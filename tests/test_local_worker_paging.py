@@ -99,9 +99,23 @@ def test_a_failed_or_capped_read_is_not_paged(c):
     assert page(c, 2, 3, 4, 100, 20_000) is c
 
 
-def test_a_last_line_without_newline_gets_one_before_the_note():
+def test_a_last_line_without_newline_is_said_so_in_the_note():
     out = page(call(b"a\nb"), None, None, 5, None, 20_000)
+    assert out.output == "a\nb\n[lines 1-2 of 2; end of file (no newline at end of file)]"
+    out = page(call(b"a\nb"), 1, 1, 5, None, 20_000)  # not shown: not mentioned
+    assert out.output == "a\n[lines 1-1 of 2; call read_file with start_line=2 to continue]"
+    out = page(call(b"a\nb\n"), None, None, 5, None, 20_000)
     assert out.output == "a\nb\n[lines 1-2 of 2; end of file]"
+
+
+@pytest.mark.parametrize(("start", "end"), [(None, None), (1, 5), (3, None)])
+def test_an_empty_file_says_it_is_empty(start, end):
+    out = page(call(b""), start, end, 400, 16_000, 20_000)
+    assert out.output == "[the file is empty]" and out.stdout_truncated is False
+
+
+def test_a_start_past_the_end_is_truncated():
+    assert page(call(), 11, None, 4, None, 20_000).stdout_truncated is True
 
 
 # -- protocol, limits, redaction and schema --------------------------------------------------------

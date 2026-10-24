@@ -6,7 +6,9 @@ every mode, and the loop serves exactly those lines of the wrapper's output. Wit
 Limits.read_page_lines on, a read shows at most that many lines (a read without a range: the
 first page), and with read_page_bytes at most that many bytes of whole lines (at least one line,
 clipped if it alone is larger). A paged or ranged observation ends with a note naming the lines
-shown and, unless the file ended, the start_line that continues. Lines are numbered as grep -n
+shown and, unless the file ended, the start_line that continues; at the end it says when the file
+has no final newline (the note is always on its own line). An empty file reads as EMPTY, with or
+without a range. Lines are numbered as grep -n
 counts them (split_lines), so a search hit's line number is a start_line. A read with no range
 and paging off is passed through unchanged, as is a failed read or one whose capture was capped.
 The turn keeps the wrapper's stdout_bytes and output_sha256 (the whole file); stdout_truncated
@@ -18,6 +20,8 @@ from __future__ import annotations
 from dataclasses import replace
 
 from experimental.local_worker.toolcall import ToolCall, _clip
+
+EMPTY = "[the file is empty]"
 
 
 def split_lines(raw: bytes) -> list[bytes]:
@@ -43,9 +47,11 @@ def page(
         return call
     lines = split_lines(call.raw)
     n, first = len(lines), start or 1
+    if n == 0:
+        return replace(call, output=EMPTY, stdout_truncated=False)
     if first > n:
         note = f"[start_line {first} is past the end: the file has {n} lines]"
-        return replace(call, output=note, stdout_truncated=n > 0)
+        return replace(call, output=note, stdout_truncated=True)
     last = n if end is None else min(end, n)
     if page_lines is not None:
         last = min(last, first + page_lines - 1)
@@ -61,6 +67,8 @@ def page(
     cap = max_bytes if page_bytes is None else min(max_bytes, page_bytes)
     body, clipped = _clip(b"".join(shown), cap)
     more = f"call read_file with start_line={last + 1} to continue" if last < n else "end of file"
-    sep = "" if not body or body.endswith("\n") else "\n"
+    if last == n and not lines[-1].endswith(b"\n"):  # the note still goes on its own line
+        more += " (no newline at end of file)"
+    sep = "" if body.endswith("\n") else "\n"
     output = f"{body}{sep}[lines {first}-{last} of {n}; {more}]"
     return replace(call, output=output, stdout_truncated=clipped or first > 1 or last < n)
