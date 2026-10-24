@@ -69,6 +69,10 @@ def test_ordinary_regexes_pass(pattern):
         "[(]a{2}[)]{3}",
         "[]{(]+(b){2}",  # a leading ] is part of the bracket expression
         "[^]{}]{3}",
+        "(a[{2}]){3}",  # a bound-like text inside [...] is no bound, so this is no nesting
+        "[a{101}]",  # nor a count over the cap
+        "(a[]{2}]){3}",  # with a leading ], the bracket runs to the second ]
+        "(a[^]{2}]){3}",
     ],
 )
 def test_braces_that_are_no_bound_and_brackets_pass(pattern):
