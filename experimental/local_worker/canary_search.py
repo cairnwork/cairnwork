@@ -30,12 +30,15 @@ def refusals(tools: WorkerTools, pattern: str, secret: str) -> list[dict]:
 
 
 def write_probe(tools: WorkerTools, run_root: Path) -> dict:
-    """It must start (not refused), fail, and leave neither file (removed if it did)."""
+    """It must start (not refused), have both writes denied by Seatbelt, and leave neither file
+    (removed if it did)."""
     call = tools.search_probe()
     left = []
     for path in (run_root / "checkout" / "search-probe", run_root / "tmp" / "search-probe"):
         if os.path.lexists(path) and not path.is_dir():  # checkout and tmp: the Owner's real dirs
             left.append(str(path))
             path.unlink()
-    ok = call.exit_code not in (0, REFUSED_EXIT, None) and not left
-    return {"probe": "search profile denies writes", "pass": ok, "exit_code": call.exit_code}
+    denied = call.output.count("Operation not permitted")  # touch's own error, once per file
+    ok = call.exit_code not in (0, REFUSED_EXIT, None) and denied == 2 and not left
+    row = {"probe": "search profile denies writes", "pass": ok, "exit_code": call.exit_code}
+    return {**row, "denied_writes": denied}
