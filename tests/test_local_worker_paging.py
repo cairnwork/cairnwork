@@ -324,3 +324,13 @@ def test_grep_numbers_lines_by_newline_only(tmp_path):
     (runs / TAG / "checkout" / "f.py").write_bytes(b"a\x0cb\nneedle\n")
     proc = run_wrapper(runs, "search", str(runs / TAG), "fixed", "needle", "f.py")
     assert proc.stdout == b"f.py:2:needle\n"
+
+
+def test_the_byte_cap_counts_raw_bytes_not_characters():
+    # 9 lines of 1000 two-byte characters (2001 bytes each): 7 lines (14007 bytes) fit in 16000,
+    # 8 (16008) do not. Counting characters (1001 each) would take all 9 and leave _clip to cut
+    # the middle of the page under a note that still claims whole lines (review of #251).
+    raw = ("é" * 1000 + "\n").encode() * 9
+    out = page(call(raw), None, None, 400, 16_000, 20_000)  # the ADDENDUM_06 page
+    assert out.output.endswith("[lines 1-7 of 9; call read_file with start_line=8 to continue]")
+    assert out.output.count("\n") == 7 and "bytes truncated" not in out.output
