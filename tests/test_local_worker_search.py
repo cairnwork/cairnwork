@@ -64,6 +64,8 @@ def test_search_regex_and_no_match(runs):
         ("fixed", "hello", "link.txt"),  # a symlink is never searched
         ("fixed", "hello", "linkdir"),
         ("fixed", "hello", "../" + TAG),
+        ("fixed", "hello", "sub/../sub"),  # a ".." is refused even when it lands inside
+        ("fixed", "hello", "./sub"),
         ("fixed", "hello", "/etc"),
         ("fixed", "hello", ".git"),
         ("fixed", "hello", "sub/.GIT"),
