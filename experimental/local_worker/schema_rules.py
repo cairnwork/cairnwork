@@ -16,6 +16,8 @@ ERROR_CATEGORIES = ("NONE", "TIMEOUT", "REFUSED", "SYNTAX_ERROR", "TEST_FAILED",
 ERROR_CATEGORIES += ("TOOL_ERROR", "INVALID_CALL", "PROTOCOL_ERROR", "REPEATED", "NO_MATCH")
 ABORT_CAUSES = ("endpoint_error", "worker_isolation", "status_unavailable", "protocol_error")
 ABORT_CAUSES += ("internal_error", "interrupted")
+# context_cap_bytes_estimate is no longer emitted (review of PR 251, 6: the context-window guard
+# alone decides without usage); it stays in the vocabulary so v1 lines still validate.
 LIMITS_HIT = ("max_steps", "max_wall_seconds", "context_cap", "context_cap_bytes_estimate")
 GUARD_LIMITS = {  # exit reason -> the limit_hit values it may carry (guards.py)
     "REPEAT_LIMIT": ("repeat_stop_at",),

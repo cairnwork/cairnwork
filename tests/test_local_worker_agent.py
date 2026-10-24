@@ -182,12 +182,6 @@ def test_context_cap(tmp_path):
     assert rec["total_turns"] == 1
 
 
-def test_context_cap_without_usage_uses_a_byte_estimate(tmp_path):
-    replies = [reply("read_file", usage="missing", path="src/app.py")] * 5
-    out, _, _, _ = run(tmp_path, replies, context_cap=200)
-    assert out.limit_hit == "context_cap_bytes_estimate"
-
-
 def test_endpoint_timeout_and_error(tmp_path):
     out, rec, _, _ = run(tmp_path, [EndpointTimeout("slow")])
     assert out.exit_reason == "TIMEOUT" and rec["total_turns"] == 0

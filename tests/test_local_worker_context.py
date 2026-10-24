@@ -247,3 +247,16 @@ def test_the_first_bound_counts_the_tools_and_the_template(tmp_path, resume, sla
         assert endpoint.payloads == []
     else:
         assert len(endpoint.payloads) >= 1
+
+
+def test_without_usage_only_the_context_guard_decides(tmp_path):
+    """Review of PR 251 (6): the old 2-bytes-per-token estimate (context_cap_bytes_estimate) is
+    gone; with no reported usage the context-window guard's byte bound alone decides."""
+    replies = [reply("read_file", usage="missing", path=p) for p in ("src/app.py", "x")] * 2
+    loop, _, _, _ = make_loop(tmp_path, replies, context_cap=200)
+    out, rec = run(loop)
+    assert out.exit_reason == "COMPLETED" and rec["total_turns"] == 5
+    loop, _, endpoint, _ = make_loop(tmp_path / "b", replies, context_window=4200)  # room: 104
+    out, _ = run(loop)
+    assert (out.exit_reason, out.limit_hit) == ("CONTEXT_LIMIT", "context_window_bound")
+    assert endpoint.payloads == []

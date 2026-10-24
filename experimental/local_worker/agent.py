@@ -38,7 +38,6 @@ SystemExit is handed to the caller to re-raise after the line is written (review
 
 from __future__ import annotations
 
-import json
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta, timezone
@@ -276,13 +275,10 @@ class AgentLoop(CleanupMixin, GuardMixin):
             return "TURN_LIMIT", "max_steps"
         if self.clock() >= deadline:
             return "TIMEOUT", "max_wall_seconds"
-        if last is not None:
-            prompt, completion, _ = last.tokens
-            if prompt is not None and completion is not None:
-                if prompt + completion >= self.limits.context_cap:
-                    return "TURN_LIMIT", "context_cap"
-            elif len(json.dumps(messages)) // 2 >= self.limits.context_cap:
-                return "TURN_LIMIT", "context_cap_bytes_estimate"  # no usage: 2 bytes/token
+        prompt, completion, _ = last.tokens if last is not None else (None, None, None)
+        if prompt is not None and completion is not None:  # without usage: the guard decides
+            if prompt + completion >= self.limits.context_cap:
+                return "TURN_LIMIT", "context_cap"
         return self._context_stop(messages, deadline)
 
     def _payload(self, messages: list[dict]) -> dict:
