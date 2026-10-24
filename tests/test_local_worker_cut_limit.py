@@ -41,12 +41,15 @@ def test_a_write_turn_spanning_the_limit_leaves_the_tree_unknown():
     ("turn", "want", "completed"),
     [
         (_turn(800.0, 950.0, False, None), False, 1),  # no tool ran in it: nothing could change
-        (_turn(800.0, 900.0, True, True), True, 2),  # ends exactly at the limit: observed by then
-        (_turn(900.0, 950.0, True, True), False, 1),  # starts at the limit: nothing before it
+        (_turn(800.0, 899.998, True, True), True, 2),  # ends a margin before: observed by then
+        (_turn(800.0, 899.999, True, True), None, 1),  # inside the margin: rounding could hide it
+        (_turn(800.0, 900.0, True, True), None, 1),  # ends at the limit, rounded: unknown
+        (_turn(900.0, 950.0, True, True), None, 1),  # starts at the limit, rounded: unknown
+        (_turn(900.002, 950.0, True, True), False, 1),  # starts a margin after: nothing before it
         (_turn(950.0, 990.0, True, True), False, 1),  # wholly after the limit
     ],
 )
-def test_only_a_tool_turn_strictly_spanning_the_limit_is_unknown(turn, want, completed):
+def test_only_a_tool_turn_that_may_span_the_limit_is_unknown(turn, want, completed):
     turns = [_turn(10.0, 20.0, True, False), turn]
     cut = episode.cut_at(turns, "COMPLETED", 999.0, 900.0)
     assert cut["tree_differs_at_limit"] is want and cut["turns_completed"] == completed
@@ -74,7 +77,7 @@ def test_a_real_run_cut_inside_its_write_turn(tmp_path):
     bad = dict(rec, cut_900s=dict(cut, tree_differs_at_limit=False))  # the old answer
     with pytest.raises(SchemaError, match="cut_900s differs"):
         validate_record(bad)
-    end = round(out.turns[0].t_end, 3)
+    end = round(out.turns[0].t_end, 3) + episode.CUT_MARGIN
     rec = episode.build_record(META, out, cut_seconds=end)
     validate_record(rec)
     assert rec["cut_900s"]["tree_differs_at_limit"] is True
@@ -156,3 +159,47 @@ def test_an_interrupted_tool_turn_whose_observation_fails_ends_with_the_attempt(
     validate_record(rec)
     assert rec["cut_900s"]["turns_completed"] == 0
     assert rec["cut_900s"]["tree_differs_at_limit"] is None
+
+
+def test_rounding_cannot_backdate_an_observation_across_the_limit(tmp_path):
+    """Codex review of PR #248, round 3: interrupted, the surviving worker writes at 900.0001 s
+    and cleanup observes it at 900.0004 s. Rounded to 3 decimals the turn ended at 900.000, and
+    the line claimed the changed tree and a completed turn at 900 s. Both are unknown now, and
+    the validator refuses the old claim."""
+    write = [reply("write_file", path="src/a.py", content="a")]
+    loop, _, _, _ = make_loop(tmp_path, write, max_steps=1)  # one turn, then TURN_LIMIT
+    out = loop.run(initial_messages(TASK))
+    [turn] = out.turns
+    turn.t_start, turn.t_end, out.wall_seconds = 850.0, 900.0004, 900.0004
+    assert turn.tool_ran and turn.tree is not None and turn.tree.observed
+    rec = episode.build_record(META, out, cut_seconds=900.0)
+    assert rec["turns"][0]["t_end_seconds"] == 900.0  # the rounding the review used
+    validate_record(rec)
+    cut = rec["cut_900s"]
+    assert cut["tree_differs_at_limit"] is None and cut["turns_completed"] == 0
+    assert cut["within_limit"] is False and cut["exit_reason"] == "TIMEOUT"
+    for field, claim in (("tree_differs_at_limit", True), ("turns_completed", 1)):
+        bad = dict(rec, cut_900s=dict(cut, **{field: claim}))
+        with pytest.raises(SchemaError, match="cut_900s differs"):
+            validate_record(bad)
+    bad = dict(rec, cut_900s=dict(cut, within_limit=True, exit_reason="COMPLETED"))
+    with pytest.raises(SchemaError, match="within_limit"):
+        validate_record(bad)
+
+
+@pytest.mark.parametrize("parent", [0.0, 123.4565, 899.9995])
+def test_a_resume_limit_keeps_the_margin_for_its_parents_rounding(tmp_path, parent):
+    """A resume's limit is 900 minus the parent's rounded pre-cut seconds; a turn ending just
+    under the rounded limit is not counted as ended by the true one."""
+    write = [reply("write_file", path="src/a.py", content="a")]
+    loop, _, _, _ = make_loop(tmp_path, write, max_steps=1)  # one turn, then TURN_LIMIT
+    out = loop.run(initial_messages(TASK))
+    [turn] = out.turns
+    limit = round(900.0 - round(parent, 3), 3)
+    turn.t_start, turn.t_end = max(0.0, limit - 50.0), limit - 0.0004
+    out.wall_seconds = turn.t_end
+    meta = dict(META, parent_pre_cut_wall_seconds=round(parent, 3) or None)
+    cut = episode.build_record(meta, out, cut_seconds=900.0)["cut_900s"]
+    assert cut["limit_seconds"] == limit
+    assert cut["turns_completed"] == 0 and cut["tree_differs_at_limit"] is None
+    assert cut["within_limit"] is False

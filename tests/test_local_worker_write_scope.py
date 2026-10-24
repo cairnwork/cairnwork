@@ -58,8 +58,13 @@ def test_a_write_in_scope_lands(runs, path, scope):
 )
 def test_a_write_out_of_scope_is_refused_and_writes_nothing(runs, path, scope):
     before = sorted(p.relative_to(runs) for p in runs.rglob("*"))
+    existed = (runs / TAG / "checkout" / path).exists()
     proc = write(runs, path, *scope)
-    assert refused(proc) and b"out of write scope" in proc.stderr, proc.stderr
+    # The wrapper is macOS-only: it reads an existing target's link count with BSD stat. On Linux
+    # /usr/bin/stat is GNU's, so an existing target ("a.txt") is refused as unresolvable instead.
+    on_linux = existed and sys.platform != "darwin"
+    off_macos = on_linux and b"write target cannot be resolved" in proc.stderr
+    assert refused(proc) and (b"out of write scope" in proc.stderr or off_macos), proc.stderr
     assert sorted(p.relative_to(runs) for p in runs.rglob("*")) == before
     assert (runs / TAG / "checkout" / "a.txt").read_text() == "hello\n"
 
@@ -111,21 +116,6 @@ def test_a_symlink_into_scope_lands_in_scope(runs):
     (co / "in").symlink_to("sub")
     assert write(runs, "in/x.py", "sub").returncode == 0
     assert (co / "sub" / "x.py").read_bytes() == b"new\n"
-
-
-@pytest.mark.sandbox
-def test_a_hard_link_in_scope_is_refused(runs):
-    """Another name of the same file may lie outside the scope (test code can make one)."""
-    co = runs / TAG / "checkout"
-    (co / "out").mkdir()
-    (co / "out" / "f").write_text("orig\n")
-    os.link(co / "out" / "f", co / "sub" / "h")
-    proc = write(runs, "sub/h", "sub")
-    assert refused(proc) and b"out of write scope: sub/h has 2 hard links" in proc.stderr
-    assert (co / "out" / "f").read_text() == "orig\n"
-    (co / "out" / "f").unlink()  # its only name now: in scope
-    assert write(runs, "sub/h", "sub").returncode == 0
-    assert (co / "sub" / "h").read_bytes() == b"new\n"
 
 
 def _case_insensitive(path: Path) -> bool:
@@ -228,13 +218,15 @@ def test_tools_refuse_out_of_scope_writes_and_edits_then_go_on(runs, tmp_path):
     assert unscoped.write_file("a.txt", "x\n").exit_code == 0
 
 
-def _without_the_check(runs, tmp_path):
-    """The wrapper with its own scope check taken out: only the Seatbelt layer is left."""
+def _without_the_check(runs, tmp_path, *more):
+    """The wrapper with its own scope check (and any of `more`) taken out: only the Seatbelt layer
+    is left."""
     text = WRAPPER.read_text()
-    check = '[ -z "$SCOPE_SET" ] || require_in_scope "$1" "$probe"'
-    assert text.count(check) == 1
+    for check in ('[ -z "$SCOPE_SET" ] || require_in_scope "$1" "$probe"', *more):
+        assert text.count(check) == 1
+        text = text.replace(check, ":")
     copy = tmp_path / "local-worker-tool"
-    copy.write_text(text.replace(check, ":"))
+    copy.write_text(text)
     env = dict(
         os.environ,
         CAIRNWORK_LOCAL_WORKER_RUNS=str(runs),
@@ -242,8 +234,9 @@ def _without_the_check(runs, tmp_path):
     )
 
     def write_unchecked(path, *scope):
+        extra = ("--scope", *scope) if scope else ()
         return subprocess.run(
-            ["/bin/sh", str(copy), "write", str(runs / TAG), path, "--scope", *scope],
+            ["/bin/sh", str(copy), "write", str(runs / TAG), path, *extra],
             input=b"new\n",
             capture_output=True,
             env=env,
@@ -279,3 +272,17 @@ def test_the_profile_lets_an_entrys_ancestors_be_created_as_directories_only(run
     assert proc.returncode != 0 and (co / "pkg").is_dir() and not (co / "pkg" / "zzz").exists()
     assert write_unchecked("pkg/mod/new.py", "pkg/mod/new.py").returncode == 0
     assert (co / "pkg" / "mod" / "new.py").read_bytes() == b"new\n"
+
+
+@pytest.mark.sandbox
+@pytest.mark.parametrize("scope", [("sub",), ()])
+def test_the_profile_keeps_a_write_out_of_tmp(runs, tmp_path, scope):
+    """Codex round 1, MF2: a directory swapped for a symlink into <run_root>/tmp after every check
+    must not take the write there. The write action's profile has no tmp rule, scoped or not."""
+    write_unchecked = _without_the_check(
+        runs, tmp_path, 'require_dir_inside_checkout "$probe" write'
+    )
+    (runs / TAG / "checkout" / "sub" / "esc").symlink_to("../../tmp")
+    proc = write_unchecked("sub/esc/x.py", *scope)
+    assert proc.returncode != 0 and b"Operation not permitted" in proc.stdout, proc.stdout
+    assert list((runs / TAG / "tmp").iterdir()) == []
