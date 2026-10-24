@@ -50,9 +50,9 @@ def test_any_hard_link_in_the_checkout_refuses_a_scoped_write(runs):
     (co / "x" / "a").write_text("a\n")
     os.link(co / "x" / "a", co / "out" / "b")
     proc = write(runs, "sub/new.py", "sub")
-    assert refused(proc) and b"a file of the run has hard links: checkout/out/b" in proc.stderr, (
-        proc.stderr
-    )
+    msg = b"local-worker-tool: refusing: out of write scope: a file of the run has hard links: "
+    named = (msg + b"checkout/out/b\n", msg + b"checkout/x/a\n")  # either: find's walk order
+    assert refused(proc) and proc.stderr in named, proc.stderr
     assert not (co / "sub" / "new.py").exists() and (co / "out" / "b").read_text() == "a\n"
 
 

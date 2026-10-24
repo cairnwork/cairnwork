@@ -8,12 +8,16 @@ lies under one (entry + "/" prefix), compared byte for byte.
 
 The wrapper enforces it (local-worker-tool ``write --scope``), not this module: only the worker may
 look at the checkout, and only the wrapper sees the canonical path a write lands on (symlinks, case
-and Unicode form of existing components resolved by /bin/realpath), refuses an existing file with
-another hard link, and has Seatbelt allow writes only under the entries. Entries stay literal: one
-naming an existing component in another case or Unicode form than on disk matches nothing (its
-writes are refused, never let through). Here the entries are only checked to be canonical, and
-turned into the wrapper's arguments. Unset (None) changes
-nothing: no argument, no manifest key, no line field.
+and Unicode form of existing components resolved by /bin/realpath), refuses a write while the
+target, or any file of the checkout (outside .git) or of <run_root>/tmp, has another hard link, and
+has Seatbelt allow the write only under the entries (plus creating their ancestor directories, and
+the /dev/null, /dev/tty and /dev/dtracehelper devices). Entries stay literal: one naming an existing
+component in another case or Unicode form than on disk matches nothing (its writes are refused,
+never let through). Here the entries are only checked to be canonical, and turned into the wrapper's
+arguments. Unset (None) adds no argument, no manifest key and no line field. Two rules of the
+wrapper's tool profile hold with or without a scope: test code may create no hard link (so
+``os.link`` in an unscoped ``run_tests`` fails too), and the write action itself cannot write
+<run_root>/tmp; the canary binding's wrapper_sha256 pins them for every corpus.
 """
 
 from __future__ import annotations
