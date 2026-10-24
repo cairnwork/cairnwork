@@ -305,36 +305,47 @@ def test_the_profile_keeps_a_write_out_of_tmp(runs, tmp_path, scope):
 
 _LINKS = """import os, sys
 co, tmp = sys.argv[1:3]
-for src, dst in ((co + "/a.txt", co + "/out/a"), (co + "/a.txt", tmp + "/a"),
-                 (tmp + "/t", co + "/out/t"), (tmp + "/t", tmp + "/t2")):
+def link(src, dst):
     try:
         os.link(src, dst)
         print("LINKED", dst)
     except PermissionError:
         print("DENIED", dst)
+link(co + "/a.txt", co + "/out/a")
+link(co + "/a.txt", tmp + "/a")
+link(tmp + "/t", co + "/out/t")
+link(tmp + "/t", tmp + "/t2")
+os.rename(co + "/sub", tmp + "/d")  # the directory route: out to tmp, link there, back again
+link(tmp + "/d/f.py", tmp + "/g")
+os.rename(tmp + "/d", co + "/sub")
+print("RENAMED BACK")
 """
 
 
 @pytest.mark.sandbox
 def test_test_code_cannot_give_a_checkout_file_a_second_name(runs):
     """Codex round 1, MF1: a process a sweep missed must not hard-link a file after a scoped
-    write's link-count check (the write would then change the other name too). The tool profile
-    denies file-link to or from the checkout; links within tmp still work."""
+    write's link-count check (the write would then change the other name too), not even by moving
+    its directory into tmp, linking there and moving it back. The tool profile denies every link."""
     root = runs / TAG
-    (root / "checkout" / "out").mkdir()
-    (root / "tmp" / "t").write_text("t\n")
-    (root / "tmp" / "links.py").write_text(_LINKS)
+    co, tmp = root / "checkout", root / "tmp"
+    (co / "out").mkdir()
+    (co / "sub" / "f.py").write_text("f\n")
+    (tmp / "t").write_text("t\n")
+    (tmp / "links.py").write_text(_LINKS)
     base = os.path.realpath(getattr(sys, "_base_executable", sys.executable))
     py = root / "venv" / "bin" / "python"
     py.parent.mkdir(parents=True)
-    py.write_text(f"#!/bin/sh\nexec {base} -I {root}/tmp/links.py {root}/checkout {root}/tmp\n")
+    py.write_text(f"#!/bin/sh\nexec {base} -I {tmp}/links.py {co} {tmp}\n")
     py.chmod(0o755)
     proc = run(runs, "pytest", str(root))
-    co, tmp = root / "checkout", root / "tmp"
-    assert proc.stdout.decode().split("\n")[:4] == [
+    assert proc.stdout.decode().split("\n")[:6] == [
         f"DENIED {co}/out/a",
         f"DENIED {tmp}/a",
         f"DENIED {co}/out/t",
-        f"LINKED {tmp}/t2",
+        f"DENIED {tmp}/t2",
+        f"DENIED {tmp}/g",
+        "RENAMED BACK",
     ], proc.stdout
-    assert (co / "a.txt").stat().st_nlink == 1 and not (co / "out" / "t").exists()
+    assert (co / "a.txt").stat().st_nlink == 1 and (co / "sub" / "f.py").stat().st_nlink == 1
+    assert not (co / "out" / "t").exists() and not (tmp / "g").exists()

@@ -27,7 +27,8 @@ WRITE_SCOPE_RULE = (  # recorded in manifest.json when a corpus runs with a writ
     " entry of the episode's write_scope or lies under one (entry + '/' prefix, byte for byte):"
     " the K arm's --write-path match. Entries are canonical relpaths taken literally, so they must"
     " name existing components in their on-disk case and Unicode form. A write to an existing"
-    " file with more than one hard link is refused too. run_tests side effects are not limited."
+    " file with more than one hard link is refused too, and test code may create no hard links."
+    " run_tests side effects are not limited otherwise."
 )
 _BAD_CHARS = ('"', "\\", "\n", "\r", "\0")
 

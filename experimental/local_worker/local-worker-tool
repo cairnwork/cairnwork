@@ -36,8 +36,9 @@
 #     worker-written hook or config would later run as the Owner), and nothing in <run_root>/q;
 #     the write action itself gets the checkout (or its scope) only, never tmp: mkdir and cat need
 #     no scratch, so a directory swapped for a symlink into tmp cannot take a write there;
-#   * no hard link to or from anything in the checkout (file-link), so a process a sweep missed
-#     cannot give a file a second name after a write's link-count check (see write --scope);
+#   * no hard links at all (file-link), so a process a sweep missed cannot give a checkout file a
+#     second name after a write's link-count check, not even by moving its directory to tmp, linking
+#     there and moving it back (see write --scope);
 #   * signals only to processes in the same sandbox (not the agy worker's runs, which share the uid).
 # The query profile (status, numstat, tracked): the same network, read and signal limits, reads
 # of the checkout (its .git included) and <run_root>/q only, writes only inside <run_root>/q. No
@@ -59,10 +60,12 @@
 # case and Unicode form, or every write under it is refused (refused, never let through). An
 # existing file with more than one hard link is refused too: its other names may lie outside the
 # scope, and no path check sees them; nor can a second name be made after the check, as the tool
-# profile denies file-link in the checkout. The profile then allows writes in the checkout only
-# under the entries (plus creating their ancestors, as directories only), and none in tmp:
-# Seatbelt checks the resolved path, so a symlink swapped in after the check (by a process a
-# sweep missed) cannot land the write elsewhere either.
+# profile denies every hard link. The profile then allows writes in the checkout only under the
+# entries (plus creating their ancestors, as directories only), and none in tmp: Seatbelt checks
+# the resolved path, so a symlink swapped in after the check (by a process a sweep missed) cannot
+# land the write elsewhere either. The scope holds as of the write's open: such a process can still
+# rename the opened file afterwards, which it could as well do to any file (no new power); the
+# Owner's sweep before the write is what keeps such processes away.
 #
 # For tests and the pre-install canary the Owner may run this file directly (not through sudo) with
 # CAIRNWORK_LOCAL_WORKER_RUNS / CAIRNWORK_LOCAL_WORKER_PYROOT set; running as the worker account,
@@ -220,7 +223,7 @@ profile() {  # the tool profile: list, read, write, pytest (and so every line of
     printf '(allow file-write-create (require-all (vnode-type DIRECTORY) (require-any%s)))\n' \
       "$CREATE_RULES"
   printf '(deny file-write* (regex #"/\\.[gG][iI][tT](/|$)"))\n'
-  printf '(deny file-link (subpath "%s"))\n' "$CHECKOUT"  # no second name for a checkout file
+  printf '(deny file-link)\n'  # no second name for any file (tmp too: see the header)
   printf '(deny file-read* file-write* (subpath "%s/q"))\n' "$RUN_ROOT"  # the queries' alone
   printf '(deny signal)\n(allow signal (target same-sandbox))\n'
 }
