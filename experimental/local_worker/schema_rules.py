@@ -14,6 +14,7 @@ ACTION_TYPES = ("list_dir", "read_file", "write_file", "edit_file", "run_test", 
 ACTION_TYPES += ("invalid_tool_call", "no_tool_call", "search")
 ERROR_CATEGORIES = ("NONE", "TIMEOUT", "REFUSED", "SYNTAX_ERROR", "TEST_FAILED", "NO_TESTS")
 ERROR_CATEGORIES += ("TOOL_ERROR", "INVALID_CALL", "PROTOCOL_ERROR", "REPEATED", "NO_MATCH")
+ERROR_CATEGORIES += ("CPU_LIMIT",)  # a search grep stopped at its CPU-time limit
 ABORT_CAUSES = ("endpoint_error", "worker_isolation", "status_unavailable", "protocol_error")
 ABORT_CAUSES += ("internal_error", "interrupted")
 # context_cap_bytes_estimate is no longer emitted (review of PR 251, 6: the context-window guard

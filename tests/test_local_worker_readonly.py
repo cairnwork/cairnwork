@@ -14,6 +14,8 @@ import pytest
 from local_worker_fakes import TAG, WRAPPER, make_runs
 from local_worker_fakes import run_wrapper as run
 
+from experimental.local_worker import tools
+
 SECRET = "hello from outside the checkout"
 SEARCH_CHECK = '    require_dir_inside_checkout "$dir" search\n'
 READ_CHECK = '    require_dir_inside_checkout "${TARGET%/*}" read\n'
@@ -119,6 +121,34 @@ def test_the_real_tools_still_read_the_checkout(runs):
     assert proc.returncode == 0 and proc.stdout == "u.txt:1:café\n".encode(), proc.stdout
 
 
+# /System is readable for dyld and the OS's libraries, but /System/Volumes holds no OS code: its
+# Preboot, Update and Hardware volumes (and the Data volume's root) were listable (Claude review
+# of PR 251 head f60b294, non-blocking 2). Denied; the tools still start (the test above).
+VOLUMES = ["Preboot", "Update", "Hardware", "Data", "iSCPreboot", "xarts"]
+VOLUMES_DENY = """  printf '(deny file-read-data (subpath "/System/Volumes"))\\n'"""
+VOLUMES_DENY += "  # no OS code: Preboot, Data, ...\n"
+
+
+@pytest.mark.sandbox
+@pytest.mark.parametrize("volume", VOLUMES)
+def test_the_read_only_profile_lists_and_searches_no_system_volume(runs, tmp_path, volume):
+    where = Path("/System/Volumes") / volume
+    if not where.is_dir():
+        pytest.skip(f"{where} does not exist on this Mac")
+    (runs / TAG / "checkout" / "sv").symlink_to(where.parent)  # a symlinked ancestor, as above
+    copy = copy_wrapper(tmp_path, (LIST_CHECK, ""), (SEARCH_CHECK, ""))
+    proc = run_copy(copy, runs, "list", str(runs / TAG), "sv/" + volume)
+    assert proc.returncode != 0 and b"Operation not permitted" in proc.stdout, proc.stdout
+    proc = run_copy(copy, runs, "search", str(runs / TAG), "fixed", "x", "sv/" + volume)
+    assert proc.returncode == 2 and b"Operation not permitted" in proc.stdout, proc.stdout
+    # The control: without the deny, the same list reads the volume (when it holds anything).
+    leaky = copy_wrapper(tmp_path, (LIST_CHECK, ""), (VOLUMES_DENY, ""))
+    out = run_copy(leaky, runs, "list", str(runs / TAG), "sv/" + volume).stdout.splitlines()
+    assert [line for line in out if b"Operation not permitted" not in line] or not any(
+        where.iterdir()
+    ), out
+
+
 # -- should-fix 2: no device write, and a probe that follows no symlink ----------------------------
 @pytest.mark.sandbox
 @pytest.mark.parametrize("device", ["/dev/null", "/dev/tty", "/dev/dtracehelper"])
@@ -180,4 +210,5 @@ def test_search_has_a_cpu_time_limit(runs, tmp_path):
     started = time.monotonic()
     proc = run_copy(copy, runs, "search", str(runs / TAG), "regex", r"^(a+)+\1$", "br.txt")
     assert proc.returncode == -24, (proc.returncode, proc.stdout)  # SIGXCPU
+    assert tools.error_category("search", proc.returncode, proc.stdout) == "CPU_LIMIT"
     assert time.monotonic() - started < 20

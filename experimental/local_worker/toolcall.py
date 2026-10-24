@@ -3,9 +3,15 @@ the clipping of its output for the model (moved here from tools.py, which re-exp
 
 from __future__ import annotations
 
+import signal
 from dataclasses import asdict, dataclass, field
 
 REFUSED_EXIT = 64
+# grep's CPU-time limit in the wrapper (SEARCH_CPU_SECONDS there, ulimit -t; a test pins the two
+# equal). A search that runs past it dies of SIGXCPU: error_category CPU_LIMIT, and the model is
+# told why instead of a bare exit code (Claude review of PR 251 head f60b294).
+SEARCH_CPU_SECONDS = 20
+CPU_LIMIT_EXITS = (-signal.SIGXCPU, 128 + signal.SIGXCPU)  # killed, or reported by a shell
 
 
 def _char_cut(data: bytes, at: int, step: int) -> int:
@@ -41,6 +47,8 @@ def error_category(action_type: str, exit_code: int | None, raw: bytes) -> str:
         return "REFUSED"
     if action_type == "search" and exit_code == 1:
         return "NO_MATCH"  # grep found no line: not an error
+    if action_type == "search" and exit_code in CPU_LIMIT_EXITS:
+        return "CPU_LIMIT"
     if action_type == "run_test":
         if b"SyntaxError" in raw:
             return "SYNTAX_ERROR"

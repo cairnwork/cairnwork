@@ -9,7 +9,17 @@ import subprocess
 import sys
 
 import pytest
-from local_worker_fakes import META, TAG, TASK, WRAPPER, cli_harness, lines, make_loop, make_runs
+from local_worker_fakes import (
+    META,
+    TAG,
+    TASK,
+    WRAPPER,
+    World,
+    cli_harness,
+    lines,
+    make_loop,
+    make_runs,
+)
 from local_worker_fakes import run_wrapper as run
 from test_local_worker_tools import action_of, make
 
@@ -192,6 +202,40 @@ def test_search_categories(rc, category):
     assert tools.error_category("search", rc, b"") == category
     if rc == 1:
         assert tools.error_category("read_file", 1, b"") == "TOOL_ERROR"
+
+
+# -- grep's CPU-time limit (Claude review of PR 251 head f60b294, non-blocking 1) ------------------
+@pytest.mark.parametrize("rc", [-24, 152])  # SIGXCPU: killed, or as a shell reports it
+def test_a_search_stopped_at_the_cpu_limit_has_its_own_category(rc):
+    assert tools.error_category("search", rc, b"") == "CPU_LIMIT"
+    assert tools.error_category("read_file", rc, b"") == "TOOL_ERROR"  # only grep runs under it
+
+
+def test_the_cpu_limit_is_pinned_to_the_wrapper():
+    from experimental.local_worker.toolcall import SEARCH_CPU_SECONDS
+
+    assert WRAPPER.read_text().count(f"SEARCH_CPU_SECONDS={SEARCH_CPU_SECONDS} ") == 1
+
+
+class CpuLimitWorld(World):
+    def handle(self, action: str, args: list[str], stdin: bytes) -> tuple[int | None, bytes]:
+        return (-24, b"") if action == "search" else super().handle(action, args, stdin)
+
+
+def test_the_model_is_told_the_search_ran_out_of_cpu(tmp_path):
+    from local_worker_fakes import reply
+
+    replies = [reply("search", pattern="(a|aa)*b", regex=True)]
+    replies.append(reply("read_file", path="src/app.py"))
+    loop, _, endpoint, _ = make_loop(tmp_path, replies, world=CpuLimitWorld())
+    rec = episode.build_record(META, loop.run(initial_messages(TASK)))
+    validate_record(rec)  # CPU_LIMIT is in the schema's vocabulary
+    first, second = rec["turns"][:2]
+    assert first["error_category"] == "CPU_LIMIT" and first["exit_code"] == -24
+    told = endpoint.payloads[1]["messages"][-1]["content"]
+    assert told.startswith("[search stopped: the pattern exceeded grep's 20-second CPU limit;")
+    assert "[exit" not in told
+    assert second["action_type"] == "read_file"  # recoverable: the loop goes on
 
 
 # -- the loop ------------------------------------------------------------------------------------

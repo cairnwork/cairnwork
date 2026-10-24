@@ -53,12 +53,17 @@
 # all (not even /dev/null, /dev/tty or /dev/dtracehelper) and no file data read anywhere except the
 # checkout (its .git excepted), the root directory itself, the OS's own /System and /usr/lib (dyld
 # and its libraries, on a macOS that reads them as files) and /usr/share/locale (grep's UTF-8
-# matching needs its locale; dyld needs "/"). Not the run's tmp or venv, not the worker Python
-# tree. The wrapper's path checks run before the command, so a process a sweep missed (the sweep
-# finds no process that cleared its environment and left the run root) could swap a checked
-# directory for a symlink before cat, ls or grep opens a path through it (grep -r follows a
-# symlink in an ancestor component); Seatbelt checks the resolved path at open, so such a swap
-# leads nowhere readable. Search also runs with a CPU-time limit (SEARCH_CPU_SECONDS, ulimit -t).
+# matching needs its locale; dyld needs "/"), but not /System/Volumes (Preboot, Update, Hardware,
+# iSCPreboot, xarts and the Data volume's root were listable; tried on Darwin 27: with them
+# denied, grep, cat and ls still start and read, no abort trap). Not the run's tmp or venv, not
+# the worker Python tree. The wrapper's path checks run before the command, so a process a sweep
+# missed (the sweep finds no process that cleared its environment and left the run root) could
+# swap a checked directory for a symlink before cat, ls or grep opens a path through it (grep -r
+# follows a symlink in an ancestor component); Seatbelt checks the resolved path at open, so such
+# a swap leads nowhere readable. Search also runs with a CPU-time limit (SEARCH_CPU_SECONDS,
+# ulimit -t). It bounds no memory, and none can be set: on Darwin 27, ulimit -v, -d and -m (and
+# setrlimit RLIMIT_AS, RLIMIT_DATA, RLIMIT_RSS) fail with EINVAL, so the Python regex cap alone
+# bounds what grep allocates.
 # The query profile (status, numstat, tracked): the same network, read and signal limits, reads
 # of the checkout (its .git included) and <run_root>/q only, writes only inside <run_root>/q. No
 # code the model wrote ever runs under it (git runs with no filter, hook, driver or textconv; see
@@ -267,6 +272,7 @@ readonly_profile() {  # list, read, search, search-probe (see the header)
   printf '(deny file-read-data (subpath "/"))\n'
   printf '(allow file-read-data (literal "/") (subpath "/System") (subpath "/usr/lib")'
   printf ' (subpath "/usr/share/locale") (subpath "%s"))\n' "$CHECKOUT"
+  printf '(deny file-read-data (subpath "/System/Volumes"))\n'  # no OS code: Preboot, Data, ...
   printf '(deny file-read-data (regex #"/\\.[gG][iI][tT](/|$)"))\n'
   printf '(deny file-write* (subpath "/"))\n'
 }

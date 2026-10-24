@@ -13,6 +13,7 @@ import json
 import re
 from typing import Any
 
+from experimental.local_worker.toolcall import SEARCH_CPU_SECONDS
 from experimental.local_worker.tools import ToolCall
 
 RUN_TESTS_ARGS = ("-q", "--tb=short", "--")
@@ -188,12 +189,18 @@ def _range_args(args: dict) -> None:
 # MAX_PATTERN_BYTES; in regex mode every bound ({n}, {n,}, {n,m}, {,m}) is at most MAX_REPEAT and
 # a bounded group may not itself contain a bound (no nesting). Braces that form no bound ({},
 # {,}, {x}) are literal to TRE and ignored here, as is anything inside a bracket expression [...].
+# The wrapper runs grep -E, so a bracket is parsed by the POSIX ERE rules macOS grep follows
+# (_bracket_end; Codex round 2 of PR 251): a leading ^, then a leading ] that is literal;
+# [:class:], [=x=] and [.x.] are atomic; any other [ and every backslash inside are literal; the
+# first other ] closes it. Fail closed: an unterminated bracket, an unknown class, or a [=..=] or
+# [....] that is not one character is a BadCall, so no text outside a bracket goes unscanned.
 # Over-rejection kept on purpose: any nesting is refused, also a cheap one like ((a){2}){2}; the
 # BadCall says how to rewrite it. Refused before the wrapper runs, as a BadCall the model can
 # repair; fixed strings are never parsed as regexes. Back-references (\1 to \9) are refused too
 # (Codex review of PR 251, must-fix 2): a back-reference makes TRE backtrack, and ^(a+)+\1$ on a
 # line of 40 "a"s and a "b" runs past any timeout. The wrapper's CPU-time limit on grep
-# (SEARCH_CPU_SECONDS) is the second layer for whatever this cap misses.
+# (SEARCH_CPU_SECONDS) is the second layer for whatever this cap misses, for time only: macOS sets
+# no memory limit (see the wrapper's header), so this cap alone bounds what grep allocates.
 MAX_PATTERN_BYTES = 512
 MAX_REPEAT = 100
 _BOUND = re.compile(r"\{(?:(\d+)(?:,(\d*))?|,(\d+))\}")
@@ -217,6 +224,41 @@ def _bound(pattern: str, at: int) -> int | None:
     return m.end()
 
 
+_CLASSES = frozenset(
+    ("alnum", "alpha", "blank", "cntrl", "digit", "graph", "lower", "print", "punct", "space")
+    + ("upper", "xdigit")
+)
+BRACKET = (
+    "search regex has a bracket expression this check cannot parse: close every [ with ], and"
+    " inside it use only the classes [:alpha:], [:digit:] and the like, and [.x.] or [=x=] of"
+    " one character"
+)
+
+
+def _bracket_end(pattern: str, at: int) -> int:
+    """The index just past the bracket expression whose [ is at ``at``, as grep -E reads it."""
+    i = at + 1
+    i += pattern[i : i + 1] == "^"
+    i += pattern[i : i + 1] == "]"  # a ] right after [ or [^ is a character
+    while i < len(pattern):
+        c = pattern[i]
+        if c == "]":
+            return i + 1
+        kind = pattern[i + 1 : i + 2] if c == "[" else ""
+        if kind == ":":
+            close = pattern.find(":]", i + 2)
+            if close < 0 or pattern[i + 2 : close] not in _CLASSES:
+                raise BadCall(BRACKET)
+            i = close + 2
+        elif kind in ("=", "."):
+            if len(pattern) < i + 5 or pattern[i + 3 : i + 5] != kind + "]":
+                raise BadCall(BRACKET)
+            i += 5
+        else:  # any other character, a backslash or a [ opening no item included, is literal
+            i += 1
+    raise BadCall(BRACKET)
+
+
 def _check_regex(pattern: str) -> None:
     stack = [False]  # per open group: whether it contains a bounded repetition
     i = 0
@@ -227,10 +269,7 @@ def _check_regex(pattern: str) -> None:
                 raise BadCall(BACKREF)
             i += 2
         elif c == "[":  # a bracket expression: no group or bound inside
-            j = i + 1 + (pattern[i + 1 : i + 2] == "^")
-            j += pattern[j : j + 1] == "]"
-            k = pattern.find("]", j)
-            i = len(pattern) if k < 0 else k + 1
+            i = _bracket_end(pattern, i)
         elif c == "(":
             stack.append(False)
             i += 1
@@ -268,7 +307,15 @@ def call_key(call: dict) -> tuple[str, str]:
     return fn["name"], raw if isinstance(raw, str) else json.dumps(raw, sort_keys=True)
 
 
+CPU_STOPPED = (
+    f"[search stopped: the pattern exceeded grep's {SEARCH_CPU_SECONDS}-second CPU limit;"
+    " simplify it (fewer nested + or *), or search with a fixed string]"
+)
+
+
 def render(call: ToolCall) -> str:
+    if call.error_category == "CPU_LIMIT":
+        return f"{CPU_STOPPED}\n{call.output}"
     rc = "timeout" if call.exit_code is None else str(call.exit_code)
     note = ", output truncated" if call.stdout_truncated else ""
     return f"[exit {rc}{note}]\n{call.output}"
