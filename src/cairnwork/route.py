@@ -3,9 +3,11 @@
 Every command prints one JSON object on stdout. Exit codes: 0 done; 2 refused
 (``{"error": code, "detail": ...}``: not accepting, bad request, not cancellable,
 recovery busy, key reused, card already active, REPLAY_FORBIDDEN,
-RECONCILIATION_REQUIRED); 3 unknown task; 4 ``recover`` settled every task but
-it is not a clean success (``leftover_run_dirs`` > 0, or ``sweep_unavailable``: the dead
-run's processes could not be checked; no ``error``: someone must clean up or check);
+RECONCILIATION_REQUIRED, NOT_SUPERSEDABLE, TAKEOVER_REFUSED: ``supersede`` of a task whose dead
+attempt's processes are unchecked or still running, #244); 3 unknown task; 4 ``recover``
+settled every task but it is not a clean success (``leftover_run_dirs`` > 0, or
+``sweep_unavailable``: the dead run's processes could not be checked; no ``error``: someone
+must clean up or check);
 1 anything else, including a recovery that could not settle every task. Only
 NOT_ACCEPTING means "not taken, the old system may run it"; after any other answer the
 caller must not run the task elsewhere (exit 1, 3 and 4 mean "unknown", never "failed").
@@ -14,6 +16,7 @@ caller must not run the task elsewhere (exit 1, 3 and 4 mean "unknown", never "f
     cairnwork-route --state DIR submit < request.json
     cairnwork-route --state DIR status (--task-id ID | --key KEY)
     cairnwork-route --state DIR cancel --task-id ID
+    cairnwork-route --state DIR supersede --task-id ID   # FAILED task: release its card to retry
     cairnwork-route --state DIR in-flight        # for the deployer's quiescence gate
     cairnwork-route --state DIR accept | drain   # switch new-task intake on / off
     cairnwork-route --state DIR recover          # after a restart, with no runner alive
@@ -40,6 +43,7 @@ from cairnwork.ownership import (
     OwnershipUnknown,
     ReconciliationRequired,
     ReplayForbidden,
+    TakeoverRefused,
 )
 from cairnwork.pipeline import TaskRejected, check_task, run_bound_task
 from cairnwork.recovery import recover
@@ -70,7 +74,7 @@ def main(argv: list[str] | None = None) -> int:
         return _emit({"error": type(exc).__name__, "detail": str(exc)}, 2)
     except JournalIntegrityViolation as exc:
         return _emit({"error": exc.code, "detail": str(exc)}, 1)
-    except (ReplayForbidden, ReconciliationRequired) as exc:
+    except (ReplayForbidden, ReconciliationRequired, TakeoverRefused) as exc:
         return _emit({"error": exc.code, "detail": str(exc)}, 2)
     except Exception as exc:  # noqa: BLE001 - reported as unknown, never as success
         return _emit({"error": "INTERNAL", "detail": f"{type(exc).__name__}: {exc}"}, 1)
@@ -99,6 +103,8 @@ def _dispatch(intake: Intake, args) -> Any:
         return intake.status(task_id=args.task_id, key=args.key)
     if args.command == "cancel":
         return intake.cancel(args.task_id)
+    if args.command == "supersede":
+        return intake.supersede(args.task_id)
     if args.command == "in-flight":
         return intake.in_flight()
     if args.command in ("accept", "drain"):
@@ -177,7 +183,8 @@ def _parser() -> argparse.ArgumentParser:
     which = status.add_mutually_exclusive_group(required=True)
     which.add_argument("--task-id")
     which.add_argument("--key")
-    commands.add_parser("cancel").add_argument("--task-id", required=True)
+    for name in ("cancel", "supersede"):
+        commands.add_parser(name).add_argument("--task-id", required=True)
     for name in ("in-flight", "accept", "drain", "recover"):
         commands.add_parser(name)
     run = commands.add_parser("_run")

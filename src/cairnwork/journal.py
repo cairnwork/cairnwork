@@ -24,7 +24,8 @@ PHASES = (
     "TEST_SOURCE",  # hidden-test mode this run used (detail = bundle | auto); read by attest
     "VERIFYING",  # verifiers about to run on the candidate
     "NOTARIZING",  # Core about to be called
-    "FINISHED",  # ledger status about to be written (detail = COMPLETED or FAILED)
+    "FINISHED",  # attempt over, journaled before the ledger move (detail = COMPLETED or FAILED;
+    # or the ledger's status, e.g. CANCELLED, when the run lost a race and never started)
 )
 
 _TABLE = """

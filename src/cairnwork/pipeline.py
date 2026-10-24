@@ -6,7 +6,8 @@ that is verified for the exact candidate commit makes it COMPLETED.
 
 Any exception after binding is recorded as FAILED with an ``INFRA_ERROR`` reason; a crash of this
 process leaves the task DISPATCHED until restart recovery. A FAILED task keeps its card: to retry,
-SUPERSEDE it (``OwnershipLedger.set_status``), then submit anew. A ``Worker``
+SUPERSEDE it (``takeover.supersede``), then submit anew; the takeover is refused while recovery
+left the old attempt's processes unchecked (#244). A ``Worker``
 edits its clone and must have exited when ``run`` returns.
 """
 

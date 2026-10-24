@@ -1,10 +1,10 @@
 """#244: two recovery crash windows a TLA+ pilot flagged, verified here. Recovery is unchanged.
 
 1. Parent crash (SIGKILL mid-worker), process sweep unavailable, recovery marks the task FAILED,
-   the operator supersedes and resubmits: nothing in Cairnwork stops the child the dead run's
-   worker started from still acting while the new attempt runs. CONFIRMED; pinned below as
-   today's behaviour.
-   The only signal is the Decision's ``sweep_unavailable`` (route ``recover`` exits 4, #189).
+   the operator supersedes and resubmits: the child the dead run's worker started could still
+   act while the new attempt runs. CONFIRMED (PR #245), FIXED: the takeover is refused until the
+   attempt's processes are swept (takeover.py, ownership.py TakeoverRefused); pinned below.
+   The signal is still the Decision's ``sweep_unavailable`` (route ``recover`` exits 4, #189).
 2. Core recorded a verified verdict, then an exception (here: the verdict readback fails) and a
    crash before the FINISHED journal row: the live run would have said FAILED (INFRA_ERROR), but
    recovery says COMPLETED. Reproduced; INTENDED per recovery.py: a Core verdict verified for the
@@ -12,7 +12,6 @@
 """
 
 import os
-import secrets
 import signal
 import sqlite3
 import subprocess
@@ -26,10 +25,11 @@ from test_recovery import DRIVER, GOOD, settle, stores
 from test_recovery import project as project  # noqa: F401 - fixture
 
 import cairnwork.recovery as recovery
+from cairnwork import takeover
 from cairnwork.confined import SWEEP_UNAVAILABLE
 from cairnwork.journal import Journal
 from cairnwork.notary import Notary
-from cairnwork.ownership import OwnershipLedger
+from cairnwork.ownership import DuplicateLogicalTask, OwnershipLedger, TakeoverRefused
 from cairnwork.pipeline import TaskSpec, run_task
 
 pytestmark = pytest.mark.sandbox
@@ -40,26 +40,6 @@ def _spec(project, key):  # noqa: F811 - the crash driver's task (tests/crash_dr
     return TaskSpec(
         key, "card-k1", "fix add", "add() is off by one", project, base, ("src/calc.py",), VERIFY
     )
-
-
-class _WaitsForTheSurvivor(EditWorker):
-    """Signals the old attempt's child with a fresh token and waits for it to echo it back."""
-
-    def __init__(self, state):
-        super().__init__({"src/calc.py": GOOD})
-        self.go, self.wrote = state / "new-attempt-running", state / "old-attempt-wrote"
-        self.token, self.echoed = secrets.token_hex(16), ""
-
-    def run(self, workdir, task):
-        super().run(workdir, task)
-        assert not self.wrote.exists()  # nothing the old child wrote before this attempt ran
-        part = self.go.with_name(self.go.name + ".part")
-        part.write_text(self.token)
-        os.replace(part, self.go)  # by rename: the child never reads an empty signal
-        deadline = time.monotonic() + 60
-        while not self.wrote.exists() and time.monotonic() < deadline:
-            time.sleep(0.05)
-        self.echoed = self.wrote.read_text() if self.wrote.exists() else ""
 
 
 def _alive(pid):
@@ -79,13 +59,15 @@ def _survivor_pid(state):
     return int(path.read_text())
 
 
-def test_a_survivor_of_an_unswept_crash_still_acts_after_supersede_and_resubmit(
+def test_a_survivor_of_an_unswept_crash_blocks_the_takeover_until_it_is_swept(
     project,  # noqa: F811
     tmp_path,
     monkeypatch,
 ):
     """#244 window 1 (recovery.py _settle, runlock.py: children do not hold the run lock).
-    The dead run's own worker started the child; the run is SIGKILLed mid-worker."""
+    The dead run's own worker started the child; the run is SIGKILLed mid-worker. The takeover
+    (supersede, then a new key) is refused while the child is unchecked, and goes ahead once a
+    real sweep has killed it (takeover.py)."""
     proc = subprocess.Popen(
         [sys.executable, str(DRIVER), str(project), str(tmp_path), GOOD, "survivor"],
         stdout=subprocess.DEVNULL,
@@ -108,21 +90,40 @@ def test_a_survivor_of_an_unswept_crash_still_acts_after_supersede_and_resubmit(
             True,
         )
         assert _alive(pid)  # recovery could not stop it, and said so
-        ledger.set_status(decision.task_id, "SUPERSEDED")
+        with pytest.raises(TakeoverRefused):  # a raw writer is fenced too
+            ledger.set_status(decision.task_id, "SUPERSEDED")
+        real_sweep = takeover.sweep_marked
+        monkeypatch.setattr(takeover, "sweep_marked", lambda *_a, **_k: SWEEP_UNAVAILABLE)
+        with pytest.raises(TakeoverRefused, match="SWEEP_UNAVAILABLE"):
+            takeover.supersede(ledger, decision.task_id)
+        assert ledger.get(task_id=decision.task_id).status == "FAILED" and _alive(pid)
         _, notary, journal = stores(tmp_path)
-        worker = _WaitsForTheSurvivor(tmp_path)
-        result = run_task(  # nothing refuses the takeover
+        with pytest.raises(DuplicateLogicalTask):  # the card is still held: no new attempt
+            run_task(
+                _spec(project, "k2"),
+                ledger=ledger,
+                notary=notary,
+                journal=journal,
+                worker=EditWorker({"src/calc.py": GOOD}),
+                run_root=tmp_path / "runs",
+            )
+        monkeypatch.setattr(takeover, "sweep_marked", real_sweep)  # the process table is readable
+        assert takeover.supersede(ledger, decision.task_id).status == "SUPERSEDED"
+        deadline = time.monotonic() + 30
+        while _alive(pid) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert not _alive(pid)  # the sweep killed the child before the card was released
+        result = run_task(
             _spec(project, "k2"),
             ledger=ledger,
             notary=notary,
             journal=journal,
-            worker=worker,
+            worker=EditWorker({"src/calc.py": GOOD}),
             run_root=tmp_path / "runs",
         )
         assert result.status == "COMPLETED" and result.verified, result.reason
-        assert worker.echoed == worker.token  # the old child acted on the new worker's signal
-        assert _alive(pid)  # and is still alive after the new attempt finished
         assert result.attempt_id != decision.attempt_id
+        assert not (tmp_path / "old-attempt-wrote").exists()
     finally:
         if proc.poll() is None:
             proc.kill()
@@ -189,3 +190,33 @@ def test_a_crash_between_that_error_and_finished_recovers_completed(project, tmp
         ("COMPLETED", "CORE_VERIFIED_BEFORE_CRASH")
     ]
     assert ledger.get(task_id=task.task_id).status == "COMPLETED"
+
+
+class _LedgerFailsOnTheFinalMove(OwnershipLedger):
+    """The ledger write that ends the attempt fails (e.g. a locked or broken disk)."""
+
+    def set_status(self, task_id, status, **kwargs):
+        if status in ("COMPLETED", "FAILED"):
+            raise sqlite3.OperationalError("database is locked")
+        return super().set_status(task_id, status, **kwargs)
+
+
+def test_an_error_in_the_final_ledger_move_propagates_and_leaves_the_task_in_flight(  # noqa: F811
+    project, tmp_path
+):
+    """#245 review N1 (pipeline.py _execute, finally): the move is not swallowed into a status.
+    The task stays DISPATCHED with FINISHED journaled, so restart recovery settles it."""
+    journal = Journal(tmp_path / "journal.sqlite")
+    with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+        run_task(
+            _spec(project, "k1"),
+            ledger=_LedgerFailsOnTheFinalMove(tmp_path / "own.sqlite"),
+            notary=Notary(tmp_path / "notary.sqlite"),
+            journal=journal,
+            worker=EditWorker({"src/calc.py": GOOD}),
+            run_root=tmp_path / "runs",
+        )
+    ledger = OwnershipLedger(tmp_path / "own.sqlite")
+    (task,) = ledger.in_flight()
+    assert task.status == "DISPATCHED"
+    assert journal.entries(task.task_id)[-1].phase == "FINISHED"

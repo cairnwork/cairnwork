@@ -16,7 +16,9 @@ Rules (from Nexus-new's experience, see docs/LESSONS_FROM_NEXUS.md):
   exits 4, as for leftover directories). The status decision does not change:
   a verdict Core recorded is bound to the candidate commit, and a process that
   outlived the run can neither alter it nor record another, so COMPLETED still
-  stands; a task without such a verdict is FAILED either way (#189);
+  stands; a task without such a verdict is FAILED either way (#189). A FAILED task is also
+  marked unswept in the ledger: it cannot be superseded, so its card cannot be taken over by a
+  new attempt, until takeover.supersede has swept the processes (#244);
 - settle each task on its own: one bad record is reported, not fatal, and
   recovery is idempotent, so it can run again after a crash during recovery.
 """
@@ -148,6 +150,8 @@ def _settle(
         new, reason = "COMPLETED", "CORE_VERIFIED_BEFORE_CRASH"
     else:
         new, reason = "FAILED", f"INTERRUPTED_AFTER_{phases[-1].phase}"
+    if unchecked and new == "FAILED":  # fence the takeover until the processes are checked (#244)
+        ledger.mark_unswept(record.task_id, attempt_id)
     ledger.set_status(record.task_id, new)
     return Decision(
         record.task_id, attempt_id, record.status, new, reason, killed, detail, len(left),
