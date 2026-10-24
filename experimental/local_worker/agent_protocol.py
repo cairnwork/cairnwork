@@ -10,6 +10,7 @@ mode; reading.py slices the wrapper's output (and pages it with Limits.read_page
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from experimental.local_worker.tools import ToolCall
@@ -179,13 +180,65 @@ def _range_args(args: dict) -> None:
         raise BadCall("the line range needs 1 <= start_line <= end_line")
 
 
+# A search pattern's cost cap (review of PR 251, 4): grep's regex engine (TRE) expands a bounded
+# repetition into copies, so ((a{255}){255}){255} allocates gigabytes. A pattern is at most
+# MAX_PATTERN_BYTES; in regex mode every bound ({n}, {n,}, {n,m}) is at most MAX_REPEAT and a
+# bounded group may not itself contain a bound (no nesting). Refused before the wrapper runs, as a
+# BadCall the model can repair; fixed strings are never parsed as regexes.
+MAX_PATTERN_BYTES = 512
+MAX_REPEAT = 100
+_BOUND = re.compile(r"\{(\d*)(?:,(\d*))?\}")
+
+
+def _bound(pattern: str, at: int) -> int | None:
+    """The end of a bound starting at ``at`` (BadCall over MAX_REPEAT), else None."""
+    m = _BOUND.match(pattern, at)
+    if m is None:
+        return None
+    if any(n and int(n) > MAX_REPEAT for n in m.groups()):
+        raise BadCall(f"search regex repetition counts must be at most {MAX_REPEAT}")
+    return m.end()
+
+
+def _check_regex(pattern: str) -> None:
+    stack = [False]  # per open group: whether it contains a bounded repetition
+    i = 0
+    while i < len(pattern):
+        c = pattern[i]
+        if c == "\\":
+            i += 2
+        elif c == "[":  # a bracket expression: no group or bound inside
+            j = i + 1 + (pattern[i + 1 : i + 2] == "^")
+            j += pattern[j : j + 1] == "]"
+            k = pattern.find("]", j)
+            i = len(pattern) if k < 0 else k + 1
+        elif c == "(":
+            stack.append(False)
+            i += 1
+        elif c == ")" and len(stack) > 1:
+            inner = stack.pop()
+            end = _bound(pattern, i + 1)
+            if end is not None and inner:
+                raise BadCall("search regex may not nest bounded repetitions")
+            stack[-1] = stack[-1] or inner or end is not None
+            i = end if end is not None else i + 1
+        else:
+            end = _bound(pattern, i) if c == "{" else None
+            stack[-1] = stack[-1] or end is not None
+            i = end if end is not None else i + 1
+
+
 def _search_args(args: dict) -> None:
     if not args["pattern"] or "\n" in args["pattern"] or "\0" in args["pattern"]:
         raise BadCall("search pattern must be one non-empty line")
+    if len(args["pattern"].encode()) > MAX_PATTERN_BYTES:
+        raise BadCall(f"search pattern must be at most {MAX_PATTERN_BYTES} bytes")
     if not isinstance(args.get("path", "."), str):
         raise BadCall("search path must be a string")
     if not isinstance(args.get("regex", False), bool):
         raise BadCall("search regex must be true or false")
+    if args.get("regex"):
+        _check_regex(args["pattern"])
 
 
 def call_key(call: dict) -> tuple[str, str]:

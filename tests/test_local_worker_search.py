@@ -263,3 +263,70 @@ def test_a_corpus_frozen_with_search_on_refuses_a_run_with_it_off(harness):
     run_cli, out = harness
     assert run_cli([], "run") == 0
     assert run_cli([], "run", "--search-tool", "off") == 2  # the manifest differs: a new corpus
+
+
+# -- the regex cost cap (review of PR 251, 4) ------------------------------------------------------
+def _decode_search(pattern: str, regex: bool = True) -> dict:
+    from experimental.local_worker.agent_protocol import decode_call
+
+    args = json.dumps({"pattern": pattern, "regex": regex})
+    call = {"id": "c", "function": {"name": "search", "arguments": args}}
+    return decode_call(call, 1, ("search",))[1]
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "((a{255}){255}){255}",
+        "((a{100}){100}){100}",
+        "(a{3}){2}",
+        "((a{3})*){2}",
+        "(x(a{2}|b)){2}",
+        "a{101}",
+        "a{1,101}",
+        "a{101,}",
+        "x" * 513,
+        "é" * 257,  # 514 bytes
+    ],
+)
+def test_a_costly_regex_is_a_bad_call(pattern):
+    from experimental.local_worker.agent_protocol import BadCall
+
+    with pytest.raises(BadCall):
+        _decode_search(pattern)
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "a{100}",
+        "(ab){3}c{4}",
+        "(a|b){2}(c){3}",
+        "[{(]x{2}",
+        r"\(a{3}\){3}",
+        "[[:alpha:]]{3}",
+        "x" * 512,
+    ],
+)
+def test_ordinary_regexes_pass(pattern):
+    assert _decode_search(pattern)["pattern"] == pattern
+
+
+def test_a_fixed_string_is_never_parsed_as_a_regex():
+    assert _decode_search("((a{255}){255}){255}", regex=False)["regex"] is False
+    from experimental.local_worker.agent_protocol import BadCall
+
+    with pytest.raises(BadCall):
+        _decode_search("x" * 513, regex=False)  # the length cap holds in both modes
+
+
+def test_the_loop_returns_the_cap_to_the_model(tmp_path):
+    from local_worker_fakes import reply
+
+    loop, world, endpoint, _ = make_loop(
+        tmp_path, [reply("search", pattern="(a{2}){2}", regex=True)]
+    )
+    rec = episode.build_record(META, loop.run(initial_messages(TASK)))
+    assert rec["turns"][0]["error_category"] == "INVALID_CALL"
+    assert "nest" in endpoint.payloads[1]["messages"][-1]["content"]
+    assert "search" not in [c[0] for c in world.calls]
