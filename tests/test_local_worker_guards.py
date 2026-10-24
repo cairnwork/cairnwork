@@ -221,3 +221,20 @@ def test_a_guard_exit_needs_its_own_limit_hit(tmp_path, exit_reason, hit):
     rec["termination"]["limit_hit"] = hit
     with pytest.raises(SchemaError, match="limit_hit"):
         validate_record(rec)
+
+
+def test_a_repeated_call_that_did_not_run_is_no_read_before_the_cut(tmp_path):
+    """Review of PR 251 (8a): pre_cut_read_actions counts reads that ran (or were refused), not
+    the repeat guard's not-run turns; the parent prefix of a resume counts the same way."""
+    from experimental.local_worker.agent import initial_messages as start
+    from experimental.local_worker.episode import parent_prefix
+
+    loop, _, _, _ = make_loop(tmp_path, [READ] * 4 + [WRITE], **HINT_MODE)
+    out = loop.run(start(TASK))
+    rec = episode.build_record(META, out)
+    validate_record(rec)  # the validator recounts the same way
+    assert categories(rec)[:5] == ["NONE", "NONE", "REPEATED", "REPEATED", "NONE"]
+    cut = rec["first_edit_cut"]
+    assert cut["cut_turn_index"] == 4 and cut["pre_cut_read_actions"] == 2
+    rows = [{**vars(t), "tokens": list(t.tokens)} for t in out.turns]
+    assert parent_prefix(rows, 4)["parent_pre_cut_read_actions"] == 2

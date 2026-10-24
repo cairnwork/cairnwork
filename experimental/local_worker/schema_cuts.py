@@ -14,9 +14,9 @@ from experimental.local_worker.cuts import (
     CUT_FIELDS,
     CUT_PRE,
     CUT_STATES,
-    READ_ACTIONS,
     SOURCE_FIELDS,
     SOURCE_PRE,
+    counts_as_read,
 )
 from experimental.local_worker.redact import MAX_CHANGED_PATHS, is_public_path
 from experimental.local_worker.schema_base import (
@@ -64,7 +64,7 @@ def pre_cut(turns: list, index: int) -> tuple[int, int | None, float, int]:
     values = [t[k] for t in before for k in keys]
     tokens = None if any(v is None for v in values) else sum(values)
     missing = sum(any(t[k] is None for k in keys) for t in before)
-    reads = sum(t["action_type"] in READ_ACTIONS for t in before)
+    reads = sum(counts_as_read(t["action_type"], t["error_category"]) for t in before)
     return reads, tokens, turns[pos]["t_start_seconds"], missing
 
 

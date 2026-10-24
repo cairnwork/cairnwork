@@ -24,8 +24,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from experimental.local_worker.cuts import (
-    READ_ACTIONS,
     _sum,
+    counts_as_read,
     differs,
     first_edit_cut,
     first_source_edit,
@@ -122,7 +122,7 @@ def parent_prefix(rows: list[dict], cut_turn: int) -> dict:
         zip(
             PARENT_FIELDS,
             (
-                sum(r["action_type"] in READ_ACTIONS for r in before),
+                sum(counts_as_read(r["action_type"], r["error_category"]) for r in before),
                 _sum(tokens),
                 round(float(start), 3),
                 sum(any(v is None for v in r["tokens"]) for r in before),
