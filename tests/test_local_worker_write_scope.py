@@ -133,6 +133,34 @@ def test_a_hard_link_in_scope_is_refused(runs):
     assert (co / "sub" / "h").read_bytes() == b"new\n"
 
 
+def test_any_hard_link_in_the_checkout_refuses_a_scoped_write(runs):
+    """A file with a second name anywhere in the checkout could have its directory moved into the
+    scope after the check (Claude review of the Codex round-1 fix): every scoped write is refused
+    meanwhile, though the target itself is new."""
+    co = runs / TAG / "checkout"
+    (co / "x").mkdir()
+    (co / "out").mkdir()
+    (co / "x" / "a").write_text("a\n")
+    os.link(co / "x" / "a", co / "out" / "b")
+    proc = write(runs, "sub/new.py", "sub")
+    assert refused(proc) and b"the checkout has a file with hard links: " in proc.stderr, (
+        proc.stderr
+    )
+    assert not (co / "sub" / "new.py").exists() and (co / "out" / "b").read_text() == "a\n"
+
+
+@pytest.mark.sandbox
+def test_hard_links_inside_git_or_without_a_scope_refuse_nothing(runs):
+    co = runs / TAG / "checkout"
+    (co / ".git" / "o1").write_text("o\n")
+    os.link(co / ".git" / "o1", co / ".git" / "o2")  # .git is never writable: skipped
+    assert write(runs, "sub/new.py", "sub").returncode == 0
+    (co / "out").mkdir()
+    os.link(co / ".git" / "o1", co / "out" / "o3")  # now a second name outside .git
+    assert refused(write(runs, "sub/new2.py", "sub"))
+    assert write(runs, "sub/new2.py").returncode == 0  # unscoped: no such check
+
+
 def _case_insensitive(path: Path) -> bool:
     return (path.parent / path.name.upper()).exists()
 

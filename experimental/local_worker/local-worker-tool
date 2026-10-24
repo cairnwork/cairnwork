@@ -59,7 +59,9 @@
 # planted at an entry must not widen it): an entry must name existing components in their on-disk
 # case and Unicode form, or every write under it is refused (refused, never let through). An
 # existing file with more than one hard link is refused too: its other names may lie outside the
-# scope, and no path check sees them; nor can a second name be made after the check, as the tool
+# scope, and no path check sees them. So is every scoped write while any file of the checkout
+# (outside .git) has more than one link, since a process a sweep missed could move its directory
+# into the scope after the check; and no second name can be made after the check, as the tool
 # profile denies every hard link. The profile then allows writes in the checkout only under the
 # entries (plus creating their ancestors, as directories only), and none in tmp: Seatbelt checks
 # the resolved path, so a symlink swapped in after the check (by a process a sweep missed) cannot
@@ -187,6 +189,13 @@ require_in_scope() {
   else
     landed=$(/bin/realpath -- "$2")${TARGET#"$2"} || refuse "write directory cannot be resolved"
   fi
+  # No file of the checkout (.git aside: never writable) may have a second name either: a process a
+  # sweep missed could move its directory into the scope after this check. No new link can appear
+  # (the profile denies file-link), so a checkout clean now stays clean.
+  multi=$(/usr/bin/find "$CHECKOUT" -iname .git -prune -o -type f -links +1 -print -quit) ||
+    refuse "checkout cannot be searched for hard links"
+  [ -z "$multi" ] ||
+    refuse "out of write scope: the checkout has a file with hard links: ${multi#"$CHECKOUT"/}"
   case "$landed" in
     "$CHECKOUT"/*) ;;
     *) refuse "write resolves outside the checkout" ;;
