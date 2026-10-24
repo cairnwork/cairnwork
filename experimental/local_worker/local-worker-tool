@@ -476,9 +476,10 @@ case "$ACTION" in
     [ -d "$dir" ] || [ -f "$dir" ] || refuse "search path is no file or directory: $TARGET"
     [ -d "$dir" ] || dir=${dir%/*}
     require_dir_inside_checkout "$dir" search
-    # grep -r follows no symlink it meets (BSD default, -p); .git is skipped; no writes at all.
+    # grep -r follows no symlink it meets (BSD default, -p); .git is skipped; no writes at all;
+    # -D skip: devices, FIFOs and sockets are never opened (a FIFO would block the read).
     ro="$(profile)(deny file-write* (subpath \"$CHECKOUT\") (subpath \"$RUN_ROOT/tmp\"))"
-    sandboxed "$ro" "$RUN_ROOT/tmp" /usr/bin/grep -r -n -I "$GREP_MODE" --exclude-dir=.git \
+    sandboxed "$ro" "$RUN_ROOT/tmp" /usr/bin/grep -r -n -I -D skip "$GREP_MODE" --exclude-dir=.git \
       -e "$PATTERN" -- "$TARGET"
     ;;
   pytest)

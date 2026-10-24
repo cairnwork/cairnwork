@@ -103,10 +103,29 @@ def test_a_symlinked_directory_on_the_way_cannot_leave_the_checkout(runs, link, 
 
 
 @pytest.mark.sandbox
+def test_a_fifo_in_the_tree_does_not_block_search(runs):
+    """Review of PR 251 (3): BSD grep -r opens a FIFO and blocks on it unless -D skip."""
+    co = runs / TAG / "checkout"
+    os.mkfifo(co / "sub" / "pipe")
+    env = dict(
+        os.environ,
+        CAIRNWORK_LOCAL_WORKER_RUNS=str(runs),
+        CAIRNWORK_LOCAL_WORKER_PYROOT=sys.base_prefix,
+    )
+    argv = ["/bin/sh", str(WRAPPER), "search", str(runs / TAG), "fixed", "hello", "."]
+    try:
+        proc = subprocess.run(argv, capture_output=True, env=env, cwd="/", timeout=30, check=False)
+    except subprocess.TimeoutExpired:  # release the grep blocked on the FIFO: a writer's open
+        os.close(os.open(co / "sub" / "pipe", os.O_WRONLY | os.O_NONBLOCK))
+        raise
+    assert proc.returncode == 0 and b"./a.txt:1:hello" in proc.stdout, proc.stderr
+
+
+@pytest.mark.sandbox
 def test_search_profile_may_write_nothing(runs, tmp_path):
     """A copy of the wrapper whose search runs touch instead of grep: the profile denies it."""
     text = WRAPPER.read_text()
-    grep = '/usr/bin/grep -r -n -I "$GREP_MODE" --exclude-dir=.git \\\n'
+    grep = '/usr/bin/grep -r -n -I -D skip "$GREP_MODE" --exclude-dir=.git \\\n'
     grep += '      -e "$PATTERN" -- "$TARGET"'
     assert text.count(grep) == 1
     copy = tmp_path / "local-worker-tool"
