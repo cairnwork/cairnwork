@@ -1,7 +1,8 @@
 """What the local worker's model sees and may call (#88): the system prompt, the tool schemas, and
 the decoding of a tool call. ``run_tests`` takes no free-form arguments (Plan v2 point 2): the loop
 runs ``pytest -q --tb=short -- <targets>`` over the task's declared public targets, or the one the
-model picks by ``target_index``.
+model picks by ``target_index``. ``search`` (read-only, a fixed string or a regex) is offered only
+with Settings.search_tool (default off): ``tool_schemas``/``system_prompt`` give the frozen set.
 """
 
 from __future__ import annotations
@@ -13,14 +14,16 @@ from experimental.local_worker.tools import ToolCall
 
 RUN_TESTS_ARGS = ("-q", "--tb=short", "--")
 NUDGE = "No tool call received. Reply with exactly one tool call, or call finish."
-SYSTEM_PROMPT = (
+_PROMPT = (
     "You are fixing one task in a Python repository. You act only through the tools list_dir, "
-    "read_file, write_file, edit_file, run_tests and finish; paths are relative to the repository "
-    "root. Call exactly one tool per reply. run_tests runs the task's public tests (all of them, "
-    "or the one named by target_index). When your change is complete, call finish with status "
-    "DONE. If the task cannot be done because its specification lacks a fact (a name, a contract "
-    "or the expected behaviour), call finish with status NEEDS_SPEC and say what is missing."
+    "read_file, {search}write_file, edit_file, run_tests and finish; paths are relative to the "
+    "repository root. Call exactly one tool per reply. run_tests runs the task's public tests "
+    "(all of them, or the one named by target_index). When your change is complete, call finish "
+    "with status DONE. If the task cannot be done because its specification lacks a fact (a "
+    "name, a contract or the expected behaviour), call finish with status NEEDS_SPEC and say "
+    "what is missing."
 )
+SYSTEM_PROMPT = _PROMPT.format(search="")
 
 
 def _fn(name: str, desc: str, props: dict, required: list[str]) -> dict:
@@ -53,7 +56,15 @@ TOOL_SCHEMAS = [
         ["status"],
     ),
 ]
-TOOLS_ABSENT = ("search",)  # the wrapper has no search action (Plan v1 design item 1: declared)
+SEARCH_SCHEMA = _fn(
+    "search",
+    "Find lines of the repository's files (read-only): a fixed string, or a regex if regex is true;"
+    " under path (a file or directory, default the root).",
+    {"pattern": _S, "path": _S, "regex": {"type": "boolean"}},
+    ["pattern"],
+)
+BASE_TOOLS = tuple(t["function"]["name"] for t in TOOL_SCHEMAS)
+TOOLS_ABSENT = ("search",)  # without Settings.search_tool (Plan v1 design item 1: declared)
 _REQUIRED = {
     "list_dir": ("path",),
     "read_file": ("path",),
@@ -61,12 +72,27 @@ _REQUIRED = {
     "edit_file": ("path", "target", "replacement"),
     "run_tests": (),
     "finish": ("status",),
+    "search": ("pattern",),
 }
 
 
 ALLOWED_ARGS = {
-    t["function"]["name"]: set(t["function"]["parameters"]["properties"]) for t in TOOL_SCHEMAS
+    t["function"]["name"]: set(t["function"]["parameters"]["properties"])
+    for t in [*TOOL_SCHEMAS, SEARCH_SCHEMA]
 }
+
+
+def tool_schemas(search: bool) -> list[dict]:
+    """The tools the model is offered: search (before write_file) only when enabled."""
+    return [*TOOL_SCHEMAS[:2], SEARCH_SCHEMA, *TOOL_SCHEMAS[2:]] if search else TOOL_SCHEMAS
+
+
+def tool_names(search: bool) -> tuple[str, ...]:
+    return tuple(t["function"]["name"] for t in tool_schemas(search))
+
+
+def system_prompt(search: bool) -> str:
+    return _PROMPT.format(search="search, ") if search else SYSTEM_PROMPT
 
 
 class BadCall(ValueError):
@@ -81,7 +107,8 @@ class ProtocolError(ValueError):
     """A reply that breaks the tool-call structure itself (tool_calls that is not a list of
     objects, a call or function that is not an object, a tool name or id that is not a string,
     arguments that are neither a JSON string nor an object): the episode stops with a recorded
-    ERROR_ABORT (abort_cause protocol_error); nothing executes and no argument is published."""
+    ERROR_ABORT (abort_cause protocol_error); nothing executes and no argument is published.
+    Nori counts it as a model outcome, so it is not recoverable like a BadCall (ADDENDUM_05)."""
 
 
 def _arguments(fn: dict) -> Any:
@@ -98,8 +125,9 @@ def _arguments(fn: dict) -> Any:
         raise BadCall("arguments are not valid JSON") from None
 
 
-def decode_call(call: Any, n_targets: int) -> tuple[str, dict]:
-    """(tool name, arguments) of one call; raises ProtocolError or BadCall (see above)."""
+def decode_call(call: Any, n_targets: int, tools: tuple[str, ...] = BASE_TOOLS) -> tuple[str, dict]:
+    """(tool name, arguments) of one call among ``tools`` (by default all but search); raises
+    ProtocolError or BadCall (see above)."""
     if not isinstance(call, dict) or not isinstance(call.get("function"), dict):
         raise ProtocolError("a tool call must be an object with a function object")
     if call.get("id") is not None and not isinstance(call["id"], str):
@@ -108,7 +136,7 @@ def decode_call(call: Any, n_targets: int) -> tuple[str, dict]:
     name = fn.get("name")
     if not isinstance(name, str):
         raise ProtocolError("a tool name must be a string")
-    if name not in _REQUIRED:
+    if name not in tools or name not in _REQUIRED:
         raise BadCall("unknown tool")
     args = _arguments(fn)
     if not isinstance(args, dict):
@@ -123,11 +151,30 @@ def decode_call(call: Any, n_targets: int) -> tuple[str, dict]:
         raise BadCall("finish status must be DONE or NEEDS_SPEC")
     if name == "finish" and not isinstance(args.get("summary", ""), str):
         raise BadCall("finish summary must be a string")
+    if name == "search":
+        _search_args(args)
     index = args.get("target_index")
     if name == "run_tests" and index is not None:
         if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < n_targets:
             raise BadCall(f"target_index must be an integer in [0, {n_targets})")
     return name, args
+
+
+def _search_args(args: dict) -> None:
+    if not args["pattern"] or "\n" in args["pattern"] or "\0" in args["pattern"]:
+        raise BadCall("search pattern must be one non-empty line")
+    if not isinstance(args.get("path", "."), str):
+        raise BadCall("search path must be a string")
+    if not isinstance(args.get("regex", False), bool):
+        raise BadCall("search regex must be true or false")
+
+
+def call_key(call: dict) -> tuple[str, str]:
+    """(tool name, raw arguments) of a decoded call: what the repeat guard compares, byte for byte
+    (arguments sent as an object are compared as their sorted JSON)."""
+    fn = call["function"]
+    raw = fn.get("arguments")
+    return fn["name"], raw if isinstance(raw, str) else json.dumps(raw, sort_keys=True)
 
 
 def render(call: ToolCall) -> str:

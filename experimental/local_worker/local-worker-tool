@@ -6,12 +6,15 @@
 #   <owner> ALL=(_cairnwork_worker) NOPASSWD: /Users/Shared/cairnwork-worker/local-bin/local-worker-tool
 # names that path. experimental/local_worker/tools.py runs it with `sudo -n -u _cairnwork_worker`.
 #
-# Eight actions, nothing else (exit 64 = refused before anything ran):
+# Nine actions, nothing else (exit 64 = refused before anything ran):
 #   [--start-nonce <hex>] before the action prints LOCAL_WORKER_STARTED <hex> on stderr first.
 #   local-worker-tool list   <run_root> <relpath>        list a directory of the checkout
 #   local-worker-tool read   <run_root> <relpath>        print a regular file of the checkout
 #   local-worker-tool write  <run_root> <relpath> [--scope <entry>...]
 #                                                        replace a checkout file with stdin
+#   local-worker-tool search <run_root> <fixed|regex> <pattern> <relpath|.>
+#                                                        lines matching a fixed string or an
+#                                                        extended regex (grep -rnI), read-only
 #   local-worker-tool pytest <run_root> [pytest args]    run <run_root>/venv/bin/python -m pytest
 #   local-worker-tool sweep  <run_root>                  kill this run's worker processes
 #   local-worker-tool status <run_root>                  git status of the checkout (porcelain v2,
@@ -27,7 +30,7 @@
 # checkout, with no "..", "." (except a bare "." for list), empty or ".git" (any case) component.
 #
 # Every action except sweep runs under a Seatbelt profile built HERE (never supplied by the caller).
-# The tool profile (list, read, write, pytest):
+# The tool profile (list, read, write, search, pytest; search also may write nothing at all):
 #   * no network at all (the tools do not need it; Splash is the agent loop's business, not theirs);
 #   * no reads under /Users, /Volumes, /private/tmp, /private/var/tmp, /private/var/folders except
 #     this run's checkout, venv and tmp and the worker Python tree, so the owner's home, the
@@ -386,7 +389,7 @@ if [ "${1:-}" = --start-nonce ]; then
   shift 2
 fi
 
-[ "$#" -ge 2 ] || refuse "usage: local-worker-tool <list|read|write|pytest|sweep|status|numstat|tracked> <run_root> ..."
+[ "$#" -ge 2 ] || refuse "usage: local-worker-tool <list|read|write|search|pytest|sweep|status|numstat|tracked> <run_root> ..."
 ACTION=$1
 RUN_ROOT=$2
 shift 2
@@ -414,6 +417,21 @@ case "$ACTION" in
       require_relpath "$1"
       TARGET=$CHECKOUT/$1
     fi
+    ;;
+  search)
+    [ "$#" -eq 3 ] || refuse "search takes a mode, a pattern and a path"
+    case "$1" in
+      fixed) GREP_MODE=-F ;;
+      regex) GREP_MODE=-E ;;
+      *) refuse "search mode must be fixed or regex" ;;
+    esac
+    case "$2" in
+      "" | *"
+"*) refuse "search pattern must be one non-empty line" ;;
+    esac
+    PATTERN=$2
+    [ "$3" = . ] || require_relpath "$3"
+    TARGET=$3
     ;;
   pytest)
     PY=$RUN_ROOT/venv/bin/python
@@ -451,6 +469,17 @@ case "$ACTION" in
     [ -z "$SCOPE_SET" ] || require_in_scope "$1" "$probe"
     sandboxed "$(profile)" "$RUN_ROOT/tmp" /bin/sh -c 'mkdir -p -- "$1" && cat > "$2"' sh \
       "$parent" "$TARGET"
+    ;;
+  search)
+    dir=$CHECKOUT/$TARGET
+    [ "$TARGET" = . ] || [ ! -L "$dir" ] || refuse "search path is a symlink: $TARGET"
+    [ -d "$dir" ] || [ -f "$dir" ] || refuse "search path is no file or directory: $TARGET"
+    [ -d "$dir" ] || dir=${dir%/*}
+    require_dir_inside_checkout "$dir" search
+    # grep -r follows no symlink it meets (BSD default, -p); .git is skipped; no writes at all.
+    ro="$(profile)(deny file-write* (subpath \"$CHECKOUT\") (subpath \"$RUN_ROOT/tmp\"))"
+    sandboxed "$ro" "$RUN_ROOT/tmp" /usr/bin/grep -r -n -I "$GREP_MODE" --exclude-dir=.git \
+      -e "$PATTERN" -- "$TARGET"
     ;;
   pytest)
     sandboxed "$(profile)" "$RUN_ROOT/tmp" "$PY" -m pytest -p no:cacheprovider "$@"

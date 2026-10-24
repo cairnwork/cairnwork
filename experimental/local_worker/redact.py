@@ -8,8 +8,8 @@ one, one the run never confirmed, or any path when the base listing was not obse
 ``{"sha256", "bytes", "ext"}``: a digest, plus its extension only when that is one of the fixed
 PATH_EXTS (so the extension carries no free text). The same rule covers tool arguments,
 first_edit_cut.target_file, its changed_paths and first_source_edit.path. Written text (content,
-target, replacement) is ``{"sha256", "bytes"}``. A list of changed paths keeps at most
-MAX_CHANGED_PATHS entries; the cut records the full count next to it.
+target, replacement, a search pattern) is ``{"sha256", "bytes"}``. A list of changed paths keeps
+at most MAX_CHANGED_PATHS entries; the cut records the full count next to it.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import hashlib
 from collections.abc import Collection
 from typing import Any
 
-TEXT_ARGS = ("content", "target", "replacement")
+TEXT_ARGS = ("content", "target", "replacement", "pattern")
 MAX_PATH_CHARS = 512
 MAX_CHANGED_PATHS = 64
 PATH_EXTS = (".py", ".pyi", ".pyx", ".pxd", ".c", ".h", ".cc", ".cpp", ".rs", ".go", ".js", ".ts")
@@ -86,6 +86,7 @@ PUBLIC_ARGS = {  # per action: the only argument keys a line may carry
     "edit_file": ("path", "target", "replacement"),
     "run_test": ("target_index",),
     "finish": ("status",),
+    "search": ("pattern", "path", "regex"),
 }
 
 
@@ -110,5 +111,7 @@ def public_args(
         elif key == "target_index" and isinstance(value, int) and not isinstance(value, bool):
             out[key] = value
         elif key == "status" and value in ("DONE", "NEEDS_SPEC"):
+            out[key] = value
+        elif key == "regex" and isinstance(value, bool):
             out[key] = value
     return out
