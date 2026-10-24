@@ -269,3 +269,38 @@ def test_the_manifest_freezes_the_paging_numbers(tmp_path, monkeypatch):
         8000,
     )
     assert run_cli([], "run", "--read-page-lines", "off") == 2  # the byte cap needs lines
+
+
+# -- line numbers as grep -n counts them (review of PR 251 delta, 1) -------------------------------
+@pytest.mark.parametrize(
+    "raw",
+    [b"a\x0cb\nc\n", b"a\rb\nc\n", "a b\nc\n".encode(), "a\x85b\x1cx\nc\n".encode()],
+)
+def test_only_a_newline_ends_a_line(raw):
+    out = page(call(raw), 2, 2, None, None, 20_000)
+    assert out.output == "c\n[lines 2-2 of 2; end of file]"
+
+
+def test_a_crlf_line_keeps_its_cr():
+    out = page(call(b"a\r\nb\r\n"), 2, None, None, None, 20_000)
+    assert out.output == "b\r\n[lines 2-2 of 2; end of file]"
+
+
+def test_a_search_hit_line_number_is_a_start_line(tmp_path):
+    world = World({"f.py": "a\x0cb\nneedle\n"})
+    replies = [reply("search", pattern="needle"), reply("read_file", path="f.py", start_line=2)]
+    loop, world, endpoint, _ = make_loop(tmp_path, replies, world)
+    loop.run(initial_messages(TASK))
+    assert "f.py:2:needle" in seen(endpoint, 1)
+    assert seen(endpoint, 2) == "[exit 0, output truncated]\nneedle\n[lines 2-2 of 2; end of file]"
+
+
+@pytest.mark.sandbox
+def test_grep_numbers_lines_by_newline_only(tmp_path):
+    """The real wrapper's search: a form feed does not start a line, as split_lines has it."""
+    from local_worker_fakes import TAG, make_runs, run_wrapper
+
+    runs = make_runs(tmp_path)
+    (runs / TAG / "checkout" / "f.py").write_bytes(b"a\x0cb\nneedle\n")
+    proc = run_wrapper(runs, "search", str(runs / TAG), "fixed", "needle", "f.py")
+    assert proc.stdout == b"f.py:2:needle\n"

@@ -99,7 +99,7 @@ class World:
                 f"{p}:{n}:{line}"
                 for p, text in sorted(self.files.items())
                 if where == "." or p == where or p.startswith(where + "/")
-                for n, line in enumerate(text.splitlines(), 1)
+                for n, line in enumerate(text.split("\n"), 1)  # as grep -n numbers lines
                 if pattern in line
             ]
             return (0 if hits else 1), "".join(h + "\n" for h in hits).encode()
