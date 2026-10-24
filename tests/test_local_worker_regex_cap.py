@@ -90,6 +90,26 @@ def test_any_nesting_is_refused_with_a_way_out(pattern):
         _decode_search(pattern)
 
 
+@pytest.mark.parametrize(
+    "pattern", [r"^(a+)+\1$", r"(a)\1", r"(a)(b)(c)(d)(e)(f)(g)(h)(i)\9", r"x\2y", r"(a)\1{2}"]
+)
+def test_a_back_reference_is_a_bad_call(pattern):
+    """Codex review of PR 251, must-fix 2: grep backtracks on a back-reference."""
+    from experimental.local_worker.agent_protocol import BadCall
+
+    with pytest.raises(BadCall, match="back-reference"):
+        _decode_search(pattern)
+
+
+@pytest.mark.parametrize("pattern", [r"\\1", r"a\.1", r"[\1]", r"\0", r"(a+)+$"])
+def test_an_escaped_backslash_a_bracket_or_a_digit_alone_is_no_back_reference(pattern):
+    assert _decode_search(pattern)["pattern"] == pattern
+
+
+def test_a_back_reference_in_a_fixed_string_is_text():
+    assert _decode_search(r"^(a+)+\1$", regex=False)["regex"] is False
+
+
 def test_a_fixed_string_is_never_parsed_as_a_regex():
     assert _decode_search("((a{255}){255}){255}", regex=False)["regex"] is False
     from experimental.local_worker.agent_protocol import BadCall

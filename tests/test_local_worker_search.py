@@ -88,12 +88,13 @@ def test_search_refuses(runs, args):
     ("link", "target", "path", "why"),
     [
         ("gd", ".git", "gd/config", b"resolves into a .git directory"),
-        ("td", "../tmp", "td/x.txt", b"resolves outside the checkout"),  # the run's tmp: readable
+        ("td", "../tmp", "td/x.txt", b"resolves outside the checkout"),  # the run's tmp
     ],
 )
 def test_a_symlinked_directory_on_the_way_cannot_leave_the_checkout(runs, link, target, path, why):
-    """Review of PR 251 (1): the directory checks, not Seatbelt, refuse these. Both targets are
-    readable under the tool profile, so without require_dir_inside_checkout grep would print."""
+    """Review of PR 251 (1): the directory checks refuse these before grep starts. Both targets
+    are readable under the tool profile; the read-only profile denies them as well (the second
+    layer, which a symlink swapped in after the checks meets: test_local_worker_readonly)."""
     co = runs / TAG / "checkout"
     (runs / TAG / "tmp" / "x.txt").write_text("hello from tmp\n")
     (co / link).symlink_to(target)
@@ -123,8 +124,8 @@ def test_a_fifo_in_the_tree_does_not_block_search(runs):
 
 @pytest.mark.sandbox
 def test_search_probe_shows_the_search_profile_denies_writes(runs):
-    """The canary's search-probe (review of PR 251, 7) touches the checkout and tmp under the
-    profile search runs under: it starts, fails, and nothing is created."""
+    """The canary's search-probe (review of PR 251, 7) tries to write the checkout, tmp and
+    /dev/null under the profile search runs under: it starts, fails, and nothing is created."""
     root = runs / TAG
     proc = run(runs, "search-probe", str(root))
     assert proc.returncode not in (0, 64) and b"Operation not permitted" in proc.stdout
@@ -138,6 +139,8 @@ def test_the_canary_requires_the_search_probes():
 
     assert "search a checkout file" in canary_check.REQUIRED_PROBES["positive_controls"]
     assert "search profile denies writes" in canary_check.REQUIRED_PROBES["b_write_denied"]
+    for path in ("links/link_dir/secret.txt", "links/link_private"):  # Codex review, should-fix 1
+        assert f"wrapper search {path}" in canary_check.REQUIRED_PROBES["a_read_denied"]
 
 
 @pytest.mark.sandbox

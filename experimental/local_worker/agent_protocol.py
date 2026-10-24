@@ -190,10 +190,17 @@ def _range_args(args: dict) -> None:
 # {,}, {x}) are literal to TRE and ignored here, as is anything inside a bracket expression [...].
 # Over-rejection kept on purpose: any nesting is refused, also a cheap one like ((a){2}){2}; the
 # BadCall says how to rewrite it. Refused before the wrapper runs, as a BadCall the model can
-# repair; fixed strings are never parsed as regexes.
+# repair; fixed strings are never parsed as regexes. Back-references (\1 to \9) are refused too
+# (Codex review of PR 251, must-fix 2): a back-reference makes TRE backtrack, and ^(a+)+\1$ on a
+# line of 40 "a"s and a "b" runs past any timeout. The wrapper's CPU-time limit on grep
+# (SEARCH_CPU_SECONDS) is the second layer for whatever this cap misses.
 MAX_PATTERN_BYTES = 512
 MAX_REPEAT = 100
 _BOUND = re.compile(r"\{(?:(\d+)(?:,(\d*))?|,(\d+))\}")
+BACKREF = (
+    "search regex may not use a back-reference such as \\1: match the text itself, or search with"
+    " a fixed string"
+)
 NESTED = (
     "search regex may not nest bounded repetitions such as (a{2}){3}, however small: write the"
     " inner part out, use * or +, or search with a fixed string"
@@ -216,6 +223,8 @@ def _check_regex(pattern: str) -> None:
     while i < len(pattern):
         c = pattern[i]
         if c == "\\":
+            if pattern[i + 1 : i + 2] in tuple("123456789"):
+                raise BadCall(BACKREF)
             i += 2
         elif c == "[":  # a bracket expression: no group or bound inside
             j = i + 1 + (pattern[i + 1 : i + 2] == "^")

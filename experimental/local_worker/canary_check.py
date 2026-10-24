@@ -3,8 +3,9 @@
 ``overall`` alone is not evidence: a report could say PASS with a failed or missing check. A
 report is accepted only with the canary's schema, exactly the six checks canary.run_canary
 writes, each passed, each probe row passed, every required probe present (one per read, write,
-network and escape target, plus the leak, leftover and positive-control rows, and at least six
-wrapper refusals for reads and for writes), and the worker identity. The sidecar sha256 the
+network and escape target, plus the leak, leftover and positive-control rows, both named search
+refusals and search's write probe, and at least six wrapper refusals for reads and for writes),
+and the worker identity. The sidecar sha256 the
 corpus also checks proves integrity only (the bytes did not change after writing), not who
 wrote them: this module is what checks the content.
 """
@@ -13,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from experimental.local_worker import probe
+from experimental.local_worker import canary_search, probe
 from experimental.local_worker.canary import SCHEMA
 from experimental.local_worker.tools import WORKER_USER
 
@@ -32,7 +33,9 @@ WRITE_TARGETS = (
     "git_query_dir",
 )
 REQUIRED_PROBES = {
-    "a_read_denied": {f"code read {n}" for n in READ_TARGETS} | {"no secret in any tool output"},
+    "a_read_denied": {f"code read {n}" for n in READ_TARGETS}
+    | {"no secret in any tool output"}
+    | canary_search.REFUSAL_PROBES,
     "b_write_denied": {f"code write {n}" for n in WRITE_TARGETS}
     | {"no write target exists afterwards", "search profile denies writes"},
     "c_network_denied": {f"code net {n}" for n in probe.NET_TARGETS},

@@ -8,14 +8,27 @@ from dataclasses import asdict, dataclass, field
 REFUSED_EXIT = 64
 
 
+def _char_cut(data: bytes, at: int, step: int) -> int:
+    """The cut ``at`` moved by ``step`` (-1: back, +1: forward) over at most three UTF-8
+    continuation bytes, so that it splits no character of valid UTF-8 (Codex review of PR 251,
+    must-fix 3); bytes that are no valid UTF-8 still decode with replacement characters."""
+    for _ in range(3):
+        if not 0 < at < len(data) or data[at] & 0xC0 != 0x80:
+            break
+        at += step
+    return at
+
+
 def _clip(data: bytes, limit: int) -> tuple[str, bool]:
-    """Head and tail of ``data`` within ``limit`` bytes (test output ends with the summary)."""
+    """Head and tail of ``data`` within ``limit`` bytes (test output ends with the summary), cut
+    at character boundaries; the note counts the bytes actually left out."""
     if len(data) <= limit:
         return data.decode("utf-8", errors="replace"), False
     half = limit // 2
-    dropped = len(data) - 2 * half
-    head = data[:half].decode("utf-8", errors="replace")
-    tail = data[-half:].decode("utf-8", errors="replace")
+    end, start = _char_cut(data, half, -1), _char_cut(data, len(data) - half, 1)
+    dropped = start - end
+    head = data[:end].decode("utf-8", errors="replace")
+    tail = data[start:].decode("utf-8", errors="replace")
     return f"{head}\n[... {dropped} bytes truncated ...]\n{tail}", True
 
 

@@ -334,3 +334,35 @@ def test_the_byte_cap_counts_raw_bytes_not_characters():
     out = page(call(raw), None, None, 400, 16_000, 20_000)  # the ADDENDUM_06 page
     assert out.output.endswith("[lines 1-7 of 9; call read_file with start_line=8 to continue]")
     assert out.output.count("\n") == 7 and "bytes truncated" not in out.output
+
+
+def test_a_clipped_line_is_cut_at_utf8_boundaries():
+    """Codex review of PR 251, must-fix 3: the exact input, default paging (400 lines, 16000
+    bytes, 20000 output): no replacement character, and the note counts the bytes left out."""
+    raw = ("€" * 6000 + "\n").encode()
+    lim = Limits(context_cap=1)
+    out = page(
+        call(raw), None, None, lim.read_page_lines, lim.read_page_bytes, lim.max_output_bytes
+    )
+    assert "\ufffd" not in out.output and out.stdout_truncated
+    head, rest = out.output.split("\n[... ", 1)
+    dropped, rest = rest.split(" bytes truncated ...]\n", 1)
+    tail, note = rest.rsplit("\n", 1)
+    assert note == "[lines 1-1 of 1; end of file]" and set(head) == set(tail) == {"€"}
+    assert len(head.encode()) + int(dropped) + len(tail.encode()) + 1 == len(raw)  # +1: the "\n"
+    assert len(head.encode()) + len(tail.encode()) + 1 <= 16_000 == lim.read_page_bytes
+
+
+def test_clip_never_splits_a_character_at_any_limit():
+    from experimental.local_worker.toolcall import _clip
+
+    data = ("aé€😀" * 5).encode()  # 1-, 2-, 3- and 4-byte characters
+    for limit in range(2, len(data)):
+        text, clipped = _clip(data, limit)
+        assert clipped and "\ufffd" not in text, limit
+        head, rest = text.split("\n[... ", 1)
+        dropped, tail = rest.split(" bytes truncated ...]\n", 1)
+        kept = len(head.encode()) + len(tail.encode())
+        assert kept <= limit and kept + int(dropped) == len(data), limit
+        assert data.startswith(head.encode()) and data.endswith(tail.encode())
+    assert _clip(b"\x80" * 10, 4)[0].count("\ufffd") == 0  # invalid UTF-8: cut, still bounded
