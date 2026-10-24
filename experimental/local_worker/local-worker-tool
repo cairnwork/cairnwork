@@ -34,6 +34,10 @@
 #     verifier tree, private test bundles, the harness and every other run (same uid!) are unreadable;
 #   * writes only inside <run_root>/checkout and <run_root>/tmp, never into any .git component (a
 #     worker-written hook or config would later run as the Owner), and nothing in <run_root>/q;
+#     the write action itself gets the checkout (or its scope) only, never tmp: mkdir and cat need
+#     no scratch, so a directory swapped for a symlink into tmp cannot take a write there;
+#   * no hard link to or from anything in the checkout (file-link), so a process a sweep missed
+#     cannot give a file a second name after a write's link-count check (see write --scope);
 #   * signals only to processes in the same sandbox (not the agy worker's runs, which share the uid).
 # The query profile (status, numstat, tracked): the same network, read and signal limits, reads
 # of the checkout (its .git included) and <run_root>/q only, writes only inside <run_root>/q. No
@@ -54,10 +58,11 @@
 # planted at an entry must not widen it): an entry must name existing components in their on-disk
 # case and Unicode form, or every write under it is refused (refused, never let through). An
 # existing file with more than one hard link is refused too: its other names may lie outside the
-# scope, and no path check sees them. The profile then allows writes in the checkout only under
-# the entries (plus creating their ancestors, as directories only): Seatbelt checks the resolved
-# path, so a symlink swapped in after the check (by a process a sweep missed) cannot land the
-# write elsewhere either.
+# scope, and no path check sees them; nor can a second name be made after the check, as the tool
+# profile denies file-link in the checkout. The profile then allows writes in the checkout only
+# under the entries (plus creating their ancestors, as directories only), and none in tmp:
+# Seatbelt checks the resolved path, so a symlink swapped in after the check (by a process a
+# sweep missed) cannot land the write elsewhere either.
 #
 # For tests and the pre-install canary the Owner may run this file directly (not through sudo) with
 # CAIRNWORK_LOCAL_WORKER_RUNS / CAIRNWORK_LOCAL_WORKER_PYROOT set; running as the worker account,
@@ -208,12 +213,14 @@ profile() {  # the tool profile: list, read, write, pytest (and so every line of
     "$CHECKOUT" "$RUN_ROOT" "$RUN_ROOT" "$PYROOT"
   printf '(allow file-read-metadata%s%s)\n' "$(ancestors "$CHECKOUT")" "$(ancestors "$PYROOT")"
   printf '(deny file-write*)\n'
-  printf '(allow file-write* %s (subpath "%s/tmp")' "$WRITE_RULES" "$RUN_ROOT"
+  printf '(allow file-write* %s' "$WRITE_RULES"
+  [ "$ACTION" = write ] || printf ' (subpath "%s/tmp")' "$RUN_ROOT"  # a write needs no scratch
   printf ' (literal "/dev/null") (literal "/dev/tty") (literal "/dev/dtracehelper"))\n'
   [ -z "$CREATE_RULES" ] ||
     printf '(allow file-write-create (require-all (vnode-type DIRECTORY) (require-any%s)))\n' \
       "$CREATE_RULES"
   printf '(deny file-write* (regex #"/\\.[gG][iI][tT](/|$)"))\n'
+  printf '(deny file-link (subpath "%s"))\n' "$CHECKOUT"  # no second name for a checkout file
   printf '(deny file-read* file-write* (subpath "%s/q"))\n' "$RUN_ROOT"  # the queries' alone
   printf '(deny signal)\n(allow signal (target same-sandbox))\n'
 }

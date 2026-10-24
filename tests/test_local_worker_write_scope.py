@@ -233,13 +233,15 @@ def test_tools_refuse_out_of_scope_writes_and_edits_then_go_on(runs, tmp_path):
     assert unscoped.write_file("a.txt", "x\n").exit_code == 0
 
 
-def _without_the_check(runs, tmp_path):
-    """The wrapper with its own scope check taken out: only the Seatbelt layer is left."""
+def _without_the_check(runs, tmp_path, *more):
+    """The wrapper with its own scope check (and any of `more`) taken out: only the Seatbelt layer
+    is left."""
     text = WRAPPER.read_text()
-    check = '[ -z "$SCOPE_SET" ] || require_in_scope "$1" "$probe"'
-    assert text.count(check) == 1
+    for check in ('[ -z "$SCOPE_SET" ] || require_in_scope "$1" "$probe"', *more):
+        assert text.count(check) == 1
+        text = text.replace(check, ":")
     copy = tmp_path / "local-worker-tool"
-    copy.write_text(text.replace(check, ":"))
+    copy.write_text(text)
     env = dict(
         os.environ,
         CAIRNWORK_LOCAL_WORKER_RUNS=str(runs),
@@ -247,8 +249,9 @@ def _without_the_check(runs, tmp_path):
     )
 
     def write_unchecked(path, *scope):
+        extra = ("--scope", *scope) if scope else ()
         return subprocess.run(
-            ["/bin/sh", str(copy), "write", str(runs / TAG), path, "--scope", *scope],
+            ["/bin/sh", str(copy), "write", str(runs / TAG), path, *extra],
             input=b"new\n",
             capture_output=True,
             env=env,
@@ -284,3 +287,54 @@ def test_the_profile_lets_an_entrys_ancestors_be_created_as_directories_only(run
     assert proc.returncode != 0 and (co / "pkg").is_dir() and not (co / "pkg" / "zzz").exists()
     assert write_unchecked("pkg/mod/new.py", "pkg/mod/new.py").returncode == 0
     assert (co / "pkg" / "mod" / "new.py").read_bytes() == b"new\n"
+
+
+@pytest.mark.sandbox
+@pytest.mark.parametrize("scope", [("sub",), ()])
+def test_the_profile_keeps_a_write_out_of_tmp(runs, tmp_path, scope):
+    """Codex round 1, MF2: a directory swapped for a symlink into <run_root>/tmp after every check
+    must not take the write there. The write action's profile has no tmp rule, scoped or not."""
+    write_unchecked = _without_the_check(
+        runs, tmp_path, 'require_dir_inside_checkout "$probe" write'
+    )
+    (runs / TAG / "checkout" / "sub" / "esc").symlink_to("../../tmp")
+    proc = write_unchecked("sub/esc/x.py", *scope)
+    assert proc.returncode != 0 and b"Operation not permitted" in proc.stdout, proc.stdout
+    assert list((runs / TAG / "tmp").iterdir()) == []
+
+
+_LINKS = """import os, sys
+co, tmp = sys.argv[1:3]
+for src, dst in ((co + "/a.txt", co + "/out/a"), (co + "/a.txt", tmp + "/a"),
+                 (tmp + "/t", co + "/out/t"), (tmp + "/t", tmp + "/t2")):
+    try:
+        os.link(src, dst)
+        print("LINKED", dst)
+    except PermissionError:
+        print("DENIED", dst)
+"""
+
+
+@pytest.mark.sandbox
+def test_test_code_cannot_give_a_checkout_file_a_second_name(runs):
+    """Codex round 1, MF1: a process a sweep missed must not hard-link a file after a scoped
+    write's link-count check (the write would then change the other name too). The tool profile
+    denies file-link to or from the checkout; links within tmp still work."""
+    root = runs / TAG
+    (root / "checkout" / "out").mkdir()
+    (root / "tmp" / "t").write_text("t\n")
+    (root / "tmp" / "links.py").write_text(_LINKS)
+    base = os.path.realpath(getattr(sys, "_base_executable", sys.executable))
+    py = root / "venv" / "bin" / "python"
+    py.parent.mkdir(parents=True)
+    py.write_text(f"#!/bin/sh\nexec {base} -I {root}/tmp/links.py {root}/checkout {root}/tmp\n")
+    py.chmod(0o755)
+    proc = run(runs, "pytest", str(root))
+    co, tmp = root / "checkout", root / "tmp"
+    assert proc.stdout.decode().split("\n")[:4] == [
+        f"DENIED {co}/out/a",
+        f"DENIED {tmp}/a",
+        f"DENIED {co}/out/t",
+        f"LINKED {tmp}/t2",
+    ], proc.stdout
+    assert (co / "a.txt").stat().st_nlink == 1 and not (co / "out" / "t").exists()
