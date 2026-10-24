@@ -118,6 +118,12 @@ def test_a_start_past_the_end_is_truncated():
     assert page(call(), 11, None, 4, None, 20_000).stdout_truncated is True
 
 
+def test_a_range_from_a_later_line_to_the_end_is_truncated():
+    """Review of PR 251 delta (4): the model saw lines 3-10 only."""
+    out = page(call(), 3, None, None, None, 20_000)
+    assert out.output.endswith("[lines 3-10 of 10; end of file]") and out.stdout_truncated is True
+
+
 # -- protocol, limits, redaction and schema --------------------------------------------------------
 def read_call(**args) -> dict:
     return {"id": "c", "function": {"name": "read_file", "arguments": json.dumps(args)}}
