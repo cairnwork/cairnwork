@@ -10,6 +10,7 @@ import pytest
 from agy_receipt_lines import RUN_TAG, WORKER, cleanup, good_run, launch, status, sweep
 from test_agy_worker import TASK, _dispatched, attempt, fake_dispatcher
 
+from cairnwork.unswept import WorkerMayLive
 from cairnwork.workers import agy_dispatch
 from cairnwork.workers.agy import AgyWorker, AgyWorkerError
 from cairnwork.workers.agy_dispatch import AgyWorkerAccountFailed, Dispatch
@@ -159,9 +160,17 @@ def test_a_launch_that_never_started_still_names_the_account_failure(tmp_path):
     )
     worker, workdir, _ = _replaying(tmp_path, stderr, 1)
     # not_started is no clean sweep receipt: the unswept run leads, the account failure follows
-    with pytest.raises(AgyWorkerError, match=f"^WORKER_SWEEP_UNCLEAN: .*{failure}"):
+    with pytest.raises(AgyWorkerError, match=f"^WORKER_SWEEP_UNCLEAN: .*{failure}") as raised:
         worker.run(workdir, TASK)
     assert _record(workdir)["attempts"][0]["worker_failure"] == failure
+    # #244: the pipeline fences the attempt, with the account its processes run as
+    assert isinstance(raised.value, WorkerMayLive) and raised.value.account == WORKER
+    assert worker.run_as == WORKER
+
+
+def test_without_an_account_the_worker_runs_as_the_owner(tmp_path):
+    worker, _, _ = _dispatched(tmp_path, "")
+    assert worker.run_as == "" and AgyWorker().run_as == ""
 
 
 def test_an_ordinary_dispatcher_failure_under_run_as_user_is_not_an_account_failure(tmp_path):

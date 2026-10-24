@@ -19,7 +19,7 @@ from pathlib import Path
 
 PHASES = (
     "DISPATCHED",  # attempt id chosen, ledger moved to DISPATCHED
-    "WORKER_STARTED",  # clone created, worker about to run
+    "WORKER_STARTED",  # clone created, worker about to run (detail = worker account or "")
     "CANDIDATE",  # candidate commit created and checked (detail = commit id)
     "TEST_SOURCE",  # hidden-test mode this run used (detail = bundle | auto); read by attest
     "VERIFYING",  # verifiers about to run on the candidate

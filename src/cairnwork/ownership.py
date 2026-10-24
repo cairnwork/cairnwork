@@ -16,8 +16,8 @@ DISPATCHED). The one-active-card rule
 lives in the schema (a partial unique index), so it also holds for raw writers;
 ``bind`` maps the index violation to DuplicateLogicalTask.
 
-A FAILED task whose attempt's processes recovery could not check (unswept.py) cannot be
-SUPERSEDED: ``set_status`` raises TakeoverRefused until ``takeover.supersede`` has swept them.
+A FAILED task whose attempt's processes are not shown gone (unswept.py) cannot be SUPERSEDED:
+``set_status`` raises TakeoverRefused until ``takeover.supersede`` has shown them gone.
 
 The ledger must live on a local disk: it uses SQLite WAL, which is unsafe on
 network filesystems, and opening fails if WAL cannot be enabled.
@@ -48,8 +48,7 @@ TRANSITIONS: dict[str, frozenset[str]] = {
     "SUPERSEDED": frozenset(),
 }
 
-_SCHEMA = (
-    """
+_SCHEMA = """
 CREATE TABLE IF NOT EXISTS task_ownership (
     idempotency_key TEXT PRIMARY KEY,
     request_digest  TEXT NOT NULL,
@@ -63,8 +62,6 @@ CREATE INDEX IF NOT EXISTS task_ownership_card ON task_ownership (card_hash);
 CREATE UNIQUE INDEX IF NOT EXISTS task_ownership_one_active_per_card
     ON task_ownership (card_hash) WHERE status NOT IN ('SUPERSEDED', 'CANCELLED');
 """
-    + unswept.SCHEMA
-)
 
 
 class OwnershipError(Exception):
@@ -109,7 +106,7 @@ class InvalidStatusTransition(OwnershipError):
 
 
 class TakeoverRefused(OwnershipError):
-    """SUPERSEDED refused: the FAILED attempt's processes were never checked (takeover.py)."""
+    """SUPERSEDED refused: the FAILED attempt's processes are not shown gone (takeover.py)."""
 
     code = "TAKEOVER_REFUSED"
 
@@ -164,6 +161,7 @@ class OwnershipLedger:
                 raise LedgerStorageUnsupported(f"journal_mode is {mode!r}, need wal")
             try:
                 conn.executescript(_SCHEMA)
+                unswept.migrate(conn)  # after task_ownership: marks a pre-#244 ledger's FAILED
             except sqlite3.IntegrityError as exc:
                 raise LedgerIntegrityViolation(str(exc)) from exc
         finally:
@@ -248,20 +246,12 @@ class OwnershipLedger:
         """Bound or dispatched rows another system owns (reported, never counted)."""
         return [r for r in self.in_flight(include_foreign=True) if r.owner != OWNER]
 
-    def mark_unswept(self, task_id: str, attempt_id: str) -> None:
-        """Recovery: the attempt's processes were not checked; SUPERSEDED is refused until
-        takeover.supersede has swept them (#244)."""
-        self._on_conn(unswept.mark, task_id, attempt_id)
-
-    def unswept_attempt(self, task_id: str) -> tuple[str, str] | None:
-        """(attempt_id, last refusal) while the task's attempt is unchecked, else None."""
+    def unswept_attempt(self, task_id: str) -> unswept.Mark | None:
+        """The task's takeover fence (unswept.py), or None."""
         return self._on_conn(unswept.get, task_id)
 
     def note_refusal(self, task_id: str, refusal: str) -> None:
         self._on_conn(unswept.note, task_id, refusal)
-
-    def clear_unswept(self, task_id: str) -> None:
-        self._on_conn(unswept.clear, task_id)
 
     def _on_conn(self, operation, *args):
         conn = self._connect()
@@ -271,15 +261,22 @@ class OwnershipLedger:
             conn.close()
 
     def set_status(
-        self, task_id: str, status: str, *, expected_from: str | None = None
+        self,
+        task_id: str,
+        status: str,
+        *,
+        expected_from: str | None = None,
+        fence: tuple[str, str] | None = None,
+        swept: str | None = None,
     ) -> OwnershipRecord:
         """Move a task along TRANSITIONS; the owner of a task can never change.
 
-        expected_from makes it a compare-and-set: the move happens only if the task
-        is in that status in the same transaction (else InvalidStatusTransition).
-        """
-        if status not in TRANSITIONS:
-            raise InvalidOwnershipValue(f"status {status!r}")
+        expected_from makes it a compare-and-set, in the same transaction (else
+        InvalidStatusTransition). fence=(attempt id, account), FAILED only: mark the attempt
+        unswept in that transaction. SUPERSEDED of a marked task needs ``swept`` = the marked
+        attempt (takeover.supersede showed its processes gone); the mark goes with the move."""
+        if status not in TRANSITIONS or (fence is not None and status != "FAILED"):
+            raise InvalidOwnershipValue(f"status {status!r}" + " with a fence" * bool(fence))
         conn = self._connect()
         try:
             conn.execute("BEGIN IMMEDIATE")
@@ -291,9 +288,12 @@ class OwnershipLedger:
             if status not in TRANSITIONS.get(current.status, frozenset()):
                 raise InvalidStatusTransition(f"{current.status} -> {status}")
             if status == "SUPERSEDED" and (held := unswept.get(conn, task_id)) is not None:
-                unswept.note(conn, task_id, "UNSWEPT_ATTEMPT: refused to supersede")
-                conn.execute("COMMIT")  # the refusal is kept, then reported (takeover.supersede)
-                raise TakeoverRefused(f"{task_id}: attempt {held[0]} was never checked (unswept)")
+                if swept != held.attempt_id:
+                    why = f"attempt {held.attempt_id or 'LEGACY'} is not shown gone (takeover.py)"
+                    raise TakeoverRefused(f"{task_id}: UNSWEPT_ATTEMPT: {why}")
+                unswept.clear(conn, task_id)
+            if fence is not None:
+                unswept.mark(conn, task_id, *fence)
             conn.execute(
                 "UPDATE task_ownership SET status = ? WHERE task_id = ?", (status, task_id)
             )

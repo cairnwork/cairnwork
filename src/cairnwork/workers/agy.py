@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cairnwork.confined import ATTEMPT_ENV, copy_capped, sweep_marked
+from cairnwork.unswept import WorkerMayLive
 from cairnwork.workers import agy_dispatch, agy_receipts
 
 ENV_KEEP = (
@@ -88,6 +89,10 @@ class AgyWorkerError(Exception):
     pass
 
 
+class AgyWorkerUnswept(AgyWorkerError, WorkerMayLive):
+    """WORKER_SWEEP_UNCLEAN: worker-account processes may survive; the attempt is fenced (#244)."""
+
+
 def _uid(user: str) -> int | None:
     try:
         return pwd.getpwnam(user).pw_uid
@@ -102,6 +107,11 @@ class AgyWorker:
     agy: str = "agy"
     dispatch: agy_dispatch.Dispatch | None = None
     verifier_user: str | None = None  # the verifier account, if any (isolation, #234)
+
+    @property
+    def run_as(self) -> str:
+        """The worker account agy runs as, "" for the owner's uid (journaled, #244)."""
+        return (self.dispatch.run_as_user or "") if self.dispatch is not None else ""
 
     @property
     def isolated(self) -> bool:
@@ -237,9 +247,10 @@ def _settle_worker_run(dispatch, reader, process, held, timed_out, log_path) -> 
     agy_receipts.write_record(log_path, receipts, unswept + ended + found + extra)
     survivors = [u for u in unswept if u.startswith("WORKER_SWEEP_UNCLEAN")]
     if survivors or (unswept and (ended or not found)):  # primary whenever a run may survive
-        raise AgyWorkerError(
+        raise AgyWorkerUnswept(
             f"WORKER_SWEEP_UNCLEAN: worker-account processes may survive: {unswept}; "
-            f"receipt problems: {found}; log {log_path}"
+            f"receipt problems: {found}; log {log_path}",
+            dispatch.run_as_user,
         )
     if found and not ended:
         raise agy_dispatch.AgyWorkerAccountFailed(f"{'; '.join(found + unswept)}; log {log_path}")

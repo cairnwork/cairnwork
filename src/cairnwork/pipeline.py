@@ -6,9 +6,10 @@ that is verified for the exact candidate commit makes it COMPLETED.
 
 Any exception after binding is recorded as FAILED with an ``INFRA_ERROR`` reason; a crash of this
 process leaves the task DISPATCHED until restart recovery. A FAILED task keeps its card: to retry,
-SUPERSEDE it (``takeover.supersede``), then submit anew; the takeover is refused while recovery
-left the old attempt's processes unchecked (#244). A ``Worker``
-edits its clone and must have exited when ``run`` returns.
+SUPERSEDE it (``takeover.supersede``), then submit anew; the takeover is refused while the old
+attempt's processes are not shown gone (#244): a worker that raises ``unswept.WorkerMayLive``
+gets its attempt marked in the FAILED move. A ``Worker`` edits its clone and must have exited
+when ``run`` returns.
 """
 
 from __future__ import annotations
@@ -39,6 +40,7 @@ from cairnwork.p2p_selection import DEFAULT_BUDGET_SECONDS, DIRECT_MODE
 from cairnwork.pipeline_judge import judge_candidate, tests_with_teeth
 from cairnwork.protected_paths import path_refusal
 from cairnwork.snapshot import snapshot_candidate
+from cairnwork.unswept import WorkerMayLive
 from cairnwork.verifier_account import VerifierAccount
 from cairnwork.verifiers import (
     VerifierRejected,
@@ -101,7 +103,8 @@ class Worker(Protocol):
 
     A worker that starts processes must give each one the environment variable
     CAIRNWORK_ATTEMPT=<workdir.name> (confined.ATTEMPT_ENV), so restart recovery can find and
-    stop them if Cairnwork dies mid-run (AgyWorker does)."""
+    stop them if Cairnwork dies mid-run (AgyWorker does). Optional ``run_as``: the worker account
+    its processes run as, journaled at WORKER_STARTED for recovery and the takeover (#244)."""
 
     def run(self, workdir: Path, task: TaskSpec) -> None: ...  # optional ``isolated``: AgyWorker
 
@@ -116,6 +119,7 @@ class TaskResult:
     verified: bool = False
     logs: list[str] = field(default_factory=list)
     p2p: dict = field(default_factory=dict)  # the P2P selection rule used (p2p.py)
+    fence: str | None = None  # WorkerMayLive's account ("" the owner's): FAILED marks it (#244)
 
 
 def check_task(task: TaskSpec, *, verifier_python: str | None = None) -> tuple[VerifierSpec, ...]:
@@ -249,7 +253,8 @@ def _execute(task, specs, record, ledger, notary, journal, worker, run_root, ver
     finally:
         result.status = "COMPLETED" if result.verified else "FAILED"
         steps.reach("FINISHED", result.status)
-        ledger.set_status(record.task_id, result.status)
+        fence = None if result.verified or result.fence is None else (attempt_id, result.fence)
+        ledger.set_status(record.task_id, result.status, fence=fence)
     return result
 
 
@@ -293,12 +298,14 @@ def _attempt(task, specs, digest, notary, worker, run_root, result, steps, verif
         result.reason = exc.comparison.worker_reason(isolated=True)
         return
     attempt = create_attempt_clone(task.repo, task.base_commit, run_root, result.attempt_id)
-    steps.reach("WORKER_STARTED")
+    steps.reach("WORKER_STARTED", getattr(worker, "run_as", "") or "")
     try:
         try:
             worker.run(attempt.path, task)
         except Exception as exc:  # noqa: BLE001 - any worker failure is a failed attempt
             result.reason = f"WORKER_FAILED: {type(exc).__name__}: {exc}"
+            if isinstance(exc, WorkerMayLive):  # its processes may outlive the run (#244)
+                result.fence = exc.account
             return
         try:
             candidate = snapshot_candidate(

@@ -1,48 +1,64 @@
 """Supersede a FAILED task without letting two attempts overlap (#244 window 1).
 
-A recovery that could not read the process table (SWEEP_UNAVAILABLE) leaves the dead attempt's
-worker possibly running, and the task FAILED with a mark in the ledger (unswept.py). Superseding
-the task and submitting its card again would start a second attempt beside that worker. So the
-takeover re-runs the very sweep recovery uses (``confined.sweep_marked`` on the attempt's
-``CAIRNWORK_ATTEMPT`` tag) and goes ahead only when the sweep now runs and, after killing what it
-found, finds nothing left. Otherwise it refuses (``TakeoverRefused``, exit 2 of route) and records
-the reason in the ledger, shown by ``status``. There is no override: fail closed, run it again.
-A task whose attempt was checked (no mark) supersedes exactly as before.
+A FAILED task whose attempt's processes are not shown gone carries a mark in the ledger
+(unswept.py); superseding it and submitting its card again would start a second attempt beside
+them. So the takeover runs the sweep recovery uses (``confined.sweep_marked`` on the attempt's
+``CAIRNWORK_ATTEMPT`` tag, and the worker account the attempt ran as) and looks again until the
+processes are shown gone (``confined.confirm_gone``): the whole table read, no marked process
+listed, none of the owner's processes hiding its environment, and the worker account idle (its
+processes cannot be inspected, so any one of them keeps the fence). Only then does it supersede,
+dropping the mark in the same ledger transaction. Otherwise it refuses (``TakeoverRefused``,
+exit 2 of route) with the reason's code (``Sweep.problem``) and records the reason, shown by
+``status``. There is no override: fail closed, run it again. A task without a mark supersedes
+exactly as before.
+
+A LEGACY mark (made at the ledger migration; the attempt is unknown to the ledger) needs the
+journal: every attempt it names for the task is swept, with ``account`` (the state's configured
+worker account) as the account. No journal: refused. No journaled attempt: nothing was started.
 """
 
 from __future__ import annotations
 
-import time
+from typing import NoReturn
 
-from cairnwork.confined import ATTEMPT_ENV, SWEEP_UNAVAILABLE, sweep_marked
+from cairnwork import unswept
+from cairnwork.confined import ATTEMPT_ENV, Sweep, confirm_gone, sweep_marked
+from cairnwork.journal import Journal
 from cairnwork.ownership import OwnershipLedger, OwnershipRecord, TakeoverRefused
 
-_CONFIRM_TRIES = 10  # re-sweeps after a kill, until the killed processes are gone
-_CONFIRM_WAIT = 0.1
 
-
-def supersede(ledger: OwnershipLedger, task_id: str) -> OwnershipRecord:
-    """Mark the task SUPERSEDED. Raises TakeoverRefused while its attempt's processes are
-    unchecked or still alive; InvalidStatusTransition as ``ledger.set_status`` does."""
+def supersede(
+    ledger: OwnershipLedger,
+    task_id: str,
+    *,
+    journal: Journal | None = None,
+    account: str | None = None,
+) -> OwnershipRecord:
+    """Mark the task SUPERSEDED. Raises TakeoverRefused while its attempt's processes are not
+    shown gone; InvalidStatusTransition as ``ledger.set_status`` does."""
     held = ledger.unswept_attempt(task_id)
-    if held is not None:
-        _recheck(ledger, task_id, held[0])
-    return ledger.set_status(task_id, "SUPERSEDED")
+    if held is None:
+        return ledger.set_status(task_id, "SUPERSEDED")
+    if held.attempt_id != unswept.LEGACY:
+        attempts, account = [held.attempt_id], held.account or None
+    elif journal is None:
+        _refuse(ledger, task_id, "LEGACY_ATTEMPT_UNKNOWN: the ledger does not know the attempt")
+    else:
+        attempts = sorted({e.attempt_id for e in journal.entries(task_id)})
+    for attempt_id in attempts:
+        found = _swept(attempt_id, account)
+        if not found.gone:
+            _refuse(ledger, task_id, f"{found.problem()} (attempt {attempt_id})")
+    return ledger.set_status(task_id, "SUPERSEDED", swept=held.attempt_id)
 
 
-def _recheck(ledger: OwnershipLedger, task_id: str, attempt_id: str) -> None:
-    found = sweep_marked(ATTEMPT_ENV, attempt_id)
-    tries = 0
-    while found not in (0, SWEEP_UNAVAILABLE) and tries < _CONFIRM_TRIES:
-        time.sleep(_CONFIRM_WAIT)  # it was SIGKILLed: wait until it is gone, then look again
-        found, tries = sweep_marked(ATTEMPT_ENV, attempt_id), tries + 1
-    if found == 0:
-        ledger.clear_unswept(task_id)
-        return
-    why = (
-        "SWEEP_UNAVAILABLE: the process table cannot be read; the attempt's processes are unchecked"
-        if found == SWEEP_UNAVAILABLE
-        else f"SURVIVORS_REMAIN: {found} process(es) of the attempt are still running"
-    )
-    ledger.note_refusal(task_id, f"{why} (attempt {attempt_id})")
+def _swept(attempt_id: str, account: str | None) -> Sweep:
+    def look() -> Sweep:
+        return sweep_marked(ATTEMPT_ENV, attempt_id, account=account)
+
+    return confirm_gone(look(), look)
+
+
+def _refuse(ledger: OwnershipLedger, task_id: str, why: str) -> NoReturn:
+    ledger.note_refusal(task_id, why)
     raise TakeoverRefused(f"{task_id}: {why}; the card stays held, retry after they are gone")

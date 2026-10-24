@@ -3,10 +3,10 @@
 Every command prints one JSON object on stdout. Exit codes: 0 done; 2 refused
 (``{"error": code, "detail": ...}``: not accepting, bad request, not cancellable,
 recovery busy, key reused, card already active, REPLAY_FORBIDDEN,
-RECONCILIATION_REQUIRED, NOT_SUPERSEDABLE, TAKEOVER_REFUSED: ``supersede`` of a task whose dead
-attempt's processes are unchecked or still running, #244); 3 unknown task; 4 ``recover``
+RECONCILIATION_REQUIRED, NOT_SUPERSEDABLE, TAKEOVER_REFUSED: ``supersede`` of a task whose FAILED
+attempt's processes are not shown gone, #244); 3 unknown task; 4 ``recover``
 settled every task but it is not a clean success (``leftover_run_dirs`` > 0, or
-``sweep_unavailable``: the dead run's processes could not be checked; no ``error``: someone
+``sweep_unavailable``: the dead run's processes are not shown gone; no ``error``: someone
 must clean up or check);
 1 anything else, including a recovery that could not settle every task. Only
 NOT_ACCEPTING means "not taken, the old system may run it"; after any other answer the

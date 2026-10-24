@@ -3,7 +3,7 @@
 1. Parent crash (SIGKILL mid-worker), process sweep unavailable, recovery marks the task FAILED,
    the operator supersedes and resubmits: the child the dead run's worker started could still
    act while the new attempt runs. CONFIRMED (PR #245), FIXED: the takeover is refused until the
-   attempt's processes are swept (takeover.py, ownership.py TakeoverRefused); pinned below.
+   attempt's processes are shown gone (takeover.py, ownership.py TakeoverRefused); pinned below.
    The signal is still the Decision's ``sweep_unavailable`` (route ``recover`` exits 4, #189).
 2. Core recorded a verified verdict, then an exception (here: the verdict readback fails) and a
    crash before the FINISHED journal row: the live run would have said FAILED (INFRA_ERROR), but
@@ -26,7 +26,7 @@ from test_recovery import project as project  # noqa: F401 - fixture
 
 import cairnwork.recovery as recovery
 from cairnwork import takeover
-from cairnwork.confined import SWEEP_UNAVAILABLE
+from cairnwork.confined import UNLISTED
 from cairnwork.journal import Journal
 from cairnwork.notary import Notary
 from cairnwork.ownership import DuplicateLogicalTask, OwnershipLedger, TakeoverRefused
@@ -82,7 +82,7 @@ def test_a_survivor_of_an_unswept_crash_blocks_the_takeover_until_it_is_swept(
         pid = _survivor_pid(tmp_path)
         os.kill(proc.pid, signal.SIGKILL)
         proc.wait()
-        monkeypatch.setattr(recovery, "sweep_marked", lambda *_a, **_k: SWEEP_UNAVAILABLE)
+        monkeypatch.setattr(recovery, "sweep_marked", lambda *_a, **_k: UNLISTED)
         (decision,), ledger = settle(tmp_path)
         assert (decision.new_status, decision.reason, decision.sweep_unavailable) == (
             "FAILED",
@@ -93,7 +93,7 @@ def test_a_survivor_of_an_unswept_crash_blocks_the_takeover_until_it_is_swept(
         with pytest.raises(TakeoverRefused):  # a raw writer is fenced too
             ledger.set_status(decision.task_id, "SUPERSEDED")
         real_sweep = takeover.sweep_marked
-        monkeypatch.setattr(takeover, "sweep_marked", lambda *_a, **_k: SWEEP_UNAVAILABLE)
+        monkeypatch.setattr(takeover, "sweep_marked", lambda *_a, **_k: UNLISTED)
         with pytest.raises(TakeoverRefused, match="SWEEP_UNAVAILABLE"):
             takeover.supersede(ledger, decision.task_id)
         assert ledger.get(task_id=decision.task_id).status == "FAILED" and _alive(pid)
@@ -109,27 +109,44 @@ def test_a_survivor_of_an_unswept_crash_blocks_the_takeover_until_it_is_swept(
             )
         monkeypatch.setattr(takeover, "sweep_marked", real_sweep)  # the process table is readable
         assert takeover.supersede(ledger, decision.task_id).status == "SUPERSEDED"
-        deadline = time.monotonic() + 30
-        while _alive(pid) and time.monotonic() < deadline:
-            time.sleep(0.05)
-        assert not _alive(pid)  # the sweep killed the child before the card was released
-        result = run_task(
+        result = run_task(  # at once: supersede itself must have shown the child gone
             _spec(project, "k2"),
             ledger=ledger,
             notary=notary,
             journal=journal,
-            worker=EditWorker({"src/calc.py": GOOD}),
+            worker=_SignallingWorker(tmp_path, {"src/calc.py": GOOD}),
             run_root=tmp_path / "runs",
         )
         assert result.status == "COMPLETED" and result.verified, result.reason
         assert result.attempt_id != decision.attempt_id
+        # the child copies the new worker's token within ~50 ms if it is alive: this fails if
+        # the takeover released the card while the old attempt's child still ran
         assert not (tmp_path / "old-attempt-wrote").exists()
+        assert not _alive(pid)
     finally:
         if proc.poll() is None:
             proc.kill()
             proc.wait()
         if pid is not None and _alive(pid):
             os.kill(pid, signal.SIGKILL)
+
+
+class _SignallingWorker(EditWorker):
+    """The new attempt's worker: tells a surviving child of the old attempt to act
+    (survivor_child.py), then gives it a second to do so."""
+
+    def __init__(self, state, files):
+        super().__init__(files)
+        self.state = state
+
+    def run(self, workdir, task):
+        super().run(workdir, task)
+        part = self.state / "new-attempt-running.part"
+        part.write_text(workdir.name)
+        os.replace(part, self.state / "new-attempt-running")
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline and not (self.state / "old-attempt-wrote").exists():
+            time.sleep(0.05)
 
 
 class _ReadbackFails(Notary):
