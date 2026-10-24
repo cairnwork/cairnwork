@@ -23,6 +23,7 @@ import re
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 from conftest import commit_change
@@ -217,7 +218,7 @@ _LINKS = (
     "        digest = hashlib.sha256(open(path, 'rb').read()).hexdigest()\n"
     "    except OSError as exc:\n"
     "        digest = errno.errorcode[exc.errno]\n"
-    "    keys = ('mode', 'nlink', 'uid')\n"
+    "    keys = ('mode', 'nlink', 'uid', 'ino')\n"
     "    return {'sha256': digest, **{k: getattr(info, 'st_' + k) for k in keys}}\n"
     "def test_links(request, capsys):\n"
     "    # explicit paths: the run's private dir is the ini's (the sandbox may not list run_root)\n"
@@ -288,14 +289,18 @@ def test_links_out_of_the_checkout_change_nothing_outside_it(
         os.path.realpath(t) for t in expected
     ]
     attempts = {(i, kind): result for i, kind, result in report["made"]}
+    inside_owner = os.getuid()
+    if account is not None and sys.platform == "linux":
+        inside_owner = int(Path("/proc/sys/kernel/overflowuid").read_text())
     assert set(attempts) == {(i, kind) for i in range(len(expected)) for kind in ("hl", "sl")}
     assert all(attempts[i, "sl"] == "ok" for i in range(len(expected))), attempts
     for i, path in enumerate(own):
         seen, info = report["seen"][len(outside) + i], os.lstat(path)
-        # the owner is checked from outside: under bwrap the account's user namespace shows the
-        # unmapped owner uid as the overflow uid (65534), so the uid seen inside is not comparable
-        assert seen["mode"] == info.st_mode, path
-        assert info.st_uid == os.getuid(), path
+        # same file (inode), mode and owner as the test saw it; the owner is the runner both then
+        # and now. Under bwrap the account's user namespace shows the unmapped owner as the
+        # overflow uid, while an account-owned file would show the account's own (mapped) uid.
+        assert (seen["mode"], seen["ino"]) == (info.st_mode, info.st_ino), path
+        assert (seen["uid"], info.st_uid) == (inside_owner, os.getuid()), path
         assert seen["nlink"] == info.st_nlink == 1, (path, attempts)
         if path != run.log_path:  # the log grows during the run; it stays owner-only
             assert seen["sha256"] == _fingerprint(path)[0], path
