@@ -114,6 +114,7 @@ class AgentLoop(CleanupMixin, GuardMixin):
         self.limits = settings.limits
         self.clock, self.now = clock, now
         tools.clock, tools.write_scope = clock, settings.write_scope  # deadlines on this clock
+        tools.max_output_bytes = settings.limits.max_output_bytes  # the frozen output cap
         self.abort_detail: str | None = None
         self.interruptible = True  # NB8 (review of #239): see interrupt and _stopped
         self.late_signals = 0
@@ -356,7 +357,9 @@ class AgentLoop(CleanupMixin, GuardMixin):
         if name == "read_file":  # the range or page: sliced here, after the wrapper (reading.py)
             lo, hi, lim = args.get("start_line"), args.get("end_line"), self.limits
             call = t.read_file(args["path"], lo, hi)
-            return page(call, lo, hi, lim.read_page_lines, lim.read_page_bytes, t.max_output_bytes)
+            return page(
+                call, lo, hi, lim.read_page_lines, lim.read_page_bytes, lim.max_output_bytes
+            )
         if name == "write_file":
             return t.write_file(args["path"], args["content"])
         if name == "edit_file":

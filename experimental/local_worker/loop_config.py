@@ -29,9 +29,14 @@ class Limits:
     repeat_stop_at: int = 5  # at this count of identical calls the episode ends (REPEAT_LIMIT)
     repeat_requires_unchanged_tree: bool = True  # count a repeat only if the tree did not change
     invalid_call_limit: int = 6  # consecutive invalid tool calls that end it (INVALID_..._LIMIT)
-    # read_file paging (reading.py): off until Nori freezes it (expected 400 lines, 16000 bytes)
-    read_page_lines: int | None = None  # a read without a range shows this many lines (None: all)
-    read_page_bytes: int | None = None  # and a page at most this many bytes (needs read_page_lines)
+    # read_file paging (reading.py), ADDENDUM_06: 400 lines or 16000 bytes, whichever comes first
+    read_page_lines: int | None = 400  # a read without a range shows this many lines (None: all)
+    read_page_bytes: int | None = (
+        16000  # and a page at most this many bytes (needs read_page_lines)
+    )
+    # every tool's output as the model sees it (run_tests, search, list_dir, read_file beyond the
+    # page): head and tail within this many bytes (tools.DEFAULT_MAX_OUTPUT_BYTES)
+    max_output_bytes: int = 20_000
 
     def __post_init__(self) -> None:
         if self.step_seconds < 1.0:
@@ -48,6 +53,8 @@ class Limits:
             raise ValueError("read_page_lines and read_page_bytes must be off or >= 1")
         if size is not None and lines is None:
             raise ValueError("read_page_bytes needs read_page_lines (paging on)")
+        if self.max_output_bytes < 2:
+            raise ValueError("max_output_bytes must be >= 2")
 
     @property
     def step_seconds(self) -> float:

@@ -179,6 +179,7 @@ def _prepare(a: argparse.Namespace) -> dict[str, Any]:
         invalid_call_limit=a.invalid_call_limit,
         read_page_lines=_off_or_int(a.read_page_lines),
         read_page_bytes=_off_or_int(a.read_page_bytes),
+        max_output_bytes=a.max_output_bytes,
     )
     manifest_sha = corpus_io.prepare_manifest(out_dir, build_manifest(a, limits, endpoint.url))
     return dict(
@@ -315,9 +316,10 @@ def parser() -> argparse.ArgumentParser:
             "--repeat-requires-unchanged-tree", choices=("true", "false"), default="true"
         )
         sp.add_argument("--invalid-call-limit", type=int, default=6)
-        # read_file paging (reading.py): off until frozen; expected 400 lines and 16000 bytes
-        sp.add_argument("--read-page-lines", default="off", help="a line count, or off")
-        sp.add_argument("--read-page-bytes", default="off", help="a byte cap, or off")
+        # read_file paging (reading.py) and the output cap: ADDENDUM_06 defaults
+        sp.add_argument("--read-page-lines", default="400", help="a line count, or off")
+        sp.add_argument("--read-page-bytes", default="16000", help="a byte cap, or off")
+        sp.add_argument("--max-output-bytes", type=int, default=20_000)
         sp.add_argument(
             "--search-tool", choices=("on", "off"), default="on", help="read-only search tool"
         )

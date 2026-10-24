@@ -1,5 +1,5 @@
 """read_file ranges and pages (#88 robustness, L0 dry run 3): sliced in Python after the wrapper's
-read, off by default (Limits.read_page_lines / read_page_bytes)."""
+read; on by default (ADDENDUM_06: 400 lines or 16000 bytes, whichever comes first)."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import json
 import pytest
 from local_worker_fakes import META, TASK, World, cli_harness, make_loop, reply
 
-from experimental.local_worker import agent_protocol, episode, redact
+from experimental.local_worker import agent_protocol, episode, redact, tools
 from experimental.local_worker.agent import Limits, initial_messages
 from experimental.local_worker.agent_protocol import BadCall, decode_call
 from experimental.local_worker.episode_schema import SchemaError, validate_record
@@ -144,7 +144,8 @@ def test_the_schema_offers_the_range_in_every_mode():
     [
         {"read_page_lines": 0},
         {"read_page_lines": 4, "read_page_bytes": 0},
-        {"read_page_bytes": 100},
+        {"read_page_lines": None},  # the default byte cap needs paging on
+        {"max_output_bytes": 1},
     ],
 )
 def test_paging_numbers_are_checked(limits):
@@ -152,9 +153,11 @@ def test_paging_numbers_are_checked(limits):
         Limits(context_cap=1, **limits)
 
 
-def test_paging_is_off_by_default():
+def test_the_defaults_are_addendum_06():
     lim = Limits(context_cap=1)
-    assert (lim.read_page_lines, lim.read_page_bytes) == (None, None)
+    assert (lim.read_page_lines, lim.read_page_bytes) == (400, 16000)
+    assert lim.max_output_bytes == 20_000 == tools.DEFAULT_MAX_OUTPUT_BYTES
+    assert Limits(context_cap=1, read_page_lines=None, read_page_bytes=None).read_page_lines is None
 
 
 def test_the_range_is_published_as_ints():
@@ -193,9 +196,44 @@ def test_the_loop_pages_a_read_and_records_the_range(tmp_path):
 
 
 def test_with_paging_off_a_read_is_what_it_was(tmp_path):
-    rec, _, endpoint = run(tmp_path, [reply("read_file", path="src/app.py")])
+    off = {"read_page_lines": None, "read_page_bytes": None}
+    rec, _, endpoint = run(tmp_path, [reply("read_file", path="src/app.py")], **off)
     assert seen(endpoint, 1) == "[exit 0]\n" + TEXT
     assert rec["turns"][0]["stdout_truncated"] is False
+
+
+def test_by_default_a_read_is_paged_at_400_lines(tmp_path):
+    world = World({"big.py": "".join(f"x{k}\n" for k in range(1, 1001))})
+    loop, _, endpoint, _ = make_loop(tmp_path, [reply("read_file", path="big.py")], world)
+    loop.run(initial_messages(TASK))
+    text = seen(endpoint, 1)
+    assert text.startswith("[exit 0, output truncated]\nx1\n") and "x400\n" in text
+    assert "x401\n" not in text
+    assert text.endswith("\n[lines 1-400 of 1000; call read_file with start_line=401 to continue]")
+
+
+def test_by_default_a_page_stops_at_16000_bytes(tmp_path):
+    world = World({"wide.py": "".join("y" * 99 + "\n" for _ in range(300))})  # 100-byte lines
+    loop, _, endpoint, _ = make_loop(tmp_path, [reply("read_file", path="wide.py")], world)
+    loop.run(initial_messages(TASK))
+    assert seen(endpoint, 1).endswith(
+        "[lines 1-160 of 300; call read_file with start_line=161 to continue]"
+    )
+
+
+def test_a_small_file_is_shown_whole_with_its_length(tmp_path):
+    rec, _, endpoint = run(tmp_path, [reply("read_file", path="src/app.py")])
+    assert seen(endpoint, 1) == "[exit 0]\n" + TEXT + "[lines 1-10 of 10; end of file]"
+    assert rec["turns"][0]["stdout_truncated"] is False
+
+
+def test_the_output_cap_is_the_frozen_limit(tmp_path):
+    world = World()
+    world.pytest_output = b"z" * 5000
+    loop, _, endpoint, _ = make_loop(tmp_path, [reply("run_tests")], world, max_output_bytes=1000)
+    loop.run(initial_messages(TASK))
+    assert loop.tools.max_output_bytes == 1000
+    assert "truncated" in seen(endpoint, 1) and len(seen(endpoint, 1)) < 1200
 
 
 def test_a_bad_range_in_the_loop_is_an_invalid_call(tmp_path):
@@ -218,10 +256,16 @@ def test_the_manifest_freezes_the_paging_numbers(tmp_path, monkeypatch):
     run_cli, out = cli_harness(tmp_path, monkeypatch)
     assert run_cli([], "run") == 0
     lim = json.loads((out / "manifest.json").read_text())["limits"]
-    assert (lim["read_page_lines"], lim["read_page_bytes"]) == (None, None)
+    assert (lim["read_page_lines"], lim["read_page_bytes"]) == (400, 16000)
+    assert lim["max_output_bytes"] == 20_000
     (tmp_path / "b").mkdir()
     run_cli, out = cli_harness(tmp_path / "b", monkeypatch)
-    assert run_cli([], "run", "--read-page-lines", "400", "--read-page-bytes", "16000") == 0
+    off = ["--read-page-lines", "off", "--read-page-bytes", "off", "--max-output-bytes", "8000"]
+    assert run_cli([], "run", *off) == 0
     lim = json.loads((out / "manifest.json").read_text())["limits"]
-    assert (lim["read_page_lines"], lim["read_page_bytes"]) == (400, 16000)
-    assert run_cli([], "run", "--read-page-bytes", "16000") == 2  # bytes need lines: refused
+    assert (lim["read_page_lines"], lim["read_page_bytes"], lim["max_output_bytes"]) == (
+        None,
+        None,
+        8000,
+    )
+    assert run_cli([], "run", "--read-page-lines", "off") == 2  # the byte cap needs lines

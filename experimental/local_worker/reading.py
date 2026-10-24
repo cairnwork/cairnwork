@@ -1,5 +1,5 @@
 """read_file pages (#88 robustness, L0 dry run 3): sliced in Python from what the wrapper already
-printed, so the wrapper (and its frozen sha256) is unchanged. Paging is off by default.
+printed, so the wrapper is unchanged. On by default (ADDENDUM_06: 400 lines, 16000 bytes).
 
 Paging: read_file takes an optional line range (start_line, end_line: 1-based, inclusive) in
 every mode, and the loop serves exactly those lines of the wrapper's output. With
