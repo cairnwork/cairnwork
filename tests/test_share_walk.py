@@ -97,14 +97,18 @@ def test_a_directory_closed_to_its_user_is_left_closed_without_error(tmp_path):
     assert mode == 0
 
 
-@pytest.mark.skipif(not hasattr(os, "chflags"), reason="needs chflags (UF_IMMUTABLE)")
+CHFLAGS = getattr(os, "chflags", None)  # BSD/macOS only (pyright checks for Linux too)
+
+
+@pytest.mark.skipif(CHFLAGS is None, reason="needs chflags (UF_IMMUTABLE)")
 def test_a_failing_chmod_fails_the_share(tmp_path):
+    assert CHFLAGS is not None
     root = _tree(tmp_path)
-    os.chflags(root / "sub" / "x.txt", stat.UF_IMMUTABLE)
+    CHFLAGS(root / "sub" / "x.txt", stat.UF_IMMUTABLE)
     try:
         done = _share(root)
     finally:
-        os.chflags(root / "sub" / "x.txt", 0)
+        CHFLAGS(root / "sub" / "x.txt", 0)
     assert done.returncode == 1 and "chmod sub/x.txt" in done.stderr, done.stderr
 
 
