@@ -221,3 +221,29 @@ def test_a_server_that_cannot_count_raises_an_endpoint_error(server, routes):
     handler.routes = routes
     with pytest.raises(ep.EndpointError):
         ep.LoopbackEndpoint(url).count_tokens({"messages": []}, time.monotonic() + 5)
+
+
+# -- the first request's fixed part (review of PR 251, 2) ------------------------------------------
+@pytest.mark.parametrize("resume", [False, True])
+@pytest.mark.parametrize("slack", [-1, 0])
+def test_the_first_bound_counts_the_tools_and_the_template(tmp_path, resume, slack):
+    """With no reported count (a fresh start or a resume), the bound is the messages plus the tool
+    schemas' bytes plus FIRST_OVERHEAD: a window the messages alone fit but that sum does not is
+    never sent to (slack -1), and the exact sum fits (slack 0)."""
+    from experimental.local_worker.guards import MESSAGE_OVERHEAD, json_bytes
+
+    probe, *_ = make_loop(tmp_path / "probe", [])
+    messages = initial_messages(TASK)
+    payload = probe._payload(messages)
+    alone = sum(json_bytes(m) + MESSAGE_OVERHEAD for m in messages)
+    room = alone + json_bytes(payload["tools"]) + 1024 + slack  # FIRST_OVERHEAD, as documented
+    loop, _, endpoint, _ = make_loop(
+        tmp_path, [READ], context_window=room + 100, max_completion_tokens=100
+    )
+    kw = {"first_turn": 3, "elapsed_offset": 10.0} if resume else {}
+    out = loop.run(initial_messages(TASK), **kw)  # a resume's record needs its parent fields
+    if slack < 0:
+        assert (out.exit_reason, out.limit_hit) == ("CONTEXT_LIMIT", "context_window_bound")
+        assert endpoint.payloads == []
+    else:
+        assert len(endpoint.payloads) >= 1
