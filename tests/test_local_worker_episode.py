@@ -74,7 +74,7 @@ def test_run_writes_one_valid_line_with_the_spec_keys(harness):
     assert rec["wall_clock_start"].endswith("+08:00")
     assert rec["turns"][2]["tool_args"]["content"]["bytes"] == len("x = 2  # SECRET-CONTENT-12\n")
     manifest = json.loads((out / "manifest.json").read_text())
-    assert manifest["limits"]["max_steps"] == 40 and manifest["tools_absent"] == ["search"]
+    assert manifest["limits"]["max_steps"] == 40 and manifest["tools_absent"] == []
     manifest_bytes = (out / "manifest.json").read_bytes()
     assert rec["manifest_sha256"] == hashlib.sha256(manifest_bytes).hexdigest()
     print("EXAMPLE_LINE " + json.dumps(rec, sort_keys=True))
