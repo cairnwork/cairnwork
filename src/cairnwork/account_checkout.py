@@ -29,7 +29,8 @@ open to group and other only) is "unreadable", which fails the run in both modes
 with descriptors opened component by component with O_NOFOLLOW and never follows a symlink. Parity
 limits, failing closed in account mode only: a regular file with more than one link whose mode
 would need a change is left as it is (its inode may have a name outside the copy, which this must
-never touch), and the run fails with "checkout not shared with the owner"; so it does when a chmod
+never touch), and the run fails with "checkout not shared with the owner"; so it does when a
+directory open to its user cannot be walked (a macOS ACL denying the account alone), a chmod
 fails, the share step fails or outlives ``SHARE_TIMEOUT_SECONDS``, or the account's processes
 cannot be confirmed ended.
 
@@ -119,9 +120,12 @@ copy(source, target)
 # group and other r/x equal to the user's (other bits unchanged), so the comparing owner may read
 # exactly what the checkout's owner may. Directories are opened one component at a time with
 # O_NOFOLLOW from the work dir, and chmod never follows a symlink, so the walk cannot leave the
-# copy. Symlinks and other file types are skipped, so is the top-level .git (not compared). Exit 1
-# (the owner then fails the run) if a regular file with more than one link needs a change (its inode
-# may have a name outside the copy, which this must never touch) or a chmod fails.
+# copy. Symlinks and other file types are skipped, so is the top-level .git (not compared). A
+# directory its user may not list and search is not entered: the comparing owner, with the same
+# bits, cannot read it either. Exit 1 (the owner then fails the run) if a directory its user may
+# list and search cannot be walked (a macOS ACL can deny the account alone), a regular file with
+# more than one link needs a change (its inode may have a name outside the copy, which this must
+# never touch), or a chmod fails.
 SHARE_HELPER = r"""
 import os, stat, sys
 
@@ -151,42 +155,49 @@ def share(fd, name, info, rel):
     try:
         mode = stat.S_IMODE(info.st_mode) & ~0o055 | want
         os.chmod(name, mode, dir_fd=fd, follow_symlinks=False)
-    except (OSError, NotImplementedError) as exc:
+    except (OSError, NotImplementedError, ValueError) as exc:
         problems.append(f"chmod {rel}: {exc}")
 
-def entries(base, parts):
+def entries(base, parts, info):
+    # a directory its user may list and search must be walked whole; any other is left closed
+    walk = info.st_mode & 0o500 == 0o500
+    rel = "/".join(parts[1:]) or "."
     try:
         fd = opened(base, parts)
-    except OSError:
-        return  # closed to its owner (the comparing owner finds it "unreadable" too)
+    except OSError as exc:
+        if walk:
+            problems.append(f"cannot open {rel}: {exc}")
+        return
     try:
-        names = sorted(os.listdir(fd))
-    except OSError:
-        names = []
-    try:
-        for name in names:
+        for name in sorted(os.listdir(fd)):
             try:
-                info = os.stat(name, dir_fd=fd, follow_symlinks=False)
-            except OSError:
-                continue
-            yield fd, name, info
+                yield fd, name, os.stat(name, dir_fd=fd, follow_symlinks=False)
+            except OSError as exc:
+                if walk:
+                    problems.append(f"cannot stat {rel}/{name}: {exc}")
+    except OSError as exc:
+        if walk:
+            problems.append(f"cannot list {rel}: {exc}")
     finally:
         os.close(fd)
 
 base, top = os.path.split(os.path.abspath(sys.argv[1]))
-for fd, name, info in entries(base, ()):
-    if name == top:
-        if not stat.S_ISDIR(info.st_mode):
-            sys.exit(f"not a directory: {top}")
-        share(fd, name, info, ".")
-stack = [(top,)]  # an explicit stack, not recursion: any depth
+fd = opened(base, ())
+try:
+    info = os.stat(top, dir_fd=fd, follow_symlinks=False)
+    if not stat.S_ISDIR(info.st_mode):
+        sys.exit(f"not a directory: {top}")
+    share(fd, top, info, ".")
+finally:
+    os.close(fd)
+stack = [((top,), info)]  # an explicit stack, not recursion: any depth
 while stack:
-    parts = stack.pop()
-    for fd, name, info in entries(base, parts):
+    parts, dir_info = stack.pop()
+    for fd, name, info in entries(base, parts, dir_info):
         rel = "/".join((*parts[1:], name))
         if stat.S_ISDIR(info.st_mode) and rel != ".git":
             share(fd, name, info, rel)
-            stack.append((*parts, name))
+            stack.append(((*parts, name), info))
         elif stat.S_ISREG(info.st_mode):
             share(fd, name, info, rel)
 if problems:
