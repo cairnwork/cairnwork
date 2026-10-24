@@ -21,11 +21,13 @@ and nothing runs past start + max_wall_seconds.
 ``run_tests`` takes no free-form arguments: it runs ``pytest -q --tb=short -- <targets>`` over the
 task's declared public test targets, or the one the model picks by ``target_index``.
 
-Guards (guards.py, every number a Limits field): identical repeated calls get a hint instead of
-running and end the episode at a count (REPEAT_LIMIT); a call the model cannot have meant (an
-agent_protocol.BadCall, or a reply that breaks the tool-call structure, a ProtocolError) is a
-recoverable invalid_tool_call turn, and a run of them ends it (INVALID_TOOL_CALL_LIMIT); a request
-whose prompt and output budget would not fit the context window is never sent (CONTEXT_LIMIT).
+Guards (guards.py, every number a Limits field, ADDENDUM_05 defaults): the 5th identical call in
+a row on an unchanged tree is not run and ends the episode (REPEAT_LIMIT; a not-run hint at an
+earlier count exists but is off by default); a call the model can repair (an
+agent_protocol.BadCall) is a recoverable invalid_tool_call turn, and 6 in a row end it
+(INVALID_TOOL_CALL_LIMIT), while a reply that breaks the tool-call structure (a ProtocolError)
+aborts (ERROR_ABORT, protocol_error); a request whose prompt and output budget would not fit the
+context window is never sent (CONTEXT_LIMIT). read_file serves a range or a page (reading.py).
 
 Once the loop starts, ``run`` never raises: an endpoint, transport, isolation or unexpected error
 ends the episode as a recorded ERROR_ABORT, and the cleanup (sweep, numstat) always runs, in a
