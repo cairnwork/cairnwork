@@ -5,7 +5,7 @@ parent_pre_cut_wall_seconds, refused at start when that leaves no more than the 
 import json
 
 import pytest
-from local_worker_fakes import BASE_SHA, TASK, cli_harness, lines, make_loop, reply
+from local_worker_fakes import BASE_SHA, TASK, cli_harness, lines, make_loop, reads, reply
 
 from experimental.local_worker import cli
 from experimental.local_worker.agent import RefusedStart, initial_messages
@@ -14,7 +14,7 @@ READ = reply("read_file", path="src/app.py")
 
 
 def _resume(tmp_path, offset, **limits):
-    loop, world, endpoint, clock = make_loop(tmp_path, [READ] * 50, **limits)
+    loop, world, endpoint, clock = make_loop(tmp_path, reads(50), **limits)
     start = clock.t
     out = loop.run(initial_messages(TASK), first_turn=3, elapsed_offset=offset)
     return out, world, endpoint, clock.t - start

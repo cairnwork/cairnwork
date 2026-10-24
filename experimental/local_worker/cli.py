@@ -50,9 +50,10 @@ from experimental.local_worker.agent import (
 )
 from experimental.local_worker.agent_protocol import (
     RUN_TESTS_ARGS,
-    SYSTEM_PROMPT,
-    TOOL_SCHEMAS,
     TOOLS_ABSENT,
+    system_prompt,
+    tool_names,
+    tool_schemas,
 )
 from experimental.local_worker.cuts import CUT_DEFINITION
 from experimental.local_worker.endpoint import DEFAULT_URL, EndpointError, LoopbackEndpoint
@@ -85,11 +86,12 @@ def build_manifest(a: argparse.Namespace, limits: Limits, endpoint: str) -> dict
         "server_model_id": a.model,  # confirmed listed by the server's /models
         "limits": asdict(limits),
         "temperature": a.temperature,
-        "tools": [t["function"]["name"] for t in TOOL_SCHEMAS],
-        "tools_absent": list(TOOLS_ABSENT),
+        "tools": list(tool_names(a.search_tool)),
+        "tools_absent": [] if a.search_tool else list(TOOLS_ABSENT),
+        "search_tool": a.search_tool,  # the guards' numbers are in "limits" (guards.py)
         "run_tests_command": ["pytest", "-p", "no:cacheprovider", *RUN_TESTS_ARGS, "<targets>"],
-        "worker_prompt_sha256": _sha(SYSTEM_PROMPT),
-        "tool_schemas_sha256": _sha(json.dumps(TOOL_SCHEMAS, sort_keys=True)),
+        "worker_prompt_sha256": _sha(system_prompt(a.search_tool)),
+        "tool_schemas_sha256": _sha(json.dumps(tool_schemas(a.search_tool), sort_keys=True)),
         "null_rule": NULL_RULE,
         "tokens_accum_formula": TOKENS_ACCUM_FORMULA,
         "wall_time_rule": WALL_TIME_RULE,
@@ -102,6 +104,10 @@ def build_manifest(a: argparse.Namespace, limits: Limits, endpoint: str) -> dict
 
 
 MANIFEST_SCHEMA = corpus_io.MANIFEST_SCHEMA
+
+
+def _off_or_int(value: str) -> int | None:
+    return None if value == "off" else int(value)
 
 
 def resume_prefix(parent: dict, cut_turn: int | None) -> tuple[list[dict], int, float]:
@@ -166,6 +172,14 @@ def _prepare(a: argparse.Namespace) -> dict[str, Any]:
         cut_seconds=a.cut_seconds,
         tool_cap_seconds=a.tool_cap_seconds,
         max_completion_tokens=a.max_completion_tokens,
+        context_window=a.context_window,
+        repeat_hint_at=_off_or_int(a.repeat_hint_at),
+        repeat_stop_at=a.repeat_stop_at,
+        repeat_requires_unchanged_tree=a.repeat_requires_unchanged_tree == "true",
+        invalid_call_limit=a.invalid_call_limit,
+        read_page_lines=_off_or_int(a.read_page_lines),
+        read_page_bytes=_off_or_int(a.read_page_bytes),
+        max_output_bytes=a.max_output_bytes,
     )
     manifest_sha = corpus_io.prepare_manifest(out_dir, build_manifest(a, limits, endpoint.url))
     return dict(
@@ -206,7 +220,7 @@ def _same_binding(
 def run_episode(a: argparse.Namespace, resume: bool) -> int:
     p = _prepare(a)
     task: Task = p["task"]
-    messages = initial_messages(task)
+    messages = initial_messages(task, a.search_tool)
     first_turn, offset, expected_base, parent_id = 0, 0.0, None, None
     plan_sha, prefix = None, dict.fromkeys(PARENT_FIELDS)
     if resume:
@@ -230,7 +244,7 @@ def run_episode(a: argparse.Namespace, resume: bool) -> int:
     eid = _episode_id(a, task)
     priv = corpus_io.private_dir(p["out_dir"], eid)
     tools = WorkerTools(p["run_root"], priv / "calls.jsonl", mode="worker")
-    settings = Settings(a.model, p["limits"], a.seed, a.temperature, a.write_scope)
+    settings = Settings(a.model, p["limits"], a.seed, a.temperature, a.write_scope, a.search_tool)
     loop = AgentLoop(tools, p["endpoint"], task, settings)
     meta = {
         "episode_id": eid,
@@ -294,6 +308,21 @@ def parser() -> argparse.ArgumentParser:
         sp.add_argument("--cut-seconds", type=float, default=900.0)
         sp.add_argument("--tool-cap-seconds", type=float, default=300.0)
         sp.add_argument("--max-completion-tokens", type=int, default=4096)
+        # The robustness guards (guards.py), all frozen in the manifest; ADDENDUM_05 defaults
+        sp.add_argument("--context-window", type=int, default=65536)
+        sp.add_argument("--repeat-hint-at", default="off", help="a count >= 2, or off")
+        sp.add_argument("--repeat-stop-at", type=int, default=5)
+        sp.add_argument(
+            "--repeat-requires-unchanged-tree", choices=("true", "false"), default="true"
+        )
+        sp.add_argument("--invalid-call-limit", type=int, default=6)
+        # read_file paging (reading.py) and the output cap: ADDENDUM_06 defaults
+        sp.add_argument("--read-page-lines", default="400", help="a line count, or off")
+        sp.add_argument("--read-page-bytes", default="16000", help="a byte cap, or off")
+        sp.add_argument("--max-output-bytes", type=int, default=20_000)
+        sp.add_argument(
+            "--search-tool", choices=("on", "off"), default="on", help="read-only search tool"
+        )
         # The K arm's --write-path: repeatable, a repo-relative file or directory (write_scope.py)
         sp.add_argument("--write-path", action="append", default=None)
         if name == "resume":
@@ -305,6 +334,7 @@ def parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     a = parser().parse_args(argv)
+    a.search_tool = a.search_tool == "on"
     try:
         return run_episode(a, resume=a.cmd == "resume")
     except (corpus_io.InputRefused, RefusedStart, EndpointError, ValueError) as exc:

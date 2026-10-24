@@ -34,10 +34,20 @@ CUT_DEFINITION = (  # recorded in manifest.json (review of #239, finding 10)
     " the checkout (git cannot see them), so creating one is a tree change for first_edit_cut;"
     " they are never a source change. Not observed: anything outside the checkout (run_root/tmp,"
     " the test process's HOME and TMPDIR), file modes git does not track, and the contents of"
-    " a FIFO."
+    " a FIFO. pre_cut_read_actions (and parent_pre_cut_read_actions) count the read_file,"
+    " list_dir and search turns before the cut, except a repeated call the loop did not run"
+    " (error_category REPEATED)."
 )
 CUT_STATES = ("CUT", "NO_CUT", "UNOBSERVED")
-READ_ACTIONS = ("read_file", "list_dir")  # the read tools the loop offers (no search tool)
+READ_ACTIONS = ("read_file", "list_dir", "search")  # the read tools (search only if enabled)
+
+
+def counts_as_read(action_type: str, error_category: str) -> bool:
+    """A read turn the cut counts: a read tool's call, unless the repeat guard did not run it
+    (review of PR 251, 8a: such a turn read nothing)."""
+    return action_type in READ_ACTIONS and error_category != "REPEATED"
+
+
 EDIT_ACTIONS = ("write_file", "edit_file")
 DOC_SUFFIXES = (".md", ".rst", ".txt", ".adoc")
 CUT_FIELDS = (
@@ -180,7 +190,7 @@ def _no_cut(fields: tuple[str, ...], status: str) -> dict:
 
 
 def _pre(before: list[TurnLog], turn: TurnLog) -> tuple[int, int | None, float, int]:
-    reads = sum(t.action_type in READ_ACTIONS for t in before)
+    reads = sum(counts_as_read(t.action_type, t.error_category) for t in before)
     tokens = _sum([v for t in before for v in t.tokens])
     return reads, tokens, round(turn.t_start, 3), sum(missing_usage(t) for t in before)
 

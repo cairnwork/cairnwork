@@ -11,12 +11,21 @@ from experimental.local_worker.episode import tree_at_limit
 from experimental.local_worker.schema_base import SchemaError
 
 ACTION_TYPES = ("list_dir", "read_file", "write_file", "edit_file", "run_test", "finish")
-ACTION_TYPES += ("invalid_tool_call", "no_tool_call")
+ACTION_TYPES += ("invalid_tool_call", "no_tool_call", "search")
 ERROR_CATEGORIES = ("NONE", "TIMEOUT", "REFUSED", "SYNTAX_ERROR", "TEST_FAILED", "NO_TESTS")
-ERROR_CATEGORIES += ("TOOL_ERROR", "INVALID_CALL", "PROTOCOL_ERROR")
+ERROR_CATEGORIES += ("TOOL_ERROR", "INVALID_CALL", "PROTOCOL_ERROR", "REPEATED", "NO_MATCH")
 ABORT_CAUSES = ("endpoint_error", "worker_isolation", "status_unavailable", "protocol_error")
 ABORT_CAUSES += ("internal_error", "interrupted")
+# context_cap_bytes_estimate is no longer emitted (review of PR 251, 6: the context-window guard
+# alone decides without usage); it stays in the vocabulary so v1 lines still validate.
 LIMITS_HIT = ("max_steps", "max_wall_seconds", "context_cap", "context_cap_bytes_estimate")
+GUARD_LIMITS = {  # exit reason -> the limit_hit values it may carry (guards.py)
+    "REPEAT_LIMIT": ("repeat_stop_at",),
+    "INVALID_TOOL_CALL_LIMIT": ("invalid_call_limit",),
+    "CONTEXT_LIMIT": ("context_window", "context_window_bound", "context_window_http_400"),
+}
+_GUARD_HITS = tuple(v for values in GUARD_LIMITS.values() for v in values)
+LIMITS_HIT += _GUARD_HITS
 CLEANUP = ("ok", "failed", "skipped")
 EPISODE_USAGE = ("ok", "partial", "missing")
 TOLERANCE = 0.002  # seconds: rounding to 3 decimals
@@ -50,6 +59,16 @@ def _times(rec: dict) -> None:
         previous = t["t_end_seconds"]
 
 
+def _limit_hit(exit_reason: str, hit: str | None) -> None:
+    """limit_hit is set exactly for a limit exit; a guard's exit carries one of its own values,
+    and a guard's value only goes with its exit reason."""
+    if (hit is not None) != (exit_reason in ("TURN_LIMIT", "TIMEOUT", *GUARD_LIMITS)):
+        raise SchemaError("termination.limit_hit is set exactly for the limit exit reasons")
+    own = GUARD_LIMITS.get(exit_reason)
+    if (own is not None or hit in _GUARD_HITS) and hit not in (own or ()):
+        raise SchemaError(f"termination.limit_hit {hit!r} does not go with exit {exit_reason}")
+
+
 def _termination(rec: dict) -> None:
     exit_reason, term = rec["verification"]["exit_reason"], rec["termination"]
     turns, added = rec["turns"], rec["verification"]["patch_lines_added"]
@@ -59,8 +78,7 @@ def _termination(rec: dict) -> None:
         raise SchemaError("termination.abort_cause is set exactly for exit ERROR_ABORT")
     if term["interrupted"] != (term["abort_cause"] == "interrupted"):
         raise SchemaError("termination.interrupted must match abort_cause interrupted")
-    if (term["limit_hit"] is not None) != (exit_reason in ("TURN_LIMIT", "TIMEOUT")):
-        raise SchemaError("termination.limit_hit is set exactly for TURN_LIMIT and TIMEOUT")
+    _limit_hit(exit_reason, term["limit_hit"])
     finished = bool(turns) and turns[-1]["action_type"] == "finish"
     if (exit_reason == "COMPLETED") != finished:
         raise SchemaError("exit COMPLETED exactly when the last turn is finish")

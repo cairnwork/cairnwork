@@ -34,10 +34,15 @@ WRITE_TARGETS = (
 REQUIRED_PROBES = {
     "a_read_denied": {f"code read {n}" for n in READ_TARGETS} | {"no secret in any tool output"},
     "b_write_denied": {f"code write {n}" for n in WRITE_TARGETS}
-    | {"no write target exists afterwards"},
+    | {"no write target exists afterwards", "search profile denies writes"},
     "c_network_denied": {f"code net {n}" for n in probe.NET_TARGETS},
     "d_launchd_escape_denied": {f"code escape {n}" for n in probe.ESCAPE_TARGETS},
-    "positive_controls": {"read a checkout file", "write a checkout file", "pytest runs the probe"},
+    "positive_controls": {
+        "read a checkout file",
+        "write a checkout file",
+        "search a checkout file",
+        "pytest runs the probe",
+    },
 }
 MIN_WRAPPER_ROWS = {"a_read_denied": 6, "b_write_denied": 6}
 CHECKS = (*REQUIRED_PROBES, "identity")
