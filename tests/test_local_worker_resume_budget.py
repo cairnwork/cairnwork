@@ -110,12 +110,14 @@ def test_a_no_cut_parent_resumes_from_turn_0_with_the_whole_budget(harness, caps
     assert "pass --cut-turn" in capsys.readouterr().err
     data = json.loads(open(tr).read())
     prefix, turn, start = cli.resume_prefix(data, 0)
-    assert (turn, len(prefix)) == (0, len(initial_messages(TASK))) and start < 1.0
+    first_reply = data["turns"][0]["assistant_msg_index"]
+    assert prefix == data["messages"][:first_reply] and turn == 0 and start < 1.0
+    assert [m["role"] for m in prefix] == ["system", "user"]  # system prompt and task, no reply
     seen = []
     real = cli.AgentLoop.run
 
     def spy(self, messages, **kw):
-        seen.append((len(messages), kw["first_turn"], kw["elapsed_offset"]))
+        seen.append((list(messages), kw["first_turn"], kw["elapsed_offset"]))
         return real(self, messages, **kw)
 
     monkeypatch.setattr(cli.AgentLoop, "run", spy)
@@ -124,4 +126,4 @@ def test_a_no_cut_parent_resumes_from_turn_0_with_the_whole_budget(harness, caps
     line = lines(out)[1]
     pre = line["parent_pre_cut_wall_seconds"]  # the parent's published (rounded) turn-0 start
     assert line["resume_cut_turn_index"] == 0 and pre == pytest.approx(start, abs=1e-3)
-    assert seen == [(len(initial_messages(TASK)), 0, pre)]  # the clock: whole budget less ~0 s
+    assert seen == [(prefix, 0, pre)]  # the clock: whole budget less ~0 s
