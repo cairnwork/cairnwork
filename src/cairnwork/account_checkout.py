@@ -18,17 +18,20 @@ So under the account the checkout is the account's own copy:
 3. the owner checks the copy (a real directory, by lstat, owned by the account, equal to the
    candidate tree) and removes the staging clone. The verifier then runs in ``work/<clone_id>``.
 
-After the run (the account's processes are killed by then) the owner compares the copy
-(``checkout_differences``): ``_same_directory`` first, then, AS THE ACCOUNT, ``SHARE_HELPER`` copies
-each directory's and regular file's user r and x bits to group and other, and then the owner runs
-``tree_differences``. So the owner reads exactly what it could read as the checkout's owner in
-owner mode: a file replaced from a 0600 temporary file or a directory left at 0700 is compared as
-in owner mode (mode bits other than the owner's execute bit are not judged), and a path closed to
-its own owner (0000) stays "unreadable", which fails the run in both modes. Parity limits, both
-fail closed in account mode only: a regular file with more than one link is left as it is (its
-inode may have a name outside the copy, which this must not widen), so if the owner cannot read
-it, it is "unreadable"; and a share step that fails or outlives ``SHARE_TIMEOUT_SECONDS`` leaves
-the rest closed, so what the owner cannot read is "unreadable" too.
+After the run the owner compares the copy (``checkout_differences``): ``_same_directory`` first;
+then, once ``kill_all`` confirms no process of the account is left, AS THE ACCOUNT ``SHARE_HELPER``
+sets each directory's and regular file's group and other r and x bits equal to its user r and x
+bits (whatever they were before), and then the owner runs ``tree_differences``. So the owner reads
+exactly what it could read as the checkout's owner in owner mode: a file replaced from a 0600
+temporary file or a directory left at 0700 is compared as in owner mode (mode bits other than the
+owner's execute bit are not judged), and a path closed to its own owner (0000, or 0044 / 0077,
+open to group and other only) is "unreadable", which fails the run in both modes. The helper walks
+with descriptors opened component by component with O_NOFOLLOW and never follows a symlink. Parity
+limits, failing closed in account mode only: a regular file with more than one link whose mode
+would need a change is left as it is (its inode may have a name outside the copy, which this must
+never touch), and the run fails with "checkout not shared with the owner"; so it does when a chmod
+fails, the share step fails or outlives ``SHARE_TIMEOUT_SECONDS``, or the account's processes
+cannot be confirmed ended.
 
 A helper that outlives its timeout (``subprocess.run`` kills only sudo) is ended with
 ``account.kill_all()``: callers hold the account's lock (``VerifierAccount.exclusive``), so every
@@ -111,37 +114,83 @@ if not stat.S_ISDIR(os.lstat(source).st_mode):
 copy(source, target)
 """
 
-# Runs as the account with ``python -I -S -c SHARE_HELPER <checkout>`` after the run: symlinks
-# and other file types are skipped (lchmod where the platform has it), so are regular files with
-# more than one link (a name outside the copy may share the inode), and the top-level .git (not
-# compared); any error leaves that path as it was: the owner then finds it "unreadable", which
-# fails closed.
+# Runs as the account with ``python -I -S -c SHARE_HELPER <checkout>`` after the run, once no
+# process of the account is left (``checkout_differences``). Each directory and regular file gets
+# group and other r/x equal to the user's (other bits unchanged), so the comparing owner may read
+# exactly what the checkout's owner may. Directories are opened one component at a time with
+# O_NOFOLLOW from the work dir, and chmod never follows a symlink, so the walk cannot leave the
+# copy. Symlinks and other file types are skipped, so is the top-level .git (not compared). Exit 1
+# (the owner then fails the run) if a regular file with more than one link needs a change (its inode
+# may have a name outside the copy, which this must never touch) or a chmod fails.
 SHARE_HELPER = r"""
 import os, stat, sys
 
-NOFOLLOW = {"follow_symlinks": False} if os.chmod in os.supports_follow_symlinks else {}
-stack = [(sys.argv[1], True)]  # an explicit stack, not recursion: any depth
-while stack:
-    path, top = stack.pop()
+DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+problems = []
+
+def opened(base, parts):
+    fd = os.open(base, DIR)
     try:
-        info = os.lstat(path)
-    except OSError:
-        continue
-    if not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
-        continue
-    if stat.S_ISREG(info.st_mode) and info.st_nlink > 1:
-        continue  # the same inode has a name outside the copy: never widen it
+        for name in parts:  # one component at a time: a symlink anywhere is refused
+            inner = os.open(name, DIR, dir_fd=fd)
+            os.close(fd)
+            fd = inner
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+def share(fd, name, info, rel):
     user = info.st_mode & 0o500
+    want = user >> 3 | user >> 6
+    if info.st_mode & 0o055 == want:
+        return
+    if stat.S_ISREG(info.st_mode) and info.st_nlink > 1:
+        problems.append(f"more than one link: {rel}")
+        return
     try:
-        os.chmod(path, stat.S_IMODE(info.st_mode) | user >> 3 | user >> 6, **NOFOLLOW)
+        mode = stat.S_IMODE(info.st_mode) & ~0o055 | want
+        os.chmod(name, mode, dir_fd=fd, follow_symlinks=False)
+    except (OSError, NotImplementedError) as exc:
+        problems.append(f"chmod {rel}: {exc}")
+
+def entries(base, parts):
+    try:
+        fd = opened(base, parts)
     except OSError:
-        pass
-    if stat.S_ISDIR(info.st_mode):
-        try:
-            names = os.listdir(path)
-        except OSError:
-            continue
-        stack += [(os.path.join(path, n), False) for n in names if not (top and n == ".git")]
+        return  # closed to its owner (the comparing owner finds it "unreadable" too)
+    try:
+        names = sorted(os.listdir(fd))
+    except OSError:
+        names = []
+    try:
+        for name in names:
+            try:
+                info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+            except OSError:
+                continue
+            yield fd, name, info
+    finally:
+        os.close(fd)
+
+base, top = os.path.split(os.path.abspath(sys.argv[1]))
+for fd, name, info in entries(base, ()):
+    if name == top:
+        if not stat.S_ISDIR(info.st_mode):
+            sys.exit(f"not a directory: {top}")
+        share(fd, name, info, ".")
+stack = [(top,)]  # an explicit stack, not recursion: any depth
+while stack:
+    parts = stack.pop()
+    for fd, name, info in entries(base, parts):
+        rel = "/".join((*parts[1:], name))
+        if stat.S_ISDIR(info.st_mode) and rel != ".git":
+            share(fd, name, info, rel)
+            stack.append((*parts, name))
+        elif stat.S_ISREG(info.st_mode):
+            share(fd, name, info, rel)
+if problems:
+    sys.exit("\n".join(problems[:20]))
 """
 
 
@@ -195,15 +244,34 @@ def _check_copy(target: Path, account, repo: Path, commit: str) -> None:
 
 def checkout_differences(repo: Path, commit: str, checkout: Path, before, account, python: str):
     """What the run changed in its checkout, as ``tree_differences`` names it; under the account,
-    first open the account's copy to the owner as described above."""
+    first open the account's copy to the owner as described above. If that cannot be done exactly
+    the run fails: the answer is then why the copy was not shared."""
     if not _same_directory(checkout, before):  # renamed away, or a symlink put in place
         return ("checkout replaced",)
     if account is not None:
-        try:
-            _as_account(account, python, SHARE_HELPER, [str(checkout)], SHARE_TIMEOUT_SECONDS)
-        except (OSError, subprocess.SubprocessError):
-            pass  # what stays closed is "unreadable" below: the run fails, never passes
+        unshared = _share_with_owner(account, python, checkout)
+        if unshared:
+            return (f"checkout not shared with the owner: {unshared}",)
     return tuple(tree_differences(repo, commit, checkout))
+
+
+def _share_with_owner(account, python: str, checkout: Path) -> str:
+    """Run SHARE_HELPER on the account's copy; "" when it did, else why not. It runs only once
+    ``kill_all`` confirms that no process of the account is left (the caller holds its lock), so
+    nothing can change the copy while the helper walks it."""
+    try:
+        left = account.kill_all()
+    except (OSError, subprocess.SubprocessError):
+        left = -1
+    if left != 0:
+        return "the account's processes could not be confirmed ended"
+    try:
+        done = _as_account(account, python, SHARE_HELPER, [str(checkout)], SHARE_TIMEOUT_SECONDS)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"share step failed: {exc}"
+    if done.returncode != 0:
+        return f"share step failed: {done.stderr.strip()[-300:]}"
+    return ""
 
 
 def remove_checkout(work: Path, clone_id: str, account) -> None:

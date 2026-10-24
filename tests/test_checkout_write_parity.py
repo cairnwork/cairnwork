@@ -6,19 +6,20 @@ the same bytes (also from a mode-0600 temporary file, left at 0600), a tracked d
 0700, and deleting the top-level ``.git`` (the verifier's scratch, never judged) pass. A leftover
 file (ignored by .gitignore or not), a retained modification, ``.git`` moved to a path inside the
 checkout, a symlink swapped in, a new directory left without permissions, or a tracked file or
-directory closed to its own owner (0000: unreadable to the owner in owner mode, so in both) is
-"checkout changed". The checkout is owned by the uid the test runs as (in account mode: the
-account's own copy), and every work dir, that copy included, is removed afterwards without a
-cleanup ALERT. The account side is one ``run_verifiers`` call (one lock hold). A link witness
-checks that links the test makes to files outside its checkout and to the run's own ini, log and
-guard leave those files' contents, modes, owners and link counts as they were, and a crash leftover
-(the account's copy with a mode-0 directory, plus the owner's staging clone) is removed by
-recovery.
+directory closed to its own owner (0000, or 0044 / 0077, open to group and other only: unreadable
+to the owner in owner mode, so in both) is "checkout changed". The checkout is owned by the uid the
+test runs as (in account mode: the account's own copy), and every work dir, that copy included, is
+removed afterwards without a cleanup ALERT. The account side is one ``run_verifiers`` call (one
+lock hold). A link witness checks that links the test makes to files outside its checkout and to
+the run's own ini, log and guard leave those files' contents, modes, owners, groups and link counts
+as they were, and a crash leftover (the account's copy with a mode-0 directory, plus the owner's
+staging clone) is removed by recovery.
 """
 
 import hashlib
 import json
 import os
+import pwd
 import re
 import shutil
 import subprocess
@@ -86,6 +87,9 @@ SCENARIOS = {
     # closed to its own owner: unreadable to the comparing owner in owner mode, so in both
     "file0000": f"def test_file0000():\n    os.chmod({DATA}, 0)\n",
     "dir0000": "def test_dir0000():\n    os.chmod(ROOT / 'pkg' / 'sub', 0)\n",
+    # closed to its owner, open to group and other: still closed to the comparing owner
+    "file0044": f"def test_file0044():\n    os.chmod({DATA}, 0o044)\n",
+    "dir0077": "def test_dir0077():\n    os.chmod(ROOT / 'pkg' / 'sub', 0o077)\n",
     "gitdelete": "def test_gitdelete():\n    shutil.rmtree(ROOT / '.git')\n",
     "owns": (  # the checkout is the running uid's own (account mode: the account's copy)
         f"def test_owns():\n    assert ROOT.stat().st_uid == {DATA}.stat().st_uid == os.getuid()\n"
@@ -121,6 +125,8 @@ EXPECTED = {
     "dir0700": (True, set()),
     "file0000": (False, {"unreadable pkg/data.txt"}),
     "dir0000": (False, {"unreadable pkg/sub"}),
+    "file0044": (False, {"unreadable pkg/data.txt"}),
+    "dir0077": (False, {"unreadable pkg/sub"}),
     "gitdelete": (True, set()),  # policy: the top-level .git is not judged (verifiers.py)
     "leave": (False, {"extra pkg/left.txt"}),
     "ignored": (False, {"extra pkg/run.log"}),  # ignore rules do not apply to the comparison
@@ -218,7 +224,7 @@ _LINKS = (
     "        digest = hashlib.sha256(open(path, 'rb').read()).hexdigest()\n"
     "    except OSError as exc:\n"
     "        digest = errno.errorcode[exc.errno]\n"
-    "    keys = ('mode', 'nlink', 'uid', 'ino')\n"
+    "    keys = ('mode', 'nlink', 'uid', 'gid', 'ino')\n"
     "    return {'sha256': digest, **{k: getattr(info, 'st_' + k) for k in keys}}\n"
     "def test_links(request, capsys):\n"
     "    # explicit paths: the run's private dir is the ini's (the sandbox may not list run_root)\n"
@@ -245,6 +251,17 @@ def _fingerprint(path):
     info = os.lstat(path)
     digest = hashlib.sha256(open(path, "rb").read()).hexdigest()
     return digest, info.st_mode, info.st_nlink, info.st_uid, info.st_gid
+
+
+def _inside_group(account):
+    """The gid the test sees for a file of group ``gid``: the same, except in Linux account mode,
+    where bwrap's user namespace maps only the account's own (primary) group; any other shows as
+    the overflow gid."""
+    if account is None or sys.platform != "linux":
+        return lambda gid: gid
+    mapped = pwd.getpwnam(account.user).pw_gid
+    overflow = int(Path("/proc/sys/kernel/overflowgid").read_text())
+    return lambda gid: gid if gid == mapped else overflow
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -289,18 +306,19 @@ def test_links_out_of_the_checkout_change_nothing_outside_it(
         os.path.realpath(t) for t in expected
     ]
     attempts = {(i, kind): result for i, kind, result in report["made"]}
-    inside_owner = os.getuid()
+    inside_owner, inside_group = os.getuid(), _inside_group(account)
     if account is not None and sys.platform == "linux":
         inside_owner = int(Path("/proc/sys/kernel/overflowuid").read_text())
     assert set(attempts) == {(i, kind) for i in range(len(expected)) for kind in ("hl", "sl")}
     assert all(attempts[i, "sl"] == "ok" for i in range(len(expected))), attempts
     for i, path in enumerate(own):
         seen, info = report["seen"][len(outside) + i], os.lstat(path)
-        # same file (inode), mode and owner as the test saw it; the owner is the runner both then
-        # and now. Under bwrap the account's user namespace shows the unmapped owner as the
-        # overflow uid, while an account-owned file would show the account's own (mapped) uid.
+        # same file (inode), mode, owner and group as the test saw it; the owner is the runner
+        # both then and now. Under bwrap the account's user namespace shows the unmapped owner as
+        # the overflow uid, while an account-owned file would show the account's own (mapped) uid.
         assert (seen["mode"], seen["ino"]) == (info.st_mode, info.st_ino), path
         assert (seen["uid"], info.st_uid) == (inside_owner, os.getuid()), path
+        assert seen["gid"] == inside_group(info.st_gid), path
         assert seen["nlink"] == info.st_nlink == 1, (path, attempts)
         if path != run.log_path:  # the log grows during the run; it stays owner-only
             assert seen["sha256"] == _fingerprint(path)[0], path
