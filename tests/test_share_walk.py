@@ -180,3 +180,17 @@ def test_an_extended_acl_fails_the_run(monkeypatch, tmp_path):
     )
     assert len(ran) == 1
     assert found == ("checkout not shared with the owner: extended ACL on pkg/sub",)
+
+
+@pytest.mark.skipif(not DARWIN, reason="macOS extended ACLs")
+def test_an_acl_hidden_from_the_owner_and_one_on_the_top_directory_are_found(tmp_path):
+    """An ACL entry denying the owner read-security hides the ACL itself: "cannot tell" counts as
+    found. The checkout's top directory is checked too."""
+    root = _tree(tmp_path)
+    _acl(root / "sub", (1 << 11,))  # deny ACL_READ_SECURITY to the running uid
+    _acl(root, (1 << 1,), tag=1)
+    try:
+        found = module._extended_acls(root)
+    finally:
+        subprocess.run(["/bin/chmod", "-R", "-N", str(root)], check=True)  # noqa: S603
+    assert found == [".", "sub"]

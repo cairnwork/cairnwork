@@ -45,6 +45,7 @@ in the checkout is ever executed, used as git state or trusted by the owner.
 from __future__ import annotations
 
 import ctypes
+import errno
 import os
 import pwd
 import shutil
@@ -292,8 +293,9 @@ def _share_with_owner(account, python: str, checkout: Path) -> str:
 def _extended_acls(checkout: Path) -> list[str]:
     """macOS: what the owner can reach in the account's copy that carries an extended ACL. An ACL
     can grant the owner a directory or file whose mode closes it to its user, which the share step
-    can neither see nor narrow, so any ACL fails the run. (Linux POSIX ACLs are bounded by the mask,
-    which the share step's chmod sets to the user's r/x.) The top-level .git is not compared."""
+    can neither see nor narrow, so any ACL fails the run, and so does one the owner cannot read (an
+    ACL may deny it read-security). Linux POSIX ACLs are bounded by the mask, which the share
+    step's chmod sets to the user's r/x. The top-level .git is not compared."""
     if sys.platform != "darwin":
         return []
     lib = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
@@ -306,9 +308,11 @@ def _extended_acls(checkout: Path) -> list[str]:
             dirs[:] = [d for d in dirs if d != ".git"]
             files = [f for f in files if f != ".git"]
         for path in (top, *(os.path.join(top, name) for name in (*dirs, *files))):
+            ctypes.set_errno(0)
             acl = lib.acl_get_link_np(os.fsencode(path), ACL_TYPE_EXTENDED)  # never follows
             if acl:
                 lib.acl_free(acl)
+            if acl or ctypes.get_errno() != errno.ENOENT:  # ENOENT: none; other: cannot tell
                 found.add(os.path.relpath(path, checkout))
     return sorted(found)
 
