@@ -13,7 +13,7 @@ from local_worker_fakes import META, TAG, TASK, WRAPPER, cli_harness, lines, mak
 from local_worker_fakes import run_wrapper as run
 from test_local_worker_tools import action_of, make
 
-from experimental.local_worker import agent_protocol, episode, redact, tools
+from experimental.local_worker import episode, redact, tools
 from experimental.local_worker.agent import initial_messages
 from experimental.local_worker.episode_schema import validate_record
 
@@ -139,10 +139,9 @@ SEARCH = {"name": "search", "pattern": "x = 1", "path": "src"}
 def loop_run(tmp_path, replies, search=True):
     from local_worker_fakes import reply
 
-    loop, world, endpoint, _ = make_loop(tmp_path, [reply(**r) for r in replies])
-    if not search:
-        loop.settings = type(loop.settings)("served-model", loop.limits, 7, search_tool=False)
-        loop._tools = agent_protocol.tool_names(False)
+    loop, world, endpoint, _ = make_loop(
+        tmp_path, [reply(**r) for r in replies], search_tool=search
+    )
     out = loop.run(initial_messages(TASK, search))
     rec = episode.build_record(META, out)
     validate_record(rec)

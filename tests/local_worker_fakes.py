@@ -206,8 +206,9 @@ def make_loop(tmp_path: Any, replies: list, world: World | None = None, **limits
     wt = WorkerTools(tmp_path / ("0" * 32), tmp_path / "calls.jsonl", invoker=world)
     endpoint = FakeEndpoint(replies, clock, limits.pop("model_seconds", 1.0))
     scope = limits.pop("write_scope", None)
+    search = limits.pop("search_tool", True)
     lim = Limits(context_cap=limits.pop("context_cap", 100_000), **limits)
-    settings = Settings("served-model", lim, seed=7, write_scope=scope)
+    settings = Settings("served-model", lim, seed=7, write_scope=scope, search_tool=search)
     loop = AgentLoop(wt, endpoint, TASK, settings, clock=clock)
     return loop, world, endpoint, clock
 
