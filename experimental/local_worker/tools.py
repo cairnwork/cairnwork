@@ -37,7 +37,7 @@ SUDO = "/usr/bin/sudo"
 TERM_GRACE_SECONDS = 5.0  # after SIGTERM, and again after SIGKILL, before giving up on a wait
 KILL_GRACE_SECONDS = 2 * TERM_GRACE_SECONDS  # how long a timed-out call can outlive its timeout
 SWEEP_TIMEOUT_SECONDS = 10.0  # the sweep after a pytest run or a timed-out tool call
-TOOL_ACTIONS = ("list", "read", "write", "search", "pytest")  # actions the model's tools use
+TOOL_ACTIONS = ("list", "read", "write", "search", "search-probe", "pytest")  # tool profile
 START_MARKER = "LOCAL_WORKER_STARTED"  # first line the wrapper prints on stderr: "<marker> <nonce>"
 DEFAULT_MAX_OUTPUT_BYTES = 20_000
 DEFAULT_TIMEOUT_SECONDS = 300.0
@@ -186,6 +186,10 @@ class WorkerTools:
         args = {"pattern": pattern, "path": path, "regex": regex}
         mode = "regex" if regex else "fixed"
         return self._call("search", "search", [mode, pattern, path], args)
+
+    def search_probe(self) -> ToolCall:
+        """The canary's check that search's profile denies writes (wrapper action search-probe)."""
+        return self._call("search_probe", "search-probe", [], {})
 
     def run_tests(self, pytest_args: Sequence[str]) -> ToolCall:
         args = list(pytest_args)

@@ -122,6 +122,25 @@ def test_a_fifo_in_the_tree_does_not_block_search(runs):
 
 
 @pytest.mark.sandbox
+def test_search_probe_shows_the_search_profile_denies_writes(runs):
+    """The canary's search-probe (review of PR 251, 7) touches the checkout and tmp under the
+    profile search runs under: it starts, fails, and nothing is created."""
+    root = runs / TAG
+    proc = run(runs, "search-probe", str(root))
+    assert proc.returncode not in (0, 64) and b"Operation not permitted" in proc.stdout
+    assert not (root / "checkout" / "search-probe").exists()
+    assert not (root / "tmp" / "search-probe").exists()
+    assert run(runs, "search-probe", str(root), "x").returncode == 64
+
+
+def test_the_canary_requires_the_search_probes():
+    from experimental.local_worker import canary_check
+
+    assert "search a checkout file" in canary_check.REQUIRED_PROBES["positive_controls"]
+    assert "search profile denies writes" in canary_check.REQUIRED_PROBES["b_write_denied"]
+
+
+@pytest.mark.sandbox
 def test_search_profile_may_write_nothing(runs, tmp_path):
     """A copy of the wrapper whose search runs touch instead of grep: the profile denies it."""
     text = WRAPPER.read_text()

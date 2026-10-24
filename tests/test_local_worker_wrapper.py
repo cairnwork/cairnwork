@@ -129,6 +129,14 @@ def test_canary_direct_mode_denies_reads_writes_and_network(tmp_path):
     assert rc == 0 and report["overall"] == "SEATBELT_ONLY_PASS", failed
     for name in ("a_read_denied", "b_write_denied", "c_network_denied", "positive_controls"):
         assert report["checks"][name]["pass"], name
+    rows = {p["probe"]: p for c in report["checks"].values() for p in c.get("probes", [])}
+    for name in (  # the search probes (review of PR 251, 7)
+        "search a checkout file",
+        "search profile denies writes",
+        "wrapper search links/link_dir/secret.txt",
+        "wrapper search links/link_private",
+    ):
+        assert rows[name]["pass"], name
     escapes = {p["probe"]: p for p in report["checks"]["d_launchd_escape_denied"]["probes"]}
     assert report["checks"]["d_launchd_escape_denied"]["pass"], escapes
     for name in ("launchctl_submit", "launchctl_bootstrap_gui_domain"):
