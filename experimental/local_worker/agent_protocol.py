@@ -185,12 +185,19 @@ def _range_args(args: dict) -> None:
 
 # A search pattern's cost cap (review of PR 251, 4): grep's regex engine (TRE) expands a bounded
 # repetition into copies, so ((a{255}){255}){255} allocates gigabytes. A pattern is at most
-# MAX_PATTERN_BYTES; in regex mode every bound ({n}, {n,}, {n,m}) is at most MAX_REPEAT and a
-# bounded group may not itself contain a bound (no nesting). Refused before the wrapper runs, as a
-# BadCall the model can repair; fixed strings are never parsed as regexes.
+# MAX_PATTERN_BYTES; in regex mode every bound ({n}, {n,}, {n,m}, {,m}) is at most MAX_REPEAT and
+# a bounded group may not itself contain a bound (no nesting). Braces that form no bound ({},
+# {,}, {x}) are literal to TRE and ignored here, as is anything inside a bracket expression [...].
+# Over-rejection kept on purpose: any nesting is refused, also a cheap one like ((a){2}){2}; the
+# BadCall says how to rewrite it. Refused before the wrapper runs, as a BadCall the model can
+# repair; fixed strings are never parsed as regexes.
 MAX_PATTERN_BYTES = 512
 MAX_REPEAT = 100
-_BOUND = re.compile(r"\{(\d*)(?:,(\d*))?\}")
+_BOUND = re.compile(r"\{(?:(\d+)(?:,(\d*))?|,(\d+))\}")
+NESTED = (
+    "search regex may not nest bounded repetitions such as (a{2}){3}, however small: write the"
+    " inner part out, use * or +, or search with a fixed string"
+)
 
 
 def _bound(pattern: str, at: int) -> int | None:
@@ -222,7 +229,7 @@ def _check_regex(pattern: str) -> None:
             inner = stack.pop()
             end = _bound(pattern, i + 1)
             if end is not None and inner:
-                raise BadCall("search regex may not nest bounded repetitions")
+                raise BadCall(NESTED)
             stack[-1] = stack[-1] or inner or end is not None
             i = end if end is not None else i + 1
         else:
