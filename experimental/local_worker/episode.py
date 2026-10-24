@@ -32,7 +32,7 @@ from experimental.local_worker.cuts import (
     missing_usage,
 )
 from experimental.local_worker.gitstate import TreeState
-from experimental.local_worker.redact import BasePaths, public_args
+from experimental.local_worker.redact import BasePaths, public_args, public_path
 
 # v1 is the line shape of PR #248 (the #88 follow-up), which changed it (base_paths_observed,
 # verification.binary_files_changed, path digests with ext) without a version bump: no v1 corpus
@@ -211,7 +211,12 @@ class LoopOutcome:
     wall_seconds: float = 0.0  # this run's own seconds
 
 
-def build_record(meta: dict, out: LoopOutcome, cut_seconds: float = 900.0) -> dict:
+def build_record(
+    meta: dict,
+    out: LoopOutcome,
+    cut_seconds: float = 900.0,
+    write_scope: tuple[str, ...] | None = None,
+) -> dict:
     """The corpus line. ``meta`` carries the identity fields (episode_id, task_id, repo,
     model_name, harness_version, arm, seed, endpoint, server_model_id, manifest_sha256,
     canary_report_sha256, checkout_id and the resume_* / plan_sha256 fields).
@@ -226,7 +231,8 @@ def build_record(meta: dict, out: LoopOutcome, cut_seconds: float = 900.0) -> di
     pre-cut seconds. To total M5 time for L0 plus its resume arms, sum L0's
     ``wall_clock_seconds`` and each resume run's ``own_wall_seconds``; summing the resume's
     wall_clock_seconds would count the pre-cut time twice. wall_clock_start/end are this run's
-    real timestamps."""
+    real timestamps. With a write scope (write_scope.py) the line also carries ``write_scope``:
+    its entries, each through redact.public_path; without one the key is absent."""
     parent_wall = meta.get("parent_pre_cut_wall_seconds") or 0.0
     own = round(out.wall_seconds, 3)
     turns = [public_turn(t, out.base, out.base_paths) for t in out.turns]
@@ -271,6 +277,8 @@ def build_record(meta: dict, out: LoopOutcome, cut_seconds: float = 900.0) -> di
             turns, out.exit_reason, own, round(max(0.0, cut_seconds - parent_wall), 3)
         ),
     }
+    if write_scope is not None:
+        record["write_scope"] = [public_path(p, out.base_paths) for p in write_scope]
     return record
 
 
