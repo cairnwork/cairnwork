@@ -84,6 +84,25 @@ def test_search_refuses(runs, args):
 
 
 @pytest.mark.sandbox
+@pytest.mark.parametrize(
+    ("link", "target", "path", "why"),
+    [
+        ("gd", ".git", "gd/config", b"resolves into a .git directory"),
+        ("td", "../tmp", "td/x.txt", b"resolves outside the checkout"),  # the run's tmp: readable
+    ],
+)
+def test_a_symlinked_directory_on_the_way_cannot_leave_the_checkout(runs, link, target, path, why):
+    """Review of PR 251 (1): the directory checks, not Seatbelt, refuse these. Both targets are
+    readable under the tool profile, so without require_dir_inside_checkout grep would print."""
+    co = runs / TAG / "checkout"
+    (runs / TAG / "tmp" / "x.txt").write_text("hello from tmp\n")
+    (co / link).symlink_to(target)
+    proc = search(runs, "fixed", "hello", path)
+    assert proc.returncode == 64 and why in proc.stderr, proc.stderr
+    assert proc.stdout == b""
+
+
+@pytest.mark.sandbox
 def test_search_profile_may_write_nothing(runs, tmp_path):
     """A copy of the wrapper whose search runs touch instead of grep: the profile denies it."""
     text = WRAPPER.read_text()
