@@ -164,6 +164,9 @@ def decode_call(call: Any, n_targets: int, tools: tuple[str, ...] = BASE_TOOLS) 
         _search_args(args)
     if name == "read_file":
         _range_args(args)
+    path = args.get("path")
+    if name in ("list_dir", "read_file", "search") and isinstance(path, str) and path.rstrip("/"):
+        args["path"] = path.rstrip("/")  # "src/" names src (review of PR 251, 8b)
     index = args.get("target_index")
     if name == "run_tests" and index is not None:
         if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < n_targets:

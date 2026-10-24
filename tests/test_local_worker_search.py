@@ -349,3 +349,29 @@ def test_the_loop_returns_the_cap_to_the_model(tmp_path):
     assert rec["turns"][0]["error_category"] == "INVALID_CALL"
     assert "nest" in endpoint.payloads[1]["messages"][-1]["content"]
     assert "search" not in [c[0] for c in world.calls]
+
+
+@pytest.mark.parametrize(
+    ("name", "path", "expected"),
+    [("search", "sub/", "sub"), ("list_dir", "src//", "src"), ("read_file", "a.py/", "a.py")],
+)
+def test_a_trailing_slash_is_dropped_before_the_wrapper(name, path, expected):
+    """Review of PR 251 (8b): the wrapper refuses an empty component, so "sub/" would be refused."""
+    from experimental.local_worker.agent_protocol import decode_call
+
+    args = {"path": path, **({"pattern": "x"} if name == "search" else {})}
+    call = {"id": "c", "function": {"name": name, "arguments": json.dumps(args)}}
+    assert decode_call(call, 1, (name,))[1]["path"] == expected
+
+
+def test_a_root_slash_is_left_for_the_wrapper_to_refuse():
+    from experimental.local_worker.agent_protocol import decode_call
+
+    call = {"id": "c", "function": {"name": "list_dir", "arguments": '{"path": "/"}'}}
+    assert decode_call(call, 1)[1]["path"] == "/"
+
+
+@pytest.mark.sandbox
+def test_the_wrapper_refuses_a_trailing_slash_so_python_drops_it(runs):
+    assert search(runs, "fixed", "hello", "sub/").returncode == 64
+    assert search(runs, "fixed", "hello", "sub").returncode == 0
