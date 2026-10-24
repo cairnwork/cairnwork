@@ -30,9 +30,10 @@ with descriptors opened component by component with O_NOFOLLOW and never follows
 limits, failing closed in account mode only: a regular file with more than one link whose mode
 would need a change is left as it is (its inode may have a name outside the copy, which this must
 never touch), and the run fails with "checkout not shared with the owner"; so it does when a
-directory open to its user cannot be walked (a macOS ACL denying the account alone), a chmod
-fails, the share step fails or outlives ``SHARE_TIMEOUT_SECONDS``, or the account's processes
-cannot be confirmed ended.
+directory open to its user cannot be walked (a macOS ACL denying the account alone), anything
+the owner can reach carries a macOS extended ACL (one can grant the owner what the mode closes to
+the user), a chmod fails, the share step fails or outlives ``SHARE_TIMEOUT_SECONDS``, or the
+account's processes cannot be confirmed ended.
 
 A helper that outlives its timeout (``subprocess.run`` kills only sudo) is ended with
 ``account.kill_all()``: callers hold the account's lock (``VerifierAccount.exclusive``), so every
@@ -43,6 +44,7 @@ in the checkout is ever executed, used as git state or trusted by the owner.
 
 from __future__ import annotations
 
+import ctypes
 import os
 import pwd
 import shutil
@@ -59,6 +61,7 @@ from cairnwork.workspace import WorkspaceError, create_attempt_clone, remove_att
 STAGE = ".cairnwork-source"
 COPY_TIMEOUT_SECONDS = 600
 SHARE_TIMEOUT_SECONDS = 120
+ACL_TYPE_EXTENDED = 0x100  # sys/acl.h (macOS)
 
 # Runs as the account with ``python -I -S -c COPY_HELPER <source> <target>``. Exit 0 only if
 # every entry was copied; any error (a refused file type included) exits non-zero.
@@ -282,7 +285,32 @@ def _share_with_owner(account, python: str, checkout: Path) -> str:
         return f"share step failed: {exc}"
     if done.returncode != 0:
         return f"share step failed: {done.stderr.strip()[-300:]}"
-    return ""
+    acls = _extended_acls(checkout)
+    return f"extended ACL on {', '.join(acls[:5])}" if acls else ""
+
+
+def _extended_acls(checkout: Path) -> list[str]:
+    """macOS: what the owner can reach in the account's copy that carries an extended ACL. An ACL
+    can grant the owner a directory or file whose mode closes it to its user, which the share step
+    can neither see nor narrow, so any ACL fails the run. (Linux POSIX ACLs are bounded by the mask,
+    which the share step's chmod sets to the user's r/x.) The top-level .git is not compared."""
+    if sys.platform != "darwin":
+        return []
+    lib = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+    lib.acl_get_link_np.restype = ctypes.c_void_p
+    lib.acl_get_link_np.argtypes = (ctypes.c_char_p, ctypes.c_int)
+    lib.acl_free.argtypes = (ctypes.c_void_p,)
+    found = set()
+    for top, dirs, files in os.walk(checkout, followlinks=False):  # what the owner can reach
+        if top == os.fspath(checkout):
+            dirs[:] = [d for d in dirs if d != ".git"]
+            files = [f for f in files if f != ".git"]
+        for path in (top, *(os.path.join(top, name) for name in (*dirs, *files))):
+            acl = lib.acl_get_link_np(os.fsencode(path), ACL_TYPE_EXTENDED)  # never follows
+            if acl:
+                lib.acl_free(acl)
+                found.add(os.path.relpath(path, checkout))
+    return sorted(found)
 
 
 def remove_checkout(work: Path, clone_id: str, account) -> None:

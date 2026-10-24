@@ -2,8 +2,10 @@
 the checkout's owner cannot, run here as the owner on its own files.
 
 A directory its user may list and search but the helper cannot walk (a macOS ACL denying the
-account alone, or any open/stat failure) and a chmod that fails make it exit 1, so the run fails
-("checkout not shared with the owner"); the checkout's top directory is shared like any other.
+account alone, or any open/list/stat failure) and a chmod that fails make it exit 1, so the run
+fails ("checkout not shared with the owner"); the checkout's top directory is shared like any
+other. A macOS extended ACL anywhere the owner can reach (one can grant the owner a directory whose
+mode closes it to its user) fails the run too.
 """
 
 import ctypes
@@ -14,22 +16,24 @@ import subprocess
 import sys
 
 import pytest
-from test_account_checkout import _share
+from test_account_checkout import ME, _differences, _LocalAccount, _share
+
+import cairnwork.account_checkout as module
 
 DARWIN = sys.platform == "darwin"
 ACL_LIST, ACL_SEARCH = 1 << 1, 1 << 3  # ACL_LIST_DIRECTORY, ACL_SEARCH (sys/acl.h)
 
 
-def _deny_self(path, perms) -> None:
-    """Add an ACL entry denying ``perms`` to the running uid alone (what a candidate can do to
-    its own copy from inside the sandbox)."""
+def _acl(path, perms, tag=2) -> None:
+    """Add an ACL entry (2: deny, 1: allow) for ``perms`` to the running uid alone: what a
+    candidate can do to its own copy from inside the sandbox, for itself or for the owner."""
     lib = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
     uuid = (ctypes.c_ubyte * 16)()
     assert lib.mbr_uid_to_uuid(ctypes.c_uint(os.getuid()), uuid) == 0
     lib.acl_init.restype = ctypes.c_void_p
     acl, entry, permset = ctypes.c_void_p(lib.acl_init(1)), ctypes.c_void_p(), ctypes.c_void_p()
     assert lib.acl_create_entry(ctypes.byref(acl), ctypes.byref(entry)) == 0
-    assert lib.acl_set_tag_type(entry, 2) == 0  # ACL_EXTENDED_DENY
+    assert lib.acl_set_tag_type(entry, tag) == 0
     assert lib.acl_set_qualifier(entry, uuid) == 0
     assert lib.acl_get_permset(entry, ctypes.byref(permset)) == 0
     for perm in perms:
@@ -56,7 +60,7 @@ def test_a_directory_denied_to_the_account_alone_fails_the_share(tmp_path, perms
     alone. The helper cannot narrow what is inside, which the comparing owner could read through
     group and other: it must exit 1, not skip the directory."""
     root = _tree(tmp_path)
-    _deny_self(root / "sub", perms)
+    _acl(root / "sub", perms)
     try:
         done = _share(root)
     finally:
@@ -117,3 +121,62 @@ def test_the_top_directory_is_shared_too(tmp_path, before, after):
         shutil.rmtree(root)
     assert done.returncode == 0, done.stderr
     assert mode == after
+
+
+def test_a_directory_that_cannot_be_listed_fails_the_share(tmp_path):
+    root = _tree(tmp_path)
+    deny = (
+        "import os\n_listdir, CALLS = os.listdir, []\n"
+        "def _denying(path):\n"
+        "    CALLS.append(path)\n"
+        "    if len(CALLS) == 2:  # the top first, then sub\n"
+        "        raise PermissionError(13, 'denied')\n"
+        "    return _listdir(path)\n"
+        "os.listdir = _denying\n"
+    )
+    done = _share(root, prefix=deny)
+    assert done.returncode == 1 and "cannot list sub" in done.stderr, done.stderr
+
+
+def test_a_directory_its_user_may_list_but_not_search_is_shared_not_entered(tmp_path):
+    root = _tree(tmp_path)
+    os.chmod(root / "sub", 0o400)
+    try:
+        done = _share(root)
+        mode = stat.S_IMODE(os.lstat(root / "sub").st_mode)
+    finally:
+        os.chmod(root / "sub", 0o755)
+    assert done.returncode == 0, done.stderr
+    assert mode == 0o444
+    assert stat.S_IMODE(os.lstat(root / "sub" / "x.txt").st_mode) == 0o044
+
+
+@pytest.mark.skipif(not DARWIN, reason="macOS extended ACLs")
+def test_an_extended_acl_the_owner_can_reach_is_found(tmp_path):
+    """A directory closed to its user by mode (0o100) with an ACL allowing the owner to list it:
+    the helper leaves it closed, the owner would list it and read 0o044 files inside."""
+    root = _tree(tmp_path)
+    (root / ".git").mkdir()
+    (root / ".git" / "f").write_text("g")
+    assert module._extended_acls(root) == []
+    _acl(root / ".git" / "f", (1 << 1,), tag=1)  # the top-level .git is not compared
+    _acl(root / "sub", (1 << 1,), tag=1)  # ACL_EXTENDED_ALLOW, ACL_LIST_DIRECTORY
+    os.chmod(root / "sub", 0o100)
+    try:
+        found = module._extended_acls(root)
+    finally:
+        os.chmod(root / "sub", 0o755)
+        subprocess.run(["/bin/chmod", "-R", "-N", str(root)], check=True)  # noqa: S603
+    assert found == ["sub"]
+
+
+def test_an_extended_acl_fails_the_run(monkeypatch, tmp_path):
+    monkeypatch.setattr(module, "_extended_acls", lambda _checkout: ["pkg/sub"])
+    found, ran = _differences(
+        monkeypatch,
+        tmp_path,
+        _LocalAccount(ME, tmp_path),
+        lambda: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    assert len(ran) == 1
+    assert found == ("checkout not shared with the owner: extended ACL on pkg/sub",)
