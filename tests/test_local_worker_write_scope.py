@@ -143,10 +143,34 @@ def test_any_hard_link_in_the_checkout_refuses_a_scoped_write(runs):
     (co / "x" / "a").write_text("a\n")
     os.link(co / "x" / "a", co / "out" / "b")
     proc = write(runs, "sub/new.py", "sub")
-    assert refused(proc) and b"the checkout has a file with hard links: " in proc.stderr, (
+    assert refused(proc) and b"a file of the run has hard links: checkout/out/b" in proc.stderr, (
         proc.stderr
     )
     assert not (co / "sub" / "new.py").exists() and (co / "out" / "b").read_text() == "a\n"
+
+
+def test_a_hard_link_parked_in_tmp_refuses_a_scoped_write_too(runs):
+    """Claude review of 40befbd: the pair could wait in tmp during the check and come back after."""
+    tmp = runs / TAG / "tmp"
+    (tmp / "x").mkdir()
+    (tmp / "x" / "a").write_text("a\n")
+    os.link(tmp / "x" / "a", tmp / "b")
+    proc = write(runs, "sub/new.py", "sub")
+    assert refused(proc) and b"a file of the run has hard links: tmp/" in proc.stderr, proc.stderr
+    assert not (runs / TAG / "checkout" / "sub" / "new.py").exists()
+
+
+def test_an_unsearchable_directory_refuses_a_scoped_write(runs):
+    """The search fails closed: a directory test code made unreadable could hide a pair."""
+    hidden = runs / TAG / "checkout" / "hidden"
+    hidden.mkdir()
+    hidden.chmod(0)
+    try:
+        proc = write(runs, "sub/new.py", "sub")
+    finally:
+        hidden.chmod(0o700)
+    assert refused(proc) and b"cannot be searched for hard links" in proc.stderr, proc.stderr
+    assert not (runs / TAG / "checkout" / "sub" / "new.py").exists()
 
 
 @pytest.mark.sandbox
