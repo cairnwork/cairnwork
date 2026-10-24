@@ -79,9 +79,10 @@ def is_public_path(value: Any, plain_ok: bool = True) -> bool:
     return plain or is_path_digest(value)
 
 
+INT_ARGS = ("target_index", "start_line", "end_line")  # published as they are
 PUBLIC_ARGS = {  # per action: the only argument keys a line may carry
     "list_dir": ("path",),
-    "read_file": ("path",),
+    "read_file": ("path", "start_line", "end_line"),
     "write_file": ("path", "content"),
     "edit_file": ("path", "target", "replacement"),
     "run_test": ("target_index",),
@@ -108,7 +109,7 @@ def public_args(
             out[key] = public_path(value, base_paths) if real else path_digest(value)
         elif key in TEXT_ARGS:
             out[key] = digest(value)
-        elif key == "target_index" and isinstance(value, int) and not isinstance(value, bool):
+        elif key in INT_ARGS and isinstance(value, int) and not isinstance(value, bool):
             out[key] = value
         elif key == "status" and value in ("DONE", "NEEDS_SPEC"):
             out[key] = value

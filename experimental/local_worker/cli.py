@@ -106,6 +106,10 @@ def build_manifest(a: argparse.Namespace, limits: Limits, endpoint: str) -> dict
 MANIFEST_SCHEMA = corpus_io.MANIFEST_SCHEMA
 
 
+def _off_or_int(value: str) -> int | None:
+    return None if value == "off" else int(value)
+
+
 def resume_prefix(parent: dict, cut_turn: int | None) -> tuple[list[dict], int, float]:
     """(messages before the cut turn's model reply, cut turn index, its start in seconds).
 
@@ -169,10 +173,12 @@ def _prepare(a: argparse.Namespace) -> dict[str, Any]:
         tool_cap_seconds=a.tool_cap_seconds,
         max_completion_tokens=a.max_completion_tokens,
         context_window=a.context_window,
-        repeat_hint_at=None if a.repeat_hint_at == "off" else int(a.repeat_hint_at),
+        repeat_hint_at=_off_or_int(a.repeat_hint_at),
         repeat_stop_at=a.repeat_stop_at,
         repeat_requires_unchanged_tree=a.repeat_requires_unchanged_tree == "true",
         invalid_call_limit=a.invalid_call_limit,
+        read_page_lines=_off_or_int(a.read_page_lines),
+        read_page_bytes=_off_or_int(a.read_page_bytes),
     )
     manifest_sha = corpus_io.prepare_manifest(out_dir, build_manifest(a, limits, endpoint.url))
     return dict(
@@ -309,6 +315,9 @@ def parser() -> argparse.ArgumentParser:
             "--repeat-requires-unchanged-tree", choices=("true", "false"), default="true"
         )
         sp.add_argument("--invalid-call-limit", type=int, default=6)
+        # read_file paging (reading.py): off until frozen; expected 400 lines and 16000 bytes
+        sp.add_argument("--read-page-lines", default="off", help="a line count, or off")
+        sp.add_argument("--read-page-bytes", default="off", help="a byte cap, or off")
         sp.add_argument(
             "--search-tool", choices=("on", "off"), default="on", help="read-only search tool"
         )

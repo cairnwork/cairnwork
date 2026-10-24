@@ -169,8 +169,12 @@ class WorkerTools:
     def list_dir(self, path: str = ".") -> ToolCall:
         return self._call("list_dir", "list", [path], {"path": path})
 
-    def read_file(self, path: str) -> ToolCall:
-        return self._call("read_file", "read", [path], {"path": path})
+    def read_file(self, path: str, start: int | None = None, end: int | None = None) -> ToolCall:
+        """The whole file, as the worker; a range (logged) is sliced by reading.page."""
+        args = {"path": path, "start_line": start, "end_line": end}
+        return self._call(
+            "read_file", "read", [path], {k: v for k, v in args.items() if v is not None}
+        )
 
     def write_file(self, path: str, content: str) -> ToolCall:
         args = {"path": path, "content": content}

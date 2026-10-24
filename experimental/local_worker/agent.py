@@ -70,6 +70,7 @@ from experimental.local_worker.loop_cleanup import CleanupMixin
 from experimental.local_worker.loop_config import Limits as Limits  # re-exported
 from experimental.local_worker.loop_config import RefusedStart as RefusedStart  # re-exported
 from experimental.local_worker.loop_config import Settings, Task
+from experimental.local_worker.reading import page
 from experimental.local_worker.tools import (
     ToolCall,
     ToolDeadline,
@@ -352,8 +353,10 @@ class AgentLoop(CleanupMixin, GuardMixin):
         t = self.tools
         if name == "list_dir":
             return t.list_dir(args["path"])
-        if name == "read_file":
-            return t.read_file(args["path"])
+        if name == "read_file":  # the range or page: sliced here, after the wrapper (reading.py)
+            lo, hi, lim = args.get("start_line"), args.get("end_line"), self.limits
+            call = t.read_file(args["path"], lo, hi)
+            return page(call, lo, hi, lim.read_page_lines, lim.read_page_bytes, t.max_output_bytes)
         if name == "write_file":
             return t.write_file(args["path"], args["content"])
         if name == "edit_file":

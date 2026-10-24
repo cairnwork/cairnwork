@@ -2,7 +2,9 @@
 the decoding of a tool call. ``run_tests`` takes no free-form arguments (Plan v2 point 2): the loop
 runs ``pytest -q --tb=short -- <targets>`` over the task's declared public targets, or the one the
 model picks by ``target_index``. ``search`` (read-only, a fixed string or a regex) is offered only
-with Settings.search_tool (default off): ``tool_schemas``/``system_prompt`` give the frozen set.
+with Settings.search_tool (default on): ``tool_schemas``/``system_prompt`` give the frozen set.
+``read_file`` takes an optional line range (start_line, end_line: 1-based, inclusive) in every
+mode; reading.py slices the wrapper's output (and pages it with Limits.read_page_lines).
 """
 
 from __future__ import annotations
@@ -33,9 +35,15 @@ def _fn(name: str, desc: str, props: dict, required: list[str]) -> dict:
 
 
 _S = {"type": "string"}
+_LINE = {"type": "integer", "minimum": 1}
 TOOL_SCHEMAS = [
     _fn("list_dir", "List a directory of the repository.", {"path": _S}, ["path"]),
-    _fn("read_file", "Print a file of the repository.", {"path": _S}, ["path"]),
+    _fn(
+        "read_file",
+        "Print a file of the repository, or its lines start_line to end_line (1-based, inclusive).",
+        {"path": _S, "start_line": _LINE, "end_line": _LINE},
+        ["path"],
+    ),
     _fn("write_file", "Create or replace.", {"path": _S, "content": _S}, ["path", "content"]),
     _fn(
         "edit_file",
@@ -153,11 +161,22 @@ def decode_call(call: Any, n_targets: int, tools: tuple[str, ...] = BASE_TOOLS) 
         raise BadCall("finish summary must be a string")
     if name == "search":
         _search_args(args)
+    if name == "read_file":
+        _range_args(args)
     index = args.get("target_index")
     if name == "run_tests" and index is not None:
         if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < n_targets:
             raise BadCall(f"target_index must be an integer in [0, {n_targets})")
     return name, args
+
+
+def _range_args(args: dict) -> None:
+    start, end = args.get("start_line"), args.get("end_line")
+    for value in (start, end):
+        if value is not None and (not isinstance(value, int) or isinstance(value, bool)):
+            raise BadCall("start_line and end_line must be integers")
+    if (start is not None and start < 1) or (end is not None and end < max(start or 1, 1)):
+        raise BadCall("the line range needs 1 <= start_line <= end_line")
 
 
 def _search_args(args: dict) -> None:
