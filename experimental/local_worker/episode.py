@@ -148,23 +148,45 @@ def tree_at(turns: list[dict]) -> bool | None:
     return ran[-1]["tree_differs_from_base"] if ran else False
 
 
+# Codex review of PR #248, round 3: a line's times are rounded to 3 decimals (0.0005 s each way),
+# and a resume run's limit is 900 minus its parent's rounded pre-cut seconds (another 0.0005 s).
+# A turn counts as ended by a limit only with this margin to spare; a tool turn within it of the
+# limit is unknown there (null); the run is within the limit only if its rounded end is, too.
+CUT_MARGIN = 0.002
+
+
+def ended_by(t: dict, limit: float) -> bool:
+    """The turn certainly ended (its tree observed, if it ran a tool) by ``limit`` seconds."""
+    return t["t_end_seconds"] + CUT_MARGIN <= limit
+
+
 def tree_at_limit(turns: list[dict], limit: float) -> bool | None:
     """The tree at ``limit`` seconds: tree_at of the turns ended by then; null when a turn whose
-    tool ran spans the limit (started before it, ended after it), since when that tool changed
-    the tree was never observed (Codex review of PR #248)."""
-    if any(t["tool_ran"] and t["t_start_seconds"] < limit < t["t_end_seconds"] for t in turns):
-        return None
-    return tree_at([t for t in turns if t["t_end_seconds"] <= limit])
+    tool ran may span the limit (it started before it, or within CUT_MARGIN after, and did not
+    surely end by it), since when that tool changed the tree was never observed (Codex review of
+    PR #248, rounds 1-3)."""
+    for t in turns:
+        if t["tool_ran"] and t["t_start_seconds"] - CUT_MARGIN < limit and not ended_by(t, limit):
+            return None
+    return tree_at([t for t in turns if ended_by(t, limit)])
+
+
+def within_limit(own_wall_seconds: float, limit: float) -> bool:
+    """The run (its rounded own_wall_seconds) certainly ended by ``limit`` seconds."""
+    return own_wall_seconds + CUT_MARGIN <= limit
 
 
 def cut_at(turns: list[dict], exit_reason: str, wall: float, limit: float) -> dict:
-    """What the episode would have been with a ``limit``-second wall clock (addendum §0a item 4).
-    turns_completed counts the turns ended by the limit; a turn spanning it is not completed."""
+    """What the episode would have been with a ``limit``-second wall clock (addendum §0a item 4),
+    from the line's own rounded values (``wall`` is own_wall_seconds), so the validator recomputes
+    it exactly. turns_completed counts the turns surely ended by the limit; a turn that may span
+    it is not completed. A run within the limit has every turn completed (t_end <= its wall)."""
+    inside = within_limit(wall, limit)
     return {
         "limit_seconds": limit,
-        "within_limit": wall <= limit,
-        "exit_reason": exit_reason if wall <= limit else "TIMEOUT",
-        "turns_completed": sum(t["t_end_seconds"] <= limit for t in turns),
+        "within_limit": inside,
+        "exit_reason": exit_reason if inside else "TIMEOUT",
+        "turns_completed": sum(ended_by(t, limit) for t in turns),
         "tree_differs_at_limit": tree_at_limit(turns, limit),
     }
 
@@ -206,6 +228,7 @@ def build_record(meta: dict, out: LoopOutcome, cut_seconds: float = 900.0) -> di
     wall_clock_seconds would count the pre-cut time twice. wall_clock_start/end are this run's
     real timestamps."""
     parent_wall = meta.get("parent_pre_cut_wall_seconds") or 0.0
+    own = round(out.wall_seconds, 3)
     turns = [public_turn(t, out.base, out.base_paths) for t in out.turns]
     added, removed, binary = out.patch if out.patch is not None else (None, None, None)
     record = {
@@ -215,7 +238,7 @@ def build_record(meta: dict, out: LoopOutcome, cut_seconds: float = 900.0) -> di
         "wall_clock_start": out.started_at,
         "wall_clock_end": out.ended_at,
         "wall_clock_seconds": round(parent_wall + out.wall_seconds, 3),
-        "own_wall_seconds": round(out.wall_seconds, 3),
+        "own_wall_seconds": own,
         "total_turns": len(turns),
         "first_edit_cut": first_edit_cut(out.turns, out.base, out.base_paths),
         "first_source_edit": first_source_edit(out.turns, out.base, out.base_paths),
@@ -245,7 +268,7 @@ def build_record(meta: dict, out: LoopOutcome, cut_seconds: float = 900.0) -> di
             "cleanup": out.cleanup,
         },
         "cut_900s": cut_at(
-            turns, out.exit_reason, out.wall_seconds, max(0.0, cut_seconds - parent_wall)
+            turns, out.exit_reason, own, round(max(0.0, cut_seconds - parent_wall), 3)
         ),
     }
     return record

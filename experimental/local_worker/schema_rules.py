@@ -7,7 +7,7 @@ closed vocabularies, turn times in order, the termination block against the exit
 
 from __future__ import annotations
 
-from experimental.local_worker.episode import tree_at_limit
+from experimental.local_worker.episode import ended_by, tree_at_limit, within_limit
 from experimental.local_worker.schema_base import SchemaError
 
 ACTION_TYPES = ("list_dir", "read_file", "write_file", "edit_file", "run_test", "finish")
@@ -75,16 +75,16 @@ def _termination(rec: dict) -> None:
 
 
 def _cut_900s(rec: dict) -> None:
+    """Recomputed exactly from the line's rounded values, with episode.CUT_MARGIN (Codex review
+    of PR #248, round 3): no rounding tolerance, so a backdated claim cannot hide in one."""
     cut, own = rec["cut_900s"], rec["own_wall_seconds"]
     turns, limit = rec["turns"], cut["limit_seconds"]
-    done = sum(t["t_end_seconds"] <= limit for t in turns)
+    done = sum(ended_by(t, limit) for t in turns)
     if cut["turns_completed"] != done or cut["tree_differs_at_limit"] != tree_at_limit(
         turns, limit
     ):
         raise SchemaError("cut_900s differs from the turns within its limit")
-    if abs(own - cut["limit_seconds"]) > TOLERANCE and cut["within_limit"] != (
-        own <= cut["limit_seconds"]
-    ):
+    if cut["within_limit"] != within_limit(own, limit):
         raise SchemaError("cut_900s.within_limit differs from own_wall_seconds")
     want = rec["verification"]["exit_reason"] if cut["within_limit"] else "TIMEOUT"
     if cut["exit_reason"] != want:
