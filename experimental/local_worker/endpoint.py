@@ -38,6 +38,19 @@ class EndpointTimeout(EndpointError):
     """The single deadline passed while waiting for the endpoint (TIMEOUT)."""
 
 
+class EndpointContextLimit(EndpointError):
+    """HTTP 400 saying the prompt (with the output budget) exceeds the context window: the episode
+    ends with CONTEXT_LIMIT, not ERROR_ABORT (guards.py)."""
+
+
+# The 400 bodies that mean "context too long": Splash 1.0.2 (code context_length_exceeded), the
+# OpenAI shape, vLLM ("maximum context length") and llama.cpp (exceed_context_size_error).
+_CONTEXT_TOO_LONG = re.compile(
+    rb"context_length_exceeded|exceed_context_size|maximum context length"
+    rb"|exceeds? the (available )?context (window|size)"
+)
+
+
 class Endpoint(Protocol):
     url: str
 
@@ -99,6 +112,21 @@ class LoopbackEndpoint:
         body = json.dumps(payload).encode()
         return self._request("POST", "/chat/completions", body, deadline)
 
+    def count_tokens(self, payload: dict, deadline: float) -> int:
+        """The exact prompt tokens of a chat request, as the server would build them: Splash's
+        /apply-template (the chat template with the tools) then /tokenize, beside /v1. Any other
+        server answers with an error: EndpointError, and the caller ends on its bound."""
+        root = self.target.base_path.removesuffix("/v1")
+        body = json.dumps({**payload, "add_generation_prompt": True}).encode()
+        prompt = self._request("POST", "/apply-template", body, deadline, root).get("prompt")
+        if not isinstance(prompt, str):
+            raise EndpointError("/apply-template answered without a prompt")
+        body = json.dumps({"content": prompt, "add_special": False}).encode()
+        tokens = self._request("POST", "/tokenize", body, deadline, root).get("tokens")
+        if not isinstance(tokens, list):
+            raise EndpointError("/tokenize answered without a token list")
+        return len(tokens)
+
     def models(self, deadline: float) -> list[str]:
         data = self._request("GET", "/models", None, deadline).get("data")
         if not isinstance(data, list):
@@ -111,8 +139,11 @@ class LoopbackEndpoint:
             raise EndpointTimeout("deadline passed")
         return left
 
-    def _request(self, method: str, path: str, body: bytes | None, deadline: float) -> dict:
+    def _request(
+        self, method: str, path: str, body: bytes | None, deadline: float, base: str | None = None
+    ) -> dict:
         t = self.target
+        base = t.base_path if base is None else base
         conn = http.client.HTTPConnection(t.host, t.port, timeout=self._remaining(deadline))
         watchdog: threading.Timer | None = None
         fired = threading.Event()  # set by the watchdog before it shuts the socket down
@@ -125,7 +156,7 @@ class LoopbackEndpoint:
             watchdog.daemon = True
             watchdog.start()
             headers = {"Content-Type": "application/json"} if body is not None else {}
-            conn.request(method, t.base_path + path, body=body, headers=headers)
+            conn.request(method, base + path, body=body, headers=headers)
             sock.settimeout(self._remaining(deadline))
             resp = conn.getresponse()
             data = _read_bounded(resp, sock, lambda: self._remaining(deadline))
@@ -142,6 +173,8 @@ class LoopbackEndpoint:
             if watchdog is not None:
                 watchdog.cancel()
             conn.close()
+        if status == 400 and _CONTEXT_TOO_LONG.search(data.lower()):
+            raise EndpointContextLimit("endpoint answered HTTP 400: context too long")
         if status != 200:  # a redirect is an error too: it is never followed
             raise EndpointError(f"endpoint answered HTTP {status}")
         try:

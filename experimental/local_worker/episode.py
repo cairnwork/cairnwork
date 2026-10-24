@@ -48,6 +48,8 @@ WALL_TIME_RULE = (  # recorded in manifest.json (Claude review of #239, NB9)
     " add a resume run's wall_clock_seconds, which counts the parent's pre-cut time again."
 )
 EXIT_REASONS = ("COMPLETED", "TURN_LIMIT", "TIMEOUT", "ERROR_ABORT")
+# The robustness guards (guards.py); additive to v1: older lines never carry them.
+EXIT_REASONS += ("REPEAT_LIMIT", "CONTEXT_LIMIT", "INVALID_TOOL_CALL_LIMIT")
 
 
 @dataclass

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from local_worker_fakes import BASE_SHA, META, TASK, World, make_loop, reply
+from local_worker_fakes import BASE_SHA, META, TASK, World, make_loop, reads, reply
 
 from experimental.local_worker import agent_protocol, cuts, episode, tools
 from experimental.local_worker.agent import RefusedStart, initial_messages
@@ -166,7 +166,7 @@ def test_wall_clock_limit_uses_one_deadline(tmp_path):
 def test_no_request_is_sent_after_the_deadline(tmp_path):
     world = World()
     world.tool_seconds = 100.0  # each wrapper call (tool or status) takes 100 s; model instant
-    replies = [reply("read_file", path="src/app.py")] * 10
+    replies = reads(10)  # alternating: the repeat guard stays out of it
     out, rec, _, endpoint = run(
         tmp_path, replies, world, max_wall_seconds=1000, cleanup_reserve_seconds=60, model_seconds=0
     )

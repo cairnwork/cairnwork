@@ -93,6 +93,16 @@ class World:
                 return 64, b"local-worker-tool: refusing: out of write scope\n"
             self.files[args[0]] = stdin.decode()
             return 0, b""
+        if action == "search":  # fixed strings only: enough for the loop's tests
+            _mode, pattern, where = args
+            hits = [
+                f"{p}:{n}:{line}"
+                for p, text in sorted(self.files.items())
+                if where == "." or p == where or p.startswith(where + "/")
+                for n, line in enumerate(text.splitlines(), 1)
+                if pattern in line
+            ]
+            return (0 if hits else 1), "".join(h + "\n" for h in hits).encode()
         if action == "pytest":
             self.files.update(self.pytest_writes)
             return 1, self.pytest_output
@@ -132,6 +142,12 @@ class World:
             rem += sum(d.startswith("- ") for d in diff)
             binary += "\0" in self.files.get(p, "") + self.base.get(p, "")
         return f"PATCH {add} {rem} {binary}\n".encode()
+
+
+def reads(n: int) -> list[dict]:
+    """n read_file replies, alternating two paths: never the repeat guard's identical calls."""
+    paths = ("src/app.py", "tests/test_app.py")
+    return [reply("read_file", path=paths[k % 2]) for k in range(n)]
 
 
 def reply(
