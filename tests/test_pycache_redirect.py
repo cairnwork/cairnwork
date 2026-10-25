@@ -106,6 +106,14 @@ CLOSED_LINKED = LINKED.replace("import os, sys", "import atexit, os, sys").repla
 )
 
 
+def case_insensitive(path):
+    """Whether the filesystem holding ``path`` gives ``path`` for another letter case of its name:
+    the case-variant link resolves only there (APFS by default, not ext4 on Linux CI)."""
+    path.stat()  # it must be visible, or the probe would skip the test silently
+    other = path.with_name(path.name.swapcase())
+    return other.exists() and os.path.samefile(other, path)
+
+
 def linked_helper_run(repo, tmp_path, how, account=None):
     files = {
         "src/evil.py": (CLOSED_LINKED if how == "closed" else LINKED).format(
@@ -166,8 +174,8 @@ def test_a_redirected_plain_pyc_for_a_protected_helper_fails_the_run(repo, tmp_p
 
 
 def test_a_redirect_through_a_case_variant_symlink_fails_the_run(repo, tmp_path):
-    if not (tmp_path / "REPO").exists():
-        pytest.skip("case-sensitive filesystem")
+    if not case_insensitive(tmp_path):  # the run root is tmp_path / "runs"
+        pytest.skip("case-sensitive filesystem: no case-variant link resolves")
     run = linked_helper_run(repo, tmp_path, "case")
     assert run.returncode == 0, run.log_path.read_text()  # the import system followed it
     assert not run.observation.passed
@@ -232,6 +240,8 @@ def test_account_a_redirected_plain_pyc_fails_the_run(repo, tmp_path, account_ru
 
 @pytest.mark.verifier_account
 def test_account_a_redirect_through_a_case_variant_symlink_fails(repo, tmp_path, account_run_root):
+    if not case_insensitive(ACCOUNT.run_root):
+        pytest.skip("case-sensitive filesystem: no case-variant link resolves")
     run = linked_helper_run(repo, tmp_path, "case", account=ACCOUNT)
     assert run.returncode == 0, run.log_path.read_text()
     assert not run.observation.passed
