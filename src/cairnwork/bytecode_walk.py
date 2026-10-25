@@ -10,7 +10,8 @@ case and NFC/NFD on APFS, firmlinks (/System/Volumes/Data), symlinks and ``..`` 
 comparison or realpath does not canonicalize (#289 review).
 
 1. **Listing.** Both write roots are listed without following a symlink; a directory closed to
-   its owner is opened (u+rwx) first. Each directory becomes a node with its entries as edges:
+   its owner is opened (u+rwx) first, and one still not listable and searchable (an ACL) is an
+   error. Each directory becomes a node with its entries as edges:
    subdirectories, and symlinks whose target (resolved by the kernel relative to the link's own
    directory, after the whole listing has opened every closed directory in the roots) is a
    directory. Every pyc-like name is reported, so is every error, a symlink's included unless
@@ -64,7 +65,9 @@ def opened(path):
     """The identity of directory ``path`` (never a symlink), opened first if closed to its owner,
     and its entries as (name, kind, identity or None, error or None), kind "dir" (identity set),
     "link" or "other". Listed through a descriptor, so each entry is resolved relative to its own
-    directory, not by the listing's (possibly long) spelling."""
+    directory, not by the listing's (possibly long) spelling. A directory that stays unlistable
+    or unsearchable after the mode fix (a macOS ACL survives it) is an error, so every directory
+    of the roots is both, or already a finding."""
     info = os.lstat(path)
     if not stat.S_ISDIR(info.st_mode):
         raise NotADirectoryError(errno.ENOTDIR, "not a directory")
@@ -74,6 +77,8 @@ def opened(path):
     try:
         if ident(os.fstat(fd)) != ident(info):
             raise OSError(errno.ESTALE, "replaced while listed")
+        if not os.access(".", os.X_OK, dir_fd=fd, effective_ids=True):  # e.g. an ACL deny search
+            raise PermissionError(errno.EACCES, "listable but not searchable")
         found = []
         with os.scandir(fd) as listing:  # DirEntry calls use fd: it stays open until done
             for entry in listing:
@@ -97,10 +102,10 @@ def link_target(name, fd):
     """The identity of the directory the symlink ``name`` in directory ``fd`` resolves to, or None.
     Resolved relative to its own directory, so no lookup reaching the link resolves with fewer
     steps, and only after the whole listing (resolve_links), when every closed directory in the
-    roots has been opened. ENOENT (dangling), ENOTDIR (through a file), ELOOP (a loop: any
-    longer lookup through it loops too) and EACCES (now only a directory outside the roots, which
-    the run cannot change, closed to this user and so to the run's Python) mean the run's Python
-    cannot use it either; any other error is raised and reported."""
+    roots has been opened and found searchable (opened). ENOENT (dangling), ENOTDIR (through a
+    file), ELOOP (a loop: any longer lookup through it loops too) and EACCES (now only a directory
+    outside the roots, which the run cannot change, closed to this user and so to the run's
+    Python) mean the run's Python cannot use it either; any other error is raised and reported."""
     try:
         info = os.stat(name, dir_fd=fd)
     except OSError as exc:

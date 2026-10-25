@@ -127,16 +127,10 @@ def test_a_symlink_into_the_mirror_is_followed(run):
     """<P>/<head of the mirror>/<middle component> is a symlink to stash/, which holds the rest:
     the physical path stash/<rest> spells no existing directory (its first name is not one at
     /), only the spelling through the link mirrors tests/helper.py."""
-    checkout, run_dir = run
+    checkout, _ = run
     parts = str(checkout / "tests").strip("/").split("/")
-    middle = len(parts) // 2
-    assert not os.path.isdir("/" + parts[middle + 1])
-    stash = run_dir / "home" / "stash"
-    stash.joinpath(*parts[middle + 1 :]).mkdir(parents=True)
-    (stash.joinpath(*parts[middle + 1 :]) / f"helper.{TAG}.pyc").write_bytes(b"x")
-    head = run_dir / "home" / "alt" / os.path.join(*parts[:middle])
-    head.mkdir(parents=True)
-    (head / parts[middle]).symlink_to(stash)
+    assert not os.path.isdir("/" + parts[len(parts) // 2 + 1])
+    link_in_the_mirror(*run, lambda stash, head: stash)
     assert scan(run) == ("tests/helper.py (protected input)",)
 
 
@@ -210,6 +204,7 @@ def link_in_the_mirror(checkout, run_dir, target_of):
     head = run_dir / "home" / "alt" / os.path.join(*parts[:middle])
     head.mkdir(parents=True)
     (head / parts[middle]).symlink_to(target_of(stash, head))
+    return head
 
 
 def test_a_link_whose_target_differs_in_case_is_followed(run):
@@ -277,6 +272,20 @@ def test_an_unreadable_directory_fails_closed(run):
     finally:
         subprocess.run(["/bin/chmod", "-N", str(denied)], check=True)
     assert reason.startswith("run/tmp/denied unreadable"), reason
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="a macOS ACL denies search despite the mode")
+def test_a_listable_but_unsearchable_directory_fails_closed(run):
+    """#289 round 4: the candidate denies search (not list) by ACL at exit on the directory
+    holding a link into the mirror; the link's target cannot then be resolved (EACCES)."""
+    head = link_in_the_mirror(*run, lambda stash, head: stash)
+    subprocess.run(["/bin/chmod", "+a", "everyone deny search", str(head)], check=True)
+    try:
+        found = scan(run)
+    finally:
+        subprocess.run(["/bin/chmod", "-N", str(head)], check=True)
+    assert len(found) == 1 and found[0].startswith("run/home/alt/"), found
+    assert "unreadable (listable but not searchable)" in found[0], found
 
 
 def test_too_many_entries_fail_closed(run, monkeypatch):
