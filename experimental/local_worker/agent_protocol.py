@@ -10,9 +10,9 @@ mode; reading.py slices the wrapper's output (and pages it with Limits.read_page
 from __future__ import annotations
 
 import json
-import re
 from typing import Any
 
+from experimental.local_worker.regex_cap import RegexRefused, check_regex
 from experimental.local_worker.toolcall import SEARCH_CPU_SECONDS
 from experimental.local_worker.tools import ToolCall
 
@@ -184,106 +184,11 @@ def _range_args(args: dict) -> None:
         raise BadCall("the line range needs 1 <= start_line <= end_line")
 
 
-# A search pattern's cost cap (review of PR 251, 4): grep's regex engine (TRE) expands a bounded
-# repetition into copies, so ((a{255}){255}){255} allocates gigabytes. A pattern is at most
-# MAX_PATTERN_BYTES; in regex mode every bound ({n}, {n,}, {n,m}, {,m}) is at most MAX_REPEAT and
-# a bounded group may not itself contain a bound (no nesting). Braces that form no bound ({},
-# {,}, {x}) are literal to TRE and ignored here, as is anything inside a bracket expression [...].
-# The wrapper runs grep -E, so a bracket is parsed by the POSIX ERE rules macOS grep follows
-# (_bracket_end; Codex round 2 of PR 251): a leading ^, then a leading ] that is literal;
-# [:class:], [=x=] and [.x.] are atomic; any other [ and every backslash inside are literal; the
-# first other ] closes it. Fail closed: an unterminated bracket, an unknown class, or a [=..=] or
-# [....] that is not one character is a BadCall, so no text outside a bracket goes unscanned.
-# Over-rejection kept on purpose: any nesting is refused, also a cheap one like ((a){2}){2}; the
-# BadCall says how to rewrite it. Refused before the wrapper runs, as a BadCall the model can
-# repair; fixed strings are never parsed as regexes. Back-references (\1 to \9) are refused too
-# (Codex review of PR 251, must-fix 2): a back-reference makes TRE backtrack, and ^(a+)+\1$ on a
-# line of 40 "a"s and a "b" runs past any timeout. The wrapper's CPU-time limit on grep
-# (SEARCH_CPU_SECONDS) is the second layer for whatever this cap misses, for time only: macOS sets
-# no memory limit (see the wrapper's header), so this cap alone bounds what grep allocates.
+# A search pattern's cost cap (reviews of PR 251): at most MAX_PATTERN_BYTES in both modes; in
+# regex mode regex_cap parses it as grep -E does and refuses it when the automaton grep would
+# compile is over budget (it is the only bound on what grep allocates; see regex_cap). Refused
+# before the wrapper runs, as a BadCall the model can repair; fixed strings are never parsed.
 MAX_PATTERN_BYTES = 512
-MAX_REPEAT = 100
-_BOUND = re.compile(r"\{(?:(\d+)(?:,(\d*))?|,(\d+))\}")
-BACKREF = (
-    "search regex may not use a back-reference such as \\1: match the text itself, or search with"
-    " a fixed string"
-)
-NESTED = (
-    "search regex may not nest bounded repetitions such as (a{2}){3}, however small: write the"
-    " inner part out, use * or +, or search with a fixed string"
-)
-
-
-def _bound(pattern: str, at: int) -> int | None:
-    """The end of a bound starting at ``at`` (BadCall over MAX_REPEAT), else None."""
-    m = _BOUND.match(pattern, at)
-    if m is None:
-        return None
-    if any(n and int(n) > MAX_REPEAT for n in m.groups()):
-        raise BadCall(f"search regex repetition counts must be at most {MAX_REPEAT}")
-    return m.end()
-
-
-_CLASSES = frozenset(
-    ("alnum", "alpha", "blank", "cntrl", "digit", "graph", "lower", "print", "punct", "space")
-    + ("upper", "xdigit")
-)
-BRACKET = (
-    "search regex has a bracket expression this check cannot parse: close every [ with ], and"
-    " inside it use only the classes [:alpha:], [:digit:] and the like, and [.x.] or [=x=] of"
-    " one character"
-)
-
-
-def _bracket_end(pattern: str, at: int) -> int:
-    """The index just past the bracket expression whose [ is at ``at``, as grep -E reads it."""
-    i = at + 1
-    i += pattern[i : i + 1] == "^"
-    i += pattern[i : i + 1] == "]"  # a ] right after [ or [^ is a character
-    while i < len(pattern):
-        c = pattern[i]
-        if c == "]":
-            return i + 1
-        kind = pattern[i + 1 : i + 2] if c == "[" else ""
-        if kind == ":":
-            close = pattern.find(":]", i + 2)
-            if close < 0 or pattern[i + 2 : close] not in _CLASSES:
-                raise BadCall(BRACKET)
-            i = close + 2
-        elif kind in ("=", "."):
-            if len(pattern) < i + 5 or pattern[i + 3 : i + 5] != kind + "]":
-                raise BadCall(BRACKET)
-            i += 5
-        else:  # any other character, a backslash or a [ opening no item included, is literal
-            i += 1
-    raise BadCall(BRACKET)
-
-
-def _check_regex(pattern: str) -> None:
-    stack = [False]  # per open group: whether it contains a bounded repetition
-    i = 0
-    while i < len(pattern):
-        c = pattern[i]
-        if c == "\\":
-            if pattern[i + 1 : i + 2] in tuple("123456789"):
-                raise BadCall(BACKREF)
-            i += 2
-        elif c == "[":  # a bracket expression: no group or bound inside
-            i = _bracket_end(pattern, i)
-        elif c == "(":
-            stack.append(False)
-            i += 1
-        elif c == ")" and len(stack) > 1:
-            inner = stack.pop()
-            end = _bound(pattern, i + 1)
-            if end is not None and inner:
-                raise BadCall(NESTED)
-            stack[-1] = stack[-1] or inner or end is not None
-            i = end if end is not None else i + 1
-        else:
-            end = _bound(pattern, i) if c == "{" else None
-            stack[-1] = stack[-1] or end is not None
-            i = end if end is not None else i + 1
 
 
 def _search_args(args: dict) -> None:
@@ -296,7 +201,10 @@ def _search_args(args: dict) -> None:
     if not isinstance(args.get("regex", False), bool):
         raise BadCall("search regex must be true or false")
     if args.get("regex"):
-        _check_regex(args["pattern"])
+        try:
+            check_regex(args["pattern"])
+        except RegexRefused as exc:
+            raise BadCall(str(exc)) from None
 
 
 def call_key(call: dict) -> tuple[str, str]:

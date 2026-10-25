@@ -4,10 +4,6 @@ in Python before the wrapper runs, a BadCall the model can repair."""
 from __future__ import annotations
 
 import json
-import os
-import random
-import subprocess
-import sys
 
 import pytest
 from local_worker_fakes import META, TASK, make_loop
@@ -30,9 +26,7 @@ def _decode_search(pattern: str, regex: bool = True) -> dict:
     [
         "((a{255}){255}){255}",
         "((a{100}){100}){100}",
-        "(a{3}){2}",
-        "((a{3})*){2}",
-        "(x(a{2}|b)){2}",
+        "((a{3})*){2}",  # (a{3})* matches the empty string
         "a{101}",
         "a{1,101}",
         "a{101,}",
@@ -40,8 +34,8 @@ def _decode_search(pattern: str, regex: bool = True) -> dict:
         "é" * 257,  # 514 bytes
         "^[[:alpha:][]((a{100}){100}){100}$",  # Codex round 2: [ is literal, [] closes nothing
         "[[:alpha:][]a{101}",
-        "[]a](a{2}){3}",
-        "[^]a](a{2}){3}",
+        "^(" + "a?" * 40 + "){100}$",  # Codex round 3: 89 bytes, 494 MB in grep
+        "[]a](a{2}){3}" + "(a{100}){6}",
     ],
 )
 def test_a_costly_regex_is_a_bad_call(pattern):
@@ -60,7 +54,15 @@ def test_a_costly_regex_is_a_bad_call(pattern):
         "[{(]x{2}",
         r"\(a{3}\){3}",
         "[[:alpha:]]{3}",
-        "x" * 512,
+        "x" * 512,  # a regex of plain characters always passes (MAX_POSITIONS)
+        r"def \w+\(",
+        "class [A-Z][a-zA-Z]+",
+        "TODO|FIXME",
+        "^import (os|sys)$",
+        r"[0-9]{1,3}(\.[0-9]{1,3}){3}",
+        "(foo|bar)+baz",
+        r"^\s*(async )?def [a-z_]+\(self",
+        "foo.{0,40}bar",
     ],
 )
 def test_ordinary_regexes_pass(pattern):
@@ -88,14 +90,15 @@ def test_braces_that_are_no_bound_and_brackets_pass(pattern):
     assert _decode_search(pattern)["pattern"] == pattern
 
 
-@pytest.mark.parametrize("pattern", ["((a){2}){2}", "(a{,3}){2}", "((b)+c{2}){4}"])
-def test_any_nesting_is_refused_with_a_way_out(pattern):
-    """Kept over-rejection (documented): even a cheap nesting is refused, and the BadCall tells
-    the model how to rewrite it."""
-    from experimental.local_worker.agent_protocol import BadCall
-
-    with pytest.raises(BadCall, match="write the inner part out"):
-        _decode_search(pattern)
+@pytest.mark.parametrize(
+    "pattern",
+    ["((a){2}){2}", "(a{,3}){2}", "((b)+c{2}){4}", "(a{3}){2}", "(x(a{2}|b)){2}", "[]a](a{2}){3}"]
+    + ["[^]a](a{2}){3}", "((ab){5}){4}"],
+)
+def test_a_cheap_nesting_passes(pattern):
+    """Codex round 3 of PR 251: the expanded-size budget supersedes the old no-nesting rule, so a
+    nesting whose expansion is small is no longer refused."""
+    assert _decode_search(pattern)["pattern"] == pattern
 
 
 @pytest.mark.parametrize(
@@ -165,7 +168,7 @@ def test_posix_bracket_expressions_pass(pattern):
         "[[:rune:]]",
         "[[:]",
         "[[.ab.]]",
-        "[[.space.]]",
+        "[[.SPACE.]]",  # names are case-sensitive to grep too
         "[[=a]",
         "[[==]]",
         "[[..]]",
@@ -179,57 +182,41 @@ def test_a_bracket_the_check_cannot_parse_is_a_bad_call(pattern):
         _decode_search(pattern)
 
 
-# Pieces a model might combine; the dangerous ones must never survive the check.
-PIECES = [
-    *("a", "b", "a+", "a*", "(a+)+", "(a|aa)*", "a{100}", "(a{100}){100}", "(a)", r"\1", "(", ")"),
-    *("[[:alpha:][]", "[]a]", "[^]a]", "[[.-.]]", "[[=a=]]", "[a-z]", "[[:digit:]]+", r"[\1]"),
-    *("[", "]", "{2}", "{100}", "*", "^", "$", "|", r"[[:alpha:]\1]", "[[a]", r"\\", r"\(", "[\\]"),
-]
-ADVERSARIAL = "a" * 40 + "b\n" + "a" * 200 + "\n[[[]]]::..--\\1\\1\n" + "ab" * 50 + "\n"
+@pytest.mark.parametrize(
+    "pattern",
+    ["[[.space.]]", "[[.hyphen.]]", "[[.period.]]", "[[=space=]]", "[[.left-square-bracket.]]"]
+    + ["[[.NUL.]]", "[[.tab.]]", "[[.full-stop.]]x", "[[.zero.]-[.nine.]]", "[[.space.]-a]"],
+)
+def test_a_named_collating_element_passes(pattern):
+    """Claude review of a91cdf7 (NIT 1): grep reads BSD regcomp's names; unknown ones stay
+    refused (above)."""
+    assert _decode_search(pattern)["pattern"] == pattern
 
 
-def _grep_cost(pattern: str, path: str, cpu: int) -> tuple[int, int]:
-    """grep -E (the wrapper's mode) under ulimit -t ``cpu``: (exit status or -signal, peak RSS)."""
-    script = 'ulimit -t "$1"; exec /usr/bin/grep -E -e "$2" -- "$3"'
-    env = {"PATH": "/usr/bin:/bin", "LANG": "en_US.UTF-8"}
-    argv = ["/bin/sh", "-c", script, "sh", str(cpu), pattern, path]
-    proc = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
-    _, status, usage = os.wait4(proc.pid, 0)
-    proc.returncode = os.waitstatus_to_exitcode(status)
-    return proc.returncode, usage.ru_maxrss  # bytes on macOS
-
-
-@pytest.mark.skipif(sys.platform != "darwin", reason="the oracle is macOS grep, as the wrapper's")
-def test_every_accepted_pattern_is_cheap_for_the_real_grep(tmp_path):
-    """Property: of generated patterns, each one the check accepts finishes on macOS grep -E under
-    a 2-second CPU limit, in bounded memory, on an adversarial input."""
+@pytest.mark.parametrize(
+    "pattern",
+    ["[[:alpha:]-z]", "[a-[:alpha:]]", "[[=a=]-z]", "[a-[=z=]]", "[z-a]", "[a-b-c]", "[a-z-9]"]
+    + ["[0-9-a]", "[!--]", "[Z-a]", "[a-~]", "[ä-a]", "[ê-é]", r"[a-\]", "[]- ]", "[[.z.]-a]"]
+    + ["[1-а]", "[а-B]", "[a-é]", "[é-ê]", "[а-я]", "[一-龥]"],  # not ASCII: refused (_ORDER)
+)
+def test_a_range_grep_rejects_is_a_bad_call(pattern):
+    """Claude review of a91cdf7 (NIT 2): grep -E exits 2 ("invalid character range") on the first
+    two rows, so the model gets a BadCall instead of a tool error. grep orders ASCII by its
+    locale's collation (_ORDER), not by code point: [Z-a] is refused, [A-z] passes. A range with
+    a non-ASCII endpoint is refused whatever grep makes of it (collation again, unpredictable)."""
     from experimental.local_worker.agent_protocol import BadCall
 
-    path = tmp_path / "adversarial.txt"
-    path.write_text(ADVERSARIAL)
-    rng = random.Random(251)
-    patterns = {"".join(rng.choice(PIECES) for _ in range(rng.randint(1, 5))) for _ in range(600)}
-    patterns |= {r"^[[:alpha:][](a+)+\1$", "^[[:alpha:][]((a{100}){100}){100}$"}
-    accepted, refused = [], 0
-    for pattern in sorted(patterns):
-        try:
-            _decode_search(pattern)
-        except BadCall:
-            refused += 1
-            continue
-        accepted.append(pattern)
-        status, rss = _grep_cost(pattern, str(path), 2)
-        assert status >= 0, (pattern, status)  # no SIGXCPU, no other signal
-        assert rss < 256 * 2**20, (pattern, rss)
-    assert len(accepted) > 100 and refused > 100, (len(accepted), refused)
+    with pytest.raises(BadCall, match="range grep rejects"):
+        _decode_search(pattern)
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="the oracle is macOS grep, as the wrapper's")
-def test_the_oracle_bites_on_the_codex_pattern(tmp_path):
-    """The control for the property: the first Codex pattern runs out of CPU on the same grep."""
-    path = tmp_path / "br.txt"
-    path.write_text("a" * 40 + "b\n")
-    assert _grep_cost(r"^[[:alpha:][](a+)+\1$", str(path), 1)[0] == -24  # SIGXCPU
+@pytest.mark.parametrize(
+    "pattern",
+    ["[A-z]", "[a-a]", "[--/]", "[a-z-]", "[-a]", "[]-a]", "[^]-a]", "[[.a.]-z]"]
+    + ["[a-[.z.]]", "[ -~]", "[^--0]", "[x^-a]", "[[-a]", "[éa-z]", "[一龥]"],
+)
+def test_a_range_grep_accepts_passes(pattern):
+    assert _decode_search(pattern)["pattern"] == pattern
 
 
 def test_a_back_reference_in_a_fixed_string_is_text():
@@ -248,9 +235,9 @@ def test_the_loop_returns_the_cap_to_the_model(tmp_path):
     from local_worker_fakes import reply
 
     loop, world, endpoint, _ = make_loop(
-        tmp_path, [reply("search", pattern="(a{2}){2}", regex=True)]
+        tmp_path, [reply("search", pattern="((a{100}){100}){100}", regex=True)]
     )
     rec = episode.build_record(META, loop.run(initial_messages(TASK)))
     assert rec["turns"][0]["error_category"] == "INVALID_CALL"
-    assert "nest" in endpoint.payloads[1]["messages"][-1]["content"]
+    assert "too costly" in endpoint.payloads[1]["messages"][-1]["content"]
     assert "search" not in [c[0] for c in world.calls]
