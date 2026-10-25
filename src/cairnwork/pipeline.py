@@ -104,9 +104,11 @@ class Worker(Protocol):
     A worker that starts processes must give each one the environment variable
     CAIRNWORK_ATTEMPT=<workdir.name> (confined.ATTEMPT_ENV), so restart recovery can find and
     stop them if Cairnwork dies mid-run (AgyWorker does). Optional ``run_as``: the worker account
-    its processes run as, journaled at WORKER_STARTED for recovery and the takeover (#244)."""
+    its processes run as, journaled at WORKER_STARTED for recovery and the takeover (#244).
+    Optional ``isolated`` (AgyWorker). ``run`` may return the provenance fields it can vouch for
+    (provenance.make); None means unknown."""
 
-    def run(self, workdir: Path, task: TaskSpec) -> None: ...  # optional ``isolated``: AgyWorker
+    def run(self, workdir: Path, task: TaskSpec, /) -> dict[str, str] | None: ...
 
 
 @dataclass
@@ -301,7 +303,7 @@ def _attempt(task, specs, digest, notary, worker, run_root, result, steps, verif
     steps.reach("WORKER_STARTED", unswept.RUN_AS + (getattr(worker, "run_as", "") or ""))
     try:
         try:
-            worker.run(attempt.path, task)
+            provenance = worker.run(attempt.path, task)  # None from a worker with no record
         except Exception as exc:  # noqa: BLE001 - any worker failure is a failed attempt
             result.reason = f"WORKER_FAILED: {type(exc).__name__}: {exc}"
             if isinstance(exc, WorkerMayLive):  # its processes may outlive the run (#244)
@@ -309,7 +311,11 @@ def _attempt(task, specs, digest, notary, worker, run_root, result, steps, verif
             return
         try:
             candidate = snapshot_candidate(
-                task.repo, attempt, task.allowed_files, allow_deletions=task.allow_deletions
+                task.repo,
+                attempt,
+                task.allowed_files,
+                allow_deletions=task.allow_deletions,
+                provenance=provenance,
             )
         except CandidateRejected as exc:
             result.reason = str(exc)
@@ -322,7 +328,13 @@ def _attempt(task, specs, digest, notary, worker, run_root, result, steps, verif
                 with base_stage(*verifying):  # an account failure here: no evidence (#234)
                     test_files = tests_with_teeth(task, specs, run_root, result, verifying)
                     judged = lay_tests_over(
-                        task.repo, judged, task.test_commit, test_files, result.attempt_id, run_root
+                        task.repo,
+                        judged,
+                        task.test_commit,
+                        test_files,
+                        result.attempt_id,
+                        run_root,
+                        provenance,
                     )
                     plan = p2p_for(task, specs, test_files, run_root, result, verifying)
             except TestCommitRejected as exc:

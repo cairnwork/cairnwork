@@ -32,6 +32,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
+from cairnwork import provenance
 from cairnwork.confined import ATTEMPT_ENV, copy_capped, sweep_marked
 from cairnwork.unswept import WorkerMayLive
 from cairnwork.workers import agy_dispatch, agy_receipts
@@ -93,6 +94,16 @@ class AgyWorkerUnswept(AgyWorkerError, WorkerMayLive):
     """WORKER_SWEEP_UNCLEAN: worker-account processes may survive; the attempt is fenced (#244)."""
 
 
+def _run_env() -> dict[str, str]:
+    """What the dispatcher is given (the --status lookup gets the same, so it sees the same
+    operation store): the kept keys plus the pool's own NEXUS_AGY_* tuning."""
+    return _kept_env() | agy_dispatch.tuning_env()
+
+
+def _kept_env() -> dict[str, str]:
+    return {key: os.environ[key] for key in ENV_KEEP if key in os.environ}
+
+
 def _uid(user: str) -> int | None:
     try:
         return pwd.getpwnam(user).pw_uid
@@ -138,7 +149,7 @@ class AgyWorker:
                 return f"agy_run_as_user {user} is the verifier account (uid {uid})"
         return ""
 
-    def run(self, workdir: Path, task) -> None:
+    def run(self, workdir: Path, task) -> dict[str, str]:
         dispatch = self.dispatch
         binary = shutil.which(self.agy) if dispatch is None else None
         if dispatch is None:
@@ -171,10 +182,8 @@ class AgyWorker:
             ]
         log_path = workdir.parent / f"{workdir.name}.agy.log"
         fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        env = {key: os.environ[key] for key in ENV_KEEP if key in os.environ}
+        env = _kept_env() if dispatch is None else _run_env()
         env[ATTEMPT_ENV] = workdir.name
-        if dispatch is not None:
-            env.update(agy_dispatch.tuning_env())
         log = os.fdopen(fd, "wb")
         process = subprocess.Popen(  # noqa: S603 - fixed argv, no shell
             argv,
@@ -193,6 +202,25 @@ class AgyWorker:
         copier = threading.Thread(target=copy_capped, args=(process.stdout, log), daemon=True)
         copier.start()
         self._await(process, copier, reader, workdir.name, log, log_path)
+        return self.provenance(reader)
+
+    def provenance(self, reader) -> dict[str, str]:
+        """Worker and requested model are Cairnwork's own config. The observed model is only
+        what the dispatcher's own record (``--status``) says about the operation named by the
+        launch receipt of the attempt that produced the candidate: the last attempt that has
+        a launch receipt. Never the stderr status line. Only with ``agy_run_as_user`` (the
+        worker is then another uid and cannot forge the receipts or the record), and only
+        for a COMPLETED operation. Else unknown."""
+        dispatch, observed = self.dispatch, None
+        if reader is not None and dispatch is not None and dispatch.run_as_user is not None:
+            found = agy_receipts.parse(reader.lines(), dispatch.run_as_user).attempts.values()
+            launches = [
+                a.receipts[agy_receipts.LAUNCH] for a in found if agy_receipts.LAUNCH in a.receipts
+            ]
+            if launches:
+                op = launches[-1].get("operation_id")
+                observed = agy_dispatch.operation_model(dispatch, op, _run_env())
+        return provenance.make("agy", self.model, observed)
 
     def _await(self, process, copier, reader, attempt: str, log, log_path) -> None:
         dispatch = self.dispatch
