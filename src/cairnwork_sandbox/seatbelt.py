@@ -35,7 +35,17 @@ from cairnwork_sandbox.backend import Policy, SandboxError
 SANDBOX_EXEC = "/usr/bin/sandbox-exec"
 _SAFE = re.compile(r"^/[A-Za-z0-9 _./+@~-]*$")
 SYSTEM_READ_SUBPATHS = ("/usr/lib", "/usr/share", "/System/Library", "/dev")
-SYSTEM_READ_LITERALS = ("/", "/private/etc/localtime", "/private/etc/passwd", "/usr/bin/env")
+# /usr/bin/shasum is a perl script: perl must read it, or every verifier that hashes a file
+# fails with "Can't open perl script". Exactly these two literal paths (council action 3, C1);
+# the rest of /usr/bin stays unreadable (tests/test_seatbelt_shasum.py).
+SHASUM_SCRIPTS = ("/usr/bin/shasum", "/usr/bin/shasum5.34")
+SYSTEM_READ_LITERALS = (
+    "/",
+    "/private/etc/localtime",
+    "/private/etc/passwd",
+    "/usr/bin/env",
+    *SHASUM_SCRIPTS,
+)
 # Where xcodebuild records that the Xcode license was accepted; a full Xcode's tools
 # refuse to run without reading it. It holds no user data.
 XCODE_LICENSE_PLIST = "/Library/Preferences/com.apple.dt.Xcode.plist"
