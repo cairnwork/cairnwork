@@ -46,6 +46,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from posixpath import basename
 
+import cairnwork_sandbox
 from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRejected
 from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.issue_task import test_target
@@ -243,6 +244,9 @@ def base_env_check(task, run_root, result, verifying) -> None:
         return
     outcomes, why = _probe(task, files, run_root, result, verifying, task.p2p_budget, tag="e")
     if outcomes is None:
+        # #262: name the cause when no sandbox backend exists
+        if why == "base-probe-failed" and cairnwork_sandbox.select() is None:
+            why += " (no-sandbox: no usable sandbox backend, so nothing ran)"
         raise _env_failed(f"{why}: {len(files)} existing test file(s) near the change")
     if marker is None:
         return
