@@ -18,6 +18,8 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from cairnwork import proc_restrict
+
 RUN_TOKEN_VAR = "CAIRNWORK_VERIFIER_RUN"
 ATTEMPT_ENV = "CAIRNWORK_ATTEMPT"  # marks every process of an attempt, for recovery
 MAX_LOG_BYTES = 4 << 20
@@ -94,6 +96,7 @@ class Sweep:
     unreadable: int = 0  # the owner's processes whose environment could not be read
     account: int = 0  # processes of the worker account (environments the owner cannot read)
     pids: tuple[int, ...] = ()  # the processes behind those counts, for the operator (describe)
+    restricted: str = ""  # not listed because /proc hides other users' processes (hidepid)
 
     @property
     def found(self) -> int:
@@ -105,6 +108,9 @@ class Sweep:
 
     def problem(self) -> str:
         """Why the processes are not shown gone, starting with a stable code ("" when gone)."""
+        if self.restricted:
+            return (f"SWEEP_UNAVAILABLE: process table restricted ({self.restricted}): the worker"
+                    " account's processes cannot all be listed and may still run")  # fmt: skip
         if not self.listed:
             return "SWEEP_UNAVAILABLE: processes of this attempt were not checked and may still run"
         if self.found:
@@ -141,6 +147,9 @@ def sweep_marked(
     processes = _processes_with_environment()
     if processes is None or (account and theirs is None):
         return UNLISTED
+    hidden_by = _restricted() if theirs is not None else ""  # own processes are never hidden
+    if hidden_by:
+        return Sweep(False, restricted=hidden_by)
     mine, me = os.getuid(), os.getpid()
     rows = [r for r in processes if r[0] != me and (skip_group is None or r[1] != skip_group)]
     held = [r[0] for r in rows if theirs is not None and r[2] == theirs]
@@ -262,6 +271,11 @@ def _reread(pids: set[int]) -> dict[int, set[str] | None] | None:
     if done.returncode != 0:
         return None
     return {pid: env for pid, _pgid, _uid, env in _parse_ps(done.stdout) if pid in pids}
+
+
+def _restricted() -> str:
+    """Why /proc may hide another user's processes; "" when it cannot (#244, proc_restrict)."""
+    return proc_restrict.restriction() if sys.platform.startswith("linux") else ""
 
 
 def _account_uid(account: str) -> int | None:

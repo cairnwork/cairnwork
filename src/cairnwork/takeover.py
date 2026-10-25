@@ -56,7 +56,10 @@ def supersede(
     for attempt_id in attempts:
         found = _swept(attempt_id, account)
         if not found.gone:
-            keeping = f"; kept by: {describe(found.pids)}" if found.pids else ""
+            kept = describe(found.pids) or (
+                f"process table restricted ({found.restricted})" if found.restricted else ""
+            )
+            keeping = f"; kept by: {kept}" if kept else ""
             _refuse(ledger, task_id, f"{found.problem()} (attempt {attempt_id}){keeping}")
     return ledger.set_status(task_id, "SUPERSEDED", swept=held.attempt_id)
 
