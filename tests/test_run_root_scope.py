@@ -59,3 +59,18 @@ def test_cleanup_takes_no_lock_when_the_test_made_nothing(tmp_path):
     with own_run_names(runs, account):
         (runs / "foreign-v-v0").mkdir()
     assert (runs / "foreign-v-v0").exists() and (runs / "other-v-v0").exists()
+
+
+def test_cleanup_reads_a_module_list_the_test_appends_to_later(tmp_path):
+    """The verifier-account tests register names through a module-level list (own_run_id): the
+    cleanup must read that same list at teardown, with what the test appended, not a copy."""
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    account = _LockedAccount(runs)
+    module_list = ["stale-from-an-earlier-test-"]
+    (runs / "stale-from-an-earlier-test-v0").mkdir()
+    with own_run_names(runs, account, module_list):
+        module_list.append("late1-")  # what own_run_id does inside the test body
+        (runs / "late1-v-v0.work").mkdir()
+    assert account.removed == [runs / "late1-v-v0.work"]
+    assert (runs / "stale-from-an-earlier-test-v0").exists()

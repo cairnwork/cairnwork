@@ -11,7 +11,7 @@ import time
 
 import pytest
 from conftest import commit_change, git
-from run_root_scope import own_run_names
+from run_root_scope import own_run_id, own_run_names
 
 import cairnwork.verifiers as verifiers
 from cairnwork.journal import Journal
@@ -32,16 +32,8 @@ _OWN_PREFIXES: list[str] = []
 def _clean_shared_run_root():
     """The run root is shared with other sessions' live runs (#247): remove only the names this
     test registered (its own attempt ids), and only under the account lock."""
-    with own_run_names(ACCOUNT.run_root, ACCOUNT) as prefixes:
-        _OWN_PREFIXES[:] = prefixes
+    with own_run_names(ACCOUNT.run_root, ACCOUNT, _OWN_PREFIXES):
         yield
-
-
-def own_run_id(prefix: str = "t") -> str:
-    """A unique attempt id for this test; its run directories are the only ones it removes."""
-    run_id = prefix + os.urandom(6).hex()
-    _OWN_PREFIXES.append(f"{run_id}-")
-    return run_id
 
 
 @pytest.fixture
@@ -64,7 +56,7 @@ def verify(project, files, target, monkeypatch=None, extra_env=()):
     if monkeypatch is not None and extra_env:
         monkeypatch.setattr(verifiers, "_ENV_KEEP", (*verifiers._ENV_KEEP, *extra_env))
     spec = parse_verifier("pytest", ["python3", "-m", "pytest", target])
-    run_id = own_run_id()
+    run_id = own_run_id(_OWN_PREFIXES)
     return run_verifiers(project, head, (spec,), ACCOUNT.run_root, run_id, account=ACCOUNT)[0]
 
 
@@ -188,14 +180,8 @@ def test_unusable_account_fails_closed(project):
     bad = VerifierAccount(user="cairnwork-no-such-user")
     spec = parse_verifier("pytest", ["python3", "-m", "pytest", "tests/test_ok.py"])
     with pytest.raises(VerifierAccountError):
-        run_verifiers(
-            project,
-            git(project, "rev-parse", "HEAD"),
-            (spec,),
-            bad.run_root,
-            own_run_id("r"),
-            account=bad,
-        )
+        run_id, head = own_run_id(_OWN_PREFIXES, "r"), git(project, "rev-parse", "HEAD")
+        run_verifiers(project, head, (spec,), bad.run_root, run_id, account=bad)
 
 
 def test_remove_refuses_paths_outside_the_run_root(tmp_path):
