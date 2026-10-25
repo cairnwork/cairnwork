@@ -76,6 +76,24 @@ def test_a_failing_candidate_on_a_base_that_cannot_run_its_tests_is_uncomparable
 
 
 @sandbox
+def test_a_failed_base_check_wins_when_only_one_candidate_verifier_passes(project, state, probes):
+    seen, core = probes({"rc": 2})
+    out = verify_candidate(
+        Intake(state),
+        repo=project,
+        base=base_of(project),
+        candidate=_wrong(project),
+        allowed_files=("src/calc.py",),
+        verifiers=(
+            ("failing", ("python3", "-m", "pytest", "-q", "tests/test_calc.py")),
+            ("passing", ("python3", "-m", "pytest", "-q", "tests/test_skip.py::test_ok")),
+        ),
+    )
+    assert_uncomparable(out, state, core, "BASE_ENV_FAILED")
+    assert seen == [(base_of(project), (NEAR,))]
+
+
+@sandbox
 @pytest.mark.parametrize("probe", PROBE_ROWS)
 def test_a_passing_candidate_keeps_its_verified_whatever_the_base_check_said(
     project, state, probes, probe

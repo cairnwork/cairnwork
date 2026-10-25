@@ -27,7 +27,8 @@ Failure paths, none of which can end VERIFIED:
 
 Before the worker starts (or, in a verify call without deferred tests, before the candidate's
 verifiers), ``base_env_check`` probes the ``module-dir`` files on the unchanged base the same way; a
-probe failure there is UNCOMPARABLE ``BASE_ENV_FAILED`` (environment, #234, #259).
+probe failure there is UNCOMPARABLE ``BASE_ENV_FAILED`` (environment, #234, #259). In a verify call
+without deferred tests, this result applies only if the candidate also fails its own verifiers.
 
 ``p2p_time_budget_seconds`` bounds each run (probe, degraded probe, candidate run, re-run).
 The rule actually used is a dict (``P2PPlan.rule``): it goes into the p2p observation's artifact
@@ -221,11 +222,12 @@ def base_env_check(
     ``without_tests`` a verify call without deferred tests (#259; ``key_repo``: the repository it
     was cloned from, which keys the marker in place of ``task.repo``), the module-dir selection of
     existing base tests is probed now, the same way (``_probe``): a timeout, a report over the cap,
-    an exit other than 0 or 1, or no guard record raises UNCOMPARABLE ``BASE_ENV_FAILED``, so no
-    worker quota is spent on a base that gives no evidence and the attempt is not counted against
-    the worker. Failing tests are fine (the base has the bug). Nothing from the test commit is
-    read. A pass is remembered per repository, base, files, import paths, budget, verifier account
-    and interpreter (``_env_fingerprint``) as a regular file in ``base-env-ok/`` in the run root,
+    an exit other than 0 or 1, or no guard record raises UNCOMPARABLE ``BASE_ENV_FAILED``. On a
+    dispatch, this means no worker quota is spent on a base that gives no evidence and the attempt
+    is not counted against the worker. Failing tests are fine (the base has the bug). Nothing from
+    the test commit is read. A pass is remembered per repository, base, files, import paths, budget,
+    verifier account and interpreter (``_env_fingerprint``) as a regular file in
+    ``base-env-ok/`` in the run root,
     so only the first check of that base pays; the marker can only skip this check, never make
     anything pass. On a dispatch the probes after the worker run as before; a verify call without
     deferred tests has no later base run, so an environment that broke after a recorded pass in a
