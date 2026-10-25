@@ -6,7 +6,7 @@
 #   <owner> ALL=(_cairnwork_worker) NOPASSWD: /Users/Shared/cairnwork-worker/local-bin/local-worker-tool
 # names that path. experimental/local_worker/tools.py runs it with `sudo -n -u _cairnwork_worker`.
 #
-# Ten actions, nothing else (exit 64 = refused before anything ran):
+# Eleven actions, nothing else (exit 64 = refused before anything ran):
 #   [--start-nonce <hex>] before the action prints LOCAL_WORKER_STARTED <hex> on stderr first.
 #   local-worker-tool list   <run_root> <relpath>        list a directory of the checkout
 #   local-worker-tool read   <run_root> <relpath>        print a regular file of the checkout
@@ -27,6 +27,8 @@
 #                                                        then empty directories, FIFOs, sockets)
 #   local-worker-tool numstat <run_root>                 lines added/removed vs HEAD (PATCH line)
 #   local-worker-tool tracked <run_root>                 every path (files and directories) of HEAD
+#   local-worker-tool digest <run_root>                  raw diff (mode, blob id) vs HEAD of every
+#                                                        file, untracked and ignored ones included
 #
 # <run_root> is a canonical real directory directly inside $RUNS named by 32 lowercase hex digits,
 # created by the Owner (0750: the worker may not rename or plant entries in it) together with
@@ -64,8 +66,8 @@
 # ulimit -t). It bounds no memory, and none can be set: on Darwin 27, ulimit -v, -d and -m (and
 # setrlimit RLIMIT_AS, RLIMIT_DATA, RLIMIT_RSS) fail with EINVAL, so the Python regex cap alone
 # bounds what grep allocates.
-# The query profile (status, numstat, tracked): the same network, read and signal limits, reads
-# of the checkout (its .git included) and <run_root>/q only, writes only inside <run_root>/q. No
+# The query profile (status, numstat, tracked, digest): the same network, read and signal limits,
+# reads of the checkout (its .git included) and <run_root>/q only, writes only inside <run_root>/q. No
 # code the model wrote ever runs under it (git runs with no filter, hook, driver or textconv; see
 # GIT_QUERY).
 # The uid boundary (the account cannot enter /Users/<owner>) sits under this as a second layer.
@@ -305,8 +307,8 @@ sandboxed() {
     "$SANDBOX_EXEC" -p "$sb_profile" "$@" 2>&1
 }
 
-# The three fixed git queries (status, numstat, tracked): read-only on the checkout and .git, as the
-# worker under the query profile, with TMPDIR=<run_root>/q (Claude review of #239, NB1: under the
+# The four fixed git queries (status, numstat, tracked, digest): read-only on the checkout and .git,
+# as the worker under the query profile, with TMPDIR=<run_root>/q (Claude review of #239, NB1: under the
 # tool profile, test code left running by a pytest call could rewrite the query's output files). Git
 # runs on a throwaway git dir in a fresh mktemp directory (Codex review of #239, B2 and the filter
 # item): its HEAD is the real HEAD commit, the real objects are only an alternate, its config is two
@@ -382,6 +384,15 @@ export GIT_INDEX_FILE="$q/index"
 step $G read-tree HEAD
 step $G add -A --force
 D="--cached --no-ext-diff --no-textconv --no-renames"
+# digest (#261): the same staging as numstat, then the raw diff of the staged tree against HEAD
+# (old and new mode, full blob ids, status, path; NUL-separated): a content fingerprint of every
+# path that differs from HEAD, untracked and ignored files included, and a symlink shows as mode
+# 120000. The loop compares it after each tool call when a start allow-list is set.
+if [ "$2" = digest ]; then
+  step $G diff $D --raw -z --no-abbrev HEAD
+  /bin/cat "$q/out"
+  exit 0
+fi
 step $G diff $D --text -U0 HEAD
 /bin/mv "$q/out" "$q/patch"
 step $G diff $D --numstat HEAD
@@ -445,7 +456,7 @@ if [ "${1:-}" = --start-nonce ]; then
   shift 2
 fi
 
-[ "$#" -ge 2 ] || refuse "usage: local-worker-tool <list|read|write|search|search-probe|pytest|sweep|status|numstat|tracked> <run_root> ..."
+[ "$#" -ge 2 ] || refuse "usage: local-worker-tool <list|read|write|search|search-probe|pytest|sweep|status|numstat|tracked|digest> <run_root> ..."
 ACTION=$1
 RUN_ROOT=$2
 shift 2
@@ -496,7 +507,7 @@ case "$ACTION" in
   sweep | search-probe)
     [ "$#" -eq 0 ] || refuse "$ACTION takes no further arguments"
     ;;
-  status | numstat | tracked)
+  status | numstat | tracked | digest)
     [ "$#" -eq 0 ] || refuse "$ACTION takes no further arguments"
     [ ! -L "$CHECKOUT/.git" ] && [ -d "$CHECKOUT/.git" ] || refuse "checkout has no real .git directory"
     ;;
@@ -555,7 +566,7 @@ exit "$w"' sh "$CHECKOUT/search-probe" "$RUN_ROOT/tmp/search-probe"
   pytest)
     sandboxed "$(profile)" "$RUN_ROOT/tmp" "$PY" -m pytest -p no:cacheprovider "$@"
     ;;
-  status | numstat | tracked)
+  status | numstat | tracked | digest)
     GIT_BIN=$(real_git) || exit 64
     sandboxed "$(query_profile)" "$RUN_ROOT/q" /bin/sh -c "$GIT_QUERY" sh "$CHECKOUT" "$ACTION" \
       "$GIT_BIN" "$PATCH_COUNT"

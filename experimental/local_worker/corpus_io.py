@@ -105,6 +105,14 @@ def harness_version() -> str:
     return head + ("-dirty" if git("status", "--porcelain", "--untracked-files=no") else "")
 
 
+# The installed wrapper before #261 added the digest query (the copy at 937ccbc). A run without a
+# start allow-list never calls digest and uses that wrapper's actions unchanged, so it may still
+# be installed for such runs until the Owner reinstalls; a run with an allow-list needs this
+# repository's copy (verify_canary require_current). TRANSITION ONLY: remove this constant, and
+# the branch that reads it, once the wrapper with digest is installed (review of PR #263, m2).
+PREVIOUS_WRAPPER_SHA256 = "51602299d211a4ce6f2b2a731c15b819657b22ee3d65db14172fb0a5029262ae"
+
+
 def _wrapper_sha(path: Path) -> str | None:
     return sha256_bytes(path.read_bytes()) if path.is_file() else None
 
@@ -128,6 +136,7 @@ def verify_canary(
     wrapper: Path = INSTALLED_WRAPPER,
     host: str | None = None,
     now: datetime | None = None,
+    require_current: bool = False,
 ) -> dict:
     """Plan v2 point 9: the report's recomputed sha256 matches its sidecar; its content is a
     complete passing worker-mode canary (canary_check.check_evidence: schema, all six checks
@@ -138,7 +147,9 @@ def verify_canary(
 
     The sidecar sha256 proves integrity only (the report was not changed after it was written);
     it is not a signature and proves nothing about who wrote the report. A report dated in the
-    future (beyond 5 minutes of clock skew) is refused like a stale one."""
+    future (beyond 5 minutes of clock skew) is refused like a stale one. The installed wrapper
+    may also be the one before the digest query (PREVIOUS_WRAPPER_SHA256), unless
+    ``require_current`` (a run with a start allow-list, which calls digest: #261)."""
     data = _inside(report_path, out_dir).read_bytes()
     digest = sha256_bytes(data)
     sidecar = report_path.with_name(report_path.name + ".sha256")
@@ -161,7 +172,8 @@ def verify_canary(
     for key, want in expected.items():
         if want is None or report.get(key) != want:
             raise InputRefused(f"canary report {key}={report.get(key)!r}, expected {want!r}")
-    if installed != _wrapper_sha(REPO_WRAPPER):
+    previous = not require_current and installed == PREVIOUS_WRAPPER_SHA256
+    if installed != _wrapper_sha(REPO_WRAPPER) and not previous:
         raise InputRefused("installed wrapper differs from this repository's local-worker-tool")
     finished = _finished_at(report.get("finished_at"))
     age = (now or datetime.now(UTC)) - finished

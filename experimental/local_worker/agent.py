@@ -55,6 +55,7 @@ from experimental.local_worker.agent_protocol import (
     tool_names,
     tool_schemas,
 )
+from experimental.local_worker.base_check import BaseCheckMixin
 from experimental.local_worker.endpoint import (
     Endpoint,
     EndpointContextLimit,
@@ -65,7 +66,6 @@ from experimental.local_worker.endpoint import (
 )
 from experimental.local_worker.episode import LoopOutcome, TurnLog
 from experimental.local_worker.gitstate import TreeState, parse_tracked
-from experimental.local_worker.gitstate import parse_status as _parse_status
 from experimental.local_worker.guards import REPEAT_STOP, GuardMixin, RepeatGuard, tree_changed
 from experimental.local_worker.loop_cleanup import CleanupMixin
 from experimental.local_worker.loop_config import Limits as Limits  # re-exported
@@ -101,7 +101,7 @@ def initial_messages(task: Task, search: bool = True) -> list[dict]:
     return [{"role": "system", "content": system_prompt(search)}, {"role": "user", "content": user}]
 
 
-class AgentLoop(CleanupMixin, GuardMixin):
+class AgentLoop(CleanupMixin, GuardMixin, BaseCheckMixin):
     def __init__(
         self,
         tools: WorkerTools,
@@ -149,15 +149,6 @@ class AgentLoop(CleanupMixin, GuardMixin):
         step = self.limits.cleanup_reserve_seconds / 3
         self.tools.deadline = min(self._final, self.clock() + step)
 
-    def observe(self) -> TreeState:
-        """The worker's git status now; not observed unless it exited 0 with its whole output
-        captured (a capped capture is never parsed as complete: Claude review of #239, NB5)."""
-        self._step_deadline()
-        call = self.tools.status()
-        if call.exit_code != 0 or not call.capture_complete:
-            return TreeState(observed=False)
-        return _parse_status(call.raw)
-
     def _base_paths(self) -> frozenset[str] | None:
         """The base commit's paths (which path names the line may publish: redact.py); None
         when the query failed or its output was capped, and then every path is a digest."""
@@ -185,11 +176,7 @@ class AgentLoop(CleanupMixin, GuardMixin):
         self._offset = elapsed_offset
         self._final = self._start + lim.max_wall_seconds
         deadline = self._final - lim.cleanup_reserve_seconds
-        base = self.observe()
-        if not base.observed or base.entries or base.head is None:
-            raise RefusedStart("checkout is not a clean git tree at its base")
-        if expected_base is not None and base.head != expected_base:
-            raise RefusedStart(f"checkout HEAD {base.head} is not the pinned base {expected_base}")
+        base = self._check_base(self.observe(), expected_base)  # RefusedStart unless clean
         self._tree = base
         started = self.now().astimezone(UTC8).isoformat()
         out = LoopOutcome(base=base, base_paths=self._base_paths(), started_at=started)
@@ -208,6 +195,7 @@ class AgentLoop(CleanupMixin, GuardMixin):
                 self._open.t_end = self._own()
             out.turns = [t for t in out.turns if t.assistant_msg_index >= 0]  # the model replied
             self._cleanup(out)
+            self._count_allowed(out)  # #261: only with a start allow-list
             out.ended_at = self.now().astimezone(UTC8).isoformat()
             out.wall_seconds = self._own()
         return out

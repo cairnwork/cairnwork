@@ -13,6 +13,12 @@ With --write-path, write_file and edit_file outside those entries are refused (w
 the manifest then carries write_scope_rule and each line its write_scope. A resume must repeat the
 parent's entries.
 
+With --allow-untracked PATH or --allow-untracked-glob GLOB (repeatable, #261), untracked or ignored
+files and empty directories the harness laid down under those entries do not refuse the start
+(untracked_allow.py); the manifest then carries untracked_allow (paths, globs, rule) and the
+transcript the base entries it let through. A resume must repeat the parent's list, and its fresh
+base must have the parent's base entries exactly.
+
 Before anything runs: the canary report is bound (corpus_io.verify_canary), the server must list
 the requested model, and the manifest is created or must match. A resume starts from a fresh run
 root (its name is neither the parent's checkout_id nor any checkout_id already in a corpus file
@@ -34,12 +40,12 @@ import secrets
 import signal
 import sys
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from experimental.local_worker import corpus_io, write_scope
+from experimental.local_worker import corpus_io, untracked_allow, write_scope
 from experimental.local_worker.agent import (
     AgentLoop,
     Limits,
@@ -100,6 +106,8 @@ def build_manifest(a: argparse.Namespace, limits: Limits, endpoint: str) -> dict
         "created_at": datetime.now(UTC).isoformat(),
         # only with --write-path: a corpus is all scoped or all not (the manifest is frozen)
         **({"write_scope_rule": write_scope.WRITE_SCOPE_RULE} if a.write_scope else {}),
+        # only with --allow-untracked[-glob] (#261): the start allow-list, the same for every arm
+        **({"untracked_allow": a.untracked_allow.manifest()} if a.untracked_allow.active else {}),
     }
 
 
@@ -138,7 +146,10 @@ def transcript(eid: str, task: Task, messages: list, out: LoopOutcome, loop: Age
         row = {k: v for k, v in asdict(t).items() if k != "tree"}
         row["tree"] = None if t.tree is None else {"head": t.tree.head, "entries": t.tree.entries}
         turns.append(row)
+    allow = loop.settings.untracked_allow
+    extra = {"untracked_allow": _allow_record(allow, out.base)} if allow.active else {}
     return {
+        **extra,
         "episode_id": eid,
         "task": asdict(task),
         "messages": messages,
@@ -151,6 +162,11 @@ def transcript(eid: str, task: Task, messages: list, out: LoopOutcome, loop: Age
     }
 
 
+def _allow_record(allow: untracked_allow.UntrackedAllow, base: Any) -> dict:
+    """The transcript's allow-list and the base entries it let through (a resume must match)."""
+    return {"paths": list(allow.paths), "globs": list(allow.globs), "base": list(base.entries)}
+
+
 def _prepare(a: argparse.Namespace) -> dict[str, Any]:
     out_dir = a.out.expanduser().resolve()
     checkout = a.checkout.resolve()
@@ -158,9 +174,14 @@ def _prepare(a: argparse.Namespace) -> dict[str, Any]:
         raise corpus_io.InputRefused("--checkout must be <run_root>/checkout")
     task = corpus_io.load_task(a.task)
     a.write_scope = write_scope.normalize(a.write_path)
+    a.untracked_allow = untracked_allow.build(a.allow_untracked, a.allow_untracked_glob)
     if not corpus_io.ID_RE.fullmatch(a.arm):
         raise corpus_io.InputRefused(f"--arm must match {corpus_io.ID_RE.pattern}")
-    a.canary_binding = corpus_io.verify_canary(a.canary_report, out_dir)
+    # with an allow-list the digest query runs: only this repository's wrapper has it (#261)
+    if a.untracked_allow.active:
+        a.canary_binding = corpus_io.verify_canary(a.canary_report, out_dir, require_current=True)
+    else:
+        a.canary_binding = corpus_io.verify_canary(a.canary_report, out_dir)
     endpoint = LoopbackEndpoint(a.endpoint)
     ids = endpoint.models(time.monotonic() + 30)
     if a.model not in ids:
@@ -199,7 +220,11 @@ def _episode_id(a: argparse.Namespace, task: Task) -> str:
 
 
 def _same_binding(
-    parent: dict, task: Task, manifest_sha: str, scope: tuple[str, ...] | None
+    parent: dict,
+    task: Task,
+    manifest_sha: str,
+    scope: tuple[str, ...] | None,
+    allow: untracked_allow.UntrackedAllow,
 ) -> None:
     """Codex review of #239, B6: a resume continues the same task under the same configuration.
     The task (id, repo, prompt, public targets) must equal the parent's, and so must the manifest
@@ -215,6 +240,10 @@ def _same_binding(
         raise corpus_io.InputRefused("the parent ran under another manifest (model or limits)")
     if parent.get("write_scope") != (None if scope is None else list(scope)):
         raise corpus_io.InputRefused("the parent ran under another write scope (--write-path)")
+    got_allow = parent.get("untracked_allow") or {}
+    got = (list(got_allow.get("paths", [])), list(got_allow.get("globs", [])))
+    if got != (list(allow.paths), list(allow.globs)):
+        raise corpus_io.InputRefused("the parent ran under another --allow-untracked list")
 
 
 def run_episode(a: argparse.Namespace, resume: bool) -> int:
@@ -225,7 +254,10 @@ def run_episode(a: argparse.Namespace, resume: bool) -> int:
     plan_sha, prefix = None, dict.fromkeys(PARENT_FIELDS)
     if resume:
         parent = corpus_io.load_transcript(a.parent_transcript, p["out_dir"])
-        _same_binding(parent, task, p["manifest_sha"], a.write_scope)
+        _same_binding(parent, task, p["manifest_sha"], a.write_scope, a.untracked_allow)
+        if a.untracked_allow.active:  # the fresh base must have the parent's base entries
+            base = tuple(parent["untracked_allow"]["base"])
+            a.untracked_allow = replace(a.untracked_allow, expected=base)
         if parent["record"]["resume_parent_episode_id"] is not None:
             raise corpus_io.InputRefused("resume from a fresh (L0) episode, not from a resume run")
         root = p["run_root"].name
@@ -244,7 +276,9 @@ def run_episode(a: argparse.Namespace, resume: bool) -> int:
     eid = _episode_id(a, task)
     priv = corpus_io.private_dir(p["out_dir"], eid)
     tools = WorkerTools(p["run_root"], priv / "calls.jsonl", mode="worker")
-    settings = Settings(a.model, p["limits"], a.seed, a.temperature, a.write_scope, a.search_tool)
+    settings = Settings(
+        a.model, p["limits"], a.seed, a.temperature, a.write_scope, a.search_tool, a.untracked_allow
+    )
     loop = AgentLoop(tools, p["endpoint"], task, settings)
     meta = {
         "episode_id": eid,
@@ -325,6 +359,9 @@ def parser() -> argparse.ArgumentParser:
         )
         # The K arm's --write-path: repeatable, a repo-relative file or directory (write_scope.py)
         sp.add_argument("--write-path", action="append", default=None)
+        # Harness-laid untracked/ignored paths the start check allows (untracked_allow.py, #261)
+        sp.add_argument("--allow-untracked", action="append", default=None, metavar="PATH")
+        sp.add_argument("--allow-untracked-glob", action="append", default=None, metavar="GLOB")
         if name == "resume":
             sp.add_argument("--parent-transcript", type=Path, required=True)
             sp.add_argument("--cut-turn", type=int, default=None)

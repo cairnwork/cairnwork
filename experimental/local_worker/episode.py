@@ -211,6 +211,8 @@ class LoopOutcome:
     started_at: str = ""
     ended_at: str = ""
     wall_seconds: float = 0.0  # this run's own seconds
+    # #261, only with a start allow-list: turns whose tree lacked a base digest record
+    allowed_base_changed_turns: int | None = None
 
 
 def build_record(
@@ -234,7 +236,8 @@ def build_record(
     ``wall_clock_seconds`` and each resume run's ``own_wall_seconds``; summing the resume's
     wall_clock_seconds would count the pre-cut time twice. wall_clock_start/end are this run's
     real timestamps. With a write scope (write_scope.py) the line also carries ``write_scope``:
-    its entries, each through redact.public_path; without one the key is absent."""
+    its entries, each through redact.public_path; without one the key is absent. With a start
+    allow-list (#261) it carries ``allowed_base_changed_turns``; without one that key is absent."""
     parent_wall = meta.get("parent_pre_cut_wall_seconds") or 0.0
     own = round(out.wall_seconds, 3)
     turns = [public_turn(t, out.base, out.base_paths) for t in out.turns]
@@ -281,6 +284,8 @@ def build_record(
     }
     if write_scope is not None:
         record["write_scope"] = [public_path(p, out.base_paths) for p in write_scope]
+    if out.allowed_base_changed_turns is not None:  # #261: only with a start allow-list
+        record["allowed_base_changed_turns"] = out.allowed_base_changed_turns
     return record
 
 
