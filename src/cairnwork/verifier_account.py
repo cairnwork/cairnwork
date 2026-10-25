@@ -338,33 +338,25 @@ class VerifierAccount:
     def grant_read(root: Path) -> None:
         """Let the account read and traverse, never write, a checkout, whatever the umask was.
 
-        Read is granted to *other*, not only the shared group (Issue #91). The checkout cannot be
-        relied on to carry the shared ``cairnwork`` group: its parent ``work`` inherits the group
-        and the setgid bit from the run root, but the per-run ``chmod`` that opens ``work`` to the
-        group strips setgid on Linux whenever the owner process is not an effective member of the
-        group (a service whose session predates ``usermod -aG``), so git clones the checkout under
-        the owner's own primary group instead. Group bits then never reach the account. With the
-        default umask the clone happens to be other-readable and the run works; under a strict umask
-        (077) it is not, and the account cannot enter the checkout — the run fails. Granting *other*
-        read/traverse makes the account's access umask- and group-independent; it is no wider than
-        the default-umask clone already is, and is scoped to this throwaway checkout of the
-        code under test, never the owner's home or the run scratch.
+        Read is granted to *other*, not only the shared group (Issue #91): the checkout cannot be
+        relied on to carry the shared ``cairnwork`` group (the per-run ``chmod`` strips setgid on
+        Linux when the owner process is not an effective member, so git clones it under the owner's
+        own primary group). The default umask happens to leave the clone other-readable; umask 077
+        does not, and the account cannot enter it. Granting *other* read/traverse makes access
+        umask- and group-independent, no wider than the default-umask clone, and scoped to this
+        throwaway checkout of the code under test, never the owner's home or the run scratch.
 
-        Symlinks are opened too, without following them (Issue #279): on macOS a link has its own
-        mode bits and ``readlink`` by another user needs the link itself to be readable, but git
-        creates links as 0700 under umask 077, so the account's copy failed at ``os.readlink``.
-        Where ``os.chmod`` supports ``follow_symlinks=False`` the link's own mode is widened and
-        its target is never touched through it; on Linux link modes are not checked, so links are
-        left alone there."""
-        chmod_links = os.chmod in os.supports_follow_symlinks
+        Symlinks are opened too, without following them (Issue #279): on macOS another user's
+        ``readlink`` needs the link's own mode readable, yet git makes links 0700 under umask 077.
+        Where ``os.chmod`` supports ``follow_symlinks=False`` only the link's mode is widened;
+        Linux does not check link modes, so links are skipped there."""
         for top, dirs, files in os.walk(root):
             for name, bits in [(d, 0o055) for d in dirs] + [(f, 0o044) for f in files]:
                 path = os.path.join(top, name)
                 if not os.path.islink(path):
                     os.chmod(path, os.stat(path).st_mode | bits)
-                elif chmod_links:
-                    mode = os.lstat(path).st_mode
-                    os.chmod(path, mode | bits, follow_symlinks=False)
+                elif os.chmod in os.supports_follow_symlinks:
+                    os.chmod(path, os.lstat(path).st_mode | bits, follow_symlinks=False)
         os.chmod(root, os.stat(root).st_mode | 0o055)
 
     @contextmanager
