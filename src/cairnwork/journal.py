@@ -26,8 +26,12 @@ PHASES = (
     "TEST_SOURCE",  # hidden-test mode this run used (detail = bundle | auto); read by attest
     "VERIFYING",  # verifiers about to run on the candidate
     "NOTARIZING",  # Core about to be called
-    "FINISHED",  # attempt over, journaled before the ledger move (detail = COMPLETED or FAILED;
-    # or the ledger's status, e.g. CANCELLED, when the run lost a race and never started)
+    # FINISHED: the run's last row, journaled before its ledger move (pipeline.py). detail =
+    # COMPLETED or FAILED (the run's own decision), or the ledger's status (e.g. CANCELLED) when the
+    # run lost a race and never started. If the ledger move then fails, the error propagates and the
+    # task stays in flight with FINISHED journaled. Recovery reads only COMPLETED/FAILED details:
+    # a FAILED one stands (no Core verdict lookup); COMPLETED does not override Core's verdict.
+    "FINISHED",
 )
 
 _TABLE = """
