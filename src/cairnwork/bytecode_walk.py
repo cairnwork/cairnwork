@@ -12,8 +12,10 @@ comparison or realpath does not canonicalize (#289 review).
 1. **Listing.** Both write roots are listed without following a symlink; a directory closed to
    its owner is opened (u+rwx) first. Each directory becomes a node with its entries as edges:
    subdirectories, and symlinks whose target (resolved by the kernel relative to the link's own
-   directory) is a directory. Every pyc-like name is reported, so is every error, a symlink's
-   included unless its target is missing, closed, looping or through a file (link_target).
+   directory, after the whole listing has opened every closed directory in the roots) is a
+   directory. Every pyc-like name is reported, so is every error, a symlink's included unless
+   its target is missing, closed (by then only outside the roots), looping or through a file
+   (link_target).
 2. **Graph.** When there is a pyc, the ancestors of the roots join as nodes (their entries are
    edges too, so /var -> /private/var counts; the step down towards each root is an edge even
    where an ancestor cannot be listed), and every node gets a ``..`` edge to the
@@ -60,9 +62,9 @@ def ident(info):
 
 def opened(path):
     """The identity of directory ``path`` (never a symlink), opened first if closed to its owner,
-    and its entries as (name, kind, identity or None, error or None), kind "dir", "link" (to a
-    directory: identity set) or "other". Listed and resolved through a descriptor, so each entry
-    is resolved relative to its own directory, not by the listing's (possibly long) spelling."""
+    and its entries as (name, kind, identity or None, error or None), kind "dir" (identity set),
+    "link" or "other". Listed through a descriptor, so each entry is resolved relative to its own
+    directory, not by the listing's (possibly long) spelling."""
     info = os.lstat(path)
     if not stat.S_ISDIR(info.st_mode):
         raise NotADirectoryError(errno.ENOTDIR, "not a directory")
@@ -76,8 +78,8 @@ def opened(path):
         with os.scandir(fd) as listing:  # DirEntry calls use fd: it stays open until done
             for entry in listing:
                 try:
-                    if entry.is_symlink():
-                        found.append((entry.name, "link", link_target(entry), None))
+                    if entry.is_symlink():  # resolved once the listing is done (resolve_links)
+                        found.append((entry.name, "link", None, None))
                     elif entry.is_dir(follow_symlinks=False):
                         found.append(
                             (entry.name, "dir", ident(entry.stat(follow_symlinks=False)), None)
@@ -91,19 +93,48 @@ def opened(path):
         os.close(fd)
 
 
-def link_target(entry):
-    """The identity of the directory symlink ``entry`` resolves to, or None. Resolved relative to
-    its own directory, so no lookup reaching the link resolves with fewer steps. ENOENT (dangling),
-    ENOTDIR (through a file), EACCES (closed to this user, as to the run's Python) and ELOOP (a
-    loop: any longer lookup through it loops too) mean the run's Python cannot use it either;
-    any other error is raised and reported."""
+def link_target(name, fd):
+    """The identity of the directory the symlink ``name`` in directory ``fd`` resolves to, or None.
+    Resolved relative to its own directory, so no lookup reaching the link resolves with fewer
+    steps, and only after the whole listing (resolve_links), when every closed directory in the
+    roots has been opened. ENOENT (dangling), ENOTDIR (through a file), ELOOP (a loop: any
+    longer lookup through it loops too) and EACCES (now only a directory outside the roots, which
+    the run cannot change, closed to this user and so to the run's Python) mean the run's Python
+    cannot use it either; any other error is raised and reported."""
     try:
-        info = entry.stat(follow_symlinks=True)
+        info = os.stat(name, dir_fd=fd)
     except OSError as exc:
         if exc.errno in (errno.ENOENT, errno.ENOTDIR, errno.EACCES, errno.ELOOP):
             return None
         raise
     return ident(info) if stat.S_ISDIR(info.st_mode) else None
+
+
+def resolve_links(links, edges, out):
+    """Second pass over the symlinks of the listing ({(id, dir path): [(index, rel, name)]}):
+    each resolving to a directory becomes an edge; an error is an error row."""
+    for (here, path), names in links.items():
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        except OSError as exc:
+            out["errors"].extend([index, rel, exc.strerror or str(exc)] for index, rel, _ in names)
+            continue
+        try:
+            if ident(os.fstat(fd)) != here:
+                out["errors"].extend(
+                    [index, rel, "replaced while listed"] for index, rel, _ in names
+                )
+                continue
+            for index, rel, name in names:
+                try:
+                    target = link_target(name, fd)
+                except OSError as exc:
+                    out["errors"].append([index, rel, exc.strerror or str(exc)])
+                    continue
+                if target is not None:
+                    edges[here].append((name, target))
+        finally:
+            os.close(fd)
 
 
 def dir_ident(path):
@@ -120,7 +151,7 @@ def dir_ident(path):
 def list_roots(roots, limit, out):
     """Nodes {id: path}, edges {id: [(name, id)]}, pycs {id: [(index, rel, name)]}, listed
     {id: (index, rel)}."""
-    nodes, edges, pycs, listed, count = {}, {}, {}, {}, 0
+    nodes, edges, pycs, listed, links, count = {}, {}, {}, {}, {}, 0
     stack = [(index, "") for index in range(len(roots))]
     while stack:
         index, rel = stack.pop()
@@ -143,10 +174,12 @@ def list_roots(roots, limit, out):
                 pycs.setdefault(here, []).append((index, sub, name))
             if error is not None:
                 out["errors"].append([index, sub, error])
+            elif kind == "link":
+                links.setdefault((here, path), []).append((index, sub, name))
             elif target is not None:
                 edges[here].append((name, target))
-                if kind == "dir":
-                    stack.append((index, sub))
+                stack.append((index, sub))
+    resolve_links(links, edges, out)
     return nodes, edges, pycs, listed
 
 

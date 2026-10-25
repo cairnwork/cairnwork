@@ -140,6 +140,22 @@ def test_a_symlink_into_the_mirror_is_followed(run):
     assert scan(run) == ("tests/helper.py (protected input)",)
 
 
+def test_a_symlink_through_a_closed_directory_in_the_run_is_followed(run):
+    """#289 round 3: the link's target lies under a mode-000 directory next to it. The listing
+    reaches the link before it opens that directory, so the target is resolved only after the
+    whole listing (the run's Python could use it: the candidate closed it at the end)."""
+    checkout, run_dir = run
+    parts = str(checkout / "tests").strip("/").split("/")
+    middle = len(parts) // 2
+    head = run_dir / "home" / "alt" / os.path.join(*parts[:middle])
+    stash = head / "closed" / "stash"
+    stash.joinpath(*parts[middle + 1 :]).mkdir(parents=True)
+    (stash.joinpath(*parts[middle + 1 :]) / f"helper.{TAG}.pyc").write_bytes(b"x")
+    (head / parts[middle]).symlink_to(stash)
+    (head / "closed").chmod(0)
+    assert scan(run) == ("tests/helper.py (protected input)",)
+
+
 def test_a_symlink_loop_spelling_the_whole_mirror_is_followed(run):
     """One directory holding the pyc and, for every component of the mirror, a symlink to
     itself: <loop>/private/var/.../tests/helper.<tag>.pyc is that one file."""
@@ -306,6 +322,19 @@ def test_dangling_and_looping_links_are_no_finding(run):
     (home / "through-a-file").symlink_to(home / "f" / "x")
     (home / "f").write_text("x")
     assert scan(run) == ()
+
+
+def test_a_link_through_a_closed_directory_outside_the_run_is_no_finding(run, tmp_path):
+    """After the listing, EACCES can only come from outside the roots: closed to the run too."""
+    _, run_dir = run
+    outside = tmp_path / "outside" / "closed"
+    (outside / "sub").mkdir(parents=True)
+    (run_dir / "home" / "link").symlink_to(outside / "sub")
+    outside.chmod(0)
+    try:
+        assert scan(run) == ()
+    finally:
+        outside.chmod(0o700)
 
 
 def test_a_staged_install_in_tmp_path_passes(run):

@@ -95,12 +95,22 @@ LINKED = (
 LINK_TARGETS = {
     "case": "os.path.join(os.path.relpath(home, head), 'STASH')",
     "firmlink": "'/System/Volumes/Data' + str(home / 'stash')",
+    "closed": "str(head / 'closed' / 'stash')",
 }
+# #289 round 3: stash/ lies in a directory next to the link that the candidate closes (mode 000)
+# when its Python exits, after the import system has read the forged helper through the link.
+CLOSED_LINKED = LINKED.replace("import os, sys", "import atexit, os, sys").replace(
+    "(home / 'stash').mkdir()\n",
+    "(head / 'closed' / 'stash').mkdir(parents=True)\n"
+    "atexit.register(os.chmod, head / 'closed', 0)\n",
+)
 
 
 def linked_helper_run(repo, tmp_path, how, account=None):
     files = {
-        "src/evil.py": LINKED.format(target=LINK_TARGETS[how]),
+        "src/evil.py": (CLOSED_LINKED if how == "closed" else LINKED).format(
+            target=LINK_TARGETS[how]
+        ),
         "tests/helper.py": "OK = False\n",
         "tests/test_a.py": "import evil\n\ndef test_a():\n    assert evil\n",
         "tests/test_z.py": "from helper import OK\n\ndef test_z():\n    assert OK\n",
@@ -173,6 +183,13 @@ def test_a_redirect_through_a_firmlink_symlink_fails_the_run(repo, tmp_path):
     assert not run.observation.passed
     if run.returncode == 0:
         assert "FORGED_BYTECODE" in run.why and "tests/helper" in run.why, run.why
+
+
+def test_a_redirect_through_a_directory_closed_at_exit_fails_the_run(repo, tmp_path):
+    run = linked_helper_run(repo, tmp_path, "closed")
+    assert run.returncode == 0, run.log_path.read_text()  # the import system followed it
+    assert not run.observation.passed
+    assert "FORGED_BYTECODE" in run.why and "tests/helper" in run.why, run.why
 
 
 def test_honest_bytecode_symlinks_and_closed_dirs_in_tmp_path_pass(repo, tmp_path):
