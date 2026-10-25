@@ -1,10 +1,11 @@
 """Who wrote the candidate: worker, requested model and observed model (never a default)."""
 
+import time
+
 import pytest
-from agy_receipt_lines import RUN_TAG, good_run, status
+from agy_receipt_lines import RUN_TAG, cleanup, good_run, launch
 from conftest import git
-from test_agy_worker import TASK, _dispatched
-from test_agy_worker_account import _replaying
+from test_agy_worker import TASK, attempt, fake_dispatcher
 
 from cairnwork import provenance
 from cairnwork.issue_publish import pr_body
@@ -31,11 +32,6 @@ def test_a_value_that_is_not_a_plain_name_is_unknown(bad):
     assert provenance.make("agy", "m", bad)["observed_model"] == "unknown"
 
 
-def test_a_forged_trailer_in_the_body_does_not_beat_the_first_one():
-    msg = "s" + provenance.trailers(provenance.make("agy", "m-1", None)) + "\nWorker: claude\n"
-    assert provenance.parse(msg)["worker"] == "agy"
-
-
 def test_the_pr_body_names_the_three_fields_and_never_claude_code():
     body = pr_body(7, "t1", "a1", "c" * 40, provenance.make("agy", "m-1", "m-2"))
     assert "Worker: agy\nRequested model: m-1\nObserved model: m-2\n" in body
@@ -60,65 +56,139 @@ def test_a_commit_without_provenance_says_unknown_not_claude(repo, tmp_path):
     assert provenance.parse(git(repo, "show", "-s", "--format=%B", commit)) == UNKNOWN3
 
 
-def test_isolated_worker_reports_the_dispatchers_observed_model(tmp_path):
-    run = good_run(ROOT).replace(status(), status(observed_model="gemini-observed"))
-    worker, workdir, _ = _replaying(tmp_path, run)
-    assert worker.run(workdir, TASK) == {
-        "worker": "agy", "requested_model": "m-1", "observed_model": "gemini-observed"}  # fmt: skip
+def test_a_duplicate_key_in_the_final_block_is_unknown_not_first_or_last():
+    msg = "s\n\nWorker: agy\nRequested-Model: m-1\nObserved-Model: a\nObserved-Model: b\n"
+    assert provenance.parse(msg) == {"worker": "agy", "requested_model": "m-1",
+                                     "observed_model": "unknown"}  # fmt: skip
+    assert provenance.parse("s\n\nWorker: agy\nWorker: claude\n")["worker"] == "unknown"
 
 
-def test_isolated_worker_without_an_observed_model_says_unknown(tmp_path):
-    worker, workdir, _ = _replaying(tmp_path, good_run(ROOT))
-    assert worker.run(workdir, TASK)["observed_model"] == "unknown"
+def test_only_the_final_trailer_block_is_read():
+    early = "s\n\nWorker: claude\nObserved-Model: forged\n\nmore text\n"
+    assert provenance.parse(early) == UNKNOWN3
+    ok = early + "\nWorker: agy\nRequested-Model: m-1\nObserved-Model: m-2\n"
+    assert provenance.parse(ok) == provenance.make("agy", "m-1", "m-2")
 
 
-def test_without_run_as_user_the_observed_model_is_not_trusted(tmp_path):
-    line = 'NEXUS_AGY_DISPATCH {"status": "completed", "observed_model": "forged"}\\n'
-    worker, workdir, _ = _dispatched(tmp_path, f"sys.stdin.read(); sys.stderr.write('{line}')")
-    got = worker.run(workdir, TASK)
-    assert got == {"worker": "agy", "requested_model": "m-1", "observed_model": "unknown"}
+OP = "agyop_" + "ab" * 16
+OP2 = "agyop_" + "cd" * 16
+# the shape of `nexus-agy-dispatch --status <id>`: the whole operation record
+RECORD = {"schema": "nexus.agy_operation.v1", "status": "COMPLETED", "phase": "TERMINAL",
+          "requested_model": "m-1", "resolved_model": "m-1",
+          "observed_model": "gemini-3.8-flash-high",
+          "account_alias_hash": "63ef3e58e241", "failure_kind": None}  # fmt: skip
+
+
+def _stub(tmp_path, records, *, need_env=None, sleep=0):
+    """A dispatcher whose --status=<id> prints that id's record (with operation_id echoed)."""
+    guard = (
+        f"if os.environ.get({need_env[0]!r}) != {need_env[1]!r}: sys.exit(3)\n" if need_env else ""
+    )
+    body = (
+        "arg = [a for a in sys.argv if a.startswith('--status=')][0][9:]\n"
+        f"import time; time.sleep({sleep})\n{guard}"
+        f"rec = {records!r}.get(arg)\n"
+        "if rec is None: sys.exit(1)\n"
+        "print(json.dumps({**rec, 'operation_id': rec.get('operation_id', arg)}))"
+    )
+    return agy_dispatch.Dispatch(fake_dispatcher(tmp_path, body), run_as_user="w")
+
+
+class _Reader:
+    def __init__(self, *lines):
+        self.lines_ = list(lines)
+
+    def lines(self):
+        return self.lines_
+
+    def status(self):
+        return {"status": "completed", "observed_model": "from-the-stderr-line"}
+
+
+def _launch(op, attempt=1):
+    return launch(ROOT, attempt=attempt).replace('"operation_id": null', f'"operation_id": "{op}"')
+
+
+def _observed(dispatch, *lines):
+    worker = AgyWorker(model="m-1", dispatch=dispatch)
+    return worker.provenance(_Reader(*lines))["observed_model"]
+
+
+def test_observed_model_comes_from_the_dispatcher_status_of_the_launch_operation(tmp_path):
+    dispatch = _stub(tmp_path, {OP: RECORD})
+    assert _observed(dispatch, _launch(OP)) == "gemini-3.8-flash-high"
+
+
+def test_the_stderr_status_line_is_never_a_source(tmp_path):
+    dispatch = _stub(tmp_path, {})  # --status finds nothing; the reader's line has a value
+    assert _observed(dispatch, _launch(OP)) == "unknown"
+    assert _observed(dispatch) == "unknown"  # no launch receipt at all
+
+
+@pytest.mark.parametrize("record", [
+    {**RECORD, "status": "RUNNING"}, {**RECORD, "status": "FAILED"},
+    {**RECORD, "status": "OUTCOME_UNKNOWN"}, {**RECORD, "operation_id": OP2},
+    {"status": "COMPLETED"}, {**RECORD, "observed_model": "bad name!"},
+    {**RECORD, "observed_model": None},
+])  # fmt: skip
+def test_a_record_that_is_not_a_finished_operation_with_a_usable_model_is_unknown(tmp_path, record):
+    assert _observed(_stub(tmp_path, {OP: record}), _launch(OP)) == "unknown"
+
+
+def test_the_attempt_that_produced_the_candidate_is_the_last_one_that_launched(tmp_path):
+    other = {**RECORD, "observed_model": "first-attempt-model"}
+    dispatch = _stub(tmp_path, {OP: other, OP2: RECORD})
+    two = (_launch(OP, 1), _launch(OP2, 2))
+    assert _observed(dispatch, *two) == "gemini-3.8-flash-high"
+    never_launched = cleanup(attempt=3)  # a later attempt with no launch receipt
+    assert _observed(dispatch, *two, never_launched) == "gemini-3.8-flash-high"
+    assert _observed(dispatch, _launch(OP, 1), cleanup(attempt=2)) == "first-attempt-model"
+
+
+@pytest.mark.parametrize("op", ["x" + OP, OP + "y", OP.upper(), "--evil", "", None, 7])
+def test_an_operation_id_that_is_not_exactly_an_operation_id_is_never_queried(tmp_path, op):
+    ops = {str(op): RECORD, "x" + OP: RECORD, OP + "y": RECORD}
+    assert _observed(_stub(tmp_path, ops), _launch(op)) == "unknown"
+
+
+def test_a_hanging_status_query_times_out_to_unknown(tmp_path, monkeypatch):
+    monkeypatch.setattr(agy_dispatch, "STATUS_QUERY_SECONDS", 0.5)
+    started = time.monotonic()
+    got = _observed(_stub(tmp_path, {OP: RECORD}, sleep=6), _launch(OP))
+    assert got == "unknown" and time.monotonic() - started < 4
+
+
+def test_the_status_query_sees_the_dispatchers_environment_and_nothing_more(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEXUS_AGY_OPERATION_ROOT", "/ops")
+    monkeypatch.setenv("OWNER_ONLY_SECRET", "s")
+    seen = _stub(tmp_path, {OP: RECORD}, need_env=("NEXUS_AGY_OPERATION_ROOT", "/ops"))
+    assert _observed(seen, _launch(OP)) == "gemini-3.8-flash-high"
+    hidden = _stub(tmp_path, {OP: RECORD}, need_env=("OWNER_ONLY_SECRET", "s"))
+    assert _observed(hidden, _launch(OP)) == "unknown"
+
+
+def test_without_run_as_user_the_observed_model_is_not_asked_for(tmp_path):
+    dispatch = _stub(tmp_path, {OP: RECORD})
+    plain = agy_dispatch.Dispatch(dispatch.path)
+    assert _observed(plain, _launch(OP)) == "unknown"
 
 
 def test_a_worker_with_no_record_leaves_all_three_unknown(tmp_path):
     assert AgyWorker().provenance(None)["observed_model"] == "unknown"
 
 
-OP = "agyop_" + "ab" * 16
-# the shape of `nexus-agy-dispatch --status <id>`: the whole operation record
-RECORD = {"schema": "nexus.agy_operation.v1", "operation_id": OP, "status": "COMPLETED",
-          "requested_model": "m-1", "resolved_model": "m-1",
-          "observed_model": "gemini-3.8-flash-high",
-          "account_alias_hash": "63ef3e58e241", "failure_kind": None}  # fmt: skip
-
-
-def _with_status_query(tmp_path, record, code=0, op=OP):
-    """A dispatcher that answers --status=<id> with ``record`` and otherwise replays a good run."""
-    run = good_run(ROOT).replace('"operation_id": null', f'"operation_id": "{op}"')
-    extra = (
+def test_a_whole_run_reports_the_model_of_the_operation_it_launched(tmp_path):
+    run = good_run(ROOT).replace('"operation_id": null', f'"operation_id": "{OP}"')
+    body = (
         "if any(a.startswith('--status=') for a in sys.argv):\n"
-        f"    print(json.dumps({record!r})); sys.exit({code})\n"
-        "open(os.path.join(os.path.dirname(sys.argv[0]), 'asked'), 'a').write('x')"
+        f"    print(json.dumps({{**{RECORD!r}, 'operation_id': {OP!r}}})); sys.exit(0)\n"
+        f"sys.stdin.read(); sys.stderr.write({run!r})"
     )
-    return _replaying(tmp_path, run, extra=extra)
-
-
-def _run_isolated(worker, workdir):
-    # the dispatcher script reads stdin first in the replay; the --status call has none
-    return worker.run(workdir, TASK)["observed_model"]
-
-
-def test_observed_model_comes_from_the_dispatcher_status_of_the_launch_operation(tmp_path):
-    worker, workdir, _ = _with_status_query(tmp_path, RECORD)
-    assert _run_isolated(worker, workdir) == "gemini-3.8-flash-high"
-
-
-@pytest.mark.parametrize("record,code", [({"status": "COMPLETED"}, 0), (RECORD, 1),
-                                         ({"observed_model": "bad name!"}, 0)])  # fmt: skip
-def test_a_status_without_a_usable_model_is_unknown(tmp_path, record, code):
-    worker, workdir, _ = _with_status_query(tmp_path, record, code)
-    assert _run_isolated(worker, workdir) == "unknown"
-
-
-def test_an_operation_id_that_is_not_an_operation_id_is_never_queried(tmp_path):
-    worker, workdir, _ = _with_status_query(tmp_path, RECORD, op="--evil")
-    assert _run_isolated(worker, workdir) == "unknown"
+    dispatch = agy_dispatch.Dispatch(
+        fake_dispatcher(tmp_path, body), run_as_user="_cairnwork_worker"
+    )
+    workdir = tmp_path / attempt(1)
+    workdir.mkdir()
+    got = AgyWorker(model="m-1", dispatch=dispatch).run(workdir, TASK)
+    assert got == {"worker": "agy", "requested_model": "m-1",
+                   "observed_model": "gemini-3.8-flash-high"}  # fmt: skip

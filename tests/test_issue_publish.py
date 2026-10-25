@@ -221,3 +221,15 @@ def test_a_probe_that_hangs_is_refused(setup, tmp_path, monkeypatch):
     gh = _wrapper(tmp_path, "sleep 5; echo James3014/demo")
     with pytest.raises(RuntimeError, match="GH_IDENTITY_NOT_BOT"):
         require_bot_gh(gh, "James3014/demo", setup["clone"])
+
+
+def test_the_pr_body_reads_the_notarised_commit_not_the_clones_head(setup, monkeypatch):
+    github = FakeGitHub([issue()])
+    taken = runner.take(setup["intake"], github, setup["clone"])[0]
+    message = "candidate" + provenance.trailers(provenance.make("agy", "m-1", "m-2"))
+    commit = commit_change(setup["clone"], {"src/calc.py": "x = 2\n"}, message=message)
+    monkeypatch.setattr(Intake, "status", _completed(setup, taken, commit))
+    commit_change(setup["clone"], {"docs/other.md": "later\n"}, message="HEAD moved on")
+    monkeypatch.setattr(runner, "_git", _git_without_credentials)
+    runner.settle(setup["intake"], github, setup["clone"])
+    assert "Worker: agy\nRequested model: m-1\nObserved model: m-2\n" in github.prs[0][2]
