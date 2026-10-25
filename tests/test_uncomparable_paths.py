@@ -38,6 +38,7 @@ BASE_ROWS = [  # (base run, code): one per row of the mapping table
     pytest.param(TEETH | {"report_too_big": True}, "BASE_REPORT_OVER_CAP", id="over-cap"),
     pytest.param(TEETH | {"recorded": False}, "BASE_NO_REPORT", id="no-record"),
 ]
+ENV_OK = {"rc": 1, "outcomes": {"tests/test_calc.py::test_add": "passed"}}  # base env check
 PROBE_ROWS = [  # a failed P2P base probe (the base run itself has teeth)
     pytest.param({"rc": None, "timed_out": True}, id="probe-timeout"),
     pytest.param({"rc": 1, "report_too_big": True}, id="probe-over-cap"),
@@ -59,14 +60,17 @@ def _run(spec, run_root, run_id, rc=1, outcomes=None, recorded=True, **flags):
 
 @pytest.fixture
 def stub(monkeypatch):
-    """stub(base=..., probe=...): fake only those runs; record every Core call."""
+    """stub(base=..., probe=...): fake only those runs (and the base env check, ENV_OK); record
+    every Core call."""
     calls = []
     monkeypatch.setattr(Notary, "notarize", lambda self, *a, **k: calls.append(a))
     real = verifiers.run_verifiers
 
     def install(base, probe=None):
         def fake(repo, commit, specs, run_root, run_id, **kw):
-            fields = {"-b": base, "-p": probe}.get(run_id[-2:])
+            # -e: the base env check before the worker (#234) passes, as the base does when stubbed;
+            # a real run there would need a sandbox, which hosts without one (Linux CI) lack
+            fields = {"-b": base, "-p": probe, "-e": ENV_OK}.get(run_id[-2:])
             if fields is None:
                 return real(repo, commit, specs, run_root, run_id, **kw)
             return tuple(_run(spec, run_root, run_id, **fields) for spec in specs)
