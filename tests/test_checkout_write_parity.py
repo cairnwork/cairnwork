@@ -28,6 +28,7 @@ from pathlib import Path
 
 import pytest
 from conftest import commit_change
+from run_root_scope import own_run_names
 from test_recovery import GOOD, crash, stores
 from test_recovery import project as project  # noqa: F401 - fixture
 
@@ -174,22 +175,10 @@ def _check(runs):
 @pytest.fixture
 def own_names():
     """Name prefixes this test creates in the account's run root; only those are removed after
-    it. The run root is shared with other sessions' runs: never remove "whatever is new". If a
-    failure left owner directories shut (0o700), reopen them first so the account's rm gets in."""
-    prefixes: list[str] = []
-    yield prefixes
-    if not prefixes or not ACCOUNT.run_root.is_dir():
-        return
-    for name in os.listdir(ACCOUNT.run_root):
-        if not any(name.startswith(prefix) for prefix in prefixes):
-            continue
-        path = ACCOUNT.run_root / name
-        for top, dirs, _ in os.walk(path):
-            for entry in [top, *(os.path.join(top, d) for d in dirs)]:
-                if not os.path.islink(entry) and os.lstat(entry).st_uid == os.getuid():
-                    os.chmod(entry, os.lstat(entry).st_mode | 0o777)
-        ACCOUNT.remove(path)
-        shutil.rmtree(path, ignore_errors=True)
+    it, under the account lock (run_root_scope). The run root is shared with other sessions'
+    runs: never remove "whatever is new"."""
+    with own_run_names(ACCOUNT.run_root, ACCOUNT) as prefixes:
+        yield prefixes
 
 
 def _mode_run_root(mode, tmp_path):
@@ -278,7 +267,7 @@ def test_links_out_of_the_checkout_change_nothing_outside_it(
     own_names.append(f"{run_id}-")
     run_root.mkdir(parents=True, exist_ok=True)
     # another run's file the account can read: not in the shared run root, whose new names other
-    # sessions' test fixtures sweep (test_verifier_account._clean_shared_run_root)
+    # sessions' test fixtures sweep (test_verifier_account's cleanup, now scoped, #247)
     base = tmp_path if account is None else ACCOUNT.root
     unrelated = base / f".cw240-unrelated-{run_id}" / "f.txt"
     unrelated.parent.mkdir()

@@ -25,6 +25,7 @@ from test_recovery import (
 )
 from test_recovery_account_cleanup import _FakeAccount
 
+from cairnwork.journal import Journal
 from cairnwork.recovery import _leftover_names, _remove_inside, recover
 from cairnwork.verifier_account import VerifierAccount
 
@@ -78,11 +79,26 @@ def _driver(p2p_project, state, step, *account):
         )
 
 
+def _own_attempt(state: Path) -> str | None:
+    """The attempt id of the run this test started, from its own journal (``state``): another
+    session's run in a shared run root has other attempt ids (#247)."""
+    path = state / "journal.sqlite"
+    if not path.exists():
+        return None
+    try:
+        entries = Journal(path).entries("k1")
+    except sqlite3.Error:  # the driver is still creating it
+        return None
+    return entries[-1].attempt_id if entries else None
+
+
 def _kill_in_p2p(p2p_project, state, step, run_root, *account):
-    before = {p.name for p in run_root.glob(f"*-{step}-v*")} if run_root.is_dir() else set()
     proc = _driver(p2p_project, state, step, *account)
     deadline = time.monotonic() + 240
-    while not ({p.name for p in run_root.glob(f"*-{step}-v*")} - before):
+    while True:
+        attempt = _own_attempt(state)
+        if attempt and run_root.is_dir() and any(run_root.glob(f"{attempt}-{step}-v*")):
+            break
         assert proc.poll() is None, (state / "driver.err").read_text()[-2000:]
         assert time.monotonic() < deadline
         time.sleep(0.2)
