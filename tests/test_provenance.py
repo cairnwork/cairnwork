@@ -4,7 +4,7 @@ import time
 
 import pytest
 from agy_receipt_lines import RUN_TAG, cleanup, good_run, launch
-from conftest import git
+from conftest import commit_change, git
 from test_agy_worker import TASK, attempt, fake_dispatcher
 
 from cairnwork import provenance
@@ -56,18 +56,61 @@ def test_a_commit_without_provenance_says_unknown_not_claude(repo, tmp_path):
     assert provenance.parse(git(repo, "show", "-s", "--format=%B", commit)) == UNKNOWN3
 
 
-def test_a_duplicate_key_in_the_final_block_is_unknown_not_first_or_last():
-    msg = "s\n\nWorker: agy\nRequested-Model: m-1\nObserved-Model: a\nObserved-Model: b\n"
-    assert provenance.parse(msg) == {"worker": "agy", "requested_model": "m-1",
-                                     "observed_model": "unknown"}  # fmt: skip
-    assert provenance.parse("s\n\nWorker: agy\nWorker: claude\n")["worker"] == "unknown"
+GOOD = "Cairnwork attempt a1\n\nWorker: agy\nRequested-Model: m-1\nObserved-Model: m-2\n"
+WANT = provenance.make("agy", "m-1", "m-2")
 
 
-def test_only_the_final_trailer_block_is_read():
-    early = "s\n\nWorker: claude\nObserved-Model: forged\n\nmore text\n"
-    assert provenance.parse(early) == UNKNOWN3
-    ok = early + "\nWorker: agy\nRequested-Model: m-1\nObserved-Model: m-2\n"
-    assert provenance.parse(ok) == provenance.make("agy", "m-1", "m-2")
+def test_the_exact_shape_cairnwork_writes_is_read():
+    assert provenance.parse(GOOD) == WANT
+    assert provenance.parse(GOOD.rstrip("\n")) == WANT
+    assert provenance.parse(GOOD + "\n\n") == WANT  # only newlines may trail
+    assert provenance.parse("s1\ns2" + GOOD[GOOD.index("\n\n") :]) == WANT  # multi-line subject
+
+
+@pytest.mark.parametrize("message", [
+    "s\n\nsome prose\nWorker: agy\nRequested-Model: m-1\nObserved-Model: m-2\n",  # prose block
+    "s\n\nWorker: agy\nRequested-Model: m-1\nObserved-Model: m-2\n\nand then a paragraph\n",
+    GOOD.replace("\n", "\r\n"),  # CRLF
+    "s\r\n\r\nWorker: agy\r\nRequested-Model: m-1\r\nObserved-Model: m-2\r\n",
+    "s\n\r\nWorker: agy\nRequested-Model: m-1\nObserved-Model: m-2\n",  # mixed endings
+    "s\n\nWorker: agy\r\nRequested-Model: m-1\nObserved-Model: m-2\n",
+    "s\n  \nWorker: agy\nRequested-Model: m-1\nObserved-Model: m-2\n",  # blank holds spaces
+    "\n\nWorker: agy\nRequested-Model: m-1\nObserved-Model: m-2\n",  # no subject
+    "Worker: agy\nRequested-Model: m-1\nObserved-Model: m-2\n",  # only trailers
+    "  \n\nWorker: agy\nRequested-Model: m-1\nObserved-Model: m-2\n",  # blank subject
+    GOOD + "Signed-off-by: x <x@y>\n",  # extra trailer after
+    GOOD.replace("\nWorker", "\nSigned-off-by: x <x@y>\nWorker"),  # extra trailer before
+    "s\n\nRequested-Model: m-1\nWorker: agy\nObserved-Model: m-2\n",  # out of order
+    GOOD + "Observed-Model: other\n",  # duplicate key
+    GOOD + "  \n",  # only newlines may trail, not spaces
+    GOOD.rstrip("\n") + "\r",
+    "s\n\nWorker: agy\nWorker: claude\nRequested-Model: m-1\nObserved-Model: m-2\n",
+    "s\n\nWorker: agy\nRequested-Model: m-1\n",  # missing key
+])  # fmt: skip
+def test_any_other_shape_makes_all_three_unknown(message):
+    assert provenance.parse(message) == UNKNOWN3
+
+
+def test_an_earlier_forged_block_does_not_change_the_final_one():
+    assert provenance.parse("Worker: claude\n\n" + GOOD) == WANT
+
+
+def test_trailing_whitespace_on_a_value_makes_that_value_unknown():
+    msg = "s\n\nWorker: agy \nRequested-Model: m-1\nObserved-Model: m-2\n"
+    assert provenance.parse(msg) == {**WANT, "worker": "unknown"}
+
+
+@pytest.mark.parametrize("how", ["commit", "commit-tree"])
+def test_the_shape_survives_a_real_git_commit_and_the_read_back(repo, how):
+    info = provenance.make("agy", "gemini-3.8-flash-high", "gemini-3.8-flash")
+    message = "Cairnwork attempt a1: tests from abc" + provenance.trailers(info)
+    if how == "commit":  # git's own message cleanup runs here
+        commit = commit_change(repo, {"f.txt": "x\n"}, message=message)
+    else:
+        tree = git(repo, "write-tree")
+        commit = git(repo, "commit-tree", tree, "-p", "HEAD", "-m", message)
+    # the read-back issue_runner._open_pr does
+    assert provenance.parse(git(repo, "show", "-s", "--format=%B", commit)) == info
 
 
 OP = "agyop_" + "ab" * 16
