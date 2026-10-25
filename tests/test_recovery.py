@@ -234,7 +234,7 @@ def test_sweep_matches_the_whole_marker_only():
     )
     try:
         time.sleep(0.5)
-        assert sweep_marked("CW_SWEEP_TEST", value) == 1
+        assert sweep_marked("CW_SWEEP_TEST", value).killed == 1
         time.sleep(0.5)
         assert exact.poll() is not None
         assert longer.poll() is None
