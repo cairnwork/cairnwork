@@ -314,3 +314,20 @@ def test_an_unreadable_base_is_a_failure_not_a_skip(project, tmp_path, monkeypat
             task, tmp_path / "runs", TaskResult("t", "a" + "0" * 16, "FAILED"), (None, None)
         )
     assert got.value.comparison.code == "BASE_ENV_FAILED" and probed == []
+
+
+def test_no_sandbox_names_the_cause_and_keeps_the_verdict(project, tmp_path, probes, monkeypatch):
+    import cairnwork_sandbox
+
+    seen, core = probes(PROBE_ROWS[2].values[0])  # a real probe failure row, but no backend
+    monkeypatch.setattr(cairnwork_sandbox, "select", lambda: None)
+    result, worker, phases = dispatch(project, tmp_path / "s")
+    assert_env_failed(result, worker, phases, core)
+    assert "base-probe-failed (no-sandbox" in result.reason and len(seen) == 1
+
+
+def test_with_a_sandbox_a_probe_failure_keeps_its_reason(project, tmp_path, probes):
+    _, core = probes(PROBE_ROWS[2].values[0])
+    result, worker, phases = dispatch(project, tmp_path / "s")
+    assert_env_failed(result, worker, phases, core)
+    assert "no-sandbox" not in result.reason
