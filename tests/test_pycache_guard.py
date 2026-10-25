@@ -119,6 +119,24 @@ def test_a_case_variant_above_the_run_is_judged_as_spelled(run):
     assert len(found) == 2
 
 
+@pytest.mark.parametrize(
+    "spelled",
+    [
+        "te\u017fts",  # long s: APFS finds teſts/ for tests/
+        "te\ufb05s",  # ligature
+        "\u212aeep",  # Kelvin sign
+        "caf\u0065\u0301",  # NFD
+    ],
+)
+def test_a_non_ascii_name_in_the_prefix_is_forged(run, spelled):
+    checkout, roots, prefix = run
+    plant(prefix, checkout / spelled / "helper.py")
+    plant(prefix, checkout / "src" / "a.py", name=f"{spelled}.{TAG}.pyc")
+    found = check(run)
+    assert f"{spelled} (non-ASCII name)" in found
+    assert f"src/{spelled}.{TAG}.pyc (non-ASCII name)" in found
+
+
 def test_a_pytest_tag_in_any_case_is_forged(run):
     plant(run[2], run[0] / "src" / "a.py", name="a.CPYTHON-312-PYTEST-8.4.2.PYC")
     plant(run[2], run[0] / "tests" / "helper.py", name="helper.CPYTHON-312.PYC")

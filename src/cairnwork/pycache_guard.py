@@ -26,8 +26,11 @@ write and that are not protected verifier inputs. Each finding fails the run (FO
 * a symlink or other non-regular entry, an entry that cannot be read, a prefix that is not a
   plain directory, or more than ``MAX_ENTRIES`` entries.
 
-The checkout and its protected names are matched ignoring case (APFS is usually
-case-insensitive, so ``Tests/helper.cpython-312.pyc`` is found for ``tests/helper.py``).
+The checkout and its protected names are matched ignoring ASCII case (APFS is usually
+case-insensitive, so ``Tests/helper.cpython-312.pyc`` is found for ``tests/helper.py``), and
+any non-ASCII name in the prefix fails the run: APFS also folds names such as ``teſts`` (long s),
+ligatures, the Kelvin sign and NFC/NFD spellings onto ASCII ones. The run's own paths are ASCII
+(the sandbox profile accepts no other), so only names the run created can be non-ASCII.
 
 Known gaps, as with the checkout comparison: bytecode planted and removed again during the run is
 not seen; and candidate code may point ``sys.pycache_prefix`` at another writable directory at
@@ -143,6 +146,9 @@ def forged_bytecode(
             if stat.S_ISLNK(mode) or not (stat.S_ISDIR(mode) or stat.S_ISREG(mode)):
                 shown = _shown(os.path.join(source_dir, name), checkouts)
                 found.append(f"{shown} (not a plain file or directory)")
+            if not name.isascii():  # APFS folds long s, ligatures, Kelvin sign, NFC/NFD forms
+                shown = _shown(os.path.join(source_dir, name), checkouts)
+                found.append(f"{shown} (non-ASCII name)")
         for name in files:
             if "-pytest-" in name.lower():
                 shown = _shown(os.path.join(source_dir, name), checkouts)

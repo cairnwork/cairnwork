@@ -25,11 +25,11 @@ CONFTEST = (
 # Candidate library code: writes `code` as the cached bytecode of `target` (a path relative to
 # the checkout), as a pytest-rewritten pyc (pytest_pyc) or a plain one, under the cache prefix;
 # upper_tests spells the tests/ directory Tests/ in the cache path, upper_name the file name in
-# upper case.
+# upper case, long_s every "s" below tests/ (and tests/ itself) as U+017F, which APFS folds to "s".
 FORGE = (
     "import importlib.util, marshal, os, sys\n"
     "from pathlib import Path\n"
-    "def forge(target, code, pytest_pyc, upper_tests=False, upper_name=False):\n"
+    "def forge(target, code, pytest_pyc, upper_tests=False, upper_name=False, long_s=False):\n"
     "    import pytest\n"
     "    root = Path(__file__).parent.parent\n"
     "    source = Path(target) if target.startswith('/') else root / target\n"
@@ -43,6 +43,9 @@ FORGE = (
     "        pyc = importlib.util.cache_from_source(path)\n"
     "        if pytest_pyc:\n"
     "            pyc = str(Path(pyc).parent / (Path(path).name[:-3] + f'.{tag}.pyc'))\n"
+    "        if long_s:\n"
+    "            head, tail = pyc.split('/tests/', 1)\n"
+    "            pyc = head + '/te\\u017fts/' + tail.replace('s', '\\u017f')\n"
     "        if upper_name:\n"
     "            pyc = os.path.join(os.path.dirname(pyc), os.path.basename(pyc).upper())\n"
     "        if upper_tests:\n"
@@ -150,6 +153,34 @@ def test_an_upper_case_pytest_pyc_name_fails_the_run_and_is_bound(project, tmp_p
     assert not run.observation.passed
     assert "FORGED_BYTECODE" in run.why and "PYTEST" in run.why, run.why
     assert len(bound) == 1 and any("PYTEST" in f for f in bound[0]["forged_bytecode"])
+
+
+@pytest.mark.parametrize("pytest_pyc", [True, False])
+def test_a_long_s_spelling_fails_the_run(project, tmp_path, pytest_pyc):
+    """APFS folds U+017F onto "s": te\u017fts/te\u017ft_z.<tag>-pyte\u017ft-<v>.pyc is found for
+    tests/test_z.py, and te\u017fts/helper.<tag>.pyc for tests/helper.py."""
+    target, code = (
+        ("tests/test_z.py", "def test_z():\\n    pass\\n")
+        if pytest_pyc
+        else ("tests/helper.py", "OK = True\\n")
+    )
+    files = {
+        "src/evil.py": (
+            f"from forger import forge\nforge({target!r}, '{code}', {pytest_pyc}, long_s=True)\n"
+        ),
+        "tests/helper.py": "OK = False\n",
+        "tests/test_a.py": "import evil\n\ndef test_a():\n    assert evil\n",
+        "tests/test_z.py": (
+            "from helper import OK\n\ndef test_z():\n    assert OK, 'the real deferred test'\n"
+        ),
+    }
+    head = commit_change(project, files)
+    spec = parse_verifier("v", ["python3", "-m", "pytest", "tests/test_a.py", "tests/test_z.py"])
+    (run,) = run_verifiers(project, head, (spec,), tmp_path / "runs", "r1", python=sys.executable)
+    if os.path.exists(str(tmp_path).replace("s", "\u017f")):
+        assert run.returncode == 0, run.log_path.read_text()  # APFS folded it: forgery ran
+    assert not run.observation.passed
+    assert "FORGED_BYTECODE" in run.why and "non-ASCII name" in run.why, run.why
 
 
 def test_a_forged_plain_pyc_for_a_protected_helper_fails_the_run(project, tmp_path):
