@@ -30,6 +30,10 @@ CASES = {
         "    names = os.listdir('/proc/self/fd')",
         "    p = '/proc/cpuinfo'  # other /proc files and /dev/null are fine",
     ),
+    "pycache_prefix": (
+        "    sys.pycache_prefix = os.environ['HOME']",
+        "    shutil.rmtree('__pycache__')  # sys.prefix and __pycache__ dirs are fine",
+    ),
 }
 
 
