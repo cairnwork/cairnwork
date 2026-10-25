@@ -33,7 +33,7 @@ from typing import NoReturn
 
 from cairnwork import unswept
 from cairnwork.confined import ATTEMPT_ENV, Sweep, confirm_gone, sweep_marked
-from cairnwork.journal import Journal, dispatched_at
+from cairnwork.journal import Journal, dispatch_mark
 from cairnwork.ownership import OwnershipLedger, OwnershipRecord, TakeoverRefused
 
 
@@ -59,8 +59,8 @@ def supersede(
         if ran_as == unswept.UNKNOWN_ACCOUNT and not account:
             why = f"the account attempt {attempt_id} ran as is unknown (journaled before #244)"
             _refuse(ledger, task_id, f"SWEEP_UNAVAILABLE: {why} and agy_run_as_user is not set")
-        since = dispatched_at([e for e in entries if e.attempt_id == attempt_id])
-        found = _swept(attempt_id, account if ran_as == unswept.UNKNOWN_ACCOUNT else ran_as, since)
+        mark = dispatch_mark([e for e in entries if e.attempt_id == attempt_id])
+        found = _swept(attempt_id, account if ran_as == unswept.UNKNOWN_ACCOUNT else ran_as, mark)
         if not found.gone:
             kept = found.kept_by()
             keeping = f"; kept by: {kept}" if kept else ""
@@ -70,7 +70,7 @@ def supersede(
 
 def _legacy_attempts(ledger: OwnershipLedger, task_id: str, entries) -> list[tuple[str, str]]:
     """(attempt id, account it ran as) of every attempt the journal names for the task."""
-    attempts = sorted({e.attempt_id for e in entries})
+    attempts = sorted({e.attempt_id for e in entries if e.attempt_id})  # "" marks nothing
     if not attempts:
         why = "its processes carry no task id, so none can be swept (a maintainer checks by hand)"
         _refuse(ledger, task_id, f"LEGACY_ATTEMPT_UNKNOWN: no journaled attempt; {why}")
@@ -80,9 +80,9 @@ def _legacy_attempts(ledger: OwnershipLedger, task_id: str, entries) -> list[tup
     ]
 
 
-def _swept(attempt_id: str, account: str | None, since: float | None) -> Sweep:
-    def look() -> Sweep:  # since: when the attempt was dispatched (journal), if known
-        return sweep_marked(ATTEMPT_ENV, attempt_id, account=account or None, since=since)
+def _swept(attempt_id: str, account: str | None, mark: str) -> Sweep:
+    def look() -> Sweep:  # mark: the attempt's DISPATCHED boot mark (journal), "" if unknown
+        return sweep_marked(ATTEMPT_ENV, attempt_id, account=account or None, dispatched=mark)
 
     return confirm_gone(look(), look)
 

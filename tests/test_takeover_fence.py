@@ -165,6 +165,22 @@ def test_a_legacy_task_with_no_journaled_attempt_stays_fenced(tmp_path, monkeypa
     assert held is not None and held.refusal.startswith("LEGACY_ATTEMPT_UNKNOWN")
 
 
+def test_a_journaled_empty_attempt_id_is_never_swept(tmp_path, monkeypatch):
+    """Gemini #244 round 3: an empty id would sweep for CAIRNWORK_ATTEMPT= (no attempt's
+    marker), so it is not an attempt; one with only such entries stays fenced."""
+    path, journal = _legacy_ledger(tmp_path)
+    ledger = OwnershipLedger(path)
+    journal.record("task-n", "", "WORKER_STARTED", "run_as=")
+    journal.record("task-b", ATTEMPT, "DISPATCHED", "")
+    journal.record("task-b", "", "WORKER_STARTED", "run_as=")
+    calls = _sweeps(monkeypatch, GONE)
+    with pytest.raises(TakeoverRefused, match="LEGACY_ATTEMPT_UNKNOWN: no journaled attempt"):
+        takeover.supersede(ledger, "task-n", journal=journal)
+    assert not calls
+    assert takeover.supersede(ledger, "task-b", journal=journal).status == "SUPERSEDED"
+    assert {value for value, _ in calls} == {ATTEMPT}
+
+
 def test_intake_refuses_a_legacy_task_with_no_journaled_attempt(tmp_path, monkeypatch):
     state = tmp_path / "state"
     state.mkdir()
@@ -266,6 +282,7 @@ def test_an_old_worker_started_entry_names_no_account():
     assert unswept.journaled_account(started("run_as=cw-worker")) == "cw-worker"
     assert unswept.journaled_account(started("run_as=")) == ""
     assert unswept.journaled_account(started("")) == unswept.UNKNOWN_ACCOUNT  # before #244
+    assert unswept.journaled_account(started(None)) == unswept.UNKNOWN_ACCOUNT  # not a text
     assert unswept.journaled_account([]) is None
 
 
@@ -332,3 +349,12 @@ def test_recovery_drops_the_legacy_mark_of_a_task_that_never_left_bound(tmp_path
     assert ledger.unswept_attempt("task-b") is None
     assert ledger.unswept_attempt("task-d") == Mark(unswept.LEGACY, "", "")  # it may have run
     assert ledger.unswept_attempt("task-n") == Mark(unswept.LEGACY, "", "")
+
+
+def test_only_a_bound_task_drops_its_legacy_mark_on_the_way_to_failed(tmp_path):
+    path, _ = _legacy_ledger(tmp_path)
+    ledger = OwnershipLedger(path)
+    ledger.set_status("task-d", "FAILED", started_nothing=True)  # DISPATCHED: it may have run
+    assert ledger.unswept_attempt("task-d") == Mark(unswept.LEGACY, "", "")
+    ledger.set_status("task-b", "FAILED", started_nothing=True)
+    assert ledger.unswept_attempt("task-b") is None

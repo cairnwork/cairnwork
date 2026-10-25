@@ -80,11 +80,15 @@ def migrate(conn: sqlite3.Connection) -> None:
 
 def journaled_account(entries) -> str | None:
     """The account an attempt's WORKER_STARTED entry names: "" for the owner's uid,
-    UNKNOWN_ACCOUNT for an entry from before #244 (it named none), None if no worker started."""
+    UNKNOWN_ACCOUNT for an entry from before #244 or one whose detail is not a run_as= text,
+    None if no worker started."""
     details = [e.detail for e in entries if e.phase == "WORKER_STARTED"]
     if not details:
         return None
-    return details[-1].removeprefix(RUN_AS) if details[-1].startswith(RUN_AS) else UNKNOWN_ACCOUNT
+    last = details[-1]
+    if isinstance(last, str) and last.startswith(RUN_AS):
+        return last.removeprefix(RUN_AS)
+    return UNKNOWN_ACCOUNT
 
 
 def get(conn: sqlite3.Connection, task_id: str) -> Mark | None:
