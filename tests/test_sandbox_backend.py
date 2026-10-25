@@ -1,9 +1,12 @@
 """The sandbox backend interface (cairnwork_sandbox) and the Seatbelt profile bytes.
 
 The profile hashes below are pinned as of the POSIX-semaphore change (#116),
-with the same fixed inputs: building a profile does not need sandbox-exec.
+with the same fixed inputs: building a profile does not need sandbox-exec. Council action 3
+(C1) added exactly the two /usr/bin/shasum read literals; the test removes those two lines
+and checks the rest is still byte-for-byte the #116 profile.
 """
 
+import hashlib
 import importlib.util
 from pathlib import Path
 
@@ -31,6 +34,17 @@ PINNED = {
         1533,
     ),
 }
+PINNED_C1 = {
+    (): ("c26b26dcdbfe665c6c626972e6f4bc6cda94fbb3d177064c8403eeaca2c0e50a", 1499),
+    ("/Library/Developer/CommandLineTools",): (
+        "0452cca6c512d7d8cd1e443b2d1beb7c86c026cf63169ec9d820e22b47cd2503",
+        1549,
+    ),
+    ("/Applications/Xcode.app",): (
+        "c0d7759d7ce157148963734b80ef0f2aeec38ef0b662d62bb7e75daeaa2d9bdb",
+        1597,
+    ),
+}
 
 
 @pytest.mark.parametrize("dirs", list(PINNED))
@@ -41,7 +55,14 @@ def test_seatbelt_profile_is_pinned_as_of_the_posix_semaphore_change_116(monkeyp
         seatbelt.build_profile(READS, WRITES, home=HOME),
         seatbelt.BACKEND.policy(READS, WRITES, home=HOME),
     ):
-        assert (profile.sha256, len(profile.text)) == PINNED[dirs]
+        c1_lines = ('  (literal "/usr/bin/shasum")\n', '  (literal "/usr/bin/shasum5.34")\n')
+        for line in c1_lines:
+            assert profile.text.count(line) == 1
+        before_c1 = profile.text
+        for line in c1_lines:
+            before_c1 = before_c1.replace(line, "")
+        assert (hashlib.sha256(before_c1.encode()).hexdigest(), len(before_c1)) == PINNED[dirs]
+        assert (profile.sha256, len(profile.text)) == PINNED_C1[dirs]
 
 
 def test_seatbelt_argv_prefixes_are_unchanged(tmp_path):
