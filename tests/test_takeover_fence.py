@@ -358,3 +358,21 @@ def test_only_a_bound_task_drops_its_legacy_mark_on_the_way_to_failed(tmp_path):
     assert ledger.unswept_attempt("task-d") == Mark(unswept.LEGACY, "", "")
     ledger.set_status("task-b", "FAILED", started_nothing=True)
     assert ledger.unswept_attempt("task-b") is None
+
+
+def test_a_dispatched_task_is_never_cancelled_marked_or_not(tmp_path):
+    """#63 (b): DISPATCHED -> CANCELLED released the card with no swept proof (only SUPERSEDED
+    checked the mark). A fence on the mark alone would not do: an unmarked DISPATCHED task is a
+    live run. A dispatched task ends only by its run (COMPLETED, FAILED) or by recovery (FAILED,
+    fenced); intake.cancel takes BOUND only."""
+    path, _ = _legacy_ledger(tmp_path)
+    ledger = OwnershipLedger(path)
+    assert ledger.unswept_attempt("task-d") == Mark(unswept.LEGACY, "", "")
+    (tmp_path / "live").mkdir()
+    live, task_id = _dispatched(tmp_path / "live")
+    for book, held, card in ((ledger, "task-d", "c4"), (live, task_id, "card-k1")):
+        with pytest.raises(ownership.InvalidStatusTransition, match="DISPATCHED -> CANCELLED"):
+            book.set_status(held, "CANCELLED")
+        assert book.get(task_id=held).status == "DISPATCHED"
+        with pytest.raises(ownership.DuplicateLogicalTask):  # the card stays held
+            book.bind("k-new", {"new": 1}, OWNER, card)

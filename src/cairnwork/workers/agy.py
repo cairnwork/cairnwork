@@ -12,7 +12,11 @@ Cairnwork's environment do not reach it; proxy URLs may carry credentials, and
 agy can read anything under HOME, so this narrows exposure, it is no boundary.
 Its output is copied into the log by the parent, capped like a verifier log; a
 process it started outside its group is killed if it still carries the attempt
-marker, and one that still holds the output afterwards fails the run.
+marker, and one that still holds the output afterwards fails the run. If that sweep cannot
+show the marked processes gone (a kill refused, the table unreadable), the run raises
+WorkerMayLive, so the attempt is fenced like an unswept worker account's (#244, #63): on the
+owner's account, or with ``agy_run_as_user`` on the worker account (its takeover sweep covers
+the owner's marked processes too).
 With an account-pool dispatcher configured (agy_dispatch.py) the worker runs that
 instead of agy, prompt on stdin, same environment plus the pool's tuning variables.
 With ``agy_run_as_user`` set as well, the dispatcher runs agy as that worker account,
@@ -32,8 +36,8 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-from cairnwork import provenance
-from cairnwork.confined import ATTEMPT_ENV, copy_capped, sweep_marked
+from cairnwork import proc_start, provenance
+from cairnwork.confined import ATTEMPT_ENV, Sweep, confirm_gone, copy_capped, sweep_marked
 from cairnwork.unswept import WorkerMayLive
 from cairnwork.workers import agy_dispatch, agy_receipts
 
@@ -185,6 +189,7 @@ class AgyWorker:
         env = _kept_env() if dispatch is None else _run_env()
         env[ATTEMPT_ENV] = workdir.name
         log = os.fdopen(fd, "wb")
+        mark = proc_start.boot_mark()  # before the start: what predates it is not the run's
         process = subprocess.Popen(  # noqa: S603 - fixed argv, no shell
             argv,
             cwd=workdir,
@@ -201,7 +206,7 @@ class AgyWorker:
             threading.Thread(target=_feed, args=(process, prompt), daemon=True).start()
         copier = threading.Thread(target=copy_capped, args=(process.stdout, log), daemon=True)
         copier.start()
-        self._await(process, copier, reader, workdir.name, log, log_path)
+        self._await(process, copier, reader, (workdir.name, mark), log, log_path)
         return self.provenance(reader)
 
     def provenance(self, reader) -> dict[str, str]:
@@ -222,7 +227,7 @@ class AgyWorker:
                 observed = agy_dispatch.operation_model(dispatch, op, _run_env())
         return provenance.make("agy", self.model, observed)
 
-    def _await(self, process, copier, reader, attempt: str, log, log_path) -> None:
+    def _await(self, process, copier, reader, attempt: tuple[str, str], log, log_path) -> None:
         dispatch = self.dispatch
         timed_out = None
         try:
@@ -232,15 +237,22 @@ class AgyWorker:
             if dispatch is not None:
                 agy_dispatch.ask_to_stop(process)  # lets it release its lease and sweep itself
         finally:
-            held = _stop(process, copier, attempt, reader)
+            held, swept = _stop(process, copier, attempt[0], reader, mark=attempt[1])
             if not held:  # else the copier still reads: leave both open rather than hang
                 process.stdout.close()
                 if process.stderr is not None:
                     process.stderr.close()
                 log.close()
         completion = None
-        if dispatch is not None and dispatch.run_as_user is not None:
-            completion = _settle_worker_run(dispatch, reader, process, held, timed_out, log_path)
+        try:
+            if dispatch is not None and dispatch.run_as_user is not None:
+                completion = _settle_worker_run(
+                    dispatch, reader, process, held, timed_out, log_path
+                )
+        except Exception as exc:  # an interrupt is not replaced: recovery then sweeps the run
+            self._fence(swept, log_path, exc)
+            raise
+        self._fence(swept, log_path)
         if timed_out is not None:
             raise AgyWorkerError("agy timed out") from timed_out
         if held:
@@ -253,6 +265,19 @@ class AgyWorker:
             raise AgyWorkerError(f"agy exited {process.returncode}{why}; log {log_path}")
         if completion is not None:
             raise agy_dispatch.AgyWorkerAccountFailed(f"{completion}; log {log_path}")
+
+    def _fence(self, swept: Sweep, log_path, cause: Exception | None = None) -> None:
+        """The owner-side sweep did not show the run gone: fenced, whatever else ended it, a
+        timeout included (#63 (a)). On the run's account: with agy_run_as_user the takeover sweep
+        of the worker account also kills the owner's marked processes (confined.sweep_marked)."""
+        if not swept.gone:
+            kept = swept.kept_by()
+            raise AgyWorkerUnswept(
+                f"WORKER_SWEEP_UNCLEAN: {swept.problem()}"
+                + f"; kept by: {kept}" * bool(kept)
+                + f"; log {log_path}",
+                self.run_as,
+            ) from cause
 
 
 def _settle_worker_run(dispatch, reader, process, held, timed_out, log_path) -> str | None:
@@ -300,16 +325,24 @@ def _feed(process, prompt: str) -> None:
             pass
 
 
-def _stop(process, copier, attempt: str, reader=None) -> bool:
-    """Kill agy's group and anything it started outside it that still carries the
-    attempt marker; return True if something still holds agy's output pipe."""
+def _stop(process, copier, attempt: str, reader=None, mark: str = "") -> tuple[bool, Sweep]:
+    """Kill agy's group and anything it started outside it that still carries the attempt
+    marker; return (whether something still holds agy's output pipe, the sweep). The sweep is
+    gone only when two looks in a row after the kill find none of the owner's processes marked
+    (confirm_gone, as takeover.py): else the run may live and is fenced (#63 (a)). ``mark``: the
+    boot mark taken before agy started; a hidden process older than it is not the run's, as in
+    takeover.py (Linux; "" elsewhere, where none is hidden for good)."""
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
         pass  # the group is already gone
     process.wait()
-    sweep_marked(ATTEMPT_ENV, attempt, skip_group=process.pid)
+
+    def look() -> Sweep:
+        return sweep_marked(ATTEMPT_ENV, attempt, skip_group=process.pid, dispatched=mark)
+
+    swept = confirm_gone(look(), look)
     copier.join(timeout=10)
     if reader is not None:
         reader.join(timeout=10)
-    return copier.is_alive() or (reader is not None and reader.is_alive())
+    return copier.is_alive() or (reader is not None and reader.is_alive()), swept

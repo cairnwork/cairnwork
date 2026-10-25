@@ -33,6 +33,7 @@ import unicodedata
 from pathlib import Path
 from typing import Any
 
+from cairnwork import issue_hook
 from cairnwork.changeset import ChangeSetError, read_change_set
 from cairnwork.deferred_tests import TestCommitRejected
 from cairnwork.gitcmd import NETWORK_TIMEOUT_SECONDS, GitCommandError, run_git
@@ -51,7 +52,6 @@ from cairnwork.lineage import require_on_main
 from cairnwork.lineage import verify_origin as _verify_origin
 from cairnwork.ownership import OwnershipError, OwnershipUnknown
 from cairnwork.pipeline import TaskRejected
-from cairnwork.post_verified import alert, run_post_verified_hook
 from cairnwork.provenance import parse as parse_provenance
 from cairnwork.workspace import ATTEMPT_ID
 
@@ -197,7 +197,8 @@ def _needs_fix(github: GitHub, number: int, exc: Exception) -> dict[str, str]:
 
 def settle(intake: Intake, github: GitHub, clone: Path) -> list[dict[str, Any]]:
     results = []
-    for issue in github.issues(RUNNING):
+    running = github.issues(RUNNING)
+    for issue in running:
         number = int(issue["number"])
         try:
             known = _recall(intake, github.repo, number)
@@ -208,10 +209,11 @@ def settle(intake: Intake, github: GitHub, clone: Path) -> list[dict[str, Any]]:
                 continue
             if status["status"] == "COMPLETED" and status["core_verified"]:
                 url = _open_pr(intake, github, clone, number, status)
+                issue_hook.owe(intake, github.repo, number, str(status["task_id"]))  # (#63 (d))
                 github.relabel(number, DONE, RUNNING)
                 github.comment(number, done_text(url, github.repo))
                 results.append({"issue": number, "pr": url})
-                _post_verified(intake, github, clone, status)  # never touches the result
+                issue_hook.run(intake, github, clone, number, status)  # never touches the result
             else:
                 github.relabel(number, FAILED_LABEL, RUNNING)
                 github.comment(number, failure_text(status))
@@ -226,34 +228,8 @@ def settle(intake: Intake, github: GitHub, clone: Path) -> list[dict[str, Any]]:
             KeyError,
         ) as exc:  # one task's failure is recorded; the others are still settled
             results.append({"issue": number, "error": f"{type(exc).__name__}: {exc}"})
+    issue_hook.run_owed(intake, github, clone, {int(i["number"]) for i in running})
     return results
-
-
-def _post_verified(intake: Intake, github: GitHub, clone: Path, status) -> None:
-    """The opt-in hook, after the outcome is final: logged and alerted, never a verdict."""
-    try:
-        config = intake.config()
-    except Exception as exc:  # noqa: BLE001 - off means silent, so alert only if it names a hook
-        if _names_hook(intake.state / "config.json"):
-            alert(f"skipped: {type(exc).__name__}")
-        return
-    try:  # status was validated by _open_pr
-        run_post_verified_hook(
-            intake.state, config, task_id=str(status["task_id"]),
-            attempt_id=str(status["attempt_id"]), candidate=str(status["candidate_commit"]),
-            clone=clone, repo_slug=github.repo, gh=github.gh,
-        )  # fmt: skip
-    except Exception as exc:  # noqa: BLE001 - nothing here may change the settle result
-        alert(f"skipped: {type(exc).__name__}")
-
-
-def _names_hook(path: Path) -> bool:
-    """Whether the (now unreadable) config sets a hook path; an explicit null does not count."""
-    try:
-        text = path.read_text(errors="replace")
-    except OSError:
-        return False
-    return re.search(r'"post_verified_hook"\s*:\s*"', text) is not None
 
 
 def _open_pr(intake: Intake, github: GitHub, clone: Path, number: int, status) -> str:
