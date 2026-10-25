@@ -122,6 +122,7 @@ class TaskResult:
     logs: list[str] = field(default_factory=list)
     p2p: dict = field(default_factory=dict)  # the P2P selection rule used (p2p.py)
     fence: str | None = None  # WorkerMayLive's account ("" the owner's): FAILED marks it (#244)
+    uncomparable: str = ""  # no evidence (#234): the code, journaled at FINISHED for the Issue
 
 
 def check_task(task: TaskSpec, *, verifier_python: str | None = None) -> tuple[VerifierSpec, ...]:
@@ -250,11 +251,11 @@ def _execute(task, specs, record, ledger, notary, journal, worker, run_root, ver
             verifying,
         )
     except Exception as exc:  # noqa: BLE001 - an infrastructure failure, never success
-        result.verified = False
+        result.verified, result.uncomparable = False, ""
         result.reason = f"INFRA_ERROR: {type(exc).__name__}: {exc}"
     finally:
         result.status = "COMPLETED" if result.verified else "FAILED"
-        steps.reach("FINISHED", result.status)
+        steps.reach("FINISHED", result.status, "" if result.verified else result.uncomparable)
         fence = None if result.verified or result.fence is None else (attempt_id, result.fence)
         ledger.set_status(record.task_id, result.status, fence=fence)
     return result
@@ -269,8 +270,8 @@ class _Steps:
     task_id: str
     attempt_id: str
 
-    def reach(self, phase: str, detail: str = "") -> None:
-        self.journal.record(self.task_id, self.attempt_id, phase, detail)
+    def reach(self, phase: str, detail: str = "", uncomparable: str = "") -> None:
+        self.journal.record(self.task_id, self.attempt_id, phase, detail, uncomparable)
         if os.environ.get(FAULT_ENV) == phase:
             os._exit(137)
 
@@ -296,6 +297,7 @@ def _attempt(task, specs, digest, notary, worker, run_root, result, steps, verif
             base_env_check(task, run_root, result, verifying)
     except BaseUncomparable as exc:  # nothing has run, so nothing a worker could have broken
         result.reason = exc.comparison.worker_reason(isolated=True)
+        result.uncomparable = exc.comparison.code
         return
     attempt = create_attempt_clone(task.repo, task.base_commit, run_root, result.attempt_id)
     steps.reach("WORKER_STARTED", unswept.RUN_AS + (getattr(worker, "run_as", "") or ""))
@@ -342,6 +344,7 @@ def _attempt(task, specs, digest, notary, worker, run_root, result, steps, verif
                 isolated = getattr(worker, "isolated", False)  # another uid (agy_run_as_user)
                 why = getattr(worker, "not_isolated_because", "")
                 result.reason = exc.comparison.worker_reason(isolated=isolated, why=why)
+                result.uncomparable = exc.comparison.code if isolated is True else ""
                 return
         result.candidate_commit = judged
         steps.reach("CANDIDATE", judged)
