@@ -348,12 +348,23 @@ class VerifierAccount:
         (077) it is not, and the account cannot enter the checkout — the run fails. Granting *other*
         read/traverse makes the account's access umask- and group-independent; it is no wider than
         the default-umask clone already is, and is scoped to this throwaway checkout of the
-        code under test, never the owner's home or the run scratch."""
+        code under test, never the owner's home or the run scratch.
+
+        Symlinks are opened too, without following them (Issue #279): on macOS a link has its own
+        mode bits and ``readlink`` by another user needs the link itself to be readable, but git
+        creates links as 0700 under umask 077, so the account's copy failed at ``os.readlink``.
+        Where ``os.chmod`` supports ``follow_symlinks=False`` the link's own mode is widened and
+        its target is never touched through it; on Linux link modes are not checked, so links are
+        left alone there."""
+        chmod_links = os.chmod in os.supports_follow_symlinks
         for top, dirs, files in os.walk(root):
             for name, bits in [(d, 0o055) for d in dirs] + [(f, 0o044) for f in files]:
                 path = os.path.join(top, name)
                 if not os.path.islink(path):
                     os.chmod(path, os.stat(path).st_mode | bits)
+                elif chmod_links:
+                    mode = os.lstat(path).st_mode
+                    os.chmod(path, mode | bits, follow_symlinks=False)
         os.chmod(root, os.stat(root).st_mode | 0o055)
 
     @contextmanager
