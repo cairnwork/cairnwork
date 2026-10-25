@@ -276,8 +276,9 @@ def _stat(path: str) -> list:
 
 
 def _small_file(path: str) -> list:
-    """A regular file's first 4 KiB and stat, or "absent"; anything else (a FIFO, a symlink, a
-    directory, no permission) is unreadable. Opened non-blocking, never following a link."""
+    """A regular file's first 4 KiB and stat, or "absent"; anything else (a FIFO, a symlink, even
+    a dangling one, a directory, no permission) is unreadable. Opened non-blocking, never
+    following a link."""
     try:
         info = os.lstat(path)
     except FileNotFoundError:
@@ -289,14 +290,15 @@ def _small_file(path: str) -> list:
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
         try:  # swapped for something else after the lstat: still not a regular file
-            if not stat.S_ISREG(os.fstat(fd).st_mode):
+            opened = os.fstat(fd)  # the metadata of the file actually read
+            if not stat.S_ISREG(opened.st_mode):
                 raise _Unreadable(path)
             data = os.read(fd, 4096)
         finally:
             os.close(fd)
     except OSError as exc:
         raise _Unreadable(path) from exc
-    return [data.decode(errors="replace"), info.st_mtime_ns, info.st_size]
+    return [data.decode(errors="replace"), opened.st_mtime_ns, opened.st_size]
 
 
 def _sites(venv: str) -> list:

@@ -74,7 +74,7 @@ def test_a_venv_without_pyvenv_cfg_is_still_remembered(check, tmp_path):
     assert check(python) == 1 and check(python) == 1
 
 
-@pytest.mark.parametrize("kind", ["fifo", "symlink", "directory"])
+@pytest.mark.parametrize("kind", ["fifo", "symlink", "dangling-symlink", "directory"])
 def test_a_pyvenv_cfg_that_is_not_a_regular_file_is_unreadable(check, tmp_path, kind):
     python = _venv(tmp_path / "venv")
     cfg = tmp_path / "venv" / "pyvenv.cfg"
@@ -86,6 +86,8 @@ def test_a_pyvenv_cfg_that_is_not_a_regular_file_is_unreadable(check, tmp_path, 
     elif kind == "symlink":
         (tmp_path / "real.cfg").write_text("version = 3.12.1\n")
         cfg.symlink_to(tmp_path / "real.cfg")
+    elif kind == "dangling-symlink":  # not "absent": a link is there
+        cfg.symlink_to(tmp_path / "nonexistent")
     else:
         cfg.mkdir()
     done: list = []
@@ -118,3 +120,28 @@ def test_a_fifo_swapped_in_after_the_type_check_neither_blocks_nor_counts(tmp_pa
     worker.start()
     worker.join(10)
     assert done == ["unreadable"]
+
+
+def test_a_pyvenv_cfg_that_cannot_be_looked_up_is_unreadable_not_absent(tmp_path, monkeypatch):
+    python = _venv(tmp_path / "venv")
+    cfg = str(tmp_path / "venv" / "pyvenv.cfg")
+    real_lstat = os.lstat
+
+    def lstat(path):
+        if str(path) == cfg:
+            raise PermissionError(13, "Permission denied", path)
+        return real_lstat(path)
+
+    monkeypatch.setattr(os, "lstat", lstat)
+    assert p2p._env_fingerprint(python) is None
+
+
+def test_the_metadata_is_that_of_the_file_actually_read(tmp_path, monkeypatch):
+    cfg = tmp_path / "pyvenv.cfg"
+    cfg.write_text("version = 3.12.1\n")
+    other = tmp_path / "other"
+    other.write_text("a different, longer file than the one read\n")
+    real_lstat = os.lstat
+    monkeypatch.setattr(os, "lstat", lambda p: real_lstat(other if p == str(cfg) else p))
+    text, _, size = p2p._small_file(str(cfg))  # swapped after the lstat
+    assert text == "version = 3.12.1\n" and size == cfg.stat().st_size
