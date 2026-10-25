@@ -45,7 +45,7 @@ from cairnwork.gitcmd import OID, GitCommandError, run_git
 from cairnwork.intake import Intake, IntakeRefused
 from cairnwork.notary_verify import binding_hash
 from cairnwork.ownership import request_digest
-from cairnwork.p2p import p2p_for
+from cairnwork.p2p import base_env_check, p2p_for
 from cairnwork.pipeline import (
     TaskRejected,
     TaskResult,
@@ -250,16 +250,36 @@ def _judge(intake, task, source, specs, candidate, notary, result, verifying) ->
         _burn(intake, task.test_commit, record=False)
     with _scratch(intake, source, task.repo, task, candidate, result.attempt_id) as scratch:
         task = replace(task, repo=scratch)
-        return _judge_in(intake, task, specs, candidate, notary, run_root, result, verifying)
+        return _judge_in(
+            intake, task, specs, candidate, notary, run_root, result, verifying, source=source
+        )
     return None  # pragma: no cover - _scratch always yields or raises
 
 
-def _judge_in(intake, task, specs, candidate, notary, run_root, result, verifying) -> dict | None:
+def _base_env(task, run_root, result, verifying, source) -> BaseUncomparable | None:
+    """Without deferred tests no base run follows, so check the base as a dispatch does (#259),
+    before any candidate code runs (an account failure here is no evidence either way). A failure
+    only counts when the candidate then fails too: a candidate that passes its verifiers, for
+    example one that fixes a base that crashed at import, keeps its own evidence."""
+    try:
+        with base_stage(*verifying):
+            base_env_check(
+                task, run_root, result, verifying, without_tests=True, key_repo=source
+            )  # fmt: skip
+    except BaseUncomparable as exc:
+        return exc
+    return None
+
+
+def _judge_in(
+    intake, task, specs, candidate, notary, run_root, result, verifying, *, source
+) -> dict | None:
     check_roots_on_base(task.repo, task.base_commit, task.test_roots)
     clone = create_attempt_clone(task.repo, candidate, run_root, result.attempt_id)
     try:
         attempt = Attempt(clone.attempt_id, task.base_commit, clone.path, clone.refs_before)
         check_candidate_commit(task.repo, attempt, candidate, task.allowed_files)
+        env = None if task.test_commit else _base_env(task, run_root, result, verifying, source)
         judged, test_files, binding = candidate, (), None
         if task.test_commit:
             _burn(intake, task.test_commit, record=True)  # before the tests are fetched
@@ -281,7 +301,7 @@ def _judge_in(intake, task, specs, candidate, notary, run_root, result, verifyin
             digest = binding_hash(binding)
         judge_candidate(
             task, specs, digest, notary, run_root, result, test_files, verifying, lambda _: None,
-            plan, binding,
+            plan, binding, env,
         )  # fmt: skip
         return binding
     finally:

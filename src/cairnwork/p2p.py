@@ -25,8 +25,9 @@ Failure paths, none of which can end VERIFIED:
   without a re-run;
 * the p2p verifier id clashes with an author verifier: REFUSED.
 
-Before the worker starts, ``base_env_check`` probes the ``module-dir`` files on the unchanged base
-the same way; a probe failure there is UNCOMPARABLE ``BASE_ENV_FAILED`` (environment, #234).
+Before the worker starts (or, in a verify call without deferred tests, before the candidate's
+verifiers), ``base_env_check`` probes the ``module-dir`` files on the unchanged base the same way; a
+probe failure there is UNCOMPARABLE ``BASE_ENV_FAILED`` (environment, #234, #259).
 
 ``p2p_time_budget_seconds`` bounds each run (probe, degraded probe, candidate run, re-run).
 The rule actually used is a dict (``P2PPlan.rule``): it goes into the p2p observation's artifact
@@ -212,19 +213,25 @@ def _run_once(spec, plan, note, task, judged, run_root, result, verifying, tag) 
 ENV_FAILED = "BASE_ENV_FAILED"
 
 
-def base_env_check(task, run_root, result, verifying) -> None:
+def base_env_check(
+    task, run_root, result, verifying, *, without_tests=False, key_repo=None
+) -> None:
     """Before the worker starts (#234): can the unchanged base run its own existing tests at all?
-    For a task that will be probed after the worker (deferred tests, P2P not off), the module-dir
-    selection of existing base tests is probed now, the same way (``_probe``): a timeout, a report
-    over the cap, an exit other than 0 or 1, or no guard record raises UNCOMPARABLE
-    ``BASE_ENV_FAILED``, so no worker quota is spent on a base that gives no evidence and the
-    attempt is not counted against the worker. Failing tests are fine (the base has the bug).
-    Nothing from the test commit is read. A pass is remembered per repository, base, files, import
-    paths, budget, verifier account and interpreter (``_env_fingerprint``) as a regular file in
-    ``base-env-ok/`` in the run root, so only the first dispatch to that base pays; the
-    marker can only skip this check, never make anything pass: the probes after the worker run
-    as before."""
-    if not task.test_commit or task.p2p_mode == "off":
+    For a task that will be probed after the worker (deferred tests, P2P not off), or with
+    ``without_tests`` a verify call without deferred tests (#259; ``key_repo``: the repository it
+    was cloned from, which keys the marker in place of ``task.repo``), the module-dir selection of
+    existing base tests is probed now, the same way (``_probe``): a timeout, a report over the cap,
+    an exit other than 0 or 1, or no guard record raises UNCOMPARABLE ``BASE_ENV_FAILED``, so no
+    worker quota is spent on a base that gives no evidence and the attempt is not counted against
+    the worker. Failing tests are fine (the base has the bug). Nothing from the test commit is
+    read. A pass is remembered per repository, base, files, import paths, budget, verifier account
+    and interpreter (``_env_fingerprint``) as a regular file in ``base-env-ok/`` in the run root,
+    so only the first check of that base pays; the marker can only skip this check, never make
+    anything pass. On a dispatch the probes after the worker run as before; a verify call without
+    deferred tests has no later base run, so an environment that broke after a recorded pass in a
+    way the key misses (sandbox backend, system libraries, the account's home) shows up there as
+    a candidate failure again, as before #259."""
+    if task.p2p_mode == "off" or not (task.test_commit or without_tests):
         return
     try:
         existing = _base_tests(task, frozenset())
@@ -236,7 +243,8 @@ def base_env_check(task, run_root, result, verifying) -> None:
     python = verifying[1] or getattr(verifying[0], "python", None) or sys.executable
     account = getattr(verifying[0], "user", "")
     fingerprint = _env_fingerprint(python)  # None: something unreadable, no marker either way
-    key = [str(Path(task.repo).resolve()), task.base_commit, files, task.import_paths,
+    repo = task.repo if key_repo is None else key_repo
+    key = [str(Path(repo).resolve()), task.base_commit, files, task.import_paths,
            task.p2p_budget, python, account, fingerprint]  # fmt: skip
     digest = hashlib.sha256(json.dumps(key).encode()).hexdigest()
     marker = Path(run_root) / "base-env-ok" / digest if fingerprint is not None else None
