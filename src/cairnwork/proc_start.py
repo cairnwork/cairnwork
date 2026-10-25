@@ -11,7 +11,8 @@ journals boot_mark(), this boot's id and CLOCK_BOOTTIME; a process's start is fi
 mark is from the current boot. No mark (macOS, an older journal, an unreadable boot id), a mark
 from another boot, or a start time that cannot be read: the process still counts (the strict
 rule). macOS reports process start times only on the wall clock, and no test or CI job there
-needs the filter, so it is off there.
+needs the filter, so it is off there. Limit: Linux time namespaces (5.6+) can give the
+dispatcher and a later sweeper different boot-clock offsets; run both in the same one.
 """
 
 from __future__ import annotations
