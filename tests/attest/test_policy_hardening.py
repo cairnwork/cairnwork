@@ -86,6 +86,8 @@ def test_policy_test_roots(world: dict) -> None:
     res_bad = _verify(world, "conf", pol_bad_root)
     assert not res_bad.ok
     assert res_bad.code == "TEST_ROOT_VIOLATION"
+    res_full = _verify(world, "full", pol_bad_root)
+    assert res_full.code == "TEST_ROOT_VIOLATION"
 
 
 @pytest.mark.parametrize(
@@ -94,6 +96,13 @@ def test_policy_test_roots(world: dict) -> None:
         {"test_roots": ["tests/test_a.py"]},
         {"test_roots": []},
         {"require_full": "yes"},
+        {"extra": 1},
+        {"require_ful": True},
+        {"test_roots": ["tests/../"]},
+        {"test_roots": ["a//"]},
+        {"test_roots": ["./"]},
+        {"test_roots": ["/x/"]},
+        {"test_roots": "tests/"},
     ],
 )
 def test_policy_malformed(world: dict, bad_override: dict) -> None:

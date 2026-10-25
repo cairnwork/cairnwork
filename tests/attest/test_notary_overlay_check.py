@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from cairnwork.notary import NotaryInputError
+from cairnwork.notary import Notary, NotaryInputError
 from tests.attest.binding_helpers import (
     TESTS,
     executed,
@@ -62,3 +62,23 @@ def test_unchecked_path_bypasses_check(tmp_path: Path) -> None:
     wrong_judged = git(p["work"], "commit-tree", tree, "-p", p["base"], "-m", "wrong parent")
     run = notarize_bound(state, p, tree_and_judged=(tree, wrong_judged), unchecked=True)
     assert run["verdict"] is not None
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"test_commit": None},
+        {"test_commit": "0" * 39},
+        {"test_paths": None},
+        {"test_paths": "tests/test_a.py"},
+        {"test_paths": ["tests/\x00a.py"]},
+    ],
+)
+def test_malformed_binding_is_a_coded_input_error(tmp_path: Path, bad: dict) -> None:
+    p = producer(tmp_path)
+    tree, judged = executed(p["work"], p["head"], p["tests"], tuple(sorted(TESTS)))
+    binding = {"head": p["head"], "test_commit": p["tests"], "test_paths": sorted(TESTS)}
+    binding.update(bad)
+    notary = Notary(tmp_path / "notary.sqlite", core_verify=lambda *a: None, core_identity={})
+    with pytest.raises(NotaryInputError):
+        notary._check_binding(p["work"], {**binding, "executed_tree": tree}, judged)

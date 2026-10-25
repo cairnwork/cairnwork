@@ -197,16 +197,21 @@ class Notary:
         head = binding.get("head")
         if parents != [head]:
             raise NotaryInputError("judged commit parent is not the binding head")
+        test_commit, paths = binding.get("test_commit"), binding.get("test_paths")
+        if not isinstance(test_commit, str) or not _OID.fullmatch(test_commit):
+            raise NotaryInputError("binding test_commit must be a 40-hex commit id")
+        if not isinstance(paths, list) or not all(isinstance(x, str) and x for x in paths):
+            raise NotaryInputError("binding test_paths must be a list of path strings")
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 rebuilt = overlay_tree(
                     repo,
                     head,
-                    binding["test_commit"],
-                    tuple(binding["test_paths"]),
+                    test_commit,
+                    tuple(paths),
                     Path(tmp) / "index",
                 )
-        except (TestCommitRejected, GitCommandError) as exc:
+        except (TestCommitRejected, GitCommandError, ValueError) as exc:  # ValueError: NUL byte
             raise NotaryInputError(str(exc)) from exc
         if rebuilt != binding["executed_tree"]:
             raise NotaryInputError(
