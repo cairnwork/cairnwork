@@ -8,6 +8,12 @@ regression and is left out.
 
 Failure paths, none of which can end VERIFIED:
 
+* base run itself unclean (a process outlived it, ``base-probe-survivors``, or it changed the
+  checkout, ``base-probe-mutated``; #285): the candidate run of the same tests would block on the
+  base's own leftover, so there is no usable comparison. UNCOMPARABLE
+  (``P2P_BASE_PROBE_UNUSABLE``) in any mode, without trying a narrower one: a narrower suite
+  would be weaker evidence than the configured one, and a false FAILED becomes "no evidence",
+  never VERIFIED;
 * base probe times out, cannot report, or its report exceeds the size cap (a suite too large for
   one guard report, #184: ``base-probe-report-over-cap``) in ``whole-suite``: degrade to
   ``module-dir`` once and say so in the record; when ``module-dir`` itself cannot be probed, or
@@ -15,6 +21,8 @@ Failure paths, none of which can end VERIFIED:
   the base, the task is UNCOMPARABLE (``P2P_BASE_PROBE_UNUSABLE``, #234: no evidence, never
   verified; a degraded probe never turns into "nothing to run"). A probe that worked but found no
   base-passing test is only recorded (``targets: 0``);
+* targets keep the order the probe ran them in (#287): a test that passes on the base only after
+  the tests before it (shared module state) must not be judged in another order;
 * the candidate run times out: its observation is not a pass, so Core says not verified;
 * the candidate run fails only because a test failed (``VerifierRun.plain_failure``: no timeout,
   mutated checkout, surviving process or oversized log, and the guard reported a failed test):
@@ -89,6 +97,9 @@ def _base_tests(task, exclude: frozenset[str]) -> tuple[str, ...]:
     )  # fmt: skip
 
 
+UNCLEAN = ("base-probe-survivors", "base-probe-mutated")  # #285: never degraded, see above
+
+
 def _probe(task, files, run_root, result, verifying, budget, tag="p"):
     """Per-test outcomes of ``files`` on the base, or (None, reason) when the run is unusable."""
     runs = run_verifiers(
@@ -104,6 +115,10 @@ def _probe(task, files, run_root, result, verifying, budget, tag="p"):
         return None, "base-probe-timeout"
     if run.report_too_big:
         return None, "base-probe-report-over-cap"
+    if run.survivors:  # the base leaves a process (or cannot tell): the candidate run would too
+        return None, UNCLEAN[0]
+    if run.mutated:  # the base's own tests write into the checkout: same for the candidate
+        return None, UNCLEAN[1]
     if run.returncode not in (0, 1) or not run.outcomes:
         return None, "base-probe-failed"
     return run.outcomes, ""
@@ -111,7 +126,9 @@ def _probe(task, files, run_root, result, verifying, budget, tag="p"):
 
 def _passing_targets(outcomes: dict[str, str]) -> tuple[str, ...]:
     """A file whose every test passed on the base is a target by itself; in a file with other
-    outcomes only the test functions (all parametrisations passed) are."""
+    outcomes only the test functions (all parametrisations passed) are. Files and functions keep
+    the order of ``outcomes`` (the order the probe ran them, #287), never sorted: pytest runs node
+    ids in the order given, and a test may depend on the tests before it."""
     by_file: dict[str, dict[str, bool]] = {}
     for nodeid, outcome in outcomes.items():
         path = nodeid.split("::", 1)[0]
@@ -119,11 +136,11 @@ def _passing_targets(outcomes: dict[str, str]) -> tuple[str, ...]:
         funcs = by_file.setdefault(path, {})
         funcs[func] = funcs.get(func, True) and outcome == "passed"
     targets: list[str] = []
-    for path, funcs in sorted(by_file.items()):
+    for path, funcs in by_file.items():
         if all(funcs.values()):
             targets.append(path)
         else:
-            targets.extend(sorted(f for f, ok in funcs.items() if ok))
+            targets.extend(f for f, ok in funcs.items() if ok)
     return tuple(targets)
 
 
@@ -145,6 +162,9 @@ def plan_p2p(task, specs, test_files, mode, budget, run_root, result, verifying)
         if files == tried:  # the narrower mode would run the same files again
             raise _unusable(rule, "module-dir selects the same files")
         outcomes, why = _probe(task, files, run_root, result, verifying, budget)
+        if why in UNCLEAN:  # #285: no narrower mode, whatever was configured
+            detail = f"{rule['degraded']}; " * bool(rule["degraded"]) + f"{why} in {applied} mode"
+            raise BaseUncomparable(Comparison("UNCOMPARABLE", "P2P_BASE_PROBE_UNUSABLE", detail))
         if outcomes is not None:
             plan = _plan(task, specs, rule, _passing_targets(outcomes), budget)
             if plan.spec is None and rule["degraded"]:  # G1: and none passes on the base
@@ -222,7 +242,8 @@ def base_env_check(
     ``without_tests`` a verify call without deferred tests (#259; ``key_repo``: the repository it
     was cloned from, which keys the marker in place of ``task.repo``), the module-dir selection of
     existing base tests is probed now, the same way (``_probe``): a timeout, a report over the cap,
-    an exit other than 0 or 1, or no guard record raises UNCOMPARABLE ``BASE_ENV_FAILED``. On a
+    an exit other than 0 or 1, no guard record, a surviving process or a mutated checkout (#285)
+    raises UNCOMPARABLE ``BASE_ENV_FAILED``. On a
     dispatch, this means no worker quota is spent on a base that gives no evidence and the attempt
     is not counted against the worker. Failing tests are fine (the base has the bug). Nothing from
     the test commit is read. A pass is remembered per repository, base, files, import paths, budget,
