@@ -68,6 +68,10 @@ def _without(check: str, probe_name: str) -> dict:
         {"checks": _failed_probe("c_network_denied")},  # check says pass, a probe does not
         {"checks": _without("d_launchd_escape_denied", "code escape signal_other_sandbox")},
         {"checks": _without("positive_controls", "pytest runs the probe")},
+        # Codex review of PR 251, should-fix 1: each named search refusal is required
+        {"checks": _without("a_read_denied", "wrapper search links/link_dir/secret.txt")},
+        {"checks": _without("a_read_denied", "wrapper search links/link_private")},
+        {"checks": _without("b_write_denied", "search profile denies writes")},
         {"checks": dict(canary_checks(), extra={"pass": True, "probes": []})},
         {"checks": dict(canary_checks(), identity={"pass": True, "observed": {"user": "james"}})},
     ],

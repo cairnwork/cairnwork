@@ -6,12 +6,21 @@
 #   <owner> ALL=(_cairnwork_worker) NOPASSWD: /Users/Shared/cairnwork-worker/local-bin/local-worker-tool
 # names that path. experimental/local_worker/tools.py runs it with `sudo -n -u _cairnwork_worker`.
 #
-# Eight actions, nothing else (exit 64 = refused before anything ran):
+# Ten actions, nothing else (exit 64 = refused before anything ran):
 #   [--start-nonce <hex>] before the action prints LOCAL_WORKER_STARTED <hex> on stderr first.
 #   local-worker-tool list   <run_root> <relpath>        list a directory of the checkout
 #   local-worker-tool read   <run_root> <relpath>        print a regular file of the checkout
 #   local-worker-tool write  <run_root> <relpath> [--scope <entry>...]
 #                                                        replace a checkout file with stdin
+#   local-worker-tool search <run_root> <fixed|regex> <pattern> <relpath|.>
+#                                                        lines matching a fixed string or an
+#                                                        extended regex (grep -rnI), read-only
+#   local-worker-tool search-probe <run_root>            the canary's check of the read-only
+#                                                        profile: create a directory in the
+#                                                        checkout and in tmp (mkdir, which never
+#                                                        follows a symlink) and open /dev/null
+#                                                        for writing under it (each must fail;
+#                                                        exit 0 = a write got through)
 #   local-worker-tool pytest <run_root> [pytest args]    run <run_root>/venv/bin/python -m pytest
 #   local-worker-tool sweep  <run_root>                  kill this run's worker processes
 #   local-worker-tool status <run_root>                  git status of the checkout (porcelain v2,
@@ -27,7 +36,7 @@
 # checkout, with no "..", "." (except a bare "." for list), empty or ".git" (any case) component.
 #
 # Every action except sweep runs under a Seatbelt profile built HERE (never supplied by the caller).
-# The tool profile (list, read, write, pytest):
+# The tool profile (write and pytest; list, read and search run under the read-only one below):
 #   * no network at all (the tools do not need it; Splash is the agent loop's business, not theirs);
 #   * no reads under /Users, /Volumes, /private/tmp, /private/var/tmp, /private/var/folders except
 #     this run's checkout, venv and tmp and the worker Python tree, so the owner's home, the
@@ -40,6 +49,21 @@
 #     second name after a write's link-count check, not even by moving its directory to tmp, linking
 #     there and moving it back (see write --scope);
 #   * signals only to processes in the same sandbox (not the agy worker's runs, which share the uid).
+# The read-only profile (list, read, search, search-probe): the tool profile, then no write at
+# all (not even /dev/null, /dev/tty or /dev/dtracehelper) and no file data read anywhere except the
+# checkout (its .git excepted), the root directory itself, the OS's own /System and /usr/lib (dyld
+# and its libraries, on a macOS that reads them as files) and /usr/share/locale (grep's UTF-8
+# matching needs its locale; dyld needs "/"), but not /System/Volumes (Preboot, Update, Hardware,
+# iSCPreboot, xarts and the Data volume's root were listable; tried on Darwin 27: with them
+# denied, grep, cat and ls still start and read, no abort trap). Not the run's tmp or venv, not
+# the worker Python tree. The wrapper's path checks run before the command, so a process a sweep
+# missed (the sweep finds no process that cleared its environment and left the run root) could
+# swap a checked directory for a symlink before cat, ls or grep opens a path through it (grep -r
+# follows a symlink in an ancestor component); Seatbelt checks the resolved path at open, so such
+# a swap leads nowhere readable. Search also runs with a CPU-time limit (SEARCH_CPU_SECONDS,
+# ulimit -t). It bounds no memory, and none can be set: on Darwin 27, ulimit -v, -d and -m (and
+# setrlimit RLIMIT_AS, RLIMIT_DATA, RLIMIT_RSS) fail with EINVAL, so the Python regex cap alone
+# bounds what grep allocates.
 # The query profile (status, numstat, tracked): the same network, read and signal limits, reads
 # of the checkout (its .git included) and <run_root>/q only, writes only inside <run_root>/q. No
 # code the model wrote ever runs under it (git runs with no filter, hook, driver or textconv; see
@@ -85,6 +109,7 @@ if [ "$(id -un)" != "$WORKER" ]; then
   PYROOT=${CAIRNWORK_LOCAL_WORKER_PYROOT:-$PYROOT}
 fi
 SANDBOX_EXEC=/usr/bin/sandbox-exec
+SEARCH_CPU_SECONDS=20  # grep's CPU-time limit (a second layer under the Python regex cap)
 WORKER_PATH=/usr/bin:/bin:/usr/sbin:/sbin
 TAG_ENV=CAIRNWORK_LOCAL_RUN_TAG
 
@@ -222,7 +247,7 @@ profile_head() {  # no network; no reads of the user, volume and temp trees (all
   printf ' (subpath "/private/var/tmp") (subpath "/private/var/folders"))\n'
 }
 
-profile() {  # the tool profile: list, read, write, pytest (and so every line of test code)
+profile() {  # the tool profile: write, pytest (so every line of test code); readonly_profile on top
   profile_head
   printf '(allow file-read* (subpath "%s") (subpath "%s/venv") (subpath "%s/tmp") (subpath "%s"))\n' \
     "$CHECKOUT" "$RUN_ROOT" "$RUN_ROOT" "$PYROOT"
@@ -238,6 +263,18 @@ profile() {  # the tool profile: list, read, write, pytest (and so every line of
   printf '(deny file-link)\n'  # no second name for any file (tmp too: see the header)
   printf '(deny file-read* file-write* (subpath "%s/q"))\n' "$RUN_ROOT"  # the queries' alone
   printf '(deny signal)\n(allow signal (target same-sandbox))\n'
+}
+
+readonly_profile() {  # list, read, search, search-probe (see the header)
+  profile
+  # Each deny names a path ("/"): a filterless (deny file-write*) here loses to the tool
+  # profile's filtered allows (tried: the write goes through), so no deny relies on that order.
+  printf '(deny file-read-data (subpath "/"))\n'
+  printf '(allow file-read-data (literal "/") (subpath "/System") (subpath "/usr/lib")'
+  printf ' (subpath "/usr/share/locale") (subpath "%s"))\n' "$CHECKOUT"
+  printf '(deny file-read-data (subpath "/System/Volumes"))\n'  # no OS code: Preboot, Data, ...
+  printf '(deny file-read-data (regex #"/\\.[gG][iI][tT](/|$)"))\n'
+  printf '(deny file-write* (subpath "/"))\n'
 }
 
 query_profile() {  # the git queries: read the checkout (.git too) and q, write only inside q
@@ -408,7 +445,7 @@ if [ "${1:-}" = --start-nonce ]; then
   shift 2
 fi
 
-[ "$#" -ge 2 ] || refuse "usage: local-worker-tool <list|read|write|pytest|sweep|status|numstat|tracked> <run_root> ..."
+[ "$#" -ge 2 ] || refuse "usage: local-worker-tool <list|read|write|search|search-probe|pytest|sweep|status|numstat|tracked> <run_root> ..."
 ACTION=$1
 RUN_ROOT=$2
 shift 2
@@ -437,12 +474,27 @@ case "$ACTION" in
       TARGET=$CHECKOUT/$1
     fi
     ;;
+  search)
+    [ "$#" -eq 3 ] || refuse "search takes a mode, a pattern and a path"
+    case "$1" in
+      fixed) GREP_MODE=-F ;;
+      regex) GREP_MODE=-E ;;
+      *) refuse "search mode must be fixed or regex" ;;
+    esac
+    case "$2" in
+      "" | *"
+"*) refuse "search pattern must be one non-empty line" ;;
+    esac
+    PATTERN=$2
+    [ "$3" = . ] || require_relpath "$3"
+    TARGET=$3
+    ;;
   pytest)
     PY=$RUN_ROOT/venv/bin/python
     [ -x "$PY" ] || refuse "run_root has no venv/bin/python"
     ;;
-  sweep)
-    [ "$#" -eq 0 ] || refuse "sweep takes no further arguments"
+  sweep | search-probe)
+    [ "$#" -eq 0 ] || refuse "$ACTION takes no further arguments"
     ;;
   status | numstat | tracked)
     [ "$#" -eq 0 ] || refuse "$ACTION takes no further arguments"
@@ -455,12 +507,12 @@ case "$ACTION" in
   list)
     [ ! -L "$TARGET" ] && [ -d "$TARGET" ] || refuse "not a directory: $1"
     require_dir_inside_checkout "$TARGET" list
-    sandboxed "$(profile)" "$RUN_ROOT/tmp" /bin/ls -1Ap -- "$TARGET"
+    sandboxed "$(readonly_profile)" "$RUN_ROOT/tmp" /bin/ls -1Ap -- "$TARGET"
     ;;
   read)
     [ ! -L "$TARGET" ] && [ -f "$TARGET" ] || refuse "not a regular file: $1"
     require_dir_inside_checkout "${TARGET%/*}" read
-    sandboxed "$(profile)" "$RUN_ROOT/tmp" /bin/cat -- "$TARGET"
+    sandboxed "$(readonly_profile)" "$RUN_ROOT/tmp" /bin/cat -- "$TARGET"
     ;;
   write)
     [ ! -L "$TARGET" ] || refuse "target is a symlink: $1"
@@ -473,6 +525,32 @@ case "$ACTION" in
     [ -z "$SCOPE_SET" ] || require_in_scope "$1" "$probe"
     sandboxed "$(profile)" "$RUN_ROOT/tmp" /bin/sh -c 'mkdir -p -- "$1" && cat > "$2"' sh \
       "$parent" "$TARGET"
+    ;;
+  search)
+    dir=$CHECKOUT/$TARGET
+    [ "$TARGET" = . ] || [ ! -L "$dir" ] || refuse "search path is a symlink: $TARGET"
+    [ -d "$dir" ] || [ -f "$dir" ] || refuse "search path is no file or directory: $TARGET"
+    [ -d "$dir" ] || dir=${dir%/*}
+    require_dir_inside_checkout "$dir" search
+    # grep -r follows no symlink it meets (BSD default, -p); .git is skipped; no writes at all;
+    # -D skip: devices, FIFOs and sockets are never opened (a FIFO would block the read). The CPU
+    # limit (hard and soft; SIGXCPU) bounds a costly regex the Python cap let through.
+    ulimit -t "$SEARCH_CPU_SECONDS"
+    sandboxed "$(readonly_profile)" "$RUN_ROOT/tmp" /usr/bin/grep -r -n -I -D skip "$GREP_MODE" --exclude-dir=.git \
+      -e "$PATTERN" -- "$TARGET"
+    ;;
+  search-probe)
+    # mkdir creates or fails, never through a symlink (EEXIST), so a planted probe path cannot
+    # point the probe at a device; one that exists already is refused (it would prove nothing).
+    for p in "$CHECKOUT/search-probe" "$RUN_ROOT/tmp/search-probe"; do
+      [ ! -e "$p" ] && [ ! -L "$p" ] || refuse "search-probe path exists: ${p#"$RUN_ROOT"/}"
+    done
+    # shellcheck disable=SC2016  # expanded by the inner shell
+    sandboxed "$(readonly_profile)" "$RUN_ROOT/tmp" /bin/sh -c 'w=1
+/bin/mkdir -- "$1" && w=0
+/bin/mkdir -- "$2" && w=0
+{ : >/dev/null; } 2>&1 && w=0
+exit "$w"' sh "$CHECKOUT/search-probe" "$RUN_ROOT/tmp/search-probe"
     ;;
   pytest)
     sandboxed "$(profile)" "$RUN_ROOT/tmp" "$PY" -m pytest -p no:cacheprovider "$@"

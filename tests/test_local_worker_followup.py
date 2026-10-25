@@ -14,7 +14,7 @@ from local_worker_fakes import META, TASK, canary_checks, cli_harness, make_loop
 
 from experimental.local_worker import canary, corpus_io, cuts, episode, schema_rules
 from experimental.local_worker.agent import initial_messages
-from experimental.local_worker.agent_protocol import TOOL_SCHEMAS, TOOLS_ABSENT
+from experimental.local_worker.agent_protocol import TOOL_SCHEMAS, TOOLS_ABSENT, tool_names
 from experimental.local_worker.episode_schema import SchemaError, validate_record
 
 
@@ -85,9 +85,11 @@ def test_x18_a_source_cut_after_an_unobserved_turn_is_refused(tmp_path):
 
 
 def test_the_action_lists_match_the_tools_the_loop_offers():
-    """1ca5/nori: READ_ACTIONS named a "search" action no tool offers and the schema refuses."""
-    offered = {t["function"]["name"] for t in TOOL_SCHEMAS}
+    """1ca5/nori: every action the schema accepts is a tool the loop can offer; search is one
+    only with --search-tool (TOOLS_ABSENT names it otherwise)."""
+    offered = set(tool_names(True))
     actions = {"run_test" if n == "run_tests" else n for n in offered}  # the spec's action name
     assert set(schema_rules.ACTION_TYPES) == actions | {"invalid_tool_call", "no_tool_call"}
-    assert set(cuts.READ_ACTIONS) == {"read_file", "list_dir"} <= actions
-    assert not set(TOOLS_ABSENT) & (set(cuts.READ_ACTIONS) | set(schema_rules.ACTION_TYPES))
+    assert set(cuts.READ_ACTIONS) == {"read_file", "list_dir", "search"} <= actions
+    assert set(TOOLS_ABSENT) == offered - {t["function"]["name"] for t in TOOL_SCHEMAS}
+    assert set(tool_names(False)) == {t["function"]["name"] for t in TOOL_SCHEMAS}

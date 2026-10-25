@@ -22,20 +22,22 @@ import subprocess
 import tempfile
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+from experimental.local_worker.toolcall import REFUSED_EXIT as REFUSED_EXIT  # re-exported
+from experimental.local_worker.toolcall import ToolCall as ToolCall
+from experimental.local_worker.toolcall import _clip
+from experimental.local_worker.toolcall import error_category as error_category
 from experimental.local_worker.write_scope import wrapper_args
 
 WORKER_USER = "_cairnwork_worker"
 INSTALLED_WRAPPER = Path("/Users/Shared/cairnwork-worker/local-bin/local-worker-tool")
 SUDO = "/usr/bin/sudo"
-REFUSED_EXIT = 64
 TERM_GRACE_SECONDS = 5.0  # after SIGTERM, and again after SIGKILL, before giving up on a wait
 KILL_GRACE_SECONDS = 2 * TERM_GRACE_SECONDS  # how long a timed-out call can outlive its timeout
 SWEEP_TIMEOUT_SECONDS = 10.0  # the sweep after a pytest run or a timed-out tool call
-TOOL_ACTIONS = ("list", "read", "write", "pytest")  # wrapper actions the model's tools use
+TOOL_ACTIONS = ("list", "read", "write", "search", "search-probe", "pytest")  # tool profile
 START_MARKER = "LOCAL_WORKER_STARTED"  # first line the wrapper prints on stderr: "<marker> <nonce>"
 DEFAULT_MAX_OUTPUT_BYTES = 20_000
 DEFAULT_TIMEOUT_SECONDS = 300.0
@@ -124,70 +126,6 @@ def subprocess_invoker(env: dict[str, str] | None = None) -> Invoker:
     return invoke
 
 
-def _clip(data: bytes, limit: int) -> tuple[str, bool]:
-    """Head and tail of ``data`` within ``limit`` bytes (test output ends with the summary)."""
-    if len(data) <= limit:
-        return data.decode("utf-8", errors="replace"), False
-    half = limit // 2
-    dropped = len(data) - 2 * half
-    head = data[:half].decode("utf-8", errors="replace")
-    tail = data[-half:].decode("utf-8", errors="replace")
-    return f"{head}\n[... {dropped} bytes truncated ...]\n{tail}", True
-
-
-def error_category(action_type: str, exit_code: int | None, raw: bytes) -> str:
-    if exit_code is None:
-        return "TIMEOUT"
-    if exit_code == 0:
-        return "NONE"
-    if exit_code == REFUSED_EXIT:
-        return "REFUSED"
-    if action_type == "run_test":
-        if b"SyntaxError" in raw:
-            return "SYNTAX_ERROR"
-        return {1: "TEST_FAILED", 5: "NO_TESTS"}.get(exit_code, "TOOL_ERROR")
-    return "TOOL_ERROR"
-
-
-@dataclass(frozen=True)
-class ToolCall:
-    turn_index: int
-    action_type: str
-    tool_args: dict
-    exit_code: int | None
-    output: str
-    stdout_bytes: int
-    stdout_truncated: bool
-    error_category: str
-    duration_ms: float
-    output_sha256: str
-    exec_identity: str
-    isolation: str
-    started_at: str
-    raw: bytes = field(default=b"", repr=False, compare=False)
-    # False when stdout or stderr was capped (tools.CAPTURE_LIMIT): ``raw`` is then not the whole
-    # output, and a git query's result is not observed (Claude review of #239, NB5).
-    capture_complete: bool = True
-
-    def record(self) -> dict:
-        rec = asdict(self)
-        rec.pop("raw")
-        rec.pop("output")
-        rec["role"] = "tool_result"
-        return rec
-
-    def as_turn(
-        self, tokens_prompt: int | None, tokens_completion: int | None, tokens_cached: int | None
-    ) -> dict:
-        turn = self.record()
-        turn.update(
-            tokens_prompt=tokens_prompt,
-            tokens_completion=tokens_completion,
-            tokens_cached=tokens_cached,
-        )
-        return turn
-
-
 class WorkerTools:
     """list_dir / read_file / write_file / edit_file / run_tests / status / numstat / tracked, as
     the worker.
@@ -231,13 +169,27 @@ class WorkerTools:
     def list_dir(self, path: str = ".") -> ToolCall:
         return self._call("list_dir", "list", [path], {"path": path})
 
-    def read_file(self, path: str) -> ToolCall:
-        return self._call("read_file", "read", [path], {"path": path})
+    def read_file(self, path: str, start: int | None = None, end: int | None = None) -> ToolCall:
+        """The whole file, as the worker; a range (logged) is sliced by reading.page."""
+        args = {"path": path, "start_line": start, "end_line": end}
+        return self._call(
+            "read_file", "read", [path], {k: v for k, v in args.items() if v is not None}
+        )
 
     def write_file(self, path: str, content: str) -> ToolCall:
         args = {"path": path, "content": content}
         argv = [path, *wrapper_args(self.write_scope)]
         return self._call("write_file", "write", argv, args, stdin=content.encode())
+
+    def search(self, pattern: str, path: str = ".", regex: bool = False) -> ToolCall:
+        """Matching lines (grep -rnI) under ``path``, read-only, as the worker."""
+        args = {"pattern": pattern, "path": path, "regex": regex}
+        mode = "regex" if regex else "fixed"
+        return self._call("search", "search", [mode, pattern, path], args)
+
+    def search_probe(self) -> ToolCall:
+        """The canary's check that search's profile denies writes (wrapper action search-probe)."""
+        return self._call("search_probe", "search-probe", [], {})
 
     def run_tests(self, pytest_args: Sequence[str]) -> ToolCall:
         args = list(pytest_args)

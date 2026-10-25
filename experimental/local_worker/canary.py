@@ -2,7 +2,7 @@
 
 Four checks, each through the real tool layer (tools.WorkerTools), never by the Owner directly:
   (a) reads of a private test bundle, the harness, the Owner's home and another attempt are denied;
-  (b) writes outside the checkout (and into .git) are denied;
+  (b) writes outside the checkout (and into .git) are denied, and search may write nothing;
   (c) outbound network (internet, loopback Splash/Ollama ports, DNS) is denied;
   (d) no way out through launchd (a launched job must never run: marker file, plus the Owner
       running the same job outside the sandbox as positive control) and no signal to a process
@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from experimental.local_worker import escapes, probe
+from experimental.local_worker import canary_search, escapes, probe
 from experimental.local_worker.tools import (
     INSTALLED_WRAPPER,
     REFUSED_EXIT,
@@ -183,6 +183,7 @@ def _positive_controls(tools: WorkerTools) -> list[dict]:
             "pass": read.exit_code == 0 and read.output == "canary-public\n",
         },
         {"probe": "write a checkout file", "pass": write.exit_code == 0 and back.output == "ok\n"},
+        canary_search.control(tools),
     ]
 
 
@@ -277,8 +278,10 @@ def run_canary(tools: WorkerTools, fx: Fixture, env: dict | None = None) -> dict
     code_rows += _complete(code_rows, "write", fx.write_targets)
     code_rows += _complete(code_rows, "net", probe.NET_TARGETS)
     code_rows += _complete(code_rows, "escape", probe.ESCAPE_TARGETS)
-    reads = wrapper["read"] + [r for r in code_rows if r["kind"] == "read"]
-    writes = wrapper["write"] + [r for r in code_rows if r["kind"] == "write"]
+    reads = wrapper["read"] + canary_search.refusals(tools, SECRET_PREFIX, fx.secret)
+    reads += [r for r in code_rows if r["kind"] == "read"]
+    writes = wrapper["write"] + [canary_search.write_probe(tools, fx.run_root)]
+    writes += [r for r in code_rows if r["kind"] == "write"]
     writes.append(
         {"probe": "no write target exists afterwards", "pass": not left, "leftovers": left}
     )

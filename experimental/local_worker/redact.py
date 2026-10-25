@@ -8,8 +8,8 @@ one, one the run never confirmed, or any path when the base listing was not obse
 ``{"sha256", "bytes", "ext"}``: a digest, plus its extension only when that is one of the fixed
 PATH_EXTS (so the extension carries no free text). The same rule covers tool arguments,
 first_edit_cut.target_file, its changed_paths and first_source_edit.path. Written text (content,
-target, replacement) is ``{"sha256", "bytes"}``. A list of changed paths keeps at most
-MAX_CHANGED_PATHS entries; the cut records the full count next to it.
+target, replacement, a search pattern) is ``{"sha256", "bytes"}``. A list of changed paths keeps
+at most MAX_CHANGED_PATHS entries; the cut records the full count next to it.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import hashlib
 from collections.abc import Collection
 from typing import Any
 
-TEXT_ARGS = ("content", "target", "replacement")
+TEXT_ARGS = ("content", "target", "replacement", "pattern")
 MAX_PATH_CHARS = 512
 MAX_CHANGED_PATHS = 64
 PATH_EXTS = (".py", ".pyi", ".pyx", ".pxd", ".c", ".h", ".cc", ".cpp", ".rs", ".go", ".js", ".ts")
@@ -79,13 +79,15 @@ def is_public_path(value: Any, plain_ok: bool = True) -> bool:
     return plain or is_path_digest(value)
 
 
+INT_ARGS = ("target_index", "start_line", "end_line")  # published as they are
 PUBLIC_ARGS = {  # per action: the only argument keys a line may carry
     "list_dir": ("path",),
-    "read_file": ("path",),
+    "read_file": ("path", "start_line", "end_line"),
     "write_file": ("path", "content"),
     "edit_file": ("path", "target", "replacement"),
     "run_test": ("target_index",),
     "finish": ("status",),
+    "search": ("pattern", "path", "regex"),
 }
 
 
@@ -107,8 +109,10 @@ def public_args(
             out[key] = public_path(value, base_paths) if real else path_digest(value)
         elif key in TEXT_ARGS:
             out[key] = digest(value)
-        elif key == "target_index" and isinstance(value, int) and not isinstance(value, bool):
+        elif key in INT_ARGS and isinstance(value, int) and not isinstance(value, bool):
             out[key] = value
         elif key == "status" and value in ("DONE", "NEEDS_SPEC"):
+            out[key] = value
+        elif key == "regex" and isinstance(value, bool):
             out[key] = value
     return out

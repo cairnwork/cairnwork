@@ -5,7 +5,7 @@ parent_pre_cut_wall_seconds, refused at start when that leaves no more than the 
 import json
 
 import pytest
-from local_worker_fakes import BASE_SHA, TASK, cli_harness, lines, make_loop, reply
+from local_worker_fakes import BASE_SHA, TASK, cli_harness, lines, make_loop, reads, reply
 
 from experimental.local_worker import cli
 from experimental.local_worker.agent import RefusedStart, initial_messages
@@ -14,7 +14,7 @@ READ = reply("read_file", path="src/app.py")
 
 
 def _resume(tmp_path, offset, **limits):
-    loop, world, endpoint, clock = make_loop(tmp_path, [READ] * 50, **limits)
+    loop, world, endpoint, clock = make_loop(tmp_path, reads(50), **limits)
     start = clock.t
     out = loop.run(initial_messages(TASK), first_turn=3, elapsed_offset=offset)
     return out, world, endpoint, clock.t - start
@@ -95,3 +95,35 @@ def test_cli_resume_records_the_parents_seconds_and_runs_within_the_rest(harness
     assert line["wall_clock_seconds"] == pytest.approx(1200.0 + line["own_wall_seconds"])
     assert BASE_SHA == line["base_sha"]
     assert seen == [(1200.0, 1800.0)]  # the loop's clock starts 1200 s in: 600 s are left
+
+
+def test_a_no_cut_parent_resumes_from_turn_0_with_the_whole_budget(harness, capsys, monkeypatch):
+    # NO_CUT parent (it never changed the tree): turn 0 is a legal cut, its prefix is the system
+    # prompt and the task, and the resume gets (almost) the full wall budget (A/B design, #88).
+    run, out = harness
+    assert run([READ, READ, reply("finish", status="DONE")], "run") == 0
+    [parent] = lines(out)
+    assert parent["first_edit_cut"]["cut_status"] == "NO_CUT"
+    tr = str(out / "private" / parent["episode_id"] / "transcript.json")
+    capsys.readouterr()
+    assert run([], "resume", "--parent-transcript", tr) == 2  # no cut: a turn must be named
+    assert "pass --cut-turn" in capsys.readouterr().err
+    data = json.loads(open(tr).read())
+    prefix, turn, start = cli.resume_prefix(data, 0)
+    first_reply = data["turns"][0]["assistant_msg_index"]
+    assert prefix == data["messages"][:first_reply] and turn == 0 and start < 1.0
+    assert [m["role"] for m in prefix] == ["system", "user"]  # system prompt and task, no reply
+    seen = []
+    real = cli.AgentLoop.run
+
+    def spy(self, messages, **kw):
+        seen.append((list(messages), kw["first_turn"], kw["elapsed_offset"]))
+        return real(self, messages, **kw)
+
+    monkeypatch.setattr(cli.AgentLoop, "run", spy)
+    done = [reply("finish", status="DONE")]
+    assert run(done, "resume", "--parent-transcript", tr, "--cut-turn", "0") == 0
+    line = lines(out)[1]
+    pre = line["parent_pre_cut_wall_seconds"]  # the parent's published (rounded) turn-0 start
+    assert line["resume_cut_turn_index"] == 0 and pre == pytest.approx(start, abs=1e-3)
+    assert seen == [(prefix, 0, pre)]  # the clock: whole budget less ~0 s

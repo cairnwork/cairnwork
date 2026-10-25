@@ -110,7 +110,7 @@ def test_a_non_string_call_id_is_a_protocol_error(tmp_path):
 
 
 def test_an_unexpected_error_is_recorded_and_cleaned_up(tmp_path, monkeypatch):
-    def boom(call: Any, n: int) -> Any:
+    def boom(call: Any, n: int, tools: Any) -> Any:
         raise LookupError("unexpected")
 
     monkeypatch.setattr(agent, "decode_call", boom)

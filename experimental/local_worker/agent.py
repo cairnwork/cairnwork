@@ -21,18 +21,23 @@ and nothing runs past start + max_wall_seconds.
 ``run_tests`` takes no free-form arguments: it runs ``pytest -q --tb=short -- <targets>`` over the
 task's declared public test targets, or the one the model picks by ``target_index``.
 
-Once the loop starts, ``run`` never raises: a reply that breaks the tool-call structure
-(agent_protocol.ProtocolError) and any unexpected error end the episode as a recorded ERROR_ABORT,
-and the cleanup (sweep, numstat) always runs, in a ``finally``. The first SIGTERM/SIGINT (cli.py
-installs ``interrupt``) stops the loop as "interrupted"; later ones are only counted
-(``late_signals``, in the private transcript); a SystemExit is handed to the caller to re-raise
-after the line is written (review of #239, NB8). A call the model can repair
-(agent_protocol.BadCall: an unknown tool, a missing or extra argument) is an invalid_tool_call.
+Guards (guards.py, every number a Limits field, ADDENDUM_05 defaults): the 5th identical call in
+a row on an unchanged tree is not run and ends the episode (REPEAT_LIMIT; a not-run hint at an
+earlier count exists but is off by default); a call the model can repair (an
+agent_protocol.BadCall) is a recoverable invalid_tool_call turn, and 6 in a row end it
+(INVALID_TOOL_CALL_LIMIT), while a reply that breaks the tool-call structure (a ProtocolError)
+aborts (ERROR_ABORT, protocol_error); a request whose prompt and output budget would not fit the
+context window is never sent (CONTEXT_LIMIT). read_file serves a range or a page (reading.py).
+
+Once the loop starts, ``run`` never raises: an endpoint, transport, isolation or unexpected error
+ends the episode as a recorded ERROR_ABORT, and the cleanup (sweep, numstat) always runs, in a
+``finally``. The first SIGTERM/SIGINT (cli.py installs ``interrupt``) stops the loop as
+"interrupted"; later ones are only counted (``late_signals``, in the private transcript); a
+SystemExit is handed to the caller to re-raise after the line is written (review of #239, NB8).
 """
 
 from __future__ import annotations
 
-import json
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta, timezone
@@ -41,26 +46,32 @@ from typing import Any
 from experimental.local_worker.agent_protocol import (
     NUDGE,
     RUN_TESTS_ARGS,
-    SYSTEM_PROMPT,
-    TOOL_SCHEMAS,
     BadCall,
     ProtocolError,
+    call_key,
     decode_call,
     render,
+    system_prompt,
+    tool_names,
+    tool_schemas,
 )
 from experimental.local_worker.endpoint import (
     Endpoint,
+    EndpointContextLimit,
     EndpointError,
     EndpointTimeout,
     first_message,
     parse_usage,
 )
 from experimental.local_worker.episode import LoopOutcome, TurnLog
-from experimental.local_worker.gitstate import TreeState, parse_numstat, parse_tracked
+from experimental.local_worker.gitstate import TreeState, parse_tracked
 from experimental.local_worker.gitstate import parse_status as _parse_status
+from experimental.local_worker.guards import REPEAT_STOP, GuardMixin, RepeatGuard, tree_changed
+from experimental.local_worker.loop_cleanup import CleanupMixin
 from experimental.local_worker.loop_config import Limits as Limits  # re-exported
 from experimental.local_worker.loop_config import RefusedStart as RefusedStart  # re-exported
 from experimental.local_worker.loop_config import Settings, Task
+from experimental.local_worker.reading import page
 from experimental.local_worker.tools import (
     ToolCall,
     ToolDeadline,
@@ -69,6 +80,7 @@ from experimental.local_worker.tools import (
 )
 
 UTC8 = timezone(timedelta(hours=8))  # spec §2: timestamps in UTC+8
+GUARD_STOPS = {"REPEAT_LIMIT": "repeat_stop_at", "INVALID_TOOL_CALL_LIMIT": "invalid_call_limit"}
 
 
 class _StatusUnavailable(RuntimeError):
@@ -83,13 +95,13 @@ _ABORT_CAUSES = (  # checked in order; any other Exception is an internal_error
 )
 
 
-def initial_messages(task: Task) -> list[dict]:
+def initial_messages(task: Task, search: bool = True) -> list[dict]:
     targets = "\n".join(f"{i}: {t}" for i, t in enumerate(task.public_tests))
     user = f"{task.prompt}\n\nPublic test targets (run_tests target_index):\n{targets}"
-    return [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": user}]
+    return [{"role": "system", "content": system_prompt(search)}, {"role": "user", "content": user}]
 
 
-class AgentLoop:
+class AgentLoop(CleanupMixin, GuardMixin):
     def __init__(
         self,
         tools: WorkerTools,
@@ -103,6 +115,7 @@ class AgentLoop:
         self.limits = settings.limits
         self.clock, self.now = clock, now
         tools.clock, tools.write_scope = clock, settings.write_scope  # deadlines on this clock
+        tools.max_output_bytes = settings.limits.max_output_bytes  # the frozen output cap
         self.abort_detail: str | None = None
         self.interruptible = True  # NB8 (review of #239): see interrupt and _stopped
         self.late_signals = 0
@@ -111,6 +124,14 @@ class AgentLoop:
         self._start = 0.0
         self._offset = 0.0
         self._final = float("inf")  # start + max_wall_seconds: nothing runs past it
+        lim = settings.limits
+        self._tools = tool_names(settings.search_tool)
+        self._repeat = RepeatGuard(
+            lim.repeat_hint_at, lim.repeat_stop_at, lim.repeat_requires_unchanged_tree
+        )
+        self._invalid = 0  # consecutive invalid_tool_call turns
+        self._known: tuple[int, int] | None = None  # (messages sent, their exact prompt tokens)
+        self._tree: TreeState | None = None  # the last observed tree
 
     def _elapsed(self) -> float:
         """Seconds on the logical episode clock (a resume starts at the parent's pre-cut time):
@@ -169,6 +190,7 @@ class AgentLoop:
             raise RefusedStart("checkout is not a clean git tree at its base")
         if expected_base is not None and base.head != expected_base:
             raise RefusedStart(f"checkout HEAD {base.head} is not the pinned base {expected_base}")
+        self._tree = base
         started = self.now().astimezone(UTC8).isoformat()
         out = LoopOutcome(base=base, base_paths=self._base_paths(), started_at=started)
         pending: BaseException | None = None  # what stopped the loop, until _stopped records it
@@ -206,6 +228,9 @@ class AgentLoop:
         if isinstance(exc, (EndpointTimeout, TimeoutError)):
             out.exit_reason, out.timed_out, out.limit_hit = "TIMEOUT", True, "max_wall_seconds"
             return
+        if isinstance(exc, EndpointContextLimit):  # the server refused the prompt's size
+            out.exit_reason, out.limit_hit = "CONTEXT_LIMIT", "context_window_http_400"
+            return
         if isinstance(exc, Exception):
             cause = next((c for kind, c in _ABORT_CAUSES if isinstance(exc, kind)), None)
             self._abort(out, cause or "internal_error", exc)
@@ -234,6 +259,10 @@ class AgentLoop:
             out.turns.append(log)  # tool ran) leaves it in out.turns (Codex review of PR #248)
             finished = self._step(log, messages, deadline)
             log.t_end, self._open = self._own(), None
+            if finished in GUARD_STOPS:
+                self.interruptible = False
+                out.exit_reason, out.limit_hit = finished, GUARD_STOPS[finished]
+                return
             if finished is not None:  # _step already cleared interruptible
                 out.exit_reason, out.needs_spec = "COMPLETED", finished == "NEEDS_SPEC"
                 return
@@ -246,22 +275,18 @@ class AgentLoop:
             return "TURN_LIMIT", "max_steps"
         if self.clock() >= deadline:
             return "TIMEOUT", "max_wall_seconds"
-        if last is None:
-            return None
-        prompt, completion, _ = last.tokens
-        if prompt is not None and completion is not None:
+        prompt, completion, _ = last.tokens if last is not None else (None, None, None)
+        if prompt is not None and completion is not None:  # without usage: the guard decides
             if prompt + completion >= self.limits.context_cap:
                 return "TURN_LIMIT", "context_cap"
-        elif len(json.dumps(messages)) // 2 >= self.limits.context_cap:
-            return "TURN_LIMIT", "context_cap_bytes_estimate"  # no usage: 2 bytes/token, early
-        return None
+        return self._context_stop(messages, deadline)
 
     def _payload(self, messages: list[dict]) -> dict:
         s = self.settings
         payload = {
             "model": s.model,
             "messages": messages,
-            "tools": TOOL_SCHEMAS,
+            "tools": tool_schemas(s.search_tool),
             "tool_choice": "auto",
             "parallel_tool_calls": False,
             "temperature": s.temperature,
@@ -272,10 +297,14 @@ class AgentLoop:
         return payload
 
     def _step(self, log: TurnLog, messages: list[dict], deadline: float) -> str | None:
-        """One turn; returns the finish status when the model finished, else None."""
+        """One turn; returns how the episode ends (the finish status, or a guard's exit reason in
+        GUARD_STOPS), else None."""
+        sent = len(messages)
         resp = self.endpoint.chat(self._payload(messages), deadline)
         *tokens, log.usage_status = parse_usage(resp)
         log.tokens = (tokens[0], tokens[1], tokens[2])
+        if tokens[0] is not None:
+            self._known = (sent, tokens[0])
         log.usage_raw, model = resp.get("usage"), resp.get("model")
         log.server_model = model if isinstance(model, str) else None
         msg = first_message(resp)
@@ -284,30 +313,25 @@ class AgentLoop:
         messages.append(assistant)
         log.assistant_msg_index = len(messages) - 1
         if not calls:
+            self._repeat.next(None)
+            self._invalid = 0
             messages.append({"role": "user", "content": NUDGE})
             return None
-        if not isinstance(calls, list) or not all(isinstance(c, dict) for c in calls):
-            log.action_type, log.error_category = "invalid_tool_call", "PROTOCOL_ERROR"
-            raise ProtocolError("tool_calls is not a list of objects")
-        assistant["tool_calls"] = calls[:1]  # extra calls in one reply are dropped, never run
-        log.extra_tool_calls_ignored = len(calls) - 1
         try:
-            name, args = decode_call(calls[0], len(self.task.public_tests))
-        except ProtocolError:
+            if not isinstance(calls, list) or not all(isinstance(c, dict) for c in calls):
+                raise ProtocolError("tool_calls is not a list of objects")
+            log.extra_tool_calls_ignored = len(calls) - 1  # dropped, never run
+            name, args = decode_call(calls[0], len(self.task.public_tests), self._tools)
+        except ProtocolError:  # a model outcome: ERROR_ABORT protocol_error (ADDENDUM_05)
             log.action_type, log.error_category = "invalid_tool_call", "PROTOCOL_ERROR"
             raise
         except BadCall as exc:
-            name, args, bad = "", {}, exc
-        else:
-            bad = None
-        # One id for the assistant's call and the tool reply, also for a BadCall (review of
-        # #239, NB7); decode_call already refused an id that is not a string.
+            return self._invalid_call(log, messages, assistant, calls, exc)
+        self._invalid = 0
+        # One id for the assistant's call and the tool reply (review of #239, NB7); decode_call
+        # already refused an id that is not a string.
         call = dict(calls[0], id=calls[0].get("id") or f"call_{log.index}")
         assistant["tool_calls"] = [call]
-        if bad is not None:
-            log.action_type, log.error_category = "invalid_tool_call", "INVALID_CALL"
-            messages.append({"role": "tool", "tool_call_id": call["id"], "content": str(bad)})
-            return None
         if name == "finish":  # no interrupt once a turn is a finish: it can only be COMPLETED
             self.interruptible = False  # (review of PR #248, W1); a signal is only counted now
             log.action_type, log.tool_args = name, args
@@ -315,20 +339,31 @@ class AgentLoop:
             return args["status"]
         log.action_type = "run_test" if name == "run_tests" else name  # the spec's action name
         log.tool_args = args
-        text = self._execute(log, name, args, deadline)
+        verdict = self._repeat.next(call_key(call))
+        if verdict == "run":
+            text = self._execute(log, name, args, deadline)
+        else:  # not run: the result would not change (a stop's text is never sent)
+            log.error_category = "REPEATED"
+            text = self._repeat.hint(self._tools) if verdict == "hint" else REPEAT_STOP
         messages.append({"role": "tool", "tool_call_id": call["id"], "content": text})
-        return None
+        return "REPEAT_LIMIT" if verdict == "stop" else None
 
     def _dispatch(self, name: str, args: dict) -> ToolCall:
         t = self.tools
         if name == "list_dir":
             return t.list_dir(args["path"])
-        if name == "read_file":
-            return t.read_file(args["path"])
+        if name == "read_file":  # the range or page: sliced here, after the wrapper (reading.py)
+            lo, hi, lim = args.get("start_line"), args.get("end_line"), self.limits
+            call = t.read_file(args["path"], lo, hi)
+            return page(
+                call, lo, hi, lim.read_page_lines, lim.read_page_bytes, lim.max_output_bytes
+            )
         if name == "write_file":
             return t.write_file(args["path"], args["content"])
         if name == "edit_file":
             return t.edit_file(args["path"], args["target"], args["replacement"])
+        if name == "search":
+            return t.search(args["pattern"], args.get("path", "."), args.get("regex", False))
         index = args.get("target_index")
         targets = self.task.public_tests if index is None else (self.task.public_tests[index],)
         return t.run_tests([*RUN_TESTS_ARGS, *targets])
@@ -357,44 +392,6 @@ class AgentLoop:
         log.tree = self.observe()
         if not log.tree.observed:
             raise _StatusUnavailable(f"git status failed after turn {log.index}")
+        self._repeat.last_changed = tree_changed(self._tree, log.tree)
+        self._tree = log.tree
         return render(call)
-
-    def _cleanup(self, out: LoopOutcome) -> None:
-        """Sweep, numstat and the last tree, as far as they get: whatever stops them (even
-        SystemExit) leaves cleanup "failed" and the line still gets written."""
-        try:
-            self._cleanup_steps(out)
-        except BaseException as exc:  # noqa: BLE001 - the caller re-raises it after the line
-            out.cleanup = "failed"
-            self.abort_detail = self.abort_detail or f"cleanup: {type(exc).__name__}: {exc}"
-            if not isinstance(exc, Exception):
-                self.deferred = self.deferred or exc
-
-    def _cleanup_steps(self, out: LoopOutcome) -> None:
-        try:
-            self._step_deadline()
-            sweep = self.tools.sweep()
-            self._step_deadline()
-            stat = self.tools.numstat()
-        except (WorkerIsolationError, ToolDeadline) as exc:
-            out.cleanup = "failed"
-            self.abort_detail = self.abort_detail or f"cleanup: {exc}"
-            return
-        whole = stat.exit_code == 0 and stat.capture_complete  # a capped count is no count
-        out.patch = parse_numstat(stat.raw) if whole else None
-        out.cleanup = "ok" if sweep.exit_code == 0 and out.patch is not None else "failed"
-        self._observe_last(out)
-
-    def _observe_last(self, out: LoopOutcome) -> None:
-        """The run stopped after a tool started, before its tree was observed: observe it now, after
-        the sweep (nothing else ran since); else it stays unobserved. The turn ends when this try
-        ends: its processes ran until the sweep, so a limit before that is null (Codex, PR #248)."""
-        last = out.turns[-1] if out.turns else None
-        if last is None or not last.tool_ran or (last.tree is not None and last.tree.observed):
-            return
-        try:
-            last.tree = self.observe()
-        except (WorkerIsolationError, ToolDeadline):
-            pass
-        finally:
-            last.t_end = self._own()

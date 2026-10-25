@@ -151,8 +151,13 @@ def _check_tool_args(turn: dict, where: str, plain_paths: bool) -> None:
         elif key == "status":
             if value not in ("DONE", "NEEDS_SPEC"):
                 raise SchemaError(f"{where}.status {value!r}")
+        elif key == "regex":
+            if not isinstance(value, bool):
+                raise SchemaError(f"{where}.regex must be true or false")
         elif not isinstance(value, int) or isinstance(value, bool) or value < 0:
             raise SchemaError(f"{where}.{key} must be a non-negative integer")
+        elif key in ("start_line", "end_line") and value < 1:
+            raise SchemaError(f"{where}.{key} must be a line number (>= 1)")
 
 
 def _check_turns(turns: list, plain_paths: bool) -> None:

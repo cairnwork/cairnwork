@@ -22,10 +22,39 @@ class Limits:
     tool_cap_seconds: float = 300.0
     cleanup_reserve_seconds: float = 60.0
     max_completion_tokens: int = 4096
+    # The robustness guards (guards.py); every one is frozen in the manifest with the limits.
+    # Defaults: Nori's ADDENDUM_05 (hint off, stop at 5 with an unchanged tree, window 65536).
+    context_window: int = 65536  # the server's window: prompt + max_completion_tokens must fit
+    repeat_hint_at: int | None = None  # identical calls from this count are not run (None: off)
+    repeat_stop_at: int = 5  # at this count of identical calls the episode ends (REPEAT_LIMIT)
+    repeat_requires_unchanged_tree: bool = True  # count a repeat only if the tree did not change
+    invalid_call_limit: int = 6  # consecutive invalid tool calls that end it (INVALID_..._LIMIT)
+    # read_file paging (reading.py), ADDENDUM_06: 400 lines or 16000 bytes, whichever comes first
+    read_page_lines: int | None = 400  # a read without a range shows this many lines (None: all)
+    read_page_bytes: int | None = (
+        16000  # and a page at most this many bytes (needs read_page_lines)
+    )
+    # every tool's output as the model sees it (run_tests, search, list_dir, read_file beyond the
+    # page): head and tail within this many bytes (tools.DEFAULT_MAX_OUTPUT_BYTES)
+    max_output_bytes: int = 20_000
 
     def __post_init__(self) -> None:
         if self.step_seconds < 1.0:
             raise ValueError(f"cleanup_reserve_seconds must be >= {3 * (KILL_GRACE_SECONDS + 1)}")
+        if self.repeat_stop_at < 2 or self.invalid_call_limit < 1:
+            raise ValueError("repeat_stop_at must be >= 2 and invalid_call_limit >= 1")
+        hint = self.repeat_hint_at
+        if hint is not None and not 2 <= hint < self.repeat_stop_at:
+            raise ValueError("repeat_hint_at must be off or in [2, repeat_stop_at)")
+        if self.max_completion_tokens >= self.context_window:
+            raise ValueError("max_completion_tokens must be below context_window")
+        lines, size = self.read_page_lines, self.read_page_bytes
+        if (lines is not None and lines < 1) or (size is not None and size < 1):
+            raise ValueError("read_page_lines and read_page_bytes must be off or >= 1")
+        if size is not None and lines is None:
+            raise ValueError("read_page_bytes needs read_page_lines (paging on)")
+        if self.max_output_bytes < 2:
+            raise ValueError("max_output_bytes must be >= 2")
 
     @property
     def step_seconds(self) -> float:
@@ -64,6 +93,7 @@ class Settings:
     temperature: float = 0.0
     # write_file/edit_file only under these repo-relative entries (write_scope.py); None: anywhere
     write_scope: tuple[str, ...] | None = None
+    search_tool: bool = True  # offer the read-only search tool (agent_protocol.SEARCH_SCHEMA)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "write_scope", normalize(self.write_scope))
