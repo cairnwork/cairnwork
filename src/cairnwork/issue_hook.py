@@ -107,9 +107,13 @@ def post_verified(intake, github, clone: Path, status) -> bool:
 
 
 def _names_hook(path: Path) -> bool:
-    """Whether the (now unreadable) config sets a hook path; an explicit null does not count."""
+    """Whether the (now unreadable) config may set a hook path; an explicit null does not count.
+    No file names none; one that is there but cannot be read may name one, so the step is then
+    not done (#63, Codex r2)."""
     try:
         text = path.read_text(errors="replace")
-    except OSError:
+    except FileNotFoundError:
         return False
+    except OSError:
+        return True
     return re.search(r'"post_verified_hook"\s*:\s*"', text) is not None

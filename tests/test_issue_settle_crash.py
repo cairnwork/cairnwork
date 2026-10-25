@@ -157,7 +157,7 @@ def _raises(*_args, **_kwargs):
     raise KeyError("post_verified_hook_seconds")
 
 
-@pytest.mark.parametrize("why", ["hook-raised", "config-unreadable"])
+@pytest.mark.parametrize("why", ["hook-raised", "config-unreadable", "config-unopenable"])
 def test_a_hook_skipped_by_an_error_stays_owed(setup, monkeypatch, tmp_path, why):  # noqa: F811
     """An error that skips the hook step (alerted, never a settle result) keeps the marker, so a
     later pass runs the hook; once it has run the marker goes."""
@@ -172,7 +172,11 @@ def test_a_hook_skipped_by_an_error_stays_owed(setup, monkeypatch, tmp_path, why
 
         def then_break(number, text):
             comment(number, text)
-            config.write_text(sound[:-1])
+            if why == "config-unreadable":
+                config.write_text(sound[:-1])  # still names the hook, no longer parses
+            else:  # cannot be read at all, so it may name one
+                config.unlink()
+                config.mkdir()
 
         github.comment = then_break
     assert runner.settle(setup["intake"], github, setup["clone"]) == [{"issue": 7, "pr": PR}]
@@ -182,6 +186,8 @@ def test_a_hook_skipped_by_an_error_stays_owed(setup, monkeypatch, tmp_path, why
     assert _hook_runs(setup) == [] and _owed(setup) == owed
     monkeypatch.setattr(issue_hook, "run_post_verified_hook", post_verified.run_post_verified_hook)
     github.comment = CrashingGitHub.comment.__get__(github)
+    if config.is_dir():
+        config.rmdir()
     config.write_text(sound)
     assert runner.settle(setup["intake"], github, setup["clone"]) == []  # result unchanged
     assert _hook_runs(setup) == [taken["task_id"]] and _owed(setup) == []
