@@ -194,6 +194,27 @@ def raise_if_worker_refused(status: dict, log_path) -> None:
         )
 
 
+OPERATION_ID = re.compile(r"agyop_[0-9a-f]{32}")
+STATUS_QUERY_SECONDS = 30
+
+
+def operation_model(dispatch: Dispatch, operation_id: object) -> object:
+    """``observed_model`` from the dispatcher's own record of the operation its WORKER_LAUNCH
+    receipt named (``<dispatcher> --status <id>`` prints that record as JSON). None on any
+    failure. The final status line does not carry the field."""
+    if not (isinstance(operation_id, str) and OPERATION_ID.fullmatch(operation_id)):
+        return None
+    try:
+        done = subprocess.run(  # noqa: S603 - the configured dispatcher, argv list, no shell
+            [dispatch.path, f"--status={operation_id}"], cwd="/", stdin=subprocess.DEVNULL,
+            capture_output=True, text=True, timeout=STATUS_QUERY_SECONDS, check=False,
+        )  # fmt: skip
+        record = json.loads(done.stdout) if done.returncode == 0 else {}
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    return record.get("observed_model") if isinstance(record, dict) else None
+
+
 def sweep_worker_run(dispatch: Dispatch, run_root: str) -> bool:
     """Kill the run's worker-account processes through the wrapper (the owner cannot
     signal another uid) and remove the run directory a killed dispatcher left behind.

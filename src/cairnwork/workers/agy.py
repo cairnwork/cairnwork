@@ -198,12 +198,20 @@ class AgyWorker:
 
     def provenance(self, reader) -> dict[str, str]:
         """Worker and requested model are Cairnwork's own config. The observed model is the
-        dispatcher's final status line, taken only with ``agy_run_as_user``: then the worker is
-        another uid and the line cannot be forged from inside the run. Else, or when the
-        dispatcher gave none, it is unknown."""
+        dispatcher's own record of the operation its launch receipt named (``--status``), or
+        its final status line if that carries the field. Taken only with ``agy_run_as_user``:
+        then the worker is another uid and cannot forge either. Else, or when the dispatcher
+        gave none, it is unknown."""
         dispatch, observed = self.dispatch, None
         if reader is not None and dispatch is not None and dispatch.run_as_user is not None:
             observed = reader.status().get("observed_model")
+            if observed is None:
+                found = agy_receipts.parse(reader.lines(), dispatch.run_as_user).attempts.values()
+                launches = [a.receipts.get(agy_receipts.LAUNCH) or {} for a in found]
+                if launches:
+                    observed = agy_dispatch.operation_model(
+                        dispatch, launches[-1].get("operation_id")
+                    )
         return provenance.make("agy", self.model, observed)
 
     def _await(self, process, copier, reader, attempt: str, log, log_path) -> None:

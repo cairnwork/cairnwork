@@ -81,3 +81,44 @@ def test_without_run_as_user_the_observed_model_is_not_trusted(tmp_path):
 
 def test_a_worker_with_no_record_leaves_all_three_unknown(tmp_path):
     assert AgyWorker().provenance(None)["observed_model"] == "unknown"
+
+
+OP = "agyop_" + "ab" * 16
+# the shape of `nexus-agy-dispatch --status <id>`: the whole operation record
+RECORD = {"schema": "nexus.agy_operation.v1", "operation_id": OP, "status": "COMPLETED",
+          "requested_model": "m-1", "resolved_model": "m-1",
+          "observed_model": "gemini-3.8-flash-high",
+          "account_alias_hash": "63ef3e58e241", "failure_kind": None}  # fmt: skip
+
+
+def _with_status_query(tmp_path, record, code=0, op=OP):
+    """A dispatcher that answers --status=<id> with ``record`` and otherwise replays a good run."""
+    run = good_run(ROOT).replace('"operation_id": null', f'"operation_id": "{op}"')
+    extra = (
+        "if any(a.startswith('--status=') for a in sys.argv):\n"
+        f"    print(json.dumps({record!r})); sys.exit({code})\n"
+        "open(os.path.join(os.path.dirname(sys.argv[0]), 'asked'), 'a').write('x')"
+    )
+    return _replaying(tmp_path, run, extra=extra)
+
+
+def _run_isolated(worker, workdir):
+    # the dispatcher script reads stdin first in the replay; the --status call has none
+    return worker.run(workdir, TASK)["observed_model"]
+
+
+def test_observed_model_comes_from_the_dispatcher_status_of_the_launch_operation(tmp_path):
+    worker, workdir, _ = _with_status_query(tmp_path, RECORD)
+    assert _run_isolated(worker, workdir) == "gemini-3.8-flash-high"
+
+
+@pytest.mark.parametrize("record,code", [({"status": "COMPLETED"}, 0), (RECORD, 1),
+                                         ({"observed_model": "bad name!"}, 0)])  # fmt: skip
+def test_a_status_without_a_usable_model_is_unknown(tmp_path, record, code):
+    worker, workdir, _ = _with_status_query(tmp_path, record, code)
+    assert _run_isolated(worker, workdir) == "unknown"
+
+
+def test_an_operation_id_that_is_not_an_operation_id_is_never_queried(tmp_path):
+    worker, workdir, _ = _with_status_query(tmp_path, RECORD, op="--evil")
+    assert _run_isolated(worker, workdir) == "unknown"
