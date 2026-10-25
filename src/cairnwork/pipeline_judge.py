@@ -60,11 +60,14 @@ def tests_with_teeth(task, specs, run_root, result, verifying) -> tuple[str, ...
 def judge_candidate(
     task, specs, digest, notary, run_root, result, test_files, verifying, reach,
     p2p: P2PPlan | None = None, binding: dict | None = None,
+    unless_passed: BaseUncomparable | None = None,
 ) -> None:  # fmt: skip
     """Verify result.candidate_commit and have Core notarise it; sets result.verified,
     result.reason and result.logs. Shared by the worker pipeline and ``verify_candidate``;
     reach(phase) records progress. A binding (verify_candidate only, #229) binds the verdict to
-    the tree that ran and to the binding's head instead of to result.candidate_commit."""
+    the tree that ran and to the binding's head instead of to result.candidate_commit.
+    ``unless_passed`` (verify_candidate only, #259): a failed base check, raised before Core is
+    asked when a verifier did not pass; when they all passed the candidate's own evidence stands."""
     judged = result.candidate_commit
     task_id = result.task_id
     reach("VERIFYING")
@@ -84,6 +87,8 @@ def judge_candidate(
         p2p_runs, result.p2p = run_plan(p2p, task, judged, run_root, result, verifying)
         runs += p2p_runs
     result.logs = [str(run.log_path) for run in runs]
+    if unless_passed is not None and not all(run.observation.passed for run in runs):
+        raise unless_passed
     spec = AcceptanceSpec(
         task_id,
         digest,
