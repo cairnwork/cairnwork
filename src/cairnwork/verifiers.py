@@ -6,7 +6,9 @@ Anything else is rejected before it runs, and nothing goes through a shell.
 
 Each run happens in a new clone of the candidate commit made from Cairnwork's repository (never
 in the worker's clone), with a minimal environment (no GIT_*, no inherited credentials, HOME and
-TMPDIR inside the run directory, bytecode and the pytest cache disabled) and a timeout. A
+TMPDIR inside the run directory, bytecode and the pytest cache disabled) and a timeout. Bytecode a
+test still writes (py_compile) goes to a per-run cache prefix in TMPDIR, which must hold nothing a
+candidate could use to replace a protected input (pycache_guard.py). A
 verifier passes only if it exits 0 and, at the end, the checkout matches the candidate tree: a
 final comparison (treecompare.py) of paths, bytes, symlink targets and the owner-execute bit. It
 does not cover the top-level .git (the verifier's scratch: never used by the owner afterwards),
@@ -66,6 +68,7 @@ from cairnwork.account_checkout import checkout_differences, make_account_checko
 from cairnwork.account_checkout import remove_checkout as _remove_checkout
 from cairnwork.confined import ATTEMPT_ENV, MAX_LOG_BYTES, RUN_TOKEN_VAR
 from cairnwork.core_request import VerifierObservation
+from cairnwork.pycache_guard import PYCACHE_DIR, forged_bytecode
 from cairnwork.reasons import why_not_passed
 from cairnwork.verifier_account import VerifierAccount, VerifierAccountError, lock_wait_seconds
 from cairnwork.verifier_exec import (  # low-level run primitives, split out for the 400-line cap
@@ -270,6 +273,7 @@ def _prepare_run(private: Path, ini: Path, ini_text: bytes, channel=None):
         HOME=str(home),
         TMPDIR=str(tmp),
         PYTHONDONTWRITEBYTECODE="1",
+        PYTHONPYCACHEPREFIX=str(tmp / PYCACHE_DIR),  # bytecode a test writes: pycache_guard.py
         PYTHONNOUSERSITE="1",
         PYTEST_DISABLE_PLUGIN_AUTOLOAD="1",
         PYTHONPATH=str(guard),
@@ -340,9 +344,10 @@ def _run_one_in(
         _write_new(log_path, b"no sandbox backend available: verifier not executed\n")
         returncode, timed_out, survivors = None, False, 0
     mutated = checkout_differences(repo, candidate_commit, checkout, before, account, python)
+    forged = forged_bytecode(tmp / PYCACHE_DIR, checkout, (checkout.parent, run_dir), spec.targets)
     verdict = channel.read() if channel else report_guard.read_verdict(verdict_path, verdict_nonce)
     ran = profile is not None and verdict.ran
-    clean = not timed_out and not mutated and survivors == 0
+    clean = not timed_out and not mutated and survivors == 0 and not forged
     too_big = log_path.stat().st_size > MAX_LOG_BYTES
     clean = clean and not too_big and not verdict.too_big
     passed = profile is not None and returncode == 0 and clean and ran
@@ -352,7 +357,7 @@ def _run_one_in(
     why = "" if passed else why_not_passed(
         ran_sandboxed=profile is not None, returncode=returncode, timed_out=timed_out,
         mutated=mutated, survivors=survivors, log_too_big=too_big, tests_ran=ran,
-        report_too_big=verdict.too_big,
+        report_too_big=verdict.too_big, forged=forged,
     )  # fmt: skip
     _remove_scratch((home, tmp), account)
     digest = _record_digest(
@@ -364,6 +369,7 @@ def _run_one_in(
         returncode=returncode,
         timed_out=timed_out,
         mutated=mutated,
+        **({"forged_bytecode": list(forged)} if forged else {}),
         tests_passed=ran,
         survivors=survivors,
         log_sha256=_file_sha256(log_path),

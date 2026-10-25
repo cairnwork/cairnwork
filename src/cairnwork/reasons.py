@@ -42,7 +42,7 @@ def verdict_reason(verified: bool, verdict, recorded) -> str:
 
 def why_not_passed(
     *, ran_sandboxed: bool, returncode, timed_out: bool, mutated, survivors: int,
-    log_too_big: bool, tests_ran: bool, report_too_big: bool = False,
+    log_too_big: bool, tests_ran: bool, report_too_big: bool = False, forged=(),
 ) -> str:  # fmt: skip
     """The causes that made a run fail, ``""`` if none (then the run passed)."""
     causes = []
@@ -52,6 +52,10 @@ def why_not_passed(
         causes.append("timed out")
     if mutated:
         causes.append(f"checkout changed ({_names(mutated)})")
+    if forged:  # pycache_guard.py: bytecode in the run's cache prefix the run may not supply
+        causes.append(
+            f"FORGED_BYTECODE: bytecode cache holds code the run may not supply ({_names(forged)})"
+        )
     if survivors:
         causes.append(
             f"{survivors} process(es) outlived the run, or the process list was unreadable"
