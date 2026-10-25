@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from cairnwork.gitcmd import OID, GitCommandError, run_git
+from cairnwork.provenance import trailers
 from cairnwork.reasons import _names
 from cairnwork.workspace import ATTEMPT_REF_PREFIX
 
@@ -292,7 +293,7 @@ def overlay_tree(
 
 def lay_tests_over(
     repo: Path, candidate: str, test_commit: str, paths: tuple[str, ...], attempt_id: str,
-    run_root: Path,
+    run_root: Path, provenance: dict | None = None,
 ) -> str:  # fmt: skip
     """Commit the test files of test_commit on top of candidate; return the new commit."""
     index = Path(run_root) / f"{attempt_id}.tests.index"
@@ -300,7 +301,7 @@ def lay_tests_over(
         raise TestCommitRejected("TEST_OVERLAY_FAILED", f"{index} already exists")
     try:
         tree = overlay_tree(repo, candidate, test_commit, paths, index)
-        message = f"Cairnwork attempt {attempt_id}: tests from {test_commit}"
+        message = f"Cairnwork attempt {attempt_id}: tests from {test_commit}{trailers(provenance)}"
         head = run_git(repo, *_IDENTITY, "commit-tree", tree, "-p", candidate, "-m", message)
         head = head.strip()
         run_git(repo, "update-ref", f"{ATTEMPT_REF_PREFIX}{attempt_id}-tested", head)

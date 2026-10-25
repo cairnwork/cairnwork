@@ -12,6 +12,7 @@ from test_issue_runner import (
 )
 
 import cairnwork.issue_runner as runner
+from cairnwork import provenance
 from cairnwork.intake import Intake
 from cairnwork.issue_publish import refusal_code, require_bot_gh
 
@@ -125,6 +126,18 @@ def test_a_draft_pr_body_has_only_validated_fields(setup, monkeypatch):
     branch, title, body = github.prs[0]
     assert title == "Cairnwork: fix for #7 (Refs #7)" and "fix x" not in body
     assert commit in body and branch.endswith(f"-a{'1' * 16}")
+    assert "Claude" not in body and "Worker: unknown\nRequested model: unknown" in body
+
+
+def test_a_pr_body_reports_the_commit_trailers(setup, monkeypatch):
+    github = FakeGitHub([issue()])
+    taken = runner.take(setup["intake"], github, setup["clone"])[0]
+    message = "candidate" + provenance.trailers(provenance.make("agy", "m-1", "m-2"))
+    commit = commit_change(setup["clone"], {"src/calc.py": "x = 2\n"}, message=message)
+    monkeypatch.setattr(Intake, "status", _completed(setup, taken, commit))
+    monkeypatch.setattr(runner, "_git", _git_without_credentials)
+    runner.settle(setup["intake"], github, setup["clone"])
+    assert "Worker: agy\nRequested model: m-1\nObserved model: m-2\n" in github.prs[0][2]
 
 
 def _settle_with(setup, monkeypatch, commit, **changes):

@@ -32,6 +32,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
+from cairnwork import provenance
 from cairnwork.confined import ATTEMPT_ENV, copy_capped, sweep_marked
 from cairnwork.workers import agy_dispatch, agy_receipts
 
@@ -128,7 +129,7 @@ class AgyWorker:
                 return f"agy_run_as_user {user} is the verifier account (uid {uid})"
         return ""
 
-    def run(self, workdir: Path, task) -> None:
+    def run(self, workdir: Path, task) -> dict[str, str]:
         dispatch = self.dispatch
         binary = shutil.which(self.agy) if dispatch is None else None
         if dispatch is None:
@@ -183,6 +184,17 @@ class AgyWorker:
         copier = threading.Thread(target=copy_capped, args=(process.stdout, log), daemon=True)
         copier.start()
         self._await(process, copier, reader, workdir.name, log, log_path)
+        return self.provenance(reader)
+
+    def provenance(self, reader) -> dict[str, str]:
+        """Worker and requested model are Cairnwork's own config. The observed model is the
+        dispatcher's final status line, taken only with ``agy_run_as_user``: then the worker is
+        another uid and the line cannot be forged from inside the run. Else, or when the
+        dispatcher gave none, it is unknown."""
+        dispatch, observed = self.dispatch, None
+        if reader is not None and dispatch is not None and dispatch.run_as_user is not None:
+            observed = reader.status().get("observed_model")
+        return provenance.make("agy", self.model, observed)
 
     def _await(self, process, copier, reader, attempt: str, log, log_path) -> None:
         dispatch = self.dispatch

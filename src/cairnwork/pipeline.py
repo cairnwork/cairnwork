@@ -295,13 +295,17 @@ def _attempt(task, specs, digest, notary, worker, run_root, result, steps, verif
     steps.reach("WORKER_STARTED")
     try:
         try:
-            worker.run(attempt.path, task)
+            provenance = worker.run(attempt.path, task)  # None from a worker with no record
         except Exception as exc:  # noqa: BLE001 - any worker failure is a failed attempt
             result.reason = f"WORKER_FAILED: {type(exc).__name__}: {exc}"
             return
         try:
             candidate = snapshot_candidate(
-                task.repo, attempt, task.allowed_files, allow_deletions=task.allow_deletions
+                task.repo,
+                attempt,
+                task.allowed_files,
+                allow_deletions=task.allow_deletions,
+                provenance=provenance,
             )
         except CandidateRejected as exc:
             result.reason = str(exc)
@@ -314,7 +318,13 @@ def _attempt(task, specs, digest, notary, worker, run_root, result, steps, verif
                 with base_stage(*verifying):  # an account failure here: no evidence (#234)
                     test_files = tests_with_teeth(task, specs, run_root, result, verifying)
                     judged = lay_tests_over(
-                        task.repo, judged, task.test_commit, test_files, result.attempt_id, run_root
+                        task.repo,
+                        judged,
+                        task.test_commit,
+                        test_files,
+                        result.attempt_id,
+                        run_root,
+                        provenance,
                     )
                     plan = p2p_for(task, specs, test_files, run_root, result, verifying)
             except TestCommitRejected as exc:

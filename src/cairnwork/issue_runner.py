@@ -52,6 +52,7 @@ from cairnwork.lineage import verify_origin as _verify_origin
 from cairnwork.ownership import OwnershipError, OwnershipUnknown
 from cairnwork.pipeline import TaskRejected
 from cairnwork.post_verified import alert, run_post_verified_hook
+from cairnwork.provenance import parse as parse_provenance
 from cairnwork.workspace import ATTEMPT_ID
 
 QUEUE, RUNNING, FAILED_LABEL, DONE, NEEDS_FIX = (
@@ -285,7 +286,8 @@ def _open_pr(intake: Intake, github: GitHub, clone: Path, number: int, status) -
     helper = f"!{shlex.quote(github.gh)} auth git-credential"
     _git(clone, "-c", "credential.helper=", "-c", f"credential.helper={helper}", "push",
          "origin", f"{commit}:refs/heads/{branch}", timeout=NETWORK_TIMEOUT_SECONDS)  # fmt: skip
-    body = pr_body(number, task_id, attempt, commit)
+    seen = parse_provenance(_git(clone, "show", "-s", "--format=%B", commit))
+    body = pr_body(number, task_id, attempt, commit, seen)
     return github.draft_pr(branch, f"Cairnwork: fix for #{number} (Refs #{number})", body)
 
 
