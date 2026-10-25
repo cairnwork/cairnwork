@@ -15,7 +15,7 @@ from test_recovery_leftovers import _routable
 
 import cairnwork.confined as confined
 import cairnwork.recovery as recovery
-from cairnwork import route, takeover, unswept
+from cairnwork import proc_names, route, takeover, unswept
 from cairnwork.confined import UNLISTED, Sweep
 from cairnwork.ownership import OWNER, DuplicateLogicalTask, OwnershipLedger, TakeoverRefused
 from cairnwork.pipeline import TaskSpec, run_task
@@ -136,7 +136,7 @@ def test_a_refusal_names_the_processes_that_keep_the_fence(tmp_path, monkeypatch
     which processes keep it (pids and commands) and the operator can act on them."""
     ledger, task_id = _failed_task(tmp_path, account="cw-worker")
     _sweeps(monkeypatch, Sweep(True, account=2, pids=(41, 42)))
-    monkeypatch.setattr(confined, "_names", lambda pids: {41: "ssh-agent"})
+    monkeypatch.setattr(proc_names, "_names", lambda pids: {41: "ssh-agent"})
     with pytest.raises(TakeoverRefused, match=r"WORKER_ACCOUNT_BUSY: .* 2 process"):
         takeover.supersede(ledger, task_id)
     refusal = (ledger.unswept_attempt(task_id) or unswept.Mark("", "", "")).refusal

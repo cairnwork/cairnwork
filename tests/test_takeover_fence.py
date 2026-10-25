@@ -184,6 +184,18 @@ def test_no_journaled_attempt_counts_only_if_the_journal_predates_the_task(
     assert held is not None and held.refusal.startswith("LEGACY_ATTEMPT_UNKNOWN")
 
 
+def test_a_legacy_task_whose_bound_request_is_missing_is_refused(tmp_path, monkeypatch):
+    """#244 review SHOULD-FIX: without requests/<task>.json the bind time is unknown, so even
+    a journal older than everything does not prove that nothing ran."""
+    path, journal = _legacy_ledger(tmp_path)
+    ledger = OwnershipLedger(path)
+    calls = _sweeps(monkeypatch, UNLISTED)
+    request = tmp_path / "requests" / "task-n.json"  # never written
+    with pytest.raises(TakeoverRefused, match="LEGACY_ATTEMPT_UNKNOWN: no journaled attempt"):
+        takeover.supersede(ledger, "task-n", journal=journal, request=request)
+    assert ledger.get(task_id="task-n").status == "FAILED" and not calls
+
+
 def test_intake_refuses_a_legacy_task_when_the_journal_is_missing(tmp_path, monkeypatch):
     state = tmp_path / "state"
     state.mkdir()

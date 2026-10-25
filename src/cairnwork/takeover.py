@@ -12,8 +12,8 @@ exit 2 of route) with the reason's code (``Sweep.problem``) and records the reas
 ``status``. There is no override: fail closed, run it again. A task without a mark supersedes
 exactly as before.
 
-A refusal names what keeps the fence (``confined.describe``: pids and command names), so the
-operator can stop those processes or wait for them, then run the takeover again.
+A refusal names what keeps the fence (``proc_names.describe``: pids and sanitised command
+names), so the operator can stop those processes or wait for them, then run the takeover again.
 
 A LEGACY mark (made at the ledger migration; the attempt is unknown to the ledger) needs the
 journal: every attempt it names for the task is swept, with ``account`` (the state's configured
@@ -31,9 +31,10 @@ from pathlib import Path
 from typing import NoReturn
 
 from cairnwork import unswept
-from cairnwork.confined import ATTEMPT_ENV, Sweep, confirm_gone, describe, sweep_marked
+from cairnwork.confined import ATTEMPT_ENV, Sweep, confirm_gone, sweep_marked
 from cairnwork.journal import Journal
 from cairnwork.ownership import OwnershipLedger, OwnershipRecord, TakeoverRefused
+from cairnwork.proc_names import describe
 
 
 def supersede(

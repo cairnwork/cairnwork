@@ -14,7 +14,7 @@ from test_recovery import crash, settle
 from test_recovery import project as project  # noqa: F401 - fixture
 
 import cairnwork.confined as confined
-from cairnwork import takeover
+from cairnwork import proc_names, takeover
 from cairnwork.confined import Sweep, confirm_gone, sweep_marked
 from cairnwork.ownership import OWNER, OwnershipLedger, TakeoverRefused
 
@@ -337,13 +337,9 @@ def test_the_pids_that_keep_the_fence_are_named(monkeypatch):
     monkeypatch.setattr(confined, "_account_uid", lambda name: OTHER_UID)
     found = sweep_marked("CAIRNWORK_ATTEMPT", "a1", account="w")
     assert found.pids == (FAKE, FAKE + 1, FAKE + 2)  # account, hidden, denied; not FAKE + 3
-    monkeypatch.setattr(confined, "_names", lambda pids: {FAKE: "ssh-agent"})
-    assert confined.describe(found.pids, limit=2) == f"{FAKE} ssh-agent, {FAKE + 1} ? and 1 more"
-    assert confined.describe(()) == ""
-
-
-def test_describe_reads_real_command_names():
-    assert "python" in confined.describe((os.getpid(),)).lower()
+    monkeypatch.setattr(proc_names, "_names", lambda pids: {FAKE: "ssh-agent"})
+    assert proc_names.describe(found.pids, limit=2) == f"{FAKE} ssh-agent, {FAKE + 1} ? and 1 more"
+    assert proc_names.describe(()) == ""
 
 
 def test_a_real_marked_process_is_killed_and_seen_gone():

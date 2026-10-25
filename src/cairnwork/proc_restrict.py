@@ -3,10 +3,12 @@
 Under ``hidepid=1`` other users' process details cannot be read; under ``hidepid=2`` (or
 ``invisible``, ``noaccess``, ``ptraceable``) their directories are not even listed. A sweep that
 must see a worker account's processes then cannot tell "idle" from "hidden", so it fails closed
-(confined.sweep_marked: UNLISTED with this reason). hidepid never hides the caller's own
-processes, so a same-user sweep is unaffected. A ``gid=`` exemption is not trusted: any hidepid
-other than 0/off counts as restricted. When the mount options cannot be read, a probe decides:
-PID 1 is always running, so a /proc that lists itself but not PID 1's status is restricted.
+(confined.sweep_marked: not listed, with this reason). hidepid never hides the caller's own
+processes; a same-user sweep still reads their owners through the /proc directory and a
+signal-0 probe (confined._hidden_owner), so it is not refused for hidepid. A ``gid=`` exemption
+is not trusted: any hidepid other than 0/off counts as restricted. Mount options that cannot be
+read (no mountinfo, or no /proc mount in it) count as restricted too: no probe can tell, e.g.,
+a PID namespace whose pid 1 is the owner's own process from an open /proc.
 """
 
 from __future__ import annotations
@@ -14,21 +16,17 @@ from __future__ import annotations
 _OPEN = frozenset({"0", "off"})
 
 
-def restriction(mountinfo: str = "/proc/self/mountinfo", proc: str = "/proc") -> str:
+def restriction(mountinfo: str = "/proc/self/mountinfo") -> str:
     """Why other users' processes may be hidden (e.g. "hidepid=2 on /proc"); empty if none."""
     try:
         with open(mountinfo) as handle:
             options = _proc_options(handle.read())
     except OSError:
         options = None
-    if options is not None:
-        hidden = [o for o in options if o.startswith("hidepid=") and o[8:] not in _OPEN]
-        return f"{hidden[-1]} on /proc" if hidden else ""
-    try:
-        with open(f"{proc}/1/status"):
-            return ""
-    except OSError:
-        return "pid 1 not visible in /proc (hidepid?)"
+    if options is None:
+        return "mount options of /proc unreadable"
+    hidden = [o for o in options if o.startswith("hidepid=") and o[8:] not in _OPEN]
+    return f"{hidden[-1]} on /proc" if hidden else ""
 
 
 def _proc_options(text: str) -> list[str] | None:

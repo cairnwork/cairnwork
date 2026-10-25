@@ -147,12 +147,9 @@ def sweep_marked(
     processes = _processes_with_environment()
     if processes is None or (account and theirs is None):
         return UNLISTED
-    hidden_by = _restricted() if theirs is not None else ""  # own processes are never hidden
-    if hidden_by:
-        return Sweep(False, restricted=hidden_by)
     mine, me = os.getuid(), os.getpid()
     rows = [r for r in processes if r[0] != me and (skip_group is None or r[1] != skip_group)]
-    held = [r[0] for r in rows if theirs is not None and r[2] == theirs]
+    held = [r[0] for r in rows if theirs is not None and r[2] in (theirs, FOREIGN)]
     ours = [r for r in rows if r[2] == mine and r[2] != theirs]  # another user's: not ours
     # Kill what the listing shows marked before re-reading the hidden ones: the re-read waits,
     # and a listed pid may meanwhile be reused by an unrelated process (#244 NIT).
@@ -162,7 +159,10 @@ def sweep_marked(
     killed, denied = killed + late_killed, denied + late_denied
     unreadable = [r[0] for r in hidden if r[3] is None]
     pids = tuple(sorted({*killed, *denied, *unreadable, *held}))
-    return Sweep(True, len(killed), len(denied), len(unreadable), len(held), pids)
+    # the owner's own marked processes are killed above even when the account's may be hidden
+    hidden_by = _restricted() if theirs is not None else ""  # hidepid never hides one's own
+    return Sweep(not hidden_by, len(killed), len(denied), len(unreadable), len(held), pids,
+                 hidden_by)  # fmt: skip
 
 
 def _kill_marked(rows, marker: str) -> tuple[list[int], list[int]]:
@@ -179,39 +179,6 @@ def _kill_marked(rows, marker: str) -> tuple[list[int], list[int]]:
         except PermissionError:
             denied.append(pid)  # still running (NIT #244: a refused kill is a survivor)
     return killed, denied
-
-
-def describe(pids: tuple[int, ...], limit: int = 20) -> str:
-    """The pids and command names that keep a takeover fence, for the operator (#244), e.g.
-    ``123 ssh-agent, 456 python3``. A name that cannot be read is "?"; past ``limit`` only the
-    number of the others is given."""
-    names = _names(pids[:limit]) if pids else {}
-    shown = ", ".join(f"{pid} {names.get(pid, '?')}" for pid in pids[:limit])
-    return shown + (f" and {len(pids) - limit} more" if len(pids) > limit else "")
-
-
-def _names(pids: tuple[int, ...]) -> dict[int, str]:
-    if sys.platform.startswith("linux"):
-        found = {}
-        for pid in pids:
-            try:
-                with open(f"/proc/{pid}/comm") as handle:
-                    found[pid] = handle.read().strip()
-            except OSError:
-                continue
-        return found
-    try:
-        done = subprocess.run(  # noqa: S603 - fixed argv, pids are integers
-            ["/bin/ps", "-o", "pid=,comm=", "-p", ",".join(map(str, pids))],
-            capture_output=True,
-            text=True,
-            timeout=PS_TIMEOUT_SECONDS,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return {}
-    rows = (line.split(None, 1) for line in done.stdout.splitlines())
-    return {int(r[0]): r[1].strip() for r in rows if len(r) == 2 and r[0].isdigit()}
 
 
 def confirm_gone(first: Sweep, again: Callable[[], Sweep]) -> Sweep:
@@ -339,15 +306,46 @@ def _linux_processes(proc: str = "/proc"):
         except (FileNotFoundError, ProcessLookupError):
             continue  # gone
         except (OSError, ValueError, IndexError, StopIteration):
-            # owner unknown (e.g. hidepid=1): it may be one of ours, or the worker account's;
-            # no process group, so no skip_group can drop it (#244)
-            uid, pgid = os.getuid(), None
+            # status hidden (e.g. hidepid=1): no process group, so no skip_group drops it (#244)
+            try:
+                uid, pgid = _hidden_owner(base, int(name)), None
+            except (FileNotFoundError, ProcessLookupError):
+                continue  # gone
         try:
             environment = _linux_environment(base)
         except (FileNotFoundError, ProcessLookupError):
             continue  # gone
         rows.append((int(name), pgid, uid, environment))
     return rows
+
+
+FOREIGN = -1  # a process that is not the owner's, of a uid that cannot be told (_hidden_owner)
+
+
+def _hidden_owner(base: str, pid: int) -> int:
+    """The owner of a process whose status cannot be read (hidepid=1 hides other users'). Its
+    /proc directory belongs to its effective uid, or to root when it is not dumpable: then a
+    signal 0 tells one the owner may signal (its own: judged as the owner's) from one it may not
+    (FOREIGN: root's or any other user's, the worker account's included). A directory that
+    cannot be read either is judged as the owner's, so a hidden environment keeps it unreadable."""
+    mine = os.getuid()
+    try:
+        owner = _dir_owner(base)
+    except (FileNotFoundError, ProcessLookupError):
+        raise
+    except OSError:
+        return mine
+    if owner != 0 or mine == 0:
+        return owner
+    try:
+        os.kill(pid, 0)  # no signal is sent: only the permission is checked
+    except PermissionError:
+        return FOREIGN
+    return mine
+
+
+def _dir_owner(base: str) -> int:
+    return os.stat(base).st_uid
 
 
 def _linux_environment(base: str) -> set[str] | None:
