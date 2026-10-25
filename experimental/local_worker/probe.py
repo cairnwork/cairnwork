@@ -7,6 +7,7 @@ from __future__ import annotations
 import inspect
 import json
 import os
+from typing import TypeGuard
 
 MARK = "CANARY_PROBE "
 
@@ -53,6 +54,7 @@ _BODY = r"""
 import errno
 import json
 import os
+from typing import TypeGuard
 import pwd
 import signal
 import socket
@@ -178,7 +180,7 @@ def test_canary_probe():
 """
 
 
-def _well_formed(row: object) -> bool:
+def _well_formed(row: object) -> TypeGuard[dict]:
     if not isinstance(row, dict) or not isinstance(row.get("kind"), str):
         return False
     return row["kind"] == "identity" or (
@@ -198,15 +200,12 @@ def parse_rows(output: str) -> tuple[list[dict], int]:
             row = json.loads(line[len(MARK) :])
         except ValueError:
             row = None
-        first_identity = (
-            isinstance(row, dict)
-            and row.get("kind") == "identity"
-            and not any(r["kind"] == "identity" for r in rows)
-        )
-        if _well_formed(row) and (first_identity or row["kind"] != "identity"):  # one identity
-            rows.append(row)
-        else:
+        if not _well_formed(row):
             bad += 1
+        elif row["kind"] == "identity" and any(r["kind"] == "identity" for r in rows):
+            bad += 1  # a second identity row: the first must not win
+        else:
+            rows.append(row)
     return rows, bad
 
 
