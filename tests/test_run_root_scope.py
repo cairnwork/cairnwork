@@ -7,8 +7,10 @@ account records the lock and the removals.
 import contextlib
 import os
 import shutil
+import sqlite3
 from pathlib import Path
 
+import pytest
 from run_root_scope import own_attempt, own_run_names
 
 from cairnwork.journal import Journal
@@ -87,3 +89,9 @@ def test_own_attempt_reads_the_journal_keyed_by_the_generated_task_id(tmp_path):
     journal.record("task-90abfe7f", "a405d5d5a4f147e97", "DISPATCHED", "x")
     journal.record("task-90abfe7f", "a405d5d5a4f147e97", "WORKER_STARTED")
     assert own_attempt(tmp_path) == "a405d5d5a4f147e97"
+
+
+def test_own_attempt_reports_an_unreadable_journal_instead_of_waiting(tmp_path):
+    (tmp_path / "journal.sqlite").write_bytes(b"not a database, " * 64)
+    with pytest.raises(sqlite3.DatabaseError):
+        own_attempt(tmp_path)

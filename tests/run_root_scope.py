@@ -66,10 +66,12 @@ def own_attempt(state: Path) -> str | None:
     if not path.exists():
         return None
     try:
-        with contextlib.closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as conn:
+        with contextlib.closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as conn:
             row = conn.execute(
                 "SELECT attempt_id FROM attempt_journal ORDER BY seq DESC LIMIT 1"
             ).fetchone()
-    except sqlite3.Error:  # the driver is still creating it
-        return None
+    except sqlite3.OperationalError as error:  # the driver is still creating or writing it
+        if "no such table" in str(error) or "locked" in str(error):
+            return None
+        raise  # anything else is reported, not waited out until the caller's deadline
     return row[0] if row else None
