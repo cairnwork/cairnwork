@@ -17,7 +17,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from http.client import HTTPException
 from pathlib import Path
@@ -113,10 +113,12 @@ def _shown(value: object, pattern: re.Pattern[str], missing: str) -> str:
     return value if isinstance(value, str) and pattern.fullmatch(value) else "invalid"
 
 
-def _offline_result(facts: dict[str, Any], public_key: Path | None, repo: Path | None) -> str:
-    """Return VERIFIED, a failure code, or a note that the signature was not checked."""
+def _offline_result(
+    facts: dict[str, Any], public_key: Path | None, repo: Path | None
+) -> tuple[str, dict[str, str] | None]:
+    """Return (VERIFIED, assurance), a failure code, or signature not checked."""
     if public_key is None:
-        return "signature not checked by this step"
+        return "signature not checked by this step", None
     if repo is not None:
         result = verify_bundle(
             Path(facts["bundle"]),
@@ -124,13 +126,17 @@ def _offline_result(facts: dict[str, Any], public_key: Path | None, repo: Path |
             repo=repo,
             expected_candidate=facts["candidate"],
         )
-        return "VERIFIED" if result.ok else result.code
+        if result.ok:
+            return "VERIFIED", result.assurance
+        return result.code, None
     key = load_public_key_pem(public_key.read_bytes())
     outcome = verify_envelope(facts["envelope"], key)
-    return "VERIFIED, signature only" if outcome.ok else "SIGNATURE_INVALID"
+    return ("VERIFIED, signature only" if outcome.ok else "SIGNATURE_INVALID"), None
 
 
-def build_summary(facts: dict[str, Any], offline: str) -> str:
+def build_summary(
+    facts: dict[str, Any], offline: str, assurance: Mapping[str, Any] | None = None
+) -> str:
     """Render the markdown summary; every bundle-derived value is cleaned."""
     rows = [
         ("Candidate", facts["candidate"]),
@@ -140,6 +146,9 @@ def build_summary(facts: dict[str, Any], offline: str) -> str:
         ("Key id", facts["keyid"]),
         ("Offline verification", offline),
     ]
+    if assurance:
+        formatted = ", ".join(f"{k}={v}" for k, v in sorted(assurance.items()))
+        rows.append(("Assurance", formatted))
     lines = ["Informational attestation report. Not an enforcing check.", ""]
     lines += [f"- {label}: {_clean(value)}" for label, value in rows]
     lines += [
@@ -230,12 +239,12 @@ def post_check_run(
         return _fail("KEY_UNREADABLE", _clean(exc.strerror or "cannot read public key"))
     candidate = facts["candidate"]
     facts["bundle"] = Path(bundle_path)
-    offline = _offline_result(facts, public_key, repo)
+    offline, assurance = _offline_result(facts, public_key, repo)
     title = "Cairnwork attestation (informational)"
     if public_key is None:
         title = "Cairnwork attestation (informational, UNVERIFIED: signature not checked)"
     output = {"title": title, "summary": ""}
-    output["summary"] = build_summary(facts, offline)
+    output["summary"] = build_summary(facts, offline, assurance=assurance)
     payload: dict[str, Any] = {
         "name": _clean(name),
         "head_sha": candidate,
