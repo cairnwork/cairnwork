@@ -127,8 +127,8 @@ def subprocess_invoker(env: dict[str, str] | None = None) -> Invoker:
 
 
 class WorkerTools:
-    """list_dir / read_file / write_file / edit_file / run_tests / status / numstat / tracked, as
-    the worker.
+    """list_dir / read_file / write_file / edit_file / run_tests / status / digest / numstat /
+    tracked, as the worker.
 
     ``mode="worker"`` (the only mode an experiment may use) goes through ``sudo -n -u
     _cairnwork_worker`` and the installed wrapper. ``mode="direct"`` runs a wrapper copy as the
@@ -237,6 +237,11 @@ class WorkerTools:
     def tracked(self) -> ToolCall:
         """Fixed ``git ls-tree -r -t -z --name-only HEAD``: the base's paths, as the worker."""
         return self._call("tracked", "tracked", [], {})
+
+    def digest(self) -> ToolCall:
+        """Mode and blob id of every path that differs from HEAD, untracked and ignored files
+        included (gitstate.parse_digest), as the worker; only with a start allow-list (#261)."""
+        return self._call("digest", "digest", [], {})
 
     def numstat(self) -> ToolCall:
         """``PATCH <added> <removed> <binary_files_changed>`` against HEAD, untracked and ignored

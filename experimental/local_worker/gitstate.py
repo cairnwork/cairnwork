@@ -12,7 +12,7 @@ guessed into a tree or a count: it is reported as not observed.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -22,6 +22,10 @@ class TreeState:
     observed: bool
     head: str | None = None
     entries: tuple[str, ...] = ()
+    # #261, with a start allow-list only: the digest query's records (parse_digest), kept in
+    # memory for the start check, numstat and the cut's changed paths; the entries carry one
+    # "r <sha256> <root>" record per allowed root instead (base_check.compress)
+    digest: tuple[str, ...] = field(default=(), compare=False, repr=False)
 
     def paths(self) -> list[str]:
         return sorted({p for e in self.entries for p in _entry_paths(e)})
@@ -40,6 +44,10 @@ def _entry_paths(entry: str) -> list[str]:
         return [entry.split(" ", 10)[-1]]
     if kind == "x":
         return [entry[4:]]
+    if kind == "h":  # a digest record: "h <mode> <blob> <status> <path>" (parse_digest)
+        return [entry.split(" ", 4)[-1]]
+    if kind == "r":  # an allowed root's digest hash: "r <sha256> <root>" (base_check.compress)
+        return [entry.split(" ", 2)[-1]]
     return []
 
 
@@ -65,6 +73,26 @@ def parse_status(raw: bytes) -> TreeState:
             return TreeState(observed=False)  # not git porcelain: never guess a tree
         i += 1
     return TreeState(observed=True, head=head, entries=tuple(sorted(entries)))
+
+
+_OID = r"(?:[0-9a-f]{40}|[0-9a-f]{64})"
+_RAW = re.compile(rf":([0-7]{{6}}) ([0-7]{{6}}) ({_OID}) ({_OID}) ([ADMT])")
+
+
+def parse_digest(raw: bytes) -> tuple[str, ...] | None:
+    """The ``digest`` query (#261: ``git diff --cached --raw -z --no-abbrev HEAD`` of the tree
+    staged with every untracked and ignored file) as sorted ``h <new mode> <new blob> <status>
+    <path>`` records, one per path that differs from HEAD; None unless every record parses."""
+    fields = raw.decode("utf-8", errors="surrogateescape").split("\0")
+    if fields[-1] != "" or len(fields) % 2 == 0:
+        return None  # not NUL-terminated (pairs of meta and path, then the final empty field)
+    records = []
+    for meta, path in zip(fields[0:-1:2], fields[1:-1:2], strict=True):
+        m = _RAW.fullmatch(meta)
+        if m is None or not path:
+            return None
+        records.append(f"h {m.group(2)} {m.group(4)} {m.group(5)} {path}")
+    return tuple(sorted(records))
 
 
 _PATCH = re.compile(rb"PATCH (\d{1,18}) (\d{1,18}) (\d{1,18})\n")

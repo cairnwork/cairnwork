@@ -79,6 +79,7 @@ TOP_EXTRA: dict[str, tuple[Any, bool]] = {  # Plan v2 point 10 and the bindings
     "parent_pre_cut_turns_missing_usage": (INT, True),
 }
 OPTIONAL_TOP = "write_scope"  # absent (or null) without a write scope: lines before it are valid
+ALLOW_TOP = "allowed_base_changed_turns"  # #261: present exactly with a start allow-list
 VERIFICATION: dict[str, tuple[Any, bool]] = {
     "exit_reason": (STR, False),
     "patch_lines_added": (INT, True),
@@ -219,15 +220,25 @@ def _check_write_scope(scope: Any, plain_paths: bool) -> None:
             raise SchemaError(f"write_scope[{n}] is neither a canonical base path nor a digest")
 
 
+def _check_allowed_changed(count: Any, turns: int) -> None:
+    """``allowed_base_changed_turns``: a count of the line's turns (an int, not a bool)."""
+    if type(count) is not int or not 0 <= count <= turns:
+        raise SchemaError("allowed_base_changed_turns must be an int from 0 to the turn count")
+
+
 def validate_record(rec: Any) -> None:
     """Raise SchemaError unless ``rec`` is a complete, consistent corpus line. ``write_scope``
-    is the one optional key (OPTIONAL_TOP): a line without a write scope has none."""
+    and ``allowed_base_changed_turns`` (ALLOW_TOP, #261) are the optional keys: a line without
+    a write scope or a start allow-list has none."""
+    optional = (OPTIONAL_TOP, ALLOW_TOP)
     core = rec
-    if isinstance(rec, dict) and OPTIONAL_TOP in rec:
-        core = {k: v for k, v in rec.items() if k != OPTIONAL_TOP}
+    if isinstance(rec, dict) and any(k in rec for k in optional):
+        core = {k: v for k, v in rec.items() if k not in optional}
     check(core, {**TOP_SPEC, **TOP_EXTRA}, "record")
-    if core is not rec:
+    if OPTIONAL_TOP in rec:
         _check_write_scope(rec[OPTIONAL_TOP], rec["base_paths_observed"])
+    if ALLOW_TOP in rec:
+        _check_allowed_changed(rec[ALLOW_TOP], len(rec["turns"]))
     if rec["schema_version"] != SCHEMA_VERSION:
         raise SchemaError(f"schema_version {rec['schema_version']!r}")
     check(rec["verification"], VERIFICATION, "verification")

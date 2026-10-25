@@ -160,7 +160,35 @@ def _artifacts(tree: TreeState) -> set[str]:
     falls at the turn that planted it (or earlier, at a source file it later hides), and no
     rule a worker wrote can move first_source_edit later."""
     ignored = {e[2:] for e in tree.entries if e.startswith("! ") and not is_ignore_file(e[2:])}
-    return ignored | {e[4:] for e in tree.entries if e.startswith("x ")}
+    dirs = tuple(p for p in ignored if p.endswith("/"))  # an ignored directory, as "dir/"
+    # #261: an allowed root's hash (only with a start allow-list) and a digest path, when it is
+    # an ignored path or lies under an ignored directory, are no source edit either, as the
+    # directory's own entry is not; an ignore file still is
+    hidden = {
+        p
+        for e in tree.entries + tree.digest
+        if e.startswith(("r ", "h ")) and not is_ignore_file(p := tree_path(e))
+        if p in ignored or p.startswith(dirs)
+    }
+    return ignored | hidden | {e[4:] for e in tree.entries if e.startswith("x ")}
+
+
+def tree_path(entry: str) -> str:
+    return TreeState(observed=True, entries=(entry,)).paths()[0]
+
+
+def _changed(tree: TreeState, base: TreeState) -> list[str]:
+    """The paths whose entries differ (with a clean base: every path of the tree). With a start
+    allow-list (#261) its base entries are no change while they stay as they were, and a root
+    whose hash changed stands for the paths under it whose digest records differ, when known."""
+    moved = TreeState(observed=True, entries=tuple(set(tree.entries) ^ set(base.entries)))
+    detail = {tree_path(r) for r in set(tree.digest) ^ set(base.digest)}
+    paths = set()
+    for p in moved.paths():
+        mine = {d for d in detail if d == p.rstrip("/") or d.startswith(p.rstrip("/") + "/")}
+        is_root = any(e.startswith("r ") and tree_path(e) == p for e in moved.entries)
+        paths |= mine if is_root and mine else {p}
+    return sorted(paths) or tree.paths()
 
 
 def _first_change(turns: list[TurnLog], base: TreeState, source_only: bool):
@@ -176,7 +204,7 @@ def _first_change(turns: list[TurnLog], base: TreeState, source_only: bool):
         if not changed_tree:
             continue
         assert turn.tree is not None
-        changed = [p for p in turn.tree.paths() if p not in base.paths()] or turn.tree.paths()
+        changed = _changed(turn.tree, base)
         if source_only:
             changed = [p for p in changed if is_source_path(p) and p not in _artifacts(turn.tree)]
         if changed or not source_only:

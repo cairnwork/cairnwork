@@ -12,6 +12,8 @@ from experimental.local_worker.tools import ToolDeadline, WorkerIsolationError, 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from experimental.local_worker.loop_config import Settings
+
 
 class CleanupMixin:
     tools: WorkerTools
@@ -20,6 +22,8 @@ class CleanupMixin:
     _own: Callable[[], float]
     _step_deadline: Callable[[], None]
     observe: Callable[[], TreeState]
+    settings: Settings
+    _cleanup_allowed: Callable[[LoopOutcome, bool, tuple[int, int, int] | None], None]
 
     def _cleanup(self, out: LoopOutcome) -> None:
         """Sweep, numstat and the last tree, as far as they get: whatever stops them (even
@@ -43,6 +47,10 @@ class CleanupMixin:
             self.abort_detail = self.abort_detail or f"cleanup: {exc}"
             return
         whole = stat.exit_code == 0 and stat.capture_complete  # a capped count is no count
+        if self.settings.untracked_allow.active:  # #261: numstat less the base, a fresh tree
+            raw = parse_numstat(stat.raw) if whole else None
+            self._cleanup_allowed(out, sweep.exit_code == 0, raw)
+            return
         out.patch = parse_numstat(stat.raw) if whole else None
         out.cleanup = "ok" if sweep.exit_code == 0 and out.patch is not None else "failed"
         self._observe_last(out)
