@@ -108,7 +108,8 @@ def harness_version() -> str:
 # The installed wrapper before #261 added the digest query (the copy at 937ccbc). A run without a
 # start allow-list never calls digest and uses that wrapper's actions unchanged, so it may still
 # be installed for such runs until the Owner reinstalls; a run with an allow-list needs this
-# repository's copy.
+# repository's copy (verify_canary require_current). TRANSITION ONLY: remove this constant, and
+# the branch that reads it, once the wrapper with digest is installed (review of PR #263, m2).
 PREVIOUS_WRAPPER_SHA256 = "51602299d211a4ce6f2b2a731c15b819657b22ee3d65db14172fb0a5029262ae"
 
 

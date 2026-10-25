@@ -121,9 +121,18 @@ def _resume(rec: dict) -> None:
         raise SchemaError("a plan belongs to a resume run")
 
 
+def _allowed_changed(rec: dict) -> None:
+    """#261: a turn that saw an allowed base file changed saw the tree differ from base, so the
+    line has a cut (or an unobserved turn before one). Negative patch counts are refused for
+    every line by the type check (finite and non-negative)."""
+    if rec.get("allowed_base_changed_turns") and rec["first_edit_cut"]["cut_status"] == "NO_CUT":
+        raise SchemaError("allowed_base_changed_turns > 0 needs a first_edit_cut")
+
+
 def check_rules(rec: dict) -> None:
     """Every cross-field rule of a line whose types and key sets were already checked."""
     _vocabulary(rec)
+    _allowed_changed(rec)
     _times(rec)
     _termination(rec)
     _cut_900s(rec)

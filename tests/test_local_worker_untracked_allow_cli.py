@@ -3,16 +3,13 @@
 import hashlib
 import json
 import subprocess
-from datetime import UTC, datetime
-from pathlib import Path
 
 import local_worker_fakes
 import pytest
-from local_worker_allow_fakes import AllowWorld
+from local_worker_allow_fakes import AllowWorld, canary_report
 from local_worker_fakes import (
     NO_AUTO_MAINTENANCE,
     TAG,
-    canary_checks,
     cli_harness,
     lines,
     make_runs,
@@ -22,7 +19,6 @@ from local_worker_fakes import run_wrapper as run
 
 from experimental.local_worker import corpus_io
 from experimental.local_worker.base_check import compress
-from experimental.local_worker.canary import SCHEMA as CANARY_SCHEMA
 from experimental.local_worker.gitstate import TreeState, parse_digest, parse_status
 from experimental.local_worker.untracked_allow import UNTRACKED_ALLOW_RULE, build, roots
 
@@ -198,8 +194,8 @@ def test_the_digest_sees_inside_an_ignored_directory(runs):
     assert run(runs, "write", root, "data/x.dat", stdin=b"one\nTWO\n").returncode == 0
     after = _observe(runs, root)
     assert after.entries == base.entries  # the status alone does not see the write
-    hashed = compress(base.digest, roots(base))
-    assert compress(after.digest, roots(base)) != hashed  # the digest does
+    hashed = compress(base.digest, roots(base), base)
+    assert compress(after.digest, roots(base), after) != hashed  # the digest does
     assert list((runs / TAG / "q").iterdir()) == []  # its temp dir is removed
 
 
@@ -235,43 +231,22 @@ def test_a_tracked_change_inside_the_list_still_refuses(runs):
 
 
 # -- the canary binding: the pre-#261 wrapper serves runs without a list ------------------------
-def _canary_report(tmp_path, wrapper_bytes: bytes):
-    wrapper = tmp_path / "local-worker-tool"
-    wrapper.write_bytes(wrapper_bytes)
-    report = {
-        "schema": CANARY_SCHEMA,
-        "checks": canary_checks(),
-        "overall": "PASS",
-        "mode": "worker",
-        "wrapper": str(wrapper),
-        "wrapper_sha256": hashlib.sha256(wrapper_bytes).hexdigest(),
-        "host": "mini",
-        "finished_at": datetime.now(UTC).isoformat(),
-    }
-    data = json.dumps(report).encode()
-    path = tmp_path / "out" / "canary.json"
-    path.parent.mkdir(exist_ok=True)
-    path.write_bytes(data)
-    Path(str(path) + ".sha256").write_text(hashlib.sha256(data).hexdigest() + "  x\n")
-    return path, wrapper, tmp_path / "out"
-
-
 def test_the_previous_wrapper_is_accepted_only_without_a_list(tmp_path, monkeypatch):
     old = b"#!/bin/sh\n# the wrapper before the digest query\n"
     monkeypatch.setattr(corpus_io, "PREVIOUS_WRAPPER_SHA256", hashlib.sha256(old).hexdigest())
-    path, wrapper, out = _canary_report(tmp_path, old)
+    path, wrapper, out = canary_report(tmp_path, old)
     corpus_io.verify_canary(path, out, wrapper=wrapper, host="mini")
     with pytest.raises(corpus_io.InputRefused, match="differs from this repository"):
         corpus_io.verify_canary(path, out, wrapper=wrapper, host="mini", require_current=True)
 
 
 def test_the_current_wrapper_is_accepted_with_a_list(tmp_path):
-    path, wrapper, out = _canary_report(tmp_path, corpus_io.REPO_WRAPPER.read_bytes())
+    path, wrapper, out = canary_report(tmp_path, corpus_io.REPO_WRAPPER.read_bytes())
     corpus_io.verify_canary(path, out, wrapper=wrapper, host="mini", require_current=True)
 
 
 def test_another_wrapper_is_refused_either_way(tmp_path):
-    path, wrapper, out = _canary_report(tmp_path, b"#!/bin/sh\n")
+    path, wrapper, out = canary_report(tmp_path, b"#!/bin/sh\n")
     for strict in (False, True):
         with pytest.raises(corpus_io.InputRefused):
             corpus_io.verify_canary(path, out, wrapper=wrapper, host="mini", require_current=strict)

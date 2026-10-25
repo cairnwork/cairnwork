@@ -22,7 +22,12 @@ from typing import TYPE_CHECKING
 
 from experimental.local_worker.gitstate import TreeState, parse_digest, parse_numstat, parse_status
 from experimental.local_worker.loop_config import RefusedStart, Settings
-from experimental.local_worker.tools import ToolCall, WorkerTools
+from experimental.local_worker.tools import (
+    ToolCall,
+    ToolDeadline,
+    WorkerIsolationError,
+    WorkerTools,
+)
 from experimental.local_worker.untracked_allow import base_path, roots, under
 
 if TYPE_CHECKING:
@@ -40,14 +45,25 @@ def _whole(call: ToolCall) -> bool:
     return call.exit_code == 0 and call.capture_complete
 
 
-def compress(records: tuple[str, ...], allowed: tuple[str, ...]) -> tuple[str, ...]:
+def compress(
+    records: tuple[str, ...], allowed: tuple[str, ...], status: TreeState
+) -> tuple[str, ...]:
     """One ``r <sha256> <root>`` record per allowed root, hashing the digest records under it.
-    Records under no root are left out: such a path differs from HEAD, so the status lists it."""
+    A record under no root is left out only when ``status`` lists its path (or an ignored
+    directory above it); else it is kept as it is (Codex review of PR #263: status and digest
+    are two queries, and a path a surviving process created between them must still change the
+    tree, never be dropped)."""
     out = []
     for root in allowed:
         mine = "\0".join(r for r in records if under(base_path(r), root))
         sha = hashlib.sha256(mine.encode("utf-8", errors="surrogateescape")).hexdigest()
         out.append(f"r {sha} {root}")
+    seen = set(status.paths())
+    dirs = tuple(p for p in seen if p.endswith("/"))
+    for r in records:
+        p = base_path(r)
+        if not any(under(p, root) for root in allowed) and p not in seen and not p.startswith(dirs):
+            out.append(r)
     return tuple(out)
 
 
@@ -57,6 +73,9 @@ class BaseCheckMixin:
     _step_deadline: Callable[[], None]
     _base_patch: Patch | None = None  # the base's numstat, only with an allow-list
     _roots: tuple[str, ...] | None = None  # the allowed roots, known once the base is checked
+    _base: TreeState | None = None  # the checked base, only with an allow-list
+    abort_detail: str | None
+    _own: Callable[[], float]
 
     def observe(self) -> TreeState:
         """The worker's git status now (with an allow-list, the digest too, in the same step);
@@ -72,7 +91,7 @@ class BaseCheckMixin:
         records = parse_digest(call.raw) if _whole(call) else None
         if records is None:
             return TreeState(observed=False)
-        hashed = () if self._roots is None else compress(records, self._roots)
+        hashed = () if self._roots is None else compress(records, self._roots, tree)
         entries = tuple(sorted(tree.entries + hashed))
         return TreeState(observed=True, head=tree.head, entries=entries, digest=records)
 
@@ -89,7 +108,7 @@ class BaseCheckMixin:
         if not allow.active:
             return base
         self._roots = roots(base)
-        entries = tuple(sorted(base.entries + compress(base.digest, self._roots)))
+        entries = tuple(sorted(base.entries + compress(base.digest, self._roots, base)))
         base = replace(base, entries=entries)
         if allow.expected is not None and base.entries != allow.expected:
             raise RefusedStart(f"{NOT_CLEAN}: the base entries differ from the parent's base")
@@ -98,20 +117,52 @@ class BaseCheckMixin:
         self._base_patch = parse_numstat(call.raw) if _whole(call) else None
         if self._base_patch is None:
             raise RefusedStart("the base numstat was not observed")
+        self._base = base
         return base
 
-    def _own_patch(self, out: LoopOutcome, raw: Patch | None) -> Patch | None:
-        """``raw`` without an allow-list; with one, ``raw`` less the base's count, if the last
-        observed tree still has every base digest record (each allowed file unchanged; new
-        files may be added), else None: an allowed file's own lines and the worker's edit of it
-        cannot be told apart."""
-        if not self.settings.untracked_allow.active:
-            return raw
-        if raw is None or self._base_patch is None:
-            return None
+    def _cleanup_allowed(self, out: LoopOutcome, sweep_ok: bool, raw: Patch | None) -> None:
+        """The cleanup's last step with an allow-list (review of PR #263): observe the tree
+        fresh right after numstat (status and digest, even when the last turn was observed),
+        give it to the last turn that ran a tool if that turn was not observed or a surviving
+        process changed the tree since, and count numstat only from this observation."""
+        try:
+            fresh = self.observe()
+        except (WorkerIsolationError, ToolDeadline):
+            fresh = TreeState(observed=False)
         last = next((t for t in reversed(out.turns) if t.tool_ran), None)
-        tree = out.base if last is None else last.tree
-        if tree is None or not tree.observed or not set(out.base.digest) <= set(tree.digest):
+        seen = None if last is None else last.tree
+        if last is not None and (seen is None or not seen.observed):
+            last.tree, last.t_end = fresh, self._own()
+        elif last is not None and seen is not None and fresh.observed:
+            if fresh.entries != seen.entries:  # changed after the turn's own observation
+                last.tree = fresh
+        out.patch = self._own_patch(fresh, raw)
+        out.cleanup = "ok" if sweep_ok and out.patch is not None else "failed"
+        if raw is not None and out.patch is None:
+            self.abort_detail = self.abort_detail or "cleanup: an allowed base file changed"
+
+    def _own_patch(self, fresh: TreeState, raw: Patch | None) -> Patch | None:
+        """``raw`` less the base's count (the allowed files' lines), if ``fresh`` (observed just
+        after numstat) still has every base digest record (each allowed base file unchanged; new
+        files may be added) and no count is negative; else None: an allowed file's own lines and
+        the worker's edit of it cannot be told apart."""
+        base = self._base
+        if raw is None or self._base_patch is None or base is None or not fresh.observed:
             return None
-        added, removed, binary = (a - b for a, b in zip(raw, self._base_patch, strict=True))
-        return added, removed, binary
+        if not set(base.digest) <= set(fresh.digest):
+            return None
+        own = tuple(a - b for a, b in zip(raw, self._base_patch, strict=True))
+        if min(own) < 0:
+            return None
+        return own[0], own[1], own[2]
+
+    def _count_allowed(self, out: LoopOutcome) -> None:
+        """allowed_base_changed_turns: the turns whose observed tree lacks a base digest record
+        (an allowed base file changed or went); only with an allow-list."""
+        if self._base is None:
+            return
+        want = set(self._base.digest)
+        out.allowed_base_changed_turns = sum(
+            t.tree is not None and t.tree.observed and not want <= set(t.tree.digest)
+            for t in out.turns
+        )

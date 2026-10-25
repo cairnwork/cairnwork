@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
+from datetime import UTC, datetime
+from pathlib import Path
 
-from local_worker_fakes import World
+from local_worker_fakes import World, canary_checks
+
+from experimental.local_worker.canary import SCHEMA as CANARY_SCHEMA
 
 HARNESS = {"data/x.dat": "one\ntwo\n", "data/sub/y.dat": "y\n", "gen/fixture.json": "{}\n"}
 
@@ -57,3 +62,24 @@ class AllowWorld(World):
             out.append(f":{old} {mode} {'b' * 40 if p in self.base else '0' * 40} {blob} ")
             out[-1] += f"{status}\0{p}\0"
         return "".join(out).encode()
+
+
+def canary_report(tmp_path, wrapper_bytes: bytes):
+    wrapper = tmp_path / "local-worker-tool"
+    wrapper.write_bytes(wrapper_bytes)
+    report = {
+        "schema": CANARY_SCHEMA,
+        "checks": canary_checks(),
+        "overall": "PASS",
+        "mode": "worker",
+        "wrapper": str(wrapper),
+        "wrapper_sha256": hashlib.sha256(wrapper_bytes).hexdigest(),
+        "host": "mini",
+        "finished_at": datetime.now(UTC).isoformat(),
+    }
+    data = json.dumps(report).encode()
+    path = tmp_path / "out" / "canary.json"
+    path.parent.mkdir(exist_ok=True)
+    path.write_bytes(data)
+    Path(str(path) + ".sha256").write_text(hashlib.sha256(data).hexdigest() + "  x\n")
+    return path, wrapper, tmp_path / "out"

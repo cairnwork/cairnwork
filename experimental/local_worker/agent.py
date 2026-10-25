@@ -195,6 +195,7 @@ class AgentLoop(CleanupMixin, GuardMixin, BaseCheckMixin):
                 self._open.t_end = self._own()
             out.turns = [t for t in out.turns if t.assistant_msg_index >= 0]  # the model replied
             self._cleanup(out)
+            self._count_allowed(out)  # #261: only with a start allow-list
             out.ended_at = self.now().astimezone(UTC8).isoformat()
             out.wall_seconds = self._own()
         return out
