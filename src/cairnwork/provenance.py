@@ -13,6 +13,7 @@ import re
 UNKNOWN = "unknown"
 KEYS = (("worker", "Worker"), ("requested_model", "Requested-Model"),
         ("observed_model", "Observed-Model"))  # fmt: skip
+SUBJECT = "Cairnwork attempt "
 UNKNOWN3 = {key: UNKNOWN for key, _ in KEYS}
 VALUE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,79}")
 
@@ -33,22 +34,23 @@ def trailers(info: dict[str, str] | None) -> str:
 
 
 def parse(message: str) -> dict[str, str]:
-    """The three fields from a message in exactly the shape Cairnwork writes (``trailers``):
-    a non-empty subject, one empty line, then the three lines ``Worker: v``,
-    ``Requested-Model: v`` and ``Observed-Model: v`` in that order, and nothing after them but
-    the trailing newlines git adds. Any other shape (prose, an extra or repeated trailer, a
-    paragraph after them, CR, a blank line holding spaces, no subject) makes all three
-    unknown. This departs from git's trailer rules on purpose: nothing is normalised (CRLF
-    is not tolerated, Cairnwork never writes it), so a message is read only when it is
-    exactly ours. Each value still goes through ``clean``."""
-    lines = message.rstrip("\n").split("\n")
-    if len(lines) < 5 or lines[-4] != "" or not "".join(lines[:-4]).strip():
+    """The three fields from a message in exactly the shape Cairnwork writes (``trailers``,
+    after the subjects of snapshot.py and deferred_tests.py). Stripping trailing newlines
+    only (the ones git adds), it must be exactly five lines: a one-line subject that starts
+    with ``Cairnwork attempt `` (so never a trailer line), an empty line, then
+    ``Worker: v``, ``Requested-Model: v`` and ``Observed-Model: v`` in that order. Anything
+    else (a longer subject, a body paragraph, an earlier block, extra blank lines or
+    trailers, a trailer after, a blank line holding spaces) makes all three unknown, and so
+    does a CR anywhere. This departs from git's trailer rules on purpose: nothing is
+    normalised (CRLF included, Cairnwork never writes it), so a message is read only when it
+    is exactly ours. Each value still goes through ``clean``."""
+    if "\r" in message:
         return dict(UNKNOWN3)
-    block = lines[-3:]
-    if any("\r" in line for line in lines[-4:]):
+    lines = message.rstrip("\n").split("\n")
+    if len(lines) != 5 or not lines[0].startswith(SUBJECT) or lines[1] != "":
         return dict(UNKNOWN3)
     out: dict[str, str] = {}
-    for (key, label), line in zip(KEYS, block, strict=True):
+    for (key, label), line in zip(KEYS, lines[2:], strict=True):
         if not line.startswith(f"{label}: "):
             return dict(UNKNOWN3)
         out[key] = clean(line[len(label) + 2 :])

@@ -132,7 +132,7 @@ def test_a_draft_pr_body_has_only_validated_fields(setup, monkeypatch):
 def test_a_pr_body_reports_the_commit_trailers(setup, monkeypatch):
     github = FakeGitHub([issue()])
     taken = runner.take(setup["intake"], github, setup["clone"])[0]
-    message = "candidate" + provenance.trailers(provenance.make("agy", "m-1", "m-2"))
+    message = "Cairnwork attempt a1" + provenance.trailers(provenance.make("agy", "m-1", "m-2"))
     commit = commit_change(setup["clone"], {"src/calc.py": "x = 2\n"}, message=message)
     monkeypatch.setattr(Intake, "status", _completed(setup, taken, commit))
     monkeypatch.setattr(runner, "_git", _git_without_credentials)
@@ -226,7 +226,7 @@ def test_a_probe_that_hangs_is_refused(setup, tmp_path, monkeypatch):
 def test_the_pr_body_reads_the_notarised_commit_not_the_clones_head(setup, monkeypatch):
     github = FakeGitHub([issue()])
     taken = runner.take(setup["intake"], github, setup["clone"])[0]
-    message = "candidate" + provenance.trailers(provenance.make("agy", "m-1", "m-2"))
+    message = "Cairnwork attempt a1" + provenance.trailers(provenance.make("agy", "m-1", "m-2"))
     commit = commit_change(setup["clone"], {"src/calc.py": "x = 2\n"}, message=message)
     monkeypatch.setattr(Intake, "status", _completed(setup, taken, commit))
     commit_change(setup["clone"], {"docs/other.md": "later\n"}, message="HEAD moved on")

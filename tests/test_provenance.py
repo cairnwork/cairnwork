@@ -22,7 +22,8 @@ def test_trailers_round_trip_and_missing_values_are_unknown():
     info = provenance.make("agy", "gemini-3.8-flash-high", "gemini-3.8-flash")
     assert provenance.parse("Cairnwork attempt a1" + provenance.trailers(info)) == info
     assert provenance.parse("Cairnwork attempt a1") == UNKNOWN3
-    assert provenance.parse("x" + provenance.trailers(None)) == UNKNOWN3
+    assert provenance.parse("Cairnwork attempt a1" + provenance.trailers(None)) == UNKNOWN3
+    assert provenance.parse("x" + provenance.trailers(info)) == UNKNOWN3
     assert provenance.trailers(None).count("unknown") == 3
 
 
@@ -56,47 +57,56 @@ def test_a_commit_without_provenance_says_unknown_not_claude(repo, tmp_path):
     assert provenance.parse(git(repo, "show", "-s", "--format=%B", commit)) == UNKNOWN3
 
 
-GOOD = "Cairnwork attempt a1\n\nWorker: agy\nRequested-Model: m-1\nObserved-Model: m-2\n"
+H = "Cairnwork attempt a1"
+T = "Worker: agy\nRequested-Model: m-1\nObserved-Model: m-2"
+GOOD = f"{H}\n\n{T}\n"
 WANT = provenance.make("agy", "m-1", "m-2")
 
 
-def test_the_exact_shape_cairnwork_writes_is_read():
+def test_the_exact_shapes_cairnwork_writes_are_read():
     assert provenance.parse(GOOD) == WANT
     assert provenance.parse(GOOD.rstrip("\n")) == WANT
     assert provenance.parse(GOOD + "\n\n") == WANT  # only newlines may trail
-    assert provenance.parse("s1\ns2" + GOOD[GOOD.index("\n\n") :]) == WANT  # multi-line subject
+    tested = f"{H}: tests from {'a' * 40}\n\n{T}\n"  # deferred_tests.lay_tests_over
+    assert provenance.parse(tested) == WANT
 
 
 @pytest.mark.parametrize("message", [
-    "s\n\nsome prose\nWorker: agy\nRequested-Model: m-1\nObserved-Model: m-2\n",  # prose block
-    "s\n\nWorker: agy\nRequested-Model: m-1\nObserved-Model: m-2\n\nand then a paragraph\n",
+    f"{H}\n\nsome prose\n{T}\n",  # prose in the block
+    f"{H}\n\n{T}\n\nand then a paragraph\n",
+    f"{H}\n\nbody paragraph\n\n{T}\n",  # a body paragraph before the block
+    f"{H}\nmore subject\n\n{T}\n",  # multi-line subject
+    f"{H}\n\n\n{T}\n",  # extra blank line
+    f"Worker: claude\n\n{GOOD}",  # an earlier block
+    f"{H}\n\n{T}\n\n{T}\n",  # the block twice
     GOOD.replace("\n", "\r\n"),  # CRLF
-    "s\r\n\r\nWorker: agy\r\nRequested-Model: m-1\r\nObserved-Model: m-2\r\n",
-    "s\n\r\nWorker: agy\nRequested-Model: m-1\nObserved-Model: m-2\n",  # mixed endings
-    "s\n\nWorker: agy\r\nRequested-Model: m-1\nObserved-Model: m-2\n",
-    "s\n  \nWorker: agy\nRequested-Model: m-1\nObserved-Model: m-2\n",  # blank holds spaces
-    "\n\nWorker: agy\nRequested-Model: m-1\nObserved-Model: m-2\n",  # no subject
-    "Worker: agy\nRequested-Model: m-1\nObserved-Model: m-2\n",  # only trailers
-    "  \n\nWorker: agy\nRequested-Model: m-1\nObserved-Model: m-2\n",  # blank subject
+    f"{H}\r\n\n{T}\n",  # CR in the subject only
+    f"{H}\r\n\nWorker: agy\nRequested-Model: {'m' * 70}\nObserved-Model: {'n' * 70}\n",  # far
+    f"{H}\n\r\n{T}\n",  # mixed endings
+    f"{H}\n\n{T.replace(chr(10), chr(13) + chr(10), 1)}\n",
+    f"{H}\n  \n{T}\n",  # blank holds spaces
+    f"\n\n{T}\n",  # no subject
+    f"{T}\n",  # only trailers
+    f"  \n\n{T}\n",  # blank subject
+    f"s\n\n{T}\n",  # not a Cairnwork attempt subject
+    f"cairnwork attempt a1\n\n{T}\n",
+    f"Worker: agy\n\n{T}\n",  # a subject that is itself a trailer line
     GOOD + "Signed-off-by: x <x@y>\n",  # extra trailer after
     GOOD.replace("\nWorker", "\nSigned-off-by: x <x@y>\nWorker"),  # extra trailer before
-    "s\n\nRequested-Model: m-1\nWorker: agy\nObserved-Model: m-2\n",  # out of order
+    f"{H}\n\nRequested-Model: m-1\nWorker: agy\nObserved-Model: m-2\n",  # out of order
     GOOD + "Observed-Model: other\n",  # duplicate key
     GOOD + "  \n",  # only newlines may trail, not spaces
     GOOD.rstrip("\n") + "\r",
-    "s\n\nWorker: agy\nWorker: claude\nRequested-Model: m-1\nObserved-Model: m-2\n",
-    "s\n\nWorker: agy\nRequested-Model: m-1\n",  # missing key
+    f"{H}\n\nWorker: agy\nWorker: claude\nRequested-Model: m-1\nObserved-Model: m-2\n",
+    f"{H}\n\nWorker: agy\nRequested-Model: m-1\n",  # missing key
+    "",
 ])  # fmt: skip
 def test_any_other_shape_makes_all_three_unknown(message):
     assert provenance.parse(message) == UNKNOWN3
 
 
-def test_an_earlier_forged_block_does_not_change_the_final_one():
-    assert provenance.parse("Worker: claude\n\n" + GOOD) == WANT
-
-
 def test_trailing_whitespace_on_a_value_makes_that_value_unknown():
-    msg = "s\n\nWorker: agy \nRequested-Model: m-1\nObserved-Model: m-2\n"
+    msg = f"{H}\n\nWorker: agy \nRequested-Model: m-1\nObserved-Model: m-2\n"
     assert provenance.parse(msg) == {**WANT, "worker": "unknown"}
 
 
