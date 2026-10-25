@@ -8,6 +8,7 @@
   too, with the worker account it ran as, and that account is journaled at WORKER_STARTED.
 The sweep's answers are faked (no other account, no sudo)."""
 
+import os
 import sqlite3
 
 import pytest
@@ -133,8 +134,69 @@ def test_a_legacy_ledger_fences_every_failed_task(tmp_path, monkeypatch):
     _sweeps(monkeypatch, GONE)
     assert takeover.supersede(ledger, "task-f", journal=journal).status == "SUPERSEDED"
     calls = _sweeps(monkeypatch, UNLISTED)
-    assert takeover.supersede(ledger, "task-n", journal=journal).status == "SUPERSEDED"
-    assert not calls  # no attempt was ever journaled: nothing ran
+    with pytest.raises(TakeoverRefused, match="LEGACY_ATTEMPT_UNKNOWN"):  # no bound request
+        takeover.supersede(ledger, "task-n", journal=journal)
+    request = _bound_request(tmp_path, _first(journal) + 1)
+    assert takeover.supersede(ledger, "task-n", journal=journal, request=request).status == (
+        "SUPERSEDED"
+    )
+    assert not calls  # no attempt was journaled by a journal older than the task: nothing ran
+
+
+def _first(journal):
+    first = journal.first_at()
+    assert first is not None
+    return first.timestamp()
+
+
+def _bound_request(root, mtime):
+    """requests/<task>.json as intake stores it at the bind; its mtime is the bind time."""
+    path = root / "requests" / "task-n.json"
+    path.parent.mkdir(exist_ok=True)
+    path.write_text("{}")
+    os.utime(path, (mtime, mtime))
+    return path
+
+
+@pytest.mark.parametrize("journal_state", ["missing", "recreated", "same instant"])
+def test_no_journaled_attempt_counts_only_if_the_journal_predates_the_task(
+    tmp_path, monkeypatch, journal_state
+):
+    """#244 review NIT: a LEGACY task with no journaled attempt was released unswept even when
+    journal.sqlite was missing (opened again empty) or recreated after the task ran."""
+    path, journal = _legacy_ledger(tmp_path)
+    ledger = OwnershipLedger(path)
+    calls = _sweeps(monkeypatch, UNLISTED)
+    bound = _first(journal)
+    if journal_state == "missing":
+        (tmp_path / "journal.sqlite").unlink()
+        journal = Journal(tmp_path / "journal.sqlite")
+    elif journal_state == "recreated":
+        (tmp_path / "journal.sqlite").unlink()
+        journal = Journal(tmp_path / "journal.sqlite")
+        journal.record("task-x", "a9", "DISPATCHED", "")  # a later task, in the new journal
+        bound -= 3600  # task-n was bound (and may have run) before the new journal began
+    request = _bound_request(tmp_path, bound)  # "same instant": not shown older
+    with pytest.raises(TakeoverRefused, match="LEGACY_ATTEMPT_UNKNOWN: no journaled attempt"):
+        takeover.supersede(ledger, "task-n", journal=journal, request=request)
+    assert ledger.get(task_id="task-n").status == "FAILED" and not calls
+    held = ledger.unswept_attempt("task-n")
+    assert held is not None and held.refusal.startswith("LEGACY_ATTEMPT_UNKNOWN")
+
+
+def test_intake_refuses_a_legacy_task_when_the_journal_is_missing(tmp_path, monkeypatch):
+    state = tmp_path / "state"
+    state.mkdir()
+    path, journal = _legacy_ledger(tmp_path)
+    path.rename(state / "ownership.sqlite")
+    _bound_request(state, _first(journal) + 1)
+    monkeypatch.setattr(Intake, "config", lambda self: DEFAULT_CONFIG)
+    calls = _sweeps(monkeypatch, UNLISTED)
+    with pytest.raises(TakeoverRefused, match="LEGACY_ATTEMPT_UNKNOWN"):
+        Intake(state).supersede("task-n")  # no journal.sqlite: opened again, empty
+    (tmp_path / "journal.sqlite").rename(state / "journal.sqlite")
+    assert Intake(state).supersede("task-n")["status"] == "SUPERSEDED"
+    assert not calls
 
 
 def test_the_migration_runs_once(tmp_path):

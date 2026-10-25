@@ -292,6 +292,60 @@ def test_linux_rows_from_proc(tmp_path):
     assert confined._linux_processes(str(tmp_path / "missing")) is None
 
 
+@pytest.mark.skipif(ME == 0, reason="root reads every file")
+def test_a_process_whose_owner_cannot_be_read_is_never_counted_gone(tmp_path, monkeypatch):
+    """#244 review (Linux, hidepid=1): an unreadable status gave pgid -1, the default
+    skip_group, so the process was dropped and the sweep read as gone."""
+    marked = _proc(tmp_path, FAKE, ME, environ=b"CAIRNWORK_ATTEMPT=a1\0")
+    worker = _proc(tmp_path, FAKE + 1, OTHER_UID)  # the worker account's: nothing readable
+    unreadable = [marked / "status", worker / "status", worker / "environ"]
+    for path in unreadable:
+        path.chmod(0)
+    try:
+        rows = sorted(confined._linux_processes(str(tmp_path)) or [], key=lambda r: r[0])
+    finally:
+        for path in unreadable:
+            path.chmod(0o600)
+    assert [(r[0], r[1], r[2]) for r in rows] == [(FAKE, None, ME), (FAKE + 1, None, ME)]
+    killed = _table(monkeypatch, rows)
+    monkeypatch.setattr(confined, "_account_uid", lambda name: OTHER_UID)
+    found = sweep_marked("CAIRNWORK_ATTEMPT", "a1", account="w")
+    assert (found.killed, found.unreadable, found.gone) == (1, 1, False) and killed == [FAKE]
+    assert found.pids == (FAKE, FAKE + 1)
+    assert sweep_marked("CAIRNWORK_ATTEMPT", "a1", skip_group=-1).killed == 1  # not dropped
+
+
+def test_marked_processes_are_killed_before_hidden_ones_are_read_again(monkeypatch):
+    """#244 review NIT: the re-read of a hidden process waits, so the pids the listing shows
+    marked are killed first; a listed pid could otherwise be reused meanwhile."""
+    events = []
+    _table(monkeypatch, [_marked(), (FAKE + 1, FAKE + 1, ME, None)], kill=events.append)
+
+    def reread(pids):
+        events.append(("reread", sorted(pids)))
+        return {FAKE + 1: {"CAIRNWORK_ATTEMPT=a1"}}
+
+    monkeypatch.setattr(confined, "_reread", reread)
+    found = sweep_marked("CAIRNWORK_ATTEMPT", "a1")
+    assert events == [FAKE, ("reread", [FAKE + 1]), FAKE + 1]
+    assert (found.killed, found.unreadable, found.pids) == (2, 0, (FAKE, FAKE + 1))
+
+
+def test_the_pids_that_keep_the_fence_are_named(monkeypatch):
+    rows = [(FAKE, FAKE, OTHER_UID, None), (FAKE + 1, FAKE + 1, ME, None), _marked(FAKE + 2)]
+    _table(monkeypatch, rows + [(FAKE + 3, FAKE + 3, ME, {"A=1"})], kill=_denied)
+    monkeypatch.setattr(confined, "_account_uid", lambda name: OTHER_UID)
+    found = sweep_marked("CAIRNWORK_ATTEMPT", "a1", account="w")
+    assert found.pids == (FAKE, FAKE + 1, FAKE + 2)  # account, hidden, denied; not FAKE + 3
+    monkeypatch.setattr(confined, "_names", lambda pids: {FAKE: "ssh-agent"})
+    assert confined.describe(found.pids, limit=2) == f"{FAKE} ssh-agent, {FAKE + 1} ? and 1 more"
+    assert confined.describe(()) == ""
+
+
+def test_describe_reads_real_command_names():
+    assert "python" in confined.describe((os.getpid(),)).lower()
+
+
 def test_a_real_marked_process_is_killed_and_seen_gone():
     import secrets
     import sys

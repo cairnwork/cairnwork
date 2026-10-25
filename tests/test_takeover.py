@@ -131,6 +131,18 @@ def test_a_worker_account_mark_is_swept_with_that_account(tmp_path, monkeypatch)
     assert [c[2] for c in calls] == ["cw-worker", "cw-worker"]
 
 
+def test_a_refusal_names_the_processes_that_keep_the_fence(tmp_path, monkeypatch):
+    """#244 review NIT: one busy worker account keeps every fence up, so the refusal says
+    which processes keep it (pids and commands) and the operator can act on them."""
+    ledger, task_id = _failed_task(tmp_path, account="cw-worker")
+    _sweeps(monkeypatch, Sweep(True, account=2, pids=(41, 42)))
+    monkeypatch.setattr(confined, "_names", lambda pids: {41: "ssh-agent"})
+    with pytest.raises(TakeoverRefused, match=r"WORKER_ACCOUNT_BUSY: .* 2 process"):
+        takeover.supersede(ledger, task_id)
+    refusal = (ledger.unswept_attempt(task_id) or unswept.Mark("", "", "")).refusal
+    assert refusal.endswith("(attempt a1); kept by: 41 ssh-agent, 42 ?")
+
+
 def test_a_re_mark_names_the_newest_attempt(tmp_path, monkeypatch):
     """#244 NIT: a second mark of one task replaces the attempt (and account), and clears the
     old refusal: the takeover must sweep the attempt the FAILED status is about."""

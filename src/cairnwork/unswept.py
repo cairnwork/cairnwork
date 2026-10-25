@@ -15,7 +15,8 @@ The mark is written inside the ledger transaction that moves the task to FAILED
 Ledgers from before this table (migrate): the ledger keeps no failure reasons, so it cannot tell
 which FAILED task recovery left unswept. Every FAILED task is marked LEGACY (attempt "") when the
 table is created, in that same transaction; takeover.py then sweeps every attempt the journal
-names for the task and requires the configured worker account to be idle.
+names for the task and requires the configured worker account to be idle. A task the journal
+names no attempt for is released only if the journal is shown older than the task.
 """
 
 from __future__ import annotations
