@@ -25,6 +25,9 @@ Failure paths, none of which can end VERIFIED:
   without a re-run;
 * the p2p verifier id clashes with an author verifier: REFUSED.
 
+Before the worker starts, ``base_env_check`` probes the ``module-dir`` files on the unchanged base
+the same way; a probe failure there is UNCOMPARABLE ``BASE_ENV_FAILED`` (environment, #234).
+
 ``p2p_time_budget_seconds`` bounds each run (probe, degraded probe, candidate run, re-run).
 The rule actually used is a dict (``P2PPlan.rule``): it goes into the p2p observation's artifact
 hash (so Core's record binds it), into ``p2p-selection.json`` beside the verifier log, and into the
@@ -35,6 +38,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -80,11 +84,11 @@ def _base_tests(task, exclude: frozenset[str]) -> tuple[str, ...]:
     )  # fmt: skip
 
 
-def _probe(task, files, run_root, result, verifying, budget):
+def _probe(task, files, run_root, result, verifying, budget, tag="p"):
     """Per-test outcomes of ``files`` on the base, or (None, reason) when the run is unusable."""
     runs = run_verifiers(
         task.repo, task.base_commit, (VerifierSpec("p2p-probe", files),), run_root,
-        f"{result.attempt_id}-p", attempt_id=result.attempt_id, account=verifying[0],
+        f"{result.attempt_id}-{tag}", attempt_id=result.attempt_id, account=verifying[0],
         python=verifying[1], base_commit=task.base_commit, timeout=budget,
         import_paths=task.import_paths,
     )  # fmt: skip
@@ -200,6 +204,48 @@ def _run_once(spec, plan, note, task, judged, run_root, result, verifying, tag) 
     except OSError:
         pass  # the hash already binds the rule
     return run
+
+
+ENV_FAILED = "BASE_ENV_FAILED"
+
+
+def base_env_check(task, run_root, result, verifying) -> None:
+    """Before the worker starts (#234): can the unchanged base run its own existing tests at all?
+    For a task that will be probed after the worker (deferred tests, P2P not off), the module-dir
+    selection of existing base tests is probed now, the same way (``_probe``): a timeout, a report
+    over the cap, an exit other than 0 or 1, or no guard record raises UNCOMPARABLE
+    ``BASE_ENV_FAILED``, so no worker quota is spent on a base that gives no evidence and the
+    attempt is not counted against the worker. Failing tests are fine (the base has the bug).
+    Nothing from the test commit is read. A pass is remembered per repository, base, files and
+    verifier (``base-env-ok/`` in the run root), so only the first dispatch to that base pays; the
+    marker can only skip this check, never make anything pass: the probes after the worker run
+    as before."""
+    if not task.test_commit or task.p2p_mode == "off":
+        return
+    try:
+        existing = _base_tests(task, frozenset())
+    except P2PRejected as exc:
+        raise _env_failed(str(exc)) from exc
+    files = select_p2p_targets(task.allowed_files, existing, task.test_roots, "module-dir")
+    if not files:  # nothing to probe now; the steps after the worker decide, as before
+        return
+    key = [str(Path(task.repo).resolve()), task.base_commit, files, task.import_paths,
+           task.p2p_budget, verifying[1] or "", getattr(verifying[0], "user", "")]  # fmt: skip
+    marker = Path(run_root) / "base-env-ok" / hashlib.sha256(json.dumps(key).encode()).hexdigest()
+    if os.path.lexists(marker):
+        return
+    outcomes, why = _probe(task, files, run_root, result, verifying, task.p2p_budget, tag="e")
+    if outcomes is None:
+        raise _env_failed(f"{why}: {len(files)} existing test file(s) near the change")
+    try:  # an unwritten marker only means the next dispatch probes again
+        marker.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.close(os.open(marker, os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW, 0o600))
+    except OSError:
+        pass
+
+
+def _env_failed(detail: str) -> BaseUncomparable:
+    return BaseUncomparable(Comparison("UNCOMPARABLE", ENV_FAILED, f"unchanged base: {detail}"))
 
 
 def p2p_for(task, specs, test_files, run_root, result, verifying) -> P2PPlan | None:

@@ -201,7 +201,7 @@ _UNKNOWN_ACCOUNT = (
     " and agy_run_as_user is not set"
 )
 _RESULTS = ("COMPLETED", "FAILED")  # the run's own FINISHED details (pipeline.py)
-_RUN_TAGS = "vbpqr"  # verify, base-test, and the P2P probe / candidate run / re-run (p2p.py)
+_RUN_TAGS = "vbpqre"  # verify, base-test, P2P probe / candidate run / re-run, base env (p2p.py)
 
 
 def _run_dirs(root: Path, attempt_id: str) -> tuple[list[Path], list[Path], list[Path]]:
