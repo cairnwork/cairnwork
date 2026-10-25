@@ -161,10 +161,10 @@ class _SimulatedCrash(BaseException):
 
 
 class _CrashBeforeFinished(Journal):
-    def record(self, task_id, attempt_id, phase, detail=""):
+    def record(self, task_id, attempt_id, phase, detail="", uncomparable=""):
         if phase == "FINISHED":
             raise _SimulatedCrash(detail)
-        super().record(task_id, attempt_id, phase, detail)
+        super().record(task_id, attempt_id, phase, detail, uncomparable)
 
 
 def _run_good_fix(project, tmp_path, journal):  # noqa: F811
