@@ -17,14 +17,17 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from cairnwork import proc_start
+
 PHASES = (
-    "DISPATCHED",  # attempt id chosen, ledger moved to DISPATCHED
-    "WORKER_STARTED",  # clone created, worker about to run
+    "DISPATCHED",  # attempt id chosen, ledger moved to DISPATCHED (boot = boot mark, #244)
+    "WORKER_STARTED",  # clone created, worker about to run (detail = worker account or "")
     "CANDIDATE",  # candidate commit created and checked (detail = commit id)
     "TEST_SOURCE",  # hidden-test mode this run used (detail = bundle | auto); read by attest
     "VERIFYING",  # verifiers about to run on the candidate
     "NOTARIZING",  # Core about to be called
-    "FINISHED",  # ledger status about to be written (detail = COMPLETED or FAILED)
+    "FINISHED",  # attempt over, journaled before the ledger move (detail = COMPLETED or FAILED;
+    # or the ledger's status, e.g. CANCELLED, when the run lost a race and never started)
 )
 
 _TABLE = """
@@ -36,7 +39,8 @@ CREATE TABLE IF NOT EXISTS attempt_journal (
         ('DISPATCHED', 'WORKER_STARTED', 'CANDIDATE', 'TEST_SOURCE', 'VERIFYING', 'NOTARIZING',
          'FINISHED')),
     detail     TEXT NOT NULL DEFAULT '',
-    at         TEXT NOT NULL
+    at         TEXT NOT NULL,
+    boot       TEXT NOT NULL DEFAULT ''
 )
 """
 
@@ -70,6 +74,13 @@ class Entry:
     attempt_id: str
     phase: str
     detail: str
+    boot: str = ""  # DISPATCHED only: proc_start.boot_mark() when it was written (#244)
+
+
+def dispatch_mark(entries: list[Entry]) -> str:
+    """The boot mark of the attempt's DISPATCHED entry: none of its processes started before.
+    "" if there is none (no entry, macOS, a journal from before the mark): the strict rule."""
+    return next((e.boot or "" for e in entries if e.phase == "DISPATCHED"), "")
 
 
 class Journal:
@@ -81,6 +92,7 @@ class Journal:
             try:
                 _widen_phase_check(conn)
                 conn.execute(_TABLE)
+                _add_boot_column(conn)
                 for statement in _SCHEMA:
                     conn.execute(statement)
                 _refuse_double_dispatch(conn)
@@ -104,10 +116,11 @@ class Journal:
             raise ValueError(f"unknown phase {phase!r}")
         conn = self._connect()
         try:
+            boot = proc_start.boot_mark() if phase == "DISPATCHED" else ""
             conn.execute(
-                "INSERT INTO attempt_journal (task_id, attempt_id, phase, detail, at)"
-                " VALUES (?, ?, ?, ?, ?)",
-                (task_id, attempt_id, phase, detail, datetime.now(UTC).isoformat()),
+                "INSERT INTO attempt_journal (task_id, attempt_id, phase, detail, at, boot)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (task_id, attempt_id, phase, detail, datetime.now(UTC).isoformat(), boot),
             )
         except sqlite3.IntegrityError as exc:
             if phase == "DISPATCHED":
@@ -120,7 +133,7 @@ class Journal:
         conn = self._connect()
         try:
             rows = conn.execute(
-                "SELECT task_id, attempt_id, phase, detail FROM attempt_journal"
+                "SELECT task_id, attempt_id, phase, detail, boot FROM attempt_journal"
                 " WHERE task_id = ? ORDER BY seq",
                 (task_id,),
             ).fetchall()
@@ -151,6 +164,13 @@ def _widen_phase_check(conn: sqlite3.Connection) -> None:
         " SELECT seq, task_id, attempt_id, phase, detail, at FROM attempt_journal_old"
     )
     conn.execute("DROP TABLE attempt_journal_old")
+
+
+def _add_boot_column(conn: sqlite3.Connection) -> None:
+    """A journal from before the DISPATCHED boot mark gains the column; its rows keep ""."""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(attempt_journal)")}
+    if "boot" not in columns:
+        conn.execute("ALTER TABLE attempt_journal ADD COLUMN boot TEXT NOT NULL DEFAULT ''")
 
 
 def _refuse_double_dispatch(conn: sqlite3.Connection) -> None:

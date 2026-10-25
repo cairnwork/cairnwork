@@ -37,7 +37,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from cairnwork import runlock
+from cairnwork import runlock, takeover
 from cairnwork.deferred_store import DeferredStore
 from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.intake_config import DEFAULT_CONFIG, has_token, seconds_ok
@@ -321,7 +321,11 @@ class Intake:
                 record.task_id, attempt, expected_candidate=candidates[-1]
             )
             verified = bool(verdict and verdict.verified)
+        held = self.ledger.unswept_attempt(record.task_id)  # its processes are not shown gone
         return {
+            "unswept": {"attempt_id": held.attempt_id, "last_refusal": held.refusal}
+            if held
+            else None,
             "task_id": record.task_id,
             "idempotency_key": record.idempotency_key,
             "owner": record.owner,
@@ -343,6 +347,23 @@ class Intake:
             record = ledger.set_status(task_id, "CANCELLED", expected_from="BOUND")
         except InvalidStatusTransition as exc:
             raise IntakeRefused("NOT_CANCELLABLE", str(exc)) from exc
+        return {"task_id": task_id, "status": record.status}
+
+    def supersede(self, task_id: str) -> dict[str, Any]:
+        """Release a FAILED task's card for a new key. Refused (TakeoverRefused) while its
+        attempt's processes are not shown gone (takeover.py, #244); a LEGACY mark is swept by
+        the journal's attempts and the configured worker account."""
+        if self.ledger.get(task_id=task_id).owner != OWNER:
+            raise IntakeRefused("OWNER_MISMATCH", f"{task_id} is not owned by {OWNER!r}")
+        try:
+            record = takeover.supersede(
+                self.ledger,
+                task_id,
+                journal=self.journal,
+                account=self.config()["agy_run_as_user"],
+            )
+        except InvalidStatusTransition as exc:
+            raise IntakeRefused("NOT_SUPERSEDABLE", str(exc)) from exc
         return {"task_id": task_id, "status": record.status}
 
     def in_flight(self) -> dict[str, Any]:

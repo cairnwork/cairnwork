@@ -10,6 +10,7 @@ import pytest
 from agy_receipt_lines import RUN_TAG, WORKER, cleanup, good_run, launch, status, sweep
 from test_agy_worker import TASK, _dispatched, attempt, fake_dispatcher
 
+from cairnwork.unswept import WorkerMayLive
 from cairnwork.workers import agy_dispatch
 from cairnwork.workers.agy import AgyWorker, AgyWorkerError
 from cairnwork.workers.agy_dispatch import AgyWorkerAccountFailed, Dispatch
@@ -159,9 +160,17 @@ def test_a_launch_that_never_started_still_names_the_account_failure(tmp_path):
     )
     worker, workdir, _ = _replaying(tmp_path, stderr, 1)
     # not_started is no clean sweep receipt: the unswept run leads, the account failure follows
-    with pytest.raises(AgyWorkerError, match=f"^WORKER_SWEEP_UNCLEAN: .*{failure}"):
+    with pytest.raises(AgyWorkerError, match=f"^WORKER_SWEEP_UNCLEAN: .*{failure}") as raised:
         worker.run(workdir, TASK)
     assert _record(workdir)["attempts"][0]["worker_failure"] == failure
+    # #244: the pipeline fences the attempt, with the account its processes run as
+    assert isinstance(raised.value, WorkerMayLive) and raised.value.account == WORKER
+    assert worker.run_as == WORKER
+
+
+def test_without_an_account_the_worker_runs_as_the_owner(tmp_path):
+    worker, _, _ = _dispatched(tmp_path, "")
+    assert worker.run_as == "" and AgyWorker().run_as == ""
 
 
 def test_an_ordinary_dispatcher_failure_under_run_as_user_is_not_an_account_failure(tmp_path):
@@ -184,3 +193,19 @@ def test_a_dispatcher_without_the_flag_rejects_it_and_nothing_runs_as_the_owner(
     with pytest.raises(AgyWorkerError, match="exited 2; no dispatcher status"):
         worker.run(workdir, TASK)
     assert not ran.exists()
+
+
+def test_a_failed_record_write_cannot_drop_the_fence(tmp_path, monkeypatch):
+    """Codex #244 round 2 #5: the record write after an unclean sweep can fail (here
+    WORKER_RECORD_EXISTS); the run must still raise AgyWorkerUnswept, so the pipeline fences
+    the attempt, not a plain worker failure."""
+    monkeypatch.setattr(agy_dispatch, "sweep_worker_run", lambda *a: False)
+    stderr = launch(ROOT) + sweep(result="unclean", wrapper="UNCLEAN", left=["4242"]) + cleanup()
+    worker, workdir, _ = _replaying(tmp_path, stderr + status("completed"))
+    existing = workdir.parent / f"{workdir.name}.agy.worker.json"
+    existing.write_text("{}")  # a record is already there: the write refuses
+    with pytest.raises(AgyWorkerError, match="^WORKER_SWEEP_UNCLEAN") as raised:
+        worker.run(workdir, TASK)
+    assert isinstance(raised.value, WorkerMayLive) and raised.value.account == WORKER
+    assert "WORKER_RECORD_EXISTS" in repr(raised.value.__context__)
+    assert existing.read_text() == "{}"
