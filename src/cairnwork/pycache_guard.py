@@ -32,10 +32,10 @@ any non-ASCII name in the prefix fails the run: APFS also folds names such as ``
 ligatures, the Kelvin sign and NFC/NFD spellings onto ASCII ones. The run's own paths are ASCII
 (the sandbox profile accepts no other), so only names the run created can be non-ASCII.
 
-Known gaps, as with the checkout comparison: bytecode planted and removed again during the run is
-not seen; and candidate code may point ``sys.pycache_prefix`` at another writable directory at
-runtime, which this check does not scan (#276; that works the same without this prefix). The
-separate verifier account and the report guard remain the boundary.
+Candidate code may also point ``sys.pycache_prefix`` at another writable directory at runtime
+(#276): bytecode_roots.py scans everything else the run may write, with rules built on the ones
+here. Known gap, as with the checkout comparison: bytecode planted and removed again during the
+run is not seen. The separate verifier account and the report guard remain the boundary.
 """
 
 from __future__ import annotations
@@ -110,15 +110,20 @@ def _variants(*paths: Path) -> tuple[str, ...]:
     return tuple(dict.fromkeys(p for path in paths for p in (str(path), os.path.realpath(path))))
 
 
+def _target_dirs(targets: tuple[str, ...]) -> tuple[str, ...]:
+    """The directories (lower case) of the run's pytest targets (``tests/test_a.py[::name]``)."""
+    return tuple(
+        {d.lower() for t in targets if (d := os.path.dirname(t.split("::", 1)[0])) not in ("", ".")}
+    )
+
+
 def forged_bytecode(
     prefix: Path, checkout: Path, write_roots: tuple[Path, ...], targets: tuple[str, ...] = ()
 ) -> tuple[str, ...]:
     """What in ``prefix`` fails the run (empty: nothing). Never follows a symlink. ``targets``
     are the verifier's pytest targets (``tests/test_a.py[::name]``): their directories are
     protected too."""
-    target_dirs = tuple(
-        {d.lower() for t in targets if (d := os.path.dirname(t.split("::", 1)[0])) not in ("", ".")}
-    )
+    target_dirs = _target_dirs(targets)
     try:
         top = os.lstat(prefix)
     except FileNotFoundError:
