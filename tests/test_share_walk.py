@@ -263,3 +263,24 @@ def test_a_nested_dot_git_is_shared_like_any_other_entry(tmp_path):
     os.link(gitfile, tmp_path / "second")
     done = _share(root)
     assert done.returncode == 1 and "more than one link: sub/pkg/.git" in done.stderr
+
+
+@pytest.mark.parametrize("name", [".GIT", ".Git"])
+def test_a_case_variant_of_dot_git_is_shared_like_any_other_entry(tmp_path, name):
+    """Only the exact name .git is skipped. Uses a checkout with no .git, so that on a
+    case-insensitive filesystem the variant does not collide with an existing .git."""
+    root = _tree(tmp_path)
+    variant = root / name
+    variant.write_text("x")
+    os.chmod(variant, 0o600)
+    done = _share(root)
+    assert done.returncode == 0, done.stderr
+    assert stat.S_IMODE(os.lstat(variant).st_mode) == 0o644
+
+
+def test_a_dangling_top_level_dot_git_symlink_is_skipped_without_error(tmp_path):
+    root = _tree(tmp_path)
+    (root / ".git").symlink_to(tmp_path / "missing")
+    done = _share(root)
+    assert done.returncode == 0, done.stderr
+    assert os.readlink(root / ".git") == str(tmp_path / "missing")
