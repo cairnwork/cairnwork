@@ -45,7 +45,7 @@ from cairnwork.ownership import (
 # move reviving a cancelled task) could never be caught. Keep this in sync deliberately.
 ALLOWED = {
     "BOUND": {"DISPATCHED", "FAILED", "CANCELLED", "SUPERSEDED"},
-    "DISPATCHED": {"COMPLETED", "FAILED", "CANCELLED"},
+    "DISPATCHED": {"COMPLETED", "FAILED"},  # never CANCELLED: its run may be live (#63 (b))
     "FAILED": {"SUPERSEDED"},
     "COMPLETED": set(),
     "CANCELLED": set(),

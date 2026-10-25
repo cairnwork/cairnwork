@@ -5,9 +5,9 @@ SQLite transaction keyed by idempotency key, and it carries the request digest, 
 the owner and the task id. Resend, query, cancel and recovery route by this record; when no
 record exists the caller must stop, never guess.
 
-At most one task per card is active. CANCELLED and SUPERSEDED release the card. COMPLETED and
-FAILED keep holding it. A resend with the same key returns the same record and never re-runs it
-(a FAILED task stays FAILED); to retry, mark the FAILED task SUPERSEDED, then bind a new key.
+At most one task per card is active. CANCELLED (BOUND only) and SUPERSEDED release the card;
+COMPLETED and FAILED keep holding it. A resend with the same key returns the same record and
+never re-runs it (a FAILED task stays FAILED); to retry, mark it SUPERSEDED, then bind a new key.
 Resending an identical request (same digest) under another key or card is refused while a task
 for it is active
 (REPLAY_FORBIDDEN if COMPLETED or FAILED, RECONCILIATION_REQUIRED if BOUND or
@@ -39,7 +39,7 @@ OWNERS = frozenset({OWNER, "nexus-new"})
 INACTIVE_STATUSES = frozenset({"SUPERSEDED", "CANCELLED"})
 TRANSITIONS: dict[str, frozenset[str]] = {
     "BOUND": frozenset({"DISPATCHED", "FAILED", "CANCELLED", "SUPERSEDED"}),
-    "DISPATCHED": frozenset({"COMPLETED", "FAILED", "CANCELLED"}),
+    "DISPATCHED": frozenset({"COMPLETED", "FAILED"}),  # never CANCELLED: its run may live (#63)
     "FAILED": frozenset({"SUPERSEDED"}),
     "COMPLETED": frozenset(),
     "CANCELLED": frozenset(),

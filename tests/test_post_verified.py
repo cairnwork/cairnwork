@@ -18,6 +18,7 @@ from test_issue_runner import (
 
 import cairnwork.intake as intake_module
 import cairnwork.intake_config as intake_config
+import cairnwork.issue_hook as issue_hook
 import cairnwork.issue_runner as runner
 import cairnwork.post_verified as post_verified
 from cairnwork.intake import Intake, IntakeRefused
@@ -231,7 +232,7 @@ def test_an_exception_in_the_hook_step_is_not_a_verdict(rig, monkeypatch, capsys
     def boom(*a, **k):
         raise ValueError("unexpected")
 
-    monkeypatch.setattr(runner, "run_post_verified_hook", boom)
+    monkeypatch.setattr(issue_hook, "run_post_verified_hook", boom)
     github, out, _ = _round(rig, monkeypatch)
     assert out == [{"issue": 7, "pr": "https://github.com/James3014/demo/pull/1"}]
     assert (
