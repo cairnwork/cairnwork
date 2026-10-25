@@ -36,10 +36,12 @@ probe overflows or hangs no longer reaches the rows below.
 
 | Situation | Result |
 |---|---|
+| base probe leaves a process behind (or the process list cannot be read) or changes the checkout, in any mode (#285) | task UNCOMPARABLE, `P2P_BASE_PROBE_UNUSABLE: base-probe-survivors` / `base-probe-mutated in <mode> mode`; no narrower mode is tried (it would be weaker evidence). Before the worker (`base_env_check`): `BASE_ENV_FAILED`. Before #285 the candidate run blocked on the base's own leftover (false FAILED) |
 | base probe times out, reports nothing usable, or its report exceeds the 4 MiB report cap (a suite too large for one guard report; #184) in `whole-suite` | degrade once to `module-dir`; recorded as `degraded: base-probe-timeout` / `base-probe-failed` / `base-probe-report-over-cap` |
 | degraded to `module-dir` but it would run the same files (flat layout) | task UNCOMPARABLE (#234; before: REFUSED), `P2P_BASE_PROBE_UNUSABLE: <reason>; module-dir selects the same files` (no second probe) |
 | `module-dir` (or the degraded run) cannot be probed either | task UNCOMPARABLE (#234; before: REFUSED), `P2P_BASE_PROBE_UNUSABLE` |
 | degraded to `module-dir` and it selects no test file, or none of them passes on the base | task UNCOMPARABLE (#234; before: REFUSED), `P2P_BASE_PROBE_UNUSABLE` (a failed probe is never "nothing to run") |
+| order of the targets (#287) | the order the base probe ran them in (files, then tests within a split file), never sorted; before #287 sorted ids could run an order-dependent test before the test it depends on and fail a correct fix |
 | candidate P2P run exceeds the budget | the observation is not a pass, Core says not verified (no re-run) |
 | a P2P run fails on the candidate only because a test failed | re-run once; a pass on the re-run is what Core sees (same verdict as a clean pass) and the first run is recorded (`rerun`: failed tests (sanitised), returncode, timed_out, mutated, survivors, ran; bound into the re-run's artifact hash); the task result's `p2p` also carries `p2p_rerun_passed` (true: passed after re-run; false: failed again; absent: clean pass or no re-run), so reports can separate the cases; a second failure blocks |
 | a P2P run fails for any other reason (checkout mutated, surviving process, oversized log, no usable guard report) | blocks as it is, no re-run |

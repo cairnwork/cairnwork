@@ -109,19 +109,50 @@ LEAK = (
 )
 
 
-def test_a_base_test_that_leaves_a_process_degrades_instead_of_failing_the_candidate(
+def test_a_base_test_that_leaves_a_process_is_uncomparable_not_the_candidates_failure(
     project, tmp_path
 ):
     # #285: an existing nested test always leaves a session-detached sleeper, on the base too.
-    # The candidate run of whole-suite would block on that leftover although the fix is right;
-    # the probe sees it on the base, so module-dir (the flat tests) is used and the fix verifies
+    # The candidate run of whole-suite would block on that leftover although the fix is right.
+    # The probe sees it on the base: no evidence (UNCOMPARABLE), and no narrower suite is tried
     result = run(
         project, tmp_path, {"src/calc.py": FIX_ADD}, mode="whole-suite",
         extra={"tests/deep/test_leak.py": LEAK},
     )  # fmt: skip
-    assert result.p2p["degraded"] == "base-probe-survivors"
-    assert result.p2p["applied"] == "module-dir"
+    assert result.status == "FAILED" and not result.verified
+    assert "P2P_BASE_PROBE_UNUSABLE" in result.reason
+    assert "base-probe-survivors in whole-suite mode" in result.reason
+    assert "outlived" not in result.reason  # the candidate run never happened
+
+
+def test_a_module_dir_base_test_that_leaves_a_process_ends_before_the_worker(project, tmp_path):
+    # #285 + #234: the module-dir files leave a process on the unchanged base
+    result = run(
+        project, tmp_path, {"src/calc.py": FIX_ADD}, mode="module-dir",
+        extra={"tests/test_leak.py": LEAK},
+    )  # fmt: skip
+    assert result.status == "FAILED" and not result.verified and result.candidate_commit is None
+    assert result.reason.startswith("UNCOMPARABLE: BASE_ENV_FAILED: ")
+    assert "base-probe-survivors" in result.reason
+
+
+ORDER = (
+    "import pytest\nSEEN = []\n"
+    "def test_z_first():\n    SEEN.append(1)\n"
+    "def test_a_after():\n    assert SEEN == [1]\n"
+    "@pytest.mark.skip(reason='x')\ndef test_skipped():\n    pass\n"
+)
+
+
+def test_targets_run_in_the_order_the_base_ran_them(project, tmp_path):
+    # #287: the skip makes the file split into per-test targets; test_a_after passes on the base
+    # only after test_z_first. Sorted ids would run it first and fail a correct fix on both runs
+    result = run(
+        project, tmp_path, {"src/calc.py": FIX_ADD}, mode="whole-suite",
+        extra={"tests/test_order.py": ORDER},
+    )  # fmt: skip
     assert result.status == "COMPLETED" and result.verified, result.reason
+    assert "rerun" not in result.p2p
 
 
 def test_a_probe_that_times_out_even_in_module_dir_ends_before_the_worker(project, tmp_path):

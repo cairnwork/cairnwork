@@ -160,6 +160,45 @@ def test_an_unclean_base_probe_is_unusable(monkeypatch, tmp_path, survivors, mut
     assert p2p._probe(TASK, ("tests/test_a.py",), tmp_path, RESULT, VERIFYING, 30) == (None, why)
 
 
+@pytest.mark.parametrize("why", p2p.UNCLEAN)
+@pytest.mark.parametrize("mode", ["whole-suite", "module-dir"])
+def test_an_unclean_base_is_uncomparable_without_a_narrower_probe(monkeypatch, why, mode):
+    # #285 (cross-model review): a narrower suite would be weaker evidence than the configured one
+    existing = ("tests/nested/test_x.py", "tests/test_calc.py")
+    got, probed = plan(monkeypatch, existing, [(None, why)], mode=mode)
+    assert uncomparable(got) and f"{why} in {mode} mode" in str(got)
+    assert len(probed) == 1
+
+
+def test_an_unclean_degraded_probe_keeps_both_reasons(monkeypatch):
+    existing = ("tests/nested/test_x.py", "tests/test_calc.py")
+    got, probed = plan(
+        monkeypatch, existing, [(None, "base-probe-timeout"), (None, p2p.UNCLEAN[0])]
+    )
+    assert uncomparable(got) and len(probed) == 2
+    assert "base-probe-timeout; base-probe-survivors in module-dir mode" in str(got)
+
+
+def test_targets_keep_the_probe_order(monkeypatch):
+    # #287: never sorted; pytest runs node ids in the order given
+    outcomes = {
+        "tests/test_z.py::test_1": "passed",
+        "tests/test_b.py::test_z": "passed",
+        "tests/test_b.py::test_a": "passed",
+        "tests/test_b.py::test_skip": "skipped",
+        "tests/test_a.py::test_1": "passed",
+    }
+    existing = ("tests/test_a.py", "tests/test_b.py", "tests/test_z.py")
+    got, _ = plan(monkeypatch, existing, [(outcomes, "")])
+    assert isinstance(got, P2PPlan) and got.spec is not None
+    assert got.spec.targets == (
+        "tests/test_z.py",
+        "tests/test_b.py::test_z",
+        "tests/test_b.py::test_a",
+        "tests/test_a.py",
+    )
+
+
 def test_a_clean_base_probe_returns_its_outcomes(monkeypatch, tmp_path):
     outcomes = {"tests/test_a.py::test_a": "passed"}
     run = make_run(True, outcomes=outcomes, log_dir=tmp_path)
