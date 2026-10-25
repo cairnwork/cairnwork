@@ -106,6 +106,19 @@ def test_a_case_variant_of_the_checkout_path_is_the_checkout(run):
     assert check(run) == ("tests/helper.py (protected input)",)
 
 
+def test_a_case_variant_above_the_run_is_judged_as_spelled(run):
+    """Case-sensitive filesystems: a case variant of the checkout's parents is another place.
+    Protected names are still protected; anything else must lie in a write root as spelled."""
+    checkout, roots, prefix = run
+    variant = str(checkout).upper()
+    plant(prefix, variant + "/src/a.py")
+    plant(prefix, variant + "/tests/helper.py")
+    found = check(run)
+    assert f"{variant}/src/a.py (outside the run)" in found
+    assert "tests/helper.py (protected input)" in found
+    assert len(found) == 2
+
+
 def test_a_pytest_tag_in_any_case_is_forged(run):
     plant(run[2], run[0] / "src" / "a.py", name="a.CPYTHON-312-PYTEST-8.4.2.PYC")
     plant(run[2], run[0] / "tests" / "helper.py", name="helper.CPYTHON-312.PYC")

@@ -94,7 +94,12 @@ def _judge(source: str, checkouts, writable, target_dirs: tuple[str, ...]) -> st
     """'' if bytecode for ``source`` may sit in the prefix, else why not."""
     if _within(source, checkouts, fold=True) is not None:
         rel = _shown(source, checkouts)
-        return f"{rel} (protected input)" if _protected_in_checkout(rel, target_dirs) else ""
+        if _protected_in_checkout(rel, target_dirs):
+            return f"{rel} (protected input)"
+        if _within(source, checkouts) is not None:
+            return ""
+        # a case variant that is not protected: on a case-sensitive filesystem it may be a
+        # different place, so it must be inside a write root as spelled
     return "" if _within(source, writable) else f"{source} (outside the run)"
 
 
