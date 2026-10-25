@@ -124,7 +124,8 @@ copy(source, target)
 # group and other r/x equal to the user's (other bits unchanged), so the comparing owner may read
 # exactly what the checkout's owner may. Directories are opened one component at a time with
 # O_NOFOLLOW from the work dir, and chmod never follows a symlink, so the walk cannot leave the
-# copy. Symlinks and other file types are skipped, so is the top-level .git (not compared). A
+# copy. Symlinks and other file types are skipped, so is the top-level .git whatever its type (a
+# directory, a gitlink file, a symlink: not compared, never entered or followed). A
 # directory its user may not list and search is not entered: the comparing owner, with the same
 # bits, cannot read it either. Exit 1 (the owner then fails the run) if a directory its user may
 # list and search cannot be walked (a macOS ACL can deny the account alone), a regular file with
@@ -199,7 +200,9 @@ while stack:
     parts, dir_info = stack.pop()
     for fd, name, info in entries(base, parts, dir_info):
         rel = "/".join((*parts[1:], name))
-        if stat.S_ISDIR(info.st_mode) and rel != ".git":
+        if rel == ".git":  # by name, whatever its type: a directory, a gitlink file or a symlink
+            continue
+        if stat.S_ISDIR(info.st_mode):
             share(fd, name, info, rel)
             stack.append(((*parts, name), info))
         elif stat.S_ISREG(info.st_mode):
