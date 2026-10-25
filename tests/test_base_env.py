@@ -3,7 +3,11 @@ tests near the change must be able to run there. If they cannot, the attempt end
 worker starts, as UNCOMPARABLE ``BASE_ENV_FAILED``: environment, not the worker. The stubbed
 rows replace only the ``-e`` probe; the sandbox test runs it for real."""
 
+import os
+import sys
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from conftest import commit_change, git
@@ -13,10 +17,12 @@ from test_uncomparable_paths import PROBE_ROWS, _account_error, _run
 from verify_helpers import FIX
 
 from cairnwork import p2p, recovery
+from cairnwork.deferred_tests import BaseUncomparable
 from cairnwork.journal import Journal
 from cairnwork.notary import Notary
 from cairnwork.ownership import OwnershipLedger
-from cairnwork.pipeline import TaskSpec, run_task
+from cairnwork.p2p import P2PRejected
+from cairnwork.pipeline import TaskResult, TaskSpec, run_task
 
 OK = {"rc": 1, "outcomes": {"tests/test_calc.py::test_add": "failed"}}  # the bug: still fine
 
@@ -173,3 +179,138 @@ def test_a_real_base_that_hangs_ends_before_the_worker(project, tmp_path):
     assert "base-probe-timeout" in result.reason
     assert OwnershipLedger(root / "own.sqlite").get(task_id=result.task_id).status == "FAILED"
     assert [p.name for p in (root / "runs").iterdir() if "-e-" in p.name] == []  # nothing left
+
+
+# Unit tests of the pass marker and its key (review of #258): only ``_probe`` is faked.
+
+KEY_TASK = TaskSpec("k", "c", "t", "i", Path("/nonexistent/repo"), "1" * 40, ("src/calc.py",),
+                    CHECK, test_commit="2" * 40, p2p_mode="module-dir")  # fmt: skip
+
+
+@pytest.fixture
+def unit(monkeypatch, tmp_path):
+    """check(task, verifying): one base_env_check; returns how many probes ran in total."""
+    probed: list = []
+    monkeypatch.setattr(p2p, "_base_tests", lambda task, exclude: ("tests/test_calc.py",))
+    monkeypatch.setattr(
+        p2p, "_probe", lambda *a, **k: (probed.append(a[0]), ({"t": "passed"}, ""))[1]
+    )
+
+    def check(task=KEY_TASK, verifying=(None, None)):
+        p2p.base_env_check(
+            task, tmp_path / "runs", TaskResult("t", "a" + "0" * 16, "FAILED"), verifying
+        )
+        return len(probed)
+
+    return check
+
+
+def _venv(root: Path, version="3.12.1") -> str:
+    (root / "bin").mkdir(parents=True, exist_ok=True)
+    (root / "lib" / "python3.12" / "site-packages").mkdir(parents=True, exist_ok=True)
+    (root / "pyvenv.cfg").write_text(f"version = {version}\n")
+    python = root / "bin" / "python"
+    python.write_text("")
+    return str(python)
+
+
+def _alias(python: str) -> str:
+    """Another name for the same interpreter in the same venv: only the python field differs."""
+    alias = Path(python).with_name("python3")
+    alias.symlink_to(python)
+    return str(alias)
+
+
+VARIANTS = [
+    pytest.param(lambda t, v, tmp: (replace(t, repo=Path("/nonexistent/other")), v), id="repo"),
+    pytest.param(lambda t, v, tmp: (replace(t, base_commit="3" * 40), v), id="base"),
+    pytest.param(lambda t, v, tmp: (replace(t, import_paths=("src",)), v), id="import_paths"),
+    pytest.param(lambda t, v, tmp: (replace(t, p2p_budget=7), v), id="budget"),
+    pytest.param(lambda t, v, tmp: (t, (v[0], _venv(tmp / "venv2"))), id="python-other-venv"),
+    pytest.param(lambda t, v, tmp: (t, (v[0], _alias(v[1]))), id="python-same-file"),
+    pytest.param(
+        lambda t, v, tmp: (t, (SimpleNamespace(user="other", python=v[1]), v[1])), id="account"
+    ),
+]
+
+
+@pytest.mark.parametrize("vary", VARIANTS)
+def test_each_key_field_gets_a_fresh_probe(unit, tmp_path, vary):
+    verifying = (SimpleNamespace(user="cairnwork-verifier", python=None), _venv(tmp_path / "venv"))
+    assert unit(KEY_TASK, verifying) == 1 and unit(KEY_TASK, verifying) == 1  # remembered
+    task, changed = vary(KEY_TASK, verifying, tmp_path)
+    assert unit(task, changed) == 2
+
+
+def test_other_files_near_the_change_get_a_fresh_probe(unit, monkeypatch):
+    assert unit() == 1 and unit() == 1
+    monkeypatch.setattr(
+        p2p, "_base_tests", lambda task, exclude: ("tests/test_calc.py", "tests/test_x.py")
+    )
+    assert unit() == 2
+
+
+@pytest.mark.parametrize("change", ["site-packages", "pyvenv.cfg", "binary"])
+def test_a_changed_interpreter_or_venv_gets_a_fresh_probe(unit, tmp_path, change):
+    python = _venv(tmp_path / "venv")
+    assert unit(KEY_TASK, (None, python)) == 1 and unit(KEY_TASK, (None, python)) == 1
+    if change == "site-packages":
+        (tmp_path / "venv" / "lib" / "python3.12" / "site-packages" / "newpkg").mkdir()
+    elif change == "pyvenv.cfg":  # same size and mtime: only the version text differs
+        cfg = tmp_path / "venv" / "pyvenv.cfg"
+        before = cfg.stat()
+        cfg.write_text("version = 3.12.2\n")
+        os.utime(cfg, ns=(before.st_atime_ns, before.st_mtime_ns))
+    else:
+        Path(python).write_text("rebuilt")
+    assert unit(KEY_TASK, (None, python)) == 2
+
+
+def test_cairnworks_own_interpreter_is_keyed_by_version_and_prefix(monkeypatch):
+    base = p2p._env_fingerprint(sys.executable)
+    monkeypatch.setattr(sys, "version", sys.version + " changed")
+    assert p2p._env_fingerprint(sys.executable) != base
+
+
+@pytest.mark.parametrize("kind", ["dangling-symlink", "symlink-to-file", "directory"])
+def test_only_a_regular_file_of_ours_counts_as_a_pass(unit, tmp_path, kind):
+    assert unit() == 1
+    (marker,) = (tmp_path / "runs" / "base-env-ok").iterdir()
+    marker.unlink()
+    if kind == "directory":
+        marker.mkdir()
+    else:
+        target = tmp_path / ("missing" if kind == "dangling-symlink" else "file")
+        if kind == "symlink-to-file":
+            target.write_text("")
+        marker.symlink_to(target)
+    assert unit() == 2
+
+
+def test_a_marker_owned_by_another_uid_is_not_a_pass(unit, tmp_path, monkeypatch):
+    assert unit() == 1
+    monkeypatch.setattr(os, "getuid", lambda: os.geteuid() + 1)  # the file is now "someone else's"
+    assert unit() == 2
+
+
+def test_a_base_whose_test_files_cannot_be_listed_is_a_failure(unit, monkeypatch):
+    def refuse(task, exclude):
+        raise P2PRejected("P2P_BASE_UNREADABLE", "ls-tree failed")
+
+    monkeypatch.setattr(p2p, "_base_tests", refuse)
+    with pytest.raises(BaseUncomparable) as got:
+        unit()
+    assert got.value.comparison.code == "BASE_ENV_FAILED" and "P2P_BASE_UNREADABLE" in str(
+        got.value
+    )
+
+
+def test_an_unreadable_base_is_a_failure_not_a_skip(project, tmp_path, monkeypatch):
+    probed: list = []
+    monkeypatch.setattr(p2p, "_probe", lambda *a, **k: probed.append(a) or ({"t": "passed"}, ""))
+    task = replace(KEY_TASK, repo=project, base_commit="4" * 40)  # not in the repository
+    with pytest.raises(BaseUncomparable) as got:
+        p2p.base_env_check(
+            task, tmp_path / "runs", TaskResult("t", "a" + "0" * 16, "FAILED"), (None, None)
+        )
+    assert got.value.comparison.code == "BASE_ENV_FAILED" and probed == []

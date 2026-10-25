@@ -36,10 +36,13 @@ task result. Core's notarisation contract is unchanged.
 
 from __future__ import annotations
 
+import glob
 import hashlib
 import json
 import os
 import shutil
+import stat
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from posixpath import basename
@@ -216,8 +219,9 @@ def base_env_check(task, run_root, result, verifying) -> None:
     over the cap, an exit other than 0 or 1, or no guard record raises UNCOMPARABLE
     ``BASE_ENV_FAILED``, so no worker quota is spent on a base that gives no evidence and the
     attempt is not counted against the worker. Failing tests are fine (the base has the bug).
-    Nothing from the test commit is read. A pass is remembered per repository, base, files and
-    verifier (``base-env-ok/`` in the run root), so only the first dispatch to that base pays; the
+    Nothing from the test commit is read. A pass is remembered per repository, base, files, import
+    paths, budget, verifier account and interpreter (``_env_fingerprint``) as a regular file in
+    ``base-env-ok/`` in the run root, so only the first dispatch to that base pays; the
     marker can only skip this check, never make anything pass: the probes after the worker run
     as before."""
     if not task.test_commit or task.p2p_mode == "off":
@@ -229,10 +233,12 @@ def base_env_check(task, run_root, result, verifying) -> None:
     files = select_p2p_targets(task.allowed_files, existing, task.test_roots, "module-dir")
     if not files:  # nothing to probe now; the steps after the worker decide, as before
         return
+    python = verifying[1] or getattr(verifying[0], "python", None) or sys.executable
+    account = getattr(verifying[0], "user", "")
     key = [str(Path(task.repo).resolve()), task.base_commit, files, task.import_paths,
-           task.p2p_budget, verifying[1] or "", getattr(verifying[0], "user", "")]  # fmt: skip
+           task.p2p_budget, python, account, _env_fingerprint(python)]  # fmt: skip
     marker = Path(run_root) / "base-env-ok" / hashlib.sha256(json.dumps(key).encode()).hexdigest()
-    if os.path.lexists(marker):
+    if _is_pass_marker(marker):
         return
     outcomes, why = _probe(task, files, run_root, result, verifying, task.p2p_budget, tag="e")
     if outcomes is None:
@@ -242,6 +248,47 @@ def base_env_check(task, run_root, result, verifying) -> None:
         os.close(os.open(marker, os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW, 0o600))
     except OSError:
         pass
+
+
+def _is_pass_marker(marker: Path) -> bool:
+    """Only a regular file of ours counts: not a symlink (dangling or not), directory or another
+    uid's file. Anything else, or an error, means probe again."""
+    try:
+        info = marker.lstat()
+    except OSError:
+        return False
+    return stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid()
+
+
+def _stat(path: str) -> list:
+    try:
+        info = os.stat(path)
+    except OSError as exc:  # e.g. under the verifier account's home: the name of the error
+        return [type(exc).__name__]
+    return [info.st_mtime_ns, info.st_size]
+
+
+def _env_fingerprint(python: str) -> list:
+    """What the verifier interpreter is, by stat and small reads only (it is never run here): the
+    real binary, the venv's pyvenv.cfg (its text holds the version) and the mtime of each
+    lib/python*/site-packages directory, which changes when a package is added or removed. For
+    Cairnwork's own interpreter also sys.version and the real sys.prefix. Unreadable parts are
+    recorded as such: the marker can only skip a check, never make anything pass."""
+    venv = os.path.dirname(os.path.dirname(os.path.abspath(python)))
+    real = os.path.realpath(python)
+    cfg = os.path.join(venv, "pyvenv.cfg")
+    try:
+        with open(cfg, "rb") as handle:
+            text = handle.read(4096).decode(errors="replace")
+    except OSError as exc:
+        text = type(exc).__name__
+    sites = sorted(glob.glob(os.path.join(glob.escape(venv), "lib", "python*", "site-packages")))
+    own = (
+        [sys.version, os.path.realpath(sys.prefix)]
+        if real == os.path.realpath(sys.executable)
+        else []
+    )
+    return [real, _stat(real), text, _stat(cfg), [[p, _stat(p)] for p in sites], own]
 
 
 def _env_failed(detail: str) -> BaseUncomparable:
