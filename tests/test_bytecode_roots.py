@@ -171,17 +171,74 @@ def test_a_non_ascii_pyc_name_fails(run):
     assert reason.endswith("(non-ASCII name)"), reason
 
 
-def test_a_long_s_directory_on_a_mirror_fails_where_it_folds(run, tmp_path):
+def test_a_long_s_directory_on_a_mirror_fails(run):
+    """APFS folds U+017F onto "s", so <P>/.../te\u017fts/helper.<tag>.pyc is found for
+    tests/helper.py; names are matched folded (NFD, case), which on a case-sensitive
+    filesystem only adds findings."""
     checkout, run_dir = run
-    folded = str(checkout / "tests").replace("/tests", "/teſts")
+    folded = str(checkout / "tests").replace("/tests", "/te\u017fts")
     target = run_dir / "home" / "alt" / folded.lstrip("/") / f"helper.{TAG}.pyc"
     target.parent.mkdir(parents=True)
     target.write_bytes(b"x")
-    found = scan(run)
-    if os.path.isdir(folded):  # APFS folds U+017F onto "s": Python would read it
-        assert found and all("(non-ASCII name)" in f for f in found), found
-    else:
-        assert found == ()
+    assert scan(run) == ("tests/helper.py (protected input)",)
+
+
+def link_in_the_mirror(checkout, run_dir, target_of):
+    """<P>/<head of the mirror>/<middle component> -> target_of(stash), with the rest of the
+    mirror and helper.<tag>.pyc physically under stash/ (whose path mirrors nothing)."""
+    parts = str(checkout / "tests").strip("/").split("/")
+    middle = len(parts) // 2
+    stash = run_dir / "home" / "stash"
+    stash.joinpath(*parts[middle + 1 :]).mkdir(parents=True)
+    (stash.joinpath(*parts[middle + 1 :]) / f"helper.{TAG}.pyc").write_bytes(b"x")
+    head = run_dir / "home" / "alt" / os.path.join(*parts[:middle])
+    head.mkdir(parents=True)
+    (head / parts[middle]).symlink_to(target_of(stash, head))
+
+
+def test_a_link_whose_target_differs_in_case_is_followed(run):
+    """#289 review: realpath keeps ../STASH as spelled, the kernel resolves it to stash/."""
+    checkout, run_dir = run
+    home = run_dir / "home"
+    if not (run_dir / "HOME").exists():
+        pytest.skip("case-sensitive filesystem: STASH is not stash")
+    upper = lambda stash, head: os.path.join(os.path.relpath(home, head), "STASH")  # noqa: E731
+    link_in_the_mirror(checkout, run_dir, upper)
+    assert scan(run) == ("tests/helper.py (protected input)",)
+
+
+def test_a_link_through_a_firmlink_is_followed(run):
+    """/System/Volumes/Data/private/... is the same directory as /private/... (APFS firmlink),
+    which no string comparison of the target sees."""
+    checkout, run_dir = run
+    stash = run_dir / "home" / "stash"
+    firm = "/System/Volumes/Data" + os.path.realpath(run_dir / "home") + "/stash"
+    if not os.path.isdir(os.path.dirname(firm)):
+        pytest.skip("no APFS firmlink to the run directory here")
+    link_in_the_mirror(checkout, run_dir, lambda stash, head: firm)
+    assert os.path.samefile(firm, stash)
+    assert scan(run) == ("tests/helper.py (protected input)",)
+
+
+def test_dotdot_after_a_link_in_the_mirror_is_followed(run):
+    """<P>/<checkout>/tests is a link to q/r, so <P>/<checkout>/tests/../tests is q/tests: read
+    for a source dir spelled <checkout>/tests/../tests (the same directory as tests/)."""
+    checkout, run_dir = run
+    mirror_tests = run_dir / "home" / "alt" / str(checkout / "tests").lstrip("/")
+    mirror_tests.parent.mkdir(parents=True)
+    (run_dir / "home" / "q" / "r").mkdir(parents=True)
+    mirror_tests.symlink_to(run_dir / "home" / "q" / "r")
+    (run_dir / "home" / "q" / "tests").mkdir()
+    (run_dir / "home" / "q" / "tests" / f"helper.{TAG}.pyc").write_bytes(b"x")
+    assert scan(run) == ("tests/helper.py (protected input)",)
+
+
+def test_committed_bytecode_read_with_the_root_as_prefix_fails(run):
+    """sys.pycache_prefix = "/" makes Python read <checkout>/tests/helper.<tag>.pyc itself."""
+    checkout, _ = run
+    (checkout / "tests" / f"helper.{TAG}.pyc").write_bytes(b"x")
+    (checkout / "tests" / "data.pyc").write_bytes(b"x")  # no tag: no source's cache, allowed
+    assert scan(run) == ("tests/helper.py (protected input)",)
 
 
 def test_a_closed_directory_is_opened_and_scanned(run):

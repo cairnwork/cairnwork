@@ -77,6 +77,37 @@ def forged_helper_run(repo, tmp_path, where, account=None):
     return run_one(repo, tmp_path, files, "tests/test_a.py", "tests/test_z.py", account=account)
 
 
+# Candidate code: the mirror of tests/ under $HOME/alt passes through a symlink, in its middle
+# component, to $HOME/stash spelled another way (#289 review): in another letter case, or through
+# the /System/Volumes/Data firmlink. The forged helper bytecode then lies physically in stash/.
+LINKED = (
+    "import os, sys\nfrom pathlib import Path\nfrom forger import forge\n"
+    "home = Path(os.environ['HOME']).resolve()\n"
+    "parts = str(Path(__file__).resolve().parents[1] / 'tests').strip('/').split('/')\n"
+    "head = home / 'alt' / os.path.join(*parts[: len(parts) // 2])\n"
+    "head.mkdir(parents=True)\n"
+    "(home / 'stash').mkdir()\n"
+    "target = {target}\n"
+    "os.symlink(target, head / parts[len(parts) // 2])\n"
+    "sys.pycache_prefix = str(home / 'alt')\n"
+    "forge('tests/helper.py', 'OK = True\\n', False)\n"
+)
+LINK_TARGETS = {
+    "case": "os.path.join(os.path.relpath(home, head), 'STASH')",
+    "firmlink": "'/System/Volumes/Data' + str(home / 'stash')",
+}
+
+
+def linked_helper_run(repo, tmp_path, how, account=None):
+    files = {
+        "src/evil.py": LINKED.format(target=LINK_TARGETS[how]),
+        "tests/helper.py": "OK = False\n",
+        "tests/test_a.py": "import evil\n\ndef test_a():\n    assert evil\n",
+        "tests/test_z.py": "from helper import OK\n\ndef test_z():\n    assert OK\n",
+    }
+    return run_one(repo, tmp_path, files, "tests/test_a.py", "tests/test_z.py", account=account)
+
+
 # An honest test that writes bytecode outside the run's prefix in ways real suites do: py_compile
 # with an explicit cfile, compileall's legacy layout, a child Python with a scrubbed environment
 # importing a tmp_path module (it writes tmp_path/__pycache__), and leaves a symlink and a
@@ -117,6 +148,26 @@ def test_a_redirected_plain_pyc_for_a_protected_helper_fails_the_run(repo, tmp_p
     assert "FORGED_BYTECODE" in run.why and "tests/helper" in run.why, run.why
 
 
+def test_a_redirect_through_a_case_variant_symlink_fails_the_run(repo, tmp_path):
+    if not (tmp_path / "REPO").exists():
+        pytest.skip("case-sensitive filesystem")
+    run = linked_helper_run(repo, tmp_path, "case")
+    assert run.returncode == 0, run.log_path.read_text()  # the import system followed it
+    assert not run.observation.passed
+    assert "FORGED_BYTECODE" in run.why and "tests/helper" in run.why, run.why
+
+
+def test_a_redirect_through_a_firmlink_symlink_fails_the_run(repo, tmp_path):
+    """Whether Seatbelt lets the run use the /System/Volumes/Data spelling or not, the run must
+    not pass; when the forgery ran, the scan is what fails it."""
+    if not os.path.isdir("/System/Volumes/Data" + str(tmp_path)):
+        pytest.skip("no APFS firmlink to the run directory here")
+    run = linked_helper_run(repo, tmp_path, "firmlink")
+    assert not run.observation.passed
+    if run.returncode == 0:
+        assert "FORGED_BYTECODE" in run.why and "tests/helper" in run.why, run.why
+
+
 def test_honest_bytecode_symlinks_and_closed_dirs_in_tmp_path_pass(repo, tmp_path):
     run = run_one(repo, tmp_path, {"tests/test_honest.py": HONEST}, "tests/test_honest.py")
     assert run.observation.passed, (run.why, run.log_path.read_text())
@@ -150,6 +201,14 @@ def test_account_a_redirected_pytest_pyc_fails_the_run(repo, tmp_path, where, ac
 @pytest.mark.verifier_account
 def test_account_a_redirected_plain_pyc_fails_the_run(repo, tmp_path, account_run_root):
     run = forged_helper_run(repo, tmp_path, "home", account=ACCOUNT)
+    assert run.returncode == 0, run.log_path.read_text()
+    assert not run.observation.passed
+    assert "FORGED_BYTECODE" in run.why and "tests/helper" in run.why, run.why
+
+
+@pytest.mark.verifier_account
+def test_account_a_redirect_through_a_case_variant_symlink_fails(repo, tmp_path, account_run_root):
+    run = linked_helper_run(repo, tmp_path, "case", account=ACCOUNT)
     assert run.returncode == 0, run.log_path.read_text()
     assert not run.observation.passed
     assert "FORGED_BYTECODE" in run.why and "tests/helper" in run.why, run.why

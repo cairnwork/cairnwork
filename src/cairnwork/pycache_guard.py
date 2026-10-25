@@ -34,8 +34,11 @@ ligatures, the Kelvin sign and NFC/NFD spellings onto ASCII ones. The run's own 
 
 Candidate code may also point ``sys.pycache_prefix`` at another writable directory at runtime
 (#276): bytecode_roots.py scans everything else the run may write, with rules built on the ones
-here. Known gap, as with the checkout comparison: bytecode planted and removed again during the
-run is not seen. The separate verifier account and the report guard remain the boundary.
+here. Known gaps, as with the checkout comparison: bytecode planted and removed again during the
+run is not seen; and candidate code that changes the import path itself (``sys.path``,
+``sys.meta_path``, path hooks, ``.pth`` files, zip archives on the path) is an in-process import
+hijack neither check claims. The separate verifier account and the report guard remain the
+boundary.
 """
 
 from __future__ import annotations
