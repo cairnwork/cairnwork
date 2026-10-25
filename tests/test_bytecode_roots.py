@@ -127,10 +127,10 @@ def test_a_symlink_into_the_mirror_is_followed(run):
     """<P>/<head of the mirror>/<middle component> is a symlink to stash/, which holds the rest:
     the physical path stash/<rest> spells no existing directory (its first name is not one at
     /), only the spelling through the link mirrors tests/helper.py."""
-    checkout, _ = run
+    checkout, run_dir = run
     parts = str(checkout / "tests").strip("/").split("/")
     assert not os.path.isdir("/" + parts[len(parts) // 2 + 1])
-    link_in_the_mirror(*run, lambda stash, head: stash)
+    link_in_the_mirror(checkout, run_dir, lambda stash, head: stash)
     assert scan(run) == ("tests/helper.py (protected input)",)
 
 
@@ -278,7 +278,7 @@ def test_an_unreadable_directory_fails_closed(run):
 def test_a_listable_but_unsearchable_directory_fails_closed(run):
     """#289 round 4: the candidate denies search (not list) by ACL at exit on the directory
     holding a link into the mirror; the link's target cannot then be resolved (EACCES)."""
-    head = link_in_the_mirror(*run, lambda stash, head: stash)
+    head = link_in_the_mirror(run[0], run[1], lambda stash, head: stash)
     subprocess.run(["/bin/chmod", "+a", "everyone deny search", str(head)], check=True)
     try:
         found = scan(run)

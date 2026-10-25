@@ -282,8 +282,9 @@ class Side:
 def walk(nodes, edges, pycs, listed, max_states, out):
     useful = useful_nodes(edges, pycs)
     side, top = Side(), dir_ident("/")
-    states = deque((node, "/", top, None) for node in useful)
-    seen = {(node, top, None) for node in useful}
+    # (node, D spelling, D identity, legacy (path, identity) or None)
+    states: deque[tuple] = deque((node, "/", top, None) for node in useful)
+    seen: set[tuple] = {(node, top, None) for node in useful}
     budget, hits = len(seen) + max_states, set()
     while states:
         node, path, here, before = states.popleft()
