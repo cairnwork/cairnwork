@@ -205,15 +205,12 @@ def _code_probes(
         owner_victim.wait()
         if sibling_proc:
             escapes.stop_sibling_victim(tools, fx, sibling_proc)
-    rows = [
-        json.loads(line[len(probe.MARK) :])
-        for line in call.output.splitlines()
-        if line.startswith(probe.MARK)
-    ]
+    rows, bad = probe.parse_rows(call.output)  # a row without a kind is a broken probe
     identity = next((r for r in rows if r["kind"] == "identity"), {})
     run = {
         "probe": "pytest runs the probe",
-        "pass": call.exit_code == 0 and bool(identity),
+        "pass": call.exit_code == 0 and bool(identity) and not bad,
+        "malformed_rows": bad,
         "exit_code": call.exit_code,
         "secret_leaked": fx.secret in call.output,
     }

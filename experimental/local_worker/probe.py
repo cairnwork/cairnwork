@@ -178,6 +178,24 @@ def test_canary_probe():
 """
 
 
+def parse_rows(output: str) -> tuple[list[dict], int]:
+    """The probe's rows in ``output`` and how many marked lines were not a JSON object with a
+    string kind (those are counted against the run, never skipped, never a crash)."""
+    rows, bad = [], 0
+    for line in output.splitlines():
+        if not line.startswith(MARK):
+            continue
+        try:
+            row = json.loads(line[len(MARK) :])
+        except ValueError:
+            row = None
+        if isinstance(row, dict) and isinstance(row.get("kind"), str):
+            rows.append(row)
+        else:
+            bad += 1
+    return rows, bad
+
+
 def source(
     reads: dict[str, str],
     writes: dict[str, str],

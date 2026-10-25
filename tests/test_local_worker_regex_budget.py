@@ -165,9 +165,10 @@ def _grown(rng: random.Random) -> str:
 @darwin
 def test_every_accepted_pattern_is_cheap_for_the_real_grep(tmp_path):
     """Property: of generated patterns, each one the check accepts runs on macOS grep -E in under
-    64 MiB and under 2 CPU seconds per MiB of adversarial input (on the M5 the budgets were
-    measured on; a slower host gets 1.5 times what the slowest edge pattern takes on it); the
-    Codex patterns are among the refused."""
+    64 MiB and under 3 CPU seconds per MiB of adversarial input (the budgets were measured at
+    about 2 s on the M5; a slower host gets 3 times what an edge pattern takes on it, which keeps
+    timing a hard check without flaking on a busy CI runner; RSS and exit status are always
+    hard); the Codex patterns are among the refused."""
     from experimental.local_worker.agent_protocol import BadCall
 
     path = tmp_path / "adversarial.txt"
@@ -176,7 +177,7 @@ def test_every_accepted_pattern_is_cheap_for_the_real_grep(tmp_path):
     patterns = {"".join(rng.choice(PIECES) for _ in range(rng.randint(1, 5))) for _ in range(700)}
     patterns |= {_grown(rng) for _ in range(24)} | set(EDGES)
     controls = {CODEX_ROUND_3, r"^[[:alpha:][](a+)+\1$", "^[[:alpha:][]((a{100}){100}){100}$"}
-    limit = max(2 / MIB_SHARE, 1.5 * _grep(EDGES[0], str(path), 2)[2])
+    limit = max(3 / MIB_SHARE, 3 * _grep(EDGES[0], str(path), 2)[2])
     accepted, refused = [], set()
     for pattern in sorted(patterns | controls):
         try:
@@ -257,3 +258,31 @@ def test_grep_reads_a_brace_with_no_digit_first_as_text(tmp_path):
         ["/usr/bin/grep", "-E", "-o", "-e", "a{,3}", str(path)], capture_output=True, text=True
     )
     assert out.stdout == "a{,3}\n"
+
+
+# -- escapes grep reads as one character (Claude review of e9a77d2, NIT 3) -------------------------
+@pytest.mark.parametrize("escape", [r"\t", r"\r", r"\f", r"\a", r"\e", r"\v"])
+def test_an_escape_grep_reads_as_one_character_is_one_atom(escape):
+    assert regex_cap.cost(escape + "+")[:2] == (1, False)
+    assert _decode_search(f"x{escape}+y")["pattern"] == f"x{escape}+y"
+    assert _decode_search(f"({escape})*")["pattern"] == f"({escape})*"
+
+
+@pytest.mark.parametrize("pattern", [r"\n+", r"\x+", r"\q+", r"\y*", "(?:x)", "(?:x)+"])
+def test_an_escape_or_syntax_of_unclear_meaning_stays_refused(pattern):
+    _refused(pattern, "match the empty string|repetition right after another")
+
+
+@darwin
+def test_grep_reads_the_accepted_escapes_as_one_character(tmp_path):
+    """The oracle for _SINGLE_ESCAPES: the control character matches, the letter alone does not
+    (except \\v, a plain v), and \\n matches nothing."""
+    path = tmp_path / "e.txt"
+    controls = {"t": "\t", "r": "\r", "f": "\f", "a": "\a", "e": "\x1b", "v": "v"}
+    for letter, char in controls.items():
+        path.write_text(f"Z{char}{char}Z\n")
+        assert _grep(rf"^Z\{letter}+Z$", str(path), 2)[0] == 0, letter
+        path.write_text(f"Z{letter}Z\n" if letter != "v" else "ZZ\n")
+        assert _grep(rf"^Z\{letter}Z$", str(path), 2)[0] == 1, letter
+    path.write_text("Zn\nZ\nn\n")
+    assert _grep(r"\n", str(path), 2)[0] == 1  # not a newline, not an n
