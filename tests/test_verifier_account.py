@@ -384,11 +384,12 @@ def test_remove_does_not_follow_a_symlink(tmp_path):
     target.mkdir()
     os.chmod(target, 0o2770)  # the account could delete what is inside
     (target / "evidence").write_text("keep")
-    try:
-        link.symlink_to(target)
-        ACCOUNT.remove(link)
-        assert (target / "evidence").exists()
-    finally:
-        link.unlink(missing_ok=True)
-        (target / "evidence").unlink(missing_ok=True)
-        target.rmdir()
+    with ACCOUNT.exclusive():  # the run root is shared (#247): touch only these names, locked
+        try:
+            link.symlink_to(target)
+            ACCOUNT.remove(link)
+            assert (target / "evidence").exists()
+        finally:
+            link.unlink(missing_ok=True)
+            (target / "evidence").unlink(missing_ok=True)
+            target.rmdir()
