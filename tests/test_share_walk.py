@@ -198,3 +198,89 @@ def test_an_acl_hidden_from_the_owner_and_one_on_the_top_directory_are_found(tmp
     finally:
         subprocess.run(["/bin/chmod", "-R", "-N", str(root)], check=True)  # noqa: S603
     assert found == [".", "sub"]
+
+
+def _git_entry(root, kind):
+    git = root / ".git"
+    if kind == "file":  # a worktree or submodule gitlink; the target must never be followed
+        git.write_text("gitdir: ../elsewhere\n")
+        os.chmod(git, 0o600)
+        os.link(git, root.parent / "git-second-link")
+    elif kind == "dir":
+        git.mkdir()
+        (git / "HEAD").write_text("ref")
+        os.chmod(git / "HEAD", 0o600)
+        os.chmod(git, 0o700)
+    else:  # a symlink to a directory outside, with a file the helper must not touch
+        outside = root.parent / "outside"
+        outside.mkdir()
+        (outside / "f").write_text("o")
+        os.chmod(outside / "f", 0o600)
+        git.symlink_to(outside)
+    return git
+
+
+@pytest.mark.parametrize(("kind", "inside", "mode"), [
+    ("file", None, 0o600), ("dir", "HEAD", 0o600), ("link", None, None),
+])  # fmt: skip
+def test_the_top_level_dot_git_is_left_alone_whatever_its_type(tmp_path, kind, inside, mode):
+    """A regular file at 0600 with a second link (a gitlink) is skipped, not "more than one
+    link"; a directory is not entered; a symlink is neither followed nor chmodded. The rest of the
+    checkout is still shared and the helper exits 0."""
+    root = _tree(tmp_path)
+    (root / "top.txt").write_text("t")
+    os.chmod(root / "top.txt", 0o600)
+    git = _git_entry(root, kind)
+    before = os.lstat(git)
+    done = _share(root)
+    assert done.returncode == 0, done.stderr
+    after = os.lstat(git)
+    assert (after.st_mode, after.st_ino) == (before.st_mode, before.st_ino)
+    if inside:
+        assert stat.S_IMODE(os.lstat(git / inside).st_mode) == mode
+    if kind == "link":
+        assert stat.S_IMODE(os.lstat(root.parent / "outside" / "f").st_mode) == 0o600
+    assert stat.S_IMODE(os.lstat(root / "top.txt").st_mode) == 0o644  # the rest is still shared
+    assert stat.S_IMODE(os.lstat(root / "sub").st_mode) == 0o755
+
+
+def test_a_nested_dot_git_is_shared_like_any_other_entry(tmp_path):
+    """Only the top-level .git is special: below it a .git directory is walked and a .git file
+    is shared, and a second link on that file still fails the share."""
+    root = _tree(tmp_path)
+    (root / "sub" / ".git").mkdir()
+    (root / "sub" / ".git" / "HEAD").write_text("ref")
+    os.chmod(root / "sub" / ".git" / "HEAD", 0o600)
+    (root / "sub" / "pkg").mkdir()
+    gitfile = root / "sub" / "pkg" / ".git"
+    gitfile.write_text("gitdir: x\n")
+    os.chmod(gitfile, 0o600)
+    done = _share(root)
+    assert done.returncode == 0, done.stderr
+    assert stat.S_IMODE(os.lstat(root / "sub" / ".git" / "HEAD").st_mode) == 0o644
+    assert stat.S_IMODE(os.lstat(gitfile).st_mode) == 0o644
+    os.chmod(gitfile, 0o600)
+    os.link(gitfile, tmp_path / "second")
+    done = _share(root)
+    assert done.returncode == 1 and "more than one link: sub/pkg/.git" in done.stderr
+
+
+@pytest.mark.parametrize("name", [".GIT", ".Git"])
+def test_a_case_variant_of_dot_git_is_shared_like_any_other_entry(tmp_path, name):
+    """Only the exact name .git is skipped. Uses a checkout with no .git, so that on a
+    case-insensitive filesystem the variant does not collide with an existing .git."""
+    root = _tree(tmp_path)
+    variant = root / name
+    variant.write_text("x")
+    os.chmod(variant, 0o600)
+    done = _share(root)
+    assert done.returncode == 0, done.stderr
+    assert stat.S_IMODE(os.lstat(variant).st_mode) == 0o644
+
+
+def test_a_dangling_top_level_dot_git_symlink_is_skipped_without_error(tmp_path):
+    root = _tree(tmp_path)
+    (root / ".git").symlink_to(tmp_path / "missing")
+    done = _share(root)
+    assert done.returncode == 0, done.stderr
+    assert os.readlink(root / ".git") == str(tmp_path / "missing")
