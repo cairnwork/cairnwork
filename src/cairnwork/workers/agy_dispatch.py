@@ -194,6 +194,32 @@ def raise_if_worker_refused(status: dict, log_path) -> None:
         )
 
 
+OPERATION_ID = re.compile(r"agyop_[0-9a-f]{32}")
+STATUS_QUERY_SECONDS = 30
+
+
+def operation_model(dispatch: Dispatch, operation_id: object, env: dict[str, str]) -> object:
+    """``observed_model`` from the dispatcher's own record of the operation its WORKER_LAUNCH
+    receipt named (``<dispatcher> --status <id>`` prints that record as JSON), run with the
+    same ``env`` as the dispatch so it finds the same operation store. Only a record of that
+    operation whose status is COMPLETED counts; anything else is None. The final status line
+    is never a source."""
+    if not (isinstance(operation_id, str) and OPERATION_ID.fullmatch(operation_id)):
+        return None
+    try:
+        done = subprocess.run(  # noqa: S603 - the configured dispatcher, argv list, no shell
+            [dispatch.path, f"--status={operation_id}"], cwd="/", env=env,
+            stdin=subprocess.DEVNULL, capture_output=True, text=True,
+            timeout=STATUS_QUERY_SECONDS, check=False,
+        )  # fmt: skip
+        record = json.loads(done.stdout) if done.returncode == 0 else {}
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    if not isinstance(record, dict) or record.get("operation_id") != operation_id:
+        return None
+    return record.get("observed_model") if record.get("status") == "COMPLETED" else None
+
+
 def sweep_worker_run(dispatch: Dispatch, run_root: str) -> bool:
     """Kill the run's worker-account processes through the wrapper (the owner cannot
     signal another uid) and remove the run directory a killed dispatcher left behind.

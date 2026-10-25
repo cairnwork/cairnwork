@@ -93,3 +93,15 @@ def test_lay_tests_over_commits_the_overlay_tree(repo, three, tmp_path):
     assert git(repo, "rev-parse", f"{judged}^{{tree}}") == expected
     assert git(repo, "rev-parse", f"{judged}^") == head
     assert not list(Path(tmp_path / "runs").iterdir())  # the private index is gone
+
+
+def test_the_overlay_commit_carries_the_provenance_trailers(repo, three, tmp_path):
+    from cairnwork import provenance
+
+    _base, head, tests = three
+    (tmp_path / "runs").mkdir()
+    info = provenance.make("agy", "m-1", "m-2")
+    judged = lay_tests_over(
+        repo, head, tests, ("tests/test_a.py",), "a0123456789abcdef", tmp_path / "runs", info
+    )
+    assert provenance.parse(git(repo, "show", "-s", "--format=%B", judged)) == info

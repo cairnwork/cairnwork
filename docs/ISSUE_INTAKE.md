@@ -46,7 +46,7 @@
    - **專用 clone(mirror)一定要單分支**：用 `git clone --single-branch --branch main <url>` 建立。整包 clone 會把放延後(隱藏)測試的單 commit 分支也抓進 mirror,讓 worker 本機就讀得到。runner 啟動時會檢查 `remote.origin.fetch` 只含 main,否則以 `LINEAGE_MIRROR_NOT_SINGLE_BRANCH` 拒絕(#76)。
    - **接手**：符合條件的 Issue 交給 Cairnwork，改標成 `cairnwork:running`，並留言附上 task id。
    - **收尾**：
-     - 完成而且 Core 判定 VERIFIED：推出分支 `cairnwork/<issue>-<attempt>`，開成 **draft PR**。PR 內文寫 `Refs #N` 並附上 Nexus 的標記，Issue 標成 `cairnwork:pr-opened`。
+     - 完成而且 Core 判定 VERIFIED：推出分支 `cairnwork/<issue>-<attempt>`，開成 **draft PR**。PR 內文寫 `Refs #N`、附上 Nexus 的標記，再列三行出處 `Worker:`、`Requested model:`、`Observed model:`（取自 Cairnwork 自己的設定和 dispatcher 回報，候選 commit 訊息有同樣三個 trailer；缺的、或沒開 `agy_run_as_user` 時的 Observed model 一律寫 `unknown`，絕不預設成 Claude），Issue 標成 `cairnwork:pr-opened`。
      - 沒有完成：在 Issue 留言寫明原因，標成 `cairnwork:failed`。不會自動重跑；要重試，就修改區塊內容，那會成為一件新任務。
    - **格式不符**：留言一次說明原因，改標成 `cairnwork:needs-fix`，移出佇列。
    - **身分不可信**：照 EIA 的做法完全不碰，也不留言。

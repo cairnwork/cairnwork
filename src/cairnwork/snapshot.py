@@ -19,6 +19,7 @@ import stat
 from pathlib import Path
 
 from cairnwork.gitcmd import GitCommandError, hash_blob, run_git
+from cairnwork.provenance import trailers
 from cairnwork.workspace import (
     ATTEMPT_REF_PREFIX,
     Attempt,
@@ -38,6 +39,7 @@ def snapshot_candidate(
     allowed_files: tuple[str, ...],
     *,
     allow_deletions: bool = False,
+    provenance: dict | None = None,
 ) -> Candidate:
     """Commit the clone's allowed files on top of the base, then check the result."""
     require_refs_unchanged(repo, attempt)
@@ -52,7 +54,7 @@ def snapshot_candidate(
         base_tree = run_git(repo, "rev-parse", f"{attempt.base_commit}^{{tree}}").strip()
         if tree == base_tree:
             raise CandidateRejected("NO_COMMIT", "the worker changed no allowed file")
-        message = f"Cairnwork attempt {attempt.attempt_id}"
+        message = f"Cairnwork attempt {attempt.attempt_id}{trailers(provenance)}"
         head = run_git(
             repo, *_IDENTITY, "commit-tree", tree, "-p", attempt.base_commit, "-m", message
         ).strip()

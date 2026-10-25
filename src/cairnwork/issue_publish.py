@@ -11,6 +11,7 @@ import subprocess
 from pathlib import Path
 
 from cairnwork.journal import PHASES
+from cairnwork.provenance import clean
 
 STATUSES = frozenset({"FAILED", "CANCELLED", "SUPERSEDED", "COMPLETED"})
 BOT_GH = "nexus-agent-gh"
@@ -63,8 +64,10 @@ def require_bot_gh(gh: str, repo: str, cwd: Path) -> None:
         raise RuntimeError(f"GH_IDENTITY_NOT_BOT: {BOT_GH} has no installation token for {repo}")
 
 
-def pr_body(number: int, task_id: str, attempt: str, commit: str) -> str:
-    """Only validated fields: the caller has matched task id, attempt and commit."""
+def pr_body(number: int, task_id: str, attempt: str, commit: str, provenance: dict) -> str:
+    """Only validated fields: the caller has matched task id, attempt and commit, and
+    ``provenance`` comes from the commit's own trailers (provenance.parse)."""
+    who = provenance_lines(provenance)
     return (
         f"Refs #{number}\n\nCairnwork: 受影響（Cairnwork 試點：Issue 直接送 Cairnwork 修）\n\n"
         f"- Cairnwork task `{task_id}`，attempt `{attempt}`\n"
@@ -72,7 +75,16 @@ def pr_body(number: int, task_id: str, attempt: str, commit: str) -> str:
         "- 這是 draft：照一般規則審查、檢查全綠後再由審查者合併；Cairnwork 不合併。\n\n"
         f"<!-- NEXUS_CORE_ISSUE: {number} -->\n<!-- NEXUS_ISSUE_INTENT_V1\n"
         f'[{{"issue": {number}, "on_merge": "KEEP_OPEN"}}]\nNEXUS_ISSUE_INTENT_V1 -->\n\n'
-        "🤖 Generated with [Claude Code](https://claude.com/claude-code)\n"
+        f"{who}\n"
+    )
+
+
+def provenance_lines(provenance: dict) -> str:
+    """Worker, requested model, observed model; each cleaned again, so a bad value is unknown."""
+    return (
+        f"Worker: {clean(provenance.get('worker'))}\n"
+        f"Requested model: {clean(provenance.get('requested_model'))}\n"
+        f"Observed model: {clean(provenance.get('observed_model'))}"
     )
 
 

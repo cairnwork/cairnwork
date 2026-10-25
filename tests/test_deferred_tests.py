@@ -10,6 +10,7 @@ from conftest import commit_change, git
 from test_pipeline import EditWorker
 
 import cairnwork.deferred_tests as dt
+from cairnwork import provenance
 from cairnwork.journal import Journal
 from cairnwork.notary import Notary
 from cairnwork.ownership import OwnershipLedger
@@ -271,3 +272,37 @@ def test_an_unparsable_test_commit_is_refused_before_any_base_run(project, tmp_p
     result = run(project, tmp_path, base, test_commit, SeeingWorker(FIX))
     assert "TEST_COMMIT_UNPARSABLE" in result.reason
     assert list((tmp_path / "state" / "runs").glob("*-b-v*")) == []  # never ran, no logs
+
+
+class ProvenanceWorker:
+    """Writes like EditWorker and returns provenance, as AgyWorker does."""
+
+    def __init__(self, files):
+        self.edit = EditWorker(files)
+
+    def run(self, workdir: Path, task) -> dict[str, str]:
+        self.edit.run(workdir, task)
+        return provenance.make("agy", "m-1", "m-2")
+
+
+def _trailers(project, commit):
+    return provenance.parse(git(project, "show", "-s", "--format=%B", commit))
+
+
+def test_a_workers_provenance_is_on_the_snapshot_and_the_overlay_commit(project, tmp_path):
+    base, test_commit = make_test_commit(project, {"tests/test_regression.py": REGRESSION})
+    result = run(project, tmp_path, base, test_commit, ProvenanceWorker(FIX))
+    assert result.status == "COMPLETED", result.reason
+    want = provenance.make("agy", "m-1", "m-2")
+    overlay = result.candidate_commit  # the commit the PR is opened from
+    assert git(project, "rev-parse", f"{overlay}^") != base  # it sits on the snapshot
+    assert _trailers(project, overlay) == want
+    assert _trailers(project, git(project, "rev-parse", f"{overlay}^")) == want
+
+
+def test_a_worker_with_no_provenance_leaves_both_commits_unknown(project, tmp_path):
+    base, test_commit = make_test_commit(project, {"tests/test_regression.py": REGRESSION})
+    result = run(project, tmp_path, base, test_commit, EditWorker(FIX))
+    unknown = {k: "unknown" for k in ("worker", "requested_model", "observed_model")}
+    assert _trailers(project, result.candidate_commit) == unknown
+    assert _trailers(project, git(project, "rev-parse", f"{result.candidate_commit}^")) == unknown
