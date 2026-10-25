@@ -35,7 +35,7 @@ from cairnwork.gitcmd import OID
 from cairnwork.journal import AlreadyDispatched, Journal
 from cairnwork.notary import Notary
 from cairnwork.ownership import OWNER, InvalidStatusTransition, OwnershipLedger, request_digest
-from cairnwork.p2p import p2p_for
+from cairnwork.p2p import base_env_check, p2p_for
 from cairnwork.p2p_selection import DEFAULT_BUDGET_SECONDS, DIRECT_MODE
 from cairnwork.pipeline_judge import judge_candidate, tests_with_teeth
 from cairnwork.protected_paths import path_refusal
@@ -283,19 +283,17 @@ def _attempt(task, specs, digest, notary, worker, run_root, result, steps, verif
     if refusal := gate():
         result.reason = refusal
         return
-    if task.test_commit:
-        try:
-            never_seen(task.repo, task.test_commit)
-        except TestCommitRejected as exc:
-            result.reason = str(exc)
-            return
     try:
+        if task.test_commit:
+            never_seen(task.repo, task.test_commit)
         check_roots_on_base(task.repo, task.base_commit, task.test_roots)
     except TestCommitRejected as exc:
         result.reason = str(exc)
         return
     try:  # before the worker: no worker quota spent, no test exposed (#234)
         precheck(*verifying)
+        with base_stage(*verifying):  # and the unchanged base can run its tests at all
+            base_env_check(task, run_root, result, verifying)
     except BaseUncomparable as exc:  # nothing has run, so nothing a worker could have broken
         result.reason = exc.comparison.worker_reason(isolated=True)
         return

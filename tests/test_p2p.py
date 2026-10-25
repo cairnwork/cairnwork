@@ -102,13 +102,15 @@ def test_a_base_probe_timeout_degrades_to_module_dir_and_says_so(project, tmp_pa
     assert result.status == "FAILED" and not result.verified
 
 
-def test_a_probe_that_times_out_even_in_module_dir_refuses_the_task(project, tmp_path):
+def test_a_probe_that_times_out_even_in_module_dir_ends_before_the_worker(project, tmp_path):
     result = run(
         project, tmp_path, {"src/calc.py": FIX_ADD}, mode="module-dir", budget=5,
         extra={"tests/test_slow.py": SLEEP},
     )  # fmt: skip
-    assert result.status == "FAILED" and not result.verified
-    assert "P2P_BASE_PROBE_UNUSABLE" in result.reason and "base-probe-timeout" in result.reason
+    # #234: the same module-dir files are probed on the unchanged base before the worker starts
+    assert result.status == "FAILED" and not result.verified and result.candidate_commit is None
+    assert result.reason.startswith("UNCOMPARABLE: BASE_ENV_FAILED: ")
+    assert "base-probe-timeout" in result.reason
 
 
 def test_a_candidate_run_that_times_out_is_not_verified(project, tmp_path):
@@ -201,7 +203,7 @@ BIG = "import pytest\n@pytest.mark.parametrize('i', range(100))\ndef test_x(i):\
         ("tests/big/test_big.py", "COMPLETED", "base-probe-report-over-cap"),
         ("tests/test_big.py", "FAILED", None),
     ],
-    ids=["nested: degrades to module-dir", "flat: refused, same files"],
+    ids=["nested: degrades to module-dir", "flat: fails on the unchanged base"],
 )
 def test_a_suite_too_large_for_one_report_degrades_or_refuses_and_says_so(
     project, tmp_path, monkeypatch, big_path, status, degraded
@@ -216,6 +218,6 @@ def test_a_suite_too_large_for_one_report_degrades_or_refuses_and_says_so(
         assert result.verified and result.p2p["degraded"] == degraded
         assert result.p2p["applied"] == "module-dir" and result.p2p["targets"] >= 1
     else:
-        assert not result.verified and "P2P_BASE_PROBE_UNUSABLE" in result.reason
-        assert "base-probe-report-over-cap" in result.reason
-        assert "module-dir selects the same files" in result.reason
+        # #234: flat, so the module-dir files overflow too, already on the unchanged base
+        assert not result.verified and "UNCOMPARABLE: BASE_ENV_FAILED: " in result.reason
+        assert "base-probe-report-over-cap" in result.reason and result.candidate_commit is None

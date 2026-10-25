@@ -29,6 +29,11 @@ path ends FAILED with reason `UNCOMPARABLE: P2P_BASE_PROBE_UNUSABLE: ...` when t
 another uid (`agy_run_as_user`), else plainly `P2P_BASE_PROBE_UNUSABLE: ...`. A probe that worked
 but found no base-passing test (no degradation) is still only recorded (`targets: 0`).
 
+Since #234 the `module-dir` files are also probed on the unchanged base before the worker starts
+(`p2p.base_env_check`). If that probe fails the same way, the attempt ends there with
+`UNCOMPARABLE: BASE_ENV_FAILED: ...` (no `WORKER_STARTED`, isolated or not), so a flat layout whose
+probe overflows or hangs no longer reaches the rows below.
+
 | Situation | Result |
 |---|---|
 | base probe times out, reports nothing usable, or its report exceeds the 4 MiB report cap (a suite too large for one guard report; #184) in `whole-suite` | degrade once to `module-dir`; recorded as `degraded: base-probe-timeout` / `base-probe-failed` / `base-probe-report-over-cap` |

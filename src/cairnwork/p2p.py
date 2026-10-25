@@ -25,6 +25,9 @@ Failure paths, none of which can end VERIFIED:
   without a re-run;
 * the p2p verifier id clashes with an author verifier: REFUSED.
 
+Before the worker starts, ``base_env_check`` probes the ``module-dir`` files on the unchanged base
+the same way; a probe failure there is UNCOMPARABLE ``BASE_ENV_FAILED`` (environment, #234).
+
 ``p2p_time_budget_seconds`` bounds each run (probe, degraded probe, candidate run, re-run).
 The rule actually used is a dict (``P2PPlan.rule``): it goes into the p2p observation's artifact
 hash (so Core's record binds it), into ``p2p-selection.json`` beside the verifier log, and into the
@@ -35,7 +38,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
+import stat
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from posixpath import basename
@@ -80,11 +86,11 @@ def _base_tests(task, exclude: frozenset[str]) -> tuple[str, ...]:
     )  # fmt: skip
 
 
-def _probe(task, files, run_root, result, verifying, budget):
+def _probe(task, files, run_root, result, verifying, budget, tag="p"):
     """Per-test outcomes of ``files`` on the base, or (None, reason) when the run is unusable."""
     runs = run_verifiers(
         task.repo, task.base_commit, (VerifierSpec("p2p-probe", files),), run_root,
-        f"{result.attempt_id}-p", attempt_id=result.attempt_id, account=verifying[0],
+        f"{result.attempt_id}-{tag}", attempt_id=result.attempt_id, account=verifying[0],
         python=verifying[1], base_commit=task.base_commit, timeout=budget,
         import_paths=task.import_paths,
     )  # fmt: skip
@@ -200,6 +206,140 @@ def _run_once(spec, plan, note, task, judged, run_root, result, verifying, tag) 
     except OSError:
         pass  # the hash already binds the rule
     return run
+
+
+ENV_FAILED = "BASE_ENV_FAILED"
+
+
+def base_env_check(task, run_root, result, verifying) -> None:
+    """Before the worker starts (#234): can the unchanged base run its own existing tests at all?
+    For a task that will be probed after the worker (deferred tests, P2P not off), the module-dir
+    selection of existing base tests is probed now, the same way (``_probe``): a timeout, a report
+    over the cap, an exit other than 0 or 1, or no guard record raises UNCOMPARABLE
+    ``BASE_ENV_FAILED``, so no worker quota is spent on a base that gives no evidence and the
+    attempt is not counted against the worker. Failing tests are fine (the base has the bug).
+    Nothing from the test commit is read. A pass is remembered per repository, base, files, import
+    paths, budget, verifier account and interpreter (``_env_fingerprint``) as a regular file in
+    ``base-env-ok/`` in the run root, so only the first dispatch to that base pays; the
+    marker can only skip this check, never make anything pass: the probes after the worker run
+    as before."""
+    if not task.test_commit or task.p2p_mode == "off":
+        return
+    try:
+        existing = _base_tests(task, frozenset())
+    except P2PRejected as exc:
+        raise _env_failed(str(exc)) from exc
+    files = select_p2p_targets(task.allowed_files, existing, task.test_roots, "module-dir")
+    if not files:  # nothing to probe now; the steps after the worker decide, as before
+        return
+    python = verifying[1] or getattr(verifying[0], "python", None) or sys.executable
+    account = getattr(verifying[0], "user", "")
+    fingerprint = _env_fingerprint(python)  # None: something unreadable, no marker either way
+    key = [str(Path(task.repo).resolve()), task.base_commit, files, task.import_paths,
+           task.p2p_budget, python, account, fingerprint]  # fmt: skip
+    digest = hashlib.sha256(json.dumps(key).encode()).hexdigest()
+    marker = Path(run_root) / "base-env-ok" / digest if fingerprint is not None else None
+    if marker is not None and _is_pass_marker(marker):
+        return
+    outcomes, why = _probe(task, files, run_root, result, verifying, task.p2p_budget, tag="e")
+    if outcomes is None:
+        raise _env_failed(f"{why}: {len(files)} existing test file(s) near the change")
+    if marker is None:
+        return
+    try:  # an unwritten marker only means the next dispatch probes again
+        marker.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.close(os.open(marker, os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW, 0o600))
+    except OSError:
+        pass
+
+
+def _is_pass_marker(marker: Path) -> bool:
+    """Only a regular file of ours counts: not a symlink (dangling or not), directory or another
+    uid's file. Anything else, or an error, means probe again."""
+    try:
+        info = marker.lstat()
+    except OSError:
+        return False
+    return stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid()
+
+
+class _Unreadable(Exception):
+    """A part of the interpreter's fingerprint could not be read: no marker is read or written."""
+
+
+def _stat(path: str) -> list:
+    try:
+        info = os.stat(path)
+    except OSError as exc:  # e.g. under the verifier account's home
+        raise _Unreadable(path) from exc
+    return [info.st_mtime_ns, info.st_size]
+
+
+def _small_file(path: str) -> list:
+    """A regular file's first 4 KiB and stat, or "absent"; anything else (a FIFO, a symlink, even
+    a dangling one, a directory, no permission) is unreadable. Opened non-blocking, never
+    following a link."""
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return ["absent"]
+    except OSError as exc:
+        raise _Unreadable(path) from exc
+    if not stat.S_ISREG(info.st_mode):
+        raise _Unreadable(path)
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+        try:  # swapped for something else after the lstat: still not a regular file
+            opened = os.fstat(fd)  # the metadata of the file actually read
+            if not stat.S_ISREG(opened.st_mode):
+                raise _Unreadable(path)
+            data = os.read(fd, 4096)
+        finally:
+            os.close(fd)
+    except OSError as exc:
+        raise _Unreadable(path) from exc
+    return [data.decode(errors="replace"), opened.st_mtime_ns, opened.st_size]
+
+
+def _sites(venv: str) -> list:
+    """Each lib/python*/site-packages and its stat (its mtime changes when a package is added or
+    removed); a lib directory or site-packages that exists but cannot be read is unreadable."""
+    lib = os.path.join(venv, "lib")
+    try:
+        names = sorted(n for n in os.listdir(lib) if n.startswith("python"))
+    except FileNotFoundError:
+        return []
+    except OSError as exc:
+        raise _Unreadable(lib) from exc
+    out = []
+    for name in names:
+        site = os.path.join(lib, name, "site-packages")
+        if os.path.lexists(site) or not os.access(os.path.join(lib, name), os.X_OK):
+            out.append([site, _stat(site)])
+    return out
+
+
+def _env_fingerprint(python: str) -> list | None:
+    """What the verifier interpreter is, by stat and small reads only (it is never run here): the
+    real binary, the venv's pyvenv.cfg (its text holds the version) and each site-packages
+    directory; for Cairnwork's own interpreter also sys.version and the real sys.prefix. None when
+    any part cannot be read: then no marker is read or written, and every dispatch probes."""
+    venv = os.path.dirname(os.path.dirname(os.path.abspath(python)))
+    real = os.path.realpath(python)
+    try:
+        parts = [real, _stat(real), _small_file(os.path.join(venv, "pyvenv.cfg")), _sites(venv)]
+    except _Unreadable:
+        return None
+    own = (
+        [sys.version, os.path.realpath(sys.prefix)]
+        if real == os.path.realpath(sys.executable)
+        else []
+    )
+    return [*parts, own]
+
+
+def _env_failed(detail: str) -> BaseUncomparable:
+    return BaseUncomparable(Comparison("UNCOMPARABLE", ENV_FAILED, f"unchanged base: {detail}"))
 
 
 def p2p_for(task, specs, test_files, run_root, result, verifying) -> P2PPlan | None:

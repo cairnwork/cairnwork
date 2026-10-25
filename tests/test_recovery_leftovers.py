@@ -109,7 +109,7 @@ def test_a_normal_run_leaves_nothing_but_the_logs(p2p_project, tmp_path):
     proc = _driver(p2p_project, tmp_path, "n")
     assert proc.wait(timeout=300) == 0, (tmp_path / "driver.err").read_text()[-2000:]
     runs = tmp_path / "runs"
-    names = [p.name for p in runs.iterdir()]
+    names = [p.name for p in runs.iterdir() if p.name != "base-env-ok"]  # the pass marker (#234)
     # only the private log dirs (verify and P2P evidence) are kept: no clone, checkout or scratch
     assert names and all("." in n and not n.endswith(".work") for n in names)
     assert not list(runs.glob("*.work")) and not list(runs.glob("*/tests"))
