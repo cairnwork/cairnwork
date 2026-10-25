@@ -230,7 +230,7 @@ def _remove_planted(path: str) -> None:
 
 def _complete(rows: list[dict], kind: str, names) -> list[dict]:
     """One row per expected target: a missing row (crash, clipping) is a failure, not a pass."""
-    seen = {r["probe"] for r in rows if r["kind"] == kind}
+    seen = {r["probe"] for r in rows if r["kind"] == kind}  # rows are normalised: see parse_rows
     return [
         {"probe": f"code {kind} {n}", "pass": False, "result": "MISSING_ROW"}
         for n in names
@@ -259,7 +259,7 @@ def _dns_needs_owner(rows: list[dict]) -> list[dict]:
 
 
 def _check(rows: list[dict]) -> dict:
-    return {"pass": bool(rows) and all(r["pass"] for r in rows), "probes": rows}
+    return {"pass": bool(rows) and all(r["pass"] is True for r in rows), "probes": rows}
 
 
 def run_canary(tools: WorkerTools, fx: Fixture, env: dict | None = None) -> dict:

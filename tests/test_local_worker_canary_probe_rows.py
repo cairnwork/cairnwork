@@ -51,9 +51,25 @@ def test_a_well_formed_probe_run_passes(monkeypatch):
 
 @pytest.mark.parametrize(
     "bad",
-    [_row(probe="x", **{"pass": True}), probe.MARK + "[1]", probe.MARK + "{broken", _row(kind=3)],
+    [_row(probe="x", **{"pass": True}), probe.MARK + "[1]", probe.MARK + "{broken", _row(kind=3)]
+    + [_row(kind="read", **{"pass": True}), _row(kind="read", probe="p"), _row(kind="net")]
+    + [_row(kind="read", probe="p", **{"pass": "yes"}), _row(kind="read", probe=1, **{"pass": 1})],
 )
 def test_a_row_without_a_kind_fails_the_run_instead_of_crashing(monkeypatch, bad):
     rows, identity, run = _run(monkeypatch, [_row(kind="identity", uid=1), bad])
     assert identity and rows == []
     assert run["pass"] is False and run["malformed_rows"] == 1
+
+
+def test_a_probe_that_prints_nothing_fails_the_run(monkeypatch):
+    rows, identity, run = _run(monkeypatch, ["collected 0 items"])
+    assert rows == [] and identity == {} and run["malformed_rows"] == 0
+    assert run["pass"] is False  # no identity row: the probe did not run
+
+
+def test_a_check_needs_pass_to_be_true_not_just_truthy():
+    good = {"probe": "p", "pass": True}
+    assert canary._check([good])["pass"] is True
+    assert canary._check([good, {"probe": "q", "pass": 1}])["pass"] is False
+    assert canary._check([{"probe": "q", "pass": "yes"}])["pass"] is False
+    assert canary._check([])["pass"] is False

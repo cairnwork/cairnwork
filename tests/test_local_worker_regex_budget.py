@@ -127,6 +127,8 @@ PIECES = [
 # of the budget, then a b the input never has, so grep keeps every state on every line.
 EDGES = ["a{100}" * 5 + "a{11}b", ".{100}.{66}b", "[[=a=]]{99}b", "[[:alpha:]]{99}b", r"\w{99}b"]
 EDGES += ["((a|aa|aaa){20})*x", "(a|aa|aaa){20}x", "((a|aa){35})*x", "(a{50}){9}b"]
+SLOW_CONTROL = "((a|aa|aaa){100})*x"  # refused; costly in time, not in memory
+TIME_RATIO = 0.75  # an accepted pattern must run in under this share of the control's time
 MIB_SHARE = 8  # the input is 1/8 MiB, so 2 s per MiB is 0.25 s here
 
 
@@ -165,10 +167,10 @@ def _grown(rng: random.Random) -> str:
 @darwin
 def test_every_accepted_pattern_is_cheap_for_the_real_grep(tmp_path):
     """Property: of generated patterns, each one the check accepts runs on macOS grep -E in under
-    64 MiB and under 3 CPU seconds per MiB of adversarial input (the budgets were measured at
-    about 2 s on the M5; a slower host gets 3 times what an edge pattern takes on it, which keeps
-    timing a hard check without flaking on a busy CI runner; RSS and exit status are always
-    hard); the Codex patterns are among the refused."""
+    64 MiB, with an exit status of 0 or 1, and in less CPU time than 0.75 times a refused
+    control measured in the same run on the same input (((a|aa|aaa){100})*x: about 3.8 s per MiB
+    on the M5, where the slowest accepted pattern takes about 2). The ratio, not a fixed time,
+    keeps a slow or busy host from flaking; the Codex patterns are among the refused."""
     from experimental.local_worker.agent_protocol import BadCall
 
     path = tmp_path / "adversarial.txt"
@@ -177,7 +179,8 @@ def test_every_accepted_pattern_is_cheap_for_the_real_grep(tmp_path):
     patterns = {"".join(rng.choice(PIECES) for _ in range(rng.randint(1, 5))) for _ in range(700)}
     patterns |= {_grown(rng) for _ in range(24)} | set(EDGES)
     controls = {CODEX_ROUND_3, r"^[[:alpha:][](a+)+\1$", "^[[:alpha:][]((a{100}){100}){100}$"}
-    limit = max(3 / MIB_SHARE, 3 * _grep(EDGES[0], str(path), 2)[2])
+    controls |= {SLOW_CONTROL, "a{900}b"}
+    limit = TIME_RATIO * min(_grep(SLOW_CONTROL, str(path), 20)[2] for _ in range(2))
     accepted, refused = [], set()
     for pattern in sorted(patterns | controls):
         try:
