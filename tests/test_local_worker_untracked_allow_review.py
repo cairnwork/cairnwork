@@ -217,3 +217,27 @@ def test_no_negative_counts_with_a_list(tmp_path):
     rec["verification"]["patch_lines_added"] = -1
     with pytest.raises(SchemaError, match="non-negative"):
         validate_record(rec)
+
+
+# -- #264: a failed sweep with a list still fails the cleanup closed ---------------------------
+class SweepFails(AllowWorld):
+    """Every sweep exits non-zero; with read-only turns the cleanup's is the only one."""
+
+    def handle(self, action, args, stdin):
+        if action == "sweep":
+            return 1, b"LOCAL_WORKER_SWEEP failed\n"
+        return super().handle(action, args, stdin)
+
+
+def test_a_failed_sweep_with_a_list_fails_the_cleanup_and_nothing_else(tmp_path):
+    plain, _, _ = _record(tmp_path / "a", [READ, LIST], AllowWorld())
+    world = SweepFails()
+    rec, out, _ = _record(tmp_path / "b", [READ, LIST], world)
+    assert [c[0] for c in world.calls][-4:] == ["sweep", "numstat", "status", "digest"]
+    assert plain["termination"]["cleanup"] == "ok"
+    assert out.cleanup == "failed" and rec["termination"]["cleanup"] == "failed"
+    assert rec["verification"]["exit_reason"] == plain["verification"]["exit_reason"]
+    assert rec["termination"]["abort_cause"] == plain["termination"]["abort_cause"]
+    assert rec["termination"]["limit_hit"] is None and not rec["termination"]["interrupted"]
+    assert rec["spec_feedback"] == plain["spec_feedback"]
+    assert [t["action_type"] for t in rec["turns"]] == [t["action_type"] for t in plain["turns"]]
