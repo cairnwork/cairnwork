@@ -54,7 +54,6 @@ _BODY = r"""
 import errno
 import json
 import os
-from typing import TypeGuard
 import pwd
 import signal
 import socket
