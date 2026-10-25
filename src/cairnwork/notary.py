@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -37,6 +38,8 @@ from typing import Any
 
 from cairnwork.changeset import GitChangeSet, read_change_set, read_tree_change_set
 from cairnwork.core_request import AcceptanceSpec, VerifierObservation, build_core_request
+from cairnwork.deferred_tests import TestCommitRejected, overlay_tree
+from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.notary_schema import MIGRATIONS, SCHEMA, SCHEMA_VERSION
 from cairnwork.notary_verify import (  # readback helpers, split out for the 400-line cap
     CORE_ERROR,
@@ -184,6 +187,32 @@ class Notary:
             return IDENTITY_MISMATCH
         return ""
 
+    def _check_binding(self, repo: Path, binding: dict[str, Any], candidate_commit: str) -> None:
+        try:
+            parents = run_git(repo, "rev-list", "--parents", "-n", "1", candidate_commit).split()[
+                1:
+            ]
+        except GitCommandError as exc:
+            raise NotaryInputError(f"cannot read candidate commit: {exc}") from exc
+        head = binding.get("head")
+        if parents != [head]:
+            raise NotaryInputError("judged commit parent is not the binding head")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                rebuilt = overlay_tree(
+                    repo,
+                    head,
+                    binding["test_commit"],
+                    tuple(binding["test_paths"]),
+                    Path(tmp) / "index",
+                )
+        except (TestCommitRejected, GitCommandError) as exc:
+            raise NotaryInputError(str(exc)) from exc
+        if rebuilt != binding["executed_tree"]:
+            raise NotaryInputError(
+                "binding executed_tree is not head overlaid with the test commit"
+            )
+
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._path, timeout=30, isolation_level=None)
         conn.execute("PRAGMA synchronous=FULL")
@@ -218,6 +247,7 @@ class Notary:
                 raise NotaryInputError("binding does not name this base and executed tree")
             if spec.requirements_hash != binding_hash(binding):
                 raise NotaryInputError("requirements_hash is not the binding's hash")
+            self._check_binding(repo, binding, candidate_commit)
         request = _frozen(build_core_request(spec, change, observations, attempt_id=attempt_id))
         request_hash = _digest(request)
         recorded = self._recorded(task_id, attempt_id, request_hash)

@@ -43,7 +43,9 @@ from cairnwork_protocol import acceptance_contract_hash, change_manifest_hash
 
 KNOWN_RULES = (OVERLAY_RULE,)
 _BINDING_KEYS = {"rule", "base", "head", "test_commit", "test_paths", "executed_tree", "verifiers"}
-_POLICY_KEYS = {"rule", "test_commit", "core_identity", "key_id"}
+_REQUIRED_POLICY_KEYS = {"rule", "test_commit", "core_identity", "key_id"}
+_OPTIONAL_POLICY_KEYS = {"require_full", "test_roots"}
+_POLICY_KEYS = _REQUIRED_POLICY_KEYS | _OPTIONAL_POLICY_KEYS
 _OID = re.compile(r"^[0-9a-f]{40}$")
 _KEYID = re.compile(r"^[0-9a-f]{64}$")
 _REGULAR = ("100644", "100755")
@@ -54,8 +56,9 @@ class PolicyError(AttestError):
 
 
 def load_policy(path: Path) -> dict[str, Any]:
-    """The receiver's policy: strict JSON with exactly ``rule`` (a known overlay rule),
-    ``test_commit`` (40 hex), ``core_identity`` (an object) and ``key_id`` (64 hex)."""
+    """The receiver's policy: strict JSON with ``rule`` (a known overlay rule),
+    ``test_commit`` (40 hex), ``core_identity`` (an object), ``key_id`` (64 hex), and optional
+    ``require_full`` (bool) and ``test_roots`` (non-empty list of root prefixes ending with /)."""
     try:
         text = Path(path).read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
@@ -72,8 +75,15 @@ def load_policy(path: Path) -> dict[str, Any]:
 
 def _policy_problem(policy: Any) -> str:
     """Why policy is not a valid receiver policy, else "" (load_policy and verify_bound)."""
-    if not isinstance(policy, Mapping) or set(policy) != _POLICY_KEYS:
-        return f"a policy has exactly the keys {sorted(_POLICY_KEYS)}"
+    if (
+        not isinstance(policy, Mapping)
+        or not _REQUIRED_POLICY_KEYS.issubset(policy)
+        or not set(policy).issubset(_POLICY_KEYS)
+    ):
+        return (
+            f"a policy requires {sorted(_REQUIRED_POLICY_KEYS)} "
+            f"and optional {sorted(_OPTIONAL_POLICY_KEYS)}"
+        )
     if (
         policy["rule"] not in KNOWN_RULES
         or not _oid(policy["test_commit"])
@@ -81,6 +91,18 @@ def _policy_problem(policy: Any) -> str:
         or not (isinstance(policy["key_id"], str) and _KEYID.fullmatch(policy["key_id"]))
     ):
         return "policy values: known rule, 40-hex test_commit, object, 64-hex key_id"
+    if "require_full" in policy and not isinstance(policy["require_full"], bool):
+        return "require_full must be a boolean"
+    if "test_roots" in policy:
+        roots = policy["test_roots"]
+        if not isinstance(roots, list) or not roots:
+            return "test_roots must be a non-empty list of root path strings"
+        for r in roots:
+            if not isinstance(r, str) or not r.endswith("/") or r.startswith("/"):
+                return f"invalid test root {r!r}: must end with / and not start with /"
+            parts = r[:-1].split("/")
+            if any(p in ("", ".", "..") for p in parts):
+                return f"invalid test root {r!r}: cannot contain empty or relative parts"
     return ""
 
 
@@ -138,6 +160,11 @@ def verify_bound(
     full = _has(repo, f"{binding['test_commit']}^{{commit}}")
     if not full and policy is None:
         return _fail("POLICY_REQUIRED", "test commit not here (confidential mode): give a policy")
+    if not full and policy is not None and policy.get("require_full") is True:
+        return _fail(
+            "POLICY_FULL_REQUIRED",
+            "the policy requires full mode and the test commit is not in this repository",
+        )
     ctx = _Ctx(repo, statement, binding, expected_candidate, expected_base, policy, full)
     checks: tuple[Callable[[_Ctx], VerifyResult | None], ...] = (
         _chain, _head, _base, _test_source, _tree if full else _head_tree,
@@ -276,6 +303,11 @@ def _test_source(ctx: _Ctx) -> VerifyResult | None:
         binding["rule"],
     ]:
         return _fail("TEST_SOURCE_MISMATCH", f"policy pins another test commit than {test_commit}")
+    if ctx.policy is not None and "test_roots" in ctx.policy:
+        roots = tuple(ctx.policy["test_roots"])
+        for path in binding["test_paths"]:
+            if not any(path.startswith(r) for r in roots):
+                return _fail("TEST_ROOT_VIOLATION", f"test path {path} not under any allowed root")
     if not ctx.full:
         return None
     try:

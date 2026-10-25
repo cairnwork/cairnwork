@@ -76,13 +76,21 @@ def executed(work: Path, head: str, tests: str, paths: tuple[str, ...]) -> tuple
     return tree, judged
 
 
+class _UncheckedNotary(Notary):
+    def _check_binding(self, repo: Any, binding: Any, candidate_commit: Any) -> None:
+        pass
+
+
 def notarize_bound(
     state: Path, p: dict[str, Any], *, attempt: str = "a1", head: str | None = None,
     overlay_head: str | None = None, paths: tuple[str, ...] | None = None,
     rule: str = OVERLAY_RULE, tree_and_judged: tuple[str, str] | None = None,
+    unchecked: bool | None = None,
 ) -> dict[str, Any]:  # fmt: skip
     """Notarize one external-candidate run; head is what the binding claims, overlay_head what
     the tests were laid over (they differ only in negative controls)."""
+    if unchecked is None:
+        unchecked = overlay_head is not None or tree_and_judged is not None
     claimed: str = head or p["head"]
     paths = paths or tuple(sorted(TESTS))
     tree, judged = tree_and_judged or executed(
@@ -96,7 +104,8 @@ def notarize_bound(
     spec = AcceptanceSpec(task, binding_hash(binding), ("pytest-0",), ("src/a.py", *paths))
     obs = (VerifierObservation("pytest-0", "artifact-1", "sha256:" + "e" * 64, True),)
     state.mkdir(parents=True, exist_ok=True)
-    notary = Notary(
+    notary_cls = _UncheckedNotary if unchecked else Notary
+    notary = notary_cls(
         state / "notary.sqlite", core_verify=fake_core_verify, core_identity=CORE_IDENTITY
     )
     verdict = notary.notarize(task, attempt, spec, p["work"], p["base"], judged, obs, binding)

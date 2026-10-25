@@ -272,7 +272,10 @@ receiving repository), never shipped by the submitter or read from the receipt:
 {"rule": "overlay-v1", "test_commit": "<40-hex>", "core_identity": {...}, "key_id": "<64-hex>"}
 ```
 
-Exactly these four keys (strict JSON); an unreadable or malformed policy is a usage error (exit
+These four keys are required (strict JSON). Two keys are optional: `require_full` (a JSON
+boolean, default `false`) and `test_roots` (a non-empty list of root prefixes such as `"tests/"`:
+each ends with `/`, does not start with `/`, and has no empty, `.` or `..` part). Any other key is
+malformed. An unreadable or malformed policy is a usage error (exit
 2). `key_id` must be the key id of `--public-key`, `core_identity` is pinned like
 `--core-identity` (both apply when both are given), and the receipt's test commit and rule must
 equal the policy's. A policy can also be given in full mode. A v0.1 receipt under a policy fails
@@ -292,13 +295,15 @@ Checks run in this order and the first failure is reported:
 
 1. signature (`SIGNATURE_INVALID`, also when the policy pins another key)
 2. shape (`STATEMENT_SHAPE`, `SUBJECT_SHAPE`; an unknown `rule` is a shape failure)
-3. policy present in confidential mode (`POLICY_REQUIRED`)
+3. policy present in confidential mode (`POLICY_REQUIRED`); a policy with `require_full: true`
+   refuses confidential mode (`POLICY_FULL_REQUIRED`)
 4. binding-hash chain (`REQUEST_HASH_MISMATCH`, `BINDING_HASH_MISMATCH`: requirements_hash, the
    contract Core echoed, and the request's target tree and source commit)
 5. head: subject == binding head == `--candidate` (`HEAD_MISMATCH`; `COMMIT_NOT_FOUND` when absent)
 6. base: binding base == predicate base (== `--base`) (`BASE_MISMATCH`), present (`BASE_NOT_FOUND`)
 7. test source: `hidden_test_commit` and the policy's pins; in full mode the test commit is one
-   commit on the base changing exactly `test_paths` (`TEST_SOURCE_MISMATCH`)
+   commit on the base changing exactly `test_paths` (`TEST_SOURCE_MISMATCH`); with `test_roots`,
+   every bound test path must start with one of the roots, in both modes (`TEST_ROOT_VIOLATION`)
 8. tree (full: `TREE_MISMATCH`, `OVERLAY_UNSUPPORTED_ENTRY`; `REBUILD_FAILED` when git cannot
    rebuild the tree in the receiver's repository, e.g. it is read-only, which says nothing about
    the receipt) or head-tree (confidential: `HEAD_TREE_MISMATCH`, `OVERLAY_UNSUPPORTED_ENTRY`)
@@ -312,7 +317,14 @@ On success `verify --json` adds `assurance`, what the receiver checked itself (`
 same object follows the `OK` line. A verify-action that predates v0.2 refuses these receipts with
 `STATEMENT_SHAPE` (closed, not open); the note is attached to the PR head, so `publish` is
 unchanged. `check-run --repo` without a policy reports `POLICY_REQUIRED` when the tests are
-absent.
+absent. When `check-run --repo` verifies a v0.2 receipt, the summary adds an `Assurance` row right
+after `Offline verification` with the same object as sorted `key=value` pairs, so a reader can see
+for example `test_source=signer_choice`; v0.1 receipts, the signature-only path and failures add no
+such row.
+
+The notary also checks a v0.2 binding before it asks Core (defence in depth): the judged commit's
+only parent must be the binding head, and rebuilding head overlaid with the test commit must give
+the binding's `executed_tree`. Otherwise it records nothing and raises `NotaryInputError`.
 
 Limits: tree and blob ids are SHA-1 (git's collision resistance); a test that reads commit
 metadata (message, log) sees the scratch commit, which the binding does not cover.
