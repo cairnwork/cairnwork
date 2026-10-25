@@ -12,8 +12,11 @@ migrates the table, the append-only triggers and the indexes inside one transact
 A FAILED FINISHED row may carry ``uncomparable``, the code of an attempt that ended with no
 evidence (#234: the base, its environment or the verifier account could not be judged). The owner
 process writes it in the 0700 state, so the Issue comment reads it from here, never from the
-runner log or the current config, which a same-uid worker could forge. It is an added column
-(default ""): older code still reads and writes the journal, and older rows read as "".
+runner log or the current config. An isolated worker (another uid) cannot write here; a same-uid
+worker is no boundary for this file, as for the ledger and the notary, so for it the claim is
+only as strong as the FAILED/COMPLETED wording already read from here (no_evidence refuses rows
+merely appended). It is an added column (default ""): older code still reads and writes the
+journal, and older rows read as "".
 """
 
 from __future__ import annotations
@@ -98,9 +101,15 @@ def dispatch_mark(entries: list[Entry]) -> str:
 
 def no_evidence(phases: list[Entry]) -> str:
     """The UNCOMPARABLE code the owner journaled when the attempt (``phases``, its rows in order)
-    finished FAILED with no evidence; "" for any other ending and for rows from before #234."""
-    last = phases[-1] if phases else None
-    if last is None or last.phase != "FINISHED" or last.detail != "FAILED":
+    finished FAILED with no evidence; "" for any other ending and for rows from before #234.
+    Only one owner run counts: DISPATCHED first (one per task), one FINISHED and it is the last
+    row. A row appended by anyone else (the triggers refuse UPDATE and DELETE, not INSERT) adds a
+    second FINISHED or an attempt without DISPATCHED, so it cannot make the claim."""
+    if not phases or phases[0].phase != "DISPATCHED":
+        return ""
+    last = phases[-1]
+    finished = sum(1 for e in phases if e.phase == "FINISHED")
+    if finished != 1 or last.phase != "FINISHED" or last.detail != "FAILED":
         return ""
     return last.uncomparable or ""
 

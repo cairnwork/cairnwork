@@ -293,3 +293,61 @@ def test_no_valid_code_means_todays_wording(status):
 def test_only_a_failed_task_says_no_evidence(word):
     text = failure_text({"status": word, "phase": "FINISHED", "uncomparable": "BASE_ENV_FAILED"})
     assert NO_EVIDENCE not in text and "BASE_ENV_FAILED" not in text
+
+
+class TruthyWorker(EditWorker):
+    isolated = 1  # truthy but not True: worker_reason does not call it isolated, nor may the code
+
+
+def test_only_isolated_is_true_journals_the_code(project, state, runs):
+    runs({"e": ENV_OK, "b": ALL_ROWS[0].values[0], "p": ALL_ROWS[0].values[1]})
+    result, status, text = settle_one(project, state, TruthyWorker(FIX_FILES))
+    assert not result.reason.startswith("UNCOMPARABLE: ") and status["uncomparable"] == ""
+    assert text == TODAY
+
+
+def owner_run(journal, code="BASE_ENV_FAILED"):
+    journal.record("t", "a", "DISPATCHED", "/r")
+    journal.record("t", "a", "WORKER_STARTED")
+    journal.record("t", "a", "FINISHED", "FAILED", code)
+
+
+def appended(path, attempt):  # an INSERT around record(), as a same-uid process could do
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "INSERT INTO attempt_journal (task_id, attempt_id, phase, detail, at, uncomparable)"
+        " VALUES ('t', ?, 'FINISHED', 'FAILED', 'now', 'BASE_ENV_FAILED')",
+        (attempt,),
+    )
+    conn.commit()
+    conn.close()
+
+
+def last_attempt(journal):  # as Intake.status picks the rows
+    entries = journal.entries("t")
+    return [e for e in entries if e.attempt_id == entries[-1].attempt_id]
+
+
+@pytest.mark.parametrize("attempt", ["a", "forged"])
+def test_an_appended_finished_row_cannot_claim_no_evidence(tmp_path, attempt):
+    path = tmp_path / "journal.sqlite"
+    journal = Journal(path)
+    owner_run(journal, code="")  # the owner decided an ordinary FAILED
+    appended(path, attempt)  # a second FINISHED, or an attempt without DISPATCHED
+    assert last_attempt(journal)[-1].uncomparable == "BASE_ENV_FAILED"
+    assert no_evidence(last_attempt(journal)) == ""
+
+
+def test_a_row_appended_before_the_owner_finishes_cannot_claim_it(tmp_path):
+    path = tmp_path / "journal.sqlite"
+    journal = Journal(path)
+    journal.record("t", "a", "DISPATCHED", "/r")
+    appended(path, "a")  # while the worker runs
+    journal.record("t", "a", "FINISHED", "FAILED")
+    assert no_evidence(last_attempt(journal)) == ""
+
+
+def test_one_owner_run_claims_it(tmp_path):
+    journal = Journal(tmp_path / "journal.sqlite")
+    owner_run(journal)
+    assert no_evidence(last_attempt(journal)) == "BASE_ENV_FAILED"
