@@ -11,6 +11,7 @@ from cairnwork.notary import Notary, NotaryInputError
 from tests.attest.binding_helpers import (
     TESTS,
     executed,
+    fake_core_verify,
     git,
     notarize_bound,
     producer,
@@ -79,6 +80,6 @@ def test_malformed_binding_is_a_coded_input_error(tmp_path: Path, bad: dict) -> 
     tree, judged = executed(p["work"], p["head"], p["tests"], tuple(sorted(TESTS)))
     binding = {"head": p["head"], "test_commit": p["tests"], "test_paths": sorted(TESTS)}
     binding.update(bad)
-    notary = Notary(tmp_path / "notary.sqlite", core_verify=lambda *a: None, core_identity={})
+    notary = Notary(tmp_path / "notary.sqlite", core_verify=fake_core_verify, core_identity={})
     with pytest.raises(NotaryInputError):
         notary._check_binding(p["work"], {**binding, "executed_tree": tree}, judged)

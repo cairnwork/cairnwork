@@ -195,7 +195,7 @@ class Notary:
         except GitCommandError as exc:
             raise NotaryInputError(f"cannot read candidate commit: {exc}") from exc
         head = binding.get("head")
-        if parents != [head]:
+        if not isinstance(head, str) or parents != [head]:
             raise NotaryInputError("judged commit parent is not the binding head")
         test_commit, paths = binding.get("test_commit"), binding.get("test_paths")
         if not isinstance(test_commit, str) or not _OID.fullmatch(test_commit):
