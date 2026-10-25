@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from experimental.local_worker.tools import KILL_GRACE_SECONDS
+from experimental.local_worker.untracked_allow import UntrackedAllow
 from experimental.local_worker.write_scope import normalize
 
 
@@ -94,6 +95,8 @@ class Settings:
     # write_file/edit_file only under these repo-relative entries (write_scope.py); None: anywhere
     write_scope: tuple[str, ...] | None = None
     search_tool: bool = True  # offer the read-only search tool (agent_protocol.SEARCH_SCHEMA)
+    # harness-laid untracked/ignored paths the start check allows (untracked_allow.py); off: ()
+    untracked_allow: UntrackedAllow = UntrackedAllow()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "write_scope", normalize(self.write_scope))

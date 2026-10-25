@@ -11,5 +11,7 @@ Install (once, by the Owner): ``sudo zsh experimental/local_worker/install_local
 The base checkout must be exactly its HEAD commit: no changed, untracked or ignored file, and no
 empty directory, FIFO or socket (the status query lists those too, as ``x`` entries, since git
 does not track them). Anything else is refused at start (agent.RefusedStart) and no episode
-runs. Each run root also needs a real ``q`` directory (0770) for the git queries.
+runs, unless the CLI's --allow-untracked/--allow-untracked-glob list allows harness-laid untracked
+or ignored files and empty directories (untracked_allow.py, #261). Each run root also needs a
+real ``q`` directory (0770) for the git queries.
 """

@@ -20,6 +20,7 @@ class CleanupMixin:
     _own: Callable[[], float]
     _step_deadline: Callable[[], None]
     observe: Callable[[], TreeState]
+    _own_patch: Callable[[LoopOutcome, tuple[int, int, int] | None], tuple[int, int, int] | None]
 
     def _cleanup(self, out: LoopOutcome) -> None:
         """Sweep, numstat and the last tree, as far as they get: whatever stops them (even
@@ -43,9 +44,15 @@ class CleanupMixin:
             self.abort_detail = self.abort_detail or f"cleanup: {exc}"
             return
         whole = stat.exit_code == 0 and stat.capture_complete  # a capped count is no count
-        out.patch = parse_numstat(stat.raw) if whole else None
+        raw = parse_numstat(stat.raw) if whole else None
+        out.patch = self._own_patch(out, raw)  # raw unless a start allow-list is set (#261)
         out.cleanup = "ok" if sweep.exit_code == 0 and out.patch is not None else "failed"
         self._observe_last(out)
+        if raw is not None and out.patch is None:  # an allow-list: now with the last tree
+            out.patch = self._own_patch(out, raw)
+            out.cleanup = "ok" if sweep.exit_code == 0 and out.patch is not None else "failed"
+            if out.patch is None:
+                self.abort_detail = self.abort_detail or "cleanup: an allowed base file changed"
 
     def _observe_last(self, out: LoopOutcome) -> None:
         """The run stopped after a tool started, before its tree was observed: observe it now, after
