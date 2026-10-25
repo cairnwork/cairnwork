@@ -326,8 +326,11 @@ def test_no_sandbox_names_the_cause_and_keeps_the_verdict(project, tmp_path, pro
     assert "base-probe-failed (no-sandbox" in result.reason and len(seen) == 1
 
 
-def test_with_a_sandbox_a_probe_failure_keeps_its_reason(project, tmp_path, probes):
+def test_with_a_sandbox_a_probe_failure_keeps_its_reason(project, tmp_path, probes, monkeypatch):
+    import cairnwork_sandbox
+
     _, core = probes(PROBE_ROWS[2].values[0])
+    monkeypatch.setattr(cairnwork_sandbox, "select", lambda: object())  # a backend, on any host
     result, worker, phases = dispatch(project, tmp_path / "s")
     assert_env_failed(result, worker, phases, core)
     assert "no-sandbox" not in result.reason
