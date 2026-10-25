@@ -9,7 +9,9 @@ import os
 import shutil
 from pathlib import Path
 
-from run_root_scope import own_run_names
+from run_root_scope import own_attempt, own_run_names
+
+from cairnwork.journal import Journal
 
 
 class _LockedAccount:
@@ -74,3 +76,14 @@ def test_cleanup_reads_a_module_list_the_test_appends_to_later(tmp_path):
         (runs / "late1-v-v0.work").mkdir()
     assert account.removed == [runs / "late1-v-v0.work"]
     assert (runs / "stale-from-an-earlier-test-v0").exists()
+
+
+def test_own_attempt_reads_the_journal_keyed_by_the_generated_task_id(tmp_path):
+    """run_task keys journal rows by its generated task id (task-<hex>), not the idempotency key
+    the driver passes (k1): the wait in _kill_in_p2p must still find the attempt while it runs."""
+    assert own_attempt(tmp_path) is None
+    journal = Journal(tmp_path / "journal.sqlite")
+    assert own_attempt(tmp_path) is None
+    journal.record("task-90abfe7f", "a405d5d5a4f147e97", "DISPATCHED", "x")
+    journal.record("task-90abfe7f", "a405d5d5a4f147e97", "WORKER_STARTED")
+    assert own_attempt(tmp_path) == "a405d5d5a4f147e97"

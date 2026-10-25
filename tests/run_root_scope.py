@@ -13,8 +13,6 @@ import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
 
-from cairnwork.journal import Journal
-
 
 def _reopen(path: Path) -> None:
     """A failed test may leave owner directories shut (0o700): reopen them for the account rm."""
@@ -62,12 +60,16 @@ def own_run_id(prefixes: list[str], prefix: str = "t") -> str:
 
 def own_attempt(state: Path) -> str | None:
     """The attempt id of the run a test started, from its own journal (``state``): another
-    session's run in a shared run root has other attempt ids."""
+    session's run in a shared run root has other attempt ids. Read-only and by the journal's
+    latest row, since the journal keys rows by the generated task id, not the idempotency key."""
     path = state / "journal.sqlite"
     if not path.exists():
         return None
     try:
-        entries = Journal(path).entries("k1")
+        with contextlib.closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as conn:
+            row = conn.execute(
+                "SELECT attempt_id FROM attempt_journal ORDER BY seq DESC LIMIT 1"
+            ).fetchone()
     except sqlite3.Error:  # the driver is still creating it
         return None
-    return entries[-1].attempt_id if entries else None
+    return row[0] if row else None
