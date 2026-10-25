@@ -84,7 +84,8 @@ def test_v01_bundle_has_no_assurance(tmp_path: Path, repo: Path) -> None:
     )
     assert res.ok
     summary = json.loads(http.calls[0][3])["output"]["summary"]
-    assert "- Offline verification: VERIFIED" in summary
+    # exact line: the signature-only path prints "VERIFIED, signature only", which must not pass
+    assert "- Offline verification: VERIFIED" in summary.splitlines()
     assert "- Assurance:" not in summary
 
 
