@@ -18,7 +18,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 
-from cairnwork import proc_restrict
+from cairnwork import proc_restrict, proc_start
 
 RUN_TOKEN_VAR = "CAIRNWORK_VERIFIER_RUN"
 ATTEMPT_ENV = "CAIRNWORK_ATTEMPT"  # marks every process of an attempt, for recovery
@@ -82,6 +82,7 @@ CONFIRM_TRIES = 10  # looks after a kill until the killed processes are shown go
 CONFIRM_WAIT = 0.1
 HIDDEN_TRIES = 3  # re-reads of a process whose environment was hidden (fork/exec hides it briefly)
 HIDDEN_WAIT = 0.05
+START_MARGIN = 5.0  # seconds of clock skew: a hidden process started earlier than this is old
 
 
 @dataclass(frozen=True)
@@ -148,7 +149,12 @@ UNLISTED = Sweep(listed=False)
 
 
 def sweep_marked(
-    var: str, value: str, *, skip_group: int | None = None, account: str | None = None
+    var: str,
+    value: str,
+    *,
+    skip_group: int | None = None,
+    account: str | None = None,
+    since: float | None = None,
 ) -> Sweep:
     """SIGKILL the owner's processes whose environment holds var=value, and say what was seen.
 
@@ -159,7 +165,8 @@ def sweep_marked(
     be inspected, so each one is counted (``Sweep.account``). A table (or an account) that
     cannot be read is UNLISTED: "may still be running", never "none". A process whose owner
     cannot be read (Linux: pgid None) may be the owner's or the account's: it is judged as one
-    of the owner's, so a hidden environment keeps it unreadable (#244).
+    of the owner's, so a hidden environment keeps it unreadable (#244). ``since``: when the
+    attempt began; a hidden process started before it is not counted (proc_start).
     """
     marker = f"{var}={value}"
     theirs = _account_uid(account) if account else None
@@ -177,6 +184,8 @@ def sweep_marked(
     late = _kill_marked([r for r in hidden if r[3] is not None], marker)
     killed, denied, vanished = killed + late[0], denied + late[1], vanished + late[2]
     unreadable = [r[0] for r in hidden if r[3] is None]
+    if since is not None and unreadable:
+        unreadable = proc_start.not_older(unreadable, since - START_MARGIN)
     held_by = sorted([(p, "marked") for p in killed + denied] + [(p, "hidden") for p in unreadable]
                      + [(p, "worker-account") for p in held])  # fmt: skip
     # Linux /proc mounted with hidepid may hide any process, a same-uid one that is not

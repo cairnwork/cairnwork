@@ -316,3 +316,19 @@ def test_an_ordinary_worker_failure_is_not_fenced(project, tmp_path):  # noqa: F
     assert result.status == "FAILED" and ledger.unswept_attempt(result.task_id) is None
     started = [e for e in journal.entries(result.task_id) if e.phase == "WORKER_STARTED"]
     assert [e.detail for e in started] == ["run_as="]  # the owner's uid, named
+
+
+def test_recovery_drops_the_legacy_mark_of_a_task_that_never_left_bound(tmp_path):
+    """#244 review NIT: under the exclusive run lock a task still BOUND started nothing (the
+    ledger moves to DISPATCHED before anything is spawned), so its LEGACY mark goes."""
+    path, journal = _legacy_ledger(tmp_path)
+    ledger = OwnershipLedger(path)
+    decisions = recovery.recover(
+        ledger=ledger, notary=stores(tmp_path)[1], journal=journal, run_root=tmp_path / "runs"
+    )
+    by_task = {d.task_id: d for d in decisions}
+    assert by_task["task-b"].reason == "INTERRUPTED_BEFORE_DISPATCH"
+    assert ledger.get(task_id="task-b").status == "FAILED"
+    assert ledger.unswept_attempt("task-b") is None
+    assert ledger.unswept_attempt("task-d") == Mark(unswept.LEGACY, "", "")  # it may have run
+    assert ledger.unswept_attempt("task-n") == Mark(unswept.LEGACY, "", "")

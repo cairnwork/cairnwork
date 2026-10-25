@@ -38,7 +38,7 @@ from pathlib import Path
 
 from cairnwork import runlock, unswept
 from cairnwork.confined import ATTEMPT_ENV, SWEEP_UNAVAILABLE, confirm_gone, sweep_marked
-from cairnwork.journal import Journal
+from cairnwork.journal import Journal, dispatched_at
 from cairnwork.notary import Notary
 from cairnwork.ownership import OWNER, OwnershipLedger, OwnershipRecord
 from cairnwork.reasons import _names
@@ -123,8 +123,8 @@ def _settle(
     if not entries and record.status == "DISPATCHED":
         # the journal is written before DISPATCHED, so this is the wrong or a lost journal
         raise RuntimeError("DISPATCHED task has no journal entries; is this the right journal?")
-    if not entries:
-        ledger.set_status(record.task_id, "FAILED")
+    if not entries:  # still BOUND: the ledger moves to DISPATCHED before anything is spawned
+        ledger.set_status(record.task_id, "FAILED", started_nothing=True)  # no legacy to sweep
         return Decision(record.task_id, "", record.status, "FAILED", "INTERRUPTED_BEFORE_DISPATCH")
     attempt_id = entries[-1].attempt_id
     phases = [e for e in entries if e.attempt_id == attempt_id]
@@ -133,8 +133,10 @@ def _settle(
         ran_as = configured  # journaled before #244: assume the configured worker account
     worker = None if ran_as in ("", unswept.UNKNOWN_ACCOUNT) else ran_as
 
+    since = dispatched_at(phases)  # a hidden process older than the attempt is not its own
+
     def look():  # the worker account it ran as, if any (pipeline.py journals it)
-        return sweep_marked(ATTEMPT_ENV, attempt_id, account=worker)
+        return sweep_marked(ATTEMPT_ENV, attempt_id, account=worker, since=since)
 
     first = look()
     swept = confirm_gone(first, look)

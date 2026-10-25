@@ -112,3 +112,9 @@ def note(conn: sqlite3.Connection, task_id: str, refusal: str) -> None:
 
 def clear(conn: sqlite3.Connection, task_id: str) -> None:
     conn.execute("DELETE FROM unswept_attempt WHERE task_id = ?", (task_id,))
+
+
+def clear_legacy(conn: sqlite3.Connection, task_id: str) -> None:
+    conn.execute(
+        "DELETE FROM unswept_attempt WHERE task_id = ? AND attempt_id = ?", (task_id, LEGACY)
+    )

@@ -33,7 +33,7 @@ from typing import NoReturn
 
 from cairnwork import unswept
 from cairnwork.confined import ATTEMPT_ENV, Sweep, confirm_gone, sweep_marked
-from cairnwork.journal import Journal
+from cairnwork.journal import Journal, dispatched_at
 from cairnwork.ownership import OwnershipLedger, OwnershipRecord, TakeoverRefused
 
 
@@ -50,15 +50,17 @@ def supersede(
     held = ledger.unswept_attempt(task_id)
     if held is None:
         return ledger.set_status(task_id, "SUPERSEDED")
+    entries = journal.entries(task_id) if journal is not None else []
     if held.attempt_id != unswept.LEGACY:
         attempts = [(held.attempt_id, held.account)]
     else:
-        attempts = _legacy_attempts(ledger, task_id, journal)
+        attempts = _legacy_attempts(ledger, task_id, entries)
     for attempt_id, ran_as in attempts:
         if ran_as == unswept.UNKNOWN_ACCOUNT and not account:
             why = f"the account attempt {attempt_id} ran as is unknown (journaled before #244)"
             _refuse(ledger, task_id, f"SWEEP_UNAVAILABLE: {why} and agy_run_as_user is not set")
-        found = _swept(attempt_id, account if ran_as == unswept.UNKNOWN_ACCOUNT else ran_as)
+        since = dispatched_at([e for e in entries if e.attempt_id == attempt_id])
+        found = _swept(attempt_id, account if ran_as == unswept.UNKNOWN_ACCOUNT else ran_as, since)
         if not found.gone:
             kept = found.kept_by()
             keeping = f"; kept by: {kept}" if kept else ""
@@ -66,11 +68,8 @@ def supersede(
     return ledger.set_status(task_id, "SUPERSEDED", swept=held.attempt_id)
 
 
-def _legacy_attempts(
-    ledger: OwnershipLedger, task_id: str, journal: Journal | None
-) -> list[tuple[str, str]]:
+def _legacy_attempts(ledger: OwnershipLedger, task_id: str, entries) -> list[tuple[str, str]]:
     """(attempt id, account it ran as) of every attempt the journal names for the task."""
-    entries = journal.entries(task_id) if journal is not None else []
     attempts = sorted({e.attempt_id for e in entries})
     if not attempts:
         why = "its processes carry no task id, so none can be swept (a maintainer checks by hand)"
@@ -81,9 +80,9 @@ def _legacy_attempts(
     ]
 
 
-def _swept(attempt_id: str, account: str | None) -> Sweep:
-    def look() -> Sweep:
-        return sweep_marked(ATTEMPT_ENV, attempt_id, account=account or None)
+def _swept(attempt_id: str, account: str | None, since: float | None) -> Sweep:
+    def look() -> Sweep:  # since: when the attempt was dispatched (journal), if known
+        return sweep_marked(ATTEMPT_ENV, attempt_id, account=account or None, since=since)
 
     return confirm_gone(look(), look)
 

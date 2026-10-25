@@ -1,26 +1,24 @@
 """Durable task ownership ledger (preserved behaviors #6 and #7).
 
-Every task is bound to exactly one owning system before dispatch. The binding
-is one atomic SQLite transaction keyed by idempotency key, and it carries the
-request digest, the card hash, the owner and the task id. Resend, query, cancel
-and recovery route by this record; when no record exists the caller must stop,
-never guess.
+Every task is bound to exactly one owning system before dispatch. The binding is one atomic
+SQLite transaction keyed by idempotency key, and it carries the request digest, the card hash,
+the owner and the task id. Resend, query, cancel and recovery route by this record; when no
+record exists the caller must stop, never guess.
 
-At most one task per card is active. CANCELLED and SUPERSEDED release the card.
-COMPLETED and FAILED keep holding it. A resend with the same key returns the
-same record and never re-runs it (a FAILED task stays FAILED); to retry, mark the
-FAILED task SUPERSEDED, then bind a new key. Resending an identical request (same
-digest) under another key or card is refused while a task for it is active
+At most one task per card is active. CANCELLED and SUPERSEDED release the card. COMPLETED and
+FAILED keep holding it. A resend with the same key returns the same record and never re-runs it
+(a FAILED task stays FAILED); to retry, mark the FAILED task SUPERSEDED, then bind a new key.
+Resending an identical request (same digest) under another key or card is refused while a task
+for it is active
 (REPLAY_FORBIDDEN if COMPLETED or FAILED, RECONCILIATION_REQUIRED if BOUND or
-DISPATCHED). The one-active-card rule
-lives in the schema (a partial unique index), so it also holds for raw writers;
-``bind`` maps the index violation to DuplicateLogicalTask.
+DISPATCHED). The one-active-card rule lives in the schema (a partial unique index), so it
+also holds for raw writers; ``bind`` maps the index violation to DuplicateLogicalTask.
 
 A FAILED task whose attempt's processes are not shown gone (unswept.py) cannot be SUPERSEDED:
 ``set_status`` raises TakeoverRefused until ``takeover.supersede`` has shown them gone.
 
-The ledger must live on a local disk: it uses SQLite WAL, which is unsafe on
-network filesystems, and opening fails if WAL cannot be enabled.
+The ledger must live on a local disk: it uses SQLite WAL, which is unsafe on network
+filesystems, and opening fails if WAL cannot be enabled.
 """
 
 from __future__ import annotations
@@ -268,13 +266,14 @@ class OwnershipLedger:
         expected_from: str | None = None,
         fence: tuple[str, str] | None = None,
         swept: str | None = None,
+        started_nothing: bool = False,
     ) -> OwnershipRecord:
         """Move a task along TRANSITIONS; the owner of a task can never change.
-
-        expected_from makes it a compare-and-set, in the same transaction (else
-        InvalidStatusTransition). fence=(attempt id, account), FAILED only: mark the attempt
-        unswept in that transaction. SUPERSEDED of a marked task needs ``swept`` = the marked
-        attempt (takeover.supersede showed its processes gone); the mark goes with the move."""
+        expected_from: a compare-and-set in the same transaction (else InvalidStatusTransition).
+        fence=(attempt id, account), FAILED only: mark the attempt unswept in that transaction.
+        SUPERSEDED of a marked task needs ``swept`` = the marked attempt (takeover.supersede
+        showed its processes gone); the mark goes with the move, as a LEGACY one does with
+        ``started_nothing`` (recovery of a task still BOUND, so nothing was spawned)."""
         if status not in TRANSITIONS or (fence is not None and status != "FAILED"):
             raise InvalidOwnershipValue(f"status {status!r}" + " with a fence" * bool(fence))
         conn = self._connect()
@@ -294,6 +293,8 @@ class OwnershipLedger:
                 unswept.clear(conn, task_id)
             if fence is not None:
                 unswept.mark(conn, task_id, *fence)
+            if started_nothing and current.status == "BOUND":
+                unswept.clear_legacy(conn, task_id)
             conn.execute(
                 "UPDATE task_ownership SET status = ? WHERE task_id = ?", (status, task_id)
             )

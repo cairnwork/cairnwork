@@ -71,6 +71,19 @@ class Entry:
     attempt_id: str
     phase: str
     detail: str
+    at: str = ""  # when it was written (UTC, ISO 8601)
+
+
+def dispatched_at(entries: list[Entry]) -> float | None:
+    """When the attempt the entries belong to was dispatched (seconds since the epoch): none of
+    its processes started before. None if no DISPATCHED entry says."""
+    for entry in entries:
+        if entry.phase == "DISPATCHED" and entry.at:
+            try:
+                return datetime.fromisoformat(entry.at).timestamp()
+            except ValueError:
+                return None
+    return None
 
 
 class Journal:
@@ -121,7 +134,7 @@ class Journal:
         conn = self._connect()
         try:
             rows = conn.execute(
-                "SELECT task_id, attempt_id, phase, detail FROM attempt_journal"
+                "SELECT task_id, attempt_id, phase, detail, at FROM attempt_journal"
                 " WHERE task_id = ? ORDER BY seq",
                 (task_id,),
             ).fetchall()
