@@ -193,3 +193,19 @@ def test_a_dispatcher_without_the_flag_rejects_it_and_nothing_runs_as_the_owner(
     with pytest.raises(AgyWorkerError, match="exited 2; no dispatcher status"):
         worker.run(workdir, TASK)
     assert not ran.exists()
+
+
+def test_a_failed_record_write_cannot_drop_the_fence(tmp_path, monkeypatch):
+    """Codex #244 round 2 #5: the record write after an unclean sweep can fail (here
+    WORKER_RECORD_EXISTS); the run must still raise AgyWorkerUnswept, so the pipeline fences
+    the attempt, not a plain worker failure."""
+    monkeypatch.setattr(agy_dispatch, "sweep_worker_run", lambda *a: False)
+    stderr = launch(ROOT) + sweep(result="unclean", wrapper="UNCLEAN", left=["4242"]) + cleanup()
+    worker, workdir, _ = _replaying(tmp_path, stderr + status("completed"))
+    existing = workdir.parent / f"{workdir.name}.agy.worker.json"
+    existing.write_text("{}")  # a record is already there: the write refuses
+    with pytest.raises(AgyWorkerError, match="^WORKER_SWEEP_UNCLEAN") as raised:
+        worker.run(workdir, TASK)
+    assert isinstance(raised.value, WorkerMayLive) and raised.value.account == WORKER
+    assert "WORKER_RECORD_EXISTS" in repr(raised.value.__context__)
+    assert existing.read_text() == "{}"

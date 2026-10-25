@@ -361,7 +361,6 @@ class Intake:
                 task_id,
                 journal=self.journal,
                 account=self.config()["agy_run_as_user"],
-                request=self.state / "requests" / f"{task_id}.json",
             )
         except InvalidStatusTransition as exc:
             raise IntakeRefused("NOT_SUPERSEDABLE", str(exc)) from exc

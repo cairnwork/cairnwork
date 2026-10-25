@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from cairnwork import runlock
+from cairnwork import runlock, unswept
 from cairnwork.account_check import base_stage, precheck
 from cairnwork.deferred_store import DeferredStore
 from cairnwork.deferred_tests import (
@@ -298,7 +298,7 @@ def _attempt(task, specs, digest, notary, worker, run_root, result, steps, verif
         result.reason = exc.comparison.worker_reason(isolated=True)
         return
     attempt = create_attempt_clone(task.repo, task.base_commit, run_root, result.attempt_id)
-    steps.reach("WORKER_STARTED", getattr(worker, "run_as", "") or "")
+    steps.reach("WORKER_STARTED", unswept.RUN_AS + (getattr(worker, "run_as", "") or ""))
     try:
         try:
             worker.run(attempt.path, task)

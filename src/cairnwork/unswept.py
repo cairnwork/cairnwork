@@ -13,10 +13,13 @@ The mark is written inside the ledger transaction that moves the task to FAILED
 (``OwnershipLedger.set_status(..., fence=...)``), so there is no FAILED task without its mark.
 
 Ledgers from before this table (migrate): the ledger keeps no failure reasons, so it cannot tell
-which FAILED task recovery left unswept. Every FAILED task is marked LEGACY (attempt "") when the
-table is created, in that same transaction; takeover.py then sweeps every attempt the journal
-names for the task and requires the configured worker account to be idle. A task the journal
-names no attempt for is released only if the journal is shown older than the task.
+which FAILED task recovery left unswept, and a runner of the old version may still end an
+in-flight task FAILED without a mark. Every FAILED, BOUND or DISPATCHED task is marked LEGACY
+(attempt "") when the table is created, in that same transaction; takeover.py then sweeps every
+attempt the journal names for the task. A task the journal names no attempt for stays fenced.
+
+Journal entries from before #244 do not name the account a worker ran as (WORKER_STARTED had no
+detail): ``journaled_account`` reads them as UNKNOWN_ACCOUNT, never as the owner's uid.
 """
 
 from __future__ import annotations
@@ -25,6 +28,8 @@ import sqlite3
 from dataclasses import dataclass
 
 LEGACY = ""  # attempt id of a mark made at the migration: the ledger does not know the attempt
+UNKNOWN_ACCOUNT = "?"  # the account of an attempt journaled before #244 (no user is named "?")
+RUN_AS = "run_as="  # WORKER_STARTED detail: "run_as=<worker account>", "run_as=" for the owner
 
 SCHEMA = """
 CREATE TABLE unswept_attempt (
@@ -53,7 +58,8 @@ class Mark:
 
 
 def migrate(conn: sqlite3.Connection) -> None:
-    """Create the table once; a ledger that predates it gets every FAILED task marked LEGACY."""
+    """Create the table once; a ledger that predates it gets every FAILED, BOUND or DISPATCHED
+    task marked LEGACY."""
     conn.execute("BEGIN IMMEDIATE")
     try:
         exists = conn.execute(
@@ -61,15 +67,24 @@ def migrate(conn: sqlite3.Connection) -> None:
         ).fetchone()
         if exists is None:
             conn.execute(SCHEMA)
-            conn.execute(
-                "INSERT INTO unswept_attempt (task_id, attempt_id)"
-                " SELECT task_id, ? FROM task_ownership WHERE status = 'FAILED'",
+            conn.execute(  # in flight too: an old runner may still end it FAILED, unmarked
+                "INSERT INTO unswept_attempt (task_id, attempt_id) SELECT task_id, ?"
+                " FROM task_ownership WHERE status IN ('BOUND', 'DISPATCHED', 'FAILED')",
                 (LEGACY,),
             )
         conn.execute("COMMIT")
     finally:
         if conn.in_transaction:
             conn.execute("ROLLBACK")
+
+
+def journaled_account(entries) -> str | None:
+    """The account an attempt's WORKER_STARTED entry names: "" for the owner's uid,
+    UNKNOWN_ACCOUNT for an entry from before #244 (it named none), None if no worker started."""
+    details = [e.detail for e in entries if e.phase == "WORKER_STARTED"]
+    if not details:
+        return None
+    return details[-1].removeprefix(RUN_AS) if details[-1].startswith(RUN_AS) else UNKNOWN_ACCOUNT
 
 
 def get(conn: sqlite3.Connection, task_id: str) -> Mark | None:

@@ -1,14 +1,14 @@
-"""Whether Linux /proc may hide other users' processes (hidepid), for the sweep (#244).
+"""Whether Linux /proc may hide processes (hidepid), for the sweep (#244).
 
 Under ``hidepid=1`` other users' process details cannot be read; under ``hidepid=2`` (or
-``invisible``, ``noaccess``, ``ptraceable``) their directories are not even listed. A sweep that
-must see a worker account's processes then cannot tell "idle" from "hidden", so it fails closed
-(confined.sweep_marked: not listed, with this reason). hidepid never hides the caller's own
-processes; a same-user sweep still reads their owners through the /proc directory and a
-signal-0 probe (confined._hidden_owner), so it is not refused for hidepid. A ``gid=`` exemption
-is not trusted: any hidepid other than 0/off counts as restricted. Mount options that cannot be
-read (no mountinfo, or no /proc mount in it) count as restricted too: no probe can tell, e.g.,
-a PID namespace whose pid 1 is the owner's own process from an open /proc.
+``invisible``) their directories are not even listed; under ``hidepid=4`` (``ptraceable``) only
+processes the caller may ptrace are shown, so a same-uid process that is not dumpable can be
+hidden too. A sweep cannot then tell "gone" from "hidden", so every sweep on such a /proc fails
+closed (confined.sweep_marked: not listed, with this reason), the owner's own as well as a
+worker account's. A ``gid=`` exemption is not trusted: any hidepid other than 0/off counts as
+restricted. Mount options that cannot be read (no mountinfo, or no /proc mount in it) count as
+restricted too: no probe can tell, e.g., a PID namespace whose pid 1 is the owner's own process
+from an open /proc.
 """
 
 from __future__ import annotations

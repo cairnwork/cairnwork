@@ -244,14 +244,17 @@ def _settle_worker_run(dispatch, reader, process, held, timed_out, log_path) -> 
     completion = agy_receipts.completion_problem(receipts) if code == 0 else None
     ended = ["TIMED_OUT"] * (timed_out is not None) + ["HELD"] * held
     extra = [completion] if completion else []
-    agy_receipts.write_record(log_path, receipts, unswept + ended + found + extra)
     survivors = [u for u in unswept if u.startswith("WORKER_SWEEP_UNCLEAN")]
-    if survivors or (unswept and (ended or not found)):  # primary whenever a run may survive
-        raise AgyWorkerUnswept(
-            f"WORKER_SWEEP_UNCLEAN: worker-account processes may survive: {unswept}; "
-            f"receipt problems: {found}; log {log_path}",
-            dispatch.run_as_user,
-        )
+    may_live = survivors or (unswept and (ended or not found))  # primary whenever one may survive
+    try:  # decided before the record write: a failing write cannot drop the fence (#244)
+        agy_receipts.write_record(log_path, receipts, unswept + ended + found + extra)
+    finally:
+        if may_live:
+            raise AgyWorkerUnswept(  # noqa: B012 - the fence outranks a failed record write
+                f"WORKER_SWEEP_UNCLEAN: worker-account processes may survive: {unswept}; "
+                f"receipt problems: {found}; log {log_path}",
+                dispatch.run_as_user,
+            )
     if found and not ended:
         raise agy_dispatch.AgyWorkerAccountFailed(f"{'; '.join(found + unswept)}; log {log_path}")
     return completion

@@ -118,6 +118,7 @@ def _dispatch(intake: Intake, args) -> Any:
             run_root=intake.run_root,
             verifier_account=intake.verifier_account(),
             leftovers_log=intake.state / "cleanup-leftovers.jsonl",
+            worker_account=intake.config()["agy_run_as_user"],
         )
         return {
             "decisions": [d.__dict__ for d in decisions],

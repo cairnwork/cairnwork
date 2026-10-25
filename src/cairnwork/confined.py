@@ -16,7 +16,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from cairnwork import proc_restrict
 
@@ -87,16 +87,19 @@ HIDDEN_WAIT = 0.05
 @dataclass(frozen=True)
 class Sweep:
     """One look at the process table for a marker (#244). Only ``gone`` means "none left":
-    a delivered SIGKILL is not a death (uninterruptible I/O), and a process whose environment
-    cannot be read may carry the marker."""
+    a delivered SIGKILL is not a death (uninterruptible I/O), a process whose environment
+    cannot be read may carry the marker, and a marked process that exited before its kill may
+    have left a child this look missed (``vanished``; confirm_gone then needs two clean looks)."""
 
     listed: bool  # the whole table, and the worker account's uid when asked, could be read
     killed: int = 0  # marked processes SIGKILL was delivered to: alive when listed
     denied: int = 0  # marked processes whose kill was refused: still running
     unreadable: int = 0  # the owner's processes whose environment could not be read
     account: int = 0  # processes of the worker account (environments the owner cannot read)
-    pids: tuple[int, ...] = ()  # the processes behind those counts, for the operator (describe)
-    restricted: str = ""  # not listed because /proc hides other users' processes (hidepid)
+    held_by: tuple[tuple[int, str], ...] = ()  # (pid, KEPT_BY label) behind those counts
+    restricted: str = ""  # not listed: Linux /proc may hide processes (hidepid, proc_restrict)
+    vanished: int = 0  # marked processes that exited between the listing and their kill
+    unconfirmed: bool = False  # clean, but not twice in a row within the window (confirm_gone)
 
     @property
     def found(self) -> int:
@@ -104,18 +107,22 @@ class Sweep:
 
     @property
     def gone(self) -> bool:
-        return self.listed and not (self.found or self.unreadable or self.account)
+        busy = self.found or self.unreadable or self.account or self.vanished or self.unconfirmed
+        return self.listed and not busy
 
     def problem(self) -> str:
         """Why the processes are not shown gone, starting with a stable code ("" when gone)."""
         if self.restricted:
-            return (f"SWEEP_UNAVAILABLE: process table restricted ({self.restricted}): the worker"
-                    " account's processes cannot all be listed and may still run")  # fmt: skip
+            return (f"SWEEP_UNAVAILABLE: process table restricted ({self.restricted}): processes"
+                    " of this attempt may be hidden and may still run")  # fmt: skip
         if not self.listed:
             return "SWEEP_UNAVAILABLE: processes of this attempt were not checked and may still run"
         if self.found:
             return (f"SURVIVORS_REMAIN: {self.found} process(es) of the attempt still listed"
                     f" ({self.denied} refused the kill)")  # fmt: skip
+        if self.vanished or self.unconfirmed:
+            return ("SURVIVORS_REMAIN: the attempt was not listed gone twice in a row"
+                    f" ({self.vanished} died before the kill, maybe leaving a child)")  # fmt: skip
         if self.unreadable:
             return (f"UNREADABLE_PROCESSES: {self.unreadable} of the owner's processes hide their"
                     " environment and may belong to the attempt")  # fmt: skip
@@ -123,6 +130,18 @@ class Sweep:
             return (f"WORKER_ACCOUNT_BUSY: the worker account runs {self.account} process(es),"
                     " which the owner cannot inspect")  # fmt: skip
         return ""
+
+    def kept_by(self, limit: int = 20) -> str:
+        """What keeps the fence, for the operator: pids and a fixed label each, never text a
+        process supplies (its name or arguments could hold a secret)."""
+        if self.restricted:
+            return f"process table restricted ({self.restricted})"
+        shown = ", ".join(f"{pid} {label}" for pid, label in self.held_by[:limit])
+        more = len(self.held_by) - limit
+        return shown + (f" and {more} more" if more > 0 else "")
+
+
+KEPT_BY = ("marked", "hidden", "worker-account")  # the labels of Sweep.held_by
 
 
 UNLISTED = Sweep(listed=False)
@@ -149,25 +168,28 @@ def sweep_marked(
         return UNLISTED
     mine, me = os.getuid(), os.getpid()
     rows = [r for r in processes if r[0] != me and (skip_group is None or r[1] != skip_group)]
-    held = [r[0] for r in rows if theirs is not None and r[2] in (theirs, FOREIGN)]
+    held = [r[0] for r in rows if theirs is not None and r[2] == theirs]
     ours = [r for r in rows if r[2] == mine and r[2] != theirs]  # another user's: not ours
     # Kill what the listing shows marked before re-reading the hidden ones: the re-read waits,
     # and a listed pid may meanwhile be reused by an unrelated process (#244 NIT).
-    killed, denied = _kill_marked([r for r in ours if r[3] is not None], marker)
+    killed, denied, vanished = _kill_marked([r for r in ours if r[3] is not None], marker)
     hidden = _resolve_hidden([r for r in ours if r[3] is None], mine)
-    late_killed, late_denied = _kill_marked([r for r in hidden if r[3] is not None], marker)
-    killed, denied = killed + late_killed, denied + late_denied
+    late = _kill_marked([r for r in hidden if r[3] is not None], marker)
+    killed, denied, vanished = killed + late[0], denied + late[1], vanished + late[2]
     unreadable = [r[0] for r in hidden if r[3] is None]
-    pids = tuple(sorted({*killed, *denied, *unreadable, *held}))
-    # the owner's own marked processes are killed above even when the account's may be hidden
-    hidden_by = _restricted() if theirs is not None else ""  # hidepid never hides one's own
-    return Sweep(not hidden_by, len(killed), len(denied), len(unreadable), len(held), pids,
-                 hidden_by)  # fmt: skip
+    held_by = sorted([(p, "marked") for p in killed + denied] + [(p, "hidden") for p in unreadable]
+                     + [(p, "worker-account") for p in held])  # fmt: skip
+    # Linux /proc mounted with hidepid may hide any process, a same-uid one that is not
+    # dumpable included: after killing what it shows, such a look is never "gone".
+    hidden_by = _restricted()
+    return Sweep(not hidden_by, len(killed), len(denied), len(unreadable), len(held),
+                 tuple(held_by), hidden_by, vanished)  # fmt: skip
 
 
-def _kill_marked(rows, marker: str) -> tuple[list[int], list[int]]:
-    """(pids SIGKILL was delivered to, pids that refused it) of the rows that carry marker."""
-    killed, denied = [], []
+def _kill_marked(rows, marker: str) -> tuple[list[int], list[int], int]:
+    """(pids SIGKILL was delivered to, pids that refused it, how many had already exited) of
+    the rows that carry marker."""
+    killed, denied, vanished = [], [], 0
     for pid, _pgid, _uid, environment in rows:
         if marker not in environment:
             continue
@@ -175,22 +197,26 @@ def _kill_marked(rows, marker: str) -> tuple[list[int], list[int]]:
             os.kill(pid, signal.SIGKILL)
             killed.append(pid)
         except ProcessLookupError:
-            pass  # already gone
+            vanished += 1  # exited after the listing: a child it started may be unlisted
         except PermissionError:
             denied.append(pid)  # still running (NIT #244: a refused kill is a survivor)
-    return killed, denied
+    return killed, denied, vanished
 
 
 def confirm_gone(first: Sweep, again: Callable[[], Sweep]) -> Sweep:
-    """Look again (``again``) after ``first`` until the processes are shown gone, the table
-    cannot be read, or CONFIRM_TRIES run out; return the last look."""
-    found = first
+    """Look again (``again``) after ``first`` until two looks in a row are gone, the table
+    cannot be read, or CONFIRM_TRIES run out; return the last look. The second clean look,
+    taken after every kill, shows that nothing the one before missed is left (e.g. a child of
+    a marked process that exited before its kill). Clean only once at the end: ``unconfirmed``,
+    so not gone."""
+    found, clean = first, int(first.gone)
     for _ in range(CONFIRM_TRIES):
-        if found.gone or not found.listed:
+        if clean >= 2 or not found.listed:
             break
         time.sleep(CONFIRM_WAIT)  # SIGKILLed: wait until the kernel has ended them
         found = again()
-    return found
+        clean = clean + 1 if found.gone else 0
+    return found if clean >= 2 or not found.gone else replace(found, unconfirmed=True)
 
 
 def _resolve_hidden(rows, mine: int):
@@ -241,7 +267,7 @@ def _reread(pids: set[int]) -> dict[int, set[str] | None] | None:
 
 
 def _restricted() -> str:
-    """Why /proc may hide another user's processes; "" when it cannot (#244, proc_restrict)."""
+    """Why /proc may hide processes; "" when it cannot (#244, proc_restrict)."""
     return proc_restrict.restriction() if sys.platform.startswith("linux") else ""
 
 
@@ -306,46 +332,15 @@ def _linux_processes(proc: str = "/proc"):
         except (FileNotFoundError, ProcessLookupError):
             continue  # gone
         except (OSError, ValueError, IndexError, StopIteration):
-            # status hidden (e.g. hidepid=1): no process group, so no skip_group drops it (#244)
-            try:
-                uid, pgid = _hidden_owner(base, int(name)), None
-            except (FileNotFoundError, ProcessLookupError):
-                continue  # gone
+            # owner unknown: it may be one of ours; no process group, so no skip_group drops
+            # it (#244); a hidepid mount is refused as a whole (proc_restrict)
+            uid, pgid = os.getuid(), None
         try:
             environment = _linux_environment(base)
         except (FileNotFoundError, ProcessLookupError):
             continue  # gone
         rows.append((int(name), pgid, uid, environment))
     return rows
-
-
-FOREIGN = -1  # a process that is not the owner's, of a uid that cannot be told (_hidden_owner)
-
-
-def _hidden_owner(base: str, pid: int) -> int:
-    """The owner of a process whose status cannot be read (hidepid=1 hides other users'). Its
-    /proc directory belongs to its effective uid, or to root when it is not dumpable: then a
-    signal 0 tells one the owner may signal (its own: judged as the owner's) from one it may not
-    (FOREIGN: root's or any other user's, the worker account's included). A directory that
-    cannot be read either is judged as the owner's, so a hidden environment keeps it unreadable."""
-    mine = os.getuid()
-    try:
-        owner = _dir_owner(base)
-    except (FileNotFoundError, ProcessLookupError):
-        raise
-    except OSError:
-        return mine
-    if owner != 0 or mine == 0:
-        return owner
-    try:
-        os.kill(pid, 0)  # no signal is sent: only the permission is checked
-    except PermissionError:
-        return FOREIGN
-    return mine
-
-
-def _dir_owner(base: str) -> int:
-    return os.stat(base).st_uid
 
 
 def _linux_environment(base: str) -> set[str] | None:

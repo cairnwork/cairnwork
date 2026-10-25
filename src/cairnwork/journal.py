@@ -129,16 +129,6 @@ class Journal:
             conn.close()
         return [Entry(*row) for row in rows]
 
-    def first_at(self) -> datetime | None:
-        """When the oldest row still in the journal was written; None if it has none. Rows are
-        never deleted, so a journal that was missing or recreated starts at its recreation."""
-        conn = self._connect()
-        try:
-            row = conn.execute("SELECT at FROM attempt_journal ORDER BY seq LIMIT 1").fetchone()
-        finally:
-            conn.close()
-        return datetime.fromisoformat(row[0]) if row else None
-
 
 def _widen_phase_check(conn: sqlite3.Connection) -> None:
     """A journal created before TEST_SOURCE has the old CHECK: rebuild it, keeping rows.

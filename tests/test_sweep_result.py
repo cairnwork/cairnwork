@@ -14,7 +14,7 @@ from test_recovery import crash, settle
 from test_recovery import project as project  # noqa: F401 - fixture
 
 import cairnwork.confined as confined
-from cairnwork import proc_names, takeover
+from cairnwork import takeover
 from cairnwork.confined import Sweep, confirm_gone, sweep_marked
 from cairnwork.ownership import OWNER, OwnershipLedger, TakeoverRefused
 
@@ -73,14 +73,6 @@ def test_a_refused_kill_is_a_survivor(monkeypatch):
     assert confined._sweep_survivors("t", -1) == 1
 
 
-def test_a_vanished_process_is_not_counted(monkeypatch):
-    def vanished(_pid):
-        raise ProcessLookupError
-
-    _table(monkeypatch, [_marked()], kill=vanished)
-    assert sweep_marked("CAIRNWORK_ATTEMPT", "a1").gone
-
-
 def test_hidden_environments_and_other_users(monkeypatch):
     rows = [
         (FAKE, FAKE, ME, None),  # one of ours that hides its environment
@@ -127,14 +119,14 @@ def test_the_worker_account_is_idle_or_the_sweep_is_not_gone(monkeypatch):
 
 def test_a_killed_process_must_be_seen_gone_within_the_window(monkeypatch):
     """SIGKILL delivered is not a death: a process in uninterruptible I/O stays listed."""
-    lingering = [[_marked()]] * confined.CONFIRM_TRIES + [[]]
+    lingering = [[_marked()]] * (confined.CONFIRM_TRIES - 1) + [[]]
     killed = _table(monkeypatch, *lingering)
 
     def look():
         return sweep_marked("CAIRNWORK_ATTEMPT", "a1")
 
-    assert confirm_gone(look(), look).gone  # gone at the last look of the window
-    assert len(killed) == confined.CONFIRM_TRIES
+    assert confirm_gone(look(), look).gone  # clean at the last two looks of the window
+    assert len(killed) == confined.CONFIRM_TRIES - 1
     _table(monkeypatch, *([[_marked()]] * (confined.CONFIRM_TRIES + 1)), [])
     last = confirm_gone(look(), look)
     assert not last.gone and last.killed == 1  # one look too many: still listed
@@ -311,7 +303,7 @@ def test_a_process_whose_owner_cannot_be_read_is_never_counted_gone(tmp_path, mo
     monkeypatch.setattr(confined, "_account_uid", lambda name: OTHER_UID)
     found = sweep_marked("CAIRNWORK_ATTEMPT", "a1", account="w")
     assert (found.killed, found.unreadable, found.gone) == (1, 1, False) and killed == [FAKE]
-    assert found.pids == (FAKE, FAKE + 1)
+    assert found.held_by == ((FAKE, "marked"), (FAKE + 1, "hidden"))
     assert sweep_marked("CAIRNWORK_ATTEMPT", "a1", skip_group=-1).killed == 1  # not dropped
 
 
@@ -328,7 +320,8 @@ def test_marked_processes_are_killed_before_hidden_ones_are_read_again(monkeypat
     monkeypatch.setattr(confined, "_reread", reread)
     found = sweep_marked("CAIRNWORK_ATTEMPT", "a1")
     assert events == [FAKE, ("reread", [FAKE + 1]), FAKE + 1]
-    assert (found.killed, found.unreadable, found.pids) == (2, 0, (FAKE, FAKE + 1))
+    assert (found.killed, found.unreadable) == (2, 0)
+    assert found.held_by == ((FAKE, "marked"), (FAKE + 1, "marked"))
 
 
 def test_the_pids_that_keep_the_fence_are_named(monkeypatch):
@@ -336,10 +329,21 @@ def test_the_pids_that_keep_the_fence_are_named(monkeypatch):
     _table(monkeypatch, rows + [(FAKE + 3, FAKE + 3, ME, {"A=1"})], kill=_denied)
     monkeypatch.setattr(confined, "_account_uid", lambda name: OTHER_UID)
     found = sweep_marked("CAIRNWORK_ATTEMPT", "a1", account="w")
-    assert found.pids == (FAKE, FAKE + 1, FAKE + 2)  # account, hidden, denied; not FAKE + 3
-    monkeypatch.setattr(proc_names, "_names", lambda pids: {FAKE: "ssh-agent"})
-    assert proc_names.describe(found.pids, limit=2) == f"{FAKE} ssh-agent, {FAKE + 1} ? and 1 more"
-    assert proc_names.describe(()) == ""
+    assert found.held_by == (
+        (FAKE, "worker-account"), (FAKE + 1, "hidden"), (FAKE + 2, "marked")
+    )  # fmt: skip
+    assert found.kept_by(limit=2) == f"{FAKE} worker-account, {FAKE + 1} hidden and 1 more"
+    assert {label for _pid, label in found.held_by} <= set(confined.KEPT_BY)
+    assert Sweep(True).kept_by() == ""
+
+
+def test_kept_by_carries_no_text_a_process_supplies(monkeypatch):
+    """Codex #244 round 2 SHOULD-FIX: filtering characters is not redaction. A process that
+    names itself after a secret shows up only as its pid and a fixed label."""
+    secret = "--password=hunter2"
+    _table(monkeypatch, [(FAKE, FAKE, ME, {"CAIRNWORK_ATTEMPT=a1", secret})])
+    found = sweep_marked("CAIRNWORK_ATTEMPT", "a1")
+    assert found.kept_by() == f"{FAKE} marked" and "hunter2" not in found.problem()
 
 
 def test_a_real_marked_process_is_killed_and_seen_gone():

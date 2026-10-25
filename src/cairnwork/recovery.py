@@ -36,7 +36,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 
-from cairnwork import runlock
+from cairnwork import runlock, unswept
 from cairnwork.confined import ATTEMPT_ENV, SWEEP_UNAVAILABLE, confirm_gone, sweep_marked
 from cairnwork.journal import Journal
 from cairnwork.notary import Notary
@@ -67,8 +67,11 @@ def recover(
     run_root: Path,
     verifier_account: VerifierAccount | None = None,
     leftovers_log: Path | None = None,
+    worker_account: str | None = None,
 ) -> list[Decision]:
     """Settle every BOUND or DISPATCHED task. Raises RunLockBusy if a run is active.
+    ``worker_account``: the state's agy_run_as_user, assumed for a worker journaled before #244
+    (its WORKER_STARTED names no account); with none, such an attempt is fenced as unknown.
     Directories that could not be removed go in the Decision and, when ``leftovers_log`` is
     given, in that append-only JSON-lines file; never in the journal (a journal row would
     change what a later recovery decides)."""
@@ -89,7 +92,14 @@ def recover(
             try:
                 decisions.append(
                     _settle(
-                        record, ledger, notary, journal, run_root, verifier_account, leftovers_log
+                        record,
+                        ledger,
+                        notary,
+                        journal,
+                        run_root,
+                        verifier_account,
+                        leftovers_log,
+                        worker_account,
                     )
                 )
             except Exception as exc:  # noqa: BLE001 - one bad record must not stop the others
@@ -106,8 +116,9 @@ def recover(
 
 
 def _settle(
-    record: OwnershipRecord, ledger, notary, journal, run_root, account=None, leftovers_log=None
-) -> Decision:
+    record: OwnershipRecord, ledger, notary, journal, run_root, account=None, leftovers_log=None,
+    configured=None,
+) -> Decision:  # fmt: skip
     entries = journal.entries(record.task_id)
     if not entries and record.status == "DISPATCHED":
         # the journal is written before DISPATCHED, so this is the wrong or a lost journal
@@ -117,14 +128,18 @@ def _settle(
         return Decision(record.task_id, "", record.status, "FAILED", "INTERRUPTED_BEFORE_DISPATCH")
     attempt_id = entries[-1].attempt_id
     phases = [e for e in entries if e.attempt_id == attempt_id]
-    worker = next((e.detail for e in phases if e.phase == "WORKER_STARTED" and e.detail), None)
+    ran_as = unswept.journaled_account(phases) or ""  # "" the owner's uid (or no worker)
+    if ran_as == unswept.UNKNOWN_ACCOUNT and configured:
+        ran_as = configured  # journaled before #244: assume the configured worker account
+    worker = None if ran_as in ("", unswept.UNKNOWN_ACCOUNT) else ran_as
 
     def look():  # the worker account it ran as, if any (pipeline.py journals it)
         return sweep_marked(ATTEMPT_ENV, attempt_id, account=worker)
 
     first = look()
     swept = confirm_gone(first, look)
-    unchecked = not swept.gone  # unknown or alive, never "none" (confined.Sweep)
+    unknown = ran_as == unswept.UNKNOWN_ACCOUNT  # its account's processes cannot be checked
+    unchecked = unknown or not swept.gone  # unknown or alive, never "none" (confined.Sweep)
     dispatched = [e.detail for e in phases if e.phase == "DISPATCHED" and e.detail]
     roots = [Path(run_root)]  # the state's run root, and the root this attempt was dispatched under
     if dispatched and Path(dispatched[-1]) != roots[0]:
@@ -138,7 +153,7 @@ def _settle(
         left += _leftover_names(owner_root, attempt_id)
     if account is not None:
         left += _leftover_names(account.run_root, attempt_id)
-    notes = [swept.problem()] if unchecked else []
+    notes = [swept.problem() or _UNKNOWN_ACCOUNT] if unchecked else []
     if left:
         notes.append(f"LEFTOVER_RUN_DIRS: {_names(left)}")
     detail = "; ".join(notes)
@@ -159,7 +174,7 @@ def _settle(
         new, reason = "COMPLETED", "CORE_VERIFIED_BEFORE_CRASH"
     else:
         new, reason = "FAILED", f"INTERRUPTED_AFTER_{phases[-1].phase}"
-    fence = (attempt_id, worker or "") if unchecked and new == "FAILED" else None  # #244
+    fence = (attempt_id, ran_as) if unchecked and new == "FAILED" else None  # #244
     ledger.set_status(record.task_id, new, fence=fence)  # the mark is in the FAILED transaction
     killed = first.killed if first.listed else SWEEP_UNAVAILABLE
     return Decision(
@@ -179,6 +194,10 @@ def _log_leftovers(path: Path, task_id: str, attempt_id: str, left: list[str]) -
         out.write(json.dumps(row, sort_keys=True) + "\n")
 
 
+_UNKNOWN_ACCOUNT = (
+    "SWEEP_UNAVAILABLE: the account the worker ran as is unknown (journaled before #244)"
+    " and agy_run_as_user is not set"
+)
 _RESULTS = ("COMPLETED", "FAILED")  # the run's own FINISHED details (pipeline.py)
 _RUN_TAGS = "vbpqr"  # verify, base-test, and the P2P probe / candidate run / re-run (p2p.py)
 

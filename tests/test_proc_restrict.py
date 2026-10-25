@@ -30,6 +30,8 @@ def _mountinfo(tmp_path, text):
         ("rw,hidepid=1", "hidepid=1 on /proc"),
         ("rw,hidepid=2,gid=1000", "hidepid=2 on /proc"),  # a gid= exemption is not trusted
         ("rw,hidepid=invisible", "hidepid=invisible on /proc"),
+        ("rw,hidepid=4", "hidepid=4 on /proc"),
+        ("rw,hidepid=ptraceable", "hidepid=ptraceable on /proc"),
     ],
 )
 def test_the_hidepid_option_of_the_proc_mount_decides(tmp_path, super_options, expected):
@@ -61,12 +63,16 @@ def _table(monkeypatch, rows, restricted):
     return killed
 
 
-def test_a_restricted_table_never_shows_the_worker_account_idle(monkeypatch):
-    _table(monkeypatch, [], "hidepid=2 on /proc")  # an "empty" account: maybe only hidden
-    found = sweep_marked("CAIRNWORK_ATTEMPT", "a1", account="w")
+@pytest.mark.parametrize("account", ["w", None])
+def test_a_restricted_table_is_never_gone(monkeypatch, account):
+    """Codex #244 round 2: under hidepid=4 (ptraceable) a same-uid process that is not dumpable
+    is hidden too, so the owner-only sweep is refused as well as the worker account's."""
+    _table(monkeypatch, [], "hidepid=ptraceable on /proc")  # "empty": maybe only hidden
+    found = sweep_marked("CAIRNWORK_ATTEMPT", "a1", account=account)
     assert not found.listed and not found.gone
-    assert found.problem().startswith("SWEEP_UNAVAILABLE: process table restricted (hidepid=2")
-    assert sweep_marked("CAIRNWORK_ATTEMPT", "a1").gone  # own processes are never hidden
+    assert found.problem().startswith("SWEEP_UNAVAILABLE: process table restricted (hidepid=")
+    _table(monkeypatch, [], "")
+    assert sweep_marked("CAIRNWORK_ATTEMPT", "a1", account=account).gone
 
 
 def test_the_owners_marked_processes_are_killed_before_the_refusal(monkeypatch):

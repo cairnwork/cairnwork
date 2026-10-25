@@ -8,7 +8,6 @@
   too, with the worker account it ran as, and that account is journaled at WORKER_STARTED.
 The sweep's answers are faked (no other account, no sudo)."""
 
-import os
 import sqlite3
 
 import pytest
@@ -94,12 +93,15 @@ def _legacy_ledger(tmp_path):
     conn.executescript(ownership._SCHEMA)
     rows = [("k1", "d1", OWNER, "task-f", "c1", "FAILED"),
             ("k2", "d2", OWNER, "task-c", "c2", "COMPLETED"),
-            ("k3", "d3", OWNER, "task-n", "c3", "FAILED")]  # fmt: skip
+            ("k3", "d3", OWNER, "task-n", "c3", "FAILED"),
+            ("k4", "d4", OWNER, "task-d", "c4", "DISPATCHED"),
+            ("k5", "d5", OWNER, "task-b", "c5", "BOUND")]  # fmt: skip
     conn.executemany("INSERT INTO task_ownership VALUES (?, ?, ?, ?, ?, ?)", rows)
     conn.commit()
     conn.close()
     journal = Journal(tmp_path / "journal.sqlite")
     journal.record("task-f", ATTEMPT, "DISPATCHED", str(tmp_path / "runs"))
+    journal.record("task-f", ATTEMPT, "WORKER_STARTED")  # before #244: no account named
     journal.record("task-f", ATTEMPT, "FINISHED", "FAILED")
     return path, journal
 
@@ -116,98 +118,63 @@ def _sweeps(monkeypatch, *answers):
     return calls
 
 
-def test_a_legacy_ledger_fences_every_failed_task(tmp_path, monkeypatch):
-    """Codex #244 MUST-FIX 2: FAILED tasks from before the upgrade supersede only after a sweep."""
+def test_a_legacy_ledger_fences_every_failed_and_in_flight_task(tmp_path, monkeypatch):
+    """Codex #244 MUST-FIX 2 and round 2 #4: FAILED tasks from before the upgrade, and tasks an
+    old runner may still end FAILED, supersede only after a sweep."""
     path, journal = _legacy_ledger(tmp_path)
     ledger = OwnershipLedger(path)
-    assert ledger.unswept_attempt("task-f") == Mark(unswept.LEGACY, "", "")
-    assert ledger.unswept_attempt("task-n") == Mark(unswept.LEGACY, "", "")
+    for legacy in ("task-f", "task-n", "task-d", "task-b"):
+        assert ledger.unswept_attempt(legacy) == Mark(unswept.LEGACY, "", "")
     assert ledger.unswept_attempt("task-c") is None  # COMPLETED never needs a takeover
     with pytest.raises(TakeoverRefused, match="UNSWEPT_ATTEMPT"):
         ledger.set_status("task-f", "SUPERSEDED")
+    calls = _sweeps(monkeypatch, GONE)
     with pytest.raises(TakeoverRefused, match="LEGACY_ATTEMPT_UNKNOWN"):
         takeover.supersede(ledger, "task-f")  # no journal: the attempt is unknown
+    # its worker started before #244, so the account it ran as is unknown: none configured
+    with pytest.raises(TakeoverRefused, match="SWEEP_UNAVAILABLE: .*agy_run_as_user is not set"):
+        takeover.supersede(ledger, "task-f", journal=journal)
+    assert not calls
     calls = _sweeps(monkeypatch, Sweep(True, account=1))
     with pytest.raises(TakeoverRefused, match="WORKER_ACCOUNT_BUSY"):
         takeover.supersede(ledger, "task-f", journal=journal, account="cw-worker")
     assert calls[0] == (ATTEMPT, "cw-worker")  # the journal's attempt, the configured account
     _sweeps(monkeypatch, GONE)
-    assert takeover.supersede(ledger, "task-f", journal=journal).status == "SUPERSEDED"
-    calls = _sweeps(monkeypatch, UNLISTED)
-    with pytest.raises(TakeoverRefused, match="LEGACY_ATTEMPT_UNKNOWN"):  # no bound request
-        takeover.supersede(ledger, "task-n", journal=journal)
-    request = _bound_request(tmp_path, _first(journal) + 1)
-    assert takeover.supersede(ledger, "task-n", journal=journal, request=request).status == (
+    assert takeover.supersede(ledger, "task-f", journal=journal, account="cw-worker").status == (
         "SUPERSEDED"
     )
-    assert not calls  # no attempt was journaled by a journal older than the task: nothing ran
 
 
-def _first(journal):
-    first = journal.first_at()
-    assert first is not None
-    return first.timestamp()
-
-
-def _bound_request(root, mtime):
-    """requests/<task>.json as intake stores it at the bind; its mtime is the bind time."""
-    path = root / "requests" / "task-n.json"
-    path.parent.mkdir(exist_ok=True)
-    path.write_text("{}")
-    os.utime(path, (mtime, mtime))
-    return path
-
-
-@pytest.mark.parametrize("journal_state", ["missing", "recreated", "same instant"])
-def test_no_journaled_attempt_counts_only_if_the_journal_predates_the_task(
-    tmp_path, monkeypatch, journal_state
-):
-    """#244 review NIT: a LEGACY task with no journaled attempt was released unswept even when
-    journal.sqlite was missing (opened again empty) or recreated after the task ran."""
+@pytest.mark.parametrize("journal_state", ["kept", "missing", "recreated"])
+def test_a_legacy_task_with_no_journaled_attempt_stays_fenced(tmp_path, monkeypatch, journal_state):
+    """Codex #244 round 2 #2: the processes carry the attempt id, not the task id, so a task
+    the journal names no attempt for cannot be swept, whatever the journal's age (it may be a
+    restored backup)."""
     path, journal = _legacy_ledger(tmp_path)
     ledger = OwnershipLedger(path)
-    calls = _sweeps(monkeypatch, UNLISTED)
-    bound = _first(journal)
-    if journal_state == "missing":
+    calls = _sweeps(monkeypatch, GONE)
+    if journal_state != "kept":
         (tmp_path / "journal.sqlite").unlink()
         journal = Journal(tmp_path / "journal.sqlite")
-    elif journal_state == "recreated":
-        (tmp_path / "journal.sqlite").unlink()
-        journal = Journal(tmp_path / "journal.sqlite")
-        journal.record("task-x", "a9", "DISPATCHED", "")  # a later task, in the new journal
-        bound -= 3600  # task-n was bound (and may have run) before the new journal began
-    request = _bound_request(tmp_path, bound)  # "same instant": not shown older
+        if journal_state == "recreated":
+            journal.record("task-x", "a9", "DISPATCHED", "")
     with pytest.raises(TakeoverRefused, match="LEGACY_ATTEMPT_UNKNOWN: no journaled attempt"):
-        takeover.supersede(ledger, "task-n", journal=journal, request=request)
+        takeover.supersede(ledger, "task-n", journal=journal, account="cw-worker")
     assert ledger.get(task_id="task-n").status == "FAILED" and not calls
     held = ledger.unswept_attempt("task-n")
     assert held is not None and held.refusal.startswith("LEGACY_ATTEMPT_UNKNOWN")
 
 
-def test_a_legacy_task_whose_bound_request_is_missing_is_refused(tmp_path, monkeypatch):
-    """#244 review SHOULD-FIX: without requests/<task>.json the bind time is unknown, so even
-    a journal older than everything does not prove that nothing ran."""
-    path, journal = _legacy_ledger(tmp_path)
-    ledger = OwnershipLedger(path)
-    calls = _sweeps(monkeypatch, UNLISTED)
-    request = tmp_path / "requests" / "task-n.json"  # never written
-    with pytest.raises(TakeoverRefused, match="LEGACY_ATTEMPT_UNKNOWN: no journaled attempt"):
-        takeover.supersede(ledger, "task-n", journal=journal, request=request)
-    assert ledger.get(task_id="task-n").status == "FAILED" and not calls
-
-
-def test_intake_refuses_a_legacy_task_when_the_journal_is_missing(tmp_path, monkeypatch):
+def test_intake_refuses_a_legacy_task_with_no_journaled_attempt(tmp_path, monkeypatch):
     state = tmp_path / "state"
     state.mkdir()
-    path, journal = _legacy_ledger(tmp_path)
+    path, _ = _legacy_ledger(tmp_path)
     path.rename(state / "ownership.sqlite")
-    _bound_request(state, _first(journal) + 1)
-    monkeypatch.setattr(Intake, "config", lambda self: DEFAULT_CONFIG)
-    calls = _sweeps(monkeypatch, UNLISTED)
-    with pytest.raises(TakeoverRefused, match="LEGACY_ATTEMPT_UNKNOWN"):
-        Intake(state).supersede("task-n")  # no journal.sqlite: opened again, empty
     (tmp_path / "journal.sqlite").rename(state / "journal.sqlite")
-    assert Intake(state).supersede("task-n")["status"] == "SUPERSEDED"
+    monkeypatch.setattr(Intake, "config", lambda self: DEFAULT_CONFIG)
+    calls = _sweeps(monkeypatch, GONE)
+    with pytest.raises(TakeoverRefused, match="LEGACY_ATTEMPT_UNKNOWN"):
+        Intake(state).supersede("task-n")
     assert not calls
 
 
@@ -232,26 +199,74 @@ def test_intake_supersede_gives_the_takeover_the_journal_and_the_account(tmp_pat
     )
     calls = _sweeps(monkeypatch, GONE)
     assert intake.supersede("task-f") == {"task_id": "task-f", "status": "SUPERSEDED"}
-    assert calls == [(ATTEMPT, "cw-worker")]
+    assert calls == [(ATTEMPT, "cw-worker")] * 2  # clean twice in a row
 
 
-def test_recovery_sweeps_the_worker_account_the_journal_names(tmp_path, monkeypatch):
+def _recover_with(tmp_path, monkeypatch, started, configured, answer):
     ledger, task_id = _dispatched(tmp_path)
     journal = Journal(tmp_path / "journal.sqlite")
     journal.record(task_id, ATTEMPT, "DISPATCHED", str(tmp_path / "runs"))
-    journal.record(task_id, ATTEMPT, "WORKER_STARTED", "cw-worker")
+    journal.record(task_id, ATTEMPT, "WORKER_STARTED", started)
     seen = []
 
     def sweep(var, value, **kw):
         seen.append(kw.get("account"))
-        return Sweep(True, account=1)
+        return answer
 
     monkeypatch.setattr(recovery, "sweep_marked", sweep)
     monkeypatch.setattr("cairnwork.confined.CONFIRM_WAIT", 0)
-    (decision,), _ = settle(tmp_path)
+    ledger_, notary, journal_ = stores(tmp_path)
+    (decision,) = recovery.recover(
+        ledger=ledger_, notary=notary, journal=journal_, run_root=tmp_path / "runs",
+        worker_account=configured,
+    )  # fmt: skip
+    return ledger, task_id, decision, set(seen)
+
+
+def test_recovery_sweeps_the_worker_account_the_journal_names(tmp_path, monkeypatch):
+    answer = Sweep(True, account=1)
+    ledger, task_id, decision, seen = _recover_with(
+        tmp_path, monkeypatch, "run_as=cw-worker", None, answer
+    )
     assert decision.new_status == "FAILED" and decision.sweep_unavailable, decision.reason
-    assert decision.detail.startswith("WORKER_ACCOUNT_BUSY") and set(seen) == {"cw-worker"}
+    assert decision.detail.startswith("WORKER_ACCOUNT_BUSY") and seen == {"cw-worker"}
     assert ledger.unswept_attempt(task_id) == Mark(ATTEMPT, "cw-worker", "")
+
+
+def test_recovery_assumes_the_configured_account_for_a_worker_journaled_before_244(
+    tmp_path, monkeypatch
+):
+    """Codex #244 round 2 #4: an old WORKER_STARTED names no account; it is not the owner's."""
+    ledger, task_id, decision, seen = _recover_with(
+        tmp_path, monkeypatch, "", "cw-worker", Sweep(True, account=1)
+    )
+    assert seen == {"cw-worker"} and decision.sweep_unavailable
+    assert ledger.unswept_attempt(task_id) == Mark(ATTEMPT, "cw-worker", "")
+
+
+def test_recovery_fences_a_worker_of_unknown_account_until_one_is_configured(tmp_path, monkeypatch):
+    ledger, task_id, decision, seen = _recover_with(tmp_path, monkeypatch, "", None, GONE)
+    assert seen == {None}  # the owner's processes are still swept and killed
+    assert decision.sweep_unavailable and decision.detail.startswith("SWEEP_UNAVAILABLE")
+    assert ledger.unswept_attempt(task_id) == Mark(ATTEMPT, unswept.UNKNOWN_ACCOUNT, "")
+    calls = _sweeps(monkeypatch, GONE)
+    with pytest.raises(TakeoverRefused, match="agy_run_as_user is not set"):
+        takeover.supersede(ledger, task_id)
+    assert not calls
+    assert takeover.supersede(ledger, task_id, account="cw-worker").status == "SUPERSEDED"
+    assert calls == [(ATTEMPT, "cw-worker")] * 2
+
+
+def test_an_old_worker_started_entry_names_no_account():
+    from cairnwork.journal import Entry
+
+    def started(detail):
+        return [Entry("t", "a", "WORKER_STARTED", detail)]
+
+    assert unswept.journaled_account(started("run_as=cw-worker")) == "cw-worker"
+    assert unswept.journaled_account(started("run_as=")) == ""
+    assert unswept.journaled_account(started("")) == unswept.UNKNOWN_ACCOUNT  # before #244
+    assert unswept.journaled_account([]) is None
 
 
 class _MayLive(EditWorker):
@@ -277,7 +292,7 @@ def test_a_live_run_whose_worker_may_live_is_fenced(project, tmp_path):  # noqa:
     assert result.status == "FAILED" and result.reason.startswith("WORKER_FAILED")
     assert ledger.unswept_attempt(result.task_id) == Mark(result.attempt_id, "cw-worker", "")
     started = [e for e in journal.entries(result.task_id) if e.phase == "WORKER_STARTED"]
-    assert [e.detail for e in started] == ["cw-worker"]  # for recovery after a crash
+    assert [e.detail for e in started] == ["run_as=cw-worker"]  # for recovery after a crash
 
 
 @pytest.mark.sandbox
@@ -300,4 +315,4 @@ def test_an_ordinary_worker_failure_is_not_fenced(project, tmp_path):  # noqa: F
     ledger, _, journal = stores(tmp_path)
     assert result.status == "FAILED" and ledger.unswept_attempt(result.task_id) is None
     started = [e for e in journal.entries(result.task_id) if e.phase == "WORKER_STARTED"]
-    assert [e.detail for e in started] == [""]
+    assert [e.detail for e in started] == ["run_as="]  # the owner's uid, named

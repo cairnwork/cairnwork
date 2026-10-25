@@ -15,7 +15,7 @@ from test_recovery_leftovers import _routable
 
 import cairnwork.confined as confined
 import cairnwork.recovery as recovery
-from cairnwork import proc_names, route, takeover, unswept
+from cairnwork import route, takeover, unswept
 from cairnwork.confined import UNLISTED, Sweep
 from cairnwork.ownership import OWNER, DuplicateLogicalTask, OwnershipLedger, TakeoverRefused
 from cairnwork.pipeline import TaskSpec, run_task
@@ -85,7 +85,7 @@ def test_survivors_that_are_killed_and_gone_allow_the_takeover(tmp_path, monkeyp
     ledger, task_id = _failed_task(tmp_path)
     calls = _sweeps(monkeypatch, Sweep(True, killed=2), Sweep(True, killed=1), GONE)
     assert takeover.supersede(ledger, task_id).status == "SUPERSEDED"
-    assert len(calls) == 3 and {c[0] for c in calls} == {"CAIRNWORK_ATTEMPT"}
+    assert len(calls) == 4 and {c[0] for c in calls} == {"CAIRNWORK_ATTEMPT"}
     assert {c[1] for c in calls} == {"a1"}  # the same tag recovery sweeps
     assert {c[2] for c in calls} == {None}  # the attempt ran as the owner
     assert ledger.unswept_attempt(task_id) is None
@@ -114,7 +114,7 @@ def test_a_sweep_that_runs_and_finds_none_allows_the_takeover(tmp_path, monkeypa
     ledger, task_id = _failed_task(tmp_path)
     calls = _sweeps(monkeypatch, GONE)
     assert takeover.supersede(ledger, task_id).status == "SUPERSEDED"
-    assert len(calls) == 1 and ledger.unswept_attempt(task_id) is None
+    assert len(calls) == 2 and ledger.unswept_attempt(task_id) is None  # clean twice in a row
 
 
 def test_a_checked_attempt_supersedes_as_before_without_sweeping(tmp_path, monkeypatch):
@@ -128,19 +128,19 @@ def test_a_worker_account_mark_is_swept_with_that_account(tmp_path, monkeypatch)
     ledger, task_id = _failed_task(tmp_path, account="cw-worker")
     calls = _sweeps(monkeypatch, Sweep(True, account=2), GONE)
     assert takeover.supersede(ledger, task_id).status == "SUPERSEDED"
-    assert [c[2] for c in calls] == ["cw-worker", "cw-worker"]
+    assert [c[2] for c in calls] == ["cw-worker"] * 3
 
 
 def test_a_refusal_names_the_processes_that_keep_the_fence(tmp_path, monkeypatch):
     """#244 review NIT: one busy worker account keeps every fence up, so the refusal says
     which processes keep it (pids and commands) and the operator can act on them."""
     ledger, task_id = _failed_task(tmp_path, account="cw-worker")
-    _sweeps(monkeypatch, Sweep(True, account=2, pids=(41, 42)))
-    monkeypatch.setattr(proc_names, "_names", lambda pids: {41: "ssh-agent"})
+    held_by = ((41, "worker-account"), (42, "worker-account"))
+    _sweeps(monkeypatch, Sweep(True, account=2, held_by=held_by))
     with pytest.raises(TakeoverRefused, match=r"WORKER_ACCOUNT_BUSY: .* 2 process"):
         takeover.supersede(ledger, task_id)
     refusal = (ledger.unswept_attempt(task_id) or unswept.Mark("", "", "")).refusal
-    assert refusal.endswith("(attempt a1); kept by: 41 ssh-agent, 42 ?")
+    assert refusal.endswith("(attempt a1); kept by: 41 worker-account, 42 worker-account")
 
 
 def test_a_re_mark_names_the_newest_attempt(tmp_path, monkeypatch):
@@ -152,7 +152,7 @@ def test_a_re_mark_names_the_newest_attempt(tmp_path, monkeypatch):
     assert ledger.unswept_attempt(task_id) == unswept.Mark("a2", "cw-worker", "")
     calls = _sweeps(monkeypatch, GONE)
     takeover.supersede(ledger, task_id)
-    assert [(c[1], c[2]) for c in calls] == [("a2", "cw-worker")]
+    assert [(c[1], c[2]) for c in calls] == [("a2", "cw-worker")] * 2
 
 
 def test_a_raw_refusal_leaves_the_last_refusal_to_the_takeover(tmp_path):
