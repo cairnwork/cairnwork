@@ -8,8 +8,11 @@ regression and is left out.
 
 Failure paths, none of which can end VERIFIED:
 
-* base probe times out, cannot report, or its report exceeds the size cap (a suite too large for
-  one guard report, #184: ``base-probe-report-over-cap``) in ``whole-suite``: degrade to
+* base probe times out, cannot report, its report exceeds the size cap (a suite too large for
+  one guard report, #184: ``base-probe-report-over-cap``), or the base run itself is unclean (a
+  process outlived it, ``base-probe-survivors``, or it changed the checkout,
+  ``base-probe-mutated``: the candidate run of the same tests would block on the base's own
+  leftovers, #285) in ``whole-suite``: degrade to
   ``module-dir`` once and say so in the record; when ``module-dir`` itself cannot be probed, or
   would run the same files again, or selects no test file at all, or none of its tests passes on
   the base, the task is UNCOMPARABLE (``P2P_BASE_PROBE_UNUSABLE``, #234: no evidence, never
@@ -104,6 +107,10 @@ def _probe(task, files, run_root, result, verifying, budget, tag="p"):
         return None, "base-probe-timeout"
     if run.report_too_big:
         return None, "base-probe-report-over-cap"
+    if run.survivors:  # the base leaves a process (or cannot tell): the candidate run would too
+        return None, "base-probe-survivors"
+    if run.mutated:  # the base's own tests write into the checkout: same for the candidate
+        return None, "base-probe-mutated"
     if run.returncode not in (0, 1) or not run.outcomes:
         return None, "base-probe-failed"
     return run.outcomes, ""

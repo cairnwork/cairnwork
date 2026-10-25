@@ -141,6 +141,32 @@ def test_tests_failing_or_skipped_on_the_base_are_left_out(monkeypatch):
     assert got.spec.targets == ("tests/test_a.py::test_ok",)
 
 
+@pytest.mark.parametrize(
+    ("survivors", "mutated", "why"),
+    [
+        (1, (), "base-probe-survivors"),
+        (-1, (), "base-probe-survivors"),  # the process list could not be read
+        (0, ("junk.txt",), "base-probe-mutated"),
+    ],
+)
+def test_an_unclean_base_probe_is_unusable(monkeypatch, tmp_path, survivors, mutated, why):
+    # #285: the candidate run blocks on survivors or a mutated checkout, so a base run that
+    # already has them gives no usable comparison (the candidate would carry the base's leftover)
+    def fake_run_verifiers(*args, **kwargs):
+        run = make_run(True, outcomes={"tests/test_a.py::test_a": "passed"}, log_dir=tmp_path)
+        return (replace(run, survivors=survivors, mutated=mutated),)
+
+    monkeypatch.setattr(p2p, "run_verifiers", fake_run_verifiers)
+    assert p2p._probe(TASK, ("tests/test_a.py",), tmp_path, RESULT, VERIFYING, 30) == (None, why)
+
+
+def test_a_clean_base_probe_returns_its_outcomes(monkeypatch, tmp_path):
+    outcomes = {"tests/test_a.py::test_a": "passed"}
+    run = make_run(True, outcomes=outcomes, log_dir=tmp_path)
+    monkeypatch.setattr(p2p, "run_verifiers", lambda *a, **k: (run,))
+    assert p2p._probe(TASK, ("tests/test_a.py",), tmp_path, RESULT, VERIFYING, 30) == (outcomes, "")
+
+
 # --- the candidate run: timeout and the flaky rule ------------------------------------------
 
 

@@ -102,6 +102,28 @@ def test_a_base_probe_timeout_degrades_to_module_dir_and_says_so(project, tmp_pa
     assert result.status == "FAILED" and not result.verified
 
 
+LEAK = (
+    "import subprocess, sys\ndef test_leak():\n"
+    "    subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'],\n"
+    "                     start_new_session=True)\n"
+)
+
+
+def test_a_base_test_that_leaves_a_process_degrades_instead_of_failing_the_candidate(
+    project, tmp_path
+):
+    # #285: an existing nested test always leaves a session-detached sleeper, on the base too.
+    # The candidate run of whole-suite would block on that leftover although the fix is right;
+    # the probe sees it on the base, so module-dir (the flat tests) is used and the fix verifies
+    result = run(
+        project, tmp_path, {"src/calc.py": FIX_ADD}, mode="whole-suite",
+        extra={"tests/deep/test_leak.py": LEAK},
+    )  # fmt: skip
+    assert result.p2p["degraded"] == "base-probe-survivors"
+    assert result.p2p["applied"] == "module-dir"
+    assert result.status == "COMPLETED" and result.verified, result.reason
+
+
 def test_a_probe_that_times_out_even_in_module_dir_ends_before_the_worker(project, tmp_path):
     result = run(
         project, tmp_path, {"src/calc.py": FIX_ADD}, mode="module-dir", budget=5,
