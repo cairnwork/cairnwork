@@ -285,3 +285,76 @@ def test_bytecode_findings_joins_the_prefix_check_and_the_rest(run):
     assert f"tests/test_z.{PYTEST_TAG}.pyc (pytest-rewritten bytecode)" in found  # pycache_guard
     assert "tests/helper.py (protected input)" in found  # elsewhere in the run
     assert len(found) == len(set(found))
+
+
+def test_a_link_that_does_not_resolve_by_name_length_is_reported(run):
+    """#289 round 2: a symlink whose target cannot be resolved for a reason other than a missing,
+    closed, looping or file-blocked target is an error row, not a dropped edge."""
+    _, run_dir = run
+    (run_dir / "home" / "long").symlink_to("x" * 300)  # a component over NAME_MAX
+    (reason,) = scan(run)
+    assert reason.startswith("run/home/long unreadable"), reason
+
+
+def test_dangling_and_looping_links_are_no_finding(run):
+    """Honest tests leave these behind; no lookup through them resolves, for Python either."""
+    _, run_dir = run
+    home = run_dir / "home"
+    (home / "dangling").symlink_to(home / "missing")
+    (home / "a").symlink_to(home / "b")
+    (home / "b").symlink_to(home / "a")
+    (home / "through-a-file").symlink_to(home / "f" / "x")
+    (home / "f").write_text("x")
+    assert scan(run) == ()
+
+
+def test_a_staged_install_in_tmp_path_passes(run):
+    """pip install --root / DESTDIR: <stage>/<real site dir>/__pycache__/<mod>.<tag>.pyc. Under
+    the prefix <stage> Python would read <stage>/<site dir>/<mod>.<tag>.pyc, never the
+    __pycache__ one: the legacy layout is read only without a prefix."""
+    import colorsys
+
+    _, run_dir = run
+    site = os.path.dirname(os.path.realpath(colorsys.__file__))
+    staged = run_dir / "tmp" / "stage" / site.lstrip("/") / "__pycache__"
+    staged.mkdir(parents=True)
+    (staged / f"colorsys.{TAG}.pyc").write_bytes(b"x")
+    assert scan(run) == ()
+
+
+def test_an_ancestor_that_cannot_be_listed_still_leads_to_the_run(run, tmp_path):
+    """tmp_path, above both roots, is searchable but not listable: the walk from / must still
+    reach committed bytecode in the checkout read with the root as prefix."""
+    checkout, _ = run
+    (checkout / "tests" / f"helper.{TAG}.pyc").write_bytes(b"x")
+    mode = tmp_path.stat().st_mode
+    tmp_path.chmod(0o311)
+    try:
+        found = scan(run)
+    finally:
+        tmp_path.chmod(mode)
+    assert found == ("tests/helper.py (protected input)",)
+
+
+class _Account:
+    """A stand-in account (no sudo): only kill_all is reached before the helper would run."""
+
+    def __init__(self, left):
+        self.left = left
+
+    def kill_all(self):
+        if isinstance(self.left, Exception):
+            raise self.left
+        return self.left
+
+
+@pytest.mark.parametrize(
+    "left, reason",
+    [
+        (1, "the account's processes could not be confirmed ended"),
+        (-1, "the account's processes could not be confirmed ended"),
+        (OSError("ps"), "bytecode scan failed (OSError)"),
+    ],
+)
+def test_account_mode_fails_closed_when_its_processes_are_not_ended(run, left, reason):
+    assert scan(run, account=_Account(left)) == (reason,)

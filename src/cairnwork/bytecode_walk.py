@@ -11,10 +11,12 @@ comparison or realpath does not canonicalize (#289 review).
 
 1. **Listing.** Both write roots are listed without following a symlink; a directory closed to
    its owner is opened (u+rwx) first. Each directory becomes a node with its entries as edges:
-   subdirectories, and symlinks whose target (``os.stat``, as the kernel resolves it) is a
-   directory. Every pyc-like name is reported, so is every error.
+   subdirectories, and symlinks whose target (resolved by the kernel relative to the link's own
+   directory) is a directory. Every pyc-like name is reported, so is every error, a symlink's
+   included unless its target is missing, closed, looping or through a file (link_target).
 2. **Graph.** When there is a pyc, the ancestors of the roots join as nodes (their entries are
-   edges too, so /var -> /private/var counts), and every node gets a ``..`` edge to the
+   edges too, so /var -> /private/var counts; the step down towards each root is an edge even
+   where an ancestor cannot be listed), and every node gets a ``..`` edge to the
    directory the kernel gives for ``<node>/..``. Only nodes from which a pyc can be reached are
    walked.
 3. **Walk.** Python reads ``<P>/<D>/<name>`` as bytecode for a source in directory D, and the
@@ -22,8 +24,9 @@ comparison or realpath does not canonicalize (#289 review).
    and, for each edge, steps D by every entry of D whose name folds (NFD, case) to the edge's
    name, or by ``..``; states are (node, D) by identity, so loops end. Where a node holding a pyc
    is reached with D, each existing source in D the pyc's name can stand for (a stem cut at a dot
-   plus ``.py``, folded) is a hit, and when D was entered as ``__pycache__`` the sources of the
-   directory before it too (the legacy layout, read without a prefix: P = /).
+   plus ``.py``, folded) is a hit, and when D was entered as ``__pycache__`` from the directory
+   P's side stood in (no prefix: P = /), the sources of that directory too (the legacy layout,
+   which Python never reads at ``<P>/<D>/__pycache__`` under another prefix).
 
 Not modeled: a lookup that leaves the run's directories and their ancestors for another
 directory and comes back into them by ``..`` or a system link (the run cannot write there).
@@ -56,14 +59,51 @@ def ident(info):
 
 
 def opened(path):
-    """The entries of directory ``path`` (never a symlink), opened first if closed to its owner."""
+    """The identity of directory ``path`` (never a symlink), opened first if closed to its owner,
+    and its entries as (name, kind, identity or None, error or None), kind "dir", "link" (to a
+    directory: identity set) or "other". Listed and resolved through a descriptor, so each entry
+    is resolved relative to its own directory, not by the listing's (possibly long) spelling."""
     info = os.lstat(path)
     if not stat.S_ISDIR(info.st_mode):
         raise NotADirectoryError(errno.ENOTDIR, "not a directory")
     if info.st_mode & 0o700 != 0o700:
         os.chmod(path, stat.S_IMODE(info.st_mode) | 0o700, **NOFOLLOW)
-    with os.scandir(path) as listing:
-        return ident(info), list(listing)
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        if ident(os.fstat(fd)) != ident(info):
+            raise OSError(errno.ESTALE, "replaced while listed")
+        found = []
+        with os.scandir(fd) as listing:  # DirEntry calls use fd: it stays open until done
+            for entry in listing:
+                try:
+                    if entry.is_symlink():
+                        found.append((entry.name, "link", link_target(entry), None))
+                    elif entry.is_dir(follow_symlinks=False):
+                        found.append(
+                            (entry.name, "dir", ident(entry.stat(follow_symlinks=False)), None)
+                        )
+                    else:
+                        found.append((entry.name, "other", None, None))
+                except OSError as exc:
+                    found.append((entry.name, "other", None, exc.strerror or str(exc)))
+        return ident(info), found
+    finally:
+        os.close(fd)
+
+
+def link_target(entry):
+    """The identity of the directory symlink ``entry`` resolves to, or None. Resolved relative to
+    its own directory, so no lookup reaching the link resolves with fewer steps. ENOENT (dangling),
+    ENOTDIR (through a file), EACCES (closed to this user, as to the run's Python) and ELOOP (a
+    loop: any longer lookup through it loops too) mean the run's Python cannot use it either;
+    any other error is raised and reported."""
+    try:
+        info = entry.stat(follow_symlinks=True)
+    except OSError as exc:
+        if exc.errno in (errno.ENOENT, errno.ENOTDIR, errno.EACCES, errno.ELOOP):
+            return None
+        raise
+    return ident(info) if stat.S_ISDIR(info.st_mode) else None
 
 
 def dir_ident(path):
@@ -92,52 +132,53 @@ def list_roots(roots, limit, out):
             continue
         nodes[here], listed[here] = path, (index, rel)
         edges.setdefault(here, [])
-        for entry in entries:
+        for name, kind, target, error in entries:
             count += 1
             if count > limit:
                 out["over"] = True
                 return nodes, edges, pycs, listed
-            sub = rel + "/" + entry.name if rel else entry.name
-            if pyc_like(entry.name):
+            sub = rel + "/" + name if rel else name
+            if pyc_like(name):
                 out["pycs"].append([index, sub])
-                pycs.setdefault(here, []).append((index, sub, entry.name))
-            try:
-                if entry.is_symlink():
-                    target = dir_ident(entry.path)
-                    if target is not None:
-                        edges[here].append((entry.name, target))
-                elif entry.is_dir(follow_symlinks=False):
-                    edges[here].append((entry.name, ident(entry.stat(follow_symlinks=False))))
+                pycs.setdefault(here, []).append((index, sub, name))
+            if error is not None:
+                out["errors"].append([index, sub, error])
+            elif target is not None:
+                edges[here].append((name, target))
+                if kind == "dir":
                     stack.append((index, sub))
-            except OSError as exc:
-                out["errors"].append([index, sub, exc.strerror or str(exc)])
     return nodes, edges, pycs, listed
 
 
 def add_ancestors(roots, nodes, edges):
     """The roots' ancestors as nodes, their entries that resolve to a node as edges, and a
     ``..`` edge on every node."""
+    chain = []  # (ancestor, name, child): each step down to a root, listable or not
     for root in roots:
-        path = os.path.dirname(os.path.realpath(root))
-        while True:
+        below, path = dir_ident(root), os.path.realpath(root)
+        while path != "/":
+            name, path = os.path.basename(path), os.path.dirname(path)
             here = dir_ident(path)
-            if here is not None and here not in nodes:
-                nodes[here] = path
-            if path == "/":
+            if here is None or below is None:
                 break
-            path = os.path.dirname(path)
+            nodes.setdefault(here, path)
+            chain.append((here, name, below))
+            below = here
     for here, path in list(nodes.items()):
         if here in edges:
             continue  # a listed directory: its entries are edges already
         try:
             names = os.listdir(path)
         except OSError:
-            names = []  # not listable by this user: only its chain below counts
+            names = []  # not listable by this user: the chain edges below still count
         for name in names:
             target = dir_ident(os.path.join(path, name))
             if target in nodes:
                 edges.setdefault(here, []).append((name, target))
         edges.setdefault(here, [])
+    for here, name, below in chain:
+        if (name, below) not in edges[here]:
+            edges[here].append((name, below))
     for here, path in nodes.items():
         parent = dir_ident(os.path.join(path, ".."))
         if parent in nodes:
@@ -218,7 +259,10 @@ def walk(nodes, edges, pycs, listed, max_states, out):
             if child not in useful:
                 continue
             for entry, step, target in side.matches(path, here, name):
-                legacy = (path, here) if fold(entry) == fold("__pycache__") else None
+                # the legacy layout is read only without a prefix: where P's side and D are one
+                # directory (P = /), not at <P>/<D>/__pycache__ under any other prefix
+                pycache = fold(entry) == fold("__pycache__") and node == here
+                legacy = (path, here) if pycache else None
                 if (child, target, legacy) in seen:
                     continue
                 seen.add((child, target, legacy))
