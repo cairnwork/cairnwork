@@ -34,6 +34,7 @@ from pathlib import Path
 
 from cairnwork import provenance
 from cairnwork.confined import ATTEMPT_ENV, copy_capped, sweep_marked
+from cairnwork.unswept import WorkerMayLive
 from cairnwork.workers import agy_dispatch, agy_receipts
 
 ENV_KEEP = (
@@ -89,6 +90,10 @@ class AgyWorkerError(Exception):
     pass
 
 
+class AgyWorkerUnswept(AgyWorkerError, WorkerMayLive):
+    """WORKER_SWEEP_UNCLEAN: worker-account processes may survive; the attempt is fenced (#244)."""
+
+
 def _uid(user: str) -> int | None:
     try:
         return pwd.getpwnam(user).pw_uid
@@ -103,6 +108,11 @@ class AgyWorker:
     agy: str = "agy"
     dispatch: agy_dispatch.Dispatch | None = None
     verifier_user: str | None = None  # the verifier account, if any (isolation, #234)
+
+    @property
+    def run_as(self) -> str:
+        """The worker account agy runs as, "" for the owner's uid (journaled, #244)."""
+        return (self.dispatch.run_as_user or "") if self.dispatch is not None else ""
 
     @property
     def isolated(self) -> bool:
@@ -246,13 +256,17 @@ def _settle_worker_run(dispatch, reader, process, held, timed_out, log_path) -> 
     completion = agy_receipts.completion_problem(receipts) if code == 0 else None
     ended = ["TIMED_OUT"] * (timed_out is not None) + ["HELD"] * held
     extra = [completion] if completion else []
-    agy_receipts.write_record(log_path, receipts, unswept + ended + found + extra)
     survivors = [u for u in unswept if u.startswith("WORKER_SWEEP_UNCLEAN")]
-    if survivors or (unswept and (ended or not found)):  # primary whenever a run may survive
-        raise AgyWorkerError(
-            f"WORKER_SWEEP_UNCLEAN: worker-account processes may survive: {unswept}; "
-            f"receipt problems: {found}; log {log_path}"
-        )
+    may_live = survivors or (unswept and (ended or not found))  # primary whenever one may survive
+    try:  # decided before the record write: a failing write cannot drop the fence (#244)
+        agy_receipts.write_record(log_path, receipts, unswept + ended + found + extra)
+    finally:
+        if may_live:
+            raise AgyWorkerUnswept(  # noqa: B012 - the fence outranks a failed record write
+                f"WORKER_SWEEP_UNCLEAN: worker-account processes may survive: {unswept}; "
+                f"receipt problems: {found}; log {log_path}",
+                dispatch.run_as_user,
+            )
     if found and not ended:
         raise agy_dispatch.AgyWorkerAccountFailed(f"{'; '.join(found + unswept)}; log {log_path}")
     return completion

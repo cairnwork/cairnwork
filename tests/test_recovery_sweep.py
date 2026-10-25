@@ -1,5 +1,5 @@
 """Recovery reports an unavailable process sweep instead of claiming a clean recovery (#189):
-``sweep_marked`` returning SWEEP_UNAVAILABLE means "may still be running", never "none"."""
+``sweep_marked`` returning UNLISTED means "may still be running", never "none"."""
 
 import json
 
@@ -10,19 +10,19 @@ from test_recovery_leftovers import _routable, _stuck_dir
 
 import cairnwork.recovery as recovery
 from cairnwork import route
-from cairnwork.confined import SWEEP_UNAVAILABLE
+from cairnwork.confined import SWEEP_UNAVAILABLE, UNLISTED, Sweep
 
 NOTE = "SWEEP_UNAVAILABLE: processes of this attempt were not checked and may still run"
 
 
 @pytest.fixture
 def unavailable_sweep(monkeypatch):
-    monkeypatch.setattr(recovery, "sweep_marked", lambda *_a, **_k: SWEEP_UNAVAILABLE)
+    monkeypatch.setattr(recovery, "sweep_marked", lambda *_a, **_k: UNLISTED)
 
 
 @pytest.fixture
 def working_sweep(monkeypatch):
-    monkeypatch.setattr(recovery, "sweep_marked", lambda *_a, **_k: 0)
+    monkeypatch.setattr(recovery, "sweep_marked", lambda *_a, **_k: Sweep(listed=True))
 
 
 def test_an_unavailable_sweep_is_reported_and_the_task_still_fails(  # noqa: F811

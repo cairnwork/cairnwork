@@ -24,7 +24,10 @@ Budgets, from /usr/bin/grep -E on Darwin 27 (M5 Mac mini, en_US.UTF-8): peak RSS
 for 1 MiB of adversarial input (4,095-character lines of a, of accented a, or a mix) on which
 the pattern almost matches everywhere and never does (the slowest case: grep keeps every state):
   a{100}x5 a{11}b (512 positions, the longest accepted run)          1.8 MiB, 1.48 s
-  (a{50}){9}b (451 positions, 9 tags), the slowest accepted seen      1.8 MiB, 1.55 s
+  (a{50}){9}b (451 positions, 9 tags)                                1.8 MiB, 1.28-1.55 s
+  ((a|b|...|q){1,5})*x, 17 single letters (86 positions, 91 tags;
+  tagged 7,912), the slowest accepted found by a fuzz (Claude review of e9a77d2)
+                                                                     1.9 MiB, 2.0-2.1 s
   .{100}.{70}b (511)                                                 1.8 MiB, 1.26 s
   [[=a=]]{100}[[=a=]]{2}b, the same with [[:alpha:]] or \w (511)   1.6 MiB, 0.94-1.03 s
   ((a|aa|aaa){20})*x (121 positions, 62 tags; tagged 7,623)          1.7 MiB, 0.92 s
@@ -33,7 +36,7 @@ the pattern almost matches everywhere and never does (the slowest case: grep kee
   (505k transitions) 97 MiB; (a|b|...|z single letters x100){100} (990k) 136 MiB;
   ((a|aa|aaa){100})*x (tagged 182k) 3.6 s; the Codex round-3 pattern 494 MB.
 Memory stays far below 64 MiB at these budgets (TRE needs about 200 bytes per transition, so
-100,000 would be some 20 MiB); time is what binds, kept under 2 s per MiB searched. A larger
+100,000 would be some 20 MiB); time is what binds, about 2 s per MiB searched at most. A larger
 input (a repository of many MiB) is left to the wrapper's CPU limit, which stops grep with a
 message the model reads.
 
@@ -55,6 +58,11 @@ from __future__ import annotations
 import re
 
 MAX_REPEAT = 100
+# Escapes macOS grep -E (TRE) reads as exactly one character: \t \r \f \a \e are the control
+# characters (tab, CR, form feed, bell, ESC) and \v is a plain v. Checked against /usr/bin/grep in
+# the tests. Other letters stay refused as maybe empty: \n matches nothing, \x41 is longer syntax,
+# and (?:...) is not an escape at all.
+_SINGLE_ESCAPES = "trfaev"
 MAX_DEPTH = 32
 # Budgets measured with /usr/bin/grep -E on Darwin 27 (see the module docstring).
 MAX_POSITIONS = 512  # = MAX_PATTERN_BYTES: a regex of plain characters always passes
@@ -297,7 +305,9 @@ class _Parser:
             return (p, n, f, last, t, g + 1)  # a group is a submatch: TRE tags it
         if c == "[":
             self.i, items = bracket_end(self.s, self.i)
-            n = items + 4  # a literal per item (+1 for [^...]), and a class test costs more
+            n = (
+                items + 4
+            )  # a literal per item (a [^...] counts the same), and a class test costs more
             return (n, False, n, n, 0, 0)
         if c in ("*", "+", "?") or (c == "{" and nxt and nxt in _DIGITS):
             raise RegexRefused(STACKED)
@@ -316,6 +326,8 @@ class _Parser:
         self.i += 1
         if c in "wWsSdD":
             return _CLASS_ESCAPE
+        if c in _SINGLE_ESCAPES:
+            return _CHAR  # one character on macOS grep (see _SINGLE_ESCAPES)
         if c.isalnum() or c in "<>`'":
             return _ASSERTION  # \b \< ... or an escape this check does not know: maybe empty
         return _CHAR

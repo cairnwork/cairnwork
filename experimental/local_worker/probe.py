@@ -7,6 +7,7 @@ from __future__ import annotations
 import inspect
 import json
 import os
+from typing import TypeGuard
 
 MARK = "CANARY_PROBE "
 
@@ -176,6 +177,35 @@ def test_canary_probe():
         emit(kind="escape", probe=f"code escape {name}", result=res, why=why,
              **{"pass": res == want})
 """
+
+
+def _well_formed(row: object) -> TypeGuard[dict]:
+    if not isinstance(row, dict) or not isinstance(row.get("kind"), str):
+        return False
+    return row["kind"] == "identity" or (
+        isinstance(row.get("probe"), str) and isinstance(row.get("pass"), bool)
+    )
+
+
+def parse_rows(output: str) -> tuple[list[dict], int]:
+    """The probe's rows in ``output``, and how many marked lines were malformed: not a JSON
+    object with a string kind and (but for the identity row) a string probe and a bool pass, or
+    a second identity row (the first must not win). Counted against the run, never skipped."""
+    rows, bad = [], 0
+    for line in output.splitlines():
+        if not line.startswith(MARK):
+            continue
+        try:
+            row = json.loads(line[len(MARK) :])
+        except ValueError:
+            row = None
+        if not _well_formed(row):
+            bad += 1
+        elif row["kind"] == "identity" and any(r["kind"] == "identity" for r in rows):
+            bad += 1  # a second identity row: the first must not win
+        else:
+            rows.append(row)
+    return rows, bad
 
 
 def source(

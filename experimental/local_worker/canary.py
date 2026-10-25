@@ -205,15 +205,12 @@ def _code_probes(
         owner_victim.wait()
         if sibling_proc:
             escapes.stop_sibling_victim(tools, fx, sibling_proc)
-    rows = [
-        json.loads(line[len(probe.MARK) :])
-        for line in call.output.splitlines()
-        if line.startswith(probe.MARK)
-    ]
+    rows, bad = probe.parse_rows(call.output)  # a row without a kind is a broken probe
     identity = next((r for r in rows if r["kind"] == "identity"), {})
     run = {
         "probe": "pytest runs the probe",
-        "pass": call.exit_code == 0 and bool(identity),
+        "pass": call.exit_code == 0 and bool(identity) and not bad,
+        "malformed_rows": bad,
         "exit_code": call.exit_code,
         "secret_leaked": fx.secret in call.output,
     }
@@ -233,7 +230,7 @@ def _remove_planted(path: str) -> None:
 
 def _complete(rows: list[dict], kind: str, names) -> list[dict]:
     """One row per expected target: a missing row (crash, clipping) is a failure, not a pass."""
-    seen = {r["probe"] for r in rows if r["kind"] == kind}
+    seen = {r["probe"] for r in rows if r["kind"] == kind}  # rows are normalised: see parse_rows
     return [
         {"probe": f"code {kind} {n}", "pass": False, "result": "MISSING_ROW"}
         for n in names
@@ -262,7 +259,7 @@ def _dns_needs_owner(rows: list[dict]) -> list[dict]:
 
 
 def _check(rows: list[dict]) -> dict:
-    return {"pass": bool(rows) and all(r["pass"] for r in rows), "probes": rows}
+    return {"pass": bool(rows) and all(r["pass"] is True for r in rows), "probes": rows}
 
 
 def run_canary(tools: WorkerTools, fx: Fixture, env: dict | None = None) -> dict:
