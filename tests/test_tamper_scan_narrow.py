@@ -28,8 +28,6 @@ def test_pure_comment_lines_are_skipped(line, caught):
 @pytest.mark.parametrize(
     "line",
     [
-        "sys.modules['pytest'] = fake",
-        "import _pytest.runner",
         "config.pluginmanager.unregister(p)",
         "def pytest_runtest_makereport(item, call):",
         "@pytest.hookimpl(tryfirst=True)",
@@ -41,6 +39,35 @@ def test_pytest_rules_apply_to_test_code_only(line):
     assert _rules("src/pkg/testing/plugin.py", line)
     assert _rules("src/pkg/plugin.py", line) == []
     assert _rules("app_test.py", line)
+
+
+@pytest.mark.parametrize(
+    ("line", "rule"),
+    [
+        ("sys.modules['pytest'] = fake", "sys_modules_write"),
+        ("import _pytest.runner", "pytest_internals"),
+    ],
+)
+def test_the_most_direct_pytest_forgeries_are_caught_in_library_code_too(line, rule):
+    """A library file a conftest loads as a plugin runs inside pytest as well (T1)."""
+    for path in (TEST, "tests/helpers/util.py", "src/pkg/plugin.py", "app_test.py"):
+        assert _rules(path, line) == [rule], path
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "sys.modules[spec.name] = mod",  # plugin loaders register what they load
+        "sys.modules[name] = m",
+        "sys.modules[__name__] = _Module()",
+        "sys.modules['dep'] = MagicMock()",
+        "mod = sys.modules['pytest']",  # a read
+        "from _pytest.monkeypatch import MonkeyPatch",
+        "mod = importlib.import_module(name)",
+    ],
+)
+def test_variable_keys_and_reads_stay_allowed_in_library_code(line):
+    assert _rules("src/pkg/plugin.py", line) == []
 
 
 def test_other_rules_still_apply_everywhere():
