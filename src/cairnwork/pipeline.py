@@ -104,9 +104,11 @@ class Worker(Protocol):
     A worker that starts processes must give each one the environment variable
     CAIRNWORK_ATTEMPT=<workdir.name> (confined.ATTEMPT_ENV), so restart recovery can find and
     stop them if Cairnwork dies mid-run (AgyWorker does). Optional ``run_as``: the worker account
-    its processes run as, journaled at WORKER_STARTED for recovery and the takeover (#244)."""
+    its processes run as, journaled at WORKER_STARTED for recovery and the takeover (#244).
+    Optional ``isolated`` (AgyWorker). ``run`` may return the provenance fields it can vouch for
+    (provenance.make); None means unknown."""
 
-    def run(self, workdir: Path, task: TaskSpec) -> None: ...  # optional ``isolated``: AgyWorker
+    def run(self, workdir: Path, task: TaskSpec, /) -> dict[str, str] | None: ...
 
 
 @dataclass

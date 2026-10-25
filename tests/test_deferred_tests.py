@@ -274,9 +274,14 @@ def test_an_unparsable_test_commit_is_refused_before_any_base_run(project, tmp_p
     assert list((tmp_path / "state" / "runs").glob("*-b-v*")) == []  # never ran, no logs
 
 
-class ProvenanceWorker(EditWorker):
-    def run(self, workdir: Path, task) -> dict:
-        super().run(workdir, task)
+class ProvenanceWorker:
+    """Writes like EditWorker and returns provenance, as AgyWorker does."""
+
+    def __init__(self, files):
+        self.edit = EditWorker(files)
+
+    def run(self, workdir: Path, task) -> dict[str, str]:
+        self.edit.run(workdir, task)
         return provenance.make("agy", "m-1", "m-2")
 
 
