@@ -7,16 +7,15 @@ import json
 from pathlib import Path
 
 import pytest
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from cairnwork_attest.checkrun import post_check_run
-from cairnwork_attest.dsse import _sign_bytes
 from tests.attest.binding_helpers import (
     notarize_bound,
     producer,
     receiver,
     sign_bound,
 )
+from tests.attest.test_verify import setup_verified_bundle_fixture
 
 
 class FakeHttp:
@@ -48,20 +47,6 @@ def v02_world(tmp_path: Path) -> dict:
     }
 
 
-def _v01_bundle(tmp_path: Path, key: Ed25519PrivateKey, cand: str, base: str) -> Path:
-    pred = {"base_commit": base, "test_source": "bundle"}
-    statement = {
-        "_type": "https://in-toto.io/Statement/v1",
-        "predicateType": "https://cairnwork.github.io/attestation/verified-change/v0.1",
-        "predicate": pred,
-        "subject": [{"digest": {"gitCommit": cand}, "name": f"git-commit:{cand}"}],
-    }
-    payload = json.dumps(statement, sort_keys=True, separators=(",", ":")).encode()
-    path = tmp_path / "v01_bundle.json"
-    path.write_text(json.dumps(_sign_bytes(payload, key)))
-    return path
-
-
 def test_v02_full_offline_check_run_includes_assurance(v02_world: dict) -> None:
     http = FakeHttp()
     res = post_check_run(
@@ -84,20 +69,22 @@ def test_v02_full_offline_check_run_includes_assurance(v02_world: dict) -> None:
     assert "overlay=rebuilt" in summary
 
 
-def test_v01_bundle_has_no_assurance(v02_world: dict, tmp_path: Path) -> None:
-    key = Ed25519PrivateKey.generate()
-    b01 = _v01_bundle(tmp_path, key, v02_world["head"], v02_world["base"])
+def test_v01_bundle_has_no_assurance(tmp_path: Path, repo: Path) -> None:
+    # A real v0.1 bundle, signed by the key that is passed as --public-key, so the check run
+    # reaches the v0.1 verified path (issue #280); a v0.1 receipt must not show an Assurance row.
+    bundle, pub, _base, _cand = setup_verified_bundle_fixture(tmp_path / "state01", repo)
     http = FakeHttp()
-    post_check_run(
-        b01,
+    res = post_check_run(
+        bundle,
         "octo/repo",
-        public_key=v02_world["pub"],
-        repo=v02_world["full"],
+        public_key=pub,
+        repo=repo,
         token="ghs_TOKEN",
         http=http,
     )
-    # v0.1 does not verify against v0.2 full repo or fails gracefully, but has no Assurance row
+    assert res.ok
     summary = json.loads(http.calls[0][3])["output"]["summary"]
+    assert "- Offline verification: VERIFIED" in summary
     assert "- Assurance:" not in summary
 
 
