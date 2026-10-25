@@ -8,6 +8,12 @@ TEST_SOURCE stays a journal phase (Issue #175): recovery treats it like any phas
 CANDIDATE and VERIFYING (a crash right after it settles FAILED, INTERRUPTED_AFTER_TEST_SOURCE;
 no Core verdict can exist yet), and cairnwork_attest reads it. Opening a journal that predates it
 migrates the table, the append-only triggers and the indexes inside one transaction.
+
+A FAILED FINISHED row may carry ``uncomparable``, the code of an attempt that ended with no
+evidence (#234: the base, its environment or the verifier account could not be judged). The owner
+process writes it in the 0700 state, so the Issue comment reads it from here, never from the
+runner log or the current config, which a same-uid worker could forge. It is an added column
+(default ""): older code still reads and writes the journal, and older rows read as "".
 """
 
 from __future__ import annotations
@@ -31,6 +37,7 @@ PHASES = (
     # run lost a race and never started. If the ledger move then fails, the error propagates and the
     # task stays in flight with FINISHED journaled. Recovery reads only COMPLETED/FAILED details:
     # a FAILED one stands (no Core verdict lookup); COMPLETED does not override Core's verdict.
+    # A FAILED one may add ``uncomparable`` (no_evidence), never another detail.
     "FINISHED",
 )
 
@@ -44,7 +51,8 @@ CREATE TABLE IF NOT EXISTS attempt_journal (
          'FINISHED')),
     detail     TEXT NOT NULL DEFAULT '',
     at         TEXT NOT NULL,
-    boot       TEXT NOT NULL DEFAULT ''
+    boot       TEXT NOT NULL DEFAULT '',
+    uncomparable TEXT NOT NULL DEFAULT ''
 )
 """
 
@@ -79,12 +87,22 @@ class Entry:
     phase: str
     detail: str
     boot: str = ""  # DISPATCHED only: proc_start.boot_mark() when it was written (#244)
+    uncomparable: str = ""  # FINISHED FAILED only: the no-evidence code (#234)
 
 
 def dispatch_mark(entries: list[Entry]) -> str:
     """The boot mark of the attempt's DISPATCHED entry: none of its processes started before.
     "" if there is none (no entry, macOS, a journal from before the mark): the strict rule."""
     return next((e.boot or "" for e in entries if e.phase == "DISPATCHED"), "")
+
+
+def no_evidence(phases: list[Entry]) -> str:
+    """The UNCOMPARABLE code the owner journaled when the attempt (``phases``, its rows in order)
+    finished FAILED with no evidence; "" for any other ending and for rows from before #234."""
+    last = phases[-1] if phases else None
+    if last is None or last.phase != "FINISHED" or last.detail != "FAILED":
+        return ""
+    return last.uncomparable or ""
 
 
 class Journal:
@@ -96,7 +114,7 @@ class Journal:
             try:
                 _widen_phase_check(conn)
                 conn.execute(_TABLE)
-                _add_boot_column(conn)
+                _add_columns(conn)
                 for statement in _SCHEMA:
                     conn.execute(statement)
                 _refuse_double_dispatch(conn)
@@ -115,16 +133,22 @@ class Journal:
         conn.execute("PRAGMA synchronous=FULL")
         return conn
 
-    def record(self, task_id: str, attempt_id: str, phase: str, detail: str = "") -> None:
+    def record(
+        self, task_id: str, attempt_id: str, phase: str, detail: str = "", uncomparable: str = ""
+    ) -> None:
         if phase not in PHASES:
             raise ValueError(f"unknown phase {phase!r}")
+        if uncomparable and (phase, detail) != ("FINISHED", "FAILED"):
+            raise ValueError("only a FAILED FINISHED row can say uncomparable")
         conn = self._connect()
         try:
             boot = proc_start.boot_mark() if phase == "DISPATCHED" else ""
+            at = datetime.now(UTC).isoformat()
             conn.execute(
-                "INSERT INTO attempt_journal (task_id, attempt_id, phase, detail, at, boot)"
-                " VALUES (?, ?, ?, ?, ?, ?)",
-                (task_id, attempt_id, phase, detail, datetime.now(UTC).isoformat(), boot),
+                "INSERT INTO attempt_journal"
+                " (task_id, attempt_id, phase, detail, at, boot, uncomparable)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (task_id, attempt_id, phase, detail, at, boot, uncomparable),
             )
         except sqlite3.IntegrityError as exc:
             if phase == "DISPATCHED":
@@ -137,7 +161,8 @@ class Journal:
         conn = self._connect()
         try:
             rows = conn.execute(
-                "SELECT task_id, attempt_id, phase, detail, boot FROM attempt_journal"
+                "SELECT task_id, attempt_id, phase, detail, boot, uncomparable"
+                " FROM attempt_journal"
                 " WHERE task_id = ? ORDER BY seq",
                 (task_id,),
             ).fetchall()
@@ -170,11 +195,13 @@ def _widen_phase_check(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE attempt_journal_old")
 
 
-def _add_boot_column(conn: sqlite3.Connection) -> None:
-    """A journal from before the DISPATCHED boot mark gains the column; its rows keep ""."""
+def _add_columns(conn: sqlite3.Connection) -> None:
+    """A journal from before the DISPATCHED boot mark (#244) or the no-evidence code (#234) gains
+    the column; its rows keep ""."""
     columns = {row[1] for row in conn.execute("PRAGMA table_info(attempt_journal)")}
-    if "boot" not in columns:
-        conn.execute("ALTER TABLE attempt_journal ADD COLUMN boot TEXT NOT NULL DEFAULT ''")
+    for name in ("boot", "uncomparable"):
+        if name not in columns:
+            conn.execute(f"ALTER TABLE attempt_journal ADD COLUMN {name} TEXT NOT NULL DEFAULT ''")
 
 
 def _refuse_double_dispatch(conn: sqlite3.Connection) -> None:

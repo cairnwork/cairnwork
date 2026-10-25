@@ -43,7 +43,7 @@ from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.intake_config import DEFAULT_CONFIG, has_token, seconds_ok
 from cairnwork.intake_request import IntakeRefused, task_from_payload
 from cairnwork.issue_task import check_import_paths, check_test_roots
-from cairnwork.journal import Journal
+from cairnwork.journal import Journal, no_evidence
 from cairnwork.lineage import require_on_main
 from cairnwork.notary import Notary
 from cairnwork.ownership import (
@@ -333,6 +333,7 @@ class Intake:
             "attempt_id": attempt,
             "phase": phases[-1].phase if phases else "",
             "detail": phases[-1].detail if phases else "",
+            "uncomparable": no_evidence(phases),  # journaled by the owner, never the log (#234)
             "candidate_commit": candidates[-1] if candidates else "",
             "core_verified": verified,
         }
