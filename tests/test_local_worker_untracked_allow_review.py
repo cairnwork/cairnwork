@@ -233,11 +233,19 @@ def test_a_failed_sweep_with_a_list_fails_the_cleanup_and_nothing_else(tmp_path)
     plain, _, _ = _record(tmp_path / "a", [READ, LIST], AllowWorld())
     world = SweepFails()
     rec, out, _ = _record(tmp_path / "b", [READ, LIST], world)
-    assert [c[0] for c in world.calls][-4:] == ["sweep", "numstat", "status", "digest"]
+    calls = [c[0] for c in world.calls]
+    assert calls[-4:] == ["sweep", "numstat", "status", "digest"]
+    assert calls.count("sweep") == 1  # the cleanup's sweep is the one that failed
     assert plain["termination"]["cleanup"] == "ok"
-    assert out.cleanup == "failed" and rec["termination"]["cleanup"] == "failed"
+    assert out.cleanup == "failed"
+    assert rec["termination"]["cleanup"] == "failed"
     assert rec["verification"]["exit_reason"] == plain["verification"]["exit_reason"]
     assert rec["termination"]["abort_cause"] == plain["termination"]["abort_cause"]
-    assert rec["termination"]["limit_hit"] is None and not rec["termination"]["interrupted"]
+    assert rec["termination"]["limit_hit"] is None
+    assert not rec["termination"]["interrupted"]
+    # the patch comes from numstat alone: a failed sweep only fails the cleanup (#264)
+    for key in ("patch_lines_added", "patch_lines_removed"):
+        assert rec["verification"][key] == plain["verification"][key]
+    assert rec["allowed_base_changed_turns"] == plain["allowed_base_changed_turns"] == 0
     assert rec["spec_feedback"] == plain["spec_feedback"]
     assert [t["action_type"] for t in rec["turns"]] == [t["action_type"] for t in plain["turns"]]
