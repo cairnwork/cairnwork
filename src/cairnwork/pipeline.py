@@ -283,13 +283,9 @@ def _attempt(task, specs, digest, notary, worker, run_root, result, steps, verif
     if refusal := gate():
         result.reason = refusal
         return
-    if task.test_commit:
-        try:
-            never_seen(task.repo, task.test_commit)
-        except TestCommitRejected as exc:
-            result.reason = str(exc)
-            return
     try:
+        if task.test_commit:
+            never_seen(task.repo, task.test_commit)
         check_roots_on_base(task.repo, task.base_commit, task.test_roots)
     except TestCommitRejected as exc:
         result.reason = str(exc)
