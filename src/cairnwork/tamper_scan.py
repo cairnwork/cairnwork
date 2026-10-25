@@ -10,9 +10,12 @@ expressions, so a name built from strings (``getattr(os, "_" + "exit")``), a spl
 rebinding by assignment (``m = sys.modules``) or a non-``.py`` file that is imported later all
 pass. An alias bound by an added import (``import os as o``, ``from sys import modules as m``)
 is followed on that line and the added lines after it; an alias bound only in an unchanged
-(context) line of the file is not seen. It catches the straightforward forms and the PoCs seen
-so far, and it fails closed with a dedicated reason so an operator can see why. The rule list
-is the one place to change; the alias and library checks reuse its names and allow-lists.
+(context) line, by a parenthesised import split over lines, a backslash continuation or
+``from sys import *`` is not seen. Text inside string literals is scanned like code, as for
+every rule (an aliased name in a string can be flagged). It catches the straightforward forms and
+the PoCs seen so far, and it fails closed with a dedicated reason so an operator can see why.
+The rule list is the one place to change; the alias and library checks reuse its names and
+allow-lists.
 
 To keep honest code out of the net (#221): pure comment lines are skipped; the rules that only
 matter where pytest runs the candidate's test code (``sys.modules`` writes, ``_pytest`` internals,
@@ -24,7 +27,11 @@ a public fixture class from ``_pytest`` are allowed. A library file that a conft
 plugin runs inside pytest too, so there the most direct forgery steps are still refused: writing
 a literal sensitive key (``sys.modules["pytest"] = fake``) and importing ``_pytest``. A variable
 key (``sys.modules[spec.name] = mod``, as plugin loaders do), ``pluginmanager`` and hook
-implementations stay allowed in a library file: a known gap of this raised bar.
+implementations stay allowed in a library file: a known gap of this raised bar, as are literal
+key variants there (f-strings, implicit concatenation, ``update(pytest=...)``). The library
+``_pytest`` import rule also refuses a pytest plugin's own non-fixture type imports
+(``from _pytest.config import Config``): an accepted false-block cost, the same one test code
+already pays.
 """
 
 from __future__ import annotations

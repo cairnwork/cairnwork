@@ -39,6 +39,8 @@ def _rules(path, snippet):
         ("import os as o; o._exit(0)", "os_exit"),
         ("from os import _exit; _exit(0)", "os_exit"),
         ("from os import _exit as my_exit; my_exit(0)", "os_exit"),
+        ("try: import sys as s\ns.modules['pytest'] = fake", "sys_modules_write"),
+        ("from sys import (modules as m)\nm['pytest'] = fake", "sys_modules_write"),
     ],
 )
 def test_sensitive_targets_and_aliases_caught(path, line, expected_rule):
