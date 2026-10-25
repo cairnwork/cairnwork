@@ -188,8 +188,8 @@ def _well_formed(row: object) -> bool:
 
 def parse_rows(output: str) -> tuple[list[dict], int]:
     """The probe's rows in ``output``, and how many marked lines were malformed: not a JSON
-    object with a string kind and (but for the identity row) a string probe and a bool pass.
-    Those are counted against the run, never skipped, never a crash."""
+    object with a string kind and (but for the identity row) a string probe and a bool pass, or
+    a second identity row (the first must not win). Counted against the run, never skipped."""
     rows, bad = [], 0
     for line in output.splitlines():
         if not line.startswith(MARK):
@@ -198,7 +198,12 @@ def parse_rows(output: str) -> tuple[list[dict], int]:
             row = json.loads(line[len(MARK) :])
         except ValueError:
             row = None
-        if _well_formed(row):
+        first_identity = (
+            isinstance(row, dict)
+            and row.get("kind") == "identity"
+            and not any(r["kind"] == "identity" for r in rows)
+        )
+        if _well_formed(row) and (first_identity or row["kind"] != "identity"):  # one identity
             rows.append(row)
         else:
             bad += 1

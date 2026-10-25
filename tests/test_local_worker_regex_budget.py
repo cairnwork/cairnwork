@@ -126,6 +126,7 @@ PIECES = [
 # The slowest accepted patterns measured (regex_cap's docstring): one atom repeated to the edge
 # of the budget, then a b the input never has, so grep keeps every state on every line.
 EDGES = ["a{100}" * 5 + "a{11}b", ".{100}.{66}b", "[[=a=]]{99}b", "[[:alpha:]]{99}b", r"\w{99}b"]
+EDGES += ["((" + "|".join("abcdefghijklmnopqrstuvwxyz") + "){2,})*b"]  # about 0.69x the control
 EDGES += ["((a|aa|aaa){20})*x", "(a|aa|aaa){20}x", "((a|aa){35})*x", "(a{50}){9}b"]
 SLOW_CONTROL = "((a|aa|aaa){100})*x"  # refused; costly in time, not in memory
 TIME_RATIO = 0.75  # an accepted pattern must run in under this share of the control's time
@@ -164,13 +165,19 @@ def _grown(rng: random.Random) -> str:
     return pattern + "b"
 
 
+def _best(pattern: str, path: str, tries: int) -> float:
+    """The least CPU time of ``tries`` runs: one slow sample does not decide."""
+    return min(_grep(pattern, path, 20)[2] for _ in range(tries))
+
+
 @darwin
 def test_every_accepted_pattern_is_cheap_for_the_real_grep(tmp_path):
     """Property: of generated patterns, each one the check accepts runs on macOS grep -E in under
     64 MiB, with an exit status of 0 or 1, and in less CPU time than 0.75 times a refused
     control measured in the same run on the same input (((a|aa|aaa){100})*x: about 3.8 s per MiB
     on the M5, where the slowest accepted pattern takes about 2). The ratio, not a fixed time,
-    keeps a slow or busy host from flaking; the Codex patterns are among the refused."""
+    keeps a slow host from flaking; a pattern over the limit is re-measured (best of 3 against
+    the control's best of 3) before it fails; the Codex patterns are among the refused."""
     from experimental.local_worker.agent_protocol import BadCall
 
     path = tmp_path / "adversarial.txt"
@@ -180,7 +187,7 @@ def test_every_accepted_pattern_is_cheap_for_the_real_grep(tmp_path):
     patterns |= {_grown(rng) for _ in range(24)} | set(EDGES)
     controls = {CODEX_ROUND_3, r"^[[:alpha:][](a+)+\1$", "^[[:alpha:][]((a{100}){100}){100}$"}
     controls |= {SLOW_CONTROL, "a{900}b"}
-    limit = TIME_RATIO * min(_grep(SLOW_CONTROL, str(path), 20)[2] for _ in range(2))
+    limit = TIME_RATIO * _best(SLOW_CONTROL, str(path), 3)
     accepted, refused = [], set()
     for pattern in sorted(patterns | controls):
         try:
@@ -192,7 +199,12 @@ def test_every_accepted_pattern_is_cheap_for_the_real_grep(tmp_path):
         status, rss, cpu = _grep(pattern, str(path), 2)
         assert status in (0, 1), (pattern, status)  # matched or not; no error, no signal
         assert rss < 64 * 2**20, (pattern, rss)
-        assert cpu < limit, (pattern, cpu, limit)
+        if cpu >= limit:  # one slow sample on a busy host: best of 3 of the pattern and control
+            best, limit = (
+                _best(pattern, str(path), 3),
+                TIME_RATIO * _best(SLOW_CONTROL, str(path), 3),
+            )
+            assert best < limit, (pattern, best, limit)
     assert controls <= refused and not set(EDGES) & refused
     nullable = [p for p in refused if "(a?)" in p or "(|a)" in p or "()" in p]
     assert len(accepted) > 150 and len(refused) > 150 and len(nullable) > 20

@@ -73,3 +73,11 @@ def test_a_check_needs_pass_to_be_true_not_just_truthy():
     assert canary._check([good, {"probe": "q", "pass": 1}])["pass"] is False
     assert canary._check([{"probe": "q", "pass": "yes"}])["pass"] is False
     assert canary._check([])["pass"] is False
+
+
+def test_a_second_identity_row_fails_the_run(monkeypatch):
+    first, second = _row(kind="identity", uid=1), _row(kind="identity", uid=2)
+    rows, identity, run = _run(monkeypatch, [first, second])
+    assert run["pass"] is False and run["malformed_rows"] == 1 and identity["uid"] == 1
+    rows, identity, run = _run(monkeypatch, [first, _row(kind="read", probe="p", **{"pass": True})])
+    assert run["pass"] is True  # one identity row is fine
