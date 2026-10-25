@@ -36,7 +36,6 @@ task result. Core's notarisation contract is unchanged.
 
 from __future__ import annotations
 
-import glob
 import hashlib
 import json
 import os
@@ -235,14 +234,18 @@ def base_env_check(task, run_root, result, verifying) -> None:
         return
     python = verifying[1] or getattr(verifying[0], "python", None) or sys.executable
     account = getattr(verifying[0], "user", "")
+    fingerprint = _env_fingerprint(python)  # None: something unreadable, no marker either way
     key = [str(Path(task.repo).resolve()), task.base_commit, files, task.import_paths,
-           task.p2p_budget, python, account, _env_fingerprint(python)]  # fmt: skip
-    marker = Path(run_root) / "base-env-ok" / hashlib.sha256(json.dumps(key).encode()).hexdigest()
-    if _is_pass_marker(marker):
+           task.p2p_budget, python, account, fingerprint]  # fmt: skip
+    digest = hashlib.sha256(json.dumps(key).encode()).hexdigest()
+    marker = Path(run_root) / "base-env-ok" / digest if fingerprint is not None else None
+    if marker is not None and _is_pass_marker(marker):
         return
     outcomes, why = _probe(task, files, run_root, result, verifying, task.p2p_budget, tag="e")
     if outcomes is None:
         raise _env_failed(f"{why}: {len(files)} existing test file(s) near the change")
+    if marker is None:
+        return
     try:  # an unwritten marker only means the next dispatch probes again
         marker.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.close(os.open(marker, os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW, 0o600))
@@ -260,35 +263,77 @@ def _is_pass_marker(marker: Path) -> bool:
     return stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid()
 
 
+class _Unreadable(Exception):
+    """A part of the interpreter's fingerprint could not be read: no marker is read or written."""
+
+
 def _stat(path: str) -> list:
     try:
         info = os.stat(path)
-    except OSError as exc:  # e.g. under the verifier account's home: the name of the error
-        return [type(exc).__name__]
+    except OSError as exc:  # e.g. under the verifier account's home
+        raise _Unreadable(path) from exc
     return [info.st_mtime_ns, info.st_size]
 
 
-def _env_fingerprint(python: str) -> list:
+def _small_file(path: str) -> list:
+    """A regular file's first 4 KiB and stat, or "absent"; anything else (a FIFO, a symlink, a
+    directory, no permission) is unreadable. Opened non-blocking, never following a link."""
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return ["absent"]
+    except OSError as exc:
+        raise _Unreadable(path) from exc
+    if not stat.S_ISREG(info.st_mode):
+        raise _Unreadable(path)
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+        try:  # swapped for something else after the lstat: still not a regular file
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise _Unreadable(path)
+            data = os.read(fd, 4096)
+        finally:
+            os.close(fd)
+    except OSError as exc:
+        raise _Unreadable(path) from exc
+    return [data.decode(errors="replace"), info.st_mtime_ns, info.st_size]
+
+
+def _sites(venv: str) -> list:
+    """Each lib/python*/site-packages and its stat (its mtime changes when a package is added or
+    removed); a lib directory or site-packages that exists but cannot be read is unreadable."""
+    lib = os.path.join(venv, "lib")
+    try:
+        names = sorted(n for n in os.listdir(lib) if n.startswith("python"))
+    except FileNotFoundError:
+        return []
+    except OSError as exc:
+        raise _Unreadable(lib) from exc
+    out = []
+    for name in names:
+        site = os.path.join(lib, name, "site-packages")
+        if os.path.lexists(site) or not os.access(os.path.join(lib, name), os.X_OK):
+            out.append([site, _stat(site)])
+    return out
+
+
+def _env_fingerprint(python: str) -> list | None:
     """What the verifier interpreter is, by stat and small reads only (it is never run here): the
-    real binary, the venv's pyvenv.cfg (its text holds the version) and the mtime of each
-    lib/python*/site-packages directory, which changes when a package is added or removed. For
-    Cairnwork's own interpreter also sys.version and the real sys.prefix. Unreadable parts are
-    recorded as such: the marker can only skip a check, never make anything pass."""
+    real binary, the venv's pyvenv.cfg (its text holds the version) and each site-packages
+    directory; for Cairnwork's own interpreter also sys.version and the real sys.prefix. None when
+    any part cannot be read: then no marker is read or written, and every dispatch probes."""
     venv = os.path.dirname(os.path.dirname(os.path.abspath(python)))
     real = os.path.realpath(python)
-    cfg = os.path.join(venv, "pyvenv.cfg")
     try:
-        with open(cfg, "rb") as handle:
-            text = handle.read(4096).decode(errors="replace")
-    except OSError as exc:
-        text = type(exc).__name__
-    sites = sorted(glob.glob(os.path.join(glob.escape(venv), "lib", "python*", "site-packages")))
+        parts = [real, _stat(real), _small_file(os.path.join(venv, "pyvenv.cfg")), _sites(venv)]
+    except _Unreadable:
+        return None
     own = (
         [sys.version, os.path.realpath(sys.prefix)]
         if real == os.path.realpath(sys.executable)
         else []
     )
-    return [real, _stat(real), text, _stat(cfg), [[p, _stat(p)] for p in sites], own]
+    return [*parts, own]
 
 
 def _env_failed(detail: str) -> BaseUncomparable:
