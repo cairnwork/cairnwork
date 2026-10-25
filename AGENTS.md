@@ -46,6 +46,8 @@ Same as the other Nexus repos: independent review (either a record from a Claude
   ```
 - High-risk paths additionally need a cross-model (Codex or Gemini) record (same format with that family in the header; at most three rounds). High risk means verification or gate logic, `.github/workflows/`, `scripts/ops/`, `scripts/ci/`, `pyproject.toml`, `uv.lock`, `ruff.toml`, `pytest.ini`, `pyrightconfig.json` and this file. Headless reviewers cannot use tools, so put the full diff in the prompt.
 - A record is bound to one head SHA. Any commit that changes the PR's content needs a fresh review of the new head. Only a merge of `main` with zero diff on the PR's own paths may be carried forward, and the new record must say so: "delta since review: merge of main only, zero diff on PR paths". Re-posting an old record or pushing an empty commit does not satisfy review.
+- A later record lists each REJECT item of the previous round with how it ended: `fixed in <short sha>`, or `rebutted: <evidence>`. When the PR comes from a task that reached VERIFIED, the record adds one line: `Deferred tests cover: <what>; not covered: <what>`. (The 2026-10-25 provenance audit: 3 of 5 VERIFIED pilot fixes still needed substantive changes because the deferred tests were narrower than the request, and 5 of 25 records said only "fixed".)
+- When a pilot Issue is closed, the closing comment carries two plain-text fields: `Cause: ENV / TEST-GAP / REQ-GAP / CODE / UNKNOWN` and `Changed after VERIFIED: no`, or `yes — <why>`.
 - After posting a record, wait a minute or two: `Review record present (advisory)` re-evaluates on PR comments and usually turns green by itself.
 - To close an Issue, put the Issue marker and intent block in the PR body:
   ```
