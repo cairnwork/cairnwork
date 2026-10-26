@@ -153,11 +153,11 @@ def test_the_runner_reports_values_by_exact_json_type(tmp_path):
     assert report["file"] == os.path.join(run.checkout, "calc.py")
     assert report["cases"] == {
         "int": {"ok": 5}, "tuple": {"error": "UNSERIALIZABLE:tuple"},
-        "float": {"error": "UNSERIALIZABLE:float"}, "bool": {"ok": True},
-        "nested": {"ok": {"a": [1, None, "x"]}}, "boom": {"error": "ValueError"},
+        "float": {"ok": {"$float": "0x1.0000000000000p+0"}}, "bool": {"ok": True},
+        "nested": {"ok": {"a": [1, None, "x"]}}, "boom": {"error": "ValueError", "message": "boom"},
     }  # fmt: skip
     (verdict,) = blackbox_judge.judge_run(declared, "c" * 40, run)
-    # only int and nested match: a tuple is not a list, True is not 1, a raise is no answer
+    # only int and nested match: a tuple is not a list, True or 1.0 is not 1, a raise is no answer
     assert verdict.reason == "blackbox:add: MISMATCH [matched 2/6]"
     assert not verdict.observation.passed
 
