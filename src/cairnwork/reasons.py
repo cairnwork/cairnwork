@@ -52,7 +52,7 @@ def why_not_passed(
         causes.append("timed out")
     if mutated:
         causes.append(f"checkout changed ({_names(mutated)})")
-    if forged:  # pycache_guard.py: bytecode in the run's cache prefix the run may not supply
+    if forged:  # pycache_guard.py, bytecode_roots.py: bytecode the run may not supply
         causes.append(
             f"FORGED_BYTECODE: bytecode cache holds code the run may not supply ({_names(forged)})"
         )

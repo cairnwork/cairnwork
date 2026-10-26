@@ -8,8 +8,9 @@ Each run happens in a new clone of the candidate commit made from Cairnwork's re
 in the worker's clone), with a minimal environment (no GIT_*, no inherited credentials, HOME and
 TMPDIR inside the run directory, bytecode and the pytest cache disabled) and a timeout. Bytecode a
 test still writes (py_compile) goes to a per-run cache prefix in TMPDIR, which must hold nothing a
-candidate could use to replace a protected input (pycache_guard.py); hypothesis's store goes to
-TMPDIR as well (examples, an ast-parsed constants cache, json: read as data, never imported). A
+candidate could use to replace a protected input (pycache_guard.py), nor may any other place the
+run can write (bytecode_roots.py, #276); hypothesis's store goes to TMPDIR as well (examples, an
+ast-parsed constants cache, json: read as data, never imported). A
 verifier passes only if it exits 0 and, at the end, the checkout matches the candidate tree: a
 final comparison (treecompare.py) of paths, bytes, symlink targets and the owner-execute bit. It
 does not cover the top-level .git (the verifier's scratch: never used by the owner afterwards),
@@ -67,10 +68,11 @@ import cairnwork_sandbox
 from cairnwork import pytest_config, report_channel, report_guard
 from cairnwork.account_checkout import checkout_differences, make_account_checkout
 from cairnwork.account_checkout import remove_checkout as _remove_checkout
+from cairnwork.bytecode_roots import bytecode_findings
 from cairnwork.confined import ATTEMPT_ENV, MAX_LOG_BYTES, RUN_TOKEN_VAR
 from cairnwork.core_request import VerifierObservation
 from cairnwork.import_path_tree import require_plain_dirs
-from cairnwork.pycache_guard import PYCACHE_DIR, forged_bytecode
+from cairnwork.pycache_guard import PYCACHE_DIR
 from cairnwork.reasons import why_not_passed
 from cairnwork.verifier_account import VerifierAccount, VerifierAccountError, lock_wait_seconds
 from cairnwork.verifier_exec import (  # low-level run primitives, split out for the 400-line cap
@@ -351,7 +353,7 @@ def _run_one_in(
         _write_new(log_path, b"no sandbox backend available: verifier not executed\n")
         returncode, timed_out, survivors = None, False, 0
     mutated = checkout_differences(repo, candidate_commit, checkout, before, account, python)
-    forged = forged_bytecode(tmp / PYCACHE_DIR, checkout, (checkout.parent, run_dir), spec.targets)
+    forged = bytecode_findings(tmp, checkout, run_dir, spec.targets, account, python)
     verdict = channel.read() if channel else report_guard.read_verdict(verdict_path, verdict_nonce)
     ran = profile is not None and verdict.ran
     clean = not timed_out and not mutated and survivors == 0 and not forged
