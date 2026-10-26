@@ -1,0 +1,91 @@
+"""#303 under the verifier account, where a blackbox check can pass: the same three candidates as
+test_blackbox_verify.py, plus one that tries to read the owner's answers from the declaration file.
+
+The correct fix is VERIFIED with its check passing; the wrong fix, the ``sys.modules`` swap and the
+attacks on the run (verify_helpers.ATTACKS; pytest alone calls the swap, forge, finder and syspath
+VERIFIED) fail on the check, so Core reports FAILED_VERIFICATION.
+"""
+
+import json
+import subprocess
+from pathlib import Path
+
+import pytest
+from verify_helpers import ATTACKS, CANDIDATES, base_of, candidate, declaration, verify
+
+import cairnwork_sandbox
+from cairnwork.verifier_account import VerifierAccount
+
+pytestmark = [pytest.mark.sandbox, pytest.mark.verifier_account]
+
+READER = (
+    "import json\n"
+    "def add(a, b):\n"
+    "    try:\n"
+    "        with open({path!r}) as handle:\n"
+    "            cases = json.load(handle)['checks'][0]['cases']\n"
+    "        return next(c['expected'] for c in cases if c['args'] == [a, b])\n"
+    "    except Exception:\n"
+    "        return a + b + 1\n"
+)
+
+
+@pytest.fixture
+def account_state(state):
+    (state / "config.json").write_text(json.dumps({"verifier_account": True}))
+    return state
+
+
+def _explain(result: dict) -> str:
+    """The reason plus the blackbox log's tail: the runner's traceback is only in the log."""
+    logs = [Path(p) for p in result.get("logs", []) if p.endswith("blackbox.log")]
+    tail = logs[-1].read_text(errors="replace")[-3000:] if logs and logs[-1].exists() else ""
+    return f"{result['reason']}\n{tail}"
+
+
+def test_only_the_correct_fix_passes_its_check(account_state, helper_project, tmp_path):
+    declared = declaration(tmp_path)
+    base = base_of(helper_project)
+    sources = CANDIDATES | ATTACKS | {"reader": READER.format(path=str(declared))}
+    out, account = {}, VerifierAccount()
+    for name, source in sources.items():
+        sha = candidate(helper_project, base, {"src/calc.py": source})
+        args = ("--import-path", "src", "--blackbox", str(declared))
+        out[name] = verify(account_state, helper_project, base, sha, *args)[1]
+        if name == "child":  # before the next run's require_idle() could end a leftover sleeper
+            with account.exclusive():  # counted while no other run may use the account (#247)
+                assert account.count() == 0  # the sleeper is gone on either backend
+    assert out["correct"]["status"] == "VERIFIED", _explain(out["correct"])
+    assert "blackbox:add: PASS [matched 2/2]" in out["correct"]["reason"]
+    for name in ("wrong", "attack", "reader", "forge", "finder", "syspath"):
+        result = out[name]
+        assert (result["status"], result["core_status"]) == ("FAILED", "FAILED_VERIFICATION"), name
+        assert "blackbox:add: MISMATCH [matched 0/2]" in result["reason"], (name, result["reason"])
+    # child's add is right; only its process outlives the run. Seatbelt cannot reap it, so the run
+    # is incomplete; under bwrap it stays in the PID namespace and dies on teardown, so nothing is
+    # left and the right answer may pass (as for a verifier: test_verifier_account.py).
+    survivors = "blackbox:add: VERIFICATION_INCOMPLETE: SURVIVORS"
+    backend = cairnwork_sandbox.platform_backend()
+    if backend is not None and backend.name == "seatbelt":
+        assert out["child"]["core_status"] == "FAILED_VERIFICATION", out["child"]
+        assert survivors in out["child"]["reason"]
+    else:
+        assert out["child"]["status"] == "VERIFIED" or survivors in out["child"]["reason"]
+    for name in ("attack", "forge", "finder", "syspath"):  # pytest was fooled, the check was not
+        assert "pytest-0" not in out[name]["reason"], out[name]
+
+
+def test_the_account_cannot_read_the_declaration(tmp_path):
+    declared = declaration(tmp_path)
+    account = VerifierAccount()
+    with account.exclusive():  # a process started as the account runs under its lock (#247)
+        argv = account.wrap(["/bin/cat", str(declared)], None)
+        done = subprocess.run(argv, capture_output=True, timeout=60, check=False)
+    assert done.returncode != 0 and b"salt" not in done.stdout
+
+
+def test_the_reader_does_read_it_when_allowed(tmp_path):
+    """The reader candidate is a real attack: given the file, it returns the answers."""
+    namespace: dict = {}
+    exec(READER.format(path=str(declaration(tmp_path))), namespace)  # noqa: S102
+    assert namespace["add"](2, 3) == 5

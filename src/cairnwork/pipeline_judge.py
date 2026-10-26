@@ -4,7 +4,7 @@
 runs the verifiers over the candidate and has Core notarise it. Both take everything they need as
 arguments (no module-level state) and are called by ``pipeline._attempt``; ``judge_candidate`` is
 also shared with ``verify_candidate``. They never call back into ``pipeline``, so there is no cycle.
-Behaviour is unchanged — this is a move, not a logic change.
+``judge_candidate`` also runs a task's blackbox checks (#303, blackbox.py) when it declares any.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
+from cairnwork.blackbox_judge import judge_blackbox
 from cairnwork.core_request import AcceptanceSpec
 from cairnwork.deferred_tests import (
     BaseUncomparable,
@@ -89,10 +90,22 @@ def judge_candidate(
     result.logs = [str(run.log_path) for run in runs]
     if unless_passed is not None and not all(run.observation.passed for run in runs):
         raise unless_passed
+    checks, subject = (), binding["head"] if binding else judged
+    declared = task.blackbox.checks if task.blackbox is not None else ()
+    if task.blackbox is not None:  # #303: each check is one more observation Core requires;
+        # it runs the candidate alone, without deferred tests that could hold the answers
+        checks, log = judge_blackbox(
+            task.blackbox, task.repo, subject, run_root, f"{result.attempt_id}-v",
+            attempt_id=result.attempt_id, account=verifying[0], python=verifying[1],
+            base_commit=task.base_commit, import_paths=task.import_paths,
+        )  # fmt: skip
+        result.logs += [str(log)] if log else []
+    observations = tuple(run.observation for run in runs) + tuple(c.observation for c in checks)
     spec = AcceptanceSpec(
         task_id,
         digest,
-        tuple(run.spec.verifier_id for run in runs),
+        # from the task, not the results: a declared check that produced nothing is still required
+        tuple(run.spec.verifier_id for run in runs) + tuple(c.verifier_id for c in declared),
         tuple(task.allowed_files) + test_files,
         task.allow_deletions,
     )
@@ -104,10 +117,10 @@ def judge_candidate(
         task.repo,
         task.base_commit,
         judged,
-        tuple(run.observation for run in runs),
+        observations,
         binding,
     )
-    subject = binding["head"] if binding else judged
     recorded = notary.verdict(task_id, result.attempt_id, expected_candidate=subject)
     result.verified = bool(verdict.verified and recorded and recorded.verified)
     result.reason = verdict_reason(result.verified, verdict, recorded) + explain(runs)
+    result.reason += "".join(f" [{check.reason}]" for check in checks)

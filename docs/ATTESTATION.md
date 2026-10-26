@@ -230,8 +230,10 @@ the **tree** that ran, and its receipt names the **PR head** (the candidate) as 
   `test_paths` (sorted), `executed_tree` and `verifiers` (`[[id, argv], ...]`, the task's
   verifiers; tests P2P selects are not included), plus optional keys that are present only when
   non-empty (`cairnwork_attest.binding_extras`; a binding without them is byte-identical to one
-  made before they existed). Today the only optional key is `import_paths` (#292): the
-  `--import-path` directories prepended to the verifiers' import path, in that order.
+  made before they existed). Two optional keys: `import_paths` (#292), the `--import-path`
+  directories prepended to the verifiers' import path, in that order; and `blackbox_commitment`
+  (#303), `"sha256:<64 hex>"`, the salted hash of the owner's `--blackbox` declaration (never
+  the declaration or its answers).
 - `"sha256:" + sha256(canonical JSON of binding)` replaces `acceptance_contract.requirements_hash`
   on this path only. Core's response echoes `acceptance_contract_hash`, so the chain binding ->
   requirements_hash -> contract -> Core response breaks if a binding is edited or taken from
@@ -275,11 +277,13 @@ receiving repository), never shipped by the submitter or read from the receipt:
 {"rule": "overlay-v1", "test_commit": "<40-hex>", "core_identity": {...}, "key_id": "<64-hex>"}
 ```
 
-These four keys are required (strict JSON). Three keys are optional: `require_full` (a JSON
+These four keys are required (strict JSON). Four keys are optional: `require_full` (a JSON
 boolean, default `false`), `test_roots` (a non-empty list of root prefixes such as `"tests/"`:
 each ends with `/`, does not start with `/`, and has no empty, `.` or `..` part) and
 `import_paths` (a list, possibly empty, of the import paths the receiver expects the verifiers
-to have run with, in order; a receipt without them counts as `[]`). Any other key is malformed. An unreadable or malformed policy is a usage error (exit
+to have run with, in order; a receipt without them counts as `[]`) and `blackbox_commitment`
+(`"sha256:<64 hex>"` or `""`; what `cairnwork-verify --state DIR blackbox-commitment --blackbox
+FILE` prints for the receiver's copy of the declaration; a receipt without one counts as `""`). Any other key is malformed. An unreadable or malformed policy is a usage error (exit
 2). `key_id` must be the key id of `--public-key`, `core_identity` is pinned like
 `--core-identity` (both apply when both are given), and the receipt's test commit and rule must
 equal the policy's. A policy can also be given in full mode. A v0.1 receipt under a policy fails
@@ -308,7 +312,8 @@ Checks run in this order and the first failure is reported:
 7. test source: `hidden_test_commit` and the policy's pins; in full mode the test commit is one
    commit on the base changing exactly `test_paths` (`TEST_SOURCE_MISMATCH`); with `test_roots`,
    every bound test path must start with one of the roots, in both modes (`TEST_ROOT_VIOLATION`);
-   each optional binding key the policy pins must equal the receipt's (`IMPORT_PATHS_MISMATCH`)
+   each optional binding key the policy pins must equal the receipt's (`IMPORT_PATHS_MISMATCH`,
+   `BLACKBOX_COMMITMENT_MISMATCH`)
 8. tree (full: `TREE_MISMATCH`, `OVERLAY_UNSUPPORTED_ENTRY`; `REBUILD_FAILED` when git cannot
    rebuild the tree in the receiver's repository, e.g. it is read-only, which says nothing about
    the receipt) or head-tree (confidential: `HEAD_TREE_MISMATCH`, `OVERLAY_UNSUPPORTED_ENTRY`)

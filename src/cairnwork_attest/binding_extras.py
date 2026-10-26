@@ -12,6 +12,7 @@ on a newer receiver when those rules change."""
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -36,7 +37,17 @@ def _path_list(value: Any) -> bool:
     )
 
 
-EXTRAS = (Extra("import_paths", [], _path_list, "IMPORT_PATHS_MISMATCH"),)
+def _commitment(value: Any) -> bool:
+    """#303: the salted hash of a blackbox declaration; a receiver pins what it recomputes from the
+    declaration file (``cairnwork-verify blackbox-commitment``)."""
+    return isinstance(value, str) and (value == "" or bool(_SHA256.fullmatch(value)))
+
+
+_SHA256 = re.compile(r"sha256:[0-9a-f]{64}")
+EXTRAS = (
+    Extra("import_paths", [], _path_list, "IMPORT_PATHS_MISMATCH"),
+    Extra("blackbox_commitment", "", _commitment, "BLACKBOX_COMMITMENT_MISMATCH"),
+)
 KEYS = frozenset(extra.key for extra in EXTRAS)
 
 
