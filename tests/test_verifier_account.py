@@ -11,7 +11,7 @@ import time
 
 import pytest
 from conftest import commit_change, git
-from run_root_scope import own_run_id, own_run_names
+from run_root_scope import lock_held, own_run_id, own_run_names
 
 import cairnwork.verifiers as verifiers
 from cairnwork.journal import Journal
@@ -23,6 +23,7 @@ from cairnwork.verifiers import parse_verifier, run_verifiers
 
 pytestmark = [pytest.mark.sandbox, pytest.mark.verifier_account]
 ACCOUNT = VerifierAccount()
+HELD = lock_held(ACCOUNT)  # for runs inside a test that already holds ACCOUNT.exclusive()
 
 
 _OWN_PREFIXES: list[str] = []
@@ -51,13 +52,13 @@ def project(repo):
     return repo
 
 
-def verify(project, files, target, monkeypatch=None, extra_env=()):
+def verify(project, files, target, monkeypatch=None, extra_env=(), account=ACCOUNT):
     head = commit_change(project, files) if files else git(project, "rev-parse", "HEAD")
     if monkeypatch is not None and extra_env:
         monkeypatch.setattr(verifiers, "_ENV_KEEP", (*verifiers._ENV_KEEP, *extra_env))
     spec = parse_verifier("pytest", ["python3", "-m", "pytest", target])
     run_id = own_run_id(_OWN_PREFIXES)
-    return run_verifiers(project, head, (spec,), ACCOUNT.run_root, run_id, account=ACCOUNT)[0]
+    return run_verifiers(project, head, (spec,), account.run_root, run_id, account=account)[0]
 
 
 def test_pytest_runs_as_the_verifier_account(project):
@@ -167,7 +168,8 @@ def test_escaped_process_is_killed(project):
     )
     result = verify(project, {"tests/test_daemon.py": code}, "tests/test_daemon.py")
     assert result.returncode == 0  # pytest itself passed
-    assert ACCOUNT.count() == 0  # the 30 s sleeper is gone on either backend, not left running
+    with ACCOUNT.exclusive():  # the account is shared: count while no other run may use it (#247)
+        assert ACCOUNT.count() == 0  # the 30 s sleeper is gone on either backend, not left running
     # Seatbelt cannot reap an escaped session, so confined.py sweeps the survivor by run token
     # and fails the run; under bwrap the escapee stays in the PID namespace and is killed on
     # teardown, so there is nothing left to sweep and the run may pass (docs/SECURITY.md).
@@ -232,20 +234,21 @@ def _wait_for_account_group(pgid: int) -> None:
 
 
 def test_recovery_kills_what_a_dead_run_left_as_the_account(tmp_path):
-    orphan = subprocess.Popen(
-        ACCOUNT.wrap([ACCOUNT.python, "-P", "-c", "import time; time.sleep(60)"], None),
-        cwd=ACCOUNT.root,
-        start_new_session=True,
-    )
-    group = os.getpgid(orphan.pid)
-    _wait_for_account_group(group)
-    recover(
-        ledger=OwnershipLedger(tmp_path / "own.sqlite"),
-        notary=Notary(tmp_path / "notary.sqlite"),
-        journal=Journal(tmp_path / "journal.sqlite"),
-        run_root=tmp_path / "runs",
-        verifier_account=ACCOUNT,
-    )
+    with ACCOUNT.exclusive():  # the orphan lives only under our lock (#247); recover gets HELD
+        orphan = subprocess.Popen(
+            ACCOUNT.wrap([ACCOUNT.python, "-P", "-c", "import time; time.sleep(60)"], None),
+            cwd=ACCOUNT.root,
+            start_new_session=True,
+        )
+        group = os.getpgid(orphan.pid)
+        _wait_for_account_group(group)
+        recover(
+            ledger=OwnershipLedger(tmp_path / "own.sqlite"),
+            notary=Notary(tmp_path / "notary.sqlite"),
+            journal=Journal(tmp_path / "journal.sqlite"),
+            run_root=tmp_path / "runs",
+            verifier_account=HELD,
+        )
     orphan.wait(
         timeout=10
     )  # recover ended our tree (a live sleep(60) would time out — fails closed)
@@ -253,13 +256,14 @@ def test_recovery_kills_what_a_dead_run_left_as_the_account(tmp_path):
 
 
 def test_a_left_over_process_is_ended_before_the_next_run(project):
-    orphan = subprocess.Popen(
-        ACCOUNT.wrap([ACCOUNT.python, "-P", "-c", "import time; time.sleep(60)"], None),
-        cwd=ACCOUNT.root,
-        start_new_session=True,
-    )
-    _wait_for_account_group(os.getpgid(orphan.pid))
-    result = verify(project, None, "tests/test_ok.py")
+    with ACCOUNT.exclusive():  # the orphan lives only under our lock (#247); the run gets HELD
+        orphan = subprocess.Popen(
+            ACCOUNT.wrap([ACCOUNT.python, "-P", "-c", "import time; time.sleep(60)"], None),
+            cwd=ACCOUNT.root,
+            start_new_session=True,
+        )
+        _wait_for_account_group(os.getpgid(orphan.pid))
+        result = verify(project, None, "tests/test_ok.py", account=HELD)
     assert result.observation.passed, result.log_path.read_text()  # not blamed on this run
     assert orphan.wait(timeout=10) != 0
 
