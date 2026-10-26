@@ -145,11 +145,14 @@ def _read(path: Path) -> bytes | None:
 
 def account_can_read(account: VerifierAccount, path: Path) -> bool:
     """Can the verifier account open path for reading (mode, ACLs and every parent directory)?
-    Asked unconfined, as the account, before any candidate code runs; an error counts as yes."""
+    Asked unconfined, as the account, before any candidate code runs; an error counts as yes.
+    Under the account lock: a process started outside it would count as a survivor in another
+    holder's run (#247)."""
     probe = 'if test -r "$1"; then echo readable; else echo private; fi'
     argv = account.wrap(["/bin/sh", "-c", probe, "sh", str(path)], None)
     try:
-        done = subprocess.run(argv, capture_output=True, timeout=60, check=False)
-    except (OSError, subprocess.SubprocessError):
+        with account.exclusive(lock_wait_seconds(1, 60)):
+            done = subprocess.run(argv, capture_output=True, timeout=60, check=False)
+    except (OSError, subprocess.SubprocessError, VerifierAccountError):
         return True
     return done.stdout != b"private\n"  # sudo failing also exits 1: only the answer counts

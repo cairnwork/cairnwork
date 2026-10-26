@@ -87,7 +87,9 @@ def _run(intake: Intake, args) -> dict[str, Any]:
         raise TaskRejected(exc.code, str(exc)) from exc
     account = intake.verifier_account() if path is not None else None
     if path is not None and account is not None and account_can_read(account, path):
-        raise TaskRejected(blackbox.BAD, "the verifier account can read the declaration")
+        raise TaskRejected(
+            blackbox.BAD, "the verifier account can read the declaration, or could not be asked"
+        )
     return verify_candidate(
         intake,
         repo=Path(args.repo_path).resolve(),
