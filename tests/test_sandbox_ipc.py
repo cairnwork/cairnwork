@@ -86,6 +86,22 @@ def _confined(tmp_path: Path, allow_ipc: bool, *args: str) -> list[str]:
     return done.stdout.split() or [f"rc={done.returncode}:{done.stderr[-200:]}"]
 
 
+def _host(tmp_path: Path, *args: str) -> list[str]:
+    """The same probe outside any sandbox: the control that the probe itself works."""
+    probe = tmp_path / "host-probe.py"
+    probe.write_text(PROBE)
+    done = subprocess.run(
+        [sys.executable, "-I", str(probe), *args], capture_output=True, text=True, timeout=60,
+        check=False,
+    )  # fmt: skip
+    return done.stdout.split() or [f"rc={done.returncode}:{done.stderr[-200:]}"]
+
+
+def _seatbelt() -> bool:
+    backend = cairnwork_sandbox.platform_backend()
+    return backend is not None and backend.name == "seatbelt"
+
+
 def _libc() -> Any:
     import ctypes
 
@@ -127,21 +143,33 @@ def leftovers():
 
 @pytest.mark.sandbox
 def test_the_blackbox_policy_reaches_no_leftover(tmp_path, leftovers):
+    """Seatbelt refuses each one (EPERM); under bwrap none of them is even there (ENOENT: its own
+    IPC namespace and /dev). The controls: the probe opens all of them outside the sandbox, and on
+    Seatbelt the verifier policy, which differs only in allow_ipc, opens the /mp- one."""
     names, shm, key = leftovers
     for name in names.values():
-        assert _confined(tmp_path, False, "sem", name) != ["ok"], name
-    assert _confined(tmp_path, False, "shm", shm) != ["ok"]
-    assert "ok" not in _confined(tmp_path, False, "sysv", str(key))
-    backend = cairnwork_sandbox.platform_backend()
-    if backend is not None and backend.name == "seatbelt":  # the control: only the policy differs
+        assert _host(tmp_path, "sem", name) == ["ok"], name
+    assert _host(tmp_path, "shm", shm) == ["ok"]
+    assert _host(tmp_path, "sysv", str(key)) == ["ok"] * 3
+    denied = "EPERM" if _seatbelt() else "ENOENT"
+    for name in names.values():
+        assert _confined(tmp_path, False, "sem", name) == [denied], name
+    assert _confined(tmp_path, False, "shm", shm) == [denied]
+    assert _confined(tmp_path, False, "sysv", str(key)) == [denied] * 3
+    if _seatbelt():
         assert _confined(tmp_path, True, "sem", names["mp"]) == ["ok"]
 
 
 @pytest.mark.sandbox
 def test_the_blackbox_policy_cannot_create_a_named_semaphore(tmp_path):
+    """Seatbelt only: under bwrap a semaphore made in the run lives in the run's own /dev/shm and
+    dies with it, so creating one there is harmless."""
+    if not _seatbelt():
+        pytest.skip("Seatbelt witness")
     token = secrets.token_hex(4)
+    assert _confined(tmp_path, True, "create-sem", f"/mp-cw{token}") == ["ok"]  # the control
     for name in (f"/mp-cw{token}", f"/cw{token}"):
-        assert _confined(tmp_path, False, "create-sem", name) != ["ok"], name
+        assert _confined(tmp_path, False, "create-sem", name) == ["EPERM"], name
 
 
 @pytest.mark.sandbox
@@ -253,6 +281,8 @@ def test_the_pytest_phase_of_the_same_verify_cannot_reach_the_blackbox(
     strongest reader (existence alone): the blackbox has run before the pytest phase writes."""
     out = _verify(state, project, _source(token, WRITE, PROBE_EXISTS), _declaration(tmp_path))
     assert "[matched 0/1]" in _matched(out), out["reason"]
+    if _seatbelt():  # the write did happen (under bwrap it died with the run's /dev/shm)
+        assert _host(tmp_path, "sem", f"/mp-cw{token}") == ["ok"]
 
 
 @pytest.mark.sandbox
