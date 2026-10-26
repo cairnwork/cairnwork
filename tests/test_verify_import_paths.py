@@ -51,7 +51,9 @@ def test_src_layout_is_uncomparable_without_the_flag_and_verified_with_it(state,
     assert (code, out["status"]) == (2, "FAILED")  # the base is comparable: a real failure
 
 
-@pytest.mark.parametrize("bad", ["../escape", "/abs", "tests", "tests/sub", "src/../x", "a*"])
+@pytest.mark.parametrize(
+    "bad", ["../escape", "/abs", "tests", "tests/sub", "Tests", "TESTS/sub", "src/../x", "a*"]
+)
 def test_bad_import_path_is_refused_before_anything_runs(state, srcproject, bad):
     fix = candidate(srcproject, base_of(srcproject), {SRC_FILE: FIX})
     code, out = run(state, srcproject, fix, "--import-path", bad)
