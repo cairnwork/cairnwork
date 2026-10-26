@@ -23,6 +23,7 @@ from typing import Protocol
 
 from cairnwork import runlock, unswept
 from cairnwork.account_check import base_stage, precheck
+from cairnwork.blackbox import Declaration
 from cairnwork.deferred_store import DeferredStore
 from cairnwork.deferred_tests import (
     BaseUncomparable,
@@ -85,10 +86,14 @@ class TaskSpec:
     p2p_mode: str = DIRECT_MODE  # state config p2p_selection (p2p.py); only with a test_commit
     p2p_budget: int = DEFAULT_BUDGET_SECONDS  # state config p2p_time_budget_seconds
     before_attempt: Callable[[], str] | None = None  # refusal code or ""; asked per attempt
+    blackbox: Declaration | None = None  # function-level checks (#303, blackbox.py); verify only
 
     def request(self) -> dict:
-        # #292: import_paths change what the verifiers import
-        extra = nonempty_fields(test_commit=self.test_commit, import_paths=list(self.import_paths))
+        # #292: import_paths change what the verifiers import; #303: the declaration's commitment
+        extra = nonempty_fields(
+            test_commit=self.test_commit, import_paths=list(self.import_paths),
+            blackbox_commitment=self.blackbox.commitment() if self.blackbox else "",
+        )  # fmt: skip
         return extra | {
             "repo": str(self.repo),
             "title": self.title,
@@ -157,6 +162,11 @@ def check_task(task: TaskSpec, *, verifier_python: str | None = None) -> tuple[V
         raise TaskRejected("PROTECTED_VERIFIER_INPUT", ", ".join(protected))
     if blocked:
         raise TaskRejected("TASK_ALLOWED_FILES_PROTECTED", ", ".join(blocked))
+    if task.blackbox and task.test_commit:  # the receipt binding cannot carry it yet (#292)
+        raise TaskRejected("BAD_BLACKBOX", "blackbox checks with deferred tests: not yet")
+    clash = {c.verifier_id for c in task.blackbox.checks} if task.blackbox else set()
+    if clash & {verifier_id for verifier_id, _ in task.verifiers}:
+        raise TaskRejected("BAD_BLACKBOX", f"verifier ids clash: {sorted(clash)}")
     try:
         return tuple(
             parse_verifier(vid, list(argv), task.test_roots) for vid, argv in task.verifiers

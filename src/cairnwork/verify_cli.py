@@ -3,6 +3,7 @@
     cairnwork-verify --state DIR run --repo-path P --base SHA --candidate SHA \\
         --allowed-file F [...] --verifier CMD [...] [--test-commit SHA] \\
         [--import-path DIR ...]    # src layout: DIR joins the verifiers' import path (#283)
+        [--blackbox FILE]          # the owner's function-level checks and answers (#303)
     cairnwork-verify --state DIR import-tests --repo-path P --bundle FILE
         # keep a deferred test commit in the private store (deferred_store.py), not on a remote
     cairnwork-verify --state DIR cleanup      # after a crashed run, before ``recover``
@@ -21,6 +22,7 @@ import sys
 from pathlib import Path
 from typing import Any, NoReturn
 
+from cairnwork import blackbox
 from cairnwork.deferred_tests import TestCommitRejected
 from cairnwork.intake import Intake, IntakeRefused
 from cairnwork.pipeline import TaskRejected
@@ -73,6 +75,10 @@ def _run(intake: Intake, args) -> dict[str, Any]:
         )
     except ValueError as exc:
         raise TaskRejected("BAD_VERIFIER", str(exc)) from exc
+    try:  # read by the owner's process only; never passed on to the run
+        declared = blackbox.load(Path(args.blackbox)) if args.blackbox else None
+    except blackbox.BlackboxRejected as exc:
+        raise TaskRejected(exc.code, str(exc)) from exc
     return verify_candidate(
         intake,
         repo=Path(args.repo_path).resolve(),
@@ -82,6 +88,7 @@ def _run(intake: Intake, args) -> dict[str, Any]:
         verifiers=verifiers,
         test_commit=args.test_commit,
         import_paths=tuple(args.import_path),
+        blackbox=declared,
     )
 
 
@@ -101,6 +108,7 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--verifier", action="append", required=True)
     run.add_argument("--test-commit", default="")
     run.add_argument("--import-path", action="append", default=[])
+    run.add_argument("--blackbox", default="")
     return parser
 
 
