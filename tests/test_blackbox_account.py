@@ -47,11 +47,14 @@ def test_only_the_correct_fix_passes_its_check(account_state, helper_project, tm
     declared = declaration(tmp_path)
     base = base_of(helper_project)
     sources = CANDIDATES | ATTACKS | {"reader": READER.format(path=str(declared))}
-    out = {}
+    out, account = {}, VerifierAccount()
     for name, source in sources.items():
         sha = candidate(helper_project, base, {"src/calc.py": source})
         args = ("--import-path", "src", "--blackbox", str(declared))
         out[name] = verify(account_state, helper_project, base, sha, *args)[1]
+        if name == "child":  # before the next run's require_idle() could end a leftover sleeper
+            with account.exclusive():  # counted while no other run may use the account (#247)
+                assert account.count() == 0  # the sleeper is gone on either backend
     assert out["correct"]["status"] == "VERIFIED", _explain(out["correct"])
     assert "blackbox:add: PASS [matched 2/2]" in out["correct"]["reason"]
     for name in ("wrong", "attack", "reader", "forge", "finder", "syspath"):
@@ -61,9 +64,6 @@ def test_only_the_correct_fix_passes_its_check(account_state, helper_project, tm
     # child's add is right; only its process outlives the run. Seatbelt cannot reap it, so the run
     # is incomplete; under bwrap it stays in the PID namespace and dies on teardown, so nothing is
     # left and the right answer may pass (as for a verifier: test_verifier_account.py).
-    account = VerifierAccount()
-    with account.exclusive():  # counted while no other run may use the account (#247)
-        assert account.count() == 0  # the sleeper is gone on either backend
     survivors = "blackbox:add: VERIFICATION_INCOMPLETE: SURVIVORS"
     backend = cairnwork_sandbox.platform_backend()
     if backend is not None and backend.name == "seatbelt":
