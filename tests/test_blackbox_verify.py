@@ -12,6 +12,8 @@ where the correct fix is VERIFIED, are in test_blackbox_account.py.
 import pytest
 from verify_helpers import ATTACKS, CANDIDATES, base_of, candidate, declaration, verify
 
+import cairnwork_sandbox
+
 
 def run_all(state, project, *extra):
     base = base_of(project)
@@ -61,6 +63,9 @@ def test_attacks_on_the_run_are_never_verified(state, helper_project, tmp_path, 
         1
     ]
     assert out["status"] == "FAILED" and out["core_status"] == "FAILED_VERIFICATION", out
+    backend = cairnwork_sandbox.platform_backend()
+    if name == "child" and not (backend is not None and backend.name == "seatbelt"):
+        return  # bwrap kills it with the PID namespace: see test_blackbox_account.py
     assert OWNER_ATTACKS[name] in out["reason"], out["reason"]
     if name != "child":  # pytest alone was fooled; the blackbox check was not
         assert "pytest-0" not in out["reason"]
