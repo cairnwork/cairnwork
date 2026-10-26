@@ -132,7 +132,8 @@ def attempt_dirs(roots, attempt_id: str) -> tuple[Path, ...]:
     """Realpaths of the attempt's own run directories under each root: ``<attempt_id>`` and
     ``<attempt_id>-<tag>-v<n>[.suffix]``. Only real directories (never a symlink) whose
     realpath is strictly inside the root's; a malformed attempt id gives none. Never raises: a
-    root that is not a directory or cannot be listed is skipped."""
+    root that is not a directory or cannot be listed is skipped, and so is an entry that cannot
+    be checked."""
     if not isinstance(attempt_id, str) or not ATTEMPT_ID.fullmatch(attempt_id):
         return ()
     name = re.compile(rf"{re.escape(attempt_id)}-[vbpqre]-v[0-9]+(\.[^/]*)?")
@@ -147,9 +148,12 @@ def attempt_dirs(roots, attempt_id: str) -> tuple[Path, ...]:
                 for entry in entries:
                     if entry.name != attempt_id and not name.fullmatch(entry.name):
                         continue
-                    if not stat.S_ISDIR(os.lstat(entry.path).st_mode):  # a symlink is not
+                    try:
+                        if not stat.S_ISDIR(os.lstat(entry.path).st_mode):  # a symlink is not
+                            continue
+                        real = os.path.realpath(entry.path)
+                    except OSError:  # gone since the listing, or unreadable: skip only it
                         continue
-                    real = os.path.realpath(entry.path)
                     if real != base and os.path.commonpath([real, base]) == base:
                         here.append(Path(real))
         except (OSError, ValueError):

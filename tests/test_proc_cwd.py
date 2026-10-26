@@ -71,6 +71,23 @@ def test_a_malformed_attempt_id_gives_no_directories(tmp_path, attempt):
     assert proc_cwd.attempt_dirs([root], attempt) == ()
 
 
+def test_an_entry_that_fails_its_check_drops_only_itself(tmp_path, monkeypatch):
+    # Opus review of #301: one entry removed between the listing and its lstat must not drop
+    # the other directories already found under the same root.
+    root = tmp_path / "runs"
+    _dirs(root, ATTEMPT, f"{ATTEMPT}-q-v0", f"{ATTEMPT}-v-v1")
+    real_lstat = os.lstat
+
+    def lstat(path, *args, **kwargs):
+        if os.path.basename(path) == f"{ATTEMPT}-q-v0":
+            raise FileNotFoundError(path)
+        return real_lstat(path, *args, **kwargs)
+
+    monkeypatch.setattr(proc_cwd.os, "lstat", lstat)
+    found = proc_cwd.attempt_dirs([root], ATTEMPT)
+    assert set(found) == {root.resolve() / ATTEMPT, root.resolve() / f"{ATTEMPT}-v-v1"}
+
+
 def test_attempt_dirs_skip_a_missing_file_or_unreadable_root(tmp_path):
     afile = tmp_path / "file"
     afile.write_text("x")
