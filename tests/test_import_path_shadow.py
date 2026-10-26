@@ -141,3 +141,20 @@ def test_a_submodule_bytecode_in_an_honest_package_is_not_a_first_level_unit(rep
     # shadow: it must not be falsely protected (same as core.py).
     commit_change(repo, {"src/calcpkg/__init__.py": "x = 1\n", "src/calcpkg/core.pyc": "\x00"})
     assert check_task(task(repo, "src/calcpkg/core.pyc"))
+
+
+def test_an_init_directly_under_an_import_root_is_a_protected_module(repo):
+    # app/lib/__init__.py with import_paths=("app/lib",) is the import root's own __init__,
+    # importable as `__init__`; it is a first-level unit, not a package of something, and a new one
+    # must be protected (Codex round-4 finding).
+    with pytest.raises(TaskRejected, match="PROTECTED_VERIFIER_INPUT"):
+        check_task(task(repo, "app/lib/__init__.py", import_paths=("app/lib",)))
+
+
+def test_a_base_tracked_dotted_stem_py_stays_protected(repo):
+    # `local.extra.py` is not a valid module name (the dotted stem is not an identifier), so it
+    # cannot be proven safe and must stay protected even when the base tracks it (base parity: the
+    # name must never be relaxed by the before-first-dot derivation used for extension modules).
+    commit_change(repo, {"local.extra.py": "x = 1\n"})
+    with pytest.raises(TaskRejected, match="PROTECTED_VERIFIER_INPUT"):
+        check_task(task(repo, "local.extra.py", import_paths=()))

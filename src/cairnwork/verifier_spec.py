@@ -120,26 +120,59 @@ def _normalize_import_paths(import_paths: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(roots))
 
 
+# Every suffix Python imports a first-level file by: source, sourceless bytecode and extension
+# modules. A committed ``.pyc``/``.so`` shadows just as a ``.py`` does (verified on APFS) and is not
+# covered by tamper_scan (``.py`` only) or pycache_guard (the TMPDIR prefix, not the checkout).
+_SOURCE_SUFFIXES = (".py", ".pyc", ".pyo")
+_EXTENSION_SUFFIXES = (".so", ".pyd")
+
+
+def _import_name(filename: str) -> str | None:
+    """The top-level name a first-level *file* would be imported under, or None if it is not an
+    importable file. Source/bytecode keep the whole stem, so a dotted stem (``a.b.py``) is not a
+    valid module name and is caught by the identifier test in ``_safe_root_modules`` (as the base
+    behaviour required); an extension module's name is the part before the first dot, dropping its
+    ABI tag (``x.cpython-NN-…​.so``). Matched casefolded for APFS."""
+    low = filename.casefold()
+    for suffix in _SOURCE_SUFFIXES:
+        if low.endswith(suffix):
+            return filename[: -len(suffix)]
+    for suffix in _EXTENSION_SUFFIXES:
+        if low.endswith(suffix):
+            return filename.split(".", 1)[0]
+    return None
+
+
+def _is_init_file(filename: str) -> bool:
+    """A package ``__init__`` in any importable suffix (.py/.pyc/.so…), case-insensitive."""
+    return filename.split(".", 1)[0].casefold() == "__init__" and _import_name(filename) is not None
+
+
 def _first_level_unit(
     path: str, import_roots: tuple[str, ...]
 ) -> tuple[str, str, str, bool, str] | None:
-    # APFS is case-insensitive, so the prefix, the ``__init__.py`` filename and its ``.py``
-    # extension are all matched casefolded: Python resolves ``pkg/__init__.py`` from a committed
-    # ``pkg/__INIT__.py`` on this host, so a case-variant must not escape the gate.
+    # APFS is case-insensitive, so the prefix and the filename/suffix are matched casefolded:
+    # Python resolves ``pkg/__init__.py`` from a committed ``pkg/__INIT__.py`` on this host. The
+    # module branch fires only when the path has no further ``/``, so a package ``__init__`` (always
+    # one level down) is classified as its package, never as a module named ``__init__``.
     for r in import_roots:
         if not r:
-            if "/" not in path and path.endswith(".py"):
-                return (path, r, path[:-3], False, "")
-            if path.count("/") == 1 and path.casefold().endswith("/__init__.py"):
+            if "/" not in path:
+                name = _import_name(path)
+                if name is not None:
+                    return (path, r, name, False, "")
+            if path.count("/") == 1 and _is_init_file(path.split("/", 1)[1]):
                 name = path.split("/")[0]
                 return (path, r, name, True, name)
         else:
             prefix = f"{r}/"
             if path.casefold().startswith(prefix.casefold()):
                 rel = path[len(prefix) :]  # prefix is the same length in any case
-                if "/" not in rel and rel.endswith(".py") and rel.casefold() != "__init__.py":
-                    return (path, r, rel[:-3], False, "")
-                if rel.count("/") == 1 and rel.casefold().endswith("/__init__.py"):
+                if "/" not in rel:
+                    name = _import_name(rel)
+                    if name is not None:
+                        return (path, r, name, False, "")
+                if rel.count("/") == 1 and _is_init_file(rel.split("/", 1)[1]):
                     name = rel.split("/")[0]
                     return (path, r, name, True, f"{r}/{name}")
     return None
