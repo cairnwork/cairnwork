@@ -7,6 +7,7 @@ is new": that deleted other sessions' live run directories.
 """
 
 import contextlib
+import dataclasses
 import os
 import shutil
 import sqlite3
@@ -75,3 +76,17 @@ def own_attempt(state: Path) -> str | None:
             return None
         raise  # anything else is reported, not waited out until the caller's deadline
     return row[0] if row else None
+
+
+def lock_held(account):
+    """A copy of ``account`` for code run while the test already holds ``account.exclusive()``:
+    the lock is not reentrant, so the inner run must not wait on it again (Issue #247). A test
+    that starts an account process outside a run holds the lock while it lives, or another
+    session's locked run would count it as its own leftover."""
+
+    class LockHeld(type(account)):
+        def exclusive(self, timeout=None):
+            return contextlib.nullcontext()
+
+    init = {f.name: getattr(account, f.name) for f in dataclasses.fields(account) if f.init}
+    return LockHeld(**init)
