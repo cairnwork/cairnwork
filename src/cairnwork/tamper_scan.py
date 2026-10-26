@@ -138,6 +138,20 @@ RULES: tuple[Rule, ...] = (
     # setattr(sys, "pycache_prefix", ...) is caught too; honest code rarely even reads it, so
     # refusing a read is an accepted false positive.
     _rule("pycache_prefix", r"\bpycache_prefix\b"),
+    # Redirecting where later imports resolve, so a protected test/conftest/helper loads a module
+    # the candidate controls instead of the checkout file (#290). A meta_path finder answers for a
+    # name from memory or a planted file; a path_hooks entry or a cleared/replaced
+    # path_importer_cache makes the import system re-ask a candidate finder for a directory on the
+    # path (including the protected tests/ dir). Matched by the bare attribute name in any file, so
+    # an alias (``import sys as s; s.meta_path``) is caught too. Honest code rarely touches these
+    # import internals, so a flagged read is an accepted false positive, as for ``pycache_prefix``.
+    # This is a higher bar, not a boundary (a name built from strings or a non-.py file still
+    # passes); the runtime origin check in report_guard raises the bar on the same vector, and
+    # ``sys.path`` writes are deliberately not here (an honest src-layout conftest prepends ``src``,
+    # and pytest restores ``tests/`` to ``sys.path[0]`` per module, so a bare prepend loses).
+    _rule("meta_path", r"\bmeta_path\b"),
+    _rule("path_hooks", r"\bpath_hooks\b"),
+    _rule("path_importer_cache", r"\bpath_importer_cache\b"),
 )
 _BY_NAME = {rule.name: rule for rule in RULES}
 

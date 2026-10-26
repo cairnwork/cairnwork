@@ -58,16 +58,67 @@ FDS_ENV = "CAIRNWORK_GUARD_FDS"
 PATH_ENV = "CAIRNWORK_VERDICT_PATH"
 NONCE_ENV = "CAIRNWORK_VERDICT_NONCE"
 MODULE = "_cairnwork_report_guard"
+ORIGINS_FILE = "_cairnwork_protected_origins.json"
 
 _PLUGIN_SOURCE = '''\
 """Materialised by cairnwork.report_guard into each verifier run; edit it there."""
 
 import json
 import os
+import sys
 
 _FDS_ENV = "CAIRNWORK_GUARD_FDS"
 _PATH_ENV = "CAIRNWORK_VERDICT_PATH"
 _NONCE_ENV = "CAIRNWORK_VERDICT_NONCE"
+_ORIGINS_FILE = "_cairnwork_protected_origins.json"
+
+
+def _load_origins():
+    """Read the protected-origins map the parent wrote next to this plugin. The guard directory is
+    read-only to the candidate, so this cannot be replaced. Returns (checkout_root, origins); a
+    missing file means the feature is off ({} origins), and an unreadable or malformed file returns
+    origins None so the check fails closed (the parent refuses the run)."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), _ORIGINS_FILE)
+    if not os.path.exists(path):
+        return "", {}
+    try:
+        with open(path, "rb") as handle:
+            data = json.loads(handle.read())
+        root, origins = data["checkout"], data["origins"]
+        if isinstance(root, str) and isinstance(origins, dict):
+            return root, origins
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return "", None
+
+
+_CHECKOUT, _ORIGINS = _load_origins()
+
+
+def _shadowed():
+    """Protected names whose module in sys.modules does not come from the expected checkout file: a
+    None/non-file origin, a path outside the checkout, or a different relative path. A missing map
+    (unreadable) yields a guard marker so the run is refused. Bar-raising, not a boundary: the
+    candidate shares the interpreter and can set a matching __spec__.origin."""
+    if _ORIGINS is None:
+        return {"_guard_origins_unreadable"}
+    root = os.path.realpath(_CHECKOUT) if _CHECKOUT else ""
+    prefix = root + os.sep
+    bad = set()
+    for name, rels in _ORIGINS.items():
+        module = sys.modules.get(name)
+        if module is None:
+            continue
+        try:
+            origin = getattr(getattr(module, "__spec__", None), "origin", None)
+            real = os.path.realpath(origin) if isinstance(origin, str) and root else None
+            ok = bool(real) and real.startswith(prefix) and real[len(prefix):] in rels \\
+                and os.path.isfile(real)
+        except Exception:  # a module that raises on attribute access is not a plain checkout file
+            ok = False
+        if not ok:
+            bad.add(name)
+    return bad
 
 
 def _take():
@@ -103,23 +154,35 @@ class _Reporter:
         self._collected = []
         self._outcomes = {}
         self._collect_errors = []
+        self._shadow = set()
+
+    def _check_shadow(self):
+        # A sticky set: once a protected name resolves to the wrong file at any checkpoint, the run
+        # is tainted even if the candidate restores the real module before runtest or sessionfinish
+        # (bind-then-restore, #290 review point 1). Checked after each collector imports (where a
+        # helper or conftest import happens), before each test runs, and at the end.
+        self._shadow |= _shadowed()
 
     def pytest_collectreport(self, report):
         if report.failed:
             self._collect_errors.append(report.nodeid)
+        self._check_shadow()
 
     def pytest_collection_finish(self, session):
         self._collected = [item.nodeid for item in session.items]
 
     def pytest_runtest_logreport(self, report):
+        if report.when == "setup":
+            self._check_shadow()
         if report.when == "call":
             self._outcomes[report.nodeid] = report.outcome
         elif report.when == "setup" and report.outcome in ("skipped", "failed"):
             self._outcomes.setdefault(report.nodeid, report.outcome)
 
     def pytest_sessionfinish(self, session, exitstatus):
+        self._check_shadow()
         payload = {"nonce": self._nonce, "collected": self._collected, "outcomes": self._outcomes,
-                   "collect_errors": self._collect_errors}
+                   "collect_errors": self._collect_errors, "import_tamper": sorted(self._shadow)}
         if self._fd is not None:
             data = json.dumps(payload).encode()
             os.ftruncate(self._fd, 0)
@@ -154,6 +217,19 @@ def install_plugin(directory: Path) -> None:
     os.chmod(path, 0o640)  # not the umask-masked open() mode: the verifier account reads by group
 
 
+def install_origins(directory: Path, checkout: Path, origins: dict[str, list[str]]) -> None:
+    """Write the protected-name -> checkout-relative-origin map next to the plugin (#290 runtime
+    half). ``checkout`` is the run's own checkout (an account-mode copy at a different root still
+    matches, because the map is relative). The directory is a sandbox read root the candidate
+    cannot write; the file is group-readable so the verifier account reads it, like the plugin."""
+    path = directory / ORIGINS_FILE
+    payload = json.dumps({"checkout": str(checkout.resolve()), "origins": origins}).encode()
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o640)
+    with os.fdopen(fd, "wb") as handle:
+        handle.write(payload)
+    os.chmod(path, 0o640)
+
+
 @dataclass(frozen=True)
 class Verdict:
     ran: bool
@@ -161,6 +237,7 @@ class Verdict:
     too_big: bool = False  # the file exceeds MAX_REPORT_BYTES: nothing could be read from it
     recorded: bool = False  # sessionfinish wrote a well-formed record with our nonce (#234)
     collect_errors: tuple[str, ...] = ()  # node ids of collectors that failed (B2, #234)
+    import_tamper: tuple[str, ...] = ()  # protected names shadowed at runtime (#290 runtime half)
 
 
 def read_verdict(path: Path, nonce: str) -> Verdict:
@@ -219,9 +296,16 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
     errors = data.get("collect_errors", [])
     if not isinstance(errors, list) or not all(isinstance(node, str) for node in errors):
         return Verdict(False, {})
+    tamper = data.get("import_tamper", [])
+    if not isinstance(tamper, list) or not all(isinstance(node, str) for node in tamper):
+        return Verdict(False, {})
+    # ``ran`` keeps its original meaning (#290 review): the runtime shadow result is a separate
+    # field the caller refuses on, so this never relaxes the pass/fail logic, only adds a reject.
     ran = (
         bool(collected)
         and set(outcomes) == set(collected)
         and all(outcome == "passed" for outcome in outcomes.values())
     )
-    return Verdict(ran, outcomes, recorded=True, collect_errors=tuple(errors))
+    return Verdict(
+        ran, outcomes, recorded=True, collect_errors=tuple(errors), import_tamper=tuple(tamper)
+    )
