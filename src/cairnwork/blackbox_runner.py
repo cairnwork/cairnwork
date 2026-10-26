@@ -87,7 +87,10 @@ def install_runner(directory: Path, spec: bytes) -> None:
     read root, on the run's PYTHONPATH, and not writable by the candidate."""
     for name, data in ((f"{MODULE}.py", _RUNNER_SOURCE.encode()), (INPUT_NAME, spec)):
         path = directory / name
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o640)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
         with os.fdopen(fd, "wb") as handle:
             handle.write(data)
-        os.chmod(path, 0o640)  # not the umask-masked mode: the verifier account reads by group
+        # Readable by other, not only the group: written after _prepare_run's chmod stripped the
+        # guard's setgid, a file takes the owner's primary group on Linux, not cairnwork
+        # (VerifierAccount.grant_read). Neither file holds an answer; the guard stays owner-written.
+        os.chmod(path, 0o644)

@@ -138,6 +138,15 @@ def run_runner(tmp_path, module="calc", function="f"):
     return declared, run
 
 
+def test_the_runner_and_its_input_are_readable_by_other_and_written_once(tmp_path):
+    """Other-readable: on Linux they need not carry the account's group (install_runner)."""
+    install_runner(tmp_path, b"{}")
+    for name in (f"{MODULE}.py", "blackbox-input.json"):
+        assert (tmp_path / name).stat().st_mode & 0o777 == 0o644
+    with pytest.raises(FileExistsError):
+        install_runner(tmp_path, b"{}")
+
+
 def test_the_runner_reports_values_by_exact_json_type(tmp_path):
     declared, run = run_runner(tmp_path)
     report = json.loads(run.report or b"")["checks"]["add"]
