@@ -34,6 +34,18 @@ CASES = {
         "    sys.pycache_prefix = os.environ['HOME']",
         "    shutil.rmtree('__pycache__')  # sys.prefix and __pycache__ dirs are fine",
     ),
+    "meta_path": (
+        "    sys.meta_path.insert(0, finder)",
+        "    sys.path.append(d)  # sys.path and a 'meta' variable are fine",
+    ),
+    "path_hooks": (
+        "    sys.path_hooks.append(hook)",
+        "    register_hooks(app)  # an unrelated 'hooks' word is fine",
+    ),
+    "path_importer_cache": (
+        "    sys.path_importer_cache.clear()",
+        "    cache = {}  # an ordinary cache variable is fine",
+    ),
 }
 
 
