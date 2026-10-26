@@ -1,13 +1,15 @@
 """The owner's verdict on a blackbox run (#303, blackbox.py): one Core observation per check.
 
 The runner's output is data from a process the candidate shares, so it is parsed strictly and
-never believed about pass or fail: the owner compares each case's value with the answer only it
-holds, by canonical JSON (so ``True`` is not ``1`` and a list is not an object). A check passes only
-when the run was clean (sandboxed, as the verifier account, exit 0, no timeout, survivor, checkout
-change or forged bytecode), the function came from the checkout, the output names exactly the
-declared cases, and every case returned its expected value. Anything that kept the check from
-running or reading is ``VERIFICATION_INCOMPLETE: <code>``, a wrong value or a raised exception is
-``MISMATCH``; neither passes, and neither turns into another outcome such as UNCOMPARABLE.
+never believed about pass or fail: the owner compares each case's outcome with the one only it
+holds (blackbox_values.judge: exact JSON types, so ``True`` is not ``1`` and a list is not an
+object; declared floats within their tolerance; a raise by type name and message). A check passes
+only when the run was clean (sandboxed, as the verifier account, exit 0, no timeout, survivor,
+checkout change or forged bytecode), the module came from the checkout, the output names exactly
+the declared cases (and, for a class case, one outcome per declared call), and every outcome is the
+expected one. Anything that kept the check from running or reading is
+``VERIFICATION_INCOMPLETE: <code>``; a wrong value, a wrong or unexpected raise is ``MISMATCH``;
+neither passes, and neither turns into another outcome such as UNCOMPARABLE.
 """
 
 from __future__ import annotations
@@ -16,11 +18,11 @@ import hashlib
 import json
 from dataclasses import dataclass
 
-from cairnwork.blackbox import INCOMPLETE, Check, Declaration
+from cairnwork.blackbox import INCOMPLETE, Case, Check, Declaration
 from cairnwork.blackbox_exec import RUNNER_SHA256, BlackboxRun, run_blackbox
+from cairnwork.blackbox_values import BadOutput, error_of, judge
 from cairnwork.core_request import VerifierObservation
 from cairnwork.verifier_exec import _file_sha256, _record_digest
-from cairnwork_protocol import canonical_json
 
 
 @dataclass(frozen=True)
@@ -99,19 +101,24 @@ def _check_problem(check: Check, report: dict, run: BlackboxRun, outcomes: dict[
     cases = entry["cases"]
     if set(cases) != {case.id for case in check.cases}:
         return "BAD_OUTPUT"
-    for case in check.cases:
-        got = cases[case.id]
-        if isinstance(got, dict) and set(got) == {"ok"}:
-            try:
-                same = canonical_json(got["ok"]) == case.expected
-            except (TypeError, ValueError, RecursionError):
-                return "BAD_OUTPUT"
-            outcomes[case.id] = "match" if same else "mismatch"
-        elif isinstance(got, dict) and set(got) == {"error"} and isinstance(got["error"], str):
-            outcomes[case.id] = f"error:{got['error'][:80]}"
-        else:
-            return "BAD_OUTPUT"
+    try:
+        for case in check.cases:
+            got = cases[case.id]
+            outcomes[case.id] = judge(case, got) if check.kind == "function" else _calls(case, got)
+    except BadOutput:
+        return "BAD_OUTPUT"
     return ""
+
+
+def _calls(case: Case, got) -> str:
+    """A class case matches when every call's outcome does; a raising constructor is an error."""
+    if isinstance(got, dict) and set(got) == {"init"}:
+        return f"error:init:{error_of(got['init'])[0][:80]}"
+    steps = got.get("steps") if isinstance(got, dict) and set(got) == {"steps"} else None
+    if not isinstance(steps, list) or len(steps) != len(case.calls):
+        raise BadOutput("steps")
+    results = [judge(call, step) for call, step in zip(case.calls, steps, strict=True)]
+    return "match" if all(result == "match" for result in results) else "mismatch"
 
 
 def _verdict(check, commit, declaration, run, failed, outcomes) -> CheckVerdict:
