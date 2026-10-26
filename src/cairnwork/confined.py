@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import os
 import pwd
-import resource
 import signal
 import subprocess
 import sys
@@ -18,12 +17,13 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 
-from cairnwork import proc_restrict, proc_start
+from cairnwork import proc_cwd, proc_restrict, proc_start
+from cairnwork.pipe_copy import MAX_LOG_BYTES as MAX_LOG_BYTES  # re-exported (verifiers)
+from cairnwork.pipe_copy import MAX_REPORT_BYTES as MAX_REPORT_BYTES  # re-exported (report_guard)
+from cairnwork.pipe_copy import _limit_file_size, copy_capped
 
 RUN_TOKEN_VAR = "CAIRNWORK_VERIFIER_RUN"
 ATTEMPT_ENV = "CAIRNWORK_ATTEMPT"  # marks every process of an attempt, for recovery
-MAX_LOG_BYTES = 4 << 20
-MAX_REPORT_BYTES = 4 << 20
 # Reading the process list is a probe, not a verdict (Issue #114): a host under heavy load can
 # take longer than a short timeout. The account probe asks again, but only after a kill.
 PS_ATTEMPTS = 3
@@ -93,8 +93,8 @@ class Sweep:
     have left a child this look missed (``vanished``; confirm_gone then needs two clean looks)."""
 
     listed: bool  # the whole table, and the worker account's uid when asked, could be read
-    killed: int = 0  # marked processes SIGKILL was delivered to: alive when listed
-    denied: int = 0  # marked processes whose kill was refused: still running
+    killed: int = 0  # marked (or attributed by cwd) processes SIGKILL was delivered to
+    denied: int = 0  # marked (or attributed by cwd) processes whose kill was refused: running
     unreadable: int = 0  # the owner's processes whose environment could not be read
     account: int = 0  # processes of the worker account (environments the owner cannot read)
     held_by: tuple[tuple[int, str], ...] = ()  # (pid, KEPT_BY label) behind those counts
@@ -142,7 +142,7 @@ class Sweep:
         return shown + (f" and {more} more" if more > 0 else "")
 
 
-KEPT_BY = ("marked", "hidden", "worker-account")  # the labels of Sweep.held_by
+KEPT_BY = ("marked", "cwd", "hidden", "worker-account")  # the labels of Sweep.held_by
 
 
 UNLISTED = Sweep(listed=False)
@@ -155,6 +155,7 @@ def sweep_marked(
     skip_group: int | None = None,
     account: str | None = None,
     dispatched: str = "",
+    cwd_dirs: tuple[str, ...] = (),
 ) -> Sweep:
     """SIGKILL the owner's processes whose environment holds var=value, and say what was seen.
 
@@ -167,6 +168,9 @@ def sweep_marked(
     cannot be read (Linux: pgid None) may be the owner's or the account's: it is judged as one
     of the owner's, so a hidden environment keeps it unreadable (#244). ``dispatched``: the
     attempt's DISPATCHED boot mark; a hidden process started before it is not counted (proc_start).
+    ``cwd_dirs`` (recovery, macOS): the attempt's run directories (realpaths); an owner process
+    whose environment macOS withholds (/bin/sh, /bin/sleep) is killed ("cwd") when its working
+    directory is inside one; one that left them is not found (proc_cwd). Empty: no extra reads.
     """
     marker = f"{var}={value}"
     theirs = _account_uid(account) if account else None
@@ -180,14 +184,18 @@ def sweep_marked(
     # Kill what the listing shows marked before re-reading the hidden ones: the re-read waits,
     # and a listed pid may meanwhile be reused by an unrelated process (#244 NIT).
     killed, denied, vanished = _kill_marked([r for r in ours if r[3] is not None], marker)
+    plain = [r for r in ours if r[3] is not None and marker not in r[3]] if cwd_dirs else []
+    by_cwd = proc_cwd.kill_withheld_in(plain, cwd_dirs, mine) if cwd_dirs else ([], [], 0)
     hidden = _resolve_hidden([r for r in ours if r[3] is None], mine)
     late = _kill_marked([r for r in hidden if r[3] is not None], marker)
-    killed, denied, vanished = killed + late[0], denied + late[1], vanished + late[2]
+    killed, denied, vanished = killed + late[0], denied + late[1], vanished + late[2] + by_cwd[2]
     unreadable = [r[0] for r in hidden if r[3] is None]
     if dispatched and unreadable:
         unreadable = proc_start.not_older(unreadable, dispatched, START_MARGIN)
     held_by = sorted([(p, "marked") for p in killed + denied] + [(p, "hidden") for p in unreadable]
+                     + [(p, "cwd") for p in by_cwd[0] + by_cwd[1]]
                      + [(p, "worker-account") for p in held])  # fmt: skip
+    killed, denied = killed + by_cwd[0], denied + by_cwd[1]
     # Linux /proc mounted with hidepid may hide any process, a same-uid one that is not
     # dumpable included: after killing what it shows, such a look is never "gone".
     hidden_by = _restricted()
@@ -373,27 +381,8 @@ def _linux_owner(base: str) -> tuple[int, int]:
     return uid, pgid
 
 
-def copy_capped(source, target) -> None:
-    """Copy at most MAX_LOG_BYTES + 1 bytes (one over the cap marks the log too big)."""
-    written = 0
-    for chunk in iter(lambda: source.read(1 << 16), b""):
-        keep = chunk[: max(0, MAX_LOG_BYTES + 1 - written)]
-        if keep:
-            target.write(keep)
-            written += len(keep)
-
-
 def _kill_group(pgid: int) -> None:
     try:
         os.killpg(pgid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
         pass  # the group is already gone
-
-
-def _limit_file_size() -> None:
-    """In the child: no file it writes (log, report, scratch) may exceed the caps, and
-    the files it creates are group-readable whatever the caller's umask (the report
-    of a verifier that runs as another account must be readable by the owner)."""
-    os.umask(0o022)
-    limit = MAX_LOG_BYTES + MAX_REPORT_BYTES
-    resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
