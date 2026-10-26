@@ -18,6 +18,7 @@ answers, nor the expected exception or message, nor the tolerances go into the r
 
 from __future__ import annotations
 
+import builtins
 import json
 import math
 import re
@@ -89,10 +90,19 @@ def _raises(data: Any, where: str) -> dict[str, str]:
     name = data["type"]
     if not isinstance(name, str) or not _TYPE.fullmatch(name) or name.startswith("builtins."):
         raise BlackboxRejected(f"{where}: bad exception type (a dotted name; builtins are bare)")
+    if "." not in name and not _builtin_exception(name):
+        raise BlackboxRejected(
+            f"{where}: a bare type must be a builtin exception, else module.Name"
+        )
     message = data.get("message", "")
     if not isinstance(message, str) or len(message) > MAX_MESSAGE:
         raise BlackboxRejected(f"{where}: message must be a string of at most {MAX_MESSAGE}")
     return data
+
+
+def _builtin_exception(name: str) -> bool:
+    kind = getattr(builtins, name, None)
+    return isinstance(kind, type) and issubclass(kind, BaseException)
 
 
 def _tolerance(data: Any, where: str) -> dict[str, Any]:
@@ -156,7 +166,8 @@ def _same(item: Expectation, value: Any) -> bool:
     try:
         if not item.tolerance:
             return canonical_json(value) == item.expected
-        tolerance = {key: _number(v) for key, v in json.loads(item.tolerance).items()}
+        declared = {key: _number(v) for key, v in json.loads(item.tolerance).items()}
+        tolerance = {"rel_tol": 0.0, "abs_tol": 0.0} | declared  # not isclose's rel_tol=1e-9
         return _close(json.loads(item.expected), value, tolerance)
     except (TypeError, ValueError, OverflowError, RecursionError) as exc:
         raise BadOutput(type(exc).__name__) from None

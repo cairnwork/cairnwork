@@ -267,7 +267,7 @@ def test_a_forged_report_with_the_answers_passes_which_is_the_limit(tmp_path):
 # --- a malicious report, judged by the owner ---------------------------------------------------
 
 
-def report_of(cases: dict, check="mean") -> bytes:
+def report_of(cases: dict | list, check="mean") -> bytes:
     return json.dumps({"checks": {check: {"file": "/co/calc.py", "cases": cases}}}).encode()
 
 
@@ -277,7 +277,7 @@ MEAN_OK = {"third": {"ok": {"$float": (2 / 3).hex()}}, "empty": RAISES | {"error
 MEAN_OK["empty"] = {"error": "ValueError", "message": "no values"}
 
 
-def judged(cases: dict, check=MEAN_CHECK) -> str:
+def judged(cases: dict | list, check=MEAN_CHECK) -> str:
     run = replace(RUN, report=report_of(cases, check["id"]))
     (verdict,) = blackbox_judge.judge_run(declare(check), "c" * 40, run)
     return verdict.reason
@@ -302,6 +302,20 @@ HALF = {"id": "mean", "module": "calc", "function": "mean", "cases": [
 def test_only_a_float_is_compared_within_the_tolerance(one, two, matched):
     want = f"blackbox:mean: {'PASS' if matched == 2 else 'MISMATCH'} [matched {matched}/2]"
     assert judged({"one": one, "two": two}, HALF) == want
+
+
+def test_a_missing_relative_tolerance_is_zero_not_iscloses_default():
+    """rel_tol=1e-9 would let 1e9 + 0.5 match 1e9 under a declared abs_tol of 0."""
+    big = {"id": "mean", "module": "calc", "function": "mean", "cases": [
+        {"id": "one", "args": [[1]], "expected": 1e9, "tolerance": {"abs_tol": 0}},
+        {"id": "two", "args": [[2]], "expected": 1e9, "tolerance": {"abs_tol": 0.5}},
+    ]}  # fmt: skip
+    near = {"ok": {"$float": (1e9 + 0.5).hex()}}
+    assert judged({"one": near, "two": near}, big) == "blackbox:mean: MISMATCH [matched 1/2]"
+
+
+def test_cases_that_are_not_an_object_are_bad_output():
+    assert judged(["third", "empty", "pair"]).endswith(": BAD_OUTPUT")
 
 
 def test_the_honest_report_passes():

@@ -65,13 +65,15 @@ REFUSED = {
     "raises-builtins-prefix": mean_without("expected", "tolerance",
                                            raises={"type": "builtins.ValueError"}),
     "raises-bad-name": mean_without("expected", "tolerance", raises={"type": "Value Error"}),
+    "raises-bare-not-builtin": mean_without("expected", "tolerance", raises={"type": "MyError"}),
+    "raises-bare-not-exception": mean_without("expected", "tolerance", raises={"type": "len"}),
     "raises-not-str": mean_without("expected", "tolerance", raises={"type": 1}),
     "raises-no-type": mean_without("expected", "tolerance", raises={"message": "x"}),
-    "raises-extra": mean_without("expected", "tolerance", raises={"type": "E", "args": []}),
+    "raises-extra": mean_without("expected", "tolerance", raises={"type": "calc.E", "args": []}),
     "raises-null-message": mean_without("expected", "tolerance",
-                                        raises={"type": "E", "message": None}),
+                                        raises={"type": "calc.E", "message": None}),
     "raises-long-message": mean_without("expected", "tolerance",
-                                        raises={"type": "E", "message": "m" * 1001}),
+                                        raises={"type": "calc.E", "message": "m" * 1001}),
     "tolerance-negative": mean_case(tolerance={"abs_tol": -1}),
     "tolerance-bool": mean_case(tolerance={"abs_tol": True}),
     "tolerance-string": mean_case(tolerance={"abs_tol": "0.1"}),
@@ -140,6 +142,8 @@ CHANGES = {
 ACCT_CHANGES = {
     "method": {"method": "withdraw"},
     "call-expected": {"expected": 16},
+    "call-raises": {"expected": None, "raises": {"type": "ValueError"}},
+    "call-tolerance": {"expected": 15.0, "tolerance": {"abs_tol": 0}},
     "init": None,
 }
 
@@ -153,6 +157,7 @@ def test_the_commitment_covers_every_new_field():
             case.pop("init")
         else:
             case["calls"][0] |= change
+            case["calls"][0] = {k: v for k, v in case["calls"][0].items() if v is not None}
         variants.append(declare(ACCOUNT_CHECK | {"cases": [case]}, MEAN_CHECK))
     commitments = [variant.commitment() for variant in variants]
     assert len(set(commitments)) == len(commitments) == 1 + len(CHANGES) + len(ACCT_CHANGES)
@@ -185,7 +190,7 @@ def test_low_entropy_counts_raises_without_a_message_and_class_calls():
     assert not declare(MEAN_CHECK | {"cases": [raises]}).checks[0].low_entropy
     guesses = [
         {"method": "m", "args": [], "expected": True},
-        {"method": "m", "args": [], "raises": {"type": "E"}},
+        {"method": "m", "args": [], "raises": {"type": "calc.E"}},
     ]
     yes_no = ACCOUNT_CHECK | {"cases": [calls(*guesses)]}
     assert declare(yes_no).checks[0].low_entropy
