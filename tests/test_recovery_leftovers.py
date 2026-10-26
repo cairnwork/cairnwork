@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 from conftest import commit_change
+from run_root_scope import own_attempt
 from test_deferred_tests import REGRESSION, make_test_commit
 from test_recovery import (
     GOOD,
@@ -79,10 +80,12 @@ def _driver(p2p_project, state, step, *account):
 
 
 def _kill_in_p2p(p2p_project, state, step, run_root, *account):
-    before = {p.name for p in run_root.glob(f"*-{step}-v*")} if run_root.is_dir() else set()
     proc = _driver(p2p_project, state, step, *account)
     deadline = time.monotonic() + 240
-    while not ({p.name for p in run_root.glob(f"*-{step}-v*")} - before):
+    while True:
+        attempt = own_attempt(state)
+        if attempt and run_root.is_dir() and any(run_root.glob(f"{attempt}-{step}-v*")):
+            break
         assert proc.poll() is None, (state / "driver.err").read_text()[-2000:]
         assert time.monotonic() < deadline
         time.sleep(0.2)
