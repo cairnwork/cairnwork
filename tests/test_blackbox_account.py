@@ -8,6 +8,7 @@ VERIFIED) fail on the check, so Core reports FAILED_VERIFICATION.
 
 import json
 import subprocess
+from pathlib import Path
 
 import pytest
 from verify_helpers import ATTACKS, CANDIDATES, base_of, candidate, declaration, verify
@@ -34,6 +35,13 @@ def account_state(state):
     return state
 
 
+def _explain(result: dict) -> str:
+    """The reason plus the blackbox log's tail: the runner's traceback is only in the log."""
+    logs = [Path(p) for p in result.get("logs", []) if p.endswith("blackbox.log")]
+    tail = logs[-1].read_text(errors="replace")[-3000:] if logs and logs[-1].exists() else ""
+    return f"{result['reason']}\n{tail}"
+
+
 def test_only_the_correct_fix_passes_its_check(account_state, helper_project, tmp_path):
     declared = declaration(tmp_path)
     base = base_of(helper_project)
@@ -43,7 +51,7 @@ def test_only_the_correct_fix_passes_its_check(account_state, helper_project, tm
         sha = candidate(helper_project, base, {"src/calc.py": source})
         args = ("--import-path", "src", "--blackbox", str(declared))
         out[name] = verify(account_state, helper_project, base, sha, *args)[1]
-    assert out["correct"]["status"] == "VERIFIED", out["correct"]["reason"]
+    assert out["correct"]["status"] == "VERIFIED", _explain(out["correct"])
     assert "blackbox:add: PASS [matched 2/2]" in out["correct"]["reason"]
     for name in ("wrong", "attack", "reader", "forge", "finder", "child", "syspath"):
         assert out[name]["status"] == "FAILED" and out[name]["core_status"] == "FAILED_VERIFICATION"
