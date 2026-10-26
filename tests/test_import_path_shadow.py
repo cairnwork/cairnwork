@@ -116,3 +116,28 @@ def test_a_case_variant_of_init_py_is_still_a_protected_package(repo, path):
     # __init__ filename (or .PY extension) must still be recognised as a shadowing package.
     with pytest.raises(TaskRejected, match="PROTECTED_VERIFIER_INPUT"):
         check_task(task(repo, path))
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "src/colorsys.pyc",
+        "src/colorsys/__init__.pyc",
+        "colorsys.pyc",
+        "json/__init__.pyo",
+        "src/colorsys.cpython-314-darwin.so",
+        "src/colorsys/__INIT__.pyc",
+    ],
+)
+def test_committed_bytecode_or_extension_shadow_is_refused(repo, path):
+    # Python imports a first-level .pyc/.pyo/.so just as a .py; tamper_scan (.py only) and
+    # pycache_guard (the TMPDIR prefix) do not cover bytecode committed into the checkout.
+    with pytest.raises(TaskRejected, match="PROTECTED_VERIFIER_INPUT"):
+        check_task(task(repo, path))
+
+
+def test_a_submodule_bytecode_in_an_honest_package_is_not_a_first_level_unit(repo):
+    # src/calcpkg/core.pyc is inside a package, not a first-level name, and calcpkg does not
+    # shadow: it must not be falsely protected (same as core.py).
+    commit_change(repo, {"src/calcpkg/__init__.py": "x = 1\n", "src/calcpkg/core.pyc": "\x00"})
+    assert check_task(task(repo, "src/calcpkg/core.pyc"))
