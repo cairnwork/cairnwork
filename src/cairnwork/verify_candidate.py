@@ -45,7 +45,7 @@ from cairnwork.gitcmd import OID, GitCommandError, run_git
 from cairnwork.import_path_tree import ImportPathError, require_plain_dirs
 from cairnwork.intake import Intake, IntakeRefused
 from cairnwork.issue_task import check_verify_import_paths
-from cairnwork.notary_verify import binding_hash
+from cairnwork.notary_verify import binding_hash, nonempty_fields
 from cairnwork.ownership import request_digest
 from cairnwork.p2p import base_env_check, p2p_for
 from cairnwork.pipeline import (
@@ -328,7 +328,7 @@ def _binding(task, head: str, test_files: tuple[str, ...], judged: str) -> dict[
     the scratch clone and its id cannot be rebuilt (commit time), so the receipt names the PR head,
     the tests and the tree that ran, which a receiver rebuilds with deferred_tests.overlay_tree."""
     tree = run_git(task.repo, "rev-parse", f"{judged}^{{tree}}").strip()
-    return {
+    return nonempty_fields(import_paths=list(task.import_paths)) | {  # #292
         "rule": OVERLAY_RULE, "base": task.base_commit, "head": head,
         "test_commit": task.test_commit, "test_paths": sorted(test_files), "executed_tree": tree,
         "verifiers": [[verifier_id, list(argv)] for verifier_id, argv in task.verifiers],
