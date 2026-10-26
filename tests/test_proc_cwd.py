@@ -6,6 +6,7 @@ here beyond a count."""
 import os
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -171,6 +172,32 @@ def test_an_empty_argv0_does_not_hide_a_readable_environment():
         assert child.stdout is not None
         assert child.stdout.readline() == b"up\n"  # read only once the child is running
         assert proc_cwd.environment_withheld(child.pid) is False
+    finally:
+        child.kill()
+        child.wait()
+
+
+@macos
+def test_an_ambiguous_platform_binary_is_left_alone(tmp_path):
+    # Codex r2 of #301: XNU hides a platform binary's environment by skipping the NULs after
+    # the exec path, so with an empty argv[0] its first entry shows through. The buffer then
+    # looks like the readable one-entry case above, which must never be killed, so this one is
+    # not counted withheld and not killed either: a known gap (see environment_withheld).
+    where = os.path.realpath(tmp_path)
+    child = subprocess.Popen(  # noqa: S603 - fixed argv
+        ["", "30"], executable="/bin/sleep", env={"A": "1", "B": "2"}, cwd=where
+    )
+    try:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:  # wait for the exec: only the exec path is looked at
+            raw = proc_cwd._sysctl((1, 49, child.pid), proc_cwd._argmax() or 0)
+            if raw and raw[4:].startswith(b"/bin/sleep\0"):
+                break
+            time.sleep(0.05)
+        assert proc_cwd.environment_withheld(child.pid) is False
+        row = (child.pid, child.pid, os.getuid(), set())
+        assert proc_cwd.kill_withheld_in([row], (where,), os.getuid()) == ([], [], 0)
+        assert child.poll() is None
     finally:
         child.kill()
         child.wait()

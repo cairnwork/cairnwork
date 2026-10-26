@@ -7,7 +7,8 @@ cannot see the attempt's marker on them. Their working directory stays readable
 sweep kills such a process of the owner when its working directory is inside one of them
 (``kill_withheld_in``).
 
-Limits: a process that changed directory out of them is not found; neither is one found by a
+Limits: a process that changed directory out of them is not found, nor a platform binary
+started with an empty argv[0] (see ``environment_withheld``); neither is one found by a
 second recovery after the first removed the directories (the first sweeps before removing).
 A legitimately empty environment counts as withheld and is then tied only by its directory;
 a shell (Cairnwork's own parent included) sitting in an attempt's run directory with a
@@ -71,7 +72,13 @@ def _argmax() -> int | None:
 
 def environment_withheld(pid: int) -> bool | None:
     """True when KERN_PROCARGS2 shows the process's environment with no entry, False when it
-    shows any, None when it cannot be read (gone, refused, malformed, or not macOS)."""
+    shows any, None when it cannot be read (gone, refused, malformed, or not macOS).
+
+    Known gap: XNU hides a platform binary's environment by skipping every NUL after the exec
+    path, so one started with an empty argv[0] and two or more entries shows its first entry.
+    That buffer cannot be told apart from a readable one-entry environment, so it counts as
+    shown (False) and is never killed by its directory. Cairnwork never starts an empty
+    argv[0]."""
     if not _MACOS or pid <= 0:
         return None
     try:
