@@ -92,12 +92,14 @@ def pin_problem(ctx: Any) -> VerifyResult | None:
     """Each optional key the policy pins must be satisfied by the binding's (equal, order included;
     for ``protection`` at least the pinned level); ctx is verify_binding's check context (policy,
     binding, request). First, the binding's protection level must be the one the signed Core
-    request's required verifier ids give, so a receiver never takes the label on trust alone."""
+    request's required verifier ids give, so a receiver never takes the label on trust alone (only
+    the ``_macos`` grade, which the ids cannot show, is the producer's word)."""
     policy, binding = ctx.policy, ctx.binding
     contract = ctx.request.get("acceptance_contract")
     ids = contract.get("required_verifier_ids") if isinstance(contract, dict) else None
     recorded = recorded_protection(binding)
-    if not isinstance(ids, list) or protection.level(map(str, ids)) != recorded:
+    expected = protection.level(map(str, ids), macos=False) if isinstance(ids, list) else None
+    if protection.coverage(recorded) != expected:  # the host grade is the producer's to state
         return _fail(
             "PROTECTION_LABEL_MISMATCH", f"protection {recorded!r} is not what Core required"
         )

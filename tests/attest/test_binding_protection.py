@@ -100,7 +100,7 @@ def test_a_label_removed_or_changed_after_the_fact_is_refused(world, tmp_path, e
     assert check(world, out).code == "BINDING_HASH_MISMATCH"
 
 
-@pytest.mark.parametrize("bad", ["same_process_only", "", "full", None, 1])
+@pytest.mark.parametrize("bad", ["same_process_only", "", "full", "partial_linux", None, 1])
 def test_a_malformed_label_is_statement_shape(world, tmp_path, bad):
     stmt = statement(world)
     stmt["predicate"]["binding"]["protection"] = bad
@@ -117,8 +117,27 @@ def test_a_policy_demands_a_least_level(world, plain):
     assert check(plain, policy=policy(plain["state"], plain["tmp"], plain["tests"])).ok
 
 
-@pytest.mark.parametrize("bad", ["full", "", None, 1, ["partial"]])
+@pytest.mark.parametrize("bad", ["full", "", "same_process_only_macos", None, 1, ["partial"]])
 def test_a_malformed_policy_level_is_refused(world, bad):
     minimum(world, bad)
     with pytest.raises(PolicyError):
         load_policy(world["tmp"] / "policy.json")
+
+
+def test_the_macos_grade_is_its_own_level(tmp_path):
+    """3e1d 2026-10-27 05:43: a blackbox verdict on macOS (the #316 residual) is not labelled as the
+    Linux one. The ids bear out the level without the grade; a pin without ``_macos`` refuses it."""
+    w = _world(tmp_path / "mac", "partial_macos", CHECKED)
+    out = check(w)
+    assert out.ok and out.assurance is not None and out.assurance["protection"] == "partial_macos"
+    assert check(w, policy=minimum(w, "partial_macos")).ok
+    assert check(w, policy=minimum(w, "partial")).code == "UNPROTECTED"
+    assert check(w, policy=minimum(w, "blackbox_macos")).code == "UNPROTECTED"
+    assert check(w, policy=minimum(w, "same_process_only")).ok
+    lying = _world(tmp_path / "lie", "blackbox_macos", CHECKED)
+    assert check(lying).code == "PROTECTION_LABEL_MISMATCH"
+
+
+def test_the_linux_grade_meets_a_macos_minimum(world):
+    assert check(world, policy=minimum(world, "partial_macos")).ok
+    assert check(world, policy=minimum(world, "blackbox_macos")).code == "UNPROTECTED"

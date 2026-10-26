@@ -8,6 +8,7 @@ VERIFIED, and only when every check passes is the candidate VERIFIED.
 """
 
 import secrets
+import sys
 from typing import Any
 
 import pytest
@@ -103,7 +104,7 @@ def test_the_receipt_binding_carries_the_commitment_only_when_declared(project):
     # #303 protection label (test_protection.py): no verifiers here, so every required id is a check
     assert with_ == without | {
         "blackbox_commitment": DECLARED.commitment(),
-        "protection": "blackbox",
+        "protection": "blackbox_macos" if sys.platform == "darwin" else "blackbox",
     }
 
 

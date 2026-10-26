@@ -100,13 +100,21 @@ require (`cairnwork/protection.py`):
 - `"same_process_only"`: none are;
 - `""`: Core was never asked (refused or uncomparable).
 
+On macOS the protected levels are `"blackbox_macos"` and `"partial_macos"`: protected, with the
+macOS cross-run IPC residual above (#316), so a lower grade than the same level on Linux bwrap. A
+minimum without the suffix (`"partial"`, `"blackbox"`) accepts only the Linux grade; one with it
+accepts either.
+
 A receipt with deferred tests (v0.2) records the level in its binding (docs/ATTESTATION.md) and the
-receiver checks it against the signed Core request. A v0.1 receipt (no deferred tests) has no
-binding: its level is what `protection.level` gives for the request's `required_verifier_ids`.
+receiver checks it against the signed Core request (the ids show the level without the host grade;
+the `_macos` suffix is the producer's statement). A v0.1 receipt (no deferred tests) has no
+binding: its level is what `protection.level` gives for the request's `required_verifier_ids`,
+without a host grade.
 
 **Strict mode** (off by default): `cairnwork-verify run --require-protection` asks for at least
-`"partial"` (without `--blackbox` it is refused before anything runs, error `UNPROTECTED`), and the
-Python API takes `require_protection="partial"` or `"blackbox"`. Core is then asked for one more
+`"partial_macos"`, so a protected run passes on either host (without `--blackbox` it is refused
+before anything runs, error `UNPROTECTED`), and the Python API takes any protected level as the
+minimum (`require_protection="partial"` for the Linux grade). Core is then asked for one more
 observation, `protection`, which passes only when the level is met, so an unprotected run is not
 VERIFIED (`protection: VERIFICATION_INCOMPLETE: UNPROTECTED [...]` in the reason). A receiver asks
 for the same with its policy's `protection` key (`UNPROTECTED`). Verifier ids `blackbox:*` and

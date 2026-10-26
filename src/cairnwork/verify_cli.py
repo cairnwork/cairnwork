@@ -14,9 +14,10 @@ Prints one JSON object. Exit codes for ``run``: 0 verified; 2 refused, uncompara
 verified (``status`` says which: REFUSED, UNCOMPARABLE or FAILED; #234 added UNCOMPARABLE, so a
 caller that switches on REFUSED must handle it); 3 usage error; 1 internal error. ``protection``
 says what a verdict rests on (protection.py): ``partial`` when declared blackbox checks are among
-the required observations, ``same_process_only`` when there are none ("" when Core was never asked).
-With ``--require-protection`` an unprotected run is not VERIFIED, and without ``--blackbox`` it is
-refused before anything runs (error UNPROTECTED).
+the required observations (``partial_macos`` on macOS, #316), ``same_process_only`` when there are
+none ("" when Core was never asked). With ``--require-protection`` an unprotected run is not
+VERIFIED (either grade passes), and without ``--blackbox`` it is refused before anything runs
+(error UNPROTECTED).
 """
 
 from __future__ import annotations
@@ -107,7 +108,7 @@ def _run(intake: Intake, args) -> dict[str, Any]:
         test_commit=args.test_commit,
         import_paths=tuple(args.import_path),
         blackbox=declared,
-        require_protection=protection.PARTIAL if args.require_protection else "",
+        require_protection=protection.WEAKEST if args.require_protection else "",
     )
 
 

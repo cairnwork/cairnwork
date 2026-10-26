@@ -8,6 +8,7 @@ verify_candidate in-process against the real Core, with the blackbox run replace
 verdict as in test_blackbox_core.py (the account path itself is test_blackbox_account.py).
 """
 
+import sys
 from typing import Any
 
 import pytest
@@ -20,17 +21,43 @@ from cairnwork.intake import Intake
 from cairnwork.pipeline import TaskRejected, TaskSpec, check_task
 from cairnwork.verify_candidate import verify_candidate
 
+# what this host labels a verdict that rests partly on blackbox checks (macOS: #316's grade)
+PARTIAL = protection.level(("pytest-0", "blackbox:add"))
+
 
 def test_levels():
-    assert protection.level(()) == "same_process_only"
-    assert protection.level(("pytest-0", "p2p-direct")) == "same_process_only"
-    assert protection.level(("pytest-0", "blackbox:add")) == "partial"
-    assert protection.level(("blackbox:add", "blackbox:mul")) == "blackbox"
-    assert protection.level(("blackbox:add", "protection")) == "blackbox"  # the gate never counts
+    linux = {"macos": False}
+    assert protection.level((), **linux) == "same_process_only"
+    assert protection.level(("pytest-0", "p2p-direct"), **linux) == "same_process_only"
+    assert protection.level(("pytest-0", "blackbox:add"), **linux) == "partial"
+    assert protection.level(("blackbox:add", "blackbox:mul"), **linux) == "blackbox"
+    assert protection.level(("blackbox:add", "protection"), **linux) == "blackbox"  # gate: never
     assert protection.at_least("partial", "partial") and protection.at_least("blackbox", "partial")
     assert not protection.at_least("same_process_only", "partial")
     assert not protection.at_least("partial", "blackbox")
     assert not protection.at_least("full", "partial") and not protection.at_least("partial", "x")
+
+
+def test_the_macos_grade_is_a_level_of_its_own():
+    """3e1d 2026-10-27 05:43: on macOS a protected verdict carries the #316 residual, so it is not
+    labelled as the Linux one; a minimum without the suffix wants the Linux grade."""
+    mac = {"macos": True}
+    assert protection.level((), **mac) == "same_process_only"
+    assert protection.level(("pytest-0", "blackbox:add"), **mac) == "partial_macos"
+    assert protection.level(("blackbox:add",), **mac) == "blackbox_macos"
+    assert protection.level(("blackbox:add",)) == protection.level(
+        ("blackbox:add",), macos=sys.platform == "darwin"
+    )
+    assert protection.at_least("partial_macos", "partial_macos")
+    assert protection.at_least("partial", "partial_macos")
+    assert protection.at_least("blackbox_macos", "partial_macos")
+    assert not protection.at_least("partial_macos", "partial")
+    assert not protection.at_least("blackbox_macos", "partial")
+    assert not protection.at_least("partial_macos", "blackbox_macos")
+    assert not protection.at_least("same_process_only", "partial_macos")
+    assert protection.at_least("blackbox_macos", "same_process_only")
+    assert protection.coverage("blackbox_macos") == "blackbox" and protection.coverage("x") == ""
+    assert protection.WEAKEST == "partial_macos"
 
 
 def test_the_gate_observation_names_the_level():
@@ -59,7 +86,7 @@ def test_a_task_may_not_name_its_verifier_like_a_protected_check(project, verifi
         check_task(task)
 
 
-@pytest.mark.parametrize("value", ["same_process_only", "full", "yes"])
+@pytest.mark.parametrize("value", ["same_process_only", "same_process_only_macos", "full", "yes"])
 def test_an_unknown_strict_level_is_refused(project, value):
     task = TaskSpec(
         "k", "h", "t", "i", project, "a" * 40, ("src/calc.py",), (("v", tuple(VERIFY.split())),),
@@ -97,24 +124,36 @@ def test_strict_mode_keeps_it_from_verified(state, project):
 @pytest.mark.sandbox
 def test_a_protected_verdict_passes_strict_mode(state, project, monkeypatch):
     monkeypatch.setattr(pipeline_judge, "judge_blackbox", fixed(True))
-    out = run(state, project, blackbox=DECLARED, require_protection="partial")
+    out = run(state, project, blackbox=DECLARED, require_protection=protection.WEAKEST)
     assert out["status"] == "VERIFIED" and out["core_status"] == "VERIFIED", out
-    assert out["protection"] == "partial" and "[protection: PASS [partial]]" in out["reason"]
+    assert out["protection"] == PARTIAL and f"[protection: PASS [{PARTIAL}]]" in out["reason"]
+
+
+@pytest.mark.sandbox
+def test_on_macos_a_linux_minimum_is_not_met(state, project, monkeypatch):
+    monkeypatch.setattr(pipeline_judge, "judge_blackbox", fixed(True))
+    monkeypatch.setattr(protection, "on_macos", lambda: True)
+    out = run(state, project, blackbox=DECLARED, require_protection="partial")
+    assert not out["verified"] and out["core_status"] == "FAILED_VERIFICATION", out
+    assert "UNPROTECTED [partial_macos; required partial]" in out["reason"]
+    monkeypatch.setattr(protection, "on_macos", lambda: False)
+    out = run(state, project, blackbox=DECLARED, require_protection="partial")
+    assert out["status"] == "VERIFIED" and out["protection"] == "partial", out
 
 
 @pytest.mark.sandbox
 def test_partial_does_not_meet_a_blackbox_minimum(state, project, monkeypatch):
     monkeypatch.setattr(pipeline_judge, "judge_blackbox", fixed(True))
-    out = run(state, project, blackbox=DECLARED, require_protection="blackbox")
+    out = run(state, project, blackbox=DECLARED, require_protection=protection.FULL + "_macos")
     assert not out["verified"] and out["core_status"] == "FAILED_VERIFICATION", out
-    assert "UNPROTECTED [partial; required blackbox]" in out["reason"]
+    assert f"UNPROTECTED [{PARTIAL}; required blackbox_macos]" in out["reason"]
 
 
 @pytest.mark.sandbox
 def test_without_strict_mode_a_failed_check_still_decides(state, project, monkeypatch):
     monkeypatch.setattr(pipeline_judge, "judge_blackbox", fixed(False))
     out = run(state, project, blackbox=DECLARED)
-    assert not out["verified"] and out["protection"] == "partial", out
+    assert not out["verified"] and out["protection"] == PARTIAL, out
     assert "protection:" not in out["reason"]  # no gate when strict mode is off
 
 
@@ -129,9 +168,11 @@ def test_the_receipt_binding_carries_the_level(state, project, monkeypatch):
         "repo": project, "base": base, "candidate": fix, "allowed_files": ("src/calc.py",),
         "verifiers": (("v", tuple(" ".join(CHECK[0][1]).split())),), "test_commit": test_commit,
     }  # fmt: skip
-    out = verify_candidate(Intake(state), **common, blackbox=DECLARED, require_protection="partial")
+    out = verify_candidate(
+        Intake(state), **common, blackbox=DECLARED, require_protection=protection.WEAKEST
+    )
     assert out["status"] == "VERIFIED", out
-    assert out["binding"]["protection"] == "partial" and out["protection"] == "partial"
+    assert out["binding"]["protection"] == PARTIAL and out["protection"] == PARTIAL
 
 
 def test_a_binding_names_the_level_only_when_protected(project):
@@ -143,8 +184,8 @@ def test_a_binding_names_the_level_only_when_protected(project):
     )
     only = TaskSpec("k", "h", "t", "i", project, "a" * 40, ("src/calc.py",), (), blackbox=DECLARED)
     assert "protection" not in binding_extras(plain, None)
-    assert binding_extras(declared, None)["protection"] == "partial"
-    assert binding_extras(only, None)["protection"] == "blackbox"
+    assert binding_extras(declared, None)["protection"] == PARTIAL
+    assert binding_extras(only, None)["protection"] == protection.level(("blackbox:add",))
 
 
 def test_a_binding_that_names_another_level_stops_the_run(monkeypatch):
@@ -161,7 +202,7 @@ def test_a_binding_that_names_another_level_stops_the_run(monkeypatch):
     with pytest.raises(RuntimeError, match="protection"):
         pipeline_judge.judge_candidate(
             task, (), "d", None, Path("x"), result, (), (None, None), lambda phase: None,
-            binding={"head": "h", "protection": "partial"},
+            binding={"head": "h", "protection": PARTIAL},
         )  # fmt: skip
 
 
@@ -191,7 +232,7 @@ def test_the_cli_reports_the_level(state, project, tmp_path):
         "--import-path",
         "src",
     )
-    assert code == 2 and out["protection"] == "partial", out  # owner mode: the check never passes
+    assert code == 2 and out["protection"] == PARTIAL, out  # owner mode: the check never passes
     assert (
         "BLACKBOX_NEEDS_VERIFIER_ACCOUNT" in out["reason"] and "protection: PASS" in out["reason"]
     )

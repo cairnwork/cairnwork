@@ -234,9 +234,10 @@ the **tree** that ran, and its receipt names the **PR head** (the candidate) as 
   directories prepended to the verifiers' import path, in that order; and `blackbox_commitment`
   (#303), `"sha256:<64 hex>"`, the salted hash of the owner's `--blackbox` declaration (never
   the declaration or its answers).
-  A third, `protection` (#303), is `"partial"` or `"blackbox"`: what a VERIFIED verdict rests on
-  (docs/SECURITY.md, "What a VERIFIED rests on"). It is absent for `"same_process_only"`. A
-  receiver checks it against the required verifier ids in the signed Core request
+  A third, `protection` (#303), is `"partial"` or `"blackbox"`, or on macOS `"partial_macos"` or
+  `"blackbox_macos"`: what a VERIFIED verdict rests on (docs/SECURITY.md, "What a VERIFIED rests
+  on"). It is absent for `"same_process_only"`. A receiver checks it, without the `_macos`
+  suffix, against the required verifier ids in the signed Core request
   (`PROTECTION_LABEL_MISMATCH` when they disagree) and reports it as `assurance.protection`.
 - `"sha256:" + sha256(canonical JSON of binding)` replaces `acceptance_contract.requirements_hash`
   on this path only. Core's response echoes `acceptance_contract_hash`, so the chain binding ->
@@ -289,7 +290,8 @@ to have run with, in order; a receipt without them counts as `[]`) and `blackbox
 (`"sha256:<64 hex>"` or `""`; what `cairnwork-verify --state DIR blackbox-commitment --blackbox
 FILE` prints for the receiver's copy of the declaration; a receipt without one counts as `""`) and
 `protection` (#303, strict mode on the receiver's side): the least level the receiver accepts,
-one of `"same_process_only"`, `"partial"`, `"blackbox"`. A receipt whose level is lower fails
+one of `"same_process_only"`, `"partial_macos"`, `"partial"`, `"blackbox_macos"`, `"blackbox"`
+(a pin without `_macos` accepts only the Linux grade). A receipt whose level is lower fails
 with `UNPROTECTED`; a receipt without the key counts as `"same_process_only"`. Any other key is
 malformed. An unreadable or malformed policy is a usage error (exit
 2). `key_id` must be the key id of `--public-key`, `core_identity` is pinned like
