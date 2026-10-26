@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cairnwork.gitcmd import GitCommandError, run_git
+from cairnwork.import_path_tree import normalize_import_paths
 from cairnwork.issue_task import DEFAULT_TEST_ROOTS, test_target
 
 _OPTIONS = {("-q",), ("-p", "no:cacheprovider")}
@@ -90,7 +91,7 @@ def protected_verifier_inputs(
     shadow a module visible to the verifier's interpreter. Without that evidence,
     such inputs remain protected.
     """
-    import_roots = _normalize_import_paths(import_paths)
+    import_roots = _import_roots(import_paths)
     first_level_units = tuple(
         path for path in paths if _first_level_unit(path, import_roots) is not None
     )
@@ -108,16 +109,8 @@ def protected_verifier_inputs(
     )
 
 
-def _normalize_import_paths(import_paths: tuple[str, ...]) -> tuple[str, ...]:
-    roots = [""]
-    for r in import_paths:
-        cleaned = r.strip()
-        while cleaned.startswith("./"):
-            cleaned = cleaned[2:]
-        cleaned = cleaned.strip("/")
-        if cleaned and cleaned != ".":
-            roots.append(cleaned)
-    return tuple(dict.fromkeys(roots))
+def _import_roots(import_paths: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(("", *normalize_import_paths(import_paths))))
 
 
 # Every suffix Python imports a first-level file by: source, sourceless bytecode and extension
@@ -201,7 +194,7 @@ def _safe_root_modules(
 ) -> set[str]:
     if not paths or repo is None or base_commit is None:
         return set()
-    import_roots = _normalize_import_paths(import_paths)
+    import_roots = _import_roots(import_paths)
     units = []
     for path in paths:
         info = _first_level_unit(path, import_roots)
