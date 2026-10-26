@@ -79,6 +79,39 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
   a dedicated location such as `/var/lib/cairnwork` (or `$XDG_STATE_HOME` set outside the masked
   trees), not under a masked directory.
 
+### What a VERIFIED rests on (#303)
+
+**Boundary.** Cairnwork guarantees tamper resistance only for acceptance observations that are
+obtained across an isolation boundary and judged independently by a trusted process. A PASS from
+an arbitrary pytest test that runs in the same process as the candidate's code carries no such
+guarantee: candidate code imported by the test can change what the test reads or compares
+(`sys.modules`, import hooks, `sys.path`, an `__eq__` that always holds), and no pytest-level rule
+in that process can rule it out.
+
+Today the only protected observation is a declared blackbox check (`cairnwork-verify --blackbox`,
+#303): the owner holds the answers, the candidate's function runs in the sandbox under the verifier
+account with the inputs only, and the owner compares. Core's definition of VERIFIED is unchanged,
+so a verdict can still be VERIFIED on same-process tests alone. It is never silent about it: every
+`cairnwork-verify` output has `protection`, the level of the verifier ids Core was asked to
+require (`cairnwork/protection.py`):
+
+- `"blackbox"`: every required observation is a declared blackbox check;
+- `"partial"`: some are, the rest (pytest verifiers, P2P) are same-process;
+- `"same_process_only"`: none are;
+- `""`: Core was never asked (refused or uncomparable).
+
+A receipt with deferred tests (v0.2) records the level in its binding (docs/ATTESTATION.md) and the
+receiver checks it against the signed Core request. A v0.1 receipt (no deferred tests) has no
+binding: its level is what `protection.level` gives for the request's `required_verifier_ids`.
+
+**Strict mode** (off by default): `cairnwork-verify run --require-protection` asks for at least
+`"partial"` (without `--blackbox` it is refused before anything runs, error `UNPROTECTED`), and the
+Python API takes `require_protection="partial"` or `"blackbox"`. Core is then asked for one more
+observation, `protection`, which passes only when the level is met, so an unprotected run is not
+VERIFIED (`protection: VERIFICATION_INCOMPLETE: UNPROTECTED [...]` in the reason). A receiver asks
+for the same with its policy's `protection` key (`UNPROTECTED`). Verifier ids `blackbox:*` and
+`protection` are reserved for this.
+
 ### The dedicated verifier account (Linux P4, Issue #84)
 
 **Run adversarial or untrusted third-party code on Linux only under the dedicated verifier

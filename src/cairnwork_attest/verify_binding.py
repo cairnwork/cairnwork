@@ -36,6 +36,7 @@ from cairnwork.core_request import change_manifest
 from cairnwork.deferred_tests import OVERLAY_RULE, TestCommitRejected, overlay_tree
 from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.notary_verify import binding_hash
+from cairnwork_attest import binding_extras
 from cairnwork_attest.binding_extras import KEYS, binding_problem, pin_problem, policy_problem
 from cairnwork_attest.keys import KeyFileError, keyid, load_public_key_pem
 from cairnwork_attest.record import AttestError, _digest, parse_strict_json
@@ -179,12 +180,10 @@ def verify_bound(
         err = _check_response_verified(ctx.predicate, pin)
         if err is not None:
             return err
-    return VerifyResult(
-        ok=True,
-        code="OK",
-        statement=statement,
-        assurance=_assurance(full, pinned=policy is not None),
-    )
+    assurance = _assurance(full, pinned=policy is not None)
+    # #303: what the verdict rests on, already checked against Core's required ids (pin_problem)
+    assurance["protection"] = binding_extras.recorded_protection(binding)
+    return VerifyResult(ok=True, code="OK", statement=statement, assurance=assurance)
 
 
 def _keyid_of(public_key_pem: Path) -> str:

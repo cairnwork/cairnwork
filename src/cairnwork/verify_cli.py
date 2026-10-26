@@ -4,6 +4,7 @@
         --allowed-file F [...] --verifier CMD [...] [--test-commit SHA] \\
         [--import-path DIR ...]    # src layout: DIR joins the verifiers' import path (#283)
         [--blackbox FILE]          # the owner's function-level checks and answers (#303)
+        [--require-protection]     # strict mode: not VERIFIED unless protected (protection.py)
     cairnwork-verify --state DIR blackbox-commitment --blackbox FILE   # for a receiver's policy
     cairnwork-verify --state DIR import-tests --repo-path P --bundle FILE
         # keep a deferred test commit in the private store (deferred_store.py), not on a remote
@@ -11,7 +12,11 @@
 
 Prints one JSON object. Exit codes for ``run``: 0 verified; 2 refused, uncomparable or not
 verified (``status`` says which: REFUSED, UNCOMPARABLE or FAILED; #234 added UNCOMPARABLE, so a
-caller that switches on REFUSED must handle it); 3 usage error; 1 internal error.
+caller that switches on REFUSED must handle it); 3 usage error; 1 internal error. ``protection``
+says what a verdict rests on (protection.py): ``partial`` when declared blackbox checks are among
+the required observations, ``same_process_only`` when there are none ("" when Core was never asked).
+With ``--require-protection`` an unprotected run is not VERIFIED, and without ``--blackbox`` it is
+refused before anything runs (error UNPROTECTED).
 """
 
 from __future__ import annotations
@@ -23,7 +28,7 @@ import sys
 from pathlib import Path
 from typing import Any, NoReturn
 
-from cairnwork import blackbox
+from cairnwork import blackbox, protection
 from cairnwork.blackbox_exec import account_can_read
 from cairnwork.deferred_tests import TestCommitRejected
 from cairnwork.intake import Intake, IntakeRefused
@@ -85,6 +90,8 @@ def _run(intake: Intake, args) -> dict[str, Any]:
         declared = blackbox.load(path) if path is not None else None
     except blackbox.BlackboxRejected as exc:
         raise TaskRejected(exc.code, str(exc)) from exc
+    if args.require_protection and path is None:  # strict mode could never be met: burn nothing
+        raise TaskRejected(protection.UNPROTECTED_CODE, "--require-protection needs --blackbox")
     account = intake.verifier_account() if path is not None else None
     if path is not None and account is not None and account_can_read(account, path):
         raise TaskRejected(
@@ -100,6 +107,7 @@ def _run(intake: Intake, args) -> dict[str, Any]:
         test_commit=args.test_commit,
         import_paths=tuple(args.import_path),
         blackbox=declared,
+        require_protection=protection.PARTIAL if args.require_protection else "",
     )
 
 
@@ -121,6 +129,7 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--test-commit", default="")
     run.add_argument("--import-path", action="append", default=[])
     run.add_argument("--blackbox", default=None)  # "" is a path that cannot be opened, not "none"
+    run.add_argument("--require-protection", action="store_true")  # strict mode (#303)
     return parser
 
 
