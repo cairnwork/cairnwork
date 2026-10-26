@@ -50,12 +50,17 @@ class Backend(Protocol):
         write_roots: tuple[Path, ...],
         home: Path | None = None,
         mask_home_credentials: bool = True,
+        allow_ipc: bool = True,
     ) -> Policy:
         """Default-deny policy; raises SandboxError for unsafe or too-broad roots.
 
         ``mask_home_credentials`` masks the launching user's home credentials; pass False when
         the sandbox runs as a different account (the dedicated verifier uid), which cannot reach
         that home and does not need to (the uid boundary denies it). See bwrap.build_policy.
+
+        ``allow_ipc`` False denies named IPC (POSIX semaphores and shared memory, SysV IPC) where
+        the backend shares it between runs; the blackbox run passes it (#311). A backend whose every
+        run already has its own IPC namespace may ignore it (bwrap).
         """
         ...
 

@@ -111,6 +111,7 @@ def _run_in(declaration, repo, commit, checkout, python, timeout, attempt_id, ac
             read_roots=(*pytest_config.interpreter_roots(python), private / "guard"),
             write_roots=(checkout.parent, run_dir),
             mask_home_credentials=account is None,
+            allow_ipc=False,  # #311: no named IPC (semaphores, shm, SysV) in the blackbox run
         )
         _write_new(profile_path, profile.text.encode())
         argv = [python, "-P", "-m", MODULE]

@@ -378,7 +378,11 @@ class BwrapBackend:
         write_roots: tuple[Path, ...],
         home: Path | None = None,
         mask_home_credentials: bool = True,
+        allow_ipc: bool = True,
     ) -> Policy:
+        # allow_ipc is ignored (#311): --unshare-all gives every run its own IPC namespace (SysV,
+        # POSIX message queues) and --dev a fresh /dev, so /dev/shm (POSIX semaphores and shared
+        # memory) is a new tmpfs per run. Nothing named outlives the run or is shared with another.
         return build_policy(read_roots, write_roots, home, mask_home_credentials)
 
     def wrap(self, argv: list[str], policy_path: Path) -> list[str]:
