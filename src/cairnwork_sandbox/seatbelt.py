@@ -166,9 +166,10 @@ def build_profile(
 ) -> Profile:
     """Default-deny profile: reads from system + read_roots, writes to write_roots only.
 
-    ``allow_ipc`` False (the blackbox run, #311) drops the semaphore rule and denies every IPC
-    operation, so the run can neither create nor open a named semaphore, POSIX shared memory or
-    an existing SysV object. What no profile closes on macOS: these namespaces are global, a
+    ``allow_ipc`` False (the blackbox run, #311) drops the semaphore rule, so deny-by-default
+    refuses every IPC operation: the run can neither create nor open a named semaphore, POSIX
+    shared memory or an existing SysV object. The trailing ``(deny ipc*)`` only states that; the
+    dropped rule is what does it. What no profile closes on macOS: these namespaces are global, a
     lookup of an absent name fails (ENOENT) before the sandbox is asked (EPERM), and creating a
     new SysV object is not mediated, so whether a name or key exists stays observable
     (docs/SECURITY.md, #316)."""
@@ -259,8 +260,9 @@ class SeatbeltBackend:
     ) -> Policy:
         # Seatbelt is default-deny (allow-list): the owner's home is unreadable whether or not
         # the explicit credential denies are present, and they mount nothing, so there is no
-        # EPERM under the dedicated account. The flag is accepted for the Backend protocol and
-        # intentionally ignored — macOS behaviour is unchanged on either path.
+        # EPERM under the dedicated account. mask_home_credentials is accepted for the Backend
+        # protocol and intentionally ignored (macOS behaviour is unchanged on either path);
+        # allow_ipc is used (#311).
         return build_profile(read_roots, write_roots, home, allow_ipc)
 
     def wrap(self, argv: list[str], policy_path: Path) -> list[str]:
