@@ -1,7 +1,8 @@
 """``cairnwork-verify``: judge a commit made elsewhere (see verify.py).
 
     cairnwork-verify --state DIR run --repo-path P --base SHA --candidate SHA \\
-        --allowed-file F [...] --verifier CMD [...] [--test-commit SHA]
+        --allowed-file F [...] --verifier CMD [...] [--test-commit SHA] \\
+        [--import-path DIR ...]    # src layout: DIR joins the verifiers' import path (#283)
     cairnwork-verify --state DIR import-tests --repo-path P --bundle FILE
         # keep a deferred test commit in the private store (deferred_store.py), not on a remote
     cairnwork-verify --state DIR cleanup      # after a crashed run, before ``recover``
@@ -80,6 +81,7 @@ def _run(intake: Intake, args) -> dict[str, Any]:
         allowed_files=tuple(args.allowed_file),
         verifiers=verifiers,
         test_commit=args.test_commit,
+        import_paths=tuple(args.import_path),
     )
 
 
@@ -98,6 +100,7 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--allowed-file", action="append", required=True)
     run.add_argument("--verifier", action="append", required=True)
     run.add_argument("--test-commit", default="")
+    run.add_argument("--import-path", action="append", default=[])
     return parser
 
 
