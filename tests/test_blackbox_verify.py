@@ -100,3 +100,32 @@ def test_the_receiver_gets_the_commitment_from_its_own_copy(state, tmp_path):
     declared = declaration(tmp_path)
     code, out = cli(state, "blackbox-commitment", "--blackbox", str(declared))
     assert code == 0 and out == {"blackbox_commitment": blackbox.load(declared).commitment()}
+
+
+@pytest.mark.sandbox
+def test_methods_raises_and_floats_run_through_the_sandbox(state, helper_project, tmp_path):
+    """The new kinds through cairnwork-verify's real run (as the owner, so never a pass)."""
+    import json
+    import secrets
+
+    from test_blackbox_kinds import ACCOUNT, ACCOUNT_CHECK, MEAN, MEAN_CHECK
+
+    path = tmp_path / "kinds.json"
+    path.write_text(
+        json.dumps({"salt": secrets.token_hex(32), "checks": [ACCOUNT_CHECK, MEAN_CHECK]})
+    )
+    path.chmod(0o600)
+    wrong = ACCOUNT.replace("self.balance += amount", "self.balance = amount") + MEAN.replace(
+        "return scale * sum(values) / len(values)",
+        "return round(scale * sum(values) / len(values), 3)",
+    )
+    base = base_of(helper_project)
+    for source, acct, mean in ((ACCOUNT + MEAN, 1, 3), (wrong, 0, 2)):
+        sha = candidate(helper_project, base, {"src/calc.py": source + CANDIDATES["correct"]})
+        out = verify(
+            state, helper_project, base, sha, "--import-path", "src", "--blackbox", str(path)
+        )[1]
+        assert out["status"] == "FAILED" and not out["verified"], out
+        for check, matched, total in (("acct", acct, 1), ("mean", mean, 3)):
+            want = f"blackbox:{check}: VERIFICATION_INCOMPLETE: BLACKBOX_NEEDS_VERIFIER_ACCOUNT"
+            assert f"{want} [matched {matched}/{total}]" in out["reason"], out["reason"]
