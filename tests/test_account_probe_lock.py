@@ -8,6 +8,8 @@ the conftest hook with a stand-in account class, so they need neither sudo nor t
 
 import contextlib
 import getpass
+import multiprocessing
+from pathlib import Path
 
 import conftest
 import pytest
@@ -98,3 +100,40 @@ def test_an_unknown_user_is_not_locked_or_probed(monkeypatch):
     _collect(monkeypatch, _fake_account(events, user="cairnwork-no-such-user-247"), [item])
     assert events == []
     assert any("cairnwork-verifier" in r for r in _skip_reasons(item))
+
+
+def _hold(root, ready, release):
+    with va.VerifierAccount(root=Path(root)).exclusive():
+        ready.set()
+        release.wait(30)
+
+
+def test_a_lock_held_by_another_process_keeps_the_probe_out(tmp_path, monkeypatch):
+    """The real lock, held by a live process standing in for another session's run: the probe
+    waits and then skips as busy, starting nothing as the account; once released, it probes."""
+    probed = []
+
+    class Account(va.VerifierAccount):  # the real exclusive() on a private lock root
+        def __init__(self):
+            super().__init__(user=getpass.getuser(), root=tmp_path)
+
+        def available(self, python=None):
+            probed.append(True)
+            return True
+
+    monkeypatch.setattr(conftest, "ACCOUNT_PROBE_LOCK_SECONDS", 0.3)
+    ctx = multiprocessing.get_context("spawn")
+    ready, release = ctx.Event(), ctx.Event()
+    holder = ctx.Process(target=_hold, args=(str(tmp_path), ready, release))
+    holder.start()
+    try:
+        assert ready.wait(20)
+        busy = _Item("verifier_account")
+        _collect(monkeypatch, Account, [busy])
+        assert probed == [] and any("busy" in r for r in _skip_reasons(busy))
+    finally:
+        release.set()
+        holder.join(20)
+    free = _Item("verifier_account")
+    _collect(monkeypatch, Account, [free])
+    assert probed == [True] and _skip_reasons(free) == []
