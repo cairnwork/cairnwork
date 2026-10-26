@@ -42,6 +42,7 @@ from cairnwork.deferred_tests import (
     never_seen,
 )
 from cairnwork.gitcmd import OID, GitCommandError, run_git
+from cairnwork.import_path_tree import ImportPathError, require_plain_dirs
 from cairnwork.intake import Intake, IntakeRefused
 from cairnwork.issue_task import check_verify_import_paths
 from cairnwork.notary_verify import binding_hash
@@ -90,7 +91,9 @@ def verify_candidate(
     test_roots = tuple(intake.config()["test_roots"])
     try:
         check_verify_import_paths(list(import_paths), test_roots)
-    except ValueError as exc:
+        if import_paths:
+            require_plain_dirs(repo, base, import_paths)
+    except (ValueError, ImportPathError) as exc:
         raise TaskRejected("BAD_IMPORT_PATH", str(exc)) from exc
     task = TaskSpec(
         f"verify-{secrets.token_hex(8)}", "verify", "verify", "", repo, base,
