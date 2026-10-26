@@ -222,3 +222,19 @@ def test_run_verifiers_checks_the_candidate_tree(repo, tmp_path):
             import_paths=("lib",),
         )
     assert exc.value.code == "BAD_IMPORT_PATH"
+
+
+@pytest.mark.parametrize(("tracked", "entry"), [(";", ";"), ("`", "`")])
+def test_require_plain_dirs_decomposes_tree_names(repo, tracked, entry):
+    run_git(repo, "config", "core.precomposeunicode", "false")
+    target = repo / "_target"
+    target.write_text("tests")
+    blob = run_git(repo, "hash-object", "-w", str(target)).strip()
+    target.unlink()
+    run_git(repo, "update-index", "--add", "--cacheinfo", "120000", blob, tracked)
+    run_git(repo, "commit", "-q", "-m", "add decomposable symlink")
+    commit = run_git(repo, "rev-parse", "HEAD").strip()
+    assert tracked in run_git(repo, "ls-tree", "-z", "--name-only", commit)
+    with pytest.raises(ImportPathError) as exc:
+        require_plain_dirs(repo, commit, (entry,))
+    assert exc.value.code == "BAD_IMPORT_PATH"

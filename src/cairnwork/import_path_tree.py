@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import unicodedata
 from pathlib import Path
 
 from cairnwork.gitcmd import GitCommandError, run_git
@@ -25,6 +26,11 @@ def _normalize_paths(paths: tuple[str, ...] | list[str]) -> tuple[str, ...]:
         if cleaned and cleaned != ".":
             roots.append(cleaned)
     return tuple(dict.fromkeys(roots))
+
+
+def _name_key(name: str) -> str:
+    """APFS compares names after Unicode decomposition: U+037E opens as ``;``."""
+    return unicodedata.normalize("NFD", unicodedata.normalize("NFD", name).casefold())
 
 
 def require_plain_dirs(repo: Path, commit: str, paths: tuple[str, ...] | list[str]) -> None:
@@ -50,7 +56,7 @@ def require_plain_dirs(repo: Path, commit: str, paths: tuple[str, ...] | list[st
                         continue
                     meta, name = entry.split("\t", 1)
                     mode = meta.split(" ", 1)[0]
-                    if name.casefold() == segment.casefold():
+                    if _name_key(name) == _name_key(segment):
                         matches.append((mode, name))
             except (GitCommandError, OSError, ValueError, subprocess.SubprocessError) as exc:
                 raise ImportPathError(f"Failed to inspect import path {path!r}: {exc}") from exc
