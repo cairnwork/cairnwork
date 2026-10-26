@@ -33,12 +33,13 @@ def test_fixture(tmp_path):
 
 @pytest.fixture
 def proj(tmp_path):
-    (tmp_path / "src/pkg").mkdir(parents=True)
-    (tmp_path / "src/pkg/__init__.py").write_text("")
-    (tmp_path / "src/pkg/core.py").write_text("def add(a, b):\n    pass\ndef half(x):\n    pass\n")
-    (tmp_path / "tests").mkdir()
-    (tmp_path / "tests/test_a.py").write_text(TESTS)
-    return tmp_path
+    root = tmp_path / "proj"
+    (root / "src/pkg").mkdir(parents=True)
+    (root / "src/pkg/__init__.py").write_text("")
+    (root / "src/pkg/core.py").write_text("def add(a, b):\n    pass\ndef half(x):\n    pass\n")
+    (root / "tests").mkdir()
+    (root / "tests/test_a.py").write_text(TESTS)
+    return root
 
 
 def obligations(proj):
@@ -86,7 +87,7 @@ def test_task_coverage_counts_every_obligation_in_the_denominator(proj):
     now = task_coverage(obligations(proj), {"function"})
     assert (now["obligations"], now["protected"]) == (6, 4) and now["exact"]
     assert now["coverage"] == pytest.approx(4 / 6)
-    assert now["reasons"] == {"uses fixture(s) …": 1, "needs float (not declarable here)": 1}
+    assert now["reasons"] == {"uses fixtures": 1, "needs a kind this version cannot declare": 1}
     later = task_coverage(obligations(proj), {"function", "float"})
     assert later["protected"] == 5
 
@@ -108,19 +109,19 @@ def test_aggregate_reports_mean_and_fully_protected_share():
 @pytest.mark.parametrize(
     "reason, expected",
     [
-        ("line 4: 'helper' is defined in the test file, not in the project",
-         "… is defined in the test file, not in the project"),
-        ("uses fixture(s): secret_fixture", "uses fixture(s) …"),
+        ("line 4: 'helper' is defined or rebound in the test file, not the project's",
+         "callee is defined or rebound in the test file"),
+        ("uses fixture(s): secret_fixture", "uses fixtures"),
         ("mypkg is not a module of the project (stdlib or a dependency?)",
-         "… is not a module of the project (stdlib or a dependency?)"),
-        ("cannot find 'f' in mypkg by reading its source",
-         "cannot find … in … by reading its source"),
-        ("line 9: with freeze_time(...) is not pytest.raises", "with …(...) is not …"),
+         "callee outside the project"),
+        ("cannot find 'f' in mypkg by reading its source", "callee cannot be resolved statically"),
+        ("line 9: with freeze_time(...) is not pytest.raises", "other with-block"),
         ("line 2: a.b.c is not a top-level name of a project module",
-         "… is not a top-level name of a project module"),
+         "callee is not a top-level function"),
+        ("needs float (not declarable here)", "needs a kind this version cannot declare"),
     ],
 )  # fmt: skip
-def test_reason_categories_carry_no_names(reason, expected):
+def test_reason_categories_are_fixed_labels(reason, expected):
     assert category(reason) == expected
 
 
@@ -148,7 +149,7 @@ def test_cli_writes_report_markdown_and_declaration(proj, tmp_path, capsys):
 
 @pytest.mark.parametrize("argv_tail", [["--kinds", "teleport"], []])
 def test_cli_refuses_unknown_kinds_and_tests_outside_the_project(proj, tmp_path, argv_tail):
-    outside = tmp_path.parent / "elsewhere_test.py"
+    outside = tmp_path / "elsewhere_test.py"
     outside.write_text("def test_x():\n    pass\n")
     target = str(proj / "tests/test_a.py") if argv_tail else str(outside)
     with pytest.raises(SystemExit) as exc:

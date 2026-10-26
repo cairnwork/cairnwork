@@ -132,7 +132,7 @@ class Imports:
     def __init__(self, tree: ast.Module):
         self.names: dict[str, tuple[str, ...]] = {}
         self.local_defs: set[str] = set()
-        for node in tree.body:
+        for node in tree.body:  # in order: a later binding replaces an import
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     if alias.asname:
@@ -140,11 +140,26 @@ class Imports:
                     else:
                         top = alias.name.split(".")[0]
                         self.names[top] = ("module", top)
+                    self.local_defs.discard(alias.asname or alias.name.split(".")[0])
             elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
                 for alias in node.names:
                     self.names[alias.asname or alias.name] = ("from", node.module, alias.name)
-            elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
-                self.local_defs.add(node.name)
+                    self.local_defs.discard(alias.asname or alias.name)
+            else:
+                for name in _bound_names(node):
+                    self.names.pop(name, None)
+                    self.local_defs.add(name)
+
+
+def _bound_names(node: ast.stmt) -> list[str]:
+    """Names a module-level statement binds (relative imports included: test helpers)."""
+    if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+        return [node.name]
+    if isinstance(node, ast.ImportFrom):
+        return [a.asname or a.name for a in node.names]
+    return [
+        n.id for n in ast.walk(node) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)
+    ]
 
 
 def dotted(node: ast.expr) -> list[str] | None:
@@ -164,7 +179,7 @@ def resolve_callee(func: ast.expr, imports: Imports, project: Project) -> Target
         raise Refused("the call target is not a plain name or dotted name")
     head, *rest = parts
     if head in imports.local_defs:
-        raise Refused(f"{head!r} is defined in the test file, not in the project")
+        raise Refused(f"{head!r} is defined or rebound in the test file, not the project's")
     bound = imports.names.get(head)
     if bound is None:
         raise Refused(f"{head!r} is not imported at the top of the test file (builtin or local)")

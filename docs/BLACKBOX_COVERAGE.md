@@ -57,13 +57,29 @@ the reason it is refused. The shapes it reads:
 - parametrize tables, including stacked ones and `pytest.param`. Literal assignments in the test
   and in the module are resolved.
 
-Anything else refuses the whole test, with the reason. That covers fixtures (autouse ones
-included), setup hooks, skip/xfail marks, other decorators, non-literal values, tuples, sets,
-bytes, calls whose result is never checked, control flow, `match=`, helpers defined in the test
-file, and modules that are not the project's. `--kinds` chooses which kinds count as protected.
-The default is what this version declares: `function`, meaning top-level functions with JSON
-values and no floats. `--declaration` writes the protected function cases as a new file, mode
-0600, with a fresh salt. It checks the file first with `cairnwork.blackbox.parse`.
+Anything else refuses the whole test, with the reason. The reasons fall into three groups.
+
+- **Things that run around the test.**
+  - Fixtures, including autouse fixtures and their params.
+  - Setup and teardown hooks.
+  - Any mark except `parametrize`; `filterwarnings` is one example.
+  - Other decorators.
+  - pytest hooks or `pytest_plugins` in the test module or a conftest.
+  - Module-level code that runs at import time: calls, attribute or item assignments, compound statements.
+  - Project pytest configuration that applies to every test: `filterwarnings = error`, `usefixtures`, `required_plugins`, or `addopts` that loads plugins or changes warnings.
+- **Values the blackbox cannot carry.**
+  - Values that are not literals.
+  - Tuples, sets and bytes.
+  - A name that is rebound in the test.
+  - A list or dict passed to several calls, because one call may change it.
+- **Shapes the tool cannot read.**
+  - Calls whose result is never checked.
+  - Control flow.
+  - `match=`.
+  - Helpers defined, or imports rebound, in the test file.
+  - Modules that are not the project's.
+
+`--kinds` chooses which kinds count as protected. The default is what this version declares: `function`, meaning top-level functions with JSON values and no floats. `--declaration` writes the protected function cases as a new file, mode 0600, with a fresh salt. It checks the file first with `cairnwork.blackbox.parse`. The reason categories in the coverage output are fixed labels, so they never carry a project's names or values.
 
 ## Review every draft before declaring it
 
@@ -75,8 +91,6 @@ values and no floats. `--declaration` writes the protected function cases as a n
 - Once a case is declared, remove its answers from the deferred and visible tests that the
   candidate's code can read. This matters for #311, and because a candidate can also copy the
   expected logic out of such tests.
-- The static count is exact for literal tables. When parametrize values are not static, the test
-  counts once and `count_exact` is false. The count is then a lower bound: use pytest's own
-  collected count for the denominator where you have it.
-- An autouse fixture can change what a test sees, so it refuses every test it applies to. If the
-  owner has checked that the fixture does not matter, the owner can still declare those cases.
+- Wherever the tool cannot know what pytest collects, the count is marked inexact (`count_exact` false) and is a lower bound. That covers parametrize values that are not literals, collection hooks, collection options in the configuration, tests defined under `if` or by assignment, and classes whose bases are defined elsewhere. Use pytest's own collected count for the denominator where you have it. Plugins installed in the environment are not visible to a static reader.
+- Test ids number parametrized cases by index (`test[0]`), not by pytest's generated ids.
+- Anything that runs around a test refuses it, because it can change what the test sees. That includes an autouse fixture, a hook, a mark or the configuration. If the owner has checked that it does not matter, the owner can still declare those cases.

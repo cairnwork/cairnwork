@@ -19,6 +19,7 @@ from typing import Any
 from .literals import Refused
 from .obligations import collect
 from .resolve import Imports, Project
+from .scope import pytest_config
 from .shapes import drafts_for
 
 KINDS_NOW = frozenset({"function"})  # what cairnwork.blackbox declares at this version
@@ -112,7 +113,7 @@ def analyze_file(test_file: Path, project_root: Path, source_roots: list[Path]) 
     project = Project(source_roots)
     imports, env = Imports(tree), module_env(tree)
     out: list[Obligation] = []
-    for item in collect(tree, rel, conftests):
+    for item in collect(tree, rel, conftests, pytest_config(project_root)):
         refusal, cases = item.refusal, []
         if refusal is None:
             try:

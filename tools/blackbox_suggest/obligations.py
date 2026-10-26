@@ -4,10 +4,13 @@ The coverage denominator (#303) is fixed before any candidate runs and includes 
 protected, so this module counts the test ids pytest would collect (module functions, methods of
 ``Test*`` classes and ``unittest.TestCase`` subclasses, each parametrized case, the product of
 stacked ``parametrize`` decorators and fixture ``params``) by reading the file, never importing it.
-Where a count cannot be known statically (parametrize values that are not literals) the test still
-counts once, refused, and ``exact`` is False so the caller can say the count is a lower bound.
-Anything that makes a test depend on more than its own body (fixtures, autouse fixtures, setup
-hooks, skip/xfail marks, other decorators) refuses the item here, with the reason.
+Where a count cannot be known statically (parametrize values that are not literals, collection
+hooks, tests defined under ``if``, classes with bases from elsewhere) the test still counts once,
+refused, and ``exact`` is False so the caller can say the count is a lower bound. Anything that
+makes a test depend on more than its own body refuses the item here, with the reason: fixtures
+(autouse ones and their params included), setup hooks, any mark but ``parametrize``, other
+decorators, pytest hooks or plugins, and module-level code that runs when pytest imports the test
+module or a conftest.
 """
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 from .resolve import dotted
+from .scope import import_time
 
 SETUP_HOOKS = {
     "setup_module",
@@ -39,7 +43,6 @@ CLASS_HOOKS = {
     "setup",
     "teardown",
 }
-REFUSING_MARKS = {"skip", "skipif", "xfail", "usefixtures"}
 
 
 @dataclass
@@ -63,7 +66,24 @@ class Fixtures:
     """Fixture definitions visible to the file: name -> number of params (None: not static)."""
 
     params: dict[str, int | None] = field(default_factory=dict)
+    deps: dict[str, list[str]] = field(default_factory=dict)
     autouse: list[str] = field(default_factory=list)
+
+    def count(self, names: list[str]) -> tuple[int, bool]:
+        """Cases these fixtures add, through the fixtures they request in turn."""
+        seen: set[str] = set()
+        todo = list(names)
+        count, exact = 1, True
+        while todo:
+            name = todo.pop()
+            if name in seen or name == "request":
+                continue
+            seen.add(name)
+            n = self.params.get(name, 1)
+            exact = exact and n is not None
+            count *= n or 1
+            todo += self.deps.get(name, [])
+        return count, exact
 
 
 def _mark(node: ast.expr) -> tuple[str, ast.Call | None] | None:
@@ -112,11 +132,14 @@ def fixtures_of(trees: list[ast.Module]) -> Fixtures:
                 spec = _fixture_spec(func)
                 if spec is None:
                     continue
-                if "params" in spec:
-                    p = spec["params"]
+                p = spec.get("params")
+                if p is None:
+                    found.params[func.name] = 1  # a later definition overrides an earlier one
+                else:
                     found.params[func.name] = (
                         len(p.elts) if isinstance(p, ast.List | ast.Tuple) else None
-                    )  # noqa: E501
+                    )
+                found.deps[func.name] = [a.arg for a in func.args.args if a.arg != "self"]
                 if func is node and is_autouse(func):
                     found.autouse.append(func.name)
     return found
@@ -151,7 +174,8 @@ def parametrize(call: ast.Call, consts: dict[str, ast.expr]) -> list[Param] | No
         return None
     indirect = any(k.arg == "indirect" for k in call.keywords)
     if not values.elts:
-        return [Param({}, "empty parametrize: collected as one skipped test")]
+        empty: dict[str, ast.expr] = {n: ast.Constant(None) for n in names}  # bound: no fixture
+        return [Param(empty, "empty parametrize: collected as one skipped test")]
     return [_param(names, elt, indirect) for elt in values.elts]
 
 
@@ -183,7 +207,7 @@ def _marks_of(decorators: list[ast.expr], extra: list[ast.expr]) -> tuple[list, 
             refusal = refusal or f"decorated with {name} (not a plain test)"
         elif mark[0] == "parametrize" and mark[1] is not None:
             calls.append(mark[1])
-        elif mark[0] in REFUSING_MARKS:
+        else:
             refusal = refusal or f"marked {mark[0]}"
     return calls, refusal
 
@@ -198,40 +222,77 @@ def _pytestmark(body: list[ast.stmt]) -> list[ast.expr]:
     return []
 
 
-def collect(tree: ast.Module, path: str, conftests: list[ast.Module]) -> list[Item]:
-    """Every test id pytest would collect from tree (path is how ids are spelt)."""
+def collect(
+    tree: ast.Module, path: str, conftests: list[ast.Module], config: tuple[str | None, bool]
+) -> list[Item]:
+    """Every test id pytest would collect from tree (path is how ids are spelt); config is the
+    project's pytest configuration verdict (reason, count_known)."""
     fixtures = fixtures_of([*conftests, tree])
     consts = _module_lists(tree)
     module_marks = _pytestmark(tree.body)
     names = {n.name for n in tree.body if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)}
-    base = None
+    base, known = config
+    for module in [*conftests, tree]:
+        reason, count_known = import_time(module)
+        base = base or reason
+        known = known and count_known
     if fixtures.autouse:
-        base = f"autouse fixture {fixtures.autouse[0]} is in effect"
+        base = base or f"autouse fixture {fixtures.autouse[0]} is in effect"
     elif names & SETUP_HOOKS:
-        base = f"module setup hook {sorted(names & SETUP_HOOKS)[0]}"
+        base = base or f"module setup hook {sorted(names & SETUP_HOOKS)[0]}"
+    auto_count, auto_exact = fixtures.count(fixtures.autouse)
+    known = known and auto_exact
     items: list[Item] = []
     classes = {n.name: n for n in tree.body if isinstance(n, ast.ClassDef)}
+    ctx = Ctx(classes, module_marks, consts, fixtures, auto_count)
     for node in tree.body:
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name.startswith(
             "test"
         ):
-            items += _expand(node, f"{path}::{node.name}", [], module_marks, consts, fixtures, base)
-        elif isinstance(node, ast.ClassDef) and _is_test_class(node):
-            items += _class_items(node, classes, path, module_marks, consts, fixtures, base)
+            items += _expand(node, f"{path}::{node.name}", [], ctx, base)
+        elif isinstance(node, ast.ClassDef):
+            found, class_known = _class_items(node, path, [], ctx, base)
+            items += found
+            known = known and class_known
+    for item in items:
+        item.exact = item.exact and known
     return items
 
 
-def _is_test_class(node: ast.ClassDef) -> bool:
-    if any((dotted(b) or [""])[-1] == "TestCase" for b in node.bases):
+@dataclass
+class Ctx:
+    classes: dict[str, ast.ClassDef]
+    module_marks: list[ast.expr]
+    consts: dict[str, ast.expr]
+    fixtures: Fixtures
+    auto_count: int
+
+
+def _is_testcase(node: ast.ClassDef, classes: dict[str, ast.ClassDef], depth: int = 0) -> bool:
+    for b in node.bases:
+        if (dotted(b) or [""])[-1] == "TestCase":
+            return True
+        if isinstance(b, ast.Name) and b.id in classes and b.id != node.name and depth < 10:
+            if _is_testcase(classes[b.id], classes, depth + 1):
+                return True
+    return False
+
+
+def _unknown_bases(node: ast.ClassDef, classes: dict[str, ast.ClassDef]) -> bool:
+    """A base defined elsewhere may bring tests (or make this a TestCase) we cannot see."""
+    for b in node.bases:
+        parts = dotted(b) or [""]
+        if parts[-1] in ("object", "TestCase") or (isinstance(b, ast.Name) and b.id in classes):
+            continue
         return True
-    has_init = any(isinstance(n, ast.FunctionDef) and n.name == "__init__" for n in node.body)
-    return node.name.startswith("Test") and not has_init
+    return False
 
 
 def _methods(node: ast.ClassDef, classes: dict[str, ast.ClassDef], depth: int = 0) -> dict:
+    """Methods as Python resolves them: the class's own, then its bases left to right."""
     found: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
     if depth < 10:
-        for b in node.bases:
+        for b in reversed(node.bases):  # earlier bases win, as in the MRO
             if isinstance(b, ast.Name) and b.id in classes and b.id != node.name:
                 found.update(_methods(classes[b.id], classes, depth + 1))
     for n in node.body:
@@ -240,46 +301,56 @@ def _methods(node: ast.ClassDef, classes: dict[str, ast.ClassDef], depth: int = 
     return found
 
 
-def _class_items(node, classes, path, module_marks, consts, fixtures, base) -> list[Item]:
+def _class_items(node: ast.ClassDef, prefix: str, outer: list, ctx: Ctx, base):
+    """(items, count_known) of a class and the test classes nested in it."""
+    classes = ctx.classes
+    unittest = _is_testcase(node, classes)
+    has_init = any(isinstance(n, ast.FunctionDef) and n.name == "__init__" for n in node.body)
     methods = _methods(node, classes)
+    if not unittest and (not node.name.startswith("Test") or has_init):
+        return [], not (
+            _unknown_bases(node, classes) and any(m.startswith("test") for m in methods)
+        )
+    known = not _unknown_bases(node, classes)
     hooks = sorted(set(methods) & CLASS_HOOKS)
     autouse = [m.name for m in methods.values() if is_autouse(m)]
     refusal = base or (f"class setup hook {hooks[0]}" if hooks else None)
     refusal = refusal or (f"class autouse fixture {autouse[0]}" if autouse else None)
-    class_marks = [*module_marks, *node.decorator_list, *_pytestmark(node.body)]
+    marks = [*outer, *node.decorator_list, *_pytestmark(node.body)]
+    test_id = f"{prefix}::{node.name}"
     items: list[Item] = []
     for name, func in methods.items():
         if name.startswith("test"):
-            test_id = f"{path}::{node.name}::{name}"
-            items += _expand(func, test_id, class_marks, [], consts, fixtures, refusal, method=True)
-    return items
+            items += _expand(func, f"{test_id}::{name}", marks, ctx, refusal, method=True)
+    for inner in node.body:
+        if isinstance(inner, ast.ClassDef):
+            found, inner_known = _class_items(inner, test_id, marks, ctx, refusal)
+            items += found
+            known = known and inner_known
+    return items, known
 
 
-def _expand(func, test_id, outer, module_marks, consts, fixtures, refusal, *, method=False):
-    calls, mark_refusal = _marks_of(func.decorator_list, [*outer, *module_marks])
+def _expand(func, test_id, outer, ctx: Ctx, refusal, *, method=False) -> list[Item]:
+    calls, mark_refusal = _marks_of(func.decorator_list, [*outer, *ctx.module_marks])
     refusal = refusal or mark_refusal
     if isinstance(func, ast.AsyncFunctionDef):
         refusal = refusal or "async test"
     tables: list[list[Param]] = []
     for call in calls:
-        table = parametrize(call, consts)
+        table = parametrize(call, ctx.consts)
         if table is None:
-            return [
-                Item(test_id, func.lineno, func, {}, "parametrize values are not static", False)
-            ]
+            reason = "parametrize values are not static"
+            return [Item(test_id, func.lineno, func, {}, reason, False)]
         tables.append(table)
     bound = {name for table in tables for p in table for name in p.bindings}
     args = [a.arg for a in [*func.args.posonlyargs, *func.args.args, *func.args.kwonlyargs]]
     if method and args:
         args = args[1:]
     used = [a for a in args if a not in bound]
-    count, exact = 1, True
-    for name in used:
-        n = fixtures.params.get(name, 1)
-        exact = exact and n is not None
-        count *= n or 1
+    count, exact = ctx.fixtures.count(used)
     if used:
         refusal = refusal or f"uses fixture(s): {', '.join(used)}"
+    count *= ctx.auto_count
     return list(_items(func, test_id, tables, count, refusal, exact))
 
 

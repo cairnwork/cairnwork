@@ -66,6 +66,7 @@ class Body:
         self.results: dict[str, ast.Call] = {}
         self.used: set[str] = set()
         self.locals: set[str] = set()
+        self.passed: dict[str, int] = {}  # name -> calls it is passed to
         self.drafts: list[Draft] = []
 
     def run(self, func: ast.FunctionDef | ast.AsyncFunctionDef) -> list[Draft]:
@@ -79,6 +80,9 @@ class Body:
         for obj in self.objects.values():
             if obj.calls == 0:
                 raise Refused("an object is built but no method of it is checked")
+        shared = [n for n, k in self.passed.items() if k > 1 and _mutable(self.env.get(n))]
+        if shared:
+            raise Refused("a list or dict is passed to several calls (one call may change it)")
         if set(self.results) - self.used:
             raise Refused("a call's result is stored but never checked (a side effect)")
         return self.drafts
@@ -104,7 +108,7 @@ class Body:
         if not isinstance(target, ast.Name):
             raise Refused(f"line {stmt.lineno}: assignment to something other than a name")
         name = target.id
-        if name in self.locals:
+        if name in self.locals or name in self.env:  # parametrize and module names included
             raise Refused(f"line {stmt.lineno}: a name is bound twice (state changes in the test)")
         self.locals.add(name)
         if isinstance(value, ast.Call):
@@ -128,6 +132,9 @@ class Body:
             raise Refused(f"{what} use *args")
         if any(k.arg is None for k in call.keywords):
             raise Refused(f"{what} use **kwargs")
+        for node in [*call.args, *(k.value for k in call.keywords)]:
+            for name in {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}:
+                self.passed[name] = self.passed.get(name, 0) + 1
         args = [evaluate(a, self.env, what=what) for a in call.args]
         kwargs = {k.arg: evaluate(k.value, self.env, what=what) for k in call.keywords if k.arg}
         floats = any(v.floats for v in args) or any(v.floats for v in kwargs.values())
@@ -140,7 +147,7 @@ class Body:
         if (
             isinstance(op, ast.Is)
             and isinstance(right, ast.Constant)
-            and right.value in (None, True, False)
+            and (right.value is None or type(right.value) is bool)
         ):
             return self.add(left, {"value": right.value, "compare": "exact"}, line, set())
         if not isinstance(op, ast.Eq):
@@ -277,6 +284,10 @@ class Body:
         raise Refused(
             f"line {line}: a bare call ({name or 'expression'}) is a side effect, not a check"
         )
+
+
+def _mutable(node: ast.expr | None) -> bool:
+    return node is not None and not isinstance(node, ast.Constant | ast.UnaryOp)
 
 
 def _docstring(stmt: ast.stmt) -> bool:

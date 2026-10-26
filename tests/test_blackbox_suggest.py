@@ -158,7 +158,7 @@ def test_fixture_params_multiply_the_count(tmp_path):
         ("def test_v():\n    assert add(1, 1) != 3\n", "NotEq"),
         ("def test_v():\n    assert add(1, 1) == add(2, 0)\n", "not a literal"),
         ("def test_v():\n    assert len([1]) == 1\n", "not imported"),
-        ("def h(x):\n    return x\ndef test_v():\n    assert h(1) == 1\n", "defined in the test"),
+        ("def h(x):\n    return x\ndef test_v():\n    assert h(1) == 1\n", "rebound in the test"),
         ("import json\ndef test_v():\n    assert json.dumps(1) == '1'\n", "not a module of the"),
         ("def test_v():\n    r = add(1, 1)\n    assert add(2, 2) == 4\n", "never checked"),
         ("def test_v():\n    add(1, 1)\n    assert add(2, 2) == 4\n", "side effect"),
@@ -316,13 +316,38 @@ def test_nothing_is_imported_or_run(tmp_path):
     sentinel = tmp_path / "ran"
     side_effect = f"open({str(sentinel)!r}, 'w').write('x')\n"
     extra = {"src/pkg/core.py": side_effect + PKG["src/pkg/core.py"],
-             "src/pkg/__init__.py": side_effect + PKG["src/pkg/__init__.py"],
-             "tests/conftest.py": side_effect}  # fmt: skip
+             "src/pkg/__init__.py": side_effect + PKG["src/pkg/__init__.py"]}  # fmt: skip
     before = set(sys.modules)
-    item = one(tmp_path, side_effect + "def test_v():\n    assert add(1, 2) == 3\n", extra)
+    item = one(tmp_path, "def test_v():\n    assert add(1, 2) == 3\n", extra)
     assert item.protected(KINDS_NOW)
+    extra["tests/conftest.py"] = side_effect
+    item = one(tmp_path, side_effect + "def test_v():\n    assert add(1, 2) == 3\n", extra)
+    assert item.refusal == "module-level statement at import time"
     assert not sentinel.exists()
     assert not {m for m in set(sys.modules) - before if m == "pkg" or m.startswith("pkg.")}
+
+
+@pytest.mark.parametrize(
+    "where, code, reason, exact",
+    [
+        ("tests/conftest.py", "def pytest_generate_tests(metafunc):\n    pass\n",
+         "hook pytest_generate_tests changes what is collected", False),
+        ("tests/conftest.py", "def pytest_configure(config):\n    pass\n",
+         "hook pytest_configure runs around the tests", True),
+        ("tests/conftest.py", "pytest_plugins = ['p']\n", "pytest_plugins loads plugins", True),
+        ("tests/test_x.py", "import pkg\npkg.MODE = 1\n", "attribute or item", True),
+        ("tests/test_x.py", "import os\nos.environ['A'] = '1'\n", "attribute or item", True),
+        ("tests/test_x.py", "from pkg import add\nX = add(1, 2)\n", "call at import time", True),
+        ("tests/test_x.py", "if True:\n    pass\n", "module-level If", False),
+    ],
+)  # fmt: skip
+def test_import_time_code_refuses_every_test_in_its_scope(tmp_path, where, code, reason, exact):
+    body = "def test_v():\n    assert add(1, 2) == 3\n"
+    if where == "tests/test_x.py":
+        item = one(tmp_path, code + body)
+    else:
+        item = one(tmp_path, body, {where: code})
+    assert reason in (item.refusal or "") and item.exact is exact
 
 
 def test_unparsable_test_file_is_one_refused_obligation(tmp_path):

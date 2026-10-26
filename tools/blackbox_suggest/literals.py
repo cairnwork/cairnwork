@@ -89,8 +89,3 @@ def _dict(node: ast.Dict, env: Env, what: str, floats: list[bool], depth: int, s
             raise Refused(f"{what} repeats the dict key {name!r}")
         out[name] = _eval(item, env, what, floats, depth, seen)
     return out
-
-
-def guessable(value: Any) -> bool:
-    """True, False and None can be guessed (blackbox marks such checks low-entropy)."""
-    return value is None or type(value) is bool
