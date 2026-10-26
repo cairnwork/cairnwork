@@ -11,7 +11,6 @@ rules stay small and easy to audit.
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -147,53 +146,6 @@ def _import_name(filename: str) -> str | None:
 def _is_init_file(filename: str) -> bool:
     """A package ``__init__`` in any importable suffix (.py/.pyc/.so…), case-insensitive."""
     return filename.split(".", 1)[0].casefold() == "__init__" and _import_name(filename) is not None
-
-
-def protected_origins(
-    checkout: Path,
-    targets: tuple[str, ...],
-    import_paths: tuple[str, ...] = (),
-    roots: tuple[str, ...] = DEFAULT_TEST_ROOTS,
-) -> dict[str, list[str]]:
-    """Map each importable name under the verifier's test roots and import roots to the real
-    checkout file(s) that carry it, so report_guard's runtime half can refuse a module loaded
-    under a protected name from anywhere else (#290): a planted file, a ``meta_path`` finder or a
-    ``sys.modules`` entry. The real checkout file always has a file origin, so a module of that
-    name whose ``__spec__.origin`` is None or a different path is shadowing. This is the secondary,
-    bar-raising half (an in-process candidate can still set a matching ``origin`` attribute); the
-    tamper_scan rules are the primary check. Keys for a package are the directory name (its
-    ``__init__`` file); for a module file, the file's import name. Values are paths relative to the
-    checkout (so the runtime check holds under an account-mode copy at a different root, and an
-    origin under the checkout but at a different relative path is still shadowing). A file whose
-    resolved path leaves the checkout (a symlink) is skipped."""
-    base = checkout.resolve()
-    prefix = f"{base}{os.sep}"
-    rels = {target.rsplit("/", 1)[0] for target in targets if "/" in target}
-    rels.update(roots)
-    rels.update(root for root in _normalize_import_paths(import_paths) if root)
-    origins: dict[str, list[str]] = {}
-    for rel in sorted(rels):
-        start = (base / rel).resolve()
-        if start != base and not str(start).startswith(prefix):
-            continue  # a rel that escapes the checkout (symlink or ``..``)
-        if not start.is_dir():
-            continue
-        for dirpath, _dirnames, filenames in os.walk(start):  # followlinks=False by default
-            for filename in filenames:
-                if _import_name(filename) is None:
-                    continue
-                try:
-                    real = str((Path(dirpath) / filename).resolve())
-                except OSError:
-                    continue
-                if not real.startswith(prefix):
-                    continue  # the file resolves outside the checkout
-                is_pkg = _is_init_file(filename)
-                key = os.path.basename(dirpath) if is_pkg else _import_name(filename)
-                relpath = real[len(prefix) :]
-                if key is not None and relpath not in origins.setdefault(key, []):
-                    origins[key].append(relpath)
-    return origins
 
 
 def _first_level_unit(

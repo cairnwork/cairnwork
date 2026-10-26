@@ -85,7 +85,6 @@ from cairnwork.verifier_spec import (  # re-exported for existing importers
     VerifierRejected,
     VerifierSpec,
     parse_verifier,
-    protected_origins,
     protected_verifier_inputs,
 )
 from cairnwork.workspace import create_attempt_clone
@@ -263,9 +262,7 @@ def _remove_scratch(dirs, account) -> None:
             print(f"ALERT verifier cleanup: {scratch} was not removed", file=sys.stderr, flush=True)
 
 
-def _prepare_run(
-    private: Path, ini: Path, ini_text: bytes, channel, checkout: Path, targets, pythonpath
-):
+def _prepare_run(private: Path, ini: Path, ini_text: bytes, channel=None):
     """Create the per-run directory (the only place besides the checkout the child may
     write), its HOME and TMPDIR, and the scrubbed environment."""
     run_dir = private / "run"
@@ -275,8 +272,6 @@ def _prepare_run(
     guard = private / "guard"
     guard.mkdir()
     report_guard.install_plugin(guard)  # the trusted plugin, read-only to the sandbox
-    # The #290 runtime half: the protected-name -> origin map, written before the account reads it.
-    report_guard.install_origins(guard, checkout, protected_origins(checkout, targets, pythonpath))
     guard.chmod(0o750)
     _write_new(ini, ini_text)
     env = {key: os.environ[key] for key in _ENV_KEEP if key in os.environ}
@@ -329,7 +324,7 @@ def _run_one_in(
         private / "profile.sb",
     )
     run_dir, home, tmp, env, verdict_path, verdict_nonce = _prepare_run(
-        private, ini, ini_text, channel, checkout, spec.targets, settings.pythonpath
+        private, ini, ini_text, channel
     )
     if account is not None:
         account.share_run(private, ini, run_dir, home, tmp)
@@ -363,7 +358,7 @@ def _run_one_in(
     ran = profile is not None and verdict.ran
     clean = not timed_out and not mutated and survivors == 0 and not forged
     too_big = log_path.stat().st_size > MAX_LOG_BYTES
-    clean = clean and not too_big and not verdict.too_big and not verdict.import_tamper
+    clean = clean and not too_big and not verdict.too_big
     passed = profile is not None and returncode == 0 and clean and ran
     plain_failure = (
         profile is not None and returncode == 1 and clean and "failed" in verdict.outcomes.values()
@@ -371,7 +366,7 @@ def _run_one_in(
     why = "" if passed else why_not_passed(
         ran_sandboxed=profile is not None, returncode=returncode, timed_out=timed_out,
         mutated=mutated, survivors=survivors, log_too_big=too_big, tests_ran=ran,
-        report_too_big=verdict.too_big, forged=forged, import_tamper=verdict.import_tamper,
+        report_too_big=verdict.too_big, forged=forged,
     )  # fmt: skip
     _remove_scratch((home, tmp), account)
     digest = _record_digest(

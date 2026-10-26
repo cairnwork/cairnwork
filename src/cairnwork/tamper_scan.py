@@ -146,9 +146,10 @@ RULES: tuple[Rule, ...] = (
     # an alias (``import sys as s; s.meta_path``) is caught too. Honest code rarely touches these
     # import internals, so a flagged read is an accepted false positive, as for ``pycache_prefix``.
     # This is a higher bar, not a boundary (a name built from strings or a non-.py file still
-    # passes); the runtime origin check in report_guard raises the bar on the same vector, and
-    # ``sys.path`` writes are deliberately not here (an honest src-layout conftest prepends ``src``,
-    # and pytest restores ``tests/`` to ``sys.path[0]`` per module, so a bare prepend loses).
+    # passes; a ``sys.modules`` entry under a non-sensitive key is not reached). A runtime observer
+    # that watches import resolution is tracked separately (Tier-3, out-of-process). ``sys.path``
+    # writes are deliberately not here: an honest src-layout conftest prepends ``src``, and pytest
+    # restores ``tests/`` to ``sys.path[0]`` per module, so a bare prepend loses to pytest.
     _rule("meta_path", r"\bmeta_path\b"),
     _rule("path_hooks", r"\bpath_hooks\b"),
     _rule("path_importer_cache", r"\bpath_importer_cache\b"),
