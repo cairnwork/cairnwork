@@ -43,6 +43,7 @@ from cairnwork.deferred_tests import (
 )
 from cairnwork.gitcmd import OID, GitCommandError, run_git
 from cairnwork.intake import Intake, IntakeRefused
+from cairnwork.issue_task import check_verify_import_paths
 from cairnwork.notary_verify import binding_hash
 from cairnwork.ownership import request_digest
 from cairnwork.p2p import base_env_check, p2p_for
@@ -75,6 +76,7 @@ def verify_candidate(
     allowed_files: tuple[str, ...],
     verifiers: tuple[tuple[str, tuple[str, ...]], ...],
     test_commit: str = "",
+    import_paths: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """``verified`` is true only for a Core verdict bound to what was judged: the candidate, or
     with deferred tests the tree that ran (candidate plus tests) and its ``binding`` (#229), whose
@@ -82,11 +84,18 @@ def verify_candidate(
     could not be compared; ``uncomparable`` says why, Core is never asked). The account precheck
     runs before the test commit is burned; ``tests_consumed`` says whether the test commit is now
     used up (a retry needs a new one). Raises TaskRejected for malformed input and IntakeRefused
-    when drained or the mirror cannot be used."""
+    when drained or the mirror cannot be used. ``import_paths`` (#283, as the Issue pipeline's) are
+    directories prepended to the verifiers' import path for a src-layout repo; BAD_IMPORT_PATH
+    when one is malformed or is, or is inside, a test root. The state config's are not read."""
+    test_roots = tuple(intake.config()["test_roots"])
+    try:
+        check_verify_import_paths(list(import_paths), test_roots)
+    except ValueError as exc:
+        raise TaskRejected("BAD_IMPORT_PATH", str(exc)) from exc
     task = TaskSpec(
         f"verify-{secrets.token_hex(8)}", "verify", "verify", "", repo, base,
         allowed_files, verifiers, test_commit=test_commit,
-        test_roots=tuple(intake.config()["test_roots"]), test_store=intake.test_store(),
+        test_roots=test_roots, test_store=intake.test_store(), import_paths=import_paths,
         p2p_mode=intake.config()["p2p_selection"],
         p2p_budget=intake.config()["p2p_time_budget_seconds"],
     )  # fmt: skip
