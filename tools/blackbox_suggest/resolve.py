@@ -110,7 +110,9 @@ def _defined(tree: ast.Module, module: str, name: str, package: bool):
             for alias in node.names:
                 if (alias.asname or alias.name) == name:
                     found = ("import", _absolute(module, node, package), alias.name)
-        elif isinstance(node, ast.Assign) and any(_is_name(t, name) for t in node.targets):
+        elif (isinstance(node, ast.Assign) and any(_is_name(t, name) for t in node.targets)) or (
+            isinstance(node, ast.AnnAssign) and _is_name(node.target, name)
+        ):
             found = (
                 ("import", module, node.value.id)
                 if isinstance(node.value, ast.Name)

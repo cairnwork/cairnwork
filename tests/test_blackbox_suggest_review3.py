@@ -243,3 +243,26 @@ def test_a_local_class_shadowing_a_builtin_exception_is_not_the_builtin(tmp_path
     (item,) = run(tmp_path, body)
     assert not any(c["expected"].get("raises", {}).get("module") == "builtins" for c in item.cases)
     assert not item.protected(ALL_KINDS)
+
+
+# Gemini cross-model review, round 5.
+
+
+def test_an_unseen_base_through_a_local_base_still_counts(tmp_path):
+    body = """
+        import unittest.mock
+        from pkg.core import f
+        class Base(unittest.mock.NonCallableMock):
+            pass
+        class TestMine(Base):
+            def test_foo(self):
+                assert f(2) == 2
+    """
+    found = run(tmp_path, body)
+    assert found and not any(o.protected(KINDS_NOW) or o.exact for o in found)
+
+
+def test_a_callee_rebound_by_an_annotated_assignment_is_refused(tmp_path):
+    files = {"src/pkg/core.py": "def f(x):\n    return x\nf: object = None\n"}
+    (item,) = run(tmp_path, PLAIN, files)
+    assert not item.protected(KINDS_NOW)

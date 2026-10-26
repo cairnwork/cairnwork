@@ -269,9 +269,7 @@ def collect(tree: ast.Module, path: str, conftests: list[ast.Module], scope: Sco
             known = known and class_known
     if not items and not known:  # tests may come from a hook or plugin defined elsewhere
         items.append(Item(f"{path}::<unseen>", 1, _UNSEEN, refusal=UNSEEN, exact=False))
-    for item in items:
-        item.exact = item.exact and known
-    return items
+    return [replace(item, exact=item.exact and known) for item in items]
 
 
 UNSEEN = "tests here come from code the reader cannot see (count unknown)"
@@ -305,11 +303,13 @@ def _is_testcase(node: ast.ClassDef, classes: dict[str, ast.ClassDef], depth: in
     return False
 
 
-def _unknown_bases(node: ast.ClassDef, classes: dict[str, ast.ClassDef]) -> bool:
-    """A base defined elsewhere may bring tests (or make this a TestCase) we cannot see."""
+def _unknown_bases(node: ast.ClassDef, classes: dict[str, ast.ClassDef], depth: int = 0) -> bool:
+    """A base defined elsewhere, here or through a local base, may bring tests or hooks."""
     for b in node.bases:
-        parts = dotted(b) or [""]
-        if parts[-1] in ("object", "TestCase") or (isinstance(b, ast.Name) and b.id in classes):
+        local = classes.get(b.id) if isinstance(b, ast.Name) and b.id != node.name else None
+        if local is not None and depth < 10 and not _unknown_bases(local, classes, depth + 1):
+            continue
+        if local is None and (dotted(b) or [""])[-1] in ("object", "TestCase"):
             continue
         return True
     return False
@@ -339,7 +339,7 @@ def _class_items(node: ast.ClassDef, prefix: str, outer: list, ctx: Ctx, base):
     if not known and (node.name.startswith("Test") or any(m.startswith("test") for m in methods)):
         return [unseen], False  # a base defined elsewhere may bring tests: never leave it out
     if not unittest and (not node.name.startswith("Test") or has_init):
-        return [], True
+        return [], known
     hooks = sorted(set(methods) & CLASS_HOOKS)
     autouse = [m.name for m in methods.values() if is_autouse(m)]
     refusal = base or (f"class setup hook {hooks[0]}" if hooks else None)
