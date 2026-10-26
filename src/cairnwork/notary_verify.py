@@ -57,6 +57,12 @@ def _is_verified(
     return all(expected[key] is not None and echoed.get(key) == expected[key] for key in _HASH_KEYS)
 
 
+def nonempty_fields(**fields: Any) -> dict[str, Any]:
+    """Optional request and binding keys (#292): present only when set, so a request or binding
+    without them stays byte-identical (and so do its digest and binding_hash)."""
+    return {key: value for key, value in fields.items() if value}
+
+
 def binding_hash(binding: dict[str, Any]) -> str:
     """The requirements_hash an external candidate's contract carries for its binding (#229)."""
     return _digest(binding)

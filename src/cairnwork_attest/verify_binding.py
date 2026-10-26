@@ -18,8 +18,8 @@ Two modes, chosen by whether the receiver holds the test commit:
 The policy is the receiver's own configuration (load_policy), never shipped by the submitter or
 read from the receipt. Checks run in a fixed order and the first failure is reported: signature
 (verify.py, plus the policy's key id), shape, policy, binding-hash chain, head, base, test source,
-tree (full) or head-tree (confidential), Core verdict. Full mode writes the rebuilt tree objects
-(trees only, no refs) into the receiver's repository.
+pinned optional keys (binding_extras), tree (full) or head-tree (confidential), Core verdict. Full
+mode writes the rebuilt tree objects (trees only, no refs) into the receiver's repository.
 """
 
 from __future__ import annotations
@@ -36,6 +36,7 @@ from cairnwork.core_request import change_manifest
 from cairnwork.deferred_tests import OVERLAY_RULE, TestCommitRejected, overlay_tree
 from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.notary_verify import binding_hash
+from cairnwork_attest.binding_extras import KEYS, binding_problem, pin_problem, policy_problem
 from cairnwork_attest.keys import KeyFileError, keyid, load_public_key_pem
 from cairnwork_attest.record import AttestError, _digest, parse_strict_json
 from cairnwork_attest.verify_response import VerifyResult, _check_response_verified, _fail
@@ -44,7 +45,7 @@ from cairnwork_protocol import acceptance_contract_hash, change_manifest_hash
 KNOWN_RULES = (OVERLAY_RULE,)
 _BINDING_KEYS = {"rule", "base", "head", "test_commit", "test_paths", "executed_tree", "verifiers"}
 _REQUIRED_POLICY_KEYS = {"rule", "test_commit", "core_identity", "key_id"}
-_OPTIONAL_POLICY_KEYS = {"require_full", "test_roots"}
+_OPTIONAL_POLICY_KEYS = {"require_full", "test_roots"} | KEYS
 _POLICY_KEYS = _REQUIRED_POLICY_KEYS | _OPTIONAL_POLICY_KEYS
 _OID = re.compile(r"^[0-9a-f]{40}$")
 _KEYID = re.compile(r"^[0-9a-f]{64}$")
@@ -103,7 +104,7 @@ def _policy_problem(policy: Any) -> str:
             parts = r[:-1].split("/")
             if any(p in ("", ".", "..") for p in parts):
                 return f"invalid test root {r!r}: cannot contain empty or relative parts"
-    return ""
+    return policy_problem(policy)
 
 
 def _oid(value: Any) -> bool:
@@ -167,7 +168,7 @@ def verify_bound(
         )
     ctx = _Ctx(repo, statement, binding, expected_candidate, expected_base, policy, full)
     checks: tuple[Callable[[_Ctx], VerifyResult | None], ...] = (
-        _chain, _head, _base, _test_source, _tree if full else _head_tree,
+        _chain, _head, _base, _test_source, pin_problem, _tree if full else _head_tree,
     )  # fmt: skip
     for check in checks:
         err = check(ctx)
@@ -207,8 +208,8 @@ def _shape(statement: dict[str, Any]) -> tuple[dict[str, Any] | None, VerifyResu
     ):
         return None, _fail("STATEMENT_SHAPE", "predicate.request and response must be objects")
     binding = predicate.get("binding")
-    if not isinstance(binding, dict) or set(binding) != _BINDING_KEYS:
-        return None, _fail("STATEMENT_SHAPE", f"binding must have exactly {sorted(_BINDING_KEYS)}")
+    if not isinstance(binding, dict) or not _BINDING_KEYS <= set(binding) <= _BINDING_KEYS | KEYS:
+        return None, _fail("STATEMENT_SHAPE", f"binding must have {sorted(_BINDING_KEYS)} (+opt)")
     if binding["rule"] not in KNOWN_RULES:
         return None, _fail("STATEMENT_SHAPE", f"unknown overlay rule {binding['rule']!r}")
     paths, verifiers = binding["test_paths"], binding["verifiers"]
@@ -220,6 +221,7 @@ def _shape(statement: dict[str, Any]) -> tuple[dict[str, Any] | None, VerifyResu
         or paths != sorted(set(paths))
         or not isinstance(verifiers, list)
         or not all(_verifier_shape(v) for v in verifiers)
+        or binding_problem(binding)
     ):
         return None, _fail("STATEMENT_SHAPE", "binding values have the wrong shape")
     return binding, None
