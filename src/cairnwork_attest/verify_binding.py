@@ -308,7 +308,7 @@ def _test_source(ctx: _Ctx) -> VerifyResult | None:
     if ctx.policy is not None and "test_roots" in ctx.policy:
         roots = tuple(ctx.policy["test_roots"])
         for path in binding["test_paths"]:
-            if not any(path.startswith(r) for r in roots):
+            if not any(path.startswith(r.rstrip("/") + "/") for r in roots):
                 return _fail("TEST_ROOT_VIOLATION", f"test path {path} not under any allowed root")
     if not ctx.full:
         return None
