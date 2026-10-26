@@ -59,14 +59,22 @@ the reason it is refused. The shapes it reads:
 
 Anything else refuses the whole test, with the reason. The reasons fall into three groups.
 
-- **Things that run around the test.**
-  - Fixtures, including autouse fixtures and their params.
-  - Setup and teardown hooks.
-  - Any mark except `parametrize`; `filterwarnings` is one example.
-  - Other decorators.
-  - pytest hooks or `pytest_plugins` in the test module or a conftest.
-  - Module-level code that runs at import time: calls, attribute or item assignments, compound statements.
-  - Project pytest configuration that applies to every test: `filterwarnings = error`, `usefixtures`, `required_plugins`, or `addopts` that loads plugins or changes warnings.
+- **Things that run around the test.** The tool uses allow-lists here, not a list of known dangers.
+  - The test module, every conftest and every test package `__init__.py` above it may hold only inert top-level statements. Allowed are:
+    - docstrings;
+    - imports of pytest, unittest, the standard library or the project; a test helper is not the project;
+    - literal assignments;
+    - `def` and `class` whose decorators, default values and bases call nothing but pytest;
+    - `if TYPE_CHECKING:` imports.
+
+    Anything else refuses every test in its scope. That includes `try` imports, other `if` blocks, hooks and `pytest_plugins`.
+  - Each pytest config file from the test's directory up to the project root (pytest.ini, .pytest.ini, pytest.toml, .pytest.toml, pyproject.toml, tox.ini, setup.cfg) may hold only options known to leave a test's outcome alone. Allowed are:
+    - `filterwarnings` entries other than `error`;
+    - reporting `addopts` (verbosity, tracebacks, coverage reports, `-p no:...`);
+    - markers, paths and logging.
+
+    Any other option refuses the tests. That covers a plugin's own option, `-W`, `-p plugin`, `--cov-fail-under` and `usefixtures`.
+  - Fixtures, including autouse fixtures and their params; setup and teardown hooks; any mark except `parametrize`; other decorators.
 - **Values the blackbox cannot carry.**
   - Values that are not literals.
   - Tuples, sets and bytes.
@@ -91,6 +99,6 @@ Anything else refuses the whole test, with the reason. The reasons fall into thr
 - Once a case is declared, remove its answers from the deferred and visible tests that the
   candidate's code can read. This matters for #311, and because a candidate can also copy the
   expected logic out of such tests.
-- Wherever the tool cannot know what pytest collects, the count is marked inexact (`count_exact` false) and is a lower bound. That covers parametrize values that are not literals, collection hooks, collection options in the configuration, tests defined under `if` or by assignment, and classes whose bases are defined elsewhere. Use pytest's own collected count for the denominator where you have it. Plugins installed in the environment are not visible to a static reader.
+- Wherever the tool cannot know what pytest collects, the count is marked inexact (`count_exact` false) and is a lower bound. That covers parametrize values that are not literals, collection hooks, `pytest_plugins`, collection or selection options in the configuration (`python_files`, `-m`, `-k`, `--ignore`), fixtures defined nowhere visible, tests defined under `if` or by assignment, and classes whose bases are defined elsewhere. Use pytest's own collected count for the denominator where you have it. Plugins installed in the environment are not visible to a static reader.
 - Test ids number parametrized cases by index (`test[0]`), not by pytest's generated ids.
 - Anything that runs around a test refuses it, because it can change what the test sees. That includes an autouse fixture, a hook, a mark or the configuration. If the owner has checked that it does not matter, the owner can still declare those cases.

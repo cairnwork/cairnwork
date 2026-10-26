@@ -124,7 +124,19 @@ class Body:
             return
         self.env[name] = value  # evaluated (or refused) where it is used
 
+    def root(self, name: str) -> str:
+        """The name an alias chain (e = d) ends at: one object under several names."""
+        for _ in range(50):
+            node = self.env.get(name)
+            if not isinstance(node, ast.Name) or node.id == name:
+                return name
+            name = node.id
+        return name
+
     def callee(self, func: ast.expr) -> Target:
+        head = (dotted(func) or [""])[0]
+        if head in self.locals or head in self.env:
+            raise Refused("the called name is rebound in the test or bound by parametrize")
         return resolve_callee(func, self.imports, self.project)
 
     def arguments(self, call: ast.Call, what: str) -> tuple[list[Any], dict[str, Any], bool]:
@@ -133,7 +145,7 @@ class Body:
         if any(k.arg is None for k in call.keywords):
             raise Refused(f"{what} use **kwargs")
         for node in [*call.args, *(k.value for k in call.keywords)]:
-            for name in {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}:
+            for name in {self.root(n.id) for n in ast.walk(node) if isinstance(n, ast.Name)}:
                 self.passed[name] = self.passed.get(name, 0) + 1
         args = [evaluate(a, self.env, what=what) for a in call.args]
         kwargs = {k.arg: evaluate(k.value, self.env, what=what) for k in call.keywords if k.arg}

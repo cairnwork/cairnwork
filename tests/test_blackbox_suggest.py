@@ -148,7 +148,10 @@ def test_fixture_params_multiply_the_count(tmp_path):
             "@pytest.mark.skipif(True, reason='x')\ndef test_v():\n    assert add(1, 1) == 2\n",
             "marked skipif",
         ),
-        ("@given(1)\ndef test_v():\n    assert add(1, 1) == 2\n", "decorated with given"),
+        (
+            "@given(1)\ndef test_v():\n    assert add(1, 1) == 2\n",
+            "module-level decorator runs at import time",
+        ),
         ("async def test_v():\n    assert add(1, 1) == 2\n", "async test"),
         ("def test_v():\n    assert add([1], [2]) == (1, 2)\n", "tuple"),
         ("def test_v():\n    assert add((1,), [2]) == [1, 2]\n", "tuple"),
@@ -322,7 +325,7 @@ def test_nothing_is_imported_or_run(tmp_path):
     assert item.protected(KINDS_NOW)
     extra["tests/conftest.py"] = side_effect
     item = one(tmp_path, side_effect + "def test_v():\n    assert add(1, 2) == 3\n", extra)
-    assert item.refusal == "module-level statement at import time"
+    assert item.refusal == "module-level Expr at import time"
     assert not sentinel.exists()
     assert not {m for m in set(sys.modules) - before if m == "pkg" or m.startswith("pkg.")}
 
@@ -334,7 +337,7 @@ def test_nothing_is_imported_or_run(tmp_path):
          "hook pytest_generate_tests changes what is collected", False),
         ("tests/conftest.py", "def pytest_configure(config):\n    pass\n",
          "hook pytest_configure runs around the tests", True),
-        ("tests/conftest.py", "pytest_plugins = ['p']\n", "pytest_plugins loads plugins", True),
+        ("tests/conftest.py", "pytest_plugins = ['p']\n", "pytest_plugins loads plugins", False),
         ("tests/test_x.py", "import pkg\npkg.MODE = 1\n", "attribute or item", True),
         ("tests/test_x.py", "import os\nos.environ['A'] = '1'\n", "attribute or item", True),
         ("tests/test_x.py", "from pkg import add\nX = add(1, 2)\n", "call at import time", True),

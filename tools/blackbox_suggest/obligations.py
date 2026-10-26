@@ -18,10 +18,9 @@ from __future__ import annotations
 import ast
 import itertools
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from .resolve import dotted
-from .scope import import_time
 
 SETUP_HOOKS = {
     "setup_module",
@@ -43,6 +42,14 @@ CLASS_HOOKS = {
     "setup",
     "teardown",
 }
+
+
+BUILTIN_FIXTURES = {
+    "request", "tmp_path", "tmp_path_factory", "tmpdir", "tmpdir_factory", "monkeypatch",
+    "capsys", "capfd", "capsysbinary", "capfdbinary", "caplog", "recwarn", "pytestconfig",
+    "cache", "record_property", "record_xml_attribute", "record_testsuite_property",
+    "doctest_namespace", "pytester", "testdir", "subtests",
+}  # fmt: skip
 
 
 @dataclass
@@ -69,17 +76,22 @@ class Fixtures:
     deps: dict[str, list[str]] = field(default_factory=dict)
     autouse: list[str] = field(default_factory=list)
 
-    def count(self, names: list[str]) -> tuple[int, bool]:
-        """Cases these fixtures add, through the fixtures they request in turn."""
-        seen: set[str] = set()
+    def count(self, names: list[str], bound: set[str]) -> tuple[int, bool]:
+        """Cases these fixtures add, through the fixtures they request in turn. A name the
+        test's parametrize binds is not a fixture there; a name defined nowhere visible (a
+        plugin's, say) may have params, so the count is then not known."""
+        seen: set[str] = set(bound)
         todo = list(names)
         count, exact = 1, True
         while todo:
             name = todo.pop()
-            if name in seen or name == "request":
+            if name in seen:
                 continue
             seen.add(name)
-            n = self.params.get(name, 1)
+            if name not in self.params:
+                exact = exact and name in BUILTIN_FIXTURES
+                continue
+            n = self.params[name]
             exact = exact and n is not None
             count *= n or 1
             todo += self.deps.get(name, [])
@@ -196,12 +208,21 @@ def _param(names: list[str], elt: ast.expr, indirect: bool) -> Param:
     return Param(dict(zip(names, items, strict=True)), refusal)
 
 
-def _marks_of(decorators: list[ast.expr], extra: list[ast.expr]) -> tuple[list, str | None]:
-    """(parametrize calls, refusal) for a decorator list plus pytestmark entries."""
+def _marks_of(decorators: list[ast.expr], extra: list[ast.expr]):
+    """(parametrize calls, refusal, usefixtures names, count_known) for a decorator list plus
+    pytestmark entries."""
     calls: list[ast.Call] = []
     refusal = None
+    used: list[str] = []
+    known = True
     for deco in [*decorators, *extra]:
         mark = _mark(deco)
+        if mark and mark[0] == "usefixtures":
+            args = mark[1].args if mark[1] else []
+            used += [
+                a.value for a in args if isinstance(a, ast.Constant) and isinstance(a.value, str)
+            ]
+            known = known and all(isinstance(a, ast.Constant) for a in args)
         if mark is None:
             name = ".".join(dotted(deco.func if isinstance(deco, ast.Call) else deco) or ["?"])
             refusal = refusal or f"decorated with {name} (not a plain test)"
@@ -209,7 +230,7 @@ def _marks_of(decorators: list[ast.expr], extra: list[ast.expr]) -> tuple[list, 
             calls.append(mark[1])
         else:
             refusal = refusal or f"marked {mark[0]}"
-    return calls, refusal
+    return calls, refusal, used, known
 
 
 def _pytestmark(body: list[ast.stmt]) -> list[ast.expr]:
@@ -222,29 +243,21 @@ def _pytestmark(body: list[ast.stmt]) -> list[ast.expr]:
     return []
 
 
-def collect(
-    tree: ast.Module, path: str, conftests: list[ast.Module], config: tuple[str | None, bool]
-) -> list[Item]:
-    """Every test id pytest would collect from tree (path is how ids are spelt); config is the
-    project's pytest configuration verdict (reason, count_known)."""
+def collect(tree: ast.Module, path: str, conftests: list[ast.Module], scope: Scope) -> list[Item]:
+    """Every test id pytest would collect from tree (path is how ids are spelt). scope says what
+    the configuration and the imported modules around the test file already decided."""
     fixtures = fixtures_of([*conftests, tree])
     consts = _module_lists(tree)
     module_marks = _pytestmark(tree.body)
     names = {n.name for n in tree.body if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)}
-    base, known = config
-    for module in [*conftests, tree]:
-        reason, count_known = import_time(module)
-        base = base or reason
-        known = known and count_known
+    base, known = scope.reason, scope.known
     if fixtures.autouse:
         base = base or f"autouse fixture {fixtures.autouse[0]} is in effect"
     elif names & SETUP_HOOKS:
         base = base or f"module setup hook {sorted(names & SETUP_HOOKS)[0]}"
-    auto_count, auto_exact = fixtures.count(fixtures.autouse)
-    known = known and auto_exact
     items: list[Item] = []
     classes = {n.name: n for n in tree.body if isinstance(n, ast.ClassDef)}
-    ctx = Ctx(classes, module_marks, consts, fixtures, auto_count)
+    ctx = Ctx(classes, module_marks, consts, fixtures, [*fixtures.autouse, *scope.usefixtures])
     for node in tree.body:
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name.startswith(
             "test"
@@ -260,12 +273,19 @@ def collect(
 
 
 @dataclass
+class Scope:
+    reason: str | None
+    known: bool
+    usefixtures: list[str]
+
+
+@dataclass
 class Ctx:
     classes: dict[str, ast.ClassDef]
     module_marks: list[ast.expr]
     consts: dict[str, ast.expr]
     fixtures: Fixtures
-    auto_count: int
+    always: list[str]  # fixtures every test here requests: autouse, config usefixtures
 
 
 def _is_testcase(node: ast.ClassDef, classes: dict[str, ast.ClassDef], depth: int = 0) -> bool:
@@ -318,20 +338,23 @@ def _class_items(node: ast.ClassDef, prefix: str, outer: list, ctx: Ctx, base):
     refusal = refusal or (f"class autouse fixture {autouse[0]}" if autouse else None)
     marks = [*outer, *node.decorator_list, *_pytestmark(node.body)]
     test_id = f"{prefix}::{node.name}"
+    inner_ctx = replace(ctx, always=[*ctx.always, *autouse])
     items: list[Item] = []
     for name, func in methods.items():
         if name.startswith("test"):
-            items += _expand(func, f"{test_id}::{name}", marks, ctx, refusal, method=True)
+            items += _expand(func, f"{test_id}::{name}", marks, inner_ctx, refusal, method=True)
     for inner in node.body:
         if isinstance(inner, ast.ClassDef):
-            found, inner_known = _class_items(inner, test_id, marks, ctx, refusal)
+            found, inner_known = _class_items(inner, test_id, marks, inner_ctx, refusal)
             items += found
             known = known and inner_known
     return items, known
 
 
 def _expand(func, test_id, outer, ctx: Ctx, refusal, *, method=False) -> list[Item]:
-    calls, mark_refusal = _marks_of(func.decorator_list, [*outer, *ctx.module_marks])
+    calls, mark_refusal, usefixtures, marks_known = _marks_of(
+        func.decorator_list, [*outer, *ctx.module_marks]
+    )
     refusal = refusal or mark_refusal
     if isinstance(func, ast.AsyncFunctionDef):
         refusal = refusal or "async test"
@@ -347,11 +370,10 @@ def _expand(func, test_id, outer, ctx: Ctx, refusal, *, method=False) -> list[It
     if method and args:
         args = args[1:]
     used = [a for a in args if a not in bound]
-    count, exact = ctx.fixtures.count(used)
+    count, exact = ctx.fixtures.count([*used, *usefixtures, *ctx.always], bound)
     if used:
         refusal = refusal or f"uses fixture(s): {', '.join(used)}"
-    count *= ctx.auto_count
-    return list(_items(func, test_id, tables, count, refusal, exact))
+    return list(_items(func, test_id, tables, count, refusal, exact and marks_known))
 
 
 def _items(func, test_id, tables, count, refusal, exact) -> Iterator[Item]:

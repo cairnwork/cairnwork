@@ -1,16 +1,19 @@
-"""What runs around a test besides its own body: module-level code, pytest hooks and plugins, and
-the project's pytest configuration. Any of it can change what a test sees (or what is collected),
-and a blackbox case repeats only the call, so it refuses the tests in its scope. Read statically:
-config files are parsed, never executed.
+"""What runs when pytest imports a test module, a conftest or a test package's ``__init__``.
+
+Any code that runs there can change what every test sees, and a blackbox case repeats only the
+call. So this is an allow-list, not a list of known dangers: a module keeps its tests declarable
+only if every top-level statement is one of a few inert shapes (docstrings; imports of pytest,
+unittest, the standard library or the project; literal assignments; ``def`` and ``class`` whose
+decorators, defaults and bases call nothing but pytest; ``if TYPE_CHECKING:`` imports). Anything
+else refuses every test in its scope, and statements that may define or collect tests mark the
+count inexact. Nothing is executed: the modules are parsed with ``ast``.
 """
 
 from __future__ import annotations
 
 import ast
-import configparser
-import re
-import tomllib
-from pathlib import Path
+import sys
+from collections.abc import Callable
 
 from .resolve import dotted
 
@@ -22,99 +25,110 @@ COUNT_HOOKS = {  # change what is collected
     "pytest_ignore_collect",
     "pytest_collection",
 }
-HARMLESS_HOOKS = {
-    "pytest_addoption",
-    "pytest_report_header",
-    "pytest_assertrepr_compare",
-    "pytest_make_parametrize_id",
-}
-COMPOUND = (ast.If, ast.Try, ast.With, ast.AsyncWith, ast.For, ast.AsyncFor, ast.While, ast.Match)
-COLLECTION_KEYS = ("python_files", "python_classes", "python_functions")
+HARMLESS_HOOKS = {"pytest_addoption", "pytest_report_header", "pytest_assertrepr_compare"}
+PYTEST_HEADS = {"pytest", "mark", "fixture", "param"}
+SAFE_IMPORTS = {"pytest", "unittest", "_pytest"} | set(sys.stdlib_module_names)
+
+
+class Verdict:
+    """The first reason found (None: inert) and whether the count stays known."""
+
+    def __init__(self) -> None:
+        self.reason: str | None = None
+        self.known = True
+
+    def refuse(self, reason: str, *, known: bool = True) -> None:
+        self.reason = self.reason or reason
+        self.known = self.known and known
 
 
 def _calls_outside_pytest(node: ast.AST) -> bool:
     return any(
-        isinstance(n, ast.Call) and (dotted(n.func) or [""])[0] not in ("pytest", "mark")
+        isinstance(n, ast.Call) and (dotted(n.func) or [""])[0] not in PYTEST_HEADS
         for n in ast.walk(node)
     )
 
 
-def import_time(tree: ast.Module) -> tuple[str | None, bool]:
-    """(reason, count_known): code that runs when pytest imports the module (calls, attribute or
-    item assignments, plugins, hooks, compound statements) can change what every test sees, or
-    what is collected."""
-    reason, known = None, True
-    for node in tree.body:
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
-            if node.name in COUNT_HOOKS:
-                reason, known = reason or f"hook {node.name} changes what is collected", False
-            elif node.name.startswith("pytest_") and node.name not in HARMLESS_HOOKS:
-                reason = reason or f"hook {node.name} runs around the tests"
+def import_time(tree: ast.Module, is_project: Callable[[str], bool]) -> tuple[str | None, bool]:
+    """(reason, count_known) for one module that pytest imports before running its tests."""
+    verdict = Verdict()
+    _body(tree.body, verdict, is_project, top=True)
+    return verdict.reason, verdict.known
+
+
+def _body(body: list[ast.stmt], verdict: Verdict, is_project, *, top: bool) -> None:
+    for node in body:
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
+            continue  # docstring or a bare constant
+        if isinstance(node, ast.Pass):
+            continue
+        if isinstance(node, ast.Import | ast.ImportFrom):
+            _import(node, verdict, is_project)
+        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            _function(node, verdict, top=top)
+        elif isinstance(node, ast.ClassDef):
+            _class(node, verdict, is_project)
         elif isinstance(node, ast.Assign | ast.AnnAssign):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            names = [t.id for t in targets if isinstance(t, ast.Name)]
-            if "pytest_plugins" in names:
-                reason = reason or "pytest_plugins loads plugins (fixtures, hooks)"
-            elif len(names) != len(targets):
-                reason = reason or "module-level assignment to an attribute or item"
-            elif node.value is not None and _calls_outside_pytest(node.value):
-                reason = reason or "module-level call at import time"
-            known = known and not any(n.startswith("test") for n in names)  # test_b = test_a
-        elif isinstance(node, COMPOUND):
-            reason = reason or f"module-level {type(node).__name__} at import time"
-            known = False  # it may define tests
-        elif isinstance(node, ast.Expr):
-            if not (isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)):
-                reason = reason or "module-level statement at import time"
-        elif not isinstance(node, ast.Import | ast.ImportFrom | ast.ClassDef):
-            reason = reason or f"module-level {type(node).__name__} at import time"
-    return reason, known
+            _assign(node, verdict)
+        elif isinstance(node, ast.If) and _type_checking(node):
+            continue
+        else:
+            compound = isinstance(node, ast.If | ast.Try | ast.With | ast.For | ast.While)
+            kind = type(node).__name__
+            verdict.refuse(f"module-level {kind} at import time", known=not compound)
 
 
-def pytest_config(root: Path) -> tuple[str | None, bool]:
-    """(reason, count_known) from the project's pytest configuration (the first file pytest
-    would use: pytest.ini, .pytest.ini, pyproject.toml, tox.ini, setup.cfg)."""
-    options = _options(root)
-    if options is None:
-        return "unreadable pytest configuration", False
-    known = not any(key in options for key in COLLECTION_KEYS)
-    text = {k: " ".join(map(str, v)) if isinstance(v, list) else str(v) for k, v in options.items()}
-    if re.search(r"(^|\s|')error\b", text.get("filterwarnings", "")):
-        return "pytest config turns warnings into errors (filterwarnings)", known
-    if text.get("usefixtures", "").strip():
-        return "pytest config applies fixtures to every test (usefixtures)", known
-    if text.get("required_plugins", "").strip():
-        return "pytest config requires plugins", known
-    if re.search(r"(^|\s)(-p|-W|--pythonwarnings|-c|--override-ini|-o)\b", text.get("addopts", "")):
-        return "pytest addopts loads plugins or changes warnings or options", known
-    return None, known
+def _import(node: ast.Import | ast.ImportFrom, verdict: Verdict, is_project) -> None:
+    if isinstance(node, ast.ImportFrom) and node.level:
+        verdict.refuse("module-level relative import of a test helper (it runs at import time)")
+        return
+    names = (
+        [node.module or ""] if isinstance(node, ast.ImportFrom) else [a.name for a in node.names]
+    )
+    for name in names:
+        if name.split(".")[0] not in SAFE_IMPORTS and not is_project(name):
+            verdict.refuse("module-level import of a module outside the project and stdlib")
 
 
-def _options(root: Path) -> dict | None:
-    try:
-        for name in ("pytest.ini", ".pytest.ini"):
-            if (root / name).is_file():
-                return _ini(root / name, ("pytest",)) or {}
-        pyproject = root / "pyproject.toml"
-        if pyproject.is_file():
-            data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-            found = data.get("tool", {}).get("pytest", {}).get("ini_options")
-            if isinstance(found, dict):
-                return found
-        for name, sections in (("tox.ini", ("pytest",)), ("setup.cfg", ("tool:pytest",))):
-            if (root / name).is_file():
-                found = _ini(root / name, sections)
-                if found is not None:
-                    return found
-    except (OSError, ValueError, configparser.Error, UnicodeDecodeError):
-        return None
-    return {}
+def _function(node: ast.FunctionDef | ast.AsyncFunctionDef, verdict: Verdict, *, top: bool):
+    if top and node.name in COUNT_HOOKS:
+        verdict.refuse(f"hook {node.name} changes what is collected", known=False)
+    elif top and node.name.startswith("pytest_") and node.name not in HARMLESS_HOOKS:
+        verdict.refuse(f"hook {node.name} runs around the tests")
+    if any(_calls_outside_pytest(d) or _foreign(d) for d in node.decorator_list):
+        verdict.refuse("module-level decorator runs at import time")
+    if _calls_outside_pytest(node.args) or (node.returns and _calls_outside_pytest(node.returns)):
+        verdict.refuse("module-level default argument runs at import time")
 
 
-def _ini(path: Path, sections: tuple[str, ...]) -> dict | None:
-    parser = configparser.ConfigParser(interpolation=None)
-    parser.read_string(path.read_text(encoding="utf-8"))
-    for section in sections:
-        if parser.has_section(section):
-            return dict(parser.items(section))
-    return None
+def _foreign(decorator: ast.expr) -> bool:
+    target = decorator.func if isinstance(decorator, ast.Call) else decorator
+    return (dotted(target) or [""])[0] not in PYTEST_HEADS
+
+
+def _class(node: ast.ClassDef, verdict: Verdict, is_project) -> None:
+    if node.keywords or any(_calls_outside_pytest(b) for b in node.bases):
+        verdict.refuse("module-level class with a metaclass or computed base")
+    if any(_calls_outside_pytest(d) or _foreign(d) for d in node.decorator_list):
+        verdict.refuse("module-level decorator runs at import time")
+    _body(node.body, verdict, is_project, top=False)
+
+
+def _assign(node: ast.Assign | ast.AnnAssign, verdict: Verdict) -> None:
+    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+    names = [t.id for t in targets if isinstance(t, ast.Name)]
+    if "pytest_plugins" in names:
+        verdict.refuse("pytest_plugins loads plugins (fixtures, hooks)", known=False)
+    elif len(names) != len(targets):
+        verdict.refuse("module-level assignment to an attribute or item")
+    elif node.value is not None and _calls_outside_pytest(node.value):
+        verdict.refuse("module-level call at import time")
+    if any(n.startswith("test") for n in names):  # test_b = test_a is collected too
+        verdict.refuse("a test is defined by assignment", known=False)
+
+
+def _type_checking(node: ast.If) -> bool:
+    """``if TYPE_CHECKING:`` holding only imports: never true at run time."""
+    test = (dotted(node.test) or [""])[-1]
+    only_imports = all(isinstance(s, ast.Import | ast.ImportFrom) for s in node.body)
+    return test == "TYPE_CHECKING" and only_imports and not node.orelse

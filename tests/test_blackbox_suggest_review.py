@@ -82,7 +82,7 @@ def test_not_protected_when_draft_is_not_equivalent(tmp_path, name):
          "warnings into errors"),
         ({"setup.cfg": "[tool:pytest]\nusefixtures = db\n"}, "usefixtures"),
         ({"tox.ini": "[pytest]\naddopts = -p myplugin\n"}, "addopts"),
-        ({"pyproject.toml": '[tool.pytest.ini_options]\nrequired_plugins = ["x"]\n'}, "plugins"),
+        ({"pyproject.toml": '[tool.pytest.ini_options]\nrequired_plugins = ["x"]\n'}, "not known"),
         ({"pyproject.toml": "not toml ["}, "unreadable"),
     ],
 )  # fmt: skip

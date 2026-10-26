@@ -16,10 +16,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .config import pytest_config
 from .literals import Refused
-from .obligations import collect
+from .obligations import Scope, collect
 from .resolve import Imports, Project
-from .scope import pytest_config
+from .scope import import_time
 from .shapes import drafts_for
 
 KINDS_NOW = frozenset({"function"})  # what cairnwork.blackbox declares at this version
@@ -65,20 +66,39 @@ def _parse(path: Path) -> ast.Module:
     return ast.parse(path.read_bytes(), filename=str(path))
 
 
-def conftests_for(test_file: Path, project: Path) -> list[Path]:
-    """conftest.py files pytest would load for test_file: its directory and each parent up to
-    the project root."""
+def conftests_for(test_file: Path, project: Path, name: str = "conftest.py") -> list[Path]:
+    """Files called name that pytest imports for test_file (conftest.py, or a test package's
+    __init__.py): its directory and each parent up to the project root."""
     found: list[Path] = []
     directory = test_file.parent.resolve()
     root = project.resolve()
     while True:
-        candidate = directory / "conftest.py"
+        candidate = directory / name
         if candidate.is_file():
             found.append(candidate)
         if directory == root or root not in directory.parents:
             break
         directory = directory.parent
     return list(reversed(found))
+
+
+def _scope(test_file: Path, root: Path, project: Project, modules: list[ast.Module]) -> Scope:
+    """What the configuration and every module imported around the test file decide."""
+    reason, known, usefixtures = pytest_config(test_file.parent, root)
+    tests_top = test_file.resolve().parent
+
+    def is_project(name: str) -> bool:
+        path = project.module_file(name)
+        if path is None:
+            return False
+        path = path.resolve()  # a test helper that happens to be importable is not the project
+        return tests_top not in path.parents and not {"tests", "test"} & set(path.parts)
+
+    for module in modules:
+        problem, count_known = import_time(module, is_project)
+        reason = reason or problem
+        known = known and count_known
+    return Scope(reason, known, usefixtures)
 
 
 def module_env(tree: ast.Module) -> dict[str, ast.expr]:
@@ -104,16 +124,17 @@ def analyze_file(test_file: Path, project_root: Path, source_roots: list[Path]) 
         tree = _parse(test_file)
     except (SyntaxError, ValueError) as exc:
         return [Obligation(rel, rel, 1, False, f"cannot parse the test file: {exc}", [])]
-    conftests = []
-    for path in conftests_for(test_file, project_root):
-        try:
-            conftests.append(_parse(path))
-        except (SyntaxError, ValueError):
-            return [Obligation(rel, rel, 1, False, "cannot parse a conftest.py", [])]
+    conftests, inits = [], []
+    try:
+        conftests = [_parse(p) for p in conftests_for(test_file, project_root)]
+        inits = [_parse(p) for p in conftests_for(test_file, project_root, "__init__.py")]
+    except (SyntaxError, ValueError):
+        return [Obligation(rel, rel, 1, False, "cannot parse a conftest.py or __init__.py", [])]
     project = Project(source_roots)
+    scope = _scope(test_file, project_root, project, [*inits, *conftests, tree])
     imports, env = Imports(tree), module_env(tree)
     out: list[Obligation] = []
-    for item in collect(tree, rel, conftests, pytest_config(project_root)):
+    for item in collect(tree, rel, conftests, scope):
         refusal, cases = item.refusal, []
         if refusal is None:
             try:
