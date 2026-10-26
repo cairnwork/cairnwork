@@ -155,4 +155,4 @@ def account_can_read(account: VerifierAccount, path: Path) -> bool:
             done = subprocess.run(argv, capture_output=True, timeout=60, check=False)
     except (OSError, subprocess.SubprocessError, VerifierAccountError):
         return True
-    return done.stdout != b"private\n"  # sudo failing also exits 1: only the answer counts
+    return done.returncode != 0 or done.stdout != b"private\n"  # only a clean "private"

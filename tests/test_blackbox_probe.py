@@ -14,11 +14,13 @@ from cairnwork.verifier_account import AccountBusy
 class _Self:
     """Stands in for the account: runs the probe as this user, or a command that fails."""
 
-    def __init__(self, fail=False, busy=False):
-        self.fail, self.busy, self.locked = fail, busy, False
+    def __init__(self, fail=False, busy=False, exit_code=0):
+        self.fail, self.busy, self.locked, self.exit_code = fail, busy, False, exit_code
 
     def wrap(self, argv, profile):
-        return ["/usr/bin/false"] if self.fail else argv
+        if self.fail:
+            return ["/usr/bin/false"]
+        return [*argv[:2], f"{argv[2]}; exit {self.exit_code}", *argv[3:]]
 
     @contextmanager
     def exclusive(self, timeout=None):
@@ -42,6 +44,8 @@ def test_the_account_probe_says_readable_unless_it_heard_private(tmp_path):
     assert account_can_read(broken, tmp_path / "missing.json")  # an error is never "private"
     busy: Any = _Self(busy=True)
     assert account_can_read(busy, tmp_path / "missing.json")  # nor is a lock it could not take
+    failing: Any = _Self(exit_code=1)
+    assert account_can_read(failing, tmp_path / "missing.json")  # "private" from a failed run
 
 
 @pytest.mark.parametrize("readable", [True, False])

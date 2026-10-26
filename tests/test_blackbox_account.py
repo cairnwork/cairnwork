@@ -61,18 +61,26 @@ def test_only_the_correct_fix_passes_its_check(account_state, helper_project, tm
     # child's add is right; only its process outlives the run. Seatbelt cannot reap it, so the run
     # is incomplete; under bwrap it stays in the PID namespace and dies on teardown, so nothing is
     # left and the right answer may pass (as for a verifier: test_verifier_account.py).
+    account = VerifierAccount()
+    with account.exclusive():  # counted while no other run may use the account (#247)
+        assert account.count() == 0  # the sleeper is gone on either backend
+    survivors = "blackbox:add: VERIFICATION_INCOMPLETE: SURVIVORS"
     backend = cairnwork_sandbox.platform_backend()
     if backend is not None and backend.name == "seatbelt":
         assert out["child"]["core_status"] == "FAILED_VERIFICATION", out["child"]
-        assert "blackbox:add: VERIFICATION_INCOMPLETE: SURVIVORS" in out["child"]["reason"]
+        assert survivors in out["child"]["reason"]
+    else:
+        assert out["child"]["status"] == "VERIFIED" or survivors in out["child"]["reason"]
     for name in ("attack", "forge", "finder", "syspath"):  # pytest was fooled, the check was not
         assert "pytest-0" not in out[name]["reason"], out[name]
 
 
 def test_the_account_cannot_read_the_declaration(tmp_path):
     declared = declaration(tmp_path)
-    argv = VerifierAccount().wrap(["/bin/cat", str(declared)], None)
-    done = subprocess.run(argv, capture_output=True, timeout=60, check=False)
+    account = VerifierAccount()
+    with account.exclusive():  # a process started as the account runs under its lock (#247)
+        argv = account.wrap(["/bin/cat", str(declared)], None)
+        done = subprocess.run(argv, capture_output=True, timeout=60, check=False)
     assert done.returncode != 0 and b"salt" not in done.stdout
 
 
