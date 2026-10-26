@@ -337,6 +337,33 @@ def test_the_account_probe_says_readable_unless_it_heard_private(tmp_path):
     assert account_can_read(broken, tmp_path / "missing.json")  # an error is never "private"
 
 
+@pytest.mark.parametrize("readable", [True, False])
+def test_the_cli_refuses_a_declaration_the_account_can_read(
+    tmp_path, monkeypatch, capsys, readable
+):
+    """verify_cli is where the probe runs (a library caller of verify_candidate must probe too)."""
+    from cairnwork import verify_cli
+    from cairnwork.intake import Intake
+
+    declared = private_file(tmp_path, json.dumps(doc()).encode())
+    ran = []
+    monkeypatch.setattr(Intake, "verifier_account", lambda self: "account")
+    monkeypatch.setattr(verify_cli, "account_can_read", lambda account, path: readable)
+    monkeypatch.setattr(
+        verify_cli, "verify_candidate", lambda *a, **k: ran.append(1) or {"verified": True}
+    )
+    argv = ["--state", str(tmp_path), "run", "--repo-path", str(tmp_path), "--base", "b",
+            "--candidate", "c", "--allowed-file", "f", "--verifier", "true",
+            "--blackbox", str(declared)]  # fmt: skip
+    code = verify_cli.main(argv)
+    out = json.loads(capsys.readouterr().out)
+    if readable:
+        assert (code, out["error"], ran) == (2, blackbox.BAD, []), out
+        assert "can read" in out["detail"]
+    else:
+        assert (code, ran) == (0, [1]), out
+
+
 def test_the_output_is_read_only_from_a_small_regular_file(tmp_path):
     from cairnwork.blackbox_exec import _read
 
