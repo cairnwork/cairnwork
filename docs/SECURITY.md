@@ -40,6 +40,27 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
   `(shm withheld: ...)`; not part of `profile.sb`, so no bound digest changes) and multiprocessing targets stay unverifiable (fail
   closed) rather than getting an uncapped tmpfs. Mach IPC and host shared memory remain denied.
 
+  **The blackbox run gets no named IPC (#311).** A declared blackbox check (#303) runs with
+  `allow_ipc=False`: on macOS its profile has no semaphore rule and ends with `(deny ipc*)`, so the
+  run can neither create nor open a named POSIX semaphore (any name, `/mp-` included), POSIX shared
+  memory, or an existing SysV semaphore, segment or queue. Within one verify the blackbox also runs
+  before the verifiers and P2P, the first run of the candidate there, so nothing a pytest phase of
+  the same verify learnt from the tests can be waiting for it. Linux bwrap needs no option: every
+  run has its own IPC namespace (`--unshare-all`) and a fresh `/dev`, so named IPC never outlives
+  or leaves a run.
+
+  **What stays open on macOS: whether a name exists.** These namespaces are global to the host,
+  across users. Opening an absent semaphore name fails with `ENOENT` before the sandbox is asked,
+  a present one with `EPERM`, and creating a new SysV object (`semget`/`shmget`/`msgget` with
+  `IPC_CREAT`) is not mediated by Seatbelt at all, after which its key answers `EEXIST`. So a run
+  can still learn which names or keys exist. Candidate code in an *earlier* verify on the same host
+  (owner mode or account) can leave names that encode what it saw in that verify's tests, and a
+  later blackbox run can read them back bit by bit. No Seatbelt rule we tried closes this (a
+  `syscall-unix` number filter had no effect on these calls on macOS 27, and `_ctypes` and
+  `_multiprocessing` are built into the interpreter). Until it is closed: on macOS, do not let a declaration's answers, or the logic that
+  produces them, appear in the deferred or visible tests of any earlier verify on that host. Linux
+  is not affected. `tests/test_sandbox_ipc.py` pins this residual (#316).
+
   **Deployment note:** a verifier write root or state directory must not live under a masked path
   (a masked credential dir such as `~/.config` or `~/.local/state`, or a masked socket tree such as
   `/run/user`, `/tmp/.X11-unix`, `/run/libvirt`). The tmpfs is applied after the write binds, so
