@@ -53,7 +53,7 @@ def test_declaration_holds_only_todays_kinds_and_parses_with_the_verifiers_parse
     write_declaration(out, draft)
     assert stat.S_IMODE(os.stat(out).st_mode) == 0o600
     parsed = parse(out.read_bytes())
-    assert [(c.module, c.function) for c in parsed.checks] == [("pkg.core", "add")]
+    assert [(c.module, c.name, c.kind) for c in parsed.checks] == [("pkg.core", "add", "function")]
     cases = parsed.checks[0].cases
     assert [c.expected for c in cases] == ["1", "2", "3", "true"]  # no float, no fixture test
     assert len({c.id for c in cases}) == 4

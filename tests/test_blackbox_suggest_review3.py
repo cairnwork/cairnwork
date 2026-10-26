@@ -148,3 +148,31 @@ def test_case_ids_never_repeat():
     taken: set[str] = set()
     ids = [_id(text, taken) for text in ["a", "a", "a", "a-x"] * 5]
     assert len(set(ids)) == len(ids)
+
+
+def test_a_metaclass_in_the_tests_refuses(tmp_path):
+    body = """
+        from pkg.core import f, Registered
+        class Helper(metaclass=Registered):
+            pass
+        def test_a():
+            assert f(2) == 2
+    """
+    (item,) = run(tmp_path, body)
+    assert "metaclass" in (item.refusal or "")
+
+
+def test_usefixtures_by_a_name_keeps_the_count_unknown(tmp_path):
+    body = """
+        import pytest
+        from pkg.core import f
+        NAME = "p"
+        @pytest.fixture(params=[1, 2])
+        def p(request):
+            return request.param
+        @pytest.mark.usefixtures(NAME)
+        def test_a():
+            assert f(2) == 2
+    """
+    found = run(tmp_path, body)
+    assert len(found) == 2 or not all(o.exact for o in found)
