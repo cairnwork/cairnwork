@@ -22,6 +22,7 @@ def run_all(state, project, *extra):
     return out
 
 
+@pytest.mark.sandbox
 def test_without_a_declaration_the_swap_is_a_false_green(state, helper_project):
     """The gap #303 is about, pinned: undeclared pytest tests stay unprotected."""
     out = run_all(state, helper_project)
@@ -30,6 +31,7 @@ def test_without_a_declaration_the_swap_is_a_false_green(state, helper_project):
     assert out["attack"]["status"] == "VERIFIED"
 
 
+@pytest.mark.sandbox
 def test_declared_checks_never_pass_as_the_owner(state, helper_project, tmp_path):
     out = run_all(state, helper_project, "--blackbox", str(declaration(tmp_path)))
     for name, matched in (("correct", 2), ("wrong", 0), ("attack", 0)):
@@ -49,6 +51,7 @@ OWNER_ATTACKS = {
 }
 
 
+@pytest.mark.sandbox
 @pytest.mark.parametrize("name", sorted(ATTACKS))
 def test_attacks_on_the_run_are_never_verified(state, helper_project, tmp_path, name):
     base = base_of(helper_project)

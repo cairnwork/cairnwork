@@ -43,12 +43,12 @@ def test_only_the_correct_fix_passes_its_check(account_state, helper_project, tm
         sha = candidate(helper_project, base, {"src/calc.py": source})
         args = ("--import-path", "src", "--blackbox", str(declared))
         out[name] = verify(account_state, helper_project, base, sha, *args)[1]
-    assert out["correct"]["status"] == "VERIFIED", out["correct"]
+    assert out["correct"]["status"] == "VERIFIED", out["correct"]["reason"]
     assert "blackbox:add: PASS [matched 2/2]" in out["correct"]["reason"]
     for name in ("wrong", "attack", "reader", "forge", "finder", "child", "syspath"):
         assert out[name]["status"] == "FAILED" and out[name]["core_status"] == "FAILED_VERIFICATION"
         want = "VERIFICATION_INCOMPLETE: SURVIVORS" if name == "child" else "MISMATCH [matched 0/2]"
-        assert f"blackbox:add: {want}" in out[name]["reason"], out[name]
+        assert f"blackbox:add: {want}" in out[name]["reason"], (name, out[name]["reason"])
     for name in ("attack", "forge", "finder", "syspath"):  # pytest was fooled, the check was not
         assert "pytest-0" not in out[name]["reason"], out[name]
 

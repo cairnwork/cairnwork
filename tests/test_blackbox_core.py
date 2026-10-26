@@ -47,6 +47,7 @@ def run(state, project) -> dict[str, Any]:
     )  # fmt: skip
 
 
+@pytest.mark.sandbox
 @pytest.mark.parametrize("passed", [False, True], ids=["check-failed", "all-passed"])
 def test_core_decides_with_the_check(state, project, monkeypatch, passed):
     monkeypatch.setattr(pipeline_judge, "judge_blackbox", fixed(passed))
@@ -56,6 +57,7 @@ def test_core_decides_with_the_check(state, project, monkeypatch, passed):
     assert ("MISMATCH" in out["reason"]) is not passed
 
 
+@pytest.mark.sandbox
 def test_a_check_that_never_reaches_core_is_not_verified(state, project, monkeypatch):
     """Simulate a wiring slip: the check passed, but its observation is dropped on the way."""
     monkeypatch.setattr(pipeline_judge, "judge_blackbox", fixed(True))
@@ -111,6 +113,7 @@ def test_a_check_id_that_clashes_with_a_verifier_is_refused(project):
         check_task(task)
 
 
+@pytest.mark.sandbox
 def test_a_declared_check_that_yields_no_verdict_stays_required(state, project, monkeypatch):
     monkeypatch.setattr(pipeline_judge, "judge_blackbox", lambda *a, **k: ((), None))
     out = run(state, project)
