@@ -34,6 +34,7 @@ from cairnwork.deferred_tests import (
 from cairnwork.gitcmd import OID
 from cairnwork.journal import AlreadyDispatched, Journal
 from cairnwork.notary import Notary
+from cairnwork.notary_verify import nonempty_fields
 from cairnwork.ownership import OWNER, InvalidStatusTransition, OwnershipLedger, request_digest
 from cairnwork.p2p import base_env_check, p2p_for
 from cairnwork.p2p_selection import DEFAULT_BUDGET_SECONDS, DIRECT_MODE
@@ -86,7 +87,8 @@ class TaskSpec:
     before_attempt: Callable[[], str] | None = None  # refusal code or ""; asked per attempt
 
     def request(self) -> dict:
-        extra = {"test_commit": self.test_commit} if self.test_commit else {}
+        # #292: import_paths change what the verifiers import
+        extra = nonempty_fields(test_commit=self.test_commit, import_paths=list(self.import_paths))
         return extra | {
             "repo": str(self.repo),
             "title": self.title,
