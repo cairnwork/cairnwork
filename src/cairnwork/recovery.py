@@ -22,6 +22,10 @@ Rules (from Nexus-new's experience, see docs/LESSONS_FROM_NEXUS.md):
   (#189). A FAILED task is then also marked unswept, in the ledger transaction that makes it
   FAILED: it cannot be superseded, so its card cannot be taken over by a new attempt, until
   takeover.supersede has shown the processes gone (#244);
+- macOS withholds the environment of Apple platform binaries (/bin/sh, /bin/sleep), so their
+  marker cannot be seen: such an owner process is killed when its working directory is inside
+  one of the attempt's own run directories (``_cwd_dirs``, proc_cwd, #301). One that changed
+  directory out of them is not found, nor one left after a crash during recovery removed them;
 - settle each task on its own: one bad record is reported, not fatal, and
   recovery is idempotent, so it can run again after a crash during recovery.
 """
@@ -41,6 +45,7 @@ from cairnwork.confined import ATTEMPT_ENV, SWEEP_UNAVAILABLE, confirm_gone, swe
 from cairnwork.journal import Journal, dispatch_mark
 from cairnwork.notary import Notary
 from cairnwork.ownership import OWNER, OwnershipLedger, OwnershipRecord
+from cairnwork.proc_cwd import attempt_dirs
 from cairnwork.reasons import _names
 from cairnwork.verifier_account import VerifierAccount, VerifierAccountError
 from cairnwork.workspace import ATTEMPT_ID, WorkspaceError, remove_attempt_clone
@@ -134,18 +139,20 @@ def _settle(
     worker = None if ran_as in ("", unswept.UNKNOWN_ACCOUNT) else ran_as
 
     mark = dispatch_mark(phases)  # a hidden process older than the attempt is not its own
+    dispatched = [e.detail for e in phases if e.phase == "DISPATCHED" and e.detail]
+    roots = [Path(run_root)]  # the state's run root, and the root this attempt was dispatched under
+    if dispatched and Path(dispatched[-1]) != roots[0]:
+        roots.append(Path(dispatched[-1]))
+    dirs = _cwd_dirs(roots, account, attempt_id)  # before the cleanup below removes them
 
     def look():  # the worker account it ran as, if any (pipeline.py journals it)
-        return sweep_marked(ATTEMPT_ENV, attempt_id, account=worker, dispatched=mark)
+        return sweep_marked(ATTEMPT_ENV, attempt_id, account=worker, dispatched=mark,
+                            cwd_dirs=dirs)  # fmt: skip
 
     first = look()
     swept = confirm_gone(first, look)
     unknown = ran_as == unswept.UNKNOWN_ACCOUNT  # its account's processes cannot be checked
     unchecked = unknown or not swept.gone  # unknown or alive, never "none" (confined.Sweep)
-    dispatched = [e.detail for e in phases if e.phase == "DISPATCHED" and e.detail]
-    roots = [Path(run_root)]  # the state's run root, and the root this attempt was dispatched under
-    if dispatched and Path(dispatched[-1]) != roots[0]:
-        roots.append(Path(dispatched[-1]))
     left = []
     for owner_root in roots:
         _remove_leftovers(owner_root, attempt_id)
@@ -183,6 +190,14 @@ def _settle(
         record.task_id, attempt_id, record.status, new, reason, killed, detail, len(left),
         unchecked,
     )  # fmt: skip
+
+
+def _cwd_dirs(roots, account, attempt_id: str) -> tuple[str, ...]:
+    """The attempt's own run directories (realpaths) under the owner's roots and the verifier
+    account's run root, whose verifier checkouts the owner makes: an owner process whose
+    environment macOS withholds is tied to the attempt when its cwd is inside one (#301)."""
+    extra = [account.run_root] if account is not None else []
+    return tuple(str(d) for d in attempt_dirs([*roots, *extra], attempt_id))
 
 
 def _log_leftovers(path: Path, task_id: str, attempt_id: str, left: list[str]) -> None:
