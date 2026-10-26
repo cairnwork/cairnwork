@@ -62,9 +62,9 @@ Anything else refuses the whole test, with the reason. The reasons fall into thr
 - **Things that run around the test.** The tool uses allow-lists here, not a list of known dangers.
   - The test module, every conftest and every test package `__init__.py` above it may hold only inert top-level statements. Allowed are:
     - docstrings;
-    - imports of pytest, unittest, the standard library or the project; a test helper is not the project;
+    - imports of pytest, unittest, the standard library or the project; a test helper is not the project. Importing a project module runs its top-level code, so a test keeps its draft only if every project module imported around it is one the blackbox runner imports anyway: a drafted module, its parent packages, or what their top-level imports name, transitively;
     - literal assignments;
-    - `def` and `class` whose decorators, default values and bases call nothing but pytest;
+    - `def` and `class` whose decorators, default values and bases call nothing but pytest. A class may not derive from a project class, whose `__init_subclass__` could run. The names `mark`, `fixture` and `param` may not be bound to anything but pytest's;
     - `if TYPE_CHECKING:` imports.
 
     Anything else refuses every test in its scope. That includes `try` imports, other `if` blocks, hooks and `pytest_plugins`.
@@ -79,7 +79,8 @@ Anything else refuses the whole test, with the reason. The reasons fall into thr
   - Values that are not literals.
   - Tuples, sets and bytes.
   - A name that is rebound in the test.
-  - A list or dict passed to several calls, because one call may change it.
+  - A list or dict passed to several calls, because one call may change it. That includes one reached through another name or container (`e = [d]`), and a module-level list or dict, which every test in the module shares.
+  - An assignment whose value runs a call (`_ = [reset()]`).
 - **Shapes the tool cannot read.**
   - Calls whose result is never checked.
   - Control flow.
@@ -99,6 +100,6 @@ Anything else refuses the whole test, with the reason. The reasons fall into thr
 - Once a case is declared, remove its answers from the deferred and visible tests that the
   candidate's code can read. This matters for #311, and because a candidate can also copy the
   expected logic out of such tests.
-- Wherever the tool cannot know what pytest collects, the count is marked inexact (`count_exact` false) and is a lower bound. That covers parametrize values that are not literals, collection hooks, `pytest_plugins`, collection or selection options in the configuration (`python_files`, `-m`, `-k`, `--ignore`), fixtures defined nowhere visible, tests defined under `if` or by assignment, and classes whose bases are defined elsewhere. Use pytest's own collected count for the denominator where you have it. Plugins installed in the environment are not visible to a static reader.
+- Wherever the tool cannot know what pytest collects, the count is marked inexact (`count_exact` false) and is a lower bound. That covers parametrize values that are not literals, collection hooks, `pytest_plugins`, collection or selection options in the configuration (`python_files`, `-m`, `-k`, `--ignore`), fixtures defined nowhere visible, tests defined under `if` or by assignment, and classes whose bases are defined elsewhere. A file whose only tests may come from code the reader cannot see gets one placeholder obligation, marked inexact. Use pytest's own collected count for the denominator where you have it. Plugins installed in the environment are not visible to a static reader.
 - Test ids number parametrized cases by index (`test[0]`), not by pytest's generated ids.
 - Anything that runs around a test refuses it, because it can change what the test sees. That includes an autouse fixture, a hook, a mark or the configuration. If the owner has checked that it does not matter, the owner can still declare those cases.

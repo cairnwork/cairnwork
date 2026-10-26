@@ -310,7 +310,10 @@ def test_submodule_and_relative_reexports_resolve(tmp_path):
             assert deep.other.f() == 1
     """,
     )
-    assert [o.protected(KINDS_NOW) for o in found] == [True, True, True, False]
+    # test_b: the file also imports pkg.sub.deep, which pkg.sub.other does not import, so the
+    # blackbox would skip deep's import-time code (PR 317 review, round 3).
+    assert [o.protected(KINDS_NOW) for o in found] == [True, False, True, False]
+    assert "would not import" in (found[1].refusal or "")
     assert found[0].cases[0]["target"] == {"module": "pkg.sub.deep", "function": "plus"}
     assert found[1].cases[0]["target"] == {"module": "pkg.sub.other", "function": "f"}
 

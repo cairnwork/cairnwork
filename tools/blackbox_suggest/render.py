@@ -93,9 +93,10 @@ def _case_text(case: dict[str, Any]) -> str:
 def _id(text: str, taken: set[str], limit: int = 40) -> str:
     base = _UNSAFE.sub("-", text.lower()).strip("-")[: limit - 9] or "case"
     candidate = base
-    if candidate in taken:
-        digest = hashlib.sha256(f"{text}:{len(taken)}".encode()).hexdigest()[:8]
-        candidate = f"{base}-{digest}"
+    salt = 0
+    while candidate in taken:
+        digest = hashlib.sha256(f"{text}:{len(taken)}:{salt}".encode()).hexdigest()[:8]
+        candidate, salt = f"{base}-{digest}", salt + 1
     taken.add(candidate)
     return candidate
 

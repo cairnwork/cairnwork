@@ -57,6 +57,12 @@ def aggregate(tasks: list[dict[str, Any]]) -> dict[str, Any]:
 # or a line from the project, so aggregates can be published. Unknown reasons become "other".
 CATEGORIES = (
     ("needs ", "needs a kind this version cannot declare"),
+    ("module-level list or dict", "shared mutable argument"),
+    ("would not import", "code runs at import time"),
+    ("derives from a project class", "code runs at import time"),
+    ("takes for pytest's", "code runs at import time"),
+    ("an assignment runs a call", "unchecked call (side effect)"),
+    ("reader cannot see", "tests the reader cannot see"),
     ("autouse fixture", "autouse fixture in effect"),
     ("class autouse fixture", "autouse fixture in effect"),
     ("uses fixture", "uses fixtures"),

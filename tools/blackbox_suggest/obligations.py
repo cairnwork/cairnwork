@@ -22,14 +22,10 @@ from dataclasses import dataclass, field, replace
 
 from .resolve import dotted
 
-SETUP_HOOKS = {
-    "setup_module",
-    "teardown_module",
-    "setup_function",
-    "teardown_function",
-    "setUpModule",
-    "tearDownModule",
-}
+SETUP_HOOKS = {  # setup/teardown: nose style, which older pytest runs around every test
+    "setup", "teardown", "setup_module", "teardown_module", "setup_function",
+    "teardown_function", "setUpModule", "tearDownModule",
+}  # fmt: skip
 CLASS_HOOKS = {
     "setup_method",
     "teardown_method",
@@ -169,9 +165,11 @@ def _module_lists(tree: ast.Module) -> dict[str, ast.expr]:
 
 def parametrize(call: ast.Call, consts: dict[str, ast.expr]) -> list[Param] | None:
     """The cases of one parametrize mark, or None when their number cannot be known."""
-    if len(call.args) < 2:
+    given = {k.arg: k.value for k in call.keywords if k.arg in ("argnames", "argvalues")}
+    given |= dict(zip(("argnames", "argvalues"), call.args, strict=False))
+    names_node, values = given.get("argnames"), given.get("argvalues")
+    if names_node is None or values is None:
         return None
-    names_node, values = call.args[0], call.args[1]
     if isinstance(names_node, ast.Constant) and isinstance(names_node.value, str):
         names = [n.strip() for n in names_node.value.split(",") if n.strip()]
     elif isinstance(names_node, ast.List | ast.Tuple) and all(
@@ -267,9 +265,15 @@ def collect(tree: ast.Module, path: str, conftests: list[ast.Module], scope: Sco
             found, class_known = _class_items(node, path, [], ctx, base)
             items += found
             known = known and class_known
+    if not items and not known:  # tests may come from a base, hook or plugin defined elsewhere
+        items.append(Item(f"{path}::<unseen>", 1, _UNSEEN, refusal=UNSEEN, exact=False))
     for item in items:
         item.exact = item.exact and known
     return items
+
+
+UNSEEN = "tests here come from code the reader cannot see (count unknown)"
+_UNSEEN = ast.FunctionDef("unseen", ast.arguments(), [ast.Pass()], [], None, None, [])
 
 
 @dataclass
@@ -277,6 +281,7 @@ class Scope:
     reason: str | None
     known: bool
     usefixtures: list[str]
+    imports: set[str] = field(default_factory=set)  # project modules imported around the tests
 
 
 @dataclass

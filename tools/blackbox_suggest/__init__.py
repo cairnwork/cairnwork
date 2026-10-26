@@ -94,11 +94,22 @@ def _scope(test_file: Path, root: Path, project: Project, modules: list[ast.Modu
         path = path.resolve()  # a test helper that happens to be importable is not the project
         return tests_top not in path.parents and not {"tests", "test"} & set(path.parts)
 
+    imported: set[str] = set()
     for module in modules:
-        problem, count_known = import_time(module, is_project)
-        reason = reason or problem
-        known = known and count_known
-    return Scope(reason, known, usefixtures)
+        verdict = import_time(module, is_project)
+        reason = reason or verdict.reason
+        known = known and verdict.known
+        imported |= verdict.imports
+    return Scope(reason, known, usefixtures, imported)
+
+
+def _unimported(cases: list[dict[str, Any]], scope: Scope, project: Project) -> str | None:
+    """Refusal when pytest imports a project module the blackbox runner would not: its
+    import-time code (``pkg.core.SCALE = 10``) then changes what the test sees."""
+    drafted = {case["target"]["module"] for case in cases}
+    if scope.imports - project.import_closure(drafted):
+        return "the tests import a project module the blackbox would not import"
+    return None
 
 
 def module_env(tree: ast.Module) -> dict[str, ast.expr]:
@@ -140,6 +151,7 @@ def analyze_file(test_file: Path, project_root: Path, source_roots: list[Path]) 
             try:
                 drafts = drafts_for(item.func, item.bindings, imports, project, env)
                 cases = [d.plain() for d in drafts]
+                refusal = _unimported(cases, scope, project)
             except Refused as exc:
                 refusal = str(exc)
             except RecursionError:

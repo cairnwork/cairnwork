@@ -31,11 +31,14 @@ SAFE_IMPORTS = {"pytest", "unittest", "_pytest"} | set(sys.stdlib_module_names)
 
 
 class Verdict:
-    """The first reason found (None: inert) and whether the count stays known."""
+    """The first reason found (None: inert), whether the count stays known, and the project
+    modules imported (each one's import-time code runs too: see ``imports``)."""
 
     def __init__(self) -> None:
         self.reason: str | None = None
         self.known = True
+        self.imports: set[str] = set()
+        self.project_names: set[str] = set()  # local names bound by those imports
 
     def refuse(self, reason: str, *, known: bool = True) -> None:
         self.reason = self.reason or reason
@@ -49,11 +52,15 @@ def _calls_outside_pytest(node: ast.AST) -> bool:
     )
 
 
-def import_time(tree: ast.Module, is_project: Callable[[str], bool]) -> tuple[str | None, bool]:
-    """(reason, count_known) for one module that pytest imports before running its tests."""
+def import_time(tree: ast.Module, is_project: Callable[[str], bool]) -> Verdict:
+    """What one module that pytest imports before running its tests does at import time.
+
+    Importing a project module runs that module's top-level code as well. That is inert for a
+    blackbox case only if the runner imports the same module anyway; the caller checks this per
+    test against ``verdict.imports``, once the drafted modules are known."""
     verdict = Verdict()
     _body(tree.body, verdict, is_project, top=True)
-    return verdict.reason, verdict.known
+    return verdict
 
 
 def _body(body: list[ast.stmt], verdict: Verdict, is_project, *, top: bool) -> None:
@@ -82,15 +89,29 @@ def _import(node: ast.Import | ast.ImportFrom, verdict: Verdict, is_project) -> 
     if isinstance(node, ast.ImportFrom) and node.level:
         verdict.refuse("module-level relative import of a test helper (it runs at import time)")
         return
-    names = (
-        [node.module or ""] if isinstance(node, ast.ImportFrom) else [a.name for a in node.names]
-    )
+    if isinstance(node, ast.ImportFrom):
+        names = [node.module or ""]
+        bound = {a.asname or a.name: f"{node.module}.{a.name}" for a in node.names}
+    else:
+        names = [a.name for a in node.names]
+        bound = {a.asname or a.name.split(".")[0]: a.name for a in node.names}
     for name in names:
-        if name.split(".")[0] not in SAFE_IMPORTS and not is_project(name):
+        if name.split(".")[0] in SAFE_IMPORTS:
+            continue
+        if not is_project(name):
             verdict.refuse("module-level import of a module outside the project and stdlib")
+            continue
+        verdict.imports.add(name)
+        verdict.project_names |= set(bound)
+    if not isinstance(node, ast.ImportFrom) or node.module not in ("pytest", "_pytest.mark"):
+        if set(bound) & PYTEST_HEADS - {"pytest"} or bound.get("pytest", "pytest") != "pytest":
+            verdict.refuse("an import binds a name this reader takes for pytest's")
+        verdict.imports |= {sub for sub in bound.values() if is_project(sub)}  # from pkg import m
 
 
 def _function(node: ast.FunctionDef | ast.AsyncFunctionDef, verdict: Verdict, *, top: bool):
+    if node.name in PYTEST_HEADS:
+        verdict.refuse("a def binds a name this reader takes for pytest's")
     if top and node.name in COUNT_HOOKS:
         verdict.refuse(f"hook {node.name} changes what is collected", known=False)
     elif top and node.name.startswith("pytest_") and node.name not in HARMLESS_HOOKS:
@@ -109,6 +130,10 @@ def _foreign(decorator: ast.expr) -> bool:
 def _class(node: ast.ClassDef, verdict: Verdict, is_project) -> None:
     if node.keywords or any(_calls_outside_pytest(b) for b in node.bases):
         verdict.refuse("module-level class with a metaclass or computed base")
+    if node.name in PYTEST_HEADS:
+        verdict.refuse("a class binds a name this reader takes for pytest's")
+    if any((dotted(b) or [""])[0] in verdict.project_names for b in node.bases):
+        verdict.refuse("a class in the tests derives from a project class (__init_subclass__)")
     if any(_calls_outside_pytest(d) or _foreign(d) for d in node.decorator_list):
         verdict.refuse("module-level decorator runs at import time")
     _body(node.body, verdict, is_project, top=False)
@@ -117,6 +142,8 @@ def _class(node: ast.ClassDef, verdict: Verdict, is_project) -> None:
 def _assign(node: ast.Assign | ast.AnnAssign, verdict: Verdict) -> None:
     targets = node.targets if isinstance(node, ast.Assign) else [node.target]
     names = [t.id for t in targets if isinstance(t, ast.Name)]
+    if set(names) & PYTEST_HEADS:
+        verdict.refuse("an assignment binds a name this reader takes for pytest's")
     if "pytest_plugins" in names:
         verdict.refuse("pytest_plugins loads plugins (fixtures, hooks)", known=False)
     elif len(names) != len(targets):

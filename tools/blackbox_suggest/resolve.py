@@ -56,6 +56,23 @@ class Project:
     def is_package_module(self, module: str) -> bool:
         return self.module_file(module) is not None
 
+    def import_closure(self, modules: set[str]) -> set[str]:
+        """The project modules that importing modules surely imports: each one, its parent
+        packages, and what their top-level import statements name, transitively. Imports under
+        if/try/def are left out, so this may be too small, never too large."""
+        found: set[str] = set()
+        todo = list(modules)
+        while todo and len(found) < 10000:
+            module = todo.pop()
+            parts = module.split(".")
+            for name in (".".join(parts[: i + 1]) for i in range(len(parts))):
+                tree = self.tree(name)
+                if name in found or tree is None:
+                    continue
+                found.add(name)
+                todo += _imported(tree, name, self.module_file(name))
+        return found
+
     def kind_of(self, module: str, name: str, hops: int = 0) -> tuple[str, str, str]:
         """(kind, defining module, name there): kind is 'function' or 'class', following
         re-exports, star imports and simple aliases."""
@@ -102,6 +119,19 @@ def _defined(tree: ast.Module, module: str, name: str, package: bool):
     if found and found[0] in ("async", "other"):
         raise Refused(f"{name!r} in {module} is not a plain def or class")
     return found
+
+
+def _imported(tree: ast.Module, module: str, path: Path | None) -> list[str]:
+    """Modules named by the top-level import statements of module (submodules included)."""
+    package = path is not None and path.name == "__init__.py"
+    out: list[str] = []
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            out += [a.name for a in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            base = _absolute(module, node, package)
+            out += [base, *(f"{base}.{a.name}" for a in node.names if a.name != "*")]
+    return out
 
 
 def _star_imports(tree: ast.Module, module: str, package: bool) -> list[str]:

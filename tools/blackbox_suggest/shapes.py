@@ -60,8 +60,9 @@ class Obj:
 class Body:
     """Walks one test body under one set of parametrize bindings."""
 
-    def __init__(self, imports: Imports, project: Project, env: Env):
+    def __init__(self, imports: Imports, project: Project, env: Env, module_names=()):
         self.imports, self.project, self.env = imports, project, dict(env)
+        self.module_names = set(module_names)  # one object shared by every test in the module
         self.objects: dict[str, Obj] = {}
         self.results: dict[str, ast.Call] = {}
         self.used: set[str] = set()
@@ -83,6 +84,8 @@ class Body:
         shared = [n for n, k in self.passed.items() if k > 1 and _mutable(self.env.get(n))]
         if shared:
             raise Refused("a list or dict is passed to several calls (one call may change it)")
+        if any(n in self.module_names and _mutable(self.env.get(n)) for n in self.passed):
+            raise Refused("a module-level list or dict is passed to a call (other tests share it)")
         if set(self.results) - self.used:
             raise Refused("a call's result is stored but never checked (a side effect)")
         return self.drafts
@@ -122,6 +125,8 @@ class Body:
             else:
                 self.results[name] = value
             return
+        if any(isinstance(n, ast.Call) for n in ast.walk(value)):  # _ = [reset()] runs reset
+            raise Refused(f"line {stmt.lineno}: an assignment runs a call (setup or side effect)")
         self.env[name] = value  # evaluated (or refused) where it is used
 
     def root(self, name: str) -> str:
@@ -132,6 +137,19 @@ class Body:
                 return name
             name = node.id
         return name
+
+    def reach(self, node: ast.expr) -> set[str]:
+        """Every object an argument reaches by name, through aliases and containers (e = [d])."""
+        found: set[str] = set()
+        todo = [n.id for n in ast.walk(node) if isinstance(n, ast.Name)]
+        while todo and len(found) < 1000:
+            name = self.root(todo.pop())
+            if name not in found:
+                found.add(name)
+                value = self.env.get(name)
+                if value is not None:
+                    todo += [n.id for n in ast.walk(value) if isinstance(n, ast.Name)]
+        return found
 
     def callee(self, func: ast.expr) -> Target:
         head = (dotted(func) or [""])[0]
@@ -145,7 +163,7 @@ class Body:
         if any(k.arg is None for k in call.keywords):
             raise Refused(f"{what} use **kwargs")
         for node in [*call.args, *(k.value for k in call.keywords)]:
-            for name in {self.root(n.id) for n in ast.walk(node) if isinstance(n, ast.Name)}:
+            for name in self.reach(node):
                 self.passed[name] = self.passed.get(name, 0) + 1
         args = [evaluate(a, self.env, what=what) for a in call.args]
         kwargs = {k.arg: evaluate(k.value, self.env, what=what) for k in call.keywords if k.arg}
@@ -312,4 +330,5 @@ def _docstring(stmt: ast.stmt) -> bool:
 
 def drafts_for(func, bindings: Env, imports: Imports, project: Project, module_env: Env):
     """The draft cases of one collected test, or Refused."""
-    return Body(imports, project, {**module_env, **bindings}).run(func)
+    module_names = set(module_env) - set(bindings)
+    return Body(imports, project, {**module_env, **bindings}, module_names).run(func)
