@@ -123,22 +123,23 @@ def _normalize_import_paths(import_paths: tuple[str, ...]) -> tuple[str, ...]:
 def _first_level_unit(
     path: str, import_roots: tuple[str, ...]
 ) -> tuple[str, str, str, bool, str] | None:
+    # APFS is case-insensitive, so the prefix, the ``__init__.py`` filename and its ``.py``
+    # extension are all matched casefolded: Python resolves ``pkg/__init__.py`` from a committed
+    # ``pkg/__INIT__.py`` on this host, so a case-variant must not escape the gate.
     for r in import_roots:
         if not r:
             if "/" not in path and path.endswith(".py"):
                 return (path, r, path[:-3], False, "")
-            if path.count("/") == 1 and path.endswith("/__init__.py"):
+            if path.count("/") == 1 and path.casefold().endswith("/__init__.py"):
                 name = path.split("/")[0]
                 return (path, r, name, True, name)
         else:
             prefix = f"{r}/"
-            # case-insensitive: on APFS SRC/ and src/ are one directory, so a case-variant prefix
-            # must not escape the gate (matches pycache_guard's APFS handling).
             if path.casefold().startswith(prefix.casefold()):
                 rel = path[len(prefix) :]  # prefix is the same length in any case
-                if "/" not in rel and rel.endswith(".py") and rel != "__init__.py":
+                if "/" not in rel and rel.endswith(".py") and rel.casefold() != "__init__.py":
                     return (path, r, rel[:-3], False, "")
-                if rel.count("/") == 1 and rel.endswith("/__init__.py"):
+                if rel.count("/") == 1 and rel.casefold().endswith("/__init__.py"):
                     name = rel.split("/")[0]
                     return (path, r, name, True, f"{r}/{name}")
     return None

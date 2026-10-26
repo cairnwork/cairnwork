@@ -106,3 +106,13 @@ def test_a_case_variant_of_the_import_root_prefix_is_still_protected(repo, path)
     # spells the import-root component in a different case must not escape the shadow gate.
     with pytest.raises(TaskRejected, match="PROTECTED_VERIFIER_INPUT"):
         check_task(task(repo, path))
+
+
+@pytest.mark.parametrize(
+    "path", ["src/colorsys/__INIT__.py", "json/__Init__.py", "src/json/__INIT__.PY"]
+)
+def test_a_case_variant_of_init_py_is_still_a_protected_package(repo, path):
+    # On APFS Python resolves pkg/__init__.py from a committed pkg/__INIT__.py, so a case-variant
+    # __init__ filename (or .PY extension) must still be recognised as a shadowing package.
+    with pytest.raises(TaskRejected, match="PROTECTED_VERIFIER_INPUT"):
+        check_task(task(repo, path))
