@@ -83,3 +83,13 @@ def test_repo_root_module_stays_protected_with_an_import_path(state, srcproject)
     fix = candidate(srcproject, base_of(srcproject), {SRC_FILE: FIX, "helper.py": "X = 1\n"})
     code, out = run(state, srcproject, fix, "--import-path", "src", allowed=(SRC_FILE, "helper.py"))
     assert code == 2 and out["error"] == "PROTECTED_VERIFIER_INPUT"
+
+
+def test_a_shadowing_first_level_file_is_refused_on_the_verify_path(state, srcproject):
+    # cairnwork-verify --import-path src must route import_paths into protected_verifier_inputs
+    # (291 sets TaskSpec.import_paths; #290 passes it through check_task), so a candidate that may
+    # add src/colorsys.py — shadowing stdlib colorsys a protected test could import — is refused
+    # before anything runs.
+    fix = candidate(srcproject, base_of(srcproject), {SRC_FILE: FIX})
+    code, out = run(state, srcproject, fix, "--import-path", "src", allowed=("src/colorsys.py",))
+    assert code == 2 and out["error"] == "PROTECTED_VERIFIER_INPUT", out

@@ -82,6 +82,7 @@ def test_hooks_in_cairnworks_repository_never_run(repo, tmp_path):
         hook = repo / ".git" / "hooks" / name
         hook.write_text(f"#!/bin/sh\ntouch {marker}\n")
         hook.chmod(0o755)
+    git(repo, "config", "core.hooksPath", str(repo / ".git" / "hooks"))
     base = git(repo, "rev-parse", "HEAD")
     clone = create_attempt_clone(repo, base, tmp_path / "attempts", "a1").path
     (clone / "src" / "a.py").write_text("x = 2\n")
@@ -210,6 +211,7 @@ def test_worker_config_commands_never_run(repo, attempt, tmp_path):
         "-m",
         "c",
     )
+    git(clone, "config", "core.hooksPath", str(clone / ".git" / "hooks"))
     marker.unlink(missing_ok=True)
     collect(repo, clone, base)
     assert not marker.exists()
