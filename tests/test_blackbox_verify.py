@@ -60,3 +60,15 @@ def test_attacks_on_the_run_are_never_verified(state, helper_project, tmp_path, 
     assert OWNER_ATTACKS[name] in out["reason"], out["reason"]
     if name != "child":  # pytest alone was fooled; the blackbox check was not
         assert "pytest-0" not in out["reason"]
+
+
+def test_a_declaration_others_can_read_is_refused_before_anything_runs(
+    state, helper_project, tmp_path
+):
+    base = base_of(helper_project)
+    sha = candidate(helper_project, base, {"src/calc.py": CANDIDATES["correct"]})
+    declared = declaration(tmp_path)
+    declared.chmod(0o644)
+    code, out = verify(state, helper_project, base, sha, "--blackbox", str(declared))
+    assert code == 2 and out["error"] == "BAD_BLACKBOX" and "salt" not in out["detail"]
+    assert not (state / "ownership.sqlite").exists()  # prepare() never ran

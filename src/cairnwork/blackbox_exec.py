@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import os
 import stat
+import subprocess
 import sys
 import tempfile
 from contextlib import nullcontext
@@ -140,3 +141,15 @@ def _read(path: Path) -> bytes | None:
             return None
         raw = handle.read(MAX_BYTES + 1)
     return raw if len(raw) <= MAX_BYTES else None
+
+
+def account_can_read(account: VerifierAccount, path: Path) -> bool:
+    """Can the verifier account open path for reading (mode, ACLs and every parent directory)?
+    Asked unconfined, as the account, before any candidate code runs; an error counts as yes."""
+    probe = 'if test -r "$1"; then echo readable; else echo private; fi'
+    argv = account.wrap(["/bin/sh", "-c", probe, "sh", str(path)], None)
+    try:
+        done = subprocess.run(argv, capture_output=True, timeout=60, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return True
+    return done.stdout != b"private\n"  # sudo failing also exits 1: only the answer counts

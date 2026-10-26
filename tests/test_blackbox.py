@@ -69,6 +69,7 @@ def test_a_bad_declaration_is_rejected(raw):
 def test_an_oversized_declaration_is_rejected(tmp_path):
     path = tmp_path / "d.json"
     path.write_bytes(b" " * (blackbox.MAX_BYTES + 1))
+    path.chmod(0o600)
     with pytest.raises(blackbox.BlackboxRejected, match="over"):
         blackbox.load(path)
 
@@ -244,3 +245,93 @@ def test_recovery_finds_a_dead_runs_blackbox_dirs(tmp_path):
         path.mkdir(parents=True)
     works, privates, _ = _run_dirs(tmp_path, attempt)
     assert works == [work] and privates == [private / "run"]  # the log stays as evidence
+
+
+def private_file(tmp_path, data: bytes, mode=0o600):
+    path = tmp_path / "d.json"
+    path.write_bytes(data)
+    path.chmod(mode)
+    return path
+
+
+@pytest.mark.parametrize("mode", [0o640, 0o604, 0o644])
+def test_a_declaration_others_may_read_is_rejected(tmp_path, mode):
+    with pytest.raises(blackbox.BlackboxRejected, match="mode 0600"):
+        blackbox.load(private_file(tmp_path, json.dumps(doc()).encode(), mode))
+
+
+def test_a_symlinked_declaration_is_rejected(tmp_path):
+    target = private_file(tmp_path, json.dumps(doc()).encode())
+    link = tmp_path / "link.json"
+    link.symlink_to(target)
+    with pytest.raises(blackbox.BlackboxRejected, match="cannot open"):
+        blackbox.load(link)
+    assert blackbox.load(target).checks[0].id == "add"
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        json.dumps(case_with(expected=123456789.987654321)).encode(),
+        b'{"salt": "' + SALT.encode() + b'", "checks": [{"id": "add", "module": "calc", '
+        b'"function": "add", "cases": [{"id": "c1", "args": [], '
+        b'"expected": {"SECRET_KEY": 1, "SECRET_KEY": 2}}]}]}',
+        json.dumps(check_with(module="SECRET module")).encode(),
+        json.dumps(case_with(id="SECRET!")).encode(),
+    ],
+    ids=["float-answer", "duplicate-answer-key", "module", "case-id"],
+)
+def test_a_rejection_never_quotes_the_declaration(raw):
+    with pytest.raises(blackbox.BlackboxRejected) as caught:
+        blackbox.parse(raw)
+    assert "SECRET" not in str(caught.value) and "987654" not in str(caught.value)
+
+
+def test_a_deeply_nested_declaration_is_rejected():
+    deep = b"[" * 100000 + b"]" * 100000
+    raw = json.dumps(case_with(expected="X")).encode().replace(b'"X"', deep)
+    with pytest.raises(blackbox.BlackboxRejected, match="nested"):
+        blackbox.parse(raw)
+
+
+def test_deeply_nested_output_is_bad_output():
+    deep = b"[" * 100000 + b"]" * 100000
+    verdict = verdict_of(replace(GOOD, report=report({"c1": {"ok": "X"}}).replace(b'"X"', deep)))
+    assert verdict.reason.startswith("blackbox:add: VERIFICATION_INCOMPLETE: BAD_OUTPUT")
+
+
+def test_a_judging_error_is_still_a_failed_observation_per_check(monkeypatch):
+    def boom(*args):
+        raise RuntimeError("anything")
+
+    monkeypatch.setattr(blackbox_judge, "run_blackbox", lambda *a, **k: GOOD)
+    monkeypatch.setattr(blackbox_judge, "judge_run", boom)
+    declared = blackbox.parse(json.dumps(doc()).encode())
+    (verdict,), log = blackbox_judge.judge_blackbox(
+        declared, Path("/r"), "c" * 40, Path("/x"), "a-v"
+    )
+    assert log == GOOD.log_path and not verdict.observation.passed
+    assert verdict.reason == "blackbox:add: VERIFICATION_INCOMPLETE: JUDGE_ERROR:RuntimeError"
+
+
+class _Self:
+    """Stands in for the account: runs the probe as this user, or a command that fails."""
+
+    def __init__(self, fail=False):
+        self.fail = fail
+
+    def wrap(self, argv, profile):
+        return ["/usr/bin/false"] if self.fail else argv
+
+
+def test_the_account_probe_says_readable_unless_it_heard_private(tmp_path):
+    from typing import Any
+
+    from cairnwork.blackbox_exec import account_can_read
+
+    readable = private_file(tmp_path, b"{}")
+    me: Any = _Self()
+    assert account_can_read(me, readable)
+    assert not account_can_read(me, tmp_path / "missing.json")
+    broken: Any = _Self(fail=True)
+    assert account_can_read(broken, tmp_path / "missing.json")  # an error is never "private"

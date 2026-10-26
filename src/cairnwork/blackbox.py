@@ -26,7 +26,9 @@ objects; anything else a function returns is ``UNSERIALIZABLE``.
 from __future__ import annotations
 
 import json
+import os
 import re
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -101,22 +103,39 @@ class Declaration:
 
 
 def load(path: Path) -> Declaration:
-    """Read and check an owner's declaration file; BlackboxRejected when anything is off."""
+    """Read and check an owner's declaration file; BlackboxRejected when anything is off. It must
+    be a regular file of this user with no group or other access: the answers in it are the whole
+    protection, and the sandbox does not hide every readable file (bubblewrap binds / read-only)."""
     try:
-        raw = path.read_bytes()
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError as exc:
-        raise BlackboxRejected(f"cannot read {path}: {exc}") from exc
+        raise BlackboxRejected(f"cannot open the declaration: {exc.strerror}") from exc
+    with os.fdopen(fd, "rb") as handle:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+            raise BlackboxRejected("the declaration must be your own regular file, mode 0600")
+        raw = handle.read(MAX_BYTES + 1)
     if len(raw) > MAX_BYTES:
         raise BlackboxRejected(f"declaration over {MAX_BYTES} bytes")
     return parse(raw)
 
 
 def parse(raw: bytes) -> Declaration:
+    """Messages never quote the file: a rejected declaration still holds the owner's answers."""
+    try:
+        return _parse(raw)
+    except RecursionError:
+        raise BlackboxRejected("declaration nested too deeply") from None
+
+
+def _parse(raw: bytes) -> Declaration:
     try:
         data = json.loads(raw, object_pairs_hook=_no_duplicates, parse_float=_no_float,
                           parse_constant=_no_float)  # fmt: skip
-    except (ValueError, UnicodeDecodeError) as exc:
-        raise BlackboxRejected(f"not strict JSON: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise BlackboxRejected(f"not JSON (line {exc.lineno} column {exc.colno})") from None
+    except (ValueError, UnicodeDecodeError):  # our hooks' fixed messages; decoding: none
+        raise BlackboxRejected("not strict JSON: no duplicate keys, floats or NaN") from None
     _keys(data, {"salt", "checks"}, "declaration")
     if not isinstance(data["salt"], str) or not _SALT.fullmatch(data["salt"]):
         raise BlackboxRejected("salt must be 64 lowercase hex digits (32 random bytes)")
@@ -133,7 +152,7 @@ def _check(data: Any) -> Check:
     module, function, cases = data["module"], data["function"], data["cases"]
     _match(_ID, data["id"], "check id")
     if not isinstance(module, str) or not all(_NAME.fullmatch(p) for p in module.split(".")):
-        raise BlackboxRejected(f"module must be a dotted name, got {module!r}")
+        raise BlackboxRejected("module must be a dotted name")
     _match(_NAME, function, "function (top-level name)")
     if not isinstance(cases, list) or not 1 <= len(cases) <= MAX_CASES:
         raise BlackboxRejected(f"check {data['id']}: 1 to {MAX_CASES} cases")
@@ -159,7 +178,7 @@ def _keys(data: Any, required: set[str], what: str, optional: frozenset | set = 
 
 def _match(pattern: re.Pattern, value: Any, what: str) -> None:
     if not isinstance(value, str) or not pattern.fullmatch(value):
-        raise BlackboxRejected(f"bad {what}: {value!r}")
+        raise BlackboxRejected(f"bad {what}")
 
 
 def _unique(values: list[str], what: str) -> None:
@@ -170,9 +189,9 @@ def _unique(values: list[str], what: str) -> None:
 def _no_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     keys = [key for key, _ in pairs]
     if len(keys) != len(set(keys)):
-        raise ValueError(f"duplicate key in {keys}")
+        raise ValueError("duplicate key")
     return dict(pairs)
 
 
 def _no_float(text: str) -> Any:
-    raise ValueError(f"floats and NaN/Infinity are not supported: {text}")
+    raise ValueError("floats and NaN/Infinity are not supported")

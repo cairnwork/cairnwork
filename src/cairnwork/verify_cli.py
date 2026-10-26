@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 from cairnwork import blackbox
+from cairnwork.blackbox_exec import account_can_read
 from cairnwork.deferred_tests import TestCommitRejected
 from cairnwork.intake import Intake, IntakeRefused
 from cairnwork.pipeline import TaskRejected
@@ -79,6 +80,9 @@ def _run(intake: Intake, args) -> dict[str, Any]:
         declared = blackbox.load(Path(args.blackbox)) if args.blackbox else None
     except blackbox.BlackboxRejected as exc:
         raise TaskRejected(exc.code, str(exc)) from exc
+    account = intake.verifier_account() if declared else None
+    if account is not None and account_can_read(account, Path(args.blackbox)):
+        raise TaskRejected(blackbox.BAD, "the verifier account can read the declaration")
     return verify_candidate(
         intake,
         repo=Path(args.repo_path).resolve(),

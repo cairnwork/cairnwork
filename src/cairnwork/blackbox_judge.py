@@ -35,10 +35,17 @@ def judge_blackbox(declaration: Declaration, repo, commit: str, run_root, run_id
     try:
         run = run_blackbox(declaration, repo, commit, run_root, run_id, **kwargs)
     except Exception as exc:  # noqa: BLE001 - declared but not run: incomplete, never a pass
-        failed = f"RUN_ERROR:{type(exc).__name__}"
-        return tuple(_verdict(check, commit, declaration, None, failed, {}) for check in
-                     declaration.checks), None  # fmt: skip
-    return tuple(judge_run(declaration, commit, run)), run.log_path
+        return _all_incomplete(declaration, commit, f"RUN_ERROR:{type(exc).__name__}"), None
+    try:  # the output is the candidate's: whatever it makes the judging do, each check still fails
+        return tuple(judge_run(declaration, commit, run)), run.log_path
+    except Exception as exc:  # noqa: BLE001
+        failed = f"JUDGE_ERROR:{type(exc).__name__}"
+        return _all_incomplete(declaration, commit, failed), run.log_path
+
+
+def _all_incomplete(declaration: Declaration, commit: str, failed: str) -> tuple[CheckVerdict, ...]:
+    checks = declaration.checks
+    return tuple(_verdict(check, commit, declaration, None, failed, {}) for check in checks)
 
 
 def judge_run(declaration: Declaration, commit: str, run: BlackboxRun):
@@ -70,7 +77,7 @@ def _run_problem(run: BlackboxRun) -> str:
 def _report(raw: bytes | None) -> dict | None:
     try:
         data = json.loads(raw or b"", parse_float=_refuse, parse_constant=_refuse)
-    except (ValueError, UnicodeDecodeError):
+    except (ValueError, UnicodeDecodeError, RecursionError):
         return None
     checks = data.get("checks") if isinstance(data, dict) else None
     return checks if isinstance(checks, dict) else None
@@ -97,7 +104,7 @@ def _check_problem(check: Check, report: dict, run: BlackboxRun, outcomes: dict[
         if isinstance(got, dict) and set(got) == {"ok"}:
             try:
                 same = canonical_json(got["ok"]) == case.expected
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, RecursionError):
                 return "BAD_OUTPUT"
             outcomes[case.id] = "match" if same else "mismatch"
         elif isinstance(got, dict) and set(got) == {"error"} and isinstance(got["error"], str):
