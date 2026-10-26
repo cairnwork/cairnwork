@@ -31,7 +31,9 @@ def key() -> Ed25519PrivateKey:
 
 @pytest.fixture
 def publish_env(tmp_path: Path) -> tuple[Path, Path, str]:
-    return make_publish_env(tmp_path)
+    src, bare, candidate = make_publish_env(tmp_path)
+    git(bare, "config", "core.hooksPath", "hooks")
+    return src, bare, candidate
 
 
 def _recorder():  # noqa: ANN202
