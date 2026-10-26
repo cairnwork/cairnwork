@@ -84,18 +84,19 @@ def environment_withheld(pid: int) -> bool | None:
 
 
 def _environment_count(raw: bytes) -> int | None:
-    """How many environment strings a KERN_PROCARGS2 buffer holds: int argc, the exec path,
-    NUL padding, argc argument strings, then the environment up to an empty string. None when
-    the layout does not hold. Only counts: no string is kept."""
+    """How many environment strings a KERN_PROCARGS2 buffer holds: int argc, the exec path
+    NUL-padded to a multiple of 8 bytes, argc argument strings, then the environment up to an
+    empty string. None when the layout does not hold. Only counts: no string is kept."""
     if len(raw) < 4:
         return None
     argc = int.from_bytes(raw[:4], sys.byteorder, signed=True)
     end = raw.find(b"\0", 4)
     if argc < 0 or end < 0:
         return None
-    at = end
-    while at < len(raw) and raw[at] == 0:  # the padding after the exec path
-        at += 1
+    # A fixed skip, not "skip every NUL": an empty argv[0] is a NUL too (#301 review).
+    at = 4 + (end - 4 + 8) // 8 * 8
+    if at > len(raw) or raw[end:at].strip(b"\0"):
+        return None
     for _ in range(argc):
         end = raw.find(b"\0", at)
         if end < 0:

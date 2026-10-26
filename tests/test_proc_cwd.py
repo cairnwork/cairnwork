@@ -85,12 +85,13 @@ def test_attempt_dirs_skip_a_missing_file_or_unreadable_root(tmp_path):
     assert found == ((good / f"{ATTEMPT}-q-v0").resolve(),)
 
 
-def _procargs(argv, env, *, pad=3, apple=()):
-    """A KERN_PROCARGS2 buffer: argc, exec path, NUL padding, argv, env, an empty string, then
-    the 'apple' strings. Values are dummies."""
+def _procargs(argv, env, *, path=b"/bin/x", pad=None, apple=()):
+    """A KERN_PROCARGS2 buffer: argc, exec path NUL-padded to 8 bytes (or ``pad`` NULs), argv,
+    env, an empty string, then the 'apple' strings. Values are dummies."""
+    pad = (-len(path) % 8 or 8) if pad is None else pad
     strings = b"".join(s + b"\0" for s in [*argv, *env])
     tail = b"\0" + b"".join(s + b"\0" for s in apple)
-    return len(argv).to_bytes(4, sys.byteorder) + b"/bin/x" + b"\0" * pad + strings + tail
+    return len(argv).to_bytes(4, sys.byteorder) + path + b"\0" * pad + strings + tail
 
 
 @pytest.mark.parametrize(
@@ -99,7 +100,14 @@ def _procargs(argv, env, *, pad=3, apple=()):
         (_procargs([b"/bin/sleep", b"60"], []), 0),
         (_procargs([b"/bin/sleep", b"60"], [], apple=[b"executable_path=/bin/x"]), 0),
         (_procargs([b"py", b""], [b"DUMMY=1", b"OTHER=2"]), 2),
-        (_procargs([b"py"], [b"DUMMY=1"], pad=1, apple=[b"ptr_munge="]), 1),
+        (_procargs([b"py"], [b"DUMMY=1"], apple=[b"ptr_munge="]), 1),
+        (_procargs([b"py"], [b"DUMMY=1"], path=b"/bin/xy"), 1),  # path + NUL fills 8 bytes
+        (_procargs([b"py"], [b"DUMMY=1"], path=b"/bin/xyz"), 1),  # a whole 8 more of padding
+        (_procargs([b"", b"-c"], [b"DUMMY=1"]), 1),  # an empty argv[0] is not padding
+        (_procargs([b"", b""], [b"DUMMY=1", b"OTHER=2"]), 2),
+        (_procargs([b"py"], [b"DUMMY=1"], pad=1), None),  # padding short of the 8-byte mark
+        (_procargs([b"py"], [b"DUMMY=1"]).replace(b"/bin/x\0\0", b"/bin/x\0Z"), None),  # not NUL
+        (_procargs([b"py"], [])[:4] + b"/bin/x\0", None),  # the padding runs off the end
         (_procargs([b"py"], [b"DUMMY=1"])[:-1], 1),  # no terminating empty string
         (b"\x01\x00", None),  # shorter than argc
         (_procargs([b"py"], [])[:4] + b"/bin/x", None),  # the exec path never ends
@@ -129,6 +137,26 @@ def test_off_macos_nothing_is_read_or_killed(monkeypatch):
     assert proc_cwd.cwd_of(os.getpid()) is None
     row = (os.getpid(), os.getpgid(0), os.getuid(), set())  # never signalled: off macOS
     assert proc_cwd.kill_withheld_in([row], ("/",), os.getuid()) == ([], [], 0)
+
+
+@macos
+def test_an_empty_argv0_does_not_hide_a_readable_environment():
+    # Codex review of #301: skipping every NUL after the exec path ate an empty argv[0], so a
+    # one-entry environment counted as none and the process looked withheld (killable).
+    exe = os.path.realpath(sys.executable)  # not an Apple platform binary: env is readable
+    child = subprocess.Popen(  # noqa: S603 - fixed argv
+        ["", "-c", "import time; print('up', flush=True); time.sleep(30)"],
+        executable=exe,
+        env={"DUMMY": "1"},
+        stdout=subprocess.PIPE,
+    )
+    try:
+        assert child.stdout is not None
+        assert child.stdout.readline() == b"up\n"  # read only once the child is running
+        assert proc_cwd.environment_withheld(child.pid) is False
+    finally:
+        child.kill()
+        child.wait()
 
 
 @macos
