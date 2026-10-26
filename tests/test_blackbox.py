@@ -335,3 +335,29 @@ def test_the_account_probe_says_readable_unless_it_heard_private(tmp_path):
     assert not account_can_read(me, tmp_path / "missing.json")
     broken: Any = _Self(fail=True)
     assert account_can_read(broken, tmp_path / "missing.json")  # an error is never "private"
+
+
+def test_the_output_is_read_only_from_a_small_regular_file(tmp_path):
+    from cairnwork.blackbox_exec import _read
+
+    real = tmp_path / "real.json"
+    real.write_bytes(b"{}")
+    link = tmp_path / "link.json"
+    link.symlink_to(real)
+    big = tmp_path / "big.json"
+    big.write_bytes(b" " * (blackbox.MAX_BYTES + 1))
+    assert _read(real) == b"{}"
+    assert _read(link) is None and _read(big) is None and _read(tmp_path / "none") is None
+
+
+def test_the_run_reports_checkout_changes_and_forged_bytecode(repo, tmp_path, monkeypatch):
+    from conftest import git
+
+    from cairnwork import blackbox_exec
+
+    monkeypatch.setattr(blackbox_exec, "checkout_differences", lambda *a: ("src/a.py",))
+    monkeypatch.setattr(blackbox_exec, "bytecode_findings", lambda *a: ("x.pyc",))
+    declared = blackbox.parse(json.dumps(doc()).encode())
+    head = git(repo, "rev-parse", "HEAD")
+    run = blackbox_exec.run_blackbox(declared, repo, head, tmp_path / "runs", "a1-v")
+    assert run.mutated == ("src/a.py",) and run.forged == ("x.pyc",) and not run.account

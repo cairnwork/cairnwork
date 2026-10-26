@@ -85,15 +85,19 @@ def test_without_a_declaration_the_request_is_unchanged(project):
     assert declared.request() == plain.request() | {"blackbox_commitment": DECLARED.commitment()}
 
 
-def test_deferred_tests_with_a_declaration_are_refused_until_the_binding_carries_it(project):
-    from cairnwork.pipeline import TaskRejected, TaskSpec, check_task
+def test_the_receipt_binding_carries_the_commitment_only_when_declared(project):
+    from cairnwork.pipeline import TaskSpec
+    from cairnwork.verify_candidate import _binding
 
-    task = TaskSpec(
-        "k", "h", "t", "i", project, "a" * 40, ("src/calc.py",), (), test_commit="b" * 40,
+    head = base_of(project)
+    plain = TaskSpec("k", "h", "t", "i", project, head, ("src/calc.py",), (), test_commit="b" * 40)
+    declared = TaskSpec(
+        "k", "h", "t", "i", project, head, ("src/calc.py",), (), test_commit="b" * 40,
         blackbox=DECLARED,
     )  # fmt: skip
-    with pytest.raises(TaskRejected, match="BAD_BLACKBOX"):
-        check_task(task)
+    without, with_ = _binding(plain, head, (), head), _binding(declared, head, (), head)
+    assert "blackbox_commitment" not in without
+    assert with_ == without | {"blackbox_commitment": DECLARED.commitment()}
 
 
 def test_a_check_id_that_clashes_with_a_verifier_is_refused(project):
@@ -105,3 +109,9 @@ def test_a_check_id_that_clashes_with_a_verifier_is_refused(project):
     )
     with pytest.raises(TaskRejected, match="clash"):
         check_task(task)
+
+
+def test_a_declared_check_that_yields_no_verdict_stays_required(state, project, monkeypatch):
+    monkeypatch.setattr(pipeline_judge, "judge_blackbox", lambda *a, **k: ((), None))
+    out = run(state, project)
+    assert not out["verified"] and out["core_status"] == "UNVERIFIABLE", out

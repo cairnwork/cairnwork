@@ -328,7 +328,8 @@ def _binding(task, head: str, test_files: tuple[str, ...], judged: str) -> dict[
     the scratch clone and its id cannot be rebuilt (commit time), so the receipt names the PR head,
     the tests and the tree that ran, which a receiver rebuilds with deferred_tests.overlay_tree."""
     tree = run_git(task.repo, "rev-parse", f"{judged}^{{tree}}").strip()
-    return nonempty_fields(import_paths=list(task.import_paths)) | {  # #292
+    commitment = task.blackbox.commitment() if task.blackbox else ""  # #303
+    return nonempty_fields(import_paths=list(task.import_paths), blackbox_commitment=commitment) | {
         "rule": OVERLAY_RULE, "base": task.base_commit, "head": head,
         "test_commit": task.test_commit, "test_paths": sorted(test_files), "executed_tree": tree,
         "verifiers": [[verifier_id, list(argv)] for verifier_id, argv in task.verifiers],

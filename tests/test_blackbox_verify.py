@@ -72,3 +72,20 @@ def test_a_declaration_others_can_read_is_refused_before_anything_runs(
     code, out = verify(state, helper_project, base, sha, "--blackbox", str(declared))
     assert code == 2 and out["error"] == "BAD_BLACKBOX" and "salt" not in out["detail"]
     assert not (state / "ownership.sqlite").exists()  # prepare() never ran
+
+
+def test_an_empty_blackbox_path_is_refused_not_ignored(state, helper_project):
+    base = base_of(helper_project)
+    sha = candidate(helper_project, base, {"src/calc.py": CANDIDATES["correct"]})
+    code, out = verify(state, helper_project, base, sha, "--blackbox", "")
+    assert code == 2 and out["error"] == "BAD_BLACKBOX", out
+
+
+def test_the_receiver_gets_the_commitment_from_its_own_copy(state, tmp_path):
+    from verify_helpers import cli
+
+    from cairnwork import blackbox
+
+    declared = declaration(tmp_path)
+    code, out = cli(state, "blackbox-commitment", "--blackbox", str(declared))
+    assert code == 0 and out == {"blackbox_commitment": blackbox.load(declared).commitment()}

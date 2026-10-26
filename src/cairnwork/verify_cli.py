@@ -4,6 +4,7 @@
         --allowed-file F [...] --verifier CMD [...] [--test-commit SHA] \\
         [--import-path DIR ...]    # src layout: DIR joins the verifiers' import path (#283)
         [--blackbox FILE]          # the owner's function-level checks and answers (#303)
+    cairnwork-verify --state DIR blackbox-commitment --blackbox FILE   # for a receiver's policy
     cairnwork-verify --state DIR import-tests --repo-path P --bundle FILE
         # keep a deferred test commit in the private store (deferred_store.py), not on a remote
     cairnwork-verify --state DIR cleanup      # after a crashed run, before ``recover``
@@ -45,10 +46,13 @@ def main(argv: list[str] | None = None) -> int:
             return _emit(cleanup(intake), 0)
         if args.command == "import-tests":
             return _import_tests(intake, args)
+        if args.command == "blackbox-commitment":  # what a receiver's policy pins (#303)
+            declared = blackbox.load(Path(args.blackbox))
+            return _emit({"blackbox_commitment": declared.commitment()}, 0)
         result = _run(intake, args)
     except IntakeRefused as exc:
         return _emit({"error": exc.code, "detail": exc.detail}, 2)
-    except TaskRejected as exc:
+    except (TaskRejected, blackbox.BlackboxRejected) as exc:
         return _emit({"error": exc.code, "detail": str(exc)}, 2)
     except Exception as exc:  # noqa: BLE001 - reported as unknown, never as success
         detail = f"{type(exc).__name__}: {exc}"
@@ -76,12 +80,13 @@ def _run(intake: Intake, args) -> dict[str, Any]:
         )
     except ValueError as exc:
         raise TaskRejected("BAD_VERIFIER", str(exc)) from exc
+    path = Path(args.blackbox) if args.blackbox is not None else None
     try:  # read by the owner's process only; never passed on to the run
-        declared = blackbox.load(Path(args.blackbox)) if args.blackbox else None
+        declared = blackbox.load(path) if path is not None else None
     except blackbox.BlackboxRejected as exc:
         raise TaskRejected(exc.code, str(exc)) from exc
-    account = intake.verifier_account() if declared else None
-    if account is not None and account_can_read(account, Path(args.blackbox)):
+    account = intake.verifier_account() if path is not None else None
+    if path is not None and account is not None and account_can_read(account, path):
         raise TaskRejected(blackbox.BAD, "the verifier account can read the declaration")
     return verify_candidate(
         intake,
@@ -101,6 +106,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--state", required=True)
     commands = parser.add_subparsers(dest="command", required=True, parser_class=_Parser)
     commands.add_parser("cleanup")
+    commands.add_parser("blackbox-commitment").add_argument("--blackbox", required=True)
     imp = commands.add_parser("import-tests")
     imp.add_argument("--repo-path", required=True)
     imp.add_argument("--bundle", required=True)
@@ -112,7 +118,7 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--verifier", action="append", required=True)
     run.add_argument("--test-commit", default="")
     run.add_argument("--import-path", action="append", default=[])
-    run.add_argument("--blackbox", default="")
+    run.add_argument("--blackbox", default=None)  # "" is a path that cannot be opened, not "none"
     return parser
 
 

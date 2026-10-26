@@ -4,7 +4,7 @@
 runs the verifiers over the candidate and has Core notarise it. Both take everything they need as
 arguments (no module-level state) and are called by ``pipeline._attempt``; ``judge_candidate`` is
 also shared with ``verify_candidate``. They never call back into ``pipeline``, so there is no cycle.
-Behaviour is unchanged — this is a move, not a logic change.
+``judge_candidate`` also runs a task's blackbox checks (#303, blackbox.py) when it declares any.
 """
 
 from __future__ import annotations
@@ -91,6 +91,7 @@ def judge_candidate(
     if unless_passed is not None and not all(run.observation.passed for run in runs):
         raise unless_passed
     checks, subject = (), binding["head"] if binding else judged
+    declared = task.blackbox.checks if task.blackbox is not None else ()
     if task.blackbox is not None:  # #303: each check is one more observation Core requires;
         # it runs the candidate alone, without deferred tests that could hold the answers
         checks, log = judge_blackbox(
@@ -103,7 +104,8 @@ def judge_candidate(
     spec = AcceptanceSpec(
         task_id,
         digest,
-        tuple(observation.verifier_id for observation in observations),
+        # from the task, not the results: a declared check that produced nothing is still required
+        tuple(run.spec.verifier_id for run in runs) + tuple(c.verifier_id for c in declared),
         tuple(task.allowed_files) + test_files,
         task.allow_deletions,
     )

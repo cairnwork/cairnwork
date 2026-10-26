@@ -110,10 +110,11 @@ def load(path: Path) -> Declaration:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError as exc:
         raise BlackboxRejected(f"cannot open the declaration: {exc.strerror}") from exc
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+        os.close(fd)
+        raise BlackboxRejected("the declaration must be your own regular file, mode 0600")
     with os.fdopen(fd, "rb") as handle:
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
-            raise BlackboxRejected("the declaration must be your own regular file, mode 0600")
         raw = handle.read(MAX_BYTES + 1)
     if len(raw) > MAX_BYTES:
         raise BlackboxRejected(f"declaration over {MAX_BYTES} bytes")

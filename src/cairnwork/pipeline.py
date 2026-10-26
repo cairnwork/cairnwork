@@ -162,8 +162,6 @@ def check_task(task: TaskSpec, *, verifier_python: str | None = None) -> tuple[V
         raise TaskRejected("PROTECTED_VERIFIER_INPUT", ", ".join(protected))
     if blocked:
         raise TaskRejected("TASK_ALLOWED_FILES_PROTECTED", ", ".join(blocked))
-    if task.blackbox and task.test_commit:  # the receipt binding cannot carry it yet (#292)
-        raise TaskRejected("BAD_BLACKBOX", "blackbox checks with deferred tests: not yet")
     clash = {c.verifier_id for c in task.blackbox.checks} if task.blackbox else set()
     if clash & {verifier_id for verifier_id, _ in task.verifiers}:
         raise TaskRejected("BAD_BLACKBOX", f"verifier ids clash: {sorted(clash)}")

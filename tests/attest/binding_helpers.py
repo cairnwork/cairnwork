@@ -86,6 +86,7 @@ def notarize_bound(
     overlay_head: str | None = None, paths: tuple[str, ...] | None = None,
     rule: str = OVERLAY_RULE, tree_and_judged: tuple[str, str] | None = None,
     unchecked: bool | None = None, import_paths: tuple[str, ...] = (),
+    blackbox_commitment: str = "",
 ) -> dict[str, Any]:  # fmt: skip
     """Notarize one external-candidate run; head is what the binding claims, overlay_head what
     the tests were laid over (they differ only in negative controls)."""
@@ -102,6 +103,8 @@ def notarize_bound(
     }  # fmt: skip
     if import_paths:  # as verify_candidate._binding (#292): only when set
         binding["import_paths"] = list(import_paths)
+    if blackbox_commitment:  # #303, likewise
+        binding["blackbox_commitment"] = blackbox_commitment
     task = "verify-0123456789abcdef"
     spec = AcceptanceSpec(task, binding_hash(binding), ("pytest-0",), ("src/a.py", *paths))
     obs = (VerifierObservation("pytest-0", "artifact-1", "sha256:" + "e" * 64, True),)
