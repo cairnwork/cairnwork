@@ -69,6 +69,7 @@ from cairnwork.account_checkout import checkout_differences, make_account_checko
 from cairnwork.account_checkout import remove_checkout as _remove_checkout
 from cairnwork.confined import ATTEMPT_ENV, MAX_LOG_BYTES, RUN_TOKEN_VAR
 from cairnwork.core_request import VerifierObservation
+from cairnwork.import_path_tree import require_plain_dirs
 from cairnwork.pycache_guard import PYCACHE_DIR, forged_bytecode
 from cairnwork.reasons import why_not_passed
 from cairnwork.verifier_account import VerifierAccount, VerifierAccountError, lock_wait_seconds
@@ -153,6 +154,8 @@ def run_verifiers(
     settings = pytest_config.base_settings(repo, base_commit)
     if import_paths:
         settings = replace(settings, pythonpath=(*import_paths, *settings.pythonpath))
+    if settings.pythonpath:
+        require_plain_dirs(repo, candidate_commit, settings.pythonpath)
     if account is not None:
         run_root, python = account.run_root, python or account.python
         with account.exclusive(lock_wait_seconds(len(specs), timeout)):
