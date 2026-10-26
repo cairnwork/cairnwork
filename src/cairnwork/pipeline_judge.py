@@ -4,7 +4,8 @@
 runs the verifiers over the candidate and has Core notarise it. Both take everything they need as
 arguments (no module-level state) and are called by ``pipeline._attempt``; ``judge_candidate`` is
 also shared with ``verify_candidate``. They never call back into ``pipeline``, so there is no cycle.
-``judge_candidate`` also runs a task's blackbox checks (#303, blackbox.py) when it declares any.
+``judge_candidate`` also runs a task's blackbox checks (#303, blackbox.py) when it declares any,
+first (#311).
 """
 
 from __future__ import annotations
@@ -72,6 +73,18 @@ def judge_candidate(
     judged = result.candidate_commit
     task_id = result.task_id
     reach("VERIFYING")
+    checks, subject, bb_logs = (), binding["head"] if binding else judged, []
+    declared = task.blackbox.checks if task.blackbox is not None else ()
+    if task.blackbox is not None:  # #303: each check is one more observation Core requires;
+        # it runs the candidate alone, without deferred tests that could hold the answers, and
+        # before any other run of the candidate in this verify (#311: nothing the candidate saw in
+        # a pytest phase of this verify can be waiting for it there)
+        checks, log = judge_blackbox(
+            task.blackbox, task.repo, subject, run_root, f"{result.attempt_id}-v",
+            attempt_id=result.attempt_id, account=verifying[0], python=verifying[1],
+            base_commit=task.base_commit, import_paths=task.import_paths,
+        )  # fmt: skip
+        bb_logs = [str(log)] if log else []
     runs = run_verifiers(
         task.repo,
         judged,
@@ -87,19 +100,9 @@ def judge_candidate(
     if p2p is not None:
         p2p_runs, result.p2p = run_plan(p2p, task, judged, run_root, result, verifying)
         runs += p2p_runs
-    result.logs = [str(run.log_path) for run in runs]
+    result.logs = [str(run.log_path) for run in runs] + bb_logs
     if unless_passed is not None and not all(run.observation.passed for run in runs):
         raise unless_passed
-    checks, subject = (), binding["head"] if binding else judged
-    declared = task.blackbox.checks if task.blackbox is not None else ()
-    if task.blackbox is not None:  # #303: each check is one more observation Core requires;
-        # it runs the candidate alone, without deferred tests that could hold the answers
-        checks, log = judge_blackbox(
-            task.blackbox, task.repo, subject, run_root, f"{result.attempt_id}-v",
-            attempt_id=result.attempt_id, account=verifying[0], python=verifying[1],
-            base_commit=task.base_commit, import_paths=task.import_paths,
-        )  # fmt: skip
-        result.logs += [str(log)] if log else []
     observations = tuple(run.observation for run in runs) + tuple(c.observation for c in checks)
     spec = AcceptanceSpec(
         task_id,

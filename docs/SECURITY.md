@@ -40,6 +40,35 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
   `(shm withheld: ...)`; not part of `profile.sb`, so no bound digest changes) and multiprocessing targets stay unverifiable (fail
   closed) rather than getting an uncapped tmpfs. Mach IPC and host shared memory remain denied.
 
+  **The blackbox run gets no named IPC (#311).** A declared blackbox check (#303) runs with
+  `allow_ipc=False`: on macOS its profile has no semaphore rule, so deny-by-default refuses IPC (the
+  trailing `(deny ipc*)` only states it) and the run can neither create nor open a named POSIX
+  semaphore (any name, `/mp-` included), POSIX shared memory, or an existing SysV semaphore, segment
+  or queue. A declared function that needs these (`multiprocessing` locks, queues or shared memory)
+  therefore always fails its check on macOS (`MISMATCH`): declare such code through a function that
+  does not start them. Within one verify the blackbox also runs
+  before the verifiers and P2P, the first run of the candidate there, so nothing a pytest phase of
+  the same verify learnt from the tests can be waiting for it. Linux bwrap needs no option: every
+  run has its own IPC namespace (`--unshare-all`) and a fresh `/dev`, so named IPC never outlives
+  or leaves a run.
+
+  **What stays open on macOS: whether a name exists, and file access times.** These namespaces are global to the host,
+  across users. Opening an absent semaphore name fails with `ENOENT` before the sandbox is asked,
+  a present one with `EPERM`, and creating a new SysV object (`semget`/`shmget`/`msgget` with
+  `IPC_CREAT`) is not mediated by Seatbelt at all, after which its key answers `EEXIST`. So a run
+  can still learn which names or keys exist. Candidate code in an *earlier* verify on the same host
+  (owner mode or account) can leave names that encode what it saw in that verify's tests, and a
+  later blackbox run can read them back bit by bit. No Seatbelt rule we tried closes this (a
+  `syscall-unix` number filter had no effect on these calls on macOS 27, and `_ctypes` and
+  `_multiprocessing` are built into the interpreter). A second channel of the same kind: reading a
+  file updates its access time on APFS, and files every run may read (the interpreter's, the
+  system's) can be read by one run and `stat`-ed by a later one. Until these are closed: on macOS,
+  do not let a declaration's answers, or the logic that produces them, appear in the deferred or
+  visible tests of any earlier run on that host, whatever the channel. "Earlier run" means any
+  earlier `cairnwork-verify` (owner mode or account) and any earlier pipeline attempt, whose
+  verifier profile still allows `/mp-` semaphores with their contents. Linux bwrap is not affected
+  by the IPC channel. `tests/test_sandbox_ipc.py` pins the IPC residual (#316).
+
   **Deployment note:** a verifier write root or state directory must not live under a masked path
   (a masked credential dir such as `~/.config` or `~/.local/state`, or a masked socket tree such as
   `/run/user`, `/tmp/.X11-unix`, `/run/libvirt`). The tmpfs is applied after the write binds, so
