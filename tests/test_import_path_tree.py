@@ -169,3 +169,56 @@ def test_verify_candidate_rejects_symlink_import_path(repo, state):
             import_paths=("lib",),
         )
     assert exc.value.code == "BAD_IMPORT_PATH"
+
+
+@pytest.mark.parametrize("entry", ["a/./b", "a//b", "a/../a/b", "./a/./b"])
+def test_require_plain_dirs_dot_or_empty_segment_rejected(repo, entry):
+    commit_change(repo, {"a/m.py": "x = 1\n"})
+    commit = make_symlink(repo, "a/b", "../tests")
+    with pytest.raises(ImportPathError) as exc:
+        require_plain_dirs(repo, commit, (entry,))
+    assert exc.value.code == "BAD_IMPORT_PATH"
+
+
+@pytest.mark.parametrize("entry", [":(top)q/x", ":/q/x"])
+def test_require_plain_dirs_pathspec_magic_is_literal(repo, entry):
+    commit_change(repo, {"q/x/m.py": "x = 1\n"})
+    commit = make_symlink(repo, f"{entry.rsplit('/', 1)[0]}/x", "../tests")
+    with pytest.raises(ImportPathError) as exc:
+        require_plain_dirs(repo, commit, (entry,))
+    assert exc.value.code == "BAD_IMPORT_PATH"
+
+
+def test_require_plain_dirs_whitespace_is_part_of_the_name(repo):
+    commit_change(repo, {"lib/m.py": "x = 1\n"})
+    commit = make_symlink(repo, " lib", "tests")
+    with pytest.raises(ImportPathError) as exc:
+        require_plain_dirs(repo, commit, (" lib",))
+    assert exc.value.code == "BAD_IMPORT_PATH"
+
+
+def test_require_plain_dirs_non_ascii_rejected(repo):
+    commit = commit_change(repo, {"café/m.py": "x = 1\n"})
+    with pytest.raises(ImportPathError) as exc:
+        require_plain_dirs(repo, commit, ("café",))
+    assert exc.value.code == "BAD_IMPORT_PATH"
+
+
+def test_run_verifiers_checks_the_candidate_tree(repo, tmp_path):
+    commit_change(repo, {"tests/test_x.py": "def test_ok(): pass\n", "lib/m.py": "x = 1\n"})
+    base = run_git(repo, "rev-parse", "HEAD").strip()
+    run_git(repo, "rm", "-q", "-r", "lib")
+    cand = make_symlink(repo, "lib", "tests")
+    spec = parse_verifier("pytest", PYTEST + ["tests/test_x.py"])
+    with pytest.raises(ImportPathError) as exc:
+        run_verifiers(
+            repo,
+            cand,
+            (spec,),
+            tmp_path / "runs",
+            "r1",
+            python=sys.executable,
+            base_commit=base,
+            import_paths=("lib",),
+        )
+    assert exc.value.code == "BAD_IMPORT_PATH"
