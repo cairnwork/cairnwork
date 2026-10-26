@@ -11,6 +11,7 @@ An unknown option (a plugin's, say), an unsafe value or an unreadable file refus
 from __future__ import annotations
 
 import configparser
+import re
 import shlex
 import tomllib
 from pathlib import Path
@@ -36,7 +37,7 @@ SAFE_FLAGS = {
     "--import-mode=append",
 }  # fmt: skip
 SAFE_PREFIXES = (
-    "-r", "--tb=", "--color=", "--durations=", "--durations-min=", "--code-highlight=",
+    "--tb=", "--color=", "--durations=", "--durations-min=", "--code-highlight=",
     "--cov=", "--cov-report=", "--cov-config=", "--cov-context=", "--doctest-glob=",
 )  # fmt: skip
 SAFE_FLAGS |= {  # reporting only: coverage tracing (pytest-cov), verbosity, warning summaries
@@ -45,6 +46,7 @@ SAFE_FLAGS |= {  # reporting only: coverage tracing (pytest-cov), verbosity, war
 }  # fmt: skip
 WITH_VALUE = {"--cov-report", "--doctest-report"}  # safe options whose value is the next token
 SELECTING = ("-m", "-k", "--deselect", "--ignore", "--ignore-glob")  # change what is collected
+REPORT = re.compile(r"-r[fEsxXpPaAN]+")  # -r with summary letters only (not -random-order)
 FILTER_ACTIONS = ("ignore", "default", "always", "module", "once")
 SECTIONS = (
     ("pytest.ini", "ini", "pytest"),
@@ -98,7 +100,9 @@ def _section(path: Path, kind: str, section: str) -> dict[str, Any] | None:
         data = data.get(part) if isinstance(data, dict) else None
     if not isinstance(data, dict):
         return None
-    return {k: v for k, v in data.items() if not isinstance(v, dict)}  # [tool.pytest.ini_options]
+    if section == "tool.pytest":
+        data = {k: v for k, v in data.items() if k != "ini_options"}  # read as its own section
+    return data  # a sub-table (a plugin's [tool.pytest.ini_options.env]) is an unknown option
 
 
 def _values(value: Any) -> list[str]:
@@ -145,7 +149,7 @@ def _addopts(tokens: list[str]) -> tuple[str | None, bool, list[str]]:
             index, known = index + 2, False
         elif token.startswith(tuple(f"{s}=" for s in SELECTING if s.startswith("--"))):
             index, known = index + 1, False
-        elif token in SAFE_FLAGS or token.startswith(SAFE_PREFIXES):
+        elif token in SAFE_FLAGS or token.startswith(SAFE_PREFIXES) or REPORT.fullmatch(token):
             index += 1
         else:
             return "pytest addopts loads plugins or changes warnings or options", False, []

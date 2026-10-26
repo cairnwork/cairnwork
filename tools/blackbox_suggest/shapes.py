@@ -290,7 +290,8 @@ class Body:
         self.drafts.append(draft)
 
     def exception(self, node: ast.expr, line: int) -> dict[str, str]:
-        if isinstance(node, ast.Name) and node.id not in self.imports.names:
+        local = self.imports.local_defs | self.locals | set(self.env)
+        if isinstance(node, ast.Name) and node.id not in set(self.imports.names) | local:
             builtin = getattr(builtins, node.id, None)
             if isinstance(builtin, type) and issubclass(builtin, BaseException):
                 return {"module": "builtins", "name": node.id, "defined_as": node.id}

@@ -9,7 +9,7 @@ import textwrap
 
 import pytest
 
-from tools.blackbox_suggest import KINDS_NOW, analyze_file, default_roots
+from tools.blackbox_suggest import ALL_KINDS, KINDS_NOW, analyze_file, default_roots
 from tools.blackbox_suggest.render import _id
 
 CORE = (
@@ -176,3 +176,70 @@ def test_usefixtures_by_a_name_keeps_the_count_unknown(tmp_path):
     """
     found = run(tmp_path, body)
     assert len(found) == 2 or not all(o.exact for o in found)
+
+
+# Gemini cross-model review, round 4.
+
+
+def test_a_test_class_with_an_unseen_base_stays_in_the_denominator(tmp_path):
+    body = """
+        import unittest.mock
+        from pkg.core import f
+        def test_standalone():
+            assert f(2) == 2
+        class TestForeign(unittest.mock.NonCallableMock):
+            pass
+    """
+    found = run(tmp_path, body)
+    assert len(found) == 2 and not any(o.exact for o in found)
+    assert not found[1].protected(KINDS_NOW)
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"pytest.ini": "[pytest]\naddopts = -random-order\n"},
+        {"pyproject.toml": '[tool.pytest.ini_options]\nminversion = "7.0"\n'
+                           '[tool.pytest.ini_options.env]\nMODE = "strict"\n'},
+    ],
+)  # fmt: skip
+def test_plugin_options_refuse(tmp_path, config):
+    (item,) = run(tmp_path, PLAIN, config)
+    assert not item.protected(KINDS_NOW)
+
+
+def test_report_letters_and_native_table_stay_inert(tmp_path):
+    config = {
+        "pytest.ini": "[pytest]\naddopts = -rfE -q\n",
+        "pyproject.toml": '[tool.pytest]\nminversion = "9.0"\n[tool.pytest.ini_options]\n',
+    }
+    (item,) = run(tmp_path, PLAIN, config)
+    assert item.protected(KINDS_NOW), item.reason(KINDS_NOW)
+
+
+def test_annotated_pytestmark_refuses(tmp_path):
+    body = """
+        import pytest
+        from typing import Any
+        from pkg.core import f
+        pytestmark: Any = pytest.mark.skip
+        def test_a():
+            assert f(2) == 2
+    """
+    (item,) = run(tmp_path, body)
+    assert not item.protected(KINDS_NOW)
+
+
+def test_a_local_class_shadowing_a_builtin_exception_is_not_the_builtin(tmp_path):
+    body = """
+        import pytest
+        from pkg.core import f
+        class ValueError(Exception):
+            pass
+        def test_a():
+            with pytest.raises(ValueError):
+                f(1)
+    """
+    (item,) = run(tmp_path, body)
+    assert not any(c["expected"].get("raises", {}).get("module") == "builtins" for c in item.cases)
+    assert not item.protected(ALL_KINDS)

@@ -224,8 +224,9 @@ def test_non_test_class_with_a_foreign_base_makes_the_count_inexact(tmp_path):
         "class Helper(Mixin):\n    def test_x(self):\n        assert f(1) == 1\n"
         "def test_a():\n    assert f(1) == 1\n"
     )
-    found = run(tmp_path, body)
-    assert len(found) == 1 and not found[0].exact
+    found = run(tmp_path, body)  # Helper may be a TestCase: one unseen placeholder stands in
+    assert [o.test_id.endswith("<unseen>") for o in found] == [True, False]
+    assert not any(o.exact for o in found) and not found[0].protected({"function"})
 
 
 def test_a_fixture_unknown_here_makes_the_count_inexact(tmp_path):

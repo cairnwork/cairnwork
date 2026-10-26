@@ -232,13 +232,15 @@ def _marks_of(decorators: list[ast.expr], extra: list[ast.expr]):
 
 
 def _pytestmark(body: list[ast.stmt]) -> list[ast.expr]:
+    """The marks of the last ``pytestmark = ...`` (annotated or not): the binding pytest reads."""
+    found: list[ast.expr] = []
     for node in body:
-        if isinstance(node, ast.Assign) and any(
-            isinstance(t, ast.Name) and t.id == "pytestmark" for t in node.targets
-        ):
-            value = node.value
-            return list(value.elts) if isinstance(value, ast.List | ast.Tuple) else [value]
-    return []
+        targets = node.targets if isinstance(node, ast.Assign) else []
+        targets = [node.target] if isinstance(node, ast.AnnAssign) and node.value else targets
+        if any(isinstance(t, ast.Name) and t.id == "pytestmark" for t in targets):
+            value: ast.expr = node.value  # type: ignore[union-attr,assignment]
+            found = list(value.elts) if isinstance(value, ast.List | ast.Tuple) else [value]
+    return found
 
 
 def collect(tree: ast.Module, path: str, conftests: list[ast.Module], scope: Scope) -> list[Item]:
@@ -265,7 +267,7 @@ def collect(tree: ast.Module, path: str, conftests: list[ast.Module], scope: Sco
             found, class_known = _class_items(node, path, [], ctx, base)
             items += found
             known = known and class_known
-    if not items and not known:  # tests may come from a base, hook or plugin defined elsewhere
+    if not items and not known:  # tests may come from a hook or plugin defined elsewhere
         items.append(Item(f"{path}::<unseen>", 1, _UNSEEN, refusal=UNSEEN, exact=False))
     for item in items:
         item.exact = item.exact and known
@@ -332,17 +334,17 @@ def _class_items(node: ast.ClassDef, prefix: str, outer: list, ctx: Ctx, base):
     unittest = _is_testcase(node, classes)
     has_init = any(isinstance(n, ast.FunctionDef) and n.name == "__init__" for n in node.body)
     methods = _methods(node, classes)
+    known, test_id = not _unknown_bases(node, classes), f"{prefix}::{node.name}"
+    unseen = Item(f"{test_id}::<unseen>", node.lineno, _UNSEEN, refusal=UNSEEN, exact=False)
+    if not known and (node.name.startswith("Test") or any(m.startswith("test") for m in methods)):
+        return [unseen], False  # a base defined elsewhere may bring tests: never leave it out
     if not unittest and (not node.name.startswith("Test") or has_init):
-        return [], not (
-            _unknown_bases(node, classes) and any(m.startswith("test") for m in methods)
-        )
-    known = not _unknown_bases(node, classes)
+        return [], True
     hooks = sorted(set(methods) & CLASS_HOOKS)
     autouse = [m.name for m in methods.values() if is_autouse(m)]
     refusal = base or (f"class setup hook {hooks[0]}" if hooks else None)
     refusal = refusal or (f"class autouse fixture {autouse[0]}" if autouse else None)
     marks = [*outer, *node.decorator_list, *_pytestmark(node.body)]
-    test_id = f"{prefix}::{node.name}"
     inner_ctx = replace(ctx, always=[*ctx.always, *autouse])
     items: list[Item] = []
     for name, func in methods.items():
