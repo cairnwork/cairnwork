@@ -163,6 +163,18 @@ def check_import_paths(paths: Any) -> tuple[str, ...]:
     return tuple(paths)
 
 
+def check_verify_import_paths(paths: list[str], test_roots: tuple[str, ...]) -> tuple[str, ...]:
+    """``cairnwork-verify --import-path`` (#283): the same rules, and none may be, or be inside,
+    a test root (the protected tests)."""
+    checked = check_import_paths(paths)
+    roots = [root.casefold() for root in test_roots]  # case-insensitive filesystems
+    for path in checked:
+        low = path.casefold()
+        if any(low == root or low.startswith(f"{root}/") for root in roots):
+            raise ValueError(f"import_paths entry {path!r} is inside a test root")
+    return checked
+
+
 def pytest_argv(command: Any, roots: tuple[str, ...] = DEFAULT_TEST_ROOTS) -> tuple[str, ...]:
     """``python3 -m pytest [-q] [-p no:cacheprovider] <root>/...``; anything else is refused."""
     try:
