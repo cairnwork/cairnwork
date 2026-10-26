@@ -230,6 +230,16 @@ def test_name_not_path_overlay_tree(world: dict) -> None:
     assert exc_info.value.code == "OVERLAY_UNSUPPORTED_ENTRY"
 
 
+@pytest.mark.parametrize("magic", [":/tests/test_new.py", ":(literal)tests/test_new.py"])
+def test_name_not_path_pathspec_magic(world: dict, magic: str) -> None:
+    # c4 (M6): ls-tree resolves pathspec magic to an existing blob, so only name != path rejects it
+    with pytest.raises(TestCommitRejected) as exc_info:
+        overlay_tree(
+            world["full"], world["head"], world["tests"], (magic,), world["tmp"] / "idx-magic"
+        )
+    assert exc_info.value.code == "OVERLAY_UNSUPPORTED_ENTRY"
+
+
 # ---------------------------------------------------------------------------
 # d. Check Run output caveat text (M7)
 # ---------------------------------------------------------------------------

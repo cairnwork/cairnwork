@@ -58,6 +58,7 @@ def test_diffcheck_kind_without_trailing_period() -> None:
     assert _known_kind("trailing whitespace.") is True
     assert _known_kind("trailing whitespace") is False
     assert _known_kind("trailing whitespace ") is False
+    assert _known_kind("trailing whitespace..") is False  # only one final period is stripped (R4)
 
     # In diff_check_detail, header without trailing period falls back to base
     cause = subprocess.CalledProcessError(
