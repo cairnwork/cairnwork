@@ -189,4 +189,13 @@ CHILD = (
     "                 start_new_session=True)\n"
     "def add(a, b):\n    return a + b\n"
 )
-ATTACKS = {"forge": FORGE, "finder": FINDER, "child": CHILD}
+# sys.path is not on tamper_scan's list (#290): put a directory of the candidate's own first, so the
+# protected test's ``from helper import EXPECTED`` resolves to the candidate's file.
+SYSPATH = (
+    "import os, sys, tempfile\n"
+    "_d = tempfile.mkdtemp()\n"
+    "with open(os.path.join(_d, 'helper.py'), 'w') as _h:\n"
+    "    _h.write('EXPECTED = 6\\n')\n"
+    "sys.path.insert(0, _d)\n"
+) + BAD
+ATTACKS = {"forge": FORGE, "finder": FINDER, "child": CHILD, "syspath": SYSPATH}

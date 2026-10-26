@@ -45,6 +45,7 @@ OWNER_ATTACKS = {
     "forge": f"{NEEDS_ACCOUNT} [matched 0/2]",
     "finder": f"{NEEDS_ACCOUNT} [matched 0/2]",
     "child": "blackbox:add: VERIFICATION_INCOMPLETE: SURVIVORS]",
+    "syspath": f"{NEEDS_ACCOUNT} [matched 0/2]",
 }
 
 

@@ -2,8 +2,8 @@
 test_blackbox_verify.py, plus one that tries to read the owner's answers from the declaration file.
 
 The correct fix is VERIFIED with its check passing; the wrong fix, the ``sys.modules`` swap and the
-attacks on the run (verify_helpers.ATTACKS; pytest alone calls the swap, forge and finder VERIFIED)
-fail on the check, so Core reports FAILED_VERIFICATION.
+attacks on the run (verify_helpers.ATTACKS; pytest alone calls the swap, forge, finder and syspath
+VERIFIED) fail on the check, so Core reports FAILED_VERIFICATION.
 """
 
 import json
@@ -45,11 +45,11 @@ def test_only_the_correct_fix_passes_its_check(account_state, helper_project, tm
         out[name] = verify(account_state, helper_project, base, sha, *args)[1]
     assert out["correct"]["status"] == "VERIFIED", out["correct"]
     assert "blackbox:add: PASS [matched 2/2]" in out["correct"]["reason"]
-    for name in ("wrong", "attack", "reader", "forge", "finder", "child"):
+    for name in ("wrong", "attack", "reader", "forge", "finder", "child", "syspath"):
         assert out[name]["status"] == "FAILED" and out[name]["core_status"] == "FAILED_VERIFICATION"
         want = "VERIFICATION_INCOMPLETE: SURVIVORS" if name == "child" else "MISMATCH [matched 0/2]"
         assert f"blackbox:add: {want}" in out[name]["reason"], out[name]
-    for name in ("attack", "forge", "finder"):  # pytest alone was fooled: the check was not
+    for name in ("attack", "forge", "finder", "syspath"):  # pytest was fooled, the check was not
         assert "pytest-0" not in out[name]["reason"], out[name]
 
 
