@@ -72,3 +72,29 @@ def test_the_shadow_really_reaches_a_protected_test(repo, tmp_path):
         repo, head, (spec,), tmp_path / "runs", "r1", python=sys.executable, import_paths=("src",)
     )
     assert run.observation.passed, (run.why, run.log_path.read_text())
+
+
+def test_adding_init_to_an_existing_tracked_package_dir_is_allowed(repo):
+    # base has src/mypkg123/mod.py (so the dir is a tracked tree) but no __init__.py; adding one
+    # to an existing package dir is not shadowing, so it stays writable when the name is safe.
+    commit_change(repo, {"src/mypkg123/mod.py": "x = 1\n"})
+    assert check_task(task(repo, "src/mypkg123/__init__.py"))
+
+
+def test_package_tree_query_failure_fails_closed(repo, monkeypatch):
+    # When the __init__.py is a new file, safety depends on the dir being a tracked tree, proved by
+    # `git ls-tree -d`. If that query fails we have no proof, so the input must stay protected.
+    import cairnwork.verifier_spec as vs
+    from cairnwork.gitcmd import GitCommandError
+
+    commit_change(repo, {"src/mypkg123/mod.py": "x = 1\n"})
+    real = vs.run_git
+
+    def flaky(repo_arg, *args):
+        if "-d" in args:
+            raise GitCommandError("ls-tree -d failed")
+        return real(repo_arg, *args)
+
+    monkeypatch.setattr(vs, "run_git", flaky)
+    with pytest.raises(TaskRejected, match="PROTECTED_VERIFIER_INPUT"):
+        check_task(task(repo, "src/mypkg123/__init__.py"))
