@@ -98,3 +98,11 @@ def test_package_tree_query_failure_fails_closed(repo, monkeypatch):
     monkeypatch.setattr(vs, "run_git", flaky)
     with pytest.raises(TaskRejected, match="PROTECTED_VERIFIER_INPUT"):
         check_task(task(repo, "src/mypkg123/__init__.py"))
+
+
+@pytest.mark.parametrize("path", ["SRC/colorsys.py", "Src/json.py", "SRC/evil.pth"])
+def test_a_case_variant_of_the_import_root_prefix_is_still_protected(repo, path):
+    # APFS is case-insensitive: SRC/ and src/ are the same directory on disk, so a candidate that
+    # spells the import-root component in a different case must not escape the shadow gate.
+    with pytest.raises(TaskRejected, match="PROTECTED_VERIFIER_INPUT"):
+        check_task(task(repo, path))

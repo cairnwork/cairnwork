@@ -132,8 +132,10 @@ def _first_level_unit(
                 return (path, r, name, True, name)
         else:
             prefix = f"{r}/"
-            if path.startswith(prefix):
-                rel = path[len(prefix) :]
+            # case-insensitive: on APFS SRC/ and src/ are one directory, so a case-variant prefix
+            # must not escape the gate (matches pycache_guard's APFS handling).
+            if path.casefold().startswith(prefix.casefold()):
+                rel = path[len(prefix) :]  # prefix is the same length in any case
                 if "/" not in rel and rel.endswith(".py") and rel != "__init__.py":
                     return (path, r, rel[:-3], False, "")
                 if rel.count("/") == 1 and rel.endswith("/__init__.py"):
@@ -149,7 +151,7 @@ def _is_first_level_pth(path: str, import_roots: tuple[str, ...]) -> bool:
                 return True
         else:
             prefix = f"{r}/"
-            if path.startswith(prefix):
+            if path.casefold().startswith(prefix.casefold()):
                 rel = path[len(prefix) :]
                 if "/" not in rel and rel.endswith(".pth"):
                     return True
