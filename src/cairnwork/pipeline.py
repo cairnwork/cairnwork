@@ -149,6 +149,7 @@ def check_task(task: TaskSpec, *, verifier_python: str | None = None) -> tuple[V
         repo=task.repo,
         base_commit=task.base_commit,
         python=verifier_python,
+        import_paths=task.import_paths,
     )
     if protected:
         raise TaskRejected("PROTECTED_VERIFIER_INPUT", ", ".join(protected))
