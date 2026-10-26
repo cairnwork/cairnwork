@@ -273,7 +273,7 @@ def collect(tree: ast.Module, path: str, conftests: list[ast.Module], scope: Sco
 
 
 UNSEEN = "tests here come from code the reader cannot see (count unknown)"
-_UNSEEN = ast.FunctionDef("unseen", ast.arguments(), [ast.Pass()], [], None, None, [])
+_UNSEEN: ast.FunctionDef = ast.parse("def unseen():\n    pass\n").body[0]  # type: ignore[assignment]
 
 
 @dataclass
