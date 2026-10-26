@@ -53,20 +53,56 @@ def commit_change(repo, files=None, delete=(), rename=None, message="candidate")
     return git(repo, "rev-parse", "HEAD")
 
 
+# How long collection waits for another run's account lock before it skips the account tests.
+ACCOUNT_PROBE_LOCK_SECONDS = 300.0
+
+
+def _account_state(items) -> str | None:
+    """'usable', 'unusable' or 'busy'; None when no collected test needs the account.
+
+    available() starts a process as the shared account, so it runs under the account lock like
+    every live run (Issue #247): started outside it, another session's locked run counted it as
+    a leftover ("1 process(es) outlived the run") and killed it."""
+    import pwd
+
+    from cairnwork import verifier_account as va
+
+    if not any("verifier_account" in item.keywords for item in items):
+        return None
+    account = va.VerifierAccount()
+    try:
+        pwd.getpwnam(account.user)
+    except KeyError:
+        return "unusable"  # no such user: nothing to lock or probe
+    try:
+        with account.exclusive(ACCOUNT_PROBE_LOCK_SECONDS):
+            return "usable" if account.available() else "unusable"
+    except va.AccountBusy:
+        return "busy"
+    except (OSError, va.VerifierAccountError):
+        return "unusable"
+
+
+@pytest.hookimpl(trylast=True)  # after -m/-k deselection: unselected account tests probe nothing
 def pytest_collection_modifyitems(config, items):
     """Tests marked 'sandbox' need real macOS Seatbelt. CAIRNWORK_REQUIRE_SANDBOX=1 (the
     macOS CI job) makes a missing sandbox an error; elsewhere those tests are skipped."""
     import os
 
     import cairnwork_sandbox
-    from cairnwork.verifier_account import VerifierAccount
 
-    if not VerifierAccount().available():
+    state = _account_state(items)
+    if state in ("unusable", "busy"):
         if os.environ.get("CAIRNWORK_REQUIRE_VERIFIER_ACCOUNT") == "1":
             raise pytest.UsageError(
-                "CAIRNWORK_REQUIRE_VERIFIER_ACCOUNT=1 but the account is unusable"
+                f"CAIRNWORK_REQUIRE_VERIFIER_ACCOUNT=1 but the account is {state}"
             )
-        skip_account = pytest.mark.skip(reason="needs the cairnwork-verifier account")
+        reason = (
+            "the cairnwork-verifier account is busy (another run holds its lock)"
+            if state == "busy"
+            else "needs the cairnwork-verifier account"
+        )
+        skip_account = pytest.mark.skip(reason=reason)
         for item in items:
             if "verifier_account" in item.keywords:
                 item.add_marker(skip_account)
