@@ -61,11 +61,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 import cairnwork_sandbox
-from cairnwork import pytest_config, report_channel, report_guard
+from cairnwork import gitcmd, pytest_config, report_channel, report_guard
 from cairnwork.account_checkout import checkout_differences, make_account_checkout
 from cairnwork.account_checkout import remove_checkout as _remove_checkout
 from cairnwork.bytecode_roots import bytecode_findings
@@ -221,30 +222,32 @@ def _run_all(
         work = Path(run_root) / f"{clone_id}.work"
         work.parent.mkdir(parents=True, exist_ok=True)
         work.mkdir(mode=0o700)
-        try:
-            if account is None:
-                checkout = create_attempt_clone(repo, candidate_commit, work, clone_id).path
-            else:  # the account's own copy: it may write, utime and chmod as the owner may (#240)
-                os.chmod(work, 0o3770)
-                checkout = make_account_checkout(
-                    account, python, repo, candidate_commit, work, clone_id
+        mark = gitcmd.marked(ATTEMPT_ENV, attempt_id) if attempt_id else nullcontext()
+        with mark:
+            try:
+                if account is None:
+                    checkout = create_attempt_clone(repo, candidate_commit, work, clone_id).path
+                else:  # the account's own copy: may write, utime, chmod as the owner (#240)
+                    os.chmod(work, 0o3770)
+                    checkout = make_account_checkout(
+                        account, python, repo, candidate_commit, work, clone_id
+                    )
+                runs.append(
+                    _run_one(
+                        repo,
+                        candidate_commit,
+                        spec,
+                        checkout,
+                        python,
+                        timeout,
+                        attempt_id,
+                        account,
+                        settings,
+                        note,
+                    )
                 )
-            runs.append(
-                _run_one(
-                    repo,
-                    candidate_commit,
-                    spec,
-                    checkout,
-                    python,
-                    timeout,
-                    attempt_id,
-                    account,
-                    settings,
-                    note,
-                )
-            )
-        finally:
-            _remove_checkout(work, clone_id, account)
+            finally:
+                _remove_checkout(work, clone_id, account)
     return tuple(runs)
 
 

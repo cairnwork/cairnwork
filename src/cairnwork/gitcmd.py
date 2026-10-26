@@ -10,9 +10,11 @@ inside a worker's repository except to fetch its HEAD.
 
 from __future__ import annotations
 
+import contextvars
 import os
 import re
 import subprocess
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +22,23 @@ GIT_TIMEOUT_SECONDS = 60
 NETWORK_TIMEOUT_SECONDS = 300  # fetch and push over a network; local commands keep the default
 STDERR_TAIL_CHARS = 400
 OID = re.compile(r"^[0-9a-f]{40}$")
+_MARK: contextvars.ContextVar[tuple[str, str] | None] = contextvars.ContextVar(
+    "_MARK", default=None
+)
+
+
+@contextmanager
+def marked(var: str, value: str):
+    """Mark git child processes in this context with an environment variable.
+
+    Uses a context variable, not os.environ: worker threads and other tasks are unaffected,
+    and new threads do not inherit the marker.
+    """
+    token = _MARK.set((var, value))
+    try:
+        yield
+    finally:
+        _MARK.reset(token)
 
 
 # Options that config files cannot override: no hooks, no fsmonitor command, no
@@ -116,6 +135,10 @@ def _exec(
     if not timeout or timeout <= 0:
         raise ValueError(f"timeout must be a positive number of seconds, got {timeout!r}")
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    mark = _MARK.get()
+    if mark is not None:
+        var, val = mark
+        env[var] = val
     if index_file is not None:
         env["GIT_INDEX_FILE"] = str(index_file)
     if isolate_config:
