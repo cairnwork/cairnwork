@@ -17,7 +17,12 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from cairnwork import protection
 from cairnwork_attest.verify_response import VerifyResult, _fail
+
+
+def _equal(pinned: Any, recorded: Any) -> bool:
+    return pinned == recorded
 
 
 @dataclass(frozen=True)
@@ -25,7 +30,8 @@ class Extra:
     key: str
     empty: Any  # what an absent key stands for
     shape: Callable[[Any], bool]  # True when a (possibly empty) value has the right shape
-    mismatch: str  # the failure code when a policy pins another value
+    mismatch: str  # the failure code when the recorded value does not satisfy the policy's
+    satisfies: Callable[[Any, Any], bool] = _equal  # (policy value, recorded value)
 
 
 def _path_list(value: Any) -> bool:
@@ -43,10 +49,23 @@ def _commitment(value: Any) -> bool:
     return isinstance(value, str) and (value == "" or bool(_SHA256.fullmatch(value)))
 
 
+def _level(value: Any) -> bool:
+    """#303: what the verdict rests on (cairnwork/protection.py). In a policy it is the least
+    level the receiver accepts (strict mode on the receiver's side), not a value to equal."""
+    return isinstance(value, str) and value in protection.LEVELS
+
+
 _SHA256 = re.compile(r"sha256:[0-9a-f]{64}")
 EXTRAS = (
     Extra("import_paths", [], _path_list, "IMPORT_PATHS_MISMATCH"),
     Extra("blackbox_commitment", "", _commitment, "BLACKBOX_COMMITMENT_MISMATCH"),
+    Extra(
+        "protection",
+        protection.NONE,
+        _level,
+        protection.UNPROTECTED_CODE,
+        lambda minimum, recorded: protection.at_least(recorded, minimum),
+    ),  # fmt: skip
 )
 KEYS = frozenset(extra.key for extra in EXTRAS)
 
@@ -70,12 +89,27 @@ def policy_problem(policy: Mapping[str, Any]) -> str:
 
 
 def pin_problem(ctx: Any) -> VerifyResult | None:
-    """Each optional key the policy pins must equal the binding's (order included); ctx is
-    verify_binding's check context (policy, binding)."""
+    """Each optional key the policy pins must be satisfied by the binding's (equal, order included;
+    for ``protection`` at least the pinned level); ctx is verify_binding's check context (policy,
+    binding, request). First, the binding's protection level must be the one the signed Core
+    request's required verifier ids give, so a receiver never takes the label on trust alone (only
+    the ``_macos`` grade, which the ids cannot show, is the producer's word)."""
     policy, binding = ctx.policy, ctx.binding
+    contract = ctx.request.get("acceptance_contract")
+    ids = contract.get("required_verifier_ids") if isinstance(contract, dict) else None
+    recorded = recorded_protection(binding)
+    expected = protection.level(map(str, ids), macos=False) if isinstance(ids, list) else None
+    if protection.coverage(recorded) != expected:  # the host grade is the producer's to state
+        return _fail(
+            "PROTECTION_LABEL_MISMATCH", f"protection {recorded!r} is not what Core required"
+        )
     for extra in EXTRAS:
         if policy is not None and extra.key in policy:
             recorded = binding.get(extra.key, extra.empty)
-            if policy[extra.key] != recorded:
+            if not extra.satisfies(policy[extra.key], recorded):
                 return _fail(extra.mismatch, f"the receipt records {extra.key} {recorded!r}")
     return None
+
+
+def recorded_protection(binding: Mapping[str, Any]) -> str:
+    return binding.get("protection", protection.NONE)

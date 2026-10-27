@@ -13,8 +13,9 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
+from cairnwork import protection
 from cairnwork.blackbox_judge import judge_blackbox
-from cairnwork.core_request import AcceptanceSpec
+from cairnwork.core_request import AcceptanceSpec, VerifierObservation
 from cairnwork.deferred_tests import (
     BaseUncomparable,
     TestCommitRejected,
@@ -103,14 +104,9 @@ def judge_candidate(
     result.logs = [str(run.log_path) for run in runs] + bb_logs
     if unless_passed is not None and not all(run.observation.passed for run in runs):
         raise unless_passed
-    observations = tuple(run.observation for run in runs) + tuple(c.observation for c in checks)
+    ids, observations, gate_note = _contract(task, runs, checks, declared, binding, result)
     spec = AcceptanceSpec(
-        task_id,
-        digest,
-        # from the task, not the results: a declared check that produced nothing is still required
-        tuple(run.spec.verifier_id for run in runs) + tuple(c.verifier_id for c in declared),
-        tuple(task.allowed_files) + test_files,
-        task.allow_deletions,
+        task_id, digest, ids, tuple(task.allowed_files) + test_files, task.allow_deletions
     )
     reach("NOTARIZING")
     verdict = notary.notarize(
@@ -126,4 +122,23 @@ def judge_candidate(
     recorded = notary.verdict(task_id, result.attempt_id, expected_candidate=subject)
     result.verified = bool(verdict.verified and recorded and recorded.verified)
     result.reason = verdict_reason(result.verified, verdict, recorded) + explain(runs)
-    result.reason += "".join(f" [{check.reason}]" for check in checks)
+    result.reason += "".join(f" [{check.reason}]" for check in checks) + gate_note
+
+
+def _contract(task, runs, checks, declared, binding, result):
+    """The verifier ids Core requires and the observations it gets. The ids come from the task, not
+    the results: a declared check that produced nothing is still required. Sets result.protection
+    (protection.py), which a receipt binding must already name. In strict mode one more required
+    observation, ``protection``, passes only when that level reaches the task's minimum."""
+    ids = tuple(run.spec.verifier_id for run in runs) + tuple(c.verifier_id for c in declared)
+    observations = tuple(run.observation for run in runs) + tuple(c.observation for c in checks)
+    result.protection = protection.level(ids)
+    if binding is not None and binding.get("protection", protection.NONE) != result.protection:
+        raise RuntimeError(f"the binding names another protection level than {result.protection}")
+    minimum, note = task.require_protection, ""
+    if minimum:
+        passed, artifact, digest = protection.gate(result.protection, minimum)
+        ids += (protection.GATE,)
+        observations += (VerifierObservation(protection.GATE, artifact, digest, passed),)
+        note = f" [{protection.reason(result.protection, minimum)}]"
+    return ids, observations, note

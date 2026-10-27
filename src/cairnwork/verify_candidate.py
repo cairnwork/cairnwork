@@ -46,7 +46,7 @@ from cairnwork.gitcmd import OID, GitCommandError, run_git
 from cairnwork.import_path_tree import ImportPathError, require_plain_dirs
 from cairnwork.intake import Intake, IntakeRefused
 from cairnwork.issue_task import check_verify_import_paths
-from cairnwork.notary_verify import binding_hash, nonempty_fields
+from cairnwork.notary_verify import binding_extras, binding_hash
 from cairnwork.ownership import request_digest
 from cairnwork.p2p import base_env_check, p2p_for
 from cairnwork.pipeline import (
@@ -72,13 +72,11 @@ from cairnwork.workspace import (
 def verify_candidate(
     intake: Intake,
     *,
-    repo: Path,
-    base: str,
-    candidate: str,
+    repo: Path, base: str, candidate: str,
     allowed_files: tuple[str, ...],
     verifiers: tuple[tuple[str, tuple[str, ...]], ...],
     test_commit: str = "", import_paths: tuple[str, ...] = (),
-    blackbox: Declaration | None = None,  # #303 (blackbox.py)
+    blackbox: Declaration | None = None, require_protection: str = "",  # #303 (protection.py)
 ) -> dict[str, Any]:  # fmt: skip
     """``verified`` is true only for a Core verdict bound to what was judged: the candidate, or
     with deferred tests the tree that ran (candidate plus tests) and its ``binding`` (#229), whose
@@ -99,8 +97,8 @@ def verify_candidate(
     task = TaskSpec(
         f"verify-{secrets.token_hex(8)}", "verify", "verify", "", repo, base,
         allowed_files, verifiers, test_commit=test_commit, blackbox=blackbox,
+        require_protection=require_protection, p2p_mode=intake.config()["p2p_selection"],
         test_roots=test_roots, test_store=intake.test_store(), import_paths=import_paths,
-        p2p_mode=intake.config()["p2p_selection"],
         p2p_budget=intake.config()["p2p_time_budget_seconds"],
     )  # fmt: skip
     account = intake.verifier_account()
@@ -147,6 +145,7 @@ def verify_candidate(
         "logs": result.logs,
         "p2p": result.p2p,
         "uncomparable": uncomparable,  # {code, detail, rule} when status is UNCOMPARABLE (#234)
+        "protection": result.protection,  # protection.py; "" when Core was never asked
         "tests_consumed": tests_consumed(intake, test_commit),
     }
 
@@ -304,9 +303,9 @@ def _judge_in(
             judged = lay_tests_over(
                 task.repo, judged, task.test_commit, test_files, result.attempt_id, run_root
             )
-            binding = _binding(task, candidate, test_files, judged)
         with base_stage(*verifying):
             plan = p2p_for(task, specs, test_files, run_root, result, verifying)
+        binding = _binding(task, candidate, test_files, judged, plan) if task.test_commit else None
         result.candidate_commit = judged
         digest = request_digest(task.request() | {"candidate": candidate})
         if binding:  # what a receiver can recompute, unlike the scratch paths in the request
@@ -323,13 +322,12 @@ def _judge_in(
             result.logs.append(f"cleanup failed: {exc}")
 
 
-def _binding(task, head: str, test_files: tuple[str, ...], judged: str) -> dict[str, Any]:
+def _binding(task, head: str, test_files: tuple[str, ...], judged: str, plan) -> dict[str, Any]:
     """#229: what the receipt is bound to. The scratch commit that carried the tests dies with
     the scratch clone and its id cannot be rebuilt (commit time), so the receipt names the PR head,
     the tests and the tree that ran, which a receiver rebuilds with deferred_tests.overlay_tree."""
     tree = run_git(task.repo, "rev-parse", f"{judged}^{{tree}}").strip()
-    commitment = task.blackbox.commitment() if task.blackbox else ""  # #303
-    return nonempty_fields(import_paths=list(task.import_paths), blackbox_commitment=commitment) | {
+    return binding_extras(task, plan) | {
         "rule": OVERLAY_RULE, "base": task.base_commit, "head": head,
         "test_commit": task.test_commit, "test_paths": sorted(test_files), "executed_tree": tree,
         "verifiers": [[verifier_id, list(argv)] for verifier_id, argv in task.verifiers],
