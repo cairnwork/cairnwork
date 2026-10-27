@@ -25,7 +25,7 @@ def test_no_secrets_and_no_pr_controlled_input() -> None:
 def test_permissions_are_minimal() -> None:
     perms = re.findall(r"^\s*permissions:\n((?:\s+[a-z-]+: \w+\n)+)", TEXT, re.MULTILINE)
     granted = {line.strip() for block in perms for line in block.splitlines()}
-    assert granted == {"contents: read", "issues: write"}
+    assert granted == {"contents: read", "issues: write", "actions: read"}
     assert TEXT.count("issues: write") == 1  # only the report job may write
 
 
@@ -42,7 +42,7 @@ def test_third_party_refs_are_pinned() -> None:
 
 
 def test_report_job_runs_on_failure_and_every_entry_point_is_documented() -> None:
-    assert "if: failure()" in TEXT and '"entrypoint smoke failed"' in TEXT
+    assert "if: always()" in TEXT and '"entrypoint smoke failed"' in TEXT
     for item in (
         "uv tool install --from git+https://github.com/cairnwork/cairnwork.git cairnwork",
         "cairnwork init",
@@ -53,3 +53,27 @@ def test_report_job_runs_on_failure_and_every_entry_point_is_documented() -> Non
         "https://cairnwork.github.io/keys/",
     ):
         assert item in DOC
+
+
+def test_report_job_needs_and_condition() -> None:
+    report = TEXT.split("\n  report:\n", 1)[1]
+    assert "needs: [walkthrough, verify-action]" in report
+    assert (
+        "if: always() && (contains(needs.*.result, 'failure') "
+        "|| contains(needs.*.result, 'cancelled'))" in report
+    )
+    assert "actions: read" in report
+    assert TEXT.count("actions: read") == 1  # only the report job
+
+
+def test_action_sha_equals_pinned_env() -> None:
+    env_sha = re.search(r'VERIFY_ACTION_SHA: "([0-9a-f]{40})"', TEXT)
+    assert env_sha
+    used = re.findall(r"uses: cairnwork/verify-action@(\S+)", TEXT)
+    assert used == [env_sha.group(1)]
+
+
+def test_readme_has_the_install_command_the_workflow_runs() -> None:
+    cmd = "uv tool install --from git+https://github.com/cairnwork/cairnwork.git cairnwork"
+    assert cmd in TEXT
+    assert cmd in (ROOT / "README.md").read_text(encoding="utf-8")

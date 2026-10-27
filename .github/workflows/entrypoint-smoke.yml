@@ -97,20 +97,26 @@ jobs:
           assert r["ok"] is True and r["code"] == "OK" and r["core_status"] == "VERIFIED", r
           assert r["keyid"] == os.environ["KEYID"], r
           PY
-          if cairnwork-attest verify "$fx/bundle.json" --public-key "$fx/public-key.pem" \
-              --repo dt --candidate "$DEMO_TARGET_BASE" > /dev/null; then
+          if bad="$(cairnwork-attest verify "$fx/bundle.json" --public-key "$fx/public-key.pem" \
+              --repo dt --candidate "$DEMO_TARGET_BASE" --base "$DEMO_TARGET_BASE" --json)"; then
             echo "::error::attest verify accepted the wrong candidate (fail-closed broken)"; exit 1
           fi
+          echo "$bad"
+          python3 - "$bad" <<'PY' || { echo "::error::wrong candidate was not rejected with CANDIDATE_MISMATCH"; exit 1; }
+          import json, sys
+          r = json.loads(sys.argv[1])
+          assert r["ok"] is False and r["code"] == "CANDIDATE_MISMATCH", r
+          PY
       - name: 6. Website public-key page is up and serves the key attest uses
         run: |
-          page="$(curl -fsS --retry 3 https://cairnwork.github.io/keys/)" \
+          page="$(curl -fsSL --retry 3 https://cairnwork.github.io/keys/)" \
             || { echo "::error::https://cairnwork.github.io/keys/ did not return 200"; exit 1; }
           echo "$page" | grep -q "$KEYID" || { echo "::error::keys page does not list keyid $KEYID"; exit 1; }
-          curl -fsS --retry 3 -o site-key.pem "https://cairnwork.github.io/keys/$KEYID.pem" \
+          curl -fsSL --retry 3 -o site-key.pem "https://cairnwork.github.io/keys/$KEYID.pem" \
             || { echo "::error::https://cairnwork.github.io/keys/$KEYID.pem did not return 200"; exit 1; }
           cmp site-key.pem va/fixtures/demo-target-pr4/public-key.pem \
             || { echo "::error::site key differs from the key the fixture verifies against"; exit 1; }
-          got="$(openssl pkey -pubin -in site-key.pem -outform DER | tail -c 32 | openssl dgst -sha256 | awk '{print $NF}')"
+          got="$(python3 -c 'import base64,hashlib,sys; der=base64.b64decode("".join(l for l in open(sys.argv[1]) if "-----" not in l)); print(hashlib.sha256(der[-32:]).hexdigest())' site-key.pem)"
           test "$got" = "$KEYID" || { echo "::error::site key sha256 $got is not its published keyid"; exit 1; }
 
   verify-action:
@@ -146,19 +152,22 @@ jobs:
           # the action installs cairnwork from this commit of the public repo, as a user would
           cairnwork-ref: ${{ github.sha }}
       - name: 7b. The action's outputs say VERIFIED / OK
+        env:
+          VERDICT: ${{ steps.action.outputs.verdict }}
+          CODE: ${{ steps.action.outputs.code }}
         run: |
-          test "${{ steps.action.outputs.verdict }}" = "VERIFIED" \
-            || { echo "::error::verify-action verdict is '${{ steps.action.outputs.verdict }}', code '${{ steps.action.outputs.code }}'"; exit 1; }
-          test "${{ steps.action.outputs.code }}" = "OK" \
-            || { echo "::error::verify-action code is '${{ steps.action.outputs.code }}'"; exit 1; }
+          test "$VERDICT" = "VERIFIED" \
+            || { echo "::error::verify-action verdict is '$VERDICT', code '$CODE'"; exit 1; }
+          test "$CODE" = "OK" || { echo "::error::verify-action code is '$CODE'"; exit 1; }
 
   report:
     name: open or update the failure Issue
     needs: [walkthrough, verify-action]
-    if: failure()
+    if: always() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
+      actions: read
       contents: read
       issues: write
     steps:
@@ -171,7 +180,7 @@ jobs:
         run: |
           set -euo pipefail
           failed="$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" --paginate \
-            --jq '.jobs[] | select(.conclusion == "failure") | .name as $j | .steps[] | select(.conclusion == "failure") | "- " + $j + ": " + .name' \
+            --jq '.jobs[] | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out") | .name as $j | .steps[] | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out") | "- " + $j + ": " + .name' \
             || true)"
           test -n "$failed" || failed="- (could not list failed steps; see the run)"
           body="$(printf 'Weekly entrypoint smoke (docs/ENTRYPOINTS.md) failed.\n\nRun: %s\n\nFailed steps:\n%s\n' "$RUN_URL" "$failed")"
