@@ -80,8 +80,9 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
   trees), not under a masked directory. The same holds on macOS, where Seatbelt denies the masked
   home paths (`seatbelt.CREDENTIAL_HOME_PATHS`). Without a verifier account, `cairnwork-verify run`
   refuses a state directory or run root under a masked home path (`STATE_UNDER_SANDBOX_MASK`,
-  naming the path and the prefix) before it consumes the deferred tests (#324; on Linux a symlinked
-  masked directory masks its target, so a state there is refused too, #339); with an account
+  naming the path and the prefix) before it consumes the deferred tests (#324; on Linux a masked
+  directory that is a relative symlink masks its target, and an absolute one makes bwrap fail to
+  start, so a state under the target is refused too, #339); with an account
   every sandboxed run lives under the account's own run root, never under the state.
 
 ### What a VERIFIED rests on (#303)

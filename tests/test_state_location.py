@@ -93,10 +93,11 @@ def test_account_mode_does_not_refuse_the_same_path(state, home):
 def test_a_symlinked_masked_dir_masks_its_target_on_bwrap_only(
     state, home, monkeypatch, backend, refused
 ):
-    # #339: bwrap's --tmpfs on a symlink mounts over the target; Seatbelt denies the link's path.
+    # #339: bwrap's --tmpfs on a relative symlink mounts over its target (an absolute one fails
+    # the mount, so the state cannot work there either); Seatbelt denies the link's own path.
     target = home / "dotfiles" / "config"
     target.mkdir(parents=True)
-    (home / ".config").symlink_to(target)
+    (home / ".config").symlink_to("dotfiles/config")  # relative, as bwrap masks its target
     state = _move(state, target / "cairnwork")
     monkeypatch.setattr(cairnwork_sandbox, "platform_backend", lambda: backend)
     if not refused:

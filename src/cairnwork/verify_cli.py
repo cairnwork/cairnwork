@@ -89,7 +89,7 @@ def _require_unmasked_state(intake: Intake) -> None:
     if backend is None or intake.verifier_account() is not None:
         return
     home = Path.home().resolve()
-    follow = getattr(backend, "masks_link_targets", False)  # bwrap mounts over the target (#339)
+    follow = getattr(backend, "masks_link_targets", False)  # bwrap: a link's target (#339)
     for path in (intake.state.resolve(), intake.run_root.resolve()):
         for masked in (home / rel for rel in backend.masked_home_paths):
             if path.is_relative_to(masked) or _same_dir_above(path, masked, follow):
