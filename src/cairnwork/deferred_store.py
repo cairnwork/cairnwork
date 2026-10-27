@@ -57,6 +57,11 @@ class DeferredStore:
         path = self.bundle(sha)
         return path.is_file() and not path.is_symlink()
 
+    def require_imported(self, sha: str) -> None:
+        """Strict mode (#332): a commit that is not in the store is refused before it is burned."""
+        if self.required and not self.has(sha):
+            raise TestCommitRejected("TEST_COMMIT_NOT_IMPORTED", sha)
+
     def parent(self, sha: str, repo: Path) -> str:
         """The test commit's only parent, read from the stored bundle (repo holds the base)."""
         self.check_dir()
@@ -144,12 +149,17 @@ class _Scratch:
         self.dir = parent
 
     def __enter__(self) -> Path:
+        objects = None
+        if self.repo is not None:  # ask git: a linked worktree's .git is a file (#332)
+            try:
+                common = run_git(self.repo, "rev-parse", "--git-common-dir").strip()
+            except GitCommandError as exc:
+                raise TestCommitRejected("TEST_COMMIT_UNREADABLE", f"{self.repo}: {exc}") from exc
+            objects = Path(self.repo, common).resolve() / "objects"
         self.dir = Path(tempfile.mkdtemp(dir=self.parent, prefix=".scratch-"))
         try:
             run_git(self.dir, "init", "--bare", "--quiet")
-            if self.repo is not None:
-                objects = self.repo / ".git" / "objects"
-                objects = objects if objects.is_dir() else self.repo / "objects"
+            if objects is not None:
                 info = self.dir / "objects" / "info"
                 info.mkdir(parents=True, exist_ok=True)
                 (info / "alternates").write_text(f"{objects}\n")
