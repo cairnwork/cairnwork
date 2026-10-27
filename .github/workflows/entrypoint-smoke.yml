@@ -1,0 +1,193 @@
+name: entrypoint-smoke
+
+# Weekly "stranger's walkthrough" of cairnwork's public entry points (docs/ENTRYPOINTS.md).
+# CI tests the code; nothing else follows the README on a clean machine. A public connector in
+# a sibling project was once broken for 8 days before anyone noticed, so this job installs the
+# tool exactly as the README says (from the public git URL, never from a checkout of this repo)
+# and walks each entry point. This workflow never checks out this repository: fixtures come from
+# the public cairnwork/verify-action and cairnwork/demo-target repositories, pinned by commit.
+# Triggers are cron and manual only; no repository secrets and no input from pull requests. Advisory, not a required check.
+on:
+  schedule:
+    - cron: "0 1 * * 1"  # Monday 01:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: entrypoint-smoke
+  cancel-in-progress: false
+
+env:
+  # Fixture: the demo-target PR #4 attestation published with cairnwork/verify-action.
+  VERIFY_ACTION_SHA: "76109be2296c6e28d6b8bf5217dd93d2a562451e"
+  DEMO_TARGET_SHA: "7cd79ab8ac46ed466a345fa6e4de315e20f6f78d"
+  DEMO_TARGET_BASE: "0c484d9eaeb7afdb29d542c09094770ed6f728e6"
+  KEYID: "ab0d10a508d83c26f9fffc11bfb42bb956584310ce961c082b4e46d0a4f3b47a"
+
+jobs:
+  walkthrough:
+    name: walkthrough (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    # no checkout in this job: the workspace is an empty directory
+    steps:
+      - name: Prerequisite, Linux only - bubblewrap and the AppArmor userns lift (docs/SECURITY.md)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          # end users load an AppArmor profile instead; || true as in ci.yml (older kernels lack the key)
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Prerequisite - uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+      - name: 1. Install from the public git URL (README one-liner)
+        run: |
+          uv tool install --from git+https://github.com/cairnwork/cairnwork.git cairnwork \
+            || { echo "::error::README install command failed"; exit 1; }
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: 2. cairnwork --help
+        run: |
+          cairnwork --help | tee help.log
+          grep -q 'demo' help.log || { echo "::error::cairnwork --help does not list demo"; exit 1; }
+          for tool in cairnwork-verify cairnwork-attest; do
+            "$tool" --help > /dev/null || { echo "::error::$tool --help failed"; exit 1; }
+          done
+      - name: 3. cairnwork init in a fresh dir
+        run: |
+          dir="$(mktemp -d)/state"
+          cairnwork init --dir "$dir" || { echo "::error::cairnwork init exited non-zero"; exit 1; }
+          test -s "$dir/config.json" || { echo "::error::init wrote no config.json"; exit 1; }
+          python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$dir/config.json" \
+            || { echo "::error::init wrote an invalid config.json"; exit 1; }
+      - name: 4. cairnwork demo reaches Core VERIFIED
+        run: |
+          set -o pipefail
+          cairnwork demo | tee demo.log || { echo "::error::cairnwork demo exited non-zero"; exit 1; }
+          grep -q 'core status:  VERIFIED' demo.log \
+            || { echo "::error::demo did not print 'core status:  VERIFIED'"; exit 1; }
+      - name: Fixtures - public verify-action and demo-target repositories, by commit
+        run: |
+          set -e
+          git clone --quiet https://github.com/cairnwork/verify-action.git va
+          git -C va checkout --quiet "$VERIFY_ACTION_SHA"
+          git clone --quiet https://github.com/cairnwork/demo-target.git dt
+          git -C dt cat-file -e "$DEMO_TARGET_SHA^{commit}" \
+            || { echo "::error::demo-target fixture commit is gone"; exit 1; }
+      - name: 5. cairnwork-attest verify on the signed fixture (and a wrong candidate must fail)
+        run: |
+          fx=va/fixtures/demo-target-pr4
+          out="$(cairnwork-attest verify "$fx/bundle.json" --public-key "$fx/public-key.pem" \
+            --repo dt --candidate "$DEMO_TARGET_SHA" --base "$DEMO_TARGET_BASE" --json)" \
+            || { echo "::error::attest verify rejected the published fixture: $out"; exit 1; }
+          echo "$out"
+          python3 - "$out" <<'PY' || { echo "::error::attest verify result not ok/OK/VERIFIED/keyid"; exit 1; }
+          import json, os, sys
+          r = json.loads(sys.argv[1])
+          assert r["ok"] is True and r["code"] == "OK" and r["core_status"] == "VERIFIED", r
+          assert r["keyid"] == os.environ["KEYID"], r
+          PY
+          if bad="$(cairnwork-attest verify "$fx/bundle.json" --public-key "$fx/public-key.pem" \
+              --repo dt --candidate "$DEMO_TARGET_BASE" --base "$DEMO_TARGET_BASE" --json)"; then
+            echo "::error::attest verify accepted the wrong candidate (fail-closed broken)"; exit 1
+          fi
+          echo "$bad"
+          python3 - "$bad" <<'PY' || { echo "::error::wrong candidate was not rejected with CANDIDATE_MISMATCH"; exit 1; }
+          import json, sys
+          r = json.loads(sys.argv[1])
+          assert r["ok"] is False and r["code"] == "CANDIDATE_MISMATCH", r
+          PY
+      - name: 6. Website public-key page is up and serves the key attest uses
+        run: |
+          page="$(curl -fsSL --retry 3 https://cairnwork.github.io/keys/)" \
+            || { echo "::error::https://cairnwork.github.io/keys/ did not return 200"; exit 1; }
+          echo "$page" | grep -q "$KEYID" || { echo "::error::keys page does not list keyid $KEYID"; exit 1; }
+          curl -fsSL --retry 3 -o site-key.pem "https://cairnwork.github.io/keys/$KEYID.pem" \
+            || { echo "::error::https://cairnwork.github.io/keys/$KEYID.pem did not return 200"; exit 1; }
+          cmp site-key.pem va/fixtures/demo-target-pr4/public-key.pem \
+            || { echo "::error::site key differs from the key the fixture verifies against"; exit 1; }
+          got="$(python3 -c 'import base64,hashlib,sys; der=base64.b64decode("".join(l for l in open(sys.argv[1]) if "-----" not in l)); print(hashlib.sha256(der[-32:]).hexdigest())' site-key.pem)"
+          test "$got" = "$KEYID" || { echo "::error::site key sha256 $got is not its published keyid"; exit 1; }
+
+  verify-action:
+    name: verify-action on the published fixture
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Fixtures - verify-action (bundle, key) and demo-target (candidate history)
+        uses: actions/checkout@v4
+        with:
+          repository: cairnwork/verify-action
+          ref: ${{ env.VERIFY_ACTION_SHA }}
+          path: va
+          persist-credentials: false
+      - name: Fixtures - demo-target full history
+        uses: actions/checkout@v4
+        with:
+          repository: cairnwork/demo-target
+          ref: ${{ env.DEMO_TARGET_SHA }}
+          fetch-depth: 0
+          path: dt
+          persist-credentials: false
+      - name: 7. cairnwork/verify-action verifies the fixture bundle
+        id: action
+        uses: cairnwork/verify-action@76109be2296c6e28d6b8bf5217dd93d2a562451e
+        with:
+          bundle-path: ${{ github.workspace }}/va/fixtures/demo-target-pr4/bundle.json
+          public-key: ${{ github.workspace }}/va/fixtures/demo-target-pr4/public-key.pem
+          candidate: ${{ env.DEMO_TARGET_SHA }}
+          base: ${{ env.DEMO_TARGET_BASE }}
+          repo-path: dt
+          require-when: always
+          # the action installs cairnwork from this commit of the public repo, as a user would
+          cairnwork-ref: ${{ github.sha }}
+      - name: 7b. The action's outputs say VERIFIED / OK
+        env:
+          VERDICT: ${{ steps.action.outputs.verdict }}
+          CODE: ${{ steps.action.outputs.code }}
+        run: |
+          test "$VERDICT" = "VERIFIED" \
+            || { echo "::error::verify-action verdict is '$VERDICT', code '$CODE'"; exit 1; }
+          test "$CODE" = "OK" || { echo "::error::verify-action code is '$CODE'"; exit 1; }
+
+  report:
+    name: open or update the failure Issue
+    needs: [walkthrough, verify-action]
+    if: always() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    steps:
+      - name: Open or update the "entrypoint smoke failed" Issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          failed="$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" --paginate \
+            --jq '.jobs[] | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out") | .name as $j | .steps[] | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out") | "- " + $j + ": " + .name' \
+            || true)"
+          test -n "$failed" || failed="- (could not list failed steps; see the run)"
+          body="$(printf 'Weekly entrypoint smoke (docs/ENTRYPOINTS.md) failed.\n\nRun: %s\n\nFailed steps:\n%s\n' "$RUN_URL" "$failed")"
+          n="$(gh issue list --repo "$REPO" --state open --search 'entrypoint smoke failed in:title' \
+            --json number,title --jq '[.[] | select(.title == "entrypoint smoke failed")][0].number // empty')"
+          if [ -n "$n" ]; then
+            gh issue comment "$n" --repo "$REPO" --body "$body"
+          else
+            gh issue create --repo "$REPO" --title "entrypoint smoke failed" --body "$body"
+          fi
