@@ -9,8 +9,10 @@ from test_deferred_tests import CHECK, REGRESSION, make_test_commit
 from test_deferred_tests import project as project  # noqa: F401 - fixture
 from verify_helpers import FIX, candidate, verify
 
+import cairnwork_sandbox
 from cairnwork.intake import Intake, IntakeRefused
 from cairnwork.verify_cli import _require_unmasked_state
+from cairnwork_sandbox import bwrap, seatbelt
 
 TESTS = {"tests/test_regression.py": REGRESSION}
 VERIFIER = " ".join(CHECK[0][1])
@@ -85,3 +87,23 @@ def test_account_mode_does_not_refuse_the_same_path(state, home):
     with pytest.raises(IntakeRefused) as err:
         _require_unmasked_state(intake)
     assert err.value.code == "STATE_UNDER_SANDBOX_MASK"
+
+
+@pytest.mark.parametrize(("backend", "refused"), [(bwrap.BACKEND, True), (seatbelt.BACKEND, False)])
+def test_a_symlinked_masked_dir_masks_its_target_on_bwrap_only(
+    state, home, monkeypatch, backend, refused
+):
+    # #339: bwrap's --tmpfs on a relative symlink mounts over its target (an absolute one fails
+    # the mount, so the state cannot work there either); Seatbelt denies the link's own path.
+    target = home / "dotfiles" / "config"
+    target.mkdir(parents=True)
+    (home / ".config").symlink_to("dotfiles/config")  # relative, as bwrap masks its target
+    state = _move(state, target / "cairnwork")
+    monkeypatch.setattr(cairnwork_sandbox, "platform_backend", lambda: backend)
+    if not refused:
+        _require_unmasked_state(Intake(state))
+        return
+    with pytest.raises(IntakeRefused) as err:
+        _require_unmasked_state(Intake(state))
+    assert err.value.code == "STATE_UNDER_SANDBOX_MASK"
+    assert str(home / ".config") in err.value.detail

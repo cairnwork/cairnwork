@@ -59,8 +59,13 @@ class DeferredStore:
 
     def require_imported(self, sha: str) -> None:
         """Strict mode (#332, #337): an unsafe store, or a commit that is not in it, is refused
-        before the commit is burned."""
+        before the commit is burned. Auto mode (#339): the caller has just checked that the
+        mirror lacks the commit (the run's clone adds only the base's and the candidate's
+        history, and the candidate's parent is the base), so one the store holds will be
+        fetched from it: check now."""
         if not self.required:
+            if self.has(sha):
+                self.check_dir()
             return
         self.check_dir()
         if not self.has(sha):

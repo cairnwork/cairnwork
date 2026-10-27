@@ -369,6 +369,8 @@ class BwrapBackend:
 
     name = NAME
     masked_home_paths: tuple[str, ...] = _CRED_DIRS + _CRED_FILES
+    # --tmpfs on a relative symlink mounts over its target (an absolute one fails the mount).
+    masks_link_targets = True
 
     def available(self) -> bool:
         return available()
