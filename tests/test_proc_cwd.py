@@ -226,3 +226,31 @@ def test_the_cwd_of_a_child_is_read(tmp_path):
     finally:
         child.kill()
         child.wait()
+
+
+def test_attempt_dirs_returns_blackbox_vbb_directories(tmp_path):
+    root = tmp_path / "runs"
+    own = [f"{ATTEMPT}-v-vbb", f"{ATTEMPT}-v-vbb.work"]
+    _dirs(root, *own)
+    found = proc_cwd.attempt_dirs([root], ATTEMPT)
+    expected = {root.resolve() / n for n in own}
+    assert set(found) == expected and len(found) == len(expected)
+
+
+def test_another_attempt_vbb_dir_is_not_counted(tmp_path):
+    root = tmp_path / "runs"
+    _dirs(root, "a1-v-vbb", "a10-v-vbb", "a1x-v-vbb")
+    assert proc_cwd.attempt_dirs([root], "a1") == ((root / "a1-v-vbb").resolve(),)
+
+
+def test_near_miss_vbb_suffixes_are_not_counted(tmp_path):
+    root = tmp_path / "runs"
+    near_miss = [
+        f"{ATTEMPT}-v-vbbx",
+        f"{ATTEMPT}-v-bb",
+        f"{ATTEMPT}-v-vb",
+        f"{ATTEMPT}-v-vbbb",
+        f"{ATTEMPT}-v-vBB",
+    ]
+    _dirs(root, *near_miss)
+    assert proc_cwd.attempt_dirs([root], ATTEMPT) == ()

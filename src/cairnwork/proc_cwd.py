@@ -137,13 +137,13 @@ def cwd_of(pid: int) -> str | None:
 
 def attempt_dirs(roots, attempt_id: str) -> tuple[Path, ...]:
     """Realpaths of the attempt's own run directories under each root: ``<attempt_id>`` and
-    ``<attempt_id>-<tag>-v<n>[.suffix]``. Only real directories (never a symlink) whose
-    realpath is strictly inside the root's; a malformed attempt id gives none. Never raises: a
-    root that is not a directory or cannot be listed is skipped, and so is an entry that cannot
-    be checked."""
+    ``<attempt_id>-<tag>-v<n>[.suffix]`` (the part after ``-v`` may be digits or ``bb``). Only
+    real directories (never a symlink) whose realpath is strictly inside the root's; a malformed
+    attempt id gives none. Never raises: a root that is not a directory or cannot be listed is
+    skipped, and so is an entry that cannot be checked."""
     if not isinstance(attempt_id, str) or not ATTEMPT_ID.fullmatch(attempt_id):
         return ()
-    name = re.compile(rf"{re.escape(attempt_id)}-[vbpqre]-v[0-9]+(\.[^/]*)?")
+    name = re.compile(rf"{re.escape(attempt_id)}-[vbpqre]-v([0-9]+|bb)(\.[^/]*)?")
     found: list[Path] = []
     for root in roots:
         try:
