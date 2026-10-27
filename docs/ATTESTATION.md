@@ -238,7 +238,9 @@ the **tree** that ran, and its receipt names the **PR head** (the candidate) as 
   `"blackbox_macos"`: what a VERIFIED verdict rests on (docs/SECURITY.md, "What a VERIFIED rests
   on"). It is absent for `"same_process_only"`. A receiver checks it, without the `_macos`
   suffix, against the required verifier ids in the signed Core request
-  (`PROTECTION_LABEL_MISMATCH` when they disagree) and reports it as `assurance.protection`.
+  (`PROTECTION_LABEL_MISMATCH` when they disagree), refuses a level above `"same_process_only"`
+  without a `blackbox_commitment` (`PROTECTION_UNCOMMITTED`), and reports it as
+  `assurance.protection`.
 - `"sha256:" + sha256(canonical JSON of binding)` replaces `acceptance_contract.requirements_hash`
   on this path only. Core's response echoes `acceptance_contract_hash`, so the chain binding ->
   requirements_hash -> contract -> Core response breaks if a binding is edited or taken from
@@ -322,8 +324,12 @@ Checks run in this order and the first failure is reported:
 7. test source: `hidden_test_commit` and the policy's pins; in full mode the test commit is one
    commit on the base changing exactly `test_paths` (`TEST_SOURCE_MISMATCH`); with `test_roots`,
    every bound test path must start with one of the roots, in both modes (`TEST_ROOT_VIOLATION`);
-   each optional binding key the policy pins must equal the receipt's (`IMPORT_PATHS_MISMATCH`,
-   `BLACKBOX_COMMITMENT_MISMATCH`)
+   the binding's `protection` must be the level of the request's required verifier ids, without
+   the `_macos` suffix (`PROTECTION_LABEL_MISMATCH`; absent means `"same_process_only"`), and a
+   level above that needs a `blackbox_commitment` (`PROTECTION_UNCOMMITTED`); each optional
+   binding key the policy pins must equal the receipt's (`IMPORT_PATHS_MISMATCH`,
+   `BLACKBOX_COMMITMENT_MISMATCH`), except `protection`, which must be at least the pinned level
+   (`UNPROTECTED`)
 8. tree (full: `TREE_MISMATCH`, `OVERLAY_UNSUPPORTED_ENTRY`; `REBUILD_FAILED` when git cannot
    rebuild the tree in the receiver's repository, e.g. it is read-only, which says nothing about
    the receipt) or head-tree (confidential: `HEAD_TREE_MISMATCH`, `OVERLAY_UNSUPPORTED_ENTRY`)
@@ -333,7 +339,8 @@ On success `verify --json` adds `assurance`, what the receiver checked itself (`
 `mode` (`full`/`confidential`), `test_source` (`policy_pinned` with `--policy`, otherwise
 `signer_choice`: the test commit the signer chose, which the receiver should read itself), `head`, `non_test_paths` (`verified` or
 `verified_against_core_manifest`), `test_contents` (`verified` or `not_verified`), `overlay`
-(`rebuilt` or `not_verified`) and `verifier_runs` (always `signer_claim`). Without `--json` the
+(`rebuilt` or `not_verified`), `verifier_runs` (always `signer_claim`) and `protection` (#303:
+the binding's level, checked in step 7; `"same_process_only"` when the binding has none). Without `--json` the
 same object follows the `OK` line. A verify-action that predates v0.2 refuses these receipts with
 `STATEMENT_SHAPE` (closed, not open); the note is attached to the PR head, so `publish` is
 unchanged. `check-run --repo` without a policy reports `POLICY_REQUIRED` when the tests are

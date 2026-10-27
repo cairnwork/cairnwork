@@ -92,8 +92,10 @@ def pin_problem(ctx: Any) -> VerifyResult | None:
     """Each optional key the policy pins must be satisfied by the binding's (equal, order included;
     for ``protection`` at least the pinned level); ctx is verify_binding's check context (policy,
     binding, request). First, the binding's protection level must be the one the signed Core
-    request's required verifier ids give, so a receiver never takes the label on trust alone (only
-    the ``_macos`` grade, which the ids cannot show, is the producer's word)."""
+    request's required verifier ids give (only the ``_macos`` grade, which the ids cannot show, is
+    the producer's word), and a level above ``same_process_only`` needs a blackbox commitment in
+    the binding (PROTECTION_UNCOMMITTED): the ``blackbox:*`` ids then stand for a declaration the
+    receiver can pin, never for the signer's naming alone."""
     policy, binding = ctx.policy, ctx.binding
     contract = ctx.request.get("acceptance_contract")
     ids = contract.get("required_verifier_ids") if isinstance(contract, dict) else None
@@ -103,6 +105,8 @@ def pin_problem(ctx: Any) -> VerifyResult | None:
         return _fail(
             "PROTECTION_LABEL_MISMATCH", f"protection {recorded!r} is not what Core required"
         )
+    if recorded != protection.NONE and not binding.get("blackbox_commitment"):
+        return _fail("PROTECTION_UNCOMMITTED", f"protection {recorded!r} without a declaration")
     for extra in EXTRAS:
         if policy is not None and extra.key in policy:
             recorded = binding.get(extra.key, extra.empty)

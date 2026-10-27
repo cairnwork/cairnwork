@@ -54,6 +54,8 @@ def test_the_macos_grade_is_a_level_of_its_own():
     assert not protection.at_least("partial_macos", "partial")
     assert not protection.at_least("blackbox_macos", "partial")
     assert not protection.at_least("partial_macos", "blackbox_macos")
+    assert not protection.at_least("blackbox_macos", "blackbox")
+    assert protection.at_least("blackbox", "blackbox_macos")
     assert not protection.at_least("same_process_only", "partial_macos")
     assert protection.at_least("blackbox_macos", "same_process_only")
     assert protection.coverage("blackbox_macos") == "blackbox" and protection.coverage("x") == ""
