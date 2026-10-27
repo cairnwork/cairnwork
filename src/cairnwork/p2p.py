@@ -60,6 +60,7 @@ import cairnwork_sandbox
 from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRejected
 from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.issue_task import test_target
+from cairnwork.p2p_probe_log import probe_log_tail
 from cairnwork.p2p_selection import DEFAULT_BUDGET_SECONDS, select_p2p_targets
 from cairnwork.verifiers import VerifierRun, VerifierSpec, run_verifiers
 
@@ -108,19 +109,25 @@ def _probe(task, files, run_root, result, verifying, budget, tag="p"):
         python=verifying[1], base_commit=task.base_commit, timeout=budget,
         import_paths=task.import_paths,
     )  # fmt: skip
-    for run in runs:  # base evidence is not for Core
-        shutil.rmtree(Path(run.log_path).parent, ignore_errors=True)
     run = runs[0]
+    reason = None
     if run.timed_out:
-        return None, "base-probe-timeout"
-    if run.report_too_big:
-        return None, "base-probe-report-over-cap"
-    if run.survivors:  # the base leaves a process (or cannot tell): the candidate run would too
-        return None, UNCLEAN[0]
-    if run.mutated:  # the base's own tests write into the checkout: same for the candidate
-        return None, UNCLEAN[1]
-    if run.returncode not in (0, 1) or not run.outcomes:
-        return None, "base-probe-failed"
+        reason = "base-probe-timeout"
+    elif run.report_too_big:
+        reason = "base-probe-report-over-cap"
+    elif run.survivors:  # the base leaves a process (or cannot tell): the candidate run would too
+        reason = UNCLEAN[0]
+    elif run.mutated:  # the base's own tests write into the checkout: same for the candidate
+        reason = UNCLEAN[1]
+    elif run.returncode not in (0, 1) or not run.outcomes:
+        reason = "base-probe-failed"
+    if reason is not None:
+        tail = probe_log_tail(run.log_path)
+        result.logs.append(f"p2p base probe {tag}: {reason}, rc={run.returncode}: {tail}")
+    for r in runs:  # base evidence is not for Core
+        shutil.rmtree(Path(r.log_path).parent, ignore_errors=True)
+    if reason is not None:
+        return None, reason
     return run.outcomes, ""
 
 
