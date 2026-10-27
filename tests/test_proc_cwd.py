@@ -254,3 +254,28 @@ def test_near_miss_vbb_suffixes_are_not_counted(tmp_path):
     ]
     _dirs(root, *near_miss)
     assert proc_cwd.attempt_dirs([root], ATTEMPT) == ()
+
+
+@macos
+def test_a_crashed_blackbox_runs_cwd_only_leftover_is_killed(tmp_path):
+    # #314: a blackbox run clones into <run_id>-vbb; a /bin/sleep it left behind (environment
+    # withheld by macOS) is tied to the attempt by its working directory and killed.
+    root = tmp_path / "runs"
+    _dirs(root, f"{ATTEMPT}-v-vbb")
+    where = os.path.realpath(root / f"{ATTEMPT}-v-vbb")
+    child = subprocess.Popen(["/bin/sleep", "30"], env={"A": "1"}, cwd=where)  # noqa: S603
+    try:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:  # wait for the exec
+            raw = proc_cwd._sysctl((1, 49, child.pid), proc_cwd._argmax() or 0)
+            if raw and raw[4:].startswith(b"/bin/sleep\0"):
+                break
+            time.sleep(0.05)
+        assert proc_cwd.environment_withheld(child.pid) is True
+        dirs = proc_cwd.attempt_dirs([root], ATTEMPT)
+        row = (child.pid, child.pid, os.getuid(), set())
+        assert proc_cwd.kill_withheld_in([row], dirs, os.getuid()) == ([child.pid], [], 0)
+        assert child.wait(timeout=10) == -9
+    finally:
+        child.kill()
+        child.wait()
