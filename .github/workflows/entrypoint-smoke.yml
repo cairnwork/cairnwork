@@ -38,7 +38,7 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: ${{ runner.temp }}
+    # no checkout in this job: the workspace is an empty directory
     steps:
       - name: Prerequisite, Linux only - bubblewrap and the AppArmor userns lift (docs/SECURITY.md)
         if: runner.os == 'Linux'
