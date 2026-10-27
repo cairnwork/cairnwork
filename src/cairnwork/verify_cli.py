@@ -89,9 +89,10 @@ def _require_unmasked_state(intake: Intake) -> None:
     if backend is None or intake.verifier_account() is not None:
         return
     home = Path.home().resolve()
+    follow = getattr(backend, "masks_link_targets", False)  # bwrap mounts over the target (#339)
     for path in (intake.state.resolve(), intake.run_root.resolve()):
         for masked in (home / rel for rel in backend.masked_home_paths):
-            if path.is_relative_to(masked) or _same_dir_above(path, masked):
+            if path.is_relative_to(masked) or _same_dir_above(path, masked, follow):
                 raise IntakeRefused(
                     "STATE_UNDER_SANDBOX_MASK",
                     f"{path} is under {masked}, which the verifier sandbox masks;"
@@ -99,10 +100,11 @@ def _require_unmasked_state(intake: Intake) -> None:
                 )
 
 
-def _same_dir_above(path: Path, masked: Path) -> bool:
-    """``path`` or a parent is ``masked`` under another spelling (APFS ignores case)."""
+def _same_dir_above(path: Path, masked: Path, follow: bool = False) -> bool:
+    """``path`` or a parent is ``masked`` under another spelling (APFS ignores case), or with
+    ``follow`` the directory a symlinked ``masked`` points to."""
     try:
-        want = masked.lstat()
+        want = masked.stat() if follow else masked.lstat()
     except OSError:
         return False
     for p in (path, *path.parents):
