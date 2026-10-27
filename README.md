@@ -4,20 +4,21 @@ Cairnwork 是 Nexus-new 的後繼產品：一個接任務、執行、驗證，�
 
 ## 定位：完成有證據
 
-> Cairnwork 是小型 pytest 修補的試點驗收工具，依賴自備延後測試；通過仍需人工審查，外部收據驗證修復中（[#229](https://github.com/cairnwork/cairnwork/issues/229)）。
+> Cairnwork 是小型 pytest 修補的試點驗收工具，依賴自備延後測試；通過仍需人工審查。與候選碼同程序執行的一般 pytest，其 PASS 不具防竄改保證，`cairnwork-verify` 的輸出與帶延後測試的收據會標出保護等級（見 [docs/SECURITY.md](docs/SECURITY.md)）。
 
 Cairnwork 是 AI 寫程式代理人的交付驗證層。核心價值不是提高成功率，而是「完成有證據」：變更唯有通過延後隱藏測試才算完成（只有 `test_source: "bundle"` 嚴格模式保證 worker 看不到測試；預設 `auto` 是相容／示範模式，不作保密主張），並可附上離線可驗證的簽署證明（見 [docs/ATTESTATION.md](docs/ATTESTATION.md)）。具體是四件事：
 
 - **僅驗收完成**：沒通過驗收程序的候選 commit 不算完成。
 - **延後隱藏測試**：驗收用的測試在 worker 結束後才套到候選上，worker 的 clone 只有 base。保密保證只在 `test_source: "bundle"`（測試只放私有存放區、沒匯入就拒絕、絕不退回 origin）成立；`auto`（程式預設）有 bundle 就用、沒有才從 origin 的公開分支抓，worker 仍可能找得到，所以不主張保密。證明包的 `test_source` 欄位記錄該次執行當時用的模式（取自執行時寫入的紀錄，不是現在的 config.json；沒有隱藏測試或舊的執行為 `none`）。
 - **隔離驗證器＋Core 公證**：驗收在專用帳號與沙盒（macOS Seatbelt／Linux bubblewrap）執行，請求與結果進只增不改的紀錄，由 Core（nexus-certify）核驗並綁定確切的候選 commit。
-- **簽署證明可離線驗證**：驗收紀錄可用 `cairnwork-attest statement --sign` 產出 in-toto＋DSSE Ed25519 證明包，第三方用 `cairnwork-attest verify` 只靠公鑰與本機 git 物件離線重算；PR 上可用 [cairnwork/verify-action](https://github.com/cairnwork/verify-action) 自動檢查。**現況限制**：`cairnwork-verify` 驗外部候選時，收據綁到驗證當下疊上測試的暫存 commit，驗完就刪，收件方目前驗不了（#229 修復中）；由 Issue runner 開的 PR 不受影響。
+- **簽署證明可離線驗證**：驗收紀錄可用 `cairnwork-attest statement --sign` 產出 in-toto＋DSSE Ed25519 證明包，第三方用 `cairnwork-attest verify` 只靠公鑰與本機 git 物件離線重算；PR 上可用 [cairnwork/verify-action](https://github.com/cairnwork/verify-action) 自動檢查。`cairnwork-verify` 驗外部候選時，收件方用自己的政策檔（釘選測試來源、Core 身分與簽章金鑰）離線驗證收據；機密模式只證明「非測試路徑與 PR head 逐位元相同、簽署者聲稱跑了政策指定的測試」，不驗測試內容（[#229](https://github.com/cairnwork/cairnwork/issues/229)，壓力重放 172/172 放行）。
 
 不主張：
 
 - 不主張提高模型解決任務的成功率（強模型在小 bug 上本來就很少錯）。
 - 不主張取代人工程式碼審查。
 - 不主張是互動式 coding agent 或對話助理。
+- 不主張一般 pytest 測試能防住刻意作弊：候選碼與測試同程序時，可以改寫測試讀到的值。只有宣告的黑箱檢查（期望值放在候選碼從未執行過的程序）受保護；`protection` 欄位標明 `blackbox`／`partial`／`same_process_only`（macOS 上受保護的兩級為 `blackbox_macos`／`partial_macos`，等級較低，#316）。`cairnwork-verify run --blackbox <宣告檔> --require-protection` 要求受保護才算 VERIFIED（`partial` 與 `partial_macos` 都算）；沒有 `--blackbox` 時直接拒絕（UNPROTECTED）。
 - 不主張驗證通過就沒有缺陷：Nexus-new#2813（修正 PR #2856）是 Core VERIFIED、但獨立審查仍抓到拒絕檢查可被繞過的實例。驗證是證據，不是證明。
 
 Nexus-new 是**參考**，不是搬家來源。決定與理由：knowledge `nexus/decisions/2026-10-19-cairnwork-owner-decision.md`；議會條文 A–I：`nexus/decisions/council-2026-10-19-cairnwork/CONSENSUS_R2.md`。
