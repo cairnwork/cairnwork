@@ -92,8 +92,10 @@ Today the only protected observation is a declared blackbox check (`cairnwork-ve
 #303): the owner holds the answers, the candidate's function runs in the sandbox under the verifier
 account with the inputs only, and the owner compares. Core's definition of VERIFIED is unchanged,
 so a verdict can still be VERIFIED on same-process tests alone. It is never silent about it: every
-`cairnwork-verify` output has `protection`, the level of the verifier ids Core was asked to
-require (`cairnwork/protection.py`):
+`cairnwork-verify run` result (`status` VERIFIED, FAILED, REFUSED or UNCOMPARABLE) has
+`protection`, the level of the verifier ids Core was asked to require (`cairnwork/protection.py`).
+An error output (`{"error": ...}`: a usage error, a task refused before it ran, an internal error)
+has no `protection`, and no verdict either:
 
 - `"blackbox"`: every required observation is a declared blackbox check;
 - `"partial"`: some are, the rest (pytest verifiers, P2P) are same-process;
@@ -105,11 +107,15 @@ macOS cross-run IPC residual above (#316), so a lower grade than the same level 
 minimum without the suffix (`"partial"`, `"blackbox"`) accepts only the Linux grade; one with it
 accepts either.
 
-A receipt with deferred tests (v0.2) records the level in its binding (docs/ATTESTATION.md) and the
+A receipt with deferred tests (v0.2) records the level in its binding (docs/ATTESTATION.md). The
 receiver checks it against the signed Core request (the ids show the level without the host grade;
-the `_macos` suffix is the producer's statement). A v0.1 receipt (no deferred tests) has no
-binding: its level is what `protection.level` gives for the request's `required_verifier_ids`,
-without a host grade.
+the `_macos` suffix is the producer's statement), and a level above `"same_process_only"` must
+come with the declaration's `blackbox_commitment` in the binding (`PROTECTION_UNCOMMITTED`
+otherwise). So the `blackbox:*` ids stand for a declaration, not for the signer's naming alone: a
+receiver that pins `blackbox_commitment` (computed from its own copy of the declaration) knows
+which one. A v0.1 receipt (no deferred tests) has no binding and carries no label: its level is
+`protection.level(required_verifier_ids, macos=False)` over the signed request, the coverage
+without a host grade, and nothing in the receipt ties those ids to a declaration.
 
 **Strict mode** (off by default): `cairnwork-verify run --require-protection` asks for at least
 `"partial_macos"`, so a protected run passes on either host (without `--blackbox` it is refused

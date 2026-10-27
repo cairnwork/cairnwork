@@ -26,13 +26,19 @@ from tests.attest.binding_helpers import (
 )
 
 CHECKED = ("pytest-0", "blackbox:add")
+COMMITMENT = "sha256:" + "c" * 64  # as the producer records it whenever a declaration was given
 
 
-def _world(tmp_path: Path, label: str, required: tuple[str, ...]) -> dict:
+def _world(
+    tmp_path: Path, label: str, required: tuple[str, ...], commitment: str | None = None
+) -> dict:
     tmp_path.mkdir(parents=True, exist_ok=True)
     p = producer(tmp_path)
     state = tmp_path / "state"
-    run = notarize_bound(state, p, protection=label, required=required)
+    commitment = (COMMITMENT if label else "") if commitment is None else commitment
+    run = notarize_bound(
+        state, p, protection=label, required=required, blackbox_commitment=commitment
+    )
     bundle = sign_bound(state, run, tmp_path / "bundle.json")
     full = receiver(tmp_path, "full", p["work"], p["head"], p["tests"])
     return {**p, "state": state, "bundle": bundle, "full": full, "pub": state / "public.pem",
@@ -141,3 +147,20 @@ def test_the_macos_grade_is_its_own_level(tmp_path):
 def test_the_linux_grade_meets_a_macos_minimum(world):
     assert check(world, policy=minimum(world, "partial_macos")).ok
     assert check(world, policy=minimum(world, "blackbox_macos")).code == "UNPROTECTED"
+
+
+def test_a_blackbox_macos_receipt_does_not_meet_a_blackbox_pin(tmp_path):
+    w = _world(tmp_path / "bbmac", "blackbox_macos", ("blackbox:add",))
+    assert check(w).ok
+    assert check(w, policy=minimum(w, "blackbox")).code == "UNPROTECTED"
+    assert check(w, policy=minimum(w, "blackbox_macos")).ok
+
+
+@pytest.mark.parametrize("label,required", [("partial", CHECKED), ("blackbox", ("blackbox:add",))])
+def test_a_protected_label_needs_a_declaration_commitment(tmp_path, label, required):
+    """A level above same_process_only rests on blackbox:* ids; without the declaration's
+    commitment in the binding those ids would be the signer's naming alone."""
+    w = _world(tmp_path / "w", label, required, commitment="")
+    assert check(w).code == "PROTECTION_UNCOMMITTED"
+    plain = _world(tmp_path / "plain", "", ("pytest-0",), commitment="")
+    assert check(plain).ok  # same_process_only needs none
