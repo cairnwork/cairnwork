@@ -19,7 +19,7 @@ from typing import Any
 from .config import pytest_config
 from .literals import Refused
 from .obligations import Scope, collect
-from .resolve import Imports, Project
+from .resolve import Imports, Project, _bound_names
 from .scope import import_time
 from .shapes import drafts_for
 
@@ -117,14 +117,16 @@ def module_env(tree: ast.Module) -> dict[str, ast.expr]:
     seen: dict[str, ast.expr] = {}
     twice: set[str] = set()
     for node in tree.body:
-        targets = node.targets if isinstance(node, ast.Assign) else []
-        names = [t.id for t in targets if isinstance(t, ast.Name)]
-        if isinstance(node, ast.AugAssign | ast.AnnAssign) and isinstance(node.target, ast.Name):
-            twice.add(node.target.id)
-        if len(targets) == 1 and len(names) == 1:
-            if names[0] in seen:
-                twice.add(names[0])
-            seen[names[0]] = node.value  # type: ignore[union-attr]
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            if isinstance(target, ast.Name):
+                twice |= {target.id} & set(seen)
+                seen[target.id] = node.value
+                continue
+        if isinstance(node, ast.Import):  # any other binding (def, class, import, X += ...)
+            twice |= {a.asname or a.name.split(".")[0] for a in node.names}
+        else:
+            twice |= set(_bound_names(node))
     return {name: value for name, value in seen.items() if name not in twice}
 
 

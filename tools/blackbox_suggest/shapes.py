@@ -68,6 +68,7 @@ class Body:
         self.used: set[str] = set()
         self.locals: set[str] = set()
         self.passed: dict[str, int] = {}  # name -> calls it is passed to
+        self.compared: set[str] = set()  # names an expected value reaches
         self.drafts: list[Draft] = []
 
     def run(self, func: ast.FunctionDef | ast.AsyncFunctionDef) -> list[Draft]:
@@ -84,6 +85,8 @@ class Body:
         shared = [n for n, k in self.passed.items() if k > 1 and _mutable(self.env.get(n))]
         if shared:
             raise Refused("a list or dict is passed to several calls (one call may change it)")
+        if any(n in self.passed and _mutable(self.env.get(n)) for n in self.compared):
+            raise Refused("a list or dict passed to a call is also an expected value")
         if any(n in self.module_names and _mutable(self.env.get(n)) for n in self.passed):
             raise Refused("a module-level list or dict is passed to a call (other tests share it)")
         if set(self.results) - self.used:
@@ -196,6 +199,7 @@ class Body:
         )
 
     def expected(self, node: ast.expr, line: int) -> tuple[dict[str, Any], set[str]]:
+        self.compared |= self.reach(node)  # d = [1]; f(d); assert g() == d: f may change d
         if isinstance(node, ast.Call) and (dotted(node.func) or [""])[-1] == "approx":
             if len(node.args) != 1:
                 raise Refused(f"line {line}: approx() of something other than one value")

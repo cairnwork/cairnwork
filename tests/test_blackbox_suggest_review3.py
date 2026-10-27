@@ -266,3 +266,63 @@ def test_a_callee_rebound_by_an_annotated_assignment_is_refused(tmp_path):
     files = {"src/pkg/core.py": "def f(x):\n    return x\nf: object = None\n"}
     (item,) = run(tmp_path, PLAIN, files)
     assert not item.protected(KINDS_NOW)
+
+
+# Gemini cross-model review, round 6.
+
+
+def test_a_module_constant_rebound_by_a_def_is_not_a_literal(tmp_path):
+    body = """
+        from pkg.core import f
+        X = 1
+        def X():
+            return 2
+        def test_a():
+            assert f(X) == 1
+    """
+    (item,) = run(tmp_path, body)
+    assert not item.protected(KINDS_NOW)
+
+
+def test_fixture_params_through_a_keyword_only_dependency_are_counted(tmp_path):
+    body = """
+        import pytest
+        from pkg.core import f
+        @pytest.fixture(params=[1, 2, 3])
+        def base(request):
+            return request.param
+        @pytest.fixture
+        def derived(*, base):
+            return base
+        def test_a(derived):
+            assert f(derived) == 1
+    """
+    found = run(tmp_path, body)
+    assert len(found) == 3 or not all(o.exact for o in found)
+
+
+def test_marks_of_a_local_base_class_are_inherited(tmp_path):
+    body = """
+        import pytest
+        from pkg.core import f
+        @pytest.mark.skip(reason="unsupported")
+        class Base:
+            def test_a(self):
+                assert f(1) == 1
+        class TestChild(Base):
+            pass
+    """
+    (item,) = run(tmp_path, body)
+    assert not item.protected(KINDS_NOW)
+
+
+def test_a_list_passed_to_a_call_and_then_expected_is_refused(tmp_path):
+    body = """
+        from pkg.core import push, f
+        def test_a():
+            d = [1]
+            assert push(d, 2) == [1, 2]
+            assert f(1) == d
+    """
+    (item,) = run(tmp_path, body)
+    assert not item.protected(KINDS_NOW)

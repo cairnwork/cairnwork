@@ -58,6 +58,7 @@ def aggregate(tasks: list[dict[str, Any]]) -> dict[str, Any]:
 CATEGORIES = (
     ("needs ", "needs a kind this version cannot declare"),
     ("module-level list or dict", "shared mutable argument"),
+    ("is also an expected value", "shared mutable argument"),
     ("would not import", "code runs at import time"),
     ("derives from a project class", "code runs at import time"),
     ("takes for pytest's", "code runs at import time"),

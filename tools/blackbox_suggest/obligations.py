@@ -20,6 +20,7 @@ import itertools
 from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 
+from .classes import class_marks, is_testcase, methods_of, pytestmark_of, unknown_bases
 from .resolve import dotted
 
 SETUP_HOOKS = {  # setup/teardown: nose style, which older pytest runs around every test
@@ -147,7 +148,8 @@ def fixtures_of(trees: list[ast.Module]) -> Fixtures:
                     found.params[func.name] = (
                         len(p.elts) if isinstance(p, ast.List | ast.Tuple) else None
                     )
-                found.deps[func.name] = [a.arg for a in func.args.args if a.arg != "self"]
+                params = [*func.args.posonlyargs, *func.args.args, *func.args.kwonlyargs]
+                found.deps[func.name] = [a.arg for a in params if a.arg != "self"]
                 if func is node and is_autouse(func):
                     found.autouse.append(func.name)
     return found
@@ -231,24 +233,12 @@ def _marks_of(decorators: list[ast.expr], extra: list[ast.expr]):
     return calls, refusal, used, known
 
 
-def _pytestmark(body: list[ast.stmt]) -> list[ast.expr]:
-    """The marks of the last ``pytestmark = ...`` (annotated or not): the binding pytest reads."""
-    found: list[ast.expr] = []
-    for node in body:
-        targets = node.targets if isinstance(node, ast.Assign) else []
-        targets = [node.target] if isinstance(node, ast.AnnAssign) and node.value else targets
-        if any(isinstance(t, ast.Name) and t.id == "pytestmark" for t in targets):
-            value: ast.expr = node.value  # type: ignore[union-attr,assignment]
-            found = list(value.elts) if isinstance(value, ast.List | ast.Tuple) else [value]
-    return found
-
-
 def collect(tree: ast.Module, path: str, conftests: list[ast.Module], scope: Scope) -> list[Item]:
     """Every test id pytest would collect from tree (path is how ids are spelt). scope says what
     the configuration and the imported modules around the test file already decided."""
     fixtures = fixtures_of([*conftests, tree])
     consts = _module_lists(tree)
-    module_marks = _pytestmark(tree.body)
+    module_marks = pytestmark_of(tree.body)
     names = {n.name for n in tree.body if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)}
     base, known = scope.reason, scope.known
     if fixtures.autouse:
@@ -293,48 +283,13 @@ class Ctx:
     always: list[str]  # fixtures every test here requests: autouse, config usefixtures
 
 
-def _is_testcase(node: ast.ClassDef, classes: dict[str, ast.ClassDef], depth: int = 0) -> bool:
-    for b in node.bases:
-        if (dotted(b) or [""])[-1] == "TestCase":
-            return True
-        if isinstance(b, ast.Name) and b.id in classes and b.id != node.name and depth < 10:
-            if _is_testcase(classes[b.id], classes, depth + 1):
-                return True
-    return False
-
-
-def _unknown_bases(node: ast.ClassDef, classes: dict[str, ast.ClassDef], depth: int = 0) -> bool:
-    """A base defined elsewhere, here or through a local base, may bring tests or hooks."""
-    for b in node.bases:
-        local = classes.get(b.id) if isinstance(b, ast.Name) and b.id != node.name else None
-        if local is not None and depth < 10 and not _unknown_bases(local, classes, depth + 1):
-            continue
-        if local is None and (dotted(b) or [""])[-1] in ("object", "TestCase"):
-            continue
-        return True
-    return False
-
-
-def _methods(node: ast.ClassDef, classes: dict[str, ast.ClassDef], depth: int = 0) -> dict:
-    """Methods as Python resolves them: the class's own, then its bases left to right."""
-    found: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
-    if depth < 10:
-        for b in reversed(node.bases):  # earlier bases win, as in the MRO
-            if isinstance(b, ast.Name) and b.id in classes and b.id != node.name:
-                found.update(_methods(classes[b.id], classes, depth + 1))
-    for n in node.body:
-        if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef):
-            found[n.name] = n
-    return found
-
-
 def _class_items(node: ast.ClassDef, prefix: str, outer: list, ctx: Ctx, base):
     """(items, count_known) of a class and the test classes nested in it."""
     classes = ctx.classes
-    unittest = _is_testcase(node, classes)
+    unittest = is_testcase(node, classes)
     has_init = any(isinstance(n, ast.FunctionDef) and n.name == "__init__" for n in node.body)
-    methods = _methods(node, classes)
-    known, test_id = not _unknown_bases(node, classes), f"{prefix}::{node.name}"
+    methods = methods_of(node, classes)
+    known, test_id = not unknown_bases(node, classes), f"{prefix}::{node.name}"
     unseen = Item(f"{test_id}::<unseen>", node.lineno, _UNSEEN, refusal=UNSEEN, exact=False)
     if not known and (node.name.startswith("Test") or any(m.startswith("test") for m in methods)):
         return [unseen], False  # a base defined elsewhere may bring tests: never leave it out
@@ -344,7 +299,7 @@ def _class_items(node: ast.ClassDef, prefix: str, outer: list, ctx: Ctx, base):
     autouse = [m.name for m in methods.values() if is_autouse(m)]
     refusal = base or (f"class setup hook {hooks[0]}" if hooks else None)
     refusal = refusal or (f"class autouse fixture {autouse[0]}" if autouse else None)
-    marks = [*outer, *node.decorator_list, *_pytestmark(node.body)]
+    marks = [*outer, *class_marks(node, classes)]
     inner_ctx = replace(ctx, always=[*ctx.always, *autouse])
     items: list[Item] = []
     for name, func in methods.items():
