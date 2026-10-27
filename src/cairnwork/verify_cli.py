@@ -29,6 +29,7 @@ import sys
 from pathlib import Path
 from typing import Any, NoReturn
 
+import cairnwork_sandbox
 from cairnwork import blackbox, protection
 from cairnwork.blackbox_exec import account_can_read
 from cairnwork.deferred_tests import TestCommitRejected
@@ -79,7 +80,26 @@ def _import_tests(intake: Intake, args) -> int:
     return _emit({"imported": sha}, 0)
 
 
+def _require_unmasked_state(intake: Intake) -> None:
+    """A state dir or run root under a path the sandbox masks would be empty inside the run,
+    so pytest fails at getcwd and the deferred tests are burned for nothing (#324). The masks
+    hide the launching user's home only without a verifier account, so only that mode refuses."""
+    backend = cairnwork_sandbox.platform_backend()
+    if backend is None or intake.verifier_account() is not None:
+        return
+    home = Path.home().resolve()
+    for path in (intake.state.resolve(), intake.run_root.resolve()):
+        for rel in backend.masked_home_paths:
+            if path.is_relative_to(home / rel):
+                raise IntakeRefused(
+                    "STATE_UNDER_SANDBOX_MASK",
+                    f"{path} is under {home / rel}, which the verifier sandbox masks;"
+                    " put the state outside it (docs/SECURITY.md)",
+                )
+
+
 def _run(intake: Intake, args) -> dict[str, Any]:
+    _require_unmasked_state(intake)
     try:
         verifiers = tuple(
             (f"pytest-{i}", tuple(shlex.split(command))) for i, command in enumerate(args.verifier)

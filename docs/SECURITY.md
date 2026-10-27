@@ -77,7 +77,11 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
   writable, so a single run that writes and reads back within itself still sees its own data — the
   loss is of *pre-existing* and *persisted* state, not an in-run write.) Put Cairnwork's state under
   a dedicated location such as `/var/lib/cairnwork` (or `$XDG_STATE_HOME` set outside the masked
-  trees), not under a masked directory.
+  trees), not under a masked directory. The same holds on macOS, where Seatbelt denies the masked
+  home paths (`seatbelt.CREDENTIAL_HOME_PATHS`). Without a verifier account, `cairnwork-verify run`
+  refuses a state directory or run root under a masked home path (`STATE_UNDER_SANDBOX_MASK`,
+  naming the path and the prefix) before it consumes the deferred tests (#324); with an account
+  the run is another user, so the launching user's home is not masked for it.
 
 ### What a VERIFIED rests on (#303)
 

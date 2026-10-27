@@ -58,8 +58,12 @@ class DeferredStore:
         return path.is_file() and not path.is_symlink()
 
     def require_imported(self, sha: str) -> None:
-        """Strict mode (#332): a commit that is not in the store is refused before it is burned."""
-        if self.required and not self.has(sha):
+        """Strict mode (#332, #337): an unsafe store, or a commit that is not in it, is refused
+        before the commit is burned."""
+        if not self.required:
+            return
+        self.check_dir()
+        if not self.has(sha):
             raise TestCommitRejected("TEST_COMMIT_NOT_IMPORTED", sha)
 
     def parent(self, sha: str, repo: Path) -> str:
