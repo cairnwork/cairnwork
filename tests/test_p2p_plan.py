@@ -22,7 +22,7 @@ TASK = SimpleNamespace(
     import_paths=(),
     allowed_files=("src/pkg/a/b.py",),
 )
-RESULT = SimpleNamespace(attempt_id="att")
+RESULT = SimpleNamespace(attempt_id="att", logs=[])  # #331: an unusable probe adds a line
 VERIFYING = (None, None)
 
 
