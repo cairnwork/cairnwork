@@ -6,7 +6,7 @@ name: entrypoint-smoke
 # tool exactly as the README says (from the public git URL, never from a checkout of this repo)
 # and walks each entry point. This workflow never checks out this repository: fixtures come from
 # the public cairnwork/verify-action and cairnwork/demo-target repositories, pinned by commit.
-# No secrets, no pull_request_target, no PR-controlled input. Advisory, not a required check.
+# Triggers are cron and manual only; no repository secrets and no input from pull requests. Advisory, not a required check.
 on:
   schedule:
     - cron: "0 1 * * 1"  # Monday 01:00 UTC
