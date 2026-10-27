@@ -260,6 +260,8 @@ def _judge(intake, task, source, specs, candidate, notary, result, verifying) ->
     if task.test_commit:
         never_seen(source, task.test_commit)  # the object store the worker path checks
         _burn(intake, task.test_commit, record=False)
+        if task.test_store:  # #332: an unimported commit is refused before it is burned
+            task.test_store.require_imported(task.test_commit)
     with _scratch(intake, source, task.repo, task, candidate, result.attempt_id) as scratch:
         task = replace(task, repo=scratch)
         return _judge_in(

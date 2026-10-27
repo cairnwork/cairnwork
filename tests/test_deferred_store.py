@@ -277,3 +277,23 @@ def test_the_run_journals_its_own_test_source(project, tmp_path, required):  # n
 @pytest.mark.sandbox
 def test_a_task_without_a_test_commit_journals_no_test_source(project, tmp_path):  # noqa: F811
     assert _run_and_journal(project, tmp_path, required=True, with_tests=False) == "none"
+
+
+def test_import_works_when_repo_path_is_a_linked_worktree(project, store, tmp_path):  # noqa: F811
+    base, sha, bundle = make_bundle(project, {"tests/test_regression.py": REGRESSION}, tmp_path)
+    linked = tmp_path / "linked"
+    git(project, "worktree", "add", "-q", "--detach", str(linked), base)
+    assert store.import_bundle(linked, bundle, used_dir(store)) == sha
+    assert store.has(sha)
+    assert store.parent(sha, linked) == base
+
+
+def test_a_repo_path_that_is_not_a_repository_is_refused_not_internal(project, store, tmp_path):  # noqa: F811
+    _b, sha, bundle = make_bundle(project, {"tests/test_regression.py": REGRESSION}, tmp_path)
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    with pytest.raises(TestCommitRejected) as err:
+        store.import_bundle(plain, bundle, used_dir(store))
+    assert err.value.code == "TEST_COMMIT_UNREADABLE"
+    assert not store.has(sha)
+    assert not any(p.name.startswith(".") for p in store.path.iterdir())  # no scratch left

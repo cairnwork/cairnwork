@@ -2,19 +2,27 @@
 holds (#189): a test commit that is already in the mirror but was never imported reached the
 machine by another route, so it is refused instead of being recorded as "bundle"."""
 
+import json
 import os
 
 import pytest
 from conftest import git
 from test_deferred_store import make_bundle, used_dir
 from test_deferred_store import store as store  # noqa: F401 - fixture
-from test_deferred_tests import REGRESSION
+from test_deferred_tests import CHECK, REGRESSION, make_test_commit
 from test_deferred_tests import project as project  # noqa: F401 - fixture
+from verify_helpers import FIX, candidate, verify
 
 from cairnwork.deferred_store import DeferredStore
 from cairnwork.deferred_tests import TestCommitRejected, ensure_test_commit
 
 TESTS = {"tests/test_regression.py": REGRESSION}
+sandbox = pytest.mark.sandbox
+VERIFIER = " ".join(CHECK[0][1])
+
+
+def _config(state, **extra):
+    (state / "config.json").write_text(json.dumps({"verifier_account": False, **extra}))
 
 
 def _present_in_mirror(project, bundle, sha):
@@ -62,3 +70,28 @@ def test_strict_mode_checks_the_store_dir_even_when_the_commit_is_present(  # no
     finally:
         os.chmod(store.path, 0o700)
     assert err.value.code == "TEST_STORE_UNSAFE"
+
+
+@sandbox
+def test_strict_mode_refuses_an_unimported_commit_before_burning_it(project, state, tmp_path):
+    base, sha, _bundle = make_bundle(project, TESTS, tmp_path)
+    _config(state, test_source="bundle")
+    store = DeferredStore.for_state(state, "bundle")
+    store.path.mkdir(parents=True, mode=0o700, exist_ok=True)
+    cand = candidate(project, base, {"src/calc.py": FIX})
+    code, out = verify(state, project, base, cand, "--test-commit", sha, tests=(VERIFIER,))
+    assert code == 2, out
+    assert out["status"] == "REFUSED"
+    assert "TEST_COMMIT_NOT_IMPORTED" in out["reason"]
+    assert out["tests_consumed"] is False
+    assert not (state / "verify-used-tests" / sha).exists()
+
+
+@sandbox
+def test_auto_mode_still_burns_and_fetches_an_unimported_commit(project, state):
+    base, test_commit = make_test_commit(project, TESTS)
+    _config(state, test_source="auto")
+    cand = candidate(project, base, {"src/calc.py": FIX})
+    code, out = verify(state, project, base, cand, "--test-commit", test_commit, tests=(VERIFIER,))
+    assert code == 0, out
+    assert out["tests_consumed"] is True
