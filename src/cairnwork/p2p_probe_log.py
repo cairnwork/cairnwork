@@ -9,12 +9,15 @@ _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")  # terminal colour and cursor cod
 # other control characters, and the line and bidi overrides gitcmd.stderr_tail drops too
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069]")
 _URL_USERINFO = re.compile(r"(?<=://)[^ \t\n]*@")  # credentials in a URL, as gitcmd.stderr_tail
+TAIL_CHARS = 2048
+# any character fits in 4 bytes; twice that, so the window always holds more than the tail: a
+# character or URL cut at the window's start falls outside the tail, and is redacted first
+_WINDOW_BYTES = 2 * 4 * TAIL_CHARS
 
 
 def probe_log_tail(path: str | Path | None) -> str:
-    """Return the last 2048 characters of ``path`` sanitized and with URL credentials removed, or
-    ``(no log)`` on error/missing. Twice that is read, so a URL cut at the start of the tail
-    is still redacted first."""
+    """Return the last TAIL_CHARS characters of ``path`` sanitized and with URL credentials
+    removed, or ``(no log)`` on error/missing."""
     if not path:
         return "(no log)"
     try:
@@ -22,10 +25,11 @@ def probe_log_tail(path: str | Path | None) -> str:
         with p.open("rb") as f:
             f.seek(0, 2)
             size = f.tell()
-            f.seek(max(0, size - 4096))
-            raw = f.read(4096)
+            start = max(0, size - _WINDOW_BYTES)
+            f.seek(start)
+            raw = f.read(_WINDOW_BYTES)
     except OSError:
         return "(no log)"
     text = raw.decode("utf-8", errors="replace")
     text = _CONTROL.sub("?", _ANSI.sub("", text).replace("\r\n", "\n"))
-    return _URL_USERINFO.sub("", text)[-2048:]
+    return _URL_USERINFO.sub("", text)[-TAIL_CHARS:]

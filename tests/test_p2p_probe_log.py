@@ -15,13 +15,21 @@ def test_colour_codes_go_crlf_ends_a_line_and_other_controls_are_replaced(tmp_pa
     assert probe_log_tail(log) == "ok\nred???]0;t??evil?\tend"
 
 
-def test_url_credentials_are_removed_even_when_the_url_starts_before_the_tail(tmp_path):
+def test_url_credentials_are_removed_even_when_the_cut_falls_inside_the_url(tmp_path):
     log = tmp_path / "verifier.log"
-    log.write_text("fetch https://user:s3cret@example.com/x\n" + "y" * 2040)
+    head = "fetch https://user:s3cret@example.com/x\n"  # 40 characters
+    log.write_text(head + "y" * 2027)  # the last 2048 start at "s3cret@": inside the credentials
     tail = probe_log_tail(log)
-    assert "s3cret" not in tail and len(tail) <= 2048
+    assert "s3cret" not in tail and len(tail) == 2048  # redacted before the cut
     log.write_text("fetch https://user:s3cret@example.com/x failed\n")
     assert probe_log_tail(log) == "fetch https://example.com/x failed\n"
+
+
+def test_a_multibyte_log_still_gives_2048_whole_characters(tmp_path):
+    log = tmp_path / "verifier.log"
+    log.write_text("中" * 6000 + "END")
+    tail = probe_log_tail(log)
+    assert len(tail) == 2048 and tail.endswith("END") and "\ufffd" not in tail
 
 
 def test_the_tail_is_the_last_2048_characters(tmp_path):
