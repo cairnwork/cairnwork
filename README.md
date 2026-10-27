@@ -4,7 +4,7 @@ Cairnwork 是 Nexus-new 的後繼產品：一個接任務、執行、驗證，�
 
 ## 定位：完成有證據
 
-> Cairnwork 是小型 pytest 修補的試點驗收工具，依賴自備延後測試；通過仍需人工審查。與候選碼同程序執行的一般 pytest，其 PASS 不具防竄改保證，收據會標出保護等級（見 [docs/SECURITY.md](docs/SECURITY.md)）。
+> Cairnwork 是小型 pytest 修補的試點驗收工具，依賴自備延後測試；通過仍需人工審查。與候選碼同程序執行的一般 pytest，其 PASS 不具防竄改保證，`cairnwork-verify` 的輸出與帶延後測試的收據會標出保護等級（見 [docs/SECURITY.md](docs/SECURITY.md)）。
 
 Cairnwork 是 AI 寫程式代理人的交付驗證層。核心價值不是提高成功率，而是「完成有證據」：變更唯有通過延後隱藏測試才算完成（只有 `test_source: "bundle"` 嚴格模式保證 worker 看不到測試；預設 `auto` 是相容／示範模式，不作保密主張），並可附上離線可驗證的簽署證明（見 [docs/ATTESTATION.md](docs/ATTESTATION.md)）。具體是四件事：
 
@@ -18,7 +18,7 @@ Cairnwork 是 AI 寫程式代理人的交付驗證層。核心價值不是提高
 - 不主張提高模型解決任務的成功率（強模型在小 bug 上本來就很少錯）。
 - 不主張取代人工程式碼審查。
 - 不主張是互動式 coding agent 或對話助理。
-- 不主張一般 pytest 測試能防住刻意作弊：候選碼與測試同程序時，可以改寫測試讀到的值。只有宣告的黑箱檢查（期望值放在候選碼從未執行過的程序）受保護；收據的 `protection` 欄位標明 `blackbox`／`partial`／`same_process_only`（macOS 為 `*_macos`，等級較低，#316）。可用 `--require-protection` 要求受保護才算 VERIFIED。
+- 不主張一般 pytest 測試能防住刻意作弊：候選碼與測試同程序時，可以改寫測試讀到的值。只有宣告的黑箱檢查（期望值放在候選碼從未執行過的程序）受保護；`protection` 欄位標明 `blackbox`／`partial`／`same_process_only`（macOS 上受保護的兩級為 `blackbox_macos`／`partial_macos`，等級較低，#316）。`cairnwork-verify run --blackbox <宣告檔> --require-protection` 要求受保護才算 VERIFIED（`partial` 與 `partial_macos` 都算）；沒有 `--blackbox` 時直接拒絕（UNPROTECTED）。
 - 不主張驗證通過就沒有缺陷：Nexus-new#2813（修正 PR #2856）是 Core VERIFIED、但獨立審查仍抓到拒絕檢查可被繞過的實例。驗證是證據，不是證明。
 
 Nexus-new 是**參考**，不是搬家來源。決定與理由：knowledge `nexus/decisions/2026-10-19-cairnwork-owner-decision.md`；議會條文 A–I：`nexus/decisions/council-2026-10-19-cairnwork/CONSENSUS_R2.md`。
