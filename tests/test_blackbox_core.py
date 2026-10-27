@@ -8,6 +8,7 @@ VERIFIED, and only when every check passes is the candidate VERIFIED.
 """
 
 import secrets
+import sys
 from typing import Any
 
 import pytest
@@ -97,9 +98,14 @@ def test_the_receipt_binding_carries_the_commitment_only_when_declared(project):
         "k", "h", "t", "i", project, head, ("src/calc.py",), (), test_commit="b" * 40,
         blackbox=DECLARED,
     )  # fmt: skip
-    without, with_ = _binding(plain, head, (), head), _binding(declared, head, (), head)
+    without = _binding(plain, head, (), head, None)
+    with_ = _binding(declared, head, (), head, None)
     assert "blackbox_commitment" not in without
-    assert with_ == without | {"blackbox_commitment": DECLARED.commitment()}
+    # #303 protection label (test_protection.py): no verifiers here, so every required id is a check
+    assert with_ == without | {
+        "blackbox_commitment": DECLARED.commitment(),
+        "protection": "blackbox_macos" if sys.platform == "darwin" else "blackbox",
+    }
 
 
 def test_a_check_id_that_clashes_with_a_verifier_is_refused(project):

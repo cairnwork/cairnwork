@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from cairnwork import runlock, unswept
+from cairnwork import protection, runlock, unswept
 from cairnwork.account_check import base_stage, precheck
 from cairnwork.blackbox import Declaration
 from cairnwork.deferred_store import DeferredStore
@@ -87,6 +87,7 @@ class TaskSpec:
     p2p_budget: int = DEFAULT_BUDGET_SECONDS  # state config p2p_time_budget_seconds
     before_attempt: Callable[[], str] | None = None  # refusal code or ""; asked per attempt
     blackbox: Declaration | None = None  # function-level checks (#303, blackbox.py); verify only
+    require_protection: str = ""  # strict mode (protection.py): the least level accepted; "" off
 
     def request(self) -> dict:
         # #292: import_paths change what the verifiers import; #303: the declaration's commitment
@@ -130,6 +131,7 @@ class TaskResult:
     p2p: dict = field(default_factory=dict)  # the P2P selection rule used (p2p.py)
     fence: str | None = None  # WorkerMayLive's account ("" the owner's): FAILED marks it (#244)
     uncomparable: str = ""  # no evidence (#234): the code, journaled at FINISHED for the Issue
+    protection: str = ""  # protection.level of what Core was asked to require; "" if never asked
 
 
 def check_task(task: TaskSpec, *, verifier_python: str | None = None) -> tuple[VerifierSpec, ...]:
@@ -162,9 +164,17 @@ def check_task(task: TaskSpec, *, verifier_python: str | None = None) -> tuple[V
         raise TaskRejected("PROTECTED_VERIFIER_INPUT", ", ".join(protected))
     if blocked:
         raise TaskRejected("TASK_ALLOWED_FILES_PROTECTED", ", ".join(blocked))
+    if task.require_protection and task.require_protection not in protection.REQUIRABLE:
+        raise TaskRejected(
+            "BAD_PROTECTION", f"require_protection is one of {protection.REQUIRABLE}"
+        )
     clash = {c.verifier_id for c in task.blackbox.checks} if task.blackbox else set()
     if clash & {verifier_id for verifier_id, _ in task.verifiers}:
         raise TaskRejected("BAD_BLACKBOX", f"verifier ids clash: {sorted(clash)}")
+    if any(protection.reserved(verifier_id) for verifier_id, _ in task.verifiers):
+        raise TaskRejected(
+            "BAD_VERIFIER", "verifier ids 'blackbox:*' and 'protection' are reserved"
+        )
     try:
         return tuple(
             parse_verifier(vid, list(argv), task.test_roots) for vid, argv in task.verifiers
