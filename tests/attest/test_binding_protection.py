@@ -156,7 +156,15 @@ def test_a_blackbox_macos_receipt_does_not_meet_a_blackbox_pin(tmp_path):
     assert check(w, policy=minimum(w, "blackbox_macos")).ok
 
 
-@pytest.mark.parametrize("label,required", [("partial", CHECKED), ("blackbox", ("blackbox:add",))])
+@pytest.mark.parametrize(
+    "label,required",
+    [
+        ("partial", CHECKED),
+        ("blackbox", ("blackbox:add",)),
+        ("partial_macos", CHECKED),
+        ("blackbox_macos", ("blackbox:add",)),
+    ],
+)
 def test_a_protected_label_needs_a_declaration_commitment(tmp_path, label, required):
     """A level above same_process_only rests on blackbox:* ids; without the declaration's
     commitment in the binding those ids would be the signer's naming alone."""

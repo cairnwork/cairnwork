@@ -113,7 +113,9 @@ the `_macos` suffix is the producer's statement), and a level above `"same_proce
 come with the declaration's `blackbox_commitment` in the binding (`PROTECTION_UNCOMMITTED`
 otherwise). So the `blackbox:*` ids stand for a declaration, not for the signer's naming alone: a
 receiver that pins `blackbox_commitment` (computed from its own copy of the declaration) knows
-which one. A v0.1 receipt (no deferred tests) has no binding and carries no label: its level is
+which one. Without that pin the commitment is itself only the signer's value. Even with it, that
+the checks really ran as blackbox runs remains the signer's claim, like every verifier run
+(`assurance.verifier_runs` is `signer_claim`). A v0.1 receipt (no deferred tests) has no binding and carries no label: its level is
 `protection.level(required_verifier_ids, macos=False)` over the signed request, the coverage
 without a host grade, and nothing in the receipt ties those ids to a declaration.
 
