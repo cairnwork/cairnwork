@@ -98,6 +98,42 @@ def test_an_unknown_strict_level_is_refused(project, value):
         check_task(task)
 
 
+class NeverRuns:
+    def run(self, workdir: Any, task: Any) -> None:
+        raise AssertionError("a refused or duplicate request must not reach the worker")
+
+
+def test_a_strict_resend_under_the_same_key_is_not_the_old_result(project, tmp_path):
+    """#322 item 1: strict mode is part of the request, so a strict resend under a key a non-strict
+    run completed is refused, not answered with that run. Without it the request is unchanged
+    (its digest is pinned in test_bind_import_paths.py)."""
+    from cairnwork.journal import Journal
+    from cairnwork.notary import Notary
+    from cairnwork.ownership import OWNER, KeyReusedWithDifferentRequest, OwnershipLedger
+    from cairnwork.pipeline import run_task
+
+    def spec(level: str = "") -> TaskSpec:
+        return TaskSpec(
+            "k", "h", "t", "i", project, base_of(project), ("src/calc.py",),
+            (("v", tuple(VERIFY.split())),), require_protection=level,
+        )  # fmt: skip
+
+    strict = spec(protection.WEAKEST)
+    assert "require_protection" not in spec().request()
+    assert strict.request() == spec().request() | {"require_protection": protection.WEAKEST}
+    ledger = OwnershipLedger(tmp_path / "own.sqlite")
+    task_id = ledger.bind("k", spec().request(), OWNER, "h").record.task_id
+    ledger.set_status(task_id, "DISPATCHED")
+    ledger.set_status(task_id, "COMPLETED")
+    stores = {"ledger": ledger, "notary": Notary(tmp_path / "n.sqlite")}
+    stores |= {"journal": Journal(tmp_path / "j.sqlite"), "worker": NeverRuns()}
+    with pytest.raises(KeyReusedWithDifferentRequest):
+        run_task(strict, **stores, run_root=tmp_path / "runs")
+    resend = run_task(spec(), **stores, run_root=tmp_path / "runs")
+    assert resend.reason == "DUPLICATE_REQUEST" and resend.status == "COMPLETED"
+    assert ledger.get(task_id=task_id).status == "COMPLETED"
+
+
 def run(state, project, **kwargs: Any) -> dict[str, Any]:
     base = base_of(project)
     fix = candidate(project, base, {"src/calc.py": FIX})

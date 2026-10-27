@@ -90,10 +90,12 @@ class TaskSpec:
     require_protection: str = ""  # strict mode (protection.py): the least level accepted; "" off
 
     def request(self) -> dict:
-        # #292: import_paths change what the verifiers import; #303: the declaration's commitment
+        # #292: import_paths change what the verifiers import; #303: the declaration's commitment;
+        # #322: strict mode, so a strict resend is not answered with a non-strict run
         extra = nonempty_fields(
             test_commit=self.test_commit, import_paths=list(self.import_paths),
             blackbox_commitment=self.blackbox.commitment() if self.blackbox else "",
+            require_protection=self.require_protection,
         )  # fmt: skip
         return extra | {
             "repo": str(self.repo),
