@@ -81,7 +81,7 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
   home paths (`seatbelt.CREDENTIAL_HOME_PATHS`). Without a verifier account, `cairnwork-verify run`
   refuses a state directory or run root under a masked home path (`STATE_UNDER_SANDBOX_MASK`,
   naming the path and the prefix) before it consumes the deferred tests (#324); with an account
-  the run is another user, so the launching user's home is not masked for it.
+  every sandboxed run lives under the account's own run root, never under the state.
 
 ### What a VERIFIED rests on (#303)
 

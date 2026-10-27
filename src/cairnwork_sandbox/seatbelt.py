@@ -246,7 +246,7 @@ class SeatbeltBackend:
     time, so a test that monkeypatches e.g. ``available`` here changes what callers see."""
 
     name = "seatbelt"
-    masked_home_paths = CREDENTIAL_HOME_PATHS
+    masked_home_paths: tuple[str, ...] = CREDENTIAL_HOME_PATHS
 
     def available(self) -> bool:
         return available()

@@ -2,6 +2,8 @@
 deferred tests are burned (#324): inside the run that directory is empty, so pytest fails at
 getcwd and every retry needed a new test commit."""
 
+import json
+
 import pytest
 from test_deferred_tests import CHECK, REGRESSION, make_test_commit
 from test_deferred_tests import project as project  # noqa: F401 - fixture
@@ -63,13 +65,23 @@ def test_a_state_outside_the_masked_paths_still_runs(project, state, home):  # n
     assert out["tests_consumed"] is True
 
 
-def test_account_mode_does_not_refuse_the_same_path(state, home, monkeypatch):
-    # With a verifier account the run is another user: the owner's home is not masked for it.
+def test_a_masked_path_spelled_in_another_case_is_refused(state, home):
+    (home / ".local" / "state").mkdir(parents=True)
+    if not (home / ".LOCAL" / "STATE").exists():
+        pytest.skip("case-sensitive filesystem: another spelling is another directory")
+    state = _move(state, home / ".LOCAL" / "STATE" / "cairnwork")
+    with pytest.raises(IntakeRefused) as err:
+        _require_unmasked_state(Intake(state))
+    assert err.value.code == "STATE_UNDER_SANDBOX_MASK"
+
+
+def test_account_mode_does_not_refuse_the_same_path(state, home):
+    # With a verifier account the runs live under the account's own run root, not the state.
     state = _move(state, home / ".local" / "state" / "cairnwork")
     intake = Intake(state)
-    monkeypatch.setattr(Intake, "verifier_account", lambda self: object())
+    (state / "config.json").write_text(json.dumps({"verifier_account": True}))
     _require_unmasked_state(intake)
-    monkeypatch.setattr(Intake, "verifier_account", lambda self: None)
+    (state / "config.json").write_text(json.dumps({"verifier_account": False}))
     with pytest.raises(IntakeRefused) as err:
         _require_unmasked_state(intake)
     assert err.value.code == "STATE_UNDER_SANDBOX_MASK"

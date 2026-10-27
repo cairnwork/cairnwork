@@ -82,20 +82,37 @@ def _import_tests(intake: Intake, args) -> int:
 
 def _require_unmasked_state(intake: Intake) -> None:
     """A state dir or run root under a path the sandbox masks would be empty inside the run,
-    so pytest fails at getcwd and the deferred tests are burned for nothing (#324). The masks
-    hide the launching user's home only without a verifier account, so only that mode refuses."""
+    so pytest fails at getcwd and the deferred tests are burned for nothing (#324). With a
+    verifier account every sandboxed run lives under the account's own run root, never under
+    the state, so only the mode without one refuses."""
     backend = cairnwork_sandbox.platform_backend()
     if backend is None or intake.verifier_account() is not None:
         return
     home = Path.home().resolve()
     for path in (intake.state.resolve(), intake.run_root.resolve()):
-        for rel in backend.masked_home_paths:
-            if path.is_relative_to(home / rel):
+        for masked in (home / rel for rel in backend.masked_home_paths):
+            if path.is_relative_to(masked) or _same_dir_above(path, masked):
                 raise IntakeRefused(
                     "STATE_UNDER_SANDBOX_MASK",
-                    f"{path} is under {home / rel}, which the verifier sandbox masks;"
+                    f"{path} is under {masked}, which the verifier sandbox masks;"
                     " put the state outside it (docs/SECURITY.md)",
                 )
+
+
+def _same_dir_above(path: Path, masked: Path) -> bool:
+    """``path`` or a parent is ``masked`` under another spelling (APFS ignores case)."""
+    try:
+        want = masked.lstat()
+    except OSError:
+        return False
+    for p in (path, *path.parents):
+        try:
+            got = p.lstat()
+        except OSError:
+            continue
+        if (got.st_dev, got.st_ino) == (want.st_dev, want.st_ino):
+            return True
+    return False
 
 
 def _run(intake: Intake, args) -> dict[str, Any]:
