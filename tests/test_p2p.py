@@ -312,10 +312,3 @@ def test_unusable_base_probe_log_tail_is_bounded_to_2048_characters(project, tmp
     assert colon_sep
     assert len(tail_content) <= 2048
     assert "Z" * 50 in tail_content
-
-
-def test_usable_base_probe_appends_no_probe_log(project, tmp_path):
-    result = run(project, tmp_path, {"src/calc.py": FIX_ADD}, mode="whole-suite")
-    assert result.status == "COMPLETED"
-    probe_logs = [log for log in result.logs if log.startswith("p2p base probe")]
-    assert probe_logs == []

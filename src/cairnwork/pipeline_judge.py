@@ -101,7 +101,8 @@ def judge_candidate(
     if p2p is not None:
         p2p_runs, result.p2p = run_plan(p2p, task, judged, run_root, result, verifying)
         runs += p2p_runs
-    result.logs = [str(run.log_path) for run in runs] + bb_logs
+    # keep what came before, e.g. a failed base probe's tail (#331)
+    result.logs = [*result.logs, *(str(run.log_path) for run in runs), *bb_logs]
     if unless_passed is not None and not all(run.observation.passed for run in runs):
         raise unless_passed
     ids, observations, gate_note = _contract(task, runs, checks, declared, binding, result)

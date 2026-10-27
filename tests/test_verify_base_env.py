@@ -247,3 +247,21 @@ def test_a_key_repo_alone_does_not_turn_the_check_on(unit):
     """Only without_tests switches it on; key_repo only keys the marker."""
     assert unit(without_tests=False) == 0
     assert unit(key_repo=None) == 1  # and without key_repo it keys on task.repo
+
+
+@sandbox
+def test_a_failed_base_check_keeps_its_probe_line_in_the_verify_output(project, state, probes):
+    """#331: the line _probe adds survives judge_candidate, which used to replace result.logs."""
+    probes({"rc": 2})
+    out = in_process(project, state, base_of(project), _wrong(project))
+    assert out["status"] == "UNCOMPARABLE"
+    probe_lines = [line for line in out["logs"] if line.startswith("p2p base probe")]
+    assert probe_lines == ["p2p base probe e: base-probe-failed, rc=2: (no log)"]
+
+
+@sandbox
+def test_a_usable_base_check_adds_no_probe_line(project, state, probes):
+    probes(OK)
+    out = in_process(project, state, base_of(project), _wrong(project))
+    assert out["status"] == "FAILED" and out["logs"]
+    assert not any(line.startswith("p2p base probe") for line in out["logs"])

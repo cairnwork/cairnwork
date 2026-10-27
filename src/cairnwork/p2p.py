@@ -121,11 +121,13 @@ def _probe(task, files, run_root, result, verifying, budget, tag="p"):
         reason = UNCLEAN[1]
     elif run.returncode not in (0, 1) or not run.outcomes:
         reason = "base-probe-failed"
-    if reason is not None:
-        tail = probe_log_tail(run.log_path)
-        result.logs.append(f"p2p base probe {tag}: {reason}, rc={run.returncode}: {tail}")
-    for r in runs:  # base evidence is not for Core
-        shutil.rmtree(Path(r.log_path).parent, ignore_errors=True)
+    try:  # #331: the operator sees why the probe was unusable
+        if reason is not None:
+            tail = probe_log_tail(run.log_path)
+            result.logs.append(f"p2p base probe {tag}: {reason}, rc={run.returncode}: {tail}")
+    finally:
+        for r in runs:  # base evidence is not for Core
+            shutil.rmtree(Path(r.log_path).parent, ignore_errors=True)
     if reason is not None:
         return None, reason
     return run.outcomes, ""
