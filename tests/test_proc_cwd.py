@@ -226,3 +226,58 @@ def test_the_cwd_of_a_child_is_read(tmp_path):
     finally:
         child.kill()
         child.wait()
+
+
+def test_attempt_dirs_returns_blackbox_vbb_directories(tmp_path):
+    root = tmp_path / "runs"
+    own = [f"{ATTEMPT}-v-vbb", f"{ATTEMPT}-v-vbb.work"]
+    _dirs(root, *own)
+    found = proc_cwd.attempt_dirs([root], ATTEMPT)
+    expected = {root.resolve() / n for n in own}
+    assert set(found) == expected and len(found) == len(expected)
+
+
+def test_another_attempt_vbb_dir_is_not_counted(tmp_path):
+    root = tmp_path / "runs"
+    _dirs(root, "a1-v-vbb", "a10-v-vbb", "a1x-v-vbb")
+    assert proc_cwd.attempt_dirs([root], "a1") == ((root / "a1-v-vbb").resolve(),)
+
+
+def test_near_miss_vbb_suffixes_are_not_counted(tmp_path):
+    root = tmp_path / "runs"
+    near_miss = [
+        f"{ATTEMPT}-v-vbbx",
+        f"{ATTEMPT}-v-bb",
+        f"{ATTEMPT}-v-vb",
+        f"{ATTEMPT}-v-vbbb",
+        f"{ATTEMPT}-v-vBB",
+    ]
+    _dirs(root, *near_miss)
+    assert proc_cwd.attempt_dirs([root], ATTEMPT) == ()
+
+
+@macos
+def test_a_crashed_blackbox_runs_cwd_only_leftover_is_killed(tmp_path):
+    # #314: a blackbox run clones into <run_id>-vbb; a /bin/sleep it left behind (environment
+    # withheld by macOS) is tied to the attempt by its working directory and killed.
+    root = tmp_path / "runs"
+    _dirs(root, f"{ATTEMPT}-v-vbb")
+    where = os.path.realpath(root / f"{ATTEMPT}-v-vbb")
+    child = subprocess.Popen(["/bin/sleep", "30"], env={"A": "1"}, cwd=where)  # noqa: S603
+    try:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:  # wait for the exec
+            raw = proc_cwd._sysctl((1, 49, child.pid), proc_cwd._argmax() or 0)
+            if raw and raw[4:].startswith(b"/bin/sleep\0"):
+                break
+            time.sleep(0.05)
+        withheld = proc_cwd.environment_withheld(child.pid)
+        if withheld is not True:  # as withheld_here in test_recovery_withheld_env.py
+            pytest.skip(f"/bin/sleep's environment is not withheld here ({withheld!r})")
+        dirs = proc_cwd.attempt_dirs([root], ATTEMPT)
+        row = (child.pid, child.pid, os.getuid(), set())
+        assert proc_cwd.kill_withheld_in([row], dirs, os.getuid()) == ([child.pid], [], 0)
+        assert child.wait(timeout=10) == -9
+    finally:
+        child.kill()
+        child.wait()

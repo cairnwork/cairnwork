@@ -13,8 +13,9 @@ second recovery after the first removed the directories (the first sweeps before
 A legitimately empty environment counts as withheld and is then tied only by its directory;
 a shell (Cairnwork's own parent included) sitting in an attempt's run directory with a
 withheld environment would be killed by recovery: run directories are Cairnwork scratch. An
-attempt id that itself looks like a run directory name (``a1-q-v0``) overlaps with ``a1``;
-real ids are ``a`` + 16 hex, so the effect stays inside the run root.
+attempt id that itself looks like a run directory name (``a1-q-v0``, or a blackbox clone's
+``a1-v-vbb``) overlaps with ``a1``; real ids are ``a`` + 16 hex with no ``-``
+(``pipeline.py``), so this cannot happen for them and the effect stays inside the run root.
 
 Nothing here keeps or shows an environment: ``environment_withheld`` only counts its entries.
 Off macOS the process readers answer None and nothing is killed; ``attempt_dirs`` is neutral.
@@ -137,13 +138,13 @@ def cwd_of(pid: int) -> str | None:
 
 def attempt_dirs(roots, attempt_id: str) -> tuple[Path, ...]:
     """Realpaths of the attempt's own run directories under each root: ``<attempt_id>`` and
-    ``<attempt_id>-<tag>-v<n>[.suffix]``. Only real directories (never a symlink) whose
-    realpath is strictly inside the root's; a malformed attempt id gives none. Never raises: a
-    root that is not a directory or cannot be listed is skipped, and so is an entry that cannot
-    be checked."""
+    ``<attempt_id>-<tag>-v<n>[.suffix]`` (the part after ``-v`` may be digits or ``bb``). Only
+    real directories (never a symlink) whose realpath is strictly inside the root's; a malformed
+    attempt id gives none. Never raises: a root that is not a directory or cannot be listed is
+    skipped, and so is an entry that cannot be checked."""
     if not isinstance(attempt_id, str) or not ATTEMPT_ID.fullmatch(attempt_id):
         return ()
-    name = re.compile(rf"{re.escape(attempt_id)}-[vbpqre]-v[0-9]+(\.[^/]*)?")
+    name = re.compile(rf"{re.escape(attempt_id)}-[vbpqre]-v([0-9]+|bb)(\.[^/]*)?")
     found: list[Path] = []
     for root in roots:
         try:
