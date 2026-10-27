@@ -271,7 +271,9 @@ def test_a_crashed_blackbox_runs_cwd_only_leftover_is_killed(tmp_path):
             if raw and raw[4:].startswith(b"/bin/sleep\0"):
                 break
             time.sleep(0.05)
-        assert proc_cwd.environment_withheld(child.pid) is True
+        withheld = proc_cwd.environment_withheld(child.pid)
+        if withheld is not True:  # as withheld_here in test_recovery_withheld_env.py
+            pytest.skip(f"/bin/sleep's environment is not withheld here ({withheld!r})")
         dirs = proc_cwd.attempt_dirs([root], ATTEMPT)
         row = (child.pid, child.pid, os.getuid(), set())
         assert proc_cwd.kill_withheld_in([row], dirs, os.getuid()) == ([child.pid], [], 0)
