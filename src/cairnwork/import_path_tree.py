@@ -14,17 +14,26 @@ class ImportPathError(PytestConfigError):
     code = "BAD_IMPORT_PATH"
 
 
-def _normalize_paths(paths: tuple[str, ...] | list[str]) -> tuple[str, ...]:
-    """Strip only what the checkout path ignores too (a leading ``./``, a trailing ``/``);
-    whitespace is part of the name the verifier's sys.path entry gets."""
+def normalize_import_paths(paths: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    """The one import-path normalizer (#300): this module's tree walk and verifier_spec's shadow
+    gate both use it, so they always reason about the same directories.
+
+    Strip only what the checkout path ignores too (a leading ``./``, a trailing ``/``);
+    whitespace is part of the name the verifier's sys.path entry gets. Every segment must be a
+    plain name: an empty, ``.`` or ``..`` segment would make the walk stop at a name git never
+    lists while the filesystem still resolves the rest, and a non-ASCII one can name a tree
+    entry in another Unicode form on APFS. Such an entry raises ImportPathError."""
     roots = []
     for r in paths:
         cleaned = r
         while cleaned.startswith("./"):
             cleaned = cleaned[2:]
         cleaned = cleaned.rstrip("/")
-        if cleaned and cleaned != ".":
-            roots.append(cleaned)
+        if not cleaned or cleaned == ".":
+            continue
+        if any(s in ("", ".", "..") or not s.isascii() for s in cleaned.split("/")):
+            raise ImportPathError(f"Import path {cleaned!r} has a segment that is not a plain name")
+        roots.append(cleaned)
     return tuple(dict.fromkeys(roots))
 
 
@@ -36,18 +45,11 @@ def _name_key(name: str) -> str:
 def require_plain_dirs(repo: Path, commit: str, paths: tuple[str, ...] | list[str]) -> None:
     """Ensure import paths correspond to plain directory trees (mode 040000) in git.
 
-    Every segment must be a plain name: an empty, ``.`` or ``..`` segment would make the walk
-    stop at a name git never lists while the filesystem still resolves the rest, and a
-    non-ASCII one can name a tree entry in another Unicode form on APFS. Children are listed
-    from the tree object (``<commit>:<dir>``), so no pathspec magic applies to the name."""
-    normalized = _normalize_paths(paths)
-    for path in normalized:
-        segments = path.split("/")
-        bad = [s for s in segments if s in ("", ".", "..") or not s.isascii()]
-        if bad:
-            raise ImportPathError(f"Import path {path!r} has a segment that is not a plain name")
+    Segments are checked by ``normalize_import_paths``. Children are listed from the tree
+    object (``<commit>:<dir>``), so no pathspec magic applies to the name."""
+    for path in normalize_import_paths(paths):
         current_dir = ""
-        for segment in segments:
+        for segment in path.split("/"):
             try:
                 out = run_git(repo, "ls-tree", "-z", f"{commit}:{current_dir}")
                 matches = []
