@@ -39,6 +39,8 @@ class Policy:
 
 class Backend(Protocol):
     name: str
+    # Paths under the launching user's home that the policy masks for the run.
+    masked_home_paths: tuple[str, ...]
 
     def available(self) -> bool:
         """True only if the sandbox really confines: probed by a permitted and a denied run."""

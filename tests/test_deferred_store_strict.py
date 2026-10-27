@@ -88,6 +88,27 @@ def test_strict_mode_refuses_an_unimported_commit_before_burning_it(project, sta
 
 
 @sandbox
+def test_strict_mode_refuses_an_unsafe_store_before_burning_the_commit(project, state, tmp_path):
+    # #337: the store check used to come from fetch_into, after the commit was burned.
+    base, sha, bundle = make_bundle(project, TESTS, tmp_path)
+    _config(state, test_source="bundle")
+    store = DeferredStore.for_state(state, "bundle")
+    store.path.mkdir(parents=True, mode=0o700, exist_ok=True)
+    store.import_bundle(project, bundle, state / "verify-used-tests")
+    os.chmod(store.path, 0o750)
+    cand = candidate(project, base, {"src/calc.py": FIX})
+    try:
+        code, out = verify(state, project, base, cand, "--test-commit", sha, tests=(VERIFIER,))
+    finally:
+        os.chmod(store.path, 0o700)
+    assert code == 2, out
+    assert out["status"] == "REFUSED"
+    assert "TEST_STORE_UNSAFE" in out["reason"]
+    assert out["tests_consumed"] is False
+    assert not (state / "verify-used-tests" / sha).exists()
+
+
+@sandbox
 def test_auto_mode_still_burns_and_fetches_an_unimported_commit(project, state):
     base, test_commit = make_test_commit(project, TESTS)
     _config(state, test_source="auto")

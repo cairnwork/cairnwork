@@ -368,6 +368,7 @@ class BwrapBackend:
     so a test that monkeypatches ``available`` here changes what callers see."""
 
     name = NAME
+    masked_home_paths: tuple[str, ...] = _CRED_DIRS + _CRED_FILES
 
     def available(self) -> bool:
         return available()
