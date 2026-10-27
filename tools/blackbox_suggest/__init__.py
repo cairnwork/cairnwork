@@ -19,7 +19,7 @@ from typing import Any
 from .config import pytest_config
 from .literals import Refused
 from .obligations import Scope, collect
-from .resolve import Imports, Project, _bound_names
+from .resolve import Imports, Project, module_env
 from .scope import import_time
 from .shapes import drafts_for
 
@@ -110,24 +110,6 @@ def _unimported(cases: list[dict[str, Any]], scope: Scope, project: Project) -> 
     if scope.imports - project.import_closure(drafted):
         return "the tests import a project module the blackbox would not import"
     return None
-
-
-def module_env(tree: ast.Module) -> dict[str, ast.expr]:
-    """Module-level names assigned exactly once (their values are evaluated only where used)."""
-    seen: dict[str, ast.expr] = {}
-    twice: set[str] = set()
-    for node in tree.body:
-        if isinstance(node, ast.Assign) and len(node.targets) == 1:
-            target = node.targets[0]
-            if isinstance(target, ast.Name):
-                twice |= {target.id} & set(seen)
-                seen[target.id] = node.value
-                continue
-        if isinstance(node, ast.Import):  # any other binding (def, class, import, X += ...)
-            twice |= {a.asname or a.name.split(".")[0] for a in node.names}
-        else:
-            twice |= set(_bound_names(node))
-    return {name: value for name, value in seen.items() if name not in twice}
 
 
 def analyze_file(test_file: Path, project_root: Path, source_roots: list[Path]) -> list[Obligation]:

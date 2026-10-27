@@ -52,6 +52,16 @@ def _calls_outside_pytest(node: ast.AST) -> bool:
     )
 
 
+def _calls_other_than_marks(node: ast.AST) -> bool:
+    """A call in a module-level value other than building a mark or a param."""
+    for n in ast.walk(node):
+        parts = (dotted(n.func) or [""]) if isinstance(n, ast.Call) else ["pytest", "mark"]
+        parts = parts[1:] if parts[0] == "pytest" else parts
+        if parts[:1] not in (["mark"], ["param"]):
+            return True
+    return False
+
+
 def import_time(tree: ast.Module, is_project: Callable[[str], bool]) -> Verdict:
     """What one module that pytest imports before running its tests does at import time.
 
@@ -148,8 +158,8 @@ def _assign(node: ast.Assign | ast.AnnAssign, verdict: Verdict) -> None:
         verdict.refuse("pytest_plugins loads plugins (fixtures, hooks)", known=False)
     elif len(names) != len(targets):
         verdict.refuse("module-level assignment to an attribute or item")
-    elif node.value is not None and _calls_outside_pytest(node.value):
-        verdict.refuse("module-level call at import time")
+    elif node.value is not None and _calls_other_than_marks(node.value):
+        verdict.refuse("module-level call at import time")  # pytest.importorskip(...) too
     if any(n.startswith("test") for n in names):  # test_b = test_a is collected too
         verdict.refuse("a test is defined by assignment", known=False)
 

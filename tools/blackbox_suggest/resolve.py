@@ -232,3 +232,21 @@ def resolve_callee(func: ast.expr, imports: Imports, project: Project) -> Target
         raise Refused(f"{'.'.join(parts)} is not a top-level name of a project module")
     kind, defined_in, real = project.kind_of(module, path[0])
     return Target(module, path[0], kind, f"{defined_in}.{real}")
+
+
+def module_env(tree: ast.Module) -> dict[str, ast.expr]:
+    """Module-level names assigned exactly once (their values are evaluated only where used)."""
+    seen: dict[str, ast.expr] = {}
+    twice: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            if isinstance(target, ast.Name):
+                twice |= {target.id} & set(seen)
+                seen[target.id] = node.value
+                continue
+        if isinstance(node, ast.Import):  # any other binding (def, class, import, X += ...)
+            twice |= {a.asname or a.name.split(".")[0] for a in node.names}
+        else:
+            twice |= set(_bound_names(node))
+    return {name: value for name, value in seen.items() if name not in twice}

@@ -21,7 +21,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 
 from .classes import class_marks, is_testcase, methods_of, pytestmark_of, unknown_bases
-from .resolve import dotted
+from .resolve import dotted, module_env
 
 SETUP_HOOKS = {  # setup/teardown: nose style, which older pytest runs around every test
     "setup", "teardown", "setup_module", "teardown_module", "setup_function",
@@ -155,16 +155,6 @@ def fixtures_of(trees: list[ast.Module]) -> Fixtures:
     return found
 
 
-def _module_lists(tree: ast.Module) -> dict[str, ast.expr]:
-    out: dict[str, ast.expr] = {}
-    for node in tree.body:
-        if isinstance(node, ast.Assign) and len(node.targets) == 1:
-            target = node.targets[0]
-            if isinstance(target, ast.Name):
-                out[target.id] = node.value
-    return out
-
-
 def parametrize(call: ast.Call, consts: dict[str, ast.expr]) -> list[Param] | None:
     """The cases of one parametrize mark, or None when their number cannot be known."""
     given = {k.arg: k.value for k in call.keywords if k.arg in ("argnames", "argvalues")}
@@ -237,7 +227,7 @@ def collect(tree: ast.Module, path: str, conftests: list[ast.Module], scope: Sco
     """Every test id pytest would collect from tree (path is how ids are spelt). scope says what
     the configuration and the imported modules around the test file already decided."""
     fixtures = fixtures_of([*conftests, tree])
-    consts = _module_lists(tree)
+    consts = module_env(tree)  # a table bound twice is not static
     module_marks = pytestmark_of(tree.body)
     names = {n.name for n in tree.body if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)}
     base, known = scope.reason, scope.known
@@ -287,8 +277,8 @@ def _class_items(node: ast.ClassDef, prefix: str, outer: list, ctx: Ctx, base):
     """(items, count_known) of a class and the test classes nested in it."""
     classes = ctx.classes
     unittest = is_testcase(node, classes)
-    has_init = any(isinstance(n, ast.FunctionDef) and n.name == "__init__" for n in node.body)
     methods = methods_of(node, classes)
+    has_init = "__init__" in methods  # inherited from a local base too
     known, test_id = not unknown_bases(node, classes), f"{prefix}::{node.name}"
     unseen = Item(f"{test_id}::<unseen>", node.lineno, _UNSEEN, refusal=UNSEEN, exact=False)
     if not known and (node.name.startswith("Test") or any(m.startswith("test") for m in methods)):

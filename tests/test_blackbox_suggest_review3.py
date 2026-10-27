@@ -326,3 +326,64 @@ def test_a_list_passed_to_a_call_and_then_expected_is_refused(tmp_path):
     """
     (item,) = run(tmp_path, body)
     assert not item.protected(KINDS_NOW)
+
+
+# Gemini cross-model review, round 7.
+
+
+def test_a_parametrize_table_rebound_later_is_not_static(tmp_path):
+    body = """
+        import pytest
+        from pkg.core import f
+        CASES = [1]
+        @pytest.mark.parametrize("a", CASES)
+        def test_a(a):
+            assert f(a) == a
+        CASES = [2, 3]
+        @pytest.mark.parametrize("a", CASES)
+        def test_b(a):
+            assert f(a) == a
+    """
+    found = run(tmp_path, body)
+    assert not any(o.protected(KINDS_NOW) for o in found) or not all(o.exact for o in found)
+    assert not any(c["args"] == [2] for o in found if "test_a" in o.test_id for c in o.cases)
+
+
+def test_a_test_class_inheriting_init_is_not_collected(tmp_path):
+    body = """
+        from pkg.core import f
+        class Base:
+            def __init__(self):
+                self.seed = 1
+            def test_foo(self):
+                assert f(2) == 2
+        class TestChild(Base):
+            pass
+    """
+    assert not any(o.protected(KINDS_NOW) for o in run(tmp_path, body))
+
+
+def test_importorskip_at_module_level_refuses(tmp_path):
+    body = """
+        import pytest
+        from pkg.core import f
+        np = pytest.importorskip("nonexistent_package")
+        CASES = [pytest.param(1, marks=pytest.mark.slow)]
+        def test_a():
+            assert f(2) == 2
+    """
+    (item,) = run(tmp_path, body)
+    assert "import time" in (item.refusal or "")
+
+
+def test_mark_and_param_values_stay_inert(tmp_path):
+    body = """
+        import pytest
+        from pkg.core import f
+        CASES = [pytest.param(1, id="one")]
+        @pytest.mark.parametrize("a", CASES)
+        def test_a(a):
+            assert f(a) == a
+    """
+    (item,) = run(tmp_path, body)
+    assert item.protected(KINDS_NOW), item.reason(KINDS_NOW)
