@@ -9,6 +9,7 @@
     cairnwork-verify --state DIR import-tests --repo-path P --bundle FILE
         # keep a deferred test commit in the private store (deferred_store.py), not on a remote
     cairnwork-verify --state DIR cleanup      # after a crashed run, before ``recover``
+    cairnwork-verify --state DIR migrate-notary  # back up, then upgrade an older notary (#343)
 
 Prints one JSON object. Exit codes for ``run``: 0 verified; 2 refused, uncomparable or not
 verified (``status`` says which: REFUSED, UNCOMPARABLE or FAILED; #234 added UNCOMPARABLE, so a
@@ -34,6 +35,8 @@ from cairnwork import blackbox, protection
 from cairnwork.blackbox_exec import account_can_read
 from cairnwork.deferred_tests import TestCommitRejected
 from cairnwork.intake import Intake, IntakeRefused
+from cairnwork.notary import NotarySchemaMismatch
+from cairnwork.notary_migrate import NotaryMissing, migrate_notary
 from cairnwork.pipeline import TaskRejected
 from cairnwork.verify_candidate import cleanup, tests_consumed, verify_candidate
 
@@ -51,6 +54,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "cleanup":
             return _emit(cleanup(intake), 0)
+        if args.command == "migrate-notary":  # the only path that upgrades a notary (#343)
+            return _emit(migrate_notary(intake.state / "notary.sqlite"), 0)
         if args.command == "import-tests":
             return _import_tests(intake, args)
         if args.command == "blackbox-commitment":  # what a receiver's policy pins (#303)
@@ -60,6 +65,8 @@ def main(argv: list[str] | None = None) -> int:
     except IntakeRefused as exc:
         return _emit({"error": exc.code, "detail": exc.detail}, 2)
     except (TaskRejected, blackbox.BlackboxRejected) as exc:
+        return _emit({"error": exc.code, "detail": str(exc)}, 2)
+    except (NotarySchemaMismatch, NotaryMissing) as exc:  # NOTARY_SCHEMA_OLDER: migrate-notary
         return _emit({"error": exc.code, "detail": str(exc)}, 2)
     except Exception as exc:  # noqa: BLE001 - reported as unknown, never as success
         detail = f"{type(exc).__name__}: {exc}"
@@ -156,6 +163,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--state", required=True)
     commands = parser.add_subparsers(dest="command", required=True, parser_class=_Parser)
     commands.add_parser("cleanup")
+    commands.add_parser("migrate-notary")
     commands.add_parser("blackbox-commitment").add_argument("--blackbox", required=True)
     imp = commands.add_parser("import-tests")
     imp.add_argument("--repo-path", required=True)

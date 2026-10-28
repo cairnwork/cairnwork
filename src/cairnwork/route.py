@@ -36,6 +36,7 @@ from cairnwork.attempt_gate import attempt_gate
 from cairnwork.intake import Intake, IntakeRefused, task_from_payload
 from cairnwork.issue_runner import DEFAULT_GH, TRUST_CHANGED, GitHub
 from cairnwork.journal import JournalIntegrityViolation
+from cairnwork.notary import NotarySchemaMismatch
 from cairnwork.ownership import (
     DuplicateLogicalTask,
     KeyReusedWithDifferentRequest,
@@ -72,6 +73,8 @@ def main(argv: list[str] | None = None) -> int:
         OwnerMismatch,
     ) as exc:
         return _emit({"error": type(exc).__name__, "detail": str(exc)}, 2)
+    except NotarySchemaMismatch as exc:  # NOTARY_SCHEMA_OLDER: cairnwork-verify migrate-notary
+        return _emit({"error": exc.code, "detail": str(exc)}, 2)
     except JournalIntegrityViolation as exc:
         return _emit({"error": exc.code, "detail": str(exc)}, 1)
     except (ReplayForbidden, ReconciliationRequired, TakeoverRefused) as exc:
