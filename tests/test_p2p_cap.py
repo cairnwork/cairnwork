@@ -175,3 +175,22 @@ def test_a_deferred_test_is_dropped_from_the_selection_it_maps_to(monkeypatch, t
                        (None, None))  # fmt: skip
     assert probed == [tuple(p for p in existing if p != "tests/test_d.py")]
     assert "capped_dirs" not in got.rule
+
+
+def test_a_deferred_test_is_never_a_target_in_whole_suite_mode(monkeypatch, tmp_path):
+    existing = ("tests/test_b.py", "tests/test_d.py")
+    task, probed = _cap_task(monkeypatch, existing, ("src/pkg/b.py",))
+    got = p2p.plan_p2p(task, (), ("tests/test_d.py",), "whole-suite", 30, tmp_path, RESULT,
+                       (None, None))  # fmt: skip
+    assert probed == [("tests/test_b.py",)] and got.rule["selected_files"] == 1
+
+
+def test_a_cut_that_leaves_only_deferred_tests_runs_no_p2p_and_says_so(monkeypatch, tmp_path):
+    # #389 review: the cut keeps test_d.py (named after the change), the deferred tests drop it,
+    # so nothing is probed; the rule records 0 targets and names the cut, as any cut to nothing
+    existing = flat(MODULE_DIR_CAP + 1, "test_d.py")
+    task, probed = _cap_task(monkeypatch, existing, ("src/pkg/d.py",))
+    got = p2p.plan_p2p(task, (), ("tests/test_d.py",), "module-dir", 30, tmp_path, RESULT,
+                       (None, None))  # fmt: skip
+    assert probed == [] and got.spec is None
+    assert got.rule["targets"] == 0 and got.rule["capped_dirs"] == ["tests"]
