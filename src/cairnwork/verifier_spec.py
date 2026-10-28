@@ -89,9 +89,9 @@ def protected_verifier_inputs(
     A root module or first-level module/package under an import path is permitted
     only when the base tracks a regular file or package tree and its name cannot
     shadow a module visible to the verifier's interpreter. Without that evidence,
-    such inputs remain protected. An import path with an empty, ``.``, ``..`` or non-ASCII
-    segment (a leading ``/`` makes an empty one) raises ImportPathError (BAD_IMPORT_PATH), the
-    same refusal as the tree check.
+    such inputs remain protected. Import paths are normalized first: leading ``./`` and trailing
+    ``/`` are stripped and the checkout root (empty, ``.``, ``./``) is dropped. Any empty, ``.`` or
+    ``..`` segment left (``a//b``, ``a/.``, leading ``/``) or non-ASCII one raises BAD_IMPORT_PATH.
     """
     import_roots = _import_roots(import_paths)
     first_level_units = tuple(
