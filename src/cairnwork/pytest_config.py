@@ -174,13 +174,14 @@ def verifier_settings(
 
 
 def gate_import_paths(
-    repo: Path, base_commit: str, import_paths: tuple[str, ...]
+    repo: Path, base_commit: str, import_paths: tuple[str, ...], test_roots: tuple[str, ...] = ()
 ) -> tuple[str, ...]:
-    """verifier_settings' pythonpath, for the shadow gate (pipeline.check_task, #351). Only a base
-    that git shows is not a commit in repo (``rev-parse --verify`` exit 1) gives just import_paths:
-    nothing runs against it from there (intake refuses it as TASK_PATH_UNREADABLE, verify_candidate
-    cannot read the candidate's parent, a run cannot check it out). Any other failure to read the
-    base or its config is a PytestConfigError, so the gate fails closed."""
+    """verifier_settings' pythonpath and every directory above a test root, for the shadow gate
+    (pipeline.check_task, #351, #360). Only a base that git shows is not a commit in repo
+    (``rev-parse --verify`` exit 1) gives just import_paths: nothing runs against it from there
+    (intake refuses it as TASK_PATH_UNREADABLE, verify_candidate cannot read the candidate's
+    parent, a run cannot check it out). Any other failure to read the base or its config is a
+    PytestConfigError, so the gate fails closed."""
     try:
         run_git(repo, "rev-parse", "--verify", "--quiet", f"{base_commit}^{{commit}}")
     except GitCommandError as exc:
@@ -189,9 +190,23 @@ def gate_import_paths(
             return import_paths
         raise PytestConfigError(f"the base cannot be read: {exc}") from exc
     try:
-        return verifier_settings(repo, base_commit, import_paths).pythonpath
+        settings = verifier_settings(repo, base_commit, import_paths)
     except GitCommandError as exc:
         raise PytestConfigError(f"the base config cannot be read: {exc}") from exc
+    return (*settings.pythonpath, *_above_test_roots(test_roots))
+
+
+def _above_test_roots(test_roots: tuple[str, ...]) -> tuple[str, ...]:
+    """Every directory between the checkout root and a test root (``a/b/tests``: ``a``, ``a/b``).
+    In pytest's default (prepend) import mode a test or conftest.py module puts the directory above
+    its top package on sys.path (with ``pkg/tests/__init__.py``: ``pkg``, checked on pytest 9.1.1).
+    Which directory that is depends on files the gate cannot pin: the test commit may add an
+    ``__init__.py`` to the root, a candidate may add or delete one above it, and a conftest.py
+    above it counts too, so all of them are import roots (#360). A flat root ``tests`` adds none."""
+    above = (
+        root.split("/")[:depth] for root in test_roots for depth in range(1, root.count("/") + 1)
+    )
+    return tuple(dict.fromkeys("/".join(parts) for parts in above))
 
 
 def _section(text: str, section: str, form: str, name: str) -> dict[str, Any] | None:
