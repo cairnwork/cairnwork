@@ -11,6 +11,7 @@ import json
 import re
 import subprocess
 from typing import Any
+from urllib.parse import urlencode
 
 from cairnwork.issue_task import queue_trusted
 
@@ -87,15 +88,43 @@ class GitHub:
         )  # fmt: skip
         return out.split()
 
-    def find_pr(self, branch: str) -> str:
-        out = self._run(
-            "pr", "list", "-R", self.repo, "--head", branch, "--state", "all",
-            "--json", "url", "--jq", ".[0].url // empty",
-        )  # fmt: skip
-        return out.strip()
+    def find_pr(self, branch: str, commit: str) -> str:
+        """This repo's PR from ``branch`` into main at ``commit``, or "" (#403). Asked with
+        ``head=<owner>:<branch>``, since a bare branch name matches every fork's branch of that
+        name; whatever comes back is checked again. A PR of ours at another commit, or one
+        closed unmerged, is refused: someone changed it, and a person has to look."""
+        owner = self.repo.split("/")[0]
+        query = urlencode({"head": f"{owner}:{branch}", "state": "all", "per_page": "100"})
+        prs = json.loads(self._run("api", f"repos/{self.repo}/pulls?{query}"))
+        if not isinstance(prs, list) or not all(isinstance(pr, dict) for pr in prs):
+            raise ValueError("gh api pulls returned an unexpected answer")
+        ours = [
+            pr for pr in prs
+            if _get(pr, "head", "repo", "full_name").casefold() == self.repo.casefold()
+            and _get(pr, "head", "ref") == branch and _get(pr, "base", "ref") == "main"
+        ]  # fmt: skip
+        at_commit = [pr for pr in ours if _get(pr, "head", "sha") == commit]
+        live = [pr for pr in at_commit if pr.get("state") == "open" or pr.get("merged_at")]
+        if live:
+            if not _get(live[0], "html_url"):
+                raise ValueError("gh api pulls returned a PR without a URL")
+            return _get(live[0], "html_url")
+        if at_commit:
+            raise ValueError(f"PR_CLOSED: the PR from {branch} was closed unmerged")
+        if ours:
+            raise ValueError(f"PR_HEAD_MISMATCH: the PR from {branch} is not at {commit}")
+        return ""
 
     def draft_pr(self, branch: str, title: str, body: str) -> str:
         return self._run(
             "pr", "create", "-R", self.repo, "--draft", "--base", "main", "--head", branch,
             "--title", title, "--body-file", "-", stdin=body,
         ).strip()  # fmt: skip
+
+
+def _get(data: dict[str, Any], *keys: str) -> str:
+    """The string at ``keys``, or "" when any step is missing or not what GitHub documents."""
+    value: Any = data
+    for key in keys:
+        value = value.get(key) if isinstance(value, dict) else None
+    return value if isinstance(value, str) else ""
