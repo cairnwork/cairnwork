@@ -1,8 +1,10 @@
 """What a blackbox case expects, and the owner's comparison (#303, blackbox.py).
 
 An expected outcome is a value (``expected``) or a raise (``raises``: the exception's type name and,
-optionally, its exact message). A value that holds floats needs a ``tolerance`` (``rel_tol``,
-``abs_tol``, as math.isclose; a missing one is 0); every other part of it is compared exactly.
+optionally, its exact message). A value that holds floats needs a ``tolerance`` (``rel_tol`` below
+1, ``abs_tol``, as math.isclose; a missing one is 0); every other part of it is compared exactly.
+A bare type is a builtin exception under its own name: an alias (``IOError``) is refused, because
+the runner reports the class's name (``OSError``) and the case could never match (#319).
 
 Floats. Core's canonical JSON has none, and the runner's text for a float is not trusted, so a
 float travels as a one-key object ``{"$float": float.hex()}``: in a declaration's canonical form
@@ -102,7 +104,7 @@ def _raises(data: Any, where: str) -> dict[str, str]:
 
 def _builtin_exception(name: str) -> bool:
     kind = getattr(builtins, name, None)
-    return isinstance(kind, type) and issubclass(kind, BaseException)
+    return isinstance(kind, type) and issubclass(kind, BaseException) and kind.__name__ == name
 
 
 def _tolerance(data: Any, where: str) -> dict[str, Any]:
@@ -115,6 +117,8 @@ def _tolerance(data: Any, where: str) -> dict[str, Any]:
             number = math.nan
         if not 0 <= number < math.inf:
             raise BlackboxRejected(f"{where}: a tolerance is a finite number >= 0")
+    if data.get("rel_tol", 0) >= 1:  # checked as a number just above
+        raise BlackboxRejected(f"{where}: rel_tol must be below 1 (at 1, 0.0 matches anything)")
     return tagged(data)
 
 
@@ -134,10 +138,22 @@ def plain(item: Expectation) -> dict[str, Any]:
 
 
 def guessable(item: Expectation) -> bool:
-    """A boolean or null answer, or a raise with no message: a candidate can guess it."""
+    """A boolean or null answer, a raise with no (or an empty) message, or floats only, each
+    matched by 0.0 within ``abs_tol`` (#319): a candidate can guess it."""
     if item.raises:
-        return "message" not in json.loads(item.raises)
+        return not json.loads(item.raises).get("message")
+    if item.tolerance:
+        abs_tol = _number(json.loads(item.tolerance).get("abs_tol", 0))
+        return _zero_matches(json.loads(item.expected), abs_tol)
     return item.expected in _GUESSABLE
+
+
+def _zero_matches(value: Any, abs_tol: float) -> bool:
+    """Every leaf is a float within ``abs_tol`` of 0.0 (and there is at least one)."""
+    if type(value) is dict and set(value) == {FLOAT}:
+        return abs(float.fromhex(value[FLOAT])) <= abs_tol
+    items = list(value.values()) if type(value) is dict else value if type(value) is list else None
+    return bool(items) and all(_zero_matches(item, abs_tol) for item in items)
 
 
 def judge(item: Expectation, got: Any) -> str:
