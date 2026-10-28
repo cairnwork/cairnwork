@@ -144,11 +144,11 @@ def _checks_problem(
     want = {protection.PREFIX + c for c in policy.get("blackbox_checks", [])}
     evidence = request.get("evidence_bundle")
     observations = evidence.get("observations") if isinstance(evidence, dict) else None
-    status: dict[Any, set[Any]] = {}
+    passed: dict[str, set[bool]] = {}  # a signed value of any type refuses, never raises
     for obs in observations if isinstance(observations, list) else []:
-        if isinstance(obs, dict):
-            status.setdefault(obs.get("verifier_id"), set()).add(obs.get("status"))
-    unpassed = sorted(i for i in got if status.get(i) != {"PASS"})
+        if isinstance(obs, dict) and isinstance(obs.get("verifier_id"), str):
+            passed.setdefault(obs["verifier_id"], set()).add(obs.get("status") == "PASS")
+    unpassed = sorted(i for i in got if passed.get(i) != {True})
     if (got != want if "blackbox_checks" in policy else not got) or unpassed:
         detail = f"Core required {sorted(got)}, the policy {sorted(want) or 'one or more'}"
         return _fail("BLACKBOX_CHECKS_MISSING", f"{detail}; not PASS: {unpassed}")

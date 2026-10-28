@@ -112,6 +112,19 @@ def test_a_pinned_commitment_needs_its_declared_checks(tmp_path, name):
     assert check(w, with_checks(pins)).code == newer, "policy with blackbox_checks"
 
 
+@pytest.mark.parametrize("field", ["verifier_id", "status"])
+@pytest.mark.parametrize("pins", [PIN, with_checks(PIN)], ids=["older", "with_checks"])
+def test_an_observation_of_another_type_is_refused_not_raised(tmp_path, field, pins):
+    """A signed observation whose id or status is a list or object (a buggy or lying signer)."""
+    w = _world(tmp_path, ALL)
+    stmt = json.loads(base64.b64decode(read_bundle(w["bundle"])["payload"]))
+    observations = stmt["predicate"]["request"]["evidence_bundle"]["observations"]
+    mul = next(o for o in observations if o["verifier_id"] == "blackbox:mul")
+    mul[field] = ["blackbox:mul"] if field == "verifier_id" else {"PASS": True}
+    out = resign(w["state"], stmt, tmp_path / "edited.json", rehash=True)
+    assert check(w, pins, out).code == MISSING
+
+
 def test_the_assurance_says_whether_the_checks_were_pinned(tmp_path):
     w = _world(tmp_path, ALL)
     for pins, said in ((None, "unpinned"), (PIN, "unpinned"), (with_checks(PIN), "pinned")):
