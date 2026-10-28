@@ -77,3 +77,14 @@ def test_readme_has_the_install_command_the_workflow_runs() -> None:
     cmd = "uv tool install --from git+https://github.com/cairnwork/cairnwork.git cairnwork"
     assert cmd in TEXT
     assert cmd in (ROOT / "README.md").read_text(encoding="utf-8")
+
+
+def test_the_report_lookup_cannot_drop_or_duplicate_the_issue() -> None:
+    """#330: past the search's default 30 hits, and when the lookup itself fails."""
+    lookup = TEXT.split('n="$(gh issue list', 1)[1].split("\n          if ", 1)[0]
+    assert "--limit 100" in lookup and lookup.rstrip().endswith('|| true)"')
+
+
+def test_the_site_key_is_checked_as_ed25519_before_its_keyid() -> None:
+    """#330: the keyid is sha256 of the raw key in an Ed25519 SPKI, not of any key's last bytes."""
+    assert '"302a300506032b6570032100"' in TEXT and "der[12:]" in TEXT and "der[-32:]" not in TEXT
