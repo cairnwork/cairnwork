@@ -228,3 +228,11 @@ def test_the_reason_names_the_code():
         "FORGED_BYTECODE: bytecode cache holds code the run may not supply"
         " (1: tests/test_z.py (protected input))"
     )
+
+
+def test_a_sibling_whose_name_extends_a_write_root_is_outside_the_run(run):
+    """``run2`` is not under the write root ``run``: a root matches only up to a path separator
+    (ACH mutation scan)."""
+    sibling = run[1][1].parent / "run2" / "mod.py"
+    plant(run[2], sibling)
+    assert check(run) == (f"{sibling} (outside the run)",)
