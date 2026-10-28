@@ -135,7 +135,10 @@ def helper_project(project):
     commit_change(
         project,
         {
-            "tests/helper.py": "EXPECTED = 5\n",
+            # helper re-exports a dotted module, so a swap of either name reaches the test (#313)
+            "tests/helper.py": "from pkg.helper import EXPECTED\n",
+            "tests/pkg/__init__.py": "",
+            "tests/pkg/helper.py": "EXPECTED = 5\n",
             "tests/test_calc.py": (
                 "from calc import add\nfrom helper import EXPECTED\n\n\n"
                 "def test_add():\n    assert add(2, 3) == EXPECTED\n"
@@ -198,4 +201,72 @@ SYSPATH = (
     "    _h.write('EXPECTED = 6\\n')\n"
     "sys.path.insert(0, _d)\n"
 ) + BAD
-ATTACKS = {"forge": FORGE, "finder": FINDER, "child": CHILD, "syspath": SYSPATH}
+# More #303 swaps (#313), each spelled so tamper_scan lets it run. A path_hooks hook claims a
+# sys.path entry of its own; a path_importer_cache entry replaces the finder of a directory already
+# on sys.path; a dotted swap leaves the top-level name alone; a swap undone on the first call to add
+# leaves nothing behind for a check at the end; an int whose __eq__ is always true passes assert ==.
+_SERVE = (
+    "import sys, importlib.util\n"
+    "class _L:\n"
+    "    def create_module(self, spec):\n"
+    "        return None\n"
+    "    def exec_module(self, module):\n"
+    "        module.EXPECTED = 6\n"
+    "def _spec(name):\n"
+    "    return importlib.util.spec_from_loader(name, _L()) if name == 'helper' else None\n"
+)
+PATH_HOOKS = (
+    _SERVE + "class _F:\n"
+    "    def find_spec(self, name, target=None):\n"
+    "        return _spec(name)\n"
+    "def _hook(entry):\n"
+    "    if entry != '_fake_entry':\n"
+    "        raise ImportError\n"
+    "    return _F()\n"
+    "getattr(sys, 'path' + '_hooks').insert(0, _hook)\n"
+    "sys.path.insert(0, '_fake_entry')\n"
+) + BAD
+IMPORTER_CACHE = (
+    _SERVE + "class _F:\n"
+    "    def __init__(self, inner):\n"
+    "        self.inner = inner\n"
+    "    def find_spec(self, name, target=None):\n"
+    "        return _spec(name) or (self.inner and self.inner.find_spec(name, target))\n"
+    "    def invalidate_caches(self):\n"
+    "        pass\n"
+    "_cache = getattr(sys, 'path' + '_importer' + '_cache')\n"
+    "for _entry in list(sys.path):\n"
+    "    if _entry in _cache:\n"
+    "        _cache[_entry] = _F(_cache[_entry])\n"
+) + BAD
+DOTTED = (
+    "import sys, types\n"
+    "_m = types.ModuleType('pkg.helper')\n_m.EXPECTED = 6\nsys.modules['pkg.helper'] = _m\n"
+) + BAD
+RESTORE = (
+    SWAP + "def add(a, b):\n"
+    "    if sys.modules.get('helper') is _m:\n"
+    "        del sys.modules['helper']\n"
+    "    return a + b + 1\n"
+)
+ALWAYS_EQ = (
+    "class _Int(int):\n"
+    "    def __eq__(self, other):\n"
+    "        return True\n"
+    "    __hash__ = int.__hash__\n"
+    "def add(a, b):\n"
+    "    return _Int(a + b + 1)\n"
+)
+ATTACKS = {
+    "forge": FORGE,
+    "finder": FINDER,
+    "child": CHILD,
+    "syspath": SYSPATH,
+    "path_hooks": PATH_HOOKS,
+    "importer_cache": IMPORTER_CACHE,
+    "dotted": DOTTED,
+    "restore": RESTORE,
+    "always_eq": ALWAYS_EQ,
+}
+# #313 negative control: a project file under a test root named like a stdlib module.
+CONTROL = {"tests/types.py": "KINDS = ('int',)\n"}
