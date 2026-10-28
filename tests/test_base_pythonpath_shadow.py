@@ -218,8 +218,11 @@ def test_a_shadow_above_a_test_root_is_refused(repo, layout, path):
     if path != "pkg/brand_new.py":
         files[path] = "x = 1\n"
     commit_change(repo, files)
-    with pytest.raises(TaskRejected, match="PROTECTED_VERIFIER_INPUT"):
-        check_task(pkg_task(repo, (path,)))
+    # A tracked pkg/__init__.py seals pkg (#382) unless the task may change it: only then can pkg
+    # get in front, so that layout is checked with its __init__ in the allowed files.
+    paths = ("pkg/__init__.py", path) if "pkg/__init__.py" in files else (path,)
+    with pytest.raises(TaskRejected, match=f"PROTECTED_VERIFIER_INPUT: {path}$"):
+        check_task(pkg_task(repo, paths))
 
 
 def test_every_directory_above_a_nested_test_root_is_an_import_root(repo):

@@ -27,9 +27,7 @@ PACKAGE = {  # a package root inside a package, and a subpackage named like the 
     "pkg/calc/impl.py": "def half():\n    return 0\n",
 }
 CASES = {  # base files changed from PACKAGE, the candidate's paths, the state's import paths
-    "pkg/__init__.py deleted": ({}, ["pkg/__init__.py", "pkg/calc/impl.py"], []),
-    "the test commit adds pkg/tests/__init__.py": (
-        {"pkg/__init__.py": None, "pkg/tests/__init__.py": None}, ["pkg/calc/impl.py"], []),
+    "a subpackage named like a root module": ({}, ["pkg/calc/impl.py"], []),
     "the module under an import path": (
         {"calc.py": None, "src/calc.py": "x = 1\n"}, ["pkg/calc/impl.py"], ["src"]),
     "a module file above the root": ({"pkg/calc.py": "x = 1\n"}, ["pkg/calc.py"], []),
@@ -62,14 +60,39 @@ REFUSED = [(2, "PROTECTED_VERIFIER_INPUT"), (2, "PROTECTED_VERIFIER_INPUT")]
 ALLOWED = [(0, None), (2, "NOT_ACCEPTING")]  # submit stops only because intake is drained
 
 
+# Each way pkg gets in front of sys.path. PACKAGE alone keeps it a sealed package (#382): pytest
+# then inserts the checkout root, never pkg, and none of these names can shadow anything.
+ROUTES = {
+    "pkg/__init__.py deleted": lambda changes, paths: (changes, ["pkg/__init__.py", *paths]),
+    "the test commit adds pkg/tests/__init__.py": lambda changes, paths: (
+        {**changes, "pkg/__init__.py": None, "pkg/tests/__init__.py": None}, paths),
+}  # fmt: skip
+
+
+@pytest.mark.parametrize("route", sorted(ROUTES))
 @pytest.mark.parametrize("case", sorted(CASES))
 def test_route_check_and_submit_refuse_a_project_name_above_a_test_root(
+    repo, tmp_path, monkeypatch, capsys, case, route
+):
+    changes, paths, import_paths = CASES[case]
+    changes, paths = ROUTES[route](changes, paths)
+    head = _base(repo, changes)
+    args = (head, paths, import_paths, ["pkg/tests"], PKG_VERIFY)
+    assert _both(repo, tmp_path, monkeypatch, capsys, *args) == REFUSED
+
+
+@pytest.mark.parametrize("case", sorted(CASES))
+def test_route_check_and_submit_allow_the_same_names_in_a_sealed_package(
     repo, tmp_path, monkeypatch, capsys, case
 ):
     changes, paths, import_paths = CASES[case]
     head = _base(repo, changes)
     args = (head, paths, import_paths, ["pkg/tests"], PKG_VERIFY)
-    assert _both(repo, tmp_path, monkeypatch, capsys, *args) == REFUSED
+    answers = _both(repo, tmp_path, monkeypatch, capsys, *args)
+    if case == "a case variant":  # past the shadow gate; a later path check refuses the spelling
+        assert {error for _code, error in answers} == {"TASK_PATH_PARENT_INVALID"}
+    else:
+        assert answers == ALLOWED
 
 
 ORDER = {  # import path src, test root src/x/tests; the checkout root comes first in the ini
