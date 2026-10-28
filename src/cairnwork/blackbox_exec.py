@@ -58,8 +58,7 @@ def run_blackbox(
     timeout: int = DEFAULT_TIMEOUT_SECONDS,
 ) -> BlackboxRun:  # fmt: skip
     """All of the declaration's checks in one run; errors creating the checkout propagate."""
-    settings = pytest_config.base_settings(repo, base_commit)
-    paths = (*import_paths, *settings.pythonpath)
+    paths = pytest_config.verifier_settings(repo, base_commit, import_paths).pythonpath
     if paths:
         require_plain_dirs(repo, commit, paths)
     args = (declaration, repo, commit, run_id, attempt_id, timeout, paths)
