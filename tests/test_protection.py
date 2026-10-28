@@ -214,6 +214,8 @@ def test_the_receipt_binding_carries_the_level(state, project, monkeypatch):
 
 
 def test_a_binding_names_the_level_only_when_protected(project):
+    from types import SimpleNamespace
+
     from cairnwork.notary_verify import binding_extras
 
     plain = TaskSpec("k", "h", "t", "i", project, "a" * 40, ("src/calc.py",), (("v", ()),))
@@ -224,6 +226,9 @@ def test_a_binding_names_the_level_only_when_protected(project):
     assert "protection" not in binding_extras(plain, None)
     assert binding_extras(declared, None)["protection"] == PARTIAL
     assert binding_extras(only, None)["protection"] == protection.level(("blackbox:add",))
+    # #322 item 2: the P2P verifier is same-process, so it pulls a blackbox-only task to partial
+    p2p_plan = SimpleNamespace(spec=SimpleNamespace(verifier_id="p2p-module-dir"))
+    assert binding_extras(only, p2p_plan)["protection"] == PARTIAL
 
 
 def test_a_binding_that_names_another_level_stops_the_run(monkeypatch):

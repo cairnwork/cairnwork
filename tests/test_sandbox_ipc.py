@@ -131,10 +131,13 @@ def leftovers():
     assert min(ids) >= 0, ids
     try:
         yield names, shm, key
-    finally:
-        for name in names.values():
-            _mp.sem_unlink(name)
-        _shm.shm_unlink(shm)
+    finally:  # #322: one failed unlink must not leave the rest behind
+        unlinks = [*((_mp.sem_unlink, name) for name in names.values()), (_shm.shm_unlink, shm)]
+        for unlink, name in unlinks:
+            try:
+                unlink(name)
+            except OSError:
+                pass
         ipcrm = shutil.which("ipcrm")
         if ipcrm:
             for flag, ident in zip(("-s", "-m", "-q"), ids, strict=True):
@@ -161,12 +164,12 @@ def test_the_blackbox_policy_reaches_no_leftover(tmp_path, leftovers):
 
 
 @pytest.mark.sandbox
-def test_the_blackbox_policy_cannot_create_a_named_semaphore(tmp_path):
+def test_the_blackbox_policy_cannot_create_a_named_semaphore(tmp_path, token):
     """Seatbelt only: under bwrap a semaphore made in the run lives in the run's own /dev/shm and
-    dies with it, so creating one there is harmless."""
+    dies with it, so creating one there is harmless. The ``token`` fixture unlinks what an
+    interrupted control would leave (#322)."""
     if not _seatbelt():
         pytest.skip("Seatbelt witness")
-    token = secrets.token_hex(4)
     assert _confined(tmp_path, True, "create-sem", f"/mp-cw{token}") == ["ok"]  # the control
     for name in (f"/mp-cw{token}", f"/cw{token}"):
         assert _confined(tmp_path, False, "create-sem", name) == ["EPERM"], name
