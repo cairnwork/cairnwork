@@ -46,6 +46,7 @@ from cairnwork.issue_task import check_import_paths, check_test_roots
 from cairnwork.journal import Journal, no_evidence
 from cairnwork.lineage import require_on_main
 from cairnwork.notary import Notary
+from cairnwork.notary_migrate import refuse_unmigrated
 from cairnwork.ownership import (
     OWNER,
     InvalidStatusTransition,
@@ -211,6 +212,7 @@ class Intake:
             os.close(fd)
 
     def submit(self, payload: Any) -> dict[str, Any]:
+        refuse_unmigrated(self.state / "notary.sqlite")  # before anything is bound (#343)
         config = self.config()
         task = task_from_payload(
             payload,
