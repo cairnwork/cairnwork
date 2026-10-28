@@ -17,6 +17,10 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
       `.local/share/keyrings`, `.terraform.d`.
     - **Credential files** replaced with `/dev/null`: `.netrc`, `.git-credentials`, `.npmrc`,
       `.pypirc`, `.pgpass`, `.my.cnf`, `.vault-token`, `.Xauthority`.
+      The mount follows what the path really is, not its name: a directory gets the tmpfs and
+      anything else `/dev/null` (a `.netrc` directory or an `.ssh` file no longer fails the run at
+      mount, #378). A mask that would cover a read root (the interpreter, the run's guard files)
+      makes the policy refuse with the root named, linked or not (#378).
       A credential path that is, or runs through, a symlink is masked at its real target, inside
       or outside `$HOME` on the launching-account path; under the dedicated account a target
       inside or outside `$HOME` is masked when the account may reach it (an outside target is read
