@@ -86,8 +86,6 @@ def ensure_test_commit(repo: Path, test_commit: str, store=None) -> None:
     if store is not None and store.has(test_commit):
         store.fetch_into(repo, test_commit)
         return
-    if store is not None and store.required:
-        raise TestCommitRejected("TEST_COMMIT_NOT_IMPORTED", test_commit)
     try:
         run_git(repo, "fetch", "--quiet", "--no-tags", "origin", test_commit)
         run_git(repo, "cat-file", "-e", f"{test_commit}^{{commit}}")
