@@ -139,8 +139,11 @@ def _checks_problem(
     """#312: a pinned commitment names the declaration, not which of its checks Core required.
     With ``blackbox_checks`` the request's ``blackbox:*`` ids must be exactly those; an older
     policy without it only asks for one (assurance ``blackbox_checks: unpinned``, the residual in
-    docs/SECURITY.md). Each must be observed in the evidence, and only as PASS."""
-    got = {i for i in ids if isinstance(i, str) and i.startswith(protection.PREFIX)}
+    docs/SECURITY.md). Each must be observed in the evidence, and only as PASS. #373: each id once,
+    and no ``blackbox:*`` observation of an id Core did not require (the producer builds both from
+    one declaration, pipeline_judge._contract, so an extra one is an inconsistent request)."""
+    named = [i for i in ids if isinstance(i, str) and i.startswith(protection.PREFIX)]
+    got = set(named)
     want = {protection.PREFIX + c for c in policy.get("blackbox_checks", [])}
     evidence = request.get("evidence_bundle")
     observations = evidence.get("observations") if isinstance(evidence, dict) else None
@@ -149,10 +152,22 @@ def _checks_problem(
         if isinstance(obs, dict) and isinstance(obs.get("verifier_id"), str):
             passed.setdefault(obs["verifier_id"], set()).add(obs.get("status") == "PASS")
     unpassed = sorted(i for i in got if passed.get(i) != {True})
-    if (got != want if "blackbox_checks" in policy else not got) or unpassed:
+    extra = sorted(i for i in passed if i.startswith(protection.PREFIX) and i not in got)
+    twice = sorted(i for i in got if named.count(i) > 1)
+    if (got != want if "blackbox_checks" in policy else not got) or unpassed or extra or twice:
         detail = f"Core required {sorted(got)}, the policy {sorted(want) or 'one or more'}"
-        return _fail("BLACKBOX_CHECKS_MISSING", f"{detail}; not PASS: {unpassed}")
+        detail += f"; not PASS: {unpassed}" + f"; not required: {extra}" * bool(extra)
+        return _fail("BLACKBOX_CHECKS_MISSING", detail + f"; required twice: {twice}" * bool(twice))
     return None
+
+
+def checks_assurance(policy: Mapping[str, Any] | None) -> str:
+    """``assurance.blackbox_checks``: ``pinned`` (the policy's ids are exactly Core's),
+    ``unpinned`` (an older policy pins the commitment only: at least one id, each PASS) or
+    ``not_checked`` (no policy, or no non-empty commitment pin: no id check ran, #373)."""
+    if not (policy or {}).get("blackbox_commitment"):
+        return "not_checked"
+    return "pinned" if "blackbox_checks" in (policy or {}) else "unpinned"
 
 
 def recorded_protection(binding: Mapping[str, Any]) -> str:
