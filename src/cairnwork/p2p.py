@@ -61,7 +61,7 @@ from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRej
 from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.issue_task import test_target
 from cairnwork.p2p_probe_log import probe_log_tail
-from cairnwork.p2p_selection import DEFAULT_BUDGET_SECONDS, select_p2p_targets
+from cairnwork.p2p_selection import DEFAULT_BUDGET_SECONDS, cap_note, select_p2p_targets
 from cairnwork.verifiers import VerifierRun, VerifierSpec, run_verifiers
 
 
@@ -164,6 +164,7 @@ def plan_p2p(task, specs, test_files, mode, budget, run_root, result, verifying)
     for applied in (mode, "module-dir") if mode == "whole-suite" else (mode,):
         files = select_p2p_targets(task.allowed_files, existing, task.test_roots, applied)
         rule |= {"applied": applied, "selected_files": len(files)}
+        rule |= cap_note(task.allowed_files, existing, task.test_roots, applied)  # #333
         if not files and rule["degraded"]:  # #117 F1: a failed probe is not "nothing to run"
             raise _unusable(rule, "no module-dir test to fall back on")
         if not files:
@@ -185,7 +186,9 @@ def plan_p2p(task, specs, test_files, mode, budget, run_root, result, verifying)
 
 def _unusable(rule: dict, why: str) -> BaseUncomparable:
     """A failed base probe: no evidence about the base, so UNCOMPARABLE, not a refusal (#234)."""
-    detail = f"{rule['degraded']}; {why}"
+    cut = rule.get("capped_dirs")  # #333: a cut is named, so "nothing to run" is never silent
+    detail = f"{rule['degraded']}; {why}" + (f"; capped: {', '.join(cut)}" if cut else "")
+    detail += f" (over {rule['cap']} test files)" if cut else ""
     return BaseUncomparable(Comparison("UNCOMPARABLE", "P2P_BASE_PROBE_UNUSABLE", detail))
 
 
