@@ -46,6 +46,22 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
       and points inside it, is ignored. Residual: the policy is built before the run, so a credential link repointed while
       a run is in progress leaves its new target readable (main already had this for relative
       links); tracked in #353.
+      A link found *inside* a credential directory (`~/.aws/credentials -> /srv/x/cred`, at any
+      depth) has its real target masked too when that target leaves the directory, by the same
+      rule and the same reach rule under the dedicated account (#377): the directory's tmpfs hides
+      the link, not the target, which stays readable at its own path. Targets under the
+      package-managed prefixes `/usr`, `/nix/store`, `/gnu/store` and `/snap` are public content
+      and are left alone (`~/.config/tz -> /usr/share/zoneinfo`, systemd user units); a link to a
+      directory under `/etc` is refused (a file there is masked). A dangling target under a read
+      or write root of the run is refused; any other dangling target is skipped and counted in the
+      policy notes. Residual (the #353 kind): the policy binds the whole host root read-only and
+      gives the run no private `/tmp`, so a skipped target created while the run is in progress
+      (say a daemon's socket under `/tmp`) is readable, a socket connectable, at its own path. Each
+      credential directory is scanned without following links, three levels deep (`.config/a/b/c`,
+      where credential links live), up to 50,000 entries; past that, or when a directory cannot be
+      read, the policy is refused rather than leave a link unscanned. Residual: deeper levels are
+      not scanned (counted in the policy notes), so a link below them leaves its target readable.
+      Each real target is masked once.
     - **Socket trees** emptied with a tmpfs (the whole tree, covering every socket under it):
       `/run/user` (systemd user bus — a `systemd-run --user` would start a process outside the
       sandbox — and session agents), `/tmp/.X11-unix` (an X server lets a process inject input and
