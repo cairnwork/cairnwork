@@ -18,9 +18,11 @@ import root (verifier_spec). The ``__init__.py`` stays when nothing can remove i
 That holds for pytest, not for the base's own code: a conftest or test that inserts its parent
 directory, or runs a script with another ``sys.path``, puts a sealed directory in front all the
 same (#385 review). So nothing is sealed when the base's Python code where tests, conftests and
-the package under test live (the checkout root's files and every directory above a test root,
-which holds the roots) mentions one of ``_PATH_WORDS``. A plain text test: it fails closed on
-any mention, and the base is the target's own code, not the candidate's.
+the code they import live (the checkout root's files, every directory above a test root, which
+holds the roots, and every import path) mentions one of ``_PATH_WORDS``; nor when the task's test
+commit is in the repository and its code does. A plain text test: it fails closed on any mention,
+and the base and the test commit are the target's own code, not the candidate's. A test commit
+not fetched yet is not read (and never fetched for this).
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ import subprocess
 from pathlib import Path
 
 from cairnwork.gitcmd import GitCommandError, run_git
+from cairnwork.import_path_tree import normalize_import_paths
 
 _REGULAR = ("100644", "100755")
 # Ways Python code can put a directory on sys.path, or start Python with another sys.path.
@@ -56,6 +59,8 @@ def sealed_packages(
     roots: tuple[str, ...],
     above: tuple[str, ...],
     paths: tuple[str, ...],
+    import_paths: tuple[str, ...] = (),
+    test_commit: str | None = None,
 ) -> frozenset[str]:
     """The directories in ``above`` or under a test root that the base gives a regular file named
     exactly ``__init__.py`` (a case variant is not one on a case-sensitive host) and whose name is
@@ -89,19 +94,32 @@ def sealed_packages(
             and folder.casefold() not in touched
         ):
             sealed.add(folder)
-    if sealed and _base_may_edit_sys_path(repo, base_commit, above):
+    if not sealed:
+        return frozenset()
+    dirs = (*above, *normalize_import_paths(import_paths))
+    commits = (base_commit, *(c for c in (test_commit,) if c and _present(repo, c)))
+    if any(_may_edit_sys_path(repo, commit, dirs) for commit in commits):
         return frozenset()
     return frozenset(sealed)
 
 
-def _base_may_edit_sys_path(repo: Path, base_commit: str, above: tuple[str, ...]) -> bool:
-    """Whether a ``.py`` file of the base at the checkout root or under a directory above a test
-    root mentions one of ``_PATH_WORDS``. ``git grep -q`` exits 1 for no match; anything else
-    (a fatal 128, a timeout) counts as a match."""
-    words = [arg for word in _PATH_WORDS for arg in ("-e", word)]
-    specs = (":(glob)*.py", *(f"{d}/*.py" for d in above))  # ``*`` crosses ``/`` here
+def _present(repo: Path, commit: str) -> bool:
+    """Whether the test commit is in the repository already (it is never fetched for this)."""
     try:
-        run_git(repo, "grep", "-q", "-I", "-F", *words, base_commit, "--", *specs)
+        run_git(repo, "cat-file", "-e", f"{commit}^{{commit}}")
+    except (GitCommandError, OSError, ValueError, subprocess.SubprocessError):
+        return False
+    return True
+
+
+def _may_edit_sys_path(repo: Path, commit: str, dirs: tuple[str, ...]) -> bool:
+    """Whether a ``.py`` file of commit at the checkout root or under one of dirs mentions one of
+    ``_PATH_WORDS``. ``-a``: a file the repository's attributes call binary is searched too.
+    ``git grep -q`` exits 1 for no match; anything else (a fatal 128, a timeout) counts as one."""
+    words = [arg for word in _PATH_WORDS for arg in ("-e", word)]
+    specs = (":(glob)*.py", *(f"{d}/*.py" for d in dirs))  # ``*`` crosses ``/`` here
+    try:
+        run_git(repo, "grep", "-q", "-a", "--no-textconv", "-F", *words, commit, "--", *specs)
     except GitCommandError as exc:
         cause = exc.__cause__
         return not (isinstance(cause, subprocess.CalledProcessError) and cause.returncode == 1)

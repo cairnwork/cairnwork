@@ -279,3 +279,48 @@ def test_a_base_conftest_really_puts_a_sealed_package_in_front(repo, tmp_path):
     )
     (run,) = run_verifiers(repo, head, (spec,), tmp_path / "runs", "r1", python=sys.executable)
     assert run.observation.passed, (run.why, run.log_path.read_text())
+
+
+# PR #385 review round 2: where else the scan must look.
+@pytest.mark.parametrize("attributes", ["*.py binary\n", "*.py -diff\n", "*.py -text\n"])
+def test_route_check_and_submit_scan_files_the_attributes_call_binary(
+    repo, tmp_path, monkeypatch, capsys, attributes
+):
+    files = SEALED_PKG | {".gitattributes": attributes, "pkg/tests/conftest.py": INSERT_PKG}
+    head = commit_change(repo, files)
+    args = (head, ["pkg/fractions.py"], [], ["pkg/tests"], PKG_VERIFY)
+    assert _both(repo, tmp_path, monkeypatch, capsys, *args) == REFUSED
+
+
+@pytest.mark.parametrize(
+    ("config", "import_paths"),
+    [
+        ({}, ("lib",)),
+        ({"pytest.ini": "[pytest]\npythonpath = lib\n"}, ()),
+        ({}, ("l[i]b",)),  # a name a pathspec could read as a pattern is still searched
+    ],
+)
+def test_an_import_path_is_scanned_too(repo, config, import_paths):
+    # library code the tests import, under a task import path or the base pythonpath
+    folder = import_paths[0] if import_paths else "lib"
+    library = {f"{folder}/paths.py": "import sys\nsys.path[:0] = ['pkg']\n"}
+    commit_change(repo, SEALED_PKG | config | library)
+    with pytest.raises(TaskRejected, match="PROTECTED_VERIFIER_INPUT: pkg/fractions.py$"):
+        check_task(_task(repo, ("pkg/fractions.py",), import_paths=import_paths))
+
+
+@pytest.mark.parametrize("present", [True, False])
+def test_a_test_commit_in_the_repository_is_scanned_too(repo, present):
+    base = commit_change(repo, SEALED_PKG)
+    test = commit_change(repo, {"pkg/tests/test_more.py": INSERT_PKG}, message="tests")
+    if not present:
+        git(repo, "reset", "-q", "--hard", base)
+        git(repo, "reflog", "expire", "--expire=now", "--all")
+        git(repo, "gc", "-q", "--prune=now")
+    task = TaskSpec("key", "card", "t", "fix", repo, base, ("pkg/fractions.py",), PKG_VERIFY,
+                    test_roots=("pkg/tests",), test_commit=test)  # fmt: skip
+    if present:
+        with pytest.raises(TaskRejected, match="PROTECTED_VERIFIER_INPUT: pkg/fractions.py$"):
+            check_task(task)
+    else:  # not fetched yet: not read, and not fetched for this (stated residual)
+        assert check_task(task)

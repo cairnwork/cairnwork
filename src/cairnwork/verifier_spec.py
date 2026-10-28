@@ -85,6 +85,7 @@ def protected_verifier_inputs(
     python: str | None = None,
     import_paths: tuple[str, ...] = (),
     allow_deletions: bool = True,
+    test_commit: str | None = None,
 ) -> tuple[str, ...]:
     """Paths a candidate must not change, because they decide what the verifier runs.
 
@@ -101,7 +102,9 @@ def protected_verifier_inputs(
     """
     above = _dirs_above_roots(tuple(roots))
     under_above = tuple(path for path in paths if _under(path, above))
-    sealed = sealed_packages(repo, base_commit, tuple(roots), above, under_above)
+    sealed = sealed_packages(
+        repo, base_commit, tuple(roots), above, under_above, tuple(import_paths), test_commit
+    )
     known = {path.casefold() for path in normalize_import_paths(import_paths)}
     gate_paths = (
         *import_paths,
