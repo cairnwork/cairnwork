@@ -22,7 +22,8 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
       inside `$HOME` that the account can reach is masked (`bwrap._account_can_reach` selects no
       target outside `$HOME`, so one there is not masked). A dangling link, or one whose target
       is a system root, `$HOME`, an ancestor of it or of a write root, makes the policy refuse
-      (#341). Residual: the policy is built before the run, so a credential link repointed while
+      (#341); under the dedicated account only for a link it selects, so a dangling link that
+      points outside `$HOME`, or sits in a home the account cannot enter, is ignored. Residual: the policy is built before the run, so a credential link repointed while
       a run is in progress leaves its new target readable (main already had this for relative
       links); tracked in #353.
     - **Socket trees** emptied with a tmpfs (the whole tree, covering every socket under it):

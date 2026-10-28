@@ -160,15 +160,18 @@ def test_a_link_target_cannot_add_a_policy_line(tmp_path, home):
         _policy(home)
 
 
-@pytest.fixture
-def world_home():
-    """A 0755 home under /tmp (world-traversable ancestors), so the account path can reach it."""
+def _world_dir():
+    """A 0755 dir under /tmp (world-traversable ancestors), so the account path can reach it."""
     base = Path(tempfile.mkdtemp(dir="/tmp", prefix="cw-link-"))  # noqa: S108
     os.chmod(base, 0o755)
     try:
         yield base
     finally:
         shutil.rmtree(base, ignore_errors=True)
+
+
+world_home = pytest.fixture(_world_dir, name="world_home")
+world_outside = pytest.fixture(_world_dir, name="world_outside")
 
 
 def test_account_mode_masks_an_in_home_absolute_link_at_its_target(world_home):
@@ -194,12 +197,23 @@ def test_account_mode_ignores_a_dangling_link_in_a_private_home(world_home):
     assert not [p for p in _masked(lines) if p.startswith(str(world_home.resolve()))]
 
 
-def test_account_mode_leaves_a_target_outside_home_unmasked(world_home, tmp_path):
-    outside = tmp_path / "outside-ssh"
+def test_account_mode_leaves_a_target_outside_home_unmasked(world_home, world_outside):
+    # The target is reachable by the account (0755 under /tmp), so only the in-home rule of
+    # _account_can_reach keeps it out: account mode masks in-home targets only (documented).
+    outside = world_outside / "ssh"
     outside.mkdir()
     (world_home / ".ssh").symlink_to(outside)
     lines = _policy(world_home, owner=False)
-    assert str(outside.resolve()) not in lines  # documented: account mode masks in-home only
+    assert str(outside.resolve()) not in lines
+
+
+def test_account_mode_refuses_a_link_to_an_in_home_ancestor_of_a_write_root(world_home):
+    work = world_home / "w" / "run"
+    work.mkdir(parents=True)
+    (world_home / ".config").symlink_to(world_home.resolve() / "w")
+    with pytest.raises(SandboxError, match=r"\.config.*links to") as err:
+        _policy(world_home, (work,), owner=False)
+    assert str(work.resolve()) in str(err.value)
 
 
 @pytest.mark.sandbox
