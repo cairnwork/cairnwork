@@ -229,3 +229,24 @@ that because the marker path is outside the write roots, on bwrap the read-only 
 already forbids the write, so that assertion does not by itself exercise the PID-namespace kill
 (the separate write-outside and no-network witnesses, plus the reasoning above, cover it). A
 dedicated witness that proves the kill directly is a P3 follow-up.
+
+## What the worker can reach (hidden-test confidentiality)
+
+The sandbox above confines candidate code while it is verified. The worker that writes the
+candidate does not run in it: `src/cairnwork/workers/agy.py` starts agy with agy's own
+`--sandbox`, which is not a security boundary (docs/DRILLS.md), on the owner's account or, with
+`agy_run_as_user`, on a worker account. Cairnwork does not cut the worker's network either (a
+hosted model needs it). The deferred tests (`deferred_tests.py`) stay hidden from the worker only
+when all three of these hold:
+
+1. **A separate worker account.** The private store `<state>/deferred-tests/` is closed only by
+   the state directory's mode 0700 under the account that runs Cairnwork (`deferred_store.py`).
+   A worker on that same account (no `agy_run_as_user`) can read it.
+2. **`test_source: "bundle"`.** Only then must a test commit come from the store. Under the
+   default `"auto"` a commit the store does not hold is fetched from `origin`, so a test commit
+   pushed to the target repository can be fetched from there by a networked worker too.
+3. **Tasks that are not public upstream.** If a task's tests or its fix exist in a public
+   repository, nothing in Cairnwork stops a networked worker from finding them.
+
+When one of these does not hold, the tests still judge the candidate, but a VERIFIED verdict no
+longer shows that the worker fixed the task without having seen them.
