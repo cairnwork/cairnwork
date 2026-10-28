@@ -18,12 +18,19 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
     - **Credential files** replaced with `/dev/null`: `.netrc`, `.git-credentials`, `.npmrc`,
       `.pypirc`, `.pgpass`, `.my.cnf`, `.vault-token`, `.Xauthority`.
       A credential path that is, or runs through, a symlink is masked at its real target, inside
-      or outside `$HOME` on the launching-account path; under the dedicated account only a target
-      inside `$HOME` that the account can reach is masked (`bwrap._account_can_reach` selects no
-      target outside `$HOME`, so one there is not masked). A dangling link, or one whose target
+      or outside `$HOME` on the launching-account path; under the dedicated account a target
+      inside or outside `$HOME` is masked when the account may reach it (an outside target is read
+      through its own path even from a `0700` home, #358). The account mounts with its own uid and
+      groups, so a directory on the way counts as enterable on `o+x`, on `g+x` when its group holds
+      any user other than the directory's owner (a home given group `cairnwork` is masked; a
+      user-private group, as on the usual `0750` home, is not), or on any POSIX ACL or error
+      reading one (`bwrap_reach`). A target behind a directory this rule says the account cannot
+      enter is not masked, because a mount over it would fail the run; it stays readable only
+      where the rule is wrong for the host. A dangling link, or one whose target
       is a system root, `$HOME`, an ancestor of it or of a write root, makes the policy refuse
-      (#341); under the dedicated account only for a link it selects, so a dangling link that
-      points outside `$HOME`, or sits in a home the account cannot enter, is ignored. Residual: the policy is built before the run, so a credential link repointed while
+      (#341); under the dedicated account only for a link it selects, so a dangling link whose
+      target's parent the account cannot reach, or that sits in a home the account cannot enter
+      and points inside it, is ignored. Residual: the policy is built before the run, so a credential link repointed while
       a run is in progress leaves its new target readable (main already had this for relative
       links); tracked in #353.
     - **Socket trees** emptied with a tmpfs (the whole tree, covering every socket under it):
