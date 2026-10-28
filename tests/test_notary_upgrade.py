@@ -1,4 +1,5 @@
-"""Issue #74: a historic verdict must survive a Core upgrade, and a v1 ledger must migrate."""
+"""Issue #74: a historic verdict must survive a Core upgrade, and a v1 ledger must migrate
+(explicitly, since #343)."""
 
 import sqlite3
 
@@ -6,6 +7,7 @@ from test_notary import notarize
 
 import cairnwork.notary as notary_module
 from cairnwork.notary import SCHEMA_VERSION, Notary
+from cairnwork.notary_migrate import migrate_notary
 
 _OTHER_IDENTITY = {"schema": "nexus.core.core-identity.v1-experimental", "version": "9.9.9"}
 
@@ -63,7 +65,8 @@ def test_a_v1_ledger_migrates_and_its_rows_keep_the_read_time_identity(repo, tmp
     v = notarize(Notary(tmp_path / "src.sqlite"), repo, {"src/a.py": "x = 2\n"})
     path = tmp_path / "v1.sqlite"
     _build_v1_ledger(tmp_path / "src.sqlite", path)
-    migrated = Notary(path)  # migrates v1 -> v2; the old row's expected_identity stays NULL
+    migrate_notary(path)  # v1 -> current; the old row's expected_identity stays NULL
+    migrated = Notary(path)
     conn = sqlite3.connect(path)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     columns = {r[1] for r in conn.execute("PRAGMA table_info(core_verifications)")}

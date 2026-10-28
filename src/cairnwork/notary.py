@@ -81,6 +81,13 @@ class NotarySchemaMismatch(NotaryError):
     code = "NOTARY_SCHEMA_MISMATCH"
 
 
+class NotarySchemaOlder(NotarySchemaMismatch):
+    """An older schema is never migrated on open (#343): that would be a one-way write that
+    an older deploy pinned to this state could no longer read. notary_migrate does it."""
+
+    code = "NOTARY_SCHEMA_OLDER"
+
+
 @dataclass(frozen=True)
 class Verdict:
     task_id: str
@@ -106,25 +113,6 @@ def default_core_identity() -> dict[str, Any]:
     from product.protocol import core_identity
 
     return core_identity()
-
-
-def _migrate(conn: sqlite3.Connection) -> None:
-    """Add the columns of later schemas (expected_identity #74, binding_json #229); existing
-    append-only rows keep NULL there. Serialised by BEGIN IMMEDIATE and idempotent under a
-    concurrent migration (a version already current runs no ALTER)."""
-    conn.execute("BEGIN IMMEDIATE")
-    try:
-        version = conn.execute("PRAGMA user_version").fetchone()[0]
-        while version in MIGRATIONS:
-            conn.execute(MIGRATIONS[version])
-            version += 1
-        if version != SCHEMA_VERSION:
-            raise NotarySchemaMismatch(f"user_version {version}, need {SCHEMA_VERSION}")
-        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-        conn.execute("COMMIT")
-    except BaseException:
-        conn.execute("ROLLBACK")
-        raise
 
 
 class Notary:
@@ -155,8 +143,11 @@ class Notary:
                 conn.executescript(
                     f"BEGIN IMMEDIATE;{SCHEMA}PRAGMA user_version = {SCHEMA_VERSION};COMMIT;"
                 )
-            elif version in MIGRATIONS:
-                _migrate(conn)
+            elif version in MIGRATIONS:  # nothing written: migration is an explicit step (#343)
+                raise NotarySchemaOlder(
+                    f"user_version {version}, need {SCHEMA_VERSION}; back up and migrate with"
+                    f" cairnwork-verify --state {self._path.parent} migrate-notary"
+                )
             elif version != SCHEMA_VERSION:
                 raise NotarySchemaMismatch(f"user_version {version}, need {SCHEMA_VERSION}")
         finally:

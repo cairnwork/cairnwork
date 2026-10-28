@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from cairnwork.notary import Notary, NotaryInputError
+from cairnwork.notary_migrate import migrate_notary
 from cairnwork_attest.record import AttestError, read_record, verify_record
 from cairnwork_attest.verify import verify_bundle
 from tests.attest.binding_helpers import (
@@ -139,7 +140,7 @@ _V2_COLUMNS = (
 )
 
 
-def test_a_v2_ledger_is_read_as_is_and_migrates_to_v3(tmp_path, repo):
+def test_a_v2_ledger_is_read_as_is_and_verified_only_after_explicit_migration(tmp_path, repo):
     from tests.attest.test_verify import setup_verified_bundle_fixture
 
     src = tmp_path / "src"
@@ -162,6 +163,11 @@ def test_a_v2_ledger_is_read_as_is_and_migrates_to_v3(tmp_path, repo):
     conn.commit()
     conn.close()
     assert read_record(path, "task-1", "a1").binding is None  # read-only, before any migration
+    before = path.read_bytes()  # a read never migrates (#343): refused, then explicit migration
+    with pytest.raises(AttestError, match="NOTARY_SCHEMA_OLDER") as refused:
+        verify_record(path, "task-1", "a1", expected_candidate=cand, core_identity=CORE_IDENTITY)
+    assert refused.value.code == "RECORD_MALFORMED" and path.read_bytes() == before
+    migrate_notary(path)
     verified = verify_record(path, "task-1", "a1", expected_candidate=cand,
                              core_identity=CORE_IDENTITY)  # fmt: skip
     assert verified.verdict.verified and verified.record.binding is None
