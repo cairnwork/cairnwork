@@ -42,6 +42,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from cairnwork_sandbox.backend import Policy, SandboxError
+from cairnwork_sandbox.bwrap_links import mask_target
 from cairnwork_sandbox.shm import shm_flags, shm_unavailable_reason
 
 NAME = "bwrap"
@@ -235,8 +236,9 @@ def build_policy(
     # root, and an absent path leaks nothing) and, off the owner path, only those the account uid
     # can both reach and read. The policy is rebuilt per run, so one created later is masked next.
     for rel, is_dir in _home_cred_masks(real_home, owner=mask_home_credentials):
-        target = f"{real_home}/{rel}"
-        flags += ["--tmpfs", target] if is_dir else ["--ro-bind", "/dev/null", target]
+        target = mask_target(f"{real_home}/{rel}", real_home, writes, _TOO_BROAD, _safe)  # #341
+        if target is not None:
+            flags += ["--tmpfs", target] if is_dir else ["--ro-bind", "/dev/null", target]
     # Mask root-equivalent daemon sockets (Docker/Podman/containerd): a read-only root bind
     # does not stop connect() to a pathname socket, and no network namespace covers it.
     # Bind over the canonical path (realpath collapses the /var/run -> /run symlink and the
@@ -369,7 +371,7 @@ class BwrapBackend:
 
     name = NAME
     masked_home_paths: tuple[str, ...] = _CRED_DIRS + _CRED_FILES
-    # --tmpfs on a relative symlink mounts over its target (an absolute one fails the mount).
+    # A credential path reached through a symlink is masked at its real target (#339, #341).
     masks_link_targets = True
 
     def available(self) -> bool:

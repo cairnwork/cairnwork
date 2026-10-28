@@ -17,6 +17,9 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
       `.local/share/keyrings`, `.terraform.d`.
     - **Credential files** replaced with `/dev/null`: `.netrc`, `.git-credentials`, `.npmrc`,
       `.pypirc`, `.pgpass`, `.my.cnf`, `.vault-token`, `.Xauthority`.
+      A credential path that is, or runs through, a symlink is masked at its real target, inside
+      or outside `$HOME` (a dangling link has nothing to mask); a link whose target is a system
+      root, `$HOME`, an ancestor of it or of a write root makes the policy refuse (#341).
     - **Socket trees** emptied with a tmpfs (the whole tree, covering every socket under it):
       `/run/user` (systemd user bus — a `systemd-run --user` would start a process outside the
       sandbox — and session agents), `/tmp/.X11-unix` (an X server lets a process inject input and
@@ -81,8 +84,8 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
   home paths (`seatbelt.CREDENTIAL_HOME_PATHS`). Without a verifier account, `cairnwork-verify run`
   refuses a state directory or run root under a masked home path (`STATE_UNDER_SANDBOX_MASK`,
   naming the path and the prefix) before it consumes the deferred tests (#324; on Linux a masked
-  directory that is a relative symlink masks its target, and an absolute one makes bwrap fail to
-  start, so a state under the target is refused too, #339); with an account
+  path reached through a symlink, relative or absolute, is masked at its real target, so a state
+  under the target is refused too, #339, #341); with an account
   every sandboxed run lives under the account's own run root, never under the state.
 
 ### What a VERIFIED rests on (#303)
