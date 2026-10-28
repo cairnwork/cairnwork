@@ -45,6 +45,17 @@ PINNED_C1 = {
         1597,
     ),
 }
+PINNED_368 = {  # a deny for reading *.pyc and creating a .pyc symlink under each write root
+    (): ("93fd16f87d345ef3c80db6631e4856cf983926e610de2c0bb4e6f155efa7005a", 1863),
+    ("/Library/Developer/CommandLineTools",): (
+        "b8c12ab2e5a7dc3e4e35d73ea76ef2fded01e94b902041abad6befe238bb9350",
+        1913,
+    ),
+    ("/Applications/Xcode.app",): (
+        "d93451a8c0c3b6f7167fe8485864d364cf08844930d0de60a22e28b3bf5d055f",
+        1961,
+    ),
+}
 
 
 @pytest.mark.parametrize("dirs", list(PINNED))
@@ -55,14 +66,18 @@ def test_seatbelt_profile_is_pinned_as_of_the_posix_semaphore_change_116(monkeyp
         seatbelt.build_profile(READS, WRITES, home=HOME),
         seatbelt.BACKEND.policy(READS, WRITES, home=HOME),
     ):
+        pycs = [line for line in profile.text.splitlines(True) if '\\.pyc$")' in line]
+        assert len(pycs) == 2 * len(WRITES)  # #368: a read and a symlink rule per write root
+        before_368 = "".join(line for line in profile.text.splitlines(True) if line not in pycs)
         c1_lines = ('  (literal "/usr/bin/shasum")\n', '  (literal "/usr/bin/shasum5.34")\n')
         for line in c1_lines:
-            assert profile.text.count(line) == 1
-        before_c1 = profile.text
+            assert before_368.count(line) == 1
+        before_c1 = before_368
         for line in c1_lines:
             before_c1 = before_c1.replace(line, "")
         assert (hashlib.sha256(before_c1.encode()).hexdigest(), len(before_c1)) == PINNED[dirs]
-        assert (profile.sha256, len(profile.text)) == PINNED_C1[dirs]
+        assert (hashlib.sha256(before_368.encode()).hexdigest(), len(before_368)) == PINNED_C1[dirs]
+        assert (profile.sha256, len(profile.text)) == PINNED_368[dirs]
 
 
 def test_seatbelt_argv_prefixes_are_unchanged(tmp_path):
