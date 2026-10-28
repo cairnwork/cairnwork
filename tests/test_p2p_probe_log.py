@@ -55,3 +55,60 @@ def test_an_ordinary_long_log_keeps_its_last_2048_characters(tmp_path):
     log.write_bytes(text.encode())
     expected = "".join(f"line {i:05d} ok\n" for i in range(2000))[-2048:]
     assert probe_log_tail(log) == expected
+
+
+def test_a_cut_credential_padded_with_escape_codes_that_hold_a_space_leaves_no_fragment(tmp_path):
+    log = tmp_path / "verifier.log"  # #366: ESC[1 q has a space before its final byte
+    log.write_bytes(b"https://user:" + b"\x1b[1 q" * 4000 + b"SECRET@x END")
+    assert "SECRET" not in probe_log_tail(log)
+    log.write_bytes(b"https://user:" + b"\x1b[1 q" * 4000 + b"SECRET@x\r50%\r100%\nnext line")
+    assert probe_log_tail(log) == "next line"  # CR records after the cut go with the cut line
+
+
+def test_a_base64_credential_with_slash_plus_and_equals_is_removed_whole(tmp_path):
+    log = tmp_path / "verifier.log"
+    log.write_text("fetch https://u:ab/cd+ef==@example.com/x failed\n")
+    assert probe_log_tail(log) == "fetch https://example.com/x failed\n"
+    log.write_text("fetch https://u:ab/cd+ef==@example.com/x\n" + "y" * 2030)  # cut inside it
+    tail = probe_log_tail(log)
+    assert len(tail) == 2048 and not any(part in tail for part in ("ab/", "cd+", "ef=="))
+
+
+def test_a_window_with_no_complete_line_says_so_instead_of_an_empty_tail(tmp_path):
+    log = tmp_path / "verifier.log"  # #366: one 20 KB line of \r progress, or one-line JSON
+    log.write_bytes(b"".join(b"\r%05d%%" % i for i in range(3500)))
+    assert probe_log_tail(log) == "[tail omitted: no complete line in the last 16 KB]"
+    log.write_bytes(b"x" * 20000 + b"\n")  # its only newline ends the window
+    assert probe_log_tail(log) == "[tail omitted: no complete line in the last 16 KB]"
+    log.write_bytes(b"short single line")  # the window starts the file: nothing is cut
+    assert probe_log_tail(log) == "short single line"
+
+
+def test_authorization_headers_bearer_tokens_and_secret_fields_are_masked(tmp_path):
+    log = tmp_path / "verifier.log"
+    log.write_text(
+        "> Authorization: Basic dXNlcjpwYXNz\n"
+        "proxy-authorization: Negotiate abc123 more\n"
+        "curl -H 'X: Bearer eyJhbGciOi.payload.sig' https://h/x\n"
+        "GET /api?a=1&access_token=AT_SECRET&b=2\n"
+        "form: password=PW_SECRET, api_key=AK_SECRET; ApiKey=AK2_SECRET\n"
+        "tok\x1b[0men=ANSI_SECRET\n"
+    )
+    tail = probe_log_tail(log)
+    for secret in ("dXNlcjpwYXNz", "abc123", "eyJhbGciOi", "_SECRET"):
+        assert secret not in tail
+    assert tail == (
+        "> Authorization: <redacted>\n"
+        "proxy-authorization: <redacted>\n"
+        "curl -H 'X: Bearer <redacted> https://h/x\n"
+        "GET /api?a=1&access_token=<redacted>&b=2\n"
+        "form: password=<redacted> api_key=<redacted> ApiKey=<redacted>\n"
+        "token=<redacted>\n"
+    )
+
+
+def test_ordinary_text_that_resembles_a_secret_is_left_alone(tmp_path):
+    log = tmp_path / "verifier.log"
+    text = "token expired\napi_key_status=ok password_policy=strict\nmail user@example.com\n"
+    log.write_text(text)
+    assert probe_log_tail(log) == text
