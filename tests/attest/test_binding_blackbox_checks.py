@@ -155,6 +155,14 @@ def test_the_assurance_says_whether_the_checks_were_pinned(tmp_path):
     assert out.ok and out.assurance is not None and out.assurance["blackbox_checks"] == "pinned"
 
 
+def test_an_empty_commitment_pin_checks_no_ids(tmp_path):
+    """#373: a policy pinning ``""`` (a plain receipt) ran no id check: ``not_checked``."""
+    w = _world(tmp_path, ("pytest-0",), blackbox_commitment="")
+    out = check(w, {"blackbox_commitment": ""})
+    assert out.ok and out.assurance is not None, out
+    assert out.assurance["blackbox_checks"] == "not_checked"
+
+
 @pytest.mark.parametrize(
     "bad",
     [[], ["add", "add"], ["Add"], ["blackbox:add"], ["a" * 41], [""], [1], "add", None, {}],
