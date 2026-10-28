@@ -116,7 +116,8 @@ jobs:
             || { echo "::error::https://cairnwork.github.io/keys/$KEYID.pem did not return 200"; exit 1; }
           cmp site-key.pem va/fixtures/demo-target-pr4/public-key.pem \
             || { echo "::error::site key differs from the key the fixture verifies against"; exit 1; }
-          got="$(python3 -c 'import base64,hashlib,sys; der=base64.b64decode("".join(l for l in open(sys.argv[1]) if "-----" not in l)); print(hashlib.sha256(der[-32:]).hexdigest())' site-key.pem)"
+          got="$(python3 -c 'import base64,hashlib,sys; der=base64.b64decode("".join(l for l in open(sys.argv[1]) if "-----" not in l)); len(der) == 44 and der[:12].hex() == "302a300506032b6570032100" or sys.exit("not an Ed25519 SPKI key"); print(hashlib.sha256(der[12:]).hexdigest())' site-key.pem)" \
+            || { echo "::error::site key is not an Ed25519 public key"; exit 1; }
           test "$got" = "$KEYID" || { echo "::error::site key sha256 $got is not its published keyid"; exit 1; }
 
   verify-action:
@@ -184,8 +185,10 @@ jobs:
             || true)"
           test -n "$failed" || failed="- (could not list failed steps; see the run)"
           body="$(printf 'Weekly entrypoint smoke (docs/ENTRYPOINTS.md) failed.\n\nRun: %s\n\nFailed steps:\n%s\n' "$RUN_URL" "$failed")"
-          n="$(gh issue list --repo "$REPO" --state open --search 'entrypoint smoke failed in:title' \
-            --json number,title --jq '[.[] | select(.title == "entrypoint smoke failed")][0].number // empty')"
+          # a failed lookup still files the Issue: a duplicate beats a silent failure (#330)
+          n="$(gh issue list --repo "$REPO" --state open --limit 100 \
+            --search 'entrypoint smoke failed in:title' --json number,title \
+            --jq '[.[] | select(.title == "entrypoint smoke failed")][0].number // empty' || true)"
           if [ -n "$n" ]; then
             gh issue comment "$n" --repo "$REPO" --body "$body"
           else
