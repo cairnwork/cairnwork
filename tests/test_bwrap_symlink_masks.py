@@ -299,3 +299,66 @@ def test_absolute_symlinked_credentials_run_and_stay_masked(repo, tmp_path, monk
     spec = parse_verifier("pytest", ["python3", "-m", "pytest", "tests/test_masked.py"])
     runs = run_verifiers(repo, head, (spec,), tmp_path / "runs", "r1", python=sys.executable)
     assert runs[0].observation.passed, runs[0].log_path.read_text()
+
+
+def _fake_groups(monkeypatch, others: bool):
+    """Every group holds another user (``others``) or only the directory's owner (a private group,
+    the usual 0750 home). Patched at the grp/pwd modules so the policy reads it however it asks."""
+    import grp
+    import pwd
+
+    me = pwd.getpwuid(os.getuid())
+    member = grp.struct_group(("g", "x", 4242, ["someone-else"] if others else []))
+    monkeypatch.setattr(grp, "getgrgid", lambda gid: member)
+    monkeypatch.setattr(pwd, "getpwall", lambda: [me])
+
+
+@pytest.mark.parametrize("others", [True, False], ids=["shared-group", "private-group"])
+def test_account_mode_masks_a_target_reached_through_its_group(
+    world_home, world_outside, monkeypatch, others
+):
+    # #358 round 1 (V1): the account keeps its own groups under bwrap, so a 0750 parent whose group
+    # holds another user may admit it and the target is masked; a private group cannot.
+    (world_outside / "grp" / "aws").mkdir(parents=True)
+    (world_outside / "grp").chmod(0o750)
+    (world_home / ".aws").symlink_to(world_outside / "grp" / "aws")
+    _fake_groups(monkeypatch, others)
+    lines = _policy(world_home, owner=False)
+    aws = str((world_outside / "grp" / "aws").resolve())
+    assert (aws in _masked(lines)) is others
+
+
+def test_account_mode_leaves_a_private_group_0750_home_unmasked(world_home, monkeypatch):
+    # Negative control: the usual 0750 home with its user-private group is not entered by the
+    # account, so masking there would only fail the run at mount (EPERM).
+    (world_home / ".ssh").mkdir()
+    world_home.chmod(0o750)
+    _fake_groups(monkeypatch, others=False)
+    lines = _policy(world_home, owner=False)
+    assert not [p for p in _masked(lines) if p.startswith(str(world_home.resolve()))]
+
+
+@pytest.mark.parametrize(
+    "xattrs", ["acl", "eio", "none", "enotsup"], ids=["acl", "read-error", "none", "no-xattrs"]
+)
+def test_account_mode_masks_a_target_behind_an_acl(world_home, world_outside, monkeypatch, xattrs):
+    # V1: a POSIX ACL (or a failure to read one) may admit the account through a 0700 parent, so
+    # the target is masked; no ACL, or a filesystem without xattrs, leaves it unreachable.
+    import errno
+
+    parent = world_outside / "acl"
+    (parent / "kube").mkdir(parents=True)
+    parent.chmod(0o700)
+    (world_home / ".kube").symlink_to(parent / "kube")
+    code = {"eio": errno.EIO, "enotsup": errno.ENOTSUP}.get(xattrs)
+
+    def listxattr(path, follow_symlinks=True):
+        if os.path.realpath(path) != str(parent.resolve()):
+            return []
+        if code:
+            raise OSError(code, os.strerror(code))
+        return ["system.posix_acl_access"] if xattrs == "acl" else []
+
+    monkeypatch.setattr(os, "listxattr", listxattr, raising=False)
+    lines = _policy(world_home, owner=False)
+    assert (str((parent / "kube").resolve()) in _masked(lines)) is (xattrs in ("acl", "eio"))

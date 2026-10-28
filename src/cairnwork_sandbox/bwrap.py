@@ -36,13 +36,13 @@ from __future__ import annotations
 import os
 import re
 import shutil
-import stat
 import subprocess
 from functools import lru_cache
 from pathlib import Path
 
 from cairnwork_sandbox.backend import Policy, SandboxError
 from cairnwork_sandbox.bwrap_links import mask_target
+from cairnwork_sandbox.bwrap_reach import account_may_traverse
 from cairnwork_sandbox.shm import shm_flags, shm_unavailable_reason
 
 NAME = "bwrap"
@@ -196,7 +196,7 @@ def build_policy(
     a different uid, so a tmpfs over a path it cannot even resolve (a ``0700`` home) would fail
     with EPERM. It is not all-or-nothing, though — a world-readable secret under a loosened
     (``0755``) home still leaks to that uid, so the credential paths that uid can *resolve to mount
-    over* are masked (every directory on the real path other-traversable). Those are exactly the
+    over* are masked (every directory on the real path enterable, ``bwrap_reach``). Those are the
     ones that can leak and can be mounted without EPERM; a correctly ``0700`` home yields none,
     unless a link in it points out to a reachable target (#358). The narrow-check still uses the
     real home, and the system socket / ``/run/user`` masks (which do not touch the owner's home)
@@ -279,47 +279,27 @@ def _home_cred_masks(real_home: str, owner: bool) -> list[tuple[str, bool]]:
 
 
 def _account_can_reach(real_home: str, rel: str) -> bool:
-    """True if the verifier process can resolve ``real_home/rel`` to mount over it. bwrap runs the
-    mount as the verifier uid in a user namespace that maps only that uid/gid and drops the owner's
-    supplementary groups, so the owner's directories are reached as *other*, and the kernel must be
-    able to traverse (``o+x``) every directory from ``/`` down to the real target's parent. The
-    target is resolved with ``realpath`` (following symlinks), inside or outside the home: an
-    outside one (``.ssh -> /srv/creds``) is read through its own path, so the home's mode does not
-    protect it (#358). One behind a directory the verifier cannot enter is not masked — binding
-    over it would EPERM and fail the run, and it cannot leak, being unreachable to that uid. The
+    """True if the verifier process may resolve ``real_home/rel`` to mount over it: bwrap mounts as
+    the verifier uid with its own groups, so every directory from ``/`` down to the real target's
+    parent must be one it may enter (``bwrap_reach``: ``o+x``, ``g+x`` on a group holding another
+    user than the owner — a home given group ``cairnwork`` included — or a POSIX ACL). The target
+    is resolved with ``realpath``, inside or outside the home: an outside one (``.ssh ->
+    /srv/creds``) is read through its own path, so the home's mode does not protect it (#358). One
+    behind a directory that rule says the account cannot enter is not masked, since binding over
+    it would EPERM and fail the run; it stays readable only if the rule is wrong for the host. The
     target's own read bits are not consulted: a reachable path is masked whatever its mode (a
     ``0711`` directory is unreadable yet still lets a known world-readable child leak). A selected
     target is masked at its real path (#341), or refused by ``mask_target`` as on the owner path
     (a system root, the home, a write root or an ancestor of either, or a dangling link: in the
-    home when the account can enter it, outside it when the account can reach its parent).
-
-    One fail-closed limit remains: a home deliberately given group ``cairnwork`` with group access
-    is reached by group, not other, so its credentials are not masked; the installer warns on a
-    group/other-accessible home."""
+    home when the account can enter it, outside it when the account can reach its parent)."""
     literal = f"{real_home}/{rel}"
     try:
         real = os.path.realpath(literal)
         if real.startswith(f"{real_home}/") and not os.path.exists(real):  # dangling, in home
-            return _other_can_traverse(real_home)
+            return account_may_traverse(real_home)
     except OSError:
         return False
-    return _other_can_traverse(os.path.dirname(real))
-
-
-def _other_can_traverse(directory: str) -> bool:
-    """Every directory from ``/`` down to ``directory`` is a real directory an *other* process can
-    enter (``o+x``). ``lstat`` so a symlinked component counts as a link, not a directory, and so as
-    not traversable (fail closed). A stat error also counts as not traversable."""
-    current = ""
-    for part in Path(directory).parts:
-        current = os.path.join(current, part) if current else part
-        try:
-            info = os.lstat(current)
-        except OSError:
-            return False
-        if not stat.S_ISDIR(info.st_mode) or not info.st_mode & 0o001:
-            return False
-    return True
+    return account_may_traverse(os.path.dirname(real))
 
 
 def _socket_dirs_to_empty() -> list[str]:
