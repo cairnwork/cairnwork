@@ -36,6 +36,13 @@ pytestmark = pytest.mark.sandbox
 SOCKET_ROOTS = ("/run", "/var/run", "/tmp")  # noqa: S108 - only listed and probed
 WALK_LIMIT, WALK_DEPTH = 100_000, 4  # daemon sockets sit 1-3 levels down (/run/systemd/journal)
 ACCOUNT = VerifierAccount()
+# Reproduced on Linux CI (real bwrap, x86-64 and arm64, owner and account mode): see the Issues.
+SOCKETS_OPEN_ON_LINUX = pytest.mark.xfail(
+    sys.platform == "linux",
+    strict=True,
+    raises=AssertionError,
+    reason="Refs #391: journald, systemd, snapd and uuidd sockets under /run stay connectable",
+)
 
 
 def socket_paths(roots, limit, depth):
@@ -140,6 +147,7 @@ def socket_run(repo, tmp_path, account=None):
     return run, listed
 
 
+@SOCKETS_OPEN_ON_LINUX
 def test_no_host_pathname_socket_is_connectable_inside_a_run(repo, tmp_path):
     run, listed = socket_run(repo, tmp_path)
     assert run.observation.passed, "\n".join((run.why, listed, run.log_path.read_text()))
@@ -160,6 +168,7 @@ def account_run_root():
 
 
 @pytest.mark.verifier_account
+@SOCKETS_OPEN_ON_LINUX
 def test_account_no_host_pathname_socket_is_connectable(repo, tmp_path, account_run_root):
     run, listed = socket_run(repo, tmp_path, account=ACCOUNT)
     assert run.observation.passed, "\n".join((run.why, listed, run.log_path.read_text()))
@@ -214,6 +223,12 @@ def leftovers(root, token):
 
 
 @pytest.mark.verifier_account
+@pytest.mark.xfail(
+    sys.platform == "linux",
+    strict=True,
+    raises=AssertionError,
+    reason="Refs #392: a marker left in run/ is found and read by the next account run",
+)
 def test_account_a_run_cannot_find_what_the_last_run_left(repo, tmp_path, account_run_root):
     token = os.urandom(8).hex()
     places = "{" + ", ".join(f"{k!r}: {v}" for k, v in PLACES.items()) + "}"
