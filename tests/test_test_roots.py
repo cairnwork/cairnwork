@@ -44,7 +44,7 @@ def test_files_under_every_root_stay_protected():
 
 
 def _task(allowed, verifier, roots):
-    return TaskSpec("k", "c", "t", "i", Path("/r"), "a" * 40, allowed, (("v", verifier),),
+    return TaskSpec("k", "c", "t", "i", Path("."), "a" * 40, allowed, (("v", verifier),),
                     test_roots=roots)  # fmt: skip
 
 

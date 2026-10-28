@@ -18,7 +18,10 @@ Modes (state config ``p2p_selection``):
   anywhere under the roots). Every test directly in a matched test's directory is selected:
   on a flat layout ``tests/test_base.py`` brings in its sibling ``tests/test_sibling.py``
   (the regression #117 is about). A changed file that maps to nothing selects the tests
-  directly in the test roots, never the whole tree. Changed test files are not sources.
+  directly in the test roots, never the whole tree. Changed test files are not sources. A selected
+  directory with more than ``MODULE_DIR_CAP`` test files contributes only the files named after a
+  change (#333: whole flat directories of a large repo made the base probe time out); the cut
+  directories are recorded in the P2P rule (``cap_note``), so a cut to nothing is visible.
 """
 
 from __future__ import annotations
@@ -29,6 +32,7 @@ MODES = ("off", "whole-suite", "module-dir")
 DEFAULT_MODE = "whole-suite"  # Intake (cairnwork-route, issue runner)
 DIRECT_MODE = "off"  # TaskSpec built directly (pipeline.run_task, drills): no P2P unless set
 DEFAULT_BUDGET_SECONDS = 300  # seconds per P2P run (probe, candidate run, re-run)
+MODULE_DIR_CAP = 25  # test files a module-dir directory may bring in whole (#333)
 
 
 def _under_root(path: str, roots: tuple[str, ...]) -> bool:
@@ -60,8 +64,19 @@ def select_p2p_targets(
     tests = frozenset(existing_tests)
     if mode == "whole-suite":
         return tuple(sorted(tests))
+    return tuple(sorted(_module_dir(changed_files, tests, test_roots)[0]))
+
+
+def _module_dir(
+    changed_files: tuple[str, ...], tests: frozenset[str], test_roots: tuple[str, ...]
+) -> tuple[set[str], set[str]]:
+    """(selected test files, directories cut to the files named after a change)."""
+    size: dict[str, int] = {}
+    for t in tests:
+        size[dirname(t)] = size.get(dirname(t), 0) + 1
     root_level = {dirname(t) for t in tests if dirname(t) in test_roots}
-    dirs: set[str] = set()
+    selected: set[str] = set()
+    cut: set[str] = set()
     for changed in changed_files:
         if _under_root(changed, test_roots):
             continue
@@ -70,8 +85,24 @@ def select_p2p_targets(
         stem = splitext(basename(changed))[0]
         names = {f"test_{stem}.py", f"{stem}_test.py"}
         hit = {dirname(t) for t in tests if dirname(t) in mirror or basename(t) in names}
-        dirs |= hit or root_level
-    return tuple(sorted(t for t in tests if dirname(t) in dirs))
+        for d in hit or root_level:
+            whole = size[d] <= MODULE_DIR_CAP
+            cut |= set() if whole else {d}
+            selected |= {t for t in tests if dirname(t) == d and (whole or basename(t) in names)}
+    return selected, cut
+
+
+def cap_note(
+    changed_files: tuple[str, ...],
+    existing_tests: tuple[str, ...],
+    test_roots: tuple[str, ...],
+    mode: str,
+) -> dict:
+    """What the P2P rule adds when module-dir cut a directory (#333); {} when nothing was cut."""
+    if mode != "module-dir":
+        return {}
+    cut = _module_dir(changed_files, frozenset(existing_tests), test_roots)[1]
+    return {"capped_dirs": sorted(cut), "cap": MODULE_DIR_CAP} if cut else {}
 
 
 def check_p2p_config(loaded: dict) -> None:
