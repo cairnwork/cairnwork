@@ -5,9 +5,10 @@ every trusted queued Issue whose ``eia-task`` block core would take, it decides 
 and appends one sidecar line per (Issue, task block, annotation, worker model). A REFUSED Issue
 is moved from ``cairnwork:queue`` to ``cairnwork:family-hold`` (``HOLD``; create the label on
 the target repository before enabling) with one comment; a runner of another family can put it
-back in the queue by hand. When that GitHub call fails, the Issue is still hidden from ``take``
-this pass (``Held``). Untrusted
-Issues and Issues core would refuse are left to core untouched.
+back in the queue by hand. When a GitHub call fails, the Issue is still kept from ``take`` this
+pass and decided again on the next. Untrusted
+Issues and Issues core would refuse are left to core untouched. ``take`` sees only the gate's
+own listing minus what it held (``Held``), never a fresh one.
 
 The sidecar lives in the experiment's own directory: never the intake state, never a receipt.
 """
@@ -34,16 +35,17 @@ ROLE = {"issue_author": "工單作者", "test_author": "驗收測試作者"}
 
 
 class Held:
-    """The runner's GitHub with some queued Issues hidden from ``issues(QUEUE)``."""
+    """The runner's GitHub whose ``issues(QUEUE)`` is the gate's own listing minus its holds.
 
-    def __init__(self, github: GitHub, held: set[int]) -> None:
-        self._github, self._held = github, held
+    ``take`` never re-lists the queue: an Issue queued after the gate listed it (or beyond the
+    listing's page) waits for the next pass instead of reaching ``take`` ungated."""
+
+    def __init__(self, github: GitHub, listed: list[dict[str, Any]], held: set[int]) -> None:
+        self._github = github
+        self._queue = [i for i in listed if int(i["number"]) not in held]
 
     def issues(self, label: str) -> list[dict[str, Any]]:
-        found = self._github.issues(label)
-        if label != QUEUE:
-            return found
-        return [i for i in found if int(i["number"]) not in self._held]
+        return list(self._queue) if label == QUEUE else self._github.issues(label)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._github, name)
@@ -94,14 +96,21 @@ def _key(row: dict[str, Any]) -> tuple:
 
 def run_gate(
     intake: Intake, github: GitHub, sidecar: Sidecar, worker_model: str
-) -> tuple[set[int], dict[str, Any]]:
-    """(Issue numbers ``take`` must not see this pass, the pass summary)."""
+) -> tuple[Held, dict[str, Any]]:
+    """(the GitHub ``take`` gets, the pass summary). An Issue the gate could not decide or
+    could not refuse cleanly is held this pass and retried on the next one."""
     roots = tuple(intake.config()["test_roots"])
-    rows, refused, held = [], [], set()
-    for issue in github.issues(QUEUE):
+    listed = github.issues(QUEUE)
+    rows, refused, held, errors = [], [], set(), []
+    for issue in listed:
         number = int(issue["number"])
-        if github.trust(number, QUEUE):
-            continue  # core skips it too; the gate says nothing about untrusted text
+        try:
+            if github.trust(number, QUEUE):
+                continue  # core skips it too; the gate says nothing about untrusted text
+        except (RuntimeError, OSError) as exc:  # undecided: not taken this pass
+            held.add(number)
+            errors.append({"issue": number, "error": f"{type(exc).__name__}: {exc}"})
+            continue
         body = str(issue.get("body") or "")
         try:
             block_sha = parse_task_block(body, roots).block_sha256
@@ -109,36 +118,52 @@ def run_gate(
             continue  # core refuses the block itself, once
         annotation = parse_annotation(body)
         verdict = decide(annotation, worker_model)
-        rows.append(
-            {
-                "at": datetime.now(UTC).isoformat(),
-                "repo": github.repo,
-                "issue": number,
-                "block_sha256": block_sha,
-                "annotation_sha256": annotation.sha256 if annotation else "",
-                "issue_author": _side(annotation, verdict, "issue_author"),
-                "test_author": _side(annotation, verdict, "test_author"),
-                "worker": {"model": worker_model, "family": verdict.families["worker"]},
-                "verdict": verdict.verdict,
-                "reason": verdict.reason,
-            }
-        )
+        rows.append(_row(github.repo, number, block_sha, annotation, verdict, worker_model))
         if verdict.verdict == REFUSED:
             refused.append((number, verdict))
     new = sidecar.append(rows)  # before any refusal: an unrecorded decision is not acted on
     counts: dict[str, int] = {}
     for row in rows:
         counts[row["verdict"]] = counts.get(row["verdict"], 0) + 1
-    errors = []
     for number, verdict in refused:
         held.add(number)  # refused or not, this pass never takes it
-        try:
-            github.relabel(number, HOLD, QUEUE)
-            github.comment(number, refusal_comment(verdict, worker_model))
-        except (RuntimeError, OSError) as exc:  # retried on the next pass
-            errors.append({"issue": number, "error": f"{type(exc).__name__}: {exc}"})
+        if error := _refuse(github, number, verdict, worker_model):
+            errors.append({"issue": number, "error": error})
     summary = {"counts": counts, "recorded": len(new), "refused": [n for n, _ in refused]}
-    return held, summary | ({"errors": errors} if errors else {})
+    return Held(github, listed, held), summary | ({"errors": errors} if errors else {})
+
+
+def _refuse(github: GitHub, number: int, verdict: Verdict, worker_model: str) -> str:
+    """Hold the Issue with one comment; "" on success. When the comment fails the Issue goes
+    back to the queue, so the next pass refuses it again and the comment is not lost."""
+    try:
+        github.relabel(number, HOLD, QUEUE)
+    except (RuntimeError, OSError) as exc:  # still queued: retried on the next pass
+        return f"{type(exc).__name__}: {exc}"
+    try:
+        github.comment(number, refusal_comment(verdict, worker_model))
+    except (RuntimeError, OSError) as exc:
+        try:
+            github.relabel(number, QUEUE, HOLD)
+        except (RuntimeError, OSError) as back:
+            return f"{type(exc).__name__}: {exc}; held without a comment: {back}"
+        return f"{type(exc).__name__}: {exc}"
+    return ""
+
+
+def _row(repo, number, block_sha, annotation, verdict: Verdict, worker_model) -> dict[str, Any]:
+    return {
+        "at": datetime.now(UTC).isoformat(),
+        "repo": repo,
+        "issue": number,
+        "block_sha256": block_sha,
+        "annotation_sha256": annotation.sha256 if annotation else "",
+        "issue_author": _side(annotation, verdict, "issue_author"),
+        "test_author": _side(annotation, verdict, "test_author"),
+        "worker": {"model": worker_model, "family": verdict.families["worker"]},
+        "verdict": verdict.verdict,
+        "reason": verdict.reason,
+    }
 
 
 def _side(annotation, verdict: Verdict, key: str) -> dict[str, Any] | None:

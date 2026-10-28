@@ -8,9 +8,9 @@ The same start checks, the same ``issues.lock`` and the same take and settle as
 ``CAIRNWORK_FAMILY_GATE=on``) the pass is exactly the plain runner's, with no extra GitHub call
 and no sidecar. On, the gate runs inside the lock before ``take``, so a plain runner on the same
 state cannot take an Issue in between (it gets BUSY). ``--worker-model`` defaults to the state's
-``model``. When the gate cannot run (sidecar unwritable or unreadable, config refused), nothing
-is refused and ``take`` does not run this pass (settle still does). Exit 1 on any error, as the
-plain runner.
+``model``. When the gate cannot run (sidecar unwritable or unreadable, config refused, the queue
+listing failed), nothing is refused and ``take`` does not run this pass (settle still does).
+Exit 1 on any error, as the plain runner.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from cairnwork.intake import Intake, IntakeRefused
 from cairnwork.issue_github import GitHub
 from cairnwork.issue_publish import require_bot_gh
 from cairnwork.lineage import verify_origin
-from experimental.family_gate.gate import DEFAULT_SIDECAR, Held, Sidecar, run_gate
+from experimental.family_gate.gate import DEFAULT_SIDECAR, Sidecar, run_gate
 
 ENV = "CAIRNWORK_FAMILY_GATE"
 
@@ -45,12 +45,18 @@ def one_pass(intake: Intake, github: GitHub, clone: Path, gate: dict | None) -> 
     result: dict = {}
     try:
         model = gate["worker_model"] or intake.config()["model"]
-        held, result["gate"] = run_gate(intake, github, gate["sidecar"], model)
-    except (OSError, ValueError, IntakeRefused) as exc:  # no take without the record
+        gated, result["gate"] = run_gate(intake, github, gate["sidecar"], model)
+    except (
+        OSError,
+        RuntimeError,
+        ValueError,
+        KeyError,
+        IntakeRefused,
+    ) as exc:  # no record, no take
         result["gate"] = {"error": f"GATE_NOT_RUN: {type(exc).__name__}: {exc}"}
         result["take"] = []
     else:
-        result["take"] = issue_runner.take(intake, cast(GitHub, Held(github, held)), clone)
+        result["take"] = issue_runner.take(intake, cast(GitHub, gated), clone)
     result["settle"] = issue_runner.settle(intake, github, clone)
     return result
 

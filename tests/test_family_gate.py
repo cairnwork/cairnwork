@@ -174,7 +174,6 @@ def test_off_is_the_plain_runner(setup, tmp_path, monkeypatch):  # noqa: F811
     result = cli.one_pass(setup["intake"], github, setup["clone"], None)
     assert "gate" not in result and calls == [runner.QUEUE, runner.RUNNING]
     assert github.labels[7] == {runner.RUNNING}  # same family, but the gate is off
-    assert not (tmp_path / "sidecar").exists()
 
 
 def test_a_second_pass_records_nothing_new(setup, tmp_path):  # noqa: F811
@@ -205,15 +204,75 @@ def test_a_github_error_while_refusing_holds_the_issue(setup, tmp_path):  # noqa
     assert github.labels[7] == {runner.QUEUE}  # left queued for the next pass
 
 
-def test_an_unwritable_sidecar_stops_take_not_settle(setup, tmp_path):  # noqa: F811
-    (tmp_path / "sidecar").write_text("a file, not a directory")
-    github = FakeGitHub([annotated(families={"issue_author": "opus"})])
+def running(github, number=9):
+    """A running Issue with no recorded task: settle reports it, so a result shows settle ran."""
+    github.bodies[number] = issue(number)
+    github.labels[number] = {runner.RUNNING}
+    return github
+
+
+@pytest.mark.parametrize("fault", ["sidecar", "listing"])
+def test_a_gate_that_cannot_run_stops_take_not_settle(setup, tmp_path, fault):  # noqa: F811
+    class Down(FakeGitHub):
+        def issues(self, label):
+            if label == runner.QUEUE:
+                raise RuntimeError("gh issue list failed: 502")
+            return super().issues(label)
+
+    if fault == "sidecar":
+        (tmp_path / "sidecar").write_text("a file, not a directory")
+    github = running((Down if fault == "listing" else FakeGitHub)([annotated(families={})]))
+    github.bodies[7] = annotated(families={"issue_author": "opus"})
     sidecar = Sidecar(tmp_path / "sidecar", github.repo)
     gate = {"worker_model": "claude-opus-5-5", "sidecar": sidecar}
     result = cli.one_pass(setup["intake"], github, setup["clone"], gate)
     assert result["gate"]["error"].startswith("GATE_NOT_RUN")
-    assert result["take"] == [] and result["settle"] == []
+    assert result["take"] == [] and setup["started"] == []
+    assert [r["issue"] for r in result["settle"]] == [9]  # settle still ran
     assert github.labels[7] == {runner.QUEUE} and github.comments == []
+
+
+def test_an_issue_queued_after_the_gate_listed_waits_for_the_next_pass(setup, tmp_path):  # noqa: F811
+    late = annotated(number=8, families={"issue_author": "opus"})
+
+    class Racing(FakeGitHub):
+        def issues(self, label):
+            found = super().issues(label)
+            if label == runner.QUEUE and 8 not in self.labels:  # queued right after this listing
+                self.bodies[8], self.labels[8] = late, {runner.QUEUE}
+            return found
+
+    github = Racing([annotated(families={"issue_author": "gpt-5.4"})])
+    result, rows, _ = gate_pass(setup, github, tmp_path, "claude-opus-5-5")
+    assert [r["issue"] for r in result["take"]] == [7] and [r["issue"] for r in rows] == [7]
+    assert github.labels[8] == {runner.QUEUE}  # never reached take ungated
+    result, rows, _ = gate_pass(setup, github, tmp_path, "claude-opus-5-5")
+    assert result["gate"]["refused"] == [8] and github.labels[8] == {HOLD}
+
+
+def test_a_trust_error_holds_only_that_issue(setup, tmp_path):  # noqa: F811
+    class Flaky(FakeGitHub):
+        def trust(self, number, label):
+            if number == 7:
+                raise RuntimeError("gh api failed: 502")
+            return super().trust(number, label)
+
+    github = running(Flaky([annotated(families={"issue_author": "gpt"}), issue(number=8)]))
+    result, _, _ = gate_pass(setup, github, tmp_path, "claude-opus-5-5")
+    assert "502" in result["gate"]["errors"][0]["error"]
+    assert [r["issue"] for r in result["take"]] == [8] and github.labels[7] == {runner.QUEUE}
+    assert [r["issue"] for r in result["settle"]] == [9]
+
+
+def test_a_failed_comment_puts_the_issue_back_in_the_queue(setup, tmp_path):  # noqa: F811
+    class Mute(FakeGitHub):
+        def comment(self, number, text):
+            raise RuntimeError("gh issue comment failed: 502")
+
+    github = Mute([annotated(families={"issue_author": "opus"})])
+    result, _, _ = gate_pass(setup, github, tmp_path, "claude-opus-5-5")
+    assert "502" in result["gate"]["errors"][0]["error"]
+    assert result["take"] == [] and github.labels[7] == {runner.QUEUE}  # refused again next pass
 
 
 def test_the_worker_model_defaults_to_the_state_config(setup, tmp_path):  # noqa: F811
@@ -265,7 +324,8 @@ def test_off_matches_the_core_runner_main(setup, tmp_path, monkeypatch, capsys):
     hubs = []
 
     def fake_hub(gh, repo):
-        hubs.append(FakeGitHub([annotated(families={"issue_author": "gemini"}), issue(8)]))
+        hub = FakeGitHub([annotated(families={"issue_author": "gemini"}), issue(8)])
+        hubs.append(running(hub))  # settle has an Issue to report too
         return hubs[-1]
 
     for module in (runner, cli):
@@ -278,12 +338,16 @@ def test_off_matches_the_core_runner_main(setup, tmp_path, monkeypatch, capsys):
     for main, state in ((runner.main, setup["intake"].state), (cli.main, other.state)):
         argv = ["--state", str(state), "--repo", "James3014/demo", "--clone", str(setup["clone"]),
                 "--gh", "/bin/nexus-agent-gh", "run-once"]  # fmt: skip
+        if main is cli.main:  # off: the sidecar named here is never created
+            argv[-1:-1] = ["--sidecar", str(tmp_path / "sidecar")]
         code = main(argv)
         out = json.loads(capsys.readouterr().out)
         for row in out["take"]:
             row.pop("task_id", None)
         outputs.append((code, out))
-    assert outputs[0] == outputs[1] and outputs[0][0] == 0
+    assert outputs[0] == outputs[1] and outputs[0][0] == 1  # 1: the running Issue's error
+    assert [r["issue"] for r in outputs[0][1]["settle"]] == [9]
+    assert not (tmp_path / "sidecar").exists()
     assert hubs[0].labels == hubs[1].labels
     task = re.compile(r"task-[0-9a-f]{32}")
     assert [(n, task.sub("T", t)) for n, t in hubs[0].comments] == [
