@@ -131,8 +131,15 @@ the `_macos` suffix is the producer's statement), and a level above `"same_proce
 come with the declaration's `blackbox_commitment` in the binding (`PROTECTION_UNCOMMITTED`
 otherwise). So the `blackbox:*` ids stand for a declaration, not for the signer's naming alone: a
 receiver that pins `blackbox_commitment` (computed from its own copy of the declaration) knows
-which one. Without that pin the commitment is itself only the signer's value. Even with it, that
-the checks really ran as blackbox runs remains the signer's claim, like every verifier run
+which one. Without that pin the commitment is itself only the signer's value. The commitment does
+not say which checks Core required, so a policy that pins it also pins `blackbox_checks`, the check
+ids `blackbox-commitment` prints with it (#312): the request's `blackbox:*` ids must be exactly
+those, each observed only as PASS (`BLACKBOX_CHECKS_MISSING`). A policy written before #312 pins
+the commitment alone and is accepted with a weaker check: at least one `blackbox:*` id, each PASS.
+Such a receiver still accepts a receipt whose Core request left out a declared check or named one
+the declaration lacks; its `assurance.blackbox_checks` is `unpinned`, so regenerate the policy.
+This guards against a producer bug; a lying signer can write the right ids. Even with these pins,
+that the checks really ran as blackbox runs remains the signer's claim, like every verifier run
 (`assurance.verifier_runs` is `signer_claim`). A v0.1 receipt (no deferred tests) has no binding and carries no label: its level is
 `protection.level(required_verifier_ids, macos=False)` over the signed request, the coverage
 without a host grade, and nothing in the receipt ties those ids to a declaration.

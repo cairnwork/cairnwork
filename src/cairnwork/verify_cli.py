@@ -64,9 +64,10 @@ def main(argv: list[str] | None = None) -> int:
             return _emit(_migrate(intake), 0)
         if args.command == "import-tests":
             return _import_tests(intake, args)
-        if args.command == "blackbox-commitment":  # what a receiver's policy pins (#303)
+        if args.command == "blackbox-commitment":  # what a receiver's policy pins (#303, #312)
             declared = blackbox.load(Path(args.blackbox))
-            return _emit({"blackbox_commitment": declared.commitment()}, 0)
+            ids = sorted(check.id for check in declared.checks)  # only the ids: no answers or salt
+            return _emit({"blackbox_commitment": declared.commitment(), "blackbox_checks": ids}, 0)
         result = _run(intake, args)
     except IntakeRefused as exc:
         return _emit({"error": exc.code, "detail": exc.detail}, 2)

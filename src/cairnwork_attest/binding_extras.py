@@ -5,6 +5,7 @@ The producer adds an optional key to the binding only when its value is non-empt
 covers it when present. Each optional key has a shape rule for the recorded value, and a receiver
 policy may pin it under the same name: an absent key counts as its empty value, and a pinned value
 that differs fails with the key's own code. Adding a key means adding one ``Extra`` to ``EXTRAS``.
+``blackbox_checks`` (#312) is a policy key only, never a binding key, so it is not one of them.
 
 Only the shape is checked here, not the producer's content rules (issue_task.check_import_paths):
 the value is signed, so a stricter receiver-side rule would only make a valid old receipt fail
@@ -56,6 +57,7 @@ def _level(value: Any) -> bool:
 
 
 _SHA256 = re.compile(r"sha256:[0-9a-f]{64}")
+_CHECK_ID = re.compile(r"[a-z0-9_-]{1,40}")  # blackbox.py's check id
 EXTRAS = (
     Extra("import_paths", [], _path_list, "IMPORT_PATHS_MISMATCH"),
     Extra("blackbox_commitment", "", _commitment, "BLACKBOX_COMMITMENT_MISMATCH"),
@@ -85,7 +87,21 @@ def policy_problem(policy: Mapping[str, Any]) -> str:
     for extra in EXTRAS:
         if extra.key in policy and not extra.shape(policy[extra.key]):
             return f"policy {extra.key} has the wrong shape"
+    if "blackbox_checks" in policy and not (  # #312: only ever checked with a non-empty pin
+        _check_ids(policy["blackbox_checks"]) and policy.get("blackbox_commitment")
+    ):
+        return "policy blackbox_checks: distinct check ids, with a non-empty blackbox_commitment"
     return ""
+
+
+def _check_ids(value: Any) -> bool:
+    """The declaration's check ids (blackbox.py), as ``blackbox-commitment`` prints them."""
+    return (
+        isinstance(value, list)
+        and bool(value)
+        and all(isinstance(i, str) and _CHECK_ID.fullmatch(i) for i in value)
+        and len(set(value)) == len(value)
+    )
 
 
 def pin_problem(ctx: Any) -> VerifyResult | None:
@@ -112,6 +128,30 @@ def pin_problem(ctx: Any) -> VerifyResult | None:
             recorded = binding.get(extra.key, extra.empty)
             if not extra.satisfies(policy[extra.key], recorded):
                 return _fail(extra.mismatch, f"the receipt records {extra.key} {recorded!r}")
+    if policy is None or not policy.get("blackbox_commitment"):
+        return None
+    return _checks_problem(policy, ids or [], ctx.request)  # a list: the label check passed
+
+
+def _checks_problem(
+    policy: Mapping[str, Any], ids: list[Any], request: Mapping[str, Any]
+) -> VerifyResult | None:
+    """#312: a pinned commitment names the declaration, not which of its checks Core required.
+    With ``blackbox_checks`` the request's ``blackbox:*`` ids must be exactly those; an older
+    policy without it only asks for one (assurance ``blackbox_checks: unpinned``, the residual in
+    docs/SECURITY.md). Each must be observed in the evidence, and only as PASS."""
+    got = {i for i in ids if isinstance(i, str) and i.startswith(protection.PREFIX)}
+    want = {protection.PREFIX + c for c in policy.get("blackbox_checks", [])}
+    evidence = request.get("evidence_bundle")
+    observations = evidence.get("observations") if isinstance(evidence, dict) else None
+    passed: dict[str, set[bool]] = {}  # a signed value of any type refuses, never raises
+    for obs in observations if isinstance(observations, list) else []:
+        if isinstance(obs, dict) and isinstance(obs.get("verifier_id"), str):
+            passed.setdefault(obs["verifier_id"], set()).add(obs.get("status") == "PASS")
+    unpassed = sorted(i for i in got if passed.get(i) != {True})
+    if (got != want if "blackbox_checks" in policy else not got) or unpassed:
+        detail = f"Core required {sorted(got)}, the policy {sorted(want) or 'one or more'}"
+        return _fail("BLACKBOX_CHECKS_MISSING", f"{detail}; not PASS: {unpassed}")
     return None
 
 
