@@ -19,6 +19,7 @@ from pathlib import Path
 from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.import_path_tree import normalize_import_paths
 from cairnwork.issue_task import DEFAULT_TEST_ROOTS, test_target
+from cairnwork.pytest_config import above_test_roots
 
 _OPTIONS = {("-q",), ("-p", "no:cacheprovider")}
 _PROTECTED_NAMES = frozenset(
@@ -100,6 +101,7 @@ def protected_verifier_inputs(
     safe_roots = _safe_root_modules(
         first_level_units, repo, base_commit, python, import_paths=import_paths
     )
+    deep = _shadowing_packages_above_roots(paths, above_test_roots(tuple(roots)), python)
     return tuple(
         path
         for path in paths
@@ -108,7 +110,32 @@ def protected_verifier_inputs(
         or path.rsplit("/", 1)[-1] in _PROTECTED_NAMES
         or _is_first_level_pth(path, import_roots)
         or (path in first_level_units and path not in safe_roots)
+        or path in deep
     )
+
+
+def _shadowing_packages_above_roots(
+    paths: tuple[str, ...], above: tuple[str, ...], python: str | None
+) -> set[str]:
+    """Paths at any depth inside a package directly under a directory above a test root (#360)
+    whose name a module visible to the verifier has. pytest's prepend mode puts such a directory
+    on sys.path after a change the first-level rule allows (``pkg/__init__.py`` deleted, or
+    ``pkg/tests/__init__.py`` added by the test commit), so ``pkg/fractions/impl.py`` can then
+    replace ``fractions``: the package is not that module at the base, unlike one under an import
+    path. Without the verifier's module inventory every such path stays protected."""
+    heads: dict[str, set[str]] = {}
+    for path in paths:
+        for top in above:
+            rest = path[len(top) + 1 :]
+            if path.casefold().startswith(f"{top}/".casefold()) and "/" in rest:
+                heads.setdefault(path, set()).add(rest.split("/", 1)[0].casefold())
+    if not heads:
+        return set()
+    try:
+        names = _importable_names(python or sys.executable)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return set(heads)  # no proof of safety: refuse before binding or verification
+    return {path for path, firsts in heads.items() if firsts & names}
 
 
 def _import_roots(import_paths: tuple[str, ...]) -> tuple[str, ...]:

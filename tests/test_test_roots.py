@@ -49,9 +49,9 @@ def _task(allowed, verifier, roots):
 
 
 def test_check_task_applies_the_roots():
-    check_task(_task(("pkg/a.py",), (*RUN, "pkg/tests/test_x.py"), PKG))
+    check_task(_task(("pkg/src/a.py",), (*RUN, "pkg/tests/test_x.py"), PKG))
     with pytest.raises(TaskRejected, match="VERIFIER_NOT_ALLOWED"):
-        check_task(_task(("pkg/a.py",), (*RUN, "tests/test_x.py"), PKG))
+        check_task(_task(("pkg/src/a.py",), (*RUN, "tests/test_x.py"), PKG))
     for path in ("pkg/tests/test_new.py", "pkg/tests/conftest.py"):
         with pytest.raises(TaskRejected, match="PROTECTED_VERIFIER_INPUT"):
             check_task(_task((path,), (*RUN, "pkg/tests/test_x.py"), PKG))
