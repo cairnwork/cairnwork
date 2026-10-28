@@ -99,7 +99,24 @@ def test_the_receiver_gets_the_commitment_from_its_own_copy(state, tmp_path):
 
     declared = declaration(tmp_path)
     code, out = cli(state, "blackbox-commitment", "--blackbox", str(declared))
-    assert code == 0 and out == {"blackbox_commitment": blackbox.load(declared).commitment()}
+    commitment = blackbox.load(declared).commitment()
+    assert code == 0 and out == {"blackbox_commitment": commitment, "blackbox_checks": ["add"]}
+
+
+def test_the_commitment_output_lists_the_check_ids_sorted_and_nothing_else(state, tmp_path):
+    """#312: the policy's blackbox_checks comes from the same load as its commitment."""
+    import json
+
+    from verify_helpers import CASES, cli
+
+    path = tmp_path / "declaration.json"
+    checks = [{"id": i, "module": "calc", "function": "add", "cases": CASES} for i in ("b", "a")]
+    path.write_text(json.dumps({"salt": "ab" * 32, "checks": checks}))
+    path.chmod(0o600)
+    code, out = cli(state, "blackbox-commitment", "--blackbox", str(path))
+    assert code == 0 and out["blackbox_checks"] == ["a", "b"], out
+    assert set(out) == {"blackbox_commitment", "blackbox_checks"}
+    assert "ab" * 32 not in json.dumps(out)  # never the salt (nor the answers, as before)
 
 
 @pytest.mark.sandbox

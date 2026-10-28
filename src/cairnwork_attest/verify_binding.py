@@ -46,7 +46,7 @@ from cairnwork_protocol import acceptance_contract_hash, change_manifest_hash
 KNOWN_RULES = (OVERLAY_RULE,)
 _BINDING_KEYS = {"rule", "base", "head", "test_commit", "test_paths", "executed_tree", "verifiers"}
 _REQUIRED_POLICY_KEYS = {"rule", "test_commit", "core_identity", "key_id"}
-_OPTIONAL_POLICY_KEYS = {"require_full", "test_roots"} | KEYS
+_OPTIONAL_POLICY_KEYS = {"require_full", "test_roots", "blackbox_checks"} | KEYS  # #312
 _POLICY_KEYS = _REQUIRED_POLICY_KEYS | _OPTIONAL_POLICY_KEYS
 _OID = re.compile(r"^[0-9a-f]{40}$")
 _KEYID = re.compile(r"^[0-9a-f]{64}$")
@@ -183,6 +183,7 @@ def verify_bound(
     assurance = _assurance(full, pinned=policy is not None)
     # #303: what the verdict rests on, already checked against Core's required ids (pin_problem)
     assurance["protection"] = binding_extras.recorded_protection(binding)
+    assurance["blackbox_checks"] = "pinned" if "blackbox_checks" in (policy or {}) else "unpinned"
     return VerifyResult(ok=True, code="OK", statement=statement, assurance=assurance)
 
 

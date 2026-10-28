@@ -87,10 +87,13 @@ def notarize_bound(
     rule: str = OVERLAY_RULE, tree_and_judged: tuple[str, str] | None = None,
     unchecked: bool | None = None, import_paths: tuple[str, ...] = (),
     blackbox_commitment: str = "", protection: str = "",
-    required: tuple[str, ...] = ("pytest-0",),
+    required: tuple[str, ...] = ("pytest-0",), failing: tuple[str, ...] = (),
+    unrequired: tuple[str, ...] = (),
 ) -> dict[str, Any]:  # fmt: skip
     """Notarize one external-candidate run; head is what the binding claims, overlay_head what
-    the tests were laid over (they differ only in negative controls)."""
+    the tests were laid over (they differ only in negative controls). ``failing`` observations
+    are FAIL and ``unrequired`` ones are observed but not required, while the fake Core still
+    says VERIFIED: a buggy producer (#312)."""
     if unchecked is None:
         unchecked = overlay_head is not None or tree_and_judged is not None
     claimed: str = head or p["head"]
@@ -110,7 +113,10 @@ def notarize_bound(
         binding["protection"] = protection
     task = "verify-0123456789abcdef"
     spec = AcceptanceSpec(task, binding_hash(binding), required, ("src/a.py", *paths))
-    obs = tuple(VerifierObservation(v, "artifact-1", "sha256:" + "e" * 64, True) for v in required)
+    obs = tuple(
+        VerifierObservation(v, "artifact-1", "sha256:" + "e" * 64, v not in failing)
+        for v in (*required, *unrequired)
+    )
     state.mkdir(parents=True, exist_ok=True)
     notary_cls = _UncheckedNotary if unchecked else Notary
     notary = notary_cls(
