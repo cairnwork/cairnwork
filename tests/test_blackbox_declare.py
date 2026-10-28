@@ -1,12 +1,14 @@
 """#303 declarations of methods, expected raises and float tolerances: what loads, what is refused
 at load time (never silently ignored), what the commitment covers, and what reaches the run."""
 
+import builtins
 import json
+from dataclasses import replace
 
 import pytest
-from test_blackbox_kinds import ACCOUNT_CHECK, MEAN_CHECK, SALT, calls, declare
+from test_blackbox_kinds import ACCOUNT_CHECK, MEAN_CHECK, RUN, SALT, calls, declare, judged
 
-from cairnwork import blackbox
+from cairnwork import blackbox, blackbox_judge
 
 OLD = {
     "salt": SALT,
@@ -195,3 +197,100 @@ def test_low_entropy_counts_raises_without_a_message_and_class_calls():
     yes_no = ACCOUNT_CHECK | {"cases": [calls(*guesses)]}
     assert declare(yes_no).checks[0].low_entropy
     assert not declare(ACCOUNT_CHECK).checks[0].low_entropy
+
+
+# --- #319: aliases, vacuous tolerances, guessable answers, single-field commitment ----------
+
+ALIASES = sorted(
+    name for name in dir(builtins)
+    if isinstance(getattr(builtins, name), type)
+    and issubclass(getattr(builtins, name), BaseException)
+    and getattr(builtins, name).__name__ != name
+)  # fmt: skip
+
+
+def raising(kind: str, message: str | None = None):
+    raises = {"type": kind} | ({"message": message} if message is not None else {})
+    return mean_without("expected", "tolerance", raises=raises)
+
+
+@pytest.mark.parametrize("alias", ALIASES)
+def test_a_builtin_alias_is_refused_because_the_runner_reports_the_class_name(alias):
+    with pytest.raises(blackbox.BlackboxRejected, match="builtin exception"):
+        declare(raising(alias))
+
+
+def test_the_aliases_are_the_known_ones_and_their_classes_load():
+    assert {"IOError", "EnvironmentError"} <= set(ALIASES)
+    for name in ("OSError", "FileNotFoundError", "ValueError"):
+        assert declare(raising(name)).checks[0].cases[0].raises
+
+
+def test_a_relative_tolerance_of_one_or_more_is_refused():
+    for rel_tol in (1, 1.0, 5):
+        with pytest.raises(blackbox.BlackboxRejected, match="rel_tol must be below 1"):
+            declare(mean_case(tolerance={"rel_tol": rel_tol}))
+    assert declare(mean_case(tolerance={"rel_tol": 0.99}))  # below 1 loads (a band, not vacuous)
+
+
+def only_case(case: dict) -> dict:
+    return MEAN_CHECK | {"cases": [{"id": "c", "args": [[1]]} | case]}
+
+
+GUESSABLE = {
+    "empty-message": {"raises": {"type": "ValueError", "message": ""}},
+    "zero-within-abs-tol": {"expected": 3.7, "tolerance": {"abs_tol": 1e300}},
+    "zero-answer": {"expected": [0.0, {"k": -0.0}], "tolerance": {"rel_tol": 1e-9}},
+}
+NOT_GUESSABLE = {
+    "message": {"raises": {"type": "ValueError", "message": "x"}},
+    "tight": {"expected": 3.7, "tolerance": {"rel_tol": 1e-9, "abs_tol": 1e-12}},
+    "wide-relative": {"expected": 3.7, "tolerance": {"rel_tol": 0.99}},
+    "a-string-too": {"expected": [0.0, "s"], "tolerance": {"abs_tol": 1}},
+}
+
+
+@pytest.mark.parametrize("case", GUESSABLE.values(), ids=GUESSABLE.keys())
+def test_an_empty_message_or_a_zero_that_matches_is_low_entropy(case):
+    assert declare(only_case(case)).checks[0].low_entropy
+
+
+@pytest.mark.parametrize("case", NOT_GUESSABLE.values(), ids=NOT_GUESSABLE.keys())
+def test_other_answers_stay_unlabelled(case):
+    assert not declare(only_case(case)).checks[0].low_entropy
+
+
+def test_one_field_of_a_raise_alone_changes_the_commitment():
+    base = declare(ACCOUNT_CHECK, MEAN_CHECK)
+    empty = MEAN_CHECK["cases"][1]
+    variants = [base]
+    for raises in (
+        {"type": "ValueError", "message": "other"},
+        {"type": "KeyError", "message": "no values"},
+    ):
+        cases = [*MEAN_CHECK["cases"]]
+        cases[1] = empty | {"raises": raises}
+        variants.append(declare(ACCOUNT_CHECK, MEAN_CHECK | {"cases": cases}))
+    case = json.loads(json.dumps(ACCOUNT_CHECK["cases"][0]))
+    case["calls"][1]["raises"]["message"] = "bad amount -2"
+    variants.append(declare(ACCOUNT_CHECK | {"cases": [case]}, MEAN_CHECK))
+    assert len({variant.commitment() for variant in variants}) == 4
+
+
+def test_a_float_answer_is_not_matched_by_a_tag_and_a_boolean():
+    """#319 item 4: exact JSON types inside a tolerance answer, both ways round."""
+    pair = {"id": "mean", "module": "calc", "function": "mean", "cases": [
+        {"id": "one", "args": [[1]], "expected": [1.5, 1], "tolerance": {"abs_tol": 0}},
+        {"id": "two", "args": [[2]], "expected": [1.5, True], "tolerance": {"abs_tol": 0}},
+    ]}  # fmt: skip
+    tag = {"$float": (1.5).hex()}
+    got = {"one": {"ok": [tag, True]}, "two": {"ok": [tag, 1]}}
+    assert judged(got, pair) == "blackbox:mean: MISMATCH [matched 0/2]"
+
+
+def test_an_import_error_from_the_report_is_cut_and_printable():
+    """#319 item 6: the candidate writes this string; it must not run on or forge a line."""
+    error = "x" * 200 + "\n] blackbox:c: PASS ["
+    run = replace(RUN, report=json.dumps({"checks": {"mean": {"error": error}}}).encode())
+    (verdict,) = blackbox_judge.judge_run(declare(MEAN_CHECK), "c" * 40, run)
+    assert verdict.reason == "blackbox:mean: VERIFICATION_INCOMPLETE: NOT_IMPORTED:" + "x" * 80
