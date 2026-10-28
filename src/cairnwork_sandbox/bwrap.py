@@ -205,9 +205,8 @@ def build_policy(
     real_home = _safe(home or Path.home())
     # read_roots are validated but never emitted: the whole root is already bound read-only, so
     # (unlike Seatbelt's allow-list) a read root grants no extra scope. Validating still rejects
-    # a malformed path early and keeps the two backends' call signatures identical.
-    for root in read_roots:
-        _safe(root)
+    # a malformed path early, and a credential mask must not hide one (#378).
+    reads = [_safe(root) for root in read_roots]
     writes = [_safe(root) for root in write_roots]
     for root in writes:
         _require_narrow(root, real_home)
@@ -236,9 +235,8 @@ def build_policy(
     # Mask only credential paths that exist (a bind over an absent path fails on the read-only
     # root, and an absent path leaks nothing) and, off the owner path, only those the account uid
     # can both reach and read. The policy is rebuilt per run, so one created later is masked next.
-    for rel, is_dir in _home_cred_masks(real_home, owner=mask_home_credentials):
-        target = mask_target(f"{real_home}/{rel}", real_home, writes, _TOO_BROAD, _safe)  # #341
-        flags += ["--tmpfs", target] if is_dir else ["--ro-bind", "/dev/null", target]
+    for rel in _home_cred_masks(real_home, owner=mask_home_credentials):  # #341, #378
+        flags += mask_target(f"{real_home}/{rel}", real_home, writes, reads, _TOO_BROAD, _safe)
     # Mask root-equivalent daemon sockets (Docker/Podman/containerd): a read-only root bind
     # does not stop connect() to a pathname socket, and no network namespace covers it.
     # Bind over the canonical path (realpath collapses the /var/run -> /run symlink and the
@@ -260,8 +258,8 @@ def build_policy(
     return Policy("\n".join(flags) + "\n", notes)
 
 
-def _home_cred_masks(real_home: str, owner: bool) -> list[tuple[str, bool]]:
-    """``(relative path, is_dir)`` for each existing credential path under ``real_home`` to mask.
+def _home_cred_masks(real_home: str, owner: bool) -> list[str]:
+    """The relative path of each existing credential path under ``real_home`` to mask.
 
     ``owner`` true (the owner runs the sandbox): every existing credential path, since the owner
     can mount over any path in their own home. False (the dedicated account, a different uid):
@@ -269,12 +267,12 @@ def _home_cred_masks(real_home: str, owner: bool) -> list[tuple[str, bool]]:
     that can leak to it. Read bits are not consulted: masking any reachable path is harmless, and
     reasoning about them per path is error-prone (a ``0711`` directory is unreadable yet still lets
     a known world-readable file under it leak)."""
-    masks: list[tuple[str, bool]] = []
-    for rel, is_dir in [(d, True) for d in _CRED_DIRS] + [(f, False) for f in _CRED_FILES]:
+    masks: list[str] = []
+    for rel in _CRED_DIRS + _CRED_FILES:
         if not os.path.lexists(f"{real_home}/{rel}"):
             continue
         if owner or _account_can_reach(real_home, rel):
-            masks.append((rel, is_dir))
+            masks.append(rel)
     return masks
 
 
