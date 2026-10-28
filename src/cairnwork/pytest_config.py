@@ -29,12 +29,12 @@ import shlex
 import shutil
 import subprocess
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from cairnwork.gitcmd import run_git
+from cairnwork.gitcmd import GitCommandError, run_git
 
 # Copied from the base configuration. Each one only decides which tests exist and how
 # they run, never where configuration, plugins or reports come from:
@@ -158,6 +158,35 @@ def base_settings(repo: Path, base_commit: str | None) -> PytestSettings:
         if found is not None or name in _ALWAYS_FOUND:
             return _settings(name, found or {})
     return PytestSettings()
+
+
+def verifier_settings(
+    repo: Path, base_commit: str | None, import_paths: tuple[str, ...] = ()
+) -> PytestSettings:
+    """base_settings with the task's import_paths put before the base pythonpath: every directory
+    the verifier imports from. run_verifiers and the shadow gate (pipeline.check_task) both read it
+    here, so the gate protects the roots the run really puts on sys.path (#351)."""
+    settings = base_settings(repo, base_commit)
+    if import_paths:
+        settings = replace(settings, pythonpath=(*import_paths, *settings.pythonpath))
+    return settings
+
+
+def gate_import_paths(
+    repo: Path, base_commit: str, import_paths: tuple[str, ...]
+) -> tuple[str, ...]:
+    """verifier_settings' pythonpath, for the shadow gate (pipeline.check_task, #351). A base that
+    is not a commit in repo gives only import_paths: nothing runs against it from there (intake
+    refuses it as TASK_PATH_UNREADABLE, verify_candidate cannot read the candidate's parent, a run
+    cannot check it out). Any other failure to read the base config is a PytestConfigError."""
+    try:
+        run_git(repo, "cat-file", "-e", f"{base_commit}^{{commit}}")
+    except (GitCommandError, OSError):
+        return import_paths
+    try:
+        return verifier_settings(repo, base_commit, import_paths).pythonpath
+    except (GitCommandError, OSError) as exc:
+        raise PytestConfigError(f"the base config cannot be read: {exc}") from exc
 
 
 def _section(text: str, section: str, form: str, name: str) -> dict[str, Any] | None:

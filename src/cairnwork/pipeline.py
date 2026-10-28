@@ -41,6 +41,7 @@ from cairnwork.p2p import base_env_check, p2p_for
 from cairnwork.p2p_selection import DEFAULT_BUDGET_SECONDS, DIRECT_MODE
 from cairnwork.pipeline_judge import judge_candidate, tests_with_teeth
 from cairnwork.protected_paths import path_refusal
+from cairnwork.pytest_config import PytestConfigError, gate_import_paths
 from cairnwork.snapshot import snapshot_candidate
 from cairnwork.unswept import WorkerMayLive
 from cairnwork.verifier_account import VerifierAccount
@@ -154,14 +155,18 @@ def check_task(task: TaskSpec, *, verifier_python: str | None = None) -> tuple[V
             blocked.append(path)
     if len(set(files)) != len(files):
         raise TaskRejected("BAD_SCOPE", "allowed_files has duplicates")
-    protected = protected_verifier_inputs(
-        task.allowed_files,
-        task.test_roots,
-        repo=task.repo,
-        base_commit=task.base_commit,
-        python=verifier_python,
-        import_paths=task.import_paths,
-    )
+    try:  # the base pythonpath is an import root too (#351); a bad entry fails closed
+        paths = gate_import_paths(task.repo, task.base_commit, task.import_paths)
+        protected = protected_verifier_inputs(
+            task.allowed_files,
+            task.test_roots,
+            repo=task.repo,
+            base_commit=task.base_commit,
+            python=verifier_python,
+            import_paths=paths,
+        )
+    except PytestConfigError as exc:  # BAD_IMPORT_PATH or PYTEST_CONFIG_ERROR, before binding
+        raise TaskRejected(exc.code, str(exc)) from exc
     if protected:
         raise TaskRejected("PROTECTED_VERIFIER_INPUT", ", ".join(protected))
     if blocked:

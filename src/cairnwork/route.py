@@ -99,7 +99,8 @@ def _dispatch(intake: Intake, args) -> Any:
             refuse_unmigrated(intake.state / "notary.sqlite")  # as submit would (#343)
             config = intake.config()
             account = intake.verifier_account()
-            task = task_from_payload(payload, tuple(config["test_roots"]))
+            roots, paths = tuple(config["test_roots"]), tuple(config["import_paths"])
+            task = task_from_payload(payload, roots, import_paths=paths)  # as submit (#351)
             python = config["verifier_python"] or getattr(account, "python", None)
             check_submitted_paths(task, check_task(task, verifier_python=python))
             return {"would_accept": intake.accepting()}
