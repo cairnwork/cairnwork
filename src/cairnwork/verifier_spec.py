@@ -19,6 +19,7 @@ from pathlib import Path
 from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.import_path_tree import normalize_import_paths
 from cairnwork.issue_task import DEFAULT_TEST_ROOTS, test_target
+from cairnwork.sealed_packages import sealed_packages
 
 _OPTIONS = {("-q",), ("-p", "no:cacheprovider")}
 _PROTECTED_NAMES = frozenset(
@@ -84,6 +85,7 @@ def protected_verifier_inputs(
     python: str | None = None,
     import_paths: tuple[str, ...] = (),
     allow_deletions: bool = True,
+    test_commit: str | None = None,
 ) -> tuple[str, ...]:
     """Paths a candidate must not change, because they decide what the verifier runs.
 
@@ -95,22 +97,30 @@ def protected_verifier_inputs(
     ``..`` segment left (``a//b``, ``a/.``, leading ``/``) or non-ASCII one raises BAD_IMPORT_PATH.
     The directories above a test root are import roots too, with two more rules (#360,
     ``_risky_above_roots``); ``allow_deletions`` is the task's (deletions are refused otherwise).
+    A sealed package (``sealed_packages``, #382) is never put on sys.path by pytest, so it is no
+    import root and its names count for nothing; only its ``__init__`` rule stays.
     """
     above = _dirs_above_roots(tuple(roots))
+    under_above = tuple(path for path in paths if _under(path, above))
+    sealed = sealed_packages(
+        repo, base_commit, tuple(roots), above, under_above, tuple(import_paths), test_commit
+    )
     known = {path.casefold() for path in normalize_import_paths(import_paths)}
-    gate_paths = (*import_paths, *(d for d in above if d.casefold() not in known))
+    gate_paths = (
+        *import_paths,
+        *(d for d in above if d.casefold() not in known and d not in sealed),
+    )
     import_roots = _import_roots(gate_paths)
     first_level_units = tuple(
         path for path in paths if _first_level_unit(path, import_roots) is not None
     )
-    under_above = tuple(path for path in paths if _under(path, above))
     project = None
     if first_level_units or under_above:
-        project = _project_entries(repo, base_commit, tuple(roots), import_roots)
+        project = _project_entries(repo, base_commit, tuple(roots), import_roots, sealed)
     safe_roots = _safe_root_modules(
         first_level_units, repo, base_commit, python, import_paths=gate_paths, project=project
     )
-    risky = _risky_above_roots(under_above, above, known, python, project, allow_deletions)
+    risky = _risky_above_roots(under_above, above, known, python, project, allow_deletions, sealed)
     return tuple(
         path
         for path in paths
@@ -146,6 +156,7 @@ def _risky_above_roots(
     python: str | None,
     project: tuple[dict[str, set[str]], set[str]] | None,
     allow_deletions: bool,
+    sealed: frozenset[str] = frozenset(),
 ) -> set[str]:
     """Paths in a directory above a test root that could change what a test imports (#360).
 
@@ -159,7 +170,7 @@ def _risky_above_roots(
       directory is in front, that entry replaces the module the tests meant. A directory that is
       an import path (``import_paths``, casefolded) is on sys.path ahead of the interpreter's
       modules already, so only the base's other entries count there: in front, ``src/calc.py``
-      wins over the root's ``calc.py``.
+      wins over the root's ``calc.py``. A sealed directory (#382) is never in front: no name rule.
     Without the module inventory or the base listing every such path stays protected."""
     if not paths:
         return set()
@@ -179,7 +190,7 @@ def _risky_above_roots(
                     risky.add(path)
                 continue
             name = head if "/" in rest else _import_name(head)
-            if name is None:
+            if name is None or top in sealed:
                 continue
             others = entries.get(name.casefold(), set()) - {f"{top}/{head}".casefold()}
             if others or (name.casefold() in names and top.casefold() not in import_paths):
@@ -192,11 +203,13 @@ def _project_entries(
     base_commit: str | None,
     roots: tuple[str, ...],
     import_roots: tuple[str, ...],
+    sealed: frozenset[str] = frozenset(),
 ) -> tuple[dict[str, set[str]], set[str]] | None:
     """The base's importable names, each with the entries (casefolded paths) that carry it: the
     first level of the checkout root and of every other import root, and every part of every
-    path under a test root. Also the regular files those first levels track. None when git cannot
-    tell (no repo, no base, a failed read): the callers then refuse."""
+    path under a test root whose directory is not sealed (#382). Also the regular files those
+    first levels track. None when git cannot tell (no repo, no base, a failed read): the callers
+    then refuse."""
     if repo is None or base_commit is None:
         return None
     dirs = tuple(f"{d}/" for d in import_roots if d)
@@ -226,7 +239,8 @@ def _project_entries(
     for path in filter(None, tests.split("\0")):
         parts = path.split("/")
         for depth, part in enumerate(parts, 1):
-            add(part if depth < len(parts) else _import_name(part), "/".join(parts[:depth]))
+            if "/".join(parts[: depth - 1]) not in sealed:
+                add(part if depth < len(parts) else _import_name(part), "/".join(parts[:depth]))
     return entries, tracked
 
 

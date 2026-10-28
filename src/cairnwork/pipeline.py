@@ -165,6 +165,7 @@ def check_task(task: TaskSpec, *, verifier_python: str | None = None) -> tuple[V
             python=verifier_python,
             import_paths=paths,
             allow_deletions=task.allow_deletions,  # an __init__ above a test root (#360)
+            test_commit=task.test_commit,  # scanned when present (#382)
         )
     except PytestConfigError as exc:  # BAD_IMPORT_PATH or PYTEST_CONFIG_ERROR, before binding
         raise TaskRejected(exc.code, str(exc)) from exc
