@@ -2,8 +2,8 @@
 test_blackbox_verify.py, plus one that tries to read the owner's answers from the declaration file.
 
 The correct fix is VERIFIED with its check passing; the wrong fix, the ``sys.modules`` swap and the
-attacks on the run (verify_helpers.ATTACKS; pytest alone calls the swap, forge, finder and syspath
-VERIFIED) fail on the check, so Core reports FAILED_VERIFICATION.
+attacks on the run (verify_helpers.ATTACKS; pytest alone calls every one but child VERIFIED) fail
+on the check, so Core reports FAILED_VERIFICATION.
 """
 
 import json
@@ -11,12 +11,14 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from verify_helpers import ATTACKS, CANDIDATES, base_of, candidate, declaration, verify
+from conftest import commit_change
+from verify_helpers import ATTACKS, CANDIDATES, CONTROL, base_of, candidate, declaration, verify
 
 import cairnwork_sandbox
 from cairnwork.verifier_account import VerifierAccount
 
 pytestmark = [pytest.mark.sandbox, pytest.mark.verifier_account]
+NEW_ATTACKS = ("path_hooks", "importer_cache", "dotted", "restore", "always_eq")  # #313
 
 READER = (
     "import json\n"
@@ -57,7 +59,8 @@ def test_only_the_correct_fix_passes_its_check(account_state, helper_project, tm
                 assert account.count() == 0  # the sleeper is gone on either backend
     assert out["correct"]["status"] == "VERIFIED", _explain(out["correct"])
     assert "blackbox:add: PASS [matched 2/2]" in out["correct"]["reason"]
-    for name in ("wrong", "attack", "reader", "forge", "finder", "syspath"):
+    fooled = ("attack", "forge", "finder", "syspath", *NEW_ATTACKS)  # pytest alone: VERIFIED
+    for name in ("wrong", "reader", *fooled):
         result = out[name]
         assert (result["status"], result["core_status"]) == ("FAILED", "FAILED_VERIFICATION"), name
         assert "blackbox:add: MISMATCH [matched 0/2]" in result["reason"], (name, result["reason"])
@@ -71,8 +74,21 @@ def test_only_the_correct_fix_passes_its_check(account_state, helper_project, tm
         assert survivors in out["child"]["reason"]
     else:
         assert out["child"]["status"] == "VERIFIED" or survivors in out["child"]["reason"]
-    for name in ("attack", "forge", "finder", "syspath"):  # pytest was fooled, the check was not
+    for name in fooled:  # pytest was fooled, the check was not
         assert "pytest-0" not in out[name]["reason"], out[name]
+
+
+def test_a_project_file_named_like_a_stdlib_module_does_not_block_the_fix(
+    account_state, helper_project, tmp_path
+):
+    """#313 negative control: tests/types.py shadows a stdlib name and is the project's own."""
+    commit_change(helper_project, CONTROL)
+    base = base_of(helper_project)
+    sha = candidate(helper_project, base, {"src/calc.py": CANDIDATES["correct"]})
+    args = ("--import-path", "src", "--blackbox", str(declaration(tmp_path)))
+    out = verify(account_state, helper_project, base, sha, *args)[1]
+    assert out["status"] == "VERIFIED", _explain(out)
+    assert "blackbox:add: PASS [matched 2/2]" in out["reason"]
 
 
 def test_the_account_cannot_read_the_declaration(tmp_path):
