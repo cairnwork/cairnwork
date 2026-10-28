@@ -27,7 +27,9 @@ def refuse_unmigrated(path: Path) -> None:
     """IntakeRefused (NOTARY_SCHEMA_OLDER or NOTARY_SCHEMA_MISMATCH) for an existing notary a run
     could not open, so submit and check refuse before anything is bound (#343)."""
     path = Path(path)
-    if not path.is_file():  # a missing notary is created by the run, as before
+    # A missing notary is created by the run, as before; so is an empty file, which opening it
+    # here would write the schema into (#356).
+    if not path.is_file() or path.stat().st_size == 0:
         return
     try:
         Notary(path, core_verify=_never_called)

@@ -27,7 +27,7 @@ def test_url_credentials_are_removed_even_when_the_cut_falls_inside_the_url(tmp_
 
 def test_a_multibyte_log_still_gives_2048_whole_characters(tmp_path):
     log = tmp_path / "verifier.log"
-    log.write_text("中" * 6000 + "END")
+    log.write_text("中" * 6000 + "\n" + "中" * 3000 + "\nEND")  # the window starts mid-character
     tail = probe_log_tail(log)
     assert len(tail) == 2048 and tail.endswith("END") and "\ufffd" not in tail
 
@@ -37,3 +37,21 @@ def test_the_tail_is_the_last_2048_characters(tmp_path):
     log.write_text("a" * 5000 + "END")
     tail = probe_log_tail(log)
     assert len(tail) == 2048 and tail.endswith("END")
+
+
+def test_credentials_cut_at_the_window_start_do_not_survive_a_sanitizing_shrink(tmp_path):
+    log = tmp_path / "verifier.log"  # #335: escape codes shrink the window below 2048 characters
+    log.write_bytes(b"https://user:" + b"\x1b[m" * 6000 + b"SECRET@x END")
+    assert "SECRET" not in probe_log_tail(log)
+    log.write_bytes(b"https://user:" + b"A/" * 10000 + b"SECRET@x END")  # no shrink: the scheme
+    assert "SECRET" not in probe_log_tail(log)  # is before the window, no "://" inside it
+    log.write_bytes(b"https://user:" + b"\x1b[m" * 6000 + b"SECRET@x\nnext line")
+    assert probe_log_tail(log) == "next line"  # later lines are kept
+
+
+def test_an_ordinary_long_log_keeps_its_last_2048_characters(tmp_path):
+    log = tmp_path / "verifier.log"
+    text = "".join(f"line {i:05d} \x1b[32mok\x1b[0m\r\n" for i in range(2000))  # ~56 KB
+    log.write_bytes(text.encode())
+    expected = "".join(f"line {i:05d} ok\n" for i in range(2000))[-2048:]
+    assert probe_log_tail(log) == expected

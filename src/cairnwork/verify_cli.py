@@ -87,7 +87,10 @@ def main(argv: list[str] | None = None) -> int:
 def _migrate(intake: Intake) -> dict[str, Any]:
     """Only on a state directory we own (BAD_STATE otherwise) and with no run, recovery or other
     migration under way: the exclusive run lock, never waited for (RUN_LOCK_BUSY)."""
-    intake.check_state()
+    try:
+        intake.check_state()
+    except FileNotFoundError as exc:  # no state directory, so no notary either (#356)
+        raise NotaryMissing(f"no notary at {intake.state / 'notary.sqlite'}") from exc
     try:
         with runlock.held(intake.state / "ownership.sqlite", exclusive=True):
             return migrate_notary(intake.state / "notary.sqlite")
