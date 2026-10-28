@@ -12,6 +12,7 @@ rule never looks this deep. The interpreter here is a throwaway venv (namespace_
 """
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -195,6 +196,15 @@ def test_the_probe_answers_one_entry_per_chain(python):
     chains = [("nsco", "somelib", "impl"), ("regpkg",), ("mylib",), ("metans",), ("nothing_here",)]
     answer = json.loads(namespace_shadow._run_probe(python, chains))
     assert answer == [["ns", "ns", "path"], ["path"], ["meta"], ["meta"], ["none"]]
+
+
+def test_the_probe_runs_where_namespaceloader_is_not_public(python):
+    """Python 3.9/3.10 (a target's own venv) have only importlib._bootstrap_external's."""
+    older = "import importlib.machinery as m\ndel m.NamespaceLoader\n" + namespace_shadow._PROBE
+    answer = subprocess.run(
+        [python, "-I", "-c", older], input='[["nsco", "somelib"]]', capture_output=True, text=True
+    )
+    assert json.loads(answer.stdout) == [["ns", "ns"]], answer.stderr
 
 
 def test_without_a_repository_the_rule_is_not_applied():

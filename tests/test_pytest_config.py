@@ -212,10 +212,10 @@ def test_the_runner_passes_python_and_base_commit(monkeypatch, repo, tmp_path):
         journal=Journal(tmp_path / "j.sqlite"),
         worker=Worker(),
         run_root=tmp_path / "runs",
-        verifier_python="/opt/target/bin/python",
+        verifier_python=sys.executable,  # a real one: the shadow gate probes it (#384)
     )
     assert result.status == "FAILED" and "stop here" in result.reason
-    assert seen["python"] == "/opt/target/bin/python"
+    assert seen["python"] == sys.executable
     assert seen["base_commit"] == task.base_commit
 
 

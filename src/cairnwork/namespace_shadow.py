@@ -49,12 +49,16 @@ from cairnwork.gitcmd import GitCommandError, run_git
 _SOURCE_SUFFIXES = (".py", ".pyc", ".pyo")
 _EXTENSION_SUFFIXES = (".so", ".pyd")
 _KINDS = frozenset({"none", "ns", "path", "meta"})
-# Run in the verifier's Python with -I from /, names as JSON on stdin. Only a namespace level
-# (no loader, or NamespaceLoader) is ever imported, so no package code runs; finders installed
-# by site .pth files do, as for verifier_spec's module inventory.
+# Run in the verifier's Python (a target's may be older than 3.11) with -I from /, names as JSON
+# on stdin. Only a namespace level (no loader, or NamespaceLoader) is ever imported, so no
+# package code runs; finders installed by site .pth files do, as for verifier_spec's inventory.
 _PROBE = r"""
 import importlib, importlib.util, json, sys
-from importlib.machinery import NamespaceLoader, PathFinder
+from importlib.machinery import PathFinder
+try:
+    from importlib.machinery import NamespaceLoader
+except ImportError:  # public from 3.11; a target's verifier Python may be older
+    from importlib._bootstrap_external import _NamespaceLoader as NamespaceLoader
 
 def namespace(spec):
     return spec.origin is None and spec.submodule_search_locations is not None and (
@@ -185,6 +189,8 @@ class _Base:
         self.folded: set[tuple[str, tuple[str, ...]]] = set()
         self.exact: dict[tuple[str, tuple[str, ...]], set[str]] = {}
         for path in listing:
+            if not firsts & {part.split(".", 1)[0].casefold() for part in path.split("/")}:
+                continue  # no part of it can start a chain: skip it under every root
             for root in roots:
                 rel = _relative(path, root)
                 if rel is None or rel.split("/", 1)[0].split(".", 1)[0].casefold() not in firsts:
