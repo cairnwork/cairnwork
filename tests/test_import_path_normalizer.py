@@ -6,14 +6,18 @@ paths. If the two read an entry differently, the gate protects one directory whi
 imports from another. Both now call ``import_path_tree.normalize_import_paths``.
 """
 
+import os
+
 import pytest
 from conftest import commit_change
 
 from cairnwork import import_path_tree, verifier_spec
+from cairnwork.gitcmd import run_git
 from cairnwork.import_path_tree import ImportPathError, normalize_import_paths, require_plain_dirs
 from cairnwork.verifier_spec import protected_verifier_inputs
 
 BAD_ENTRIES = [
+    "..",
     "a/./b",
     "a//b",
     "a/../a/b",
@@ -61,6 +65,21 @@ def test_spellings_of_one_dir_normalize_alike_in_both(repo, entry):
     require_plain_dirs(repo, commit, (entry,))
     protected = protected_verifier_inputs(("src/colorsys.py",), import_paths=(entry,))
     assert protected == ("src/colorsys.py",)
+
+
+@pytest.mark.parametrize("entry", ["./link", "././link//"])
+def test_the_tree_walk_checks_the_normalized_path(repo, entry):
+    """``./link`` is the directory ``link``; walking the raw text would look for a tree entry
+    named ``.`` and stop without ever seeing the symlink."""
+    commit_change(repo, {"m.py": "x = 1\n"})
+    os.symlink("tests", repo / "link")
+    run_git(repo, "add", "-A")
+    run_git(repo, "commit", "-m", "add symlink link")
+    commit = run_git(repo, "rev-parse", "HEAD").strip()
+    with pytest.raises(ImportPathError) as exc:
+        require_plain_dirs(repo, commit, (entry,))
+    assert exc.value.code == "BAD_IMPORT_PATH"
+    assert "120000" in str(exc.value)
 
 
 @pytest.mark.parametrize("entry", ["", ".", "./", ".//"])
