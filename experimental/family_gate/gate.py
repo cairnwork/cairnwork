@@ -3,12 +3,14 @@
 Run under the Issue runner's ``issues.lock`` (``__main__``), before ``issue_runner.take``. For
 every trusted queued Issue whose ``eia-task`` block core would take, it decides (``families``)
 and appends one sidecar line per (Issue, task block, annotation, worker model). A REFUSED Issue
-is moved from ``cairnwork:queue`` to ``cairnwork:family-hold`` (``HOLD``; create the label on
-the target repository before enabling) with one comment; a runner of another family can put it
-back in the queue by hand. When a GitHub call fails, the Issue is still kept from ``take`` this
-pass and decided again on the next. Untrusted
-Issues and Issues core would refuse are left to core untouched. ``take`` sees only the gate's
-own listing minus what it held (``Held``), never a fresh one.
+gets one comment and is then moved from ``cairnwork:queue`` to ``cairnwork:family-hold``
+(``HOLD``; create the label on the target repository before enabling); a runner of another
+family can put it back in the queue by hand. The gate never adds ``cairnwork:queue`` itself.
+
+``take`` sees only what the gate let through (``Held``): Issues it decided and did not refuse,
+and Issues whose task block core refuses (core comments on those, once). Everything else this
+pass lists stays queued untaken: untrusted when the gate looked, a GitHub error, a refusal not
+yet applied; an Issue queued after the gate's listing waits for the next pass too.
 
 The sidecar lives in the experiment's own directory: never the intake state, never a receipt.
 """
@@ -35,14 +37,13 @@ ROLE = {"issue_author": "工單作者", "test_author": "驗收測試作者"}
 
 
 class Held:
-    """The runner's GitHub whose ``issues(QUEUE)`` is the gate's own listing minus its holds.
+    """The runner's GitHub whose ``issues(QUEUE)`` is the gate's listing, only the let-through.
 
-    ``take`` never re-lists the queue: an Issue queued after the gate listed it (or beyond the
-    listing's page) waits for the next pass instead of reaching ``take`` ungated."""
+    ``take`` never re-lists the queue, and nothing the gate did not let through reaches it."""
 
-    def __init__(self, github: GitHub, listed: list[dict[str, Any]], held: set[int]) -> None:
+    def __init__(self, github: GitHub, listed: list[dict[str, Any]], through: set[int]) -> None:
         self._github = github
-        self._queue = [i for i in listed if int(i["number"]) not in held]
+        self._queue = [i for i in listed if int(i["number"]) in through]
 
     def issues(self, label: str) -> list[dict[str, Any]]:
         return list(self._queue) if label == QUEUE else self._github.issues(label)
@@ -97,56 +98,52 @@ def _key(row: dict[str, Any]) -> tuple:
 def run_gate(
     intake: Intake, github: GitHub, sidecar: Sidecar, worker_model: str
 ) -> tuple[Held, dict[str, Any]]:
-    """(the GitHub ``take`` gets, the pass summary). An Issue the gate could not decide or
-    could not refuse cleanly is held this pass and retried on the next one."""
+    """(the GitHub ``take`` gets, the pass summary). Only an Issue the gate let through reaches
+    ``take``; the rest stay queued untaken and are decided again on the next pass."""
     roots = tuple(intake.config()["test_roots"])
     listed = github.issues(QUEUE)
-    rows, refused, held, errors = [], [], set(), []
+    rows, refused, through, untrusted, errors = [], [], set(), [], []
     for issue in listed:
         number = int(issue["number"])
         try:
             if github.trust(number, QUEUE):
-                continue  # core skips it too; the gate says nothing about untrusted text
+                untrusted.append(number)  # held; the gate says nothing about untrusted text
+                continue
         except (RuntimeError, OSError) as exc:  # undecided: not taken this pass
-            held.add(number)
             errors.append({"issue": number, "error": f"{type(exc).__name__}: {exc}"})
             continue
         body = str(issue.get("body") or "")
         try:
             block_sha = parse_task_block(body, roots).block_sha256
         except IssueRefused:
-            continue  # core refuses the block itself, once
+            through.add(number)  # core refuses the block itself, once; nothing is taken
+            continue
         annotation = parse_annotation(body)
         verdict = decide(annotation, worker_model)
         rows.append(_row(github.repo, number, block_sha, annotation, verdict, worker_model))
         if verdict.verdict == REFUSED:
             refused.append((number, verdict))
+        else:
+            through.add(number)
     new = sidecar.append(rows)  # before any refusal: an unrecorded decision is not acted on
     counts: dict[str, int] = {}
     for row in rows:
         counts[row["verdict"]] = counts.get(row["verdict"], 0) + 1
     for number, verdict in refused:
-        held.add(number)  # refused or not, this pass never takes it
         if error := _refuse(github, number, verdict, worker_model):
             errors.append({"issue": number, "error": error})
-    summary = {"counts": counts, "recorded": len(new), "refused": [n for n, _ in refused]}
-    return Held(github, listed, held), summary | ({"errors": errors} if errors else {})
+    summary = {"counts": counts, "recorded": len(new), "refused": [n for n, _ in refused],
+               "untrusted": untrusted}  # fmt: skip
+    return Held(github, listed, through), summary | ({"errors": errors} if errors else {})
 
 
 def _refuse(github: GitHub, number: int, verdict: Verdict, worker_model: str) -> str:
-    """Hold the Issue with one comment; "" on success. When the comment fails the Issue goes
-    back to the queue, so the next pass refuses it again and the comment is not lost."""
-    try:
-        github.relabel(number, HOLD, QUEUE)
-    except (RuntimeError, OSError) as exc:  # still queued: retried on the next pass
-        return f"{type(exc).__name__}: {exc}"
+    """Comment, then hold; "" on success. Either failure leaves the Issue queued (never taken
+    this pass) and the next pass refuses it again, so a failed hold can repeat the comment."""
     try:
         github.comment(number, refusal_comment(verdict, worker_model))
+        github.relabel(number, HOLD, QUEUE)
     except (RuntimeError, OSError) as exc:
-        try:
-            github.relabel(number, QUEUE, HOLD)
-        except (RuntimeError, OSError) as back:
-            return f"{type(exc).__name__}: {exc}; held without a comment: {back}"
         return f"{type(exc).__name__}: {exc}"
     return ""
 

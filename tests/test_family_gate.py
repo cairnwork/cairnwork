@@ -144,12 +144,18 @@ def test_an_unknown_worker_family_cannot_be_compared():
 
 
 def test_untrusted_or_core_refused_issues_are_left_to_core(setup, tmp_path):  # noqa: F811
-    untrusted = FakeGitHub([annotated(families={"issue_author": "gemini"})], trusted="UNTRUSTED")
+    class TrustedByTake(FakeGitHub):  # e.g. a label event not yet in the timeline the gate read
+        def trust(self, number, label):
+            self.asked = getattr(self, "asked", 0) + 1
+            return "UNTRUSTED" if self.asked == 1 else ""
+
+    untrusted = TrustedByTake([annotated(families={"issue_author": "gemini"})])
     sidecar = Sidecar(tmp_path / "sidecar", untrusted.repo)
     gate = {"worker_model": "gemini-3.8-flash-high", "sidecar": sidecar}
     result = cli.one_pass(setup["intake"], untrusted, setup["clone"], gate)
-    assert result["take"] == [{"issue": 7, "skipped": "UNTRUSTED"}] and untrusted.comments == []
-    assert untrusted.labels[7] == {runner.QUEUE} and not sidecar.path.exists()
+    assert result["gate"]["untrusted"] == [7] and result["take"] == []  # held, never ungated
+    assert untrusted.labels[7] == {runner.QUEUE} and untrusted.comments == []
+    assert not sidecar.path.exists() and setup["started"] == []
     bad = annotated(families={"issue_author": "gemini"})
     bad["body"] = bad["body"].replace('"src/calc.py"', '"pyproject.toml"')
     core_refused = FakeGitHub([bad])
@@ -190,8 +196,16 @@ def test_a_second_pass_records_nothing_new(setup, tmp_path):  # noqa: F811
     assert not any("family" in p.name for p in setup["intake"].state.rglob("*"))
 
 
+class NoRequeue(FakeGitHub):
+    """The gate must never add the queue label: as the bot it would launder untrusted edits."""
+
+    def relabel(self, number, add, remove):
+        assert add != runner.QUEUE
+        super().relabel(number, add, remove)
+
+
 def test_a_github_error_while_refusing_holds_the_issue(setup, tmp_path):  # noqa: F811
-    class Flaky(FakeGitHub):
+    class Flaky(NoRequeue):
         def relabel(self, number, add, remove):
             if add == HOLD:
                 raise RuntimeError("gh issue failed: 502")
@@ -202,6 +216,7 @@ def test_a_github_error_while_refusing_holds_the_issue(setup, tmp_path):  # noqa
     assert "502" in result["gate"]["errors"][0]["error"]
     assert result["take"] == [] and setup["started"] == []
     assert github.labels[7] == {runner.QUEUE}  # left queued for the next pass
+    assert len(github.comments) == 1  # commented first; the next pass may repeat it
 
 
 def running(github, number=9):
@@ -264,8 +279,8 @@ def test_a_trust_error_holds_only_that_issue(setup, tmp_path):  # noqa: F811
     assert [r["issue"] for r in result["settle"]] == [9]
 
 
-def test_a_failed_comment_puts_the_issue_back_in_the_queue(setup, tmp_path):  # noqa: F811
-    class Mute(FakeGitHub):
+def test_a_failed_comment_leaves_the_issue_queued_and_untaken(setup, tmp_path):  # noqa: F811
+    class Mute(NoRequeue):
         def comment(self, number, text):
             raise RuntimeError("gh issue comment failed: 502")
 
@@ -273,6 +288,8 @@ def test_a_failed_comment_puts_the_issue_back_in_the_queue(setup, tmp_path):  # 
     result, _, _ = gate_pass(setup, github, tmp_path, "claude-opus-5-5")
     assert "502" in result["gate"]["errors"][0]["error"]
     assert result["take"] == [] and github.labels[7] == {runner.QUEUE}  # refused again next pass
+    result, _, _ = gate_pass(setup, NoRequeue(list(github.bodies.values())), tmp_path, "opus")
+    assert result["gate"]["refused"] == [7] and "errors" not in result["gate"]
 
 
 def test_the_worker_model_defaults_to_the_state_config(setup, tmp_path):  # noqa: F811
