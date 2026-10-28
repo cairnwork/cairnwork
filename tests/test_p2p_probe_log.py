@@ -92,6 +92,7 @@ def test_authorization_headers_bearer_tokens_and_secret_fields_are_masked(tmp_pa
         "curl -H 'X: Bearer eyJhbGciOi.payload.sig' https://h/x\n"
         "GET /api?a=1&access_token=AT_SECRET&b=2\n"
         "form: password=PW_SECRET, api_key=AK_SECRET; ApiKey=AK2_SECRET\n"
+        "passwd=PWD2_SECRET pwd=PWD3_SECRET\n"
         "tok\x1b[0men=ANSI_SECRET\n"
     )
     tail = probe_log_tail(log)
@@ -103,6 +104,7 @@ def test_authorization_headers_bearer_tokens_and_secret_fields_are_masked(tmp_pa
         "curl -H 'X: Bearer <redacted> https://h/x\n"
         "GET /api?a=1&access_token=<redacted>&b=2\n"
         "form: password=<redacted> api_key=<redacted> ApiKey=<redacted>\n"
+        "passwd=<redacted> pwd=<redacted>\n"
         "token=<redacted>\n"
     )
 
@@ -110,5 +112,13 @@ def test_authorization_headers_bearer_tokens_and_secret_fields_are_masked(tmp_pa
 def test_ordinary_text_that_resembles_a_secret_is_left_alone(tmp_path):
     log = tmp_path / "verifier.log"
     text = "token expired\napi_key_status=ok password_policy=strict\nmail user@example.com\n"
+    text += "OLDPWD=/home/u my-token=plain\n"  # a key name only after a word char or '-'
     log.write_text(text)
     assert probe_log_tail(log) == text
+
+
+def test_a_secret_field_is_masked_before_the_cut_lands_inside_its_key(tmp_path):
+    log = tmp_path / "verifier.log"  # the last 2048 characters start at "word=": no key left
+    log.write_text("password=FIELD_SECRET\n" + "y" * (2048 - len("word=<redacted>\n")))
+    tail = probe_log_tail(log)
+    assert len(tail) == 2048 and tail.startswith("word=<redacted>") and "FIELD_SECRET" not in tail
