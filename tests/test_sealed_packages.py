@@ -195,3 +195,87 @@ def test_a_mirrored_test_folder_is_not_the_top_level_module(repo, tmp_path):
     )
     (run,) = run_verifiers(repo, head, (spec,), tmp_path / "runs", "r1", python=sys.executable)
     assert run.observation.passed, (run.why, run.log_path.read_text())
+
+
+# PR #385 review round 1: the base's own code can put a sealed directory in front of sys.path.
+INSERT_PKG = (
+    "import os\nimport sys\n\nsys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))\n"
+)
+SEALED_PKG = {"pkg/__init__.py": "", "pkg/tests/__init__.py": "", "pkg/tests/test_calc.py": ""}
+
+
+@pytest.mark.parametrize(
+    ("conftest", "expected"),
+    [(INSERT_PKG, REFUSED), ("import pytest\n", ALLOWED)],  # a conftest alone opens nothing
+)
+def test_route_check_and_submit_refuse_when_a_base_conftest_inserts_the_package(
+    repo, tmp_path, monkeypatch, capsys, conftest, expected
+):
+    head = commit_change(repo, SEALED_PKG | {"pkg/tests/conftest.py": conftest})
+    args = (head, ["pkg/fractions.py"], [], ["pkg/tests"], PKG_VERIFY)
+    assert _both(repo, tmp_path, monkeypatch, capsys, *args) == expected
+
+
+WORDS = ["sys.path", "syspath", "from sys import", "addsitedir", ".pth", "PYTHONPATH",
+         "pytest_plugins", "runpy", "sys.executable", "subprocess", "os.system", "os.popen",
+         "os.exec", "os.spawn"]  # fmt: skip
+
+
+@pytest.mark.parametrize("word", WORDS)
+def test_any_mention_of_a_sys_path_change_in_a_test_unseals(repo, word):
+    commit_change(repo, SEALED_PKG | {"pkg/tests/helpers.py": f"# {word}\n"})
+    with pytest.raises(TaskRejected, match="PROTECTED_VERIFIER_INPUT: pkg/fractions.py$"):
+        check_task(_task(repo, ("pkg/fractions.py",)))
+
+
+@pytest.mark.parametrize(
+    ("path", "refused"),
+    [
+        ("conftest.py", True),  # the checkout root's files
+        ("setup_paths.py", True),
+        ("pkg/__init__.py", True),  # the package under test itself
+        ("pkg/sub/deep.py", True),
+        ("docs/conf.py", False),  # no test runs it
+        ("pkg/tests/notes.txt", False),  # not Python
+    ],
+)
+def test_where_the_base_is_scanned(repo, path, refused):
+    commit_change(repo, SEALED_PKG | {path: "import sys\nsys.path.insert(0, 'pkg')\n"})
+    task = _task(repo, ("pkg/fractions.py",))
+    if refused:
+        with pytest.raises(TaskRejected, match="PROTECTED_VERIFIER_INPUT: pkg/fractions.py$"):
+            check_task(task)
+    else:
+        assert check_task(task)
+
+
+def test_a_failed_scan_seals_nothing(repo, monkeypatch):
+    from cairnwork import sealed_packages
+
+    real = sealed_packages.run_git
+
+    def grep_fails(repo_, *args, **kwargs):
+        if args[0] == "grep":
+            raise GitCommandError("grep failed")
+        return real(repo_, *args, **kwargs)
+
+    commit_change(repo, SEALED_PKG)
+    monkeypatch.setattr(sealed_packages, "run_git", grep_fails)
+    with pytest.raises(TaskRejected, match="PROTECTED_VERIFIER_INPUT: pkg/fractions.py$"):
+        check_task(_task(repo, ("pkg/fractions.py",)))
+
+
+@pytest.mark.sandbox
+def test_a_base_conftest_really_puts_a_sealed_package_in_front(repo, tmp_path):
+    """Reachability on the verifier's own pytest, not the fix: pytest alone never inserts the
+    sealed pkg, but a base conftest that does lets a new pkg/fractions.py pass a wrong answer."""
+    files = SEALED_PKG | {
+        "pkg/tests/conftest.py": INSERT_PKG,
+        "pkg/tests/test_calc.py": SHADOW_TEST,
+    }
+    head = commit_change(repo, files | {"pkg/fractions.py": FAKE})
+    spec = parse_verifier(
+        "v", ["python3", "-m", "pytest", "pkg/tests/test_calc.py"], ("pkg/tests",)
+    )
+    (run,) = run_verifiers(repo, head, (spec,), tmp_path / "runs", "r1", python=sys.executable)
+    assert run.observation.passed, (run.why, run.log_path.read_text())
