@@ -172,3 +172,13 @@ def test_a_protected_label_needs_a_declaration_commitment(tmp_path, label, requi
     assert check(w).code == "PROTECTION_UNCOMMITTED"
     plain = _world(tmp_path / "plain", "", ("pytest-0",), commitment="")
     assert check(plain).ok  # same_process_only needs none
+
+
+def test_required_ids_that_are_not_a_list_are_refused(world, tmp_path):
+    """A signer that writes Core's required ids as an object (same contract hash: the hash sorts
+    its keys) leaves no ids to bear the label out, so the label is refused (ACH mutation scan)."""
+    stmt = statement(world)
+    contract = stmt["predicate"]["request"]["acceptance_contract"]
+    contract["required_verifier_ids"] = dict.fromkeys(contract["required_verifier_ids"], 1)
+    out = resign(world["state"], stmt, tmp_path / "edited.json", rehash=True)
+    assert check(world, out).code == "PROTECTION_LABEL_MISMATCH"

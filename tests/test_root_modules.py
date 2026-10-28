@@ -70,3 +70,22 @@ def test_configured_verifier_inventory_decides_shadowing(repo, monkeypatch):
 
 def test_root_module_without_base_evidence_stays_protected():
     assert protected_verifier_inputs(("calc.py",)) == ("calc.py",)
+
+
+def test_the_report_guard_module_name_is_reserved(repo):
+    """The trusted guard plugin is not in the interpreter's inventory, yet a tracked root module of
+    its name would shadow it, so the name stays protected (ACH mutation scan)."""
+    commit_change(repo, {"_cairnwork_report_guard.py": "x = 1\n"})
+    with pytest.raises(TaskRejected, match="PROTECTED_VERIFIER_INPUT"):
+        check_task(task(repo, "_cairnwork_report_guard.py"))
+
+
+def test_the_module_inventory_is_matched_ignoring_case(repo, tmp_path):
+    """A verifier interpreter that lists ``Calc`` keeps a tracked ``calc.py`` protected: the real
+    inventory is casefolded, as every other name check here is (ACH mutation scan)."""
+    commit_change(repo, {"calc.py": "x = 1\n"})
+    python = tmp_path / "python"
+    python.write_text("#!/bin/sh\necho '[\"Calc\"]'\n")
+    python.chmod(0o755)
+    with pytest.raises(TaskRejected, match="PROTECTED_VERIFIER_INPUT"):
+        check_task(task(repo, "calc.py"), verifier_python=str(python))
