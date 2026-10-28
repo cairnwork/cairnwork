@@ -20,20 +20,25 @@ def mask_target(
     real_home: str,
     writes: Iterable[str],
     too_broad: tuple[str, ...],
-    resolve: Callable[[str], str],
-) -> str | None:
-    """The path to mount the mask for ``literal`` on, or None when there is nothing to mask.
+    check: Callable[[str], str],
+) -> str:
+    """The path to mount the mask for ``literal`` on.
 
-    ``resolve`` is the policy's checked realpath (it refuses a target that could rewrite a policy
-    line). A path with no link on it is returned unchanged. A dangling link holds nothing and
-    bwrap could not mount over it, so it gets no mask. A target that is a system root, ``$HOME``,
-    an ancestor of it, or that covers a write root is refused: a tmpfs there would hide the run
-    itself, which fails later and more obscurely than a clear refusal now."""
-    real = resolve(literal)
+    A path with no link on it is returned unchanged. Otherwise the link's real target, after
+    ``check`` (the policy's path check, which refuses a target that could rewrite a policy line).
+    Refused with ``SandboxError``: a dangling link (bwrap cannot mount over it, and a target that
+    appears later would be unmasked), and a target that is a system root, ``$HOME``, an ancestor
+    of it, or that covers a write root (a tmpfs there would hide the run itself, which fails later
+    and more obscurely than a clear refusal now)."""
+    real = os.path.realpath(literal)
+    if not os.path.exists(literal):  # the caller saw it lexist: a dangling link or a link loop
+        raise SandboxError(
+            f"credential path {literal!r} is a symlink to {real!r}, which does not exist;"
+            " remove the dangling link or create its target"
+        )
     if real == literal:
         return literal
-    if not os.path.exists(real):
-        return None
+    real = check(real)
     prefix = real.rstrip("/") + "/"
     covered = [p for p in (real_home, *writes) if p == real or p.startswith(prefix)]
     if real in too_broad or covered:

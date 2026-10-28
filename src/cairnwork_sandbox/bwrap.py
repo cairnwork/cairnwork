@@ -237,8 +237,7 @@ def build_policy(
     # can both reach and read. The policy is rebuilt per run, so one created later is masked next.
     for rel, is_dir in _home_cred_masks(real_home, owner=mask_home_credentials):
         target = mask_target(f"{real_home}/{rel}", real_home, writes, _TOO_BROAD, _safe)  # #341
-        if target is not None:
-            flags += ["--tmpfs", target] if is_dir else ["--ro-bind", "/dev/null", target]
+        flags += ["--tmpfs", target] if is_dir else ["--ro-bind", "/dev/null", target]
     # Mask root-equivalent daemon sockets (Docker/Podman/containerd): a read-only root bind
     # does not stop connect() to a pathname socket, and no network namespace covers it.
     # Bind over the canonical path (realpath collapses the /var/run -> /run symlink and the
@@ -285,23 +284,23 @@ def _account_can_reach(real_home: str, rel: str) -> bool:
     able to traverse (``o+x``) every directory from ``/`` down to the real target's parent. The
     target is resolved with ``realpath`` (following symlinks) and must stay strictly inside the
     home: one that resolves outside it, or behind a directory the verifier cannot enter, is not
-    masked —
-    binding over it would EPERM and fail the run, and it cannot leak either, being unreadable to
-    that uid. The target's own read bits are not consulted: a reachable path is masked whatever its
-    mode (a ``0711`` directory is unreadable yet still lets a known world-readable child leak).
+    masked — binding over it would EPERM and fail the run, and it cannot leak either, being
+    unreadable to that uid. The target's own read bits are not consulted: a reachable path is
+    masked whatever its mode (a ``0711`` directory is unreadable yet still lets a known world-
+    readable child leak). The walk runs on the resolved path, so a credential reached through an
+    in-home symlink is masked at its real target (#341); a dangling in-home link is selected when
+    the account can enter the home, so the policy refuses it as on the owner path.
 
-    Two fail-closed limits remain (defense-in-depth, not regressions — the account path masked
-    nothing before). A home deliberately given group ``cairnwork`` with group access is reached by
-    group, not other, so its credentials are not masked; the installer warns on a group/other-
-    accessible home. And ``lstat`` per component treats a symlinked *intermediate* as not
-    traversable, so a credential reached only through an in-home symlink is left unmasked."""
+    One fail-closed limit remains: a home deliberately given group ``cairnwork`` with group access
+    is reached by group, not other, so its credentials are not masked; the installer warns on a
+    group/other-accessible home."""
     literal = f"{real_home}/{rel}"
     try:
         real = os.path.realpath(literal)
         if not real.startswith(f"{real_home}/"):  # outside the home, or home itself: never mask
             return False
-        if not os.path.exists(real):  # a broken symlink masks nothing and cannot be mounted
-            return False
+        if not os.path.exists(real):  # dangling: mask_target refuses it if the home is enterable
+            return _other_can_traverse(real_home)
     except OSError:
         return False
     return _other_can_traverse(os.path.dirname(real))

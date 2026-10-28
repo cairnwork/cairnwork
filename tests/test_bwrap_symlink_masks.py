@@ -101,28 +101,55 @@ def test_a_linked_credential_file_is_replaced_at_its_target(tmp_path, home):
     assert _pair(lines, plain) == ["--ro-bind", "/dev/null", plain]
 
 
-def test_a_dangling_link_gets_no_mask(tmp_path, home):
-    (home / ".config").symlink_to(tmp_path / "gone")
+@pytest.mark.parametrize("kind", ["absolute", "relative", "loop"])
+def test_a_dangling_link_is_refused(tmp_path, home, kind):
+    target = {"absolute": tmp_path / "gone", "relative": "missing", "loop": ".config"}[kind]
+    (home / ".config").symlink_to(target)
+    with pytest.raises(SandboxError, match=r"\.config.*does not exist.*dangling"):
+        _policy(home)
+
+
+def test_a_dangling_file_link_is_refused(home):
     (home / ".netrc").symlink_to("missing-netrc")
-    lines = _policy(home)
-    assert not [p for p in _masked(lines) if p.startswith(str(tmp_path.resolve()))]
+    with pytest.raises(SandboxError, match=r"\.netrc.*does not exist"):
+        _policy(home)
 
 
 @pytest.mark.parametrize(
     "where", ["/", "/usr", "home", "home-parent", "write-root", "write-parent"]
 )
-def test_a_link_whose_target_would_hide_the_run_is_refused(tmp_path, home, where):
-    work = tmp_path / "w" / "run"
+def test_a_link_whose_target_would_hide_the_run_is_refused(tmp_path, where):
+    home, work = tmp_path / "h" / "home", tmp_path / "w" / "run"
+    home.mkdir(parents=True)
     work.mkdir(parents=True)
     target = {
         "home": home,
-        "home-parent": tmp_path,
+        "home-parent": home.parent,  # covers the home only, not the write root
         "write-root": work,
-        "write-parent": work.parent,
+        "write-parent": work.parent,  # covers the write root only, not the home
     }.get(where, Path(where))
     (home / ".config").symlink_to(target)
-    with pytest.raises(SandboxError, match=r"\.config.*links to"):
+    with pytest.raises(SandboxError, match=r"\.config.*links to") as err:
         _policy(home, (work,))
+    hidden = str(err.value).split("without hiding ", 1)[1]
+    real_home, real_work = str(home.resolve()), str(work.resolve())
+    if where in ("home", "home-parent"):
+        assert real_home in hidden and real_work not in hidden
+    elif where in ("write-root", "write-parent"):
+        assert real_work in hidden and real_home not in hidden
+
+
+@pytest.mark.parametrize("sibling_of", ["write-root", "home"])
+def test_a_target_whose_name_only_prefixes_a_root_is_masked(tmp_path, sibling_of):
+    """``/x/run`` does not cover ``/x/run2``: coverage is by path component, not string prefix."""
+    home, work = tmp_path / "home2", tmp_path / "run2"
+    home.mkdir()
+    work.mkdir()
+    target = tmp_path / ("run" if sibling_of == "write-root" else "home")
+    target.mkdir()
+    (home / ".config").symlink_to(target)
+    lines = _policy(home, (work,))
+    assert _pair(lines, str(target.resolve())) == ["--tmpfs", str(target.resolve())]
 
 
 def test_a_link_target_cannot_add_a_policy_line(tmp_path, home):
@@ -152,6 +179,27 @@ def test_account_mode_masks_an_in_home_absolute_link_at_its_target(world_home):
     real = f"{world_home.resolve()}/dotfiles/ssh"
     assert _pair(lines, real) == ["--tmpfs", real]
     assert f"{world_home.resolve()}/.ssh" not in lines
+
+
+def test_account_mode_refuses_a_dangling_link_in_an_enterable_home(world_home):
+    (world_home / ".ssh").symlink_to(world_home.resolve() / "gone")
+    with pytest.raises(SandboxError, match="dangling"):
+        _policy(world_home, owner=False)
+
+
+def test_account_mode_ignores_a_dangling_link_in_a_private_home(world_home):
+    (world_home / ".ssh").symlink_to(world_home.resolve() / "gone")
+    world_home.chmod(0o700)  # the account cannot enter: nothing there can leak or be mounted
+    lines = _policy(world_home, owner=False)
+    assert not [p for p in _masked(lines) if p.startswith(str(world_home.resolve()))]
+
+
+def test_account_mode_leaves_a_target_outside_home_unmasked(world_home, tmp_path):
+    outside = tmp_path / "outside-ssh"
+    outside.mkdir()
+    (world_home / ".ssh").symlink_to(outside)
+    lines = _policy(world_home, owner=False)
+    assert str(outside.resolve()) not in lines  # documented: account mode masks in-home only
 
 
 @pytest.mark.sandbox
