@@ -15,7 +15,7 @@ import cairnwork.notary_migrate as notary_migrate
 import cairnwork.verify_cli as verify_cli
 from cairnwork import runlock
 from cairnwork.notary import Notary, NotarySchemaMismatch, NotarySchemaOlder
-from cairnwork.notary_migrate import NotaryMissing, migrate_notary
+from cairnwork.notary_migrate import NotaryMissing, migrate_notary, refuse_unmigrated
 from cairnwork.notary_schema import SCHEMA, SCHEMA_VERSION
 from cairnwork.runlock import RunLockBusy
 
@@ -200,6 +200,20 @@ def test_after_migrate_state_the_same_run_verifies(project, state, tmp_path):
     code, out = run()
     assert code == 0, out
     assert (state / "verify-used-tests" / test_commit).exists()
+
+
+def test_migrate_notary_without_a_state_dir_is_notary_missing(tmp_path):
+    state = tmp_path / "absent"
+    code, out = cli(state, "migrate-notary")  # documented as NOTARY_MISSING, exit 2 (#356)
+    assert code == 2 and out["error"] == NotaryMissing.code, out
+    assert not state.exists()
+
+
+def test_the_refusal_leaves_an_empty_notary_file_unwritten(tmp_path):
+    path = tmp_path / "notary.sqlite"
+    path.touch()
+    refuse_unmigrated(path)  # an empty file is no notary yet: the run creates it (#356)
+    assert path.read_bytes() == b""
 
 
 def test_route_reports_an_older_notary_as_refused(state):

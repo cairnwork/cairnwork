@@ -36,6 +36,11 @@ def request(project):
 
 
 def test_route_submit_and_check_refuse_before_binding(project, state):
+    # the base is on origin/main, so only the refusal keeps submit from binding (#356)
+    origin = project.parent / "origin.git"
+    git(project.parent, "init", "-q", "--bare", "-b", "main", str(origin))
+    git(project, "remote", "add", "origin", str(origin))
+    git(project, "push", "-q", "-u", "origin", "main")
     old_notary(state / "notary.sqlite", 2)
     before = digest(state / "notary.sqlite")
     for command in ("check", "submit"):
