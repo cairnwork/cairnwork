@@ -138,9 +138,9 @@ def protected_verifier_inputs(
     return tuple(
         path
         for path in paths
-        if path in roots
-        or path.startswith(tuple(f"{r}/" for r in roots))
-        or path.rsplit("/", 1)[-1] in _PROTECTED_NAMES
+        if path.casefold() in {r.casefold() for r in roots}  # APFS: TESTS/ is tests/ (PR #405)
+        or _under(path, tuple(roots))
+        or path.rsplit("/", 1)[-1].casefold() in _PROTECTED_NAMES
         or _is_first_level_pth(path, import_roots)
         or (path in first_level_units and path not in safe_roots)
         or path in risky
@@ -297,13 +297,13 @@ def _first_level_unit(
 def _is_first_level_pth(path: str, import_roots: tuple[str, ...]) -> bool:
     for r in import_roots:
         if not r:
-            if "/" not in path and path.endswith(".pth"):
+            if "/" not in path and path.casefold().endswith(".pth"):
                 return True
         else:
             prefix = f"{r}/"
             if path.casefold().startswith(prefix.casefold()):
                 rel = path[len(prefix) :]
-                if "/" not in rel and rel.endswith(".pth"):
+                if "/" not in rel and rel.casefold().endswith(".pth"):
                     return True
     return False
 

@@ -28,6 +28,13 @@ def test_default_roots_behave_as_before():
     assert protected_verifier_inputs(("tests/a.py", "src/a.py")) == ("tests/a.py",)
 
 
+def test_a_case_variant_is_matched_as_the_root_name_or_suffix_it_spells():
+    """APFS: ``TESTS/`` is ``tests/``, ``CONFTEST.py`` is ``conftest.py`` (advrev, PR #405)."""
+    paths = ("TESTS/nsco/oracle.py", "Tests", "src/CONFTEST.py", "lib/Setup.py", "evil.PTH")
+    assert protected_verifier_inputs(paths) == paths
+    assert protected_verifier_inputs(("PKG/Tests/x.py",), PKG) == ("PKG/Tests/x.py",)
+
+
 def test_verifier_targets_follow_the_roots():
     assert parse_verifier("v", [*RUN, "pkg/tests/t/test_x.py::test_a"], PKG).targets
     for bad in ("tests/test_x.py", "pkg/tests_x/test_x.py", "pkg/test_x.py", "pkg/tests/../a.py"):

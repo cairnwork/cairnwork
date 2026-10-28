@@ -62,6 +62,14 @@ def test_check_task_refuses_a_forged_oracle(repo, python, oracle):
         check_task(task(repo, base, ("src/myproj/compute.py", forged)), verifier_python=python)
 
 
+def test_check_task_refuses_a_test_root_spelled_in_another_case(repo, python):
+    """advrev on PR #405: ``TESTS/`` is ``tests/`` on APFS, which pytest puts on sys.path."""
+    base = project(repo, ORACLES["namespace"])
+    forged = "TESTS/nsco/somelib/oracle.py"
+    with pytest.raises(TaskRejected, match=f"PROTECTED_VERIFIER_INPUT: {forged}$"):
+        check_task(task(repo, base, ("src/myproj/compute.py", forged)), verifier_python=python)
+
+
 def test_check_task_accepts_a_fix_with_an_own_namespace_portion(repo, python):
     base = project(repo, ORACLES["namespace"])
     allowed = ("src/myproj/compute.py", "src/nsco/myproj/helper.py")
@@ -83,6 +91,14 @@ def test_the_refused_shape_is_a_reachable_false_green(repo, tmp_path, python, or
     unfixed = run(repo, tmp_path, python, base, base, "unfixed")
     assert not unfixed.observation.passed, unfixed.log_path.read_text()
     forged = commit_change(repo, {forged_path(oracle): FORGED})
+    shadowed = run(repo, tmp_path, python, base, forged, "forged")
+    assert shadowed.observation.passed, shadowed.log_path.read_text()
+
+
+@pytest.mark.sandbox
+def test_a_test_root_in_another_case_is_a_reachable_false_green(repo, tmp_path, python):
+    base = project(repo, ORACLES["namespace"])
+    forged = commit_change(repo, {"TESTS/nsco/somelib/oracle.py": FORGED})
     shadowed = run(repo, tmp_path, python, base, forged, "forged")
     assert shadowed.observation.passed, shadowed.log_path.read_text()
 
