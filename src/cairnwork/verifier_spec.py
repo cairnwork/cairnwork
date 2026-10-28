@@ -19,6 +19,9 @@ from pathlib import Path
 from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.import_path_tree import normalize_import_paths
 from cairnwork.issue_task import DEFAULT_TEST_ROOTS, test_target
+from cairnwork.namespace_shadow import import_name as _import_name
+from cairnwork.namespace_shadow import is_init_file as _is_init_file
+from cairnwork.namespace_shadow import namespace_shadows
 from cairnwork.sealed_packages import sealed_packages
 
 _OPTIONS = {("-q",), ("-p", "no:cacheprovider")}
@@ -98,7 +101,8 @@ def protected_verifier_inputs(
     The directories above a test root are import roots too, with two more rules (#360,
     ``_risky_above_roots``); ``allow_deletions`` is the task's (deletions are refused otherwise).
     A sealed package (``sealed_packages``, #382) is never put on sys.path by pytest, so it is no
-    import root and its names count for nothing; only its ``__init__`` rule stays.
+    import root and its names count for nothing; only its ``__init__`` rule stays. A path deeper
+    in an import root must not take over a dotted name it does not own (``namespace_shadows``).
     """
     above = _dirs_above_roots(tuple(roots))
     under_above = tuple(path for path in paths if _under(path, above))
@@ -121,6 +125,16 @@ def protected_verifier_inputs(
         first_level_units, repo, base_commit, python, import_paths=gate_paths, project=project
     )
     risky = _risky_above_roots(under_above, above, known, python, project, allow_deletions, sealed)
+    risky |= namespace_shadows(  # below the first level of an import root (#384, #390)
+        paths,
+        import_roots,
+        tuple(roots),
+        sealed,
+        repo=repo,
+        base_commit=base_commit,
+        python=python,
+        allow_deletions=allow_deletions,
+    )
     return tuple(
         path
         for path in paths
@@ -248,34 +262,6 @@ def _import_roots(import_paths: tuple[str, ...]) -> tuple[str, ...]:
     """The checkout root plus each import path, normalized by the same rule as the tree check
     (#300); an entry with an empty, ``.``, ``..`` or non-ASCII segment raises ImportPathError."""
     return ("", *normalize_import_paths(import_paths))
-
-
-# Every suffix Python imports a first-level file by: source, sourceless bytecode and extension
-# modules. A committed ``.pyc``/``.so`` shadows just as a ``.py`` does (verified on APFS) and is not
-# covered by tamper_scan (``.py`` only) or pycache_guard (the TMPDIR prefix, not the checkout).
-_SOURCE_SUFFIXES = (".py", ".pyc", ".pyo")
-_EXTENSION_SUFFIXES = (".so", ".pyd")
-
-
-def _import_name(filename: str) -> str | None:
-    """The top-level name a first-level *file* would be imported under, or None if it is not an
-    importable file. Source/bytecode keep the whole stem, so a dotted stem (``a.b.py``) is not a
-    valid module name and is caught by the identifier test in ``_safe_root_modules`` (as the base
-    behaviour required); an extension module's name is the part before the first dot, dropping its
-    ABI tag (``x.cpython-NN-…​.so``). Matched casefolded for APFS."""
-    low = filename.casefold()
-    for suffix in _SOURCE_SUFFIXES:
-        if low.endswith(suffix):
-            return filename[: -len(suffix)]
-    for suffix in _EXTENSION_SUFFIXES:
-        if low.endswith(suffix):
-            return filename.split(".", 1)[0]
-    return None
-
-
-def _is_init_file(filename: str) -> bool:
-    """A package ``__init__`` in any importable suffix (.py/.pyc/.so…), case-insensitive."""
-    return filename.split(".", 1)[0].casefold() == "__init__" and _import_name(filename) is not None
 
 
 def _first_level_unit(
