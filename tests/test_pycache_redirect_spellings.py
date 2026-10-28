@@ -9,10 +9,11 @@ points ``sys.pycache_prefix`` at the run's HOME and plants bytecode there for te
 A spelled-out redirect (plain, aliased, setattr, vars) is refused by tamper_scan before anything
 runs; a name built from strings passes it, and the after-run scan fails the run instead. Bytecode
 removed again before the run ends (the prefix directory, or only the pyc files in it; the name
-built by concatenation or with chr) is the known gap of that scan (bytecode_roots.py): pinned here
-as a false green, like the sys.modules swap in test_blackbox_verify.py, which needs no bytecode at
-all. Both are in-process forgeries; the boundary is the blackbox declaration (#303) and a verdict
-produced outside the candidate's process, not these scans.
+built by concatenation or with chr) is the known gap of that scan (bytecode_roots.py): those cases
+expect the fix (not VERIFIED) and are strict xfails until it lands, while the sys.modules swap in
+test_blackbox_verify.py, which needs no bytecode at all, stays a false green. Both are in-process
+forgeries; the boundary is the blackbox declaration (#303) and a verdict produced outside the
+candidate's process, not these scans.
 """
 
 import pytest
@@ -77,13 +78,21 @@ def test_a_redirect_built_from_strings_fails_on_the_planted_bytecode(state, help
     assert "FORGED_BYTECODE" in out["reason"] and "tests/helper.py" in out["reason"], out
 
 
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="Refs #276: bytecode removed before the after-run scan still gives VERIFIED",
+)
 @pytest.mark.parametrize("how", sorted(REMOVED))
-def test_bytecode_removed_before_the_run_ends_is_a_known_false_green(state, helper_project, how):
-    """The gap bytecode_roots.py names, pinned: add is wrong, so only the forged helper passes it
-    (test_the_same_wrong_add_without_a_forgery_fails). A fix (a verdict produced outside the
-    candidate's process) turns this red on purpose; then update it."""
+def test_bytecode_removed_before_the_run_ends_is_not_verified(state, helper_project, how):
+    """The gap bytecode_roots.py names: add is wrong, so only the forged helper passes it
+    (test_the_same_wrong_add_without_a_forgery_fails). Today the run comes back VERIFIED and the
+    final assert xfails; a fix makes it XPASS, which strict mode fails: then remove the marker.
+    Any other outcome (a broken run) is a plain failure, never hidden by the xfail."""
     out = run(state, helper_project, REMOVED[how])
-    assert out["status"] == "VERIFIED", out
+    if out["status"] != "VERIFIED" and "FORGED_BYTECODE" not in out.get("reason", ""):
+        pytest.fail(f"neither the known false green nor FORGED_BYTECODE: {out}")
+    assert out["status"] != "VERIFIED", out
 
 
 def test_the_same_wrong_add_without_a_forgery_fails(state, helper_project):
