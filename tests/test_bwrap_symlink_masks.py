@@ -197,14 +197,52 @@ def test_account_mode_ignores_a_dangling_link_in_a_private_home(world_home):
     assert not [p for p in _masked(lines) if p.startswith(str(world_home.resolve()))]
 
 
-def test_account_mode_leaves_a_target_outside_home_unmasked(world_home, world_outside):
-    # The target is reachable by the account (0755 under /tmp), so only the in-home rule of
-    # _account_can_reach keeps it out: account mode masks in-home targets only (documented).
-    outside = world_outside / "ssh"
-    outside.mkdir()
-    (world_home / ".ssh").symlink_to(outside)
+@pytest.mark.parametrize("home_mode", [0o755, 0o700], ids=["home-0755", "home-0700"])
+def test_account_mode_masks_a_reachable_target_outside_home(world_home, world_outside, home_mode):
+    # #358: the account reads an outside target through its own path (0755 under /tmp), whether
+    # or not it can enter the home that holds the link, so the target is masked there.
+    (world_outside / "ssh").mkdir()
+    (world_outside / "netrc").write_text("machine x password y\n")
+    (world_home / ".ssh").symlink_to(world_outside / "ssh")
+    (world_home / ".netrc").symlink_to(world_outside / "netrc")
+    world_home.chmod(home_mode)
     lines = _policy(world_home, owner=False)
-    assert str(outside.resolve()) not in lines
+    ssh, netrc = str((world_outside / "ssh").resolve()), str((world_outside / "netrc").resolve())
+    assert _pair(lines, ssh) == ["--tmpfs", ssh]
+    assert _pair(lines, netrc) == ["--ro-bind", "/dev/null", netrc]
+    assert f"{world_home.resolve()}/.ssh" not in lines
+
+
+def test_account_mode_leaves_an_unreachable_outside_target_unmasked(world_home, world_outside):
+    # Negative control: behind a directory the account cannot enter, the target cannot leak and
+    # a mount over it would EPERM, so it is not masked and the policy is not refused.
+    (world_outside / "priv" / "ssh").mkdir(parents=True)
+    (world_outside / "priv").chmod(0o700)
+    (world_home / ".ssh").symlink_to(world_outside / "priv" / "ssh")
+    (world_home / ".netrc").write_text("x\n")  # an in-home control is still masked
+    lines = _policy(world_home, owner=False)
+    assert not [p for p in _masked(lines) if p.startswith(str(world_outside.resolve()))]
+    assert f"{world_home.resolve()}/.netrc" in _masked(lines)
+
+
+@pytest.mark.parametrize("where", ["/usr", "write-root", "dangling"])
+def test_account_mode_refuses_an_outside_target_it_cannot_mask(world_home, world_outside, where):
+    # Selected like an in-home target, an outside one the mask cannot cover (a system root, a
+    # write root) or that does not exist yet is refused as on the owner path, not left readable.
+    work = world_outside / "run"
+    work.mkdir()
+    target = {"/usr": Path("/usr"), "write-root": work, "dangling": world_outside / "gone"}[where]
+    (world_home / ".config").symlink_to(target)
+    with pytest.raises(SandboxError, match=r"\.config"):
+        _policy(world_home, (work,), owner=False)
+
+
+def test_account_mode_ignores_a_dangling_outside_link_it_cannot_reach(world_home, world_outside):
+    (world_outside / "priv").mkdir()
+    (world_outside / "priv").chmod(0o700)
+    (world_home / ".ssh").symlink_to(world_outside / "priv" / "gone")
+    lines = _policy(world_home, owner=False)
+    assert not [p for p in _masked(lines) if p.startswith(str(world_outside.resolve()))]
 
 
 def test_account_mode_refuses_a_link_to_an_in_home_ancestor_of_a_write_root(world_home):
