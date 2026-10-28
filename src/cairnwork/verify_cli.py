@@ -21,9 +21,10 @@ VERIFIED (either grade passes), and without ``--blackbox`` it is refused before 
 (error UNPROTECTED).
 
 Exit codes for ``migrate-notary``: 0 migrated, or already current (``"migrated": false``); 2
-refused: NOTARY_SCHEMA_MISMATCH (unknown version), NOTARY_MISSING, BAD_STATE (not an owner-only
-directory) or RUN_LOCK_BUSY (a run, recovery or migration holds the run lock); 1 INTERNAL (e.g.
-the backup could not be written; the notary is then unchanged).
+refused: NOTARY_SCHEMA_MISMATCH (unknown version, or no notary), NOTARY_MISSING (none, or empty),
+BAD_STATE (not an owner-only 0700 directory, or unreadable; #367) or RUN_LOCK_BUSY (a run,
+recovery or migration holds the run lock); 1 INTERNAL (e.g. the backup could not be written; the
+notary is then unchanged).
 """
 
 from __future__ import annotations
