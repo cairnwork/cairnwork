@@ -29,6 +29,7 @@ import os
 import re
 import shlex
 import sys
+import tempfile
 import unicodedata
 from pathlib import Path
 from typing import Any
@@ -134,7 +135,11 @@ def _take_one(intake, github, clone, base, issue) -> dict[str, Any]:
     if reason:  # untrusted queueing: leave the Issue exactly as it is
         return {"skipped": reason}
     task = parse_task_block(issue.get("body") or "", tuple(intake.config()["test_roots"]))
-    known = _recall(intake, github.repo, number)
+    # no record, or a bad one: the ledger knows what was bound (a resubmit is refused once main
+    # moved, #404)
+    known = _recall(intake, github.repo, number, strict=False) or _from_ledger(
+        intake, github.repo, number, task.block_sha256
+    )
     if known and known.get("block_sha256") == task.block_sha256:
         github.relabel(number, RUNNING, QUEUE)  # taken before; only the label was missing
         return {"task_id": known["task_id"], "already": True}
@@ -308,13 +313,42 @@ def _record_path(intake: Intake, repo: str, number: int) -> Path:
 def _remember(intake: Intake, repo: str, number: int, task_id: str, block: str) -> None:
     path = _record_path(intake, repo, number)
     path.parent.mkdir(mode=0o700, exist_ok=True)
-    path.write_text(json.dumps({"repo": repo, "issue": number, "task_id": task_id,
-                                "block_sha256": block}))  # fmt: skip
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as out:
+            out.write(json.dumps({"repo": repo, "issue": number, "task_id": task_id,
+                                  "block_sha256": block}))  # fmt: skip
+            out.flush()
+            os.fsync(out.fileno())
+        os.replace(tmp, path)  # whole or not at all (#404)
+    finally:
+        Path(tmp).unlink(missing_ok=True)  # gone already once renamed
 
 
-def _recall(intake: Intake, repo: str, number: int) -> dict[str, Any] | None:
+def _recall(intake: Intake, repo: str, number: int, strict=True) -> dict[str, Any] | None:
+    """The record take wrote; a bad one is ISSUE_RECORD_UNREADABLE, or None when not strict."""
     path = _record_path(intake, repo, number)
-    return json.loads(path.read_text()) if path.exists() else None
+    try:
+        known = json.loads(path.read_text()) if path.exists() else None
+        if known is None or isinstance(known["task_id"], str):
+            return known
+    except (ValueError, TypeError, KeyError):  # cut short, not JSON, or not the record's shape
+        pass
+    if strict:
+        raise ValueError(f"ISSUE_RECORD_UNREADABLE: {path.name}")
+    return None
+
+
+def _from_ledger(intake: Intake, repo: str, number: int, block: str) -> dict[str, Any] | None:
+    """The task bound for this exact block (take's key and card hash), its record written again."""
+    try:
+        bound = intake.ledger.get(idempotency_key=f"gh:{repo}#{number}:{block[:16]}")
+    except OwnershipUnknown:
+        return None
+    if bound.card_hash != f"gh:{repo}#{number}:{block}":  # same prefix, another block
+        return None
+    _remember(intake, repo, number, bound.task_id, block)
+    return {"task_id": bound.task_id, "block_sha256": block}
 
 
 def _git(repo: Path, *args: str, timeout: float | None = None) -> str:
