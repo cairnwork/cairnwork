@@ -7,7 +7,7 @@
 | 正常 | **通過**（2026-10-20，2 次；第 2 次使用現行 worker 設定，含 `--sandbox`） | 見下方 |
 | 失敗 | **通過**：自動測試涵蓋四種路徑（錯誤修正 → `CORE_FAILED_VERIFICATION`、改到範圍外 → `DIRTY_TREE`、沒有改動 → `NO_COMMIT`、worker 當掉 → `WORKER_FAILED`）。真 agent 有 1 次走到預期路徑（改了檔案，Core 判定未通過），另外 3 次停在 worker 中止，見下方 | `tests/test_pipeline.py`、`docs/drills/2026-10-20-failure.json` |
 | 重啟 | **通過**：自動測試用真的 kill -9，涵蓋 DISPATCHED、WORKER_STARTED、CANDIDATE、VERIFYING、NOTARIZING、FINISHED 六個時間點，以及孤兒程序、鎖衝突、重複執行恢復。真 agent 跑了 1 次，agy 執行到一半時 kill -9，見下方 | `tests/test_recovery.py`、`docs/drills/2026-10-20-restart.json` |
-| 回退 | **還不能做**：Cairnwork 端的接收與 `drain` 已完成，也實測過（drain 後重送拿回同一個任務、新任務被拒），但回退的對象是 Gateway 的線上切換，Gateway 端還沒做。步驟見 `docs/GATEWAY_ROUTE.md` | `docs/drills/2026-10-20-route.json`（只有 Cairnwork 端） |
+| 回退 | **未驗收（跨系統）**：Cairnwork 端的接收與 `drain` 已完成，也實測過（drain 後重送拿回同一個任務、新任務被拒）。Gateway 轉送自 2026-10-21 起依維護者決定停車（`docs/GATEWAY_ROUTE.md`），`off` 只在環境變數層確認，沒有一筆線上任務回到 SelfHosted 完成，所以跨系統回退沒有驗收證據。重開 route 前要照 #39 在當前版本重做三個見證 | `docs/drills/2026-10-20-route.json`、`docs/drills/2026-10-20-rollback-cairnwork-side.json`（都只有 Cairnwork 端） |
 
 ## 正常演練 2026-10-20
 
@@ -84,7 +84,7 @@
 
 2026-10-20 實際執行一次，使用 verifier 帳號，所有預期都成立（`passed: true`），A 為 COMPLETED、Core VERIFIED。
 
-**這不等於回退演練通過。** 這個腳本只涵蓋 Cairnwork 這一端。完整的回退演練還需要 Gateway 端：Nexus-new PR #2804 和部署器的那張 PR 合併並部署之後，才能驗證開關切換、已轉送任務仍查得到、以及沒有任何任務在兩個系統都跑。在那之前，上方表格的「回退」仍維持「還不能做」。
+**這不等於回退演練通過。** 這個腳本只涵蓋 Cairnwork 這一端。Gateway 端的程式（Nexus-new PR #2804 與部署器）已合併，但 route 自 2026-10-21 停車，沒有在 Gateway 端驗證過開關切換、已轉送任務仍查得到、以及沒有任何任務在兩個系統都跑。所以上方表格的「回退」維持未驗收，不能當跨系統回退的驗收；重開 route 前的步驟見 #39。
 
 ## Nexus-new 測試經 Cairnwork verifier 執行 2026-10-20
 
