@@ -84,7 +84,7 @@
 
 2026-10-20 實際執行一次，使用 verifier 帳號，所有預期都成立（`passed: true`），A 為 COMPLETED、Core VERIFIED。
 
-**這不等於回退演練通過。** 這個腳本只涵蓋 Cairnwork 這一端。Gateway 端的程式（Nexus-new PR #2804 與部署器）已合併，但 route 自 2026-10-21 停車，沒有在 Gateway 端驗證過開關切換、已轉送任務仍查得到、以及沒有任何任務在兩個系統都跑。所以上方表格的「回退」維持未驗收，不能當跨系統回退的驗收；重開 route 前的步驟見 #39。
+**這不等於回退演練通過。** 這個腳本只涵蓋 Cairnwork 這一端。Gateway 端的程式（Nexus-new PR #2804 與部署器）已合併，但 route 自 2026-10-21 停車。2026-10-20 在線上見證過 route 與 drain 後拒收（Cairnwork caa74e8），之後沒有在當前版本做完整的跨系統見證：`off` 之後沒有一筆線上任務回到 SelfHosted 完成，也沒有驗證已轉送任務仍查得到、以及沒有任何任務在兩個系統都跑。所以上方表格的「回退」維持未驗收，不能當跨系統回退的驗收；重開 route 前的步驟見 #39。
 
 ## Nexus-new 測試經 Cairnwork verifier 執行 2026-10-20
 
