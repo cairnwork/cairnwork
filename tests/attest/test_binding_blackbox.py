@@ -29,7 +29,11 @@ OTHER = "sha256:" + "cd" * 32
 def _world(tmp_path: Path, commitment: str) -> dict:
     p = producer(tmp_path)
     state = tmp_path / "state"
-    run = notarize_bound(state, p, blackbox_commitment=commitment)
+    declared = ("blackbox:add",) if commitment else ()  # as the producer requires them (#312)
+    run = notarize_bound(
+        state, p, blackbox_commitment=commitment, required=("pytest-0", *declared),
+        protection="partial" if declared else "",
+    )  # fmt: skip
     bundle = sign_bound(state, run, tmp_path / "bundle.json")
     full = receiver(tmp_path, "full", p["work"], p["head"], p["tests"])
     return {**p, "state": state, "bundle": bundle, "full": full, "pub": state / "public.pem",
