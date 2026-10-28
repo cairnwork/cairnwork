@@ -50,6 +50,7 @@ from cairnwork.issue_publish import (
 from cairnwork.issue_task import TASK_FENCE, IssueRefused, parse_task_block
 from cairnwork.lineage import require_on_main
 from cairnwork.lineage import verify_origin as _verify_origin
+from cairnwork.notary import NotaryError
 from cairnwork.ownership import OwnershipError, OwnershipUnknown
 from cairnwork.pipeline import TaskRejected
 from cairnwork.provenance import parse as parse_provenance
@@ -222,6 +223,7 @@ def settle(intake: Intake, github: GitHub, clone: Path) -> list[dict[str, Any]]:
             OwnershipUnknown,
             ChangeSetError,
             IntakeRefused,
+            NotaryError,  # NOTARY_SCHEMA_OLDER: reported for this Issue, not a traceback (#343)
             RuntimeError,
             OSError,
             ValueError,

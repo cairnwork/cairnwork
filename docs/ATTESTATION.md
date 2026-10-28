@@ -248,8 +248,12 @@ the **tree** that ran, and its receipt names the **PR head** (the candidate) as 
 - The notary row (schema 3) keeps the binding in a nullable `binding_json` column and names the
   head as its `candidate_commit`; the notary refuses a binding that does not name the base and the
   tree of the commit the verifiers ran, or whose hash is not the contract's. Ledgers at schema 1
-  or 2 are migrated with `ALTER TABLE ... ADD COLUMN` when a `Notary` opens them (a write, also
-  when `cairnwork-attest` reads); `read_record` reads an unmigrated schema-2 ledger as is.
+  or 2 are never migrated on open (#343): a `Notary` refuses them with `NOTARY_SCHEMA_OLDER`
+  and writes nothing (`cairnwork-attest` verification reports it as `RECORD_MALFORMED`). The
+  operator runs `cairnwork-verify --state DIR migrate-notary`, which writes a backup beside the
+  ledger and then applies the `ALTER TABLE ... ADD COLUMN` steps in one transaction; an older
+  deploy pinned to that state cannot read it afterwards. `read_record` reads an unmigrated
+  schema-2 ledger as is.
 - Unchanged: the Issue runner (its PR head is the commit notarized; no binding), a verify run
   without `--test-commit` (bound to the candidate commit, v0.1), old rows and v0.1 bundles.
   External-candidate receipts signed before this change (subject = scratch commit) still cannot

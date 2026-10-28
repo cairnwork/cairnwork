@@ -1,4 +1,4 @@
-"""The notary's on-disk schema contract: the version and the DDL the Notary creates and migrates.
+"""The notary's on-disk schema contract: the version, the DDL and the migration steps.
 
 Kept apart from the runtime logic in notary.py so the append-only record's shape and its migration
 history are read in one place. The Notary is the only writer of this schema.
@@ -45,7 +45,8 @@ CREATE TRIGGER IF NOT EXISTS core_verifications_no_overwrite
     BEGIN SELECT RAISE(ABORT, 'core_verifications is append-only'); END;
 """
 
-# One ALTER per older version, applied in order by Notary._migrate (#74, #229).
+# One ALTER per older version, applied in order by notary_migrate, only on the operator's
+# explicit migrate-notary (#74, #229, #343).
 MIGRATIONS = {
     1: "ALTER TABLE core_verifications ADD COLUMN expected_identity TEXT",
     2: "ALTER TABLE core_verifications ADD COLUMN binding_json TEXT",
