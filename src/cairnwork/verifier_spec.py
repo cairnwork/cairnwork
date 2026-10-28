@@ -19,7 +19,6 @@ from pathlib import Path
 from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.import_path_tree import normalize_import_paths
 from cairnwork.issue_task import DEFAULT_TEST_ROOTS, test_target
-from cairnwork.pytest_config import above_test_roots
 
 _OPTIONS = {("-q",), ("-p", "no:cacheprovider")}
 _PROTECTED_NAMES = frozenset(
@@ -84,6 +83,7 @@ def protected_verifier_inputs(
     base_commit: str | None = None,
     python: str | None = None,
     import_paths: tuple[str, ...] = (),
+    allow_deletions: bool = True,
 ) -> tuple[str, ...]:
     """Paths a candidate must not change, because they decide what the verifier runs.
 
@@ -93,15 +93,24 @@ def protected_verifier_inputs(
     such inputs remain protected. Import paths are normalized first: leading ``./`` and trailing
     ``/`` are stripped and the checkout root (empty, ``.``, ``./``) is dropped. Any empty, ``.`` or
     ``..`` segment left (``a//b``, ``a/.``, leading ``/``) or non-ASCII one raises BAD_IMPORT_PATH.
+    The directories above a test root are import roots too, with two more rules (#360,
+    ``_risky_above_roots``); ``allow_deletions`` is the task's (deletions are refused otherwise).
     """
-    import_roots = _import_roots(import_paths)
+    above = _dirs_above_roots(tuple(roots))
+    known = {path.casefold() for path in normalize_import_paths(import_paths)}
+    gate_paths = (*import_paths, *(d for d in above if d.casefold() not in known))
+    import_roots = _import_roots(gate_paths)
     first_level_units = tuple(
         path for path in paths if _first_level_unit(path, import_roots) is not None
     )
+    under_above = tuple(path for path in paths if _under(path, above))
+    project = None
+    if first_level_units or under_above:
+        project = _project_entries(repo, base_commit, tuple(roots), import_roots)
     safe_roots = _safe_root_modules(
-        first_level_units, repo, base_commit, python, import_paths=import_paths
+        first_level_units, repo, base_commit, python, import_paths=gate_paths, project=project
     )
-    deep = _shadowing_packages_above_roots(paths, above_test_roots(tuple(roots)), python)
+    risky = _risky_above_roots(under_above, above, known, python, project, allow_deletions)
     return tuple(
         path
         for path in paths
@@ -110,32 +119,115 @@ def protected_verifier_inputs(
         or path.rsplit("/", 1)[-1] in _PROTECTED_NAMES
         or _is_first_level_pth(path, import_roots)
         or (path in first_level_units and path not in safe_roots)
-        or path in deep
+        or path in risky
     )
 
 
-def _shadowing_packages_above_roots(
-    paths: tuple[str, ...], above: tuple[str, ...], python: str | None
+def _dirs_above_roots(roots: tuple[str, ...]) -> tuple[str, ...]:
+    """Every directory between the checkout root and a test root (``a/b/tests``: ``a``, ``a/b``),
+    #360. In pytest's default (prepend) import mode a test or conftest.py module puts the directory
+    above its top package at the front of sys.path (with ``pkg/tests/__init__.py``: ``pkg``,
+    checked on pytest 9.1.1), ahead of the checkout root and the import paths. Which one depends on
+    the ``__init__.py`` files above the root and on the test commit, so all of them count."""
+    parts = (root.split("/")[:depth] for root in roots for depth in range(1, root.count("/") + 1))
+    return tuple(dict.fromkeys(map("/".join, parts)))
+
+
+def _under(path: str, tops: tuple[str, ...]) -> list[tuple[str, str]]:
+    """(directory, rest of the path) for each of tops that path is inside, casefolded for APFS."""
+    low = path.casefold()
+    return [(top, path[len(top) + 1 :]) for top in tops if low.startswith(f"{top}/".casefold())]
+
+
+def _risky_above_roots(
+    paths: tuple[str, ...],
+    above: tuple[str, ...],
+    import_paths: set[str],
+    python: str | None,
+    project: tuple[dict[str, set[str]], set[str]] | None,
+    allow_deletions: bool,
 ) -> set[str]:
-    """Paths at any depth inside a package directly under a directory above a test root (#360)
-    whose name a module visible to the verifier has. pytest's prepend mode puts such a directory
-    on sys.path after a change the first-level rule allows (``pkg/__init__.py`` deleted, or
-    ``pkg/tests/__init__.py`` added by the test commit), so ``pkg/fractions/impl.py`` can then
-    replace ``fractions``: the package is not that module at the base, unlike one under an import
-    path. Without the verifier's module inventory every such path stays protected."""
-    heads: dict[str, set[str]] = {}
-    for path in paths:
-        for top in above:
-            rest = path[len(top) + 1 :]
-            if path.casefold().startswith(f"{top}/".casefold()) and "/" in rest:
-                heads.setdefault(path, set()).add(rest.split("/", 1)[0].casefold())
-    if not heads:
+    """Paths in a directory above a test root that could change what a test imports (#360).
+
+    Such a directory may be put at the front of sys.path only after a change: the candidate adds
+    or deletes an ``__init__.py`` above the root, or the test commit adds one to the root. So:
+    - an ``__init__`` directly in it may be changed only when the base tracks it and the task
+      refuses deletions (then it is modified, never added or removed);
+    - any other path in it is refused when its top-level entry (``pkg/calc/impl.py``: ``calc``)
+      is named like a module of the verifier's interpreter, or like another entry of the base
+      under the checkout root, an import path, another such directory or a test root: once the
+      directory is in front, that entry replaces the module the tests meant. A directory that is
+      an import path (``import_paths``, casefolded) is on sys.path ahead of the interpreter's
+      modules already, so only the base's other entries count there: in front, ``src/calc.py``
+      wins over the root's ``calc.py``.
+    Without the module inventory or the base listing every such path stays protected."""
+    if not paths:
         return set()
     try:
         names = _importable_names(python or sys.executable)
     except (OSError, ValueError, subprocess.SubprocessError):
-        return set(heads)  # no proof of safety: refuse before binding or verification
-    return {path for path, firsts in heads.items() if firsts & names}
+        return set(paths)  # no proof of safety: refuse before binding or verification
+    if project is None:
+        return set(paths)
+    entries, tracked = project
+    risky = set()
+    for path in paths:
+        for top, rest in _under(path, above):
+            head = rest.split("/", 1)[0]
+            if "/" not in rest and _is_init_file(rest):
+                if allow_deletions or path not in tracked:
+                    risky.add(path)
+                continue
+            name = head if "/" in rest else _import_name(head)
+            if name is None:
+                continue
+            others = entries.get(name.casefold(), set()) - {f"{top}/{head}".casefold()}
+            if others or (name.casefold() in names and top.casefold() not in import_paths):
+                risky.add(path)
+    return risky
+
+
+def _project_entries(
+    repo: Path | None,
+    base_commit: str | None,
+    roots: tuple[str, ...],
+    import_roots: tuple[str, ...],
+) -> tuple[dict[str, set[str]], set[str]] | None:
+    """The base's importable names, each with the entries (casefolded paths) that carry it: the
+    first level of the checkout root and of every other import root, and every part of every
+    path under a test root. Also the regular files those first levels track. None when git cannot
+    tell (no repo, no base, a failed read): the callers then refuse."""
+    if repo is None or base_commit is None:
+        return None
+    dirs = tuple(f"{d}/" for d in import_roots if d)
+    try:
+        listing = run_git(repo, "ls-tree", "-z", base_commit)
+        if dirs:
+            listing += run_git(repo, "ls-tree", "-z", base_commit, "--", *dirs)
+        tests = run_git(
+            repo, "ls-tree", "-r", "-z", "--name-only", base_commit, "--", *(f"{r}/" for r in roots)
+        )
+    except (GitCommandError, OSError, ValueError, subprocess.SubprocessError):
+        return None
+    entries: dict[str, set[str]] = {}
+    tracked = set()
+
+    def add(name: str | None, path: str) -> None:
+        if name is not None and name.casefold() != "__init__":
+            entries.setdefault(name.casefold(), set()).add(path.casefold())
+
+    for entry in filter(None, listing.split("\0")):
+        meta, path = entry.split("\t", 1)
+        mode, kind, _oid = meta.split()
+        leaf = path.rsplit("/", 1)[-1]
+        add(leaf if kind == "tree" else _import_name(leaf), path)
+        if kind == "blob" and mode in ("100644", "100755"):
+            tracked.add(path)
+    for path in filter(None, tests.split("\0")):
+        parts = path.split("/")
+        for depth, part in enumerate(parts, 1):
+            add(part if depth < len(parts) else _import_name(part), "/".join(parts[:depth]))
+    return entries, tracked
 
 
 def _import_roots(import_paths: tuple[str, ...]) -> tuple[str, ...]:
@@ -222,7 +314,12 @@ def _safe_root_modules(
     base_commit: str | None,
     python: str | None = None,
     import_paths: tuple[str, ...] = (),
+    project: tuple[dict[str, set[str]], set[str]] | None = None,
 ) -> set[str]:
+    """The first-level units a candidate may change. A new ``__init__`` in a tracked directory
+    counts as tracked only when no other base entry carries the name (``_project_entries``): a
+    namespace directory that becomes a regular package wins over a module of that name later on
+    sys.path (``foo/__init__.py`` over ``src/foo.py``, #360 review)."""
     if not paths or repo is None or base_commit is None:
         return set()
     import_roots = _import_roots(import_paths)
@@ -259,10 +356,17 @@ def _safe_root_modules(
 
     safe = set()
     for path_str, _r, name, is_pkg, pkg_dir in units:
-        is_tracked = tracked_blobs.get(path_str, False) or (is_pkg and pkg_dir in tracked_trees)
+        is_tracked = tracked_blobs.get(path_str, False) or (
+            is_pkg and pkg_dir in tracked_trees and _only_entry(project, name, pkg_dir)
+        )
         if is_tracked and name.isidentifier() and name.casefold() not in names:
             safe.add(path_str)
     return safe
+
+
+def _only_entry(project: tuple[dict[str, set[str]], set[str]] | None, name: str, path: str) -> bool:
+    """Whether path is the base's only entry named name (None: unknown, so no)."""
+    return project is not None and not project[0].get(name.casefold(), set()) - {path.casefold()}
 
 
 def _importable_names(python: str) -> set[str]:

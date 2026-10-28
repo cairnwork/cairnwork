@@ -38,7 +38,7 @@ def test_verifier_targets_follow_the_roots():
 
 
 def test_files_under_every_root_stay_protected():
-    paths = ("pkg/tests/test_x.py", "pkg/tests/conftest.py", "pkg/src/a.py", "tests/a.py")
+    paths = ("pkg/tests/test_x.py", "pkg/tests/conftest.py", "lib/a.py", "tests/a.py")
     assert protected_verifier_inputs(paths, PKG) == paths[:2]
     assert protected_verifier_inputs(("pkg/conftest.py",), PKG) == ("pkg/conftest.py",)
 
@@ -49,9 +49,9 @@ def _task(allowed, verifier, roots):
 
 
 def test_check_task_applies_the_roots():
-    check_task(_task(("pkg/src/a.py",), (*RUN, "pkg/tests/test_x.py"), PKG))
+    check_task(_task(("lib/a.py",), (*RUN, "pkg/tests/test_x.py"), PKG))
     with pytest.raises(TaskRejected, match="VERIFIER_NOT_ALLOWED"):
-        check_task(_task(("pkg/src/a.py",), (*RUN, "tests/test_x.py"), PKG))
+        check_task(_task(("lib/a.py",), (*RUN, "tests/test_x.py"), PKG))
     for path in ("pkg/tests/test_new.py", "pkg/tests/conftest.py"):
         with pytest.raises(TaskRejected, match="PROTECTED_VERIFIER_INPUT"):
             check_task(_task((path,), (*RUN, "pkg/tests/test_x.py"), PKG))

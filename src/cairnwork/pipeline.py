@@ -155,8 +155,8 @@ def check_task(task: TaskSpec, *, verifier_python: str | None = None) -> tuple[V
             blocked.append(path)
     if len(set(files)) != len(files):
         raise TaskRejected("BAD_SCOPE", "allowed_files has duplicates")
-    try:  # the base pythonpath (#351) and the dirs above test roots (#360) are import roots too
-        paths = gate_import_paths(task.repo, task.base_commit, task.import_paths, task.test_roots)
+    try:  # the base pythonpath is an import root too (#351); a bad entry fails closed
+        paths = gate_import_paths(task.repo, task.base_commit, task.import_paths)
         protected = protected_verifier_inputs(
             task.allowed_files,
             task.test_roots,
@@ -164,6 +164,7 @@ def check_task(task: TaskSpec, *, verifier_python: str | None = None) -> tuple[V
             base_commit=task.base_commit,
             python=verifier_python,
             import_paths=paths,
+            allow_deletions=task.allow_deletions,  # an __init__ above a test root (#360)
         )
     except PytestConfigError as exc:  # BAD_IMPORT_PATH or PYTEST_CONFIG_ERROR, before binding
         raise TaskRejected(exc.code, str(exc)) from exc
