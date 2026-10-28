@@ -159,10 +159,11 @@ def plan_p2p(task, specs, test_files, mode, budget, run_root, result, verifying)
     rule: dict = {"configured": mode, "applied": mode, "budget_seconds": budget, "degraded": ""}
     if mode == "off":
         return P2PPlan(rule, None, budget)
-    existing = _base_tests(task, frozenset(test_files))
+    existing = _base_tests(task, frozenset())  # #361: base_env_check's list; deferred cut below
     tried: tuple[str, ...] | None = None
     for applied in (mode, "module-dir") if mode == "whole-suite" else (mode,):
-        files = select_p2p_targets(task.allowed_files, existing, task.test_roots, applied)
+        selected = select_p2p_targets(task.allowed_files, existing, task.test_roots, applied)
+        files = tuple(f for f in selected if f not in test_files)
         rule |= {"applied": applied, "selected_files": len(files)}
         rule |= cap_note(task.allowed_files, existing, task.test_roots, applied)  # #333
         if not files and rule["degraded"]:  # #117 F1: a failed probe is not "nothing to run"

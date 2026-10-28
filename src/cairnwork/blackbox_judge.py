@@ -94,7 +94,9 @@ def _check_problem(check: Check, report: dict, run: BlackboxRun, outcomes: dict[
     entry = report.get(check.id)
     if not isinstance(entry, dict) or not isinstance(entry.get("cases"), dict):
         error = entry.get("error") if isinstance(entry, dict) else None
-        return f"NOT_IMPORTED:{error}" if isinstance(error, str) else "BAD_OUTPUT"
+        if not isinstance(error, str):
+            return "BAD_OUTPUT"
+        return "NOT_IMPORTED:" + "".join(c if c.isprintable() else "?" for c in error[:80])  # #319
     origin = entry.get("file")
     if not isinstance(origin, str) or not origin.startswith(run.checkout + "/"):
         return "NOT_FROM_CHECKOUT"
