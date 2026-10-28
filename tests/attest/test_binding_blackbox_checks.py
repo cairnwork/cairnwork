@@ -25,6 +25,7 @@ from cairnwork_attest.binding_extras import KEYS
 from cairnwork_attest.bundle import read_bundle
 from cairnwork_attest.verify import verify_bundle
 from cairnwork_attest.verify_binding import PolicyError, load_policy
+from cairnwork_protocol import evidence_bundle_hash
 from tests.attest.binding_helpers import (
     notarize_bound,
     policy,
@@ -174,3 +175,18 @@ def test_blackbox_checks_is_a_policy_key_not_a_binding_key(tmp_path):
     stmt["predicate"]["binding"]["blackbox_checks"] = CHECKS
     out = resign(w["state"], stmt, tmp_path / "edited.json")
     assert check(w, with_checks(PIN), out).code == "STATEMENT_SHAPE"
+
+
+@pytest.mark.parametrize("pins", [PIN, with_checks(PIN)], ids=["older", "with_checks"])
+def test_a_failed_observation_is_not_outvoted_by_a_later_pass(tmp_path, pins):
+    """A required check observed FAIL and then PASS was not only PASS, even when the signer also
+    re-echoes the evidence hash so nothing else refuses the receipt (ACH mutation scan)."""
+    w = _world(tmp_path, ALL)
+    stmt = json.loads(base64.b64decode(read_bundle(w["bundle"])["payload"]))
+    evidence = stmt["predicate"]["request"]["evidence_bundle"]
+    observations = evidence["observations"]
+    at = next(i for i, o in enumerate(observations) if o["verifier_id"] == "blackbox:mul")
+    observations.insert(at, observations[at] | {"status": "FAIL", "artifact_id": "a-fail"})
+    stmt["predicate"]["response"]["hashes"]["evidence_bundle_hash"] = evidence_bundle_hash(evidence)
+    out = resign(w["state"], stmt, tmp_path / "edited.json", rehash=True)
+    assert check(w, pins, out).code == MISSING
