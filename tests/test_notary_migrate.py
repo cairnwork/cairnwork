@@ -12,9 +12,12 @@ from test_notary import notarize
 from verify_helpers import FIX, candidate, cli, make_mirror, verify
 
 import cairnwork.notary_migrate as notary_migrate
+import cairnwork.verify_cli as verify_cli
+from cairnwork import runlock
 from cairnwork.notary import Notary, NotarySchemaMismatch, NotarySchemaOlder
 from cairnwork.notary_migrate import NotaryMissing, migrate_notary
 from cairnwork.notary_schema import SCHEMA, SCHEMA_VERSION
+from cairnwork.runlock import RunLockBusy
 
 _ADDED_LATER = {1: ("expected_identity", "binding_json"), 2: ("binding_json",)}
 
@@ -107,6 +110,7 @@ def test_migrate_state_backs_up_then_migrates(verified, state, version):
     [backup] = backups(state)
     assert out == {"migrated": True, "from": version, "to": SCHEMA_VERSION, "backup": str(backup)}
     assert version_of(backup) == version and rows_of(backup) == old_rows
+    assert backup.stat().st_mode & 0o777 == 0o600  # owner-only, as the notary's state is
     assert version_of(path) == SCHEMA_VERSION
     width = len(old_rows[0])  # old columns first, unchanged; every added column is NULL
     assert [row[:width] for row in rows_of(path)] == old_rows
@@ -205,3 +209,37 @@ def test_route_reports_an_older_notary_as_refused(state):
         capture_output=True, text=True, timeout=120, check=False,
     )  # fmt: skip
     assert done.returncode == 2 and json.loads(done.stdout)["error"] == "NOTARY_SCHEMA_OLDER"
+
+
+def test_migrate_notary_refuses_a_state_others_can_use(state):
+    old_notary(state / "notary.sqlite", 2)
+    before = digest(state / "notary.sqlite")
+    state.chmod(0o755)
+    code, out = cli(state, "migrate-notary")
+    assert code == 2 and out["error"] == "BAD_STATE", out
+    assert digest(state / "notary.sqlite") == before and backups(state) == []
+
+
+def test_migrate_notary_refuses_while_a_run_holds_the_run_lock(state):
+    old_notary(state / "notary.sqlite", 2)
+    before = digest(state / "notary.sqlite")
+    with runlock.held(state / "ownership.sqlite", exclusive=False):  # as a running verify does
+        code, out = cli(state, "migrate-notary")
+    assert code == 2 and out["error"] == RunLockBusy.code, out
+    assert digest(state / "notary.sqlite") == before and backups(state) == []
+
+
+def test_the_run_lock_is_held_exclusively_while_migrating(state, monkeypatch, capsys):
+    old_notary(state / "notary.sqlite", 2)
+    real, attempts = verify_cli.migrate_notary, []
+
+    def migrate_while_probing(path):
+        with pytest.raises(RunLockBusy):  # a run (shared) or recovery (exclusive) cannot start
+            with runlock.held(state / "ownership.sqlite", exclusive=True):
+                pass
+        attempts.append(path)
+        return real(path)
+
+    monkeypatch.setattr(verify_cli, "migrate_notary", migrate_while_probing)
+    assert verify_cli.main(["--state", str(state), "migrate-notary"]) == 0
+    assert json.loads(capsys.readouterr().out)["migrated"] is True and len(attempts) == 1

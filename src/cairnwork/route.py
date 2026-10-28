@@ -37,6 +37,7 @@ from cairnwork.intake import Intake, IntakeRefused, task_from_payload
 from cairnwork.issue_runner import DEFAULT_GH, TRUST_CHANGED, GitHub
 from cairnwork.journal import JournalIntegrityViolation
 from cairnwork.notary import NotarySchemaMismatch
+from cairnwork.notary_migrate import refuse_unmigrated
 from cairnwork.ownership import (
     DuplicateLogicalTask,
     KeyReusedWithDifferentRequest,
@@ -95,6 +96,7 @@ def _dispatch(intake: Intake, args) -> Any:
         except json.JSONDecodeError as exc:
             raise IntakeRefused("BAD_REQUEST", "stdin is not JSON") from exc
         if args.command == "check":  # no binding, no files, no runner
+            refuse_unmigrated(intake.state / "notary.sqlite")  # as submit would (#343)
             config = intake.config()
             account = intake.verifier_account()
             task = task_from_payload(payload, tuple(config["test_roots"]))

@@ -14,7 +14,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from cairnwork.notary import NotaryError, NotarySchemaMismatch
+from cairnwork.intake_request import IntakeRefused
+from cairnwork.notary import Notary, NotaryError, NotarySchemaMismatch
 from cairnwork.notary_schema import MIGRATIONS, SCHEMA_VERSION
 
 
@@ -22,9 +23,27 @@ class NotaryMissing(NotaryError):
     code = "NOTARY_MISSING"
 
 
+def refuse_unmigrated(path: Path) -> None:
+    """IntakeRefused (NOTARY_SCHEMA_OLDER or NOTARY_SCHEMA_MISMATCH) for an existing notary a run
+    could not open, so submit and check refuse before anything is bound (#343)."""
+    path = Path(path)
+    if not path.is_file():  # a missing notary is created by the run, as before
+        return
+    try:
+        Notary(path, core_verify=_never_called)
+    except NotarySchemaMismatch as exc:
+        raise IntakeRefused(exc.code, str(exc).removeprefix(f"{exc.code}: ")) from exc
+
+
+def _never_called(_: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    raise AssertionError("opening a notary never calls Core")
+
+
 def migrate_notary(path: Path) -> dict[str, Any]:
     """Back up, then migrate the notary at path to SCHEMA_VERSION. A current notary is left
-    untouched (no backup); a missing one is not created; an unknown version is refused."""
+    untouched (no backup); a missing one is not created; an unknown version is refused. The
+    caller checks the state directory and holds the exclusive run lock (verify_cli)."""
+    path = Path(path)
     if not path.is_file():  # sqlite3.connect would create an empty database
         raise NotaryMissing(f"no notary at {path}")
     conn = sqlite3.connect(path, timeout=30, isolation_level=None)
@@ -77,5 +96,5 @@ def _backup(path: Path, version: int) -> Path:
             copy.close()
         os.link(partial, target)  # fails if the name exists; never replaces a file
     finally:
-        partial.unlink()
+        partial.unlink(missing_ok=True)
     return target
