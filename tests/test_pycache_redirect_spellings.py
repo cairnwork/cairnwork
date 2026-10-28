@@ -8,7 +8,8 @@ points ``sys.pycache_prefix`` at the run's HOME and plants bytecode there for te
 
 A spelled-out redirect (plain, aliased, setattr, vars) is refused by tamper_scan before anything
 runs; a name built from strings passes it, and the after-run scan fails the run instead. Bytecode
-removed again before the run ends is the known gap of that scan (bytecode_roots.py): pinned here
+removed again before the run ends (the prefix directory, or only the pyc files in it; the name
+built by concatenation or with chr) is the known gap of that scan (bytecode_roots.py): pinned here
 as a false green, like the sys.modules swap in test_blackbox_verify.py, which needs no bytecode at
 all. Both are in-process forgeries; the boundary is the blackbox declaration (#303) and a verdict
 produced outside the candidate's process, not these scans.
@@ -43,7 +44,17 @@ SPELLED = {
     "vars": "vars(sys)['pycache_prefix'] = _d",
 }
 BUILT = "setattr(sys, 'pycache' + '_prefix', _d)"
-REMOVED = BUILT + "\nimport atexit, shutil\natexit.register(shutil.rmtree, _d, True)"
+CHR = f"setattr(sys, ''.join(map(chr, {[ord(c) for c in 'pycache_prefix']})), _d)"
+# Evidence removed when the candidate's Python exits, before the after-run scan.
+REMOVED = {
+    "built_rmtree": BUILT + "\nimport atexit, shutil\natexit.register(shutil.rmtree, _d, True)",
+    "chr_rmtree": CHR + "\nimport atexit, shutil\natexit.register(shutil.rmtree, _d, True)",
+    "built_pyc_only": BUILT
+    + (
+        "\nimport atexit\natexit.register(lambda: [os.remove(os.path.join(r, f))"
+        " for r, _, fs in os.walk(_d) for f in fs if f.endswith('.pyc')])"
+    ),
+}
 
 
 def run(state, project, redirect):
@@ -66,13 +77,17 @@ def test_a_redirect_built_from_strings_fails_on_the_planted_bytecode(state, help
     assert "FORGED_BYTECODE" in out["reason"] and "tests/helper.py" in out["reason"], out
 
 
-def test_bytecode_removed_before_the_run_ends_is_a_known_false_green(state, helper_project):
-    """The gap bytecode_roots.py names, pinned: add is wrong, so only the forged helper passes it.
-    A fix (a verdict produced outside the candidate's process) turns this red on purpose."""
-    out = run(state, helper_project, REMOVED)
+@pytest.mark.parametrize("how", sorted(REMOVED))
+def test_bytecode_removed_before_the_run_ends_is_a_known_false_green(state, helper_project, how):
+    """The gap bytecode_roots.py names, pinned: add is wrong, so only the forged helper passes it
+    (test_the_same_wrong_add_without_a_forgery_fails). A fix (a verdict produced outside the
+    candidate's process) turns this red on purpose; then update it."""
+    out = run(state, helper_project, REMOVED[how])
     assert out["status"] == "VERIFIED", out
+
+
+def test_the_same_wrong_add_without_a_forgery_fails(state, helper_project):
     base = base_of(helper_project)
-    wrong = candidate(helper_project, base, {"src/calc.py": "import os, sys\n" + BAD})  # no forgery
-    assert verify(state, helper_project, base, wrong, "--import-path", "src")[1]["status"] == (
-        "FAILED"
-    )
+    wrong = candidate(helper_project, base, {"src/calc.py": "import os, sys\n" + BAD})
+    out = verify(state, helper_project, base, wrong, "--import-path", "src")[1]
+    assert out["status"] == "FAILED" and "pytest exit code 1" in out["reason"], out
