@@ -164,8 +164,9 @@ def verifier_settings(
     repo: Path, base_commit: str | None, import_paths: tuple[str, ...] = ()
 ) -> PytestSettings:
     """base_settings with the task's import_paths put before the base pythonpath: every directory
-    the verifier imports from. run_verifiers and the shadow gate (pipeline.check_task) both read it
-    here, so the gate protects the roots the run really puts on sys.path (#351)."""
+    the verifier imports from. run_verifiers, the blackbox run and the shadow gate
+    (pipeline.check_task) all read it here, so the gate protects the roots a run puts on sys.path
+    (#351)."""
     settings = base_settings(repo, base_commit)
     if import_paths:
         settings = replace(settings, pythonpath=(*import_paths, *settings.pythonpath))
@@ -175,17 +176,21 @@ def verifier_settings(
 def gate_import_paths(
     repo: Path, base_commit: str, import_paths: tuple[str, ...]
 ) -> tuple[str, ...]:
-    """verifier_settings' pythonpath, for the shadow gate (pipeline.check_task, #351). A base that
-    is not a commit in repo gives only import_paths: nothing runs against it from there (intake
-    refuses it as TASK_PATH_UNREADABLE, verify_candidate cannot read the candidate's parent, a run
-    cannot check it out). Any other failure to read the base config is a PytestConfigError."""
+    """verifier_settings' pythonpath, for the shadow gate (pipeline.check_task, #351). Only a base
+    that git shows is not a commit in repo (``rev-parse --verify`` exit 1) gives just import_paths:
+    nothing runs against it from there (intake refuses it as TASK_PATH_UNREADABLE, verify_candidate
+    cannot read the candidate's parent, a run cannot check it out). Any other failure to read the
+    base or its config is a PytestConfigError, so the gate fails closed."""
     try:
-        run_git(repo, "cat-file", "-e", f"{base_commit}^{{commit}}")
-    except (GitCommandError, OSError):
-        return import_paths
+        run_git(repo, "rev-parse", "--verify", "--quiet", f"{base_commit}^{{commit}}")
+    except GitCommandError as exc:
+        failed = exc.__cause__
+        if isinstance(failed, subprocess.CalledProcessError) and failed.returncode == 1:
+            return import_paths
+        raise PytestConfigError(f"the base cannot be read: {exc}") from exc
     try:
         return verifier_settings(repo, base_commit, import_paths).pythonpath
-    except (GitCommandError, OSError) as exc:
+    except GitCommandError as exc:
         raise PytestConfigError(f"the base config cannot be read: {exc}") from exc
 
 
