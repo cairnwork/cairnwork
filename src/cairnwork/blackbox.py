@@ -13,8 +13,9 @@ changed.
 What it protects, and what it does not. The output can be forged (the candidate shares the
 runner's interpreter, and may take the runner over); the protection is that the candidate does not
 know the answers. So it holds for answers that cannot be guessed, under a verifier account (another
-uid, which cannot read the declaration). Answers that are all booleans, null, or raises with no
-message can be guessed: the check still runs, and its artifact id and reason say ``low-entropy``.
+uid, which cannot read the declaration). Answers that are all booleans, null, raises with no (or
+an empty) message, or floats that 0.0 matches within ``abs_tol`` (#319) can be guessed: the check
+still runs, and its artifact id and reason say ``low-entropy``.
 Without an account the candidate runs as the owner and could read the declaration: the check runs
 for the evidence but never passes (``VERIFICATION_INCOMPLETE: BLACKBOX_NEEDS_VERIFIER_ACCOUNT``).
 Pytest tests that are not declared here are not protected; a candidate that hard-codes the

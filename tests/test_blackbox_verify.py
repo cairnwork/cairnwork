@@ -10,7 +10,8 @@ where the correct fix is VERIFIED, are in test_blackbox_account.py.
 """
 
 import pytest
-from verify_helpers import ATTACKS, CANDIDATES, base_of, candidate, declaration, verify
+from conftest import commit_change
+from verify_helpers import ATTACKS, CANDIDATES, CONTROL, base_of, candidate, declaration, verify
 
 import cairnwork_sandbox
 
@@ -50,6 +51,11 @@ OWNER_ATTACKS = {
     "finder": f"{NEEDS_ACCOUNT} [matched 0/2]",
     "child": "blackbox:add: VERIFICATION_INCOMPLETE: SURVIVORS]",
     "syspath": f"{NEEDS_ACCOUNT} [matched 0/2]",
+    "path_hooks": f"{NEEDS_ACCOUNT} [matched 0/2]",
+    "importer_cache": f"{NEEDS_ACCOUNT} [matched 0/2]",
+    "dotted": f"{NEEDS_ACCOUNT} [matched 0/2]",
+    "restore": f"{NEEDS_ACCOUNT} [matched 0/2]",
+    "always_eq": f"{NEEDS_ACCOUNT} [matched 0/2]",
 }
 
 
@@ -71,6 +77,24 @@ def test_attacks_on_the_run_are_never_verified(state, helper_project, tmp_path, 
     assert OWNER_ATTACKS[name] in out["reason"], out["reason"]
     if name != "child":  # pytest alone was fooled; the blackbox check was not
         assert "pytest-0" not in out["reason"]
+
+
+@pytest.mark.sandbox
+def test_a_project_file_named_like_a_stdlib_module_does_not_block_the_fix(
+    state, helper_project, tmp_path
+):
+    """#313 negative control: tests/types.py shadows a stdlib name and is the project's own."""
+    commit_change(helper_project, CONTROL)
+    base = base_of(helper_project)
+    sha = candidate(helper_project, base, {"src/calc.py": CANDIDATES["correct"]})
+    plain = verify(state, helper_project, base, sha, "--import-path", "src")[1]
+    assert plain["status"] == "VERIFIED", plain
+    declared = str(declaration(tmp_path))
+    out = verify(state, helper_project, base, sha, "--import-path", "src", "--blackbox", declared)[
+        1
+    ]
+    assert f"{NEEDS_ACCOUNT} [matched 2/2]" in out["reason"], out["reason"]
+    assert "pytest-0" not in out["reason"], out
 
 
 def test_a_declaration_others_can_read_is_refused_before_anything_runs(
