@@ -55,6 +55,13 @@ def test_a_directory_at_the_cap_is_still_selected_whole():
     assert note(("src/pkg/foo.py",), existing) == {}
 
 
+def test_only_files_directly_in_a_directory_count_toward_the_cap():
+    direct = flat(MODULE_DIR_CAP - 5, "test_foo.py")
+    nested = tuple(f"tests/sub/test_n{i:02}.py" for i in range(10))  # 30 under tests/ in all
+    assert select(("src/pkg/foo.py",), direct + nested) == direct
+    assert note(("src/pkg/foo.py",), direct + nested) == {}
+
+
 def test_the_117_sibling_is_still_selected_and_nothing_is_cut():
     existing = ("tests/test_base.py", "tests/test_sibling.py")
     assert select(("src/pkg/base.py",), existing) == existing
