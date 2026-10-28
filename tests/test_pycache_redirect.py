@@ -3,9 +3,10 @@
 The verifier sets PYTHONPYCACHEPREFIX to its own prefix (test_pycache_prefix.py), but candidate
 library code imported by an honest test may reassign ``sys.pycache_prefix`` at runtime to any
 directory the run may write (its HOME, its TMPDIR, the work directory next to the checkout, the
-checkout's own .git) and plant bytecode there for a protected test or helper. pytest's assertion
-rewriter and the import system read it from there, the deferred test that fails as written passes,
-and the checkout comparison does not see the planted file. The after-run scan (bytecode_roots.py)
+checkout's own .git) and plant bytecode there for a protected test or helper. Under bwrap pytest's
+assertion rewriter and the import system read it from there, the deferred test that fails as
+written passes, and the checkout comparison does not see the planted file; Seatbelt denies the
+read (#368, test_seatbelt_pyc.py). The after-run scan (bytecode_roots.py)
 must fail each of these runs with FORGED_BYTECODE, while honest runs that write bytecode into
 tmp_path, leave symlinks or leave an unreadable directory there still pass.
 
@@ -19,7 +20,7 @@ import sys
 
 import pytest
 from conftest import commit_change
-from test_pycache_prefix import CONFTEST, FORGE
+from test_pycache_prefix import CONFTEST, FORGE, PLANTED_RC
 
 from cairnwork.verifier_account import VerifierAccount
 from cairnwork.verifiers import parse_verifier, run_verifiers
@@ -160,7 +161,7 @@ HONEST = (
 @pytest.mark.parametrize("where", sorted(PREFIXES))
 def test_a_redirected_pytest_pyc_for_a_deferred_test_fails_the_run(repo, tmp_path, where):
     run = forged_test_run(repo, tmp_path, where)
-    assert run.returncode == 0, run.log_path.read_text()  # the forgery really ran
+    assert run.returncode == PLANTED_RC, run.log_path.read_text()
     assert not run.observation.passed and not run.plain_failure
     assert "FORGED_BYTECODE" in run.why and "tests/test_z" in run.why, run.why
 
@@ -168,7 +169,7 @@ def test_a_redirected_pytest_pyc_for_a_deferred_test_fails_the_run(repo, tmp_pat
 @pytest.mark.parametrize("where", ["home", "tmpdir", "workdir"])
 def test_a_redirected_plain_pyc_for_a_protected_helper_fails_the_run(repo, tmp_path, where):
     run = forged_helper_run(repo, tmp_path, where)
-    assert run.returncode == 0, run.log_path.read_text()
+    assert run.returncode == PLANTED_RC, run.log_path.read_text()
     assert not run.observation.passed
     assert "FORGED_BYTECODE" in run.why and "tests/helper" in run.why, run.why
 
@@ -177,7 +178,7 @@ def test_a_redirect_through_a_case_variant_symlink_fails_the_run(repo, tmp_path)
     if not case_insensitive(tmp_path):  # the run root is tmp_path / "runs"
         pytest.skip("case-sensitive filesystem: no case-variant link resolves")
     run = linked_helper_run(repo, tmp_path, "case")
-    assert run.returncode == 0, run.log_path.read_text()  # the import system followed it
+    assert run.returncode == PLANTED_RC, run.log_path.read_text()
     assert not run.observation.passed
     assert "FORGED_BYTECODE" in run.why and "tests/helper" in run.why, run.why
 
@@ -195,7 +196,7 @@ def test_a_redirect_through_a_firmlink_symlink_fails_the_run(repo, tmp_path):
 
 def test_a_redirect_through_a_directory_closed_at_exit_fails_the_run(repo, tmp_path):
     run = linked_helper_run(repo, tmp_path, "closed")
-    assert run.returncode == 0, run.log_path.read_text()  # the import system followed it
+    assert run.returncode == PLANTED_RC, run.log_path.read_text()
     assert not run.observation.passed
     assert "FORGED_BYTECODE" in run.why and "tests/helper" in run.why, run.why
 
@@ -225,7 +226,7 @@ def account_run_root():
 @pytest.mark.parametrize("where", sorted(PREFIXES))
 def test_account_a_redirected_pytest_pyc_fails_the_run(repo, tmp_path, where, account_run_root):
     run = forged_test_run(repo, tmp_path, where, account=ACCOUNT)
-    assert run.returncode == 0, run.log_path.read_text()
+    assert run.returncode == PLANTED_RC, run.log_path.read_text()
     assert not run.observation.passed
     assert "FORGED_BYTECODE" in run.why and "tests/test_z" in run.why, run.why
 
@@ -233,7 +234,7 @@ def test_account_a_redirected_pytest_pyc_fails_the_run(repo, tmp_path, where, ac
 @pytest.mark.verifier_account
 def test_account_a_redirected_plain_pyc_fails_the_run(repo, tmp_path, account_run_root):
     run = forged_helper_run(repo, tmp_path, "home", account=ACCOUNT)
-    assert run.returncode == 0, run.log_path.read_text()
+    assert run.returncode == PLANTED_RC, run.log_path.read_text()
     assert not run.observation.passed
     assert "FORGED_BYTECODE" in run.why and "tests/helper" in run.why, run.why
 
@@ -243,7 +244,7 @@ def test_account_a_redirect_through_a_case_variant_symlink_fails(repo, tmp_path,
     if not case_insensitive(ACCOUNT.run_root):
         pytest.skip("case-sensitive filesystem: no case-variant link resolves")
     run = linked_helper_run(repo, tmp_path, "case", account=ACCOUNT)
-    assert run.returncode == 0, run.log_path.read_text()
+    assert run.returncode == PLANTED_RC, run.log_path.read_text()
     assert not run.observation.passed
     assert "FORGED_BYTECODE" in run.why and "tests/helper" in run.why, run.why
 
