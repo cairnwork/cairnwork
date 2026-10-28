@@ -62,7 +62,7 @@ import subprocess
 import sys
 import tempfile
 from contextlib import nullcontext
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 import cairnwork_sandbox
@@ -154,9 +154,7 @@ def run_verifiers(
     verifier's import path so a src-layout project can import its own package. A non-empty note
     (the P2P selection rule, p2p.py) is bound into each observation's artifact hash.
     """
-    settings = pytest_config.base_settings(repo, base_commit)
-    if import_paths:
-        settings = replace(settings, pythonpath=(*import_paths, *settings.pythonpath))
+    settings = pytest_config.verifier_settings(repo, base_commit, import_paths)
     if settings.pythonpath:
         require_plain_dirs(repo, candidate_commit, settings.pythonpath)
     if account is not None:

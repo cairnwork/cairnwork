@@ -22,6 +22,8 @@ def test_patterns_refuse_a_trailing_newline(pattern, good):
 
 
 def test_task_with_a_newline_after_its_base_is_rejected(tmp_path):
+    git(tmp_path, "init", "-q")  # a readable repository without that base (#351)
+
     def task(base):
         return TaskSpec(
             idempotency_key="k",
