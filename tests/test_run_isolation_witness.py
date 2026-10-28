@@ -103,11 +103,12 @@ PROBE = (
     "        kinds = connected_types(path)\n"
     "        if kinds:\n"
     "            reached.append(path + ' (' + ','.join(kinds) + ')')\n"
-    "    assert not reached, (\n"
-    "        f'CONNECTABLE {{len(reached)}} of {{len(probed)}} probed sockets '\n"
-    "        f'(host listed {{len(HOST)}}, the run found {{len(inside)}} in {{count}} entries, '\n"
-    "        f'{{len(unreadable)}} unreadable): ' + '; '.join(reached)\n"
-    "    )\n"
+    "    # printed, not put in the message: pytest cuts a long assertion message short\n"
+    "    print(f'probed {{len(probed)}} (host listed {{len(HOST)}}, the run found '\n"
+    "          f'{{len(inside)}} in {{count}} entries, {{len(unreadable)}} unreadable)')\n"
+    "    for line in reached:\n"
+    "        print('CONNECTABLE ' + line)\n"
+    "    assert not reached, f'{{len(reached)}} host sockets connectable, listed on stdout'\n"
 )
 
 
@@ -141,7 +142,7 @@ def socket_run(repo, tmp_path, account=None):
 
 def test_no_host_pathname_socket_is_connectable_inside_a_run(repo, tmp_path):
     run, listed = socket_run(repo, tmp_path)
-    assert run.observation.passed, (run.why, listed, run.log_path.read_text())
+    assert run.observation.passed, "\n".join((run.why, listed, run.log_path.read_text()))
 
 
 # --- the same under the separate verifier account -------------------------------------------
@@ -161,7 +162,7 @@ def account_run_root():
 @pytest.mark.verifier_account
 def test_account_no_host_pathname_socket_is_connectable(repo, tmp_path, account_run_root):
     run, listed = socket_run(repo, tmp_path, account=ACCOUNT)
-    assert run.observation.passed, (run.why, listed, run.log_path.read_text())
+    assert run.observation.passed, "\n".join((run.why, listed, run.log_path.read_text()))
 
 
 # #392: where the first run leaves a marker. HOME, TMPDIR and the work directory are removed after
@@ -195,10 +196,12 @@ FIND = (
     "                    readable.append(path)\n"
     "        except OSError:\n"
     "            pass\n"
-    "    assert not found and not readable, (\n"
-    "        f'LEFTOVERS found by name: {{found}}; readable: {{readable}} '\n"
-    "        f'({{count}} entries walked, {{len(unreadable)}} unreadable)'\n"
-    "    )\n"
+    "    print(f'{{count}} entries walked, {{len(unreadable)}} unreadable')\n"
+    "    for path in found:\n"
+    "        print('LEFTOVER FOUND ' + path)\n"
+    "    for path in readable:\n"
+    "        print('LEFTOVER READABLE ' + path)\n"
+    "    assert not found and not readable, 'leftovers of the last run, listed on stdout'\n"
 )
 
 
@@ -218,14 +221,11 @@ def test_account_a_run_cannot_find_what_the_last_run_left(repo, tmp_path, accoun
         repo, tmp_path, {"tests/test_leave.py": LEAVE.format(places=places, token=token)},
         "tests/test_leave.py", ACCOUNT,
     )  # fmt: skip
-    assert first.observation.passed, (first.why, first.log_path.read_text())
+    assert first.observation.passed, first.why + "\n" + first.log_path.read_text()
     run_dir = first.log_path.parent / "run"  # the private dir holds the log and run/
     known = [str(run_dir / f"cw-leftover-{token}-{where}") for where in PLACES]
     owner_view = leftovers(ACCOUNT.run_root, token)
     code = FIND.format(root=str(ACCOUNT.run_root), limit=WALK_LIMIT, token=token, known=known)
     second = run_one(repo, tmp_path, {"tests/test_find.py": code}, "tests/test_find.py", ACCOUNT)
-    assert second.observation.passed, (
-        second.why,
-        f"left after run 1 (owner's view): {owner_view}",
-        second.log_path.read_text(),
-    )
+    owner_lines = "".join(f"LEFT AFTER RUN 1 (owner's view) {path}\n" for path in owner_view)
+    assert second.observation.passed, second.why + "\n" + owner_lines + second.log_path.read_text()
