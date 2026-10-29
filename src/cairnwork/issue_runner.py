@@ -135,11 +135,11 @@ def _take_one(intake, github, clone, base, issue) -> dict[str, Any]:
     if reason:  # untrusted queueing: leave the Issue exactly as it is
         return {"skipped": reason}
     task = parse_task_block(issue.get("body") or "", tuple(intake.config()["test_roots"]))
-    # no record, or a bad one: the ledger knows what was bound (a resubmit is refused once main
-    # moved, #404)
-    known = _recall(intake, github.repo, number, strict=False) or _from_ledger(
-        intake, github.repo, number, task.block_sha256
-    )
+    # no record, a bad one, or one of an older block: the ledger knows what was bound (a resubmit
+    # is refused once main moved, #404, #424)
+    known = _recall(intake, github.repo, number, strict=False)
+    if not known or known.get("block_sha256") != task.block_sha256:
+        known = _from_ledger(intake, github.repo, number, task.block_sha256) or known
     if known and known.get("block_sha256") == task.block_sha256:
         github.relabel(number, RUNNING, QUEUE)  # taken before; only the label was missing
         return {"task_id": known["task_id"], "already": True}
