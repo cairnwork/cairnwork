@@ -165,6 +165,7 @@ def test_any_difference_between_clone_and_candidate_is_rejected(repo, attempt, l
     if leftover == "untracked":
         (clone / "notes.txt").write_text("left\n")
     elif leftover == "ignored":
+        (clone / ".git" / "info").mkdir(exist_ok=True)  # no git templates in the clone (#417)
         (clone / ".git" / "info" / "exclude").write_text("secret.txt\n")
         (clone / "secret.txt").write_text("hidden\n")
     elif leftover in ("skip-worktree", "assume-unchanged"):
@@ -193,7 +194,9 @@ def test_worker_config_commands_never_run(repo, attempt, tmp_path):
     marker = tmp_path / "worker-code-ran"
     git(clone, "config", "core.fsmonitor", f"touch {marker}")
     git(clone, "config", "filter.evil.clean", f"touch {marker}; cat")
+    (clone / ".git" / "info").mkdir(exist_ok=True)  # no git templates in the clone (#417)
     (clone / ".git" / "info" / "attributes").write_text("* filter=evil\n")
+    (clone / ".git" / "hooks").mkdir(exist_ok=True)
     for name in ("post-checkout", "pre-commit", "reference-transaction"):
         hook = clone / ".git" / "hooks" / name
         hook.write_text(f"#!/bin/sh\ntouch {marker}\n")
