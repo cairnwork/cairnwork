@@ -41,6 +41,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from cairnwork_sandbox.backend import Policy, SandboxError
+from cairnwork_sandbox.bwrap_inner import inner_link_masks
 from cairnwork_sandbox.bwrap_links import mask_target
 from cairnwork_sandbox.bwrap_reach import account_may_traverse
 from cairnwork_sandbox.shm import shm_flags, shm_unavailable_reason
@@ -235,8 +236,8 @@ def build_policy(
     # Mask only credential paths that exist (a bind over an absent path fails on the read-only
     # root, and an absent path leaks nothing) and, off the owner path, only those the account uid
     # can both reach and read. The policy is rebuilt per run, so one created later is masked next.
-    for rel in _home_cred_masks(real_home, owner=mask_home_credentials):  # #341, #378
-        flags += mask_target(f"{real_home}/{rel}", real_home, writes, reads, _TOO_BROAD, _safe)
+    masks, mask_notes = _credential_masks(real_home, mask_home_credentials, writes, reads)
+    flags += masks
     # Mask root-equivalent daemon sockets (Docker/Podman/containerd): a read-only root bind
     # does not stop connect() to a pathname socket, and no network namespace covers it.
     # Bind over the canonical path (realpath collapses the /var/run -> /run symlink and the
@@ -254,8 +255,23 @@ def build_policy(
         flags += ["--tmpfs", _safe(socket_dir)]
     # Surfaced by the verifier run (Policy.notes), not written into the hashed policy text.
     reason = shm_unavailable_reason(bwrap_path() or "")
-    notes = (f"{SHM_NOTE_PREFIX}{reason}",) if reason else ()
+    notes = ((f"{SHM_NOTE_PREFIX}{reason}",) if reason else ()) + mask_notes
     return Policy("\n".join(flags) + "\n", notes)
+
+
+def _credential_masks(
+    home: str, owner: bool, writes: list[str], reads: list[str]
+) -> tuple[list[str], tuple[str, ...]]:
+    """The credential masks under ``home`` (#341, #378), then the outside targets of the links in
+    the credential directories (#377), all through the one ``mask_target`` rule."""
+
+    def mask(path: str) -> list[str]:
+        return mask_target(path, home, writes, reads, _TOO_BROAD, _safe)
+
+    flags = [flag for rel in _home_cred_masks(home, owner) for flag in mask(f"{home}/{rel}")]
+    cred_dirs = [f"{home}/{rel}" for rel in _CRED_DIRS]
+    inner, notes = inner_link_masks(cred_dirs, owner, flags, mask, writes + reads)
+    return flags + inner, notes
 
 
 def _home_cred_masks(real_home: str, owner: bool) -> list[str]:

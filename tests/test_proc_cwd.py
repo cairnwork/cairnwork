@@ -178,29 +178,140 @@ def test_an_empty_argv0_does_not_hide_a_readable_environment():
 
 
 @macos
-def test_an_ambiguous_platform_binary_is_left_alone(tmp_path):
-    # Codex r2 of #301: XNU hides a platform binary's environment by skipping the NULs after
-    # the exec path, so with an empty argv[0] its first entry shows through. The buffer then
-    # looks like the readable one-entry case above, which must never be killed, so this one is
-    # not counted withheld and not killed either: a known gap (see environment_withheld).
+def test_an_empty_argv0_platform_binary_is_tied_by_its_cwd(tmp_path):
+    # Codex r2 of #301 (#310): XNU hides a platform binary's environment by skipping the NULs
+    # after the exec path, so with an empty argv[0] one entry shows through and the buffer looks
+    # like the readable one-entry case above. Its code-signing status says it is a platform
+    # binary, so it counts as withheld and is killed by its directory.
     where = os.path.realpath(tmp_path)
     child = subprocess.Popen(  # noqa: S603 - fixed argv
         ["", "30"], executable="/bin/sleep", env={"A": "1", "B": "2"}, cwd=where
     )
     try:
+        raw = None
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:  # wait for the exec: only the exec path is looked at
             raw = proc_cwd._sysctl((1, 49, child.pid), proc_cwd._argmax() or 0)
             if raw and raw[4:].startswith(b"/bin/sleep\0"):
                 break
             time.sleep(0.05)
-        assert proc_cwd.environment_withheld(child.pid) is False
+        del raw  # keep the buffer out of pytest -l output on failure
+        if (
+            proc_cwd._environment_count(
+                proc_cwd._sysctl((1, 49, child.pid), proc_cwd._argmax() or 0) or b""
+            )
+            != 1
+        ):
+            pytest.skip("this macOS does not let one entry through for an empty argv[0]")
+        assert proc_cwd._platform_binary(child.pid) is True
+        assert proc_cwd.environment_withheld(child.pid) is True
         row = (child.pid, child.pid, os.getuid(), set())
-        assert proc_cwd.kill_withheld_in([row], (where,), os.getuid()) == ([], [], 0)
+        assert proc_cwd.kill_withheld_in([row], (where,), os.getuid()) == ([child.pid], [], 0)
+        assert child.wait(timeout=10) == -9
+    finally:
+        if child.poll() is None:
+            child.kill()
+        child.wait()
+
+
+@macos
+def test_a_readable_one_entry_environment_is_not_a_platform_binary():
+    exe = os.path.realpath(sys.executable)  # not an Apple platform binary
+    child = subprocess.Popen(  # noqa: S603 - fixed argv
+        [exe, "-c", "import time; print('up', flush=True); time.sleep(30)"],
+        env={"DUMMY": "1"},
+        stdout=subprocess.PIPE,
+    )
+    try:
+        assert child.stdout is not None
+        assert child.stdout.readline() == b"up\n"
+        assert proc_cwd._platform_binary(child.pid) is False
+        assert proc_cwd.environment_withheld(child.pid) is False
+    finally:
+        child.kill()
+        child.wait()
+
+
+def test_one_shown_entry_follows_the_code_signing_status(monkeypatch):
+    raw = _procargs([b"x"], [b"A=1"])
+    monkeypatch.setattr(proc_cwd, "_MACOS", True)
+    monkeypatch.setattr(proc_cwd, "_argmax", lambda: 4096)
+    monkeypatch.setattr(proc_cwd, "_sysctl", lambda names, size: raw)
+    for status, answer in ((True, True), (False, False), (None, None)):
+        monkeypatch.setattr(proc_cwd, "_platform_binary", lambda pid, s=status: s)
+        assert proc_cwd.environment_withheld(12345) is answer
+    monkeypatch.setattr(proc_cwd, "_platform_binary", lambda pid: True)  # only one entry asks
+    monkeypatch.setattr(
+        proc_cwd, "_sysctl", lambda names, size: _procargs([b"x"], [b"A=1", b"B=2"])
+    )
+    assert proc_cwd.environment_withheld(12345) is False
+
+
+def _sleeper():
+    return subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])  # noqa: S603
+
+
+@pytest.mark.parametrize("why", ["another uid", "not macOS"])
+def test_kill_withheld_in_keeps_its_own_guards(tmp_path, monkeypatch, why):
+    # Defence in depth (#310): with both readers saying "withheld, inside", the uid and the
+    # platform checks alone keep the process alive.
+    monkeypatch.setattr(proc_cwd, "environment_withheld", lambda pid: True)
+    monkeypatch.setattr(proc_cwd, "cwd_of", lambda pid: str(tmp_path))
+    child = _sleeper()
+    try:
+        uid = os.getuid()
+        if why == "another uid":
+            monkeypatch.setattr(proc_cwd, "_MACOS", True)
+            row = (child.pid, child.pid, uid + 1, set())
+        else:
+            monkeypatch.setattr(proc_cwd, "_MACOS", False)
+            row = (child.pid, child.pid, uid, set())
+        assert proc_cwd.kill_withheld_in([row], (str(tmp_path),), uid) == ([], [], 0)
         assert child.poll() is None
     finally:
         child.kill()
         child.wait()
+
+
+@pytest.mark.parametrize(
+    ("first", "second"), [(b"first start", b"another start"), (b"first start", None), (None, None)]
+)
+def test_a_pid_whose_start_time_changed_is_not_killed(tmp_path, monkeypatch, first, second):
+    # Codex r1 of #420: the pid may be reused between the reads and the kill. The start time is
+    # read before and after; a changed or unreadable one leaves the process alone.
+    monkeypatch.setattr(proc_cwd, "_MACOS", True)
+    monkeypatch.setattr(proc_cwd, "environment_withheld", lambda pid: True)
+    monkeypatch.setattr(proc_cwd, "cwd_of", lambda pid: str(tmp_path))
+    child = _sleeper()
+    answers = iter([first, second])
+    monkeypatch.setattr(proc_cwd, "_started", lambda pid: next(answers))
+    try:
+        row = (child.pid, child.pid, os.getuid(), set())
+        assert proc_cwd.kill_withheld_in([row], (str(tmp_path),), os.getuid()) == ([], [], 0)
+        assert child.poll() is None
+    finally:
+        child.kill()
+        child.wait()
+
+
+@macos
+def test_the_start_time_of_a_live_process_is_read_and_stable():
+    first = proc_cwd._started(os.getpid())
+    assert first is not None and first != bytes(len(first))
+    assert proc_cwd._started(os.getpid()) == first
+    assert proc_cwd._started(_dead_pid()) is None
+
+
+@pytest.mark.parametrize("where", ["outside", "the root itself"])
+def test_attempt_dirs_keep_only_entries_strictly_inside_the_root(tmp_path, monkeypatch, where):
+    root = tmp_path / "runs"
+    _dirs(root, ATTEMPT)
+    base = os.path.realpath(root)
+    entry = os.path.join(base, ATTEMPT)
+    target = str(tmp_path / "elsewhere") if where == "outside" else base
+    real = os.path.realpath
+    monkeypatch.setattr(proc_cwd.os.path, "realpath", lambda p: target if p == entry else real(p))
+    assert proc_cwd.attempt_dirs([root], ATTEMPT) == ()
 
 
 @macos
@@ -263,7 +374,7 @@ def test_a_crashed_blackbox_runs_cwd_only_leftover_is_killed(tmp_path):
     root = tmp_path / "runs"
     _dirs(root, f"{ATTEMPT}-v-vbb")
     where = os.path.realpath(root / f"{ATTEMPT}-v-vbb")
-    child = subprocess.Popen(["/bin/sleep", "30"], env={"A": "1"}, cwd=where)  # noqa: S603
+    child = subprocess.Popen(["/bin/sleep", "30"], env={"A": "1", "B": "2"}, cwd=where)  # noqa: S603
     try:
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:  # wait for the exec

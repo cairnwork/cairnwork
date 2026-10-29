@@ -321,6 +321,8 @@ def test_only_the_blackbox_policy_changes(tmp_path):
     closed = seatbelt.BACKEND.policy(roots, writes, allow_ipc=False).text
     assert "ipc-posix-sem" not in closed and "(deny ipc*)" in closed
     assert closed.replace("(deny ipc*)\n", "") == default.replace(seatbelt.posix_sem_rule(), "")
-    linux = bwrap.BACKEND.policy(roots, writes, allow_ipc=False).text
-    assert linux == bwrap.BACKEND.policy(roots, writes).text
+    home = tmp_path / "home"  # not the host's: #377 scans its credential dirs for links
+    home.mkdir()
+    linux = bwrap.BACKEND.policy(roots, writes, home=home, allow_ipc=False).text
+    assert linux == bwrap.BACKEND.policy(roots, writes, home=home).text
     assert {"--unshare-all", "--dev"} <= set(linux.splitlines())
