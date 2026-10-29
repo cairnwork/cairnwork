@@ -4,6 +4,7 @@ import subprocess
 import sys
 
 import pytest
+from xdist_groups import XDIST_GROUP_OF
 
 pytest_plugins = ["verify_helpers"]
 
@@ -29,7 +30,7 @@ def tamper_stored_request(db, mutate):
 def repo(tmp_path):
     path = tmp_path / "repo"
     path.mkdir()
-    git(path, "init", "-q", "-b", "main")
+    git(path, "init", "-q", "-b", "main", "--template=")  # no hook samples: ~20k fewer files (#417)
     git(path, "config", "user.email", "test@example.invalid")
     git(path, "config", "user.name", "test")
     (path / "src").mkdir()
@@ -115,6 +116,14 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if "sandbox" in item.keywords:
             item.add_marker(skip)
+
+
+def pytest_itemcollected(item):
+    """Mark the files of xdist_groups.XDIST_GROUPS (#406); xdist reads the mark later, in its own
+    pytest_collection_modifyitems."""
+    group = XDIST_GROUP_OF.get(item.path.name)
+    if group is not None:
+        item.add_marker(pytest.mark.xdist_group(group))
 
 
 @pytest.fixture(autouse=True)
