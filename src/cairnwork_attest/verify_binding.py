@@ -183,7 +183,7 @@ def verify_bound(
     assurance = _assurance(full, pinned=policy is not None)
     # #303: what the verdict rests on, already checked against Core's required ids (pin_problem)
     assurance["protection"] = binding_extras.recorded_protection(binding)
-    assurance["blackbox_checks"] = "pinned" if "blackbox_checks" in (policy or {}) else "unpinned"
+    assurance["blackbox_checks"] = binding_extras.checks_assurance(policy)
     return VerifyResult(ok=True, code="OK", statement=statement, assurance=assurance)
 
 
