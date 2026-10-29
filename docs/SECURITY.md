@@ -173,7 +173,10 @@ ids `blackbox-commitment` prints with it (#312): the request's `blackbox:*` ids 
 those, each observed only as PASS (`BLACKBOX_CHECKS_MISSING`). Under either policy shape a
 `blackbox:*` id named twice in the request, or observed without being required, refuses too (#373:
 the current producer builds both from one declaration, so either is an inconsistent request;
-several PASS observations of one required id are still accepted). The receiver must copy both
+several PASS observations of one required id are still accepted). With any policy or none, an
+observation of any id Core did not require that is not PASS refuses (`UNREQUIRED_OBSERVATION_FAILED`,
+#413: a FAIL the receiver was not asked about is still evidence that something failed; no producer
+sends one). The receiver must copy both
 fields unchanged: a hand-shortened `blackbox_checks` accepts receipts that skip the dropped checks,
 and nothing here can tell without the declaration. A policy written before #312 pins
 the commitment alone and is accepted with a weaker check: at least one `blackbox:*` id, each PASS.

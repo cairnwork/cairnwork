@@ -111,7 +111,8 @@ def pin_problem(ctx: Any) -> VerifyResult | None:
     request's required verifier ids give (only the ``_macos`` grade, which the ids cannot show, is
     the producer's word), and a level above ``same_process_only`` needs a blackbox commitment in
     the binding (PROTECTION_UNCOMMITTED): the ``blackbox:*`` ids then stand for a declaration the
-    receiver can pin, never for the signer's naming alone."""
+    receiver can pin, never for the signer's naming alone. Last, under any policy or none, no
+    observation of an id Core did not require may be other than PASS (#413)."""
     policy, binding = ctx.policy, ctx.binding
     contract = ctx.request.get("acceptance_contract")
     ids = contract.get("required_verifier_ids") if isinstance(contract, dict) else None
@@ -128,9 +129,11 @@ def pin_problem(ctx: Any) -> VerifyResult | None:
             recorded = binding.get(extra.key, extra.empty)
             if not extra.satisfies(policy[extra.key], recorded):
                 return _fail(extra.mismatch, f"the receipt records {extra.key} {recorded!r}")
-    if policy is None or not policy.get("blackbox_commitment"):
-        return None
-    return _checks_problem(policy, ids or [], ctx.request)  # a list: the label check passed
+    if policy is not None and policy.get("blackbox_commitment"):
+        problem = _checks_problem(policy, ids or [], ctx.request)  # a list: label check passed
+        if problem is not None:  # a failed VerifyResult is falsy: never `problem or ...`
+            return problem
+    return _unrequired_problem(ids or [], ctx.request)
 
 
 def _checks_problem(
@@ -158,6 +161,25 @@ def _checks_problem(
         detail = f"Core required {sorted(got)}, the policy {sorted(want) or 'one or more'}"
         detail += f"; not PASS: {unpassed}" + f"; not required: {extra}" * bool(extra)
         return _fail("BLACKBOX_CHECKS_MISSING", detail + f"; required twice: {twice}" * bool(twice))
+    return None
+
+
+def _unrequired_problem(ids: list[Any], request: Mapping[str, Any]) -> VerifyResult | None:
+    """#413: an observation of an id Core did not require is not part of its verdict, but one that
+    is not PASS is still evidence that something failed, so it refuses. No producer sends one
+    (pipeline_judge._contract builds the ids and the observations from the same runs and checks).
+    A PASS one stays accepted here; a ``blackbox:*`` one refuses under a commitment pin (#373)."""
+    evidence = request.get("evidence_bundle")
+    observations = evidence.get("observations") if isinstance(evidence, dict) else None
+    bad = sorted(
+        str(obs.get("verifier_id"))
+        for obs in (observations if isinstance(observations, list) else [])
+        if isinstance(obs, dict)
+        and obs.get("verifier_id") not in ids
+        and obs.get("status") != "PASS"
+    )
+    if bad:
+        return _fail("UNREQUIRED_OBSERVATION_FAILED", f"observed not PASS, not required: {bad}")
     return None
 
 

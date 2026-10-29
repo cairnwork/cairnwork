@@ -338,7 +338,9 @@ Checks run in this order and the first failure is reported:
    (`UNPROTECTED`); after a non-empty pinned `blackbox_commitment`, the request's `blackbox:*`
    required ids must be `blackbox:<id>` for exactly the policy's `blackbox_checks` (at least one
    when the policy has none), each named once and observed only as PASS, and no `blackbox:*`
-   observation of an id Core did not require (`BLACKBOX_CHECKS_MISSING`)
+   observation of an id Core did not require (`BLACKBOX_CHECKS_MISSING`); last, with any policy
+   or none, every observation of an id Core did not require must be PASS
+   (`UNREQUIRED_OBSERVATION_FAILED`, #413)
 8. tree (full: `TREE_MISMATCH`, `OVERLAY_UNSUPPORTED_ENTRY`; `REBUILD_FAILED` when git cannot
    rebuild the tree in the receiver's repository, e.g. it is read-only, which says nothing about
    the receipt) or head-tree (confidential: `HEAD_TREE_MISMATCH`, `OVERLAY_UNSUPPORTED_ENTRY`)
