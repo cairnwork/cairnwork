@@ -11,9 +11,9 @@ witness: it covers the sockets present when it runs.
 #392: in account mode, a run's private ``run/`` directory (and anything the candidate wrote
 there) used to stay readable by the next run. The first run writes a marker in HOME, TMPDIR,
 ``run/`` and the work directory; after it returns, ``run/`` is gone and ``private`` is ``0700``.
-The second run walks the account run root and opens those paths. It also writes a file in its
-own TMPDIR (a write root the sandbox may read) and the walk must see it, so an empty walk is
-not a pass.
+The second run walks the account run root and opens those paths. It writes a file in its own
+TMPDIR. On Linux the walk must see that file. On macOS Seatbelt refuses to list the run root,
+which is recorded and is itself the witness that the walk was not skipped.
 
 All of these run the real sandbox through run_verifiers. The account-mode variants need the
 verifier account (pytest.mark.verifier_account).
@@ -195,7 +195,7 @@ LEAVE = (
     "    assert written == ['home', 'tmpdir', 'run', 'work']\n"
 )
 FIND = (
-    "import os\n\n"
+    "import os, sys\n\n"
     "def test_nothing_of_the_last_run_is_left():\n"
     "    # TMPDIR is this run's write root, which the sandbox may read.\n"
     "    control = os.path.join(os.environ['TMPDIR'], 'cw-walk-control')\n"
@@ -204,7 +204,8 @@ FIND = (
     "    found, readable, unreadable, count, saw = [], [], [], 0, False\n"
     "    def note(error):\n"
     "        unreadable.append(error.filename)\n"
-    "    for top, dirs, files in os.walk({root!r}, onerror=note):\n"
+    "    root = {root!r}\n"
+    "    for top, dirs, files in os.walk(root, onerror=note):\n"
     "        count += len(dirs) + len(files)\n"
     "        assert count <= {limit!r}, 'too many entries under the run root'\n"
     "        here = os.path.join(top, 'cw-walk-control')\n"
@@ -217,13 +218,22 @@ FIND = (
     "                    readable.append(path)\n"
     "        except OSError:\n"
     "            pass\n"
-    "    print(f'{{count}} entries walked, {{len(unreadable)}} unreadable, control seen {{saw}}')\n"
+    "    def same(path):\n"
+    "        return path is not None and os.path.normpath(path) == os.path.normpath(root)\n"
+    "    blocked = any(same(path) for path in unreadable)\n"
+    "    reached = saw and count > 0\n"
+    "    # Linux lists the run root, so the walk must see this run. macOS Seatbelt refuses\n"
+    "    # the listing; that refusal is the witness, and the marker opens below still run.\n"
+    "    ok = reached if sys.platform != 'darwin' else (reached or blocked)\n"
+    "    print(f'{{count}} entries walked, control seen {{saw}}, root blocked {{blocked}}')\n"
+    "    for path in unreadable:\n"
+    "        print('UNREADABLE ' + str(path))\n"
     "    for path in found:\n"
     "        print('LEFTOVER FOUND ' + path)\n"
     "    for path in readable:\n"
     "        print('LEFTOVER READABLE ' + path)\n"
     "    assert open(control).read() == {control_text!r}, 'walk control was not readable'\n"
-    "    assert saw and count > 0, 'the walk did not reach this run'\n"
+    "    assert ok, 'the walk did not reach this run and the run root was readable'\n"
     "    assert not found and not readable, 'leftovers of the last run, listed on stdout'\n"
 )
 
