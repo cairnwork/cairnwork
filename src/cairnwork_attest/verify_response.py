@@ -87,7 +87,10 @@ def _check_response_verified(
             )
 
     request = predicate["request"]
-    binding_problem = response_binding_problem(request, response, resp_core_id)
+    try:  # it hashes Core's manifest and compares the identity again, both recursively
+        binding_problem = response_binding_problem(request, response, resp_core_id)
+    except RecursionError:
+        binding_problem = "a value is nested too deeply to compare"
     if binding_problem is not None:
         return _fail("RESPONSE_NOT_VERIFIED", f"response binding problem: {binding_problem}")
 
