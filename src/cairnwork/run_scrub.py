@@ -12,11 +12,13 @@ lock, so it only uses ``close_private``.
 Nothing here is deleted unless ``lstat`` shows ``private`` and ``run`` are real directories, their
 ``realpath`` is strictly inside the run root, and the private directory's name is one
 ``mkdtemp`` makes (``<checkout>.<8 chars>``). A symlink is not removed and not followed.
-``shutil.rmtree`` is used only where ``avoids_symlink_attacks`` is true. A failure of
-``close_private`` never raises: the verdict is already decided, and the next account run refuses
-to start while the residue is still there. That refusal names the path and how the owner cleans
-it up by hand. ``private`` is chmod'd to 0700 only after ``run/`` is actually gone: locking it
-sooner would stop the account from entering, and the printed recovery steps would not work.
+``shutil.rmtree`` is used only where ``avoids_symlink_attacks`` is true. An expected failure of
+``close_private`` (``OSError``, a subprocess error, ``VerifierAccountError``) does not raise: the
+verdict is already decided, and the next account run refuses to start while the residue is still
+there. That refusal names the path and how the owner cleans it up by hand. Any other exception is
+a bug and propagates on purpose, replacing the verdict (fail-closed). ``private`` is chmod'd to
+0700 only after ``run/`` is actually gone: locking it sooner would stop the account from
+entering, and the printed recovery steps would not work.
 Inode quotas are a separate issue.
 
 Who can write which parent, after ``share_run`` (this is why the check-then-delete gap is not
@@ -29,10 +31,15 @@ unlink only names it owns. The owner's ``home`` and ``tmp`` stay. Those inner sy
 followed (``rmtree`` only when ``avoids_symlink_attacks``). Only the owner can retarget
 ``private`` or ``run``, and the owner is this process, holding the account lock.
 
-A candidate can ``chflags`` ``UF_IMMUTABLE`` or ``UF_APPEND`` on its own files under HOME or
-TMPDIR. Only that account (or root) can clear them; the owner gets EPERM. On macOS the account
-therefore runs ``chflags -R nouchg,nouappnd`` and ``chmod -R u+rwx`` through the sandbox binary
-sudoers already allows, before ``rm``. Clearing only ``nouchg`` leaves append-only files.
+A candidate owns its files under HOME and TMPDIR, so on macOS it can set ``UF_IMMUTABLE`` or
+``UF_APPEND``, an ACL that denies delete, or one that denies even ``readsecurity`` (then ``lstat``
+fails for the owner of the file too). Only that account (or root) can undo them. The account
+therefore runs ``_UNLOCK`` through the sandbox binary sudoers already allows, before ``rm``
+(Issue #437). ``chflags -R`` and ``chmod -R`` stat each entry first and stop at a directory they
+cannot read, so nested locks of different kinds defeat any fixed order of them, and Apple's
+``chmod -R -N`` clears a symlink's target. Seatbelt cannot stop the locks being set: denying
+``file-write-flags`` breaks ``shutil.copy2``, and an ACL given at creation (``mkdirx_np``,
+``openx_np``) passes a ``file-write-acl`` deny.
 """
 
 from __future__ import annotations
@@ -89,25 +96,114 @@ def _shown(path: Path) -> str:
 _SUDO = "/usr/bin/sudo"
 _ALLOW_ALL = "(version 1) (allow default)"
 
+# Run by the verifier python as the account (macOS): argv is run, then the entry, depth and second
+# limits. One pre-order pass. Per entry, before relying on lstat: clear its ACL (setattrlist with
+# FSOPT_NOFOLLOW: the entry itself, a symlink too, never a target; no open, so a denied read or
+# readsecurity does not stop it) and uchg/uappnd (the chflags syscall needs no stat). A directory
+# on run's device gets u+rwx and is entered through an O_NOFOLLOW descriptor, so names stay
+# relative (no PATH_MAX). A listing reads at most the names left in the budget plus one and closes
+# its descriptor before the walk goes on. At a limit (entries listed, depth, or the clock, checked
+# before the first listing too) it exits 1 and leaves the rest: rm fails, the scrub refuses.
+_UNLOCK_SOURCE = """\
+import ctypes, itertools, os, stat, struct, sys, time
+top, max_nodes, max_depth, seconds = sys.argv[1], *map(int, sys.argv[2:5])
+deadline, listed = time.monotonic() + seconds, 0
+LOCKS = stat.UF_IMMUTABLE | stat.UF_APPEND
+DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+lib = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
+lib.setattrlist.argtypes = (ctypes.c_char_p,) * 3 + (ctypes.c_size_t, ctypes.c_uint32)
+ATTRS = struct.pack("=HHIIIII", 5, 0, 0x400000, 0, 0, 0, 0)
+FILESEC = struct.pack("=I16s16sII", 0x012CC16D, bytes(16), bytes(16), 0xFFFFFFFF, 0)
+NO_ACL = struct.pack("=iI", 8, len(FILESEC)) + FILESEC
+def stop():
+    sys.exit("unlock: limit reached, the rest is left in place")
+def attempt(call, *args, **kwargs):
+    try:
+        call(*args, **kwargs)
+    except OSError:
+        pass
+def no_acl(name):
+    lib.setattrlist(os.fsencode(name), ATTRS, NO_ACL, len(NO_ACL), 1)
+def unlock(name):
+    no_acl(name)
+    try:
+        info = os.lstat(name)
+    except OSError:
+        attempt(os.lchflags, name, 0)
+        no_acl(name)
+        try:
+            info = os.lstat(name)
+        except OSError:
+            return None
+    if info.st_flags & LOCKS:
+        attempt(os.lchflags, name, info.st_flags & ~LOCKS)
+        no_acl(name)
+    return info
+def opened(name, dev):
+    global listed
+    if time.monotonic() >= deadline:
+        stop()
+    fd = os.open(name, DIR)
+    try:
+        if os.fstat(fd).st_dev != dev:
+            return None
+        with os.scandir(fd) as entries:
+            names = [entry.name for entry in itertools.islice(entries, max_nodes - listed + 1)]
+        listed += len(names)
+        if listed > max_nodes:
+            stop()
+        os.fchdir(fd)
+    finally:
+        os.close(fd)
+    return iter(names)
+dev = os.stat(top, follow_symlinks=False).st_dev
+stack = [opened(top, dev)]
+while stack:
+    name = next(stack[-1], None)
+    if name is None:
+        stack.pop()
+        if stack:
+            os.chdir("..")
+        continue
+    if len(stack) > max_depth or time.monotonic() >= deadline:
+        stop()
+    info = unlock(name)
+    if info is None or not stat.S_ISDIR(info.st_mode) or info.st_dev != dev:
+        continue
+    attempt(os.chmod, name, stat.S_IMODE(info.st_mode) | 0o700, follow_symlinks=False)
+    try:
+        child = opened(name, dev)
+    except OSError:
+        child = None
+    if child is not None:
+        stack.append(child)
+"""
+_UNLOCK = f"exec({_UNLOCK_SOURCE!r})"  # one line, so the printed recovery step is one line
+_UNLOCK_LIMITS = (500_000, 400, 45)  # entries, depth, seconds: under remove()'s 60 s timeout
 
-def account_delete_argv(user: str, path: str, wrap) -> list[list[str]]:
+
+def _unlock_argv(python: str, path: str) -> list[str]:
+    """macOS: ``_UNLOCK`` by ``python`` (isolated). Linux: ``chmod -R u+rwx``, enough there."""
+    if sys.platform == "darwin":
+        return [python, "-I", "-c", _UNLOCK, path, *map(str, _UNLOCK_LIMITS)]
+    return ["/bin/chmod", "-R", "u+rwx", "--", path]
+
+
+def account_delete_argv(user: str, path: str, wrap, python: str) -> list[list[str]]:
     """Commands as ``user``, in order, before the owner's rmtree.
 
-    ``wrap`` is the sandbox binary with an allow-all policy (what sudoers permits). On macOS
-    ``chflags -R nouchg,nouappnd`` is first: immutable and append-only belong to the account, and
-    the owner's ``chflags`` returns EPERM. ``chmod -R u+rwx`` is the same identity. ``rm`` is in
-    sudoers. Clearing only ``nouchg`` leaves append-only names that ``rm`` cannot unlink.
+    ``wrap`` is the sandbox binary with an allow-all policy (what sudoers permits); ``python`` is
+    the verifier python (owner-owned, the account can only run it). The flags and ACLs that stop
+    ``rm`` belong to the account: the owner gets EPERM. ``rm`` is in sudoers.
     """
 
     def as_account(argv: list[str]) -> list[str]:
         return [_SUDO, "-n", "-u", user, "--", *wrap(argv)]
 
-    commands: list[list[str]] = []
-    if sys.platform == "darwin":
-        commands.append(as_account(["/usr/bin/chflags", "-R", "nouchg,nouappnd", "--", path]))
-    commands.append(as_account(["/bin/chmod", "-R", "u+rwx", "--", path]))
-    commands.append([_SUDO, "-n", "-u", user, "--", "/bin/rm", "-rf", "--", path])
-    return commands
+    return [
+        as_account(_unlock_argv(python, path)),
+        [_SUDO, "-n", "-u", user, "--", "/bin/rm", "-rf", "--", path],
+    ]
 
 
 def _as_account_shell(user: str, argv: list[str]) -> str:
@@ -121,27 +217,26 @@ def _as_account_shell(user: str, argv: list[str]) -> str:
     return f"as the verifier account: sudo -n -u {shlex.quote(user)} -- {tool}"
 
 
-def _recovery_steps(user: str, run: Path, private: Path) -> str:
+def _recovery_steps(user: str, python: str, run: Path, private: Path) -> str:
     """Who runs each step. Joined with ``;``, not ``&&``, and no period after the last command."""
     q_run, q_priv = shlex.quote(str(run)), shlex.quote(str(private))
-    steps = []
-    if sys.platform == "darwin":
-        flags = ["/usr/bin/chflags", "-R", "nouchg,nouappnd", "--", str(run)]
-        steps.append(_as_account_shell(user, flags))
-    steps.append(_as_account_shell(user, ["/bin/chmod", "-R", "u+rwx", "--", str(run)]))
+    steps = [_as_account_shell(user, _unlock_argv(python, str(run)))]
     account_rm = f"sudo -n -u {shlex.quote(user)} -- /bin/rm -rf -- {q_run}"
     steps.append(f"as the verifier account: {account_rm}")
+    if sys.platform == "darwin":  # past a limit only root clears it: root ignores ACLs and modes
+        root_rm = f"/usr/bin/chflags -R -- nouchg,nouappnd {q_run}; /bin/rm -rfx -- {q_run}"
+        steps.append(f"as root, only if {q_run} is still there (a limit was reached): {root_rm}")
     steps.append(f"as the owner: rm -rf -- {q_run}")
     steps.append(f"as the owner: chmod 700 {q_priv}")
     return "; ".join(steps)
 
 
-def _hint(user: str, path: Path) -> str:
+def _hint(user: str, python: str, path: Path) -> str:
     """Recovery while ``private`` is still group-traversable (0750). Not for the run root itself."""
     private = path.parent if path.name == "run" else path
     run = private / "run"
     q_run, q_priv = shlex.quote(str(run)), shlex.quote(str(private))
-    steps = _recovery_steps(user, run, private)
+    steps = _recovery_steps(user, python, run, private)
     return (
         f"leftover {_shown(path)} blocks the next account run. "
         f"Clean it by hand without following links: ls -ld {q_priv} {q_run}. "
@@ -180,7 +275,8 @@ def _account_remove(account, run: Path) -> None:
 
 
 def _delete_run(account, run: Path) -> None:
-    """``account.remove`` then the owner's ``rmtree``. Never follows a symlink; never raises.
+    """``account.remove`` then the owner's ``rmtree``. Never follows a symlink; an expected
+    failure of ``account.remove`` is an ALERT, not raised.
 
     Refuses outright when ``rmtree`` would follow symlinks. The account cannot swap ``run`` for a
     symlink in the gap after this check: it cannot write ``private`` (0750, owner) or ``run_root``
@@ -200,10 +296,12 @@ def _delete_run(account, run: Path) -> None:
 
 
 def close_private(private: Path, account) -> None:
-    """Delete ``private/run`` and chmod ``private`` to 0700. Never raises.
+    """Delete ``private/run`` and chmod ``private`` to 0700. Expected failures do not raise.
 
     A symlink, a path outside the run root or an unexpected name is left in place (stderr
-    ALERT). The verdict already stands. Owner mode passes ``account=None``.
+    ALERT). The verdict already stands. Owner mode passes ``account=None``. An exception other
+    than those ``_account_remove`` and this function catch is a bug: it propagates and replaces
+    the verdict, and run/ stays for the next scrub to refuse (see the module docstring).
     """
     try:
         root = private.parent if account is None else account.run_root
@@ -261,7 +359,7 @@ def _seal(private: Path, root: Path, stuck: list[Path]) -> None:
 def _refuse(account, stuck: list[Path]) -> str:
     shown = ", ".join(_shown(path) for path in stuck[:8])
     extra = f" (+{len(stuck) - 8} more)" if len(stuck) > 8 else ""
-    return f"{shown}{extra}. {_hint(account.user, stuck[0])}"
+    return f"{shown}{extra}. {_hint(account.user, account.python, stuck[0])}"
 
 
 def stale_run_error(account) -> str | None:

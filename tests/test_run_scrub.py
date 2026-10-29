@@ -30,6 +30,7 @@ class _Account:
     def __init__(self, root):
         self.user = "cairnwork-verifier"
         self.run_root = root
+        self.python = "/srv/cw/venv/bin/python"  # the verifier python, named in the recovery steps
         self.removed = []
 
     def remove(self, path):
@@ -211,17 +212,16 @@ def test_both_deletes_fail_and_recovery_steps_quote_a_hostile_path(tmp_path, mon
     q_run, q_priv = shlex.quote(str(run)), shlex.quote(str(private))
     assert q_run != str(run)  # the path is hostile enough that quote changes it
     policy = shlex.quote("(version 1) (allow default)")
-    chflags = (
+    limits = " ".join(map(str, run_scrub._UNLOCK_LIMITS))
+    unlock = (
         f"as the verifier account: sudo -n -u cairnwork-verifier -- /usr/bin/sandbox-exec -p "
-        f"{policy} /usr/bin/chflags -R nouchg,nouappnd -- {q_run}"
+        f"{policy} /srv/cw/venv/bin/python -I -c {shlex.quote(run_scrub._UNLOCK)} {q_run} {limits}"
     )
-    chmod_account = (
-        f"as the verifier account: sudo -n -u cairnwork-verifier -- /usr/bin/sandbox-exec -p "
-        f"{policy} /bin/chmod -R u+rwx -- {q_run}"
-    )
+    root = f"/usr/bin/chflags -R -- nouchg,nouappnd {q_run}; /bin/rm -rfx -- {q_run}"
     steps = (
-        f"{chflags}; {chmod_account}; "
+        f"{unlock}; "
         f"as the verifier account: sudo -n -u cairnwork-verifier -- /bin/rm -rf -- {q_run}; "
+        f"as root, only if {q_run} is still there (a limit was reached): {root}; "
         f"as the owner: rm -rf -- {q_run}; "
         f"as the owner: chmod 700 {q_priv}"
     )
@@ -256,8 +256,9 @@ def test_rmtree_that_follows_symlinks_is_not_called(tmp_path, monkeypatch):
     assert (private / "run" / "marker").read_text() == "stay"
 
 
-def test_chflags_is_requested_as_the_account(tmp_path, monkeypatch):
-    """The stand-in records the argv scrub asks ``remove`` to run. chflags is that account."""
+def test_the_unlock_is_requested_as_the_account(tmp_path, monkeypatch):
+    """The stand-in records the argv scrub asks ``remove`` to run. The unlock (flags, ACLs and
+    modes, #437) is that account's, by the verifier python, before its rm."""
     import cairnwork.run_scrub as run_scrub
 
     monkeypatch.setattr(run_scrub.sys, "platform", "darwin")
@@ -276,20 +277,21 @@ def test_chflags_is_requested_as_the_account(tmp_path, monkeypatch):
             def wrap(argv: list[str]) -> list[str]:
                 return ["/usr/bin/sandbox-exec", "-p", "(version 1) (allow default)", *argv]
 
-            self.commands.extend(run_scrub.account_delete_argv(self.user, text, wrap))
+            self.commands.extend(run_scrub.account_delete_argv(self.user, text, wrap, self.python))
             raise VerifierAccountError("no sudo in this test")
 
     account: Any = _Recording(root)
     assert stale_run_error(account) is None  # owner rmtree still removes the real directory
-    chflags = next(argv for argv in account.commands if "/usr/bin/chflags" in argv)
+    unlock = next(argv for argv in account.commands if run_scrub._UNLOCK in argv)
     rm = next(argv for argv in account.commands if "/bin/rm" in argv)
-    assert chflags[:4] == ["/usr/bin/sudo", "-n", "-u", "cairnwork-verifier"]
-    assert "nouchg,nouappnd" in chflags and "nouchg" not in chflags
-    assert account.commands.index(chflags) < account.commands.index(rm)
+    assert unlock[:4] == ["/usr/bin/sudo", "-n", "-u", "cairnwork-verifier"]
+    assert unlock[8:11] == ["/srv/cw/venv/bin/python", "-I", "-c"]
+    assert account.commands.index(unlock) < account.commands.index(rm)
     assert not (private / "run").exists()
 
 
-def test_remove_clears_the_immutable_flag_as_the_account(tmp_path, monkeypatch):
+def test_remove_runs_the_unlock_as_the_account(tmp_path, monkeypatch):
+    import cairnwork.run_scrub as run_scrub
     import cairnwork.verifier_account as va
 
     monkeypatch.setattr(va.sys, "platform", "darwin")
@@ -303,9 +305,9 @@ def test_remove_clears_the_immutable_flag_as_the_account(tmp_path, monkeypatch):
     root = tmp_path / "cairn"
     (root / "runs" / "rid-v0.abcd1234").mkdir(parents=True)
     va.VerifierAccount(user="acct", root=root).remove(root / "runs" / "rid-v0.abcd1234")
-    chflags = next(argv for argv in ran if "/usr/bin/chflags" in argv)
-    assert chflags[:4] == ["/usr/bin/sudo", "-n", "-u", "acct"]
-    assert "nouchg,nouappnd" in chflags and "nouchg" not in chflags
+    unlock = next(argv for argv in ran if run_scrub._UNLOCK in argv)
+    assert unlock[:4] == ["/usr/bin/sudo", "-n", "-u", "acct"]
+    assert unlock[6] == str(root / "venv" / "bin" / "python")
 
 
 def test_an_unlistable_run_root_has_no_private_chmod(tmp_path, monkeypatch):
