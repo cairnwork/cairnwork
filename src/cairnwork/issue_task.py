@@ -25,6 +25,7 @@ import shlex
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import PurePath
 from typing import Any
 
 from cairnwork.protected_paths import (  # noqa: F401  (re-exported)
@@ -127,17 +128,18 @@ def adoptable(bound: Any, load_request: Callable[[str], Any], want: Mapping[str,
     asks for: title, instructions (the task text), allowed files, verifiers and test commit, else
     IssueRefused, so a client that pre-bound the key and card with its own files, verifiers or task
     text is never adopted. base_commit and repo may differ: main moves, the intake binds its mirror.
-    A FAILED row whose request cannot be read (the store failed after the bind) is IssueRefused
-    TASK_BOUND_REQUEST_UNREADABLE (#443): never adopted, never resubmitted under the same key.
+    A FAILED row whose stored request is missing or cut short (the store failed after the bind) is
+    IssueRefused TASK_BOUND_REQUEST_UNREADABLE (#443): never adopted, never resubmitted under the
+    same key. Any other read failure (config.json, EACCES, EIO) raises: the Issue stays queued.
     """
     if bound.card_hash != want["card_hash"]:
         return False
     try:
         request = load_request(bound.task_id)
-    except (OSError, ValueError) as exc:
-        if bound.status == "FAILED":
-            raise IssueRefused("TASK_BOUND_REQUEST_UNREADABLE", bound.task_id) from exc
-        raise
+    except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        if bound.status != "FAILED" or not _request_itself(exc, bound.task_id):
+            raise
+        raise IssueRefused("TASK_BOUND_REQUEST_UNREADABLE", bound.task_id) from exc
     expected = {
         "title": want["title"],
         "instructions": want["instructions"],
@@ -148,6 +150,15 @@ def adoptable(bound: Any, load_request: Callable[[str], Any], want: Mapping[str,
     differ = [name for name, value in expected.items() if getattr(request, name) != value]
     if differ:
         raise IssueRefused("TASK_BOUND_REQUEST_DIFFERS", f"{bound.task_id}: {', '.join(differ)}")
+    return True
+
+
+def _request_itself(exc: Exception, task_id: str) -> bool:
+    """Did the stored request itself fail, not another file? A missing file must be
+    requests/<task_id>.json; a decode error is the request's, as load_request decodes it before
+    reading config.json, whose own decode errors are IntakeRefused BAD_CONFIG."""
+    if isinstance(exc, FileNotFoundError):
+        return PurePath(str(exc.filename)).parts[-2:] == ("requests", f"{task_id}.json")
     return True
 
 
