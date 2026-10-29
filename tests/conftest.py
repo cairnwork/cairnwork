@@ -1,4 +1,5 @@
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -7,6 +8,59 @@ import pytest
 from xdist_groups import XDIST_GROUP_OF
 
 pytest_plugins = ["verify_helpers"]
+
+
+# Fewer files per test git repo (#417): the tests' own git init/clone (subprocesses included)
+# copy no template directory (hook samples, info/exclude, description) and keep no reflogs.
+# Code under test must see the production git environment. Git calls that inherit it:
+# - cairnwork.gitcmd run_git/run_git_bytes (every core git call) and
+#   experimental/bm25_hints/commit_source.py: drop every GIT_* variable themselves.
+# - cairnwork_attest.publish._git ({**os.environ, ...}): its tests (test_publish*.py,
+#   test_on_verified.py, test_check_run_gh.py) use the production_git_env fixture below.
+# - experimental/local_worker's git queries run under ``env -i``.
+# - experimental/bm25_hints/eval_hit_at_k.py (clone --shared, checkout; run by test_bm25_hints)
+#   only reads the checked-out files afterwards: no template, hook or reflog is involved.
+# - scripts/measure_p2p.py (clone, commit, push) and the scripts/drill_*.py demos (init, commit)
+#   are not run by any test; scripts/env_smoke.py (run by test_env_smoke) only reads refs/config.
+# No other src code runs git with the inherited environment.
+TEST_GIT_ENV = {
+    "GIT_TEMPLATE_DIR": "",  # empty: no template, as with --template=
+    "GIT_CONFIG_COUNT": "1",
+    "GIT_CONFIG_KEY_0": "core.logAllRefUpdates",
+    "GIT_CONFIG_VALUE_0": "false",
+}
+# Which of them conftest itself set, recorded in the environment: this module may be imported
+# twice (as pytest's conftest and by ``from conftest import``) and xdist workers inherit the
+# controller's environment, so only the first import in the process tree decides.
+INJECTED_VAR = "CW_TEST_GIT_ENV_INJECTED"
+
+
+def inject_test_git_env(environ) -> None:
+    """Set each test-only variable the environment does not already define, once."""
+    if INJECTED_VAR in environ:
+        return
+    keys = [] if "GIT_TEMPLATE_DIR" in environ else ["GIT_TEMPLATE_DIR"]
+    config = [k for k in TEST_GIT_ENV if k.startswith("GIT_CONFIG_")]
+    if not any(k in environ for k in config):  # never mix with an existing GIT_CONFIG_* set
+        keys += config
+    environ.update({k: TEST_GIT_ENV[k] for k in keys})
+    environ[INJECTED_VAR] = " ".join(keys)
+
+
+def injected_test_git_env(environ) -> list[str]:
+    """The variables conftest set that still hold its value."""
+    keys = environ.get(INJECTED_VAR, "").split()
+    return [k for k in keys if k in TEST_GIT_ENV and environ.get(k) == TEST_GIT_ENV[k]]
+
+
+inject_test_git_env(os.environ)
+
+
+@pytest.fixture
+def production_git_env(monkeypatch):
+    """Remove the variables conftest set, and only those."""
+    for key in injected_test_git_env(os.environ):
+        monkeypatch.delenv(key)
 
 
 def git(repo, *args):
