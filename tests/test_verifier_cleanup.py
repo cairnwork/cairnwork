@@ -9,6 +9,7 @@ import pytest
 
 import cairnwork.verifiers as verifiers
 from cairnwork.account_checkout import STAGE
+from cairnwork.run_scrub import close_private
 from cairnwork.verifier_account import VerifierAccountError
 
 
@@ -33,36 +34,43 @@ def test_a_failing_account_removal_keeps_the_verdict_and_the_owner_removes_its_p
 
 
 def test_a_failing_account_removal_of_scratch_keeps_the_verdict(tmp_path):
-    home, tmp = tmp_path / "home", tmp_path / "tmp"
-    for directory in (home, tmp):
-        directory.mkdir()
-        (directory / "f").write_text("x")
+    private = tmp_path / "id-v0.abcd1234"
+    run = private / "run"
+    (run / "home").mkdir(parents=True)
+    (run / "tmp").mkdir()
 
     class Failing:
+        user = "cairnwork-verifier"
+        run_root = tmp_path
+
         def remove(self, path):
             raise subprocess.TimeoutExpired("rm", 60)
 
-    verifiers._remove_scratch((home, tmp), Failing())
-    assert not home.exists() and not tmp.exists()
+    close_private(private, Failing())
+    assert not run.exists()
 
 
 def test_a_scratch_leftover_is_reported_not_silent(tmp_path, capsys):
-    home, tmp = tmp_path / "home", tmp_path / "tmp"
-    closed = home / "closed"  # stands in for what only the account could remove
+    private = tmp_path / "id-v0.abcd1234"
+    closed = private / "run" / "closed"  # stands in for what only the account could remove
     closed.mkdir(parents=True)
     (closed / "f").write_text("account")
-    tmp.mkdir()
     os.chmod(closed, 0o500)
+    os.chmod(private, 0o750)
 
     class Failing:
+        user = "cairnwork-verifier"
+        run_root = tmp_path
+
         def remove(self, path):
             raise VerifierAccountError("sudo failed")
 
     try:
-        verifiers._remove_scratch((home, tmp), Failing())
-        assert home.exists() and not tmp.exists()
+        close_private(private, Failing())
+        assert (private / "run").exists()
+        assert os.stat(private).st_mode & 0o777 == 0o750  # not locked before the delete succeeds
         err = capsys.readouterr().err
-        assert f"ALERT verifier cleanup: {home} was not removed" in err and str(tmp) not in err
+        assert f"ALERT verifier cleanup: {private / 'run'} was not removed" in err
     finally:
         os.chmod(closed, 0o700)
 

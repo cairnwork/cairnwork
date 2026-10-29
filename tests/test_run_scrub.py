@@ -3,9 +3,11 @@ a stand-in ``remove`` refuses, and the owner's ``rmtree`` is what deletes a real
 """
 
 import os
+import shlex
 import shutil
 import stat
 import sys
+from typing import Any
 
 import pytest
 
@@ -70,7 +72,7 @@ def test_a_run_symlink_outside_the_root_is_not_followed(tmp_path):
     private.mkdir()
     (private / "verifier.log").write_text("kept")
     (private / "run").symlink_to(outside)
-    account = _Account(root)
+    account: Any = _Account(root)
     with pytest.raises(VerifierAccountError) as caught:
         VerifierAccount.scrub_stale_runs(account)
     message = str(caught.value)
@@ -109,7 +111,7 @@ def test_a_work_dir_is_not_scrubbed_and_a_bad_name_refuses(tmp_path):
     odd = root / "not-a-private-dir"
     (odd / "run").mkdir(parents=True)
     (odd / "run" / "marker").write_text("stay")
-    account = _Account(root)
+    account: Any = _Account(root)
     with pytest.raises(VerifierAccountError) as caught:
         VerifierAccount.scrub_stale_runs(account)
     assert str(odd / "run") in str(caught.value)
@@ -160,3 +162,60 @@ def test_a_raised_blackbox_still_drops_its_run_dir(tmp_path, monkeypatch):
     assert not (private / "run").exists()
     assert (private / "blackbox.log").read_text() == "kept"
     assert stat.S_IMODE(private.stat().st_mode) == 0o700
+
+
+def test_a_symlinked_private_is_not_followed_to_a_same_named_directory(tmp_path):
+    """Red if the lstat guard is dropped and the link is followed.
+
+    The target's basename matches the link, and its parent is also named ``runs``, so a check
+    of one path component would treat it as this run root and delete ``secret``.
+    """
+    root = tmp_path / "runs"
+    root.mkdir()
+    name = "rid-v0.abcd1234"
+    real = tmp_path / "decoy" / "runs" / name
+    (real / "run").mkdir(parents=True)
+    (real / "run" / "secret").write_text("keep")
+    link = root / name
+    link.symlink_to(real)
+    account: Any = _Account(root)
+    with pytest.raises(VerifierAccountError):
+        VerifierAccount.scrub_stale_runs(account)
+    assert (real / "run" / "secret").read_text() == "keep"
+    assert link.is_symlink()
+    assert account.removed == []
+
+
+def test_both_deletes_fail_and_recovery_steps_match_current_permissions(tmp_path, monkeypatch):
+    """Account rm and the owner's rmtree both fail: private stays 0750, and the steps are not &&."""
+    import cairnwork.run_scrub as run_scrub
+
+    root = tmp_path / "runs"
+    private = _private(root, "rid-v0.abcd1234")
+    os.chmod(private, 0o750)
+    (private / "run" / "cw-stale").write_text("stay")
+
+    class _InertRmtree:
+        avoids_symlink_attacks = shutil.rmtree.avoids_symlink_attacks
+
+        def __call__(self, *_args, **_kwargs):
+            return None
+
+    monkeypatch.setattr(run_scrub.shutil, "rmtree", _InertRmtree())
+    account: Any = _Account(root)
+    with pytest.raises(VerifierAccountError) as caught:
+        VerifierAccount.scrub_stale_runs(account)
+    message = str(caught.value)
+    run = private / "run"
+    q_run, q_priv = shlex.quote(str(run)), shlex.quote(str(private))
+    steps = (
+        f"chflags -R nouchg {q_run}; "
+        f"sudo -n -u cairnwork-verifier -- /bin/rm -rf -- {q_run}; "
+        f"rm -rf -- {q_run}; "
+        f"chmod 700 {q_priv}"
+    )
+    assert steps in message
+    assert "&&" not in message
+    assert stat.S_IMODE(private.stat().st_mode) == 0o750
+    assert (run / "cw-stale").read_text() == "stay"
+    assert account.removed == [str(run)]

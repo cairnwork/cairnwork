@@ -48,6 +48,12 @@ DEFAULT_ROOT = Path(
 )
 
 
+# A waiter gives up after this long instead of queueing behind a stuck holder. run_verifiers
+# holds the lock across every spec (each bounded by its timeout, 600 s by default), so it does
+# not use this fixed floor alone: lock_wait_seconds() sizes the wait from the spec count.
+# Waiters queue by ticket in .verifier.queue; a dead waiter's released flock lets us skip it.
+# A live but stopped (SIGSTOP) older waiter blocks later ones until their own timeout,
+# which fails closed.
 LOCK_TIMEOUT_SECONDS = 900.0
 _LOCK_MARGIN_SECONDS = 300.0
 # The derived wait never exceeds this (4 h, about 23 specs at the 600 s default): a huge spec
@@ -243,14 +249,8 @@ class VerifierAccount:
 
     def reap(self) -> int:
         """Kill everything the account runs; return how many escaped processes were running.
-
-        The process list is read once, *before* the kill, with no retry: asking again while a
-        survivor is alive would give it time to undo the run's traces and exit before it is
-        counted (``kill -9 -1`` cannot report what it hit: it signals itself too, and ps is not
-        allowed inside the account's sandbox). Retrying is only done after a kill. An unknown
-        count, an expired probe deadline, or a process that outlived the kill count as one
-        more, so a caller never mistakes "cannot tell" for "nothing escaped".
-        """
+        The list is read once before the kill (no retry while a survivor can hide). An unknown
+        count is one more, so "cannot tell" is never "nothing escaped"."""
         deadline = time.monotonic() + PROBE_DEADLINE_SECONDS
         try:
             before = self._escaped_count(deadline, attempts=1)

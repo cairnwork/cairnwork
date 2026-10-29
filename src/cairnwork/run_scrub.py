@@ -15,13 +15,26 @@ Nothing here is deleted unless ``lstat`` shows ``private`` and ``run`` are real 
 ``shutil.rmtree`` is used only where ``avoids_symlink_attacks`` is true. A failure of
 ``close_private`` never raises: the verdict is already decided, and the next account run refuses
 to start while the residue is still there. That refusal names the path and how the owner cleans
-it up by hand. Inode quotas are a separate issue.
+it up by hand. ``private`` is chmod'd to 0700 only after ``run/`` is actually gone: locking it
+sooner would stop the account from entering, and the printed recovery steps would not work.
+Inode quotas are a separate issue.
+
+Who can write which parent, after ``share_run`` (this is why the check-then-delete gap is not
+the account's to win). ``run_root`` is owner:cairnwork 2750 (setgid): the owner can create and
+unlink names there; the account is in the group, so it can list and traverse, not write, and
+cannot replace a private directory with a symlink. ``private`` is 0750, owned by the owner: the
+account can traverse and read, not write, and cannot replace ``run`` with a symlink. ``run`` is
+03770 (sticky, setgid): the account can create names inside it, including symlinks, and can
+unlink only names it owns. The owner's ``home`` and ``tmp`` stay. Those inner symlinks are not
+followed (``rmtree`` only when ``avoids_symlink_attacks``). Only the owner can retarget
+``private`` or ``run``, and the owner is this process, holding the account lock.
 """
 
 from __future__ import annotations
 
 import os
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -69,14 +82,28 @@ def _shown(path: Path) -> str:
 
 
 def _hint(user: str, path: Path) -> str:
-    """Owner instructions. ``chmod`` follows a symlink, so it sits only in the real-dir branch."""
+    """Owner instructions that work while ``private`` is still group-traversable (0750).
+
+    The steps are separated by ``;``, not ``&&``: a failed account ``rm`` must not skip the
+    owner's. ``chmod`` follows a symlink, so it is only in the real-directory steps. On macOS
+    ``chflags -R nouchg`` clears the user-immutable flag first; Linux has no ``chflags``.
+    """
     private = path.parent if path.name == "run" else path
-    run, priv = _shown(private / "run"), _shown(private)
+    run = private / "run"
+    q_run, q_priv, q_user = shlex.quote(str(run)), shlex.quote(str(private)), shlex.quote(user)
+    steps = "; ".join(
+        (
+            f"chflags -R nouchg {q_run}",
+            f"sudo -n -u {q_user} -- /bin/rm -rf -- {q_run}",
+            f"rm -rf -- {q_run}",
+            f"chmod 700 {q_priv}",
+        )
+    )
     return (
         f"leftover {_shown(path)} blocks the next account run. Clean it by hand without following "
-        f"links: ls -ld {priv} {run}. Only when both are real directories under the run root: "
-        f"sudo -n -u {user} -- /bin/rm -rf -- {run} && rm -rf -- {run} && chmod 700 {priv}. "
-        f"If either is a symlink, unlink that symlink only and do not remove or chmod its target."
+        f"links: ls -ld {q_priv} {q_run}. If either is a symlink, unlink that symlink only and do "
+        f"not remove or chmod its target. If both are real directories under the run root, run "
+        f"every step even when an earlier one fails (macOS chflags first): {steps}."
     )
 
 
@@ -109,8 +136,16 @@ def _account_remove(account, run: Path) -> None:
 
 
 def _delete_run(account, run: Path) -> None:
-    """``account.remove`` then the owner's ``rmtree``. Never follows a symlink; never raises."""
-    if _real_dir(run) is None or not shutil.rmtree.avoids_symlink_attacks:
+    """``account.remove`` then the owner's ``rmtree``. Never follows a symlink; never raises.
+
+    Refuses outright when ``rmtree`` would follow symlinks. The account cannot swap ``run`` for a
+    symlink in the gap after this check: it cannot write ``private`` (0750, owner) or ``run_root``
+    (2750, owner). See the module docstring.
+    """
+    if not shutil.rmtree.avoids_symlink_attacks:
+        _alert(f"{_shown(run)} left in place; rmtree on this platform follows symlinks")
+        return
+    if _real_dir(run) is None:
         _alert(f"{_shown(run)} is not a safe directory; not removed")
         return
     if account is not None:
@@ -135,7 +170,10 @@ def close_private(private: Path, account) -> None:
             _alert(f"{_shown(run)} is not a safe directory; not removed")
         elif os.path.lexists(private) and _real_dir(private) is None:
             _alert(f"{_shown(private)} is not a safe directory; not removed")
-        seal_private(private, root)
+        # 0700 only once run/ is gone. Locking it earlier blocks the account rm in the
+        # recovery steps, which need to traverse private (still 0750).
+        if _real_dir(private) is not None and not os.path.lexists(run):
+            seal_private(private, root)
     except OSError:
         _alert(f"{_shown(private)} could not be closed")
 
@@ -160,14 +198,13 @@ def _consider(account, root: Path, name: str, stuck: list[Path]) -> None:
             _seal(private, root, stuck)
         return
     if not run_tree_ok(private, root):
-        stuck.append(run)
-        if _private_name(name):
-            _seal(private, root, stuck)
+        stuck.append(run)  # leave private traversable so the recovery steps can enter it
         return
     _delete_run(account, run)
-    _seal(private, root, stuck)
     if os.path.lexists(run):
         stuck.append(run)
+        return
+    _seal(private, root, stuck)
 
 
 def _seal(private: Path, root: Path, stuck: list[Path]) -> None:
