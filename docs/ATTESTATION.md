@@ -330,7 +330,8 @@ Checks run in this order and the first failure is reported:
 7. test source: `hidden_test_commit` and the policy's pins; in full mode the test commit is one
    commit on the base changing exactly `test_paths` (`TEST_SOURCE_MISMATCH`); with `test_roots`,
    every bound test path must start with one of the roots, in both modes (`TEST_ROOT_VIOLATION`);
-   the binding's `protection` must be the level of the request's required verifier ids, without
+   the binding's `protection` must be the level of the request's required verifier ids (a list of
+   strings, else this refuses too), without
    the `_macos` suffix (`PROTECTION_LABEL_MISMATCH`; absent means `"same_process_only"`), and a
    level above that needs a `blackbox_commitment` (`PROTECTION_UNCOMMITTED`); each optional
    binding key the policy pins must equal the receipt's (`IMPORT_PATHS_MISMATCH`,

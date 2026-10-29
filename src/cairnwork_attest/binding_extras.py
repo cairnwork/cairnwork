@@ -111,13 +111,16 @@ def pin_problem(ctx: Any) -> VerifyResult | None:
     request's required verifier ids give (only the ``_macos`` grade, which the ids cannot show, is
     the producer's word), and a level above ``same_process_only`` needs a blackbox commitment in
     the binding (PROTECTION_UNCOMMITTED): the ``blackbox:*`` ids then stand for a declaration the
-    receiver can pin, never for the signer's naming alone. Last, under any policy or none, no
-    observation of an id Core did not require may be other than PASS (#413)."""
+    receiver can pin, never for the signer's naming alone; required ids that are not a list of
+    strings bear no label out. Last, under any policy or none, no observation of an id Core did
+    not require may be other than PASS (#413)."""
     policy, binding = ctx.policy, ctx.binding
     contract = ctx.request.get("acceptance_contract")
     ids = contract.get("required_verifier_ids") if isinstance(contract, dict) else None
+    if not (isinstance(ids, list) and all(isinstance(i, str) for i in ids)):
+        ids = None  # #413: no list of string ids bears any label out, nor says what was required
     recorded = recorded_protection(binding)
-    expected = protection.level(map(str, ids), macos=False) if isinstance(ids, list) else None
+    expected = protection.level(ids, macos=False) if ids is not None else None
     if protection.coverage(recorded) != expected:  # the host grade is the producer's to state
         return _fail(
             "PROTECTION_LABEL_MISMATCH", f"protection {recorded!r} is not what Core required"
@@ -168,14 +171,18 @@ def _unrequired_problem(ids: list[Any], request: Mapping[str, Any]) -> VerifyRes
     """#413: an observation of an id Core did not require is not part of its verdict, but one that
     is not PASS is still evidence that something failed, so it refuses. No producer sends one
     (pipeline_judge._contract builds the ids and the observations from the same runs and checks).
-    A PASS one stays accepted here; a ``blackbox:*`` one refuses under a commitment pin (#373)."""
+    A PASS one stays accepted here; a ``blackbox:*`` one refuses under a commitment pin (#373).
+    ids are strings (pin_problem refused any other), and an observation's id that is not a string
+    is never a required one. An observation that is not an object is skipped, not refused, here:
+    Core's evidence hash cannot be computed over it, so the Core-verdict step refuses the receipt
+    (RESPONSE_NOT_VERIFIED), and this check must return a result, never raise."""
     evidence = request.get("evidence_bundle")
     observations = evidence.get("observations") if isinstance(evidence, dict) else None
     bad = sorted(
         str(obs.get("verifier_id"))
         for obs in (observations if isinstance(observations, list) else [])
         if isinstance(obs, dict)
-        and obs.get("verifier_id") not in ids
+        and not (isinstance(obs.get("verifier_id"), str) and obs["verifier_id"] in ids)
         and obs.get("status") != "PASS"
     )
     if bad:
