@@ -17,6 +17,10 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
       `.local/share/keyrings`, `.terraform.d`.
     - **Credential files** replaced with `/dev/null`: `.netrc`, `.git-credentials`, `.npmrc`,
       `.pypirc`, `.pgpass`, `.my.cnf`, `.vault-token`, `.Xauthority`.
+      The mount follows what the path really is, not its name: a directory gets the tmpfs and
+      anything else `/dev/null` (a `.netrc` directory or an `.ssh` file no longer fails the run at
+      mount, #378). A mask that would cover a read root (the interpreter, the run's guard files)
+      makes the policy refuse with the root named, linked or not (#378).
       A credential path that is, or runs through, a symlink is masked at its real target, inside
       or outside `$HOME` on the launching-account path; under the dedicated account a target
       inside or outside `$HOME` is masked when the account may reach it (an outside target is read
@@ -138,10 +142,16 @@ receiver that pins `blackbox_commitment` (computed from its own copy of the decl
 which one. Without that pin the commitment is itself only the signer's value. The commitment does
 not say which checks Core required, so a policy that pins it also pins `blackbox_checks`, the check
 ids `blackbox-commitment` prints with it (#312): the request's `blackbox:*` ids must be exactly
-those, each observed only as PASS (`BLACKBOX_CHECKS_MISSING`). A policy written before #312 pins
+those, each observed only as PASS (`BLACKBOX_CHECKS_MISSING`). Under either policy shape a
+`blackbox:*` id named twice in the request, or observed without being required, refuses too (#373:
+the current producer builds both from one declaration, so either is an inconsistent request;
+several PASS observations of one required id are still accepted). The receiver must copy both
+fields unchanged: a hand-shortened `blackbox_checks` accepts receipts that skip the dropped checks,
+and nothing here can tell without the declaration. A policy written before #312 pins
 the commitment alone and is accepted with a weaker check: at least one `blackbox:*` id, each PASS.
 Such a receiver still accepts a receipt whose Core request left out a declared check or named one
-the declaration lacks; its `assurance.blackbox_checks` is `unpinned`, so regenerate the policy.
+the declaration lacks; its `assurance.blackbox_checks` is `unpinned`, so regenerate the policy
+(`not_checked` means no id check ran: no policy, or no non-empty commitment pin).
 This guards against a producer bug; a lying signer can write the right ids. Even with these pins,
 that the checks really ran as blackbox runs remains the signer's claim, like every verifier run
 (`assurance.verifier_runs` is `signer_claim`). A v0.1 receipt (no deferred tests) has no binding and carries no label: its level is

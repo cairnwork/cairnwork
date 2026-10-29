@@ -296,7 +296,8 @@ to have run with, in order; a receipt without them counts as `[]`) and `blackbox
 (`"sha256:<64 hex>"` or `""`; what `cairnwork-verify --state DIR blackbox-commitment --blackbox
 FILE` prints for the receiver's copy of the declaration; a receipt without one counts as `""`) and
 `blackbox_checks` (#312: the distinct check ids the same command prints, only with a non-empty
-`blackbox_commitment`) and `protection` (#303, strict mode on the receiver's side): the least
+`blackbox_commitment`; copy both fields unchanged: a shortened list accepts receipts that skip the
+dropped checks, and the verifier cannot tell without the declaration, #373) and `protection` (#303, strict mode on the receiver's side): the least
 level the receiver accepts, one of `"same_process_only"`, `"partial_macos"`, `"partial"`, `"blackbox_macos"`, `"blackbox"`
 (a pin without `_macos` accepts only the Linux grade). A receipt whose level is lower fails
 with `UNPROTECTED`; a receipt without the key counts as `"same_process_only"`. Any other key is
@@ -336,7 +337,8 @@ Checks run in this order and the first failure is reported:
    `BLACKBOX_COMMITMENT_MISMATCH`), except `protection`, which must be at least the pinned level
    (`UNPROTECTED`); after a non-empty pinned `blackbox_commitment`, the request's `blackbox:*`
    required ids must be `blackbox:<id>` for exactly the policy's `blackbox_checks` (at least one
-   when the policy has none), each observed only as PASS (`BLACKBOX_CHECKS_MISSING`)
+   when the policy has none), each named once and observed only as PASS, and no `blackbox:*`
+   observation of an id Core did not require (`BLACKBOX_CHECKS_MISSING`)
 8. tree (full: `TREE_MISMATCH`, `OVERLAY_UNSUPPORTED_ENTRY`; `REBUILD_FAILED` when git cannot
    rebuild the tree in the receiver's repository, e.g. it is read-only, which says nothing about
    the receipt) or head-tree (confidential: `HEAD_TREE_MISMATCH`, `OVERLAY_UNSUPPORTED_ENTRY`)
@@ -348,7 +350,9 @@ On success `verify --json` adds `assurance`, what the receiver checked itself (`
 `verified_against_core_manifest`), `test_contents` (`verified` or `not_verified`), `overlay`
 (`rebuilt` or `not_verified`), `verifier_runs` (always `signer_claim`) and `protection` (#303:
 the binding's level, checked in step 7; `"same_process_only"` when the binding has none) and
-`blackbox_checks` (#312: `pinned` when the policy has `blackbox_checks`, otherwise `unpinned`;
+`blackbox_checks` (#312, #373: `pinned` when the policy has `blackbox_checks`, `unpinned` when it
+pins a non-empty `blackbox_commitment` only, the weaker check, and `not_checked` without a policy or
+a non-empty commitment pin; it says which check ids the receiver pinned, not that the checks ran;
 docs/SECURITY.md). Without `--json` the
 same object follows the `OK` line. A verify-action that predates v0.2 refuses these receipts with
 `STATEMENT_SHAPE` (closed, not open); the note is attached to the PR head, so `publish` is
