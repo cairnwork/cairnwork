@@ -110,4 +110,46 @@ def _check_response_verified(
         if hashes.get(key) != exp_val:
             return _fail("RESPONSE_NOT_VERIFIED", f"hash mismatch for {key}: expected {exp_val}")
 
+    return _parts_problem(predicate, request, expected)
+
+
+_CROSS = (  # (part, the hash it names): nexus-core product/evidence ``integrity``
+    ("verification_plan", "acceptance_contract_hash"),
+    ("verification_plan", "change_set_hash"),
+    ("evidence_bundle", "acceptance_contract_hash"),
+    ("evidence_bundle", "change_set_hash"),
+    ("evidence_bundle", "verification_plan_hash"),
+)
+
+
+def _parts_problem(
+    predicate: Mapping[str, Any], request: Mapping[str, Any], hashes: Mapping[str, str]
+) -> VerifyResult | None:
+    """#440: the hashes Core echoes cover each part of the request, not that the parts name each
+    other. Core refuses a request whose plan or evidence names another contract, change set or
+    plan (CROSS_BOUND, STALE, CROSS_BINDING_INVALID) or whose contract and plan require different
+    ids (MISSING), so a VERIFIED response to one is not its verdict; and
+    ``predicate.verifier_observations`` is an exact copy of the request's observations. No producer
+    writes either (core_request.build_core_request builds every part from one list): this guards
+    against a producer bug, a lying signer can write consistent parts. The parts are objects here:
+    their hashes were computed above."""
+    for part, key in _CROSS:
+        if request[part].get(key) != hashes[key]:
+            return _fail("RECEIPT_INCONSISTENT", f"{part}.{key} is not this request's {key}")
+    ids = [
+        request[p].get("required_verifier_ids")
+        for p in ("acceptance_contract", "verification_plan")
+    ]
+    strings = all(isinstance(i, list) and all(isinstance(v, str) for v in i) for i in ids)
+    if not strings or set(ids[0]) != set(ids[1]):
+        return _fail(
+            "RECEIPT_INCONSISTENT", f"contract and plan required_verifier_ids differ: {ids}"
+        )
+    try:
+        copied = canonical_json(predicate.get("verifier_observations"))
+        same = copied == canonical_json(request["evidence_bundle"]["observations"])
+    except TypeError:
+        same = False
+    if not same:
+        return _fail("RECEIPT_INCONSISTENT", "predicate.verifier_observations is not the request's")
     return None
