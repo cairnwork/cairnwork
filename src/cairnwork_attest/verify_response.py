@@ -68,7 +68,7 @@ def _check_response_verified(
     try:
         if canonical_json(pred_core_id) != canonical_json(resp_core_id):
             return _fail("RESPONSE_NOT_VERIFIED", "predicate and response core_identity mismatch")
-    except TypeError:
+    except (TypeError, RecursionError):  # canonical_json recurses: a deep value refuses (#440)
         return _fail("RESPONSE_NOT_VERIFIED", "core_identity not canonical JSON serializable")
 
     if core_identity_pin is not None:
@@ -81,7 +81,7 @@ def _check_response_verified(
                     "response core_identity does not match pin: "
                     f"{resp_core_id!r} != {core_identity_pin!r}",
                 )
-        except TypeError:
+        except (TypeError, RecursionError):
             return _fail(
                 "CORE_IDENTITY_MISMATCH", "core_identity_pin not canonical JSON serializable"
             )
@@ -103,7 +103,7 @@ def _check_response_verified(
             "evidence_bundle_hash": evidence_bundle_hash(request["evidence_bundle"]),
             "change_manifest_hash": change_manifest_hash(request["change_manifest"]),
         }
-    except (KeyError, TypeError, ValueError) as exc:
+    except (KeyError, TypeError, ValueError, RecursionError) as exc:
         return _fail("RESPONSE_NOT_VERIFIED", f"malformed request for hashes: {exc}")
 
     for key, exp_val in expected.items():
@@ -148,7 +148,7 @@ def _parts_problem(
     try:
         copied = canonical_json(predicate.get("verifier_observations"))
         same = copied == canonical_json(request["evidence_bundle"]["observations"])
-    except TypeError:
+    except (TypeError, RecursionError):
         same = False
     if not same:
         return _fail("RECEIPT_INCONSISTENT", "predicate.verifier_observations is not the request's")

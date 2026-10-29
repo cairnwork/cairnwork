@@ -179,9 +179,9 @@ return `ENVELOPE_SHAPE`. Only programmer errors (such as wrong argument types) m
   7. `COMMIT_BINDING_MISMATCH`: `predicate.request.change_set.target_revision` and `source_revision` match `git-commit:<candidate>` and `git-commit:<base>`.
      - `UNREQUIRED_OBSERVATION_FAILED` (part of step 7, #430): every observation in `predicate.request.evidence_bundle` of an id the request's `required_verifier_ids` does not name must be `PASS`, as for a v0.2 receipt (#413). Required ids that are not a list of strings name none.
   8. `MANIFEST_MISMATCH`: The change manifest is recomputed from raw git tree objects between base and candidate commits (`read_change_set`), and its canonical `change_manifest_hash` matches both `predicate.request.change_set.diff_hash` and `cairnwork_protocol.change_manifest_hash(predicate.request.change_manifest)`.
-  9. `RESPONSE_NOT_VERIFIED`: The verification response reports status `"VERIFIED"` and integrity `"VALID"` with HTTP 200, echoes all five request hashes (`acceptance_contract_hash`, `change_set_hash`, `verification_plan_hash`, `evidence_bundle_hash`, and required `change_manifest_hash`), satisfies `response_binding_problem` against the response's reported `core_identity`, and matches `predicate.response.core_identity == predicate.core_identity` (both present, deep-equal).
-     - `RECEIPT_INCONSISTENT` (part of step 9, #440): the request's parts name each other as Core requires (the plan's `acceptance_contract_hash` and `change_set_hash`, and the evidence bundle's `acceptance_contract_hash`, `change_set_hash` and `verification_plan_hash`, are those of the request's contract, change set and plan), the contract's and the plan's `required_verifier_ids` are lists of strings naming the same set, and `predicate.verifier_observations` equals the request's observations. Core refuses a request that fails any of these, so a VERIFIED response to one is not its verdict.
-  10. `CORE_IDENTITY_MISMATCH`: When an optional Core identity pin is provided (`--core-identity <json-file>` / `core_identity_pin`), it must match `predicate.response.core_identity`.
+  9. `RESPONSE_NOT_VERIFIED`: The verification response reports status `"VERIFIED"` and integrity `"VALID"` with HTTP 200, and matches `predicate.response.core_identity == predicate.core_identity` (both present, deep-equal); after the pin check (step 10), it satisfies `response_binding_problem` against the response's reported `core_identity` and echoes all five request hashes (`acceptance_contract_hash`, `change_set_hash`, `verification_plan_hash`, `evidence_bundle_hash`, and required `change_manifest_hash`). A value nested too deeply to compare refuses here too, never raises (#440).
+     - `RECEIPT_INCONSISTENT` (last, after step 10 and the rest of step 9, #440): the request's parts name each other as Core requires (the plan's `acceptance_contract_hash` and `change_set_hash`, and the evidence bundle's `acceptance_contract_hash`, `change_set_hash` and `verification_plan_hash`, are those of the request's contract, change set and plan), the contract's and the plan's `required_verifier_ids` are lists of strings naming the same set, and `predicate.verifier_observations` equals the request's observations. Core refuses a request that fails any of these, so a VERIFIED response to one is not its verdict.
+  10. `CORE_IDENTITY_MISMATCH`: When an optional Core identity pin is provided (`--core-identity <json-file>` / `core_identity_pin`), it must match `predicate.response.core_identity`. It runs inside step 9: after the Core identity comparison, before the response binding and the echoed hashes.
 
 ### CLI Usage
 
@@ -348,8 +348,9 @@ Checks run in this order and the first failure is reported:
 8. tree (full: `TREE_MISMATCH`, `OVERLAY_UNSUPPORTED_ENTRY`; `REBUILD_FAILED` when git cannot
    rebuild the tree in the receiver's repository, e.g. it is read-only, which says nothing about
    the receipt) or head-tree (confidential: `HEAD_TREE_MISMATCH`, `OVERLAY_UNSUPPORTED_ENTRY`)
-9. Core verdict (`RESPONSE_NOT_VERIFIED`, `RECEIPT_INCONSISTENT`, `CORE_IDENTITY_MISMATCH`), as for
-   v0.1
+9. Core verdict, as for v0.1: `RESPONSE_NOT_VERIFIED` (verdict and Core identity), the pin
+   (`CORE_IDENTITY_MISMATCH`), `RESPONSE_NOT_VERIFIED` (response binding and echoed hashes), then
+   `RECEIPT_INCONSISTENT`
 
 On success `verify --json` adds `assurance`, what the receiver checked itself (`null` for v0.1):
 `mode` (`full`/`confidential`), `test_source` (`policy_pinned` with `--policy`, otherwise

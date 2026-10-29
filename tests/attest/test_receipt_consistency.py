@@ -170,7 +170,18 @@ def _copy_status(predicate: dict[str, Any]) -> None:
     predicate["verifier_observations"][0]["status"] = "FAIL"
 
 
-COPY = {"extra_fail": _fail_in_copy, "dropped": _copy_dropped, "status": _copy_status}
+def _copy_one_for_true(predicate: dict[str, Any]) -> None:
+    """Equal under Python's ``==`` (1 == True), not as JSON: the comparison is canonical JSON."""
+    predicate["request"]["evidence_bundle"]["observations"][0]["flag"] = True
+    predicate["verifier_observations"][0]["flag"] = 1
+
+
+COPY = {
+    "extra_fail": _fail_in_copy,
+    "dropped": _copy_dropped,
+    "status": _copy_status,
+    "one_for_true": _copy_one_for_true,
+}
 
 
 @pytest.mark.parametrize("edit", COPY.values(), ids=COPY.keys())
