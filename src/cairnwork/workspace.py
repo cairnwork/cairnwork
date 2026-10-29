@@ -116,10 +116,10 @@ def _refuse_case_collisions(repo: Path, base_commit: str, clone: Path, differenc
     """#428: name the cause when a checkout failed because base's tree holds paths that differ
     only in case and the clone's filesystem folds case (both are written to one file, so a
     rerun never helps). Runs only after the clean-checkout check failed with HEAD at base;
-    otherwise returns and the caller raises its generic error. Differences the collisions do
-    not explain are listed too, so a collision never hides another cause. Paths come from the
-    repository, so they are shown with repr: quoted, control characters escaped, never the
-    start of a log line."""
+    otherwise returns and the caller raises its generic error. The collision is only added
+    to that error: every difference found is still listed, so nothing is hidden. Paths come
+    from the repository, so they are shown with repr: quoted, control characters escaped,
+    never the start of a log line."""
     try:
         names = run_git(repo, "ls-tree", "-r", "-z", "--name-only", "--full-tree", base_commit)
     except GitCommandError:
@@ -127,7 +127,7 @@ def _refuse_case_collisions(repo: Path, base_commit: str, clone: Path, differenc
     groups = _case_collisions(filter(None, names.split("\0")))
     if not groups or not _folds_case(clone):
         return
-    detail = _collision_detail(groups, _unexplained(differences, groups))
+    detail = _collision_detail(groups, differences)
     raise WorkspaceError(f"{clone} is not a clean checkout of {base_commit}: {detail}")
 
 
@@ -142,31 +142,16 @@ def _case_collisions(names) -> list[list[str]]:
     return sorted(sorted(group) for group in folded.values() if len(group) > 1)
 
 
-_DIFFERENCE = re.compile(r"(missing|changed|extra directory|extra) (.+)", re.DOTALL)
-
-
-def _unexplained(differences, groups: list[list[str]]) -> list[str]:
-    """The tree_differences entries a checkout of the colliding paths does not account for:
-    any other kind, or a path with no part (itself or a parent) that folds to a collision."""
-    colliding = {group[0].casefold() for group in groups}
-    left = []
-    for difference in differences:
-        match = _DIFFERENCE.fullmatch(difference)
-        parts = match.group(2).split("/") if match else []
-        prefixes = ("/".join(parts[:end]).casefold() for end in range(1, len(parts) + 1))
-        if not any(prefix in colliding for prefix in prefixes):
-            left.append(difference)
-    return left
-
-
-def _collision_detail(groups: list[list[str]], other: list[str]) -> str:
+def _collision_detail(groups: list[list[str]], differences) -> str:
+    """The collision groups (first three) and every difference found (first five)."""
     shown = ", ".join(f"({', '.join(map(repr, group))})" for group in groups[:3])
     more = f" and {len(groups) - 3} more" if len(groups) > 3 else ""
-    detail = f"base tree has case-colliding paths {shown}{more} on a case-insensitive filesystem"
-    if other:
-        listed = ", ".join(map(repr, other[:3]))
-        detail += f"; {len(other)} other difference(s): {listed}"
-    return detail
+    listed = ", ".join(map(repr, differences[:5]))
+    rest = f" and {len(differences) - 5} more" if len(differences) > 5 else ""
+    return (
+        f"base tree has case-colliding paths {shown}{more} on a case-insensitive filesystem;"
+        f" differences: {listed}{rest}"
+    )
 
 
 def _folds_case(clone: Path) -> bool:

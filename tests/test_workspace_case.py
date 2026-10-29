@@ -11,7 +11,6 @@ from cairnwork.workspace import (
     WorkspaceError,
     _case_collisions,
     _collision_detail,
-    _unexplained,
     create_attempt_clone,
 )
 
@@ -44,7 +43,7 @@ def test_case_colliding_files_are_named(repo, tmp_path):
         create_attempt_clone(repo, base, tmp_path / "attempts", "a1")
     message = str(info.value)
     assert f"is not a clean checkout of {base}: base tree has case-colliding paths" in message
-    assert "other difference" not in message  # the collision explains every difference
+    assert "; differences: 'missing " in message  # every difference is still listed
     assert "on a case-insensitive filesystem" in message
     assert "('docs/X.html', 'docs/x.html')" in message
     assert "('::WARNING::a', '::warning::A')" in message  # quoted, never a bare '::' line
@@ -65,48 +64,53 @@ def test_a_base_without_collisions_still_clones(repo, tmp_path):
     assert git(made.path, "rev-parse", "HEAD") == base
 
 
-def test_another_difference_is_reported_beside_the_collision(repo, tmp_path, monkeypatch):
-    """A collision must not hide another cause (here a leftover the check also found)."""
-    base = _commit_with(repo, "docs/X.html", "docs/x.html")
+def _with_extra(monkeypatch, *extra):
     real = workspace.tree_differences
-    monkeypatch.setattr(
-        workspace, "tree_differences", lambda *a: [*real(*a), "extra ::warning::left.txt"]
-    )
+    monkeypatch.setattr(workspace, "tree_differences", lambda *a: [*real(*a), *extra])
+
+
+def test_a_difference_under_a_colliding_directory_is_still_listed(repo, tmp_path, monkeypatch):
+    """The collision only adds to the error: an unrelated leftover, even inside a colliding
+    directory, is always shown. _folds_case is forced so this runs on every filesystem."""
+    base = _commit_with(repo, "Docs/a.html", "docs/b.html")
+    monkeypatch.setattr(workspace, "_folds_case", lambda clone: True)
+    _with_extra(monkeypatch, "extra directory DOCS/sub", "extra ::warning::left.txt")
     with pytest.raises(WorkspaceError) as info:
         create_attempt_clone(repo, base, tmp_path / "attempts", "a1")
     message = str(info.value)
-    assert "is not a clean checkout of" in message
-    if _folds_case(tmp_path):
-        assert "case-colliding" in message
-        assert "1 other difference(s): 'extra ::warning::left.txt'" in message
+    assert f"is not a clean checkout of {base}: base tree has case-colliding paths" in message
+    assert "'extra directory DOCS/sub'" in message
+    assert "'extra ::warning::left.txt'" in message
 
 
-# The attribution itself, independent of the host's filesystem.
-GROUPS = _case_collisions(["Docs/a.html", "docs/b.html", "lib/X.py", "lib/x.py", "y.py"])
+def test_a_head_other_than_base_keeps_the_generic_error(repo, tmp_path, monkeypatch):
+    base = _commit_with(repo, "docs/X.html", "docs/x.html")
+    monkeypatch.setattr(workspace, "_folds_case", lambda clone: True)
+    real = workspace.run_git
+    monkeypatch.setattr(
+        workspace,
+        "run_git",
+        lambda path, *a, **k: "0" * 40 if a == ("rev-parse", "HEAD") else real(path, *a, **k),
+    )
+    with pytest.raises(WorkspaceError) as info:
+        create_attempt_clone(repo, base, tmp_path / "attempts", "a1")
+    assert str(info.value).endswith(f"is not a clean checkout of {base}")
+
+
+# The message itself, independent of the host's filesystem.
 
 
 def test_case_collisions_group_files_and_directories():
-    assert GROUPS == [["Docs", "docs"], ["lib/X.py", "lib/x.py"]]
+    names = ["Docs/a.html", "docs/b.html", "lib/X.py", "lib/x.py", "y.py"]
+    assert _case_collisions(names) == [["Docs", "docs"], ["lib/X.py", "lib/x.py"]]
     assert _case_collisions(["a/X", "b/x", "c"]) == []
 
 
-def test_only_differences_under_a_collision_are_explained():
-    explained = ["missing docs/b.html", "extra Docs/b.html", "changed lib/X.py", "missing lib/x.py"]
-    explained.append("extra directory DOCS/sub")
-    assert _unexplained(explained, GROUPS) == []
-    other = [
-        "extra notes.txt",
-        "changed y.py",
-        "missing lib/z.py",
-        "unreadable docs/b.html",
-        "non-empty submodule docs/m",
-    ]
-    assert _unexplained(explained + other, GROUPS) == other
-
-
-def test_the_detail_caps_the_groups_and_quotes_other_differences():
+def test_the_detail_caps_groups_and_lists_every_kind_of_difference():
     groups = [[f"{c}.txt", f"{c.upper()}.txt"] for c in "abcd"]
-    detail = _collision_detail(groups, ["extra ::x", "extra b", "extra c", "extra d"])
+    differences = [f"extra ::{n}" for n in range(7)]
+    detail = _collision_detail(groups, differences)
     assert "('a.txt', 'A.txt'), ('b.txt', 'B.txt'), ('c.txt', 'C.txt') and 1 more" in detail
-    assert detail.endswith("; 4 other difference(s): 'extra ::x', 'extra b', 'extra c'")
-    assert "other" not in _collision_detail(groups[:1], [])
+    shown = ", ".join(repr(d) for d in differences[:5])
+    assert detail.endswith(f"; differences: {shown} and 2 more")
+    assert _collision_detail(groups[:1], ["missing a.txt"]).endswith("differences: 'missing a.txt'")
