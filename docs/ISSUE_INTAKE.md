@@ -49,6 +49,7 @@
      - 完成而且 Core 判定 VERIFIED：推出分支 `cairnwork/<issue>-<attempt>`，開成 **draft PR**。PR 內文寫 `Refs #N`、附上 Nexus 的標記，再列三行出處 `Worker:`、`Requested model:`、`Observed model:`（取自 Cairnwork 自己的設定和 dispatcher 回報，候選 commit 訊息有同樣三個 trailer；缺的、或沒開 `agy_run_as_user` 時的 Observed model 一律寫 `unknown`，絕不預設成 Claude），Issue 標成 `cairnwork:pr-opened`。
      - 沒有完成：在 Issue 留言寫明原因，標成 `cairnwork:failed`。不會自動重跑；要重試，就修改區塊內容，那會成為一件新任務。
    - **格式不符**：留言一次說明原因，改標成 `cairnwork:needs-fix`，移出佇列。
+   - **綁定的任務已 FAILED、存下的請求檔卻不見或只寫了一半**（綁定後存請求失敗）：同樣當成 needs-fix，碼是 `TASK_BOUND_REQUEST_UNREADABLE`，不接手、不用同一把 key 重送（#443）。要重試就修改區塊。其他讀取錯誤（config.json、權限、I/O），以及 `requests/` 目錄不見、被換成 symlink 或請求檔位置是 symlink（狀態損壞），都照舊回報 error，Issue 留在佇列下一輪再試。
    - **身分不可信**：照 EIA 的做法完全不碰，也不留言。
    - **Cairnwork 停止接新任務（drain）時**：Issue 留在佇列，下一輪再試。
 
