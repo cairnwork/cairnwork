@@ -217,7 +217,7 @@ def test_both_deletes_fail_and_recovery_steps_quote_a_hostile_path(tmp_path, mon
         f"as the verifier account: sudo -n -u cairnwork-verifier -- /usr/bin/sandbox-exec -p "
         f"{policy} /srv/cw/venv/bin/python -I -c {shlex.quote(run_scrub._UNLOCK)} {q_run} {limits}"
     )
-    root = f"/usr/bin/chflags -R -- nouchg,nouappnd {q_run}; /bin/rm -rf -- {q_run}"
+    root = f"/usr/bin/chflags -R -- nouchg,nouappnd {q_run}; /bin/rm -rfx -- {q_run}"
     steps = (
         f"{unlock}; "
         f"as the verifier account: sudo -n -u cairnwork-verifier -- /bin/rm -rf -- {q_run}; "

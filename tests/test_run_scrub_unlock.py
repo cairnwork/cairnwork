@@ -50,6 +50,7 @@ def _drop_acl(name: str) -> None:
 def _unlock_here(name: str) -> None:
     """Teardown, not the code under test: flags and ACL before lstat, then recurse by relative
     names (so deep trees too). Never follows a link."""
+    assert sys.platform == "darwin"  # lchflags and chflags exist only there
     try:
         os.lchflags(name, 0)
     except OSError:
@@ -128,6 +129,7 @@ def _lock_down(home: Path) -> None:
     EPERM, ``chflags`` EACCES). Next to a: a deny-delete file, a deny-delete_child dir and a
     symlink whose own ACL denies readsecurity and delete.
     """
+    assert sys.platform == "darwin"
     deep = home / "a" / "b" / "c" / "-R"
     deep.mkdir(parents=True)
     for name in ("immutable", "append", "acl", "hidden-immutable"):
@@ -248,6 +250,7 @@ def test_the_account_sequence_does_not_follow_a_symlink_out_of_run(runs, tmp_pat
 @darwin
 def test_a_lock_below_path_max_is_cleared(runs):
     """Past PATH_MAX (1024) a tool given the full path gets ENAMETOOLONG; names stay relative."""
+    assert sys.platform == "darwin"
     private = _private(runs)
     back = os.open(".", os.O_RDONLY)
     try:
@@ -280,6 +283,40 @@ def test_at_a_limit_the_rest_stays_and_the_next_run_is_refused(runs, monkeypatch
     assert stat.S_IMODE(os.lstat(private).st_mode) == 0o750
     message = stale_run_error(_Refusing(runs))
     assert message is not None and "as root, only if" in message
+
+
+def _walk(monkeypatch, run: Path, limits: tuple[int, int, int]) -> subprocess.CompletedProcess:
+    monkeypatch.setattr(run_scrub, "_UNLOCK_LIMITS", limits)
+    argv = run_scrub._unlock_argv(sys.executable, os.path.realpath(run))
+    return subprocess.run(argv, capture_output=True, text=True, check=False)
+
+
+@darwin
+def test_a_large_directory_stops_at_the_entry_limit(runs, monkeypatch):
+    """A listing reads at most the budget plus one name, so a huge directory cannot hold the
+    walk in one listing past its limits: 1000 names against a budget of 10 stop it."""
+    private = _private(runs)
+    crowd = private / "run" / "home" / "crowd"
+    crowd.mkdir()
+    for index in range(1000):
+        (crowd / f"f{index}").write_text("x")
+    done = _walk(monkeypatch, private / "run", (10, 400, 45))
+    assert done.returncode == 1 and "limit reached" in done.stderr, done
+
+
+@darwin
+def test_with_no_time_left_nothing_is_listed_or_unlocked(runs, monkeypatch):
+    """The clock is checked before the first listing: with 0 seconds the top-level lock stays."""
+    private = _private(runs)
+    locked = private / "run" / "home" / "f"
+    locked.write_text("x")
+    _acl("everyone deny delete", str(locked))
+    done = _walk(monkeypatch, private / "run", (500_000, 400, 0))
+    assert done.returncode == 1 and "limit reached" in done.stderr, done
+    listing = subprocess.run(
+        ["/bin/ls", "-led", str(locked)], capture_output=True, text=True, check=True
+    ).stdout
+    assert "deny delete" in listing, listing
 
 
 def test_an_unexpected_error_in_cleanup_is_raised_not_swallowed(runs):
