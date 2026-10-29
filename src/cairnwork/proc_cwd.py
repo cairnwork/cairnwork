@@ -7,8 +7,7 @@ cannot see the attempt's marker on them. Their working directory stays readable
 sweep kills such a process of the owner when its working directory is inside one of them
 (``kill_withheld_in``).
 
-Limits: a process that changed directory out of them is not found, nor a platform binary
-started with an empty argv[0] (see ``environment_withheld``); neither is one found by a
+Limits: a process that changed directory out of them is not found; neither is one found by a
 second recovery after the first removed the directories (the first sweeps before removing).
 A legitimately empty environment counts as withheld and is then tied only by its directory;
 a shell (Cairnwork's own parent included) sitting in an attempt's run directory with a
@@ -37,6 +36,7 @@ from cairnwork.workspace import ATTEMPT_ID
 _MACOS = sys.platform == "darwin"
 _CTL_KERN, _KERN_ARGMAX, _KERN_PROCARGS2 = 1, 8, 49  # <sys/sysctl.h>
 _PROC_PIDVNODEPATHINFO = 9  # <sys/proc_info.h>
+_CS_OPS_STATUS, _CS_PLATFORM_BINARY = 0, 0x04000000  # <sys/codesign.h>
 # struct proc_vnodepathinfo: pvi_cdir then pvi_rdir, each a vnode_info_path (a 152-byte
 # vnode_info, then vip_path[MAXPATHLEN = 1024])
 _VNODE_INFO_SIZE, _MAXPATHLEN = 152, 1024
@@ -53,6 +53,8 @@ def _system():
     lib.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p,
                                  ctypes.c_int]  # fmt: skip
     lib.proc_pidinfo.restype = ctypes.c_int
+    lib.csops.argtypes = [ctypes.c_int, ctypes.c_uint, ctypes.c_void_p, ctypes.c_size_t]
+    lib.csops.restype = ctypes.c_int
     return lib
 
 
@@ -75,11 +77,12 @@ def environment_withheld(pid: int) -> bool | None:
     """True when KERN_PROCARGS2 shows the process's environment with no entry, False when it
     shows any, None when it cannot be read (gone, refused, malformed, or not macOS).
 
-    Known gap: XNU hides a platform binary's environment by skipping every NUL after the exec
-    path, so one started with an empty argv[0] and two or more entries shows its first entry.
-    That buffer cannot be told apart from a readable one-entry environment, so it counts as
-    shown (False) and is never killed by its directory. Cairnwork never starts an empty
-    argv[0]."""
+    XNU hides a platform binary's environment by skipping every NUL after the exec path, so
+    one started with an empty argv[0] and one or more entries shows exactly one entry: the
+    buffer alone looks like a readable one-entry environment. The code-signing status tells
+    them apart (#310): a platform binary (``CS_PLATFORM_BINARY``) showing one entry or none
+    counts as withheld. A process that is not one keeps the buffer's answer, so a readable
+    one-entry environment of an ordinary program is never taken for withheld."""
     if not _MACOS or pid <= 0:
         return None
     try:
@@ -88,7 +91,23 @@ def environment_withheld(pid: int) -> bool | None:
     except (OSError, AttributeError, ValueError):
         return None
     count = _environment_count(raw) if raw else None
-    return None if count is None else count == 0
+    if count is None:
+        return None
+    if count == 1:  # one entry may be the one an empty argv[0] lets through (#310)
+        return _platform_binary(pid)
+    return count == 0
+
+
+def _platform_binary(pid: int) -> bool | None:
+    """Whether the process is an Apple platform binary (csops CS_OPS_STATUS), None when the
+    status cannot be read."""
+    flags = ctypes.c_uint32(0)
+    try:
+        if _system().csops(pid, _CS_OPS_STATUS, ctypes.byref(flags), ctypes.sizeof(flags)) != 0:
+            return None
+    except (OSError, AttributeError):
+        return None
+    return bool(flags.value & _CS_PLATFORM_BINARY)
 
 
 def _environment_count(raw: bytes) -> int | None:
