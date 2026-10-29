@@ -2,7 +2,6 @@
 
 import io
 import threading
-import time
 
 from cairnwork.workers.agy import _stop
 from cairnwork.workers.agy_dispatch import StatusReader
@@ -35,7 +34,13 @@ def test_a_reader_that_is_still_alive_counts_as_holding_the_output(tmp_path):
     copier = threading.Thread(target=lambda: None)
     copier.start()
     copier.join()
-    stuck = threading.Thread(target=time.sleep, args=(3,), daemon=True)
+    # The reader blocks until the test releases it, not for a fixed time: a slow sweep under
+    # load must not let it finish before _stop looks (#412).
+    release = threading.Event()
+    stuck = threading.Thread(target=release.wait, daemon=True)
     stuck.start()
     stuck.join = lambda timeout=None: None  # type: ignore[method-assign]
-    assert _stop(P(), copier, "attempt-x", stuck)[0] is True  # (held, sweep)
+    try:
+        assert _stop(P(), copier, "attempt-x", stuck)[0] is True  # (held, sweep)
+    finally:
+        release.set()
