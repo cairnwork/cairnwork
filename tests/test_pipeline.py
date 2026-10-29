@@ -163,7 +163,7 @@ def test_resend_does_not_run_again(project, stores, tmp_path):
         ({"allowed": ("agents.MD",)}, "TASK_ALLOWED_FILES_PROTECTED"),
         ({"allowed": ("uv.lock",)}, "TASK_ALLOWED_FILES_PROTECTED"),
         ({"allowed": ("src/calc.py", "docs/governance/x.md")}, "TASK_ALLOWED_FILES_PROTECTED"),
-        ({"allowed": ("Pyproject.TOML",)}, "TASK_ALLOWED_FILES_PROTECTED"),
+        ({"allowed": ("Pyproject.TOML",)}, "PROTECTED_VERIFIER_INPUT"),
         ({"verifiers": (("v", ("bash", "-c", "true")),)}, "VERIFIER_NOT_ALLOWED"),
     ],
 )
