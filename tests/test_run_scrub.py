@@ -165,10 +165,10 @@ def test_a_raised_blackbox_still_drops_its_run_dir(tmp_path, monkeypatch):
 
 
 def test_a_symlinked_private_is_not_followed_to_a_same_named_directory(tmp_path):
-    """Red if the lstat guard is dropped and the link is followed.
+    """A same-named directory under another ``runs`` parent is not deleted.
 
-    The target's basename matches the link, and its parent is also named ``runs``, so a check
-    of one path component would treat it as this run root and delete ``secret``.
+    ``_real_dir`` and ``_consider`` both refuse a symlink, so dropping only one of those checks
+    can still leave ``secret`` in place. This asserts the outcome: the target is untouched.
     """
     root = tmp_path / "runs"
     root.mkdir()
@@ -186,11 +186,12 @@ def test_a_symlinked_private_is_not_followed_to_a_same_named_directory(tmp_path)
     assert account.removed == []
 
 
-def test_both_deletes_fail_and_recovery_steps_match_current_permissions(tmp_path, monkeypatch):
-    """Account rm and the owner's rmtree both fail: private stays 0750, and the steps are not &&."""
+def test_both_deletes_fail_and_recovery_steps_quote_a_hostile_path(tmp_path, monkeypatch):
+    """Both deletes fail. quote() must change the path, or dropping it would stay green."""
     import cairnwork.run_scrub as run_scrub
 
-    root = tmp_path / "runs"
+    monkeypatch.setattr(run_scrub.sys, "platform", "darwin")
+    root = tmp_path / "runs dir" / 'a;b $(x) "q"'
     private = _private(root, "rid-v0.abcd1234")
     os.chmod(private, 0o750)
     (private / "run" / "cw-stale").write_text("stay")
@@ -208,14 +209,132 @@ def test_both_deletes_fail_and_recovery_steps_match_current_permissions(tmp_path
     message = str(caught.value)
     run = private / "run"
     q_run, q_priv = shlex.quote(str(run)), shlex.quote(str(private))
+    assert q_run != str(run)  # the path is hostile enough that quote changes it
+    policy = shlex.quote("(version 1) (allow default)")
+    chflags = (
+        f"as the verifier account: sudo -n -u cairnwork-verifier -- /usr/bin/sandbox-exec -p "
+        f"{policy} /usr/bin/chflags -R nouchg -- {q_run}"
+    )
+    chmod_account = (
+        f"as the verifier account: sudo -n -u cairnwork-verifier -- /usr/bin/sandbox-exec -p "
+        f"{policy} /bin/chmod -R u+rwx -- {q_run}"
+    )
     steps = (
-        f"chflags -R nouchg {q_run}; "
-        f"sudo -n -u cairnwork-verifier -- /bin/rm -rf -- {q_run}; "
-        f"rm -rf -- {q_run}; "
-        f"chmod 700 {q_priv}"
+        f"{chflags}; {chmod_account}; "
+        f"as the verifier account: sudo -n -u cairnwork-verifier -- /bin/rm -rf -- {q_run}; "
+        f"as the owner: rm -rf -- {q_run}; "
+        f"as the owner: chmod 700 {q_priv}"
     )
     assert steps in message
     assert "&&" not in message
+    assert not message.endswith(".")
     assert stat.S_IMODE(private.stat().st_mode) == 0o750
     assert (run / "cw-stale").read_text() == "stay"
     assert account.removed == [str(run)]
+
+
+def test_rmtree_that_follows_symlinks_is_not_called(tmp_path, monkeypatch):
+    import cairnwork.run_scrub as run_scrub
+
+    root = tmp_path / "runs"
+    private = _private(root, "rid-v0.abcd1234")
+    (private / "run" / "marker").write_text("stay")
+    called: list[str] = []
+
+    class _Following:
+        avoids_symlink_attacks = False
+
+        def __call__(self, *_args, **_kwargs):
+            called.append("rmtree")
+
+    monkeypatch.setattr(run_scrub.shutil, "rmtree", _Following())
+    account: Any = _Account(root)
+    with pytest.raises(VerifierAccountError):
+        VerifierAccount.scrub_stale_runs(account)
+    assert account.removed == []
+    assert called == []
+    assert (private / "run" / "marker").read_text() == "stay"
+
+
+def test_chflags_is_requested_as_the_account(tmp_path, monkeypatch):
+    """The stand-in records the argv scrub asks ``remove`` to run. chflags is that account."""
+    import cairnwork.run_scrub as run_scrub
+
+    monkeypatch.setattr(run_scrub.sys, "platform", "darwin")
+    root = tmp_path / "runs"
+    private = _private(root, "rid-v0.abcd1234")
+
+    class _Recording(_Account):
+        def __init__(self, run_root):
+            super().__init__(run_root)
+            self.commands: list[list[str]] = []
+
+        def remove(self, path):
+            text = os.fspath(path)
+            self.removed.append(text)
+
+            def wrap(argv: list[str]) -> list[str]:
+                return ["/usr/bin/sandbox-exec", "-p", "(version 1) (allow default)", *argv]
+
+            self.commands.extend(run_scrub.account_delete_argv(self.user, text, wrap))
+            raise VerifierAccountError("no sudo in this test")
+
+    account: Any = _Recording(root)
+    assert stale_run_error(account) is None  # owner rmtree still removes the real directory
+    chflags = next(argv for argv in account.commands if "/usr/bin/chflags" in argv)
+    rm = next(argv for argv in account.commands if "/bin/rm" in argv)
+    assert chflags[:4] == ["/usr/bin/sudo", "-n", "-u", "cairnwork-verifier"]
+    assert "nouchg" in chflags and "/usr/bin/chflags" in chflags
+    assert account.commands.index(chflags) < account.commands.index(rm)
+    assert not (private / "run").exists()
+
+
+def test_remove_clears_the_immutable_flag_as_the_account(tmp_path, monkeypatch):
+    import cairnwork.verifier_account as va
+
+    monkeypatch.setattr(va.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        va,
+        "_backend",
+        lambda: type("B", (), {"unconfined": staticmethod(lambda argv: ["sandbox-exec", *argv])})(),
+    )
+    ran: list[list[str]] = []
+    monkeypatch.setattr(va.subprocess, "run", lambda argv, **_k: ran.append(list(argv)))
+    root = tmp_path / "cairn"
+    (root / "runs" / "rid-v0.abcd1234").mkdir(parents=True)
+    va.VerifierAccount(user="acct", root=root).remove(root / "runs" / "rid-v0.abcd1234")
+    chflags = next(argv for argv in ran if "/usr/bin/chflags" in argv)
+    assert chflags[:4] == ["/usr/bin/sudo", "-n", "-u", "acct"]
+    assert "nouchg" in chflags
+
+
+def test_an_unlistable_run_root_has_no_private_chmod(tmp_path, monkeypatch):
+    import cairnwork.run_scrub as run_scrub
+
+    root = tmp_path / "runs"
+    root.mkdir()
+
+    def _boom(_path):
+        raise OSError(13, "Permission denied")
+
+    monkeypatch.setattr(run_scrub.os, "listdir", _boom)
+    message = stale_run_error(_Account(root))
+    assert message is not None
+    assert "chmod" not in message
+    assert "700" not in message
+    assert str(root) in message
+
+
+def test_a_symlinked_run_leaves_private_at_0750(tmp_path):
+    root = tmp_path / "runs"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    private = root / "rid-v0.abcd1234"
+    private.mkdir()
+    os.chmod(private, 0o750)
+    (private / "run").symlink_to(outside)
+    account: Any = _Account(root)
+    with pytest.raises(VerifierAccountError):
+        VerifierAccount.scrub_stale_runs(account)
+    assert stat.S_IMODE(private.stat().st_mode) == 0o750

@@ -305,23 +305,21 @@ class VerifierAccount:
             raise VerifierAccountError(detail)
 
     def remove(self, path: Path) -> None:
-        """Remove files the account created (the owner cannot), only inside its run root."""
+        """Remove files the account created (the owner cannot), only inside its run root.
+
+        macOS runs ``chflags -R nouchg`` as the account first (UF_IMMUTABLE; the owner gets
+        EPERM), then ``chmod -R u+rwx``, both through the sandbox binary sudoers allows.
+        """
         if os.path.islink(path):  # never follow a name the account may have swapped
             return
         real = Path(os.path.realpath(path))
         if self.run_root.resolve() not in real.parents:
             raise VerifierAccountError(f"{real} is outside {self.run_root}")
-        # The account may have left directories without permissions: rm -rf alone cannot
-        # enter them. chmod runs as the account (allowed only through sandbox-exec).
-        for argv in (
-            _backend().unconfined(["/bin/chmod", "-R", "u+rwx", "--", str(real)]),
-            ["/bin/rm", "-rf", "--", str(real)],
-        ):
+        from cairnwork.run_scrub import account_delete_argv
+
+        for argv in account_delete_argv(self.user, str(real), _backend().unconfined):
             subprocess.run(  # noqa: S603 - fixed argv, path checked above
-                [SUDO, "-n", "-u", self.user, "--", *argv],
-                capture_output=True,
-                timeout=60,
-                check=False,
+                argv, capture_output=True, timeout=60, check=False
             )
 
     @staticmethod

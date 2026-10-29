@@ -28,6 +28,11 @@ account can traverse and read, not write, and cannot replace ``run`` with a syml
 unlink only names it owns. The owner's ``home`` and ``tmp`` stay. Those inner symlinks are not
 followed (``rmtree`` only when ``avoids_symlink_attacks``). Only the owner can retarget
 ``private`` or ``run``, and the owner is this process, holding the account lock.
+
+A candidate can ``chflags(UF_IMMUTABLE)`` on its own files under HOME or TMPDIR. Only that
+account (or root) can clear the flag; the owner gets EPERM. On macOS the account therefore
+runs ``chflags -R nouchg`` and ``chmod -R u+rwx`` through the sandbox binary sudoers already
+allows, before ``rm``.
 """
 
 from __future__ import annotations
@@ -81,29 +86,66 @@ def _shown(path: Path) -> str:
     return str(path).replace("\r", "\\r").replace("\n", "\\n")
 
 
-def _hint(user: str, path: Path) -> str:
-    """Owner instructions that work while ``private`` is still group-traversable (0750).
+_SUDO = "/usr/bin/sudo"
+_ALLOW_ALL = "(version 1) (allow default)"
 
-    The steps are separated by ``;``, not ``&&``: a failed account ``rm`` must not skip the
-    owner's. ``chmod`` follows a symlink, so it is only in the real-directory steps. On macOS
-    ``chflags -R nouchg`` clears the user-immutable flag first; Linux has no ``chflags``.
+
+def account_delete_argv(user: str, path: str, wrap) -> list[list[str]]:
+    """Commands as ``user``, in order, before the owner's rmtree.
+
+    ``wrap`` is the sandbox binary with an allow-all policy (what sudoers permits). On macOS
+    ``chflags -R nouchg`` is first: the immutable flag belongs to the account, and the owner's
+    ``chflags`` returns EPERM. ``chmod -R u+rwx`` is the same identity. ``rm`` is named in sudoers.
     """
+
+    def as_account(argv: list[str]) -> list[str]:
+        return [_SUDO, "-n", "-u", user, "--", *wrap(argv)]
+
+    commands: list[list[str]] = []
+    if sys.platform == "darwin":
+        commands.append(as_account(["/usr/bin/chflags", "-R", "nouchg", "--", path]))
+    commands.append(as_account(["/bin/chmod", "-R", "u+rwx", "--", path]))
+    commands.append([_SUDO, "-n", "-u", user, "--", "/bin/rm", "-rf", "--", path])
+    return commands
+
+
+def _as_account_shell(user: str, argv: list[str]) -> str:
+    """One recovery step, naming the account. The sandbox form matches ``unconfined``."""
+    inner = " ".join(shlex.quote(part) for part in argv)
+    tool = (
+        f"/usr/bin/sandbox-exec -p {shlex.quote(_ALLOW_ALL)} {inner}"
+        if sys.platform == "darwin"
+        else f"bwrap --bind / / --dev /dev -- {inner}"
+    )
+    return f"as the verifier account: sudo -n -u {shlex.quote(user)} -- {tool}"
+
+
+def _recovery_steps(user: str, run: Path, private: Path) -> str:
+    """Who runs each step. Joined with ``;``, not ``&&``, and no period after the last command."""
+    q_run, q_priv = shlex.quote(str(run)), shlex.quote(str(private))
+    steps = []
+    if sys.platform == "darwin":
+        steps.append(_as_account_shell(user, ["/usr/bin/chflags", "-R", "nouchg", "--", str(run)]))
+    steps.append(_as_account_shell(user, ["/bin/chmod", "-R", "u+rwx", "--", str(run)]))
+    account_rm = f"sudo -n -u {shlex.quote(user)} -- /bin/rm -rf -- {q_run}"
+    steps.append(f"as the verifier account: {account_rm}")
+    steps.append(f"as the owner: rm -rf -- {q_run}")
+    steps.append(f"as the owner: chmod 700 {q_priv}")
+    return "; ".join(steps)
+
+
+def _hint(user: str, path: Path) -> str:
+    """Recovery while ``private`` is still group-traversable (0750). Not for the run root itself."""
     private = path.parent if path.name == "run" else path
     run = private / "run"
-    q_run, q_priv, q_user = shlex.quote(str(run)), shlex.quote(str(private)), shlex.quote(user)
-    steps = "; ".join(
-        (
-            f"chflags -R nouchg {q_run}",
-            f"sudo -n -u {q_user} -- /bin/rm -rf -- {q_run}",
-            f"rm -rf -- {q_run}",
-            f"chmod 700 {q_priv}",
-        )
-    )
+    q_run, q_priv = shlex.quote(str(run)), shlex.quote(str(private))
+    steps = _recovery_steps(user, run, private)
     return (
-        f"leftover {_shown(path)} blocks the next account run. Clean it by hand without following "
-        f"links: ls -ld {q_priv} {q_run}. If either is a symlink, unlink that symlink only and do "
-        f"not remove or chmod its target. If both are real directories under the run root, run "
-        f"every step even when an earlier one fails (macOS chflags first): {steps}."
+        f"leftover {_shown(path)} blocks the next account run. "
+        f"Clean it by hand without following links: ls -ld {q_priv} {q_run}. "
+        f"If either is a symlink, unlink that symlink only and do not remove or chmod its target. "
+        f"If both are real directories under the run root, run every step even when an earlier "
+        f"one fails. {steps}"
     )
 
 
@@ -237,7 +279,13 @@ def stale_run_error(account) -> str | None:
     try:
         names = sorted(os.listdir(root))
     except OSError as exc:
-        return f"cannot list {_shown(root)}: {exc}. {_hint(account.user, root)}"
+        # Not _hint: that prints `chmod 700` of a private dir, and here the path is the run root.
+        shown = shlex.quote(str(root))
+        return (
+            f"cannot list {_shown(root)}: {exc}. The owner must fix this directory without "
+            f"following links: ls -ld {shown}. If it is a symlink, unlink it only and do not "
+            f"remove its target."
+        )
     stuck: list[Path] = []
     for name in names:
         if name.endswith(".work"):
