@@ -213,7 +213,7 @@ def _check_manifest(
 
     try:
         req_manifest_h = change_manifest_hash(req_manifest)
-    except (KeyError, TypeError, ValueError) as exc:
+    except (KeyError, TypeError, ValueError, RecursionError) as exc:  # #447: never raise
         return _fail("MANIFEST_MISMATCH", f"malformed request.change_manifest: {exc}")
 
     if req_manifest_h != recomputed_hash:
@@ -262,8 +262,30 @@ def verify_bundle(
     VerifyResult with ok=False and the corresponding failure code
     (e.g. BUNDLE_UNREADABLE, BUNDLE_MALFORMED, ENVELOPE_SHAPE). This function
     never raises for external input or verification failures; only programmer
-    errors (such as wrong argument types) may raise.
+    errors (such as wrong argument types) may raise. A signed value nested too deeply to check
+    (#440) refuses with the code of the step that catches it, else ``STATEMENT_SHAPE``: a message
+    that quotes the value, or a comparison, can still recurse past the limit (Python 3.14).
     """
+    try:
+        return _verify_bundle(
+            bundle_path, public_key_pem=public_key_pem, repo=repo,
+            expected_candidate=expected_candidate, core_identity_pin=core_identity_pin,
+            expected_base=expected_base, policy=policy,
+        )  # fmt: skip
+    except RecursionError:
+        return _fail("STATEMENT_SHAPE", "a signed value is nested too deeply to check")
+
+
+def _verify_bundle(
+    bundle_path: Path,
+    *,
+    public_key_pem: Path,
+    repo: Path,
+    expected_candidate: str,
+    core_identity_pin: Mapping[str, Any] | None = None,
+    expected_base: str | None = None,
+    policy: Mapping[str, Any] | None = None,
+) -> VerifyResult:
     payload_bytes, err = _verify_envelope_and_payload(bundle_path, public_key_pem)
     if err is not None:
         return err

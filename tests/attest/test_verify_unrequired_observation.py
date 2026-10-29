@@ -52,7 +52,9 @@ def test_a_receipt_with_only_required_passed_observations_is_accepted(tmp_path, 
     assert _check(tmp_path, repo, required=("pytest", "pytest-1")).code == "OK"
 
 
-@pytest.mark.parametrize("status", [None, "ERROR", "fail", "SKIP", ["FAIL"]], ids=repr)
+@pytest.mark.parametrize(
+    "status", [None, "ERROR", "fail", "SKIP", ["FAIL"], "pass", "PASS "], ids=repr
+)
 def test_any_status_but_pass_refuses(tmp_path, repo, status):
     def edit(observations: list[dict[str, Any]]) -> None:
         other = next(o for o in observations if o["verifier_id"] == "other")
@@ -62,6 +64,18 @@ def test_any_status_but_pass_refuses(tmp_path, repo, status):
             other["status"] = status
 
     assert _check(tmp_path, repo, edit, unrequired=("other",)).code == FAILED
+
+
+@pytest.mark.parametrize("lookalike", [" pytest", "Pytest"], ids=repr)
+def test_an_id_that_only_looks_like_a_required_one_is_unrequired(tmp_path, repo, lookalike):
+    """Only ``pytest`` is required: ids compare exactly, never stripped or case-folded (#440)."""
+
+    def edit(observations: list[dict[str, Any]]) -> None:
+        observations.append(dict(observations[0], verifier_id=lookalike, status="FAIL"))
+
+    out = _check(tmp_path, repo, edit)
+    assert out.code == FAILED, out
+    assert f"[{lookalike!r}]" in out.detail
 
 
 def test_an_observation_that_is_not_an_object_returns_a_result(tmp_path, repo):
