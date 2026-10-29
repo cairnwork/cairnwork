@@ -330,7 +330,8 @@ Checks run in this order and the first failure is reported:
 7. test source: `hidden_test_commit` and the policy's pins; in full mode the test commit is one
    commit on the base changing exactly `test_paths` (`TEST_SOURCE_MISMATCH`); with `test_roots`,
    every bound test path must start with one of the roots, in both modes (`TEST_ROOT_VIOLATION`);
-   the binding's `protection` must be the level of the request's required verifier ids, without
+   the binding's `protection` must be the level of the request's required verifier ids (a list of
+   strings, else this refuses too), without
    the `_macos` suffix (`PROTECTION_LABEL_MISMATCH`; absent means `"same_process_only"`), and a
    level above that needs a `blackbox_commitment` (`PROTECTION_UNCOMMITTED`); each optional
    binding key the policy pins must equal the receipt's (`IMPORT_PATHS_MISMATCH`,
@@ -338,7 +339,9 @@ Checks run in this order and the first failure is reported:
    (`UNPROTECTED`); after a non-empty pinned `blackbox_commitment`, the request's `blackbox:*`
    required ids must be `blackbox:<id>` for exactly the policy's `blackbox_checks` (at least one
    when the policy has none), each named once and observed only as PASS, and no `blackbox:*`
-   observation of an id Core did not require (`BLACKBOX_CHECKS_MISSING`)
+   observation of an id Core did not require (`BLACKBOX_CHECKS_MISSING`); last, with any policy
+   or none, every observation of an id Core did not require must be PASS
+   (`UNREQUIRED_OBSERVATION_FAILED`, #413)
 8. tree (full: `TREE_MISMATCH`, `OVERLAY_UNSUPPORTED_ENTRY`; `REBUILD_FAILED` when git cannot
    rebuild the tree in the receiver's repository, e.g. it is read-only, which says nothing about
    the receipt) or head-tree (confidential: `HEAD_TREE_MISMATCH`, `OVERLAY_UNSUPPORTED_ENTRY`)

@@ -167,7 +167,7 @@ class _Scratch:
             objects = Path(self.repo, common).resolve() / "objects"
         self.dir = Path(tempfile.mkdtemp(dir=self.parent, prefix=".scratch-"))
         try:
-            run_git(self.dir, "init", "--bare", "--quiet")
+            run_git(self.dir, "init", "--bare", "--quiet", "--template=")
             if objects is not None:
                 info = self.dir / "objects" / "info"
                 info.mkdir(parents=True, exist_ok=True)
