@@ -50,6 +50,7 @@ def readers(monkeypatch):
 
     monkeypatch.setattr(proc_cwd, "environment_withheld", withheld)
     monkeypatch.setattr(proc_cwd, "cwd_of", cwd_of)
+    monkeypatch.setattr(proc_cwd, "_started", lambda pid: b"same start")  # pid not reused
     return cwds, unknown, calls
 
 

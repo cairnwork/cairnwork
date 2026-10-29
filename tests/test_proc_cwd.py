@@ -273,6 +273,35 @@ def test_kill_withheld_in_keeps_its_own_guards(tmp_path, monkeypatch, why):
         child.wait()
 
 
+@pytest.mark.parametrize(
+    ("first", "second"), [(b"first start", b"another start"), (b"first start", None), (None, None)]
+)
+def test_a_pid_whose_start_time_changed_is_not_killed(tmp_path, monkeypatch, first, second):
+    # Codex r1 of #420: the pid may be reused between the reads and the kill. The start time is
+    # read before and after; a changed or unreadable one leaves the process alone.
+    monkeypatch.setattr(proc_cwd, "_MACOS", True)
+    monkeypatch.setattr(proc_cwd, "environment_withheld", lambda pid: True)
+    monkeypatch.setattr(proc_cwd, "cwd_of", lambda pid: str(tmp_path))
+    child = _sleeper()
+    answers = iter([first, second])
+    monkeypatch.setattr(proc_cwd, "_started", lambda pid: next(answers))
+    try:
+        row = (child.pid, child.pid, os.getuid(), set())
+        assert proc_cwd.kill_withheld_in([row], (str(tmp_path),), os.getuid()) == ([], [], 0)
+        assert child.poll() is None
+    finally:
+        child.kill()
+        child.wait()
+
+
+@macos
+def test_the_start_time_of_a_live_process_is_read_and_stable():
+    first = proc_cwd._started(os.getpid())
+    assert first is not None and first != bytes(len(first))
+    assert proc_cwd._started(os.getpid()) == first
+    assert proc_cwd._started(_dead_pid()) is None
+
+
 @pytest.mark.parametrize("where", ["outside", "the root itself"])
 def test_attempt_dirs_keep_only_entries_strictly_inside_the_root(tmp_path, monkeypatch, where):
     root = tmp_path / "runs"

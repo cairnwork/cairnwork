@@ -35,7 +35,9 @@ from cairnwork.workspace import ATTEMPT_ID
 
 _MACOS = sys.platform == "darwin"
 _CTL_KERN, _KERN_ARGMAX, _KERN_PROCARGS2 = 1, 8, 49  # <sys/sysctl.h>
-_PROC_PIDVNODEPATHINFO = 9  # <sys/proc_info.h>
+_PROC_PIDTBSDINFO, _PROC_PIDVNODEPATHINFO = 3, 9  # <sys/proc_info.h>
+# struct proc_bsdinfo is 136 bytes; pbi_start_tvsec and pbi_start_tvusec are its last two uint64s
+_BSDINFO_SIZE, _BSDINFO_START = 136, 120
 _CS_OPS_STATUS, _CS_PLATFORM_BINARY = 0, 0x04000000  # <sys/codesign.h>
 # struct proc_vnodepathinfo: pvi_cdir then pvi_rdir, each a vnode_info_path (a 152-byte
 # vnode_info, then vip_path[MAXPATHLEN = 1024])
@@ -157,6 +159,19 @@ def cwd_of(pid: int) -> str | None:
     return os.fsdecode(path) or None
 
 
+def _started(pid: int) -> bytes | None:
+    """The process's start time (proc_pidinfo PROC_PIDTBSDINFO), None when unreadable: read
+    before and after the other reads, an unchanged value means the pid was not reused."""
+    buf = ctypes.create_string_buffer(_BSDINFO_SIZE)
+    try:
+        done = _system().proc_pidinfo(pid, _PROC_PIDTBSDINFO, 0, buf, _BSDINFO_SIZE)
+    except (OSError, AttributeError):
+        return None
+    if done < _BSDINFO_SIZE:
+        return None
+    return buf.raw[_BSDINFO_START:_BSDINFO_SIZE]
+
+
 def attempt_dirs(roots, attempt_id: str) -> tuple[Path, ...]:
     """Realpaths of the attempt's own run directories under each root: ``<attempt_id>`` and
     ``<attempt_id>-<tag>-v<n>[.suffix]`` (the part after ``-v`` may be digits or ``bb``). Only
@@ -207,8 +222,10 @@ def _inside(cwd: str | None, dirs: list[str]) -> bool:
 def kill_withheld_in(rows, dirs, mine: int) -> tuple[list[int], list[int], int]:
     """SIGKILL each of the owner's (``mine``) readable rows whose environment is withheld and
     whose working directory is inside one of ``dirs``; (killed pids, refused pids, how many had
-    exited before the kill). Per row: environment_withheld, cwd_of, then the kill, no wait in
-    between. An unknown answer (None) is ignored: it cannot be tied to the attempt."""
+    exited before the kill). Per row: the start time, environment_withheld, cwd_of, the start
+    time again, then the kill, no wait in between; a changed or unreadable start time means the
+    pid may now be another process, so it is left alone (#310). An unknown answer (None) is
+    ignored: it cannot be tied to the attempt."""
     killed: list[int] = []
     denied: list[int] = []
     vanished = 0
@@ -216,9 +233,12 @@ def kill_withheld_in(rows, dirs, mine: int) -> tuple[list[int], list[int], int]:
         return killed, denied, vanished
     tops = [os.path.realpath(d) for d in dirs]
     for pid, _pgid, uid, environment in rows:
-        if uid != mine or environment is None or environment_withheld(pid) is not True:
+        if uid != mine or environment is None:
             continue
-        if not _inside(cwd_of(pid), tops):
+        started = _started(pid)
+        if started is None or environment_withheld(pid) is not True:
+            continue
+        if not _inside(cwd_of(pid), tops) or _started(pid) != started:
             continue
         try:
             os.kill(pid, signal.SIGKILL)
