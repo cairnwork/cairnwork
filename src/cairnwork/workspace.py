@@ -106,35 +106,67 @@ def create_attempt_clone(repo: Path, base_commit: str, root: Path, attempt_id: s
     except GitCommandError as exc:
         raise WorkspaceError(str(exc)) from exc
     if head != base_commit or differences:
-        _refuse_case_collisions(repo, base_commit, path)
+        if head == base_commit:
+            _refuse_case_collisions(repo, base_commit, path, differences)
         raise WorkspaceError(f"{path} is not a clean checkout of {base_commit}")
     return Attempt(attempt_id, base_commit, path, refs_before)
 
 
-def _refuse_case_collisions(repo: Path, base_commit: str, clone: Path) -> None:
+def _refuse_case_collisions(repo: Path, base_commit: str, clone: Path, differences) -> None:
     """#428: name the cause when a checkout failed because base's tree holds paths that differ
     only in case and the clone's filesystem folds case (both are written to one file, so a
-    rerun never helps). Runs only after the clean-checkout check failed; otherwise returns and
-    the caller raises its generic error. Paths come from the repository, so they are shown
-    with repr: quoted, control characters escaped, never the start of a log line."""
+    rerun never helps). Runs only after the clean-checkout check failed with HEAD at base;
+    otherwise returns and the caller raises its generic error. Differences the collisions do
+    not explain are listed too, so a collision never hides another cause. Paths come from the
+    repository, so they are shown with repr: quoted, control characters escaped, never the
+    start of a log line."""
     try:
         names = run_git(repo, "ls-tree", "-r", "-z", "--name-only", "--full-tree", base_commit)
     except GitCommandError:
         return
+    groups = _case_collisions(filter(None, names.split("\0")))
+    if not groups or not _folds_case(clone):
+        return
+    detail = _collision_detail(groups, _unexplained(differences, groups))
+    raise WorkspaceError(f"{clone} is not a clean checkout of {base_commit}: {detail}")
+
+
+def _case_collisions(names) -> list[list[str]]:
+    """Groups of tree paths, or directories, whose names differ only in case."""
     folded: dict[str, set[str]] = {}
-    for name in filter(None, names.split("\0")):
+    for name in names:
         parts = name.split("/")  # a directory differing in case collides as well
         for end in range(1, len(parts) + 1):
             prefix = "/".join(parts[:end])
             folded.setdefault(prefix.casefold(), set()).add(prefix)
-    groups = sorted(sorted(group) for group in folded.values() if len(group) > 1)
-    if not groups or not _folds_case(clone):
-        return
+    return sorted(sorted(group) for group in folded.values() if len(group) > 1)
+
+
+_DIFFERENCE = re.compile(r"(missing|changed|extra directory|extra) (.+)", re.DOTALL)
+
+
+def _unexplained(differences, groups: list[list[str]]) -> list[str]:
+    """The tree_differences entries a checkout of the colliding paths does not account for:
+    any other kind, or a path with no part (itself or a parent) that folds to a collision."""
+    colliding = {group[0].casefold() for group in groups}
+    left = []
+    for difference in differences:
+        match = _DIFFERENCE.fullmatch(difference)
+        parts = match.group(2).split("/") if match else []
+        prefixes = ("/".join(parts[:end]).casefold() for end in range(1, len(parts) + 1))
+        if not any(prefix in colliding for prefix in prefixes):
+            left.append(difference)
+    return left
+
+
+def _collision_detail(groups: list[list[str]], other: list[str]) -> str:
     shown = ", ".join(f"({', '.join(map(repr, group))})" for group in groups[:3])
     more = f" and {len(groups) - 3} more" if len(groups) > 3 else ""
-    raise WorkspaceError(
-        f"base tree has case-colliding paths {shown}{more} on a case-insensitive filesystem"
-    )
+    detail = f"base tree has case-colliding paths {shown}{more} on a case-insensitive filesystem"
+    if other:
+        listed = ", ".join(map(repr, other[:3]))
+        detail += f"; {len(other)} other difference(s): {listed}"
+    return detail
 
 
 def _folds_case(clone: Path) -> bool:
