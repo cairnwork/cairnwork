@@ -210,7 +210,12 @@ def test_the_verifier_accounts_run_root_is_a_cwd_root(tmp_path):
 @pytest.fixture
 def withheld_here():
     probe = subprocess.Popen(  # noqa: S603 - fixed argv
-        ["/bin/sleep", "30"], stdin=subprocess.DEVNULL, env={"PATH": "/usr/bin:/bin"}
+        ["/bin/sleep", "30"],
+        stdin=subprocess.DEVNULL,
+        # two entries: a single readable entry of a platform binary also counts as withheld
+        # (#310), so one entry could not tell a macOS that shows the environment from one that
+        # withholds it
+        env={"PATH": "/usr/bin:/bin", "PROBE": "1"},
     )
     try:
         answer = proc_cwd.environment_withheld(probe.pid)

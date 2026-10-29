@@ -374,7 +374,7 @@ def test_a_crashed_blackbox_runs_cwd_only_leftover_is_killed(tmp_path):
     root = tmp_path / "runs"
     _dirs(root, f"{ATTEMPT}-v-vbb")
     where = os.path.realpath(root / f"{ATTEMPT}-v-vbb")
-    child = subprocess.Popen(["/bin/sleep", "30"], env={"A": "1"}, cwd=where)  # noqa: S603
+    child = subprocess.Popen(["/bin/sleep", "30"], env={"A": "1", "B": "2"}, cwd=where)  # noqa: S603
     try:
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:  # wait for the exec
