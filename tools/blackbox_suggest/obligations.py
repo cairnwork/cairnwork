@@ -124,8 +124,13 @@ def _fixture_spec(func: ast.FunctionDef | ast.AsyncFunctionDef) -> dict[str, ast
 
 
 def is_autouse(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """Autouse unless the fixture gives no autouse or the literal False (``**`` options count)."""
+    for deco in func.decorator_list:
+        spec = _fixture_decorator(deco)
+        if isinstance(spec, ast.Call) and any(k.arg is None for k in spec.keywords):
+            return True
     auto = (_fixture_spec(func) or {}).get("autouse")
-    return isinstance(auto, ast.Constant) and auto.value is True
+    return auto is not None and not (isinstance(auto, ast.Constant) and auto.value is False)
 
 
 def fixtures_of(trees: list[ast.Module]) -> Fixtures:
