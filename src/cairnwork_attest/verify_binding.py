@@ -256,7 +256,7 @@ def _chain(ctx: _Ctx) -> VerifyResult | None:
         echoed = isinstance(hashes, dict) and hashes.get(
             "acceptance_contract_hash"
         ) == acceptance_contract_hash(contract)
-    except (KeyError, TypeError, ValueError):
+    except (KeyError, TypeError, ValueError, RecursionError):
         echoed = False
     if not echoed:
         return _fail("BINDING_HASH_MISMATCH", "Core's response does not echo this contract")

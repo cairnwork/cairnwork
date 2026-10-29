@@ -75,7 +75,9 @@ def _edited(w: dict, tmp_path: Path, edit: Any) -> Path:
     return resign(w["state"], stmt, tmp_path / "edited.json", rehash=True)
 
 
-@pytest.mark.parametrize("status", [None, "ERROR", "fail", "SKIP", ["FAIL"]], ids=repr)
+@pytest.mark.parametrize(
+    "status", [None, "ERROR", "fail", "SKIP", ["FAIL"], "pass", "PASS "], ids=repr
+)
 def test_any_status_but_pass_refuses(tmp_path, status):
     """Not only FAIL: an absent status (None here), another word, another case or another type."""
     w = _world(tmp_path, ALL, unrequired=("other",))
