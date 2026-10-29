@@ -208,6 +208,7 @@ def test_a_failed_relabel_leaves_the_issue_queued_and_unadopted(setup, monkeypat
 def test_adoptable_turns_an_unreadable_request_into_a_refusal_only_for_a_failed_row(tmp_path):
     want = {"card_hash": "gh:r#1:abc"}
     (tmp_path / "requests").mkdir()
+    (tmp_path / "other").mkdir()  # a plain directory, but not requests/
 
     def unreadable(task_id):
         path = tmp_path / "requests" / f"{task_id}.json"
