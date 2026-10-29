@@ -241,6 +241,39 @@ def test_a_closed_wal_file_is_refused_unopened(state):
     assert files(path) == before
 
 
+def linked(state, make):
+    """state/notary.sqlite as a symlink to a notary elsewhere: SQLite keeps the -journal, -wal
+    and -shm beside that real file, not beside the link."""
+    real = state.parent / "real" / "notary.sqlite"
+    real.parent.mkdir(mode=0o700)
+    make(real)
+    (state / "notary.sqlite").symlink_to(real)
+    return real
+
+
+def test_a_symlinked_notary_with_a_crashed_writers_journal_is_no_mismatch(state):
+    real = linked(state, lambda path: (Notary(path), crash(path)))
+    assert len(files(real)) == 2  # the file and its hot -journal
+    before = files(real)
+    refuse_unmigrated(state / "notary.sqlite")  # as without the link: current, read from a copy
+    code, out = route(state, "check", stdin="{}")
+    assert code != 1 and out.get("error") != "INTERNAL", out
+    assert files(real) == before
+    assert cli(state, "migrate-notary") == (
+        0,
+        {"migrated": False, "from": SCHEMA_VERSION, "to": SCHEMA_VERSION},
+    )
+
+
+def test_a_symlinked_notary_with_a_wal_beside_its_target_is_refused_unopened(state):
+    real = linked(state, stray_wal)
+    before = files(real)
+    for code, out in (route(state, "check", stdin="{}"), cli(state, "migrate-notary")):
+        assert (code, out["error"]) == (2, "NOTARY_SCHEMA_MISMATCH"), out
+    assert files(real) == before  # no -shm made beside the target
+    assert not real.with_name(real.name + "-shm").exists()
+
+
 @pytest.mark.skipif(ROOT, reason="root writes any file")
 def test_a_read_only_notary_with_a_journal_is_read_but_not_migrated(state):
     path = state / "notary.sqlite"

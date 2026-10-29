@@ -40,6 +40,7 @@ def _probe(path: Path) -> tuple[int, bool, bool] | None:
         raise IntakeRefused("BAD_STATE", f"{path} is not a regular file")
     if info.st_size == 0:
         return None
+    path = path.resolve()  # a symlink: SQLite keeps -journal, -wal and -shm beside the real file
     try:
         with path.open("rb") as file:
             header = file.read(20)
