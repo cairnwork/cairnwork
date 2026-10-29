@@ -96,18 +96,19 @@ def _shown(path: Path) -> str:
 _SUDO = "/usr/bin/sudo"
 _ALLOW_ALL = "(version 1) (allow default)"
 
-# Run by the verifier python as the account (macOS): argv is run, then the entry, depth and second
-# limits. One pre-order pass. Per entry, before relying on lstat: clear its ACL (setattrlist with
+# Run by the verifier python as the account (macOS): argv is run, then the entry and second limits.
+# One pre-order pass. Per entry, before relying on lstat: clear its ACL (setattrlist with
 # FSOPT_NOFOLLOW: the entry itself, a symlink too, never a target; no open, so a denied read or
 # readsecurity does not stop it) and uchg/uappnd (the chflags syscall needs no stat). A directory
-# on run's device gets u+rwx and is entered through an O_NOFOLLOW descriptor, so names stay
-# relative (no PATH_MAX). A listing reads at most the names left in the budget plus one and closes
-# its descriptor before the walk goes on. At a limit (entries listed, depth, or the clock, checked
-# before the first listing too) it exits 1 and leaves the rest: rm fails, the scrub refuses.
+# on run's device gets u+rwx and is entered by an O_NOFOLLOW fd, closed once listed (no PATH_MAX).
+# No depth limit: a listing keeps at most half the entries left, so the next one gets some. A
+# cut-short directory once done, or the current one at the clock (checked before any listing), is
+# moved up into run: rm frees the path above it and the next scrub goes on, not over. Exit 1 if
+# anything is left: rm fails, the scrub refuses.
 _UNLOCK_SOURCE = """\
 import ctypes, itertools, os, stat, struct, sys, time
-top, max_nodes, max_depth, seconds = sys.argv[1], *map(int, sys.argv[2:5])
-deadline, listed = time.monotonic() + seconds, 0
+top, max_nodes, seconds = sys.argv[1], *map(int, sys.argv[2:4])
+deadline, listed, cut, stack = time.monotonic() + seconds, 0, False, []
 LOCKS = stat.UF_IMMUTABLE | stat.UF_APPEND
 DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 lib = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
@@ -115,13 +116,21 @@ lib.setattrlist.argtypes = (ctypes.c_char_p,) * 3 + (ctypes.c_size_t, ctypes.c_u
 ATTRS = struct.pack("=HHIIIII", 5, 0, 0x400000, 0, 0, 0, 0)
 FILESEC = struct.pack("=I16s16sII", 0x012CC16D, bytes(16), bytes(16), 0xFFFFFFFF, 0)
 NO_ACL = struct.pack("=iI", 8, len(FILESEC)) + FILESEC
-def stop():
-    sys.exit("unlock: limit reached, the rest is left in place")
 def attempt(call, *args, **kwargs):
     try:
         call(*args, **kwargs)
     except OSError:
         pass
+def leave(cut_short):
+    _names, _short, here = stack.pop()
+    if stack:
+        os.chdir("..")
+        if cut_short and len(stack) > 1:
+            attempt(os.rename, here, os.path.join(top, ".unlock-" + os.urandom(8).hex()))
+def stop():
+    if stack:
+        leave(True)
+    sys.exit("unlock: limit reached, the rest is left in place")
 def no_acl(name):
     lib.setattrlist(os.fsencode(name), ATTRS, NO_ACL, len(NO_ACL), 1)
 def unlock(name):
@@ -140,46 +149,43 @@ def unlock(name):
         no_acl(name)
     return info
 def opened(name, dev):
-    global listed
+    global listed, cut
     if time.monotonic() >= deadline:
         stop()
     fd = os.open(name, DIR)
     try:
         if os.fstat(fd).st_dev != dev:
-            return None
+            raise OSError("another device: left in place")
+        keep = (max_nodes - listed + 1) // 2
         with os.scandir(fd) as entries:
-            names = [entry.name for entry in itertools.islice(entries, max_nodes - listed + 1)]
-        listed += len(names)
-        if listed > max_nodes:
-            stop()
+            names = [entry.name for entry in itertools.islice(entries, keep + 1)]
         os.fchdir(fd)
     finally:
         os.close(fd)
-    return iter(names)
+    cut, listed = cut or len(names) > keep, listed + min(len(names), keep)
+    return iter(names[:keep]), len(names) > keep, name
 dev = os.stat(top, follow_symlinks=False).st_dev
-stack = [opened(top, dev)]
+stack.append(opened(top, dev))
 while stack:
-    name = next(stack[-1], None)
+    name = next(stack[-1][0], None)
     if name is None:
-        stack.pop()
-        if stack:
-            os.chdir("..")
+        leave(stack[-1][1])
         continue
-    if len(stack) > max_depth or time.monotonic() >= deadline:
+    if time.monotonic() >= deadline:
         stop()
     info = unlock(name)
     if info is None or not stat.S_ISDIR(info.st_mode) or info.st_dev != dev:
         continue
     attempt(os.chmod, name, stat.S_IMODE(info.st_mode) | 0o700, follow_symlinks=False)
     try:
-        child = opened(name, dev)
+        stack.append(opened(name, dev))
     except OSError:
-        child = None
-    if child is not None:
-        stack.append(child)
+        pass
+if cut:
+    stop()
 """
 _UNLOCK = f"exec({_UNLOCK_SOURCE!r})"  # one line, so the printed recovery step is one line
-_UNLOCK_LIMITS = (500_000, 400, 45)  # entries, depth, seconds: under remove()'s 60 s timeout
+_UNLOCK_LIMITS = (500_000, 45)  # entries, seconds: under remove()'s 60 s timeout
 
 
 def _unlock_argv(python: str, path: str) -> list[str]:
@@ -223,9 +229,9 @@ def _recovery_steps(user: str, python: str, run: Path, private: Path) -> str:
     steps = [_as_account_shell(user, _unlock_argv(python, str(run)))]
     account_rm = f"sudo -n -u {shlex.quote(user)} -- /bin/rm -rf -- {q_run}"
     steps.append(f"as the verifier account: {account_rm}")
-    if sys.platform == "darwin":  # past a limit only root clears it: root ignores ACLs and modes
+    if sys.platform == "darwin":  # a pass at a limit moves on; what none removes needs root
         root_rm = f"/usr/bin/chflags -R -- nouchg,nouappnd {q_run}; /bin/rm -rfx -- {q_run}"
-        steps.append(f"as root, only if {q_run} is still there (a limit was reached): {root_rm}")
+        steps.append(f"as root, only if repeated account steps stop shrinking {q_run}: {root_rm}")
     steps.append(f"as the owner: rm -rf -- {q_run}")
     steps.append(f"as the owner: chmod 700 {q_priv}")
     return "; ".join(steps)
