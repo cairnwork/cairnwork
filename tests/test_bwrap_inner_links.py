@@ -126,7 +126,9 @@ def test_system_package_targets_are_left_alone(home, target):
         pytest.skip(f"{target} is absent on this host")
     (home / ".config" / "systemd").mkdir(parents=True)
     (home / ".config" / "systemd" / "x").symlink_to(target)
-    assert _under(_policy(home), home.parent) == [f"{_real(home)}/.config"]
+    lines = _policy(home)
+    assert _under(lines, home.parent) == [f"{_real(home)}/.config"]
+    assert _real(Path(target)) not in _masked(lines)  # the target itself is left unmasked
 
 
 def test_an_etc_directory_target_is_refused_and_an_etc_file_masked(home, tmp_path, monkeypatch):
