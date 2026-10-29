@@ -31,6 +31,12 @@ def _masked(lines: list[str]) -> list[str]:
     return tmpfs + null
 
 
+def _under(lines: list[str], base: Path) -> list[str]:
+    """The masks below ``base``: a Linux host adds its own (/dev/shm, /run/user, sockets), so a
+    whole-list comparison only holds on macOS."""
+    return [p for p in _masked(lines) if p.startswith(_real(base) + os.sep)]
+
+
 def _pair(lines: list[str], target: str) -> list[str]:
     i = lines.index(target)
     return lines[i - 1 : i + 1] if lines[i - 1] == "--tmpfs" else lines[i - 2 : i + 1]
@@ -90,7 +96,7 @@ def test_links_inside_the_dir_or_already_masked_add_no_mask(home, out):
     (home / ".netrc").symlink_to(out / "netrc")
     (out / "netrc").write_text("secret\n")
     (home / ".config" / "netrc").symlink_to(home / ".netrc")  # already masked at its target
-    before = _masked(_policy(home))
+    before = _under(_policy(home), home.parent)
     assert sorted(before) == sorted(
         [f"{_real(home)}/.aws", f"{_real(home)}/.config", _real(out / "netrc")]
     )
@@ -120,7 +126,7 @@ def test_system_package_targets_are_left_alone(home, target):
         pytest.skip(f"{target} is absent on this host")
     (home / ".config" / "systemd").mkdir(parents=True)
     (home / ".config" / "systemd" / "x").symlink_to(target)
-    assert _masked(_policy(home)) == [f"{_real(home)}/.config"]
+    assert _under(_policy(home), home.parent) == [f"{_real(home)}/.config"]
 
 
 def test_an_etc_directory_target_is_refused_and_an_etc_file_masked(home, tmp_path, monkeypatch):
@@ -179,8 +185,26 @@ def test_a_dangling_target_outside_every_root_is_skipped_with_a_note(tmp_path, h
     (home / ".codex" / "ctl" / "a.sock").symlink_to(tmp_path / "daemon" / "a.sock")
     (home / ".codex" / "ctl" / "b.sock").symlink_to(tmp_path / "gone.sock")
     policy = bwrap.BACKEND.policy((run,), (), home=home)
-    assert _masked(policy.text.split("\n")) == [f"{_real(home)}/.codex"]
+    assert _under(policy.text.split("\n"), tmp_path) == [f"{_real(home)}/.codex"]
     assert f"{bwrap_inner.DANGLING_NOTE}2" in policy.notes
+
+
+def test_an_unreadable_target_is_refused_not_called_dangling(tmp_path, home):
+    # A permission error on the target is not "it does not exist": skipping it would leave a
+    # target the owner cannot stat unmasked. Only ENOENT and ENOTDIR count as dangling.
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    (locked / "tok").write_text("secret\n")
+    (home / ".aws").mkdir()
+    (home / ".aws" / "x").symlink_to(locked / "tok")
+    locked.chmod(0)
+    try:
+        if os.access(locked / "tok", os.F_OK):
+            pytest.skip("running as a user that stats through a mode-0 directory (root)")
+        with pytest.raises(SandboxError, match=r"\.aws/x.*cannot be checked"):
+            _policy(home, reads=(tmp_path / "run",))
+    finally:
+        locked.chmod(0o700)
 
 
 def test_a_scan_past_the_limit_is_refused(home, monkeypatch):

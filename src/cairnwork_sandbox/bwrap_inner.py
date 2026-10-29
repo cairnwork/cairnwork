@@ -75,9 +75,10 @@ def inner_link_masks(
                 continue
             if not owner and not account_may_traverse(os.path.dirname(real)):
                 continue
-            if not os.path.exists(link) and not _covered(real, set(roots)):
-                skipped += 1
-                continue
+            if not _stat_ok(link):
+                if not _covered(real, set(roots)):
+                    skipped += 1
+                    continue
             if real.startswith(ETC) and os.path.isdir(real):
                 raise SandboxError(
                     f"credential link {link!r} points to the /etc directory {real!r}; a mask there"
@@ -89,6 +90,21 @@ def inner_link_masks(
             flags += added
     notes = [f"{DANGLING_NOTE}{skipped}"] if skipped else []
     return flags, tuple(notes + ([f"{DEPTH_NOTE}{deep}"] if deep else []))
+
+
+def _stat_ok(link: str) -> bool:
+    """The link's target exists. Only ENOENT and ENOTDIR mean dangling; any other error (EACCES)
+    is refused, since a target the owner cannot stat is not known to be absent."""
+    try:
+        os.stat(link)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except OSError as err:
+        raise SandboxError(
+            f"credential link {link!r}: its target cannot be checked ({err.strerror}); a target"
+            " that may exist but is unreadable is not skipped, so make it readable or remove the link"
+        ) from err
+    return True
 
 
 def _hidden(masked: list[str]) -> tuple[set[str], set[str]]:

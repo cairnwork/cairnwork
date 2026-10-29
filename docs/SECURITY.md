@@ -46,13 +46,13 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
       and points inside it, is ignored. Residual: the policy is built before the run, so a credential link repointed while
       a run is in progress leaves its new target readable (main already had this for relative
       links); tracked in #353.
-      A link found *inside* a credential directory (`~/.aws/credentials -> /srv/x/cred`, at any
-      depth) has its real target masked too when that target leaves the directory, by the same
+      A link found *inside* a credential directory (`~/.aws/credentials -> /srv/x/cred`, up to
+      three levels deep) has its real target masked too when that target leaves the directory, by the same
       rule and the same reach rule under the dedicated account (#377): the directory's tmpfs hides
       the link, not the target, which stays readable at its own path. Targets under the
       package-managed prefixes `/usr`, `/nix/store`, `/gnu/store` and `/snap` are public content
-      and are left alone (`~/.config/tz -> /usr/share/zoneinfo`, systemd user units); a link to a
-      directory under `/etc` is refused (a file there is masked). A dangling target under a read
+      and are left alone (`~/.config/tz -> /usr/share/zoneinfo`, systemd user units); the exemption covers all of `/usr`, so a private file reached through `/usr/local` stays readable (known residual); a link to a
+      directory under `/etc` is refused (a file there is masked). A target whose existence cannot be checked (a permission error, not ENOENT or ENOTDIR) is refused; a dangling target under a read
       or write root of the run is refused; any other dangling target is skipped and counted in the
       policy notes. Residual (the #353 kind): the policy binds the whole host root read-only and
       gives the run no private `/tmp`, so a skipped target created while the run is in progress
