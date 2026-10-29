@@ -305,18 +305,20 @@ def test_a_large_directory_stops_at_the_entry_limit(runs, monkeypatch):
 
 
 @darwin
-def test_with_no_time_left_nothing_is_listed_or_unlocked(runs, monkeypatch):
-    """The clock is checked before the first listing: with 0 seconds the top-level lock stays."""
+def test_with_no_time_left_one_entry_is_still_unlocked(runs, monkeypatch):
+    """With 0 seconds a pass still does one unit of work (here: unlock one file), then stops,
+    so a pass never ends with nothing done; the other lock stays."""
     private = _private(runs)
-    locked = private / "run" / "home" / "f"
-    locked.write_text("x")
-    _acl("everyone deny delete", str(locked))
+    home = private / "run" / "home"
+    for name in ("f", "g"):
+        (home / name).write_text("x")
+        _acl("everyone deny delete", str(home / name))
     done = _walk(monkeypatch, private / "run", (500_000, 0))
     assert done.returncode == 1 and "limit reached" in done.stderr, done
     listing = subprocess.run(
-        ["/bin/ls", "-led", str(locked)], capture_output=True, text=True, check=True
+        ["/bin/ls", "-le", str(home)], capture_output=True, text=True, check=True
     ).stdout
-    assert "deny delete" in listing, listing
+    assert listing.count("deny delete") == 1, listing
 
 
 def test_an_unexpected_error_in_cleanup_is_raised_not_swallowed(runs):

@@ -70,14 +70,17 @@ _ALLOW_ALL = "(version 1) (allow default)"
 # on run's device gets u+rwx and is entered by an O_NOFOLLOW fd, closed once listed (no PATH_MAX).
 # No depth limit: a listing keeps at most half the entries left and reads for at most half the
 # time left, so what it read is still unlocked, and the next listing gets some of both. A
-# cut-short directory once done, or the current one at the clock (checked before any listing), is
+# cut-short directory once done, or the current one at the clock (checked before each entry), is
 # moved up into run unless it is right under run already: rm frees the path above it and the next
-# scrub goes on, not over. Exit 1 if anything is left (cut short, an entry or listing that failed,
-# the clock): rm fails, the scrub refuses.
+# scrub goes on, not over. Whatever the clock says, a pass does one unit of work first: unlock a
+# non-directory or finish a directory (rm can then remove it), or stop deep enough to move one up.
+# So past the clock it does at most that one unit: a listing it reads then is cut at one name.
+# Exit 1 if anything is left (cut short, an entry or listing that failed, another device, the
+# clock): rm fails, the scrub refuses.
 _UNLOCK_SOURCE = """\
 import ctypes, itertools, os, stat, struct, sys, time
 top, max_nodes, seconds = sys.argv[1], *map(int, sys.argv[2:4])
-deadline, listed, cut, stack = time.monotonic() + seconds, 0, False, []
+deadline, listed, cut, done, stack = time.monotonic() + seconds, 0, False, False, []
 LOCKS = stat.UF_IMMUTABLE | stat.UF_APPEND
 DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 lib = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
@@ -100,6 +103,8 @@ def stop():
     if stack:
         leave(True)
     sys.exit("unlock: limit reached, the rest is left in place")
+def late():
+    return time.monotonic() >= deadline and (done or len(stack) > 2)
 def no_acl(name):
     lib.setattrlist(os.fsencode(name), ATTRS, NO_ACL, len(NO_ACL), 1)
 def unlock(name):
@@ -119,8 +124,6 @@ def unlock(name):
     return info
 def opened(name, dev):
     global listed, cut
-    if time.monotonic() >= deadline:
-        stop()
     fd = os.open(name, DIR)
     try:
         if os.fstat(fd).st_dev != dev:
@@ -144,13 +147,17 @@ stack.append(opened(top, dev))
 while stack:
     name = next(stack[-1][0], None)
     if name is None:
+        done = done or not stack[-1][1]
         leave(stack[-1][1])
         continue
-    if time.monotonic() >= deadline:
+    if late():
         stop()
     info = unlock(name)
-    cut = cut or info is None
-    if info is None or not stat.S_ISDIR(info.st_mode) or info.st_dev != dev:
+    if info is None or info.st_dev != dev:
+        cut = True
+        continue
+    if not stat.S_ISDIR(info.st_mode):
+        done = True
         continue
     attempt(os.chmod, name, stat.S_IMODE(info.st_mode) | 0o700, follow_symlinks=False)
     try:
@@ -207,7 +214,7 @@ def _recovery_steps(user: str, python: str, run: Path, private: Path) -> str:
     steps.append(f"as the verifier account: {account_rm}")
     if sys.platform == "darwin":  # a pass at a limit moves on; what none removes needs root
         root_rm = f"/usr/bin/chflags -R -- nouchg,nouappnd {q_run}; /bin/rm -rfx -- {q_run}"
-        steps.append(f"as root, only if repeated account steps stop shrinking {q_run}: {root_rm}")
+        steps.append(f"as root, only if {q_run} is still there after that: {root_rm}")
     steps.append(f"as the owner: rm -rf -- {q_run}")
     steps.append(f"as the owner: chmod 700 {q_priv}")
     return "; ".join(steps)
@@ -223,8 +230,9 @@ def _hint(user: str, python: str, path: Path) -> str:
         f"leftover {_shown(path)} blocks the next account run. "
         f"Clean it by hand without following links: ls -ld {q_priv} {q_run}. "
         f"If either is a symlink, unlink that symlink only and do not remove or chmod its target. "
-        f"If both are real directories under the run root, run every step even when an earlier "
-        f"one fails. {steps}"
+        f"If both are real directories under the run root, run the steps in order even when one "
+        f"fails, and repeat the two account steps until {q_run} is gone or a pass removes or "
+        f"moves nothing in it. {steps}"
     )
 
 
