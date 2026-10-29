@@ -39,11 +39,12 @@ AS THE ACCOUNT, by the verifier's Python with ``-I -S`` through the sudo path
 account_checkout.py uses, once ``kill_all`` confirms no process of the account is left. In owner
 mode it runs as the owner. The owner judges its output.
 
-Known gaps. Bytecode planted and removed again during the run is not seen (as for the checkout
-and the run's prefix). Candidate code that changes the import path itself (``sys.path``,
-``sys.meta_path``, path hooks, a ``.pth`` or a zip archive on the path) can load its own
-``helper.py`` or bytecode from HOME without any of this: that in-process import hijack is not
-claimed here or in pycache_guard; the report guard and the verifier account are the boundary.
+Known gaps. Bytecode planted and removed again during the run is not seen (as for the checkout and
+the run's prefix); Seatbelt denies reading it in the write roots (#368), bwrap does not. Candidate
+code that changes the import path itself (``sys.path``, ``sys.meta_path``, path hooks, a ``.pth``
+or a zip archive on the path) can load its own ``helper.py`` or bytecode from HOME without any of
+this: that in-process import hijack is not claimed here or in pycache_guard; the report guard and
+the verifier account are the boundary.
 """
 
 from __future__ import annotations

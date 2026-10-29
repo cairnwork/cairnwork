@@ -6,7 +6,8 @@ own TMPDIR. Python and pytest also *read* bytecode from that prefix (pytest's as
 loads ``<prefix>/<dir>/<name>.<tag>-pytest-<ver>.pyc`` whenever the header matches the source's
 mtime and size, even with PYTHONDONTWRITEBYTECODE set), and the prefix is outside the checkout
 comparison. The counterexamples below plant such bytecode from candidate library code and must
-fail the run with FORGED_BYTECODE. All of them run the real sandbox through run_verifiers.
+fail the run with FORGED_BYTECODE (under Seatbelt the planted bytecode is not even read, #368).
+All of them run the real sandbox through run_verifiers.
 """
 
 import os
@@ -18,6 +19,10 @@ from conftest import commit_change, git
 from cairnwork.verifiers import parse_verifier, run_verifiers
 
 pytestmark = pytest.mark.sandbox
+# pytest's exit code once the forgery is planted: 0 where it is loaded (bwrap), 1 under Seatbelt,
+# which denies reading bytecode under a write root (#368), so the real test fails as written. The
+# scan must name the planted file either way.
+PLANTED_RC = 1 if sys.platform == "darwin" else 0
 
 CONFTEST = (
     "import sys, pathlib\nsys.path.insert(0, str(pathlib.Path(__file__).parent.parent / 'src'))\n"
@@ -124,7 +129,7 @@ def test_a_forged_pytest_pyc_for_a_protected_test_fails_the_run(project, tmp_pat
     head = commit_change(project, files)
     spec = parse_verifier("v", ["python3", "-m", "pytest", "tests/test_a.py", "tests/test_z.py"])
     (run,) = run_verifiers(project, head, (spec,), tmp_path / "runs", "r1", python=sys.executable)
-    assert run.returncode == 0, run.log_path.read_text()  # the forgery really ran
+    assert run.returncode == PLANTED_RC, run.log_path.read_text()
     assert not run.observation.passed and not run.plain_failure
     assert "FORGED_BYTECODE" in run.why and "tests/test_z" in run.why, run.why
 
@@ -149,7 +154,7 @@ def test_an_upper_case_pytest_pyc_name_fails_the_run_and_is_bound(project, tmp_p
     spec = parse_verifier("v", ["python3", "-m", "pytest", "tests/test_a.py", "tests/test_z.py"])
     (run,) = run_verifiers(project, head, (spec,), tmp_path / "runs", "r1", python=sys.executable)
     if os.path.exists(str(tmp_path).upper()):
-        assert run.returncode == 0, run.log_path.read_text()  # case-insensitive: forgery ran
+        assert run.returncode == PLANTED_RC, run.log_path.read_text()
     assert not run.observation.passed
     assert "FORGED_BYTECODE" in run.why and "PYTEST" in run.why, run.why
     assert len(bound) == 1 and any("PYTEST" in f for f in bound[0]["forged_bytecode"])
@@ -178,7 +183,7 @@ def test_a_long_s_spelling_fails_the_run(project, tmp_path, pytest_pyc):
     spec = parse_verifier("v", ["python3", "-m", "pytest", "tests/test_a.py", "tests/test_z.py"])
     (run,) = run_verifiers(project, head, (spec,), tmp_path / "runs", "r1", python=sys.executable)
     if os.path.exists(str(tmp_path).replace("s", "\u017f")):
-        assert run.returncode == 0, run.log_path.read_text()  # APFS folded it: forgery ran
+        assert run.returncode == PLANTED_RC, run.log_path.read_text()
     assert not run.observation.passed
     assert "FORGED_BYTECODE" in run.why and "non-ASCII name" in run.why, run.why
 
@@ -195,7 +200,7 @@ def test_a_forged_plain_pyc_for_a_protected_helper_fails_the_run(project, tmp_pa
     head = commit_change(project, files)
     spec = parse_verifier("v", ["python3", "-m", "pytest", "tests/test_a.py", "tests/test_z.py"])
     (run,) = run_verifiers(project, head, (spec,), tmp_path / "runs", "r1", python=sys.executable)
-    assert run.returncode == 0, run.log_path.read_text()
+    assert run.returncode == PLANTED_RC, run.log_path.read_text()
     assert not run.observation.passed
     assert "FORGED_BYTECODE" in run.why and "tests/helper" in run.why, run.why
 
@@ -216,7 +221,7 @@ def test_a_case_variant_cache_path_for_a_protected_helper_fails_the_run(project,
     spec = parse_verifier("v", ["python3", "-m", "pytest", "tests/test_a.py", "tests/test_z.py"])
     (run,) = run_verifiers(project, head, (spec,), tmp_path / "runs", "r1", python=sys.executable)
     if os.path.exists(str(tmp_path).upper()):
-        assert run.returncode == 0, run.log_path.read_text()  # case-insensitive: forgery ran
+        assert run.returncode == PLANTED_RC, run.log_path.read_text()
     assert not run.observation.passed
     assert "FORGED_BYTECODE" in run.why and "Tests/helper" in run.why, run.why
 
@@ -230,6 +235,6 @@ def test_forged_bytecode_for_a_module_outside_the_checkout_fails_the_run(project
         "tests/test_a.py": ("import evil, colorsys\n\ndef test_a():\n    assert colorsys.FORGED\n"),
     }
     (run,) = verify(project, tmp_path, files, "tests/test_a.py")
-    assert run.returncode == 0, run.log_path.read_text()
+    assert run.returncode == PLANTED_RC, run.log_path.read_text()
     assert not run.observation.passed
     assert "FORGED_BYTECODE" in run.why and "colorsys" in run.why, run.why

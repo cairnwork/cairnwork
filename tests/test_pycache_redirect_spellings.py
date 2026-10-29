@@ -9,12 +9,14 @@ points ``sys.pycache_prefix`` at the run's HOME and plants bytecode there for te
 A spelled-out redirect (plain, aliased, setattr, vars) is refused by tamper_scan before anything
 runs; a name built from strings passes it, and the after-run scan fails the run instead. Bytecode
 removed again before the run ends (the prefix directory, or only the pyc files in it; the name
-built by concatenation or with chr) is the known gap of that scan (bytecode_roots.py): those cases
-expect the fix (not VERIFIED) and are strict xfails until it lands, while the sys.modules swap in
-test_blackbox_verify.py, which needs no bytecode at all, stays a false green. Both are in-process
-forgeries; the boundary is the blackbox declaration (#303) and a verdict produced outside the
-candidate's process, not these scans.
+built by concatenation or with chr) is the known gap of that scan (bytecode_roots.py): Seatbelt
+closes it by never reading bytecode under a write root (#368), and those cases stay strict xfails
+under bwrap, while the sys.modules swap in test_blackbox_verify.py, which needs no bytecode at all,
+stays a false green. Both are in-process forgeries; the boundary is the blackbox declaration
+(#303) and a verdict produced outside the candidate's process, not these scans.
 """
+
+import sys
 
 import pytest
 from verify_helpers import BAD, base_of, candidate, verify
@@ -79,6 +81,7 @@ def test_a_redirect_built_from_strings_fails_on_the_planted_bytecode(state, help
 
 
 @pytest.mark.xfail(
+    sys.platform != "darwin",  # Seatbelt denies reading the planted pyc (#368); bwrap cannot
     strict=True,
     raises=AssertionError,
     reason="Refs #276: bytecode removed before the after-run scan still gives VERIFIED",
@@ -86,10 +89,13 @@ def test_a_redirect_built_from_strings_fails_on_the_planted_bytecode(state, help
 @pytest.mark.parametrize("how", sorted(REMOVED))
 def test_bytecode_removed_before_the_run_ends_is_not_verified(state, helper_project, how):
     """The gap bytecode_roots.py names: add is wrong, so only the forged helper passes it
-    (test_the_same_wrong_add_without_a_forgery_fails). Today the run comes back VERIFIED and the
-    final assert xfails; a fix makes it XPASS, which strict mode fails: then remove the marker.
+    (test_the_same_wrong_add_without_a_forgery_fails). Under bwrap the run comes back VERIFIED and
+    the final assert xfails; a fix makes it XPASS, which strict mode fails: then remove the marker.
     Any other outcome (a broken run) is a plain failure, never hidden by the xfail."""
     out = run(state, helper_project, REMOVED[how])
+    if sys.platform == "darwin":  # #368: the planted pyc is never read, so the wrong add fails
+        assert out["status"] == "FAILED" and "pytest exit code 1" in out["reason"], out
+        return
     if out["status"] != "VERIFIED" and "FORGED_BYTECODE" not in out.get("reason", ""):
         pytest.fail(f"neither the known false green nor FORGED_BYTECODE: {out}")
     assert out["status"] != "VERIFIED", out
