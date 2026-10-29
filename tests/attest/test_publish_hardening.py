@@ -8,7 +8,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import TEST_GIT_ENV, git
+from conftest import git, injected_test_git_env
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from publish_helpers import (
     _NOTES_REF,
@@ -324,6 +324,6 @@ def test_remote_lock_failure_is_retried(
 def test_publish_git_sees_the_production_environment(publish_env) -> None:
     """conftest's test-only git variables (#417) never reach publish's own git calls."""
     src, _, _ = publish_env
-    assert not [k for k, v in TEST_GIT_ENV.items() if os.environ.get(k) == v]
+    assert injected_test_git_env(os.environ) == []
     shown = _git(src, "config", "--show-origin", "--list")
     assert shown.returncode == 0 and "command line:" not in shown.stdout
