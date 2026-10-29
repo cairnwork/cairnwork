@@ -23,6 +23,8 @@ from publish_helpers import (
 from cairnwork_attest.cli import main
 from cairnwork_attest.publish import _git, publish_bundle
 
+pytestmark = pytest.mark.usefixtures("production_git_env")  # publish._git inherits os.environ
+
 
 @pytest.fixture
 def key() -> Ed25519PrivateKey:

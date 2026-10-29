@@ -16,6 +16,8 @@ from cairnwork_attest.cli import main
 from cairnwork_attest.publish import publish_bundle
 from tests.attest.test_attest_cli import setup_cli_fixture
 
+pytestmark = pytest.mark.usefixtures("production_git_env")  # publish._git inherits os.environ
+
 TOKEN = "ghs_SECRETTOKEN123"
 SLUG = "octo/repo"
 
