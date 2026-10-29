@@ -75,6 +75,7 @@ from cairnwork.core_request import VerifierObservation
 from cairnwork.import_path_tree import require_plain_dirs
 from cairnwork.pycache_guard import PYCACHE_DIR
 from cairnwork.reasons import why_not_passed
+from cairnwork.run_scrub import close_private
 from cairnwork.verifier_account import VerifierAccount, VerifierAccountError, lock_wait_seconds
 from cairnwork.verifier_exec import (  # low-level run primitives, split out for the 400-line cap
     _execute,
@@ -163,6 +164,7 @@ def run_verifiers(
             if not account.available(python):
                 raise VerifierAccountError(f"account {account.user} is not usable")
             account.require_idle()
+            account.scrub_stale_runs()  # a killed run's private/run, before this run creates one
             return _run_all(
                 repo,
                 candidate_commit,
@@ -310,9 +312,12 @@ def _run_one(
             repo, candidate_commit, spec, checkout, python, timeout, attempt_id, account,
             settings, note, plugins, ini_text, private, channel,
         )  # fmt: skip
-    finally:
-        if channel is not None:
-            channel.close()
+    finally:  # close the channel, then drop private/run even if that close raises
+        try:
+            if channel is not None:
+                channel.close()
+        finally:
+            close_private(private, account)
 
 
 def _run_one_in(
@@ -369,7 +374,6 @@ def _run_one_in(
         mutated=mutated, survivors=survivors, log_too_big=too_big, tests_ran=ran,
         report_too_big=verdict.too_big, forged=forged,
     )  # fmt: skip
-    _remove_scratch((home, tmp), account)
     digest = _record_digest(
         candidate_commit=candidate_commit,
         verifier_id=spec.verifier_id,

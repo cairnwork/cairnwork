@@ -29,9 +29,10 @@ from cairnwork.blackbox_runner import _RUNNER_SOURCE, MODULE, OUTPUT_NAME, insta
 from cairnwork.bytecode_roots import bytecode_findings
 from cairnwork.confined import ATTEMPT_ENV
 from cairnwork.import_path_tree import require_plain_dirs
+from cairnwork.run_scrub import close_private
 from cairnwork.verifier_account import VerifierAccount, VerifierAccountError, lock_wait_seconds
 from cairnwork.verifier_exec import _execute, _write_new
-from cairnwork.verifiers import DEFAULT_TIMEOUT_SECONDS, _prepare_run, _remove_scratch
+from cairnwork.verifiers import DEFAULT_TIMEOUT_SECONDS, _prepare_run
 from cairnwork.workspace import create_attempt_clone
 
 RUNNER_SHA256 = hashlib.sha256(_RUNNER_SOURCE.encode()).hexdigest()
@@ -69,6 +70,7 @@ def run_blackbox(
         if not account.available(python):
             raise VerifierAccountError(f"account {account.user} is not usable")
         account.require_idle()
+        account.scrub_stale_runs()  # a killed run's private/run, before this run creates one
         return _run(*args, account.run_root, python, account)
 
 
@@ -92,6 +94,19 @@ def _run(declaration, repo, commit, run_id, attempt_id, timeout, paths, run_root
 
 def _run_in(declaration, repo, commit, checkout, python, timeout, attempt_id, account, paths):
     private = Path(tempfile.mkdtemp(prefix=f"{checkout.name}.", dir=checkout.parent.parent))
+    try:
+        return _run_in_open(
+            declaration, repo, commit, checkout, python, timeout, attempt_id, account, paths,
+            private,
+        )  # fmt: skip
+    finally:
+        # after _read: the whole private/run goes, then private is owner-only (0700)
+        close_private(private, account)
+
+
+def _run_in_open(
+    declaration, repo, commit, checkout, python, timeout, attempt_id, account, paths, private
+):
     log_path, ini, profile_path = private / "blackbox.log", private / "unused.ini", private / "p.sb"
     run_dir, home, tmp, env, _, _ = _prepare_run(private, ini, b"")
     out = run_dir / OUTPUT_NAME
@@ -123,7 +138,6 @@ def _run_in(declaration, repo, commit, checkout, python, timeout, attempt_id, ac
     mutated = checkout_differences(repo, commit, checkout, before, account, python)
     forged = bytecode_findings(tmp, checkout, run_dir, (), account, python)
     report = _read(out) if profile is not None else None
-    _remove_scratch((home, tmp), account)
     return BlackboxRun(
         report, returncode, timed_out, survivors, tuple(mutated), tuple(forged), log_path, real,
         profile.sha256 if profile else None, account is not None,

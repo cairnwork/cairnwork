@@ -42,20 +42,12 @@ from cairnwork_sandbox import Backend, platform_backend
 
 SUDO = "/usr/bin/sudo"
 DEFAULT_USER = "cairnwork-verifier"
-# The shared root lives where the platform keeps shared service data: /Users/Shared on macOS,
-# /var/lib on Linux. scripts/setup_verifier_user.sh (macOS) and setup_verifier_user_linux.sh
-# create it there; the account machinery is otherwise identical on both.
+# /var/lib/cairnwork on Linux, /Users/Shared/cairnwork on macOS (setup_verifier_user*.sh).
 DEFAULT_ROOT = Path(
     "/var/lib/cairnwork" if sys.platform.startswith("linux") else "/Users/Shared/cairnwork"
 )
 
 
-# A waiter gives up after this long instead of queueing behind a stuck holder. run_verifiers
-# holds the lock across every spec (each bounded by its timeout, 600 s by default), so it does
-# not use this fixed floor alone: lock_wait_seconds() sizes the wait from the spec count.
-# Waiters queue by ticket in .verifier.queue; a dead waiter's released flock lets us skip it.
-# A live but stopped (SIGSTOP) older waiter blocks later ones until their own timeout,
-# which fails closed.
 LOCK_TIMEOUT_SECONDS = 900.0
 _LOCK_MARGIN_SECONDS = 300.0
 # The derived wait never exceeds this (4 h, about 23 specs at the 600 s default): a huge spec
@@ -303,6 +295,14 @@ class VerifierAccount:
         left = self.kill_all()
         if left != 0:
             raise VerifierAccountError(f"account {self.user} still runs processes ({left})")
+
+    def scrub_stale_runs(self) -> None:
+        """Under exclusive(), after require_idle: drop leftover private/run dirs or refuse."""
+        from cairnwork.run_scrub import stale_run_error
+
+        detail = stale_run_error(self)
+        if detail:
+            raise VerifierAccountError(detail)
 
     def remove(self, path: Path) -> None:
         """Remove files the account created (the owner cannot), only inside its run root."""

@@ -8,11 +8,11 @@ candidate test, which also walks the same roots itself from inside the run and t
 ``connect()`` on each with every AF_UNIX socket type. Nothing is sent. This is a point-in-time
 witness: it covers the sockets present when it runs.
 
-#392: in account mode, files a run leaves in its private ``run/`` directory (HOME and TMPDIR are
-removed after the run, the checkout's work directory too, but ``run/`` itself is not) may stay
-readable by the next run under the same account. The first run writes a marker next to each of
-those places; the second looks for it, by walking the account run root and by opening the known
-paths.
+#392: in account mode, a run's private ``run/`` directory (and anything the candidate wrote
+there) used to stay readable by the next run. The first run writes a marker in HOME, TMPDIR,
+``run/`` and the work directory; after it returns, ``run/`` is gone and ``private`` is ``0700``.
+The second run walks the account run root and opens those paths, and must also be able to read
+a control file the owner placed, so an empty walk is not a pass.
 
 All of these run the real sandbox through run_verifiers. The account-mode variants need the
 verifier account (pytest.mark.verifier_account).
@@ -175,8 +175,8 @@ def test_account_no_host_pathname_socket_is_connectable(repo, tmp_path, own_name
     assert run.observation.passed, "\n".join((run.why, listed, run.log_path.read_text()))
 
 
-# #392: where the first run leaves a marker. HOME, TMPDIR and the work directory are removed after
-# every run; run/ (HOME's parent) is not.
+# #392: markers the first run writes. home/tmp/run sit under private/run and are removed with it;
+# work sits in <run_id>.work, which remove_checkout deletes. The known paths are that formula.
 PLACES = {
     "home": "Path(os.environ['HOME'])",
     "tmpdir": "Path(os.environ['TMPDIR'])",
@@ -186,8 +186,12 @@ PLACES = {
 LEAVE = (
     "import os\nfrom pathlib import Path\n\n"
     "def test_leave():\n"
+    "    written = []\n"
     "    for where, place in {places}.items():\n"
-    "        (place / ('cw-leftover-{token}-' + where)).write_text('{token}')\n"
+    "        path = place / ('cw-leftover-{token}-' + where)\n"
+    "        path.write_text('{token}')\n"
+    "        written.append(where)\n"
+    "    assert written == ['home', 'tmpdir', 'run', 'work']\n"
 )
 FIND = (
     "import os\n\n"
@@ -211,25 +215,38 @@ FIND = (
     "        print('LEFTOVER FOUND ' + path)\n"
     "    for path in readable:\n"
     "        print('LEFTOVER READABLE ' + path)\n"
+    "    assert open({control!r}).read() == {control_text!r}, 'walk control was not readable'\n"
+    "    assert count > 0, 'the walk saw nothing, so it cannot witness an absence'\n"
     "    assert not found and not readable, 'leftovers of the last run, listed on stdout'\n"
 )
 
 
 def leftovers(root, token):
-    """Owner's view: the paths under ``root`` whose name carries ``token`` (no link followed)."""
+    """Owner's view. An unreadable directory fails the walk: silence is not 'nothing left'."""
     hits = []
-    for top, dirs, files in os.walk(root):
+
+    def boom(err):
+        raise RuntimeError(f"cannot walk {err.filename}") from err
+
+    for top, dirs, files in os.walk(root, onerror=boom):
         hits += [os.path.join(top, n) for n in dirs + files if token in n]
     return sorted(hits)
 
 
+def _marker_paths(private, run_root, token):
+    """Where LEAVE writes. mkdtemp keeps checkout.name before the dot in the private dir's name."""
+    stem, name = private.name.rsplit(".", 1)
+    assert len(name) == 8  # mkdtemp suffix; a different shape means the formula is wrong
+    run = private / "run"
+    return [
+        str(run / "home" / f"cw-leftover-{token}-home"),
+        str(run / "tmp" / f"cw-leftover-{token}-tmpdir"),
+        str(run / f"cw-leftover-{token}-run"),
+        str(run_root / f"{stem}.work" / f"cw-leftover-{token}-work"),
+    ]
+
+
 @pytest.mark.verifier_account
-@pytest.mark.xfail(
-    sys.platform == "linux",
-    strict=True,
-    raises=AssertionError,
-    reason="Refs #392: a marker left in run/ is found and read by the next account run",
-)
 def test_account_a_run_cannot_find_what_the_last_run_left(repo, tmp_path, own_names):
     token = os.urandom(8).hex()
     places = "{" + ", ".join(f"{k!r}: {v}" for k, v in PLACES.items()) + "}"
@@ -237,13 +254,32 @@ def test_account_a_run_cannot_find_what_the_last_run_left(repo, tmp_path, own_na
         repo, tmp_path, {"tests/test_leave.py": LEAVE.format(places=places, token=token)},
         "tests/test_leave.py", ACCOUNT, own_names,
     )  # fmt: skip
-    assert first.observation.passed, first.why + "\n" + first.log_path.read_text()
-    run_dir = first.log_path.parent / "run"  # the private dir holds the log and run/
-    known = [str(run_dir / f"cw-leftover-{token}-{where}") for where in PLACES]
-    owner_view = leftovers(ACCOUNT.run_root, token)
-    code = FIND.format(root=str(ACCOUNT.run_root), limit=WALK_LIMIT, token=token, known=known)
+    if not first.observation.passed:
+        pytest.fail(first.why + "\n" + first.log_path.read_text())
+    private = first.log_path.parent
+    if os.path.lexists(private / "run"):
+        pytest.fail(f"{private / 'run'} still exists after the run")
+    mode = stat.S_IMODE(private.stat().st_mode)
+    if mode != 0o700:
+        pytest.fail(f"{private} mode is {mode:04o}, want 0700")
+    for name in ("verifier.log", "pytest.ini", "profile.sb"):
+        if not (private / name).is_file():
+            pytest.fail(f"evidence {private / name} was removed with run/")
+    if first.observation.artifact_id != f"{private.name}/verifier.log":
+        pytest.fail(f"observation log path is {first.observation.artifact_id}")
+    known = _marker_paths(private, ACCOUNT.run_root, token)
+    still = leftovers(ACCOUNT.run_root, token)
+    if still:
+        pytest.fail(f"owner can still see the last run's markers: {still}")
+    control = ACCOUNT.run_root / f"{own_names[0]}cw-control"
+    control.write_text("control-ok")
+    os.chmod(control, 0o644)
+    code = FIND.format(
+        root=str(ACCOUNT.run_root), limit=WALK_LIMIT, token=token, known=known,
+        control=str(control), control_text="control-ok",
+    )  # fmt: skip
     second = run_one(
         repo, tmp_path, {"tests/test_find.py": code}, "tests/test_find.py", ACCOUNT, own_names
     )
-    owner_lines = "".join(f"LEFT AFTER RUN 1 (owner's view) {path}\n" for path in owner_view)
-    assert second.observation.passed, second.why + "\n" + owner_lines + second.log_path.read_text()
+    if not second.observation.passed:
+        pytest.fail(second.why + "\n" + second.log_path.read_text())
