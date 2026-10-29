@@ -20,13 +20,13 @@ verifier account (pytest.mark.verifier_account).
 
 import inspect
 import os
-import shutil
 import socket
 import stat
 import sys
 
 import pytest
 from conftest import commit_change
+from run_root_scope import own_run_id, own_run_names
 
 from cairnwork.verifier_account import VerifierAccount
 from cairnwork.verifiers import parse_verifier, run_verifiers
@@ -119,19 +119,20 @@ PROBE = (
 )
 
 
-def run_one(repo, tmp_path, files, target, account=None):
+def run_one(repo, tmp_path, files, target, account=None, prefixes=None):
     head = commit_change(repo, files)
     spec = parse_verifier("v", ["python3", "-m", "pytest", target])
     if account is None:
         root, python = tmp_path / "runs", sys.executable
     else:
         root, python = account.run_root, None
-    run_id = "r" + os.urandom(6).hex()
+    # in account mode the run root is shared: register the id so only this run is removed
+    run_id = "r" + os.urandom(6).hex() if prefixes is None else own_run_id(prefixes, "r")
     (run,) = run_verifiers(repo, head, (spec,), root, run_id, python=python, account=account)
     return run
 
 
-def socket_run(repo, tmp_path, account=None):
+def socket_run(repo, tmp_path, account=None, prefixes=None):
     host, unreadable, count = socket_paths(SOCKET_ROOTS, WALK_LIMIT, WALK_DEPTH)
     assert host, f"no pathname socket under {SOCKET_ROOTS} on this host: the witness is vacuous"
     code = PROBE.format(
@@ -142,7 +143,9 @@ def socket_run(repo, tmp_path, account=None):
         limit=WALK_LIMIT,
         depth=WALK_DEPTH,
     )
-    run = run_one(repo, tmp_path, {"tests/test_sockets.py": code}, "tests/test_sockets.py", account)
+    run = run_one(
+        repo, tmp_path, {"tests/test_sockets.py": code}, "tests/test_sockets.py", account, prefixes
+    )
     listed = f"host: {len(host)} sockets in {count} entries, {len(unreadable)} unreadable"
     return run, listed
 
@@ -157,20 +160,18 @@ def test_no_host_pathname_socket_is_connectable_inside_a_run(repo, tmp_path):
 
 
 @pytest.fixture
-def account_run_root():
-    """The account's run root is shared: remove what these tests leave there."""
-    root = ACCOUNT.run_root
-    before = set(os.listdir(root)) if root.is_dir() else set()
-    yield
-    for name in (set(os.listdir(root)) if root.is_dir() else set()) - before:
-        ACCOUNT.remove(root / name)
-        shutil.rmtree(root / name, ignore_errors=True)
+def own_names():
+    """Name prefixes these tests create in the account's run root; only those are removed after
+    the test, under the account lock (run_root_scope). The run root is shared with other
+    sessions' runs: never remove "whatever is new"."""
+    with own_run_names(ACCOUNT.run_root, ACCOUNT) as prefixes:
+        yield prefixes
 
 
 @pytest.mark.verifier_account
 @SOCKETS_OPEN_ON_LINUX
-def test_account_no_host_pathname_socket_is_connectable(repo, tmp_path, account_run_root):
-    run, listed = socket_run(repo, tmp_path, account=ACCOUNT)
+def test_account_no_host_pathname_socket_is_connectable(repo, tmp_path, own_names):
+    run, listed = socket_run(repo, tmp_path, account=ACCOUNT, prefixes=own_names)
     assert run.observation.passed, "\n".join((run.why, listed, run.log_path.read_text()))
 
 
@@ -229,18 +230,20 @@ def leftovers(root, token):
     raises=AssertionError,
     reason="Refs #392: a marker left in run/ is found and read by the next account run",
 )
-def test_account_a_run_cannot_find_what_the_last_run_left(repo, tmp_path, account_run_root):
+def test_account_a_run_cannot_find_what_the_last_run_left(repo, tmp_path, own_names):
     token = os.urandom(8).hex()
     places = "{" + ", ".join(f"{k!r}: {v}" for k, v in PLACES.items()) + "}"
     first = run_one(
         repo, tmp_path, {"tests/test_leave.py": LEAVE.format(places=places, token=token)},
-        "tests/test_leave.py", ACCOUNT,
+        "tests/test_leave.py", ACCOUNT, own_names,
     )  # fmt: skip
     assert first.observation.passed, first.why + "\n" + first.log_path.read_text()
     run_dir = first.log_path.parent / "run"  # the private dir holds the log and run/
     known = [str(run_dir / f"cw-leftover-{token}-{where}") for where in PLACES]
     owner_view = leftovers(ACCOUNT.run_root, token)
     code = FIND.format(root=str(ACCOUNT.run_root), limit=WALK_LIMIT, token=token, known=known)
-    second = run_one(repo, tmp_path, {"tests/test_find.py": code}, "tests/test_find.py", ACCOUNT)
+    second = run_one(
+        repo, tmp_path, {"tests/test_find.py": code}, "tests/test_find.py", ACCOUNT, own_names
+    )
     owner_lines = "".join(f"LEFT AFTER RUN 1 (owner's view) {path}\n" for path in owner_view)
     assert second.observation.passed, second.why + "\n" + owner_lines + second.log_path.read_text()
