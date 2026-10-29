@@ -22,7 +22,7 @@ import hashlib
 import json
 import re
 import shlex
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -118,6 +118,30 @@ def parse_task_block(body: str, roots: tuple[str, ...] = DEFAULT_TEST_ROOTS) -> 
         block_sha256=hashlib.sha256(blocks[0].encode()).hexdigest(),
         test_commit=test_commit,
     )
+
+
+def adoptable(bound: Any, load_request: Callable[[str], Any], want: Mapping[str, Any]) -> bool:
+    """May the issue runner adopt ``bound``, the ledger row under its own idempotency key, instead
+    of submitting ``want`` (#426)? False when the row carries another card hash (another block
+    behind the same key prefix). With the same card, the bound request must be the one ``want``
+    asks for: title, instructions (the task text), allowed files, verifiers and test commit, else
+    IssueRefused, so a client that pre-bound the key and card with its own files, verifiers or task
+    text is never adopted. base_commit and repo may differ: main moves, the intake binds its mirror.
+    """
+    if bound.card_hash != want["card_hash"]:
+        return False
+    request = load_request(bound.task_id)
+    expected = {
+        "title": want["title"],
+        "instructions": want["instructions"],
+        "allowed_files": tuple(want["allowed_files"]),
+        "verifiers": tuple((name, tuple(argv)) for name, argv in want["verifiers"]),
+        "test_commit": want.get("test_commit", ""),
+    }
+    differ = [name for name, value in expected.items() if getattr(request, name) != value]
+    if differ:
+        raise IssueRefused("TASK_BOUND_REQUEST_DIFFERS", f"{bound.task_id}: {', '.join(differ)}")
+    return True
 
 
 def _check_path(path: Any) -> None:

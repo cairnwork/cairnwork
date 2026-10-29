@@ -48,7 +48,7 @@ from cairnwork.issue_publish import (
     refusal_text,
     require_bot_gh,
 )
-from cairnwork.issue_task import TASK_FENCE, IssueRefused, parse_task_block
+from cairnwork.issue_task import TASK_FENCE, IssueRefused, adoptable, parse_task_block
 from cairnwork.lineage import require_on_main
 from cairnwork.lineage import verify_origin as _verify_origin
 from cairnwork.notary import NotaryError
@@ -135,14 +135,6 @@ def _take_one(intake, github, clone, base, issue) -> dict[str, Any]:
     if reason:  # untrusted queueing: leave the Issue exactly as it is
         return {"skipped": reason}
     task = parse_task_block(issue.get("body") or "", tuple(intake.config()["test_roots"]))
-    # no record, a bad one, or one of an older block: the ledger knows what was bound (a resubmit
-    # is refused once main moved, #404, #424)
-    known = _recall(intake, github.repo, number, strict=False)
-    if not known or known.get("block_sha256") != task.block_sha256:
-        known = _from_ledger(intake, github.repo, number, task.block_sha256) or known
-    if known and known.get("block_sha256") == task.block_sha256:
-        github.relabel(number, RUNNING, QUEUE)  # taken before; only the label was missing
-        return {"task_id": known["task_id"], "already": True}
     payload = {
         "idempotency_key": f"gh:{github.repo}#{number}:{task.block_sha256[:16]}",
         "card_hash": f"gh:{github.repo}#{number}:{task.block_sha256}",
@@ -152,9 +144,17 @@ def _take_one(intake, github, clone, base, issue) -> dict[str, Any]:
         "base_commit": base,
         "allowed_files": list(task.allowed_files),
         "verifiers": [[f"pytest-{i}", list(v)] for i, v in enumerate(task.verifiers)],
+        **({"test_commit": task.test_commit} if task.test_commit else {}),
     }
+    # no record, a bad one, or one of an older block: the ledger knows what was bound (a resubmit
+    # is refused once main moved, #404, #424), adopted only if bound with this payload (#426)
+    known = _recall(intake, github.repo, number, strict=False)
+    if not known or known.get("block_sha256") != task.block_sha256:
+        known = _from_ledger(intake, github.repo, number, task.block_sha256, payload) or known
+    if known and known.get("block_sha256") == task.block_sha256:
+        github.relabel(number, RUNNING, QUEUE)  # taken before; only the label was missing
+        return {"task_id": known["task_id"], "already": True}
     if task.test_commit:  # bind to the tests' parent; the tests stay off this machine
-        payload["test_commit"] = task.test_commit
         payload["base_commit"] = _test_base(github, clone, task.test_commit, intake.test_store())
     now = github.current(number)  # re-read: nothing may change between first check and dispatch
     if now != {k: issue.get(k) for k in ("title", "body")} or github.trust(number, QUEUE):
@@ -339,13 +339,13 @@ def _recall(intake: Intake, repo: str, number: int, strict=True) -> dict[str, An
     return None
 
 
-def _from_ledger(intake: Intake, repo: str, number: int, block: str) -> dict[str, Any] | None:
-    """The task bound for this exact block (take's key and card hash), its record written again."""
+def _from_ledger(intake: Intake, repo: str, number: int, block: str, want) -> dict[str, Any] | None:
+    """The task bound for this block with take's key, card and request (#426); record rewritten."""
     try:
         bound = intake.ledger.get(idempotency_key=f"gh:{repo}#{number}:{block[:16]}")
     except OwnershipUnknown:
         return None
-    if bound.card_hash != f"gh:{repo}#{number}:{block}":  # same prefix, another block
+    if not adoptable(bound, intake.load_request, want):  # same prefix, another block
         return None
     _remember(intake, repo, number, bound.task_id, block)
     return {"task_id": bound.task_id, "block_sha256": block}
