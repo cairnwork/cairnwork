@@ -195,10 +195,13 @@ class Intake:
 
     def check_state(self) -> None:
         """BAD_STATE unless the state is a directory we own with mode 0700 (no side effects)."""
-        info = self.state.lstat()
+        try:
+            info = self.state.lstat()
+        except (NotADirectoryError, PermissionError) as exc:  # a bad parent (#367)
+            raise IntakeRefused("BAD_STATE", f"{self.state}: {exc.strerror}") from exc
         if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
             raise IntakeRefused("BAD_STATE", f"{self.state} is not a directory owned by us")
-        if info.st_mode & 0o077:
+        if info.st_mode & 0o777 != 0o700:  # 0600 or 0500 cannot hold a run (#367)
             raise IntakeRefused("BAD_STATE", f"{self.state} must be mode 0700")
 
     @contextmanager

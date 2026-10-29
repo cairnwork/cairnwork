@@ -88,6 +88,25 @@ class NotarySchemaOlder(NotarySchemaMismatch):
     code = "NOTARY_SCHEMA_OLDER"
 
 
+def schema_refusal(
+    path: Path, version: int, has_table: bool, objects: bool
+) -> NotarySchemaMismatch | None:
+    """Why the database at path is no notary a run may open, else None: a current notary, or a
+    blank database (version 0, no schema object) that a run makes one. Read by notary_migrate."""
+    if not has_table:  # not ours unless blank: never stamped as a notary (#367)
+        if version or objects:
+            return NotarySchemaMismatch(f"user_version {version} but no notary table")
+        return None
+    if version in MIGRATIONS:  # nothing written: migration is an explicit step (#343)
+        return NotarySchemaOlder(
+            f"user_version {version}, need {SCHEMA_VERSION}; back up and migrate with"
+            f" cairnwork-verify --state {Path(path).parent} migrate-notary"
+        )
+    if version != SCHEMA_VERSION:
+        return NotarySchemaMismatch(f"user_version {version}, need {SCHEMA_VERSION}")
+    return None
+
+
 @dataclass(frozen=True)
 class Verdict:
     task_id: str
@@ -136,20 +155,17 @@ class Notary:
             has_table = conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'core_verifications'"
             ).fetchone()
+            objects = conn.execute("SELECT count(*) FROM sqlite_master").fetchone()[0]
             conn.execute("COMMIT")
+            problem = schema_refusal(self._path, version, bool(has_table), bool(objects))
+            if problem is not None:
+                raise problem
             if not has_table:  # only a new database is written to; readers never take the lock
                 # Tables, triggers and user_version commit together, so no other connection
                 # can see the tables without the version (or race to a half-built schema).
                 conn.executescript(
                     f"BEGIN IMMEDIATE;{SCHEMA}PRAGMA user_version = {SCHEMA_VERSION};COMMIT;"
                 )
-            elif version in MIGRATIONS:  # nothing written: migration is an explicit step (#343)
-                raise NotarySchemaOlder(
-                    f"user_version {version}, need {SCHEMA_VERSION}; back up and migrate with"
-                    f" cairnwork-verify --state {self._path.parent} migrate-notary"
-                )
-            elif version != SCHEMA_VERSION:
-                raise NotarySchemaMismatch(f"user_version {version}, need {SCHEMA_VERSION}")
         finally:
             conn.close()
 
