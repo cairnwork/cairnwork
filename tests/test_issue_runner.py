@@ -47,7 +47,7 @@ class FakeGitHub(runner.GitHub):
             raise RuntimeError("gh api failed: HTTP 404 Not Found")
         return self.commits[commit]
 
-    def find_pr(self, branch):
+    def find_pr(self, branch, commit):
         return next(
             (
                 f"https://github.com/James3014/demo/pull/{i + 1}"

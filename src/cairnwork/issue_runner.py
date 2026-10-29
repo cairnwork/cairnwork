@@ -257,7 +257,7 @@ def _open_pr(intake: Intake, github: GitHub, clone: Path, number: int, status) -
     ):
         raise ValueError(f"RECEIPT_BINDING_MISMATCH: candidate {commit} is not what was notarized")
     branch = f"cairnwork/{number}-{attempt}"
-    existing = github.find_pr(branch)
+    existing = github.find_pr(branch, commit)
     if existing:  # a previous pass opened it; only the labels were left to do
         return existing
     _verify_origin(clone, github.repo)  # re-checked: the remote may have changed
