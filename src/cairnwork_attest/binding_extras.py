@@ -115,10 +115,7 @@ def pin_problem(ctx: Any) -> VerifyResult | None:
     strings bear no label out. Last, under any policy or none, no observation of an id Core did
     not require may be other than PASS (#413)."""
     policy, binding = ctx.policy, ctx.binding
-    contract = ctx.request.get("acceptance_contract")
-    ids = contract.get("required_verifier_ids") if isinstance(contract, dict) else None
-    if not (isinstance(ids, list) and all(isinstance(i, str) for i in ids)):
-        ids = None  # #413: no list of string ids bears any label out, nor says what was required
+    ids = required_ids(ctx.request)
     recorded = recorded_protection(binding)
     expected = protection.level(ids, macos=False) if ids is not None else None
     if protection.coverage(recorded) != expected:  # the host grade is the producer's to state
@@ -137,6 +134,14 @@ def pin_problem(ctx: Any) -> VerifyResult | None:
         if problem is not None:  # a failed VerifyResult is falsy: never `problem or ...`
             return problem
     return _unrequired_problem(ids or [], ctx.request)
+
+
+def required_ids(request: Mapping[str, Any]) -> list[str] | None:
+    """The signed request's required verifier ids, or None when they are not a list of strings:
+    #413, such ids bear no label out, nor say what was required."""
+    contract = request.get("acceptance_contract")
+    ids = contract.get("required_verifier_ids") if isinstance(contract, dict) else None
+    return ids if isinstance(ids, list) and all(isinstance(i, str) for i in ids) else None
 
 
 def _checks_problem(
@@ -172,6 +177,7 @@ def _unrequired_problem(ids: list[Any], request: Mapping[str, Any]) -> VerifyRes
     is not PASS is still evidence that something failed, so it refuses. No producer sends one
     (pipeline_judge._contract builds the ids and the observations from the same runs and checks).
     A PASS one stays accepted here; a ``blackbox:*`` one refuses under a commitment pin (#373).
+    It runs for a v0.1 receipt too (verify.py, #430), with ``required_ids(request) or []``.
     ids are strings (pin_problem refused any other), and an observation's id that is not a string
     is never a required one. An observation that is not an object is skipped, not refused, here:
     Core's evidence hash cannot be computed over it, so the Core-verdict step refuses the receipt

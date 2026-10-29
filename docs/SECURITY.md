@@ -176,7 +176,7 @@ the current producer builds both from one declaration, so either is an inconsist
 several PASS observations of one required id are still accepted). With any policy or none, an
 observation of any id Core did not require that is not PASS refuses (`UNREQUIRED_OBSERVATION_FAILED`,
 #413: a FAIL the receiver was not asked about is still evidence that something failed; no producer
-sends one). The receiver must copy both
+sends one); a v0.1 receipt refuses it the same way (#430). The receiver must copy both
 fields unchanged: a hand-shortened `blackbox_checks` accepts receipts that skip the dropped checks,
 and nothing here can tell without the declaration. A policy written before #312 pins
 the commitment alone and is accepted with a weaker check: at least one `blackbox:*` id, each PASS.
