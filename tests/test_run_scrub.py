@@ -213,7 +213,7 @@ def test_both_deletes_fail_and_recovery_steps_quote_a_hostile_path(tmp_path, mon
     policy = shlex.quote("(version 1) (allow default)")
     chflags = (
         f"as the verifier account: sudo -n -u cairnwork-verifier -- /usr/bin/sandbox-exec -p "
-        f"{policy} /usr/bin/chflags -R nouchg -- {q_run}"
+        f"{policy} /usr/bin/chflags -R nouchg,nouappnd -- {q_run}"
     )
     chmod_account = (
         f"as the verifier account: sudo -n -u cairnwork-verifier -- /usr/bin/sandbox-exec -p "
@@ -284,7 +284,7 @@ def test_chflags_is_requested_as_the_account(tmp_path, monkeypatch):
     chflags = next(argv for argv in account.commands if "/usr/bin/chflags" in argv)
     rm = next(argv for argv in account.commands if "/bin/rm" in argv)
     assert chflags[:4] == ["/usr/bin/sudo", "-n", "-u", "cairnwork-verifier"]
-    assert "nouchg" in chflags and "/usr/bin/chflags" in chflags
+    assert "nouchg,nouappnd" in chflags and "nouchg" not in chflags
     assert account.commands.index(chflags) < account.commands.index(rm)
     assert not (private / "run").exists()
 
@@ -305,7 +305,7 @@ def test_remove_clears_the_immutable_flag_as_the_account(tmp_path, monkeypatch):
     va.VerifierAccount(user="acct", root=root).remove(root / "runs" / "rid-v0.abcd1234")
     chflags = next(argv for argv in ran if "/usr/bin/chflags" in argv)
     assert chflags[:4] == ["/usr/bin/sudo", "-n", "-u", "acct"]
-    assert "nouchg" in chflags
+    assert "nouchg,nouappnd" in chflags and "nouchg" not in chflags
 
 
 def test_an_unlistable_run_root_has_no_private_chmod(tmp_path, monkeypatch):

@@ -307,8 +307,8 @@ class VerifierAccount:
     def remove(self, path: Path) -> None:
         """Remove files the account created (the owner cannot), only inside its run root.
 
-        macOS runs ``chflags -R nouchg`` as the account first (UF_IMMUTABLE; the owner gets
-        EPERM), then ``chmod -R u+rwx``, both through the sandbox binary sudoers allows.
+        macOS runs ``chflags -R nouchg,nouappnd`` as the account first (immutable and append-only;
+        the owner gets EPERM), then ``chmod -R u+rwx``, through the sandbox binary sudoers allows.
         """
         if os.path.islink(path):  # never follow a name the account may have swapped
             return

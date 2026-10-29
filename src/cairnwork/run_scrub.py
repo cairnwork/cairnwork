@@ -29,10 +29,10 @@ unlink only names it owns. The owner's ``home`` and ``tmp`` stay. Those inner sy
 followed (``rmtree`` only when ``avoids_symlink_attacks``). Only the owner can retarget
 ``private`` or ``run``, and the owner is this process, holding the account lock.
 
-A candidate can ``chflags(UF_IMMUTABLE)`` on its own files under HOME or TMPDIR. Only that
-account (or root) can clear the flag; the owner gets EPERM. On macOS the account therefore
-runs ``chflags -R nouchg`` and ``chmod -R u+rwx`` through the sandbox binary sudoers already
-allows, before ``rm``.
+A candidate can ``chflags`` ``UF_IMMUTABLE`` or ``UF_APPEND`` on its own files under HOME or
+TMPDIR. Only that account (or root) can clear them; the owner gets EPERM. On macOS the account
+therefore runs ``chflags -R nouchg,nouappnd`` and ``chmod -R u+rwx`` through the sandbox binary
+sudoers already allows, before ``rm``. Clearing only ``nouchg`` leaves append-only files.
 """
 
 from __future__ import annotations
@@ -94,8 +94,9 @@ def account_delete_argv(user: str, path: str, wrap) -> list[list[str]]:
     """Commands as ``user``, in order, before the owner's rmtree.
 
     ``wrap`` is the sandbox binary with an allow-all policy (what sudoers permits). On macOS
-    ``chflags -R nouchg`` is first: the immutable flag belongs to the account, and the owner's
-    ``chflags`` returns EPERM. ``chmod -R u+rwx`` is the same identity. ``rm`` is named in sudoers.
+    ``chflags -R nouchg,nouappnd`` is first: immutable and append-only belong to the account, and
+    the owner's ``chflags`` returns EPERM. ``chmod -R u+rwx`` is the same identity. ``rm`` is in
+    sudoers. Clearing only ``nouchg`` leaves append-only names that ``rm`` cannot unlink.
     """
 
     def as_account(argv: list[str]) -> list[str]:
@@ -103,7 +104,7 @@ def account_delete_argv(user: str, path: str, wrap) -> list[list[str]]:
 
     commands: list[list[str]] = []
     if sys.platform == "darwin":
-        commands.append(as_account(["/usr/bin/chflags", "-R", "nouchg", "--", path]))
+        commands.append(as_account(["/usr/bin/chflags", "-R", "nouchg,nouappnd", "--", path]))
     commands.append(as_account(["/bin/chmod", "-R", "u+rwx", "--", path]))
     commands.append([_SUDO, "-n", "-u", user, "--", "/bin/rm", "-rf", "--", path])
     return commands
@@ -125,7 +126,8 @@ def _recovery_steps(user: str, run: Path, private: Path) -> str:
     q_run, q_priv = shlex.quote(str(run)), shlex.quote(str(private))
     steps = []
     if sys.platform == "darwin":
-        steps.append(_as_account_shell(user, ["/usr/bin/chflags", "-R", "nouchg", "--", str(run)]))
+        flags = ["/usr/bin/chflags", "-R", "nouchg,nouappnd", "--", str(run)]
+        steps.append(_as_account_shell(user, flags))
     steps.append(_as_account_shell(user, ["/bin/chmod", "-R", "u+rwx", "--", str(run)]))
     account_rm = f"sudo -n -u {shlex.quote(user)} -- /bin/rm -rf -- {q_run}"
     steps.append(f"as the verifier account: {account_rm}")
