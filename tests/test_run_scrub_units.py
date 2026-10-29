@@ -170,3 +170,144 @@ def test_past_the_clock_right_under_run_one_unit_is_done_then_it_stops(runs, kin
     assert done.returncode == 1 and "limit reached" in done.stderr, done
     subprocess.run(["/bin/rm", "-rf", "--", str(private / "run")], capture_output=True, check=False)
     assert len(os.listdir(home)) == 4
+
+
+# os.lstat fails for every name starting with "m" (as for an entry the account does not own, or
+# a race), counted; the clock is a test clock that the preamble's "jump" moves past the deadline.
+_FAILING_M = """\
+import atexit, os, time
+now, real_lstat, real_fchdir, real_chdir, failed_m = [0], os.lstat, os.fchdir, os.chdir, set()
+time.monotonic = lambda: now[0]
+def lstat(name, *args, **kwargs):
+    if isinstance(name, str) and name.startswith("m"):
+        if now[0]:
+            failed_m.add(name)
+        raise PermissionError(1, "injected")
+    return real_lstat(name, *args, **kwargs)
+def fchdir(fd):
+    real_fchdir(fd)
+    if "{jump}" == "listed" and os.fstat(fd).st_ino == {ino}:
+        now[0] = 10**6
+def chdir(path):
+    if "{jump}" == "left" and path == ".." and os.stat(".").st_ino == {ino}:
+        now[0] = 10**6
+    real_chdir(path)
+os.lstat, os.fchdir, os.chdir = lstat, fchdir, chdir
+atexit.register(lambda: print("entries failed past the clock", len(failed_m)))
+"""
+
+
+def _failing_m(jump: str, directory: Path) -> str:
+    return _FAILING_M.format(jump=jump, ino=os.lstat(directory).st_ino)
+
+
+@darwin
+def test_past_the_clock_right_under_run_a_failing_entry_ends_the_pass(runs):
+    """Five entries right under run's home that fail every time, listed before the clock runs
+    out: past the clock the pass tries one, then stops (exit 1), instead of trying them all."""
+    private = _private(runs)
+    home = private / "run" / "home"
+    for index in range(5):
+        (home / f"m{index}").write_text("x")
+    done = _walk(private / "run", (500_000, 30), _failing_m("listed", home))
+    assert done.returncode == 1 and "limit reached" in done.stderr, done
+    assert done.stdout.split()[-1] == "1", done
+
+
+@darwin
+def test_a_directory_with_an_entry_that_failed_is_not_counted_as_done(runs):
+    """``d`` holds an entry that fails, and the clock runs out as the walk leaves ``d``: ``d`` is
+    not removable, so it is no unit of work, and the pass goes on to ``e`` (listed after ``d``)
+    and unlocks one of its locked files before it stops."""
+    top = runs / "top"
+    (top / "d").mkdir(parents=True)
+    (top / "d" / "m").write_text("x")
+    (top / "e").mkdir()
+    for index in range(5):
+        _locked_file(top / "e" / f"f{index}")
+    assert [entry.name for entry in os.scandir(top)] == ["d", "e"]
+    done = _walk(top, (500_000, 30), _failing_m("left", top / "d"))
+    assert done.returncode == 1 and "limit reached" in done.stderr, done
+    subprocess.run(["/bin/rm", "-rf", "--", str(top)], capture_output=True, check=False)
+    assert len(os.listdir(top / "e")) == 4
+
+
+@darwin
+def test_an_entry_that_fails_every_pass_stays_and_every_pass_exits_1(runs):
+    """What no account pass can remove (item G: here a mount point, by an injected lstat; or an
+    entry the account does not own) is left in place, fail-closed: every pass exits 1 and run/
+    stays, so the scrub keeps refusing and only root can clear it. The rest is removed."""
+    private = _private(runs)
+    run = private / "run"
+    (run / "home" / "m").mkdir()
+    _locked_file(run / "home" / "m" / "f")
+    for index in range(5):
+        _locked_file(run / "home" / f"f{index}")
+    for _ in range(3):
+        done = _walk(run, (500_000, 45), _MOUNTED)
+        assert done.returncode == 1 and "limit reached" in done.stderr, done
+        subprocess.run(["/bin/rm", "-rf", "--", str(run)], capture_output=True, check=False)
+        assert os.listdir(run / "home") == ["m"]
+
+
+@darwin
+def test_with_the_entry_budget_spent_no_directory_is_opened_or_listed(runs):
+    """Budget 10 on a 50-level chain: 10 names are listed and visited, no directory below them is
+    entered or read, and the last one listed is moved up into run/ (a unit of work)."""
+    private = _private(runs)
+    run = private / "run"
+    deep = run / "home"
+    for _ in range(50):
+        deep = deep / "d"
+    deep.mkdir(parents=True)
+    counting = progress._COUNTED + (
+        "real_fchdir, depth = os.fchdir, [0]\n"
+        "def fchdir(fd):\n"
+        "    real_fchdir(fd)\n"
+        "    depth[0] += 1\n"
+        "os.fchdir = fchdir\n"
+        "atexit.register(lambda: print('entered', depth[0]))\n"
+    )
+    done = _walk(run, (10, 45), counting)
+    assert done.returncode == 1 and "limit reached" in done.stderr, done
+    assert progress._names_read(done) == 10, done
+    assert done.stdout.split()[1] == "10", done  # run/ and the 9 directories above the 10th
+    assert len([name for name in os.listdir(run) if name.startswith(".unlock-")]) == 1
+
+
+# Injected failures of the move up into run/ and of opening a directory named "d".
+_FAILING_CALL = """\
+import os
+real_rename, real_open = os.rename, os.open
+def rename(*args, **kwargs):
+    if "{fails}" == "move":
+        raise PermissionError(1, "injected")
+    return real_rename(*args, **kwargs)
+def open_(name, *args, **kwargs):
+    if "{fails}" == "open" and name == "d":
+        raise PermissionError(1, "injected")
+    return real_open(name, *args, **kwargs)
+os.rename, os.open = rename, open_
+"""
+
+
+@darwin
+@pytest.mark.parametrize("fails", ["nothing", "move", "open"])
+def test_past_the_clock_a_move_or_a_failure_under_home_ends_the_pass(runs, fails):
+    """home holds ``d`` and then ``e`` (a locked directory); budget 6 cuts ``d``'s listing short
+    and the two entries kept in it fail. "nothing"/"move": the clock runs out as the walk leaves
+    ``d``, and ``d`` is moved up into run/ (a unit) or the move fails; "open": the clock runs out
+    once home is listed, and opening ``d`` fails. Either way the pass stops before ``e``."""
+    private = _private(runs)
+    run, home = private / "run", private / "run" / "home"
+    (home / "d").mkdir()
+    for index in range(3):
+        (home / "d" / f"m{index}").write_text("x")
+    (home / "e").mkdir()
+    os.chflags(home / "e", stat.UF_IMMUTABLE)
+    assert [entry.name for entry in os.scandir(home)] == ["d", "e"]
+    jump = ("listed", home) if fails == "open" else ("left", home / "d")
+    done = _walk(run, (6, 30), _failing_m(*jump) + _FAILING_CALL.format(fails=fails))
+    assert done.returncode == 1 and "limit reached" in done.stderr, done
+    assert os.lstat(home / "e").st_flags & stat.UF_IMMUTABLE, done
+    assert sorted(os.listdir(home)) == (["e"] if fails == "nothing" else ["d", "e"])

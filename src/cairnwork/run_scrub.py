@@ -73,14 +73,17 @@ _ALLOW_ALL = "(version 1) (allow default)"
 # cut-short directory once done, or the current one at the clock (checked before each entry), is
 # moved up into run unless it is right under run already: rm frees the path above it and the next
 # scrub goes on, not over. Whatever the clock says, a pass does one unit of work first: unlock a
-# non-directory or finish a directory (rm can then remove it), or stop deep enough to move one up.
-# So past the clock it does at most that one unit: a listing it reads then is cut at one name.
-# Exit 1 if anything is left (cut short, an entry or listing that failed, another device, the
-# clock): rm fails, the scrub refuses.
+# non-directory, finish a directory with nothing in it cut short or failed (rm can then remove
+# it), or move one up. So past the clock it does at most that one unit, or tries one entry that
+# fails (what fails every pass is item G: root only); a listing it reads then is cut at one name.
+# With the entry budget spent no directory is opened again: a deep one is moved up instead.
+# Exit 1 if anything is left (cut short, an entry, listing or move that failed, another device,
+# the clock): rm fails, the scrub refuses.
 _UNLOCK_SOURCE = """\
 import ctypes, itertools, os, stat, struct, sys, time
 top, max_nodes, seconds = sys.argv[1], *map(int, sys.argv[2:4])
 deadline, listed, cut, done, stack = time.monotonic() + seconds, 0, False, False, []
+failed, failed_late = 0, False
 LOCKS = stat.UF_IMMUTABLE | stat.UF_APPEND
 DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 lib = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
@@ -92,19 +95,30 @@ def attempt(call, *args, **kwargs):
     try:
         call(*args, **kwargs)
     except OSError:
-        pass
+        return False
+    return True
+def fail():
+    global cut, failed, failed_late
+    cut, failed = True, failed + 1
+    failed_late = failed_late or time.monotonic() >= deadline
+def up(name):
+    global done
+    if attempt(os.rename, name, os.path.join(top, ".unlock-" + os.urandom(8).hex())):
+        done = True
+    else:
+        fail()
 def leave(cut_short):
-    _names, _short, here = stack.pop()
+    _names, _short, here, _failed = stack.pop()
     if stack:
         os.chdir("..")
         if cut_short and len(stack) > 1:
-            attempt(os.rename, here, os.path.join(top, ".unlock-" + os.urandom(8).hex()))
+            up(here)
 def stop():
     if stack:
         leave(True)
     sys.exit("unlock: limit reached, the rest is left in place")
 def late():
-    return time.monotonic() >= deadline and (done or len(stack) > 2)
+    return time.monotonic() >= deadline and (done or failed_late or len(stack) > 2)
 def no_acl(name):
     lib.setattrlist(os.fsencode(name), ATTRS, NO_ACL, len(NO_ACL), 1)
 def unlock(name):
@@ -141,29 +155,34 @@ def opened(name, dev):
         os.close(fd)
     short = short or len(names) > keep
     cut, listed = cut or short, listed + min(len(names), keep)
-    return iter(names[:keep]), short, name
+    return iter(names[:keep]), short, name, failed
 dev = os.stat(top, follow_symlinks=False).st_dev
 stack.append(opened(top, dev))
 while stack:
     name = next(stack[-1][0], None)
     if name is None:
-        done = done or not stack[-1][1]
+        done = done or (not stack[-1][1] and stack[-1][3] == failed)
         leave(stack[-1][1])
         continue
     if late():
         stop()
     info = unlock(name)
     if info is None or info.st_dev != dev:
-        cut = True
+        fail()
         continue
     if not stat.S_ISDIR(info.st_mode):
         done = True
         continue
     attempt(os.chmod, name, stat.S_IMODE(info.st_mode) | 0o700, follow_symlinks=False)
+    if listed >= max_nodes:
+        cut = True
+        if len(stack) > 1:
+            up(name)
+        continue
     try:
         stack.append(opened(name, dev))
     except OSError:
-        cut = True
+        fail()
 if cut:
     stop()
 """
