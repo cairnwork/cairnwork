@@ -106,8 +106,44 @@ def create_attempt_clone(repo: Path, base_commit: str, root: Path, attempt_id: s
     except GitCommandError as exc:
         raise WorkspaceError(str(exc)) from exc
     if head != base_commit or differences:
+        _refuse_case_collisions(repo, base_commit, path)
         raise WorkspaceError(f"{path} is not a clean checkout of {base_commit}")
     return Attempt(attempt_id, base_commit, path, refs_before)
+
+
+def _refuse_case_collisions(repo: Path, base_commit: str, clone: Path) -> None:
+    """#428: name the cause when a checkout failed because base's tree holds paths that differ
+    only in case and the clone's filesystem folds case (both are written to one file, so a
+    rerun never helps). Runs only after the clean-checkout check failed; otherwise returns and
+    the caller raises its generic error. Paths come from the repository, so they are shown
+    with repr: quoted, control characters escaped, never the start of a log line."""
+    try:
+        names = run_git(repo, "ls-tree", "-r", "-z", "--name-only", "--full-tree", base_commit)
+    except GitCommandError:
+        return
+    folded: dict[str, set[str]] = {}
+    for name in filter(None, names.split("\0")):
+        parts = name.split("/")  # a directory differing in case collides as well
+        for end in range(1, len(parts) + 1):
+            prefix = "/".join(parts[:end])
+            folded.setdefault(prefix.casefold(), set()).add(prefix)
+    groups = sorted(sorted(group) for group in folded.values() if len(group) > 1)
+    if not groups or not _folds_case(clone):
+        return
+    shown = ", ".join(f"({', '.join(map(repr, group))})" for group in groups[:3])
+    more = f" and {len(groups) - 3} more" if len(groups) > 3 else ""
+    raise WorkspaceError(
+        f"base tree has case-colliding paths {shown}{more} on a case-insensitive filesystem"
+    )
+
+
+def _folds_case(clone: Path) -> bool:
+    """Whether clone's filesystem is case-insensitive: ``.GIT`` names its ``.git``. Nothing
+    is written; git never creates ``.GIT`` itself."""
+    try:
+        return os.path.samefile(clone / ".git", clone / ".GIT")
+    except OSError:
+        return False
 
 
 def _restrict_to_base_history(path: Path, base_commit: str) -> None:
