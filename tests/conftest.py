@@ -12,14 +12,31 @@ pytest_plugins = ["verify_helpers"]
 
 # Fewer files per test git repo (#417): the tests' own git init/clone (subprocesses included)
 # copy no template directory (hook samples, info/exclude, description) and keep no reflogs.
-# Cairnwork's run_git strips every GIT_* variable, so its own clones are unaffected by both.
-os.environ["GIT_TEMPLATE_DIR"] = ""  # empty: no template, as with --template=
+# Code under test must see the production git environment. src git calls that inherit it:
+# - cairnwork.gitcmd run_git/run_git_bytes (every core git call): drop every GIT_* variable.
+# - cairnwork_attest.publish._git ({**os.environ, ...}): its tests (test_publish*.py,
+#   test_on_verified.py, test_check_run_gh.py) use the production_git_env fixture below.
+# No other src code runs git with the inherited environment; scripts/ and experimental/ only
+# run git here to build their own fixture repos or to read (status, ls-files, rev-parse).
+# This module may be imported twice (as pytest's conftest and by ``from conftest import``), so
+# the setup is idempotent and the fixture recognises the variables by their values.
+TEST_GIT_ENV = {
+    "GIT_TEMPLATE_DIR": "",  # empty: no template, as with --template=
+    "GIT_CONFIG_COUNT": "1",
+    "GIT_CONFIG_KEY_0": "core.logAllRefUpdates",
+    "GIT_CONFIG_VALUE_0": "false",
+}
+os.environ.setdefault("GIT_TEMPLATE_DIR", "")
 if "GIT_CONFIG_COUNT" not in os.environ:
-    os.environ.update(
-        GIT_CONFIG_COUNT="1",
-        GIT_CONFIG_KEY_0="core.logAllRefUpdates",
-        GIT_CONFIG_VALUE_0="false",
-    )
+    os.environ.update({k: v for k, v in TEST_GIT_ENV.items() if k.startswith("GIT_CONFIG_")})
+
+
+@pytest.fixture
+def production_git_env(monkeypatch):
+    """Remove the variables set above: each one that still holds conftest's value."""
+    for key, value in TEST_GIT_ENV.items():
+        if os.environ.get(key) == value:
+            monkeypatch.delenv(key)
 
 
 def git(repo, *args):

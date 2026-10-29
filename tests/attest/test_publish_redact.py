@@ -11,6 +11,8 @@ from publish_helpers import _make_bundle_bytes, _write_bundle, make_publish_env
 
 from cairnwork_attest.publish import _git, _redact, publish_bundle
 
+pytestmark = pytest.mark.usefixtures("production_git_env")  # publish._git inherits os.environ
+
 SECRET = "ghs_SeCrEt0123456789"
 
 

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import git
+from conftest import TEST_GIT_ENV, git
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from publish_helpers import (
     _NOTES_REF,
@@ -22,6 +23,8 @@ from publish_helpers import (
 
 from cairnwork_attest.cli import main
 from cairnwork_attest.publish import _git, publish_bundle
+
+pytestmark = pytest.mark.usefixtures("production_git_env")  # publish._git inherits os.environ
 
 
 @pytest.fixture
@@ -316,3 +319,11 @@ def test_remote_lock_failure_is_retried(
     bundle_file = _write_bundle(tmp_path, _make_bundle_bytes(candidate, key))
     r = publish_bundle(bundle_file, src, candidate, run=lock_once)
     assert (r.ok, r.code, r.attempts) == (True, "PUBLISHED", 2)
+
+
+def test_publish_git_sees_the_production_environment(publish_env) -> None:
+    """conftest's test-only git variables (#417) never reach publish's own git calls."""
+    src, _, _ = publish_env
+    assert not [k for k, v in TEST_GIT_ENV.items() if os.environ.get(k) == v]
+    shown = _git(src, "config", "--show-origin", "--list")
+    assert shown.returncode == 0 and "command line:" not in shown.stdout

@@ -14,6 +14,8 @@ from cairnwork_attest.checkrun_gh import _parse_include
 from cairnwork_attest.cli import main
 from tests.attest.test_check_run import CAND, SLUG, _bundle, _pem
 
+pytestmark = pytest.mark.usefixtures("production_git_env")  # publish._git inherits os.environ
+
 _FAKE_GH = """#!/bin/sh
 printf '%s\\n' "$@" > "{log}/argv"
 cat > "{log}/stdin"
