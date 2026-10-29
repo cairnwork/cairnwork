@@ -78,6 +78,7 @@ def test_base_must_be_an_existing_full_commit_id(repo, tmp_path, base):
 
 def test_hooks_in_cairnworks_repository_never_run(repo, tmp_path):
     marker = tmp_path / "hook-ran"
+    (repo / ".git" / "hooks").mkdir(exist_ok=True)  # the repo fixture copies no git templates
     for name in ("post-checkout", "reference-transaction", "pre-auto-gc"):
         hook = repo / ".git" / "hooks" / name
         hook.write_text(f"#!/bin/sh\ntouch {marker}\n")
