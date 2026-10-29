@@ -11,8 +11,9 @@ witness: it covers the sockets present when it runs.
 #392: in account mode, a run's private ``run/`` directory (and anything the candidate wrote
 there) used to stay readable by the next run. The first run writes a marker in HOME, TMPDIR,
 ``run/`` and the work directory; after it returns, ``run/`` is gone and ``private`` is ``0700``.
-The second run walks the account run root and opens those paths, and must also be able to read
-a control file the owner placed, so an empty walk is not a pass.
+The second run walks the account run root and opens those paths. It also writes a file in its
+own TMPDIR (a write root the sandbox may read) and the walk must see it, so an empty walk is
+not a pass.
 
 All of these run the real sandbox through run_verifiers. The account-mode variants need the
 verifier account (pytest.mark.verifier_account).
@@ -196,12 +197,18 @@ LEAVE = (
 FIND = (
     "import os\n\n"
     "def test_nothing_of_the_last_run_is_left():\n"
-    "    found, readable, unreadable, count = [], [], [], 0\n"
+    "    # TMPDIR is this run's write root, which the sandbox may read.\n"
+    "    control = os.path.join(os.environ['TMPDIR'], 'cw-walk-control')\n"
+    "    with open(control, 'w') as handle:\n"
+    "        handle.write({control_text!r})\n"
+    "    found, readable, unreadable, count, saw = [], [], [], 0, False\n"
     "    def note(error):\n"
     "        unreadable.append(error.filename)\n"
     "    for top, dirs, files in os.walk({root!r}, onerror=note):\n"
     "        count += len(dirs) + len(files)\n"
     "        assert count <= {limit!r}, 'too many entries under the run root'\n"
+    "        here = os.path.join(top, 'cw-walk-control')\n"
+    "        saw = saw or (here == control and 'cw-walk-control' in files)\n"
     "        found += [os.path.join(top, n) for n in dirs + files if '{token}' in n]\n"
     "    for path in sorted(set(found) | set({known!r})):\n"
     "        try:\n"
@@ -210,13 +217,13 @@ FIND = (
     "                    readable.append(path)\n"
     "        except OSError:\n"
     "            pass\n"
-    "    print(f'{{count}} entries walked, {{len(unreadable)}} unreadable')\n"
+    "    print(f'{{count}} entries walked, {{len(unreadable)}} unreadable, control seen {{saw}}')\n"
     "    for path in found:\n"
     "        print('LEFTOVER FOUND ' + path)\n"
     "    for path in readable:\n"
     "        print('LEFTOVER READABLE ' + path)\n"
-    "    assert open({control!r}).read() == {control_text!r}, 'walk control was not readable'\n"
-    "    assert count > 0, 'the walk saw nothing, so it cannot witness an absence'\n"
+    "    assert open(control).read() == {control_text!r}, 'walk control was not readable'\n"
+    "    assert saw and count > 0, 'the walk did not reach this run'\n"
     "    assert not found and not readable, 'leftovers of the last run, listed on stdout'\n"
 )
 
@@ -271,12 +278,9 @@ def test_account_a_run_cannot_find_what_the_last_run_left(repo, tmp_path, own_na
     still = leftovers(ACCOUNT.run_root, token)
     if still:
         pytest.fail(f"owner can still see the last run's markers: {still}")
-    control = ACCOUNT.run_root / f"{own_names[0]}cw-control"
-    control.write_text("control-ok")
-    os.chmod(control, 0o644)
     code = FIND.format(
         root=str(ACCOUNT.run_root), limit=WALK_LIMIT, token=token, known=known,
-        control=str(control), control_text="control-ok",
+        control_text="control-ok",
     )  # fmt: skip
     second = run_one(
         repo, tmp_path, {"tests/test_find.py": code}, "tests/test_find.py", ACCOUNT, own_names
