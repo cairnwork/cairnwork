@@ -8,7 +8,8 @@ installed namespace's ``nsco.somelib.impl`` (#384), or of the base's own namespa
 another root (``acme/core/calc.py`` at the checkout root against ``src/acme/core/calc.py``). And
 PathFinder returns that namespace before an appended ``sys.meta_path`` finder (editable installs)
 is asked, so a package found only by such a finder is replaced by any directory of its name
-(#390). The first-level rule in verifier_spec never looks this deep.
+(#390). The first-level rule in verifier_spec never looks this deep, and it takes a new
+``__init__`` in an already tracked directory for tracked, so that one is walked here too.
 
 For each path and each import root R holding it, the dotted chain is its directories plus the
 module a code file defines (``__init__`` is its directory). It stops at the first part that is
@@ -216,7 +217,9 @@ class _Base:
 
 def _chains(path: str, import_roots: tuple[str, ...]) -> list[tuple[str, list[str], bool, str]]:
     """(root, dotted parts, leaf is code, path) per import root holding path below its first
-    level."""
+    level. A first-level package ``__init__`` counts too: verifier_spec's rule takes a new one in
+    a tracked directory for tracked, and its module inventory misses names that only a finder
+    or a namespace without metadata provides (PR #405 review)."""
     found = []
     for root in import_roots:
         rel = _relative(path, root)
@@ -230,8 +233,6 @@ def _chains(path: str, import_roots: tuple[str, ...]) -> list[tuple[str, list[st
             chain, leaf = [*parts[:-1], name], True
         else:
             chain, leaf = parts[:-1], False
-        if len(parts) == 2 and is_init_file(parts[-1]):
-            continue  # a first-level package: verifier_spec's rule
         cut = next((i for i, part in enumerate(chain) if not part.isidentifier()), None)
         if cut is not None:
             chain, leaf = chain[:cut], False

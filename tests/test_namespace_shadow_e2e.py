@@ -8,6 +8,7 @@ install's meta-path finder). The base's ``pytest.ini`` sets ``pythonpath = src``
 import roots come from the base config, as in a real task.
 """
 
+import os
 import sys
 
 import pytest
@@ -15,6 +16,7 @@ from conftest import commit_change
 from namespace_site import make_site, site_dir
 
 from cairnwork.pipeline import TaskRejected, TaskSpec, check_task
+from cairnwork.verifier_account import VerifierAccount
 from cairnwork.verifiers import parse_verifier, run_verifiers
 
 TARGET = "tests/test_compute.py"
@@ -70,6 +72,15 @@ def test_check_task_refuses_a_test_root_spelled_in_another_case(repo, python):
         check_task(task(repo, base, ("src/myproj/compute.py", forged)), verifier_python=python)
 
 
+def test_an_account_without_its_venv_fails_closed(repo, tmp_path):
+    """The gate probes the Python the verifier will run (the account's when no verifier_python
+    is set, pipeline/intake); where that venv is missing every deep path is refused."""
+    base = project(repo, ORACLES["namespace"])
+    missing = VerifierAccount(root=tmp_path / "no-account").python
+    with pytest.raises(TaskRejected, match="PROTECTED_VERIFIER_INPUT: src/myproj/compute.py$"):
+        check_task(task(repo, base, ("src/myproj/compute.py",)), verifier_python=missing)
+
+
 def test_check_task_accepts_a_fix_with_an_own_namespace_portion(repo, python):
     base = project(repo, ORACLES["namespace"])
     allowed = ("src/myproj/compute.py", "src/nsco/myproj/helper.py")
@@ -97,6 +108,8 @@ def test_the_refused_shape_is_a_reachable_false_green(repo, tmp_path, python, or
 
 @pytest.mark.sandbox
 def test_a_test_root_in_another_case_is_a_reachable_false_green(repo, tmp_path, python):
+    if not os.path.exists(str(tmp_path).upper()):
+        pytest.skip("a case-sensitive file system: TESTS/ is another directory there")
     base = project(repo, ORACLES["namespace"])
     forged = commit_change(repo, {"TESTS/nsco/somelib/oracle.py": FORGED})
     shadowed = run(repo, tmp_path, python, base, forged, "forged")

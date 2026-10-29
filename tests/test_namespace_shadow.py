@@ -105,6 +105,21 @@ def test_an_own_regular_package_found_by_an_editable_finder_stays_editable(repo,
     assert gate(repo, ["src/ownproj/core.py", "src/ownproj/sub/x.py"], python) == ()
 
 
+@pytest.mark.parametrize("name", ["mylib", "nsco", "metans"])
+def test_a_new_init_in_a_tracked_directory_cannot_take_over_an_installed_name(repo, python, name):
+    """rev on PR #405: the base tracks only ``src/<name>/README.md``; the first-level rule counts
+    the new ``__init__.py`` as tracked, and its module inventory misses names that only a finder
+    or a namespace without metadata provides."""
+    commit_change(repo, {f"src/{name}/README.md": "x\n"})
+    path = f"src/{name}/__init__.py"
+    assert gate(repo, [path], python) == (path,)
+
+
+def test_a_new_init_in_a_tracked_directory_of_a_new_name_stays_allowed(repo, python):
+    commit_change(repo, {"src/myproj/README.md": "x\n"})
+    assert gate(repo, ["src/myproj/__init__.py"], python) == ()
+
+
 def test_an_own_module_of_the_name_wins_over_the_candidates_directory(repo, python):
     commit_change(repo, {"src/nsco.py": "x = 1\n"})
     assert gate(repo, ["src/nsco/somelib/impl.py"], python) == ()
