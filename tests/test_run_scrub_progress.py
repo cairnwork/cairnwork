@@ -45,6 +45,7 @@ def runs(tmp_path):
 
 
 def _locked_file(path: Path) -> None:
+    assert sys.platform == "darwin"  # chflags and st_flags exist only there
     path.write_text("x")
     _acl(HIDDEN, str(path))
     os.chflags(path, stat.UF_IMMUTABLE)  # the syscall: the ACL above hides it from lstat

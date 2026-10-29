@@ -156,6 +156,7 @@ def test_past_the_clock_right_under_run_one_unit_is_done_then_it_stops(runs, kin
     """Five locked files, or five locked empty directories, right under run's home: the clock
     runs out once they are listed; one is unlocked (a file) or finished (a directory), and the
     other four stay locked."""
+    assert sys.platform == "darwin"  # chflags and st_flags exist only there
     private = _private(runs)
     home = private / "run" / "home"
     for index in range(5):
@@ -298,6 +299,7 @@ def test_past_the_clock_a_move_or_a_failure_under_home_ends_the_pass(runs, fails
     and the two entries kept in it fail. "nothing"/"move": the clock runs out as the walk leaves
     ``d``, and ``d`` is moved up into run/ (a unit) or the move fails; "open": the clock runs out
     once home is listed, and opening ``d`` fails. Either way the pass stops before ``e``."""
+    assert sys.platform == "darwin"  # chflags and st_flags exist only there
     private = _private(runs)
     run, home = private / "run", private / "run" / "home"
     (home / "d").mkdir()
