@@ -201,7 +201,7 @@ def test_files_the_account_leaves_in_home_are_removed(project):
     )
     result = verify(project, {"tests/test_leave.py": code}, "tests/test_leave.py")
     assert result.observation.passed, result.log_path.read_text()
-    assert not (result.log_path.parent / "run" / "home").exists()
+    assert not (result.log_path.parent / "run").exists()  # the whole run dir, not only home
 
 
 def _account_pids_in_group(pgid: int) -> list[int]:

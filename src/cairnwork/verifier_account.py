@@ -42,9 +42,7 @@ from cairnwork_sandbox import Backend, platform_backend
 
 SUDO = "/usr/bin/sudo"
 DEFAULT_USER = "cairnwork-verifier"
-# The shared root lives where the platform keeps shared service data: /Users/Shared on macOS,
-# /var/lib on Linux. scripts/setup_verifier_user.sh (macOS) and setup_verifier_user_linux.sh
-# create it there; the account machinery is otherwise identical on both.
+# /var/lib/cairnwork on Linux, /Users/Shared/cairnwork on macOS (setup_verifier_user*.sh).
 DEFAULT_ROOT = Path(
     "/var/lib/cairnwork" if sys.platform.startswith("linux") else "/Users/Shared/cairnwork"
 )
@@ -251,14 +249,8 @@ class VerifierAccount:
 
     def reap(self) -> int:
         """Kill everything the account runs; return how many escaped processes were running.
-
-        The process list is read once, *before* the kill, with no retry: asking again while a
-        survivor is alive would give it time to undo the run's traces and exit before it is
-        counted (``kill -9 -1`` cannot report what it hit: it signals itself too, and ps is not
-        allowed inside the account's sandbox). Retrying is only done after a kill. An unknown
-        count, an expired probe deadline, or a process that outlived the kill count as one
-        more, so a caller never mistakes "cannot tell" for "nothing escaped".
-        """
+        The list is read once before the kill (no retry while a survivor can hide). An unknown
+        count is one more, so "cannot tell" is never "nothing escaped"."""
         deadline = time.monotonic() + PROBE_DEADLINE_SECONDS
         try:
             before = self._escaped_count(deadline, attempts=1)
@@ -304,24 +296,30 @@ class VerifierAccount:
         if left != 0:
             raise VerifierAccountError(f"account {self.user} still runs processes ({left})")
 
+    def scrub_stale_runs(self) -> None:
+        """Under exclusive(), after require_idle: drop leftover private/run dirs or refuse."""
+        from cairnwork.run_scrub import stale_run_error
+
+        detail = stale_run_error(self)
+        if detail:
+            raise VerifierAccountError(detail)
+
     def remove(self, path: Path) -> None:
-        """Remove files the account created (the owner cannot), only inside its run root."""
+        """Remove files the account created (the owner cannot), only inside its run root.
+
+        macOS runs ``chflags -R nouchg,nouappnd`` as the account first (immutable and append-only;
+        the owner gets EPERM), then ``chmod -R u+rwx``, through the sandbox binary sudoers allows.
+        """
         if os.path.islink(path):  # never follow a name the account may have swapped
             return
         real = Path(os.path.realpath(path))
         if self.run_root.resolve() not in real.parents:
             raise VerifierAccountError(f"{real} is outside {self.run_root}")
-        # The account may have left directories without permissions: rm -rf alone cannot
-        # enter them. chmod runs as the account (allowed only through sandbox-exec).
-        for argv in (
-            _backend().unconfined(["/bin/chmod", "-R", "u+rwx", "--", str(real)]),
-            ["/bin/rm", "-rf", "--", str(real)],
-        ):
+        from cairnwork.run_scrub import account_delete_argv
+
+        for argv in account_delete_argv(self.user, str(real), _backend().unconfined):
             subprocess.run(  # noqa: S603 - fixed argv, path checked above
-                [SUDO, "-n", "-u", self.user, "--", *argv],
-                capture_output=True,
-                timeout=60,
-                check=False,
+                argv, capture_output=True, timeout=60, check=False
             )
 
     @staticmethod
