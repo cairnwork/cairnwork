@@ -225,6 +225,23 @@ REFUSED = [
     case("fixture_kwargs_unpack", '@pytest.fixture(**{"autouse": True})\n', POISON),
     case("conftest_autouse_by_name",
          conftest="AUTO = True\n@pytest.fixture(autouse=AUTO)\n" + POISON),
+    # ** in a pytest call inside a value calls the mapping's keys() at import time
+    case("param_kwargs_unpack_in_parametrize", """
+        class M:
+            def keys():
+                core.SCALE = 10
+                return []
+        @pytest.mark.parametrize("v", [pytest.param(1, **M)])
+        def test_b(v):
+            pass
+    """),
+    case("mark_kwargs_unpack_in_module_value", """
+        class M:
+            def keys():
+                core.SCALE = 10
+                return []
+        SKIP = pytest.mark.skipif(**M)
+    """),
     # Mutation pins: each fails if the named check is dropped from scope.py
     case("dict_unpack_of_class", """
         class M:

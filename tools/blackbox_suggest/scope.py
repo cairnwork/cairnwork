@@ -88,6 +88,8 @@ def _inert(node: ast.expr, verdict: Verdict) -> bool:
     if isinstance(node, ast.Dict):
         keys = [k for k in node.keys if k is not None]  # None: ** unpacking, which iterates
         return len(keys) == len(node.keys) and all(_inert(e, verdict) for e in keys + node.values)
+    if isinstance(node, ast.Call) and any(k.arg is None for k in node.keywords):
+        return False  # ** calls the mapping's keys() at import time
     args = [*node.args, *(k.value for k in node.keywords)] if isinstance(node, ast.Call) else []
     parts = dotted(node.func if isinstance(node, ast.Call) else node) or [""]
     parts = parts[1:] if parts[0] == "pytest" else parts
