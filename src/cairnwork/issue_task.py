@@ -20,12 +20,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shlex
+import stat
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import PurePath
+from pathlib import Path
 from typing import Any
 
 from cairnwork.protected_paths import (  # noqa: F401  (re-exported)
@@ -154,12 +156,19 @@ def adoptable(bound: Any, load_request: Callable[[str], Any], want: Mapping[str,
 
 
 def _request_itself(exc: Exception, task_id: str) -> bool:
-    """Did the stored request itself fail, not another file? A missing file must be
-    requests/<task_id>.json; a decode error is the request's, as load_request decodes it before
-    reading config.json, whose own decode errors are IntakeRefused BAD_CONFIG."""
+    """Did the stored request itself fail, not another file or the state? A missing file must be
+    requests/<task_id>.json, absent (not even a dangling symlink: the intake creates it O_EXCL)
+    from a plain requests/ directory (lstat); a decode error is the request's, as load_request
+    decodes it before reading config.json, whose own decode errors are IntakeRefused BAD_CONFIG."""
     if isinstance(exc, FileNotFoundError):
-        return PurePath(str(exc.filename)).parts[-2:] == ("requests", f"{task_id}.json")
-    return True
+        path = Path(str(exc.filename))
+        try:
+            plain_dir = stat.S_ISDIR(path.parent.lstat().st_mode)
+        except OSError:
+            return False
+        named = path.parts[-2:] == ("requests", f"{task_id}.json")
+        return named and plain_dir and not os.path.lexists(path)
+    return isinstance(exc, (json.JSONDecodeError, UnicodeDecodeError))
 
 
 def _check_path(path: Any) -> None:

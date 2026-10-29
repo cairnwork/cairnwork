@@ -4,6 +4,7 @@
 import errno
 import json
 import os
+import shutil
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
@@ -139,6 +140,30 @@ def test_a_request_file_that_cannot_be_opened_still_errors(setup, monkeypatch):
     _still_queued(setup, github, task_id, out, "PermissionError")
 
 
+def _no_requests_dir(requests: Path, task_id: str) -> None:
+    shutil.rmtree(requests)
+
+
+def _dangling_symlink(requests: Path, task_id: str) -> None:
+    (requests / f"{task_id}.json").symlink_to(requests / "nowhere.json")
+
+
+def _requests_dir_symlink(requests: Path, task_id: str) -> None:
+    requests.rename(requests.with_name("requests-real"))
+    requests.symlink_to(requests.with_name("requests-real"))
+
+
+@pytest.mark.parametrize("damage", [_no_requests_dir, _dangling_symlink, _requests_dir_symlink])
+def test_a_missing_request_in_a_damaged_state_still_errors(setup, monkeypatch, damage):
+    """Only a request file absent from a plain requests/ directory is "missing": a missing
+    requests/, a dangling symlink at the path or a symlinked requests/ is damaged state (the
+    intake creates the file with O_EXCL), so the Issue stays queued."""
+    github, task_id = _failed_pass(setup, monkeypatch, "none")
+    damage(setup["intake"].state / "requests", task_id)
+    out = runner.take(setup["intake"], github, setup["clone"])
+    _still_queued(setup, github, task_id, out, "FileNotFoundError")
+
+
 def test_a_failed_row_with_a_readable_other_request_still_differs(setup, monkeypatch):
     github, task_id = _failed_pass(setup, monkeypatch, "whole")
     github.bodies[7] = {**github.bodies[7], "title": "fix x (edited title)"}
@@ -180,11 +205,13 @@ def test_a_failed_relabel_leaves_the_issue_queued_and_unadopted(setup, monkeypat
     assert len(setup["started"]) == 0 and _rows(setup) == [(task_id, "FAILED")]
 
 
-def test_adoptable_turns_an_unreadable_request_into_a_refusal_only_for_a_failed_row():
+def test_adoptable_turns_an_unreadable_request_into_a_refusal_only_for_a_failed_row(tmp_path):
     want = {"card_hash": "gh:r#1:abc"}
+    (tmp_path / "requests").mkdir()
 
     def unreadable(task_id):
-        raise FileNotFoundError(errno.ENOENT, "No such file", f"/state/requests/{task_id}.json")
+        path = tmp_path / "requests" / f"{task_id}.json"
+        raise FileNotFoundError(errno.ENOENT, "No such file", str(path))
 
     def row(status):
         return SimpleNamespace(card_hash="gh:r#1:abc", task_id="task-1", status=status)
@@ -196,11 +223,12 @@ def test_adoptable_turns_an_unreadable_request_into_a_refusal_only_for_a_failed_
         with pytest.raises(FileNotFoundError):
             issue_task.adoptable(row(status), unreadable, want)
     for error in (
-        FileNotFoundError(errno.ENOENT, "No such file", "/state/config.json"),
-        FileNotFoundError(errno.ENOENT, "No such file", "/state/requests/task-2.json"),
-        FileNotFoundError(errno.ENOENT, "No such file", "/state/other/task-1.json"),
+        FileNotFoundError(errno.ENOENT, "No such file", str(tmp_path / "config.json")),
+        FileNotFoundError(errno.ENOENT, "No such file", str(tmp_path / "requests/task-2.json")),
+        FileNotFoundError(errno.ENOENT, "No such file", str(tmp_path / "other/task-1.json")),
+        FileNotFoundError(errno.ENOENT, "No such file", "/no-such-state/requests/task-1.json"),
         FileNotFoundError("no file name"),
-        PermissionError(errno.EACCES, "Permission denied", "/state/requests/task-1.json"),
+        PermissionError(errno.EACCES, "Permission denied", str(tmp_path / "requests/task-1.json")),
     ):
 
         def failing(task_id, error=error):
@@ -210,3 +238,13 @@ def test_adoptable_turns_an_unreadable_request_into_a_refusal_only_for_a_failed_
             issue_task.adoptable(row("FAILED"), failing, want)
     other = SimpleNamespace(card_hash="gh:r#1:abd", task_id="task-1", status="FAILED")
     assert issue_task.adoptable(other, unreadable, want) is False  # another block: card first
+
+
+def test_only_a_missing_file_or_a_decode_error_counts_as_the_request_itself(tmp_path):
+    (tmp_path / "requests").mkdir()
+    request = str(tmp_path / "requests" / "task-1.json")
+    assert issue_task._request_itself(FileNotFoundError(errno.ENOENT, "x", request), "task-1")
+    assert issue_task._request_itself(json.JSONDecodeError("cut", "{", 1), "task-1")
+    assert issue_task._request_itself(UnicodeDecodeError("utf-8", b"\xe4", 0, 1, "cut"), "task-1")
+    for other in (ValueError("x"), PermissionError(errno.EACCES, "x", request), KeyError("x")):
+        assert issue_task._request_itself(other, "task-1") is False
