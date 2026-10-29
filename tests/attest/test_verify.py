@@ -64,14 +64,20 @@ def setup_verified_bundle_fixture(
     *,
     task_id: str = "task-1",
     attempt_id: str = "a1",
+    required: tuple[str, ...] = ("pytest",),
+    unrequired: tuple[str, ...] = (),
+    failing: tuple[str, ...] = (),
 ) -> tuple[Path, Path, str, str]:
     state_dir.mkdir(parents=True, exist_ok=True)
     db_path = state_dir / "notary.sqlite"
     notary = Notary(db_path, core_verify=fake_core_verify, core_identity=CORE_IDENTITY)
     base_commit = git(repo, "rev-parse", "HEAD")
     candidate_commit = commit_change(repo, {"src/a.py": "x = 2\n"})
-    spec = AcceptanceSpec(task_id, "sha256:" + "c" * 64, ("pytest",), ("src/a.py",), False)
-    obs = (VerifierObservation("pytest", "artifact-1", "sha256:" + "e" * 64, True),)
+    spec = AcceptanceSpec(task_id, "sha256:" + "c" * 64, required, ("src/a.py",), False)
+    obs = tuple(  # ``unrequired`` ids are observed, not required; ``failing`` ones are FAIL
+        VerifierObservation(v, "artifact-1", "sha256:" + "e" * 64, v not in failing)
+        for v in (*required, *unrequired)
+    )
     notary.notarize(task_id, attempt_id, spec, repo, base_commit, candidate_commit, obs)
 
     pubkey = generate_keypair(state_dir)

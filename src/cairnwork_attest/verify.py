@@ -9,6 +9,7 @@ from typing import Any
 
 from cairnwork.changeset import ChangeSetError, read_change_set
 from cairnwork.gitcmd import GitCommandError, run_git
+from cairnwork_attest.binding_extras import _unrequired_problem, required_ids
 from cairnwork_attest.bundle import BundleError, read_bundle
 from cairnwork_attest.dsse import verify_envelope
 from cairnwork_attest.keys import KeyFileError, load_public_key_pem
@@ -294,6 +295,11 @@ def verify_bundle(
     predicate = statement["predicate"]
 
     err = _check_request_binding(predicate, candidate, base)
+    if err is not None:
+        return err
+
+    request = predicate["request"]  # an object: _check_request_binding refused any other
+    err = _unrequired_problem(required_ids(request) or [], request)  # #430: as for v0.2 (#413)
     if err is not None:
         return err
 
