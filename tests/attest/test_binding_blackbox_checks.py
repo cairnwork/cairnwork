@@ -9,7 +9,8 @@ cannot reach any of this: the ids are in the signed Core request, covered by the
 
 An older policy (a pinned commitment without ``blackbox_checks``, James's option (a) on 2026-10-28)
 only needs at least one ``blackbox:*`` id with a PASS observation; the rows it still accepts are
-the residual docs/SECURITY.md names, and the assurance says ``blackbox_checks: unpinned``."""
+the residual docs/SECURITY.md names, and the assurance says ``blackbox_checks: unpinned``.
+An observation Core did not require and a required id named twice refuse under both (#373)."""
 
 from __future__ import annotations
 
@@ -63,7 +64,7 @@ ROWS: dict[str, tuple[tuple[str, ...], dict[str, Any], dict[str, Any] | None, st
     "H_strict_foreign_id": (("blackbox:zzz",), {}, STRICT, "OK", MISSING),
     "I_required_check_failed": (ALL, {"failing": ("blackbox:mul",)}, PIN, MISSING, MISSING),
     "J_observed_not_required": (
-        ("pytest-0", "blackbox:add"), {"unrequired": ("blackbox:mul",)}, PIN, "OK", MISSING
+        ("pytest-0", "blackbox:add"), {"unrequired": ("blackbox:mul",)}, PIN, MISSING, MISSING
     ),
     "K_all_plus_foreign_id": ((*ALL, "blackbox:zzz"), {}, PIN, "OK", MISSING),
     "L_commitment_checked_first": (ALL, {"blackbox_commitment": OTHER}, PIN, MISMATCH, MISMATCH),
@@ -75,6 +76,17 @@ ROWS: dict[str, tuple[tuple[str, ...], dict[str, Any], dict[str, Any] | None, st
     ),
     "O_order_differs": (("blackbox:mul", "pytest-0", "blackbox:add"), {}, PIN, "OK", "OK"),
     "P_no_policy": (("pytest-0", "blackbox:add"), {}, None, "OK", "OK"),  # out of #312's scope
+    # #373: an observation Core did not require (PASS or FAIL), and a required id named twice
+    "Q_unrequired_failed": (
+        ALL, {"unrequired": ("blackbox:zzz",), "failing": ("blackbox:zzz",)}, PIN, MISSING, MISSING
+    ),
+    "R_unrequired_passed": (ALL, {"unrequired": ("blackbox:zzz",)}, PIN, MISSING, MISSING),
+    "S_duplicate_required_id": ((*ALL, "blackbox:add"), {}, PIN, MISSING, MISSING),
+    "T_commitment_before_extra": (
+        ALL, {"blackbox_commitment": OTHER, "unrequired": ("blackbox:zzz",)}, PIN, MISMATCH,
+        MISMATCH,
+    ),
+    "U_unrequired_without_pin": (ALL, {"unrequired": ("blackbox:zzz",)}, {}, "OK", "OK"),
 }  # fmt: skip
 
 
@@ -127,13 +139,28 @@ def test_an_observation_of_another_type_is_refused_not_raised(tmp_path, field, p
 
 
 def test_the_assurance_says_whether_the_checks_were_pinned(tmp_path):
+    """#373: ``unpinned`` is the older policy's weaker check; ``not_checked`` that no id check ran
+    (no policy, or no or an empty commitment pin). Either way the runs stay the signer's claim."""
     w = _world(tmp_path, ALL)
-    for pins, said in ((None, "unpinned"), (PIN, "unpinned"), (with_checks(PIN), "pinned")):
+    for pins, said in (
+        (None, "not_checked"),
+        ({}, "not_checked"),
+        (PIN, "unpinned"),
+        (with_checks(PIN), "pinned"),
+    ):
         out = check(w, pins)
         assert out.ok and out.assurance is not None, out
         assert out.assurance["blackbox_checks"] == said, pins
     out = check(w, with_checks(PIN, ["mul", "add"]))  # a set: the policy's order does not matter
     assert out.ok and out.assurance is not None and out.assurance["blackbox_checks"] == "pinned"
+
+
+def test_an_empty_commitment_pin_checks_no_ids(tmp_path):
+    """#373: a policy pinning ``""`` (a plain receipt) ran no id check: ``not_checked``."""
+    w = _world(tmp_path, ("pytest-0",), blackbox_commitment="")
+    out = check(w, {"blackbox_commitment": ""})
+    assert out.ok and out.assurance is not None, out
+    assert out.assurance["blackbox_checks"] == "not_checked"
 
 
 @pytest.mark.parametrize(
