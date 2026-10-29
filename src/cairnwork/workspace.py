@@ -1,9 +1,9 @@
 """Isolated attempt clones and candidate checks (preserved behaviors #11-#13, #19).
 
 Each attempt is a separate ``git clone --no-local`` with its own ``.git``
-(objects, config, hooks, refs, index, info/), detached at the task's base
-commit, with its ``origin`` remote removed so git gives the worker no handle
-on Cairnwork's repository. Cairnwork's repository path must still not be
+(objects, config, refs, index; no template files such as hook samples, #417),
+detached at the task's base commit, with its ``origin`` remote removed so git
+gives the worker no handle on Cairnwork's repository. Cairnwork's repository path must still not be
 writable from the worker's sandbox: git cannot stop a process that already
 has write access, and branch and tag protection relies on that. As a check on
 the refs that matter for verification, ``collect_candidate`` refuses a
@@ -39,7 +39,7 @@ from pathlib import Path
 
 from cairnwork.changeset import ChangeSetError, read_change_set
 from cairnwork.diffcheck import diff_check_detail
-from cairnwork.gitcmd import OID, GitCommandError, run_git, run_git_bytes
+from cairnwork.gitcmd import CLONE_ISOLATED, OID, GitCommandError, run_git, run_git_bytes
 from cairnwork.protected_paths import is_protected
 from cairnwork.tamper_scan import CODE as TAMPER_CODE
 from cairnwork.tamper_scan import scan_patch
@@ -89,9 +89,7 @@ def create_attempt_clone(repo: Path, base_commit: str, root: Path, attempt_id: s
         if run_git(repo, "cat-file", "-t", base_commit).strip() != "commit":
             raise WorkspaceError(f"{base_commit} is not a commit")
         path.parent.mkdir(parents=True, exist_ok=True)
-        run_git(
-            path.parent, "clone", "--quiet", "--no-local", "--no-checkout", str(repo), path.name
-        )
+        run_git(path.parent, *CLONE_ISOLATED, str(repo), path.name)
         run_git(path, "remote", "remove", "origin")
         try:
             run_git(path, "cat-file", "-e", f"{base_commit}^{{commit}}")

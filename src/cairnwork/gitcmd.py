@@ -22,6 +22,10 @@ GIT_TIMEOUT_SECONDS = 60
 NETWORK_TIMEOUT_SECONDS = 300  # fetch and push over a network; local commands keep the default
 STDERR_TAIL_CHARS = 400
 OID = re.compile(r"^[0-9a-f]{40}$")
+# A private clone of a local repository for one attempt or verification run. ``--template=``
+# copies no template directory (hook samples, info/exclude, description; nor an operator's
+# init.templateDir hooks): about 20 files fewer per clone and nothing executable in .git (#417).
+CLONE_ISOLATED = ("clone", "--quiet", "--no-local", "--no-checkout", "--template=")
 _MARK: contextvars.ContextVar[tuple[str, str] | None] = contextvars.ContextVar(
     "_MARK", default=None
 )
