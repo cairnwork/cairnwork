@@ -1,6 +1,7 @@
 import json
 import sqlite3
 import subprocess
+import sys
 
 import pytest
 
@@ -114,6 +115,28 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if "sandbox" in item.keywords:
             item.add_marker(skip)
+
+
+@pytest.fixture(autouse=True)
+def _a_verifier_python_the_gate_can_probe(request, monkeypatch):
+    """A task without verifier_python uses the verifier account's (intake). On a host without
+    that venv (a CI runner with no account) the shadow gate's probe cannot run and refuses every
+    deep path, fail closed (#384); such tests get this interpreter instead. Hosts that have the
+    venv, tests of the real account, and accounts with another root keep theirs
+    (test_namespace_shadow_e2e pins that a missing venv does fail closed)."""
+    from pathlib import Path
+
+    from cairnwork.verifier_account import DEFAULT_ROOT, VerifierAccount
+
+    if request.node.get_closest_marker("verifier_account"):
+        return  # the real account and its own venv
+    if not Path(VerifierAccount().python).exists():
+        here = sys.executable
+
+        def python(self):
+            return here if self.root == DEFAULT_ROOT else str(self.root / "venv" / "bin" / "python")
+
+        monkeypatch.setattr(VerifierAccount, "python", property(python))
 
 
 @pytest.fixture(autouse=True)
