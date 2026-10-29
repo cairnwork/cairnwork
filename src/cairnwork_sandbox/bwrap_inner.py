@@ -102,7 +102,7 @@ def _stat_ok(link: str) -> bool:
     except OSError as err:
         raise SandboxError(
             f"credential link {link!r}: its target cannot be checked ({err.strerror}); a target"
-            " that may exist but is unreadable is not skipped, so make it readable or remove the link"
+            " that may exist but is unreadable is not skipped; make it readable or remove the link"
         ) from err
     return True
 
