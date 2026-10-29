@@ -7,8 +7,7 @@ cannot see the attempt's marker on them. Their working directory stays readable
 sweep kills such a process of the owner when its working directory is inside one of them
 (``kill_withheld_in``).
 
-Limits: a process that changed directory out of them is not found, nor a platform binary
-started with an empty argv[0] (see ``environment_withheld``); neither is one found by a
+Limits: a process that changed directory out of them is not found; neither is one found by a
 second recovery after the first removed the directories (the first sweeps before removing).
 A legitimately empty environment counts as withheld and is then tied only by its directory;
 a shell (Cairnwork's own parent included) sitting in an attempt's run directory with a
@@ -36,7 +35,10 @@ from cairnwork.workspace import ATTEMPT_ID
 
 _MACOS = sys.platform == "darwin"
 _CTL_KERN, _KERN_ARGMAX, _KERN_PROCARGS2 = 1, 8, 49  # <sys/sysctl.h>
-_PROC_PIDVNODEPATHINFO = 9  # <sys/proc_info.h>
+_PROC_PIDTBSDINFO, _PROC_PIDVNODEPATHINFO = 3, 9  # <sys/proc_info.h>
+# struct proc_bsdinfo is 136 bytes; pbi_start_tvsec and pbi_start_tvusec are its last two uint64s
+_BSDINFO_SIZE, _BSDINFO_START = 136, 120
+_CS_OPS_STATUS, _CS_PLATFORM_BINARY = 0, 0x04000000  # <sys/codesign.h>
 # struct proc_vnodepathinfo: pvi_cdir then pvi_rdir, each a vnode_info_path (a 152-byte
 # vnode_info, then vip_path[MAXPATHLEN = 1024])
 _VNODE_INFO_SIZE, _MAXPATHLEN = 152, 1024
@@ -53,6 +55,8 @@ def _system():
     lib.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p,
                                  ctypes.c_int]  # fmt: skip
     lib.proc_pidinfo.restype = ctypes.c_int
+    lib.csops.argtypes = [ctypes.c_int, ctypes.c_uint, ctypes.c_void_p, ctypes.c_size_t]
+    lib.csops.restype = ctypes.c_int
     return lib
 
 
@@ -75,11 +79,14 @@ def environment_withheld(pid: int) -> bool | None:
     """True when KERN_PROCARGS2 shows the process's environment with no entry, False when it
     shows any, None when it cannot be read (gone, refused, malformed, or not macOS).
 
-    Known gap: XNU hides a platform binary's environment by skipping every NUL after the exec
-    path, so one started with an empty argv[0] and two or more entries shows its first entry.
-    That buffer cannot be told apart from a readable one-entry environment, so it counts as
-    shown (False) and is never killed by its directory. Cairnwork never starts an empty
-    argv[0]."""
+    XNU hides a platform binary's environment by skipping every NUL after the exec path, so
+    one started with an empty argv[0] and one or more entries shows exactly one entry: the
+    buffer alone looks like a readable one-entry environment. The code-signing status tells
+    them apart (#310): a platform binary (``CS_PLATFORM_BINARY``) showing one entry or none
+    counts as withheld. A process that is not one keeps the buffer's answer, so a readable
+    one-entry environment of an ordinary program is never taken for withheld. On a macOS that
+    shows platform binaries' environments, one with exactly one real entry counts as withheld
+    too: it is then tied only by its directory (run directories are Cairnwork scratch)."""
     if not _MACOS or pid <= 0:
         return None
     try:
@@ -88,7 +95,23 @@ def environment_withheld(pid: int) -> bool | None:
     except (OSError, AttributeError, ValueError):
         return None
     count = _environment_count(raw) if raw else None
-    return None if count is None else count == 0
+    if count is None:
+        return None
+    if count == 1:  # one entry may be the one an empty argv[0] lets through (#310)
+        return _platform_binary(pid)
+    return count == 0
+
+
+def _platform_binary(pid: int) -> bool | None:
+    """Whether the process is an Apple platform binary (csops CS_OPS_STATUS), None when the
+    status cannot be read."""
+    flags = ctypes.c_uint32(0)
+    try:
+        if _system().csops(pid, _CS_OPS_STATUS, ctypes.byref(flags), ctypes.sizeof(flags)) != 0:
+            return None
+    except (OSError, AttributeError):
+        return None
+    return bool(flags.value & _CS_PLATFORM_BINARY)
 
 
 def _environment_count(raw: bytes) -> int | None:
@@ -134,6 +157,19 @@ def cwd_of(pid: int) -> str | None:
         return None
     path = buf.raw[_VNODE_INFO_SIZE : _VNODE_INFO_SIZE + _MAXPATHLEN].split(b"\0", 1)[0]
     return os.fsdecode(path) or None
+
+
+def _started(pid: int) -> bytes | None:
+    """The process's start time (proc_pidinfo PROC_PIDTBSDINFO), None when unreadable: read
+    before and after the other reads, an unchanged value means the pid was not reused."""
+    buf = ctypes.create_string_buffer(_BSDINFO_SIZE)
+    try:
+        done = _system().proc_pidinfo(pid, _PROC_PIDTBSDINFO, 0, buf, _BSDINFO_SIZE)
+    except (OSError, AttributeError):
+        return None
+    if done < _BSDINFO_SIZE:
+        return None
+    return buf.raw[_BSDINFO_START:_BSDINFO_SIZE]
 
 
 def attempt_dirs(roots, attempt_id: str) -> tuple[Path, ...]:
@@ -186,8 +222,10 @@ def _inside(cwd: str | None, dirs: list[str]) -> bool:
 def kill_withheld_in(rows, dirs, mine: int) -> tuple[list[int], list[int], int]:
     """SIGKILL each of the owner's (``mine``) readable rows whose environment is withheld and
     whose working directory is inside one of ``dirs``; (killed pids, refused pids, how many had
-    exited before the kill). Per row: environment_withheld, cwd_of, then the kill, no wait in
-    between. An unknown answer (None) is ignored: it cannot be tied to the attempt."""
+    exited before the kill). Per row: the start time, environment_withheld, cwd_of, the start
+    time again, then the kill, no wait in between; a changed or unreadable start time means the
+    pid may now be another process, so it is left alone (#310). An unknown answer (None) is
+    ignored: it cannot be tied to the attempt."""
     killed: list[int] = []
     denied: list[int] = []
     vanished = 0
@@ -195,9 +233,12 @@ def kill_withheld_in(rows, dirs, mine: int) -> tuple[list[int], list[int], int]:
         return killed, denied, vanished
     tops = [os.path.realpath(d) for d in dirs]
     for pid, _pgid, uid, environment in rows:
-        if uid != mine or environment is None or environment_withheld(pid) is not True:
+        if uid != mine or environment is None:
             continue
-        if not _inside(cwd_of(pid), tops):
+        started = _started(pid)
+        if started is None or environment_withheld(pid) is not True:
+            continue
+        if not _inside(cwd_of(pid), tops) or _started(pid) != started:
             continue
         try:
             os.kill(pid, signal.SIGKILL)
