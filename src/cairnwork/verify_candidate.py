@@ -42,7 +42,7 @@ from cairnwork.deferred_tests import (
     lay_tests_over,
     never_seen,
 )
-from cairnwork.gitcmd import OID, GitCommandError, run_git
+from cairnwork.gitcmd import CLONE_ISOLATED, OID, GitCommandError, run_git
 from cairnwork.import_path_tree import ImportPathError, require_plain_dirs
 from cairnwork.intake import Intake, IntakeRefused
 from cairnwork.issue_task import check_verify_import_paths
@@ -173,7 +173,7 @@ def _scratch(intake: Intake, source: Path, repo: Path, task: TaskSpec, candidate
     path = intake.state / "verify-scratch" / name
     path.parent.mkdir(mode=0o700, exist_ok=True)
     try:
-        run_git(path.parent, "clone", "--quiet", "--no-local", "--no-checkout", str(source), name)
+        run_git(path.parent, *CLONE_ISOLATED, str(source), name)
         try:
             run_git(
                 path,

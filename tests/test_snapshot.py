@@ -81,6 +81,7 @@ def test_symlinked_parent_directory_is_rejected(repo, attempt, tmp_path):
 def test_worker_attributes_and_filters_do_not_run(repo, attempt, tmp_path):
     marker = tmp_path / "filter-ran"
     git(attempt.path, "config", "filter.evil.clean", f"touch {marker}; cat")
+    (attempt.path / ".git" / "info").mkdir(exist_ok=True)  # no git templates in the clone (#417)
     (attempt.path / ".git" / "info" / "attributes").write_text("* filter=evil\n")
     (attempt.path / "src" / "a.py").write_text("x = 2\n")
     snapshot_candidate(repo, attempt, ALLOWED)

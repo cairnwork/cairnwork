@@ -164,7 +164,7 @@ def _report(result: dict, kept: Path | None) -> int:
 
 
 def _git_init(repo: Path) -> None:
-    run_git(repo, "init", "--quiet", "-b", "main")
+    run_git(repo, "init", "--quiet", "-b", "main", "--template=")
     _identify(repo)
 
 
