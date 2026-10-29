@@ -106,8 +106,61 @@ def create_attempt_clone(repo: Path, base_commit: str, root: Path, attempt_id: s
     except GitCommandError as exc:
         raise WorkspaceError(str(exc)) from exc
     if head != base_commit or differences:
+        if head == base_commit:
+            _refuse_case_collisions(repo, base_commit, path, differences)
         raise WorkspaceError(f"{path} is not a clean checkout of {base_commit}")
     return Attempt(attempt_id, base_commit, path, refs_before)
+
+
+def _refuse_case_collisions(repo: Path, base_commit: str, clone: Path, differences) -> None:
+    """#428: name the cause when a checkout failed because base's tree holds paths that differ
+    only in case and the clone's filesystem folds case (both are written to one file, so a
+    rerun never helps). Runs only after the clean-checkout check failed with HEAD at base;
+    otherwise returns and the caller raises its generic error. The collision is only added
+    to that error: every difference found is still listed, so nothing is hidden. Paths come
+    from the repository, so they are shown with repr: quoted, control characters escaped,
+    never the start of a log line."""
+    try:
+        names = run_git(repo, "ls-tree", "-r", "-z", "--name-only", "--full-tree", base_commit)
+    except GitCommandError:
+        return
+    groups = _case_collisions(filter(None, names.split("\0")))
+    if not groups or not _folds_case(clone):
+        return
+    detail = _collision_detail(groups, differences)
+    raise WorkspaceError(f"{clone} is not a clean checkout of {base_commit}: {detail}")
+
+
+def _case_collisions(names) -> list[list[str]]:
+    """Groups of tree paths, or directories, whose names differ only in case."""
+    folded: dict[str, set[str]] = {}
+    for name in names:
+        parts = name.split("/")  # a directory differing in case collides as well
+        for end in range(1, len(parts) + 1):
+            prefix = "/".join(parts[:end])
+            folded.setdefault(prefix.casefold(), set()).add(prefix)
+    return sorted(sorted(group) for group in folded.values() if len(group) > 1)
+
+
+def _collision_detail(groups: list[list[str]], differences) -> str:
+    """The collision groups (first three) and every difference found (first five)."""
+    shown = ", ".join(f"({', '.join(map(repr, group))})" for group in groups[:3])
+    more = f" and {len(groups) - 3} more" if len(groups) > 3 else ""
+    listed = ", ".join(map(repr, differences[:5]))
+    rest = f" and {len(differences) - 5} more" if len(differences) > 5 else ""
+    return (
+        f"base tree has case-colliding paths {shown}{more} on a case-insensitive filesystem;"
+        f" differences: {listed}{rest}"
+    )
+
+
+def _folds_case(clone: Path) -> bool:
+    """Whether clone's filesystem is case-insensitive: ``.GIT`` names its ``.git``. Nothing
+    is written; git never creates ``.GIT`` itself."""
+    try:
+        return os.path.samefile(clone / ".git", clone / ".GIT")
+    except OSError:
+        return False
 
 
 def _restrict_to_base_history(path: Path, base_commit: str) -> None:
