@@ -82,7 +82,9 @@ def environment_withheld(pid: int) -> bool | None:
     buffer alone looks like a readable one-entry environment. The code-signing status tells
     them apart (#310): a platform binary (``CS_PLATFORM_BINARY``) showing one entry or none
     counts as withheld. A process that is not one keeps the buffer's answer, so a readable
-    one-entry environment of an ordinary program is never taken for withheld."""
+    one-entry environment of an ordinary program is never taken for withheld. On a macOS that
+    shows platform binaries' environments, one with exactly one real entry counts as withheld
+    too: it is then tied only by its directory (run directories are Cairnwork scratch)."""
     if not _MACOS or pid <= 0:
         return None
     try:
