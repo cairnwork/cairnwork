@@ -33,6 +33,7 @@ def key() -> Ed25519PrivateKey:
 def publish_env(tmp_path: Path) -> tuple[Path, Path, str]:
     src, bare, candidate = make_publish_env(tmp_path)
     git(bare, "config", "core.hooksPath", "hooks")
+    (bare / "hooks").mkdir(exist_ok=True)  # the tests copy no git templates (conftest, #417)
     return src, bare, candidate
 
 

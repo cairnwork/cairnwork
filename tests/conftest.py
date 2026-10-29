@@ -1,4 +1,5 @@
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -7,6 +8,18 @@ import pytest
 from xdist_groups import XDIST_GROUP_OF
 
 pytest_plugins = ["verify_helpers"]
+
+
+# Fewer files per test git repo (#417): the tests' own git init/clone (subprocesses included)
+# copy no template directory (hook samples, info/exclude, description) and keep no reflogs.
+# Cairnwork's run_git strips every GIT_* variable, so its own clones are unaffected by both.
+os.environ["GIT_TEMPLATE_DIR"] = ""  # empty: no template, as with --template=
+if "GIT_CONFIG_COUNT" not in os.environ:
+    os.environ.update(
+        GIT_CONFIG_COUNT="1",
+        GIT_CONFIG_KEY_0="core.logAllRefUpdates",
+        GIT_CONFIG_VALUE_0="false",
+    )
 
 
 def git(repo, *args):
