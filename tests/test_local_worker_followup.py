@@ -52,7 +52,8 @@ def _canary(tmp_path, **changes: Any):
 
 @pytest.mark.parametrize(
     "finished_at",
-    [datetime.now().isoformat(), "2026-10-24T10:00:00", 1761300000, None, "yesterday"],
+    # a fixed naive now()-style value: a live now() gives each xdist worker different test ids
+    ["2026-10-24T10:00:00.123456", "2026-10-24T10:00:00", 1761300000, None, "yesterday"],
 )
 def test_a_canary_finish_time_without_an_offset_is_a_clean_refusal(tmp_path, finished_at):
     verify = _canary(tmp_path, finished_at=finished_at)
