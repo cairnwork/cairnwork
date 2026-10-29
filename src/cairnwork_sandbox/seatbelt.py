@@ -161,9 +161,9 @@ def developer_dirs() -> tuple[str, ...]:
 def _pyc_under(root: Path) -> str:
     """#368: a filter for every ``*.pyc`` below root. Bytecode the run writes is never read back, so
     a redirected sys.pycache_prefix cannot load a forged pyc it removes before the after-run scan.
-    Seatbelt matches a symlink by its target, so none may be created under a .pyc name there; one
-    in the candidate commit is the after-run scan's. '.' and '+' are the only regex metacharacters
-    sbpl_path lets through."""
+    Seatbelt matches a symlink by its target, so none may be created under a .pyc name there, and no
+    .pyc there may be unlinked (else RENAME_SWAP swaps a symlink in); one in the candidate commit is
+    the after-run scan's. '.' and '+' are the only regex metacharacters sbpl_path lets through."""
     escaped = re.sub(r"([.+])", r"\\\1", sbpl_path(root))
     return f'(regex #"^{escaped}/.*\\.pyc$")'
 
@@ -214,6 +214,7 @@ def build_profile(
         ")",
         *[f"(deny file-read-data {rule})" for rule in pycs],
         *[f"(deny file-write-create (require-all {rule} (vnode-type SYMLINK)))" for rule in pycs],
+        *[f"(deny file-write-unlink {rule})" for rule in pycs],
         "(deny network*)",
         *([] if allow_ipc else ["(deny ipc*)"]),
         "(deny file-read* file-write*",

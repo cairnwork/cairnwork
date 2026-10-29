@@ -8,12 +8,14 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
 - **macOS Seatbelt** (`src/cairnwork_sandbox/seatbelt.py`): default deny. Reads only from an
   allow-list (system libraries, the interpreter, the checkout); writes only to the checkout
   and the per-run directory; no network; credential stores denied last. Behaviour unchanged.
-  Bytecode (`*.pyc`) under the write roots is never read back, and no symlink with such a name
-  can be created there (Seatbelt matches a symlink by its target), so bytecode the run plants for
+  Reading bytecode (`*.pyc`) under the write roots is denied, and so are creating a symlink with
+  such a name there (Seatbelt matches a symlink by its target) and unlinking a `.pyc` there (so
+  no symlink is swapped in for one by RENAME_SWAP), so bytecode the run plants for
   a protected file through `sys.pycache_prefix` is not loaded even when it is removed before the
   after-run scan (#368; probed spellings in `tests/test_seatbelt_pyc.py`). Writing bytecode stays
   allowed and an honest import compiles from source; a test that reads back a `.pyc` it wrote
-  (py_compile output, a sourceless import from tmp) fails on macOS. A `.pyc` in the candidate
+  (py_compile output, a sourceless import from tmp) fails on macOS, and so does deleting or
+  replacing a `.pyc` there (an `rmtree` of a directory holding bytecode). A `.pyc` in the candidate
   commit itself is left to the after-run scan. Linux has no such rule.
 - **Linux bubblewrap** (`src/cairnwork_sandbox/bwrap.py`): a read-only bind of the whole root,
   read-write binds for the write roots only, every namespace unshared (no network), all

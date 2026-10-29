@@ -56,6 +56,17 @@ PINNED_368 = {  # a deny for reading *.pyc and creating a .pyc symlink under eac
         1961,
     ),
 }
+PINNED_368_SWAP = {  # and a deny for unlinking a *.pyc there (no RENAME_SWAP onto one)
+    (): ("b9ab2d2e69908de3c725cf436d3d9829495d5cda1d014aefb24a907ad3dbfabc", 2013),
+    ("/Library/Developer/CommandLineTools",): (
+        "b468b27280962754c1fd99f982f4341d8e7312aaafbab6eaae0252cef977f93b",
+        2063,
+    ),
+    ("/Applications/Xcode.app",): (
+        "660baec97cc2687b9fc2d21266091af4fabbc8bf4b71113d32a5fa79b35493b0",
+        2111,
+    ),
+}
 
 
 @pytest.mark.parametrize("dirs", list(PINNED))
@@ -67,7 +78,10 @@ def test_seatbelt_profile_is_pinned_as_of_the_posix_semaphore_change_116(monkeyp
         seatbelt.BACKEND.policy(READS, WRITES, home=HOME),
     ):
         pycs = [line for line in profile.text.splitlines(True) if '\\.pyc$")' in line]
-        assert len(pycs) == 2 * len(WRITES)  # #368: a read and a symlink rule per write root
+        assert len(pycs) == 3 * len(WRITES)  # #368: a read, a symlink and an unlink rule per root
+        unlinks = [line for line in pycs if line.startswith("(deny file-write-unlink ")]
+        assert len(unlinks) == len(WRITES)
+        no_unlink = "".join(line for line in profile.text.splitlines(True) if line not in unlinks)
         before_368 = "".join(line for line in profile.text.splitlines(True) if line not in pycs)
         c1_lines = ('  (literal "/usr/bin/shasum")\n', '  (literal "/usr/bin/shasum5.34")\n')
         for line in c1_lines:
@@ -77,7 +91,8 @@ def test_seatbelt_profile_is_pinned_as_of_the_posix_semaphore_change_116(monkeyp
             before_c1 = before_c1.replace(line, "")
         assert (hashlib.sha256(before_c1.encode()).hexdigest(), len(before_c1)) == PINNED[dirs]
         assert (hashlib.sha256(before_368.encode()).hexdigest(), len(before_368)) == PINNED_C1[dirs]
-        assert (profile.sha256, len(profile.text)) == PINNED_368[dirs]
+        assert (hashlib.sha256(no_unlink.encode()).hexdigest(), len(no_unlink)) == PINNED_368[dirs]
+        assert (profile.sha256, len(profile.text)) == PINNED_368_SWAP[dirs]
 
 
 def test_seatbelt_argv_prefixes_are_unchanged(tmp_path):

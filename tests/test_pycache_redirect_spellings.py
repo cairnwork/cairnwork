@@ -12,9 +12,8 @@ removed again before the run ends (the prefix directory, or only the pyc files i
 built by concatenation or with chr) is the known gap of that scan (bytecode_roots.py): Seatbelt
 closes it by never reading bytecode under a write root (#368), and those cases stay strict xfails
 under bwrap, while the sys.modules swap in test_blackbox_verify.py, which needs no bytecode at all,
-stays a false green. Both are in-process
-forgeries; the boundary is the blackbox declaration (#303) and a verdict produced outside the
-candidate's process, not these scans.
+stays a false green. Both are in-process forgeries; the boundary is the blackbox declaration
+(#303) and a verdict produced outside the candidate's process, not these scans.
 """
 
 import sys
