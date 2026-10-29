@@ -68,10 +68,12 @@ _ALLOW_ALL = "(version 1) (allow default)"
 # FSOPT_NOFOLLOW: the entry itself, a symlink too, never a target; no open, so a denied read or
 # readsecurity does not stop it) and uchg/uappnd (the chflags syscall needs no stat). A directory
 # on run's device gets u+rwx and is entered by an O_NOFOLLOW fd, closed once listed (no PATH_MAX).
-# No depth limit: a listing keeps at most half the entries left, so the next one gets some. A
+# No depth limit: a listing keeps at most half the entries left and reads for at most half the
+# time left, so what it read is still unlocked, and the next listing gets some of both. A
 # cut-short directory once done, or the current one at the clock (checked before any listing), is
-# moved up into run: rm frees the path above it and the next scrub goes on, not over. Exit 1 if
-# anything is left: rm fails, the scrub refuses.
+# moved up into run unless it is right under run already: rm frees the path above it and the next
+# scrub goes on, not over. Exit 1 if anything is left (cut short, an entry or listing that failed,
+# the clock): rm fails, the scrub refuses.
 _UNLOCK_SOURCE = """\
 import ctypes, itertools, os, stat, struct, sys, time
 top, max_nodes, seconds = sys.argv[1], *map(int, sys.argv[2:4])
@@ -123,14 +125,20 @@ def opened(name, dev):
     try:
         if os.fstat(fd).st_dev != dev:
             raise OSError("another device: left in place")
-        keep = (max_nodes - listed + 1) // 2
+        keep, names, short = (max_nodes - listed + 1) // 2, [], False
+        until = (time.monotonic() + deadline) / 2
         with os.scandir(fd) as entries:
-            names = [entry.name for entry in itertools.islice(entries, keep + 1)]
+            for entry in itertools.islice(entries, keep + 1):
+                names.append(entry.name)
+                if time.monotonic() >= until:
+                    short = True
+                    break
         os.fchdir(fd)
     finally:
         os.close(fd)
-    cut, listed = cut or len(names) > keep, listed + min(len(names), keep)
-    return iter(names[:keep]), len(names) > keep, name
+    short = short or len(names) > keep
+    cut, listed = cut or short, listed + min(len(names), keep)
+    return iter(names[:keep]), short, name
 dev = os.stat(top, follow_symlinks=False).st_dev
 stack.append(opened(top, dev))
 while stack:
@@ -141,13 +149,14 @@ while stack:
     if time.monotonic() >= deadline:
         stop()
     info = unlock(name)
+    cut = cut or info is None
     if info is None or not stat.S_ISDIR(info.st_mode) or info.st_dev != dev:
         continue
     attempt(os.chmod, name, stat.S_IMODE(info.st_mode) | 0o700, follow_symlinks=False)
     try:
         stack.append(opened(name, dev))
     except OSError:
-        pass
+        cut = True
 if cut:
     stop()
 """
