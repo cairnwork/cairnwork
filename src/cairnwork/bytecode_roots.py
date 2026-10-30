@@ -24,6 +24,9 @@ It runs as the run's own user (below). The owner fails the run (FORGED_BYTECODE)
 * a pytest-rewritten pyc (``-pytest-``) anywhere outside the checkout: the run sets
   PYTHONDONTWRITEBYTECODE, so an honest pytest writes none (in the checkout, the comparison has
   already shown each file to be the candidate's own committed content, judged as above);
+* any other regular file, the checkout included, that starts with this Python's magic number:
+  the run's Python may name bytecode otherwise (``BYTECODE_SUFFIXES``, ``cache_tag``, pytest's
+  ``PYC_TAIL``), and then no name says which source it stands for;
 * a non-ASCII pyc name, an unreadable directory, more than ``MAX_ENTRIES`` entries, more than
   ``MAX_STATES`` walk steps, or a scan that fails.
 
@@ -72,6 +75,7 @@ SCAN_TIMEOUT_SECONDS = 120
 HELPER = Path(__file__).with_name("bytecode_walk.py")  # run as a program, never imported here
 _SHAPES = {
     "pycs": (int, str),
+    "bytecode": (int, str),
     "errors": (int, str, str),
     "hits": (int, str, str, int, str, list),
 }
@@ -178,6 +182,9 @@ def redirected_bytecode(
             found.append(f"{shown(index, rel)} (non-ASCII name)")
         elif "-pytest-" in name.lower() and not committed:
             found.append(f"{shown(index, rel)} (pytest-rewritten bytecode)")
+    found.extend(
+        f"{shown(index, rel)} (bytecode not named .pyc)" for index, rel in listing["bytecode"]
+    )
     found.extend(_judged_hits(listing["hits"], roots, checkout, _target_dirs(targets)))
     found.extend(f"{shown(index, rel)} unreadable ({why})" for index, rel, why in listing["errors"])
     if listing["over"]:
