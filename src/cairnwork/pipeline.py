@@ -283,11 +283,12 @@ def _execute(task, specs, record, ledger, notary, journal, worker, run_root, ver
     except Exception as exc:  # noqa: BLE001 - an infrastructure failure, never success
         result.verified, result.uncomparable = False, ""
         result.reason = f"INFRA_ERROR: {type(exc).__name__}: {exc}"
-    finally:
-        result.status = "COMPLETED" if result.verified else "FAILED"
-        steps.reach("FINISHED", result.status, "" if result.verified else result.uncomparable)
-        fence = None if result.verified or result.fence is None else (attempt_id, result.fence)
-        ledger.set_status(record.task_id, result.status, fence=fence)
+    # Anything else (KeyboardInterrupt, SystemExit) leaves the task DISPATCHED, as a crash does:
+    # the attempt's processes are not shown gone, so recovery sweeps it and fences it (#244).
+    result.status = "COMPLETED" if result.verified else "FAILED"
+    steps.reach("FINISHED", result.status, "" if result.verified else result.uncomparable)
+    fence = None if result.verified or result.fence is None else (attempt_id, result.fence)
+    ledger.set_status(record.task_id, result.status, fence=fence)
     return result
 
 

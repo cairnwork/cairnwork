@@ -216,13 +216,7 @@ class VerifierAccount:
             return None
         if done.returncode != 0:
             return None
-        paths: dict[int, str] = {}
-        for line in done.stdout.split("\n"):
-            if "\t" in line:
-                pid_s, path = line.split("\t", 1)
-                if pid_s.isdigit():
-                    paths[int(pid_s)] = path
-        return paths
+        return verifier_escape.parse_pidpaths(done.stdout, pids)
 
     def _escaped_count(
         self, deadline: float | None = None, attempts: int = confined.PS_ATTEMPTS
