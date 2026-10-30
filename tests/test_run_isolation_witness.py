@@ -35,6 +35,7 @@ from pathlib import Path
 import pytest
 from conftest import commit_change
 from run_root_scope import own_run_id, own_run_names
+from socket_inventory import owner_sockets
 
 import cairnwork_sandbox
 from cairnwork.verifier_account import VerifierAccount
@@ -45,14 +46,6 @@ pytestmark = pytest.mark.sandbox
 SOCKET_ROOTS = ("/run", "/var/run", "/tmp")  # noqa: S108 - only listed and probed
 WALK_LIMIT, WALK_DEPTH = 100_000, 4  # daemon sockets sit 1-3 levels down (/run/systemd/journal)
 ACCOUNT = VerifierAccount()
-# Searchable-but-unlistable dirs the owner walk may skip (#418), with every socket a sudo listing
-# on the ubuntu-24.04 runners found in each (PR 474 CI); the run probes those by name.
-SEARCHABLE_OK = {
-    # 0711 root; both root:root 0660, and neither the runner nor the verifier is in group root
-    "/run/containerd": ("containerd.sock", "containerd.sock.ttrpc"),
-    "/run/libpod": (),  # 0751 root; podman state: alive, alive.lck, exits/ (0750). No socket
-    "/run/sudo": (),  # 0711 root, sudo's timestamp dir: empty in the listing
-}
 
 
 def socket_paths(roots, limit, depth):
@@ -165,13 +158,12 @@ def run_one(repo, tmp_path, files, target, account=None, prefixes=None):
 
 def socket_run(repo, tmp_path, account=None, prefixes=None):
     host, unreadable, blind, count = socket_paths(SOCKET_ROOTS, WALK_LIMIT, WALK_DEPTH)
-    blind = [path for path in blind if path not in SEARCHABLE_OK]
-    for path in unreadable:  # only a searchable one can hide a reachable socket (#418)
-        print(("BLIND " if path in blind else "UNREADABLE ") + repr(path))
-    assert not blind, f"owner cannot list searchable {blind}: sockets there are never probed"
-    known = (os.path.join(d, n) for d, names in SEARCHABLE_OK.items() for n in names)
-    # a known name is reachable without listing: the run's probe tries each that exists
-    host += [p for p in known if os.path.exists(p) and stat.S_ISSOCK(os.stat(p).st_mode)]
+    host, failures = owner_sockets(host, blind)
+    for path in sorted(set(unreadable) - set(blind)):  # cannot be searched: nothing reachable
+        print("UNREADABLE " + repr(path))
+    for line in failures:  # blind dirs only an evidenced inventory may excuse (#418)
+        print(line)
+    assert not failures, f"{len(failures)} blind dirs or unlisted sockets, listed on stdout"
     assert host, f"no pathname socket under {SOCKET_ROOTS} on this host: the witness is vacuous"
     code = PROBE.format(
         walker=inspect.getsource(socket_paths),
