@@ -81,7 +81,15 @@ def read_change_set(repo: Path, base_commit: str, candidate_commit: str) -> GitC
     base_tree = _tree_of(repo, base_commit)
     candidate_tree = _tree_of(repo, candidate_commit)
     raw = _git(
-        repo, "diff-tree", "-r", "-z", "--raw", "--no-renames", base_commit, candidate_commit
+        repo,
+        "diff-tree",
+        "-r",
+        "-z",
+        "--raw",
+        "--no-renames",
+        "--ignore-submodules=none",
+        base_commit,
+        candidate_commit,
     )
     entries = _parse_raw(raw)
     if not entries:
@@ -97,7 +105,17 @@ def read_tree_change_set(repo: Path, base_commit: str, target: str) -> GitChange
     tree = _git(repo, "rev-parse", "--verify", "--end-of-options", f"{target}^{{tree}}").strip()
     base_tree = _tree_of(repo, base_commit)
     entries = _parse_raw(
-        _git(repo, "diff-tree", "-r", "-z", "--raw", "--no-renames", base_tree, tree)
+        _git(
+            repo,
+            "diff-tree",
+            "-r",
+            "-z",
+            "--raw",
+            "--no-renames",
+            "--ignore-submodules=none",
+            base_tree,
+            tree,
+        )
     )
     if not entries:
         raise ChangeSetError("target changes no files")
