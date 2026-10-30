@@ -4,7 +4,9 @@ The readers look at spellings (``fixture``, ``mark.parametrize``, ``pytest.impor
 ``from pytest import fixture as mark`` or ``import pytest as pt`` would otherwise be read as
 something else. ``resolve_aliases`` rewrites such a module in place so that every use carries
 the real name; the rest of the tool then treats the aliased and the plain spelling alike.
-A name that is bound more than once in the module is left alone: it does not name the import.
+An alias is resolved only if nothing else in the module binds or declares its name (any scope,
+any binding form) and the module binds no names dynamically; otherwise it is left alone, and the
+scope reader refuses the unresolved alias.
 """
 
 from __future__ import annotations
@@ -15,24 +17,44 @@ from collections import Counter
 PYTEST_MODULES = {"pytest", "_pytest.mark"}
 
 
-def _bindings(tree: ast.Module) -> Counter[str]:
-    """How many times each name is bound anywhere in the module, by any statement."""
+DYNAMIC = {  # names through which a module can bind names this reader does not see
+    "globals", "vars", "locals", "exec", "eval", "setattr", "delattr",
+    "__dict__", "__setattr__", "__delattr__",
+}  # fmt: skip
+
+
+def _names(node: ast.AST) -> list[str]:
+    """The names node binds or declares, in whatever scope (an attribute store counts as well:
+    it may be the module's)."""
+    if isinstance(node, ast.Name | ast.Attribute) and isinstance(node.ctx, ast.Store | ast.Del):
+        return [node.id if isinstance(node, ast.Name) else node.attr]
+    if isinstance(node, ast.Import | ast.ImportFrom):
+        return [(a.asname or a.name).split(".")[0] for a in node.names]
+    if isinstance(node, ast.Global | ast.Nonlocal):
+        return list(node.names)
+    if isinstance(node, ast.arg):
+        return [node.arg]
+    if isinstance(node, ast.MatchMapping):
+        return [node.rest] if node.rest else []
+    found = [p.name for p in getattr(node, "type_params", ())]  # PEP 695, Python 3.12+
+    if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+        found.append(node.name)
+    elif isinstance(node, ast.ExceptHandler | ast.MatchAs | ast.MatchStar) and node.name:
+        found.append(node.name)
+    return found
+
+
+def _bindings(tree: ast.Module) -> Counter[str] | None:
+    """How many times each name is bound or declared anywhere in the module, by any statement
+    (None: the module can bind names dynamically or by a star import, so no count is known)."""
     count: Counter[str] = Counter()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store | ast.Del):
-            count[node.id] += 1
-        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
-            count[node.name] += 1
-        elif isinstance(node, ast.arg):
-            count[node.arg] += 1
-        elif isinstance(node, ast.Import | ast.ImportFrom):
-            for a in node.names:
-                count[(a.asname or a.name).split(".")[0]] += 1
-        elif isinstance(node, ast.ExceptHandler | ast.MatchAs | ast.MatchStar) and node.name:
-            count[node.name] += 1
-        elif isinstance(node, ast.MatchMapping) and node.rest:
-            count[node.rest] += 1
-    return count
+        if isinstance(node, ast.Name) and node.id in DYNAMIC:
+            return None
+        if isinstance(node, ast.Attribute) and node.attr in DYNAMIC:
+            return None
+        count.update(_names(node))
+    return None if "*" in count else count
 
 
 def _table(tree: ast.Module, bound: Counter[str]) -> dict[str, str]:
@@ -68,5 +90,6 @@ class _Rename(ast.NodeTransformer):
 def resolve_aliases(tree: ast.Module) -> ast.Module:
     """The module with pytest's aliased names renamed to the real ones (the tree is changed
     in place and returned)."""
-    table = _table(tree, _bindings(tree))
+    bound = _bindings(tree)
+    table = _table(tree, bound) if bound is not None else {}
     return _Rename(table).visit(tree) if table else tree

@@ -4,6 +4,7 @@ Each refused case would run code around the test under real pytest that a blackb
 repeat; each control (the same file without the alias) is refused the same way.
 """
 
+import sys
 import textwrap
 
 import pytest
@@ -187,3 +188,54 @@ def test_a_pytest_import_inside_a_function_is_refused(tmp_path, case):
 def test_a_function_local_import_of_another_module_keeps_the_draft(tmp_path):
     item = run(tmp_path, HEAD + "def helper():\n    import json\n    return json\n" + PLAIN)
     assert item.protected(KINDS_NOW), item.reason(KINDS_NOW)
+
+
+ALIASED_TEST = HEAD + "import pytest as pt\n@pt.mark.parametrize('x', [1])\n"
+ALIASED_TEST += "def test_a(x):\n    assert f(x) == x\n"
+BINDING_FORMS = {  # each also binds or declares pt somewhere, so pt may not be the import
+    "global": "def helper():\n    global pt\n    return pt\n",
+    "nonlocal": "def outer(pt):\n    def inner():\n        nonlocal pt\n    return inner\n",
+    "del": "def helper():\n    del pt\n",
+    "argument": "def helper(pt):\n    return pt\n",
+    "positional_only": "def helper(pt, /):\n    return pt\n",
+    "keyword_only": "def helper(*, pt):\n    return pt\n",
+    "vararg": "def helper(*pt):\n    return pt\n",
+    "kwarg": "def helper(**pt):\n    return pt\n",
+    "lambda_argument": "def helper():\n    return lambda pt: pt\n",
+    "class_name": "def helper():\n    class pt:\n        pass\n",
+    "function_name": "def helper():\n    def pt():\n        pass\n",
+    "for_target": "def helper():\n    for pt in ():\n        pass\n",
+    "with_as": "def helper():\n    with open('x') as pt:\n        pass\n",
+    "walrus": "def helper():\n    return (pt := 1)\n",
+    "comprehension": "def helper():\n    return [pt for pt in ()]\n",
+    "except_as": "def helper():\n    try:\n        pass\n    except ValueError as pt:\n"
+    + "        pass\n",
+    "other_import": "def helper():\n    import os as pt\n",
+    "attribute": "def helper(module):\n    module.pt = 1\n",
+    "globals": "def helper():\n    globals()['pt'] = 1\n",
+    "setattr": "import sys\ndef helper():\n    setattr(sys.modules[__name__], 'pt', 1)\n",
+    "module_dict": "import sys\ndef helper():\n    sys.modules[__name__].__dict__['pt'] = 1\n",
+    "exec": "def helper():\n    exec('pt = 1')\n",
+    "star_import": "from os.path import *\n",
+}
+TYPE_PARAMS = {  # PEP 695 (Python 3.12+)
+    "function_type_parameter": "def helper[pt]():\n    pass\n",
+    "class_type_parameter": "class Helper[pt]:\n    pass\n",
+    "type_alias": "def helper():\n    type pt = int\n",
+}
+
+
+def test_an_alias_bound_only_by_its_import_resolves(tmp_path):
+    item = run(tmp_path, ALIASED_TEST)
+    assert item.protected(KINDS_NOW), item.reason(KINDS_NOW)
+
+
+@pytest.mark.parametrize("form", sorted(BINDING_FORMS))
+def test_an_alias_bound_or_declared_elsewhere_is_not_resolved(tmp_path, form):
+    assert refused(run(tmp_path, ALIASED_TEST + BINDING_FORMS[form]))
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="type parameters need Python 3.12")
+@pytest.mark.parametrize("form", sorted(TYPE_PARAMS))
+def test_an_alias_bound_as_a_type_parameter_is_not_resolved(tmp_path, form):
+    assert refused(run(tmp_path, ALIASED_TEST + TYPE_PARAMS[form]))
