@@ -194,6 +194,18 @@ def test_etc_links_to_a_file_under_the_tree_are_bound_read_only(host):
     assert "name.conf" not in lines
 
 
+def test_an_etc_link_into_tmp_is_not_put_back(host):
+    # A file under /tmp may belong to any local user, who could swap it for a socket between the
+    # check and the mount: only /run and /var/run (system daemons' trees) get /etc files back.
+    (host / "tmp" / "f.conf").write_text("x\n")
+    (host / "run" / "f.conf").write_text("x\n")
+    (host / "etc" / "tmp.conf").symlink_to(host / "tmp" / "f.conf")
+    (host / "etc" / "run.conf").symlink_to(host / "run" / "f.conf")
+    lines = _policy(host)
+    assert _real(host / "tmp" / "f.conf") not in lines
+    assert _at(lines, "--ro-bind", *[_real(host / "run" / "f.conf")] * 2) > 0
+
+
 def test_an_etc_file_the_account_cannot_reach_is_left_out(host, monkeypatch):
     run = host / "run"
     (run / "secret").mkdir()
