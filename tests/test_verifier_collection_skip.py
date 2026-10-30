@@ -19,6 +19,7 @@ from cairnwork.journal import Journal
 from cairnwork.notary import Notary
 from cairnwork.ownership import OwnershipLedger
 from cairnwork.pipeline import TaskSpec, run_task
+from cairnwork.reasons import why_not_passed
 from cairnwork.verifiers import parse_verifier, run_verifiers
 
 CONFTEST = (
@@ -101,6 +102,24 @@ def test_the_record_names_each_collected_tests_file_by_index():
     assert verdict.not_run(("tests/a.py",)) == ("tests/a.py",)
 
 
+def test_a_record_naming_an_item_renamed_after_collection_is_not_a_pass():
+    record = _record(files=["tests/a.py"], file_of=[0], renamed=["tests/a.py::t"])
+    verdict = report_guard.parse_verdict(record, "n")
+    assert verdict.recorded and not verdict.ran
+    assert verdict.renamed == ("tests/a.py::t",)
+    why = why_not_passed(
+        ran_sandboxed=True, returncode=0, timed_out=False, mutated=(), survivors=0,
+        log_too_big=False, tests_ran=False, renamed=verdict.renamed,
+    )  # fmt: skip
+    assert why == "items renamed after collection (1: tests/a.py??t)"  # _names masks colons
+
+
+@pytest.mark.parametrize("bad", ["tests/a.py::t", [1], {"x": "y"}])
+def test_a_malformed_renamed_list_fails_closed(bad):
+    verdict = report_guard.parse_verdict(_record(renamed=bad), "n")
+    assert not verdict.recorded and not verdict.ran
+
+
 @pytest.mark.parametrize(
     ("files", "file_of"),
     [
@@ -152,13 +171,32 @@ RENAME = CONFTEST + (
     "    items[:] = keep\n"
 )
 REORDER = CONFTEST + "def pytest_collection_modifyitems(items):\n    items.reverse()\n"
+# an honest deselection: removes an item and reports it, renames nothing
+DESELECT = CONFTEST + (
+    "def pytest_collection_modifyitems(config, items):\n"
+    "    dropped = [i for i in items if i.name == 'test_add_twice']\n"
+    "    items[:] = [i for i in items if i not in dropped]\n"
+    "    config.hook.pytest_deselected(items=dropped)\n"
+)
 
 
 @pytest.mark.sandbox
 @pytest.mark.parametrize(
     ("conftest", "ext", "passes"),
-    [(RENAME, EXT_WRONG, False), (REORDER, EXT, True), (REORDER, EXT_WRONG, False)],
-    ids=["renamed-into-target", "reordered-passing", "reordered-failing"],
+    [
+        (RENAME, EXT_WRONG, False),
+        (REORDER, EXT, True),
+        (REORDER, EXT_WRONG, False),
+        (DESELECT, EXT, True),
+        (DESELECT, EXT_WRONG, False),
+    ],
+    ids=[
+        "renamed-into-target",
+        "reordered-passing",
+        "reordered-failing",
+        "deselected-passing",
+        "deselected-failing",
+    ],
 )
 def test_a_target_is_owned_by_the_items_collected_from_its_file_not_by_their_node_id(
     repo, tmp_path, conftest, ext, passes
@@ -177,8 +215,61 @@ def test_a_target_is_owned_by_the_items_collected_from_its_file_not_by_their_nod
     assert run.ran is passes
     if conftest is RENAME:
         assert run.returncode == 0  # pytest itself sees nothing wrong
-        assert "tests/test_ext.py::test_mul" in run.outcomes
-        assert "no test ran for a target or skipped module (1: tests/test_ext.py)" in run.why
+        assert run.outcomes == {  # keyed by the node ids pytest collected
+            "tests/test_core.py::test_add_positive": "passed",
+            "tests/test_core.py::test_add_twice": "passed",
+        }
+        assert "items renamed after collection (1: tests/test_ext.py??test_mul)" in run.why
+    if conftest is DESELECT and passes:
+        assert "tests/test_core.py::test_add_twice" not in run.outcomes
+
+
+# one file: its named test is dropped and a passing sibling takes over that test's node id
+EXT_TWO = (
+    "import pytest\nfrom calc_ext import mul\n"
+    "def test_mul():\n    assert mul(2, 3) == 6\n"
+    "@pytest.mark.parametrize('a', [0, 1])\n"
+    "def test_mul_zero(a):\n    assert mul(0, 0) == 0\n"
+)
+SAME_FILE = CONFTEST + (
+    "def pytest_collection_modifyitems(items):\n"
+    "    keep = [i for i in items if i.name != 'test_mul']\n"
+    "    for item in keep:\n"
+    "        if item.name == 'test_mul_zero[1]':\n"
+    "            item._nodeid = 'tests/test_ext.py::test_mul'\n"
+    "    items[:] = keep\n"
+)
+
+
+@pytest.mark.sandbox
+@pytest.mark.parametrize(
+    ("conftest", "ext", "passes"),
+    [(SAME_FILE, EXT_WRONG, False), (CONFTEST, EXT, True), (CONFTEST, EXT_WRONG, False)],
+    ids=["renamed-within-the-file", "plain-passing", "plain-failing"],
+)
+def test_a_test_renamed_after_collection_fails_the_run_even_within_its_own_file(
+    repo, tmp_path, conftest, ext, passes
+):
+    commit_change(repo, {
+        "src/calc.py": CALC, "src/calc_ext.py": EXT, "tests/conftest.py": CONFTEST,
+        "tests/test_ext.py": EXT_TWO, "tests/test_core.py": CORE_TEST,
+    })  # fmt: skip
+    candidate = commit_change(
+        repo, {"src/calc.py": FIXED_ADD, "src/calc_ext.py": ext, "tests/conftest.py": conftest}
+    )
+    targets = [
+        "tests/test_core.py",
+        "tests/test_ext.py::test_mul",
+        "tests/test_ext.py::test_mul_zero",
+    ]
+    spec = parse_verifier("pytest", ["python3", "-m", "pytest", "-q", *targets])
+    (run,) = run_verifiers(repo, candidate, (spec,), tmp_path / "runs", "r1", python=sys.executable)
+    assert run.observation.passed is passes
+    assert run.ran is passes
+    if conftest is SAME_FILE:
+        assert run.returncode == 0  # pytest itself sees nothing wrong
+        assert "tests/test_ext.py::test_mul_zero[1]" in run.outcomes
+        assert "items renamed after collection (1: tests/test_ext.py??test_mul)" in run.why
 
 
 # ---- the author's verifier (run_verifiers, real sandbox) ---------------------------------

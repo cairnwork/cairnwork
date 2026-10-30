@@ -6,10 +6,12 @@ write. verifiers.py used to pass ``--junitxml=<path>`` in argv and read that fil
 candidate's own code runs in the same process and could read the path from ``sys.argv``, write
 a passing report and ``os._exit(0)`` before the real tests ran. The parent now accepts a run
 only when our record is present (so an exit before ``sessionfinish`` fails), it names at least
-one collected test, every collected test has a result, all of them passed, and no collector was
-skipped or failed; the caller also requires each target it named to own a test that ran
-(``Verdict.not_run``), judged by the file each test was collected from (recorded when pytest
-collects the item, before ``pytest_collection_modifyitems``), not by its node id: a module
+one collected test, every collected test has a result, all of them passed, no collector was
+skipped or failed, and every item kept the node id and file it had when pytest collected it
+(recorded in ``pytest_itemcollected``, before ``pytest_collection_modifyitems``; an item renamed,
+moved or added later fails the run). Tests and outcomes are keyed by that collected node id, and
+the caller also requires each target it named to own a test that ran (``Verdict.not_run``: the
+test's collected file is the target's file and its collected node id is under it): a module
 skipped at collection (``importorskip``, a module-level skip) yields no test at all, so it counts
 as skipped, not as passed.
 
@@ -109,9 +111,10 @@ class _Reporter:
         self._nonce = nonce
         self._collected = []
         self._outcomes = {}
-        self._sources = {}  # id(item) -> (item, its file) as collected, before any reordering hook
+        self._sources = {}  # id(item) -> (item, node id, file) when collected
         self._files = []
-        self._file_of = []  # per collected item: its index in _files, -1 if not seen collected
+        self._file_of = []  # per collected item: its index in _files, -1 if it has none
+        self._renamed = []  # items whose node id or file changed after collection, or never seen
         self._collect_errors = []
         self._collect_skipped = []
 
@@ -121,32 +124,50 @@ class _Reporter:
         elif report.skipped:  # a module or directory skipped whole while collecting
             self._collect_skipped.append(report.nodeid)
 
+    @staticmethod
+    def _source(item):
+        try:
+            return item.path.relative_to(item.config.rootpath).as_posix()
+        except (AttributeError, TypeError, ValueError):
+            return ""
+
+    def _original(self, item, nodeid):
+        """The node id ``item`` had when collected; an item that was not seen collected, or whose
+        node id or file has changed since, is recorded as renamed (the run cannot pass)."""
+        seen = self._sources.get(id(item))
+        if not seen or seen[0] is not item:
+            self._renamed.append(nodeid)
+            return nodeid, ""
+        if nodeid != seen[1] or self._source(item) != seen[2]:
+            self._renamed.append(nodeid)
+        return seen[1], seen[2]
+
     @pytest.hookimpl(tryfirst=True)
     def pytest_itemcollected(self, item):
-        try:
-            source = item.path.relative_to(item.config.rootpath).as_posix()
-        except (AttributeError, TypeError, ValueError):
-            source = ""
-        self._sources[id(item)] = (item, source)
+        self._sources[id(item)] = (item, item.nodeid, self._source(item))
 
     def pytest_collection_finish(self, session):
-        self._collected = [item.nodeid for item in session.items]
         index = {}
         for item in session.items:
-            seen = self._sources.get(id(item))
-            source = seen[1] if seen and seen[0] is item else ""  # an item made after collection
+            nodeid, source = self._original(item, item.nodeid)
+            self._collected.append(nodeid)
             self._file_of.append(index.setdefault(source, len(index)) if source else -1)
         self._files = list(index)
 
-    def pytest_runtest_logreport(self, report):
+    @pytest.hookimpl(wrapper=True, tryfirst=True)
+    def pytest_runtest_makereport(self, item, call):
+        report = yield  # outermost: the report as every other hook left it
+        nodeid, _ = self._original(item, report.nodeid)
         if report.when == "call":
-            self._outcomes[report.nodeid] = report.outcome
+            self._outcomes[nodeid] = report.outcome
         elif report.when == "setup" and report.outcome in ("skipped", "failed"):
-            self._outcomes.setdefault(report.nodeid, report.outcome)
+            self._outcomes.setdefault(nodeid, report.outcome)
+        return report
 
     def pytest_sessionfinish(self, session, exitstatus):
         payload = {"nonce": self._nonce, "collected": self._collected, "outcomes": self._outcomes,
                    "files": self._files, "file_of": self._file_of,
+                   "renamed": list(dict.fromkeys(self._renamed)),
                    "collect_errors": self._collect_errors,
                    "collect_skipped": self._collect_skipped}
         if self._fd is not None:
@@ -191,6 +212,7 @@ class Verdict:
     recorded: bool = False  # sessionfinish wrote a well-formed record with our nonce (#234)
     collect_errors: tuple[str, ...] = ()  # node ids of collectors that failed (B2, #234)
     collect_skipped: tuple[str, ...] = ()  # node ids of collectors skipped while collecting
+    renamed: tuple[str, ...] = ()  # items whose node id or file changed after collection
     paths: dict[str, str] = field(default_factory=dict)  # node id -> its file, as collected
 
     def not_run(self, targets) -> tuple[str, ...]:
@@ -243,8 +265,9 @@ def read_verdict_fd(fd: int, nonce: str) -> Verdict:
 def parse_verdict(raw: bytes, nonce: str) -> Verdict:
     """``ran`` is true only when sessionfinish wrote the record, it matches
     the nonce, at least one test was collected, every collected test produced a result, all
-    results are ``passed`` and no collector failed or was skipped. Outcomes, ``recorded`` and the
-    collector lists are returned whenever the nonce matches (even when not all passed) so
+    results are ``passed``, no collector failed or was skipped and no item's node id or file
+    changed after collection (``renamed``). Outcomes, ``recorded`` and the collector lists are
+    returned whenever the nonce matches (even when not all passed) so
     base_comparison can see a test that failed. A record over MAX_REPORT_BYTES (a suite too large
     for one report, #184) is ``too_big`` so the caller can say why nothing was read."""
     if len(raw) > MAX_REPORT_BYTES:
@@ -267,10 +290,12 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
         return Verdict(False, {})
     errors = data.get("collect_errors", [])
     skipped = data.get("collect_skipped", [])
+    renamed = data.get("renamed", [])
     files = data.get("files", [])
     file_of = data.get("file_of")  # absent: no test owns a named target
     if not all(
-        isinstance(v, list) and all(isinstance(n, str) for n in v) for v in (errors, skipped)
+        isinstance(v, list) and all(isinstance(n, str) for n in v)
+        for v in (errors, skipped, renamed)
     ):
         return Verdict(False, {})
     if not isinstance(files, list) or not all(isinstance(path, str) for path in files):
@@ -285,6 +310,7 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
         bool(collected)
         and not errors
         and not skipped
+        and not renamed
         and set(outcomes) == set(collected)
         and all(outcome == "passed" for outcome in outcomes.values())
     )
@@ -294,6 +320,7 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
         recorded=True,
         collect_errors=tuple(errors),
         collect_skipped=tuple(skipped),
+        renamed=tuple(renamed),
         paths=_sources(collected, files, file_of or ()),
     )
 

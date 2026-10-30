@@ -359,7 +359,7 @@ def _run_one_in(
     why = "" if passed else why_not_passed(
         ran_sandboxed=profile is not None, returncode=returncode, timed_out=timed_out,
         mutated=mutated, survivors=survivors, log_too_big=too_big, tests_ran=ran,
-        report_too_big=verdict.too_big, forged=forged, not_run=not_run,
+        report_too_big=verdict.too_big, forged=forged, not_run=not_run, renamed=verdict.renamed,
     )  # fmt: skip
     digest = _record_digest(
         candidate_commit=candidate_commit,
