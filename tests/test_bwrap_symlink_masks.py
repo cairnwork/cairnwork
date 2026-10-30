@@ -4,13 +4,12 @@ at mount. A path reached through any link is now masked at its real target. The 
 on any host; the last test witnesses it on real bwrap (the test-linux-sandbox CI job)."""
 
 import os
-import shutil
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
 from conftest import commit_change
+from fixture_tree import reach_env, world_base, world_dir
 
 import cairnwork_sandbox
 from cairnwork.verifiers import parse_verifier, run_verifiers
@@ -161,13 +160,9 @@ def test_a_link_target_cannot_add_a_policy_line(tmp_path, home):
 
 
 def _world_dir():
-    """A 0755 dir under /tmp (world-traversable ancestors), so the account path can reach it."""
-    base = Path(tempfile.mkdtemp(dir="/tmp", prefix="cw-link-"))  # noqa: S108
-    os.chmod(base, 0o755)
-    try:
+    """A 0755 dir off /tmp (world-traversable ancestors), so the account path can reach it."""
+    with world_dir("cw-link-") as base:
         yield base
-    finally:
-        shutil.rmtree(base, ignore_errors=True)
 
 
 world_home = pytest.fixture(_world_dir, name="world_home")
@@ -199,7 +194,7 @@ def test_account_mode_ignores_a_dangling_link_in_a_private_home(world_home):
 
 @pytest.mark.parametrize("home_mode", [0o755, 0o700], ids=["home-0755", "home-0700"])
 def test_account_mode_masks_a_reachable_target_outside_home(world_home, world_outside, home_mode):
-    # #358: the account reads an outside target through its own path (0755 under /tmp), whether
+    # #358: the account reads an outside target through its own path (0755 off /tmp), whether
     # or not it can enter the home that holds the link, so the target is masked there.
     (world_outside / "ssh").mkdir()
     (world_outside / "netrc").write_text("machine x password y\n")
@@ -255,13 +250,15 @@ def test_account_mode_refuses_a_link_to_an_in_home_ancestor_of_a_write_root(worl
 
 
 @pytest.mark.sandbox
-def test_absolute_symlinked_credentials_run_and_stay_masked(repo, tmp_path, monkeypatch):
+def test_absolute_symlinked_credentials_run_and_stay_masked(repo, tmp_path, monkeypatch, request):
     """On base this run fails at mount ('Can't mount tmpfs on /newroot/...'): the verifier does
-    not pass. Fixed, the run passes and no canary behind a link is readable."""
+    not pass. Fixed, the run passes and no canary behind a link is readable, while a plain file
+    beside them is (the fixture tree is off /tmp, so the run sees it, #391)."""
     backend = cairnwork_sandbox.platform_backend()
     if backend is None or backend.name != "bwrap":
         pytest.skip("bwrap only: Seatbelt deny rules are a separate mechanism (not #341)")
-    home, outside = tmp_path / "fakehome", tmp_path / "outside"
+    base = world_base(request, "cw-link-run-")
+    home, outside = base / "fakehome", base / "outside"
     (outside / "config" / "gh").mkdir(parents=True)
     (home / "dotfiles" / "ssh").mkdir(parents=True)
     (outside / "config" / "gh" / "hosts.yml").write_text("CANARY-SECRET\n")
@@ -280,12 +277,14 @@ def test_absolute_symlinked_credentials_run_and_stay_masked(repo, tmp_path, monk
     ]
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("CW_CANARIES", ":".join(str(c) for c in canaries))
+    reach, check = reach_env(monkeypatch, backend, home, outside, home / "dotfiles")
     import cairnwork.verifiers as verifiers
 
-    monkeypatch.setattr(verifiers, "_ENV_KEEP", (*verifiers._ENV_KEEP, "CW_CANARIES"))
+    monkeypatch.setattr(verifiers, "_ENV_KEEP", (*verifiers._ENV_KEEP, "CW_CANARIES", *reach))
     code = (
         "import os\n"
         "def test_masked():\n"
+        f"{check}"
         "    paths = os.environ['CW_CANARIES'].split(':')\n"
         "    assert len(paths) == 6\n"
         "    for path in paths:\n"
