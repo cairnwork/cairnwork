@@ -1,16 +1,17 @@
 """A private, read-only /run, /var/run (when separate) and /tmp for each bwrap run (#391).
 
-/run holds the host's daemon sockets (journald, systemd, snapd, uuidd, D-Bus, container daemons)
-and /tmp the users' own (ssh-agent, tmux, X11), and a read-only bind does not stop ``connect()``.
-So each run gets an empty tmpfs there in its own mount namespace (a socket the host adds later does
-not appear), read-only last. Put back: each top-level link that resolves inside a tree, at the path
-checked (not Rancher's ``/run/docker.sock`` -> home, nor NixOS ``/run/current-system``, #469);
-each top-level ``/etc`` link to a regular file in a tree (``/etc/resolv.conf``), read-only, for
-the account only one it may reach (a file swapped after the check is bound as it then is); a read
-or write root under /tmp (the tests' owner-mode runs live there), a read one read-only and only if
-it exists. ``--remount-ro`` does not recurse, so a write root stays writable. Refused: a root that
-is a tree or in /run or /var/run, a write root holding a tree, trees that overlap, a tree that
-cannot be listed or written in the policy, an /etc entry that cannot be checked.
+/run holds the host's daemon sockets (journald, systemd, snapd, uuidd, D-Bus, container daemons) and
+/tmp the users' own (ssh-agent, tmux, X11), and a read-only bind does not stop ``connect()``. So
+each run gets an empty tmpfs there in its own mount namespace (a socket the host adds later does not
+appear), read-only last. Put back: each top-level link that resolves inside a tree, at the path
+checked (not Rancher's ``/run/docker.sock`` -> home, nor NixOS ``/run/current-system``, #469); each
+top-level ``/etc`` link to a regular file in /run or /var/run (``/etc/resolv.conf``; not in /tmp,
+whose files any user may swap for a socket), read-only, for the account only one it may reach (a
+file its daemon swaps after the check is bound as it then is); a read or write root under /tmp (the
+tests' owner-mode runs live there), a read one read-only and only if it exists. ``--remount-ro``
+does not recurse, so a write root stays writable. Refused: a root that is a tree or in /run or
+/var/run, a write root holding a tree, trees that overlap, a tree that cannot be listed or written
+in the policy, an /etc entry that cannot be checked.
 """
 
 from __future__ import annotations
@@ -80,14 +81,15 @@ def private_flags(reads: list[str], writes: list[str], owner: bool) -> tuple[lis
             real = os.path.realpath(os.path.join(tree, target)) if target else ""
             if _under(real, private) and _NAME.fullmatch(real) and _NAME.fullmatch(entry.name):
                 head += ["--symlink", real, f"{tree}/{entry.name}"]
-    for root in reads:  # only one that exists now: none another user could plant in /tmp later
+    for root in reads:  # a read root absent at build time is skipped
         head += ["--ro-bind", root, root] if _under(root, private) and os.path.exists(root) else []
+    daemons = [tree for tree in private if not _under(tree, holds)]  # not /tmp
     for entry in _entries(ETC):
         try:
             real = os.path.realpath(entry.path) if entry.is_symlink() else ""
         except OSError as err:
             raise SandboxError(f"cannot check {entry.path} for the private trees: {err}") from err
-        if not _under(real, private) or not _NAME.fullmatch(real) or real in head:
+        if not _under(real, daemons) or not _NAME.fullmatch(real) or real in head:
             continue
         try:
             regular = stat.S_ISREG(os.stat(real).st_mode)
