@@ -15,6 +15,9 @@ A commit may change it when one of its Python files (``.py``/``.pyw``, any case)
   any other object (``os.sys``) or imports ``sys`` from another module, or names a function of
   ``os`` (also ``posix``, ``nt``) that starts a program, under any name
   (``from os import system``), or
+- reaches an attribute or runs code by a name built at run time: calls one of ``DYNAMIC_NAMES``
+  (``getattr(logging, "sys")``, ``exec``), reads one of ``DYNAMIC_ATTRS`` (``m.__dict__``),
+  imports one of ``DYNAMIC_MODULES`` or matches ``sys`` or such a name in a class pattern, or
 - cannot be read: it may name one of those modules (or holds a non-ASCII byte, which an
   identifier may normalize from) and this interpreter cannot parse it (a syntax or encoding
   error), or it is a symlink; a file that names none of them reaches them only through a word;
@@ -82,8 +85,23 @@ SAFE_SYS = frozenset(
 _OS_MODULES = frozenset({"os", "posix", "nt"})
 _OS_RUN = frozenset({"system", "popen", "putenv", "startfile"})
 _OS_RUN_PREFIXES = ("exec", "spawn", "posix_spawn")
-# Files worth parsing: those that may name sys, os, posix or nt (see the module docstring).
-_MAY_NAME = re.compile(rb"\b(?:sys|os|posix|nt)\b|[^\x00-\x7f]")
+# Files worth parsing: those that may name sys, os, posix, nt or a dynamic name (see above).
+# Code that reaches attributes, or runs code, by a name built at run time; never followed.
+DYNAMIC_NAMES = frozenset(
+    {"getattr", "setattr", "delattr", "vars", "globals", "locals", "exec", "eval", "compile",
+     "__import__", "__builtins__"}
+)  # fmt: skip
+DYNAMIC_ATTRS = frozenset(
+    {"__dict__", "__getattribute__", "__globals__", "__builtins__", "__code__", "f_globals",
+     "f_locals", "f_builtins", "attrgetter", "methodcaller"}
+)  # fmt: skip
+DYNAMIC_MODULES = frozenset({"builtins", "inspect", "gc", "ctypes", "pickle", "_pickle", "marshal"})
+_DYNAMIC = DYNAMIC_NAMES | DYNAMIC_ATTRS | DYNAMIC_MODULES
+_MAY_NAME = re.compile(
+    rb"\b(?:sys|os|posix|nt|"
+    + b"|".join(n.encode() for n in sorted(_DYNAMIC))
+    + rb")\b|[^\x00-\x7f]"
+)
 
 
 def may_edit_sys_path(repo: Path, commit: str) -> bool:
@@ -106,7 +124,7 @@ def _python_blobs(repo: Path, commit: str) -> list[str] | None:
     except (GitCommandError, OSError, ValueError, subprocess.SubprocessError):
         return None
     oids: dict[str, None] = {}
-    total = 0
+    total = files = 0
     for entry in filter(None, listing.split("\0")):
         meta, path = entry.split("\t", 1)
         mode, kind, oid, size = meta.split()
@@ -119,10 +137,11 @@ def _python_blobs(repo: Path, commit: str) -> list[str] | None:
             continue
         if mode not in _REGULAR:  # a symlink: what it points at may not be in the commit
             return None
+        files += 1
         if oid not in oids:
             oids[oid] = None
             total += int(size)
-    if len(oids) > MAX_FILES or total > MAX_BYTES:
+    if files > MAX_FILES or total > MAX_BYTES:
         return None
     return list(oids)
 
@@ -171,6 +190,8 @@ def _uses_import_system(tree: ast.AST) -> bool:
     nodes = list(ast.walk(tree))
     sys_names, os_names = {"sys"}, set(_OS_MODULES)
     for node in nodes:
+        if _dynamic(node):
+            return True
         if isinstance(node, ast.Import):
             for alias in node.names:
                 if alias.asname and alias.name == "sys":
@@ -179,7 +200,9 @@ def _uses_import_system(tree: ast.AST) -> bool:
                     os_names.add(alias.asname)
         elif isinstance(node, ast.ImportFrom):
             names = [alias.name for alias in node.names]
-            if "sys" in names:  # ``from os import sys``, ``from logging import sys``
+            if "sys" in names or _DYNAMIC.intersection(
+                names
+            ):  # ``from os import sys``, ``from logging import sys``
                 return True
             if node.level == 0 and node.module == "sys":
                 if any(name not in SAFE_SYS for name in names):
@@ -196,6 +219,21 @@ def _uses_import_system(tree: ast.AST) -> bool:
         if _named(node.value, sys_names) and node.attr in SAFE_SYS:
             safe.add(id(node.value))
     return any(_named(node, sys_names) and id(node) not in safe for node in nodes)
+
+
+def _dynamic(node: ast.AST) -> bool:
+    """Whether node reaches an attribute or runs code by a name built at run time."""
+    if isinstance(node, ast.Name):
+        return node.id in DYNAMIC_NAMES
+    if isinstance(node, ast.Attribute):
+        return node.attr in DYNAMIC_ATTRS
+    if isinstance(node, ast.MatchClass):
+        return any(a == "sys" or a in DYNAMIC_ATTRS or _starts_programs(a) for a in node.kwd_attrs)
+    if isinstance(node, ast.Import):
+        return any(a.name.partition(".")[0] in DYNAMIC_MODULES for a in node.names)
+    if isinstance(node, ast.ImportFrom):
+        return (node.module or "").partition(".")[0] in DYNAMIC_MODULES and not node.level
+    return False
 
 
 def _named(node: ast.AST, names: set[str]) -> bool:

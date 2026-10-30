@@ -79,6 +79,17 @@ UNSEALING = {  # one base file anywhere in the checkout
     "a file that names sys and does not parse": ("lib/x.py", "import sys\nprint 'pkg'\n"),
     "a not-UTF-8 file that names sys": ("lib/x.py", b"import sys\nx = '\xff'\n"),
     "tracked bytecode": ("lib/x.pyc", b"\x00\x01"),
+    "sys through getattr": (
+        "lib/x.py", "import logging\ns = getattr(logging, 'sys')\ns.path.insert(0, 'pkg')\n"),
+    "a sys name built at run time": (
+        "lib/x.py", "import logging\ns = getattr(logging, 's' 'ys')\n"),
+    "os.system through getattr": ("scripts/run.py", "import os\ngetattr(os, 'system')('x')\n"),
+    "a module's __dict__": ("lib/x.py", "import logging\nm = logging.__dict__['s' 'ys']\n"),
+    "exec": ("lib/x.py", "exec('import s' 'ys')\n"),
+    "eval": ("lib/x.py", "m = eval('__imp' 'ort__')\n"),
+    "a class pattern on sys": (
+        "lib/x.py", "import logging\nmatch logging:\n    case object(sys=s):\n        pass\n"),
+    "pickle": ("lib/x.py", "import pickle\nm = pickle.loads(b'')\n"),
 }  # fmt: skip
 KEEPS_SEALED = {
     "sys for the platform": ("conftest.py", "import sys\nWIN = sys.platform == 'win32'\n"),
@@ -88,6 +99,8 @@ KEEPS_SEALED = {
         "tests_util.py",
         "import os\n\n\ndef f(mp):\n    mp.setattr(os, 'getcwd', lambda: os.path.sep)\n"),
     "sys.path in a text file": ("notes/readme.txt", "sys.path.insert(0, 'pkg')\n"),
+    "re.compile and a method named eval": (
+        "lib/x.py", "import re\n\n\nclass M:\n    def eval(self):\n        return re.compile\n"),
 }  # fmt: skip
 
 
@@ -124,5 +137,13 @@ def test_a_symlinked_python_file_unseals(repo):
 def test_too_much_python_seals_nothing(repo, monkeypatch, name, value):
     commit_change(repo, SEALED_PKG | {"lib/x.py": "x = 1\n", "lib/y.py": "y = 2\n"})
     monkeypatch.setattr(sys_path_scan, name, value)
+    with pytest.raises(TaskRejected, match=REFUSED):
+        check_task(_task(repo, ("pkg/fractions.py",)))
+
+
+def test_the_file_limit_counts_paths_not_contents(repo, monkeypatch):
+    """The base has five Python files but three contents: SEALED_PKG's three files are empty."""
+    commit_change(repo, SEALED_PKG)
+    monkeypatch.setattr(sys_path_scan, "MAX_FILES", 4)
     with pytest.raises(TaskRejected, match=REFUSED):
         check_task(_task(repo, ("pkg/fractions.py",)))
