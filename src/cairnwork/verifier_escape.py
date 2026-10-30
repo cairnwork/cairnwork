@@ -13,8 +13,9 @@ from __future__ import annotations
 import subprocess
 
 SYSTEM_DAEMONS = frozenset({"/usr/sbin/distnoted"})
-# Printed, as the account, one "pid\treal-path" line per queried pid. proc_pidpath returns the
-# running image's vnode path from the kernel, which the target process cannot forge.
+# Printed, as the account, "pid NUL real-path NUL" per queried pid (a path can hold a newline or a
+# tab but never a NUL, so no path can reshape the records). proc_pidpath returns the running
+# image's vnode path from the kernel, which the target process cannot forge.
 PIDPATH_HELPER = (
     "import ctypes,sys\n"
     "libc=ctypes.CDLL(None)\n"
@@ -22,7 +23,7 @@ PIDPATH_HELPER = (
     "b=ctypes.create_string_buffer(4096)\n"
     "for a in sys.argv[1:]:\n"
     "    n=libc.proc_pidpath(int(a),b,4096)\n"
-    "    if n>0: sys.stdout.write('%s\\t%s\\n'%(a,b.value[:n].decode('utf-8','replace')))\n"
+    "    if n>0: sys.stdout.write('%s\\0%s\\0'%(a,b.value[:n].decode('utf-8','replace')))\n"
 )
 
 
@@ -45,3 +46,27 @@ def is_exempt(real_path: str | None, ppid: int) -> bool:
     """Whether a process is a launchd system daemon that must not count as an escape: its real
     executable path is allow-listed, its parent is launchd (ppid 1), and it is Apple-signed."""
     return ppid == 1 and real_path in SYSTEM_DAEMONS and apple_signed(real_path)
+
+
+def parse_pidpaths(out: str, queried: list[int]) -> dict[int, str] | None:
+    """Parse PIDPATH_HELPER output strictly: NUL-terminated ``pid``, ``path`` fields. Anything off
+    (truncated, odd field count, non-decimal or repeated pid, a pid that was not queried, empty
+    path) is None, which the caller counts as "cannot tell", never as an exemption. A queried pid
+    with no record is fine: it has no known path, so it is counted."""
+    if not out:
+        return {}
+    if not out.endswith("\0"):
+        return None
+    fields = out[:-1].split("\0")
+    if len(fields) % 2:
+        return None
+    allowed = set(queried)
+    paths: dict[int, str] = {}
+    for pid_s, path in zip(fields[0::2], fields[1::2], strict=True):
+        if not (pid_s.isascii() and pid_s.isdigit()) or not path:
+            return None
+        pid = int(pid_s)
+        if pid not in allowed or pid in paths:
+            return None
+        paths[pid] = path
+    return paths

@@ -87,3 +87,45 @@ def test_off_darwin_counts_every_process_without_proc_pidpath(monkeypatch):
 
     monkeypatch.setattr(va.VerifierAccount, "_real_paths", _boom)
     assert acct._escaped_count() == 1
+
+
+def _rec(*pairs):
+    return "".join(f"{pid}\0{path}\0" for pid, path in pairs)
+
+
+def test_parse_pidpaths_reads_well_formed_records():
+    out = _rec((100, DAEMON), (101, "/tmp/a b\tc"))
+    assert ve.parse_pidpaths(out, [100, 101, 102]) == {100: DAEMON, 101: "/tmp/a b\tc"}
+    assert ve.parse_pidpaths("", [100]) == {}
+
+
+def test_parse_pidpaths_keeps_a_newline_path_as_one_record():
+    forged = "/tmp/x\n4242\t" + DAEMON
+    assert ve.parse_pidpaths(_rec((4242, forged)), [4242]) == {4242: forged}
+    assert not ve.is_exempt(forged, 1)
+
+
+def test_parse_pidpaths_fails_closed_on_malformed_output():
+    bad = [
+        _rec((4242, "/x"), (4242, DAEMON)),  # repeated pid
+        _rec((7, DAEMON)),  # pid not queried
+        _rec((4242, "/x"))[:-1],  # truncated
+        "4242\0",  # odd field count
+        "42x\0/x\0",  # non-decimal pid
+        "4242\0\0",  # empty path
+        f"4242\t{DAEMON}\n",  # old line format
+    ]
+    for out in bad:
+        assert ve.parse_pidpaths(out, [4242]) is None, out
+
+
+def test_garbled_helper_output_is_unknown_not_zero(monkeypatch):
+    monkeypatch.setattr(va.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        va.VerifierAccount, "_list", lambda self, deadline=None, attempts=1: [(100, 1)]
+    )
+    monkeypatch.setattr(
+        va.VerifierAccount, "_real_paths", lambda self, pids: ve.parse_pidpaths("100\0", pids)
+    )
+    acct = va.VerifierAccount(user="x", root=Path("/tmp/does-not-matter"))
+    assert acct._escaped_count() == -1
