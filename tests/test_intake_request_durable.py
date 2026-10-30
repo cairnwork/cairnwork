@@ -281,3 +281,17 @@ def test_a_ledger_of_finished_tasks_still_needs_its_requests_dir(setup):
     with pytest.raises(IntakeRefused, match="BAD_STATE"):
         intake.prepare()
     assert not (intake.state / "requests").exists()
+
+
+def test_a_cut_unicode_escape_is_a_cut_whichever_position_the_decoder_names():
+    """CPython builds differ on where an "Invalid \\uXXXX escape" error points (the backslash on
+    Ubuntu's 3.12.3, the "u" elsewhere): the rule must hold for both."""
+    from cairnwork.intake_request import _cut_short
+
+    def cut(text: str, pos: int) -> bool:
+        return _cut_short(text, json.JSONDecodeError("Invalid \\uXXXX escape", text, pos))
+
+    for text in ('"ab\\u', '"ab\\u0', '"ab\\u00e'):
+        assert cut(text, 3) and cut(text, 4)  # the backslash, or the "u"
+    for text in ('"ab\\uZZZZ"', '"ab\\u0Z', '"ab\\u00e9zz\\uZ"'):
+        assert not cut(text, 3) and not cut(text, 4)  # bad hex before the end: damage

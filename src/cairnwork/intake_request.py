@@ -19,6 +19,7 @@ from cairnwork.issue_task import RequestUnreadable
 from cairnwork.ownership import OWNER, BindResult, OwnershipError, OwnershipLedger, new_task_id
 from cairnwork.pipeline import TaskSpec
 
+_HEX = frozenset("0123456789abcdefABCDEF")
 _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW  # requests/ itself, never a symlink
 
 FIELDS = frozenset(
@@ -175,7 +176,11 @@ def _cut_short(text: str, exc: json.JSONDecodeError) -> bool:
     '{"a":???', extra data) is malformed content: damage, not a cut."""
     if exc.pos >= len(text) or exc.msg.startswith("Unterminated string"):
         return True
-    return exc.msg.startswith("Invalid \\uXXXX escape") and exc.pos + 5 > len(text)
+    if not exc.msg.startswith("Invalid \\uXXXX escape"):
+        return False
+    start = text.rfind("\\", 0, exc.pos + 1)  # its backslash: pos names it or its "u" (by build)
+    tail = text[start + 2 :]  # what the cut left of the four hex digits
+    return start >= max(exc.pos - 1, 0) and len(tail) < 4 and all(c in _HEX for c in tail)
 
 
 def check_requests(state: Path) -> None:
