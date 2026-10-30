@@ -5,20 +5,24 @@ A JSON number such as ``1e400`` is valid JSON but parses to ``inf``, which no st
 serializer writes back (``record._digest`` uses ``allow_nan=False`` and raised ``ValueError`` out of
 ``verify_bundle``). The strict parser refuses it, as it refuses ``Infinity``, so a signed statement
 with one is ``STATEMENT_SHAPE`` for v0.1 and v0.2 alike. ``verify --json`` re-reads the bundle for
-its facts after ``verify_bundle`` has refused it; a file nested too deeply reports null facts with
-the refusal (the #444 guard), needing no key.
+its facts after ``verify_bundle`` has refused it; a payload nested too deeply reports null facts
+with the refusal (the #444 guard), needing no key. It re-reads through ``read_bundle`` (#458), so a
+symlink, FIFO, directory or oversize file is refused as ``verify_bundle`` refused it, without
+blocking or following the link.
 """
 
 from __future__ import annotations
 
 import base64
 import json
+import os
+import threading
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from cairnwork_attest.bundle import BundleError, read_bundle, write_bundle
+from cairnwork_attest.bundle import MAX_BUNDLE_BYTES, BundleError, read_bundle, write_bundle
 from cairnwork_attest.cli import main
 from cairnwork_attest.dsse import _sign_bytes
 from cairnwork_attest.keys import load_private_key
@@ -114,3 +118,62 @@ def test_verify_json_on_a_deeply_nested_unsigned_payload_reports_its_code(tmp_pa
     bundle = tmp_path / "deep.json"
     bundle.write_text(json.dumps(envelope))
     assert _verify_json(repo, pub, candidate, bundle, capsys)["code"] == "SIGNATURE_INVALID"
+
+
+def _refused_json(tmp_path: Path, repo: Path, capsys: Any, make: Any) -> dict:
+    """``verify --json`` on the path ``make(bundle)`` returns, ``bundle`` being a valid one."""
+    bundle, pub, _base, candidate = setup_verified_bundle_fixture(tmp_path / "state", repo)
+    line = _verify_json(repo, pub, candidate, make(bundle), capsys)
+    assert line["code"] == "BUNDLE_UNREADABLE", line
+    return line
+
+
+def test_verify_json_does_not_follow_a_symlink(tmp_path, repo, capsys):
+    """#458: the facts come from read_bundle's read, which refuses a link to a valid bundle as
+    verify_bundle did; a plain read followed it and reported the bundle's facts."""
+
+    def link(bundle: Path) -> Path:
+        (tmp_path / "link.json").symlink_to(bundle)
+        return tmp_path / "link.json"
+
+    assert "symlink" in _refused_json(tmp_path, repo, capsys, link)["detail"]
+
+
+def test_verify_json_refuses_a_bundle_over_the_size_cap(tmp_path, repo, capsys):
+    """A valid bundle padded with whitespace past 4 MiB: still JSON, never read for facts."""
+
+    def padded(bundle: Path) -> Path:
+        big = tmp_path / "big.json"
+        big.write_bytes(bundle.read_bytes() + b" " * (MAX_BUNDLE_BYTES + 1))
+        return big
+
+    assert "exceeds" in _refused_json(tmp_path, repo, capsys, padded)["detail"]
+
+
+def test_verify_json_refuses_a_directory(tmp_path, repo, capsys):
+    def directory(_bundle: Path) -> Path:
+        (tmp_path / "dir.json").mkdir()
+        return tmp_path / "dir.json"
+
+    assert "not a regular file" in _refused_json(tmp_path, repo, capsys, directory)["detail"]
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no FIFOs on this platform")
+def test_verify_json_does_not_block_on_a_fifo(tmp_path, repo, capsys):
+    """#449, #458: a plain read of a FIFO with no writer blocks for ever. The command runs in a
+    thread with a time limit; a blocked read is released by opening the FIFO for writing."""
+    fifo = tmp_path / "fifo.json"
+    os.mkfifo(fifo)
+    lines: list[dict] = []
+    worker = threading.Thread(
+        target=lambda: lines.append(_refused_json(tmp_path, repo, capsys, lambda _b: fifo)),
+        daemon=True,
+    )
+    worker.start()
+    worker.join(30)
+    blocked = worker.is_alive()
+    if blocked:  # unblock the reader so the thread ends with the test
+        os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
+        worker.join(30)
+    assert not blocked, "verify --json blocked on a FIFO"
+    assert lines and "not a regular file" in lines[0]["detail"], lines
