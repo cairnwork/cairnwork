@@ -1,7 +1,7 @@
 import pytest
 from conftest import commit_change, git
 
-from cairnwork.changeset import ChangeSetError, read_change_set
+from cairnwork.changeset import ChangeSetError, read_change_set, read_tree_change_set
 
 
 def test_modify_add_and_delete_are_read_from_git(repo):
@@ -58,3 +58,41 @@ def test_inherited_git_environment_is_ignored(repo, tmp_path, monkeypatch):
     head = commit_change(repo, {"src/a.py": "x = 2\n"})
     monkeypatch.setenv("GIT_DIR", str(tmp_path / "elsewhere"))
     assert [e.path for e in read_change_set(repo, base, head).entries] == ["src/a.py"]
+
+
+def _submodule_repo_with_ignore(repo, ignore):
+    """A repo whose .gitmodules sets ``ignore`` on a submodule pointer, committed as the base."""
+    (repo / ".gitmodules").write_text(
+        f'[submodule "vendor"]\n\tpath = vendor\n\turl = ./x\n\tignore = {ignore}\n'
+    )
+    git(repo, "update-index", "--add", "--cacheinfo", f"160000,{'1' * 40},vendor")
+    git(repo, "add", ".gitmodules")
+    git(repo, "commit", "-q", "-m", "submodule")
+    return git(repo, "rev-parse", "HEAD")
+
+
+def _move_pointer(repo):
+    git(repo, "update-index", "--cacheinfo", f"160000,{'2' * 40},vendor")
+    git(repo, "commit", "-q", "-m", "candidate")
+    return git(repo, "rev-parse", "HEAD")
+
+
+@pytest.mark.parametrize("ignore", ["all", "dirty", "untracked", "none"])
+def test_submodule_pointer_changes_are_part_of_the_change_set_regardless_of_gitmodules_ignore(
+    repo, ignore
+):
+    base = _submodule_repo_with_ignore(repo, ignore)
+    head = _move_pointer(repo)
+    change = read_change_set(repo, base, head)
+    assert change.paths == ["vendor"]
+    assert change.entries[0].after_mode == "160000"
+
+
+@pytest.mark.parametrize("ignore", ["all", "dirty", "untracked", "none"])
+def test_submodule_pointer_changes_are_in_the_tree_change_set_regardless_of_gitmodules_ignore(
+    repo, ignore
+):
+    base = _submodule_repo_with_ignore(repo, ignore)
+    head = _move_pointer(repo)
+    change = read_tree_change_set(repo, base, head)
+    assert change.paths == ["vendor"]
