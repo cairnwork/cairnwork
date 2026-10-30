@@ -35,7 +35,7 @@ import unicodedata
 from pathlib import Path
 from typing import Any
 
-from cairnwork import issue_hook
+from cairnwork import issue_hook, issue_task
 from cairnwork.changeset import ChangeSetError, read_change_set
 from cairnwork.deferred_tests import TestCommitRejected
 from cairnwork.gitcmd import NETWORK_TIMEOUT_SECONDS, GitCommandError, run_git
@@ -209,7 +209,8 @@ def settle(intake: Intake, github: GitHub, clone: Path) -> list[dict[str, Any]]:
             known = _recall(intake, github.repo, number)
             if not known:
                 raise KeyError(f"no Cairnwork task recorded for #{number} in this state")
-            status = intake.status(task_id=known["task_id"])
+            bound = intake.ledger.get(task_id=known["task_id"])  # the record is a cache (#454)
+            status = intake.status(task_id=issue_task.issue_task_id(bound, github.repo, number))
             if status["status"] in ("BOUND", "DISPATCHED"):
                 continue
             if status["status"] == "COMPLETED" and status["core_verified"]:
@@ -228,6 +229,7 @@ def settle(intake: Intake, github: GitHub, clone: Path) -> list[dict[str, Any]]:
             ChangeSetError,
             IntakeRefused,
             NotaryError,  # NOTARY_SCHEMA_OLDER: reported for this Issue, not a traceback (#343)
+            sqlite3.Error,  # an unreadable ledger, as in take (#454)
             RuntimeError,
             OSError,
             ValueError,
