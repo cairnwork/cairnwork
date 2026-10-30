@@ -1,7 +1,7 @@
-"""The private, read-only /run of a bwrap run (#391), as policy text: on any host, with the trees
-and /etc pointed at directories under tmp_path. The real mounts are witnessed on Linux CI by
-tests/test_run_isolation_witness.py (no host socket under /run connectable, and a run still
-works)."""
+"""The private, read-only /run, /var/run and /tmp of a bwrap run (#391), as policy text: on any
+host, with the trees and /etc pointed at directories under tmp_path. The real mounts are witnessed
+on Linux CI by tests/test_run_isolation_witness.py and tests/test_tmp_isolation_witness.py (no
+host socket there connectable, and a run, with its roots under /tmp in owner mode, still works)."""
 
 import os
 from pathlib import Path
@@ -14,13 +14,15 @@ from cairnwork_sandbox.backend import SandboxError
 
 @pytest.fixture
 def host(tmp_path, monkeypatch):
-    """A fake /run, /var/run (a link to it) and /etc, plus a home; the real ones are not read."""
-    run, etc, home = tmp_path / "run", tmp_path / "etc", tmp_path / "home"
-    for directory in (run, etc, home):
+    """A fake /run, /var/run (a link to it), /tmp and /etc, plus a home; the real ones are not
+    read."""
+    run, etc, home, tmp = tmp_path / "run", tmp_path / "etc", tmp_path / "home", tmp_path / "tmp"
+    for directory in (run, etc, home, tmp):
         directory.mkdir()
     (tmp_path / "varrun").symlink_to(run)
-    trees = (str(run), str(tmp_path / "varrun"))
+    trees = (str(run), str(tmp_path / "varrun"), str(tmp))
     monkeypatch.setattr(bwrap_private, "TREES", trees)
+    monkeypatch.setattr(bwrap_private, "HOLDS_ROOTS", str(tmp))
     monkeypatch.setattr(bwrap_private, "ETC", str(etc))
     return tmp_path
 
@@ -53,7 +55,7 @@ def test_the_tree_is_a_tmpfs_before_every_bind_and_read_only_last(host):
     assert tmpfs > _at(lines, "--ro-bind", "/", "/") >= 0
     assert tmpfs < _at(lines, "--bind", _real(work), _real(work))
     assert tmpfs < _at(lines, "--ro-bind", "/dev/null", f"{_real(host / 'home')}/.netrc")
-    assert lines[-2:] == ["--remount-ro", run]
+    assert lines[-4:] == ["--remount-ro", run, "--remount-ro", _real(host / "tmp")]
     assert lines.count(run) == 2  # /var/run is a link to /run: one tree, mounted once
 
 
@@ -63,7 +65,8 @@ def test_a_separate_var_run_gets_its_own_tmpfs(host, monkeypatch):
     lines = _policy(host)
     run, varrun = _real(host / "run"), _real(host / "varrun")
     assert _at(lines, "--tmpfs", run) >= 0 and _at(lines, "--tmpfs", varrun) >= 0
-    assert lines[-4:] == ["--remount-ro", run, "--remount-ro", varrun]
+    tmp = _real(host / "tmp")
+    assert lines[-6:] == ["--remount-ro", run, "--remount-ro", varrun, "--remount-ro", tmp]
 
 
 def test_an_absent_tree_adds_nothing(host, monkeypatch):
@@ -73,15 +76,32 @@ def test_an_absent_tree_adds_nothing(host, monkeypatch):
 
 
 @pytest.mark.parametrize("kind", ["read", "write"])
-@pytest.mark.parametrize("where", ["run/py", "run"])
-def test_a_root_in_the_private_tree_is_refused(host, kind, where):
-    # No caller puts one there; binding it would bring host content (and sockets) into the tree,
-    # and a write bind would stay writable (bwrap's --remount-ro does not recurse).
+@pytest.mark.parametrize("where", ["run/py", "run", "varrun/py", "tmp"])
+def test_a_root_in_run_or_at_a_tree_is_refused(host, kind, where):
+    # No caller puts one in /run; binding it would bring host content (and sockets) into the
+    # tree. A root that is a whole tree would undo it.
     root = host / where
     root.mkdir(exist_ok=True)
     reads, writes = ((root,), ()) if kind == "read" else ((), (root,))
     with pytest.raises(SandboxError, match="private"):
         _policy(host, reads, writes)
+
+
+def test_a_root_under_tmp_is_put_back_on_the_tmpfs_before_read_only(host):
+    # Owner-mode runs live under /tmp (pytest's tmp_path): their roots come back on the private
+    # tmpfs, a read root read-only (an absent one stays absent), a write root by the caller's
+    # --bind. --remount-ro does not recurse, so the write bind stays writable: the run witnesses
+    # in test_run_isolation_witness.py write there on Linux CI. Nothing else of /tmp comes back.
+    tmp = host / "tmp"
+    read, write, other = tmp / "r" / "py", tmp / "w", tmp / "other"
+    for directory in (read, write, other):
+        directory.mkdir(parents=True)
+    lines = _policy(host, reads=(read, tmp / "absent"), writes=(write,))
+    tmpfs, real, wreal = _at(lines, "--tmpfs", _real(tmp)), _real(read), _real(write)
+    bind = _at(lines, "--bind", wreal, wreal)
+    assert 0 <= tmpfs < _at(lines, "--ro-bind-try", real, real) < bind < len(lines) - 2
+    assert _at(lines, "--ro-bind-try", *[_real(tmp / "absent")] * 2) > tmpfs
+    assert lines[-2:] == ["--remount-ro", _real(tmp)] and _real(other) not in lines
 
 
 def test_a_read_root_beside_or_holding_the_tree_adds_nothing(host):

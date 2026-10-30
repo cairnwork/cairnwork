@@ -92,37 +92,35 @@ _SEATBELT_ONLY = ("read-outside", "read-repo-git")
         ),
     ],
 )
-def test_attacks_are_denied(project, tmp_path, monkeypatch, name, code):
+def test_attacks_are_denied(project, tmp_path, monkeypatch, request, name, code):
+    import os
+    import pathlib
+    import uuid
+
+    import cairnwork.verifiers as verifiers
+
     backend = cairnwork_sandbox.platform_backend()
     if name in _SEATBELT_ONLY and (backend is None or backend.name != "seatbelt"):
         pytest.skip("bwrap binds the whole root read-only: reads outside the roots are allowed")
     secret = tmp_path / "secret.txt"
     secret.write_text("TOP SECRET\n")
-    import os
-    import pathlib
-    import uuid
-
+    # Off /tmp, which a Linux run sees as an empty private tree (#391): there the write would
+    # fail for a missing directory. The reach control shows the run sees this directory.
+    outside = world_base(request, "cw-out-") / "escaped.txt"
+    reach, check = reach_env(monkeypatch, backend, outside.parent)
+    keep = ("CW_SECRET", "CW_OUTSIDE", "CW_SSH", "CW_REPO_GIT", "CW_TMP_TARGET", *reach)
     monkeypatch.setenv("CW_SECRET", str(secret))
-    monkeypatch.setenv("CW_OUTSIDE", str(tmp_path / "escaped.txt"))
+    monkeypatch.setenv("CW_OUTSIDE", str(outside))
     monkeypatch.setenv("CW_SSH", str(pathlib.Path.home() / ".ssh"))
     tmp_target = f"/tmp/cairnwork-escape-{uuid.uuid4().hex}"
     monkeypatch.setenv("CW_TMP_TARGET", tmp_target)
     monkeypatch.setenv("CW_REPO_GIT", str(project / ".git"))
-    import cairnwork.verifiers as verifiers
-
-    monkeypatch.setattr(
-        verifiers,
-        "_ENV_KEEP",
-        (*verifiers._ENV_KEEP, "CW_SECRET", "CW_OUTSIDE", "CW_SSH", "CW_REPO_GIT", "CW_TMP_TARGET"),
-    )
-    result = verify(
-        project,
-        tmp_path,
-        {f"tests/test_{name.replace('-', '_')}.py": attack(code)},
-        f"tests/test_{name.replace('-', '_')}.py",
-    )
+    monkeypatch.setattr(verifiers, "_ENV_KEEP", (*verifiers._ENV_KEEP, *keep))
+    target = f"tests/test_{name.replace('-', '_')}.py"
+    candidate = attack(code) + (check if name == "write-outside" else "")
+    result = verify(project, tmp_path, {target: candidate}, target)
     assert result.observation.passed, result.log_path.read_text()
-    assert not (tmp_path / "escaped.txt").exists()
+    assert not outside.exists()
     assert not os.path.exists(tmp_target)
 
 
@@ -320,31 +318,26 @@ def test_named_credentials_are_masked(project, tmp_path, monkeypatch, request):
 
 
 @pytest.mark.sandbox
-def test_x11_and_daemon_sockets_are_masked(project, tmp_path, monkeypatch, request):
-    """X11 server sockets and root-equivalent daemon sockets (libvirt/LXD/Docker, #85) are
-    masked, so a candidate cannot reach one that exists on the host. The real paths vary and a
-    CI runner has none, so point the (bwrap) mask lists at canary paths (off /tmp) and witness
-    them unreadable inside the sandbox (under bwrap's whole-root bind they would be readable
-    without the mask; Seatbelt denies them by its allow-list anyway)."""
+def test_daemon_sockets_are_masked(project, tmp_path, monkeypatch, request):
+    """Root-equivalent daemon sockets (LXD/Docker, #85) are masked, so a candidate cannot reach one
+    that exists on the host (X11's, under /tmp, are in the private /tmp: #391). The real paths
+    vary and a CI runner has none, so point the (bwrap) mask list at a canary path (off /tmp) and
+    witness it unreadable inside the sandbox (under bwrap's whole-root bind it would be readable
+    without the mask; Seatbelt denies it by its allow-list anyway)."""
     import cairnwork_sandbox.bwrap as bwrap_mod
 
     base = world_base(request, "cw-socks-")
-    x11 = base / ".X11-unix"
-    x11.mkdir()
-    (x11 / "X0").write_text("CANARY-X11\n")
     sock = base / "libvirt-sock"
     sock.write_text("CANARY-SOCK\n")
-    monkeypatch.setattr(bwrap_mod, "_X11_SOCKET_DIR", str(x11))
     monkeypatch.setattr(bwrap_mod, "_DANGEROUS_SOCKETS", (str(sock),))
-    monkeypatch.setenv("CW_X11", str(x11 / "X0"))
     monkeypatch.setenv("CW_SOCK", str(sock))
     import cairnwork.verifiers as verifiers
 
     reach, check = reach_env(monkeypatch, cairnwork_sandbox.platform_backend(), base)
-    monkeypatch.setattr(verifiers, "_ENV_KEEP", (*verifiers._ENV_KEEP, "CW_X11", "CW_SOCK", *reach))
+    monkeypatch.setattr(verifiers, "_ENV_KEEP", (*verifiers._ENV_KEEP, "CW_SOCK", *reach))
     code = (
         f"import os\ndef test_masked():\n{check}"
-        "    for key in ('CW_X11', 'CW_SOCK'):\n"
+        "    for key in ('CW_SOCK',):\n"
         "        try:\n"
         "            data = open(os.environ[key]).read()\n"
         "        except OSError:\n"

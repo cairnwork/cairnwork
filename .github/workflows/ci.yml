@@ -94,7 +94,7 @@ jobs:
       - name: Gate — bwrap must be able to nest namespaces (unguarded)
         run: bwrap --unshare-pid --unshare-user --cap-drop ALL --ro-bind / / --proc /proc true
       - name: Sandbox witnesses on real bwrap
-        run: CAIRNWORK_REQUIRE_SANDBOX=1 uv run pytest -q tests/test_sandbox.py tests/test_bwrap_symlink_masks.py tests/test_bwrap_mask_roots.py tests/test_run_isolation_witness.py tests/test_bwrap_inner_links.py
+        run: CAIRNWORK_REQUIRE_SANDBOX=1 uv run pytest -q tests/test_sandbox.py tests/test_bwrap_symlink_masks.py tests/test_bwrap_mask_roots.py tests/test_run_isolation_witness.py tests/test_tmp_isolation_witness.py tests/test_bwrap_inner_links.py
 
   # Linux P4 (Issue #84): verifiers run as a dedicated unprivileged account, as on macOS.
   # Creates the account, then runs the account witnesses on real bwrap with the account
