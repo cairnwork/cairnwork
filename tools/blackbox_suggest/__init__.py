@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .aliases import resolve_aliases
 from .config import pytest_config
 from .literals import Refused
 from .obligations import Scope, collect
@@ -63,7 +64,7 @@ class Obligation:
 
 
 def _parse(path: Path) -> ast.Module:
-    return ast.parse(path.read_bytes(), filename=str(path))
+    return resolve_aliases(ast.parse(path.read_bytes(), filename=str(path)))
 
 
 def conftests_for(test_file: Path, project: Path, name: str = "conftest.py") -> list[Path]:
@@ -129,7 +130,7 @@ def analyze_file(test_file: Path, project_root: Path, source_roots: list[Path]) 
     scope = _scope(test_file, project_root, project, [*inits, *conftests, tree])
     imports, env = Imports(tree), module_env(tree)
     out: list[Obligation] = []
-    for item in collect(tree, rel, conftests, scope):
+    for item in collect(tree, rel, conftests, scope, inits):
         refusal, cases = item.refusal, []
         if refusal is None:
             try:
