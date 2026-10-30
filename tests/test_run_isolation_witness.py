@@ -45,9 +45,12 @@ pytestmark = pytest.mark.sandbox
 SOCKET_ROOTS = ("/run", "/var/run", "/tmp")  # noqa: S108 - only listed and probed
 WALK_LIMIT, WALK_DEPTH = 100_000, 4  # daemon sockets sit 1-3 levels down (/run/systemd/journal)
 ACCOUNT = VerifierAccount()
-# Searchable-but-unlistable host directories the owner walk may skip (#418), each with its reason.
+# Searchable-but-unlistable dirs the owner walk may skip (#418), with every socket a sudo listing
+# on the ubuntu-24.04 runners found in each (PR 474 CI); the run probes those by name.
 SEARCHABLE_OK = {
-    "/run/sudo": "sudo's timestamp dir (tmpfiles.d 0711 root): only ts/ records, never a socket",
+    # 0711 root; both root:root 0660, and neither the runner nor the verifier is in group root
+    "/run/containerd": ("containerd.sock", "containerd.sock.ttrpc"),
+    "/run/libpod": (),  # 0751 root; podman state: alive, alive.lck, exits/ (0750). No socket
 }
 
 
@@ -55,8 +58,7 @@ def socket_paths(roots, limit, depth):
     """(sockets, unreadable dirs, blind dirs, entries seen) under roots, at most ``depth`` levels
     down: no link followed, each root once by real path, sockets de-duplicated by real path. Raises
     when more than ``limit`` entries were seen, so a partial list never passes for a complete one.
-    connect() needs search (x), not read: an unreadable dir that is searchable may hold a
-    connectable socket that is never probed, so it is "blind" and callers fail on it (#418)."""
+    Blind: unreadable yet searchable, so connect() may reach a socket never probed (#418)."""
     found, unreadable, seen, count = set(), [], set(), 0
     for root in roots:
         real = os.path.realpath(root)
@@ -166,6 +168,12 @@ def socket_run(repo, tmp_path, account=None, prefixes=None):
     for path in unreadable:  # only a searchable one can hide a reachable socket (#418)
         print(("BLIND " if path in blind else "UNREADABLE ") + repr(path))
     assert not blind, f"owner cannot list searchable {blind}: sockets there are never probed"
+    for path in (os.path.join(d, n) for d, names in SEARCHABLE_OK.items() for n in names):
+        try:  # a known name is reachable without listing: hand it to the run's probe
+            if stat.S_ISSOCK(os.lstat(path).st_mode):
+                host.append(path)
+        except OSError:
+            pass
     assert host, f"no pathname socket under {SOCKET_ROOTS} on this host: the witness is vacuous"
     code = PROBE.format(
         walker=inspect.getsource(socket_paths),
