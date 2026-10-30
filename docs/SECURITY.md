@@ -303,13 +303,17 @@ directories (`attempt_dirs`). Three residuals remain (#436); each has its own bo
   directories, not for an ordinary program, an unreadable signing status or two entries. The
   `proc_cwd.py` module docstring records the same kind of case for a legitimately empty
   environment: it is tied only by its directory too, Cairnwork's own parent shell included.
-- **PID reuse.** The start time is read before and after the other reads, which narrows the race,
-  but `os.kill` takes a number: macOS has no pidfd to bind the kill to the process checked.
-  Bound: the kill runs as the owner, so it reaches only a process of the owner's uid, and only one
-  of two kinds: one that took the pid in the gap between the second start-time read and
-  `os.kill` (no wait in between), or one that took the pid between the two reads with a start time
-  equal to the microsecond (`_started` compares seconds and microseconds). macOS hands out pids in
-  turn up to 99,999 before wrapping, so reuse within either gap is unlikely in practice.
+- **PID reuse.** `os.kill` takes a number: macOS has no pidfd to bind the kill to the process
+  checked. A process that took the pid before the first start-time read is the one whose start
+  time, environment and directory are checked, so it is killed only if it passes those checks
+  itself (the first residual above). The kill can reach a process other than the one checked only
+  if the pid was reused after the first start-time read: between the two reads, by a process whose
+  start time is equal to the microsecond (`_started` compares seconds and microseconds), or after
+  the second read, before `os.kill` (no wait in between). Either way the kill runs as the owner,
+  so it reaches only a process of the owner's uid: Cairnwork never runs this sweep as root
+  (recovery runs in the caller's own process, `cairnwork-route recover`, and no sudo step of
+  Cairnwork runs it; an operator who starts recovery as root lifts this bound). macOS hands out
+  pids in turn up to 99,999 before wrapping, so reuse within either window is unlikely in practice.
 - **Directory checks are by path.** Recovery resolves the run directories to realpaths when it
   lists them, `kill_withheld_in` resolves them again at the start of every sweep (`confirm_gone`
   sweeps again after `CONFIRM_WAIT`), and a process's directory is resolved when it is checked; a
