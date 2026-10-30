@@ -155,6 +155,16 @@ def adoptable(bound: Any, load_request: Callable[[str], Any], want: Mapping[str,
     return True
 
 
+def issue_task_id(bound: Any, repo: str, number: int) -> str:
+    """The task id of ``bound``, the ledger row a running Issue's record names, if the row is that
+    Issue's: take's idempotency key and card hash both start ``gh:<repo>#<number>:`` (#454). Else
+    ValueError ISSUE_TASK_MISMATCH, so settle opens no draft PR from another client's task."""
+    prefix = f"gh:{repo}#{number}:"
+    if not (bound.idempotency_key.startswith(prefix) and bound.card_hash.startswith(prefix)):
+        raise ValueError(f"ISSUE_TASK_MISMATCH: {bound.task_id} is not bound for {prefix[:-1]}")
+    return bound.task_id
+
+
 def _request_itself(exc: Exception, task_id: str) -> bool:
     """Did the stored request itself fail, not another file or the state? A missing file must be
     requests/<task_id>.json, absent (not even a dangling symlink: the intake creates it O_EXCL)

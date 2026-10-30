@@ -1,5 +1,6 @@
 """Facts a ``verify --json`` line reports from a bundle as claimed (not verified), split out of
-cli.py for the 400-line cap. Any unreadable value is reported as null."""
+cli.py for the 400-line cap. Any unreadable value is reported as null; a bundle that read_bundle
+refuses has no facts."""
 
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from cairnwork_attest.bundle import BundleError, read_bundle
 from cairnwork_attest.statement import TEST_SOURCES
 
 _OID = re.compile(r"^[0-9a-f]{40}$")
@@ -24,9 +26,8 @@ def bundle_facts(path: Path) -> dict[str, Any]:
         "keyid": None,
         "test_source": None,
     }
-    try:
-        content = path.read_bytes()
-        envelope = json.loads(content)
+    try:  # read_bundle's one guarded read (#458): no symlink, FIFO, directory or oversize file
+        envelope = read_bundle(path)
         raw_payload = base64.b64decode(envelope["payload"], validate=True)
         statement = json.loads(raw_payload)
         base = None
@@ -57,5 +58,14 @@ def bundle_facts(path: Path) -> dict[str, Any]:
             "core_status": core_status,
             "keyid": keyid_val,
         }
-    except (OSError, ValueError, UnicodeDecodeError, KeyError, TypeError, binascii.Error):
+    except (
+        BundleError,
+        OSError,
+        ValueError,
+        UnicodeDecodeError,
+        KeyError,
+        TypeError,
+        binascii.Error,
+        RecursionError,
+    ):  # a payload nested too deeply (#449), as verify_bundle refuses it
         return nulls
