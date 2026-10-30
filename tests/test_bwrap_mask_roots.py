@@ -5,13 +5,12 @@ read root is refused with the root named. The policy tests run on any host; the 
 witnesses the type fix on real bwrap (the test-linux-sandbox CI job)."""
 
 import os
-import shutil
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
 from conftest import commit_change
+from fixture_tree import reach_env, world_base, world_dir
 
 import cairnwork_sandbox
 from cairnwork.verifiers import parse_verifier, run_verifiers
@@ -110,15 +109,11 @@ def test_a_write_root_under_a_plain_credential_dir_is_left_to_the_deployment_che
 
 @pytest.fixture
 def world():
-    """0755 dirs under /tmp (world-traversable ancestors), so the account path can reach them."""
-    base = Path(tempfile.mkdtemp(dir="/tmp", prefix="cw-roots-"))  # noqa: S108
-    os.chmod(base, 0o755)
-    (base / "home").mkdir(mode=0o755)
-    (base / "out").mkdir(mode=0o755)
-    try:
+    """0755 dirs off /tmp (world-traversable ancestors), so the account path can reach them."""
+    with world_dir("cw-roots-") as base:
+        (base / "home").mkdir(mode=0o755)
+        (base / "out").mkdir(mode=0o755)
         yield base
-    finally:
-        shutil.rmtree(base, ignore_errors=True)
 
 
 def test_account_mode_refuses_a_reachable_target_over_a_read_root(world):
@@ -138,13 +133,15 @@ def test_account_mode_masks_a_reachable_target_by_its_type(world):
 
 
 @pytest.mark.sandbox
-def test_mistyped_credential_paths_run_and_stay_masked(repo, tmp_path, monkeypatch):
+def test_mistyped_credential_paths_run_and_stay_masked(repo, tmp_path, monkeypatch, request):
     """On base this run fails at mount ("Destination is not a file" / tmpfs on a file): the
-    verifier does not pass. Fixed, the run passes and no canary is readable."""
+    verifier does not pass. Fixed, the run passes and no canary is readable, while a plain file
+    beside them is (the fixture tree is off /tmp, so the run sees it, #391)."""
     backend = cairnwork_sandbox.platform_backend()
     if backend is None or backend.name != "bwrap":
         pytest.skip("bwrap only: Seatbelt deny rules are a separate mechanism (not #378)")
-    home, outside = tmp_path / "fakehome", tmp_path / "outside"
+    base = world_base(request, "cw-roots-run-")
+    home, outside = base / "fakehome", base / "outside"
     (home / ".netrc").mkdir(parents=True)  # a credential file name that is a directory
     (home / ".netrc" / "token").write_text("CANARY-SECRET\n")
     (home / ".ssh").write_text("CANARY-SECRET\n")  # a credential dir name that is a file
@@ -154,12 +151,14 @@ def test_mistyped_credential_paths_run_and_stay_masked(repo, tmp_path, monkeypat
     canaries = [home / ".netrc/token", home / ".ssh", outside / "pypirc/token"]
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("CW_CANARIES", ":".join(str(c) for c in canaries))
+    reach, check = reach_env(monkeypatch, backend, home, outside)
     import cairnwork.verifiers as verifiers
 
-    monkeypatch.setattr(verifiers, "_ENV_KEEP", (*verifiers._ENV_KEEP, "CW_CANARIES"))
+    monkeypatch.setattr(verifiers, "_ENV_KEEP", (*verifiers._ENV_KEEP, "CW_CANARIES", *reach))
     code = (
         "import os\n"
         "def test_masked():\n"
+        f"{check}"
         "    paths = os.environ['CW_CANARIES'].split(':')\n"
         "    assert len(paths) == 3\n"
         "    for path in paths:\n"

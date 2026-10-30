@@ -2,13 +2,11 @@
 argv construction (pure functions) are checked on any host. The real confinement is witnessed
 by tests/test_sandbox.py on the test-linux-sandbox CI job."""
 
-import os
-import shutil
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
+from fixture_tree import world_dir
 
 from cairnwork_sandbox import bwrap, platform_backend
 from cairnwork_sandbox.backend import Policy, SandboxError
@@ -17,17 +15,11 @@ from cairnwork_sandbox.backend import Policy, SandboxError
 @pytest.fixture
 def world_home():
     """A home whose ancestors are world-traversable, so the account-path reachability walk (which
-    runs from ``/``) can pass. pytest's own tmp tree is 0700, which would block it; ``/tmp`` is
-    1777. The home itself is 0755 unless a test tightens it."""
-    base = Path(tempfile.mkdtemp(dir="/tmp", prefix="cw-home-"))  # noqa: S108 - needs world ancestors
-    os.chmod(base, 0o755)
-    try:
+    runs from ``/``) can pass. pytest's own tmp tree is 0700, which would block it; /var/tmp is
+    1777 and, unlike /tmp, not a private tree inside a run (#391). The home itself is 0755 unless
+    a test tightens it."""
+    with world_dir("cw-home-") as base:
         yield base
-    finally:
-        for root, dirs, _ in os.walk(base):  # some tests make 0700 subdirs; reopen them to delete
-            for d in dirs:
-                os.chmod(os.path.join(root, d), 0o700)
-        shutil.rmtree(base, ignore_errors=True)
 
 
 # Captured before the autouse fixture neutralises the module attribute, so a test can check the
