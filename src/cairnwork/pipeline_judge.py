@@ -16,18 +16,33 @@ from pathlib import Path
 from cairnwork import protection
 from cairnwork.blackbox_judge import judge_blackbox
 from cairnwork.core_request import AcceptanceSpec, VerifierObservation
+from cairnwork.deferred_store import consume
 from cairnwork.deferred_tests import (
     BaseUncomparable,
     TestCommitRejected,
     base_comparison,
     check_roots_on_base,
     ensure_test_commit,
+    never_seen,
     new_tests,
     test_paths,
 )
 from cairnwork.p2p import P2PPlan, run_plan
 from cairnwork.reasons import explain, verdict_reason
 from cairnwork.verifiers import run_verifiers
+
+
+def tests_unused(task, *, claim: bool) -> None:
+    """A worker run's half of the single-use rule (deferred_store.consume). Before the worker:
+    the test commit is on no clone here and no run, verify or worker, has used it. Right before
+    the fetch (claim=True) this run registers it, so of two runs racing for one commit only one
+    gets it. A TaskSpec with no store (library use, no state directory) keeps the mirror check."""
+    if not task.test_commit:
+        return
+    if not claim:
+        never_seen(task.repo, task.test_commit)
+    if task.test_store is not None:
+        consume(task.test_store.used, task.test_commit, record=claim)
 
 
 def tests_with_teeth(task, specs, run_root, result, verifying) -> tuple[str, ...]:
