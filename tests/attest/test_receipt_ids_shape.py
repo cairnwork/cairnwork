@@ -2,11 +2,13 @@
 
 nexus-core's ``_require_ids`` (product/evidence) refuses, for the contract's and for the plan's
 ``required_verifier_ids`` alike, a list that is empty, names an id twice, or holds an id that is
-empty, padded with whitespace or carries a NUL. Core never answers VERIFIED to such a request, so a
+empty, padded with whitespace or carries a NUL; its wire validator (product/adapters, #453) also
+refuses an id longer than 512 UTF-8 bytes. Core never answers VERIFIED to such a request, so a
 receipt with one is not its verdict: RECEIPT_INCONSISTENT, as for the other #440 checks. Comparing
-the two lists as sets alone let these by. Ids Core accepts (inner spaces, non-ASCII, any order)
-still verify: the rule matches Core's, it is not stricter. Synthetic receipts, re-signed with the
-producer's key after a fake Core said VERIFIED (a buggy producer), as in test_receipt_consistency.
+the two lists as sets alone let these by. Ids Core accepts (inner spaces and tabs, non-ASCII,
+exactly 512 bytes, any order) still verify: the rule matches Core's, it is not stricter. Synthetic
+receipts, re-signed with the producer's key after a fake Core said VERIFIED (a buggy producer), as
+in test_receipt_consistency.
 """
 
 from __future__ import annotations
@@ -42,6 +44,12 @@ BOTH_REFUSED = {  # the same list in contract and plan, so the sets agree
     "trailing_space": ["pytest "],
     "empty_id": [""],
     "nul": ["pytest\x00"],
+    "leading_tab": ["\tpytest"],
+    "ideographic_space": ["pytest\u3000"],
+    "inner_nul": ["py\x00test"],
+    "513_bytes": ["p" * 513],
+    "513_bytes_in_512_chars": ["p" * 511 + "\u00e9"],  # bytes are counted, not characters
+    "lone_surrogate": ["\ud800"],  # no UTF-8 form: Core cannot count it either, never raises
 }
 
 
@@ -50,7 +58,7 @@ def test_ids_core_refuses_in_both_lists_refuse_v01(tmp_path, repo, ids):
     _refused(_v01(tmp_path, repo, _ids(ids, list(ids))))
 
 
-V02 = {k: BOTH_REFUSED[k] for k in ("duplicated", "empty", "leading_space")}
+V02 = {k: BOTH_REFUSED[k] for k in ("duplicated", "empty", "leading_space", "513_bytes")}
 
 
 @pytest.mark.parametrize("ids", V02.values(), ids=V02.keys())
@@ -73,9 +81,19 @@ def test_ids_that_are_not_a_list_refuse_without_raising(tmp_path, repo, ids):
     _refused(_v01(tmp_path, repo, _ids(ids, ids)))
 
 
-@pytest.mark.parametrize("ids", [["py test"], ["pytést"]], ids=repr)
+ACCEPTED = {
+    "inner_space": ["py test"],
+    "non_ascii": ["pytést"],
+    "inner_tab": ["py\ttest"],
+    "512_bytes": ["p" * 512],
+    "512_bytes_ending_multibyte": ["p" * 510 + "\u00e9"],
+}
+
+
+@pytest.mark.parametrize("ids", ACCEPTED.values(), ids=ACCEPTED.keys())
 def test_ids_core_accepts_still_verify(tmp_path, repo, ids):
-    """Control: inner spaces and non-ASCII are normalized text to Core; not stricter than Core."""
+    """Control: inner whitespace and non-ASCII are normalized text to Core, and 512 bytes is its
+    limit, not past it; not stricter than Core."""
     out = _v01(tmp_path, repo, _ids(ids, list(ids)))
     assert out.code == "OK", out
 
