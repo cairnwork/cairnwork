@@ -298,7 +298,8 @@ def _settle_worker_run(dispatch, reader, process, held, timed_out, log_path) -> 
     ended = ["TIMED_OUT"] * (timed_out is not None) + ["HELD"] * held
     extra = [completion] if completion else []
     survivors = [u for u in unswept if u.startswith("WORKER_SWEEP_UNCLEAN")]
-    may_live = survivors or (unswept and (ended or not found))  # primary whenever one may survive
+    unknown = agy_receipts.launches_unknown(receipts, killed=killed)  # lost lines too (#244)
+    may_live = survivors or unknown or (unswept and (ended or not found))  # whenever one may live
     try:  # decided before the record write: a failing write cannot drop the fence (#244)
         agy_receipts.write_record(log_path, receipts, unswept + ended + found + extra)
     finally:

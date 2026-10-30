@@ -168,6 +168,16 @@ def sweep_after_kill(dispatch, receipts: Receipts, *, killed: bool = True) -> li
     return unswept
 
 
+def launches_unknown(receipts: Receipts, *, killed: bool) -> bool:
+    """The dispatcher died by a signal and its receipts cannot say which runs it launched: lines
+    were lost, no launch receipt came, or one is not trustworthy. A run may then live unswept."""
+    user = receipts.run_as_user
+    attempts = receipts.attempts.values()
+    return killed and (
+        not receipts.known or not attempts or any(launch_problem(a, user) for a in attempts)
+    )
+
+
 def _same_directory(root: str, run_root_id: object) -> bool:
     """The run root is still the directory the launch receipt's lstat named (dev, ino),
     so a post-hoc sweep never reaches another run that took the same path later."""
