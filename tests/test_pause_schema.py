@@ -124,8 +124,17 @@ def test_the_core_import_contract_covers_pause():
 def test_the_fakes_satisfy_the_interfaces():
     assert isinstance(FakePlanner([]), interfaces.Planner)
     assert isinstance(FakeGate([]), interfaces.Gate)
-    assert isinstance(FakeGuard(), interfaces.CheckoutGuard)
+    assert isinstance(FakeGuard(), interfaces.RollbackGuard)
     assert isinstance(MemoryEvents(), interfaces.EventLog)
+
+
+def test_a_read_only_guard_need_not_roll_back():
+    class DigestOnly:
+        def digest(self) -> str:
+            return "0" * 64
+
+    assert isinstance(DigestOnly(), interfaces.CheckoutGuard)
+    assert not isinstance(DigestOnly(), interfaces.RollbackGuard)
 
 
 def test_a_broken_guard_fails_closed():

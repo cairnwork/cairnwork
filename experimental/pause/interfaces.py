@@ -1,7 +1,8 @@
 """The interfaces later PAUSE steps implement (#476); types only, no logic here.
 
 - ``Planner`` and ``Gate``: step 2 (the Haiku clients; ``cli gate-replay`` drives a ``Gate``).
-- ``CheckoutGuard`` and ``EventLog``: step 3b (AC8's file-level guard and its single controller).
+- ``CheckoutGuard`` (``RollbackGuard`` under AC8 (b)) and ``EventLog``: step 3b (AC8's
+  file-level guard and its single controller).
 - Step 3 wires them around local_worker's resume; step 4 injects failures through fakes of them
   (tests/pause_fakes.py).
 
@@ -77,10 +78,16 @@ class GuardUnavailable(Exception):
 
 @runtime_checkable
 class CheckoutGuard(Protocol):
-    """AC8 (b): a digest of the checkout (tracked content, untracked and ignored files, file
-    modes) before and after every tool call until the plan arrives; any change is rolled back."""
+    """AC8: a digest of the checkout (tracked content, untracked and ignored files, file modes).
+    Under (a) the checkout is read-only until the plan arrives and a changed digest fails closed;
+    under (b) a guard also implements ``RollbackGuard``."""
 
     def digest(self) -> str: ...  # raises GuardUnavailable
+
+
+@runtime_checkable
+class RollbackGuard(CheckoutGuard, Protocol):
+    """AC8 (b): any change made before the plan arrives is rolled back."""
 
     def rollback(self, to: str) -> None: ...  # back to the state of digest ``to``, or raises
 
