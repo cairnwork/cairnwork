@@ -256,15 +256,21 @@ def test_policy_always_dies_with_parent():
 
 
 def test_dangerous_sockets_cover_the_root_equivalent_services():
-    # The real list must mask the known root-equivalent daemon socket files outside /run (#85);
-    # Docker, Podman, containerd, the system D-Bus and libvirt live under the private /run (#391).
+    # The real list must mask the known root-equivalent daemon socket files (#85), the ones under
+    # /run too: one may be a link to a socket outside it (Rancher Desktop, Colima), whose real
+    # target the private /run does not hide (#391). libvirt is covered by the private /run.
     required = {
+        "/run/docker.sock",
+        "/var/run/docker.sock",
+        "/run/podman/podman.sock",
+        "/run/containerd/containerd.sock",
+        "/run/dbus/system_bus_socket",
         "/var/snap/lxd/common/lxd/unix.socket",
         "/var/lib/lxd/unix.socket",
         "/var/lib/incus/unix.socket",
+        "/run/incus/unix.socket",
     }
     assert required <= set(_REAL_DANGEROUS_SOCKETS)
-    assert not [p for p in _REAL_DANGEROUS_SOCKETS if p.startswith(("/run/", "/var/run/"))]
 
 
 def test_socket_dirs_cover_x11(monkeypatch):
@@ -356,7 +362,8 @@ def test_policy_paths_cannot_add_lines(tmp_path, bad):
 
 @pytest.mark.parametrize(
     "root",
-    ["/", "/home", "/tmp", "/var", "/var/tmp", "/usr", "/etc", "/run", "HOME", "HOME_PARENT"],  # noqa: S108
+    ["/", "/home", "/tmp", "/var", "/var/tmp", "/usr", "/etc", "/run", "/var/run"]  # noqa: S108
+    + ["HOME", "HOME_PARENT"],
 )
 def test_broad_write_roots_are_refused(tmp_path, root):
     import os

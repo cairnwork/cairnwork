@@ -72,39 +72,73 @@ def test_an_absent_tree_adds_nothing(host, monkeypatch):
     assert "--remount-ro" not in lines and str(host / "absent") not in "\n".join(lines)
 
 
-def test_roots_under_the_tree_are_put_back_and_others_are_not(host):
-    run = host / "run"
-    read, write, outside = run / "py", run / "w" / "work", host / "lib"
-    for directory in (read, write, outside):
-        directory.mkdir(parents=True)
-    lines = _policy(host, reads=(read, outside, run, host), writes=(write,))
-    read_bind = _at(lines, "--ro-bind", _real(read), _real(read))
-    write_bind = _at(lines, "--bind", _real(write), _real(write))
-    assert _at(lines, "--tmpfs", _real(run)) < read_bind < write_bind
-    assert _real(outside) not in lines  # outside the tree: the root bind already gives it
-    # a read root that is the tree or holds it would bring the host tree back
-    assert _at(lines, "--ro-bind", _real(run), _real(run)) == -1
-    assert _at(lines, "--ro-bind", _real(host), _real(host)) == -1
+@pytest.mark.parametrize("kind", ["read", "write"])
+@pytest.mark.parametrize("where", ["run/py", "run"])
+def test_a_root_in_the_private_tree_is_refused(host, kind, where):
+    # No caller puts one there; binding it would bring host content (and sockets) into the tree,
+    # and a write bind would stay writable (bwrap's --remount-ro does not recurse).
+    root = host / where
+    root.mkdir(exist_ok=True)
+    roots = {"reads": (root,)} if kind == "read" else {"writes": (root,)}
+    with pytest.raises(SandboxError, match="private"):
+        _policy(host, **roots)
 
 
-def test_top_level_links_are_recreated_and_nothing_else_is(host):
+def test_a_read_root_beside_or_holding_the_tree_adds_nothing(host):
+    outside = host / "lib"
+    outside.mkdir()
+    lines = _policy(host, reads=(outside, host))
+    assert _real(outside) not in lines  # the root bind already gives it
+    assert _at(lines, "--ro-bind", _real(host), _real(host)) == -1  # would bring the tree back
+
+
+def test_only_links_that_stay_in_the_tree_or_a_store_are_recreated(host):
     run = host / "run"
-    (run / "current-system").symlink_to("/nix/store/abc-system")
+    (run / "sub").mkdir()
+    (run / "inside").symlink_to("sub/x")
+    (run / "inside-abs").symlink_to(run / "sub")
+    (run / "current-system").symlink_to("/nix/store/abc-system")  # immutable: no sockets there
+    (run / "out-abs").symlink_to("/tmp/agent.sock")  # noqa: S108 - escapes: not recreated
+    (run / "out-rel").symlink_to("../../tmp/x")
     (run / "shm").symlink_to("../dev/shm")
     (run / "evil").symlink_to("x\n--bind\n/\n/")  # cannot add a policy line
     (run / "dash").symlink_to("--bind")
+    (run / "x\nbad").symlink_to("sub")  # a name that would add a policy line
+    (run / "-lead").symlink_to("sub")
     (run / "plain").write_text("x")
-    (run / "dir").mkdir()
-    (run / "dir" / "link").symlink_to("/nowhere")  # not top level
+    (run / "sub" / "link").symlink_to("sub")  # not top level
     os.mkfifo(run / "s")  # stands in for a socket: anything not a link is left out alike
     lines = _policy(host)
     real = _real(run)
     links = [lines[i + 1 : i + 3] for i, flag in enumerate(lines) if flag == "--symlink"]
     assert links == [
         ["/nix/store/abc-system", f"{real}/current-system"],
-        ["../dev/shm", f"{real}/shm"],
+        ["sub/x", f"{real}/inside"],
+        [f"{real}/sub", f"{real}/inside-abs"],
     ]
-    assert not [line for line in lines if line.startswith(f"{real}/") and "/dir" in line]
+    assert "bad" not in lines and f"{real}/-lead" not in lines
+
+
+def test_a_run_link_to_an_outside_daemon_socket_is_masked_not_recreated(host, monkeypatch):
+    # Rancher Desktop or Colima: /run/docker.sock -> ~/.rd/docker.sock. The private /run must
+    # not point the run back at it, and the daemon-socket mask covers its real target.
+    run, rd = host / "run", host / "home" / ".rd"
+    rd.mkdir()
+    (rd / "docker.sock").write_text("")  # stands in for the socket inode
+    (run / "docker.sock").symlink_to(rd / "docker.sock")
+    monkeypatch.setattr(bwrap, "_DANGEROUS_SOCKETS", (str(run / "docker.sock"),))
+    lines = _policy(host)
+    target = _real(rd / "docker.sock")
+    assert f"{_real(run)}/docker.sock" not in lines
+    assert _at(lines, "--ro-bind", "/dev/null", target) > _at(lines, "--tmpfs", _real(run))
+
+
+def test_a_tree_whose_real_path_cannot_be_written_in_a_policy_fails(host, monkeypatch):
+    odd = host / "r\nun"
+    odd.mkdir()
+    monkeypatch.setattr(bwrap_private, "TREES", (str(odd),))
+    with pytest.raises(SandboxError, match="private"):
+        _policy(host)
 
 
 def test_etc_links_to_a_file_under_the_tree_are_bound_read_only(host):
@@ -118,12 +152,15 @@ def test_etc_links_to_a_file_under_the_tree_are_bound_read_only(host):
     (etc / "dirlink").symlink_to(run / "resolve" / "dir")  # a directory: nothing
     (etc / "out.conf").symlink_to(host / "elsewhere")  # not under the tree: nothing
     (etc / "gone.conf").symlink_to(run / "gone")  # dangling: nothing
+    (run / "resolve" / "x\nname.conf").write_text("x\n")
+    (etc / "odd.conf").symlink_to(run / "resolve" / "x\nname.conf")  # cannot be a policy line
     lines = _policy(host)
     stub = _real(run / "resolve" / "stub-resolv.conf")
     assert _at(lines, "--ro-bind", stub, stub) > _at(lines, "--tmpfs", _real(run))
     assert lines.count(stub) == 2
     assert _real(run / "resolve" / "dir") not in lines
     assert _real(host / "elsewhere") not in lines
+    assert "name.conf" not in lines
 
 
 def test_an_etc_file_the_account_cannot_reach_is_left_out(host, monkeypatch):
@@ -157,3 +194,19 @@ def test_a_tree_or_etc_that_cannot_be_listed_fails_the_policy(host, monkeypatch,
 def test_a_write_root_at_the_tree_is_still_refused(host):
     with pytest.raises(SandboxError, match="too broad"):
         _policy(host, writes=(Path("/run"),))
+
+
+def test_an_etc_entry_that_cannot_be_checked_fails_the_policy(host, monkeypatch):
+    class Unreadable:
+        name, path = "x", "/x"
+
+        def is_symlink(self):
+            raise OSError(5, "Input/output error")
+
+    real_entries = bwrap_private._entries
+    etc = bwrap_private.ETC
+    monkeypatch.setattr(
+        bwrap_private, "_entries", lambda d: [Unreadable()] if d == etc else real_entries(d)
+    )
+    with pytest.raises(SandboxError, match="/x"):
+        _policy(host)
