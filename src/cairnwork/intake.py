@@ -10,7 +10,7 @@ in one state directory (owner-only):
                         "mirror", "core_url", "core_token_file", "core_identity", "test_roots",
                         "import_paths", "post_verified_hook", "post_verified_hook_seconds"}
     ownership.sqlite, notary.sqlite, journal.sqlite
-    requests/<task_id>.json   the request as bound (its digest is checked again)
+    requests/<task_id>.json   the request as bound (its digest is checked again), stored first
     runs/              attempt clones, verifier logs, one runner log per task
 
 ``submit`` binds the task (owner "cairnwork") while holding the shared run lock
@@ -41,7 +41,13 @@ from cairnwork import runlock, takeover
 from cairnwork.deferred_store import DeferredStore
 from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.intake_config import DEFAULT_CONFIG, has_token, seconds_ok
-from cairnwork.intake_request import IntakeRefused, task_from_payload
+from cairnwork.intake_request import (
+    IntakeRefused,
+    bind_stored,
+    check_requests,
+    read_request,
+    task_from_payload,
+)
 from cairnwork.issue_task import check_import_paths, check_test_roots
 from cairnwork.journal import Journal, no_evidence
 from cairnwork.lineage import require_on_main
@@ -194,7 +200,8 @@ class Intake:
             (self.state / name).mkdir(mode=0o700, exist_ok=True)
 
     def check_state(self) -> None:
-        """BAD_STATE unless the state is a directory we own with mode 0700 (no side effects)."""
+        """BAD_STATE unless the state is a directory we own with mode 0700 and, once a task is
+        bound, a plain requests/ (check_requests, #466) (no side effects)."""
         try:
             info = self.state.lstat()
         except (NotADirectoryError, PermissionError) as exc:  # a bad parent (#367)
@@ -203,6 +210,7 @@ class Intake:
             raise IntakeRefused("BAD_STATE", f"{self.state} is not a directory owned by us")
         if info.st_mode & 0o777 != 0o700:  # 0600 or 0500 cannot hold a run (#367)
             raise IntakeRefused("BAD_STATE", f"{self.state} must be mode 0700")
+        check_requests(self.state)
 
     @contextmanager
     def _intake_lock(self) -> Iterator[None]:
@@ -257,12 +265,11 @@ class Intake:
                     ) from exc
                 raise IntakeRefused("BASE_NOT_ON_MAIN", str(exc)) from exc
         fd = runlock.shared_fd(ledger.path)
-        try:
-            bound = ledger.bind(task.idempotency_key, task.request(), OWNER, task.card_hash)
+        try:  # the request is on disk, whole and synced, before its task is bound (#466)
+            bound = bind_stored(ledger, task, payload, self.state / "requests")
             record = bound.record
             if not bound.duplicate:
                 try:
-                    self._store_request(record.task_id, payload)
                     self._start_runner(record.task_id, fd)
                 except Exception:
                     ledger.set_status(record.task_id, "FAILED")  # never left BOUND, unowned
@@ -271,15 +278,8 @@ class Intake:
             os.close(fd)  # the runner holds its own copy of the lock now
         return {"task_id": record.task_id, "status": record.status, "duplicate": bound.duplicate}
 
-    def _store_request(self, task_id: str, payload: dict[str, Any]) -> None:
-        path = self.state / "requests" / f"{task_id}.json"
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(fd, "w") as handle:
-            json.dump(payload, handle, sort_keys=True)
-
-    def load_request(self, task_id: str) -> TaskSpec:
-        path = self.state / "requests" / f"{task_id}.json"
-        raw, config = json.loads(path.read_text()), self.config()
+    def load_request(self, task_id: str) -> TaskSpec:  # RequestUnreadable: see read_request
+        raw, config = read_request(self.state / "requests", task_id), self.config()
         task = task_from_payload(
             raw, tuple(config["test_roots"]), self.test_store(), tuple(config["import_paths"])
         )
