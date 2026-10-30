@@ -105,6 +105,14 @@ def test_plan_ids_beyond_the_contract_still_refuse_first_as_unrequired(tmp_path,
     assert out.code == "UNREQUIRED_OBSERVATION_FAILED", out
 
 
+def test_plan_ids_beyond_the_contract_refuse_when_the_extra_one_passed(tmp_path, repo):
+    """#449: ``other`` PASS is not refused as unrequired, so only the comparison of the two lists
+    (both ways, not only the contract's ids missing from the plan) refuses it."""
+    out = _v01(tmp_path, repo, _plan_ids(["other", "pytest"]), unrequired=("other",))
+    assert out.code == INCONSISTENT, out
+    assert "required_verifier_ids differ" in out.detail
+
+
 def test_the_same_ids_in_another_order_are_consistent(tmp_path, repo):
     """Control: the edit and re-chaining alone change nothing; Core compares sets."""
     out = _v01(tmp_path, repo, _plan_ids(["pytest-1", "pytest"]), required=("pytest", "pytest-1"))
@@ -131,11 +139,11 @@ CROSS = [
 ]
 
 
-def _cross(part: str, key: str) -> Edit:
+def _cross(part: str, key: str, value: Callable[[dict[str, Any]], str] | None = None) -> Edit:
     def edit(predicate: dict[str, Any]) -> None:
         request = predicate["request"]
         _chained(request)
-        request[part][key] = "sha256:" + "0" * 64
+        request[part][key] = value(request) if value else "sha256:" + "0" * 64
         if part == "verification_plan":  # the evidence names the plan as it now is
             request["evidence_bundle"]["verification_plan_hash"] = verification_plan_hash(
                 request["verification_plan"]
@@ -157,6 +165,21 @@ def test_a_part_naming_another_part_refuses_v02(tmp_path, part, key):
     assert out.code == INCONSISTENT, out
 
 
+OTHER_HASH = {  # a hash of this same request, but of another part than ``key`` names
+    "acceptance_contract_hash": lambda request: change_set_hash(request["change_set"]),
+    "change_set_hash": lambda request: acceptance_contract_hash(request["acceptance_contract"]),
+    "verification_plan_hash": lambda request: change_set_hash(request["change_set"]),
+}
+
+
+@pytest.mark.parametrize(("part", "key"), CROSS, ids=[f"{p}.{k}" for p, k in CROSS])
+def test_a_part_naming_another_hash_of_this_request_refuses(tmp_path, repo, part, key):
+    """#449: each part names the hash of the one part its key says, not any hash Core echoed."""
+    out = _v01(tmp_path, repo, _cross(part, key, OTHER_HASH[key]))
+    assert out.code == INCONSISTENT, out
+    assert f"{part}.{key}" in out.detail
+
+
 def _fail_in_copy(predicate: dict[str, Any]) -> None:
     extra = dict(predicate["verifier_observations"][0], verifier_id="other", status="FAIL")
     predicate["verifier_observations"].append(extra)
@@ -170,6 +193,11 @@ def _copy_status(predicate: dict[str, Any]) -> None:
     predicate["verifier_observations"][0]["status"] = "FAIL"
 
 
+def _copy_reordered(predicate: dict[str, Any]) -> None:
+    """The same observations in another order: an exact copy keeps the order (#449)."""
+    predicate["verifier_observations"].reverse()
+
+
 def _copy_one_for_true(predicate: dict[str, Any]) -> None:
     """Equal under Python's ``==`` (1 == True), not as JSON: the comparison is canonical JSON."""
     predicate["request"]["evidence_bundle"]["observations"][0]["flag"] = True
@@ -180,6 +208,7 @@ COPY = {
     "extra_fail": _fail_in_copy,
     "dropped": _copy_dropped,
     "status": _copy_status,
+    "reordered": _copy_reordered,
     "one_for_true": _copy_one_for_true,
 }
 

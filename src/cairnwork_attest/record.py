@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import sqlite3
 from dataclasses import dataclass, field
@@ -59,7 +60,8 @@ def parse_strict_json(
     malformed_code: str = "RECORD_MALFORMED",
     constant_code: str = "RECORD_MALFORMED",
 ) -> Any:
-    """Parse JSON strictly: reject duplicate keys, NaN, Infinity, and -Infinity."""
+    """Parse JSON strictly: reject duplicate keys, NaN, Infinity, -Infinity, and a number that
+    overflows to infinity (``1e400``, #449): no strict-JSON writer can hash it back."""
 
     def pairs_hook(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
         res: dict[str, Any] = {}
@@ -72,11 +74,18 @@ def parse_strict_json(
     def reject_constant(val: str) -> Any:
         raise error_cls(f"unsupported JSON constant: {val!r}", code=constant_code)
 
+    def finite_float(val: str) -> float:
+        number = float(val)
+        if not math.isfinite(number):
+            raise error_cls("a JSON number overflows to infinity", code=constant_code)
+        return number
+
     try:
         return json.loads(
             raw,
             object_pairs_hook=pairs_hook,
             parse_constant=reject_constant,
+            parse_float=finite_float,
         )
     except AttestError:
         raise
