@@ -15,9 +15,15 @@ A commit may change it when one of its Python files (``.py``/``.pyw``, any case)
   any other object (``os.sys``) or imports ``sys`` from another module, or names a function of
   ``os`` (also ``posix``, ``nt``) that starts a program, under any name
   (``from os import system``), or
-- reaches an attribute or runs code by a name built at run time: calls one of ``DYNAMIC_NAMES``
-  (``getattr(logging, "sys")``, ``exec``), reads one of ``DYNAMIC_ATTRS`` (``m.__dict__``),
-  imports one of ``DYNAMIC_MODULES`` or matches ``sys`` or such a name in a class pattern, or
+- reaches an attribute, imports or runs code by a name built at run time: uses one of
+  ``DYNAMIC_NAMES`` (``getattr(logging, "sys")``, ``exec``) or ``DYNAMIC_ATTRS``
+  (``m.__dict__``, ``pkgutil.resolve_name``), or calls monkeypatch's string-target
+  ``setattr``/``delattr``, or
+- imports one of ``IMPORT_MODULES`` (``site``, ``runpy``, ``importlib.util``) or a submodule,
+  takes sys, os or one of them from another object (``logging.os``, ``from random import _os``,
+  a ``HELD`` or, on a chain from an imported module, a ``HELD_IF_IMPORTED`` name, also in a
+  class pattern), uses an imported module but through its attributes (``m = logging``,
+  ``f(os)``), or writes ``os.environ`` (anything but a subscript read, ``in`` or ``.get``), or
 - cannot be read: it may name one of those modules (or holds a non-ASCII byte, which an
   identifier may normalize from) and this interpreter cannot parse it (a syntax or encoding
   error), or it is a symlink; a file that names none of them reaches them only through a word;
@@ -85,22 +91,56 @@ SAFE_SYS = frozenset(
 _OS_MODULES = frozenset({"os", "posix", "nt"})
 _OS_RUN = frozenset({"system", "popen", "putenv", "startfile"})
 _OS_RUN_PREFIXES = ("exec", "spawn", "posix_spawn")
-# Files worth parsing: those that may name sys, os, posix, nt or a dynamic name (see above).
 # Code that reaches attributes, or runs code, by a name built at run time; never followed.
 DYNAMIC_NAMES = frozenset(
     {"getattr", "setattr", "delattr", "vars", "globals", "locals", "exec", "eval", "compile",
-     "__import__", "__builtins__"}
+     "breakpoint", "__import__", "__builtins__"}
 )  # fmt: skip
 DYNAMIC_ATTRS = frozenset(
     {"__dict__", "__getattribute__", "__globals__", "__builtins__", "__code__", "f_globals",
-     "f_locals", "f_builtins", "attrgetter", "methodcaller"}
+     "f_locals", "f_builtins", "attrgetter", "methodcaller", "setenv", "unsetenv", "putenv",
+     "environb", "ProcessPoolExecutor", "spec_from_file_location", "module_from_spec",
+     "exec_module", "load_module", "load_source", "import_path", "pyimport", "resolve_name",
+     "import_string", "import_module", "find_class", "entry_points", "load_entry_point",
+     "builtins", "__self__", "__closure__", "__subclasses__", "__bases__", "__base__",
+     "__mro__"}
 )  # fmt: skip
-DYNAMIC_MODULES = frozenset({"builtins", "inspect", "gc", "ctypes", "pickle", "_pickle", "marshal"})
-_DYNAMIC = DYNAMIC_NAMES | DYNAMIC_ATTRS | DYNAMIC_MODULES
+# Modules that can change the import path or the import system, load or run code given as a
+# path or as text, or start a program; a file that imports one (or a submodule) seals nothing.
+IMPORT_MODULES = frozenset(
+    {"site", "sitecustomize", "usercustomize", "runpy", "pkgutil", "zipimport", "imp", "_imp",
+     "importlib", "_frozen_importlib", "_frozen_importlib_external", "sysconfig", "distutils",
+     "setuptools", "pkg_resources", "code", "codeop", "types", "builtins", "inspect", "gc",
+     "ctypes", "pickle", "_pickle", "marshal", "shelve", "copyreg", "doctest", "timeit", "pdb",
+     "bdb", "trace", "profile", "cProfile", "pydoc", "subprocess", "_posixsubprocess", "_winapi",
+     "multiprocessing", "concurrent.futures.process", "pty", "webbrowser", "logging.config",
+     "unittest.mock", "mock", "pexpect", "sh", "plumbum", "execnet"}
+)  # fmt: skip
+# Names under which another module may hold sys, os or one of IMPORT_MODULES (``logging.os``,
+# ``random._os``, ``tempfile._os``), leading underscores aside: an attribute or a ``from``
+# import of one seals nothing. HELD_IF_IMPORTED are too common to refuse on any object, so they
+# count only on a chain that starts at an imported module (``unittest.mock``, ``logging.config``).
+HELD = frozenset(
+    {"sys", "os", "posix", "nt", "runpy", "pkgutil", "zipimport", "importlib", "sysconfig",
+     "distutils", "setuptools", "pkg_resources", "sitecustomize", "usercustomize", "codeop",
+     "builtins", "bltns", "ctypes", "pickle", "marshal", "shelve", "copyreg", "doctest",
+     "timeit", "pdb", "bdb", "cProfile", "pyprofile", "pydoc", "subprocess", "posixsubprocess",
+     "winapi", "multiprocessing", "pty", "webbrowser", "frozen_importlib",
+     "frozen_importlib_external", "pexpect", "plumbum", "execnet"}
+)  # fmt: skip
+HELD_IF_IMPORTED = frozenset(
+    {"site", "code", "types", "imp", "inspect", "gc", "trace", "profile", "util", "machinery",
+     "bootstrap", "bootstrap_external", "process", "context", "reduction", "reducer", "config",
+     "mock", "sh", "macholib", "dyld", "dylib", "framework"}
+)  # fmt: skip
+_ENVIRON_READS = frozenset({"get", "copy", "keys", "items", "values"})
+_PARSE_NAMES = (
+    {"sys", "environ"} | _OS_MODULES | DYNAMIC_NAMES | DYNAMIC_ATTRS | HELD | HELD_IF_IMPORTED
+    | {part for module in IMPORT_MODULES for part in module.split(".")}
+)  # fmt: skip
+# Files worth parsing: those that may name one of the above (see the module docstring).
 _MAY_NAME = re.compile(
-    rb"\b(?:sys|os|posix|nt|"
-    + b"|".join(n.encode() for n in sorted(_DYNAMIC))
-    + rb")\b|[^\x00-\x7f]"
+    rb"\b_*(?:" + b"|".join(n.encode() for n in sorted(_PARSE_NAMES)) + rb")\b|[^\x00-\x7f]"
 )
 
 
@@ -188,51 +228,127 @@ def _mentions(data: bytes) -> bool:
 
 def _uses_import_system(tree: ast.AST) -> bool:
     nodes = list(ast.walk(tree))
-    sys_names, os_names = {"sys"}, set(_OS_MODULES)
+    sys_names, os_names, modules, roots = {"sys"}, set(_OS_MODULES), set(), set()
     for node in nodes:
         if _dynamic(node):
             return True
         if isinstance(node, ast.Import):
             for alias in node.names:
+                modules.add(alias.asname or alias.name.partition(".")[0])
                 if alias.asname and alias.name == "sys":
                     sys_names.add(alias.asname)
                 elif alias.asname and alias.name in _OS_MODULES:
                     os_names.add(alias.asname)
         elif isinstance(node, ast.ImportFrom):
             names = [alias.name for alias in node.names]
-            if "sys" in names or _DYNAMIC.intersection(
-                names
-            ):  # ``from os import sys``, ``from logging import sys``
+            roots.update(alias.asname or alias.name for alias in node.names)
+            if _imports_held(node.module, names):  # ``from logging import sys``
                 return True
             if node.level == 0 and node.module == "sys":
                 if any(name not in SAFE_SYS for name in names):
                     return True
             elif node.level == 0 and node.module in _OS_MODULES:
-                if any(name == "*" or _starts_programs(name) for name in names):
+                if any(name in {"*", "environ"} or _starts_programs(name) for name in names):
                     return True
+    return _reaches(nodes, sys_names, os_names, modules, roots | modules | sys_names | os_names)
+
+
+def _reaches(
+    nodes: list[ast.AST],
+    sys_names: set[str],
+    os_names: set[str],
+    modules: set[str],
+    roots: set[str],
+) -> bool:
+    """Whether an attribute reaches sys, os or the import system, sys is used for anything but a
+    SAFE_SYS attribute, os.environ is written, or an imported module is used but through one of
+    its attributes (``m = logging``, ``f(os)``: the receiver may then take any attribute). roots
+    are the names an import binds, where a HELD_IF_IMPORTED chain counts."""
     safe: set[int] = set()
     for node in nodes:
-        if not isinstance(node, ast.Attribute):
-            continue
-        if node.attr == "sys" or (_named(node.value, os_names) and _starts_programs(node.attr)):
+        if isinstance(node, ast.Attribute):
+            if _held(node, roots) or (_named(node.value, os_names) and _starts_programs(node.attr)):
+                return True
+            if _named(node.value, sys_names) and node.attr in SAFE_SYS:
+                safe.add(id(node.value))
+            if _named(node.value, modules - sys_names):
+                safe.add(id(node.value))
+            if node.attr in _ENVIRON_READS and _environ(node.value, os_names):
+                safe.add(id(node.value))
+        elif isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Load):
+            if _environ(node.value, os_names):
+                safe.add(id(node.value))
+        elif isinstance(node, ast.Compare) and all(
+            isinstance(op, (ast.In, ast.NotIn)) for op in node.ops
+        ):
+            safe.update(id(c) for c in node.comparators if _environ(c, os_names))
+    return any(
+        id(node) not in safe
+        and (
+            (_named(node, sys_names | modules) and isinstance(getattr(node, "ctx", None), ast.Load))
+            or _environ(node, os_names)
+        )
+        for node in nodes
+    )
+
+
+def _held(node: ast.Attribute, roots: set[str]) -> bool:
+    """Whether node takes sys, os or an IMPORT_MODULES module from another object."""
+    name = node.attr.lstrip("_")
+    if name in HELD:
+        return True
+    if name not in HELD_IF_IMPORTED:
+        return False
+    base = node.value
+    while isinstance(base, ast.Attribute):
+        base = base.value
+    return _named(base, roots)
+
+
+def _imports_held(module: str | None, names: list[str]) -> bool:
+    """Whether ``from module import names`` takes sys, os or an IMPORT_MODULES module, or a
+    DYNAMIC name, from another module."""
+    for name in names:
+        bare = name.lstrip("_")
+        if bare in HELD - {"sys", "os", "posix", "nt"} or name in DYNAMIC_NAMES | DYNAMIC_ATTRS:
             return True
-        if _named(node.value, sys_names) and node.attr in SAFE_SYS:
-            safe.add(id(node.value))
-    return any(_named(node, sys_names) and id(node) not in safe for node in nodes)
+        if bare in {"sys", "os", "posix", "nt"} and module not in _OS_MODULES:
+            return True  # ``from logging import sys``, ``from random import _os``
+        if module and _is_import_module(f"{module}.{name}"):
+            return True
+    return False
+
+
+def _environ(node: ast.AST, os_names: set[str]) -> bool:
+    return (
+        isinstance(node, ast.Attribute) and node.attr == "environ" and _named(node.value, os_names)
+    )
+
+
+def _is_import_module(dotted: str) -> bool:
+    return any(dotted == m or dotted.startswith(m + ".") for m in IMPORT_MODULES)
 
 
 def _dynamic(node: ast.AST) -> bool:
-    """Whether node reaches an attribute or runs code by a name built at run time."""
+    """Whether node reaches an attribute or runs code by a name built at run time, or imports one
+    of IMPORT_MODULES."""
     if isinstance(node, ast.Name):
         return node.id in DYNAMIC_NAMES
     if isinstance(node, ast.Attribute):
         return node.attr in DYNAMIC_ATTRS
     if isinstance(node, ast.MatchClass):
-        return any(a == "sys" or a in DYNAMIC_ATTRS or _starts_programs(a) for a in node.kwd_attrs)
+        return any(
+            a.lstrip("_") in HELD | HELD_IF_IMPORTED or a in DYNAMIC_ATTRS or _starts_programs(a)
+            for a in node.kwd_attrs
+        )
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+        # monkeypatch's ``setattr("mod.attr", value)`` and ``delattr("mod.attr")`` import by name
+        wanted = {"setattr": 3, "delattr": 2}.get(node.func.attr, 0)
+        return len(node.args) + len([k for k in node.keywords if k.arg != "raising"]) < wanted
     if isinstance(node, ast.Import):
-        return any(a.name.partition(".")[0] in DYNAMIC_MODULES for a in node.names)
+        return any(_is_import_module(a.name) for a in node.names)
     if isinstance(node, ast.ImportFrom):
-        return (node.module or "").partition(".")[0] in DYNAMIC_MODULES and not node.level
+        return not node.level and _is_import_module(node.module or "")
     return False
 
 

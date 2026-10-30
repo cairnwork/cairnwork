@@ -90,14 +90,43 @@ UNSEALING = {  # one base file anywhere in the checkout
     "a class pattern on sys": (
         "lib/x.py", "import logging\nmatch logging:\n    case object(sys=s):\n        pass\n"),
     "pickle": ("lib/x.py", "import pickle\nm = pickle.loads(b'')\n"),
+    "site under another name": ("lib/x.py", "import site as s\ns.main()\n"),
+    "importlib.util by from": ("lib/x.py", "from importlib import util\n"),
+    "runpy.run_path": ("lib/x.py", "import runpy\nrunpy.run_path('x')\n"),
+    "pkgutil.extend_path": ("lib/x.py", "import pkgutil\nx = pkgutil.extend_path([], 'pkg')\n"),
+    "PYTHONPATH in os.environ": ("lib/x.py", "import os\nos.environ['PYTHONPATH'] = 'pkg'\n"),
+    "an os.environ name built at run time": (
+        "lib/x.py", "import os\nos.environ['PYTHON' 'PATH'] = 'pkg'\n"),
+    "os.environ.update": ("lib/x.py", "import os\nos.environ.update(A='pkg')\n"),
+    "monkeypatch.setenv": ("conftest.py", "def f(mp):\n    mp.setenv('A', 'pkg')\n"),
+    "os from another module": ("lib/x.py", "import logging\nlogging.os.system('x')\n"),
+    "os imported from another module": ("lib/x.py", "from logging import os as o\no.system('x')\n"),
+    "os under a private name": ("lib/x.py", "import random\nrandom._os.system('x')\n"),
+    "a module handed on": ("lib/x.py", "import logging\nm = logging\n"),
+    "os handed to a function": (
+        "tests_util.py",
+        "import os\n\n\ndef f(mp):\n    mp.setattr(os, 'getcwd', lambda: os.path.sep)\n"),
+    "builtins from another module": ("lib/x.py", "import reprlib\nf = reprlib.builtins.getattr\n"),
+    "__subclasses__": ("lib/x.py", "x = ().__class__.__base__.__subclasses__()\n"),
+    "pty.spawn": ("lib/x.py", "import pty\npty.spawn('x')\n"),
+    "pkgutil.resolve_name": ("lib/x.py", "from pkgutil import resolve_name\n"),
+    "resolve_name on another module": ("lib/x.py", "import foo\nm = foo.resolve_name('a.b')\n"),
+    "a monkeypatch target by name": (
+        "conftest.py", "def f(monkeypatch):\n    monkeypatch.delattr('s' 'ys.path')\n"),
+    "unittest.mock": ("lib/x.py", "import unittest\nunittest.mock.patch('x')\n"),
 }  # fmt: skip
 KEEPS_SEALED = {
     "sys for the platform": ("conftest.py", "import sys\nWIN = sys.platform == 'win32'\n"),
     "sys under another name, for the version": (
         "lib/x.py", "import sys as _sys\nOLD = _sys.version_info < (3, 12)\n"),
-    "os.path and a patched os": (
+    "os.path and os.environ reads": (
         "tests_util.py",
-        "import os\n\n\ndef f(mp):\n    mp.setattr(os, 'getcwd', lambda: os.path.sep)\n"),
+        "import os\nHOME = os.environ.get('HOME')\nCI = 'CI' in os.environ\nX = os.path.sep\n"),
+    "a plain test module": (
+        "pkg/tests/test_y.py",
+        "import platform\nfrom collections import abc\n\nimport pytest\n\n\n"
+        "@pytest.mark.skipif(platform.system() == 'Windows', reason='')\n"
+        "def test_y():\n    assert isinstance({}, abc.Mapping)\n"),
     "sys.path in a text file": ("notes/readme.txt", "sys.path.insert(0, 'pkg')\n"),
     "re.compile and a method named eval": (
         "lib/x.py", "import re\n\n\nclass M:\n    def eval(self):\n        return re.compile\n"),
@@ -147,3 +176,17 @@ def test_the_file_limit_counts_paths_not_contents(repo, monkeypatch):
     monkeypatch.setattr(sys_path_scan, "MAX_FILES", 4)
     with pytest.raises(TaskRejected, match=REFUSED):
         check_task(_task(repo, ("pkg/fractions.py",)))
+
+
+@pytest.mark.parametrize("module", sorted(sys_path_scan.IMPORT_MODULES))
+def test_importing_a_module_that_can_change_imports_unseals(module):
+    assert sys_path_scan._mentions(f"import {module} as m\n".encode())
+    parent, _, leaf = module.rpartition(".")
+    if parent:
+        assert sys_path_scan._mentions(f"from {parent} import {leaf}\n".encode())
+
+
+@pytest.mark.parametrize("name", sorted(sys_path_scan.HELD | sys_path_scan.HELD_IF_IMPORTED))
+def test_a_module_held_by_another_module_unseals(name):
+    assert sys_path_scan._mentions(f"import logging\nm = logging.{name}.x\n".encode())
+    assert sys_path_scan._mentions(f"import logging\nm = logging._{name}.x\n".encode())
