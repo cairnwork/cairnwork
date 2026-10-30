@@ -175,11 +175,13 @@ def test_read_request_names_only_the_request_s_own_failures(tmp_path):
     (requests / "dir.json").mkdir()
     (requests / "link.json").symlink_to(requests / "whole.json")
     (requests / "byte.json").write_bytes(b'{"a": "\xff"}')
+    (requests / "utf8.json").write_bytes('{"a": "é"}'.encode())  # valid UTF-8, still not ASCII
     for task_id, error in (
         ("fifo", OSError),
         ("dir", OSError),
         ("link", OSError),
         ("byte", UnicodeDecodeError),
+        ("utf8", UnicodeDecodeError),
     ):
         with pytest.raises(error) as raised:
             read_request(requests, task_id)
