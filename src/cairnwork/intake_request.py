@@ -179,8 +179,8 @@ def _cut_short(text: str, exc: json.JSONDecodeError) -> bool:
     if not exc.msg.startswith("Invalid \\uXXXX escape"):
         return False
     start = text.rfind("\\", 0, exc.pos + 1)  # its backslash: pos names it or its "u" (by build)
-    tail = text[start + 2 :]  # what the cut left of the four hex digits
-    return start >= max(exc.pos - 1, 0) and len(tail) < 4 and all(c in _HEX for c in tail)
+    tail = text[start + 2 :]  # the cut left at most its four hex digits (3.12.3 errs on all four)
+    return start >= max(exc.pos - 1, 0) and len(tail) <= 4 and all(c in _HEX for c in tail)
 
 
 def check_requests(state: Path) -> None:
