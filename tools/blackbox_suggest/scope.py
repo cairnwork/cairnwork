@@ -19,6 +19,7 @@ import ast
 import sys
 from collections.abc import Callable
 
+from .aliases import PYTEST_MODULES
 from .obligations import CLASS_HOOKS, SETUP_HOOKS
 from .resolve import dotted
 
@@ -196,6 +197,13 @@ def _import(node: ast.Import | ast.ImportFrom, verdict: Verdict, is_project, *, 
             a.asname or a.name.split(".")[0]: a.name if a.asname else a.name.split(".")[0]
             for a in node.names
         }
+    if any(a.asname and a.asname != a.name for a in node.names) and (
+        isinstance(node, ast.ImportFrom)
+        and node.module in PYTEST_MODULES
+        or isinstance(node, ast.Import)
+        and any(a.name == "pytest" for a in node.names)
+    ):  # an alias of pytest's names that resolve_aliases left alone
+        verdict.refuse("an import renames a pytest name that could not be resolved")
     for local, origin in origins.items():
         _bind(verdict, local, origin)
         _hook(verdict, local, top=top, by_def=False)

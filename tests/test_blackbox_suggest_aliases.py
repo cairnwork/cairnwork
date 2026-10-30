@@ -91,7 +91,7 @@ def _write(root, body):
 def test_package_init_setup_hooks_are_obligations(tmp_path, hook):
     init = f"def {hook}(module=None):\n    pass\n"
     item = run(tmp_path, HEAD + PLAIN, {"tests/__init__.py": init})
-    assert refused(item) and "package init" in item.refusal
+    assert item.refusal and "package init" in item.refusal and refused(item)
 
 
 def test_module_setup_hook_in_the_test_file_is_the_control(tmp_path):
@@ -101,4 +101,49 @@ def test_module_setup_hook_in_the_test_file_is_the_control(tmp_path):
 
 def test_a_package_init_without_hooks_keeps_the_draft(tmp_path):
     item = run(tmp_path, HEAD + PLAIN, {"tests/__init__.py": "VALUE = 1\n"})
+    assert item.protected(KINDS_NOW), item.reason(KINDS_NOW)
+
+
+UNRESOLVED = {
+    "conftest_fixture_with_local_rebinding": (
+        HEAD + PLAIN,
+        {
+            "tests/conftest.py": "from pytest import fixture as mark\n"
+            "@mark(autouse=True)\ndef env():\n    mark = None\n    yield\n"
+        },
+    ),
+    "parameter_named_like_the_alias": (
+        HEAD
+        + "from pytest import fixture as mark\n@mark(autouse=True)\ndef env():\n    yield\n"
+        + "def helper(mark=None):\n    return mark\n"
+        + PLAIN,
+        {},
+    ),
+    "function_local_assignment": (
+        HEAD
+        + "from pytest import importorskip as mark\nmod = mark('json')\n"
+        + "def helper():\n    mark = 1\n    return mark\n"
+        + PLAIN,
+        {},
+    ),
+    "comprehension_variable": (
+        HEAD
+        + "from pytest import fixture as mark\n@mark(autouse=True)\ndef env():\n    yield\n"
+        + "VALUES = [mark for mark in ()]\n"
+        + PLAIN,
+        {},
+    ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(UNRESOLVED))
+def test_an_alias_that_cannot_be_resolved_is_refused(tmp_path, case):
+    body, extra = UNRESOLVED[case]
+    assert refused(run(tmp_path, body, extra))
+
+
+def test_a_single_clean_alias_still_resolves_to_the_plain_result(tmp_path):
+    body = HEAD + "from pytest import mark as m\n@m.parametrize('x', [1])\n"
+    body += "def test_a(x):\n    assert f(x) == x\n"
+    item = run(tmp_path, body)
     assert item.protected(KINDS_NOW), item.reason(KINDS_NOW)
