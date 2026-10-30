@@ -185,9 +185,10 @@ def test_recovery_passes_the_attempts_run_dirs_before_removing_them(tmp_path, mo
     monkeypatch.setattr(confined, "CONFIRM_WAIT", 0)
     ledger, journal = _dispatched(state, run_root, ATTEMPT, other)
     (decision,) = _recover(state, run_root, ledger, journal)
-    expected = tuple(str((r / f"{ATTEMPT}-q-v0.work").resolve()) for r in (run_root, other))
+    expected = (str((run_root / f"{ATTEMPT}-q-v0.work").resolve()),)  # never the journal's other
     assert seen and set(seen) == {(ATTEMPT, expected, True)}
-    assert decision.detail == "" and not (run_root / f"{ATTEMPT}-q-v0.work").exists()
+    assert not (run_root / f"{ATTEMPT}-q-v0.work").exists()
+    assert (other / f"{ATTEMPT}-q-v0.work").is_dir() and decision.leftover_run_dirs == 1
 
 
 def test_the_verifier_accounts_run_root_is_a_cwd_root(tmp_path):

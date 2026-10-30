@@ -26,6 +26,10 @@ Rules (from Nexus-new's experience, see docs/LESSONS_FROM_NEXUS.md):
   marker cannot be seen: such an owner process is killed when its working directory is inside
   one of the attempt's own run directories (``_cwd_dirs``, proc_cwd, #301). One that changed
   directory out of them is not found, nor one left after a crash during recovery removed them;
+- act only inside the state's own run root: the journal is a file, so a run root its
+  DISPATCHED row names that is not the state's is not cleaned or searched for processes, only
+  re-scanned for names (reported, ``JOURNAL_RUN_ROOT_NOT_USED``), and an attempt id a run does
+  not make (``a`` + 16 hex, pipeline.py) names no directory (``ATTEMPT_ID_NOT_A_RUN_ID``);
 - settle each task on its own: one bad record is reported, not fatal, and
   recovery is idempotent, so it can run again after a crash during recovery.
 """
@@ -34,6 +38,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import time
 from contextlib import nullcontext
@@ -48,7 +53,7 @@ from cairnwork.ownership import OWNER, OwnershipLedger, OwnershipRecord
 from cairnwork.proc_cwd import attempt_dirs
 from cairnwork.reasons import _names
 from cairnwork.verifier_account import VerifierAccount, VerifierAccountError
-from cairnwork.workspace import ATTEMPT_ID, WorkspaceError, remove_attempt_clone
+from cairnwork.workspace import WorkspaceError, remove_attempt_clone
 
 
 @dataclass(frozen=True)
@@ -140,9 +145,7 @@ def _settle(
 
     mark = dispatch_mark(phases)  # a hidden process older than the attempt is not its own
     dispatched = [e.detail for e in phases if e.phase == "DISPATCHED" and e.detail]
-    roots = [Path(run_root)]  # the state's run root, and the root this attempt was dispatched under
-    if dispatched and Path(dispatched[-1]) != roots[0]:
-        roots.append(Path(dispatched[-1]))
+    roots, other = _owner_roots(run_root, dispatched)
     dirs = _cwd_dirs(roots, account, attempt_id)  # before the cleanup below removes them
 
     def look():  # the worker account it ran as, if any (pipeline.py journals it)
@@ -162,7 +165,11 @@ def _settle(
         left += _leftover_names(owner_root, attempt_id)
     if account is not None:
         left += _leftover_names(account.run_root, attempt_id)
+    if other is not None:  # names only: whatever is there was not touched
+        left += _leftover_names(other, attempt_id)
     notes = [swept.problem() or _UNKNOWN_ACCOUNT] if unchecked else []
+    notes += [_OTHER_ROOT] if other is not None else []
+    notes += [] if _run_attempt(attempt_id) else [_NOT_A_RUN_ID]
     if left:
         notes.append(f"LEFTOVER_RUN_DIRS: {_names(left)}")
     detail = "; ".join(notes)
@@ -192,10 +199,32 @@ def _settle(
     )  # fmt: skip
 
 
+def _owner_roots(run_root, dispatched: list[str]) -> tuple[list[Path], Path | None]:
+    """The owner-side roots recovery cleans and searches: the state's run root only. The run
+    journals the resolved run root at DISPATCHED (pipeline.py); the journal is a file, so a
+    root it names that is not the state's (by realpath) is returned apart, never acted on."""
+    if not dispatched:
+        return [Path(run_root)], None
+    try:
+        same = os.path.realpath(dispatched[-1]) == os.path.realpath(run_root)
+    except (OSError, ValueError):
+        same = False
+    return [Path(run_root)], None if same else Path(dispatched[-1])
+
+
+def _run_attempt(attempt_id) -> bool:
+    """An id a run makes (pipeline.py, verify_candidate.py: ``a`` + 16 hex). Only such an id
+    names directories or working directories here: the journal is a file, do not trust it for
+    paths, and a looser id could name another entry of the run root (``a1-q-v0``)."""
+    return isinstance(attempt_id, str) and _RUN_ATTEMPT_ID.fullmatch(attempt_id) is not None
+
+
 def _cwd_dirs(roots, account, attempt_id: str) -> tuple[str, ...]:
     """The attempt's own run directories (realpaths) under the owner's roots and the verifier
     account's run root, whose verifier checkouts the owner makes: an owner process whose
     environment macOS withholds is tied to the attempt when its cwd is inside one (#301)."""
+    if not _run_attempt(attempt_id):
+        return ()
     extra = [account.run_root] if account is not None else []
     return tuple(str(d) for d in attempt_dirs([*roots, *extra], attempt_id))
 
@@ -215,6 +244,12 @@ _UNKNOWN_ACCOUNT = (
     "SWEEP_UNAVAILABLE: the account the worker ran as is unknown (journaled before #244)"
     " and agy_run_as_user is not set"
 )
+_OTHER_ROOT = (
+    "JOURNAL_RUN_ROOT_NOT_USED: the journal names a run root that is not the state's;"
+    " nothing there was removed or swept, its names are listed"
+)
+_NOT_A_RUN_ID = "ATTEMPT_ID_NOT_A_RUN_ID: no directory was looked for"
+_RUN_ATTEMPT_ID = re.compile(r"a[0-9a-f]{16}")
 _RESULTS = ("COMPLETED", "FAILED")  # the run's own FINISHED details (pipeline.py)
 _RUN_TAGS = "vbpqre"  # verify, base-test, P2P probe / candidate run / re-run, base env (p2p.py)
 
@@ -244,7 +279,7 @@ def _run_dirs(root: Path, attempt_id: str) -> tuple[list[Path], list[Path], list
 def _remove_leftovers(run_root: Path, attempt_id: str) -> None:
     """Attempt and verifier clones, a snapshot index, and verifier scratch (run/) dirs.
     Verifier logs (the private dirs themselves) are kept as evidence."""
-    if not ATTEMPT_ID.fullmatch(attempt_id):  # the journal is a file: do not trust it for paths
+    if not _run_attempt(attempt_id):  # the journal is a file: do not trust it for paths
         return
     root = Path(run_root)
     (root / f"{attempt_id}.index").unlink(missing_ok=True)
@@ -296,7 +331,7 @@ def _remove_account_leftovers(account: VerifierAccount, attempt_id: str) -> None
     as that account) can delete them — the owner-side ``_remove_leftovers`` cannot. This mirrors
     normal cleanup (verifiers.py removes the same dirs with ``account.remove``) and keeps the
     verify run's log directory as evidence, as ``_remove_leftovers`` does."""
-    if not ATTEMPT_ID.fullmatch(attempt_id):  # the journal is a file: do not trust it for paths
+    if not _run_attempt(attempt_id):  # the journal is a file: do not trust it for paths
         return
     root = account.run_root
     if not root.is_dir():
@@ -317,7 +352,7 @@ def _leftover_names(root: Path, attempt_id: str) -> list[str]:
     """Names (only) of the attempt's directories still under ``root`` after cleanup: anything
     that can hold laid-over hidden tests. A verify run's private dir is evidence and does not
     count, its ``run/`` scratch does. Re-scans from disk; it trusts nothing the removers said."""
-    if not ATTEMPT_ID.fullmatch(attempt_id) or not Path(root).is_dir():
+    if not _run_attempt(attempt_id) or not Path(root).is_dir():
         return []
     root = Path(root)
     works, privates, clones = _run_dirs(root, attempt_id)
