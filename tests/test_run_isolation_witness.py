@@ -6,7 +6,12 @@ masked; any other socket under /run, /var/run or /tmp (journald's is mode 0666) 
 The outer test lists the host's sockets (as the owner, before the run) and hands the list to a
 candidate test, which also walks the same roots itself from inside the run and tries
 ``connect()`` on each with every AF_UNIX socket type. Nothing is sent. This is a point-in-time
-witness: it covers the sockets present when it runs.
+witness: it covers the sockets present when it runs. On Linux the candidate first connects to a
+socket of its own in TMPDIR, so a probe that cannot connect at all does not pass. Each run now
+gets a private, read-only /run (#391 step 2), which closes the account-mode rows; the owner-mode
+witness still fails on the launching account's own sockets under /tmp until step 3. A further
+run checks what the private /run must not break (writes, /etc/resolv.conf, user and locale
+lookups, multiprocessing).
 
 #392: in account mode, a run's private ``run/`` directory (and anything the candidate wrote
 there) used to stay readable by the next run. The first run writes a marker in HOME, TMPDIR,
@@ -19,16 +24,19 @@ All of these run the real sandbox through run_verifiers. The account-mode varian
 verifier account (pytest.mark.verifier_account).
 """
 
+import hashlib
 import inspect
 import os
 import socket
 import stat
 import sys
+from pathlib import Path
 
 import pytest
 from conftest import commit_change
 from run_root_scope import own_run_id, own_run_names
 
+import cairnwork_sandbox
 from cairnwork.verifier_account import VerifierAccount
 from cairnwork.verifiers import parse_verifier, run_verifiers
 
@@ -42,7 +50,7 @@ SOCKETS_OPEN_ON_LINUX = pytest.mark.xfail(
     sys.platform == "linux",
     strict=True,
     raises=AssertionError,
-    reason="Refs #391: journald, systemd, snapd and uuidd sockets under /run stay connectable",
+    reason="Refs #391: the launching account's own sockets under /tmp stay connectable",
 )
 
 
@@ -95,11 +103,25 @@ def connected_types(path):
 
 
 PROBE = (
-    "import os, socket, stat\n"
+    "import os, socket, stat, sys\n"
     "from pathlib import Path\n\n"
     "{walker}\n\n{connector}\n\n"
     "HOST = {host!r}\n\n"
+    "def own_socket_connects():\n"
+    "    # a short relative name in TMPDIR: AF_UNIX paths are capped at 108 bytes\n"
+    "    here = os.getcwd()\n"
+    "    os.chdir(os.environ['TMPDIR'])\n"
+    "    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\n"
+    "    try:\n"
+    "        server.bind('cw-own.sock')\n"
+    "        server.listen(1)\n"
+    "        return connected_types('cw-own.sock')\n"
+    "    finally:\n"
+    "        server.close()\n"
+    "        os.chdir(here)\n\n"
     "def test_no_host_socket_is_connectable():\n"
+    "    if sys.platform == 'linux':  # Seatbelt denies every AF_UNIX connect (deny network*)\n"
+    "        assert own_socket_connects() == ['SOCK_STREAM'], 'cannot connect to its own socket'\n"
     "    # the run root (owner mode: under /tmp) holds only this run's own directories\n"
     "    own = str(Path(os.environ['HOME']).resolve().parents[2])\n"
     "    inside, unreadable, count = socket_paths({roots!r}, {limit!r}, {depth!r})\n"
@@ -170,10 +192,67 @@ def own_names():
 
 
 @pytest.mark.verifier_account
-@SOCKETS_OPEN_ON_LINUX
 def test_account_no_host_pathname_socket_is_connectable(repo, tmp_path, own_names):
     run, listed = socket_run(repo, tmp_path, account=ACCOUNT, prefixes=own_names)
     assert run.observation.passed, "\n".join((run.why, listed, run.log_path.read_text()))
+
+
+# What the private /run (#391) must leave working, under bwrap: writes to the run's own places
+# and none outside, /etc/resolv.conf (a link into /run on systemd hosts), name, user and locale
+# lookups, and a multiprocessing child (its queue's lock lives in /dev/shm).
+WORKS = (
+    "import hashlib, locale, os, pwd, socket\n"
+    "from multiprocessing import Process, Queue\n\n"
+    "def put(queue):\n"
+    "    queue.put('cw-mp-ok')\n\n"
+    "def test_a_run_still_works():\n"
+    "    work = os.path.dirname(os.getcwd())  # next to the checkout (the checkout is compared)\n"
+    "    for where in (work, os.environ['TMPDIR'], os.environ['HOME']):\n"
+    "        with open(os.path.join(where, 'cw-391-write'), 'w') as handle:\n"
+    "            handle.write('x')\n"
+    "    for where in {readonly!r}:\n"
+    "        try:\n"
+    "            open(os.path.join(where, 'cw-391-write'), 'w').close()\n"
+    "        except OSError:\n"
+    "            continue\n"
+    "        raise AssertionError('wrote under ' + where)\n"
+    "    if {resolv!r}:\n"
+    "        data = open('/etc/resolv.conf', 'rb').read()\n"
+    "        assert hashlib.sha256(data).hexdigest() == {resolv!r}\n"
+    "    assert socket.getaddrinfo('localhost', None)\n"
+    "    locale.setlocale(locale.LC_ALL, 'C.UTF-8')\n"
+    "    assert pwd.getpwuid(os.getuid()).pw_uid == os.getuid()\n"
+    "    queue = Queue()\n"
+    "    child = Process(target=put, args=(queue,))\n"
+    "    child.start()\n"
+    "    assert queue.get(timeout=10) == 'cw-mp-ok'\n"
+    "    child.join(timeout=10)\n"
+    "    assert child.exitcode == 0\n"
+)
+
+
+def works_run(repo, tmp_path, account=None, prefixes=None):
+    backend = cairnwork_sandbox.platform_backend()
+    if backend is None or backend.name != "bwrap":
+        pytest.skip("bwrap only: the private /run is a bwrap mount (#391)")
+    try:  # the host's view; a file the owner cannot read is not checked inside
+        resolv = hashlib.sha256(Path("/etc/resolv.conf").read_bytes()).hexdigest()
+    except OSError:
+        resolv = ""
+    readonly = [d for d in ("/run", "/var/run", "/tmp") if os.path.isdir(d)]  # noqa: S108
+    code = WORKS.format(readonly=readonly, resolv=resolv)
+    files = {"tests/test_works.py": code}
+    run = run_one(repo, tmp_path, files, "tests/test_works.py", account, prefixes)
+    assert run.observation.passed, "\n".join((run.why, run.log_path.read_text()))
+
+
+def test_a_run_with_a_private_run_tree_still_works(repo, tmp_path):
+    works_run(repo, tmp_path)
+
+
+@pytest.mark.verifier_account
+def test_account_a_run_with_a_private_run_tree_still_works(repo, tmp_path, own_names):
+    works_run(repo, tmp_path, ACCOUNT, own_names)
 
 
 # #392: markers the first run writes. home/tmp/run sit under private/run and are removed with it;
