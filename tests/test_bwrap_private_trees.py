@@ -79,15 +79,18 @@ def test_a_root_in_the_private_tree_is_refused(host, kind, where):
     # and a write bind would stay writable (bwrap's --remount-ro does not recurse).
     root = host / where
     root.mkdir(exist_ok=True)
-    roots = {"reads": (root,)} if kind == "read" else {"writes": (root,)}
+    reads, writes = ((root,), ()) if kind == "read" else ((), (root,))
     with pytest.raises(SandboxError, match="private"):
-        _policy(host, **roots)
+        _policy(host, reads, writes)
 
 
 def test_a_read_root_beside_or_holding_the_tree_adds_nothing(host):
-    outside = host / "lib"
+    outside, sibling = host / "lib", host / "run2"  # run2 only shares the tree's name prefix
     outside.mkdir()
-    lines = _policy(host, reads=(outside, host))
+    sibling.mkdir()
+    (host / "run" / "sib").symlink_to("../run2")  # leads out of the tree: not recreated
+    lines = _policy(host, reads=(outside, host, sibling))
+    assert "--symlink" not in lines and _real(sibling) not in lines
     assert _real(outside) not in lines  # the root bind already gives it
     assert _at(lines, "--ro-bind", _real(host), _real(host)) == -1  # would bring the tree back
 

@@ -24,12 +24,16 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
   read-write binds for the write roots only, every namespace unshared (no network), all
   capabilities dropped, nested user namespaces disabled. `/run` (and `/var/run` where it is its
   own directory, not a link to `/run`) is private to each run: an empty tmpfs, made read-only
-  last, with only what a run needs put back — the tree's top-level symlinks (NixOS
-  `/run/current-system`), each top-level `/etc` symlink to a regular file under it
+  last, with only what a run needs put back — the tree's top-level symlinks that resolve inside
+  the tree or into an immutable `/nix/store` or `/gnu/store` (NixOS `/run/current-system`; a link
+  leading anywhere else, such as Rancher Desktop's `/var/run/docker.sock -> ~/.rd/docker.sock`,
+  is not recreated), and each top-level `/etc` symlink to a regular file under it
   (`/etc/resolv.conf -> /run/systemd/resolve/stub-resolv.conf`; under the dedicated account only
-  one it may reach), and the run's read and write roots under it (#391,
-  `src/cairnwork_sandbox/bwrap_private.py`). The masked set (all under `$HOME` unless an
-  absolute path is given):
+  one it may reach; a file its daemon swaps between the policy build and the run start is bound
+  as it then is) (#391, `src/cairnwork_sandbox/bwrap_private.py`). A read or write root inside
+  `/run` or `/var/run` is refused: no caller puts one there, binding it would bring host content
+  back, and bwrap's `--remount-ro` does not recurse, so a write bind there would stay writable.
+  The masked set (all under `$HOME` unless an absolute path is given):
     - **Credential directories** emptied with a tmpfs: `.ssh`, `.aws`, `.gnupg`, `.config`,
       `.docker`, `.kube`, `.claude`, `.codex`, `.gemini`, `.nexus`, `.local/state`,
       `.local/share/keyrings`, `.terraform.d`.
@@ -78,11 +82,12 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
       `/tmp/.X11-unix` (an X server lets a process inject input and run commands outside the
       sandbox). The trees under `/run` (`/run/user` with the systemd user bus and session agents,
       `/run/libvirt` with every libvirt daemon socket) are hidden by the private `/run`.
-    - **Root-equivalent daemon sockets** outside `/run` replaced with `/dev/null`: LXD and Incus
-      under `/var` (a read-only bind does not stop `connect()` to a pathname `AF_UNIX` socket, and
-      the network namespace covers only abstract sockets). Docker, Podman, containerd and the
-      system D-Bus have their sockets under `/run` (or `/var/run`, a link to it), so the private
-      `/run` hides them.
+    - **Root-equivalent daemon sockets** replaced with `/dev/null` at their real path: Docker,
+      Podman, containerd, the system D-Bus, LXD and Incus (a read-only bind does not stop
+      `connect()` to a pathname `AF_UNIX` socket, and the network namespace covers only abstract
+      sockets). The ones listed under `/run` and `/var/run` stay on the list although the private
+      `/run` hides those paths: the name there may be a link to a socket outside `/run`
+      (Rancher Desktop, Colima), and that real target is what gets masked.
 
   Only paths that exist are masked. Write roots that are `/`, a system or temp directory, `$HOME`
   or an ancestor of `$HOME` are refused.
@@ -261,7 +266,8 @@ mode (launching account or dedicated account):
   varlink sockets, snapd and uuidd under `/run` in both modes (#391). So every run gets the
   private, read-only `/run` described above: no host socket under `/run` or `/var/run` is
   connectable from a run, in owner or account mode, including one the host creates while the
-  run is in progress (the tmpfs lives in the run's own mount namespace).
+  run is in progress (the tmpfs lives in the run's own mount namespace), and no path under them
+  leads back out (a recreated link stays inside the tree or a store; no root is bound there).
   `tests/test_run_isolation_witness.py` checks this on real bwrap in CI. Still open: a pathname
   socket elsewhere — under `/tmp` (in owner mode the launching account's own sockets, such as an
   ssh-agent or tmux socket, until the rest of #391), `/var/tmp`, `/var/lib`, a home, `/srv` — is
@@ -270,8 +276,9 @@ mode (launching account or dedicated account):
   the environment hides the usual pointer but not the path itself).
   What the private `/run` changes for a run: a user known only through systemd-userdb (a
   `DynamicUser`) no longer resolves inside it (the nscd and userdb sockets are gone, so glibc
-  falls back to `/etc/passwd`), and NixOS `/run/wrappers` (setuid `sudo`, `ping`) is not put
-  back (setuid is inert under bwrap's `no_new_privs` anyway). Multiprocessing is unaffected: its
+  falls back to `/etc/passwd`); NixOS `/run/wrappers` (setuid `sudo`, `ping`) is not put back
+  (setuid is inert under bwrap's `no_new_privs` anyway); and a `/run` link leading out of the
+  tree, such as Debian's `/run/shm -> /dev/shm`, is not recreated (`/dev/shm` itself is there). Multiprocessing is unaffected: its
   semaphores and shared memory live in the run's own `/dev/shm`, its sockets in `TMPDIR`.
 - So "writes and network are confined" holds for ordinary filesystem writes and IP networking;
   a filesystem socket outside the private trees is the residual. **Run genuinely adversarial
