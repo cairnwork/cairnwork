@@ -2,19 +2,20 @@
 
 The policy is a read-only bind of the whole root plus read-write binds for the write roots,
 with a fresh /dev and /proc, every namespace unshared (so no network), all capabilities
-dropped and nested user namespaces disabled. Named credential directories under $HOME (and the
-/run/user, /tmp/.X11-unix and /run/libvirt socket trees) are emptied with a tmpfs, credential
-files are replaced by /dev/null, and root-equivalent daemon socket files (Docker/Podman/
-containerd, the system D-Bus, LXD, Incus) are replaced by /dev/null — a read-only root bind does
-not stop connect() to a pathname socket, which no network namespace covers (an X server likewise
-lets a reachable client inject input and run commands outside the sandbox). See docs/SECURITY.md
-for the full set.
+dropped and nested user namespaces disabled. A read-only root bind does not stop connect() to a
+pathname socket, which no network namespace covers, so /run (and a separate /var/run) is a
+private, read-only tmpfs per run with only what a run needs put back (``bwrap_private``, #391).
+Named credential directories under $HOME (and the /tmp/.X11-unix socket tree: an X server lets a
+reachable client inject input and run commands outside the sandbox) are emptied with a tmpfs,
+credential files are replaced by /dev/null, and so are root-equivalent daemon sockets (Docker/
+Podman/containerd, the system D-Bus, LXD, Incus) at their real path, which a /run link may put
+outside /run. See docs/SECURITY.md for the full set.
 
-Trade-off (documented in docs/SECURITY.md): until the verifier runs under its own account
-(P4) the sandbox runs as the invoking account, so everything that account can read is
-readable inside; only the named credential list and daemon sockets are masked. Other users'
-0700 home directories are protected by POSIX permissions. This is not complete read isolation,
-and the general pathname-socket surface under the whole-root bind closes only with P4.
+Trade-off (documented in docs/SECURITY.md): the whole root stays readable, so everything the
+running account (the launching one, or the dedicated verifier account) can read is readable
+inside; only the named credential list is masked. Other users' 0700 home directories are
+protected by POSIX permissions. This is not complete read isolation, and a pathname socket
+outside the private trees (under /tmp, /var/lib, a home) stays connectable if that account may.
 
 On Ubuntu 24.04+ an AppArmor rule restricts unprivileged user namespaces by default:
 ``unshare(CLONE_NEWUSER)`` still succeeds but the new namespace holds no capabilities, so
@@ -43,6 +44,7 @@ from pathlib import Path
 from cairnwork_sandbox.backend import Policy, SandboxError
 from cairnwork_sandbox.bwrap_inner import inner_link_masks
 from cairnwork_sandbox.bwrap_links import mask_target
+from cairnwork_sandbox.bwrap_private import private_flags
 from cairnwork_sandbox.bwrap_reach import account_may_traverse
 from cairnwork_sandbox.shm import shm_flags, shm_unavailable_reason
 
@@ -61,6 +63,7 @@ _TOO_BROAD = (
     "/srv",
     "/root",
     "/run",
+    "/var/run",
 )  # noqa: S108
 _CRED_DIRS = (
     ".ssh",
@@ -87,31 +90,20 @@ _CRED_FILES = (
     ".vault-token",  # HashiCorp Vault token
     ".Xauthority",  # X11 cookie: reaching the X server lets a process inject input / run commands
 )
-# Daemon sockets that, left reachable, grant a candidate the host even with no network
-# namespace: a read-only bind does not stop ``connect()`` to a pathname AF_UNIX socket, and
-# the Docker/Podman/containerd API is root-equivalent. Replaced with /dev/null so connect
-# fails. (This is the known-dangerous set; the general pathname-socket surface under the
-# whole-root bind closes only with the P4 dedicated account — see docs/SECURITY.md.)
+# Root-equivalent daemon sockets: a read-only bind does not stop ``connect()`` to a pathname
+# AF_UNIX socket, so each existing one's real path gets /dev/null. Those under /run stay listed
+# though the private /run hides /run itself (#391): one may be a link to a socket outside it
+# (Rancher Desktop, Colima), and its real target is what gets masked.
+_RUN_SOCKETS = "docker.sock podman/podman.sock containerd/containerd.sock dbus/system_bus_socket"
 _DANGEROUS_SOCKETS = (
-    "/var/run/docker.sock",
-    "/run/docker.sock",
-    "/var/run/podman/podman.sock",
-    "/run/podman/podman.sock",
-    "/run/containerd/containerd.sock",
-    "/var/run/containerd/containerd.sock",
-    "/run/dbus/system_bus_socket",  # system D-Bus
-    "/var/run/dbus/system_bus_socket",
+    *(f"{run}/{sock}" for run in ("/run", "/var/run") for sock in _RUN_SOCKETS.split()),
+    "/run/incus/unix.socket",
     "/var/snap/lxd/common/lxd/unix.socket",  # LXD: root-equivalent (launch a privileged container)
     "/var/lib/lxd/unix.socket",
     "/var/lib/incus/unix.socket",  # Incus (the LXD fork): same root-equivalence
-    "/run/incus/unix.socket",
 )
-# libvirt's sockets (the monolithic libvirtd and the modular virtqemud/virtnetworkd/… daemons)
-# all live under /run/libvirt, so that whole directory is emptied with a tmpfs (see
-# _socket_dirs_to_empty) rather than enumerating each socket here.
-# Socket directories emptied with a tmpfs (the whole tree at once, uid-independent): the X11
-# server sockets (a reachable X server lets a process inject input and run commands outside the
-# sandbox on a desktop) and the per-user runtime tree (systemd user bus, session agents).
+# The X11 server sockets, emptied with a tmpfs (the whole tree at once, uid-independent): a
+# reachable X server lets a process inject input and run commands outside the sandbox.
 _X11_SOCKET_DIR = "/tmp/.X11-unix"  # noqa: S108 - masked, not created
 
 # Unshare a user + pid namespace, drop all capabilities, disable nested userns, bind the root
@@ -200,7 +192,7 @@ def build_policy(
     over* are masked (every directory on the real path enterable, ``bwrap_reach``). Those are the
     ones that can leak and can be mounted without EPERM; a correctly ``0700`` home yields none,
     unless a link in it points out to a reachable target (#358). The narrow-check still uses the
-    real home, and the system socket / ``/run/user`` masks (which do not touch the owner's home)
+    real home, and the private /run and the socket masks (which do not touch the owner's home)
     are always applied.
     """
     real_home = _safe(home or Path.home())
@@ -231,6 +223,9 @@ def build_policy(
         "/proc",
         *shm_flags(bwrap_path() or ""),
     ]
+    # The private /run goes first, so the write binds and masks below land on top of it (#391).
+    private, remount = private_flags(reads, writes, mask_home_credentials)
+    flags += private
     for root in writes:
         flags += ["--bind", root, root]
     # Mask only credential paths that exist (a bind over an absent path fails on the read-only
@@ -238,12 +233,9 @@ def build_policy(
     # can both reach and read. The policy is rebuilt per run, so one created later is masked next.
     masks, mask_notes = _credential_masks(real_home, mask_home_credentials, writes, reads)
     flags += masks
-    # Mask root-equivalent daemon sockets (Docker/Podman/containerd): a read-only root bind
-    # does not stop connect() to a pathname socket, and no network namespace covers it.
-    # Bind over the canonical path (realpath collapses the /var/run -> /run symlink and the
-    # duplicate entries to one existing socket; binding /dev/null onto the symlink path itself
-    # makes bwrap try to create a mountpoint through it and fail). Only an existing socket is
-    # masked: exists() follows the link, so an absent or dangling one adds no flag.
+    # Mask root-equivalent daemon sockets at the canonical path (realpath collapses duplicates;
+    # /dev/null bound onto a symlink path makes bwrap create a mountpoint through it and fail).
+    # Only an existing one: exists() follows the link, so an absent or dangling one adds no flag.
     masked_socks: set[str] = set()
     for sock in _DANGEROUS_SOCKETS:
         real = _safe(sock) if os.path.exists(sock) else None
@@ -253,6 +245,7 @@ def build_policy(
     # Empty the socket trees that exist with a tmpfs (whole tree, uid-independent).
     for socket_dir in _socket_dirs_to_empty():
         flags += ["--tmpfs", _safe(socket_dir)]
+    flags += remount  # last: the private trees turn read-only once everything is mounted on them
     # Surfaced by the verifier run (Policy.notes), not written into the hashed policy text.
     reason = shm_unavailable_reason(bwrap_path() or "")
     notes = ((f"{SHM_NOTE_PREFIX}{reason}",) if reason else ()) + mask_notes
@@ -317,26 +310,9 @@ def _account_can_reach(real_home: str, rel: str) -> bool:
 
 
 def _socket_dirs_to_empty() -> list[str]:
-    """The socket directories to empty with a tmpfs, those that exist. Masking the whole tree
-    (not a per-path or per-uid entry) is uid-independent and covers every socket under it, so it
-    holds whether the candidate runs as the launching account or (under P4) a dedicated verifier
-    uid — the policy is built before any account switch, so keying on the launcher's own uid would
-    mask the wrong subdir. The tuple is read each call (tests rebind the module globals):
-    ``/run/user`` holds the systemd user bus (a ``systemd-run --user`` would start a process
-    outside the sandbox) and session agents; ``/tmp/.X11-unix`` the X server sockets (a reachable
-    X server lets a process inject input and run commands); ``/run/libvirt`` (and
-    ``/var/run/libvirt`` where that is a separate tree, not a symlink to ``/run``) every libvirt
-    daemon socket (the monolithic ``libvirtd`` and the modular ``virtqemud``/``virtnetworkd``/… —
-    each root-equivalent), covered in one tmpfs rather than enumerating each socket. Deduplicated
-    by real path so two names for the same directory (the usual /var/run -> /run symlink) mask
-    it once."""
-    seen: set[str] = set()
-    dirs = []
-    for d in ("/run/user", _X11_SOCKET_DIR, "/run/libvirt", "/var/run/libvirt"):
-        if os.path.isdir(d) and os.path.realpath(d) not in seen:
-            seen.add(os.path.realpath(d))
-            dirs.append(d)
-    return dirs
+    """The X server socket tree when it exists (read each call: tests rebind the global), emptied
+    whole so it holds for any uid; /run/user and /run/libvirt are in the private /run (#391)."""
+    return [_X11_SOCKET_DIR] if os.path.isdir(_X11_SOCKET_DIR) else []
 
 
 def _binary() -> str:
