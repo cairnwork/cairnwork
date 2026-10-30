@@ -5,14 +5,17 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from cairnwork import p2p
+from cairnwork import deferred_tests, p2p
 from cairnwork.core_request import VerifierObservation
 from cairnwork.deferred_tests import BaseUncomparable
+from cairnwork.gitcmd import GitCommandError
 from cairnwork.p2p import P2PPlan, P2PRejected, plan_p2p, run_plan
+from cairnwork.p2p_nodes import changed_tests
 from cairnwork.verifiers import VerifierRun, VerifierSpec
 
 TASK = SimpleNamespace(
@@ -364,3 +367,21 @@ def test_no_plan_spec_runs_nothing(tmp_path):
 def test_mode_off_never_probes(monkeypatch, mode):
     got, probed = plan(monkeypatch, ("tests/test_a.py",), [], mode=mode)
     assert isinstance(got, P2PPlan) and got.spec is None and probed == []
+
+
+@pytest.mark.parametrize("unreadable", ["base", "test commit"])
+def test_a_changed_test_file_that_cannot_be_read_is_refused_not_dropped(monkeypatch, unreadable):
+    """The file exists on both commits (test_paths: A or M, and on the base): a failed read is
+    a refusal, never an empty file whose base tests would all count as changed."""
+    base, test_commit = "b" * 40, "c" * 40
+    gone = base if unreadable == "base" else test_commit
+
+    def fake_git(repo, *args):
+        if args[1].startswith(gone):
+            raise GitCommandError("git show failed")
+        return "def test_a():\n    assert True\n"
+
+    monkeypatch.setattr(deferred_tests, "run_git", fake_git)
+    with pytest.raises(deferred_tests.TestCommitRejected) as caught:
+        changed_tests(Path("/repo"), base, test_commit, ("tests/test_a.py",))
+    assert caught.value.code == "TEST_COMMIT_UNREADABLE"

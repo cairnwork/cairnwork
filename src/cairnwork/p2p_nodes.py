@@ -31,8 +31,8 @@ def changed_tests(
     found = set()
     for path in paths:
         if path.endswith(".py"):
-            before = _test_functions(repo, f"{base}:{path}")
-            after = _test_functions(repo, f"{test_commit}:{path}")
+            before = _test_functions(repo, f"{base}:{path}", present=True)  # on both commits
+            after = _test_functions(repo, f"{test_commit}:{path}", present=True)
             found |= {f"{path}::{n}" for n in before.keys() | after.keys()
                       if before.get(n) != after.get(n)}  # fmt: skip
     return frozenset(found)
