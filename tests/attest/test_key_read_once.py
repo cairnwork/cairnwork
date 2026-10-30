@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 from pathlib import Path
 
@@ -77,3 +78,11 @@ def test_full_verify_check_run_reads_the_key_once(tmp_path, monkeypatch):
     summary = json.loads(http.calls[0][3])["output"]["summary"]
     line = next(x for x in summary.splitlines() if x.startswith("- Offline verification"))
     assert "VERIFIED" in line and "signature only" not in line
+
+
+def test_public_verify_bundle_takes_no_loaded_key():
+    """Only check-run's internal path may pass a loaded key; the public API reads the file."""
+    assert list(inspect.signature(verify_bundle).parameters) == [
+        "bundle_path", "public_key_pem", "repo", "expected_candidate",
+        "core_identity_pin", "expected_base", "policy",
+    ]  # fmt: skip

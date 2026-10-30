@@ -253,7 +253,6 @@ def verify_bundle(
     core_identity_pin: Mapping[str, Any] | None = None,
     expected_base: str | None = None,
     policy: Mapping[str, Any] | None = None,
-    public_key: Ed25519PublicKey | None = None,
 ) -> VerifyResult:
     """Verify an attestation bundle against local git objects and a trusted public key.
 
@@ -270,7 +269,29 @@ def verify_bundle(
     errors (such as wrong argument types) may raise. A signed value nested too deeply to check
     (#440) refuses with the code of the step that catches it, else ``STATEMENT_SHAPE``: a message
     that quotes the value, or a comparison, can still recurse past the limit (Python 3.14).
-    ``public_key``, when given, is ``public_key_pem`` already loaded, so the file is not read again.
+    """
+    return _verify_loaded(
+        bundle_path, public_key_pem=public_key_pem, public_key=None, repo=repo,
+        expected_candidate=expected_candidate, core_identity_pin=core_identity_pin,
+        expected_base=expected_base, policy=policy,
+    )  # fmt: skip
+
+
+def _verify_loaded(
+    bundle_path: Path,
+    *,
+    public_key_pem: Path,
+    public_key: Ed25519PublicKey | None,
+    repo: Path,
+    expected_candidate: str,
+    core_identity_pin: Mapping[str, Any] | None = None,
+    expected_base: str | None = None,
+    policy: Mapping[str, Any] | None = None,
+) -> VerifyResult:
+    """verify_bundle, where ``public_key`` is the key the caller loaded from ``public_key_pem``.
+
+    Only check-run passes a key (the one it just read from that file), so the file is read once;
+    the public verify_bundle always passes None and reads the file itself.
     """
     try:
         return _verify_bundle(
