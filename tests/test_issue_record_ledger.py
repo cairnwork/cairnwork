@@ -87,3 +87,21 @@ def test_a_matching_record_with_an_unreadable_ledger_stays_queued(setup):
     out = runner.take(setup["intake"], github, setup["clone"])[0]
     assert out["error"].startswith("DatabaseError") and "already" not in out
     assert github.labels[7] == {runner.QUEUE} and len(setup["started"]) == 1
+
+
+def test_adoption_rewrites_the_record_before_the_issue_is_labelled_running(setup):
+    """Settle reads the record of a running Issue: it must name the adopted task by then."""
+    seen = []
+
+    class Watching(FakeGitHub):
+        def relabel(self, number, add, remove):
+            if add == runner.RUNNING:
+                seen.append(_record(setup)["task_id"])
+            super().relabel(number, add, remove)
+
+    github = Watching([issue()])
+    first = runner.take(setup["intake"], github, setup["clone"])[0]
+    runner._remember(setup["intake"], REPO, 7, "task-other", BLOCK_SHA)
+    github.labels[7] = {runner.QUEUE}
+    assert runner.take(setup["intake"], github, setup["clone"])[0]["already"] is True
+    assert seen == [first["task_id"], first["task_id"]]
