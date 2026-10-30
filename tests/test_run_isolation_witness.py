@@ -45,12 +45,18 @@ pytestmark = pytest.mark.sandbox
 SOCKET_ROOTS = ("/run", "/var/run", "/tmp")  # noqa: S108 - only listed and probed
 WALK_LIMIT, WALK_DEPTH = 100_000, 4  # daemon sockets sit 1-3 levels down (/run/systemd/journal)
 ACCOUNT = VerifierAccount()
+# Searchable-but-unlistable host directories the owner walk may skip (#418), each with its reason.
+SEARCHABLE_OK = {
+    "/run/sudo": "sudo's timestamp dir (tmpfiles.d 0711 root): only ts/ records, never a socket",
+}
 
 
 def socket_paths(roots, limit, depth):
-    """(sockets, unreadable dirs, entries seen) under roots, at most ``depth`` levels down: no link
-    followed, each root once by real path, sockets de-duplicated by real path. Raises when more
-    than ``limit`` entries were seen, so a partial list never passes for a complete one."""
+    """(sockets, unreadable dirs, blind dirs, entries seen) under roots, at most ``depth`` levels
+    down: no link followed, each root once by real path, sockets de-duplicated by real path. Raises
+    when more than ``limit`` entries were seen, so a partial list never passes for a complete one.
+    connect() needs search (x), not read: an unreadable dir that is searchable may hold a
+    connectable socket that is never probed, so it is "blind" and callers fail on it (#418)."""
     found, unreadable, seen, count = set(), [], set(), 0
     for root in roots:
         real = os.path.realpath(root)
@@ -70,7 +76,8 @@ def socket_paths(roots, limit, depth):
                         found.add(os.path.realpath(path))
                 except OSError:
                     unreadable.append(path)
-    return sorted(found), sorted(unreadable), count
+    blind = [p for p in unreadable if os.path.isdir(p) and os.access(p, os.X_OK)]
+    return sorted(found), sorted(unreadable), sorted(blind), count
 
 
 def connected_types(path):
@@ -117,7 +124,7 @@ PROBE = (
     "        assert own_socket_connects() == ['SOCK_STREAM'], 'cannot connect to its own socket'\n"
     "    # the run root (owner mode: under /tmp) holds only this run's own directories\n"
     "    own = str(Path(os.environ['HOME']).resolve().parents[2])\n"
-    "    inside, unreadable, count = socket_paths({roots!r}, {limit!r}, {depth!r})\n"
+    "    inside, unreadable, blind, count = socket_paths({roots!r}, {limit!r}, {depth!r})\n"
     "    probed = sorted(set(HOST) | set(inside))\n"
     "    reached = []\n"
     "    for path in probed:\n"
@@ -128,10 +135,15 @@ PROBE = (
     "            reached.append(path + ' (' + ','.join(kinds) + ')')\n"
     "    # printed, not put in the message: pytest cuts a long assertion message short\n"
     "    print(f'probed {{len(probed)}} (host listed {{len(HOST)}}, the run found '\n"
-    "          f'{{len(inside)}} in {{count}} entries, {{len(unreadable)}} unreadable)')\n"
+    "          f'{{len(inside)}} in {{count}} entries, {{len(unreadable)}} unreadable, '\n"
+    "          f'{{len(blind)}} searchable but unlistable)')\n"
     "    for line in reached:  # repr: a host path cannot start a line of its own in the log\n"
     "        print('CONNECTABLE ' + repr(line))\n"
+    "    for path in unreadable:  # only a searchable one can hide a reachable socket\n"
+    "        print(('BLIND ' if path in blind else 'UNREADABLE ') + repr(path))\n"
     "    assert not reached, f'{{len(reached)}} host sockets connectable, listed on stdout'\n"
+    "    if sys.platform == 'linux':  # under Seatbelt no connect succeeds, hidden or not\n"
+    "        assert not blind, f'{{len(blind)}} searchable dirs not listed, so never probed'\n"
 )
 
 
@@ -149,7 +161,11 @@ def run_one(repo, tmp_path, files, target, account=None, prefixes=None):
 
 
 def socket_run(repo, tmp_path, account=None, prefixes=None):
-    host, unreadable, count = socket_paths(SOCKET_ROOTS, WALK_LIMIT, WALK_DEPTH)
+    host, unreadable, blind, count = socket_paths(SOCKET_ROOTS, WALK_LIMIT, WALK_DEPTH)
+    blind = [path for path in blind if path not in SEARCHABLE_OK]
+    for path in unreadable:  # only a searchable one can hide a reachable socket (#418)
+        print(("BLIND " if path in blind else "UNREADABLE ") + repr(path))
+    assert not blind, f"owner cannot list searchable {blind}: sockets there are never probed"
     assert host, f"no pathname socket under {SOCKET_ROOTS} on this host: the witness is vacuous"
     code = PROBE.format(
         walker=inspect.getsource(socket_paths),
