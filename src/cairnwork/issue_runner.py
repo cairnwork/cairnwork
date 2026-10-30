@@ -375,10 +375,10 @@ def main(argv: list[str] | None = None) -> int:
             raise RuntimeError(problem)
         _verify_origin(clone, github.repo)
         require_bot_gh(args.gh, github.repo, clone)
+        intake.prepare()  # BAD_STATE (e.g. requests/ gone under a ledger, #466): every pass
     except (RuntimeError, IntakeRefused) as exc:
         print(json.dumps({"error": str(exc).split(":")[0], "detail": str(exc)}))
         return 3
-    intake.prepare()
     fd = os.open(intake.state / "issues.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     try:
         try:

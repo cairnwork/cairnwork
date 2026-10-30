@@ -71,7 +71,7 @@ def test_a_matching_record_with_an_unreadable_request_stays_queued(setup):
     (setup["intake"].state / "requests" / f"{first['task_id']}.json").unlink()
     github.labels[7] = {runner.QUEUE}
     out = runner.take(setup["intake"], github, setup["clone"])[0]
-    assert out["error"].startswith("FileNotFoundError") and "already" not in out
+    assert out["error"].startswith("RequestUnreadable") and "already" not in out  # #466: typed
     assert github.labels[7] == {runner.QUEUE} and len(github.comments) == 1
     assert len(setup["started"]) == 1
 
