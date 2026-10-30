@@ -178,16 +178,20 @@ def _dying(tmp_path, before: str, how: str):
 
 
 @pytest.mark.parametrize(
-    "how",
-    [
-        "import signal; os.kill(os.getpid(), signal.SIGKILL)",  # killed by someone else: -9
-        "sys.exit(1)",  # crashed: no final status line
+    ("how", "error", "primary"),
+    [  # killed by someone else (-9): a later launch may be unrecorded, so it is fenced (#244)
+        ("import signal; os.kill(os.getpid(), signal.SIGKILL)", AgyWorkerError,
+         "WORKER_SWEEP_UNCLEAN: .*KILLED_BY_SIGNAL: 9.*WORKER_RECEIPT_INCOMPLETE: attempt 1"),
+        ("sys.exit(1)", AgyWorkerAccountFailed,  # crashed: no final status line
+         "WORKER_RECEIPT_INCOMPLETE: attempt 1"),
     ],
-)
-def test_an_abnormal_end_not_caused_by_our_timeout_is_swept_too(tmp_path, monkeypatch, layout, how):
+)  # fmt: skip
+def test_an_abnormal_end_not_caused_by_our_timeout_is_swept_too(
+    tmp_path, monkeypatch, layout, how, error, primary
+):
     seen = _sudo(tmp_path, monkeypatch, "print('AGY_WORKER_SWEEP clean')")
     worker, workdir = _dying(tmp_path, launch(str(layout)), how)
-    with pytest.raises(AgyWorkerAccountFailed, match="^WORKER_RECEIPT_INCOMPLETE: attempt 1"):
+    with pytest.raises(error, match=f"^{primary}"):
         worker.run(workdir, TASK)  # swept clean, and still a failed attempt
     assert json.loads(seen.read_text())[-2:] == ["--sweep", str(layout)]
     assert not layout.exists()

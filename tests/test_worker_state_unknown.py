@@ -1,8 +1,9 @@
 """#244: a worker whose state after launch is unknown keeps its attempt fenced.
 
-- A dispatcher killed by a signal whose receipts cannot say what it launched (lines lost, no
-  launch receipt, or an untrustworthy one) may have left a run behind: the attempt is fenced
-  (WorkerMayLive), however its other receipts read.
+- A dispatcher killed by a signal that is not our timeout may have launched a run whose receipt
+  it never wrote: the attempt is fenced (WorkerMayLive), however its receipts read (lines lost,
+  no launch receipt, an untrustworthy one, or an earlier attempt's receipts complete). A
+  dispatcher that ended on its own, and our timeout, keep their own paths.
 - An interrupt that is not an Exception (KeyboardInterrupt, SystemExit) leaves the task
   DISPATCHED, as a crash does, so only recovery settles it (sweep, then fence); it is never
   FAILED unmarked, which a supersede would take over without a sweep.
@@ -12,10 +13,11 @@ Pure fakes only: no process is started, signalled or swept. Every sweep entry po
 test if it is reached, except where a fake sweep answer is installed."""
 
 import json
+import os
 import types
 
 import pytest
-from agy_receipt_lines import RUN_TAG, WORKER, launch, status
+from agy_receipt_lines import RUN_TAG, WORKER, cleanup, launch, status, sweep
 from test_pipeline import EditWorker, task
 from test_recovery import project as project  # noqa: F401 - fixture
 from test_recovery import settle, stores
@@ -62,11 +64,12 @@ class _Reader:
         return list(self._lines)
 
 
-def _settle(tmp_path, lines, code, dropped=False):
+def _settle(tmp_path, lines, code, dropped=False, timed_out=None):
     dispatch = types.SimpleNamespace(run_as_user=WORKER)
     process = types.SimpleNamespace(returncode=code)
     log = tmp_path / "a1.agy.log"
-    return agy._settle_worker_run(dispatch, _Reader(lines, dropped), process, False, None, log)
+    reader = _Reader(lines, dropped)
+    return agy._settle_worker_run(dispatch, reader, process, False, timed_out, log)
 
 
 @pytest.mark.parametrize(
@@ -88,7 +91,34 @@ def test_a_killed_dispatcher_with_unknown_launches_is_fenced(tmp_path, lines, dr
     assert json.loads((tmp_path / "a1.agy.worker.json").read_text())["isolated"] is False
 
 
-@pytest.mark.parametrize(("lines", "dropped"), [([], True), ([launch(ROOT), launch(ROOT)], False)])
+# attempt 1 launched, swept clean and removed (its root is gone, so nothing is swept again)
+EARLIER = {
+    "failed": [launch(ROOT), sweep(), cleanup(failure="AGY_PROVIDER_FAILED:quota")],
+    "clean": [launch(ROOT), sweep(), cleanup()],
+}
+
+
+@pytest.mark.parametrize("earlier", sorted(EARLIER))
+def test_a_dispatcher_killed_after_complete_receipts_is_fenced(tmp_path, earlier):
+    """Killed by a signal not ours after attempt 1's receipts were whole: attempt 2 may have
+    launched before its WORKER_LAUNCH line was written, so the receipts cannot clear it."""
+    assert not os.path.lexists(ROOT)
+    with pytest.raises(WorkerMayLive, match="KILLED_BY_SIGNAL: 9") as raised:
+        _settle(tmp_path, EARLIER[earlier], -9)
+    assert raised.value.account == WORKER
+    record = json.loads((tmp_path / "a1.agy.worker.json").read_text())
+    assert any(p.startswith("KILLED_BY_SIGNAL") for p in record["problems"])
+
+
+@pytest.mark.parametrize("earlier", sorted(EARLIER))
+def test_our_timeout_after_complete_receipts_keeps_its_own_path(tmp_path, earlier):
+    assert _settle(tmp_path, EARLIER[earlier], -9, timed_out=TimeoutError()) is None
+
+
+@pytest.mark.parametrize(
+    ("lines", "dropped"),
+    [([], True), ([launch(ROOT), launch(ROOT)], False), (EARLIER["failed"], False)],
+)
 def test_a_dispatcher_that_ended_on_its_own_stays_an_account_failure(tmp_path, lines, dropped):
     with pytest.raises(AgyWorkerAccountFailed) as raised:
         _settle(tmp_path, lines, 1, dropped)
