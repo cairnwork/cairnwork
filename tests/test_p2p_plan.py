@@ -224,8 +224,9 @@ def make_run(passed, *, timed_out=False, outcomes=None, log_dir, plain=None, mut
     )
 
 
-def candidate(monkeypatch, tmp_path, runs):
-    """run_plan with run_verifiers returning ``runs`` in turn; returns (result, notes seen)."""
+def candidate(monkeypatch, tmp_path, runs, nodes=()):
+    """run_plan with run_verifiers returning ``runs`` in turn and the plan binding ``nodes``;
+    returns (result, notes seen)."""
     notes: list[str] = []
     queue = iter(runs)
 
@@ -236,8 +237,42 @@ def candidate(monkeypatch, tmp_path, runs):
     monkeypatch.setattr(p2p, "run_verifiers", fake_run_verifiers)
     rule = {"configured": "whole-suite", "applied": "whole-suite", "degraded": "", "targets": 1}
     spec = VerifierSpec("p2p-whole-suite", ("tests/test_a.py",))
-    got = run_plan(P2PPlan(rule, spec, 30), TASK, "c" * 40, tmp_path, RESULT, VERIFYING)
+    got = run_plan(P2PPlan(rule, spec, 30, nodes), TASK, "c" * 40, tmp_path, RESULT, VERIFYING)
     return got, notes
+
+
+BOUND = ("tests/test_a.py::t[1]", "tests/test_a.py::t[2]")
+
+
+def test_a_passed_run_without_a_bound_node_id_is_not_a_pass_and_not_re_run(monkeypatch, tmp_path):
+    first = make_run(True, outcomes={BOUND[0]: "passed"}, log_dir=tmp_path / "1")
+    (runs, rule), notes = candidate(monkeypatch, tmp_path, [first], BOUND)
+    assert len(notes) == 1 and not runs[0].observation.passed and "rerun" not in rule
+    assert runs[0].observation.artifact_hash == first.observation.artifact_hash
+    assert rule["missing"] == [BOUND[1]] and "did not run" in runs[0].why
+    assert "missing" not in json.loads(notes[0])  # the note is hashed before the run
+
+
+def test_a_run_with_every_bound_node_id_and_more_passes(monkeypatch, tmp_path):
+    outcomes = dict.fromkeys((*BOUND, "tests/test_a.py::t[3]"), "passed")
+    first = make_run(True, outcomes=outcomes, log_dir=tmp_path / "1")
+    (runs, rule), _ = candidate(monkeypatch, tmp_path, [first], BOUND)
+    assert runs == (first,) and "missing" not in rule
+
+
+def test_a_bound_candidate_timeout_is_handled_as_before(monkeypatch, tmp_path):
+    # the budget is per run, as before: a timeout is not a pass, not re-run, nothing "missing"
+    first = make_run(False, timed_out=True, log_dir=tmp_path / "1")
+    (runs, rule), notes = candidate(monkeypatch, tmp_path, [first], BOUND)
+    assert runs == (first,) and len(notes) == 1 and "missing" not in rule and "rerun" not in rule
+
+
+def test_a_re_run_without_a_bound_node_id_blocks(monkeypatch, tmp_path):
+    first = make_run(False, outcomes={BOUND[0]: "failed"}, log_dir=tmp_path / "1")
+    second = make_run(True, outcomes={BOUND[0]: "passed"}, log_dir=tmp_path / "2")
+    (runs, rule), _ = candidate(monkeypatch, tmp_path, [first, second], BOUND)
+    assert not runs[0].observation.passed and rule["p2p_rerun_passed"] is False
+    assert rule["missing"] == [BOUND[1]]
 
 
 def test_a_passing_candidate_run_is_not_re_run(monkeypatch, tmp_path):
