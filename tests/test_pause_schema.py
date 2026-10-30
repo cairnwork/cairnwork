@@ -34,6 +34,7 @@ AMENDMENT_2 = {  # the five fallback classes' missing codes, and AC8
     "PAUSE_GUARD_UNAVAILABLE",
 }
 GATE_API = {"PAUSE_GATE_TIMEOUT", "PAUSE_GATE_REFUSED", "PAUSE_GATE_QUOTA_EXHAUSTED"}
+STEP_3 = {"PAUSE_SCOPE_VIOLATION"}  # the final patch left write_scope or is not regular files
 AC5_FIELDS = {  # AC5's list, plus what AC2 and AC8 need
     "task_id",
     "checkpoint_sha256",
@@ -53,7 +54,8 @@ AC5_FIELDS = {  # AC5's list, plus what AC2 and AC8 need
 
 def test_every_reason_code_is_listed_by_the_spec_or_an_amendment():
     assert SPEC_AC3 <= set(Reason) and SPEC_OTHER <= set(Reason)
-    assert set(Reason) == SPEC_AC3 | SPEC_OTHER | AMENDMENT_2 | GATE_API
+    assert set(Reason) == SPEC_AC3 | SPEC_OTHER | AMENDMENT_2 | GATE_API | STEP_3
+    assert Reason.PAUSE_SCOPE_VIOLATION in schema.FALLBACK_REASONS
     assert all(r.value == r.name and r.startswith("PAUSE_") for r in Reason)
 
 

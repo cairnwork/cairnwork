@@ -39,6 +39,9 @@ class Reason(StrEnum):
     PAUSE_GATE_TIMEOUT = "PAUSE_GATE_TIMEOUT"
     PAUSE_GATE_REFUSED = "PAUSE_GATE_REFUSED"
     PAUSE_GATE_QUOTA_EXHAUSTED = "PAUSE_GATE_QUOTA_EXHAUSTED"
+    # step 3: the resumed run's final patch has a path outside write_scope, or a non-regular
+    # file (symlink 120000, gitlink 160000); the resumed result is discarded
+    PAUSE_SCOPE_VIOLATION = "PAUSE_SCOPE_VIOLATION"
     # AC8: a checkout change before the plan arrived was rolled back and triggered PAUSE (the
     # only code an intervention may carry); the guard could not be applied (fail closed)
     PAUSE_GUARD_ROLLED_BACK = "PAUSE_GUARD_ROLLED_BACK"
