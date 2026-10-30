@@ -6,7 +6,10 @@ write. verifiers.py used to pass ``--junitxml=<path>`` in argv and read that fil
 candidate's own code runs in the same process and could read the path from ``sys.argv``, write
 a passing report and ``os._exit(0)`` before the real tests ran. The parent now accepts a run
 only when our record is present (so an exit before ``sessionfinish`` fails), it names at least
-one collected test, every collected test has a result, and all of them passed.
+one collected test, every collected test has a result, all of them passed, and no collector was
+skipped or failed; the caller also requires each target it named to own a test that ran
+(``Verdict.not_run``): a module skipped at collection (``importorskip``, a module-level skip)
+yields no test at all, so it counts as skipped, not as passed.
 
 The plugin is a small standalone module (``_PLUGIN_SOURCE``) materialised into a per-run
 directory by ``install_plugin`` and loaded with ``-p``. It carries no cairnwork import, so it
@@ -103,10 +106,13 @@ class _Reporter:
         self._collected = []
         self._outcomes = {}
         self._collect_errors = []
+        self._collect_skipped = []
 
     def pytest_collectreport(self, report):
         if report.failed:
             self._collect_errors.append(report.nodeid)
+        elif report.skipped:  # a module or directory skipped whole while collecting
+            self._collect_skipped.append(report.nodeid)
 
     def pytest_collection_finish(self, session):
         self._collected = [item.nodeid for item in session.items]
@@ -119,7 +125,8 @@ class _Reporter:
 
     def pytest_sessionfinish(self, session, exitstatus):
         payload = {"nonce": self._nonce, "collected": self._collected, "outcomes": self._outcomes,
-                   "collect_errors": self._collect_errors}
+                   "collect_errors": self._collect_errors,
+                   "collect_skipped": self._collect_skipped}
         if self._fd is not None:
             data = json.dumps(payload).encode()
             os.ftruncate(self._fd, 0)
@@ -161,6 +168,20 @@ class Verdict:
     too_big: bool = False  # the file exceeds MAX_REPORT_BYTES: nothing could be read from it
     recorded: bool = False  # sessionfinish wrote a well-formed record with our nonce (#234)
     collect_errors: tuple[str, ...] = ()  # node ids of collectors that failed (B2, #234)
+    collect_skipped: tuple[str, ...] = ()  # node ids of collectors skipped while collecting
+
+    def not_run(self, targets) -> tuple[str, ...]:
+        """The named ``targets`` (``path`` or ``path::node``) that own no recorded test, then the
+        collectors skipped while collecting: a run that leaves any of them is not a pass, whatever
+        else it ran."""
+        missing = [t for t in targets if not any(_within(node, t) for node in self.outcomes)]
+        return tuple(dict.fromkeys([*missing, *self.collect_skipped]))
+
+
+def _within(nodeid: str, target: str) -> bool:
+    """A test belongs to a target when it is that node, a node under it (``::``) or one of its
+    parametrisations (``[``)."""
+    return nodeid == target or nodeid.startswith((f"{target}::", f"{target}["))
 
 
 def read_verdict(path: Path, nonce: str) -> Verdict:
@@ -193,11 +214,11 @@ def read_verdict_fd(fd: int, nonce: str) -> Verdict:
 
 def parse_verdict(raw: bytes, nonce: str) -> Verdict:
     """``ran`` is true only when sessionfinish wrote the record, it matches
-    the nonce, at least one test was collected, every collected test produced a result, and all
-    results are ``passed``. Outcomes, ``recorded`` and ``collect_errors`` are returned whenever the
-    nonce matches (even when not all passed) so base_comparison can see a test that failed. A
-    record over MAX_REPORT_BYTES (a suite too large for one report, #184) is ``too_big`` so the
-    caller can say why nothing was read."""
+    the nonce, at least one test was collected, every collected test produced a result, all
+    results are ``passed`` and no collector failed or was skipped. Outcomes, ``recorded`` and the
+    collector lists are returned whenever the nonce matches (even when not all passed) so
+    base_comparison can see a test that failed. A record over MAX_REPORT_BYTES (a suite too large
+    for one report, #184) is ``too_big`` so the caller can say why nothing was read."""
     if len(raw) > MAX_REPORT_BYTES:
         return Verdict(False, {}, too_big=True)
     try:
@@ -217,11 +238,18 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
     ):
         return Verdict(False, {})
     errors = data.get("collect_errors", [])
-    if not isinstance(errors, list) or not all(isinstance(node, str) for node in errors):
+    skipped = data.get("collect_skipped", [])
+    if not all(
+        isinstance(v, list) and all(isinstance(n, str) for n in v) for v in (errors, skipped)
+    ):
         return Verdict(False, {})
     ran = (
         bool(collected)
+        and not errors
+        and not skipped
         and set(outcomes) == set(collected)
         and all(outcome == "passed" for outcome in outcomes.values())
     )
-    return Verdict(ran, outcomes, recorded=True, collect_errors=tuple(errors))
+    return Verdict(
+        ran, outcomes, recorded=True, collect_errors=tuple(errors), collect_skipped=tuple(skipped)
+    )

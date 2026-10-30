@@ -42,7 +42,7 @@ def verdict_reason(verified: bool, verdict, recorded) -> str:
 
 def why_not_passed(
     *, ran_sandboxed: bool, returncode, timed_out: bool, mutated, survivors: int,
-    log_too_big: bool, tests_ran: bool, report_too_big: bool = False, forged=(),
+    log_too_big: bool, tests_ran: bool, report_too_big: bool = False, forged=(), not_run=(),
 ) -> str:  # fmt: skip
     """The causes that made a run fail, ``""`` if none (then the run passed)."""
     causes = []
@@ -66,6 +66,10 @@ def why_not_passed(
         causes.append("test report over the size cap")
     if ran_sandboxed and not timed_out and returncode != 0:
         causes.append(f"pytest exit code {returncode}")
+    elif ran_sandboxed and returncode == 0 and not tests_ran and not_run:
+        causes.append(
+            f"pytest passed but no test ran for a target or skipped module ({_names(not_run)})"
+        )
     elif ran_sandboxed and returncode == 0 and not tests_ran:
         causes.append("pytest passed but the guard saw no test run")
     return "; ".join(causes)
