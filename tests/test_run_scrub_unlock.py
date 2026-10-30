@@ -269,10 +269,10 @@ def test_a_lock_below_path_max_is_cleared(runs):
 
 
 @darwin
-@pytest.mark.parametrize("limits", [(3, 400, 45), (500_000, 2, 45), (500_000, 400, 0)])
+@pytest.mark.parametrize("limits", [(3, 45), (500_000, 0)])
 def test_at_a_limit_the_rest_stays_and_the_next_run_is_refused(runs, monkeypatch, limits):
-    """Entries, depth or seconds: the walk stops (exit 1), rm cannot finish, the scrub refuses
-    and says root must clear what is left."""
+    """Entries or seconds: the walk stops (exit 1), rm cannot finish, the scrub refuses and
+    names the root step for what repeating the account steps cannot clear."""
     monkeypatch.setattr(run_scrub, "_UNLOCK_LIMITS", limits)
     private = _private(runs)
     _lock_down(private / "run" / "home")
@@ -285,7 +285,7 @@ def test_at_a_limit_the_rest_stays_and_the_next_run_is_refused(runs, monkeypatch
     assert message is not None and "as root, only if" in message
 
 
-def _walk(monkeypatch, run: Path, limits: tuple[int, int, int]) -> subprocess.CompletedProcess:
+def _walk(monkeypatch, run: Path, limits: tuple[int, int]) -> subprocess.CompletedProcess:
     monkeypatch.setattr(run_scrub, "_UNLOCK_LIMITS", limits)
     argv = run_scrub._unlock_argv(sys.executable, os.path.realpath(run))
     return subprocess.run(argv, capture_output=True, text=True, check=False)
@@ -293,30 +293,32 @@ def _walk(monkeypatch, run: Path, limits: tuple[int, int, int]) -> subprocess.Co
 
 @darwin
 def test_a_large_directory_stops_at_the_entry_limit(runs, monkeypatch):
-    """A listing reads at most the budget plus one name, so a huge directory cannot hold the
-    walk in one listing past its limits: 1000 names against a budget of 10 stop it."""
+    """A listing reads at most half the budget left plus one name, so a huge directory cannot
+    hold the walk in one listing past its limits: 1000 names against a budget of 10 stop it."""
     private = _private(runs)
     crowd = private / "run" / "home" / "crowd"
     crowd.mkdir()
     for index in range(1000):
         (crowd / f"f{index}").write_text("x")
-    done = _walk(monkeypatch, private / "run", (10, 400, 45))
+    done = _walk(monkeypatch, private / "run", (10, 45))
     assert done.returncode == 1 and "limit reached" in done.stderr, done
 
 
 @darwin
-def test_with_no_time_left_nothing_is_listed_or_unlocked(runs, monkeypatch):
-    """The clock is checked before the first listing: with 0 seconds the top-level lock stays."""
+def test_with_no_time_left_one_entry_is_still_unlocked(runs, monkeypatch):
+    """With 0 seconds a pass still does one unit of work (here: unlock one file), then stops,
+    so a pass never ends with nothing done; the other lock stays."""
     private = _private(runs)
-    locked = private / "run" / "home" / "f"
-    locked.write_text("x")
-    _acl("everyone deny delete", str(locked))
-    done = _walk(monkeypatch, private / "run", (500_000, 400, 0))
+    home = private / "run" / "home"
+    for name in ("f", "g"):
+        (home / name).write_text("x")
+        _acl("everyone deny delete", str(home / name))
+    done = _walk(monkeypatch, private / "run", (500_000, 0))
     assert done.returncode == 1 and "limit reached" in done.stderr, done
     listing = subprocess.run(
-        ["/bin/ls", "-led", str(locked)], capture_output=True, text=True, check=True
+        ["/bin/ls", "-le", str(home)], capture_output=True, text=True, check=True
     ).stdout
-    assert "deny delete" in listing, listing
+    assert listing.count("deny delete") == 1, listing
 
 
 def test_an_unexpected_error_in_cleanup_is_raised_not_swallowed(runs):

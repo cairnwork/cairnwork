@@ -45,7 +45,6 @@ cannot read, so nested locks of different kinds defeat any fixed order of them, 
 from __future__ import annotations
 
 import os
-import re
 import shlex
 import shutil
 import stat
@@ -53,39 +52,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-# tempfile.mkdtemp(prefix=f"{checkout.name}.") appends 8 chars from [a-z0-9_]. checkout.name
-# ({run_id}-vN or {run_id}-vbb) has no dot, so a private dir has exactly one, before that suffix.
-_PRIVATE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,160}\.[a-z0-9_]{8}$")
-
-
-def _real_dir(path: Path) -> Path | None:
-    """Resolved path if ``path`` itself is a directory. A symlink is None: never follow it."""
-    try:
-        info = os.lstat(path)
-    except OSError:
-        return None
-    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
-        return None
-    return Path(os.path.realpath(path))
-
-
-def _private_name(name: str) -> bool:
-    return _PRIVATE_NAME.fullmatch(name) is not None
-
-
-def run_tree_ok(private: Path, root: Path) -> bool:
-    """True when ``private`` and ``private/run`` may be deleted.
-
-    Both must be real directories (not symlinks), ``private`` a direct child of ``root`` by
-    realpath, ``run`` a direct child of ``private``, and the name a private-dir name.
-    """
-    base, own = _real_dir(root), _real_dir(private)
-    scratch = _real_dir(private / "run")
-    if not (base and own and scratch and _private_name(private.name)):
-        return False
-    if scratch.name != "run" or own.name != private.name:
-        return False
-    return own.parent == base and scratch.parent == own
+from cairnwork.run_tree import _private_name, _real_dir, run_tree_ok, seal_private
 
 
 def _shown(path: Path) -> str:
@@ -96,18 +63,27 @@ def _shown(path: Path) -> str:
 _SUDO = "/usr/bin/sudo"
 _ALLOW_ALL = "(version 1) (allow default)"
 
-# Run by the verifier python as the account (macOS): argv is run, then the entry, depth and second
-# limits. One pre-order pass. Per entry, before relying on lstat: clear its ACL (setattrlist with
+# Run by the verifier python as the account (macOS): argv is run, then the entry and second limits.
+# One pre-order pass. Per entry, before relying on lstat: clear its ACL (setattrlist with
 # FSOPT_NOFOLLOW: the entry itself, a symlink too, never a target; no open, so a denied read or
 # readsecurity does not stop it) and uchg/uappnd (the chflags syscall needs no stat). A directory
-# on run's device gets u+rwx and is entered through an O_NOFOLLOW descriptor, so names stay
-# relative (no PATH_MAX). A listing reads at most the names left in the budget plus one and closes
-# its descriptor before the walk goes on. At a limit (entries listed, depth, or the clock, checked
-# before the first listing too) it exits 1 and leaves the rest: rm fails, the scrub refuses.
+# on run's device gets u+rwx and is entered by an O_NOFOLLOW fd, closed once listed (no PATH_MAX).
+# No depth limit: a listing keeps at most half the entries left and reads for at most half the
+# time left, so what it read is still unlocked, and the next listing gets some of both. A
+# cut-short directory once done, or the current one at the clock (checked before each entry), is
+# moved up into run unless it is right under run already: rm frees the path above it and the next
+# scrub goes on, not over. Whatever the clock says, a pass does one unit of work first: unlock a
+# non-directory, finish a directory with nothing in it cut short or failed (rm can then remove
+# it), or move one up. So past the clock it does at most that one unit, or tries one entry that
+# fails (what fails every pass is item G: root only); a listing it reads then is cut at one name.
+# With the entry budget spent no directory is opened again: a deep one is moved up instead.
+# Exit 1 if anything is left (cut short, an entry, listing or move that failed, another device,
+# the clock): rm fails, the scrub refuses.
 _UNLOCK_SOURCE = """\
 import ctypes, itertools, os, stat, struct, sys, time
-top, max_nodes, max_depth, seconds = sys.argv[1], *map(int, sys.argv[2:5])
-deadline, listed = time.monotonic() + seconds, 0
+top, max_nodes, seconds = sys.argv[1], *map(int, sys.argv[2:4])
+deadline, listed, cut, done, stack = time.monotonic() + seconds, 0, False, False, []
+failed, failed_late = 0, False
 LOCKS = stat.UF_IMMUTABLE | stat.UF_APPEND
 DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 lib = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
@@ -115,13 +91,34 @@ lib.setattrlist.argtypes = (ctypes.c_char_p,) * 3 + (ctypes.c_size_t, ctypes.c_u
 ATTRS = struct.pack("=HHIIIII", 5, 0, 0x400000, 0, 0, 0, 0)
 FILESEC = struct.pack("=I16s16sII", 0x012CC16D, bytes(16), bytes(16), 0xFFFFFFFF, 0)
 NO_ACL = struct.pack("=iI", 8, len(FILESEC)) + FILESEC
-def stop():
-    sys.exit("unlock: limit reached, the rest is left in place")
 def attempt(call, *args, **kwargs):
     try:
         call(*args, **kwargs)
     except OSError:
-        pass
+        return False
+    return True
+def fail():
+    global cut, failed, failed_late
+    cut, failed = True, failed + 1
+    failed_late = failed_late or time.monotonic() >= deadline
+def up(name):
+    global done
+    if attempt(os.rename, name, os.path.join(top, ".unlock-" + os.urandom(8).hex())):
+        done = True
+    else:
+        fail()
+def leave(cut_short):
+    _names, _short, here, _failed = stack.pop()
+    if stack:
+        os.chdir("..")
+        if cut_short and len(stack) > 1:
+            up(here)
+def stop():
+    if stack:
+        leave(True)
+    sys.exit("unlock: limit reached, the rest is left in place")
+def late():
+    return time.monotonic() >= deadline and (done or failed_late or len(stack) > 2)
 def no_acl(name):
     lib.setattrlist(os.fsencode(name), ATTRS, NO_ACL, len(NO_ACL), 1)
 def unlock(name):
@@ -140,46 +137,57 @@ def unlock(name):
         no_acl(name)
     return info
 def opened(name, dev):
-    global listed
-    if time.monotonic() >= deadline:
-        stop()
+    global listed, cut
     fd = os.open(name, DIR)
     try:
         if os.fstat(fd).st_dev != dev:
-            return None
+            raise OSError("another device: left in place")
+        keep, names, short = (max_nodes - listed + 1) // 2, [], False
+        until = (time.monotonic() + deadline) / 2
         with os.scandir(fd) as entries:
-            names = [entry.name for entry in itertools.islice(entries, max_nodes - listed + 1)]
-        listed += len(names)
-        if listed > max_nodes:
-            stop()
+            for entry in itertools.islice(entries, keep + 1):
+                names.append(entry.name)
+                if time.monotonic() >= until:
+                    short = True
+                    break
         os.fchdir(fd)
     finally:
         os.close(fd)
-    return iter(names)
+    short = short or len(names) > keep
+    cut, listed = cut or short, listed + min(len(names), keep)
+    return iter(names[:keep]), short, name, failed
 dev = os.stat(top, follow_symlinks=False).st_dev
-stack = [opened(top, dev)]
+stack.append(opened(top, dev))
 while stack:
-    name = next(stack[-1], None)
+    name = next(stack[-1][0], None)
     if name is None:
-        stack.pop()
-        if stack:
-            os.chdir("..")
+        done = done or (not stack[-1][1] and stack[-1][3] == failed)
+        leave(stack[-1][1])
         continue
-    if len(stack) > max_depth or time.monotonic() >= deadline:
+    if late():
         stop()
     info = unlock(name)
-    if info is None or not stat.S_ISDIR(info.st_mode) or info.st_dev != dev:
+    if info is None or info.st_dev != dev:
+        fail()
+        continue
+    if not stat.S_ISDIR(info.st_mode):
+        done = True
         continue
     attempt(os.chmod, name, stat.S_IMODE(info.st_mode) | 0o700, follow_symlinks=False)
+    if listed >= max_nodes:
+        cut = True
+        if len(stack) > 1:
+            up(name)
+        continue
     try:
-        child = opened(name, dev)
+        stack.append(opened(name, dev))
     except OSError:
-        child = None
-    if child is not None:
-        stack.append(child)
+        fail()
+if cut:
+    stop()
 """
 _UNLOCK = f"exec({_UNLOCK_SOURCE!r})"  # one line, so the printed recovery step is one line
-_UNLOCK_LIMITS = (500_000, 400, 45)  # entries, depth, seconds: under remove()'s 60 s timeout
+_UNLOCK_LIMITS = (500_000, 45)  # entries, seconds: under remove()'s 60 s timeout
 
 
 def _unlock_argv(python: str, path: str) -> list[str]:
@@ -223,9 +231,9 @@ def _recovery_steps(user: str, python: str, run: Path, private: Path) -> str:
     steps = [_as_account_shell(user, _unlock_argv(python, str(run)))]
     account_rm = f"sudo -n -u {shlex.quote(user)} -- /bin/rm -rf -- {q_run}"
     steps.append(f"as the verifier account: {account_rm}")
-    if sys.platform == "darwin":  # past a limit only root clears it: root ignores ACLs and modes
+    if sys.platform == "darwin":  # a pass at a limit moves on; what none removes needs root
         root_rm = f"/usr/bin/chflags -R -- nouchg,nouappnd {q_run}; /bin/rm -rfx -- {q_run}"
-        steps.append(f"as root, only if {q_run} is still there (a limit was reached): {root_rm}")
+        steps.append(f"as root, only if {q_run} is still there after that: {root_rm}")
     steps.append(f"as the owner: rm -rf -- {q_run}")
     steps.append(f"as the owner: chmod 700 {q_priv}")
     return "; ".join(steps)
@@ -241,21 +249,10 @@ def _hint(user: str, python: str, path: Path) -> str:
         f"leftover {_shown(path)} blocks the next account run. "
         f"Clean it by hand without following links: ls -ld {q_priv} {q_run}. "
         f"If either is a symlink, unlink that symlink only and do not remove or chmod its target. "
-        f"If both are real directories under the run root, run every step even when an earlier "
-        f"one fails. {steps}"
+        f"If both are real directories under the run root, run the steps in order even when one "
+        f"fails, and repeat the two account steps until {q_run} is gone or a pass removes or "
+        f"moves nothing in it. {steps}"
     )
-
-
-def seal_private(private: Path, root: Path) -> None:
-    """chmod ``private`` to 0700 through a no-follow directory fd. A symlink is left alone."""
-    base, own = _real_dir(root), _real_dir(private)
-    if not (base and own and _private_name(private.name) and own.parent == base):
-        return
-    fd = os.open(private, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
-        os.fchmod(fd, 0o700)
-    finally:
-        os.close(fd)
 
 
 def _alert(text: str) -> None:

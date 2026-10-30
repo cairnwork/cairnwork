@@ -221,7 +221,7 @@ def test_both_deletes_fail_and_recovery_steps_quote_a_hostile_path(tmp_path, mon
     steps = (
         f"{unlock}; "
         f"as the verifier account: sudo -n -u cairnwork-verifier -- /bin/rm -rf -- {q_run}; "
-        f"as root, only if {q_run} is still there (a limit was reached): {root}; "
+        f"as root, only if {q_run} is still there after that: {root}; "
         f"as the owner: rm -rf -- {q_run}; "
         f"as the owner: chmod 700 {q_priv}"
     )
