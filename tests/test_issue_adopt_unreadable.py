@@ -159,6 +159,11 @@ def _not_ascii(requests: Path, task_id: str) -> None:
     path.write_bytes(bytes(data))
 
 
+def _malformed(requests: Path, task_id: str) -> None:
+    path = requests / f"{task_id}.json"
+    path.write_text(path.read_text().replace('": "', '": ?', 1))  # complete, malformed: not a cut
+
+
 def _cut_utf8(requests: Path, task_id: str) -> None:
     path = requests / f"{task_id}.json"
     path.write_bytes(path.read_bytes()[:40] + b"\xe4")
@@ -174,6 +179,7 @@ def _cut_utf8(requests: Path, task_id: str) -> None:
         (_symlink_to(b""), "OSError"),
         (_not_ascii, "UnicodeDecodeError"),
         (_cut_utf8, "UnicodeDecodeError"),
+        (_malformed, "JSONDecodeError"),
     ],
     ids=lambda v: getattr(v, "__name__", v) or "any",
 )

@@ -175,7 +175,12 @@ class OwnershipLedger:
         return conn
 
     def bind(
-        self, idempotency_key: str, request: dict[str, Any], owner: str, card_hash: str, task_id=""
+        self,
+        idempotency_key: str,
+        request: dict[str, Any],
+        owner: str,
+        card_hash: str,
+        task_id: str = "",
     ) -> BindResult:
         """Bind a new task, or return the existing binding for an identical resend. A new task gets
         ``task_id`` when given (new_task_id(): the intake stores its request first, #466)."""

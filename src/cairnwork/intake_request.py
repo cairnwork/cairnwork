@@ -142,9 +142,10 @@ def _drop(requests: Path, task_id: str) -> None:
 
 def read_request(requests: Path, task_id: str) -> Any:
     """The stored request's JSON. RequestUnreadable only when the file is absent from requests/
-    (held open, so no later look decides it; #450) or is ASCII JSON cut short. Anything else raises
-    as it is: requests/ missing or a symlink, a symlink or non-regular file at the path
-    (O_NOFOLLOW), EACCES or EIO, or bytes that are not ASCII (never written: damage, not a cut)."""
+    (held open, so no later look decides it; #450) or is ASCII JSON cut short (_cut_short). Anything
+    else raises as it is: requests/ missing or a symlink, a symlink or non-regular file at the path
+    (O_NOFOLLOW), EACCES or EIO, bytes that are not ASCII (never written: damage, not a cut), or
+    complete but malformed JSON (a JSONDecodeError, a ValueError: damage, not a cut)."""
     dir_fd = os.open(requests, _DIR_FLAGS)
     try:
         try:
@@ -162,7 +163,19 @@ def read_request(requests: Path, task_id: str) -> Any:
     try:
         return json.loads(text)
     except json.JSONDecodeError as exc:
-        raise RequestUnreadable(f"{task_id}: cut short") from exc
+        if _cut_short(text, exc):
+            raise RequestUnreadable(f"{task_id}: cut short") from exc
+        raise
+
+
+def _cut_short(text: str, exc: json.JSONDecodeError) -> bool:
+    """Did the decoder fail only because the input ended (a prefix of JSON, as a store cut off at
+    any byte leaves)? Yes when it failed at the end of the text, in a string that never closes,
+    or in a \\uXXXX escape that runs past the end. A failure before the end ("not json",
+    '{"a":???', extra data) is malformed content: damage, not a cut."""
+    if exc.pos >= len(text) or exc.msg.startswith("Unterminated string"):
+        return True
+    return exc.msg.startswith("Invalid \\uXXXX escape") and exc.pos + 5 > len(text)
 
 
 def check_requests(state: Path) -> None:

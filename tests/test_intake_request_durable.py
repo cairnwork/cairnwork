@@ -16,6 +16,16 @@ from cairnwork.intake import Intake, IntakeRefused
 from cairnwork.ownership import OwnershipLedger
 
 REPO = "James3014/demo"
+PAYLOAD = {  # the shape the issue runner submits: strings, lists, escapes, a non-ASCII title
+    "allowed_files": ["src/calc.py"],
+    "base_commit": "a" * 40,
+    "card_hash": "gh:James3014/demo#7:" + "b" * 64,
+    "idempotency_key": "gh:James3014/demo#7:" + "b" * 16,
+    "instructions": 'line one\nsay "hi" \\ back',
+    "repo": "/srv/clone",
+    "title": "fix é",
+    "verifiers": [["pytest-0", ["python3", "-m", "pytest", "-q", "tests/test_calc.py"]]],
+}
 
 
 def _rows(intake: Intake) -> list[tuple[str, str]]:
@@ -70,14 +80,17 @@ def test_the_request_is_whole_and_synced_on_disk_before_the_bind(setup, monkeypa
     seen = {}
 
     def fsync(fd):
-        synced.append(os.fstat(fd).st_ino)
+        info = os.fstat(fd)
+        synced.append((info.st_ino, info.st_size))  # the size the sync made durable
         return real_fsync(fd)
 
     def bind(self, key, request, owner, card_hash, *args, **kwargs):
         requests = self.path.parent / "requests"
         (name,) = os.listdir(requests)  # exactly one: the request about to be bound
         seen["name"], seen["text"] = name, (requests / name).read_text()
-        seen["synced"] = {os.stat(requests / name).st_ino, os.stat(requests).st_ino} <= set(synced)
+        inodes = {ino for ino, _ in synced}
+        whole = (os.stat(requests / name).st_ino, len(seen["text"].encode())) in synced
+        seen["synced"] = whole and os.stat(requests).st_ino in inodes  # file flushed, then synced
         record = real_bind(self, key, request, owner, card_hash, *args, **kwargs).record
         seen["task_id"] = record.task_id
         raise KeyboardInterrupt  # the process dies after the commit, before the runner starts
@@ -186,6 +199,16 @@ def test_read_request_names_only_the_request_s_own_failures(tmp_path):
         with pytest.raises(error) as raised:
             read_request(requests, task_id)
         assert not isinstance(raised.value, RequestUnreadable)
+    for bad in (b"not json", b'{"a":???', b'{"a": 1}}', b'{"a": "\\uZZZZ"}', b'{"a": tr'):
+        (requests / "bad.json").write_bytes(bad)  # complete but malformed: damage, not a cut
+        with pytest.raises(json.JSONDecodeError) as raised:
+            read_request(requests, "bad")
+        assert not isinstance(raised.value, RequestUnreadable)
+    text = json.dumps(PAYLOAD, sort_keys=True)  # what store_request writes, cut at every byte
+    for end in range(len(text)):
+        (requests / "cut.json").write_text(text[:end])
+        with pytest.raises(RequestUnreadable):
+            read_request(requests, "cut")
     with pytest.raises(FileNotFoundError):
         read_request(tmp_path / "gone", "whole")  # requests/ itself missing: not the request's
     (tmp_path / "linked").symlink_to(requests)
@@ -228,3 +251,33 @@ def test_a_ledger_that_cannot_be_read_counts_as_naming_tasks(tmp_path):
     (intake.state / "ownership.sqlite").write_bytes(b"not a database")
     with pytest.raises(IntakeRefused, match="BAD_STATE"):
         intake.check_state()  # fail closed: it may name tasks whose requests are gone
+
+
+def test_a_bind_that_fails_after_its_commit_keeps_the_request(setup, monkeypatch):
+    """Only an OwnershipError is known to come before the commit; any other bind failure (here an
+    OperationalError after the real commit) leaves the request for the row it may have bound."""
+    real_bind = OwnershipLedger.bind
+
+    def bind(self, *args, **kwargs):
+        real_bind(self, *args, **kwargs)
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(OwnershipLedger, "bind", bind)
+    github = FakeGitHub([issue()])
+    out = runner.take(setup["intake"], github, setup["clone"])
+    assert out[0]["error"].startswith("OperationalError") and github.labels[7] == {runner.QUEUE}
+    ((task_id, status),) = _rows(setup["intake"])
+    assert status == "BOUND" and setup["started"] == []
+    assert setup["intake"].load_request(task_id).title == "fix x"
+
+
+def test_a_ledger_of_finished_tasks_still_needs_its_requests_dir(setup):
+    """A FAILED (or COMPLETED) task still has its request read later (adopt, settle): any task in
+    the ledger, not only a live one, makes a missing requests/ BAD_STATE."""
+    intake = setup["intake"]
+    (taken,) = runner.take(intake, FakeGitHub([issue()]), setup["clone"])
+    intake.ledger.set_status(taken["task_id"], "FAILED")
+    shutil.rmtree(intake.state / "requests")
+    with pytest.raises(IntakeRefused, match="BAD_STATE"):
+        intake.prepare()
+    assert not (intake.state / "requests").exists()
