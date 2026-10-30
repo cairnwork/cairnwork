@@ -344,9 +344,10 @@ def test_recovery_removes_a_crashed_account_checkout_and_staging_clone(
         )  # fmt: skip
     assert done.returncode == 0, done.stderr
     assert os.lstat(checkout).st_uid != os.getuid()  # the account's copy
-    (decision,) = recover(
-        ledger=ledger, notary=notary, journal=journal, run_root=ACCOUNT.run_root,
+    (decision,) = recover(  # as the route calls it: the state's run root, and the account
+        ledger=ledger, notary=notary, journal=journal, run_root=tmp_path / "runs",
         verifier_account=ACCOUNT,
     )  # fmt: skip
     assert decision.detail == "", decision.detail
-    assert not os.path.lexists(work)
+    assert not os.path.lexists(work)  # the account's copy and the owner's staging clone in it
+    assert not os.path.lexists(tmp_path / "runs" / attempt)  # the owner's attempt clone
