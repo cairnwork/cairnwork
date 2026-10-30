@@ -106,8 +106,7 @@ def _mark(node: ast.expr) -> tuple[str, ast.Call | None] | None:
 
 def _fixture_decorator(node: ast.expr) -> ast.Call | bool:
     target = node.func if isinstance(node, ast.Call) else node
-    parts = dotted(target)
-    if parts and parts[-1] == "fixture":
+    if dotted(target) in (["fixture"], ["pytest", "fixture"]):  # not pytest.mark.fixture
         return node if isinstance(node, ast.Call) else True
     return False
 
@@ -228,14 +227,23 @@ def _marks_of(decorators: list[ast.expr], extra: list[ast.expr]):
     return calls, refusal, used, known
 
 
-def collect(tree: ast.Module, path: str, conftests: list[ast.Module], scope: Scope) -> list[Item]:
+def collect(
+    tree: ast.Module,
+    path: str,
+    conftests: list[ast.Module],
+    scope: Scope,
+    inits: list[ast.Module] | None = None,
+) -> list[Item]:
     """Every test id pytest would collect from tree (path is how ids are spelt). scope says what
     the configuration and the imported modules around the test file already decided."""
     fixtures = fixtures_of([*conftests, tree])
     consts = module_env(tree)  # a table bound twice is not static
     module_marks = pytestmark_of(tree.body)
-    names = {n.name for n in tree.body if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)}
+    names = _defs(tree)
     base, known = scope.reason, scope.known
+    package_hooks = set().union(*(_defs(t) for t in inits or [])) & SETUP_HOOKS
+    if package_hooks:
+        base = base or f"package init setup hook {sorted(package_hooks)[0]}"
     if fixtures.autouse:
         base = base or f"autouse fixture {fixtures.autouse[0]} is in effect"
     elif names & SETUP_HOOKS:
@@ -255,6 +263,10 @@ def collect(tree: ast.Module, path: str, conftests: list[ast.Module], scope: Sco
     if not items and not known:  # tests may come from a hook or plugin defined elsewhere
         items.append(Item(f"{path}::<unseen>", 1, _UNSEEN, refusal=UNSEEN, exact=False))
     return [replace(item, exact=item.exact and known) for item in items]
+
+
+def _defs(tree: ast.Module) -> set[str]:
+    return {n.name for n in tree.body if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)}
 
 
 UNSEEN = "tests here come from code the reader cannot see (count unknown)"
