@@ -9,6 +9,7 @@ raises WorkerMayLive (WORKER_SWEEP_UNCLEAN, #244); the owner path must do the sa
 owner's account (""), so pipeline.py fences the attempt and only takeover.py, after its own
 sweep, releases the card. Fake agy; no model is called."""
 
+import io
 import os
 import signal
 import time
@@ -29,7 +30,7 @@ from cairnwork.pipeline import run_task
 from cairnwork.unswept import Mark, WorkerMayLive
 from cairnwork.workers import agy as agy_module
 from cairnwork.workers.agy import AgyWorker
-from cairnwork.workers.agy_dispatch import AgyWorkerAccountFailed
+from cairnwork.workers.agy_dispatch import AgyWorkerAccountFailed, Dispatch
 
 UNCLEAN = [UNLISTED, Sweep(True, denied=1), Sweep(True, unreadable=1)]
 
@@ -171,6 +172,30 @@ def test_an_interrupt_is_not_replaced_by_the_fence(tmp_path, monkeypatch):
     worker, workdir, _ = _replaying(tmp_path, good_run(ROOT))
     with pytest.raises(KeyboardInterrupt):
         worker.run(workdir, TASK)
+
+
+class _Killed:
+    """A dispatcher that ended on a signal nobody here sent (-9). No process is started."""
+
+    pid, returncode = 0, -signal.SIGKILL
+    stdout, stderr = io.BytesIO(), io.BytesIO()
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+
+def test_a_dispatcher_killed_by_someone_else_is_fenced_without_a_worker_account(
+    tmp_path, monkeypatch
+):
+    """Without agy_run_as_user the receipts are not settled, yet a signal from outside may have
+    cut the dispatcher after a launch it never recorded: may live, even if the owner sweep is
+    clean (#244). Fakes only: no signal is sent and no process table is read."""
+    monkeypatch.setattr(agy_module, "_stop", lambda *_a, **_k: (False, Sweep(listed=True)))
+    worker = AgyWorker(dispatch=Dispatch(str(tmp_path / "dispatcher")))
+    fenced = "^WORKER_SWEEP_UNCLEAN: KILLED_BY_SIGNAL: 9"
+    with pytest.raises(WorkerMayLive, match=fenced) as caught:
+        worker._await(_Killed(), None, None, ("attempt-1", ""), io.BytesIO(), tmp_path / "log")
+    assert caught.value.account == ""
 
 
 @pytest.mark.sandbox

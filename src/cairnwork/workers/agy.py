@@ -253,6 +253,12 @@ class AgyWorker:
             self._fence(swept, log_path, exc)
             raise
         self._fence(swept, log_path)
+        if dispatch is not None and timed_out is None and process.returncode < 0:  # #244
+            raise AgyWorkerUnswept(  # with agy_run_as_user, _settle_worker_run raised already
+                f"WORKER_SWEEP_UNCLEAN: KILLED_BY_SIGNAL: {-process.returncode}; launches after "
+                f"the last receipt unknown; log {log_path}",
+                self.run_as,
+            )
         if timed_out is not None:
             raise AgyWorkerError("agy timed out") from timed_out
         if held:
