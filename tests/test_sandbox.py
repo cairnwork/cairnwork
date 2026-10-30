@@ -11,6 +11,7 @@ import sys
 
 import pytest
 from conftest import commit_change, git
+from fixture_tree import reach_env, world_base
 
 import cairnwork_sandbox
 from cairnwork.verifiers import parse_verifier, run_verifiers
@@ -288,22 +289,23 @@ def test_a_replaced_checkout_fails_the_run(project, tmp_path):
 
 
 @pytest.mark.sandbox
-def test_named_credentials_are_masked(project, tmp_path, monkeypatch):
+def test_named_credentials_are_masked(project, tmp_path, monkeypatch, request):
     """A fake home holds canary credentials; inside the sandbox none of them is readable
-    (denied, missing or emptied), whichever backend confines the run."""
-    home = tmp_path / "fakehome"
+    (denied, missing or emptied), whichever backend confines the run. Under bwrap a plain file
+    beside them is (the home is off /tmp, so the run sees it, #391)."""
+    home = world_base(request, "cw-creds-") / "fakehome"
     canaries = [".ssh/id_test", ".aws/credentials", ".config/gh/hosts.yml", ".netrc", ".Xauthority"]
     for rel in canaries:
         (home / rel).parent.mkdir(parents=True, exist_ok=True)
         (home / rel).write_text("CANARY-SECRET\n")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("CW_CANARIES", ":".join(str(home / rel) for rel in canaries))
+    reach, check = reach_env(monkeypatch, cairnwork_sandbox.platform_backend(), home)
     import cairnwork.verifiers as verifiers
 
-    monkeypatch.setattr(verifiers, "_ENV_KEEP", (*verifiers._ENV_KEEP, "CW_CANARIES"))
+    monkeypatch.setattr(verifiers, "_ENV_KEEP", (*verifiers._ENV_KEEP, "CW_CANARIES", *reach))
     code = (
-        "import os\n"
-        "def test_masked():\n"
+        f"import os\ndef test_masked():\n{check}"
         "    paths = os.environ['CW_CANARIES'].split(':')\n"
         "    assert len(paths) == 5\n"
         "    for path in paths:\n"
@@ -318,18 +320,19 @@ def test_named_credentials_are_masked(project, tmp_path, monkeypatch):
 
 
 @pytest.mark.sandbox
-def test_x11_and_daemon_sockets_are_masked(project, tmp_path, monkeypatch):
+def test_x11_and_daemon_sockets_are_masked(project, tmp_path, monkeypatch, request):
     """X11 server sockets and root-equivalent daemon sockets (libvirt/LXD/Docker, #85) are
     masked, so a candidate cannot reach one that exists on the host. The real paths vary and a
-    CI runner has none, so point the (bwrap) mask lists at canary paths under tmp and witness
+    CI runner has none, so point the (bwrap) mask lists at canary paths (off /tmp) and witness
     them unreadable inside the sandbox (under bwrap's whole-root bind they would be readable
     without the mask; Seatbelt denies them by its allow-list anyway)."""
     import cairnwork_sandbox.bwrap as bwrap_mod
 
-    x11 = tmp_path / ".X11-unix"
+    base = world_base(request, "cw-socks-")
+    x11 = base / ".X11-unix"
     x11.mkdir()
     (x11 / "X0").write_text("CANARY-X11\n")
-    sock = tmp_path / "libvirt-sock"
+    sock = base / "libvirt-sock"
     sock.write_text("CANARY-SOCK\n")
     monkeypatch.setattr(bwrap_mod, "_X11_SOCKET_DIR", str(x11))
     monkeypatch.setattr(bwrap_mod, "_DANGEROUS_SOCKETS", (str(sock),))
@@ -337,10 +340,10 @@ def test_x11_and_daemon_sockets_are_masked(project, tmp_path, monkeypatch):
     monkeypatch.setenv("CW_SOCK", str(sock))
     import cairnwork.verifiers as verifiers
 
-    monkeypatch.setattr(verifiers, "_ENV_KEEP", (*verifiers._ENV_KEEP, "CW_X11", "CW_SOCK"))
+    reach, check = reach_env(monkeypatch, cairnwork_sandbox.platform_backend(), base)
+    monkeypatch.setattr(verifiers, "_ENV_KEEP", (*verifiers._ENV_KEEP, "CW_X11", "CW_SOCK", *reach))
     code = (
-        "import os\n"
-        "def test_masked():\n"
+        f"import os\ndef test_masked():\n{check}"
         "    for key in ('CW_X11', 'CW_SOCK'):\n"
         "        try:\n"
         "            data = open(os.environ[key]).read()\n"

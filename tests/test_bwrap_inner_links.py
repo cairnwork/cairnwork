@@ -4,14 +4,13 @@ The policy tests run on any host; the sandbox-marked test witnesses it on real b
 test-linux-sandbox CI job)."""
 
 import os
-import shutil
 import socket
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
 from conftest import commit_change
+from fixture_tree import reach_env, world_base, world_dir
 
 import cairnwork_sandbox
 from cairnwork.verifiers import parse_verifier, run_verifiers
@@ -259,15 +258,11 @@ def test_an_unreadable_subdir_is_refused(home):
 
 @pytest.fixture
 def world():
-    """0755 dirs under /tmp (world-traversable ancestors), so the account path can reach them."""
-    base = Path(tempfile.mkdtemp(dir="/tmp", prefix="cw-inner-"))  # noqa: S108
-    os.chmod(base, 0o755)
-    (base / "home").mkdir(mode=0o755)
-    (base / "out").mkdir(mode=0o755)
-    try:
+    """0755 dirs off /tmp (world-traversable ancestors), so the account path can reach them."""
+    with world_dir("cw-inner-") as base:
+        (base / "home").mkdir(mode=0o755)
+        (base / "out").mkdir(mode=0o755)
         yield base
-    finally:
-        shutil.rmtree(base, ignore_errors=True)
 
 
 @pytest.mark.parametrize("home_mode", [0o755, 0o700], ids=["home-0755", "home-0700"])
@@ -303,14 +298,16 @@ def _serve(path: Path) -> socket.socket:
 
 
 @pytest.mark.sandbox
-def test_inner_link_targets_stay_masked_on_a_real_run(repo, tmp_path, monkeypatch):
+def test_inner_link_targets_stay_masked_on_a_real_run(repo, tmp_path, monkeypatch, request):
     """On base the run passes but reads the canaries and reaches the socket, so the candidate's
     test fails. Fixed, nothing behind an inner link is readable or reachable, and a /usr target
-    is still there."""
+    is still there, as is a plain file beside the canaries (the fixture tree is off /tmp, so the
+    run sees it, #391)."""
     backend = cairnwork_sandbox.platform_backend()
     if backend is None or backend.name != "bwrap":
         pytest.skip("bwrap only: Seatbelt deny rules are a separate mechanism (not #377)")
-    home, out = tmp_path / "fakehome", tmp_path / "o"
+    base = world_base(request, "cw-inner-run-")
+    home, out = base / "fakehome", base / "o"
     (out / "deep").mkdir(parents=True)
     (out / "cred").write_text("CANARY-SECRET\n")
     (out / "deep" / "tok").write_text("CANARY-SECRET\n")
@@ -324,12 +321,14 @@ def test_inner_link_targets_stay_masked_on_a_real_run(repo, tmp_path, monkeypatc
     server = _serve(out / "agent.sock")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("CW_OUT", str(out))
+    reach, check = reach_env(monkeypatch, backend, home, out)
     import cairnwork.verifiers as verifiers
 
-    monkeypatch.setattr(verifiers, "_ENV_KEEP", (*verifiers._ENV_KEEP, "CW_OUT"))
+    monkeypatch.setattr(verifiers, "_ENV_KEEP", (*verifiers._ENV_KEEP, "CW_OUT", *reach))
     code = (
         "import os, socket\n"
         "def test_masked():\n"
+        f"{check}"
         "    out = os.environ['CW_OUT']\n"
         "    assert os.path.exists('/usr/bin/env')\n"
         "    for path in (out + '/cred', out + '/deep/tok'):\n"
