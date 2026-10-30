@@ -7,10 +7,10 @@ not appear), read-only last. Put back: each top-level link that resolves inside 
 checked (not Rancher's ``/run/docker.sock`` -> home, nor NixOS ``/run/current-system``, #469);
 each top-level ``/etc`` link to a regular file in a tree (``/etc/resolv.conf``), read-only, for
 the account only one it may reach (a file swapped after the check is bound as it then is); a read
-or write root under /tmp (owner-mode runs live there: pytest's tmp_path), the read one read-only.
-``--remount-ro`` does not recurse, so a write root stays writable. A root that is a tree, or is in
-/run or /var/run, is refused. A tree that cannot be listed or written in the policy, or an /etc
-entry that cannot be checked, refuses the policy.
+or write root under /tmp (the tests' owner-mode runs live there), a read one read-only and only if
+it exists. ``--remount-ro`` does not recurse, so a write root stays writable. Refused: a root that
+is a tree or in /run or /var/run, a write root holding a tree, trees that overlap, a tree that
+cannot be listed or written in the policy, an /etc entry that cannot be checked.
 """
 
 from __future__ import annotations
@@ -29,14 +29,17 @@ _NAME = re.compile(r"^[A-Za-z0-9_./+@~][A-Za-z0-9 _./+@~-]*$")  # no line break,
 
 
 def trees() -> list[str]:
-    """The real path of each tree that exists, once (``/var/run`` is usually a link to /run)."""
+    """The real path of each tree that exists, once (``/var/run`` is usually a link to /run). One
+    at or in another (``/tmp -> /run``) refuses: a root under /tmp would then be bound into /run."""
     found: list[str] = []
     for tree in TREES:
         real = os.path.realpath(tree)
-        if not os.path.isdir(tree) or real in found:
+        if not os.path.isdir(tree) or (real in found and tree != HOLDS_ROOTS):
             continue
         if not _NAME.fullmatch(real):
             raise SandboxError(f"private tree {real!r} has characters not allowed in a policy")
+        if any(_under(real, [other]) or _under(other, [real]) for other in found):
+            raise SandboxError(f"private tree {tree} ({real}) overlaps another of {found}")
         found.append(real)
     return found
 
@@ -66,6 +69,9 @@ def private_flags(reads: list[str], writes: list[str], owner: bool) -> tuple[lis
     for root in reads + writes:
         if root in private or (_under(root, private) and not _under(root, holds)):
             raise SandboxError(f"root {root!r} is in a private tree {private}")
+    for root in writes:  # a read root outside the trees is never bound, so it cannot cover one
+        if any(_under(tree, [root]) for tree in private):
+            raise SandboxError(f"write root {root!r} holds a private tree {private}")
     head: list[str] = []
     for tree in private:
         head += ["--tmpfs", tree]
@@ -74,8 +80,8 @@ def private_flags(reads: list[str], writes: list[str], owner: bool) -> tuple[lis
             real = os.path.realpath(os.path.join(tree, target)) if target else ""
             if _under(real, private) and _NAME.fullmatch(real) and _NAME.fullmatch(entry.name):
                 head += ["--symlink", real, f"{tree}/{entry.name}"]
-    for root in reads:  # the caller binds the write roots next
-        head += ["--ro-bind-try", root, root] if _under(root, private) else []
+    for root in reads:  # only one that exists now: none another user could plant in /tmp later
+        head += ["--ro-bind", root, root] if _under(root, private) and os.path.exists(root) else []
     for entry in _entries(ETC):
         try:
             real = os.path.realpath(entry.path) if entry.is_symlink() else ""
