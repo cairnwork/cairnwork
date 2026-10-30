@@ -124,6 +124,22 @@ def test_a_test_commit_may_only_add_plain_test_files(project, tmp_path, files, c
     assert code in result.reason
 
 
+def test_test_commit_submodule_pointer_changes_are_seen_regardless_of_gitmodules_ignore(project):
+    commit_change(
+        project, {".gitmodules": '[submodule "tests/sub"]\n\tpath = tests/sub\n\tignore = all\n'}
+    )
+    base = git(project, "rev-parse", "HEAD")
+    (project / "tests").mkdir(exist_ok=True)
+    (project / "tests/test_regression.py").write_text(REGRESSION)
+    git(project, "add", "tests/test_regression.py")
+    git(project, "update-index", "--add", "--cacheinfo", f"160000,{base},tests/sub")
+    test_commit = git(project, "commit-tree", git(project, "write-tree"), "-p", base, "-m", "tests")
+    git(project, "reset", "-q", "--hard", base)
+    with pytest.raises(dt.TestCommitRejected) as err:
+        dt.test_paths(project, base, test_commit)
+    assert err.value.code == "TEST_COMMIT_SCOPE" and "tests/sub" in str(err.value)
+
+
 def test_a_test_commit_must_sit_on_the_base(project, tmp_path):
     base, test_commit = make_test_commit(project, {"tests/test_regression.py": REGRESSION})
     newer = commit_change(project, {"README.md": "moved\n"})
