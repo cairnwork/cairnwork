@@ -112,7 +112,9 @@ def test_the_worker_gets_the_arguments_unchanged(monkeypatch):
 def test_a_planner_configuration_is_refused_until_the_planner_is_wired(capsys, argv):
     seen = []
     assert pause_cli.main(argv, worker_main=lambda a: seen.append(a) or 0) == 2
-    assert seen == [] and "PAUSE_REFUSED" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert seen == [] and "--planner-config is not wired yet" in err
+    assert not any(code in err for code in schema.Reason)  # a CLI refusal, not a reason code
 
 
 @pytest.mark.parametrize("argv", [[], ["resume", "--task", "t.json"], ["--task", "t.json"]])

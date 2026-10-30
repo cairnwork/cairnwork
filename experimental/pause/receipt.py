@@ -114,7 +114,10 @@ def append(path: Path, rec: dict) -> None:
     if problems:
         raise ValueError("; ".join(problems))
     if path.exists():
-        last = path.read_text().splitlines()[-1:]
+        text = path.read_text()
+        if text and not text.endswith("\n"):
+            raise ValueError("the receipts file does not end with a newline")
+        last = text.splitlines()[-1:]
         if last and json.loads(last[0])["event_seq"] >= rec["event_seq"]:
             raise ValueError("event_seq does not follow the file's last receipt")
     with path.open("a") as f:

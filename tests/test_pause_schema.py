@@ -26,6 +26,8 @@ SPEC_AC3 = {
     "PAUSE_GATE_REFUSAL",
 }
 SPEC_OTHER = {"PAUSE_NO_CUT", "PAUSE_SECRET_BLOCKED"}  # AC2, AC4
+# an empty or malformed plan (PLANNER_REFUSED stays the API layer's), as the gate's BAD_OUTPUT
+PLANNER_OUTPUT = {"PAUSE_PLANNER_BAD_OUTPUT"}
 AMENDMENT_2 = {  # the five fallback classes' missing codes, and AC8
     "PAUSE_LOCAL_OUT_OF_MEMORY",
     "PAUSE_PLANNER_QUOTA_EXHAUSTED",
@@ -54,7 +56,8 @@ AC5_FIELDS = {  # AC5's list, plus what AC2 and AC8 need
 
 def test_every_reason_code_is_listed_by_the_spec_or_an_amendment():
     assert SPEC_AC3 <= set(Reason) and SPEC_OTHER <= set(Reason)
-    assert set(Reason) == SPEC_AC3 | SPEC_OTHER | AMENDMENT_2 | GATE_API | STEP_3
+    assert set(Reason) == SPEC_AC3 | SPEC_OTHER | AMENDMENT_2 | GATE_API | STEP_3 | PLANNER_OUTPUT
+    assert Reason.PAUSE_PLANNER_BAD_OUTPUT in schema.FALLBACK_REASONS
     assert Reason.PAUSE_SCOPE_VIOLATION in schema.FALLBACK_REASONS
     assert all(r.value == r.name and r.startswith("PAUSE_") for r in Reason)
 

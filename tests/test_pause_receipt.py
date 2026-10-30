@@ -117,3 +117,16 @@ def test_a_resealed_receipt_with_a_malformed_hash_does_not_verify(bad):
     rec = {**rec, "checkpoint_sha256": "xyz"}
     rec["receipt_sha256"] = receipt.digest(rec)
     assert any("checkpoint_sha256" in p for p in receipt.verify(rec))
+
+
+def test_append_refuses_a_file_whose_last_line_is_unterminated(tmp_path):
+    # Claude review of #530: a missing newline would join two receipts on one line
+    log = tmp_path / "receipts.jsonl"
+    first = json.dumps(_intervened(event_seq=1), separators=(",", ":"))
+    log.write_text(first)
+    with pytest.raises(ValueError, match="newline"):
+        receipt.append(log, _intervened(event_seq=2))
+    assert log.read_text() == first
+    log.write_text("")  # an empty file is fine
+    receipt.append(log, _intervened(event_seq=2))
+    assert [json.loads(x)["event_seq"] for x in log.read_text().splitlines()] == [2]

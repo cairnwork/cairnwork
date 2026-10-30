@@ -4,8 +4,9 @@
 
 Without ``--planner-config`` (the flag off, the default) the arguments go unchanged to
 ``python -m experimental.local_worker.cli run``: the same episode, the same output, no cloud
-request and no PAUSE receipt (AC1). ``--planner-config`` is refused until steps 2 and 3 wire the
-planner, the gate and the resume."""
+request and no PAUSE receipt (AC1). ``--planner-config`` is refused (exit 2, before the worker
+runs; a CLI message, not a schema.Reason) until steps 2 and 3 wire the planner, the gate and the
+resume."""
 
 from __future__ import annotations
 
@@ -28,7 +29,7 @@ def main(
         print(USAGE, file=sys.stderr)
         return 2
     if any(a == FLAG or a.startswith(FLAG + "=") for a in args[1:]):
-        print("PAUSE_REFUSED: the planner is not wired yet (#476 steps 2-3)", file=sys.stderr)
+        print("pause: --planner-config is not wired yet (#476 steps 2-3)", file=sys.stderr)
         return 2
     return (worker_main or worker_cli.main)(args)
 
