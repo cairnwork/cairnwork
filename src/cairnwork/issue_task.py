@@ -65,8 +65,9 @@ class IssueRefused(Exception):
 
 
 class RequestUnreadable(ValueError):
-    """The intake's stored request is absent from a plain requests/ directory, or ASCII JSON cut
-    short (intake_request.read_request, #466). Defined here so adoptable needs no intake import."""
+    """The intake's stored request is absent from a plain requests/ directory, or its bytes are not
+    whole ASCII JSON, cut short or damaged (intake_request.read_request, #466). Defined here so
+    adoptable needs no intake import."""
 
 
 @dataclass(frozen=True)
