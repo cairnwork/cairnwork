@@ -127,7 +127,7 @@ def test_paths(
         parents = run_git(repo, "rev-list", "--parents", "-n", "1", test_commit).split()
         raw = run_git(
             repo, "diff-tree", "-r", "-z", "--no-renames", "--no-commit-id", "--raw",
-            base, test_commit,
+            "--ignore-submodules=none", base, test_commit,
         )  # fmt: skip
     except GitCommandError as exc:
         raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
