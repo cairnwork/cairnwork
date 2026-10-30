@@ -8,8 +8,10 @@ a passing report and ``os._exit(0)`` before the real tests ran. The parent now a
 only when our record is present (so an exit before ``sessionfinish`` fails), it names at least
 one collected test, every collected test has a result, all of them passed, and no collector was
 skipped or failed; the caller also requires each target it named to own a test that ran
-(``Verdict.not_run``): a module skipped at collection (``importorskip``, a module-level skip)
-yields no test at all, so it counts as skipped, not as passed.
+(``Verdict.not_run``), judged by the file each test was collected from (recorded when pytest
+collects the item, before ``pytest_collection_modifyitems``), not by its node id: a module
+skipped at collection (``importorskip``, a module-level skip) yields no test at all, so it counts
+as skipped, not as passed.
 
 The plugin is a small standalone module (``_PLUGIN_SOURCE``) materialised into a per-run
 directory by ``install_plugin`` and loaded with ``-p``. It carries no cairnwork import, so it
@@ -52,7 +54,7 @@ from __future__ import annotations
 import json
 import os
 import stat
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from cairnwork.confined import MAX_REPORT_BYTES
@@ -67,6 +69,8 @@ _PLUGIN_SOURCE = '''\
 
 import json
 import os
+
+import pytest
 
 _FDS_ENV = "CAIRNWORK_GUARD_FDS"
 _PATH_ENV = "CAIRNWORK_VERDICT_PATH"
@@ -105,6 +109,9 @@ class _Reporter:
         self._nonce = nonce
         self._collected = []
         self._outcomes = {}
+        self._sources = {}  # id(item) -> (item, its file) as collected, before any reordering hook
+        self._files = []
+        self._file_of = []  # per collected item: its index in _files, -1 if not seen collected
         self._collect_errors = []
         self._collect_skipped = []
 
@@ -114,8 +121,22 @@ class _Reporter:
         elif report.skipped:  # a module or directory skipped whole while collecting
             self._collect_skipped.append(report.nodeid)
 
+    @pytest.hookimpl(tryfirst=True)
+    def pytest_itemcollected(self, item):
+        try:
+            source = item.path.relative_to(item.config.rootpath).as_posix()
+        except (AttributeError, TypeError, ValueError):
+            source = ""
+        self._sources[id(item)] = (item, source)
+
     def pytest_collection_finish(self, session):
         self._collected = [item.nodeid for item in session.items]
+        index = {}
+        for item in session.items:
+            seen = self._sources.get(id(item))
+            source = seen[1] if seen and seen[0] is item else ""  # an item made after collection
+            self._file_of.append(index.setdefault(source, len(index)) if source else -1)
+        self._files = list(index)
 
     def pytest_runtest_logreport(self, report):
         if report.when == "call":
@@ -125,6 +146,7 @@ class _Reporter:
 
     def pytest_sessionfinish(self, session, exitstatus):
         payload = {"nonce": self._nonce, "collected": self._collected, "outcomes": self._outcomes,
+                   "files": self._files, "file_of": self._file_of,
                    "collect_errors": self._collect_errors,
                    "collect_skipped": self._collect_skipped}
         if self._fd is not None:
@@ -169,13 +191,19 @@ class Verdict:
     recorded: bool = False  # sessionfinish wrote a well-formed record with our nonce (#234)
     collect_errors: tuple[str, ...] = ()  # node ids of collectors that failed (B2, #234)
     collect_skipped: tuple[str, ...] = ()  # node ids of collectors skipped while collecting
+    paths: dict[str, str] = field(default_factory=dict)  # node id -> its file, as collected
 
     def not_run(self, targets) -> tuple[str, ...]:
         """The named ``targets`` (``path`` or ``path::node``) that own no recorded test, then the
         collectors skipped while collecting: a run that leaves any of them is not a pass, whatever
-        else it ran."""
-        missing = [t for t in targets if not any(_within(node, t) for node in self.outcomes)]
+        else it ran. A test belongs to a target only when it was collected from the target's file
+        (``paths``, taken from the item's path when pytest collected it, before any hook could
+        reorder or rename items) and its node id is under the target."""
+        missing = [t for t in targets if not any(self._owns(node, t) for node in self.outcomes)]
         return tuple(dict.fromkeys([*missing, *self.collect_skipped]))
+
+    def _owns(self, nodeid: str, target: str) -> bool:
+        return self.paths.get(nodeid) == target.partition("::")[0] and _within(nodeid, target)
 
 
 def _within(nodeid: str, target: str) -> bool:
@@ -239,8 +267,18 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
         return Verdict(False, {})
     errors = data.get("collect_errors", [])
     skipped = data.get("collect_skipped", [])
+    files = data.get("files", [])
+    file_of = data.get("file_of")  # absent: no test owns a named target
     if not all(
         isinstance(v, list) and all(isinstance(n, str) for n in v) for v in (errors, skipped)
+    ):
+        return Verdict(False, {})
+    if not isinstance(files, list) or not all(isinstance(path, str) for path in files):
+        return Verdict(False, {})
+    if file_of is not None and not (
+        isinstance(file_of, list)
+        and len(file_of) == len(collected)
+        and all(type(n) is int and -1 <= n < len(files) for n in file_of)
     ):
         return Verdict(False, {})
     ran = (
@@ -251,5 +289,21 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
         and all(outcome == "passed" for outcome in outcomes.values())
     )
     return Verdict(
-        ran, outcomes, recorded=True, collect_errors=tuple(errors), collect_skipped=tuple(skipped)
+        ran,
+        outcomes,
+        recorded=True,
+        collect_errors=tuple(errors),
+        collect_skipped=tuple(skipped),
+        paths=_sources(collected, files, file_of or ()),
     )
+
+
+def _sources(collected: list[str], files: list[str], file_of) -> dict[str, str]:
+    """Each collected node id's file; ``""`` when it was not seen collected or one id names
+    items of two files (then neither owns a target)."""
+    paths: dict[str, str] = {}
+    for node, n in zip(collected, file_of, strict=False):
+        source = files[n] if n >= 0 else ""
+        if paths.setdefault(node, source) != source:
+            paths[node] = ""
+    return paths

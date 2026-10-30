@@ -70,7 +70,8 @@ def _record(**extra):
 
 
 def test_a_record_naming_a_collector_skipped_at_collection_is_not_a_pass():
-    verdict = report_guard.parse_verdict(_record(collect_skipped=["tests/b.py"]), "n")
+    record = _record(collect_skipped=["tests/b.py"], files=["tests/a.py"], file_of=[0])
+    verdict = report_guard.parse_verdict(record, "n")
     assert verdict.recorded and not verdict.ran
     assert verdict.collect_skipped == ("tests/b.py",)
     assert verdict.not_run(("tests/a.py",)) == ("tests/b.py",)
@@ -79,6 +80,42 @@ def test_a_record_naming_a_collector_skipped_at_collection_is_not_a_pass():
 @pytest.mark.parametrize("bad", ["tests/b.py", [1], {"x": "y"}])
 def test_a_malformed_skipped_collector_list_fails_closed(bad):
     verdict = report_guard.parse_verdict(_record(collect_skipped=bad), "n")
+    assert not verdict.recorded and not verdict.ran
+
+
+def test_a_test_owns_a_target_only_through_the_source_file_recorded_at_collection():
+    node = "tests/a.py::test_op"
+    for paths, owned in (({node: "tests/a.py"}, True), ({node: "tests/b.py"}, False), ({}, False)):
+        verdict = report_guard.Verdict(True, {node: "passed"}, recorded=True, paths=paths)
+        assert verdict.not_run(("tests/a.py",)) == (() if owned else ("tests/a.py",))
+
+
+def test_the_record_names_each_collected_tests_file_by_index():
+    record = _record(files=["tests/b.py", "tests/a.py"], file_of=[1])
+    verdict = report_guard.parse_verdict(record, "n")
+    assert verdict.ran and verdict.paths == {"tests/a.py::t": "tests/a.py"}
+    assert verdict.not_run(("tests/a.py",)) == ()
+    verdict = report_guard.parse_verdict(_record(files=["tests/a.py"], file_of=[-1]), "n")
+    assert verdict.paths == {"tests/a.py::t": ""} and verdict.not_run(("tests/a.py",))
+    verdict = report_guard.parse_verdict(_record(), "n")  # no file indices: owns nothing
+    assert verdict.not_run(("tests/a.py",)) == ("tests/a.py",)
+
+
+@pytest.mark.parametrize(
+    ("files", "file_of"),
+    [
+        ("tests/a.py", [0]),
+        ([1], [0]),
+        (["tests/a.py"], "0"),
+        (["tests/a.py"], [1]),
+        (["tests/a.py"], [-2]),
+        (["tests/a.py"], [True]),
+        (["tests/a.py"], [0, 0]),
+        (["tests/a.py"], []),
+    ],
+)
+def test_a_malformed_source_file_index_fails_closed(files, file_of):
+    verdict = report_guard.parse_verdict(_record(files=files, file_of=file_of), "n")
     assert not verdict.recorded and not verdict.ran
 
 
@@ -97,8 +134,51 @@ def test_a_malformed_skipped_collector_list_fails_closed(bad):
 )
 def test_a_target_owns_its_node_its_children_and_its_parametrisations(target, owned):
     outcomes = {"tests/a.py::test_op[dbl]": "passed", "tests/a.py::TestK::test_m": "passed"}
-    verdict = report_guard.Verdict(True, outcomes, recorded=True)
+    paths = dict.fromkeys(outcomes, "tests/a.py")
+    verdict = report_guard.Verdict(True, outcomes, recorded=True, paths=paths)
     assert verdict.not_run((target,)) == (() if owned else (target,))
+
+
+# ---- a conftest that rewrites the collected items (run_verifiers, real sandbox) ----------
+
+CORE_TWO = CORE_TEST + "def test_add_twice():\n    assert add(add(1, 1), 1) > 0\n"
+# drops the target's own items and gives a passing item from another file a node id under it
+RENAME = CONFTEST + (
+    "def pytest_collection_modifyitems(items):\n"
+    "    keep = [i for i in items if not i.nodeid.startswith('tests/test_ext.py')]\n"
+    "    for item in keep:\n"
+    "        if item.name == 'test_add_twice':\n"
+    "            item._nodeid = 'tests/test_ext.py::test_mul'\n"
+    "    items[:] = keep\n"
+)
+REORDER = CONFTEST + "def pytest_collection_modifyitems(items):\n    items.reverse()\n"
+
+
+@pytest.mark.sandbox
+@pytest.mark.parametrize(
+    ("conftest", "ext", "passes"),
+    [(RENAME, EXT_WRONG, False), (REORDER, EXT, True), (REORDER, EXT_WRONG, False)],
+    ids=["renamed-into-target", "reordered-passing", "reordered-failing"],
+)
+def test_a_target_is_owned_by_the_items_collected_from_its_file_not_by_their_node_id(
+    repo, tmp_path, conftest, ext, passes
+):
+    commit_change(repo, {
+        "src/calc.py": CALC, "src/calc_ext.py": EXT, "tests/conftest.py": CONFTEST,
+        "tests/test_ext.py": IMPORTORSKIP, "tests/test_core.py": CORE_TWO,
+    })  # fmt: skip
+    candidate = commit_change(
+        repo, {"src/calc.py": FIXED_ADD, "src/calc_ext.py": ext, "tests/conftest.py": conftest}
+    )
+    argv = ["python3", "-m", "pytest", "-q", "tests/test_core.py", "tests/test_ext.py"]
+    spec = parse_verifier("pytest", argv)
+    (run,) = run_verifiers(repo, candidate, (spec,), tmp_path / "runs", "r1", python=sys.executable)
+    assert run.observation.passed is passes
+    assert run.ran is passes
+    if conftest is RENAME:
+        assert run.returncode == 0  # pytest itself sees nothing wrong
+        assert "tests/test_ext.py::test_mul" in run.outcomes
+        assert "no test ran for a target or skipped module (1: tests/test_ext.py)" in run.why
 
 
 # ---- the author's verifier (run_verifiers, real sandbox) ---------------------------------
