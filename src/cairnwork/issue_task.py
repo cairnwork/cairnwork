@@ -20,14 +20,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 import shlex
-import stat
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 from cairnwork.protected_paths import (  # noqa: F401  (re-exported)
@@ -65,6 +62,11 @@ class IssueRefused(Exception):
     def __init__(self, code: str, detail: str = "") -> None:
         super().__init__(f"{code}: {detail}" if detail else code)
         self.code = code
+
+
+class RequestUnreadable(ValueError):
+    """The intake's stored request is absent from a plain requests/ directory, or ASCII JSON cut
+    short (intake_request.read_request, #466). Defined here so adoptable needs no intake import."""
 
 
 @dataclass(frozen=True)
@@ -130,16 +132,17 @@ def adoptable(bound: Any, load_request: Callable[[str], Any], want: Mapping[str,
     asks for: title, instructions (the task text), allowed files, verifiers and test commit, else
     IssueRefused, so a client that pre-bound the key and card with its own files, verifiers or task
     text is never adopted. base_commit and repo may differ: main moves, the intake binds its mirror.
-    A FAILED row whose stored request is missing or cut short (the store failed after the bind) is
-    IssueRefused TASK_BOUND_REQUEST_UNREADABLE (#443): never adopted, never resubmitted under the
-    same key. Any other read failure (config.json, EACCES, EIO) raises: the Issue stays queued.
+    A FAILED row whose stored request is RequestUnreadable (missing or cut short: a row the intake
+    bound before it stored requests first, #466) is IssueRefused TASK_BOUND_REQUEST_UNREADABLE
+    (#443): never adopted, never resubmitted under the same key. Any other failure raises (a live
+    row, config.json, EACCES, EIO, a symlink, a missing requests/): the Issue stays queued.
     """
     if bound.card_hash != want["card_hash"]:
         return False
     try:
         request = load_request(bound.task_id)
-    except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError) as exc:
-        if bound.status != "FAILED" or not _request_itself(exc, bound.task_id):
+    except RequestUnreadable as exc:
+        if bound.status != "FAILED":
             raise
         raise IssueRefused("TASK_BOUND_REQUEST_UNREADABLE", bound.task_id) from exc
     expected = {
@@ -163,22 +166,6 @@ def issue_task_id(bound: Any, repo: str, number: int) -> str:
     if not (bound.idempotency_key.startswith(prefix) and bound.card_hash.startswith(prefix)):
         raise ValueError(f"ISSUE_TASK_MISMATCH: {bound.task_id} is not bound for {prefix[:-1]}")
     return bound.task_id
-
-
-def _request_itself(exc: Exception, task_id: str) -> bool:
-    """Did the stored request itself fail, not another file or the state? A missing file must be
-    requests/<task_id>.json, absent (not even a dangling symlink: the intake creates it O_EXCL)
-    from a plain requests/ directory (lstat); a decode error is the request's, as load_request
-    decodes it before reading config.json, whose own decode errors are IntakeRefused BAD_CONFIG."""
-    if isinstance(exc, FileNotFoundError):
-        path = Path(str(exc.filename))
-        try:
-            plain_dir = stat.S_ISDIR(path.parent.lstat().st_mode)
-        except OSError:
-            return False
-        named = path.parts[-2:] == ("requests", f"{task_id}.json")
-        return named and plain_dir and not os.path.lexists(path)
-    return isinstance(exc, (json.JSONDecodeError, UnicodeDecodeError))
 
 
 def _check_path(path: Any) -> None:

@@ -97,6 +97,14 @@ def provenance_lines(provenance: dict) -> str:
 
 
 def refusal_text(exc: Exception, needs_fix: str, queue: str) -> str:
+    if refusal_code(exc) == "TASK_BOUND_REQUEST_UNREADABLE":  # the block is not at fault (#466)
+        return (
+            "Cairnwork 不能接這張：`TASK_BOUND_REQUEST_UNREADABLE`。區塊沒有寫錯："
+            "它綁定的任務已失敗，存下的請求讀不到。只改區塊再排，請求內容沒變時"
+            "會被 `REPLAY_FORBIDDEN` 擋下。請維護者先用 `cairnwork-route supersede` "
+            "釋放那個任務（task id 在 run-once 的本機輸出），再修改區塊、"
+            f"移除 `{needs_fix}` 再加上 `{queue}`。"
+        )
     return (
         f"Cairnwork 不能接這張：`{refusal_code(exc)}`。修正 `eia-task` 區塊，移除 "
         f"`{needs_fix}` 再加上 `{queue}`。測試檔不能列在 allowed_files，要先放在 main。"

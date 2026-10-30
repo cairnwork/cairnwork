@@ -28,7 +28,7 @@ import json
 import math
 import sqlite3
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import astuple, dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -133,6 +133,10 @@ class BindResult:
     duplicate: bool
 
 
+def new_task_id() -> str:
+    return f"task-{uuid.uuid4().hex}"
+
+
 def request_digest(request: dict[str, Any]) -> str:
     """sha256 over canonical JSON; key order and whitespace do not matter.
 
@@ -171,9 +175,10 @@ class OwnershipLedger:
         return conn
 
     def bind(
-        self, idempotency_key: str, request: dict[str, Any], owner: str, card_hash: str
+        self, idempotency_key: str, request: dict[str, Any], owner: str, card_hash: str, task_id=""
     ) -> BindResult:
-        """Bind a new task, or return the existing binding for an identical resend."""
+        """Bind a new task, or return the existing binding for an identical resend. A new task gets
+        ``task_id`` when given (new_task_id(): the intake stores its request first, #466)."""
         _require_token(idempotency_key, "idempotency_key")
         _require_token(card_hash, "card_hash")
         if owner not in OWNERS:
@@ -188,7 +193,7 @@ class OwnershipLedger:
                 return BindResult(_same_binding(existing, digest, owner, card_hash), True)
             _refuse_replay(conn, digest, card_hash)
             record = OwnershipRecord(
-                idempotency_key, digest, owner, f"task-{uuid.uuid4().hex}", card_hash, "BOUND"
+                idempotency_key, digest, owner, task_id or new_task_id(), card_hash, "BOUND"
             )
             _insert(conn, record)
             conn.execute("COMMIT")
@@ -340,17 +345,7 @@ def _refuse_replay(conn: sqlite3.Connection, digest: str, card_hash: str) -> Non
 
 def _insert(conn: sqlite3.Connection, record: OwnershipRecord) -> None:
     try:
-        conn.execute(
-            "INSERT INTO task_ownership VALUES (?, ?, ?, ?, ?, ?)",
-            (
-                record.idempotency_key,
-                record.request_digest,
-                record.owner,
-                record.task_id,
-                record.card_hash,
-                record.status,
-            ),
-        )
+        conn.execute("INSERT INTO task_ownership VALUES (?, ?, ?, ?, ?, ?)", astuple(record))
     except sqlite3.IntegrityError as exc:
         active = _active_for_card(conn, record.card_hash)
         if active is None:

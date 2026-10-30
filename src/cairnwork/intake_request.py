@@ -1,14 +1,25 @@
 """The intake's closed request schema: a submitted payload becomes a TaskSpec or is refused
 (``IntakeRefused``); unknown or missing fields are refused, never ignored. intake.py (the state
-directory, config and task lifecycle) uses it and re-exports both names."""
+directory, config and task lifecycle) uses it and re-exports both names. Also the stored request,
+``requests/<task_id>.json``: written whole and synced before its task is bound (#466), and read
+back so that only its own absence or a cut-short body is RequestUnreadable."""
 
 from __future__ import annotations
 
+import contextlib
+import errno
+import json
 import os
+import sqlite3
+import stat
 from pathlib import Path
 from typing import Any
 
+from cairnwork.issue_task import RequestUnreadable
+from cairnwork.ownership import OWNER, BindResult, OwnershipError, OwnershipLedger, new_task_id
 from cairnwork.pipeline import TaskSpec
+
+_DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW  # requests/ itself, never a symlink
 
 FIELDS = frozenset(
     {
@@ -79,3 +90,93 @@ def _verifier_shape(value: Any) -> bool:
         and isinstance(value[1], list)
         and all(isinstance(a, str) for a in value[1])
     )
+
+
+def store_request(requests: Path, task_id: str, payload: dict[str, Any]) -> None:
+    """Write the request for a task id nothing is bound to yet: a new file (O_EXCL, no symlink),
+    synced, then requests/ synced so the name survives a crash too. On any failure the file is
+    removed and the error raised: the caller binds nothing, so the next submit starts over."""
+    data = json.dumps(payload, sort_keys=True).encode("ascii")  # ensure_ascii: ASCII only
+    name, dir_fd = f"{task_id}.json", os.open(requests, _DIR_FLAGS)
+    try:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+        fd = os.open(name, flags, 0o600, dir_fd=dir_fd)
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.fsync(dir_fd)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(name, dir_fd=dir_fd)
+            raise
+    finally:
+        os.close(dir_fd)
+
+
+def bind_stored(
+    ledger: OwnershipLedger, task: TaskSpec, payload: dict[str, Any], requests: Path
+) -> BindResult:
+    """Store the request under a new task id, then bind that id (#466), so every bound task's
+    request is on disk, whole and synced. The copy is dropped when nothing is bound to it: a
+    refusal before the commit (OwnershipError) or a resend answered with the existing task. Any
+    other failure of the bind may come after its commit, so the copy stays."""
+    task_id = new_task_id()
+    store_request(requests, task_id, payload)
+    try:
+        bound = ledger.bind(task.idempotency_key, task.request(), OWNER, task.card_hash, task_id)
+    except OwnershipError:
+        _drop(requests, task_id)
+        raise
+    if bound.duplicate:
+        _drop(requests, task_id)
+    return bound
+
+
+def _drop(requests: Path, task_id: str) -> None:
+    """Remove a stored request no task is bound to; best effort (an orphan file is harmless)."""
+    with contextlib.suppress(OSError):
+        (requests / f"{task_id}.json").unlink()
+
+
+def read_request(requests: Path, task_id: str) -> Any:
+    """The stored request's JSON. RequestUnreadable only when the file is absent from requests/
+    (held open, so no later look decides it; #450) or is ASCII JSON cut short. Anything else raises
+    as it is: requests/ missing or a symlink, a symlink or non-regular file at the path
+    (O_NOFOLLOW), EACCES or EIO, or bytes that are not ASCII (never written: damage, not a cut)."""
+    dir_fd = os.open(requests, _DIR_FLAGS)
+    try:
+        try:
+            fd = os.open(
+                f"{task_id}.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd
+            )
+        except FileNotFoundError as exc:
+            raise RequestUnreadable(f"{task_id}: missing") from exc
+        with os.fdopen(fd, "rb") as handle:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise OSError(errno.EINVAL, "not a regular file", f"{task_id}.json")
+            text = handle.read().decode("ascii")
+    finally:
+        os.close(dir_fd)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise RequestUnreadable(f"{task_id}: cut short") from exc
+
+
+def check_requests(state: Path) -> None:
+    """BAD_STATE when requests/ is missing or not a plain directory while the ledger names a task
+    (#466): those tasks' requests are gone, which prepare() must not hide by making it anew. With
+    no ledger or an empty one nothing is lost, so prepare() creates it. Read-only."""
+    requests, ledger = state / "requests", state / "ownership.sqlite"
+    if (requests.is_dir() and not requests.is_symlink()) or not ledger.exists():
+        return
+    try:
+        uri = f"{ledger.absolute().as_uri()}?mode=ro"
+        with contextlib.closing(sqlite3.connect(uri, uri=True)) as conn:
+            bound = conn.execute("SELECT 1 FROM task_ownership LIMIT 1").fetchone() is not None
+    except sqlite3.Error:
+        bound = True  # a ledger we cannot read may name tasks: fail closed
+    if bound:
+        raise IntakeRefused("BAD_STATE", f"{requests} is missing or not a plain directory")
