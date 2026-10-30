@@ -95,12 +95,17 @@ def test_a_read_root_beside_or_holding_the_tree_adds_nothing(host):
     assert _at(lines, "--ro-bind", _real(host), _real(host)) == -1  # would bring the tree back
 
 
-def test_only_links_that_stay_in_the_tree_or_a_store_are_recreated(host):
+def test_only_links_that_stay_in_the_tree_are_recreated_at_the_checked_path(host):
     run = host / "run"
     (run / "sub").mkdir()
+    (host / "out").mkdir()
     (run / "inside").symlink_to("sub/x")
     (run / "inside-abs").symlink_to(run / "sub")
-    (run / "current-system").symlink_to("/nix/store/abc-system")  # immutable: no sockets there
+    (run / "mid").symlink_to("sub")  # an intermediate link: the checked path is what is recreated
+    (run / "via").symlink_to("mid/x")
+    (run / "mid-out").symlink_to(host / "out")
+    (run / "via-out").symlink_to("mid-out/x")  # leaves the tree through mid-out: not recreated
+    (run / "current-system").symlink_to("/nix/store/abc-system")  # outside the tree: #469
     (run / "out-abs").symlink_to("/tmp/agent.sock")  # noqa: S108 - escapes: not recreated
     (run / "out-rel").symlink_to("../../tmp/x")
     (run / "shm").symlink_to("../dev/shm")
@@ -115,9 +120,11 @@ def test_only_links_that_stay_in_the_tree_or_a_store_are_recreated(host):
     real = _real(run)
     links = [lines[i + 1 : i + 3] for i, flag in enumerate(lines) if flag == "--symlink"]
     assert links == [
-        ["/nix/store/abc-system", f"{real}/current-system"],
-        ["sub/x", f"{real}/inside"],
+        [f"{real}/--bind", f"{real}/dash"],  # an absolute path now: no option, no line break
+        [f"{real}/sub/x", f"{real}/inside"],
         [f"{real}/sub", f"{real}/inside-abs"],
+        [f"{real}/sub", f"{real}/mid"],
+        [f"{real}/sub/x", f"{real}/via"],
     ]
     assert "bad" not in lines and f"{real}/-lead" not in lines
 

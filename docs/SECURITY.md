@@ -25,9 +25,10 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
   capabilities dropped, nested user namespaces disabled. `/run` (and `/var/run` where it is its
   own directory, not a link to `/run`) is private to each run: an empty tmpfs, made read-only
   last, with only what a run needs put back — the tree's top-level symlinks that resolve inside
-  the tree or into an immutable `/nix/store` or `/gnu/store` (NixOS `/run/current-system`; a link
-  leading anywhere else, such as Rancher Desktop's `/var/run/docker.sock -> ~/.rd/docker.sock`,
-  is not recreated), and each top-level `/etc` symlink to a regular file under it
+  the tree, recreated at the canonical path that was checked (a link leading anywhere else, such
+  as Rancher Desktop's `/var/run/docker.sock -> ~/.rd/docker.sock` or NixOS
+  `/run/current-system -> /nix/store/...`, is not recreated; NixOS is #469), and each top-level
+  `/etc` symlink to a regular file under it
   (`/etc/resolv.conf -> /run/systemd/resolve/stub-resolv.conf`; under the dedicated account only
   one it may reach; a file its daemon swaps between the policy build and the run start is bound
   as it then is) (#391, `src/cairnwork_sandbox/bwrap_private.py`). A read or write root inside
@@ -267,7 +268,7 @@ mode (launching account or dedicated account):
   private, read-only `/run` described above: no host socket under `/run` or `/var/run` is
   connectable from a run, in owner or account mode, including one the host creates while the
   run is in progress (the tmpfs lives in the run's own mount namespace), and no path under them
-  leads back out (a recreated link stays inside the tree or a store; no root is bound there).
+  leads back out (a recreated link stays inside the tree; no root is bound there).
   `tests/test_run_isolation_witness.py` checks this on real bwrap in CI. Still open: a pathname
   socket elsewhere — under `/tmp` (in owner mode the launching account's own sockets, such as an
   ssh-agent or tmux socket, until the rest of #391), `/var/tmp`, `/var/lib`, a home, `/srv` — is
@@ -278,8 +279,10 @@ mode (launching account or dedicated account):
   `DynamicUser`) no longer resolves inside it (the nscd and userdb sockets are gone, so glibc
   falls back to `/etc/passwd`); NixOS `/run/wrappers` (setuid `sudo`, `ping`) is not put back
   (setuid is inert under bwrap's `no_new_privs` anyway); and a `/run` link leading out of the
-  tree, such as Debian's `/run/shm -> /dev/shm`, is not recreated (`/dev/shm` itself is there). Multiprocessing is unaffected: its
-  semaphores and shared memory live in the run's own `/dev/shm`, its sockets in `TMPDIR`.
+  tree is not recreated: Debian's `/run/shm -> /dev/shm` (`/dev/shm` itself is there) and NixOS
+  `/run/current-system`, so on NixOS commands found only through `/run/current-system/sw/bin`
+  are missing inside a run (#469). Multiprocessing is unaffected: its semaphores and shared
+  memory live in the run's own `/dev/shm`, its sockets in `TMPDIR`.
 - So "writes and network are confined" holds for ordinary filesystem writes and IP networking;
   a filesystem socket outside the private trees is the residual. **Run genuinely adversarial
   third-party code only under the dedicated account**, not the launching account: the whole-root

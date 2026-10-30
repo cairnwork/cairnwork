@@ -3,9 +3,9 @@
 /run holds the host's daemon sockets (journald, systemd, snapd, uuidd, D-Bus, container daemons),
 and a read-only bind does not stop ``connect()``. So each run gets an empty tmpfs there in its own
 mount namespace (a socket the host adds later does not appear), read-only last. Put back: each
-top-level link that resolves inside a tree or an immutable store (NixOS ``/run/current-system``;
-not Rancher's ``/run/docker.sock`` -> home); each top-level ``/etc`` link to a regular file in a
-tree (``/etc/resolv.conf``), read-only, for the account only one it may reach (a file swapped
+top-level link that resolves inside a tree, at the path checked (not Rancher's ``/run/docker.sock``
+-> home, nor NixOS ``/run/current-system``, #469); each top-level ``/etc`` link to a regular file
+in a tree (``/etc/resolv.conf``), read-only, for the account only one it may reach (a file swapped
 after the check is bound as it then is). A read or write root in a tree is refused: none is put
 there, and ``--remount-ro`` does not recurse into a write bind. A tree that cannot be listed or
 written in the policy, or an /etc entry that cannot be checked, refuses the policy.
@@ -23,7 +23,6 @@ from cairnwork_sandbox.bwrap_reach import account_may_traverse
 TREES = ("/run", "/var/run")  # read at call time: tests rebind it
 ETC = "/etc"
 _NAME = re.compile(r"^[A-Za-z0-9_./+@~][A-Za-z0-9 _./+@~-]*$")  # no line break, no leading '-'
-_STORES = ["/nix/store", "/gnu/store"]  # immutable package stores: no socket lives there
 
 
 def trees() -> list[str]:
@@ -68,10 +67,10 @@ def private_flags(reads: list[str], writes: list[str], owner: bool) -> tuple[lis
     for tree in private:
         head += ["--tmpfs", tree]
         for entry in _entries(tree):
-            target = _readlink(entry)
-            inside = _under(os.path.realpath(entry.path), private + _STORES)
-            if inside and _NAME.fullmatch(target) and _NAME.fullmatch(entry.name):
-                head += ["--symlink", target, f"{tree}/{entry.name}"]
+            target = _readlink(entry)  # read once; the checked canonical path is what is recreated
+            real = os.path.realpath(os.path.join(tree, target)) if target else ""
+            if _under(real, private) and _NAME.fullmatch(real) and _NAME.fullmatch(entry.name):
+                head += ["--symlink", real, f"{tree}/{entry.name}"]
     for entry in _entries(ETC):
         try:
             real = os.path.realpath(entry.path) if entry.is_symlink() else ""
