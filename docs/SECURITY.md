@@ -306,9 +306,10 @@ directories (`attempt_dirs`). Three residuals remain (#436); each has its own bo
 - **PID reuse.** The start time is read before and after the other reads, which narrows the race,
   but `os.kill` takes a number: macOS has no pidfd to bind the kill to the process checked.
   Bound: the kill runs as the owner, so it reaches only a process of the owner's uid, and only one
-  that took the pid in the gap between the second start-time read and `os.kill`, with no wait in
-  between. macOS hands out pids in turn up to 99,999 before wrapping, so in practice that gap is
-  short.
+  of two kinds: one that took the pid in the gap between the second start-time read and
+  `os.kill` (no wait in between), or one that took the pid between the two reads with a start time
+  equal to the microsecond (`_started` compares seconds and microseconds). macOS hands out pids in
+  turn up to 99,999 before wrapping, so reuse within either gap is unlikely in practice.
 - **Directory checks are by path.** Recovery resolves the run directories to realpaths when it
   lists them, `kill_withheld_in` resolves them again at the start of every sweep (`confirm_gone`
   sweeps again after `CONFIRM_WAIT`), and a process's directory is resolved when it is checked; a
