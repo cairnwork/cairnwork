@@ -3,19 +3,18 @@
 The policy is a read-only bind of the whole root plus read-write binds for the write roots,
 with a fresh /dev and /proc, every namespace unshared (so no network), all capabilities
 dropped and nested user namespaces disabled. A read-only root bind does not stop connect() to a
-pathname socket, which no network namespace covers, so /run (and a separate /var/run) is a
-private, read-only tmpfs per run with only what a run needs put back (``bwrap_private``, #391).
-Named credential directories under $HOME (and the /tmp/.X11-unix socket tree: an X server lets a
-reachable client inject input and run commands outside the sandbox) are emptied with a tmpfs,
-credential files are replaced by /dev/null, and so are root-equivalent daemon sockets (Docker/
-Podman/containerd, the system D-Bus, LXD, Incus) at their real path, which a /run link may put
-outside /run. See docs/SECURITY.md for the full set.
+pathname socket, which no network namespace covers, so /run, /tmp (and a separate /var/run) are
+private, read-only tmpfs trees per run with only what a run needs put back (``bwrap_private``,
+#391). Named credential directories under $HOME are emptied with a tmpfs, credential files are
+replaced by /dev/null, and so are root-equivalent daemon sockets (Docker/Podman/containerd, the
+system D-Bus, LXD, Incus) at their real path, which a /run link may put outside /run. See
+docs/SECURITY.md for the full set.
 
 Trade-off (documented in docs/SECURITY.md): the whole root stays readable, so everything the
 running account (the launching one, or the dedicated verifier account) can read is readable
 inside; only the named credential list is masked. Other users' 0700 home directories are
 protected by POSIX permissions. This is not complete read isolation, and a pathname socket
-outside the private trees (under /tmp, /var/lib, a home) stays connectable if that account may.
+outside the private trees (/var/tmp, /var/lib, a home, /srv) stays connectable if that account may.
 
 On Ubuntu 24.04+ an AppArmor rule restricts unprivileged user namespaces by default:
 ``unshare(CLONE_NEWUSER)`` still succeeds but the new namespace holds no capabilities, so
@@ -102,9 +101,6 @@ _DANGEROUS_SOCKETS = (
     "/var/lib/lxd/unix.socket",
     "/var/lib/incus/unix.socket",  # Incus (the LXD fork): same root-equivalence
 )
-# The X11 server sockets, emptied with a tmpfs (the whole tree at once, uid-independent): a
-# reachable X server lets a process inject input and run commands outside the sandbox.
-_X11_SOCKET_DIR = "/tmp/.X11-unix"  # noqa: S108 - masked, not created
 
 # Unshare a user + pid namespace, drop all capabilities, disable nested userns, bind the root
 # read-only, mount a fresh /proc, run true. Exit 0 means bwrap can build a confining namespace
@@ -192,7 +188,7 @@ def build_policy(
     over* are masked (every directory on the real path enterable, ``bwrap_reach``). Those are the
     ones that can leak and can be mounted without EPERM; a correctly ``0700`` home yields none,
     unless a link in it points out to a reachable target (#358). The narrow-check still uses the
-    real home, and the private /run and the socket masks (which do not touch the owner's home)
+    real home, and the private trees and the socket masks (which do not touch the owner's home)
     are always applied.
     """
     real_home = _safe(home or Path.home())
@@ -223,7 +219,7 @@ def build_policy(
         "/proc",
         *shm_flags(bwrap_path() or ""),
     ]
-    # The private /run goes first, so the write binds and masks below land on top of it (#391).
+    # The private trees go first, so the write binds and masks below land on top of it (#391).
     private, remount = private_flags(reads, writes, mask_home_credentials)
     flags += private
     for root in writes:
@@ -242,9 +238,6 @@ def build_policy(
         if real and real not in masked_socks:
             masked_socks.add(real)
             flags += ["--ro-bind", "/dev/null", real]
-    # Empty the socket trees that exist with a tmpfs (whole tree, uid-independent).
-    for socket_dir in _socket_dirs_to_empty():
-        flags += ["--tmpfs", _safe(socket_dir)]
     flags += remount  # last: the private trees turn read-only once everything is mounted on them
     # Surfaced by the verifier run (Policy.notes), not written into the hashed policy text.
     reason = shm_unavailable_reason(bwrap_path() or "")
@@ -307,12 +300,6 @@ def _account_can_reach(real_home: str, rel: str) -> bool:
     except OSError:
         return False
     return account_may_traverse(os.path.dirname(real))
-
-
-def _socket_dirs_to_empty() -> list[str]:
-    """The X server socket tree when it exists (read each call: tests rebind the global), emptied
-    whole so it holds for any uid; /run/user and /run/libvirt are in the private /run (#391)."""
-    return [_X11_SOCKET_DIR] if os.path.isdir(_X11_SOCKET_DIR) else []
 
 
 def _binary() -> str:
