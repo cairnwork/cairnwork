@@ -7,6 +7,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
 from cairnwork.changeset import ChangeSetError, read_change_set
 from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork_attest.binding_extras import _unrequired_problem, required_ids
@@ -25,7 +27,7 @@ _OID = re.compile(r"^[0-9a-f]{40}$")
 
 
 def _verify_envelope_and_payload(
-    bundle_path: Path, public_key_pem: Path
+    bundle_path: Path, public_key_pem: Path, public_key: Ed25519PublicKey | None = None
 ) -> tuple[bytes | None, VerifyResult | None, str]:
     """Check the signature; also return the id of the one key that was read for it."""
     try:
@@ -38,8 +40,9 @@ def _verify_envelope_and_payload(
         return None, _fail("BUNDLE_UNREADABLE", f"cannot read bundle: {exc}"), ""
 
     try:
-        pem_bytes = Path(public_key_pem).read_bytes()
-        pubkey = load_public_key_pem(pem_bytes)
+        pubkey = public_key
+        if pubkey is None:  # not loaded by the caller: read the file once, here
+            pubkey = load_public_key_pem(Path(public_key_pem).read_bytes())
     except (KeyFileError, OSError) as exc:
         return None, _fail("SIGNATURE_INVALID", f"cannot load public key: {exc}"), ""
 
@@ -250,6 +253,7 @@ def verify_bundle(
     core_identity_pin: Mapping[str, Any] | None = None,
     expected_base: str | None = None,
     policy: Mapping[str, Any] | None = None,
+    public_key: Ed25519PublicKey | None = None,
 ) -> VerifyResult:
     """Verify an attestation bundle against local git objects and a trusted public key.
 
@@ -266,12 +270,13 @@ def verify_bundle(
     errors (such as wrong argument types) may raise. A signed value nested too deeply to check
     (#440) refuses with the code of the step that catches it, else ``STATEMENT_SHAPE``: a message
     that quotes the value, or a comparison, can still recurse past the limit (Python 3.14).
+    ``public_key``, when given, is ``public_key_pem`` already loaded, so the file is not read again.
     """
     try:
         return _verify_bundle(
             bundle_path, public_key_pem=public_key_pem, repo=repo,
             expected_candidate=expected_candidate, core_identity_pin=core_identity_pin,
-            expected_base=expected_base, policy=policy,
+            expected_base=expected_base, policy=policy, public_key=public_key,
         )  # fmt: skip
     except RecursionError:
         return _fail("STATEMENT_SHAPE", "a signed value is nested too deeply to check")
@@ -286,8 +291,11 @@ def _verify_bundle(
     core_identity_pin: Mapping[str, Any] | None = None,
     expected_base: str | None = None,
     policy: Mapping[str, Any] | None = None,
+    public_key: Ed25519PublicKey | None = None,
 ) -> VerifyResult:
-    payload_bytes, err, signing_key_id = _verify_envelope_and_payload(bundle_path, public_key_pem)
+    payload_bytes, err, signing_key_id = _verify_envelope_and_payload(
+        bundle_path, public_key_pem, public_key
+    )
     if err is not None:
         return err
     if payload_bytes is None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -11,7 +12,7 @@ from cairnwork_attest.checkrun import post_check_run
 from cairnwork_attest.keys import keyid, public_key_pem
 from cairnwork_attest.verify import verify_bundle
 from tests.attest.binding_helpers import notarize_bound, policy, producer, sign_bound
-from tests.attest.test_check_run import SLUG, _bundle, _pem
+from tests.attest.test_check_run import SLUG, TOKEN, FakeHttp, _bundle, _pem
 from tests.attest.test_check_run_gh import _gh
 
 pytestmark = pytest.mark.usefixtures("production_git_env")
@@ -59,3 +60,20 @@ def test_signature_only_check_run_reads_the_key_once(tmp_path, monkeypatch):
     result = post_check_run(_bundle(tmp_path, key), SLUG, public_key=pem, token=None, gh=gh)
     assert result.ok
     assert calls[0] == 1
+
+
+def test_full_verify_check_run_reads_the_key_once(tmp_path, monkeypatch):
+    p = producer(tmp_path)
+    state = tmp_path / "state"
+    run = notarize_bound(state, p)
+    bundle = sign_bound(state, run, tmp_path / "bundle.json")
+    pub = state / "public.pem"
+    other = public_key_pem(Ed25519PrivateKey.generate().public_key()).encode()
+    calls = _count_reads(monkeypatch, pub, [pub.read_bytes(), other])
+    http = FakeHttp()
+    result = post_check_run(bundle, SLUG, public_key=pub, repo=p["work"], token=TOKEN, http=http)
+    assert result.ok
+    assert calls[0] == 1
+    summary = json.loads(http.calls[0][3])["output"]["summary"]
+    line = next(x for x in summary.splitlines() if x.startswith("- Offline verification"))
+    assert "VERIFIED" in line and "signature only" not in line

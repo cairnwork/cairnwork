@@ -125,6 +125,7 @@ def _offline_result(
             public_key_pem=public_key,
             repo=repo,
             expected_candidate=facts["candidate"],
+            public_key=key,
         )
         if result.ok:
             return "VERIFIED", result.assurance
