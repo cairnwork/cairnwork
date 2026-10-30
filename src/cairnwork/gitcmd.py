@@ -119,12 +119,15 @@ def run_git(
     return _exec(repo, args, index_file, isolate_config, timeout, text=True)
 
 
-def run_git_bytes(repo: Path, *args: str, timeout: float = GIT_TIMEOUT_SECONDS) -> bytes:
+def run_git_bytes(
+    repo: Path, *args: str, timeout: float = GIT_TIMEOUT_SECONDS, stdin: bytes | None = None
+) -> bytes:
     """Like run_git, but stdout is raw bytes: no decoding and no newline translation.
 
+    stdin, when given, is git's standard input (``cat-file --batch``).
     A failure's ``CalledProcessError`` (``__cause__``) then carries bytes in ``stdout``.
     """
-    return _exec(repo, args, None, False, timeout, text=False)
+    return _exec(repo, args, None, False, timeout, text=False, stdin=stdin)
 
 
 def _exec(
@@ -135,6 +138,7 @@ def _exec(
     timeout: float,
     *,
     text: bool,
+    stdin: bytes | None = None,
 ) -> Any:  # str when text, else bytes
     if not timeout or timeout <= 0:
         raise ValueError(f"timeout must be a positive number of seconds, got {timeout!r}")
@@ -152,6 +156,7 @@ def _exec(
         done = subprocess.run(  # noqa: S603 - fixed git argv, no shell
             ["git", *_SAFE_OPTIONS, "-C", str(repo), *args],  # noqa: S607
             check=True,
+            input=stdin,
             capture_output=True,
             text=text,
             encoding="utf-8" if text else None,
