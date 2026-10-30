@@ -57,5 +57,13 @@ def bundle_facts(path: Path) -> dict[str, Any]:
             "core_status": core_status,
             "keyid": keyid_val,
         }
-    except (OSError, ValueError, UnicodeDecodeError, KeyError, TypeError, binascii.Error):
+    except (
+        OSError,
+        ValueError,
+        UnicodeDecodeError,
+        KeyError,
+        TypeError,
+        binascii.Error,
+        RecursionError,
+    ):  # a file nested too deeply (#449), as verify_bundle refuses it
         return nulls

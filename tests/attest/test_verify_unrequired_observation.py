@@ -53,7 +53,19 @@ def test_a_receipt_with_only_required_passed_observations_is_accepted(tmp_path, 
 
 
 @pytest.mark.parametrize(
-    "status", [None, "ERROR", "fail", "SKIP", ["FAIL"], "pass", "PASS "], ids=repr
+    "status",
+    [
+        None,
+        "ERROR",
+        "fail",
+        "SKIP",
+        ["FAIL"],
+        "pass",
+        "PASS ",
+        "\uff30\uff21\uff33\uff33",
+        "PASS\u00a0",
+    ],
+    ids=repr,
 )
 def test_any_status_but_pass_refuses(tmp_path, repo, status):
     def edit(observations: list[dict[str, Any]]) -> None:
@@ -66,9 +78,13 @@ def test_any_status_but_pass_refuses(tmp_path, repo, status):
     assert _check(tmp_path, repo, edit, unrequired=("other",)).code == FAILED
 
 
-@pytest.mark.parametrize("lookalike", [" pytest", "Pytest"], ids=repr)
+LOOKALIKES = [" pytest", "Pytest", "\uff50\uff59\uff54\uff45\uff53\uff54", "pytest\u00a0"]
+
+
+@pytest.mark.parametrize("lookalike", LOOKALIKES, ids=repr)
 def test_an_id_that_only_looks_like_a_required_one_is_unrequired(tmp_path, repo, lookalike):
-    """Only ``pytest`` is required: ids compare exactly, never stripped or case-folded (#440)."""
+    """Only ``pytest`` is required: ids compare exactly, never stripped, case-folded or NFKC
+    normalized (full-width letters, a no-break space; #440, #449)."""
 
     def edit(observations: list[dict[str, Any]]) -> None:
         observations.append(dict(observations[0], verifier_id=lookalike, status="FAIL"))
