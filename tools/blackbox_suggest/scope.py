@@ -229,6 +229,8 @@ def _function(node: ast.FunctionDef | ast.AsyncFunctionDef, verdict: Verdict, *,
         verdict.refuse("a def binds a name this reader takes for pytest's")
     _hook(verdict, node.name, top=top, by_def=True)
     _decorators(node.decorator_list, verdict)
+    if any(_from_pytest(n) for stmt in node.body for n in ast.walk(stmt)):
+        verdict.refuse("a function imports from pytest in its body (its names are not resolved)")
     if _calls_outside_pytest(node.args) or (node.returns and _calls_outside_pytest(node.returns)):
         verdict.refuse("module-level default argument runs at import time")
     args = node.args
@@ -238,6 +240,14 @@ def _function(node: ast.FunctionDef | ast.AsyncFunctionDef, verdict: Verdict, *,
         verdict.refuse("a default argument is not a literal (it is evaluated at import time)")
     if not all(_annotation_inert(n, verdict) for n in notes if n):
         verdict.refuse("an annotation is not a plain type (it is evaluated at import time)")
+
+
+def _from_pytest(node: ast.AST) -> bool:
+    if isinstance(node, ast.ImportFrom):
+        return (node.module or "").split(".")[0] in ("pytest", "_pytest")
+    return isinstance(node, ast.Import) and any(
+        a.name.split(".")[0] in ("pytest", "_pytest") for a in node.names
+    )
 
 
 def _decorators(decorators: list[ast.expr], verdict: Verdict) -> None:

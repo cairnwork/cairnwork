@@ -133,6 +133,27 @@ UNRESOLVED = {
         + PLAIN,
         {},
     ),
+    "match_capture": (
+        HEAD
+        + "from pytest import mark as m\n@m.parametrize('x', [1])\n"
+        + "def test_a(x):\n    assert f(x) == x\n"
+        + "def helper(v):\n    match v:\n        case {'x': m}:\n            return m\n",
+        {},
+    ),
+    "match_star": (
+        HEAD
+        + "from pytest import mark as m\n@m.parametrize('x', [1])\n"
+        + "def test_a(x):\n    assert f(x) == x\n"
+        + "def helper(v):\n    match v:\n        case [*m]:\n            return m\n",
+        {},
+    ),
+    "match_mapping_rest": (
+        HEAD
+        + "from pytest import mark as m\n@m.parametrize('x', [1])\n"
+        + "def test_a(x):\n    assert f(x) == x\n"
+        + "def helper(v):\n    match v:\n        case {**m}:\n            return m\n",
+        {},
+    ),
 }
 
 
@@ -146,4 +167,23 @@ def test_a_single_clean_alias_still_resolves_to_the_plain_result(tmp_path):
     body = HEAD + "from pytest import mark as m\n@m.parametrize('x', [1])\n"
     body += "def test_a(x):\n    assert f(x) == x\n"
     item = run(tmp_path, body)
+    assert item.protected(KINDS_NOW), item.reason(KINDS_NOW)
+
+
+FUNCTION_LOCAL = {
+    "aliased_name": "def helper():\n    from pytest import skip as sk\n    sk('no')\n",
+    "aliased_module": "def helper():\n    import pytest as pt\n    pt.skip('no')\n",
+    "plain_name": "def helper():\n    from pytest import skip\n    skip('no')\n",
+    "in_a_method": "class Helper:\n    def go(self):\n        import pytest\n"
+    + "        pytest.skip('no')\n",
+}
+
+
+@pytest.mark.parametrize("case", sorted(FUNCTION_LOCAL))
+def test_a_pytest_import_inside_a_function_is_refused(tmp_path, case):
+    assert refused(run(tmp_path, HEAD + FUNCTION_LOCAL[case] + PLAIN))
+
+
+def test_a_function_local_import_of_another_module_keeps_the_draft(tmp_path):
+    item = run(tmp_path, HEAD + "def helper():\n    import json\n    return json\n" + PLAIN)
     assert item.protected(KINDS_NOW), item.reason(KINDS_NOW)

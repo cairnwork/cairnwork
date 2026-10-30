@@ -28,8 +28,10 @@ def _bindings(tree: ast.Module) -> Counter[str]:
         elif isinstance(node, ast.Import | ast.ImportFrom):
             for a in node.names:
                 count[(a.asname or a.name).split(".")[0]] += 1
-        elif isinstance(node, ast.ExceptHandler) and node.name:
+        elif isinstance(node, ast.ExceptHandler | ast.MatchAs | ast.MatchStar) and node.name:
             count[node.name] += 1
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            count[node.rest] += 1
     return count
 
 
