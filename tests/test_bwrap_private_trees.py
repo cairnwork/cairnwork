@@ -62,9 +62,14 @@ def test_the_tree_is_a_tmpfs_before_every_bind_and_read_only_last(host):
 def test_a_separate_var_run_gets_its_own_tmpfs(host, monkeypatch):
     (host / "varrun").unlink()
     (host / "varrun").mkdir()
+    (host / "varrun" / "f.conf").write_text("x\n")
+    (host / "etc" / "v.conf").symlink_to(host / "varrun" / "f.conf")  # /etc into it: put back
     lines = _policy(host)
     run, varrun = _real(host / "run"), _real(host / "varrun")
     assert _at(lines, "--tmpfs", run) >= 0 and _at(lines, "--tmpfs", varrun) >= 0
+    assert _at(lines, "--ro-bind", f"{varrun}/f.conf", f"{varrun}/f.conf") > _at(
+        lines, "--tmpfs", varrun
+    )
     tmp = _real(host / "tmp")
     assert lines[-6:] == ["--remount-ro", run, "--remount-ro", varrun, "--remount-ro", tmp]
 

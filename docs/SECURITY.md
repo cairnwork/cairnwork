@@ -81,13 +81,13 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
       refused (a file there is masked). A target whose existence cannot be checked (a
       permission error, not ENOENT or ENOTDIR) is refused; a dangling target under a read or
       write root of the run is refused; any other dangling target is skipped and counted in the
-      policy notes. Residual (the #353 kind): the policy binds the whole host root read-only,
-      so a skipped target outside the private trees created while the run is in progress (say
-      a daemon's socket under `/var/tmp`) is readable, a socket connectable, at its own path;
-      one under `/tmp` or `/run` does not appear in the run. Each credential directory is
-      scanned without following links, three levels deep (`.config/a/b/c`, where credential
-      links live), up to 50,000 entries; past that, or when a directory cannot be read, the
-      policy is refused rather than leave a link unscanned.
+      policy notes. Residual (the #353 kind): the policy binds the whole host root read-only, so a
+      skipped target outside the private trees created while the run is in progress (say a daemon's
+      socket under `/var/tmp`) is readable, a socket connectable, at its own path; one under `/tmp`,
+      `/run` or `/var/run` falls under the claim in **Pathname sockets** below. Each credential
+      directory is scanned without following links, three levels deep (`.config/a/b/c`, where
+      credential links live), up to 50,000 entries; past that, or when a directory cannot be read,
+      the policy is refused rather than leave a link unscanned.
       Residual: deeper levels are not scanned (counted in the policy notes), so a link below
       them leaves its target readable. Each real target is masked once.
     - **Socket trees**: `/tmp/.X11-unix` (an X server lets a process inject input and run
@@ -267,27 +267,31 @@ verifier log to a worker or a model** (`src/cairnwork/verifiers.py` says the sam
 Two consequences of the whole-root read-only bind are mitigated, not fully closed, in either
 mode (launching account or dedicated account):
 
-- **Pathname sockets.** A read-only bind does not stop `connect()` to an `AF_UNIX` pathname
-  socket, and the network namespace covers only abstract sockets. A reachable privileged local
-  socket hands the candidate the host — the container daemons (Docker/Podman/containerd), the
-  system D-Bus, and the **systemd user bus** under `/run/user/<uid>` (a `systemd-run --user`
-  there starts a process *outside* the sandbox) — and an unprivileged one can still carry data
-  out (journald keeps what it is sent and may forward it off the host). The dedicated account
-  does not close this by itself: on Linux CI a run reached journald, systemd's notify and
-  varlink sockets, snapd and uuidd under `/run` in both modes, and in owner mode the launching
-  account's own sockets under `/tmp` (#391). So every run gets the private, read-only `/run` and
-  `/tmp` described above: no host socket under `/run`, `/var/run` or `/tmp` is connectable from a
-  run, in owner or account mode, including one the host creates while the run is in progress
-  (the tmpfs lives in the run's own mount namespace), and no path under them leads back out (a
-  recreated link stays inside the trees; the only roots bound there are the run's own under
-  `/tmp`). `tests/test_run_isolation_witness.py` (every socket the host has there) and
-  `tests/test_tmp_isolation_witness.py` (sockets planted under `/tmp` before the run and after the
-  policy is built) check this on real bwrap in CI. Still open: a pathname socket elsewhere —
-  under `/var/tmp`, `/var/lib` (sssd's pipes, databases), a home, `/srv` — is connectable
-  whenever the running account may connect to it; these were not walked by the witness. This is
-  not a claim that a Linux run has no host IPC channel. An agent socket an operator
-  put at such a path is reachable by a candidate that guesses it (scrubbing `SSH_AUTH_SOCK` from
-  the environment hides the usual pointer but not the path itself).
+- **Pathname sockets.** A read-only bind does not stop `connect()` to an `AF_UNIX` pathname socket,
+  and the network namespace covers only abstract sockets. A reachable privileged local socket hands
+  the candidate the host — the container daemons (Docker/Podman/containerd), the system D-Bus, and
+  the **systemd user bus** under `/run/user/<uid>` (a `systemd-run --user` there starts a process
+  *outside* the sandbox) — and an unprivileged one can still carry data out (journald keeps what it
+  is sent and may forward it off the host). The dedicated account does not close this by itself: on
+  Linux CI a run reached journald, systemd's notify and varlink sockets, snapd and uuidd under
+  `/run` in both modes, and in owner mode the launching account's own sockets under `/tmp` (#391).
+  So every run gets the private, read-only `/run` and `/tmp` described above. The claim, in full:
+  from a Linux run, in owner or account mode, no host pathname socket under `/run`, `/var/run` or
+  `/tmp` is connectable, including one the host creates while the run is in progress (the tmpfs
+  lives in the run's own mount namespace), with two exceptions. (1) Inside the run's own read and
+  write roots that lie under `/tmp`, which the caller chooses and which are bound back as they are:
+  the run's work and private directories and the interpreter's prefixes (Cairnwork puts runs under
+  the required `--state` directory; only tests put them under pytest's temp directory in `/tmp`).
+  (2) A regular file under `/run` or `/var/run` that a top-level `/etc` link names
+  (`/etc/resolv.conf`), which its owning daemon could replace with a socket between the policy check
+  and the mount. This is not a claim that a Linux run has no host IPC channel: a pathname socket
+  elsewhere — under `/var/tmp`, `/var/lib` (sssd's pipes, databases), a home, `/srv` — stays
+  connectable whenever the running account may connect to it, and the witness does not walk those
+  paths (#471). `tests/test_run_isolation_witness.py` (every socket the host has under the three
+  trees, outside the run's own root) and `tests/test_tmp_isolation_witness.py` (sockets planted
+  under `/tmp` before the run and after the policy is built) check the claim on real bwrap in CI. An
+  agent socket an operator put at an open path is reachable by a candidate that guesses it
+  (scrubbing `SSH_AUTH_SOCK` from the environment hides the usual pointer but not the path itself).
   What the private `/run` and `/tmp` change for a run (besides host `/tmp` files, above): a user
   known only through systemd-userdb (a `DynamicUser`) no longer resolves inside it (the nscd and
   userdb sockets are gone, so glibc falls back to `/etc/passwd`); NixOS `/run/wrappers` (setuid
