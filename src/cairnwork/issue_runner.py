@@ -28,13 +28,14 @@ import json
 import os
 import re
 import shlex
+import sqlite3
 import sys
 import tempfile
 import unicodedata
 from pathlib import Path
 from typing import Any
 
-from cairnwork import issue_hook
+from cairnwork import issue_hook, issue_task
 from cairnwork.changeset import ChangeSetError, read_change_set
 from cairnwork.deferred_tests import TestCommitRejected
 from cairnwork.gitcmd import NETWORK_TIMEOUT_SECONDS, GitCommandError, run_git
@@ -123,7 +124,7 @@ def take(intake: Intake, github: GitHub, clone: Path) -> list[dict[str, Any]]:
                 results.append({"issue": number, "skipped": exc.code})
                 continue
             results.append({"issue": number, **_needs_fix(github, number, exc)})
-        except (OwnershipError, RuntimeError, OSError, ValueError, KeyError) as exc:
+        except (OwnershipError, sqlite3.Error, RuntimeError, OSError, ValueError, KeyError) as exc:
             # ledger or GitHub trouble: report it and leave the Issue queued
             results.append({"issue": number, "error": f"{type(exc).__name__}: {exc}"})
     return results
@@ -146,12 +147,10 @@ def _take_one(intake, github, clone, base, issue) -> dict[str, Any]:
         "verifiers": [[f"pytest-{i}", list(v)] for i, v in enumerate(task.verifiers)],
         **({"test_commit": task.test_commit} if task.test_commit else {}),
     }
-    # no record, a bad one, or one of an older block: the ledger knows what was bound (a resubmit
-    # is refused once main moved, #404, #424), adopted only if bound with this payload (#426)
-    known = _recall(intake, github.repo, number, strict=False)
-    if not known or known.get("block_sha256") != task.block_sha256:
-        known = _from_ledger(intake, github.repo, number, task.block_sha256, payload) or known
-    if known and known.get("block_sha256") == task.block_sha256:
+    # the ledger knows what was bound (a resubmit is refused once main moved, #404, #424), adopted
+    # only if bound with this payload (#426); the record is a cache rewritten from it (#442)
+    known = _from_ledger(intake, github.repo, number, task.block_sha256, payload)
+    if known:
         github.relabel(number, RUNNING, QUEUE)  # taken before; only the label was missing
         return {"task_id": known["task_id"], "already": True}
     if task.test_commit:  # bind to the tests' parent; the tests stay off this machine
@@ -210,7 +209,8 @@ def settle(intake: Intake, github: GitHub, clone: Path) -> list[dict[str, Any]]:
             known = _recall(intake, github.repo, number)
             if not known:
                 raise KeyError(f"no Cairnwork task recorded for #{number} in this state")
-            status = intake.status(task_id=known["task_id"])
+            bound = intake.ledger.get(task_id=known["task_id"])  # the record is a cache (#454)
+            status = intake.status(task_id=issue_task.issue_task_id(bound, github.repo, number))
             if status["status"] in ("BOUND", "DISPATCHED"):
                 continue
             if status["status"] == "COMPLETED" and status["core_verified"]:
@@ -229,6 +229,7 @@ def settle(intake: Intake, github: GitHub, clone: Path) -> list[dict[str, Any]]:
             ChangeSetError,
             IntakeRefused,
             NotaryError,  # NOTARY_SCHEMA_OLDER: reported for this Issue, not a traceback (#343)
+            sqlite3.Error,  # an unreadable ledger, as in take (#454)
             RuntimeError,
             OSError,
             ValueError,
@@ -325,8 +326,8 @@ def _remember(intake: Intake, repo: str, number: int, task_id: str, block: str) 
         Path(tmp).unlink(missing_ok=True)  # gone already once renamed
 
 
-def _recall(intake: Intake, repo: str, number: int, strict=True) -> dict[str, Any] | None:
-    """The record take wrote; a bad one is ISSUE_RECORD_UNREADABLE, or None when not strict."""
+def _recall(intake: Intake, repo: str, number: int) -> dict[str, Any] | None:
+    """The record take wrote (None if none); a bad one is ISSUE_RECORD_UNREADABLE."""
     path = _record_path(intake, repo, number)
     try:
         known = json.loads(path.read_text()) if path.exists() else None
@@ -334,9 +335,7 @@ def _recall(intake: Intake, repo: str, number: int, strict=True) -> dict[str, An
             return known
     except (ValueError, TypeError, KeyError):  # cut short, not JSON, or not the record's shape
         pass
-    if strict:
-        raise ValueError(f"ISSUE_RECORD_UNREADABLE: {path.name}")
-    return None
+    raise ValueError(f"ISSUE_RECORD_UNREADABLE: {path.name}")
 
 
 def _from_ledger(intake: Intake, repo: str, number: int, block: str, want) -> dict[str, Any] | None:
