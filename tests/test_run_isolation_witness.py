@@ -51,6 +51,7 @@ SEARCHABLE_OK = {
     # 0711 root; both root:root 0660, and neither the runner nor the verifier is in group root
     "/run/containerd": ("containerd.sock", "containerd.sock.ttrpc"),
     "/run/libpod": (),  # 0751 root; podman state: alive, alive.lck, exits/ (0750). No socket
+    "/run/sudo": (),  # 0711 root, sudo's timestamp dir: empty in the listing
 }
 
 
@@ -168,12 +169,9 @@ def socket_run(repo, tmp_path, account=None, prefixes=None):
     for path in unreadable:  # only a searchable one can hide a reachable socket (#418)
         print(("BLIND " if path in blind else "UNREADABLE ") + repr(path))
     assert not blind, f"owner cannot list searchable {blind}: sockets there are never probed"
-    for path in (os.path.join(d, n) for d, names in SEARCHABLE_OK.items() for n in names):
-        try:  # a known name is reachable without listing: hand it to the run's probe
-            if stat.S_ISSOCK(os.lstat(path).st_mode):
-                host.append(path)
-        except OSError:
-            pass
+    known = (os.path.join(d, n) for d, names in SEARCHABLE_OK.items() for n in names)
+    # a known name is reachable without listing: the run's probe tries each that exists
+    host += [p for p in known if os.path.exists(p) and stat.S_ISSOCK(os.stat(p).st_mode)]
     assert host, f"no pathname socket under {SOCKET_ROOTS} on this host: the witness is vacuous"
     code = PROBE.format(
         walker=inspect.getsource(socket_paths),
