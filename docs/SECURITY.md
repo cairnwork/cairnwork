@@ -289,6 +289,42 @@ already forbids the write, so that assertion does not by itself exercise the PID
 (the separate write-outside and no-network witnesses, plus the reasoning above, cover it). A
 dedicated witness that proves the kill directly is a P3 follow-up.
 
+### Recovery's sweep by working directory (#301, #310, #420)
+
+macOS withholds the environment of Apple platform binaries (`/bin/sh`, `/bin/sleep`), so recovery
+cannot see the attempt marker on them. `proc_cwd.kill_withheld_in` SIGKILLs a process of the owner
+whose environment is withheld and whose working directory is inside one of the dead attempt's run
+directories (`attempt_dirs`). Three residuals remain (#436); each has its own bound:
+
+- **A platform binary with one real environment entry is taken for withheld.** On a macOS that
+  does show platform binaries' environments, such a process inside a run directory is killed.
+  Bound: run directories are Cairnwork scratch. Pinned with fakes by
+  `tests/test_proc_cwd_residuals.py`, which also shows it goes no further: not outside the run
+  directories, not for an ordinary program, an unreadable signing status or two entries. The
+  `proc_cwd.py` module docstring records the same kind of case for a legitimately empty
+  environment: it is tied only by its directory too, Cairnwork's own parent shell included.
+- **PID reuse.** `os.kill` takes a number: macOS has no pidfd to bind the kill to the process
+  checked. A process that took the pid before the first start-time read is the one whose start
+  time, environment and directory are checked, so it is killed only if it passes those checks
+  itself (the first residual above). The kill can reach a process other than the one checked only
+  if the pid was reused after the first start-time read: between the two reads, by a process whose
+  start time is equal to the microsecond (`_started` compares seconds and microseconds), or after
+  the second read, before `os.kill` (no wait in between). Either way the kill runs as the owner,
+  so it reaches only a process of the owner's uid: Cairnwork never runs this sweep as root
+  (recovery runs in the caller's own process, `cairnwork-route recover`, and no sudo step of
+  Cairnwork runs it; an operator who starts recovery as root lifts this bound). macOS hands out
+  pids in turn up to 99,999 before wrapping, so reuse within either window is unlikely in practice.
+- **Directory checks are by path.** Recovery resolves the run directories to realpaths when it
+  lists them, `kill_withheld_in` resolves them again at the start of every sweep (`confirm_gone`
+  sweeps again after `CONFIRM_WAIT`), and a process's directory is resolved when it is checked; a
+  run directory moved or replaced between those reads and the kill is not covered. Bound: only the
+  owner can replace a top-level run directory. The owner's run roots belong to the owner, and a
+  dedicated account's `runs/` is `chown $OWNER`, mode `2750` (`scripts/setup_verifier_user.sh`).
+
+Testing rule: no live probe or mutant of `proc_cwd` on a real host (a mutant that dropped the
+directory check killed every process of the user). Read the code, use a VM or sandbox, or fake the
+process table and readers inside `tmp_path`.
+
 ## What the worker can reach (hidden-test confidentiality)
 
 The sandbox above confines candidate code while it is verified. The worker that writes the
