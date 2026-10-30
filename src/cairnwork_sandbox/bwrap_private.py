@@ -6,15 +6,15 @@ each run gets an empty tmpfs there in its own mount namespace, read-only last. P
 top-level link that resolves inside a tree, at the path checked (not Rancher's ``/run/docker.sock``
 -> home, nor NixOS ``/run/current-system``, #469); each top-level ``/etc`` link to a regular file in
 /run or /var/run (``/etc/resolv.conf``; not in /tmp, whose files any user may swap for a socket),
-read-only, for the account only one it may reach (a file its daemon swaps after the check is bound
-as it then is); a read or write root under /tmp (the tests' owner-mode runs live there), a read one
+read-only, for the account only one it may reach (a file its owner swaps after the check is bound as
+it then is); a read or write root under /tmp (the tests' owner-mode runs live there), a read one
 read-only and only if it exists. ``--remount-ro`` does not recurse, so a write root stays writable.
 Refused: a root that is a tree or in /run or /var/run, a write root holding a tree, trees that
 overlap, a tree that cannot be listed or written in the policy, an /etc entry that cannot be
 checked. The claim (docs/SECURITY.md): no host socket under these trees is connectable from a run,
 even one added later, except inside the run's own roots under /tmp (bound back as they are) and in a
-/run or /var/run file an /etc link names (its daemon could swap it for a socket after the check).
-Not a claim that a run has no host IPC channel (#471).
+/run or /var/run file an /etc link names (its owner could swap it for a socket after the check). Not
+a claim that a run has no host IPC channel (#471).
 """
 
 from __future__ import annotations

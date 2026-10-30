@@ -30,7 +30,7 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
   `/run/current-system -> /nix/store/...`, is not recreated; NixOS is #469), and each top-level
   `/etc` symlink to a regular file under `/run` or `/var/run` (`/etc/resolv.conf ->
   /run/systemd/resolve/stub-resolv.conf`; under the dedicated account only one it may reach; a file
-  its daemon swaps between the policy build and the run start is bound as it then is; a link into
+  its owner swaps between the policy build and the run start is bound as it then is; a link into
   `/tmp` is not put back, since any local user may own and swap a file there), and the run's own
   read and write roots under `/tmp` (production runs live under the required `--state` directory;
   only tests put them in `/tmp`, under pytest's temp directory): a read root read-only (a read root
@@ -90,9 +90,10 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
       the policy is refused rather than leave a link unscanned.
       Residual: deeper levels are not scanned (counted in the policy notes), so a link below
       them leaves its target readable. Each real target is masked once.
-    - **Socket trees**: `/tmp/.X11-unix` (an X server lets a process inject input and run
-      commands outside the sandbox), `/run/user` (the systemd user bus and session agents) and
-      `/run/libvirt` (every libvirt daemon socket) are hidden by the private `/tmp` and `/run`.
+    - **Socket trees**: `/tmp/.X11-unix` (an X server lets a process inject input and run commands
+      outside the sandbox), `/run/user` (the systemd user bus and session agents) and `/run/libvirt`
+      (every libvirt daemon socket) are hidden by the private `/tmp` and `/run` (subject to the two
+      exceptions under **Pathname sockets**).
     - **Root-equivalent daemon sockets** replaced with `/dev/null` at their real path: Docker,
       Podman, containerd, the system D-Bus, LXD and Incus (a read-only bind does not stop
       `connect()` to a pathname `AF_UNIX` socket, and the network namespace covers only abstract
@@ -283,15 +284,15 @@ mode (launching account or dedicated account):
   the run's work and private directories and the interpreter's prefixes (Cairnwork puts runs under
   the required `--state` directory; only tests put them under pytest's temp directory in `/tmp`).
   (2) A regular file under `/run` or `/var/run` that a top-level `/etc` link names
-  (`/etc/resolv.conf`), which its owning daemon could replace with a socket between the policy check
-  and the mount. This is not a claim that a Linux run has no host IPC channel: a pathname socket
-  elsewhere — under `/var/tmp`, `/var/lib` (sssd's pipes, databases), a home, `/srv` — stays
-  connectable whenever the running account may connect to it, and the witness does not walk those
-  paths (#471). `tests/test_run_isolation_witness.py` (every socket the host has under the three
-  trees, outside the run's own root) and `tests/test_tmp_isolation_witness.py` (sockets planted
-  under `/tmp` before the run and after the policy is built) check the claim on real bwrap in CI. An
-  agent socket an operator put at an open path is reachable by a candidate that guesses it
-  (scrubbing `SSH_AUTH_SOCK` from the environment hides the usual pointer but not the path itself).
+  (`/etc/resolv.conf`), which its owner could replace with a socket between the policy check and the
+  mount. This is not a claim that a Linux run has no host IPC channel: a pathname socket elsewhere —
+  under `/var/tmp`, `/var/lib` (sssd's pipes, databases), a home, `/srv` — stays connectable
+  whenever the running account may connect to it, and the witness does not walk those paths (#471).
+  `tests/test_run_isolation_witness.py` (every socket the host has under the three trees, outside
+  the run's own root) and `tests/test_tmp_isolation_witness.py` (sockets planted under `/tmp` before
+  the run and after the policy is built) check the claim on real bwrap in CI. An agent socket an
+  operator put at an open path is reachable by a candidate that guesses it (scrubbing
+  `SSH_AUTH_SOCK` from the environment hides the usual pointer but not the path itself).
   What the private `/run` and `/tmp` change for a run (besides host `/tmp` files, above): a user
   known only through systemd-userdb (a `DynamicUser`) no longer resolves inside it (the nscd and
   userdb sockets are gone, so glibc falls back to `/etc/passwd`); NixOS `/run/wrappers` (setuid
@@ -301,11 +302,12 @@ mode (launching account or dedicated account):
   `/run/current-system/sw/bin` are missing inside a run (#469). Multiprocessing is unaffected: its
   semaphores and shared memory live in the run's own `/dev/shm`, its sockets in `TMPDIR` (Linux CI
   runs a multiprocessing child from a test that also writes through `tmp_path` and `tempfile`).
-- So "writes and network are confined" holds for ordinary filesystem writes and IP networking;
-  a filesystem socket outside the private trees is the residual. **Run genuinely adversarial
-  third-party code only under the dedicated account**, not the launching account: the whole-root
-  read bind means the deny-list cannot be proven complete, and without the account its own files
-  and sockets are the trust boundary.
+- So "writes and network are confined" holds for ordinary filesystem writes and IP networking; a
+  filesystem socket outside the private trees, or within the two exceptions under **Pathname
+  sockets** above, is the residual. **Run genuinely adversarial third-party code only under the
+  dedicated account**, not the launching account: the whole-root read bind means the deny-list
+  cannot be proven complete, and without the account its own files and sockets are the trust
+  boundary.
 
 CI on `ubuntu-24.04` lifts the AppArmor `apparmor_restrict_unprivileged_userns` restriction
 with sysctl; an end user's machine needs an AppArmor profile that grants `userns` to bwrap.
