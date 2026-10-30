@@ -132,10 +132,11 @@ def adoptable(bound: Any, load_request: Callable[[str], Any], want: Mapping[str,
     asks for: title, instructions (the task text), allowed files, verifiers and test commit, else
     IssueRefused, so a client that pre-bound the key and card with its own files, verifiers or task
     text is never adopted. base_commit and repo may differ: main moves, the intake binds its mirror.
-    A FAILED row whose stored request is RequestUnreadable (missing or cut short: a row the intake
-    bound before it stored requests first, #466) is IssueRefused TASK_BOUND_REQUEST_UNREADABLE
-    (#443): never adopted, never resubmitted under the same key. Any other failure raises (a live
-    row, config.json, EACCES, EIO, a symlink, a missing requests/): the Issue stays queued.
+    A FAILED row whose stored request is RequestUnreadable (missing, cut short or damaged: a row
+    the intake bound before it stored requests first, #466) is IssueRefused
+    TASK_BOUND_REQUEST_UNREADABLE (#443): never adopted, never resubmitted under the same key. Any
+    other failure raises (a live row, config.json, EACCES, EIO, a symlink, a missing requests/):
+    the Issue stays queued.
     """
     if bound.card_hash != want["card_hash"]:
         return False

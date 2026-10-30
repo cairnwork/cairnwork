@@ -181,39 +181,22 @@ def test_read_request_names_only_the_request_s_own_failures(tmp_path):
     assert read_request(requests, "whole") == {"a": 1}
     (requests / "empty.json").write_text("")
     (requests / "cut.json").write_text('{"a": ')
-    for task_id in ("absent", "empty", "cut"):
+    (requests / "byte.json").write_bytes(b'{"a": "\xff"}')
+    (requests / "utf8.json").write_bytes('{"a": "é"}'.encode())  # valid UTF-8, still not ASCII
+    for task_id in ("absent", "empty", "cut", "byte", "utf8"):
         with pytest.raises(RequestUnreadable, match=f"^{task_id}: "):
             read_request(requests, task_id)
     os.mkfifo(requests / "fifo.json")  # O_NONBLOCK: refused at once, never waited on
     (requests / "dir.json").mkdir()
     (requests / "link.json").symlink_to(requests / "whole.json")
-    (requests / "byte.json").write_bytes(b'{"a": "\xff"}')
-    (requests / "utf8.json").write_bytes('{"a": "é"}'.encode())  # valid UTF-8, still not ASCII
-    for task_id, error in (
-        ("fifo", OSError),
-        ("dir", OSError),
-        ("link", OSError),
-        ("byte", UnicodeDecodeError),
-        ("utf8", UnicodeDecodeError),
-    ):
-        with pytest.raises(error) as raised:
+    for task_id in ("fifo", "dir", "link"):
+        with pytest.raises(OSError) as raised:
             read_request(requests, task_id)
         assert not isinstance(raised.value, RequestUnreadable)
-    for bad in (
-        b"not json",
-        b'{"a":???',
-        b'{"a": 1}}',
-        b'{"a": "\\uZZZZ"}',
-        b'{"a": tr',
-        b" ",
-        b"\n\t",
-        b"[",
-        b' {"a": 1',
-    ):
-        (requests / "bad.json").write_bytes(bad)  # complete but malformed: damage, not a cut
-        with pytest.raises(json.JSONDecodeError) as raised:
+    for bad in (b"not json", b'{"a":???', b'{"a": 1}}', b'{"a":1', b" ", b"[", b' {"a": 1'):
+        (requests / "bad.json").write_bytes(bad)  # cut or damaged: the bytes cannot tell which
+        with pytest.raises(RequestUnreadable):
             read_request(requests, "bad")
-        assert not isinstance(raised.value, RequestUnreadable)
     text = json.dumps(PAYLOAD, sort_keys=True)  # what store_request writes, cut at every byte
     for end in range(len(text)):
         (requests / "cut.json").write_text(text[:end])
@@ -291,19 +274,3 @@ def test_a_ledger_of_finished_tasks_still_needs_its_requests_dir(setup):
     with pytest.raises(IntakeRefused, match="BAD_STATE"):
         intake.prepare()
     assert not (intake.state / "requests").exists()
-
-
-def test_a_cut_unicode_escape_is_a_cut_whichever_position_the_decoder_names():
-    """CPython builds differ on where an "Invalid \\uXXXX escape" error points (the backslash or
-    the "u"), and 3.12.3 raises it even for a whole escape at the very end: it holds for all."""
-    from cairnwork.intake_request import _cut_short
-
-    def cut(text: str, pos: int) -> bool:
-        return _cut_short(text, json.JSONDecodeError("Invalid \\uXXXX escape", text, pos))
-
-    for text in ('{"a": "ab\\u', '{"a": "ab\\u0', '{"a": "ab\\u00e', '{"a": "ab\\u00e9'):
-        assert cut(text, 9) and cut(
-            text, 10
-        )  # the backslash, or the "u"; all four: 3.12.3 errs too
-    for text in ('{"a": "ab\\uZZZZ"', '{"a": "ab\\u0Z', '{"a": "ab\\u00e9zz\\uZ"'):
-        assert not cut(text, 9) and not cut(text, 10)  # bad hex before the end: damage

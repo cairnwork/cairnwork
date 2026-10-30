@@ -155,18 +155,30 @@ def _symlink_to(content: bytes):
 def _not_ascii(requests: Path, task_id: str) -> None:
     path = requests / f"{task_id}.json"
     data = bytearray(path.read_bytes())
-    data[10] = 0xFF  # json.dumps writes ASCII only: this byte is damage, not a cut-short store
+    data[10] = 0xFF  # json.dumps writes ASCII only: this byte is damage
     path.write_bytes(bytes(data))
 
 
 def _malformed(requests: Path, task_id: str) -> None:
     path = requests / f"{task_id}.json"
-    path.write_text(path.read_text().replace('": "', '": ?', 1))  # complete, malformed: not a cut
+    path.write_text(path.read_text().replace('": "', '": ?', 1))  # complete, malformed
 
 
 def _cut_utf8(requests: Path, task_id: str) -> None:
     path = requests / f"{task_id}.json"
     path.write_bytes(path.read_bytes()[:40] + b"\xe4")
+
+
+@pytest.mark.parametrize("damage", [_not_ascii, _cut_utf8, _malformed], ids=lambda f: f.__name__)
+def test_a_request_not_whole_ascii_json_ends_in_needs_fix(setup, damage):
+    """Cut short or damaged, the request's own bytes cannot tell which; either way it is lost, and
+    needs-fix is fail closed: never adopted, a human looks (#450)."""
+    github, task_id = _legacy_failed(setup, "whole")
+    damage(setup["intake"].state / "requests", task_id)
+    out = runner.take(setup["intake"], github, setup["clone"])
+    assert out == [{"issue": 7, "refused": f"{CODE}: {task_id}"}]
+    assert github.labels[7] == {runner.NEEDS_FIX} and _rows(setup) == [(task_id, "FAILED")]
+    assert len(setup["started"]) == 1  # never adopted, never resubmitted
 
 
 @pytest.mark.parametrize(
@@ -177,16 +189,13 @@ def _cut_utf8(requests: Path, task_id: str) -> None:
         (_dangling_symlink, "OSError"),  # ELOOP: O_NOFOLLOW
         (_symlink_to(b"not json"), "OSError"),
         (_symlink_to(b""), "OSError"),
-        (_not_ascii, "UnicodeDecodeError"),
-        (_cut_utf8, "UnicodeDecodeError"),
-        (_malformed, "JSONDecodeError"),
     ],
     ids=lambda v: getattr(v, "__name__", v) or "any",
 )
 def test_a_request_in_a_damaged_state_still_errors(setup, damage, error):
-    """Only a request file absent from the held requests/ directory, or ASCII JSON cut short, is the
-    request's own failure (#466): a missing or symlinked requests/, a symlink at the path (followed
-    or not), or bytes the intake never writes are damaged state, so the Issue stays queued."""
+    """Only a request file absent from the held requests/ directory, or one whose bytes are not
+    whole ASCII JSON, is the request's own failure (#466): a missing or symlinked requests/ or a
+    symlink at the path (followed or not) is damaged state, so the Issue stays queued."""
     github, task_id = _legacy_failed(setup, "whole")
     damage(setup["intake"].state / "requests", task_id)
     out = runner.take(setup["intake"], github, setup["clone"])

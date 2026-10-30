@@ -2,7 +2,7 @@
 (``IntakeRefused``); unknown or missing fields are refused, never ignored. intake.py (the state
 directory, config and task lifecycle) uses it and re-exports both names. Also the stored request,
 ``requests/<task_id>.json``: written whole and synced before its task is bound (#466), and read
-back so that only its own absence or a cut-short body is RequestUnreadable."""
+back so that only its own absence or a body that is not whole ASCII JSON is RequestUnreadable."""
 
 from __future__ import annotations
 
@@ -19,7 +19,6 @@ from cairnwork.issue_task import RequestUnreadable
 from cairnwork.ownership import OWNER, BindResult, OwnershipError, OwnershipLedger, new_task_id
 from cairnwork.pipeline import TaskSpec
 
-_HEX = frozenset("0123456789abcdefABCDEF")
 _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW  # requests/ itself, never a symlink
 
 FIELDS = frozenset(
@@ -143,10 +142,10 @@ def _drop(requests: Path, task_id: str) -> None:
 
 def read_request(requests: Path, task_id: str) -> Any:
     """The stored request's JSON. RequestUnreadable only when the file is absent from requests/
-    (held open, so no later look decides it; #450) or is ASCII JSON cut short (_cut_short). Anything
-    else raises as it is: requests/ missing or a symlink, a symlink or non-regular file at the path
-    (O_NOFOLLOW), EACCES or EIO, bytes that are not ASCII (never written: damage, not a cut), or
-    complete but malformed JSON (a JSONDecodeError, a ValueError: damage, not a cut)."""
+    (held open, so no later look decides it; #450) or the regular file read whole is not ASCII
+    JSON: cut short or damaged, which its bytes cannot tell apart, and either way the request is
+    lost (needs-fix, fail closed). Anything else raises as it is: requests/ missing or a symlink,
+    a symlink or non-regular file at the path (O_NOFOLLOW), EACCES or EIO."""
     dir_fd = os.open(requests, _DIR_FLAGS)
     try:
         try:
@@ -158,32 +157,13 @@ def read_request(requests: Path, task_id: str) -> Any:
         with os.fdopen(fd, "rb") as handle:
             if not stat.S_ISREG(os.fstat(fd).st_mode):
                 raise OSError(errno.EINVAL, "not a regular file", f"{task_id}.json")
-            text = handle.read().decode("ascii")
+            data = handle.read()
     finally:
         os.close(dir_fd)
     try:
-        return json.loads(text)
-    except json.JSONDecodeError as exc:
-        if _cut_short(text, exc):
-            raise RequestUnreadable(f"{task_id}: cut short") from exc
-        raise
-
-
-def _cut_short(text: str, exc: json.JSONDecodeError) -> bool:
-    """Did the decoder fail only because the input ended (a prefix of JSON, as a store cut off at
-    any byte leaves)? Yes when it failed at the end of the text, in a string that never closes,
-    or in a \\uXXXX escape that runs past the end. A failure before the end ("not json",
-    '{"a":???', extra data) is malformed content: damage, not a cut. So is non-empty text that does
-    not start with "{": store_request writes a dict, so no cut of it can (" ", "[", ' {')."""
-    if text and not text.startswith("{"):
-        return False
-    if exc.pos >= len(text) or exc.msg.startswith("Unterminated string"):
-        return True
-    if not exc.msg.startswith("Invalid \\uXXXX escape"):
-        return False
-    start = text.rfind("\\", 0, exc.pos + 1)  # its backslash: pos names it or its "u" (by build)
-    tail = text[start + 2 :]  # the cut left at most its four hex digits (3.12.3 errs on all four)
-    return start >= max(exc.pos - 1, 0) and len(tail) <= 4 and all(c in _HEX for c in tail)
+        return json.loads(data.decode("ascii"))
+    except ValueError as exc:  # UnicodeDecodeError, JSONDecodeError
+        raise RequestUnreadable(f"{task_id}: not whole ASCII JSON") from exc
 
 
 def check_requests(state: Path) -> None:
