@@ -150,4 +150,8 @@ def test_a_spelling_too_long_to_check_fails_the_run(tmp_path, too_long):
             os.close(parent)
     assert len(str(alt / str(checkout).lstrip("/") / "tests" / f"helper.{TAG}.pyc")) < LIMIT
     reasons = scan(checkout, run_dir)
-    assert any("too long" in reason for reason in reasons), reasons
+    if too_long == "source":  # the planted pyc's own row, not one of the listing's
+        pyc = f"run/home/s/tests/helper.{TAG}.pyc"
+        assert any(r.startswith(pyc) and "too long" in r for r in reasons), reasons
+    else:
+        assert any("too long" in reason for reason in reasons), reasons
