@@ -173,7 +173,10 @@ def _cut_short(text: str, exc: json.JSONDecodeError) -> bool:
     """Did the decoder fail only because the input ended (a prefix of JSON, as a store cut off at
     any byte leaves)? Yes when it failed at the end of the text, in a string that never closes,
     or in a \\uXXXX escape that runs past the end. A failure before the end ("not json",
-    '{"a":???', extra data) is malformed content: damage, not a cut."""
+    '{"a":???', extra data) is malformed content: damage, not a cut. So is non-empty text that does
+    not start with "{": store_request writes a dict, so no cut of it can (" ", "[", ' {')."""
+    if text and not text.startswith("{"):
+        return False
     if exc.pos >= len(text) or exc.msg.startswith("Unterminated string"):
         return True
     if not exc.msg.startswith("Invalid \\uXXXX escape"):

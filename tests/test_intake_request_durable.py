@@ -199,7 +199,17 @@ def test_read_request_names_only_the_request_s_own_failures(tmp_path):
         with pytest.raises(error) as raised:
             read_request(requests, task_id)
         assert not isinstance(raised.value, RequestUnreadable)
-    for bad in (b"not json", b'{"a":???', b'{"a": 1}}', b'{"a": "\\uZZZZ"}', b'{"a": tr'):
+    for bad in (
+        b"not json",
+        b'{"a":???',
+        b'{"a": 1}}',
+        b'{"a": "\\uZZZZ"}',
+        b'{"a": tr',
+        b" ",
+        b"\n\t",
+        b"[",
+        b' {"a": 1',
+    ):
         (requests / "bad.json").write_bytes(bad)  # complete but malformed: damage, not a cut
         with pytest.raises(json.JSONDecodeError) as raised:
             read_request(requests, "bad")
@@ -291,7 +301,9 @@ def test_a_cut_unicode_escape_is_a_cut_whichever_position_the_decoder_names():
     def cut(text: str, pos: int) -> bool:
         return _cut_short(text, json.JSONDecodeError("Invalid \\uXXXX escape", text, pos))
 
-    for text in ('"ab\\u', '"ab\\u0', '"ab\\u00e', '"ab\\u00e9'):  # all four: 3.12.3 errs too
-        assert cut(text, 3) and cut(text, 4)  # the backslash, or the "u"
-    for text in ('"ab\\uZZZZ"', '"ab\\u0Z', '"ab\\u00e9zz\\uZ"'):
-        assert not cut(text, 3) and not cut(text, 4)  # bad hex before the end: damage
+    for text in ('{"a": "ab\\u', '{"a": "ab\\u0', '{"a": "ab\\u00e', '{"a": "ab\\u00e9'):
+        assert cut(text, 9) and cut(
+            text, 10
+        )  # the backslash, or the "u"; all four: 3.12.3 errs too
+    for text in ('{"a": "ab\\uZZZZ"', '{"a": "ab\\u0Z', '{"a": "ab\\u00e9zz\\uZ"'):
+        assert not cut(text, 9) and not cut(text, 10)  # bad hex before the end: damage
