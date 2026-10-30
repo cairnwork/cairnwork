@@ -104,11 +104,17 @@ def test_a_trusted_issue_is_taken_once(setup):
     assert github.labels[7] == {runner.RUNNING} and len(github.comments) == 1
     github.labels[7] = {runner.QUEUE}  # e.g. the relabel had failed: the next pass retries
     commit_change(setup["origin"].parent / "clone", {"other.txt": "main moved\n"})
-    github.bodies[7] = {**github.bodies[7], "title": "fix x (edited title)"}
     again = runner.take(setup["intake"], github, setup["clone"])
     assert again[0]["already"] is True and again[0]["task_id"] == first[0]["task_id"]
     assert github.labels[7] == {runner.RUNNING}
     assert len(setup["started"]) == 1 and len(github.comments) == 1
+    # #442: the title is part of the bound request; an intact record does not excuse an edit
+    github.labels[7] = {runner.QUEUE}
+    github.bodies[7] = {**github.bodies[7], "title": "fix x (edited title)"}
+    edited = runner.take(setup["intake"], github, setup["clone"])[0]
+    assert edited["refused"].startswith("TASK_BOUND_REQUEST_DIFFERS") and "already" not in edited
+    assert github.labels[7] == {runner.NEEDS_FIX}
+    assert len(setup["started"]) == 1 and len(github.comments) == 2
     base = git(setup["clone"], "rev-parse", "origin/main")
     status = setup["intake"].status(task_id=first[0]["task_id"])
     assert status["status"] == "BOUND"
