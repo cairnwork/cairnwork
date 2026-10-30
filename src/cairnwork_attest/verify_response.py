@@ -125,6 +125,16 @@ _CROSS = (  # (part, the hash it names): nexus-core product/evidence ``integrity
 )
 
 
+def _core_ids(ids: Any) -> bool:
+    """nexus-core ``_require_ids``: a non-empty list of distinct, non-empty, normalized strings."""
+    return (
+        isinstance(ids, list)
+        and bool(ids)
+        and all(type(v) is str and v and v == v.strip() and "\x00" not in v for v in ids)
+        and len(set(ids)) == len(ids)
+    )
+
+
 def _parts_problem(
     predicate: Mapping[str, Any], request: Mapping[str, Any], hashes: Mapping[str, str]
 ) -> VerifyResult | None:
@@ -143,8 +153,12 @@ def _parts_problem(
         request[p].get("required_verifier_ids")
         for p in ("acceptance_contract", "verification_plan")
     ]
-    strings = all(isinstance(i, list) and all(isinstance(v, str) for v in i) for i in ids)
-    if not strings or set(ids[0]) != set(ids[1]):
+    if not all(_core_ids(i) for i in ids):  # #445
+        return _fail(
+            "RECEIPT_INCONSISTENT",
+            f"contract or plan required_verifier_ids are not ids Core accepts: {ids}",
+        )
+    if set(ids[0]) != set(ids[1]):
         return _fail(
             "RECEIPT_INCONSISTENT", f"contract and plan required_verifier_ids differ: {ids}"
         )
