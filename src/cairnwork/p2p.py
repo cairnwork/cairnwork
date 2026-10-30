@@ -60,10 +60,10 @@ from pathlib import Path
 from posixpath import basename
 
 import cairnwork_sandbox
-from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRejected, changed_tests
+from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRejected
 from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.issue_task import test_target
-from cairnwork.p2p_nodes import passing_targets, require_nodes
+from cairnwork.p2p_nodes import changed_tests, passing_targets, require_nodes
 from cairnwork.p2p_probe_log import probe_log_tail
 from cairnwork.p2p_selection import DEFAULT_BUDGET_SECONDS, cap_note, select_p2p_targets
 from cairnwork.verifiers import VerifierRun, VerifierSpec, run_verifiers

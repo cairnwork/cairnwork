@@ -8,7 +8,7 @@ passed and a target covers must have run and passed on the candidate; one that d
 a pass.
 
 A test file the test commit changes stays a P2P file. Its tests that the test commit adds,
-changes or removes (``deferred_tests.changed_tests``) are left to the author's verifiers; every
+changes or removes (``changed_tests``) are left to the author's verifiers; every
 other test the base passed in it is bound by function, never by the whole file, which on the
 candidate also holds the test commit's tests.
 """
@@ -16,8 +16,26 @@ candidate also holds the test commit's tests.
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 
+from cairnwork.deferred_tests import _test_functions
 from cairnwork.verifiers import VerifierRun
+
+
+def changed_tests(
+    repo: Path, base: str, test_commit: str, paths: tuple[str, ...]
+) -> frozenset[str]:
+    """``deferred_tests.new_tests`` plus the test functions the test commit removes: the base
+    outcome of these says nothing about the candidate. A test changed only in a way the AST
+    comparison does not see (see ``new_tests``) is not in it, so it stays a P2P test."""
+    found = set()
+    for path in paths:
+        if path.endswith(".py"):
+            before = _test_functions(repo, f"{base}:{path}")
+            after = _test_functions(repo, f"{test_commit}:{path}")
+            found |= {f"{path}::{n}" for n in before.keys() | after.keys()
+                      if before.get(n) != after.get(n)}  # fmt: skip
+    return frozenset(found)
 
 
 def _function(nodeid: str) -> str:

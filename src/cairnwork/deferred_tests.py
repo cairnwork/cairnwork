@@ -174,22 +174,6 @@ def new_tests(repo: Path, base: str, test_commit: str, paths: tuple[str, ...]) -
     return frozenset(found)
 
 
-def changed_tests(
-    repo: Path, base: str, test_commit: str, paths: tuple[str, ...]
-) -> frozenset[str]:
-    """``new_tests`` plus the test functions the test commit removes: the base outcome of these
-    says nothing about the candidate (p2p_nodes.py). A test changed only in a way the AST
-    comparison does not see (see ``new_tests``) is not in it, so it stays a P2P test."""
-    found = set()
-    for path in paths:
-        if path.endswith(".py"):
-            before = _test_functions(repo, f"{base}:{path}")
-            after = _test_functions(repo, f"{test_commit}:{path}")
-            found |= {f"{path}::{n}" for n in before.keys() | after.keys()
-                      if before.get(n) != after.get(n)}  # fmt: skip
-    return frozenset(found)
-
-
 def _test_functions(repo: Path, blob: str) -> dict[str, str]:
     try:
         source = run_git(repo, "show", blob)
