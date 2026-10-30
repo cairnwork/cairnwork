@@ -218,7 +218,7 @@ def test_route_check_and_submit_refuse_when_a_base_conftest_inserts_the_package(
 
 WORDS = ["sys.path", "syspath", "from sys import", "addsitedir", ".pth", "PYTHONPATH",
          "pytest_plugins", "runpy", "sys.executable", "subprocess", "os.system", "os.popen",
-         "os.exec", "os.spawn"]  # fmt: skip
+         "os.exec", "os.spawn", "meta_path", "path_hooks", "importlib", "__import__"]  # fmt: skip
 
 
 @pytest.mark.parametrize("word", WORDS)
@@ -235,7 +235,8 @@ def test_any_mention_of_a_sys_path_change_in_a_test_unseals(repo, word):
         ("setup_paths.py", True),
         ("pkg/__init__.py", True),  # the package under test itself
         ("pkg/sub/deep.py", True),
-        ("docs/conf.py", False),  # no test runs it
+        ("docs/conf.py", True),  # importable from the checkout root (a namespace package)
+        ("tools/release-notes/make.py", True),  # every Python file: runpy or exec can reach it
         ("pkg/tests/notes.txt", False),  # not Python
     ],
 )
@@ -249,18 +250,21 @@ def test_where_the_base_is_scanned(repo, path, refused):
         assert check_task(task)
 
 
-def test_a_failed_scan_seals_nothing(repo, monkeypatch):
-    from cairnwork import sealed_packages
+@pytest.mark.parametrize("step", ["ls-tree", "cat-file"])
+def test_a_failed_scan_seals_nothing(repo, monkeypatch, step):
+    from cairnwork import sys_path_scan
 
-    real = sealed_packages.run_git
+    def fails(name, real):
+        def run(repo_, *args, **kwargs):
+            if args[0] == step:
+                raise GitCommandError(f"{step} failed")
+            return real(repo_, *args, **kwargs)
 
-    def grep_fails(repo_, *args, **kwargs):
-        if args[0] == "grep":
-            raise GitCommandError("grep failed")
-        return real(repo_, *args, **kwargs)
+        monkeypatch.setattr(sys_path_scan, name, run)
 
     commit_change(repo, SEALED_PKG)
-    monkeypatch.setattr(sealed_packages, "run_git", grep_fails)
+    fails("run_git", sys_path_scan.run_git)
+    fails("run_git_bytes", sys_path_scan.run_git_bytes)
     with pytest.raises(TaskRejected, match="PROTECTED_VERIFIER_INPUT: pkg/fractions.py$"):
         check_task(_task(repo, ("pkg/fractions.py",)))
 
