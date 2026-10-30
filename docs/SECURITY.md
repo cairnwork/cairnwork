@@ -22,18 +22,28 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
   commit itself is left to the after-run scan. Linux has no such rule.
 - **Linux bubblewrap** (`src/cairnwork_sandbox/bwrap.py`): a read-only bind of the whole root,
   read-write binds for the write roots only, every namespace unshared (no network), all
-  capabilities dropped, nested user namespaces disabled. `/run` (and `/var/run` where it is its
-  own directory, not a link to `/run`) is private to each run: an empty tmpfs, made read-only
-  last, with only what a run needs put back — the tree's top-level symlinks that resolve inside
-  the tree, recreated at the canonical path that was checked (a link leading anywhere else, such
-  as Rancher Desktop's `/var/run/docker.sock -> ~/.rd/docker.sock` or NixOS
+  capabilities dropped, nested user namespaces disabled. `/run`, `/tmp` (and `/var/run` where
+  it is its own directory, not a link to `/run`) are private to each run: an empty tmpfs, made
+  read-only last, with only what a run needs put back — the trees' top-level symlinks that
+  resolve inside the trees, recreated at the canonical path that was checked (a link leading
+  anywhere else, such as Rancher Desktop's `/var/run/docker.sock -> ~/.rd/docker.sock` or NixOS
   `/run/current-system -> /nix/store/...`, is not recreated; NixOS is #469), and each top-level
-  `/etc` symlink to a regular file under it
-  (`/etc/resolv.conf -> /run/systemd/resolve/stub-resolv.conf`; under the dedicated account only
-  one it may reach; a file its daemon swaps between the policy build and the run start is bound
-  as it then is) (#391, `src/cairnwork_sandbox/bwrap_private.py`). A read or write root inside
-  `/run` or `/var/run` is refused: no caller puts one there, binding it would bring host content
-  back, and bwrap's `--remount-ro` does not recurse, so a write bind there would stay writable.
+  `/etc` symlink to a regular file under `/run` or `/var/run` (`/etc/resolv.conf ->
+  /run/systemd/resolve/stub-resolv.conf`; under the dedicated account only one it may reach; a file
+  its owner swaps between the policy build and the run start is bound as it then is; a link into
+  `/tmp` is not put back, since any local user may own and swap a file there), and the run's own
+  read and write roots under `/tmp` (production runs live under the required `--state` directory;
+  only tests put them in `/tmp`, under pytest's temp directory): a read root read-only (a read root
+  absent when the policy is built is skipped), a write root writable (bwrap's `--remount-ro` does
+  not recurse into a bind under the tree; Linux CI writes the run's `TMPDIR` and work directory
+  under `/tmp`) (#391, `src/cairnwork_sandbox/bwrap_private.py`). Refused (`SandboxError`): a read
+  or write root that is a whole tree or lies inside `/run` or `/var/run` (no caller puts one there,
+  and binding it would bring host content back), a write root that holds a tree (it would cover it),
+  and trees whose real paths overlap, such as `/tmp` linked into `/run` (a root under `/tmp` would
+  then be bound into `/run`; `/var/run` linked to `/run` itself is one tree). **Behaviour change:**
+  a run no longer sees the host's `/tmp`: a test that reads a host file under `/tmp` outside its own
+  roots now gets `ENOENT` (macOS Seatbelt already denies those reads), and it writes temporary files
+  in its `TMPDIR` (`tmp_path`, `tempfile`) as before.
   The masked set (all under `$HOME` unless an absolute path is given):
     - **Credential directories** emptied with a tmpfs: `.ssh`, `.aws`, `.gnupg`, `.config`,
       `.docker`, `.kube`, `.claude`, `.codex`, `.gemini`, `.nexus`, `.local/state`,
@@ -71,18 +81,19 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
       refused (a file there is masked). A target whose existence cannot be checked (a
       permission error, not ENOENT or ENOTDIR) is refused; a dangling target under a read or
       write root of the run is refused; any other dangling target is skipped and counted in the
-      policy notes. Residual (the #353 kind): the policy binds the whole host root read-only
-      and gives the run no private `/tmp`, so a skipped target created while the run is in
-      progress (say a daemon's socket under `/tmp`) is readable, a socket connectable, at its
-      own path. Each credential directory is scanned without following links, three levels deep
-      (`.config/a/b/c`, where credential links live), up to 50,000 entries; past that, or when
-      a directory cannot be read, the policy is refused rather than leave a link unscanned.
+      policy notes. Residual (the #353 kind): the policy binds the whole host root read-only, so a
+      skipped target outside the private trees created while the run is in progress (say a daemon's
+      socket under `/var/tmp`) is readable, a socket connectable, at its own path; one under `/tmp`,
+      `/run` or `/var/run` falls under the claim in **Pathname sockets** below. Each credential
+      directory is scanned without following links, three levels deep (`.config/a/b/c`, where
+      credential links live), up to 50,000 entries; past that, or when a directory cannot be read,
+      the policy is refused rather than leave a link unscanned.
       Residual: deeper levels are not scanned (counted in the policy notes), so a link below
       them leaves its target readable. Each real target is masked once.
-    - **Socket trees** emptied with a tmpfs (the whole tree, covering every socket under it):
-      `/tmp/.X11-unix` (an X server lets a process inject input and run commands outside the
-      sandbox). The trees under `/run` (`/run/user` with the systemd user bus and session agents,
-      `/run/libvirt` with every libvirt daemon socket) are hidden by the private `/run`.
+    - **Socket trees**: `/tmp/.X11-unix` (an X server lets a process inject input and run commands
+      outside the sandbox), `/run/user` (the systemd user bus and session agents) and `/run/libvirt`
+      (every libvirt daemon socket) are hidden by the private `/tmp` and `/run` (subject to the two
+      exceptions under **Pathname sockets**).
     - **Root-equivalent daemon sockets** replaced with `/dev/null` at their real path: Docker,
       Podman, containerd, the system D-Bus, LXD and Incus (a read-only bind does not stop
       `connect()` to a pathname `AF_UNIX` socket, and the network namespace covers only abstract
@@ -133,8 +144,8 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
   by the IPC channel. `tests/test_sandbox_ipc.py` pins the IPC residual (#316).
 
   **Deployment note:** a verifier write root or state directory must not live under a masked path
-  (a masked credential dir such as `~/.config` or `~/.local/state`, or a masked socket tree such as
-  `/tmp/.X11-unix`). The tmpfs is applied after the write binds, so
+  (a masked credential dir such as `~/.config` or `~/.local/state`) or inside `/run` or `/var/run`
+  (refused). The tmpfs is applied after the write binds, so
   inside the sandbox the directory is replaced by an empty tmpfs: any state already there is hidden
   from the run, and anything written there is discarded when the run ends. (The tmpfs is itself
   writable, so a single run that writes and reads back within itself still sees its own data — the
@@ -257,37 +268,46 @@ verifier log to a worker or a model** (`src/cairnwork/verifiers.py` says the sam
 Two consequences of the whole-root read-only bind are mitigated, not fully closed, in either
 mode (launching account or dedicated account):
 
-- **Pathname sockets.** A read-only bind does not stop `connect()` to an `AF_UNIX` pathname
-  socket, and the network namespace covers only abstract sockets. A reachable privileged local
-  socket hands the candidate the host — the container daemons (Docker/Podman/containerd), the
-  system D-Bus, and the **systemd user bus** under `/run/user/<uid>` (a `systemd-run --user`
-  there starts a process *outside* the sandbox) — and an unprivileged one can still carry data
-  out (journald keeps what it is sent and may forward it off the host). The dedicated account
-  does not close this by itself: on Linux CI a run reached journald, systemd's notify and
-  varlink sockets, snapd and uuidd under `/run` in both modes (#391). So every run gets the
-  private, read-only `/run` described above: no host socket under `/run` or `/var/run` is
-  connectable from a run, in owner or account mode, including one the host creates while the
-  run is in progress (the tmpfs lives in the run's own mount namespace), and no path under them
-  leads back out (a recreated link stays inside the tree; no root is bound there).
-  `tests/test_run_isolation_witness.py` checks this on real bwrap in CI. Still open: a pathname
-  socket elsewhere — under `/tmp` (in owner mode the launching account's own sockets, such as an
-  ssh-agent or tmux socket, until the rest of #391), `/var/tmp`, `/var/lib`, a home, `/srv` — is
-  connectable whenever the running account may connect to it, and an agent socket an operator
-  put at such a path is reachable by a candidate that guesses it (scrubbing `SSH_AUTH_SOCK` from
-  the environment hides the usual pointer but not the path itself).
-  What the private `/run` changes for a run: a user known only through systemd-userdb (a
-  `DynamicUser`) no longer resolves inside it (the nscd and userdb sockets are gone, so glibc
-  falls back to `/etc/passwd`); NixOS `/run/wrappers` (setuid `sudo`, `ping`) is not put back
-  (setuid is inert under bwrap's `no_new_privs` anyway); and a `/run` link leading out of the
-  tree is not recreated: Debian's `/run/shm -> /dev/shm` (`/dev/shm` itself is there) and NixOS
-  `/run/current-system`, so on NixOS commands found only through `/run/current-system/sw/bin`
-  are missing inside a run (#469). Multiprocessing is unaffected: its semaphores and shared
-  memory live in the run's own `/dev/shm`, its sockets in `TMPDIR`.
-- So "writes and network are confined" holds for ordinary filesystem writes and IP networking;
-  a filesystem socket outside the private trees is the residual. **Run genuinely adversarial
-  third-party code only under the dedicated account**, not the launching account: the whole-root
-  read bind means the deny-list cannot be proven complete, and without the account its own files
-  and sockets are the trust boundary.
+- **Pathname sockets.** A read-only bind does not stop `connect()` to an `AF_UNIX` pathname socket,
+  and the network namespace covers only abstract sockets. A reachable privileged local socket hands
+  the candidate the host — the container daemons (Docker/Podman/containerd), the system D-Bus, and
+  the **systemd user bus** under `/run/user/<uid>` (a `systemd-run --user` there starts a process
+  *outside* the sandbox) — and an unprivileged one can still carry data out (journald keeps what it
+  is sent and may forward it off the host). The dedicated account does not close this by itself: on
+  Linux CI a run reached journald, systemd's notify and varlink sockets, snapd and uuidd under
+  `/run` in both modes, and in owner mode the launching account's own sockets under `/tmp` (#391).
+  So every run gets the private, read-only `/run` and `/tmp` described above. The claim, in full:
+  from a Linux run, in owner or account mode, no host pathname socket under `/run`, `/var/run` or
+  `/tmp` is connectable, including one the host creates while the run is in progress (the tmpfs
+  lives in the run's own mount namespace), with two exceptions. (1) Inside the run's own read and
+  write roots that lie under `/tmp`, which the caller chooses and which are bound back as they are:
+  the run's work and private directories and the interpreter's prefixes (Cairnwork puts runs under
+  the required `--state` directory; only tests put them under pytest's temp directory in `/tmp`).
+  (2) A regular file under `/run` or `/var/run` that a top-level `/etc` link names
+  (`/etc/resolv.conf`), which its owner could replace with a socket between the policy check and the
+  mount. This is not a claim that a Linux run has no host IPC channel: a pathname socket elsewhere —
+  under `/var/tmp`, `/var/lib` (sssd's pipes, databases), a home, `/srv` — stays connectable
+  whenever the running account may connect to it, and the witness does not walk those paths (#471).
+  `tests/test_run_isolation_witness.py` (every socket the host has under the three trees, outside
+  the run's own root) and `tests/test_tmp_isolation_witness.py` (sockets planted under `/tmp` before
+  the run and after the policy is built) check the claim on real bwrap in CI. An agent socket an
+  operator put at an open path is reachable by a candidate that guesses it (scrubbing
+  `SSH_AUTH_SOCK` from the environment hides the usual pointer but not the path itself).
+  What the private `/run` and `/tmp` change for a run (besides host `/tmp` files, above): a user
+  known only through systemd-userdb (a `DynamicUser`) no longer resolves inside it (the nscd and
+  userdb sockets are gone, so glibc falls back to `/etc/passwd`); NixOS `/run/wrappers` (setuid
+  `sudo`, `ping`) is not put back (setuid is inert under bwrap's `no_new_privs` anyway); and a
+  `/run` link leading out of the tree is not recreated: Debian's `/run/shm -> /dev/shm` (`/dev/shm`
+  itself is there) and NixOS `/run/current-system`, so on NixOS commands found only through
+  `/run/current-system/sw/bin` are missing inside a run (#469). Multiprocessing is unaffected: its
+  semaphores and shared memory live in the run's own `/dev/shm`, its sockets in `TMPDIR` (Linux CI
+  runs a multiprocessing child from a test that also writes through `tmp_path` and `tempfile`).
+- So "writes and network are confined" holds for ordinary filesystem writes and IP networking; a
+  filesystem socket outside the private trees, or within the two exceptions under **Pathname
+  sockets** above, is the residual. **Run genuinely adversarial third-party code only under the
+  dedicated account**, not the launching account: the whole-root read bind means the deny-list
+  cannot be proven complete, and without the account its own files and sockets are the trust
+  boundary.
 
 CI on `ubuntu-24.04` lifts the AppArmor `apparmor_restrict_unprivileged_userns` restriction
 with sysctl; an end user's machine needs an AppArmor profile that grants `userns` to bwrap.

@@ -1,7 +1,7 @@
-"""The private, read-only /run of a bwrap run (#391), as policy text: on any host, with the trees
-and /etc pointed at directories under tmp_path. The real mounts are witnessed on Linux CI by
-tests/test_run_isolation_witness.py (no host socket under /run connectable, and a run still
-works)."""
+"""The private, read-only /run, /var/run and /tmp of a bwrap run (#391), as policy text: on any
+host, with the trees and /etc pointed at directories under tmp_path. The real mounts are witnessed
+on Linux CI by tests/test_run_isolation_witness.py and tests/test_tmp_isolation_witness.py (no
+host socket there connectable, and a run, with its roots under /tmp in owner mode, still works)."""
 
 import os
 from pathlib import Path
@@ -14,13 +14,15 @@ from cairnwork_sandbox.backend import SandboxError
 
 @pytest.fixture
 def host(tmp_path, monkeypatch):
-    """A fake /run, /var/run (a link to it) and /etc, plus a home; the real ones are not read."""
-    run, etc, home = tmp_path / "run", tmp_path / "etc", tmp_path / "home"
-    for directory in (run, etc, home):
+    """A fake /run, /var/run (a link to it), /tmp and /etc, plus a home; the real ones are not
+    read."""
+    run, etc, home, tmp = tmp_path / "run", tmp_path / "etc", tmp_path / "home", tmp_path / "tmp"
+    for directory in (run, etc, home, tmp):
         directory.mkdir()
     (tmp_path / "varrun").symlink_to(run)
-    trees = (str(run), str(tmp_path / "varrun"))
+    trees = (str(run), str(tmp_path / "varrun"), str(tmp))
     monkeypatch.setattr(bwrap_private, "TREES", trees)
+    monkeypatch.setattr(bwrap_private, "HOLDS_ROOTS", str(tmp))
     monkeypatch.setattr(bwrap_private, "ETC", str(etc))
     return tmp_path
 
@@ -53,17 +55,23 @@ def test_the_tree_is_a_tmpfs_before_every_bind_and_read_only_last(host):
     assert tmpfs > _at(lines, "--ro-bind", "/", "/") >= 0
     assert tmpfs < _at(lines, "--bind", _real(work), _real(work))
     assert tmpfs < _at(lines, "--ro-bind", "/dev/null", f"{_real(host / 'home')}/.netrc")
-    assert lines[-2:] == ["--remount-ro", run]
+    assert lines[-4:] == ["--remount-ro", run, "--remount-ro", _real(host / "tmp")]
     assert lines.count(run) == 2  # /var/run is a link to /run: one tree, mounted once
 
 
 def test_a_separate_var_run_gets_its_own_tmpfs(host, monkeypatch):
     (host / "varrun").unlink()
     (host / "varrun").mkdir()
+    (host / "varrun" / "f.conf").write_text("x\n")
+    (host / "etc" / "v.conf").symlink_to(host / "varrun" / "f.conf")  # /etc into it: put back
     lines = _policy(host)
     run, varrun = _real(host / "run"), _real(host / "varrun")
     assert _at(lines, "--tmpfs", run) >= 0 and _at(lines, "--tmpfs", varrun) >= 0
-    assert lines[-4:] == ["--remount-ro", run, "--remount-ro", varrun]
+    assert _at(lines, "--ro-bind", f"{varrun}/f.conf", f"{varrun}/f.conf") > _at(
+        lines, "--tmpfs", varrun
+    )
+    tmp = _real(host / "tmp")
+    assert lines[-6:] == ["--remount-ro", run, "--remount-ro", varrun, "--remount-ro", tmp]
 
 
 def test_an_absent_tree_adds_nothing(host, monkeypatch):
@@ -73,15 +81,33 @@ def test_an_absent_tree_adds_nothing(host, monkeypatch):
 
 
 @pytest.mark.parametrize("kind", ["read", "write"])
-@pytest.mark.parametrize("where", ["run/py", "run"])
-def test_a_root_in_the_private_tree_is_refused(host, kind, where):
-    # No caller puts one there; binding it would bring host content (and sockets) into the tree,
-    # and a write bind would stay writable (bwrap's --remount-ro does not recurse).
+@pytest.mark.parametrize("where", ["run/py", "run", "varrun/py", "tmp"])
+def test_a_root_in_run_or_at_a_tree_is_refused(host, kind, where):
+    # No caller puts one in /run; binding it would bring host content (and sockets) into the
+    # tree. A root that is a whole tree would undo it.
     root = host / where
     root.mkdir(exist_ok=True)
     reads, writes = ((root,), ()) if kind == "read" else ((), (root,))
     with pytest.raises(SandboxError, match="private"):
         _policy(host, reads, writes)
+
+
+def test_a_root_under_tmp_is_put_back_on_the_tmpfs_before_read_only(host):
+    # A run root under /tmp (the tests' owner-mode runs: pytest's tmp_path) comes back on the
+    # private tmpfs: a read root read-only, a write root by the caller's --bind. A read root absent
+    # at build time is left out (no source another user could plant in /tmp before bwrap mounts).
+    # --remount-ro does not recurse, so the write bind stays writable: the run witnesses in
+    # test_run_isolation_witness.py write there on Linux CI. Nothing else of /tmp comes back.
+    tmp = host / "tmp"
+    read, write, other = tmp / "r" / "py", tmp / "w", tmp / "other"
+    for directory in (read, write, other):
+        directory.mkdir(parents=True)
+    lines = _policy(host, reads=(read, tmp / "absent"), writes=(write,))
+    tmpfs, real, wreal = _at(lines, "--tmpfs", _real(tmp)), _real(read), _real(write)
+    bind = _at(lines, "--bind", wreal, wreal)
+    assert 0 <= tmpfs < _at(lines, "--ro-bind", real, real) < bind < len(lines) - 2
+    assert "--ro-bind-try" not in lines and _real(tmp / "absent") not in lines
+    assert lines[-2:] == ["--remount-ro", _real(tmp)] and _real(other) not in lines
 
 
 def test_a_read_root_beside_or_holding_the_tree_adds_nothing(host):
@@ -173,6 +199,18 @@ def test_etc_links_to_a_file_under_the_tree_are_bound_read_only(host):
     assert "name.conf" not in lines
 
 
+def test_an_etc_link_into_tmp_is_not_put_back(host):
+    # A file under /tmp may belong to any local user, who could swap it for a socket between the
+    # check and the mount: only /run and /var/run (system daemons' trees) get /etc files back.
+    (host / "tmp" / "f.conf").write_text("x\n")
+    (host / "run" / "f.conf").write_text("x\n")
+    (host / "etc" / "tmp.conf").symlink_to(host / "tmp" / "f.conf")
+    (host / "etc" / "run.conf").symlink_to(host / "run" / "f.conf")
+    lines = _policy(host)
+    assert _real(host / "tmp" / "f.conf") not in lines
+    assert _at(lines, "--ro-bind", *[_real(host / "run" / "f.conf")] * 2) > 0
+
+
 def test_an_etc_file_the_account_cannot_reach_is_left_out(host, monkeypatch):
     run = host / "run"
     (run / "secret").mkdir()
@@ -199,6 +237,30 @@ def test_a_tree_or_etc_that_cannot_be_listed_fails_the_policy(host, monkeypatch,
     monkeypatch.setattr(bwrap_private.os, "scandir", scandir)
     with pytest.raises(SandboxError, match="cannot list"):
         _policy(host)
+
+
+@pytest.mark.parametrize(
+    "link,target", [("tmp", "run"), ("tmp", "run/x"), ("varrun", "tmp/vr"), ("varrun", "run/x")]
+)
+def test_a_tree_that_resolves_into_another_is_refused(host, link, target):
+    # /tmp -> /run (or below): a root under /tmp would be a root in /run, bound back from the host
+    # over the private /run. Only /var/run -> /run itself is one tree (the standard layout).
+    (host / target).mkdir(parents=True, exist_ok=True)
+    (host / link).unlink() if (host / link).is_symlink() else (host / link).rmdir()
+    (host / link).symlink_to(host / target)
+    with pytest.raises(SandboxError, match="overlaps"):
+        _policy(host)
+
+
+def test_a_write_root_that_holds_a_tree_is_refused(host):
+    # /tmp -> /data/tmp with a write root /data: the write bind would cover the private /tmp.
+    data = host / "data"
+    (data / "tmp").mkdir(parents=True)
+    (host / "tmp").rmdir()
+    (host / "tmp").symlink_to(data / "tmp")
+    with pytest.raises(SandboxError, match="holds"):
+        _policy(host, writes=(data,))
+    assert "--tmpfs" in _policy(host, reads=(data,))  # a read root outside the trees adds nothing
 
 
 def test_a_write_root_at_the_tree_is_still_refused(host):

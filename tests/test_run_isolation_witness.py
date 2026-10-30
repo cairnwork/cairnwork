@@ -1,17 +1,17 @@
 """Witnesses for two cross-boundary channels a verifier run may still have (#391, #392).
 
 #391: the bwrap policy binds the host root read-only, and a read-only bind does not stop
-``connect()`` on a pathname socket. Only a named set of daemon sockets and a few socket trees are
-masked; any other socket under /run, /var/run or /tmp (journald's is mode 0666) may stay reachable.
+``connect()`` on a pathname socket, and any socket under /run, /var/run or /tmp (journald's is mode
+0666, the launching account's own ssh-agent or tmux socket) was reachable from a run.
 The outer test lists the host's sockets (as the owner, before the run) and hands the list to a
 candidate test, which also walks the same roots itself from inside the run and tries
 ``connect()`` on each with every AF_UNIX socket type. Nothing is sent. This is a point-in-time
 witness: it covers the sockets present when it runs. On Linux the candidate first connects to a
 socket of its own in TMPDIR, so a probe that cannot connect at all does not pass. Each run now
-gets a private, read-only /run (#391 step 2), which closes the account-mode rows; the owner-mode
-witness still fails on the launching account's own sockets under /tmp until step 3. A further
-run checks what the private /run must not break (writes, /etc/resolv.conf, user and locale
-lookups, multiprocessing).
+gets a private, read-only /run, /var/run and /tmp, so no host socket there is connectable in
+either mode (planted and late sockets: test_tmp_isolation_witness.py). A further run checks what
+the private trees must not break (writes, /etc/resolv.conf, user and locale lookups, a
+multiprocessing child; in owner mode the run's own roots sit under /tmp and stay writable).
 
 #392: in account mode, a run's private ``run/`` directory (and anything the candidate wrote
 there) used to stay readable by the next run. The first run writes a marker in HOME, TMPDIR,
@@ -45,13 +45,6 @@ pytestmark = pytest.mark.sandbox
 SOCKET_ROOTS = ("/run", "/var/run", "/tmp")  # noqa: S108 - only listed and probed
 WALK_LIMIT, WALK_DEPTH = 100_000, 4  # daemon sockets sit 1-3 levels down (/run/systemd/journal)
 ACCOUNT = VerifierAccount()
-# Reproduced on Linux CI (real bwrap, x86-64 and arm64, owner and account mode): see the Issues.
-SOCKETS_OPEN_ON_LINUX = pytest.mark.xfail(
-    sys.platform == "linux",
-    strict=True,
-    raises=AssertionError,
-    reason="Refs #391: the launching account's own sockets under /tmp stay connectable",
-)
 
 
 def socket_paths(roots, limit, depth):
@@ -136,8 +129,8 @@ PROBE = (
     "    # printed, not put in the message: pytest cuts a long assertion message short\n"
     "    print(f'probed {{len(probed)}} (host listed {{len(HOST)}}, the run found '\n"
     "          f'{{len(inside)}} in {{count}} entries, {{len(unreadable)}} unreadable)')\n"
-    "    for line in reached:\n"
-    "        print('CONNECTABLE ' + line)\n"
+    "    for line in reached:  # repr: a host path cannot start a line of its own in the log\n"
+    "        print('CONNECTABLE ' + repr(line))\n"
     "    assert not reached, f'{{len(reached)}} host sockets connectable, listed on stdout'\n"
 )
 
@@ -173,7 +166,6 @@ def socket_run(repo, tmp_path, account=None, prefixes=None):
     return run, listed
 
 
-@SOCKETS_OPEN_ON_LINUX
 def test_no_host_pathname_socket_is_connectable_inside_a_run(repo, tmp_path):
     run, listed = socket_run(repo, tmp_path)
     assert run.observation.passed, "\n".join((run.why, listed, run.log_path.read_text()))
@@ -197,17 +189,20 @@ def test_account_no_host_pathname_socket_is_connectable(repo, tmp_path, own_name
     assert run.observation.passed, "\n".join((run.why, listed, run.log_path.read_text()))
 
 
-# What the private /run (#391) must leave working, under bwrap: writes to the run's own places
-# and none outside, /etc/resolv.conf (a link into /run on systemd hosts), name, user and locale
-# lookups, and a multiprocessing child (its queue's lock lives in /dev/shm).
+# What the private trees (#391) must leave working, under bwrap: writes to the run's own places
+# (pytest's tmp_path and tempfile's directory are in TMPDIR) and none outside, /etc/resolv.conf
+# (a link into /run on systemd hosts), name, user and locale lookups, and a multiprocessing child
+# (its queue's lock lives in /dev/shm). In owner mode the run root is under /tmp, so the writes
+# also show that bwrap's non-recursive --remount-ro of /tmp leaves the write binds writable (O1).
 WORKS = (
-    "import hashlib, locale, os, pwd, socket\n"
+    "import hashlib, locale, os, pwd, socket, tempfile\n"
     "from multiprocessing import Process, Queue\n\n"
     "def put(queue):\n"
     "    queue.put('cw-mp-ok')\n\n"
-    "def test_a_run_still_works():\n"
+    "def test_a_run_still_works(tmp_path):\n"
     "    work = os.path.dirname(os.getcwd())  # next to the checkout (the checkout is compared)\n"
-    "    for where in (work, os.environ['TMPDIR'], os.environ['HOME']):\n"
+    "    places = (work, os.environ['TMPDIR'], os.environ['HOME'], tempfile.gettempdir())\n"
+    "    for where in (*places, str(tmp_path)):\n"
     "        with open(os.path.join(where, 'cw-391-write'), 'w') as handle:\n"
     "            handle.write('x')\n"
     "    for where in {readonly!r}:\n"
@@ -234,7 +229,7 @@ WORKS = (
 def works_run(repo, tmp_path, account=None, prefixes=None):
     backend = cairnwork_sandbox.platform_backend()
     if backend is None or backend.name != "bwrap":
-        pytest.skip("bwrap only: the private /run is a bwrap mount (#391)")
+        pytest.skip("bwrap only: the private trees are bwrap mounts (#391)")
     try:  # the host's view; a file the owner cannot read is not checked inside
         resolv = hashlib.sha256(Path("/etc/resolv.conf").read_bytes()).hexdigest()
     except OSError:

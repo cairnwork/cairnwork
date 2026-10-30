@@ -13,8 +13,8 @@ directory under ``/etc`` is shared system configuration the run may need, so a l
 refused by name, while a file there is masked. A dangling target is refused when it lies under a
 read or write root of the run, and otherwise skipped with a count in ``Policy.notes``
 (``DANGLING_NOTE``). That skip is a residual of the #353 kind, not a proof of safety: the policy
-binds the whole host root read-only and gives the run no private ``/tmp``, so a target created
-while the run is in progress is readable (a socket connectable) at its own path. Refusing every
+binds the whole host root read-only, so a target created while the run is in progress outside
+the private /run and /tmp is readable (a socket connectable) at its own path. Refusing every
 dangling target instead would block each run while, for example, a daemon whose socket a link
 names (``~/.codex/.../app-server-control.sock -> /tmp/codex-daemon-*/...``) is not running. The
 scan reaches ``SCAN_DEPTH`` levels below each credential directory (``.config/a/b/c``), where

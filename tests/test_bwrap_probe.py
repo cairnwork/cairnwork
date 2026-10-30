@@ -3,31 +3,23 @@ argv construction (pure functions) are checked on any host. The real confinement
 by tests/test_sandbox.py on the test-linux-sandbox CI job."""
 
 import os
-import shutil
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
+from fixture_tree import world_base
 
 from cairnwork_sandbox import bwrap, bwrap_private, platform_backend
 from cairnwork_sandbox.backend import Policy, SandboxError
 
 
 @pytest.fixture
-def world_home():
+def world_home(request):
     """A home whose ancestors are world-traversable, so the account-path reachability walk (which
-    runs from ``/``) can pass. pytest's own tmp tree is 0700, which would block it; ``/tmp`` is
-    1777. The home itself is 0755 unless a test tightens it."""
-    base = Path(tempfile.mkdtemp(dir="/tmp", prefix="cw-home-"))  # noqa: S108 - needs world ancestors
-    os.chmod(base, 0o755)
-    try:
-        yield base
-    finally:
-        for root, dirs, _ in os.walk(base):  # some tests make 0700 subdirs; reopen them to delete
-            for d in dirs:
-                os.chmod(os.path.join(root, d), 0o700)
-        shutil.rmtree(base, ignore_errors=True)
+    runs from ``/``) can pass. pytest's own tmp tree is 0700, which would block it. Under
+    /var/tmp, off the private /tmp (fixture_tree, #391). The home itself is 0755 unless a test
+    tightens it."""
+    return world_base(request, "cw-home-")
 
 
 # Captured before the autouse fixture neutralises the module attribute, so a test can check the
@@ -43,10 +35,9 @@ def _host_independent_ipc_masks(monkeypatch):
     them in their own body (tests/test_bwrap_private_trees.py for the private /run). Only these
     directories are forced absent, so pytest's own isdir calls are untouched (patching os.getuid
     globally breaks its tmp-owner check)."""
-    import os
 
     real_isdir = os.path.isdir
-    masked_dirs = {bwrap._X11_SOCKET_DIR, "/run", "/var/run"}
+    masked_dirs = {"/run", "/var/run", "/tmp"}
     monkeypatch.setattr(bwrap, "_DANGEROUS_SOCKETS", ())
     monkeypatch.setattr(
         bwrap.os.path, "isdir", lambda p: False if p in masked_dirs else real_isdir(p)
@@ -222,7 +213,6 @@ def test_dangerous_sockets_are_masked_only_when_present(tmp_path, monkeypatch):
     # does not stop connect(), so an existing one is replaced with /dev/null at its canonical
     # path; an absent one adds no flag (a bind over a missing path would fail on the read-only
     # root), and duplicate paths (the /var/run -> /run symlink) collapse to one.
-    import os
 
     home = _home(tmp_path)
     present = tmp_path / "docker.sock"
@@ -245,7 +235,7 @@ def test_the_whole_run_tree_is_private_not_one_uid(tmp_path, monkeypatch):
     monkeypatch.setattr(bwrap_private, "_entries", lambda d: [])
     lines = bwrap.BACKEND.policy((), (), home=_home(tmp_path)).text.splitlines()
     assert lines[lines.index("/run") - 1] == "--tmpfs" and lines[-2:] == ["--remount-ro", "/run"]
-    assert "/run/user" not in lines and bwrap._socket_dirs_to_empty() == []
+    assert "/run/user" not in lines
 
 
 def test_policy_always_dies_with_parent():
@@ -273,23 +263,11 @@ def test_dangerous_sockets_cover_the_root_equivalent_services():
     assert required <= set(_REAL_DANGEROUS_SOCKETS)
 
 
-def test_socket_dirs_cover_x11(monkeypatch):
-    # /tmp/.X11-unix is emptied as a whole tree; /run/user and /run/libvirt are in the private /run.
-    trees = {"/run/user", bwrap._X11_SOCKET_DIR, "/run/libvirt"}
-    monkeypatch.setattr(bwrap.os.path, "isdir", lambda p: p in trees)
-    assert bwrap._socket_dirs_to_empty() == [bwrap._X11_SOCKET_DIR]
-
-
-def test_x11_socket_dir_is_masked_with_tmpfs(tmp_path, monkeypatch):
-    # A reachable X server socket (/tmp/.X11-unix/X*) lets a candidate inject input / run commands
-    # outside the sandbox on a desktop; the whole dir is emptied with a tmpfs when it exists.
-    import os
-
-    monkeypatch.setattr(bwrap.os.path, "isdir", lambda p: p == bwrap._X11_SOCKET_DIR)
-    lines = bwrap.BACKEND.policy((), (), home=_home(tmp_path)).text.splitlines()
-    real_x11 = os.path.realpath(bwrap._X11_SOCKET_DIR)  # _safe() resolves /tmp on macOS
-    i = lines.index(real_x11)
-    assert lines[i - 1] == "--tmpfs"
+def test_tmp_is_a_private_tree_too():
+    # /tmp holds the users' own sockets (ssh-agent, tmux, X11 under /tmp/.X11-unix): private like
+    # /run, the X11 tree with it (#391). The only tree a run's roots may sit in.
+    assert bwrap_private.TREES == ("/run", "/var/run", "/tmp")
+    assert bwrap_private.HOLDS_ROOTS == "/tmp"
 
 
 def test_socket_dirs_absent_add_no_tmpfs(tmp_path, monkeypatch):
@@ -366,7 +344,6 @@ def test_policy_paths_cannot_add_lines(tmp_path, bad):
     + ["HOME", "HOME_PARENT"],
 )
 def test_broad_write_roots_are_refused(tmp_path, root):
-    import os
 
     if root[0] == "/" and os.path.realpath(root) != root:
         pytest.skip(f"{root} is a symlink on this host (macOS); its real path is not listed")

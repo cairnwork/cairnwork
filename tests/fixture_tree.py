@@ -28,7 +28,8 @@ REACH_CHECK = (
 
 @contextlib.contextmanager
 def world_dir(prefix: str):
-    """A fresh 0755 directory under ``BASE``, removed afterwards (0700 subdirs reopened first)."""
+    """A fresh 0755 directory under ``BASE``, removed afterwards (0700 subdirs reopened first; a
+    link to a directory is not followed, so its target's mode is left alone)."""
     base = Path(tempfile.mkdtemp(dir=BASE, prefix=prefix))
     os.chmod(base, 0o755)
     try:
@@ -36,8 +37,9 @@ def world_dir(prefix: str):
     finally:
         for root, dirs, _ in os.walk(base):
             for d in dirs:
-                with contextlib.suppress(OSError):
-                    os.chmod(os.path.join(root, d), 0o700)
+                if not os.path.islink(path := os.path.join(root, d)):
+                    with contextlib.suppress(OSError):
+                        os.chmod(path, 0o700)
         shutil.rmtree(base, ignore_errors=True)
 
 
