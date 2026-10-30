@@ -253,12 +253,14 @@ class AgyWorker:
             self._fence(swept, log_path, exc)
             raise
         self._fence(swept, log_path)
-        if dispatch is not None and timed_out is None and process.returncode < 0:  # #244
-            raise AgyWorkerUnswept(  # with agy_run_as_user, _settle_worker_run raised already
-                f"WORKER_SWEEP_UNCLEAN: KILLED_BY_SIGNAL: {-process.returncode}; launches after "
-                f"the last receipt unknown; log {log_path}",
+        if process.returncode < 0:  # any signal end, ours included (#244); with agy_run_as_user
+            raise AgyWorkerUnswept(  # _settle_worker_run raised already
+                "WORKER_SWEEP_UNCLEAN: "
+                + "agy timed out; " * (timed_out is not None)
+                + f"KILLED_BY_SIGNAL: {-process.returncode}; launches after the last receipt "
+                f"unknown; log {log_path}",
                 self.run_as,
-            )
+            ) from timed_out
         if timed_out is not None:
             raise AgyWorkerError("agy timed out") from timed_out
         if held:
@@ -301,7 +303,7 @@ def _settle_worker_run(dispatch, reader, process, held, timed_out, log_path) -> 
     unswept = agy_receipts.sweep_after_kill(dispatch, receipts, killed=killed)
     found = agy_receipts.problems(receipts)
     completion = agy_receipts.completion_problem(receipts) if code == 0 else None
-    signalled = timed_out is None and code < 0  # not by us: a later launch may be unrecorded
+    signalled = code < 0  # ours or not (#244): a later launch may be unrecorded
     ended = ["TIMED_OUT"] * (timed_out is not None) + ["HELD"] * held
     ended += [f"KILLED_BY_SIGNAL: {-code}; launches after the last receipt unknown"] * signalled
     extra = [completion] if completion else []

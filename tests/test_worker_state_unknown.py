@@ -1,9 +1,9 @@
 """#244: a worker whose state after launch is unknown keeps its attempt fenced.
 
-- A dispatcher killed by a signal that is not our timeout may have launched a run whose receipt
-  it never wrote: the attempt is fenced (WorkerMayLive), however its receipts read (lines lost,
-  no launch receipt, an untrustworthy one, or an earlier attempt's receipts complete). A
-  dispatcher that ended on its own, and our timeout, keep their own paths.
+- A dispatcher killed by a signal, our timeout kill included, may have launched a run whose
+  receipt it never wrote: the attempt is fenced (WorkerMayLive), however its receipts read (lines
+  lost, no launch receipt, an untrustworthy one, or an earlier attempt's receipts complete). A
+  dispatcher that ended on its own (an exit code, on our SIGTERM too) keeps its own path.
 - An interrupt that is not an Exception (KeyboardInterrupt, SystemExit) leaves the task
   DISPATCHED, as a crash does, so only recovery settles it (sweep, then fence); it is never
   FAILED unmarked, which a supersede would take over without a sweep.
@@ -111,8 +111,15 @@ def test_a_dispatcher_killed_after_complete_receipts_is_fenced(tmp_path, earlier
 
 
 @pytest.mark.parametrize("earlier", sorted(EARLIER))
-def test_our_timeout_after_complete_receipts_keeps_its_own_path(tmp_path, earlier):
-    assert _settle(tmp_path, EARLIER[earlier], -9, timed_out=TimeoutError()) is None
+def test_our_timeout_kill_after_complete_receipts_is_fenced_too(tmp_path, earlier):
+    """Our own kill is a signal end too: fencing it costs one sweep before a takeover."""
+    with pytest.raises(WorkerMayLive, match="TIMED_OUT.*KILLED_BY_SIGNAL: 9"):
+        _settle(tmp_path, EARLIER[earlier], -9, timed_out=TimeoutError())
+
+
+@pytest.mark.parametrize("earlier", sorted(EARLIER))
+def test_our_timeout_with_a_dispatcher_that_exited_keeps_its_own_path(tmp_path, earlier):
+    assert _settle(tmp_path, EARLIER[earlier], 1, timed_out=TimeoutError()) is None
 
 
 @pytest.mark.parametrize(

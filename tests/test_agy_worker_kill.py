@@ -74,7 +74,8 @@ def test_a_killed_run_is_swept_through_the_wrapper_from_its_launch_receipt(
 ):
     seen = _sudo(tmp_path, monkeypatch, "print('AGY_WORKER_SWEEP clean')")
     worker, workdir = _hanging(tmp_path, monkeypatch, launch(str(layout)))
-    with pytest.raises(AgyWorkerError, match="agy timed out"):
+    fenced = "^WORKER_SWEEP_UNCLEAN: .*TIMED_OUT.*KILLED_BY_SIGNAL: 9"  # our kill too (#244)
+    with pytest.raises(AgyWorkerError, match=fenced):
         worker.run(workdir, TASK)
     assert json.loads(seen.read_text())[1:] == [
         "-n", "-u", WORKER, agy_dispatch.WORKER_WRAPPER, "--sweep", str(layout),
