@@ -294,19 +294,27 @@ dedicated witness that proves the kill directly is a P3 follow-up.
 macOS withholds the environment of Apple platform binaries (`/bin/sh`, `/bin/sleep`), so recovery
 cannot see the attempt marker on them. `proc_cwd.kill_withheld_in` SIGKILLs a process of the owner
 whose environment is withheld and whose working directory is inside one of the dead attempt's run
-directories (`attempt_dirs`). Run directories are Cairnwork scratch; that is the bound on all three
-residuals (#436):
+directories (`attempt_dirs`). Three residuals remain (#436); each has its own bound:
 
 - **A platform binary with one real environment entry is taken for withheld.** On a macOS that
   does show platform binaries' environments, such a process inside a run directory is killed.
-  Pinned with fakes by `tests/test_proc_cwd_residuals.py`, which also shows it goes no further:
-  not outside the run directories, not for an ordinary program, an unreadable signing status or
-  two entries.
+  Bound: run directories are Cairnwork scratch. Pinned with fakes by
+  `tests/test_proc_cwd_residuals.py`, which also shows it goes no further: not outside the run
+  directories, not for an ordinary program, an unreadable signing status or two entries. The
+  `proc_cwd.py` module docstring records the same kind of case for a legitimately empty
+  environment: it is tied only by its directory too, Cairnwork's own parent shell included.
 - **PID reuse.** The start time is read before and after the other reads, which narrows the race,
   but `os.kill` takes a number: macOS has no pidfd to bind the kill to the process checked.
-- **Directory checks are by path.** Run directories are resolved to realpaths when recovery lists
-  them, before the sweep, and the process's directory when it is checked; a run directory moved
-  or replaced between those reads and the kill is not covered.
+  Bound: the kill runs as the owner, so it reaches only a process of the owner's uid, and only one
+  that took the pid in the gap between the second start-time read and `os.kill`, with no wait in
+  between. macOS hands out pids in turn up to 99,999 before wrapping, so in practice that gap is
+  short.
+- **Directory checks are by path.** Recovery resolves the run directories to realpaths when it
+  lists them, `kill_withheld_in` resolves them again at the start of every sweep (`confirm_gone`
+  sweeps again after `CONFIRM_WAIT`), and a process's directory is resolved when it is checked; a
+  run directory moved or replaced between those reads and the kill is not covered. Bound: only the
+  owner can replace a top-level run directory. The owner's run roots belong to the owner, and a
+  dedicated account's `runs/` is `chown $OWNER`, mode `2750` (`scripts/setup_verifier_user.sh`).
 
 Testing rule: no live probe or mutant of `proc_cwd` on a real host (a mutant that dropped the
 directory check killed every process of the user). Read the code, use a VM or sandbox, or fake the
