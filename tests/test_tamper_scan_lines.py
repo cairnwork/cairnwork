@@ -115,3 +115,44 @@ def test_more_spellings_of_the_same_apis_are_caught(path, line, rule):
 )
 def test_lookalikes_of_the_new_spellings_pass(path, line):
     assert scan_added_lines(path, [(1, line)]) == []
+
+
+def test_operator_diff_settings_do_not_change_how_the_diff_is_read(repo):
+    """A blank context line between hunks, written as "" under diff.suppressBlankEmpty."""
+    git(repo, "config", "diff.suppressBlankEmpty", "true")
+    git(repo, "config", "diff.interHunkContext", "5")
+    (repo / "README.md").write_text("a\n\nb\n\nc\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "readme")
+    base = git(repo, "rev-parse", "HEAD")
+    (repo / "README.md").write_text("A\n\nb\n\nC\n")
+    (repo / "src" / "z.py").write_text("import os\nos._exit(0)\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "candidate")
+    head = git(repo, "rev-parse", "HEAD")
+    assert [(f.path, f.line, f.rule) for f in scan_patch(repo, base, head)] == [
+        ("src/z.py", 2, "os_exit")
+    ]
+
+
+HEAD_A = "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n"
+HEAD_Z = "diff --git a/z.py b/z.py\nnew file mode 100644\n--- /dev/null\n+++ b/z.py\n"
+
+
+def test_an_empty_line_inside_a_hunk_is_a_blank_context_line():
+    diff = HEAD_A + "@@ -1,5 +1,5 @@\n-a\n+A\n\n b\n\n-c\n+C\n" + HEAD_Z + "@@ -0,0 +1 @@\n+x\n"
+    assert added_lines(diff) == {"README.md": [(1, "A"), (5, "C")], "z.py": [(1, "x")]}
+
+
+@pytest.mark.parametrize(
+    "diff",
+    [
+        HEAD_A + "@@ -1,2 +1,2 @@\n-a\n+A\n" + HEAD_Z + "@@ -0,0 +1 @@\n+x\n",  # counts left
+        HEAD_A + "@@ -1 +1 @@\n-a\n+A\n+B\n",  # more lines than counted: B is outside the hunk
+        HEAD_A + "@@ -1 +1,2 @@\n-a\n+A\n",  # the diff ends inside a hunk
+        HEAD_A + "@@ -1 +1 @@\n-a\n \n+A\n",  # a context line the old side does not owe
+    ],
+)
+def test_a_hunk_whose_lines_do_not_match_its_counts_is_unreadable(diff):
+    with pytest.raises(GitCommandError):
+        added_lines(diff)

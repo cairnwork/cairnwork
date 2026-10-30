@@ -275,7 +275,8 @@ def scan_added_lines(path: str, lines: list[tuple[int, str]]) -> list[Finding]:
     aliases: dict[str, set[str]] = {key: set() for key in ("sys", "os", "gc", "modules", "_exit")}
     found = []
     # Python also ends a source line at "\r" (CRLF included), so each piece is scanned on its own.
-    for number, text in [(number, piece) for number, line in lines for piece in line.split("\r")]:
+    pieces = [(number, piece) for number, line in lines for piece in line.split("\r")]
+    for number, text in pieces:
         if _COMMENT_ONLY.match(text):
             continue
         names = []
@@ -298,17 +299,26 @@ def added_lines(diff: str) -> dict[str, list[tuple[int, str]]]:
 
     A line ends only at "\\n" (git ends every diff line there; any other line break inside is
     content). Inside a hunk, its header's counts say how many old and new lines follow, so an
-    added line that starts with "++ " or "@@" is content, not a file or hunk header.
+    added line that starts with "++ " or "@@" is content, not a file or hunk header. A diff whose
+    lines do not match those counts raises GitCommandError (unreadable, so the change is refused).
     """
     files: dict[str, list[tuple[int, str]]] = {}
     current, number, old_left, new_left = None, 0, 0, 0
-    for raw in diff.split("\n"):
-        if old_left > 0 or new_left > 0:  # "\ No newline at end of file" counts for neither
-            if raw.startswith("+") and current is not None:
+    for raw in diff.removesuffix("\n").split("\n"):
+        if old_left > 0 or new_left > 0:
+            # "" is a blank context line (diff.suppressBlankEmpty); "\ No newline" counts for none
+            kind = raw[:1] or " "
+            if kind not in "+- \\":
+                raise GitCommandError("diff line inside a hunk has no +, -, space or \\ prefix")
+            if kind == "+" and current is not None:
                 files[current].append((number, raw[1:]))
-            old_left -= raw.startswith(("-", " "))
-            new_left -= raw.startswith(("+", " "))
-            number += raw.startswith(("+", " "))
+            old_left -= kind in "- "  # a bool counts as 0 or 1
+            new_left -= kind in "+ "
+            number += kind in "+ "
+            if old_left < 0 or new_left < 0:
+                raise GitCommandError("diff hunk has more lines than its header counts")
+        elif raw.startswith(("+", "-", " ")) and not raw.startswith(("+++ ", "--- ")):
+            raise GitCommandError("diff line outside a hunk")
         elif raw.startswith("+++ "):
             target = _unquote(raw[4:].rstrip("\t"))  # git appends a tab to a path with a space
             current = target[2:] if target.startswith("b/") else None
@@ -317,6 +327,8 @@ def added_lines(diff: str) -> dict[str, list[tuple[int, str]]]:
         elif hunk := _HUNK.match(raw):
             old_left, number = int(hunk.group(1) or 1), int(hunk.group(2))
             new_left = int(hunk.group(3) or 1)
+    if old_left > 0 or new_left > 0:
+        raise GitCommandError("diff ends inside a hunk")
     return files
 
 
@@ -331,7 +343,8 @@ def _unquote(name: str) -> str:
 def scan_patch(repo: Path, base: str, head: str) -> list[Finding]:
     """Scan what ``head`` adds on top of ``base`` (both commits already in repo)."""
     raw = run_git_bytes(  # bytes: no newline translation, so a lone "\r" stays inside its line
-        repo, "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames", "-U0",
+        repo, "-c", "diff.suppressBlankEmpty=false", "-c", "diff.interHunkContext=0",
+        "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames", "-U0",
         "--src-prefix=a/", "--dst-prefix=b/", base, head,
     )  # fmt: skip
     try:
