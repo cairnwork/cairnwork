@@ -78,6 +78,22 @@ def test_flag_off_is_the_bare_run(through_pause, capsys, script):
     assert not list(out.rglob(schema.RECEIPTS_FILE)) and not list(out.rglob("*pause*"))
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("exit_reason", "TIMEOUT"), ("turns_completed", 99), ("tree_differs_at_limit", "flip")],
+)
+def test_a_different_900s_outcome_is_not_hidden(through_pause, field, value):
+    # Codex review of #530: cut_900s's results are compared, not dropped with the wall clock
+    go, out, _ = through_pause
+    assert go(SCRIPTS[2], "bare") == 0 and go(SCRIPTS[2], "pause") == 0
+    bare, paused = lines(out)
+    assert strip(paused) == strip(bare)
+    old = paused["cut_900s"][field]
+    paused["cut_900s"][field] = (not old) if value == "flip" else value
+    assert paused["cut_900s"][field] != old
+    assert strip(paused) != strip(bare)
+
+
 def test_the_worker_gets_the_arguments_unchanged(monkeypatch):
     seen = []
     argv = ["run", "--task", "t.json", "--checkout", "c", "--write-path", "src", "--plan", "p"]

@@ -64,6 +64,13 @@ def test_a_tampered_plan_hash_does_not_verify():
         dict(plan=None),
         dict(event_seq=True),
         dict(event_seq=-1),
+        dict(checkpoint_sha256=None),  # an intervention names its checkpoint
+        dict(checkpoint_sha256="C" * 64),  # not lowercase hex
+        dict(checkpoint_sha256="c" * 63),
+        dict(checkpoint_sha256="checkpoint"),
+        dict(plan_sha256="0" * 64),  # build computes it from the plan: never overridden
+        dict(plan_sha256=hashlib.sha256(PLAN.encode()).hexdigest()),
+        dict(schema="cairnwork.pause.receipt/v0"),
     ],
 )
 def test_inconsistent_receipts_are_refused(over):
@@ -97,3 +104,16 @@ def test_append_keeps_the_event_order(tmp_path):
         receipt.append(log, bad)
     assert len(log.read_text().splitlines()) == 2
     assert receipt.verify_log([rows[1], rows[0]]) != []
+
+
+@pytest.mark.parametrize("bad", ["0" * 63, "A" * 64, "z" * 64, None])
+def test_a_resealed_receipt_with_a_malformed_hash_does_not_verify(bad):
+    # Codex review of #530: verify without the plan still checks both hashes' shape
+    for field in ("plan_sha256", "checkpoint_sha256"):
+        rec = {**_intervened(), field: bad}
+        rec["receipt_sha256"] = receipt.digest(rec)
+        assert any(field in p for p in receipt.verify(rec)), (field, bad)
+    rec = receipt.build(task_id="T", intervened=False, reason="PAUSE_NO_CUT", event_seq=1)
+    rec = {**rec, "checkpoint_sha256": "xyz"}
+    rec["receipt_sha256"] = receipt.digest(rec)
+    assert any("checkpoint_sha256" in p for p in receipt.verify(rec))

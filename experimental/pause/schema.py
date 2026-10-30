@@ -84,8 +84,9 @@ AC2_FIELDS = ("task_id", "checkpoint_sha256", "plan_sha256", "cut_turn_index")
 RECEIPT_VOLATILE_FIELDS = ("episode_id", "receipt_sha256")  # differ between replays of one run
 
 # #476 Open 2: what AC1 drops from local_worker's episode line, at any depth, before comparing
-# the bare run with PAUSE's flag-off run: run identities and the wall clock (cut_900s is derived
-# from it). Every other field must be equal.
+# the bare run with PAUSE's flag-off run: run identities and wall-clock readings. Every other
+# field must be equal, the outcomes derived from the clock included (cut_900s's exit_reason,
+# turns_completed, tree_differs_at_limit; Codex review of #530).
 EPISODE_VOLATILE_FIELDS = (
     "episode_id",
     "checkout_id",
@@ -98,5 +99,4 @@ EPISODE_VOLATILE_FIELDS = (
     "duration_ms",
     "pre_cut_wall_seconds",
     "pre_wall_seconds",
-    "cut_900s",
 )
