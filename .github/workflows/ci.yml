@@ -93,10 +93,6 @@ jobs:
           uv run python -c "from cairnwork_sandbox import bwrap; assert bwrap.available() is True, 'lifted host must be available'"
       - name: Gate — bwrap must be able to nest namespaces (unguarded)
         run: bwrap --unshare-pid --unshare-user --cap-drop ALL --ro-bind / / --proc /proc true
-      - name: Diagnostic (#418) — what the owner cannot list under /run
-        run: |
-          id
-          sudo -n find /run/containerd /run/libpod -maxdepth 3 -printf '%M %u:%g %p\n' || true
       - name: Sandbox witnesses on real bwrap
         run: CAIRNWORK_REQUIRE_SANDBOX=1 uv run pytest -q tests/test_sandbox.py tests/test_bwrap_symlink_masks.py tests/test_bwrap_mask_roots.py tests/test_run_isolation_witness.py tests/test_tmp_isolation_witness.py tests/test_bwrap_inner_links.py
 
@@ -126,10 +122,6 @@ jobs:
         run: |
           sudo sh scripts/setup_verifier_user_linux.sh "$USER"
           zsh scripts/setup_verifier_python.sh
-      - name: Diagnostic (#418) — what the owner cannot list under /run
-        run: |
-          id
-          sudo -n find /run/containerd /run/libpod -maxdepth 3 -printf '%M %u:%g %p\n' || true
       - name: Account witnesses on real bwrap, as the dedicated account
         run: uv run pytest -q -m verifier_account
       - name: Account run is membership-independent — cleared groups + umask 077 (Issue #108)
