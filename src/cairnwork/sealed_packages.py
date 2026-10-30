@@ -21,7 +21,8 @@ same (#385 review). So nothing is sealed when any Python file of the base may ch
 start Python another way (``sys_path_scan``: every file, since tests can import code from anywhere
 in the checkout; text words plus a syntax-tree reading that sees ``sys`` under another name); nor
 when the task's test commit is in the repository and its code may. The scan fails closed, and the
-base and the test commit are the target's own code, not the candidate's. A test commit not
+base and the test commit are the target's own code, not the candidate's: it covers the ways
+ordinary code does this, not code written to hide it (see ``sys_path_scan``). A test commit not
 fetched yet is not read (and never fetched for this).
 """
 

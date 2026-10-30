@@ -101,11 +101,16 @@ UNSEALING = {  # one base file anywhere in the checkout
     "monkeypatch.setenv": ("conftest.py", "def f(mp):\n    mp.setenv('A', 'pkg')\n"),
     "os from another module": ("lib/x.py", "import logging\nlogging.os.system('x')\n"),
     "os imported from another module": ("lib/x.py", "from logging import os as o\no.system('x')\n"),
+    "inspect imported from another module": ("lib/x.py", "from dataclasses import inspect as i\n"),
+    "gc imported from another module": ("lib/x.py", "from foo import gc\n"),
     "os under a private name": ("lib/x.py", "import random\nrandom._os.system('x')\n"),
     "a module handed on": ("lib/x.py", "import logging\nm = logging\n"),
     "os handed to a function": (
         "tests_util.py",
         "import os\n\n\ndef f(mp):\n    mp.setattr(os, 'getcwd', lambda: os.path.sep)\n"),
+    "a module imported by from, handed to a function": (
+        "tests_util.py",
+        "from os import path as p\n\n\ndef f(mp):\n    mp.setattr(p, 'sep', '/')\n"),
     "builtins from another module": ("lib/x.py", "import reprlib\nf = reprlib.builtins.getattr\n"),
     "__subclasses__": ("lib/x.py", "x = ().__class__.__base__.__subclasses__()\n"),
     "pty.spawn": ("lib/x.py", "import pty\npty.spawn('x')\n"),
@@ -127,6 +132,11 @@ KEEPS_SEALED = {
         "import platform\nfrom collections import abc\n\nimport pytest\n\n\n"
         "@pytest.mark.skipif(platform.system() == 'Windows', reason='')\n"
         "def test_y():\n    assert isinstance({}, abc.Mapping)\n"),
+    "names imported by from, called or read through attributes": (
+        "pkg/tests/test_z.py",
+        "from os import path\nfrom os.path import join\n\nfrom pytest import fixture, raises\n\n"
+        "from pkg import Thing\n\n\n@fixture\ndef z():\n    with raises(Thing):\n"
+        "        return join(path.sep, 'a')\n"),
     "sys.path in a text file": ("notes/readme.txt", "sys.path.insert(0, 'pkg')\n"),
     "re.compile and a method named eval": (
         "lib/x.py", "import re\n\n\nclass M:\n    def eval(self):\n        return re.compile\n"),
@@ -190,3 +200,4 @@ def test_importing_a_module_that_can_change_imports_unseals(module):
 def test_a_module_held_by_another_module_unseals(name):
     assert sys_path_scan._mentions(f"import logging\nm = logging.{name}.x\n".encode())
     assert sys_path_scan._mentions(f"import logging\nm = logging._{name}.x\n".encode())
+    assert sys_path_scan._mentions(f"from logging import {name}\n".encode())

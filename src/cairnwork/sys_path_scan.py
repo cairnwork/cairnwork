@@ -7,6 +7,12 @@ directory without ``__init__.py`` imports as a namespace package, a conftest in 
 import a root-level package, and another test root's conftest runs in the same session. So every
 Python file of the commit is read, not only those near a test root.
 
+Scope: the base and the test commit are the target repository's own code, not the candidate's.
+The scan is meant to catch the ways ordinary code changes sys.path or starts Python: the path
+words below, ``sys``/``os`` and the import-system modules under any name or by ``from`` import,
+in every Python file of the commit, modules handed on as values, names built at run time, and
+files it cannot read. It is not meant to resist code written so that such a change goes unseen.
+
 A commit may change it when one of its Python files (``.py``/``.pyw``, any case)
 
 - holds one of ``PATH_WORDS`` (a plain byte search: comments and strings count too), or
@@ -22,8 +28,10 @@ A commit may change it when one of its Python files (``.py``/``.pyw``, any case)
 - imports one of ``IMPORT_MODULES`` (``site``, ``runpy``, ``importlib.util``) or a submodule,
   takes sys, os or one of them from another object (``logging.os``, ``from random import _os``,
   a ``HELD`` or, on a chain from an imported module, a ``HELD_IF_IMPORTED`` name, also in a
-  class pattern), uses an imported module but through its attributes (``m = logging``,
-  ``f(os)``), or writes ``os.environ`` (anything but a subscript read, ``in`` or ``.get``), or
+  class pattern, or any ``from`` import of one), uses an imported module but through its
+  attributes (``m = logging``, ``f(os)``; a lowercase name a ``from`` import binds counts too,
+  except when called or as a decorator), or writes ``os.environ`` (anything but a subscript
+  read, ``in`` or ``.get``), or
 - cannot be read: it may name one of those modules (or holds a non-ASCII byte, which an
   identifier may normalize from) and this interpreter cannot parse it (a syntax or encoding
   error), or it is a symlink; a file that names none of them reaches them only through a word;
@@ -229,6 +237,7 @@ def _mentions(data: bytes) -> bool:
 def _uses_import_system(tree: ast.AST) -> bool:
     nodes = list(ast.walk(tree))
     sys_names, os_names, modules, roots = {"sys"}, set(_OS_MODULES), set(), set()
+    from_modules = set()  # names a ``from`` import binds that are spelled like a module
     for node in nodes:
         if _dynamic(node):
             return True
@@ -242,6 +251,9 @@ def _uses_import_system(tree: ast.AST) -> bool:
         elif isinstance(node, ast.ImportFrom):
             names = [alias.name for alias in node.names]
             roots.update(alias.asname or alias.name for alias in node.names)
+            from_modules.update(
+                alias.asname or alias.name for alias in node.names if alias.name.islower()
+            )
             if _imports_held(node.module, names):  # ``from logging import sys``
                 return True
             if node.level == 0 and node.module == "sys":
@@ -250,7 +262,8 @@ def _uses_import_system(tree: ast.AST) -> bool:
             elif node.level == 0 and node.module in _OS_MODULES:
                 if any(name in {"*", "environ"} or _starts_programs(name) for name in names):
                     return True
-    return _reaches(nodes, sys_names, os_names, modules, roots | modules | sys_names | os_names)
+    roots |= modules | sys_names | os_names
+    return _reaches(nodes, sys_names, os_names, modules, roots, from_modules - modules - sys_names)
 
 
 def _reaches(
@@ -259,19 +272,26 @@ def _reaches(
     os_names: set[str],
     modules: set[str],
     roots: set[str],
+    from_modules: set[str],
 ) -> bool:
     """Whether an attribute reaches sys, os or the import system, sys is used for anything but a
     SAFE_SYS attribute, os.environ is written, or an imported module is used but through one of
     its attributes (``m = logging``, ``f(os)``: the receiver may then take any attribute). roots
-    are the names an import binds, where a HELD_IF_IMPORTED chain counts."""
+    are the names an import binds, where a HELD_IF_IMPORTED chain counts. from_modules are the
+    lowercase names a ``from`` import binds (``from os import path``), which may be a module or
+    a function: they may also be called or decorate."""
     safe: set[int] = set()
     for node in nodes:
+        if isinstance(node, ast.Call) and _named(node.func, from_modules):
+            safe.add(id(node.func))
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            safe.update(id(d) for d in node.decorator_list if _named(d, from_modules))
         if isinstance(node, ast.Attribute):
             if _held(node, roots) or (_named(node.value, os_names) and _starts_programs(node.attr)):
                 return True
             if _named(node.value, sys_names) and node.attr in SAFE_SYS:
                 safe.add(id(node.value))
-            if _named(node.value, modules - sys_names):
+            if _named(node.value, (modules | from_modules) - sys_names):
                 safe.add(id(node.value))
             if node.attr in _ENVIRON_READS and _environ(node.value, os_names):
                 safe.add(id(node.value))
@@ -285,7 +305,10 @@ def _reaches(
     return any(
         id(node) not in safe
         and (
-            (_named(node, sys_names | modules) and isinstance(getattr(node, "ctx", None), ast.Load))
+            (
+                _named(node, sys_names | modules | from_modules)
+                and isinstance(getattr(node, "ctx", None), ast.Load)
+            )
             or _environ(node, os_names)
         )
         for node in nodes
@@ -311,6 +334,8 @@ def _imports_held(module: str | None, names: list[str]) -> bool:
     for name in names:
         bare = name.lstrip("_")
         if bare in HELD - {"sys", "os", "posix", "nt"} or name in DYNAMIC_NAMES | DYNAMIC_ATTRS:
+            return True
+        if bare in HELD_IF_IMPORTED:  # a ``from`` import is a chain from an imported module
             return True
         if bare in {"sys", "os", "posix", "nt"} and module not in _OS_MODULES:
             return True  # ``from logging import sys``, ``from random import _os``
