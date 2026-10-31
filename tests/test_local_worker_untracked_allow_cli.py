@@ -258,3 +258,18 @@ def test_the_pinned_previous_wrapper_has_no_digest_and_this_one_does():
     assert hashlib.sha256(corpus_io.REPO_WRAPPER.read_bytes()).hexdigest() != (
         corpus_io.PREVIOUS_WRAPPER_SHA256
     )
+
+
+def test_the_wrapper_before_pytest_ro_still_serves_every_run(tmp_path, monkeypatch):
+    old = b"#!/bin/sh\n# the wrapper before pytest-ro\n"
+    monkeypatch.setattr(corpus_io, "PRE_PYTEST_RO_WRAPPER_SHA256", hashlib.sha256(old).hexdigest())
+    path, wrapper, out = canary_report(tmp_path, old)
+    corpus_io.verify_canary(path, out, wrapper=wrapper, host="mini", require_current=True)
+
+
+def test_the_pinned_pre_pytest_ro_wrapper_is_not_this_one():
+    assert corpus_io.REPO_WRAPPER.read_bytes().count(b"pytest-ro)") == 2  # parsed, then run
+    assert len(corpus_io.PRE_PYTEST_RO_WRAPPER_SHA256) == 64
+    assert hashlib.sha256(corpus_io.REPO_WRAPPER.read_bytes()).hexdigest() != (
+        corpus_io.PRE_PYTEST_RO_WRAPPER_SHA256
+    )

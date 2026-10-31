@@ -33,6 +33,7 @@ from cairnwork import runlock
 from cairnwork.account_check import base_stage, precheck
 from cairnwork.blackbox import Declaration
 from cairnwork.confined import ATTEMPT_ENV, sweep_marked
+from cairnwork.deferred_store import USED_DIR, consume
 from cairnwork.deferred_tests import (
     BASE_COMPARE_RULE,
     OVERLAY_RULE,
@@ -101,8 +102,7 @@ def verify_candidate(
         test_roots=test_roots, test_store=intake.test_store(), import_paths=import_paths,
         p2p_budget=intake.config()["p2p_time_budget_seconds"],
     )  # fmt: skip
-    account = intake.verifier_account()
-    python = intake.config()["verifier_python"]
+    account, python = intake.verifier_account(), intake.config()["verifier_python"]
     specs = check_task(
         task, verifier_python=python or getattr(account, "python", None)
     )  # the same scope, protected-file and verifier rules
@@ -147,6 +147,7 @@ def verify_candidate(
         "uncomparable": uncomparable,  # {code, detail, rule} when status is UNCOMPARABLE (#234)
         "protection": result.protection,  # protection.py; "" when Core was never asked
         "tests_consumed": tests_consumed(intake, test_commit),
+        "verifier_mode": "account" if account is not None else "sandbox_only",
     }
 
 
@@ -216,25 +217,9 @@ def _absolute(url: str, source: Path) -> str:
 
 
 def _burn(intake: Intake, test_commit: str, *, record: bool) -> None:
-    """The deferred tests stay hidden from whoever supplies candidates: a verify run that
-    uses them runs candidate code over them and returns its logs (and even pass or fail
-    tells a lot), so a test commit is single-use, as on the worker path. Using it is
-    registered by creating ``<state>/verify-used-tests/<sha>`` exclusively, before the tests
-    are fetched and so before any candidate code runs; a crash or a later refusal still
-    counts as used. record=False only checks."""
-    marker = _used(intake, test_commit)
-    marker.parent.mkdir(mode=0o700, exist_ok=True)
-    try:
-        if record:  # any failure to create the marker propagates: nothing runs unrecorded
-            os.close(os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600))
-            return
-        try:
-            marker.lstat()  # any other lookup error propagates: unknown is never "unused"
-        except FileNotFoundError:
-            return  # not used yet
-        raise FileExistsError
-    except FileExistsError:
-        raise TestCommitRejected("TEST_COMMIT_ALREADY_EXPOSED", "push a new test commit") from None
+    """The deferred tests stay hidden from whoever supplies candidates, so a test commit is
+    single-use across verify and worker runs (deferred_store.consume); record=False only checks."""
+    consume(intake.state / USED_DIR, test_commit, record=record)
 
 
 def tests_consumed(intake: Intake, test_commit: str) -> bool:
@@ -251,7 +236,7 @@ def tests_consumed(intake: Intake, test_commit: str) -> bool:
 
 
 def _used(intake: Intake, test_commit: str) -> Path:
-    return intake.state / "verify-used-tests" / test_commit  # checked to be 40 hex digits
+    return intake.state / USED_DIR / test_commit  # checked to be 40 hex digits
 
 
 def _judge(intake, task, source, specs, candidate, notary, result, verifying) -> dict | None:
