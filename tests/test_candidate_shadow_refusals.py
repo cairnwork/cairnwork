@@ -21,6 +21,7 @@ from verify_helpers import base_of, candidate, verify
 
 from cairnwork.pipeline import TaskRejected, TaskSpec, check_task
 from cairnwork.verifiers import parse_verifier, run_verifiers
+from cairnwork.verify_context import VerifyContext
 
 sandbox = pytest.mark.sandbox
 
@@ -37,9 +38,8 @@ def _run(project, tmp_path, files):
     head = git(project, "rev-parse", "HEAD")
     commit = candidate(project, head, {"src/calc.py": WRONG, **files})
     spec = parse_verifier("v", ["python3", "-m", "pytest", "-q", TARGET])
-    return run_verifiers(project, commit, (spec,), tmp_path / "runs", "r1", python=sys.executable)[
-        0
-    ]
+    ctx = VerifyContext(project, tmp_path / "runs", python=sys.executable)
+    return run_verifiers(ctx, commit, (spec,), "r1")[0]
 
 
 def _task(project, path):
