@@ -1,8 +1,8 @@
 """Calling a Nexus Core HTTP service: ``POST /v1/changesets/verify``.
 
 Same contract as the in-process call (request dict in, ``(HTTP status, response dict)``
-out), so the notary cannot tell them apart. Plain http is accepted only to a loopback
-host (Core's own server binds loopback only); anything else must be https. The bearer
+out), so the notary cannot tell them apart. Plain http is accepted only to a literal loopback
+address (Core's own server binds loopback only); anything else must be https. The bearer
 token is read from a file the owner controls, at call time, and never logged; requests
 ignore proxy settings and never follow redirects.
 """
@@ -37,8 +37,6 @@ _OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedire
 
 
 def _loopback(host: str) -> bool:
-    if host == "localhost":
-        return True
     try:
         return ipaddress.ip_address(host).is_loopback
     except ValueError:
@@ -56,7 +54,10 @@ def check_core_url(base_url: str) -> str:
     if parts.scheme not in ("http", "https") or not parts.hostname:
         raise CoreHttpError(f"core_url must be an http(s) URL: {base_url!r}")
     if parts.scheme == "http" and not _loopback(parts.hostname):
-        raise CoreHttpError("plain http is allowed only to a loopback Core")
+        raise CoreHttpError(
+            "plain http is allowed only to a literal loopback address "
+            "(http://127.0.0.1:<port> or http://[::1]:<port>)"
+        )
     if parts.path not in ("", "/") or parts.query or parts.fragment or "@" in parts.netloc:
         raise CoreHttpError("core_url is the service root only (scheme://host:port)")
     return f"{parts.scheme}://{parts.netloc}"

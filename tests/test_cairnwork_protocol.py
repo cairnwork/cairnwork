@@ -134,7 +134,8 @@ def test_same_hashes_as_core_for_any_input(contract, change_set, bundle, manifes
 @pytest.mark.parametrize(
     "url",
     ["http://10.0.0.5:8080", "http://core.example.com", "ftp://127.0.0.1", "127.0.0.1:80",
-     "http://127.0.0.1:8080/v1", "http://user@127.0.0.1:8080", "https://"],
+     "http://127.0.0.1:8080/v1", "http://user@127.0.0.1:8080", "https://",
+     "http://localhost:8080", "http://LOCALHOST:8080", "http://localhost", "http://example.com"],
 )  # fmt: skip
 def test_core_url_must_be_a_loopback_http_or_an_https_root(url):
     with pytest.raises(CoreHttpError):
@@ -144,7 +145,7 @@ def test_core_url_must_be_a_loopback_http_or_an_https_root(url):
 @pytest.mark.parametrize(
     ("url", "root"),
     [("http://127.0.0.1:8080/", "http://127.0.0.1:8080"), ("http://[::1]:9", "http://[::1]:9"),
-     ("https://core.example.com", "https://core.example.com")],
+     ("https://localhost:8443", "https://localhost:8443"), ("https://core.example.com", "https://core.example.com")],
 )  # fmt: skip
 def test_accepted_core_urls(url, root):
     assert check_core_url(url) == root
