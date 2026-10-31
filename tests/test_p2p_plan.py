@@ -168,6 +168,7 @@ def test_an_unclean_base_probe_is_unusable(monkeypatch, tmp_path, survivors, mut
 
     monkeypatch.setattr(p2p, "run_verifiers", fake_run_verifiers)
     assert p2p._probe(TASK, ("tests/test_a.py",), RESULT, context(tmp_path), 30) == (None, why)
+    assert why in p2p.UNCLEAN  # never degraded to a narrower mode (#285, #481)
 
 
 @pytest.mark.parametrize("why", p2p.UNCLEAN)
