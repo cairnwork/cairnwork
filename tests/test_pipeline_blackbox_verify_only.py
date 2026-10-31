@@ -1,4 +1,4 @@
-"""A blackbox declaration is for verify only: a worker run refuses it together with deferred
+"""A blackbox declaration is for verify only: a worker run refuses it, with or without deferred
 tests, before the task is bound or the worker starts."""
 
 import secrets
@@ -80,13 +80,23 @@ def test_run_bound_task_refuses_both_before_the_worker_starts(both, tmp_path):
     assert ledger.get(task_id=bound.record.task_id).status == "BOUND"
 
 
-@pytest.mark.parametrize("field", [{"blackbox": None}, {"test_commit": ""}])
-def test_either_declaration_alone_is_not_refused(both, tmp_path, field):
+@pytest.mark.parametrize("field", [{}, {"test_commit": ""}], ids=["with-tests", "alone"])
+def test_run_task_refuses_a_blackbox_declaration_with_or_without_tests(both, tmp_path, field):
     ledger, notary, journal = stores(tmp_path)
-    task = replace(both, **field)
+    worker = CountingWorker()
+    with pytest.raises(TaskRejected) as caught:
+        run_task(replace(both, **field), ledger=ledger, notary=notary, journal=journal,
+                 worker=worker, run_root=tmp_path / "runs")  # fmt: skip
+    assert caught.value.code == "BAD_BLACKBOX"
+    assert worker.calls == 0 and journal_rows(tmp_path) == []
+
+
+def test_a_task_without_a_blackbox_declaration_reaches_the_worker(both, tmp_path):
+    ledger, notary, journal = stores(tmp_path)
     worker = CountingWorker()
     try:
-        run_task(task, ledger=ledger, notary=notary, journal=journal, worker=worker,
-                 run_root=tmp_path / "runs")  # fmt: skip
+        run_task(replace(both, blackbox=None), ledger=ledger, notary=notary, journal=journal,
+                 worker=worker, run_root=tmp_path / "runs")  # fmt: skip
     except TaskRejected as exc:
         assert exc.code != "BAD_BLACKBOX"
+    assert worker.calls == 1

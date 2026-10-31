@@ -195,9 +195,9 @@ def check_task(task: TaskSpec, *, verifier_python: str | None = None) -> tuple[V
 
 
 def _require_no_blackbox(task: TaskSpec) -> None:
-    """A worker run judges the tree with the deferred tests laid over it; a blackbox check
-    is for the candidate alone (verify_candidate), so the two declarations never meet here."""
-    if task.blackbox is not None and task.test_commit:
+    """A blackbox declaration is for verify only (verify_candidate): a worker run never
+    carries one, so its expected values never reach the worker."""
+    if task.blackbox is not None:
         raise TaskRejected("BAD_BLACKBOX", "a blackbox declaration is for verify only")
 
 
