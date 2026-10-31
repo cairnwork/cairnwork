@@ -16,7 +16,7 @@ import subprocess
 import time
 
 import pytest
-from agy_receipt_lines import WORKER, good_run
+from agy_receipt_lines import WORKER, good_run, status
 from test_agy_worker import TASK, attempt, expire_once_ready, fake_agy
 from test_agy_worker_account import ROOT, _replaying
 from test_pipeline import project as project  # noqa: F401 - fixture
@@ -193,12 +193,13 @@ class _Ended:
 
 
 class _Reader:
-    """Complete receipts (the settle helpers are faked to say so) and no status line."""
+    """Complete receipts (the settle helpers are faked to say so) and a final status line, as
+    the dispatcher writes last (without one the run is fenced, #546); status() reads none."""
 
     unknown = dropped = False
 
     def lines(self):
-        return []
+        return [status().rstrip("\n")]
 
     def status(self):
         return {}

@@ -3,7 +3,9 @@
 - A dispatcher killed by a signal, our timeout kill included, may have launched a run whose
   receipt it never wrote: the attempt is fenced (WorkerMayLive), however its receipts read (lines
   lost, no launch receipt, an untrustworthy one, or an earlier attempt's receipts complete). A
-  dispatcher that ended on its own (an exit code, on our SIGTERM too) keeps its own path.
+  dispatcher that ended on its own (an exit code, on our SIGTERM too) keeps its own path, unless
+  its receipts cannot show its launches gone (lines lost, a receipt twice, another account, or a
+  completed attempt with no launch receipt): that is fenced too (#546).
 - An interrupt that is not an Exception (KeyboardInterrupt, SystemExit) leaves the task
   DISPATCHED, as a crash does, so only recovery settles it (sweep, then fence); it is never
   FAILED unmarked, which a supersede would take over without a sweep.
@@ -17,7 +19,7 @@ import os
 import types
 
 import pytest
-from agy_receipt_lines import RUN_TAG, WORKER, cleanup, launch, status, sweep
+from agy_receipt_lines import PREFIX, RUN_TAG, WORKER, cleanup, launch, status, sweep
 from test_pipeline import EditWorker, task
 from test_recovery import project as project  # noqa: F401 - fixture
 from test_recovery import settle, stores
@@ -119,17 +121,74 @@ def test_our_timeout_kill_after_complete_receipts_is_fenced_too(tmp_path, earlie
 
 @pytest.mark.parametrize("earlier", sorted(EARLIER))
 def test_our_timeout_with_a_dispatcher_that_exited_keeps_its_own_path(tmp_path, earlier):
-    assert _settle(tmp_path, EARLIER[earlier], 1, timed_out=TimeoutError()) is None
+    lines = [*EARLIER[earlier], status("failed")]
+    assert _settle(tmp_path, lines, 1, timed_out=TimeoutError()) is None
+
+
+def test_a_dispatcher_that_ended_on_its_own_stays_an_account_failure(tmp_path):
+    """Whole receipts that show the run swept clean and removed, with an account failure."""
+    with pytest.raises(AgyWorkerAccountFailed) as raised:
+        _settle(tmp_path, [*EARLIER["failed"], status("failed")], 1)
+    assert not isinstance(raised.value, WorkerMayLive)
+
+
+@pytest.mark.parametrize("code", [0, 1, 2])
+@pytest.mark.parametrize("earlier", [[], EARLIER["clean"]], ids=["no-receipt", "whole-receipts"])
+def test_a_dispatcher_that_ended_without_its_final_status_is_fenced(tmp_path, earlier, code):
+    """#546: no final status line means it ended outside its protocol (a crash, os._exit), maybe
+    after starting a run and before writing its WORKER_LAUNCH: fenced, as a signal end is."""
+    with pytest.raises(WorkerMayLive, match="NO_FINAL_STATUS") as raised:
+        _settle(tmp_path, earlier, code)
+    assert raised.value.account == WORKER
 
 
 @pytest.mark.parametrize(
-    ("lines", "dropped"),
-    [([], True), ([launch(ROOT), launch(ROOT)], False), (EARLIER["failed"], False)],
+    ("final", "code"),
+    [
+        (status("pool_exhausted"), 75),
+        (status("failed", failure_kind="AGY_WORKER_LAUNCH_FAILED:wrapper_did_not_start"), 1),
+        (status("invalid_contract", failure_kind="RUN_AS_USER_REQUIRES_ACCEPT_EDITS"), 64),
+    ],
+    ids=["exhausted", "launch-failed", "invalid"],
 )
-def test_a_dispatcher_that_ended_on_its_own_stays_an_account_failure(tmp_path, lines, dropped):
-    with pytest.raises(AgyWorkerAccountFailed) as raised:
-        _settle(tmp_path, lines, 1, dropped)
-    assert not isinstance(raised.value, WorkerMayLive)
+def test_a_final_status_without_any_receipt_is_not_fenced(tmp_path, final, code):
+    """The other side of #546: a dispatcher that wrote its final status and no receipt at all
+    ended before any launch by its own account; that keeps its own path, unfenced."""
+    assert _settle(tmp_path, [final], code) is None
+
+
+@pytest.mark.parametrize("code", [0, 1])
+@pytest.mark.parametrize(
+    ("lines", "dropped"),
+    [
+        ([], True),  # every line lost
+        ([launch(ROOT), launch(ROOT), status()], False),  # a launch receipt twice
+        ([launch(ROOT, user="james"), status()], False),  # a launch naming another account
+        ([*EARLIER["clean"], status()], True),  # whole receipts, but earlier lines were dropped
+        ([*EARLIER["clean"], PREFIX + '{"event": "WORKER_LAUNCH", "attempt": 2', status()], False),
+    ],
+    ids=["all-lost", "duplicate", "other-account", "dropped", "unparsed"],
+)
+def test_receipts_that_cannot_show_the_launches_gone_are_fenced(tmp_path, lines, dropped, code):
+    """#546: a dispatcher that ended on its own leaves receipts that cannot show its runs swept:
+    fenced as a killed one is, not a plain account failure (the less is seen, the stricter)."""
+    with pytest.raises(WorkerMayLive) as raised:
+        _settle(tmp_path, lines, code, dropped)
+    assert raised.value.account == WORKER
+    assert str(raised.value).startswith("WORKER_SWEEP_UNCLEAN:")
+    assert json.loads((tmp_path / "a1.agy.worker.json").read_text())["isolated"] is False
+
+
+@pytest.mark.parametrize("named", [1, 2], ids=["only-status", "another-attempt"])
+def test_a_completed_attempt_without_a_launch_receipt_is_fenced(tmp_path, named):
+    """#546: exit 0 after a completed status whose attempt has no WORKER_LAUNCH: nothing shows
+    what that attempt launched, so the attempt is fenced, not only failed."""
+    lines = [*EARLIER["clean"]] * (named == 2) + [status(attempts=named)]
+    with pytest.raises(
+        WorkerMayLive, match="WORKER_RECEIPT_MISSING: the completed attempt"
+    ) as raised:
+        _settle(tmp_path, lines, 0)
+    assert raised.value.account == WORKER
 
 
 class _SettlesKilled(EditWorker):
