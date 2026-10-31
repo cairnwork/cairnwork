@@ -7,6 +7,7 @@ test_verifier_account.py.
 """
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import cairnwork.verifier_account as va
 import cairnwork.verifier_escape as ve
@@ -129,3 +130,71 @@ def test_garbled_helper_output_is_unknown_not_zero(monkeypatch):
     )
     acct = va.VerifierAccount(user="x", root=Path("/tmp/does-not-matter"))
     assert acct._escaped_count() == -1
+
+
+def _racing_account(monkeypatch, survives_kills=1):
+    """A process table where pid 100 (ppid 1) starts pid 101 while its path is being read and is
+    then running the real daemon: the first list shows only 100, a later one shows 101 too. The
+    first ``survives_kills`` kills leave 100 running; later kills end everything."""
+    monkeypatch.setattr(va.sys, "platform", "darwin")
+    table = [(100, 1)]
+    kills = []
+
+    def listed(self, deadline=None, attempts=1):
+        return list(table)
+
+    def real_paths(self, pids):
+        if (100, 1) in table and (101, 100) not in table:
+            table.append((101, 100))  # started after the list was read, before the path check
+        return {pid: DAEMON if pid == 100 else "/private/tmp/child" for pid in pids}
+
+    def run(argv, **kwargs):
+        assert "/bin/kill" in argv, argv
+        kills.append(argv)
+        if len(kills) > survives_kills:
+            table.clear()
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(va.VerifierAccount, "_list", listed)
+    monkeypatch.setattr(va.VerifierAccount, "_real_paths", real_paths)
+    monkeypatch.setattr(ve, "apple_signed", lambda path: path == DAEMON)
+    monkeypatch.setattr(va.subprocess, "run", run)
+    return va.VerifierAccount(user="x", root=Path("/tmp/does-not-matter")), table, kills
+
+
+def test_a_process_started_while_the_paths_are_read_is_counted(monkeypatch):
+    acct, table, _ = _racing_account(monkeypatch)
+    assert acct._escaped_count() == 1
+    assert table == [(100, 1), (101, 100)]
+
+
+def test_kill_all_does_not_stop_while_a_process_started_after_the_list_runs(monkeypatch):
+    acct, table, kills = _racing_account(monkeypatch)
+    assert acct.kill_all() == 0
+    assert len(kills) == 2 and table == []
+
+
+def _listing_account(monkeypatch, lists):
+    """Each _list call returns the next of ``lists``; every listed pid runs the real daemon."""
+    monkeypatch.setattr(va.sys, "platform", "darwin")
+    answers = iter(lists)
+    monkeypatch.setattr(va.VerifierAccount, "_list", lambda self, d=None, a=1: next(answers))
+    monkeypatch.setattr(va.VerifierAccount, "_real_paths", lambda self, p: dict.fromkeys(p, DAEMON))
+    monkeypatch.setattr(ve, "apple_signed", lambda path: path == DAEMON)
+    return va.VerifierAccount(user="x", root=Path("/tmp/does-not-matter"))
+
+
+def test_a_list_that_keeps_changing_is_unknown_not_zero(monkeypatch):
+    acct = _listing_account(monkeypatch, [[(100 + n, 1)] for n in range(10)])
+    assert acct._escaped_count() == -1
+
+
+def test_a_daemon_restarted_once_by_launchd_is_still_exempt(monkeypatch):
+    # launchd replaced the daemon between two lists: the new pid is checked and found exempt.
+    acct = _listing_account(monkeypatch, [[(100, 1)], [(105, 1)], [(105, 1)]])
+    assert acct._escaped_count() == 0
+
+
+def test_a_daemon_that_exits_before_the_second_list_is_still_clean(monkeypatch):
+    acct = _listing_account(monkeypatch, [[(100, 1), (105, 1)], [(105, 1)]])
+    assert acct._escaped_count() == 0

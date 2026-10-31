@@ -224,27 +224,35 @@ class VerifierAccount:
         """Processes the account runs that are NOT a launchd system daemon (-1: cannot tell).
         A daemon is exempt only when its real executable is allow-listed, its parent is launchd
         (ppid 1) and it is Apple-signed; anything else — a candidate's leftover process, however it
-        named itself — is counted. If the list or the real paths cannot be read, the count is
-        unknown (fail closed), never zero."""
+        named itself — is counted. A zero that rests on an exemption holds only if a later list
+        shows nothing new (see verifier_escape). If the list or the real paths cannot be read, the
+        count is unknown (fail closed), never zero."""
         procs = self._list(deadline, attempts)
-        if procs is None:
-            return -1
-        # Only a launchd child (ppid 1) can be an exempt daemon, and proc_pidpath is macOS-only, so
-        # resolve real paths (a separate probe, as the account) ONLY for those pids, and not at all
-        # off Darwin or when none have ppid 1 — every other process simply counts.
-        launchd = [pid for pid, ppid in procs if ppid == 1]
-        if not launchd or sys.platform != "darwin":
-            return len(procs)
-        real = self._real_paths(launchd)
-        if real is None:
-            return -1
-        exempt = sum(1 for pid in launchd if verifier_escape.is_exempt(real.get(pid), 1))
-        return len(procs) - exempt
+        for _ in range(verifier_escape.LIST_ROUNDS):
+            if procs is None:
+                return -1
+            # Only a launchd child (ppid 1) can be an exempt daemon, and proc_pidpath is macOS-only,
+            # so resolve real paths (as the account) ONLY for those pids, never off Darwin.
+            launchd = [pid for pid, ppid in procs if ppid == 1]
+            if not launchd or sys.platform != "darwin":
+                return len(procs)
+            real = self._real_paths(launchd)
+            if real is None:
+                return -1
+            exempt = sum(1 for pid in launchd if verifier_escape.is_exempt(real.get(pid), 1))
+            if exempt < len(procs):
+                return len(procs) - exempt
+            # The paths were read after the list: a listed process may have started another one.
+            again = self._list(deadline, attempts)
+            if again is not None and set(again) <= set(procs):
+                return 0
+            procs = again
+        return -1
 
     def reap(self) -> int:
         """Kill everything the account runs; return how many escaped processes were running.
-        The list is read once before the kill (no retry while a survivor can hide). An unknown
-        count is one more, so "cannot tell" is never "nothing escaped"."""
+        Before the kill a failed ps is not retried (that gives a survivor time to hide). An
+        unknown count is one more, so "cannot tell" is never "nothing escaped"."""
         deadline = time.monotonic() + PROBE_DEADLINE_SECONDS
         try:
             before = self._escaped_count(deadline, attempts=1)

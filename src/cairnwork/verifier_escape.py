@@ -6,6 +6,12 @@ VerifierAccount must not count it as an escape. A process is exempt only by its 
 (proc_pidpath, never the forgeable argv[0]/ps-comm), its parent being launchd (ppid 1), and an Apple
 code signature — so a candidate that renames itself to a daemon, or re-parents to launchd while
 running another binary, keeps its own real path and is still counted.
+
+The real path is read after the process list, so a listed process can start a child and then
+become the daemon in between; the child is not on that list. A count that is zero only because of
+an exemption therefore lists the account's processes again; if the new list shows a process the
+earlier one did not, the new list is checked the same way (at most LIST_ROUNDS rounds, after
+which a list that is still changing gives "cannot tell").
 """
 
 from __future__ import annotations
@@ -13,6 +19,7 @@ from __future__ import annotations
 import subprocess
 
 SYSTEM_DAEMONS = frozenset({"/usr/sbin/distnoted"})
+LIST_ROUNDS = 3  # launchd may restart the daemon once or twice between two lists
 # Printed, as the account, "pid NUL real-path NUL" per queried pid (a path can hold a newline or a
 # tab but never a NUL, so no path can reshape the records). proc_pidpath returns the running
 # image's vnode path from the kernel, which the target process cannot forge.
