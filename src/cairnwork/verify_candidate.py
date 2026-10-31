@@ -102,8 +102,7 @@ def verify_candidate(
         test_roots=test_roots, test_store=intake.test_store(), import_paths=import_paths,
         p2p_budget=intake.config()["p2p_time_budget_seconds"],
     )  # fmt: skip
-    account = intake.verifier_account()
-    python = intake.config()["verifier_python"]
+    account, python = intake.verifier_account(), intake.config()["verifier_python"]
     specs = check_task(
         task, verifier_python=python or getattr(account, "python", None)
     )  # the same scope, protected-file and verifier rules
@@ -148,6 +147,7 @@ def verify_candidate(
         "uncomparable": uncomparable,  # {code, detail, rule} when status is UNCOMPARABLE (#234)
         "protection": result.protection,  # protection.py; "" when Core was never asked
         "tests_consumed": tests_consumed(intake, test_commit),
+        "verifier_mode": "account" if account is not None else "sandbox_only",
     }
 
 
