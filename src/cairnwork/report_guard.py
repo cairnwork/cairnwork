@@ -19,7 +19,8 @@ The plugin is a small standalone module (``_PLUGIN_SOURCE``) materialised into a
 directory by ``install_plugin`` and loaded with ``-p``. It carries no cairnwork import, so it
 loads even when cairnwork is not importable from inside the sandbox (an editable checkout under
 a 0700 home the verifier account cannot traverse); that directory is read-only to the sandbox,
-so the candidate cannot replace it.
+so the candidate cannot replace it. The plugin file starts with the bytecode hook
+(bytecode_hook.py), installed and probed before anything else in it runs.
 
 What this does and does not do. It removes the old trivial attack (read ``--junitxml`` from
 argv, write a passing report) and makes the verdict reflect what pytest itself collected and
@@ -59,6 +60,7 @@ import stat
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from cairnwork.bytecode_hook import HOOK_SOURCE
 from cairnwork.confined import MAX_REPORT_BYTES
 
 FDS_ENV = "CAIRNWORK_GUARD_FDS"
@@ -208,11 +210,13 @@ def pytest_configure(config):
 
 def install_plugin(directory: Path) -> None:
     """Write the standalone plugin into directory (which must be on the run's PYTHONPATH and a
-    sandbox read root, and must not be writable by the candidate)."""
+    sandbox read root, and must not be writable by the candidate). The bytecode hook comes first
+    (bytecode_hook.py): installed and probed before the plugin reads its hand-over, so a run
+    whose hook is not live has no record and fails."""
     path = directory / f"{MODULE}.py"
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o640)
     with os.fdopen(fd, "w") as handle:
-        handle.write(_PLUGIN_SOURCE)
+        handle.write(HOOK_SOURCE + _PLUGIN_SOURCE)
     os.chmod(path, 0o640)  # not the umask-masked open() mode: the verifier account reads by group
 
 
