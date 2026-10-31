@@ -9,11 +9,12 @@ from cairnwork import report_guard
 from cairnwork.confined import MAX_REPORT_BYTES
 
 NONCE = "n0nce"
+STATUS = {"exitstatus": 0, "testsfailed": 0}  # pytest's own session status (#276)
 
 
 def _write(tmp_path, payload):
     path = tmp_path / "verdict.json"
-    path.write_text(json.dumps(payload))
+    path.write_text(json.dumps(STATUS | payload))
     return path
 
 
@@ -126,6 +127,7 @@ def test_the_plugin_records_a_passing_run_end_to_end(tmp_path):
     assert rc.returncode == 0
     v = report_guard.read_verdict(verdict, NONCE)
     assert v.ran and v.outcomes == {"tests/test_x.py::test_ok": "passed"}
+    assert (v.exitstatus, v.testsfailed) == (0, 0)
 
 
 def test_os_exit_before_sessionfinish_leaves_no_record(tmp_path):

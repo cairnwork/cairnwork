@@ -101,7 +101,8 @@ def test_a_pytest_package_or_config_in_the_checkout_does_not_change_the_run(
 def test_a_root_conftest_that_zeroes_the_exit_status_is_not_a_pass(project, tmp_path):
     got = _run(project, tmp_path, {"conftest.py": SESSION_ZERO})
     assert got.returncode == 0 and not got.observation.passed
-    assert got.outcomes == FAILED and "guard saw no test run" in got.why
+    assert got.outcomes == FAILED  # pytest's own status, recorded at sessionfinish, says 1
+    assert "process exit status 0 disagrees with the recorded session status" in got.why
 
 
 @sandbox

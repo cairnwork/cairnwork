@@ -78,8 +78,9 @@ def test_a_clean_run_has_no_teardown_errors(tmp_path):
 
 def _record(tmp_path, extra):
     path = tmp_path / "verdict.json"
-    path.write_text(json.dumps({"nonce": NONCE, "collected": ["t.py::a"],
-                                "outcomes": {"t.py::a": "passed"}} | extra))  # fmt: skip
+    path.write_text(json.dumps({"nonce": NONCE, "collected": ["t.py::a"], "exitstatus": 0,
+                                "testsfailed": 0, "outcomes": {"t.py::a": "passed"}}
+                               | extra))  # fmt: skip
     return report_guard.read_verdict(path, NONCE)
 
 
