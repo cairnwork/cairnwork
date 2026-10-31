@@ -15,10 +15,10 @@ is followed on that line and the added lines after it; an alias bound only in an
 every rule (an aliased name in a string can be flagged). The diff is cut into lines only at a
 newline and file headers are read only between hunks, so no text inside an added line ends it
 early; a carriage return, which Python also reads as a line end, starts a new piece to scan.
-Python reads identifiers in NFKC form, so each piece is also matched in that form, and a source
-encoding other than UTF-8 declared on an added line 1 or 2 is refused (``source_encoding``). It
-catches the straightforward forms and the PoCs seen so far, and it fails closed with a dedicated
-reason so an operator can see why.
+Python reads identifiers in NFKC form, so each piece is also matched with its identifier
+characters in that form (the rest as written), and a source encoding other than UTF-8 declared
+on an added line 1 or 2 is refused (``source_encoding``). It catches the straightforward forms
+and the PoCs seen so far, and it fails closed with a dedicated reason so an operator can see why.
 The rule list is the one place to change; the alias and library checks reuse its names and
 allow-lists.
 
@@ -82,7 +82,7 @@ _PYTEST_HINT_IMPORT = (  # one complete line; an open "(" continuing on the next
 _COMMENT_ONLY = re.compile(r"^\s*#")
 # A PEP 263 encoding declaration (Python reads it on line 1 or 2) and the UTF-8 names it accepts.
 _CODING = re.compile(r"^[ \t\f]*#.*?coding[:=][ \t]*([-\w.]+)", re.ASCII)
-_UTF8 = re.compile(r"utf[-_]?8(?:[-_][-\w.]*)?", re.ASCII | re.IGNORECASE)
+_UTF8 = re.compile(r"utf[-_]8(?:[-_][-\w.]*)?|utf8", re.ASCII | re.IGNORECASE)
 # sys.modules entries a forgery would swap; a literal key naming any other module is a test stub.
 _SENSITIVE_MODULE = (
     r"(?:_?pytest\w*|pluggy|py|_?cairnwork\w*|sys|os|builtins|importlib|gc|conftest|__main__)"
@@ -180,7 +180,7 @@ _BY_NAME = {rule.name: rule for rule in RULES}
 # may follow ``;`` or a ``:`` (``try: import sys as s``); the name list stops at a comment.
 _IMPORT_STMT = re.compile(r"(?:^|[:;])\s*import\s+([^#;]+)")
 _FROM_STMT = re.compile(r"(?:^|[:;])\s*from\s+(sys|os)\s+import\s+\(?([^#;)]+)")
-_IMPORTED_NAME = re.compile(r"^\s*([\w.]+)(?:\s+as\s+([A-Za-z_]\w*))?\s*$")
+_IMPORTED_NAME = re.compile(r"^\s*([\w.]+)(?:\s+as\s+([^\W\d]\w*))?\s*$")
 _FROM_TARGET = {"sys": "modules", "os": "_exit"}  # the one name worth following per module
 _MODULE_ALIAS = {"sys": "sys", "os": "os", "posix": "os", "nt": "os", "gc": "gc"}  # posix is os
 
@@ -289,7 +289,7 @@ def scan_added_lines(path: str, lines: list[tuple[int, str]]) -> list[Finding]:
             continue
         names: list[str] = []
         # Python compiles identifiers in NFKC form (PEP 3131): the piece as written, then that form.
-        for text in dict.fromkeys((piece, unicodedata.normalize("NFKC", piece))):
+        for text in dict.fromkeys((piece, _nfkc_names(piece))):
             for rule in RULES:
                 if (rule.skip_in_conftest and in_conftest) or (rule.tests_only and not in_tests):
                     continue
@@ -299,6 +299,12 @@ def scan_added_lines(path: str, lines: list[tuple[int, str]]) -> list[Finding]:
             names += [name for name in _extra_rules(text, aliases, in_tests) if name not in names]
         found += [Finding(path, number, name) for name in names]
     return found
+
+
+def _nfkc_names(text: str) -> str:
+    """Identifier characters in NFKC form, the rest as written (no new operator or separator)."""
+    pairs = ((char, unicodedata.normalize("NFKC", char)) for char in text)
+    return "".join(new if ("a" + new).isidentifier() else old for old, new in pairs)
 
 
 def _foreign_coding(text: str) -> bool:

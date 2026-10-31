@@ -34,6 +34,8 @@ def _found(repo, base, head):
         (LIBRARY, "import sys\nsys.\U0001d5c6eta_path.insert(0, None)", "meta_path"),
         (TEST, "import sys\nsys.ｍodules['pytest'] = None", "sys_modules_write"),
         (LIBRARY, "import os as ｏ\no._exit(0)", "os_exit"),
+        (LIBRARY, "import os as π\nπ._exit(0)", "os_exit"),
+        (LIBRARY, "import gc as 垃圾\n垃圾.get_objects()", "gc_walk"),
     ],
 )
 def test_scan_matches_the_identifiers_python_compiles(path, text, rule):
@@ -47,6 +49,8 @@ def test_scan_matches_the_identifiers_python_compiles(path, text, rule):
         ("#!/usr/bin/env python\n# -*- coding: latin-1 -*-\nx = 1", 2),
         ("# vim: set fileencoding=raw_unicode_escape :\nx = 1", 1),
         ("#\r# coding=unicode_escape\nx = 1", 1),
+        ("# coding: utf8_x\nx = 1", 1),
+        ("# coding: utf8-x\nx = 1", 1),
     ],
 )
 def test_a_source_encoding_other_than_utf8_on_line_1_or_2_is_refused(text, line):
@@ -61,10 +65,14 @@ def test_a_source_encoding_other_than_utf8_on_line_1_or_2_is_refused(text, line)
         "#!/usr/bin/env python3\n# coding=UTF-8\nimport os",
         "# vim: set fileencoding=utf8 :\nx = 1",
         "# -*- coding: utf_8 -*-\nx = 1",
+        "# -*- coding: UTF8 -*-\nx = 1",
+        "# -*- coding: utf_8_sig -*-\nx = 1",
         "x = 1\ny = 2\n# coding: latin-1 (line 3 is an ordinary comment)",
         'GREETING = "你好，世界（測試）"\nNAME = "Café ｆｕｌｌ ｗｉｄｔｈ"',
         "def 計算(數量):\n    return 數量 * 2  # 中文註解：回傳兩倍",
         "π = 3.14159\nlabel = f'半徑：{π}'",
+        "sys.modules['dep'] = mock.Mock(name='依賴；測試')",
+        "x = '甲；乙'; y = '（丙）'",
     ],
 )
 def test_ordinary_non_ascii_source_passes(path, text):
@@ -92,6 +100,12 @@ def test_a_py_file_git_would_show_as_binary_is_still_scanned(repo, setting):
     base = git(repo, "rev-parse", "HEAD")
     head = commit_change(repo, {"pkg/mod.py": "import os\nx = 1\nos._exit(0)\n"})
     assert _found(repo, base, head) == [("pkg/mod.py", 3, "os_exit")]
+
+
+def test_a_py_file_at_the_repository_root_is_scanned(repo):
+    base = git(repo, "rev-parse", "HEAD")
+    head = commit_change(repo, {"conftest.py": "import os\nos._exit(0)\n"})
+    assert _found(repo, base, head) == [("conftest.py", 2, "os_exit")]
 
 
 def test_ordinary_binary_and_empty_files_in_a_change_still_pass(repo):
@@ -122,6 +136,17 @@ def test_a_changed_py_file_without_lines_in_the_diff_is_unreadable():
     diff = (
         f"diff --git a/pkg/mod.py b/pkg/mod.py\n{INDEX} 100644\n"
         "Binary files a/pkg/mod.py and b/pkg/mod.py differ\n"
+    )
+    with pytest.raises(GitCommandError):
+        added_lines(diff)
+
+
+def test_a_changed_py_file_without_lines_is_unreadable_before_the_next_file_too():
+    diff = (
+        f"diff --git a/pkg/mod.py b/pkg/mod.py\n{INDEX} 100644\n"
+        "Binary files a/pkg/mod.py and b/pkg/mod.py differ\n"
+        f"diff --git a/pkg/b.py b/pkg/b.py\n{INDEX} 100644\n"
+        "--- a/pkg/b.py\n+++ b/pkg/b.py\n@@ -1 +1 @@\n-x = 1\n+x = 2\n"
     )
     with pytest.raises(GitCommandError):
         added_lines(diff)
