@@ -173,6 +173,7 @@ class _Run:
         self.teardown_errors = ()
         self.survivors = fields.get("survivors", 0)
         self.forged = fields.get("forged", ())
+        self.log_too_big = fields.get("log_too_big", False)
 
 
 TARGETS = frozenset({"tests/test_regression.py::t"})  # the new test of the test commit

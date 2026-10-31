@@ -255,7 +255,8 @@ def test_output_over_the_cap_fails(project, tmp_path, monkeypatch):
     head = commit_change(project, {"src/src_a.py": "X = 2\n"})
     assert run(project, tmp_path / "ok", head, "tests/test_a.py::test_x").observation.passed
     monkeypatch.setattr(verifiers, "MAX_LOG_BYTES", 10)
-    assert not run(project, tmp_path / "big", head, "tests/test_a.py::test_x").observation.passed
+    big = run(project, tmp_path / "big", head, "tests/test_a.py::test_x")
+    assert not big.observation.passed and big.log_too_big  # #481: base_comparison reads it
 
 
 def test_a_report_over_the_cap_fails_and_says_so(project, tmp_path, monkeypatch):
