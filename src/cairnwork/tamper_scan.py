@@ -14,9 +14,11 @@ is followed on that line and the added lines after it; an alias bound only in an
 ``from sys import *`` is not seen. Text inside string literals is scanned like code, as for
 every rule (an aliased name in a string can be flagged). The diff is cut into lines only at a
 newline and file headers are read only between hunks, so no text inside an added line ends it
-early; a carriage return, which Python also reads as a line end, starts a new piece to scan. It
-catches the straightforward forms and the PoCs seen so far, and it fails closed with a dedicated
-reason so an operator can see why.
+early; a carriage return, which Python also reads as a line end, starts a new piece to scan.
+Python reads identifiers in NFKC form, so each piece is also matched with its identifier
+characters in that form (the rest as written), and a source encoding other than UTF-8 declared
+on an added line 1 or 2 is refused (``source_encoding``). It catches the straightforward forms
+and the PoCs seen so far, and it fails closed with a dedicated reason so an operator can see why.
 The rule list is the one place to change; the alias and library checks reuse its names and
 allow-lists.
 
@@ -42,6 +44,7 @@ from __future__ import annotations
 import codecs
 import posixpath
 import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -77,6 +80,9 @@ _PYTEST_HINT_IMPORT = (  # one complete line; an open "(" continuing on the next
     rf"^\s*from\s+_pytest(?:\.\w+)+\s+import\s+(?:{_HINTS}|\(\s*{_HINTS}\s*,?\s*\))\s*(?:#.*)?$"
 )
 _COMMENT_ONLY = re.compile(r"^\s*#")
+# A PEP 263 encoding declaration (Python reads it on line 1 or 2) and the UTF-8 names it accepts.
+_CODING = re.compile(r"^[ \t\f]*#.*?coding[:=][ \t]*([-\w.]+)", re.ASCII)
+_UTF8 = re.compile(r"utf[-_]8(?:[-_][-\w.]*)?|utf8", re.ASCII | re.IGNORECASE)
 # sys.modules entries a forgery would swap; a literal key naming any other module is a test stub.
 _SENSITIVE_MODULE = (
     r"(?:_?pytest\w*|pluggy|py|_?cairnwork\w*|sys|os|builtins|importlib|gc|conftest|__main__)"
@@ -174,7 +180,7 @@ _BY_NAME = {rule.name: rule for rule in RULES}
 # may follow ``;`` or a ``:`` (``try: import sys as s``); the name list stops at a comment.
 _IMPORT_STMT = re.compile(r"(?:^|[:;])\s*import\s+([^#;]+)")
 _FROM_STMT = re.compile(r"(?:^|[:;])\s*from\s+(sys|os)\s+import\s+\(?([^#;)]+)")
-_IMPORTED_NAME = re.compile(r"^\s*([\w.]+)(?:\s+as\s+([A-Za-z_]\w*))?\s*$")
+_IMPORTED_NAME = re.compile(r"^\s*([\w.]+)(?:\s+as\s+([^\W\d]\w*))?\s*$")
 _FROM_TARGET = {"sys": "modules", "os": "_exit"}  # the one name worth following per module
 _MODULE_ALIAS = {"sys": "sys", "os": "os", "posix": "os", "nt": "os", "gc": "gc"}  # posix is os
 
@@ -276,22 +282,44 @@ def scan_added_lines(path: str, lines: list[tuple[int, str]]) -> list[Finding]:
     found = []
     # Python also ends a source line at "\r" (CRLF included), so each piece is scanned on its own.
     pieces = [(number, piece) for number, line in lines for piece in line.split("\r")]
-    for number, text in pieces:
-        if _COMMENT_ONLY.match(text):
+    for number, piece in pieces:
+        if number <= 2 and _foreign_coding(piece):
+            found.append(Finding(path, number, "source_encoding"))
+        if _COMMENT_ONLY.match(piece):
             continue
-        names = []
-        for rule in RULES:
-            if (rule.skip_in_conftest and in_conftest) or (rule.tests_only and not in_tests):
-                continue
-            if _hits(rule, text):
-                names.append(rule.name)
-        _bind_aliases(text, aliases)  # before the extra checks: "import os as o; o._exit(0)"
-        names += [name for name in _extra_rules(text, aliases, in_tests) if name not in names]
+        names: list[str] = []
+        # Python compiles identifiers in NFKC form (PEP 3131): the piece as written, then that form.
+        for text in dict.fromkeys((piece, _nfkc_names(piece))):
+            for rule in RULES:
+                if (rule.skip_in_conftest and in_conftest) or (rule.tests_only and not in_tests):
+                    continue
+                if _hits(rule, text) and rule.name not in names:
+                    names.append(rule.name)
+            _bind_aliases(text, aliases)  # before the extra checks: "import os as o; o._exit(0)"
+            names += [name for name in _extra_rules(text, aliases, in_tests) if name not in names]
         found += [Finding(path, number, name) for name in names]
     return found
 
 
+def _nfkc_names(text: str) -> str:
+    """Identifier characters in NFKC form, the rest as written (no new operator or separator)."""
+    pairs = ((char, unicodedata.normalize("NFKC", char)) for char in text)
+    return "".join(new if ("a" + new).isidentifier() else old for old, new in pairs)
+
+
+def _foreign_coding(text: str) -> bool:
+    """A comment declaring a source encoding other than UTF-8 (read by Python on line 1 or 2)."""
+    found = _CODING.match(text)
+    return found is not None and not _UTF8.fullmatch(found.group(1))
+
+
 _HUNK = re.compile(r"@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+_INDEX = re.compile(r"index [0-9a-f]+\.\.([0-9a-f]+)")
+# A new side with no lines to show: a deleted file (all zeros) or the empty blob (SHA-1, SHA-256).
+_NO_LINES = re.compile(
+    r"0+|e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+    r"|473a0f4c3be8a93681a267e3b1e9a7dcda1185436fe141f7749120a303721813"
+)
 
 
 def added_lines(diff: str) -> dict[str, list[tuple[int, str]]]:
@@ -300,10 +328,12 @@ def added_lines(diff: str) -> dict[str, list[tuple[int, str]]]:
     A line ends only at "\\n" (git ends every diff line there; any other line break inside is
     content). Inside a hunk, its header's counts say how many old and new lines follow, so an
     added line that starts with "++ " or "@@" is content, not a file or hunk header. A diff whose
-    lines do not match those counts raises GitCommandError (unreadable, so the change is refused).
+    lines do not match those counts raises GitCommandError (unreadable, so the change is refused),
+    as does a file whose ``index`` line names new content but whose lines the diff does not show.
     """
     files: dict[str, list[tuple[int, str]]] = {}
     current, number, old_left, new_left = None, 0, 0, 0
+    owed = False  # an "index" line named new content; its "+++" header has not come yet
     for raw in diff.removesuffix("\n").split("\n"):
         if old_left > 0 or new_left > 0:
             # "" is a blank context line (diff.suppressBlankEmpty); "\ No newline" counts for none
@@ -319,7 +349,12 @@ def added_lines(diff: str) -> dict[str, list[tuple[int, str]]]:
                 raise GitCommandError("diff hunk has more lines than its header counts")
         elif raw.startswith(("+", "-", " ")) and not raw.startswith(("+++ ", "--- ")):
             raise GitCommandError("diff line outside a hunk")
+        elif raw.startswith("diff --git ") and owed:
+            raise GitCommandError("diff shows a changed file without its lines")
+        elif index := _INDEX.match(raw):
+            owed = not _NO_LINES.fullmatch(index.group(1))
         elif raw.startswith("+++ "):
+            owed = False
             target = _unquote(raw[4:].rstrip("\t"))  # git appends a tab to a path with a space
             current = target[2:] if target.startswith("b/") else None
             if current is not None:
@@ -327,8 +362,8 @@ def added_lines(diff: str) -> dict[str, list[tuple[int, str]]]:
         elif hunk := _HUNK.match(raw):
             old_left, number = int(hunk.group(1) or 1), int(hunk.group(2))
             new_left = int(hunk.group(3) or 1)
-    if old_left > 0 or new_left > 0:
-        raise GitCommandError("diff ends inside a hunk")
+    if old_left > 0 or new_left > 0 or owed:
+        raise GitCommandError("diff ends inside a hunk or without a changed file's lines")
     return files
 
 
@@ -341,11 +376,14 @@ def _unquote(name: str) -> str:
 
 
 def scan_patch(repo: Path, base: str, head: str) -> list[Finding]:
-    """Scan what ``head`` adds on top of ``base`` (both commits already in repo)."""
+    """Scan what ``head`` adds on top of ``base`` (both commits already in repo).
+
+    Only ``.py`` files are read, as text whatever git attributes or size settings say.
+    """
     raw = run_git_bytes(  # bytes: no newline translation, so a lone "\r" stays inside its line
         repo, "-c", "diff.suppressBlankEmpty=false", "-c", "diff.interHunkContext=0",
-        "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames", "-U0",
-        "--src-prefix=a/", "--dst-prefix=b/", base, head,
+        "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames", "-U0", "--text",
+        "--full-index", "--src-prefix=a/", "--dst-prefix=b/", base, head, "--", "*.py",
     )  # fmt: skip
     try:
         diff = raw.decode("utf-8")
