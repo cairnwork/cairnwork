@@ -117,6 +117,7 @@ class _Reporter:
         self._renamed = []  # items whose node id or file changed after collection, or never seen
         self._collect_errors = []
         self._collect_skipped = []
+        self._teardown_errors = []
 
     def pytest_collectreport(self, report):
         if report.failed:
@@ -162,6 +163,9 @@ class _Reporter:
             self._outcomes[nodeid] = report.outcome
         elif report.when == "setup" and report.outcome in ("skipped", "failed"):
             self._outcomes.setdefault(nodeid, report.outcome)
+        elif report.when == "teardown" and report.failed:  # #478: a fixture raised after yield
+            self._outcomes[nodeid] = "failed"
+            self._teardown_errors.append(nodeid)
         return report
 
     def pytest_sessionfinish(self, session, exitstatus):
@@ -169,7 +173,8 @@ class _Reporter:
                    "files": self._files, "file_of": self._file_of,
                    "renamed": list(dict.fromkeys(self._renamed)),
                    "collect_errors": self._collect_errors,
-                   "collect_skipped": self._collect_skipped}
+                   "collect_skipped": self._collect_skipped,
+                   "teardown_errors": self._teardown_errors}
         if self._fd is not None:
             data = json.dumps(payload).encode()
             os.ftruncate(self._fd, 0)
@@ -214,6 +219,9 @@ class Verdict:
     collect_skipped: tuple[str, ...] = ()  # node ids of collectors skipped while collecting
     renamed: tuple[str, ...] = ()  # items whose node id or file changed after collection
     paths: dict[str, str] = field(default_factory=dict)  # node id -> its file, as collected
+    # #478: tests whose teardown failed. A shared fixture's finalizer runs at its last user's
+    # teardown, so the node named is where the error landed, not the test that owns the fixture
+    teardown_errors: tuple[str, ...] = ()
 
     def not_run(self, targets) -> tuple[str, ...]:
         """The named ``targets`` (``path`` or ``path::node``) that own no recorded test, then the
@@ -265,11 +273,12 @@ def read_verdict_fd(fd: int, nonce: str) -> Verdict:
 def parse_verdict(raw: bytes, nonce: str) -> Verdict:
     """``ran`` is true only when sessionfinish wrote the record, it matches
     the nonce, at least one test was collected, every collected test produced a result, all
-    results are ``passed``, no collector failed or was skipped and no item's node id or file
-    changed after collection (``renamed``). Outcomes, ``recorded`` and the collector lists are
-    returned whenever the nonce matches (even when not all passed) so
-    base_comparison can see a test that failed. A record over MAX_REPORT_BYTES (a suite too large
-    for one report, #184) is ``too_big`` so the caller can say why nothing was read."""
+    results are ``passed``, no collector failed or was skipped, no teardown failed and no item's
+    node id or file changed after collection (``renamed``). Outcomes, ``recorded`` and the
+    collector and teardown lists are returned whenever the nonce matches (even when not all
+    passed) so base_comparison can see a test that failed. A record over MAX_REPORT_BYTES (a
+    suite too large for one report, #184) is ``too_big`` so the caller can say why nothing was
+    read."""
     if len(raw) > MAX_REPORT_BYTES:
         return Verdict(False, {}, too_big=True)
     try:
@@ -291,11 +300,12 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
     errors = data.get("collect_errors", [])
     skipped = data.get("collect_skipped", [])
     renamed = data.get("renamed", [])
+    teardown = data.get("teardown_errors", [])
     files = data.get("files", [])
     file_of = data.get("file_of")  # absent: no test owns a named target
     if not all(
         isinstance(v, list) and all(isinstance(n, str) for n in v)
-        for v in (errors, skipped, renamed)
+        for v in (errors, skipped, renamed, teardown)
     ):
         return Verdict(False, {})
     if not isinstance(files, list) or not all(isinstance(path, str) for path in files):
@@ -311,6 +321,7 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
         and not errors
         and not skipped
         and not renamed
+        and not teardown
         and set(outcomes) == set(collected)
         and all(outcome == "passed" for outcome in outcomes.values())
     )
@@ -321,6 +332,7 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
         collect_errors=tuple(errors),
         collect_skipped=tuple(skipped),
         renamed=tuple(renamed),
+        teardown_errors=tuple(teardown),
         paths=_sources(collected, files, file_of or ()),
     )
 
