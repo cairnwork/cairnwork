@@ -62,6 +62,10 @@ cairnwork demo        # 五分鐘示範：隔離 clone、範圍檢查、驗證�
 - sibling repo 永遠不得 import Cairnwork。
 - Cairnwork 不得改動 Nexus-new#2721 的量測環境。
 
+## 目前狀態：worker 停用
+
+核心唯一的 worker 是 Agy 帳號池，2026-10-30 起停用。目前實際使用的只有 `cairnwork-verify` 這條驗收路徑；`cairnwork run`、Issue intake、route 的 worker 階段暫時無法跑完。另由誰來當 worker，另行決定。現行部署版本是 `1662f01`（2026-10-31 部署）。演練的現況見 [docs/DRILLS.md](docs/DRILLS.md)：用到真 agent worker 的演練標為「未重跑」，不需要 worker 的演練預計在現行 main 上重跑。
+
 ## 硬性限制（CI 強制）
 
 - 單檔 ≤400 行、單函式 ≤80 行；獨立套件 `cairnwork_sandbox` 上限 1,200。
