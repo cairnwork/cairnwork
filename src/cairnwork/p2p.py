@@ -10,7 +10,7 @@ Failure paths, none of which can end VERIFIED:
 
 * base run itself unclean (a process outlived it, ``base-probe-survivors``, or it changed the
   checkout, ``base-probe-mutated``; #285): the candidate run of the same tests would block on the
-  base's own leftover; or it loaded bytecode it may not supply (``base-probe-forged``, #481), so
+  base's own leftover; or it left bytecode it may not supply (``base-probe-forged``, #481), so
   its own outcomes prove nothing. Either way there is no usable comparison. UNCOMPARABLE
   (``P2P_BASE_PROBE_UNUSABLE``) in any mode, without trying a narrower one: a narrower suite
   would be weaker evidence than the configured one, and a false FAILED becomes "no evidence",
@@ -118,16 +118,16 @@ def _probe(task, files, result, ctx: VerifyContext, budget, tag="p"):
     runs = run_verifiers(ctx, task.base_commit, (spec,), run_id, timeout=budget)
     run = runs[0]
     reason = None
-    if run.timed_out:
+    if run.forged:  # #481: bytecode the run may not supply may be what made its tests pass
+        reason = UNCLEAN[2]  # first: a timeout or a cap does not cause it, so it is never masked
+    elif run.timed_out:  # before survivors and mutated: the timeout's own kill can cause both
         reason = "base-probe-timeout"
-    elif run.report_too_big or run.log_too_big:  # #184, #481: too large a suite for one run
-        reason = f"base-probe-{'report' if run.report_too_big else 'log'}-over-cap"
     elif run.survivors:  # the base leaves a process (or cannot tell): the candidate run would too
         reason = UNCLEAN[0]
     elif run.mutated:  # the base's own tests write into the checkout: same for the candidate
         reason = UNCLEAN[1]
-    elif run.forged:  # #481: bytecode the run may not supply may be what made its tests pass
-        reason = UNCLEAN[2]
+    elif run.report_too_big or run.log_too_big:  # #184, #481: too large a suite for one run
+        reason = f"base-probe-{'report' if run.report_too_big else 'log'}-over-cap"
     elif run.teardown_errors:  # #478: a shared fixture's error lands on whichever test runs last
         reason = "base-probe-teardown-error"
     elif run.returncode not in (0, 1) or not run.outcomes:
