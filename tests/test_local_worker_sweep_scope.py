@@ -88,7 +88,7 @@ def test_the_tag_entry_is_the_whole_run_root(tmp_path):
 
 @pytest.mark.sandbox
 def test_two_runs_named_alike_do_not_sweep_each_other(tmp_path):
-    """#533 F3: two suites, two runs directories, both run roots named TAG."""
+    """#533: two suites, two runs directories, both run roots named TAG."""
     a = make_runs(tmp_path / "suite_a")
     b = make_runs(tmp_path / "suite_b")
     pid_b = _start_sleeper(b)  # outside its run root: found by its environment only
