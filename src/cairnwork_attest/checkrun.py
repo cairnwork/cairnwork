@@ -28,7 +28,7 @@ from cairnwork_attest.checkrun_gh import gh_http, gh_problem
 from cairnwork_attest.dsse import verify_envelope
 from cairnwork_attest.keys import load_public_key_pem
 from cairnwork_attest.record import AttestError
-from cairnwork_attest.verify import _parse_statement_payload, verify_bundle
+from cairnwork_attest.verify import _parse_statement_payload, _verify_loaded
 
 _OID = re.compile(r"^[0-9a-f]{40}$")
 _KEYID = re.compile(r"^[0-9a-f]{64}$")
@@ -114,22 +114,22 @@ def _shown(value: object, pattern: re.Pattern[str], missing: str) -> str:
 
 
 def _offline_result(
-    facts: dict[str, Any], public_key: Path | None, repo: Path | None
+    facts: dict[str, Any], public_key: Path | None, repo: Path | None, key: Any = None
 ) -> tuple[str, dict[str, str] | None]:
     """Return (VERIFIED, assurance), a failure code, or signature not checked."""
     if public_key is None:
         return "signature not checked by this step", None
     if repo is not None:
-        result = verify_bundle(
+        result = _verify_loaded(
             Path(facts["bundle"]),
             public_key_pem=public_key,
+            public_key=key,  # loaded from public_key above: the file is read once
             repo=repo,
             expected_candidate=facts["candidate"],
         )
         if result.ok:
             return "VERIFIED", result.assurance
         return result.code, None
-    key = load_public_key_pem(public_key.read_bytes())
     outcome = verify_envelope(facts["envelope"], key)
     return ("VERIFIED, signature only" if outcome.ok else "SIGNATURE_INVALID"), None
 
@@ -229,8 +229,9 @@ def post_check_run(
         return _fail("USAGE", usage)
     try:
         facts = _facts(Path(bundle_path))
+        key = None
         if public_key is not None:
-            load_public_key_pem(
+            key = load_public_key_pem(
                 public_key.read_bytes()
             )  # an operator key problem never reads as a forgery
     except AttestError as exc:
@@ -239,7 +240,7 @@ def post_check_run(
         return _fail("KEY_UNREADABLE", _clean(exc.strerror or "cannot read public key"))
     candidate = facts["candidate"]
     facts["bundle"] = Path(bundle_path)
-    offline, assurance = _offline_result(facts, public_key, repo)
+    offline, assurance = _offline_result(facts, public_key, repo, key)
     title = "Cairnwork attestation (informational)"
     if public_key is None:
         title = "Cairnwork attestation (informational, UNVERIFIED: signature not checked)"
