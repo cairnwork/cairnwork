@@ -27,6 +27,7 @@ import sys
 import time
 from pathlib import Path
 
+from cairnwork.account_check import locked_available
 from cairnwork.confined import ATTEMPT_ENV, sweep_marked
 from cairnwork.journal import Journal
 from cairnwork.notary import Notary
@@ -52,10 +53,13 @@ FILES = {
 }
 VERIFY = (("pytest", ("python3", "-m", "pytest", "-q", "tests/test_stats.py")),)
 
-# Run verifiers as the dedicated account when it is set up (Issue #9).
-ACCOUNT = VerifierAccount() if VerifierAccount().available() else None
+# Run verifiers as the dedicated account when it is set up (Issue #9); probe it under its lock
+# (#560).
+ACCOUNT = VerifierAccount() if locked_available(VerifierAccount()) else None
 if ACCOUNT is None:
-    print("WARNING: verifier account not set up; verifiers run as the owner", file=sys.stderr)
+    print(
+        "WARNING: verifier account not set up or busy; verifiers run as the owner", file=sys.stderr
+    )
 
 
 def git(repo: Path, *args: str) -> str:

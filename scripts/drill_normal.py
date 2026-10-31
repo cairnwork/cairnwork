@@ -15,6 +15,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from cairnwork.account_check import locked_available
 from cairnwork.journal import Journal
 from cairnwork.notary import Notary
 from cairnwork.ownership import OwnershipLedger
@@ -39,10 +40,13 @@ FILES = {
     ),
 }
 
-# Run verifiers as the dedicated account when it is set up (Issue #9).
-ACCOUNT = VerifierAccount() if VerifierAccount().available() else None
+# Run verifiers as the dedicated account when it is set up (Issue #9); probe it under its lock
+# (#560).
+ACCOUNT = VerifierAccount() if locked_available(VerifierAccount()) else None
 if ACCOUNT is None:
-    print("WARNING: verifier account not set up; verifiers run as the owner", file=sys.stderr)
+    print(
+        "WARNING: verifier account not set up or busy; verifiers run as the owner", file=sys.stderr
+    )
 
 
 def git(repo: Path, *args: str) -> str:

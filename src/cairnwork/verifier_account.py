@@ -33,7 +33,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -118,7 +118,9 @@ class VerifierAccount:
         means confinement actually works — a policy that fails to mount (e.g. a tmpfs under a
         home the account cannot enter) reports unusable instead of a false healthy.
 
-        It starts a process as the account, so call it while holding exclusive().
+        It starts a process as the account, so call it while holding exclusive(). A probe that
+        times out is still running as the account (only its sudo is killed), so the timeout path
+        ends everything the account runs before it reports unusable.
         """
         from cairnwork import pytest_config  # local import keeps the module import-cycle free
 
@@ -145,12 +147,20 @@ class VerifierAccount:
             done = subprocess.run(  # noqa: S603 - fixed argv
                 probe, capture_output=True, timeout=60, check=False, cwd=self.root
             )
+        except subprocess.TimeoutExpired:
+            self._clear_after_timeout()
+            return False
         except (OSError, subprocess.SubprocessError, VerifierAccountError):
             return False
         finally:
             if policy_file is not None:
                 policy_file.unlink(missing_ok=True)
         return done.returncode == 0
+
+    def _clear_after_timeout(self) -> None:
+        """Best effort: a cleanup error leaves the account as it was and available() False."""
+        with suppress(Exception):  # the verdict is already "unusable"
+            self.kill_all()
 
     def wrap(self, argv: list[str], profile: Path | None, env: dict[str, str] | None = None):
         """sudo -> sandbox-exec -> env -i -> argv (profile None: an allow-all probe)."""
