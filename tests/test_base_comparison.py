@@ -55,6 +55,9 @@ ROWS = [
     pytest.param(  # rc 0 too: the candidate run of the same tests would hit the cap (#481)
         run(rc=0, failed=(), log_too_big=True), "UNCOMPARABLE", "BASE_LOG_OVER_CAP", id="log-rc0"
     ),
+    pytest.param(  # named before the exit code: the oversized log is the cause to fix
+        run(rc=2, failed=(), log_too_big=True), "UNCOMPARABLE", "BASE_LOG_OVER_CAP", id="log-rc2"
+    ),
     pytest.param(run(recorded=False), "UNCOMPARABLE", "BASE_NO_REPORT", id="no-record"),
     pytest.param(run(survivors=1), "UNCOMPARABLE", "BASE_SURVIVORS", id="survivors-rc1"),
     pytest.param(

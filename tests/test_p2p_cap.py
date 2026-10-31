@@ -10,10 +10,11 @@ cut is recorded, so "0 P2P tests" never reads as "P2P passed".
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
-from test_p2p_plan import RESULT, TASK, plan, uncomparable
+from test_p2p_plan import RESULT, TASK, make_run, plan, uncomparable
 
 from cairnwork import p2p
 from cairnwork.p2p import P2PPlan, run_plan
@@ -218,3 +219,13 @@ def test_a_cut_that_leaves_only_changed_tests_runs_no_p2p_and_says_so(monkeypatc
     assert probed == [("tests/test_d.py",)] and got.spec is None
     assert got.rule["targets"] == 0 and got.rule["capped_dirs"] == ["tests"]
     assert got.rule["changed_by_test_commit"] == 1
+
+
+def test_a_base_probe_whose_log_went_over_the_cap_is_degraded_like_an_oversized_report(
+    monkeypatch, tmp_path
+):
+    # #481: a narrower suite writes a smaller log, so this one may degrade (not UNCLEAN)
+    run = make_run(True, outcomes={"tests/test_a.py::test_a": "passed"}, log_dir=tmp_path)
+    monkeypatch.setattr(p2p, "run_verifiers", lambda *a, **k: (replace(run, log_too_big=True),))
+    got = p2p._probe(TASK, ("tests/test_a.py",), RESULT, context(TASK, tmp_path), 30)
+    assert got == (None, "base-probe-log-over-cap") and got[1] not in p2p.UNCLEAN
