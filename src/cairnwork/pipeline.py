@@ -194,6 +194,13 @@ def check_task(task: TaskSpec, *, verifier_python: str | None = None) -> tuple[V
         raise TaskRejected(exc.code, str(exc)) from exc
 
 
+def _require_no_blackbox(task: TaskSpec) -> None:
+    """A blackbox declaration is for verify only (verify_candidate): a worker run never
+    carries one, so its expected values never reach the worker."""
+    if task.blackbox is not None:
+        raise TaskRejected("BAD_BLACKBOX", "a blackbox declaration is for verify only")
+
+
 def run_task(
     task: TaskSpec,
     *,
@@ -210,6 +217,7 @@ def run_task(
     specs = check_task(
         task, verifier_python=verifier_python or getattr(verifier_account, "python", None)
     )
+    _require_no_blackbox(task)
     ctx = VerifyContext.of(task, run_root, account=verifier_account, python=verifier_python)
     with runlock.held(ledger.path, exclusive=False):
         bound = ledger.bind(task.idempotency_key, task.request(), OWNER, task.card_hash)
@@ -237,6 +245,7 @@ def run_bound_task(
     specs = check_task(
         task, verifier_python=verifier_python or getattr(verifier_account, "python", None)
     )
+    _require_no_blackbox(task)
     ctx = VerifyContext.of(task, run_root, account=verifier_account, python=verifier_python)
     with runlock.held(ledger.path, exclusive=False):
         record = ledger.get(task_id=task_id)
