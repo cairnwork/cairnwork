@@ -109,11 +109,13 @@ def _validate_verified_record(verified: VerifiedRecord) -> None:
         verdict.verified
         and verdict.task_id == record.task_id
         and verdict.attempt_id == record.attempt_id
+        and verdict.base_commit == record.base_commit
         and verdict.candidate_commit == record.candidate_commit
+        and verdict.request_hash == record.request_hash
     ):
         raise StatementInputError(
-            "verdict does not match record task_id, attempt_id, or candidate_commit, "
-            "or is not verified",
+            "verdict does not match record task_id, attempt_id, base_commit, "
+            "candidate_commit, or request_hash, or is not verified",
             code="VERIFIED_RECORD_TAMPERED",
         )
 
