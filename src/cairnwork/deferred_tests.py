@@ -7,7 +7,7 @@ only). The worker never gets it: its attempt clone holds the base. Cairnwork the
 1. runs the verifiers on the test commit itself (base + tests) and requires a real
    failure there (base_comparison): tests that already pass prove nothing about the fix
    (REFUSED); a base that cannot run them cleanly (collection error, timeout, no sandbox,
-   no report) gives no evidence either way (UNCOMPARABLE, #234);
+   no report, a checkout the run changed) gives no evidence either way (UNCOMPARABLE, #234);
 2. lays the test files over the worker's candidate in a private index and commits the
    result on top of it; that commit is what the verifiers run, Core notarises and a PR
    would carry (fix and tests together).
@@ -234,13 +234,21 @@ def _base_problem(run) -> str:
     rc = run.returncode
     if run.timed_out or rc is None:  # None without a timeout: no sandbox, nothing ran
         return "BASE_TIMEOUT" if run.timed_out else "BASE_NOT_EXECUTED"
+    if run.mutated:  # the base's own tests wrote into the checkout, rc 0 too (as p2p._probe, #285)
+        return "BASE_MUTATED"
     if run.report_too_big:
         return "BASE_REPORT_OVER_CAP"
     if run.collect_errors:  # the guard saw a collector fail (exit 2 alone may be an interrupt)
         return "BASE_COLLECTION_ERROR"
     if rc not in (0, 1):  # 5: nothing collected; 2 without collect_errors, 3, 4, others: pytest
         return "BASE_NO_TESTS" if rc == 5 else "BASE_PYTEST_ERROR"
-    return "" if run.recorded else "BASE_NO_REPORT"
+    if not run.recorded:
+        return "BASE_NO_REPORT"
+    # #478: a teardown error (a shared fixture's lands on whichever test runs last), or exit 1
+    # with no failed test in the record: the base run cannot say which tests fail on the base
+    if run.teardown_errors or (rc == 1 and "failed" not in run.outcomes.values()):
+        return "BASE_PYTEST_ERROR"
+    return ""
 
 
 def base_comparison(runs, targets: frozenset[str]) -> Comparison:
