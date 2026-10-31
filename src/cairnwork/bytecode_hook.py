@@ -37,19 +37,23 @@ closure when called, only its defaults, which hold types, exception classes, str
 of strings and one ``slice``; types are compared with the bound ``type`` only (no ``isinstance``,
 no ``__class__``); it keeps no state and reports nothing, refusal is the exception it raises.
 
-Not a boundary. From Python 3.13 on, code in the same process may still change the hook's
-arguments at its entry; ctypes or native code can rewrite memory; code the candidate builds or
-unmarshals explicitly in its own process is not covered; and code can change what a test reads
-without any bytecode file (``sys.modules``, import hooks: #303). The hook guards the process it is
-installed in: a forked child keeps it, a child Python a test starts does not (no child produces
-the verdict). This raises the cost of one way to make a verdict disagree with the source, like
-tamper_scan and report_channel; the boundary is a verdict produced outside the candidate's
-process. Honest code it refuses: reading back a ``.pyc`` (as Seatbelt already does), unmarshalling
-code objects, the gc walks above (leak and reference-cycle checks; ``hypothesis.register_random``
-and ``deterministic_PRNG`` outside ``@given``, typeguard's ``check_argument_types`` and
-``check_return_type``), ``sys._current_frames`` (a stack dump, as pytest-timeout prints on a
-timeout) and ``io.FileIO`` on a path object. Coverage, debuggers and ``sys.settrace`` are not
-affected.
+Not a boundary. The frozen-origin check trusts the import state it finds: it relies on nothing
+untrusted having run before the plugin, which the verifier's command line and environment guarantee
+(``-P``, ``PYTHONNOUSERSITE``, a read-only guard directory first on ``PYTHONPATH``) together with
+the protected start-up files and root modules (tests/test_root_modules.py and
+tests/test_candidate_shadow_refusals.py pin those two). From Python 3.13 on, code in the same
+process may still change the hook's arguments at its entry; ctypes or native code can rewrite
+memory; code the candidate builds or unmarshals explicitly in its own process is not covered; and
+code can change what a test reads without any bytecode file (``sys.modules``, import hooks: #303).
+The hook guards the process it is installed in: a forked child keeps it, a child Python a test
+starts does not (no child produces the verdict). This raises the cost of one way to make a verdict
+disagree with the source, like tamper_scan and report_channel; the boundary is a verdict produced
+outside the candidate's process. Honest code it refuses: reading back a ``.pyc`` (as Seatbelt
+already does), unmarshalling code objects, the gc walks above (leak and reference-cycle checks;
+``hypothesis.register_random`` and ``deterministic_PRNG`` outside ``@given``, typeguard's
+``check_argument_types`` and ``check_return_type``), ``sys._current_frames`` (a stack dump, as
+pytest-timeout prints on a timeout) and ``io.FileIO`` on a path object. Coverage, debuggers and
+``sys.settrace`` are not affected.
 """
 
 from __future__ import annotations
