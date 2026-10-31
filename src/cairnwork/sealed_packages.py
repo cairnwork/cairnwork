@@ -17,12 +17,13 @@ import root (verifier_spec). The ``__init__.py`` stays when nothing can remove i
 
 That holds for pytest, not for the base's own code: a conftest or test that inserts its parent
 directory, or runs a script with another ``sys.path``, puts a sealed directory in front all the
-same (#385 review). So nothing is sealed when the base's Python code where tests, conftests and
-the code they import live (the checkout root's files, every directory above a test root, which
-holds the roots, and every import path) mentions one of ``_PATH_WORDS``; nor when the task's test
-commit is in the repository and its code does. A plain text test: it fails closed on any mention,
-and the base and the test commit are the target's own code, not the candidate's. A test commit
-not fetched yet is not read (and never fetched for this).
+same (#385 review). So nothing is sealed when any Python file of the base may change sys.path or
+start Python another way (``sys_path_scan``: every file, since tests can import code from anywhere
+in the checkout; text words plus a syntax-tree reading that sees ``sys`` under another name); nor
+when the task's test commit is in the repository and its code may. The scan fails closed, and the
+base and the test commit are the target's own code, not the candidate's: it covers the ways
+ordinary code does this, not code written to hide it (see ``sys_path_scan``). A test commit not
+fetched yet is not read (and never fetched for this).
 """
 
 from __future__ import annotations
@@ -31,26 +32,9 @@ import subprocess
 from pathlib import Path
 
 from cairnwork.gitcmd import GitCommandError, run_git
-from cairnwork.import_path_tree import normalize_import_paths
+from cairnwork.sys_path_scan import may_edit_sys_path
 
 _REGULAR = ("100644", "100755")
-# Ways Python code can put a directory on sys.path, or start Python with another sys.path.
-_PATH_WORDS = (
-    "sys.path",  # also sys.path_hooks
-    "syspath",  # pytest's monkeypatch.syspath_prepend, pytester.syspathinsert
-    "from sys import",
-    "addsitedir",
-    ".pth",
-    "PYTHONPATH",
-    "pytest_plugins",  # a plugin module may live anywhere
-    "runpy",
-    "sys.executable",
-    "subprocess",
-    "os.system",
-    "os.popen",
-    "os.exec",
-    "os.spawn",
-)
 
 
 def sealed_packages(
@@ -59,7 +43,6 @@ def sealed_packages(
     roots: tuple[str, ...],
     above: tuple[str, ...],
     paths: tuple[str, ...],
-    import_paths: tuple[str, ...] = (),
     test_commit: str | None = None,
 ) -> frozenset[str]:
     """The directories in ``above`` or under a test root that the base gives a regular file named
@@ -96,9 +79,8 @@ def sealed_packages(
             sealed.add(folder)
     if not sealed:
         return frozenset()
-    dirs = (*above, *normalize_import_paths(import_paths))
     commits = (base_commit, *(c for c in (test_commit,) if c and _present(repo, c)))
-    if any(_may_edit_sys_path(repo, commit, dirs) for commit in commits):
+    if any(may_edit_sys_path(repo, commit) for commit in commits):
         return frozenset()
     return frozenset(sealed)
 
@@ -109,22 +91,6 @@ def _present(repo: Path, commit: str) -> bool:
         run_git(repo, "cat-file", "-e", f"{commit}^{{commit}}")
     except (GitCommandError, OSError, ValueError, subprocess.SubprocessError):
         return False
-    return True
-
-
-def _may_edit_sys_path(repo: Path, commit: str, dirs: tuple[str, ...]) -> bool:
-    """Whether a ``.py`` file of commit at the checkout root or under one of dirs mentions one of
-    ``_PATH_WORDS``. ``-a``: a file the repository's attributes call binary is searched too.
-    ``git grep -q`` exits 1 for no match; anything else (a fatal 128, a timeout) counts as one."""
-    words = [arg for word in _PATH_WORDS for arg in ("-e", word)]
-    specs = (":(glob)*.py", *(f"{d}/*.py" for d in dirs))  # ``*`` crosses ``/`` here
-    try:
-        run_git(repo, "grep", "-q", "-a", "--no-textconv", "-F", *words, commit, "--", *specs)
-    except GitCommandError as exc:
-        cause = exc.__cause__
-        return not (isinstance(cause, subprocess.CalledProcessError) and cause.returncode == 1)
-    except (OSError, ValueError, subprocess.SubprocessError):
-        return True
     return True
 
 

@@ -106,9 +106,7 @@ def protected_verifier_inputs(
     """
     above = _dirs_above_roots(tuple(roots))
     under_above = tuple(path for path in paths if _under(path, above))
-    sealed = sealed_packages(
-        repo, base_commit, tuple(roots), above, under_above, tuple(import_paths), test_commit
-    )
+    sealed = sealed_packages(repo, base_commit, tuple(roots), above, under_above, test_commit)
     known = {path.casefold() for path in normalize_import_paths(import_paths)}
     gate_paths = (
         *import_paths,
