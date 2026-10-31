@@ -27,6 +27,7 @@ def run(name: str = "v", rc: int | None = 1, *, failed=(TARGET,), **fields):
         recorded=fields.get("recorded", True),
         collect_errors=fields.get("collect_errors", ()),
         teardown_errors=(),
+        survivors=fields.get("survivors", 0),
     )
 
 
@@ -47,6 +48,10 @@ ROWS = [
     pytest.param(run(rc=None, failed=()), "UNCOMPARABLE", "BASE_NOT_EXECUTED", id="no-sandbox"),
     pytest.param(run(report_too_big=True), "UNCOMPARABLE", "BASE_REPORT_OVER_CAP", id="over-cap"),
     pytest.param(run(recorded=False), "UNCOMPARABLE", "BASE_NO_REPORT", id="no-record"),
+    pytest.param(run(survivors=1), "UNCOMPARABLE", "BASE_SURVIVORS", id="survivors-rc1"),
+    pytest.param(
+        run(rc=0, failed=(), survivors=1), "UNCOMPARABLE", "BASE_SURVIVORS", id="survivors-rc0"
+    ),
     pytest.param(
         run(collect_errors=("tests/test_x.py",)),
         "UNCOMPARABLE",

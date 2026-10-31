@@ -170,6 +170,7 @@ class _Run:
             fields.get("recorded", True), fields.get("collect_errors", ()),
         )  # fmt: skip
         self.teardown_errors = ()
+        self.survivors = fields.get("survivors", 0)
 
 
 TARGETS = frozenset({"tests/test_regression.py::t"})  # the new test of the test commit
