@@ -81,6 +81,7 @@ from cairnwork.verifiers import (
     parse_verifier,
     run_verifiers,
 )
+from cairnwork.verify_context import VerifyContext
 from cairnwork.workspace import (
     ATTEMPT_REF_PREFIX,
     Attempt,
@@ -148,7 +149,8 @@ class VisibleTestsWorker:
 
     # Never isolated, whatever the inner worker is (#234): probe() runs candidate code (as the
     # verifier account, or the owner) before the pipeline's base checks, so a later account
-    # failure there could be the candidate's doing. pipeline reads both with getattr.
+    # failure there could be the candidate's doing. The owner's account ran it.
+    run_as = ""
     isolated = False
     not_isolated_because = "visible-tests probe runs candidate code before verification"
 
@@ -205,18 +207,9 @@ class VisibleTestsWorker:
             except CandidateRejected as exc:
                 return f"Cairnwork could not check your edit: {_why_rejected(exc.code)}\n{FOOTER}"
             root.mkdir(mode=0o700)
+            ctx = VerifyContext.of(task, root, workdir.name, self.account, self.python)
             runs = run_verifiers(
-                task.repo,
-                candidate.candidate_commit,
-                specs,
-                root,
-                run_id,
-                python=self.python,
-                timeout=self.timeout,
-                attempt_id=workdir.name,
-                account=self.account,
-                base_commit=task.base_commit,
-                import_paths=task.import_paths,
+                ctx, candidate.candidate_commit, specs, run_id, timeout=self.timeout
             )
             detail = self.account is not None and not self.pass_fail_only
             return summarize(runs, hidden=bool(task.test_commit), detail=detail)

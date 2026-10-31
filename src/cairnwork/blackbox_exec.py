@@ -17,7 +17,7 @@ import subprocess
 import sys
 import tempfile
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import cairnwork_sandbox
@@ -33,6 +33,7 @@ from cairnwork.run_scrub import close_private
 from cairnwork.verifier_account import VerifierAccount, VerifierAccountError, lock_wait_seconds
 from cairnwork.verifier_exec import _execute, _write_new
 from cairnwork.verifiers import DEFAULT_TIMEOUT_SECONDS, _prepare_run
+from cairnwork.verify_context import VerifyContext
 from cairnwork.workspace import create_attempt_clone
 
 RUNNER_SHA256 = hashlib.sha256(_RUNNER_SOURCE.encode()).hexdigest()
@@ -53,60 +54,63 @@ class BlackboxRun:
 
 
 def run_blackbox(
-    declaration: Declaration, repo: Path, commit: str, run_root: Path, run_id: str, *,
-    attempt_id: str = "", account: VerifierAccount | None = None, python: str | None = None,
-    base_commit: str | None = None, import_paths: tuple[str, ...] = (),
+    declaration: Declaration,
+    ctx: VerifyContext,
+    commit: str,
+    run_id: str,
+    *,
     timeout: int = DEFAULT_TIMEOUT_SECONDS,
-) -> BlackboxRun:  # fmt: skip
+) -> BlackboxRun:
     """All of the declaration's checks in one run; errors creating the checkout propagate."""
-    paths = pytest_config.verifier_settings(repo, base_commit, import_paths).pythonpath
+    paths = pytest_config.verifier_settings(ctx.repo, ctx.base_commit, ctx.import_paths).pythonpath
     if paths:
-        require_plain_dirs(repo, commit, paths)
-    args = (declaration, repo, commit, run_id, attempt_id, timeout, paths)
+        require_plain_dirs(ctx.repo, commit, paths)
+    args = (declaration, commit, run_id, timeout, paths)
+    account = ctx.account
     if account is None:
-        return _run(*args, Path(run_root), python or sys.executable, None)
+        return _run(*args, replace(ctx, run_root=Path(ctx.run_root)), ctx.python or sys.executable)
     with account.exclusive(lock_wait_seconds(1, timeout)):
-        python = python or account.python
+        python = ctx.python or account.python
         if not account.available(python):
             raise VerifierAccountError(f"account {account.user} is not usable")
         account.require_idle()
         account.scrub_stale_runs()  # a killed run's private/run, before this run creates one
-        return _run(*args, account.run_root, python, account)
+        return _run(*args, replace(ctx, run_root=account.run_root), python)
 
 
-def _run(declaration, repo, commit, run_id, attempt_id, timeout, paths, run_root, python, account):
+def _run(declaration, commit, run_id, timeout, paths, ctx: VerifyContext, python: str):
+    """Under an account ctx.run_root is the account's; python is the interpreter the run uses
+    (ctx.python, else the account's, else sys.executable): read it here, not from ctx."""
+    account = ctx.account
     clone_id = f"{run_id}-vbb"  # recovery finds it with the verifiers' (recovery._run_dirs)
-    work = Path(run_root) / f"{clone_id}.work"
+    work = Path(ctx.run_root) / f"{clone_id}.work"
     work.parent.mkdir(parents=True, exist_ok=True)
     work.mkdir(mode=0o700)
-    with gitcmd.marked(ATTEMPT_ENV, attempt_id) if attempt_id else nullcontext():
+    with gitcmd.marked(ATTEMPT_ENV, ctx.attempt_id) if ctx.attempt_id else nullcontext():
         try:
             if account is None:
-                checkout = create_attempt_clone(repo, commit, work, clone_id).path
+                checkout = create_attempt_clone(ctx.repo, commit, work, clone_id).path
             else:  # the account's own copy, as for a verifier (#240)
                 os.chmod(work, 0o3770)
-                checkout = make_account_checkout(account, python, repo, commit, work, clone_id)
-            return _run_in(declaration, repo, commit, checkout, python, timeout, attempt_id,
-                           account, paths)  # fmt: skip
+                checkout = make_account_checkout(account, python, ctx.repo, commit, work, clone_id)
+            return _run_in(declaration, ctx, python, commit, checkout, timeout, paths)
         finally:
             _remove_checkout(work, clone_id, account)
 
 
-def _run_in(declaration, repo, commit, checkout, python, timeout, attempt_id, account, paths):
+def _run_in(declaration, ctx: VerifyContext, python: str, commit, checkout, timeout, paths):
     private = Path(tempfile.mkdtemp(prefix=f"{checkout.name}.", dir=checkout.parent.parent))
     try:
-        return _run_in_open(
-            declaration, repo, commit, checkout, python, timeout, attempt_id, account, paths,
-            private,
-        )  # fmt: skip
+        return _run_in_open(declaration, ctx, python, commit, checkout, timeout, paths, private)
     finally:
         # after _read: the whole private/run goes, then private is owner-only (0700)
-        close_private(private, account)
+        close_private(private, ctx.account)
 
 
 def _run_in_open(
-    declaration, repo, commit, checkout, python, timeout, attempt_id, account, paths, private
+    declaration, ctx: VerifyContext, python: str, commit, checkout, timeout, paths, private
 ):
+    account, attempt_id = ctx.account, ctx.attempt_id
     log_path, ini, profile_path = private / "blackbox.log", private / "unused.ini", private / "p.sb"
     run_dir, home, tmp, env, _, _ = _prepare_run(private, ini, b"")
     out = run_dir / OUTPUT_NAME
@@ -135,7 +139,7 @@ def _run_in_open(
     else:
         _write_new(log_path, b"no sandbox backend available: blackbox not executed\n")
         returncode, timed_out, survivors = None, False, 0
-    mutated = checkout_differences(repo, commit, checkout, before, account, python)
+    mutated = checkout_differences(ctx.repo, commit, checkout, before, account, python)
     forged = bytecode_findings(tmp, checkout, run_dir, (), account, python)
     report = _read(out) if profile is not None else None
     return BlackboxRun(

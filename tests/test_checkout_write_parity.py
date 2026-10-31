@@ -37,6 +37,7 @@ from cairnwork.account_checkout import STAGE
 from cairnwork.recovery import recover
 from cairnwork.verifier_account import VerifierAccount
 from cairnwork.verifiers import parse_verifier, run_verifiers
+from cairnwork.verify_context import VerifyContext
 
 ACCOUNT = VerifierAccount()
 
@@ -154,7 +155,9 @@ def _run(repo, run_root, account, run_id, scenarios):
         for name in scenarios
     )
     python = None if account is not None else sys.executable
-    runs = run_verifiers(repo, head, specs, run_root, run_id, python=python, account=account)
+    runs = run_verifiers(
+        VerifyContext(repo, run_root, python=python, account=account), head, specs, run_id
+    )
     for run in runs:
         assert run.ran, run.log_path.read_text()  # the guard saw the test run and pass
         assert run.returncode == 0, run.log_path.read_text()  # the candidate test succeeded

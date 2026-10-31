@@ -8,6 +8,7 @@ from conftest import commit_change, git
 from cairnwork.core_request import AcceptanceSpec
 from cairnwork.notary import Notary
 from cairnwork.verifiers import VerifierRejected, parse_verifier, run_verifiers
+from cairnwork.verify_context import VerifyContext
 
 PYTEST = ["python3", "-m", "pytest"]
 
@@ -74,9 +75,8 @@ def project(repo):
 
 def run(repo, tmp_path, commit, target, **kwargs):
     spec = parse_verifier("pytest", PYTEST + [target])
-    return run_verifiers(
-        repo, commit, (spec,), tmp_path / "runs", "r1", python=sys.executable, **kwargs
-    )[0]
+    ctx = VerifyContext(repo, tmp_path / "runs", python=sys.executable)
+    return run_verifiers(ctx, commit, (spec,), "r1", **kwargs)[0]
 
 
 def test_failing_test_is_not_passed(project, tmp_path):
@@ -244,7 +244,9 @@ def test_ini_in_a_parent_directory_is_ignored(project, tmp_path):
 def test_duplicate_verifier_ids_are_rejected(project, tmp_path):
     spec = parse_verifier("pytest", PYTEST + ["tests/test_a.py"])
     with pytest.raises(VerifierRejected):
-        run_verifiers(project, git(project, "rev-parse", "HEAD"), (spec, spec), tmp_path, "r1")
+        run_verifiers(
+            VerifyContext(project, tmp_path), git(project, "rev-parse", "HEAD"), (spec, spec), "r1"
+        )
 
 
 def test_output_over_the_cap_fails(project, tmp_path, monkeypatch):

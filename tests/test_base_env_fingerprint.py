@@ -10,6 +10,7 @@ from test_base_env import KEY_TASK, _venv
 
 from cairnwork import p2p
 from cairnwork.pipeline import TaskResult
+from cairnwork.verify_context import VerifyContext
 
 
 @pytest.fixture
@@ -21,7 +22,8 @@ def check(monkeypatch, tmp_path):
 
     def run(python):
         result = TaskResult("t", "a" + "0" * 16, "FAILED")
-        p2p.base_env_check(KEY_TASK, tmp_path / "runs", result, (None, python))
+        ctx = VerifyContext.of(KEY_TASK, tmp_path / "runs", result.attempt_id, python=python)
+        p2p.base_env_check(KEY_TASK, result, ctx)
         return len(probed)
 
     return run

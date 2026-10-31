@@ -4,7 +4,8 @@ Usage: python crash_driver.py <repo> <state dir> <fix text> [orphan | survivor]
 With 'orphan', the worker starts a detached child tagged CAIRNWORK_ATTEMPT and
 sleeps, so the test can SIGKILL this process mid-worker. 'survivor' starts such a
 child that runs tests/survivor_child.py instead (#244).
-Env CRASH_TEST_COMMIT gives the task a hidden-test commit.
+Env CRASH_TEST_COMMIT gives the task a hidden-test commit. Env CAIRNWORK_FAULT_AFTER=<phase>
+kills this process (exit 137) right after that phase is journaled.
 """
 
 import os
@@ -17,6 +18,7 @@ from cairnwork.journal import Journal
 from cairnwork.notary import Notary
 from cairnwork.ownership import OwnershipLedger
 from cairnwork.pipeline import TaskSpec, run_task
+from cairnwork.workers import WorkerDefaults
 
 repo, state, fix = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
 mode = sys.argv[4] if len(sys.argv) > 4 else ""
@@ -27,7 +29,12 @@ base = subprocess.run(
 ).stdout.strip()
 
 
-class Worker:
+def fault_after(phase):
+    if os.environ.get("CAIRNWORK_FAULT_AFTER") == phase:
+        os._exit(137)
+
+
+class Worker(WorkerDefaults):
     def run(self, workdir, task):
         (workdir / "src" / "calc.py").write_text(fix)
         if orphan:
@@ -65,4 +72,5 @@ run_task(
     journal=Journal(state / "journal.sqlite"),
     worker=Worker(),
     run_root=state / "runs",
+    on_reach=fault_after,
 )

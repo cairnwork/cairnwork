@@ -19,6 +19,7 @@ from test_visible_tests import (
 )
 
 import experimental.visible_tests.feedback as feedback
+from cairnwork.workers import WorkerDefaults
 from experimental.visible_tests import VisibleTestsWorker
 
 
@@ -27,7 +28,7 @@ class Task:
     instructions: str = "fix it"
 
 
-class Quiet:
+class Quiet(WorkerDefaults):
     def __init__(self):
         self.turns = 0
 
@@ -119,7 +120,7 @@ def test_a_probe_that_raises_still_leaves_the_turns_that_ran(tmp_path, monkeypat
     assert _record(workdir)["extra_turns"] == 1
 
 
-class Raising:
+class Raising(WorkerDefaults):
     """An inner worker that raises on the given turn (1 = the first, unprobed turn)."""
 
     def __init__(self, on_turn):

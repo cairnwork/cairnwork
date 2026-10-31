@@ -16,6 +16,7 @@ from conftest import git
 
 from cairnwork.verifier_account import VerifierAccount
 from cairnwork.verifiers import parse_verifier, run_verifiers
+from cairnwork.verify_context import VerifyContext
 
 CLONE = os.environ.get("CAIRNWORK_NEXUS_NEW_CLONE", "")
 PYTHON = os.environ.get("CAIRNWORK_NEXUS_NEW_PYTHON", "")
@@ -65,14 +66,10 @@ def with_file(repo: Path, base: str, path: str, data: bytes) -> str:
 def verify(repo: Path, commit: str, base: str) -> bool:
     spec = parse_verifier("lessons", ["python3", "-m", "pytest", TEST])
     run = run_verifiers(
-        repo,
+        VerifyContext(repo, ACCOUNT.run_root, account=ACCOUNT, python=PYTHON, base_commit=base),
         commit,
         (spec,),
-        ACCOUNT.run_root,
         "w" + os.urandom(6).hex(),
-        account=ACCOUNT,
-        python=PYTHON,
-        base_commit=base,
     )[0]
     ACCOUNT.remove(run.log_path.parent)
     shutil.rmtree(run.log_path.parent, ignore_errors=True)
