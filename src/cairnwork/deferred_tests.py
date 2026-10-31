@@ -233,14 +233,14 @@ class BaseUncomparable(Exception):
 
 def _base_problem(run) -> str:
     rc = run.returncode
+    if run.forged:  # first, as p2p._probe: a scan after the run finds it, a timeout cannot cause it
+        return "BASE_FORGED_BYTECODE"  # bytecode the run may not supply may have decided it (#481)
     if run.timed_out or rc is None:  # None without a timeout: no sandbox, nothing ran
         return "BASE_TIMEOUT" if run.timed_out else "BASE_NOT_EXECUTED"
     if run.survivors:  # a process outlived the base run (or cannot tell): as p2p._probe (#285)
         return "BASE_SURVIVORS"
     if run.mutated:  # the base's own tests wrote into the checkout, rc 0 too (as p2p._probe, #285)
         return "BASE_MUTATED"
-    if run.forged:  # bytecode the run may not supply: it may be what decided the outcomes (#481)
-        return "BASE_FORGED_BYTECODE"
     if run.report_too_big:
         return "BASE_REPORT_OVER_CAP"
     if run.log_too_big:  # the candidate run of the same tests would go over the cap too (#481)

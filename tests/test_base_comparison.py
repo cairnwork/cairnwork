@@ -92,11 +92,17 @@ ROWS = [
     pytest.param(  # rc 0: forged bytecode may be what made the base's tests pass (#481)
         run(rc=0, failed=(), forged=(PYC,)), "UNCOMPARABLE", "BASE_FORGED_BYTECODE", id="forged-rc0"
     ),
-    pytest.param(  # a changed checkout is named before forged bytecode, as p2p._probe
+    pytest.param(  # forged bytecode is named first, as p2p._probe
         run(mutated=("leftover.txt",), forged=(PYC,)),
         "UNCOMPARABLE",
-        "BASE_MUTATED",
+        "BASE_FORGED_BYTECODE",
         id="mutated-and-forged",
+    ),
+    pytest.param(  # a timeout does not hide it (#481 sweep)
+        run(rc=None, timed_out=True, forged=(PYC,)),
+        "UNCOMPARABLE",
+        "BASE_FORGED_BYTECODE",
+        id="timeout-and-forged",
     ),
     pytest.param(
         run(collect_errors=("tests/test_x.py",)),

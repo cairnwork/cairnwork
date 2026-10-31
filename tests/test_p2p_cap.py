@@ -261,8 +261,11 @@ def test_a_log_over_the_cap_twice_degrades_once_then_is_uncomparable(monkeypatch
 def test_an_unclean_probe_that_also_hit_a_limit_keeps_its_unclean_reason(
     monkeypatch, tmp_path, cap, taint, on_timeout
 ):
-    # #481 sweep (V2): a limit must not hide an unclean base run behind a reason that degrades;
-    # only after a timeout may survivors and mutated be the timeout's own doing
+    """#481 sweep: a limit must not hide an unclean base run behind a reason that degrades. The
+    exception is survivors or mutated after a timeout: the timeout's own kill can produce them
+    (under the verifier account the reaper counts the timed-out main process), so that run is
+    still read as a timeout and may be retried narrower. Forged bytecode is found by a scan after
+    the run, which no timeout or cap can cause, so it is never masked."""
     run = make_run(False, timed_out=cap == "timed_out", log_dir=tmp_path)
     run = replace(run, **({} if cap == "timed_out" else {cap: True}), **taint)
     unclean = p2p.UNCLEAN[("survivors", "mutated", "forged").index(next(iter(taint)))]
