@@ -113,6 +113,17 @@ def precheck(
     raise unusable(f"account {account.user} cannot run {py}: {hint}")
 
 
+def locked_available(account: VerifierAccount, timeout: float | None = None) -> bool:
+    """``available()`` under the account lock, for callers that only need a yes or no (the drills).
+    The probe starts a process as the account, and one that times out ends everything the account
+    runs (#560), so it never runs without the lock. A busy or unusable lock means no."""
+    try:
+        with account.exclusive(timeout):
+            return account.available()
+    except (OSError, VerifierAccountError):  # AccountBusy is a VerifierAccountError
+        return False
+
+
 @contextmanager
 def base_stage(account: VerifierAccount | None, python: str | None) -> Iterator[None]:
     """Around the base runs (deferred tests on the base, the P2P probe): no candidate code has run
