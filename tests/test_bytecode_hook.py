@@ -3,9 +3,10 @@
 Each case runs in its own child Python that installs the hook as the plugin does, tries one thing
 and then checks that the hook still refuses both reading a ``.pyc`` and unmarshalling code. Every
 interpreter ``uv python find`` locates from 3.9 to 3.14 runs them, as well as the one running these
-tests; a version that is not installed is left out. The plugin end to end: a hook that fails to
-install or does not answer its own probe leaves no verdict record (test_report_guard.py drives the
-same plugin when it works).
+tests; a version that is not installed is left out, and one whose marshal raises no audit event
+(Apple's Python 3.9.6) must instead fail the hook's probe. The plugin end to end: a hook that
+fails to install or does not answer its own probe leaves no verdict record (test_report_guard.py
+drives the same plugin when it works).
 """
 
 import shutil
@@ -35,7 +36,25 @@ def _interpreters():
     return found
 
 
-INTERPRETERS = _interpreters()
+# Does this interpreter raise the marshal.loads audit event? Without it the hook cannot refuse
+# unmarshalling, so its probe must fail (some builds of 3.9 lack the event).
+AUDITS_MARSHAL = (
+    "import marshal, sys\n"
+    "seen = []\n"
+    "sys.addaudithook(lambda event, args: seen.append(event))\n"
+    "marshal.loads(marshal.dumps(1))\n"
+    "print('marshal.loads' in seen)\n"
+)
+
+
+def _audits_marshal(python):
+    done = subprocess.run([python, "-I", "-c", AUDITS_MARSHAL], capture_output=True, text=True)
+    return done.stdout.strip() == "True"
+
+
+FOUND = _interpreters()
+INTERPRETERS = {path: v for path, v in FOUND.items() if _audits_marshal(path)}
+SILENT = sorted(set(FOUND) - set(INTERPRETERS))
 
 PRELUDE = f"""
 import builtins, gc, io, marshal, os, pathlib, sys
@@ -212,6 +231,19 @@ def test_the_hook_holds_after_each_step(tmp_path, python, case):
     outcome, state = run_case(python, tmp_path, body)
     assert state == "live", (case, outcome)
     assert outcome.startswith("refused:") if refused else outcome == "done", (case, outcome)
+
+
+def test_an_interpreter_without_the_marshal_event_fails_the_probe(tmp_path):
+    """Where marshal raises no audit event the hook cannot refuse unmarshalling: its probe fails,
+    and so does the plugin import (no verdict record). Nothing to check when no such interpreter
+    is installed."""
+    (tmp_path / "hooked.py").write_text(HOOK_SOURCE)
+    load = "import sys\nsys.path.insert(0, sys.argv[1])\nimport hooked\n"
+    for python in SILENT:
+        done = subprocess.run(
+            [python, "-I", "-B", "-c", load, str(tmp_path)], capture_output=True, text=True
+        )
+        assert done.returncode != 0 and "hook is not active" in done.stderr, (python, done.stderr)
 
 
 @pytest.mark.parametrize("python", sorted(INTERPRETERS), ids=INTERPRETERS.get)
