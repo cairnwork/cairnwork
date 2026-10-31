@@ -26,6 +26,7 @@ import shutil
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -68,6 +69,7 @@ from cairnwork.workspace import (
     check_candidate_commit,
     create_attempt_clone,
     remove_attempt_clone,
+    unless_interrupted,
 )
 
 
@@ -269,7 +271,7 @@ def _judge_in(intake, task, specs, candidate, notary, result, ctx, *, source) ->
     run_root = ctx.run_root
     check_roots_on_base(task.repo, task.base_commit, task.test_roots)
     clone = create_attempt_clone(task.repo, candidate, run_root, result.attempt_id)
-    try:
+    with unless_interrupted(partial(_remove_clone, run_root, result)):
         attempt = Attempt(clone.attempt_id, task.base_commit, clone.path, clone.refs_before)
         check_candidate_commit(task.repo, attempt, candidate, task.allowed_files)
         env = None if task.test_commit else _base_env(task, result, ctx, source)
@@ -297,11 +299,13 @@ def _judge_in(intake, task, specs, candidate, notary, result, ctx, *, source) ->
             task, specs, digest, notary, result, test_files, ctx, lambda _: None, plan, binding, env
         )
         return binding
-    finally:
-        try:
-            remove_attempt_clone(run_root, result.attempt_id)
-        except WorkspaceError as exc:  # keep the run's own outcome; note the leftover
-            result.logs.append(f"cleanup failed: {exc}")
+
+
+def _remove_clone(run_root, result) -> None:
+    try:
+        remove_attempt_clone(run_root, result.attempt_id)
+    except WorkspaceError as exc:  # keep the run's own outcome; note the leftover
+        result.logs.append(f"cleanup failed: {exc}")
 
 
 def _binding(task, head: str, test_files: tuple[str, ...], judged: str, plan) -> dict[str, Any]:
@@ -342,10 +346,10 @@ def _marked(intake: Intake, attempt_id: str) -> Iterator[None]:
         if _same_file(fd, path):
             break
         os.close(fd)
-    try:
-        yield
+    try:  # an interrupt keeps the marker: the next run's cleanup then sweeps this attempt
+        with unless_interrupted(partial(path.unlink, missing_ok=True)):
+            yield
     finally:
-        path.unlink(missing_ok=True)
         os.close(fd)
 
 
