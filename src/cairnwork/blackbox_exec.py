@@ -88,7 +88,8 @@ def _run(declaration, commit, run_id, timeout, paths, ctx: VerifyContext, python
     work.parent.mkdir(parents=True, exist_ok=True)
     work.mkdir(mode=0o700)
     with gitcmd.marked(ATTEMPT_ENV, ctx.attempt_id) if ctx.attempt_id else nullcontext():
-        with unless_interrupted(partial(_remove_checkout, work, clone_id, account)):
+        remove = partial(_remove_checkout, work, clone_id, account)
+        with unless_interrupted(remove, keep=account is None):  # as verifiers._run_all
             if account is None:
                 checkout = create_attempt_clone(ctx.repo, commit, work, clone_id).path
             else:  # the account's own copy, as for a verifier (#240)

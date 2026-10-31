@@ -1,6 +1,7 @@
 """#537 on the cairnwork-verify path: a run ended by KeyboardInterrupt or SystemExit keeps its
-marker and its clone, so the next run's ``cleanup`` still finds the attempt, sweeps its processes
-and removes the clone. A normal return or an ordinary exception removes both at once."""
+marker and its clone; a normal return or an ordinary exception removes both at once. Only what
+the run leaves behind is checked here: these tests do not run the next run's ``cleanup`` on a
+kept marker, nor recovery on the kept directories."""
 
 from types import SimpleNamespace
 from typing import Any

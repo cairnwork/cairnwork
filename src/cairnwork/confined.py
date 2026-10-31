@@ -15,6 +15,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass, replace
 
 from cairnwork import proc_cwd, proc_restrict, proc_start
@@ -53,7 +54,7 @@ def execute(
         )
         copier = threading.Thread(target=copy_capped, args=(process.stdout, log), daemon=True)
         copier.start()
-        timed_out = False
+        timed_out = finished = False
         try:  # the group is killed on any way out of the wait, an interrupt included (#537)
             try:
                 process.wait(timeout=timeout)
@@ -62,9 +63,14 @@ def execute(
             # Another account's processes: the owner cannot signal them; reap() kills them
             # all and says how many were running (the main one, if it timed out, included).
             escaped = reap() if reap is not None else 0
+            finished = True
         finally:
             _kill_group(process.pid)
-            process.wait()
+            if not finished and reap is not None:  # interrupted: the account's processes too
+                with suppress(Exception):  # best effort (own deadline); the interrupt propagates
+                    reap()
+            with suppress(subprocess.TimeoutExpired):  # bounded only after an interrupt
+                process.wait(timeout=None if finished else 10)
         survivors = _sweep_survivors(token, process.pid) + escaped
         copier.join(timeout=10)  # a descendant that escaped the group may hold the pipe
         if process.stdout is not None:  # always: stdout=PIPE

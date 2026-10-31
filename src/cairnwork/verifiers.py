@@ -202,7 +202,10 @@ def _run_all(batch: _Batch, specs, run_id) -> tuple[VerifierRun, ...]:
         work.mkdir(mode=0o700)
         mark = gitcmd.marked(ATTEMPT_ENV, ctx.attempt_id) if ctx.attempt_id else nullcontext()
         with mark:
-            with unless_interrupted(partial(_remove_checkout, work, clone_id, ctx.account)):
+            # Kept on an interrupt for recovery's cwd sweep, except an account's checkout: its
+            # processes are ended by the account's kill, and cairnwork-verify never removes it.
+            remove = partial(_remove_checkout, work, clone_id, ctx.account)
+            with unless_interrupted(remove, keep=ctx.account is None):
                 if ctx.account is None:
                     checkout = create_attempt_clone(
                         ctx.repo, batch.candidate_commit, work, clone_id

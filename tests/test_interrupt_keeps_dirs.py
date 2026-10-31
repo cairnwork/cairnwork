@@ -1,8 +1,9 @@
 """#537: a run ended by KeyboardInterrupt or SystemExit kills its verifier's process group and
 keeps its directories: restart recovery ties a leftover process to the attempt by its working
 directory (proc_cwd.attempt_dirs lists only directories that exist) and removes them after its
-sweep. A normal return or an ordinary exception still removes them at once. Stand-ins only: no
-process is started or signalled here."""
+sweep. A normal return or an ordinary exception still removes them at once. Owner mode; a
+verifier account's checkout: test_interrupt_account_mode.py. Stand-ins only: no process is
+started or signalled here."""
 
 import io
 from pathlib import Path
