@@ -24,9 +24,11 @@ It runs as the run's own user (below). The owner fails the run (FORGED_BYTECODE)
 * a pytest-rewritten pyc (``-pytest-``) anywhere outside the checkout: the run sets
   PYTHONDONTWRITEBYTECODE, so an honest pytest writes none (in the checkout, the comparison has
   already shown each file to be the candidate's own committed content, judged as above);
-* any other regular file, the checkout included, that starts with this Python's magic number:
-  the run's Python may name bytecode otherwise (``BYTECODE_SUFFIXES``, ``cache_tag``, pytest's
-  ``PYC_TAIL``), and then no name says which source it stands for;
+* any other regular file outside the checkout (its .git included) that starts with this
+  Python's magic number: the run's Python may name bytecode otherwise (``BYTECODE_SUFFIXES``,
+  ``cache_tag``, pytest's ``PYC_TAIL``), and then no name says which source it stands for. In
+  the checkout such a file is the candidate's own committed content (the comparison shows it),
+  left to that comparison and to review, so a committed fixture that happens to start so passes;
 * a non-ASCII pyc name, an unreadable directory, more than ``MAX_ENTRIES`` entries, more than
   ``MAX_STATES`` walk steps, or a scan that fails.
 
@@ -49,8 +51,8 @@ or a zip archive on the path) can load its own ``helper.py`` or bytecode from HO
 this: that in-process import hijack is not claimed here or in pycache_guard; the report guard and
 the verifier account are the boundary. The same goes for the magic number: the run's Python can
 change it in-process too, and bytecode with neither a pyc-like name nor this magic number is not
-identified. An honest file that starts with this magic number under another name (a committed
-fixture, a temporary ``x.pyc.<n>``) fails the run.
+identified. An honest file outside the checkout that starts with this magic number under
+another name (a temporary ``x.pyc.<n>`` left by a killed write) fails the run.
 """
 
 from __future__ import annotations
@@ -177,16 +179,21 @@ def redirected_bytecode(
     def shown(index: int, rel: str) -> str:
         return _display(write_roots[index], rel, checkouts)
 
+    def committed(index: int, rel: str) -> bool:
+        path = os.path.join(roots[index], rel)
+        return _within(path, checkouts) is not None and _within(path, git_dirs) is None
+
     found: list[str] = []
     for index, rel in listing["pycs"]:
-        path, name = os.path.join(roots[index], rel), os.path.basename(rel)
-        committed = _within(path, checkouts) is not None and _within(path, git_dirs) is None
+        name = os.path.basename(rel)
         if not name.isascii():
             found.append(f"{shown(index, rel)} (non-ASCII name)")
-        elif "-pytest-" in name.lower() and not committed:
+        elif "-pytest-" in name.lower() and not committed(index, rel):
             found.append(f"{shown(index, rel)} (pytest-rewritten bytecode)")
     found.extend(
-        f"{shown(index, rel)} (bytecode not named .pyc)" for index, rel in listing["bytecode"]
+        f"{shown(index, rel)} (bytecode not named .pyc)"
+        for index, rel in listing["bytecode"]
+        if not committed(index, rel)
     )
     found.extend(_judged_hits(listing["hits"], roots, checkout, _target_dirs(targets)))
     found.extend(f"{shown(index, rel)} unreadable ({why})" for index, rel, why in listing["errors"])

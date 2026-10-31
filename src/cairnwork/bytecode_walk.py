@@ -16,9 +16,10 @@ comparison or realpath does not canonicalize (#289 review).
    directory, after the whole listing has opened every closed directory in the roots) is a
    directory. Every pyc-like name is reported, so is every other regular file that starts with
    this Python's magic number (the run's Python names bytecode by ``BYTECODE_SUFFIXES``,
-   ``sys.implementation.cache_tag`` and pytest's ``PYC_TAIL``, all of which the run can change),
-   so is every error, a symlink's included unless its target is missing, closed (by then only
-   outside the roots), looping or through a file (link_target).
+   ``sys.implementation.cache_tag`` and pytest's ``PYC_TAIL``, all of which the run can change;
+   the owner judges only those outside the checkout's committed files), so is every error, a
+   symlink's included unless its target is missing, closed (by then only outside the roots),
+   looping or through a file (link_target).
 2. **Graph.** When there is a pyc, the ancestors of the roots join as nodes (their entries are
    edges too, so /var -> /private/var counts; the step down towards each root is an edge even
    where an ancestor cannot be listed), and every node gets a ``..`` edge to the

@@ -89,10 +89,15 @@ def test_a_file_starting_with_the_magic_number_fails_wherever_it_is(run, where):
     assert scan(checkout, run_dir) == (f"run/{where} (bytecode not named .pyc)",)
 
 
-def test_committed_bytecode_under_another_name_fails(run):
+def test_a_committed_data_file_starting_with_the_magic_number_passes(run):
+    """In the checkout the comparison shows such a file is the candidate's own committed
+    content; its .git is not compared, so there the content still counts."""
     checkout, run_dir = run
-    (checkout / "src" / "blob.bin").write_bytes(MAGIC + bytes(12))
-    assert scan(checkout, run_dir) == ("src/blob.bin (bytecode not named .pyc)",)
+    (checkout / "tests" / "data").mkdir()
+    (checkout / "tests" / "data" / "header.bin").write_bytes(MAGIC + b"fixture record\n")
+    assert scan(checkout, run_dir) == ()
+    (checkout / ".git" / "header.bin").write_bytes(MAGIC + b"fixture record\n")
+    assert scan(checkout, run_dir) == (".git/header.bin (bytecode not named .pyc)",)
 
 
 def test_other_files_closed_files_and_fifos_pass(run):
