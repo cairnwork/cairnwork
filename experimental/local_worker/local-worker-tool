@@ -445,8 +445,9 @@ real_git() {
 # run's when its ENVIRONMENT carries TAG_ENTRY (CAIRNWORK_LOCAL_RUN_TAG=<run_root>: the whole
 # canonical path, so runs directories of two suites on one host never share it) or its cwd is
 # inside the run root. ps -E prints the arguments and then the environment on one line, so a
-# line with the entry anywhere is only a candidate (env_has_tag): a command line that merely
-# names the entry (a grep for it, another run's test code) is not this run's.
+# line with the entry anywhere is only a candidate (env_has_tag). The arguments column is the
+# process's own to rewrite, so the entry there (a grep for it, another run's test code, or
+# anything a process put in that column) cannot be told apart: never killed, sweep not clean.
 # Not found: a process that both clears its environment and leaves the run root; it is still
 # inside this run's Seatbelt profile, so the Owner must sweep before reading the checkout back
 # and treat the checkout as untrusted. Taken for this run's: a process of the same uid that put
@@ -469,14 +470,18 @@ sweep_pids() {
 
 # "k <pid>" when pid $1 has TAG_ENTRY in its environment. Its ps line without -E is its arguments
 # alone, and the -E line starts with exactly that; the rest is the environment. A process that
-# exec'd between the two reads (or a reused pid) does not line up, and a live process ps cannot
-# read cannot be told either: "u <pid>" for both. A process that is gone prints nothing.
+# exec'd between the two reads (or a reused pid) does not line up, an empty arguments column
+# proves nothing, the entry in the arguments column cannot be told apart (see sweep_pids), and a
+# live process ps cannot read cannot be told either: "u <pid>" for all. Gone: nothing.
 env_has_tag() {
   if args_line=$(/bin/ps -ww -p "$1" -o command= 2>/dev/null) &&
     full_line=$(/bin/ps -E -ww -p "$1" -o command= 2>/dev/null); then
     case "$full_line" in
       "$args_line"*) ;;
       *) printf 'u %s\n' "$1"; return 0 ;;
+    esac
+    case " $args_line " in
+      "  " | *" $TAG_ENTRY "*) printf 'u %s\n' "$1"; return 0 ;;
     esac
     case " ${full_line#"$args_line"} " in
       *" $TAG_ENTRY "*) printf 'k %s\n' "$1" ;;

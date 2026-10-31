@@ -4,7 +4,8 @@ Two suites on one host each make a runs directory whose run root is named local_
 Before #533 the sweep matched that name, so one suite's sweep killed the other's processes (F3).
 It also matched the tag entry anywhere on a ps -E line, arguments included, so a process outside
 every run whose command line names the entry was killed too (F4). Now the entry carries the whole
-run root and must be in the process's environment.
+run root and must be in the process's environment; in the arguments column it is never killed and
+the sweep is not clean.
 """
 
 import os
@@ -20,6 +21,15 @@ TAG_VAR = "CAIRNWORK_LOCAL_RUN_TAG"
 CLEAN = b"LOCAL_WORKER_SWEEP clean\n"
 SLEEPER = """
 import os, sys, time
+if sys.argv[1:2] == ["blank"]:
+    import ctypes  # clear every argument string in place, before the pid file says it is up
+    libc = ctypes.CDLL(None)
+    libc._NSGetArgv.restype = ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))
+    libc._NSGetArgc.restype = ctypes.POINTER(ctypes.c_int)
+    argv = libc._NSGetArgv().contents
+    for i in range(libc._NSGetArgc().contents.value):
+        ctypes.memset(argv[i], 0, len(ctypes.string_at(argv[i])))
+    os.chdir("/")  # only its environment ties it to its run
 tmp = os.environ["TMPDIR"]
 with open(os.path.join(tmp, "pid.part"), "w") as fh:
     fh.write(str(os.getpid()))
@@ -134,9 +144,26 @@ def test_a_process_whose_arguments_keep_changing_makes_the_sweep_unclean_and_is_
     assert _gone(pid)
 
 
+@pytest.mark.sandbox
+def test_a_process_of_the_run_with_blank_arguments_makes_the_sweep_unclean(tmp_path):
+    """It left the run root and cleared its arguments: the sweep cannot tell it apart, so it is not
+    stopped and the sweep is not clean (it must never come out clean while the process lives)."""
+    runs = make_runs(tmp_path)
+    pid = _start_sleeper(runs, "blank", *["x"] * 40)  # more arguments than environment entries
+    try:
+        out = run(runs, "sweep", str(runs / TAG)).stdout
+        assert out.startswith(b"LOCAL_WORKER_SWEEP unclean"), out
+        assert str(pid).encode() in out.split()[2:], out
+        assert _alive(pid), "the sweep stopped a process it could not tell"
+    finally:
+        os.kill(pid, 9)
+    assert _gone(pid)
+
+
 @pytest.mark.skipif(sys.platform != "darwin", reason="the sweep reads ps -E and lsof as on macOS")
-def test_a_command_line_that_names_the_tag_entry_is_not_swept(tmp_path):
-    """#533 F4: the entry in a process's arguments, not its environment, is not this run's."""
+def test_a_command_line_that_names_the_tag_entry_makes_the_sweep_unclean(tmp_path):
+    """#533 F4: the entry in a process's arguments, not its environment: not killed, and the sweep
+    is not clean (the arguments column cannot be told apart from this run's own)."""
     runs = make_runs(tmp_path)
     root = runs / TAG
     words = [f"{TAG_VAR}={TAG}", f"{TAG_VAR}={root}"]  # the entry as it was and as it is now
@@ -160,7 +187,9 @@ def test_a_command_line_that_names_the_tag_entry_is_not_swept(tmp_path):
                 check=False,
             ).stdout
             time.sleep(0.05)
-        assert run(runs, "sweep", str(root)).stdout == CLEAN
+        out = run(runs, "sweep", str(root)).stdout
+        assert out.startswith(b"LOCAL_WORKER_SWEEP unclean"), out
+        assert str(other.pid).encode() in out.split()[2:], out
         assert other.poll() is None, "the sweep stopped a process outside the run"
     finally:
         other.kill()
