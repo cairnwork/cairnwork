@@ -229,3 +229,21 @@ def test_a_base_probe_whose_log_went_over_the_cap_is_degraded_like_an_oversized_
     monkeypatch.setattr(p2p, "run_verifiers", lambda *a, **k: (replace(run, log_too_big=True),))
     got = p2p._probe(TASK, ("tests/test_a.py",), RESULT, context(TASK, tmp_path), 30)
     assert got == (None, "base-probe-log-over-cap") and got[1] not in p2p.UNCLEAN
+
+
+def test_a_log_over_the_cap_twice_degrades_once_then_is_uncomparable(monkeypatch, tmp_path):
+    # #481, through the real _probe: whole-suite over the log cap, module-dir over it again
+    run = make_run(True, outcomes={"tests/test_calc.py::test_a": "passed"}, log_dir=tmp_path)
+    probed = []
+
+    def fake_run_verifiers(ctx, commit, specs, run_id, **kwargs):
+        probed.append(specs[0].targets)
+        return (replace(run, log_too_big=True),)
+
+    existing = ("tests/nested/test_big.py", "tests/test_calc.py")
+    monkeypatch.setattr(p2p, "_base_tests", lambda task, exclude: existing)
+    monkeypatch.setattr(p2p, "run_verifiers", fake_run_verifiers)
+    with pytest.raises(p2p.BaseUncomparable) as raised:
+        p2p.plan_p2p(TASK, (), (), "whole-suite", 30, RESULT, context(TASK, tmp_path))
+    assert uncomparable(raised.value) and probed == [existing, ("tests/test_calc.py",)]
+    assert "base-probe-log-over-cap" in str(raised.value), str(raised.value)
