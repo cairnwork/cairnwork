@@ -14,9 +14,12 @@ comparison or realpath does not canonicalize (#289 review).
    error. Each directory becomes a node with its entries as edges:
    subdirectories, and symlinks whose target (resolved by the kernel relative to the link's own
    directory, after the whole listing has opened every closed directory in the roots) is a
-   directory. Every pyc-like name is reported, so is every error, a symlink's included unless
-   its target is missing, closed (by then only outside the roots), looping or through a file
-   (link_target).
+   directory. Every pyc-like name is reported, so is every other regular file that starts with
+   this Python's magic number (the run's Python names bytecode by ``BYTECODE_SUFFIXES``,
+   ``sys.implementation.cache_tag`` and pytest's ``PYC_TAIL``, all of which the run can change;
+   the owner judges only those outside the checkout's committed files), so is every error, a
+   symlink's included unless its target is missing, closed (by then only outside the roots),
+   looping or through a file (link_target).
 2. **Graph.** When there is a pyc, the ancestors of the roots join as nodes (their entries are
    edges too, so /var -> /private/var counts; the step down towards each root is an edge even
    where an ancestor cannot be listed), and every node gets a ``..`` edge to the
@@ -29,13 +32,15 @@ comparison or realpath does not canonicalize (#289 review).
    is reached with D, each existing source in D the pyc's name can stand for (a stem cut at a dot
    plus ``.py``, folded) is a hit, and when D was entered as ``__pycache__`` from the directory
    P's side stood in (no prefix: P = /), the sources of that directory too (the legacy layout,
-   which Python never reads at ``<P>/<D>/__pycache__`` under another prefix).
+   which Python never reads at ``<P>/<D>/__pycache__`` under another prefix). Only the first
+   spelling of D reached is kept, so one the kernel refuses as too long is an error, not a miss.
 
 Not modeled: a lookup that leaves the run's directories and their ancestors for another
 directory and comes back into them by ``..`` or a system link (the run cannot write there).
 """
 
 import errno
+import importlib.util
 import json
 import os
 import stat
@@ -45,6 +50,7 @@ from collections import deque
 
 MAX_PATH = 4096  # Linux PATH_MAX (macOS: 1024): no longer path can be opened
 NOFOLLOW = {"follow_symlinks": False} if os.chmod in os.supports_follow_symlinks else {}
+MAGIC = importlib.util.MAGIC_NUMBER
 
 
 def fold(name):
@@ -61,11 +67,26 @@ def ident(info):
     return (info.st_dev, info.st_ino)
 
 
+def bytecode(name, fd):
+    """Whether the regular file ``name`` in directory ``fd`` starts with this Python's magic
+    number. A file closed to this user is not read: like one removed before the run ended, it is
+    the known gap of bytecode_roots.py."""
+    try:
+        handle = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+    except PermissionError:
+        return False
+    try:
+        return stat.S_ISREG(os.fstat(handle).st_mode) and os.read(handle, len(MAGIC)) == MAGIC
+    finally:
+        os.close(handle)
+
+
 def opened(path):
     """The identity of directory ``path`` (never a symlink), opened first if closed to its owner,
     and its entries as (name, kind, identity or None, error or None), kind "dir" (identity set),
-    "link" or "other". Listed through a descriptor, so each entry is resolved relative to its own
-    directory, not by the listing's (possibly long) spelling. A directory that stays unlistable
+    "link", "bytecode" (a file starting as bytecode, not named like it) or "other". Listed
+    through a descriptor, so each entry is resolved relative to its own directory, not by the
+    listing's (possibly long) spelling. A directory that stays unlistable
     or unsearchable after the mode fix (a macOS ACL survives it) is an error, so every directory
     of the roots is both, or already a finding."""
     info = os.lstat(path)
@@ -89,6 +110,12 @@ def opened(path):
                         found.append(
                             (entry.name, "dir", ident(entry.stat(follow_symlinks=False)), None)
                         )
+                    elif (
+                        entry.is_file(follow_symlinks=False)
+                        and not pyc_like(entry.name)
+                        and bytecode(entry.name, fd)
+                    ):
+                        found.append((entry.name, "bytecode", None, None))
                     else:
                         found.append((entry.name, "other", None, None))
                 except OSError as exc:
@@ -143,14 +170,29 @@ def resolve_links(links, edges, out):
 
 
 def dir_ident(path):
-    """The identity of the directory ``path`` resolves to, or None (not one, or not reachable)."""
+    """The identity of the directory ``path`` resolves to, or None (not one, or not reachable).
+    A spelling too long to resolve is raised: a shorter one of the same place may be usable."""
     if len(path) >= MAX_PATH:
-        return None
+        raise OSError(errno.ENAMETOOLONG, os.strerror(errno.ENAMETOOLONG))
     try:
         info = os.stat(path)
-    except OSError:
+    except OSError as exc:
+        if exc.errno == errno.ENAMETOOLONG:
+            raise
         return None  # missing, a loop, or closed to this user: the run's Python cannot use it
     return ident(info) if stat.S_ISDIR(info.st_mode) else None
+
+
+def present(path):
+    """Whether ``path`` exists as the run's Python would see it. Missing, through a file, closed
+    or a loop is no; any other error (a spelling too long) is raised."""
+    try:
+        os.stat(path)
+    except OSError as exc:
+        if exc.errno in (errno.ENOENT, errno.ENOTDIR, errno.EACCES, errno.ELOOP):
+            return False
+        raise
+    return True
 
 
 def list_roots(roots, limit, out):
@@ -177,6 +219,8 @@ def list_roots(roots, limit, out):
             if pyc_like(name):
                 out["pycs"].append([index, sub])
                 pycs.setdefault(here, []).append((index, sub, name))
+            elif kind == "bytecode":
+                out["bytecode"].append([index, sub])
             if error is not None:
                 out["errors"].append([index, sub, error])
             elif kind == "link":
@@ -276,7 +320,7 @@ class Side:
             candidates = [stem[:i] + ".py" for i, char in enumerate(stem) if char == "."]
         else:
             candidates = [name for key in wanted for name in folded.get(key, [])]
-        return sorted(n for n in set(candidates) if os.path.exists(os.path.join(path, n)))
+        return sorted(n for n in set(candidates) if present(os.path.join(path, n)))
 
 
 def walk(nodes, edges, pycs, listed, max_states, out):
@@ -290,14 +334,24 @@ def walk(nodes, edges, pycs, listed, max_states, out):
         node, path, here, before = states.popleft()
         for index, rel, name in pycs.get(node, ()):
             for d_path, d_id in ((path, here), *([before] if before else [])):
-                names = side.sources(d_path, d_id, name)
+                try:
+                    names = side.sources(d_path, d_id, name)
+                except OSError as exc:
+                    out["errors"].append([index, rel, exc.strerror or str(exc)])
+                    continue
                 if names:
                     where = listed.get(d_id, (-1, ""))
                     hits.add((index, rel, d_path, *where, tuple(names)))
         for name, child in edges.get(node, ()):
             if child not in useful:
                 continue
-            for entry, step, target in side.matches(path, here, name):
+            try:
+                matched = list(side.matches(path, here, name))
+            except OSError as exc:
+                where = listed.get(node) or listed.get(here) or (0, "")
+                out["errors"].append([*where, exc.strerror or str(exc)])
+                continue
+            for entry, step, target in matched:
                 # the legacy layout is read only without a prefix: where P's side and D are one
                 # directory (P = /), not at <P>/<D>/__pycache__ under any other prefix
                 pycache = fold(entry) == fold("__pycache__") and node == here
@@ -315,7 +369,7 @@ def walk(nodes, edges, pycs, listed, max_states, out):
 def main(argv):
     spec = json.loads(argv[1])
     roots = spec["roots"]
-    out = {"pycs": [], "hits": [], "errors": [], "over": False, "steps_over": False}
+    out = {"pycs": [], "bytecode": [], "hits": [], "errors": [], "over": False, "steps_over": False}
     nodes, edges, pycs, listed = list_roots(roots, spec["limit"], out)
     if pycs and not out["over"]:
         add_ancestors(roots, nodes, edges)
