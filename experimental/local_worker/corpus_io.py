@@ -111,6 +111,10 @@ def harness_version() -> str:
 # repository's copy (verify_canary require_current). TRANSITION ONLY: remove this constant, and
 # the branch that reads it, once the wrapper with digest is installed (review of PR #263, m2).
 PREVIOUS_WRAPPER_SHA256 = "51602299d211a4ce6f2b2a731c15b819657b22ee3d65db14172fb0a5029262ae"
+# The installed wrapper before #476 added pytest-ro (the copy at 9d8e358): every other action is
+# byte for byte this copy's, so it serves every run, with or without a start allow-list; PAUSE
+# probes pytest-ro itself and stops (fail closed) where it is missing. TRANSITION ONLY, as above.
+PRE_PYTEST_RO_WRAPPER_SHA256 = "756f2093701fab5d4e74f477a16877f1c1cb00f858e5e12939cdb1e47aa9aaaa"
 
 
 def _wrapper_sha(path: Path) -> str | None:
@@ -173,6 +177,7 @@ def verify_canary(
         if want is None or report.get(key) != want:
             raise InputRefused(f"canary report {key}={report.get(key)!r}, expected {want!r}")
     previous = not require_current and installed == PREVIOUS_WRAPPER_SHA256
+    previous = previous or installed == PRE_PYTEST_RO_WRAPPER_SHA256
     if installed != _wrapper_sha(REPO_WRAPPER) and not previous:
         raise InputRefused("installed wrapper differs from this repository's local-worker-tool")
     finished = _finished_at(report.get("finished_at"))

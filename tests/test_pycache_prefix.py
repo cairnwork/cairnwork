@@ -17,6 +17,7 @@ import pytest
 from conftest import commit_change, git
 
 from cairnwork.verifiers import parse_verifier, run_verifiers
+from cairnwork.verify_context import VerifyContext
 
 pytestmark = pytest.mark.sandbox
 # pytest's exit code once the forgery is planted: 0 where it is loaded (bwrap), 1 under Seatbelt,
@@ -73,7 +74,9 @@ def verify(repo, tmp_path, files, *targets, run_id="r1"):
         parse_verifier(f"v{i}", ["python3", "-m", "pytest", target])
         for i, target in enumerate(targets)
     )
-    return run_verifiers(repo, head, specs, tmp_path / "runs", run_id, python=sys.executable)
+    return run_verifiers(
+        VerifyContext(repo, tmp_path / "runs", python=sys.executable), head, specs, run_id
+    )
 
 
 def test_py_compile_no_longer_changes_the_checkout(project, tmp_path):
@@ -128,7 +131,9 @@ def test_a_forged_pytest_pyc_for_a_protected_test_fails_the_run(project, tmp_pat
     }
     head = commit_change(project, files)
     spec = parse_verifier("v", ["python3", "-m", "pytest", "tests/test_a.py", "tests/test_z.py"])
-    (run,) = run_verifiers(project, head, (spec,), tmp_path / "runs", "r1", python=sys.executable)
+    (run,) = run_verifiers(
+        VerifyContext(project, tmp_path / "runs", python=sys.executable), head, (spec,), "r1"
+    )
     assert run.returncode == PLANTED_RC, run.log_path.read_text()
     assert not run.observation.passed and not run.plain_failure
     assert "FORGED_BYTECODE" in run.why and "tests/test_z" in run.why, run.why
@@ -152,7 +157,9 @@ def test_an_upper_case_pytest_pyc_name_fails_the_run_and_is_bound(project, tmp_p
     }
     head = commit_change(project, files)
     spec = parse_verifier("v", ["python3", "-m", "pytest", "tests/test_a.py", "tests/test_z.py"])
-    (run,) = run_verifiers(project, head, (spec,), tmp_path / "runs", "r1", python=sys.executable)
+    (run,) = run_verifiers(
+        VerifyContext(project, tmp_path / "runs", python=sys.executable), head, (spec,), "r1"
+    )
     if os.path.exists(str(tmp_path).upper()):
         assert run.returncode == PLANTED_RC, run.log_path.read_text()
     assert not run.observation.passed
@@ -181,7 +188,9 @@ def test_a_long_s_spelling_fails_the_run(project, tmp_path, pytest_pyc):
     }
     head = commit_change(project, files)
     spec = parse_verifier("v", ["python3", "-m", "pytest", "tests/test_a.py", "tests/test_z.py"])
-    (run,) = run_verifiers(project, head, (spec,), tmp_path / "runs", "r1", python=sys.executable)
+    (run,) = run_verifiers(
+        VerifyContext(project, tmp_path / "runs", python=sys.executable), head, (spec,), "r1"
+    )
     if os.path.exists(str(tmp_path).replace("s", "\u017f")):
         assert run.returncode == PLANTED_RC, run.log_path.read_text()
     assert not run.observation.passed
@@ -199,7 +208,9 @@ def test_a_forged_plain_pyc_for_a_protected_helper_fails_the_run(project, tmp_pa
     }
     head = commit_change(project, files)
     spec = parse_verifier("v", ["python3", "-m", "pytest", "tests/test_a.py", "tests/test_z.py"])
-    (run,) = run_verifiers(project, head, (spec,), tmp_path / "runs", "r1", python=sys.executable)
+    (run,) = run_verifiers(
+        VerifyContext(project, tmp_path / "runs", python=sys.executable), head, (spec,), "r1"
+    )
     assert run.returncode == PLANTED_RC, run.log_path.read_text()
     assert not run.observation.passed
     assert "FORGED_BYTECODE" in run.why and "tests/helper" in run.why, run.why
@@ -219,7 +230,9 @@ def test_a_case_variant_cache_path_for_a_protected_helper_fails_the_run(project,
     }
     head = commit_change(project, files)
     spec = parse_verifier("v", ["python3", "-m", "pytest", "tests/test_a.py", "tests/test_z.py"])
-    (run,) = run_verifiers(project, head, (spec,), tmp_path / "runs", "r1", python=sys.executable)
+    (run,) = run_verifiers(
+        VerifyContext(project, tmp_path / "runs", python=sys.executable), head, (spec,), "r1"
+    )
     if os.path.exists(str(tmp_path).upper()):
         assert run.returncode == PLANTED_RC, run.log_path.read_text()
     assert not run.observation.passed

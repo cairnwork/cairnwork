@@ -5,15 +5,19 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from cairnwork import p2p
+from cairnwork import deferred_tests, p2p
 from cairnwork.core_request import VerifierObservation
 from cairnwork.deferred_tests import BaseUncomparable
+from cairnwork.gitcmd import GitCommandError
 from cairnwork.p2p import P2PPlan, P2PRejected, plan_p2p, run_plan
+from cairnwork.p2p_nodes import changed_tests
 from cairnwork.verifiers import VerifierRun, VerifierSpec
+from cairnwork.verify_context import VerifyContext
 
 TASK = SimpleNamespace(
     repo="/repo",
@@ -23,7 +27,11 @@ TASK = SimpleNamespace(
     allowed_files=("src/pkg/a/b.py",),
 )
 RESULT = SimpleNamespace(attempt_id="att", logs=[])  # #331: an unusable probe adds a line
-VERIFYING = (None, None)
+
+
+def context(run_root) -> VerifyContext:
+    """The context the pipeline builds for TASK's attempt RESULT."""
+    return VerifyContext.of(TASK, run_root, RESULT.attempt_id)
 
 
 def plan(monkeypatch, existing, probe_results, mode="whole-suite"):
@@ -32,14 +40,14 @@ def plan(monkeypatch, existing, probe_results, mode="whole-suite"):
     probed: list[tuple[str, ...]] = []
     results = iter(probe_results)
 
-    def fake_probe(task, files, run_root, result, verifying, budget):
+    def fake_probe(task, files, result, ctx, budget):
         probed.append(files)
         return next(results)
 
     monkeypatch.setattr(p2p, "_base_tests", lambda task, exclude: existing)
     monkeypatch.setattr(p2p, "_probe", fake_probe)
     try:
-        return plan_p2p(TASK, (), (), mode, 30, "/runs", RESULT, VERIFYING), probed
+        return plan_p2p(TASK, (), (), mode, 30, RESULT, context("/runs")), probed
     except (P2PRejected, BaseUncomparable) as exc:
         return exc, probed
 
@@ -157,7 +165,7 @@ def test_an_unclean_base_probe_is_unusable(monkeypatch, tmp_path, survivors, mut
         return (replace(run, survivors=survivors, mutated=mutated),)
 
     monkeypatch.setattr(p2p, "run_verifiers", fake_run_verifiers)
-    assert p2p._probe(TASK, ("tests/test_a.py",), tmp_path, RESULT, VERIFYING, 30) == (None, why)
+    assert p2p._probe(TASK, ("tests/test_a.py",), RESULT, context(tmp_path), 30) == (None, why)
 
 
 @pytest.mark.parametrize("why", p2p.UNCLEAN)
@@ -203,7 +211,7 @@ def test_a_clean_base_probe_returns_its_outcomes(monkeypatch, tmp_path):
     outcomes = {"tests/test_a.py::test_a": "passed"}
     run = make_run(True, outcomes=outcomes, log_dir=tmp_path)
     monkeypatch.setattr(p2p, "run_verifiers", lambda *a, **k: (run,))
-    assert p2p._probe(TASK, ("tests/test_a.py",), tmp_path, RESULT, VERIFYING, 30) == (outcomes, "")
+    assert p2p._probe(TASK, ("tests/test_a.py",), RESULT, context(tmp_path), 30) == (outcomes, "")
 
 
 # --- the candidate run: timeout and the flaky rule ------------------------------------------
@@ -224,8 +232,9 @@ def make_run(passed, *, timed_out=False, outcomes=None, log_dir, plain=None, mut
     )
 
 
-def candidate(monkeypatch, tmp_path, runs):
-    """run_plan with run_verifiers returning ``runs`` in turn; returns (result, notes seen)."""
+def candidate(monkeypatch, tmp_path, runs, nodes=()):
+    """run_plan with run_verifiers returning ``runs`` in turn and the plan binding ``nodes``;
+    returns (result, notes seen)."""
     notes: list[str] = []
     queue = iter(runs)
 
@@ -236,8 +245,42 @@ def candidate(monkeypatch, tmp_path, runs):
     monkeypatch.setattr(p2p, "run_verifiers", fake_run_verifiers)
     rule = {"configured": "whole-suite", "applied": "whole-suite", "degraded": "", "targets": 1}
     spec = VerifierSpec("p2p-whole-suite", ("tests/test_a.py",))
-    got = run_plan(P2PPlan(rule, spec, 30), TASK, "c" * 40, tmp_path, RESULT, VERIFYING)
+    got = run_plan(P2PPlan(rule, spec, 30, nodes), TASK, "c" * 40, RESULT, context(tmp_path))
     return got, notes
+
+
+BOUND = ("tests/test_a.py::t[1]", "tests/test_a.py::t[2]")
+
+
+def test_a_passed_run_without_a_bound_node_id_is_not_a_pass_and_not_re_run(monkeypatch, tmp_path):
+    first = make_run(True, outcomes={BOUND[0]: "passed"}, log_dir=tmp_path / "1")
+    (runs, rule), notes = candidate(monkeypatch, tmp_path, [first], BOUND)
+    assert len(notes) == 1 and not runs[0].observation.passed and "rerun" not in rule
+    assert runs[0].observation.artifact_hash == first.observation.artifact_hash
+    assert rule["missing"] == [BOUND[1]] and "did not run" in runs[0].why
+    assert "missing" not in json.loads(notes[0])  # the note is hashed before the run
+
+
+def test_a_run_with_every_bound_node_id_and_more_passes(monkeypatch, tmp_path):
+    outcomes = dict.fromkeys((*BOUND, "tests/test_a.py::t[3]"), "passed")
+    first = make_run(True, outcomes=outcomes, log_dir=tmp_path / "1")
+    (runs, rule), _ = candidate(monkeypatch, tmp_path, [first], BOUND)
+    assert runs == (first,) and "missing" not in rule
+
+
+def test_a_bound_candidate_timeout_is_handled_as_before(monkeypatch, tmp_path):
+    # the budget is per run, as before: a timeout is not a pass, not re-run, nothing "missing"
+    first = make_run(False, timed_out=True, log_dir=tmp_path / "1")
+    (runs, rule), notes = candidate(monkeypatch, tmp_path, [first], BOUND)
+    assert runs == (first,) and len(notes) == 1 and "missing" not in rule and "rerun" not in rule
+
+
+def test_a_re_run_without_a_bound_node_id_blocks(monkeypatch, tmp_path):
+    first = make_run(False, outcomes={BOUND[0]: "failed"}, log_dir=tmp_path / "1")
+    second = make_run(True, outcomes={BOUND[0]: "passed"}, log_dir=tmp_path / "2")
+    (runs, rule), _ = candidate(monkeypatch, tmp_path, [first, second], BOUND)
+    assert not runs[0].observation.passed and rule["p2p_rerun_passed"] is False
+    assert rule["missing"] == [BOUND[1]]
 
 
 def test_a_passing_candidate_run_is_not_re_run(monkeypatch, tmp_path):
@@ -319,7 +362,7 @@ def test_a_re_run_that_times_out_blocks(monkeypatch, tmp_path):
 
 def test_no_plan_spec_runs_nothing(tmp_path):
     rule = {"applied": "off"}
-    assert run_plan(P2PPlan(rule, None), TASK, "c" * 40, tmp_path, RESULT, VERIFYING) == (
+    assert run_plan(P2PPlan(rule, None), TASK, "c" * 40, RESULT, context(tmp_path)) == (
         (),
         rule,
     )
@@ -329,3 +372,21 @@ def test_no_plan_spec_runs_nothing(tmp_path):
 def test_mode_off_never_probes(monkeypatch, mode):
     got, probed = plan(monkeypatch, ("tests/test_a.py",), [], mode=mode)
     assert isinstance(got, P2PPlan) and got.spec is None and probed == []
+
+
+@pytest.mark.parametrize("unreadable", ["base", "test commit"])
+def test_a_changed_test_file_that_cannot_be_read_is_refused_not_dropped(monkeypatch, unreadable):
+    """The file exists on both commits (test_paths: A or M, and on the base): a failed read is
+    a refusal, never an empty file whose base tests would all count as changed."""
+    base, test_commit = "b" * 40, "c" * 40
+    gone = base if unreadable == "base" else test_commit
+
+    def fake_git(repo, *args):
+        if args[1].startswith(gone):
+            raise GitCommandError("git show failed")
+        return "def test_a():\n    assert True\n"
+
+    monkeypatch.setattr(deferred_tests, "run_git", fake_git)
+    with pytest.raises(deferred_tests.TestCommitRejected) as caught:
+        changed_tests(Path("/repo"), base, test_commit, ("tests/test_a.py",))
+    assert caught.value.code == "TEST_COMMIT_UNREADABLE"

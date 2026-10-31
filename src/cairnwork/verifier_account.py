@@ -200,9 +200,10 @@ class VerifierAccount:
         procs = self._list(deadline, attempts)
         return -1 if procs is None else len(procs)
 
-    def _real_paths(self, pids: list[int]) -> dict[int, str] | None:
-        """Map each pid to its real executable path (proc_pidpath), run AS THE ACCOUNT so it may
-        query its own processes. None if the helper could not run (treated as "cannot tell")."""
+    def _real_paths(self, pids: list[int]) -> dict[int, verifier_escape.Seen] | None:
+        """Map each pid to (kernel start time, real executable path), run AS THE ACCOUNT so it may
+        query its own processes (verifier_escape.PIDPATH_HELPER). A pid with no record is counted.
+        None if the helper could not run (treated as "cannot tell")."""
         if not pids:
             return {}
         argv = self.wrap(
@@ -224,27 +225,18 @@ class VerifierAccount:
         """Processes the account runs that are NOT a launchd system daemon (-1: cannot tell).
         A daemon is exempt only when its real executable is allow-listed, its parent is launchd
         (ppid 1) and it is Apple-signed; anything else — a candidate's leftover process, however it
-        named itself — is counted. If the list or the real paths cannot be read, the count is
-        unknown (fail closed), never zero."""
-        procs = self._list(deadline, attempts)
-        if procs is None:
-            return -1
-        # Only a launchd child (ppid 1) can be an exempt daemon, and proc_pidpath is macOS-only, so
-        # resolve real paths (a separate probe, as the account) ONLY for those pids, and not at all
-        # off Darwin or when none have ppid 1 — every other process simply counts.
-        launchd = [pid for pid, ppid in procs if ppid == 1]
-        if not launchd or sys.platform != "darwin":
-            return len(procs)
-        real = self._real_paths(launchd)
-        if real is None:
-            return -1
-        exempt = sum(1 for pid in launchd if verifier_escape.is_exempt(real.get(pid), 1))
-        return len(procs) - exempt
+        named itself — is counted. A zero that rests on an exemption holds only if a later list
+        and a second helper call show the same processes, by pid and kernel start time (see
+        verifier_escape). If the list or the real paths cannot be read, the count is unknown (fail
+        closed), never zero."""
+        return verifier_escape.escaped_count(
+            lambda: self._list(deadline, attempts), self._real_paths, sys.platform == "darwin"
+        )
 
     def reap(self) -> int:
         """Kill everything the account runs; return how many escaped processes were running.
-        The list is read once before the kill (no retry while a survivor can hide). An unknown
-        count is one more, so "cannot tell" is never "nothing escaped"."""
+        Before the kill a failed ps is not retried (that gives a survivor time to hide). An
+        unknown count is one more, so "cannot tell" is never "nothing escaped"."""
         deadline = time.monotonic() + PROBE_DEADLINE_SECONDS
         try:
             before = self._escaped_count(deadline, attempts=1)

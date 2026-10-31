@@ -23,6 +23,7 @@ XDIST_GROUPS = {
         "test_local_worker_wrapper.py",
         "test_local_worker_write_scope.py",
         "test_local_worker_write_scope_links.py",
+        "test_pause_guard.py",
     ),
 }
 XDIST_GROUP_OF = {name: group for group, names in XDIST_GROUPS.items() for name in names}

@@ -24,6 +24,7 @@ from test_pycache_prefix import CONFTEST, FORGE, PLANTED_RC
 
 from cairnwork.verifier_account import VerifierAccount
 from cairnwork.verifiers import parse_verifier, run_verifiers
+from cairnwork.verify_context import VerifyContext
 
 pytestmark = pytest.mark.sandbox
 
@@ -55,7 +56,9 @@ def run_one(repo, tmp_path, files, *targets, account=None):
     else:
         root, python = account.run_root, None
     run_id = "r" + os.urandom(6).hex()
-    (run,) = run_verifiers(repo, head, (spec,), root, run_id, python=python, account=account)
+    (run,) = run_verifiers(
+        VerifyContext(repo, root, python=python, account=account), head, (spec,), run_id
+    )
     return run
 
 

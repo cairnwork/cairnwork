@@ -74,42 +74,21 @@ def test_verifiers_run_all_git_marking(project, tmp_path, monkeypatch):
     head = commit_change(project, {"tests/test_a.py": "def test_ok(): pass\n"})
 
     from cairnwork import pytest_config
-    from cairnwork.verifiers import _run_all
+    from cairnwork.verifiers import _Batch, _run_all
+    from cairnwork.verify_context import VerifyContext
 
     settings = pytest_config.base_settings(project, None)
 
     # When attempt_id is empty, no git commands carry marker
     recorded_attempts.clear()
-    _run_all(
-        project,
-        head,
-        (spec,),
-        tmp_path / "runs1",
-        "r1",
-        sys.executable,
-        60,
-        "",
-        None,
-        settings,
-        "",
-    )
+    ctx = VerifyContext(project, tmp_path / "runs1", attempt_id="", account=None)
+    _run_all(_Batch(ctx, sys.executable, head, 60, settings, ""), (spec,), "r1")
     assert recorded_attempts, "git must be called during checkout"
     assert all(a is None for a in recorded_attempts), "attempt_id='' must not set mark"
 
     # When attempt_id is non-empty, every git command during checkout & removal has marker
     recorded_attempts.clear()
-    _run_all(
-        project,
-        head,
-        (spec,),
-        tmp_path / "runs2",
-        "r2",
-        sys.executable,
-        60,
-        "att123",
-        None,
-        settings,
-        "",
-    )
+    ctx = VerifyContext(project, tmp_path / "runs2", attempt_id="att123", account=None)
+    _run_all(_Batch(ctx, sys.executable, head, 60, settings, ""), (spec,), "r2")
     assert recorded_attempts, "git must be called during checkout"
     assert all(a == "att123" for a in recorded_attempts), "all git calls must carry attempt marker"
