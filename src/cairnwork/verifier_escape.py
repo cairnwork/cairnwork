@@ -57,6 +57,8 @@ libc.proc_pidpath.restype = ctypes.c_int
 def start(pid):
     info = Info()
     n = libc.proc_pidinfo(pid, 3, 0, ctypes.byref(info), ctypes.sizeof(info))  # PROC_PIDTBSDINFO
+    # proc_pidinfo returns the bytes it filled: anything short of the whole struct is no answer.
+    # tv_usec is below one million in a valid timeval; more would not print as six digits.
     if n != ctypes.sizeof(info) or info.pbi_pid != pid or info.pbi_start_tvusec > 999999:
         return None
     return "%d.%06d" % (info.pbi_start_tvsec, info.pbi_start_tvusec)

@@ -264,6 +264,20 @@ def test_a_confirmation_with_another_path_or_no_record_is_checked_again(monkeypa
         assert len(asked) == 3, confirm
 
 
+def test_one_exempt_pid_with_a_new_start_time_is_enough_to_check_again(monkeypatch):
+    # Two exempt daemons; at the confirmation pid 100 is unchanged but pid 105 has a new start
+    # time. The next round reads 105's path (not the daemon) and counts it.
+    t1 = "1793429308.357319"
+    seen = [
+        {100: (T0, DAEMON), 105: (T0, DAEMON)},
+        {100: (T0, DAEMON), 105: (t1, DAEMON)},
+        {100: (T0, DAEMON), 105: (t1, "/private/tmp/x")},
+    ]
+    acct, asked = _listing_account(monkeypatch, [[(100, 1), (105, 1)]] * 3, seen)
+    assert acct._escaped_count() == 1
+    assert asked == [[100, 105], [100, 105], [100, 105]]
+
+
 def _run_helper(monkeypatch, capsys, starts, path=b"/usr/sbin/distnoted", pid_seen=None):
     """Run PIDPATH_HELPER in this process for pid 100 against a stand-in libproc: each
     proc_pidinfo call reports the next of ``starts`` ((sec, usec), or None: the call fails)."""
