@@ -9,9 +9,10 @@ Python file of the commit is read, not only those near a test root.
 
 Scope: the base and the test commit are the target repository's own code, not the candidate's.
 The scan is meant to catch the ways ordinary code changes sys.path or starts Python: the path
-words below, ``sys``/``os`` and the import-system modules under any name or by ``from`` import,
-in every Python file of the commit, modules handed on as values, names built at run time, and
-files it cannot read. It is not meant to resist code written so that such a change goes unseen.
+words (the tables live in ``sys_path_names``), ``sys``/``os`` and the import-system modules under
+any name or by ``from`` import, in every Python file of the commit, modules handed on as values,
+names built at run time, and files it cannot read. It is not meant to resist code written so that
+such a change goes unseen.
 
 A commit may change it when one of its Python files (``.py``/``.pyw``, any case)
 
@@ -51,97 +52,26 @@ import warnings
 from pathlib import Path
 
 from cairnwork.gitcmd import GitCommandError, run_git, run_git_bytes
+from cairnwork.sys_path_names import (
+    DYNAMIC_ATTRS,
+    DYNAMIC_NAMES,
+    HELD,
+    HELD_IF_IMPORTED,
+    IMPORT_MODULES,
+    PATH_WORDS,
+    SAFE_SYS,
+)
 
 MAX_FILES = 20_000
 MAX_BYTES = 64 << 20  # 64 MiB of Python source, read at once
 _REGULAR = ("100644", "100755")
 _SOURCE = (".py", ".pyw")
 _COMPILED = (".pyc", ".pyo", ".pyd", ".so")
-# Ways Python code can put a directory on sys.path, or start Python with another sys.path.
-PATH_WORDS = (
-    "sys.path",  # also sys.path_hooks, sys.path_importer_cache
-    "syspath",  # pytest's monkeypatch.syspath_prepend, pytester.syspathinsert
-    "from sys import",
-    "addsitedir",
-    ".pth",
-    "PYTHONPATH",
-    "pytest_plugins",  # a plugin module may live anywhere
-    "runpy",
-    "sys.executable",
-    "subprocess",
-    "os.system",
-    "os.popen",
-    "os.exec",
-    "os.spawn",
-    "meta_path",
-    "path_hooks",
-    "importlib",
-    "__import__",
-)
 _WORDS = tuple(word.encode() for word in PATH_WORDS)
-# sys attributes that neither read nor change the import system or start a program.
-SAFE_SYS = frozenset(
-    {
-        "abiflags", "api_version", "argv", "base_exec_prefix", "base_prefix", "byteorder",
-        "builtin_module_names", "copyright", "displayhook", "dont_write_bytecode", "exc_info",
-        "exception", "excepthook", "exec_prefix", "exit", "flags", "float_info",
-        "float_repr_style", "get_int_max_str_digits", "getdefaultencoding",
-        "getfilesystemencodeerrors", "getfilesystemencoding", "getprofile", "getrecursionlimit",
-        "getrefcount", "getsizeof", "getswitchinterval", "gettrace", "getwindowsversion",
-        "hash_info", "hexversion", "implementation", "int_info", "intern", "is_finalizing",
-        "last_traceback", "last_type", "last_value", "maxsize", "maxunicode", "orig_argv",
-        "platform", "platlibdir", "prefix", "set_int_max_str_digits", "setprofile",
-        "setrecursionlimit", "setswitchinterval", "settrace", "stderr", "stdin",
-        "stdlib_module_names", "stdout", "thread_info", "unraisablehook", "version",
-        "version_info", "warnoptions", "__stderr__", "__stdin__", "__stdout__",
-    }
-)  # fmt: skip
 _OS_MODULES = frozenset({"os", "posix", "nt"})
 _OS_RUN = frozenset({"system", "popen", "putenv", "startfile"})
 _OS_RUN_PREFIXES = ("exec", "spawn", "posix_spawn")
 _TEST_MAINS = frozenset({"main", "TestProgram"})  # unittest's: module=None runs discovery
-# Code that reaches attributes, or runs code, by a name built at run time; never followed.
-DYNAMIC_NAMES = frozenset(
-    {"getattr", "setattr", "delattr", "vars", "globals", "locals", "exec", "eval", "compile",
-     "breakpoint", "__import__", "__builtins__"}
-)  # fmt: skip
-DYNAMIC_ATTRS = frozenset(
-    {"__dict__", "__getattribute__", "__globals__", "__builtins__", "__code__", "f_globals",
-     "f_locals", "f_builtins", "attrgetter", "methodcaller", "setenv", "unsetenv", "putenv",
-     "environb", "ProcessPoolExecutor", "spec_from_file_location", "module_from_spec",
-     "exec_module", "load_module", "load_source", "import_path", "pyimport", "resolve_name",
-     "import_string", "import_module", "find_class", "entry_points", "load_entry_point",
-     "builtins", "__self__", "__closure__", "__subclasses__", "__bases__", "__base__",
-     "__mro__", "discover"}
-)  # fmt: skip
-# Modules that can change the import path or the import system, load or run code given as a
-# path or as text, or start a program; a file that imports one (or a submodule) seals nothing.
-IMPORT_MODULES = frozenset(
-    {"site", "sitecustomize", "usercustomize", "runpy", "pkgutil", "zipimport", "imp", "_imp",
-     "importlib", "_frozen_importlib", "_frozen_importlib_external", "sysconfig", "distutils",
-     "setuptools", "pkg_resources", "code", "codeop", "types", "builtins", "inspect", "gc",
-     "ctypes", "pickle", "_pickle", "marshal", "shelve", "copyreg", "doctest", "timeit", "pdb",
-     "bdb", "trace", "profile", "cProfile", "pydoc", "subprocess", "_posixsubprocess", "_winapi",
-     "multiprocessing", "concurrent.futures.process", "pty", "webbrowser", "logging.config",
-     "unittest.mock", "mock", "pexpect", "sh", "plumbum", "execnet"}
-)  # fmt: skip
-# Names under which another module may hold sys, os or one of IMPORT_MODULES (``logging.os``,
-# ``random._os``, ``tempfile._os``), leading underscores aside: an attribute or a ``from``
-# import of one seals nothing. HELD_IF_IMPORTED are too common to refuse on any object, so they
-# count only on a chain that starts at an imported module (``unittest.mock``, ``logging.config``).
-HELD = frozenset(
-    {"sys", "os", "posix", "nt", "runpy", "pkgutil", "zipimport", "importlib", "sysconfig",
-     "distutils", "setuptools", "pkg_resources", "sitecustomize", "usercustomize", "codeop",
-     "builtins", "bltns", "ctypes", "pickle", "marshal", "shelve", "copyreg", "doctest",
-     "timeit", "pdb", "bdb", "cProfile", "pyprofile", "pydoc", "subprocess", "posixsubprocess",
-     "winapi", "multiprocessing", "pty", "webbrowser", "frozen_importlib",
-     "frozen_importlib_external", "pexpect", "plumbum", "execnet"}
-)  # fmt: skip
-HELD_IF_IMPORTED = frozenset(
-    {"site", "code", "types", "imp", "inspect", "gc", "trace", "profile", "util", "machinery",
-     "bootstrap", "bootstrap_external", "process", "context", "reduction", "reducer", "config",
-     "mock", "sh", "macholib", "dyld", "dylib", "framework"}
-)  # fmt: skip
 _ENVIRON_READS = frozenset({"get", "copy", "keys", "items", "values"})
 _PARSE_NAMES = (
     {"sys", "environ"} | _OS_MODULES | DYNAMIC_NAMES | DYNAMIC_ATTRS | HELD | HELD_IF_IMPORTED
