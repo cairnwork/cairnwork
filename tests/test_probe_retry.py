@@ -16,6 +16,8 @@ import cairnwork.verifier_account as va
 from cairnwork.core_request import VerifierObservation
 from cairnwork.reasons import explain, why_not_passed
 
+LSTART = "Sat Oct 31 14:26:01 2026"  # ps lstart under LC_ALL=C
+
 
 def _flaky(monkeypatch, module, fails, answer):
     calls = []
@@ -40,7 +42,7 @@ def test_process_environments_stay_unknown_after_a_timeout(monkeypatch):
 
 
 def test_account_count_is_read_after_a_timeout(monkeypatch):
-    ok = SimpleNamespace(returncode=0, stdout="11 1\n12 1\n", stderr="")  # ps -o pid=,ppid=
+    ok = SimpleNamespace(returncode=0, stdout=f"11 1 {LSTART}\n12 1 {LSTART}\n", stderr="")
     calls = _flaky(monkeypatch, va, 2, ok)
     assert va.VerifierAccount(user="nobody").count() == 2
     assert len(calls) == 3
@@ -91,7 +93,7 @@ def test_an_escaped_process_that_exits_during_the_retry_window_still_counts(monk
     """ps saw a process before the kill; after the kill it is gone. It still counts (kills a
     'reap ignores what was seen before' mutant). ppid 500 is a normal escape (not launchd), so no
     proc_pidpath exemption probe fires."""
-    fake, _ = _fake_account("777 500\n", [""])  # ps -o pid=,ppid=
+    fake, _ = _fake_account(f"777 500 {LSTART}\n", [""])  # ps -o pid=,ppid=,lstart=
     monkeypatch.setattr(va.subprocess, "run", fake)
     assert va.VerifierAccount(user="nobody").reap() == 1
 

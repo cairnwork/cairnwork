@@ -160,10 +160,11 @@ class VerifierAccount:
         jailed = backend.wrap(inner, profile) if profile is not None else backend.unconfined(inner)
         return [SUDO, "-n", "-u", self.user, "--", *jailed]
 
-    def _list(self, deadline: float | None, attempts: int) -> list[tuple[int, int]] | None:
-        """(pid, ppid) for each process the account runs; None if it cannot be determined within the
-        deadline. ppid is the kernel's parent pid, which the process cannot forge. Retries like
-        count(): slow under load is not "cannot tell" (Issue #114)."""
+    def _list(self, deadline: float | None, attempts: int) -> list[verifier_escape.Proc] | None:
+        """(pid, ppid, start) for each process the account runs; None if it cannot be determined
+        within the deadline. ppid is the kernel's parent pid, which the process cannot forge; start
+        (verifier_escape.parse_ps) tells a reused pid apart. Retries like count(): slow under load
+        is not "cannot tell" (Issue #114)."""
         # BSD ps (macOS) needs -x to include processes with no controlling tty; Linux
         # procps selects all of a user's processes with -U alone and rejects -x.
         tty_flag = ["-x"] if sys.platform == "darwin" else []
@@ -173,21 +174,17 @@ class VerifierAccount:
                 break
             try:
                 done = subprocess.run(  # noqa: S603 - fixed argv
-                    ["/bin/ps", *tty_flag, "-U", self.user, "-o", "pid=,ppid="],
+                    ["/bin/ps", *tty_flag, "-U", self.user, "-o", verifier_escape.PS_FIELDS],
                     capture_output=True,
                     text=True,
+                    env=verifier_escape.PS_ENV,
                     timeout=min(budget, confined.PS_TIMEOUT_SECONDS),
                     check=False,
                 )
             except (OSError, subprocess.SubprocessError):
                 continue
             if done.returncode in (0, 1) and not done.stderr.strip():  # 1: nothing matched
-                procs: list[tuple[int, int]] = []
-                for line in done.stdout.split("\n"):
-                    parts = line.split()
-                    if len(parts) == 2 and all(p.isdigit() for p in parts):
-                        procs.append((int(parts[0]), int(parts[1])))
-                return procs
+                return verifier_escape.parse_ps(done.stdout)
         return None  # e.g. an unknown user, which ps also reports with exit 1
 
     def count(self, deadline: float | None = None, attempts: int = confined.PS_ATTEMPTS) -> int:
@@ -225,29 +222,11 @@ class VerifierAccount:
         A daemon is exempt only when its real executable is allow-listed, its parent is launchd
         (ppid 1) and it is Apple-signed; anything else — a candidate's leftover process, however it
         named itself — is counted. A zero that rests on an exemption holds only if a later list
-        shows nothing new (see verifier_escape). If the list or the real paths cannot be read, the
-        count is unknown (fail closed), never zero."""
-        procs = self._list(deadline, attempts)
-        for _ in range(verifier_escape.LIST_ROUNDS):
-            if procs is None:
-                return -1
-            # Only a launchd child (ppid 1) can be an exempt daemon, and proc_pidpath is macOS-only,
-            # so resolve real paths (as the account) ONLY for those pids, never off Darwin.
-            launchd = [pid for pid, ppid in procs if ppid == 1]
-            if not launchd or sys.platform != "darwin":
-                return len(procs)
-            real = self._real_paths(launchd)
-            if real is None:
-                return -1
-            exempt = sum(1 for pid in launchd if verifier_escape.is_exempt(real.get(pid), 1))
-            if exempt < len(procs):
-                return len(procs) - exempt
-            # The paths were read after the list: a listed process may have started another one.
-            again = self._list(deadline, attempts)
-            if again is not None and set(again) <= set(procs):
-                return 0
-            procs = again
-        return -1
+        shows nothing new (verifier_escape.escaped_count). If the list or the real paths cannot be
+        read, the count is unknown (fail closed), never zero."""
+        return verifier_escape.escaped_count(
+            lambda: self._list(deadline, attempts), self._real_paths, sys.platform == "darwin"
+        )
 
     def reap(self) -> int:
         """Kill everything the account runs; return how many escaped processes were running.

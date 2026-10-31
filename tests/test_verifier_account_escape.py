@@ -13,13 +13,20 @@ import cairnwork.verifier_account as va
 import cairnwork.verifier_escape as ve
 
 DAEMON = "/usr/sbin/distnoted"  # the one real launchd daemon seen on full-Xcode hosts
+START = "Sat Oct 31 14:00:00 2026"  # ps lstart under LC_ALL=C
+
+
+def _rows(procs):
+    """(pid, ppid) pairs as _list returns them, with START unless a start time is given."""
+    return None if procs is None else [p if len(p) == 3 else (*p, START) for p in procs]
 
 
 def _account(monkeypatch, procs, real, apple=(DAEMON,)):
     # The daemon exemption is macOS-only (proc_pidpath); force it on so the logic is tested on any
     # host (CI's test jobs run on Linux). A separate test covers the off-Darwin path.
     monkeypatch.setattr(va.sys, "platform", "darwin")
-    monkeypatch.setattr(va.VerifierAccount, "_list", lambda self, deadline=None, attempts=1: procs)
+    rows = _rows(procs)
+    monkeypatch.setattr(va.VerifierAccount, "_list", lambda self, deadline=None, attempts=1: rows)
     monkeypatch.setattr(va.VerifierAccount, "_real_paths", lambda self, pids: real)
     monkeypatch.setattr(ve, "apple_signed", lambda path: path in apple)
     return va.VerifierAccount(user="x", root=Path("/tmp/does-not-matter"))
@@ -123,7 +130,7 @@ def test_parse_pidpaths_fails_closed_on_malformed_output():
 def test_garbled_helper_output_is_unknown_not_zero(monkeypatch):
     monkeypatch.setattr(va.sys, "platform", "darwin")
     monkeypatch.setattr(
-        va.VerifierAccount, "_list", lambda self, deadline=None, attempts=1: [(100, 1)]
+        va.VerifierAccount, "_list", lambda self, deadline=None, attempts=1: _rows([(100, 1)])
     )
     monkeypatch.setattr(
         va.VerifierAccount, "_real_paths", lambda self, pids: ve.parse_pidpaths("100\0", pids)
@@ -141,7 +148,7 @@ def _racing_account(monkeypatch, survives_kills=1):
     kills = []
 
     def listed(self, deadline=None, attempts=1):
-        return list(table)
+        return _rows(table)
 
     def real_paths(self, pids):
         if (100, 1) in table and (101, 100) not in table:
@@ -174,27 +181,96 @@ def test_kill_all_does_not_stop_while_a_process_started_after_the_list_runs(monk
     assert len(kills) == 2 and table == []
 
 
-def _listing_account(monkeypatch, lists):
-    """Each _list call returns the next of ``lists``; every listed pid runs the real daemon."""
+def _listing_account(monkeypatch, lists, paths=None):
+    """Each _list call returns the next of ``lists`` (None: ps could not be read). The n-th path
+    check returns ``paths[n]`` (default: every pid runs the real daemon). Returns the account and
+    the pids each path check was asked for."""
     monkeypatch.setattr(va.sys, "platform", "darwin")
-    answers = iter(lists)
+    answers = iter([_rows(rows) for rows in lists])
+    asked = []
+
+    def real_paths(self, pids):
+        asked.append(list(pids))
+        return paths[len(asked) - 1] if paths else dict.fromkeys(pids, DAEMON)
+
     monkeypatch.setattr(va.VerifierAccount, "_list", lambda self, d=None, a=1: next(answers))
-    monkeypatch.setattr(va.VerifierAccount, "_real_paths", lambda self, p: dict.fromkeys(p, DAEMON))
+    monkeypatch.setattr(va.VerifierAccount, "_real_paths", real_paths)
     monkeypatch.setattr(ve, "apple_signed", lambda path: path == DAEMON)
-    return va.VerifierAccount(user="x", root=Path("/tmp/does-not-matter"))
+    return va.VerifierAccount(user="x", root=Path("/tmp/does-not-matter")), asked
 
 
 def test_a_list_that_keeps_changing_is_unknown_not_zero(monkeypatch):
-    acct = _listing_account(monkeypatch, [[(100 + n, 1)] for n in range(10)])
+    acct, _ = _listing_account(monkeypatch, [[(100 + n, 1)] for n in range(10)])
     assert acct._escaped_count() == -1
 
 
 def test_a_daemon_restarted_once_by_launchd_is_still_exempt(monkeypatch):
     # launchd replaced the daemon between two lists: the new pid is checked and found exempt.
-    acct = _listing_account(monkeypatch, [[(100, 1)], [(105, 1)], [(105, 1)]])
+    acct, _ = _listing_account(monkeypatch, [[(100, 1)], [(105, 1)], [(105, 1)]])
     assert acct._escaped_count() == 0
 
 
 def test_a_daemon_that_exits_before_the_second_list_is_still_clean(monkeypatch):
-    acct = _listing_account(monkeypatch, [[(100, 1), (105, 1)], [(105, 1)]])
+    acct, _ = _listing_account(monkeypatch, [[(100, 1), (105, 1)], [(105, 1)]])
     assert acct._escaped_count() == 0
+
+
+def test_an_unreadable_second_list_is_unknown_not_zero(monkeypatch):
+    acct, _ = _listing_account(monkeypatch, [[(100, 1)], None])
+    assert acct._escaped_count() == -1
+
+
+def test_a_daemon_restarted_twice_by_launchd_is_still_exempt(monkeypatch):
+    acct, asked = _listing_account(monkeypatch, [[(100, 1)], [(105, 1)], [(110, 1)], [(110, 1)]])
+    assert acct._escaped_count() == 0
+    assert asked == [[100], [105], [110]]
+
+
+def test_a_daemon_restarted_three_times_is_unknown(monkeypatch):
+    lists = [[(100, 1)], [(105, 1)], [(110, 1)], [(115, 1)], [(115, 1)]]
+    acct, _ = _listing_account(monkeypatch, lists)
+    assert acct._escaped_count() == -1
+
+
+def test_a_reused_pid_with_a_new_start_time_is_checked_again(monkeypatch):
+    # Same pid and ppid on both lists, but a different start time: another process has the pid
+    # now, so its path is read again (it is not the daemon) and it is counted.
+    later = "Sat Oct 31 14:00:01 2026"
+    lists = [[(100, 1, START)], [(100, 1, later)], [(100, 1, later)]]
+    acct, asked = _listing_account(monkeypatch, lists, paths=[{100: DAEMON}, {100: "/tmp/x"}])
+    assert acct._escaped_count() == 1
+    assert asked == [[100], [100]]
+
+
+def test_parse_ps_reads_pid_ppid_and_start_time():
+    out = "  100     1 Sat Oct 31 14:26:01 2026    \n  101   100 Sat Oct  3 09:05:00 2026\n\n"
+    assert ve.parse_ps(out) == [
+        (100, 1, "Sat Oct 31 14:26:01 2026"),
+        (101, 100, "Sat Oct 3 09:05:00 2026"),
+    ]
+    assert ve.parse_ps("") == []
+
+
+def test_parse_ps_fails_closed_on_a_line_it_cannot_read():
+    bad = [
+        "100 1\n",  # no start time
+        "100 1 Sat Oct 31 14:26:01\n",  # short time
+        "1x0 1 Sat Oct 31 14:26:01 2026\n",  # non-decimal pid
+        "100 -1 Sat Oct 31 14:26:01 2026\n",  # signed ppid
+        "100 1 Sat Oct 31 14:26:01 2026\nbroken\n",  # one good line, one bad
+    ]
+    for out in bad:
+        assert ve.parse_ps(out) is None, out
+
+
+def test_the_list_asks_ps_for_the_start_time_in_the_c_locale(monkeypatch):
+    seen = {}
+
+    def fake(argv, **kwargs):
+        seen.update(argv=argv, env=kwargs.get("env"))
+        return SimpleNamespace(returncode=0, stdout="7 1 Sat Oct 31 14:26:01 2026\n", stderr="")
+
+    monkeypatch.setattr(va.subprocess, "run", fake)
+    acct = va.VerifierAccount(user="x", root=Path("/tmp/does-not-matter"))
+    assert acct._list(None, 1) == [(7, 1, "Sat Oct 31 14:26:01 2026")]
+    assert seen["argv"][-1] == "pid=,ppid=,lstart=" and seen["env"] == {"LC_ALL": "C"}
