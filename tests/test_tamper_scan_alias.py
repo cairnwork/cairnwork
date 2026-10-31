@@ -206,6 +206,41 @@ def test_changes_to_pytest_public_classes_are_refused_in_any_file(path, snippet)
     assert set(_rules(path, snippet)) == {"pytest_public_patch"}
 
 
+@pytest.mark.parametrize("path", [TEST, CALC])
+@pytest.mark.parametrize(
+    "snippet",
+    [
+        "pytest.TestReport.outcome: object = property(get_outcome)",  # annotated
+        "pytest.TestReport.outcome, extra = property(get_outcome), 0",  # tuple
+        "extra, pytest.TestReport.outcome = 0, property(get_outcome)",
+        "a, (b, pytest.TestReport.outcome) = 1, (2, prop)",
+        "(pytest.TestReport.outcome) = property(get_outcome)",  # parenthesised
+        "[pytest.TestReport.outcome] = [property(get_outcome)]",  # list
+        "*rest, pytest.Item.runtest = runs",
+        "if ready: (pytest.Item.runtest) = run",
+        "x = 1; [pytest.Item.runtest] = [run]",
+        "(pytest.Item.runtest) += hook",
+        "for pytest.Item.runtest in [run]: pass",
+        "with patched() as pytest.Item.runtest: pass",
+        "pytest . TestReport.passed = True",
+        "pytest.ExceptionInfo.__bool__ = lambda self: False",
+        "pytest.RaisesExc.matches = lambda self, exc: True",
+        "pytest.RaisesGroup.matches = lambda self, exc: True",
+        "pytest.SubtestReport.passed = True",
+        "pytest.Metafunc.parametrize = keep_one",
+        "del(pytest.Item.runtest)",
+        "setattr(*(pytest.TestReport, 'passed', True))",
+        "import pytest as p\n(p.TestReport.outcome) = prop",
+        "import pytest as p\np . TestReport.passed = True",
+        "from pytest import TestReport as R\nR.outcome: object = prop",
+        "from pytest import TestReport as R\nR.outcome, extra = prop, 0",
+        "from pytest import ExceptionInfo as E\nE.__bool__ = lambda self: False",
+    ],
+)
+def test_more_target_forms_and_classes_are_refused(path, snippet):
+    assert set(_rules(path, snippet)) == {"pytest_public_patch"}
+
+
 def test_a_pytest_class_alias_bound_earlier_is_followed_in_library_code():
     lines = [(1, "from pytest import TestReport as R"), (2, "x = 1"), (30, "    R.passed = True")]
     assert [(f.line, f.rule) for f in scan_added_lines(CALC, lines)] == [
@@ -230,6 +265,17 @@ def test_a_pytest_class_alias_bound_earlier_is_followed_in_library_code():
         "from pytest import Item\nclass MyItem(Item):\n    marker = 'x'",
         "import pytest as p; obj.p.TestReport.x = 1",  # an attribute, not the alias
         "pytest.Items.x = 1",  # not one of the listed classes
+        "setattr(pytest.Items, 'x', 1)",
+        "from pytest import TestReport as R\nobj.R.passed = 1",  # an attribute, not the alias
+        "run(pytest.Item.name, flag=True)",  # a keyword argument is not an assignment
+        "obj.check(pytest.Item.name)[0] = 1",
+        "registry[pytest.Item.name] = item",
+        "pair, other = pytest.Item.name, 1",
+        "names = [pytest.Item.name]; flags = (pytest.Item.name, 1)",
+        "pytest.Item.name: str",  # an annotation with no value
+        "for name in [pytest.Item.name]: pass",
+        "with pytest.raises(ValueError) as excinfo: pass",
+        "if excinfo.value == pytest.ExceptionInfo: pass",
     ],
 )
 def test_honest_uses_of_pytest_public_classes_pass(path, snippet):

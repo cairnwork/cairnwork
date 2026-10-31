@@ -9,8 +9,8 @@ This raises the bar; it is not a boundary. It reads single added lines with regu
 expressions, so a name built from strings (``getattr(os, "_" + "exit")``, and likewise
 ``getattr(pytest, "Test" + "Report")`` for the ``pytest_public_patch`` rule), a split line, a
 rebinding by assignment (``m = sys.modules``) or a non-``.py`` file that is imported later all
-pass: known residuals. Changes to pytest's public classes (``pytest_public_patch``,
-tamper_scan_pytest.py) are refused in every file, library code included. An alias bound by an
+pass: known residuals. Changes to the pytest classes listed in tamper_scan_pytest.py
+(``pytest_public_patch``) are refused in every file, library code included. An alias bound by an
 added import (``import os as o``, ``from sys import modules as m``, ``import pytest as p``)
 is followed on that line and the added lines after it; an alias bound only in an unchanged
 (context) line, by a parenthesised import split over lines, a backslash continuation or
