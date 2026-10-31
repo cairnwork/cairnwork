@@ -31,7 +31,8 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
   system's bytecode loaders (cached and sourceless imports, zipimport) and pytest's assertion-rewrite
   cache, whatever the file is called and whenever it is removed. It also refuses the object-graph
   walks and memory files that would reach the hook itself. Frozen standard-library modules are
-  imported before the hook is installed (Python 3.13 and later unmarshal them on the same path). The plugin
+  imported before the hook is installed, each from the interpreter's own frozen table or the plugin
+  fails (Python 3.13 and later unmarshal them on the same path). The plugin
   probes the hook and fails to load (no verdict record, so the run fails) when it is not live or
   the interpreter is older than 3.9; the run also sets `PYTHON_DISABLE_REMOTE_DEBUG=1`. This is a
   higher hurdle, not a boundary: code in the same process may, from Python 3.13 on, still change

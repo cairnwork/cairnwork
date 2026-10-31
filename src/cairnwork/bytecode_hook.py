@@ -25,7 +25,9 @@ before any conftest, test module or candidate code. It installs a PEP 578 audit 
 A path that arrives as a str or bytes subclass is judged by an exact copy of its text, taken by
 the base type's own slot, never by a method of the subclass; any other object (``io.FileIO`` given
 a ``pathlib.Path``: the event carries the object, not the name the file system sees) is refused,
-since its name cannot be read without running its code. Then the hook probes itself, and the
+since its name cannot be read without running its code. Frozen standard-library modules are
+imported before the hook, each from the interpreter's own frozen table or the plugin fails (3.13
+and later unmarshal them on the audited path). Then the hook probes itself, and the
 plugin import (and so the whole run: no verdict record) fails when the hook is not live or the
 interpreter is older than 3.9.
 
@@ -160,11 +162,18 @@ def _cw_install_bytecode_hook():
         types.FunctionType, name, pyc, frozenset(s.encode() for s in pyc), slice(None), message,
         "cairnwork: not available in a verifier run",
     )  # fmt: skip
-    import _imp  # 3.13+ unmarshals frozen stdlib modules on the audited path: load them first
+    import _frozen_importlib  # 3.13+ unmarshals frozen stdlib modules on the audited path:
+    import _imp  # load them first, and only from the interpreter's own frozen table
 
     for frozen in getattr(_imp, "_frozen_module_names", tuple)():
-        if not frozen.startswith("__"):  # not the interpreter's own __hello__ test modules
-            __import__(frozen)
+        if frozen.startswith("__"):  # not the interpreter's own __hello__ test modules
+            continue
+        module = __import__(frozen, fromlist=["_"])
+        spec = getattr(module, "__spec__", None)
+        if _frozen_importlib.FrozenImporter.find_spec(frozen) is not None and (
+            spec is None or spec.origin != "frozen"
+        ):
+            raise RuntimeError("cairnwork: " + frozen + " did not load from the interpreter")
     _cw_sys.addaudithook(hook)
     live = False
     try:  # refused by the hook before the path reaches the file system
