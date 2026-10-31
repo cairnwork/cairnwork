@@ -14,6 +14,7 @@ from cairnwork.deferred_tests import Comparison, base_comparison
 
 TARGET = "tests/test_regression.py::test_regression"
 TARGETS = frozenset({TARGET})
+PYC = "tests/__pycache__/test_regression.cpython-312.pyc"  # a FORGED_BYTECODE finding
 
 
 def run(name: str = "v", rc: int | None = 1, *, failed=(TARGET,), **fields):
@@ -29,6 +30,7 @@ def run(name: str = "v", rc: int | None = 1, *, failed=(TARGET,), **fields):
         mutated=fields.get("mutated", ()),
         teardown_errors=(),
         survivors=fields.get("survivors", 0),
+        forged=fields.get("forged", ()),
     )
 
 
@@ -77,6 +79,16 @@ ROWS = [
         "UNCOMPARABLE",
         "BASE_MUTATED",
         id="mutated-rc2",
+    ),
+    pytest.param(run(forged=(PYC,)), "UNCOMPARABLE", "BASE_FORGED_BYTECODE", id="forged-rc1"),
+    pytest.param(  # rc 0: forged bytecode may be what made the base's tests pass (#481)
+        run(rc=0, failed=(), forged=(PYC,)), "UNCOMPARABLE", "BASE_FORGED_BYTECODE", id="forged-rc0"
+    ),
+    pytest.param(  # a changed checkout is named before forged bytecode, as p2p._probe
+        run(mutated=("leftover.txt",), forged=(PYC,)),
+        "UNCOMPARABLE",
+        "BASE_MUTATED",
+        id="mutated-and-forged",
     ),
     pytest.param(
         run(collect_errors=("tests/test_x.py",)),
