@@ -38,7 +38,6 @@ from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.notary_verify import binding_hash
 from cairnwork_attest import binding_extras
 from cairnwork_attest.binding_extras import KEYS, binding_problem, pin_problem, policy_problem
-from cairnwork_attest.keys import KeyFileError, keyid, load_public_key_pem
 from cairnwork_attest.record import AttestError, _digest, parse_strict_json
 from cairnwork_attest.verify_response import VerifyResult, _check_response_verified, _fail
 from cairnwork_protocol import acceptance_contract_hash, change_manifest_hash
@@ -144,15 +143,18 @@ def verify_bound(
     *,
     repo: Path,
     expected_candidate: str,
-    public_key_pem: Path,
+    signing_key_id: str,
     core_identity_pin: Mapping[str, Any] | None = None,
     expected_base: str | None = None,
     policy: Mapping[str, Any] | None = None,
 ) -> VerifyResult:
-    """Check a v0.2 statement whose DSSE signature verify.py has already checked."""
+    """Check a v0.2 statement whose DSSE signature verify.py has already checked.
+
+    ``signing_key_id`` is the id of the key that signature was checked with (one read of the key).
+    """
     if policy is not None and (problem := _policy_problem(policy)):
         return _fail("POLICY_MALFORMED", problem)  # a caller's dict, not load_policy's
-    if policy is not None and _keyid_of(public_key_pem) != policy.get("key_id"):
+    if policy is not None and signing_key_id != policy.get("key_id"):
         return _fail("SIGNATURE_INVALID", "the public key is not the key the policy pins")
     binding, err = _shape(statement)
     if err is not None:  # a failed VerifyResult is falsy: never `err or ...`
@@ -185,13 +187,6 @@ def verify_bound(
     assurance["protection"] = binding_extras.recorded_protection(binding)
     assurance["blackbox_checks"] = binding_extras.checks_assurance(policy)
     return VerifyResult(ok=True, code="OK", statement=statement, assurance=assurance)
-
-
-def _keyid_of(public_key_pem: Path) -> str:
-    try:
-        return keyid(load_public_key_pem(Path(public_key_pem).read_bytes()))
-    except (KeyFileError, OSError):
-        return ""
 
 
 def _shape(statement: dict[str, Any]) -> tuple[dict[str, Any] | None, VerifyResult | None]:
