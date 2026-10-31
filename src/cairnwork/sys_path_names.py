@@ -1,4 +1,4 @@
-"""The name tables ``sys_path_scan`` matches (moved out of it unchanged, #579).
+"""The name tables ``sys_path_scan`` matches (moved out of ``sys_path_scan.py`` in #579).
 
 ``sys_path_scan`` reads these tables; its module docstring says what each one means for a commit.
 """
@@ -13,6 +13,8 @@ PATH_WORDS = (
     "addsitedir",
     ".pth",
     "PYTHONPATH",
+    "pythonpath",  # pytest's ini option, also as ``-o pythonpath=…`` to an in-process run
+    "sys.modules",  # also a string target: pytest-mock's ``mocker.patch.dict("sys.modules", …)``
     "pytest_plugins",  # a plugin module may live anywhere
     "runpy",
     "sys.executable",
@@ -21,6 +23,8 @@ PATH_WORDS = (
     "os.popen",
     "os.exec",
     "os.spawn",
+    "run_process",  # anyio's and trio's program launchers
+    "open_process",
     "meta_path",
     "path_hooks",
     "importlib",
@@ -66,7 +70,7 @@ IMPORT_MODULES = frozenset(
      "ctypes", "pickle", "_pickle", "marshal", "shelve", "copyreg", "doctest", "timeit", "pdb",
      "bdb", "trace", "profile", "cProfile", "pydoc", "subprocess", "_posixsubprocess", "_winapi",
      "multiprocessing", "concurrent.futures.process", "pty", "webbrowser", "logging.config",
-     "unittest.mock", "mock", "pexpect", "sh", "plumbum", "execnet"}
+     "unittest.mock", "mock", "pexpect", "sh", "plumbum", "execnet", "invoke", "nox"}
 )  # fmt: skip
 # Names under which another module may hold sys, os or one of IMPORT_MODULES (``logging.os``,
 # ``random._os``, ``tempfile._os``), leading underscores aside: an attribute or a ``from``
