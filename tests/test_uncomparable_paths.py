@@ -38,7 +38,7 @@ BASE_ROWS = [  # (base run, code): one per row of the mapping table
     pytest.param(TEETH | {"report_too_big": True}, "BASE_REPORT_OVER_CAP", id="over-cap"),
     pytest.param(TEETH | {"recorded": False}, "BASE_NO_REPORT", id="no-record"),
 ]
-ENV_OK = {"rc": 1, "outcomes": {"tests/test_calc.py::test_add": "passed"}}  # base env check
+ENV_OK = {"rc": 1, "outcomes": {"tests/test_calc.py::test_add": "failed"}}  # base env check
 PROBE_ROWS = [  # a failed P2P base probe (the base run itself has teeth)
     pytest.param({"rc": None, "timed_out": True}, id="probe-timeout"),
     pytest.param({"rc": 1, "report_too_big": True}, id="probe-over-cap"),
@@ -272,7 +272,7 @@ def test_uncomparable_after_the_burn_says_the_tests_are_consumed(project, state,
 def test_an_account_failure_in_the_base_stage_is_uncomparable_and_consumed(
     project, state, stub, monkeypatch, stage
 ):
-    calls = stub(TEETH, {"rc": 1, "outcomes": {"tests/test_calc.py::test_add": "passed"}})
+    calls = stub(TEETH, {"rc": 0, "outcomes": {"tests/test_calc.py::test_add": "passed"}})
     staged = p2p.run_verifiers if stage == "-p" else pipeline_judge.run_verifiers
     raising = lambda ctx, commit, specs, run_id, **kw: (  # noqa: E731
         _account_error() if run_id.endswith(stage) else staged(ctx, commit, specs, run_id, **kw)
@@ -318,7 +318,7 @@ def test_an_account_failure_after_the_worker_is_uncomparable_only_when_isolated(
 
 
 def test_an_account_failure_in_the_candidate_run_is_never_uncomparable(project, tmp_path, stub):
-    stub(TEETH, {"rc": 1, "outcomes": {"tests/test_calc.py::test_add": "passed"}})
+    stub(TEETH, {"rc": 0, "outcomes": {"tests/test_calc.py::test_add": "passed"}})
     real = pipeline_judge.run_verifiers
 
     def candidate_breaks(ctx, commit, specs, run_id, **kw):
@@ -368,7 +368,7 @@ def test_verify_a_candidate_run_account_failure_is_internal(
 ):
     """The candidate's code ran as the account: never UNCOMPARABLE. cairnwork-verify says INTERNAL
     and, as everywhere, whether the test commit is used up."""
-    stub(TEETH, {"rc": 1, "outcomes": {"tests/test_calc.py::test_add": "passed"}})
+    stub(TEETH, {"rc": 0, "outcomes": {"tests/test_calc.py::test_add": "passed"}})
     staged = pipeline_judge.run_verifiers
 
     def candidate_breaks(ctx, commit, specs, run_id, **kw):
