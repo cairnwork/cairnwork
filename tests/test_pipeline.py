@@ -9,6 +9,7 @@ from cairnwork.notary import Notary
 from cairnwork.ownership import OwnershipLedger
 from cairnwork.pipeline import TaskRejected, TaskSpec, run_task
 from cairnwork.verifiers import protected_verifier_inputs
+from cairnwork.workers import WorkerDefaults
 
 VERIFY = (("pytest", ("python3", "-m", "pytest", "-q", "tests/test_calc.py")),)
 
@@ -46,7 +47,7 @@ def task(project, key="k1", allowed=("src/calc.py",), verifiers=VERIFY):
     )
 
 
-class EditWorker:
+class EditWorker(WorkerDefaults):
     def __init__(self, files):
         self.files = files
 
@@ -56,7 +57,7 @@ class EditWorker:
             (workdir / name).write_text(text)
 
 
-class CrashWorker:
+class CrashWorker(WorkerDefaults):
     def run(self, workdir, _task):
         raise RuntimeError("model unavailable")
 
@@ -88,6 +89,23 @@ def test_correct_fix_completes_with_core_verified(project, stores, tmp_path):
     )
     assert result.status == "COMPLETED" and result.verified, result.reason
     assert stores[0].get(task_id=result.task_id).status == "COMPLETED"
+
+
+def test_on_reach_hook_sees_each_journaled_phase(project, stores, tmp_path):
+    seen: list[str] = []
+    ledger, notary, journal = stores
+    result = run_task(
+        task(project),
+        ledger=ledger,
+        notary=notary,
+        journal=journal,
+        worker=EditWorker({"src/calc.py": "def add(a, b):\n    return a + b\n"}),
+        run_root=tmp_path / "runs",
+        on_reach=seen.append,
+    )
+    assert result.status == "COMPLETED", result.reason
+    assert seen[0] == "DISPATCHED" and seen[-1] == "FINISHED"
+    assert "WORKER_STARTED" in seen and "CANDIDATE" in seen
 
 
 def test_existing_root_module_completes_with_core_verified(repo, stores, tmp_path):
@@ -191,7 +209,7 @@ def test_submit_path_refuses_everything_the_issue_path_protects(project, stores,
     assert sampled == {"TASK_ALLOWED_FILES_PROTECTED", "PROTECTED_VERIFIER_INPUT"}
 
 
-class ChmodWorker:
+class ChmodWorker(WorkerDefaults):
     def run(self, workdir, _task):
         (workdir / "src").chmod(0)
 

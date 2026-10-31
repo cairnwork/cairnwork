@@ -19,8 +19,14 @@ from cairnwork import p2p
 from cairnwork.p2p import P2PPlan, run_plan
 from cairnwork.p2p_selection import MODULE_DIR_CAP, cap_note
 from cairnwork.p2p_selection import select_p2p_targets as _select
+from cairnwork.verify_context import VerifyContext
 
 ROOTS = ("tests",)
+
+
+def context(task, run_root) -> VerifyContext:
+    """The context the pipeline builds for ``task``'s attempt RESULT."""
+    return VerifyContext.of(task, run_root, RESULT.attempt_id)
 
 
 def flat(count: int, *named: str) -> tuple[str, ...]:
@@ -109,7 +115,7 @@ def test_a_cut_to_nothing_is_recorded_as_no_p2p_not_as_a_pass(monkeypatch, tmp_p
     got, probed = plan(monkeypatch, flat(MODULE_DIR_CAP + 1), [], mode="module-dir")
     assert isinstance(got, P2PPlan) and got.spec is None and probed == []
     assert got.rule["targets"] == 0 and got.rule["capped_dirs"] == ["tests"]
-    runs, rule = run_plan(got, TASK, "c" * 40, tmp_path, None, (None, None))
+    runs, rule = run_plan(got, TASK, "c" * 40, None, VerifyContext.of(TASK, tmp_path))
     assert runs == () and rule["capped_dirs"] == ["tests"]  # what the result's "p2p" shows
 
 
@@ -124,7 +130,7 @@ def test_base_env_check_probes_the_capped_selection(monkeypatch, tmp_path, count
     existing = flat(count, "test_b.py")
     probed = []
 
-    def fake_probe(task, files, run_root, result, verifying, budget, tag="p"):
+    def fake_probe(task, files, result, ctx, budget, tag="p"):
         probed.append(files)
         return {}, ""
 
@@ -133,18 +139,21 @@ def test_base_env_check_probes_the_capped_selection(monkeypatch, tmp_path, count
     monkeypatch.setattr(p2p, "_env_fingerprint", lambda python: None)
     task = SimpleNamespace(**{**vars(TASK), "allowed_files": ("src/pkg/b.py",)})
     task.p2p_mode, task.test_commit, task.p2p_budget = "module-dir", "t" * 40, 30
-    p2p.base_env_check(task, tmp_path, None, (None, None))
+    p2p.base_env_check(task, None, VerifyContext.of(task, tmp_path))
     assert probed == [existing if count == MODULE_DIR_CAP else ("tests/test_b.py",)]
 
 
-def _cap_task(monkeypatch, existing, changed):
+def _cap_task(monkeypatch, existing, changed, by_test_commit=frozenset(), outcomes=None):
     """A module-dir task over ``existing`` base tests (the real ``exclude`` rule), probes stubbed
-    to pass the first file; returns (task, the file sets probed)."""
+    to pass the first file (or to return ``outcomes``), the test commit changing the test
+    functions ``by_test_commit``; returns (task, the file sets probed)."""
     probed: list[tuple[str, ...]] = []
 
-    def fake_probe(task, files, run_root, result, verifying, budget, tag="p"):
+    def fake_probe(task, files, result, ctx, budget, tag="p"):
         probed.append(files)
-        return {f"{files[0]}::t": "passed"}, ""
+        return outcomes or {f"{files[0]}::t": "passed"}, ""
+
+    monkeypatch.setattr(p2p, "changed_tests", lambda repo, base, test_commit, paths: by_test_commit)
 
     base = lambda task, exclude: tuple(p for p in existing if p not in exclude)  # noqa: E731
     monkeypatch.setattr(p2p, "_base_tests", base)
@@ -161,36 +170,51 @@ def test_a_deferred_test_on_the_base_counts_toward_the_cap_in_both_steps(monkeyp
     # used to be cut before the worker and probed whole (25 files) after it
     existing = flat(MODULE_DIR_CAP + 1, "test_b.py", "test_d.py")
     task, probed = _cap_task(monkeypatch, existing, ("src/pkg/b.py",))
-    p2p.base_env_check(task, tmp_path, RESULT, (None, None))
-    got = p2p.plan_p2p(task, (), ("tests/test_d.py",), "module-dir", 30, tmp_path, RESULT,
-                       (None, None))  # fmt: skip
+    p2p.base_env_check(task, RESULT, context(task, tmp_path))
+    got = p2p.plan_p2p(
+        task, (), ("tests/test_d.py",), "module-dir", 30, RESULT, context(task, tmp_path)
+    )
     assert probed == [("tests/test_b.py",), ("tests/test_b.py",)]
     assert got.rule["capped_dirs"] == ["tests"] and got.rule["selected_files"] == 1
 
 
-def test_a_deferred_test_is_dropped_from_the_selection_it_maps_to(monkeypatch, tmp_path):
+def test_a_changed_test_file_stays_in_the_selection_it_maps_to(monkeypatch, tmp_path):
     existing = flat(MODULE_DIR_CAP, "test_b.py", "test_d.py")
     task, probed = _cap_task(monkeypatch, existing, ("src/pkg/d.py",))
-    got = p2p.plan_p2p(task, (), ("tests/test_d.py",), "module-dir", 30, tmp_path, RESULT,
-                       (None, None))  # fmt: skip
-    assert probed == [tuple(p for p in existing if p != "tests/test_d.py")]
+    got = p2p.plan_p2p(
+        task, (), ("tests/test_d.py",), "module-dir", 30, RESULT, context(task, tmp_path)
+    )
+    assert probed == [existing]
     assert "capped_dirs" not in got.rule
 
 
-def test_a_deferred_test_is_never_a_target_in_whole_suite_mode(monkeypatch, tmp_path):
+def test_a_changed_test_file_leaves_out_only_the_changed_tests(monkeypatch, tmp_path):
+    # the changed file is bound by function, never whole: on the candidate it also holds the test
+    # commit's own tests; a new file of the test commit is not on the base, so never selected
     existing = ("tests/test_b.py", "tests/test_d.py")
-    task, probed = _cap_task(monkeypatch, existing, ("src/pkg/b.py",))
-    got = p2p.plan_p2p(task, (), ("tests/test_d.py",), "whole-suite", 30, tmp_path, RESULT,
-                       (None, None))  # fmt: skip
-    assert probed == [("tests/test_b.py",)] and got.rule["selected_files"] == 1
+    d = "tests/test_d.py"
+    outcomes = {"tests/test_b.py::t": "passed", f"{d}::t_kept[1]": "passed",
+                f"{d}::t_kept[2]": "passed", f"{d}::t_new": "passed"}  # fmt: skip
+    task, probed = _cap_task(monkeypatch, existing, ("src/pkg/b.py",),
+                             frozenset({"tests/test_d.py::t_new"}), outcomes)  # fmt: skip
+    got = p2p.plan_p2p(task, (), ("tests/test_d.py", "tests/test_n.py"), "whole-suite", 30,
+                       RESULT, context(task, tmp_path))  # fmt: skip
+    assert probed == [existing] and got.rule["selected_files"] == 2
+    assert got.spec is not None
+    assert got.spec.targets == ("tests/test_b.py", "tests/test_d.py::t_kept")
+    assert got.nodes == tuple(n for n in outcomes if not n.endswith("t_new"))
+    assert got.rule["nodes"] == 3 and got.rule["changed_by_test_commit"] == 1
 
 
-def test_a_cut_that_leaves_only_deferred_tests_runs_no_p2p_and_says_so(monkeypatch, tmp_path):
-    # #389 review: the cut keeps test_d.py (named after the change), the deferred tests drop it,
-    # so nothing is probed; the rule records 0 targets and names the cut, as any cut to nothing
+def test_a_cut_that_leaves_only_changed_tests_runs_no_p2p_and_says_so(monkeypatch, tmp_path):
+    # #389 review: the cut keeps test_d.py (named after the change); the test commit changes its
+    # only test, so nothing is bound; the rule records 0 targets and names the cut
     existing = flat(MODULE_DIR_CAP + 1, "test_d.py")
-    task, probed = _cap_task(monkeypatch, existing, ("src/pkg/d.py",))
-    got = p2p.plan_p2p(task, (), ("tests/test_d.py",), "module-dir", 30, tmp_path, RESULT,
-                       (None, None))  # fmt: skip
-    assert probed == [] and got.spec is None
+    task, probed = _cap_task(monkeypatch, existing, ("src/pkg/d.py",),
+                             frozenset({"tests/test_d.py::t"}))  # fmt: skip
+    got = p2p.plan_p2p(
+        task, (), ("tests/test_d.py",), "module-dir", 30, RESULT, context(task, tmp_path)
+    )
+    assert probed == [("tests/test_d.py",)] and got.spec is None
     assert got.rule["targets"] == 0 and got.rule["capped_dirs"] == ["tests"]
+    assert got.rule["changed_by_test_commit"] == 1

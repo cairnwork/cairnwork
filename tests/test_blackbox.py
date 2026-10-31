@@ -12,6 +12,7 @@ import pytest
 from cairnwork import blackbox, blackbox_judge
 from cairnwork.blackbox_exec import BlackboxRun
 from cairnwork.blackbox_runner import MODULE, install_runner
+from cairnwork.verify_context import VerifyContext
 
 SALT = "ab" * 32
 MANY = [{"id": f"c{i}", "args": [], "expected": 1} for i in range(blackbox.MAX_CASES + 1)]
@@ -239,7 +240,7 @@ def test_a_run_that_cannot_be_made_is_incomplete(monkeypatch):
     monkeypatch.setattr(blackbox_judge, "run_blackbox", broken)
     declared = blackbox.parse(json.dumps(doc()).encode())
     (verdict,), log = blackbox_judge.judge_blackbox(
-        declared, Path("/r"), "c" * 40, Path("/x"), "a-v"
+        declared, VerifyContext(Path("/r"), Path("/x")), "c" * 40, "a-v"
     )
     assert log is None and not verdict.observation.passed
     assert verdict.reason == "blackbox:add: VERIFICATION_INCOMPLETE: RUN_ERROR:OSError"
@@ -317,7 +318,7 @@ def test_a_judging_error_is_still_a_failed_observation_per_check(monkeypatch):
     monkeypatch.setattr(blackbox_judge, "judge_run", boom)
     declared = blackbox.parse(json.dumps(doc()).encode())
     (verdict,), log = blackbox_judge.judge_blackbox(
-        declared, Path("/r"), "c" * 40, Path("/x"), "a-v"
+        declared, VerifyContext(Path("/r"), Path("/x")), "c" * 40, "a-v"
     )
     assert log == GOOD.log_path and not verdict.observation.passed
     assert verdict.reason == "blackbox:add: VERIFICATION_INCOMPLETE: JUDGE_ERROR:RuntimeError"
@@ -345,5 +346,5 @@ def test_the_run_reports_checkout_changes_and_forged_bytecode(repo, tmp_path, mo
     monkeypatch.setattr(blackbox_exec, "bytecode_findings", lambda *a: ("x.pyc",))
     declared = blackbox.parse(json.dumps(doc()).encode())
     head = git(repo, "rev-parse", "HEAD")
-    run = blackbox_exec.run_blackbox(declared, repo, head, tmp_path / "runs", "a1-v")
+    run = blackbox_exec.run_blackbox(declared, VerifyContext(repo, tmp_path / "runs"), head, "a1-v")
     assert run.mutated == ("src/a.py",) and run.forged == ("x.pyc",) and not run.account

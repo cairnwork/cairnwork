@@ -17,25 +17,26 @@ from cairnwork.ownership import OwnershipLedger
 from cairnwork.pipeline import TaskSpec, run_task
 from cairnwork.verifier_account import VerifierAccount
 from cairnwork.verifiers import VerifierRun
+from cairnwork.workers import WorkerDefaults
 
 repo, state, base, tests, step = Path(sys.argv[1]), Path(sys.argv[2]), *sys.argv[3:6]
 account = VerifierAccount() if len(sys.argv) > 6 else None
 real = p2p._run_once
 
 
-def once(spec, plan, note, task, judged, run_root, result, verifying, tag):
+def once(spec, plan, note, task, judged, result, ctx, tag):
     if step == "r" and tag == "q":  # a plain failure, so run_plan re-runs (-r)
         observation = VerifierObservation(spec.verifier_id, "q", "q", False)
         failed = {"tests/test_slow.py::test_slow": "failed"}
-        return VerifierRun(spec, 1, False, (), run_root / "q.log", observation, failed,
+        return VerifierRun(spec, 1, False, (), ctx.run_root / "q.log", observation, failed,
                            plain_failure=True)  # fmt: skip
-    return real(spec, plan, note, task, judged, run_root, result, verifying, tag)
+    return real(spec, plan, note, task, judged, result, ctx, tag)
 
 
 p2p._run_once = once
 
 
-class Worker:
+class Worker(WorkerDefaults):
     def run(self, workdir, task):
         slow = step != "n"
         (workdir / "src" / "calc.py").write_text(

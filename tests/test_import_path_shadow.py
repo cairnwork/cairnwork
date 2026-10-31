@@ -14,6 +14,7 @@ from conftest import commit_change, git
 
 from cairnwork.pipeline import TaskRejected, TaskSpec, check_task
 from cairnwork.verifiers import parse_verifier, run_verifiers
+from cairnwork.verify_context import VerifyContext
 
 VERIFY = (("pytest", ("python3", "-m", "pytest", "-q", "tests/test_calc.py")),)
 
@@ -69,7 +70,10 @@ def test_the_shadow_really_reaches_a_protected_test(repo, tmp_path):
     head = commit_change(repo, files)
     spec = parse_verifier("v", ["python3", "-m", "pytest", "tests/test_calc.py"])
     (run,) = run_verifiers(
-        repo, head, (spec,), tmp_path / "runs", "r1", python=sys.executable, import_paths=("src",)
+        VerifyContext(repo, tmp_path / "runs", python=sys.executable, import_paths=("src",)),
+        head,
+        (spec,),
+        "r1",
     )
     assert run.observation.passed, (run.why, run.log_path.read_text())
 

@@ -17,6 +17,7 @@ from test_base_pythonpath_shadow import PKG_VERIFY, VERIFY, _payload, _route, _s
 
 from cairnwork.pipeline import TaskRejected, TaskSpec, check_task
 from cairnwork.verifiers import parse_verifier, run_verifiers
+from cairnwork.verify_context import VerifyContext
 
 PACKAGE = {  # a package root inside a package, and a subpackage named like the root's calc.py
     "calc.py": "def half():\n    return 0\n",
@@ -205,7 +206,9 @@ def test_a_project_named_subpackage_really_shadows_once_pkg_is_inserted(
     spec = parse_verifier(
         "v", ["python3", "-m", "pytest", "pkg/tests/test_calc.py"], ("pkg/tests",)
     )
-    (run,) = run_verifiers(repo, head, (spec,), tmp_path / "runs", "r1", python=sys.executable)
+    (run,) = run_verifiers(
+        VerifyContext(repo, tmp_path / "runs", python=sys.executable), head, (spec,), "r1"
+    )
     assert run.observation.passed is passed, (run.why, run.log_path.read_text())
 
 
@@ -220,7 +223,10 @@ def test_an_init_really_turns_a_namespace_directory_into_the_module(
     head = commit_change(repo, files | ({"foo/__init__.py": "WHO = 'root'\n"} if add_init else {}))
     spec = parse_verifier("v", ["python3", "-m", "pytest", "tests/test_calc.py"])
     (run,) = run_verifiers(
-        repo, head, (spec,), tmp_path / "runs", "r1", python=sys.executable, import_paths=("src",)
+        VerifyContext(repo, tmp_path / "runs", python=sys.executable, import_paths=("src",)),
+        head,
+        (spec,),
+        "r1",
     )
     assert run.observation.passed is passed, (run.why, run.log_path.read_text())
 
@@ -238,6 +244,9 @@ def test_an_init_above_the_root_really_changes_which_project_module_wins(
         "v", ["python3", "-m", "pytest", "src/x/tests/test_calc.py"], ("src/x/tests",)
     )
     (run,) = run_verifiers(
-        repo, head, (spec,), tmp_path / "runs", "r1", python=sys.executable, import_paths=("src",)
+        VerifyContext(repo, tmp_path / "runs", python=sys.executable, import_paths=("src",)),
+        head,
+        (spec,),
+        "r1",
     )
     assert run.observation.passed is passed, (run.why, run.log_path.read_text())

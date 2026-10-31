@@ -6,13 +6,16 @@ import pytest
 from conftest import commit_change
 
 from cairnwork.verifiers import parse_verifier, run_verifiers
+from cairnwork.verify_context import VerifyContext
 
 pytestmark = pytest.mark.sandbox
 
 
 def run(repo, tmp_path, commit, target):
     spec = parse_verifier("pytest", ["python3", "-m", "pytest", target])
-    return run_verifiers(repo, commit, (spec,), tmp_path / "runs", "r1", python=sys.executable)[0]
+    return run_verifiers(
+        VerifyContext(repo, tmp_path / "runs", python=sys.executable), commit, (spec,), "r1"
+    )[0]
 
 
 FORGE_FROM_ENV = (
