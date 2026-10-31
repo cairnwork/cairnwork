@@ -23,7 +23,21 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
   Writing bytecode stays allowed and an honest import compiles from source; a test that reads back
   a `.pyc` it wrote (py_compile output, a sourceless import from tmp) fails on macOS, and so does
   deleting or replacing a `.pyc` there (an `rmtree` of a directory holding bytecode). A `.pyc` in
-  the candidate commit itself is left to the after-run scan. Linux has no such rule.
+  the candidate commit itself is left to the after-run scan. Linux has no such sandbox rule.
+- **Bytecode hook, both platforms** (`src/cairnwork/bytecode_hook.py`, #276): the verifier's pytest
+  process refuses to load bytecode from files. The trusted report plugin starts with a PEP 578
+  audit hook, installed before any conftest, test module or candidate code runs: it refuses opening
+  a `.pyc` (any letter case) for reading and unmarshalling a code object, which every way of
+  running bytecode from a file needs, whatever the file is called and whenever it is removed; and
+  it refuses the object-graph walks and memory files that would reach the hook itself. The plugin
+  probes the hook and fails to load (no verdict record, so the run fails) when it is not live or
+  the interpreter is older than 3.9; the run also sets `PYTHON_DISABLE_REMOTE_DEBUG=1`. This is a
+  higher hurdle, not a boundary: code in the same process may, from Python 3.13 on, still change
+  the hook's arguments at its entry, and ctypes or native code can rewrite memory. Honest code it
+  refuses (measured in #276's PR): reading back a `.pyc`, unmarshalling a code object,
+  `gc.get_objects`, `gc.get_referrers` and `gc.get_referents` (leak and reference-cycle checks),
+  `sys._current_frames` (pytest-timeout's dump on a timeout), `io.FileIO` given a path object, and
+  opening a file named `mem`. Coverage, debuggers and `sys.settrace` are not affected.
 - **Linux bubblewrap** (`src/cairnwork_sandbox/bwrap.py`): a read-only bind of the whole root,
   read-write binds for the write roots only, every namespace unshared (no network), all
   capabilities dropped, nested user namespaces disabled. `/run`, `/tmp` (and `/var/run` where
