@@ -296,7 +296,7 @@ def test_only_a_failed_task_says_no_evidence(word):
 
 
 class TruthyWorker(EditWorker):
-    isolated = 1  # truthy but not True: worker_reason does not call it isolated, nor may the code
+    isolated = 1  # pyright: ignore[reportAssignmentType] - truthy but not True: worker_reason does not call it isolated, nor may the code
 
 
 def test_only_isolated_is_true_journals_the_code(project, state, runs):

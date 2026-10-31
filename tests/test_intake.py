@@ -86,7 +86,7 @@ def test_a_task_not_started_can_be_cancelled_and_is_then_never_run(intake, repo)
         ledger=intake.ledger,
         notary=intake.notary,
         journal=intake.journal,
-        worker=None,
+        worker=None,  # pyright: ignore[reportArgumentType] - never run
         run_root=intake.run_root,
     )
     assert result.reason == "NOT_BOUND" and result.status == "CANCELLED"
@@ -102,7 +102,7 @@ def test_a_runner_refuses_a_request_that_is_not_the_bound_one(intake, repo):
             ledger=intake.ledger,
             notary=intake.notary,
             journal=intake.journal,
-            worker=None,
+            worker=None,  # pyright: ignore[reportArgumentType] - never run
             run_root=intake.run_root,
         )
 
