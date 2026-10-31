@@ -18,6 +18,7 @@ XDIST_GROUPS = {
         "test_local_worker_query_dir.py",
         "test_local_worker_readonly.py",
         "test_local_worker_search.py",
+        "test_local_worker_sweep_scope.py",
         "test_local_worker_unseen.py",
         "test_local_worker_untracked_allow_cli.py",
         "test_local_worker_wrapper.py",
