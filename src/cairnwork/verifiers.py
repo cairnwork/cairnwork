@@ -71,6 +71,7 @@ import cairnwork_sandbox
 from cairnwork import gitcmd, pytest_config, report_channel, report_guard
 from cairnwork.account_checkout import checkout_differences, make_account_checkout
 from cairnwork.account_checkout import remove_checkout as _remove_checkout
+from cairnwork.bytecode_hook import host_notes
 from cairnwork.bytecode_roots import bytecode_findings
 from cairnwork.confined import ATTEMPT_ENV, MAX_LOG_BYTES, RUN_TOKEN_VAR
 from cairnwork.core_request import VerifierObservation
@@ -346,7 +347,7 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
     return VerifierRun(
         spec, returncode, timed_out, mutated, log_path, observation, verdict.outcomes,
         survivors=survivors, ran=ran, plain_failure=plain_failure, why=why,
-        report_too_big=verdict.too_big, notes=profile.notes if profile else (),
+        report_too_big=verdict.too_big, notes=(profile.notes if profile else ()) + host_notes(),
         recorded=verdict.recorded, collect_errors=verdict.collect_errors,
         teardown_errors=verdict.teardown_errors,
     )  # fmt: skip

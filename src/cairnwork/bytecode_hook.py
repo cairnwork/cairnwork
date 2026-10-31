@@ -52,7 +52,30 @@ affected.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 NAME = "<cairnwork-bytecode-hook>"  # the hook's co_filename: how it recognises itself
+PTRACE_SCOPE = Path("/proc/sys/kernel/yama/ptrace_scope")
+PTRACE_NOTE = "bytecode hook: ptrace_scope "
+
+
+def host_notes() -> tuple[str, ...]:
+    """What the host leaves open around the hook, read outside the sandbox for the run's notes.
+
+    Linux: with Yama's ``ptrace_scope`` at 0 (or no Yama), any process of the run's user may write
+    another's memory, so a child the candidate starts could change the pytest process that holds
+    the hook (the hook only guards the process it is in). GitHub's runners and common distributions
+    use 1, which limits that to a process's own descendants. A note, not a refusal: the hook is a
+    hurdle either way, and the verdict is unchanged."""
+    if sys.platform != "linux":
+        return ()
+    try:
+        value = PTRACE_SCOPE.read_text(encoding="ascii").strip()
+    except (OSError, ValueError):
+        value = "unreadable"
+    return () if value in ("1", "2", "3") else (f"{PTRACE_NOTE}{value or 'empty'}",)
+
 
 HOOK_SOURCE = '''\
 # --- cairnwork bytecode hook: written by cairnwork.report_guard from cairnwork/bytecode_hook.py

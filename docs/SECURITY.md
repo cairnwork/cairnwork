@@ -44,6 +44,9 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
   `hypothesis.register_random` and `deterministic_PRNG` outside `@given`, typeguard's
   `check_argument_types()`/`check_return_type()`), `sys._current_frames` (pytest-timeout's dump on a timeout), `io.FileIO` given a path object, and
   opening a file named `mem`. Coverage, debuggers and `sys.settrace` are not affected.
+  On Linux, when Yama's `ptrace_scope` is 0 (or cannot be read), a child of the run could write
+  the pytest process's memory, and the run's notes say so (`bytecode hook: ptrace_scope 0`, read
+  outside the sandbox; the verdict is unchanged).
 - **Linux bubblewrap** (`src/cairnwork_sandbox/bwrap.py`): a read-only bind of the whole root,
   read-write binds for the write roots only, every namespace unshared (no network), all
   capabilities dropped, nested user namespaces disabled. `/run`, `/tmp` (and `/var/run` where
