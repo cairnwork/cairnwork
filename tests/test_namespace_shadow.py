@@ -243,6 +243,33 @@ def test_a_malformed_probe_answer_protects_every_deep_path(repo, python, monkeyp
     assert gate(repo, paths, python) == paths
 
 
+def _raises(code, stdin):
+    raise subprocess.SubprocessError("suffix probe failed")
+
+
+BAD_SUFFIXES = {
+    "the probe fails": _raises,
+    "not json": lambda code, stdin: "ok",
+    "not a list": lambda code, stdin: json.dumps({".py": 1}),
+    "a suffix without its dot": lambda code, stdin: json.dumps([".py", "pyc"]),
+    "a non-string suffix": lambda code, stdin: json.dumps([".py", 3]),
+}
+
+
+@pytest.mark.parametrize("answer", BAD_SUFFIXES.values(), ids=BAD_SUFFIXES.keys())
+def test_a_bad_suffix_probe_protects_every_deep_path(repo, python, monkeypatch, answer):
+    real = namespace_shadow._run_python
+
+    def run(python, code, stdin):
+        if code == namespace_shadow._SUFFIXES_PROBE:
+            return answer(code, stdin)
+        return real(python, code, stdin)
+
+    monkeypatch.setattr(namespace_shadow, "_run_python", run)
+    paths = ("src/nsco/myproj/core.py", "src/other/core.py")
+    assert gate(repo, paths, python) == paths
+
+
 def test_the_probe_answers_one_entry_per_chain(python):
     chains = [("nsco", "somelib", "impl"), ("regpkg",), ("mylib",), ("metans",), ("nothing_here",)]
     answer = json.loads(namespace_shadow._run_probe(python, chains))
