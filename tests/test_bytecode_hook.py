@@ -71,8 +71,10 @@ EPILOGUE = """
 try:
     step()
     outcome = "done"
-except (OSError, RuntimeError) as error:
-    outcome = "refused:" + type(error).__name__
+except (OSError, RuntimeError) as error:  # the hook's own refusals carry its prefix
+    text = error.strerror if isinstance(error, OSError) else str(error)
+    by_hook = (text or "").startswith("cairnwork:")
+    outcome = ("refused:" if by_hook else "error:") + type(error).__name__
 print(outcome, "live" if live() else "NOT LIVE")
 """
 
@@ -205,7 +207,7 @@ def test_the_hook_holds_after_each_step(tmp_path, python, case):
     body, refused = CASES[case]
     outcome, state = run_case(python, tmp_path, body)
     assert state == "live", (case, outcome)
-    assert outcome.startswith("refused:") is refused, (case, outcome)
+    assert outcome.startswith("refused:") if refused else outcome == "done", (case, outcome)
 
 
 @pytest.mark.parametrize("python", sorted(INTERPRETERS), ids=INTERPRETERS.get)
