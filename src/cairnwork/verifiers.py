@@ -9,7 +9,8 @@ in the worker's clone), with a minimal environment (no GIT_*, no inherited crede
 TMPDIR inside the run directory, bytecode and the pytest cache disabled) and a timeout. Bytecode a
 test still writes (py_compile) goes to a per-run cache prefix in TMPDIR, which must hold nothing a
 candidate could use to replace a protected input (pycache_guard.py), nor may any other place the
-run can write (bytecode_roots.py, #276); hypothesis's store goes to TMPDIR as well (examples, an
+run can write (bytecode_roots.py, #276); the pytest process itself refuses to load bytecode from
+files (bytecode_hook.py); hypothesis's store goes to TMPDIR as well (examples, an
 ast-parsed constants cache, json: read as data, never imported). A
 verifier passes only if it exits 0 and, at the end, the checkout matches the candidate tree: a
 final comparison (treecompare.py) of paths, bytes, symlink targets and the owner-execute bit. It
@@ -241,6 +242,7 @@ def _prepare_run(private: Path, ini: Path, ini_text: bytes, channel=None):
         # rule in the checkout comparison, so a hypothesis that ignores this still fails the run
         HYPOTHESIS_STORAGE_DIRECTORY=str(tmp / "hypothesis"),
         PYTHONNOUSERSITE="1",
+        PYTHON_DISABLE_REMOTE_DEBUG="1",  # 3.14+: no debugger script injected (bytecode_hook.py)
         PYTEST_DISABLE_PLUGIN_AUTOLOAD="1",
         PYTHONPATH=str(guard),
     )
