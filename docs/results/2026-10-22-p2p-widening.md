@@ -46,7 +46,7 @@ probe overflows or hangs no longer reaches the rows below.
 | Situation | Result |
 |---|---|
 | base probe leaves a process behind (or the process list cannot be read) or changes the checkout, in any mode (#285), or leaves forged bytecode (#481) | task UNCOMPARABLE, `P2P_BASE_PROBE_UNUSABLE: base-probe-survivors` / `base-probe-mutated` / `base-probe-forged in <mode> mode`; no narrower mode is tried (it would be weaker evidence). Before the worker (`base_env_check`): `BASE_ENV_FAILED`. Before #285 the candidate run blocked on the base's own leftover (false FAILED) |
-| base probe times out, reports nothing usable, or its report exceeds the 4 MiB report cap (a suite too large for one guard report; #184) in `whole-suite` | degrade once to `module-dir`; recorded as `degraded: base-probe-timeout` / `base-probe-failed` / `base-probe-report-over-cap` |
+| base probe times out, reports nothing usable, or its report exceeds the 4 MiB report cap (a suite too large for one guard report; #184) or its log the 4 MiB log cap (#481) in `whole-suite` | degrade once to `module-dir`; recorded as `degraded: base-probe-timeout` / `base-probe-failed` / `base-probe-report-over-cap` / `base-probe-log-over-cap` |
 | degraded to `module-dir` but it would run the same files (flat layout) | task UNCOMPARABLE (#234; before: REFUSED), `P2P_BASE_PROBE_UNUSABLE: <reason>; module-dir selects the same files` (no second probe) |
 | `module-dir` (or the degraded run) cannot be probed either | task UNCOMPARABLE (#234; before: REFUSED), `P2P_BASE_PROBE_UNUSABLE` |
 | degraded to `module-dir` and it selects no test file, or none of them passes on the base | task UNCOMPARABLE (#234; before: REFUSED), `P2P_BASE_PROBE_UNUSABLE` (a failed probe is never "nothing to run") |
