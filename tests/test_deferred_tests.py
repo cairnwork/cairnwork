@@ -169,6 +169,7 @@ class _Run:
             fields.get("timed_out", False), fields.get("report_too_big", False),
             fields.get("recorded", True), fields.get("collect_errors", ()),
         )  # fmt: skip
+        self.mutated = fields.get("mutated", ())
         self.teardown_errors = ()
 
 

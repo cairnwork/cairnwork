@@ -26,6 +26,7 @@ def run(name: str = "v", rc: int | None = 1, *, failed=(TARGET,), **fields):
         report_too_big=fields.get("report_too_big", False),
         recorded=fields.get("recorded", True),
         collect_errors=fields.get("collect_errors", ()),
+        mutated=fields.get("mutated", ()),
         teardown_errors=(),
     )
 
@@ -47,6 +48,19 @@ ROWS = [
     pytest.param(run(rc=None, failed=()), "UNCOMPARABLE", "BASE_NOT_EXECUTED", id="no-sandbox"),
     pytest.param(run(report_too_big=True), "UNCOMPARABLE", "BASE_REPORT_OVER_CAP", id="over-cap"),
     pytest.param(run(recorded=False), "UNCOMPARABLE", "BASE_NO_REPORT", id="no-record"),
+    pytest.param(run(mutated=("leftover.txt",)), "UNCOMPARABLE", "BASE_MUTATED", id="mutated-rc1"),
+    pytest.param(
+        run(rc=0, failed=(), mutated=("leftover.txt",)),
+        "UNCOMPARABLE",
+        "BASE_MUTATED",
+        id="mutated-rc0",
+    ),
+    pytest.param(  # named before the exit code: the changed checkout is the cause to fix
+        run(rc=2, failed=(), mutated=("leftover.txt",)),
+        "UNCOMPARABLE",
+        "BASE_MUTATED",
+        id="mutated-rc2",
+    ),
     pytest.param(
         run(collect_errors=("tests/test_x.py",)),
         "UNCOMPARABLE",
