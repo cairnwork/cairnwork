@@ -141,6 +141,9 @@ require_profile_safe() {
 
 require_run_root() {
   require_profile_safe "$1" run_root
+  case "$1" in  # TAG_ENTRY must stay one word of a ps line (#533)
+    *[[:space:]]*) refuse "run_root has white space" ;;
+  esac
   [ ! -L "$1" ] && [ -d "$1" ] || refuse "run_root is not a real directory"
   [ "$(physical_dir "$1")" = "$1" ] || refuse "run_root is not a canonical path"
   [ "$(physical_dir "$RUNS")" = "$RUNS" ] || refuse "runs directory is not canonical"
@@ -314,7 +317,7 @@ sandboxed() {
     PATH="$WORKER_PATH" \
     LANG=en_US.UTF-8 \
     PYTHONDONTWRITEBYTECODE=1 \
-    "$TAG_ENV=${RUN_ROOT##*/}" \
+    "$TAG_ENTRY" \
     "$SANDBOX_EXEC" -p "$sb_profile" "$@" 2>&1
 }
 
@@ -437,14 +440,15 @@ real_git() {
   refuse "no git binary under the developer tools"
 }
 
-# Worker-owned pids of this run: the run tag in their environment, or a cwd inside the run root.
+# Worker-owned pids of this run: the run tag (the whole run root, #533) in their environment, or a
+# cwd inside the run root.
 # (A process that both clears its environment and leaves the run root is not found; it is still
 # inside this run's Seatbelt profile, so the Owner must sweep before reading the checkout back and
 # treat the checkout as untrusted.)
 sweep_pids() {
   /bin/ps -E -ww -U "$UID_SELF" -o pid= -o command= 2>/dev/null | while read -r pid rest; do
     case " $rest " in
-      *" $TAG_ENV=${RUN_ROOT##*/} "*) printf '%s\n' "$pid" ;;
+      *" $TAG_ENTRY "*) printf '%s\n' "$pid" ;;
     esac
   done
   /usr/sbin/lsof -nP -a -u "$UID_SELF" -d cwd -Fpn 2>/dev/null | while read -r line; do
@@ -472,6 +476,7 @@ ACTION=$1
 RUN_ROOT=$2
 shift 2
 require_run_root "$RUN_ROOT"
+TAG_ENTRY="$TAG_ENV=$RUN_ROOT"  # sandboxed sets it, sweep_pids looks for it (#533)
 require_profile_safe "$PYROOT" python_root
 umask 007
 SCOPE_SET=""
