@@ -11,6 +11,8 @@ bundle into its own clone only after the worker is done (``deferred_tests.ensure
 one parent, prerequisite = that parent) inside a private scratch repository, so what is stored
 is what Cairnwork built, not what the supplier sent. Nothing is overwritten and a commit that
 is already on the mirror or already burned (``verify-used-tests``) is refused.
+
+``consume`` keeps the single-use record that verify runs and worker runs share (``used``).
 """
 
 from __future__ import annotations
@@ -26,6 +28,30 @@ from cairnwork.deferred_tests import TestCommitRejected
 from cairnwork.gitcmd import OID, GitCommandError, run_git
 
 HEAD_REF = "refs/cairnwork/test"
+USED_DIR = "verify-used-tests"  # <state>/verify-used-tests/<sha>: one per test commit ever used
+
+
+def consume(used: Path, test_commit: str, *, record: bool) -> None:
+    """A test commit judges one candidate: the run that uses it exposes it (logs, and even pass
+    or fail, tell a lot). Using it, on the verify path or the worker path alike, is registered by
+    creating ``used/<sha>`` exclusively, before the tests are fetched and so before they meet
+    any candidate; a crash or a later refusal still counts as used, and of two runs that race
+    for one commit only one creates it. record=False only checks."""
+    if not OID.fullmatch(test_commit):
+        raise TestCommitRejected("TEST_COMMIT_INVALID", "not a 40-hex commit id")
+    marker = used / test_commit
+    used.mkdir(mode=0o700, exist_ok=True)
+    try:
+        if record:  # any failure to create the marker propagates: nothing runs unrecorded
+            os.close(os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600))
+            return
+        try:
+            marker.lstat()  # any other lookup error propagates: unknown is never "unused"
+        except FileNotFoundError:
+            return  # not used yet
+        raise FileExistsError
+    except FileExistsError:
+        raise TestCommitRejected("TEST_COMMIT_ALREADY_EXPOSED", "push a new test commit") from None
 
 
 @dataclass(frozen=True)
@@ -37,6 +63,11 @@ class DeferredStore:
     def for_state(cls, state: Path, test_source: str | None) -> DeferredStore:
         """The store under ``state``; ``test_source == "bundle"`` is the strict mode."""
         return cls(state / "deferred-tests", test_source == "bundle")
+
+    @property
+    def used(self) -> Path:
+        """The single-use record of the same state (``consume``)."""
+        return self.path.parent / USED_DIR
 
     def check_dir(self) -> None:
         try:

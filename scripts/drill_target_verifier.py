@@ -40,6 +40,7 @@ from cairnwork import confined
 from cairnwork.pytest_config import PytestConfigError
 from cairnwork.verifier_account import VerifierAccount
 from cairnwork.verifiers import parse_verifier, run_verifiers
+from cairnwork.verify_context import VerifyContext
 
 TEST = "tests/services/test_federated_lessons.py"
 MODULE = "nexus/services/federated_lessons.py"
@@ -111,16 +112,8 @@ def verify(repo: Path, commit: str, base: str, python: str | None, account: Veri
 
 
 def _verify(repo, commit, base, python, account, spec):
-    run = run_verifiers(
-        repo,
-        commit,
-        (spec,),
-        account.run_root,
-        "drill" + os.urandom(4).hex(),
-        account=account,
-        python=python,
-        base_commit=base,
-    )[0]
+    ctx = VerifyContext(repo, account.run_root, account=account, python=python, base_commit=base)
+    run = run_verifiers(ctx, commit, (spec,), "drill" + os.urandom(4).hex())[0]
     private = run.log_path.parent
     log = run.log_path.read_text(errors="replace")
     ini = (private / "pytest.ini").read_text()

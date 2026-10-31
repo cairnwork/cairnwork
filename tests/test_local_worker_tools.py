@@ -255,6 +255,25 @@ def test_every_test_run_is_followed_by_a_sweep(tmp_path):
     assert [action_of(c[0]) for c in inv.calls] == ["pytest", "sweep", "read"]
 
 
+def test_every_read_only_test_run_is_followed_by_a_sweep(tmp_path):
+    t, inv = make(tmp_path, (0, b"1 passed", b""))
+    call = t.run_tests(["-q"], read_only=True)
+    t.read_file("a.py")
+    assert [action_of(c[0]) for c in inv.calls] == ["pytest-ro", "sweep", "read"]
+    assert call.action_type == "run_test" and call.tool_args == {"pytest_args": ["-q"]}
+
+
+def test_the_read_only_window_refuses_writable_actions_before_they_start(tmp_path):
+    t, inv = make(tmp_path, (0, b"1 passed", b""))
+    t.read_only_until_plan = True
+    for attempt in (lambda: t.run_tests(["-q"]), lambda: t.write_file("a.py", "x\n")):
+        with pytest.raises(tools.PrePlanReadOnly):
+            attempt()
+    assert inv.calls == [] and t.calls_started == 0
+    t.run_tests(["-q"], read_only=True)
+    assert [action_of(c[0]) for c in inv.calls] == ["pytest-ro", "sweep"]
+
+
 def test_edit_timeout_sweeps(tmp_path):
     t, inv = make(tmp_path, (0, b"a = 1\n", b""), (None, b"", b""))
     call = t.edit_file("m.py", "a = 1", "a = 2")

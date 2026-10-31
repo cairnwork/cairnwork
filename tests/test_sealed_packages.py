@@ -20,6 +20,7 @@ from test_prepend_shadow_names import ALLOWED, REFUSED, _both
 from cairnwork.gitcmd import GitCommandError
 from cairnwork.pipeline import TaskRejected, TaskSpec, check_task
 from cairnwork.verifiers import parse_verifier, run_verifiers
+from cairnwork.verify_context import VerifyContext
 
 INPKG = {  # in-package tests, import path src: pytest inserts src, never src/mylib
     "src/mylib/__init__.py": "",
@@ -173,8 +174,8 @@ def test_the_verifiers_pytest_never_inserts_a_sealed_package(repo, tmp_path, cas
     files, root, import_paths, passed = REACH[case]
     head = commit_change(repo, files | {f"{root}/test_calc.py": SHADOW_TEST})
     spec = parse_verifier("v", ["python3", "-m", "pytest", f"{root}/test_calc.py"], (root,))
-    (run,) = run_verifiers(repo, head, (spec,), tmp_path / "runs", "r1", python=sys.executable,
-                           import_paths=import_paths)  # fmt: skip
+    ctx = VerifyContext(repo, tmp_path / "runs", python=sys.executable, import_paths=import_paths)
+    (run,) = run_verifiers(ctx, head, (spec,), "r1")
     assert run.observation.passed is passed, (run.why, run.log_path.read_text())
 
 
@@ -193,7 +194,9 @@ def test_a_mirrored_test_folder_is_not_the_top_level_module(repo, tmp_path):
     spec = parse_verifier(
         "v", ["python3", "-m", "pytest", "pkg/tests/core/test_x.py"], ("pkg/tests",)
     )
-    (run,) = run_verifiers(repo, head, (spec,), tmp_path / "runs", "r1", python=sys.executable)
+    (run,) = run_verifiers(
+        VerifyContext(repo, tmp_path / "runs", python=sys.executable), head, (spec,), "r1"
+    )
     assert run.observation.passed, (run.why, run.log_path.read_text())
 
 
@@ -277,7 +280,9 @@ def test_a_base_conftest_really_puts_a_sealed_package_in_front(repo, tmp_path):
     spec = parse_verifier(
         "v", ["python3", "-m", "pytest", "pkg/tests/test_calc.py"], ("pkg/tests",)
     )
-    (run,) = run_verifiers(repo, head, (spec,), tmp_path / "runs", "r1", python=sys.executable)
+    (run,) = run_verifiers(
+        VerifyContext(repo, tmp_path / "runs", python=sys.executable), head, (spec,), "r1"
+    )
     assert run.observation.passed, (run.why, run.log_path.read_text())
 
 
