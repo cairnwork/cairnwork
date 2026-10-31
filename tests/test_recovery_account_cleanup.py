@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 from conftest import commit_change
-from test_recovery import GOOD, crash, stores  # reuse the crash drill
+from test_recovery import A1, GOOD, crash, stores  # reuse the crash drill
 
 from cairnwork.recovery import _remove_account_leftovers, recover
 
@@ -42,20 +42,20 @@ class _FakeAccount:
 def test_account_leftover_cleanup_removes_account_run_dirs(tmp_path):
     runs = tmp_path / "acct-runs"
     runs.mkdir()
-    (runs / "a1-v-v0").mkdir()  # the verifier clone
-    (runs / "a1-v-v0.work").mkdir()  # the verifier checkout's own dir
-    verify = runs / "a1-v-v0.priv"
+    (runs / f"{A1}-v-v0").mkdir()  # the verifier clone
+    (runs / f"{A1}-v-v0.work").mkdir()  # the verifier checkout's own dir
+    verify = runs / f"{A1}-v-v0.priv"
     (verify / "run").mkdir(parents=True)
     (verify / "verifier.log").write_text("log")
-    base = runs / "a1-b-v0.priv"
+    base = runs / f"{A1}-b-v0.priv"
     (base / "run").mkdir(parents=True)
     (runs / "b2-v-v0").mkdir()  # an unrelated attempt, must be untouched
     (runs / "b2-v-v0.work").mkdir()
 
-    _remove_account_leftovers(_FakeAccount(runs), "a1")  # type: ignore[arg-type]
+    _remove_account_leftovers(_FakeAccount(runs), A1)  # type: ignore[arg-type]
 
-    assert not (runs / "a1-v-v0").exists()
-    assert not (runs / "a1-v-v0.work").exists()
+    assert not (runs / f"{A1}-v-v0").exists()
+    assert not (runs / f"{A1}-v-v0.work").exists()
     assert not base.exists()  # a base-test run goes whole
     assert (verify / "verifier.log").exists() and not (verify / "run").exists()  # verify log kept
     assert (runs / "b2-v-v0").exists() and (runs / "b2-v-v0.work").exists()  # unrelated kept
@@ -122,12 +122,12 @@ def test_recover_cleans_the_accounts_own_run_dirs(repo, tmp_path):
 def test_account_leftover_cleanup_removes_p2p_run_directories(tmp_path, tag):
     """#171: the account-side remover drops the P2P -p/-q/-r dirs too."""
     runs = tmp_path / "acct-runs"
-    (runs / f"a1-{tag}-v0" / "tests").mkdir(parents=True)
-    (runs / f"a1-{tag}-v0.work").mkdir()
-    (runs / f"a1-{tag}-v0.abc" / "run").mkdir(parents=True)
+    (runs / f"{A1}-{tag}-v0" / "tests").mkdir(parents=True)
+    (runs / f"{A1}-{tag}-v0.work").mkdir()
+    (runs / f"{A1}-{tag}-v0.abc" / "run").mkdir(parents=True)
     (runs / f"a2-{tag}-v0").mkdir()
 
-    _remove_account_leftovers(_FakeAccount(runs), "a1")  # type: ignore[arg-type]
+    _remove_account_leftovers(_FakeAccount(runs), A1)  # type: ignore[arg-type]
 
-    assert not list(runs.glob(f"a1-{tag}-*"))
+    assert not list(runs.glob(f"{A1}-{tag}-*"))
     assert (runs / f"a2-{tag}-v0").exists()

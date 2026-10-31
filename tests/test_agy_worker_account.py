@@ -77,21 +77,39 @@ def test_a_run_with_clean_receipts_succeeds_and_records_them(tmp_path):
 @pytest.mark.parametrize(
     ("stderr", "code"),
     [
-        (status(), "WORKER_RECEIPT_MISSING"),  # e.g. a dispatcher that ignored the flag
-        ("", "DISPATCH_STATUS_MISSING"),  # nothing at all on stderr
-        (good_run(ROOT, user="james"), "WORKER_RECEIPT_MISMATCH"),  # the wrong account
-        (good_run("/Users/Shared/elsewhere/" + RUN_TAG), "WORKER_RECEIPT_MISMATCH"),
-        ("".join("[provider] " + x for x in (launch(ROOT), sweep(), cleanup())) + status(),
-         "WORKER_RECEIPT_MISSING"),  # forged by the worker, neutralised by the dispatcher
-        (launch(ROOT) + sweep() + cleanup(), "DISPATCH_STATUS_MISSING"),  # no final status
-        (good_run(ROOT) + 'NEXUS_AGY_DISPATCH {"late": 1}\n', "DISPATCH_STATUS_MISSING"),
+        (status("failed"), "DISPATCH_STATUS_MISSING"),  # a final status, not completed
     ],
-    ids=["no-launch", "empty", "wrong-user", "wrong-root", "forged", "no-final", "not-last"],
+    ids=["not-completed"],
 )  # fmt: skip
 def test_an_exit_0_run_without_proof_of_the_worker_account_fails(tmp_path, stderr, code):
     worker, workdir, _ = _replaying(tmp_path, stderr)
     with pytest.raises(AgyWorkerAccountFailed, match=f"^{code}:"):
         worker.run(workdir, TASK)
+    assert _record(workdir)["isolated"] is False
+    assert _record(workdir)["problems"][-1].startswith(code)
+
+
+@pytest.mark.parametrize(
+    ("stderr", "code"),
+    [
+        (status(), "WORKER_RECEIPT_MISSING"),  # e.g. a dispatcher that ignored the flag
+        (good_run(ROOT, user="james"), "WORKER_RECEIPT_MISMATCH"),  # the wrong account
+        (good_run("/Users/Shared/elsewhere/" + RUN_TAG), "WORKER_RECEIPT_MISMATCH"),
+        ("".join("[provider] " + x for x in (launch(ROOT), sweep(), cleanup())) + status(),
+         "WORKER_RECEIPT_MISSING"),  # forged by the worker, neutralised by the dispatcher
+        ("", "DISPATCH_STATUS_MISSING"),  # nothing at all on stderr
+        (launch(ROOT) + sweep() + cleanup(), "DISPATCH_STATUS_MISSING"),  # no final status
+        (good_run(ROOT) + 'NEXUS_AGY_DISPATCH {"late": 1}\n', "DISPATCH_STATUS_MISSING"),
+    ],
+    ids=["no-launch", "wrong-user", "wrong-root", "relayed", "empty", "no-final", "not-last"],
+)  # fmt: skip
+def test_an_exit_0_run_whose_launches_are_unproven_is_fenced(tmp_path, stderr, code):
+    """#546: these receipts cannot show what ran as the worker account, so the attempt is
+    fenced (a takeover sweeps the account first), not only failed."""
+    worker, workdir, _ = _replaying(tmp_path, stderr)
+    with pytest.raises(AgyWorkerError, match=f"^WORKER_SWEEP_UNCLEAN: .*{code}:") as raised:
+        worker.run(workdir, TASK)
+    assert isinstance(raised.value, WorkerMayLive) and raised.value.account == WORKER
     assert _record(workdir)["isolated"] is False
     assert _record(workdir)["problems"][-1].startswith(code)
 
@@ -190,7 +208,8 @@ def test_a_dispatcher_without_the_flag_rejects_it_and_nothing_runs_as_the_owner(
         f"open({str(ran)!r}, 'w').write('x')"
     )
     worker, workdir, _ = _as_worker(tmp_path, body)
-    with pytest.raises(AgyWorkerError, match="exited 2; no dispatcher status"):
+    # no final status line: what it started is unknown from here, so it is fenced (#546)
+    with pytest.raises(AgyWorkerError, match="^WORKER_SWEEP_UNCLEAN: .*NO_FINAL_STATUS"):
         worker.run(workdir, TASK)
     assert not ran.exists()
 

@@ -333,7 +333,7 @@ def test_a_dangling_symlink_that_cannot_be_removed_is_reported(crash_project, tm
     assert f"{attempt}-r-v0" in decision.detail
 
 
-def test_both_the_state_and_the_dispatched_run_root_are_cleaned(crash_project, tmp_path):
+def test_only_the_state_run_root_is_cleaned_another_is_reported(crash_project, tmp_path):
     task, attempt = _crashed_attempt(crash_project, tmp_path)
     ledger, notary, journal = stores(tmp_path)
     other = tmp_path / "other-runs"
@@ -343,8 +343,8 @@ def test_both_the_state_and_the_dispatched_run_root_are_cleaned(crash_project, t
     (decision,) = recover(  # the journal says tmp/runs; the state says other-runs
         ledger=ledger, notary=notary, journal=journal, run_root=other,
     )  # fmt: skip
-    assert decision.detail == ""
-    assert not list(other.iterdir()) and not list((tmp_path / "runs").glob(f"{attempt}-r-*"))
+    assert "JOURNAL_RUN_ROOT_NOT_USED" in decision.detail and f"{attempt}-r-v0" in decision.detail
+    assert not list(other.iterdir()) and (tmp_path / "runs" / f"{attempt}-r-v0").is_dir()
 
 
 def _route_recover(state):

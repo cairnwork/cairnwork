@@ -129,7 +129,7 @@ def analyze_file(test_file: Path, project_root: Path, source_roots: list[Path]) 
     scope = _scope(test_file, project_root, project, [*inits, *conftests, tree])
     imports, env = Imports(tree), module_env(tree)
     out: list[Obligation] = []
-    for item in collect(tree, rel, conftests, scope):
+    for item in collect(tree, rel, conftests, scope, inits):
         refusal, cases = item.refusal, []
         if refusal is None:
             try:

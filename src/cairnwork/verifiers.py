@@ -126,6 +126,7 @@ class VerifierRun:
     report_too_big: bool = False  # the guard's report exceeded MAX_REPORT_BYTES: no verdict read
     recorded: bool = False  # the guard's record was there and well-formed (base_comparison, #234)
     collect_errors: tuple[str, ...] = ()  # collectors the guard saw fail (B2, #234)
+    teardown_errors: tuple[str, ...] = ()  # tests whose teardown failed (#478, report_guard)
     why: str = ""  # in words, why the run did not pass ("" when it passed): reasons.py
     # facts about the sandbox policy used (e.g. "shm withheld: BWRAP_TMPFS_SIZE_UNSUPPORTED"); not
     # in the observation's artifact hash, so recording them changes no bound digest
@@ -346,4 +347,5 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
         survivors=survivors, ran=ran, plain_failure=plain_failure, why=why,
         report_too_big=verdict.too_big, notes=profile.notes if profile else (),
         recorded=verdict.recorded, collect_errors=verdict.collect_errors,
+        teardown_errors=verdict.teardown_errors,
     )  # fmt: skip
