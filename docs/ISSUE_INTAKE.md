@@ -23,7 +23,7 @@
        - 接手時只透過 GitHub API 讀取它的父 commit，不下載測試。
        - 給 worker 的指示裡不含 `eia-task` 區塊，也不含 commit id。
        - worker 結束後，Cairnwork 才抓取測試；在 base 上跑的 log 用完就刪。
-       - 任務開始前，如果這個測試 commit 已經在本機出現過（例如重試，或之前另一個任務用過同一個），就拒絕（`TEST_COMMIT_ALREADY_EXPOSED`）。重試時要把測試推成一個新的 commit。兩個**同時執行**的任務用同一個測試 commit 時擋不住，所以一個測試 commit 只給一張 Issue 用。
+       - 任務開始前，如果這個測試 commit 已經在本機出現過（例如重試，或之前另一個任務用過同一個），就拒絕（`TEST_COMMIT_ALREADY_EXPOSED`）。重試時要把測試推成一個新的 commit。被 `cairnwork-verify` 用過（`<state>/verify-used-tests/<sha>` 已存在）的也一樣拒絕。worker 結束、抓取測試之前，用 `O_EXCL` 建立同一個 `verify-used-tests/<sha>` 登記（和 verify 共用，`deferred_store.consume`），所以兩個**同時執行**、用同一個測試 commit 的任務只有一個拿得到，另一個拒絕 `TEST_COMMIT_ALREADY_EXPOSED`；worker 失敗、候選被拒絕這類在抓取之前就結束的嘗試不登記，重試可以沿用同一個測試 commit。直接用程式建立、沒有 `test_store`（沒有 state 目錄）的 TaskSpec 只有「從未出現過」檢查。
        - **限制**：worker 和 Cairnwork 用同一個系統帳號，而修正的驗證 log 是 Core 公證的證據，必須保留。所以重試時如果新的測試內容和上一次相同，worker 仍可能從上一次的 log 讀到。要徹底解決，必須讓 worker 改在獨立的帳號或環境裡執行（追蹤中）。
      - **確認測試有效**（三態，#234，規則 `base-compare-v1`）：在「base + 測試」上跑 verifier，看 guard 紀錄（不是 JUnit 檔）。每個 verifier 都判，不提早結束：
        - 有延後測試的案例失敗，而且每個 verifier 都正常跑完（exit 0 或 1、有 guard 紀錄、沒有收集錯誤）→ 有牙齒，繼續。

@@ -30,7 +30,6 @@ from cairnwork.deferred_tests import (
     TestCommitRejected,
     check_roots_on_base,
     lay_tests_over,
-    never_seen,
 )
 from cairnwork.gitcmd import OID
 from cairnwork.journal import AlreadyDispatched, Journal
@@ -39,7 +38,7 @@ from cairnwork.notary_verify import nonempty_fields
 from cairnwork.ownership import OWNER, InvalidStatusTransition, OwnershipLedger, request_digest
 from cairnwork.p2p import base_env_check, p2p_for
 from cairnwork.p2p_selection import DEFAULT_BUDGET_SECONDS, DIRECT_MODE
-from cairnwork.pipeline_judge import judge_candidate, tests_with_teeth
+from cairnwork.pipeline_judge import judge_candidate, tests_unused, tests_with_teeth
 from cairnwork.protected_paths import path_refusal
 from cairnwork.pytest_config import PytestConfigError, gate_import_paths
 from cairnwork.snapshot import snapshot_candidate
@@ -316,8 +315,7 @@ def _attempt(task, specs, digest, notary, worker, run_root, result, steps, verif
         result.reason = refusal
         return
     try:
-        if task.test_commit:
-            never_seen(task.repo, task.test_commit)
+        tests_unused(task, claim=False)  # single use, shared with verify runs
         check_roots_on_base(task.repo, task.base_commit, task.test_roots)
     except TestCommitRejected as exc:
         result.reason = str(exc)
@@ -354,8 +352,9 @@ def _attempt(task, specs, digest, notary, worker, run_root, result, steps, verif
         judged, test_files, plan = candidate.candidate_commit, (), None
         if task.test_commit:  # only now: the worker is done (deferred_tests.py, p2p.py)
             mode = "bundle" if task.test_store and task.test_store.required else "auto"
-            steps.reach("TEST_SOURCE", mode)  # the mode of this run, read by cairnwork_attest
             try:
+                tests_unused(task, claim=True)  # registered before the fetch, as verify does
+                steps.reach("TEST_SOURCE", mode)  # the mode of this run, read by cairnwork_attest
                 with base_stage(*verifying):  # an account failure here: no evidence (#234)
                     test_files = tests_with_teeth(task, specs, run_root, result, verifying)
                     judged = lay_tests_over(
