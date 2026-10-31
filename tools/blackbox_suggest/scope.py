@@ -196,6 +196,8 @@ def _import(node: ast.Import | ast.ImportFrom, verdict: Verdict, is_project, *, 
             a.asname or a.name.split(".")[0]: a.name if a.asname else a.name.split(".")[0]
             for a in node.names
         }
+    if _renames_pytest(node):  # the readers know pytest's names by their spelling
+        verdict.refuse("an import binds a pytest name under another name")
     for local, origin in origins.items():
         _bind(verdict, local, origin)
         _hook(verdict, local, top=top, by_def=False)
@@ -221,6 +223,8 @@ def _function(node: ast.FunctionDef | ast.AsyncFunctionDef, verdict: Verdict, *,
         verdict.refuse("a def binds a name this reader takes for pytest's")
     _hook(verdict, node.name, top=top, by_def=True)
     _decorators(node.decorator_list, verdict)
+    if any(_from_pytest(n) for stmt in node.body for n in ast.walk(stmt)):
+        verdict.refuse("a function imports from pytest in its body (only module imports are read)")
     if _calls_outside_pytest(node.args) or (node.returns and _calls_outside_pytest(node.returns)):
         verdict.refuse("module-level default argument runs at import time")
     args = node.args
@@ -230,6 +234,25 @@ def _function(node: ast.FunctionDef | ast.AsyncFunctionDef, verdict: Verdict, *,
         verdict.refuse("a default argument is not a literal (it is evaluated at import time)")
     if not all(_annotation_inert(n, verdict) for n in notes if n):
         verdict.refuse("an annotation is not a plain type (it is evaluated at import time)")
+
+
+def _pytest_module(name: str) -> bool:
+    return name.split(".")[0] in ("pytest", "_pytest")
+
+
+def _from_pytest(node: ast.AST) -> bool:
+    if isinstance(node, ast.ImportFrom):
+        return _pytest_module(node.module or "")
+    return isinstance(node, ast.Import) and any(_pytest_module(a.name) for a in node.names)
+
+
+def _renames_pytest(node: ast.Import | ast.ImportFrom) -> bool:
+    """``import pytest as pt``, ``from pytest import fixture as fx`` and the like."""
+    if isinstance(node, ast.ImportFrom):
+        names = node.names if _pytest_module(node.module or "") else []
+    else:
+        names = [a for a in node.names if _pytest_module(a.name)]
+    return any(a.asname and a.asname != a.name for a in names)
 
 
 def _decorators(decorators: list[ast.expr], verdict: Verdict) -> None:
