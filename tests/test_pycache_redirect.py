@@ -165,7 +165,7 @@ HONEST = (
 def test_a_redirected_pytest_pyc_for_a_deferred_test_fails_the_run(repo, tmp_path, where):
     run = forged_test_run(repo, tmp_path, where)
     assert run.returncode == PLANTED_RC, run.log_path.read_text()
-    assert not run.observation.passed and not run.plain_failure
+    assert not run.observation.passed and not run.plain_failure and run.forged  # #481
     assert "FORGED_BYTECODE" in run.why and "tests/test_z" in run.why, run.why
 
 

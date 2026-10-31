@@ -155,6 +155,7 @@ def test_tests_failing_or_skipped_on_the_base_are_left_out(monkeypatch):
         (1, (), "base-probe-survivors"),
         (-1, (), "base-probe-survivors"),  # the process list could not be read
         (0, ("junk.txt",), "base-probe-mutated"),
+        (0, (), "base-probe-forged"),  # #481: forged bytecode set below
     ],
 )
 def test_an_unclean_base_probe_is_unusable(monkeypatch, tmp_path, survivors, mutated, why):
@@ -162,7 +163,8 @@ def test_an_unclean_base_probe_is_unusable(monkeypatch, tmp_path, survivors, mut
     # already has them gives no usable comparison (the candidate would carry the base's leftover)
     def fake_run_verifiers(*args, **kwargs):
         run = make_run(True, outcomes={"tests/test_a.py::test_a": "passed"}, log_dir=tmp_path)
-        return (replace(run, survivors=survivors, mutated=mutated),)
+        forged = ("tests/__pycache__/test_a.pyc",) * (why == "base-probe-forged")
+        return (replace(run, survivors=survivors, mutated=mutated, forged=forged),)
 
     monkeypatch.setattr(p2p, "run_verifiers", fake_run_verifiers)
     assert p2p._probe(TASK, ("tests/test_a.py",), RESULT, context(tmp_path), 30) == (None, why)
