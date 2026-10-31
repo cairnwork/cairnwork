@@ -46,6 +46,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cairnwork.verifiers import parse_verifier, run_verifiers
+from cairnwork.verify_context import VerifyContext
 from cairnwork.workspace import create_attempt_clone, remove_attempt_clone
 
 # Ordered signatures for classifying a sandbox-only failure from the verifier log.
@@ -179,17 +180,8 @@ def probe_repo(probe: RepoProbe, *, timeout: int = 300) -> ProbeResult:
             return ProbeResult(name, "SKIP_BARE_TIMEOUT", f"bare tests exceeded {timeout}s")
         if not bare:
             return ProbeResult(name, "REPO_TESTS_NOT_GREEN", "tests do not pass bare; not a probe")
-        run = run_verifiers(
-            probe.repo,
-            commit,
-            (spec,),
-            run_root,
-            "env-smoke",
-            python=probe.python,
-            timeout=timeout,
-            account=None,
-            base_commit=commit,
-        )[0]
+        ctx = VerifyContext(probe.repo, run_root, python=probe.python, base_commit=commit)
+        run = run_verifiers(ctx, commit, (spec,), "env-smoke", timeout=timeout)[0]
         if run.observation.passed:
             return ProbeResult(name, "ENV_OK", "")
         skipped = _skip_like(run)

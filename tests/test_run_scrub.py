@@ -16,6 +16,7 @@ import cairnwork.verifiers as verifiers
 from cairnwork.pytest_config import PytestSettings
 from cairnwork.run_scrub import close_private, stale_run_error
 from cairnwork.verifier_account import VerifierAccount, VerifierAccountError
+from cairnwork.verify_context import VerifyContext
 
 
 class _Checkout:
@@ -139,11 +140,12 @@ def test_a_raised_verifier_still_drops_its_run_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(verifiers.tempfile, "mkdtemp", mkdtemp)
     monkeypatch.setattr(verifiers.pytest_config, "installed_plugins", lambda _python: ())
     monkeypatch.setattr(verifiers, "_run_one_in", boom)
+    nothing: Any = None
+    batch = verifiers._Batch(
+        VerifyContext(nothing, nothing), sys.executable, nothing, nothing, PytestSettings(), nothing
+    )
     with pytest.raises(RuntimeError, match="before verdict"):
-        verifiers._run_one(
-            None, None, None, _Checkout(tmp_path), sys.executable, None, None, None,
-            PytestSettings(), None,
-        )  # fmt: skip
+        verifiers._run_one(batch, None, _Checkout(tmp_path))
     private = made["private"]
     assert not (private / "run").exists()
     assert (private / "verifier.log").read_text() == "kept"
@@ -157,8 +159,10 @@ def test_a_raised_blackbox_still_drops_its_run_dir(tmp_path, monkeypatch):
         raise RuntimeError("before read")
 
     monkeypatch.setattr(blackbox_exec, "_prepare_run", prepare)
+    nothing: Any = None
+    ctx = VerifyContext(nothing, nothing)
     with pytest.raises(RuntimeError, match="before read"):
-        blackbox_exec._run_in(None, None, None, _Checkout(tmp_path), None, None, None, None, ())
+        blackbox_exec._run_in(None, ctx, nothing, None, _Checkout(tmp_path), None, ())
     private = next(tmp_path.glob("id-v0.*"))
     assert not (private / "run").exists()
     assert (private / "blackbox.log").read_text() == "kept"

@@ -20,6 +20,7 @@ import pwd
 import secrets
 import subprocess
 import tempfile
+import threading
 import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
@@ -37,7 +38,11 @@ SUDO = "/usr/bin/sudo"
 TERM_GRACE_SECONDS = 5.0  # after SIGTERM, and again after SIGKILL, before giving up on a wait
 KILL_GRACE_SECONDS = 2 * TERM_GRACE_SECONDS  # how long a timed-out call can outlive its timeout
 SWEEP_TIMEOUT_SECONDS = 10.0  # the sweep after a pytest run or a timed-out tool call
-TOOL_ACTIONS = ("list", "read", "write", "search", "search-probe", "pytest")  # tool profile
+TOOL_ACTIONS = ("list", "read", "write", "search", "search-probe", "pytest", "pytest-ro")
+TEST_ACTIONS = ("pytest", "pytest-ro")  # pytest-ro: nothing in the checkout writable (PAUSE)
+# The only actions that start while ``read_only_until_plan``: none can write the checkout.
+READ_ONLY_WINDOW_ACTIONS = ("list", "read", "search", "search-probe", "pytest-ro", "sweep")
+READ_ONLY_WINDOW_ACTIONS += ("status", "numstat", "tracked", "digest")
 START_MARKER = "LOCAL_WORKER_STARTED"  # first line the wrapper prints on stderr: "<marker> <nonce>"
 DEFAULT_MAX_OUTPUT_BYTES = 20_000
 DEFAULT_TIMEOUT_SECONDS = 300.0
@@ -52,6 +57,11 @@ Invoker = Callable[[list[str], bytes | None, float], Invoked]
 
 class WorkerIsolationError(RuntimeError):
     """sudo could not start the wrapper as the worker: fail closed, never fall back to the Owner."""
+
+
+class PrePlanReadOnly(WorkerIsolationError):
+    """PAUSE's read-only window (#476 AC8 a): an action that may write the checkout was asked for
+    before the plan arrived. Nothing started."""
 
 
 class ToolDeadline(TimeoutError):
@@ -164,6 +174,17 @@ class WorkerTools:
         self.calls_started = 0  # wrapper processes started: a tool may have changed the tree
         self.last_complete = True  # whether the last wrapper call's output was captured whole
         self.write_scope: tuple[str, ...] | None = None  # writes only here (write_scope.py)
+        self.read_only_until_plan = False  # PAUSE sets it (#476): READ_ONLY_WINDOW_ACTIONS only
+        self._window_lock = threading.Lock()  # the window's check and calls_started, together
+
+    def enter_read_only_if_unused(self) -> bool:
+        """PAUSE (#476): enter the read-only window only if no wrapper call has started yet, in
+        one step with the check _invoke makes before it starts one. False: a call started."""
+        with self._window_lock:
+            if self.calls_started:
+                return False
+            self.read_only_until_plan = True
+            return True
 
     # -- the actions -------------------------------------------------------------------------
     def list_dir(self, path: str = ".") -> ToolCall:
@@ -191,9 +212,11 @@ class WorkerTools:
         """The canary's check that search's profile denies writes (wrapper action search-probe)."""
         return self._call("search_probe", "search-probe", [], {})
 
-    def run_tests(self, pytest_args: Sequence[str]) -> ToolCall:
+    def run_tests(self, pytest_args: Sequence[str], read_only: bool = False) -> ToolCall:
+        """``read_only``: the wrapper's pytest-ro, whose profile denies every checkout write."""
         args = list(pytest_args)
-        return self._call("run_test", "pytest", args, {"pytest_args": args})
+        action = "pytest-ro" if read_only else "pytest"
+        return self._call("run_test", action, args, {"pytest_args": args})
 
     def edit_file(self, path: str, target: str, replacement: str) -> ToolCall:
         """Replace the single exact occurrence of ``target``; the text comes from a worker read."""
@@ -276,7 +299,10 @@ class WorkerTools:
         timeout = self._timeout(action, cap)
         nonce = secrets.token_hex(8)
         argv = self._argv(action, args, nonce)
-        self.calls_started += 1
+        with self._window_lock:
+            if self.read_only_until_plan and action not in READ_ONLY_WINDOW_ACTIONS:
+                raise PrePlanReadOnly(f"{action} may write the checkout before the plan arrives")
+            self.calls_started += 1
         rc, out, err = self.invoker(argv, stdin, timeout)
         self.last_complete = len(out) <= CAPTURE_LIMIT and len(err) <= CAPTURE_LIMIT
         marker = f"{START_MARKER} {nonce}\n".encode()
@@ -317,7 +343,7 @@ class WorkerTools:
         # numstat report: they write only in <run_root>/q, which its profile can neither read nor
         # write (Claude review of #239, NB1), so they report the tree as it is when they run.
         # The time for this sweep was kept free when the tool call's timeout was chosen.
-        if action in TOOL_ACTIONS and (action == "pytest" or rc is None):
+        if action in TOOL_ACTIONS and (action in TEST_ACTIONS or rc is None):
             self._call("sweep", "sweep", [], {}, cap=SWEEP_TIMEOUT_SECONDS)
 
     def _log(

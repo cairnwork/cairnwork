@@ -20,6 +20,7 @@ from cairnwork.ownership import OwnershipLedger
 from cairnwork.recovery import recover
 from cairnwork.verifier_account import VerifierAccount, VerifierAccountError
 from cairnwork.verifiers import parse_verifier, run_verifiers
+from cairnwork.verify_context import VerifyContext
 
 pytestmark = [pytest.mark.sandbox, pytest.mark.verifier_account]
 ACCOUNT = VerifierAccount()
@@ -57,8 +58,8 @@ def verify(project, files, target, monkeypatch=None, extra_env=(), account=ACCOU
     if monkeypatch is not None and extra_env:
         monkeypatch.setattr(verifiers, "_ENV_KEEP", (*verifiers._ENV_KEEP, *extra_env))
     spec = parse_verifier("pytest", ["python3", "-m", "pytest", target])
-    run_id = own_run_id(_OWN_PREFIXES)
-    return run_verifiers(project, head, (spec,), account.run_root, run_id, account=account)[0]
+    ctx = VerifyContext(project, account.run_root, account=account)
+    return run_verifiers(ctx, head, (spec,), own_run_id(_OWN_PREFIXES))[0]
 
 
 def test_pytest_runs_as_the_verifier_account(project):
@@ -183,7 +184,7 @@ def test_unusable_account_fails_closed(project):
     spec = parse_verifier("pytest", ["python3", "-m", "pytest", "tests/test_ok.py"])
     with pytest.raises(VerifierAccountError):
         run_id, head = own_run_id(_OWN_PREFIXES, "r"), git(project, "rev-parse", "HEAD")
-        run_verifiers(project, head, (spec,), bad.run_root, run_id, account=bad)
+        run_verifiers(VerifyContext(project, bad.run_root, account=bad), head, (spec,), run_id)
 
 
 def test_remove_refuses_paths_outside_the_run_root(tmp_path):

@@ -23,6 +23,7 @@ from cairnwork.notary import Notary
 from cairnwork.ownership import OwnershipLedger
 from cairnwork.p2p import P2PRejected
 from cairnwork.pipeline import TaskResult, TaskSpec, run_task
+from cairnwork.verify_context import VerifyContext
 
 OK = {"rc": 1, "outcomes": {"tests/test_calc.py::test_add": "failed"}}  # the bug: still fine
 
@@ -37,13 +38,13 @@ def probes(monkeypatch):
     seen: list = []
 
     def install(fields):
-        def fake(repo, commit, specs, run_root, run_id, **kw):
+        def fake(ctx, commit, specs, run_id, **kw):
             if not run_id.endswith("-e"):
-                return real(repo, commit, specs, run_root, run_id, **kw)
+                return real(ctx, commit, specs, run_id, **kw)
             seen.append((commit, tuple(spec.targets for spec in specs)))
             if callable(fields):
                 return fields()
-            return tuple(_run(spec, run_root, run_id, **fields) for spec in specs)
+            return tuple(_run(spec, ctx.run_root, run_id, **fields) for spec in specs)
 
         monkeypatch.setattr(p2p, "run_verifiers", fake)
         return seen, core
@@ -197,9 +198,9 @@ def unit(monkeypatch, tmp_path):
     )
 
     def check(task=KEY_TASK, verifying=(None, None)):
-        p2p.base_env_check(
-            task, tmp_path / "runs", TaskResult("t", "a" + "0" * 16, "FAILED"), verifying
-        )
+        result, (account, python) = TaskResult("t", "a" + "0" * 16, "FAILED"), verifying
+        ctx = VerifyContext.of(task, tmp_path / "runs", result.attempt_id, account, python)
+        p2p.base_env_check(task, result, ctx)
         return len(probed)
 
     return check
@@ -309,10 +310,10 @@ def test_an_unreadable_base_is_a_failure_not_a_skip(project, tmp_path, monkeypat
     probed: list = []
     monkeypatch.setattr(p2p, "_probe", lambda *a, **k: probed.append(a) or ({"t": "passed"}, ""))
     task = replace(KEY_TASK, repo=project, base_commit="4" * 40)  # not in the repository
+    result = TaskResult("t", "a" + "0" * 16, "FAILED")
+    ctx = VerifyContext.of(task, tmp_path / "runs", result.attempt_id)
     with pytest.raises(BaseUncomparable) as got:
-        p2p.base_env_check(
-            task, tmp_path / "runs", TaskResult("t", "a" + "0" * 16, "FAILED"), (None, None)
-        )
+        p2p.base_env_check(task, result, ctx)
     assert got.value.comparison.code == "BASE_ENV_FAILED" and probed == []
 
 

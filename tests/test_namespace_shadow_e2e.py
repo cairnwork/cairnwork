@@ -18,6 +18,7 @@ from namespace_site import make_site, site_dir
 from cairnwork.pipeline import TaskRejected, TaskSpec, check_task
 from cairnwork.verifier_account import VerifierAccount
 from cairnwork.verifiers import parse_verifier, run_verifiers
+from cairnwork.verify_context import VerifyContext
 
 TARGET = "tests/test_compute.py"
 VERIFY = (("pytest", ("python3", "-m", "pytest", "-q", TARGET)),)
@@ -90,7 +91,7 @@ def test_check_task_accepts_a_fix_with_an_own_namespace_portion(repo, python):
 def run(repo, tmp_path, python, base, head, name):
     spec = parse_verifier("pytest", ["python3", "-m", "pytest", "-q", TARGET])
     (result,) = run_verifiers(
-        repo, head, (spec,), tmp_path / name, name, python=python, base_commit=base
+        VerifyContext(repo, tmp_path / name, python=python, base_commit=base), head, (spec,), name
     )
     return result
 

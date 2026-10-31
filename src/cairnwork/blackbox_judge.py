@@ -31,11 +31,11 @@ class CheckVerdict:
     reason: str  # one line: "blackbox:<id>: PASS|MISMATCH|VERIFICATION_INCOMPLETE: <code> [...]"
 
 
-def judge_blackbox(declaration: Declaration, repo, commit: str, run_root, run_id: str, **kwargs):
+def judge_blackbox(declaration: Declaration, ctx, commit: str, run_id: str, **kwargs):
     """Run the declaration's checks on commit and judge them; never raises for a run that could not
     be made (that is VERIFICATION_INCOMPLETE). Returns (verdicts, log path or None)."""
     try:
-        run = run_blackbox(declaration, repo, commit, run_root, run_id, **kwargs)
+        run = run_blackbox(declaration, ctx, commit, run_id, **kwargs)
     except Exception as exc:  # noqa: BLE001 - declared but not run: incomplete, never a pass
         return _all_incomplete(declaration, commit, f"RUN_ERROR:{type(exc).__name__}"), None
     try:  # the output is the candidate's: whatever it makes the judging do, each check still fails

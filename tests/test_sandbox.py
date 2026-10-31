@@ -15,6 +15,7 @@ from fixture_tree import reach_env, world_base
 
 import cairnwork_sandbox
 from cairnwork.verifiers import parse_verifier, run_verifiers
+from cairnwork.verify_context import VerifyContext
 
 
 @pytest.fixture
@@ -35,7 +36,9 @@ def project(repo):
 def verify(project, tmp_path, files, target):
     head = commit_change(project, files) if files else git(project, "rev-parse", "HEAD")
     spec = parse_verifier("pytest", ["python3", "-m", "pytest", target])
-    runs = run_verifiers(project, head, (spec,), tmp_path / "runs", "r1", python=sys.executable)
+    runs = run_verifiers(
+        VerifyContext(project, tmp_path / "runs", python=sys.executable), head, (spec,), "r1"
+    )
     return runs[0]
 
 
@@ -205,7 +208,10 @@ def test_python_must_be_an_absolute_path(project, tmp_path):
     spec = parse_verifier("pytest", ["python3", "-m", "pytest", "tests/test_ok.py"])
     with pytest.raises(VerifierRejected):
         run_verifiers(
-            project, git(project, "rev-parse", "HEAD"), (spec,), tmp_path, "r1", python="python3"
+            VerifyContext(project, tmp_path, python="python3"),
+            git(project, "rev-parse", "HEAD"),
+            (spec,),
+            "r1",
         )
 
 

@@ -6,7 +6,7 @@
 #   <owner> ALL=(_cairnwork_worker) NOPASSWD: /Users/Shared/cairnwork-worker/local-bin/local-worker-tool
 # names that path. experimental/local_worker/tools.py runs it with `sudo -n -u _cairnwork_worker`.
 #
-# Eleven actions, nothing else (exit 64 = refused before anything ran):
+# Twelve actions, nothing else (exit 64 = refused before anything ran):
 #   [--start-nonce <hex>] before the action prints LOCAL_WORKER_STARTED <hex> on stderr first.
 #   local-worker-tool list   <run_root> <relpath>        list a directory of the checkout
 #   local-worker-tool read   <run_root> <relpath>        print a regular file of the checkout
@@ -22,6 +22,9 @@
 #                                                        for writing under it (each must fail;
 #                                                        exit 0 = a write got through)
 #   local-worker-tool pytest <run_root> [pytest args]    run <run_root>/venv/bin/python -m pytest
+#   local-worker-tool pytest-ro <run_root> [pytest args] the same under pytest_ro_profile: nothing
+#                                                        in the checkout is writable (PAUSE, #476
+#                                                        AC8 a: the tests before the plan arrives)
 #   local-worker-tool sweep  <run_root>                  kill this run's worker processes
 #   local-worker-tool status <run_root>                  git status of the checkout (porcelain v2,
 #                                                        then empty directories, FIFOs, sockets)
@@ -267,6 +270,14 @@ profile() {  # the tool profile: write, pytest (so every line of test code); rea
   printf '(deny signal)\n(allow signal (target same-sandbox))\n'
 }
 
+# pytest-ro: the tool profile with no write rule for the checkout, then a deny of every write in
+# it. Seatbelt holds for the process and all it starts, so a process a pytest-ro call leaves
+# behind can never write the checkout, not even after a later pytest call runs writable.
+pytest_ro_profile() {
+  profile
+  printf '(deny file-write* (subpath "%s"))\n' "$CHECKOUT"
+}
+
 readonly_profile() {  # list, read, search, search-probe (see the header)
   profile
   # Each deny names a path ("/"): a filterless (deny file-write*) here loses to the tool
@@ -504,6 +515,11 @@ case "$ACTION" in
     PY=$RUN_ROOT/venv/bin/python
     [ -x "$PY" ] || refuse "run_root has no venv/bin/python"
     ;;
+  pytest-ro)
+    PY=$RUN_ROOT/venv/bin/python
+    [ -x "$PY" ] || refuse "run_root has no venv/bin/python"
+    WRITE_RULES=""  # tmp, /dev/null, /dev/tty and /dev/dtracehelper only (profile)
+    ;;
   sweep | search-probe)
     [ "$#" -eq 0 ] || refuse "$ACTION takes no further arguments"
     ;;
@@ -565,6 +581,9 @@ exit "$w"' sh "$CHECKOUT/search-probe" "$RUN_ROOT/tmp/search-probe"
     ;;
   pytest)
     sandboxed "$(profile)" "$RUN_ROOT/tmp" "$PY" -m pytest -p no:cacheprovider "$@"
+    ;;
+  pytest-ro)
+    sandboxed "$(pytest_ro_profile)" "$RUN_ROOT/tmp" "$PY" -m pytest -p no:cacheprovider "$@"
     ;;
   status | numstat | tracked | digest)
     GIT_BIN=$(real_git) || exit 64
