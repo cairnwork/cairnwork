@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from local_worker_fakes import TAG, WRAPPER, make_runs
+from local_worker_fakes import NO_AUTO_MAINTENANCE, TAG, WRAPPER, make_runs
 
 from experimental.local_worker.tools import PrePlanReadOnly, WorkerTools, subprocess_invoker
 from experimental.pause.controller import JsonlEventLog, PrePlanGuard, read_events
@@ -60,7 +60,18 @@ def _fill(co):
     (co / "run.sh").chmod(0o755)
     os.symlink("src/a.py", co / "link")
     git(co, "add", "-A")
-    git(co, "commit", "-q", "-m", "base")
+    # A commit may start git's auto maintenance detached; its .git/objects/maintenance.lock then
+    # appears and vanishes while a digest walks .git (FileNotFoundError, or digests that differ).
+    git(co, *NO_AUTO_MAINTENANCE, "commit", "-q", "-m", "base")
+
+
+def test_the_fixture_commit_starts_no_background_maintenance(tmp_path, monkeypatch):
+    trace = tmp_path / "trace.log"
+    monkeypatch.setenv("GIT_TRACE", str(trace))
+    co = tmp_path / "repo"
+    co.mkdir()
+    _fill(co)
+    assert "maintenance run" not in trace.read_text()
 
 
 @pytest.fixture
