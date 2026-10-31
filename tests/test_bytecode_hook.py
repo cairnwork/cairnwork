@@ -247,6 +247,30 @@ def test_an_interpreter_without_the_marshal_event_fails_the_probe(tmp_path):
 
 
 @pytest.mark.parametrize("python", sorted(INTERPRETERS), ids=INTERPRETERS.get)
+def test_a_frozen_module_name_held_by_another_module_fails_the_install(tmp_path, python):
+    """The frozen standard-library modules are imported before the hook from the interpreter's
+    frozen table only (3.11+ lists them); a module of that name from anywhere else fails closed."""
+    (tmp_path / "hooked.py").write_text(HOOK_SOURCE)
+    code = (
+        "import _imp, sys, types\n"
+        "if not hasattr(_imp, '_frozen_module_names'):\n"
+        "    print('no list')\n"
+        "    raise SystemExit\n"
+        "sys.modules['ntpath'] = types.ModuleType('ntpath')\n"
+        "sys.path.insert(0, sys.argv[1])\n"
+        "try:\n"
+        "    import hooked\n"
+        "    print('installed')\n"
+        "except RuntimeError as error:\n"
+        "    print('refused' if 'ntpath' in str(error) else error)\n"
+    )
+    done = subprocess.run(
+        [python, "-I", "-B", "-c", code, str(tmp_path)], capture_output=True, text=True, timeout=60
+    )
+    assert done.stdout.strip() in ("refused", "no list"), done.stdout + done.stderr
+
+
+@pytest.mark.parametrize("python", sorted(INTERPRETERS), ids=INTERPRETERS.get)
 def test_the_hook_defaults_hold_only_immutable_values(tmp_path, python):
     body = (
         "def step():\n"
