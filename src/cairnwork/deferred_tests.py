@@ -174,10 +174,13 @@ def new_tests(repo: Path, base: str, test_commit: str, paths: tuple[str, ...]) -
     return frozenset(found)
 
 
-def _test_functions(repo: Path, blob: str) -> dict[str, str]:
+def _test_functions(repo: Path, blob: str, *, present: bool = False) -> dict[str, str]:
+    """``present``: the file is known to exist, so a failed read is a refusal, not a new file."""
     try:
         source = run_git(repo, "show", blob)
-    except GitCommandError:
+    except GitCommandError as exc:
+        if present:
+            raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
         return {}  # a new file
     except UnicodeDecodeError as exc:
         raise TestCommitRejected("TEST_COMMIT_UNPARSABLE", f"{blob} is not UTF-8") from exc

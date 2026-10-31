@@ -12,9 +12,18 @@ done:
 1. select existing test files on the base by `p2p_selection` (state config, one state per target
    repository): `whole-suite` (default), `module-dir`, or `off` (the per-repository opt-out);
 2. run them on the **base** to find the tests that pass there (a test that fails or is skipped on
-   the base is not a regression); the deferred test files themselves are excluded;
+   the base is not a regression). A test file the test commit adds is not on the base, so never
+   selected. A base test file the test commit changes stays selected: the tests in it that the
+   test commit adds, changes or removes (by AST, as `deferred_tests.new_tests`) are left to the
+   author's verifiers (counted as `changed_by_test_commit`); every other test the base passed in
+   it is a P2P test, bound by function (never the whole file, which on the judged commit also
+   holds the test commit's tests). Before, the whole changed file was left out, so a node-id
+   verifier on it left the file's other tests unchecked;
 3. run exactly those base-passing tests on the judged commit as one more verifier
-   `p2p-<applied mode>`; Core must see it pass like any other verifier.
+   `p2p-<applied mode>`; Core must see it pass like any other verifier. Every base-passing node id
+   the targets cover is bound (`nodes`, `nodes_sha256`): a run that exits 0 but did not run one of
+   them (for example a parametrisation built from candidate code that no longer yields that case)
+   is not a pass, and is not re-run; the absent ids are recorded as `missing`.
 
 `module-dir`: the directories holding a test for a changed file (by name `test_<stem>.py` /
 `<stem>_test.py`, or by the mirrored package directory); every test directly in such a directory
@@ -45,18 +54,19 @@ probe overflows or hangs no longer reaches the rows below.
 | candidate P2P run exceeds the budget | the observation is not a pass, Core says not verified (no re-run) |
 | a P2P run fails on the candidate only because a test failed | re-run once; a pass on the re-run is what Core sees (same verdict as a clean pass) and the first run is recorded (`rerun`: failed tests (sanitised), returncode, timed_out, mutated, survivors, ran; bound into the re-run's artifact hash); the task result's `p2p` also carries `p2p_rerun_passed` (true: passed after re-run; false: failed again; absent: clean pass or no re-run), so reports can separate the cases; a second failure blocks |
 | a P2P run fails for any other reason (checkout mutated, surviving process, oversized log, no usable guard report) | blocks as it is, no re-run |
+| a P2P run (or its re-run) exits 0 but lacks a bound base-passing node id | not a pass, no re-run; `missing` lists the absent ids (first 50, sanitised; not in the hashed note, which is written before the run) |
 | no base-passing test selected (no degradation) | only the author's verifiers run; recorded (`targets: 0`) |
 | author verifier id equals `p2p-<mode>` | REFUSED, `P2P_VERIFIER_ID_CLASH` |
 
 `p2p_time_budget_seconds` (default 300) bounds each probe or run, so the worst case adds three
-budgets (probe, degraded probe, candidate run), four when a failing candidate run is re-run. Tasks without a `test_commit` are unchanged.
+budgets (probe, degraded probe, candidate run), four when a failing candidate run is re-run. A base test file the test commit changes adds its unchanged tests to the probe and the candidate run, under the same budget per run; an overrun follows the rows above. Tasks without a `test_commit` are unchanged.
 
 **Default per entry path (#174).** Intake (`cairnwork-route`, the issue runner) defaults `p2p_selection` to `whole-suite`, budget 300 s. A `TaskSpec` built directly (`pipeline.run_task`, `scripts/drill_*.py`) is a library/drill path and defaults to `off`: it has no P2P unless the caller sets `p2p_mode`. The constants live in `p2p_selection.py` (`DEFAULT_MODE`, `DIRECT_MODE`, `DEFAULT_BUDGET_SECONDS`).
 
 ## Where the rule is recorded
 
 Core's notarisation contract is unchanged. The rule (`configured`, `applied`, `degraded`, budget,
-counts, `targets_sha256`) is a JSON note bound into the p2p observation's artifact hash (so the
+counts, `targets_sha256`, `nodes`, `nodes_sha256`) is a JSON note bound into the p2p observation's artifact hash (so the
 Core record binds it), written as `p2p-selection.json` beside the p2p verifier log, and returned as
 `p2p` by `cairnwork-verify` and in the task result. The exact test list is also part of the hashed
 argv.

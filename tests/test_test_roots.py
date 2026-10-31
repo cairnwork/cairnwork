@@ -15,6 +15,7 @@ from cairnwork.intake import Intake, IntakeRefused
 from cairnwork.issue_task import IssueRefused, check_test_roots, parse_task_block
 from cairnwork.pipeline import TaskRejected, TaskSpec, check_task
 from cairnwork.verifiers import VerifierRejected, parse_verifier, protected_verifier_inputs
+from cairnwork.verify_context import VerifyContext
 
 PKG = ("pkg/tests",)
 RUN = ["python3", "-m", "pytest", "-q"]
@@ -302,7 +303,7 @@ def test_tests_with_teeth_checks_the_roots_before_any_base_run(pkg_project, tmp_
     monkeypatch.setattr(pipeline_judge, "run_verifiers", boom)
     monkeypatch.setattr(pipeline_judge, "ensure_test_commit", boom)
     with pytest.raises(Rejected, match="TEST_ROOT_NOT_A_DIRECTORY"):
-        pipeline_judge.tests_with_teeth(task, (), tmp_path, None, (None, None))
+        pipeline_judge.tests_with_teeth(task, (), None, VerifyContext.of(task, tmp_path))
 
 
 @pytest.mark.parametrize(
