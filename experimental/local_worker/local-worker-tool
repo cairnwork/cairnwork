@@ -447,7 +447,8 @@ real_git() {
 # inside the run root. ps -E prints the arguments and then the environment on one line, so a
 # line with the entry anywhere is only a candidate (env_has_tag). The arguments column is the
 # process's own to rewrite, so the entry there (a grep for it, another run's test code, or
-# anything a process put in that column) cannot be told apart: never killed, sweep not clean.
+# anything a process put in that column) cannot be told apart: not killed for that, and the
+# sweep is not clean while it lasts. Its cwd inside the run root still makes it this run's (k).
 # Not found: a process that both clears its environment and leaves the run root; it is still
 # inside this run's Seatbelt profile, so the Owner must sweep before reading the checkout back
 # and treat the checkout as untrusted. Taken for this run's: a process of the same uid that put
@@ -469,24 +470,28 @@ sweep_pids() {
 }
 
 # "k <pid>" when pid $1 has TAG_ENTRY in its environment. Its ps line without -E is its arguments
-# alone, and the -E line starts with exactly that; the rest is the environment. A process that
-# exec'd between the two reads (or a reused pid) does not line up, an empty arguments column
-# proves nothing, the entry in the arguments column cannot be told apart (see sweep_pids), and a
-# live process ps cannot read cannot be told either: "u <pid>" for all. Gone: nothing.
+# alone, and the -E line starts with exactly that; the rest is the environment. Only that is
+# proof. Anything else about a live process is "u <pid>": a failed read, an exec between the
+# reads (or a reused pid) so the lines do not line up, an empty arguments column, the entry in
+# the arguments column (see sweep_pids), or the entry no longer found where sweep_pids saw it.
+# A process that is gone prints nothing.
 env_has_tag() {
   if args_line=$(/bin/ps -ww -p "$1" -o command= 2>/dev/null) &&
-    full_line=$(/bin/ps -E -ww -p "$1" -o command= 2>/dev/null); then
+    full_line=$(/bin/ps -E -ww -p "$1" -o command= 2>/dev/null) && [ -n "$args_line" ]; then
     case "$full_line" in
-      "$args_line"*) ;;
-      *) printf 'u %s\n' "$1"; return 0 ;;
+      "$args_line"*)
+        case " $args_line " in
+          *" $TAG_ENTRY "*) ;;
+          *)
+            case " ${full_line#"$args_line"} " in
+              *" $TAG_ENTRY "*) printf 'k %s\n' "$1"; return 0 ;;
+            esac
+            ;;
+        esac
+        ;;
     esac
-    case " $args_line " in
-      "  " | *" $TAG_ENTRY "*) printf 'u %s\n' "$1"; return 0 ;;
-    esac
-    case " ${full_line#"$args_line"} " in
-      *" $TAG_ENTRY "*) printf 'k %s\n' "$1" ;;
-    esac
-  elif kill -0 "$1" 2>/dev/null; then
+  fi
+  if kill -0 "$1" 2>/dev/null; then
     printf 'u %s\n' "$1"
   fi
 }

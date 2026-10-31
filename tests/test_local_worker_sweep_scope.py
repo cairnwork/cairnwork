@@ -196,6 +196,39 @@ def test_a_command_line_that_names_the_tag_entry_makes_the_sweep_unclean(tmp_pat
         other.wait()
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="the sweep reads ps -E and lsof as on macOS")
+def test_the_entry_in_the_arguments_does_not_spare_a_process_whose_cwd_is_in_the_run(tmp_path):
+    """Its cwd inside the run root makes it this run's: the entry in its arguments (unclean on its
+    own) does not keep it alive, and once it is gone the sweep is clean."""
+    runs = make_runs(tmp_path)
+    root = runs / TAG
+    env = {k: v for k, v in os.environ.items() if k != TAG_VAR}
+    other = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(120)", f"{TAG_VAR}={root}"],
+        cwd=root,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        seen, end = "", time.monotonic() + 10
+        while str(root) not in seen:  # it exec'd and ps can read its arguments: no vacuous pass
+            assert time.monotonic() < end, f"ps never showed the arguments: {seen!r}"
+            seen = subprocess.run(
+                ["/bin/ps", "-ww", "-o", "command=", "-p", str(other.pid)],
+                capture_output=True,
+                text=True,
+                check=False,
+            ).stdout
+            time.sleep(0.05)
+        assert run(runs, "sweep", str(root)).stdout == CLEAN
+        assert _gone(other.pid), "the sweep left a process whose cwd is in the run root"
+    finally:
+        other.kill()
+        other.wait()
+
+
 def test_a_run_root_with_white_space_is_refused(tmp_path):
     runs = make_runs(tmp_path / "two words")
     proc = run(runs, "sweep", str(runs / TAG))
