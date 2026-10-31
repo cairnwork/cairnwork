@@ -179,6 +179,10 @@ CASES = {
         "def step():\n    sys.audit('cpython.remote_debugger_script', 'x')\n",
         True,
     ),
+    "frozen_stdlib_modules_still_import": (
+        "def step():\n    import ntpath, runpy, importlib.util, importlib.machinery\n",
+        False,
+    ),
     "writing_a_pyc": (
         "def step():\n    open(os.path.join(sys.argv[2], 'w.pyc'), 'wb').close()\n",
         False,

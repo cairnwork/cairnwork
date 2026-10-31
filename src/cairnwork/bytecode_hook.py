@@ -12,8 +12,10 @@ before any conftest, test module or candidate code. It installs a PEP 578 audit 
   (``PermissionError``: the import system and pytest treat it as a cache miss and compile the
   source, as an honest run already does, its cache prefix being an empty directory);
 * refuses to unmarshal a code object (``marshal.loads`` of data that starts with one) and any
-  ``marshal.load``: every way to run bytecode from a file goes through one of the two, whatever
-  the file is called, where it lies and when it is removed;
+  ``marshal.load``: the import system's bytecode loaders (cached and sourceless imports,
+  zipimport) and pytest's assertion-rewrite cache go through one of the two, so bytecode they
+  would load from a file is refused whatever the file is called, where it lies and when it is
+  removed;
 * keeps itself in place against pure-Python code in the same process: its function and defaults
   cannot be replaced, and the object-graph walks (``gc.get_referrers``, ``gc.get_referents``,
   ``gc.get_objects``) and ``sys._current_frames`` that would reach it are refused outright;
@@ -34,12 +36,16 @@ of strings and one ``slice``; types are compared with the bound ``type`` only (n
 no ``__class__``); it keeps no state and reports nothing, refusal is the exception it raises.
 
 Not a boundary. From Python 3.13 on, code in the same process may still change the hook's
-arguments at its entry; ctypes or native code can rewrite memory; and code can change what a test
-reads without any bytecode file (``sys.modules``, import hooks: #303). This raises the cost of one
-way to make a verdict disagree with the source, like tamper_scan and report_channel; the boundary
-is a verdict produced outside the candidate's process. Honest code it refuses: reading back a
-``.pyc`` (as Seatbelt already does), unmarshalling code objects, the gc walks above (leak and
-reference-cycle checks), ``sys._current_frames`` (a stack dump, as pytest-timeout prints on a
+arguments at its entry; ctypes or native code can rewrite memory; code the candidate builds or
+unmarshals explicitly in its own process is not covered; and code can change what a test reads
+without any bytecode file (``sys.modules``, import hooks: #303). The hook guards the process it is
+installed in: a forked child keeps it, a child Python a test starts does not (no child produces
+the verdict). This raises the cost of one way to make a verdict disagree with the source, like
+tamper_scan and report_channel; the boundary is a verdict produced outside the candidate's
+process. Honest code it refuses: reading back a ``.pyc`` (as Seatbelt already does), unmarshalling
+code objects, the gc walks above (leak and reference-cycle checks; ``hypothesis.register_random``
+and ``deterministic_PRNG`` outside ``@given``, typeguard's ``check_argument_types`` and
+``check_return_type``), ``sys._current_frames`` (a stack dump, as pytest-timeout prints on a
 timeout) and ``io.FileIO`` on a path object. Coverage, debuggers and ``sys.settrace`` are not
 affected.
 """
@@ -131,6 +137,11 @@ def _cw_install_bytecode_hook():
         types.FunctionType, name, pyc, frozenset(s.encode() for s in pyc), slice(None), message,
         "cairnwork: not available in a verifier run",
     )  # fmt: skip
+    import _imp  # 3.13+ unmarshals frozen stdlib modules on the audited path: load them first
+
+    for frozen in getattr(_imp, "_frozen_module_names", tuple)():
+        if not frozen.startswith("__"):  # not the interpreter's own __hello__ test modules
+            __import__(frozen)
     _cw_sys.addaudithook(hook)
     live = False
     try:  # refused by the hook before the path reaches the file system
