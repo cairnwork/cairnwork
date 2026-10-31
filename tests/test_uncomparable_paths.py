@@ -46,6 +46,7 @@ PROBE_ROWS = [  # a failed P2P base probe (the base run itself has teeth)
     pytest.param({"rc": None, "timed_out": True}, id="probe-timeout"),
     pytest.param({"rc": 1, "report_too_big": True}, id="probe-over-cap"),
     pytest.param({"rc": 1, "log_too_big": True}, id="probe-log-over-cap"),
+    pytest.param({"rc": 1, "forged": ("x.pyc",)}, id="probe-forged"),
     pytest.param({"rc": 2}, id="probe-rc2"),
     pytest.param({"rc": 1, "recorded": False}, id="probe-no-record"),
 ]
