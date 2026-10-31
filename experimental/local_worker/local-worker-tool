@@ -451,6 +451,8 @@ real_git() {
 # inside this run's Seatbelt profile, so the Owner must sweep before reading the checkout back
 # and treat the checkout as untrusted. Taken for this run's: a process of the same uid that put
 # the entry into its environment on purpose (it can make this sweep unclean, never clean).
+# A process that keeps rewriting its arguments only makes the sweep report unclean: the two ps
+# reads never agree, so it is never sent SIGKILL.
 sweep_pids() {
   /bin/ps -E -ww -U "$UID_SELF" -o pid= -o command= 2>/dev/null | while read -r pid rest; do
     case " $rest " in

@@ -24,8 +24,19 @@ tmp = os.environ["TMPDIR"]
 with open(os.path.join(tmp, "pid.part"), "w") as fh:
     fh.write(str(os.getpid()))
 os.replace(os.path.join(tmp, "pid.part"), os.path.join(tmp, "pid"))
-if sys.argv[1:] == ["leave"]:
+if sys.argv[1:2] in (["leave"], ["churn"]):
     os.chdir("/")  # from here on only its environment ties it to its run
+if sys.argv[1:2] == ["churn"]:
+    import ctypes  # rewrite the last argument in place over and over
+    libc = ctypes.CDLL(None)
+    libc._NSGetArgv.restype = ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))
+    libc._NSGetArgc.restype = ctypes.POINTER(ctypes.c_int)
+    where = libc._NSGetArgv().contents[libc._NSGetArgc().contents.value - 1]
+    width, n = len(sys.argv[-1]), 0
+    while True:
+        n += 1
+        ctypes.memmove(where, str(n % 10**width).zfill(width).encode(), width)
+        time.sleep(0.0003)
 end = time.time() + 120
 while time.time() < end:
     time.sleep(0.05)
@@ -103,6 +114,24 @@ def test_two_runs_named_alike_do_not_sweep_each_other(tmp_path):
         swept = run(b, "sweep", str(b / TAG)).stdout
     assert swept == CLEAN
     assert _gone(pid_b), "run B's sweep did not find its own process by its environment"
+
+
+@pytest.mark.sandbox
+def test_a_process_whose_arguments_keep_changing_makes_the_sweep_unclean_and_is_not_stopped(
+    tmp_path,
+):
+    """The wrapper cannot tell whose it is (its two ps reads never agree): it is not stopped and
+    the sweep is not clean."""
+    runs = make_runs(tmp_path)
+    pid = _start_sleeper(runs, "churn", "0" * 12)
+    try:
+        out = run(runs, "sweep", str(runs / TAG)).stdout
+        assert out.startswith(b"LOCAL_WORKER_SWEEP unclean"), out
+        assert str(pid).encode() in out.split()[2:], out
+        assert _alive(pid), "the sweep stopped a process it could not tell"
+    finally:
+        os.kill(pid, 9)
+    assert _gone(pid)
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="the sweep reads ps -E and lsof as on macOS")
