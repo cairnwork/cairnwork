@@ -63,6 +63,7 @@ import sys
 import tempfile
 from contextlib import nullcontext
 from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
 
 import cairnwork_sandbox
@@ -90,7 +91,7 @@ from cairnwork.verifier_spec import (  # re-exported for existing importers
     protected_verifier_inputs,
 )
 from cairnwork.verify_context import VerifyContext
-from cairnwork.workspace import create_attempt_clone
+from cairnwork.workspace import create_attempt_clone, unless_interrupted
 
 __all__ = [
     "DEFAULT_TIMEOUT_SECONDS",
@@ -200,7 +201,7 @@ def _run_all(batch: _Batch, specs, run_id) -> tuple[VerifierRun, ...]:
         work.mkdir(mode=0o700)
         mark = gitcmd.marked(ATTEMPT_ENV, ctx.attempt_id) if ctx.attempt_id else nullcontext()
         with mark:
-            try:
+            with unless_interrupted(partial(_remove_checkout, work, clone_id, ctx.account)):
                 if ctx.account is None:
                     checkout = create_attempt_clone(
                         ctx.repo, batch.candidate_commit, work, clone_id
@@ -211,8 +212,6 @@ def _run_all(batch: _Batch, specs, run_id) -> tuple[VerifierRun, ...]:
                         ctx.account, python, ctx.repo, batch.candidate_commit, work, clone_id
                     )
                 runs.append(_run_one(batch, spec, checkout))
-            finally:
-                _remove_checkout(work, clone_id, ctx.account)
     return tuple(runs)
 
 
@@ -257,14 +256,13 @@ def _run_one(batch: _Batch, spec, checkout) -> VerifierRun:
     ini_text = batch.settings.ini_text(checkout, plugins)
     private = Path(tempfile.mkdtemp(prefix=f"{checkout.name}.", dir=checkout.parent.parent))
     channel = report_channel.open_channel(private) if account is None else None
-    try:
-        return _run_one_in(batch, spec, checkout, plugins, ini_text, private, channel)
-    finally:  # close the channel, then drop private/run even if that close raises
+    # close the channel, then drop private/run even if that close raises
+    with unless_interrupted(partial(close_private, private, account)):
         try:
+            return _run_one_in(batch, spec, checkout, plugins, ini_text, private, channel)
+        finally:
             if channel is not None:
                 channel.close()
-        finally:
-            close_private(private, account)
 
 
 def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, channel) -> VerifierRun:

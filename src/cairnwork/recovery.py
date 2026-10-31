@@ -24,7 +24,8 @@ Rules (from Nexus-new's experience, see docs/LESSONS_FROM_NEXUS.md):
   takeover.supersede has shown the processes gone (#244);
 - macOS withholds the environment of Apple platform binaries (/bin/sh, /bin/sleep), so their
   marker cannot be seen: such an owner process is killed when its working directory is inside
-  one of the attempt's own run directories (``_cwd_dirs``, proc_cwd, #301). One that changed
+  one of the attempt's own run directories (``_cwd_dirs``, proc_cwd, #301); a run ended by
+  KeyboardInterrupt or SystemExit leaves them in place for this (#537). One that changed
   directory out of them is not found, nor one left after a crash during recovery removed them;
 - settle each task on its own: one bad record is reported, not fatal, and
   recovery is idempotent, so it can run again after a crash during recovery.
