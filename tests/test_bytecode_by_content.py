@@ -100,6 +100,20 @@ def test_a_committed_data_file_starting_with_the_magic_number_passes(run):
     assert scan(checkout, run_dir) == (".git/header.bin (bytecode not named .pyc)",)
 
 
+def test_files_beside_the_checkout_are_not_committed(run):
+    """The work directory around the checkout is no part of the candidate's commit: there a
+    magic-number file and a pytest-rewritten pyc both fail the run."""
+    checkout, run_dir = run
+    other = checkout.parent / "other"
+    other.mkdir()
+    (other / "x.bin").write_bytes(MAGIC + b"fixture record\n")
+    (other / f"test_a.{TAG}-pytest-8.0.pyc").write_bytes(MAGIC + bytes(12))
+    assert scan(checkout, run_dir) == (
+        f"r1-v0.work/other/test_a.{TAG}-pytest-8.0.pyc (pytest-rewritten bytecode)",
+        "r1-v0.work/other/x.bin (bytecode not named .pyc)",
+    )
+
+
 def test_other_files_closed_files_and_fifos_pass(run):
     checkout, run_dir = run
     home = run_dir / "home"
