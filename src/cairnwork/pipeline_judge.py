@@ -36,13 +36,17 @@ def tests_unused(task, *, claim: bool) -> None:
     """A worker run's half of the single-use rule (deferred_store.consume). Before the worker:
     the test commit is on no clone here and no run, verify or worker, has used it. Right before
     the fetch (claim=True) this run registers it, so of two runs racing for one commit only one
-    gets it. A TaskSpec with no store (library use, no state directory) keeps the mirror check."""
+    gets it. The store is checked before the worker too, as verify does (#332/#337/#339): an
+    unimported commit or an unsafe store is refused while nothing is recorded yet. A TaskSpec
+    with no store (library use, no state directory) keeps the mirror check."""
     if not task.test_commit:
         return
     if not claim:
         never_seen(task.repo, task.test_commit)
     if task.test_store is not None:
         consume(task.test_store.used, task.test_commit, record=claim)
+        if not claim:
+            task.test_store.require_imported(task.test_commit)
 
 
 def tests_with_teeth(task, specs, run_root, result, verifying) -> tuple[str, ...]:
