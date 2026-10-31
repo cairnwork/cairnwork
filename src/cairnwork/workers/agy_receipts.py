@@ -58,8 +58,9 @@ class Receipts:
 
 def parse(lines: list[str], run_as_user: str, *, known: bool = True) -> Receipts:
     """Group the WORKER_* receipts by attempt and find the final status line."""
-    out = Receipts(run_as_user, known=known)
     metas = [agy_dispatch.read_status(line) for line in lines]
+    # a kept dispatcher line that does not parse may have been a receipt (#546)
+    out = Receipts(run_as_user, known=known and all(metas))
     for meta in metas:
         event = meta.get("event")
         if event not in EVENTS:
