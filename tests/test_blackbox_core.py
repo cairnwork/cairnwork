@@ -21,6 +21,7 @@ from cairnwork.core_request import VerifierObservation
 from cairnwork.intake import Intake
 from cairnwork.notary import Notary
 from cairnwork.verify_candidate import verify_candidate
+from cairnwork.verify_context import VerifyContext
 
 DECLARED = Declaration(
     secrets.token_hex(32), (Check("add", "calc", "add", (Case("c1", "[2,3]", "{}", "5"),)),)
@@ -148,7 +149,7 @@ def test_the_check_runs_on_the_bindings_head_not_the_tree_that_ran(monkeypatch):
         result = SimpleNamespace(candidate_commit="judged", task_id="t", attempt_id="a", logs=[])
         with pytest.raises(Stop):
             pipeline_judge.judge_candidate(
-                task, (), "d", None, Path("x"), result, (), (None, None), lambda phase: None,
-                binding=binding,
+                task, (), "d", None, result, (), VerifyContext.of(task, Path("x"), "a"),
+                lambda phase: None, binding=binding,
             )  # fmt: skip
     assert seen == ["judged", "head"]

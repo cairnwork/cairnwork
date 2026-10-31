@@ -23,6 +23,7 @@ from cairnwork.notary import Notary
 from cairnwork.pipeline import TaskResult
 from cairnwork.verifier_account import VerifierAccountError
 from cairnwork.verify_candidate import verify_candidate
+from cairnwork.verify_context import VerifyContext
 
 sandbox = pytest.mark.sandbox  # the candidate's own verifiers run for real
 WRONG = "def add(a, b):\n    return a + b + 2\n"  # still fails tests/test_calc.py
@@ -203,14 +204,9 @@ def unit(monkeypatch, tmp_path):
 
     def check(task=VERIFY_TASK, verifying=(None, None), key_repo=SOURCE, without_tests=True):
         result = TaskResult("t", "a" + "0" * 16, "FAILED")
-        p2p.base_env_check(
-            task,
-            tmp_path / "runs",
-            result,
-            verifying,
-            without_tests=without_tests,
-            key_repo=key_repo,
-        )
+        account, python = verifying
+        ctx = VerifyContext.of(task, tmp_path / "runs", result.attempt_id, account, python)
+        p2p.base_env_check(task, result, ctx, without_tests=without_tests, key_repo=key_repo)
         return len(probed)
 
     return check

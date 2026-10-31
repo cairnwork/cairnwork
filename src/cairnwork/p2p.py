@@ -102,9 +102,8 @@ def _base_tests(task, exclude: frozenset[str]) -> tuple[str, ...]:
 UNCLEAN = ("base-probe-survivors", "base-probe-mutated")  # #285: never degraded, see above
 
 
-def _probe(task, files, run_root, result, verifying, budget, tag="p"):
+def _probe(task, files, result, ctx: VerifyContext, budget, tag="p"):
     """Per-test outcomes of ``files`` on the base, or (None, reason) when the run is unusable."""
-    ctx = VerifyContext.of(task, run_root, result.attempt_id, *verifying)
     run_id, spec = f"{result.attempt_id}-{tag}", VerifierSpec("p2p-probe", files)
     runs = run_verifiers(ctx, task.base_commit, (spec,), run_id, timeout=budget)
     run = runs[0]
@@ -151,7 +150,7 @@ def _passing_targets(outcomes: dict[str, str]) -> tuple[str, ...]:
     return tuple(targets)
 
 
-def plan_p2p(task, specs, test_files, mode, budget, run_root, result, verifying) -> P2PPlan:
+def plan_p2p(task, specs, test_files, mode, budget, result, ctx: VerifyContext) -> P2PPlan:
     """Select and probe; see the module docstring. ``test_files`` (the deferred tests) are never
     P2P tests: the author's verifiers cover them."""
     rule: dict = {"configured": mode, "applied": mode, "budget_seconds": budget, "degraded": ""}
@@ -170,7 +169,7 @@ def plan_p2p(task, specs, test_files, mode, budget, run_root, result, verifying)
             return P2PPlan(rule | {"targets": 0}, None, budget)
         if files == tried:  # the narrower mode would run the same files again
             raise _unusable(rule, "module-dir selects the same files")
-        outcomes, why = _probe(task, files, run_root, result, verifying, budget)
+        outcomes, why = _probe(task, files, result, ctx, budget)
         if why in UNCLEAN:  # #285: no narrower mode, whatever was configured
             detail = f"{rule['degraded']}; " * bool(rule["degraded"]) + f"{why} in {applied} mode"
             raise BaseUncomparable(Comparison("UNCOMPARABLE", "P2P_BASE_PROBE_UNUSABLE", detail))
@@ -203,14 +202,14 @@ def _plan(task, specs, rule, targets, budget) -> P2PPlan:
 
 
 def run_plan(
-    plan: P2PPlan, task, judged: str, run_root, result, verifying
+    plan: P2PPlan, task, judged: str, result, ctx: VerifyContext
 ) -> tuple[tuple[VerifierRun, ...], dict]:
     """The base-passing tests on the judged commit, and the rule actually used. A run that fails
     without timing out is re-run once; Core sees the re-run, whose note records the first run's
     failures (``rerun``), so a flaky pass is not blocking but is bound into the record."""
     if plan.spec is None:
         return (), plan.rule
-    run = _run_once(plan.spec, plan, plan.note, task, judged, run_root, result, verifying, "q")
+    run = _run_once(plan.spec, plan, plan.note, task, judged, result, ctx, "q")
     if run.observation.passed or not run.plain_failure:  # timeout, mutation, survivors...: block
         return (run,), plan.rule
     failing = sorted(_clean(n) for n, outcome in run.outcomes.items() if outcome != "passed")
@@ -218,7 +217,7 @@ def run_plan(
              "mutated": list(run.mutated), "survivors": run.survivors, "ran": run.ran}  # fmt: skip
     rule = plan.rule | {"rerun": first}
     note = json.dumps(rule, sort_keys=True)
-    run = _run_once(plan.spec, plan, note, task, judged, run_root, result, verifying, "r")
+    run = _run_once(plan.spec, plan, note, task, judged, result, ctx, "r")
     # Not in the note: the flag is the re-run's outcome, which the note is hashed before.
     return (run,), rule | {"p2p_rerun_passed": bool(run.observation.passed)}
 
@@ -228,8 +227,7 @@ def _clean(name: str) -> str:
     return "".join(c if c.isprintable() else "?" for c in str(name))[:200]
 
 
-def _run_once(spec, plan, note, task, judged, run_root, result, verifying, tag) -> VerifierRun:
-    ctx = VerifyContext.of(task, run_root, result.attempt_id, *verifying)
+def _run_once(spec, plan, note, task, judged, result, ctx: VerifyContext, tag) -> VerifierRun:
     run_id = f"{result.attempt_id}-{tag}"
     (run,) = run_verifiers(ctx, judged, (spec,), run_id, timeout=plan.timeout, note=note)
     try:
@@ -242,9 +240,7 @@ def _run_once(spec, plan, note, task, judged, run_root, result, verifying, tag) 
 ENV_FAILED = "BASE_ENV_FAILED"
 
 
-def base_env_check(
-    task, run_root, result, verifying, *, without_tests=False, key_repo=None
-) -> None:
+def base_env_check(task, result, ctx: VerifyContext, *, without_tests=False, key_repo=None) -> None:
     """Before the worker starts (#234): can the unchanged base run its own existing tests at all?
     For a task that will be probed after the worker (deferred tests, P2P not off), or with
     ``without_tests`` a verify call without deferred tests (#259; ``key_repo``: the repository it
@@ -271,17 +267,17 @@ def base_env_check(
     files = select_p2p_targets(task.allowed_files, existing, task.test_roots, "module-dir")
     if not files:  # nothing to probe now; the steps after the worker decide, as before
         return
-    python = verifying[1] or getattr(verifying[0], "python", None) or sys.executable
-    account = getattr(verifying[0], "user", "")
+    python = ctx.python or getattr(ctx.account, "python", None) or sys.executable
+    account = getattr(ctx.account, "user", "")
     fingerprint = _env_fingerprint(python)  # None: something unreadable, no marker either way
     repo = task.repo if key_repo is None else key_repo
     key = [str(Path(repo).resolve()), task.base_commit, files, task.import_paths,
            task.p2p_budget, python, account, fingerprint]  # fmt: skip
     digest = hashlib.sha256(json.dumps(key).encode()).hexdigest()
-    marker = Path(run_root) / "base-env-ok" / digest if fingerprint is not None else None
+    marker = Path(ctx.run_root) / "base-env-ok" / digest if fingerprint is not None else None
     if marker is not None and _is_pass_marker(marker):
         return
-    outcomes, why = _probe(task, files, run_root, result, verifying, task.p2p_budget, tag="e")
+    outcomes, why = _probe(task, files, result, ctx, task.p2p_budget, tag="e")
     if outcomes is None:
         # #262: name the cause when no sandbox backend exists
         if why == "base-probe-failed" and cairnwork_sandbox.select() is None:
@@ -385,10 +381,8 @@ def _env_failed(detail: str) -> BaseUncomparable:
     return BaseUncomparable(Comparison("UNCOMPARABLE", ENV_FAILED, f"unchanged base: {detail}"))
 
 
-def p2p_for(task, specs, test_files, run_root, result, verifying) -> P2PPlan | None:
+def p2p_for(task, specs, test_files, result, ctx: VerifyContext) -> P2PPlan | None:
     """The P2P plan of a task with deferred tests (p2p.py), computed once the worker is done."""
     if not task.test_commit:
         return None
-    return plan_p2p(
-        task, specs, test_files, task.p2p_mode, task.p2p_budget, run_root, result, verifying
-    )
+    return plan_p2p(task, specs, test_files, task.p2p_mode, task.p2p_budget, result, ctx)

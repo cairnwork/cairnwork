@@ -31,7 +31,7 @@ from cairnwork.verifiers import run_verifiers
 from cairnwork.verify_context import VerifyContext
 
 
-def tests_with_teeth(task, specs, run_root, result, verifying) -> tuple[str, ...]:
+def tests_with_teeth(task, specs, result, ctx: VerifyContext) -> tuple[str, ...]:
     """Check a task's deferred tests once the worker is done: plain test files on the
     base whose test cases really fail there. Returns their paths; raises TestCommitRejected
     when they do not (NO_TEETH) and BaseUncomparable when the base cannot tell (#234)."""
@@ -39,7 +39,6 @@ def tests_with_teeth(task, specs, run_root, result, verifying) -> tuple[str, ...
     ensure_test_commit(task.repo, task.test_commit, task.test_store)
     paths = test_paths(task.repo, task.base_commit, task.test_commit, task.test_roots)
     targets = new_tests(task.repo, task.base_commit, task.test_commit, paths)  # may refuse
-    ctx = VerifyContext.of(task, run_root, result.attempt_id, *verifying)
     runs = run_verifiers(ctx, task.test_commit, specs, f"{result.attempt_id}-b")
     comparison = base_comparison(runs, targets)  # decided before the base logs go
     for run in runs:  # not evidence for Core; would show the tests to later workers
@@ -52,10 +51,18 @@ def tests_with_teeth(task, specs, run_root, result, verifying) -> tuple[str, ...
 
 
 def judge_candidate(
-    task, specs, digest, notary, run_root, result, test_files, verifying, reach,
-    p2p: P2PPlan | None = None, binding: dict | None = None,
+    task,
+    specs,
+    digest,
+    notary,
+    result,
+    test_files,
+    ctx: VerifyContext,
+    reach,
+    p2p: P2PPlan | None = None,
+    binding: dict | None = None,
     unless_passed: BaseUncomparable | None = None,
-) -> None:  # fmt: skip
+) -> None:
     """Verify result.candidate_commit and have Core notarise it; sets result.verified,
     result.reason and result.logs. Shared by the worker pipeline and ``verify_candidate``;
     reach(phase) records progress. A binding (verify_candidate only, #229) binds the verdict to
@@ -66,7 +73,6 @@ def judge_candidate(
     task_id = result.task_id
     reach("VERIFYING")
     checks, subject, bb_logs = (), binding["head"] if binding else judged, []
-    ctx = VerifyContext.of(task, run_root, result.attempt_id, *verifying)
     declared = task.blackbox.checks if task.blackbox is not None else ()
     if task.blackbox is not None:  # #303: each check is one more observation Core requires;
         # it runs the candidate alone, without deferred tests that could hold the answers, and
@@ -76,7 +82,7 @@ def judge_candidate(
         bb_logs = [str(log)] if log else []
     runs = run_verifiers(ctx, judged, specs, f"{result.attempt_id}-v")
     if p2p is not None:
-        p2p_runs, result.p2p = run_plan(p2p, task, judged, run_root, result, verifying)
+        p2p_runs, result.p2p = run_plan(p2p, task, judged, result, ctx)
         runs += p2p_runs
     # keep what came before, e.g. a failed base probe's tail (#331)
     result.logs = [*result.logs, *(str(run.log_path) for run in runs), *bb_logs]
