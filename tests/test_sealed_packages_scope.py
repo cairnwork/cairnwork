@@ -12,6 +12,7 @@ from test_sealed_packages import FAKE, SEALED_PKG, SHADOW_TEST, _task
 from cairnwork import sys_path_scan
 from cairnwork.pipeline import TaskRejected, TaskSpec, check_task
 from cairnwork.verifiers import parse_verifier, run_verifiers
+from cairnwork.verify_context import VerifyContext
 
 REFUSED = "PROTECTED_VERIFIER_INPUT: pkg/fractions.py$"
 PUT_PKG_FIRST = (
@@ -21,6 +22,12 @@ PUT_PKG_FIRST = (
 )
 ALIASED = (
     "import os\nimport sys as _s\n\n_s.path.insert(0, os.path.dirname(os.path.dirname(__file__)))\n"
+)
+DISCOVER = (  # unittest's discovery puts its start directory first on sys.path
+    "import os, unittest\n\n\ndef test_a_suite():\n"
+    "    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))\n"
+    "    unittest.defaultTestLoader.discover(here, pattern='none_*.py')\n\n\n"
+    "def test_half():\n    import fractions\n\n    assert fractions.Fraction(1, 2) == 7\n"
 )
 PKG = {"pkg/__init__.py": "", "pkg/tests/__init__.py": ""}
 LAYOUTS = {  # base files, test roots, the test the verifier runs
@@ -35,6 +42,8 @@ LAYOUTS = {  # base files, test roots, the test the verifier runs
     "sys under another name": (
         PKG | {"pkg/tests/conftest.py": ALIASED, "pkg/tests/test_calc.py": SHADOW_TEST},
         ("pkg/tests",), "pkg/tests/test_calc.py"),
+    "base test discovery changes the import path": (
+        PKG | {"pkg/tests/test_calc.py": DISCOVER}, ("pkg/tests",), "pkg/tests/test_calc.py"),
 }  # fmt: skip
 
 
@@ -52,7 +61,8 @@ def test_check_task_refuses_a_package_the_base_puts_in_front(repo, tmp_path, lay
         check_task(task)
     candidate = commit_change(repo, {"pkg/fractions.py": FAKE})
     spec = parse_verifier("v", ["python3", "-m", "pytest", target], roots)
-    (run,) = run_verifiers(repo, candidate, (spec,), tmp_path / "runs", "r1", python=sys.executable)
+    ctx = VerifyContext(repo, tmp_path / "runs", python=sys.executable)
+    (run,) = run_verifiers(ctx, candidate, (spec,), "r1")
     assert run.observation.passed, (run.why, run.log_path.read_text())
 
 
@@ -119,6 +129,13 @@ UNSEALING = {  # one base file anywhere in the checkout
     "a monkeypatch target by name": (
         "conftest.py", "def f(monkeypatch):\n    monkeypatch.delattr('s' 'ys.path')\n"),
     "unittest.mock": ("lib/x.py", "import unittest\nunittest.mock.patch('x')\n"),
+    "unittest test discovery": (
+        "pkg/tests/test_all.py",
+        "import unittest\n\n\ndef test_all():\n    unittest.TestLoader().discover('pkg')\n"),
+    "unittest.main without a module": (
+        "lib/x.py", "import unittest as ut\nut.main(module=None, exit=False)\n"),
+    "TestProgram imported by from, without a module": (
+        "lib/x.py", "from unittest import TestProgram as T\nT(None, argv=['x'])\n"),
 }  # fmt: skip
 KEEPS_SEALED = {
     "sys for the platform": ("conftest.py", "import sys\nWIN = sys.platform == 'win32'\n"),
@@ -137,6 +154,12 @@ KEEPS_SEALED = {
         "from os import path\nfrom os.path import join\n\nfrom pytest import fixture, raises\n\n"
         "from pkg import Thing\n\n\n@fixture\ndef z():\n    with raises(Thing):\n"
         "        return join(path.sep, 'a')\n"),
+    "a unittest test module": (
+        "pkg/tests/test_u.py",
+        "import unittest\nfrom unittest import main\n\n\nclass T(unittest.TestCase):\n"
+        "    def test_u(self):\n        self.assertTrue(True)\n\n\n"
+        "if __name__ == '__main__':\n    unittest.main(verbosity=2)\n"
+        "    main(module='pkg.tests.test_u', exit=False)\n"),
     "sys.path in a text file": ("notes/readme.txt", "sys.path.insert(0, 'pkg')\n"),
     "re.compile and a method named eval": (
         "lib/x.py", "import re\n\n\nclass M:\n    def eval(self):\n        return re.compile\n"),

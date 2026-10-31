@@ -23,8 +23,8 @@ A commit may change it when one of its Python files (``.py``/``.pyw``, any case)
   (``from os import system``), or
 - reaches an attribute, imports or runs code by a name built at run time: uses one of
   ``DYNAMIC_NAMES`` (``getattr(logging, "sys")``, ``exec``) or ``DYNAMIC_ATTRS``
-  (``m.__dict__``, ``pkgutil.resolve_name``), or calls monkeypatch's string-target
-  ``setattr``/``delattr``, or
+  (``m.__dict__``, ``pkgutil.resolve_name``, ``discover``), or calls monkeypatch's string-target
+  ``setattr``/``delattr`` or unittest's ``main``/``TestProgram`` with a non-string module, or
 - imports one of ``IMPORT_MODULES`` (``site``, ``runpy``, ``importlib.util``) or a submodule,
   takes sys, os or one of them from another object (``logging.os``, ``from random import _os``,
   a ``HELD`` or, on a chain from an imported module, a ``HELD_IF_IMPORTED`` name, also in a
@@ -99,6 +99,7 @@ SAFE_SYS = frozenset(
 _OS_MODULES = frozenset({"os", "posix", "nt"})
 _OS_RUN = frozenset({"system", "popen", "putenv", "startfile"})
 _OS_RUN_PREFIXES = ("exec", "spawn", "posix_spawn")
+_TEST_MAINS = frozenset({"main", "TestProgram"})  # unittest's: module=None runs discovery
 # Code that reaches attributes, or runs code, by a name built at run time; never followed.
 DYNAMIC_NAMES = frozenset(
     {"getattr", "setattr", "delattr", "vars", "globals", "locals", "exec", "eval", "compile",
@@ -111,7 +112,7 @@ DYNAMIC_ATTRS = frozenset(
      "exec_module", "load_module", "load_source", "import_path", "pyimport", "resolve_name",
      "import_string", "import_module", "find_class", "entry_points", "load_entry_point",
      "builtins", "__self__", "__closure__", "__subclasses__", "__bases__", "__base__",
-     "__mro__"}
+     "__mro__", "discover"}
 )  # fmt: skip
 # Modules that can change the import path or the import system, load or run code given as a
 # path or as text, or start a program; a file that imports one (or a submodule) seals nothing.
@@ -238,6 +239,7 @@ def _uses_import_system(tree: ast.AST) -> bool:
     nodes = list(ast.walk(tree))
     sys_names, os_names, modules, roots = {"sys"}, set(_OS_MODULES), set(), set()
     from_modules = set()  # names a ``from`` import binds that are spelled like a module
+    test_mains = set()  # unittest's main and TestProgram as this file calls them (``ut.main``)
     for node in nodes:
         if _dynamic(node):
             return True
@@ -248,6 +250,8 @@ def _uses_import_system(tree: ast.AST) -> bool:
                     sys_names.add(alias.asname)
                 elif alias.asname and alias.name in _OS_MODULES:
                     os_names.add(alias.asname)
+                if alias.name == "unittest":
+                    test_mains.update(f"{alias.asname or alias.name}.{m}" for m in _TEST_MAINS)
         elif isinstance(node, ast.ImportFrom):
             names = [alias.name for alias in node.names]
             roots.update(alias.asname or alias.name for alias in node.names)
@@ -256,12 +260,16 @@ def _uses_import_system(tree: ast.AST) -> bool:
             )
             if _imports_held(node.module, names):  # ``from logging import sys``
                 return True
+            if node.level == 0 and node.module in {"unittest", "unittest.main"}:
+                test_mains.update(a.asname or a.name for a in node.names if a.name in _TEST_MAINS)
             if node.level == 0 and node.module == "sys":
                 if any(name not in SAFE_SYS for name in names):
                     return True
             elif node.level == 0 and node.module in _OS_MODULES:
                 if any(name in {"*", "environ"} or _starts_programs(name) for name in names):
                     return True
+    if test_mains and any(_runs_discovery(node, test_mains) for node in nodes):
+        return True
     roots |= modules | sys_names | os_names
     return _reaches(nodes, sys_names, os_names, modules, roots, from_modules - modules - sys_names)
 
@@ -375,6 +383,13 @@ def _dynamic(node: ast.AST) -> bool:
     if isinstance(node, ast.ImportFrom):
         return not node.level and _is_import_module(node.module or "")
     return False
+
+
+def _runs_discovery(node: ast.AST, test_mains: set[str]) -> bool:
+    if not isinstance(node, ast.Call) or ast.unparse(node.func) not in test_mains:
+        return False
+    given = [*node.args[:1], *(k.value for k in node.keywords if k.arg in {"module", None})]
+    return not all(isinstance(m, ast.Constant) and isinstance(m.value, str) for m in given)
 
 
 def _named(node: ast.AST, names: set[str]) -> bool:
