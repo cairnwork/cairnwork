@@ -204,7 +204,7 @@ def read_record(notary_sqlite: Path, task_id: str, attempt_id: str) -> VerdictRe
     if not path.is_file():
         raise RecordNotFound(f"notary database does not exist: {path}", code="RECORD_NOT_FOUND")
 
-    row = _fetch_row(f"file:{path.as_posix()}?mode=ro", task_id, attempt_id)
+    row = _fetch_row(f"{path.as_uri()}?mode=ro", task_id, attempt_id)
     try:
         (
             row_task_id,
