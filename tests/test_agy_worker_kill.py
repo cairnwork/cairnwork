@@ -183,8 +183,8 @@ def _dying(tmp_path, before: str, how: str):
     [  # killed by someone else (-9): a later launch may be unrecorded, so it is fenced (#244)
         ("import signal; os.kill(os.getpid(), signal.SIGKILL)", AgyWorkerError,
          "WORKER_SWEEP_UNCLEAN: .*KILLED_BY_SIGNAL: 9.*WORKER_RECEIPT_INCOMPLETE: attempt 1"),
-        ("sys.exit(1)", AgyWorkerAccountFailed,  # crashed: no final status line
-         "WORKER_RECEIPT_INCOMPLETE: attempt 1"),
+        ("sys.exit(1)", AgyWorkerError,  # crashed: no final status line, fenced too (#546)
+         "WORKER_SWEEP_UNCLEAN: .*NO_FINAL_STATUS.*WORKER_RECEIPT_INCOMPLETE: attempt 1"),
     ],
 )  # fmt: skip
 def test_an_abnormal_end_not_caused_by_our_timeout_is_swept_too(
@@ -226,7 +226,8 @@ def test_lost_lines_with_a_final_status_still_sweep_the_known_root(tmp_path, mon
     monkeypatch.setattr(agy_dispatch, "STATUS_LINES_KEPT", 2)  # the oldest line is dropped
     stderr = status("running") + launch(str(layout)) + status("failed")
     worker, workdir = _dying(tmp_path, stderr, "sys.exit(1)")
-    with pytest.raises(AgyWorkerAccountFailed, match="^WORKER_RECEIPTS_UNKNOWN"):
+    # lines lost: a launch no kept receipt names may survive, so it is fenced (#546)
+    with pytest.raises(AgyWorkerError, match="^WORKER_SWEEP_UNCLEAN: .*WORKER_RECEIPTS_UNKNOWN"):
         worker.run(workdir, TASK)
     assert json.loads(seen.read_text())[-2:] == ["--sweep", str(layout)]
     assert not layout.exists()

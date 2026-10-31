@@ -93,14 +93,16 @@ def test_a_withheld_process_outside_the_attempt_dirs_is_not_killed(monkeypatch, 
     assert killed == [] and found.gone and found.held_by == ()
 
 
-def test_an_unknown_answer_is_ignored(monkeypatch, readers, runs):
+def test_an_unknown_answer_is_not_killed_and_counts_as_vanished(monkeypatch, readers, runs):
+    """#546: a None read after the start time was read is what a process that ended gives: not
+    killed, counted as vanished, so the look is not gone and confirm_gone looks again."""
     cwds, unknown, calls = readers
     unknown.add(FAKE)  # environment_withheld: None
     cwds[FAKE] = str(runs / ATTEMPT)
     cwds[FAKE + 1] = None  # withheld, but its cwd cannot be read
     killed = _table(monkeypatch, [_plain(FAKE), _plain(FAKE + 1), _plain(FAKE + 2)])
     found = sweep_marked(ATTEMPT_ENV, ATTEMPT, cwd_dirs=_dirs(runs))
-    assert killed == [] and found.gone
+    assert killed == [] and found.vanished == 2 and not found.gone
     assert ("cwd", FAKE) not in calls and ("cwd", FAKE + 2) not in calls  # not withheld: no read
 
 

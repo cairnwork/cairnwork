@@ -96,13 +96,40 @@ def test_a_platform_binary_with_one_real_entry_in_a_run_dir_is_killed(world, run
     [
         ([b"A=1"], True, "elsewhere"),  # bounded to run directories
         ([b"A=1"], False, ATTEMPT),  # an ordinary program's one entry is real
-        ([b"A=1"], None, ATTEMPT),  # code-signing status unreadable: unknown, ignored
         ([b"A=1", b"B=2"], True, ATTEMPT),  # two entries are never the empty-argv[0] case
     ],
-    ids=["outside-run-dirs", "not-platform", "status-unknown", "two-entries"],
+    ids=["outside-run-dirs", "not-platform", "two-entries"],
 )
 def test_the_false_positive_goes_no_further(world, runs, env, platform, where):
     world.env, world.platform = env, platform
     world.cwd = str(runs / ATTEMPT / "sub") if where == ATTEMPT else str(runs.parent / where)
+    assert _sweep(world, runs) == ([], [], 0)
+    assert world.signals == []
+
+
+@pytest.mark.parametrize(
+    "gone", ["status-unread", "environment-unread", "cwd-unread", "start-changed"]
+)
+def test_a_process_that_ends_during_the_reads_counts_as_vanished(world, runs, monkeypatch, gone):
+    """#546: once its start time was read, a pid whose later reads answer None (as a process
+    that ended reads) or whose start time changed is never killed, and it is counted as
+    vanished, as confined counts a marked process that exited before its kill: confirm_gone
+    then needs another clean look."""
+    world.cwd = None if gone == "cwd-unread" else str(runs / ATTEMPT / "sub")
+    world.platform = None if gone == "status-unread" else True
+    if gone == "environment-unread":
+        monkeypatch.setattr(proc_cwd, "environment_withheld", lambda pid: None)
+    starts = [b"first", b"second"] if gone == "start-changed" else [b"same start"] * 2
+    answers = iter(starts)
+    monkeypatch.setattr(proc_cwd, "_started", lambda pid: next(answers))
+    assert _sweep(world, runs) == ([], [], 1)
+    assert world.signals == []
+
+
+def test_a_start_time_unreadable_at_the_first_read_is_not_counted(world, runs, monkeypatch):
+    """Any process of the owner that ended after the listing reads so, and nothing ties it to
+    the attempt: counting it would keep a busy host from ever showing the attempt gone."""
+    world.cwd = str(runs / ATTEMPT / "sub")
+    monkeypatch.setattr(proc_cwd, "_started", lambda pid: None)
     assert _sweep(world, runs) == ([], [], 0)
     assert world.signals == []
