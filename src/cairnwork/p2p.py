@@ -63,6 +63,7 @@ from cairnwork.issue_task import test_target
 from cairnwork.p2p_probe_log import probe_log_tail
 from cairnwork.p2p_selection import DEFAULT_BUDGET_SECONDS, cap_note, select_p2p_targets
 from cairnwork.verifiers import VerifierRun, VerifierSpec, run_verifiers
+from cairnwork.verify_context import VerifyContext
 
 
 class P2PRejected(TestCommitRejected):
@@ -103,12 +104,9 @@ UNCLEAN = ("base-probe-survivors", "base-probe-mutated")  # #285: never degraded
 
 def _probe(task, files, run_root, result, verifying, budget, tag="p"):
     """Per-test outcomes of ``files`` on the base, or (None, reason) when the run is unusable."""
-    runs = run_verifiers(
-        task.repo, task.base_commit, (VerifierSpec("p2p-probe", files),), run_root,
-        f"{result.attempt_id}-{tag}", attempt_id=result.attempt_id, account=verifying[0],
-        python=verifying[1], base_commit=task.base_commit, timeout=budget,
-        import_paths=task.import_paths,
-    )  # fmt: skip
+    ctx = VerifyContext.of(task, run_root, result.attempt_id, *verifying)
+    run_id, spec = f"{result.attempt_id}-{tag}", VerifierSpec("p2p-probe", files)
+    runs = run_verifiers(ctx, task.base_commit, (spec,), run_id, timeout=budget)
     run = runs[0]
     reason = None
     if run.timed_out:
@@ -231,12 +229,9 @@ def _clean(name: str) -> str:
 
 
 def _run_once(spec, plan, note, task, judged, run_root, result, verifying, tag) -> VerifierRun:
-    (run,) = run_verifiers(
-        task.repo, judged, (spec,), run_root, f"{result.attempt_id}-{tag}",
-        attempt_id=result.attempt_id, account=verifying[0], python=verifying[1],
-        base_commit=task.base_commit, timeout=plan.timeout, note=note,
-        import_paths=task.import_paths,
-    )  # fmt: skip
+    ctx = VerifyContext.of(task, run_root, result.attempt_id, *verifying)
+    run_id = f"{result.attempt_id}-{tag}"
+    (run,) = run_verifiers(ctx, judged, (spec,), run_id, timeout=plan.timeout, note=note)
     try:
         (Path(run.log_path).parent / "p2p-selection.json").write_text(note)
     except OSError:

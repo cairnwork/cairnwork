@@ -40,13 +40,13 @@ def probes(monkeypatch):
         return real_notarize(self, *args, **kwargs)
 
     def install(fields):
-        def fake(repo, commit, specs, run_root, run_id, **kw):
+        def fake(ctx, commit, specs, run_id, **kw):
             if not run_id.endswith("-e"):
-                return real_run(repo, commit, specs, run_root, run_id, **kw)
+                return real_run(ctx, commit, specs, run_id, **kw)
             seen.append((commit, tuple(spec.targets for spec in specs)))
             if isinstance(fields, Exception):
                 raise fields
-            return tuple(_run(spec, run_root, run_id, **fields) for spec in specs)
+            return tuple(_run(spec, ctx.run_root, run_id, **fields) for spec in specs)
 
         monkeypatch.setattr(p2p, "run_verifiers", fake)
         monkeypatch.setattr(Notary, "notarize", notarize)

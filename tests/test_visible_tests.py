@@ -2,6 +2,7 @@
 pass/fail summary of the visible tests, and never reaches the deferred tests or the logs."""
 
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -129,11 +130,12 @@ class FakeAccount:
 
 
 def _with_account(monkeypatch, account):
-    def run_as_account(repo, commit, specs, _root, run_id, **kw):
+    def run_as_account(ctx, commit, specs, run_id, **kw):
         # The wrapper hands the account to run_verifiers; core then swaps in account.run_root
         # itself (verifiers.run_verifiers), which this stand-in does without sudo.
-        assert kw.pop("account") is account
-        return run_verifiers(repo, commit, specs, account.run_root, run_id, **kw)
+        assert ctx.account is account
+        ctx = replace(ctx, run_root=account.run_root, account=None)
+        return run_verifiers(ctx, commit, specs, run_id, **kw)
 
     monkeypatch.setattr(feedback, "run_verifiers", run_as_account)
     return lambda inner: VisibleTestsWorker(inner, retries=1, account=account)
@@ -257,12 +259,12 @@ def test_a_probe_that_raises_midway_still_cleans_up(project, tmp_path, monkeypat
     account: Any = FakeAccount((tmp_path / "account-runs").resolve(), fail_remove=fail_remove)
     seen = {}
 
-    def half_run(repo, commit, specs, root, run_id, **kw):
+    def half_run(ctx, commit, specs, run_id, **kw):
         log_dir = account.run_root / f"{run_id}-v0.abc"
         log_dir.mkdir()
         (log_dir / "verifier.log").write_text(SECRET_LOG)
-        (root / "partial").write_text(SECRET_LOG)
-        seen["root"], seen["repo"] = root, repo
+        (ctx.run_root / "partial").write_text(SECRET_LOG)
+        seen["root"], seen["repo"] = ctx.run_root, ctx.repo
         raise _Boom("second spec failed")
 
     monkeypatch.setattr(feedback, "run_verifiers", half_run)

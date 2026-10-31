@@ -13,6 +13,7 @@ from conftest import commit_change
 from cairnwork.intake import Intake, IntakeRefused
 from cairnwork.issue_task import check_import_paths
 from cairnwork.verifiers import parse_verifier, run_verifiers
+from cairnwork.verify_context import VerifyContext
 
 SRC_LAYOUT = {
     "src/mypkg/__init__.py": "",
@@ -70,13 +71,10 @@ def test_src_layout_project_verifies_only_with_import_paths(repo, tmp_path):
 
     def verify(run_id, import_paths):
         return run_verifiers(
-            repo,
+            VerifyContext(repo, tmp_path / "runs", base_commit=base, import_paths=import_paths),
             base,
             (spec,),
-            tmp_path / "runs",
             run_id,
-            base_commit=base,
-            import_paths=import_paths,
         )[0]
 
     without = verify("r1", ())

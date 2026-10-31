@@ -13,6 +13,7 @@ import pytest
 
 from cairnwork import verifier_account, verifiers
 from cairnwork.verifier_account import VerifierAccount, VerifierAccountError
+from cairnwork.verify_context import VerifyContext
 
 
 def _hold(root: str, ready, release) -> None:
@@ -186,7 +187,11 @@ def test_run_verifiers_waits_for_the_lock_as_long_as_its_specs_need(tmp_path):
     specs = tuple(verifiers.VerifierSpec(f"v{i}", ("tests/t.py",)) for i in range(3))
     with pytest.raises(VerifierAccountError, match="stop here"):
         verifiers.run_verifiers(
-            tmp_path, "0" * 40, specs, tmp_path, "r", account=Spy(root=tmp_path), timeout=100
+            VerifyContext(tmp_path, tmp_path, account=Spy(root=tmp_path)),
+            "0" * 40,
+            specs,
+            "r",
+            timeout=100,
         )
     assert seen == [max(verifier_account.LOCK_TIMEOUT_SECONDS, 3 * 100 + 300.0)]
 

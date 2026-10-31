@@ -18,6 +18,7 @@ from cairnwork.ownership import OwnershipLedger
 from cairnwork.pytest_config import PytestConfigError, PytestSettings, base_settings
 from cairnwork.verifier_account import VerifierAccount, VerifierAccountError
 from cairnwork.verifiers import parse_verifier, run_verifiers
+from cairnwork.verify_context import VerifyContext
 
 BASE_INI = """[pytest]
 python_functions = check_*
@@ -173,7 +174,10 @@ def test_a_run_uses_base_settings_not_the_candidates(based, tmp_path):
 
     def verify(base_commit, run_id):
         return run_verifiers(
-            repo, candidate, (spec,), tmp_path / "runs", run_id, base_commit=base_commit
+            VerifyContext(repo, tmp_path / "runs", base_commit=base_commit),
+            candidate,
+            (spec,),
+            run_id,
         )[0]
 
     good = verify(base, "r1")
@@ -184,8 +188,8 @@ def test_a_run_uses_base_settings_not_the_candidates(based, tmp_path):
 def test_the_runner_passes_python_and_base_commit(monkeypatch, repo, tmp_path):
     seen = {}
 
-    def fake_run_verifiers(*args, **kwargs):
-        seen.update(kwargs)
+    def fake_run_verifiers(ctx, *args, **kwargs):
+        seen.update(python=ctx.python, base_commit=ctx.base_commit)
         raise RuntimeError("stop here")
 
     # run_verifiers is called from pipeline_judge.judge_candidate (split out of pipeline.py)
@@ -239,13 +243,10 @@ def test_the_account_runs_the_given_python(repo):
     head = git(repo, "rev-parse", "HEAD")
     with pytest.raises(VerifierAccountError, match="not usable"):
         run_verifiers(
-            repo,
+            VerifyContext(repo, account.run_root, account=account, python="/nonexistent/python"),
             head,
             (spec,),
-            account.run_root,
             "x",
-            account=account,
-            python="/nonexistent/python",
         )
 
 
@@ -265,7 +266,9 @@ def test_base_strictness_applies_and_a_missing_plugin_fails_closed(repo, tmp_pat
     )
 
     def passed(base_commit, run_id):
-        runs = run_verifiers(repo, base, specs, tmp_path / "runs", run_id, base_commit=base_commit)
+        runs = run_verifiers(
+            VerifyContext(repo, tmp_path / "runs", base_commit=base_commit), base, specs, run_id
+        )
         return [run.observation.passed for run in runs]
 
     assert passed(None, "lenient") == [True, True]  # without the base's options both pass
@@ -274,4 +277,9 @@ def test_base_strictness_applies_and_a_missing_plugin_fails_closed(repo, tmp_pat
         pytest.skip("pytest-timeout is installed here")
     with_timeout = commit_change(repo, {"pytest.ini": "[pytest]\ntimeout = 5\n"})
     with pytest.raises(PytestConfigError, match="pytest_timeout is not installed"):
-        run_verifiers(repo, with_timeout, specs, tmp_path / "runs", "t", base_commit=with_timeout)
+        run_verifiers(
+            VerifyContext(repo, tmp_path / "runs", base_commit=with_timeout),
+            with_timeout,
+            specs,
+            "t",
+        )

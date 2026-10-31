@@ -13,6 +13,7 @@ from fixture_tree import reach_env, world_base, world_dir
 
 import cairnwork_sandbox
 from cairnwork.verifiers import parse_verifier, run_verifiers
+from cairnwork.verify_context import VerifyContext
 from cairnwork_sandbox import bwrap
 from cairnwork_sandbox.backend import SandboxError
 
@@ -296,7 +297,9 @@ def test_absolute_symlinked_credentials_run_and_stay_masked(repo, tmp_path, monk
     )
     head = commit_change(repo, {"tests/test_masked.py": code})
     spec = parse_verifier("pytest", ["python3", "-m", "pytest", "tests/test_masked.py"])
-    runs = run_verifiers(repo, head, (spec,), tmp_path / "runs", "r1", python=sys.executable)
+    runs = run_verifiers(
+        VerifyContext(repo, tmp_path / "runs", python=sys.executable), head, (spec,), "r1"
+    )
     assert runs[0].observation.passed, runs[0].log_path.read_text()
 
 

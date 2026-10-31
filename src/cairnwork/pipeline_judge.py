@@ -28,6 +28,7 @@ from cairnwork.deferred_tests import (
 from cairnwork.p2p import P2PPlan, run_plan
 from cairnwork.reasons import explain, verdict_reason
 from cairnwork.verifiers import run_verifiers
+from cairnwork.verify_context import VerifyContext
 
 
 def tests_with_teeth(task, specs, run_root, result, verifying) -> tuple[str, ...]:
@@ -38,18 +39,8 @@ def tests_with_teeth(task, specs, run_root, result, verifying) -> tuple[str, ...
     ensure_test_commit(task.repo, task.test_commit, task.test_store)
     paths = test_paths(task.repo, task.base_commit, task.test_commit, task.test_roots)
     targets = new_tests(task.repo, task.base_commit, task.test_commit, paths)  # may refuse
-    runs = run_verifiers(
-        task.repo,
-        task.test_commit,
-        specs,
-        run_root,
-        f"{result.attempt_id}-b",
-        attempt_id=result.attempt_id,
-        account=verifying[0],
-        python=verifying[1],
-        base_commit=task.base_commit,
-        import_paths=task.import_paths,
-    )
+    ctx = VerifyContext.of(task, run_root, result.attempt_id, *verifying)
+    runs = run_verifiers(ctx, task.test_commit, specs, f"{result.attempt_id}-b")
     comparison = base_comparison(runs, targets)  # decided before the base logs go
     for run in runs:  # not evidence for Core; would show the tests to later workers
         shutil.rmtree(Path(run.log_path).parent, ignore_errors=True)
@@ -75,29 +66,15 @@ def judge_candidate(
     task_id = result.task_id
     reach("VERIFYING")
     checks, subject, bb_logs = (), binding["head"] if binding else judged, []
+    ctx = VerifyContext.of(task, run_root, result.attempt_id, *verifying)
     declared = task.blackbox.checks if task.blackbox is not None else ()
     if task.blackbox is not None:  # #303: each check is one more observation Core requires;
         # it runs the candidate alone, without deferred tests that could hold the answers, and
         # before any other run of the candidate in this verify (#311: nothing the candidate saw in
         # a pytest phase of this verify can be waiting for it there)
-        checks, log = judge_blackbox(
-            task.blackbox, task.repo, subject, run_root, f"{result.attempt_id}-v",
-            attempt_id=result.attempt_id, account=verifying[0], python=verifying[1],
-            base_commit=task.base_commit, import_paths=task.import_paths,
-        )  # fmt: skip
+        checks, log = judge_blackbox(task.blackbox, ctx, subject, f"{result.attempt_id}-v")
         bb_logs = [str(log)] if log else []
-    runs = run_verifiers(
-        task.repo,
-        judged,
-        specs,
-        run_root,
-        f"{result.attempt_id}-v",
-        attempt_id=result.attempt_id,
-        account=verifying[0],
-        python=verifying[1],
-        base_commit=task.base_commit,
-        import_paths=task.import_paths,
-    )
+    runs = run_verifiers(ctx, judged, specs, f"{result.attempt_id}-v")
     if p2p is not None:
         p2p_runs, result.p2p = run_plan(p2p, task, judged, run_root, result, verifying)
         runs += p2p_runs

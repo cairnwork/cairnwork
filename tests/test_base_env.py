@@ -37,13 +37,13 @@ def probes(monkeypatch):
     seen: list = []
 
     def install(fields):
-        def fake(repo, commit, specs, run_root, run_id, **kw):
+        def fake(ctx, commit, specs, run_id, **kw):
             if not run_id.endswith("-e"):
-                return real(repo, commit, specs, run_root, run_id, **kw)
+                return real(ctx, commit, specs, run_id, **kw)
             seen.append((commit, tuple(spec.targets for spec in specs)))
             if callable(fields):
                 return fields()
-            return tuple(_run(spec, run_root, run_id, **fields) for spec in specs)
+            return tuple(_run(spec, ctx.run_root, run_id, **fields) for spec in specs)
 
         monkeypatch.setattr(p2p, "run_verifiers", fake)
         return seen, core

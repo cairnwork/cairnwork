@@ -28,7 +28,7 @@ DECLARED = Declaration(
 
 
 def fixed(passed: bool):
-    def judge(declaration, repo, commit, run_root, run_id, **kwargs):
+    def judge(declaration, ctx, commit, run_id, **kwargs):
         observation = VerifierObservation(
             "blackbox:add", "x/blackbox.log#add", "sha256:" + "a" * 64, passed
         )
@@ -137,7 +137,7 @@ def test_the_check_runs_on_the_bindings_head_not_the_tree_that_ran(monkeypatch):
 
     seen = []
 
-    def capture(declaration, repo, commit, *args, **kwargs):
+    def capture(declaration, ctx, commit, *args, **kwargs):
         seen.append(commit)
         raise Stop
 

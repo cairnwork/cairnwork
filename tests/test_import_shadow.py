@@ -20,6 +20,7 @@ from conftest import commit_change
 
 from cairnwork.tamper_scan import scan_added_lines
 from cairnwork.verifiers import parse_verifier, run_verifiers
+from cairnwork.verify_context import VerifyContext
 
 pytestmark = pytest.mark.sandbox
 
@@ -86,7 +87,9 @@ def run(repo, tmp_path, lib, conftest=CONFTEST):
     }
     head = commit_change(repo, files)
     spec = parse_verifier("v", ["python3", "-m", "pytest", "tests/test_a.py", "tests/test_z.py"])
-    (result,) = run_verifiers(repo, head, (spec,), tmp_path / "runs", "r1", python=sys.executable)
+    (result,) = run_verifiers(
+        VerifyContext(repo, tmp_path / "runs", python=sys.executable), head, (spec,), "r1"
+    )
     return result
 
 
