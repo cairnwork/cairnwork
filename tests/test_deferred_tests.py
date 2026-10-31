@@ -172,6 +172,7 @@ class _Run:
         self.mutated = fields.get("mutated", ())
         self.teardown_errors = ()
         self.survivors = fields.get("survivors", 0)
+        self.forged = fields.get("forged", ())
 
 
 TARGETS = frozenset({"tests/test_regression.py::t"})  # the new test of the test commit
