@@ -246,17 +246,29 @@ def test_an_interpreter_without_the_marshal_event_fails_the_probe(tmp_path):
         assert done.returncode != 0 and "hook is not active" in done.stderr, (python, done.stderr)
 
 
+STAND_INS = {
+    "no-spec": "types.ModuleType('ntpath')",
+    "other-origin": (
+        "types.ModuleType('ntpath'); stand_in.__spec__ = importlib.machinery.ModuleSpec("
+        "'ntpath', None, origin='/elsewhere/ntpath.py')"
+    ),
+}
+
+
+@pytest.mark.parametrize("stand_in", sorted(STAND_INS))
 @pytest.mark.parametrize("python", sorted(INTERPRETERS), ids=INTERPRETERS.get)
-def test_a_frozen_module_name_held_by_another_module_fails_the_install(tmp_path, python):
+def test_a_frozen_module_name_held_by_another_module_fails_the_install(tmp_path, python, stand_in):
     """The frozen standard-library modules are imported before the hook from the interpreter's
-    frozen table only (3.11+ lists them); a module of that name from anywhere else fails closed."""
+    frozen table only (3.11+ lists them); a module of that name with no spec, or with a spec from
+    anywhere else, fails closed."""
     (tmp_path / "hooked.py").write_text(HOOK_SOURCE)
     code = (
-        "import _imp, sys, types\n"
+        "import _imp, importlib.machinery, sys, types\n"
         "if not hasattr(_imp, '_frozen_module_names'):\n"
         "    print('no list')\n"
         "    raise SystemExit\n"
-        "sys.modules['ntpath'] = types.ModuleType('ntpath')\n"
+        f"stand_in = {STAND_INS[stand_in]}\n"
+        "sys.modules['ntpath'] = stand_in\n"
         "sys.path.insert(0, sys.argv[1])\n"
         "try:\n"
         "    import hooked\n"
@@ -267,7 +279,8 @@ def test_a_frozen_module_name_held_by_another_module_fails_the_install(tmp_path,
     done = subprocess.run(
         [python, "-I", "-B", "-c", code, str(tmp_path)], capture_output=True, text=True, timeout=60
     )
-    assert done.stdout.strip() in ("refused", "no list"), done.stdout + done.stderr
+    listed = tuple(int(part) for part in INTERPRETERS[python].split(".")) >= (3, 11)
+    assert done.stdout.strip() == ("refused" if listed else "no list"), done.stdout + done.stderr
 
 
 @pytest.mark.parametrize("python", sorted(INTERPRETERS), ids=INTERPRETERS.get)
