@@ -27,6 +27,7 @@ from cairnwork.gitcmd import GitCommandError
 from cairnwork.import_path_tree import ImportPathError
 from cairnwork.pipeline import TaskRejected, TaskSpec, check_task
 from cairnwork.verifiers import parse_verifier, run_verifiers
+from cairnwork.verify_context import VerifyContext
 
 VERIFY = (("pytest", ("python3", "-m", "pytest", "-q", "tests/test_calc.py")),)
 CONFIGS = {
@@ -84,9 +85,11 @@ def test_run_verifiers_keeps_the_base_pythonpath_next_to_import_paths(repo, tmp_
     head = commit_change(repo, {"pytest.ini": CONFIGS["pytest.ini"]})
     seen = _stop_at_plain_dirs(monkeypatch, "cairnwork.verifiers")
     spec = parse_verifier("v", ["python3", "-m", "pytest", "tests/test_calc.py"])
+    ctx = VerifyContext(
+        repo, tmp_path / "runs", python=sys.executable, base_commit=head, import_paths=("other",)
+    )
     with pytest.raises(ImportPathError):
-        run_verifiers(repo, head, (spec,), tmp_path / "runs", "r1", python=sys.executable,
-                      base_commit=head, import_paths=("other",))  # fmt: skip
+        run_verifiers(ctx, head, (spec,), "r1")
     assert seen == [("other", "src")]
 
 
@@ -94,9 +97,11 @@ def test_the_blackbox_run_keeps_the_base_pythonpath_too(repo, tmp_path, monkeypa
     head = commit_change(repo, {"pytest.ini": CONFIGS["pytest.ini"]})
     seen = _stop_at_plain_dirs(monkeypatch, "cairnwork.blackbox_exec")
     declaration: Any = None  # never read: the run stops at the import-path check
+    ctx = VerifyContext(
+        repo, tmp_path / "runs", python=sys.executable, base_commit=head, import_paths=("other",)
+    )
     with pytest.raises(ImportPathError):
-        run_blackbox(declaration, repo, head, tmp_path / "runs", "r1", python=sys.executable,
-                     base_commit=head, import_paths=("other",))  # fmt: skip
+        run_blackbox(declaration, ctx, head, "r1")
     assert seen == [("other", "src")]
 
 
@@ -285,7 +290,9 @@ def test_the_verifiers_pytest_really_imports_from_above_a_package_test_root(repo
     spec = parse_verifier(
         "v", ["python3", "-m", "pytest", "pkg/tests/test_calc.py"], ("pkg/tests",)
     )
-    (run,) = run_verifiers(repo, head, (spec,), tmp_path / "runs", "r1", python=sys.executable)
+    (run,) = run_verifiers(
+        VerifyContext(repo, tmp_path / "runs", python=sys.executable), head, (spec,), "r1"
+    )
     assert run.observation.passed, (run.why, run.log_path.read_text())
 
 
@@ -376,5 +383,7 @@ def test_deleting_the_init_above_the_root_really_lets_a_subpackage_shadow(
     spec = parse_verifier(
         "v", ["python3", "-m", "pytest", "pkg/tests/test_calc.py"], ("pkg/tests",)
     )
-    (run,) = run_verifiers(repo, head, (spec,), tmp_path / "runs", "r1", python=sys.executable)
+    (run,) = run_verifiers(
+        VerifyContext(repo, tmp_path / "runs", python=sys.executable), head, (spec,), "r1"
+    )
     assert run.observation.passed is passed, (run.why, run.log_path.read_text())

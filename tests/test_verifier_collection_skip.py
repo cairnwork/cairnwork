@@ -21,6 +21,7 @@ from cairnwork.ownership import OwnershipLedger
 from cairnwork.pipeline import TaskSpec, run_task
 from cairnwork.reasons import why_not_passed
 from cairnwork.verifiers import parse_verifier, run_verifiers
+from cairnwork.verify_context import VerifyContext
 
 CONFTEST = (
     "import sys, pathlib\nsys.path.insert(0, str(pathlib.Path(__file__).parent.parent / 'src'))\n"
@@ -210,7 +211,9 @@ def test_a_target_is_owned_by_the_items_collected_from_its_file_not_by_their_nod
     )
     argv = ["python3", "-m", "pytest", "-q", "tests/test_core.py", "tests/test_ext.py"]
     spec = parse_verifier("pytest", argv)
-    (run,) = run_verifiers(repo, candidate, (spec,), tmp_path / "runs", "r1", python=sys.executable)
+    (run,) = run_verifiers(
+        VerifyContext(repo, tmp_path / "runs", python=sys.executable), candidate, (spec,), "r1"
+    )
     assert run.observation.passed is passes
     assert run.ran is passes
     if conftest is RENAME:
@@ -263,7 +266,9 @@ def test_a_test_renamed_after_collection_fails_the_run_even_within_its_own_file(
         "tests/test_ext.py::test_mul_zero",
     ]
     spec = parse_verifier("pytest", ["python3", "-m", "pytest", "-q", *targets])
-    (run,) = run_verifiers(repo, candidate, (spec,), tmp_path / "runs", "r1", python=sys.executable)
+    (run,) = run_verifiers(
+        VerifyContext(repo, tmp_path / "runs", python=sys.executable), candidate, (spec,), "r1"
+    )
     assert run.observation.passed is passes
     assert run.ran is passes
     if conftest is SAME_FILE:
@@ -285,7 +290,9 @@ def test_a_verifier_target_whose_module_is_skipped_at_collection_does_not_count_
     candidate = commit_change(repo, {"src/calc.py": FIXED_ADD, "src/calc_ext.py": ext})
     argv = ["python3", "-m", "pytest", "-q", "tests/test_core.py", "tests/test_ext.py"]
     spec = parse_verifier("pytest", argv)
-    (run,) = run_verifiers(repo, candidate, (spec,), tmp_path / "runs", "r1", python=sys.executable)
+    (run,) = run_verifiers(
+        VerifyContext(repo, tmp_path / "runs", python=sys.executable), candidate, (spec,), "r1"
+    )
     assert run.observation.passed is passes
     assert run.ran is passes
     if ext is EXT_WRONG_UNIMPORTABLE:
