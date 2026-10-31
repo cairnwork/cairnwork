@@ -14,8 +14,8 @@ run on either platform, because the verifier's pytest process refuses to load by
 (bytecode_hook.py; Seatbelt also denies reading it under a write root, #368), so the wrong ``add``
 fails as written. An honest candidate that compiles and imports a module of its own still passes.
 The sys.modules swap in test_blackbox_verify.py, which needs no bytecode at all, stays a false
-green. Both are in-process forgeries; the boundary is the blackbox declaration (#303) and a verdict
-produced outside the candidate's process, not these scans or the hook.
+green. Both happen inside the candidate's process; the boundary is the blackbox declaration
+(#303) and a verdict produced outside the candidate's process, not these scans or the hook.
 """
 
 import pytest
@@ -83,8 +83,9 @@ def test_a_redirect_built_from_strings_fails_on_the_planted_bytecode(state, help
 @pytest.mark.parametrize("how", sorted(REMOVED))
 def test_bytecode_removed_before_the_run_ends_is_not_verified(state, helper_project, how):
     """The gap bytecode_roots.py names: add is wrong, so only the forged helper passes it
-    (test_the_same_wrong_add_without_a_forgery_fails). The planted bytecode is never loaded
-    (bytecode_hook.py on both platforms, Seatbelt as well on macOS), so the wrong add fails."""
+    (the last test here runs the same wrong add with nothing planted). The planted bytecode is
+    never loaded (bytecode_hook.py on both platforms, Seatbelt as well on macOS), so the wrong add
+    fails."""
     out = run(state, helper_project, REMOVED[how])
     assert out["status"] == "FAILED" and not out["verified"], out
     assert "pytest exit code 1" in out["reason"], out

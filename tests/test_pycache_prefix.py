@@ -20,9 +20,10 @@ from cairnwork.verifiers import parse_verifier, run_verifiers
 from cairnwork.verify_context import VerifyContext
 
 pytestmark = pytest.mark.sandbox
-# pytest's exit code once the forgery is planted: 1 on both platforms, because the verifier's pytest
-# process refuses to load bytecode from files (bytecode_hook.py; Seatbelt also denies reading it
-# under a write root, #368), so the real test fails as written. The scan must name the planted file.
+# pytest's exit code once the bytecode is planted: 1 on both platforms, because the verifier's
+# pytest process refuses to load bytecode from files (bytecode_hook.py; Seatbelt also denies
+# reading it under a write root, #368), so the real test fails as written. The scan must name the
+# planted file.
 PLANTED_RC = 1
 
 CONFTEST = (
