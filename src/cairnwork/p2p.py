@@ -15,7 +15,10 @@ Failure paths, none of which can end VERIFIED:
   would be weaker evidence than the configured one, and a false FAILED becomes "no evidence",
   never VERIFIED;
 * base probe times out, cannot report, or its report exceeds the size cap (a suite too large for
-  one guard report, #184: ``base-probe-report-over-cap``) in ``whole-suite``: degrade to
+  one guard report, #184: ``base-probe-report-over-cap``), or a test's teardown failed there
+  (#478: ``base-probe-teardown-error``; a shared fixture's error lands on whichever test runs
+  last, so no test of that run can be trusted as a target), or it exits 1 with no failed test in
+  the guard's record, in ``whole-suite``: degrade to
   ``module-dir`` once and say so in the record; when ``module-dir`` itself cannot be probed, or
   would run the same files again, or selects no test file at all, or none of its tests passes on
   the base, the task is UNCOMPARABLE (``P2P_BASE_PROBE_UNUSABLE``, #234: no evidence, never
@@ -121,7 +124,11 @@ def _probe(task, files, result, ctx: VerifyContext, budget, tag="p"):
         reason = UNCLEAN[0]
     elif run.mutated:  # the base's own tests write into the checkout: same for the candidate
         reason = UNCLEAN[1]
+    elif run.teardown_errors:  # #478: a shared fixture's error lands on whichever test runs last
+        reason = "base-probe-teardown-error"
     elif run.returncode not in (0, 1) or not run.outcomes:
+        reason = "base-probe-failed"
+    elif run.returncode == 1 and "failed" not in run.outcomes.values():  # #478: not in the record
         reason = "base-probe-failed"
     try:  # #331: the operator sees why the probe was unusable
         if reason is not None:
@@ -246,8 +253,9 @@ def base_env_check(task, result, ctx: VerifyContext, *, without_tests=False, key
     ``without_tests`` a verify call without deferred tests (#259; ``key_repo``: the repository it
     was cloned from, which keys the marker in place of ``task.repo``), the module-dir selection of
     existing base tests is probed now, the same way (``_probe``): a timeout, a report over the cap,
-    an exit other than 0 or 1, no guard record, a surviving process or a mutated checkout (#285)
-    raises UNCOMPARABLE ``BASE_ENV_FAILED``. On a
+    an exit other than 0 or 1, no guard record, a teardown error or an exit 1 with no failed test
+    (#478), a surviving process or a mutated checkout (#285) raises UNCOMPARABLE
+    ``BASE_ENV_FAILED``. On a
     dispatch, this means no worker quota is spent on a base that gives no evidence and the attempt
     is not counted against the worker. Failing tests are fine (the base has the bug). Nothing from
     the test commit is read. A pass is remembered per repository, base, files, import paths, budget,

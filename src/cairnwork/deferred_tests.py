@@ -240,7 +240,13 @@ def _base_problem(run) -> str:
         return "BASE_COLLECTION_ERROR"
     if rc not in (0, 1):  # 5: nothing collected; 2 without collect_errors, 3, 4, others: pytest
         return "BASE_NO_TESTS" if rc == 5 else "BASE_PYTEST_ERROR"
-    return "" if run.recorded else "BASE_NO_REPORT"
+    if not run.recorded:
+        return "BASE_NO_REPORT"
+    # #478: a teardown error (a shared fixture's lands on whichever test runs last), or exit 1
+    # with no failed test in the record: the base run cannot say which tests fail on the base
+    if run.teardown_errors or (rc == 1 and "failed" not in run.outcomes.values()):
+        return "BASE_PYTEST_ERROR"
+    return ""
 
 
 def base_comparison(runs, targets: frozenset[str]) -> Comparison:
