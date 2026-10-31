@@ -50,6 +50,12 @@ from cairnwork.gitcmd import GitCommandError, run_git
 _SOURCE_SUFFIXES = (".py", ".pyc", ".pyo")
 _EXTENSION_SUFFIXES = (".so", ".pyd")
 _KINDS = frozenset({"none", "ns", "path", "meta"})
+_REGULAR_MODES = frozenset({"100644", "100755"})
+# The suffixes a module or package ``__init__`` is loaded by in the verifier's Python: ``.pyo``
+# has not been one since 3.5, and an extension carries that interpreter's own ABI tag.
+_SUFFIXES_PROBE = (
+    "import importlib.machinery, json; print(json.dumps(importlib.machinery.all_suffixes()))"
+)
 # Run in the verifier's Python (a target's may be older than 3.11) with -I from /, names as JSON
 # on stdin. Only a namespace level (no loader, or NamespaceLoader) is ever imported, so no
 # package code runs; finders installed by site .pth files do, as for verifier_spec's inventory.
@@ -130,12 +136,14 @@ def namespace_shadows(
     if not candidates or repo is None or base_commit is None:
         return set()
     try:
-        tree = run_git(repo, "ls-tree", "-rz", "--name-only", "--end-of-options", base_commit)
+        tree = run_git(repo, "ls-tree", "-rz", "--end-of-options", base_commit)
     except GitCommandError:
         if _absent(repo, base_commit):  # nothing runs against it (pytest_config.gate_import_paths)
             return set()
         return set(candidates)  # no proof of safety: refuse before binding or verification
-    listing = [path for path in tree.split("\0") if path]
+    entries = [entry.split("\t", 1) for entry in tree.split("\0") if entry]
+    listing = [path for _, path in entries]
+    regular = {path for meta, path in entries if meta.split(" ", 1)[0] in _REGULAR_MODES}
     spellings = _spellings(listing, tuple(candidates))
     walks = {
         path: [found for variant in spellings[path] for found in _chains(variant, import_roots)]
@@ -144,13 +152,14 @@ def namespace_shadows(
     names = sorted({tuple(chain) for found in walks.values() for _, chain, _, _ in found})
     try:
         answer = _kinds(_run_probe(python or sys.executable, names), names)
+        suffixes = _suffixes(_run_python(python or sys.executable, _SUFFIXES_PROBE, ""))
     except (OSError, ValueError, subprocess.SubprocessError):
         return set(candidates)
     kinds = dict(zip(names, answer, strict=True))
     others = (*import_roots, *_test_dirs(listing, test_roots, sealed))
     firsts = {chain[0].casefold() for chain in names}
     deletable = {path.casefold() for path in paths} if allow_deletions else set()
-    base = _Base(listing, others, firsts, deletable)
+    base = _Base(listing, others, firsts, deletable, regular, suffixes)
     return {
         path
         for path, found in walks.items()
@@ -181,10 +190,18 @@ def _takes_over(
 class _Base:
     """The base's entries by import root and dotted parts, for names starting like a chain:
     casefolded for the other roots (more is refused), exact for the candidate's own root (only
-    an exact entry wins on APFS), there with the files that make it a module or package."""
+    an exact entry wins on APFS), there with the files that make it a module or package: regular
+    files (a symlink may dangle, a submodule is a directory) named exactly as the verifier's
+    Python loads them, ``<name>`` or ``__init__`` plus one of its ``all_suffixes()``."""
 
     def __init__(
-        self, listing: list[str], roots: tuple[str, ...], firsts: set[str], deletable: set[str]
+        self,
+        listing: list[str],
+        roots: tuple[str, ...],
+        firsts: set[str],
+        deletable: set[str],
+        regular: set[str],
+        suffixes: frozenset[str],
     ) -> None:
         self.roots, self.tracked, self.deletable = roots, set(listing), deletable
         self.folded: set[tuple[str, tuple[str, ...]]] = set()
@@ -201,9 +218,11 @@ class _Base:
                 name = import_name(parts[-1])
                 if name is None or len(parts) < 2 and is_init_file(parts[-1]):
                     continue
-                key = tuple(parts[:-1]) if is_init_file(parts[-1]) else (*parts[:-1], name)
+                stem = "__init__" if is_init_file(parts[-1]) else name
+                key = tuple(parts[:-1]) if stem == "__init__" else (*parts[:-1], name)
                 self.folded.add((root, _fold(key)))
-                self.exact.setdefault((root, key), set()).add(path)
+                if path in regular and parts[-1] in {stem + suffix for suffix in suffixes}:
+                    self.exact.setdefault((root, key), set()).add(path)
 
     def elsewhere(self, root: str, parts: tuple[str, ...]) -> bool:
         """Any base entry of this name under another root, in any case."""
@@ -259,10 +278,24 @@ def _kinds(stdout: str, names: list[tuple[str, ...]]) -> list[list[str]]:
     return answer
 
 
+def _suffixes(stdout: str) -> frozenset[str]:
+    """The probe's ``all_suffixes()``, or ValueError."""
+    answer = json.loads(stdout)
+    if not isinstance(answer, list) or not all(
+        isinstance(suffix, str) and suffix.startswith(".") for suffix in answer
+    ):
+        raise ValueError("suffix probe answer is invalid")
+    return frozenset(answer)
+
+
 def _run_probe(python: str, names: list[tuple[str, ...]]) -> str:
+    return _run_python(python, _PROBE, json.dumps(names))
+
+
+def _run_python(python: str, code: str, stdin: str) -> str:
     return subprocess.run(  # noqa: S603 - the configured verifier Python, fixed code
-        [python, "-I", "-c", _PROBE],
-        input=json.dumps(names),
+        [python, "-I", "-c", code],
+        input=stdin,
         check=True,
         capture_output=True,
         text=True,
