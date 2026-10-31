@@ -26,6 +26,7 @@ def run(name: str = "v", rc: int | None = 1, *, failed=(TARGET,), **fields):
         report_too_big=fields.get("report_too_big", False),
         recorded=fields.get("recorded", True),
         collect_errors=fields.get("collect_errors", ()),
+        teardown_errors=(),
     )
 
 
