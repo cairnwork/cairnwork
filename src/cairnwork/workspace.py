@@ -34,6 +34,8 @@ import os
 import re
 import shutil
 import stat
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -203,6 +205,26 @@ def remove_attempt_clone(root: Path, attempt_id: str) -> None:
         shutil.rmtree(path)
     except OSError as exc:
         raise WorkspaceError(f"could not remove {path}: {exc}") from exc
+
+
+@contextmanager
+def unless_interrupted(remove: Callable[[], object], keep: bool = True) -> Iterator[None]:
+    """Call ``remove`` when the block returns or raises an ordinary Exception, not when any
+    other BaseException ends it (KeyboardInterrupt, SystemExit, GeneratorExit, a
+    BaseExceptionGroup, ...): the run's directories then stay for restart recovery, which ties a
+    leftover process to the attempt by its working directory (proc_cwd.attempt_dirs) and removes
+    them after its sweep (#537). ``keep=False`` removes on those exits too (a verifier account's
+    checkout: its processes are killed by the account, not found by cwd)."""
+    try:
+        yield
+    except Exception:
+        remove()
+        raise
+    except BaseException:
+        if not keep:
+            remove()
+        raise
+    remove()
 
 
 def collect_candidate(
