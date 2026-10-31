@@ -13,6 +13,7 @@ rule never looks this deep. The interpreter here is a throwaway venv (namespace_
 
 import json
 import subprocess
+from importlib.machinery import EXTENSION_SUFFIXES
 from pathlib import Path
 
 import pytest
@@ -125,6 +126,41 @@ def test_an_own_module_of_the_name_wins_over_the_candidates_directory(repo, pyth
     assert gate(repo, ["src/nsco/somelib/impl.py"], python) == ()
 
 
+LOADED = ["src/nsco.py", "src/nsco/__init__.py", "src/nsco/__init__.pyc"]
+NOT_LOADED = [
+    "src/nsco.pyo",
+    "src/nsco/__init__.pyo",
+    "src/nsco/__init__.cpython-39-darwin.so",
+    "src/nsco/somelib/__init__.pyo",
+    "src/nsco/__init__.PY",
+]
+
+
+@pytest.mark.parametrize("own", LOADED + [f"src/nsco/__init__{EXTENSION_SUFFIXES[0]}"])
+def test_an_own_file_the_verifiers_python_loads_ends_the_walk(repo, python, own):
+    commit_change(repo, {own: ""})
+    assert gate(repo, ["src/nsco/somelib/impl.py"], python) == ()
+
+
+@pytest.mark.parametrize("own", NOT_LOADED)
+def test_an_own_file_the_verifiers_python_does_not_load_does_not_count(repo, python, own):
+    """Only a suffix in the interpreter's ``all_suffixes()``, exactly spelled, makes a module or
+    regular package: ``.pyo`` is not one since 3.5, nor another version's extension tag."""
+    commit_change(repo, {own: ""})
+    assert gate(repo, ["src/nsco/somelib/impl.py"], python) == ("src/nsco/somelib/impl.py",)
+
+
+@pytest.mark.parametrize("mode", ["120000", "160000"])
+def test_an_own_symlink_or_submodule_does_not_count(repo, python, mode):
+    """Only a regular file is a module: a symlink may dangle, a submodule is a directory."""
+    target = git(repo, "hash-object", "-w", "src/a.py")  # as a link: a missing relative target
+    blob = target if mode == "120000" else git(repo, "rev-parse", "HEAD")
+    for path in ("src/nsco/__init__.py", "src/nsco.py"):
+        git(repo, "update-index", "--add", "--cacheinfo", f"{mode},{blob},{path}")
+    git(repo, "commit", "-q", "-m", "links")
+    assert gate(repo, ["src/nsco/somelib/impl.py"], python) == ("src/nsco/somelib/impl.py",)
+
+
 def test_an_own_module_the_task_may_delete_does_not_count(repo, python):
     commit_change(repo, {"src/nsco.py": "x = 1\n"})
     paths = ["src/nsco.py", "src/nsco/somelib/impl.py"]
@@ -203,6 +239,33 @@ MALFORMED = {
 @pytest.mark.parametrize("answer", MALFORMED.values(), ids=MALFORMED.keys())
 def test_a_malformed_probe_answer_protects_every_deep_path(repo, python, monkeypatch, answer):
     monkeypatch.setattr(namespace_shadow, "_run_probe", lambda python, names: answer(names))
+    paths = ("src/nsco/myproj/core.py", "src/other/core.py")
+    assert gate(repo, paths, python) == paths
+
+
+def _raises(code, stdin):
+    raise subprocess.SubprocessError("suffix probe failed")
+
+
+BAD_SUFFIXES = {
+    "the probe fails": _raises,
+    "not json": lambda code, stdin: "ok",
+    "not a list": lambda code, stdin: json.dumps({".py": 1}),
+    "a suffix without its dot": lambda code, stdin: json.dumps([".py", "pyc"]),
+    "a non-string suffix": lambda code, stdin: json.dumps([".py", 3]),
+}
+
+
+@pytest.mark.parametrize("answer", BAD_SUFFIXES.values(), ids=BAD_SUFFIXES.keys())
+def test_a_bad_suffix_probe_protects_every_deep_path(repo, python, monkeypatch, answer):
+    real = namespace_shadow._run_python
+
+    def run(python, code, stdin):
+        if code == namespace_shadow._SUFFIXES_PROBE:
+            return answer(code, stdin)
+        return real(python, code, stdin)
+
+    monkeypatch.setattr(namespace_shadow, "_run_python", run)
     paths = ("src/nsco/myproj/core.py", "src/other/core.py")
     assert gate(repo, paths, python) == paths
 

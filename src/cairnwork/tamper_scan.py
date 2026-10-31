@@ -12,8 +12,11 @@ pass. An alias bound by an added import (``import os as o``, ``from sys import m
 is followed on that line and the added lines after it; an alias bound only in an unchanged
 (context) line, by a parenthesised import split over lines, a backslash continuation or
 ``from sys import *`` is not seen. Text inside string literals is scanned like code, as for
-every rule (an aliased name in a string can be flagged). It catches the straightforward forms and
-the PoCs seen so far, and it fails closed with a dedicated reason so an operator can see why.
+every rule (an aliased name in a string can be flagged). The diff is cut into lines only at a
+newline and file headers are read only between hunks, so no text inside an added line ends it
+early; a carriage return, which Python also reads as a line end, starts a new piece to scan. It
+catches the straightforward forms and the PoCs seen so far, and it fails closed with a dedicated
+reason so an operator can see why.
 The rule list is the one place to change; the alias and library checks reuse its names and
 allow-lists.
 
@@ -42,7 +45,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from cairnwork.gitcmd import run_git
+from cairnwork.gitcmd import GitCommandError, run_git_bytes
 
 CODE = "VERIFIER_TAMPER_API"
 
@@ -78,8 +81,11 @@ _COMMENT_ONLY = re.compile(r"^\s*#")
 _SENSITIVE_MODULE = (
     r"(?:_?pytest\w*|pluggy|py|_?cairnwork\w*|sys|os|builtins|importlib|gc|conftest|__main__)"
 )
+# Test code by module name: a test root package, a conftest or a test module, at any depth.
+_TEST_MODULE = r"(?:\w+\.)*(?:tests|test|testing|conftest|test_\w*|\w+_test)"
 _STUB_NAME = (
-    rf"(?:'(?!{_SENSITIVE_MODULE}(?:\.|'))[\w.]+'|\"(?!{_SENSITIVE_MODULE}(?:\.|\"))[\w.]+\")"
+    rf"(?:'(?!{_SENSITIVE_MODULE}(?:\.|')|{_TEST_MODULE}(?:\.|'))[\w.]+'"
+    rf"|\"(?!{_SENSITIVE_MODULE}(?:\.|\")|{_TEST_MODULE}(?:\.|\"))[\w.]+\")"
 )
 _STUB_KEY = rf"\[\s*{_STUB_NAME}\s*\]"
 _STUB_RHS = r"(?:(?!\bmodules\b)[^;])*"  # no second sys.modules access chained on the line
@@ -103,17 +109,25 @@ def _is_test_path(path: str) -> bool:
 
 
 RULES: tuple[Rule, ...] = (
-    _rule("os_exit", r"\bos\s*\.\s*_exit\b|\bfrom\s+os\s+import\b[^#\n]*\b_exit\b"),
+    _rule(
+        "os_exit",
+        r"\b(?:os|posix|nt)\s*\.\s*_exit\b|\bfrom\s+(?:os|posix|nt)\s+import\b[^#\n]*\b_exit\b",
+    ),
     _rule(
         "cairnwork_env",
         r"(?=.*\bCAIRNWORK_)(?=.*(?:\benviron\b|\bgetenv\b|\benvb\b))",
     ),
-    _rule("gc_walk", r"\bgc\s*\.\s*(?:get_objects|get_referrers|get_referents)\b"),
+    _rule(
+        "gc_walk",
+        r"\bgc\s*\.\s*(?:get_objects|get_referrers|get_referents)\b"
+        r"|\bfrom\s+gc\s+import\b[^#\n]*\b(?:get_objects|get_referrers|get_referents)\b",
+    ),
     _rule(
         "sys_modules_write",
         r"\bsys\s*\.\s*modules\s*\[(?!\s*__name__\s*\])[^\]]*\]\s*=(?!=)"
         r"|\bdel\s+sys\s*\.\s*modules\b"
-        r"|\bsys\s*\.\s*modules\s*\.\s*(?:pop|popitem|update|setdefault|clear)\s*\(",
+        r"|\bsys\s*\.\s*modules\s*\.\s*(?:pop|popitem|update|setdefault|clear"
+        r"|__setitem__|__delitem__|__ior__)\s*\(|\bsys\s*\.\s*modules\s*\|=",
         allow=_SYS_MODULES_STUB,
         tests_only=True,
     ),
@@ -156,22 +170,24 @@ RULES: tuple[Rule, ...] = (
 )
 _BY_NAME = {rule.name: rule for rule in RULES}
 
-# Import statements that can bind another name to sys, os, sys.modules or os._exit. A statement
+# Import statements that can bind another name to sys, os, gc, sys.modules or os._exit. A statement
 # may follow ``;`` or a ``:`` (``try: import sys as s``); the name list stops at a comment.
 _IMPORT_STMT = re.compile(r"(?:^|[:;])\s*import\s+([^#;]+)")
 _FROM_STMT = re.compile(r"(?:^|[:;])\s*from\s+(sys|os)\s+import\s+\(?([^#;)]+)")
 _IMPORTED_NAME = re.compile(r"^\s*([\w.]+)(?:\s+as\s+([A-Za-z_]\w*))?\s*$")
 _FROM_TARGET = {"sys": "modules", "os": "_exit"}  # the one name worth following per module
+_MODULE_ALIAS = {"sys": "sys", "os": "os", "posix": "os", "nt": "os", "gc": "gc"}  # posix is os
 
 # Library files: only a literal sensitive key (the names _SYS_MODULES_STUB refuses in test code),
 # so a plugin loader's sys.modules[spec.name] = mod and a stub of an unrelated module pass.
-_SENSITIVE_KEY = rf"""(?:'{_SENSITIVE_MODULE}(?:\.[\w.]*)?'|"{_SENSITIVE_MODULE}(?:\.[\w.]*)?")"""
+_SENSITIVE_NAME = rf"(?:{_SENSITIVE_MODULE}|{_TEST_MODULE})(?:\.[\w.]*)?"
+_SENSITIVE_KEY = rf"""(?:'{_SENSITIVE_NAME}'|"{_SENSITIVE_NAME}")"""
 _MODULES = r"\bsys\s*\.\s*modules\s*"
 _LIBRARY_MODULES_WRITE = re.compile(
     rf"{_MODULES}\[\s*{_SENSITIVE_KEY}\s*\]\s*=(?!=)"
     rf"|\bdel\s+[^#;]*{_MODULES}\[\s*{_SENSITIVE_KEY}\s*\]"
-    rf"|{_MODULES}\.\s*(?:pop|setdefault)\s*\(\s*{_SENSITIVE_KEY}"
-    rf"|{_MODULES}\.\s*update\s*\([^)]*{_SENSITIVE_KEY}"
+    rf"|{_MODULES}\.\s*(?:pop|setdefault|__setitem__|__delitem__)\s*\(\s*{_SENSITIVE_KEY}"
+    rf"|{_MODULES}(?:\.\s*(?:update|__ior__)\s*\(|\|=)[^)]*{_SENSITIVE_KEY}"
 )
 # An import statement naming _pytest (not importlib.import_module, not a pytest_x helper).
 _LIBRARY_PYTEST = Rule(  # with main's type-hint import allow
@@ -182,11 +198,11 @@ _LIBRARY_PYTEST = Rule(  # with main's type-hint import allow
 
 
 def _bind_aliases(text: str, aliases: dict[str, set[str]]) -> None:
-    """Record in ``aliases`` the names this line's imports bind to sys, os, modules or _exit."""
+    """Record in ``aliases`` the names this line's imports bind to sys, os, gc, modules or _exit."""
     for match in _IMPORT_STMT.finditer(text):
         for name, alias in _imported_names(match.group(1)):
-            if name in ("sys", "os") and alias:
-                aliases[name].add(alias)
+            if name in _MODULE_ALIAS and alias:
+                aliases[_MODULE_ALIAS[name]].add(alias)
     for match in _FROM_STMT.finditer(text):
         target = _FROM_TARGET[match.group(1)]
         for name, alias in _imported_names(match.group(2)):
@@ -206,6 +222,8 @@ def _canonical(text: str, aliases: dict[str, set[str]]) -> str:
         text = re.sub(rf"(?<![\w.]){re.escape(name)}(\s*\.\s*modules\b)", r"sys\1", text)
     for name in sorted(aliases["os"]):
         text = re.sub(rf"(?<![\w.]){re.escape(name)}(\s*\.\s*_exit\b)", r"os\1", text)
+    for name in sorted(aliases["gc"]):
+        text = re.sub(rf"(?<![\w.]){re.escape(name)}(\s*\.\s*get_)", r"gc\1", text)
     for name in sorted(aliases["modules"]):
         text = re.sub(rf"(?<![\w.]){re.escape(name)}\b", "sys.modules", text)
     for name in sorted(aliases["_exit"]):  # a call; "def _exit(self):" defines a method instead
@@ -222,9 +240,9 @@ def _hits(rule: Rule, text: str) -> bool:
 def _extra_rules(text: str, aliases: dict[str, set[str]], in_tests: bool) -> list[str]:
     """Rule names the RULES table misses on this line: alias spellings and library forgeries."""
     canon = _canonical(text, aliases)
-    names = []
-    if canon != text and _hits(_BY_NAME["os_exit"], canon):
-        names.append("os_exit")
+    names = [
+        name for name in ("os_exit", "gc_walk") if canon != text and _hits(_BY_NAME[name], canon)
+    ]
     if in_tests:  # main's full sys.modules rule, stub allow included, on the plain spelling
         if canon != text and _hits(_BY_NAME["sys_modules_write"], canon):
             names.append("sys_modules_write")
@@ -254,9 +272,11 @@ def scan_added_lines(path: str, lines: list[tuple[int, str]]) -> list[Finding]:
     in_conftest = posixpath.basename(path) == "conftest.py"
     in_tests = _is_test_path(path)
     # Aliases bound so far by the added lines, in order (context lines are not in the diff).
-    aliases: dict[str, set[str]] = {"sys": set(), "os": set(), "modules": set(), "_exit": set()}
+    aliases: dict[str, set[str]] = {key: set() for key in ("sys", "os", "gc", "modules", "_exit")}
     found = []
-    for number, text in lines:
+    # Python also ends a source line at "\r" (CRLF included), so each piece is scanned on its own.
+    pieces = [(number, piece) for number, line in lines for piece in line.split("\r")]
+    for number, text in pieces:
         if _COMMENT_ONLY.match(text):
             continue
         names = []
@@ -271,22 +291,44 @@ def scan_added_lines(path: str, lines: list[tuple[int, str]]) -> list[Finding]:
     return found
 
 
+_HUNK = re.compile(r"@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+
+
 def added_lines(diff: str) -> dict[str, list[tuple[int, str]]]:
-    """The added lines of a ``git diff -U0`` text, by new path with their new line numbers."""
+    """The added lines of a ``git diff -U0`` text, by new path with their new line numbers.
+
+    A line ends only at "\\n" (git ends every diff line there; any other line break inside is
+    content). Inside a hunk, its header's counts say how many old and new lines follow, so an
+    added line that starts with "++ " or "@@" is content, not a file or hunk header. A diff whose
+    lines do not match those counts raises GitCommandError (unreadable, so the change is refused).
+    """
     files: dict[str, list[tuple[int, str]]] = {}
-    current, number = None, 0
-    for raw in diff.splitlines():
-        if raw.startswith("+++ "):
+    current, number, old_left, new_left = None, 0, 0, 0
+    for raw in diff.removesuffix("\n").split("\n"):
+        if old_left > 0 or new_left > 0:
+            # "" is a blank context line (diff.suppressBlankEmpty); "\ No newline" counts for none
+            kind = raw[:1] or " "
+            if kind not in "+- \\":
+                raise GitCommandError("diff line inside a hunk has no +, -, space or \\ prefix")
+            if kind == "+" and current is not None:
+                files[current].append((number, raw[1:]))
+            old_left -= kind in "- "  # a bool counts as 0 or 1
+            new_left -= kind in "+ "
+            number += kind in "+ "
+            if old_left < 0 or new_left < 0:
+                raise GitCommandError("diff hunk has more lines than its header counts")
+        elif raw.startswith(("+", "-", " ")) and not raw.startswith(("+++ ", "--- ")):
+            raise GitCommandError("diff line outside a hunk")
+        elif raw.startswith("+++ "):
             target = _unquote(raw[4:].rstrip("\t"))  # git appends a tab to a path with a space
             current = target[2:] if target.startswith("b/") else None
             if current is not None:
                 files.setdefault(current, [])
-        elif raw.startswith("@@"):
-            match = re.search(r"\+(\d+)", raw)
-            number = int(match.group(1)) if match else 0
-        elif current is not None and raw.startswith("+"):
-            files[current].append((number, raw[1:]))
-            number += 1
+        elif hunk := _HUNK.match(raw):
+            old_left, number = int(hunk.group(1) or 1), int(hunk.group(2))
+            new_left = int(hunk.group(3) or 1)
+    if old_left > 0 or new_left > 0:
+        raise GitCommandError("diff ends inside a hunk")
     return files
 
 
@@ -300,10 +342,15 @@ def _unquote(name: str) -> str:
 
 def scan_patch(repo: Path, base: str, head: str) -> list[Finding]:
     """Scan what ``head`` adds on top of ``base`` (both commits already in repo)."""
-    diff = run_git(
-        repo, "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames", "-U0",
+    raw = run_git_bytes(  # bytes: no newline translation, so a lone "\r" stays inside its line
+        repo, "-c", "diff.suppressBlankEmpty=false", "-c", "diff.interHunkContext=0",
+        "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames", "-U0",
         "--src-prefix=a/", "--dst-prefix=b/", base, head,
     )  # fmt: skip
+    try:
+        diff = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:  # as run_git: a change that is not UTF-8 is unreadable
+        raise GitCommandError("git diff output is not UTF-8") from exc
     return [
         finding
         for path, lines in added_lines(diff).items()

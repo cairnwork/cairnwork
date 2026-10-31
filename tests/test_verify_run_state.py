@@ -128,23 +128,25 @@ def test_cleanup_removes_a_dead_run_s_leftovers_and_spares_a_live_one(state):
     runs, markers = state / "runs", state / "verify-runs"
     runs.mkdir()
     markers.mkdir()
-    for attempt in ("adead0001", "alive0002"):
+    for attempt in ("adead000000000001", "aa11e000000000002"):
         (markers / attempt).touch()
         (runs / f"{attempt}-b-v0.work").mkdir()
         (runs / f"{attempt}.tests.index").touch()
         (state / "verify-scratch" / attempt).mkdir(parents=True)
-    live = (markers / "alive0002").open("r+")
+    live = (markers / "aa11e000000000002").open("r+")
     fcntl.flock(live, fcntl.LOCK_EX)
     try:
         code, out = cli(state, "cleanup")
     finally:
         live.close()
-    assert code == 0 and out == {"cleaned": ["adead0001"]}
-    assert not (markers / "adead0001").exists() and not (runs / "adead0001.tests.index").exists()
-    assert not (runs / "adead0001-b-v0.work").exists()
-    assert not (state / "verify-scratch" / "adead0001").exists()
-    assert (state / "verify-scratch" / "alive0002").exists()
-    assert (markers / "alive0002").exists() and (runs / "alive0002-b-v0.work").exists()
+    assert code == 0 and out == {"cleaned": ["adead000000000001"]}
+    assert not (markers / "adead000000000001").exists()
+    assert not (runs / "adead000000000001.tests.index").exists()
+    assert not (runs / "adead000000000001-b-v0.work").exists()
+    assert not (state / "verify-scratch" / "adead000000000001").exists()
+    assert (state / "verify-scratch" / "aa11e000000000002").exists()
+    assert (markers / "aa11e000000000002").exists()
+    assert (runs / "aa11e000000000002-b-v0.work").exists()
 
 
 @sandbox
@@ -196,14 +198,14 @@ def test_cleanup_stops_a_dead_run_s_orphan_process(state):
     from cairnwork.confined import ATTEMPT_ENV
 
     (state / "verify-runs").mkdir()
-    (state / "verify-runs" / "adead0003").touch()
+    (state / "verify-runs" / "adead000000000003").touch()
     orphan = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(60)"],
-        env={**os.environ, ATTEMPT_ENV: "adead0003"},
+        env={**os.environ, ATTEMPT_ENV: "adead000000000003"},
     )
     try:
         time.sleep(0.5)
-        assert cli(state, "cleanup")[1] == {"cleaned": ["adead0003"]}
+        assert cli(state, "cleanup")[1] == {"cleaned": ["adead000000000003"]}
         time.sleep(1)
         assert orphan.poll() is not None
     finally:
@@ -257,18 +259,18 @@ def test_cleanup_leaves_a_marker_that_was_replaced_while_it_held_the_lock(state,
 
     markers = state / "verify-runs"
     markers.mkdir()
-    (markers / "adead0004").touch()
+    (markers / "adead000000000004").touch()
     (state / "runs").mkdir()
-    (state / "runs" / "adead0004.tests.index").touch()
+    (state / "runs" / "adead000000000004.tests.index").touch()
 
     def new_run_starts():  # a run recreated the marker after we opened the old one
-        (markers / "adead0004").unlink()
-        (markers / "adead0004").touch()
+        (markers / "adead000000000004").unlink()
+        (markers / "adead000000000004").touch()
 
     monkeypatch.setattr(module, "_gap", new_run_starts)
     assert module.cleanup(Intake(state)) == {"cleaned": []}
-    assert (markers / "adead0004").exists()
-    assert (state / "runs" / "adead0004.tests.index").exists()
+    assert (markers / "adead000000000004").exists()
+    assert (state / "runs" / "adead000000000004.tests.index").exists()
 
 
 def test_cleanup_tolerates_a_marker_that_vanishes_before_it_is_opened(state, monkeypatch):
@@ -279,11 +281,11 @@ def test_cleanup_tolerates_a_marker_that_vanishes_before_it_is_opened(state, mon
 
     markers = state / "verify-runs"
     markers.mkdir()
-    (markers / "agone0005").touch()
+    (markers / "a90e0000000000005").touch()
     real = os.open
 
     def vanishing(path, *args, **kwargs):
-        if str(path).endswith("agone0005"):
+        if str(path).endswith("a90e0000000000005"):
             os.unlink(path)  # the run finished between the listing and the open
         return real(path, *args, **kwargs)
 
@@ -293,15 +295,15 @@ def test_cleanup_tolerates_a_marker_that_vanishes_before_it_is_opened(state, mon
 
 def test_run_cleans_up_dead_runs_first(project, state):
     (state / "verify-runs").mkdir()
-    (state / "verify-runs" / "adead0006").touch()
+    (state / "verify-runs" / "adead000000000006").touch()
     (state / "runs").mkdir()
-    (state / "runs" / "adead0006.tests.index").touch()
+    (state / "runs" / "adead000000000006.tests.index").touch()
     base = base_of(project)
     cand = candidate(project, base, {"src/calc.py": FIX, "src/other.py": "x = 1\n"})
     code, out = verify(state, project, base, cand)
     assert code == 2 and out["reason"].startswith("OUT_OF_SCOPE")
-    assert not (state / "verify-runs" / "adead0006").exists()
-    assert not (state / "runs" / "adead0006.tests.index").exists()
+    assert not (state / "verify-runs" / "adead000000000006").exists()
+    assert not (state / "runs" / "adead000000000006.tests.index").exists()
 
 
 @sandbox
