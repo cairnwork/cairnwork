@@ -317,6 +317,9 @@ def test_build_statement_missing_core_identity_and_observations(tmp_path: Path, 
         request_hash=_digest(stripped_req),
     )
     object.__setattr__(verified, "record", mod_record)
+    object.__setattr__(
+        verified, "verdict", replace(verified.verdict, request_hash=mod_record.request_hash)
+    )
 
     statement = build_statement(
         verified,
@@ -371,4 +374,20 @@ def test_build_statement_tampered_request_hash_via_setattr_refused(
             producer=Producer(),
             timestamp="2026-10-22T09:00:00Z",
         )
+    assert exc_info.value.code == "VERIFIED_RECORD_TAMPERED"
+
+
+@pytest.mark.parametrize(
+    ("field_name", "other"), [("base_commit", "0" * 40), ("request_hash", "sha256:" + "0" * 64)]
+)
+def test_build_statement_verdict_binding_fields_must_match_record(
+    tmp_path: Path, repo: Path, field_name: str, other: str
+) -> None:
+    db_path = tmp_path / "notary.sqlite"
+    _, verdict = setup_sample_notary(db_path, repo, "task-1", "a1")
+    verified = verify_record(db_path, "task-1", "a1", expected_candidate=verdict.candidate_commit)
+
+    object.__setattr__(verified, "verdict", replace(verified.verdict, **{field_name: other}))
+    with pytest.raises(StatementInputError) as exc_info:
+        build_statement(verified, producer=Producer(), timestamp="2026-10-22T09:00:00Z")
     assert exc_info.value.code == "VERIFIED_RECORD_TAMPERED"

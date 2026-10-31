@@ -6,7 +6,14 @@ write. verifiers.py used to pass ``--junitxml=<path>`` in argv and read that fil
 candidate's own code runs in the same process and could read the path from ``sys.argv``, write
 a passing report and ``os._exit(0)`` before the real tests ran. The parent now accepts a run
 only when our record is present (so an exit before ``sessionfinish`` fails), it names at least
-one collected test, every collected test has a result, and all of them passed.
+one collected test, every collected test has a result, all of them passed, no collector was
+skipped or failed, and every item kept the node id and file it had when pytest collected it
+(recorded in ``pytest_itemcollected``, before ``pytest_collection_modifyitems``; an item renamed,
+moved or added later fails the run). Tests and outcomes are keyed by that collected node id, and
+the caller also requires each target it named to own a test that ran (``Verdict.not_run``: the
+test's collected file is the target's file and its collected node id is under it): a module
+skipped at collection (``importorskip``, a module-level skip) yields no test at all, so it counts
+as skipped, not as passed.
 
 The plugin is a small standalone module (``_PLUGIN_SOURCE``) materialised into a per-run
 directory by ``install_plugin`` and loaded with ``-p``. It carries no cairnwork import, so it
@@ -49,7 +56,7 @@ from __future__ import annotations
 import json
 import os
 import stat
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from cairnwork.confined import MAX_REPORT_BYTES
@@ -64,6 +71,8 @@ _PLUGIN_SOURCE = '''\
 
 import json
 import os
+
+import pytest
 
 _FDS_ENV = "CAIRNWORK_GUARD_FDS"
 _PATH_ENV = "CAIRNWORK_VERDICT_PATH"
@@ -102,24 +111,70 @@ class _Reporter:
         self._nonce = nonce
         self._collected = []
         self._outcomes = {}
+        self._sources = {}  # id(item) -> (item, node id, file) when collected
+        self._files = []
+        self._file_of = []  # per collected item: its index in _files, -1 if it has none
+        self._renamed = []  # items whose node id or file changed after collection, or never seen
         self._collect_errors = []
+        self._collect_skipped = []
+        self._teardown_errors = []
 
     def pytest_collectreport(self, report):
         if report.failed:
             self._collect_errors.append(report.nodeid)
+        elif report.skipped:  # a module or directory skipped whole while collecting
+            self._collect_skipped.append(report.nodeid)
+
+    @staticmethod
+    def _source(item):
+        try:
+            return item.path.relative_to(item.config.rootpath).as_posix()
+        except (AttributeError, TypeError, ValueError):
+            return ""
+
+    def _original(self, item, nodeid):
+        """The node id ``item`` had when collected; an item that was not seen collected, or whose
+        node id or file has changed since, is recorded as renamed (the run cannot pass)."""
+        seen = self._sources.get(id(item))
+        if not seen or seen[0] is not item:
+            self._renamed.append(nodeid)
+            return nodeid, ""
+        if nodeid != seen[1] or self._source(item) != seen[2]:
+            self._renamed.append(nodeid)
+        return seen[1], seen[2]
+
+    @pytest.hookimpl(tryfirst=True)
+    def pytest_itemcollected(self, item):
+        self._sources[id(item)] = (item, item.nodeid, self._source(item))
 
     def pytest_collection_finish(self, session):
-        self._collected = [item.nodeid for item in session.items]
+        index = {}
+        for item in session.items:
+            nodeid, source = self._original(item, item.nodeid)
+            self._collected.append(nodeid)
+            self._file_of.append(index.setdefault(source, len(index)) if source else -1)
+        self._files = list(index)
 
-    def pytest_runtest_logreport(self, report):
+    @pytest.hookimpl(wrapper=True, tryfirst=True)
+    def pytest_runtest_makereport(self, item, call):
+        report = yield  # outermost: the report as every other hook left it
+        nodeid, _ = self._original(item, report.nodeid)
         if report.when == "call":
-            self._outcomes[report.nodeid] = report.outcome
+            self._outcomes[nodeid] = report.outcome
         elif report.when == "setup" and report.outcome in ("skipped", "failed"):
-            self._outcomes.setdefault(report.nodeid, report.outcome)
+            self._outcomes.setdefault(nodeid, report.outcome)
+        elif report.when == "teardown" and report.failed:  # #478: a fixture raised after yield
+            self._outcomes[nodeid] = "failed"
+            self._teardown_errors.append(nodeid)
+        return report
 
     def pytest_sessionfinish(self, session, exitstatus):
         payload = {"nonce": self._nonce, "collected": self._collected, "outcomes": self._outcomes,
-                   "collect_errors": self._collect_errors}
+                   "files": self._files, "file_of": self._file_of,
+                   "renamed": list(dict.fromkeys(self._renamed)),
+                   "collect_errors": self._collect_errors,
+                   "collect_skipped": self._collect_skipped,
+                   "teardown_errors": self._teardown_errors}
         if self._fd is not None:
             data = json.dumps(payload).encode()
             os.ftruncate(self._fd, 0)
@@ -161,6 +216,30 @@ class Verdict:
     too_big: bool = False  # the file exceeds MAX_REPORT_BYTES: nothing could be read from it
     recorded: bool = False  # sessionfinish wrote a well-formed record with our nonce (#234)
     collect_errors: tuple[str, ...] = ()  # node ids of collectors that failed (B2, #234)
+    collect_skipped: tuple[str, ...] = ()  # node ids of collectors skipped while collecting
+    renamed: tuple[str, ...] = ()  # items whose node id or file changed after collection
+    paths: dict[str, str] = field(default_factory=dict)  # node id -> its file, as collected
+    # #478: tests whose teardown failed. A shared fixture's finalizer runs at its last user's
+    # teardown, so the node named is where the error landed, not the test that owns the fixture
+    teardown_errors: tuple[str, ...] = ()
+
+    def not_run(self, targets) -> tuple[str, ...]:
+        """The named ``targets`` (``path`` or ``path::node``) that own no recorded test, then the
+        collectors skipped while collecting: a run that leaves any of them is not a pass, whatever
+        else it ran. A test belongs to a target only when it was collected from the target's file
+        (``paths``, taken from the item's path when pytest collected it, before any hook could
+        reorder or rename items) and its node id is under the target."""
+        missing = [t for t in targets if not any(self._owns(node, t) for node in self.outcomes)]
+        return tuple(dict.fromkeys([*missing, *self.collect_skipped]))
+
+    def _owns(self, nodeid: str, target: str) -> bool:
+        return self.paths.get(nodeid) == target.partition("::")[0] and _within(nodeid, target)
+
+
+def _within(nodeid: str, target: str) -> bool:
+    """A test belongs to a target when it is that node, a node under it (``::``) or one of its
+    parametrisations (``[``)."""
+    return nodeid == target or nodeid.startswith((f"{target}::", f"{target}["))
 
 
 def read_verdict(path: Path, nonce: str) -> Verdict:
@@ -193,11 +272,13 @@ def read_verdict_fd(fd: int, nonce: str) -> Verdict:
 
 def parse_verdict(raw: bytes, nonce: str) -> Verdict:
     """``ran`` is true only when sessionfinish wrote the record, it matches
-    the nonce, at least one test was collected, every collected test produced a result, and all
-    results are ``passed``. Outcomes, ``recorded`` and ``collect_errors`` are returned whenever the
-    nonce matches (even when not all passed) so base_comparison can see a test that failed. A
-    record over MAX_REPORT_BYTES (a suite too large for one report, #184) is ``too_big`` so the
-    caller can say why nothing was read."""
+    the nonce, at least one test was collected, every collected test produced a result, all
+    results are ``passed``, no collector failed or was skipped, no teardown failed and no item's
+    node id or file changed after collection (``renamed``). Outcomes, ``recorded`` and the
+    collector and teardown lists are returned whenever the nonce matches (even when not all
+    passed) so base_comparison can see a test that failed. A record over MAX_REPORT_BYTES (a
+    suite too large for one report, #184) is ``too_big`` so the caller can say why nothing was
+    read."""
     if len(raw) > MAX_REPORT_BYTES:
         return Verdict(False, {}, too_big=True)
     try:
@@ -217,11 +298,51 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
     ):
         return Verdict(False, {})
     errors = data.get("collect_errors", [])
-    if not isinstance(errors, list) or not all(isinstance(node, str) for node in errors):
+    skipped = data.get("collect_skipped", [])
+    renamed = data.get("renamed", [])
+    teardown = data.get("teardown_errors", [])
+    files = data.get("files", [])
+    file_of = data.get("file_of")  # absent: no test owns a named target
+    if not all(
+        isinstance(v, list) and all(isinstance(n, str) for n in v)
+        for v in (errors, skipped, renamed, teardown)
+    ):
+        return Verdict(False, {})
+    if not isinstance(files, list) or not all(isinstance(path, str) for path in files):
+        return Verdict(False, {})
+    if file_of is not None and not (
+        isinstance(file_of, list)
+        and len(file_of) == len(collected)
+        and all(type(n) is int and -1 <= n < len(files) for n in file_of)
+    ):
         return Verdict(False, {})
     ran = (
         bool(collected)
+        and not errors
+        and not skipped
+        and not renamed
+        and not teardown
         and set(outcomes) == set(collected)
         and all(outcome == "passed" for outcome in outcomes.values())
     )
-    return Verdict(ran, outcomes, recorded=True, collect_errors=tuple(errors))
+    return Verdict(
+        ran,
+        outcomes,
+        recorded=True,
+        collect_errors=tuple(errors),
+        collect_skipped=tuple(skipped),
+        renamed=tuple(renamed),
+        teardown_errors=tuple(teardown),
+        paths=_sources(collected, files, file_of or ()),
+    )
+
+
+def _sources(collected: list[str], files: list[str], file_of) -> dict[str, str]:
+    """Each collected node id's file; ``""`` when it was not seen collected or one id names
+    items of two files (then neither owns a target)."""
+    paths: dict[str, str] = {}
+    for node, n in zip(collected, file_of, strict=False):
+        source = files[n] if n >= 0 else ""
+        if paths.setdefault(node, source) != source:
+            paths[node] = ""
+    return paths

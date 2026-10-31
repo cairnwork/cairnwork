@@ -19,6 +19,7 @@ from cairnwork.recovery import recover
 DRIVER = Path(__file__).with_name("crash_driver.py")
 GOOD = "def add(a, b):\n    return a + b\n"
 BAD = "def add(a, b):\n    return a - b\n"
+A1 = "a0123456789abcdef"  # an attempt id as a run makes it (pipeline.py)
 
 
 @pytest.fixture
@@ -344,12 +345,12 @@ def test_leftover_cleanup_ignores_an_attempt_id_that_is_not_a_name(tmp_path):
 def test_leftover_cleanup_removes_whole_base_test_runs(tmp_path):
     from cairnwork.recovery import _remove_leftovers
 
-    base_run = tmp_path / "a1-b-v0.abc"
-    verify_run = tmp_path / "a1-v-v0.def"
+    base_run = tmp_path / f"{A1}-b-v0.abc"
+    verify_run = tmp_path / f"{A1}-v-v0.def"
     for private in (base_run, verify_run):
         (private / "run").mkdir(parents=True)
         (private / "verifier.log").write_text("log")
-    _remove_leftovers(tmp_path, "a1")
+    _remove_leftovers(tmp_path, A1)
     assert not base_run.exists()
     assert (verify_run / "verifier.log").exists() and not (verify_run / "run").exists()
 
@@ -360,13 +361,13 @@ def test_leftover_cleanup_removes_verifier_work_directories(tmp_path):
     from cairnwork.recovery import _remove_leftovers
 
     for kind in ("v", "b"):
-        work = tmp_path / f"a1-{kind}-v0.work"
-        (work / f"a1-{kind}-v0" / "tests").mkdir(parents=True)
+        work = tmp_path / f"{A1}-{kind}-v0.work"
+        (work / f"{A1}-{kind}-v0" / "tests").mkdir(parents=True)
         (work / "nexus-runtime-targets").mkdir()
-    verify_run = tmp_path / "a1-v-v0.def"
+    verify_run = tmp_path / f"{A1}-v-v0.def"
     (verify_run / "run").mkdir(parents=True)
     (verify_run / "verifier.log").write_text("log")
-    _remove_leftovers(tmp_path, "a1")
+    _remove_leftovers(tmp_path, A1)
     assert not list(tmp_path.glob("*.work"))
     assert (verify_run / "verifier.log").exists() and not (verify_run / "run").exists()
 
@@ -376,16 +377,16 @@ def test_leftover_cleanup_removes_p2p_run_directories(tmp_path, tag):
     """#171: the P2P probe (-p) and candidate runs (-q/-r, hidden tests laid over) go whole."""
     from cairnwork.recovery import _remove_leftovers
 
-    clone = tmp_path / f"a1-{tag}-v0"
+    clone = tmp_path / f"{A1}-{tag}-v0"
     (clone / "tests").mkdir(parents=True)
     (clone / "tests" / "test_hidden.py").write_text("x")
-    work = tmp_path / f"a1-{tag}-v0.work"
-    (work / f"a1-{tag}-v0").mkdir(parents=True)
-    run = tmp_path / f"a1-{tag}-v0.abc"
+    work = tmp_path / f"{A1}-{tag}-v0.work"
+    (work / f"{A1}-{tag}-v0").mkdir(parents=True)
+    run = tmp_path / f"{A1}-{tag}-v0.abc"
     (run / "run").mkdir(parents=True)
     (run / "verifier.log").write_text("log")
     other = tmp_path / f"a2-{tag}-v0"
     other.mkdir()
-    _remove_leftovers(tmp_path, "a1")
+    _remove_leftovers(tmp_path, A1)
     assert not clone.exists() and not work.exists() and not run.exists()
     assert other.exists()  # another attempt is untouched

@@ -9,12 +9,14 @@ raises WorkerMayLive (WORKER_SWEEP_UNCLEAN, #244); the owner path must do the sa
 owner's account (""), so pipeline.py fences the attempt and only takeover.py, after its own
 sweep, releases the card. Fake agy; no model is called."""
 
+import io
 import os
 import signal
+import subprocess
 import time
 
 import pytest
-from agy_receipt_lines import WORKER, good_run
+from agy_receipt_lines import WORKER, good_run, status
 from test_agy_worker import TASK, attempt, expire_once_ready, fake_agy
 from test_agy_worker_account import ROOT, _replaying
 from test_pipeline import project as project  # noqa: F401 - fixture
@@ -28,8 +30,8 @@ from cairnwork.ownership import TakeoverRefused
 from cairnwork.pipeline import run_task
 from cairnwork.unswept import Mark, WorkerMayLive
 from cairnwork.workers import agy as agy_module
-from cairnwork.workers.agy import AgyWorker
-from cairnwork.workers.agy_dispatch import AgyWorkerAccountFailed
+from cairnwork.workers.agy import AgyWorker, AgyWorkerError
+from cairnwork.workers.agy_dispatch import AgyWorkerAccountFailed, Dispatch
 
 UNCLEAN = [UNLISTED, Sweep(True, denied=1), Sweep(True, unreadable=1)]
 
@@ -171,6 +173,89 @@ def test_an_interrupt_is_not_replaced_by_the_fence(tmp_path, monkeypatch):
     worker, workdir, _ = _replaying(tmp_path, good_run(ROOT))
     with pytest.raises(KeyboardInterrupt):
         worker.run(workdir, TASK)
+
+
+class _Ended:
+    """A dispatcher or agy that already ended with `code`; with `timeout` our wait expires
+    first. No process is started: pid -1 is never signalled (os.kill and killpg are refused)."""
+
+    pid = -1
+
+    def __init__(self, code: int, timeout: bool):
+        self.returncode, self.timeout = code, timeout
+        self.stdout, self.stderr = io.BytesIO(), io.BytesIO()
+
+    def wait(self, timeout=None):
+        if self.timeout:
+            self.timeout = False
+            raise subprocess.TimeoutExpired("agy", timeout or 0)
+        return self.returncode
+
+
+class _Reader:
+    """Complete receipts (the settle helpers are faked to say so) and a final status line, as
+    the dispatcher writes last (without one the run is fenced, #546); status() reads none."""
+
+    unknown = dropped = False
+
+    def lines(self):
+        return [status().rstrip("\n")]
+
+    def status(self):
+        return {}
+
+    def describe(self):
+        return "no status"
+
+
+WORKERS = [None, Dispatch("dispatcher"), Dispatch("dispatcher", run_as_user=WORKER)]
+
+
+def _ending(tmp_path, monkeypatch, dispatch, code, timeout):
+    def refused(*_a, **_k):
+        raise AssertionError("no signal is sent in this test")
+
+    monkeypatch.setattr(os, "kill", refused)
+    monkeypatch.setattr(os, "killpg", refused)
+    monkeypatch.setattr(agy_module, "_stop", lambda *_a, **_k: (False, Sweep(listed=True)))
+    monkeypatch.setattr(agy_module.agy_dispatch, "ask_to_stop", lambda _p: None)
+    monkeypatch.setattr(agy_module.agy_receipts, "sweep_after_kill", lambda *_a, **_k: [])
+    monkeypatch.setattr(agy_module.agy_receipts, "problems", lambda _r: [])
+    monkeypatch.setattr(agy_module.agy_receipts, "completion_problem", lambda _r: None)
+    monkeypatch.setattr(agy_module.agy_receipts, "write_record", lambda *_a, **_k: None)
+    worker = AgyWorker(dispatch=dispatch)
+    reader = None if dispatch is None else _Reader()
+    attempt_ = ("attempt-1", "")
+    return lambda: worker._await(
+        _Ended(code, timeout), None, reader, attempt_, io.BytesIO(), tmp_path / "log"
+    )
+
+
+@pytest.mark.parametrize("timeout", [False, True], ids=["external", "our-timeout"])
+@pytest.mark.parametrize("dispatch", WORKERS, ids=["raw-agy", "owner-dispatch", "worker-account"])
+@pytest.mark.parametrize("code", [-9, -15])
+def test_any_end_by_a_signal_is_fenced(tmp_path, monkeypatch, dispatch, timeout, code):
+    """A signal end, ours (the timeout kill) or not, with complete receipts and a clean owner
+    sweep: a launch after the last receipt may be unrecorded, so the run may live (#244).
+    Fencing our own timeout kill costs one sweep before a takeover. Fakes only: no signal is
+    sent, no process table is read, no wrapper sweep runs."""
+    run = _ending(tmp_path, monkeypatch, dispatch, code, timeout)
+    with pytest.raises(WorkerMayLive, match=f"^WORKER_SWEEP_UNCLEAN: .*KILLED_BY_SIGNAL: {-code}"):
+        run()
+
+
+@pytest.mark.parametrize("timeout", [False, True], ids=["exit", "our-timeout"])
+@pytest.mark.parametrize("dispatch", WORKERS, ids=["raw-agy", "owner-dispatch", "worker-account"])
+@pytest.mark.parametrize("code", [0, 1])
+def test_an_exit_that_is_not_a_signal_is_not_fenced(tmp_path, monkeypatch, dispatch, timeout, code):
+    run = _ending(tmp_path, monkeypatch, dispatch, code, timeout)
+    if code == 0 and not timeout:
+        run()  # unchanged: a clean exit with complete receipts succeeds
+        return
+    why = "agy timed out" if timeout else "agy exited 1"
+    with pytest.raises(AgyWorkerError, match=f"^{why}") as caught:
+        run()
+    assert not isinstance(caught.value, WorkerMayLive)
 
 
 @pytest.mark.sandbox

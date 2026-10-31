@@ -15,6 +15,7 @@ from cairnwork.journal import Journal
 from cairnwork.notary import Notary
 from cairnwork.ownership import OwnershipLedger
 from cairnwork.pipeline import TaskSpec, run_task
+from cairnwork.workers import WorkerDefaults
 
 pytestmark = pytest.mark.sandbox
 
@@ -168,6 +169,7 @@ class _Run:
             fields.get("timed_out", False), fields.get("report_too_big", False),
             fields.get("recorded", True), fields.get("collect_errors", ()),
         )  # fmt: skip
+        self.teardown_errors = ()
 
 
 TARGETS = frozenset({"tests/test_regression.py::t"})  # the new test of the test commit
@@ -290,7 +292,7 @@ def test_an_unparsable_test_commit_is_refused_before_any_base_run(project, tmp_p
     assert list((tmp_path / "state" / "runs").glob("*-b-v*")) == []  # never ran, no logs
 
 
-class ProvenanceWorker:
+class ProvenanceWorker(WorkerDefaults):
     """Writes like EditWorker and returns provenance, as AgyWorker does."""
 
     def __init__(self, files):

@@ -224,8 +224,12 @@ def kill_withheld_in(rows, dirs, mine: int) -> tuple[list[int], list[int], int]:
     whose working directory is inside one of ``dirs``; (killed pids, refused pids, how many had
     exited before the kill). Per row: the start time, environment_withheld, cwd_of, the start
     time again, then the kill, no wait in between; a changed or unreadable start time means the
-    pid may now be another process, so it is left alone (#310). An unknown answer (None) is
-    ignored: it cannot be tied to the attempt."""
+    pid may now be another process, so it is left alone (#310). Once its start time was read, a
+    later read that answers None (a process that ended reads so) or a changed start time counts
+    as vanished, as ``confined._kill_marked`` counts a marked one: it may have left a child this
+    look missed, so ``confirm_gone`` needs another clean look (#546). A start time unreadable at
+    the first read is not counted: any process of the owner that ended after the listing reads
+    so, and counting those kept a busy host from ever showing the attempt gone."""
     killed: list[int] = []
     denied: list[int] = []
     vanished = 0
@@ -236,9 +240,16 @@ def kill_withheld_in(rows, dirs, mine: int) -> tuple[list[int], list[int], int]:
         if uid != mine or environment is None:
             continue
         started = _started(pid)
-        if started is None or environment_withheld(pid) is not True:
+        if started is None:  # gone since the listing (or unreadable): nothing ties it to them
             continue
-        if not _inside(cwd_of(pid), tops) or _started(pid) != started:
+        withheld = environment_withheld(pid)
+        if withheld is False:
+            continue
+        cwd = cwd_of(pid) if withheld else None
+        if cwd is not None and not _inside(cwd, tops):
+            continue
+        if cwd is None or _started(pid) != started:
+            vanished += 1  # ended (or the pid was reused) during the reads
             continue
         try:
             os.kill(pid, signal.SIGKILL)

@@ -38,7 +38,7 @@ BASE_ROWS = [  # (base run, code): one per row of the mapping table
     pytest.param(TEETH | {"report_too_big": True}, "BASE_REPORT_OVER_CAP", id="over-cap"),
     pytest.param(TEETH | {"recorded": False}, "BASE_NO_REPORT", id="no-record"),
 ]
-ENV_OK = {"rc": 1, "outcomes": {"tests/test_calc.py::test_add": "passed"}}  # base env check
+ENV_OK = {"rc": 1, "outcomes": {"tests/test_calc.py::test_add": "failed"}}  # base env check
 PROBE_ROWS = [  # a failed P2P base probe (the base run itself has teeth)
     pytest.param({"rc": None, "timed_out": True}, id="probe-timeout"),
     pytest.param({"rc": 1, "report_too_big": True}, id="probe-over-cap"),
@@ -67,13 +67,13 @@ def stub(monkeypatch):
     real = verifiers.run_verifiers
 
     def install(base, probe=None):
-        def fake(repo, commit, specs, run_root, run_id, **kw):
+        def fake(ctx, commit, specs, run_id, **kw):
             # -e: the base env check before the worker (#234) passes, as the base does when stubbed;
             # a real run there would need a sandbox, which hosts without one (Linux CI) lack
             fields = {"-b": base, "-p": probe, "-e": ENV_OK}.get(run_id[-2:])
             if fields is None:
-                return real(repo, commit, specs, run_root, run_id, **kw)
-            return tuple(_run(spec, run_root, run_id, **fields) for spec in specs)
+                return real(ctx, commit, specs, run_id, **kw)
+            return tuple(_run(spec, ctx.run_root, run_id, **fields) for spec in specs)
 
         monkeypatch.setattr(pipeline_judge, "run_verifiers", fake)
         monkeypatch.setattr(p2p, "run_verifiers", fake)
@@ -272,12 +272,10 @@ def test_uncomparable_after_the_burn_says_the_tests_are_consumed(project, state,
 def test_an_account_failure_in_the_base_stage_is_uncomparable_and_consumed(
     project, state, stub, monkeypatch, stage
 ):
-    calls = stub(TEETH, {"rc": 1, "outcomes": {"tests/test_calc.py::test_add": "passed"}})
+    calls = stub(TEETH, {"rc": 0, "outcomes": {"tests/test_calc.py::test_add": "passed"}})
     staged = p2p.run_verifiers if stage == "-p" else pipeline_judge.run_verifiers
-    raising = lambda repo, commit, specs, root, run_id, **kw: (  # noqa: E731
-        _account_error()
-        if run_id.endswith(stage)
-        else staged(repo, commit, specs, root, run_id, **kw)
+    raising = lambda ctx, commit, specs, run_id, **kw: (  # noqa: E731
+        _account_error() if run_id.endswith(stage) else staged(ctx, commit, specs, run_id, **kw)
     )
     monkeypatch.setattr(p2p if stage == "-p" else pipeline_judge, "run_verifiers", raising)
     out = verify_stubbed(project, state)
@@ -320,13 +318,13 @@ def test_an_account_failure_after_the_worker_is_uncomparable_only_when_isolated(
 
 
 def test_an_account_failure_in_the_candidate_run_is_never_uncomparable(project, tmp_path, stub):
-    stub(TEETH, {"rc": 1, "outcomes": {"tests/test_calc.py::test_add": "passed"}})
+    stub(TEETH, {"rc": 0, "outcomes": {"tests/test_calc.py::test_add": "passed"}})
     real = pipeline_judge.run_verifiers
 
-    def candidate_breaks(repo, commit, specs, root, run_id, **kw):
+    def candidate_breaks(ctx, commit, specs, run_id, **kw):
         if run_id.endswith("-v"):  # the candidate's own run: its code ran as the account
             _account_error()
-        return real(repo, commit, specs, root, run_id, **kw)
+        return real(ctx, commit, specs, run_id, **kw)
 
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(pipeline_judge, "run_verifiers", candidate_breaks)
@@ -370,13 +368,13 @@ def test_verify_a_candidate_run_account_failure_is_internal(
 ):
     """The candidate's code ran as the account: never UNCOMPARABLE. cairnwork-verify says INTERNAL
     and, as everywhere, whether the test commit is used up."""
-    stub(TEETH, {"rc": 1, "outcomes": {"tests/test_calc.py::test_add": "passed"}})
+    stub(TEETH, {"rc": 0, "outcomes": {"tests/test_calc.py::test_add": "passed"}})
     staged = pipeline_judge.run_verifiers
 
-    def candidate_breaks(repo, commit, specs, root, run_id, **kw):
+    def candidate_breaks(ctx, commit, specs, run_id, **kw):
         if run_id.endswith("-v"):
             _account_error()
-        return staged(repo, commit, specs, root, run_id, **kw)
+        return staged(ctx, commit, specs, run_id, **kw)
 
     monkeypatch.setattr(pipeline_judge, "run_verifiers", candidate_breaks)
     base, test_commit = make_test_commit(project, {"tests/test_regression.py": REGRESSION})
