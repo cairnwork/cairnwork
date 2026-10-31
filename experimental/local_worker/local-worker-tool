@@ -141,6 +141,9 @@ require_profile_safe() {
 
 require_run_root() {
   require_profile_safe "$1" run_root
+  case "$1" in  # TAG_ENTRY must stay one word of a ps line (#533)
+    *[[:space:]]*) refuse "run_root has white space" ;;
+  esac
   [ ! -L "$1" ] && [ -d "$1" ] || refuse "run_root is not a real directory"
   [ "$(physical_dir "$1")" = "$1" ] || refuse "run_root is not a canonical path"
   [ "$(physical_dir "$RUNS")" = "$RUNS" ] || refuse "runs directory is not canonical"
@@ -314,7 +317,7 @@ sandboxed() {
     PATH="$WORKER_PATH" \
     LANG=en_US.UTF-8 \
     PYTHONDONTWRITEBYTECODE=1 \
-    "$TAG_ENV=${RUN_ROOT##*/}" \
+    "$TAG_ENTRY" \
     "$SANDBOX_EXEC" -p "$sb_profile" "$@" 2>&1
 }
 
@@ -437,22 +440,48 @@ real_git() {
   refuse "no git binary under the developer tools"
 }
 
-# Worker-owned pids of this run: the run tag in their environment, or a cwd inside the run root.
-# (A process that both clears its environment and leaves the run root is not found; it is still
-# inside this run's Seatbelt profile, so the Owner must sweep before reading the checkout back and
-# treat the checkout as untrusted.)
+# Worker-owned pids of this run (#533), one "k <pid>" (this run's: kill it) or "u <pid>" (cannot
+# be told: not killed, and the sweep is not clean while it lasts) per line. A process is this
+# run's when its ENVIRONMENT carries TAG_ENTRY (CAIRNWORK_LOCAL_RUN_TAG=<run_root>: the whole
+# canonical path, so runs directories of two suites on one host never share it) or its cwd is
+# inside the run root. ps -E prints the arguments and then the environment on one line, so a
+# line with the entry anywhere is only a candidate (env_has_tag): a command line that merely
+# names the entry (a grep for it, another run's test code) is not this run's.
+# Not found: a process that both clears its environment and leaves the run root; it is still
+# inside this run's Seatbelt profile, so the Owner must sweep before reading the checkout back
+# and treat the checkout as untrusted. Taken for this run's: a process of the same uid that put
+# the entry into its environment on purpose (it can make this sweep unclean, never clean).
 sweep_pids() {
   /bin/ps -E -ww -U "$UID_SELF" -o pid= -o command= 2>/dev/null | while read -r pid rest; do
     case " $rest " in
-      *" $TAG_ENV=${RUN_ROOT##*/} "*) printf '%s\n' "$pid" ;;
+      *" $TAG_ENTRY "*) env_has_tag "$pid" ;;
     esac
   done
   /usr/sbin/lsof -nP -a -u "$UID_SELF" -d cwd -Fpn 2>/dev/null | while read -r line; do
     case "$line" in
       p*) pid=${line#p} ;;
-      n"$RUN_ROOT" | n"$RUN_ROOT"/*) printf '%s\n' "$pid" ;;
+      n"$RUN_ROOT" | n"$RUN_ROOT"/*) printf 'k %s\n' "$pid" ;;
     esac
   done
+}
+
+# "k <pid>" when pid $1 has TAG_ENTRY in its environment. Its ps line without -E is its arguments
+# alone, and the -E line starts with exactly that; the rest is the environment. A process that
+# exec'd between the two reads (or a reused pid) does not line up, and a live process ps cannot
+# read cannot be told either: "u <pid>" for both. A process that is gone prints nothing.
+env_has_tag() {
+  if args_line=$(/bin/ps -ww -p "$1" -o command= 2>/dev/null) &&
+    full_line=$(/bin/ps -E -ww -p "$1" -o command= 2>/dev/null); then
+    case "$full_line" in
+      "$args_line"*) ;;
+      *) printf 'u %s\n' "$1"; return 0 ;;
+    esac
+    case " ${full_line#"$args_line"} " in
+      *" $TAG_ENTRY "*) printf 'k %s\n' "$1" ;;
+    esac
+  elif kill -0 "$1" 2>/dev/null; then
+    printf 'u %s\n' "$1"
+  fi
 }
 
 # Optional first option: --start-nonce <hex>. The Owner's tool layer passes a fresh nonce per call
@@ -472,6 +501,7 @@ ACTION=$1
 RUN_ROOT=$2
 shift 2
 require_run_root "$RUN_ROOT"
+TAG_ENTRY="$TAG_ENV=$RUN_ROOT"  # sandboxed sets it, sweep_pids looks for it (#533)
 require_profile_safe "$PYROOT" python_root
 umask 007
 SCOPE_SET=""
@@ -596,9 +626,20 @@ exit "$w"' sh "$CHECKOUT/search-probe" "$RUN_ROOT/tmp/search-probe"
     left=""
     for _ in 1 2 3 4 5; do
       left=""
-      for p in $(sweep_pids); do
+      found=$(sweep_pids)
+      set -f
+      # shellcheck disable=SC2086  # "k <pid>" and "u <pid>" pairs, split on purpose
+      set -- $found
+      set +f
+      while [ "$#" -ge 2 ]; do
+        kind=$1
+        p=$2
+        shift 2
         [ "$p" = "$ME" ] && continue
-        kill -9 "$p" 2>/dev/null && left="$left $p"
+        case "$kind" in
+          k) kill -9 "$p" 2>/dev/null && left="$left $p" ;;
+          *) left="$left $p" ;;  # u: never killed, and no clean sweep while it lasts
+        esac
       done
       [ -z "$left" ] && break
       sleep 0.2
