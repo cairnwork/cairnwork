@@ -13,7 +13,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from cairnwork_attest import checkrun
 from cairnwork_attest.cli import main
-from cairnwork_attest.verify import verify_bundle
+from cairnwork_attest.verify import _verify_loaded, verify_bundle
 from tests.attest.test_check_run import CAND, TOKEN, FakeHttp, _bundle, _pem, _post
 
 
@@ -77,9 +77,9 @@ def test_full_verify_mode_reports_verify_bundle_code(tmp_path: Path, monkeypatch
 
     def spy(path, **kw):
         seen.update(kw)
-        return verify_bundle(path, **kw)
+        return _verify_loaded(path, **kw)
 
-    monkeypatch.setattr(checkrun, "verify_bundle", spy)
+    monkeypatch.setattr(checkrun, "_verify_loaded", spy)
     http = FakeHttp()
     res = _post(_bundle(tmp_path, key), http, public_key=_pem(tmp_path, key), repo=repo)
     assert res.ok
