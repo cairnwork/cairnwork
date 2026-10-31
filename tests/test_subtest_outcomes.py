@@ -140,6 +140,58 @@ def test_a_node_run_twice_keeps_its_skipped_setup(tmp_path):
     assert rc == 0 and not v.ran and v.outcomes == {"tests/test_d.py::test_f": "skipped"}
 
 
+FAILS_THEN_SETUP_SKIPS = (
+    "import os, pytest\n"
+    "@pytest.fixture\ndef second():\n"
+    "    if os.path.exists('seen'):\n        pytest.skip('second run')\n"
+    "def test_f(second):\n"
+    "    open('seen', 'w').close()\n"
+    "    assert False\n"
+)
+
+
+def test_a_failed_run_is_kept_when_the_next_run_of_the_node_skips_in_setup(tmp_path):
+    rc, v = guard_run(tmp_path, {"tests/test_d.py": FAILS_THEN_SETUP_SKIPS}, "--keep-duplicates",
+                      "tests/test_d.py", "tests/test_d.py")  # fmt: skip
+    assert rc == 1 and not v.ran and v.outcomes == {"tests/test_d.py::test_f": "failed"}
+
+
+SUB_TEST_IN_FIXTURE_AFTER_YIELD = (
+    "import pytest\n"
+    "@pytest.fixture\ndef checked(subtests):\n"
+    "    yield\n"
+    "    with subtests.test(msg='after'):\n        assert True\n"
+    "def test_sub(checked):\n    assert False\n"
+)
+SUB_TEST_IN_FIXTURE_BEFORE_YIELD = (
+    "import pytest\n"
+    "@pytest.fixture\ndef checked(subtests):\n"
+    "    with subtests.test(msg='before'):\n        assert False\n"
+    "    yield\n"
+    "def test_sub(checked):\n    assert True\n"
+)
+SUB_TEST_IN_XFAIL = (
+    "import pytest\n"
+    "@pytest.mark.xfail(reason='known')\n"
+    "def test_sub(subtests):\n"
+    "    with subtests.test(i=0):\n        assert False\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("source", "rc", "outcome"),
+    [
+        pytest.param(SUB_TEST_IN_FIXTURE_AFTER_YIELD, 1, "failed", id="fixture-after-yield"),
+        pytest.param(SUB_TEST_IN_FIXTURE_BEFORE_YIELD, 1, "failed", id="fixture-before-yield"),
+        pytest.param(SUB_TEST_IN_XFAIL, 0, "skipped", id="xfail-test"),
+    ],
+)
+def test_a_sub_test_in_a_fixture_or_an_xfail_test_is_kept(tmp_path, source, rc, outcome):
+    got_rc, v = guard_run(tmp_path, {T: source}, "tests")
+    assert got_rc == rc and v.recorded and not v.ran
+    assert v.outcomes == {f"{T}::test_sub": outcome}
+
+
 PLAIN = (
     "import pytest\n"
     "@pytest.fixture\ndef broken():\n    raise RuntimeError('setup')\n"
