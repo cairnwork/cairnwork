@@ -247,3 +247,26 @@ def test_a_log_over_the_cap_twice_degrades_once_then_is_uncomparable(monkeypatch
         p2p.plan_p2p(TASK, (), (), "whole-suite", 30, RESULT, context(TASK, tmp_path))
     assert uncomparable(raised.value) and probed == [existing, ("tests/test_calc.py",)]
     assert "base-probe-log-over-cap" in str(raised.value), str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("taint", "on_timeout"),
+    [
+        ({"forged": ("tests/__pycache__/test_a.cpython-312.pyc",)}, "base-probe-forged"),
+        ({"survivors": 1}, "base-probe-timeout"),  # the timeout's kill can leave a survivor count
+        ({"mutated": ("junk.txt",)}, "base-probe-timeout"),  # or a half-written file
+    ],
+)
+@pytest.mark.parametrize("cap", ["timed_out", "report_too_big", "log_too_big"])
+def test_an_unclean_probe_that_also_hit_a_limit_keeps_its_unclean_reason(
+    monkeypatch, tmp_path, cap, taint, on_timeout
+):
+    # #481 sweep (V2): a limit must not hide an unclean base run behind a reason that degrades;
+    # only after a timeout may survivors and mutated be the timeout's own doing
+    run = make_run(False, timed_out=cap == "timed_out", log_dir=tmp_path)
+    run = replace(run, **({} if cap == "timed_out" else {cap: True}), **taint)
+    unclean = p2p.UNCLEAN[("survivors", "mutated", "forged").index(next(iter(taint)))]
+    want = on_timeout if cap == "timed_out" else unclean
+    monkeypatch.setattr(p2p, "run_verifiers", lambda *args, **kwargs: (run,))
+    got = p2p._probe(TASK, ("tests/test_a.py",), RESULT, context(TASK, tmp_path), 30)
+    assert got == (None, want), got
