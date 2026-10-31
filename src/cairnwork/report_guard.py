@@ -159,14 +159,21 @@ class _Reporter:
     def pytest_runtest_makereport(self, item, call):
         report = yield  # outermost: the report as every other hook left it
         nodeid, _ = self._original(item, report.nodeid)
-        if report.when == "call":
-            self._outcomes[nodeid] = report.outcome
+        if report.when == "call":  # #570: one per sub-test, then the test's own
+            self._keep_worst(nodeid, report.outcome)
         elif report.when == "setup" and report.outcome in ("skipped", "failed"):
-            self._outcomes.setdefault(nodeid, report.outcome)
+            self._keep_worst(nodeid, report.outcome)
         elif report.when == "teardown" and report.failed:  # #478: a fixture raised after yield
             self._outcomes[nodeid] = "failed"
             self._teardown_errors.append(nodeid)
         return report
+
+    def _keep_worst(self, nodeid, outcome):
+        """A node's outcome never improves (failed > skipped > passed): a later report for the
+        same node (the parent's after its sub-tests', a duplicate run) cannot undo a worse one."""
+        rank = {"passed": 0, "skipped": 1}
+        if rank.get(outcome, 2) >= rank.get(self._outcomes.get(nodeid, "passed"), 2):
+            self._outcomes[nodeid] = outcome
 
     def pytest_sessionfinish(self, session, exitstatus):
         payload = {"nonce": self._nonce, "collected": self._collected, "outcomes": self._outcomes,
