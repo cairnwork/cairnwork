@@ -10,11 +10,12 @@ from cairnwork.notary import Notary
 from cairnwork.ownership import OWNER, OwnershipLedger
 from cairnwork.pipeline import run_bound_task
 from cairnwork.recovery import recover
+from cairnwork.workers import WorkerDefaults
 
 pytestmark = pytest.mark.sandbox
 
 
-class CountingWorker:
+class CountingWorker(WorkerDefaults):
     def __init__(self):
         self.calls = 0
         self._lock = threading.Lock()

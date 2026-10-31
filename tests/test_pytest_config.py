@@ -18,6 +18,7 @@ from cairnwork.ownership import OwnershipLedger
 from cairnwork.pytest_config import PytestConfigError, PytestSettings, base_settings
 from cairnwork.verifier_account import VerifierAccount, VerifierAccountError
 from cairnwork.verifiers import parse_verifier, run_verifiers
+from cairnwork.workers import WorkerDefaults
 
 BASE_INI = """[pytest]
 python_functions = check_*
@@ -191,7 +192,7 @@ def test_the_runner_passes_python_and_base_commit(monkeypatch, repo, tmp_path):
     # run_verifiers is called from pipeline_judge.judge_candidate (split out of pipeline.py)
     monkeypatch.setattr(pipeline_judge, "run_verifiers", fake_run_verifiers)
 
-    class Worker:
+    class Worker(WorkerDefaults):
         def run(self, workdir, _task):
             (workdir / "src" / "a.py").write_text("x = 2\n")
 

@@ -20,6 +20,7 @@ from cairnwork import pipeline_judge, protection
 from cairnwork.intake import Intake
 from cairnwork.pipeline import TaskRejected, TaskSpec, check_task
 from cairnwork.verify_candidate import verify_candidate
+from cairnwork.workers import WorkerDefaults
 
 # what this host labels a verdict that rests partly on blackbox checks (macOS: #316's grade)
 PARTIAL = protection.level(("pytest-0", "blackbox:add"))
@@ -98,7 +99,7 @@ def test_an_unknown_strict_level_is_refused(project, value):
         check_task(task)
 
 
-class NeverRuns:
+class NeverRuns(WorkerDefaults):
     def run(self, workdir: Any, task: Any) -> None:
         raise AssertionError("a refused or duplicate request must not reach the worker")
 
