@@ -17,6 +17,7 @@ from cairnwork.notary import Notary
 from cairnwork.ownership import OwnershipLedger
 from cairnwork.pipeline import TaskSpec, run_task
 from cairnwork.verifiers import run_verifiers
+from cairnwork.workers import WorkerDefaults
 from experimental.visible_tests import VisibleTestsWorker, visible_specs
 from experimental.visible_tests.feedback import HIDDEN, NEEDS_ACCOUNT
 
@@ -51,7 +52,7 @@ def project(repo):
     return repo
 
 
-class TurnWorker:
+class TurnWorker(WorkerDefaults):
     """Writes turns[i] on turn i and records what each turn could see."""
 
     def __init__(self, turns, test_commit=""):

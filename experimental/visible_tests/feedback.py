@@ -149,7 +149,8 @@ class VisibleTestsWorker:
 
     # Never isolated, whatever the inner worker is (#234): probe() runs candidate code (as the
     # verifier account, or the owner) before the pipeline's base checks, so a later account
-    # failure there could be the candidate's doing. pipeline reads both with getattr.
+    # failure there could be the candidate's doing. The owner's account ran it.
+    run_as = ""
     isolated = False
     not_isolated_because = "visible-tests probe runs candidate code before verification"
 

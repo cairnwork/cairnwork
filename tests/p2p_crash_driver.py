@@ -17,6 +17,7 @@ from cairnwork.ownership import OwnershipLedger
 from cairnwork.pipeline import TaskSpec, run_task
 from cairnwork.verifier_account import VerifierAccount
 from cairnwork.verifiers import VerifierRun
+from cairnwork.workers import WorkerDefaults
 
 repo, state, base, tests, step = Path(sys.argv[1]), Path(sys.argv[2]), *sys.argv[3:6]
 account = VerifierAccount() if len(sys.argv) > 6 else None
@@ -35,7 +36,7 @@ def once(spec, plan, note, task, judged, result, ctx, tag):
 p2p._run_once = once
 
 
-class Worker:
+class Worker(WorkerDefaults):
     def run(self, workdir, task):
         slow = step != "n"
         (workdir / "src" / "calc.py").write_text(
