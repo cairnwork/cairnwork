@@ -19,14 +19,16 @@ and undone during the run is not seen. Under a verifier account the checkout is 
 own copy: a test may write, utime and chmod it, and it is compared, as in owner mode (#240,
 account_checkout.py).
 The pytest run must also leave a JUnit report showing at least one test run and none failed,
-errored, skipped or xfailed. pytest's configuration is pinned to a Cairnwork-owned ini with
-rootdir and confcutdir at the checkout, so no ini in the candidate or a parent directory
-applies, and plugin autoloading is off; the ini holds only allow-listed keys from the task's
-base commit and plugins load by explicit -p (pytest_config.py). Output streams to a log file
-with a size cap, the run's process group is killed afterwards, and logs and reports live in a
-private directory, created with O_EXCL|O_NOFOLLOW. A process that starts its own session escapes
-the group kill; only a sandbox stops that. The observation hash binds the candidate commit,
-verifier id, full argv, exit code, timeout, mutations, test result and log hash.
+errored, skipped or xfailed, and every named target must own a test that ran: a module skipped
+while collecting (``importorskip``, a module-level skip) counts as skipped (report_guard.py).
+pytest's configuration is pinned to a Cairnwork-owned ini with rootdir and confcutdir at the
+checkout, so no ini in the candidate or a parent directory applies, and plugin autoloading is
+off; the ini holds only allow-listed keys from the task's base commit and plugins load by
+explicit -p (pytest_config.py). Output streams to a log file with a size cap, the run's process
+group is killed afterwards, and logs and reports live in a private directory, created with
+O_EXCL|O_NOFOLLOW. A process that starts its own session escapes the group kill; only a sandbox
+stops that. The observation hash binds the candidate commit, verifier id, full argv, exit code,
+timeout, mutations, test result and log hash.
 
 The run is confined with macOS Seatbelt (see cairnwork_sandbox): no network, reads only
 from the system, the interpreter and the checkout, writes only to the checkout
@@ -345,7 +347,8 @@ def _run_one_in(
     mutated = checkout_differences(repo, candidate_commit, checkout, before, account, python)
     forged = bytecode_findings(tmp, checkout, run_dir, spec.targets, account, python)
     verdict = channel.read() if channel else report_guard.read_verdict(verdict_path, verdict_nonce)
-    ran = profile is not None and verdict.ran
+    not_run = verdict.not_run(spec.targets)  # a target with no test that ran, a skipped module
+    ran = profile is not None and verdict.ran and not not_run
     clean = not timed_out and not mutated and survivors == 0 and not forged
     too_big = log_path.stat().st_size > MAX_LOG_BYTES
     clean = clean and not too_big and not verdict.too_big
@@ -356,7 +359,7 @@ def _run_one_in(
     why = "" if passed else why_not_passed(
         ran_sandboxed=profile is not None, returncode=returncode, timed_out=timed_out,
         mutated=mutated, survivors=survivors, log_too_big=too_big, tests_ran=ran,
-        report_too_big=verdict.too_big, forged=forged,
+        report_too_big=verdict.too_big, forged=forged, not_run=not_run, renamed=verdict.renamed,
     )  # fmt: skip
     digest = _record_digest(
         candidate_commit=candidate_commit,
