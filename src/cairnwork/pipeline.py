@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import secrets
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Protocol
 
@@ -49,6 +49,7 @@ from cairnwork.verifiers import (
     parse_verifier,
     protected_verifier_inputs,
 )
+from cairnwork.verify_context import VerifyContext
 from cairnwork.workspace import (
     CandidateRejected,
     WorkspaceError,
@@ -209,15 +210,13 @@ def run_task(
     specs = check_task(
         task, verifier_python=verifier_python or getattr(verifier_account, "python", None)
     )
-    verifying = (verifier_account, verifier_python)
+    ctx = VerifyContext.of(task, run_root, account=verifier_account, python=verifier_python)
     with runlock.held(ledger.path, exclusive=False):
         bound = ledger.bind(task.idempotency_key, task.request(), OWNER, task.card_hash)
         record = bound.record
         if bound.duplicate:
             return TaskResult(record.task_id, "", record.status, reason="DUPLICATE_REQUEST")
-        return _execute(
-            task, specs, record, ledger, notary, journal, worker, run_root, verifying, on_reach
-        )
+        return _execute(task, specs, record, ledger, notary, journal, worker, ctx, on_reach)
 
 
 def run_bound_task(
@@ -238,7 +237,7 @@ def run_bound_task(
     specs = check_task(
         task, verifier_python=verifier_python or getattr(verifier_account, "python", None)
     )
-    verifying = (verifier_account, verifier_python)
+    ctx = VerifyContext.of(task, run_root, account=verifier_account, python=verifier_python)
     with runlock.held(ledger.path, exclusive=False):
         record = ledger.get(task_id=task_id)
         same = record.idempotency_key == task.idempotency_key and (
@@ -248,13 +247,11 @@ def run_bound_task(
             raise TaskRejected("REQUEST_MISMATCH", f"{task_id} was bound to another request")
         if record.status != "BOUND":
             return TaskResult(task_id, "", record.status, reason="NOT_BOUND")
-        return _execute(
-            task, specs, record, ledger, notary, journal, worker, run_root, verifying, on_reach
-        )
+        return _execute(task, specs, record, ledger, notary, journal, worker, ctx, on_reach)
 
 
 def _execute(
-    task, specs, record, ledger, notary, journal, worker, run_root, verifying, on_reach=None
+    task, specs, record, ledger, notary, journal, worker, ctx: VerifyContext, on_reach=None
 ):
     """Dispatch a BOUND task: the journal entry comes first, so a crash is recoverable.
 
@@ -265,8 +262,9 @@ def _execute(
     is not COMPLETED/FAILED); ``status`` shows phase FINISHED instead of a dangling DISPATCHED."""
     attempt_id = f"a{secrets.token_hex(8)}"
     steps = _Steps(journal, record.task_id, attempt_id, on_reach)
+    ctx = replace(ctx, attempt_id=attempt_id)
     try:
-        steps.reach("DISPATCHED", str(Path(run_root).resolve()))
+        steps.reach("DISPATCHED", str(Path(ctx.run_root).resolve()))
     except AlreadyDispatched:  # another runner took this task first
         status = ledger.get(task_id=record.task_id).status
         return TaskResult(record.task_id, "", status, reason="NOT_BOUND")
@@ -278,17 +276,7 @@ def _execute(
         return TaskResult(record.task_id, attempt_id, status, reason="NOT_BOUND")
     result = TaskResult(record.task_id, attempt_id, "FAILED")
     try:
-        _attempt(
-            task,
-            specs,
-            record.request_digest,
-            notary,
-            worker,
-            run_root,
-            result,
-            steps,
-            verifying,
-        )
+        _attempt(task, specs, record.request_digest, notary, worker, result, steps, ctx)
     except Exception as exc:  # noqa: BLE001 - an infrastructure failure, never success
         result.verified, result.uncomparable = False, ""
         result.reason = f"INFRA_ERROR: {type(exc).__name__}: {exc}"
@@ -317,8 +305,8 @@ class _Steps:
             self.on_reach(phase)
 
 
-def _attempt(task, specs, digest, notary, worker, run_root, result, steps, verifying) -> None:
-    """verifying = (verifier account or None, verifier Python or None)."""
+def _attempt(task, specs, digest, notary, worker, result, steps, ctx: VerifyContext) -> None:
+    run_root = ctx.run_root
     gate = task.before_attempt or (  # trust re-check per attempt; a gh: card with no gate refuses
         lambda: "TRUST_CHANGED_BEFORE_DISPATCH" if task.card_hash.startswith("gh:") else ""
     )
@@ -332,9 +320,9 @@ def _attempt(task, specs, digest, notary, worker, run_root, result, steps, verif
         result.reason = str(exc)
         return
     try:  # before the worker: no worker quota spent, no test exposed (#234)
-        precheck(*verifying)
-        with base_stage(*verifying):  # and the unchanged base can run its tests at all
-            base_env_check(task, run_root, result, verifying)
+        precheck(ctx.account, ctx.python)
+        with base_stage(ctx.account, ctx.python):  # and the unchanged base can run its tests at all
+            base_env_check(task, result, ctx)
     except BaseUncomparable as exc:  # nothing has run, so nothing a worker could have broken
         result.reason = exc.comparison.worker_reason(isolated=True)
         result.uncomparable = exc.comparison.code
@@ -366,8 +354,9 @@ def _attempt(task, specs, digest, notary, worker, run_root, result, steps, verif
             try:
                 tests_unused(task, claim=True)  # registered before the fetch, as verify does
                 steps.reach("TEST_SOURCE", mode)  # the mode of this run, read by cairnwork_attest
-                with base_stage(*verifying):  # an account failure here: no evidence (#234)
-                    test_files = tests_with_teeth(task, specs, run_root, result, verifying)
+                # an account failure here: no evidence (#234)
+                with base_stage(ctx.account, ctx.python):
+                    test_files = tests_with_teeth(task, specs, result, ctx)
                     judged = lay_tests_over(
                         task.repo,
                         judged,
@@ -377,7 +366,7 @@ def _attempt(task, specs, digest, notary, worker, run_root, result, steps, verif
                         run_root,
                         provenance,
                     )
-                    plan = p2p_for(task, specs, test_files, run_root, result, verifying)
+                    plan = p2p_for(task, specs, test_files, result, ctx)
             except TestCommitRejected as exc:
                 result.reason = str(exc)
                 return
@@ -389,9 +378,7 @@ def _attempt(task, specs, digest, notary, worker, run_root, result, steps, verif
                 return
         result.candidate_commit = judged
         steps.reach("CANDIDATE", judged)
-        judge_candidate(
-            task, specs, digest, notary, run_root, result, test_files, verifying, steps.reach, plan
-        )
+        judge_candidate(task, specs, digest, notary, result, test_files, ctx, steps.reach, plan)
     finally:
         try:
             remove_attempt_clone(run_root, result.attempt_id)

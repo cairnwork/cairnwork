@@ -13,6 +13,7 @@ import pytest
 from conftest import commit_change
 
 from cairnwork.verifiers import parse_verifier, run_verifiers
+from cairnwork.verify_context import VerifyContext
 
 pytestmark = pytest.mark.sandbox
 pytest.importorskip("hypothesis")
@@ -28,7 +29,9 @@ def verify(repo, tmp_path, files, *targets, run_id="r1"):
         parse_verifier(f"v{i}", ["python3", "-m", "pytest", target])
         for i, target in enumerate(targets)
     )
-    return run_verifiers(repo, head, specs, tmp_path / "runs", run_id, python=sys.executable)
+    return run_verifiers(
+        VerifyContext(repo, tmp_path / "runs", python=sys.executable), head, specs, run_id
+    )
 
 
 def test_a_hypothesis_test_leaves_the_checkout_clean(repo, tmp_path):

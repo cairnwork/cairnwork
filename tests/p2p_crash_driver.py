@@ -24,13 +24,13 @@ account = VerifierAccount() if len(sys.argv) > 6 else None
 real = p2p._run_once
 
 
-def once(spec, plan, note, task, judged, run_root, result, verifying, tag):
+def once(spec, plan, note, task, judged, result, ctx, tag):
     if step == "r" and tag == "q":  # a plain failure, so run_plan re-runs (-r)
         observation = VerifierObservation(spec.verifier_id, "q", "q", False)
         failed = {"tests/test_slow.py::test_slow": "failed"}
-        return VerifierRun(spec, 1, False, (), run_root / "q.log", observation, failed,
+        return VerifierRun(spec, 1, False, (), ctx.run_root / "q.log", observation, failed,
                            plain_failure=True)  # fmt: skip
-    return real(spec, plan, note, task, judged, run_root, result, verifying, tag)
+    return real(spec, plan, note, task, judged, result, ctx, tag)
 
 
 p2p._run_once = once

@@ -15,6 +15,7 @@ import pytest
 from conftest import commit_change
 
 from cairnwork.verifiers import parse_verifier, run_verifiers
+from cairnwork.verify_context import VerifyContext
 from cairnwork_sandbox import seatbelt
 
 mac_only = pytest.mark.skipif(sys.platform != "darwin", reason="needs macOS sandbox-exec")
@@ -26,7 +27,9 @@ OTHER_SCRIPTS = ("/usr/bin/crc32", "/usr/bin/corelist", "/usr/bin/cpan", "/usr/b
 def _verify(repo, tmp_path, code):
     head = commit_change(repo, {"tests/test_c1.py": code})
     spec = parse_verifier("pytest", ["python3", "-m", "pytest", "tests/test_c1.py"])
-    runs = run_verifiers(repo, head, (spec,), tmp_path / "runs", "r1", python=sys.executable)
+    runs = run_verifiers(
+        VerifyContext(repo, tmp_path / "runs", python=sys.executable), head, (spec,), "r1"
+    )
     return runs[0]
 
 

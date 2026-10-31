@@ -17,6 +17,7 @@ from cairnwork.gitcmd import GitCommandError
 from cairnwork.p2p import P2PPlan, P2PRejected, plan_p2p, run_plan
 from cairnwork.p2p_nodes import changed_tests
 from cairnwork.verifiers import VerifierRun, VerifierSpec
+from cairnwork.verify_context import VerifyContext
 
 TASK = SimpleNamespace(
     repo="/repo",
@@ -26,7 +27,11 @@ TASK = SimpleNamespace(
     allowed_files=("src/pkg/a/b.py",),
 )
 RESULT = SimpleNamespace(attempt_id="att", logs=[])  # #331: an unusable probe adds a line
-VERIFYING = (None, None)
+
+
+def context(run_root) -> VerifyContext:
+    """The context the pipeline builds for TASK's attempt RESULT."""
+    return VerifyContext.of(TASK, run_root, RESULT.attempt_id)
 
 
 def plan(monkeypatch, existing, probe_results, mode="whole-suite"):
@@ -35,14 +40,14 @@ def plan(monkeypatch, existing, probe_results, mode="whole-suite"):
     probed: list[tuple[str, ...]] = []
     results = iter(probe_results)
 
-    def fake_probe(task, files, run_root, result, verifying, budget):
+    def fake_probe(task, files, result, ctx, budget):
         probed.append(files)
         return next(results)
 
     monkeypatch.setattr(p2p, "_base_tests", lambda task, exclude: existing)
     monkeypatch.setattr(p2p, "_probe", fake_probe)
     try:
-        return plan_p2p(TASK, (), (), mode, 30, "/runs", RESULT, VERIFYING), probed
+        return plan_p2p(TASK, (), (), mode, 30, RESULT, context("/runs")), probed
     except (P2PRejected, BaseUncomparable) as exc:
         return exc, probed
 
@@ -160,7 +165,7 @@ def test_an_unclean_base_probe_is_unusable(monkeypatch, tmp_path, survivors, mut
         return (replace(run, survivors=survivors, mutated=mutated),)
 
     monkeypatch.setattr(p2p, "run_verifiers", fake_run_verifiers)
-    assert p2p._probe(TASK, ("tests/test_a.py",), tmp_path, RESULT, VERIFYING, 30) == (None, why)
+    assert p2p._probe(TASK, ("tests/test_a.py",), RESULT, context(tmp_path), 30) == (None, why)
 
 
 @pytest.mark.parametrize("why", p2p.UNCLEAN)
@@ -206,7 +211,7 @@ def test_a_clean_base_probe_returns_its_outcomes(monkeypatch, tmp_path):
     outcomes = {"tests/test_a.py::test_a": "passed"}
     run = make_run(True, outcomes=outcomes, log_dir=tmp_path)
     monkeypatch.setattr(p2p, "run_verifiers", lambda *a, **k: (run,))
-    assert p2p._probe(TASK, ("tests/test_a.py",), tmp_path, RESULT, VERIFYING, 30) == (outcomes, "")
+    assert p2p._probe(TASK, ("tests/test_a.py",), RESULT, context(tmp_path), 30) == (outcomes, "")
 
 
 # --- the candidate run: timeout and the flaky rule ------------------------------------------
@@ -240,7 +245,7 @@ def candidate(monkeypatch, tmp_path, runs, nodes=()):
     monkeypatch.setattr(p2p, "run_verifiers", fake_run_verifiers)
     rule = {"configured": "whole-suite", "applied": "whole-suite", "degraded": "", "targets": 1}
     spec = VerifierSpec("p2p-whole-suite", ("tests/test_a.py",))
-    got = run_plan(P2PPlan(rule, spec, 30, nodes), TASK, "c" * 40, tmp_path, RESULT, VERIFYING)
+    got = run_plan(P2PPlan(rule, spec, 30, nodes), TASK, "c" * 40, RESULT, context(tmp_path))
     return got, notes
 
 
@@ -357,7 +362,7 @@ def test_a_re_run_that_times_out_blocks(monkeypatch, tmp_path):
 
 def test_no_plan_spec_runs_nothing(tmp_path):
     rule = {"applied": "off"}
-    assert run_plan(P2PPlan(rule, None), TASK, "c" * 40, tmp_path, RESULT, VERIFYING) == (
+    assert run_plan(P2PPlan(rule, None), TASK, "c" * 40, RESULT, context(tmp_path)) == (
         (),
         rule,
     )

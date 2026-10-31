@@ -20,6 +20,7 @@ from cairnwork import pipeline_judge, protection
 from cairnwork.intake import Intake
 from cairnwork.pipeline import TaskRejected, TaskSpec, check_task
 from cairnwork.verify_candidate import verify_candidate
+from cairnwork.verify_context import VerifyContext
 from cairnwork.workers import WorkerDefaults
 
 # what this host labels a verdict that rests partly on blackbox checks (macOS: #316's grade)
@@ -245,8 +246,8 @@ def test_a_binding_that_names_another_level_stops_the_run(monkeypatch):
     result = SimpleNamespace(candidate_commit="j", task_id="t", attempt_id="a", logs=[])
     with pytest.raises(RuntimeError, match="protection"):
         pipeline_judge.judge_candidate(
-            task, (), "d", None, Path("x"), result, (), (None, None), lambda phase: None,
-            binding={"head": "h", "protection": PARTIAL},
+            task, (), "d", None, result, (), VerifyContext.of(task, Path("x"), "a"),
+            lambda phase: None, binding={"head": "h", "protection": PARTIAL},
         )  # fmt: skip
 
 

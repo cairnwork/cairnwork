@@ -59,6 +59,7 @@ from cairnwork.pipeline import (
     tests_with_teeth,
 )
 from cairnwork.recovery import _remove_leftovers
+from cairnwork.verify_context import VerifyContext
 from cairnwork.workspace import (
     ATTEMPT_ID,
     Attempt,
@@ -114,14 +115,14 @@ def verify_candidate(
     cleanup(intake)
     result = TaskResult(task.idempotency_key, f"a{secrets.token_hex(8)}", "FAILED")
     notary = intake.notary
-    verifying = (account, python)
+    ctx = VerifyContext.of(task, intake.run_root, result.attempt_id, account, python)
     status, binding, uncomparable = "FAILED", None, None
     with runlock.held(intake.state / "ownership.sqlite", exclusive=False):
         _require_accepting(intake)  # a drain that came in while we waited for the lock
         with _marked(intake, result.attempt_id):
             try:
-                precheck(*verifying)  # before _burn: an unusable account consumes no tests
-                binding = _judge(intake, task, source, specs, candidate, notary, result, verifying)
+                precheck(account, python)  # before _burn: an unusable account consumes no tests
+                binding = _judge(intake, task, source, specs, candidate, notary, result, ctx)
             except (CandidateRejected, TestCommitRejected, WorkspaceError) as exc:
                 result.reason, status = str(exc), "REFUSED"
             except BaseUncomparable as exc:  # before Core: nothing notarised, nothing to sign
@@ -239,8 +240,7 @@ def _used(intake: Intake, test_commit: str) -> Path:
     return intake.state / USED_DIR / test_commit  # checked to be 40 hex digits
 
 
-def _judge(intake, task, source, specs, candidate, notary, result, verifying) -> dict | None:
-    run_root = intake.run_root
+def _judge(intake, task, source, specs, candidate, notary, result, ctx) -> dict | None:
     _check_parent(task.repo, task.base_commit, candidate)
     if task.test_commit:
         never_seen(source, task.test_commit)  # the object store the worker path checks
@@ -248,36 +248,31 @@ def _judge(intake, task, source, specs, candidate, notary, result, verifying) ->
         if task.test_store:  # #332: an unimported commit is refused before it is burned
             task.test_store.require_imported(task.test_commit)
     with _scratch(intake, source, task.repo, task, candidate, result.attempt_id) as scratch:
-        task = replace(task, repo=scratch)
-        return _judge_in(
-            intake, task, specs, candidate, notary, run_root, result, verifying, source=source
-        )
+        task, ctx = replace(task, repo=scratch), replace(ctx, repo=scratch)
+        return _judge_in(intake, task, specs, candidate, notary, result, ctx, source=source)
 
 
-def _base_env(task, run_root, result, verifying, source) -> BaseUncomparable | None:
+def _base_env(task, result, ctx, source) -> BaseUncomparable | None:
     """Without deferred tests no base run follows, so check the base as a dispatch does (#259),
     before any candidate code runs (an account failure here is no evidence either way). A failure
     only counts when the candidate then fails too: a candidate that passes its verifiers, for
     example one that fixes a base that crashed at import, keeps its own evidence."""
     try:
-        with base_stage(*verifying):
-            base_env_check(
-                task, run_root, result, verifying, without_tests=True, key_repo=source
-            )  # fmt: skip
+        with base_stage(ctx.account, ctx.python):
+            base_env_check(task, result, ctx, without_tests=True, key_repo=source)
     except BaseUncomparable as exc:
         return exc
     return None
 
 
-def _judge_in(
-    intake, task, specs, candidate, notary, run_root, result, verifying, *, source
-) -> dict | None:
+def _judge_in(intake, task, specs, candidate, notary, result, ctx, *, source) -> dict | None:
+    run_root = ctx.run_root
     check_roots_on_base(task.repo, task.base_commit, task.test_roots)
     clone = create_attempt_clone(task.repo, candidate, run_root, result.attempt_id)
     try:
         attempt = Attempt(clone.attempt_id, task.base_commit, clone.path, clone.refs_before)
         check_candidate_commit(task.repo, attempt, candidate, task.allowed_files)
-        env = None if task.test_commit else _base_env(task, run_root, result, verifying, source)
+        env = None if task.test_commit else _base_env(task, result, ctx, source)
         judged, test_files, binding = candidate, (), None
         if task.test_commit:
             _burn(intake, task.test_commit, record=True)  # before the tests are fetched
@@ -285,22 +280,22 @@ def _judge_in(
             # the same journal and row the worker path writes; cairnwork-attest reads it by
             # (task_id, attempt_id), both in this run's output
             intake.journal.record(result.task_id, result.attempt_id, "TEST_SOURCE", mode)
-            with base_stage(*verifying):  # base runs: an account failure is no evidence (#234)
-                test_files = tests_with_teeth(task, specs, run_root, result, verifying)
+            # base runs: an account failure is no evidence (#234)
+            with base_stage(ctx.account, ctx.python):
+                test_files = tests_with_teeth(task, specs, result, ctx)
             judged = lay_tests_over(
                 task.repo, judged, task.test_commit, test_files, result.attempt_id, run_root
             )
-        with base_stage(*verifying):
-            plan = p2p_for(task, specs, test_files, run_root, result, verifying)
+        with base_stage(ctx.account, ctx.python):
+            plan = p2p_for(task, specs, test_files, result, ctx)
         binding = _binding(task, candidate, test_files, judged, plan) if task.test_commit else None
         result.candidate_commit = judged
         digest = request_digest(task.request() | {"candidate": candidate})
         if binding:  # what a receiver can recompute, unlike the scratch paths in the request
             digest = binding_hash(binding)
         judge_candidate(
-            task, specs, digest, notary, run_root, result, test_files, verifying, lambda _: None,
-            plan, binding, env,
-        )  # fmt: skip
+            task, specs, digest, notary, result, test_files, ctx, lambda _: None, plan, binding, env
+        )
         return binding
     finally:
         try:

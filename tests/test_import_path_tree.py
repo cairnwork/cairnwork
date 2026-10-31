@@ -11,6 +11,7 @@ from cairnwork.import_path_tree import ImportPathError, require_plain_dirs
 from cairnwork.pipeline import TaskRejected
 from cairnwork.verifiers import parse_verifier, run_verifiers
 from cairnwork.verify_candidate import verify_candidate
+from cairnwork.verify_context import VerifyContext
 
 PYTEST = ["python3", "-m", "pytest"]
 
@@ -117,13 +118,10 @@ def test_run_verifiers_rejects_symlink_import_path(repo, tmp_path):
     spec = parse_verifier("pytest", PYTEST + ["tests/test_x.py"])
     with pytest.raises(ImportPathError) as exc:
         run_verifiers(
-            repo,
+            VerifyContext(repo, tmp_path / "runs", python=sys.executable, import_paths=("lib",)),
             commit,
             (spec,),
-            tmp_path / "runs",
             "r1",
-            python=sys.executable,
-            import_paths=("lib",),
         )
     assert exc.value.code == "BAD_IMPORT_PATH"
 
@@ -138,13 +136,10 @@ def test_run_verifiers_rejects_pyproject_pythonpath_symlink(repo, tmp_path):
     spec = parse_verifier("pytest", PYTEST + ["tests/test_x.py"])
     with pytest.raises(ImportPathError) as exc:
         run_verifiers(
-            repo,
+            VerifyContext(repo, tmp_path / "runs", python=sys.executable, base_commit=commit),
             commit,
             (spec,),
-            tmp_path / "runs",
             "r1",
-            python=sys.executable,
-            base_commit=commit,
         )
     assert exc.value.code == "BAD_IMPORT_PATH"
 
@@ -212,14 +207,16 @@ def test_run_verifiers_checks_the_candidate_tree(repo, tmp_path):
     spec = parse_verifier("pytest", PYTEST + ["tests/test_x.py"])
     with pytest.raises(ImportPathError) as exc:
         run_verifiers(
-            repo,
+            VerifyContext(
+                repo,
+                tmp_path / "runs",
+                python=sys.executable,
+                base_commit=base,
+                import_paths=("lib",),
+            ),
             cand,
             (spec,),
-            tmp_path / "runs",
             "r1",
-            python=sys.executable,
-            base_commit=base,
-            import_paths=("lib",),
         )
     assert exc.value.code == "BAD_IMPORT_PATH"
 

@@ -50,13 +50,13 @@ def runs(monkeypatch):
 
     def install(rows):
         def wrap(real):
-            def fake(repo, commit, specs, run_root, run_id, **kw):
+            def fake(ctx, commit, specs, run_id, **kw):
                 fields = rows.get(run_id.rsplit("-", 1)[-1])
                 if fields is None:
-                    return real(repo, commit, specs, run_root, run_id, **kw)
+                    return real(ctx, commit, specs, run_id, **kw)
                 if callable(fields):
                     return fields()
-                return tuple(_run(spec, run_root, run_id, **fields) for spec in specs)
+                return tuple(_run(spec, ctx.run_root, run_id, **fields) for spec in specs)
 
             return fake
 
