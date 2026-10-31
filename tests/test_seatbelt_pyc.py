@@ -6,7 +6,9 @@ profile therefore denies reading ``*.pyc`` under every write root, creating a sy
 such a name there (Seatbelt matches a symlink's target, not its name), and unlinking one there (so
 no symlink can be swapped in for an existing ``.pyc`` with RENAME_SWAP). Writing bytecode stays
 allowed: an honest import then misses the cache and compiles from source. A ``.pyc`` symlink in
-the candidate commit itself is the after-run scan's (removing it mutates the checkout).
+the candidate commit itself is the after-run scan's (removing it mutates the checkout). On the
+default case-insensitive APFS volume Seatbelt matches these rules without regard to letter case, so
+a file stored as ``X.PYC`` (what opening ``X.pyc`` reads there) is covered by the lower-case rule.
 """
 
 import subprocess
@@ -127,6 +129,70 @@ def test_a_pyc_swapped_for_a_symlink_end_to_end_is_not_verified(state, helper_pr
     assert "renamex_np" in SWAPPED and "import ctypes" in SWAPPED
     base = base_of(helper_project)
     files = {"src/calc.py": SWAPPED.format(redirect=REMOVED["built_rmtree"])}
+    sha = candidate(helper_project, base, files)
+    out = verify(state, helper_project, base, sha, "--import-path", "src")[1]
+    assert out["status"] == "FAILED" and not out["verified"], out
+
+
+CASE_PROBE = """
+import os, sys
+w = sys.argv[1]
+def attempt(name, fn):
+    try:
+        fn()
+        print(name, "ok")
+    except OSError:
+        print(name, "denied")
+open(os.path.join(w, "blob"), "w").close()
+attempt("write", lambda: open(os.path.join(w, "U.PYC"), "wb").close())
+attempt("read_upper", lambda: open(os.path.join(w, "U.PYC"), "rb").close())
+attempt("read_upper_as_lower", lambda: open(os.path.join(w, "u.pyc"), "rb").close())
+open(os.path.join(w, "V.Pyc"), "wb").close()
+attempt("read_mixed", lambda: open(os.path.join(w, "V.Pyc"), "rb").close())
+attempt("symlink_upper", lambda: os.symlink("blob", os.path.join(w, "s.PYC")))
+open(os.path.join(w, "t.pYc"), "wb").close()
+attempt("unlink_mixed", lambda: os.unlink(os.path.join(w, "t.pYc")))
+attempt("read_other", lambda: open(os.path.join(w, "blob"), "rb").close())
+"""
+
+
+@mac_only
+@pytest.mark.sandbox
+def test_bytecode_names_in_any_letter_case_are_covered(tmp_path):
+    write = (tmp_path / "w").resolve()
+    write.mkdir()
+    py = sys.executable
+    profile = seatbelt.build_profile(pytest_config.interpreter_roots(py), (write,), home=tmp_path)
+    path = tmp_path / "p.sb"
+    path.write_text(profile.text)
+    argv = seatbelt.wrap([py, "-I", "-c", CASE_PROBE, str(write)], path)
+    done = subprocess.run(argv, capture_output=True, text=True, timeout=60, check=False)
+    assert done.returncode == 0, done.stderr
+    assert dict(line.split(" ", 1) for line in done.stdout.splitlines()) == {
+        "write": "ok",
+        "read_upper": "denied",
+        "read_upper_as_lower": "denied",  # the name an import asks for, stored as U.PYC
+        "read_mixed": "denied",
+        "symlink_upper": "denied",
+        "unlink_mixed": "denied",
+        "read_other": "ok",  # other names under the write root stay readable
+    }
+    assert not (write / "s.PYC").is_symlink() and (write / "t.pYc").is_file()
+
+
+# REMOVED["built_rmtree"], but each forged pyc is stored under an upper-case suffix; the import
+# asks for the lower-case name and the case-insensitive file system returns that file.
+UPPER = PLANT.replace(
+    "    Path(_pyc).write_bytes(_data)\n", "    Path(_pyc[:-4] + '.PYC').write_bytes(_data)\n"
+)
+
+
+@mac_only
+@pytest.mark.sandbox
+def test_a_pyc_stored_with_an_upper_case_suffix_end_to_end_is_not_verified(state, helper_project):
+    assert ".PYC" in UPPER
+    base = base_of(helper_project)
+    files = {"src/calc.py": UPPER.format(redirect=REMOVED["built_rmtree"])}
     sha = candidate(helper_project, base, files)
     out = verify(state, helper_project, base, sha, "--import-path", "src")[1]
     assert out["status"] == "FAILED" and not out["verified"], out

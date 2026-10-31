@@ -4,6 +4,7 @@ applies to its own worker's output, without a worker and without a ledger record
 import json
 import subprocess
 import sys
+from typing import Any
 
 import pytest
 from conftest import commit_change, git
@@ -150,3 +151,33 @@ def test_a_patch_using_a_verdict_forging_api_is_refused_with_its_own_code(projec
     assert code == 2 and out["verified"] is False and out["status"] == "REFUSED"
     assert out["reason"].startswith("VERIFIER_TAMPER_API") and "src/calc.py:" in out["reason"]
     assert "[os_exit]" in out["reason"] and out["core_status"] == ""
+
+
+def test_the_run_reports_sandbox_only_when_no_verifier_account_is_used(project, state):
+    base = base_of(project)
+    cand = candidate(project, base, {"src/calc.py": FIX, "src/other.py": "x = 1\n"})
+    code, out = verify(state, project, base, cand)
+    assert code == 2 and out["status"] == "REFUSED"
+    assert out["verifier_mode"] == "sandbox_only"
+
+
+def test_the_run_reports_account_when_a_verifier_account_object_is_used(
+    project, state, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from cairnwork import verify_candidate as vc
+    from cairnwork.intake import Intake
+
+    fake: Any = SimpleNamespace(python=None)  # stands in for the account; never used for real
+    monkeypatch.setattr(Intake, "verifier_account", lambda self: fake)
+    monkeypatch.setattr(vc, "precheck", lambda *args: None)
+    base = base_of(project)
+    cand = candidate(project, base, {"src/calc.py": FIX, "src/other.py": "x = 1\n"})
+    out = vc.verify_candidate(
+        Intake(state),
+        repo=project, base=base, candidate=cand,
+        allowed_files=("src/calc.py",),
+        verifiers=(("v", ("python3", "-m", "pytest", "-q", "tests/test_calc.py")),),
+    )  # fmt: skip
+    assert out["status"] == "REFUSED" and out["verifier_mode"] == "account"

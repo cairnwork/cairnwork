@@ -50,13 +50,13 @@ def runs(monkeypatch):
 
     def install(rows):
         def wrap(real):
-            def fake(repo, commit, specs, run_root, run_id, **kw):
+            def fake(ctx, commit, specs, run_id, **kw):
                 fields = rows.get(run_id.rsplit("-", 1)[-1])
                 if fields is None:
-                    return real(repo, commit, specs, run_root, run_id, **kw)
+                    return real(ctx, commit, specs, run_id, **kw)
                 if callable(fields):
                     return fields()
-                return tuple(_run(spec, run_root, run_id, **fields) for spec in specs)
+                return tuple(_run(spec, ctx.run_root, run_id, **fields) for spec in specs)
 
             return fake
 
@@ -296,7 +296,7 @@ def test_only_a_failed_task_says_no_evidence(word):
 
 
 class TruthyWorker(EditWorker):
-    isolated = 1  # truthy but not True: worker_reason does not call it isolated, nor may the code
+    isolated = 1  # pyright: ignore[reportAssignmentType] - truthy but not True: worker_reason does not call it isolated, nor may the code
 
 
 def test_only_isolated_is_true_journals_the_code(project, state, runs):

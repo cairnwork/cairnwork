@@ -19,14 +19,16 @@ and undone during the run is not seen. Under a verifier account the checkout is 
 own copy: a test may write, utime and chmod it, and it is compared, as in owner mode (#240,
 account_checkout.py).
 The pytest run must also leave a JUnit report showing at least one test run and none failed,
-errored, skipped or xfailed. pytest's configuration is pinned to a Cairnwork-owned ini with
-rootdir and confcutdir at the checkout, so no ini in the candidate or a parent directory
-applies, and plugin autoloading is off; the ini holds only allow-listed keys from the task's
-base commit and plugins load by explicit -p (pytest_config.py). Output streams to a log file
-with a size cap, the run's process group is killed afterwards, and logs and reports live in a
-private directory, created with O_EXCL|O_NOFOLLOW. A process that starts its own session escapes
-the group kill; only a sandbox stops that. The observation hash binds the candidate commit,
-verifier id, full argv, exit code, timeout, mutations, test result and log hash.
+errored, skipped or xfailed, and every named target must own a test that ran: a module skipped
+while collecting (``importorskip``, a module-level skip) counts as skipped (report_guard.py).
+pytest's configuration is pinned to a Cairnwork-owned ini with rootdir and confcutdir at the
+checkout, so no ini in the candidate or a parent directory applies, and plugin autoloading is
+off; the ini holds only allow-listed keys from the task's base commit and plugins load by
+explicit -p (pytest_config.py). Output streams to a log file with a size cap, the run's process
+group is killed afterwards, and logs and reports live in a private directory, created with
+O_EXCL|O_NOFOLLOW. A process that starts its own session escapes the group kill; only a sandbox
+stops that. The observation hash binds the candidate commit, verifier id, full argv, exit code,
+timeout, mutations, test result and log hash.
 
 The run is confined with macOS Seatbelt (see cairnwork_sandbox): no network, reads only
 from the system, the interpreter and the checkout, writes only to the checkout
@@ -60,7 +62,7 @@ import secrets
 import sys
 import tempfile
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import cairnwork_sandbox
@@ -74,7 +76,7 @@ from cairnwork.import_path_tree import require_plain_dirs
 from cairnwork.pycache_guard import PYCACHE_DIR
 from cairnwork.reasons import why_not_passed
 from cairnwork.run_scrub import close_private
-from cairnwork.verifier_account import VerifierAccount, VerifierAccountError, lock_wait_seconds
+from cairnwork.verifier_account import VerifierAccountError, lock_wait_seconds
 from cairnwork.verifier_exec import (  # low-level run primitives, split out for the 400-line cap
     _execute,
     _file_sha256,
@@ -87,6 +89,7 @@ from cairnwork.verifier_spec import (  # re-exported for existing importers
     parse_verifier,
     protected_verifier_inputs,
 )
+from cairnwork.verify_context import VerifyContext
 from cairnwork.workspace import create_attempt_clone
 
 __all__ = [
@@ -129,82 +132,57 @@ class VerifierRun:
 
 
 def run_verifiers(
-    repo: Path,
+    ctx: VerifyContext,
     candidate_commit: str,
     specs: tuple[VerifierSpec, ...],
-    run_root: Path,
     run_id: str,
     *,
-    python: str | None = None,
     timeout: int = DEFAULT_TIMEOUT_SECONDS,
-    attempt_id: str = "",
-    account: VerifierAccount | None = None,
-    base_commit: str | None = None,
-    import_paths: tuple[str, ...] = (),
     note: str = "",
 ) -> tuple[VerifierRun, ...]:
     """Run each spec on a fresh checkout of candidate_commit; a failing test is not an error.
 
     If a checkout cannot be created the error propagates and no observation is
     returned (fail closed). With an account, verifiers run as that dedicated user
-    (verifier_account.py), in its run root and with its Python (or ``python``), one at a
-    time. With base_commit, pytest settings come from that commit (pytest_config.py).
+    (verifier_account.py), in its run root and with its Python (or ``ctx.python``), one at a
+    time. With a base commit, pytest settings come from that commit (pytest_config.py).
     ``import_paths`` (operator state config, #82) are checkout-relative dirs prepended to the
     verifier's import path so a src-layout project can import its own package. A non-empty note
     (the P2P selection rule, p2p.py) is bound into each observation's artifact hash.
     """
-    settings = pytest_config.verifier_settings(repo, base_commit, import_paths)
+    settings = pytest_config.verifier_settings(ctx.repo, ctx.base_commit, ctx.import_paths)
     if settings.pythonpath:
-        require_plain_dirs(repo, candidate_commit, settings.pythonpath)
+        require_plain_dirs(ctx.repo, candidate_commit, settings.pythonpath)
+    account = ctx.account
     if account is not None:
-        run_root, python = account.run_root, python or account.python
+        ctx, python = replace(ctx, run_root=account.run_root), ctx.python or account.python
         with account.exclusive(lock_wait_seconds(len(specs), timeout)):
             if not account.available(python):
                 raise VerifierAccountError(f"account {account.user} is not usable")
             account.require_idle()
             account.scrub_stale_runs()  # a killed run's private/run, before this run creates one
-            return _run_all(
-                repo,
-                candidate_commit,
-                specs,
-                run_root,
-                run_id,
-                python,
-                timeout,
-                attempt_id,
-                account,
-                settings,
-                note,
-            )
-    python = python or sys.executable
-    return _run_all(
-        repo,
-        candidate_commit,
-        specs,
-        run_root,
-        run_id,
-        python,
-        timeout,
-        attempt_id,
-        None,
-        settings,
-        note,
-    )
+            batch = _Batch(ctx, python, candidate_commit, timeout, settings, note)
+            return _run_all(batch, specs, run_id)
+    python = ctx.python or sys.executable
+    return _run_all(_Batch(ctx, python, candidate_commit, timeout, settings, note), specs, run_id)
 
 
-def _run_all(
-    repo,
-    candidate_commit,
-    specs,
-    run_root,
-    run_id,
-    python,
-    timeout,
-    attempt_id,
-    account,
-    settings,
-    note,
-) -> tuple[VerifierRun, ...]:
+@dataclass(frozen=True)
+class _Batch:
+    """One run_verifiers call: the same for each of its specs. Under an account ctx.run_root is
+    the account's. python is the interpreter the runs use: ctx.python, else the account's, else
+    sys.executable; read it here, not from ctx."""
+
+    ctx: VerifyContext
+    python: str
+    candidate_commit: str
+    timeout: int
+    settings: pytest_config.PytestSettings
+    note: str
+
+
+def _run_all(batch: _Batch, specs, run_id) -> tuple[VerifierRun, ...]:
+    ctx, python = batch.ctx, batch.python
     if not os.path.isabs(python):
         raise VerifierRejected(f"python must be an absolute path, got {python!r}")
     ids = [spec.verifier_id for spec in specs]
@@ -217,35 +195,24 @@ def _run_all(
         # some create files next to their repository (Nexus-new: nexus-runtime-targets),
         # and that must stay inside this run. Under the account the checkout is its own copy, which
         # it may rename (sticky only protects the owner's names): _same_directory catches that.
-        work = Path(run_root) / f"{clone_id}.work"
+        work = Path(ctx.run_root) / f"{clone_id}.work"
         work.parent.mkdir(parents=True, exist_ok=True)
         work.mkdir(mode=0o700)
-        mark = gitcmd.marked(ATTEMPT_ENV, attempt_id) if attempt_id else nullcontext()
+        mark = gitcmd.marked(ATTEMPT_ENV, ctx.attempt_id) if ctx.attempt_id else nullcontext()
         with mark:
             try:
-                if account is None:
-                    checkout = create_attempt_clone(repo, candidate_commit, work, clone_id).path
+                if ctx.account is None:
+                    checkout = create_attempt_clone(
+                        ctx.repo, batch.candidate_commit, work, clone_id
+                    ).path
                 else:  # the account's own copy: may write, utime, chmod as the owner (#240)
                     os.chmod(work, 0o3770)
                     checkout = make_account_checkout(
-                        account, python, repo, candidate_commit, work, clone_id
+                        ctx.account, python, ctx.repo, batch.candidate_commit, work, clone_id
                     )
-                runs.append(
-                    _run_one(
-                        repo,
-                        candidate_commit,
-                        spec,
-                        checkout,
-                        python,
-                        timeout,
-                        attempt_id,
-                        account,
-                        settings,
-                        note,
-                    )
-                )
+                runs.append(_run_one(batch, spec, checkout))
             finally:
-                _remove_checkout(work, clone_id, account)
+                _remove_checkout(work, clone_id, ctx.account)
     return tuple(runs)
 
 
@@ -284,18 +251,14 @@ def _prepare_run(private: Path, ini: Path, ini_text: bytes, channel=None):
     return run_dir, home, tmp, env, verdict_path, verdict_nonce
 
 
-def _run_one(
-    repo, candidate_commit, spec, checkout, python, timeout, attempt_id, account, settings, note
-) -> VerifierRun:
+def _run_one(batch: _Batch, spec, checkout) -> VerifierRun:
+    account, python = batch.ctx.account, batch.python
     plugins = pytest_config.installed_plugins(python)
-    ini_text = settings.ini_text(checkout, plugins)
+    ini_text = batch.settings.ini_text(checkout, plugins)
     private = Path(tempfile.mkdtemp(prefix=f"{checkout.name}.", dir=checkout.parent.parent))
     channel = report_channel.open_channel(private) if account is None else None
     try:
-        return _run_one_in(
-            repo, candidate_commit, spec, checkout, python, timeout, attempt_id, account,
-            settings, note, plugins, ini_text, private, channel,
-        )  # fmt: skip
+        return _run_one_in(batch, spec, checkout, plugins, ini_text, private, channel)
     finally:  # close the channel, then drop private/run even if that close raises
         try:
             if channel is not None:
@@ -304,10 +267,9 @@ def _run_one(
             close_private(private, account)
 
 
-def _run_one_in(
-    repo, candidate_commit, spec, checkout, python, timeout, attempt_id, account, settings, note,
-    plugins, ini_text, private, channel,
-) -> VerifierRun:  # fmt: skip
+def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, channel) -> VerifierRun:
+    ctx, candidate_commit, timeout = batch.ctx, batch.candidate_commit, batch.timeout
+    account, python, attempt_id = ctx.account, batch.python, ctx.attempt_id
     log_path, ini, profile_path = (
         private / "verifier.log",
         private / "pytest.ini",
@@ -323,7 +285,7 @@ def _run_one_in(
     argv = [
         python, "-P", "-m", "pytest", "-q", "-p", "no:cacheprovider", "-c", str(ini),
         f"--rootdir={checkout}", f"--confcutdir={checkout}", "-o", "addopts=",
-        *settings.args(plugins), "-p", report_guard.MODULE, *spec.targets,
+        *batch.settings.args(plugins), "-p", report_guard.MODULE, *spec.targets,
     ]  # fmt: skip
     before = os.lstat(checkout)
     profile = None
@@ -342,10 +304,11 @@ def _run_one_in(
     else:
         _write_new(log_path, b"no sandbox backend available: verifier not executed\n")
         returncode, timed_out, survivors = None, False, 0
-    mutated = checkout_differences(repo, candidate_commit, checkout, before, account, python)
+    mutated = checkout_differences(ctx.repo, candidate_commit, checkout, before, account, python)
     forged = bytecode_findings(tmp, checkout, run_dir, spec.targets, account, python)
     verdict = channel.read() if channel else report_guard.read_verdict(verdict_path, verdict_nonce)
-    ran = profile is not None and verdict.ran
+    not_run = verdict.not_run(spec.targets)  # a target with no test that ran, a skipped module
+    ran = profile is not None and verdict.ran and not not_run
     clean = not timed_out and not mutated and survivors == 0 and not forged
     too_big = log_path.stat().st_size > MAX_LOG_BYTES
     clean = clean and not too_big and not verdict.too_big
@@ -356,7 +319,7 @@ def _run_one_in(
     why = "" if passed else why_not_passed(
         ran_sandboxed=profile is not None, returncode=returncode, timed_out=timed_out,
         mutated=mutated, survivors=survivors, log_too_big=too_big, tests_ran=ran,
-        report_too_big=verdict.too_big, forged=forged,
+        report_too_big=verdict.too_big, forged=forged, not_run=not_run, renamed=verdict.renamed,
     )  # fmt: skip
     digest = _record_digest(
         candidate_commit=candidate_commit,
@@ -371,7 +334,7 @@ def _run_one_in(
         tests_passed=ran,
         survivors=survivors,
         log_sha256=_file_sha256(log_path),
-        **({"note": note} if note else {}),
+        **({"note": batch.note} if batch.note else {}),
     )
     observation = VerifierObservation(
         spec.verifier_id, f"{private.name}/verifier.log", f"sha256:{digest}", passed
