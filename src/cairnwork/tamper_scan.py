@@ -6,9 +6,12 @@ interpreter's objects, reach into pytest or redirect where bytecode is loaded fr
 refuses a patch whose added ``.py`` lines mention those APIs, before any candidate code runs.
 
 This raises the bar; it is not a boundary. It reads single added lines with regular
-expressions, so a name built from strings (``getattr(os, "_" + "exit")``), a split line, a
+expressions, so a name built from strings (``getattr(os, "_" + "exit")``, and likewise
+``getattr(pytest, "Test" + "Report")`` for the ``pytest_public_patch`` rule), a split line, a
 rebinding by assignment (``m = sys.modules``) or a non-``.py`` file that is imported later all
-pass. An alias bound by an added import (``import os as o``, ``from sys import modules as m``)
+pass: known residuals. Changes to the pytest classes listed in tamper_scan_pytest.py
+(``pytest_public_patch``) are refused in every file, library code included. An alias bound by an
+added import (``import os as o``, ``from sys import modules as m``, ``import pytest as p``)
 is followed on that line and the added lines after it; an alias bound only in an unchanged
 (context) line, by a parenthesised import split over lines, a backslash continuation or
 ``from sys import *`` is not seen. Text inside string literals is scanned like code, as for
@@ -49,6 +52,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cairnwork.gitcmd import GitCommandError, run_git_bytes
+from cairnwork.tamper_scan_pytest import PYTEST_CLASSES, PYTEST_PUBLIC_PATCH, canonical_pytest
 
 CODE = "VERIFIER_TAMPER_API"
 
@@ -173,16 +177,18 @@ RULES: tuple[Rule, ...] = (
     _rule("meta_path", r"\bmeta_path\b"),
     _rule("path_hooks", r"\bpath_hooks\b"),
     _rule("path_importer_cache", r"\bpath_importer_cache\b"),
+    _rule("pytest_public_patch", PYTEST_PUBLIC_PATCH),
 )
 _BY_NAME = {rule.name: rule for rule in RULES}
 
 # Import statements that can bind another name to sys, os, gc, sys.modules or os._exit. A statement
 # may follow ``;`` or a ``:`` (``try: import sys as s``); the name list stops at a comment.
 _IMPORT_STMT = re.compile(r"(?:^|[:;])\s*import\s+([^#;]+)")
-_FROM_STMT = re.compile(r"(?:^|[:;])\s*from\s+(sys|os)\s+import\s+\(?([^#;)]+)")
+_FROM_STMT = re.compile(r"(?:^|[:;])\s*from\s+(sys|os|pytest)\s+import\s+\(?([^#;)]+)")
 _IMPORTED_NAME = re.compile(r"^\s*([\w.]+)(?:\s+as\s+([^\W\d]\w*))?\s*$")
-_FROM_TARGET = {"sys": "modules", "os": "_exit"}  # the one name worth following per module
-_MODULE_ALIAS = {"sys": "sys", "os": "os", "posix": "os", "nt": "os", "gc": "gc"}  # posix is os
+_FROM_TARGET = {"sys": ("modules",), "os": ("_exit",), "pytest": PYTEST_CLASSES}  # to follow
+_MODULE_ALIAS = {name: name for name in ("sys", "os", "gc", "pytest")} | {"posix": "os", "nt": "os"}
+_ALIAS_RULES = ("os_exit", "gc_walk", "pytest_public_patch")  # read on the alias spelling anywhere
 
 # Library files: only a literal sensitive key (the names _SYS_MODULES_STUB refuses in test code),
 # so a plugin loader's sys.modules[spec.name] = mod and a stub of an unrelated module pass.
@@ -208,12 +214,12 @@ def _bind_aliases(text: str, aliases: dict[str, set[str]]) -> None:
     for match in _IMPORT_STMT.finditer(text):
         for name, alias in _imported_names(match.group(1)):
             if name in _MODULE_ALIAS and alias:
-                aliases[_MODULE_ALIAS[name]].add(alias)
+                aliases.setdefault(_MODULE_ALIAS[name], set()).add(alias)
     for match in _FROM_STMT.finditer(text):
-        target = _FROM_TARGET[match.group(1)]
+        targets = _FROM_TARGET[match.group(1)]
         for name, alias in _imported_names(match.group(2)):
-            if name == target:
-                aliases[target].add(alias or name)
+            if name in targets:
+                aliases.setdefault(name, set()).add(alias or name)
 
 
 def _imported_names(clause: str) -> list[tuple[str, str | None]]:
@@ -234,7 +240,7 @@ def _canonical(text: str, aliases: dict[str, set[str]]) -> str:
         text = re.sub(rf"(?<![\w.]){re.escape(name)}\b", "sys.modules", text)
     for name in sorted(aliases["_exit"]):  # a call; "def _exit(self):" defines a method instead
         text = re.sub(rf"(?<![\w.])(?<!def ){re.escape(name)}(\s*\()", r"os._exit\1", text)
-    return text
+    return canonical_pytest(text, aliases)
 
 
 def _hits(rule: Rule, text: str) -> bool:
@@ -246,9 +252,7 @@ def _hits(rule: Rule, text: str) -> bool:
 def _extra_rules(text: str, aliases: dict[str, set[str]], in_tests: bool) -> list[str]:
     """Rule names the RULES table misses on this line: alias spellings and library forgeries."""
     canon = _canonical(text, aliases)
-    names = [
-        name for name in ("os_exit", "gc_walk") if canon != text and _hits(_BY_NAME[name], canon)
-    ]
+    names = [name for name in _ALIAS_RULES if canon != text and _hits(_BY_NAME[name], canon)]
     if in_tests:  # main's full sys.modules rule, stub allow included, on the plain spelling
         if canon != text and _hits(_BY_NAME["sys_modules_write"], canon):
             names.append("sys_modules_write")
