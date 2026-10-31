@@ -23,11 +23,17 @@ pytest_plugins = ["verify_helpers"]
 # - scripts/measure_p2p.py (clone, commit, push) and the scripts/drill_*.py demos (init, commit)
 #   are not run by any test; scripts/env_smoke.py (run by test_env_smoke) only reads refs/config.
 # No other src code runs git with the inherited environment.
+# A commit may start git's auto maintenance detached; its lock files under .git/objects then
+# appear and vanish while a test walks that directory (#565, #578): the tests' git runs none.
 TEST_GIT_ENV = {
     "GIT_TEMPLATE_DIR": "",  # empty: no template, as with --template=
-    "GIT_CONFIG_COUNT": "1",
+    "GIT_CONFIG_COUNT": "3",
     "GIT_CONFIG_KEY_0": "core.logAllRefUpdates",
     "GIT_CONFIG_VALUE_0": "false",
+    "GIT_CONFIG_KEY_1": "maintenance.auto",
+    "GIT_CONFIG_VALUE_1": "false",
+    "GIT_CONFIG_KEY_2": "gc.auto",
+    "GIT_CONFIG_VALUE_2": "0",
 }
 # Which of them conftest itself set, recorded in the environment: this module may be imported
 # twice (as pytest's conftest and by ``from conftest import``) and xdist workers inherit the

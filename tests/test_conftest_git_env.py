@@ -1,5 +1,7 @@
-"""conftest's test-only git variables (#417): only what conftest itself set is ever removed."""
+"""conftest's test-only git variables (#417): only what conftest itself set is ever removed.
+The tests' own commits start no background git maintenance (#578)."""
 
+import pytest
 from conftest import INJECTED_VAR, TEST_GIT_ENV, inject_test_git_env, injected_test_git_env
 
 CONFIG = {k: v for k, v in TEST_GIT_ENV.items() if k.startswith("GIT_CONFIG_")}
@@ -34,3 +36,19 @@ def test_a_value_changed_after_injection_is_not_removed():
     inject_test_git_env(environ)
     environ["GIT_CONFIG_VALUE_0"] = "true"
     assert "GIT_CONFIG_VALUE_0" not in injected_test_git_env(environ)
+
+
+@pytest.mark.parametrize("helper", ["repo-fixture", "test_workspace.commit"])
+def test_the_tests_commits_start_no_background_maintenance(helper, tmp_path, monkeypatch, request):
+    """GIT_TRACE names every git command started: a commit with auto maintenance on starts
+    ``git maintenance run --auto --detach`` (#565), which the workspace object walk can race."""
+    trace = tmp_path / "trace.log"
+    monkeypatch.setenv("GIT_TRACE", str(trace))
+    repo = request.getfixturevalue("repo")  # built now, under GIT_TRACE
+    if helper == "test_workspace.commit":
+        from test_workspace import commit
+
+        (repo / "src" / "a.py").write_text("x = 2\n")
+        commit(repo)
+    text = trace.read_text()
+    assert " commit " in text and "maintenance" not in text and " gc " not in text
