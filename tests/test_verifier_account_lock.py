@@ -13,6 +13,7 @@ import pytest
 
 from cairnwork import verifier_account, verifiers
 from cairnwork.verifier_account import VerifierAccount, VerifierAccountError
+from cairnwork.workers import WorkerDefaults
 
 
 def _hold(root: str, ready, release) -> None:
@@ -130,7 +131,7 @@ def test_lock_timeout_ends_the_task_failed(repo, tmp_path, holder, monkeypatch):
         (("pytest", ("python3", "-m", "pytest", "-q", "tests/test_calc.py")),),
     )
 
-    class Worker:
+    class Worker(WorkerDefaults):
         def run(self, workdir, task):
             (workdir / "src" / "calc.py").write_text("def add(a, b):\n    return a + b\n")
 

@@ -13,6 +13,7 @@ from test_pipeline import CrashWorker, EditWorker, project, stores, task  # noqa
 import cairnwork.attempt_gate as gate_module
 import cairnwork.issue_runner as runner
 from cairnwork.pipeline import TaskResult, _attempt, run_bound_task
+from cairnwork.workers import WorkerDefaults
 
 pytestmark = pytest.mark.sandbox
 
@@ -49,7 +50,7 @@ class CountingWorker(CrashWorker):
 def test_a_refusing_gate_stops_the_attempt_before_the_worker(project, stores, tmp_path):
     seen = []
 
-    class Spy:
+    class Spy(WorkerDefaults):
         def run(self, workdir, task):
             seen.append(workdir)
 
@@ -204,7 +205,7 @@ def test_a_config_without_test_roots_ends_the_task_refusing_not_stranded(monkeyp
 def test_run_bound_task_gates_an_issue_task_that_arrives_without_a_gate(project, stores, tmp_path):
     seen = []
 
-    class Spy:
+    class Spy(WorkerDefaults):
         def run(self, workdir, task):
             seen.append(workdir)
 
