@@ -31,6 +31,7 @@ def run(name: str = "v", rc: int | None = 1, *, failed=(TARGET,), **fields):
         teardown_errors=(),
         survivors=fields.get("survivors", 0),
         forged=fields.get("forged", ()),
+        log_too_big=fields.get("log_too_big", False),
     )
 
 
@@ -50,6 +51,10 @@ ROWS = [
     pytest.param(run(rc=None, timed_out=True), "UNCOMPARABLE", "BASE_TIMEOUT", id="timeout"),
     pytest.param(run(rc=None, failed=()), "UNCOMPARABLE", "BASE_NOT_EXECUTED", id="no-sandbox"),
     pytest.param(run(report_too_big=True), "UNCOMPARABLE", "BASE_REPORT_OVER_CAP", id="over-cap"),
+    pytest.param(run(log_too_big=True), "UNCOMPARABLE", "BASE_LOG_OVER_CAP", id="log-over-cap"),
+    pytest.param(  # rc 0 too: the candidate run of the same tests would hit the cap (#481)
+        run(rc=0, failed=(), log_too_big=True), "UNCOMPARABLE", "BASE_LOG_OVER_CAP", id="log-rc0"
+    ),
     pytest.param(run(recorded=False), "UNCOMPARABLE", "BASE_NO_REPORT", id="no-record"),
     pytest.param(run(survivors=1), "UNCOMPARABLE", "BASE_SURVIVORS", id="survivors-rc1"),
     pytest.param(

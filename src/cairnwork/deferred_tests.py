@@ -7,8 +7,8 @@ only). The worker never gets it: its attempt clone holds the base. Cairnwork the
 1. runs the verifiers on the test commit itself (base + tests) and requires a real
    failure there (base_comparison): tests that already pass prove nothing about the fix
    (REFUSED); a base that cannot run them cleanly (collection error, timeout, no sandbox,
-   no report, a process left running, a checkout the run changed, forged bytecode) gives no
-   evidence either way (UNCOMPARABLE, #234);
+   no report, a log over the cap, a process left running, a checkout the run changed, forged
+   bytecode) gives no evidence either way (UNCOMPARABLE, #234);
 2. lays the test files over the worker's candidate in a private index and commits the
    result on top of it; that commit is what the verifiers run, Core notarises and a PR
    would carry (fix and tests together).
@@ -243,6 +243,8 @@ def _base_problem(run) -> str:
         return "BASE_FORGED_BYTECODE"
     if run.report_too_big:
         return "BASE_REPORT_OVER_CAP"
+    if run.log_too_big:  # the candidate run of the same tests would go over the cap too (#481)
+        return "BASE_LOG_OVER_CAP"
     if run.collect_errors:  # the guard saw a collector fail (exit 2 alone may be an interrupt)
         return "BASE_COLLECTION_ERROR"
     if rc not in (0, 1):  # 5: nothing collected; 2 without collect_errors, 3, 4, others: pytest
