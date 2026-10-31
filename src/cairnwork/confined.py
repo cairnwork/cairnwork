@@ -54,13 +54,13 @@ def execute(
         copier = threading.Thread(target=copy_capped, args=(process.stdout, log), daemon=True)
         copier.start()
         timed_out = False
-        try:
-            process.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-        # Another account's processes: the owner cannot signal them; reap() kills them
-        # all and says how many were running (the main one, if it timed out, included).
-        try:
+        try:  # the group is killed on any way out of the wait, an interrupt included (#537)
+            try:
+                process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+            # Another account's processes: the owner cannot signal them; reap() kills them
+            # all and says how many were running (the main one, if it timed out, included).
             escaped = reap() if reap is not None else 0
         finally:
             _kill_group(process.pid)

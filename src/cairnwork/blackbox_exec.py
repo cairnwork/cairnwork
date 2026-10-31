@@ -18,6 +18,7 @@ import sys
 import tempfile
 from contextlib import nullcontext
 from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
 
 import cairnwork_sandbox
@@ -34,7 +35,7 @@ from cairnwork.verifier_account import VerifierAccount, VerifierAccountError, lo
 from cairnwork.verifier_exec import _execute, _write_new
 from cairnwork.verifiers import DEFAULT_TIMEOUT_SECONDS, _prepare_run
 from cairnwork.verify_context import VerifyContext
-from cairnwork.workspace import create_attempt_clone
+from cairnwork.workspace import create_attempt_clone, unless_interrupted
 
 RUNNER_SHA256 = hashlib.sha256(_RUNNER_SOURCE.encode()).hexdigest()
 
@@ -87,24 +88,20 @@ def _run(declaration, commit, run_id, timeout, paths, ctx: VerifyContext, python
     work.parent.mkdir(parents=True, exist_ok=True)
     work.mkdir(mode=0o700)
     with gitcmd.marked(ATTEMPT_ENV, ctx.attempt_id) if ctx.attempt_id else nullcontext():
-        try:
+        with unless_interrupted(partial(_remove_checkout, work, clone_id, account)):
             if account is None:
                 checkout = create_attempt_clone(ctx.repo, commit, work, clone_id).path
             else:  # the account's own copy, as for a verifier (#240)
                 os.chmod(work, 0o3770)
                 checkout = make_account_checkout(account, python, ctx.repo, commit, work, clone_id)
             return _run_in(declaration, ctx, python, commit, checkout, timeout, paths)
-        finally:
-            _remove_checkout(work, clone_id, account)
 
 
 def _run_in(declaration, ctx: VerifyContext, python: str, commit, checkout, timeout, paths):
     private = Path(tempfile.mkdtemp(prefix=f"{checkout.name}.", dir=checkout.parent.parent))
-    try:
+    # after _read: the whole private/run goes, then private is owner-only (0700)
+    with unless_interrupted(partial(close_private, private, ctx.account)):
         return _run_in_open(declaration, ctx, python, commit, checkout, timeout, paths, private)
-    finally:
-        # after _read: the whole private/run goes, then private is owner-only (0700)
-        close_private(private, ctx.account)
 
 
 def _run_in_open(

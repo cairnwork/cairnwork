@@ -17,6 +17,7 @@ from __future__ import annotations
 import secrets
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
+from functools import partial
 from pathlib import Path
 from typing import Protocol
 
@@ -55,6 +56,7 @@ from cairnwork.workspace import (
     WorkspaceError,
     create_attempt_clone,
     remove_attempt_clone,
+    unless_interrupted,
 )
 
 
@@ -329,7 +331,7 @@ def _attempt(task, specs, digest, notary, worker, result, steps, ctx: VerifyCont
         return
     attempt = create_attempt_clone(task.repo, task.base_commit, run_root, result.attempt_id)
     steps.reach("WORKER_STARTED", unswept.RUN_AS + worker.run_as)
-    try:
+    with unless_interrupted(partial(_remove_clone, run_root, result)):
         try:
             provenance = worker.run(attempt.path, task)  # None from a worker with no record
         except Exception as exc:  # noqa: BLE001 - any worker failure is a failed attempt
@@ -379,8 +381,10 @@ def _attempt(task, specs, digest, notary, worker, result, steps, ctx: VerifyCont
         result.candidate_commit = judged
         steps.reach("CANDIDATE", judged)
         judge_candidate(task, specs, digest, notary, result, test_files, ctx, steps.reach, plan)
-    finally:
-        try:
-            remove_attempt_clone(run_root, result.attempt_id)
-        except WorkspaceError as exc:  # keep the attempt's own outcome; note the leftover
-            result.logs.append(f"cleanup failed: {exc}")
+
+
+def _remove_clone(run_root, result) -> None:
+    try:
+        remove_attempt_clone(run_root, result.attempt_id)
+    except WorkspaceError as exc:  # keep the attempt's own outcome; note the leftover
+        result.logs.append(f"cleanup failed: {exc}")
