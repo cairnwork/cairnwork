@@ -235,7 +235,7 @@ def kill_withheld_in(rows, dirs, mine: int) -> tuple[list[int], list[int], int]:
     vanished = 0
     if not dirs or not _MACOS:
         return killed, denied, vanished
-    tops = [os.path.realpath(d) for d in dirs]
+    tops = [os.fspath(d) for d in dirs]  # realpaths taken earlier: not followed again (#578)
     for pid, _pgid, uid, environment in rows:
         if uid != mine or environment is None:
             continue

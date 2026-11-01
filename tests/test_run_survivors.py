@@ -8,7 +8,6 @@ or by synthetic rows, and os.kill is faked wherever a kill could reach a synthet
 import os
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -103,7 +102,9 @@ def test_a_clean_table_counts_no_survivor(monkeypatch):
 def test_the_real_process_table_shows_a_fresh_token_gone(tmp_path):
     """On this host, with nothing started: the escape check counts no survivor (a busy host's
     hidden or withheld processes outside the fresh checkout do not count)."""
-    assert confined._sweep_survivors(f"{TOKEN}-{os.getpid()}", -1, tmp_path) == 0
+    assert (
+        confined._sweep_survivors(f"{TOKEN}-{os.getpid()}", -1, (os.path.realpath(tmp_path),)) == 0
+    )
 
 
 def test_execute_sweeps_with_the_checkout_and_the_start_mark(monkeypatch, tmp_path):
@@ -146,14 +147,44 @@ def own_platform_sleep(tmp_path):
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS withholds platform binaries' env")
 def test_a_marked_platform_binary_in_the_checkout_counts(own_platform_sleep, monkeypatch):
     child, checkout = own_platform_sleep
+    rows = _only(child.pid, monkeypatch)
+    assert MARKER not in (rows[0][3] or ())
+    assert confined._sweep_survivors(TOKEN, -1, (os.path.realpath(checkout),)) == 1
+    assert child.wait(timeout=10) == -9  # the sweep ended it
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS withholds platform binaries' env")
+def test_a_checkout_swapped_for_a_symlink_keeps_the_sweep_where_the_run_started(
+    tmp_path, monkeypatch
+):
+    """The run may replace its checkout with a symlink to another directory; the sweep still
+    looks only in the directory the run started in, so a process working elsewhere is left be."""
+    checkout, outside = tmp_path / "checkout", tmp_path / "outside"
+    checkout.mkdir()
+    outside.mkdir()
+    child = subprocess.Popen(["/bin/sleep", "60"], cwd=outside, start_new_session=True)  # noqa: S603
+    try:
+        _only(child.pid, monkeypatch)
+        env = {"PATH": "/usr/bin:/bin", confined.RUN_TOKEN_VAR: TOKEN}
+        swap = ["/bin/sh", "-c", "cd .. && mv checkout moved && ln -s outside checkout"]
+        assert confined.execute(swap, checkout, env, 30, tmp_path / "log")[0] == 0
+        assert checkout.is_symlink()
+        with pytest.raises(subprocess.TimeoutExpired):  # a SIGKILL would end it within this
+            child.wait(timeout=2)
+    finally:
+        child.kill()
+        child.wait()
+
+
+def _only(pid: int, monkeypatch) -> list:
+    """The real ps row of this test's own child, as the only process the sweep can see."""
     done = subprocess.run(  # noqa: S603 - fixed argv, an integer pid
-        ["/bin/ps", "-wwE", "-o", confined._PS_COLUMNS, "-p", str(child.pid)],
+        ["/bin/ps", "-wwE", "-o", confined._PS_COLUMNS, "-p", str(pid)],
         capture_output=True,
         text=True,
         check=True,
     )
     rows = confined._parse_ps(done.stdout)
-    assert [r[0] for r in rows] == [child.pid] and MARKER not in (rows[0][3] or ())
+    assert [r[0] for r in rows] == [pid]
     monkeypatch.setattr(confined, "_processes_with_environment", lambda: rows)
-    assert confined._sweep_survivors(TOKEN, -1, Path(checkout)) == 1
-    assert child.wait(timeout=10) == -9  # the sweep ended it
+    return rows
