@@ -215,3 +215,31 @@ def test_a_tokenizer_error_of_any_type_gives_no_views(monkeypatch):
 def test_scan_patch_takes_only_a_full_commit_id(repo):
     with pytest.raises(GitCommandError):
         scan_patch(repo, git(repo, "rev-parse", "HEAD"), "HEAD")
+
+
+@pytest.mark.parametrize("path", [TEST, LIBRARY])
+@pytest.mark.parametrize(
+    ("source", "rule"),
+    [
+        ('import os as o\n"""\nfrom sys import modules as os\n"""\no._exit(0)\n', "os_exit"),
+        ('import gc as g\n"""\nfrom sys import modules as gc\n"""\ng.get_objects()\n', "gc_walk"),
+        (
+            "from sys import modules as m\n'''\nfrom sys import modules as sys\n'''\n"
+            "m['pytest'] = 1\n",
+            "sys_modules_write",
+        ),
+        ("import os as o\nx = 1  # ; from sys import modules as os\no._exit(0)\n", "os_exit"),
+        ("import os as o\ny = 'note: from sys import modules as os, x'\no._exit(0)\n", "os_exit"),
+        ('import ｏｓ as o\n"""\nfrom sys import modules as os\n"""\no._exit(0)\n', "os_exit"),
+        ('import os as o\n"""\nfrom sys import modules as os\n"""\nｏ._exit(0)\n', "os_exit"),
+    ],
+)
+def test_an_alias_bound_only_inside_a_string_or_comment_does_not_hide_a_later_call(
+    path, source, rule
+):
+    assert rule in _rules(path, source)
+
+
+def test_an_alias_bound_by_code_after_a_string_is_followed():
+    source = 'x = """\n""" ; import os as o\no._exit(0)\n'
+    assert "os_exit" in _rules(LIBRARY, source)
