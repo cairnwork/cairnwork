@@ -64,6 +64,8 @@ def task_from_payload(
         raise IntakeRefused("BAD_REQUEST", "allowed_files must be a list of strings")
     if not isinstance(verifiers, list) or not all(_verifier_shape(v) for v in verifiers):
         raise IntakeRefused("BAD_REQUEST", "verifiers must be [[id, [argv...]], ...]")
+    if not verifiers:  # Core cannot verify a task with none: refuse before the worker runs (#639)
+        raise IntakeRefused("BAD_REQUEST", "verifiers must name at least one verifier")
     if not os.path.isabs(payload["repo"]):
         raise IntakeRefused("BAD_REQUEST", "repo must be an absolute path")
     return TaskSpec(
