@@ -196,6 +196,7 @@ _IMPORTED_NAME = re.compile(r"^\s*([\w.]+)(?:\s+as\s+([^\W\d]\w*))?\s*$")
 _FROM_TARGET = {"sys": ("modules",), "os": ("_exit",), "pytest": PYTEST_CLASSES}  # to follow
 _MODULE_ALIAS = {name: name for name in ("sys", "os", "gc", "pytest")} | {"posix": "os", "nt": "os"}
 _ALIAS_RULES = ("os_exit", "gc_walk", "pytest_public_patch")  # read on the alias spelling anywhere
+Table = dict[str, set[str]]  # alias names by what they are bound to (sys, os, modules, pytest...)
 
 # Library files: only a literal sensitive key (the names _SYS_MODULES_STUB refuses in test code),
 # so a plugin loader's sys.modules[spec.name] = mod and a stub of an unrelated module pass.
@@ -216,7 +217,7 @@ _LIBRARY_PYTEST = Rule(  # with main's type-hint import allow
 )
 
 
-def _bind_aliases(text: str, aliases: dict[str, set[str]]) -> None:
+def _bind_aliases(text: str, aliases: Table) -> None:
     """Record in ``aliases`` the names this line's imports bind to sys, os, gc, modules or _exit."""
     for match in _IMPORT_STMT.finditer(text):
         for name, alias in _imported_names(match.group(1)):
@@ -300,7 +301,7 @@ def scan_added_lines(
     masked_aliases = {key: set(names) for key, names in aliases.items()}  # also from masked lines
     source = data if data is not None else added_file(lines)
     views = (file_views(source) if source is not None else None) or {}  # none: no comment skip
-    code_aliases = {key: set(names) for key, names in aliases.items()} if views else None
+    code_aliases = [{k: set(v) for k, v in aliases.items()} for _ in range(2)] if views else None
     found = []
     # Python also ends a source line at "\r" (CRLF included), so each piece is scanned on its own.
     for number, line in lines:
@@ -315,9 +316,12 @@ def scan_added_lines(
             names = _rule_names(plain, aliases, masked_aliases, in_tests, in_conftest)
             if code_aliases is not None and view is not None:  # aliases bound by code only
                 for text in dict.fromkeys((view.bound, _nfkc_names(view.bound))):
-                    _bind_aliases(text.replace("import(", "import ("), code_aliases)
+                    _bind_aliases(text, code_aliases[0])  # the second also reads "import(":
+                    _bind_aliases(text.replace("import(", "import ("), code_aliases[1])
                 both = dict.fromkeys((*plain, view.code, _nfkc_names(view.code)))
-                names += [n for t in both for n in _extra_rules(t, code_aliases, in_tests)]
+                names += [
+                    n for a in code_aliases for t in both for n in _extra_rules(t, a, in_tests)
+                ]
                 names = list(dict.fromkeys(names))
             code = piece if view is None else view.code  # "#", ";" in a string masked
             masked = (code, _nfkc_names(code))  # read with a table of its own: only adds names
@@ -329,11 +333,7 @@ def scan_added_lines(
 
 
 def _rule_names(
-    texts: tuple[str, ...],
-    aliases: dict[str, set[str]],
-    also: dict[str, set[str]] | None,
-    in_tests: bool,
-    in_conftest: bool,
+    texts: tuple[str, ...], aliases: Table, also: Table | None, in_tests: bool, in_conftest: bool
 ) -> list[str]:
     """Rule names for ``texts`` read with ``aliases``; their imports also bind into ``also``."""
     names: list[str] = []

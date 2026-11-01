@@ -199,3 +199,18 @@ def test_property_canonical_pytest_is_idempotent(cls, alias, text):
     aliases = {P: {alias}, cls: {alias}}
     once = canonical_pytest(text, aliases)
     assert canonical_pytest(once, aliases) == once
+
+
+@pytest.mark.parametrize("path", [LIBRARY, TEST])
+@pytest.mark.parametrize(
+    ("module", "alias", "call", "rule"),
+    [("os", "o", "o._exit(0)", "os_exit"), ("gc", "g", "g.get_objects()", "gc_walk")],
+)
+def test_a_no_space_import_after_a_string_rebind_keeps_the_earlier_alias(
+    path, module, alias, call, rule
+):
+    rebind = "from sys import modules as " + module
+    no_space = "from sys import(modules as " + module + ")"
+    snippet = "\n".join([f"import {module} as {alias}", '"""', rebind, '"""', no_space, call])
+    compile(snippet, "calc.py", "exec")
+    assert rule in _rules(snippet, path)

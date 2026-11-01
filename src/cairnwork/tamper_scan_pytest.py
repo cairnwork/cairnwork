@@ -16,7 +16,9 @@ space) is followed by tamper_scan's alias machinery, which spells it as ``pytest
 ``canonical_pytest`` below. Type hints, ``isinstance``
 checks, reads, comparisons, calls and keyword arguments pass. Accepted costs (honest code also
 refused): a self-documenting f-string (``f"{pytest.Item.name=}"``), ``del`` of a mapping entry
-keyed by such an attribute, and a plugin that builds reports with ``from_item_and_call``.
+keyed by such an attribute, a plugin that builds reports with ``from_item_and_call``, and a slice
+whose bound is such an attribute between two colons, followed on the line by ``==`` and later a
+``=`` (a keyword argument): the colon reads as an annotation, which may hold ``==``.
 
 A raised bar, not a boundary. Known residuals that still pass: a name built from strings
 (``getattr(pytest, "Test" + "Report")``), a rebinding by assignment (``R = pytest.TestReport``),
@@ -56,14 +58,18 @@ _TARGET = r"(?:(?![\w.)\]]\s*[(\[])[\w\s.,*()\[\]])"
 _FOR_TARGET = rf"(?:(?!\bin\b){_TARGET})"  # a ``for`` target ends at ``in``
 _START = r"(?:^|[;:])\s*"  # where a statement starts on the line
 _KEYWORD = r"(?<![^\W\d])"  # a keyword may follow a digit or bracket directly ("0for", ")as(")
+# An annotated target and its colon. An annotation run stops where another one starts, which then
+# reads on from there itself: the same matches, but each part of a long line is read once.
+_ANNOTATED = rf"[(\s]*{_CHAIN}[\s)]*:"
+_NOT_FOR = rf"(?:(?!{_KEYWORD}for\b){_FOR_TARGET})"  # a ``for`` target up to a later ``for``
 PYTEST_PUBLIC_PATCH = (
     rf"{_CHAIN}\s*{_ASSIGN}"
     # in a tuple, list or parentheses: a run of target characters up to "=" that holds the chain
     # (the possessive run first, so a long line is read once per statement, not once per offset)
     rf"|{_START}(?={_TARGET}*+{_ASSIGN}){_TARGET}*?{_CHAIN}"
-    rf"|{_START}[(\s]*{_CHAIN}[\s)]*:(?:==|[^=#;])*=(?!=)"  # with an annotation ("==" inside)
-    rf"|{_KEYWORD}for\b(?={_FOR_TARGET}*+\bin\b){_FOR_TARGET}*?{_CHAIN}"
-    rf"|{_KEYWORD}as\b\s*[(\[\s]*{_CHAIN}\s*[:,)\]]"  # a ``with`` target
+    rf"|(?:^|[;:]){_ANNOTATED}(?:==|(?!:{_ANNOTATED})[^=#;])*=(?!=)"  # annotated ("==" inside)
+    rf"|{_KEYWORD}for\b{_NOT_FOR}*?{_CHAIN}(?={_FOR_TARGET}*+\bin\b)"
+    rf"|{_KEYWORD}as\b[(\[\s]*{_CHAIN}\s*[:,)\]]"  # a ``with`` target
     # unittest.mock's patch, patch.object and patch.multiple, which set the attribute for the caller
     rf"|\bpatch(?:\s*\.\s*(?:object|multiple))?\s*\(\s*['\"]?{_OBJECT}"
     # setattr/delattr on the class, also unpacked or a "pytest.TestReport.x" string target
