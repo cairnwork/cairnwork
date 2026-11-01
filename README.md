@@ -6,7 +6,7 @@ Cairnwork 是 Nexus-new 的後繼產品：一個接任務、執行、驗證，�
 
 > Cairnwork 是小型 pytest 修補的試點驗收工具，依賴自備延後測試；通過仍需人工審查。與候選碼同程序執行的一般 pytest，其 PASS 不具防竄改保證，`cairnwork-verify` 的輸出與帶延後測試的收據會標出保護等級（見 [docs/SECURITY.md](docs/SECURITY.md)）。
 
-Cairnwork 是 AI 寫程式代理人的交付驗證層。核心價值不是提高成功率，而是「完成有證據」：變更唯有通過延後隱藏測試才算完成（只有 `test_source: "bundle"` 嚴格模式保證 worker 看不到測試；預設 `auto` 是相容／示範模式，不作保密主張），並可附上離線可驗證的簽署證明（見 [docs/ATTESTATION.md](docs/ATTESTATION.md)）。具體是四件事：
+Cairnwork 是 AI 寫程式代理人交件時的驗收關卡。核心價值不是提高成功率，而是讓 AI 交來的變更先過一道驗收：變更唯有通過延後隱藏測試才放行，通過仍需人工審查（只有 `test_source: "bundle"` 嚴格模式保證 worker 看不到測試；預設 `auto` 是相容／示範模式，不作保密主張），並可附上離線可驗證的簽署證明（見 [docs/ATTESTATION.md](docs/ATTESTATION.md)）。具體是四件事：
 
 - **僅驗收完成**：沒通過驗收程序的候選 commit 不算完成。
 - **延後隱藏測試**：驗收用的測試在 worker 結束後才套到候選上，worker 的 clone 只有 base。保密保證只在 `test_source: "bundle"`（測試只放私有存放區、沒匯入就拒絕、絕不退回 origin）成立；`auto`（程式預設）有 bundle 就用、沒有才從 origin 的公開分支抓，worker 仍可能找得到，所以不主張保密。證明包的 `test_source` 欄位記錄該次執行當時用的模式（取自執行時寫入的紀錄，不是現在的 config.json；沒有隱藏測試或舊的執行為 `none`）。
