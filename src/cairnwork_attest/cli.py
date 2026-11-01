@@ -222,8 +222,15 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         return 0
 
     detail = f": {result.detail}" if result.detail else ""
-    print(f"{result.code}{detail}")
+    print(_printable(f"{result.code}{detail}"))
     return 1
+
+
+def _printable(text: str) -> str:
+    """A refusal's detail may quote a signed path no codec can write (a lone surrogate):
+    escape what stdout cannot encode, so a refusal never ends in a traceback (#537 J)."""
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    return text.encode(encoding, "backslashreplace").decode(encoding)
 
 
 def _cmd_publish(args: argparse.Namespace) -> int:

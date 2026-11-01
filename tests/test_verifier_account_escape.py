@@ -7,6 +7,7 @@ test_verifier_account.py.
 """
 
 import ctypes
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -323,3 +324,13 @@ def test_the_helper_gives_no_record_when_the_start_time_changes_or_a_read_fails(
     ]
     for case in cases:
         assert _run_helper(monkeypatch, capsys, **case) == "", case
+
+
+def test_helper_output_is_read_as_utf8_whatever_the_owners_locale(monkeypatch):
+    """#537 E: the helper writes UTF-8; output the owner's decoding could not read (an ASCII
+    locale without UTF-8 mode, or bytes that are not UTF-8) gives a record or "cannot tell", never
+    an exception out of the count. This test's own child stands in for the helper; no account."""
+    record = b"100\0" + T0.encode() + b"\0/opt/caf\xc3\xa9\xff\0"
+    child = [sys.executable, "-c", f"import sys; sys.stdout.buffer.write({record!r})"]
+    monkeypatch.setattr(va.VerifierAccount, "wrap", lambda self, argv, profile, env=None: child)
+    assert va.VerifierAccount(user="nobody")._real_paths([100]) == {100: (T0, "/opt/café�")}
