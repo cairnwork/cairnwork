@@ -94,3 +94,18 @@ def test_a_block_that_cannot_be_parsed_at_all_counts_as_changed(setup, monkeypat
 
     monkeypatch.setattr(runner.issue_task, "parse_task_block", unreadable)
     _refused(github, setup, "ISSUE_CHANGED_AFTER_TAKE")
+
+
+def test_a_local_config_error_leaves_the_issue_running(setup, monkeypatch):  # noqa: F811
+    github = FakeGitHub([issue()])
+    _verified(setup, monkeypatch, github)
+    comments = list(github.comments)
+
+    def unreadable(_self):
+        raise OSError("state config unreadable")
+
+    monkeypatch.setattr(Intake, "config", unreadable)
+    out = runner.settle(setup["intake"], github, setup["clone"])
+    assert out == [{"issue": 7, "error": "OSError: state config unreadable"}], out
+    assert github.labels[7] == {runner.RUNNING}  # the Issue did not change: retried next pass
+    assert github.comments == comments and github.prs == []

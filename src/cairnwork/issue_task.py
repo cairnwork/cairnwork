@@ -316,8 +316,9 @@ def settle_check(github: Any, number: int, known: Mapping[str, Any], intake: Any
     reason = github.trust(number, queue)  # first, as take: an untrusted body is never parsed
     if not reason:
         body = github.current(number).get("body") or ""  # a GitHub error: retried next pass
+        roots = tuple(intake.config()["test_roots"])  # a local config error: retried next pass
         try:
-            block = parse_task_block(body, tuple(intake.config()["test_roots"])).block_sha256
+            block = parse_task_block(body, roots).block_sha256
         except Exception:  # noqa: BLE001 - any unreadable block counts as changed (attempt_gate)
             block = ""
         reason = "" if block and block == known.get("block_sha256") else "ISSUE_CHANGED_AFTER_TAKE"
