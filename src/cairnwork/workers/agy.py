@@ -241,7 +241,8 @@ class AgyWorker:
             if dispatch is not None:
                 agy_dispatch.ask_to_stop(process)  # lets it release its lease and sweep itself
         finally:
-            held, swept = _stop(process, copier, attempt[0], reader, attempt[1], attempt[2])
+            name, mark, dirs = attempt
+            held, swept, by_cwd = _stop(process, copier, name, reader, mark, dirs)
             if not held:  # else the copier still reads: leave both open rather than hang
                 process.stdout.close()
                 if process.stderr is not None:
@@ -250,8 +251,8 @@ class AgyWorker:
         completion = None
         try:
             if dispatch is not None and dispatch.run_as_user is not None:
-                completion = _settle_worker_run(
-                    dispatch, reader, process, held, timed_out, log_path
+                completion = _settle_worker_run(  # a cwd kill is judged as a holder (#537)
+                    dispatch, reader, process, held or bool(by_cwd), timed_out, log_path
                 )
         except Exception as exc:  # an interrupt is not replaced: recovery then sweeps the run
             self._fence(swept, log_path, exc)
@@ -271,11 +272,15 @@ class AgyWorker:
                 f"unknown; log {log_path}",
                 self.run_as,
             ) from timed_out
-        if held:  # a holder without the marker is not one the sweep finds: fenced (#537 A)
+        # a holder without the marker is not one the sweep finds (#537 A); one found only by its
+        # working directory in the clone is the same kind of leftover, killed or not: fenced too
+        if held or by_cwd:
             raise AgyWorkerUnswept(
                 "WORKER_SWEEP_UNCLEAN: "
                 + "agy timed out; " * (timed_out is not None)
-                + f"HELD: a process agy started outlived it and holds its output; log {log_path}",
+                + "HELD: a process agy started outlived it and holds its output; " * held
+                + f"CWD: {by_cwd} process(es) in the clone tied to the attempt; " * bool(by_cwd)
+                + f"log {log_path}",
                 self.run_as,
             ) from timed_out
         if timed_out is not None:
@@ -360,7 +365,7 @@ def _feed(process, prompt: str) -> None:
 
 def _stop(
     process, copier, attempt: str, reader=None, mark: str = "", dirs: tuple[str, ...] = ()
-) -> tuple[bool, Sweep]:
+) -> tuple[bool, Sweep, int]:
     """Kill agy's group and anything it started outside it that still carries the attempt
     marker; return (whether something still holds agy's output pipe, the sweep). The sweep is
     gone only when two looks in a row after the kill find none of the owner's processes marked
@@ -368,20 +373,25 @@ def _stop(
     boot mark taken before agy started; a hidden process older than it is not the run's, as in
     takeover.py (Linux; "" elsewhere, where none is hidden for good). ``dirs``: the clone's
     realpath taken before agy started; on macOS a process whose environment is withheld is tied
-    to the attempt when its working directory is inside it, as in confined.execute (#537)."""
+    to the attempt when its working directory is inside it, as in confined.execute (#537); the
+    third value counts those, at any look (the run is then fenced, even once they are gone)."""
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
         pass  # the group is already gone
     process.wait()
 
-    def look() -> Sweep:
-        return sweep_marked(
+    by_cwd: set[int] = set()
+
+    def look() -> Sweep:  # each process tied by its cwd counts once, as confined._sweep_survivors
+        one = sweep_marked(
             ATTEMPT_ENV, attempt, skip_group=process.pid, dispatched=mark, cwd_dirs=dirs
         )
+        by_cwd.update(pid for pid, why in one.held_by if why == "cwd")
+        return one
 
     swept = confirm_gone(look(), look)
     copier.join(timeout=10)
     if reader is not None:
         reader.join(timeout=10)
-    return copier.is_alive() or (reader is not None and reader.is_alive()), swept
+    return copier.is_alive() or (reader is not None and reader.is_alive()), swept, len(by_cwd)
