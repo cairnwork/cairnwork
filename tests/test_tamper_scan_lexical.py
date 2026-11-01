@@ -10,6 +10,7 @@ import ast
 import pytest
 from conftest import git
 
+from cairnwork.gitcmd import GitCommandError
 from cairnwork.tamper_scan import scan_added_lines, scan_patch
 from cairnwork.tamper_scan_tokens import file_views
 
@@ -180,3 +181,37 @@ def test_an_encoding_declaration_moved_up_to_line_2_is_refused(repo):
 def test_a_crlf_file_keeps_its_comment_lines_after_a_continued_line():
     lines = [(1, "x = 1 + \\\r"), (2, "    2\r"), (3, "# os._exit(0) is not called\r")]
     assert scan_added_lines(LIBRARY, lines) == []
+
+
+@pytest.mark.parametrize("path", [TEST, LIBRARY])
+@pytest.mark.parametrize(
+    ("source", "rule"),
+    [
+        ('import os as o\n"""\nfrom sys import foo #, modules as os\n"""\no._exit(0)\n', "os_exit"),
+        (
+            'import gc as g\n"""\nfrom sys import foo #, modules as gc\n"""\ng.get_objects()\n',
+            "gc_walk",
+        ),
+        (
+            "from sys import modules as m\n'''\nfrom sys import foo #, modules as sys\n'''\n"
+            "m['pytest'] = 1\n",
+            "sys_modules_write",
+        ),
+    ],
+)
+def test_an_import_inside_a_string_literal_leaves_later_aliases_as_they_were(path, source, rule):
+    assert rule in _rules(path, source)
+
+
+def test_a_tokenizer_error_of_any_type_gives_no_views(monkeypatch):
+    def fail(readline):
+        raise SystemError("tokenizer")
+
+    monkeypatch.setattr("cairnwork.tamper_scan_tokens.tokenize.generate_tokens", fail)
+    assert file_views(b"x = 1\n") is None
+    assert {f.rule for f in scan_added_lines(LIBRARY, [(1, "# os._exit(0)")])} == {"os_exit"}
+
+
+def test_scan_patch_takes_only_a_full_commit_id(repo):
+    with pytest.raises(GitCommandError):
+        scan_patch(repo, git(repo, "rev-parse", "HEAD"), "HEAD")

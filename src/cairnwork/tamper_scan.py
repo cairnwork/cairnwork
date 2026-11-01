@@ -56,7 +56,7 @@ import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
-from cairnwork.gitcmd import GitCommandError, run_git_bytes
+from cairnwork.gitcmd import OID, GitCommandError, run_git_bytes
 from cairnwork.tamper_scan_diff import added_lines
 from cairnwork.tamper_scan_pytest import PYTEST_CLASSES, PYTEST_PUBLIC_PATCH, canonical_pytest
 from cairnwork.tamper_scan_tokens import added_file, file_views
@@ -297,6 +297,7 @@ def scan_added_lines(
     in_tests = _is_test_path(path)
     # Aliases bound so far by the added lines, in order (context lines are not in the diff).
     aliases: dict[str, set[str]] = {key: set() for key in ("sys", "os", "gc", "modules", "_exit")}
+    masked_aliases = {key: set(names) for key, names in aliases.items()}  # also from masked lines
     source = data if data is not None else added_file(lines)
     views = (file_views(source) if source is not None else None) or {}  # none: no comment skip
     found = []
@@ -308,23 +309,39 @@ def scan_added_lines(
                 found.append(Finding(path, number, "source_encoding"))
             if _COMMENT_ONLY.match(piece) and view and view.skip and len(view.code) == len(piece):
                 continue  # a comment to Python, or string text with no code on the line
-            code = piece if view is None else view.code  # string text masked: "#", ";" are syntax
-            names: list[str] = []
-            # Python compiles identifiers in NFKC form (PEP 3131): each text, then that form.
-            for text in dict.fromkeys((piece, _nfkc_names(piece), code, _nfkc_names(code))):
-                for rule in RULES:
-                    if (rule.skip_in_conftest and in_conftest) or (
-                        rule.tests_only and not in_tests
-                    ):
-                        continue
-                    if _hits(rule, text) and rule.name not in names:
-                        names.append(rule.name)
-                _bind_aliases(text, aliases)  # before the extra checks: "import os as o; o._exit()"
-                names += [
-                    name for name in _extra_rules(text, aliases, in_tests) if name not in names
-                ]
+            # Main's reading, with its own alias table; a line main skips as a comment has none.
+            plain = () if _COMMENT_ONLY.match(piece) else (piece, _nfkc_names(piece))
+            names = _rule_names(plain, aliases, masked_aliases, in_tests, in_conftest)
+            code = piece if view is None else view.code  # "#", ";" in a string masked
+            masked = (code, _nfkc_names(code))  # read with a table of its own: only adds names
+            if masked != plain or masked_aliases != aliases:
+                more = _rule_names(masked, masked_aliases, None, in_tests, in_conftest)
+                names += [name for name in more if name not in names]
             found += [Finding(path, number, name) for name in names]
     return found + _committed_coding(path, data, found)
+
+
+def _rule_names(
+    texts: tuple[str, ...],
+    aliases: dict[str, set[str]],
+    also: dict[str, set[str]] | None,
+    in_tests: bool,
+    in_conftest: bool,
+) -> list[str]:
+    """Rule names for ``texts`` read with ``aliases``; their imports also bind into ``also``."""
+    names: list[str] = []
+    # Python compiles identifiers in NFKC form (PEP 3131): each text, then that form.
+    for text in dict.fromkeys(texts):
+        for rule in RULES:
+            if (rule.skip_in_conftest and in_conftest) or (rule.tests_only and not in_tests):
+                continue
+            if _hits(rule, text) and rule.name not in names:
+                names.append(rule.name)
+        _bind_aliases(text, aliases)  # before the extra checks: "import os as o; o._exit(0)"
+        if also is not None:
+            _bind_aliases(text, also)
+        names += [name for name in _extra_rules(text, aliases, in_tests) if name not in names]
+    return names
 
 
 def _committed_coding(path: str, data: bytes | None, found: list[Finding]) -> list[Finding]:
@@ -366,6 +383,8 @@ def scan_patch(repo: Path, base: str, head: str) -> list[Finding]:
         diff = raw.decode("utf-8")
     except UnicodeDecodeError as exc:  # as run_git: a change that is not UTF-8 is unreadable
         raise GitCommandError("git diff output is not UTF-8") from exc
+    if not OID.fullmatch(head):  # read as "<commit>:<path>" below, so never an option
+        raise GitCommandError("head is not a full commit id")
     found = []
     for path, lines in added_lines(diff).items():
         if path.endswith(".py") and lines:  # the whole file as committed, for Python's reading

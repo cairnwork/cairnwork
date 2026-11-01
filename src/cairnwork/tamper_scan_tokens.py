@@ -67,7 +67,7 @@ def file_views(data: bytes) -> Views | None:
     keys, rows = _rows(text.removeprefix("\ufeff"))
     try:
         tokens = list(tokenize.generate_tokens(io.StringIO("\n".join(rows)).readline))
-    except (tokenize.TokenError, SyntaxError):
+    except Exception:  # noqa: BLE001 - any tokenizer failure, whatever its type: no views
         return None
     if any(token.type == tokenize.ERRORTOKEN for token in tokens):
         return None  # Python 3.11 reports some unreadable source this way instead of raising
