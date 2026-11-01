@@ -258,3 +258,23 @@ def test_cli_verify_roundtrip_and_no_network(
     assert rc_bad == 1
     out_bad = capsys.readouterr().out
     assert "SIGNATURE_INVALID" in out_bad
+
+
+def test_cli_verify_prints_a_detail_with_an_unencodable_path(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#537 J: a v0.2 refusal may quote a signed path holding a lone surrogate; without --json it
+    is printed escaped and the exit code stays 1, never a traceback."""
+    import cairnwork_attest.cli as cli
+    from cairnwork_attest.verify_response import VerifyResult
+
+    detail = "tests/t\udcff.py in the executed tree is not head's"
+    refused = VerifyResult(ok=False, code="HEAD_TREE_MISMATCH", detail=detail)
+    monkeypatch.setattr(cli, "verify_bundle", lambda *_a, **_k: refused)
+    rc = main(
+        ["verify", str(tmp_path / "b.json"), "--public-key", str(tmp_path / "k.pem"),
+         "--repo", str(tmp_path), "--candidate", "a" * 40]
+    )  # fmt: skip
+    assert rc == 1
+    shown = "HEAD_TREE_MISMATCH: tests/t\\udcff.py in the executed tree is not head's\n"
+    assert capsys.readouterr().out == shown
