@@ -3,11 +3,13 @@
 # ruff: noqa: F811
 
 import json
+import subprocess
 
 import pytest
 from conftest import commit_change  # noqa: F401
 from test_issue_runner import FakeGitHub, issue, setup  # noqa: F401
 
+import cairnwork.issue_github as issue_github
 import cairnwork.issue_runner as runner
 from cairnwork.intake import Intake
 
@@ -130,6 +132,27 @@ def test_odd_timeline_output_fails_that_issue_closed_and_the_pass_goes_on(
     assert out[1]["issue"] == 8 and out[1]["duplicate"] is False
     assert len(calls) == 1 and github.comments == ["8"]
     assert github.labels[7] == {runner.QUEUE}
+
+
+def test_a_gh_timeout_fails_that_issue_and_the_pass_goes_on(setup, monkeypatch):
+    """#648: a hung gh call (TimeoutExpired) leaves that Issue queued; the next one is taken."""
+    calls = _submitted(setup, monkeypatch)
+
+    run = subprocess.run  # the module is shared: git calls still run
+
+    def hang(argv, **kw):
+        if argv[0] != github.gh:
+            return run(argv, **kw)
+        raise subprocess.TimeoutExpired(argv, kw.get("timeout", 120))
+
+    github = FakeGitHub([issue(7), issue(8)])
+    monkeypatch.setattr(issue_github.subprocess, "run", hang)
+    real = runner.GitHub.trust
+    monkeypatch.setattr(github, "trust", lambda n, label: real(github, n, label) if n == 7 else "")
+    out = runner.take(setup["intake"], github, setup["clone"])
+    assert out[0] == {"issue": 7, "error": "RuntimeError: gh api failed: TimeoutExpired"}, out
+    assert out[1]["issue"] == 8 and out[1]["duplicate"] is False
+    assert len(calls) == 1 and github.labels == {7: {runner.QUEUE}, 8: {runner.RUNNING}}
 
 
 GOOD_EVENT = {"event": "labeled", "label": "cairnwork:queue", "actor": "James3014",

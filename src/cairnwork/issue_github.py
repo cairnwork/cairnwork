@@ -13,7 +13,7 @@ import subprocess
 from typing import Any
 from urllib.parse import urlencode
 
-from cairnwork.issue_task import queue_trusted
+from cairnwork.issue_task import TRUST_CHECK_FAILED, queue_trusted
 
 REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 
@@ -25,9 +25,13 @@ class GitHub:
         self.gh, self.repo = gh, repo
 
     def _run(self, *args: str, stdin: str | None = None) -> str:
-        done = subprocess.run(  # noqa: S603 - fixed binary, argv list, no shell
-            [self.gh, *args], input=stdin, capture_output=True, text=True, timeout=120, check=False
-        )
+        try:
+            done = subprocess.run(  # noqa: S603 - fixed binary, argv list, no shell
+                [self.gh, *args], input=stdin, capture_output=True, text=True, timeout=120,
+                check=False,
+            )  # fmt: skip
+        except subprocess.SubprocessError as exc:  # a hung gh fails this Issue, not the pass (#648)
+            raise RuntimeError(f"gh {args[0]} failed: {type(exc).__name__}") from exc
         if done.returncode != 0:
             raise RuntimeError(f"gh {args[0]} failed: {done.stderr.strip()[-300:]}")
         return done.stdout
@@ -43,7 +47,7 @@ class GitHub:
         try:
             return self._trust(number, label)
         except (TypeError, AttributeError, KeyError, ValueError):  # odd GitHub output: refuse
-            return "TRUST_CHECK_FAILED"
+            return TRUST_CHECK_FAILED
 
     def current(self, number: int) -> dict[str, Any]:
         out = self._run("issue", "view", str(number), "-R", self.repo, "--json", "body,title")

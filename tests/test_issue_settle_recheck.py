@@ -2,11 +2,15 @@
 
 Fake GitHub and a real local clone (no network), as in test_issue_runner."""
 
+import json
+import subprocess
+
 from conftest import commit_change
 from issue_helpers import _completed
 from test_issue_runner import BLOCK, FakeGitHub, _git_without_credentials, issue
 from test_issue_runner import setup as setup  # noqa: F401 - fixture
 
+import cairnwork.issue_github as issue_github
 import cairnwork.issue_runner as runner
 from cairnwork.intake import Intake
 
@@ -109,3 +113,51 @@ def test_a_local_config_error_leaves_the_issue_running(setup, monkeypatch):  # n
     assert out == [{"issue": 7, "error": "OSError: state config unreadable"}], out
     assert github.labels[7] == {runner.RUNNING}  # the Issue did not change: retried next pass
     assert github.comments == comments and github.prs == []
+
+
+class _GlitchyTrust(FakeGitHub):
+    """The real GitHub.trust, with gh answering exit 0 but cut-short JSON for the GraphQL call."""
+
+    def _run(self, *args, stdin=None):
+        if args[:2] == ("api", "graphql"):
+            return '{"data": {"repository": {"issue": {"author": {"login": "Jam'  # cut short
+        return json.dumps({"event": "labeled", "label": runner.QUEUE, "actor": "James3014",
+                           "at": "2026-11-01T00:00:00Z"})  # fmt: skip
+
+
+def test_a_trust_reply_that_cannot_be_read_keeps_the_issue_running(setup, monkeypatch):  # noqa: F811
+    """#648: one unreadable GitHub reply is no verdict on the Issue; the verified result is kept."""
+    github = FakeGitHub([issue()])
+    _verified(setup, monkeypatch, github)
+    comments = list(github.comments)
+    glitchy = _GlitchyTrust([issue()])
+    with monkeypatch.context() as m:
+        m.setattr(github, "trust", lambda n, label: runner.GitHub.trust(glitchy, n, label))
+        out = runner.settle(setup["intake"], github, setup["clone"])
+    assert out == [{"issue": 7, "error": "RuntimeError: TRUST_CHECK_FAILED"}], out
+    assert github.labels[7] == {runner.RUNNING} and github.prs == []
+    assert github.comments == comments  # no needs-fix comment
+    out = runner.settle(setup["intake"], github, setup["clone"])  # GitHub answers again
+    assert out and out[0].get("pr"), out
+    assert github.labels[7] == {runner.DONE}
+
+
+def test_a_gh_timeout_in_settle_is_recorded_not_raised(setup, monkeypatch):  # noqa: F811
+    """#648: a hung gh call is this Issue's error for this pass, not the end of the pass."""
+    github = FakeGitHub([issue()])
+    _verified(setup, monkeypatch, github)
+    comments = list(github.comments)
+
+    run = subprocess.run  # the module is shared: git calls still run
+
+    def hang(argv, **kw):
+        if argv[0] != github.gh:
+            return run(argv, **kw)
+        raise subprocess.TimeoutExpired(argv, kw.get("timeout", 120))
+
+    monkeypatch.setattr(issue_github.subprocess, "run", hang)
+    monkeypatch.setattr(github, "trust", lambda n, label: runner.GitHub.trust(github, n, label))
+    out = runner.settle(setup["intake"], github, setup["clone"])
+    assert out == [{"issue": 7, "error": "RuntimeError: gh api failed: TimeoutExpired"}], out
+    assert github.labels[7] == {runner.RUNNING} and github.prs == []
+    assert github.comments == comments
