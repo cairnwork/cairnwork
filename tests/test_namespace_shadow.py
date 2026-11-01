@@ -11,17 +11,20 @@ found only by such a finder (editable installs) is replaced as a whole (#390). T
 rule never looks this deep. The interpreter here is a throwaway venv (namespace_site.py).
 """
 
+import importlib.util
 import json
+import marshal
 import subprocess
 from importlib.machinery import EXTENSION_SUFFIXES
 from pathlib import Path
 
 import pytest
 from conftest import commit_change, git
-from namespace_site import make_site
+from namespace_site import make_site, site_dir
 
 from cairnwork import namespace_shadow
 from cairnwork.gitcmd import GitCommandError
+from cairnwork.namespace_open_init import opens_its_path
 from cairnwork.verifier_spec import protected_verifier_inputs
 
 
@@ -124,6 +127,91 @@ def test_a_new_init_in_a_tracked_directory_of_a_new_name_stays_allowed(repo, pyt
 def test_an_own_module_of_the_name_wins_over_the_candidates_directory(repo, python):
     commit_change(repo, {"src/nsco.py": "x = 1\n"})
     assert gate(repo, ["src/nsco/somelib/impl.py"], python) == ()
+
+
+EXTEND = "__path__ = __import__('pkgutil').extend_path(__path__, __name__)\n"
+OPEN_PATH = {
+    "pkgutil.extend_path": ("src/nsco/__init__.py", EXTEND),
+    "a hand-set __path__": ("src/nsco/__init__.py", "import os\n__path__.append({site!r})\n"),
+    "declare_namespace": (
+        "src/nsco/__init__.py",
+        "__import__('pkg_resources').declare_namespace(__name__)\n",
+    ),
+    "a module that sets __path__": (
+        "src/nsco.py",
+        "import os\n__path__ = [os.path.join(os.path.dirname(__file__), 'nsco'), {site!r}]\n",
+    ),
+}
+
+
+def test_runtime_an_own_package_that_extends_its_path_lets_a_deep_candidate_module_win(
+    repo, python
+):
+    """The interpreter fact the next test models: the installed module, then the candidate's."""
+    commit_change(repo, {"src/nsco/__init__.py": EXTEND})
+    code = "import nsco.somelib.impl as m; print(m.__file__)"
+    run = [python, "-c", code]
+    env = {"PYTHONPATH": str(repo / "src")}
+    assert "site-packages" in subprocess.check_output(run, env=env, text=True)
+    commit_change(repo, {"src/nsco/somelib/impl.py": "def answer():\n    return 0\n"})
+    assert subprocess.check_output(run, env=env, text=True).strip() == str(
+        repo / "src/nsco/somelib/impl.py"
+    )
+
+
+@pytest.mark.parametrize(("own", "text"), OPEN_PATH.values(), ids=OPEN_PATH.keys())
+def test_a_deep_path_below_an_own_package_that_extends_its_path_is_refused(repo, python, own, text):
+    """#525 follow-up: such a package stays open to the installed portions of its name, so the
+    walk goes on below it, as for a namespace."""
+    commit_change(repo, {own: text.format(site=str(site_dir(python) / "nsco"))})
+    assert gate(repo, ["src/nsco/somelib/impl.py"], python) == ("src/nsco/somelib/impl.py",)
+
+
+def test_a_bytecode_init_that_extends_its_path_is_refused(repo, python):
+    pyc = importlib.util.MAGIC_NUMBER + bytes(12) + marshal.dumps(compile(EXTEND, "x", "exec"))
+    (repo / "src/nsco").mkdir()
+    (repo / "src/nsco/__init__.pyc").write_bytes(pyc)
+    commit_change(repo)
+    assert gate(repo, ["src/nsco/somelib/impl.py"], python) == ("src/nsco/somelib/impl.py",)
+
+
+def test_one_own_file_that_extends_its_path_is_enough(repo, python):
+    """Python finds the package directory before a module of its name, so the plain module
+    beside it does not end the walk."""
+    commit_change(repo, {"src/nsco.py": "", "src/nsco/__init__.py": EXTEND})
+    assert gate(repo, ["src/nsco/somelib/impl.py"], python) == ("src/nsco/somelib/impl.py",)
+
+
+def test_each_own_file_is_read_once_per_check(repo, python, monkeypatch):
+    commit_change(repo, {"src/nsco/__init__.py": EXTEND})
+    read = []
+    real = namespace_shadow.opens_its_path
+    monkeypatch.setattr(
+        namespace_shadow, "opens_its_path", lambda repo, blob: read.append(blob) or real(repo, blob)
+    )
+    paths = ["src/nsco/somelib/impl.py", "src/nsco/somelib/oracle.py"]
+    assert gate(repo, paths, python) == tuple(paths)
+    assert len(read) == 1
+
+
+def test_an_own_file_git_cannot_read_counts_as_extending_its_path(repo):
+    """Fail closed: a blob name that is not an object id, or an object git does not have."""
+    assert opens_its_path(repo, "HEAD:src/a.py")
+    assert opens_its_path(repo, "0" * 40)
+    assert not opens_its_path(repo, git(repo, "rev-parse", "HEAD:src/a.py"))
+
+
+def test_an_own_package_that_extends_its_path_keeps_its_new_names_editable(repo, python):
+    """Nothing installed of the name (or of the deeper name): the walk still ends allowed."""
+    commit_change(repo, {"src/myproj/__init__.py": EXTEND, "src/myproj/sub/core.py": "x = 1\n"})
+    commit_change(repo, {"src/nsco/__init__.py": EXTEND})
+    paths = [
+        "src/myproj/sub/core.py",
+        "src/myproj/new.py",
+        "src/nsco/newmod.py",
+        "src/nsco/myproj/core.py",
+    ]
+    assert gate(repo, paths, python) == ()
 
 
 LOADED = ["src/nsco.py", "src/nsco/__init__.py", "src/nsco/__init__.pyc"]
