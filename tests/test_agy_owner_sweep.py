@@ -225,7 +225,7 @@ def _ending(tmp_path, monkeypatch, dispatch, code, timeout):
     monkeypatch.setattr(agy_module.agy_receipts, "write_record", lambda *_a, **_k: None)
     worker = AgyWorker(dispatch=dispatch)
     reader = None if dispatch is None else _Reader()
-    attempt_ = ("attempt-1", "")
+    attempt_ = ("attempt-1", "", ())
     return lambda: worker._await(
         _Ended(code, timeout), None, reader, attempt_, io.BytesIO(), tmp_path / "log"
     )
@@ -307,3 +307,22 @@ def test_a_signal_end_stays_fenced_when_settling_the_run_raises(tmp_path, monkey
     with pytest.raises(WorkerMayLive, match="^WORKER_SWEEP_UNCLEAN: KILLED_BY_SIGNAL: 9") as caught:
         run()
     assert caught.value.__cause__ is exc and caught.value.account == WORKER
+
+
+def test_agys_own_sweep_looks_for_withheld_processes_in_the_clone(tmp_path, monkeypatch):
+    """#537: macOS withholds the environment of platform binaries (/bin/sleep), so one that agy
+    left behind is tied to the attempt only by a working directory inside the clone; agy's sweep
+    looks there, by the realpath taken before agy started, as confined.execute does. Fake agy
+    (this test's own child); the sweep is a stand-in, so no process table is read."""
+    seen = []
+
+    def sweep(*_args, **kwargs):
+        seen.append(kwargs.get("cwd_dirs"))
+        return Sweep(listed=True)
+
+    monkeypatch.setattr(agy_module, "sweep_marked", sweep)
+    agy = fake_agy(tmp_path, "print('done', flush=True)")
+    workdir = tmp_path / attempt(7)
+    workdir.mkdir()
+    AgyWorker(agy=agy).run(workdir, TASK)
+    assert seen and set(seen) == {(os.path.realpath(workdir),)}

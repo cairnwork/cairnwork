@@ -90,6 +90,9 @@ HIDDEN_TESTS = """- The tests that will judge your fix are not in this repositor
 """
 
 
+Attempt = tuple[str, str, tuple[str, ...]]  # (attempt name, boot mark, run dirs for the sweep)
+
+
 class AgyWorkerError(Exception):
     pass
 
@@ -190,6 +193,7 @@ class AgyWorker:
         env[ATTEMPT_ENV] = workdir.name
         log = os.fdopen(fd, "wb")
         mark = proc_start.boot_mark()  # before the start: what predates it is not the run's
+        dirs = (os.path.realpath(workdir),)  # now: the run may swap it (#578, #537)
         process = subprocess.Popen(  # noqa: S603 - fixed argv, no shell
             argv,
             cwd=workdir,
@@ -206,7 +210,7 @@ class AgyWorker:
             threading.Thread(target=_feed, args=(process, prompt), daemon=True).start()
         copier = threading.Thread(target=copy_capped, args=(process.stdout, log), daemon=True)
         copier.start()
-        self._await(process, copier, reader, (workdir.name, mark), log, log_path)
+        self._await(process, copier, reader, (workdir.name, mark, dirs), log, log_path)
         return self.provenance(reader)
 
     def provenance(self, reader) -> dict[str, str]:
@@ -227,7 +231,7 @@ class AgyWorker:
                 observed = agy_dispatch.operation_model(dispatch, op, _run_env())
         return provenance.make("agy", self.model, observed)
 
-    def _await(self, process, copier, reader, attempt: tuple[str, str], log, log_path) -> None:
+    def _await(self, process, copier, reader, attempt: Attempt, log, log_path) -> None:
         dispatch = self.dispatch
         timed_out = None
         try:
@@ -237,7 +241,7 @@ class AgyWorker:
             if dispatch is not None:
                 agy_dispatch.ask_to_stop(process)  # lets it release its lease and sweep itself
         finally:
-            held, swept = _stop(process, copier, attempt[0], reader, mark=attempt[1])
+            held, swept = _stop(process, copier, attempt[0], reader, attempt[1], attempt[2])
             if not held:  # else the copier still reads: leave both open rather than hang
                 process.stdout.close()
                 if process.stderr is not None:
@@ -354,13 +358,17 @@ def _feed(process, prompt: str) -> None:
             pass
 
 
-def _stop(process, copier, attempt: str, reader=None, mark: str = "") -> tuple[bool, Sweep]:
+def _stop(
+    process, copier, attempt: str, reader=None, mark: str = "", dirs: tuple[str, ...] = ()
+) -> tuple[bool, Sweep]:
     """Kill agy's group and anything it started outside it that still carries the attempt
     marker; return (whether something still holds agy's output pipe, the sweep). The sweep is
     gone only when two looks in a row after the kill find none of the owner's processes marked
     (confirm_gone, as takeover.py): else the run may live and is fenced (#63 (a)). ``mark``: the
     boot mark taken before agy started; a hidden process older than it is not the run's, as in
-    takeover.py (Linux; "" elsewhere, where none is hidden for good)."""
+    takeover.py (Linux; "" elsewhere, where none is hidden for good). ``dirs``: the clone's
+    realpath taken before agy started; on macOS a process whose environment is withheld is tied
+    to the attempt when its working directory is inside it, as in confined.execute (#537)."""
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
@@ -368,7 +376,9 @@ def _stop(process, copier, attempt: str, reader=None, mark: str = "") -> tuple[b
     process.wait()
 
     def look() -> Sweep:
-        return sweep_marked(ATTEMPT_ENV, attempt, skip_group=process.pid, dispatched=mark)
+        return sweep_marked(
+            ATTEMPT_ENV, attempt, skip_group=process.pid, dispatched=mark, cwd_dirs=dirs
+        )
 
     swept = confirm_gone(look(), look)
     copier.join(timeout=10)
