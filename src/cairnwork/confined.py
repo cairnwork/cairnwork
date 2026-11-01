@@ -54,10 +54,10 @@ def execute(
             pass_fds=pass_fds,  # descriptors the child inherits on purpose (report_channel)
             preexec_fn=_limit_file_size,  # noqa: PLW1509 - only setrlimit, no locks
         )
-        copier = threading.Thread(target=copy_capped, args=(process.stdout, log), daemon=True)
-        copier.start()
         timed_out = finished = False
-        try:  # the group is killed on any way out of the wait, an interrupt included (#537)
+        try:  # the group is killed on any way out after the start, an interrupt included (#537)
+            copier = threading.Thread(target=copy_capped, args=(process.stdout, log), daemon=True)
+            copier.start()
             try:
                 process.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
