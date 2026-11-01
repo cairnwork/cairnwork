@@ -207,29 +207,40 @@ def attempt_dirs(roots, attempt_id: str) -> tuple[Path, ...]:
 
 
 def _inside(cwd: str | None, dirs: list[str]) -> bool:
+    """Whether the working directory the process reports, or its realpath now, is inside one of
+    ``dirs`` (#599): a leftover may since have made the reported path resolve elsewhere. The
+    reported path is taken as given only when absolute and without "." or "..", so its spelling
+    alone never places a directory outside ``dirs`` inside one."""
     if not cwd:
         return False
-    real = os.path.realpath(cwd)
+    paths = [os.path.realpath(cwd)]
+    if os.path.isabs(cwd) and os.path.normpath(cwd) == cwd:
+        paths.append(cwd)
     for top in dirs:
-        try:
-            if os.path.commonpath([real, top]) == top:
-                return True
-        except ValueError:
-            continue
+        for path in paths:
+            try:
+                if os.path.commonpath([path, top]) == top:
+                    return True
+            except ValueError:
+                continue
     return False
 
 
 def kill_withheld_in(rows, dirs, mine: int) -> tuple[list[int], list[int], int]:
     """SIGKILL each of the owner's (``mine``) readable rows whose environment is withheld and
     whose working directory is inside one of ``dirs``; (killed pids, refused pids, how many had
-    exited before the kill). Per row: the start time, environment_withheld, cwd_of, the start
-    time again, then the kill, no wait in between; a changed or unreadable start time means the
-    pid may now be another process, so it is left alone (#310). Once its start time was read, a
-    later read that answers None (a process that ended reads so) or a changed start time counts
-    as vanished, as ``confined._kill_marked`` counts a marked one: it may have left a child this
-    look missed, so ``confirm_gone`` needs another clean look (#546). A start time unreadable at
-    the first read is not counted: any process of the owner that ended after the listing reads
-    so, and counting those kept a busy host from ever showing the attempt gone."""
+    exited before the kill). ``dirs`` must be realpaths taken before the run started, while its
+    processes could not yet change them (recovery: ``attempt_dirs``, real directories only, never
+    a symlink): they are used as given, never resolved again here, so a directory the run later
+    swaps for a symlink cannot move the sweep elsewhere (#578). Per row: the start time,
+    environment_withheld, cwd_of, the start time again, then the kill, no wait in between; a
+    changed or unreadable start time means the pid may now be another process, so it is left
+    alone (#310). Once its start time was read, a later read that answers None (a
+    process that ended reads so) or a changed start time counts as vanished, as
+    ``confined._kill_marked`` counts a marked one: it may have left a child this look missed, so
+    ``confirm_gone`` needs another clean look (#546). A start time unreadable at the first read is
+    not counted: any process of the owner that ended after the listing reads so, and counting
+    those kept a busy host from ever showing the attempt gone."""
     killed: list[int] = []
     denied: list[int] = []
     vanished = 0
