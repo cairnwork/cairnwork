@@ -219,10 +219,11 @@ class VerifierAccount:
         argv = self.wrap(
             [self.python, "-P", "-c", verifier_escape.PIDPATH_HELPER, *map(str, pids)], None
         )
-        try:
+        try:  # the helper writes UTF-8: decoded so, whatever the owner's locale (#537 E)
             done = subprocess.run(  # noqa: S603 - fixed argv, pids from ps
-                argv, capture_output=True, text=True, timeout=30, check=False
-            )
+                argv, capture_output=True, encoding="utf-8", errors="replace", timeout=30,
+                check=False,
+            )  # fmt: skip
         except (OSError, subprocess.SubprocessError):
             return None
         if done.returncode != 0:
