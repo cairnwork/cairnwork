@@ -58,3 +58,39 @@ def test_an_unchanged_trusted_issue_still_gets_its_pr(setup, monkeypatch):  # no
     out = runner.settle(setup["intake"], github, setup["clone"])
     assert out and out[0].get("pr"), out
     assert github.labels[7] == {runner.DONE}
+
+
+class _OrderedGitHub(FakeGitHub):
+    """Records whether the body was read after a refused trust check."""
+
+    def __init__(self, issues):
+        super().__init__(issues)
+        self.calls = []
+        read = self.current
+        self.current = lambda number: self.calls.append("current") or read(number)
+
+    def trust(self, number, label):
+        self.calls.append("trust")
+        return self.trusted
+
+
+def test_untrusted_queueing_is_refused_before_the_body_is_read(setup, monkeypatch):  # noqa: F811
+    github = _OrderedGitHub([issue()])
+    _verified(setup, monkeypatch, github)
+    github.calls.clear()
+    github.trusted = "BODY_EDITED_BY_UNTRUSTED"
+    github.bodies[7] = issue(block={**BLOCK, "allowed_files": [["src/calc.py"]]})
+    _refused(github, setup, "BODY_EDITED_BY_UNTRUSTED")
+    assert github.calls == ["trust"]
+
+
+def test_a_block_that_cannot_be_parsed_at_all_counts_as_changed(setup, monkeypatch):  # noqa: F811
+    github = FakeGitHub([issue()])
+    _verified(setup, monkeypatch, github)
+    github.bodies[7] = issue(block={**BLOCK, "allowed_files": [["src/calc.py"]]})
+
+    def unreadable(*_a, **_k):
+        raise RecursionError("maximum recursion depth exceeded")
+
+    monkeypatch.setattr(runner.issue_task, "parse_task_block", unreadable)
+    _refused(github, setup, "ISSUE_CHANGED_AFTER_TAKE")
