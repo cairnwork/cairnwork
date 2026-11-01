@@ -39,6 +39,7 @@ BASE_ROWS = [  # (base run, code): one per row of the mapping table
     pytest.param(TEETH | {"recorded": False}, "BASE_NO_REPORT", id="no-record"),
     pytest.param(TEETH | {"survivors": 1}, "BASE_SURVIVORS", id="survivors"),
     pytest.param(TEETH | {"forged": ("x.pyc",)}, "BASE_FORGED_BYTECODE", id="forged"),
+    pytest.param(TEETH | {"log_too_big": True}, "BASE_LOG_OVER_CAP", id="log-over-cap"),
 ]
 ENV_OK = {"rc": 1, "outcomes": {"tests/test_calc.py::test_add": "failed"}}  # base env check
 PROBE_ROWS = [  # a failed P2P base probe (the base run itself has teeth)
@@ -46,6 +47,8 @@ PROBE_ROWS = [  # a failed P2P base probe (the base run itself has teeth)
     pytest.param({"rc": 1, "report_too_big": True}, id="probe-over-cap"),
     pytest.param({"rc": 2}, id="probe-rc2"),
     pytest.param({"rc": 1, "recorded": False}, id="probe-no-record"),
+    pytest.param({"rc": 1, "log_too_big": True}, id="probe-log-over-cap"),  # new rows last:
+    pytest.param({"rc": 1, "forged": ("x.pyc",)}, id="probe-forged"),  # test_base_env indexes
 ]
 
 
@@ -57,7 +60,7 @@ def _run(spec, run_root, run_id, rc=1, outcomes=None, recorded=True, **flags):
         spec, rc, flags.get("timed_out", False), (), log, seen, outcomes,
         recorded=recorded, report_too_big=flags.get("report_too_big", False),
         collect_errors=flags.get("collect_errors", ()), survivors=flags.get("survivors", 0),
-        forged=flags.get("forged", ()),
+        forged=flags.get("forged", ()), log_too_big=flags.get("log_too_big", False),
     )  # fmt: skip
 
 
