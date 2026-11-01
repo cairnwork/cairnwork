@@ -246,8 +246,8 @@ def test_honest_names_in_a_test_file_are_not_hooks(source):
     assert _rules(source, TEST) == set()
 
 
-LONG_LINES = [  # about 100 KB each, straight through the pattern or function
-    ("(" * 50000 + ITEM + ")" * 50000 + ".runtest = f", lambda line: canonical_pytest(line, {})),
+LONG_LINES = [  # about 100 KB each (brackets 20 KB: up to 200 unwrap passes, #657)
+    ("(" * 10000 + ITEM + ")" * 10000 + ".runtest = f", lambda line: canonical_pytest(line, {})),
     ((P + "_runtest_a: ") * 8000, re.compile(PYTEST_HOOK_IMPL).search),
     ("from x import a " * 8000, re.compile(PYTEST_HOOK_IMPL).search),
     ("patch(a, " * 12000, re.compile(PYTEST_PUBLIC_PATCH).search),
