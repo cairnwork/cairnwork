@@ -226,11 +226,17 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     return 1
 
 
-def _printable(text: str) -> str:
+# C0 and C1 controls and the Unicode line and paragraph separators, written as escapes.
+_CONTROLS = {c: f"\\x{c:02x}" for c in [*range(0x20), *range(0x7F, 0xA0)]}
+_CONTROLS.update({0x2028: "\\u2028", 0x2029: "\\u2029"})
+
+
+def _printable(text: str, stream: object = None) -> str:
     """A refusal's detail may quote a signed path no codec can write (a lone surrogate):
-    escape what stdout cannot encode, so a refusal never ends in a traceback (#537 J)."""
-    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
-    return text.encode(encoding, "backslashreplace").decode(encoding)
+    escape what the stream cannot encode, so a refusal never ends in a traceback (#537 J). A
+    control character or line separator in it is escaped too, so the refusal stays one line."""
+    encoding = getattr(stream or sys.stdout, "encoding", None) or "utf-8"
+    return text.translate(_CONTROLS).encode(encoding, "backslashreplace").decode(encoding)
 
 
 def _cmd_publish(args: argparse.Namespace) -> int:
@@ -263,7 +269,7 @@ def _cmd_publish(args: argparse.Namespace) -> int:
             print(f"PUBLISHED {result.candidate} {result.notes_ref} {result.notes_tip or '-'}")
     else:
         detail = f": {result.detail}" if result.detail else ""
-        print(f"{result.code}{detail}", file=sys.stderr)
+        print(_printable(f"{result.code}{detail}", sys.stderr), file=sys.stderr)
     if result.ok:
         return 0
     if result.code == "NOTE_CONFLICT":

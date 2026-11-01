@@ -278,3 +278,25 @@ def test_cli_verify_prints_a_detail_with_an_unencodable_path(
     assert rc == 1
     shown = "HEAD_TREE_MISMATCH: tests/t\\udcff.py in the executed tree is not head's\n"
     assert capsys.readouterr().out == shown
+
+
+@pytest.mark.parametrize("sep", ["\n", "\r", "\x85", "\u2028"])
+def test_cli_verify_prints_a_refusal_on_one_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, sep: str
+) -> None:
+    """A signed path quoted in a refusal may hold a line break: without --json the refusal is
+    printed as one line, the break escaped, so no part of it starts a line of its own."""
+    import cairnwork_attest.cli as cli
+    from cairnwork_attest.verify_response import VerifyResult
+
+    detail = f"test path tests/a{sep}::notice::x.py"
+    refused = VerifyResult(ok=False, code="TEST_ROOT_VIOLATION", detail=detail)
+    monkeypatch.setattr(cli, "verify_bundle", lambda *_a, **_k: refused)
+    rc = main(
+        ["verify", str(tmp_path / "b.json"), "--public-key", str(tmp_path / "k.pem"),
+         "--repo", str(tmp_path), "--candidate", "a" * 40]
+    )  # fmt: skip
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert out.count("\n") == 1 and out.endswith("\n") and out.startswith("TEST_ROOT_VIOLATION: ")
+    assert not any(c in out[:-1] for c in "\r\x85\u2028")
