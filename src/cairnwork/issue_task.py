@@ -1,8 +1,9 @@
 """A queued GitHub Issue as a Cairnwork task: the ``eia-task`` block and who may queue it.
 
-Pure functions, no network (issue_runner.py does the GitHub I/O). The rules follow the
-Nexus-new EIA scheduler (docs/ops/eia_nightly.md, scripts/ops/eia_nightly.py at
-Nexus-new 05c6a8c) so the same Issue means the same task in both systems:
+Pure functions, no network (issue_runner.py does the GitHub I/O; settle_check is handed its
+client). The rules follow the Nexus-new EIA scheduler (docs/ops/eia_nightly.md,
+scripts/ops/eia_nightly.py at Nexus-new 05c6a8c) so the same Issue means the same task in both
+systems:
 
 * exactly one fenced ```eia-task JSON block; only the known keys;
 * ``allowed_files``: 1 to 10 literal repo-relative paths, no ``.`` components, none
@@ -99,6 +100,7 @@ def parse_task_block(body: str, roots: tuple[str, ...] = DEFAULT_TEST_ROOTS) -> 
     if (
         not isinstance(files, list)
         or not 0 < len(files) <= MAX_ALLOWED_FILES
+        or not all(isinstance(f, str) for f in files)  # set() needs hashable entries (#626)
         or len(set(files)) != len(files)
     ):
         raise IssueRefused("TASK_ALLOWED_FILES_INVALID")
@@ -311,13 +313,15 @@ def settle_check(github: Any, number: int, known: Mapping[str, Any], intake: Any
     is opened for the old block. Re-queueing is left to a trusted person: a queue label added by
     the bot would count earlier edits as made before the label."""
     queue, running, needs_fix = labels
-    roots = tuple(intake.config()["test_roots"])
-    try:
-        block = parse_task_block(github.current(number).get("body") or "", roots).block_sha256
-    except IssueRefused:
-        block = ""
-    reason = "" if block and block == known.get("block_sha256") else "ISSUE_CHANGED_AFTER_TAKE"
-    reason = reason or github.trust(number, queue)
+    reason = github.trust(number, queue)  # first, as take: an untrusted body is never parsed
+    if not reason:
+        body = github.current(number).get("body") or ""  # a GitHub error: retried next pass
+        roots = tuple(intake.config()["test_roots"])  # a local config error: retried next pass
+        try:
+            block = parse_task_block(body, roots).block_sha256
+        except Exception:  # noqa: BLE001 - any unreadable block counts as changed (attempt_gate)
+            block = ""
+        reason = "" if block and block == known.get("block_sha256") else "ISSUE_CHANGED_AFTER_TAKE"
     if not reason:
         return
     github.relabel(number, needs_fix, running)
