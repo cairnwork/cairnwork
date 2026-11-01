@@ -67,6 +67,8 @@ def _record(**extra):
         "nonce": "n",
         "collected": ["tests/a.py::t"],
         "outcomes": {"tests/a.py::t": "passed"},
+        "exitstatus": 0,
+        "testsfailed": 0,
     }
     return json.dumps(payload | extra).encode()
 

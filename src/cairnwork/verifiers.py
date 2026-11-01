@@ -319,7 +319,7 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
     clean = not timed_out and not mutated and survivors == 0 and not forged
     too_big = log_path.stat().st_size > MAX_LOG_BYTES
     clean = clean and not too_big and not verdict.too_big
-    passed = profile is not None and returncode == 0 and clean and ran
+    passed = profile is not None and returncode == 0 and clean and ran  # ran: pytest said 0 too
     plain_failure = (
         profile is not None and returncode == 1 and clean and "failed" in verdict.outcomes.values()
     )
@@ -327,6 +327,7 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
         ran_sandboxed=profile is not None, returncode=returncode, timed_out=timed_out,
         mutated=mutated, survivors=survivors, log_too_big=too_big, tests_ran=ran,
         report_too_big=verdict.too_big, forged=forged, not_run=not_run, renamed=verdict.renamed,
+        exitstatus=verdict.exitstatus, testsfailed=verdict.testsfailed,
     )  # fmt: skip
     digest = _record_digest(
         candidate_commit=candidate_commit,
