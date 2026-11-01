@@ -77,10 +77,10 @@ class GitHub:
         self._run("issue", "comment", str(number), "-R", self.repo, "--body-file", "-", stdin=text)
 
     def relabel(self, number: int, add: str, remove: str) -> None:
-        self._run(
-            "issue", "edit", str(number), "-R", self.repo, "--add-label", add,
-            "--remove-label", remove,
-        )  # fmt: skip
+        # two calls, add first: a pass that stops halfway leaves both labels, which the runner
+        # settles, never neither, which no pass lists again (#634)
+        self._run("issue", "edit", str(number), "-R", self.repo, "--add-label", add)
+        self._run("issue", "edit", str(number), "-R", self.repo, "--remove-label", remove)
 
     def parents(self, commit: str) -> list[str]:
         out = self._run(
