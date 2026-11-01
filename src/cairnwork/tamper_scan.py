@@ -315,7 +315,7 @@ def scan_added_lines(
             names = _rule_names(plain, aliases, masked_aliases, in_tests, in_conftest)
             if code_aliases is not None and view is not None:  # aliases bound by code only
                 for text in dict.fromkeys((view.bound, _nfkc_names(view.bound))):
-                    _bind_aliases(text, code_aliases)
+                    _bind_aliases(text.replace("import(", "import ("), code_aliases)
                 both = dict.fromkeys((*plain, view.code, _nfkc_names(view.code)))
                 names += [n for t in both for n in _extra_rules(t, code_aliases, in_tests)]
                 names = list(dict.fromkeys(names))
