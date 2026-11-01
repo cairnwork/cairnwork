@@ -16,6 +16,7 @@ from cairnwork_protocol import (
     response_binding_problem,
     verification_plan_hash,
 )
+from cairnwork_protocol.ids import core_ids as _core_ids
 
 
 @dataclass(frozen=True)
@@ -123,28 +124,6 @@ _CROSS = (  # (part, the hash it names): nexus-core product/evidence ``integrity
     ("evidence_bundle", "change_set_hash"),
     ("evidence_bundle", "verification_plan_hash"),
 )
-
-
-_MAX_ID_BYTES = 512  # nexus-core's wire validator (product/adapters ``_MAX_TEXT``), #453
-
-
-def _fits(text: str) -> bool:
-    try:
-        return len(text.encode("utf-8")) <= _MAX_ID_BYTES
-    except UnicodeEncodeError:  # a lone surrogate has no UTF-8 form; Core cannot encode it either
-        return False
-
-
-def _core_ids(ids: Any) -> bool:
-    """nexus-core ``_require_ids``: a non-empty list of distinct, non-empty, normalized strings,
-    each at most 512 UTF-8 bytes (Core's wire validator refuses a longer one)."""
-    return (
-        isinstance(ids, list)
-        and bool(ids)
-        and all(type(v) is str and v and v == v.strip() and "\x00" not in v for v in ids)
-        and all(_fits(v) for v in ids)
-        and len(set(ids)) == len(ids)
-    )
 
 
 def _parts_problem(

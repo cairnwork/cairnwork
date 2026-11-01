@@ -71,6 +71,12 @@ from cairnwork.workspace import (
     remove_attempt_clone,
     unless_interrupted,
 )
+from cairnwork_protocol.ids import ID_RULE, core_ids
+
+
+def _require_core_ids(verifiers: tuple[tuple[str, tuple[str, ...]], ...]) -> None:
+    if not core_ids([vid for vid, _ in verifiers]):  # as Core, before anything runs (#490)
+        raise TaskRejected("BAD_VERIFIER", f"verifier {ID_RULE}")
 
 
 def verify_candidate(
@@ -98,6 +104,7 @@ def verify_candidate(
             require_plain_dirs(repo, base, import_paths)
     except (ValueError, ImportPathError) as exc:
         raise TaskRejected("BAD_IMPORT_PATH", str(exc)) from exc
+    _require_core_ids(verifiers)
     task = TaskSpec(
         f"verify-{secrets.token_hex(8)}", "verify", "verify", "", repo, base,
         allowed_files, verifiers, test_commit=test_commit, blackbox=blackbox,
