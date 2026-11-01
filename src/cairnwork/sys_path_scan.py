@@ -9,22 +9,25 @@ Python file of the commit is read, not only those near a test root.
 
 Scope: the base and the test commit are the target repository's own code, not the candidate's.
 The scan is meant to catch the ways ordinary code changes sys.path or starts Python: the path
-words below, ``sys``/``os`` and the import-system modules under any name or by ``from`` import,
-in every Python file of the commit, modules handed on as values, names built at run time, and
-files it cannot read. It is not meant to resist code written so that such a change goes unseen.
+words (the tables live in ``sys_path_names``), ``sys``/``os`` and the import-system modules under
+any name or by ``from`` import, in every Python file of the commit, modules handed on as values,
+names built at run time, and files it cannot read. It is not meant to resist code written so that
+such a change goes unseen.
 
 A commit may change it when one of its Python files (``.py``/``.pyw``, any case)
 
 - holds one of ``PATH_WORDS`` (a plain byte search: comments and strings count too), or
 - uses the ``sys`` module under any name (``import sys as s``) for anything but a ``SAFE_SYS``
   attribute (``s.path``, ``from sys import path``, ``f(sys)``), takes a ``sys`` attribute from
-  any other object (``os.sys``) or imports ``sys`` from another module, or names a function of
+  any other object (``os.sys``) or imports ``sys`` from another module (``from os import sys as
+  s`` binds a sys name; a relative ``from .os import`` is never os), or names a function of
   ``os`` (also ``posix``, ``nt``) that starts a program, under any name
   (``from os import system``), or
 - reaches an attribute, imports or runs code by a name built at run time: uses one of
   ``DYNAMIC_NAMES`` (``getattr(logging, "sys")``, ``exec``) or ``DYNAMIC_ATTRS``
   (``m.__dict__``, ``pkgutil.resolve_name``, ``discover``), or calls monkeypatch's string-target
-  ``setattr``/``delattr`` or unittest's ``main``/``TestProgram`` with a non-string module, or
+  ``setattr``/``delattr``, or uses unittest's ``main``/``TestProgram`` other than in a call with a
+  string module, or pytest's ``main`` at all (``sys_path_runners``), or
 - imports one of ``IMPORT_MODULES`` (``site``, ``runpy``, ``importlib.util``) or a submodule,
   takes sys, os or one of them from another object (``logging.os``, ``from random import _os``,
   a ``HELD`` or, on a chain from an imported module, a ``HELD_IF_IMPORTED`` name, also in a
@@ -34,9 +37,13 @@ A commit may change it when one of its Python files (``.py``/``.pyw``, any case)
   read, ``in`` or ``.get``), or
 - cannot be read: it may name one of those modules (or holds a non-ASCII byte, which an
   identifier may normalize from) and this interpreter cannot parse it (a syntax or encoding
-  error), or it is a symlink; a file that names none of them reaches them only through a word;
+  error), or it is a symlink; a file that names none of them reaches them only through a word,
+  or
+- declares a source encoding other than UTF-8, ASCII or Latin-1, which a byte search cannot read;
 
-when the commit tracks compiled code Python may import (``.pyc``, ``.pyo``, ``.pyd``, ``.so``);
+when the commit tracks compiled code Python may import (``.pyc``, ``.pyo``, ``.pyd``, ``.so``) or
+a symlink whose target may lie outside the commit (absolute, above the root, or through another
+tracked symlink), since Python may import code there the scan never reads;
 or when it has more than ``MAX_FILES`` Python files or ``MAX_BYTES`` of them, or git fails. Every
 one of these answers seals nothing, the stricter outcome: each directory counts as an import root,
 as before #382.
@@ -45,107 +52,41 @@ as before #382.
 from __future__ import annotations
 
 import ast
+import codecs
+import io
 import re
 import subprocess
+import tokenize
 import warnings
 from pathlib import Path
 
 from cairnwork.gitcmd import GitCommandError, run_git, run_git_bytes
+from cairnwork.sys_path_names import (
+    DYNAMIC_ATTRS,
+    DYNAMIC_NAMES,
+    HELD,
+    HELD_IF_IMPORTED,
+    IMPORT_MODULES,
+    PATH_WORDS,
+    SAFE_SYS,
+)
+from cairnwork.sys_path_runners import RUNNERS, Runners
 
 MAX_FILES = 20_000
 MAX_BYTES = 64 << 20  # 64 MiB of Python source, read at once
 _REGULAR = ("100644", "100755")
+_SYMLINK = "120000"
 _SOURCE = (".py", ".pyw")
 _COMPILED = (".pyc", ".pyo", ".pyd", ".so")
-# Ways Python code can put a directory on sys.path, or start Python with another sys.path.
-PATH_WORDS = (
-    "sys.path",  # also sys.path_hooks, sys.path_importer_cache
-    "syspath",  # pytest's monkeypatch.syspath_prepend, pytester.syspathinsert
-    "from sys import",
-    "addsitedir",
-    ".pth",
-    "PYTHONPATH",
-    "pytest_plugins",  # a plugin module may live anywhere
-    "runpy",
-    "sys.executable",
-    "subprocess",
-    "os.system",
-    "os.popen",
-    "os.exec",
-    "os.spawn",
-    "meta_path",
-    "path_hooks",
-    "importlib",
-    "__import__",
-)
 _WORDS = tuple(word.encode() for word in PATH_WORDS)
-# sys attributes that neither read nor change the import system or start a program.
-SAFE_SYS = frozenset(
-    {
-        "abiflags", "api_version", "argv", "base_exec_prefix", "base_prefix", "byteorder",
-        "builtin_module_names", "copyright", "displayhook", "dont_write_bytecode", "exc_info",
-        "exception", "excepthook", "exec_prefix", "exit", "flags", "float_info",
-        "float_repr_style", "get_int_max_str_digits", "getdefaultencoding",
-        "getfilesystemencodeerrors", "getfilesystemencoding", "getprofile", "getrecursionlimit",
-        "getrefcount", "getsizeof", "getswitchinterval", "gettrace", "getwindowsversion",
-        "hash_info", "hexversion", "implementation", "int_info", "intern", "is_finalizing",
-        "last_traceback", "last_type", "last_value", "maxsize", "maxunicode", "orig_argv",
-        "platform", "platlibdir", "prefix", "set_int_max_str_digits", "setprofile",
-        "setrecursionlimit", "setswitchinterval", "settrace", "stderr", "stdin",
-        "stdlib_module_names", "stdout", "thread_info", "unraisablehook", "version",
-        "version_info", "warnoptions", "__stderr__", "__stdin__", "__stdout__",
-    }
-)  # fmt: skip
 _OS_MODULES = frozenset({"os", "posix", "nt"})
 _OS_RUN = frozenset({"system", "popen", "putenv", "startfile"})
 _OS_RUN_PREFIXES = ("exec", "spawn", "posix_spawn")
-_TEST_MAINS = frozenset({"main", "TestProgram"})  # unittest's: module=None runs discovery
-# Code that reaches attributes, or runs code, by a name built at run time; never followed.
-DYNAMIC_NAMES = frozenset(
-    {"getattr", "setattr", "delattr", "vars", "globals", "locals", "exec", "eval", "compile",
-     "breakpoint", "__import__", "__builtins__"}
-)  # fmt: skip
-DYNAMIC_ATTRS = frozenset(
-    {"__dict__", "__getattribute__", "__globals__", "__builtins__", "__code__", "f_globals",
-     "f_locals", "f_builtins", "attrgetter", "methodcaller", "setenv", "unsetenv", "putenv",
-     "environb", "ProcessPoolExecutor", "spec_from_file_location", "module_from_spec",
-     "exec_module", "load_module", "load_source", "import_path", "pyimport", "resolve_name",
-     "import_string", "import_module", "find_class", "entry_points", "load_entry_point",
-     "builtins", "__self__", "__closure__", "__subclasses__", "__bases__", "__base__",
-     "__mro__", "discover"}
-)  # fmt: skip
-# Modules that can change the import path or the import system, load or run code given as a
-# path or as text, or start a program; a file that imports one (or a submodule) seals nothing.
-IMPORT_MODULES = frozenset(
-    {"site", "sitecustomize", "usercustomize", "runpy", "pkgutil", "zipimport", "imp", "_imp",
-     "importlib", "_frozen_importlib", "_frozen_importlib_external", "sysconfig", "distutils",
-     "setuptools", "pkg_resources", "code", "codeop", "types", "builtins", "inspect", "gc",
-     "ctypes", "pickle", "_pickle", "marshal", "shelve", "copyreg", "doctest", "timeit", "pdb",
-     "bdb", "trace", "profile", "cProfile", "pydoc", "subprocess", "_posixsubprocess", "_winapi",
-     "multiprocessing", "concurrent.futures.process", "pty", "webbrowser", "logging.config",
-     "unittest.mock", "mock", "pexpect", "sh", "plumbum", "execnet"}
-)  # fmt: skip
-# Names under which another module may hold sys, os or one of IMPORT_MODULES (``logging.os``,
-# ``random._os``, ``tempfile._os``), leading underscores aside: an attribute or a ``from``
-# import of one seals nothing. HELD_IF_IMPORTED are too common to refuse on any object, so they
-# count only on a chain that starts at an imported module (``unittest.mock``, ``logging.config``).
-HELD = frozenset(
-    {"sys", "os", "posix", "nt", "runpy", "pkgutil", "zipimport", "importlib", "sysconfig",
-     "distutils", "setuptools", "pkg_resources", "sitecustomize", "usercustomize", "codeop",
-     "builtins", "bltns", "ctypes", "pickle", "marshal", "shelve", "copyreg", "doctest",
-     "timeit", "pdb", "bdb", "cProfile", "pyprofile", "pydoc", "subprocess", "posixsubprocess",
-     "winapi", "multiprocessing", "pty", "webbrowser", "frozen_importlib",
-     "frozen_importlib_external", "pexpect", "plumbum", "execnet"}
-)  # fmt: skip
-HELD_IF_IMPORTED = frozenset(
-    {"site", "code", "types", "imp", "inspect", "gc", "trace", "profile", "util", "machinery",
-     "bootstrap", "bootstrap_external", "process", "context", "reduction", "reducer", "config",
-     "mock", "sh", "macholib", "dyld", "dylib", "framework"}
-)  # fmt: skip
 _ENVIRON_READS = frozenset({"get", "copy", "keys", "items", "values"})
+_PLAIN_ENCODINGS = frozenset({"utf-8", "utf-8-sig", "iso8859-1", "ascii"})  # codecs names
 _PARSE_NAMES = (
     {"sys", "environ"} | _OS_MODULES | DYNAMIC_NAMES | DYNAMIC_ATTRS | HELD | HELD_IF_IMPORTED
-    | {part for module in IMPORT_MODULES for part in module.split(".")}
+    | {part for module in IMPORT_MODULES for part in module.split(".")} | set(RUNNERS)
 )  # fmt: skip
 # Files worth parsing: those that may name one of the above (see the module docstring).
 _MAY_NAME = re.compile(
@@ -156,23 +97,30 @@ _MAY_NAME = re.compile(
 def may_edit_sys_path(repo: Path, commit: str) -> bool:
     """Whether commit's Python code may change sys.path or start Python another way (see the
     module docstring); True whenever the scan cannot tell."""
-    oids = _python_blobs(repo, commit)
-    if oids is None:
+    found = _python_blobs(repo, commit)
+    if found is None:
         return True
-    blobs = _read_blobs(repo, oids)
+    oids, links = found
+    blobs = _read_blobs(repo, [*oids, *links.values()])
     if blobs is None:
         return True
-    return any(_mentions(data) for data in blobs)
+    if any(
+        _leaves(path, target, links) for path, target in zip(links, blobs[len(oids) :], strict=True)
+    ):
+        return True
+    return any(_mentions(data) for data in blobs[: len(oids)])
 
 
-def _python_blobs(repo: Path, commit: str) -> list[str] | None:
-    """The distinct blob ids of commit's Python files; None when one is a symlink, compiled code
-    is tracked, there are too many or too large, or git fails."""
+def _python_blobs(repo: Path, commit: str) -> tuple[list[str], dict[str, str]] | None:
+    """The distinct blob ids of commit's Python files, and its other symlinks (path -> blob id);
+    None when a Python file is a symlink, compiled code is tracked, there are too many or too
+    large, or git fails."""
     try:
         listing = run_git(repo, "ls-tree", "-r", "-l", "-z", "--full-tree", commit)
     except (GitCommandError, OSError, ValueError, subprocess.SubprocessError):
         return None
     oids: dict[str, None] = {}
+    links: dict[str, str] = {}
     total = files = 0
     for entry in filter(None, listing.split("\0")):
         meta, path = entry.split("\t", 1)
@@ -182,6 +130,9 @@ def _python_blobs(repo: Path, commit: str) -> list[str] | None:
         leaf = path.rpartition("/")[2].casefold()
         if leaf.endswith(_COMPILED) and kind == "blob":
             return None
+        if mode == _SYMLINK and not leaf.endswith(_SOURCE):
+            links[path] = oid
+            continue
         if not leaf.endswith(_SOURCE) or kind != "blob":
             continue
         if mode not in _REGULAR:  # a symlink: what it points at may not be in the commit
@@ -192,7 +143,30 @@ def _python_blobs(repo: Path, commit: str) -> list[str] | None:
             total += int(size)
     if files > MAX_FILES or total > MAX_BYTES:
         return None
-    return list(oids)
+    return list(oids), links
+
+
+def _leaves(path: str, target: bytes, links: dict[str, str]) -> bool:
+    """Whether the tracked symlink at path may point outside the commit: its target is absolute
+    or not UTF-8, climbs above the root, or passes through another tracked symlink (whose own
+    target a plain path walk cannot follow)."""
+    try:
+        steps = target.decode().split("/")
+    except UnicodeDecodeError:
+        return True
+    if target.startswith(b"/"):
+        return True
+    parts = path.split("/")[:-1]
+    for step in steps:
+        if step == "..":
+            if not parts:
+                return True
+            parts.pop()
+        elif step not in {"", "."}:
+            parts.append(step)
+            if "/".join(parts) in links:
+                return True
+    return False
 
 
 def _read_blobs(repo: Path, oids: list[str]) -> list[bytes] | None:
@@ -222,7 +196,7 @@ def _read_blobs(repo: Path, oids: list[str]) -> list[bytes] | None:
 
 def _mentions(data: bytes) -> bool:
     """Whether one file's bytes hold a path word or its syntax tree uses the import system."""
-    if any(word in data for word in _WORDS):
+    if any(word in data for word in _WORDS) or not _plain_encoding(data):
         return True
     if not _MAY_NAME.search(data):
         return False
@@ -235,11 +209,21 @@ def _mentions(data: bytes) -> bool:
     return _uses_import_system(tree)
 
 
+def _plain_encoding(data: bytes) -> bool:
+    """Whether data's declared source encoding spells every ASCII name in ASCII bytes, as the
+    byte search above assumes (``utf-7`` spells ``sys`` as ``s+AHk-s``)."""
+    try:
+        name = tokenize.detect_encoding(io.BytesIO(data).readline)[0]
+        return codecs.lookup(name).name in _PLAIN_ENCODINGS
+    except (SyntaxError, LookupError):
+        return False
+
+
 def _uses_import_system(tree: ast.AST) -> bool:
     nodes = list(ast.walk(tree))
     sys_names, os_names, modules, roots = {"sys"}, set(_OS_MODULES), set(), set()
     from_modules = set()  # names a ``from`` import binds that are spelled like a module
-    test_mains = set()  # unittest's main and TestProgram as this file calls them (``ut.main``)
+    runners = Runners()  # unittest's and pytest's entry points as this file names them
     for node in nodes:
         if _dynamic(node):
             return True
@@ -250,25 +234,23 @@ def _uses_import_system(tree: ast.AST) -> bool:
                     sys_names.add(alias.asname)
                 elif alias.asname and alias.name in _OS_MODULES:
                     os_names.add(alias.asname)
-                if alias.name == "unittest":
-                    test_mains.update(f"{alias.asname or alias.name}.{m}" for m in _TEST_MAINS)
         elif isinstance(node, ast.ImportFrom):
             names = [alias.name for alias in node.names]
             roots.update(alias.asname or alias.name for alias in node.names)
             from_modules.update(
                 alias.asname or alias.name for alias in node.names if alias.name.islower()
             )
-            if _imports_held(node.module, names):  # ``from logging import sys``
+            if _imports_held(node.module, names, node.level):  # ``from logging import sys``
                 return True
-            if node.level == 0 and node.module in {"unittest", "unittest.main"}:
-                test_mains.update(a.asname or a.name for a in node.names if a.name in _TEST_MAINS)
             if node.level == 0 and node.module == "sys":
                 if any(name not in SAFE_SYS for name in names):
                     return True
             elif node.level == 0 and node.module in _OS_MODULES:
+                sys_names.update(a.asname or a.name for a in node.names if a.name == "sys")
                 if any(name in {"*", "environ"} or _starts_programs(name) for name in names):
                     return True
-    if test_mains and any(_runs_discovery(node, test_mains) for node in nodes):
+        runners.note(node)
+    if runners.run_in_process(nodes):
         return True
     roots |= modules | sys_names | os_names
     return _reaches(nodes, sys_names, os_names, modules, roots, from_modules - modules - sys_names)
@@ -336,16 +318,16 @@ def _held(node: ast.Attribute, roots: set[str]) -> bool:
     return _named(base, roots)
 
 
-def _imports_held(module: str | None, names: list[str]) -> bool:
+def _imports_held(module: str | None, names: list[str], level: int = 0) -> bool:
     """Whether ``from module import names`` takes sys, os or an IMPORT_MODULES module, or a
-    DYNAMIC name, from another module."""
+    DYNAMIC name, from another module (a relative module is never os)."""
     for name in names:
         bare = name.lstrip("_")
         if bare in HELD - {"sys", "os", "posix", "nt"} or name in DYNAMIC_NAMES | DYNAMIC_ATTRS:
             return True
         if bare in HELD_IF_IMPORTED:  # a ``from`` import is a chain from an imported module
             return True
-        if bare in {"sys", "os", "posix", "nt"} and module not in _OS_MODULES:
+        if bare in {"sys", "os", "posix", "nt"} and (level or module not in _OS_MODULES):
             return True  # ``from logging import sys``, ``from random import _os``
         if module and _is_import_module(f"{module}.{name}"):
             return True
@@ -383,13 +365,6 @@ def _dynamic(node: ast.AST) -> bool:
     if isinstance(node, ast.ImportFrom):
         return not node.level and _is_import_module(node.module or "")
     return False
-
-
-def _runs_discovery(node: ast.AST, test_mains: set[str]) -> bool:
-    if not isinstance(node, ast.Call) or ast.unparse(node.func) not in test_mains:
-        return False
-    given = [*node.args[:1], *(k.value for k in node.keywords if k.arg in {"module", None})]
-    return not all(isinstance(m, ast.Constant) and isinstance(m.value, str) for m in given)
 
 
 def _named(node: ast.AST, names: set[str]) -> bool:
