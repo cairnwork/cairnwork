@@ -40,6 +40,8 @@ def execute(
     if not token:
         raise ValueError(f"{RUN_TOKEN_VAR} must be set so escaped processes can be found")
     fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    mark = proc_start.boot_mark()  # before the start: what predates it is not the run's
+    dirs = (os.path.realpath(cwd),) if cwd is not None else ()  # now: the run may swap it (#578)
     with os.fdopen(fd, "wb") as log:
         process = subprocess.Popen(  # noqa: S603 - argv built from an allow-listed spec, no shell
             argv,
@@ -71,16 +73,19 @@ def execute(
                     reap()
             with suppress(subprocess.TimeoutExpired):  # bounded only after an interrupt
                 process.wait(timeout=None if finished else 10)
-        survivors = _sweep_survivors(token, process.pid) + escaped
+        survivors = _sweep_survivors(token, process.pid, dirs, mark) + escaped
         copier.join(timeout=10)  # a descendant that escaped the group may hold the pipe
         if process.stdout is not None:  # always: stdout=PIPE
             process.stdout.close()
     return (None if timed_out else process.returncode), timed_out, survivors
 
 
-def _sweep_survivors(token: str, group: int) -> int:
-    found = sweep_marked(RUN_TOKEN_VAR, token, skip_group=group)
-    return found.found if found.listed else 1  # unknown counts as a survivor, so does a denied kill
+def _sweep_survivors(token: str, group: int, dirs: tuple[str, ...] = (), mark: str = "") -> int:
+    """Anything not shown gone counts (#578); a look that killed none and is not gone is redone."""
+    found = sweep_marked(RUN_TOKEN_VAR, token, skip_group=group, dispatched=mark, cwd_dirs=dirs)
+    if found.listed and not found.found and not found.gone:  # e.g. one exited: a child left?
+        found = sweep_marked(RUN_TOKEN_VAR, token, skip_group=group, dispatched=mark, cwd_dirs=dirs)
+    return 0 if found.gone else max(1, found.found)
 
 
 SWEEP_UNAVAILABLE = -1  # recovery.Decision.killed_processes when the table could not be read
@@ -174,9 +179,10 @@ def sweep_marked(
     cannot be read (Linux: pgid None) may be the owner's or the account's: it is judged as one
     of the owner's, so a hidden environment keeps it unreadable (#244). ``dispatched``: the
     attempt's DISPATCHED boot mark; a hidden process started before it is not counted (proc_start).
-    ``cwd_dirs`` (recovery, macOS): the attempt's run directories (realpaths); an owner process
-    whose environment macOS withholds (/bin/sh, /bin/sleep) is killed ("cwd") when its working
-    directory is inside one; one that left them is not found (proc_cwd). Empty: no extra reads.
+    ``cwd_dirs`` (macOS): an attempt's run directories or a run's checkout, as realpaths taken
+    before the run could swap one for a symlink (#578); an owner process whose environment macOS
+    withholds (/bin/sh, /bin/sleep) is killed ("cwd") when its working directory is inside one;
+    one that left them is not found (proc_cwd). Empty: no extra reads.
     """
     marker = f"{var}={value}"
     theirs = _account_uid(account) if account else None

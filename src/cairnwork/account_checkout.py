@@ -32,8 +32,10 @@ would need a change is left as it is (its inode may have a name outside the copy
 never touch), and the run fails with "checkout not shared with the owner"; so it does when a
 directory open to its user cannot be walked (a macOS ACL denying the account alone), anything
 the owner can reach carries a macOS extended ACL (one can grant the owner what the mode closes to
-the user), a chmod fails, the share step fails or outlives ``SHARE_TIMEOUT_SECONDS``, or the
-account's processes cannot be confirmed ended.
+the user), a chmod fails, or the share step fails or outlives ``SHARE_TIMEOUT_SECONDS``. When the
+account's processes cannot be confirmed ended, the account is the problem, not the checkout:
+``VerifierAccountError`` is raised (#578), which the base stage reports as
+``VERIFIER_ACCOUNT_UNUSABLE`` (``account_check.base_stage``), as ``require_idle`` is before a run.
 
 A helper that outlives its timeout (``subprocess.run`` kills only sudo) is ended with
 ``account.kill_all()``: callers hold the account's lock (``VerifierAccount.exclusive``), so every
@@ -263,26 +265,32 @@ def _check_copy(target: Path, account, repo: Path, commit: str) -> None:
 def checkout_differences(repo: Path, commit: str, checkout: Path, before, account, python: str):
     """What the run changed in its checkout, as ``tree_differences`` names it; under the account,
     first open the account's copy to the owner as described above. If that cannot be done exactly
-    the run fails: the answer is then why the copy was not shared."""
+    the run fails: the answer is then why the copy was not shared. Account processes that cannot
+    be confirmed ended raise ``VerifierAccountError``: an account problem, not a checkout change."""
     if not _same_directory(checkout, before):  # renamed away, or a symlink put in place
         return ("checkout replaced",)
     if account is not None:
+        _require_ended(account)
         unshared = _share_with_owner(account, python, checkout)
         if unshared:
             return (f"checkout not shared with the owner: {unshared}",)
     return tuple(tree_differences(repo, commit, checkout))
 
 
-def _share_with_owner(account, python: str, checkout: Path) -> str:
-    """Run SHARE_HELPER on the account's copy; "" when it did, else why not. It runs only once
-    ``kill_all`` confirms that no process of the account is left (the caller holds its lock), so
-    nothing can change the copy while the helper walks it."""
+def _require_ended(account) -> None:
+    """Raise unless ``kill_all`` confirms that no process of the account is left (the caller holds
+    its lock), so nothing can change the copy while SHARE_HELPER walks it."""
     try:
         left = account.kill_all()
     except (OSError, subprocess.SubprocessError):
         left = -1
     if left != 0:
-        return "the account's processes could not be confirmed ended"
+        raise VerifierAccountError("the account's processes could not be confirmed ended")
+
+
+def _share_with_owner(account, python: str, checkout: Path) -> str:
+    """Run SHARE_HELPER on the account's copy (after ``_require_ended``); "" when it did, else why
+    not."""
     try:
         done = _as_account(account, python, SHARE_HELPER, [str(checkout)], SHARE_TIMEOUT_SECONDS)
     except (OSError, subprocess.SubprocessError) as exc:

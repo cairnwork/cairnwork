@@ -14,12 +14,15 @@ import stat
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from conftest import git
 
+from cairnwork.account_check import base_stage
 from cairnwork.account_checkout import COPY_HELPER, SHARE_HELPER, STAGE, make_account_checkout
-from cairnwork.verifier_account import VerifierAccount
+from cairnwork.deferred_tests import BaseUncomparable, base_comparison
+from cairnwork.verifier_account import VerifierAccount, VerifierAccountError
 from cairnwork.workspace import WorkspaceError
 
 
@@ -320,19 +323,29 @@ def test_a_failing_share_step_fails_the_run_not_an_error(monkeypatch, tmp_path, 
     assert found[0].startswith("checkout not shared with the owner: share step failed")
 
 
-@pytest.mark.parametrize("left", [1, -1])
+def _ended(left):
+    if isinstance(left, Exception):
+        raise left
+    return left
+
+
+@pytest.mark.parametrize("left", [1, -1, OSError("ps")])
 def test_no_share_step_while_account_processes_may_be_left(monkeypatch, tmp_path, left):
     """kill_all must confirm that no process of the account is left (none, not "unknown") before
-    the share step runs unconfined on the copy; otherwise it never runs and the run fails."""
+    the share step runs unconfined on the copy; otherwise it never runs, and the account, not the
+    checkout, is reported (#578): VerifierAccountError, which the base stage reports as
+    VERIFIER_ACCOUNT_UNUSABLE, never BASE_MUTATED. Stand-in account: the real one is not used."""
     account = _LocalAccount(ME, tmp_path)
-    account.kill_all = lambda: left
-    found, ran = _differences(
-        monkeypatch, tmp_path, account, lambda: subprocess.CompletedProcess([], 0, "", "")
-    )
-    assert ran == []
-    assert found == (
-        "checkout not shared with the owner: the account's processes could not be confirmed ended",
-    )
+    account.kill_all = lambda: _ended(left)
+    with pytest.raises(VerifierAccountError, match="could not be confirmed ended") as raised:
+        _differences(monkeypatch, tmp_path, account, _share_must_not_run)
+    with pytest.raises(BaseUncomparable) as reported, base_stage(None, None):
+        raise raised.value
+    assert reported.value.comparison.code == "VERIFIER_ACCOUNT_UNUSABLE"
+
+
+def _share_must_not_run():
+    raise AssertionError("the share step ran while account processes may be left")
 
 
 def test_a_shared_copy_is_compared(monkeypatch, tmp_path):
@@ -341,3 +354,9 @@ def test_a_shared_copy_is_compared(monkeypatch, tmp_path):
         monkeypatch, tmp_path, account, lambda: subprocess.CompletedProcess([], 0, "", "")
     )
     assert account.killed == 1 and len(ran) == 1 and found == ("changed pkg/x",)
+    base = SimpleNamespace(
+        spec=SimpleNamespace(verifier_id="v"), returncode=1, outcomes={"t.py::t": "failed"},
+        timed_out=False, report_too_big=False, recorded=True, collect_errors=(), mutated=found,
+        teardown_errors=(), survivors=0, forged=(),
+    )  # fmt: skip
+    assert base_comparison([base], frozenset({"t.py::t"})).code == "BASE_MUTATED"  # a real change
