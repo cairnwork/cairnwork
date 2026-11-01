@@ -13,6 +13,9 @@ import pytest
 from test_intake import FakePopen, payload
 from test_intake import intake as intake  # noqa: F401 - fixture
 from test_intake import repo as repo  # noqa: F401 - fixture
+from test_pipeline import VERIFY, CrashWorker, go
+from test_pipeline import project as project  # noqa: F401 - fixture
+from test_pipeline import stores as stores  # noqa: F401 - fixture
 
 from cairnwork import verify_candidate as vc
 from cairnwork.intake import Intake, IntakeRefused, task_from_payload
@@ -31,6 +34,7 @@ BAD_IDS = {
     "lone-surrogate": ["\ud800"],
     "duplicate": ["pytest", "pytest"],
 }
+NO_IDS = {**BAD_IDS, "none": []}
 
 
 def _with_ids(repo, ids):  # noqa: F811
@@ -51,7 +55,7 @@ def test_submit_refuses_bad_ids_and_binds_nothing(intake, repo, ids):  # noqa: F
     assert not list((intake.state / "requests").glob("*.json"))
 
 
-@pytest.mark.parametrize("ids", BAD_IDS.values(), ids=BAD_IDS.keys())
+@pytest.mark.parametrize("ids", NO_IDS.values(), ids=NO_IDS.keys())
 def test_verify_refuses_bad_ids_before_anything_runs(tmp_path, repo, ids):  # noqa: F811
     state = Intake(tmp_path / "state")
     with pytest.raises(TaskRejected, match="BAD_VERIFIER.*verifier ids must be distinct"):
@@ -59,6 +63,14 @@ def test_verify_refuses_bad_ids_before_anything_runs(tmp_path, repo, ids):  # no
             state, repo=repo, base="0" * 40, candidate="1" * 40, allowed_files=("src/a.py",),
             verifiers=tuple((i, tuple(ARGV)) for i in ids),
         )  # fmt: skip
+
+
+@pytest.mark.parametrize("ids", NO_IDS.values(), ids=NO_IDS.keys())
+def test_a_task_built_directly_is_refused_before_the_worker_runs(project, stores, tmp_path, ids):  # noqa: F811
+    argv = VERIFY[0][1]
+    with pytest.raises(TaskRejected, match="BAD_VERIFIER.*verifier ids must be distinct"):
+        go(project, stores, tmp_path, CrashWorker(), verifiers=tuple((i, argv) for i in ids))
+    assert not (tmp_path / "runs").exists()
 
 
 def test_shadow_check_refuses_bad_ids_as_submit_does(tmp_path, repo):  # noqa: F811

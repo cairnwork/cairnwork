@@ -58,6 +58,7 @@ from cairnwork.workspace import (
     remove_attempt_clone,
     unless_interrupted,
 )
+from cairnwork_protocol.ids import ID_RULE, core_ids
 
 
 class TaskRejected(Exception):
@@ -181,13 +182,13 @@ def check_task(task: TaskSpec, *, verifier_python: str | None = None) -> tuple[V
         raise TaskRejected(
             "BAD_PROTECTION", f"require_protection is one of {protection.REQUIRABLE}"
         )
+    if not core_ids([verifier_id for verifier_id, _ in task.verifiers]):  # as Core (#490)
+        raise TaskRejected("BAD_VERIFIER", f"verifier {ID_RULE}")
     clash = {c.verifier_id for c in task.blackbox.checks} if task.blackbox else set()
     if clash & {verifier_id for verifier_id, _ in task.verifiers}:
         raise TaskRejected("BAD_BLACKBOX", f"verifier ids clash: {sorted(clash)}")
     if any(protection.reserved(verifier_id) for verifier_id, _ in task.verifiers):
-        raise TaskRejected(
-            "BAD_VERIFIER", "verifier ids 'blackbox:*' and 'protection' are reserved"
-        )
+        raise TaskRejected("BAD_VERIFIER", "verifier ids blackbox:* and protection are reserved")
     try:
         return tuple(
             parse_verifier(vid, list(argv), task.test_roots) for vid, argv in task.verifiers
