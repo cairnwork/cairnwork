@@ -99,6 +99,7 @@ def parse_task_block(body: str, roots: tuple[str, ...] = DEFAULT_TEST_ROOTS) -> 
     if (
         not isinstance(files, list)
         or not 0 < len(files) <= MAX_ALLOWED_FILES
+        or not all(isinstance(f, str) for f in files)  # set() needs hashable entries (#626)
         or len(set(files)) != len(files)
     ):
         raise IssueRefused("TASK_ALLOWED_FILES_INVALID")
