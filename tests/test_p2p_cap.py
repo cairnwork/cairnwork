@@ -10,10 +10,11 @@ cut is recorded, so "0 P2P tests" never reads as "P2P passed".
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
-from test_p2p_plan import RESULT, TASK, plan, uncomparable
+from test_p2p_plan import RESULT, TASK, make_run, plan, uncomparable
 
 from cairnwork import p2p
 from cairnwork.p2p import P2PPlan, run_plan
@@ -218,3 +219,57 @@ def test_a_cut_that_leaves_only_changed_tests_runs_no_p2p_and_says_so(monkeypatc
     assert probed == [("tests/test_d.py",)] and got.spec is None
     assert got.rule["targets"] == 0 and got.rule["capped_dirs"] == ["tests"]
     assert got.rule["changed_by_test_commit"] == 1
+
+
+def test_a_base_probe_whose_log_went_over_the_cap_is_degraded_like_an_oversized_report(
+    monkeypatch, tmp_path
+):
+    # #481: a narrower suite writes a smaller log, so this one may degrade (not UNCLEAN)
+    run = make_run(True, outcomes={"tests/test_a.py::test_a": "passed"}, log_dir=tmp_path)
+    monkeypatch.setattr(p2p, "run_verifiers", lambda *a, **k: (replace(run, log_too_big=True),))
+    got = p2p._probe(TASK, ("tests/test_a.py",), RESULT, context(TASK, tmp_path), 30)
+    assert got == (None, "base-probe-log-over-cap") and got[1] not in p2p.UNCLEAN
+
+
+def test_a_log_over_the_cap_twice_degrades_once_then_is_uncomparable(monkeypatch, tmp_path):
+    # #481, through the real _probe: whole-suite over the log cap, module-dir over it again
+    run = make_run(True, outcomes={"tests/test_calc.py::test_a": "passed"}, log_dir=tmp_path)
+    probed = []
+
+    def fake_run_verifiers(ctx, commit, specs, run_id, **kwargs):
+        probed.append(specs[0].targets)
+        return (replace(run, log_too_big=True),)
+
+    existing = ("tests/nested/test_big.py", "tests/test_calc.py")
+    monkeypatch.setattr(p2p, "_base_tests", lambda task, exclude: existing)
+    monkeypatch.setattr(p2p, "run_verifiers", fake_run_verifiers)
+    with pytest.raises(p2p.BaseUncomparable) as raised:
+        p2p.plan_p2p(TASK, (), (), "whole-suite", 30, RESULT, context(TASK, tmp_path))
+    assert uncomparable(raised.value) and probed == [existing, ("tests/test_calc.py",)]
+    assert "base-probe-log-over-cap" in str(raised.value), str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("taint", "on_timeout"),
+    [
+        ({"forged": ("tests/__pycache__/test_a.cpython-312.pyc",)}, "base-probe-forged"),
+        ({"survivors": 1}, "base-probe-timeout"),  # the timeout's kill can leave a survivor count
+        ({"mutated": ("junk.txt",)}, "base-probe-timeout"),  # or a half-written file
+    ],
+)
+@pytest.mark.parametrize("cap", ["timed_out", "report_too_big", "log_too_big"])
+def test_an_unclean_probe_that_also_hit_a_limit_keeps_its_unclean_reason(
+    monkeypatch, tmp_path, cap, taint, on_timeout
+):
+    """#481 sweep: a limit must not hide an unclean base run behind a reason that degrades. The
+    exception is survivors or mutated after a timeout: the timeout's own kill can produce them
+    (under the verifier account the reaper counts the timed-out main process), so that run is
+    still read as a timeout and may be retried narrower. Forged bytecode is found by a scan after
+    the run, which no timeout or cap can cause, so it is never masked."""
+    run = make_run(False, timed_out=cap == "timed_out", log_dir=tmp_path)
+    run = replace(run, **({} if cap == "timed_out" else {cap: True}), **taint)
+    unclean = p2p.UNCLEAN[("survivors", "mutated", "forged").index(next(iter(taint)))]
+    want = on_timeout if cap == "timed_out" else unclean
+    monkeypatch.setattr(p2p, "run_verifiers", lambda *args, **kwargs: (run,))
+    got = p2p._probe(TASK, ("tests/test_a.py",), RESULT, context(TASK, tmp_path), 30)
+    assert got == (None, want), got

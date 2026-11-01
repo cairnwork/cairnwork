@@ -46,6 +46,10 @@ CASES = {
         "    sys.path_importer_cache.clear()",
         "    cache = {}  # an ordinary cache variable is fine",
     ),
+    "pytest_public_patch": (
+        "    pytest.TestReport.passed = property(lambda self: True)",
+        "    if report.outcome == 'passed':  # a report object, not pytest's class, is fine",
+    ),
 }
 
 
