@@ -258,6 +258,23 @@ def test_an_exit_that_is_not_a_signal_is_not_fenced(tmp_path, monkeypatch, dispa
     assert not isinstance(caught.value, WorkerMayLive)
 
 
+@pytest.mark.parametrize("timeout", [False, True], ids=["external", "our-timeout"])
+@pytest.mark.parametrize("dispatch", WORKERS, ids=["raw-agy", "owner-dispatch", "worker-account"])
+@pytest.mark.parametrize("code", [0, 1, 143])
+def test_a_process_holding_the_output_after_an_exit_is_fenced(
+    tmp_path, monkeypatch, dispatch, timeout, code
+):
+    """#537 A: a process that outlives agy and keeps its output open may carry no marker, so a
+    clean owner sweep does not show it gone: the run is fenced on every path, after our timeout
+    too (a dispatcher ends with its own code on our stop), not failed plainly.
+    Fakes only: no signal is sent, no process table is read."""
+    run = _ending(tmp_path, monkeypatch, dispatch, code, timeout)
+    monkeypatch.setattr(agy_module, "_stop", lambda *_a, **_k: (True, Sweep(listed=True)))
+    with pytest.raises(WorkerMayLive, match="^WORKER_SWEEP_UNCLEAN: ") as caught:
+        run()
+    assert caught.value.account == (getattr(dispatch, "run_as_user", None) or "")
+
+
 @pytest.mark.sandbox
 def test_an_owner_mode_agy_that_may_live_leaves_its_task_fenced(project, tmp_path, monkeypatch):  # noqa: F811
     """End to end: the FAILED task carries the mark, SUPERSEDED is refused, and the takeover
@@ -279,3 +296,14 @@ def test_an_owner_mode_agy_that_may_live_leaves_its_task_fenced(project, tmp_pat
     monkeypatch.setattr(takeover, "sweep_marked", lambda *_a, **_k: Sweep(listed=True))
     done = takeover.supersede(ledger, result.task_id, journal=journal)
     assert done.status == "SUPERSEDED" and ledger.unswept_attempt(result.task_id) is None
+
+
+@pytest.mark.parametrize("exc", [RecursionError("deep"), OSError("record")], ids=["parse", "write"])
+def test_a_signal_end_stays_fenced_when_settling_the_run_raises(tmp_path, monkeypatch, exc):
+    """#537 B: with agy_run_as_user, an exception from settling the run (parsing its status lines,
+    writing its record) must not skip the fence a signal end gets. Fakes only, as above."""
+    run = _ending(tmp_path, monkeypatch, Dispatch("dispatcher", run_as_user=WORKER), -9, False)
+    _settling_raises(monkeypatch, exc)
+    with pytest.raises(WorkerMayLive, match="^WORKER_SWEEP_UNCLEAN: KILLED_BY_SIGNAL: 9") as caught:
+        run()
+    assert caught.value.__cause__ is exc and caught.value.account == WORKER
