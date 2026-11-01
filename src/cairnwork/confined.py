@@ -81,16 +81,19 @@ def execute(
 
 
 def _sweep_survivors(token: str, group: int, dirs: tuple[str, ...] = (), mark: str = "") -> int:
-    """Anything not shown gone counts (#578); a look that killed none and is not gone is redone."""
-    found = sweep_marked(RUN_TOKEN_VAR, token, skip_group=group, dispatched=mark, cwd_dirs=dirs)
-    if found.listed and not found.found and not found.gone:  # e.g. one exited: a child left?
-        found = sweep_marked(RUN_TOKEN_VAR, token, skip_group=group, dispatched=mark, cwd_dirs=dirs)
-    return 0 if found.gone else max(1, found.found)
+    """Each process found at any look counts once; none only after two clean looks (#578, #599)."""
+    found: set[int] = set()
+
+    def look() -> Sweep:  # confirm_gone, as recovery: one exited, a child it left is seen next
+        one = sweep_marked(RUN_TOKEN_VAR, token, skip_group=group, dispatched=mark, cwd_dirs=dirs)
+        found.update(pid for pid, why in one.held_by if why in ("marked", "cwd"))
+        return one
+
+    return len(found) if confirm_gone(look(), look).gone else max(1, len(found))
 
 
 SWEEP_UNAVAILABLE = -1  # recovery.Decision.killed_processes when the table could not be read
-CONFIRM_TRIES = 10  # looks after a kill until the killed processes are shown gone (confirm_gone)
-CONFIRM_WAIT = 0.1
+CONFIRM_TRIES, CONFIRM_WAIT = 10, 0.1  # looks (and the wait between) of confirm_gone
 HIDDEN_TRIES = 3  # re-reads of a process whose environment was hidden (fork/exec hides it briefly)
 HIDDEN_WAIT = 0.05
 START_MARGIN = 5.0  # seconds: a hidden process started this much before DISPATCHED is old
@@ -154,8 +157,6 @@ class Sweep:
 
 
 KEPT_BY = ("marked", "cwd", "hidden", "worker-account")  # the labels of Sweep.held_by
-
-
 UNLISTED = Sweep(listed=False)
 
 
@@ -216,8 +217,7 @@ def sweep_marked(
 
 
 def _kill_marked(rows, marker: str) -> tuple[list[int], list[int], int]:
-    """(pids SIGKILL was delivered to, pids that refused it, how many had already exited) of
-    the rows that carry marker."""
+    """(pids SIGKILL reached, pids that refused it, how many had exited) of rows with marker."""
     killed, denied, vanished = [], [], 0
     for pid, _pgid, _uid, environment in rows:
         if marker not in environment:
