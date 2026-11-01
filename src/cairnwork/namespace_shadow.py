@@ -18,21 +18,23 @@ verifier's interpreter (``_PROBE``), the base's entries under the other roots (t
 each test root and every directory in one, as pytest's prepend mode may put any of them on
 sys.path; which one is in front is not modelled) and the base's own entry under R. At a
 directory level the candidate only adds a namespace portion, which loses to any module or
-regular package found on sys.path: own module or package (that the task cannot delete),
-interpreter ``path``, or nothing anywhere end the walk, allowed. Interpreter ``meta`` (resolved
-by find_spec, not by PathFinder) is refused: the portion would win. At the leaf the candidate
-defines the module or package itself, refused when any other source has the name, unless the
-base already tracks the very path and the task refuses deletions (snapshot writes only regular
-files at the listed paths, so it stays the same module). A path is also walked with each
-spelling of its directories that the base or another path uses (equal up to case: one directory
-on APFS, whose on-disk case Python matches). A probe or listing failure protects every such
-path; a base that git says is no commit is left to the later refusals, as in
-``pytest_config.gate_import_paths``. Without a repository or base commit (pycache_guard's
-per-file check) the rule is not applied; check_task passes both.
+regular package found on sys.path: own module or package (that the task cannot delete and whose
+file does not extend its own ``__path__``, namespace_open_init), interpreter ``path``, or
+nothing anywhere end the walk, allowed. Interpreter ``meta`` (resolved by find_spec, not by
+PathFinder) is refused: the portion would win. So is interpreter ``path`` where the own file
+extends its ``__path__``: its own directory is searched first (unless the base tracks the path,
+as at the leaf), new names included. At the leaf the candidate defines the module or package
+itself, refused when any other source has the name, unless the base already tracks the very path
+and the task refuses deletions (snapshot writes only regular files at the listed paths, so it
+stays the same module). A path is also walked with each spelling of its directories that the
+base or another path uses (equal up to case: one directory on APFS, whose on-disk case Python
+matches). A probe or listing failure protects every such path; a base that git says is no commit
+is left to the later refusals, as in ``pytest_config.gate_import_paths``. Without a repository
+or base commit (pycache_guard's per-file check) the rule is not applied; check_task passes both.
 
-Not covered: base code that edits ``sys.path`` itself (#385's limit), data files read through
-``importlib.resources`` from a namespace, and new names in a pkgutil-style package probed with
-``try: import``.
+Not covered: base code that edits ``sys.path`` itself (#385's limit), a ``__path__`` change
+that namespace_open_init does not see, data files read through ``importlib.resources`` from a
+namespace, and new names in a pkgutil-style package probed with ``try: import``.
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ import sys
 from pathlib import Path
 
 from cairnwork.gitcmd import GitCommandError, run_git
+from cairnwork.namespace_open_init import opens_its_path
 
 # Every suffix Python imports a first-level file by: source, sourceless bytecode and extension
 # modules. A committed ``.pyc``/``.so`` shadows just as a ``.py`` does (verified on APFS) and is not
@@ -143,7 +146,11 @@ def namespace_shadows(
         return set(candidates)  # no proof of safety: refuse before binding or verification
     entries = [entry.split("\t", 1) for entry in tree.split("\0") if entry]
     listing = [path for _, path in entries]
-    regular = {path for meta, path in entries if meta.split(" ", 1)[0] in _REGULAR_MODES}
+    regular = {
+        path: meta.split(" ")[-1]
+        for meta, path in entries
+        if meta.split(" ", 1)[0] in _REGULAR_MODES
+    }
     spellings = _spellings(listing, tuple(candidates))
     walks = {
         path: [found for variant in spellings[path] for found in _chains(variant, import_roots)]
@@ -159,7 +166,7 @@ def namespace_shadows(
     others = (*import_roots, *_test_dirs(listing, test_roots, sealed))
     firsts = {chain[0].casefold() for chain in names}
     deletable = {path.casefold() for path in paths} if allow_deletions else set()
-    base = _Base(listing, others, firsts, deletable, regular, suffixes)
+    base = _Base(listing, others, firsts, deletable, regular, suffixes, repo)
     return {
         path
         for path, found in walks.items()
@@ -174,12 +181,15 @@ def _takes_over(
     path: str, root: str, chain: list[str], leaf: bool, kinds: list[str], base: _Base
 ) -> bool:
     """The walk of one chain under one root (see the module docstring)."""
+    kept = path in base.tracked and path.casefold() not in base.deletable
     for depth in range(1, len(chain) + 1):
         parts = tuple(chain[:depth])
         found = kinds[depth - 1] if depth <= len(kinds) else "none"
         taken = found != "none" or base.elsewhere(root, parts)
         if leaf and depth == len(chain):
-            return taken and not (path in base.tracked and path.casefold() not in base.deletable)
+            return taken and not kept
+        if found == "path" and base.opened(root, parts):
+            return not kept
         if base.concrete(root, parts) or found == "path" or not taken:
             return False
         if found == "meta":
@@ -192,7 +202,8 @@ class _Base:
     casefolded for the other roots (more is refused), exact for the candidate's own root (only
     an exact entry wins on APFS), there with the files that make it a module or package: regular
     files (a symlink may dangle, a submodule is a directory) named exactly as the verifier's
-    Python loads them, ``<name>`` or ``__init__`` plus one of its ``all_suffixes()``."""
+    Python loads them, ``<name>`` or ``__init__`` plus one of its ``all_suffixes()``. Whether such
+    a file extends its own ``__path__`` is read from repo once (namespace_open_init)."""
 
     def __init__(
         self,
@@ -200,10 +211,13 @@ class _Base:
         roots: tuple[str, ...],
         firsts: set[str],
         deletable: set[str],
-        regular: set[str],
+        regular: dict[str, str],
         suffixes: frozenset[str],
+        repo: Path,
     ) -> None:
         self.roots, self.tracked, self.deletable = roots, set(listing), deletable
+        self.regular, self.repo = regular, repo
+        self.open: dict[str, bool] = {}
         self.folded: set[tuple[str, tuple[str, ...]]] = set()
         self.exact: dict[tuple[str, tuple[str, ...]], set[str]] = {}
         for path in listing:
@@ -229,9 +243,19 @@ class _Base:
         return any(other != root and (other, _fold(parts)) in self.folded for other in self.roots)
 
     def concrete(self, root: str, parts: tuple[str, ...]) -> bool:
-        """A module or regular package of exactly this name under root, which the task keeps."""
+        """A module or regular package of exactly this name under root, which the task keeps and
+        which does not extend its own ``__path__``."""
         files = self.exact.get((root, parts), set())
-        return bool(files) and not {path.casefold() for path in files} & self.deletable
+        if not files or {path.casefold() for path in files} & self.deletable:
+            return False
+        return not self.opened(root, parts)
+
+    def opened(self, root: str, parts: tuple[str, ...]) -> bool:
+        """Whether a file of exactly this name under root extends its own ``__path__``."""
+        files = self.exact.get((root, parts), set())
+        for path in files - self.open.keys():
+            self.open[path] = opens_its_path(self.repo, self.regular[path])
+        return any(self.open[path] for path in files)
 
 
 def _chains(path: str, import_roots: tuple[str, ...]) -> list[tuple[str, list[str], bool, str]]:
