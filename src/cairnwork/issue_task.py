@@ -303,3 +303,28 @@ def _gql_login(actor: Any) -> str | None:
     if kind == "Bot":
         return f"{actor['login']}[bot]"
     return actor["login"] if kind == "User" else None
+
+
+def settle_check(github: Any, number: int, known: Mapping[str, Any], intake: Any, labels) -> None:
+    """Before settle releases a finished task (#624), the check take makes right before dispatch:
+    the Issue must still carry the block take bound, and its queueing must still be trusted.
+    Otherwise the Issue moves to needs-fix with one comment and RuntimeError tells settle; no PR
+    is opened for the old block. Re-queueing is left to a trusted person: a queue label added by
+    the bot would count earlier edits as made before the label."""
+    queue, running, needs_fix = labels
+    roots = tuple(intake.config()["test_roots"])
+    try:
+        block = parse_task_block(github.current(number).get("body") or "", roots).block_sha256
+    except IssueRefused:
+        block = ""
+    reason = "" if block and block == known.get("block_sha256") else "ISSUE_CHANGED_AFTER_TAKE"
+    reason = reason or github.trust(number, queue)
+    if not reason:
+        return
+    github.relabel(number, needs_fix, running)
+    github.comment(
+        number,
+        f"Cairnwork 沒有開 PR：`{reason}`。接手後 Issue 的區塊或可信狀態變了，"
+        f"這次的結果不代表現在的需求。確認區塊後，移除 `{needs_fix}` 再加上 `{queue}`。",
+    )
+    raise RuntimeError(reason)
