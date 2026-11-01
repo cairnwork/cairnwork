@@ -1,16 +1,17 @@
 """Property tests pinning issue_task.settle_check, the re-check before settle opens a PR (#624).
 
 A mutation sweep (2026-11-02) found checks that no test pinned: which label settle asks trust
-about, the configured test roots, and what happens when GitHub or the local config fails.
-settle_check asks trust(n, "cairnwork:queue") first (an untrusted body is never parsed), then
-reads the current body, then parses it with the configured roots; a body that no longer parses
-or no longer matches the bound block hash counts as changed (ISSUE_CHANGED_AFTER_TAKE). A
-refusal moves the Issue to needs-fix with exactly one comment and raises RuntimeError. A GitHub
-or config error is not a changed Issue: it propagates, with no relabel and no comment.
+about and what happens when GitHub fails. settle_check asks trust(n, "cairnwork:queue") first
+(an untrusted body is never parsed), then reads the current body; a body without exactly one
+eia-task block, or whose block text no longer hashes to the bound block, counts as changed
+(ISSUE_CHANGED_AFTER_TAKE). The block is not parsed again with the configured test roots, so a
+roots change after take does not count as an edit (#649). A refusal moves the Issue to
+needs-fix with exactly one comment and raises RuntimeError. A GitHub error is not a changed
+Issue: it propagates, with no relabel and no comment.
 
 Pure fakes (no git, no clone): a GitHub that records every call and answers trust() per label,
-so a wrong label is visible, and an intake that only has config(). test_issue_settle_recheck.py
-uses a FakeGitHub whose trust() ignores the label.
+so a wrong label is visible. test_issue_settle_recheck.py uses a FakeGitHub whose trust()
+ignores the label.
 """
 
 import json
@@ -32,16 +33,6 @@ def block(cmd="python3 -m pytest -q tests/test_calc.py", files=("src/calc.py",))
     raw = {"difficulty": "easy", "allowed_files": list(files), "verification": [cmd],
            "capability_ids": ["x"]}  # fmt: skip
     return f"Bug\n\n```eia-task\n{json.dumps(raw)}\n```\n"
-
-
-class Intake:
-    def __init__(self, roots=("tests",), error=None):
-        self.roots, self.error = list(roots), error
-
-    def config(self):
-        if self.error:
-            raise self.error
-        return {"test_roots": self.roots}
 
 
 class GitHub:
@@ -70,9 +61,9 @@ class GitHub:
         self.calls.append(("comment", number, text))
 
 
-def run(github, known, intake=None):
+def run(github, known):
     try:
-        settle_check(github, 7, known, intake or Intake(), LABELS)
+        settle_check(github, 7, known, LABELS)
     except RuntimeError as exc:
         return str(exc)
     return ""
@@ -136,7 +127,19 @@ def test_the_configured_test_roots_are_used():
     """An Issue whose verifier sits under a configured root (pkg/tests) still gets its PR."""
     text = block(cmd="python3 -m pytest -q pkg/tests/test_calc.py")
     known = {"block_sha256": parse_task_block(text, ("pkg/tests",)).block_sha256}
-    assert run(GitHub(text), known, Intake(("pkg/tests",))) == ""
+    assert run(GitHub(text), known) == ""
+
+
+def test_a_test_roots_change_after_take_is_not_an_edit():
+    """#649: take read the block with the root pkg/tests, which the default roots no longer
+    allow. The block text is unchanged, so settle still opens the PR."""
+    text = block(cmd="python3 -m pytest -q pkg/tests/test_calc.py")
+    known = {"block_sha256": parse_task_block(text, ("pkg/tests",)).block_sha256}
+    with pytest.raises(IssueRefused):
+        parse_task_block(text)  # the roots now in force would refuse a fresh take
+    github = GitHub(text)
+    assert run(github, known) == ""
+    assert not moves_of(github, "relabel") and not moves_of(github, "comment")
 
 
 @pytest.mark.parametrize("error", [RuntimeError("gh: HTTP 502"), OSError("timeout")])
@@ -146,17 +149,8 @@ def test_a_github_read_failure_propagates_without_relabel_or_comment(error):
     known = {"block_sha256": parse_task_block(block()).block_sha256}
     github = GitHub(block(), current_error=error)
     with pytest.raises(type(error)) as caught:
-        settle_check(github, 7, known, Intake(), LABELS)
+        settle_check(github, 7, known, LABELS)
     assert caught.value is error
-    assert not moves_of(github, "relabel") and not moves_of(github, "comment")
-
-
-@pytest.mark.parametrize("error", [OSError("config.json unreadable"), KeyError("test_roots")])
-def test_a_config_failure_propagates_without_relabel_or_comment(error):
-    known = {"block_sha256": parse_task_block(block()).block_sha256}
-    github = GitHub(block())
-    with pytest.raises(type(error)):
-        settle_check(github, 7, known, Intake(error=error), LABELS)
     assert not moves_of(github, "relabel") and not moves_of(github, "comment")
 
 
