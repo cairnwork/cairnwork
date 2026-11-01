@@ -171,7 +171,7 @@ def read_status(text: str) -> dict:
         return {}
     try:
         status = json.loads(text[len(STATUS_PREFIX) :])
-    except ValueError:
+    except (ValueError, RecursionError):  # too deep to parse is malformed too (#537 B)
         return {}
     return status if isinstance(status, dict) else {}
 
