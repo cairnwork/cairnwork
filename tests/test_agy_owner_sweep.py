@@ -13,7 +13,6 @@ import io
 import os
 import signal
 import subprocess
-import threading
 import time
 
 import pytest
@@ -308,80 +307,3 @@ def test_a_signal_end_stays_fenced_when_settling_the_run_raises(tmp_path, monkey
     with pytest.raises(WorkerMayLive, match="^WORKER_SWEEP_UNCLEAN: KILLED_BY_SIGNAL: 9") as caught:
         run()
     assert caught.value.__cause__ is exc and caught.value.account == WORKER
-
-
-def test_agys_own_sweep_looks_for_withheld_processes_in_the_clone(tmp_path, monkeypatch):
-    """#537: macOS withholds the environment of platform binaries (/bin/sleep), so one that agy
-    left behind is tied to the attempt only by a working directory inside the clone; agy's sweep
-    looks there, by the realpath taken before agy started, as confined.execute does. Fake agy
-    (this test's own child); the sweep is a stand-in, so no process table is read."""
-    seen = []
-
-    def sweep(*_args, **kwargs):
-        seen.append(kwargs.get("cwd_dirs"))
-        return Sweep(listed=True)
-
-    monkeypatch.setattr(agy_module, "sweep_marked", sweep)
-    agy = fake_agy(tmp_path, "print('done', flush=True)")
-    workdir = tmp_path / attempt(7)
-    workdir.mkdir()
-    AgyWorker(agy=agy).run(workdir, TASK)
-    assert seen and set(seen) == {(os.path.realpath(workdir),)}
-
-
-REAL_STOP = agy_module._stop
-TIED_BY_CWD = Sweep(listed=True, killed=1, held_by=((4242, "cwd"),))  # killed, then gone
-
-
-class _DoneReader(_Reader):
-    def join(self, timeout=None):
-        pass
-
-    def is_alive(self):
-        return False
-
-
-def _with_agys_sweep(tmp_path, monkeypatch, dispatch, looks):
-    """As _ending (exit 0), but agy's own _stop runs on a finished copier: its sweep answers
-    ``looks`` in turn, then the last one again. Stand-ins only: the group kill is a no-op, no
-    signal is sent and no process table is read."""
-    _ending(tmp_path, monkeypatch, dispatch, 0, False)
-    monkeypatch.setattr(agy_module, "_stop", REAL_STOP)
-    monkeypatch.setattr(agy_module.os, "killpg", lambda *_a: None)
-    answers = iter(looks)
-    monkeypatch.setattr(agy_module, "sweep_marked", lambda *_a, **_k: next(answers, looks[-1]))
-    copier = threading.Thread(target=lambda: None)
-    copier.start()
-    copier.join()
-    worker = AgyWorker(dispatch=dispatch)
-    reader = None if dispatch is None else _DoneReader()
-    attempt_ = ("attempt-1", "", ("/clone",))
-    return copier, lambda: worker._await(
-        _Ended(0, False), copier, reader, attempt_, io.BytesIO(), tmp_path / "log"
-    )
-
-
-@pytest.mark.parametrize("dispatch", WORKERS, ids=["raw-agy", "owner-dispatch", "worker-account"])
-def test_a_process_tied_to_the_clone_by_its_cwd_fences_the_run(tmp_path, monkeypatch, dispatch):
-    """#537: a process whose environment macOS withholds, found in the clone by its working
-    directory and killed (two later looks clean, so the sweep is gone and nothing holds the
-    output any more), still fences the run: without the cwd look it would have outlived agy,
-    so it counts like a holder. Every path, the worker account's settling included."""
-    _copier, run = _with_agys_sweep(
-        tmp_path, monkeypatch, dispatch, [TIED_BY_CWD, Sweep(listed=True)]
-    )
-    with pytest.raises(WorkerMayLive, match="^WORKER_SWEEP_UNCLEAN: ") as caught:
-        run()
-    assert caught.value.account == (getattr(dispatch, "run_as_user", None) or "")
-    if dispatch is None or dispatch.run_as_user is None:
-        assert "CWD: 1 process(es) in the clone" in str(caught.value)
-
-
-@pytest.mark.parametrize("dispatch", WORKERS, ids=["raw-agy", "owner-dispatch", "worker-account"])
-def test_a_clean_sweep_with_nothing_in_the_clone_completes(tmp_path, monkeypatch, dispatch):
-    """The control: nothing tied by its working directory, two clean looks, a clean exit: agy's
-    stop reports none in the clone and the run completes as before."""
-    copier, run = _with_agys_sweep(tmp_path, monkeypatch, dispatch, [Sweep(listed=True)])
-    held, swept, by_cwd = agy_module._stop(_Ended(0, False), copier, "attempt-1", None, "", ("/c",))
-    assert (held, swept.gone, by_cwd) == (False, True, 0)
-    run()

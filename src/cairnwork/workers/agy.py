@@ -248,12 +248,10 @@ class AgyWorker:
                 if process.stderr is not None:
                     process.stderr.close()
                 log.close()
-        completion = None
+        completion, why = None, "HELD" * held or "CWD" * bool(by_cwd)  # cwd: as a holder (#537)
         try:
             if dispatch is not None and dispatch.run_as_user is not None:
-                completion = _settle_worker_run(  # a cwd kill is judged as a holder (#537)
-                    dispatch, reader, process, held or bool(by_cwd), timed_out, log_path
-                )
+                completion = _settle_worker_run(dispatch, reader, process, why, timed_out, log_path)
         except Exception as exc:  # an interrupt is not replaced: recovery then sweeps the run
             self._fence(swept, log_path, exc)
             if process.returncode < 0 and not isinstance(exc, WorkerMayLive):  # #537 B
@@ -329,7 +327,7 @@ def _settle_worker_run(dispatch, reader, process, held, timed_out, log_path) -> 
     # no final status line: it ended outside its protocol (a crash, os._exit), so a launch
     # after the last receipt may be unrecorded too, whatever the exit code (#546)
     unfinished = receipts.final is None and not signalled
-    ended = ["TIMED_OUT"] * (timed_out is not None) + ["HELD"] * held
+    ended = ["TIMED_OUT"] * (timed_out is not None) + [held] * bool(held)  # "HELD" or "CWD"
     ended += [f"KILLED_BY_SIGNAL: {-code}; launches after the last receipt unknown"] * signalled
     ended += ["NO_FINAL_STATUS: launches after the last receipt unknown"] * unfinished
     extra = [completion] if completion else []
@@ -367,14 +365,15 @@ def _stop(
     process, copier, attempt: str, reader=None, mark: str = "", dirs: tuple[str, ...] = ()
 ) -> tuple[bool, Sweep, int]:
     """Kill agy's group and anything it started outside it that still carries the attempt
-    marker; return (whether something still holds agy's output pipe, the sweep). The sweep is
-    gone only when two looks in a row after the kill find none of the owner's processes marked
-    (confirm_gone, as takeover.py): else the run may live and is fenced (#63 (a)). ``mark``: the
+    marker; return three values: whether something still holds agy's output pipe, the sweep,
+    and how many processes it tied to the clone by cwd (below). The sweep is gone only when two
+    looks in a row after the kill find none of the owner's processes marked (confirm_gone, as
+    takeover.py): else the run may live and is fenced (#63 (a)). ``mark``: the
     boot mark taken before agy started; a hidden process older than it is not the run's, as in
     takeover.py (Linux; "" elsewhere, where none is hidden for good). ``dirs``: the clone's
     realpath taken before agy started; on macOS a process whose environment is withheld is tied
-    to the attempt when its working directory is inside it, as in confined.execute (#537); the
-    third value counts those, at any look (the run is then fenced, even once they are gone)."""
+    to the attempt when its working directory is inside it, as in confined.execute (#537); those
+    count once each, at any look (the run is then fenced, even once they are gone)."""
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
