@@ -1,0 +1,26 @@
+{
+  "date": "2026-11-01",
+  "main_sha": "c513c4ed3bf2411776872f02fffebc2089dc67a1",
+  "drill": "failure",
+  "command": "CAIRNWORK_REQUIRE_SANDBOX=1 nice -n 19 uv run pytest -q -rs tests/test_pipeline.py",
+  "exit": 0,
+  "summary": "30 passed in 43.45s",
+  "passed": 30,
+  "failed": 0,
+  "skipped": 0,
+  "failure_paths": {
+    "wrong-fix": "CORE_FAILED_VERIFICATION",
+    "out-of-scope-edit": "DIRTY_TREE",
+    "no-change": "NO_COMMIT",
+    "worker-crash": "WORKER_FAILED"
+  },
+  "also_covered": [
+    "18 bad task specs refused before anything runs (BAD_SCOPE, PROTECTED_VERIFIER_INPUT, TASK_ALLOWED_FILES_PROTECTED, VERIFIER_NOT_ALLOWED)",
+    "resend does not run again",
+    "infrastructure errors end FAILED with a reason",
+    "bad base commit refused before binding",
+    "an unbound Core response is not CORE_VERIFIED"
+  ],
+  "worker": "scripted test workers; no agy, no model",
+  "real_agent_part": "not re-run: worker paused since 2026-10-30; last record docs/drills/2026-10-20-failure.json"
+}

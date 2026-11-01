@@ -1,0 +1,31 @@
+{
+  "date": "2026-11-01",
+  "main_sha": "c513c4ed3bf2411776872f02fffebc2089dc67a1",
+  "drill": "restart",
+  "command": "CAIRNWORK_REQUIRE_SANDBOX=1 nice -n 19 uv run pytest -q -rs tests/test_recovery.py",
+  "exit": 0,
+  "summary": "26 passed in 57.50s",
+  "passed": 26,
+  "failed": 0,
+  "skipped": 0,
+  "fault_points": [
+    "DISPATCHED",
+    "WORKER_STARTED",
+    "CANDIDATE",
+    "TEST_SOURCE",
+    "VERIFYING",
+    "NOTARIZING",
+    "FINISHED"
+  ],
+  "also_covered": [
+    "orphan process killed after SIGKILL mid worker (scripted worker)",
+    "SIGKILL during verification",
+    "run lock held by a live run",
+    "idempotent recovery",
+    "another owner's task left untouched",
+    "leftover run directories removed"
+  ],
+  "verifier_account_tests": "none: tests/test_recovery.py has no test marked verifier_account",
+  "worker": "the crash driver's scripted fix (tests/crash_driver.py); no agy, no model",
+  "real_agent_part": "not re-run: worker paused since 2026-10-30; last record docs/drills/2026-10-20-restart.json"
+}
