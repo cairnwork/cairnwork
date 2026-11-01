@@ -18,7 +18,7 @@ import pytest
 from hypothesis import HealthCheck, example, given, seed, settings
 from hypothesis import strategies as st
 
-from cairnwork.issue_task import MAX_ALLOWED_FILES, IssueRefused, parse_task_block
+from cairnwork.issue_task import IssueRefused, parse_task_block
 
 SETTINGS = settings(
     max_examples=300, deadline=None, derandomize=True,
@@ -84,10 +84,10 @@ def test_text_that_is_not_json_is_refused_as_json_invalid(text):
 # 2. Counts: allowed_files 1..10 distinct, verification 1..8 (reference oracle).
 @SETTINGS
 @seed(20261102)
-@given(files=st.lists(safe_path, min_size=0, max_size=MAX_ALLOWED_FILES + 2))
+@given(files=st.lists(safe_path, min_size=0, max_size=12))
 def test_allowed_files_take_one_to_ten_distinct_paths(files):
     got = code_of(body(json.dumps({**GOOD, "allowed_files": files})))
-    ok = 0 < len(files) <= MAX_ALLOWED_FILES and len(set(files)) == len(files)
+    ok = 0 < len(files) <= 10 and len(set(files)) == len(files)
     if ok:
         assert not isinstance(got, str), got
         assert got.allowed_files == tuple(files)
