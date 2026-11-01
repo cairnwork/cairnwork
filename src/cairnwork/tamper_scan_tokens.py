@@ -10,6 +10,8 @@ opened on an earlier line (an unchanged one included) holds both as plain text. 
   separates statements, as Python reads them; the rest of the line is as written.
 * ``skip``: the line holds no code for Python: only a comment, or text of a plain string
   literal (not an f-string or t-string, whose braces hold code), or both.
+* ``bound``: only the code of the line: every string literal masked whole and the comment cut
+  off (empty when ``skip``). tamper_scan reads the names an import binds from this text.
 
 tamper_scan scans ``code`` in addition to the line as written, so the view only adds findings, and
 skips a ``#`` line only when ``skip`` agrees. A file that is not UTF-8 or does not tokenize
@@ -53,6 +55,7 @@ _TEXT_TOKENS = frozenset(
 class LineView:
     code: str
     skip: bool
+    bound: str
 
 
 Views = dict[tuple[int, int], LineView]
@@ -72,6 +75,7 @@ def file_views(data: bytes) -> Views | None:
     if any(token.type == tokenize.ERRORTOKEN for token in tokens):
         return None  # Python 3.11 reports some unreadable source this way instead of raising
     chars = [list(row) for row in rows]
+    bare = [list(row) for row in rows]  # every string literal masked whole: code only
     comments: dict[int, int] = {}  # row index -> column where a real comment starts
     separators: set[tuple[int, int]] = set()
     code_rows: set[int] = set()  # rows holding a token other than plain string text or comment
@@ -81,7 +85,8 @@ def file_views(data: bytes) -> Views | None:
         elif token.type == tokenize.OP and token.string == ";":
             separators.add((token.start[0] - 1, token.start[1]))
         if token.type in _TEXT_TOKENS:
-            _mask(chars, token.start, token.end)
+            _mask(chars, token.start, token.end, _SYNTAX)
+            _mask(bare, token.start, token.end, None)
         if token.type not in _NO_CODE or _PREFIX_CODE & set(_prefix(token)):
             code_rows.update(range(token.start[0] - 1, token.end[0]))
     views: Views = {}
@@ -90,7 +95,9 @@ def file_views(data: bytes) -> Views | None:
         for column in range(start):  # outside a comment, a stray "#" or ";" is text, not syntax
             if row[column] == "#" or (row[column] == ";" and (index, column) not in separators):
                 row[column] = _MASK
-        views[key] = LineView("".join(row), index not in code_rows)
+        skip = index not in code_rows
+        bound = "" if skip else "".join(bare[index][: comments.get(index, len(row))])
+        views[key] = LineView("".join(row), skip, bound)
     return views
 
 
@@ -112,14 +119,19 @@ def _rows(text: str) -> tuple[list[tuple[int, int]], list[str]]:
     return keys, rows
 
 
-def _mask(chars: list[list[str]], start: tuple[int, int], end: tuple[int, int]) -> None:
-    """Replace each ``#`` and ``;`` of one string-literal token with ``_MASK``."""
+def _mask(
+    chars: list[list[str]],
+    start: tuple[int, int],
+    end: tuple[int, int],
+    only: frozenset[str] | None,
+) -> None:
+    """Replace the characters in ``only`` (all when None) of one string-literal token."""
     for row in range(start[0] - 1, end[0]):
         line = chars[row]
         first = start[1] if row == start[0] - 1 else 0
         last = end[1] if row == end[0] - 1 else len(line)
         for column in range(first, min(last, len(line))):
-            if line[column] in _SYNTAX:
+            if only is None or line[column] in only:
                 line[column] = _MASK
 
 
