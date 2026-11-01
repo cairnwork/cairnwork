@@ -251,6 +251,12 @@ class AgyWorker:
                 )
         except Exception as exc:  # an interrupt is not replaced: recovery then sweeps the run
             self._fence(swept, log_path, exc)
+            if process.returncode < 0 and not isinstance(exc, WorkerMayLive):  # #537 B
+                raise AgyWorkerUnswept(  # a signal end stays fenced, whatever settling raised
+                    f"WORKER_SWEEP_UNCLEAN: KILLED_BY_SIGNAL: {-process.returncode}; settling"
+                    f" the run raised {type(exc).__name__}; log {log_path}",
+                    self.run_as,
+                ) from exc
             raise
         self._fence(swept, log_path)
         if process.returncode < 0:  # any signal end, ours included (#244); with agy_run_as_user

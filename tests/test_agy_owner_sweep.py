@@ -291,3 +291,14 @@ def test_an_owner_mode_agy_that_may_live_leaves_its_task_fenced(project, tmp_pat
     monkeypatch.setattr(takeover, "sweep_marked", lambda *_a, **_k: Sweep(listed=True))
     done = takeover.supersede(ledger, result.task_id, journal=journal)
     assert done.status == "SUPERSEDED" and ledger.unswept_attempt(result.task_id) is None
+
+
+@pytest.mark.parametrize("exc", [RecursionError("deep"), OSError("record")], ids=["parse", "write"])
+def test_a_signal_end_stays_fenced_when_settling_the_run_raises(tmp_path, monkeypatch, exc):
+    """#537 B: with agy_run_as_user, an exception from settling the run (parsing its status lines,
+    writing its record) must not skip the fence a signal end gets. Fakes only, as above."""
+    run = _ending(tmp_path, monkeypatch, Dispatch("dispatcher", run_as_user=WORKER), -9, False)
+    _settling_raises(monkeypatch, exc)
+    with pytest.raises(WorkerMayLive, match="^WORKER_SWEEP_UNCLEAN: KILLED_BY_SIGNAL: 9") as caught:
+        run()
+    assert caught.value.__cause__ is exc and caught.value.account == WORKER
