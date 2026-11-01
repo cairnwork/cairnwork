@@ -57,6 +57,8 @@ KEYS = frozenset(
 )
 _LATEST = datetime.max.replace(tzinfo=UTC)
 TRUSTED_ACTORS = frozenset({"James3014", "james3014-nexus-agent[bot]"})
+# GitHub.trust's answer when GitHub's reply could not be read: a refusal, not a verdict (#648)
+TRUST_CHECK_FAILED = "TRUST_CHECK_FAILED"
 
 
 class IssueRefused(Exception):
@@ -89,7 +91,7 @@ def parse_task_block(body: str, roots: tuple[str, ...] = DEFAULT_TEST_ROOTS) -> 
         raise IssueRefused("TASK_BODY_HAS_FOREIGN_CONTRACT")
     try:
         raw = json.loads(blocks[0])
-    except ValueError as exc:
+    except (ValueError, RecursionError) as exc:  # deep nesting raises RecursionError (#650)
         raise IssueRefused("TASK_BLOCK_JSON_INVALID") from exc
     if not isinstance(raw, dict) or set(raw) - KEYS:
         raise IssueRefused("TASK_BLOCK_KEYS_INVALID")
@@ -311,9 +313,13 @@ def settle_check(github: Any, number: int, known: Mapping[str, Any], intake: Any
     the Issue must still carry the block take bound, and its queueing must still be trusted.
     Otherwise the Issue moves to needs-fix with one comment and RuntimeError tells settle; no PR
     is opened for the old block. Re-queueing is left to a trusted person: a queue label added by
-    the bot would count earlier edits as made before the label."""
+    the bot would count earlier edits as made before the label. A trust reply that could not be
+    read says nothing about the Issue: no PR either, but it stays running and the verified result
+    is kept for the next pass (#648)."""
     queue, running, needs_fix = labels
     reason = github.trust(number, queue)  # first, as take: an untrusted body is never parsed
+    if reason == TRUST_CHECK_FAILED:
+        raise RuntimeError(reason)
     if not reason:
         body = github.current(number).get("body") or ""  # a GitHub error: retried next pass
         roots = tuple(intake.config()["test_roots"])  # a local config error: retried next pass

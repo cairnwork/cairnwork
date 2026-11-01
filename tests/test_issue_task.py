@@ -1,7 +1,11 @@
 import json
 
 import pytest
+from test_issue_runner import FakeGitHub, issue
+from test_issue_runner import setup as setup  # noqa: F401 - fixture
 
+import cairnwork.issue_runner as runner
+import cairnwork.issue_task as issue_task
 from cairnwork.issue_task import IssueRefused, parse_task_block, queue_trusted
 
 GOOD = {
@@ -133,3 +137,25 @@ def test_the_latest_label_event_counts():
 
 def test_a_test_commit_is_carried():
     assert parse_task_block(body({**GOOD, "test_commit": "a" * 40})).test_commit == "a" * 40
+
+
+def test_a_block_nested_too_deep_to_decode_is_refused():
+    """#650: json.loads raises RecursionError, not ValueError, for deep nesting (3.11 to 3.14)."""
+    deep = "[" * 100_000 + "]" * 100_000
+    text = f"Bug text\n\n```eia-task\n{deep}\n```\n"
+    with pytest.raises(IssueRefused) as refused:
+        parse_task_block(text)
+    assert refused.value.code == "TASK_BLOCK_JSON_INVALID"
+
+
+def test_take_refuses_a_block_the_decoder_cannot_nest(setup, monkeypatch):  # noqa: F811
+    """#650: a RecursionError in the decoder is a refusal (needs-fix), not a retry every pass."""
+
+    def deep(_text, *a, **k):
+        raise RecursionError("maximum recursion depth exceeded while decoding a JSON array")
+
+    monkeypatch.setattr(issue_task.json, "loads", deep)
+    github = FakeGitHub([issue()])
+    out = runner.take(setup["intake"], github, setup["clone"])
+    assert out[0]["refused"] == "TASK_BLOCK_JSON_INVALID", out
+    assert github.labels[7] == {runner.NEEDS_FIX}
