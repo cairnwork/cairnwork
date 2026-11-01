@@ -15,7 +15,12 @@ added import (``import os as o``, ``from sys import modules as m``, ``import pyt
 is followed on that line and the added lines after it; an alias bound only in an unchanged
 (context) line, by a parenthesised import split over lines, a backslash continuation or
 ``from sys import *`` is not seen. Text inside string literals is scanned like code, as for
-every rule (an aliased name in a string can be flagged). The diff is cut into lines only at a
+every rule (an aliased name in a string can be flagged). Which ``#`` starts a comment and which
+``;`` ends a statement is Python's own reading of the whole committed file (tamper_scan_tokens.py):
+each line is also scanned with every ``#`` and ``;`` inside a string literal masked, so one in a
+string, or a string opened on an earlier line, does not cut a statement short or hide one, and a
+foreign encoding declared on line 1 or 2 of the committed file is refused even when that line is
+unchanged. The diff is cut into lines only at a
 newline and file headers are read only between hunks, so no text inside an added line ends it
 early; a carriage return, which Python also reads as a line end, starts a new piece to scan.
 Python reads identifiers in NFKC form, so each piece is also matched with its identifier
@@ -25,7 +30,8 @@ and the PoCs seen so far, and it fails closed with a dedicated reason so an oper
 The rule list is the one place to change; the alias and library checks reuse its names and
 allow-lists.
 
-To keep honest code out of the net (#221): pure comment lines are skipped; the rules that only
+To keep honest code out of the net (#221): a line that starts with ``#`` and holds no code for
+Python (only a comment or plain string text) is skipped; the rules that only
 matter where pytest runs the candidate's test code (``sys.modules`` writes, ``_pytest`` internals,
 pytest hook implementations) apply in full only to test code (``conftest.py``, ``test_*.py``,
 ``*_test.py`` and files under a ``tests``/``test``/``testing`` directory), so a library's own
@@ -44,15 +50,16 @@ already pays.
 
 from __future__ import annotations
 
-import codecs
 import posixpath
 import re
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
-from cairnwork.gitcmd import GitCommandError, run_git_bytes
+from cairnwork.gitcmd import OID, GitCommandError, run_git_bytes
+from cairnwork.tamper_scan_diff import added_lines
 from cairnwork.tamper_scan_pytest import PYTEST_CLASSES, PYTEST_PUBLIC_PATCH, canonical_pytest
+from cairnwork.tamper_scan_tokens import added_file, file_views
 
 CODE = "VERIFIER_TAMPER_API"
 
@@ -275,34 +282,79 @@ class Finding:
         return f"{self.path}:{self.line} [{self.rule}]"
 
 
-def scan_added_lines(path: str, lines: list[tuple[int, str]]) -> list[Finding]:
-    """Findings for the added ``(line number, text)`` pairs of one file (``.py`` files only)."""
+def scan_added_lines(
+    path: str, lines: list[tuple[int, str]], data: bytes | None = None
+) -> list[Finding]:
+    """Findings for the added ``(line number, text)`` pairs of one file (``.py`` files only).
+
+    ``data`` is the whole file as committed (scan_patch passes it): Python's reading of its
+    comments and strings comes from there (tamper_scan_tokens.py). Without it, a file made of the
+    added lines alone stands in.
+    """
     if not path.endswith(".py"):
         return []
     in_conftest = posixpath.basename(path) == "conftest.py"
     in_tests = _is_test_path(path)
     # Aliases bound so far by the added lines, in order (context lines are not in the diff).
     aliases: dict[str, set[str]] = {key: set() for key in ("sys", "os", "gc", "modules", "_exit")}
+    masked_aliases = {key: set(names) for key, names in aliases.items()}  # also from masked lines
+    source = data if data is not None else added_file(lines)
+    views = (file_views(source) if source is not None else None) or {}  # none: no comment skip
     found = []
     # Python also ends a source line at "\r" (CRLF included), so each piece is scanned on its own.
-    pieces = [(number, piece) for number, line in lines for piece in line.split("\r")]
-    for number, piece in pieces:
-        if number <= 2 and _foreign_coding(piece):
-            found.append(Finding(path, number, "source_encoding"))
-        if _COMMENT_ONLY.match(piece):
-            continue
-        names: list[str] = []
-        # Python compiles identifiers in NFKC form (PEP 3131): the piece as written, then that form.
-        for text in dict.fromkeys((piece, _nfkc_names(piece))):
-            for rule in RULES:
-                if (rule.skip_in_conftest and in_conftest) or (rule.tests_only and not in_tests):
-                    continue
-                if _hits(rule, text) and rule.name not in names:
-                    names.append(rule.name)
-            _bind_aliases(text, aliases)  # before the extra checks: "import os as o; o._exit(0)"
-            names += [name for name in _extra_rules(text, aliases, in_tests) if name not in names]
-        found += [Finding(path, number, name) for name in names]
-    return found
+    for number, line in lines:
+        for index, piece in enumerate(line.split("\r")):
+            view = views.get((number, index))
+            if number <= 2 and _foreign_coding(piece):
+                found.append(Finding(path, number, "source_encoding"))
+            if _COMMENT_ONLY.match(piece) and view and view.skip and len(view.code) == len(piece):
+                continue  # a comment to Python, or string text with no code on the line
+            # Main's reading, with its own alias table; a line main skips as a comment has none.
+            plain = () if _COMMENT_ONLY.match(piece) else (piece, _nfkc_names(piece))
+            names = _rule_names(plain, aliases, masked_aliases, in_tests, in_conftest)
+            code = piece if view is None else view.code  # "#", ";" in a string masked
+            masked = (code, _nfkc_names(code))  # read with a table of its own: only adds names
+            if masked != plain or masked_aliases != aliases:
+                more = _rule_names(masked, masked_aliases, None, in_tests, in_conftest)
+                names += [name for name in more if name not in names]
+            found += [Finding(path, number, name) for name in names]
+    return found + _committed_coding(path, data, found)
+
+
+def _rule_names(
+    texts: tuple[str, ...],
+    aliases: dict[str, set[str]],
+    also: dict[str, set[str]] | None,
+    in_tests: bool,
+    in_conftest: bool,
+) -> list[str]:
+    """Rule names for ``texts`` read with ``aliases``; their imports also bind into ``also``."""
+    names: list[str] = []
+    # Python compiles identifiers in NFKC form (PEP 3131): each text, then that form.
+    for text in dict.fromkeys(texts):
+        for rule in RULES:
+            if (rule.skip_in_conftest and in_conftest) or (rule.tests_only and not in_tests):
+                continue
+            if _hits(rule, text) and rule.name not in names:
+                names.append(rule.name)
+        _bind_aliases(text, aliases)  # before the extra checks: "import os as o; o._exit(0)"
+        if also is not None:
+            _bind_aliases(text, also)
+        names += [name for name in _extra_rules(text, aliases, in_tests) if name not in names]
+    return names
+
+
+def _committed_coding(path: str, data: bytes | None, found: list[Finding]) -> list[Finding]:
+    """A foreign source encoding declared on line 1 or 2 of the committed file, unchanged too."""
+    if data is None:
+        return []
+    seen = {finding.line for finding in found if finding.rule == "source_encoding"}
+    head = enumerate(data.decode("latin-1").split("\n")[:2], start=1)  # the cookie is ASCII
+    return [
+        Finding(path, number, "source_encoding")
+        for number, line in head
+        if number not in seen and any(_foreign_coding(piece) for piece in line.split("\r"))
+    ]
 
 
 def _nfkc_names(text: str) -> str:
@@ -315,68 +367,6 @@ def _foreign_coding(text: str) -> bool:
     """A comment declaring a source encoding other than UTF-8 (read by Python on line 1 or 2)."""
     found = _CODING.match(text)
     return found is not None and not _UTF8.fullmatch(found.group(1))
-
-
-_HUNK = re.compile(r"@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
-_INDEX = re.compile(r"index [0-9a-f]+\.\.([0-9a-f]+)")
-# A new side with no lines to show: a deleted file (all zeros) or the empty blob (SHA-1, SHA-256).
-_NO_LINES = re.compile(
-    r"0+|e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
-    r"|473a0f4c3be8a93681a267e3b1e9a7dcda1185436fe141f7749120a303721813"
-)
-
-
-def added_lines(diff: str) -> dict[str, list[tuple[int, str]]]:
-    """The added lines of a ``git diff -U0`` text, by new path with their new line numbers.
-
-    A line ends only at "\\n" (git ends every diff line there; any other line break inside is
-    content). Inside a hunk, its header's counts say how many old and new lines follow, so an
-    added line that starts with "++ " or "@@" is content, not a file or hunk header. A diff whose
-    lines do not match those counts raises GitCommandError (unreadable, so the change is refused),
-    as does a file whose ``index`` line names new content but whose lines the diff does not show.
-    """
-    files: dict[str, list[tuple[int, str]]] = {}
-    current, number, old_left, new_left = None, 0, 0, 0
-    owed = False  # an "index" line named new content; its "+++" header has not come yet
-    for raw in diff.removesuffix("\n").split("\n"):
-        if old_left > 0 or new_left > 0:
-            # "" is a blank context line (diff.suppressBlankEmpty); "\ No newline" counts for none
-            kind = raw[:1] or " "
-            if kind not in "+- \\":
-                raise GitCommandError("diff line inside a hunk has no +, -, space or \\ prefix")
-            if kind == "+" and current is not None:
-                files[current].append((number, raw[1:]))
-            old_left -= kind in "- "  # a bool counts as 0 or 1
-            new_left -= kind in "+ "
-            number += kind in "+ "
-            if old_left < 0 or new_left < 0:
-                raise GitCommandError("diff hunk has more lines than its header counts")
-        elif raw.startswith(("+", "-", " ")) and not raw.startswith(("+++ ", "--- ")):
-            raise GitCommandError("diff line outside a hunk")
-        elif raw.startswith("diff --git ") and owed:
-            raise GitCommandError("diff shows a changed file without its lines")
-        elif index := _INDEX.match(raw):
-            owed = not _NO_LINES.fullmatch(index.group(1))
-        elif raw.startswith("+++ "):
-            owed = False
-            target = _unquote(raw[4:].rstrip("\t"))  # git appends a tab to a path with a space
-            current = target[2:] if target.startswith("b/") else None
-            if current is not None:
-                files.setdefault(current, [])
-        elif hunk := _HUNK.match(raw):
-            old_left, number = int(hunk.group(1) or 1), int(hunk.group(2))
-            new_left = int(hunk.group(3) or 1)
-    if old_left > 0 or new_left > 0 or owed:
-        raise GitCommandError("diff ends inside a hunk or without a changed file's lines")
-    return files
-
-
-def _unquote(name: str) -> str:
-    """git C-quotes a path with special characters (``"b/a\\tb.py"``, octal escapes for bytes)."""
-    if len(name) < 2 or not (name.startswith('"') and name.endswith('"')):
-        return name
-    raw = name[1:-1].encode("utf-8", "surrogateescape")
-    return codecs.escape_decode(raw)[0].decode("utf-8", "surrogateescape")
 
 
 def scan_patch(repo: Path, base: str, head: str) -> list[Finding]:
@@ -393,8 +383,11 @@ def scan_patch(repo: Path, base: str, head: str) -> list[Finding]:
         diff = raw.decode("utf-8")
     except UnicodeDecodeError as exc:  # as run_git: a change that is not UTF-8 is unreadable
         raise GitCommandError("git diff output is not UTF-8") from exc
-    return [
-        finding
-        for path, lines in added_lines(diff).items()
-        for finding in scan_added_lines(path, lines)
-    ]
+    if not OID.fullmatch(head):  # read as "<commit>:<path>" below, so never an option
+        raise GitCommandError("head is not a full commit id")
+    found = []
+    for path, lines in added_lines(diff).items():
+        if path.endswith(".py") and lines:  # the whole file as committed, for Python's reading
+            data = run_git_bytes(repo, "cat-file", "blob", f"{head}:{path}")
+            found += scan_added_lines(path, lines, data)
+    return found
