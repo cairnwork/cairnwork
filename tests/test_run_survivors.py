@@ -11,7 +11,7 @@ import sys
 
 import pytest
 
-from cairnwork import confined
+from cairnwork import confined, proc_cwd, proc_start
 from cairnwork.confined import Sweep
 
 TOKEN = "run578-token"
@@ -101,10 +101,10 @@ def test_a_clean_table_counts_no_survivor(monkeypatch):
 
 def test_the_real_process_table_shows_a_fresh_token_gone(tmp_path):
     """On this host, with nothing started: the escape check counts no survivor (a busy host's
-    hidden or withheld processes outside the fresh checkout do not count)."""
-    assert (
-        confined._sweep_survivors(f"{TOKEN}-{os.getpid()}", -1, (os.path.realpath(tmp_path),)) == 0
-    )
+    hidden processes that predate the mark, as execute takes it, or withheld ones outside the
+    fresh checkout do not count)."""
+    token, mark = f"{TOKEN}-{os.getpid()}", proc_start.boot_mark()
+    assert confined._sweep_survivors(token, -1, (os.path.realpath(tmp_path),), mark) == 0
 
 
 def test_execute_sweeps_with_the_checkout_and_the_start_mark(monkeypatch, tmp_path):
@@ -177,7 +177,10 @@ def test_a_checkout_swapped_for_a_symlink_keeps_the_sweep_where_the_run_started(
 
 
 def _only(pid: int, monkeypatch) -> list:
-    """The real ps row of this test's own child, as the only process the sweep can see."""
+    """The real ps row of this test's own child, as the only process the sweep can see; skips
+    where macOS shows the child's environment (some CI runners), so the cwd path is not used."""
+    if not proc_cwd.environment_withheld(pid):
+        pytest.skip("this host shows platform binaries' environment")
     done = subprocess.run(  # noqa: S603 - fixed argv, an integer pid
         ["/bin/ps", "-wwE", "-o", confined._PS_COLUMNS, "-p", str(pid)],
         capture_output=True,
