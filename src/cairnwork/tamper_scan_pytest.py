@@ -7,10 +7,13 @@ too, not only test code), an added line that changes an attribute of one of ``PY
 below (the report, item, session, config, plugin-manager, exception-info and ``raises`` matcher
 classes, nothing else) reached through ``pytest.``: as the target of ``=`` or an augmented
 assignment, with an annotation, inside a tuple, list or parentheses, as a ``for`` or ``with``
-target, in ``del``, or passed to ``setattr``/``delattr``; and any line that mentions
-``from_item_and_call``. An alias bound by an added import (``import pytest as p``,
-``from pytest import TestReport as R``) is followed by tamper_scan's alias machinery, which
-spells it as ``pytest.<Class>`` with ``canonical_pytest`` below. Type hints, ``isinstance``
+target (a keyword may touch a bracket or digit, as Python allows), in ``del``, passed to
+``setattr``/``delattr`` or to ``unittest.mock``'s ``patch``, ``patch.object`` or
+``patch.multiple``; and any line that mentions ``from_item_and_call``. An annotation may hold
+``==`` and its target may be in parentheses. An alias bound by an added import
+(``import pytest as p``, ``from pytest import TestReport as R``, also ``import(`` with no
+space) is followed by tamper_scan's alias machinery, which spells it as ``pytest.<Class>`` with
+``canonical_pytest`` below. Type hints, ``isinstance``
 checks, reads, comparisons, calls and keyword arguments pass. Accepted costs (honest code also
 refused): a self-documenting f-string (``f"{pytest.Item.name=}"``), ``del`` of a mapping entry
 keyed by such an attribute, and a plugin that builds reports with ``from_item_and_call``.
@@ -52,14 +55,17 @@ _ASSIGN = r"(?:[-+*/%&|^@]|//|\*\*|<<|>>)?=(?!=)"  # ``=``, ``+=``, ``>>=``; not
 _TARGET = r"(?:(?![\w.)\]]\s*[(\[])[\w\s.,*()\[\]])"
 _FOR_TARGET = rf"(?:(?!\bin\b){_TARGET})"  # a ``for`` target ends at ``in``
 _START = r"(?:^|[;:])\s*"  # where a statement starts on the line
+_KEYWORD = r"(?<![^\W\d])"  # a keyword may follow a digit or bracket directly ("0for", ")as(")
 PYTEST_PUBLIC_PATCH = (
     rf"{_CHAIN}\s*{_ASSIGN}"
     # in a tuple, list or parentheses: a run of target characters up to "=" that holds the chain
     # (the possessive run first, so a long line is read once per statement, not once per offset)
     rf"|{_START}(?={_TARGET}*+{_ASSIGN}){_TARGET}*?{_CHAIN}"
-    rf"|{_START}{_CHAIN}\s*:[^=#;]*=(?!=)"  # with an annotation
-    rf"|\bfor\s(?={_FOR_TARGET}*+\bin\b){_FOR_TARGET}*?{_CHAIN}"
-    rf"|\bas\s+[(\[\s]*{_CHAIN}\s*[:,)\]]"  # a ``with`` target
+    rf"|{_START}[(\s]*{_CHAIN}[\s)]*:(?:==|[^=#;])*=(?!=)"  # with an annotation ("==" inside)
+    rf"|{_KEYWORD}for\b(?={_FOR_TARGET}*+\bin\b){_FOR_TARGET}*?{_CHAIN}"
+    rf"|{_KEYWORD}as\b\s*[(\[\s]*{_CHAIN}\s*[:,)\]]"  # a ``with`` target
+    # unittest.mock's patch, patch.object and patch.multiple, which set the attribute for the caller
+    rf"|\bpatch(?:\s*\.\s*(?:object|multiple))?\s*\(\s*['\"]?{_OBJECT}"
     # setattr/delattr on the class, also unpacked or a "pytest.TestReport.x" string target
     rf"|\b_*(?:set|del)attr_*\s*\(\s*[*(\s]*['\"]?{_OBJECT}"
     rf"|\bdel\b[^#;]*{_OBJECT}\s*\."
