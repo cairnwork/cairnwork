@@ -47,6 +47,9 @@ COMMITMENT = DECLARED.commitment()  # what the receiver recomputes from its own 
 CHECKS = sorted(check.id for check in DECLARED.checks)  # ["add", "mul"]
 OTHER = "sha256:" + "cd" * 32
 MISSING, MISMATCH = "BLACKBOX_CHECKS_MISSING", "BLACKBOX_COMMITMENT_MISMATCH"
+# #651: the binding names pytest-0; ids without it pass the pins, then the coverage check refuses
+# (a test commit needs a pytest verifier, so no producer signs such a receipt)
+NOT_REQUIRED = "VERIFIER_NOT_REQUIRED"
 PIN = {"blackbox_commitment": COMMITMENT}
 STRICT = {"blackbox_commitment": COMMITMENT, "protection": "blackbox"}
 ALL = ("pytest-0", "blackbox:add", "blackbox:mul")
@@ -60,8 +63,8 @@ ROWS: dict[str, tuple[tuple[str, ...], dict[str, Any], dict[str, Any] | None, st
     "D_all_present": (ALL, {}, PIN, "OK", "OK"),
     "E_no_pins": (("pytest-0",), {}, {}, "OK", "OK"),
     "F_strict_no_ids": (("pytest-0",), {}, STRICT, "UNPROTECTED", "UNPROTECTED"),
-    "G_strict_one_missing": (("blackbox:add",), {}, STRICT, "OK", MISSING),
-    "H_strict_foreign_id": (("blackbox:zzz",), {}, STRICT, "OK", MISSING),
+    "G_strict_one_missing": (("blackbox:add",), {}, STRICT, NOT_REQUIRED, MISSING),
+    "H_strict_foreign_id": (("blackbox:zzz",), {}, STRICT, NOT_REQUIRED, MISSING),
     "I_required_check_failed": (ALL, {"failing": ("blackbox:mul",)}, PIN, MISSING, MISSING),
     "J_observed_not_required": (
         ("pytest-0", "blackbox:add"), {"unrequired": ("blackbox:mul",)}, PIN, MISSING, MISSING
@@ -72,7 +75,7 @@ ROWS: dict[str, tuple[tuple[str, ...], dict[str, Any], dict[str, Any] | None, st
         ("pytest-0",), {"blackbox_commitment": ""}, {"blackbox_commitment": ""}, "OK", "OK"
     ),
     "N_strict_all_and_gate": (
-        ("blackbox:add", "blackbox:mul", "protection"), {}, STRICT, "OK", "OK"
+        ("blackbox:add", "blackbox:mul", "protection"), {}, STRICT, NOT_REQUIRED, NOT_REQUIRED
     ),
     "O_order_differs": (("blackbox:mul", "pytest-0", "blackbox:add"), {}, PIN, "OK", "OK"),
     "P_no_policy": (("pytest-0", "blackbox:add"), {}, None, "OK", "OK"),  # out of #312's scope

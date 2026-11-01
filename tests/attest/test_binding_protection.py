@@ -27,6 +27,9 @@ from tests.attest.binding_helpers import (
 
 CHECKED = ("pytest-0", "blackbox:add")
 COMMITMENT = "sha256:" + "c" * 64  # as the producer records it whenever a declaration was given
+# #651: a blackbox-only id list leaves out the bound pytest-0; no producer signs such a receipt
+# (a test commit needs a pytest verifier), and the receiver refuses it after the label and pins
+NOT_REQUIRED = "VERIFIER_NOT_REQUIRED"
 
 
 def _world(
@@ -80,8 +83,8 @@ def test_the_receiver_reports_the_level(world, plain):
 
 def test_the_strict_gate_is_not_counted(tmp_path):
     w = _world(tmp_path / "gate", "blackbox", ("blackbox:add", "protection"))
-    out = check(w)
-    assert out.ok and out.assurance is not None and out.assurance["protection"] == "blackbox"
+    # the label check passed; the bound pytest-0 is not required, so coverage refuses (#651)
+    assert check(w).code == NOT_REQUIRED
 
 
 @pytest.mark.parametrize(
@@ -151,9 +154,9 @@ def test_the_linux_grade_meets_a_macos_minimum(world):
 
 def test_a_blackbox_macos_receipt_does_not_meet_a_blackbox_pin(tmp_path):
     w = _world(tmp_path / "bbmac", "blackbox_macos", ("blackbox:add",))
-    assert check(w).ok
+    assert check(w).code == NOT_REQUIRED  # past the label and pins; see the strict gate test
     assert check(w, policy=minimum(w, "blackbox")).code == "UNPROTECTED"
-    assert check(w, policy=minimum(w, "blackbox_macos")).ok
+    assert check(w, policy=minimum(w, "blackbox_macos")).code == NOT_REQUIRED
 
 
 @pytest.mark.parametrize(

@@ -18,8 +18,9 @@ Two modes, chosen by whether the receiver holds the test commit:
 The policy is the receiver's own configuration (load_policy), never shipped by the submitter or
 read from the receipt. Checks run in a fixed order and the first failure is reported: signature
 (verify.py, plus the policy's key id), shape, policy, binding-hash chain, head, base, test source,
-pinned optional keys (binding_extras), tree (full) or head-tree (confidential), Core verdict. Full
-mode writes the rebuilt tree objects (trees only, no refs) into the receiver's repository.
+pinned optional keys (binding_extras), tree (full) or head-tree (confidential), Core verdict,
+coverage (verify_coverage). Full mode writes the rebuilt tree objects (trees only, no refs) into
+the receiver's repository.
 """
 
 from __future__ import annotations
@@ -39,6 +40,7 @@ from cairnwork.notary_verify import binding_hash
 from cairnwork_attest import binding_extras
 from cairnwork_attest.binding_extras import KEYS, binding_problem, pin_problem, policy_problem
 from cairnwork_attest.record import AttestError, _digest, parse_strict_json
+from cairnwork_attest.verify_coverage import coverage_problem
 from cairnwork_attest.verify_response import VerifyResult, _check_response_verified, _fail
 from cairnwork_protocol import acceptance_contract_hash, change_manifest_hash
 
@@ -182,6 +184,8 @@ def verify_bound(
         err = _check_response_verified(ctx.predicate, pin)
         if err is not None:
             return err
+    if (err := coverage_problem(ctx)) is not None:  # #651: what the verdict's runs covered
+        return err
     assurance = _assurance(full, pinned=policy is not None)
     # #303: what the verdict rests on, already checked against Core's required ids (pin_problem)
     assurance["protection"] = binding_extras.recorded_protection(binding)
