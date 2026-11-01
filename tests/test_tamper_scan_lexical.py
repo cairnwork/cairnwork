@@ -6,6 +6,7 @@ first checks with ``ast`` that Python compiles the statement the rule is about.
 """
 
 import ast
+import unicodedata
 
 import pytest
 from conftest import git
@@ -237,6 +238,25 @@ def test_scan_patch_takes_only_a_full_commit_id(repo):
 def test_an_alias_bound_only_inside_a_string_or_comment_does_not_hide_a_later_call(
     path, source, rule
 ):
+    call = unicodedata.normalize("NFKC", source.rstrip("\n").split("\n")[-1])
+    assert _compiles(source, call)
+    assert rule in _rules(path, source)
+
+
+@pytest.mark.parametrize("path", [TEST, LIBRARY])
+@pytest.mark.parametrize(
+    ("bind", "name", "call", "rule"),
+    [
+        ("import os as o", "os", "o._exit(0)", "os_exit"),
+        ("import gc as g", "gc", "g.get_objects()", "gc_walk"),
+    ],
+)
+def test_an_alias_bound_only_inside_a_string_does_not_hide_a_call_after_it_closes(
+    path, bind, name, call, rule
+):
+    text = "from sys import modules as " + name
+    source = bind + '\nx = """\n' + text + '\n# """; ' + call + "\n"
+    assert _compiles(source, call)
     assert rule in _rules(path, source)
 
 
