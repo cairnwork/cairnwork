@@ -1,0 +1,77 @@
+{
+  "date": "2026-11-01",
+  "main_sha": "c513c4ed3bf2411776872f02fffebc2089dc67a1",
+  "drill": "verifier-account",
+  "command": "cairnwork-verify --state <drill dir>/state run --repo-path <drill dir>/project --base 6c45ff47d0d4307f80ef21bb4dc134f80e60d872 --candidate <sha> --allowed-file src/stats.py --verifier 'python3 -m pytest -q tests/test_stats.py'",
+  "state_config": {
+    "verifier_account": true,
+    "verifier_python": null
+  },
+  "project": "the drill_normal.py project (src/stats.py average() divides by len + 1; tests/test_stats.py has 2 tests that fail on the base)",
+  "base_commit": "6c45ff47d0d4307f80ef21bb4dc134f80e60d872",
+  "worker": "none: both candidates are commits made by hand on the base; no agy, no model",
+  "verifier_account": "cairnwork-verifier",
+  "cases": {
+    "good": {
+      "candidate": "correct fix",
+      "candidate_commit": "f1f96c24e03f9a2f068ad3ca955244c977a7d654",
+      "diff": "-    return sum(values) / (len(values) + 1)\n+    return sum(values) / len(values)",
+      "expected_verified": true,
+      "exit": 0,
+      "status": "VERIFIED",
+      "verified": true,
+      "core_status": "VERIFIED",
+      "reason": "CORE_VERIFIED",
+      "task_id": "verify-97e20f3268b89ba2",
+      "attempt_id": "ace8fe0f2fc5b95e1",
+      "verifier_mode": "account",
+      "verifier_log": "/Users/Shared/cairnwork/runs/ace8fe0f2fc5b95e1-v-v0.dneva_24/verifier.log",
+      "pytest_summary": "2 passed in 0.01s"
+    },
+    "bad": {
+      "candidate": "known-bad: the line still adds 1",
+      "candidate_commit": "b977f8adefa44b55cbbd190928b941cb9369cee1",
+      "diff": "-    return sum(values) / (len(values) + 1)\n+    return sum(values) / len(values) + 1",
+      "expected_verified": false,
+      "exit": 2,
+      "status": "FAILED",
+      "verified": false,
+      "core_status": "FAILED_VERIFICATION",
+      "reason": "CORE_FAILED_VERIFICATION [pytest-0: pytest exit code 1]",
+      "task_id": "verify-a073bd35f63719b1",
+      "attempt_id": "aee7ef95abdd0e8db",
+      "verifier_mode": "account",
+      "verifier_log": "/Users/Shared/cairnwork/runs/aee7ef95abdd0e8db-v-v0._f37b_on/verifier.log",
+      "pytest_summary": "2 failed in 0.02s",
+      "owned_by_account_during_run": [
+        "PROC cairnwork-verifier 74418 /Users/Shared/cairnwork/venv/bin/python -P -m pytest -q -p no:cacheprovider -c /Users/Shared/cairnwork/runs/aee7ef95abdd0e8db-v-v0._f37b_on/pytest.ini --rootdir=/Users/Shared/",
+        "FILE -rw-r--r-- 1 cairnwork-verifier cairnwork 131 Nov 1 14:15 /Users/Shared/cairnwork/runs/aee7ef95abdd0e8db-v-v0.work/aee7ef95abdd0e8db-v-v0/src/stats.py",
+        "FILE -rw-r--r-- 1 cairnwork-verifier cairnwork 145 Nov 1 14:15 /Users/Shared/cairnwork/runs/aee7ef95abdd0e8db-v-v0.work/aee7ef95abdd0e8db-v-v0/tests/test_stats.py"
+      ]
+    },
+    "good2": {
+      "candidate": "correct fix",
+      "candidate_commit": "f1f96c24e03f9a2f068ad3ca955244c977a7d654",
+      "diff": "-    return sum(values) / (len(values) + 1)\n+    return sum(values) / len(values)",
+      "expected_verified": true,
+      "exit": 0,
+      "status": "VERIFIED",
+      "verified": true,
+      "core_status": "VERIFIED",
+      "reason": "CORE_VERIFIED",
+      "task_id": "verify-54f9bd226491fa12",
+      "attempt_id": "afe2a18f02e2b186c",
+      "verifier_mode": "account",
+      "verifier_log": "/Users/Shared/cairnwork/runs/afe2a18f02e2b186c-v-v0.37m79lfo/verifier.log",
+      "pytest_summary": "2 passed in 0.01s",
+      "owned_by_account_during_run": [
+        "PROC cairnwork-verifier 75175 /Users/Shared/cairnwork/venv/bin/python -P -m pytest -q -p no:cacheprovider -c /Users/Shared/cairnwork/runs/afe2a18f02e2b186c-v-v0.37m79lfo/pytest.ini --rootdir=/Users/Shared/",
+        "FILE -rw-r--r-- 1 cairnwork-verifier cairnwork 127 Nov 1 14:15 /Users/Shared/cairnwork/runs/afe2a18f02e2b186c-v-v0.work/afe2a18f02e2b186c-v-v0/src/stats.py",
+        "FILE -rw-r--r-- 1 cairnwork-verifier cairnwork 145 Nov 1 14:15 /Users/Shared/cairnwork/runs/afe2a18f02e2b186c-v-v0.work/afe2a18f02e2b186c-v-v0/tests/test_stats.py"
+      ]
+    }
+  },
+  "passed": true,
+  "account_processes_after": 0,
+  "note": "Since report_guard.py the verifier no longer writes junit.xml, so ownership is shown by a read-only sampler (find -user cairnwork-verifier, ps) while the run was in progress: the checkout files (src/stats.py, tests/test_stats.py) and the pytest process belonged to cairnwork-verifier. The run directories keep only verifier.log, pytest.ini and the guard, written by the owner. Order of runs: good 14:14, bad 14:15:42, good2 14:15:50 (Asia/Taipei)."
+}
