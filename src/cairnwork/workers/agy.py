@@ -12,8 +12,8 @@ Cairnwork's environment do not reach it; proxy URLs may carry credentials, and
 agy can read anything under HOME, so this narrows exposure, it is no boundary.
 Its output is copied into the log by the parent, capped like a verifier log; a
 process it started outside its group is killed if it still carries the attempt
-marker, and one that still holds the output afterwards fails the run. If that sweep cannot
-show the marked processes gone (a kill refused, the table unreadable), the run raises
+marker, and one that still holds the output afterwards fails the run, fenced (#537). If that
+sweep cannot show the marked processes gone (a kill refused, the table unreadable), the run raises
 WorkerMayLive, so the attempt is fenced like an unswept worker account's (#244, #63): on the
 owner's account, or with ``agy_run_as_user`` on the worker account (its takeover sweep covers
 the owner's marked processes too).
@@ -263,8 +263,12 @@ class AgyWorker:
             ) from timed_out
         if timed_out is not None:
             raise AgyWorkerError("agy timed out") from timed_out
-        if held:
-            raise AgyWorkerError("a process agy started outlived it and holds its output")
+        if held:  # a holder without the marker is not one the sweep finds: fenced (#537 A)
+            raise AgyWorkerUnswept(
+                "WORKER_SWEEP_UNCLEAN: HELD: a process agy started outlived it and holds its"
+                f" output; log {log_path}",
+                self.run_as,
+            )
         if reader is not None:
             agy_dispatch.raise_if_exhausted(reader.status(), process.returncode, log_path)
             agy_dispatch.raise_if_worker_refused(reader.status(), log_path)
