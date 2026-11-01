@@ -229,11 +229,11 @@ def _imported_names(clause: str) -> list[tuple[str, str | None]]:
 
 
 def _canonical(text: str, aliases: Table) -> set[str]:
-    """The line with every known alias spelled as the plain name, so main's rules read it: twice,
-    pytest's last and first, so a name bound to pytest (or a class) and to sys.modules is read as
-    each."""
-    pytest_last = canonical_pytest(_plain(text, aliases), aliases)
-    return {pytest_last, _plain(canonical_pytest(text, aliases), aliases)}
+    """The line with every known alias spelled as the plain name, so main's rules read it: as main
+    does, then unwrapped with pytest's aliases last and first (a name bound twice reads as each)."""
+    plain = _plain(text, aliases)
+    unwrapped = {canonical_pytest(plain, aliases), _plain(canonical_pytest(text, aliases), aliases)}
+    return {canonical_pytest(plain, aliases, unwrap=False), *unwrapped}
 
 
 def _plain(text: str, aliases: Table) -> str:

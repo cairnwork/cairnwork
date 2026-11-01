@@ -107,12 +107,18 @@ PYTEST_HINT_IMPORT = (  # one complete line; an open "(" continuing on the next 
 )
 
 # A name, attribute chain or subscript in brackets of its own, not a call's: Python reads
-# ``(pytest.Item).runtest`` as ``pytest.Item.runtest``. Nested ones are read from the inside out,
-# to the depth Python's parser allows (200).
-_BRACKETED = re.compile(r"(?<![\w)\]])\(\s*([^\W\d]\w*(?:\s*(?:\.\s*\w+|\[[^\[\]()]*\]))*)\s*\)")
+# ``(pytest.Item).runtest`` as ``pytest.Item.runtest``. Brackets right after a name or a closing
+# bracket (spaces between included) are a call's or a subscript's and stay; after a keyword they
+# are the expression's own. Nested ones are read from the inside out, to the depth Python's parser
+# allows (200).
+_KEYWORDS = r"and|as|assert|await|del|elif|else|for|from|if|in|is|not|or|raise|return|while|with"
+_BEFORE = rf"(^|[^\w\s)\]]|(?<![\w.])(?:{_KEYWORDS}|yield))(\s*)"
+_BRACKETED = re.compile(rf"{_BEFORE}\(\s*([^\W\d]\w*(?:\s*(?:\.\s*\w+|\[[^\[\]()]*\]))*)\s*\)")
 
 # A pytest hook implementation in test code: a hook's name bound by ``def``, an assignment or an
-# import, or pytest's or pluggy's hookimpl marker under any name. Not ``pytest_generate_tests``,
+# import, or pytest's own hookimpl marker: ``pytest.hookimpl``, ``hookimpl`` imported from pytest
+# (under any name) and pluggy's marker made for the ``pytest`` project; a project's own pluggy
+# marker and the word in its text pass. Not ``pytest_generate_tests``,
 # which pytest reads from a test module, nor ``pytest_addoption`` or the ``pytest_plugins`` list.
 _HOOK = (
     r"pytest_(?:runtest|sessionstart|sessionfinish|collect|configure|unconfigure|report"
@@ -124,17 +130,18 @@ _HOOK = (
 PYTEST_HOOK_IMPL = (
     rf"^\s*(?:async\s+)?def\s+{_HOOK}|(?:^|[;:])\s*{_HOOK}\s*(?::[^=:;#]*)?=(?!=)"
     rf"|\bas\s+{_HOOK}|\bfrom\s+[\w.]+\s+import\b(?:(?!\bfrom\b)[^#;])*?(?<![\w.]){_HOOK}"
-    r"|\bhookimpl\b|\bHookimplMarker\b"
+    r"|\bpytest\s*\.\s*hookimpl\b|\bfrom\s+pytest\s+import\b(?:(?!\bfrom\b)[^#;])*?\bhookimpl\b"
+    r"|\bHookimplMarker\s*\(\s*(?:project_name\s*=\s*)?[rRuU]?['\"]pytest['\"]"
 )
 
 
-def canonical_pytest(text: str, aliases: dict[str, set[str]]) -> str:
+def canonical_pytest(text: str, aliases: dict[str, set[str]], unwrap: bool = True) -> str:
     """The line with an alias of pytest or of one of PYTEST_CLASSES spelled ``pytest.<Class>``.
 
-    A name or chain in brackets of its own is read without them first.
+    With ``unwrap``, a name or chain in brackets of its own is read without them first.
     """
-    for _ in range(200):
-        text, count = _BRACKETED.subn(r"\1", text)
+    for _ in range(200 if unwrap else 0):
+        text, count = _BRACKETED.subn(r"\1\2\3", text)
         if not count:
             break
     # Not after "." or a word character: obj.p.TestReport or xR is not the alias p or R.
