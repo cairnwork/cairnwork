@@ -171,7 +171,7 @@ NONCE = "n0nce"
 
 def _record(tmp_path, payload):
     path = tmp_path / "verdict.json"
-    path.write_text(json.dumps(payload))
+    path.write_text(json.dumps({"exitstatus": 1, "testsfailed": 1} | payload))
     return path
 
 
