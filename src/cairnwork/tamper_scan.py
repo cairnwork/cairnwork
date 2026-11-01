@@ -300,6 +300,8 @@ def scan_added_lines(
     masked_aliases = {key: set(names) for key, names in aliases.items()}  # also from masked lines
     source = data if data is not None else added_file(lines)
     views = (file_views(source) if source is not None else None) or {}  # none: no comment skip
+    # Aliases bound by code only (no string text, no comment), when the file tokenizes.
+    code_aliases = {key: set(names) for key, names in aliases.items()} if views else None
     found = []
     # Python also ends a source line at "\r" (CRLF included), so each piece is scanned on its own.
     for number, line in lines:
@@ -312,6 +314,11 @@ def scan_added_lines(
             # Main's reading, with its own alias table; a line main skips as a comment has none.
             plain = () if _COMMENT_ONLY.match(piece) else (piece, _nfkc_names(piece))
             names = _rule_names(plain, aliases, masked_aliases, in_tests, in_conftest)
+            if code_aliases is not None and view is not None:
+                for text in dict.fromkeys((view.bound, _nfkc_names(view.bound))):
+                    _bind_aliases(text, code_aliases)
+                names += [n for t in plain for n in _extra_rules(t, code_aliases, in_tests)]
+                names = list(dict.fromkeys(names))
             code = piece if view is None else view.code  # "#", ";" in a string masked
             masked = (code, _nfkc_names(code))  # read with a table of its own: only adds names
             if masked != plain or masked_aliases != aliases:
