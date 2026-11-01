@@ -12,7 +12,8 @@ rebinding by assignment (``m = sys.modules``) or a non-``.py`` file that is impo
 pass: known residuals. Changes to the pytest classes listed in tamper_scan_pytest.py
 (``pytest_public_patch``) are refused in every file, library code included. An alias bound by an
 added import (``import os as o``, ``from sys import modules as m``, ``import pytest as p``)
-is followed on that line and the added lines after it; an alias bound only in an unchanged
+is followed on that line and the added lines after it (a name bound both to pytest or one of its
+classes and to ``sys.modules`` is read as each); an alias bound only in an unchanged
 (context) line, by a parenthesised import split over lines, a backslash continuation or
 ``from sys import *`` is not seen. Text inside string literals is scanned like code, as for
 every rule (an aliased name in a string can be flagged). Which ``#`` starts a comment and which
@@ -39,7 +40,8 @@ compatibility shims and pytest plugins pass; there, a literal stub of an unrelat
 (``sys.modules["dep"] = MagicMock()``), ``sys.modules[__name__] = ...`` and a type-hint import of
 a public fixture class from ``_pytest`` are allowed. A library file that a conftest loads as a
 plugin runs inside pytest too, so there the most direct forgery steps are still refused: writing
-a literal sensitive key (``sys.modules["pytest"] = fake``) and importing ``_pytest``. A variable
+a literal sensitive key (``sys.modules["pytest"] = fake``) and importing ``_pytest``, also as a
+patch or monkeypatch target, which the call imports. A variable
 key (``sys.modules[spec.name] = mod``, as plugin loaders do), ``pluginmanager`` and hook
 implementations stay allowed in a library file: a known gap of this raised bar, as are literal
 key variants there (f-strings, implicit concatenation, ``update(pytest=...)``). The library
@@ -58,7 +60,14 @@ from pathlib import Path
 
 from cairnwork.gitcmd import OID, GitCommandError, run_git_bytes
 from cairnwork.tamper_scan_diff import added_lines
-from cairnwork.tamper_scan_pytest import PYTEST_CLASSES, PYTEST_PUBLIC_PATCH, canonical_pytest
+from cairnwork.tamper_scan_pytest import (
+    PATCHED_INTERNALS,
+    PYTEST_CLASSES,
+    PYTEST_HINT_IMPORT,
+    PYTEST_HOOK_IMPL,
+    PYTEST_PUBLIC_PATCH,
+    canonical_pytest,
+)
 from cairnwork.tamper_scan_tokens import added_file, file_views
 
 CODE = "VERIFIER_TAMPER_API"
@@ -80,16 +89,6 @@ def _rule(
     return Rule(name, re.compile(regex), skip_in_conftest, compiled, tests_only)
 
 
-# Public pytest fixture types that honest code imports from ``_pytest`` for type hints only.
-# Classes whose methods a forgery would patch (Item, Config, reports, runner) are not here.
-_HINT = (
-    r"(?:CaptureFixture|FixtureRequest|LogCaptureFixture|MonkeyPatch|Pytester|TempPathFactory"
-    r"|TempdirFactory|Testdir)(?:\s+as\s+\w+)?"
-)
-_HINTS = rf"{_HINT}(?:\s*,\s*{_HINT})*"
-_PYTEST_HINT_IMPORT = (  # one complete line; an open "(" continuing on the next line is not allowed
-    rf"^\s*from\s+_pytest(?:\.\w+)+\s+import\s+(?:{_HINTS}|\(\s*{_HINTS}\s*,?\s*\))\s*(?:#.*)?$"
-)
 _COMMENT_ONLY = re.compile(r"^\s*#")
 # A PEP 263 encoding declaration (Python reads it on line 1 or 2) and the UTF-8 names it accepts.
 _CODING = re.compile(r"^[ \t\f]*#.*?coding[:=][ \t]*([-\w.]+)", re.ASCII)
@@ -151,17 +150,10 @@ RULES: tuple[Rule, ...] = (
     _rule(
         "pytest_internals",
         r"\b_pytest\b|\bpluginmanager\b",
-        allow=_PYTEST_HINT_IMPORT,
+        allow=PYTEST_HINT_IMPORT,
         tests_only=True,
     ),
-    _rule(
-        "pytest_hook_impl",
-        r"^\s*(?:async\s+)?def\s+pytest_(?:runtest|sessionfinish|sessionstart|collection|configure"
-        r"|unconfigure|report|terminal_summary|exception_interact)\w*"
-        r"|\bpytest\s*\.\s*hookimpl\b",
-        skip_in_conftest=True,
-        tests_only=True,
-    ),
+    _rule("pytest_hook_impl", PYTEST_HOOK_IMPL, skip_in_conftest=True, tests_only=True),
     _rule("guard_module", r"_cairnwork_report_guard"),
     _rule("fd_listing", r"/proc/(?:self|thread-self|\d+)/fd\b|/dev/fd\b"),
     # Setting sys.pycache_prefix at run time points imports and pytest's assertion rewriter at
@@ -209,10 +201,11 @@ _LIBRARY_MODULES_WRITE = re.compile(
     rf"|{_MODULES}\.\s*(?:pop|setdefault|__setitem__|__delitem__)\s*\(\s*{_SENSITIVE_KEY}"
     rf"|{_MODULES}(?:\.\s*(?:update|__ior__)\s*\(|\|=)[^)]*{_SENSITIVE_KEY}"
 )
-# An import statement naming _pytest (not importlib.import_module, not a pytest_x helper).
+# An import statement naming _pytest (not importlib.import_module, not a pytest_x helper), or a
+# patch or monkeypatch target naming it, which the call imports.
 _LIBRARY_PYTEST = Rule(  # with main's type-hint import allow
     "pytest_internals",
-    re.compile(r"\bimport\s+[^#;]*?(?<![\w.])_pytest\b|\bfrom\s+_pytest\b"),
+    re.compile(rf"\bimport\s+[^#;]*?(?<![\w.])_pytest\b|\bfrom\s+_pytest\b|{PATCHED_INTERNALS}"),
     allow=_BY_NAME["pytest_internals"].allow,
 )
 
@@ -235,8 +228,15 @@ def _imported_names(clause: str) -> list[tuple[str, str | None]]:
     return [(found.group(1), found.group(2)) for found in parsed if found]
 
 
-def _canonical(text: str, aliases: dict[str, set[str]]) -> str:
-    """The line with every known alias spelled as the plain name, so main's rules read it."""
+def _canonical(text: str, aliases: Table) -> set[str]:
+    """The line with every known alias spelled as the plain name, so main's rules read it: as main
+    does, then unwrapped with pytest's aliases last and first (a name bound twice reads as each)."""
+    plain = _plain(text, aliases)
+    unwrapped = {canonical_pytest(plain, aliases), _plain(canonical_pytest(text, aliases), aliases)}
+    return {canonical_pytest(plain, aliases, unwrap=False), *unwrapped}
+
+
+def _plain(text: str, aliases: Table) -> str:
     # Not after "." or a word character: obj.s.modules or ms.modules is not the alias s.
     for name in sorted(aliases["sys"]):
         text = re.sub(rf"(?<![\w.]){re.escape(name)}(\s*\.\s*modules\b)", r"sys\1", text)
@@ -248,7 +248,7 @@ def _canonical(text: str, aliases: dict[str, set[str]]) -> str:
         text = re.sub(rf"(?<![\w.]){re.escape(name)}\b", "sys.modules", text)
     for name in sorted(aliases["_exit"]):  # a call; "def _exit(self):" defines a method instead
         text = re.sub(rf"(?<![\w.])(?<!def ){re.escape(name)}(\s*\()", r"os._exit\1", text)
-    return canonical_pytest(text, aliases)
+    return text
 
 
 def _hits(rule: Rule, text: str) -> bool:
@@ -259,14 +259,14 @@ def _hits(rule: Rule, text: str) -> bool:
 
 def _extra_rules(text: str, aliases: dict[str, set[str]], in_tests: bool) -> list[str]:
     """Rule names the RULES table misses on this line: alias spellings and library forgeries."""
-    canon = _canonical(text, aliases)
-    names = [name for name in _ALIAS_RULES if canon != text and _hits(_BY_NAME[name], canon)]
+    canons = _canonical(text, aliases) - {text}
+    names = [name for name in _ALIAS_RULES if any(_hits(_BY_NAME[name], c) for c in canons)]
     if in_tests:  # main's full sys.modules rule, stub allow included, on the plain spelling
-        if canon != text and _hits(_BY_NAME["sys_modules_write"], canon):
+        if any(_hits(_BY_NAME["sys_modules_write"], canon) for canon in canons):
             names.append("sys_modules_write")
         return names
     # The original line too: an alias that shadows "sys" itself must not hide sys.modules.
-    if _LIBRARY_MODULES_WRITE.search(text) or _LIBRARY_MODULES_WRITE.search(canon):
+    if any(_LIBRARY_MODULES_WRITE.search(t) for t in (text, *canons)):
         names.append("sys_modules_write")
     if _hits(_LIBRARY_PYTEST, text):
         names.append("pytest_internals")
