@@ -258,12 +258,17 @@ def test_an_exit_that_is_not_a_signal_is_not_fenced(tmp_path, monkeypatch, dispa
     assert not isinstance(caught.value, WorkerMayLive)
 
 
+@pytest.mark.parametrize("timeout", [False, True], ids=["external", "our-timeout"])
 @pytest.mark.parametrize("dispatch", WORKERS, ids=["raw-agy", "owner-dispatch", "worker-account"])
-def test_a_process_holding_the_output_after_a_clean_exit_is_fenced(tmp_path, monkeypatch, dispatch):
+@pytest.mark.parametrize("code", [0, 1, 143])
+def test_a_process_holding_the_output_after_an_exit_is_fenced(
+    tmp_path, monkeypatch, dispatch, timeout, code
+):
     """#537 A: a process that outlives agy and keeps its output open may carry no marker, so a
-    clean owner sweep does not show it gone: the run is fenced on every path, not failed plainly.
+    clean owner sweep does not show it gone: the run is fenced on every path, after our timeout
+    too (a dispatcher ends with its own code on our stop), not failed plainly.
     Fakes only: no signal is sent, no process table is read."""
-    run = _ending(tmp_path, monkeypatch, dispatch, 0, False)
+    run = _ending(tmp_path, monkeypatch, dispatch, code, timeout)
     monkeypatch.setattr(agy_module, "_stop", lambda *_a, **_k: (True, Sweep(listed=True)))
     with pytest.raises(WorkerMayLive, match="^WORKER_SWEEP_UNCLEAN: ") as caught:
         run()

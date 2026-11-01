@@ -267,14 +267,15 @@ class AgyWorker:
                 f"unknown; log {log_path}",
                 self.run_as,
             ) from timed_out
-        if timed_out is not None:
-            raise AgyWorkerError("agy timed out") from timed_out
         if held:  # a holder without the marker is not one the sweep finds: fenced (#537 A)
             raise AgyWorkerUnswept(
-                "WORKER_SWEEP_UNCLEAN: HELD: a process agy started outlived it and holds its"
-                f" output; log {log_path}",
+                "WORKER_SWEEP_UNCLEAN: "
+                + "agy timed out; " * (timed_out is not None)
+                + f"HELD: a process agy started outlived it and holds its output; log {log_path}",
                 self.run_as,
-            )
+            ) from timed_out
+        if timed_out is not None:
+            raise AgyWorkerError("agy timed out") from timed_out
         if reader is not None:
             agy_dispatch.raise_if_exhausted(reader.status(), process.returncode, log_path)
             agy_dispatch.raise_if_worker_refused(reader.status(), log_path)
