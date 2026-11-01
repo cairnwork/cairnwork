@@ -18,6 +18,7 @@ from typing import Any
 from cairnwork.issue_task import RequestUnreadable
 from cairnwork.ownership import OWNER, BindResult, OwnershipError, OwnershipLedger, new_task_id
 from cairnwork.pipeline import TaskSpec
+from cairnwork_protocol.ids import ID_RULE, core_ids
 
 _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW  # requests/ itself, never a symlink
 
@@ -66,6 +67,8 @@ def task_from_payload(
         raise IntakeRefused("BAD_REQUEST", "verifiers must be [[id, [argv...]], ...]")
     if not verifiers:  # Core cannot verify a task with none: refuse before the worker runs (#639)
         raise IntakeRefused("BAD_REQUEST", "verifiers must name at least one verifier")
+    if not core_ids([v[0] for v in verifiers]):  # as Core: refuse before the worker runs (#490)
+        raise IntakeRefused("BAD_REQUEST", f"verifier {ID_RULE}")
     if not os.path.isabs(payload["repo"]):
         raise IntakeRefused("BAD_REQUEST", "repo must be an absolute path")
     return TaskSpec(
