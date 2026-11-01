@@ -47,6 +47,16 @@ removes it from ``os.environ`` once read, but the process's original environment
 (``/proc/self/environ`` on Linux, ``KERN_PROCARGS2`` for the same uid on macOS), so on that path
 the nonce is still within reach of the code under test.
 
+The record also carries pytest's own exit status and failure count (#276): a run passes only
+when both are 0 and the process exits with status 0 too, so a process whose exit status
+disagrees with what pytest recorded fails. The functions the hooks call on the record path
+(``json.dumps``, the ``os`` functions that write the record, the reporter's own helpers) are
+bound when the plugin is imported, so rebinding those module or class attributes later does not
+change the record. Code that reaches the reporter instance, pytest's report objects or the
+encoder behind ``json.dumps`` can still change what is recorded: there the exit-status agreement
+and tamper_scan are hurdles, not a boundary, and a pytest verdict stays ``same_process_only``
+(protection.py).
+
 A real boundary needs the verdict produced outside the candidate's process (a subprocess per
 test, or an external observer), tracked as Tier-3 in the report-forgery research
 (knowledge nexus/research/2026-10-20-forgeable-test-report.md).
@@ -106,7 +116,17 @@ def _take():
 _HANDOVER = _take()
 
 
+def _source(item):
+    try:
+        return item.path.relative_to(item.config.rootpath).as_posix()
+    except (AttributeError, TypeError, ValueError):
+        return ""
+
+
 class _Reporter:
+    # the hooks call their helpers and the json/os functions through default arguments bound at
+    # import: rebinding a class or module attribute later does not change what is recorded
+
     def __init__(self, path, report_fd, nonce):
         self._path = path
         self._fd = report_fd
@@ -127,48 +147,16 @@ class _Reporter:
         elif report.skipped:  # a module or directory skipped whole while collecting
             self._collect_skipped.append(report.nodeid)
 
-    @staticmethod
-    def _source(item):
-        try:
-            return item.path.relative_to(item.config.rootpath).as_posix()
-        except (AttributeError, TypeError, ValueError):
-            return ""
-
-    def _original(self, item, nodeid):
+    def _original(self, item, nodeid, _source=_source):
         """The node id ``item`` had when collected; an item that was not seen collected, or whose
         node id or file has changed since, is recorded as renamed (the run cannot pass)."""
         seen = self._sources.get(id(item))
         if not seen or seen[0] is not item:
             self._renamed.append(nodeid)
             return nodeid, ""
-        if nodeid != seen[1] or self._source(item) != seen[2]:
+        if nodeid != seen[1] or _source(item) != seen[2]:
             self._renamed.append(nodeid)
         return seen[1], seen[2]
-
-    @pytest.hookimpl(tryfirst=True)
-    def pytest_itemcollected(self, item):
-        self._sources[id(item)] = (item, item.nodeid, self._source(item))
-
-    def pytest_collection_finish(self, session):
-        index = {}
-        for item in session.items:
-            nodeid, source = self._original(item, item.nodeid)
-            self._collected.append(nodeid)
-            self._file_of.append(index.setdefault(source, len(index)) if source else -1)
-        self._files = list(index)
-
-    @pytest.hookimpl(wrapper=True, tryfirst=True)
-    def pytest_runtest_makereport(self, item, call):
-        report = yield  # outermost: the report as every other hook left it
-        nodeid, _ = self._original(item, report.nodeid)
-        if report.when == "call":  # #570: one per sub-test, then the test's own
-            self._keep_worst(nodeid, report.outcome)
-        elif report.when == "setup" and report.outcome in ("skipped", "failed"):
-            self._keep_worst(nodeid, report.outcome)
-        elif report.when == "teardown" and report.failed:  # #478: a fixture raised after yield
-            self._outcomes[nodeid] = "failed"
-            self._teardown_errors.append(nodeid)
-        return report
 
     def _keep_worst(self, nodeid, outcome):
         """A node's outcome never improves (failed > skipped > passed): a later report for the
@@ -177,27 +165,58 @@ class _Reporter:
         if rank.get(outcome, 2) >= rank.get(self._outcomes.get(nodeid, "passed"), 2):
             self._outcomes[nodeid] = outcome
 
-    def pytest_sessionfinish(self, session, exitstatus):
+    @pytest.hookimpl(tryfirst=True)
+    def pytest_itemcollected(self, item, _source=_source):
+        self._sources[id(item)] = (item, item.nodeid, _source(item))
+
+    def pytest_collection_finish(self, session, _original=_original):
+        index = {}
+        for item in session.items:
+            nodeid, source = _original(self, item, item.nodeid)
+            self._collected.append(nodeid)
+            self._file_of.append(index.setdefault(source, len(index)) if source else -1)
+        self._files = list(index)
+
+    @pytest.hookimpl(wrapper=True, tryfirst=True)
+    def pytest_runtest_makereport(self, item, call, _original=_original, _keep_worst=_keep_worst):
+        report = yield  # outermost: the report as every other hook left it
+        nodeid, _ = _original(self, item, report.nodeid)
+        if report.when == "call":  # #570: one per sub-test, then the test's own
+            _keep_worst(self, nodeid, report.outcome)
+        elif report.when == "setup" and report.outcome in ("skipped", "failed"):
+            _keep_worst(self, nodeid, report.outcome)
+        elif report.when == "teardown" and report.failed:  # #478: a fixture raised after yield
+            self._outcomes[nodeid] = "failed"
+            self._teardown_errors.append(nodeid)
+        return report
+
+    def pytest_sessionfinish(self, session, exitstatus, _io=(
+        json.dumps, json.dump, os.ftruncate, os.pwrite, os.open, os.fdopen, os.chmod,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+    )):
+        dumps, dump, ftruncate, pwrite, open_, fdopen, chmod, flags = _io
         payload = {"nonce": self._nonce, "collected": self._collected, "outcomes": self._outcomes,
                    "files": self._files, "file_of": self._file_of,
                    "renamed": list(dict.fromkeys(self._renamed)),
                    "collect_errors": self._collect_errors,
                    "collect_skipped": self._collect_skipped,
-                   "teardown_errors": self._teardown_errors}
+                   "teardown_errors": self._teardown_errors,
+                   # pytest's own status: the parent requires it and the process's to agree
+                   "exitstatus": int(exitstatus), "testsfailed": session.testsfailed}
         if self._fd is not None:
-            data = json.dumps(payload).encode()
-            os.ftruncate(self._fd, 0)
+            data = dumps(payload).encode()
+            ftruncate(self._fd, 0)
             written = 0
             while written < len(data):
-                step = os.pwrite(self._fd, data[written:], written)
+                step = pwrite(self._fd, data[written:], written)
                 if step <= 0:  # no progress: leave a short record, which the parent refuses
                     break
                 written += step
             return
-        fd = os.open(self._path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(fd, "w") as handle:
-            json.dump(payload, handle)
-        os.chmod(self._path, 0o644)  # the owner reads it (a different user under the account)
+        fd = open_(self._path, flags, 0o600)
+        with fdopen(fd, "w") as handle:
+            dump(payload, handle)
+        chmod(self._path, 0o644)  # the owner reads it (a different user under the account)
 
 
 def pytest_configure(config):
@@ -233,6 +252,8 @@ class Verdict:
     # #478: tests whose teardown failed. A shared fixture's finalizer runs at its last user's
     # teardown, so the node named is where the error landed, not the test that owns the fixture
     teardown_errors: tuple[str, ...] = ()
+    exitstatus: int | None = None  # pytest's own session status, as recorded (#276)
+    testsfailed: int | None = None  # pytest's own count of failed tests, as recorded
 
     def not_run(self, targets) -> tuple[str, ...]:
         """The named ``targets`` (``path`` or ``path::node``) that own no recorded test, then the
@@ -282,14 +303,15 @@ def read_verdict_fd(fd: int, nonce: str) -> Verdict:
 
 
 def parse_verdict(raw: bytes, nonce: str) -> Verdict:
-    """``ran`` is true only when sessionfinish wrote the record, it matches
-    the nonce, at least one test was collected, every collected test produced a result, all
-    results are ``passed``, no collector failed or was skipped, no teardown failed and no item's
-    node id or file changed after collection (``renamed``). Outcomes, ``recorded`` and the
-    collector and teardown lists are returned whenever the nonce matches (even when not all
-    passed) so base_comparison can see a test that failed. A record over MAX_REPORT_BYTES (a
-    suite too large for one report, #184) is ``too_big`` so the caller can say why nothing was
-    read."""
+    """``ran`` is true only when sessionfinish wrote the record, it matches the nonce, at least
+    one test was collected, every collected test produced a result, all results are ``passed``,
+    pytest's own exit status and failure count are 0, no collector failed or was skipped, no
+    teardown failed and no item's node id or file changed after collection (``renamed``). A
+    record without that exit status and count (exact ints) is not a record. Outcomes,
+    ``recorded`` and the collector and teardown lists are returned whenever the nonce matches
+    (even when not all passed) so base_comparison can see a test that failed. A record over
+    MAX_REPORT_BYTES (a suite too large for one report, #184) is ``too_big`` so the caller can
+    say why nothing was read."""
     if len(raw) > MAX_REPORT_BYTES:
         return Verdict(False, {}, too_big=True)
     try:
@@ -314,6 +336,9 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
     teardown = data.get("teardown_errors", [])
     files = data.get("files", [])
     file_of = data.get("file_of")  # absent: no test owns a named target
+    status = (data.get("exitstatus"), data.get("testsfailed"))  # exact ints: no bool, no None
+    if not all(type(n) is int for n in status):
+        return Verdict(False, {})
     if not all(
         isinstance(v, list) and all(isinstance(n, str) for n in v)
         for v in (errors, skipped, renamed, teardown)
@@ -333,6 +358,7 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
         and not skipped
         and not renamed
         and not teardown
+        and status == (0, 0)
         and set(outcomes) == set(collected)
         and all(outcome == "passed" for outcome in outcomes.values())
     )
@@ -345,6 +371,8 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
         renamed=tuple(renamed),
         teardown_errors=tuple(teardown),
         paths=_sources(collected, files, file_of or ()),
+        exitstatus=status[0],
+        testsfailed=status[1],
     )
 
 
