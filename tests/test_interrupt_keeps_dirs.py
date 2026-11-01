@@ -56,6 +56,39 @@ def test_an_interrupt_in_the_wait_still_kills_the_process_group(monkeypatch, tmp
     assert killed == [Stub.pid]
 
 
+@pytest.mark.parametrize("stop", [*STOPS, RuntimeError("can't start new thread")], ids=type)
+def test_an_end_while_starting_the_output_copier_still_kills_the_process_group(
+    monkeypatch, tmp_path, stop
+):
+    """The child already runs when the copier thread starts: an interrupt there, or a thread
+    that cannot start, must not leave its group running (#537)."""
+    killed = []
+
+    class Stub:  # Popen that started; the copier never gets going
+        pid = 434343
+        returncode = -9
+
+        def __init__(self, *args, **kwargs):
+            self.stdout = io.BytesIO(b"")
+
+        def wait(self, timeout=None):
+            return -9
+
+    class Unstartable:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            raise stop
+
+    monkeypatch.setattr(confined.subprocess, "Popen", Stub)
+    monkeypatch.setattr(confined.threading, "Thread", Unstartable)
+    monkeypatch.setattr(confined, "_kill_group", killed.append)
+    with pytest.raises(type(stop)):
+        confined.execute(["x"], tmp_path, {confined.RUN_TOKEN_VAR: "t"}, 5, tmp_path / "log")
+    assert killed == [Stub.pid]
+
+
 def _raise(exc):
     def raiser(*args, **kwargs):
         raise exc
