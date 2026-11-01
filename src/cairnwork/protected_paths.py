@@ -17,6 +17,8 @@ import re
 from pathlib import PurePosixPath
 from typing import Any
 
+from cairnwork_protocol.ids import MAX_ID_BYTES
+
 SAFE_PATH = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]*")
 PROTECTED_PATHS = (
     ".github",
@@ -67,6 +69,8 @@ def path_refusal(path: Any) -> tuple[str, str] | None:
     """``(reason code, detail)`` when ``path`` may not be an allowed file, else None."""
     if not isinstance(path, str):
         return "TASK_ALLOWED_FILES_INVALID", repr(path)
+    if len(path) > MAX_ID_BYTES:  # Core refuses a longer text (#645); SAFE_PATH is ASCII below
+        return "TASK_ALLOWED_FILES_INVALID", f"{path[:40]!r}... is over {MAX_ID_BYTES} bytes"
     if is_protected(path):  # first, so ".github/x" is "protected" rather than "dotted"
         return "TASK_ALLOWED_FILES_PROTECTED", path
     if not SAFE_PATH.fullmatch(path) or PurePosixPath(path).as_posix() != path:
