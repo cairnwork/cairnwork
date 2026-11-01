@@ -217,7 +217,7 @@ def _ending(tmp_path, monkeypatch, dispatch, code, timeout):
 
     monkeypatch.setattr(os, "kill", refused)
     monkeypatch.setattr(os, "killpg", refused)
-    monkeypatch.setattr(agy_module, "_stop", lambda *_a, **_k: (False, Sweep(listed=True)))
+    monkeypatch.setattr(agy_module, "_stop", lambda *_a, **_k: (False, Sweep(listed=True), 0))
     monkeypatch.setattr(agy_module.agy_dispatch, "ask_to_stop", lambda _p: None)
     monkeypatch.setattr(agy_module.agy_receipts, "sweep_after_kill", lambda *_a, **_k: [])
     monkeypatch.setattr(agy_module.agy_receipts, "problems", lambda _r: [])
@@ -225,7 +225,7 @@ def _ending(tmp_path, monkeypatch, dispatch, code, timeout):
     monkeypatch.setattr(agy_module.agy_receipts, "write_record", lambda *_a, **_k: None)
     worker = AgyWorker(dispatch=dispatch)
     reader = None if dispatch is None else _Reader()
-    attempt_ = ("attempt-1", "")
+    attempt_ = ("attempt-1", "", ())
     return lambda: worker._await(
         _Ended(code, timeout), None, reader, attempt_, io.BytesIO(), tmp_path / "log"
     )
@@ -269,7 +269,7 @@ def test_a_process_holding_the_output_after_an_exit_is_fenced(
     too (a dispatcher ends with its own code on our stop), not failed plainly.
     Fakes only: no signal is sent, no process table is read."""
     run = _ending(tmp_path, monkeypatch, dispatch, code, timeout)
-    monkeypatch.setattr(agy_module, "_stop", lambda *_a, **_k: (True, Sweep(listed=True)))
+    monkeypatch.setattr(agy_module, "_stop", lambda *_a, **_k: (True, Sweep(listed=True), 0))
     with pytest.raises(WorkerMayLive, match="^WORKER_SWEEP_UNCLEAN: ") as caught:
         run()
     assert caught.value.account == (getattr(dispatch, "run_as_user", None) or "")

@@ -89,11 +89,13 @@ def test_a_marked_process_agy_leaves_behind_is_killed(tmp_path):
 
 
 def test_an_unmarked_process_holding_the_output_fails_the_run(tmp_path):
+    """Outside the clone too: one inside it whose environment macOS withholds (an empty one reads
+    so) is tied to the attempt by its working directory and killed (#537)."""
     agy = fake_agy(
         tmp_path,
         "import subprocess\n"
         "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(15)'],"
-        " start_new_session=True, env={})\n"
+        " start_new_session=True, env={}, cwd='/')\n"
         "print('started', flush=True)",
     )
     workdir = tmp_path / attempt(4)
