@@ -68,7 +68,9 @@ PYTEST_PUBLIC_PATCH = (
     # (the possessive run first, so a long line is read once per statement, not once per offset)
     rf"|{_START}(?={_TARGET}*+{_ASSIGN}){_TARGET}*?{_CHAIN}"
     rf"|(?:^|[;:]){_ANNOTATED}(?:==|(?!:{_ANNOTATED})[^=#;])*=(?!=)"  # annotated ("==" inside)
-    rf"|{_KEYWORD}for\b{_NOT_FOR}*?{_CHAIN}(?={_FOR_TARGET}*+\bin\b)"
+    # a ``for`` target: only its first chain is tried (not every chain on a long line), and the
+    # ``in`` is looked for from the chain's first attribute on, which may itself be named ``in``
+    rf"|{_KEYWORD}for\b(?>{_NOT_FOR}*?(?={_CHAIN}){_OBJECT}\s*\.)(?={_FOR_TARGET}*+\bin\b)"
     rf"|{_KEYWORD}as\b[(\[\s]*{_CHAIN}\s*[:,)\]]"  # a ``with`` target
     # unittest.mock's patch, patch.object and patch.multiple, which set the attribute for the caller
     rf"|\bpatch(?:\s*\.\s*(?:object|multiple))?\s*\(\s*['\"]?{_OBJECT}"

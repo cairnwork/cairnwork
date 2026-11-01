@@ -5,12 +5,15 @@ reached through it), so each case reads as the shape it checks. The class list i
 here, not read from the module, so a class dropped from ``PYTEST_CLASSES`` fails a test.
 """
 
+import re
+import time
+
 import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from cairnwork.tamper_scan import scan_added_lines
-from cairnwork.tamper_scan_pytest import canonical_pytest
+from cairnwork.tamper_scan_pytest import PYTEST_PUBLIC_PATCH, canonical_pytest
 
 LIBRARY = "src/calc.py"
 TEST = "tests/test_calc.py"
@@ -116,6 +119,39 @@ def test_a_modules_alias_imported_with_no_space_is_followed():
     snippet = "from sys import(modules as m)\nm['" + P + "'] = None"
     compile(snippet, "test_calc.py", "exec")
     assert "sys_modules_write" in _rules(snippet, TEST)
+
+
+@pytest.mark.parametrize(
+    "snippet",
+    [f"for before, {ITEM}.runtest in pairs: pass", f"{ITEM}.runtest: T[1:2] = run"],
+)
+def test_a_for_target_after_a_name_and_an_annotation_with_a_slice_are_refused(snippet):
+    compile(snippet, "calc.py", "exec")
+    assert _rules(snippet) == {RULE}
+
+
+@pytest.mark.parametrize("path", [LIBRARY, TEST])
+@pytest.mark.parametrize(
+    "snippet",
+    [f"import {P}\nfor {ITEM}.\uff49\uff4e, y[0] in [(1, 2)]: pass", f"x = 'for {ITEM}.in'"],
+)
+def test_first_attribute_named_in_is_reported(snippet, path):
+    compile(snippet, "calc.py", "exec")
+    assert RULE in _rules(snippet, path)
+
+
+LONG_LINES = [  # a few KB through the whole scan, and about 100 KB through the pattern alone
+    ("x = '" + f"{ITEM}.a0for." * 300 + "'", _rules),
+    ("x = '" + f"for .{ITEM}.a" * 250 + "'", _rules),
+    ("for " + f"{ITEM}.a " * 7000, re.compile(PYTEST_PUBLIC_PATCH).search),
+]
+
+
+@pytest.mark.parametrize(("line", "scan"), LONG_LINES, ids=["chain", "for-chain", "targets"])
+def test_for_chain_scan_stays_linear_on_long_lines(line, scan):
+    start = time.perf_counter()
+    scan(line)
+    assert time.perf_counter() - start < 2.0
 
 
 # --- properties --------------------------------------------------------------------------
