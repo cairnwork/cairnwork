@@ -278,3 +278,64 @@ def test_cli_verify_prints_a_detail_with_an_unencodable_path(
     assert rc == 1
     shown = "HEAD_TREE_MISMATCH: tests/t\\udcff.py in the executed tree is not head's\n"
     assert capsys.readouterr().out == shown
+
+
+# Every character str.splitlines() breaks on, and the CR LF pair.
+LINE_BREAKS = ["\n", "\v", "\f", "\r", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029", "\r\n"]
+
+
+@pytest.mark.parametrize("sep", LINE_BREAKS, ids=ascii)
+def test_cli_verify_prints_a_refusal_on_one_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, sep: str
+) -> None:
+    """A signed path quoted in a refusal may hold a line break: without --json the refusal is
+    printed as one line, the break escaped, so no part of it starts a line of its own."""
+    import cairnwork_attest.cli as cli
+    from cairnwork_attest.verify_response import VerifyResult
+
+    detail = f"test path tests/a{sep}::notice::x.py"
+    refused = VerifyResult(ok=False, code="TEST_ROOT_VIOLATION", detail=detail)
+    monkeypatch.setattr(cli, "verify_bundle", lambda *_a, **_k: refused)
+    rc = main(
+        ["verify", str(tmp_path / "b.json"), "--public-key", str(tmp_path / "k.pem"),
+         "--repo", str(tmp_path), "--candidate", "a" * 40]
+    )  # fmt: skip
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert out.endswith("\n") and out.startswith("TEST_ROOT_VIOLATION: ")
+    assert out.splitlines() == [out[:-1]]
+    assert "::notice::x.py" in out
+
+
+def test_cli_publish_prints_a_refusal_on_one_line_in_stderrs_encoding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A publish refusal goes to stderr as one line, encoded for stderr: a line break and what
+    stderr cannot write are escaped, and what it can write stays as is, whatever stdout's
+    encoding is. Nothing goes to stdout."""
+    import io
+
+    import cairnwork_attest.cli as cli
+    from cairnwork_attest.publish import PublishResult
+
+    refused = PublishResult(
+        ok=False, code="PUSH_RETRIES_EXHAUSTED", detail="x\n::warning::y \u00e9 \udcff \u2029",
+        candidate="a" * 40, notes_ref="refs/notes/cairnwork", remote="origin", attempts=5,
+        blob=None, notes_tip=None,
+    )  # fmt: skip
+    monkeypatch.setattr(cli, "publish_bundle", lambda **_k: refused)
+    out = io.TextIOWrapper(io.BytesIO(), encoding="ascii", newline="\n")
+    err = io.TextIOWrapper(io.BytesIO(), encoding="utf-8", newline="\n")
+    monkeypatch.setattr(cli.sys, "stdout", out)
+    monkeypatch.setattr(cli.sys, "stderr", err)
+    rc = main(
+        ["publish", "--bundle", str(tmp_path / "b.json"), "--repo", str(tmp_path),
+         "--candidate", "a" * 40]
+    )  # fmt: skip
+    out.flush()
+    err.flush()
+    assert rc == 2
+    assert out.buffer.getvalue() == b""  # type: ignore[attr-defined]
+    written = err.buffer.getvalue()  # type: ignore[attr-defined]
+    assert written == b"PUSH_RETRIES_EXHAUSTED: x\\x0a::warning::y \xc3\xa9 \\udcff \\u2029\n"
+    assert written.count(b"\n") == 1
