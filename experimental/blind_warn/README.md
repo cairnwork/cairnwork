@@ -30,4 +30,8 @@ Comparison with R-G: R-G used a tool-using agent that read the whole tree. This 
 API call per step with files inlined (at most 150 KB of tracked text, chosen by name overlap with
 the ticket; symlinks are skipped). R-G's numbers therefore do not transfer to this version.
 
+The candidate's own test configuration (conftest, pytest settings it changes) takes part in the
+candidate run, so it can hide or produce a warning; acceptable for an experimental warning line.
+A candidate that puts a link at a blind-test path makes the run refuse (`unsafe test path`).
+
 Owner and expiry are in OWNER and EXPIRES. Core never imports this package.

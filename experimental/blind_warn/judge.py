@@ -13,6 +13,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import urllib.request
 import uuid
 from collections.abc import Callable
@@ -154,6 +155,31 @@ def _commit(work: Path, message: str) -> str:
     return run_git(work, "rev-parse", "HEAD").strip()
 
 
+def _put(work: Path, rel: str, text: str) -> None:
+    """Write a file inside the clone; refuse (BlindWarnError) when any component is a link."""
+    current = work
+    parts = Path(rel).parts
+    for part in parts[:-1]:
+        current = current / part
+        try:
+            mode = os.lstat(current).st_mode
+        except FileNotFoundError:
+            current.mkdir()
+            continue
+        if not stat.S_ISDIR(mode):
+            raise BlindWarnError("unsafe test path")
+    target = current / parts[-1]
+    try:
+        if not stat.S_ISREG(os.lstat(target).st_mode):
+            raise BlindWarnError("unsafe test path")
+        target.unlink()  # a regular file the candidate added at our path
+    except FileNotFoundError:
+        pass
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+    with os.fdopen(os.open(target, flags, 0o600), "w", encoding="utf-8") as handle:
+        handle.write(text)
+
+
 def _verify_both(
     work: Path,
     base_sha: str,
@@ -165,15 +191,12 @@ def _verify_both(
 ) -> tuple[tuple[VerifierRun, ...], tuple[VerifierRun, ...], tuple[VerifierSpec, ...]]:
     names = {key: f"{root}/test_blind_{key}.py" for key in files}
     for key, text in files.items():
-        target = work / names[key]
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(text, encoding="utf-8")
+        _put(work, names[key], text)
     base_commit = _commit(work, "blind tests on base")
     run_git(work, "checkout", "-q", "--detach", base_sha)
     run_git(work, "apply", "--whitespace=nowarn", "--", str(patch))
     for key, text in files.items():
-        (work / names[key]).parent.mkdir(parents=True, exist_ok=True)
-        (work / names[key]).write_text(text, encoding="utf-8")
+        _put(work, names[key], text)
     cand_commit = _commit(work, "candidate with blind tests")
     specs = tuple(VerifierSpec(key, (names[key],)) for key in files)
     base_runs = run(ctx, base_commit, specs, f"bw-{uuid.uuid4().hex[:8]}-b", timeout=RUN_TIMEOUT)

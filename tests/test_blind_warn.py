@@ -207,6 +207,34 @@ def test_the_clone_is_removed_after_a_run(case):
     assert list((case.state / "blind_warn").iterdir()) == []
 
 
+def link_patch(tmp_path, case, link_path, target):
+    """A patch (made in a scratch commit) that adds a symlink at link_path pointing to target."""
+    repo = case.base
+    (repo / link_path).parent.mkdir(parents=True, exist_ok=True)
+    (repo / link_path).symlink_to(target)
+    git(repo, "add", "-A")
+    case.patch.write_text(git(repo, "diff", "--cached") + "\n")
+    git(repo, "reset", "-q", "--hard")
+    git(repo, "clean", "-fdq")
+
+
+@pytest.mark.parametrize("kind", ["file", "dir"])
+def test_a_link_at_the_test_path_is_refused_and_writes_nothing_outside(case, tmp_path, kind):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    if kind == "file":
+        victim = outside / "victim.py"
+        victim.write_text("ORIGINAL")
+        link_patch(tmp_path, case, "tests/test_blind_a.py", victim)
+    else:
+        victim = outside / "test_blind_a.py"
+        link_patch(tmp_path, case, "tests", outside)
+    result = go(case, fake_model(PASS_TEST, PASS_TEST), runner_with({}, {}))
+    assert result["warn"] is False and "unsafe test path" in result["error"]
+    assert not victim.exists() or victim.read_text() == "ORIGINAL"
+    assert sorted(p.name for p in outside.iterdir()) in ([], ["victim.py"])
+
+
 @pytest.mark.sandbox
 def test_end_to_end_through_the_real_verifier(case):
     (case.state / "config.json").write_text(
