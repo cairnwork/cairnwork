@@ -7,7 +7,9 @@ import pytest
 from test_deferred_tests import REGRESSION, SeeingWorker, make_test_commit, run
 from verify_helpers import FIX, candidate, verify
 
-from cairnwork.deferred_tests import untargeted
+from cairnwork.deferred_tests import TestCommitRejected as Rejected
+from cairnwork.deferred_tests import ensure_test_commit, untargeted
+from cairnwork.deferred_tests import test_paths as paths_of_commit
 
 sandbox = pytest.mark.sandbox
 TWO_FILES = {
@@ -32,6 +34,40 @@ def test_a_file_is_covered_whole_or_by_each_of_its_changed_tests():
     assert untargeted(paths, nodes, whole[:1]) == ("tests/test_b.py", "tests/helpers.py")
     partial = ("tests/test_a.py::test_x[1]", "tests/test_b.py::test_y", *whole[2:])
     assert untargeted(paths, nodes, partial) == ("tests/test_a.py", "tests/test_b.py")
+
+
+def _paths(project, files):
+    base, test_commit = make_test_commit(project, files)
+    ensure_test_commit(project, test_commit)
+    return paths_of_commit(project, base, test_commit)
+
+
+def _long(size: int) -> str:
+    head = "tests/" + ("d" * 100 + "/") * 4  # every part a target name, so only the length counts
+    return head + "test_" + "x" * (size - len(head) - 8) + ".py"
+
+
+def test_a_test_path_over_cores_text_limit_is_refused_up_front(project):
+    """#656: receipts and the acceptance spec carry each test path; Core refuses one over 512
+    UTF-8 bytes, so the test commit is refused before anything reads it, saying why."""
+    assert _paths(project, {_long(512): REGRESSION}) == (_long(512),)
+    with pytest.raises(Rejected) as err:
+        _paths(project, {_long(513): REGRESSION})
+    assert err.value.code == "TEST_COMMIT_SCOPE" and "over 512 UTF-8 bytes" in str(err.value)
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["tests/test_a.b.py", "tests/test a.py", "tests/t\u00e9st_a.py", "tests/sub.d/test_a.py"],
+)
+def test_a_python_test_file_no_verifier_target_can_name_is_refused_up_front(project, path):
+    """#656: such a file could only ever end in DEFERRED_TESTS_NOT_TARGETED, which does not say
+    why. Data files need no target, so an odd name stays allowed for them."""
+    files = {"tests/test_regression.py": REGRESSION, "tests/data.d/cases v2.json": "{}\n"}
+    assert set(_paths(project, files)) == set(files)
+    with pytest.raises(Rejected) as err:
+        _paths(project, {**files, path: REGRESSION})
+    assert err.value.code == "TEST_COMMIT_SCOPE" and "no verifier target can name" in str(err.value)
 
 
 @sandbox
