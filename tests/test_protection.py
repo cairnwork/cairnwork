@@ -241,7 +241,7 @@ def test_a_binding_that_names_another_level_stops_the_run(monkeypatch):
     monkeypatch.setattr(pipeline_judge, "run_verifiers", lambda *a, **k: [])
     task = SimpleNamespace(
         blackbox=None, repo=Path("r"), base_commit="b" * 40, import_paths=(), allowed_files=(),
-        allow_deletions=False, require_protection="",
+        allow_deletions=False, require_protection="", test_commit=None,
     )  # fmt: skip
     result = SimpleNamespace(candidate_commit="j", task_id="t", attempt_id="a", logs=[])
     with pytest.raises(RuntimeError, match="protection"):

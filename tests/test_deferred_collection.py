@@ -177,3 +177,51 @@ def test_verify_refuses_a_new_test_the_verification_run_did_not_run(project, sta
     assert out["verified"] is False, out
     assert out["reason"].startswith("DEFERRED_TESTS_NOT_RUN_IN_VERIFICATION"), out
     assert "tests/test_regression.py::TestK::test_m" in out["reason"]
+
+
+class _ToCore(Exception):
+    """Raised by the fake notary: the attempt reached Core."""
+
+
+def _judge(monkeypatch, verifier_run, p2p_runs=()):
+    from types import SimpleNamespace
+
+    from cairnwork import pipeline_judge
+    from cairnwork.verify_context import VerifyContext
+
+    named = "tests/test_x.py::TestK::test_m"
+    monkeypatch.setattr(pipeline_judge, "run_verifiers", lambda *a, **k: [verifier_run])
+    monkeypatch.setattr(pipeline_judge, "run_plan", lambda *a, **k: (list(p2p_runs), {}))
+    monkeypatch.setattr(pipeline_judge, "new_tests", lambda *a, **k: frozenset({named}))
+    task = SimpleNamespace(
+        blackbox=None, repo=Path("r"), base_commit="b" * 40, import_paths=(), allowed_files=(),
+        allow_deletions=False, require_protection="", test_commit="c" * 40,
+    )  # fmt: skip
+    result = SimpleNamespace(candidate_commit="j", task_id="t", attempt_id="a", logs=[])
+    notary = SimpleNamespace(notarize=lambda *a: (_ for _ in ()).throw(_ToCore()))
+    pipeline_judge.judge_candidate(
+        task, (), "d", notary, result, ("tests/test_x.py",), VerifyContext.of(task, Path("x"), "a"),
+        lambda phase: None, p2p=object() if p2p_runs else None,
+    )  # fmt: skip
+    return result, named
+
+
+def _passed_run(outcomes):
+    return VerifierRun(
+        VerifierSpec("v", ("tests/test_x.py",)), 0, False, (), Path("x"),
+        VerifierObservation("v", "x/verifier.log", "sha256:0", True), outcomes, recorded=True,
+    )  # fmt: skip
+
+
+def test_a_p2p_run_does_not_stand_in_for_the_verification_run(monkeypatch):
+    other = "tests/test_x.py::test_other"
+    p2p_run = _passed_run({"tests/test_x.py::TestK::test_m": "passed"})
+    result, named = _judge(monkeypatch, _passed_run({other: "passed"}), (p2p_run,))
+    assert result.reason.startswith("DEFERRED_TESTS_NOT_RUN_IN_VERIFICATION"), result.reason
+    assert named in result.reason
+
+
+def test_a_failed_verification_run_keeps_the_verdict_path(monkeypatch):
+    failed = _base_run({"tests/test_x.py::test_other": "failed"})  # observation not passed
+    with pytest.raises(_ToCore):  # Core judges the failure; the new code is not used
+        _judge(monkeypatch, failed)
