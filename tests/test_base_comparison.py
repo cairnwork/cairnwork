@@ -1,5 +1,5 @@
-"""#234: base_comparison maps each base run to TEETH, NO_TEETH or UNCOMPARABLE; B2: the guard's
-record carries the collection errors. The verify and worker paths are in
+"""#234: base_comparison maps each base run to TEETH, NO_TEETH (#660: or NOT_RUN) or UNCOMPARABLE;
+B2: the guard's record carries the collection errors. The verify and worker paths are in
 test_uncomparable_paths.py."""
 
 import json
@@ -17,12 +17,16 @@ TARGETS = frozenset({TARGET})
 PYC = "tests/__pycache__/test_regression.cpython-312.pyc"  # a FORGED_BYTECODE finding
 
 
-def run(name: str = "v", rc: int | None = 1, *, failed=(TARGET,), **fields):
-    """A stand-in VerifierRun with the fields base_comparison reads."""
+def run(name: str = "v", rc: int | None = 1, *, failed=(TARGET,), ran=True, **fields):
+    """A stand-in VerifierRun with the fields base_comparison reads. ``ran``: the deferred test is
+    in the record (#660), passed unless ``failed`` names it."""
+    outcomes = {node: "failed" for node in failed} | {"tests/test_old.py::test_ok": "passed"}
+    if ran and not any(node.split("[", 1)[0] == TARGET for node in outcomes):
+        outcomes[TARGET] = "passed"
     return SimpleNamespace(
         spec=SimpleNamespace(verifier_id=name),
         returncode=rc,
-        outcomes={node: "failed" for node in failed} | {"tests/test_old.py::test_ok": "passed"},
+        outcomes=outcomes,
         timed_out=fields.get("timed_out", False),
         report_too_big=fields.get("report_too_big", False),
         recorded=fields.get("recorded", True),
@@ -116,6 +120,9 @@ ROWS = [
         "NO_TEETH",
         "TESTS_DO_NOT_FAIL_ON_BASE",
         id="only-another-test-fails",
+    ),
+    pytest.param(
+        run(rc=0, failed=(), ran=False), "NOT_RUN", "DEFERRED_TESTS_NOT_RUN", id="target-not-run"
     ),
     pytest.param(run(), "TEETH", "", id="target-fails"),
     pytest.param(run(failed=(f"{TARGET}[case-1]",)), "TEETH", "", id="parametrised-target"),

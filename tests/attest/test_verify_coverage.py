@@ -10,12 +10,17 @@ import pytest
 import tests.attest.binding_helpers as helpers
 from cairnwork_attest.verify import verify_bundle
 from cairnwork_attest.verify_coverage import targets
+from cairnwork_attest.verify_response import VerifyResult
 from tests.attest.binding_helpers import notarize_bound, policy, producer, receiver, sign_bound
 
 PYTEST = ["python3", "-m", "pytest", "-q"]
 
 
 def _verify(tmp_path: Path, verifiers: list, mode: str, **notarize) -> str:
+    return _result(tmp_path, verifiers, mode, **notarize).code
+
+
+def _result(tmp_path: Path, verifiers: list, mode: str, **notarize) -> VerifyResult:
     """Sign a receipt whose binding names ``verifiers`` and verify it with a pinning policy."""
     helpers.VERIFIERS[:] = verifiers
     p = producer(tmp_path)
@@ -29,14 +34,16 @@ def _verify(tmp_path: Path, verifiers: list, mode: str, **notarize) -> str:
         policy=pol,
     )  # fmt: skip
     assert result.code != "OK" or result.assurance is not None
-    return result.code
+    return result
 
 
 @pytest.fixture(autouse=True)
 def _restore_verifiers():
-    saved = list(helpers.VERIFIERS)
+    saved, tests = list(helpers.VERIFIERS), dict(helpers.TESTS)
     yield
     helpers.VERIFIERS[:] = saved
+    helpers.TESTS.clear()
+    helpers.TESTS.update(tests)
 
 
 @pytest.mark.parametrize("mode", ["full", "confidential"])
@@ -88,3 +95,45 @@ def test_targets_are_read_from_the_one_argv_shape_the_producer_accepts():
     assert targets([*PYTEST, "-k", "x", "tests/test_a.py"]) == ()
     assert targets([*PYTEST, "-p", "other", "tests/test_a.py"]) == ()
     assert targets(["pytest", "tests/test_a.py"]) == ()
+
+
+# #660: what the target names alone do not show, read from the test commit (full mode)
+INHERITED = (
+    "def test_a():\n    assert 1\nclass TestK:\n    def test_m(self):\n        pass\n"
+    "class TestK2(TestK):\n    pass\n"
+)
+NOT_COLLECTED = (
+    "def test_a():\n    assert 1\nclass TestK:\n    def __init__(self):\n        pass\n"
+    "    def test_m(self):\n        pass\n"
+)
+PARENT_ONLY = ["tests/test_new.py", "tests/test_a.py::test_a", "tests/test_a.py::TestK::test_m"]
+
+
+@pytest.mark.parametrize("mode,code", [("full", "TEST_PATH_NOT_TARGETED"), ("confidential", "OK")])
+def test_receipt_needs_a_target_for_each_node_id_a_new_test_is_collected_under(
+    tmp_path, mode, code
+):
+    """Full mode reads every node id pytest collects the new test under; confidential mode cannot
+    read the file and takes the signer's word."""
+    helpers.TESTS["tests/test_a.py"] = INHERITED
+    got = _result(tmp_path, [["pytest-0", [*PYTEST, *PARENT_ONLY]]], mode)
+    assert got.code == code
+    if mode == "full":
+        assert got.detail == "no bound verifier runs these: ['tests/test_a.py']"
+    each = tmp_path / "each"
+    each.mkdir()
+    both = [["pytest-0", [*PYTEST, *PARENT_ONLY, "tests/test_a.py::TestK2"]]]
+    assert _verify(each, both, mode) == "OK"
+
+
+@pytest.mark.parametrize("mode,code", [("full", "TEST_PATH_NOT_TARGETED"), ("confidential", "OK")])
+def test_receipt_refuses_a_new_test_pytest_does_not_collect(tmp_path, mode, code):
+    """Naming the whole file does not run a test pytest does not collect. The receiver reads that
+    from the test commit in full mode only."""
+    helpers.TESTS["tests/test_a.py"] = NOT_COLLECTED
+    whole = [["pytest-0", [*PYTEST, "tests/test_a.py", "tests/test_new.py"]]]
+    got = _result(tmp_path, whole, mode)
+    assert got.code == code
+    if mode == "full":
+        assert got.detail.startswith("cannot read the bound tests: DEFERRED_TESTS_NOT_COLLECTED: ")
+        assert "tests/test_a.py::TestK::test_m" in got.detail
