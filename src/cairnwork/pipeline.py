@@ -188,7 +188,7 @@ def check_task(task: TaskSpec, *, verifier_python: str | None = None) -> tuple[V
     if clash & {verifier_id for verifier_id, _ in task.verifiers}:
         raise TaskRejected("BAD_BLACKBOX", f"verifier ids clash: {sorted(clash)}")
     if any(protection.reserved(verifier_id) for verifier_id, _ in task.verifiers):
-        raise TaskRejected("BAD_VERIFIER", "verifier ids blackbox:* and protection are reserved")
+        raise TaskRejected("BAD_VERIFIER", f"verifier ids {protection.RESERVED} are reserved")
     try:
         return tuple(
             parse_verifier(vid, list(argv), task.test_roots) for vid, argv in task.verifiers

@@ -7,6 +7,10 @@ import re
 
 from cairnwork.gitcmd import GitCommandError
 
+# Characters in one added line that tamper_scan.py reads. A longer line is refused as such
+# (``long_line``) and not read further: several of its patterns take time that grows with the
+# square of a line's length, or with the number of aliases a line binds times its length (#642).
+MAX_LINE = 4096
 _HUNK = re.compile(r"@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 _INDEX = re.compile(r"index [0-9a-f]+\.\.([0-9a-f]+)")
 # A new side with no lines to show: a deleted file (all zeros) or the empty blob (SHA-1, SHA-256).

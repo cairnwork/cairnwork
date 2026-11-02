@@ -21,13 +21,13 @@ every rule (an aliased name in a string can be flagged). Which ``#`` starts a co
 each line is also scanned with every ``#`` and ``;`` inside a string literal masked, so one in a
 string, or a string opened on an earlier line, does not cut a statement short or hide one, and a
 foreign encoding declared on line 1 or 2 of the committed file is refused even when that line is
-unchanged. The diff is cut into lines only at a
-newline and file headers are read only between hunks, so no text inside an added line ends it
-early; a carriage return, which Python also reads as a line end, starts a new piece to scan.
-Python reads identifiers in NFKC form, so each piece is also matched with its identifier
-characters in that form (the rest as written), and a source encoding other than UTF-8 declared
-on an added line 1 or 2 is refused (``source_encoding``). It catches the straightforward forms
-and the PoCs seen so far, and it fails closed with a dedicated reason so an operator can see why.
+unchanged. The diff is cut into lines only at a newline and file headers are read only between
+hunks, so no text inside an added line ends it early; a carriage return, which Python also reads as
+a line end, starts a new piece to scan. Python reads identifiers in NFKC form, so each piece is
+also matched with its identifier characters in that form (the rest as written), and a source
+encoding other than UTF-8 declared on an added line 1 or 2 is refused (``source_encoding``), as is
+an over-long added line, unread (``long_line``). It catches the straightforward forms and the PoCs
+seen so far, and it fails closed with a dedicated reason so an operator can see why.
 The rule list is the one place to change; the alias and library checks reuse its names and
 allow-lists.
 
@@ -59,7 +59,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cairnwork.gitcmd import OID, GitCommandError, run_git_bytes
-from cairnwork.tamper_scan_diff import added_lines
+from cairnwork.tamper_scan_diff import MAX_LINE, added_lines
 from cairnwork.tamper_scan_pytest import (
     PATCHED_INTERNALS,
     PYTEST_CLASSES,
@@ -131,7 +131,7 @@ RULES: tuple[Rule, ...] = (
     ),
     _rule(
         "cairnwork_env",
-        r"(?=.*\bCAIRNWORK_)(?=.*(?:\benviron\b|\bgetenv\b|\benvb\b))",
+        r"(?m)^(?=.*\bCAIRNWORK_)(?=.*(?:\benviron\b|\bgetenv\b|\benvb\b))",  # once per line
     ),
     _rule(
         "gc_walk",
@@ -288,9 +288,9 @@ def scan_added_lines(
 ) -> list[Finding]:
     """Findings for the added ``(line number, text)`` pairs of one file (``.py`` files only).
 
-    ``data`` is the whole file as committed (scan_patch passes it): Python's reading of its
-    comments and strings comes from there (tamper_scan_tokens.py). Without it, a file made of the
-    added lines alone stands in.
+    ``data`` is the whole file as committed (scan_patch passes it); Python's reading of comments
+    and strings comes from it (tamper_scan_tokens.py), else from the added lines. Not read with an
+    over-long added line: refused anyway, and some Pythons tokenize such a line in quadratic time.
     """
     if not path.endswith(".py"):
         return []
@@ -300,11 +300,11 @@ def scan_added_lines(
     aliases: dict[str, set[str]] = {key: set() for key in ("sys", "os", "gc", "modules", "_exit")}
     masked_aliases = {key: set(names) for key, names in aliases.items()}  # also from masked lines
     source = data if data is not None else added_file(lines)
-    views = (file_views(source) if source is not None else None) or {}  # none: no comment skip
+    found = [Finding(path, number, "long_line") for number, line in lines if len(line) > MAX_LINE]
+    views = (file_views(source) if source is not None and not found else None) or {}
     code_aliases = [{k: set(v) for k, v in aliases.items()} for _ in range(2)] if views else None
-    found = []
     # Python also ends a source line at "\r" (CRLF included), so each piece is scanned on its own.
-    for number, line in lines:
+    for number, line in ((number, line) for number, line in lines if len(line) <= MAX_LINE):
         for index, piece in enumerate(line.split("\r")):
             view = views.get((number, index))
             if number <= 2 and _foreign_coding(piece):

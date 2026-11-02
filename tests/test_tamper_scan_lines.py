@@ -2,14 +2,19 @@
 
 A diff line ends only at "\\n"; file headers are read only between hunks (inside a hunk the
 header's line counts say how many lines follow). Python also ends a source line at a carriage
-return, so an added line is scanned piece by piece at each "\\r".
+return, so an added line is scanned piece by piece at each "\\r". An added line longer than
+``MAX_LINE`` is refused as such (``long_line``) and not read further, so the time per line stays
+bounded (#642).
 """
+
+import time
 
 import pytest
 from conftest import git
 
 from cairnwork.gitcmd import GitCommandError
-from cairnwork.tamper_scan import added_lines, scan_added_lines, scan_patch
+from cairnwork.tamper_scan import _BY_NAME, added_lines, scan_added_lines, scan_patch
+from cairnwork.tamper_scan_diff import MAX_LINE
 
 TEST = "tests/test_x.py"
 LIBRARY = "pkg/module.py"
@@ -156,3 +161,84 @@ def test_an_empty_line_inside_a_hunk_is_a_blank_context_line():
 def test_a_hunk_whose_lines_do_not_match_its_counts_is_unreadable(diff):
     with pytest.raises(GitCommandError):
         added_lines(diff)
+
+
+# --- line length (#642) ------------------------------------------------------------------------
+P = "py" + "test"
+LONG = 128 * 1024  # each shape below took seconds to minutes per line at this length before #642
+LONG_SHAPES = {  # one shape per pattern family whose time grew with the square of the length
+    "plain": lambda n: "abc def " * (n // 8),  # cairnwork_env, on every line
+    "del": lambda n: "del a " * (n // 6),  # del forms (pytest_public_patch, library sys.modules)
+    "import": lambda n: "import a " * (n // 9),  # library _pytest import
+    "from-os": lambda n: "from os import a " * (n // 17),  # os_exit, gc_walk, library _pytest
+    "brackets": lambda n: "x = " + "(" * (n // 2) + "a" + ")" * (n // 2),  # canonical_pytest
+    "aliases": lambda n: f"from {P} import " + ", ".join(f"Item as a{i}" for i in range(n // 14)),
+}
+
+
+def _timed_rules(path: str, line: str) -> tuple[float, list[str]]:
+    start = time.perf_counter()
+    found = scan_added_lines(path, [(1, line)], line.encode())
+    return time.perf_counter() - start, [finding.rule for finding in found]
+
+
+def test_cairnwork_env_is_read_once_per_line():
+    pattern = _BY_NAME["cairnwork_env"].pattern
+    start = time.perf_counter()
+    assert pattern.search("abc def " * (LONG // 8)) is None
+    assert time.perf_counter() - start < 2.0
+    assert pattern.search("a = 1 " * 1000 + "os.environ['CAIRNWORK_GUARD_FDS']")
+    assert pattern.search("x\nn = os.getenv('CAIRNWORK_X')")  # any line of the text
+    assert pattern.search("CAIRNWORK_X\nos.environ") is None  # both on one line, as before
+
+
+@BOTH
+@pytest.mark.parametrize("shape", LONG_SHAPES.values(), ids=LONG_SHAPES.keys())
+def test_an_over_long_line_is_refused_in_bounded_time(path, shape):
+    line = shape(LONG)
+    assert len(line) > MAX_LINE
+    seconds, rules = _timed_rules(path, line)
+    assert rules == ["long_line"]
+    assert seconds < 2.0
+
+
+@BOTH
+@pytest.mark.parametrize("shape", LONG_SHAPES.values(), ids=LONG_SHAPES.keys())
+def test_a_line_of_the_longest_length_read_is_read_in_bounded_time(path, shape):
+    line = shape(2 * MAX_LINE)[:MAX_LINE]
+    seconds, rules = _timed_rules(path, line)
+    assert "long_line" not in rules
+    assert seconds < 2.0
+
+
+@BOTH
+def test_a_line_of_the_longest_length_read_is_still_read_in_full(path):
+    line = "os._exit(0)  # " + "x" * MAX_LINE
+    assert [f.rule for f in scan_added_lines(path, [(1, line[:MAX_LINE])])] == ["os_exit"]
+    assert [f.rule for f in scan_added_lines(path, [(1, line[: MAX_LINE + 1])])] == ["long_line"]
+    assert scan_added_lines(path, [(1, ("x = 1  # " + "x" * MAX_LINE)[:MAX_LINE])]) == []
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "import os; os._exit(0)  # " + "x" * MAX_LINE + "\n",  # the change on the long line
+        "import os as o  # " + "x" * MAX_LINE + "\no._exit(0)\n",  # its alias used later
+        "x = 1  # " + "x" * MAX_LINE + "\nimport os\nos._exit(0)\n",  # lines after it still read
+    ],
+    ids=["same-line", "alias-later", "after"],
+)
+def test_an_over_long_line_never_lets_a_refused_change_pass(repo, content):
+    found = _scan(repo, content.encode())
+    assert ("src/a.py", 1, "long_line") in found
+    if "\nos._exit" in content:
+        assert ("src/a.py", 3, "os_exit") in found
+
+
+def test_a_file_with_an_over_long_added_line_is_not_tokenized(monkeypatch):
+    import cairnwork.tamper_scan as scan
+
+    monkeypatch.setattr(scan, "file_views", lambda data: pytest.fail("tokenized"))
+    lines = [(1, "x = 1"), (2, "a " * MAX_LINE)]
+    data = "\n".join(text for _, text in lines).encode()
+    assert [finding.rule for finding in scan.scan_added_lines(TEST, lines, data)] == ["long_line"]
