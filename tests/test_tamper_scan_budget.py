@@ -194,6 +194,9 @@ def test_a_row_costs_the_row_cost_and_a_reading_costs_one_more_than_its_length()
     budget = ScanBudget()
     budget.tokenize(b"ab\n\n")  # rows "ab", "", "": three rows
     assert MAX_TOKENIZED - budget.tokenized_left == 2 + 3 * ROW_COST
+    budget = ScanBudget()
+    budget.tokenize(b"a\rb\r\nc")  # CR and CRLF end rows as file_views reads them: "a", "b", "c"
+    assert MAX_TOKENIZED - budget.tokenized_left == 3 + 3 * ROW_COST
     budget.read(["abc", "", "de"])  # one extra per reading, pinned (#690)
     assert MAX_READ - budget.read_left == 3 + 0 + 2 + 3
 
@@ -215,3 +218,4 @@ def test_a_large_honest_module_stays_inside_the_budget():
     data = ("".join(f"value_{i} = compute({i}, 'label-{i}')\n" for i in range(30_000))).encode()
     assert len(data) > 1_000_000
     assert ScanBudget().tokenize(data)
+    assert ScanBudget().tokenize(data.replace(b"\n", b"\r\n"))  # Windows line ends cost the same
