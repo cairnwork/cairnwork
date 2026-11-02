@@ -48,7 +48,7 @@ jobs:
           # end users load an AppArmor profile instead; || true as in ci.yml (older kernels lack the key)
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: Prerequisite - uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           python-version: "3.13"
       - name: 1. Install from the public git URL (README one-liner)
@@ -126,14 +126,14 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Fixtures - verify-action (bundle, key) and demo-target (candidate history)
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: cairnwork/verify-action
           ref: ${{ env.VERIFY_ACTION_SHA }}
           path: va
           persist-credentials: false
       - name: Fixtures - demo-target full history
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: cairnwork/demo-target
           ref: ${{ env.DEMO_TARGET_SHA }}
