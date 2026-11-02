@@ -23,6 +23,7 @@ could still be found by a worker with network access.
 from __future__ import annotations
 
 import ast
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -173,6 +174,29 @@ def new_tests(repo: Path, base: str, test_commit: str, paths: tuple[str, ...]) -
             if before.get(node_id) != body:
                 found.add(f"{path}::{node_id}")
     return frozenset(found)
+
+
+def untargeted(
+    paths: tuple[str, ...], nodes: Iterable[str], targets: Iterable[str]
+) -> tuple[str, ...]:
+    """The test commit's Python files (``paths``) that the verifiers' ``targets`` do not cover. A
+    file is covered when a target names it whole, or when it has new or changed tests (``nodes``,
+    from new_tests) and a target names each of them or a class holding it. A file with no such test
+    (a helper, ``__init__.py``, a fixture-only change) must be named whole. Other files (data)
+    cannot be pytest targets and are not required. A receipt binds every test path, so each one's
+    changes must have run (DEFERRED_TESTS_NOT_TARGETED; the receiver applies the same rule,
+    cairnwork_attest.verify_coverage). Tests a file keeps unchanged are P2P's (p2p.py)."""
+    named, missing = frozenset(targets), []
+    for path in (path for path in paths if path.endswith(".py") and path not in named):
+        mine = [node for node in nodes if node.split("::", 1)[0] == path]
+        if not mine or not all(_named(node, named) for node in mine):
+            missing.append(path)
+    return tuple(missing)
+
+
+def _named(node: str, targets: frozenset[str]) -> bool:
+    parts = node.split("::")
+    return any("::".join(parts[:i]) in targets for i in range(2, len(parts) + 1))
 
 
 def _test_functions(repo: Path, blob: str, *, present: bool = False) -> dict[str, str]:

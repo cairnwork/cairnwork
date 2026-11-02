@@ -355,6 +355,13 @@ Checks run in this order and the first failure is reported:
 9. Core verdict, as for v0.1: `RESPONSE_NOT_VERIFIED` (verdict and Core identity), the pin
    (`CORE_IDENTITY_MISMATCH`), `RESPONSE_NOT_VERIFIED` (response binding and echoed hashes), then
    `RECEIPT_INCONSISTENT`
+10. coverage (#651), the producer's rule: every Python file in `test_paths` must be a target of
+    some bound verifier argv (in the `python3 -m pytest` shape the producer accepts), whole or
+    through each of its new or changed tests (`path::test` or `path::Class`). Full mode reads
+    those tests from the test commit; confidential mode cannot, so there any target naming a test
+    in the file counts, on the signer's word like the test contents (`TEST_PATH_NOT_TARGETED`).
+    Every bound verifier id must be among the request's required verifier ids
+    (`VERIFIER_NOT_REQUIRED`)
 
 On success `verify --json` adds `assurance`, what the receiver checked itself (`null` for v0.1):
 `mode` (`full`/`confidential`), `test_source` (`policy_pinned` with `--policy`, otherwise

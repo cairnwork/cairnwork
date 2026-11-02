@@ -24,7 +24,10 @@ from cairnwork_attest.record import _digest, verify_record
 from cairnwork_attest.statement import Producer, statement_bytes
 from tests.attest.test_verify import CORE_IDENTITY, fake_core_verify
 
-VERIFIERS = [["pytest-0", ["python3", "-m", "pytest", "-q", "tests"]]]
+# the shape the producer accepts (verifier_spec.parse_verifier): each test file a whole target
+VERIFIERS = [
+    ["pytest-0", ["python3", "-m", "pytest", "-q", "tests/test_a.py", "tests/test_new.py"]]
+]
 TESTS = {  # one test file added, one changed
     "tests/test_new.py": "def test_new():\n    pass\n",
     "tests/test_a.py": "def test_a():\n    assert 1\n",

@@ -26,6 +26,7 @@ from cairnwork.deferred_tests import (
     never_seen,
     new_tests,
     test_paths,
+    untargeted,
 )
 from cairnwork.p2p import P2PPlan, run_plan
 from cairnwork.reasons import explain, verdict_reason
@@ -53,11 +54,15 @@ def tests_unused(task, *, claim: bool) -> None:
 def tests_with_teeth(task, specs, result, ctx: VerifyContext) -> tuple[str, ...]:
     """Check a task's deferred tests once the worker is done: plain test files on the
     base whose test cases really fail there. Returns their paths; raises TestCommitRejected
-    when they do not (NO_TEETH) and BaseUncomparable when the base cannot tell (#234)."""
+    when they do not (NO_TEETH) or leave a test file's changes out of every verifier target
+    (DEFERRED_TESTS_NOT_TARGETED), and BaseUncomparable when the base cannot tell (#234)."""
     check_roots_on_base(task.repo, task.base_commit, task.test_roots)  # before any base run
     ensure_test_commit(task.repo, task.test_commit, task.test_store)
     paths = test_paths(task.repo, task.base_commit, task.test_commit, task.test_roots)
     targets = new_tests(task.repo, task.base_commit, task.test_commit, paths)  # may refuse
+    if missing := untargeted(paths, targets, (t for spec in specs for t in spec.targets)):
+        hint = "name each such file, or each of its new or changed tests, as a verifier target"
+        raise TestCommitRejected("DEFERRED_TESTS_NOT_TARGETED", f"{', '.join(missing)}; {hint}")
     runs = run_verifiers(ctx, task.test_commit, specs, f"{result.attempt_id}-b")
     comparison = base_comparison(runs, targets)  # decided before the base logs go
     for run in runs:  # not evidence for Core; would show the tests to later workers
