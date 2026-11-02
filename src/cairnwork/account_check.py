@@ -3,7 +3,7 @@
 The stress replay lost 26 rows to a bare "not usable": the venv sat under a 0750 home. ``walk``
 says for each directory on the way to the interpreter (as configured and as really located)
 whether the account's uid and groups may traverse it; ``blocked`` names the first that blocks,
-e.g. ``/Users/james 0750 james:staff not traversable by cairnwork-verifier``. Mode bits only, no
+e.g. ``/Users/<owner> 0750 <owner>:staff not traversable by cairnwork-verifier``. Mode bits only, no
 ACLs: a hint. ``precheck`` takes its verdict from ``VerifierAccount.available()``, before anything
 is spent; a failure is UNCOMPARABLE ``VERIFIER_ACCOUNT_UNUSABLE``, never success.
 """

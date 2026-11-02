@@ -17,8 +17,20 @@ confirming that all integrity invariants hold:
 8. Recomputed `request_hash`: Must equal `"sha256:" + sha256(canonical_json(request))` as computed by the notary.
 9. Recomputed commit bindings: The record's `candidate_commit` must equal `change_set.target_revision` (stripped of `git-commit:` prefix) and `base_commit` must equal `change_set.source_revision` (stripped of `git-commit:` prefix).
 
-If any check fails or the notary verdict is not verified, statement creation is refused
-with `RecordNotVerified` or `RecordMalformed`.
+If any check fails or the notary verdict is not verified, statement creation is refused:
+`cairnwork-attest statement` prints the error code to stderr and exits 2. The codes (from
+`cairnwork_attest.record`, `statement`, `keys` and `bundle`): `RECORD_NOT_FOUND`,
+`RECORD_NOT_VERIFIED` (`RecordNotVerified`), `RECORD_MALFORMED`, `DUPLICATE_KEY`,
+`INVALID_BINDING_JSON`, `INVALID_REQUEST_JSON`, `INVALID_RESPONSE_JSON` and the matching
+`INVALID_<BINDING|REQUEST|RESPONSE>_STRUCTURE` (the last four and the first two are
+`RecordMalformed` or `RecordNotFound`), `BINDING_HASH_MISMATCH`, `CANDIDATE_MISMATCH`,
+`VERIFIED_RECORD_FORGED`, `VERIFIED_RECORD_TAMPERED`; with `--sign` also the key codes
+(`STATE_DIR_NOT_FOUND`, `KEY_NOT_FOUND`, `KEY_NOT_REGULAR`, `KEY_UNREADABLE`,
+`KEY_PERMISSIONS_LOOSE`, `KEY_WRONG_OWNER`, `KEY_TOO_LARGE`, `KEY_MALFORMED`, `KEY_WRONG_TYPE`),
+`PAYLOAD_NOT_BYTES` and the bundle write codes (`BUNDLE_EXISTS`, `BUNDLE_UNWRITABLE`,
+`BUNDLE_MALFORMED`, `FILE_UNWRITABLE` for the unsigned file). A contradictory or unknown
+`TEST_SOURCE` journal row fails with the base code `ATTEST_ERROR`. An `OSError` or `ValueError`
+prints `ERROR: <message>` and also exits 2.
 
 ## In-Process Trust Boundary
 
@@ -381,8 +393,11 @@ the binding's level, checked in step 7; `"same_process_only"` when the binding h
 pins a non-empty `blackbox_commitment` only, the weaker check, and `not_checked` without a policy or
 a non-empty commitment pin; it says which check ids the receiver pinned, not that the checks ran;
 docs/SECURITY.md). Without `--json` the
-same object follows the `OK` line. A verify-action that predates v0.2 refuses these receipts with
-`STATEMENT_SHAPE` (closed, not open); the note is attached to the PR head, so `publish` is
+same object follows the `OK` line. A verify-action that predates v0.2 does not
+refuse them with `STATEMENT_SHAPE`: what it does depends on the version. The untagged commits
+before v0.2 support return `UNSUPPORTED_PREDICATE_TYPE`; the tagged `v0.1.0` has no `policy`
+input and, when its `cairnwork-ref` is a Cairnwork commit that supports v0.2, accepts a
+full-mode receipt without a policy (`test_source=signer_choice`). The note is attached to the PR head, so `publish` is
 unchanged. `check-run --repo` without a policy reports `POLICY_REQUIRED` when the tests are
 absent. When `check-run --repo` verifies a v0.2 receipt, the summary adds an `Assurance` row right
 after `Offline verification` with the same object as sorted `key=value` pairs, so a reader can see
@@ -461,6 +476,5 @@ The following capabilities and gaps are explicitly deferred:
 - Sigstore signing and transparency log integration.
 - Enforcing forge status (the notes push is `cairnwork-attest publish`; the informational Check Run is `cairnwork-attest check-run`).
 - `hidden_test_commit` for the Issue runner: bound for external candidates (v0.2) only.
-- Execution log hashes: verifier argv is bound for external candidates (v0.2); log digests are not.
-- Sandbox profile hash: Not carried in the notary record or evidence bundle.
+- Execution log hashes: verifier argv is bound for external candidates (v0.2). The log digest and the sandbox profile hash are not separate fields, but both are committed inside each verifier observation's `artifact_hash` (`log_sha256` and `sandbox_profile_sha256` in `verifiers._record_digest`).
 - Timestamp validation: Timestamp is caller-supplied and not validated as UTC or against a trusted timestamping authority.

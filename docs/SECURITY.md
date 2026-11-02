@@ -394,8 +394,9 @@ directories (`attempt_dirs`). Three residuals remain (#436); each has its own bo
   Cairnwork runs it; an operator who starts recovery as root lifts this bound). macOS hands out
   pids in turn up to 99,999 before wrapping, so reuse within either window is unlikely in practice.
 - **Directory checks are by path.** Recovery resolves the run directories to realpaths when it
-  lists them, `kill_withheld_in` resolves them again at the start of every sweep (`confirm_gone`
-  sweeps again after `CONFIRM_WAIT`), and a process's directory is resolved when it is checked; a
+  lists them, `kill_withheld_in` uses those realpaths as given and never resolves them again (#578: a
+  directory the run later swaps for a symlink cannot move the sweep elsewhere; `confirm_gone`
+  looks again after `CONFIRM_WAIT` with the same list), and a process's directory is resolved when it is checked; a
   run directory moved or replaced between those reads and the kill is not covered. Bound: only the
   owner can replace a top-level run directory. The owner's run roots belong to the owner, and a
   dedicated account's `runs/` is `chown $OWNER`, mode `2750` (`scripts/setup_verifier_user.sh`).

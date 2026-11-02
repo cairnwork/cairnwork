@@ -34,7 +34,7 @@ push protection 已經開啟，可以擋下大部分常見格式。但它擋不�
 
 - **隱藏測試保密只在 `test_source: "bundle"` 成立**（私有存放區、沒匯入就拒絕、絕不退回 origin）。`auto`（程式預設）是相容／示範模式，沒有保密保證，任何文件和證明都不得在 `auto` 下主張。證明包的 `test_source` 欄位記錄該次執行用的模式（`bundle`／`auto`／`none`）。
 
-- CI 只用最小權限（`permissions: contents: read`）。
+- CI 預設只用最小權限（`permissions: contents: read`）。例外是三個 job 另加一個寫入範圍：`pyright-trusted.yml` 的 `publish` 與 `sibling-merge-checks.yml` 的呼叫 job 各加 `statuses: write`（只為了在 PR head 上寫狀態檢查）；`entrypoint-smoke.yml` 的開 Issue job 加 `issues: write`（只為了開或更新「entrypoint smoke failed」的 Issue）。
 - 不在 repo 裡寫主機路徑、內部 IP、帳號 email。
 - 依賴固定版本。升級要用獨立 PR。
 - **worker 帳號隔離（state `agy_run_as_user`，#183）是帳號邊界，不是完成的證明。** 設了之後 agy 模型程序跑在
