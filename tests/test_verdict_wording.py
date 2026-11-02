@@ -3,7 +3,8 @@
 import pytest
 
 from cairnwork import protection
-from cairnwork.issue_publish import pr_body
+from cairnwork.issue_publish import done_text, pr_body
+from cairnwork.notary import _level
 from cairnwork_quickstart.cli import _report
 
 
@@ -14,8 +15,21 @@ def test_the_issue_pr_body_says_the_level_beside_verified(level):
     assert f"VERIFIED {level}" in body
 
 
-def test_the_issue_pr_body_without_a_level_says_plain_verified():
-    assert "Core 判定 VERIFIED（" in pr_body(7, "t1", "a1", "c" * 40, {})
+def test_an_unknown_level_is_said_not_left_bare():
+    assert "Core 判定 VERIFIED（保護等級未知）（" in pr_body(7, "t1", "a1", "c" * 40, {})
+    assert "（VERIFIED（保護等級未知））" in done_text("", "o/r")
+    assert "（VERIFIED partial）" in done_text("", "o/r", "partial")
+
+
+def test_the_level_comes_from_the_requests_ids_not_the_binding():
+    same = {"acceptance_contract": {"required_verifier_ids": ["pytest"]}}
+    both = {"acceptance_contract": {"required_verifier_ids": ["blackbox:x", "pytest"]}}
+    assert _level(same, None) == "same_process_only"
+    assert _level(same, {"protection": "blackbox"}) == "same_process_only"  # coverage differs
+    assert _level(same, {"protection": "bogus"}) == "same_process_only"
+    assert _level(both, {"protection": "partial_macos"}) == "partial_macos"  # host grade kept
+    assert _level(both, {"protection": "bogus"}) == protection.level(["blackbox:x", "pytest"])
+    assert _level({}, {"protection": "blackbox"}) == ""
 
 
 def test_the_quickstart_report_says_the_level(capsys):

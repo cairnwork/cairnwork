@@ -217,10 +217,10 @@ def settle(intake: Intake, github: GitHub, clone: Path) -> list[dict[str, Any]]:
                 continue
             if status["status"] == "COMPLETED" and status["core_verified"]:
                 issue_task.settle_check(github, number, known, (QUEUE, RUNNING, NEEDS_FIX))
-                url = _open_pr(intake, github, clone, number, status)
+                url, level = _open_pr(intake, github, clone, number, status)
                 issue_hook.owe(intake, github.repo, number, str(status["task_id"]))  # (#63 (d))
                 github.relabel(number, DONE, RUNNING)
-                github.comment(number, done_text(url, github.repo))
+                github.comment(number, done_text(url, github.repo, level))
                 results.append({"issue": number, "pr": url})
                 issue_hook.run(intake, github, clone, number, status)  # never touches the result
             else:
@@ -243,7 +243,7 @@ def settle(intake: Intake, github: GitHub, clone: Path) -> list[dict[str, Any]]:
     return results
 
 
-def _open_pr(intake: Intake, github: GitHub, clone: Path, number: int, status) -> str:
+def _open_pr(intake: Intake, github: GitHub, clone: Path, number: int, status) -> tuple:
     attempt, commit = str(status["attempt_id"]), str(status["candidate_commit"])
     if not ATTEMPT_ID.fullmatch(attempt) or not COMMIT.fullmatch(commit):
         raise ValueError(f"unexpected attempt or commit: {attempt!r} {commit!r}")
@@ -263,18 +263,19 @@ def _open_pr(intake: Intake, github: GitHub, clone: Path, number: int, status) -
         task_id, attempt, read_change_set(clone, request.base_commit, commit)
     ):
         raise ValueError(f"RECEIPT_BINDING_MISMATCH: candidate {commit} is not what was notarized")
+    verdict = intake.notary.verdict(task_id, attempt, expected_candidate=commit)
+    level = verdict.protection if verdict else ""
     branch = f"cairnwork/{number}-{attempt}"
     existing = github.find_pr(branch, commit)
     if existing:  # a previous pass opened it; only the labels were left to do
-        return existing
+        return existing, level
     _verify_origin(clone, github.repo)  # re-checked: the remote may have changed
     helper = f"!{shlex.quote(github.gh)} auth git-credential"
     _git(clone, "-c", "credential.helper=", "-c", f"credential.helper={helper}", "push",
          "origin", f"{commit}:refs/heads/{branch}", timeout=NETWORK_TIMEOUT_SECONDS)  # fmt: skip
     seen = parse_provenance(_git(clone, "show", "-s", "--format=%B", commit))
-    verdict = intake.notary.verdict(task_id, attempt, expected_candidate=commit)
-    body = pr_body(number, task_id, attempt, commit, seen, verdict.protection if verdict else "")
-    return github.draft_pr(branch, f"Cairnwork: fix for #{number} (Refs #{number})", body)
+    body = pr_body(number, task_id, attempt, commit, seen, level)
+    return github.draft_pr(branch, f"Cairnwork: fix for #{number} (Refs #{number})", body), level
 
 
 def _instructions(repo: str, number: int, issue: dict[str, Any], summary: str) -> str:
