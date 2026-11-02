@@ -26,4 +26,8 @@ Rules
 - The `outcome` the guard reports does not separate an assertion failure from a failed fixture, so
   a setup error on the candidate also counts as a failure. Cost is an estimate from token counts.
 
+Comparison with R-G: R-G used a tool-using agent that read the whole tree. This is one Messages
+API call per step with files inlined (at most 150 KB of tracked text, chosen by name overlap with
+the ticket; symlinks are skipped). R-G's numbers therefore do not transfer to this version.
+
 Owner and expiry are in OWNER and EXPIRES. Core never imports this package.

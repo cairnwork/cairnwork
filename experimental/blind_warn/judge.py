@@ -12,12 +12,13 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import urllib.request
 import uuid
 from collections.abc import Callable
 from pathlib import Path
 
-from cairnwork.gitcmd import run_git
+from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.intake import Intake
 from cairnwork.verifiers import VerifierRun, VerifierSpec, run_verifiers
 from cairnwork.verify_context import VerifyContext
@@ -34,7 +35,7 @@ _FENCE = re.compile(r"```(?:python)?\n(.*?)```", re.DOTALL)
 _TEXT_SUFFIXES = (".py", ".md", ".rst", ".txt", ".cfg", ".toml", ".ini")
 
 ModelCall = Callable[[str, str], tuple[str, float]]  # (prompt, model) -> (text, usd)
-Runner = Callable[[VerifyContext, str, tuple[VerifierSpec, ...], str], tuple[VerifierRun, ...]]
+Runner = Callable[..., tuple[VerifierRun, ...]]  # run_verifiers(ctx, commit, specs, id, timeout=)
 
 
 class BlindWarnError(Exception):
@@ -79,7 +80,8 @@ def _tokens(text: str) -> set[str]:
 
 def repo_context(base: Path, ticket: str) -> str:
     """Tracked text files of the base, those that share the most words with the ticket first."""
-    names = run_git(base, "ls-files").splitlines()
+    entries = (line.split("\t", 1) for line in run_git(base, "ls-files", "-s").splitlines())
+    names = [name for info, name in entries if not info.startswith("120000")]  # no symlinks
     words = _tokens(ticket)
     ranked = sorted(
         (n for n in names if n.endswith(_TEXT_SUFFIXES)),
@@ -88,9 +90,8 @@ def repo_context(base: Path, ticket: str) -> str:
     parts, used = [], 0
     for name in ranked:
         try:
-            raw = (base / name).read_bytes()[:MAX_FILE_BYTES]
-            text = raw.decode("utf-8")
-        except (OSError, UnicodeDecodeError):
+            text = run_git(base, "show", f"HEAD:{name}")[:MAX_FILE_BYTES]  # the tracked blob
+        except (GitCommandError, UnicodeDecodeError):
             continue
         if used + len(text) > CONTEXT_BYTES:
             continue
@@ -169,14 +170,14 @@ def _verify_both(
         target.write_text(text, encoding="utf-8")
     base_commit = _commit(work, "blind tests on base")
     run_git(work, "checkout", "-q", "--detach", base_sha)
-    run_git(work, "apply", "--whitespace=nowarn", str(patch))
+    run_git(work, "apply", "--whitespace=nowarn", "--", str(patch))
     for key, text in files.items():
         (work / names[key]).parent.mkdir(parents=True, exist_ok=True)
         (work / names[key]).write_text(text, encoding="utf-8")
     cand_commit = _commit(work, "candidate with blind tests")
     specs = tuple(VerifierSpec(key, (names[key],)) for key in files)
-    base_runs = run(ctx, base_commit, specs, f"bw-{uuid.uuid4().hex[:8]}-b")
-    cand_runs = run(ctx, cand_commit, specs, f"bw-{uuid.uuid4().hex[:8]}-c")
+    base_runs = run(ctx, base_commit, specs, f"bw-{uuid.uuid4().hex[:8]}-b", timeout=RUN_TIMEOUT)
+    cand_runs = run(ctx, cand_commit, specs, f"bw-{uuid.uuid4().hex[:8]}-c", timeout=RUN_TIMEOUT)
     return base_runs, cand_runs, specs
 
 
@@ -206,9 +207,15 @@ def _line(a: dict, b: dict) -> str:
 
 def _run(ticket, base, patch, state, model, call, runner, cost) -> dict:
     context = repo_context(base, ticket)
-    conv_prompt = f"{_brief('BRIEF-conv.md')}\n\n=== ISSUE.md\n{ticket}\n\n=== src/\n{context}"
+    conv_prompt = (
+        f"{_brief('BRIEF-conv.md')}\n\nInstead of writing files, put the full text of "
+        "work/conventions.md in your reply (not just OK)."
+        f"\n\n=== ISSUE.md\n{ticket}\n\n=== src/\n{context}"
+    )
     conventions, usd = call(conv_prompt, model)
     cost[0] += usd
+    if conventions.strip().strip(".!").lower() in ("", "ok"):
+        raise BlindWarnError("the conventions step returned no summary")
     files = {}
     for key in ("a", "b"):  # same brief, two separate calls
         text, usd = _write_tests(call, model, ticket, context, conventions)
@@ -227,8 +234,16 @@ def _run(ticket, base, patch, state, model, call, runner, cost) -> dict:
     work_dir = state / "blind_warn" / uuid.uuid4().hex[:12]
     work_dir.mkdir(parents=True)
     work = work_dir / "repo"
+    try:
+        return _run_in(work_dir, work, base, patch, files, config, account, runner, cost)
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def _run_in(work_dir, work, base, patch, files, config, account, runner, cost) -> dict:
+    state = work_dir.parent.parent
     base_sha = run_git(base, "rev-parse", "HEAD").strip()
-    run_git(work_dir, "clone", "-q", "--no-hardlinks", str(base), str(work))
+    run_git(work_dir, "clone", "-q", "--no-hardlinks", "--", str(base), str(work))
     ctx = VerifyContext(
         work, state / "runs", account=account,
         python=config.get("verifier_python"), base_commit=base_sha,

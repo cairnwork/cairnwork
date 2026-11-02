@@ -43,7 +43,7 @@ def run_of(outcomes, rc=1, collect=()):
 def runner_with(base, cand):
     """base/cand: {'a': run, 'b': run}; the run id ends in -b (base) or -c (candidate)."""
 
-    def runner(ctx, commit, specs, run_id):
+    def runner(ctx, commit, specs, run_id, **kwargs):
         table = base if run_id.endswith("-b") else cand
         return tuple(table[spec.verifier_id] for spec in specs)
 
@@ -163,11 +163,48 @@ def test_cli_prints_one_json_object_and_exits_zero(case, monkeypatch, capsys, tm
 
 
 def test_core_does_not_import_the_package():
-    done = subprocess.run(
-        [sys.executable, "-c", "import sys, cairnwork.intake; print('experimental' in sys.modules)"],  # noqa: E501
-        capture_output=True, text=True, check=True,
-    )  # fmt: skip
+    # the enforcer is lint-imports ("Core must not import experimental"); this checks the runtime
+    code = "import sys, cairnwork.intake; print(any(m.startswith('experimental') for m in sys))"
+    code = code.replace("in sys)", "in sys.modules)")
+    done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
     assert done.stdout.strip() == "False"
+
+
+def test_tracked_symlink_to_an_outside_file_is_never_sent(case, tmp_path):
+    outside = tmp_path / "outside.txt"
+    outside.write_text("OUTSIDE-SECRET-TEXT")
+    (case.base / "docs.md").symlink_to(outside)
+    commit_change(case.base, {})
+    prompts = []
+
+    def spy(prompt, model):
+        prompts.append(prompt)
+        return "```python\n" + PASS_TEST + "```", 0.0
+
+    go(case, spy, runner_with({}, {}))
+    assert prompts and not any("OUTSIDE-SECRET-TEXT" in p for p in prompts)
+
+
+@pytest.mark.parametrize("reply", ["OK", "", "ok."])
+def test_a_conventions_reply_of_only_ok_is_an_error(case, reply):
+    prompts = []
+
+    def call(prompt, model):
+        prompts.append(prompt)
+        return reply, 0.0
+
+    result = go(case, call, runner_with({}, {}))
+    assert result["warn"] is False and "conventions" in result["error"]
+    assert len(prompts) == 1 and "in your reply" in prompts[0]
+
+
+def test_the_clone_is_removed_after_a_run(case):
+    go(
+        case,
+        fake_model(PASS_TEST, PASS_TEST),
+        runner_with({"a": GOOD, "b": GOOD}, {"a": GOOD, "b": GOOD}),
+    )
+    assert list((case.state / "blind_warn").iterdir()) == []
 
 
 @pytest.mark.sandbox
