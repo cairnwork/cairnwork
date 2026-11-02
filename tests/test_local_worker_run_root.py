@@ -8,6 +8,7 @@ local_worker_fakes."""
 
 from __future__ import annotations
 
+import io
 import os
 
 import pytest
@@ -219,7 +220,8 @@ def test_a_claim_that_is_not_text_is_not_this_episodes(tmp_path, capsys):
     assert "kept (not this episode's claim)" in capsys.readouterr().err
 
 
-def test_a_closed_stderr_does_not_replace_the_outcome(tmp_path, monkeypatch):
+@pytest.mark.parametrize("stream", ("broken pipe", "closed"))
+def test_a_closed_stderr_does_not_replace_the_outcome(tmp_path, monkeypatch, stream):
     runs = (tmp_path / "runs").resolve()
     _fill(runs / A)
     c = claim(runs / A, runs, "ep_1")
@@ -231,6 +233,10 @@ def test_a_closed_stderr_does_not_replace_the_outcome(tmp_path, monkeypatch):
         def flush(self):
             raise BrokenPipeError(32, "Broken pipe")
 
-    monkeypatch.setattr(run_root_cleanup.sys, "stderr", Closed())
+    closed = io.StringIO()
+    closed.close()  # print raises ValueError on it
+    monkeypatch.setattr(
+        run_root_cleanup.sys, "stderr", Closed() if stream == "broken pipe" else closed
+    )
     run_root_cleanup.finish(c, runs, delete=True)  # never raises
     assert not os.path.lexists(runs / A)

@@ -132,5 +132,5 @@ def finish(c: Claim | None, runs: Path, delete: bool) -> None:
         outcome = f"partial ({type(exc).__name__})"
     try:
         print(f"LOCAL_WORKER_RUN_ROOT {outcome} {c.root.name}", file=sys.stderr)
-    except OSError:  # a closed stderr must not replace the episode's outcome either
+    except (OSError, ValueError):  # a broken or closed stderr must not replace the outcome
         pass
