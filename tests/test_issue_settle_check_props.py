@@ -142,6 +142,15 @@ def test_a_test_roots_change_after_take_is_not_an_edit():
     assert not moves_of(github, "relabel") and not moves_of(github, "comment")
 
 
+def test_a_foreign_contract_fence_added_after_take_is_a_changed_issue():
+    """The eia-task block text is unchanged, but a ```*-contract fence now sits beside it (a
+    body take refuses): settle counts the Issue as changed and opens no PR."""
+    known = {"block_sha256": parse_task_block(block()).block_sha256}
+    github = GitHub(block() + "\n```nexus-contract\n{}\n```\n")
+    assert run(github, known) == "ISSUE_CHANGED_AFTER_TAKE"
+    assert len(moves_of(github, "comment")) == 1
+
+
 @pytest.mark.parametrize("error", [RuntimeError("gh: HTTP 502"), OSError("timeout")])
 def test_a_github_read_failure_propagates_without_relabel_or_comment(error):
     """A failed read of the Issue is GitHub trouble, retried next pass; it must not move the

@@ -157,8 +157,7 @@ def _run(intake: Intake, task_id: str) -> dict[str, Any]:
             if found is None:
                 raise ValueError("unreadable link")
             repo, number, block = found.groups()
-            roots = tuple(config.get("test_roots", ()))
-            gate = attempt_gate(GitHub(config["gh"] or DEFAULT_GH, repo), int(number), block, roots)
+            gate = attempt_gate(GitHub(config["gh"] or DEFAULT_GH, repo), int(number), block)
         except Exception:  # noqa: BLE001 - any failure: refuse, the task ends FAILED
             gate = lambda: TRUST_CHANGED  # noqa: E731
     result = run_bound_task(
