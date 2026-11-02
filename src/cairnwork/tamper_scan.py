@@ -26,8 +26,9 @@ hunks, so no text inside an added line ends it early; a carriage return, which P
 a line end, starts a new piece to scan. Python reads identifiers in NFKC form, so each piece is
 also matched with its identifier characters in that form (the rest as written), and a source
 encoding other than UTF-8 declared on an added line 1 or 2 is refused (``source_encoding``), as is
-an over-long added line, unread (``long_line``). It catches the straightforward forms and the PoCs
-seen so far, and it fails closed with a dedicated reason so an operator can see why.
+an over-long added line, unread (``long_line``), and a patch past its scan budget, read no further
+(``scan_budget``, tamper_scan_budget.py). It catches the straightforward forms and the PoCs seen so
+far, and it fails closed with a dedicated reason so an operator can see why.
 The rule list is the one place to change; the alias and library checks reuse its names and
 allow-lists.
 
@@ -59,6 +60,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cairnwork.gitcmd import OID, GitCommandError, run_git_bytes
+from cairnwork.tamper_scan_budget import SCAN_BUDGET, ScanBudget, Table
+from cairnwork.tamper_scan_budget import canonical as _canonical
 from cairnwork.tamper_scan_diff import MAX_LINE, added_lines
 from cairnwork.tamper_scan_pytest import (
     PATCHED_INTERNALS,
@@ -66,7 +69,6 @@ from cairnwork.tamper_scan_pytest import (
     PYTEST_HINT_IMPORT,
     PYTEST_HOOK_IMPL,
     PYTEST_PUBLIC_PATCH,
-    canonical_pytest,
 )
 from cairnwork.tamper_scan_tokens import added_file, file_views
 
@@ -188,7 +190,6 @@ _IMPORTED_NAME = re.compile(r"^\s*([\w.]+)(?:\s+as\s+([^\W\d]\w*))?\s*$")
 _FROM_TARGET = {"sys": ("modules",), "os": ("_exit",), "pytest": PYTEST_CLASSES}  # to follow
 _MODULE_ALIAS = {name: name for name in ("sys", "os", "gc", "pytest")} | {"posix": "os", "nt": "os"}
 _ALIAS_RULES = ("os_exit", "gc_walk", "pytest_public_patch")  # read on the alias spelling anywhere
-Table = dict[str, set[str]]  # alias names by what they are bound to (sys, os, modules, pytest...)
 
 # Library files: only a literal sensitive key (the names _SYS_MODULES_STUB refuses in test code),
 # so a plugin loader's sys.modules[spec.name] = mod and a stub of an unrelated module pass.
@@ -228,38 +229,19 @@ def _imported_names(clause: str) -> list[tuple[str, str | None]]:
     return [(found.group(1), found.group(2)) for found in parsed if found]
 
 
-def _canonical(text: str, aliases: Table) -> set[str]:
-    """The line with every known alias spelled as the plain name, so main's rules read it: as main
-    does, then unwrapped with pytest's aliases last and first (a name bound twice reads as each)."""
-    plain = _plain(text, aliases)
-    unwrapped = {canonical_pytest(plain, aliases), _plain(canonical_pytest(text, aliases), aliases)}
-    return {canonical_pytest(plain, aliases, unwrap=False), *unwrapped}
-
-
-def _plain(text: str, aliases: Table) -> str:
-    # Not after "." or a word character: obj.s.modules or ms.modules is not the alias s.
-    for name in sorted(aliases["sys"]):
-        text = re.sub(rf"(?<![\w.]){re.escape(name)}(\s*\.\s*modules\b)", r"sys\1", text)
-    for name in sorted(aliases["os"]):
-        text = re.sub(rf"(?<![\w.]){re.escape(name)}(\s*\.\s*_exit\b)", r"os\1", text)
-    for name in sorted(aliases["gc"]):
-        text = re.sub(rf"(?<![\w.]){re.escape(name)}(\s*\.\s*get_)", r"gc\1", text)
-    for name in sorted(aliases["modules"]):
-        text = re.sub(rf"(?<![\w.]){re.escape(name)}\b", "sys.modules", text)
-    for name in sorted(aliases["_exit"]):  # a call; "def _exit(self):" defines a method instead
-        text = re.sub(rf"(?<![\w.])(?<!def ){re.escape(name)}(\s*\()", r"os._exit\1", text)
-    return text
-
-
 def _hits(rule: Rule, text: str) -> bool:
     if rule.allow is not None and rule.allow.match(text):
         return False  # a whole line of an honest shape
     return bool(rule.pattern.search(text))
 
 
-def _extra_rules(text: str, aliases: dict[str, set[str]], in_tests: bool) -> list[str]:
+def _extra_rules(text: str, aliases: Table, in_tests: bool, budget: ScanBudget) -> list[str]:
     """Rule names the RULES table misses on this line: alias spellings and library forgeries."""
+    if not budget.read((text,), aliases):  # checked before spelling: costs grow with both
+        return [SCAN_BUDGET]
     canons = _canonical(text, aliases) - {text}
+    if not budget.read(canons):  # the patterns read the spelled-out text
+        return [SCAN_BUDGET]
     names = [name for name in _ALIAS_RULES if any(_hits(_BY_NAME[name], c) for c in canons)]
     if in_tests:  # main's full sys.modules rule, stub allow included, on the plain spelling
         if any(_hits(_BY_NAME["sys_modules_write"], canon) for canon in canons):
@@ -284,13 +266,17 @@ class Finding:
 
 
 def scan_added_lines(
-    path: str, lines: list[tuple[int, str]], data: bytes | None = None
+    path: str,
+    lines: list[tuple[int, str]],
+    data: bytes | None = None,
+    budget: ScanBudget | None = None,
 ) -> list[Finding]:
     """Findings for the added ``(line number, text)`` pairs of one file (``.py`` files only).
 
     ``data`` is the whole file as committed (scan_patch passes it); Python's reading of comments
     and strings comes from it (tamper_scan_tokens.py), else from the added lines. Not read with an
     over-long added line: refused anyway, and some Pythons tokenize such a line in quadratic time.
+    ``budget`` is the patch's (tamper_scan_budget.py); past it the file is refused, unread.
     """
     if not path.endswith(".py"):
         return []
@@ -301,6 +287,9 @@ def scan_added_lines(
     masked_aliases = {key: set(names) for key, names in aliases.items()}  # also from masked lines
     source = data if data is not None else added_file(lines)
     found = [Finding(path, number, "long_line") for number, line in lines if len(line) > MAX_LINE]
+    budget = budget or ScanBudget()
+    if source is not None and not found and not budget.tokenize(source):
+        return [Finding(path, lines[0][0] if lines else 1, SCAN_BUDGET)]
     views = (file_views(source) if source is not None and not found else None) or {}
     code_aliases = [{k: set(v) for k, v in aliases.items()} for _ in range(2)] if views else None
     # Python also ends a source line at "\r" (CRLF included), so each piece is scanned on its own.
@@ -313,29 +302,37 @@ def scan_added_lines(
                 continue  # a comment to Python, or string text with no code on the line
             # Main's reading, with its own alias table; a line main skips as a comment has none.
             plain = () if _COMMENT_ONLY.match(piece) else (piece, _nfkc_names(piece))
-            names = _rule_names(plain, aliases, masked_aliases, in_tests, in_conftest)
+            names = _rule_names(plain, aliases, masked_aliases, in_tests, in_conftest, budget)
             if code_aliases is not None and view is not None:  # aliases bound by code only
                 for text in dict.fromkeys((view.bound, _nfkc_names(view.bound))):
                     _bind_aliases(text, code_aliases[0])  # the second also reads "import(":
                     _bind_aliases(text.replace("import(", "import ("), code_aliases[1])
                 both = dict.fromkeys((*plain, view.code, _nfkc_names(view.code)))
-                names += [
-                    n for a in code_aliases for t in both for n in _extra_rules(t, a, in_tests)
-                ]
+                extra = (_extra_rules(t, a, in_tests, budget) for a in code_aliases for t in both)
+                names += [name for more in extra for name in more]
                 names = list(dict.fromkeys(names))
             code = piece if view is None else view.code  # "#", ";" in a string masked
             masked = (code, _nfkc_names(code))  # read with a table of its own: only adds names
             if masked != plain or masked_aliases != aliases:
-                more = _rule_names(masked, masked_aliases, None, in_tests, in_conftest)
+                more = _rule_names(masked, masked_aliases, None, in_tests, in_conftest, budget)
                 names += [name for name in more if name not in names]
             found += [Finding(path, number, name) for name in names]
+            if budget.over:  # refused (scan_budget): the rest is not read (#668)
+                return found
     return found + _committed_coding(path, data, found)
 
 
 def _rule_names(
-    texts: tuple[str, ...], aliases: Table, also: Table | None, in_tests: bool, in_conftest: bool
+    texts: tuple[str, ...],
+    aliases: Table,
+    also: Table | None,
+    in_tests: bool,
+    in_conftest: bool,
+    budget: ScanBudget,
 ) -> list[str]:
     """Rule names for ``texts`` read with ``aliases``; their imports also bind into ``also``."""
+    if not budget.read(dict.fromkeys(texts)):  # every reading of a line counts (#668)
+        return [SCAN_BUDGET]
     names: list[str] = []
     # Python compiles identifiers in NFKC form (PEP 3131): each text, then that form.
     for text in dict.fromkeys(texts):
@@ -347,7 +344,8 @@ def _rule_names(
         _bind_aliases(text, aliases)  # before the extra checks: "import os as o; o._exit(0)"
         if also is not None:
             _bind_aliases(text, also)
-        names += [name for name in _extra_rules(text, aliases, in_tests) if name not in names]
+        more = _extra_rules(text, aliases, in_tests, budget)
+        names += [name for name in more if name not in names]
     return names
 
 
@@ -392,9 +390,9 @@ def scan_patch(repo: Path, base: str, head: str) -> list[Finding]:
         raise GitCommandError("git diff output is not UTF-8") from exc
     if not OID.fullmatch(head):  # read as "<commit>:<path>" below, so never an option
         raise GitCommandError("head is not a full commit id")
-    found = []
+    found, budget = [], ScanBudget()  # one budget for the whole patch (#668)
     for path, lines in added_lines(diff).items():
-        if path.endswith(".py") and lines:  # the whole file as committed, for Python's reading
+        if path.endswith(".py") and lines and not budget.over:  # the whole file, as committed
             data = run_git_bytes(repo, "cat-file", "blob", f"{head}:{path}")
-            found += scan_added_lines(path, lines, data)
+            found += scan_added_lines(path, lines, data, budget)
     return found
