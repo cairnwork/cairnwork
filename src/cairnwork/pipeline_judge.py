@@ -25,6 +25,7 @@ from cairnwork.deferred_tests import (
     ensure_test_commit,
     never_seen,
     new_tests,
+    not_run,
     test_paths,
     untargeted,
 )
@@ -93,7 +94,9 @@ def judge_candidate(
     reach(phase) records progress. A binding (verify_candidate only, #229) binds the verdict to
     the tree that ran and to the binding's head instead of to result.candidate_commit.
     ``unless_passed`` (verify_candidate only, #259): a failed base check, raised before Core is
-    asked when a verifier did not pass; when they all passed the candidate's own evidence stands."""
+    asked when a verifier did not pass; when they all passed the candidate's own evidence stands.
+    When every run and check passed but a new test of the test commit is in no verifier run's
+    record, Core is not asked either (DEFERRED_TESTS_NOT_RUN_IN_VERIFICATION, #697)."""
     judged = result.candidate_commit
     task_id = result.task_id
     reach("VERIFYING")
@@ -106,6 +109,7 @@ def judge_candidate(
         checks, log = judge_blackbox(task.blackbox, ctx, subject, f"{result.attempt_id}-v")
         bb_logs = [str(log)] if log else []
     runs = run_verifiers(ctx, judged, specs, f"{result.attempt_id}-v")
+    verified_by = list(runs)  # the verifier runs alone, as the base run's check reads them
     if p2p is not None:
         p2p_runs, result.p2p = run_plan(p2p, task, judged, result, ctx)
         runs += p2p_runs
@@ -113,6 +117,13 @@ def judge_candidate(
     result.logs = [*result.logs, *(str(run.log_path) for run in runs), *bb_logs]
     if unless_passed is not None and not all(run.observation.passed for run in runs):
         raise unless_passed
+    if (missing := _not_run_here(task, verified_by, test_files)) and all(
+        o.passed for o in (*(run.observation for run in runs), *(c.observation for c in checks))
+    ):  # #697: a whole-file target passes on another test of that file; Core is not asked
+        result.reason = (
+            f"DEFERRED_TESTS_NOT_RUN_IN_VERIFICATION: no verifier collected or ran {missing}"
+        )
+        return
     ids, observations, gate_note = _contract(task, runs, checks, declared, binding, result)
     spec = AcceptanceSpec(
         task_id, digest, ids, tuple(task.allowed_files) + test_files, task.allow_deletions
@@ -132,6 +143,14 @@ def judge_candidate(
     result.verified = bool(verdict.verified and recorded and recorded.verified)
     result.reason = verdict_reason(result.verified, verdict, recorded) + explain(runs)
     result.reason += "".join(f" [{check.reason}]" for check in checks) + gate_note
+
+
+def _not_run_here(task, runs, test_files) -> list[str]:
+    """Every new or changed test must be in the verification run's guard record too (#697), as
+    in the base run's (base_comparison, #660)."""
+    if not (task.test_commit and test_files):
+        return []
+    return not_run(runs, new_tests(task.repo, task.base_commit, task.test_commit, test_files))
 
 
 def _contract(task, runs, checks, declared, binding, result):

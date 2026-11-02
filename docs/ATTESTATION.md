@@ -375,7 +375,9 @@ Checks run in this order and the first failure is reported:
     Every bound verifier id must be among the request's required verifier ids
     (`VERIFIER_NOT_REQUIRED`). The rule reads which tests a target names, not which ones pytest
     collected (#660). The producer also refuses a test commit whose new or changed tests are not
-    all in its base run's guard record (`DEFERRED_TESTS_NOT_RUN`); the receipt carries no such
+    all in its base run's guard record (`DEFERRED_TESTS_NOT_RUN`), and, before Core is asked, a
+    candidate whose verification run's guard record misses one of them, even when another test of
+    the same file ran (`DEFERRED_TESTS_NOT_RUN_IN_VERIFICATION`, #697); the receipt carries no such
     record, so on that point the receiver relies on the signer. In full mode it does check what the
     files show: a test a class inherits from an earlier class in the same file is a new test of
     that class too (so a target naming only the parent's copy does not cover the file), and a new

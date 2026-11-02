@@ -320,8 +320,7 @@ def base_comparison(runs, targets: frozenset[str]) -> Comparison:
             for run, code in problems
         )  # fmt: skip
         return Comparison("UNCOMPARABLE", problems[0][1], detail)
-    ran = {nodeid.split("[", 1)[0] for run in runs for nodeid in run.outcomes}
-    if missing := sorted(targets - ran):  # #660: the receipt would bind a test that never ran
+    if missing := not_run(runs, targets):  # #660: the receipt would bind a test that never ran
         return Comparison(
             "NOT_RUN", "DEFERRED_TESTS_NOT_RUN", f"no verifier collected or ran {missing}"
         )
@@ -331,6 +330,13 @@ def base_comparison(runs, targets: frozenset[str]) -> Comparison:
                 return Comparison("TEETH")
     codes = [run.returncode for run in runs]
     return Comparison("NO_TEETH", "TESTS_DO_NOT_FAIL_ON_BASE", f"pytest exit codes {codes}")
+
+
+def not_run(runs, targets) -> list[str]:
+    """The ``targets`` no run's guard record holds (collected and run, any outcome; a
+    parametrisation counts): the base run's check (#660) and the verification run's (#697)."""
+    ran = {nodeid.split("[", 1)[0] for run in runs for nodeid in run.outcomes}
+    return sorted(set(targets) - ran)
 
 
 def overlay_tree(

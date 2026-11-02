@@ -4,6 +4,7 @@ reading the file (every node id pytest collects a new test under, and DEFERRED_T
 and, after the base run, the guard's record (DEFERRED_TESTS_NOT_RUN)."""
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 from conftest import commit_change
@@ -12,7 +13,13 @@ from verify_helpers import FIX, candidate, verify
 
 from cairnwork.core_request import VerifierObservation
 from cairnwork.deferred_tests import TestCommitRejected as Rejected
-from cairnwork.deferred_tests import base_comparison, ensure_test_commit, new_tests, untargeted
+from cairnwork.deferred_tests import (
+    base_comparison,
+    ensure_test_commit,
+    new_tests,
+    not_run,
+    untargeted,
+)
 from cairnwork.verifiers import VerifierRun, VerifierSpec
 
 sandbox = pytest.mark.sandbox
@@ -115,7 +122,7 @@ def test_worker_path_refuses_a_new_test_the_base_run_did_not_run(project, tmp_pa
     result = run(project, tmp_path, base, test_commit, SeeingWorker({"src/calc.py": FIX}),
                  verifiers=_argv("tests/test_regression.py"))  # fmt: skip
     assert result.status == "FAILED"
-    assert result.reason.startswith("DEFERRED_TESTS_NOT_RUN"), result.reason
+    assert result.reason.startswith("DEFERRED_TESTS_NOT_RUN:"), result.reason
     assert "tests/test_regression.py::TestK::test_m" in result.reason
 
 
@@ -128,3 +135,95 @@ def test_verify_refuses_a_new_test_the_base_run_did_not_run(project, state):
     assert code == 2 and out["status"] == "REFUSED" and out["verified"] is False
     assert out["reason"].startswith("DEFERRED_TESTS_NOT_RUN"), out
     assert "tests/test_regression.py::TestK::test_m" in out["reason"]
+
+
+# #697: the verification run's record must hold every new test too. TestK is collected on the base
+# (add is off by one, so it fails there: teeth) and not on the candidate, where the whole-file
+# target still passes on test_regression.
+GONE = REGRESSION + "class TestK:\n    __test__ = add(1, 1) != 2\n" + METHOD
+
+
+def test_not_run_names_a_target_missing_from_the_record_even_beside_its_file():
+    other, named = "tests/test_x.py::test_other", "tests/test_x.py::TestK::test_m"
+    record = [_base_run({other: "passed"}, rc=0)]  # same file, another test: not enough
+    assert not_run(record, frozenset({other, named})) == [named]
+    assert not_run([_base_run({other: "passed", f"{named}[1]": "passed"})], {other, named}) == []
+
+
+@sandbox
+def test_worker_path_refuses_a_new_test_the_verification_run_did_not_run(project, tmp_path):
+    base, test_commit = make_test_commit(project, {"tests/test_regression.py": GONE})
+    result = run(project, tmp_path, base, test_commit, SeeingWorker({"src/calc.py": FIX}),
+                 verifiers=_argv("tests/test_regression.py"))  # fmt: skip
+    assert result.status == "FAILED" and not result.verified
+    assert result.reason.startswith("DEFERRED_TESTS_NOT_RUN_IN_VERIFICATION"), result.reason
+    assert "tests/test_regression.py::TestK::test_m" in result.reason
+    assert "test_regression.py::test_regression" not in result.reason
+
+
+@sandbox
+def test_worker_path_completes_when_the_verification_run_ran_every_new_test(project, tmp_path):
+    base, test_commit = make_test_commit(project, {"tests/test_regression.py": REGRESSION})
+    result = run(project, tmp_path, base, test_commit, SeeingWorker({"src/calc.py": FIX}),
+                 verifiers=_argv("tests/test_regression.py"))  # fmt: skip
+    assert result.status == "COMPLETED" and result.verified, result.reason
+
+
+@sandbox
+def test_verify_refuses_a_new_test_the_verification_run_did_not_run(project, state):
+    base, test_commit = make_test_commit(project, {"tests/test_regression.py": GONE})
+    cand = candidate(project, base, {"src/calc.py": FIX})
+    command = "python3 -m pytest -q tests/test_regression.py"
+    code, out = verify(state, project, base, cand, "--test-commit", test_commit, tests=(command,))
+    assert out["verified"] is False, out
+    assert out["reason"].startswith("DEFERRED_TESTS_NOT_RUN_IN_VERIFICATION"), out
+    assert "tests/test_regression.py::TestK::test_m" in out["reason"]
+
+
+class _ToCore(Exception):
+    """Raised by the fake notary: the attempt reached Core."""
+
+
+def _judge(monkeypatch, verifier_run, p2p_runs=()):
+    from types import SimpleNamespace
+
+    from cairnwork import pipeline_judge
+    from cairnwork.verify_context import VerifyContext
+
+    named = "tests/test_x.py::TestK::test_m"
+    monkeypatch.setattr(pipeline_judge, "run_verifiers", lambda *a, **k: [verifier_run])
+    monkeypatch.setattr(pipeline_judge, "run_plan", lambda *a, **k: (list(p2p_runs), {}))
+    monkeypatch.setattr(pipeline_judge, "new_tests", lambda *a, **k: frozenset({named}))
+    task = SimpleNamespace(
+        blackbox=None, repo=Path("r"), base_commit="b" * 40, import_paths=(), allowed_files=(),
+        allow_deletions=False, require_protection="", test_commit="c" * 40,
+    )  # fmt: skip
+    result = SimpleNamespace(candidate_commit="j", task_id="t", attempt_id="a", logs=[])
+    notary = SimpleNamespace(notarize=lambda *a: (_ for _ in ()).throw(_ToCore()))
+    plan: Any = object()  # run_plan is replaced above, so any stand-in will do
+    pipeline_judge.judge_candidate(
+        task, (), "d", notary, result, ("tests/test_x.py",), VerifyContext.of(task, Path("x"), "a"),
+        lambda phase: None, p2p=plan if p2p_runs else None,
+    )  # fmt: skip
+    return result, named
+
+
+def _passed_run(outcomes):
+    return VerifierRun(
+        VerifierSpec("v", ("tests/test_x.py",)), 0, False, (), Path("x"),
+        VerifierObservation("v", "x/verifier.log", "sha256:0", True), outcomes, recorded=True,
+    )  # fmt: skip
+
+
+def test_a_p2p_run_does_not_stand_in_for_the_verification_run(monkeypatch):
+    other = "tests/test_x.py::test_other"
+    p2p_run = _passed_run({"tests/test_x.py::TestK::test_m": "passed"})
+    result, named = _judge(monkeypatch, _passed_run({other: "passed"}), (p2p_run,))
+    assert result.reason.startswith("DEFERRED_TESTS_NOT_RUN_IN_VERIFICATION"), result.reason
+    assert named in result.reason
+
+
+def test_a_failed_verification_run_keeps_the_verdict_path(monkeypatch):
+    failed = _base_run({"tests/test_x.py::test_other": "failed"})  # observation not passed
+    with pytest.raises(_ToCore):  # Core judges the failure; the new code is not used
+        _judge(monkeypatch, failed)
