@@ -31,6 +31,8 @@ import json
 import sys
 from collections.abc import Iterable
 
+from cairnwork.p2p_selection import VERIFIER_IDS as P2P_IDS
+
 PREFIX = "blackbox:"
 GATE = "protection"  # the strict-mode observation's verifier id; never counted in the level
 NONE, PARTIAL, FULL = "same_process_only", "partial", "blackbox"
@@ -41,11 +43,13 @@ LEVELS = (NONE, *REQUIRABLE)
 WEAKEST = PARTIAL + MACOS  # cairnwork-verify --require-protection: protected, on any host
 UNPROTECTED_CODE = "UNPROTECTED"
 UNPROTECTED = f"VERIFICATION_INCOMPLETE: {UNPROTECTED_CODE}"
+RESERVED = ", ".join((f"{PREFIX}*", GATE, *P2P_IDS))  # for the refusal (pipeline.check_task)
 
 
 def reserved(verifier_id: str) -> bool:
-    """A task's own verifier may not take an id the level counts or the gate uses."""
-    return verifier_id.startswith(PREFIX) or verifier_id == GATE
+    """A task's own verifier may not take an id the level counts, the gate uses or P2P adds (#644:
+    refused before binding, not after the worker ran, p2p.py's P2P_VERIFIER_ID_CLASH)."""
+    return verifier_id.startswith(PREFIX) or verifier_id in (GATE, *P2P_IDS)
 
 
 def on_macos() -> bool:

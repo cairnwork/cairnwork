@@ -214,7 +214,7 @@ def settle(intake: Intake, github: GitHub, clone: Path) -> list[dict[str, Any]]:
             if status["status"] in ("BOUND", "DISPATCHED"):
                 continue
             if status["status"] == "COMPLETED" and status["core_verified"]:
-                issue_task.settle_check(github, number, known, intake, (QUEUE, RUNNING, NEEDS_FIX))
+                issue_task.settle_check(github, number, known, (QUEUE, RUNNING, NEEDS_FIX))
                 url = _open_pr(intake, github, clone, number, status)
                 issue_hook.owe(intake, github.repo, number, str(status["task_id"]))  # (#63 (d))
                 github.relabel(number, DONE, RUNNING)

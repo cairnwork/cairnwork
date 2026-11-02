@@ -200,7 +200,7 @@ def _plan(specs, rule, selection, budget) -> P2PPlan:
         return P2PPlan(rule, None, budget)
     verifier_id = f"p2p-{rule['applied']}"
     if verifier_id in {spec.verifier_id for spec in specs}:
-        raise P2PRejected("P2P_VERIFIER_ID_CLASH", verifier_id)
+        raise P2PRejected("P2P_VERIFIER_ID_CLASH", verifier_id)  # check_task refuses first (#644)
     return P2PPlan(rule, VerifierSpec(verifier_id, targets), budget, nodes)
 
 
