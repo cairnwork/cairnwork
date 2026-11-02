@@ -8,9 +8,9 @@ The same start checks, the same ``issues.lock`` and the same take and settle as
 ``CAIRNWORK_FAMILY_GATE=on``) the pass is exactly the plain runner's, with no extra GitHub call
 and no sidecar. On, the gate runs inside the lock before ``take``, so a plain runner on the same
 state cannot take an Issue in between (it gets BUSY). ``--worker-model`` defaults to the state's
-``model``. When the gate cannot run (sidecar unwritable or unreadable, config refused, the queue
-listing failed), nothing is refused and ``take`` does not run this pass (settle still does).
-Exit 1 on any error, as the plain runner.
+``model``. When the gate cannot run (sidecar or hold journal unwritable or unreadable, config
+refused, the queue listing failed), nothing is refused and ``take`` does not run this pass
+(settle still does). Exit 1 on any error, as the plain runner.
 """
 
 from __future__ import annotations
