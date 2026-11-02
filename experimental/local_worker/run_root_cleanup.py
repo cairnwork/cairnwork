@@ -1,20 +1,25 @@
-"""Remove an episode's run root once its corpus line is written (#677).
+"""Remove an episode's run root once its corpus line is written (#677), with --clean-run-root.
 
 Each episode runs in a run root the harness made for it (``<runs>/<32 hex>``: checkout, tmp, q
 and a venv of about 20 MB). Nothing in this package reads the root after the line: a resume needs
-a fresh root (cli.py), and the line, the transcript and the call log live under ``--out``. So
-after the line the CLI deletes every entry of the root except top-level regular files named
-``*.json``, ``*.jsonl`` or ``*.md`` (small result files a driver may have left there), then the
-root itself when nothing was kept. ``--keep-run-root`` leaves the root as it is.
+a fresh root (cli.py), and the line, the transcript and the call log live under ``--out``. A
+driver may still use it after the CLI exits (PAUSE's rescue driver runs deferred tests and Core
+verification there, then deletes the root itself), so the CLI touches it only when asked: with
+``--clean-run-root`` (off by default; without it nothing here runs, no claim either), after the
+line the CLI deletes every entry of the root except top-level regular files named ``*.json``,
+``*.jsonl`` or ``*.md`` (small result files a driver may have left there), then the root itself
+when nothing was kept.
 
-Which root is this episode's own is never read from process text (#563). Before any tool call the
-episode creates ``CLAIM`` in its root (O_EXCL, O_NOFOLLOW) holding its episode id; the worker
+Which root is this episode's own is never read from process text (#563). Before any tool call
+the episode creates ``CLAIM`` in its root (O_EXCL, O_NOFOLLOW) holding its episode id; the worker
 cannot write there (the root is 0750, the Owner's). A root that already holds a claim refuses the
-start, so no live episode runs in a root another one deletes. Only the episode whose claim it is
-deletes the root, and only after its line exists; an episode that ends without a line releases
-its claim, and one that dies leaves it (the root then stays, as before). Only a root that is a
-real directory (not a link) named by 32 lowercase hex digits, directly inside a canonical runs
-directory and canonical itself, is ever claimed or touched; anything else is left alone.
+start, so no flagged episode runs in a root another one deletes. Only the episode whose claim it
+is deletes the root, and only after its line exists; an episode that ends without a line releases
+its claim, and one that dies leaves it (the root then stays, as before). An episode without the
+flag claims nothing, so it is not protected from a flagged one in the same root; one root per
+episode is the corpus rule anyway. Only a root that is a real directory (not a link) named by 32
+lowercase hex digits, directly inside a canonical runs directory and canonical itself, is ever
+claimed or touched; anything else is left alone.
 Residual: an entry the Owner cannot delete (a directory the worker made unwritable) stays, the
 root and its claim stay with it, and the report says how many entries are left.
 """

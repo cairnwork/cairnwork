@@ -28,8 +28,8 @@ the status query lists them (--ignored=matching), so an ignored artifact that ru
 the checkout is itself a tree change and sets the cut; none lies before it. What run_tests left
 before the cut outside the checkout (<run_root>/tmp, its HOME and TMPDIR) is not recreated in the
 fresh run root. Exit 0 after the line is written (whatever the episode's exit reason), 2 when a
-check refused the start. After the line the run root is deleted, its small result files aside,
-unless --keep-run-root (run_root_cleanup.py, #677; --runs names the runs directory).
+check refused the start. With --clean-run-root (off by default) the run root is deleted after the
+line, its small result files aside (run_root_cleanup.py, #677; --runs names the runs directory).
 """
 
 from __future__ import annotations
@@ -298,7 +298,8 @@ def run_episode(a: argparse.Namespace, resume: bool) -> int:
         "manifest_sha256": p["manifest_sha"],
         "canary_report_sha256": a.canary_binding["report_sha256"],
     }
-    claim = run_root_cleanup.claim(p["run_root"], a.runs, eid)  # None: not a root under --runs
+    # None without --clean-run-root, or for a root not directly under --runs (then never touched)
+    claim = run_root_cleanup.claim(p["run_root"], a.runs, eid) if a.clean_run_root else None
     # The first SIGTERM/SIGINT interrupts the loop (recorded as interrupted); later ones, and any
     # during the cleanup and the line write, are only counted (review of #239, NB8).
     previous = {s: signal.signal(s, loop.interrupt) for s in (signal.SIGTERM, signal.SIGINT)}
@@ -317,7 +318,7 @@ def run_episode(a: argparse.Namespace, resume: bool) -> int:
         print(f"LOCAL_WORKER_EPISODE {out.exit_reason} {eid} {path} line_sha256={line_sha}")
         written = True
     finally:
-        run_root_cleanup.finish(claim, a.runs, written and not a.keep_run_root)
+        run_root_cleanup.finish(claim, a.runs, written)
         for sig, handler in previous.items():
             signal.signal(sig, handler)
     if loop.deferred is not None:  # e.g. SystemExit during the run: raised once the line exists
@@ -368,7 +369,7 @@ def parser() -> argparse.ArgumentParser:
         sp.add_argument("--allow-untracked", action="append", default=None, metavar="PATH")
         sp.add_argument("--allow-untracked-glob", action="append", default=None, metavar="GLOB")
         sp.add_argument("--runs", type=Path, default=run_root_cleanup.INSTALLED_RUNS)
-        sp.add_argument("--keep-run-root", action="store_true")
+        sp.add_argument("--clean-run-root", action="store_true")
         if name == "resume":
             sp.add_argument("--parent-transcript", type=Path, required=True)
             sp.add_argument("--cut-turn", type=int, default=None)

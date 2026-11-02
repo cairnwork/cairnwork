@@ -1,4 +1,5 @@
-"""#677: an episode deletes its own run root after its line, and nothing else.
+"""#677: with --clean-run-root an episode deletes its own run root after its line, and
+nothing else; without it the root is left alone.
 
 Every test works in its own tmp_path: the runs directory is ``tmp_path/runs`` (passed as --runs),
 the cwd is a directory holding only a SENTINEL file, which must survive. No real runs directory,
@@ -49,7 +50,7 @@ def _fill(root):
 def test_an_episode_deletes_its_own_run_root_after_its_line(env):
     run, out, runs = env
     _fill(runs / A)
-    assert run(DONE, "run", "--runs", str(runs), root=A) == 0
+    assert run(DONE, "run", "--clean-run-root", "--runs", str(runs), root=A) == 0
     assert lines(out)[0]["checkout_id"] == A
     assert not os.path.lexists(runs / A)
 
@@ -62,16 +63,20 @@ def test_small_result_files_are_kept_and_nothing_else(env):
     (runs / A / "notes.md").write_text("# n\n")
     (runs / A / "big.bin").write_bytes(b"\0" * 1024)
     (runs / A / "nested.json").mkdir()  # a directory, whatever its name, goes
-    assert run(DONE, "run", "--runs", str(runs), root=A) == 0
+    assert run(DONE, "run", "--clean-run-root", "--runs", str(runs), root=A) == 0
     assert sorted(p.name for p in (runs / A).iterdir()) == ["notes.md", "result.json", "rows.jsonl"]
 
 
-def test_keep_run_root_leaves_the_root_and_releases_the_claim(env):
+def test_without_the_flag_the_root_is_left_as_it_was(env):
+    """Off by default (a driver such as PAUSE's rescue driver still uses the root after the CLI):
+    no claim, no deletion, and the root can be used again as before."""
     run, out, runs = env
     _fill(runs / A)
-    assert run(DONE, "run", "--runs", str(runs), "--keep-run-root", root=A) == 0
-    assert (runs / A / "venv" / "bin" / "python").exists()
-    assert not os.path.lexists(runs / A / CLAIM)
+    before = sorted(str(p.relative_to(runs / A)) for p in (runs / A).rglob("*"))
+    assert run(DONE, "run", "--runs", str(runs), root=A) == 0
+    assert run(DONE, "run", "--runs", str(runs), "--seed", "1", root=A) == 0
+    assert len(lines(out)) == 2
+    assert sorted(str(p.relative_to(runs / A)) for p in (runs / A).rglob("*")) == before
 
 
 def test_a_live_episodes_root_and_other_roots_are_left_alone(env):
@@ -80,14 +85,14 @@ def test_a_live_episodes_root_and_other_roots_are_left_alone(env):
         _fill(runs / tag)
     live = claim(runs / B, runs, "ep_live")  # what a running episode holds from its start
     assert live is not None
-    assert run(DONE, "run", "--runs", str(runs), root=A) == 0
+    assert run(DONE, "run", "--clean-run-root", "--runs", str(runs), root=A) == 0
     assert not os.path.lexists(runs / A)
     for tag in (B, C):
         assert (runs / tag / "venv" / "bin" / "python").exists()
         assert (runs / tag / "checkout" / "src" / "app.py").exists()
     assert (runs / B / CLAIM).read_text() == "ep_live\n"
     # A second episode in the live root is refused at start and changes nothing there.
-    assert run(DONE, "run", "--runs", str(runs), "--seed", "1", root=B) == 2
+    assert run(DONE, "run", "--clean-run-root", "--runs", str(runs), "--seed", "1", root=B) == 2
     assert (runs / B / CLAIM).read_text() == "ep_live\n"
     assert (runs / B / "venv" / "bin" / "python").exists()
     # Removal goes by the claim's owner: another episode id cannot delete the live root.
@@ -105,7 +110,7 @@ def test_an_episode_without_a_line_keeps_its_root_and_releases_it(env, monkeypat
 
     monkeypatch.setattr(corpus_io, "append_episode", fail)
     with pytest.raises(OSError, match="disk full"):
-        run(DONE, "run", "--runs", str(runs), root=A)
+        run(DONE, "run", "--clean-run-root", "--runs", str(runs), root=A)
     assert (runs / A / "venv" / "bin" / "python").exists()
     assert not os.path.lexists(runs / A / CLAIM)  # free again for a retry
 
@@ -115,10 +120,11 @@ def test_a_root_outside_runs_is_never_deleted(env, tmp_path):
     _fill(runs / A)
     other_runs = (tmp_path / "other-runs").resolve()
     other_runs.mkdir()
-    assert run(DONE, "run", "--runs", str(other_runs), root=A) == 0  # A is not under other-runs
+    # A is not under other-runs
+    assert run(DONE, "run", "--clean-run-root", "--runs", str(other_runs), root=A) == 0
     assert (runs / A / "venv" / "bin" / "python").exists()
     assert not os.path.lexists(runs / A / CLAIM)
-    assert run(DONE, "run", "--seed", "1", root=B) == 0  # the default runs directory: not ours
+    assert run(DONE, "run", "--clean-run-root", "--seed", "1", root=B) == 0  # default runs
     assert (runs / B / "checkout").is_dir()
 
 
@@ -127,13 +133,14 @@ def test_a_linked_root_or_runs_directory_is_never_deleted(env, tmp_path):
     target = (tmp_path / "elsewhere" / A).resolve()
     _fill(target)
     (runs / A).symlink_to(target)  # the root is a link: it resolves outside runs
-    assert run(DONE, "run", "--runs", str(runs), root=A) == 0
+    assert run(DONE, "run", "--clean-run-root", "--runs", str(runs), root=A) == 0
     assert (runs / A).is_symlink()
     assert (target / "venv" / "bin" / "python").exists()
     _fill(runs / B)
     link_runs = tmp_path / "runs-link"
     link_runs.symlink_to(runs)  # a runs directory named through a link is not canonical
-    assert run(DONE, "run", "--runs", str(link_runs), "--seed", "1", root=B) == 0
+    flags = ("--clean-run-root", "--runs", str(link_runs), "--seed", "1")
+    assert run(DONE, "run", *flags, root=B) == 0
     assert (runs / B / "venv" / "bin" / "python").exists()
 
 
@@ -147,7 +154,7 @@ def test_a_link_inside_the_root_goes_but_not_its_target(env, tmp_path):
     (runs / A / "dir-link").symlink_to(outside / "d")
     (runs / A / "file-link.json").symlink_to(outside / "keep.json")  # a link is no result file
     (runs / A / "checkout" / "src" / "inner-link").symlink_to(outside / "d")
-    assert run(DONE, "run", "--runs", str(runs), root=A) == 0
+    assert run(DONE, "run", "--clean-run-root", "--runs", str(runs), root=A) == 0
     assert not os.path.lexists(runs / A)
     assert (outside / "d" / "f.txt").read_text() == "stay\n"
     assert (outside / "keep.json").read_text() == "{}\n"
