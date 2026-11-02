@@ -135,7 +135,9 @@ def _take_one(intake, github, clone, base, issue) -> dict[str, Any]:
     reason = github.trust(number, QUEUE)
     if reason:  # untrusted queueing: leave the Issue exactly as it is
         return {"skipped": reason}
-    task = parse_task_block(issue.get("body") or "", tuple(intake.config()["test_roots"]))
+    body = issue.get("body") or ""
+    bound = _bound(intake, github.repo, number, body)  # before parsing: roots may change (#671)
+    task = parse_task_block(body, None if bound else tuple(intake.config()["test_roots"]))
     payload = {
         "idempotency_key": f"gh:{github.repo}#{number}:{task.block_sha256[:16]}",
         "card_hash": f"gh:{github.repo}#{number}:{task.block_sha256}",
@@ -149,10 +151,10 @@ def _take_one(intake, github, clone, base, issue) -> dict[str, Any]:
     }
     # the ledger knows what was bound (a resubmit is refused once main moved, #404, #424), adopted
     # only if bound with this payload (#426); the record is a cache rewritten from it (#442)
-    known = _from_ledger(intake, github.repo, number, task.block_sha256, payload)
-    if known:
+    if bound and adoptable(bound, intake.load_request, payload):
+        _remember(intake, github.repo, number, bound.task_id, task.block_sha256)
         github.relabel(number, RUNNING, QUEUE)  # taken before; only the label was missing
-        return {"task_id": known["task_id"], "already": True}
+        return {"task_id": bound.task_id, "already": True}
     if task.test_commit:  # bind to the tests' parent; the tests stay off this machine
         payload["base_commit"] = _test_base(github, clone, task.test_commit, intake.test_store())
     now = github.current(number)  # re-read: nothing may change between first check and dispatch
@@ -339,16 +341,14 @@ def _recall(intake: Intake, repo: str, number: int) -> dict[str, Any] | None:
     raise ValueError(f"ISSUE_RECORD_UNREADABLE: {path.name}")
 
 
-def _from_ledger(intake: Intake, repo: str, number: int, block: str, want) -> dict[str, Any] | None:
-    """The task bound for this block with take's key, card and request (#426); record rewritten."""
+def _bound(intake: Intake, repo: str, number: int, body: str) -> Any:
+    """The row bound with take's key and card for this block (by its text), else None (#426)."""
+    block = issue_task.task_block_sha256(body)  # as settle and the attempt gate (#659, #667)
     try:
         bound = intake.ledger.get(idempotency_key=f"gh:{repo}#{number}:{block[:16]}")
     except OwnershipUnknown:
         return None
-    if not adoptable(bound, intake.load_request, want):  # same prefix, another block
-        return None
-    _remember(intake, repo, number, bound.task_id, block)
-    return {"task_id": bound.task_id, "block_sha256": block}
+    return bound if bound.card_hash == f"gh:{repo}#{number}:{block}" else None  # or another block
 
 
 def _git(repo: Path, *args: str, timeout: float | None = None) -> str:

@@ -93,7 +93,13 @@ def task_block_text(body: str) -> str:
     return blocks[0]
 
 
-def parse_task_block(body: str, roots: tuple[str, ...] = DEFAULT_TEST_ROOTS) -> IssueTask:
+def task_block_sha256(body: str) -> str:
+    """The hash take binds (card hash) and settle and the attempt gate compare (#659, #667)."""
+    return hashlib.sha256(task_block_text(body).encode()).hexdigest()
+
+
+def parse_task_block(body: str, roots: tuple[str, ...] | None = DEFAULT_TEST_ROOTS) -> IssueTask:
+    """``roots`` None: verifier targets under any plain directory (a block bound before, #671)."""
     block = task_block_text(body)
     try:
         raw = json.loads(block)
@@ -186,10 +192,11 @@ def _check_path(path: Any) -> None:
         raise IssueRefused(*refusal)
 
 
-def test_target(roots: tuple[str, ...]) -> re.Pattern[str]:
-    """A verifier target: a .py file under one of the test roots, with optional ::node ids."""
-    top = "|".join(map(re.escape, roots))
+def test_target(roots: tuple[str, ...] | None) -> re.Pattern[str]:
+    """A verifier target: a .py file under one of the test roots (None: any plain directory),
+    with optional ::node ids."""
     name = r"[A-Za-z0-9_\-]+"
+    top = r"[A-Za-z0-9_][A-Za-z0-9_\-]*" if roots is None else "|".join(map(re.escape, roots))
     return re.compile(rf"(?:{top})/(?:{name}/)*{name}\.py(?:::[A-Za-z0-9_\[\]\-]+)*")
 
 
@@ -235,7 +242,9 @@ def check_verify_import_paths(paths: list[str], test_roots: tuple[str, ...]) -> 
     return checked
 
 
-def pytest_argv(command: Any, roots: tuple[str, ...] = DEFAULT_TEST_ROOTS) -> tuple[str, ...]:
+def pytest_argv(
+    command: Any, roots: tuple[str, ...] | None = DEFAULT_TEST_ROOTS
+) -> tuple[str, ...]:
     """``python3 -m pytest [-q] [-p no:cacheprovider] <root>/...``; anything else is refused."""
     try:
         argv = shlex.split(command) if isinstance(command, str) else []
@@ -329,7 +338,7 @@ def settle_check(github: Any, number: int, known: Mapping[str, Any], labels) -> 
     if not reason:
         body = github.current(number).get("body") or ""  # a GitHub error: retried next pass
         try:  # the block text take bound, not a re-parse: test_roots may change meanwhile (#649)
-            block = hashlib.sha256(task_block_text(body).encode()).hexdigest()
+            block = task_block_sha256(body)
         except Exception:  # noqa: BLE001 - any unreadable block counts as changed (attempt_gate)
             block = ""
         reason = "" if block and block == known.get("block_sha256") else "ISSUE_CHANGED_AFTER_TAKE"
