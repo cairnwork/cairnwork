@@ -33,6 +33,8 @@ DEFAULT_MODE = "whole-suite"  # Intake (cairnwork-route, issue runner)
 DIRECT_MODE = "off"  # TaskSpec built directly (pipeline.run_task, drills): no P2P unless set
 DEFAULT_BUDGET_SECONDS = 300  # seconds per P2P run (probe, candidate run, re-run)
 MODULE_DIR_CAP = 25  # test files a module-dir directory may bring in whole (#333)
+# the id p2p.py gives the verifier it adds (p2p-<applied mode>); no task may take one (#644)
+VERIFIER_IDS = tuple(f"p2p-{mode}" for mode in MODES if mode != "off")
 
 
 def _under_root(path: str, roots: tuple[str, ...]) -> bool:
