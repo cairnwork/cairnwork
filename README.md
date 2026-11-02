@@ -18,7 +18,7 @@ Cairnwork 是 AI 寫程式代理人交件時的驗收關卡。核心價值不是
 - 不主張提高模型解決任務的成功率（強模型在小 bug 上本來就很少錯）。
 - 不主張取代人工程式碼審查。
 - 不主張是互動式 coding agent 或對話助理。
-- 不主張一般 pytest 測試能防住刻意作弊：候選碼與測試同程序時，可以改寫測試讀到的值。只有宣告的黑箱檢查（期望值放在候選碼從未執行過的程序）受保護；`protection` 欄位標明 `blackbox`／`partial`／`same_process_only`（macOS 上受保護的兩級為 `blackbox_macos`／`partial_macos`，等級較低，#316）。`cairnwork-verify run --blackbox <宣告檔> --require-protection` 要求受保護才算 VERIFIED（`partial` 與 `partial_macos` 都算）；沒有 `--blackbox` 時直接拒絕（UNPROTECTED）。
+- 不主張一般 pytest 測試能防住刻意作弊：候選碼與測試同程序時，可以改寫測試讀到的值。只有宣告的黑箱檢查（期望值放在候選碼從未執行過的程序）受保護；`protection` 欄位標明（`verdict` 欄位把它接在 VERIFIED 後面，例如 `VERIFIED same_process_only`）`blackbox`／`partial`／`same_process_only`（macOS 上受保護的兩級為 `blackbox_macos`／`partial_macos`，等級較低，#316）。`cairnwork-verify run --blackbox <宣告檔> --require-protection` 要求受保護才算 VERIFIED（`partial` 與 `partial_macos` 都算）；沒有 `--blackbox` 時直接拒絕（UNPROTECTED）。
 - 不主張驗證通過就沒有缺陷：Nexus-new#2813（修正 PR #2856）是 Core VERIFIED、但獨立審查仍抓到拒絕檢查可被繞過的實例。驗證是證據，不是證明。
 
 Nexus-new 是**參考**，不是搬家來源。決定與理由：knowledge `nexus/decisions/2026-10-19-cairnwork-owner-decision.md`；議會條文 A–I：`nexus/decisions/council-2026-10-19-cairnwork/CONSENSUS_R2.md`。
