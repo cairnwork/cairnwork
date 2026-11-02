@@ -22,6 +22,7 @@ import tempfile
 from pathlib import Path
 
 from cairnwork.gitcmd import run_git
+from cairnwork.protection import verdict_text
 
 # The seeded project: total() returns -1 for an empty list instead of 0. The test catches it,
 # so it is red on the base; the fix is a one-line change confined to src/calc.py.
@@ -147,7 +148,8 @@ def _verify(state: Path, repo: Path, shas: dict[str, str]) -> dict:
 def _report(result: dict, kept: Path | None) -> int:
     # Fail closed: only call it verified when the run says so AND Core recorded VERIFIED.
     verified = bool(result.get("verified")) and result.get("core_status") == "VERIFIED"
-    mark = "VERIFIED ✓" if verified else "NOT VERIFIED ✗"
+    level = result.get("protection") or ""
+    mark = f"{verdict_text(True, '', level)} ✓" if verified else "NOT VERIFIED ✗"
     print(f"\n  verdict:      {mark}")
     print(f"  core status:  {result.get('core_status') or '—'}")
     print(f"  candidate:    {result.get('candidate_commit', '')[:12]}")

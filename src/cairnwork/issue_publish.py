@@ -11,6 +11,7 @@ import subprocess
 from pathlib import Path
 
 from cairnwork.journal import PHASES, TRUST_UNREAD
+from cairnwork.protection import verdict_text
 from cairnwork.provenance import clean
 
 STATUSES = frozenset({"FAILED", "CANCELLED", "SUPERSEDED", "COMPLETED"})
@@ -27,10 +28,15 @@ def pr_url(url: str, repo: str) -> str:
     return url if re.fullmatch(PR_URL.format(repo=re.escape(repo)), url) else ""
 
 
-def done_text(url: str, repo: str) -> str:
+def verified_text(level: str) -> str:
+    """VERIFIED with its protection level (#700); an unknown level is said, never left bare."""
+    return verdict_text(True, "", level) if level else "VERIFIED（保護等級未知）"
+
+
+def done_text(url: str, repo: str, level: str = "") -> str:
     safe = pr_url(url, repo)
     tail = f"draft PR：{safe}" if safe else "draft PR 已開，連結在 Cairnwork 本機輸出。"
-    return f"Cairnwork 修好並通過 Core 驗證，{tail}"
+    return f"Cairnwork 修好並通過 Core 驗證（{verified_text(level)}），{tail}"
 
 
 def failure_text(status: dict) -> str:
@@ -72,14 +78,16 @@ def require_bot_gh(gh: str, repo: str, cwd: Path) -> None:
         raise RuntimeError(f"GH_IDENTITY_NOT_BOT: {BOT_GH} has no installation token for {repo}")
 
 
-def pr_body(number: int, task_id: str, attempt: str, commit: str, provenance: dict) -> str:
+def pr_body(
+    number: int, task_id: str, attempt: str, commit: str, provenance: dict, level: str = ""
+) -> str:
     """Only validated fields: the caller has matched task id, attempt and commit, and
     ``provenance`` comes from the commit's own trailers (provenance.parse)."""
     who = provenance_lines(provenance)
     return (
         f"Refs #{number}\n\nCairnwork: 受影響（Cairnwork 試點：Issue 直接送 Cairnwork 修）\n\n"
         f"- Cairnwork task `{task_id}`，attempt `{attempt}`\n"
-        f"- 候選 commit `{commit}`，Core 判定 VERIFIED（Cairnwork notary）\n"
+        f"- 候選 commit `{commit}`，Core 判定 {verified_text(level)}（Cairnwork notary）\n"
         "- 這是 draft：照一般規則審查、檢查全綠後再由審查者合併；Cairnwork 不合併。\n\n"
         f"<!-- NEXUS_CORE_ISSUE: {number} -->\n<!-- NEXUS_ISSUE_INTENT_V1\n"
         f'[{{"issue": {number}, "on_merge": "KEEP_OPEN"}}]\nNEXUS_ISSUE_INTENT_V1 -->\n\n'

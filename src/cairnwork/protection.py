@@ -46,6 +46,13 @@ UNPROTECTED = f"VERIFICATION_INCOMPLETE: {UNPROTECTED_CODE}"
 RESERVED = ", ".join((f"{PREFIX}*", GATE, *P2P_IDS))  # for the refusal (pipeline.check_task)
 
 
+def verdict_text(verified: bool, status: str, level: str) -> str:
+    """The one verdict string: VERIFIED with the protection level beside it, so a same-process
+    pass does not read like a blackbox one. Any other status, or no level, is just the status."""
+    word = "VERIFIED" if verified else status
+    return f"{word} {level}" if verified and level else word
+
+
 def reserved(verifier_id: str) -> bool:
     """A task's own verifier may not take an id the level counts, the gate uses or P2P adds (#644:
     refused before binding, not after the worker ran, p2p.py's P2P_VERIFIER_ID_CLASH)."""

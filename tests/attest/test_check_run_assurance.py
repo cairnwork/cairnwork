@@ -61,7 +61,7 @@ def test_v02_full_offline_check_run_includes_assurance(v02_world: dict) -> None:
     assert res.code == "CREATED"
     body = json.loads(http.calls[0][3])
     summary = body["output"]["summary"]
-    assert "- Offline verification: VERIFIED" in summary
+    assert "- Offline verification: VERIFIED same_process_only" in summary  # the level, as verify
     assert "- Assurance: " in summary
     assert "test_source=signer_choice" in summary
     assert "mode=full" in summary

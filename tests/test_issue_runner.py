@@ -167,6 +167,8 @@ def test_a_verified_task_becomes_a_draft_pr(setup, monkeypatch):
         branch == f"cairnwork/7-a{'1' * 16}" and "Refs #7" in body and "NEXUS_CORE_ISSUE: 7" in body
     )
     assert "Closes" not in body and "KEEP_OPEN" in body
+    assert "Core 判定 VERIFIED same_process_only（" in body  # #700: from the notarized request
+    assert "（VERIFIED same_process_only）" in github.comments[-1][1]
     pushed = subprocess.run(
         ["git", "-C", str(setup["origin"]), "rev-parse", f"refs/heads/{branch}"],
         capture_output=True,

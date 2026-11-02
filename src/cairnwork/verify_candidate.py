@@ -30,7 +30,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from cairnwork import runlock
+from cairnwork import protection, runlock
 from cairnwork.account_check import base_stage, precheck
 from cairnwork.blackbox import Declaration
 from cairnwork.confined import ATTEMPT_ENV, sweep_marked
@@ -166,7 +166,7 @@ def _status_fields(verified: bool, status: str, level: str) -> dict[str, str]:
     pass does not read like a blackbox one. Any other status, or no level (Core was never asked),
     gives ``verdict`` equal to ``status``."""
     word = "VERIFIED" if verified else status
-    return {"status": word, "verdict": f"{word} {level}" if verified and level else word}
+    return {"status": word, "verdict": protection.verdict_text(verified, status, level)}
 
 
 def _require_accepting(intake: Intake) -> None:

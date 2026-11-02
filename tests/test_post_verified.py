@@ -155,7 +155,8 @@ def test_a_failing_hook_never_changes_the_outcome(rig, monkeypatch, tmp_path, ca
     url = "https://github.com/James3014/demo/pull/1"  # the same as with the hook off
     assert out == [{"issue": 7, "pr": url}]  # the same as with the hook off
     assert github.labels == {7: {runner.DONE}} and len(github.prs) == 1
-    assert github.comments[-1][1] == done_text(url, "James3014/demo") and len(github.comments) == 2
+    assert github.comments[-1][1] == done_text(url, "James3014/demo", "same_process_only")
+    assert len(github.comments) == 2
     reason = {"exit2": "exit 2", "timeout": "TIMEOUT", "missing": "FileNotFoundError"}[failure]
     assert err.startswith("ALERT post_verified_hook task t") and reason in err
     assert TOKEN not in err
