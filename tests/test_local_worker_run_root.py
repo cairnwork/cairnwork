@@ -166,12 +166,16 @@ def test_only_a_real_hex_named_directory_directly_in_runs_is_eligible(tmp_path):
     (runs / A / B).mkdir(parents=True)
     (runs / ("g" * 32)).mkdir()
     (runs / ("a" * 31)).mkdir()
+    (runs / ("a" * 33)).mkdir()
+    (runs / ("x" + "a" * 32)).mkdir()
     (runs / C).write_text("a file\n")
     (runs / ("d" * 32)).symlink_to(runs / A)
     assert eligible(runs / A, runs)
     assert not eligible(runs / A / B, runs)  # not directly inside runs
     assert not eligible(runs / ("g" * 32), runs)
     assert not eligible(runs / ("a" * 31), runs)
+    assert not eligible(runs / ("a" * 33), runs)  # the whole name must be the tag
+    assert not eligible(runs / ("x" + "a" * 32), runs)
     assert not eligible(runs / C, runs)  # not a directory
     assert not eligible(runs / ("d" * 32), runs)  # a link
     assert not eligible(runs / ("e" * 32), runs)  # missing
@@ -180,6 +184,19 @@ def test_only_a_real_hex_named_directory_directly_in_runs_is_eligible(tmp_path):
     link_runs.symlink_to(runs)
     assert not eligible(link_runs / A, link_runs)  # runs (and so the root) not canonical
     assert not os.path.lexists(runs / A / CLAIM)
+
+
+def test_a_cleanup_error_does_not_change_the_episode_outcome(env, monkeypatch, capsys):
+    run, out, runs = env
+    _fill(runs / A)
+
+    def denied(c, runs):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(run_root_cleanup, "remove", denied)
+    assert run(DONE, "run", "--clean-run-root", "--runs", str(runs), root=A) == 0
+    assert len(lines(out)) == 1
+    assert f"LOCAL_WORKER_RUN_ROOT partial (PermissionError) {A}" in capsys.readouterr().err
 
 
 def test_a_claim_replaced_by_a_link_is_not_this_episodes(tmp_path):
