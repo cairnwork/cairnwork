@@ -32,7 +32,7 @@ from cairnwork.deferred_tests import (
     lay_tests_over,
 )
 from cairnwork.gitcmd import OID
-from cairnwork.journal import AlreadyDispatched, Journal
+from cairnwork.journal import TRUST_UNREAD, AlreadyDispatched, Journal
 from cairnwork.notary import Notary
 from cairnwork.notary_verify import nonempty_fields
 from cairnwork.ownership import OWNER, InvalidStatusTransition, OwnershipLedger, request_digest
@@ -322,8 +322,8 @@ def _attempt(task, specs, digest, notary, worker, result, steps, ctx: VerifyCont
     gate = task.before_attempt or (  # trust re-check per attempt; a gh: card with no gate refuses
         lambda: "TRUST_CHANGED_BEFORE_DISPATCH" if task.card_hash.startswith("gh:") else ""
     )
-    if refusal := gate():
-        result.reason = refusal
+    if refusal := gate():  # GitHub unreadable: journaled as no evidence, not a change (#673)
+        result.reason, result.uncomparable = refusal, refusal if refusal == TRUST_UNREAD else ""
         return
     try:
         tests_unused(task, claim=False)  # single use, shared with verify runs
