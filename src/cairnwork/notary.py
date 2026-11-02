@@ -126,11 +126,12 @@ class Verdict:
 
 def _level(request: dict[str, Any], binding: Any) -> str:
     """The hash-bound request's ids give the level (#700); the binding adds only its host grade."""
-    ids = (request.get("acceptance_contract") or {}).get("required_verifier_ids")
+    contract = request.get("acceptance_contract") if isinstance(request, dict) else None
+    ids = contract.get("required_verifier_ids") if isinstance(contract, dict) else None
     found = protection.level(map(str, ids)) if isinstance(ids, list) and ids else ""
-    told = binding.get("protection") if isinstance(binding, dict) else None
-    same = protection.coverage(told) == protection.coverage(found)
-    return told if found and same else found
+    told = binding.get("protection") if isinstance(binding, dict) else ""
+    told = told if isinstance(told, str) else ""
+    return told if found and protection.coverage(told) == protection.coverage(found) else found
 
 
 def default_core_verify() -> CoreVerify:
@@ -354,9 +355,7 @@ class Notary:
         exp, binding = row[8], None if row[9] is None else json.loads(row[9])
         request, response = json.loads(request_json), json.loads(resp)
         verified = _is_verified(http_status, status, integrity, response, request, request_hash)
-        reason = ""
-        if verified:
-            reason = self._identity_problem(request, response, exp)
+        reason = self._identity_problem(request, response, exp) if verified else ""
         verified = (
             verified
             and not reason
