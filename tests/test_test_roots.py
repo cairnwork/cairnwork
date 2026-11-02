@@ -348,7 +348,7 @@ def test_a_non_test_nested_root_is_refused_with_no_fix_offered(root):
 def test_a_very_long_repeated_root_is_refused_quickly():
     import time
 
-    root = "tests/" + "a/tests/" * 12500 + "x"  # about 100k characters
+    root = "tests/" + "a/tests/" * 25000 + "x y"  # about 200k characters, ends in an invalid part
     start = time.monotonic()
     with pytest.raises(ValueError, match="last part is tests or test"):
         check_test_roots([root])
