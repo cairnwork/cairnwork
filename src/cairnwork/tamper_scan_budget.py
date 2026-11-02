@@ -11,8 +11,9 @@ lines included, and many lines near the cap add up. So, counted in characters, n
 * one patch reads at most ``MAX_READ`` characters, every reading of a line counted, and tokenizes
   at most ``MAX_TOKENIZED`` bytes of committed files, a row longer than ``MAX_LINE`` counted once
   per started ``MAX_LINE`` (on some Pythons tokenize time grows with the square of a row's length);
-  every line piece, every reading and every row also costs one, empty or skipped, since each runs
-  the rules or the tokenizer once whatever its length.
+  every line piece and every reading also costs one, and every row ``ROW_COST``, empty or skipped,
+  since each runs the rules or the tokenizer once whatever its length (an empty row costs
+  the tokenizer and ``file_views`` far more than a byte, #690).
 
 Past any of them the scan stops reading and the patch is refused with the finding ``scan_budget``:
 the budget can only add a refusal, never let a refused change pass. ``canonical`` (``_canonical``
@@ -32,6 +33,7 @@ SCAN_BUDGET = "scan_budget"
 MAX_ALIASES = 64  # names in one alias table of a file, all kinds; honest code binds a handful
 MAX_READ = 1 << 21  # characters read per patch, every reading counted
 MAX_TOKENIZED = 1 << 24  # bytes of committed files tokenized per patch, long rows weighted
+ROW_COST = 64  # a row costs the tokenizer about this many bytes' worth even when empty (#690)
 Table = dict[str, set[str]]  # alias names by what they are bound to (sys, os, modules, pytest...)
 
 
@@ -51,9 +53,9 @@ class ScanBudget:
 
     def tokenize(self, data: bytes) -> bool:
         """Spend tokenizing ``data`` (a whole file); False when over."""
-        rows = data.split(b"\n")
+        rows = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n").split(b"\n")  # as _rows splits
         self.tokenized_left -= sum(
-            (len(row) + 1) * max(1, -(-len(row) // MAX_LINE)) for row in rows
+            (len(row) + ROW_COST) * max(1, -(-len(row) // MAX_LINE)) for row in rows
         )
         self.over = self.over or self.tokenized_left < 0
         return not self.over

@@ -20,6 +20,7 @@ from cairnwork.tamper_scan_budget import (
     MAX_ALIASES,
     MAX_READ,
     MAX_TOKENIZED,
+    ROW_COST,
     SCAN_BUDGET,
     ScanBudget,
     canonical,
@@ -143,8 +144,8 @@ def test_an_unchanged_long_row_within_the_budget_is_still_tokenized_and_read(mon
 
 
 def test_the_tokenize_budget_is_one_per_patch():
-    budget = ScanBudget(tokenized=3 * MAX_LINE)
-    data = b"x = 1\n" * (2 * MAX_LINE // 6)
+    data = b"x = 1\n" * 100
+    budget = ScanBudget(tokenized=3 * (100 * (5 + ROW_COST) + ROW_COST) // 2)  # 1.5 files
     assert _rules(TEST, ["x = 1"], data, budget) == []
     assert _rules(TEST, ["x = 1"], data, budget) == [(1, SCAN_BUDGET)]
 
@@ -187,3 +188,34 @@ def test_short_or_empty_lines_still_spend_the_budget(text):
 def test_empty_rows_still_spend_the_tokenize_budget():
     budget = ScanBudget(tokenized=1000)
     assert not budget.tokenize(b"\n" * 2000)
+
+
+def test_a_row_costs_the_row_cost_and_a_reading_costs_one_more_than_its_length():
+    budget = ScanBudget()
+    budget.tokenize(b"ab\n\n")  # rows "ab", "", "": three rows
+    assert MAX_TOKENIZED - budget.tokenized_left == 2 + 3 * ROW_COST
+    budget = ScanBudget()
+    budget.tokenize(b"a\rb\r\nc")  # CR and CRLF end rows as file_views reads them: "a", "b", "c"
+    assert MAX_TOKENIZED - budget.tokenized_left == 3 + 3 * ROW_COST
+    budget.read(["abc", "", "de"])  # one extra per reading, pinned (#690)
+    assert MAX_READ - budget.read_left == 3 + 0 + 2 + 3
+
+
+def test_many_empty_rows_are_refused_before_file_views_runs(monkeypatch):
+    """An empty row costs the tokenizer ~760 bytes and ~3 us, so the budget stops them early (#690).
+
+    Counted, not timed: at most MAX_TOKENIZED // ROW_COST empty rows reach ``file_views``.
+    """
+    monkeypatch.setattr(scan, "file_views", lambda data: pytest.fail("tokenized"))
+    for blank in (b"\n", b" \n", b"\t\n", b"\r", b"\r\n"):  # file_views splits on CR too
+        data = blank * (MAX_TOKENIZED // 64 + 1)  # 64: what an empty row really costs
+        assert scan_added_lines(TEST, [(1, "x = 1")], data)[0].rule == SCAN_BUDGET
+    assert ScanBudget().tokenize(b"\n" * (MAX_TOKENIZED // ROW_COST - 2))
+
+
+def test_a_large_honest_module_stays_inside_the_budget():
+    """Row charging must not refuse ordinary code: a 1 MB module of plain statements passes."""
+    data = ("".join(f"value_{i} = compute({i}, 'label-{i}')\n" for i in range(30_000))).encode()
+    assert len(data) > 1_000_000
+    assert ScanBudget().tokenize(data)
+    assert ScanBudget().tokenize(data.replace(b"\n", b"\r\n"))  # Windows line ends cost the same
