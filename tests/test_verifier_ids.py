@@ -3,7 +3,9 @@
 Core refuses a required-id list that is empty, has an empty or whitespace-padded id, an id with
 NUL or over 512 UTF-8 bytes, or a duplicate. Submit, the shadow check and verify refuse such ids
 with the same rule (cairnwork_protocol.ids, shared with offline verify) instead of running a
-worker or verifiers for a task Core could never verify."""
+worker or verifiers for a task Core could never verify. An id P2P widening gives its own verifier,
+``p2p-<mode>``, is reserved like ``blackbox:*`` and ``protection`` (#644): submit and the shadow
+check refuse it before binding, not p2p.py after the worker has run."""
 
 import json
 import subprocess
@@ -35,6 +37,7 @@ BAD_IDS = {
     "duplicate": ["pytest", "pytest"],
 }
 NO_IDS = {**BAD_IDS, "none": []}
+P2P_IDS = ["p2p-whole-suite", "p2p-module-dir"]  # every mode that adds a verifier (#644)
 
 
 def _with_ids(repo, ids):  # noqa: F811
@@ -84,6 +87,28 @@ def test_shadow_check_refuses_bad_ids_as_submit_does(tmp_path, repo):  # noqa: F
             timeout=120, check=False,
         )  # fmt: skip
         assert done.returncode == 2 and json.loads(done.stdout)["error"] == "BAD_REQUEST", ids
+    assert sorted(p.name for p in state.iterdir()) == ["config.json"]
+
+
+@pytest.mark.parametrize("verifier_id", P2P_IDS)
+def test_submit_refuses_a_p2p_verifier_id_and_binds_nothing(intake, repo, verifier_id):  # noqa: F811
+    with pytest.raises(TaskRejected, match=f"BAD_VERIFIER.*{verifier_id}.* reserved"):
+        intake.submit(_with_ids(repo, ["pytest", verifier_id]))
+    assert intake.in_flight()["count"] == 0 and FakePopen.held == []
+    assert not list((intake.state / "requests").glob("*.json"))
+
+
+def test_shadow_check_refuses_a_p2p_verifier_id_as_submit_does(tmp_path, repo):  # noqa: F811
+    state = tmp_path / "state"
+    state.mkdir(mode=0o700)
+    (state / "config.json").write_text(json.dumps({"verifier_account": False}))
+    for verifier_id in P2P_IDS:
+        done = subprocess.run(
+            [sys.executable, "-I", "-m", "cairnwork.route", "--state", str(state), "check"],
+            input=json.dumps(_with_ids(repo, [verifier_id])), capture_output=True, text=True,
+            timeout=120, check=False,
+        )  # fmt: skip
+        assert done.returncode == 2 and json.loads(done.stdout)["error"] == "BAD_VERIFIER", done
     assert sorted(p.name for p in state.iterdir()) == ["config.json"]
 
 
