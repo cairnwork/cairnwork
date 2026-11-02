@@ -28,7 +28,8 @@ the status query lists them (--ignored=matching), so an ignored artifact that ru
 the checkout is itself a tree change and sets the cut; none lies before it. What run_tests left
 before the cut outside the checkout (<run_root>/tmp, its HOME and TMPDIR) is not recreated in the
 fresh run root. Exit 0 after the line is written (whatever the episode's exit reason), 2 when a
-check refused the start.
+check refused the start. After the line the run root is deleted, its small result files aside,
+unless --keep-run-root (run_root_cleanup.py, #677; --runs names the runs directory).
 """
 
 from __future__ import annotations
@@ -45,7 +46,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from experimental.local_worker import corpus_io, untracked_allow, write_scope
+from experimental.local_worker import corpus_io, run_root_cleanup, untracked_allow, write_scope
 from experimental.local_worker.agent import (
     AgentLoop,
     Limits,
@@ -297,9 +298,11 @@ def run_episode(a: argparse.Namespace, resume: bool) -> int:
         "manifest_sha256": p["manifest_sha"],
         "canary_report_sha256": a.canary_binding["report_sha256"],
     }
+    claim = run_root_cleanup.claim(p["run_root"], a.runs, eid)  # None: not a root under --runs
     # The first SIGTERM/SIGINT interrupts the loop (recorded as interrupted); later ones, and any
     # during the cleanup and the line write, are only counted (review of #239, NB8).
     previous = {s: signal.signal(s, loop.interrupt) for s in (signal.SIGTERM, signal.SIGINT)}
+    written = False
     try:
         out = loop.run(
             messages, first_turn=first_turn, elapsed_offset=offset, expected_base=expected_base
@@ -312,7 +315,9 @@ def run_episode(a: argparse.Namespace, resume: bool) -> int:
         path = corpus_io.episodes_path(p["out_dir"], a.dataset, a.model, a.split)
         line_sha = corpus_io.append_episode(path, record, p["out_dir"])
         print(f"LOCAL_WORKER_EPISODE {out.exit_reason} {eid} {path} line_sha256={line_sha}")
+        written = True
     finally:
+        run_root_cleanup.finish(claim, a.runs, written and not a.keep_run_root)
         for sig, handler in previous.items():
             signal.signal(sig, handler)
     if loop.deferred is not None:  # e.g. SystemExit during the run: raised once the line exists
@@ -362,6 +367,8 @@ def parser() -> argparse.ArgumentParser:
         # Harness-laid untracked/ignored paths the start check allows (untracked_allow.py, #261)
         sp.add_argument("--allow-untracked", action="append", default=None, metavar="PATH")
         sp.add_argument("--allow-untracked-glob", action="append", default=None, metavar="GLOB")
+        sp.add_argument("--runs", type=Path, default=run_root_cleanup.INSTALLED_RUNS)
+        sp.add_argument("--keep-run-root", action="store_true")
         if name == "resume":
             sp.add_argument("--parent-transcript", type=Path, required=True)
             sp.add_argument("--cut-turn", type=int, default=None)
