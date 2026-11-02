@@ -125,3 +125,13 @@ def test_verify_verifies_when_every_deferred_test_file_is_targeted(project, stat
     cand = candidate(project, base, {"src/calc.py": FIX})
     code, out = verify(state, project, base, cand, "--test-commit", test_commit, tests=(BOTH,))
     assert code == 0 and out["status"] == "VERIFIED", out
+
+
+@sandbox
+def test_worker_path_reads_the_targets_of_every_verifier(project, tmp_path):
+    """#660: each deferred test file may be the target of a different verifier."""
+    base, test_commit = make_test_commit(project, TWO_FILES)
+    split = (*_argv(ONE), ("pytest-1", tuple("python3 -m pytest -q tests/test_extra.py".split())))
+    result = run(project, tmp_path, base, test_commit, SeeingWorker({"src/calc.py": FIX}),
+                 verifiers=split)  # fmt: skip
+    assert result.status == "COMPLETED", result.reason

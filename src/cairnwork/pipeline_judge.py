@@ -54,8 +54,9 @@ def tests_unused(task, *, claim: bool) -> None:
 def tests_with_teeth(task, specs, result, ctx: VerifyContext) -> tuple[str, ...]:
     """Check a task's deferred tests once the worker is done: plain test files on the
     base whose test cases really fail there. Returns their paths; raises TestCommitRejected
-    when they do not (NO_TEETH) or leave a test file's changes out of every verifier target
-    (DEFERRED_TESTS_NOT_TARGETED), and BaseUncomparable when the base cannot tell (#234)."""
+    when they do not (NO_TEETH), leave a test file's changes out of every verifier target
+    (DEFERRED_TESTS_NOT_TARGETED) or were not all collected and run by the base run
+    (DEFERRED_TESTS_NOT_RUN, #660), and BaseUncomparable when the base cannot tell (#234)."""
     check_roots_on_base(task.repo, task.base_commit, task.test_roots)  # before any base run
     ensure_test_commit(task.repo, task.test_commit, task.test_store)
     paths = test_paths(task.repo, task.base_commit, task.test_commit, task.test_roots)

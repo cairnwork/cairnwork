@@ -253,7 +253,10 @@ def test_teeth_count_only_the_new_tests_and_ignore_parameters(tmp_path):
         "tests/test_regression.py::t[case-1]": "failed",
     }
     assert kind([run]) == "TEETH"
-    run.outcomes = {"tests/test_regression.py::t_old": "failed"}
+    run.outcomes = {  # the new test ran and passed (#660: one that did not run is NOT_RUN)
+        "tests/test_regression.py::t_old": "failed",
+        "tests/test_regression.py::t[case-1]": "passed",
+    }
     assert kind([run]) == "NO_TEETH"
 
 

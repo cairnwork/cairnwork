@@ -27,6 +27,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from cairnwork.deferred_nodes import test_functions
 from cairnwork.gitcmd import OID, GitCommandError, run_git
 from cairnwork.issue_task import test_target
 from cairnwork.provenance import trailers
@@ -172,18 +173,29 @@ def new_tests(repo: Path, base: str, test_commit: str, paths: tuple[str, ...]) -
     commit adds or changes: only these may count as teeth, not tests in the same file
     that already failed on the base for another reason (e.g. the environment).
 
-    Top-level ``test*`` functions and ``test*`` methods of top-level ``Test*`` classes,
-    compared by AST (decorators included, line numbers not). Not seen: tests changed only
-    through a fixture, helper or module constant, nested or inherited test classes,
-    TestCase subclasses not named Test*, custom python_functions/python_classes. Such a
-    test commit is refused (no teeth found), never wrongly accepted."""
+    Top-level ``test*`` functions and ``test*`` methods of top-level ``Test*`` classes, including
+    those a class inherits from one defined earlier in the file (deferred_nodes.py), compared by
+    AST (decorators included, line numbers not). A new or changed test in a class pytest does not
+    collect (an ``__init__`` or ``__new__``) is refused, DEFERRED_TESTS_NOT_COLLECTED: no verifier
+    can run it (#660). Not seen: tests changed only through a fixture, helper or module constant,
+    nested classes, classes inherited from another module, TestCase subclasses not named Test*,
+    custom python_functions/python_classes. Such a test commit is refused (no teeth found, or the
+    base run's DEFERRED_TESTS_NOT_RUN), never wrongly accepted."""
     found = set()
     for path in paths:
         if not path.endswith(".py"):
             continue
         before = _test_functions(repo, f"{base}:{path}")
-        for node_id, body in _test_functions(repo, f"{test_commit}:{path}").items():
+        tree = _tree(repo, f"{test_commit}:{path}") or ast.Module(body=[], type_ignores=[])
+        after, uncollected = test_functions(tree)
+        for node_id, body in after.items():
             if before.get(node_id) != body:
+                if "::" in node_id and node_id.split("::", 1)[0] in uncollected:
+                    raise TestCommitRejected(
+                        "DEFERRED_TESTS_NOT_COLLECTED",
+                        f"{path}::{node_id}: pytest does not collect a test class with __init__"
+                        " or __new__, so no verifier runs it",
+                    )
                 found.add(f"{path}::{node_id}")
     return frozenset(found)
 
@@ -213,28 +225,24 @@ def _named(node: str, targets: frozenset[str]) -> bool:
 
 def _test_functions(repo: Path, blob: str, *, present: bool = False) -> dict[str, str]:
     """``present``: the file is known to exist, so a failed read is a refusal, not a new file."""
+    tree = _tree(repo, blob, present=present)
+    return test_functions(tree)[0] if tree is not None else {}
+
+
+def _tree(repo: Path, blob: str, *, present: bool = False) -> ast.Module | None:
+    """The parsed file, or None for a file that is not there (a new file) unless ``present``."""
     try:
         source = run_git(repo, "show", blob)
     except GitCommandError as exc:
         if present:
             raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
-        return {}  # a new file
+        return None  # a new file
     except UnicodeDecodeError as exc:
         raise TestCommitRejected("TEST_COMMIT_UNPARSABLE", f"{blob} is not UTF-8") from exc
     try:
-        tree = ast.parse(source)
+        return ast.parse(source)
     except (SyntaxError, ValueError) as exc:
         raise TestCommitRejected("TEST_COMMIT_UNPARSABLE", blob) from exc
-    functions: dict[str, str] = {}
-    defs = (ast.FunctionDef, ast.AsyncFunctionDef)
-    for node in tree.body:
-        if isinstance(node, defs) and node.name.startswith("test"):
-            functions[node.name] = ast.dump(node)
-        elif isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
-            for item in node.body:
-                if isinstance(item, defs) and item.name.startswith("test"):
-                    functions[f"{node.name}::{item.name}"] = ast.dump(item)
-    return functions
 
 
 BASE_COMPARE_RULE = "base-compare-v1"  # how base runs map to a Comparison (#234)
@@ -242,8 +250,9 @@ BASE_COMPARE_RULE = "base-compare-v1"  # how base runs map to a Comparison (#234
 
 @dataclass(frozen=True)
 class Comparison:
-    """The deferred tests on the base (#234): TEETH, NO_TEETH (REFUSED) or UNCOMPARABLE (the base
-    could not be judged: no evidence either way, never verified and never a refusal)."""
+    """The deferred tests on the base (#234): TEETH, NO_TEETH or NOT_RUN (REFUSED, #660) or
+    UNCOMPARABLE (the base could not be judged: no evidence either way, never verified and never a
+    refusal)."""
 
     kind: str
     code: str = ""
@@ -296,7 +305,10 @@ def _base_problem(run) -> str:
 
 def base_comparison(runs, targets: frozenset[str]) -> Comparison:
     """Every run is judged (no short-circuit): one uncomparable run makes it UNCOMPARABLE even when
-    another has teeth. Teeth: a new or changed test (``targets``) failed in the guard's record."""
+    another has teeth. Then every new or changed test (``targets``) must be in some run's guard
+    record (collected and run, any outcome), or the receipt would bind tests no verifier ran
+    (NOT_RUN, #660; the static target rule, ``untargeted``, cannot see what pytest collects).
+    Teeth: one of them failed in the guard's record."""
     problems = [(run, code) for run in runs if (code := _base_problem(run))]
     if problems:
         files = {target.split("::", 1)[0] for target in targets}
@@ -308,6 +320,11 @@ def base_comparison(runs, targets: frozenset[str]) -> Comparison:
             for run, code in problems
         )  # fmt: skip
         return Comparison("UNCOMPARABLE", problems[0][1], detail)
+    ran = {nodeid.split("[", 1)[0] for run in runs for nodeid in run.outcomes}
+    if missing := sorted(targets - ran):  # #660: the receipt would bind a test that never ran
+        return Comparison(
+            "NOT_RUN", "DEFERRED_TESTS_NOT_RUN", f"no verifier collected or ran {missing}"
+        )
     for run in runs:
         for nodeid, outcome in run.outcomes.items():
             if outcome == "failed" and nodeid.split("[", 1)[0] in targets:

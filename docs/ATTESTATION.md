@@ -361,7 +361,15 @@ Checks run in this order and the first failure is reported:
     those tests from the test commit; confidential mode cannot, so there any target naming a test
     in the file counts, on the signer's word like the test contents (`TEST_PATH_NOT_TARGETED`).
     Every bound verifier id must be among the request's required verifier ids
-    (`VERIFIER_NOT_REQUIRED`)
+    (`VERIFIER_NOT_REQUIRED`). The rule reads which tests a target names, not which ones pytest
+    collected (#660). The producer also refuses a test commit whose new or changed tests are not
+    all in its base run's guard record (`DEFERRED_TESTS_NOT_RUN`); the receipt carries no such
+    record, so on that point the receiver relies on the signer. In full mode it does check what the
+    files show: a test a class inherits from an earlier class in the same file is a new test of
+    that class too (so a target naming only the parent's copy does not cover the file), and a new
+    or changed test in a class pytest does not collect (an `__init__` or `__new__`) fails with
+    `TEST_PATH_NOT_TARGETED` (detail `DEFERRED_TESTS_NOT_COLLECTED`). Confidential mode checks
+    neither and keeps taking the signer's word, as above
 
 On success `verify --json` adds `assurance`, what the receiver checked itself (`null` for v0.1):
 `mode` (`full`/`confidential`), `test_source` (`policy_pinned` with `--policy`, otherwise

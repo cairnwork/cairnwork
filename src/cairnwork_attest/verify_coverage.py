@@ -6,6 +6,14 @@ its new or changed tests is named. Full mode reads those tests from the test com
 (deferred_tests.new_tests). Confidential mode cannot: there a file counts as named when a target
 names a test in it, the signer's word, as the test contents are (``test_contents: not_verified``).
 Each bound verifier must also be one Core required, or its run is not part of the verdict.
+
+The rule is static: it reads which tests a target names, not which ones pytest collected. The
+producer also refuses a test commit whose new or changed tests are not all in the base run's guard
+record (DEFERRED_TESTS_NOT_RUN, #660); the receipt carries no such record, so the receiver relies on
+the signer for that. What the files themselves show it checks in full mode, through new_tests: a
+test a class inherits from another in the file is a test of that class too, and a new test in a
+class pytest does not collect (``__init__``/``__new__``) is refused (DEFERRED_TESTS_NOT_COLLECTED,
+reported as TEST_PATH_NOT_TARGETED). Confidential mode sees neither, as above.
 """
 
 from __future__ import annotations
