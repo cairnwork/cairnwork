@@ -295,6 +295,8 @@ def scan_added_lines(
     # Python also ends a source line at "\r" (CRLF included), so each piece is scanned on its own.
     for number, line in ((number, line) for number, line in lines if len(line) <= MAX_LINE):
         for index, piece in enumerate(line.split("\r")):
+            if not budget.piece():  # empty and skipped pieces still cost a pass (#668)
+                return found + [Finding(path, number, SCAN_BUDGET)]
             view = views.get((number, index))
             if number <= 2 and _foreign_coding(piece):
                 found.append(Finding(path, number, "source_encoding"))

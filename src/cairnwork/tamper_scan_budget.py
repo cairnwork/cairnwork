@@ -10,7 +10,9 @@ lines included, and many lines near the cap add up. So, counted in characters, n
   substitution over each later line that holds it);
 * one patch reads at most ``MAX_READ`` characters, every reading of a line counted, and tokenizes
   at most ``MAX_TOKENIZED`` bytes of committed files, a row longer than ``MAX_LINE`` counted once
-  per started ``MAX_LINE`` (on some Pythons tokenize time grows with the square of a row's length).
+  per started ``MAX_LINE`` (on some Pythons tokenize time grows with the square of a row's length);
+  every line piece, every reading and every row also costs one, empty or skipped, since each runs
+  the rules or the tokenizer once whatever its length.
 
 Past any of them the scan stops reading and the patch is refused with the finding ``scan_budget``:
 the budget can only add a refusal, never let a refused change pass. ``canonical`` (``_canonical``
@@ -42,7 +44,7 @@ class ScanBudget:
     def read(self, texts: Iterable[str], aliases: Table | None = None) -> bool:
         """Spend ``texts`` (and check the ``aliases`` they are read with); False when over."""
         lengths = [len(text) for text in texts]
-        self.read_left -= sum(lengths)
+        self.read_left -= sum(lengths) + len(lengths)
         many = aliases is not None and sum(map(len, aliases.values())) > MAX_ALIASES
         self.over = self.over or self.read_left < 0 or many or max(lengths, default=0) > MAX_LINE
         return not self.over
@@ -50,8 +52,16 @@ class ScanBudget:
     def tokenize(self, data: bytes) -> bool:
         """Spend tokenizing ``data`` (a whole file); False when over."""
         rows = data.split(b"\n")
-        self.tokenized_left -= sum(len(row) * -(-len(row) // MAX_LINE) for row in rows)
+        self.tokenized_left -= sum(
+            (len(row) + 1) * max(1, -(-len(row) // MAX_LINE)) for row in rows
+        )
         self.over = self.over or self.tokenized_left < 0
+        return not self.over
+
+    def piece(self) -> bool:
+        """Spend one line piece (``\\r``-separated), however short; False when over."""
+        self.read_left -= 1
+        self.over = self.over or self.read_left < 0
         return not self.over
 
 

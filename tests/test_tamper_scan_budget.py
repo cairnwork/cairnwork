@@ -175,3 +175,15 @@ def _spent(path, texts) -> int:
     budget = ScanBudget()
     _rules(path, texts, budget=budget)
     return MAX_READ - budget.read_left
+
+
+@pytest.mark.parametrize("text", ["", "#", "\r" * 64, "x"])
+def test_short_or_empty_lines_still_spend_the_budget(text):
+    """Every line costs a pass of the rules, so many short lines run out too (#668)."""
+    texts = [text] * 2000
+    assert SCAN_BUDGET in {rule for _, rule in _rules(LIBRARY, texts, budget=ScanBudget(read=1000))}
+
+
+def test_empty_rows_still_spend_the_tokenize_budget():
+    budget = ScanBudget(tokenized=1000)
+    assert not budget.tokenize(b"\n" * 2000)
