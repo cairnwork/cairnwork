@@ -19,7 +19,7 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
-from cairnwork.gitcmd import GitCommandError, run_git
+from cairnwork.gitcmd import GitCommandError, run_git, run_git_bytes
 from cairnwork.intake import Intake
 from cairnwork.verifiers import VerifierRun, VerifierSpec, run_verifiers
 from cairnwork.verify_context import VerifyContext
@@ -82,11 +82,16 @@ def _tokens(text: str) -> set[str]:
 
 def repo_context(base: Path, ticket: str) -> str:
     """Tracked text files of the base, those that share the most words with the ticket first."""
-    listing = run_git(
-        base, "ls-tree", "-r", "-z", "HEAD"
-    )  # one source as the blobs; -z: no quoting
-    entries = (item.split("\t", 1) for item in listing.split("\0") if "\t" in item)
-    names = [name for info, name in entries if info.split(" ", 1)[0] in _FILE_MODES]
+    listing = run_git_bytes(base, "ls-tree", "-r", "-z", "HEAD")  # same source as the blobs
+    names = []
+    for item in listing.split(b"\0"):
+        info, tab, raw = item.partition(b"\t")
+        if not tab or info.split(b" ", 1)[0].decode() not in _FILE_MODES:
+            continue
+        try:
+            names.append(raw.decode("utf-8"))
+        except UnicodeDecodeError:
+            continue  # a name that is not text is skipped, never a failure of the whole listing
     words = _tokens(ticket)
     ranked = sorted(
         (n for n in names if n.endswith(_TEXT_SUFFIXES)),
