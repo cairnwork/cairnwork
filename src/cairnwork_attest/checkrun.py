@@ -23,6 +23,7 @@ from http.client import HTTPException
 from pathlib import Path
 from typing import Any
 
+from cairnwork.protection import verdict_text
 from cairnwork_attest.bundle import BundleError, read_bundle
 from cairnwork_attest.checkrun_gh import gh_http, gh_problem
 from cairnwork_attest.dsse import verify_envelope
@@ -128,7 +129,8 @@ def _offline_result(
             expected_candidate=facts["candidate"],
         )
         if result.ok:
-            return "VERIFIED", result.assurance
+            level = (result.assurance or {}).get("protection") or ""
+            return verdict_text(True, "", level), result.assurance
         return result.code, None
     outcome = verify_envelope(facts["envelope"], key)
     return ("VERIFIED, signature only" if outcome.ok else "SIGNATURE_INVALID"), None

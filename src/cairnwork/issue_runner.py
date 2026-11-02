@@ -255,10 +255,8 @@ def _open_pr(intake: Intake, github: GitHub, clone: Path, number: int, status) -
     require_on_main(clone, request.base_commit, fetch=False)
     _git(clone, "merge-base", "--is-ancestor", request.base_commit, commit)
     changed = _git(clone, "diff", "--name-only", "--no-renames", request.base_commit, commit)
-    tests = ()
-    if request.test_commit:
-        tests = _git(clone, "diff", "--name-only", "--no-renames", request.base_commit,
-                     request.test_commit).split()  # fmt: skip
+    tests = _git(clone, "diff", "--name-only", "--no-renames", request.base_commit,
+                 request.test_commit).split() if request.test_commit else ()  # fmt: skip
     if not set(changed.split()) <= set(request.allowed_files) | set(tests):
         raise ValueError(f"candidate {commit} changes files outside the Issue's allowed_files")
     if not intake.notary.bound_to(
@@ -274,7 +272,8 @@ def _open_pr(intake: Intake, github: GitHub, clone: Path, number: int, status) -
     _git(clone, "-c", "credential.helper=", "-c", f"credential.helper={helper}", "push",
          "origin", f"{commit}:refs/heads/{branch}", timeout=NETWORK_TIMEOUT_SECONDS)  # fmt: skip
     seen = parse_provenance(_git(clone, "show", "-s", "--format=%B", commit))
-    body = pr_body(number, task_id, attempt, commit, seen)
+    verdict = intake.notary.verdict(task_id, attempt, expected_candidate=commit)
+    body = pr_body(number, task_id, attempt, commit, seen, verdict.protection if verdict else "")
     return github.draft_pr(branch, f"Cairnwork: fix for #{number} (Refs #{number})", body)
 
 

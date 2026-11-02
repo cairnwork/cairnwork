@@ -36,6 +36,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from cairnwork import protection
 from cairnwork.changeset import GitChangeSet, read_change_set, read_tree_change_set
 from cairnwork.core_request import AcceptanceSpec, VerifierObservation, build_core_request
 from cairnwork.deferred_tests import TestCommitRejected, overlay_tree
@@ -120,6 +121,12 @@ class Verdict:
     verified: bool
     response: dict[str, Any]
     reason: str = ""  # set when Core said VERIFIED but the response is not bound to the request
+    protection: str = ""  # the binding's protection level (protection.py); "" when none
+
+
+def _level(binding: Any) -> str:
+    found = binding.get("protection") if isinstance(binding, dict) else ""
+    return found if found in protection.LEVELS else ""
 
 
 def default_core_verify() -> CoreVerify:
@@ -365,6 +372,7 @@ class Notary:
             verified,
             response,
             reason,
+            _level(binding),
         )
 
     def _recorded(self, task_id: str, attempt_id: str, request_hash: str) -> Verdict | None:
