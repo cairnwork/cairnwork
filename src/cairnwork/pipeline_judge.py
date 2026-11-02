@@ -94,7 +94,9 @@ def judge_candidate(
     reach(phase) records progress. A binding (verify_candidate only, #229) binds the verdict to
     the tree that ran and to the binding's head instead of to result.candidate_commit.
     ``unless_passed`` (verify_candidate only, #259): a failed base check, raised before Core is
-    asked when a verifier did not pass; when they all passed the candidate's own evidence stands."""
+    asked when a verifier did not pass; when they all passed the candidate's own evidence stands.
+    When every run and check passed but a new test of the test commit is in no verifier run's
+    record, Core is not asked either (DEFERRED_TESTS_NOT_RUN_IN_VERIFICATION, #697)."""
     judged = result.candidate_commit
     task_id = result.task_id
     reach("VERIFYING")
@@ -116,7 +118,7 @@ def judge_candidate(
     if unless_passed is not None and not all(run.observation.passed for run in runs):
         raise unless_passed
     if (missing := _not_run_here(task, verified_by, test_files)) and all(
-        run.observation.passed for run in runs
+        o.passed for o in (*(run.observation for run in runs), *(c.observation for c in checks))
     ):  # #697: a whole-file target passes on another test of that file; Core is not asked
         result.reason = (
             f"DEFERRED_TESTS_NOT_RUN_IN_VERIFICATION: no verifier collected or ran {missing}"

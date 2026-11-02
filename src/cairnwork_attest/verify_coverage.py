@@ -9,11 +9,13 @@ Each bound verifier must also be one Core required, or its run is not part of th
 
 The rule is static: it reads which tests a target names, not which ones pytest collected. The
 producer also refuses a test commit whose new or changed tests are not all in the base run's guard
-record (DEFERRED_TESTS_NOT_RUN, #660); the receipt carries no such record, so the receiver relies on
-the signer for that. What the files themselves show it checks in full mode, through new_tests: a
-test a class inherits from another in the file is a test of that class too, and a new test in a
-class pytest does not collect (``__init__``/``__new__``) is refused (DEFERRED_TESTS_NOT_COLLECTED,
-reported as TEST_PATH_NOT_TARGETED). Confidential mode sees neither, as above.
+record (DEFERRED_TESTS_NOT_RUN, #660), and a candidate whose verification runs did not all run them
+(DEFERRED_TESTS_NOT_RUN_IN_VERIFICATION, #697); the receipt carries no such record, so the receiver
+relies on the signer for that. What the files themselves show it checks in full mode, through
+new_tests: a test a class inherits from another in the file is a test of that class too, and a new
+test in a class pytest does not collect (``__init__``/``__new__``) is refused
+(DEFERRED_TESTS_NOT_COLLECTED, reported as TEST_PATH_NOT_TARGETED). Confidential mode sees neither,
+as above.
 """
 
 from __future__ import annotations

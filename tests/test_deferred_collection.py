@@ -4,6 +4,7 @@ reading the file (every node id pytest collects a new test under, and DEFERRED_T
 and, after the base run, the guard's record (DEFERRED_TESTS_NOT_RUN)."""
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 from conftest import commit_change
@@ -121,7 +122,7 @@ def test_worker_path_refuses_a_new_test_the_base_run_did_not_run(project, tmp_pa
     result = run(project, tmp_path, base, test_commit, SeeingWorker({"src/calc.py": FIX}),
                  verifiers=_argv("tests/test_regression.py"))  # fmt: skip
     assert result.status == "FAILED"
-    assert result.reason.startswith("DEFERRED_TESTS_NOT_RUN"), result.reason
+    assert result.reason.startswith("DEFERRED_TESTS_NOT_RUN:"), result.reason
     assert "tests/test_regression.py::TestK::test_m" in result.reason
 
 
@@ -199,9 +200,10 @@ def _judge(monkeypatch, verifier_run, p2p_runs=()):
     )  # fmt: skip
     result = SimpleNamespace(candidate_commit="j", task_id="t", attempt_id="a", logs=[])
     notary = SimpleNamespace(notarize=lambda *a: (_ for _ in ()).throw(_ToCore()))
+    plan: Any = object()  # run_plan is replaced above, so any stand-in will do
     pipeline_judge.judge_candidate(
         task, (), "d", notary, result, ("tests/test_x.py",), VerifyContext.of(task, Path("x"), "a"),
-        lambda phase: None, p2p=object() if p2p_runs else None,
+        lambda phase: None, p2p=plan if p2p_runs else None,
     )  # fmt: skip
     return result, named
 
