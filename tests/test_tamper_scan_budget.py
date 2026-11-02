@@ -204,7 +204,14 @@ def test_many_empty_rows_are_refused_before_file_views_runs(monkeypatch):
     Counted, not timed: at most MAX_TOKENIZED // ROW_COST empty rows reach ``file_views``.
     """
     monkeypatch.setattr(scan, "file_views", lambda data: pytest.fail("tokenized"))
-    for blank in (b"\n", b" \n", b"\t\n"):
+    for blank in (b"\n", b" \n", b"\t\n", b"\r", b"\r\n"):  # file_views splits on CR too
         data = blank * (MAX_TOKENIZED // 64 + 1)  # 64: what an empty row really costs
         assert scan_added_lines(TEST, [(1, "x = 1")], data)[0].rule == SCAN_BUDGET
     assert ScanBudget().tokenize(b"\n" * (MAX_TOKENIZED // ROW_COST - 2))
+
+
+def test_a_large_honest_module_stays_inside_the_budget():
+    """Row charging must not refuse ordinary code: a 1 MB module of plain statements passes."""
+    data = ("".join(f"value_{i} = compute({i}, 'label-{i}')\n" for i in range(30_000))).encode()
+    assert len(data) > 1_000_000
+    assert ScanBudget().tokenize(data)

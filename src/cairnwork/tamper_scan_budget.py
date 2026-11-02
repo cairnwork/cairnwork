@@ -53,7 +53,7 @@ class ScanBudget:
 
     def tokenize(self, data: bytes) -> bool:
         """Spend tokenizing ``data`` (a whole file); False when over."""
-        rows = data.split(b"\n")
+        rows = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n").split(b"\n")  # as _rows splits
         self.tokenized_left -= sum(
             (len(row) + ROW_COST) * max(1, -(-len(row) // MAX_LINE)) for row in rows
         )
