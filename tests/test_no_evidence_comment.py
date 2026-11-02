@@ -31,7 +31,7 @@ import cairnwork.issue_runner as runner
 from cairnwork import p2p, pipeline, pipeline_judge
 from cairnwork.intake import Intake
 from cairnwork.issue_publish import failure_text
-from cairnwork.journal import Journal, no_evidence
+from cairnwork.journal import TRUST_UNREAD, Journal, no_evidence
 from cairnwork.notary import Notary
 from cairnwork.ownership import OwnershipLedger
 from cairnwork.pipeline import TaskSpec, run_bound_task, run_task
@@ -287,6 +287,16 @@ def test_only_a_failed_finished_row_can_carry_the_code(tmp_path, phase, detail):
 )
 def test_no_valid_code_means_todays_wording(status):
     assert failure_text(status) == TODAY
+
+
+def test_a_github_read_failure_before_the_attempt_says_no_evidence_not_a_trust_change():
+    """#673: the per-attempt gate could not read GitHub; the Issue is told there is no evidence
+    and that its trust did not change, not the base/environment wording of #234."""
+    text = failure_text({"status": "FAILED", "phase": "FINISHED", "uncomparable": TRUST_UNREAD})
+    assert NO_EVIDENCE in text and "`TRUST_CHECK_FAILED_BEFORE_ATTEMPT`" in text
+    assert "讀不到 GitHub" in text and "不是可信狀態變了" in text and "base、它的環境" not in text
+    other = failure_text({"status": "FAILED", "phase": "FINISHED", "uncomparable": "X_FAILED"})
+    assert "base、它的環境或驗證帳號無法判斷" in other and "GitHub" not in other
 
 
 @pytest.mark.parametrize("word", ["SUPERSEDED", "CANCELLED", "COMPLETED", "odd"])
