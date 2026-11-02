@@ -367,3 +367,25 @@ def test_a_nested_root_whose_ancestor_is_already_listed_says_to_drop_it():
         check_test_roots(["tests", "tests/x"])
     text = str(exc.value)
     assert "already listed, so drop 'tests/x'" in text and "instead" not in text
+
+
+@pytest.mark.parametrize(
+    "root",
+    ["tasks/tests", "policy/test", "docs/governance/tests", "docs/agents/test",
+     "src/cairnwork/tests", "src/cairnwork_attest/test", "scripts/ops/trusted_gate/tests",
+     "scripts/ops/eia_nightly_x/tests", "nexus/services/external_intelligence_x/tests",
+     "Tasks/tests", "Makefile/tests", "scripts/ops/external_intelligence_x/tests"],
+)  # fmt: skip
+def test_a_well_formed_root_under_a_protected_path_is_refused_with_no_hint(root, tmp_path):
+    """#704: the shape is clean (plain names, last part tests or test); only the protected path
+    is wrong, so the refusal names the rule and offers no fix. One root per protected family."""
+    with pytest.raises(ValueError) as exc:
+        check_test_roots([root])
+    text = str(exc.value)
+    assert "outside protected paths" in text and "instead" not in text and "drop" not in text
+    intake = Intake(tmp_path / "state")
+    intake.prepare()
+    (intake.state / "config.json").write_text(json.dumps({"test_roots": [root]}))
+    with pytest.raises(IntakeRefused, match="BAD_CONFIG") as refused:
+        intake.config()
+    assert "instead" not in str(refused.value) and "drop" not in str(refused.value)
