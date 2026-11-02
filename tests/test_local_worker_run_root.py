@@ -14,7 +14,7 @@ import os
 import pytest
 from local_worker_fakes import cli_harness, lines, reply
 
-from experimental.local_worker import corpus_io, run_root_cleanup
+from experimental.local_worker import canary, corpus_io, run_root_cleanup
 from experimental.local_worker.run_root_cleanup import CLAIM, claim, eligible
 
 DONE = [reply("read_file", path="src/app.py"), reply("finish", status="DONE")]
@@ -221,7 +221,7 @@ def test_a_claim_that_cannot_be_written_is_not_left_behind(tmp_path, monkeypatch
 
     with monkeypatch.context() as m:
         m.setattr(run_root_cleanup.os, "write", full)
-        with pytest.raises(OSError):
+        with pytest.raises(corpus_io.InputRefused, match="could not be written .ENOSPC."):
             claim(runs / A, runs, "ep_1")
     assert not os.path.lexists(runs / A / CLAIM)  # a later episode can still start here
     assert claim(runs / A, runs, "ep_2") is not None
@@ -257,3 +257,48 @@ def test_a_closed_stderr_does_not_replace_the_outcome(tmp_path, monkeypatch, str
     )
     run_root_cleanup.finish(c, runs, delete=True)  # never raises
     assert not os.path.lexists(runs / A)
+
+
+def test_a_claim_that_cannot_be_created_is_refused_not_a_traceback(tmp_path, monkeypatch):
+    runs = (tmp_path / "runs").resolve()
+    _fill(runs / A)
+
+    def denied(*args, **kwargs):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(run_root_cleanup.os, "open", denied)
+    with pytest.raises(corpus_io.InputRefused, match="could not be created .EACCES."):
+        claim(runs / A, runs, "ep_1")
+
+
+def test_deletion_stays_in_the_directory_that_was_checked(tmp_path, monkeypatch):
+    runs = (tmp_path / "runs").resolve()
+    _fill(runs / A)
+    (runs / A / "loose.bin").write_bytes(b"x")
+    c = claim(runs / A, runs, "ep_1")
+    assert c is not None
+    victim = tmp_path / "victim"
+    _fill(victim)  # the same entry names as the root, so a path-based delete would hit them
+    (victim / "loose.bin").write_bytes(b"stay")
+    moved = tmp_path / "moved"
+    real_scandir = os.scandir
+
+    def swap_then_scan(fd):  # after the check and the open, the root becomes a link elsewhere
+        if not moved.exists():  # os is shared: rmtree scans too, the swap happens once
+            (runs / A).rename(moved)
+            (runs / A).symlink_to(victim)
+        return real_scandir(fd)
+
+    monkeypatch.setattr(run_root_cleanup.os, "scandir", swap_then_scan)
+    try:
+        run_root_cleanup.remove(c, runs)
+    except OSError:
+        pass  # the final rmdir meets the link; the outcome text is not the point
+    assert (victim / "checkout" / "src" / "app.py").read_text() == "x = 1\n"
+    assert (victim / "venv" / "bin" / "python").exists()
+    assert (victim / "loose.bin").read_bytes() == b"stay"
+    assert not (moved / "venv").exists()  # the checked directory itself was emptied
+
+
+def test_there_is_one_installed_runs():
+    assert run_root_cleanup.INSTALLED_RUNS is canary.INSTALLED_RUNS

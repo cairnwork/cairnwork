@@ -26,6 +26,7 @@ root and its claim stay with it, and the report says how many entries are left.
 
 from __future__ import annotations
 
+import errno
 import os
 import re
 import shutil
@@ -34,9 +35,9 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from experimental.local_worker.canary import INSTALLED_RUNS  # noqa: F401  (cli.py reads it here)
 from experimental.local_worker.corpus_io import InputRefused
 
-INSTALLED_RUNS = Path("/Users/Shared/cairnwork-worker/local-runs")  # local-worker-tool's RUNS
 CLAIM = ".cairnwork-episode-claim"
 KEEP_SUFFIXES = (".json", ".jsonl", ".md")
 _TAG = re.compile(r"[0-9a-f]{32}")
@@ -60,6 +61,10 @@ def eligible(root: Path, runs: Path) -> bool:
         return False
 
 
+def _why(exc: OSError) -> str:
+    return errno.errorcode.get(exc.errno or 0, type(exc).__name__)
+
+
 def claim(root: Path, runs: Path, episode_id: str) -> Claim | None:
     """Claim root for this episode; None when it is not an eligible run root (left alone)."""
     if not eligible(root, runs):
@@ -69,11 +74,17 @@ def claim(root: Path, runs: Path, episode_id: str) -> Claim | None:
         fd = os.open(root / CLAIM, flags, 0o600)
     except FileExistsError:
         raise InputRefused(f"run root {root.name} is claimed by another episode") from None
+    except OSError as exc:
+        raise InputRefused(
+            f"run root {root.name}: claim could not be created ({_why(exc)})"
+        ) from exc
     try:
         os.write(fd, (episode_id + "\n").encode())
-    except OSError:
+    except OSError as exc:
         (root / CLAIM).unlink(missing_ok=True)  # an empty claim would refuse every later start
-        raise
+        raise InputRefused(
+            f"run root {root.name}: claim could not be written ({_why(exc)})"
+        ) from exc
     finally:
         os.close(fd)
     return Claim(root, episode_id)
@@ -95,24 +106,36 @@ def remove(c: Claim, runs: Path) -> str:
     if not _mine(c, runs):
         return "kept (not this episode's claim)"
     kept, left = 0, 0
-    with os.scandir(c.root) as it:
-        entries = [e for e in it if e.name != CLAIM]
-    for e in entries:
-        path = c.root / e.name
-        if e.is_file(follow_symlinks=False) and e.name.endswith(KEEP_SUFFIXES):
-            kept += 1
-            continue
-        if e.is_dir(follow_symlinks=False):
-            shutil.rmtree(path, ignore_errors=True)  # never follows a link inside the tree
-        else:
-            path.unlink(missing_ok=True)  # a file or a link (only the link itself goes)
-        left += os.path.lexists(path)
-    if left:
-        return f"partial ({left} entries left)"
-    (c.root / CLAIM).unlink()
+    # Every delete below goes through this fd, the directory _mine just checked: if the root is
+    # swapped for a link afterwards, nothing outside the checked directory is touched.
+    fd = os.open(c.root, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY)
+    try:
+        with os.scandir(fd) as it:
+            entries = [e for e in it if e.name != CLAIM]
+        for e in entries:
+            if e.is_file(follow_symlinks=False) and e.name.endswith(KEEP_SUFFIXES):
+                kept += 1
+                continue
+            if e.is_dir(follow_symlinks=False):
+                shutil.rmtree(e.name, ignore_errors=True, dir_fd=fd)  # never follows a link
+            else:
+                try:
+                    os.unlink(e.name, dir_fd=fd)  # a file or a link (only the link itself goes)
+                except FileNotFoundError:
+                    pass
+            try:
+                os.lstat(e.name, dir_fd=fd)
+                left += 1
+            except FileNotFoundError:
+                pass
+        if left:
+            return f"partial ({left} entries left)"
+        os.unlink(CLAIM, dir_fd=fd)
+    finally:
+        os.close(fd)
     if kept:
         return f"reduced ({kept} result files kept)"
-    c.root.rmdir()
+    os.rmdir(c.root)  # path-based on purpose: rmdir needs the parent, and it refuses a link
     return "removed"
 
 
