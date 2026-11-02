@@ -83,14 +83,20 @@ class IssueTask:
     test_commit: str = ""  # deferred tests (cairnwork.deferred_tests)
 
 
-def parse_task_block(body: str, roots: tuple[str, ...] = DEFAULT_TEST_ROOTS) -> IssueTask:
+def task_block_text(body: str) -> str:
+    """The one ```eia-task block of an Issue body, before its content is read."""
     blocks = TASK_FENCE.findall(body or "")
     if len(blocks) != 1:
         raise IssueRefused("TASK_BLOCK_REQUIRED", "exactly one ```eia-task block")
     if ANY_FENCE.search(body or ""):
         raise IssueRefused("TASK_BODY_HAS_FOREIGN_CONTRACT")
+    return blocks[0]
+
+
+def parse_task_block(body: str, roots: tuple[str, ...] = DEFAULT_TEST_ROOTS) -> IssueTask:
+    block = task_block_text(body)
     try:
-        raw = json.loads(blocks[0])
+        raw = json.loads(block)
     except (ValueError, RecursionError) as exc:  # deep nesting raises RecursionError (#650)
         raise IssueRefused("TASK_BLOCK_JSON_INVALID") from exc
     if not isinstance(raw, dict) or set(raw) - KEYS:
@@ -125,7 +131,7 @@ def parse_task_block(body: str, roots: tuple[str, ...] = DEFAULT_TEST_ROOTS) -> 
         allowed_files=tuple(files),
         verifiers=tuple(pytest_argv(c, roots) for c in commands),
         summary=" ".join(summary.split())[:400],
-        block_sha256=hashlib.sha256(blocks[0].encode()).hexdigest(),
+        block_sha256=hashlib.sha256(block.encode()).hexdigest(),
         test_commit=test_commit,
     )
 
@@ -308,7 +314,7 @@ def _gql_login(actor: Any) -> str | None:
     return actor["login"] if kind == "User" else None
 
 
-def settle_check(github: Any, number: int, known: Mapping[str, Any], intake: Any, labels) -> None:
+def settle_check(github: Any, number: int, known: Mapping[str, Any], labels) -> None:
     """Before settle releases a finished task (#624), the check take makes right before dispatch:
     the Issue must still carry the block take bound, and its queueing must still be trusted.
     Otherwise the Issue moves to needs-fix with one comment and RuntimeError tells settle; no PR
@@ -322,9 +328,8 @@ def settle_check(github: Any, number: int, known: Mapping[str, Any], intake: Any
         raise RuntimeError(reason)
     if not reason:
         body = github.current(number).get("body") or ""  # a GitHub error: retried next pass
-        roots = tuple(intake.config()["test_roots"])  # a local config error: retried next pass
-        try:
-            block = parse_task_block(body, roots).block_sha256
+        try:  # the block text take bound, not a re-parse: test_roots may change meanwhile (#649)
+            block = hashlib.sha256(task_block_text(body).encode()).hexdigest()
         except Exception:  # noqa: BLE001 - any unreadable block counts as changed (attempt_gate)
             block = ""
         reason = "" if block and block == known.get("block_sha256") else "ISSUE_CHANGED_AFTER_TAKE"
