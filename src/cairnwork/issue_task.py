@@ -215,12 +215,14 @@ def _tests_ancestor(root: Any) -> str | None:
     return None
 
 
-def _root_refusal(root: Any) -> str:
+def _root_refusal(root: Any, listed: Any = ()) -> str:
     """Why a test_roots entry is refused (#701): the rule, and for a directory nested inside a
     ``tests``/``test`` directory the one fix (list that directory itself, which protects it all)."""
     why = f"test_roots entry {root!r} is not a clean unprotected directory"
     rule = "a root is a relative path of plain names whose last part is tests or test"
     near = _tests_ancestor(root)
+    if near and not is_protected(near) and near in listed:
+        return f"{why}: {rule}; {near!r} is already listed, so drop {root!r}"
     if near and not is_protected(near):
         return f"{why}: {rule}; it is inside {near!r}, so list {near!r} instead"
     return f"{why}: {rule}, outside protected paths"
@@ -238,7 +240,7 @@ def check_test_roots(roots: Any) -> tuple[str, ...]:
         raise ValueError(f"test_roots must be 1-8 distinct directory paths, got {roots!r}")
     for root in roots:
         if not (isinstance(root, str) and _ROOT.fullmatch(root)) or is_protected(root):
-            raise ValueError(_root_refusal(root))
+            raise ValueError(_root_refusal(root, roots))
     return tuple(roots)
 
 

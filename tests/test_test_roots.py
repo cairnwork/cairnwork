@@ -353,3 +353,17 @@ def test_a_very_long_repeated_root_is_refused_quickly():
     with pytest.raises(ValueError, match="last part is tests or test"):
         check_test_roots([root])
     assert time.monotonic() - start < 1
+
+
+def test_a_nested_root_under_a_protected_tests_directory_gets_no_hint():
+    for root in ("tasks/tests/x", "docs/governance/test/x"):
+        with pytest.raises(ValueError) as exc:
+            check_test_roots([root])
+        assert "last part is tests or test" in str(exc.value) and "instead" not in str(exc.value)
+
+
+def test_a_nested_root_whose_ancestor_is_already_listed_says_to_drop_it():
+    with pytest.raises(ValueError) as exc:
+        check_test_roots(["tests", "tests/x"])
+    text = str(exc.value)
+    assert "already listed, so drop 'tests/x'" in text and "instead" not in text
