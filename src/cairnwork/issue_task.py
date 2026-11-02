@@ -200,6 +200,22 @@ def test_target(roots: tuple[str, ...] | None) -> re.Pattern[str]:
     return re.compile(rf"(?:{top})/(?:{name}/)*{name}\.py(?:::[A-Za-z0-9_\[\]\-]+)*")
 
 
+_NESTED = re.compile(
+    r"((?:[A-Za-z0-9_][A-Za-z0-9_\-]*/)*(?:tests|test))(?:/[A-Za-z0-9_][A-Za-z0-9_\-]*)+"
+)
+
+
+def _root_refusal(root: Any) -> str:
+    """Why a test_roots entry is refused (#701): the rule, and for a directory nested inside a
+    ``tests``/``test`` directory the one fix (list that directory itself, which protects it all)."""
+    why = f"test_roots entry {root!r} is not a clean unprotected directory"
+    rule = "a root is a relative path of plain names whose last part is tests or test"
+    nested = _NESTED.fullmatch(root) if isinstance(root, str) else None
+    if nested and not is_protected(nested[1]):
+        return f"{why}: {rule}; it is inside {nested[1]!r}, so list {nested[1]!r} instead"
+    return f"{why}: {rule}, outside protected paths"
+
+
 def check_test_roots(roots: Any) -> tuple[str, ...]:
     """The state config's ``test_roots``: 1 to 8 distinct directories, written as clean
     relative paths of plain names (no glob, dot, empty or ``-`` leading part) whose last part
@@ -212,7 +228,7 @@ def check_test_roots(roots: Any) -> tuple[str, ...]:
         raise ValueError(f"test_roots must be 1-8 distinct directory paths, got {roots!r}")
     for root in roots:
         if not (isinstance(root, str) and _ROOT.fullmatch(root)) or is_protected(root):
-            raise ValueError(f"test_roots entry {root!r} is not a clean unprotected directory")
+            raise ValueError(_root_refusal(root))
     return tuple(roots)
 
 

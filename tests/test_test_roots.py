@@ -322,3 +322,24 @@ def test_a_root_directory_itself_is_protected():
     assert protected_verifier_inputs(("pkg/tests", "tests", "pkg"), two) == ("pkg/tests", "tests")
     with pytest.raises(TaskRejected, match="PROTECTED_VERIFIER_INPUT"):
         check_task(_task(("pkg/tests",), (*RUN, "pkg/tests/test_x.py"), PKG))
+
+
+@pytest.mark.parametrize(
+    ("root", "fix"),
+    [("tests/_sync", "tests"), ("tests/functional", "tests"), ("pkg/test/comparison", "pkg/test"),
+     ("tests/a/b", "tests"), ("pkg/tests/test_level4", "pkg/tests")],
+)  # fmt: skip
+def test_a_nested_root_is_refused_naming_the_rule_and_the_one_fix(root, fix):
+    """#701: the shapes real repos have are still refused, but the message says what to list."""
+    with pytest.raises(ValueError) as exc:
+        check_test_roots([root])
+    text = str(exc.value)
+    assert "last part is tests or test" in text and f"list {fix!r} instead" in text
+    assert check_test_roots([fix]) == (fix,)
+
+
+@pytest.mark.parametrize("root", ["src/lib", "pkg/*", "tests2/x", ".github/tests/x", "Tests/x"])
+def test_a_non_test_nested_root_is_refused_with_no_fix_offered(root):
+    with pytest.raises(ValueError) as exc:
+        check_test_roots([root])
+    assert "last part is tests or test" in str(exc.value) and "instead" not in str(exc.value)
