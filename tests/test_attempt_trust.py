@@ -14,7 +14,8 @@ from test_pipeline import CrashWorker, EditWorker, project, stores, task  # noqa
 
 import cairnwork.attempt_gate as gate_module
 import cairnwork.issue_runner as runner
-from cairnwork.issue_task import IssueRefused, parse_task_block
+from cairnwork.issue_task import TRUST_CHECK_FAILED, IssueRefused, parse_task_block
+from cairnwork.journal import TRUST_UNREAD, no_evidence
 from cairnwork.pipeline import TaskResult, _attempt, run_bound_task
 from cairnwork.verify_context import VerifyContext
 from cairnwork.workers import WorkerDefaults
@@ -100,7 +101,7 @@ def test_identity_changed_between_attempt_one_and_two_refuses_attempt_two(
 
 @pytest.mark.parametrize(
     "text, trust, asked_trust",
-    [(BLOCK + " ", "", False), (BLOCK, "AUTHOR_UNTRUSTED", True)],
+    [(BLOCK + " ", "", True), (BLOCK, "AUTHOR_UNTRUSTED", True)],
     ids=["hash-mismatch", "distrust"],
 )
 def test_the_gate_refuses_a_changed_block_or_distrust(monkeypatch, text, trust, asked_trust):
@@ -108,7 +109,7 @@ def test_the_gate_refuses_a_changed_block_or_distrust(monkeypatch, text, trust, 
     asked = []
     github = fake(current=lambda n: {"body": "x"}, trust=lambda n, label: asked.append(1) or trust)
     assert gate_module.attempt_gate(github, 7, BLOCK_SHA)() == runner.TRUST_CHANGED
-    assert bool(asked) is asked_trust  # a mismatch refuses before trust is asked; distrust asks
+    assert bool(asked) is asked_trust  # trust is asked first, as take and settle do (#673)
 
 
 def test_the_gate_passes_an_unchanged_trusted_issue(monkeypatch):
@@ -119,14 +120,14 @@ def test_the_gate_passes_an_unchanged_trusted_issue(monkeypatch):
 
 def test_a_foreign_contract_fence_added_after_take_refuses_the_attempt():
     """The eia-task block is unchanged, but a ```*-contract fence now sits beside it: the body
-    take refused to read is a changed Issue, refused before trust is asked."""
+    take refused to read is a changed Issue, refused once trust has been asked (#673)."""
     bound = parse_task_block(body()).block_sha256
     asked = []
     github = fake(
         current=lambda n: {"body": body() + "\n```nexus-contract\n{}\n```\n"},
         trust=lambda n, label: asked.append(1) or "",
     )
-    assert gate_module.attempt_gate(github, 7, bound)() == runner.TRUST_CHANGED and not asked
+    assert gate_module.attempt_gate(github, 7, bound)() == runner.TRUST_CHANGED and asked
 
 
 def test_the_gate_fails_closed_when_github_cannot_be_read():
@@ -134,7 +135,63 @@ def test_the_gate_fails_closed_when_github_cannot_be_read():
         raise RuntimeError("gh down")
 
     github = fake(current=boom, trust=lambda n, label: "")
-    assert gate_module.attempt_gate(github, 7, SHA)() == runner.TRUST_CHANGED
+    assert gate_module.attempt_gate(github, 7, SHA)() == TRUST_UNREAD  # refused, no evidence
+
+
+def _gh_down(*args):
+    raise RuntimeError("gh api failed: TimeoutExpired")
+
+
+@pytest.mark.parametrize(
+    "trust, current",
+    [
+        (lambda n, label: TRUST_CHECK_FAILED, lambda n: {"body": "x"}),
+        (_gh_down, lambda n: {"body": "x"}),
+        (lambda n, label: "", _gh_down),
+        (lambda n, label: "", lambda n: ["not", "an", "issue"]),
+    ],
+    ids=["odd-trust-reply", "trust-gh-error", "body-gh-error", "odd-body-reply"],
+)
+def test_a_github_read_that_fails_in_the_gate_is_no_evidence_not_a_trust_change(
+    monkeypatch, trust, current
+):
+    """#673: as in take and settle_check, a reply that could not be read says nothing about the
+    Issue. The attempt is still refused, under its own code, never TRUST_CHANGED_BEFORE_DISPATCH."""
+    monkeypatch.setattr(gate_module, "task_block_text", lambda b: BLOCK)
+    code = gate_module.attempt_gate(fake(current=current, trust=trust), 7, BLOCK_SHA)()
+    assert code == TRUST_UNREAD == "TRUST_CHECK_FAILED_BEFORE_ATTEMPT"
+
+
+def test_an_untrusted_edit_is_refused_without_the_block_being_read(monkeypatch):
+    """#673 item 2: trust first, as take and settle_check: an untrusted body is never read."""
+    read = []
+    monkeypatch.setattr(gate_module, "task_block_text", lambda b: read.append("block") or BLOCK)
+    github = fake(
+        current=lambda n: read.append("body") or {"body": "x"},
+        trust=lambda n, label: "BODY_EDITED_BY_UNTRUSTED",
+    )
+    assert gate_module.attempt_gate(github, 7, BLOCK_SHA)() == runner.TRUST_CHANGED
+    assert read == []
+
+
+@pytest.mark.parametrize(
+    "code, journaled", [(TRUST_UNREAD, TRUST_UNREAD), ("TRUST_CHANGED_BEFORE_DISPATCH", "")]
+)
+def test_only_an_unread_gate_is_journaled_as_no_evidence(
+    project, stores, tmp_path, code, journaled
+):
+    """#673: the FINISHED row carries the gate's code only when GitHub could not be read, so the
+    Issue says "no evidence" for it; a trust change keeps the plain FAILED wording."""
+    seen = []
+
+    class Spy(WorkerDefaults):
+        def run(self, workdir, task):
+            seen.append(workdir)
+
+    result = _bound(project, stores, tmp_path, Spy(), lambda: code)
+    assert result.status == "FAILED" and result.reason == code and seen == []
+    assert result.uncomparable == journaled
+    assert no_evidence(stores[2].entries(result.task_id)) == journaled
 
 
 def _routed(monkeypatch, project, card_hash, gh=None):

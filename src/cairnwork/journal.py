@@ -10,7 +10,8 @@ no Core verdict can exist yet), and cairnwork_attest reads it. Opening a journal
 migrates the table, the append-only triggers and the indexes inside one transaction.
 
 A FAILED FINISHED row may carry ``uncomparable``, the code of an attempt that ended with no
-evidence (#234: the base, its environment or the verifier account could not be judged). The owner
+evidence (#234: the base, its environment or the verifier account could not be judged; #673:
+the per-attempt gate could not read GitHub, TRUST_UNREAD). The owner
 process writes it in the 0700 state, so the Issue comment reads it from here, never from the
 runner log or the current config. An isolated worker (another uid) cannot write here; a same-uid
 worker is no boundary for this file, as for the ledger and the notary, so for it the claim is
@@ -28,6 +29,8 @@ from pathlib import Path
 
 from cairnwork import proc_start
 
+# The per-attempt gate's code when GitHub could not be read: no evidence, not a trust change (#673)
+TRUST_UNREAD = "TRUST_CHECK_FAILED_BEFORE_ATTEMPT"
 PHASES = (
     "DISPATCHED",  # attempt id chosen, ledger moved to DISPATCHED (boot = boot mark, #244)
     "WORKER_STARTED",  # clone created, worker about to run (detail = worker account or "")
