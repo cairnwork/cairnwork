@@ -374,7 +374,7 @@ def test_a_nested_root_whose_ancestor_is_already_listed_says_to_drop_it():
     ["tasks/tests", "policy/test", "docs/governance/tests", "docs/agents/test",
      "src/cairnwork/tests", "src/cairnwork_attest/test", "scripts/ops/trusted_gate/tests",
      "scripts/ops/eia_nightly_x/tests", "nexus/services/external_intelligence_x/tests",
-     "Tasks/tests"],
+     "Tasks/tests", "Makefile/tests", "scripts/ops/external_intelligence_x/tests"],
 )  # fmt: skip
 def test_a_well_formed_root_under_a_protected_path_is_refused_with_no_hint(root, tmp_path):
     """#704: the shape is clean (plain names, last part tests or test); only the protected path
