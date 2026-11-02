@@ -66,6 +66,9 @@ from the target repository's public branch, so it makes **no** hidden-test confi
 Set `"test_source": "bundle"` in `config.json` and import the tests with `cairnwork-verify
 import-tests` to get the strict mode (see ISSUE_INTAKE.md).
 
+`--gh` defaults to `~/.config/nexus-agent-bot/bin/nexus-agent-gh` (it must be the bot wrapper; otherwise the run
+exits 3 with `GH_IDENTITY_NOT_BOT`). The exit codes (0, 1, 2, 3) are listed in ISSUE_INTAKE.md.
+
 See [ISSUE_INTAKE.md](ISSUE_INTAKE.md) for how a task Issue is written (the `eia-task` block,
 deferred `test_commit`, the `cairnwork:queue` label and the trusted-identity rules).
 
