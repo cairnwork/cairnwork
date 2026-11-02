@@ -28,9 +28,11 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from cairnwork.gitcmd import OID, GitCommandError, run_git
+from cairnwork.issue_task import test_target
 from cairnwork.provenance import trailers
 from cairnwork.reasons import _names
 from cairnwork.workspace import ATTEMPT_REF_PREFIX
+from cairnwork_protocol.ids import MAX_ID_BYTES
 
 _IDENTITY = ("-c", "user.name=Cairnwork", "-c", "user.email=cairnwork@localhost")
 _REGULAR = ("100644", "100755")
@@ -124,7 +126,9 @@ def check_roots_on_base(repo: Path, base: str, roots: tuple[str, ...]) -> None:
 def test_paths(
     repo: Path, base: str, test_commit: str, roots: tuple[str, ...] = ("tests",)
 ) -> tuple[str, ...]:
-    """The files the test commit adds or changes; refuse anything but plain test files."""
+    """The files the test commit adds or changes; refuse anything but plain test files, and any
+    path that can never pass (#656): one over Core's text limit (receipts and the acceptance spec
+    carry each path), or a Python file no verifier target can name (``untargeted`` requires it)."""
     try:
         parents = run_git(repo, "rev-list", "--parents", "-n", "1", test_commit).split()
         raw = run_git(
@@ -136,7 +140,7 @@ def test_paths(
     if parents[1:] != [base]:
         raise TestCommitRejected("TEST_COMMIT_NOT_ON_BASE", "its only parent must be the base")
     fields = raw.split("\0")
-    paths = []
+    paths, target = [], test_target(roots)
     for meta, path in zip(fields[0::2], fields[1::2], strict=False):
         new_mode, status = meta.split()[1], meta.split()[4]
         posix = PurePosixPath(path)
@@ -149,6 +153,14 @@ def test_paths(
             or {x.casefold() for x in posix.parts} & _SITE_NAMES
         ):
             raise TestCommitRejected("TEST_COMMIT_SCOPE", f"{status} {new_mode} {path}")
+        if len(path.encode("utf-8")) > MAX_ID_BYTES:
+            raise TestCommitRejected(
+                "TEST_COMMIT_SCOPE", f"path over {MAX_ID_BYTES} UTF-8 bytes: {path[:80]}..."
+            )
+        if path.endswith(".py") and not target.fullmatch(path):  # data files need no target
+            raise TestCommitRejected(
+                "TEST_COMMIT_SCOPE", f"no verifier target can name {path!r} (names: [A-Za-z0-9_-])"
+            )
         paths.append(path)
     if not paths:
         raise TestCommitRejected("TEST_COMMIT_EMPTY")

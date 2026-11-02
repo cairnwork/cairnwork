@@ -142,7 +142,7 @@ def verify_candidate(
     subject = binding["head"] if binding else judged  # a bound row names the head (#229)
     verdict = notary.verdict(result.task_id, result.attempt_id, expected_candidate=subject)
     return {
-        "status": "VERIFIED" if result.verified else status,
+        **_status_fields(result.verified, status, result.protection),
         "verified": result.verified,
         "reason": result.reason,
         "core_status": verdict.status if verdict else "",
@@ -159,6 +159,14 @@ def verify_candidate(
         "tests_consumed": tests_consumed(intake, test_commit),
         "verifier_mode": "account" if account is not None else "sandbox_only",
     }
+
+
+def _status_fields(verified: bool, status: str, level: str) -> dict[str, str]:
+    """``status``, and ``verdict``: VERIFIED with the protection level beside it, so a same-process
+    pass does not read like a blackbox one. Any other status, or no level (Core was never asked),
+    gives ``verdict`` equal to ``status``."""
+    word = "VERIFIED" if verified else status
+    return {"status": word, "verdict": f"{word} {level}" if verified and level else word}
 
 
 def _require_accepting(intake: Intake) -> None:
