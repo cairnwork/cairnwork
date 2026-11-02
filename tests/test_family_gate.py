@@ -28,7 +28,16 @@ class Hub(FakeGitHub):
 
     relabel = runner.GitHub.relabel
 
+    closed: set[int] = set()
+
     def _run(self, *args, stdin=None):
+        if args[:2] == ("issue", "view"):  # the gate asks where a journaled hold's Issue is now
+            assert args[3:] == ("-R", self.repo, "--json", "labels,state")
+            number = int(args[2])
+            names = [{"name": label} for label in sorted(self.labels[number])]
+            return json.dumps(
+                {"labels": names, "state": "CLOSED" if number in self.closed else "OPEN"}
+            )
         number, flag, label = int(args[2]), args[5], args[6]
         assert len(args) == 7 and args[:2] == ("issue", "edit") and args[3:5] == ("-R", self.repo)
         assert (flag, label) != ("--add-label", runner.QUEUE)

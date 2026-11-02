@@ -9,8 +9,12 @@ can put it back in the queue by hand. The gate never adds ``cairnwork:queue`` it
 
 The hold is three GitHub calls, and a pass can stop between any two (#646). The hold is written
 to the experiment's journal first, the queue label comes off before the hold label goes on, and
-every step is safe to repeat: a stopped hold leaves the Issue out of the queue, so no ``take``
-lists it, gate on or off, and the next gate pass finishes it from the journal.
+every step is safe to repeat. Once the queue label is off no ``take`` lists the Issue, gate on or
+off; a stop before that leaves it queued as the gate found it, and a pass with the gate off may
+take it. The next gate pass finishes a journaled hold only for an Issue that is open and carries
+no runner label; one taken, queued again (also past the listing's 50) or closed meanwhile is
+dropped from the journal and left as it is. One gate per repository: two intake states on one
+repository would share the sidecar, which is not supported.
 
 ``take`` sees only what the gate let through (``Held``): Issues it decided and did not refuse,
 and Issues whose task block core refuses (core comments on those, once). Everything else this
@@ -30,7 +34,7 @@ from typing import Any
 
 from cairnwork.intake import Intake
 from cairnwork.issue_github import GitHub
-from cairnwork.issue_runner import QUEUE
+from cairnwork.issue_runner import DONE, FAILED_LABEL, NEEDS_FIX, QUEUE, RUNNING
 from cairnwork.issue_task import IssueRefused, parse_task_block
 from experimental.family_gate.families import REFUSED, Verdict, decide, parse_annotation
 
@@ -39,6 +43,7 @@ HOLDS_NAME = "holds.json"  # holds started and not yet finished: Issue number ->
 # Only this experiment reads it: core's needs-fix means the task block itself is wrong (fd31).
 HOLD = "cairnwork:family-hold"
 DEFAULT_SIDECAR = Path.home() / ".local/state/cairnwork-family-gate"
+RUNNER_LABELS = frozenset({QUEUE, RUNNING, FAILED_LABEL, DONE, NEEDS_FIX})
 ROLE = {"issue_author": "工單作者", "test_author": "驗收測試作者"}
 
 
@@ -159,32 +164,55 @@ def run_gate(
     for row in rows:
         counts[row["verdict"]] = counts.get(row["verdict"], 0) + 1
     queued = {int(i["number"]) for i in listed}  # back in the queue: decided again above
-    holds = {n: text for n, text in started.items() if n not in queued}
-    holds |= {n: refusal_comment(v, worker_model) for n, v in refused}
-    errors += _hold_all(github, sidecar, started, holds)
+    holds = {n: refusal_comment(v, worker_model) for n, v in refused}
+    waiting: dict[int, str] = {}  # GitHub could not say: kept in the journal, not held this pass
+    for number, text in started.items():
+        if number not in queued and number not in holds:
+            if (still := _still_held(github, number)) is None:
+                waiting[number] = text
+                errors.append({"issue": number, "error": "HOLD_STATE_UNKNOWN"})
+            elif still:
+                holds[number] = text
+    errors += _hold_all(github, sidecar, started, holds, waiting)
     summary = {"counts": counts, "recorded": len(new), "refused": [n for n, _ in refused],
                "untrusted": untrusted}  # fmt: skip
     return Held(github, listed, through), summary | ({"errors": errors} if errors else {})
 
 
+def _still_held(github: GitHub, number: int) -> bool | None:
+    """Whether a journaled hold whose Issue left the gate's listing is still the gate's to finish:
+    open and without a runner label. None when GitHub's answer is missing or odd."""
+    try:
+        out = github._run("issue", "view", str(number), "-R", github.repo, "--json", "labels,state")
+        data = json.loads(out)
+        names = {str(label["name"]) for label in data["labels"]}
+        return data["state"] == "OPEN" and not names & RUNNER_LABELS
+    except (RuntimeError, OSError, ValueError, KeyError, TypeError):
+        return None
+
+
 def _hold_all(
-    github: GitHub, sidecar: Sidecar, started: dict[int, str], holds: dict[int, str]
+    github: GitHub,
+    sidecar: Sidecar,
+    started: dict[int, str],
+    holds: dict[int, str],
+    waiting: dict[int, str],
 ) -> list[dict[str, Any]]:
     """Finish every hold; the errors. The journal names a hold before its first label edit and
-    drops it after its comment, so a stop anywhere leaves it to the next pass."""
-    if holds != started:
-        sidecar.set_holds(holds)  # OSError: nothing is held, and take does not run this pass
-    errors, left = [], dict(holds)
+    drops it right after its comment, so a stop anywhere leaves only that hold to the next pass."""
+    journal = waiting | holds
+    if journal != started:
+        sidecar.set_holds(journal)  # OSError: nothing is held, and take does not run this pass
+    errors, left = [], dict(journal)
     for number, text in sorted(holds.items()):
         if error := _hold(github, number, text):
             errors.append({"issue": number, "error": error})
-        else:
-            del left[number]
-    if left != holds:
+            continue
+        del left[number]
         try:
             sidecar.set_holds(left)
-        except OSError as exc:  # the held Issues stay held; the next pass comments once more
-            errors.append({"error": f"HOLD_JOURNAL: {type(exc).__name__}: {exc}"})
+        except OSError as exc:  # the held Issue stays held; the next pass comments once more
+            errors.append({"issue": number, "error": f"HOLD_JOURNAL: {type(exc).__name__}"})
     return errors
 
 
