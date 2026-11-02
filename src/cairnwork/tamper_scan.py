@@ -288,9 +288,9 @@ def scan_added_lines(
 ) -> list[Finding]:
     """Findings for the added ``(line number, text)`` pairs of one file (``.py`` files only).
 
-    ``data`` is the whole file as committed (scan_patch passes it): Python's reading of its
-    comments and strings comes from there (tamper_scan_tokens.py). Without it, a file made of the
-    added lines alone stands in.
+    ``data`` is the whole file as committed (scan_patch passes it); Python's reading of comments
+    and strings comes from it (tamper_scan_tokens.py), else from the added lines. Not read with an
+    over-long added line: refused anyway, and some Pythons tokenize such a line in quadratic time.
     """
     if not path.endswith(".py"):
         return []
@@ -300,9 +300,9 @@ def scan_added_lines(
     aliases: dict[str, set[str]] = {key: set() for key in ("sys", "os", "gc", "modules", "_exit")}
     masked_aliases = {key: set(names) for key, names in aliases.items()}  # also from masked lines
     source = data if data is not None else added_file(lines)
-    views = (file_views(source) if source is not None else None) or {}  # none: no comment skip
-    code_aliases = [{k: set(v) for k, v in aliases.items()} for _ in range(2)] if views else None
     found = [Finding(path, number, "long_line") for number, line in lines if len(line) > MAX_LINE]
+    views = (file_views(source) if source is not None and not found else None) or {}
+    code_aliases = [{k: set(v) for k, v in aliases.items()} for _ in range(2)] if views else None
     # Python also ends a source line at "\r" (CRLF included), so each piece is scanned on its own.
     for number, line in ((number, line) for number, line in lines if len(line) <= MAX_LINE):
         for index, piece in enumerate(line.split("\r")):

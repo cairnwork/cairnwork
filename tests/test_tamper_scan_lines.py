@@ -233,3 +233,12 @@ def test_an_over_long_line_never_lets_a_refused_change_pass(repo, content):
     assert ("src/a.py", 1, "long_line") in found
     if "\nos._exit" in content:
         assert ("src/a.py", 3, "os_exit") in found
+
+
+def test_a_file_with_an_over_long_added_line_is_not_tokenized(monkeypatch):
+    import cairnwork.tamper_scan as scan
+
+    monkeypatch.setattr(scan, "file_views", lambda data: pytest.fail("tokenized"))
+    lines = [(1, "x = 1"), (2, "a " * MAX_LINE)]
+    data = "\n".join(text for _, text in lines).encode()
+    assert [finding.rule for finding in scan.scan_added_lines(TEST, lines, data)] == ["long_line"]
