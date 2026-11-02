@@ -10,7 +10,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from cairnwork.journal import PHASES
+from cairnwork.journal import PHASES, TRUST_UNREAD
 from cairnwork.provenance import clean
 
 STATUSES = frozenset({"FAILED", "CANCELLED", "SUPERSEDED", "COMPLETED"})
@@ -41,10 +41,10 @@ def failure_text(status: dict) -> str:
     where = f"（最後階段 `{phase}`）" if phase in PHASES else ""
     code = status.get("uncomparable")
     if word == "FAILED" and isinstance(code, str) and REFUSAL_CODE.fullmatch(code):
-        where += (
-            f"。不可比較／沒有證據（`{code}`）：base、它的環境或驗證帳號無法判斷，"
-            "這次沒有產生證據，不是對候選修正的判定"
-        )
+        why = "base、它的環境或驗證帳號無法判斷"
+        if code == TRUST_UNREAD:  # the per-attempt gate could not read GitHub (#673)
+            why = "嘗試前讀不到 GitHub 上的可信狀態，不是可信狀態變了"
+        where += f"。不可比較／沒有證據（`{code}`）：{why}，這次沒有產生證據，不是對候選修正的判定"
     return f"Cairnwork 沒有完成：`{word}`{where}。細節在 Cairnwork 本機輸出，不貼在這裡。"
 
 
