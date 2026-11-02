@@ -12,7 +12,11 @@ from core_http_server import core_http_server
 from test_deferred_tests import CHECK, REGRESSION, make_test_commit
 from verify_helpers import FIX, base_of, candidate, has_object, verify
 
+from cairnwork import p2p_selection
+from cairnwork.intake import Intake
 from cairnwork.ownership import OwnershipLedger
+from cairnwork.pipeline import TaskRejected
+from cairnwork.verify_candidate import verify_candidate
 
 sandbox = pytest.mark.sandbox
 
@@ -181,3 +185,15 @@ def test_the_run_reports_account_when_a_verifier_account_object_is_used(
         verifiers=(("v", ("python3", "-m", "pytest", "-q", "tests/test_calc.py")),),
     )  # fmt: skip
     assert out["status"] == "REFUSED" and out["verifier_mode"] == "account"
+
+
+@pytest.mark.parametrize("mode", [m for m in p2p_selection.MODES if m != "off"])
+def test_a_task_naming_a_reserved_p2p_verifier_id_is_refused(state, project, mode):
+    vid = f"p2p-{mode}"
+    argv = ("python3", "-m", "pytest", "tests/test_calc.py")
+    with pytest.raises(TaskRejected) as got:
+        verify_candidate(
+            Intake(state), repo=project, base="0" * 40, candidate="1" * 40,
+            allowed_files=("src/calc.py",), verifiers=(("pytest", argv), (vid, argv)),
+        )  # fmt: skip
+    assert got.value.code == "BAD_VERIFIER" and vid in str(got.value)
