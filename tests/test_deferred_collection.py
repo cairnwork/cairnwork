@@ -12,7 +12,13 @@ from verify_helpers import FIX, candidate, verify
 
 from cairnwork.core_request import VerifierObservation
 from cairnwork.deferred_tests import TestCommitRejected as Rejected
-from cairnwork.deferred_tests import base_comparison, ensure_test_commit, new_tests, untargeted
+from cairnwork.deferred_tests import (
+    base_comparison,
+    ensure_test_commit,
+    new_tests,
+    not_run,
+    untargeted,
+)
 from cairnwork.verifiers import VerifierRun, VerifierSpec
 
 sandbox = pytest.mark.sandbox
@@ -127,4 +133,47 @@ def test_verify_refuses_a_new_test_the_base_run_did_not_run(project, state):
     code, out = verify(state, project, base, cand, "--test-commit", test_commit, tests=(command,))
     assert code == 2 and out["status"] == "REFUSED" and out["verified"] is False
     assert out["reason"].startswith("DEFERRED_TESTS_NOT_RUN"), out
+    assert "tests/test_regression.py::TestK::test_m" in out["reason"]
+
+
+# #697: the verification run's record must hold every new test too. TestK is collected on the base
+# (add is off by one, so it fails there: teeth) and not on the candidate, where the whole-file
+# target still passes on test_regression.
+GONE = REGRESSION + "class TestK:\n    __test__ = add(1, 1) != 2\n" + METHOD
+
+
+def test_not_run_names_a_target_missing_from_the_record_even_beside_its_file():
+    other, named = "tests/test_x.py::test_other", "tests/test_x.py::TestK::test_m"
+    record = [_base_run({other: "passed"}, rc=0)]  # same file, another test: not enough
+    assert not_run(record, frozenset({other, named})) == [named]
+    assert not_run([_base_run({other: "passed", f"{named}[1]": "passed"})], {other, named}) == []
+
+
+@sandbox
+def test_worker_path_refuses_a_new_test_the_verification_run_did_not_run(project, tmp_path):
+    base, test_commit = make_test_commit(project, {"tests/test_regression.py": GONE})
+    result = run(project, tmp_path, base, test_commit, SeeingWorker({"src/calc.py": FIX}),
+                 verifiers=_argv("tests/test_regression.py"))  # fmt: skip
+    assert result.status == "FAILED" and not result.verified
+    assert result.reason.startswith("DEFERRED_TESTS_NOT_RUN_IN_VERIFICATION"), result.reason
+    assert "tests/test_regression.py::TestK::test_m" in result.reason
+    assert "test_regression.py::test_regression" not in result.reason
+
+
+@sandbox
+def test_worker_path_completes_when_the_verification_run_ran_every_new_test(project, tmp_path):
+    base, test_commit = make_test_commit(project, {"tests/test_regression.py": REGRESSION})
+    result = run(project, tmp_path, base, test_commit, SeeingWorker({"src/calc.py": FIX}),
+                 verifiers=_argv("tests/test_regression.py"))  # fmt: skip
+    assert result.status == "COMPLETED" and result.verified, result.reason
+
+
+@sandbox
+def test_verify_refuses_a_new_test_the_verification_run_did_not_run(project, state):
+    base, test_commit = make_test_commit(project, {"tests/test_regression.py": GONE})
+    cand = candidate(project, base, {"src/calc.py": FIX})
+    command = "python3 -m pytest -q tests/test_regression.py"
+    code, out = verify(state, project, base, cand, "--test-commit", test_commit, tests=(command,))
+    assert out["verified"] is False, out
+    assert out["reason"].startswith("DEFERRED_TESTS_NOT_RUN_IN_VERIFICATION"), out
     assert "tests/test_regression.py::TestK::test_m" in out["reason"]
