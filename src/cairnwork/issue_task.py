@@ -196,7 +196,7 @@ def test_target(roots: tuple[str, ...] | None) -> re.Pattern[str]:
     """A verifier target: a .py file under one of the test roots (None: any plain directory),
     with optional ::node ids."""
     name = r"[A-Za-z0-9_\-]+"
-    top = name if roots is None else "|".join(map(re.escape, roots))
+    top = r"[A-Za-z0-9_][A-Za-z0-9_\-]*" if roots is None else "|".join(map(re.escape, roots))
     return re.compile(rf"(?:{top})/(?:{name}/)*{name}\.py(?:::[A-Za-z0-9_\[\]\-]+)*")
 
 

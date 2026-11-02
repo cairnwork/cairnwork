@@ -79,7 +79,12 @@ def test_a_bound_block_parses_under_any_plain_directory_but_keeps_every_other_ru
     assert parse_task_block(body, None).verifiers == (
         ("python3", "-m", "pytest", "-q", "pkg/tests/test_calc.py"),
     )
-    for bad in ("python3 -m pytest -q ../x/test_a.py", "python3 -m pytest -q test_a.py", "ls"):
+    for bad in (
+        "python3 -m pytest -q ../x/test_a.py",
+        "python3 -m pytest -q test_a.py",
+        "python3 -m pytest -q -pfoo/test_a.py",
+        "ls",
+    ):
         with pytest.raises(IssueRefused, match="TASK_VERIFICATION_UNSUPPORTED"):
             parse_task_block(issue(block={**BLOCK, "verification": [bad]})["body"], None)
 
