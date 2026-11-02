@@ -203,7 +203,9 @@ so a verdict can still be VERIFIED on same-process tests alone. It is never sile
 `cairnwork-verify run` result (`status` VERIFIED, FAILED, REFUSED or UNCOMPARABLE) has
 `protection`, the level of the verifier ids Core was asked to require (`cairnwork/protection.py`).
 An error output (`{"error": ...}`: a usage error, a task refused before it ran, an internal error)
-has no `protection`, and no verdict either:
+has no `protection`, and no verdict either. `verdict` repeats the level next to the word, `VERIFIED
+same_process_only` for a same-process pass (any other status is repeated as is), so a reader of one field
+is not misled; `status`, `verified` and the exit code are unchanged:
 
 - `"blackbox"`: every required observation is a declared blackbox check;
 - `"partial"`: some are, the rest (pytest verifiers, P2P) are same-process;
