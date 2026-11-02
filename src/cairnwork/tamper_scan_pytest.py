@@ -144,10 +144,13 @@ def canonical_pytest(text: str, aliases: dict[str, set[str]], unwrap: bool = Tru
         text, count = _BRACKETED.subn(r"\1\2\3", text)
         if not count:
             break
-    # Not after "." or a word character: obj.p.TestReport or xR is not the alias p or R.
+    # Not after "." or a word character: obj.p.TestReport or xR is not the alias p or R. A name
+    # the text does not hold (as it is at that step) has nothing to substitute: skipped (#665).
     for name in sorted(aliases.get("pytest", ())):
-        text = re.sub(rf"(?<![\w.]){re.escape(name)}(\s*\.\s*{_CLASS})", r"pytest\1", text)
+        if name in text:
+            text = re.sub(rf"(?<![\w.]){re.escape(name)}(\s*\.\s*{_CLASS})", r"pytest\1", text)
     for cls in PYTEST_CLASSES:
         for name in sorted(aliases.get(cls, ())):
-            text = re.sub(rf"(?<![\w.]){re.escape(name)}\b", f"pytest.{cls}", text)
+            if name in text:
+                text = re.sub(rf"(?<![\w.]){re.escape(name)}\b", f"pytest.{cls}", text)
     return text
