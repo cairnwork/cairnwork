@@ -343,3 +343,13 @@ def test_a_non_test_nested_root_is_refused_with_no_fix_offered(root):
     with pytest.raises(ValueError) as exc:
         check_test_roots([root])
     assert "last part is tests or test" in str(exc.value) and "instead" not in str(exc.value)
+
+
+def test_a_very_long_repeated_root_is_refused_quickly():
+    import time
+
+    root = "tests/" + "a/tests/" * 12500 + "x"  # about 100k characters
+    start = time.monotonic()
+    with pytest.raises(ValueError, match="last part is tests or test"):
+        check_test_roots([root])
+    assert time.monotonic() - start < 1

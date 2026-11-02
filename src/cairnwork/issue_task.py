@@ -200,9 +200,19 @@ def test_target(roots: tuple[str, ...] | None) -> re.Pattern[str]:
     return re.compile(rf"(?:{top})/(?:{name}/)*{name}\.py(?:::[A-Za-z0-9_\[\]\-]+)*")
 
 
-_NESTED = re.compile(
-    r"((?:[A-Za-z0-9_][A-Za-z0-9_\-]*/)*(?:tests|test))(?:/[A-Za-z0-9_][A-Za-z0-9_\-]*)+"
-)
+_PART = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_\-]*")
+
+
+def _tests_ancestor(root: Any) -> str | None:
+    """The nearest ``tests``/``test`` directory strictly above ``root``, found by one walk over
+    its parts (linear), or None if any part is not a plain name or there is no such ancestor."""
+    parts = root.split("/") if isinstance(root, str) else []
+    if not all(_PART.fullmatch(part) for part in parts):
+        return None
+    for i in range(len(parts) - 2, -1, -1):
+        if parts[i] in ("tests", "test"):
+            return "/".join(parts[: i + 1])
+    return None
 
 
 def _root_refusal(root: Any) -> str:
@@ -210,9 +220,9 @@ def _root_refusal(root: Any) -> str:
     ``tests``/``test`` directory the one fix (list that directory itself, which protects it all)."""
     why = f"test_roots entry {root!r} is not a clean unprotected directory"
     rule = "a root is a relative path of plain names whose last part is tests or test"
-    nested = _NESTED.fullmatch(root) if isinstance(root, str) else None
-    if nested and not is_protected(nested[1]):
-        return f"{why}: {rule}; it is inside {nested[1]!r}, so list {nested[1]!r} instead"
+    near = _tests_ancestor(root)
+    if near and not is_protected(near):
+        return f"{why}: {rule}; it is inside {near!r}, so list {near!r} instead"
     return f"{why}: {rule}, outside protected paths"
 
 
