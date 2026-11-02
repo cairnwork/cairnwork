@@ -69,8 +69,13 @@ def claim(root: Path, runs: Path, episode_id: str) -> Claim | None:
         fd = os.open(root / CLAIM, flags, 0o600)
     except FileExistsError:
         raise InputRefused(f"run root {root.name} is claimed by another episode") from None
-    with os.fdopen(fd, "w") as f:
-        f.write(episode_id + "\n")
+    try:
+        os.write(fd, (episode_id + "\n").encode())
+    except OSError:
+        (root / CLAIM).unlink(missing_ok=True)  # an empty claim would refuse every later start
+        raise
+    finally:
+        os.close(fd)
     return Claim(root, episode_id)
 
 
@@ -81,8 +86,8 @@ def _mine(c: Claim, runs: Path) -> bool:
         fd = os.open(c.root / CLAIM, os.O_RDONLY | os.O_NOFOLLOW)
     except OSError:
         return False
-    with os.fdopen(fd) as f:
-        return f.read() == c.episode_id + "\n"
+    with os.fdopen(fd, "rb") as f:  # bytes: a claim that is not text is simply not ours
+        return f.read() == (c.episode_id + "\n").encode()
 
 
 def remove(c: Claim, runs: Path) -> str:
@@ -125,4 +130,7 @@ def finish(c: Claim | None, runs: Path, delete: bool) -> None:
                 (c.root / CLAIM).unlink()
     except OSError as exc:
         outcome = f"partial ({type(exc).__name__})"
-    print(f"LOCAL_WORKER_RUN_ROOT {outcome} {c.root.name}", file=sys.stderr)
+    try:
+        print(f"LOCAL_WORKER_RUN_ROOT {outcome} {c.root.name}", file=sys.stderr)
+    except OSError:  # a closed stderr must not replace the episode's outcome either
+        pass

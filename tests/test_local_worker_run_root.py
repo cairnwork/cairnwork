@@ -192,3 +192,45 @@ def test_a_claim_replaced_by_a_link_is_not_this_episodes(tmp_path):
     (runs / A / CLAIM).symlink_to(elsewhere)
     assert run_root_cleanup.remove(c, runs).startswith("kept")
     assert (runs / A / "venv" / "bin" / "python").exists()
+
+
+def test_a_claim_that_cannot_be_written_is_not_left_behind(tmp_path, monkeypatch):
+    runs = (tmp_path / "runs").resolve()
+    _fill(runs / A)
+
+    def full(fd, data):
+        raise OSError(28, "No space left on device")
+
+    with monkeypatch.context() as m:
+        m.setattr(run_root_cleanup.os, "write", full)
+        with pytest.raises(OSError):
+            claim(runs / A, runs, "ep_1")
+    assert not os.path.lexists(runs / A / CLAIM)  # a later episode can still start here
+    assert claim(runs / A, runs, "ep_2") is not None
+
+
+def test_a_claim_that_is_not_text_is_not_this_episodes(tmp_path, capsys):
+    runs = (tmp_path / "runs").resolve()
+    _fill(runs / A)
+    c = claim(runs / A, runs, "ep_1")
+    (runs / A / CLAIM).write_bytes(b"\xff\xfe\n")
+    run_root_cleanup.finish(c, runs, delete=True)  # never raises
+    assert (runs / A / "venv" / "bin" / "python").exists()
+    assert "kept (not this episode's claim)" in capsys.readouterr().err
+
+
+def test_a_closed_stderr_does_not_replace_the_outcome(tmp_path, monkeypatch):
+    runs = (tmp_path / "runs").resolve()
+    _fill(runs / A)
+    c = claim(runs / A, runs, "ep_1")
+
+    class Closed:
+        def write(self, _text):
+            raise BrokenPipeError(32, "Broken pipe")
+
+        def flush(self):
+            raise BrokenPipeError(32, "Broken pipe")
+
+    monkeypatch.setattr(run_root_cleanup.sys, "stderr", Closed())
+    run_root_cleanup.finish(c, runs, delete=True)  # never raises
+    assert not os.path.lexists(runs / A)
