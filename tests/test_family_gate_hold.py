@@ -149,6 +149,7 @@ def test_a_held_issue_queued_again_is_decided_again(setup, tmp_path):  # noqa: F
     assert [r["issue"] for r in result["take"]] == [7] and rows[0]["verdict"] == PASS
     assert github.labels[7] == {runner.RUNNING} and told(github) == [] and sidecar.holds() == {}
     assert json.loads(sidecar.holds_path.read_text()) == {}
+    assert [e for e in github.edits if e[2] == HOLD] == []  # the old hold is not finished
 
 
 @pytest.mark.parametrize("meanwhile", ("taken", "queued past the listing", "closed"))
@@ -193,6 +194,16 @@ def test_a_hold_whose_issue_github_cannot_place_waits(setup, tmp_path):  # noqa:
     result, _, _ = gate_pass(setup, github, tmp_path, WORKER)
     assert "errors" not in result["gate"] and sidecar.holds() == {}
     assert github.labels[7] == {HOLD} and len(told(github)) == 1
+
+
+def test_a_failed_hold_stays_journaled_when_a_later_one_finishes(setup, tmp_path):  # noqa: F811
+    github = Stopping([annotated(families=SAME), annotated(8, families=SAME)], "hold")
+    result, _, sidecar = gate_pass(setup, github, tmp_path, WORKER)
+    assert [e["issue"] for e in result["gate"]["errors"]] == [7]
+    assert github.labels[8] == {HOLD} and sidecar.holds() == {7: sidecar.holds()[7]}
+    github.stop = ""
+    gate_pass(setup, github, tmp_path, WORKER)
+    assert github.labels[7] == {HOLD} and len(told(github)) == 1 and sidecar.holds() == {}
 
 
 class Killed(BaseException):
