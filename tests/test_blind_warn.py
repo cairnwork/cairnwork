@@ -250,3 +250,33 @@ def test_end_to_end_through_the_real_verifier(case):
     result = go(case, fake_model(assert_a, assert_a), run_verifiers)
     assert result.get("error") is None, result
     assert result["warn"] is True and "test_val" in result["line"]
+
+
+def _spy_prompts(case):
+    prompts = []
+
+    def spy(prompt, model):
+        prompts.append(prompt)
+        return "```python\n" + PASS_TEST + "```", 0.0
+
+    go(case, spy, runner_with({}, {}))
+    return "\n".join(prompts)
+
+
+@pytest.mark.parametrize("name", ["說明文件.md", 'say "hi".md', "tab\tname.md"])
+def test_files_with_quoted_or_non_ascii_names_are_listed(case, name):
+    (case.base / name).write_text("MARKER-" + str(abs(hash(name))))
+    commit_change(case.base, {})
+    assert f"--- FILE: {name}\n" in _spy_prompts(case)
+
+
+def test_uncommitted_file_and_index_link_are_not_sent(case, tmp_path):
+    outside = tmp_path / "outside.txt"
+    outside.write_text("OUTSIDE-SECRET-TEXT")
+    (case.base / "draft.md").write_text("UNCOMMITTED-TEXT")
+    git(case.base, "add", "draft.md")  # staged only, not in HEAD
+    (case.base / "link.md").symlink_to(outside)
+    git(case.base, "add", "link.md")
+    text = _spy_prompts(case)
+    assert "UNCOMMITTED-TEXT" not in text and "OUTSIDE-SECRET-TEXT" not in text
+    assert "FILE: draft.md" not in text and "FILE: link.md" not in text

@@ -33,6 +33,7 @@ MAX_TOKENS = 4096
 RUN_TIMEOUT = 300
 USD_PER_MTOK = (3.0, 15.0)  # input, output: an estimate, not a bill
 _FENCE = re.compile(r"```(?:python)?\n(.*?)```", re.DOTALL)
+_FILE_MODES = ("100644", "100755")  # regular files; not symlinks (120000) or gitlinks
 _TEXT_SUFFIXES = (".py", ".md", ".rst", ".txt", ".cfg", ".toml", ".ini")
 
 ModelCall = Callable[[str, str], tuple[str, float]]  # (prompt, model) -> (text, usd)
@@ -81,8 +82,11 @@ def _tokens(text: str) -> set[str]:
 
 def repo_context(base: Path, ticket: str) -> str:
     """Tracked text files of the base, those that share the most words with the ticket first."""
-    entries = (line.split("\t", 1) for line in run_git(base, "ls-files", "-s").splitlines())
-    names = [name for info, name in entries if not info.startswith("120000")]  # no symlinks
+    listing = run_git(
+        base, "ls-tree", "-r", "-z", "HEAD"
+    )  # one source as the blobs; -z: no quoting
+    entries = (item.split("\t", 1) for item in listing.split("\0") if "\t" in item)
+    names = [name for info, name in entries if info.split(" ", 1)[0] in _FILE_MODES]
     words = _tokens(ticket)
     ranked = sorted(
         (n for n in names if n.endswith(_TEXT_SUFFIXES)),
