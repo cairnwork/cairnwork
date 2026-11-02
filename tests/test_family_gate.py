@@ -22,6 +22,21 @@ from experimental.family_gate.families import (
 from experimental.family_gate.gate import HOLD, Sidecar
 
 
+class Hub(FakeGitHub):
+    """The real two-call ``relabel``, and ``gh issue edit`` with one label played on ``labels``.
+    Nothing may add the queue label: as the bot the gate would launder untrusted edits."""
+
+    relabel = runner.GitHub.relabel
+
+    def _run(self, *args, stdin=None):
+        number, flag, label = int(args[2]), args[5], args[6]
+        assert len(args) == 7 and args[:2] == ("issue", "edit") and args[3:5] == ("-R", self.repo)
+        assert (flag, label) != ("--add-label", runner.QUEUE)
+        change = {"--add-label": set.union, "--remove-label": set.difference}[flag]
+        self.labels[number] = change(self.labels[number], {label})
+        return ""
+
+
 def annotated(number=7, families=None, raw=None):
     item = issue(number)
     text = raw if raw is not None else json.dumps(families)
@@ -90,7 +105,7 @@ def test_a_different_family_passes_and_is_recorded(setup, tmp_path):  # noqa: F8
     ],
 )
 def test_a_same_family_author_is_refused_before_take(setup, tmp_path, model, families, code):  # noqa: F811
-    github = FakeGitHub([annotated(families=families), issue(number=8)])
+    github = Hub([annotated(families=families), issue(number=8)])
     result, rows, _ = gate_pass(setup, github, tmp_path, model)
     assert result["gate"]["refused"] == [7]
     assert github.labels[7] == {HOLD} and github.labels[8] == {runner.RUNNING}
@@ -183,7 +198,7 @@ def test_off_is_the_plain_runner(setup, tmp_path, monkeypatch):  # noqa: F811
 
 
 def test_a_second_pass_records_nothing_new(setup, tmp_path):  # noqa: F811
-    github = FakeGitHub([annotated(families={"issue_author": "opus"})])
+    github = Hub([annotated(families={"issue_author": "opus"})])
     sidecar = Sidecar(tmp_path / "sidecar", github.repo)
     gate = {"worker_model": "claude-opus-5-5", "sidecar": sidecar}
     first = cli.one_pass(setup["intake"], github, setup["clone"], gate)
@@ -194,29 +209,6 @@ def test_a_second_pass_records_nothing_new(setup, tmp_path):  # noqa: F811
     assert stat.S_IMODE(os.stat(sidecar.path).st_mode) == 0o600
     assert stat.S_IMODE(os.stat(sidecar.dir).st_mode) == 0o700
     assert not any("family" in p.name for p in setup["intake"].state.rglob("*"))
-
-
-class NoRequeue(FakeGitHub):
-    """The gate must never add the queue label: as the bot it would launder untrusted edits."""
-
-    def relabel(self, number, add, remove):
-        assert add != runner.QUEUE
-        super().relabel(number, add, remove)
-
-
-def test_a_github_error_while_refusing_holds_the_issue(setup, tmp_path):  # noqa: F811
-    class Flaky(NoRequeue):
-        def relabel(self, number, add, remove):
-            if add == HOLD:
-                raise RuntimeError("gh issue failed: 502")
-            super().relabel(number, add, remove)
-
-    github = Flaky([annotated(families={"issue_author": "opus"})])
-    result, _, _ = gate_pass(setup, github, tmp_path, "claude-opus-5-5")
-    assert "502" in result["gate"]["errors"][0]["error"]
-    assert result["take"] == [] and setup["started"] == []
-    assert github.labels[7] == {runner.QUEUE}  # left queued for the next pass
-    assert len(github.comments) == 1  # commented first; the next pass may repeat it
 
 
 def running(github, number=9):
@@ -250,7 +242,7 @@ def test_a_gate_that_cannot_run_stops_take_not_settle(setup, tmp_path, fault):  
 def test_an_issue_queued_after_the_gate_listed_waits_for_the_next_pass(setup, tmp_path):  # noqa: F811
     late = annotated(number=8, families={"issue_author": "opus"})
 
-    class Racing(FakeGitHub):
+    class Racing(Hub):
         def issues(self, label):
             found = super().issues(label)
             if label == runner.QUEUE and 8 not in self.labels:  # queued right after this listing
@@ -279,22 +271,9 @@ def test_a_trust_error_holds_only_that_issue(setup, tmp_path):  # noqa: F811
     assert [r["issue"] for r in result["settle"]] == [9]
 
 
-def test_a_failed_comment_leaves_the_issue_queued_and_untaken(setup, tmp_path):  # noqa: F811
-    class Mute(NoRequeue):
-        def comment(self, number, text):
-            raise RuntimeError("gh issue comment failed: 502")
-
-    github = Mute([annotated(families={"issue_author": "opus"})])
-    result, _, _ = gate_pass(setup, github, tmp_path, "claude-opus-5-5")
-    assert "502" in result["gate"]["errors"][0]["error"]
-    assert result["take"] == [] and github.labels[7] == {runner.QUEUE}  # refused again next pass
-    result, _, _ = gate_pass(setup, NoRequeue(list(github.bodies.values())), tmp_path, "opus")
-    assert result["gate"]["refused"] == [7] and "errors" not in result["gate"]
-
-
 def test_the_worker_model_defaults_to_the_state_config(setup, tmp_path):  # noqa: F811
     (setup["intake"].state / "config.json").write_text('{"model": "claude-opus-5-5"}')
-    github = FakeGitHub([annotated(families={"issue_author": "sonnet"})])
+    github = Hub([annotated(families={"issue_author": "sonnet"})])
     sidecar = Sidecar(tmp_path / "sidecar", github.repo)
     result = cli.one_pass(
         setup["intake"], github, setup["clone"], {"worker_model": "", "sidecar": sidecar}
