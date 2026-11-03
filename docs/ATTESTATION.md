@@ -91,7 +91,7 @@ Semantics rule: `"unknown"` means not evidenced. Boolean and enum fields default
 Cairnwork never assumes or hard-codes `True` without direct evidence, and does
 not accept unproven caller assertions.
 
-- Core identity at re-verification (#74): the notary stores, with each schema-2 record, the Core identity it was notarized against, and `verify_record` checks the record's response binding against that stored identity, so a record notarized under an older Core still verifies after a Core upgrade. If the caller passes `core_identity=`, it is a pin: it must also equal the record's stored identity, else the record is refused (`IDENTITY_MISMATCH`). Only a record from before that migration (no stored identity) is checked against the identity of the currently installed `nexus-certify`, or the caller's `core_identity=`. (`notary.py` `_identity_problem`, `record.py` `verify_record`.)
+- Core identity at re-verification (#74): the notary stores, with each record since schema 2 (the current schema is 3), the Core identity it was notarized against, and `verify_record` checks the record's response binding against that stored identity, so a record notarized under an older Core still verifies after a Core upgrade. If the caller passes `core_identity=`, it is a pin: it must also equal the record's stored identity, else the record is refused with `RECORD_NOT_VERIFIED`, reason `CORE_IDENTITY_MISMATCH`. Only a record from before that migration (no stored identity) is checked against the identity of the currently installed `nexus-certify`, or the caller's `core_identity=`. (`notary.py` `_identity_problem`, `record.py` `verify_record`.)
 
 ## Signing (DSSE, Ed25519)
 
