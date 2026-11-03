@@ -14,7 +14,9 @@ _URL_USERINFO = re.compile(r"(?<=://)[^ \t\n]*@")  # credentials in a URL, as gi
 _HEADER = re.compile(r"(?im)(\b(?:proxy-)?authorization:[ \t]*)[^\n]+")
 _BEARER = re.compile(r"(?i)(\bbearer[ \t]+)\S+")
 _KEYS = r"(?:access_|refresh_|id_|auth_)?token|password|passwd|pwd|secret|client_secret|api_?key"
-_FIELD = re.compile(rf"(?i)((?<![\w-])(?:{_KEYS})=)[^&\s]+")
+_KEY = re.compile(_KEYS)
+_HID = "\x00"  # stands for a hidden character until the field pass has read the name (#744)
+_FIELD = re.compile(rf"((?<![\w-])([\w{_HID}]+)=)[^&\s]+")
 TAIL_CHARS = 2048
 # any character fits in 4 bytes; twice that, so the window holds more than the tail. A window that
 # does not start the file drops its first, partial line: a character or URL cut there never reaches
@@ -47,7 +49,17 @@ def probe_log_tail(path: str | Path | None) -> str:
             return f"[tail omitted: no complete line in the last {_WINDOW_BYTES // 1024} KB]"
     text = raw.decode("utf-8", errors="replace")
     text = _URL_USERINFO.sub(
-        "", replace_hidden(_ANSI.sub("", text).replace("\r\n", "\n"), keep="\n\t")
+        "", replace_hidden(_ANSI.sub("", text).replace("\r\n", "\n"), _HID, keep="\n\t")
     )
     text = _BEARER.sub(r"\1<redacted>", _HEADER.sub(r"\1<redacted>", text))
-    return _FIELD.sub(r"\1<redacted>", text)[-TAIL_CHARS:]
+    return _FIELD.sub(_mask_field, text).replace(_HID, "?")[-TAIL_CHARS:]
+
+
+def _mask_field(m: re.Match[str]) -> str:
+    """Mask a secret-named field; the name is read without hidden characters, case folded, and a
+    name also counts when only its last piece after a hidden character is a secret key."""
+    name = m.group(2)
+    names = (name.replace(_HID, ""), name.rsplit(_HID, 1)[-1])
+    if any(_KEY.fullmatch(n.casefold()) for n in names):
+        return m.group(1) + "<redacted>"
+    return m.group(0)
