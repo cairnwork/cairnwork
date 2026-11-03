@@ -1,7 +1,15 @@
-"""Casebook file: JSON lines, each carrying `prev` = sha256 of the previous line's bytes."""
+"""Casebook file: JSON lines, each carrying `prev` = sha256 of the previous line's bytes.
+
+The chain shows an edited or removed line except the last; ``<casebook>.head`` holds the last
+line's digest, so removing the tail (or the whole file) is seen too. ``add`` holds an exclusive
+lock on ``<casebook>.lock`` while it reads, checks and appends, so two adds never fork the chain.
+A crash between the append and the head update leaves them disagreeing: refused, fail closed.
+This shows accidental edits; someone who rewrites the file and the head together is not caught.
+"""
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -30,8 +38,21 @@ class CasebookError(Exception):
         super().__init__(f"{code}: {message}" if message else code)
 
 
+def _head(path: Path) -> Path:
+    return path.with_name(path.name + ".head")
+
+
 def _read_chain(path: Path) -> tuple[list[dict[str, Any]], str]:
     """Return (cases, digest of last line). Any inconsistency is NOT_APPEND_ONLY."""
+    cases, prev = _read_lines(path)
+    head = _head(path)
+    recorded = head.read_text().strip() if head.exists() else ZERO
+    if recorded != prev:
+        raise CasebookError("CASEBOOK_NOT_APPEND_ONLY", "last line differs from the recorded head")
+    return cases, prev
+
+
+def _read_lines(path: Path) -> tuple[list[dict[str, Any]], str]:
     if not path.exists():
         return [], ZERO
     data = path.read_bytes()
@@ -69,6 +90,15 @@ def add_case(path: Path, notary_db: Path, case: dict[str, str]) -> str:
     """Append one case. Returns "ADDED" or "DUPLICATE"; raises CasebookError on refusal."""
     if case.get("kind") not in KINDS or any(not case.get(k) for k in FIELDS):
         raise CasebookError("CASE_INVALID", "missing field or unknown kind")
+    lock = os.open(path.with_name(path.name + ".lock"), os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _add_locked(path, notary_db, case)
+    finally:
+        os.close(lock)  # closing drops the lock
+
+
+def _add_locked(path: Path, notary_db: Path, case: dict[str, str]) -> str:
     cases, prev = _read_chain(path)
     _check_record(case, notary_db)
     key = (case["candidate"], case["base"], case["version"])
@@ -81,4 +111,9 @@ def add_case(path: Path, notary_db: Path, case: dict[str, str]) -> str:
     fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
     with os.fdopen(fd, "ab") as handle:
         handle.write(line.encode())
+    tmp = path.with_name(path.name + ".head.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as handle:
+        handle.write(hashlib.sha256(line.encode()).hexdigest() + "\n")
+    os.replace(tmp, _head(path))
     return "ADDED"

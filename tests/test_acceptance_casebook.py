@@ -106,7 +106,9 @@ def test_ac3_list_intact_chain_prints_cases(
     assert [c["version"] for c in cases] == ["v1", "v2"]
 
 
-@pytest.mark.parametrize("tamper", ["edit", "remove_first", "truncate"])
+@pytest.mark.parametrize(
+    "tamper", ["edit", "remove_first", "remove_last", "truncate", "remove_file"]
+)
 def test_ac3_tampered_refused_no_partial(
     ledger: dict[str, str], capsys: pytest.CaptureFixture[str], tamper: str
 ) -> None:
@@ -117,16 +119,39 @@ def test_ac3_tampered_refused_no_partial(
         lines[1] = lines[1].replace(b"reviewer-x", b"someone-y")
     elif tamper == "remove_first":
         lines = lines[1:]
-    else:
+    elif tamper == "remove_last":  # the chain alone cannot see this; the head file does
+        lines = lines[:-1]
+    elif tamper == "truncate":
         lines[2] = lines[2][:-5]
-    book(ledger).write_bytes(b"".join(lines))
+    if tamper == "remove_file":
+        book(ledger).unlink()
+    else:
+        book(ledger).write_bytes(b"".join(lines))
     capsys.readouterr()
     assert main(["list", "--casebook", str(book(ledger))]) == 2
     out = capsys.readouterr().out
     assert "CASEBOOK_NOT_APPEND_ONLY" in out and "v1" not in out
-    before = book(ledger).read_bytes()
+    before = book(ledger).read_bytes() if book(ledger).exists() else None
     assert add(ledger, version="v9") == 2
-    assert book(ledger).read_bytes() == before
+    assert (book(ledger).read_bytes() if book(ledger).exists() else None) == before
+
+
+def test_concurrent_adds_keep_one_chain(ledger: dict[str, str]) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    from experimental.acceptance_casebook.store import add_case, list_cases
+
+    case = {"candidate": ledger["cand"], "base": ledger["base"], "task_id": "task-1",
+            "attempt_id": "a1", "kind": "accepted_bad", "found_by": "reviewer-x",
+            "evidence": "note-1"}  # fmt: skip
+    with ThreadPoolExecutor(8) as pool:
+        db = Path(ledger["db"])
+        done = list(pool.map(lambda i: add_case(book(ledger), db, {**case, "version": f"v{i}"}),
+                             range(16)))  # fmt: skip
+    assert done == ["ADDED"] * 16
+    assert sorted(c["version"] for c in list_cases(book(ledger))) == sorted(
+        f"v{i}" for i in range(16)
+    )
 
 
 def test_ac5_core_never_imports_casebook() -> None:
