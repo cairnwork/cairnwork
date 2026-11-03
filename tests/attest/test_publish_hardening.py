@@ -24,7 +24,7 @@ from publish_helpers import (
 from cairnwork_attest.cli import main
 from cairnwork_attest.publish import _git, publish_bundle
 
-pytestmark = pytest.mark.usefixtures("production_git_env")  # publish._git inherits os.environ
+pytestmark = pytest.mark.usefixtures("production_git_env")  # publish._git reads os.environ
 
 
 @pytest.fixture
@@ -326,4 +326,53 @@ def test_publish_git_sees_the_production_environment(publish_env) -> None:
     src, _, _ = publish_env
     assert injected_test_git_env(os.environ) == []
     shown = _git(src, "config", "--show-origin", "--list")
-    assert shown.returncode == 0 and "command line:" not in shown.stdout
+    cmdline = [ln for ln in shown.stdout.splitlines() if ln.startswith("command line:")]
+    assert shown.returncode == 0
+    # only the hardening options of gitcmd (#727), nothing from the test environment
+    assert sorted(ln.split("\t")[1] for ln in cmdline) == [
+        "core.fsmonitor=false",
+        "core.hookspath=/dev/null",
+        "core.untrackedcache=false",
+    ]
+
+
+def test_repository_hooks_never_run_during_publish(
+    tmp_path: Path, publish_env: tuple[Path, Path, str], key: Ed25519PrivateKey
+) -> None:
+    """A pre-push (and reference-transaction) hook in the repository is not executed (#727)."""
+    src, bare, candidate = publish_env
+    marker = tmp_path / "hook-ran"
+    (src / ".git" / "hooks").mkdir(exist_ok=True)
+    for name in ("pre-push", "reference-transaction"):
+        hook = src / ".git" / "hooks" / name
+        hook.write_text(f"#!/bin/sh\ntouch '{marker}'\n")
+        hook.chmod(0o755)
+    git(src, "config", "core.hooksPath", str(src / ".git" / "hooks"))
+    bundle_file = _write_bundle(tmp_path, _make_bundle_bytes(candidate, key))
+    assert publish_bundle(bundle_file, src, candidate).code == "PUBLISHED"
+    assert not marker.exists()
+
+
+def test_the_hook_credential_settings_still_reach_publish_git(publish_env, monkeypatch) -> None:
+    """The post-verified hook passes its credential helper as GIT_CONFIG_* (docs/ATTESTATION.md);
+    dropping the caller's other GIT_* variables (#727) must keep those."""
+    from cairnwork.post_verified import _env
+
+    src, _, _ = publish_env
+    for k, v in _env("/opt/gh").items():
+        if k.startswith("GIT_CONFIG_"):
+            monkeypatch.setenv(k, v)
+    shown = _git(src, "config", "--get-all", "credential.helper")
+    assert shown.returncode == 0 and "/opt/gh auth git-credential" in shown.stdout
+
+
+def test_the_callers_other_git_variables_never_reach_publish_git(publish_env, monkeypatch) -> None:
+    """GIT_DIR and GIT_CONFIG_PARAMETERS from the caller are dropped (#727): publish's git still
+    works on the repository it was given and sees no extra configuration."""
+    src, bare, _ = publish_env
+    monkeypatch.setenv("GIT_DIR", str(bare))
+    monkeypatch.setenv("GIT_CONFIG_PARAMETERS", "'cairnwork.injected'='yes'")
+    where = _git(src, "rev-parse", "--absolute-git-dir")
+    assert where.returncode == 0 and Path(where.stdout.strip()) == (src / ".git").resolve()
+    shown = _git(src, "config", "--show-origin", "--list")
+    assert shown.returncode == 0 and "cairnwork.injected" not in shown.stdout

@@ -15,7 +15,8 @@ pytest_plugins = ["verify_helpers"]
 # Code under test must see the production git environment. Git calls that inherit it:
 # - cairnwork.gitcmd run_git/run_git_bytes (every core git call) and
 #   experimental/bm25_hints/commit_source.py: drop every GIT_* variable themselves.
-# - cairnwork_attest.publish._git ({**os.environ, ...}): its tests (test_publish*.py,
+# - cairnwork_attest.publish._git (os.environ minus GIT_* other than GIT_CONFIG_COUNT/KEY/VALUE,
+#   #727): its tests (test_publish*.py,
 #   test_on_verified.py, test_check_run_gh.py) use the production_git_env fixture below.
 # - experimental/local_worker's git queries run under ``env -i``.
 # - experimental/bm25_hints/eval_hit_at_k.py (clone --shared, checkout; run by test_bm25_hints)

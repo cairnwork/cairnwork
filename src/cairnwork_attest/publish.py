@@ -14,6 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from cairnwork.gitcmd import _SAFE_OPTIONS
 from cairnwork_attest.bundle import BundleError, read_bundle
 from cairnwork_attest.record import AttestError, parse_strict_json
 
@@ -46,11 +47,27 @@ class PublishResult:
     notes_tip: str | None
 
 
+_CONFIG_VAR = re.compile(r"GIT_CONFIG_(?:COUNT|KEY_[0-9]+|VALUE_[0-9]+)")
+
+
 def _git(repo: Path, *args: str, input: bytes | None = None) -> subprocess.CompletedProcess[str]:
-    """Run git with prompts disabled and C-locale messages (stderr is matched)."""
-    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C", "LANGUAGE": "C"}
+    """Run git with prompts disabled and C-locale messages (stderr is matched).
+
+    gitcmd's options (no repository hooks, no fsmonitor, no replace refs) and the caller's GIT_*
+    variables dropped, except GIT_CONFIG_COUNT/KEY_n/VALUE_n: the post-verified hook's notes
+    push gets its credential helper that way (docs/ATTESTATION.md).
+    """
+    env = {
+        k: v for k, v in os.environ.items() if not k.startswith("GIT_") or _CONFIG_VAR.fullmatch(k)
+    }
+    env.update({"GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C", "LANGUAGE": "C"})
     proc = subprocess.run(
-        ["git", *args], cwd=repo, env=env, capture_output=True, check=False, input=input
+        ["git", *_SAFE_OPTIONS, *args],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        check=False,
+        input=input,
     )
     return subprocess.CompletedProcess(
         proc.args,
