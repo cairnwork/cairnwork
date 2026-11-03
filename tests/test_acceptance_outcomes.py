@@ -43,7 +43,7 @@ def call_id(fx: dict[str, Any]) -> str:
 
 
 def finding(fx: dict[str, Any], cid: str, root: str = "r1", **kw: Any) -> None:
-    ev = {"type": "finding", "source": "review", "finder": "alice", "root": root, **kw}
+    ev = {"type": "finding", "source": "code_review", "finder": "alice", "root": root, **kw}
     assert add_event(fx["led"], cid, ev) == "ADDED"
 
 
@@ -238,7 +238,7 @@ def test_cli_record_event_roundtrip(fx: dict[str, Any], tmp_path: Path) -> None:
     rec += ["--candidate", fx["cand"], "--version", "v1", "--notary-db", str(fx["db"])]
     assert main(rec) == 0
     cid = json.loads(fx["led"].read_text().splitlines()[0])["call_id"]
-    f = ["event", *base, "--call", cid, "--type", "finding", "--source", "review"]
+    f = ["event", *base, "--call", cid, "--type", "finding", "--source", "code_review"]
     assert main([*f, "--finder", "alice", "--root", "r1"]) == 0
     c = ["event", *base, "--call", cid, "--type", "confirmation", "--finding-id", "f1"]
     c += ["--confirmer", "alice", "--outcome", "regression", "--evidence", "e"]

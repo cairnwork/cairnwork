@@ -18,7 +18,7 @@ from experimental.acceptance_outcomes.store import OutcomesError, append_checked
 
 VERDICTS = ("VERIFIED", "FAILED", "REFUSED", "UNCOMPARABLE")
 PRE_CORE = "PRE_CORE"
-SOURCES = ("deferred_test", "p2p", "review", "human_use", "later_pr", "user_report")
+SOURCES = ("deferred_test", "p2p", "code_review", "human_use", "later_pr", "user_report")
 VERIFIED_KINDS = ("not_fixed", "regression", "environment", "requirement_changed")
 OTHER_KINDS = ("refused_but_correct",)
 EVENT_TYPES = ("observed", "finding", "confirmation", "closed")
