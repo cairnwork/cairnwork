@@ -369,7 +369,8 @@ Checks run in this order and the first failure is reported:
    `RECEIPT_INCONSISTENT`
 10. coverage (#651), the producer's rule: every Python file in `test_paths` must be a target of
     some bound verifier argv (in the `python3 -m pytest` shape the producer accepts), whole or
-    through each of its new or changed tests (`path::test` or `path::Class`). Full mode reads
+    through each of its new or changed tests (`path::test`, `path::Class`, or one case
+    `path::test[case]`, which names its test; #714). Full mode reads
     those tests from the test commit; confidential mode cannot, so there any target naming a test
     in the file counts, on the signer's word like the test contents (`TEST_PATH_NOT_TARGETED`).
     Every bound verifier id must be among the request's required verifier ids

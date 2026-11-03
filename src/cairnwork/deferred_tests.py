@@ -209,13 +209,22 @@ def untargeted(
     (a helper, ``__init__.py``, a fixture-only change) must be named whole. Other files (data)
     cannot be pytest targets and are not required. A receipt binds every test path, so each one's
     changes must have run (DEFERRED_TESTS_NOT_TARGETED; the receiver applies the same rule,
-    cairnwork_attest.verify_coverage). Tests a file keeps unchanged are P2P's (p2p.py)."""
-    named, missing = frozenset(targets), []
+    cairnwork_attest.verify_coverage). Tests a file keeps unchanged are P2P's (p2p.py). A target
+    naming one parametrized case (``::test_y[case]``) names its test ``test_y`` (#714)."""
+    named, missing = frozenset(map(_without_case, targets)), []  # a case names its test
+    nodes = list(map(_without_case, nodes))  # the same on both sides (the receiver too)
     for path in (path for path in paths if path.endswith(".py") and path not in named):
         mine = [node for node in nodes if node.split("::", 1)[0] == path]
         if not mine or not all(_named(node, named) for node in mine):
             missing.append(path)
     return tuple(missing)
+
+
+def _without_case(node_id: str) -> str:
+    """``path::name[case]`` -> ``path::name``; a ``[`` in the path part is left alone, so a
+    target the producer's grammar refuses (``tests/test_x.py[x]``) names no file here either."""
+    path, sep, names = node_id.partition("::")
+    return path + sep + names.split("[", 1)[0] if sep else node_id
 
 
 def _named(node: str, targets: frozenset[str]) -> bool:

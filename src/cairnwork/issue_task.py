@@ -194,10 +194,12 @@ def _check_path(path: Any) -> None:
 
 def test_target(roots: tuple[str, ...] | None) -> re.Pattern[str]:
     """A verifier target: a .py file under one of the test roots (None: any plain directory),
-    with optional ::node ids."""
+    with optional ::node ids, the last of which may name one parametrized case (``[<param>]``,
+    any text but newline, NUL and ``]``; #714). Argv reaches pytest without a shell."""
     name = r"[A-Za-z0-9_\-]+"
     top = r"[A-Za-z0-9_][A-Za-z0-9_\-]*" if roots is None else "|".join(map(re.escape, roots))
-    return re.compile(rf"(?:{top})/(?:{name}/)*{name}\.py(?:::[A-Za-z0-9_\[\]\-]+)*")
+    case = r"(?:::[A-Za-z0-9_\-]+)+(?:\[[^\]\n\0]*\])?"
+    return re.compile(rf"(?:{top})/(?:{name}/)*{name}\.py(?:{case})?")
 
 
 _PART = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_\-]*")
