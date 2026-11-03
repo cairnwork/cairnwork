@@ -33,7 +33,8 @@ def test_a_file_is_covered_whole_or_by_each_of_its_changed_tests():
     assert untargeted(paths, nodes, by_node) == ("tests/helpers.py",)  # no test in it: whole only
     assert untargeted(paths, nodes, whole[:1]) == ("tests/test_b.py", "tests/helpers.py")
     partial = ("tests/test_a.py::test_x[1]", "tests/test_b.py::test_y", *whole[2:])
-    assert untargeted(paths, nodes, partial) == ("tests/test_a.py", "tests/test_b.py")
+    # one parametrized case names its test (#714); test_b's TestK::test_m is still unnamed
+    assert untargeted(paths, nodes, partial) == ("tests/test_b.py",)
 
 
 def _paths(project, files):
