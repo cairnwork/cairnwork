@@ -26,6 +26,7 @@ def _parser() -> argparse.ArgumentParser:
         rec.add_argument(f"--{opt}", required=True)
     rec.add_argument("--test-commit", default="")
     rec.add_argument("--notary-db", type=Path)
+    rec.add_argument("--call-ref", default="", help="tells apart identical outputs of two calls")
     ev = sub.choices["event"]
     ev.add_argument("--call", required=True)
     ev.add_argument("--type", required=True)
@@ -55,8 +56,10 @@ def main(argv: list[str] | None = None) -> int:
                 result = json.loads(args.result.read_text())
             except (OSError, ValueError) as exc:
                 raise OutcomesError("OUTCOME_INVALID", f"result unreadable: {exc}") from exc
+            if not isinstance(result, dict):
+                raise OutcomesError("OUTCOME_INVALID", "result must be a JSON object")
             inputs = {k: getattr(args, k) for k in ("repo", "base", "candidate", "version")}
-            inputs["test_commit"] = args.test_commit
+            inputs["test_commit"], inputs["call_ref"] = args.test_commit, args.call_ref
             print(record_call(args.ledger, result, inputs, args.notary_db))
             return 0
         event = {k: getattr(args, k) for k in EVENT_ARGS if getattr(args, k) is not None}

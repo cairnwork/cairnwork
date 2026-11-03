@@ -10,6 +10,7 @@ casebook). #772 will replace identity sourcing.
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -34,20 +35,26 @@ def _verdict_of(result: dict[str, Any]) -> str:
 
 
 def _notary_state(verdict: str, call: dict[str, Any], result: dict[str, Any], db: Path | None):
-    """Return "row" or "no_notary_row"; OUTCOME_RECORD_MISMATCH when a row disagrees."""
+    """Return "row" or "no_notary_row"; OUTCOME_RECORD_MISMATCH when the notary disagrees: a row
+    with another candidate, base or status, or any row at all behind a call labelled as refused
+    before Core. Without ``db`` only VERIFIED is refused (it needs its row)."""
     task, attempt = result.get("task_id"), result.get("attempt_id")
-    if verdict not in ("VERIFIED", "FAILED") or not task or not attempt or db is None:
+    if not task or not attempt or db is None:
         if verdict == "VERIFIED":
             raise OutcomesError("OUTCOME_RECORD_MISMATCH", "VERIFIED needs its notary row")
         return "no_notary_row"
     try:
         rec = read_record(db, str(task), str(attempt))
     except AttestError as exc:
-        if verdict == "FAILED" and exc.code == "RECORD_NOT_FOUND":
+        if verdict != "VERIFIED" and exc.code == "RECORD_NOT_FOUND":
             return "no_notary_row"
         raise OutcomesError("OUTCOME_RECORD_MISMATCH", f"notary row: {exc.code}") from exc
+    if verdict not in ("VERIFIED", "FAILED"):
+        raise OutcomesError("OUTCOME_RECORD_MISMATCH", f"{verdict} call has a notary row")
     if rec.candidate_commit != call["candidate"] or rec.base_commit != call["base"]:
         raise OutcomesError("OUTCOME_RECORD_MISMATCH", "candidate or base differs from notary row")
+    if rec.status != verdict:
+        raise OutcomesError("OUTCOME_RECORD_MISMATCH", f"verdict {verdict} but row {rec.status}")
     return "row"
 
 
@@ -55,6 +62,8 @@ def record_call(
     path: Path, result: dict[str, Any], inputs: dict[str, str], notary_db: Path | None = None
 ) -> str:
     """Append one call line. ``inputs``: repo, base, candidate, version, optional test_commit."""
+    if not isinstance(result, dict):
+        raise OutcomesError("OUTCOME_INVALID", "result must be a JSON object")
     call: dict[str, Any] = {k: inputs.get(k, "") for k in ("repo", "base", "candidate", "version")}
     if any(not call[k] for k in call):
         raise OutcomesError("OUTCOME_INVALID", "repo, base, candidate and version are required")
@@ -64,7 +73,17 @@ def record_call(
     call["task_id"], call["attempt_id"] = result.get("task_id", ""), result.get("attempt_id", "")
     state = _notary_state(verdict, call, result, notary_db)
     call["no_notary_row"] = state == "no_notary_row"
-    key = "|".join(str(call[k]) for k in sorted(call) if k != "reason")
+    # Every distinct verify output is its own call (reason and the whole output are in the key);
+    # recording the byte-identical output again for the same inputs is a replay: DUPLICATE. Two
+    # real calls with identical output can be told apart with the optional ``call_ref``.
+    digest = hashlib.sha256(json.dumps(result, sort_keys=True).encode()).hexdigest()
+    key = (
+        "|".join(str(call[k]) for k in sorted(call))
+        + "|"
+        + digest
+        + "|"
+        + inputs.get("call_ref", "")
+    )
     call["call_id"] = "c" + hashlib.sha256(key.encode()).hexdigest()[:12]
 
     def build(rows: list[dict[str, Any]]) -> dict[str, Any] | None:

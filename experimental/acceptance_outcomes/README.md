@@ -17,3 +17,9 @@ carries `prev` (sha256 of the previous line) and `F.head` holds the last digest,
 removed line is refused with `OUTCOMES_NOT_APPEND_ONLY` and the report prints nothing. This shows
 accidental edits, not a deliberate rewrite of both files. Confirmer identity is a placeholder
 (different id, not a declared clone) until #772.
+
+Recovery: a crash between the append and the head update leaves the head one line behind; the
+next call is refused with `OUTCOMES_NOT_APPEND_ONLY` (fail closed) until an operator checks the
+last line and rewrites `F.head` with its sha256. Deleting both the ledger and its head gives an
+empty report (a stated limit). `unknown` (window closed without an observed window or without
+the agreed checks) is counted separately and is outside the rate's denominator and coverage.

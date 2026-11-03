@@ -165,7 +165,9 @@ def test_ac4_refused_but_correct_only_for_non_verified(fx: dict[str, Any]) -> No
 def test_ac5_statuses(fx: dict[str, Any]) -> None:
     assert status_of([]) == "untracked"
     assert status_of([{"type": "observed"}]) == "tracking"
-    assert status_of([{"type": "closed", "checks_done": True}]) == "no_defect_found"
+    obs = {"type": "observed"}
+    assert status_of([{"type": "closed", "checks_done": True}]) == "unknown"  # no window
+    assert status_of([obs, {"type": "closed", "checks_done": True}]) == "no_defect_found"
     assert status_of([{"type": "closed", "checks_done": False}]) == "unknown"
     assert status_of([{"type": "closed", "checks_done": True}, {"type": "confirmation"}]) == (
         "overturned"
@@ -250,3 +252,126 @@ def test_ac7_default_off_and_core_never_imports_it() -> None:
         assert not pat.search(p.read_text()), p
     toml = (ROOT / "pyproject.toml").read_text()
     assert "experimental" in toml  # import-linter contract names it (lint-imports gate)
+
+
+def test_unknown_outside_denominator_and_coverage(fx: dict[str, Any]) -> None:
+    from experimental.acceptance_outcomes.report import _verified
+
+    ids = ["a", "b", "c", "d"]
+    by_call = {"a": "overturned", "b": "no_defect_found", "c": "unknown", "d": "unknown"}
+    ev = {"a": [{"type": "finding", "finding_id": "f1", "root": "r"},
+                {"type": "confirmation", "finding_id": "f1", "outcome": "regression"}]}  # fmt: skip
+    v = _verified(ids, by_call, ev)
+    assert (v["closed"], v["unknown"], v["den"], v["coverage"]) == (2, 2, 2, "2/4")
+    assert v["text"] == "1/2 = 0.500"
+
+
+@given(base=st.lists(st.sampled_from(["overturned", "no_defect_found"]), max_size=8),
+       unk=st.integers(min_value=0, max_value=10))  # fmt: skip
+def test_unknown_never_lowers_rate_or_raises_coverage(base: list[str], unk: int) -> None:
+    from experimental.acceptance_outcomes.report import _verified
+
+    def run(extra: int) -> dict[str, Any]:
+        ids = [f"c{i}" for i in range(len(base) + extra)]
+        by_call = {i: base[n] if n < len(base) else "unknown" for n, i in enumerate(ids)}
+        ev = {i: [{"type": "finding", "finding_id": "f1", "root": "r"},
+                  {"type": "confirmation", "finding_id": "f1", "outcome": "regression"}]
+              for i, s_ in by_call.items() if s_ == "overturned"}  # fmt: skip
+        return _verified(ids, by_call, ev)
+
+    a, b = run(0), run(unk)
+    assert a["rate"] == b["rate"]
+    assert (b["coverage_value"] or 0) <= (a["coverage_value"] or 0) or not base
+
+
+def test_identical_inputs_different_reasons_are_distinct_calls(fx: dict[str, Any]) -> None:
+    led = fx["led"]
+    one, two = {"error": "BAD_SCOPE", "reason": "r1"}, {"error": "BAD_SCOPE", "reason": "r2"}
+    assert record_call(led, one, inputs(fx)) == "ADDED"
+    assert record_call(led, two, inputs(fx)) == "ADDED"
+    assert record_call(led, one, inputs(fx)) == "DUPLICATE"  # byte-identical replay
+    assert record_call(led, {**one, "call_ref": "x"}, inputs(fx, call_ref="2")) == "ADDED"
+    assert build_report(led)["v1"]["total"] == 3
+
+
+def test_verdict_must_match_notary_status_and_row_presence(fx: dict[str, Any]) -> None:
+    led = fx["led"]
+    # the fixture row is VERIFIED: a FAILED claim against it, or a pre-Core label with its ids
+    with pytest.raises(OutcomesError, match="OUTCOME_RECORD_MISMATCH"):
+        record_call(led, verified(fx, status="FAILED"), inputs(fx), fx["db"])
+    for res in ({"status": "REFUSED"}, {"error": "BAD_SCOPE"}):
+        with pytest.raises(OutcomesError, match="OUTCOME_RECORD_MISMATCH"):
+            record_call(led, {**res, "task_id": "task-1", "attempt_id": "a1"}, inputs(fx), fx["db"])
+    assert not led.exists()
+
+
+def test_result_not_a_json_object_exits_2(
+    fx: dict[str, Any], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    res = tmp_path / "r.json"
+    res.write_text("[1]")
+    rec = ["record", "--ledger", str(fx["led"]), "--result", str(res), "--repo", "r"]
+    rec += ["--base", fx["base"], "--candidate", fx["cand"], "--version", "v1"]
+    assert main(rec) == 2 and "OUTCOME_INVALID" in capsys.readouterr().out
+    with pytest.raises(OutcomesError, match="OUTCOME_INVALID"):
+        record_call(fx["led"], [1], inputs(fx))  # type: ignore[arg-type]
+
+
+def test_tail_truncation_refused_on_append_and_read(fx: dict[str, Any]) -> None:
+    cid = call_id(fx)
+    finding(fx, cid)
+    led = fx["led"]
+    lines = led.read_text().splitlines(keepends=True)
+    led.write_text(lines[0])  # a clean cut at a line boundary: chain fine, head disagrees
+    before = led.read_text()
+    with pytest.raises(OutcomesError, match="OUTCOMES_NOT_APPEND_ONLY"):
+        build_report(led)
+    with pytest.raises(OutcomesError, match="OUTCOMES_NOT_APPEND_ONLY"):
+        finding(fx, cid, "r2")
+    with pytest.raises(OutcomesError, match="OUTCOMES_NOT_APPEND_ONLY"):
+        record_call(led, {"error": "X"}, inputs(fx))
+    assert led.read_text() == before
+
+
+def test_refused_but_correct_denominator_is_closed_failed_or_refused(fx: dict[str, Any]) -> None:
+    led = fx["led"]
+    ids = []
+    for n in range(4):
+        record_call(
+            led, {"status": "FAILED" if n % 2 else "REFUSED", "reason": f"w{n}"}, inputs(fx)
+        )
+    ids = [json.loads(x)["call_id"] for x in led.read_text().splitlines()]
+    add_event(led, ids[0], {"type": "observed", "start": "a", "end": "b"})
+    add_event(led, ids[0], {"type": "closed", "checks_done": True})  # no_defect_found
+    add_event(led, ids[1], {"type": "closed", "checks_done": True})  # unknown (no window)
+    finding(fx, ids[2])
+    confirm(fx, ids[2], outcome="refused_but_correct")  # overturned
+    add_event(led, ids[3], {"type": "observed", "start": "a", "end": "b"})  # tracking only
+    r = build_report(led)["v1"]["refused_but_correct"]
+    assert (r["num"], r["den"], r["coverage"]) == (1, 2, "2/4")
+
+
+def test_appends_wait_for_the_lock(fx: dict[str, Any]) -> None:
+    import fcntl
+    import threading
+
+    led = fx["led"]
+    cid = call_id(fx)
+    lock = led.with_name(led.name + ".lock")
+    assert lock.exists()
+    fd = lock.open("wb")
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    done = threading.Event()
+
+    def work() -> None:
+        finding(fx, cid)
+        done.set()
+
+    thread = threading.Thread(target=work)
+    thread.start()
+    assert not done.wait(0.5)  # blocked while another writer holds the lock
+    fcntl.flock(fd, fcntl.LOCK_UN)
+    fd.close()
+    thread.join(10)
+    assert done.is_set()
+    assert len(build_report(led)["v1"]["cases"]["tracking"]) == 1

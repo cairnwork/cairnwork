@@ -12,6 +12,7 @@ from typing import Any
 from experimental.acceptance_outcomes.ledger import PRE_CORE, VERDICTS
 from experimental.acceptance_outcomes.store import read_ledger
 
+CLOSED = ("no_defect_found", "overturned")  # `unknown` is its own count, never a "clean" close
 STATUSES = ("untracked", "tracking", "no_defect_found", "unknown", "overturned")
 
 
@@ -21,7 +22,8 @@ def status_of(events: list[dict[str, Any]]) -> str:
         return "overturned"
     closed = [e for e in events if e["type"] == "closed"]
     if closed:
-        return "no_defect_found" if closed[-1].get("checks_done") else "unknown"
+        done = closed[-1].get("checks_done") and any(e["type"] == "observed" for e in events)
+        return "no_defect_found" if done else "unknown"
     return "tracking" if events else "untracked"
 
 
@@ -49,7 +51,7 @@ def _version_block(calls: list[dict[str, Any]], events: dict[str, list[dict[str,
     }
     block["VERIFIED"] = _verified(ids["VERIFIED"], by_call, events)
     ids_other = [i for v in ("FAILED", "REFUSED") for i in ids[v]]
-    closed = [i for i in ids_other if by_call[i] in ("no_defect_found", "unknown", "overturned")]
+    closed = [i for i in ids_other if by_call[i] in CLOSED]
     rbc = [i for i in closed if by_call[i] == "overturned"]
     block["refused_but_correct"] = {
         **_rate(len(rbc), len(closed), len(closed), len(ids_other)),
@@ -60,7 +62,8 @@ def _version_block(calls: list[dict[str, Any]], events: dict[str, list[dict[str,
 
 def _verified(ids: list[str], by_call: dict[str, str], events: dict) -> dict[str, Any]:
     tracked = [i for i in ids if by_call[i] != "untracked"]
-    closed = [i for i in ids if by_call[i] in ("no_defect_found", "unknown", "overturned")]
+    closed = [i for i in ids if by_call[i] in CLOSED]
+    unknown = [i for i in ids if by_call[i] == "unknown"]
     over = [i for i in ids if by_call[i] == "overturned"]
     kinds: dict[str, set[tuple[str, str]]] = {}
     for i in over:
@@ -72,9 +75,10 @@ def _verified(ids: list[str], by_call: dict[str, str], events: dict) -> dict[str
         "tracked": len(tracked),
         "closed": len(closed),
         "overturned": len(over),
+        "unknown": len(unknown),
         "overturned_by_kind": {k: len(v) for k, v in sorted(kinds.items())},
         **_rate(len(over), len(closed), len(closed), len(ids)),
-        "cases": {"tracked": tracked, "closed": closed, "overturned": over},
+        "cases": {"tracked": tracked, "closed": closed, "unknown": unknown, "overturned": over},
     }
 
 
@@ -100,7 +104,7 @@ def format_report(report: dict[str, Any], *, cases: bool = False) -> str:
         v = b["VERIFIED"]
         kinds = ", ".join(f"{k} {n}" for k, n in v["overturned_by_kind"].items()) or "none"
         out.append(f"  VERIFIED: tracked {v['tracked']}, closed {v['closed']}, "
-                   f"overturned {v['overturned']} ({kinds})")  # fmt: skip
+                   f"unknown {v['unknown']}, overturned {v['overturned']} ({kinds})")  # fmt: skip
         out.append(f"  VERIFIED overturn rate: {v['text']}, coverage {v['coverage']}")
         r = b["refused_but_correct"]
         out.append(f"  FAILED/REFUSED refused_but_correct: {r['text']}, coverage {r['coverage']}")
