@@ -126,7 +126,14 @@ def test_a_secret_field_is_masked_before_the_cut_lands_inside_its_key(tmp_path):
 
 def test_a_secret_field_name_with_a_hidden_character_or_odd_case_is_still_masked(tmp_path):
     log = tmp_path / "verifier.log"
-    names = ["pass​word", "pass­word", "pass‮word", "PassWord", "api​_KEY"]
+    names = [
+        "pass\u200bword",
+        "pass\u00adword",
+        "pass\u202eword",
+        "PassWord",
+        "api\u200b_KEY",
+        "x\u200btoken",
+    ]
     log.write_text("".join(f"{n}=PLACEHOLDER\n" for n in names) + "color=blue\n")
     tail = probe_log_tail(log)
     assert "PLACEHOLDER" not in tail and tail.endswith("color=blue\n")
