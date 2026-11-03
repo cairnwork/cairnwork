@@ -63,6 +63,8 @@ def test_teeth_of_a_parametrized_case_count_for_its_function():
 def test_a_parametrized_target_names_its_test_for_the_target_rule():
     paths, nodes = ("tests/test_x.py",), {"tests/test_x.py::test_y"}
     assert untargeted(paths, nodes, ("tests/test_x.py::test_y[case one]",)) == ()
+    # the receiver in confidential mode lists the target itself as the node (verify_coverage)
+    assert untargeted(paths, ["tests/test_x.py::test_y[1]"], ("tests/test_x.py::test_y[1]",)) == ()
     two = {"tests/test_x.py::test_y", "tests/test_x.py::test_z"}
     assert untargeted(paths, two, ("tests/test_x.py::test_y[case one]",)) == paths
 

@@ -212,6 +212,7 @@ def untargeted(
     cairnwork_attest.verify_coverage). Tests a file keeps unchanged are P2P's (p2p.py). A target
     naming one parametrized case (``::test_y[case]``) names its test ``test_y`` (#714)."""
     named, missing = frozenset(t.split("[", 1)[0] for t in targets), []  # a case names its test
+    nodes = [node.split("[", 1)[0] for node in nodes]  # the same on both sides (receiver too)
     for path in (path for path in paths if path.endswith(".py") and path not in named):
         mine = [node for node in nodes if node.split("::", 1)[0] == path]
         if not mine or not all(_named(node, named) for node in mine):

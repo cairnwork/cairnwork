@@ -58,6 +58,7 @@ def test_receipt_verifies_when_every_test_file_is_a_whole_target(tmp_path, mode)
     [
         ["tests/test_new.py", "tests/test_a.py::test_a"],
         ["tests/test_new.py::test_new", "tests/test_a.py"],
+        ["tests/test_new.py", "tests/test_a.py::test_a[1]"],  # one case names its test (#714)
     ],
 )
 def test_receipt_verifies_when_each_changed_test_is_a_node_target(tmp_path, mode, args):
