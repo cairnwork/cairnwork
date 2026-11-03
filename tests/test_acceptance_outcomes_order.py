@@ -1,6 +1,6 @@
 """Acceptance outcomes: close-after-observe ordering and PRE_CORE refused_but_correct."""
 
-# ruff: noqa: F811
+# ruff: noqa: F811, F401
 
 from __future__ import annotations
 
