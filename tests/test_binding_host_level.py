@@ -20,8 +20,8 @@ def test_the_binding_host_grade_wins_over_the_reading_host(monkeypatch, reader_i
 
 @pytest.mark.parametrize("reader_is_macos", [True, False])
 @pytest.mark.parametrize("binding", [None, {}, {"protection": None}, {"protection": "bogus"}])
-def test_a_record_without_a_host_grade_gets_the_attest_level_on_any_host(
+def test_a_record_without_a_host_grade_gets_the_lower_grade_on_any_host(
     monkeypatch, reader_is_macos, binding
 ):
     monkeypatch.setattr(protection, "on_macos", lambda: reader_is_macos)
-    assert _level(REQUEST, binding) == protection.level(IDS, macos=False) == "partial"
+    assert _level(REQUEST, binding) == protection.level(IDS, macos=True) == "partial_macos"
