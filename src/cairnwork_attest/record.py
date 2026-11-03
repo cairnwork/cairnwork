@@ -309,6 +309,15 @@ def verify_record(
     except (NotaryInputError, NotarySchemaMismatch) as exc:
         raise RecordMalformed(str(exc), code="RECORD_MALFORMED") from exc
 
+    if verdict is not None and (
+        (record.status, record.integrity, record.http_status)
+        != (verdict.status, verdict.integrity, verdict.http_status)
+    ):  # the row changed between the two reads: sign neither
+        raise RecordMalformed(
+            "notary row status/integrity/http_status differ between the two reads",
+            code="RECORD_MALFORMED",
+        )
+
     if verdict is None or not verdict.verified:
         reason = (
             verdict.reason
