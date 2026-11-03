@@ -71,6 +71,14 @@ def test_receipt_needs_a_target_for_each_bound_test_file(tmp_path, mode):
     assert _verify(tmp_path, one, mode) == "TEST_PATH_NOT_TARGETED"
 
 
+@pytest.mark.parametrize("mode", ["full", "confidential"])
+def test_receipt_refuses_a_case_on_a_file_as_naming_that_file(tmp_path, mode):
+    """The producer grammar refuses tests/test_a.py[x]; the receiver must not read it as the
+    whole file (#714)."""
+    odd = [["pytest-0", [*PYTEST, "tests/test_new.py", "tests/test_a.py[x]"]]]
+    assert _verify(tmp_path, odd, mode) == "TEST_PATH_NOT_TARGETED"
+
+
 @pytest.mark.parametrize("mode,code", [("full", "TEST_PATH_NOT_TARGETED"), ("confidential", "OK")])
 def test_receipt_reads_the_changed_tests_from_the_test_commit_in_full_mode(tmp_path, mode, code):
     """test_a.py's changed test is test_a; a target naming another test in that file covers it only
