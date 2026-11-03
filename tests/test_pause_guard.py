@@ -161,8 +161,9 @@ def test_every_write_before_the_plan_is_denied(name, run_root, tmp_path):
 
 @pytest.mark.sandbox
 def test_a_process_left_behind_can_never_write_but_the_plan_can(run_root, tmp_path):
-    """The left-behind process clears its environment and leaves the run root, so local
-    worker's sweep does not find it; it outlives the plan and a writable test run."""
+    """The left-behind process clears its environment, leaves the run root and starts its own
+    session, so neither local worker's sweep nor the job's group stop (#741) reaches it; it
+    outlives the plan and a writable test run."""
     co, tmp = run_root / "checkout", run_root / "tmp"
     tools = _tools(run_root, tmp_path)
     pre = PrePlanGuard(TreeGuard(co), _log(co, tmp_path), tools)
@@ -171,7 +172,11 @@ def test_a_process_left_behind_can_never_write_but_the_plan_can(run_root, tmp_pa
         f'cd /; while [ ! -e "{tmp}/go" ]; do sleep 0.1; done; '
         f'{{ echo "x = 9" > "{co}/src/a.py"; }} 2> "{tmp}/late.err"; echo $? > "{tmp}/late.rc"'
     )
-    _job(run_root, f"/usr/bin/env -i /bin/sh -c '{late}' </dev/null >/dev/null 2>&1 &")
+    (tmp / "late.sh").write_text(late + "\n")
+    detach = (
+        "import os; os.setsid(); os.execv('/usr/bin/env', ['env', '-i', '/bin/sh', '$T/late.sh'])"
+    )
+    _job(run_root, f'"$PY" -c "{detach}" </dev/null >/dev/null 2>&1 &')
     pre.run_tests(["-q"])
     pre.at_plan_arrival()
     _job(run_root, 'echo "y = 2" > src/b.py')

@@ -111,10 +111,8 @@ def _signal(proc: subprocess.Popen, kill: bool) -> None:
 def _kill_group(proc: subprocess.Popen) -> None:
     try:
         os.killpg(proc.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass  # the group is already gone
-    except PermissionError:
-        pass  # setuid sudo may refuse the Owner's signal; the caller sweeps the run instead
+    except (PermissionError, ProcessLookupError):
+        pass  # gone already, or setuid sudo refuses the Owner's signal (the caller sweeps the run)
 
 
 def subprocess_invoker(env: dict[str, str] | None = None) -> Invoker:
