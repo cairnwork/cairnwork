@@ -114,6 +114,7 @@ def test_targets_are_read_from_the_one_argv_shape_the_producer_accepts():
     # the grammar is not tied to a `tests` root (#722)
     assert targets([*PYTEST, "pkg/test/test_a.py::test_a[1]"]) == ("pkg/test/test_a.py::test_a[1]",)
     assert targets([*PYTEST, "pkg/test/test_a.py[x]"]) == ()
+    assert targets([*PYTEST, "pkg/test/test_a.py::test_a[a\u202eb]"]) == ()  # printable here too
 
 
 # #660: what the target names alone do not show, read from the test commit (full mode)
