@@ -154,6 +154,14 @@ def decode_call(call: Any, n_targets: int, tools: tuple[str, ...] = BASE_TOOLS) 
     extra = set(args) - ALLOWED_ARGS[name]
     if extra:  # their names and values are model text: neither is kept in the public line
         raise BadCall(f"{name} got {len(extra)} argument(s) it does not take")
+    for key, value in args.items():
+        if isinstance(value, str):
+            try:
+                value.encode()
+            except (
+                UnicodeEncodeError
+            ):  # a lone surrogate from a JSON escape: model text, not a fault
+                raise BadCall(f"{name} argument {key!r} is not valid UTF-8 text") from None
     for key in _REQUIRED[name]:
         if not isinstance(args.get(key), str):
             raise BadCall(f"{name} needs a string {key!r}")
