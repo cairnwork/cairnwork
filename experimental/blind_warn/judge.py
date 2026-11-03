@@ -131,16 +131,12 @@ def _text(blob: bytes) -> str:
 
 
 def _cut(text: str, limit: int) -> str:
-    """The longest prefix of text that is at most ``limit`` UTF-8 bytes (never half a character)."""
+    """The longest prefix of text within ``limit`` UTF-8 bytes (no half characters)."""
     return text.encode("utf-8")[:limit].decode("utf-8", "ignore")
 
 
 def _least(size: int) -> int:
-    """A lower bound of the bytes a blob of ``size`` bytes adds to the context.
-
-    Reading text mode turns CRLF into LF, which at worst halves it (``ceil(size / 2)``), and the
-    cut to MAX_FILE_BYTES drops at most 3 bytes of a partial character (``MAX_FILE_BYTES - 3``).
-    """
+    """Lower bound of the bytes a blob adds: CRLF to LF at worst halves it; the cut drops <= 3."""
     return max(0, min(-(-size // 2), MAX_FILE_BYTES - 3))
 
 
@@ -151,8 +147,7 @@ def repo_context(base: Path, ticket: str) -> str:
     UTF-8 (a file that is not is skipped), keeping its first MAX_FILE_BYTES bytes (whole
     characters) and adding it while the total stays within CONTEXT_BYTES bytes; but a blob is read
     only when it could still fit (its size bounds its length in bytes), and blobs are read
-    ``_BATCH`` at a time with one git call each, so a large repository costs a few calls, not one
-    per file.
+    ``_BATCH`` at a time with one git call each, so a large repository costs a few calls.
     """
     files, skipped = _listing(base)
     words = _tokens(ticket)
