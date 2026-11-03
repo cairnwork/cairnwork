@@ -110,7 +110,8 @@ def alert(message: str) -> None:
 
 
 def _run(argv: list[str], seconds: int, env: dict[str, str]) -> tuple[int, bytes, bytes]:
-    """Its own session, so a timeout kills what the hook started; cleanup is bounded too.
+    """Its own session, so the group is stopped on every exit (what the hook started never
+    outlives it, timeout or not); cleanup is bounded too.
 
     Output stays bytes: _tail decodes it leniently, so no output can lose the record.
     """
@@ -134,6 +135,8 @@ def _run(argv: list[str], seconds: int, env: dict[str, str]) -> tuple[int, bytes
 
 
 def _kill_group(proc: subprocess.Popen[bytes]) -> None:
+    # After a normal exit the leader is reaped; the pgid stays in use while any member lives,
+    # so only a fully gone group whose id was reused at once could be hit (accepted, #731).
     try:
         os.killpg(proc.pid, signal.SIGKILL)
     except ProcessLookupError:
