@@ -86,13 +86,17 @@ def _is_hidden(ch: str) -> bool:
     return cat.startswith("C") or cat in ("Zl", "Zp")
 
 
-def repo_context(base: Path, ticket: str) -> str:
-    """Tracked text files of the base, those that share the most words with the ticket first."""
-    listing = run_git_bytes(base, "ls-tree", "-r", "-z", "HEAD")  # same source as the blobs
-    names, skipped = [], 0
+_BATCH = 200  # blobs per `git cat-file --batch` call
+
+
+def _listing(base: Path) -> tuple[list[tuple[str, str, int]], int]:
+    """(name, blob id, size) of the regular files tracked at HEAD; how many names were skipped."""
+    listing = run_git_bytes(base, "ls-tree", "-r", "-z", "-l", "HEAD")  # same source as the blobs
+    files, skipped = [], 0
     for item in listing.split(b"\0"):
         info, tab, raw = item.partition(b"\t")
-        if not tab or info.split(b" ", 1)[0].decode() not in _FILE_MODES:
+        fields = info.split()
+        if not tab or len(fields) != 4 or fields[0].decode() not in _FILE_MODES:
             continue
         try:
             name = raw.decode("utf-8")
@@ -101,24 +105,68 @@ def repo_context(base: Path, ticket: str) -> str:
         if any(_is_hidden(c) for c in name):
             skipped += 1  # a control character in a name could fake a header line in the prompt
             continue
-        names.append(name)
+        files.append((name, fields[2].decode(), int(fields[3])))
+    return files, skipped
+
+
+def _blobs(base: Path, oids: list[str]) -> dict[str, bytes]:
+    """The contents of the given blobs, read with one `git cat-file --batch` call."""
+    request = "".join(f"{oid}\n" for oid in oids).encode()
+    out = run_git_bytes(base, "cat-file", "--batch", stdin=request)
+    found, pos = {}, 0
+    for oid in oids:
+        header_end = out.index(b"\n", pos)
+        header = out[pos:header_end].split()
+        if len(header) != 3 or header[0].decode() != oid or header[1] != b"blob":
+            raise BlindWarnError(f"unexpected cat-file output for {oid}")
+        size = int(header[2])
+        found[oid] = out[header_end + 1 : header_end + 1 + size]
+        pos = header_end + 1 + size + 1  # the content is followed by a newline
+    return found
+
+
+def _text(blob: bytes) -> str:
+    """The blob as run_git returned it: strict UTF-8, line endings read as text mode does."""
+    return blob.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+
+
+def repo_context(base: Path, ticket: str) -> str:
+    """Tracked text files of the base, those that share the most words with the ticket first.
+
+    The same files and text as reading each blob in rank order (``git show``), decoding it as
+    UTF-8 (a file that is not is skipped), keeping its first MAX_FILE_BYTES characters and adding
+    it while the total stays within CONTEXT_BYTES; but a blob is read only when it could still fit
+    (its size bounds its length: a UTF-8 character is 1 to 4 bytes), and blobs are read
+    ``_BATCH`` at a time with one git call each, so a large repository costs a few calls, not one
+    per file.
+    """
+    files, skipped = _listing(base)
     words = _tokens(ticket)
     ranked = sorted(
-        (n for n in names if n.endswith(_TEXT_SUFFIXES)),
-        key=lambda n: (-len(words & _tokens(n.replace("/", " ").replace(".", " "))), n),
+        (f for f in files if f[0].endswith(_TEXT_SUFFIXES)),
+        key=lambda f: (-len(words & _tokens(f[0].replace("/", " ").replace(".", " "))), f[0]),
     )
-    parts, used = [], 0
+    parts, used, i = [], 0, 0
     if skipped:
         parts.append(f"--- SKIPPED: {skipped} file names with control characters")
-    for name in ranked:
+    while i < len(ranked):
+        # the next files that could still fit; each is decided below on its real text, in order
+        chunk = [f for f in ranked[i : i + _BATCH] if used + min(-(-f[2] // 4), MAX_FILE_BYTES)
+                 <= CONTEXT_BYTES]  # fmt: skip
+        i += _BATCH
         try:
-            text = run_git(base, "show", f"HEAD:{name}")[:MAX_FILE_BYTES]  # the tracked blob
-        except (GitCommandError, UnicodeDecodeError):
-            continue
-        if used + len(text) > CONTEXT_BYTES:
-            continue
-        parts.append(f"--- FILE: {name}\n{text}")
-        used += len(text)
+            blobs = _blobs(base, [oid for _, oid, _ in chunk]) if chunk else {}
+        except GitCommandError:
+            continue  # as one unreadable blob was skipped before
+        for name, oid, _ in chunk:
+            try:
+                text = _text(blobs[oid])[:MAX_FILE_BYTES]
+            except UnicodeDecodeError:
+                continue
+            if used + len(text) > CONTEXT_BYTES:
+                continue
+            parts.append(f"--- FILE: {name}\n{text}")
+            used += len(text)
     return "\n".join(parts)
 
 
