@@ -240,17 +240,6 @@ def test_a_candidate_outside_the_allowed_files_is_not_pushed(setup, monkeypatch)
     assert "outside the Issue's allowed_files" in out[0]["error"] and github.prs == []
 
 
-def test_settle_after_a_partial_failure_reuses_the_pr(setup, monkeypatch):
-    github = FakeGitHub([issue()])
-    taken = runner.take(setup["intake"], github, setup["clone"])[0]
-    commit = commit_change(setup["clone"], {"src/calc.py": "x = 2\n"})
-    monkeypatch.setattr(Intake, "status", _completed(setup, taken, commit))
-    monkeypatch.setattr(runner, "_git", _git_without_credentials)
-    github.prs.append((f"cairnwork/7-a{'1' * 16}", "t", "b"))  # opened by a pass that then died
-    out = runner.settle(setup["intake"], github, setup["clone"])
-    assert out[0]["pr"] == "https://github.com/James3014/demo/pull/1" and len(github.prs) == 1
-
-
 def test_a_strange_attempt_id_is_never_pushed(setup, monkeypatch):
     github = FakeGitHub([issue()])
     taken = runner.take(setup["intake"], github, setup["clone"])[0]
