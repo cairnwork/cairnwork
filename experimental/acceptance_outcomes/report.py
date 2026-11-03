@@ -20,9 +20,11 @@ def status_of(events: list[dict[str, Any]]) -> str:
     """Tracking status from one call's events. A confirmation beats everything."""
     if any(e["type"] == "confirmation" for e in events):
         return "overturned"
-    closed = [e for e in events if e["type"] == "closed"]
-    if closed:
-        done = closed[-1].get("checks_done") and any(e["type"] == "observed" for e in events)
+    last = max((i for i, e in enumerate(events) if e["type"] == "closed"), default=None)
+    if last is not None:  # the window must precede the last close (ledger append order)
+        done = events[last].get("checks_done") and any(
+            e["type"] == "observed" for e in events[:last]
+        )
         return "no_defect_found" if done else "unknown"
     return "tracking" if events else "untracked"
 
@@ -50,14 +52,15 @@ def _version_block(calls: list[dict[str, Any]], events: dict[str, list[dict[str,
         "cases": {"all": [c["call_id"] for c in calls], **ids, **status},
     }
     block["VERIFIED"] = _verified(ids["VERIFIED"], by_call, events)
-    ids_other = [i for v in ("FAILED", "REFUSED") for i in ids[v]]
-    closed = [i for i in ids_other if by_call[i] in CLOSED]
-    rbc = [i for i in closed if by_call[i] == "overturned"]
-    block["refused_but_correct"] = {
-        **_rate(len(rbc), len(closed), len(closed), len(ids_other)),
-        "cases": rbc,
-    }
+    block["refused_but_correct"] = _refused(ids["FAILED"] + ids["REFUSED"], by_call)
+    block["pre_core_refused_but_correct"] = _refused(ids[PRE_CORE], by_call)
     return block
+
+
+def _refused(ids: list[str], by_call: dict[str, str]) -> dict[str, Any]:
+    closed = [i for i in ids if by_call[i] in CLOSED]
+    rbc = [i for i in closed if by_call[i] == "overturned"]
+    return {**_rate(len(rbc), len(closed), len(closed), len(ids)), "cases": rbc}
 
 
 def _verified(ids: list[str], by_call: dict[str, str], events: dict) -> dict[str, Any]:
@@ -108,6 +111,8 @@ def format_report(report: dict[str, Any], *, cases: bool = False) -> str:
         out.append(f"  VERIFIED overturn rate: {v['text']}, coverage {v['coverage']}")
         r = b["refused_but_correct"]
         out.append(f"  FAILED/REFUSED refused_but_correct: {r['text']}, coverage {r['coverage']}")
+        p = b["pre_core_refused_but_correct"]
+        out.append(f"  PRE_CORE refused_but_correct: {p['text']}, coverage {p['coverage']}")
         if cases:
             for name, ids in b["cases"].items():
                 out.append(f"  cases {name}: {' '.join(ids) or '-'}")
