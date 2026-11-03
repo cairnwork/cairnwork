@@ -184,7 +184,7 @@ class _ToCore(Exception):
     """Raised by the fake notary: the attempt reached Core."""
 
 
-def _judge(monkeypatch, verifier_run, p2p_runs=()):
+def _judge(monkeypatch, verifier_run, p2p_runs=(), checks=()):
     from types import SimpleNamespace
 
     from cairnwork import pipeline_judge
@@ -194,9 +194,13 @@ def _judge(monkeypatch, verifier_run, p2p_runs=()):
     monkeypatch.setattr(pipeline_judge, "run_verifiers", lambda *a, **k: [verifier_run])
     monkeypatch.setattr(pipeline_judge, "run_plan", lambda *a, **k: (list(p2p_runs), {}))
     monkeypatch.setattr(pipeline_judge, "new_tests", lambda *a, **k: frozenset({named}))
+    if checks:  # a declared blackbox whose judged checks are the given verdicts
+        monkeypatch.setattr(pipeline_judge, "judge_blackbox", lambda *a, **k: (tuple(checks), None))
+    declared = SimpleNamespace(checks=tuple(SimpleNamespace(verifier_id="bb") for _ in checks))
     task = SimpleNamespace(
-        blackbox=None, repo=Path("r"), base_commit="b" * 40, import_paths=(), allowed_files=(),
-        allow_deletions=False, require_protection="", test_commit="c" * 40,
+        blackbox=declared if checks else None, repo=Path("r"), base_commit="b" * 40,
+        import_paths=(), allowed_files=(), allow_deletions=False,
+        require_protection="", test_commit="c" * 40,
     )  # fmt: skip
     result = SimpleNamespace(candidate_commit="j", task_id="t", attempt_id="a", logs=[])
     notary = SimpleNamespace(notarize=lambda *a: (_ for _ in ()).throw(_ToCore()))
@@ -227,3 +231,13 @@ def test_a_failed_verification_run_keeps_the_verdict_path(monkeypatch):
     failed = _base_run({"tests/test_x.py::test_other": "failed"})  # observation not passed
     with pytest.raises(_ToCore):  # Core judges the failure; the new code is not used
         _judge(monkeypatch, failed)
+
+
+def test_a_failed_blackbox_check_keeps_the_verdict_path(monkeypatch):
+    from cairnwork.blackbox_judge import CheckVerdict
+
+    observation = VerifierObservation("bb", "x/bb.log", "sha256:0", False)  # the check failed
+    verdict = CheckVerdict(observation, "blackbox:c1: MISMATCH: x")
+    ran = _passed_run({"tests/test_x.py::test_other": "passed"})  # every pytest run passed
+    with pytest.raises(_ToCore):  # Core judges the failed check; the new code is not used
+        _judge(monkeypatch, ran, checks=(verdict,))
