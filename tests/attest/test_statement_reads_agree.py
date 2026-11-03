@@ -59,7 +59,9 @@ def test_a_difference_is_named_even_when_the_second_read_is_not_verified(
     real_verdict = record_mod.Notary.verdict
 
     def second_read_changed(self: Any, *args: Any, **kwargs: Any) -> Any:
-        return replace(real_verdict(self, *args, **kwargs), verified=False, status="FAILED")
+        verdict = real_verdict(self, *args, **kwargs)
+        assert verdict is not None
+        return replace(verdict, verified=False, status="FAILED")
 
     monkeypatch.setattr(record_mod.Notary, "verdict", second_read_changed)
     with pytest.raises(RecordMalformed, match="differs between the two reads: status$"):
