@@ -2,7 +2,8 @@
 
 Stripping GIT_* keeps a hook environment (GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE)
 from pointing a command at another repository or index. Hooks, the fsmonitor
-command and the untracked cache are disabled and replace refs are ignored.
+command, configuration-declared hooks and the untracked cache are disabled and replace refs
+are ignored.
 These options are a second line of defence: workers never get a checkout that
 shares Cairnwork's repository (see workspace.py), and Cairnwork never runs git
 inside a worker's repository except to fetch its HEAD.
@@ -58,6 +59,39 @@ _SAFE_OPTIONS = (
     "-c",
     "core.untrackedCache=false",
 )
+
+
+# hook.<friendly-name>.<key> (git 2.54 and later): hooks declared in configuration, which
+# core.hooksPath does not turn off (#737). The friendly name may itself hold dots.
+# The name may also be empty (``[hook ""]``) or hold bytes that are not UTF-8.
+_HOOK_KEY = re.compile(r"hook\.(.*)\.[a-z][a-z0-9-]*", re.DOTALL)
+
+
+def config_hooks_off(repo: Path | str, env: dict[str, str]) -> tuple[str, ...]:
+    """``-c hook.<name>.enabled=false`` for every hook declared in the configuration git reads
+    in repo with env (system, global, repository and GIT_CONFIG_* pairs), to put after
+    _SAFE_OPTIONS. A name that ``-c`` cannot carry (it holds ``=``) is refused, and so is a
+    listing that does not finish (timeout, git not started). The listing is every key, filtered
+    here (a regex in git, under a UTF-8 locale, skips a key that is not UTF-8). When it exits
+    non-zero (no such directory, a malformed file) nothing is added: the command
+    itself reads the same configuration and fails the same way before any hook could run.
+    Names are decoded with surrogateescape, so ``-c`` carries the same bytes back to git (a name
+    that is not UTF-8 is still matched). Listing runs no hook, so it needs no _SAFE_OPTIONS.
+    """
+    try:
+        done = subprocess.run(  # noqa: S603 - fixed git argv, no shell
+            ["git", "-C", str(repo), "config", "--null", "--name-only", "--list"],
+            capture_output=True, timeout=GIT_TIMEOUT_SECONDS, env={**env, "LC_ALL": "C"},
+        )  # fmt: skip
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise GitCommandError("git config (hook listing) failed; refusing to run git") from exc
+    if done.returncode != 0:
+        return ()
+    names = sorted({m.group(1) for k in done.stdout.decode("utf-8", "surrogateescape").split("\0")
+                    if (m := _HOOK_KEY.fullmatch(k))})  # fmt: skip
+    if any("=" in n for n in names):
+        raise GitCommandError("a configuration-declared hook name holds '='; refusing to run git")
+    return tuple(x for n in names for x in ("-c", f"hook.{n}.enabled=false"))
 
 
 # Greedy to the last '@' in the run free of space and tab (newlines count as part of the run, so
@@ -155,7 +189,7 @@ def _exec(
         env["GIT_CONFIG_SYSTEM"] = os.devnull
     try:
         done = subprocess.run(  # noqa: S603 - fixed git argv, no shell
-            ["git", *_SAFE_OPTIONS, "-C", str(repo), *args],  # noqa: S607
+            ["git", *_SAFE_OPTIONS, *config_hooks_off(repo, env), "-C", str(repo), *args],
             check=True,
             input=stdin,
             capture_output=True,
@@ -174,11 +208,13 @@ def _exec(
 
 def hash_blob(repo: Path, data: bytes) -> str:
     """Store data as a blob in repo with no filters, from bytes the caller already read."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     try:
         done = subprocess.run(  # noqa: S603 - fixed git argv, no shell
             [
                 "git",
                 *_SAFE_OPTIONS,
+                *config_hooks_off(repo, env),
                 "-C",
                 str(repo),
                 "hash-object",
@@ -190,7 +226,7 @@ def hash_blob(repo: Path, data: bytes) -> str:
             capture_output=True,
             check=True,
             timeout=GIT_TIMEOUT_SECONDS,
-            env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
+            env=env,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise GitCommandError("git hash-object failed") from exc

@@ -15,9 +15,10 @@ from __future__ import annotations
 
 import re
 import subprocess
-import unicodedata
 from collections.abc import Collection
 from typing import Any
+
+from cairnwork.textclean import replace_hidden
 
 RULE = "git-diff-check"
 MAX_ENTRIES = 5
@@ -35,7 +36,6 @@ KINDS = frozenset(
 )
 CONFLICT_MARKER = "leftover conflict marker"
 _HEADER = re.compile(r"([^+\n].*):(\d+): ([^\n]+)")
-_UNSAFE_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
 
 
 def _known_kind(kind: str) -> bool:
@@ -46,7 +46,7 @@ def _known_kind(kind: str) -> bool:
 
 
 def _clean(text: str) -> str:
-    return "".join(c for c in text if unicodedata.category(c) not in _UNSAFE_CATEGORIES)
+    return replace_hidden(text, "")
 
 
 def diff_check_detail(base: str, cause: BaseException | None, paths: Collection[str]) -> str:

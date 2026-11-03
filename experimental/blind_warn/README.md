@@ -10,8 +10,12 @@ python -m experimental.blind_warn.cli --ticket ISSUE.md --base <git checkout> \
     --candidate-diff cand.patch --state <cairnwork state> [--model claude-sonnet-5-5] [--out r.json]
 ```
 
-Output JSON: `{"warn", "a", "b", "line", "cost_usd", "error"}`; `a`/`b` hold `written`, `failed`
-and `undecided`. `line` is empty when there is nothing to say.
+Output JSON: `{"warn", "a", "b", "line", "cost_usd", "error"}`; `a`/`b` hold `written`, `failed`,
+`undecided`, and `failed` split in two by the base run: `regression` (passed on the base, fails on
+the candidate) and `not_fixed` (did not pass on the base either: a test written from the ticket is
+meant to fail on the base, so the candidate did not fix it, or the test is wrong). The split is for
+display and counting only; `warn` does not depend on it. `line` names the failing functions and
+the count of each kind, and is empty when there is nothing to say.
 
 Rules
 - Step 1 reads the repository conventions (prompts/BRIEF-conv.md); step 2 writes A and B from the
