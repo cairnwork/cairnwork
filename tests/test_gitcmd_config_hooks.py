@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from cairnwork import gitcmd
 from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork_attest.publish import _git
 
@@ -84,3 +85,32 @@ def test_a_hook_name_with_an_equals_sign_is_refused(tmp_path: Path) -> None:
     proc = _git(repo, "update-ref", "refs/y", head)
     assert proc.returncode != 0 and "'='" in proc.stderr
     assert not marker.exists()
+
+
+def test_a_hook_name_that_is_not_utf8_does_not_run(tmp_path: Path) -> None:
+    repo, marker, head = _repo(tmp_path)
+    for key, value in (
+        (b"event", b"reference-transaction"),
+        (b"command", f"touch {marker}".encode()),
+    ):
+        subprocess.run(
+            [b"git", b"-C", bytes(repo), b"config", b"hook.n\xff." + key, value], check=True
+        )
+    run_git(repo, "update-ref", "refs/x", head)
+    assert not marker.exists()
+
+
+def test_a_listing_that_cannot_run_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo, marker, head = _repo(tmp_path)
+    real = gitcmd.subprocess.run
+
+    def no_listing(argv, **kw):  # the listing times out; every other call is real
+        if "--get-regexp" in argv:
+            raise subprocess.TimeoutExpired(argv, 1)
+        return real(argv, **kw)
+
+    monkeypatch.setattr(gitcmd.subprocess, "run", no_listing)
+    with pytest.raises(GitCommandError, match="hook listing"):
+        run_git(repo, "update-ref", "refs/x", head)
+    assert subprocess.run(["git", "-C", str(repo), "rev-parse", "-q", "--verify", "refs/x"],
+                          capture_output=True).returncode != 0  # fmt: skip

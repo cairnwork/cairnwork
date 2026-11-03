@@ -21,7 +21,9 @@ def test_a_failing_push_reports_gits_stderr(repo, tmp_path):
 
 
 def test_a_failure_without_stderr_keeps_the_short_message(monkeypatch, tmp_path):
-    def boom(*a, **kw):
+    def boom(argv, **kw):  # the hook listing finds none; the command itself times out
+        if "--get-regexp" in argv:
+            return subprocess.CompletedProcess(argv, 1, b"", b"")
         raise subprocess.TimeoutExpired("git", 1)
 
     monkeypatch.setattr(gitcmd.subprocess, "run", boom)
@@ -67,7 +69,9 @@ def test_stderr_tail_redacts_a_tab_inside_the_userinfo():
     [("-c", "x=y", "--no-pager", "push"), ("-C", "p", "push"), ("-c", "x=y", "-C", "p", "push")],
 )
 def test_the_error_names_the_subcommand_not_a_leading_option_value(monkeypatch, tmp_path, args):
-    def boom(*a, **kw):
+    def boom(argv, **kw):  # the hook listing finds none; the command itself times out
+        if "--get-regexp" in argv:
+            return subprocess.CompletedProcess(argv, 1, b"", b"")
         raise subprocess.TimeoutExpired("git", 1)
 
     monkeypatch.setattr(gitcmd.subprocess, "run", boom)

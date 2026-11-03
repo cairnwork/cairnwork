@@ -69,20 +69,23 @@ _HOOK_KEY = re.compile(r"hook\.(.+)\.[a-z]+", re.DOTALL)
 def config_hooks_off(repo: Path | str, env: dict[str, str]) -> tuple[str, ...]:
     """``-c hook.<name>.enabled=false`` for every hook declared in the configuration git reads
     in repo with env (system, global, repository and GIT_CONFIG_* pairs), to put after
-    _SAFE_OPTIONS. A name that ``-c`` cannot carry (it holds ``=``) is refused. When git cannot
-    list the configuration (no such directory, a malformed file) nothing is added: the command
+    _SAFE_OPTIONS. A name that ``-c`` cannot carry (it holds ``=``) is refused, and so is a
+    listing that does not finish (timeout, git not started). When git lists and exits non-zero
+    (1: no hook declared; no such directory, a malformed file) nothing is added: the command
     itself reads the same configuration and fails the same way before any hook could run.
+    Names are decoded with surrogateescape, so ``-c`` carries the same bytes back to git (a name
+    that is not UTF-8 is still matched). Listing runs no hook, so it needs no _SAFE_OPTIONS.
     """
     try:
         done = subprocess.run(  # noqa: S603 - fixed git argv, no shell
             ["git", "-C", str(repo), "config", "--null", "--name-only", "--get-regexp", "^hook[.]"],
             capture_output=True, timeout=GIT_TIMEOUT_SECONDS, env=env,
         )  # fmt: skip
-    except (OSError, subprocess.SubprocessError):
-        return ()
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise GitCommandError("git config (hook listing) failed; refusing to run git") from exc
     if done.returncode != 0:
         return ()
-    names = sorted({m.group(1) for k in done.stdout.decode("utf-8", "replace").split("\0")
+    names = sorted({m.group(1) for k in done.stdout.decode("utf-8", "surrogateescape").split("\0")
                     if (m := _HOOK_KEY.fullmatch(k))})  # fmt: skip
     if any("=" in n for n in names):
         raise GitCommandError("a configuration-declared hook name holds '='; refusing to run git")
