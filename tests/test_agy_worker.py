@@ -376,3 +376,31 @@ def test_an_error_without_a_status_line_says_so(tmp_path):
     worker, workdir, _ = _dispatched(tmp_path, "sys.exit(3)")
     with pytest.raises(AgyWorkerError, match="exited 3; no dispatcher status"):
         worker.run(workdir, TASK)
+
+
+def test_an_exception_between_start_and_await_stops_agys_group(tmp_path, monkeypatch):
+    started = []
+    real_popen = subprocess.Popen
+    agy = fake_agy(tmp_path, "import time\ntime.sleep(60)")
+
+    class Popen(real_popen):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            if isinstance(self.args, list) and self.args[0] == agy:  # not the sweep's ps calls
+                started.append(self.pid)
+
+    class Boom(BaseException):
+        pass
+
+    def no_thread(*args, **kwargs):
+        raise Boom
+
+    monkeypatch.setattr(agy_module.subprocess, "Popen", Popen)
+    monkeypatch.setattr(agy_module.threading, "Thread", no_thread)
+    workdir = tmp_path / attempt(40)
+    workdir.mkdir()
+    with pytest.raises(Boom):
+        AgyWorker(agy=agy).run(workdir, TASK)
+    assert len(started) == 1
+    with pytest.raises(ProcessLookupError):  # the stand-in's own group is gone
+        os.killpg(started[0], 0)
