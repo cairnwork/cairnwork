@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import stat
+import unicodedata
 import urllib.request
 import uuid
 from collections.abc import Callable
@@ -80,6 +81,11 @@ def _tokens(text: str) -> set[str]:
     return {word.lower() for word in re.findall(r"[A-Za-z_]{4,}", text)}
 
 
+def _is_hidden(ch: str) -> bool:
+    cat = unicodedata.category(ch)  # C*: control, format, surrogate, private, unassigned
+    return cat.startswith("C") or cat in ("Zl", "Zp")
+
+
 def repo_context(base: Path, ticket: str) -> str:
     """Tracked text files of the base, those that share the most words with the ticket first."""
     listing = run_git_bytes(base, "ls-tree", "-r", "-z", "HEAD")  # same source as the blobs
@@ -92,7 +98,7 @@ def repo_context(base: Path, ticket: str) -> str:
             name = raw.decode("utf-8")
         except UnicodeDecodeError:
             continue  # a name that is not text is skipped, never a failure of the whole listing
-        if any(ord(c) < 0x20 or ord(c) == 0x7F for c in name):
+        if any(_is_hidden(c) for c in name):
             skipped += 1  # a control character in a name could fake a header line in the prompt
             continue
         names.append(name)
