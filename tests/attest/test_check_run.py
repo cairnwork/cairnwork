@@ -260,7 +260,7 @@ def test_summary_exact_verified_status(status: str) -> None:
 
 @pytest.mark.parametrize(
     "status",
-    ["VERIFIED_RECORD_MISMATCH", "VERIFIED_RECORD_INVALID", "VERIFIEDX", "VERIFIED-ish"],
+    ["VERIFIED_RECORD_FORGED", "VERIFIED_RECORD_TAMPERED", "VERIFIEDX", "VERIFIED-ish"],
 )
 def test_summary_prefix_only_status_not_verified(status: str) -> None:
     from cairnwork_attest.checkrun import build_summary
