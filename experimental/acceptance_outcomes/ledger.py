@@ -10,7 +10,6 @@ casebook). #772 will replace identity sourcing.
 from __future__ import annotations
 
 import hashlib
-import json
 from pathlib import Path
 from typing import Any
 
@@ -49,8 +48,6 @@ def _notary_state(verdict: str, call: dict[str, Any], result: dict[str, Any], db
         if verdict != "VERIFIED" and exc.code == "RECORD_NOT_FOUND":
             return "no_notary_row"
         raise OutcomesError("OUTCOME_RECORD_MISMATCH", f"notary row: {exc.code}") from exc
-    if verdict not in ("VERIFIED", "FAILED"):
-        raise OutcomesError("OUTCOME_RECORD_MISMATCH", f"{verdict} call has a notary row")
     if rec.candidate_commit != call["candidate"] or rec.base_commit != call["base"]:
         raise OutcomesError("OUTCOME_RECORD_MISMATCH", "candidate or base differs from notary row")
     if rec.status != verdict:
@@ -73,17 +70,10 @@ def record_call(
     call["task_id"], call["attempt_id"] = result.get("task_id", ""), result.get("attempt_id", "")
     state = _notary_state(verdict, call, result, notary_db)
     call["no_notary_row"] = state == "no_notary_row"
-    # Every distinct verify output is its own call (reason and the whole output are in the key);
-    # recording the byte-identical output again for the same inputs is a replay: DUPLICATE. Two
-    # real calls with identical output can be told apart with the optional ``call_ref``.
-    digest = hashlib.sha256(json.dumps(result, sort_keys=True).encode()).hexdigest()
-    key = (
-        "|".join(str(call[k]) for k in sorted(call))
-        + "|"
-        + digest
-        + "|"
-        + inputs.get("call_ref", "")
-    )
+    # The key holds every recorded field including the reason, so the same inputs refused for two
+    # reasons are two calls; the same output recorded again is a replay (DUPLICATE). Two real calls
+    # with identical output can be told apart with the optional ``call_ref``.
+    key = "|".join(str(call[k]) for k in sorted(call)) + "|" + inputs.get("call_ref", "")
     call["call_id"] = "c" + hashlib.sha256(key.encode()).hexdigest()[:12]
 
     def build(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
