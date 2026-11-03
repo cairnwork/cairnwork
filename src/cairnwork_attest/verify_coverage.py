@@ -23,18 +23,21 @@ from __future__ import annotations
 from typing import Any
 
 from cairnwork.deferred_tests import TestCommitRejected, new_tests, untargeted
+from cairnwork.issue_task import test_target
 from cairnwork_attest.binding_extras import required_ids
 from cairnwork_attest.verify_response import VerifyResult, _fail
 
 _PYTEST = ["python3", "-m", "pytest"]
 _FLAGS = frozenset({"-q"})
 _PAIRS = {"-p": "no:cacheprovider"}
+_TARGET = test_target(None)  # the producer's target grammar, under any plain directory
 
 
 def targets(argv: list[str]) -> tuple[str, ...]:
     """The targets of one bound argv in the one shape the producer accepts
     (verifier_spec.parse_verifier): ``python3 -m pytest`` with ``-q`` and ``-p no:cacheprovider``
-    as the only options. Any other argv names no target, so it covers nothing."""
+    as the only options, and every target in the producer's grammar (issue_task.test_target).
+    Any other argv names no target, so it covers nothing."""
     if argv[:3] != _PYTEST:
         return ()
     rest, found = argv[3:], []
@@ -43,7 +46,7 @@ def targets(argv: list[str]) -> tuple[str, ...]:
             rest = rest[1:]
         elif rest[0] in _PAIRS and rest[1:2] == [_PAIRS[rest[0]]]:
             rest = rest[2:]
-        elif rest[0].startswith("-"):
+        elif rest[0].startswith("-") or not _TARGET.fullmatch(rest[0]):
             return ()
         else:
             found.append(rest.pop(0))

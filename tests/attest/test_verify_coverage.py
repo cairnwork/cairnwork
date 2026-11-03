@@ -72,11 +72,14 @@ def test_receipt_needs_a_target_for_each_bound_test_file(tmp_path, mode):
 
 
 @pytest.mark.parametrize("mode", ["full", "confidential"])
-def test_receipt_refuses_a_case_on_a_file_as_naming_that_file(tmp_path, mode):
-    """The producer grammar refuses tests/test_a.py[x]; the receiver must not read it as the
-    whole file (#714)."""
-    odd = [["pytest-0", [*PYTEST, "tests/test_new.py", "tests/test_a.py[x]"]]]
-    assert _verify(tmp_path, odd, mode) == "TEST_PATH_NOT_TARGETED"
+@pytest.mark.parametrize(
+    "odd", ["tests/test_a.py[x]", "tests/test_a.py::test_a[x", "tests/test_a.py::test_a[x]::y"]
+)
+def test_receipt_refuses_a_target_outside_the_producer_grammar(tmp_path, mode, odd):
+    """The producer refuses these targets; the receiver must not read them as naming a file or a
+    test (#714)."""
+    one = [["pytest-0", [*PYTEST, "tests/test_new.py", odd]]]
+    assert _verify(tmp_path, one, mode) == "TEST_PATH_NOT_TARGETED"
 
 
 @pytest.mark.parametrize("mode,code", [("full", "TEST_PATH_NOT_TARGETED"), ("confidential", "OK")])
@@ -104,6 +107,10 @@ def test_targets_are_read_from_the_one_argv_shape_the_producer_accepts():
     assert targets([*PYTEST, "-k", "x", "tests/test_a.py"]) == ()
     assert targets([*PYTEST, "-p", "other", "tests/test_a.py"]) == ()
     assert targets(["pytest", "tests/test_a.py"]) == ()
+    # the producer grammar applies here too (#714): one bad target covers nothing
+    assert targets([*PYTEST, "tests/test_a.py::test_a[x]"]) == ("tests/test_a.py::test_a[x]",)
+    for bad in ("tests/test_a.py::test_a[x", "tests/test_a.py::test_a[x]::y", "tests/test_a.py[x]"):
+        assert targets([*PYTEST, "tests/test_new.py", bad]) == ()
 
 
 # #660: what the target names alone do not show, read from the test commit (full mode)
