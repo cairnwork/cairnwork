@@ -114,6 +114,9 @@ def _cmd_statement(args: argparse.Namespace) -> int:
     return 0
 
 
+UNVERIFIED_BUNDLE_FIELDS = ("base", "core_status", "keyid", "statement_sha256", "test_source")
+
+
 def _print_json(
     *,
     ok: bool,
@@ -139,6 +142,9 @@ def _print_json(
         "statement_sha256": statement_sha256,
         "test_source": test_source,
     }
+    if not ok:
+        # Values read from the bundle itself; a failed verify did not vouch for them.
+        obj["unverified_fields"] = list(UNVERIFIED_BUNDLE_FIELDS)
     print(json.dumps(obj, sort_keys=True, separators=(",", ":")))
 
 
