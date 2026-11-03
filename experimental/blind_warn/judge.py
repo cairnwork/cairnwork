@@ -139,9 +139,9 @@ def repo_context(base: Path, ticket: str) -> str:
     """Tracked text files of the base, those that share the most words with the ticket first.
 
     The same files and text as reading each blob in rank order (``git show``), decoding it as
-    UTF-8 (a file that is not is skipped), keeping its first MAX_FILE_BYTES bytes (whole characters) and adding
-    it while the total stays within CONTEXT_BYTES bytes; but a blob is read only when it could still fit
-    (its size bounds its length in bytes), and blobs are read
+    UTF-8 (a file that is not is skipped), keeping its first MAX_FILE_BYTES bytes (whole
+    characters) and adding it while the total stays within CONTEXT_BYTES bytes; but a blob is read
+    only when it could still fit (its size bounds its length in bytes), and blobs are read
     ``_BATCH`` at a time with one git call each, so a large repository costs a few calls, not one
     per file.
     """
