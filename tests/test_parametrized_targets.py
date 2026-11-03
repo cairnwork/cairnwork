@@ -1,5 +1,6 @@
 """#714: a verifier target may name one case of a parametrized test (``test_x.py::test_y[case]``),
-the case text being anything but newline, NUL and ``]``, in one group at the end."""
+one group at the end; #722: the case text is printable only (``str.isprintable()`` plus the
+space) and holds no square bracket."""
 
 import sys
 from types import SimpleNamespace
@@ -35,6 +36,12 @@ BAD = (
     "tests/test_x.py::test_y[a[b]",
     "tests/test_x.py::test_y[a\x1bb]",
     "tests/test_x.py::test_y[a\x7fb]",
+    "tests/test_x.py::test_y[a\tb]",
+    "tests/test_x.py::test_y[a\rb]",
+    "tests/test_x.py::test_y[a\u202eb]",
+    "tests/test_x.py::test_y[a\u200bb]",
+    "tests/test_x.py::test_y[a\ufeffb]",
+    "tests/test_x.py::test_y[a\xa0b]",
     "tests/test_x.py::test_y[a\x85b]",
     "tests/test_x.py::test_y[a\u2028b]",
     "tests/test_x.py::test_y[a\u2029b]",
@@ -108,3 +115,15 @@ def test_a_parametrized_target_runs_exactly_that_case(repo, tmp_path):
     (run,) = run_verifiers(ctx, head, (gone,), "r2")
     assert run.returncode not in (0, 1), run.returncode
     assert base_comparison([run], frozenset({"tests/test_x.py::test_y"})).kind == "UNCOMPARABLE"
+
+
+def test_the_case_text_is_printable_by_the_repository_definition():
+    """Every code point the grammar lets into the case text is str.isprintable() or a space;
+    everything else is refused (#722), one code point at a time over the first 65,536."""
+    from cairnwork.issue_task import test_target
+
+    target = test_target(("tests",))
+    for code in range(0x10000):
+        ch = chr(code)
+        expected = (ch == " " or ch.isprintable()) and ch not in "[]"
+        assert target.fullmatch(f"tests/test_x.py::test_y[a{ch}b]") is expected, hex(code)

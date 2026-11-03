@@ -192,18 +192,32 @@ def _check_path(path: Any) -> None:
         raise IssueRefused(*refusal)
 
 
-def test_target(roots: tuple[str, ...] | None) -> re.Pattern[str]:
+class _Target:
+    """``test_target``'s matcher: the grammar as a regex, then the case text must be printable."""
+
+    def __init__(self, pattern: re.Pattern[str]) -> None:
+        self._pattern = pattern
+
+    def fullmatch(self, target: str) -> bool:
+        match = self._pattern.fullmatch(target)
+        if match is None:
+            return False
+        case = match.group("case")
+        return case is None or all(ch == " " or ch.isprintable() for ch in case)
+
+
+def test_target(roots: tuple[str, ...] | None) -> _Target:
     """A verifier target: a .py file under one of the test roots (None: any plain directory),
     with optional ::node ids, the last of which may name one parametrized case (``[<param>]``,
-    one group at the end): the text may hold anything but a control character (C0, DEL, C1),
-    a line or paragraph separator (U+2028, U+2029) or a square bracket (#722). Format
-    characters (zero-width, bidirectional marks) are not refused here: pytest escapes them in
-    ids, so such a target matches nothing and the run fails closed. Argv reaches pytest
-    without a shell."""
+    one group at the end). The case text is printable only, by ``str.isprintable()`` plus the
+    space (the repository's definition, as in p2p and blackbox_judge): no control, format,
+    separator (other than space), surrogate, private-use or unassigned character, and no square
+    bracket, so ``[a[b]`` and ``[a[b]]`` are refused (#714, #722). Argv reaches pytest without a
+    shell."""
     name = r"[A-Za-z0-9_\-]+"
     top = r"[A-Za-z0-9_][A-Za-z0-9_\-]*" if roots is None else "|".join(map(re.escape, roots))
-    case = r"(?:::[A-Za-z0-9_\-]+)+(?:\[[^\]\[\x00-\x1f\x7f-\x9f\u2028\u2029]*\])?"
-    return re.compile(rf"(?:{top})/(?:{name}/)*{name}\.py(?:{case})?")
+    case = r"(?:::[A-Za-z0-9_\-]+)+(?:\[(?P<case>[^\]\[\n\0]*)\])?"
+    return _Target(re.compile(rf"(?:{top})/(?:{name}/)*{name}\.py(?:{case})?"))
 
 
 _PART = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_\-]*")
