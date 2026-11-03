@@ -141,7 +141,8 @@ _NOT_PINNED = "the candidate named in the bundle only, base, policy and Core ide
 
 def _is_verified(offline: str) -> bool:
     """Exact status match (#778): the word VERIFIED alone, or followed by a space (protection
-    level) or a comma ("VERIFIED, signature only"). A longer code such as VERIFIED_RECORD_* is not."""
+    level) or a comma ("VERIFIED, signature only"). A longer code such as
+    VERIFIED_RECORD_* is not."""
     return offline == "VERIFIED" or offline.startswith(("VERIFIED ", "VERIFIED,"))
 
 
