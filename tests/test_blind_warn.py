@@ -263,7 +263,7 @@ def _spy_prompts(case):
     return "\n".join(prompts)
 
 
-@pytest.mark.parametrize("name", ["說明文件.md", 'say "hi".md', "with space.md"])
+@pytest.mark.parametrize("name", ["說明文件.md", 'say "hi".md', "with space.md", "café.md"])
 def test_files_with_quoted_or_non_ascii_names_are_listed(case, name):
     (case.base / name).write_text("MARKER-" + str(abs(hash(name))))
     commit_change(case.base, {})
@@ -352,7 +352,7 @@ def test_a_name_that_looks_like_a_file_header_is_skipped(case):
     assert "--- SKIPPED: 1 file names with control characters" in text
 
 
-@pytest.mark.parametrize("char", ["\x7f", "\x1b", "\t", "\r"])
+@pytest.mark.parametrize("char", ["\x7f", "\x1b", "\t", "\r", "\x1f", "\x85", "\u2028", "\u202e"])
 def test_other_control_characters_in_a_name_are_skipped(case, char):
     (case.base / f"bad{char}name.md").write_text("BAD-TEXT")
     commit_change(case.base, {})
