@@ -63,7 +63,7 @@ import secrets
 import sys
 import tempfile
 from contextlib import nullcontext
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
 
@@ -129,6 +129,7 @@ class VerifierRun:
     recorded: bool = False  # the guard's record was there and well-formed (base_comparison, #234)
     collect_errors: tuple[str, ...] = ()  # collectors the guard saw fail (B2, #234)
     teardown_errors: tuple[str, ...] = ()  # tests whose teardown failed (#478, report_guard)
+    fail_kind: dict[str, str] = field(default_factory=dict)  # #775: node -> "setup" | "env"
     forged: tuple[str, ...] = ()  # FORGED_BYTECODE findings (#289): a base run proves nothing
     log_too_big: bool = False  # the run's log went over MAX_LOG_BYTES (#481, base_comparison)
     why: str = ""  # in words, why the run did not pass ("" when it passed): reasons.py
@@ -327,7 +328,7 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
         ran_sandboxed=profile is not None, returncode=returncode, timed_out=timed_out,
         mutated=mutated, survivors=survivors, log_too_big=too_big, tests_ran=ran,
         report_too_big=verdict.too_big, forged=forged, not_run=not_run, renamed=verdict.renamed,
-        exitstatus=verdict.exitstatus, testsfailed=verdict.testsfailed,
+        exitstatus=verdict.exitstatus, testsfailed=verdict.testsfailed, fail_kind=verdict.fail_kind,
     )  # fmt: skip
     digest = _record_digest(
         candidate_commit=candidate_commit,
@@ -349,8 +350,8 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
     )
     return VerifierRun(
         spec, returncode, timed_out, mutated, log_path, observation, verdict.outcomes,
-        survivors=survivors, ran=ran, plain_failure=plain_failure, why=why,
+        survivors=survivors, ran=ran, plain_failure=plain_failure, why=why, forged=forged,
         report_too_big=verdict.too_big, notes=(profile.notes if profile else ()) + host_notes(),
         recorded=verdict.recorded, collect_errors=verdict.collect_errors,
-        teardown_errors=verdict.teardown_errors, forged=forged, log_too_big=too_big,
+        teardown_errors=verdict.teardown_errors, fail_kind=verdict.fail_kind, log_too_big=too_big,
     )  # fmt: skip

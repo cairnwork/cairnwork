@@ -28,6 +28,13 @@ def _names(names) -> str:
     return f"{len(items)}: {', '.join(shown)}" + (f", +{more} more" if more > 0 else "")
 
 
+def _kind_causes(fail_kind) -> list[str]:
+    """#775: a test that failed in fixture setup or with an OSError (report_guard's
+    ``fail_kind``). Wording only: the verdict stays FAILED and nothing parses it."""
+    said = {"setup": "setup error in", "env": "environment error (OSError) in"}
+    return [f"{said[kind]} {_names([node])[3:]}" for node, kind in fail_kind.items()][:MAX_NAMES]
+
+
 def verdict_reason(verified: bool, verdict, recorded) -> str:
     """The reason string for a judged attempt. A verified attempt reads ``CORE_<status>``. Otherwise
     the readback's reason is shown (``recorded`` when present, so an unverified readback never reads
@@ -45,7 +52,7 @@ def verdict_reason(verified: bool, verdict, recorded) -> str:
 def why_not_passed(
     *, ran_sandboxed: bool, returncode, timed_out: bool, mutated, survivors: int,
     log_too_big: bool, tests_ran: bool, report_too_big: bool = False, forged=(), not_run=(),
-    renamed=(), exitstatus=None, testsfailed=None,
+    renamed=(), exitstatus=None, testsfailed=None, fail_kind=None,
 ) -> str:  # fmt: skip
     """The causes that made a run fail, ``""`` if none (then the run passed)."""
     causes = []
@@ -81,6 +88,7 @@ def why_not_passed(
         )
     if ran_sandboxed and not timed_out and returncode != 0:
         causes.append(f"pytest exit code {returncode}")
+        causes.extend(_kind_causes(fail_kind or {}))
     elif ran_sandboxed and returncode == 0 and not tests_ran and not_run:
         causes.append(
             f"pytest passed but no test ran for a target or skipped module ({_names(not_run)})"

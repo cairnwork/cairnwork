@@ -141,6 +141,8 @@ class _Reporter:
         self._collect_errors = []
         self._collect_skipped = []
         self._teardown_errors = []
+        self._setup_failed = []  # #775: fixture raised before the body
+        self._env_ok = {}  # #775: node -> every failed call raised an OSError so far
 
     def pytest_collectreport(self, report):
         if report.failed:
@@ -184,8 +186,14 @@ class _Reporter:
         nodeid, _ = _original(self, item, report.nodeid)
         if report.when == "call":  # #570: one per sub-test, then the test's own
             _keep_worst(self, nodeid, report.outcome)
+            if report.failed:  # #775: an OSError says "environment", never a plain test failure
+                info = call.excinfo
+                oserr = info is not None and info.errisinstance(OSError)
+                self._env_ok[nodeid] = self._env_ok.get(nodeid, True) and oserr
         elif report.when == "setup" and report.outcome in ("skipped", "failed"):
             _keep_worst(self, nodeid, report.outcome)
+            if report.failed:  # a skip in a fixture is not an error
+                self._setup_failed.append(nodeid)
         elif report.when == "teardown" and report.failed:  # #478: a fixture raised after yield
             self._outcomes[nodeid] = "failed"
             self._teardown_errors.append(nodeid)
@@ -196,7 +204,10 @@ class _Reporter:
         os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
     )):
         dumps, dump, ftruncate, pwrite, open_, fdopen, chmod, flags = _io
-        payload = {"nonce": self._nonce, "collected": self._collected, "outcomes": self._outcomes,
+        kind = {n: "env" for n, ok in self._env_ok.items() if ok}
+        kind.update(dict.fromkeys(self._setup_failed, "setup"))
+        payload = {"nonce": self._nonce, "fail_kind": kind,
+                   "collected": self._collected, "outcomes": self._outcomes,
                    "files": self._files, "file_of": self._file_of,
                    "renamed": list(dict.fromkeys(self._renamed)),
                    "collect_errors": self._collect_errors,
@@ -301,6 +312,11 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
     renamed = data.get("renamed", [])
     teardown = data.get("teardown_errors", [])
     files = data.get("files", [])
+    kind = data.get("fail_kind", {})  # #775: node -> "setup" | "env", only nodes in outcomes
+    if not isinstance(kind, dict) or not all(
+        n in outcomes and v in ("setup", "env") for n, v in kind.items()
+    ):
+        return Verdict(False, {})
     file_of = data.get("file_of")  # absent: no test owns a named target
     status = (data.get("exitstatus"), data.get("testsfailed"))  # exact ints: no bool, no None
     if not all(type(n) is int for n in status):
@@ -336,6 +352,7 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
         collect_skipped=tuple(skipped),
         renamed=tuple(renamed),
         teardown_errors=tuple(teardown),
+        fail_kind=kind,
         paths=_sources(collected, files, file_of or ()),
         exitstatus=status[0],
         testsfailed=status[1],

@@ -20,6 +20,9 @@ class Verdict:
     # #478: tests whose teardown failed. A shared fixture's finalizer runs at its last user's
     # teardown, so the node named is where the error landed, not the test that owns the fixture
     teardown_errors: tuple[str, ...] = ()
+    # #775: why a failed node failed: "setup" (a fixture raised before the body) or "env" (every
+    # failed call raised an OSError). Absent: an ordinary test failure. ``outcomes`` are unchanged.
+    fail_kind: dict[str, str] = field(default_factory=dict)
     exitstatus: int | None = None  # pytest's own session status, as recorded (#276)
     testsfailed: int | None = None  # pytest's own count of failed tests, as recorded
 

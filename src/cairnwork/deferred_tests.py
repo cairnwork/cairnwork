@@ -27,6 +27,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from cairnwork.base_teeth import base_teeth
 from cairnwork.deferred_nodes import test_functions
 from cairnwork.gitcmd import OID, GitCommandError, run_git
 from cairnwork.issue_task import test_target
@@ -333,10 +334,9 @@ def base_comparison(runs, targets: frozenset[str]) -> Comparison:
         return Comparison(
             "NOT_RUN", "DEFERRED_TESTS_NOT_RUN", f"no verifier collected or ran {missing}"
         )
-    for run in runs:
-        for nodeid, outcome in run.outcomes.items():
-            if outcome == "failed" and nodeid.split("[", 1)[0] in targets:
-                return Comparison("TEETH")
+    verdict = base_teeth(runs, targets)  # #775: a fixture or OSError failure is not teeth
+    if verdict[0] != "NO_TEETH":
+        return Comparison(*verdict)
     codes = [run.returncode for run in runs]
     return Comparison("NO_TEETH", "TESTS_DO_NOT_FAIL_ON_BASE", f"pytest exit codes {codes}")
 
