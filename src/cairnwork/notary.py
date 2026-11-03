@@ -41,7 +41,15 @@ from cairnwork.changeset import GitChangeSet, read_change_set, read_tree_change_
 from cairnwork.core_request import AcceptanceSpec, VerifierObservation, build_core_request
 from cairnwork.deferred_tests import TestCommitRejected, overlay_tree
 from cairnwork.gitcmd import GitCommandError, run_git
-from cairnwork.notary_schema import MIGRATIONS, SCHEMA, SCHEMA_VERSION
+from cairnwork.notary_errors import (  # noqa: F401  re-exported: callers import these from here
+    AttemptRequestMismatch,
+    NotaryError,
+    NotaryInputError,
+    NotarySchemaMismatch,
+    NotarySchemaOlder,
+    schema_refusal,
+)
+from cairnwork.notary_schema import SCHEMA, SCHEMA_VERSION
 from cairnwork.notary_verify import (  # readback helpers, split out for the 400-line cap
     CORE_ERROR,
     _columns_match,
@@ -61,51 +69,6 @@ from cairnwork_protocol import (
 
 CoreVerify = Callable[[dict[str, Any]], tuple[int, dict[str, Any]]]
 _OID = re.compile(r"^[0-9a-f]{40}$")
-
-
-class NotaryError(Exception):
-    code = "NOTARY_ERROR"
-
-    def __init__(self, detail: str = "") -> None:
-        super().__init__(f"{self.code}: {detail}" if detail else self.code)
-
-
-class AttemptRequestMismatch(NotaryError):
-    code = "ATTEMPT_REQUEST_MISMATCH"
-
-
-class NotaryInputError(NotaryError):
-    code = "NOTARY_INPUT_ERROR"
-
-
-class NotarySchemaMismatch(NotaryError):
-    code = "NOTARY_SCHEMA_MISMATCH"
-
-
-class NotarySchemaOlder(NotarySchemaMismatch):
-    """An older schema is never migrated on open (#343): that would be a one-way write that
-    an older deploy pinned to this state could no longer read. notary_migrate does it."""
-
-    code = "NOTARY_SCHEMA_OLDER"
-
-
-def schema_refusal(
-    path: Path, version: int, has_table: bool, objects: bool
-) -> NotarySchemaMismatch | None:
-    """Why the database at path is no notary a run may open, else None: a current notary, or a
-    blank database (version 0, no schema object) that a run makes one. Read by notary_migrate."""
-    if not has_table:  # not ours unless blank: never stamped as a notary (#367)
-        if version or objects:
-            return NotarySchemaMismatch(f"user_version {version} but no notary table")
-        return None
-    if version in MIGRATIONS:  # nothing written: migration is an explicit step (#343)
-        return NotarySchemaOlder(
-            f"user_version {version}, need {SCHEMA_VERSION}; back up and migrate with"
-            f" cairnwork-verify --state {Path(path).parent} migrate-notary"
-        )
-    if version != SCHEMA_VERSION:
-        return NotarySchemaMismatch(f"user_version {version}, need {SCHEMA_VERSION}")
-    return None
 
 
 @dataclass(frozen=True)
