@@ -247,7 +247,7 @@ This guards against a producer bug; a lying signer can write the right ids. Even
 that the checks really ran as blackbox runs remains the signer's claim, like every verifier run
 (`assurance.verifier_runs` is `signer_claim`). A v0.1 receipt (no deferred tests) has no binding and carries no label: its level is
 `protection.level(required_verifier_ids, macos=False)` over the signed request, the coverage
-without a host grade, and nothing in the receipt ties those ids to a declaration.
+without a host grade, and nothing in the receipt ties those ids to a declaration. Cairnwork's own notary, reading a record whose binding states no usable grade, takes the lower grade instead (`protection.level(..., macos=True)` on any reading host, #709): the producing host is unknown, so it never words a record above what that host may have earned. That level only words the PR body and the done comment; strict mode and the attest receiver use their own levels.
 
 **Strict mode** (off by default): `cairnwork-verify run --require-protection` asks for at least
 `"partial_macos"`, so a protected run passes on either host (without `--blackbox` it is refused

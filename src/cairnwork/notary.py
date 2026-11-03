@@ -88,10 +88,11 @@ class Verdict:
 
 
 def _level(request: dict[str, Any], binding: Any) -> str:
-    """The hash-bound request's ids give the level (#700); the binding adds only its host grade."""
+    """The hash-bound request's ids give the level (#700); the binding adds only its host grade.
+    Without one the producing host is unknown: the lower (macOS) grade on any reader (#709)."""
     contract = request.get("acceptance_contract") if isinstance(request, dict) else None
     ids = contract.get("required_verifier_ids") if isinstance(contract, dict) else None
-    found = protection.level(map(str, ids)) if isinstance(ids, list) and ids else ""
+    found = protection.level(map(str, ids), macos=True) if isinstance(ids, list) and ids else ""
     told = binding.get("protection") if isinstance(binding, dict) else ""
     told = told if isinstance(told, str) else ""
     return told if found and protection.coverage(told) == protection.coverage(found) else found
