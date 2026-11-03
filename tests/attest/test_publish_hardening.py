@@ -326,4 +326,28 @@ def test_publish_git_sees_the_production_environment(publish_env) -> None:
     src, _, _ = publish_env
     assert injected_test_git_env(os.environ) == []
     shown = _git(src, "config", "--show-origin", "--list")
-    assert shown.returncode == 0 and "command line:" not in shown.stdout
+    cmdline = [ln for ln in shown.stdout.splitlines() if ln.startswith("command line:")]
+    assert shown.returncode == 0
+    # only the hardening options of gitcmd (#727), nothing from the test environment
+    assert sorted(ln.split("\t")[1] for ln in cmdline) == [
+        "core.fsmonitor=false",
+        "core.hookspath=/dev/null",
+        "core.untrackedcache=false",
+    ]
+
+
+def test_repository_hooks_never_run_during_publish(
+    tmp_path: Path, publish_env: tuple[Path, Path, str], key: Ed25519PrivateKey
+) -> None:
+    """A pre-push (and reference-transaction) hook in the repository is not executed (#727)."""
+    src, bare, candidate = publish_env
+    marker = tmp_path / "hook-ran"
+    (src / ".git" / "hooks").mkdir(exist_ok=True)
+    for name in ("pre-push", "reference-transaction"):
+        hook = src / ".git" / "hooks" / name
+        hook.write_text(f"#!/bin/sh\ntouch '{marker}'\n")
+        hook.chmod(0o755)
+    git(src, "config", "core.hooksPath", str(src / ".git" / "hooks"))
+    bundle_file = _write_bundle(tmp_path, _make_bundle_bytes(candidate, key))
+    assert publish_bundle(bundle_file, src, candidate).code == "PUBLISHED"
+    assert not marker.exists()

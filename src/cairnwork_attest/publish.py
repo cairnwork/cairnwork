@@ -14,6 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from cairnwork.gitcmd import _SAFE_OPTIONS
 from cairnwork_attest.bundle import BundleError, read_bundle
 from cairnwork_attest.record import AttestError, parse_strict_json
 
@@ -47,10 +48,20 @@ class PublishResult:
 
 
 def _git(repo: Path, *args: str, input: bytes | None = None) -> subprocess.CompletedProcess[str]:
-    """Run git with prompts disabled and C-locale messages (stderr is matched)."""
-    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C", "LANGUAGE": "C"}
+    """Run git with prompts disabled and C-locale messages (stderr is matched).
+
+    Same protections as gitcmd: no repository hooks, no fsmonitor, no replace refs, and the
+    caller's GIT_* variables dropped, so the repository cannot run code during a publish.
+    """
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env.update({"GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C", "LANGUAGE": "C"})
     proc = subprocess.run(
-        ["git", *args], cwd=repo, env=env, capture_output=True, check=False, input=input
+        ["git", *_SAFE_OPTIONS, *args],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        check=False,
+        input=input,
     )
     return subprocess.CompletedProcess(
         proc.args,
