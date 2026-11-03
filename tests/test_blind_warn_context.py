@@ -109,3 +109,17 @@ def test_limits_count_bytes_for_non_ascii_files(
     for part in got.split("--- FILE: ")[1:]:
         assert len(part.split("\n", 1)[1].rstrip("\n").encode()) <= 100  # 33 chars, not 100
     assert got.count("--- FILE: ") == 10  # 99 bytes each; 10 fit in 1000 bytes (11 would not)
+
+
+@pytest.mark.parametrize(
+    ("data", "context"),
+    [("中".encode() * 200, 1089), (b"a\r\n" * 40, 1040), (b"a\r\n" * 40, 1190)],
+)
+def test_the_prefilter_never_skips_a_file_that_would_fit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, data: bytes, context: int
+) -> None:
+    monkeypatch.setattr(judge, "CONTEXT_BYTES", context)
+    monkeypatch.setattr(judge, "MAX_FILE_BYTES", 100)
+    monkeypatch.setattr(judge, "_BATCH", 1)
+    repo = _repo(tmp_path, {f"f{i:02}.md": data for i in range(20)})
+    assert judge.repo_context(repo, "") == _reference(repo, "")

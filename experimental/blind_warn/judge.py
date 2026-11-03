@@ -135,6 +135,15 @@ def _cut(text: str, limit: int) -> str:
     return text.encode("utf-8")[:limit].decode("utf-8", "ignore")
 
 
+def _least(size: int) -> int:
+    """A lower bound of the bytes a blob of ``size`` bytes adds to the context.
+
+    Reading text mode turns CRLF into LF, which at worst halves it (``ceil(size / 2)``), and the
+    cut to MAX_FILE_BYTES drops at most 3 bytes of a partial character (``MAX_FILE_BYTES - 3``).
+    """
+    return max(0, min(-(-size // 2), MAX_FILE_BYTES - 3))
+
+
 def repo_context(base: Path, ticket: str) -> str:
     """Tracked text files of the base, those that share the most words with the ticket first.
 
@@ -156,7 +165,7 @@ def repo_context(base: Path, ticket: str) -> str:
         parts.append(f"--- SKIPPED: {skipped} file names with control characters")
     while i < len(ranked):
         # the next files that could still fit; each is decided below on its real text, in order
-        chunk = [f for f in ranked[i : i + _BATCH] if used + min(f[2], MAX_FILE_BYTES)
+        chunk = [f for f in ranked[i : i + _BATCH] if used + _least(f[2])
                  <= CONTEXT_BYTES]  # fmt: skip
         i += _BATCH
         try:
