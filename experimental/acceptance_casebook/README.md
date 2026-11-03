@@ -1,6 +1,10 @@
 # Acceptance casebook (experimental, default off)
 
-Owner and expiry: see OWNER and EXPIRES. Step 1: `add` and `list`.
+Owner and expiry: see OWNER and EXPIRES. Step 1a: `add` and `list`.
+
+This is an experimental record of acceptance mistakes, not a measure of false completion or
+false green: a recorded case is not a confirmed one (independent confirmation is #772), and a
+confirmed case is not evidence that an acceptance change helped (replay is #751 step 3).
 
     python -m experimental.acceptance_casebook add --casebook F --notary-db DB --task-id T \
       --attempt-id A --candidate C --base B --version V --kind accepted_bad|refused_good \
