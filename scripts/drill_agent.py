@@ -137,7 +137,13 @@ def restart(work: Path, model: str) -> dict:
         stderr=subprocess.DEVNULL,
     )
     ledger, notary, journal = stores(work)
-    attempt = _wait_for_agy(child, ledger, journal)
+    try:
+        attempt = _wait_for_agy(child, ledger, journal)
+    except BaseException:
+        if child.poll() is None:
+            os.kill(child.pid, signal.SIGKILL)
+        child.wait()
+        raise
     before = agy_processes(attempt) if attempt else []
     if child.poll() is None:
         os.kill(child.pid, signal.SIGKILL)

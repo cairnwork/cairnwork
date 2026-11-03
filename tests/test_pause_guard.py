@@ -161,8 +161,9 @@ def test_every_write_before_the_plan_is_denied(name, run_root, tmp_path):
 
 @pytest.mark.sandbox
 def test_a_process_left_behind_can_never_write_but_the_plan_can(run_root, tmp_path):
-    """The left-behind process clears its environment and leaves the run root, so local
-    worker's sweep does not find it; it outlives the plan and a writable test run."""
+    """The left-behind process clears its environment, leaves the run root and starts its own
+    session, so neither local worker's sweep nor the job's group stop (#741) reaches it; it
+    outlives the plan and a writable test run."""
     co, tmp = run_root / "checkout", run_root / "tmp"
     tools = _tools(run_root, tmp_path)
     pre = PrePlanGuard(TreeGuard(co), _log(co, tmp_path), tools)
@@ -171,13 +172,23 @@ def test_a_process_left_behind_can_never_write_but_the_plan_can(run_root, tmp_pa
         f'cd /; while [ ! -e "{tmp}/go" ]; do sleep 0.1; done; '
         f'{{ echo "x = 9" > "{co}/src/a.py"; }} 2> "{tmp}/late.err"; echo $? > "{tmp}/late.rc"'
     )
-    _job(run_root, f"/usr/bin/env -i /bin/sh -c '{late}' </dev/null >/dev/null 2>&1 &")
-    pre.run_tests(["-q"])
-    pre.at_plan_arrival()
-    _job(run_root, 'echo "y = 2" > src/b.py')
-    after = tools.run_tests(["-q"])  # after the plan: the writable profile
-    assert after.exit_code == 0 and (co / "src" / "b.py").read_text() == "y = 2\n"
-    (tmp / "go").write_text("")
+    (tmp / "late.sh").write_text(late + "\n")
+    detach = (
+        "import os; os.setsid(); open('$T/detached', 'w').close(); "
+        "os.execv('/usr/bin/env', ['env', '-i', '/bin/sh', '$T/late.sh'])"
+    )
+    # the job ends only once the process has its own session, so the group stop cannot race it
+    wait = 'for _ in $(seq 300); do [ -e "$T/detached" ] && break; sleep 0.1; done'
+    _job(run_root, f'"$PY" -c "{detach}" </dev/null >/dev/null 2>&1 &\n{wait}')
+    try:
+        pre.run_tests(["-q"])
+        assert (tmp / "detached").exists(), "the left-behind process never left the job's group"
+        pre.at_plan_arrival()
+        _job(run_root, 'echo "y = 2" > src/b.py')
+        after = tools.run_tests(["-q"])  # after the plan: the writable profile
+        assert after.exit_code == 0 and (co / "src" / "b.py").read_text() == "y = 2\n"
+    finally:  # the detached loop always ends, even when an assertion above fails
+        (tmp / "go").write_text("")
     for _ in range(300):
         if (tmp / "late.rc").exists() and (tmp / "late.rc").read_text().strip():
             break

@@ -18,6 +18,7 @@ import json
 import os
 import pwd
 import secrets
+import signal
 import subprocess
 import tempfile
 import threading
@@ -107,6 +108,13 @@ def _signal(proc: subprocess.Popen, kill: bool) -> None:
         pass  # setuid sudo may refuse the Owner's signal; the caller sweeps the run instead
 
 
+def _kill_group(proc: subprocess.Popen) -> None:
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (PermissionError, ProcessLookupError):
+        pass  # gone already, or setuid sudo refuses the Owner's signal (the caller sweeps the run)
+
+
 def subprocess_invoker(env: dict[str, str] | None = None) -> Invoker:
     """Run argv with stdout/stderr in temp files (bounded memory, and no hang on a grandchild
     that keeps a pipe open). On timeout: signal, wait briefly, and report exit code None."""
@@ -114,7 +122,13 @@ def subprocess_invoker(env: dict[str, str] | None = None) -> Invoker:
     def invoke(argv: list[str], stdin: bytes | None, timeout: float) -> Invoked:
         with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
             proc = subprocess.Popen(  # noqa: S603 - argv is built here from fixed parts
-                argv, stdin=subprocess.PIPE, stdout=out, stderr=err, env=env, cwd="/"
+                argv,
+                stdin=subprocess.PIPE,
+                stdout=out,
+                stderr=err,
+                env=env,
+                cwd="/",
+                start_new_session=True,
             )
             rc: int | None
             try:
@@ -131,6 +145,8 @@ def subprocess_invoker(env: dict[str, str] | None = None) -> Invoker:
                         proc.wait(timeout=TERM_GRACE_SECONDS)  # reap it: no zombie per timeout
                     except subprocess.TimeoutExpired:
                         pass  # a refused signal; the sweep that follows kills the worker side
+            finally:  # every exit (also an interrupt): the child's group must not outlive the call
+                _kill_group(proc)
             return rc, _captured(out), _captured(err)
 
     return invoke
