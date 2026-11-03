@@ -130,13 +130,18 @@ def _text(blob: bytes) -> str:
     return blob.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
 
 
+def _cut(text: str, limit: int) -> str:
+    """The longest prefix of text that is at most ``limit`` UTF-8 bytes (never half a character)."""
+    return text.encode("utf-8")[:limit].decode("utf-8", "ignore")
+
+
 def repo_context(base: Path, ticket: str) -> str:
     """Tracked text files of the base, those that share the most words with the ticket first.
 
     The same files and text as reading each blob in rank order (``git show``), decoding it as
-    UTF-8 (a file that is not is skipped), keeping its first MAX_FILE_BYTES characters and adding
-    it while the total stays within CONTEXT_BYTES; but a blob is read only when it could still fit
-    (its size bounds its length: a UTF-8 character is 1 to 4 bytes), and blobs are read
+    UTF-8 (a file that is not is skipped), keeping its first MAX_FILE_BYTES bytes (whole characters) and adding
+    it while the total stays within CONTEXT_BYTES bytes; but a blob is read only when it could still fit
+    (its size bounds its length in bytes), and blobs are read
     ``_BATCH`` at a time with one git call each, so a large repository costs a few calls, not one
     per file.
     """
@@ -151,7 +156,7 @@ def repo_context(base: Path, ticket: str) -> str:
         parts.append(f"--- SKIPPED: {skipped} file names with control characters")
     while i < len(ranked):
         # the next files that could still fit; each is decided below on its real text, in order
-        chunk = [f for f in ranked[i : i + _BATCH] if used + min(-(-f[2] // 4), MAX_FILE_BYTES)
+        chunk = [f for f in ranked[i : i + _BATCH] if used + min(f[2], MAX_FILE_BYTES)
                  <= CONTEXT_BYTES]  # fmt: skip
         i += _BATCH
         try:
@@ -160,13 +165,14 @@ def repo_context(base: Path, ticket: str) -> str:
             continue  # as one unreadable blob was skipped before
         for name, oid, _ in chunk:
             try:
-                text = _text(blobs[oid])[:MAX_FILE_BYTES]
+                text = _cut(_text(blobs[oid]), MAX_FILE_BYTES)
             except UnicodeDecodeError:
                 continue
-            if used + len(text) > CONTEXT_BYTES:
+            size = len(text.encode("utf-8"))
+            if used + size > CONTEXT_BYTES:
                 continue
             parts.append(f"--- FILE: {name}\n{text}")
-            used += len(text)
+            used += size
     return "\n".join(parts)
 
 
