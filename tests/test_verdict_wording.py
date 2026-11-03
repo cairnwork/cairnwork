@@ -28,7 +28,9 @@ def test_the_level_comes_from_the_requests_ids_not_the_binding():
     assert _level(same, {"protection": "blackbox"}) == "same_process_only"  # coverage differs
     assert _level(same, {"protection": "bogus"}) == "same_process_only"
     assert _level(both, {"protection": "partial_macos"}) == "partial_macos"  # host grade kept
-    assert _level(both, {"protection": "bogus"}) == protection.level(["blackbox:x", "pytest"])
+    assert _level(both, {"protection": "bogus"}) == protection.level(
+        ["blackbox:x", "pytest"], macos=False
+    )
     assert _level({}, {"protection": "blackbox"}) == ""
     none = {"acceptance_contract": {"required_verifier_ids": []}}
     assert _level(none, {"protection": "bogus"}) == ""  # no ids: never the binding's word
