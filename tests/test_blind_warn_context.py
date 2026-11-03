@@ -45,13 +45,14 @@ def _reference(base: Path, ticket: str) -> str:
     )
     for name in ranked:
         try:
-            text = run_git(base, "show", f"HEAD:{name}")[: judge.MAX_FILE_BYTES]
+            text = run_git(base, "show", f"HEAD:{name}").encode()[: judge.MAX_FILE_BYTES]
+            text = text.decode("utf-8", "ignore")
         except (GitCommandError, UnicodeDecodeError):
             continue
-        if used + len(text) > judge.CONTEXT_BYTES:
+        if used + len(text.encode()) > judge.CONTEXT_BYTES:
             continue
         parts.append(f"--- FILE: {name}\n{text}")
-        used += len(text)
+        used += len(text.encode())
     return "\n".join(parts)
 
 
@@ -96,3 +97,29 @@ def test_a_large_repository_costs_a_few_git_calls(
     # 1 listing + one batch per 200 files while space is left; once full, nothing more is read
     assert commands.count("show") == 0 and commands.count("ls-tree") == 1
     assert commands.count("cat-file") <= -(-(judge.CONTEXT_BYTES // 2000) // judge._BATCH) + 1
+
+
+def test_limits_count_bytes_for_non_ascii_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(judge, "CONTEXT_BYTES", 1000)
+    monkeypatch.setattr(judge, "MAX_FILE_BYTES", 100)
+    repo = _repo(tmp_path, {f"w{i}.md": "中".encode() * 200 for i in range(20)})
+    got = judge.repo_context(repo, "")
+    for part in got.split("--- FILE: ")[1:]:
+        assert len(part.split("\n", 1)[1].rstrip("\n").encode()) <= 100  # 33 chars, not 100
+    assert got.count("--- FILE: ") == 10  # 99 bytes each; 10 fit in 1000 bytes (11 would not)
+
+
+@pytest.mark.parametrize(
+    ("data", "context"),
+    [("中".encode() * 200, 1089), (b"a\r\n" * 40, 1040), (b"a\r\n" * 40, 1190)],
+)
+def test_the_prefilter_never_skips_a_file_that_would_fit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, data: bytes, context: int
+) -> None:
+    monkeypatch.setattr(judge, "CONTEXT_BYTES", context)
+    monkeypatch.setattr(judge, "MAX_FILE_BYTES", 100)
+    monkeypatch.setattr(judge, "_BATCH", 1)
+    repo = _repo(tmp_path, {f"f{i:02}.md": data for i in range(20)})
+    assert judge.repo_context(repo, "") == _reference(repo, "")
