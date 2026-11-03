@@ -5,9 +5,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from cairnwork.textclean import replace_hidden
+
 _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")  # terminal colour and cursor codes, dropped whole
-# other control characters, and the line and bidi overrides gitcmd.stderr_tail drops too
-_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069]")
 _URL_USERINFO = re.compile(r"(?<=://)[^ \t\n]*@")  # credentials in a URL, as gitcmd.stderr_tail
 # header values (any scheme), Bearer tokens and secret-named key=value fields (#366); the value runs
 # to the end of the line, the next whitespace, or '&', so trailing punctuation is masked with it
@@ -46,6 +46,8 @@ def probe_log_tail(path: str | Path | None) -> str:
         if not raw:
             return f"[tail omitted: no complete line in the last {_WINDOW_BYTES // 1024} KB]"
     text = raw.decode("utf-8", errors="replace")
-    text = _URL_USERINFO.sub("", _CONTROL.sub("?", _ANSI.sub("", text).replace("\r\n", "\n")))
+    text = _URL_USERINFO.sub(
+        "", replace_hidden(_ANSI.sub("", text).replace("\r\n", "\n"), keep="\n\t")
+    )
     text = _BEARER.sub(r"\1<redacted>", _HEADER.sub(r"\1<redacted>", text))
     return _FIELD.sub(r"\1<redacted>", text)[-TAIL_CHARS:]
