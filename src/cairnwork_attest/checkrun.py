@@ -136,10 +136,21 @@ def _offline_result(
     return ("VERIFIED, signature only" if outcome.ok else "SIGNATURE_INVALID"), None
 
 
+_NOT_PINNED = "the candidate named in the bundle only, base, policy and Core identity not pinned"
+_UNVERIFIED_NOTE = "The values above are read from the bundle and were not verified by this step."
+
+
 def build_summary(
-    facts: dict[str, Any], offline: str, assurance: Mapping[str, Any] | None = None
-) -> str:
-    """Render the markdown summary; every bundle-derived value is cleaned."""
+    facts: dict[str, Any], offline: str, assurance: Mapping[str, Any] | None = None, *,
+    full: bool = False,
+) -> str:  # fmt: skip
+    """Render the markdown summary; every bundle-derived value is cleaned.
+
+    ``full``: the offline result came from ``verify`` with ``--repo``, which checks the bundle
+    against the candidate it names itself (the commit this run is posted on) and pins nothing
+    else, so the summary says so (#747). A result that is not VERIFIED marks the values as
+    read from the bundle (as #749 did for verify --json).
+    """
     rows = [
         ("Candidate", facts["candidate"]),
         ("Base", facts["base"]),
@@ -148,11 +159,15 @@ def build_summary(
         ("Key id", facts["keyid"]),
         ("Offline verification", offline),
     ]
+    if full and offline.startswith("VERIFIED"):
+        rows.append(("Checked against", _NOT_PINNED))
     if assurance:
         formatted = ", ".join(f"{k}={v}" for k, v in sorted(assurance.items()))
         rows.append(("Assurance", formatted))
     lines = ["Informational attestation report. Not an enforcing check.", ""]
     lines += [f"- {label}: {_clean(value)}" for label, value in rows]
+    if not offline.startswith("VERIFIED"):
+        lines += ["", _UNVERIFIED_NOTE]
     lines += [
         "",
         "Verify offline with `cairnwork-attest verify`. "
@@ -247,7 +262,7 @@ def post_check_run(
     if public_key is None:
         title = "Cairnwork attestation (informational, UNVERIFIED: signature not checked)"
     output = {"title": title, "summary": ""}
-    output["summary"] = build_summary(facts, offline, assurance=assurance)
+    output["summary"] = build_summary(facts, offline, assurance=assurance, full=repo is not None)
     payload: dict[str, Any] = {
         "name": _clean(name),
         "head_sha": candidate,
