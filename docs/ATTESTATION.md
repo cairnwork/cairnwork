@@ -16,6 +16,7 @@ confirming that all integrity invariants hold:
 7. Candidate commit is supplied by the caller and compared independently against the record's candidate commit and notary verdict.
 8. Recomputed `request_hash`: Must equal `"sha256:" + sha256(canonical_json(request))` as computed by the notary.
 9. Recomputed commit bindings: The record's `candidate_commit` must equal `change_set.target_revision` (stripped of `git-commit:` prefix) and `base_commit` must equal `change_set.source_revision` (stripped of `git-commit:` prefix).
+10. The row's base and candidate commits, `request_hash`, `http_status`, `status`, `integrity` and `response` from the first notary read must equal the notary verdict's (the second read); a difference is refused as `RECORD_MALFORMED`, naming the fields. The verdict does not carry `binding` or `recorded_at`, so those two are taken from the first read without this comparison.
 
 If any check fails or the notary verdict is not verified, statement creation is refused:
 `cairnwork-attest statement` prints the error code to stderr and exits 2. The codes (from
