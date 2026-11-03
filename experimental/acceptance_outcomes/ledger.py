@@ -1,0 +1,131 @@
+"""Record acceptance calls and append follow-up events (AC1-AC4).
+
+A call line is written once and never changed; everything later is a separate event line. A
+``finding`` is only a suspicion. It changes the outcome only when a ``confirmation`` by an
+identity independent of the finder is appended. Independence here is a placeholder: the confirmer
+id must differ from the finder id and must not be a declared clone of it (same rule shape as the
+casebook). #772 will replace identity sourcing.
+"""
+
+from __future__ import annotations
+
+import hashlib
+from pathlib import Path
+from typing import Any
+
+from cairnwork_attest.record import AttestError, read_record
+from experimental.acceptance_outcomes.store import OutcomesError, append_checked
+
+VERDICTS = ("VERIFIED", "FAILED", "REFUSED", "UNCOMPARABLE")
+PRE_CORE = "PRE_CORE"
+SOURCES = ("deferred_test", "p2p", "review", "human_use", "later_pr", "user_report")
+VERIFIED_KINDS = ("not_fixed", "regression", "environment", "requirement_changed")
+OTHER_KINDS = ("refused_but_correct",)
+EVENT_TYPES = ("observed", "finding", "confirmation", "closed")
+
+
+def _verdict_of(result: dict[str, Any]) -> str:
+    status = result.get("status")
+    if status in VERDICTS:
+        return str(status)
+    if result.get("error") or result.get("code") or result.get("refused"):
+        return PRE_CORE  # check_task / intake refusal: no TaskResult exists
+    raise OutcomesError("OUTCOME_INVALID", "result has no status and no error code")
+
+
+def _notary_state(verdict: str, call: dict[str, Any], result: dict[str, Any], db: Path | None):
+    """Return "row" or "no_notary_row"; OUTCOME_RECORD_MISMATCH when a row disagrees."""
+    task, attempt = result.get("task_id"), result.get("attempt_id")
+    if verdict not in ("VERIFIED", "FAILED") or not task or not attempt or db is None:
+        if verdict == "VERIFIED":
+            raise OutcomesError("OUTCOME_RECORD_MISMATCH", "VERIFIED needs its notary row")
+        return "no_notary_row"
+    try:
+        rec = read_record(db, str(task), str(attempt))
+    except AttestError as exc:
+        if verdict == "FAILED" and exc.code == "RECORD_NOT_FOUND":
+            return "no_notary_row"
+        raise OutcomesError("OUTCOME_RECORD_MISMATCH", f"notary row: {exc.code}") from exc
+    if rec.candidate_commit != call["candidate"] or rec.base_commit != call["base"]:
+        raise OutcomesError("OUTCOME_RECORD_MISMATCH", "candidate or base differs from notary row")
+    return "row"
+
+
+def record_call(
+    path: Path, result: dict[str, Any], inputs: dict[str, str], notary_db: Path | None = None
+) -> str:
+    """Append one call line. ``inputs``: repo, base, candidate, version, optional test_commit."""
+    call: dict[str, Any] = {k: inputs.get(k, "") for k in ("repo", "base", "candidate", "version")}
+    if any(not call[k] for k in call):
+        raise OutcomesError("OUTCOME_INVALID", "repo, base, candidate and version are required")
+    call["test_commit"] = inputs.get("test_commit", "")
+    verdict = _verdict_of(result)
+    call.update(verdict=verdict, reason=str(result.get("reason") or result.get("error") or ""))
+    call["task_id"], call["attempt_id"] = result.get("task_id", ""), result.get("attempt_id", "")
+    state = _notary_state(verdict, call, result, notary_db)
+    call["no_notary_row"] = state == "no_notary_row"
+    key = "|".join(str(call[k]) for k in sorted(call) if k != "reason")
+    call["call_id"] = "c" + hashlib.sha256(key.encode()).hexdigest()[:12]
+
+    def build(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+        if any(r.get("type") == "call" and r["call_id"] == call["call_id"] for r in rows):
+            return None
+        return {"type": "call", **call}
+
+    return append_checked(path, build)
+
+
+def _check_event(rows: list[dict[str, Any]], ev: dict[str, Any]) -> None:
+    calls = {r["call_id"]: r for r in rows if r.get("type") == "call"}
+    call = calls.get(ev.get("call_id", ""))
+    if call is None:
+        raise OutcomesError("OUTCOME_UNKNOWN_CALL", "no such call in the ledger")
+    kind = ev["type"]
+    if kind == "observed" and not (ev.get("start") and ev.get("end")):
+        raise OutcomesError("OUTCOME_INVALID", "observed needs start and end")
+    if kind == "finding":
+        if ev.get("source") not in SOURCES or not ev.get("finder") or not ev.get("root"):
+            raise OutcomesError("OUTCOME_INVALID", "finding needs a known source, finder and root")
+    if kind == "confirmation":
+        _check_confirmation(rows, call, ev)
+
+
+def _check_confirmation(
+    rows: list[dict[str, Any]], call: dict[str, Any], ev: dict[str, Any]
+) -> None:
+    finding = next(
+        (
+            r
+            for r in rows
+            if r.get("type") == "finding"
+            and r["call_id"] == ev["call_id"]
+            and r["finding_id"] == ev.get("finding_id")
+        ),
+        None,
+    )
+    if finding is None:
+        raise OutcomesError("OUTCOME_UNKNOWN_FINDING", "confirmation names no finding of this call")
+    allowed = VERIFIED_KINDS if call["verdict"] == "VERIFIED" else OTHER_KINDS
+    if ev.get("outcome") not in allowed:
+        raise OutcomesError("OUTCOME_KIND_INVALID", f"{call['verdict']} takes one of {allowed}")
+    who, evidence = ev.get("confirmer", ""), ev.get("evidence", "")
+    if not who or not evidence:
+        raise OutcomesError("OUTCOME_INVALID", "confirmation needs a confirmer and evidence")
+    finder = finding["finder"]
+    if who == finder or who in finding.get("clones", []) or finder in ev.get("clones", []):
+        raise OutcomesError("SAME_CONFIRMER", "the finder or its clone cannot confirm")
+
+
+def add_event(path: Path, call_id: str, event: dict[str, Any]) -> str:
+    """Append one follow-up event for a recorded call. The call line is never touched."""
+    if event.get("type") not in EVENT_TYPES:
+        raise OutcomesError("OUTCOME_INVALID", f"type must be one of {EVENT_TYPES}")
+    ev = {**event, "call_id": call_id}
+
+    def build(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+        _check_event(rows, ev)
+        if ev["type"] == "finding":
+            ev["finding_id"] = f"f{sum(1 for r in rows if r.get('type') == 'finding') + 1}"
+        return ev
+
+    return append_checked(path, build)
