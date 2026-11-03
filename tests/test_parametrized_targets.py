@@ -34,6 +34,7 @@ BAD = (
     "tests/test_x.py::test_y[a[b]]",
     "tests/test_x.py::test_y[a[b]",
     "tests/test_x.py::test_y[a\x1bb]",
+    "tests/test_x.py::test_y[a\x7fb]",
     "tests/test_x.py::test_y[a\x85b]",
     "tests/test_x.py::test_y[a\u2028b]",
     "tests/test_x.py::test_y[a\u2029b]",
