@@ -204,12 +204,16 @@ class AgyWorker:
             start_new_session=True,
         )
         reader = None
-        if dispatch is not None:
-            reader = agy_dispatch.StatusReader(process.stderr)
-            reader.start()
-            threading.Thread(target=_feed, args=(process, prompt), daemon=True).start()
-        copier = threading.Thread(target=copy_capped, args=(process.stdout, log), daemon=True)
-        copier.start()
+        try:  # an exception before _await owns the process must not leave agy's group running
+            if dispatch is not None:
+                reader = agy_dispatch.StatusReader(process.stderr)
+                reader.start()
+                threading.Thread(target=_feed, args=(process, prompt), daemon=True).start()
+            copier = threading.Thread(target=copy_capped, args=(process.stdout, log), daemon=True)
+            copier.start()
+        except BaseException:
+            _stop(process, None, workdir.name, reader, mark, dirs)
+            raise
         self._await(process, copier, reader, (workdir.name, mark, dirs), log, log_path)
         return self.provenance(reader)
 
@@ -390,7 +394,7 @@ def _stop(
         return one
 
     swept = confirm_gone(look(), look)
-    copier.join(timeout=10)
-    if reader is not None:
-        reader.join(timeout=10)
-    return copier.is_alive() or (reader is not None and reader.is_alive()), swept, len(by_cwd)
+    for thread in (copier, reader):  # copier is None when the start itself failed
+        if thread is not None:
+            thread.join(timeout=10)
+    return any(t is not None and t.is_alive() for t in (copier, reader)), swept, len(by_cwd)

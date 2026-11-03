@@ -113,3 +113,55 @@ def test_a_broken_stderr_pipe_does_not_change_the_exit_code(tmp_path):
     done = subprocess.run([sys.executable, "-c", code], stderr=write, check=False, timeout=60)
     os.close(write)
     assert done.returncode == 0
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def _pid_gone(pid: int) -> bool:
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if not _pid_alive(pid):
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_a_normal_return_stops_what_the_hook_left_in_its_group():
+    script = "sleep 300 >/dev/null 2>&1 & echo $!"
+    code, out, _ = post_verified._run(["sh", "-c", script], 30, dict(os.environ))
+    pid = int(out.split()[0])
+    try:
+        assert code == 0 and _pid_gone(pid)
+    finally:
+        if _pid_alive(pid):
+            os.kill(pid, 9)  # only the stand-in this test started
+
+
+def test_an_exception_stops_the_group_and_a_finished_group_is_tolerated(monkeypatch):
+    calls = []
+    real = os.killpg
+
+    def record(pid, sig):
+        calls.append(pid)
+        return real(pid, sig)
+
+    class Boom(BaseException):
+        pass
+
+    def boom(self, *args, **kwargs):
+        raise Boom
+
+    monkeypatch.setattr(post_verified.os, "killpg", record)
+    monkeypatch.setattr(subprocess.Popen, "communicate", boom)
+    with pytest.raises(Boom):
+        post_verified._run(["sleep", "300"], 30, dict(os.environ))
+    assert len(calls) == 1 and not _pid_alive(calls[0])
+    calls.clear()
+    monkeypatch.undo()
+    assert post_verified._run(["true"], 30, dict(os.environ))[0] == 0  # group already gone

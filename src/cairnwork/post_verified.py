@@ -110,7 +110,8 @@ def alert(message: str) -> None:
 
 
 def _run(argv: list[str], seconds: int, env: dict[str, str]) -> tuple[int, bytes, bytes]:
-    """Its own session, so a timeout kills what the hook started; cleanup is bounded too.
+    """Its own session, so the group is stopped on every exit (what the hook started never
+    outlives it, timeout or not); cleanup is bounded too.
 
     Output stays bytes: _tail decodes it leniently, so no output can lose the record.
     """
@@ -119,18 +120,29 @@ def _run(argv: list[str], seconds: int, env: dict[str, str]) -> tuple[int, bytes
         env=env, start_new_session=True,
     ) as proc:  # fmt: skip
         try:
-            out, err = proc.communicate(timeout=seconds)
-        except subprocess.TimeoutExpired:
             try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except OSError:
-                proc.kill()
-            try:
-                out, err = proc.communicate(timeout=CLEANUP_SECONDS)
-            except subprocess.TimeoutExpired:  # a descendant in its own session holds the pipes
-                out = err = None
-            raise subprocess.TimeoutExpired(argv, seconds, out, err) from None
-        return proc.returncode, out, err
+                out, err = proc.communicate(timeout=seconds)
+            except subprocess.TimeoutExpired:
+                _kill_group(proc)
+                try:
+                    out, err = proc.communicate(timeout=CLEANUP_SECONDS)
+                except subprocess.TimeoutExpired:  # a descendant in its own session holds the pipes
+                    out = err = None
+                raise subprocess.TimeoutExpired(argv, seconds, out, err) from None
+            return proc.returncode, out, err
+        finally:  # every exit: what the hook left behind in its group must not outlive it
+            _kill_group(proc)
+
+
+def _kill_group(proc: subprocess.Popen[bytes]) -> None:
+    # After a normal exit the leader is reaped; the pgid stays in use while any member lives,
+    # so only a fully gone group whose id was reused at once could be hit (accepted, #731).
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass  # the group is already gone
+    except OSError:
+        proc.kill()
 
 
 def _append(path: Path, record: dict[str, Any]) -> None:
