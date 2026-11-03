@@ -18,6 +18,10 @@ GOOD = (
     "tests/test_x.py::test_y[1536-ARABIC NUMBER SIGN]",
     "tests/test_x.py::TestK::test_m[a/b-False]",
     "tests/test_x.py::test_y[k.pem0]",
+    "tests/test_x.py::test_y[a b]",
+    "tests/test_x.py::test_y[\u00e9]",
+    "tests/test_x.py::test_y[a/b-1.5,x]",
+    "tests/test_x.py::test_y[a::b]",
 )
 BAD = (
     "tests/test_x.py::test_y[open",
@@ -27,6 +31,12 @@ BAD = (
     "tests/test_x.py::test_y[a]::test_z",
     "tests/test_x.py::test_y[a][b]",
     "tests/test_x.py[a]",
+    "tests/test_x.py::test_y[a[b]]",
+    "tests/test_x.py::test_y[a[b]",
+    "tests/test_x.py::test_y[a\x1bb]",
+    "tests/test_x.py::test_y[a\x85b]",
+    "tests/test_x.py::test_y[a\u2028b]",
+    "tests/test_x.py::test_y[a\u2029b]",
 )
 
 

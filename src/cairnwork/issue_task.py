@@ -195,10 +195,12 @@ def _check_path(path: Any) -> None:
 def test_target(roots: tuple[str, ...] | None) -> re.Pattern[str]:
     """A verifier target: a .py file under one of the test roots (None: any plain directory),
     with optional ::node ids, the last of which may name one parametrized case (``[<param>]``,
-    any text but newline, NUL and ``]``; #714). Argv reaches pytest without a shell."""
+    printable text only: no control character (C0, DEL, C1), no line or paragraph separator, and
+    no bracket of either kind, so ``[a[b]`` and ``[a[b]]`` are refused; #714, #722). Argv reaches
+    pytest without a shell."""
     name = r"[A-Za-z0-9_\-]+"
     top = r"[A-Za-z0-9_][A-Za-z0-9_\-]*" if roots is None else "|".join(map(re.escape, roots))
-    case = r"(?:::[A-Za-z0-9_\-]+)+(?:\[[^\]\n\0]*\])?"
+    case = r"(?:::[A-Za-z0-9_\-]+)+(?:\[[^\]\[\x00-\x1f\x7f-\x9f\u2028\u2029]*\])?"
     return re.compile(rf"(?:{top})/(?:{name}/)*{name}\.py(?:{case})?")
 
 
