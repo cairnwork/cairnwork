@@ -174,11 +174,15 @@ def test_a_process_left_behind_can_never_write_but_the_plan_can(run_root, tmp_pa
     )
     (tmp / "late.sh").write_text(late + "\n")
     detach = (
-        "import os; os.setsid(); os.execv('/usr/bin/env', ['env', '-i', '/bin/sh', '$T/late.sh'])"
+        "import os; os.setsid(); open('$T/detached', 'w').close(); "
+        "os.execv('/usr/bin/env', ['env', '-i', '/bin/sh', '$T/late.sh'])"
     )
-    _job(run_root, f'"$PY" -c "{detach}" </dev/null >/dev/null 2>&1 &')
+    # the job ends only once the process has its own session, so the group stop cannot race it
+    wait = 'for _ in $(seq 300); do [ -e "$T/detached" ] && break; sleep 0.1; done'
+    _job(run_root, f'"$PY" -c "{detach}" </dev/null >/dev/null 2>&1 &\n{wait}')
     try:
         pre.run_tests(["-q"])
+        assert (tmp / "detached").exists(), "the left-behind process never left the job's group"
         pre.at_plan_arrival()
         _job(run_root, 'echo "y = 2" > src/b.py')
         after = tools.run_tests(["-q"])  # after the plan: the writable profile
