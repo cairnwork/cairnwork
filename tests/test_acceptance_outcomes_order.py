@@ -1,11 +1,13 @@
 """Acceptance outcomes: close-after-observe ordering and PRE_CORE refused_but_correct."""
 
+# ruff: noqa: F811
+
 from __future__ import annotations
 
 import json
 from typing import Any
 
-from test_acceptance_outcomes import call_id, confirm, finding, fx, inputs, verified  # noqa: F401
+from test_acceptance_outcomes import call_id, confirm, finding, fx, inputs, verified
 
 from experimental.acceptance_outcomes import add_event, build_report, record_call
 
