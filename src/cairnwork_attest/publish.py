@@ -47,13 +47,20 @@ class PublishResult:
     notes_tip: str | None
 
 
+_CONFIG_VAR = re.compile(r"GIT_CONFIG_(?:COUNT|KEY_[0-9]+|VALUE_[0-9]+)")
+
+
 def _git(repo: Path, *args: str, input: bytes | None = None) -> subprocess.CompletedProcess[str]:
     """Run git with prompts disabled and C-locale messages (stderr is matched).
 
     Same protections as gitcmd: no repository hooks, no fsmonitor, no replace refs, and the
-    caller's GIT_* variables dropped, so the repository cannot run code during a publish.
+    caller's GIT_* variables dropped, so the repository cannot run code during a publish. The
+    GIT_CONFIG_COUNT/KEY_n/VALUE_n settings stay: the post-verified hook's notes push gets its
+    credential helper that way (docs/ATTESTATION.md).
     """
-    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env = {
+        k: v for k, v in os.environ.items() if not k.startswith("GIT_") or _CONFIG_VAR.fullmatch(k)
+    }
     env.update({"GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C", "LANGUAGE": "C"})
     proc = subprocess.run(
         ["git", *_SAFE_OPTIONS, *args],

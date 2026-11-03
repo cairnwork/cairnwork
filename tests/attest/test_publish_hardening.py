@@ -351,3 +351,17 @@ def test_repository_hooks_never_run_during_publish(
     bundle_file = _write_bundle(tmp_path, _make_bundle_bytes(candidate, key))
     assert publish_bundle(bundle_file, src, candidate).code == "PUBLISHED"
     assert not marker.exists()
+
+
+def test_the_hook_credential_settings_still_reach_publish_git(publish_env, monkeypatch) -> None:
+    """The post-verified hook passes its credential helper as GIT_CONFIG_* (docs/ATTESTATION.md);
+    dropping the caller's other GIT_* variables (#727) must keep those."""
+    from cairnwork.post_verified import _env
+
+    src, _, _ = publish_env
+    for k, v in _env("/opt/gh").items():
+        if k.startswith("GIT_CONFIG_"):
+            monkeypatch.setenv(k, v)
+    monkeypatch.setenv("GIT_DIR", "/nonexistent")
+    shown = _git(src, "config", "--get-all", "credential.helper")
+    assert shown.returncode == 0 and "/opt/gh auth git-credential" in shown.stdout
