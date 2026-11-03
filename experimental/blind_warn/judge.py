@@ -226,12 +226,22 @@ def _verify_both(
 
 
 def _summary(cand: VerifierRun, base: VerifierRun) -> dict:
+    """``failed`` split by the base run, for display and counts only (``warn`` is unchanged):
+    ``regression``, the function passed on the base; ``not_fixed``, it did not pass there
+    either (a blind test written from the ticket is meant to fail on the base, so this is the
+    candidate not fixing the issue, or a wrong test)."""
     failed, undecided, written = classify(cand, base)
-    return {"written": written, "failed": failed, "undecided": undecided}
+    passed_on_base = {short_name(n) for n, state in base.outcomes.items() if state == "passed"}
+    failed_on_base = {short_name(n) for n, state in base.outcomes.items() if state != "passed"}
+    regression = [n for n in failed if n in passed_on_base and n not in failed_on_base]
+    return {
+        "written": written, "failed": failed, "undecided": undecided,
+        "regression": regression, "not_fixed": [n for n in failed if n not in regression],
+    }  # fmt: skip
 
 
 def _result(warn=False, a=None, b=None, line="", cost=0.0, error="") -> dict:
-    empty = {"written": 0, "failed": [], "undecided": []}
+    empty = {"written": 0, "failed": [], "undecided": [], "regression": [], "not_fixed": []}
     result = {
         "warn": warn,
         "a": a or empty,
@@ -246,7 +256,12 @@ def _result(warn=False, a=None, b=None, line="", cost=0.0, error="") -> dict:
 
 def _line(a: dict, b: dict) -> str:
     names = sorted(set(a["failed"]) | set(b["failed"]))[:6]
-    return f"Blind tests: A and B both fail ({', '.join(names)}); not a verdict"
+    kinds = [
+        f"{label}: {len(set(a[key]) | set(b[key]))}"
+        for key, label in (("not_fixed", "not fixed"), ("regression", "regression"))
+        if a[key] or b[key]
+    ]
+    return f"Blind tests: A and B both fail ({', '.join(names)}); {', '.join(kinds)}; not a verdict"
 
 
 def _run(ticket, base, patch, state, model, call, runner, cost) -> dict:
