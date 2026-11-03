@@ -222,7 +222,7 @@ Missing or malformed `--candidate` (not a 40-character hex commit SHA) produces 
 lacks it, e.g. one signed before this field existed). The field is informational: `verify` does
 not yet refuse `auto` bundles.
 
-When `verify --json` fails (`ok: false`), it adds `unverified_fields`, the list of keys (`base`, `core_status`, `keyid`, `statement_sha256`, `test_source`) whose values were read from the bundle without being vouched for by the failed check; do not treat them as verified. On success the output has no such key and is unchanged.
+When `verify --json` fails (`ok: false`), it adds `unverified_fields`, the list of keys (`base`, `core_status`, `keyid`, `statement_sha256`, `test_source`) whose values came from the bundle without being vouched for by the failed check (all `null` when the bundle could not be read at all); do not treat them as verified. A failure's `detail` text may quote bundle values too. On success the output has no such key and is unchanged.
 
 ### No receipt without a comparison (#234)
 
