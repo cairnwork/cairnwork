@@ -300,5 +300,91 @@ def test_deletion_stays_in_the_directory_that_was_checked(tmp_path, monkeypatch)
     assert not (moved / "venv").exists()  # the checked directory itself was emptied
 
 
+def _swap_on_open(monkeypatch, root, moved, replacement, after, link=True):
+    """Once: swap root's name for replacement (a link or a real directory), moved holding the
+    original, either just before (after=False) or just after the root directory is opened."""
+    real_open = os.open
+    done = []
+
+    def opener(path, flags, *args, **kwargs):
+        is_root = bool(flags & os.O_DIRECTORY) and kwargs.get("dir_fd") is None and not done
+        if is_root and not after:
+            done.append(1)
+            _swap(root, moved, replacement, link)
+        fd = real_open(path, flags, *args, **kwargs)
+        if is_root and after:
+            done.append(1)
+            _swap(root, moved, replacement, link)
+        return fd
+
+    monkeypatch.setattr(run_root_cleanup.os, "open", opener)
+
+
+def _swap(root, moved, replacement, link):
+    root.rename(moved)
+    if link:
+        root.symlink_to(replacement)
+    else:
+        replacement.rename(root)  # a real directory takes the name
+
+
+def _decoy(path):
+    _fill(path)
+    (path / CLAIM).write_text("ep_other\n")  # a claim that is not ours, so a path-based read fails
+    (path / "loose.bin").write_bytes(b"stay")
+
+
+def test_a_root_swapped_for_another_real_directory_before_the_open_is_left_alone(
+    tmp_path, monkeypatch
+):
+    runs = (tmp_path / "runs").resolve()
+    _fill(runs / A)
+    c = claim(runs / A, runs, "ep_1")
+    assert c is not None
+    other = tmp_path / "other"
+    _decoy(other)
+    _swap_on_open(monkeypatch, runs / A, tmp_path / "moved", other, after=False, link=False)
+    assert run_root_cleanup.remove(c, runs) == "kept (not this episode's claim)"
+    assert (runs / A / CLAIM).read_text() == "ep_other\n"
+    assert (runs / A / "loose.bin").read_bytes() == b"stay"
+    assert (runs / A / "venv" / "bin" / "python").exists()
+    assert (tmp_path / "moved" / CLAIM).read_text() == "ep_1\n"  # ours was left untouched too
+
+
+def test_a_root_swapped_for_a_link_before_the_open_is_never_followed(tmp_path, monkeypatch):
+    runs = (tmp_path / "runs").resolve()
+    _fill(runs / A)
+    c = claim(runs / A, runs, "ep_1")
+    assert c is not None
+    victim = tmp_path / "victim"
+    _decoy(victim)
+    (victim / CLAIM).write_text("ep_1\n")  # even a matching claim behind the link is not ours
+    _swap_on_open(monkeypatch, runs / A, tmp_path / "moved", victim, after=False)
+    assert run_root_cleanup.remove(c, runs) == "kept (not this episode's claim)"
+    assert (victim / CLAIM).read_text() == "ep_1\n"
+    assert (victim / "venv" / "bin" / "python").exists()
+    assert (victim / "loose.bin").read_bytes() == b"stay"
+
+
+def test_every_step_after_the_open_stays_in_the_opened_directory(tmp_path, monkeypatch):
+    """The root is swapped for a link to a decoy right after it is opened: the outcome, the
+    deletions and the claim release all belong to the opened (moved) directory."""
+    runs = (tmp_path / "runs").resolve()
+    _fill(runs / A)
+    (runs / A / "result.json").write_text("{}\n")
+    c = claim(runs / A, runs, "ep_1")
+    assert c is not None
+    victim = tmp_path / "victim"
+    _decoy(victim)
+    moved = tmp_path / "moved"
+    _swap_on_open(monkeypatch, runs / A, moved, victim, after=True)
+    assert run_root_cleanup.remove(c, runs) == "reduced (1 result files kept)"
+    assert sorted(p.name for p in moved.iterdir()) == ["result.json"]  # claim released there
+    assert (victim / CLAIM).read_text() == "ep_other\n"
+    assert (victim / "venv" / "bin" / "python").exists()
+    assert (victim / "loose.bin").read_bytes() == b"stay"
+    assert (runs / A).is_symlink()
+
+
 def test_there_is_one_installed_runs():
     assert run_root_cleanup.INSTALLED_RUNS is canary.INSTALLED_RUNS

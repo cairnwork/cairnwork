@@ -90,26 +90,39 @@ def claim(root: Path, runs: Path, episode_id: str) -> Claim | None:
     return Claim(root, episode_id)
 
 
-def _mine(c: Claim, runs: Path) -> bool:
-    if not eligible(c.root, runs):
-        return False
+def _claim_matches(c: Claim, dir_fd: int | None = None) -> bool:
+    """The claim file holds this episode's id; read through dir_fd when given."""
     try:
-        fd = os.open(c.root / CLAIM, os.O_RDONLY | os.O_NOFOLLOW)
+        if dir_fd is None:
+            fd = os.open(c.root / CLAIM, os.O_RDONLY | os.O_NOFOLLOW)
+        else:
+            fd = os.open(CLAIM, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dir_fd)
     except OSError:
         return False
     with os.fdopen(fd, "rb") as f:  # bytes: a claim that is not text is simply not ours
         return f.read() == (c.episode_id + "\n").encode()
 
 
+def _mine(c: Claim, runs: Path) -> bool:
+    return eligible(c.root, runs) and _claim_matches(c)
+
+
 def remove(c: Claim, runs: Path) -> str:
     """Delete this episode's root (but its kept result files); the outcome, for the report."""
-    if not _mine(c, runs):
+    if not eligible(c.root, runs):
         return "kept (not this episode's claim)"
-    kept, left = 0, 0
-    # Every delete below goes through this fd, the directory _mine just checked: if the root is
-    # swapped for a link afterwards, nothing outside the checked directory is touched.
-    fd = os.open(c.root, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY)
+    # The directory is opened first and the claim is read through that same fd, then every
+    # delete goes through it too: whatever the root's name points to afterwards (a link, or a
+    # real directory renamed into place), the claim checked and the entries deleted are the
+    # same directory's, so nothing else is touched.
     try:
+        fd = os.open(c.root, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY)
+    except OSError:
+        return "kept (not this episode's claim)"
+    try:
+        if not _claim_matches(c, fd):
+            return "kept (not this episode's claim)"
+        kept, left = 0, 0
         with os.scandir(fd) as it:
             entries = [e for e in it if e.name != CLAIM]
         for e in entries:
