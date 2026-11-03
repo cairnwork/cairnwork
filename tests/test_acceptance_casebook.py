@@ -17,14 +17,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture
-def ledger(tmp_path: Path) -> dict[str, str]:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    git(repo, "init", "-q")
-    (repo / "src").mkdir()
-    (repo / "src/a.py").write_text("x = 1\n")
-    git(repo, "add", "-A")
-    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "base")
+def ledger(tmp_path: Path, repo: Path) -> dict[str, str]:
+    # conftest's repo: its own user.name/email, so CI without a global git identity works
     base = git(repo, "rev-parse", "HEAD")
     state = tmp_path / "state"
     cand = setup_cli_fixture(state, repo)
