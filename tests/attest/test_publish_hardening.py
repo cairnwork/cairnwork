@@ -24,7 +24,7 @@ from publish_helpers import (
 from cairnwork_attest.cli import main
 from cairnwork_attest.publish import _git, publish_bundle
 
-pytestmark = pytest.mark.usefixtures("production_git_env")  # publish._git inherits os.environ
+pytestmark = pytest.mark.usefixtures("production_git_env")  # publish._git reads os.environ
 
 
 @pytest.fixture
@@ -362,6 +362,17 @@ def test_the_hook_credential_settings_still_reach_publish_git(publish_env, monke
     for k, v in _env("/opt/gh").items():
         if k.startswith("GIT_CONFIG_"):
             monkeypatch.setenv(k, v)
-    monkeypatch.setenv("GIT_DIR", "/nonexistent")
     shown = _git(src, "config", "--get-all", "credential.helper")
     assert shown.returncode == 0 and "/opt/gh auth git-credential" in shown.stdout
+
+
+def test_the_callers_other_git_variables_never_reach_publish_git(publish_env, monkeypatch) -> None:
+    """GIT_DIR and GIT_CONFIG_PARAMETERS from the caller are dropped (#727): publish's git still
+    works on the repository it was given and sees no extra configuration."""
+    src, bare, _ = publish_env
+    monkeypatch.setenv("GIT_DIR", str(bare))
+    monkeypatch.setenv("GIT_CONFIG_PARAMETERS", "'cairnwork.injected'='yes'")
+    where = _git(src, "rev-parse", "--absolute-git-dir")
+    assert where.returncode == 0 and Path(where.stdout.strip()) == (src / ".git").resolve()
+    shown = _git(src, "config", "--show-origin", "--list")
+    assert shown.returncode == 0 and "cairnwork.injected" not in shown.stdout
