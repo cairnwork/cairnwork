@@ -87,17 +87,52 @@ def test_a_hook_name_with_an_equals_sign_is_refused(tmp_path: Path) -> None:
     assert not marker.exists()
 
 
-def test_a_hook_name_that_is_not_utf8_does_not_run(tmp_path: Path) -> None:
-    repo, marker, head = _repo(tmp_path)
+def _declare_bytes(repo: Path, name: bytes, marker: Path) -> None:
     for key, value in (
         (b"event", b"reference-transaction"),
-        (b"command", f"touch {marker}".encode()),
+        (b"command", b"touch " + bytes(marker)),
     ):
-        subprocess.run(
-            [b"git", b"-C", bytes(repo), b"config", b"hook.n\xff." + key, value], check=True
-        )
+        subprocess.run([b"git", b"-C", bytes(repo), b"config", b"hook." + name + b"." + key, value],
+                       check=True)  # fmt: skip
+
+
+@pytest.mark.parametrize("name", [b"", b"n\xff", b"caf\xe9"])
+@pytest.mark.parametrize("locale", ["C", "en_US.UTF-8"])
+def test_an_empty_or_non_utf8_name_does_not_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: bytes, locale: str
+) -> None:
+    repo, marker, head = _repo(tmp_path)
+    _declare_bytes(repo, name, marker)
+    monkeypatch.setenv("LC_ALL", locale)
     run_git(repo, "update-ref", "refs/x", head)
+    assert _git(repo, "update-ref", "refs/y", head).returncode == 0
     assert not marker.exists()
+
+
+@pytest.mark.parametrize("name", ["", "\udcff"])  # "\udcff" reaches git as the byte 0xFF
+def test_publish_drops_an_empty_or_non_utf8_name_from_kept_pairs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    repo, marker, head = _repo(tmp_path)
+    pairs = {"COUNT": "2", "KEY_0": f"hook.{name}.event", "VALUE_0": "reference-transaction",
+             "KEY_1": f"hook.{name}.command", "VALUE_1": f"touch {marker}"}  # fmt: skip
+    for k, v in pairs.items():
+        monkeypatch.setenv(f"GIT_CONFIG_{k}", v)
+    assert _git(repo, "update-ref", "refs/x", head).returncode == 0
+    assert not marker.exists()
+
+
+def test_hash_blob_turns_the_declared_hooks_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, marker, _ = _repo(tmp_path)
+    _declare(repo, "mark", marker)
+    seen: list[list[str]] = []
+    real = gitcmd.subprocess.run
+    monkeypatch.setattr(gitcmd.subprocess, "run", lambda a, **k: seen.append(a) or real(a, **k))
+    gitcmd.hash_blob(repo, b"data\n")
+    argv = next(a for a in seen if "hash-object" in a)
+    assert "hook.mark.enabled=false" in argv
 
 
 def test_a_listing_that_cannot_run_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -105,7 +140,7 @@ def test_a_listing_that_cannot_run_refuses(tmp_path: Path, monkeypatch: pytest.M
     real = gitcmd.subprocess.run
 
     def no_listing(argv, **kw):  # the listing times out; every other call is real
-        if "--get-regexp" in argv:
+        if "--list" in argv:
             raise subprocess.TimeoutExpired(argv, 1)
         return real(argv, **kw)
 
