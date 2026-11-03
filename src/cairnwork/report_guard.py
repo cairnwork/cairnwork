@@ -67,11 +67,12 @@ from __future__ import annotations
 import json
 import os
 import stat
-from dataclasses import dataclass, field
 from pathlib import Path
 
 from cairnwork.bytecode_hook import HOOK_SOURCE
 from cairnwork.confined import MAX_REPORT_BYTES
+from cairnwork.verdict_record import Verdict as Verdict
+from cairnwork.verdict_record import _sources
 
 FDS_ENV = "CAIRNWORK_GUARD_FDS"
 PATH_ENV = "CAIRNWORK_VERDICT_PATH"
@@ -239,41 +240,6 @@ def install_plugin(directory: Path) -> None:
     os.chmod(path, 0o640)  # not the umask-masked open() mode: the verifier account reads by group
 
 
-@dataclass(frozen=True)
-class Verdict:
-    ran: bool
-    outcomes: dict[str, str]
-    too_big: bool = False  # the file exceeds MAX_REPORT_BYTES: nothing could be read from it
-    recorded: bool = False  # sessionfinish wrote a well-formed record with our nonce (#234)
-    collect_errors: tuple[str, ...] = ()  # node ids of collectors that failed (B2, #234)
-    collect_skipped: tuple[str, ...] = ()  # node ids of collectors skipped while collecting
-    renamed: tuple[str, ...] = ()  # items whose node id or file changed after collection
-    paths: dict[str, str] = field(default_factory=dict)  # node id -> its file, as collected
-    # #478: tests whose teardown failed. A shared fixture's finalizer runs at its last user's
-    # teardown, so the node named is where the error landed, not the test that owns the fixture
-    teardown_errors: tuple[str, ...] = ()
-    exitstatus: int | None = None  # pytest's own session status, as recorded (#276)
-    testsfailed: int | None = None  # pytest's own count of failed tests, as recorded
-
-    def not_run(self, targets) -> tuple[str, ...]:
-        """The named ``targets`` (``path`` or ``path::node``) that own no recorded test, then the
-        collectors skipped while collecting: a run that leaves any of them is not a pass, whatever
-        else it ran. A test belongs to a target only when it was collected from the target's file
-        (``paths``, taken from the item's path when pytest collected it, before any hook could
-        reorder or rename items) and its node id is under the target."""
-        missing = [t for t in targets if not any(self._owns(node, t) for node in self.outcomes)]
-        return tuple(dict.fromkeys([*missing, *self.collect_skipped]))
-
-    def _owns(self, nodeid: str, target: str) -> bool:
-        return self.paths.get(nodeid) == target.partition("::")[0] and _within(nodeid, target)
-
-
-def _within(nodeid: str, target: str) -> bool:
-    """A test belongs to a target when it is that node, a node under it (``::``) or one of its
-    parametrisations (``[``)."""
-    return nodeid == target or nodeid.startswith((f"{target}::", f"{target}["))
-
-
 def read_verdict(path: Path, nonce: str) -> Verdict:
     """Read the plugin's record from a path (the verifier-account hand-over). See
     ``parse_verdict`` for what makes ``ran`` true."""
@@ -374,14 +340,3 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
         exitstatus=status[0],
         testsfailed=status[1],
     )
-
-
-def _sources(collected: list[str], files: list[str], file_of) -> dict[str, str]:
-    """Each collected node id's file; ``""`` when it was not seen collected or one id names
-    items of two files (then neither owns a target)."""
-    paths: dict[str, str] = {}
-    for node, n in zip(collected, file_of, strict=False):
-        source = files[n] if n >= 0 else ""
-        if paths.setdefault(node, source) != source:
-            paths[node] = ""
-    return paths
