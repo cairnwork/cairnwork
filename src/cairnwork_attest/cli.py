@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from cairnwork.textclean import replace_hidden
 from cairnwork_attest.bundle import BundleError, write_bundle
 from cairnwork_attest.bundle_facts import bundle_facts
 from cairnwork_attest.checkrun import add_subparser as _add_check_run
@@ -226,9 +227,10 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     return 1
 
 
-# C0 and C1 controls and the Unicode line and paragraph separators, written as escapes.
-_CONTROLS = {c: f"\\x{c:02x}" for c in [*range(0x20), *range(0x7F, 0xA0)]}
-_CONTROLS.update({0x2028: "\\u2028", 0x2029: "\\u2029"})
+def _escape(ch: str) -> str:
+    """A hidden character (control, format, separator ...) written as an escape."""
+    n = ord(ch)
+    return f"\\x{n:02x}" if n < 0x100 else f"\\u{n:04x}" if n < 0x10000 else f"\\U{n:08x}"
 
 
 def _printable(text: str, stream: object = None) -> str:
@@ -236,7 +238,7 @@ def _printable(text: str, stream: object = None) -> str:
     escape what the stream cannot encode, so a refusal never ends in a traceback (#537 J). A
     control character or line separator in it is escaped too, so the refusal stays one line."""
     encoding = getattr(stream or sys.stdout, "encoding", None) or "utf-8"
-    return text.translate(_CONTROLS).encode(encoding, "backslashreplace").decode(encoding)
+    return replace_hidden(text, _escape).encode(encoding, "backslashreplace").decode(encoding)
 
 
 def _cmd_publish(args: argparse.Namespace) -> int:

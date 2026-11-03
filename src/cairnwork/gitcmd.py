@@ -18,6 +18,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from cairnwork.textclean import replace_hidden
+
 GIT_TIMEOUT_SECONDS = 60
 NETWORK_TIMEOUT_SECONDS = 300  # fetch and push over a network; local commands keep the default
 STDERR_TAIL_CHARS = 400
@@ -62,7 +64,6 @@ _SAFE_OPTIONS = (
 # one planted in the userinfo cannot split it): a password may itself hold '@' or '/'.
 # Fail-closed: an '@' later in a path also removes the text before it.
 _URL_USERINFO = re.compile(r"(?<=://)[^ \t]*@")
-_CONTROL = re.compile(r"[^\x20-\x7e\n\u00a0-\U0010ffff]|[\u2028\u2029\u202a-\u202e\u2066-\u2069]")
 
 
 def stderr_tail(raw: str | bytes | None) -> str:
@@ -76,7 +77,7 @@ def stderr_tail(raw: str | bytes | None) -> str:
     """
     if isinstance(raw, bytes):
         raw = raw.decode("utf-8", "replace")
-    text = _URL_USERINFO.sub("", _CONTROL.sub("", raw or "")).strip()
+    text = _URL_USERINFO.sub("", replace_hidden(raw or "", "", keep="\n")).strip()
     return text.replace("\n", " | ")[-STDERR_TAIL_CHARS:]
 
 

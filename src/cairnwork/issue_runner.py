@@ -56,6 +56,7 @@ from cairnwork.notary import NotaryError
 from cairnwork.ownership import OwnershipError, OwnershipUnknown
 from cairnwork.pipeline import TaskRejected
 from cairnwork.provenance import parse as parse_provenance
+from cairnwork.textclean import replace_hidden
 from cairnwork.workspace import ATTEMPT_ID
 
 QUEUE, RUNNING, FAILED_LABEL, DONE, NEEDS_FIX = (
@@ -70,8 +71,6 @@ COMMIT = re.compile(r"[0-9a-f]{40}")
 # `<issue role="x">`, `< /issue>`. Matched after NFKC normalisation, so full-width lookalikes
 # (`＜issue＞`) are caught as well (#187).
 ISSUE_TAG = re.compile(r"<\s*/?\s*issue\b[^>]*>", re.IGNORECASE)
-CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
-BODY_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")  # keeps \n and \t
 TRUST_CHANGED = "TRUST_CHANGED_BEFORE_DISPATCH"
 DEFAULT_GH = str(Path.home() / ".config/nexus-agent-bot/bin/nexus-agent-gh")
 
@@ -298,13 +297,13 @@ def _unfence(text: str, *, multiline: bool) -> str:
     keeps ``\\n`` and ``\\t``) and remove every <issue>/</issue> tag. The three steps repeat until
     nothing changes, so a removal cannot assemble a new tag from the pieces around it
     (``</iss</issue>ue>``)."""
-    control = BODY_CONTROL_CHARS if multiline else CONTROL_CHARS
+    keep = "\n\t" if multiline else ""
     if multiline:
         text = text.replace("\r\n", "\n")
     while True:
         folded = unicodedata.normalize("NFKC", html.unescape(text))
         visible = "".join(c for c in folded if unicodedata.category(c) != "Cf")  # zero-width
-        cleaned = ISSUE_TAG.sub("", control.sub("?", visible))
+        cleaned = ISSUE_TAG.sub("", replace_hidden(visible, keep=keep))
         if cleaned == text:
             return cleaned
         text = cleaned
