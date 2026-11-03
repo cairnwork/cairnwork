@@ -241,3 +241,30 @@ def test_cli_missing_token(tmp_path: Path, capsys: pytest.CaptureFixture[str], m
     rc = main(["check-run", "--bundle", str(path), "--repo-slug", SLUG, "--json"])
     assert rc == 2
     assert json.loads(capsys.readouterr().out)["code"] == "USAGE"
+
+
+_FACTS = {
+    "candidate": "a" * 40, "base": BASE, "statement_sha256": "c" * 64,
+    "test_source": "t", "keyid": "k",
+}  # fmt: skip
+
+
+@pytest.mark.parametrize("status", ["VERIFIED", "VERIFIED blackbox", "VERIFIED, signature only"])
+def test_summary_exact_verified_status(status: str) -> None:
+    from cairnwork_attest.checkrun import build_summary
+
+    text = build_summary(_FACTS, status, full=True)
+    assert "- Checked against:" in text
+    assert "not verified by this step" not in text
+
+
+@pytest.mark.parametrize(
+    "status",
+    ["VERIFIED_RECORD_MISMATCH", "VERIFIED_RECORD_INVALID", "VERIFIEDX", "VERIFIED-ish"],
+)
+def test_summary_prefix_only_status_not_verified(status: str) -> None:
+    from cairnwork_attest.checkrun import build_summary
+
+    text = build_summary(_FACTS, status, full=True)
+    assert "- Checked against:" not in text
+    assert "not verified by this step" in text
