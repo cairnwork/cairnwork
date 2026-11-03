@@ -372,7 +372,8 @@ def test_policy_notes_reach_the_run_and_the_reason_but_not_the_hash(project, tmp
     _with_notes(monkeypatch, (note,))
     noted = run(project, tmp_path / "b", head, "tests/test_a.py::test_x")
     assert plain.notes == () and noted.notes == (note,)
-    assert noted.observation.passed and explain([noted]) == ""
+    assert noted.observation.passed
+    assert explain([noted]) == f" [notes {noted.spec.verifier_id}: {note}]"
     assert seen[0].keys() == seen[1].keys()
     assert not any(note in str(value) for value in seen[1].values())
     failing = run(project, tmp_path / "c", head, "tests/test_a.py::test_writes")

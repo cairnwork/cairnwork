@@ -14,7 +14,7 @@ import pytest
 import cairnwork.confined as confined
 import cairnwork.verifier_account as va
 from cairnwork.core_request import VerifierObservation
-from cairnwork.reasons import explain, why_not_passed
+from cairnwork.reasons import explain, verdict_reason, why_not_passed
 
 
 def _flaky(monkeypatch, module, fails, answer):
@@ -200,10 +200,23 @@ def test_explain_names_only_the_failed_verifiers():
     assert explain([_run("v1", True, "")]) == ""
 
 
-def test_explain_shows_the_backend_notes_of_a_failed_run_only():
+def test_explain_shows_the_backend_notes_of_failed_and_passed_runs():
     note = "shm withheld: BWRAP_TMPFS_SIZE_UNSUPPORTED"
     runs = [_run("v1", True, "", (note,)), _run("v2", False, "pytest exit code 1", (note,))]
-    assert explain(runs) == f" [v2: pytest exit code 1 ({note})]"
+    assert explain(runs) == f" [v2: pytest exit code 1 ({note})] [notes v1: {note}]"
+
+
+def test_explain_shows_the_notes_of_a_passed_run_and_leaves_clean_runs_alone():
+    notes = ("shm withheld: X", "bytecode hook: ptrace_scope 1")
+    assert explain([_run("v1", True, "", notes)]) == f" [notes v1: {notes[0]}, {notes[1]}]"
+    assert explain([_run("v1", True, ""), _run("v2", True, "", ())]) == ""
+    assert explain([_run("v1", False, "timed out")]) == " [v1: timed out]"
+
+
+def test_notes_on_a_passed_run_leave_the_verdict_reason_first():
+    verdict = SimpleNamespace(status="VERIFIED", reason="")
+    reason = verdict_reason(True, verdict, verdict) + explain([_run("v1", True, "", ("n",))])
+    assert reason == "CORE_VERIFIED [notes v1: n]"
 
 
 @pytest.mark.parametrize("attempts", [confined.PS_ATTEMPTS])
