@@ -138,3 +138,23 @@ def test_a_secret_field_name_with_a_hidden_character_or_odd_case_is_still_masked
     tail = probe_log_tail(log)
     assert "PLACEHOLDER" not in tail and tail.endswith("color=blue\n")
     assert tail.count("<redacted>") == len(names)
+
+
+def test_a_secret_field_inside_another_fields_value_is_still_masked(tmp_path):
+    log = tmp_path / "verifier.log"
+    lines = [
+        "env=PASSWORD=V1", "color=token=V2 x", "user=x:password=V3", "foo=client_secret=V4&z=1",
+        "a=1,password=V5", "user=bob,token=V6", "-\u200bpassword=V7", "-x\u200bid_token=V8",
+    ]  # fmt: skip
+    log.write_text("\n".join(lines) + "\n")
+    tail = probe_log_tail(log)
+    assert not any(f"V{i}" in tail for i in range(1, 9)), tail
+    assert "z=1" in tail and "color=token=" in tail
+
+
+def test_dotted_and_dotless_i_in_a_secret_name_still_count(tmp_path):
+    log = tmp_path / "verifier.log"
+    log.write_text("apİ_key=W1\napıkey=W2\nİd_token=W3\n")
+    tail = probe_log_tail(log)
+    assert "W1" not in tail and "W2" not in tail and "W3" not in tail
+    assert tail.count("<redacted>") == 3
