@@ -91,11 +91,20 @@ def why_not_passed(
 
 
 def explain(runs) -> str:
-    """``[v1: cause; v2: cause]`` for the runs that failed; ``""`` when every run passed."""
+    """``[v1: cause; v2: cause]`` for the runs that failed, then ``[notes v3: note, note]`` for the
+    backend notes of the runs that passed (Issue #584); ``""`` when every run passed without
+    notes. Notes never change the verdict: they only say what the host left open around a run."""
     failed = [
         f"{run.spec.verifier_id}: {run.why or 'no cause recorded'}"
         + "".join(f" ({note})" for note in run.notes)  # fixed strings from the backend
         for run in runs
         if not run.observation.passed
     ]
-    return f" [{'; '.join(failed)}]" if failed else ""
+    noted = [
+        f"{run.spec.verifier_id}: {', '.join(run.notes)}"  # fixed strings from the backend
+        for run in runs
+        if run.observation.passed and run.notes
+    ]
+    return (f" [{'; '.join(failed)}]" if failed else "") + (
+        f" [notes {'; '.join(noted)}]" if noted else ""
+    )
