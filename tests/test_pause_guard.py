@@ -177,12 +177,14 @@ def test_a_process_left_behind_can_never_write_but_the_plan_can(run_root, tmp_pa
         "import os; os.setsid(); os.execv('/usr/bin/env', ['env', '-i', '/bin/sh', '$T/late.sh'])"
     )
     _job(run_root, f'"$PY" -c "{detach}" </dev/null >/dev/null 2>&1 &')
-    pre.run_tests(["-q"])
-    pre.at_plan_arrival()
-    _job(run_root, 'echo "y = 2" > src/b.py')
-    after = tools.run_tests(["-q"])  # after the plan: the writable profile
-    assert after.exit_code == 0 and (co / "src" / "b.py").read_text() == "y = 2\n"
-    (tmp / "go").write_text("")
+    try:
+        pre.run_tests(["-q"])
+        pre.at_plan_arrival()
+        _job(run_root, 'echo "y = 2" > src/b.py')
+        after = tools.run_tests(["-q"])  # after the plan: the writable profile
+        assert after.exit_code == 0 and (co / "src" / "b.py").read_text() == "y = 2\n"
+    finally:  # the detached loop always ends, even when an assertion above fails
+        (tmp / "go").write_text("")
     for _ in range(300):
         if (tmp / "late.rc").exists() and (tmp / "late.rc").read_text().strip():
             break
