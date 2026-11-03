@@ -5,7 +5,7 @@ import subprocess
 import pytest
 from conftest import git
 
-from cairnwork.diffcheck import diff_check_detail
+from cairnwork.diffcheck import _clean, diff_check_detail
 from cairnwork.workspace import (
     Attempt,
     CandidateRejected,
@@ -250,3 +250,16 @@ def test_run_git_default_still_returns_str(repo):
     text = run_git(repo, "rev-parse", "HEAD")
     assert isinstance(text, str)
     assert run_git_bytes(repo, "rev-parse", "HEAD").decode() == text
+
+
+def test_private_use_unassigned_and_format_characters_are_removed():
+    name = "a\ue000b\u0378c\u202ed.py"
+    detail = diff_check_detail(OLD, _cause(f"{name}:1: trailing whitespace.\n"), (name,))
+    assert detail == f"{OLD}; rule=git-diff-check; abcd.py:1: trailing whitespace."
+    plain = diff_check_detail(OLD, _cause(_line(1, "src/ok_1.py")), ("src/ok_1.py",))
+    assert plain == f"{OLD}; rule=git-diff-check; src/ok_1.py:1: trailing whitespace."
+
+
+def test_lone_surrogate_is_removed():
+    # Decoded git output cannot hold a surrogate, so _clean is called directly.
+    assert _clean("a\ud800b.py") == "ab.py"
