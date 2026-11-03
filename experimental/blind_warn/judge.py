@@ -83,21 +83,27 @@ def _tokens(text: str) -> set[str]:
 def repo_context(base: Path, ticket: str) -> str:
     """Tracked text files of the base, those that share the most words with the ticket first."""
     listing = run_git_bytes(base, "ls-tree", "-r", "-z", "HEAD")  # same source as the blobs
-    names = []
+    names, skipped = [], 0
     for item in listing.split(b"\0"):
         info, tab, raw = item.partition(b"\t")
         if not tab or info.split(b" ", 1)[0].decode() not in _FILE_MODES:
             continue
         try:
-            names.append(raw.decode("utf-8"))
+            name = raw.decode("utf-8")
         except UnicodeDecodeError:
             continue  # a name that is not text is skipped, never a failure of the whole listing
+        if any(ord(c) < 0x20 or ord(c) == 0x7F for c in name):
+            skipped += 1  # a control character in a name could fake a header line in the prompt
+            continue
+        names.append(name)
     words = _tokens(ticket)
     ranked = sorted(
         (n for n in names if n.endswith(_TEXT_SUFFIXES)),
         key=lambda n: (-len(words & _tokens(n.replace("/", " ").replace(".", " "))), n),
     )
     parts, used = [], 0
+    if skipped:
+        parts.append(f"--- SKIPPED: {skipped} file names with control characters")
     for name in ranked:
         try:
             text = run_git(base, "show", f"HEAD:{name}")[:MAX_FILE_BYTES]  # the tracked blob
