@@ -7,10 +7,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from test_attest_cli import setup_cli_fixture
 
 from cairnwork_attest import record as record_mod
 from cairnwork_attest.cli import main
+from tests.attest.test_attest_cli import setup_cli_fixture
 
 
 @pytest.mark.parametrize(
