@@ -222,6 +222,8 @@ Missing or malformed `--candidate` (not a 40-character hex commit SHA) produces 
 lacks it, e.g. one signed before this field existed). The field is informational: `verify` does
 not yet refuse `auto` bundles.
 
+When `verify --json` fails (`ok: false`), it adds `unverified_fields`, the list of keys (`base`, `core_status`, `keyid`, `statement_sha256`, `test_source`) whose values were read from the bundle without being vouched for by the failed check; do not treat them as verified. On success the output has no such key and is unchanged.
+
 ### No receipt without a comparison (#234)
 
 A run whose base could not be compared (`status: "UNCOMPARABLE"` from `cairnwork-verify`, or a
