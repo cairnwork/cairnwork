@@ -137,6 +137,15 @@ def _offline_result(
 
 
 _NOT_PINNED = "the candidate named in the bundle only, base, policy and Core identity not pinned"
+
+
+def _is_verified(offline: str) -> bool:
+    """Exact status match (#778): the word VERIFIED alone, or followed by a space (protection
+    level) or a comma ("VERIFIED, signature only"). A longer code such as
+    VERIFIED_RECORD_* is not."""
+    return offline == "VERIFIED" or offline.startswith(("VERIFIED ", "VERIFIED,"))
+
+
 _UNVERIFIED_NOTE = "The values above are read from the bundle and were not verified by this step."
 
 
@@ -159,14 +168,14 @@ def build_summary(
         ("Key id", facts["keyid"]),
         ("Offline verification", offline),
     ]
-    if full and offline.startswith("VERIFIED"):
+    if full and _is_verified(offline):
         rows.append(("Checked against", _NOT_PINNED))
     if assurance:
         formatted = ", ".join(f"{k}={v}" for k, v in sorted(assurance.items()))
         rows.append(("Assurance", formatted))
     lines = ["Informational attestation report. Not an enforcing check.", ""]
     lines += [f"- {label}: {_clean(value)}" for label, value in rows]
-    if not offline.startswith("VERIFIED"):
+    if not _is_verified(offline):
         lines += ["", _UNVERIFIED_NOTE]
     lines += [
         "",
