@@ -282,6 +282,12 @@ def _never_call_core(_: dict[str, Any]) -> tuple[int, dict[str, Any]]:
     raise RuntimeError("attest never calls Core")
 
 
+# every value the statement signs from the first read that the second read (the verdict) also
+# carries; binding and recorded_at are not in the verdict (see docs/ATTESTATION.md check 10)
+_BOTH_READS = ("base_commit", "candidate_commit", "request_hash", "http_status", "status",
+               "integrity", "response")  # fmt: skip
+
+
 def verify_record(
     notary_sqlite: Path,
     task_id: str,
@@ -309,12 +315,11 @@ def verify_record(
     except (NotaryInputError, NotarySchemaMismatch) as exc:
         raise RecordMalformed(str(exc), code="RECORD_MALFORMED") from exc
 
-    if verdict is not None and (
-        (record.status, record.integrity, record.http_status)
-        != (verdict.status, verdict.integrity, verdict.http_status)
-    ):  # the row changed between the two reads: sign neither
+    changed = [k for k in _BOTH_READS if verdict is not None
+               and getattr(record, k) != getattr(verdict, k)]  # fmt: skip
+    if changed:  # the row changed between the two reads: sign neither (#750)
         raise RecordMalformed(
-            "notary row status/integrity/http_status differ between the two reads",
+            f"notary row differs between the two reads: {', '.join(changed)}",
             code="RECORD_MALFORMED",
         )
 
