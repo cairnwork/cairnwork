@@ -103,7 +103,8 @@ def test_run_git_timeout_defaults_short_and_can_be_raised(repo, monkeypatch):
     seen = _record_timeouts(monkeypatch)
     run_git(repo, "rev-parse", "HEAD")
     run_git(repo, "rev-parse", "HEAD", timeout=NETWORK_TIMEOUT_SECONDS)
-    assert [t for _, t in seen] == [gitcmd.GIT_TIMEOUT_SECONDS, NETWORK_TIMEOUT_SECONDS]
+    # calls with no listed subcommand are the hook listing (git config, short timeout)
+    assert [t for a, t in seen if a] == [gitcmd.GIT_TIMEOUT_SECONDS, NETWORK_TIMEOUT_SECONDS]
     assert NETWORK_TIMEOUT_SECONDS == 300 and gitcmd.GIT_TIMEOUT_SECONDS == 60
 
 

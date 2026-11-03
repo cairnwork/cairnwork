@@ -2,7 +2,8 @@
 
 Stripping GIT_* keeps a hook environment (GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE)
 from pointing a command at another repository or index. Hooks, the fsmonitor
-command and the untracked cache are disabled and replace refs are ignored.
+command, configuration-declared hooks and the untracked cache are disabled and replace refs
+are ignored.
 These options are a second line of defence: workers never get a checkout that
 shares Cairnwork's repository (see workspace.py), and Cairnwork never runs git
 inside a worker's repository except to fetch its HEAD.
@@ -58,6 +59,34 @@ _SAFE_OPTIONS = (
     "-c",
     "core.untrackedCache=false",
 )
+
+
+# hook.<friendly-name>.<key> (git 2.54 and later): hooks declared in configuration, which
+# core.hooksPath does not turn off (#737). The friendly name may itself hold dots.
+_HOOK_KEY = re.compile(r"hook\.(.+)\.[a-z]+", re.DOTALL)
+
+
+def config_hooks_off(repo: Path | str, env: dict[str, str]) -> tuple[str, ...]:
+    """``-c hook.<name>.enabled=false`` for every hook declared in the configuration git reads
+    in repo with env (system, global, repository and GIT_CONFIG_* pairs), to put after
+    _SAFE_OPTIONS. A name that ``-c`` cannot carry (it holds ``=``) is refused. When git cannot
+    list the configuration (no such directory, a malformed file) nothing is added: the command
+    itself reads the same configuration and fails the same way before any hook could run.
+    """
+    try:
+        done = subprocess.run(  # noqa: S603 - fixed git argv, no shell
+            ["git", "-C", str(repo), "config", "--null", "--name-only", "--get-regexp", "^hook[.]"],
+            capture_output=True, timeout=GIT_TIMEOUT_SECONDS, env=env,
+        )  # fmt: skip
+    except (OSError, subprocess.SubprocessError):
+        return ()
+    if done.returncode != 0:
+        return ()
+    names = sorted({m.group(1) for k in done.stdout.decode("utf-8", "replace").split("\0")
+                    if (m := _HOOK_KEY.fullmatch(k))})  # fmt: skip
+    if any("=" in n for n in names):
+        raise GitCommandError("a configuration-declared hook name holds '='; refusing to run git")
+    return tuple(x for n in names for x in ("-c", f"hook.{n}.enabled=false"))
 
 
 # Greedy to the last '@' in the run free of space and tab (newlines count as part of the run, so
@@ -155,7 +184,7 @@ def _exec(
         env["GIT_CONFIG_SYSTEM"] = os.devnull
     try:
         done = subprocess.run(  # noqa: S603 - fixed git argv, no shell
-            ["git", *_SAFE_OPTIONS, "-C", str(repo), *args],  # noqa: S607
+            ["git", *_SAFE_OPTIONS, *config_hooks_off(repo, env), "-C", str(repo), *args],
             check=True,
             input=stdin,
             capture_output=True,
@@ -174,11 +203,13 @@ def _exec(
 
 def hash_blob(repo: Path, data: bytes) -> str:
     """Store data as a blob in repo with no filters, from bytes the caller already read."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     try:
         done = subprocess.run(  # noqa: S603 - fixed git argv, no shell
             [
                 "git",
                 *_SAFE_OPTIONS,
+                *config_hooks_off(repo, env),
                 "-C",
                 str(repo),
                 "hash-object",
@@ -190,7 +221,7 @@ def hash_blob(repo: Path, data: bytes) -> str:
             capture_output=True,
             check=True,
             timeout=GIT_TIMEOUT_SECONDS,
-            env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
+            env=env,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise GitCommandError("git hash-object failed") from exc
