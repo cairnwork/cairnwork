@@ -34,14 +34,14 @@ prints `ERROR: <message>` and also exits 2.
 
 ## In-Process Trust Boundary
 
-The opaque type and re-checks defend against accidental misuse and against callers that only hold the public API; they do not defend against code running in the same process that bypasses them (`object.__setattr__`, direct SQLite writes); the signed envelope (next PR) binds the Statement bytes, and offline verification recomputes everything from the notary database and git objects.
+The opaque type and re-checks defend against accidental misuse and against callers that only hold the public API; they do not defend against code running in the same process that bypasses them (`object.__setattr__`, direct SQLite writes); the signed envelope (next PR) binds the Statement bytes, and offline verification (`verify_bundle`) does not open the notary database: it recomputes from the request and change manifest embedded in the signed Statement and from git objects (see "Offline Verification").
 
 ## Statement Structure
 
 An attestation statement is an unsigned in-toto v1 Statement containing:
 - `_type`: `"https://in-toto.io/Statement/v1"`.
 - `subject`: Identifies the candidate git revision under evaluation (exactly one entry):
-  - `git-commit:<candidate>`: Target revision under evaluation.
+  - `git-commit:<candidate>`: Target revision under evaluation. For a v0.2 receipt this is the PR head, while the Core request's `change_set.target_revision` is `git-tree:<executed tree>`; verify requires subject == `binding.head` == `--candidate` (`HEAD_MISMATCH`).
 - `predicateType`: Provisional type URI
   `https://cairnwork.github.io/attestation/verified-change/v0.1`, or `.../v0.2` for an external
   candidate verified with deferred tests (see "External candidates" below).
@@ -84,12 +84,14 @@ so all five fields render `"unknown"`:
 - `hidden_tests`: `"unknown"` (no typed request field proves hidden test evaluation).
 - `network`: `"unknown"` (no typed request field proves network isolation posture).
 
+This signed `predicate.assurance` is the producer's record. It is not the `assurance` that `verify` returns for a v0.2 receipt (`VerifyResult.assurance`, see "Verifying a v0.2 receipt"), which is what the receiver checked itself.
+
 Semantics rule: `"unknown"` means not evidenced. Boolean and enum fields default to
 `"unknown"` unless positive or negative proof exists in direct typed request evidence.
 Cairnwork never assumes or hard-codes `True` without direct evidence, and does
 not accept unproven caller assertions.
 
-- Core identity at re-verification: `verify_record` re-runs the notary's response binding against the Core identity of the *currently installed* `nexus-certify` unless the caller passes `core_identity=` explicitly. A record notarized under an older Core therefore reads as not verified (fail closed) until the caller supplies that Core's identity; the recorded response's own `core_identity` is carried in the predicate for that purpose.
+- Core identity at re-verification (#74): the notary stores, with each schema-2 record, the Core identity it was notarized against, and `verify_record` checks the record's response binding against that stored identity, so a record notarized under an older Core still verifies after a Core upgrade. If the caller passes `core_identity=`, it is a pin: it must also equal the record's stored identity, else the record is refused (`IDENTITY_MISMATCH`). Only a record from before that migration (no stored identity) is checked against the identity of the currently installed `nexus-certify`, or the caller's `core_identity=`. (`notary.py` `_identity_problem`, `record.py` `verify_record`.)
 
 ## Signing (DSSE, Ed25519)
 
@@ -106,7 +108,7 @@ envelope (`cairnwork_attest.dsse`):
 ```
 
 - Envelope top-level keys must be strictly the whitelist `payloadType`, `payload`, `signatures`; any extra top-level key fails envelope validation with `ENVELOPE_SHAPE`. Unknown fields inside the signed Statement payload may stay for forward compatibility.
-- Public signing is performed via `sign_statement(verified: VerifiedRecord, *, producer: Producer, timestamp: str, private_key: Ed25519PrivateKey) -> dict`: it accepts only an in-process `VerifiedRecord`, builds the Statement via `build_statement`, serialises it with `statement_bytes`, and signs it. The raw-bytes signer is private (`_sign_bytes`).
+- Public signing is performed via `sign_statement(verified: VerifiedRecord, *, producer: Producer, timestamp: str, private_key: Ed25519PrivateKey, test_source: str = "none") -> dict`: it accepts only an in-process `VerifiedRecord`, builds the Statement via `build_statement` (`test_source` must be `"bundle"`, `"auto"` or `"none"`, else `STATEMENT_INPUT_ERROR`; the CLI passes the value it reads from the journal), serialises it with `statement_bytes`, and signs it. The raw-bytes signer is private (`_sign_bytes`).
 - The Ed25519 signature covers the DSSE Pre-Authentication Encoding
   `PAE(payloadType, payload)` =
   `"DSSEv1" SP len(type) SP type SP len(payload) SP payload`, never the base64
@@ -186,7 +188,7 @@ hashes or compares it (`MANIFEST_MISMATCH`, `BINDING_HASH_MISMATCH`, `RESPONSE_N
   - Without a Core identity pin, the signing key vouches for the reported Core identity.
 - **What is recomputed and checked** (in order, failing closed at the first violation):
   1. `BUNDLE_UNREADABLE` / `BUNDLE_MALFORMED` / `ENVELOPE_SHAPE` / `SIGNATURE_INVALID`: Bundle envelope is read using a single `os.open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)` call, verified with `fstat` to be a regular file with `st_size <= MAX` (4 MiB), and at most MAX+1 bytes are read from the fd (refusing if more arrives). Any missing file, oversize file, non-regular file, or read failure returns `BUNDLE_UNREADABLE`. Strict JSON decode failures (including duplicate keys) return `BUNDLE_MALFORMED`. The envelope must decode as strict JSON containing strictly `payloadType`, `payload`, `signatures` (any extra key → `ENVELOPE_SHAPE`), and its DSSE signature verified over `PAE(payloadType, payload)` using the supplied public key (`SIGNATURE_INVALID`).
-  2. `STATEMENT_SHAPE`: Statement payload decodes as strict JSON (no duplicate key, `NaN`, `Infinity`, or number that overflows to infinity such as `1e400`, #449) with `_type == "https://in-toto.io/Statement/v1"`, `predicateType == "https://cairnwork.github.io/attestation/verified-change/v0.1"`, and an object `predicate`. Unknown fields inside the signed Statement may stay for forward compatibility.
+  2. `STATEMENT_SHAPE`: Statement payload decodes as strict JSON (no duplicate key, `NaN`, `Infinity`, or number that overflows to infinity such as `1e400`, #449) with `_type == "https://in-toto.io/Statement/v1"`, `predicateType` equal to the v0.1 URI or the v0.2 URI (`https://cairnwork.github.io/attestation/verified-change/v0.2`; v0.2 receipts continue in "Verifying a v0.2 receipt" below, and the steps listed here are the v0.1 path), and an object `predicate`. A v0.1 receipt verified with a policy fails right after this step with `TEST_SOURCE_MISMATCH`, before the subject and candidate checks. Unknown fields inside the signed Statement may stay for forward compatibility.
   3. `SUBJECT_SHAPE`: Statement has exactly one subject entry with a valid 40-hex `gitCommit` digest, and `predicate.base_commit` is a 40-hex commit hash.
   4. `CANDIDATE_MISMATCH`: The Statement's subject `gitCommit` must equal `expected_candidate` (checked right after signature and shape checks). Verifying without pinning the candidate proves only that "some commit was verified".
      - `BASE_MISMATCH` (part of step 4): Only when the caller passes `--base <sha>` (`expected_base`): `predicate.base_commit` must equal it. Checked right after `CANDIDATE_MISMATCH`, so only a signed, well-shaped statement reaches the comparison. Without `--base` this check is skipped and behaviour is unchanged.
@@ -211,7 +213,9 @@ cairnwork-attest keygen --state <state-dir>
 cairnwork-attest statement --state <state-dir> --task-id <id> --attempt-id <id> --candidate <sha> --out bundle.json --sign
 
 # 3. Offline verification: verify the signed bundle using public key and git repo
-cairnwork-attest verify bundle.json --public-key <public-key.pem> --repo <git-repo> --candidate <sha> [--base <sha>] [--core-identity <json>]
+cairnwork-attest verify bundle.json --public-key <public-key.pem> --repo <git-repo> --candidate <sha> [--base <sha>] [--core-identity <json>] [--policy <json>] [--json]
+
+# 4. Publish, Check Run and runner hook (sections below): publish, check-run, on-verified
 ```
 
 `--candidate <sha>` is required with no default. The caller must decide and pass the candidate commit explicitly (for example, `--candidate "$(git rev-parse HEAD)"`). The tool refuses to guess the candidate from HEAD or the local environment because an attacker-controlled checkout must never be trusted to choose the candidate commit under evaluation.
@@ -386,7 +390,7 @@ Checks run in this order and the first failure is reported:
     `TEST_PATH_NOT_TARGETED` (detail `DEFERRED_TESTS_NOT_COLLECTED`). Confidential mode checks
     neither and keeps taking the signer's word, as above
 
-On success `verify --json` adds `assurance`, what the receiver checked itself (`null` for v0.1):
+On success `VerifyResult.assurance` (Python API) and `verify --json` carry `assurance`, what the receiver checked itself (`null` for v0.1):
 `mode` (`full`/`confidential`), `test_source` (`policy_pinned` with `--policy`, otherwise
 `signer_choice`: the test commit the signer chose, which the receiver should read itself), `head`, `non_test_paths` (`verified` or
 `verified_against_core_manifest`), `test_contents` (`verified` or `not_verified`), `overlay`
@@ -479,5 +483,5 @@ The following capabilities and gaps are explicitly deferred:
 - Sigstore signing and transparency log integration.
 - Enforcing forge status (the notes push is `cairnwork-attest publish`; the informational Check Run is `cairnwork-attest check-run`).
 - `hidden_test_commit` for the Issue runner: bound for external candidates (v0.2) only.
-- Execution log hashes: verifier argv is bound for external candidates (v0.2). The log digest and the sandbox profile hash are not separate fields, but both are committed inside each verifier observation's `artifact_hash` (`log_sha256` and `sandbox_profile_sha256` in `verifier_exec._record_digest`).
+- Execution log hashes: verifier argv is bound for external candidates (v0.2). The log digest and the sandbox profile hash are not separate fields, but both are committed inside each verifier observation's `artifact_hash` (`log_sha256` and `sandbox_profile_sha256` in `cairnwork.verifier_exec._record_digest`, called from `verifiers.py` and `blackbox_judge.py`).
 - Timestamp validation: Timestamp is caller-supplied and not validated as UTC or against a trusted timestamping authority.
