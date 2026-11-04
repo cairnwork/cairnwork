@@ -31,7 +31,11 @@ def _names(names) -> str:
 def _kind_causes(fail_kind) -> list[str]:
     """#775: a test that failed in fixture setup or with an OSError (report_guard's
     ``fail_kind``). Wording only: the verdict stays FAILED and nothing parses it."""
-    said = {"setup": "setup error in", "env": "environment error (OSError) in"}
+    said = {
+        "setup": "setup error in",
+        "env": "environment error (OSError) in",
+        "plugin": "missing pytest plugin fixture in",
+    }
     return [f"{said[kind]} {_names([node])[3:]}" for node, kind in fail_kind.items()][:MAX_NAMES]
 
 

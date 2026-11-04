@@ -130,7 +130,7 @@ class VerifierRun:
     recorded: bool = False  # the guard's record was there and well-formed (base_comparison, #234)
     collect_errors: tuple[str, ...] = ()  # collectors the guard saw fail (B2, #234)
     teardown_errors: tuple[str, ...] = ()  # tests whose teardown failed (#478, report_guard)
-    fail_kind: dict[str, str] = field(default_factory=dict)  # #775: node -> "setup" | "env"
+    fail_kind: dict[str, str] = field(default_factory=dict)  # #775: node -> setup/env/plugin
     forged: tuple[str, ...] = ()  # FORGED_BYTECODE findings (#289): a base run proves nothing
     log_too_big: bool = False  # the run's log went over MAX_LOG_BYTES (#481, base_comparison)
     why: str = ""  # in words, why the run did not pass ("" when it passed): reasons.py
@@ -278,6 +278,12 @@ def _run_one(batch: _Batch, spec, checkout) -> VerifierRun:
                 channel.close()
 
 
+def _read_verdict(channel, path, nonce, plugins):
+    """The guard's record, with its ``plugin:<module>`` fail kinds made final (#804)."""
+    verdict = channel.read() if channel else report_guard.read_verdict(path, nonce)
+    return replace(verdict, fail_kind=pytest_config.plugin_kinds(verdict.fail_kind, plugins))
+
+
 def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, channel) -> VerifierRun:
     ctx, candidate_commit, timeout = batch.ctx, batch.candidate_commit, batch.timeout
     account, python, attempt_id = ctx.account, batch.python, ctx.attempt_id
@@ -315,7 +321,7 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
         returncode, timed_out, survivors = None, False, 0
     mutated = checkout_differences(ctx.repo, candidate_commit, checkout, before, account, python)
     forged = bytecode_findings(tmp, checkout, run_dir, spec.targets, account, python)
-    verdict = channel.read() if channel else report_guard.read_verdict(verdict_path, verdict_nonce)
+    verdict = _read_verdict(channel, verdict_path, verdict_nonce, plugins)
     not_run = verdict.not_run(spec.targets)  # a target with no test that ran, a skipped module
     ran = profile is not None and verdict.ran and not not_run
     clean = not timed_out and not mutated and survivors == 0 and not forged

@@ -51,7 +51,10 @@ from cairnwork.gitcmd import GitCommandError, run_git
 #   strict_config
 #   asyncio_*                         pytest-asyncio needs them to run async tests;
 #   timeout                           pytest-timeout limit per test; it can only end a
-#                                     test sooner, Cairnwork's own timeout still applies.
+#                                     test sooner, Cairnwork's own timeout still applies;
+#   DJANGO_SETTINGS_MODULE,           pytest-django: which settings module (base value only:
+#   DJANGO_CONFIGURATION,             the env is scrubbed, addopts' --ds is dropped) and
+#   FAIL_INVALID_TEMPLATE_VARS        the stricter template check (#804).
 # A kept key whose plugin the interpreter lacks fails the run (PytestConfigError) rather
 # than being dropped: dropping it would run the tests more leniently than the target's CI.
 # pythonpath is handled apart: its entries must stay inside the checkout.
@@ -72,13 +75,26 @@ BASE_KEYS = (
     "asyncio_default_fixture_loop_scope",
     "asyncio_default_test_loop_scope",
     "timeout",
+    "DJANGO_SETTINGS_MODULE",
+    "DJANGO_CONFIGURATION",
+    "FAIL_INVALID_TEMPLATE_VARS",
 )
-# Explicit -p plugins: (importable top-level name, plugin module, keys that need it).
+# Explicit -p plugins (#804): (importable top-level name, plugin module, base keys that need it).
+# Only these names are ever loaded, and only when the verifier's interpreter has them; the list is
+# Cairnwork's, never read from the base, the candidate or the environment. pytest-django's other
+# ini keys are dropped: django_debug_mode only changes DEBUG; django_find_project is pinned below.
+_ASYNCIO = ("asyncio_mode", "asyncio_default_fixture_loop_scope", "asyncio_default_test_loop_scope")
+_DJANGO = ("DJANGO_SETTINGS_MODULE", "DJANGO_CONFIGURATION", "FAIL_INVALID_TEMPLATE_VARS")
 PLUGINS = (
-    ("pytest_asyncio", "pytest_asyncio.plugin", "asyncio_"),
-    ("pytest_timeout", "pytest_timeout", "timeout"),
-    ("anyio", "anyio.pytest_plugin", None),
+    ("pytest_asyncio", "pytest_asyncio.plugin", frozenset(_ASYNCIO)),
+    ("pytest_timeout", "pytest_timeout", frozenset({"timeout"})),
+    ("anyio", "anyio.pytest_plugin", frozenset()),
+    ("pytest_mock", "pytest_mock", frozenset()),
+    ("pytest_django", "pytest_django.plugin", frozenset(_DJANGO)),
 )
+# Written whenever pytest_django loads: its default (true) puts the directory of any manage.py,
+# a file the candidate can write, on sys.path, outside the roots the shadow gate protects (#351).
+DJANGO_PINNED = ("django_find_project", "false")
 IMPORT_MODES = frozenset({"prepend", "append", "importlib"})
 # From the base addopts only these survive (everything else is dropped): the import
 # mode, and options that make the run stricter (-W warning filters, strict markers/config).
@@ -120,13 +136,15 @@ class PytestSettings:
         ``-P`` keeps it off sys.path until pytest itself is imported."""
         lines = [f"# base config: {self.source or 'none'}", "[pytest]"]
         for key, value in self.values:
-            needs = [p for p in PLUGINS if p[2] and key.startswith(p[2])]
+            needs = [p for p in PLUGINS if key in p[2]]
             if needs and needs[0][1] not in plugins:
                 raise PytestConfigError(
                     f"the base config sets {key}, but {needs[0][0]} is not installed"
                     " in the verifier's Python"
                 )
             lines.append(f"{key} = {_render(value)}")
+        if "pytest_django.plugin" in plugins:
+            lines.append(" = ".join(DJANGO_PINNED))
         paths = [str(checkout), *(str(checkout / entry) for entry in self.pythonpath)]
         lines.append("pythonpath = " + " ".join(shlex.quote(p) for p in dict.fromkeys(paths)))
         if self.dropped:
@@ -225,6 +243,7 @@ def _section(text: str, section: str, form: str, name: str) -> dict[str, Any] | 
                 table = table.get(part) if isinstance(table, dict) else None
             return dict(table) if isinstance(table, dict) else None
         parser = configparser.ConfigParser(interpolation=None)
+        parser.optionxform = str  # type: ignore[assignment] # pytest's ini keys are case-sensitive
         parser.read_string(text)
     except (tomllib.TOMLDecodeError, configparser.Error) as exc:
         raise PytestConfigError(f"{name} at the base cannot be parsed") from exc
@@ -317,6 +336,18 @@ def _render(value: Any) -> str | None:
     if len(lines) == 1 and not isinstance(value, list):
         return lines[0]
     return "".join(f"\n    {line}" for line in lines)
+
+
+def plugin_kinds(fail_kind: dict[str, str], loaded: tuple[str, ...]) -> dict[str, str]:
+    """The guard's ``plugin:<module>`` fail kinds made final (#804): ``plugin`` (base
+    PLUGIN_NOT_INSTALLED) only when the module is not in ``loaded``, the table plugins found in
+    the verifier's Python; a fixture missing although its plugin loaded is a ``setup`` error."""
+    final = {}
+    for node, kind in fail_kind.items():
+        if kind.startswith("plugin:"):
+            kind = "setup" if kind.removeprefix("plugin:") in loaded else "plugin"
+        final[node] = kind
+    return final
 
 
 @lru_cache(maxsize=8)
