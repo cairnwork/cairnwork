@@ -54,6 +54,7 @@ task result. Core's notarisation contract is unchanged.
 
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import json
 import os
@@ -71,6 +72,7 @@ from cairnwork.issue_task import test_target
 from cairnwork.p2p_nodes import changed_tests, passing_targets, require_nodes
 from cairnwork.p2p_probe_log import probe_log_tail
 from cairnwork.p2p_selection import DEFAULT_BUDGET_SECONDS, cap_note, select_p2p_targets
+from cairnwork.pytest_config import PytestConfigError, base_settings
 from cairnwork.verifiers import VerifierRun, VerifierSpec, run_verifiers
 from cairnwork.verify_context import VerifyContext
 
@@ -93,18 +95,24 @@ class P2PPlan:
 
 
 def _base_tests(task, exclude: frozenset[str]) -> tuple[str, ...]:
-    """Test files (test_*.py, *_test.py) under the roots on the base that are plain targets."""
+    """Test files under the roots on the base that are plain targets and whose name matches the
+    base's ``python_files`` (the one the verifier's ini carries); without it pytest's default,
+    test_*.py and *_test.py."""
     try:
+        values = dict(base_settings(task.repo, task.base_commit).values)
         raw = run_git(task.repo, "ls-tree", "-r", "-z", "--name-only", task.base_commit,
                       "--", *task.test_roots)  # fmt: skip
-    except GitCommandError as exc:
+    except (GitCommandError, PytestConfigError) as exc:
         raise P2PRejected("P2P_BASE_UNREADABLE", str(exc)) from exc
+    configured = values.get("python_files")
+    words = [configured] if isinstance(configured, str) else configured or []
+    patterns = [w for item in words for w in str(item).split()] or ["test_*.py", "*_test.py"]
     target = test_target(task.test_roots)
     return tuple(
         sorted(
             p for p in raw.split("\0")
             if p and p not in exclude and target.fullmatch(p)
-            and (basename(p).startswith("test_") or p.endswith("_test.py"))
+            and any(fnmatch.fnmatch(basename(p), pat) for pat in patterns)
         )
     )  # fmt: skip
 
