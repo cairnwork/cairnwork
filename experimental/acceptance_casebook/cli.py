@@ -1,4 +1,4 @@
-"""CLI: `python -m experimental.acceptance_casebook add|list|confirm`. Exit 0 ok, 2 refusal."""
+"""CLI: `python -m experimental.acceptance_casebook add|list|confirm|repair`; exit 2 = refused."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from typing import Any
 
 from experimental.acceptance_casebook.confirm import check_record, confirm_case
 from experimental.acceptance_casebook.identity import IdentityError, resolve_actor
+from experimental.acceptance_casebook.repair import repair
 from experimental.acceptance_casebook.store import (
     CasebookError,
     add_case,
@@ -21,7 +22,7 @@ from experimental.acceptance_casebook.store import (
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="acceptance_casebook", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("add", "list", "confirm"):
+    for name in ("add", "list", "confirm", "repair"):
         p = sub.add_parser(name)
         p.add_argument("--casebook", type=Path, required=True)
         p.add_argument("--json", action="store_true")
@@ -95,6 +96,10 @@ def main(argv: list[str] | None = None) -> int:
                 else list_cases(args.casebook, db)
             )
             _out(args, {"cases": cases}, "\n".join(json.dumps(c, sort_keys=True) for c in cases))
+            return 0
+        if args.command == "repair":
+            result = repair(args.casebook)
+            _out(args, {"result": result}, result)
             return 0
         if args.command == "confirm":
             digest = _confirm(args)
