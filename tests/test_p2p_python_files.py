@@ -10,6 +10,7 @@ from test_p2p import FIX_BREAKS_NEG, SIBLING, configured_project, run
 
 from cairnwork.p2p import P2PRejected, _base_tests
 from cairnwork.pytest_config import _file_matches
+from cairnwork.pytest_config import test_file_rule as base_file_rule
 
 
 @pytest.mark.parametrize(
@@ -27,8 +28,29 @@ def test_a_pattern_matches_as_pytest_matches_it(pattern, path, expected):
     assert _file_matches(pattern, path) is expected
 
 
-def test_a_regression_under_a_directory_pattern_is_caught(repo, tmp_path):
-    project = configured_project(repo, "[pytest]\npython_files = tests/*.py\n")
+@pytest.mark.parametrize(
+    ("ini", "path", "expected"),
+    [
+        ("[pytest]\npython_files = /home/*/test_*.py\n", "tests/test_x.py", True),  # default added
+        ("[pytest]\npython_files = */*/*/*/test_*.py\n", "tests/test_x.py", True),
+        ("[pytest]\npython_files = check_*.py\n", "tests/test_x.py", False),  # no "/": no default
+        (
+            '[tool.pytest.ini_options]\npython_files = ["check_*.py spec_*.py"]\n',
+            "t/spec_x.py",
+            True,
+        ),
+    ],
+)
+def test_the_base_file_rule_never_selects_fewer_than_the_default(repo, ini, path, expected):
+    name = "pyproject.toml" if ini.startswith("[tool") else "pytest.ini"
+    base = commit_change(repo, {name: ini})
+    assert base_file_rule(repo, base)(path) is expected
+
+
+@pytest.mark.sandbox
+@pytest.mark.parametrize("pattern", ["tests/*.py", "/home/*/test_*.py", "*/*/*/*/test_*.py"])
+def test_a_regression_under_a_directory_pattern_is_caught(repo, tmp_path, pattern):
+    project = configured_project(repo, f"[pytest]\npython_files = {pattern}\n")
     commit_change(project, {"tests/test_sibling.py": SIBLING})
     result = run(project, tmp_path, {"src/calc.py": FIX_BREAKS_NEG}, mode="whole-suite")
     assert result.status == "FAILED" and not result.verified
