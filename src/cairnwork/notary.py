@@ -185,6 +185,9 @@ class Notary:
             raise NotaryInputError("binding test_commit must be a 40-hex commit id")
         if not isinstance(paths, list) or not all(isinstance(x, str) and x for x in paths):
             raise NotaryInputError("binding test_paths must be a list of path strings")
+        deleted = binding.get("deleted_test_paths", [])  # #798
+        if not isinstance(deleted, list) or not all(isinstance(x, str) and x for x in deleted):
+            raise NotaryInputError("binding deleted_test_paths must be a list of path strings")
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 rebuilt = overlay_tree(
@@ -193,6 +196,7 @@ class Notary:
                     test_commit,
                     tuple(paths),
                     Path(tmp) / "index",
+                    tuple(deleted),
                 )
         except (TestCommitRejected, GitCommandError, ValueError) as exc:  # ValueError: NUL byte
             raise NotaryInputError(str(exc)) from exc

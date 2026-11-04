@@ -40,7 +40,7 @@ def test_a_file_is_covered_whole_or_by_each_of_its_changed_tests():
 def _paths(project, files):
     base, test_commit = make_test_commit(project, files)
     ensure_test_commit(project, test_commit)
-    return paths_of_commit(project, base, test_commit)
+    return paths_of_commit(project, base, test_commit)[0]
 
 
 def _long(size: int) -> str:

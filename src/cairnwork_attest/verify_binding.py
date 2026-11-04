@@ -37,7 +37,7 @@ from cairnwork.core_request import change_manifest
 from cairnwork.deferred_tests import OVERLAY_RULE, TestCommitRejected, overlay_tree
 from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.notary_verify import binding_hash
-from cairnwork_attest import binding_extras
+from cairnwork_attest import binding_extras as bx
 from cairnwork_attest.binding_extras import KEYS, binding_problem, pin_problem, policy_problem
 from cairnwork_attest.record import AttestError, _digest, parse_strict_json
 from cairnwork_attest.verify_coverage import coverage_problem
@@ -188,8 +188,8 @@ def verify_bound(
         return err
     assurance = _assurance(full, pinned=policy is not None)
     # #303: what the verdict rests on, already checked against Core's required ids (pin_problem)
-    assurance["protection"] = binding_extras.recorded_protection(binding)
-    assurance["blackbox_checks"] = binding_extras.checks_assurance(policy)
+    assurance["protection"] = bx.recorded_protection(binding)
+    assurance["blackbox_checks"] = bx.checks_assurance(policy)
     return VerifyResult(ok=True, code="OK", statement=statement, assurance=assurance)
 
 
@@ -304,11 +304,9 @@ def _test_source(ctx: _Ctx) -> VerifyResult | None:
         binding["rule"],
     ]:
         return _fail("TEST_SOURCE_MISMATCH", f"policy pins another test commit than {test_commit}")
-    if ctx.policy is not None and "test_roots" in ctx.policy:
-        roots = tuple(ctx.policy["test_roots"])
-        for path in binding["test_paths"]:
-            if not any(path.startswith(r.rstrip("/") + "/") for r in roots):
-                return _fail("TEST_ROOT_VIOLATION", f"test path {path} not under any allowed root")
+    problem = bx.roots_problem(ctx.policy, binding, ctx.full)
+    if problem is not None:  # a failed VerifyResult is falsy
+        return problem
     if not ctx.full:
         return None
     try:
@@ -319,7 +317,7 @@ def _test_source(ctx: _Ctx) -> VerifyResult | None:
         ).split("\0")  # fmt: skip
     except GitCommandError as exc:
         return _fail("TEST_SOURCE_MISMATCH", f"cannot read the test commit: {exc}")
-    if parents != [binding["base"]] or sorted(n for n in names if n) != binding["test_paths"]:
+    if parents != [binding["base"]] or sorted(n for n in names if n) != bx.all_paths(binding):
         return _fail("TEST_SOURCE_MISMATCH", "test commit is not one commit of these paths on base")
     return None
 
@@ -332,7 +330,7 @@ def _tree(ctx: _Ctx) -> VerifyResult | None:
         try:
             tree = overlay_tree(
                 ctx.repo, binding["head"], binding["test_commit"], tuple(binding["test_paths"]),
-                Path(tmp) / "index",
+                Path(tmp) / "index", tuple(bx.deleted_paths(binding)),
             )  # fmt: skip
         except TestCommitRejected as exc:  # a git failure here is the receiver's environment
             code = "OVERLAY_UNSUPPORTED_ENTRY" if exc.code == "OVERLAY_UNSUPPORTED_ENTRY" else ""
@@ -367,7 +365,7 @@ def _head_tree(ctx: _Ctx) -> VerifyResult | None:
         return _fail("HEAD_TREE_MISMATCH", "Core's manifest entries are malformed")
     claimed = {e.get("path"): e for e in entries}
     heads = {e.path: e.to_core() for e in head_change.entries}
-    tests = set(binding["test_paths"])
+    tests, gone = set(binding["test_paths"]), set(bx.deleted_paths(binding))
     if len(claimed) != len(entries):
         return _fail("HEAD_TREE_MISMATCH", "Core's manifest names a path twice")
     for path in sorted(tests):
@@ -378,7 +376,10 @@ def _head_tree(ctx: _Ctx) -> VerifyResult | None:
             return _fail("HEAD_TREE_MISMATCH", f"test path {path} is not added or modified")
         if entry.get("after_mode") not in _REGULAR:
             return _fail("OVERLAY_UNSUPPORTED_ENTRY", f"test path {path} is not a regular file")
-    for path in sorted((set(claimed) | set(heads)) - tests, key=str):
+    problem = bx.manifest_problem(claimed, binding)
+    if problem is not None:
+        return problem
+    for path in sorted((set(claimed) | set(heads)) - tests - gone, key=str):
         if claimed.get(path) != heads.get(path):
             return _fail("HEAD_TREE_MISMATCH", f"{path} in the executed tree is not head's")
     return None

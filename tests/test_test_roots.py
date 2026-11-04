@@ -131,7 +131,7 @@ PKG_TEST = "from calc import add\ndef test_regression():\n    assert add(1, 1) =
 
 def paths_of(repo, base, commit, *roots):
     ensure_test_commit(repo, commit)
-    return _paths(repo, base, commit, *roots)
+    return _paths(repo, base, commit, *roots)[0]
 
 
 def test_a_deferred_test_commit_must_sit_under_a_root(pkg_project, tmp_path):
