@@ -52,3 +52,19 @@ def test_pre_core_refused_but_correct_is_its_own_block(fx: dict[str, Any]) -> No
     p = b["pre_core_refused_but_correct"]
     assert (p["num"], p["den"], p["coverage"], p["cases"]) == (1, 1, "1/1", [pre])
     assert b["refused_but_correct"] == base
+
+
+def test_two_closes_on_one_call_last_close_decides_and_counts_once(fx: dict[str, Any]) -> None:
+    cid = call_id(fx)
+    add_event(fx["led"], cid, {"type": "observed", "start": "a", "end": "b"})
+    add_event(fx["led"], cid, {"type": "closed", "checks_done": True})
+    assert build_report(fx["led"])["v1"]["cases"]["no_defect_found"] == [cid]
+    assert add_event(fx["led"], cid, {"type": "closed", "checks_done": False}) == "ADDED"
+    b = build_report(fx["led"])["v1"]
+    assert b["cases"]["unknown"] == [cid] and b["cases"]["no_defect_found"] == []
+    v = b["VERIFIED"]  # one call: counted once, in `unknown`, outside the rate denominator
+    assert (v["tracked"], v["closed"], v["unknown"], v["den"], v["coverage"]) == (1, 0, 1, 0, "0/1")
+    assert v["text"] == "unknown"
+    add_event(fx["led"], cid, {"type": "closed", "checks_done": True})  # last close wins again
+    b = build_report(fx["led"])["v1"]
+    assert b["cases"]["no_defect_found"] == [cid] and b["VERIFIED"]["closed"] == 1
