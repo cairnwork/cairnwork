@@ -101,7 +101,7 @@ def test_a_planted_pyc_is_still_found_without_fd_scandir(tmp_path):
     python = python_without_fd_scandir(tmp_path)
     found = redirected_bytecode(checkout, (checkout.parent, run_dir), python=python)
     assert found and not any("bytecode scan failed" in item for item in found)
-    assert any("helper.cpython-312.pyc" in item for item in found)
+    assert found == ("tests/helper.py (protected input)",)
 
 
 @pytest.mark.skipif(not OLD, reason="no older uv Python (3.6 is not installable by uv)")
