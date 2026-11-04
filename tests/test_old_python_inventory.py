@@ -7,6 +7,7 @@ way a real 3.9 does. Each case can also put directories on its sys.path or insta
 
 import ast
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -234,6 +235,7 @@ def test_an_unsupported_or_unreadable_version_fails_closed(repo, tmp_path, answe
     assert refused(repo, "pkgB/base.py", str(python))
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="root searches any directory")
 def test_a_path_the_probe_cannot_search_fails_closed(repo, tmp_path):
     """Open 6: the verifier's account might import from a directory the probe's user cannot
     search, so a permission error is a failure, never "absent"."""
