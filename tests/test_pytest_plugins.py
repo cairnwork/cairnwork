@@ -4,6 +4,7 @@ PLUGIN_NOT_INSTALLED when it does not; nothing outside the table is ever loaded.
 
 import configparser
 import importlib.util
+import json
 
 import pytest
 from conftest import commit_change
@@ -187,3 +188,36 @@ def test_the_guard_record_accepts_only_table_plugin_kinds():
 
     assert kind_ok("plugin:pytest_mock") and kind_ok("setup")
     assert not kind_ok("plugin:evil") and not kind_ok("plugin")
+
+
+@pytest.mark.sandbox
+def test_a_table_plugin_that_is_found_but_fails_to_load_is_not_plugin_not_installed(
+    project, state, monkeypatch, capsys
+):
+    """#804: 'not installed' (find_spec says no) and 'installed but broken' (the module is found,
+    importing it raises) are told apart. The load failure makes ``-p`` abort pytest before the
+    guard records anything, so the base is UNCOMPARABLE as for any run without a record."""
+    from test_deferred_tests import CHECK, make_test_commit
+    from verify_helpers import candidate
+
+    from cairnwork import pytest_config, report_guard, verify_cli
+
+    real_install = report_guard.install_plugin
+
+    def install_with_broken_plugin(guard):
+        real_install(guard)
+        (guard / "pytest_mock.py").write_text("raise RuntimeError('plugin fails to import')\n")
+
+    monkeypatch.setattr(report_guard, "install_plugin", install_with_broken_plugin)
+    monkeypatch.setattr(pytest_config, "installed_plugins", lambda python: ("pytest_mock",))
+    base, test_commit = make_test_commit(project, {"tests/test_regression.py": MOCKER_TEST})
+    cand = candidate(project, base, {"src/calc.py": FIX_DOUBLE})
+    code = verify_cli.main(
+        ["--state", str(state), "run", "--repo-path", str(project), "--base", base,
+         "--candidate", cand, "--allowed-file", "src/calc.py", "--verifier",
+         " ".join(CHECK[0][1]), "--test-commit", test_commit]
+    )  # fmt: skip
+    out = json.loads(capsys.readouterr().out)
+    assert code == 2 and out["status"] == "UNCOMPARABLE" and out["verified"] is False, out
+    assert out["uncomparable"]["code"] != "PLUGIN_NOT_INSTALLED"
+    assert out["uncomparable"]["code"] in ("BASE_NO_REPORT", "BASE_PYTEST_ERROR"), out
