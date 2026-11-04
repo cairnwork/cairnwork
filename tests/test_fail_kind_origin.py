@@ -102,3 +102,14 @@ def test_an_oserror_raised_in_site_packages_inside_the_checkout_stays_env(tmp_pa
     v = _run(tmp_path, files)
     assert v.outcomes == {f"{T}test_a": "failed"}
     assert v.fail_kind == {f"{T}test_a": "env"}
+
+
+def test_a_builtin_oserror_raised_by_checkout_code_stays_env(tmp_path):
+    """A sandbox-denied open() in checkout code: a built-in class, so the environment reading
+    stays (a candidate that avoids the denied read must not be VERIFIED off it)."""
+    lib = "def load():\n    open('/nonexistent-dir-797/none.txt')\n"
+    deny = "def load():\n    raise PermissionError(13, 'denied')\n"
+    for body in (lib, deny):
+        v = _run(tmp_path / str(len(body)), {"lib.py": body, "tests/test_x.py": USE})
+        assert v.outcomes == {f"{T}test_a": "failed"}
+        assert v.fail_kind == {f"{T}test_a": "env"}
