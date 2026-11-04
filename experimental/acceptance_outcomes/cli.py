@@ -26,7 +26,7 @@ def _parser() -> argparse.ArgumentParser:
         rec.add_argument(f"--{opt}", required=True)
     rec.add_argument("--test-commit", default="")
     rec.add_argument("--notary-db", type=Path)
-    rec.add_argument("--notary-lost", default="", metavar="REASON",
+    rec.add_argument("--notary-lost", default=None, metavar="REASON",
                      help="Core result whose notary database is gone (no --notary-db)")  # fmt: skip
     rec.add_argument("--call-ref", default="", help="tells apart identical outputs of two calls")
     ev = sub.choices["event"]

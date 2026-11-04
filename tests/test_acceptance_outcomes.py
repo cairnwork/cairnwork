@@ -338,9 +338,9 @@ def test_refused_but_correct_denominator_is_closed_failed_or_refused(fx: dict[st
     led = fx["led"]
     ids = []
     for n in range(4):
-        record_call(
-            led, {"status": "FAILED" if n % 2 else "REFUSED", "reason": f"w{n}"}, inputs(fx)
-        )
+        res = {"status": "FAILED" if n % 2 else "REFUSED", "reason": f"w{n}"}
+        lost = "state gone" if n % 2 else ""  # FAILED reached Core: its row is declared lost
+        record_call(led, res, inputs(fx), None, notary_lost=lost)
     ids = [json.loads(x)["call_id"] for x in led.read_text().splitlines()]
     add_event(led, ids[0], {"type": "observed", "start": "a", "end": "b"})
     add_event(led, ids[0], {"type": "closed", "checks_done": True})  # no_defect_found

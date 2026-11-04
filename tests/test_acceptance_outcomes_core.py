@@ -55,9 +55,11 @@ def test_ac1d_lost_flag_marks_line_and_report(fx: dict[str, Any]) -> None:  # no
 
 def test_ac1d_lost_flag_negatives(fx: dict[str, Any]) -> None:  # noqa: F811
     cases = [(res, None, "gone") for res in PRE_CORE]  # pre-Core result
-    cases += [(verified({}), fx["db"], "gone"), (verified({}), None, "")]  # db given; no reason
+    cases += [(verified({}), fx["db"], "gone")]  # db given
+    for blank in ("", "  \t"):  # explicit empty or blank reason: refused for any result
+        cases += [(verified({}), None, blank), (PRE_CORE[0], None, blank), (CORE[1], None, blank)]
     for res, db, why in cases:
-        with pytest.raises(OutcomesError, match="OUTCOME_"):
+        with pytest.raises(OutcomesError, match="OUTCOME_INVALID"):
             record_call(fx["led"], res, inputs(fx), db, notary_lost=why)
     assert not fx["led"].exists()
 
@@ -68,6 +70,7 @@ def test_ac1d_cli_flag(fx: dict[str, Any], tmp_path: Path) -> None:  # noqa: F81
     rec = ["record", "--ledger", str(fx["led"]), "--result", str(res), "--repo", "r"]
     rec += ["--base", fx["base"], "--candidate", fx["cand"], "--version", "v1"]
     assert main(rec) == 2
+    assert main([*rec, "--notary-lost", ""]) == 2  # explicit empty reason is refused
     assert main([*rec, "--notary-lost", "cleaned up"]) == 0
     assert json.loads(fx["led"].read_text())["notary_lost_reason"] == "cleaned up"
 

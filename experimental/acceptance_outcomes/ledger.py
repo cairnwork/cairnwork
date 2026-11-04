@@ -43,13 +43,17 @@ def _reached_core(verdict: str, result: dict[str, Any]) -> bool:
 
 
 def _notary_state(
-    verdict: str, call: dict[str, Any], result: dict[str, Any], db: Path | None, lost: str = ""
+    verdict: str,
+    call: dict[str, Any],
+    result: dict[str, Any],
+    db: Path | None,
+    lost: str | None = None,
 ):
     """Return "row", "no_notary_row" (pre-Core only) or "notary_lost"; OUTCOME_RECORD_MISMATCH when
     the notary disagrees: a row with another candidate, base or status, a Core result without its
     row (AC1c), or any row at all behind a call labelled as refused before Core."""
     reached = _reached_core(verdict, result)
-    if lost:
+    if lost is not None:
         if not reached or db is not None:
             raise OutcomesError("OUTCOME_INVALID", "notary-lost needs a Core result and no db")
         return "notary_lost"
@@ -76,7 +80,7 @@ def record_call(
     result: dict[str, Any],
     inputs: dict[str, str],
     notary_db: Path | None = None,
-    notary_lost: str = "",
+    notary_lost: str | None = None,
 ) -> str:
     """Append one call line. ``inputs``: repo, base, candidate, version, optional test_commit.
     ``notary_lost`` (a reason) marks a Core result whose notary database is gone (AC1d)."""
@@ -89,10 +93,13 @@ def record_call(
     verdict = _verdict_of(result)
     call.update(verdict=verdict, reason=str(result.get("reason") or result.get("error") or ""))
     call["task_id"], call["attempt_id"] = result.get("task_id", ""), result.get("attempt_id", "")
-    state = _notary_state(verdict, call, result, notary_db, notary_lost.strip())
+    lost = None if notary_lost is None else notary_lost.strip()
+    if lost == "":  # given but empty or blank: never read as "flag not passed"
+        raise OutcomesError("OUTCOME_INVALID", "notary-lost needs a reason")
+    state = _notary_state(verdict, call, result, notary_db, lost)
     call["no_notary_row"] = state == "no_notary_row"
     if state == "notary_lost":  # keys exist only on such lines: old lines keep their format (AC1e)
-        call["notary_lost"], call["notary_lost_reason"] = True, notary_lost.strip()
+        call["notary_lost"], call["notary_lost_reason"] = True, lost
     # The key holds every recorded field including the reason, so the same inputs refused for two
     # reasons are two calls; the same output recorded again is a replay (DUPLICATE). Two real calls
     # with identical output can be told apart with the optional ``call_ref``.

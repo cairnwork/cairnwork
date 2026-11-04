@@ -32,3 +32,5 @@ REFUSED/UNCOMPARABLE with an empty `core_status`). If the notary database is gon
 counts as reached Core, and the report prints "unchecked binding N" next to each rate that uses
 Core lines. The flag is refused for a pre-Core result or together with a database. Lines written
 before this change keep their format and still read; to fix an old ledger start a new file.
+`core_status` is taken as given from the result JSON; without `--notary-db` there is no way to
+check whether it was altered.
