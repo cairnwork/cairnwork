@@ -39,7 +39,7 @@ import re
 from typing import Any
 
 from cairnwork.gitcmd import OID, GitCommandError, run_git_bytes
-from cairnwork.tamper_scan_budget import ScanBudget
+from cairnwork.tamper_scan_budget import SCAN_BUDGET, ScanBudget
 
 _ASSIGN = r"(?:[-+*/%&|^@]|//|\*\*|<<|>>)?=(?!=)"
 PYTEST_INTERNALS = (
@@ -95,12 +95,34 @@ _NAMES = (  # a name from the rules above, as a bare word, by the rule that refu
 )
 
 
-def string_built_rules(text: str) -> list[str]:
-    """Rule names for a line that gives a refused name as string(s) to a dynamic lookup."""
+_WINDOW = 64  # a refused name is under 40 characters: more than this before a piece cannot hold one
+assert max(map(len, HOOK_NAMES)) < _WINDOW // 2
+
+
+def _runs(pieces: list[str]) -> set[str]:
+    """Runs of adjacent literals that can hold a name (the part before the last piece is short)."""
+    runs: set[str] = set()
+    for i in range(len(pieces)):
+        run = ""
+        for piece in pieces[i:]:
+            if len(run) > _WINDOW:
+                break
+            run += piece
+            runs.add(run)
+    return runs
+
+
+def string_built_rules(text: str, budget: ScanBudget | None = None) -> list[str]:
+    """Rule names for a line that gives a refused name as string(s) to a dynamic lookup.
+
+    The runs read are paid from ``budget`` (``scan_budget`` when it runs out).
+    """
     if not _DYNAMIC_ACCESS.search(text):
         return []
     pieces = [_FSTRING_PIECE.sub(r"\1", a or b) for a, b in _LITERAL.findall(text)]
-    runs = {"".join(pieces[i:j]) for i in range(len(pieces)) for j in range(i + 1, len(pieces) + 1)}
+    runs = _runs(pieces)
+    if budget is not None and not budget.read(runs):
+        return [SCAN_BUDGET]
     return [name for name, pattern in _NAMES if any(pattern.search(run) for run in runs)]
 
 

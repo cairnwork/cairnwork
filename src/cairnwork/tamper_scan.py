@@ -345,7 +345,7 @@ def _rule_names(
         _bind_aliases(text, aliases)  # before the extra checks: "import os as o; o._exit(0)"
         if also is not None:
             _bind_aliases(text, also)
-        more = _extra_rules(text, aliases, in_tests, budget) + string_built_rules(text)
+        more = _extra_rules(text, aliases, in_tests, budget) + string_built_rules(text, budget)
         names += [name for name in more if name not in names]
     return names
 

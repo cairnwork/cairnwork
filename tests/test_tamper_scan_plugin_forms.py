@@ -147,3 +147,42 @@ def test_blobs_of_many_files_are_read_by_one_cat_file(repo, monkeypatch):
     head = commit_change(repo, {f"src/m{i}.py": f"x{i} = {i}\n" for i in range(30)})
     assert scan_patch(repo, base, head) == []
     assert [c for c in calls if c[0] == "cat-file"] == [("cat-file", "--batch")]
+
+
+# Round 3: the cost of one line is bounded, and paid from the budget.
+def _many_pieces_line(count=815):
+    names = [f"{a}{b}" for a in "abcdefghij" for b in "abcdefghij"]
+    return "x = getattr(o, " + ",".join(f"'{n}'" for n in (names * 9)[:count]) + ")"
+
+
+def test_the_runs_of_one_line_are_bounded_by_the_window():
+    from cairnwork.tamper_scan_plugin import _WINDOW, _runs
+
+    pieces = [f"{i % 100:02d}" for i in range(800)]
+    runs = _runs(pieces)
+    assert len(runs) < 800 * (_WINDOW + 4)  # unbounded it is about 320,000
+    assert max(map(len, runs)) <= _WINDOW + 2 + 1
+
+
+def test_the_window_holds_the_longest_refused_name_split_one_character_a_piece():
+    from cairnwork.tamper_scan_plugin import _WINDOW, HOOK_NAMES
+
+    longest = max(HOOK_NAMES, key=len)
+    assert len(longest) < _WINDOW // 2
+    line = "setattr(m, " + " + ".join(f"'{c}'" for c in longest) + ", f)"
+    assert "pytest_hook_impl" in scan(line)
+    junk = "x = getattr(o, " + ", ".join(["'zz'"] * 200) + ", 'plugin' 'manager')"
+    assert "pytest_internals" in scan(junk)
+
+
+def test_a_line_of_hundreds_of_literals_is_read_quickly_and_paid_from_the_budget():
+    import time
+
+    line = _many_pieces_line()
+    start = time.monotonic()
+    scan(line)
+    assert time.monotonic() - start < 2.0  # about 1.7 s per line before the window
+    from cairnwork.tamper_scan_plugin import string_built_rules
+
+    assert string_built_rules(line, ScanBudget(read=100)) == ["scan_budget"]
+    assert string_built_rules(line, ScanBudget()) == []
