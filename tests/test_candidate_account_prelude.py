@@ -14,7 +14,7 @@ from test_uncomparable_paths import TEETH, IsolatedWorker, run_worker, stub  # n
 from verify_helpers import FIX
 
 from cairnwork import pipeline_judge, verifiers
-from cairnwork.account_prelude import AccountUnusableBeforeRun, prelude
+from cairnwork.account_prelude import AccountUnusableBeforeRun, locked_prelude
 from cairnwork.journal import Journal, no_evidence
 from cairnwork.verifier_account import AccountBusy, VerifierAccountError
 from cairnwork.verify_context import VerifyContext
@@ -53,15 +53,17 @@ class FakeAccount:
 @pytest.mark.parametrize("step", ["available", "require_idle", "scrub"])
 def test_each_prelude_refusal_is_typed_and_nothing_after_it_runs(step):
     account: Any = FakeAccount(step)
-    with pytest.raises(AccountUnusableBeforeRun) as raised:
-        prelude(account, "python3")
+    with pytest.raises(AccountUnusableBeforeRun) as raised, locked_prelude(account, "python3", 1):
+        pytest.fail("the run must not start")
     assert account.calls[-1] == {"scrub": "scrub"}.get(step, step)
     assert not raised.value.detail.startswith("VERIFIER_ACCOUNT_ERROR")
 
 
-def test_a_usable_account_passes_the_prelude():
+def test_a_usable_account_runs_and_its_errors_are_not_prelude_refusals():
     account: Any = FakeAccount()
-    prelude(account, "python3")
+    with pytest.raises(VerifierAccountError) as raised, locked_prelude(account, "python3", 1):
+        raise VerifierAccountError("the run's own error")
+    assert type(raised.value) is VerifierAccountError  # an error of the run stays what it was
     assert account.calls == ["available", "require_idle", "scrub"]
 
 

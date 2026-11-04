@@ -71,7 +71,7 @@ import cairnwork_sandbox
 from cairnwork import gitcmd, pytest_config, report_channel, report_guard
 from cairnwork.account_checkout import checkout_differences, make_account_checkout
 from cairnwork.account_checkout import remove_checkout as _remove_checkout
-from cairnwork.account_prelude import prelude
+from cairnwork.account_prelude import locked_prelude
 from cairnwork.bytecode_hook import host_notes
 from cairnwork.bytecode_roots import bytecode_findings
 from cairnwork.confined import ATTEMPT_ENV, MAX_LOG_BYTES, RUN_TOKEN_VAR
@@ -164,8 +164,8 @@ def run_verifiers(
     account = ctx.account
     if account is not None:
         ctx, python = replace(ctx, run_root=account.run_root), ctx.python or account.python
-        with account.exclusive(lock_wait_seconds(len(specs), timeout)):
-            prelude(account, python)  # refusal: AccountUnusableBeforeRun (#803)
+        # a prelude refusal is AccountUnusableBeforeRun (#803)
+        with locked_prelude(account, python, lock_wait_seconds(len(specs), timeout)):
             batch = _Batch(ctx, python, candidate_commit, timeout, settings, note)
             return _run_all(batch, specs, run_id)
     python = ctx.python or sys.executable
