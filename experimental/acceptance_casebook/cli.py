@@ -64,14 +64,14 @@ def _adder(args: argparse.Namespace) -> dict[str, Any] | None:
     except IdentityError as exc:
         if exc.code == "IDENTITY_MISSING":
             return None  # recorded without an adder: such a case can never be confirmed
-        raise CasebookError(exc.code, str(exc)) from exc
+        raise CasebookError(exc.code, exc.detail) from exc
 
 
 def _confirm(args: argparse.Namespace) -> str:
     try:
         confirmer = _identity(args)
     except IdentityError as exc:
-        raise CasebookError(exc.code, str(exc)) from exc
+        raise CasebookError(exc.code, exc.detail) from exc
     check = check_record(args.check_method, args.check_evidence_file)
     return confirm_case(args.casebook, args.case, confirmer, args.conclusion, check)
 

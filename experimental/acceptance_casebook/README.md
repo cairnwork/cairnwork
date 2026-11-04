@@ -42,3 +42,12 @@ is not the adder's session, not in its lineage (and the adder not in the confirm
 or another model family, and both identities and the check evidence are complete. `confirm`
 refuses otherwise (`SAME_SESSION`, `SAME_LINEAGE`, `SAME_FAMILY`, `IDENTITY_INCOMPLETE`,
 `NO_CHECK_EVIDENCE`), and `list` applies the same rule to every confirmation line it reads.
+
+Identity limits: ids, logins and lineage items are normalised (NFKC, invisible characters removed,
+stripped, casefolded, then plain `[a-z0-9._:@/-]` only) and families must be spelled exactly as
+one of `anthropic google openai deepseek xai meta mistral alibaba`; a human login is refused while
+`CLAUDE_CODE_SESSION_ID` is set, and source and check files must be non-empty, with their digests
+recomputed on every read. Human and other-family identities and every lineage are self-declared and
+not verified; lineage is compared by direct membership, so a copy that names only an intermediate
+ancestor is not caught. A hand-written confirmation line that passes every rule counts: the chain
+and head stop edits, not appends.

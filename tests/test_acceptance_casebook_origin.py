@@ -150,10 +150,11 @@ def test_replaced_ledger_same_ids_is_origin_changed(
 
 def _confirm(lg: dict[str, str], digest: str, conclusion: str = "confirmed") -> None:
     from experimental.acceptance_casebook.confirm import check_record, confirm_case
+    from experimental.acceptance_casebook.identity import resolve_actor
 
-    src = _ev(lg, "conf-src")
-    who = {"kind": "agent", "session_id": "conf-1", "lineage": [], "model_family": "google",
-           "source_ref": src, "source_sha256": "a" * 64}  # fmt: skip
+    opts = {"dispatch_id": "conf-1", "lineage": "root", "model_family": "google",
+            "source_file": _ev(lg, "conf-src")}  # fmt: skip
+    who = resolve_actor({}, opts)
     check = check_record("rerun", _ev(lg, "check"))
     confirm_case(_book(lg), digest, who, conclusion, check)
 

@@ -4,11 +4,10 @@ Refused unless identity.confirmation_problem passes; the reader checks the same 
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 from typing import Any
 
-from experimental.acceptance_casebook.identity import confirmation_problem
+from experimental.acceptance_casebook.identity import IdentityError, confirmation_problem, file_sha
 from experimental.acceptance_casebook.store import (
     CasebookError,
     _append,
@@ -20,9 +19,10 @@ from experimental.acceptance_casebook.store import (
 
 def check_record(method: str, evidence_file: str) -> dict[str, str]:
     try:
-        digest = hashlib.sha256(Path(evidence_file).read_bytes()).hexdigest()
-    except OSError as exc:
-        raise CasebookError("NO_CHECK_EVIDENCE", "check evidence file unreadable") from exc
+        digest = file_sha(evidence_file) or ""
+    except IdentityError as exc:
+        raise CasebookError("NO_CHECK_EVIDENCE", "check evidence file unreadable or empty") from exc
+    evidence_file = str(Path(evidence_file).resolve())
     return {"method": method, "evidence_ref": evidence_file, "evidence_sha256": digest}
 
 

@@ -111,17 +111,33 @@ def test_6_adder_without_identity_cannot_be_confirmed(lg, capsys) -> None:  # no
     assert rc == 2 and "IDENTITY_INCOMPLETE" in capsys.readouterr().out
 
 
-def test_6_hand_written_confirmation_without_check_does_not_count(lg, case, capsys) -> None:  # noqa: F811
+def test_6_hand_written_confirmation_counts_only_if_it_passes_the_rule(lg, case, capsys) -> None:  # noqa: F811
+    """Read side: a hand-written line is judged by the same rule. A line with every part filled
+    and re-checkable does count: the chain and head stop edits, not appends (README)."""
+    from experimental.acceptance_casebook.identity import resolve_actor
     from experimental.acceptance_casebook.store import _append, _read_chain
 
-    who = {"kind": "human", "session_id": "h", "lineage": [], "model_family": "human",
-           "source_ref": "u", "source_sha256": "a" * 64}  # fmt: skip
-    _append(_book(lg), {"type": "confirmation", "case": case, "confirmer": who,
-                        "conclusion": "confirmed"}, _read_chain(_book(lg))[1])  # fmt: skip
-    assert _list(lg, capsys)[0]["state"] == "unconfirmed"
-    _append(_book(lg), {"type": "confirmation", "case": case, "confirmer": who,
-                        "conclusion": "confirmed", "check": {"method": "m", "evidence_ref": "r",
-                        "evidence_sha256": "b" * 64}}, _read_chain(_book(lg))[1])  # fmt: skip
+    url = "https://github.com/cairnwork/cairnwork/issues/772#issuecomment-9"
+    who = resolve_actor({}, {"github_login": "h", "source_ref": url,
+                             "source_file": _ev(lg, "h-body")})  # fmt: skip
+    ev = str(Path(_ev(lg, "check")).resolve())
+    good = {
+        "method": "m",
+        "evidence_ref": ev,
+        "evidence_sha256": __import__("hashlib").sha256(Path(ev).read_bytes()).hexdigest(),
+    }
+    for bad in ({}, {**good, "evidence_sha256": "b" * 64},
+                {**good, "who": {**who, "source_sha256": "a" * 64}},
+                {**good, "who": {**who, "session_id": "H"}}):  # fmt: skip
+        line = {"type": "confirmation", "case": case, "conclusion": "confirmed",
+                "confirmer": bad.pop("who", who)}  # fmt: skip
+        if bad:
+            line["check"] = bad
+        _append(_book(lg), line, _read_chain(_book(lg))[1])
+        assert _list(lg, capsys)[0]["state"] == "unconfirmed"
+    line = {"type": "confirmation", "case": case, "conclusion": "confirmed", "confirmer": who,
+            "check": good}  # fmt: skip
+    _append(_book(lg), line, _read_chain(_book(lg))[1])
     assert _list(lg, capsys)[0]["state"] == "confirmed"
 
 
