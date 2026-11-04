@@ -292,6 +292,16 @@ def _is_module(name: str) -> bool:
     return len(name) <= 100 and all(part.isidentifier() for part in name.split("."))
 
 
+def _module_names(data: dict) -> tuple[str, ...]:
+    """The modules the record says skipped collectors could not import (#813): a hint for the
+    reason, never read by the verdict, so anything but a list of module names is dropped."""
+    deps = data.get("collect_skipped_deps")
+    names = (
+        [d for d in deps if isinstance(d, str) and _is_module(d)] if isinstance(deps, list) else []
+    )
+    return tuple(dict.fromkeys(names))
+
+
 def parse_verdict(raw: bytes, nonce: str) -> Verdict:
     """``ran`` is true only when sessionfinish wrote the record, it matches the nonce, at least
     one test was collected, every collected test produced a result, all results are ``passed``,
@@ -320,14 +330,9 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
         isinstance(node, str) and isinstance(result, str) for node, result in outcomes.items()
     ):
         return Verdict(False, {})
-    errors = data.get("collect_errors", [])
-    skipped = data.get("collect_skipped", [])
+    errors, skipped = data.get("collect_errors", []), data.get("collect_skipped", [])
     renamed = data.get("renamed", [])
     teardown = data.get("teardown_errors", [])
-    deps = data.get("collect_skipped_deps", [])  # a hint for the reason only, never the verdict
-    deps = (
-        [d for d in deps if isinstance(d, str) and _is_module(d)] if isinstance(deps, list) else []
-    )
     files = data.get("files", [])
     kind = data.get("fail_kind", {})  # #775: node -> "setup" | "env", only nodes in outcomes
     if not isinstance(kind, dict) or not all(
@@ -367,7 +372,7 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
         recorded=True,
         collect_errors=tuple(errors),
         collect_skipped=tuple(skipped),
-        skipped_deps=tuple(dict.fromkeys(deps)),
+        skipped_deps=_module_names(data),
         renamed=tuple(renamed),
         teardown_errors=tuple(teardown),
         fail_kind=kind,
