@@ -23,13 +23,13 @@ _KEYS = (
 )
 _KEY = re.compile(_KEYS, re.IGNORECASE)
 # colon form (#402): 'token: x', 'DB-PASSWORD : x', '"password": "x"'; value to line end
-_COLON = re.compile(rf"(?im)((?<!\w)(?:[\w-]*[_-])?(?:{_KEYS})[\"']?[ \t]*:[ \t]*)[^\n]+")
+_COLON = re.compile(rf"(?im)((?<!\w)(?:[\w-]{{0,64}}[_-])?(?:{_KEYS})[\"']?[ \t]*:[ \t]*)[^\n]+")
 # '--password x' with a space (#402): a flag whose name ends in a secret word, and its next word
-_FLAG = re.compile(
-    r"(?i)((?<![\w-])--[\w-]*(?:token|password|passwd|secret|api-?key)[ \t]+)(?!-)\S+"
-)
+_FLAG_WORDS = r"(?:token|password|passwd|pwd|secret|api[-_]?key|private[-_]key)"
+_FLAG = re.compile(rf"(?i)((?<![\w-])--[\w-]{{0,64}}{_FLAG_WORDS}[ \t]+)(?!-)\S+")
+_FLAG_HEAD = re.compile(r"(?<![\w-])--([\w-]{0,64})$")  # the flag name up to a name's start
 # a URL-encoded 'name%3Dvalue' (#402)
-_ENCODED = re.compile(rf"(?i)((?<!\w)[\w-]*(?:{_KEYS})%3d)[^&\s]+")
+_ENCODED = re.compile(rf"(?i)((?<!\w)[\w-]{{0,64}}(?:{_KEYS})%3d)[^&\s]+")
 _HID = "\x00"  # stands for a hidden character until the field pass has read the name (#744)
 # a name: a run of word characters and markers, not after a word character or a marker; only the
 # name is consumed, so a secret field inside another field's value is still found. After '-' a name
@@ -54,8 +54,9 @@ def probe_log_tail(path: str | Path | None) -> str:
 
     Not masked: credentials split by a raw control byte (it becomes '?'), a quoted value with a
     space in it after ``=``, other dashed names (``my-token=``), full-width or hidden-character
-    names in colon form, a value after ``%3A``, scp-style ``user:pass@host:`` and bare high-entropy
-    strings.
+    names in colon form, a value after ``%3A``, a value starting with '-' after ``--flag``, spaces
+    around '=', ``Authorization=`` with a non-Bearer value, a value on the next line,
+    ``api-key :``, scp-style ``user:pass@host:`` and bare high-entropy strings.
     """
     if not path:
         return "(no log)"
@@ -93,10 +94,12 @@ def _is_key(name: str) -> bool:
 
 def _is_secret_name(text: str, start: int, name: str, names: tuple[str, str]) -> bool:
     if start > 0 and text[start - 1] == "-" and _HID not in name:
-        if text[start - 2 : start] == "--":  # a flag: --token=, --client-secret=
-            return any(_is_key(n) for n in names)
+        flag = _FLAG_HEAD.search(text, max(0, start - 70), start)
+        if flag is not None:  # a flag: --token=, --github-token=, --aws-secret-access-key=
+            full = (flag.group(1) + name).replace("-", "_")
+            return any(_is_key(n) for n in (*names, full))
         # a dashed name counts only as a whole known one: client-secret, api-key, x-auth-token
-        word = re.search(r"\w+$", text[: start - 1])
+        word = re.search(r"\w{1,64}$", text[max(0, start - 65) : start - 1])
         return word is not None and bool(_KEY.fullmatch(f"{word.group()}_{name}".casefold()))
     return any(_is_key(n) for n in names)
 

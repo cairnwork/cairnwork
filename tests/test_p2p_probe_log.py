@@ -1,5 +1,7 @@
 """#331: the tail of a failed base probe's log, as it goes into the output's logs."""
 
+import time
+
 import pytest
 
 from cairnwork.p2p_probe_log import probe_log_tail
@@ -184,6 +186,13 @@ _FORMS = {  # #402: one failing line per credential form the Issue lists
     "json_quoted": ('{"Authorization": "Basic fake-token-123"}', '{"Authorization": <redacted>'),
     "repr_quoted": ("{'Authorization': 'Basic fake-token-123'}", "{'Authorization': <redacted>"),
     "url_encoded": ("access_token%3Dfake-token-123&x=1", "access_token%3D<redacted>&x=1"),
+    "compound_flag_equals": ("--github-token=fake-token-123", "--github-token=<redacted>"),
+    "compound_flag_key": (
+        "--aws-secret-access-key=fake-token-123",
+        "--aws-secret-access-key=<redacted>",
+    ),
+    "compound_flag_space": ("--pypi-password fake-token-123", "--pypi-password <redacted>"),
+    "flag_private_key": ("--private-key fake-token-123", "--private-key <redacted>"),
     "full_width": ("ｐａｓｓｗｏｒｄ=fake-token-123", None),
 }
 
@@ -203,8 +212,17 @@ def test_look_alike_text_next_to_the_new_forms_is_left_alone(tmp_path):
     log = tmp_path / "verifier.log"
     text = (
         "my-token=plain tokens: 5 used password_policy=strict OLDPWD=/home/u\n"
-        "run --password-file /tmp/pw --verbose Content-Type: text/plain\n"
+        "run --password-file /tmp/pw --verbose --token --quiet Content-Type: text/plain\n"
         "retry after: 5s status: ok key%3Dvalue cooking: slow\n"
     )
     log.write_text(text)
     assert probe_log_tail(log) == text
+
+
+@pytest.mark.parametrize("unit", ["-", "a-", "a_", "x-token-"])
+def test_one_long_line_of_word_characters_and_dashes_is_not_quadratic(tmp_path, unit):
+    log = tmp_path / "verifier.log"  # #402: unbounded name prefixes cost ~30 s on a 16 KB line
+    log.write_text("head\n" + unit * (15000 // len(unit)) + "\nEND\n")  # inside the 16 KB window
+    started = time.monotonic()
+    tail = probe_log_tail(log)
+    assert time.monotonic() - started < 5 and tail.endswith("END\n")
