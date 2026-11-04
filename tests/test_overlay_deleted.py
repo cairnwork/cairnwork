@@ -92,3 +92,49 @@ def test_stray_deletions_are_the_judged_deletes_the_test_commit_did_not_make(rep
     both = commit_change(repo, {}, delete=("tests/test_a.py", "tests/test_b.py"), message="x")
     assert stray_deletions(repo, base, both, ("tests/test_a.py",)) == ["tests/test_b.py"]
     assert stray_deletions(repo, base, both, ("tests/test_a.py", "tests/test_b.py")) == []
+
+
+class _Stop(Exception):
+    pass
+
+
+def _judge_deleting(repo, three, monkeypatch, deleted_by_candidate):
+    """judge_candidate up to its stray-deletion check: the two gates that would stop a worker
+    deleting files before it (the verifier run and the not-run check) are stubbed away, and the
+    step after the check raises _Stop."""
+    from types import SimpleNamespace
+
+    from cairnwork import pipeline_judge
+
+    base, _, _ = three
+    git(repo, "checkout", "-q", "--detach", base)
+    judged = commit_change(repo, {"src/a.py": "x = 3\n"}, delete=deleted_by_candidate)
+    git(repo, "checkout", "-q", "-f", "main")
+    monkeypatch.setattr(pipeline_judge, "busy_once_more", lambda *a, **k: ())
+    monkeypatch.setattr(pipeline_judge, "_not_run_here", lambda *a, **k: [])
+
+    def stop(*a, **k):
+        raise _Stop
+
+    monkeypatch.setattr(pipeline_judge, "_contract", stop)
+    task = SimpleNamespace(blackbox=None, repo=repo, base_commit=base, allow_deletions=False)
+    result = SimpleNamespace(candidate_commit=judged, task_id="t", attempt_id="a", logs=[])
+    files = TestFiles(("tests/test_new.py",), ("tests/test_a.py",))
+    args = (task, (), "d", None, result, files, None, lambda phase: None)
+    return pipeline_judge.judge_candidate, args, result
+
+
+def test_judge_candidate_stops_on_a_delete_the_test_commit_did_not_make(repo, three, monkeypatch):
+    judge, args, result = _judge_deleting(
+        repo, three, monkeypatch, ("tests/test_a.py", "tests/test_b.py")
+    )
+    judge(*args)  # returns before Core is asked: _contract would raise _Stop
+    assert result.reason == "DELETION_OUTSIDE_TEST_COMMIT: ['tests/test_b.py']"
+
+
+def test_judge_candidate_goes_on_when_it_deletes_only_what_the_test_commit_does(
+    repo, three, monkeypatch
+):
+    judge, args, _ = _judge_deleting(repo, three, monkeypatch, ("tests/test_a.py",))
+    with pytest.raises(_Stop):
+        judge(*args)
