@@ -100,3 +100,17 @@ def test_confirmation_without_confirmer_does_not_count(lg, capsys) -> None:  # n
     line = {"type": "confirmation", "case": digest, "conclusion": "confirmed"}
     _append(_book(lg), line, _read_chain(_book(lg))[1])
     assert _list(lg, capsys)[0]["state"] == "unconfirmed"
+
+
+def _verified_without_echo(request: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    status, response = fake_core_verify(request)
+    response["hashes"] = {}  # VERIFIED/VALID/200, but Core did not echo what it judged
+    return status, response
+
+
+def test_verified_row_that_fails_the_notary_rule_is_not_accepted(lg, repo, capsys) -> None:  # noqa: F811
+    _attempt(lg, repo, "a6", _verified_without_echo, lg["cand"])
+    capsys.readouterr()
+    assert _add(lg, lg["cand"], "a6", "accepted_bad") == 2
+    assert "CASE_ORIGIN_MISMATCH" in capsys.readouterr().out
+    assert not _book(lg).exists()
