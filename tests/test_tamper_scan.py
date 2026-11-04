@@ -25,6 +25,18 @@ CASES = {
         "def pytest_runtest_makereport(item, call):",
         "def test_pytest_runtest_makereport_name():",
     ),
+    "pytest_option_write": (
+        "    config.option.maxfail = 0",
+        "    n = config.option.maxfail  # a read",
+    ),
+    "code_object_forge": (
+        "    f.__code__ = g.__code__",
+        "    name = f.__code__.co_filename  # a read; re.compile( is another thing",
+    ),
+    "dynamic_loader": (
+        "    spec = importlib.util.spec_from_file_location('m', p)",
+        "    mod = importlib.import_module('json')",
+    ),
     "guard_module": ("import _cairnwork_report_guard", "import cairnwork.report_guard_docs"),
     "fd_listing": (
         "    names = os.listdir('/proc/self/fd')",
