@@ -137,14 +137,15 @@ def test_sub_tests_that_all_raise_oserror(tmp_path):
     assert v.fail_kind == {f"{T}test_s": "env"}
 
 
-def test_sub_tests_with_one_non_oserror_failure_stay_teeth(tmp_path):
+@pytest.mark.parametrize("oserror_first", [True, False], ids=["oserror-first", "assertion-first"])
+def test_sub_tests_with_one_non_oserror_failure_stay_teeth(tmp_path, oserror_first):
+    oserr = "        raise PermissionError(1, 'denied')\n"
+    boom = "        assert False\n"
+    first, second = (oserr, boom) if oserror_first else (boom, oserr)
     v = _run(
         tmp_path,
         "def test_s(subtests):\n"
-        "    with subtests.test(i=0):\n"
-        "        raise PermissionError(1, 'denied')\n"
-        "    with subtests.test(i=1):\n"
-        "        assert False\n",
+        "    with subtests.test(i=0):\n" + first + "    with subtests.test(i=1):\n" + second,
     )
     assert v.outcomes == {f"{T}test_s": "failed"}
     assert v.fail_kind == {}
