@@ -195,3 +195,26 @@ def test_human_link_rechecked_on_read(src: str) -> None:
 def test_env_source_needs_a_claude_agent_and_its_digest(change: dict) -> None:
     conf = {**claude("s2"), **change}
     assert independence_problem(claude("s1"), conf) == "IDENTITY_INCOMPLETE"
+
+
+def test_source_that_is_not_a_regular_file_does_not_block(src: str, tmp_path: Path) -> None:
+    import os
+    import threading
+
+    fifo = tmp_path / "fifo"
+    os.mkfifo(fifo)
+    conf = {**agent(src, "g1"), "source_file": str(fifo)}
+    result: list[str | None] = []
+    adder = claude("s1")
+    worker = threading.Thread(
+        target=lambda: result.append(independence_problem(adder, conf)), daemon=True
+    )
+    worker.start()
+    worker.join(10)
+    assert result == ["IDENTITY_INCOMPLETE"]
+
+
+@pytest.mark.parametrize("bad", [123, "a\x00b"])
+def test_source_path_of_the_wrong_shape_does_not_count(src: str, bad: object) -> None:
+    conf = {**agent(src, "g1"), "source_file": bad}
+    assert independence_problem(claude("s1"), conf) == "IDENTITY_INCOMPLETE"

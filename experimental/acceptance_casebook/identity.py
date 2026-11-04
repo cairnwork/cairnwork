@@ -125,8 +125,8 @@ def _valid_id(value: Any) -> bool:
 def _source_holds(actor: dict[str, Any]) -> bool:
     if actor["source_ref"] == f"env:{ENV_SESSION}":
         expected = hashlib.sha256(actor["session_id"].encode()).hexdigest()
-        claude = actor["kind"] == "agent" and actor["model_family"] == "anthropic"
-        return claude and actor["source_sha256"] == expected
+        # an anthropic family implies kind agent (incomplete() ties human to family human)
+        return actor["model_family"] == "anthropic" and actor["source_sha256"] == expected
     try:
         return file_sha(actor.get("source_file")) == actor["source_sha256"]
     except IdentityError:
