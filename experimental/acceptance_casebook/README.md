@@ -25,9 +25,32 @@ attempt_id, kind and ref; its sha256 is kept). `accepted_bad` needs an accepted 
 and `refused_good` a refused one (`CASE_ORIGIN_MISMATCH`); evidence about another claim is
 `CASE_EVIDENCE_MISMATCH`. `list` shows each case's state (`unconfirmed`, `confirmed`, `rejected`;
 with `--notary-db`, `origin_changed` when the row no longer gives the stored origin). Only
-`confirmed` cases whose origin re-checks are listed by `--eligible`. There is no `confirm`
-command yet (#772 step 2). Threat model: one local user owns every file; this is record integrity
+`confirmed` cases whose origin re-checks are listed by `--eligible`. Threat model: one local user owns every file; this is record integrity
 and honest attribution, not protection against that user.
+
+Confirmation (#772 step 2):
+
+    python -m experimental.acceptance_casebook confirm --casebook F --case LINE_SHA256 \
+      --conclusion confirmed|rejected --check-method M --check-evidence-file E \
+      [--lineage root|A,B] [--model-family F] [--dispatch-id ID] [--github-login L \
+      --source-ref URL] [--source-file S] [--display-name N]
+
+Identity comes from the harness env `CLAUDE_CODE_SESSION_ID` (family anthropic), a non-Claude
+dispatch id with its family and output file, or a GitHub login with the URL and saved body of
+its comment; `add` records the adder the same way. A confirmation counts only when the confirmer
+is not the adder's session, not in its lineage (and the adder not in the confirmer's), is a human
+or another model family, and both identities and the check evidence are complete. `confirm`
+refuses otherwise (`SAME_SESSION`, `SAME_LINEAGE`, `SAME_FAMILY`, `IDENTITY_INCOMPLETE`,
+`NO_CHECK_EVIDENCE`), and `list` applies the same rule to every confirmation line it reads.
+
+Identity limits: ids, logins and lineage items are normalised (NFKC, invisible characters removed,
+stripped, casefolded, then plain `[a-z0-9._:@/-]` only) and families must be spelled exactly as
+one of `anthropic google openai deepseek xai meta mistral alibaba`; a human login is refused while
+`CLAUDE_CODE_SESSION_ID` is set, and source and check files must be non-empty, with their digests
+recomputed on every read. Human and other-family identities and every lineage are self-declared and
+not verified; lineage is compared by direct membership, so a copy that names only an intermediate
+ancestor is not caught. A hand-written confirmation line that passes every rule counts: the chain
+and head stop edits, not appends.
 
 Round 2 (#825 review): `refused_good` needs a real Core refusal (a verification with integrity
 VALID, HTTP 200 and status FAILED, REJECTED or REFUSED); an error row (502, `CORE_UNAVAILABLE`,
