@@ -280,11 +280,8 @@ def _run_one(batch: _Batch, spec, checkout) -> VerifierRun:
 def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, channel) -> VerifierRun:
     ctx, candidate_commit, timeout = batch.ctx, batch.candidate_commit, batch.timeout
     account, python, attempt_id = ctx.account, batch.python, ctx.attempt_id
-    log_path, ini, profile_path = (
-        private / "verifier.log",
-        private / "pytest.ini",
-        private / "profile.sb",
-    )
+    log_path, ini = private / "verifier.log", private / "pytest.ini"
+    profile_path = private / "profile.sb"
     run_dir, home, tmp, env, verdict_path, verdict_nonce = _prepare_run(
         private, ini, ini_text, channel
     )
