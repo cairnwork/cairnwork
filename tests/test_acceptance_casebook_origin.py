@@ -37,6 +37,7 @@ def _notarize(db: Path, repo: Path, attempt: str, core: Any, files: dict[str, st
 @pytest.fixture(autouse=True)
 def _no_harness_session(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    monkeypatch.delenv("CLAUDECODE", raising=False)  # set when the tests run inside Claude Code
 
 
 @pytest.fixture
