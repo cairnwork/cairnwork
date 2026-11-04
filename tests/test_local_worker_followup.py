@@ -90,7 +90,8 @@ def test_the_action_lists_match_the_tools_the_loop_offers():
     only with --search-tool (TOOLS_ABSENT names it otherwise)."""
     offered = set(tool_names(True))
     actions = {"run_test" if n == "run_tests" else n for n in offered}  # the spec's action name
-    assert set(schema_rules.ACTION_TYPES) == actions | {"invalid_tool_call", "no_tool_call"}
+    records_only = {"invalid_tool_call", "no_tool_call", "finish_precheck"}  # no tool of their own
+    assert set(schema_rules.ACTION_TYPES) == actions | records_only
     assert set(cuts.READ_ACTIONS) == {"read_file", "list_dir", "search"} <= actions
     assert set(TOOLS_ABSENT) == offered - {t["function"]["name"] for t in TOOL_SCHEMAS}
     assert set(tool_names(False)) == {t["function"]["name"] for t in TOOL_SCHEMAS}
