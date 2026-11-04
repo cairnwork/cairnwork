@@ -356,4 +356,5 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
         paths=_sources(collected, files, file_of or ()),
         exitstatus=status[0],
         testsfailed=status[1],
+        collected=tuple(collected),
     )
