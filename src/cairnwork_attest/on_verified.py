@@ -21,7 +21,7 @@ from typing import Any
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from cairnwork_attest.bundle import BundleError
+from cairnwork_attest.bundle import BundleError, read_bundle
 from cairnwork_attest.checkrun import _SLUG, TOKEN_ENV, post_check_run
 from cairnwork_attest.dsse import sign_statement
 from cairnwork_attest.keys import load_private_key, public_key_pem
@@ -118,6 +118,20 @@ def _existing_is_ours(
     )
 
 
+def _exists_message(bundle: Path) -> str:
+    """Still refused (never reused, never overwritten). A file that is not even a readable
+    bundle is most likely a receipt cut short; say which file to delete and why (#783)."""
+    try:
+        read_bundle(bundle)
+    except BundleError:
+        return (
+            f"bundle already exists: {bundle}; it is not a complete bundle (an earlier run "
+            f"was probably interrupted while writing it). Nothing was reused. If you agree, "
+            f"delete that one file (rm {bundle}) and run again."
+        )
+    return f"bundle already exists: {bundle}"
+
+
 def _statement_step(args: argparse.Namespace, bundle: Path, pubkey: Path) -> _Step:
     try:
         verified = verify_record(
@@ -133,7 +147,7 @@ def _statement_step(args: argparse.Namespace, bundle: Path, pubkey: Path) -> _St
         if bundle.exists():
             if _existing_is_ours(bundle, args, pubkey, verified):
                 return _Step("statement", "OK", "reused existing bundle")
-            raise BundleError(f"bundle already exists: {bundle}", code="BUNDLE_EXISTS")
+            raise BundleError(_exists_message(bundle), code="BUNDLE_EXISTS")
         bundle.parent.mkdir(parents=True, exist_ok=True)
         _write_private(bundle, _build_envelope(args, verified, private_key))
     except AttestError as exc:

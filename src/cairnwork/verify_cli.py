@@ -76,6 +76,14 @@ def main(argv: list[str] | None = None) -> int:
         return _emit({"error": exc.code, "detail": str(exc)}, 2)
     except (NotarySchemaMismatch, NotaryMissing) as exc:  # NOTARY_SCHEMA_OLDER: migrate-notary
         return _emit({"error": exc.code, "detail": str(exc)}, 2)
+    except KeyboardInterrupt:  # #783: say what the interruption cost; the signal still ends the run
+        used = tests_consumed(intake, getattr(args, "test_commit", ""))
+        detail = "interrupted" + (
+            "; the test commit is consumed, a retry needs a new one (TEST_COMMIT_ALREADY_EXPOSED)"
+            if used
+            else ""
+        )
+        return _emit({"error": "INTERRUPTED", "detail": detail, "tests_consumed": used}, 130)
     except Exception as exc:  # noqa: BLE001 - reported as unknown, never as success
         detail = f"{type(exc).__name__}: {exc}"
         if args.command == "migrate-notary":  # no tests involved

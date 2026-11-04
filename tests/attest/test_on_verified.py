@@ -133,7 +133,22 @@ def test_different_existing_bundle_fails_bundle_exists(
         ("check_run", "SKIPPED"),
     ]
     assert env.bundle.read_text() == "{}"
+    assert "not a complete bundle" not in json.dumps(obj)  # a whole file is not called partial
     assert _remote_tip(env.bare) is None
+
+
+def test_partial_bundle_is_not_reused_and_the_error_names_the_file_to_delete(
+    env: Env, http: FakeHttp, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert _run(capsys, env.argv())[0] == 0
+    whole = env.bundle.read_bytes()
+    env.bundle.write_bytes(whole[: len(whole) // 2])  # a write cut short
+    rc, _, obj = _run(capsys, env.argv())
+    assert rc == 2
+    assert _codes(obj)[0] == ("statement", "BUNDLE_EXISTS")
+    detail = obj["steps"][0]["detail"]
+    assert f"rm {env.bundle}" in detail and "not a complete bundle" in detail
+    assert env.bundle.read_bytes() == whole[: len(whole) // 2]  # never touched, never reused
 
 
 def test_note_conflict_exits_1(
