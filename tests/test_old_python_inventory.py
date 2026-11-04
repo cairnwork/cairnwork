@@ -225,10 +225,55 @@ def test_any_other_inventory_output_is_refused(stdout):
         _old_names(stdout, [3, 9])
 
 
-@pytest.mark.parametrize("answer", ("3 5", "2 7", "3.9", "3 9 0", ""))
+@pytest.mark.parametrize("answer", ("3 5", "2 7", "3.9", "3 9 0", "", "3 9\\n3 9"))
 def test_an_unsupported_or_unreadable_version_fails_closed(repo, tmp_path, answer):
     commit_change(repo, FILES)
     python = tmp_path / "python"
     python.write_text(f"#!/bin/sh\necho '{answer}'\n")
     python.chmod(0o755)
     assert refused(repo, "pkgB/base.py", str(python))
+
+
+def test_a_path_the_probe_cannot_search_fails_closed(repo, tmp_path):
+    """Open 6: the verifier's account might import from a directory the probe's user cannot
+    search, so a permission error is a failure, never "absent"."""
+    commit_change(repo, FILES)
+    locked = tmp_path / "locked"
+    (locked / "sub").mkdir(parents=True)
+    site = tmp_path / "site"
+    site.mkdir()
+    (site / "x.pth").write_text(f"{locked / 'sub'}\n")
+    locked.chmod(0)
+    try:
+        assert refused(repo, "pkgB/base.py", stub(tmp_path, extra=[site]))
+        assert refused(repo, "pkgB/base.py", stub(tmp_path, extra=[locked / "sub"]))
+    finally:
+        locked.chmod(0o755)
+    assert not refused(repo, "pkgB/base.py", stub(tmp_path, extra=[site]))  # the control
+
+
+def test_zips_eggs_and_installed_files_are_listed(tmp_path):
+    """A zip named by a .pth, an .egg on sys.path and installed-files.txt's ``../pkg`` lines."""
+    import zipfile
+
+    from cairnwork import module_inventory
+
+    site = tmp_path / "site"
+    site.mkdir()
+    for name, member in (("lib.zip", "zm.py"), ("e-1.0.egg", "egm/__init__.py")):
+        with zipfile.ZipFile(site / name, "w") as archive:
+            archive.writestr(member, "")
+    (site / "z.pth").write_text(f"{site / 'lib.zip'}\n")
+    (site / "o-1.0.egg-info").mkdir()
+    (site / "o-1.0.egg-info" / "installed-files.txt").write_text("../ofm/__init__.py\n")
+    names = module_inventory.importable_names(stub(tmp_path, extra=[site, site / "e-1.0.egg"]))
+    assert {"zm", "egm", "ofm"} <= names
+
+
+@pytest.mark.parametrize(
+    "setup",
+    ("sys.version_info = (3, 8, 0, 'final', 0)", "print('extra line')"),
+)
+def test_a_changed_version_or_extra_output_fails_closed(repo, tmp_path, setup):
+    commit_change(repo, FILES)
+    assert refused(repo, "pkgB/base.py", stub(tmp_path, setup=setup))

@@ -31,10 +31,14 @@ def _top(entry):
 
 
 def _lines(path):
-    if not os.path.exists(path):
-        return []
-    with open(path, encoding="utf-8") as handle:
-        return handle.read().splitlines()
+    """A file's lines; [] only when it does not exist, any other error fails the probe."""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return handle.read().splitlines()
+    except OSError as exc:
+        if exc.errno in (errno.ENOENT, errno.ENOTDIR):
+            return []
+        raise
 
 
 def _metadata_names(meta):
@@ -61,8 +65,20 @@ def _is_dir(path):
         raise
 
 
+def _exists(path):
+    try:
+        os.stat(path)
+    except OSError as exc:
+        if exc.errno in (errno.ENOENT, errno.ENOTDIR):
+            return False
+        raise
+    return True
+
+
 def _scan(directory, names, seen):
     if not _is_dir(directory):
+        if _exists(directory):  # a zip or .egg file: pkgutil lists it through zipimport
+            names.update(module[1] for module in pkgutil.iter_modules([directory]))
         return
     real = os.path.realpath(directory)
     if real in seen:
