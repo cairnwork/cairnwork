@@ -1,3 +1,4 @@
+# ruff: noqa: F811  (the lg fixture is imported, then requested by name)
 """Acceptance casebook #772 step 1, round 2: the bound row must hold a real Core verdict whose
 columns agree with its own request; two attempts on one candidate reach CASE_CONFLICT."""
 
@@ -44,13 +45,17 @@ def test_error_row_is_not_an_original_refusal(lg, repo, capsys) -> None:  # noqa
     assert not _book(lg).exists()
 
 
-def _tamper(lg: dict[str, str], tmp_path: Path, column: str, value: str) -> str:  # noqa: F811
+def _tamper(
+    lg: dict[str, str], tmp_path: Path, column: str, value: str, attempt: str = "a1"
+) -> str:  # noqa: F811
     copy = tmp_path / "tampered.sqlite"
     shutil.copy(lg["db"], copy)
     conn = sqlite3.connect(copy)
     for (name,) in conn.execute("SELECT name FROM sqlite_master WHERE type = 'trigger'"):
         conn.execute(f"DROP TRIGGER {name}")
-    conn.execute(f"UPDATE core_verifications SET {column} = ? WHERE attempt_id = 'a1'", (value,))
+    conn.execute(
+        f"UPDATE core_verifications SET {column} = ? WHERE attempt_id = ?", (value, attempt)
+    )
     conn.commit()
     conn.close()
     return str(copy)
@@ -113,4 +118,47 @@ def test_verified_row_that_fails_the_notary_rule_is_not_accepted(lg, repo, capsy
     capsys.readouterr()
     assert _add(lg, lg["cand"], "a6", "accepted_bad") == 2
     assert "CASE_ORIGIN_MISMATCH" in capsys.readouterr().out
+    assert not _book(lg).exists()
+
+
+def _core_says(status: str, integrity: str = "VALID", http: int = 200) -> Any:
+    def core(request: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        _, response = fake_core_verify(request)
+        response["verification"] = {"status": status, "integrity": integrity, "reason_codes": []}
+        return http, response
+
+    return core
+
+
+@pytest.mark.parametrize(
+    ("status", "integrity", "http"),
+    [("UNCOMPARABLE", "VALID", 200), ("INCOMPLETE", "VALID", 200), ("FAILED", "INVALID", 200),
+     ("FAILED", "VALID", 500)],
+)  # fmt: skip
+def test_only_a_core_refusal_is_an_original_refusal(lg, repo, capsys, status, integrity, http):  # noqa: F811
+    _attempt(lg, repo, "a7", _core_says(status, integrity, http), lg["cand"])
+    capsys.readouterr()
+    assert _add(lg, lg["cand"], "a7", "refused_good") == 2
+    assert "CASE_ORIGIN_MISMATCH" in capsys.readouterr().out
+    assert not _book(lg).exists()
+
+
+@pytest.mark.parametrize(
+    ("attempt", "column_says", "kind"),
+    [("a1", "FAILED", "refused_good"), ("a3", "VERIFIED", "accepted_bad")],
+)
+def test_status_column_that_disagrees_with_response_refused(
+    lg,
+    repo,
+    tmp_path,
+    capsys,
+    attempt,
+    column_says,
+    kind,  # noqa: F811
+) -> None:
+    _attempt(lg, repo, "a3", _refusing, lg["cand"])
+    db = _tamper(lg, tmp_path, "status", column_says, attempt)
+    capsys.readouterr()
+    assert _add({**lg, "db": db}, lg["cand"], attempt, kind) == 2
+    assert "CASE_RECORD_MISMATCH" in capsys.readouterr().out
     assert not _book(lg).exists()

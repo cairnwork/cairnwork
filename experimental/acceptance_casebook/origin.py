@@ -9,13 +9,13 @@ import json
 from pathlib import Path
 from typing import Any
 
-from cairnwork.notary_verify import _is_verified
+from cairnwork.notary_verify import _is_verified, _status_and_integrity
 from cairnwork_attest.record import AttestError, VerdictRecord, check_record_bindings, read_record
 
 ROW_COLUMNS = ("task_id", "attempt_id", "base_commit", "candidate_commit", "request_hash",
                "request_json", "http_status", "status", "integrity", "response_json",
                "recorded_at", "binding_json")  # fmt: skip
-REFUSALS = ("FAILED", "REJECTED", "REFUSED")  # a Core verdict; error rows (502, CORE_*) are not
+REFUSALS = ("FAILED",)  # Core's only refusal status; REFUSED/UNCOMPARABLE are set before Core
 EVIDENCE_KEYS = ("candidate", "task_id", "attempt_id", "kind", "ref")
 
 
@@ -36,10 +36,9 @@ def _accepted(rec: VerdictRecord) -> bool:
 
 
 def _refused(rec: VerdictRecord) -> bool:
-    """A real Core refusal: a verification with integrity VALID and a refusal status."""
-    judged = isinstance(rec.response, dict) and isinstance(rec.response.get("verification"), dict)
-    return judged and rec.http_status == 200 and rec.integrity == "VALID" and (
-        rec.status in REFUSALS)  # fmt: skip
+    """A real Core refusal: HTTP 200, integrity VALID and Core's refusal status. read_origin has
+    already required these columns to equal the response's own verification."""
+    return rec.http_status == 200 and rec.integrity == "VALID" and rec.status in REFUSALS
 
 
 def origin_of(rec: VerdictRecord) -> dict[str, Any]:
@@ -67,6 +66,8 @@ def read_origin(notary_db: Path, task_id: str, attempt_id: str) -> tuple[Verdict
         check_record_bindings(rec)  # request hash and target revision agree with the columns
     except AttestError as exc:
         raise OriginError("CASE_RECORD_MISMATCH", f"ledger row: {exc.code}") from exc
+    if _status_and_integrity(rec.response) != (rec.status, rec.integrity):
+        raise OriginError("CASE_RECORD_MISMATCH", "status/integrity columns differ from response")
     return rec, origin_of(rec)
 
 
