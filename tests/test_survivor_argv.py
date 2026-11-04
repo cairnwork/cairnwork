@@ -12,7 +12,9 @@ import pytest
 from cairnwork import confined, reasons, survivor_argv
 from cairnwork.deferred_tests import base_comparison
 
-LEAK = "import os, time; os.setsid(); time.sleep(60)"  # leaves the group, outlives the run
+LEAK = (
+    "import os, pathlib, sys, time; os.setsid(); pathlib.Path(sys.argv[2]).touch(); time.sleep(60)"
+)
 
 
 def test_a_secret_argument_is_masked_before_the_cut():
@@ -50,8 +52,14 @@ def test_a_real_leaked_process_is_named_and_still_counted(tmp_path):
     if not sys.platform.startswith(("linux", "darwin")):
         pytest.skip("needs /proc or ps")
     script = tmp_path / "leaky_server.py"
-    script.write_text(f"import subprocess, sys\nsubprocess.Popen([sys.executable, '-c', {LEAK!r}, "
-                      "'leaky_marker'])\n")  # fmt: skip
+    flag = (
+        tmp_path / "left-the-group"
+    )  # the child says so: killed before setsid, it would not count
+    script.write_text(
+        "import subprocess, sys, time, pathlib\n"
+        f"subprocess.Popen([sys.executable, '-c', {LEAK!r}, 'leaky_marker', {str(flag)!r}])\n"
+        f"while not pathlib.Path({str(flag)!r}).exists():\n    time.sleep(0.05)\n"
+    )
     env = {"PATH": os.environ["PATH"], confined.RUN_TOKEN_VAR: uuid.uuid4().hex}
     _rc, _timed_out, survivors = confined.execute(
         [sys.executable, str(script)], tmp_path, env, 30, tmp_path / "log"
@@ -79,7 +87,7 @@ def test_a_platform_shell_found_by_its_directory_is_named_too(tmp_path):
     # macOS withholds /bin/sh's environment, so the sweep finds it by its working directory
     # (proc_cwd); its argv is still read before the kill. The #799 gunicorn-teardown pattern.
     script = tmp_path / "teardown.py"
-    script.write_text("import os, subprocess\nsubprocess.Popen(['/bin/sh', '-c', 'sleep 60'],"
+    script.write_text("import os, subprocess\nsubprocess.Popen(['/bin/sh', '-c', 'sleep 60; true'],"
                       " preexec_fn=os.setsid)\n")  # fmt: skip
     env = {"PATH": os.environ["PATH"], confined.RUN_TOKEN_VAR: uuid.uuid4().hex}
     *_, survivors = confined.execute(
