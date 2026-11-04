@@ -17,9 +17,11 @@ import fcntl
 import hashlib
 import json
 import os
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
+from experimental.acceptance_casebook.identity import confirmation_problem
 from experimental.acceptance_casebook.origin import (
     OriginError,
     check_kind,
@@ -28,6 +30,7 @@ from experimental.acceptance_casebook.origin import (
     read_origin,
 )
 
+T = TypeVar("T")
 ZERO = "0" * 64
 KINDS = ("accepted_bad", "refused_good")
 FIELDS = (
@@ -89,10 +92,10 @@ def _is_case(entry: dict[str, Any]) -> bool:
     return entry.get("type", "case") == "case"  # #763 lines have no type
 
 
-def _state(digest: str, entries: list[tuple[dict[str, Any], str]]) -> str:
+def _state(case: dict[str, Any], digest: str, entries: list[tuple[dict[str, Any], str]]) -> str:
     said = [e.get("conclusion") for e, _ in entries
             if e.get("type") == "confirmation" and e.get("case") == digest
-            and isinstance(e.get("confirmer"), dict)]  # fmt: skip
+            and confirmation_problem(case, e) is None]  # fmt: skip
     if "rejected" in said:
         return "rejected"
     return "confirmed" if "confirmed" in said else "unconfirmed"
@@ -106,7 +109,7 @@ def list_cases(path: Path, notary_db: Path | None = None) -> list[dict[str, Any]
     for entry, digest in entries:
         if not _is_case(entry):
             continue
-        state = _state(digest, entries)
+        state = _state(entry, digest, entries)
         if notary_db is not None and not origin_still_holds(notary_db, entry):
             state = "origin_changed"
         out.append({**entry, "line_sha256": digest, "state": state})
@@ -118,7 +121,7 @@ def eligible_cases(path: Path, notary_db: Path) -> list[dict[str, Any]]:
     return [c for c in list_cases(path, notary_db) if c["state"] == "confirmed"]
 
 
-def _bind(case: dict[str, str], notary_db: Path) -> dict[str, Any]:
+def _bind(case: dict[str, Any], notary_db: Path) -> dict[str, Any]:
     try:
         rec, origin = read_origin(notary_db, case["task_id"], case["attempt_id"])
         if rec.candidate_commit != case["candidate"] or rec.base_commit != case["base"]:
@@ -127,22 +130,27 @@ def _bind(case: dict[str, str], notary_db: Path) -> dict[str, Any]:
         after = read_after(Path(case["evidence_file"]), case)
     except OriginError as exc:
         raise CasebookError(exc.code, str(exc)) from exc
-    return {**{k: case[k] for k in STORED}, "type": "case", "origin": origin, "after": after}
+    bound = {**{k: case[k] for k in STORED}, "type": "case", "origin": origin, "after": after}
+    return {**bound, "adder": case["adder"]} if case.get("adder") else bound
 
 
-def add_case(path: Path, notary_db: Path, case: dict[str, str]) -> str:
+def add_case(path: Path, notary_db: Path, case: dict[str, Any]) -> str:
     """Append one case. Returns "ADDED" or "DUPLICATE"; raises CasebookError on refusal."""
     if case.get("kind") not in KINDS or any(not case.get(k) for k in FIELDS):
         raise CasebookError("CASE_INVALID", "missing field or unknown kind")
+    return locked(path, lambda: _add_locked(path, notary_db, case))
+
+
+def locked(path: Path, action: Callable[[], T]) -> T:
     lock = os.open(path.with_name(path.name + ".lock"), os.O_WRONLY | os.O_CREAT, 0o600)
     try:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        return _add_locked(path, notary_db, case)
+        return action()
     finally:
         os.close(lock)  # closing drops the lock
 
 
-def _add_locked(path: Path, notary_db: Path, case: dict[str, str]) -> str:
+def _add_locked(path: Path, notary_db: Path, case: dict[str, Any]) -> str:
     entries, prev = _read_chain(path)
     bound = _bind(case, notary_db)
     key = (case["candidate"], case["base"], case["version"])

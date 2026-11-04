@@ -34,6 +34,11 @@ def _notarize(db: Path, repo: Path, attempt: str, core: Any, files: dict[str, st
     return cand
 
 
+@pytest.fixture(autouse=True)
+def _no_harness_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+
+
 @pytest.fixture
 def lg(tmp_path: Path, repo: Path) -> dict[str, str]:
     """Row a1: accepted (VERIFIED). Row a2: refused (FAILED), another candidate."""
@@ -58,7 +63,8 @@ def _add(lg: dict[str, str], cand: str, attempt: str, kind: str, version: str = 
     return main(["add", "--casebook", str(_book(lg)), "--notary-db", lg["db"],
                  "--task-id", "task-1", "--attempt-id", attempt, "--candidate", cand,
                  "--base", lg["base"], "--version", version, "--kind", kind,
-                 "--found-by", "reviewer-x",
+                 "--found-by", "reviewer-x", "--dispatch-id", "adder-1", "--lineage", "root",
+                 "--model-family", "anthropic", "--source-file", _ev(lg, "adder-src"),
                  "--evidence-file", _ev(lg, f"ev-{attempt}-{version}", **claim)])  # fmt: skip
 
 
@@ -143,11 +149,14 @@ def test_replaced_ledger_same_ids_is_origin_changed(
 
 
 def _confirm(lg: dict[str, str], digest: str, conclusion: str = "confirmed") -> None:
-    from experimental.acceptance_casebook.store import _append, _read_chain
+    from experimental.acceptance_casebook.confirm import check_record, confirm_case
+    from experimental.acceptance_casebook.identity import resolve_actor
 
-    _append(_book(lg), {"type": "confirmation", "case": digest, "conclusion": conclusion,
-                        "confirmer": {"kind": "stub"}},
-            _read_chain(_book(lg))[1])  # fmt: skip
+    opts = {"dispatch_id": "conf-1", "lineage": "root", "model_family": "google",
+            "source_file": _ev(lg, "conf-src")}  # fmt: skip
+    who = resolve_actor({}, opts)
+    check = check_record("rerun", _ev(lg, "check"))
+    confirm_case(_book(lg), digest, who, conclusion, check)
 
 
 def test_only_confirmed_cases_with_intact_origin_are_eligible(

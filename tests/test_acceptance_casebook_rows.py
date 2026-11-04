@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 from attest.test_attest_cli import CORE_IDENTITY, fake_core_verify
-from test_acceptance_casebook_origin import _add, _book, _ev, _list, lg  # noqa: F401
+from test_acceptance_casebook_origin import _add, _book, _ev, _list, _no_harness_session, lg  # noqa: F401
 
 from cairnwork.core_request import AcceptanceSpec, VerifierObservation
 from cairnwork.notary import Notary
