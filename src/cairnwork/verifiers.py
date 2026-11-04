@@ -315,6 +315,7 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
     mutated = checkout_differences(ctx.repo, candidate_commit, checkout, before, account, python)
     forged = bytecode_findings(tmp, checkout, run_dir, spec.targets, account, python)
     verdict = channel.read() if channel else report_guard.read_verdict(verdict_path, verdict_nonce)
+    verdict = replace(verdict, fail_kind=pytest_config.plugin_kinds(verdict.fail_kind, plugins))
     not_run = verdict.not_run(spec.targets)  # a target with no test that ran, a skipped module
     ran = profile is not None and verdict.ran and not not_run
     clean = not timed_out and not mutated and survivors == 0 and not forged

@@ -338,6 +338,18 @@ def _render(value: Any) -> str | None:
     return "".join(f"\n    {line}" for line in lines)
 
 
+def plugin_kinds(fail_kind: dict[str, str], loaded: tuple[str, ...]) -> dict[str, str]:
+    """The guard's ``plugin:<module>`` fail kinds made final (#804): ``plugin`` (base
+    PLUGIN_NOT_INSTALLED) only when the module is not in ``loaded``, the table plugins found in
+    the verifier's Python; a fixture missing although its plugin loaded is a ``setup`` error."""
+    final = {}
+    for node, kind in fail_kind.items():
+        if kind.startswith("plugin:"):
+            kind = "setup" if kind.removeprefix("plugin:") in loaded else "plugin"
+        final[node] = kind
+    return final
+
+
 @lru_cache(maxsize=8)
 def installed_plugins(python: str) -> tuple[str, ...]:
     """The PLUGINS modules the interpreter can import (found, not imported)."""

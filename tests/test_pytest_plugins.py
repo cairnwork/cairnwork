@@ -161,3 +161,29 @@ def test_plugin_not_installed_only_when_no_other_setup_error():
         "PLUGIN_NOT_INSTALLED"
     )
     assert judge({T1: "failed", T2: "failed"}, {T1: "plugin"}).kind == "TEETH"
+
+
+def test_a_missing_fixture_is_plugin_not_installed_only_when_the_plugin_cannot_be_found():
+    from cairnwork.pytest_config import plugin_kinds
+
+    kinds = {"a": "plugin:pytest_mock", "b": "plugin:pytest_django.plugin", "c": "env"}
+    assert plugin_kinds(kinds, ("pytest_mock",)) == {"a": "setup", "b": "plugin", "c": "env"}
+    assert plugin_kinds(kinds, ()) == {"a": "plugin", "b": "plugin", "c": "env"}
+
+
+def test_the_guard_record_accepts_only_table_plugin_kinds():
+    import json
+
+    from cairnwork.report_guard import parse_verdict
+
+    def kind_ok(kind):
+        record = {
+            "nonce": "n", "collected": ["t::a"], "outcomes": {"t::a": "failed"},
+            "fail_kind": {"t::a": kind}, "files": ["t"], "file_of": [0], "renamed": [],
+            "collect_errors": [], "collect_skipped": [], "teardown_errors": [],
+            "exitstatus": 1, "testsfailed": 1,
+        }  # fmt: skip
+        return parse_verdict(json.dumps(record).encode(), "n").recorded
+
+    assert kind_ok("plugin:pytest_mock") and kind_ok("setup")
+    assert not kind_ok("plugin:evil") and not kind_ok("plugin")
