@@ -76,13 +76,29 @@ def task(repo: Path, path: str) -> TaskSpec:
     return TaskSpec("k", "c", "t", "fix", repo, head, (path,), verify, test_roots=(root,))
 
 
-def refused(repo, path, python) -> bool:
+def rejection(repo, path, python) -> str | None:
+    """The code check_task refuses with, None when it allows the task."""
     try:
         check_task(task(repo, path), verifier_python=python)
     except TaskRejected as exc:
-        assert "PROTECTED_VERIFIER_INPUT" in str(exc)
-        return True
-    return False
+        return exc.code
+    return None
+
+
+def refused(repo, path, python) -> bool:
+    code = rejection(repo, path, python)
+    assert code in (None, "PROTECTED_VERIFIER_INPUT"), code
+    return code is not None
+
+
+UNAVAILABLE = "VERIFIER_PYTHON_INVENTORY_UNAVAILABLE"
+
+
+def unavailable(repo, path, python) -> bool:
+    """Refused with the environment reason: the listing could not be made (#790 acceptance)."""
+    code = rejection(repo, path, python)
+    assert code in (None, UNAVAILABLE), code
+    return code == UNAVAILABLE
 
 
 @pytest.mark.parametrize("path", sorted(CASES))
@@ -142,14 +158,17 @@ HOOKS = {
 def test_an_import_hook_the_probe_cannot_enumerate_fails_closed(repo, tmp_path, setup):
     """N2, N5b, N5d, N5e: names served by an unknown hook could be missing, so nothing is safe."""
     commit_change(repo, FILES)
-    assert refused(repo, "pkgB/base.py", stub(tmp_path, setup=HOOKS[setup]))
+    assert unavailable(repo, "pkgB/base.py", stub(tmp_path, setup=HOOKS[setup]))
 
 
 @pytest.mark.parametrize(
     "setup",
     (
-        "Finder = type('Finder', (), {'MAPPING': {'base.x': '/x'}})\n"
-        "Finder.__module__ = '__editable___d_finder'\nsys.meta_path.append(Finder)",
+        "import types\nmod = types.ModuleType('__editable___d_finder')\n"
+        "mod.MAPPING, mod.NAMESPACES = {'base': '/x'}, {'other.sub': []}\n"
+        "sys.modules[mod.__name__] = mod\n"
+        "Finder = type('_EditableFinder', (), {'__module__': mod.__name__})\n"
+        "sys.meta_path.append(Finder)",
         "import types\nsys.modules['base'] = types.ModuleType('base')",
     ),
 )
@@ -232,7 +251,7 @@ def test_an_unsupported_or_unreadable_version_fails_closed(repo, tmp_path, answe
     python = tmp_path / "python"
     python.write_text(f"#!/bin/sh\necho '{answer}'\n")
     python.chmod(0o755)
-    assert refused(repo, "pkgB/base.py", str(python))
+    assert unavailable(repo, "pkgB/base.py", str(python))
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root searches any directory")
@@ -247,8 +266,8 @@ def test_a_path_the_probe_cannot_search_fails_closed(repo, tmp_path):
     (site / "x.pth").write_text(f"{locked / 'sub'}\n")
     locked.chmod(0)
     try:
-        assert refused(repo, "pkgB/base.py", stub(tmp_path, extra=[site]))
-        assert refused(repo, "pkgB/base.py", stub(tmp_path, extra=[locked / "sub"]))
+        assert unavailable(repo, "pkgB/base.py", stub(tmp_path, extra=[site]))
+        assert unavailable(repo, "pkgB/base.py", stub(tmp_path, extra=[locked / "sub"]))
     finally:
         locked.chmod(0o755)
     assert not refused(repo, "pkgB/base.py", stub(tmp_path, extra=[site]))  # the control
@@ -278,4 +297,4 @@ def test_zips_eggs_and_installed_files_are_listed(tmp_path):
 )
 def test_a_changed_version_or_extra_output_fails_closed(repo, tmp_path, setup):
     commit_change(repo, FILES)
-    assert refused(repo, "pkgB/base.py", stub(tmp_path, setup=setup))
+    assert unavailable(repo, "pkgB/base.py", stub(tmp_path, setup=setup))

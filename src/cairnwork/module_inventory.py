@@ -4,7 +4,8 @@ A verifier Python of 3.10 or newer runs ``_MODULE_NAMES`` as before. An older on
 #790) lacks ``sys.stdlib_module_names`` and ``packages_distributions``, so it runs
 old_python_probe.py instead, and the standard-library names of Cairnwork's own Python are added.
 The version is asked first, by itself; any failure, any other version and any output that is not
-exactly the expected shape raise, and the callers then keep every checked path protected.
+exactly the expected shape raise VerifierInventoryError (an environment reason): the task is refused
+before binding, as before, but with that code instead of a bare PROTECTED_VERIFIER_INPUT.
 """
 
 from __future__ import annotations
@@ -14,6 +15,8 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+
+from cairnwork.pytest_config import PytestConfigError
 
 _VERSION = "import sys; print(sys.version_info[0], sys.version_info[1])"
 _VERSION_LINE = re.compile(r"(\d{1,2}) (\d{1,3})\n?")
@@ -26,16 +29,38 @@ _MODULE_NAMES = (
 _OLD_PROBE = Path(__file__).with_name("old_python_probe.py")
 
 
+class VerifierInventoryError(PytestConfigError):
+    """The verifier's Python cannot list its modules: an environment reason, not a verdict on the
+    candidate (#790). The task is still refused before binding, with this code."""
+
+    code = "VERIFIER_PYTHON_INVENTORY_UNAVAILABLE"
+
+
 def importable_names(python: str) -> set[str]:
-    major, minor = _version(python)
+    try:
+        major, minor = _version(python)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        raise VerifierInventoryError(f"the version question failed: {_why(exc)}") from exc
     if (major, minor) >= (3, 10):
         names = _names(json.loads(_run(python, _MODULE_NAMES)))
     elif (3, 6) <= (major, minor):
-        names = _old_names(_run(python, _OLD_PROBE.read_text(encoding="utf-8")), [major, minor])
-        names |= set(sys.stdlib_module_names)
+        try:
+            old = _run(python, _OLD_PROBE.read_text(encoding="utf-8"))
+            names = _old_names(old, [major, minor]) | set(sys.stdlib_module_names)
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            reason = f"Python {major}.{minor} cannot list its modules: {_why(exc)}"
+            raise VerifierInventoryError(reason) from exc
     else:
-        raise ValueError(f"verifier Python {major}.{minor} is not supported")
+        raise VerifierInventoryError(f"Python {major}.{minor} is not supported")
     return {name.casefold() for name in names} | {"_cairnwork_report_guard"}
+
+
+def _why(exc: Exception) -> str:
+    """The kind of failure and, for a probe that exited, its last stderr line (printable ASCII,
+    cut, no leading ``::`` or ``##[`` that a CI log would read as a command)."""
+    text = str(getattr(exc, "stderr", "") or "").strip().splitlines()
+    detail = re.sub(r"[^ -~]", "?", text[-1] if text else str(exc))[:160]
+    return f"{type(exc).__name__}: {detail}".replace("::", ": :").replace("##[", "# #[")
 
 
 def _run(python: str, code: str) -> str:

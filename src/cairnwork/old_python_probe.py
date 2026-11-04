@@ -104,10 +104,34 @@ def _scan(directory, names, seen):
                     _scan(os.path.join(real, line), names, seen)
 
 
+def _is_editable(cls, name):
+    """A class setuptools generated into an ``__editable___*_finder`` module (PEP 660)."""
+    return (
+        isinstance(cls, type)
+        and cls.__name__ == name
+        and cls.__module__.startswith("__editable___")
+    )
+
+
+def _editable_names(cls):
+    """The names setuptools keeps in the module globals MAPPING and NAMESPACES, not on the class."""
+    module = sys.modules.get(cls.__module__)
+    mapping = getattr(module, "MAPPING", None)
+    spaces = getattr(module, "NAMESPACES", None)
+    if not isinstance(mapping, dict) or not isinstance(spaces, dict):
+        raise SystemExit("unreadable editable finder: " + cls.__module__)
+    return {str(key).split(".", 1)[0] for key in list(mapping) + list(spaces)}
+
+
 def _check_path_machinery():
     for hook in sys.path_hooks:
-        if hook is not zipimport.zipimporter and getattr(hook, "__code__", None) is not (
-            _FILE_FINDER_HOOK
+        if (
+            hook is not zipimport.zipimporter
+            and getattr(hook, "__code__", None) is not _FILE_FINDER_HOOK
+            and not (
+                getattr(hook, "__name__", "") == "_path_hook"
+                and _is_editable(getattr(hook, "__self__", None), "_EditableNamespaceFinder")
+            )
         ):
             raise SystemExit("unknown path hook: " + repr(hook))
     entries = list(sys.path) + list(sys.path_importer_cache)
@@ -115,8 +139,10 @@ def _check_path_machinery():
         importer = sys.path_importer_cache.get(entry)
         if importer is None and entry in sys.path:
             importer = pkgutil.get_importer(entry)
-        if importer is not None and not isinstance(
-            importer, (machinery.FileFinder, zipimport.zipimporter)
+        if (
+            importer is not None
+            and not isinstance(importer, (machinery.FileFinder, zipimport.zipimporter))
+            and not _is_editable(importer, "_EditableNamespaceFinder")
         ):
             raise SystemExit("unknown path importer for " + repr(entry))
 
@@ -129,13 +155,12 @@ def _meta_path_names():
             continue
         cls = finder if isinstance(finder, type) else type(finder)
         where = (cls.__module__, cls.__name__)
-        mapping = getattr(finder, "MAPPING", None)
         if where == ("_distutils_hack", "DistutilsMetaFinder"):
             names.add("distutils")
         elif where == ("_virtualenv", "_Finder"):
             pass  # virtualenv patches distutils on load and adds no name
-        elif cls.__module__.startswith("__editable___") and isinstance(mapping, dict):
-            names.update(str(key).split(".", 1)[0] for key in mapping)
+        elif _is_editable(cls, "_EditableFinder"):
+            names.update(_editable_names(cls))
         else:
             raise SystemExit("unknown meta_path finder: " + cls.__module__ + "." + cls.__name__)
     return names
