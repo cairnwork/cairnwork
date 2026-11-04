@@ -1,7 +1,8 @@
 """#797: an OSError counts as an environment error only when it was raised outside the checkout's
-own code. The innermost raising frame decides: a non-test file inside the checkout is the code
-under test (no fail_kind, so teeth); stdlib, site-packages, the test file and conftest keep the
-#775 reading (``env``). End to end through the real plugin."""
+own code. The innermost raising frame, the OSError's class and every OSError on its cause/context
+chain decide together: all checkout code (a non-test file inside the checkout) is the code under
+test (no fail_kind, so teeth); anything else keeps the #775 reading (``env``). End to end through
+the real plugin."""
 
 import subprocess
 import sys
@@ -176,3 +177,12 @@ def test_every_oserror_on_the_cause_and_context_chain_must_be_checkout_code(tmp_
     v = _run(tmp_path, {"lib.py": lib, "tests/test_x.py": USE})
     assert v.outcomes == {f"{T}test_a": "failed"}
     assert v.fail_kind == kind
+
+
+def test_a_stdlib_oserror_subclass_raised_by_checkout_code_stays_env(tmp_path):
+    """shutil.Error is an OSError subclass defined in a Python file outside the checkout: the
+    class check cannot place it under rootpath, so it is env (not teeth)."""
+    lib = "import shutil\ndef load():\n    raise shutil.Error('copy failed')\n"
+    v = _run(tmp_path, {"lib.py": lib, "tests/test_x.py": USE})
+    assert v.outcomes == {f"{T}test_a": "failed"}
+    assert v.fail_kind == {f"{T}test_a": "env"}
