@@ -124,6 +124,11 @@ def _source(item):
         return ""
 
 
+def _missing(report):  # #813: the module a skip at collection says it could not import
+    shown = report.longrepr[-1] if isinstance(report.longrepr, tuple) else ""
+    return str(shown).partition("could not import '")[2].partition("'")[0][:100]
+
+
 class _Reporter:
     # the hooks call their helpers and the json/os functions through default arguments bound at
     # import: rebinding a class or module attribute later does not change what is recorded
@@ -140,6 +145,7 @@ class _Reporter:
         self._renamed = []  # items whose node id or file changed after collection, or never seen
         self._collect_errors = []
         self._collect_skipped = []
+        self._skipped_deps = []  # #813: per skipped collector, the module it could not import
         self._teardown_errors = []
         self._setup_failed = []  # #775: fixture raised before the body
         self._env_ok = {}  # #775: node -> every failed call raised an OSError so far
@@ -149,6 +155,7 @@ class _Reporter:
             self._collect_errors.append(report.nodeid)
         elif report.skipped:  # a module or directory skipped whole while collecting
             self._collect_skipped.append(report.nodeid)
+            self._skipped_deps.append(_missing(report))
 
     def _original(self, item, nodeid, _source=_source):
         """The node id ``item`` had when collected; an item that was not seen collected, or whose
@@ -212,6 +219,7 @@ class _Reporter:
                    "renamed": list(dict.fromkeys(self._renamed)),
                    "collect_errors": self._collect_errors,
                    "collect_skipped": self._collect_skipped,
+                   "collect_skipped_deps": self._skipped_deps,
                    "teardown_errors": self._teardown_errors,
                    # pytest's own status: the parent requires it and the process's to agree
                    "exitstatus": int(exitstatus), "testsfailed": session.testsfailed}
@@ -279,6 +287,11 @@ def read_verdict_fd(fd: int, nonce: str) -> Verdict:
     return parse_verdict(raw, nonce)
 
 
+def _is_module(name: str) -> bool:
+    """A dotted module name as the record may carry it (candidate-written: nothing else shown)."""
+    return len(name) <= 100 and all(part.isidentifier() for part in name.split("."))
+
+
 def parse_verdict(raw: bytes, nonce: str) -> Verdict:
     """``ran`` is true only when sessionfinish wrote the record, it matches the nonce, at least
     one test was collected, every collected test produced a result, all results are ``passed``,
@@ -311,6 +324,10 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
     skipped = data.get("collect_skipped", [])
     renamed = data.get("renamed", [])
     teardown = data.get("teardown_errors", [])
+    deps = data.get("collect_skipped_deps", [])  # a hint for the reason only, never the verdict
+    deps = (
+        [d for d in deps if isinstance(d, str) and _is_module(d)] if isinstance(deps, list) else []
+    )
     files = data.get("files", [])
     kind = data.get("fail_kind", {})  # #775: node -> "setup" | "env", only nodes in outcomes
     if not isinstance(kind, dict) or not all(
@@ -350,6 +367,7 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
         recorded=True,
         collect_errors=tuple(errors),
         collect_skipped=tuple(skipped),
+        skipped_deps=tuple(dict.fromkeys(deps)),
         renamed=tuple(renamed),
         teardown_errors=tuple(teardown),
         fail_kind=kind,
