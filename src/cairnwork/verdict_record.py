@@ -26,7 +26,7 @@ class Verdict:
     exitstatus: int | None = None  # pytest's own session status, as recorded (#276)
     testsfailed: int | None = None  # pytest's own count of failed tests, as recorded
     collected: tuple[str, ...] = ()  # #793: every node id pytest collected, as recorded
-    collection_finished: bool = False  # #793: pytest_collection_finish ran (not interrupted)
+    collection_finished: bool = False  # #793: the guard's pytest_collection wrapper returned
 
     def not_run(self, targets) -> tuple[str, ...]:
         """The named ``targets`` (``path`` or ``path::node``) that own no recorded test, then the
