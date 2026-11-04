@@ -48,6 +48,7 @@ def _version_block(calls: list[dict[str, Any]], events: dict[str, list[dict[str,
     block: dict[str, Any] = {
         "total": len(calls),
         "reached_core": sum(1 for c in calls if not c["no_notary_row"]),
+        "unchecked_binding": sum(1 for c in calls if c.get("notary_lost")),
         "counts": counts,
         "cases": {"all": [c["call_id"] for c in calls], **ids, **status},
     }
@@ -104,13 +105,16 @@ def format_report(report: dict[str, Any], *, cases: bool = False) -> str:
     for version, b in report.items():
         out.append(f"version {version}: calls {b['total']}, reached Core {b['reached_core']}")
         out.append("  " + ", ".join(f"{k} {n}" for k, n in b["counts"].items()))
-        v = b["VERIFIED"]
+        v, unchecked = b["VERIFIED"], f", unchecked binding {b['unchecked_binding']}"
         kinds = ", ".join(f"{k} {n}" for k, n in v["overturned_by_kind"].items()) or "none"
         out.append(f"  VERIFIED: tracked {v['tracked']}, closed {v['closed']}, "
                    f"unknown {v['unknown']}, overturned {v['overturned']} ({kinds})")  # fmt: skip
-        out.append(f"  VERIFIED overturn rate: {v['text']}, coverage {v['coverage']}")
+        out.append(f"  VERIFIED overturn rate: {v['text']}, coverage {v['coverage']}{unchecked}")
         r = b["refused_but_correct"]
-        out.append(f"  FAILED/REFUSED refused_but_correct: {r['text']}, coverage {r['coverage']}")
+        out.append(
+            f"  FAILED/REFUSED refused_but_correct: {r['text']}, "
+            f"coverage {r['coverage']}{unchecked}"
+        )
         p = b["pre_core_refused_but_correct"]
         out.append(f"  PRE_CORE refused_but_correct: {p['text']}, coverage {p['coverage']}")
         if cases:
