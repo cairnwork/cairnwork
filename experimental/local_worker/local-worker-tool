@@ -6,7 +6,7 @@
 #   <owner> ALL=(_cairnwork_worker) NOPASSWD: /Users/Shared/cairnwork-worker/local-bin/local-worker-tool
 # names that path. experimental/local_worker/tools.py runs it with `sudo -n -u _cairnwork_worker`.
 #
-# Twelve actions, nothing else (exit 64 = refused before anything ran):
+# Thirteen actions, nothing else (exit 64 = refused before anything ran):
 #   [--start-nonce <hex>] before the action prints LOCAL_WORKER_STARTED <hex> on stderr first.
 #   local-worker-tool list   <run_root> <relpath>        list a directory of the checkout
 #   local-worker-tool read   <run_root> <relpath>        print a regular file of the checkout
@@ -32,6 +32,9 @@
 #   local-worker-tool tracked <run_root>                 every path (files and directories) of HEAD
 #   local-worker-tool digest <run_root>                  raw diff (mode, blob id) vs HEAD of every
 #                                                        file, untracked and ignored ones included
+#   local-worker-tool check  <run_root>                  git diff --check (added lines only) of the
+#                                                        staged tree vs HEAD; exit 0, its findings
+#                                                        as output (precheck.py)
 #
 # <run_root> is a canonical real directory directly inside $RUNS named by 32 lowercase hex digits,
 # created by the Owner (0750: the worker may not rename or plant entries in it) together with
@@ -321,7 +324,7 @@ sandboxed() {
     "$SANDBOX_EXEC" -p "$sb_profile" "$@" 2>&1
 }
 
-# The four fixed git queries (status, numstat, tracked, digest): read-only on the checkout and .git,
+# The five fixed git queries (status, numstat, tracked, digest, check): read-only on the checkout and .git,
 # as the worker under the query profile, with TMPDIR=<run_root>/q (Claude review of #239, NB1: under the
 # tool profile, test code left running by a pytest call could rewrite the query's output files). Git
 # runs on a throwaway git dir in a fresh mktemp directory (Codex review of #239, B2 and the filter
@@ -407,6 +410,17 @@ if [ "$2" = digest ]; then
   /bin/cat "$q/out"
   exit 0
 fi
+# check: whitespace errors on added lines, the Core test for DIFF_CHECK_FAILED. git exits 2 when
+# it finds some; that is the answer here, not a failure (any other status or any stderr still is).
+if [ "$2" = check ]; then
+  /bin/rm -f "$q/out" "$q/err"
+  rc=0
+  $G diff $D --check HEAD >"$q/out" 2>"$q/err" || rc=$?
+  [ "$rc" -le 2 ] || { /bin/cat "$q/err"; exit 3; }
+  [ ! -s "$q/err" ] || { /bin/cat "$q/err"; exit 4; }
+  /bin/cat "$q/out"
+  exit 0
+fi
 step $G diff $D --text -U0 HEAD
 /bin/mv "$q/out" "$q/patch"
 step $G diff $D --numstat HEAD
@@ -471,7 +485,7 @@ if [ "${1:-}" = --start-nonce ]; then
   shift 2
 fi
 
-[ "$#" -ge 2 ] || refuse "usage: local-worker-tool <list|read|write|search|search-probe|pytest|sweep|status|numstat|tracked|digest> <run_root> ..."
+[ "$#" -ge 2 ] || refuse "usage: local-worker-tool <list|read|write|search|search-probe|pytest|sweep|status|numstat|tracked|digest|check> <run_root> ..."
 ACTION=$1
 RUN_ROOT=$2
 shift 2
@@ -528,7 +542,7 @@ case "$ACTION" in
   sweep | search-probe)
     [ "$#" -eq 0 ] || refuse "$ACTION takes no further arguments"
     ;;
-  status | numstat | tracked | digest)
+  status | numstat | tracked | digest | check)
     [ "$#" -eq 0 ] || refuse "$ACTION takes no further arguments"
     [ ! -L "$CHECKOUT/.git" ] && [ -d "$CHECKOUT/.git" ] || refuse "checkout has no real .git directory"
     ;;
@@ -590,7 +604,7 @@ exit "$w"' sh "$CHECKOUT/search-probe" "$RUN_ROOT/tmp/search-probe"
   pytest-ro)
     sandboxed "$(pytest_ro_profile)" "$RUN_ROOT/tmp" "$PY" -m pytest -p no:cacheprovider "$@"
     ;;
-  status | numstat | tracked | digest)
+  status | numstat | tracked | digest | check)
     GIT_BIN=$(real_git) || exit 64
     sandboxed "$(query_profile)" "$RUN_ROOT/q" /bin/sh -c "$GIT_QUERY" sh "$CHECKOUT" "$ACTION" \
       "$GIT_BIN" "$PATCH_COUNT"
