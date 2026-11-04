@@ -72,6 +72,7 @@ from pathlib import Path
 from cairnwork.bytecode_hook import HOOK_SOURCE
 from cairnwork.confined import MAX_REPORT_BYTES
 from cairnwork.pytest_config import PLUGINS
+from cairnwork.skip_hint import module_names as _module_names
 from cairnwork.verdict_record import Verdict as Verdict
 from cairnwork.verdict_record import _sources
 
@@ -138,6 +139,11 @@ def _source(item):
         return ""
 
 
+def _missing(report):  # #813: the module a skip at collection says it could not import
+    shown = report.longrepr[-1] if isinstance(report.longrepr, tuple) else ""
+    return str(shown).partition("could not import '")[2].partition("'")[0][:100]
+
+
 class _Reporter:
     # the hooks call their helpers and the json/os functions through default arguments bound at
     # import: rebinding a class or module attribute later does not change what is recorded
@@ -154,6 +160,7 @@ class _Reporter:
         self._renamed = []  # items whose node id or file changed after collection, or never seen
         self._collect_errors = []
         self._collect_skipped = []
+        self._skipped_deps = []  # #813: per skipped collector, the module it could not import
         self._teardown_errors = []
         self._setup_failed = []  # #775: fixture raised before the body
         self._plugin_missing = {}  # #804: node -> the table plugin whose fixture was not found
@@ -165,6 +172,7 @@ class _Reporter:
             self._collect_errors.append(report.nodeid)
         elif report.skipped:  # a module or directory skipped whole while collecting
             self._collect_skipped.append(report.nodeid)
+            self._skipped_deps.append(_missing(report))
 
     def _original(self, item, nodeid, _source=_source):
         """The node id ``item`` had when collected; an item that was not seen collected, or whose
@@ -241,6 +249,7 @@ class _Reporter:
                    "renamed": list(dict.fromkeys(self._renamed)),
                    "collect_errors": self._collect_errors,
                    "collect_skipped": self._collect_skipped,
+                   "collect_skipped_deps": self._skipped_deps,
                    "teardown_errors": self._teardown_errors,
                    "collection_finished": self._finished,
                    # pytest's own status: the parent requires it and the process's to agree
@@ -337,8 +346,7 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
         isinstance(node, str) and isinstance(result, str) for node, result in outcomes.items()
     ):
         return Verdict(False, {})
-    errors = data.get("collect_errors", [])
-    skipped = data.get("collect_skipped", [])
+    errors, skipped = data.get("collect_errors", []), data.get("collect_skipped", [])
     renamed = data.get("renamed", [])
     teardown = data.get("teardown_errors", [])
     files = data.get("files", [])
@@ -380,6 +388,7 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
         recorded=True,
         collect_errors=tuple(errors),
         collect_skipped=tuple(skipped),
+        skipped_deps=_module_names(data),
         renamed=tuple(renamed),
         teardown_errors=tuple(teardown),
         fail_kind=kind,
