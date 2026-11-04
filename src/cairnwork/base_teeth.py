@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from cairnwork.reasons import _names
 
+_PLUGIN_HINT = "; install the plugin in the verifier's Python (pytest_config.PLUGINS)"
 _SETUP_HINT = "; import fix-introduced symbols inside the test function"
 
 
@@ -16,6 +17,7 @@ def base_teeth(runs, targets) -> tuple[str, str, str]:
     """``(kind, code, detail)`` for ``Comparison``: TEETH, UNCOMPARABLE or NO_TEETH."""
     setup: list[str] = []
     env: list[str] = []
+    plugin: list[str] = []
     for run in runs:
         for nodeid, outcome in run.outcomes.items():
             if outcome != "failed" or nodeid.split("[", 1)[0] not in targets:
@@ -23,8 +25,12 @@ def base_teeth(runs, targets) -> tuple[str, str, str]:
             kind = run.fail_kind.get(nodeid)
             if kind is None:
                 return ("TEETH", "", "")
-            (setup if kind == "setup" else env).append(nodeid)
-    if setup:
+            {"setup": setup, "plugin": plugin}.get(kind, env).append(nodeid)
+    if plugin and not setup:  # #804: only a missing table plugin's fixture stopped the base
+        detail = f"a pytest plugin fixture is missing for {_names(plugin)}"
+        return ("UNCOMPARABLE", "PLUGIN_NOT_INSTALLED", detail + _PLUGIN_HINT)
+    if setup or plugin:
+        setup += plugin
         files = {target.split("::", 1)[0] for target in targets}
         hint = _SETUP_HINT if any(n.split("::", 1)[0] in files for n in setup) else ""
         detail = f"fixture setup failed for {_names(setup)}{hint}"
