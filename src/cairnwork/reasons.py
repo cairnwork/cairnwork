@@ -120,3 +120,10 @@ def explain(runs) -> str:
     return (f" [{'; '.join(failed)}]" if failed else "") + (
         f" [notes {'; '.join(noted)}]" if noted else ""
     )
+
+
+def skip_hint(run) -> str:
+    """#813: the module a collector skipped for (``importorskip``); text for the reason, the
+    verdict is not read from it. The names come from the run's record: cut and cleaned here."""
+    deps = getattr(run, "skipped_deps", ())
+    return f"; skipped at collection, could not import {_names(deps)}" if deps else ""

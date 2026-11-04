@@ -15,6 +15,7 @@ class Verdict:
     recorded: bool = False  # sessionfinish wrote a well-formed record with our nonce (#234)
     collect_errors: tuple[str, ...] = ()  # node ids of collectors that failed (B2, #234)
     collect_skipped: tuple[str, ...] = ()  # node ids of collectors skipped while collecting
+    skipped_deps: tuple[str, ...] = ()  # modules the skipped collectors could not import (#813)
     renamed: tuple[str, ...] = ()  # items whose node id or file changed after collection
     paths: dict[str, str] = field(default_factory=dict)  # node id -> its file, as collected
     # #478: tests whose teardown failed. A shared fixture's finalizer runs at its last user's
