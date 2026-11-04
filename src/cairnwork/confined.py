@@ -34,7 +34,7 @@ PS_TIMEOUT_SECONDS = 60
 
 def execute(
     argv, cwd, env, timeout, log_path, reap=None, pass_fds=()
-) -> tuple[int | None, bool, int]:
+) -> tuple[int | None, bool, survivor_argv.Survivors]:
     """Run in a new process group; the parent copies output into log_path (the child
     never holds the log's file descriptor); kill the group afterwards."""
     token = env.get(RUN_TOKEN_VAR)

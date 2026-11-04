@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import uuid
+from typing import Any
 
 import pytest
 
@@ -37,9 +38,11 @@ def test_only_the_count_decides_the_reason_stays_the_same_without_argv():
     assert named.endswith("was unreadable (argv: srv --x)")
 
 
-def _run(**over):
-    base = dict(ran_sandboxed=True, returncode=0, timed_out=False, mutated=(), survivors=0,
-                log_too_big=False, tests_ran=True)  # fmt: skip
+def _run(**over: Any) -> dict[str, Any]:
+    base: dict[str, Any] = {
+        "ran_sandboxed": True, "returncode": 0, "timed_out": False, "mutated": (),
+        "survivors": 0, "log_too_big": False, "tests_ran": True,
+    }  # fmt: skip
     return base | over
 
 
