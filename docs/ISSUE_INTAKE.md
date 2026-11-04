@@ -114,12 +114,13 @@
 def test_square():
     assert square(3) == 9
 
+
 # 較強：不同於可見測試的輸入、呼叫兩次、性質式斷言、isinstance
 def test_square_properties():
     a, b = square(7), square(-12)
     assert isinstance(a, int) and isinstance(b, int)
     assert (a, b) == (49, 144)
-    assert b > a > 0            # 不等式
+    assert b > a > 0  # 不等式
     assert square(-5) == square(5)  # 性質：偶函數
 ```
 
