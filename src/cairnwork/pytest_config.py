@@ -22,13 +22,16 @@ configuration file at the base fails the run (``PytestConfigError``).
 from __future__ import annotations
 
 import configparser
+import fnmatch
 import json
 import os
+import posixpath
 import re
 import shlex
 import shutil
 import subprocess
 import tomllib
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
@@ -158,6 +161,14 @@ def base_settings(repo: Path, base_commit: str | None) -> PytestSettings:
         if found is not None or name in _ALWAYS_FOUND:
             return _settings(name, found or {})
     return PytestSettings()
+
+
+def test_file_rule(repo: Path, base_commit: str | None) -> Callable[[str], bool]:
+    """Whether a path's file name matches the base's ``python_files``, the patterns the verifier's
+    ini carries (#793); pytest's default, test_*.py and *_test.py, when it sets none."""
+    configured = dict(base_settings(repo, base_commit).values).get("python_files")
+    patterns = tuple(_words(configured)) or ("test_*.py", "*_test.py")
+    return lambda path: any(fnmatch.fnmatch(posixpath.basename(path), p) for p in patterns)
 
 
 def verifier_settings(
