@@ -251,6 +251,8 @@ def _prepare_run(private: Path, ini: Path, ini_text: bytes, channel=None):
         PYTEST_DISABLE_PLUGIN_AUTOLOAD="1",
         PYTHONPATH=str(guard),
     )
+    if (backend := cairnwork_sandbox.select()) is not None:
+        env.update(getattr(backend, "run_env", ()))  # macOS: USER, LOGNAME (#802)
     env[RUN_TOKEN_VAR] = secrets.token_hex(16)
     verdict_path, verdict_nonce = run_dir / "verdict.json", secrets.token_hex(16)
     if channel is not None:  # owner run: descriptors, no nonce or path in the environment
