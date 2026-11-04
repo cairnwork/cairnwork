@@ -90,6 +90,14 @@ import pytest
 _FDS_ENV = "CAIRNWORK_GUARD_FDS"
 _PATH_ENV = "CAIRNWORK_VERDICT_PATH"
 _NONCE_ENV = "CAIRNWORK_VERDICT_NONCE"
+# #804: fixtures of the plugins pytest_config.PLUGINS may load; a setup error that says one of
+# them is missing means the plugin is not loaded (fail kind "plugin", base PLUGIN_NOT_INSTALLED)
+_PLUGIN_FIXTURES = frozenset({
+    "mocker", "class_mocker", "module_mocker", "package_mocker", "session_mocker",
+    "db", "transactional_db", "django_db_setup", "client", "async_client", "admin_client",
+    "admin_user", "rf", "async_rf", "settings", "live_server", "django_user_model",
+    "django_assert_num_queries", "mailoutbox", "anyio_backend",
+})
 
 
 def _take():
@@ -142,6 +150,7 @@ class _Reporter:
         self._collect_skipped = []
         self._teardown_errors = []
         self._setup_failed = []  # #775: fixture raised before the body
+        self._plugin_missing = []  # #804: a table plugin's fixture was not found
         self._env_ok = {}  # #775: node -> every failed call raised an OSError so far
 
     def pytest_collectreport(self, report):
@@ -181,7 +190,8 @@ class _Reporter:
         self._files = list(index)
 
     @pytest.hookimpl(wrapper=True, tryfirst=True)
-    def pytest_runtest_makereport(self, item, call, _original=_original, _keep_worst=_keep_worst):
+    def pytest_runtest_makereport(self, item, call, _original=_original, _keep_worst=_keep_worst,
+                                  _fixtures=_PLUGIN_FIXTURES):
         report = yield  # outermost: the report as every other hook left it
         nodeid, _ = _original(self, item, report.nodeid)
         if report.when == "call":  # #570: one per sub-test, then the test's own
@@ -194,6 +204,8 @@ class _Reporter:
             _keep_worst(self, nodeid, report.outcome)
             if report.failed:  # a skip in a fixture is not an error
                 self._setup_failed.append(nodeid)
+                if getattr(report.longrepr, "argname", None) in _fixtures:
+                    self._plugin_missing.append(nodeid)
         elif report.when == "teardown" and report.failed:  # #478: a fixture raised after yield
             self._outcomes[nodeid] = "failed"
             self._teardown_errors.append(nodeid)
@@ -206,6 +218,7 @@ class _Reporter:
         dumps, dump, ftruncate, pwrite, open_, fdopen, chmod, flags = _io
         kind = {n: "env" for n, ok in self._env_ok.items() if ok}
         kind.update(dict.fromkeys(self._setup_failed, "setup"))
+        kind.update(dict.fromkeys(self._plugin_missing, "plugin"))
         payload = {"nonce": self._nonce, "fail_kind": kind,
                    "collected": self._collected, "outcomes": self._outcomes,
                    "files": self._files, "file_of": self._file_of,
@@ -312,9 +325,9 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
     renamed = data.get("renamed", [])
     teardown = data.get("teardown_errors", [])
     files = data.get("files", [])
-    kind = data.get("fail_kind", {})  # #775: node -> "setup" | "env", only nodes in outcomes
+    kind = data.get("fail_kind", {})  # #775: node -> "setup" | "env" | "plugin" (#804)
     if not isinstance(kind, dict) or not all(
-        n in outcomes and v in ("setup", "env") for n, v in kind.items()
+        n in outcomes and v in ("setup", "env", "plugin") for n, v in kind.items()
     ):
         return Verdict(False, {})
     file_of = data.get("file_of")  # absent: no test owns a named target
