@@ -42,6 +42,9 @@ SKIP_BODY = (  # R6: the test body is never run
     "def pytest_pyfunc_call(pyfuncitem):\n"
     "    return True\n"
 )
+GLOBALS_LITERAL = (  # a hook registered by writing its plain name into the module namespace
+    "def _f(pyfuncitem):\n    return True\nglobals()['pytest_pyfunc_call'] = _f\n"
+)
 ALLOWED = ("src/calc.py", "src/myplug.py")  # the plugin is listed but a real fix leaves it alone
 DESELECT = (  # unchanged-class case from main: drop the target test from the run
     "def pytest_collection_modifyitems(config, items):\n"
@@ -90,6 +93,7 @@ def _no_receipt(out):
         ("R2_makereport_flip", FLIP),
         ("R4_swallow_call", SWALLOW),
         ("R6_pyfunc_skip_body", SKIP_BODY),
+        ("R7_globals_plain_name", GLOBALS_LITERAL),
     ],
 )
 def test_1_each_hook_forgery_is_refused_by_the_new_rule_with_no_receipt(

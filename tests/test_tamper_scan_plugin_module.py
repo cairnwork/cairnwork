@@ -293,10 +293,14 @@ def test_ac8_a_changed_file_that_binds_a_hook_name_is_refused_unread(repo, head)
     assert _patch(repo, {LIB: head}, {LIB: HOOK_BASE}) >= {(LIB, "hook_file_touched")}
 
 
-def test_ac8_a_head_that_binds_a_hook_with_a_clean_base_is_refused_too(repo):
-    assert _patch(repo, {LIB: TOUCHED["def_in_if"]}, {LIB: "X = 1\n"}) >= {
-        (LIB, "hook_file_touched")
-    }
+@pytest.mark.parametrize(
+    "head",
+    [v for k, v in TOUCHED.items() if k not in ("unchanged_hook_other_edit", "hook_deleted")],
+    ids=[k for k in TOUCHED if k not in ("unchanged_hook_other_edit", "hook_deleted")],
+)
+def test_ac8_a_head_that_binds_a_hook_with_a_clean_base_is_refused_too(repo, head):
+    """Each head-side shape on its own: nothing in the base to find (mutant M1 of the review)."""
+    assert _patch(repo, {LIB: head}, {LIB: "X = 1\n"}) >= {(LIB, "hook_file_touched")}
 
 
 @pytest.mark.parametrize(

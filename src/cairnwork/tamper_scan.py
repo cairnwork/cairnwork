@@ -28,20 +28,19 @@ a source encoding other than UTF-8 declared on an added line 1 or 2 is refused
 scan budget, read no further (``scan_budget``, tamper_scan_budget.py). It catches the
 straightforward forms and the PoCs seen so far, and it fails closed with a dedicated reason.
 
-To keep honest code out of the net (#221): a line that holds no code for Python (only a comment or
-plain string text) is skipped; the ``sys.modules`` write rule applies in full only to test code
-(``conftest.py``, ``test_*.py``, ``*_test.py`` and files under a ``tests``/``test``/``testing``
-directory): there a literal stub of an unrelated module (``sys.modules["dep"] = MagicMock()``) and
-``sys.modules[__name__] = ...`` are allowed. In any other file a literal sensitive key
-(``sys.modules["pytest"] = fake``) is still refused, a variable key (``sys.modules[spec.name] =
-mod``, as plugin loaders do) is allowed, as are literal key variants (f-strings, implicit
-concatenation, ``update(pytest=...)``): a known gap of this raised bar.
-Since #821 the pytest rules reach every candidate ``.py`` (a library file that a protected conftest
-loads as a plugin runs inside pytest): ``pytest_hook_impl`` (not in a conftest, where hooks are
-normal) and ``pytest_internals``, whose allow is a type-hint import of a public fixture class from
-``_pytest``. The new rules are in tamper_scan_plugin.py. Accepted false-block costs: a pytest
-plugin's own non-fixture type imports (``from _pytest.config import Config``) and a task that
-edits a file defining a hook.
+To keep honest code out of the net (#221): a line that starts with ``#`` and holds no code for
+Python (only a comment or plain string text) is skipped; the ``sys.modules`` write rule applies in
+full only to test code (``conftest.py``, ``test_*.py``, ``*_test.py`` and files under a
+``tests``/``test``/``testing`` directory): there a literal stub of an unrelated module
+(``sys.modules["dep"] = MagicMock()``) and ``sys.modules[__name__] = ...`` are allowed. In any other
+file a literal sensitive key (``sys.modules["pytest"] = fake``) is still refused, a variable key
+(``sys.modules[spec.name] = mod``, as plugin loaders do) is allowed, as are literal key variants
+(f-strings, implicit concatenation, ``update(pytest=...)``): a known gap of this raised bar.
+Since #821 the pytest rules reach every candidate ``.py`` (a library file a protected conftest loads
+as a plugin runs inside pytest): ``pytest_hook_impl`` (not in a conftest) and ``pytest_internals``,
+which allows a type-hint import of a public fixture class from ``_pytest``. The new rules are in
+tamper_scan_plugin.py. Accepted false blocks: a plugin's non-fixture ``_pytest`` type imports, and a
+task that edits a file defining a hook.
 """
 
 from __future__ import annotations
@@ -397,4 +396,5 @@ def scan_patch(repo: Path, base: str, head: str) -> list[Finding]:
         if path.endswith(".py") and lines and not budget.over:  # the whole file, as committed
             data = run_git_bytes(repo, "cat-file", "blob", f"{head}:{path}")
             found += scan_added_lines(path, lines, data, budget)
-    return found + [Finding(path, 0, rule) for path, rule in file_rules(repo, base, head)]
+    more = [] if budget.over else file_rules(repo, base, head, budget)  # over: scan_budget already
+    return found + [Finding(path, 0, rule) for path, rule in more]
