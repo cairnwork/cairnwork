@@ -12,6 +12,7 @@ from experimental.local_worker.schema_base import SchemaError
 
 ACTION_TYPES = ("list_dir", "read_file", "write_file", "edit_file", "run_test", "finish")
 ACTION_TYPES += ("invalid_tool_call", "no_tool_call", "search")
+ACTION_TYPES += ("finish_precheck",)  # a DONE finish answered with the precheck report
 ERROR_CATEGORIES = ("NONE", "TIMEOUT", "REFUSED", "SYNTAX_ERROR", "TEST_FAILED", "NO_TESTS")
 ERROR_CATEGORIES += ("TOOL_ERROR", "INVALID_CALL", "PROTOCOL_ERROR", "REPEATED", "NO_MATCH")
 ERROR_CATEGORIES += ("CPU_LIMIT",)  # a search grep stopped at its CPU-time limit

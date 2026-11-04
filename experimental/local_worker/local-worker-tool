@@ -72,7 +72,7 @@
 # ulimit -t). It bounds no memory, and none can be set: on Darwin 27, ulimit -v, -d and -m (and
 # setrlimit RLIMIT_AS, RLIMIT_DATA, RLIMIT_RSS) fail with EINVAL, so the Python regex cap alone
 # bounds what grep allocates.
-# The query profile (status, numstat, tracked, digest): the same network, read and signal limits,
+# The query profile (status, numstat, tracked, digest, check): the same network, read and signal limits,
 # reads of the checkout (its .git included) and <run_root>/q only, writes only inside <run_root>/q. No
 # code the model wrote ever runs under it (git runs with no filter, hook, driver or textconv; see
 # GIT_QUERY).

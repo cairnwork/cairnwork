@@ -321,7 +321,7 @@ class AgentLoop(CleanupMixin, GuardMixin, BaseCheckMixin, PrecheckMixin):
         # already refused an id that is not a string.
         call = dict(calls[0], id=calls[0].get("id") or f"call_{log.index}")
         assistant["tool_calls"] = [call]
-        if name == "finish" and self._precheck_reply(log, args, messages, call["id"]):
+        if name == "finish" and self._precheck_reply(log, args, messages, call["id"], deadline):
             return None  # told what the Core would refuse; the agent may fix it and finish again
         if name == "finish":  # no interrupt once a turn is a finish: it can only be COMPLETED
             self.interruptible = False  # (review of PR #248, W1); a signal is only counted now

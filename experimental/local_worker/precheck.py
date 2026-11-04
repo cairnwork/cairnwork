@@ -76,6 +76,8 @@ def protected_paths(raw_digest: bytes, roots: tuple[str, ...]) -> tuple[str, ...
     if records is None:
         return None
     changed = tuple(r.split(" ", 4)[4] for r in records)
+    # Only the top-level roots: a nested root (pkg/tests) or a protected input above the roots is
+    # missed. That only under-reports; the Core still decides.
     under = tuple(p for p in changed if "/" in p and p.split("/", 1)[0] in roots)
     return protected_verifier_inputs(under, roots) if under else ()
 
@@ -100,17 +102,24 @@ class PrecheckMixin:
     settings: Any
     tools: Any
     limits: Any
+    clock: Any
     _step_deadline: Any
     _prechecked = False  # the one reply (settings.precheck_roots) was used
 
-    def _precheck_reply(self, log: Any, args: dict, messages: list[dict], call_id: str) -> bool:
+    def _precheck_reply(
+        self, log: Any, args: dict, messages: list[dict], call_id: str, deadline: float
+    ) -> bool:
         """Once per run, a DONE finish with problems gets the report as its tool reply.
-        A query that fails or runs out of time adds nothing: the Core still decides."""
+        A query that fails or runs out of time adds nothing: the Core still decides. A
+        WorkerIsolationError from a query still aborts the run, as everywhere in the loop.
+        No report when it would take the last turn or the last of the time: the finish stands."""
         roots = self.settings.precheck_roots
         if roots is None or self._prechecked or args["status"] != "DONE":
             return False
+        if log.index + 1 >= self.limits.max_steps or self.clock() >= deadline:
+            return False
         self._prechecked = True
-        self.tools.timeout_seconds, self.tools.turn_index = self.limits.tool_cap_seconds, log.index
+        self.tools.turn_index = log.index
         self._step_deadline()
         try:
             report = precheck(self.tools, roots)

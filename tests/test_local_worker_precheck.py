@@ -7,11 +7,21 @@ import subprocess
 from dataclasses import replace
 
 import pytest
-from local_worker_fakes import NO_AUTO_MAINTENANCE, TAG, TASK, World, make_loop, make_runs, reply
+from local_worker_fakes import (
+    META,
+    NO_AUTO_MAINTENANCE,
+    TAG,
+    TASK,
+    World,
+    make_loop,
+    make_runs,
+    reply,
+)
 from local_worker_fakes import run_wrapper as run
 
-from experimental.local_worker import precheck
+from experimental.local_worker import episode, precheck
 from experimental.local_worker.agent import initial_messages
+from experimental.local_worker.episode_schema import validate_record
 
 CHECK = b"src/app.py:2: trailing whitespace.\n+y = 2 \nnotes.md:3: trailing whitespace.\n+hi  \n"
 
@@ -95,8 +105,8 @@ class CheckWorld(World):
         return super().handle(action, args, stdin)
 
 
-def loop_with(tmp_path, replies, world, roots=("tests",)):
-    loop, world, endpoint, _ = make_loop(tmp_path, replies, world)
+def loop_with(tmp_path, replies, world, roots=("tests",), **limits):
+    loop, world, endpoint, _ = make_loop(tmp_path, replies, world, **limits)
     loop.settings = replace(loop.settings, precheck_roots=roots)
     return loop, world, endpoint
 
@@ -159,3 +169,25 @@ def test_a_failed_query_gives_no_report(tmp_path):
     loop, _, _ = loop_with(tmp_path, [reply("finish", status="DONE")], Broken())
     out = loop.run(initial_messages(TASK))
     assert out.exit_reason == "COMPLETED" and len(out.turns) == 1
+
+
+def test_a_report_turn_is_a_valid_episode_record(tmp_path):
+    """The report turn's action type is in the vocabulary: the line passes validate_record."""
+    world = CheckWorld()
+    world.check_out, world.digest_out = CHECK, digest("tests/test_new.py")
+    done = reply("finish", status="DONE")
+    loop, world, _ = loop_with(tmp_path, [done, done], world)
+    out = loop.run(initial_messages(TASK))
+    rec = episode.build_record(META, out)
+    validate_record(rec)
+    assert [t["action_type"] for t in rec["turns"]] == ["finish_precheck", "finish"]
+
+
+def test_a_finish_on_the_last_step_stands(tmp_path):
+    """The report turn would use the last turn: DONE stays COMPLETED, not TURN_LIMIT."""
+    world = CheckWorld()
+    world.check_out = CHECK
+    loop, world, _ = loop_with(tmp_path, [reply("finish", status="DONE")], world, max_steps=1)
+    out = loop.run(initial_messages(TASK))
+    assert out.exit_reason == "COMPLETED" and len(out.turns) == 1
+    assert not [c for c in world.calls if c[0] in ("check", "digest")]

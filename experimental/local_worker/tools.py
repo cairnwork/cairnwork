@@ -336,6 +336,7 @@ class WorkerTools:
         except (WorkerIsolationError, ToolDeadline):
             pass  # the loop's cleanup sweeps again
 
+    # precheck.py also calls this for the "check" query (git diff --check of the staged tree).
     def _call(
         self,
         action_type: str,
