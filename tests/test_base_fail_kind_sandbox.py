@@ -14,9 +14,7 @@ SETUP_LOOKUP = (
     "    from calc import double\n"
     "    assert double(2) == 4\n"
 )
-BODY_OSERROR = (
-    "def test_double():\n    from calc import double\n    raise PermissionError(1, 'denied')\n"
-)
+BODY_OSERROR = "def test_double():\n    raise PermissionError(1, 'denied')\n"
 
 
 @pytest.mark.sandbox
