@@ -14,8 +14,8 @@ guard's record:
   is not under a target file (a directory, a conftest) leaves nothing readable.
 
 Anything else (a timeout, a mutated checkout, survivors, forged bytecode, an oversized log or
-report, no well-formed record, an id outside the targets, a recorded outcome, a code/record
-mismatch) gives ``unusable``: the caller must not read any id from it.
+report, no well-formed record, a collection stopped part way, an id outside the targets, a
+recorded outcome, a code/record mismatch) gives ``unusable``: the caller must not read any id.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from dataclasses import dataclass
 class Collected:
     ids: tuple[str, ...] = ()  # sorted node ids collected, from files that collected cleanly
     error_files: tuple[str, ...] = ()  # target files whose collector failed: ids unknown
-    skipped_files: tuple[str, ...] = ()  # target files skipped while collecting (module skip)
+    skipped_files: tuple[str, ...] = ()  # target files skipped while collecting: ids unknown
     unusable: str = ""  # non-empty: why nothing can be read from the run
 
 
@@ -63,6 +63,7 @@ def _unclean(run) -> str:
         ("collect-mutated", run.mutated),
         ("collect-over-cap", run.report_too_big or run.log_too_big),
         ("collect-not-recorded", not run.recorded),
+        ("collect-unfinished", not run.collection_finished),  # stopped part way: ids unknown
         ("collect-ran-tests", run.outcomes),
     ):
         if bad:

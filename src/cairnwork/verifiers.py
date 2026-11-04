@@ -138,6 +138,7 @@ class VerifierRun:
     notes: tuple[str, ...] = ()
     collected: tuple[str, ...] = ()  # #793: node ids pytest collected (the guard's record)
     collect_skipped: tuple[str, ...] = ()  # #793: collectors skipped while collecting
+    collection_finished: bool = False  # #793: collection was not stopped part way
 
 
 def run_verifiers(
@@ -355,4 +356,5 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
         recorded=verdict.recorded, collect_errors=verdict.collect_errors,
         teardown_errors=verdict.teardown_errors, fail_kind=verdict.fail_kind, log_too_big=too_big,
         collected=verdict.collected, collect_skipped=verdict.collect_skipped,
+        collection_finished=verdict.collection_finished,
     )  # fmt: skip

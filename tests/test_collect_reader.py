@@ -28,6 +28,7 @@ ALIAS = (
 FAILING = "def test_red():\n    assert False\n"
 BROKEN = "import no_such_module_793\n\ndef test_never():\n    pass\n"
 EMPTY = "X = 1\n"
+STOPS = "raise KeyboardInterrupt\n"  # collection is stopped while importing this file
 
 
 def collect(repo, tmp_path, files, *, collect_only=True):
@@ -84,18 +85,37 @@ def test_nothing_collected_is_the_empty_set(repo, tmp_path):
     assert read_collected(run) == Collected()
 
 
+@pytest.mark.sandbox
+def test_a_collection_stopped_part_way_is_unusable(repo, tmp_path):
+    # a collector fails, then collection stops before the later files are read: not "no tests"
+    files = {"tests/test_a.py": BROKEN, "tests/test_b.py": STOPS, "tests/test_c.py": OK}
+    run = collect(repo, tmp_path, files)
+    assert run.returncode == 2 and not run.collection_finished
+    assert read_collected(run) == Collected(unusable="collect-unfinished")
+
+
 def fake(**kw) -> Any:
     base: dict[str, Any] = dict(
         spec=VerifierSpec("c", ("tests/test_a.py",), collect_only=True), returncode=0,
         forged=(), timed_out=False, survivors=0, mutated=(), report_too_big=False,
         log_too_big=False, recorded=True, outcomes={}, collected=("tests/test_a.py::test_x",),
         collect_errors=(), collect_skipped=(), log_path=Path("/nonexistent"),
+        collection_finished=True,
     )  # fmt: skip
     return SimpleNamespace(**(base | kw))
 
 
 def test_a_clean_rc0_record_is_read():
     assert read_collected(fake()).ids == ("tests/test_a.py::test_x",)
+
+
+def test_ids_of_a_file_whose_collector_failed_are_not_read():
+    spec = VerifierSpec("c", ("tests/test_a.py", "tests/test_b.py"), collect_only=True)
+    ids = ("tests/test_a.py::test_x", "tests/test_b.py::test_y")
+    got = read_collected(
+        fake(spec=spec, returncode=2, collected=ids, collect_errors=("tests/test_a.py::TestK",))
+    )
+    assert got == Collected(ids=("tests/test_b.py::test_y",), error_files=("tests/test_a.py",))
 
 
 def test_only_a_collect_only_run_is_read():
@@ -114,6 +134,8 @@ def test_only_a_collect_only_run_is_read():
         ({"log_too_big": True}, "collect-over-cap"),
         ({"report_too_big": True}, "collect-over-cap"),
         ({"recorded": False}, "collect-not-recorded"),
+        ({"collection_finished": False}, "collect-unfinished"),
+        ({"collect_skipped": ("tests",)}, "collect-error-outside-a-target"),
         ({"outcomes": {"tests/test_a.py::test_x": "passed"}}, "collect-ran-tests"),
         ({"collected": ("tests/test_b.py::test_y",)}, "collected-outside-the-targets"),
         ({"returncode": 2, "collect_errors": ("tests",)}, "collect-error-outside-a-target"),
