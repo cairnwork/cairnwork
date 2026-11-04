@@ -145,7 +145,8 @@ def test_replaced_ledger_same_ids_is_origin_changed(
 def _confirm(lg: dict[str, str], digest: str, conclusion: str = "confirmed") -> None:
     from experimental.acceptance_casebook.store import _append, _read_chain
 
-    _append(_book(lg), {"type": "confirmation", "case": digest, "conclusion": conclusion},
+    _append(_book(lg), {"type": "confirmation", "case": digest, "conclusion": conclusion,
+                        "confirmer": {"kind": "stub"}},
             _read_chain(_book(lg))[1])  # fmt: skip
 
 

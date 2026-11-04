@@ -28,3 +28,12 @@ with `--notary-db`, `origin_changed` when the row no longer gives the stored ori
 `confirmed` cases whose origin re-checks are listed by `--eligible`. There is no `confirm`
 command yet (#772 step 2). Threat model: one local user owns every file; this is record integrity
 and honest attribution, not protection against that user.
+
+Round 2 (#825 review): `refused_good` needs a real Core refusal (a verification with integrity
+VALID, HTTP 200 and status FAILED, REJECTED or REFUSED); an error row (502, `CORE_UNAVAILABLE`,
+integrity UNKNOWN) is `CASE_ORIGIN_MISMATCH` for either kind. `accepted` is the notary's own
+verified rule, and the row must pass `check_record_bindings` (request hash and target revision
+agree with its columns) or it is `CASE_RECORD_MISMATCH`. With `--notary-db`, the later evidence
+file is re-hashed too. A confirmation line without a confirmer never counts. `DUPLICATE` is
+decided per (candidate, base, version, attempt); the same claim from another attempt is its own
+line, and the other kind is `CASE_CONFLICT`.

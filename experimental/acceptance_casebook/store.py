@@ -91,7 +91,8 @@ def _is_case(entry: dict[str, Any]) -> bool:
 
 def _state(digest: str, entries: list[tuple[dict[str, Any], str]]) -> str:
     said = [e.get("conclusion") for e, _ in entries
-            if e.get("type") == "confirmation" and e.get("case") == digest]  # fmt: skip
+            if e.get("type") == "confirmation" and e.get("case") == digest
+            and isinstance(e.get("confirmer"), dict)]  # fmt: skip
     if "rejected" in said:
         return "rejected"
     return "confirmed" if "confirmed" in said else "unconfirmed"
@@ -146,10 +147,12 @@ def _add_locked(path: Path, notary_db: Path, case: dict[str, str]) -> str:
     bound = _bind(case, notary_db)
     key = (case["candidate"], case["base"], case["version"])
     for old in (e for e, _ in entries if _is_case(e)):
-        if (old["candidate"], old["base"], old["version"]) == key:
-            if old["kind"] == case["kind"]:
-                return "DUPLICATE"
+        if (old["candidate"], old["base"], old["version"]) != key:
+            continue
+        if old["kind"] != case["kind"]:
             raise CasebookError("CASE_CONFLICT", "same case recorded with the other kind")
+        if old["attempt_id"] == case["attempt_id"]:  # another attempt is its own line
+            return "DUPLICATE"
     _append(path, bound, prev)
     return "ADDED"
 
