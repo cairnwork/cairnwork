@@ -34,7 +34,8 @@ from cairnwork_sandbox.backend import Policy, SandboxError
 
 SANDBOX_EXEC = "/usr/bin/sandbox-exec"
 _SAFE = re.compile(r"^/[A-Za-z0-9 _./+@~-]*$")
-SYSTEM_READ_SUBPATHS = ("/usr/lib", "/usr/share", "/System/Library", "/dev")
+TIMEZONE_DATA = "/private/var/db/timezone"  # zoneinfo, localtime: tz/<any version>/ (#802)
+SYSTEM_READ_SUBPATHS = ("/usr/lib", "/usr/share", "/System/Library", "/dev", TIMEZONE_DATA)
 # /usr/bin/shasum is a perl script: perl must read it, or every verifier that hashes a file
 # fails with "Can't open perl script". Exactly these two literal paths (council action 3, C1);
 # the rest of /usr/bin stays unreadable (tests/test_seatbelt_shasum.py).
@@ -43,6 +44,7 @@ SYSTEM_READ_LITERALS = (
     "/",
     "/private/etc/localtime",
     "/private/etc/passwd",
+    "/private/etc/hosts",  # localhost resolves; other names still fail: no network (#802)
     "/usr/bin/env",
     *SHASUM_SCRIPTS,
 )
@@ -261,6 +263,7 @@ class SeatbeltBackend:
 
     name = "seatbelt"
     masked_home_paths: tuple[str, ...] = CREDENTIAL_HOME_PATHS
+    run_env = (("USER", "cairnwork"), ("LOGNAME", "cairnwork"))  # getpass.getuser(): a constant
 
     def available(self) -> bool:
         return available()
