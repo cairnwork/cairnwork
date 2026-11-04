@@ -71,6 +71,7 @@ from pathlib import Path
 
 from cairnwork.bytecode_hook import HOOK_SOURCE
 from cairnwork.confined import MAX_REPORT_BYTES
+from cairnwork.pytest_config import PLUGINS
 from cairnwork.verdict_record import Verdict as Verdict
 from cairnwork.verdict_record import _sources
 
@@ -78,6 +79,7 @@ FDS_ENV = "CAIRNWORK_GUARD_FDS"
 PATH_ENV = "CAIRNWORK_VERDICT_PATH"
 NONCE_ENV = "CAIRNWORK_VERDICT_NONCE"
 MODULE = "_cairnwork_report_guard"
+PLUGIN_KINDS = frozenset(f"plugin:{module}" for _, module, _ in PLUGINS)
 
 _PLUGIN_SOURCE = '''\
 """Materialised by cairnwork.report_guard into each verifier run; edit it there."""
@@ -90,6 +92,18 @@ import pytest
 _FDS_ENV = "CAIRNWORK_GUARD_FDS"
 _PATH_ENV = "CAIRNWORK_VERDICT_PATH"
 _NONCE_ENV = "CAIRNWORK_VERDICT_NONCE"
+# #804: fixture -> module of the pytest_config.PLUGINS entry that provides it. A setup error that
+# says one of them is missing is recorded as "plugin:<module>"; the parent keeps it as "plugin"
+# (base PLUGIN_NOT_INSTALLED) only when that module cannot be found in the verifier's Python.
+_PLUGIN_FIXTURES = {
+    **dict.fromkeys(("mocker", "class_mocker", "module_mocker", "package_mocker",
+                     "session_mocker"), "pytest_mock"),
+    # pytest-django: only names a project rarely defines itself (not db, client or settings)
+    **dict.fromkeys(("transactional_db", "django_db_setup", "django_db_blocker", "admin_client",
+                     "admin_user", "rf", "async_rf", "live_server", "django_user_model",
+                     "django_assert_num_queries", "mailoutbox"), "pytest_django.plugin"),
+    "anyio_backend": "anyio.pytest_plugin",
+}
 
 
 def _take():
@@ -148,6 +162,7 @@ class _Reporter:
         self._skipped_deps = []  # #813: per skipped collector, the module it could not import
         self._teardown_errors = []
         self._setup_failed = []  # #775: fixture raised before the body
+        self._plugin_missing = {}  # #804: node -> the table plugin whose fixture was not found
         self._env_ok = {}  # #775: node -> every failed call raised an OSError so far
         self._finished = False  # #793: collection ran to its end (not stopped part way)
 
@@ -197,7 +212,8 @@ class _Reporter:
         self._files = list(index)
 
     @pytest.hookimpl(wrapper=True, tryfirst=True)
-    def pytest_runtest_makereport(self, item, call, _original=_original, _keep_worst=_keep_worst):
+    def pytest_runtest_makereport(self, item, call, _original=_original, _keep_worst=_keep_worst,
+                                  _fixtures=_PLUGIN_FIXTURES):
         report = yield  # outermost: the report as every other hook left it
         nodeid, _ = _original(self, item, report.nodeid)
         if report.when == "call":  # #570: one per sub-test, then the test's own
@@ -210,6 +226,9 @@ class _Reporter:
             _keep_worst(self, nodeid, report.outcome)
             if report.failed:  # a skip in a fixture is not an error
                 self._setup_failed.append(nodeid)
+                module = _fixtures.get(getattr(report.longrepr, "argname", None))
+                if module:
+                    self._plugin_missing[nodeid] = module
         elif report.when == "teardown" and report.failed:  # #478: a fixture raised after yield
             self._outcomes[nodeid] = "failed"
             self._teardown_errors.append(nodeid)
@@ -222,6 +241,7 @@ class _Reporter:
         dumps, dump, ftruncate, pwrite, open_, fdopen, chmod, flags = _io
         kind = {n: "env" for n, ok in self._env_ok.items() if ok}
         kind.update(dict.fromkeys(self._setup_failed, "setup"))
+        kind.update({n: "plugin:" + m for n, m in self._plugin_missing.items()})
         payload = {"nonce": self._nonce, "fail_kind": kind,
                    "collected": self._collected, "outcomes": self._outcomes,
                    "files": self._files, "file_of": self._file_of,
@@ -344,9 +364,9 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
     renamed = data.get("renamed", [])
     teardown = data.get("teardown_errors", [])
     files = data.get("files", [])
-    kind = data.get("fail_kind", {})  # #775: node -> "setup" | "env", only nodes in outcomes
+    kind = data.get("fail_kind", {})  # #775: node -> "setup" | "env" | "plugin:<module>" (#804)
     if not isinstance(kind, dict) or not all(
-        n in outcomes and v in ("setup", "env") for n, v in kind.items()
+        n in outcomes and (v in ("setup", "env") or v in PLUGIN_KINDS) for n, v in kind.items()
     ):
         return Verdict(False, {})
     file_of = data.get("file_of")  # absent: no test owns a named target

@@ -22,7 +22,8 @@ class Verdict:
     # teardown, so the node named is where the error landed, not the test that owns the fixture
     teardown_errors: tuple[str, ...] = ()
     # #775: why a failed node failed: "setup" (a fixture raised before the body) or "env" (every
-    # failed call raised an OSError). Absent: an ordinary test failure. ``outcomes`` are unchanged.
+    # failed call raised an OSError) or "plugin" (#804: a table plugin's fixture was missing).
+    # Absent: an ordinary test failure. ``outcomes`` are unchanged.
     fail_kind: dict[str, str] = field(default_factory=dict)
     exitstatus: int | None = None  # pytest's own session status, as recorded (#276)
     testsfailed: int | None = None  # pytest's own count of failed tests, as recorded
