@@ -53,6 +53,13 @@ def overlay_tree(
                 raise TestCommitRejected("OVERLAY_UNSUPPORTED_ENTRY", repr(path))
         if set(paths) & set(deleted):
             raise TestCommitRejected("OVERLAY_UNSUPPORTED_ENTRY", "a path both laid and deleted")
+        for path in deleted:
+            kept = run_git(repo, "ls-tree", "-z", test_commit, "--", path).strip("\0").split()[1:2]
+            if kept and kept != ["tree"]:  # a directory in its place is a file-to-directory swap
+                raise TestCommitRejected(
+                    "OVERLAY_UNSUPPORTED_ENTRY", f"deleted path in tests {path!r}"
+                )
+            run_git(repo, "update-index", "--force-remove", "--", path, index_file=index)
         for path in paths:
             meta, _, name = run_git(repo, "ls-tree", "-z", test_commit, "--", path).partition("\t")
             mode, kind, blob = (meta.split() + ["", "", ""])[:3]
@@ -62,12 +69,24 @@ def overlay_tree(
                 repo, "update-index", "--add", "--cacheinfo", f"{mode},{blob},{path}",
                 index_file=index,
             )  # fmt: skip
-        for path in deleted:
-            if run_git(repo, "ls-tree", "-z", test_commit, "--", path).strip("\0"):
-                raise TestCommitRejected(
-                    "OVERLAY_UNSUPPORTED_ENTRY", f"deleted path in tests {path!r}"
-                )
-            run_git(repo, "update-index", "--force-remove", "--", path, index_file=index)
         return run_git(repo, "write-tree", index_file=index).strip()
     except GitCommandError as exc:
         raise TestCommitRejected("TEST_OVERLAY_FAILED", str(exc)) from exc
+
+
+def stray_deletions(repo: Path, base: str, judged: str, deleted: tuple[str, ...]) -> list[str]:
+    """Paths the judged commit deletes from base that the test commit did not delete (#816
+    review). Core's deletion_policy is whole-contract, so before it is asked with ALLOW because of
+    ``deleted``, the judged change may delete exactly those test files and nothing else."""
+    out = run_git(
+        repo,
+        "diff-tree",
+        "-r",
+        "-z",
+        "--no-renames",
+        "--diff-filter=D",
+        "--name-only",
+        base,
+        judged,
+    )  # noqa: E501
+    return sorted(set(filter(None, out.split("\0"))) - set(deleted))

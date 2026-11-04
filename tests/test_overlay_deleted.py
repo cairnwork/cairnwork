@@ -68,3 +68,27 @@ def test_lay_tests_over_deletes_what_the_test_files_carry(repo, three, tmp_path)
 def test_plain_tuples_delete_nothing():
     assert deleted_of(("tests/test_a.py",)) == () and deleted_of(()) == ()
     assert deleted_of(TestFiles(("a",), ("b",))) == ("b",) and TestFiles(("a",)) == ("a",)
+
+
+def test_a_file_replaced_by_a_directory_deletes_before_it_adds(repo, tmp_path):
+    """#816 review: deleting tests/helper and adding tests/helper/test_a.py is one test commit."""
+    base = commit_change(repo, {"tests/helper": "x\n"})
+    git(repo, "checkout", "-q", "--detach", base)
+    git(repo, "rm", "-q", "tests/helper")
+    tests = commit_change(repo, {"tests/helper/test_a.py": "def test_a(): pass\n"})
+    git(repo, "checkout", "-q", "-f", "main")
+    tree = overlay_tree(
+        repo, base, tests, ("tests/helper/test_a.py",), tmp_path / "i", ("tests/helper",)
+    )
+    assert "tests/helper/test_a.py" in _names(repo, tree) and "tests/helper" not in _names(
+        repo, tree
+    )
+
+
+def test_stray_deletions_are_the_judged_deletes_the_test_commit_did_not_make(repo, three):
+    from cairnwork.deferred_overlay import stray_deletions
+
+    base, _head, _tests = three
+    both = commit_change(repo, {}, delete=("tests/test_a.py", "tests/test_b.py"), message="x")
+    assert stray_deletions(repo, base, both, ("tests/test_a.py",)) == ["tests/test_b.py"]
+    assert stray_deletions(repo, base, both, ("tests/test_a.py", "tests/test_b.py")) == []

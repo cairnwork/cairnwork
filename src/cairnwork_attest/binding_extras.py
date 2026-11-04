@@ -112,9 +112,28 @@ def manifest_problem(claimed: dict[Any, Any], binding: dict[str, Any]) -> Verify
     for path in deleted_paths(binding):
         parts, entry = path.split("/"), claimed.get(path)
         if {"", ".", ".."} & set(parts) or ".git" in {p.casefold() for p in parts}:
-            return _fail("OVERLAY_UNSUPPORTED_ENTRY", f"deleted test path {path!r}")
+            return _fail("OVERLAY_UNSUPPORTED_ENTRY", f"deleted test path {path[:200]!r}")
         if not isinstance(entry, dict) or entry.get("change_type") != "DELETE":
-            return _fail("HEAD_TREE_MISMATCH", f"deleted test path {path} is not a deletion")
+            return _fail(
+                "HEAD_TREE_MISMATCH", f"deleted test path {path[:200]!r} is not a deletion"
+            )
+    return None
+
+
+def roots_problem(policy: Any, binding: dict[str, Any], full: bool) -> VerifyResult | None:
+    """Every test path (the deleted ones too) is under a policy ``test_roots``. A receipt with
+    deletions needs that pin in confidential mode: the receiver cannot read the test commit, so
+    without it a deleted path could be any file (#816 review)."""
+    if policy is None or "test_roots" not in policy:
+        if deleted_paths(binding) and not full:
+            return _fail("TEST_ROOT_VIOLATION", "deleted test paths need a policy with test_roots")
+        return None
+    roots = tuple(policy["test_roots"])
+    for path in all_paths(binding):
+        if not any(path.startswith(r.rstrip("/") + "/") for r in roots):
+            return _fail(
+                "TEST_ROOT_VIOLATION", f"test path {path[:200]!r} not under any allowed root"
+            )
     return None
 
 

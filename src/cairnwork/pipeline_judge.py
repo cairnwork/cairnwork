@@ -16,6 +16,7 @@ from pathlib import Path
 from cairnwork import protection
 from cairnwork.blackbox_judge import judge_blackbox
 from cairnwork.core_request import AcceptanceSpec, VerifierObservation
+from cairnwork.deferred_overlay import stray_deletions
 from cairnwork.deferred_store import consume
 from cairnwork.deferred_tests import (
     BaseUncomparable,
@@ -126,13 +127,20 @@ def judge_candidate(
             f"DEFERRED_TESTS_NOT_RUN_IN_VERIFICATION: no verifier collected or ran {missing}"
         )
         return
+    if deleted_of(test_files) and not task.allow_deletions:  # Core's ALLOW is whole-contract
+        if stray := stray_deletions(task.repo, task.base_commit, judged, deleted_of(test_files)):
+            result.reason = f"DELETION_OUTSIDE_TEST_COMMIT: {stray[:5]}"
+            return
     ids, observations, gate_note = _contract(task, runs, checks, declared, binding, result)
     spec = AcceptanceSpec(
         task_id,
         digest,
         ids,
         tuple(task.allowed_files) + test_files + deleted_of(test_files),
-        task.allow_deletions or bool(deleted_of(test_files)),  # a test file the tests removed
+        task.allow_deletions
+        or bool(
+            deleted_of(test_files)
+        ),  # whole contract; only the test commit's files can be deleted (producer check)
     )
     reach("NOTARIZING")
     verdict = notary.notarize(

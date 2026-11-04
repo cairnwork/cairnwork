@@ -59,11 +59,11 @@ def make_test_commit(project, files, delete=()):
     return base, test_commit
 
 
-def run(project, tmp_path, base, test_commit, worker, verifiers=CHECK, key="k1"):
+def run(project, tmp_path, base, test_commit, worker, verifiers=CHECK, key="k1", **task_kw):
     state = tmp_path / "state"
     state.mkdir(exist_ok=True)
     task = TaskSpec(key, "card-" + key, "fix add", "add() is off by one", project, base,
-                    ("src/calc.py",), verifiers, test_commit=test_commit)  # fmt: skip
+                    ("src/calc.py",), verifiers, test_commit=test_commit, **task_kw)  # fmt: skip
     return run_task(
         task,
         ledger=OwnershipLedger(state / "own.sqlite"),

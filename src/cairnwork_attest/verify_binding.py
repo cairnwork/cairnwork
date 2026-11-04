@@ -304,11 +304,9 @@ def _test_source(ctx: _Ctx) -> VerifyResult | None:
         binding["rule"],
     ]:
         return _fail("TEST_SOURCE_MISMATCH", f"policy pins another test commit than {test_commit}")
-    if ctx.policy is not None and "test_roots" in ctx.policy:
-        roots = tuple(ctx.policy["test_roots"])
-        for path in bx.all_paths(binding):
-            if not any(path.startswith(r.rstrip("/") + "/") for r in roots):
-                return _fail("TEST_ROOT_VIOLATION", f"test path {path} not under any allowed root")
+    problem = bx.roots_problem(ctx.policy, binding, ctx.full)
+    if problem is not None:  # a failed VerifyResult is falsy
+        return problem
     if not ctx.full:
         return None
     try:
@@ -378,7 +376,8 @@ def _head_tree(ctx: _Ctx) -> VerifyResult | None:
             return _fail("HEAD_TREE_MISMATCH", f"test path {path} is not added or modified")
         if entry.get("after_mode") not in _REGULAR:
             return _fail("OVERLAY_UNSUPPORTED_ENTRY", f"test path {path} is not a regular file")
-    if problem := bx.manifest_problem(claimed, binding):
+    problem = bx.manifest_problem(claimed, binding)
+    if problem is not None:
         return problem
     for path in sorted((set(claimed) | set(heads)) - tests - gone, key=str):
         if claimed.get(path) != heads.get(path):

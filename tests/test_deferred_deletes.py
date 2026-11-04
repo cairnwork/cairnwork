@@ -90,3 +90,21 @@ def test_deleting_anything_but_a_plain_test_file_is_still_refused(project, tmp_p
     )
     result = run(project, tmp_path, base, tests, SeeingWorker(FIX))
     assert "TEST_COMMIT_SCOPE" in result.reason
+
+
+@pytest.mark.parametrize("mode", ["module-dir", "whole-suite"])
+def test_a_deleted_file_is_not_a_p2p_target(project, tmp_path, mode):
+    """#816 review: with P2P on, the deleted file must not be run on the judged tree (rc 4)."""
+    base, tests = make_test_commit(project, {"tests/test_regression.py": REGRESSION},
+                                   delete=("tests/test_old.py",))  # fmt: skip
+    result = run(project, tmp_path, base, tests, SeeingWorker(FIX), p2p_mode=mode)
+    assert result.status == "COMPLETED", result.reason
+
+
+@pytest.mark.parametrize("mode", ["module-dir", "whole-suite"])
+def test_a_moved_file_is_not_a_p2p_target_either(project, tmp_path, mode):
+    files = {"tests/test_moved.py": MOVED, "tests/test_regression.py": REGRESSION}
+    base, tests = make_test_commit(project, files, delete=("tests/test_old.py",))
+    result = run(project, tmp_path, base, tests, SeeingWorker(FIX), verifiers=MOVE_VERIFIERS,
+                 p2p_mode=mode)  # fmt: skip
+    assert result.status == "COMPLETED", result.reason

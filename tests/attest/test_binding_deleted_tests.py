@@ -66,7 +66,9 @@ def statement(w: dict) -> dict:
 
 @pytest.mark.parametrize("mode", ["full", "conf"])
 def test_a_receipt_of_a_deleting_test_commit_verifies_in_both_modes(world, mode):
-    pol = policy(world["state"], world["tmp"], world["tests"])  # confidential mode needs one
+    pol = policy(
+        world["state"], world["tmp"], world["tests"], test_roots=["tests/"]
+    )  # conf needs it
     result = check(world, repo=mode, policy=pol)
     assert result.ok, result
     binding = statement(world)["predicate"]["binding"]
@@ -103,6 +105,28 @@ def test_the_binding_key_is_only_present_when_a_test_file_was_deleted():
     assert got["deleted_test_paths"] == ["tests/b.py", "tests/z.py"]
 
 
+@pytest.mark.parametrize("mode", ["full", "conf"])
+def test_a_binding_that_names_a_deletion_the_executed_tree_lacks_is_refused(tmp_path, mode):
+    """The signer says tests/test_a.py was deleted, but the tree that ran still has it: only the
+    manifest check (confidential) or the rebuild (full) can notice. #816 review."""
+    from tests.attest.binding_helpers import executed
+
+    (tmp_path / "w").mkdir()
+    w = _world(tmp_path / "w")
+    tree, judged = executed(w["work"], w["head"], w["tests"], ("tests/test_new.py",), ())
+    run = notarize_bound(
+        tmp_path / "s2", w, attempt="a2", paths=("tests/test_new.py",),
+        deleted=("tests/test_a.py",), tree_and_judged=(tree, judged),
+    )  # fmt: skip
+    bundle = sign_bound(tmp_path / "s2", run, tmp_path / "forged.json")
+    pol = policy(tmp_path / "s2", tmp_path, w["tests"], test_roots=["tests/"])
+    got = verify_bundle(
+        bundle, public_key_pem=tmp_path / "s2/public.pem", repo=w[mode],
+        expected_candidate=w["head"], policy=pol,
+    )  # fmt: skip
+    assert not got.ok and got.code in ("HEAD_TREE_MISMATCH", "TREE_MISMATCH"), got
+
+
 def test_the_notary_refuses_a_binding_that_leaves_the_deletion_out(tmp_path):
     p = producer(tmp_path)
     git(p["work"], "checkout", "-q", "--detach", p["base"])
@@ -123,6 +147,15 @@ def test_the_notary_refuses_a_binding_that_leaves_the_deletion_out(tmp_path):
     assert conn.execute("SELECT count(*) FROM core_verifications").fetchone()[0] == 0
 
 
+def test_confidential_mode_needs_test_roots_for_deleted_paths(world):
+    """#816 review: without the pin a deleted path could be any file, e.g. src/a.py."""
+    no_roots = policy(world["state"], world["tmp"], world["tests"])
+    assert check(world, repo="conf", policy=no_roots).code == "TEST_ROOT_VIOLATION"
+    assert check(world, repo="full", policy=no_roots).ok  # full mode reads the test commit
+    other = policy(world["state"], world["tmp"], world["tests"], test_roots=["lib/"])
+    assert check(world, repo="conf", policy=other).code == "TEST_ROOT_VIOLATION"
+
+
 @pytest.mark.parametrize(
     ("value", "ok"),
     [(["a/b.py"], True), ([], True), (["b", "a"], False), (["a", "a"], False), (["/a"], False),
@@ -136,9 +169,19 @@ def test_the_deleted_paths_shape(value, ok):
 @pytest.mark.parametrize("mode", ["full", "conf"])
 def test_a_policy_pins_the_deleted_paths(world, mode):
     same = policy(
-        world["state"], world["tmp"], world["tests"], deleted_test_paths=["tests/test_a.py"]
+        world["state"],
+        world["tmp"],
+        world["tests"],
+        test_roots=["tests/"],
+        deleted_test_paths=["tests/test_a.py"],
     )
     assert check(world, repo=mode, policy=same).ok
     for other in ([], ["tests/test_b.py"]):
-        pol = policy(world["state"], world["tmp"], world["tests"], deleted_test_paths=other)
+        pol = policy(
+            world["state"],
+            world["tmp"],
+            world["tests"],
+            test_roots=["tests/"],
+            deleted_test_paths=other,
+        )
         assert check(world, repo=mode, policy=pol).code == "DELETED_TEST_PATHS_MISMATCH", other
