@@ -143,6 +143,7 @@ class _Reporter:
         self._teardown_errors = []
         self._setup_failed = []  # #775: fixture raised before the body
         self._env_ok = {}  # #775: node -> every failed call raised an OSError so far
+        self._finished = False  # #793: collection ran to its end (not stopped part way)
 
     def pytest_collectreport(self, report):
         if report.failed:
@@ -171,6 +172,14 @@ class _Reporter:
     @pytest.hookimpl(tryfirst=True)
     def pytest_itemcollected(self, item, _source=_source):
         self._sources[id(item)] = (item, item.nodeid, _source(item))
+
+    @pytest.hookimpl(wrapper=True)
+    def pytest_collection(self, session):
+        # #793: pytest calls collection_finish even when collection is interrupted; only a
+        # collection that returned (no exception) ran to its end
+        result = yield
+        self._finished = True
+        return result
 
     def pytest_collection_finish(self, session, _original=_original):
         index = {}
@@ -213,6 +222,7 @@ class _Reporter:
                    "collect_errors": self._collect_errors,
                    "collect_skipped": self._collect_skipped,
                    "teardown_errors": self._teardown_errors,
+                   "collection_finished": self._finished,
                    # pytest's own status: the parent requires it and the process's to agree
                    "exitstatus": int(exitstatus), "testsfailed": session.testsfailed}
         if self._fd is not None:
@@ -356,4 +366,6 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
         paths=_sources(collected, files, file_of or ()),
         exitstatus=status[0],
         testsfailed=status[1],
+        collected=tuple(collected),
+        collection_finished=data.get("collection_finished") is True,
     )

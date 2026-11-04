@@ -56,6 +56,7 @@ class VerifierRejected(Exception):
 class VerifierSpec:
     verifier_id: str
     targets: tuple[str, ...]
+    collect_only: bool = False  # #793: pytest --collect-only; never a pass (collect_reader.py)
 
 
 def parse_verifier(verifier_id: str, argv: list[str], roots=DEFAULT_TEST_ROOTS) -> VerifierSpec:

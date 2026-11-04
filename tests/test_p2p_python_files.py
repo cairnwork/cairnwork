@@ -34,6 +34,8 @@ def test_a_pattern_matches_as_pytest_matches_it(pattern, path, expected):
         ("[pytest]\npython_files = /home/*/test_*.py\n", "tests/test_x.py", True),  # default added
         ("[pytest]\npython_files = */*/*/*/test_*.py\n", "tests/test_x.py", True),
         ("[pytest]\npython_files = check_*.py\n", "tests/test_x.py", False),  # no "/": no default
+        # mixed: one pattern has "/", so the default is added (kills the any -> all mutant)
+        ("[pytest]\npython_files = check_*.py lib/*.py\n", "tests/test_x.py", True),
         (
             '[tool.pytest.ini_options]\npython_files = ["check_*.py spec_*.py"]\n',
             "t/spec_x.py",

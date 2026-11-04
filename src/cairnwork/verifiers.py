@@ -137,6 +137,9 @@ class VerifierRun:
     # facts about the sandbox policy used (e.g. "shm withheld: BWRAP_TMPFS_SIZE_UNSUPPORTED"); not
     # in the observation's artifact hash, so recording them changes no bound digest
     notes: tuple[str, ...] = ()
+    collected: tuple[str, ...] = ()  # #793: node ids pytest collected (the guard's record)
+    collect_skipped: tuple[str, ...] = ()  # #793: collectors skipped while collecting
+    collection_finished: bool = False  # #793: collection was not stopped part way
 
 
 def run_verifiers(
@@ -278,11 +281,8 @@ def _run_one(batch: _Batch, spec, checkout) -> VerifierRun:
 def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, channel) -> VerifierRun:
     ctx, candidate_commit, timeout = batch.ctx, batch.candidate_commit, batch.timeout
     account, python, attempt_id = ctx.account, batch.python, ctx.attempt_id
-    log_path, ini, profile_path = (
-        private / "verifier.log",
-        private / "pytest.ini",
-        private / "profile.sb",
-    )
+    log_path, ini = private / "verifier.log", private / "pytest.ini"
+    profile_path = private / "profile.sb"
     run_dir, home, tmp, env, verdict_path, verdict_nonce = _prepare_run(
         private, ini, ini_text, channel
     )
@@ -294,6 +294,7 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
         python, "-P", "-m", "pytest", "-q", "-p", "no:cacheprovider", "-c", str(ini),
         f"--rootdir={checkout}", f"--confcutdir={checkout}", "-o", "addopts=",
         *batch.settings.args(plugins), "-p", report_guard.MODULE, *spec.targets,
+        *(("--collect-only",) if spec.collect_only else ()),  # #793: collect_reader.py
     ]  # fmt: skip
     before = os.lstat(checkout)
     profile = None
@@ -354,4 +355,6 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
         report_too_big=verdict.too_big, notes=(profile.notes if profile else ()) + host_notes(),
         recorded=verdict.recorded, collect_errors=verdict.collect_errors,
         teardown_errors=verdict.teardown_errors, fail_kind=verdict.fail_kind, log_too_big=too_big,
+        collected=verdict.collected, collect_skipped=verdict.collect_skipped,
+        collection_finished=verdict.collection_finished,
     )  # fmt: skip
