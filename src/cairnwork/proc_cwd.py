@@ -31,6 +31,7 @@ import stat
 import sys
 from pathlib import Path
 
+from cairnwork import survivor_argv
 from cairnwork.workspace import ATTEMPT_ID
 
 _MACOS = sys.platform == "darwin"
@@ -226,7 +227,7 @@ def _inside(cwd: str | None, dirs: list[str]) -> bool:
     return False
 
 
-def kill_withheld_in(rows, dirs, mine: int) -> tuple[list[int], list[int], int]:
+def kill_withheld_in(rows, dirs, mine: int, seen=None) -> tuple[list[int], list[int], int]:
     """SIGKILL each of the owner's (``mine``) readable rows whose environment is withheld and
     whose working directory is inside one of ``dirs``; (killed pids, refused pids, how many had
     exited before the kill). ``dirs`` must be realpaths taken before the run started, while its
@@ -240,7 +241,8 @@ def kill_withheld_in(rows, dirs, mine: int) -> tuple[list[int], list[int], int]:
     ``confined._kill_marked`` counts a marked one: it may have left a child this look missed, so
     ``confirm_gone`` needs another clean look (#546). A start time unreadable at the first read is
     not counted: any process of the owner that ended after the listing reads so, and counting
-    those kept a busy host from ever showing the attempt gone."""
+    those kept a busy host from ever showing the attempt gone. ``seen``: gets each killed process's
+    masked argv prefix, read just before the kill (#814, survivor_argv)."""
     killed: list[int] = []
     denied: list[int] = []
     vanished = 0
@@ -262,6 +264,8 @@ def kill_withheld_in(rows, dirs, mine: int) -> tuple[list[int], list[int], int]:
         if cwd is None or _started(pid) != started:
             vanished += 1  # ended (or the pid was reused) during the reads
             continue
+        if seen is not None:
+            survivor_argv.note(seen, pid)
         try:
             os.kill(pid, signal.SIGKILL)
             killed.append(pid)
