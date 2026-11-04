@@ -68,7 +68,7 @@ def test_a_malformed_case_is_refused(target):
 def _run(outcomes, rc=1):
     return SimpleNamespace(
         returncode=rc, outcomes=outcomes, timed_out=False, report_too_big=False, recorded=True,
-        collect_errors=(), mutated=(), teardown_errors=(), survivors=0, forged=(),
+        collect_errors=(), mutated=(), teardown_errors=(), fail_kind={}, survivors=0, forged=(),
         log_too_big=False, spec=SimpleNamespace(verifier_id="v"),
     )  # fmt: skip
 

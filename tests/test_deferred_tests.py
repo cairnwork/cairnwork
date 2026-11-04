@@ -171,6 +171,7 @@ class _Run:
         )  # fmt: skip
         self.mutated = fields.get("mutated", ())
         self.teardown_errors = ()
+        self.fail_kind = {}
         self.survivors = fields.get("survivors", 0)
         self.forged = fields.get("forged", ())
         self.log_too_big = fields.get("log_too_big", False)
