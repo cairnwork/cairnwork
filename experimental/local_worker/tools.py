@@ -43,7 +43,7 @@ TOOL_ACTIONS = ("list", "read", "write", "search", "search-probe", "pytest", "py
 TEST_ACTIONS = ("pytest", "pytest-ro")  # pytest-ro: nothing in the checkout writable (PAUSE)
 # The only actions that start while ``read_only_until_plan``: none can write the checkout.
 READ_ONLY_WINDOW_ACTIONS = ("list", "read", "search", "search-probe", "pytest-ro", "sweep")
-READ_ONLY_WINDOW_ACTIONS += ("status", "numstat", "tracked", "digest")
+READ_ONLY_WINDOW_ACTIONS += ("status", "numstat", "tracked", "digest", "check")
 START_MARKER = "LOCAL_WORKER_STARTED"  # first line the wrapper prints on stderr: "<marker> <nonce>"
 DEFAULT_MAX_OUTPUT_BYTES = 20_000
 DEFAULT_TIMEOUT_SECONDS = 300.0
@@ -336,6 +336,7 @@ class WorkerTools:
         except (WorkerIsolationError, ToolDeadline):
             pass  # the loop's cleanup sweeps again
 
+    # precheck.py also calls this for the "check" query (git diff --check of the staged tree).
     def _call(
         self,
         action_type: str,

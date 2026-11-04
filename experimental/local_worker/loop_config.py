@@ -97,6 +97,10 @@ class Settings:
     search_tool: bool = True  # offer the read-only search tool (agent_protocol.SEARCH_SCHEMA)
     # harness-laid untracked/ignored paths the start check allows (untracked_allow.py); off: ()
     untracked_allow: UntrackedAllow = UntrackedAllow()
+    # precheck.py: with test roots set, a DONE finish is answered once with the Core's likely
+    # refusals (whitespace on added lines, changes under these roots) instead of ending the run;
+    # None (the default) leaves the loop exactly as it was
+    precheck_roots: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "write_scope", normalize(self.write_scope))
