@@ -155,10 +155,12 @@ def _add_locked(path: Path, notary_db: Path, case: dict[str, Any]) -> str:
     bound = _bind(case, notary_db)
     key = (case["candidate"], case["base"], case["version"])
     for old in (e for e, _ in entries if _is_case(e)):
-        if (old["candidate"], old["base"], old["version"]) == key:
-            if old["kind"] == case["kind"]:
-                return "DUPLICATE"
+        if (old["candidate"], old["base"], old["version"]) != key:
+            continue
+        if old["kind"] != case["kind"]:
             raise CasebookError("CASE_CONFLICT", "same case recorded with the other kind")
+        if old["attempt_id"] == case["attempt_id"]:  # another attempt is its own line
+            return "DUPLICATE"
     _append(path, bound, prev)
     return "ADDED"
 

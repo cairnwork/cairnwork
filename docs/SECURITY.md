@@ -11,6 +11,13 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
   allowed for every path, and `sysctl-read` and `process-exec` are allowed with no path filter
   (#461); writes only to the checkout and the per-run directory; no network; credential stores
   denied last. Behaviour unchanged.
+  Also readable (#802): the time zone data (`/private/var/db/timezone`, where `/usr/share/zoneinfo`
+  and `/etc/localtime` point; before, `zoneinfo` raised and `TZ=...; tzset()` silently gave UTC)
+  and `/private/etc/hosts` (so `localhost` resolves; no other name does). A run's `USER` and
+  `LOGNAME` are the constant `cairnwork` on macOS only (`getpass.getuser()` had nothing to read);
+  Linux keeps the bound `/etc/passwd`. Still denied: `AF_UNIX` sockets at any path length
+  (`network*`; allowing them would need a path limit, a security-owner decision) and loopback.
+  Tests that need them are verified on a Linux host.
   Reading bytecode (`*.pyc`) under the write roots is denied, and so are creating a symlink with
   such a name there (Seatbelt matches a symlink by its target) and unlinking a `.pyc` there (so
   no symlink is swapped in for one by RENAME_SWAP), so bytecode the run plants for

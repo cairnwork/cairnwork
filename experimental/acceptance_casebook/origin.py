@@ -9,11 +9,13 @@ import json
 from pathlib import Path
 from typing import Any
 
-from cairnwork_attest.record import AttestError, VerdictRecord, read_record
+from cairnwork.notary_verify import _is_verified
+from cairnwork_attest.record import AttestError, VerdictRecord, check_record_bindings, read_record
 
 ROW_COLUMNS = ("task_id", "attempt_id", "base_commit", "candidate_commit", "request_hash",
                "request_json", "http_status", "status", "integrity", "response_json",
                "recorded_at", "binding_json")  # fmt: skip
+REFUSALS = ("FAILED", "REJECTED", "REFUSED")  # a Core verdict; error rows (502, CORE_*) are not
 EVIDENCE_KEYS = ("candidate", "task_id", "attempt_id", "kind", "ref")
 
 
@@ -28,7 +30,16 @@ def _sha(value: Any) -> str:
 
 
 def _accepted(rec: VerdictRecord) -> bool:
-    return (rec.status, rec.integrity, rec.http_status) == ("VERIFIED", "VALID", 200)
+    """The notary's own verified rule (status, integrity, HTTP, request hash, echoed hashes)."""
+    return _is_verified(rec.http_status, rec.status, rec.integrity, rec.response, rec.request,
+                        rec.request_hash)  # fmt: skip
+
+
+def _refused(rec: VerdictRecord) -> bool:
+    """A real Core refusal: a verification with integrity VALID and a refusal status."""
+    judged = isinstance(rec.response, dict) and isinstance(rec.response.get("verification"), dict)
+    return judged and rec.http_status == 200 and rec.integrity == "VALID" and (
+        rec.status in REFUSALS)  # fmt: skip
 
 
 def origin_of(rec: VerdictRecord) -> dict[str, Any]:
@@ -43,6 +54,7 @@ def origin_of(rec: VerdictRecord) -> dict[str, Any]:
         "http_status": rec.http_status,
         "recorded_at": rec.recorded_at,
         "accepted": _accepted(rec),
+        "refused": _refused(rec),
         "core_identity_sha256": _sha(response.get("core_identity")),
         "acceptance_contract_hash": contract,
         "binding_sha256": None if rec.binding is None else _sha(rec.binding),
@@ -52,6 +64,7 @@ def origin_of(rec: VerdictRecord) -> dict[str, Any]:
 def read_origin(notary_db: Path, task_id: str, attempt_id: str) -> tuple[VerdictRecord, dict]:
     try:
         rec = read_record(notary_db, task_id, attempt_id)
+        check_record_bindings(rec)  # request hash and target revision agree with the columns
     except AttestError as exc:
         raise OriginError("CASE_RECORD_MISMATCH", f"ledger row: {exc.code}") from exc
     return rec, origin_of(rec)
@@ -59,8 +72,8 @@ def read_origin(notary_db: Path, task_id: str, attempt_id: str) -> tuple[Verdict
 
 def check_kind(kind: str, origin: dict[str, Any]) -> None:
     """accepted_bad needs an accepted original verdict; refused_good needs a refused one."""
-    if (kind == "accepted_bad") != origin["accepted"]:
-        said = "accepted" if origin["accepted"] else f"refused ({origin['status']})"
+    if not origin["accepted" if kind == "accepted_bad" else "refused"]:
+        said = f"{origin['status']}/{origin['integrity']}/{origin['http_status']}"
         raise OriginError("CASE_ORIGIN_MISMATCH", f"original verdict was {said}, case is {kind}")
 
 
@@ -76,10 +89,22 @@ def read_after(evidence_file: Path, case: dict[str, str]) -> dict[str, str]:
     for key in ("candidate", "task_id", "attempt_id", "kind"):
         if data[key] != case[key]:
             raise OriginError("CASE_EVIDENCE_MISMATCH", f"evidence {key} is not the case's")
-    return {"ref": data["ref"], "sha256": hashlib.sha256(raw).hexdigest()}
+    path = str(Path(evidence_file).resolve())
+    return {"ref": data["ref"], "file": path, "sha256": hashlib.sha256(raw).hexdigest()}
 
 
 def origin_still_holds(notary_db: Path, case: dict[str, Any]) -> bool:
+    """The row still gives the stored origin and the later evidence file is unchanged."""
+    after = case.get("after")
+    if not isinstance(after, dict):
+        return False
+    try:
+        if hashlib.sha256(Path(str(after.get("file"))).read_bytes()).hexdigest() != after.get(
+            "sha256"
+        ):
+            return False
+    except OSError:
+        return False
     try:
         _, now = read_origin(notary_db, case["task_id"], case["attempt_id"])
     except OriginError:

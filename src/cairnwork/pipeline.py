@@ -38,7 +38,7 @@ from cairnwork.notary_verify import nonempty_fields
 from cairnwork.ownership import OWNER, InvalidStatusTransition, OwnershipLedger, request_digest
 from cairnwork.p2p import base_env_check, p2p_for
 from cairnwork.p2p_selection import DEFAULT_BUDGET_SECONDS, DIRECT_MODE
-from cairnwork.pipeline_judge import judge_candidate, tests_unused, tests_with_teeth
+from cairnwork.pipeline_judge import judge_for, tests_unused, tests_with_teeth
 from cairnwork.protected_paths import path_refusal
 from cairnwork.pytest_config import PytestConfigError, gate_import_paths
 from cairnwork.snapshot import snapshot_candidate
@@ -390,7 +390,7 @@ def _attempt(task, specs, digest, notary, worker, result, steps, ctx: VerifyCont
                 return
         result.candidate_commit = judged
         steps.reach("CANDIDATE", judged)
-        judge_candidate(task, specs, digest, notary, result, test_files, ctx, steps.reach, plan)
+        judge_for(worker, task, specs, digest, notary, result, test_files, ctx, steps.reach, plan)
 
 
 def _remove_clone(run_root, result) -> None:

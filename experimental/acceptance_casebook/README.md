@@ -51,3 +51,12 @@ recomputed on every read. Human and other-family identities and every lineage ar
 not verified; lineage is compared by direct membership, so a copy that names only an intermediate
 ancestor is not caught. A hand-written confirmation line that passes every rule counts: the chain
 and head stop edits, not appends.
+
+Round 2 (#825 review): `refused_good` needs a real Core refusal (a verification with integrity
+VALID, HTTP 200 and status FAILED, REJECTED or REFUSED); an error row (502, `CORE_UNAVAILABLE`,
+integrity UNKNOWN) is `CASE_ORIGIN_MISMATCH` for either kind. `accepted` is the notary's own
+verified rule, and the row must pass `check_record_bindings` (request hash and target revision
+agree with its columns) or it is `CASE_RECORD_MISMATCH`. With `--notary-db`, the later evidence
+file is re-hashed too. A confirmation line without a confirmer never counts. `DUPLICATE` is
+decided per (candidate, base, version, attempt); the same claim from another attempt is its own
+line, and the other kind is `CASE_CONFLICT`.
