@@ -103,6 +103,7 @@ def _judge_deleting(repo, three, monkeypatch, deleted_by_candidate):
     deleting files before it (the verifier run and the not-run check) are stubbed away, and the
     step after the check raises _Stop."""
     from types import SimpleNamespace
+    from typing import Any
 
     from cairnwork import pipeline_judge
 
@@ -120,7 +121,7 @@ def _judge_deleting(repo, three, monkeypatch, deleted_by_candidate):
     task = SimpleNamespace(blackbox=None, repo=repo, base_commit=base, allow_deletions=False)
     result = SimpleNamespace(candidate_commit=judged, task_id="t", attempt_id="a", logs=[])
     files = TestFiles(("tests/test_new.py",), ("tests/test_a.py",))
-    args = (task, (), "d", None, result, files, None, lambda phase: None)
+    args: tuple[Any, ...] = (task, (), "d", None, result, files, None, lambda phase: None)
     return pipeline_judge.judge_candidate, args, result
 
 
