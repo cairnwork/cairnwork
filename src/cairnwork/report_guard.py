@@ -84,6 +84,7 @@ _PLUGIN_SOURCE = '''\
 
 import json
 import os
+from pathlib import Path
 
 import pytest
 
@@ -122,6 +123,25 @@ def _source(item):
         return item.path.relative_to(item.config.rootpath).as_posix()
     except (AttributeError, TypeError, ValueError):
         return ""
+
+
+def _own_code(info, item):
+    """#797: the innermost frame that raised is code under test: a file inside the checkout
+    (``rootpath``) that is not a test file, a conftest or a site-packages file. Anything that
+    cannot be established says False (the caller then keeps the environment reading, #775)."""
+    try:
+        frame = info.traceback[-1].path
+        root = item.config.rootpath.resolve()
+        path = Path(os.path.realpath(str(frame)))
+        parts = path.relative_to(root).parts
+        name = path.name
+        tests = path == Path(os.path.realpath(str(item.path)))
+        tests = tests or name == "conftest.py" or name.startswith("test_")
+        tests = tests or name.endswith("_test.py")
+        pkgs = any(p in ("site-packages", "dist-packages") for p in parts)
+        return path.is_file() and not tests and not pkgs
+    except Exception:
+        return False
 
 
 class _Reporter:
@@ -181,14 +201,15 @@ class _Reporter:
         self._files = list(index)
 
     @pytest.hookimpl(wrapper=True, tryfirst=True)
-    def pytest_runtest_makereport(self, item, call, _original=_original, _keep_worst=_keep_worst):
+    def pytest_runtest_makereport(self, item, call, _original=_original, _keep_worst=_keep_worst,
+                               _own=_own_code):
         report = yield  # outermost: the report as every other hook left it
         nodeid, _ = _original(self, item, report.nodeid)
         if report.when == "call":  # #570: one per sub-test, then the test's own
             _keep_worst(self, nodeid, report.outcome)
             if report.failed:  # #775: an OSError says "environment", never a plain test failure
-                info = call.excinfo
-                oserr = info is not None and info.errisinstance(OSError)
+                info = call.excinfo  # #797: unless the checkout's own code raised it
+                oserr = info is not None and info.errisinstance(OSError) and not _own(info, item)
                 self._env_ok[nodeid] = self._env_ok.get(nodeid, True) and oserr
         elif report.when == "setup" and report.outcome in ("skipped", "failed"):
             _keep_worst(self, nodeid, report.outcome)
