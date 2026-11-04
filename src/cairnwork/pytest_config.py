@@ -22,13 +22,16 @@ configuration file at the base fails the run (``PytestConfigError``).
 from __future__ import annotations
 
 import configparser
+import fnmatch
 import json
 import os
+import posixpath
 import re
 import shlex
 import shutil
 import subprocess
 import tomllib
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
@@ -158,6 +161,26 @@ def base_settings(repo: Path, base_commit: str | None) -> PytestSettings:
         if found is not None or name in _ALWAYS_FOUND:
             return _settings(name, found or {})
     return PytestSettings()
+
+
+def test_file_rule(repo: Path, base_commit: str | None) -> Callable[[str], bool]:
+    """Whether a path matches the base's ``python_files``, the patterns the verifier's ini carries,
+    as pytest matches them (#793); pytest's default, test_*.py and *_test.py, when it sets none."""
+    configured = _render(dict(base_settings(repo, base_commit).values).get("python_files"))
+    default = ("test_*.py", "*_test.py")
+    patterns = tuple(_words(configured)) or default  # one line per item, split
+    if any("/" in p for p in patterns):  # its match can depend on where the checkout sits:
+        patterns = (*patterns, *default)  # never select fewer files than the default (fail closed)
+    return lambda path: any(_file_matches(p, path) for p in patterns)
+
+
+def _file_matches(pattern: str, path: str) -> bool:
+    """pytest's ``fnmatch_ex`` for a checkout-relative POSIX ``path``: a pattern without ``/``
+    matches the file name; one with ``/`` the absolute path, as ``*/pattern`` (``*`` crosses ``/``).
+    The checkout's own location is unknown here: ``/root`` stands in for it."""
+    if "/" not in pattern:
+        return fnmatch.fnmatch(posixpath.basename(path), pattern)
+    return fnmatch.fnmatch(f"/root/{path}", pattern if pattern.startswith("/") else f"*/{pattern}")
 
 
 def verifier_settings(
