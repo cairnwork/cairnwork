@@ -35,7 +35,7 @@ from cairnwork.protected_paths import (  # noqa: F401  (re-exported)
     path_refusal,
 )
 
-TASK_FENCE = re.compile(r"```eia-task[ \t]*\n(.*?)\n```", re.DOTALL)
+TASK_FENCE = re.compile(r"```eia-task[ \t]*\r?\n(.*?)\r?\n```", re.DOTALL)
 ANY_FENCE = re.compile(r"```[A-Za-z0-9_-]*-contract\b")
 DEFAULT_TEST_ROOTS = ("tests",)
 _ROOT = re.compile(r"(?:[A-Za-z0-9_][A-Za-z0-9_\-]*/)*(?:tests|test)")
@@ -90,7 +90,7 @@ def task_block_text(body: str) -> str:
         raise IssueRefused("TASK_BLOCK_REQUIRED", "exactly one ```eia-task block")
     if ANY_FENCE.search(body or ""):
         raise IssueRefused("TASK_BODY_HAS_FOREIGN_CONTRACT")
-    return blocks[0]
+    return blocks[0].replace("\r\n", "\n")  # web-edited Issue bodies are CRLF: one card hash
 
 
 def task_block_sha256(body: str) -> str:

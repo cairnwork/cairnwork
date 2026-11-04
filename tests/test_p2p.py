@@ -312,3 +312,34 @@ def test_unusable_base_probe_log_tail_is_bounded_to_2048_characters(project, tmp
     assert colon_sep
     assert len(tail_content) <= 2048
     assert "Z" * 50 in tail_content
+
+
+TESTS_PY = "from calc import neg\ndef test_neg():\n    assert neg(2) == -2\n"
+
+
+def configured_project(repo, ini):
+    commit_change(
+        repo,
+        {
+            "pytest.ini": ini,
+            "src/calc.py": CALC,
+            "tests/conftest.py": CONFTEST,
+            "tests/tests.py": TESTS_PY,
+        },
+    )
+    return repo
+
+
+def test_a_regression_in_a_configured_python_file_is_caught(repo, tmp_path):
+    project = configured_project(repo, "[pytest]\npython_files = tests.py\n")
+    result = run(project, tmp_path, {"src/calc.py": FIX_BREAKS_NEG}, mode="whole-suite")
+    assert result.status == "FAILED" and not result.verified
+    assert result.p2p["rerun"]["failed"] == ["tests/tests.py::test_neg"]
+
+
+def test_the_default_file_names_still_select_regressions_without_the_setting(repo, tmp_path):
+    project = configured_project(repo, "[pytest]\n")
+    commit_change(project, {"tests/test_sibling.py": SIBLING})
+    result = run(project, tmp_path, {"src/calc.py": FIX_BREAKS_NEG}, mode="whole-suite")
+    assert result.status == "FAILED" and not result.verified
+    assert result.p2p["rerun"]["failed"] == ["tests/test_sibling.py::test_neg"]

@@ -68,6 +68,18 @@ PINNED_368_SWAP = {  # and a deny for unlinking a *.pyc there (no RENAME_SWAP on
     ),
 }
 
+PINNED_802 = {  # and time zone data and /etc/hosts readable
+    (): ("439b3c7cf869575c9ac754329588dde31a3f578bb53538cbd232788dc32910df", 2085),
+    ("/Library/Developer/CommandLineTools",): (
+        "08ae7b90a8bf447876a5487c90849ff27554c4065868e8f6922eee08b2d9d14f",
+        2135,
+    ),
+    ("/Applications/Xcode.app",): (
+        "abd63687ecc82b66e93448decf4aa27c2e41586aea9a1af536a777fa3bf3a23f",
+        2183,
+    ),
+}
+
 
 @pytest.mark.parametrize("dirs", list(PINNED))
 def test_seatbelt_profile_is_pinned_as_of_the_posix_semaphore_change_116(monkeypatch, dirs):
@@ -77,12 +89,20 @@ def test_seatbelt_profile_is_pinned_as_of_the_posix_semaphore_change_116(monkeyp
         seatbelt.build_profile(READS, WRITES, home=HOME),
         seatbelt.BACKEND.policy(READS, WRITES, home=HOME),
     ):
-        pycs = [line for line in profile.text.splitlines(True) if '\\.pyc$")' in line]
+        added_802 = (
+            '  (subpath "/private/var/db/timezone")\n',
+            '  (literal "/private/etc/hosts")\n',
+        )
+        text = profile.text
+        for line in added_802:
+            assert text.count(line) == 1
+            text = text.replace(line, "")
+        pycs = [line for line in text.splitlines(True) if '\\.pyc$")' in line]
         assert len(pycs) == 3 * len(WRITES)  # #368: a read, a symlink and an unlink rule per root
         unlinks = [line for line in pycs if line.startswith("(deny file-write-unlink ")]
         assert len(unlinks) == len(WRITES)
-        no_unlink = "".join(line for line in profile.text.splitlines(True) if line not in unlinks)
-        before_368 = "".join(line for line in profile.text.splitlines(True) if line not in pycs)
+        no_unlink = "".join(line for line in text.splitlines(True) if line not in unlinks)
+        before_368 = "".join(line for line in text.splitlines(True) if line not in pycs)
         c1_lines = ('  (literal "/usr/bin/shasum")\n', '  (literal "/usr/bin/shasum5.34")\n')
         for line in c1_lines:
             assert before_368.count(line) == 1
@@ -92,7 +112,8 @@ def test_seatbelt_profile_is_pinned_as_of_the_posix_semaphore_change_116(monkeyp
         assert (hashlib.sha256(before_c1.encode()).hexdigest(), len(before_c1)) == PINNED[dirs]
         assert (hashlib.sha256(before_368.encode()).hexdigest(), len(before_368)) == PINNED_C1[dirs]
         assert (hashlib.sha256(no_unlink.encode()).hexdigest(), len(no_unlink)) == PINNED_368[dirs]
-        assert (profile.sha256, len(profile.text)) == PINNED_368_SWAP[dirs]
+        assert (hashlib.sha256(text.encode()).hexdigest(), len(text)) == PINNED_368_SWAP[dirs]
+        assert (profile.sha256, len(profile.text)) == PINNED_802[dirs]
 
 
 def test_seatbelt_argv_prefixes_are_unchanged(tmp_path):
