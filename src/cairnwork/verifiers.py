@@ -71,6 +71,7 @@ import cairnwork_sandbox
 from cairnwork import gitcmd, pytest_config, report_channel, report_guard
 from cairnwork.account_checkout import checkout_differences, make_account_checkout
 from cairnwork.account_checkout import remove_checkout as _remove_checkout
+from cairnwork.account_prelude import locked_prelude
 from cairnwork.bytecode_hook import host_notes
 from cairnwork.bytecode_roots import bytecode_findings
 from cairnwork.confined import ATTEMPT_ENV, MAX_LOG_BYTES, RUN_TOKEN_VAR
@@ -79,7 +80,7 @@ from cairnwork.import_path_tree import require_plain_dirs
 from cairnwork.pycache_guard import PYCACHE_DIR
 from cairnwork.reasons import why_not_passed
 from cairnwork.run_scrub import close_private
-from cairnwork.verifier_account import VerifierAccountError, lock_wait_seconds
+from cairnwork.verifier_account import lock_wait_seconds
 from cairnwork.verifier_exec import (  # low-level run primitives, split out for the 400-line cap
     _execute,
     _file_sha256,
@@ -136,6 +137,9 @@ class VerifierRun:
     # facts about the sandbox policy used (e.g. "shm withheld: BWRAP_TMPFS_SIZE_UNSUPPORTED"); not
     # in the observation's artifact hash, so recording them changes no bound digest
     notes: tuple[str, ...] = ()
+    collected: tuple[str, ...] = ()  # #793: node ids pytest collected (the guard's record)
+    collect_skipped: tuple[str, ...] = ()  # #793: collectors skipped while collecting
+    collection_finished: bool = False  # #793: collection was not stopped part way
 
 
 def run_verifiers(
@@ -163,11 +167,8 @@ def run_verifiers(
     account = ctx.account
     if account is not None:
         ctx, python = replace(ctx, run_root=account.run_root), ctx.python or account.python
-        with account.exclusive(lock_wait_seconds(len(specs), timeout)):
-            if not account.available(python):
-                raise VerifierAccountError(f"account {account.user} is not usable")
-            account.require_idle()
-            account.scrub_stale_runs()  # a killed run's private/run, before this run creates one
+        # a prelude refusal is AccountUnusableBeforeRun (#803)
+        with locked_prelude(account, python, lock_wait_seconds(len(specs), timeout)):
             batch = _Batch(ctx, python, candidate_commit, timeout, settings, note)
             return _run_all(batch, specs, run_id)
     python = ctx.python or sys.executable
@@ -286,11 +287,8 @@ def _read_verdict(channel, path, nonce, plugins):
 def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, channel) -> VerifierRun:
     ctx, candidate_commit, timeout = batch.ctx, batch.candidate_commit, batch.timeout
     account, python, attempt_id = ctx.account, batch.python, ctx.attempt_id
-    log_path, ini, profile_path = (
-        private / "verifier.log",
-        private / "pytest.ini",
-        private / "profile.sb",
-    )
+    log_path, ini = private / "verifier.log", private / "pytest.ini"
+    profile_path = private / "profile.sb"
     run_dir, home, tmp, env, verdict_path, verdict_nonce = _prepare_run(
         private, ini, ini_text, channel
     )
@@ -302,6 +300,7 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
         python, "-P", "-m", "pytest", "-q", "-p", "no:cacheprovider", "-c", str(ini),
         f"--rootdir={checkout}", f"--confcutdir={checkout}", "-o", "addopts=",
         *batch.settings.args(plugins), "-p", report_guard.MODULE, *spec.targets,
+        *(("--collect-only",) if spec.collect_only else ()),  # #793: collect_reader.py
     ]  # fmt: skip
     before = os.lstat(checkout)
     profile = None
@@ -362,4 +361,6 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
         report_too_big=verdict.too_big, notes=(profile.notes if profile else ()) + host_notes(),
         recorded=verdict.recorded, collect_errors=verdict.collect_errors,
         teardown_errors=verdict.teardown_errors, fail_kind=verdict.fail_kind, log_too_big=too_big,
+        collected=verdict.collected, collect_skipped=verdict.collect_skipped,
+        collection_finished=verdict.collection_finished,
     )  # fmt: skip
