@@ -26,7 +26,13 @@ from cairnwork import gitcmd, pytest_config
 from cairnwork.account_checkout import checkout_differences, make_account_checkout
 from cairnwork.account_checkout import remove_checkout as _remove_checkout
 from cairnwork.blackbox import MAX_BYTES, Declaration
-from cairnwork.blackbox_runner import _RUNNER_SOURCE, MODULE, OUTPUT_NAME, install_runner
+from cairnwork.blackbox_runner import (
+    _RUNNER_SOURCE,
+    HASH_SEED,
+    MODULE,
+    OUTPUT_NAME,
+    install_runner,
+)
 from cairnwork.bytecode_roots import bytecode_findings
 from cairnwork.confined import ATTEMPT_ENV
 from cairnwork.import_path_tree import require_plain_dirs
@@ -117,6 +123,7 @@ def _run_in_open(
     install_runner(private / "guard", spec)
     if account is not None:
         account.share_run(private, ini, run_dir, home, tmp)
+    env["PYTHONHASHSEED"] = HASH_SEED  # #815: one candidate, one output (read at interpreter start)
     if attempt_id:
         env[ATTEMPT_ENV] = attempt_id
     before = os.lstat(checkout)
