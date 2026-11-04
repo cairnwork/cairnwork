@@ -33,11 +33,11 @@ def test_pure_comment_lines_are_skipped(line, caught):
         "@pytest.hookimpl(tryfirst=True)",
     ],
 )
-def test_pytest_rules_apply_to_test_code_only(line):
+def test_pytest_rules_apply_to_every_py_file_since_821(line):
     assert _rules(TEST, line)
     assert _rules("tests/helpers/util.py", line)
     assert _rules("src/pkg/testing/plugin.py", line)
-    assert _rules("src/pkg/plugin.py", line) == []
+    assert _rules("src/pkg/plugin.py", line)
     assert _rules("app_test.py", line)
 
 
