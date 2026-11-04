@@ -33,6 +33,7 @@ def run(name: str = "v", rc: int | None = 1, *, failed=(TARGET,), ran=True, **fi
         collect_errors=fields.get("collect_errors", ()),
         mutated=fields.get("mutated", ()),
         teardown_errors=(),
+        fail_kind={},
         survivors=fields.get("survivors", 0),
         forged=fields.get("forged", ()),
         log_too_big=fields.get("log_too_big", False),
