@@ -33,7 +33,7 @@ from cairnwork.deferred_nodes import test_functions
 from cairnwork.gitcmd import OID, GitCommandError, run_git
 from cairnwork.issue_task import test_target
 from cairnwork.provenance import trailers
-from cairnwork.reasons import _names
+from cairnwork.reasons import _names, skip_hint
 from cairnwork.workspace import ATTEMPT_REF_PREFIX
 from cairnwork_protocol.ids import MAX_ID_BYTES
 
@@ -328,15 +328,15 @@ def base_comparison(runs, targets: frozenset[str]) -> Comparison:
             f"{run.spec.verifier_id}: {code} (exit {run.returncode})"
             + (f", collection errors {_names(run.collect_errors)}" if run.collect_errors else "")
             + (survivor_argv.listing(run.survivors) if code == "BASE_SURVIVORS" else "")
+            + skip_hint(run)
             + ("; import fix-introduced symbols inside the test function"
                if set(run.collect_errors) & files else "")
             for run, code in problems
         )  # fmt: skip
         return Comparison("UNCOMPARABLE", problems[0][1], detail)
     if missing := not_run(runs, targets):  # #660: the receipt would bind a test that never ran
-        return Comparison(
-            "NOT_RUN", "DEFERRED_TESTS_NOT_RUN", f"no verifier collected or ran {missing}"
-        )
+        detail = f"no verifier collected or ran {missing}" + "".join(map(skip_hint, runs))
+        return Comparison("NOT_RUN", "DEFERRED_TESTS_NOT_RUN", detail)
     verdict = base_teeth(runs, targets)  # #775: a fixture or OSError failure is not teeth
     if verdict[0] != "NO_TEETH":
         return Comparison(*verdict)

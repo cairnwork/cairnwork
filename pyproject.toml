@@ -29,6 +29,7 @@ dev = [
     "import-linter>=2.1",
     "hypothesis>=6.100",
     "pytest-xdist>=3.6",
+    "pytest-mock==3.17.0",
 ]
 
 [tool.hatch.build.targets.wheel]

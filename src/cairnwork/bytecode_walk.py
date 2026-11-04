@@ -60,7 +60,7 @@ def fold(name):
 
 def pyc_like(name):
     folded = unicodedata.normalize("NFKD", name).casefold()
-    return "".join(c for c in folded if c.isascii()).endswith(".pyc")
+    return "".join(c for c in folded if ord(c) < 128).endswith(".pyc")  # str.isascii is 3.7+
 
 
 def ident(info):
@@ -101,25 +101,19 @@ def opened(path):
         if not os.access(".", os.X_OK, dir_fd=fd, effective_ids=True):  # e.g. an ACL deny search
             raise PermissionError(errno.EACCES, "listable but not searchable")
         found = []
-        with os.scandir(fd) as listing:  # DirEntry calls use fd: it stays open until done
-            for entry in listing:
-                try:
-                    if entry.is_symlink():  # resolved once the listing is done (resolve_links)
-                        found.append((entry.name, "link", None, None))
-                    elif entry.is_dir(follow_symlinks=False):
-                        found.append(
-                            (entry.name, "dir", ident(entry.stat(follow_symlinks=False)), None)
-                        )
-                    elif (
-                        entry.is_file(follow_symlinks=False)
-                        and not pyc_like(entry.name)
-                        and bytecode(entry.name, fd)
-                    ):
-                        found.append((entry.name, "bytecode", None, None))
-                    else:
-                        found.append((entry.name, "other", None, None))
-                except OSError as exc:
-                    found.append((entry.name, "other", None, exc.strerror or str(exc)))
+        for name in os.listdir(fd):  # not scandir(fd): that needs Python 3.7, the run's may be 3.6
+            try:  # each entry is looked at relative to fd, never through a symlink (as DirEntry)
+                mode = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                if stat.S_ISLNK(mode.st_mode):  # resolved once the listing is done (resolve_links)
+                    found.append((name, "link", None, None))
+                elif stat.S_ISDIR(mode.st_mode):
+                    found.append((name, "dir", ident(mode), None))
+                elif stat.S_ISREG(mode.st_mode) and not pyc_like(name) and bytecode(name, fd):
+                    found.append((name, "bytecode", None, None))
+                else:
+                    found.append((name, "other", None, None))
+            except OSError as exc:
+                found.append((name, "other", None, exc.strerror or str(exc)))
         return ident(info), found
     finally:
         os.close(fd)

@@ -15,16 +15,20 @@ class Verdict:
     recorded: bool = False  # sessionfinish wrote a well-formed record with our nonce (#234)
     collect_errors: tuple[str, ...] = ()  # node ids of collectors that failed (B2, #234)
     collect_skipped: tuple[str, ...] = ()  # node ids of collectors skipped while collecting
+    skipped_deps: tuple[str, ...] = ()  # modules the skipped collectors could not import (#813)
     renamed: tuple[str, ...] = ()  # items whose node id or file changed after collection
     paths: dict[str, str] = field(default_factory=dict)  # node id -> its file, as collected
     # #478: tests whose teardown failed. A shared fixture's finalizer runs at its last user's
     # teardown, so the node named is where the error landed, not the test that owns the fixture
     teardown_errors: tuple[str, ...] = ()
     # #775: why a failed node failed: "setup" (a fixture raised before the body) or "env" (every
-    # failed call raised an OSError). Absent: an ordinary test failure. ``outcomes`` are unchanged.
+    # failed call raised an OSError) or "plugin" (#804: a table plugin's fixture was missing).
+    # Absent: an ordinary test failure. ``outcomes`` are unchanged.
     fail_kind: dict[str, str] = field(default_factory=dict)
     exitstatus: int | None = None  # pytest's own session status, as recorded (#276)
     testsfailed: int | None = None  # pytest's own count of failed tests, as recorded
+    collected: tuple[str, ...] = ()  # #793: every node id pytest collected, as recorded
+    collection_finished: bool = False  # #793: pytest_collection_finish ran (not interrupted)
 
     def not_run(self, targets) -> tuple[str, ...]:
         """The named ``targets`` (``path`` or ``path::node``) that own no recorded test, then the

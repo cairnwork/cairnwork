@@ -32,7 +32,11 @@ def _names(names) -> str:
 def _kind_causes(fail_kind) -> list[str]:
     """#775: a test that failed in fixture setup or with an OSError (report_guard's
     ``fail_kind``). Wording only: the verdict stays FAILED and nothing parses it."""
-    said = {"setup": "setup error in", "env": "environment error (OSError) in"}
+    said = {
+        "setup": "setup error in",
+        "env": "environment error (OSError) in",
+        "plugin": "missing pytest plugin fixture in",
+    }
     return [f"{said[kind]} {_names([node])[3:]}" for node, kind in fail_kind.items()][:MAX_NAMES]
 
 
@@ -118,3 +122,10 @@ def explain(runs) -> str:
     return (f" [{'; '.join(failed)}]" if failed else "") + (
         f" [notes {'; '.join(noted)}]" if noted else ""
     )
+
+
+def skip_hint(run) -> str:
+    """#813: the module a collector skipped for (``importorskip``); text for the reason, the
+    verdict is not read from it. The names come from the run's record: cut and cleaned here."""
+    deps = getattr(run, "skipped_deps", ())
+    return f"; skipped at collection, could not import {_names(deps)}" if deps else ""
