@@ -111,8 +111,8 @@ def test_a_builtin_oserror_raised_by_checkout_code_stays_env(tmp_path):
     stays (a candidate that avoids the denied read must not be VERIFIED off it)."""
     lib = "def load():\n    open('/nonexistent-dir-797/none.txt')\n"
     deny = "def load():\n    raise PermissionError(13, 'denied')\n"
-    for body in (lib, deny):
-        v = _run(tmp_path / str(len(body)), {"lib.py": body, "tests/test_x.py": USE})
+    for label, body in (("open", lib), ("raise", deny)):
+        v = _run(tmp_path / label, {"lib.py": body, "tests/test_x.py": USE})
         assert v.outcomes == {f"{T}test_a": "failed"}
         assert v.fail_kind == {f"{T}test_a": "env"}
 
@@ -150,3 +150,29 @@ def test_realpath_is_bound_when_the_plugin_is_imported(tmp_path):
     v = _run(tmp_path, {"lib.py": LIB, "tests/test_x.py": head + USE})
     assert v.outcomes == {f"{T}test_a": "failed"}
     assert v.fail_kind == {}
+
+
+OWN = "class Own(FileNotFoundError):\n    pass\n\nclass Other(OSError):\n    pass\n\n"
+READ = "open('/nonexistent-dir-797/none.txt')"
+CHAIN = {  # GLM / review desk: a denied built-in re-raised as the checkout's own class
+    "from_e": f"    try:\n        {READ}\n    except OSError as e:\n"
+    "        raise Own(2, 'x') from e\n",
+    "context": f"    try:\n        {READ}\n    except OSError:\n        raise Own(2, 'x')\n",
+    "own_only": "    try:\n        raise Other(5, 'io')\n    except OSError as e:\n"
+    "        raise Own(2, 'x') from e\n",
+    "cycle": "    a, b = Own(2, 'a'), Other(5, 'b')\n    a.__context__, b.__context__ = b, a\n"
+    "    raise a\n",
+}
+
+
+@pytest.mark.parametrize(("case", "kind"), [
+    ("from_e", {f"{T}test_a": "env"}), ("context", {f"{T}test_a": "env"}),
+    ("own_only", {}), ("cycle", {}),
+])  # fmt: skip
+def test_every_oserror_on_the_cause_and_context_chain_must_be_checkout_code(tmp_path, case, kind):
+    """A built-in OSError anywhere on the chain keeps env; a chain of checkout classes only (a
+    cycle included) is still the #797 teeth."""
+    lib = OWN + "def load():\n" + CHAIN[case]
+    v = _run(tmp_path, {"lib.py": lib, "tests/test_x.py": USE})
+    assert v.outcomes == {f"{T}test_a": "failed"}
+    assert v.fail_kind == kind

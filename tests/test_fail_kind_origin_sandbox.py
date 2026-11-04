@@ -26,16 +26,21 @@ def test_an_oserror_subclass_from_checkout_code_gives_teeth(project, state, fix,
 
 
 @pytest.mark.sandbox
-@pytest.mark.parametrize("call", ["open({p!r}).read()", "__import__('os').listdir({d!r})"])
+@pytest.mark.parametrize("call", [
+    "open({p!r}).read()", "__import__('os').listdir({d!r})",
+    "try:\n        open({p!r}).read()\n    except OSError as e:\n"
+    "        raise Missing(2, name) from e",
+])  # fmt: skip
 def test_a_sandbox_denied_builtin_call_in_checkout_code_stays_uncomparable(
     project, state, tmp_path_factory, call
 ):
     """a1e3's counterexample: base ``load`` reads a file the sandbox denies (PermissionError from
-    a built-in); the candidate returns the constant and never reads. Not VERIFIED."""
+    a built-in), also re-raised as the checkout's own class; the candidate returns the constant
+    and never reads. Not VERIFIED."""
     outside = tmp_path_factory.mktemp("outside-797")
     (outside / "data.txt").write_text("{}")
     body = call.format(p=str(outside / "data.txt"), d=str(outside))
-    base = ADD + f"def load(name):\n    {body}\n    return {{}}\n"
+    base = ADD + MISSING + f"def load(name):\n    {body}\n    return {{}}\n"
     commit_change(project, {"src/calc.py": base})
     fix = ADD + "def load(name):\n    return {}\n"  # never makes the call
     got, out = run_cli(project, state, TEST, {"src/calc.py": fix})

@@ -142,14 +142,24 @@ def _checkout_code(file, item, _path=Path, _realpath=os.path.realpath):
 
 
 def _own_code(info, item, _code=_checkout_code, _modules=sys.modules):
-    """#797: the checkout's own code raised its own error: the innermost frame and the class of
-    the OSError are both checkout code. A built-in OSError (an open() the sandbox denies) keeps
-    the environment reading even when checkout code called open(). Anything that cannot be
-    established says False (#775). The helpers, Path and os.path.realpath are bound at import;
-    rootpath.resolve(), Path methods and TracebackEntry.path are still looked up at call time."""
+    """#797: the innermost frame and the class of every OSError on the cause/context chain are
+    checkout code, so a built-in OSError (a sandbox-denied open()), even re-raised as a checkout
+    class, stays env; unknown says False (#775). Helpers, Path and realpath are bound at import;
+    rootpath.resolve(), Path methods and TracebackEntry.path are looked up at call time."""
     try:
-        cls_file = getattr(_modules.get(info.type.__module__), "__file__", None)
-        return bool(cls_file) and _code(info.traceback[-1].path, item) and _code(cls_file, item)
+        if not _code(info.traceback[-1].path, item):
+            return False
+        seen, todo = [], [info.value]
+        while todo and len(seen) < 32:  # the whole chain, cycles and depth capped
+            exc = todo.pop()
+            if any(exc is s for s in seen):
+                continue
+            seen.append(exc)
+            todo += [e for e in (exc.__cause__, exc.__context__) if e is not None]
+            cls_file = getattr(_modules.get(type(exc).__module__), "__file__", None)
+            if isinstance(exc, OSError) and not (cls_file and _code(cls_file, item)):
+                return False
+        return not todo
     except Exception:
         return False
 
