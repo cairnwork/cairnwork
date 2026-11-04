@@ -81,8 +81,8 @@ def test_a_base_test_hidden_from_pytest_refuses_the_test_commit(repo, tmp_path, 
 def test_an_inherited_base_test_the_test_commit_stops_collecting_is_refused(
     repo, tmp_path, shape, good
 ):
-    commit_change(repo, {"src/calc.py": CALC, "tests/conftest.py": CONFTEST,
-                         "tests/checks_base.py": HELPER, "tests/test_calc.py": INHERITS})  # fmt: skip
+    files = {"src/calc.py": CALC, "tests/conftest.py": CONFTEST}
+    commit_change(repo, {**files, "tests/checks_base.py": HELPER, "tests/test_calc.py": INHERITS})
     check = (("pytest", ("python3", "-m", "pytest", "-q", "tests/test_calc.py::test_mul")),)
     candidate = (CALC if good else SUB_OFF) + MUL
     result = _run(repo, tmp_path, ("src/calc.py",), {"src/calc.py": candidate},
