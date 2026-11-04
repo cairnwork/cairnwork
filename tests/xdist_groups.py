@@ -15,6 +15,7 @@ XDIST_GROUPS = {
         "test_local_worker_paging.py",
         "test_local_worker_patch_count.py",
         "test_local_worker_paths.py",
+        "test_local_worker_precheck.py",
         "test_local_worker_query_dir.py",
         "test_local_worker_readonly.py",
         "test_local_worker_search.py",
