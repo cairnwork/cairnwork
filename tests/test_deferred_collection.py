@@ -3,6 +3,7 @@
 reading the file (every node id pytest collects a new test under, and DEFERRED_TESTS_NOT_COLLECTED)
 and, after the base run, the guard's record (DEFERRED_TESTS_NOT_RUN)."""
 
+import ast
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,7 @@ from conftest import commit_change
 from test_deferred_tests import REGRESSION, SeeingWorker, make_test_commit, run
 from verify_helpers import FIX, candidate, verify
 
+from cairnwork import deferred_nodes
 from cairnwork.core_request import VerifierObservation
 from cairnwork.deferred_tests import TestCommitRejected as Rejected
 from cairnwork.deferred_tests import (
@@ -241,3 +243,51 @@ def test_a_failed_blackbox_check_keeps_the_verdict_path(monkeypatch):
     ran = _passed_run({"tests/test_x.py::test_other": "passed"})  # every pytest run passed
     with pytest.raises(_ToCore):  # Core judges the failed check; the new code is not used
         _judge(monkeypatch, ran, checks=(verdict,))
+
+
+UT = "import unittest\nfrom django.test import TestCase\n"
+HELD = "from calc import add\n"
+M = "    def test_m(self):\n        assert add(1, 1) == 2\n"
+FILES = {
+    "tests/test_u.py": UT + HELD + "class FooTests(TestCase):\n" + M
+    + "class BarTest(unittest.TestCase):\n" + M,
+}  # fmt: skip
+
+
+def _nodes(src):
+    funcs, bad = deferred_nodes.test_functions(ast.parse(src))
+    return set(funcs), set(bad)
+
+
+def test_unittest_case_subclasses_not_named_test_are_read():
+    funcs, bad = _nodes(FILES["tests/test_u.py"])
+    assert funcs == {"FooTests::test_m", "BarTest::test_m"} and not bad
+
+
+def test_a_class_inheriting_an_earlier_case_subclass_is_read():
+    src = (
+        UT
+        + "class Base(TestCase):\n    def test_b(self): pass\n"
+        + "class Sub(Base):\n    def test_s(self): pass\n"
+    )
+    funcs, _ = _nodes(src)
+    assert funcs == {"Base::test_b", "Sub::test_b", "Sub::test_s"}
+
+
+def test_a_plain_helper_class_is_not_read():
+    funcs, bad = _nodes("class Helper:\n    def test_like(self): pass\n")
+    assert funcs == set() and not bad
+
+
+def test_a_case_subclass_with_init_is_uncollected_and_refused(project):
+    layout = UT + "class FooTests(TestCase):\n" + INIT + M
+    assert _nodes(layout)[1] == {"FooTests"}
+    with pytest.raises(Rejected) as err:
+        _new_tests(project, {"tests/test_regression.py": REGRESSION + layout})
+    assert err.value.code == "DEFERRED_TESTS_NOT_COLLECTED"
+
+
+def test_new_tests_sees_a_test_added_to_a_case_subclass(project):
+    commit_change(project, {K: "import unittest\nclass FooTests(unittest.TestCase):\n    pass\n"})
+    new = "import unittest\n" + HELD + "class FooTests(unittest.TestCase):\n" + M
+    assert _new_tests(project, {K: new}) == {f"{K}::FooTests::test_m"}

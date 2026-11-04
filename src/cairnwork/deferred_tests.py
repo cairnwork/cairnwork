@@ -174,12 +174,13 @@ def new_tests(repo: Path, base: str, test_commit: str, paths: tuple[str, ...]) -
     commit adds or changes: only these may count as teeth, not tests in the same file
     that already failed on the base for another reason (e.g. the environment).
 
-    Top-level ``test*`` functions and ``test*`` methods of top-level ``Test*`` classes, including
+    Top-level ``test*`` functions and ``test*`` methods of top-level ``Test*`` and TestCase-subclass
+    classes, including
     those a class inherits from one defined earlier in the file (deferred_nodes.py), compared by
     AST (decorators included, line numbers not). A new or changed test in a class pytest does not
     collect (an ``__init__`` or ``__new__``) is refused, DEFERRED_TESTS_NOT_COLLECTED: no verifier
     can run it (#660). Not seen: tests changed only through a fixture, helper or module constant,
-    nested classes, classes inherited from another module, TestCase subclasses not named Test*,
+    nested classes, classes inherited from another module,
     custom python_functions/python_classes. Such a test commit is refused (no teeth found, or the
     base run's DEFERRED_TESTS_NOT_RUN), never wrongly accepted."""
     found = set()
