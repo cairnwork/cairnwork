@@ -1,5 +1,7 @@
 """#331: the tail of a failed base probe's log, as it goes into the output's logs."""
 
+import pytest
+
 from cairnwork.p2p_probe_log import probe_log_tail
 
 
@@ -158,3 +160,51 @@ def test_dotted_and_dotless_i_in_a_secret_name_still_count(tmp_path):
     tail = probe_log_tail(log)
     assert "W1" not in tail and "W2" not in tail and "W3" not in tail
     assert tail.count("<redacted>") == 3
+
+
+_FORMS = {  # #402: one failing line per credential form the Issue lists
+    "env_token": ("GITHUB_TOKEN=fake-token-123", "GITHUB_TOKEN=<redacted>"),
+    "env_password": ("PYPI_PASSWORD=fake-token-123", "PYPI_PASSWORD=<redacted>"),
+    "env_secret_access_key": (
+        "AWS_SECRET_ACCESS_KEY=fake-token-123",
+        "AWS_SECRET_ACCESS_KEY=<redacted>",
+    ),
+    "flag_token": ("--token=fake-token-123", "--token=<redacted>"),
+    "flag_password": ("--password=fake-token-123", "--password=<redacted>"),
+    "flag_space": ("run --password fake-token-123 --next", "run --password <redacted> --next"),
+    "dashed_secret": ("client-secret=fake-token-123", "client-secret=<redacted>"),
+    "dashed_api_key": ("api-key=fake-token-123", "api-key=<redacted>"),
+    "colon_token": ("token: fake-token-123", "token: <redacted>"),
+    "colon_password": ("password: fake-token-123", "password: <redacted>"),
+    "space_before_colon": ("Authorization : fake-token-123", "Authorization : <redacted>"),
+    "x_api_key": ("X-Api-Key: fake-token-123", "X-Api-Key: <redacted>"),
+    "x_auth_token": ("X-Auth-Token: fake-token-123", "X-Auth-Token: <redacted>"),
+    "private_token": ("Private-Token: fake-token-123", "Private-Token: <redacted>"),
+    "cookie": ("Cookie: sid=fake-token-123; b=2", "Cookie: <redacted>"),
+    "json_quoted": ('{"Authorization": "Basic fake-token-123"}', '{"Authorization": <redacted>'),
+    "repr_quoted": ("{'Authorization': 'Basic fake-token-123'}", "{'Authorization': <redacted>"),
+    "url_encoded": ("access_token%3Dfake-token-123&x=1", "access_token%3D<redacted>&x=1"),
+    "full_width": ("ｐａｓｓｗｏｒｄ=fake-token-123", None),
+}
+
+
+@pytest.mark.parametrize("form", sorted(_FORMS))
+def test_each_credential_form_the_tail_used_to_print_is_masked(tmp_path, form):
+    line, expected = _FORMS[form]
+    log = tmp_path / "verifier.log"
+    log.write_text(f"before\n{line}\nafter\n")
+    tail = probe_log_tail(log)
+    assert "fake-token-123" not in tail and tail.startswith("before\n") and tail.endswith("after\n")
+    if expected is not None:
+        assert tail == f"before\n{expected}\nafter\n"
+
+
+def test_look_alike_text_next_to_the_new_forms_is_left_alone(tmp_path):
+    log = tmp_path / "verifier.log"
+    text = (
+        "my-token=plain tokens: 5 used password_policy=strict OLDPWD=/home/u\n"
+        "run --password-file /tmp/pw --verbose Content-Type: text/plain\n"
+        "retry after: 5s status: ok key%3Dvalue cooking: slow\n"
+    )
+    log.write_text(text)
+    assert probe_log_tail(log) == text
