@@ -75,3 +75,24 @@ def test_names_in_the_record_are_only_module_names(tmp_path):
     assert report_guard.read_verdict(path, NONCE).skipped_deps == (DEP,)
     path.write_text(record.replace('"collect_skipped_deps"', '"x"'))
     assert report_guard.read_verdict(path, NONCE).skipped_deps == ()
+
+
+def test_a_dotted_name_with_a_bad_later_part_is_dropped(tmp_path):
+    from cairnwork.skip_hint import is_module
+
+    assert is_module("ok.a_b") and not is_module("ok.a b")
+    assert not is_module("ok.") and not is_module("ok.1x")
+    assert report_guard.parse_verdict(_record(["ok.a b", "ok.good"]), NONCE).skipped_deps == (
+        "ok.good",
+    )
+
+
+def test_a_repeated_module_name_is_listed_once():
+    got = report_guard.parse_verdict(_record([DEP, "other", DEP, DEP]), NONCE).skipped_deps
+    assert got == (DEP, "other")
+
+
+def _record(deps):
+    return json.dumps({"nonce": NONCE, "collected": [], "outcomes": {}, "exitstatus": 5,
+                       "testsfailed": 0, "collect_skipped": ["t.py"],
+                       "collect_skipped_deps": deps}).encode()  # fmt: skip

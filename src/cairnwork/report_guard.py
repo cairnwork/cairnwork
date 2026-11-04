@@ -72,6 +72,7 @@ from pathlib import Path
 from cairnwork.bytecode_hook import HOOK_SOURCE
 from cairnwork.confined import MAX_REPORT_BYTES
 from cairnwork.pytest_config import PLUGINS
+from cairnwork.skip_hint import module_names as _module_names
 from cairnwork.verdict_record import Verdict as Verdict
 from cairnwork.verdict_record import _sources
 
@@ -315,21 +316,6 @@ def read_verdict_fd(fd: int, nonce: str) -> Verdict:
     except OSError:
         return Verdict(False, {})
     return parse_verdict(raw, nonce)
-
-
-def _is_module(name: str) -> bool:
-    """A dotted module name as the record may carry it (candidate-written: nothing else shown)."""
-    return len(name) <= 100 and all(part.isidentifier() for part in name.split("."))
-
-
-def _module_names(data: dict) -> tuple[str, ...]:
-    """The modules the record says skipped collectors could not import (#813): a hint for the
-    reason, never read by the verdict, so anything but a list of module names is dropped."""
-    deps = data.get("collect_skipped_deps")
-    names = (
-        [d for d in deps if isinstance(d, str) and _is_module(d)] if isinstance(deps, list) else []
-    )
-    return tuple(dict.fromkeys(names))
 
 
 def parse_verdict(raw: bytes, nonce: str) -> Verdict:
