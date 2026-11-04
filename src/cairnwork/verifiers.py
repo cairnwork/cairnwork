@@ -71,6 +71,7 @@ import cairnwork_sandbox
 from cairnwork import gitcmd, pytest_config, report_channel, report_guard
 from cairnwork.account_checkout import checkout_differences, make_account_checkout
 from cairnwork.account_checkout import remove_checkout as _remove_checkout
+from cairnwork.account_prelude import locked_prelude
 from cairnwork.bytecode_hook import host_notes
 from cairnwork.bytecode_roots import bytecode_findings
 from cairnwork.confined import ATTEMPT_ENV, MAX_LOG_BYTES, RUN_TOKEN_VAR
@@ -79,7 +80,7 @@ from cairnwork.import_path_tree import require_plain_dirs
 from cairnwork.pycache_guard import PYCACHE_DIR
 from cairnwork.reasons import why_not_passed
 from cairnwork.run_scrub import close_private
-from cairnwork.verifier_account import VerifierAccountError, lock_wait_seconds
+from cairnwork.verifier_account import lock_wait_seconds
 from cairnwork.verifier_exec import (  # low-level run primitives, split out for the 400-line cap
     _execute,
     _file_sha256,
@@ -164,11 +165,8 @@ def run_verifiers(
     account = ctx.account
     if account is not None:
         ctx, python = replace(ctx, run_root=account.run_root), ctx.python or account.python
-        with account.exclusive(lock_wait_seconds(len(specs), timeout)):
-            if not account.available(python):
-                raise VerifierAccountError(f"account {account.user} is not usable")
-            account.require_idle()
-            account.scrub_stale_runs()  # a killed run's private/run, before this run creates one
+        # a prelude refusal is AccountUnusableBeforeRun (#803)
+        with locked_prelude(account, python, lock_wait_seconds(len(specs), timeout)):
             batch = _Batch(ctx, python, candidate_commit, timeout, settings, note)
             return _run_all(batch, specs, run_id)
     python = ctx.python or sys.executable
