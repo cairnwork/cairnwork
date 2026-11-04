@@ -4,11 +4,13 @@ The verifier's pytest process also imports the candidate's library code, so a li
 replace a method of a pytest class (``pytest.TestReport.from_item_and_call``) and change what
 pytest reports for a protected test. tamper_scan therefore refuses, in any file (library code
 too, not only test code), an added line that changes an attribute of one of ``PYTEST_CLASSES``
-below (the report, item, session, config, plugin-manager, exception-info and ``raises`` matcher
-classes, nothing else) reached through ``pytest.``, at any depth and through a subscript
-(``__mro__[0].runtest``, an item of a method's ``__globals__``), with a name or chain in brackets of
-its own read without them (``(pytest.Item).runtest``): as the target of ``=`` or an augmented
-assignment, with an annotation, inside a tuple, list or parentheses, as a ``for`` or ``with``
+below (the report, item, collector, fixture-definition, session, config, plugin-manager,
+exception-info, terminal-reporter and ``raises`` matcher classes, nothing else) reached through
+``pytest.``, at any depth and through a subscript (``__mro__[0].runtest``, an item of a method's
+``__globals__``), with a name or chain in brackets of its own read without them
+(``(pytest.Item).runtest``): as the target of ``=`` or an augmented assignment, with an
+annotation, inside a tuple, list or parentheses (a parenthesised target; a class in brackets of
+its own is read without them, above), as a ``for`` or ``with``
 target (a keyword may touch a bracket or digit, as Python allows), in ``del``, passed to
 ``setattr``/``delattr`` or to ``unittest.mock``'s ``patch``, ``patch.object`` or
 ``patch.multiple`` (the first argument or ``target=``, a string with any prefix or quotes); and
@@ -28,7 +30,9 @@ A raised bar, not a boundary. Known residuals that still pass: a name built from
 the class reached through an instance (``type(item).runtest = f``, ``report.__class__``), a
 subclass that overrides a method (a custom ``Item.runtest``), pytest's other classes and its
 module-level functions (``pytest.raises``, ``pytest.approx``), ``setattr`` with arguments built
-elsewhere, a ``with`` target inside a tuple, a target split over lines, ``from pytest import *``
+elsewhere, a ``with`` target inside a tuple, a target split over lines, a changed attribute reached
+through the module globals of a pytest function, ``setattr`` passed as a value to another call,
+a ``for`` target list in which another element is subscripted or called, ``from pytest import *``
 and an alias bound only in an unchanged line.
 """
 
@@ -50,6 +54,17 @@ PYTEST_CLASSES = (
     "Metafunc",
     "Config",
     "PytestPluginManager",
+    # the collector and fixture classes (#587); reads and type hints still pass
+    "Collector",
+    "Class",
+    "Module",
+    "Package",
+    "File",
+    "Dir",
+    "Directory",
+    "DoctestItem",
+    "FixtureDef",
+    "TerminalReporter",
 )
 _CLASS = rf"(?:{'|'.join(PYTEST_CLASSES)})\b"
 _OBJECT = rf"\bpytest\s*\.\s*{_CLASS}"
