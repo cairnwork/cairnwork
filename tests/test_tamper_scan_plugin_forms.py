@@ -186,3 +186,52 @@ def test_a_line_of_hundreds_of_literals_is_read_quickly_and_paid_from_the_budget
 
     assert string_built_rules(line, ScanBudget(read=100)) == ["scan_budget"]
     assert string_built_rules(line, ScanBudget()) == []
+
+
+# Round 4: empty pieces and one-character pieces cost nothing extra and cannot stretch a window.
+def test_empty_pieces_are_dropped_and_a_run_spans_a_bounded_number_of_pieces():
+    from cairnwork.tamper_scan_plugin import _WINDOW, _runs
+
+    assert _runs([""] * 16000) == set()
+    runs = _runs(["a"] * 5000)
+    assert len(runs) <= _WINDOW + 1  # one run per length, 1.._WINDOW (and one of the full window)
+    assert max(map(len, runs)) <= _WINDOW
+
+
+def test_sixteen_thousand_empty_literals_are_cheap_and_paid_from_the_budget():
+    import time
+
+    from cairnwork.tamper_scan_plugin import string_built_rules
+
+    line = "x = getattr(x, " + "+".join(["''"] * 16000) + ")"
+    start = time.monotonic()
+    assert string_built_rules(line) == []
+    assert time.monotonic() - start < 1.0  # 5 s with the window on length alone
+    assert string_built_rules(line, ScanBudget(read=1000)) == ["scan_budget"]
+    budget = ScanBudget()
+    string_built_rules(line, budget)
+    assert budget.read_left <= (1 << 21) - 16000  # the pieces were paid before any run
+
+
+def test_an_empty_piece_inside_a_refused_name_does_not_hide_it():
+    assert "pytest_hook_impl" in scan("globals()['pytest_pyfunc' + \"\" + '_call'] = f")
+    assert "pytest_hook_impl" in scan("globals()[f\"pytest_{''}pyfunc\" '' '_call'] = f")
+    assert "pytest_internals" in scan("getattr(cfg, 'plugin' + '' + '' + 'manager')")
+
+
+def test_the_pieces_are_paid_by_count_times_window_before_any_run_is_built():
+    from cairnwork.tamper_scan_plugin import _WINDOW, string_built_rules
+
+    line = "x = getattr(x, " + ",".join(["'ab'"] * 300) + ")"
+    budget = ScanBudget()
+    before = budget.read_left
+    string_built_rules(line, budget)
+    assert before - budget.read_left >= 300 * _WINDOW
+    assert string_built_rules(line, ScanBudget(read=300 * _WINDOW - 1)) == ["scan_budget"]
+
+
+def test_empty_pieces_are_not_charged_a_window_each():
+    from cairnwork.tamper_scan_plugin import string_built_rules
+
+    line = "x = getattr(x, " + "+".join(["''"] * 16000) + ")"
+    assert string_built_rules(line, ScanBudget(read=20000)) == []  # one each, no window

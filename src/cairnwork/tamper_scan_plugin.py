@@ -97,14 +97,20 @@ _NAMES = (  # a name from the rules above, as a bare word, by the rule that refu
 
 _WINDOW = 64  # a refused name is under 40 characters: more than this before a piece cannot hold one
 assert max(map(len, HOOK_NAMES)) < _WINDOW // 2
+_PAD = "x" * _WINDOW  # what one piece may cost: a window
 
 
 def _runs(pieces: list[str]) -> set[str]:
-    """Runs of adjacent literals that can hold a name (the part before the last piece is short)."""
+    """Runs of adjacent literals that can hold a name (the part before the last piece is short).
+
+    Empty pieces add nothing and are dropped; a run also spans at most ``_WINDOW`` pieces, so a
+    line of one-character pieces is bounded too.
+    """
+    pieces = [piece for piece in pieces if piece]
     runs: set[str] = set()
     for i in range(len(pieces)):
         run = ""
-        for piece in pieces[i:]:
+        for piece in pieces[i : i + _WINDOW]:
             if len(run) > _WINDOW:
                 break
             run += piece
@@ -115,12 +121,16 @@ def _runs(pieces: list[str]) -> set[str]:
 def string_built_rules(text: str, budget: ScanBudget | None = None) -> list[str]:
     """Rule names for a line that gives a refused name as string(s) to a dynamic lookup.
 
-    The runs read are paid from ``budget`` (``scan_budget`` when it runs out).
+    What is read is paid from ``budget`` (``scan_budget`` when it runs out): first the pieces,
+    before any run is built, then the runs.
     """
     if not _DYNAMIC_ACCESS.search(text):
         return []
     pieces = [_FSTRING_PIECE.sub(r"\1", a or b) for a, b in _LITERAL.findall(text)]
-    runs = _runs(pieces)
+    live = [piece for piece in pieces if piece]  # after the f-string pieces are put in
+    if budget is not None and not (budget.read(pieces) and budget.read([_PAD] * len(live))):
+        return [SCAN_BUDGET]  # paid before any run is built: every piece may start a window
+    runs = _runs(live)
     if budget is not None and not budget.read(runs):
         return [SCAN_BUDGET]
     return [name for name, pattern in _NAMES if any(pattern.search(run) for run in runs)]
