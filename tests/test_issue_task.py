@@ -186,6 +186,7 @@ def test_crlf_and_lf_hash_the_same():  # AC3
     lf = f"x\n\n```eia-task\n{pretty}\n```\n"
     assert issue_task.task_block_sha256(crlf(lf)) == issue_task.task_block_sha256(lf)
     assert issue_task.task_block_sha256(crlf(lf)) == hashlib.sha256(pretty.encode()).hexdigest()
+    assert parse_task_block(crlf(lf)).block_sha256 == parse_task_block(lf).block_sha256
 
 
 def test_crlf_block_is_removed_from_the_worker_text():
