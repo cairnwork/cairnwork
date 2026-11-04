@@ -8,7 +8,8 @@ checkout's import paths first on ``sys.path``, calls each case and writes, per c
 ``{"file": <module __file__, resolved>, "cases": {id: <outcome>}}`` to the output path, once. An
 outcome is ``{"ok": value}`` (floats tagged, blackbox_values.py) or ``{"error": <type name>,
 "message": <str(exception), cut>}``; a class case is ``{"steps": [outcome, ...]}``, or
-``{"init": outcome}`` when the constructor raised.
+``{"init": outcome}`` when the constructor raised. Its interpreter runs with ``PYTHONHASHSEED``
+set to ``HASH_SEED`` (blackbox_exec), so one candidate gives one output.
 
 It never says pass or fail: the owner compares the output with answers it alone holds
 (blackbox.py). The candidate shares this interpreter and can forge the output; that is why the
@@ -21,6 +22,11 @@ import os
 from pathlib import Path
 
 MODULE = "_cairnwork_blackbox_runner"
+# The interpreter reads PYTHONHASHSEED once, at start, so blackbox_exec puts it in the run's
+# environment (#815). Without it a function that returns a set's or a dict-of-sets' iteration order
+# gives another list on each run (AMICI-dev/AMICI#3329) and the exact comparison fails at random.
+# It only makes a re-run repeatable: the seed is fixed, public and not part of the receipt.
+HASH_SEED = "0"
 INPUT_NAME = "blackbox-input.json"
 OUTPUT_NAME = "blackbox-out.json"
 
