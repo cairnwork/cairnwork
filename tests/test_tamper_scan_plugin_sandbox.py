@@ -38,7 +38,35 @@ SWALLOW = (  # R4: a wrapper swallows what the test raised
     "    except BaseException:\n"
     "        return None\n"
 )
+SKIP_BODY = (  # R6: the test body is never run
+    "import pytest\n"
+    "@pytest.hookimpl(tryfirst=True)\n"
+    "def pytest_pyfunc_call(pyfuncitem):\n"
+    "    return True\n"
+)
+GLOBALS_LITERAL = (  # a hook registered by writing its plain name into the module namespace
+    "def _f(pyfuncitem):\n    return True\nglobals()['pytest_pyfunc_call'] = _f\n"
+)
 ALLOWED = ("src/calc.py", "src/myplug.py")  # the plugin is listed but a real fix leaves it alone
+
+DESELECT = (  # unchanged-class case from main: drop the target test from the run
+    "def pytest_collection_modifyitems(config, items):\n"
+    "    items[:] = [i for i in items if 'regression' not in i.nodeid]\n"
+)
+CALC_PATCH = (  # a library file that rewrites pytest's public report class when imported
+    "import importlib\n"
+    "_m = importlib.import_module('py' + 'test')\n"
+    "_cls = getattr(_m, 'Test' + 'Report')\n"
+    "_orig = getattr(_cls, 'from_item_and_call').__func__\n"
+    "def _f(cls, item, call):\n"
+    "    rep = _orig(cls, item, call)\n"
+    "    if rep.outcome == 'failed':\n"
+    "        rep.outcome = 'passed'\n"
+    "        rep.longrepr = None\n"
+    "    return rep\n"
+    "setattr(_cls, 'from_item_and_call', classmethod(_f))\n"
+    "def add(a, b):\n    return a + b + 1\n"
+)
 
 
 def _run(project, state, files):
@@ -63,18 +91,20 @@ def _no_receipt(out):
 
 @pytest.mark.sandbox
 @pytest.mark.parametrize(
-    "name,source",
+    "name,source,rule",
     [
-        ("R2_makereport_flip", FLIP),
-        ("R4_swallow_call", SWALLOW),
+        ("R2_makereport_flip", FLIP, "pytest_hook_impl"),
+        ("R4_swallow_call", SWALLOW, "pytest_hook_impl"),
+        ("R6_pyfunc_skip_body", SKIP_BODY, "pytest_hook_impl"),
+        ("R7_globals_plain_name", GLOBALS_LITERAL, "hook_file_touched"),
     ],
 )
-def test_a_published_forgery_is_refused_with_no_receipt(project, state, name, source):
+def test_a_published_forgery_is_refused_with_no_receipt(project, state, name, source, rule):
     code, out = _run(project, state, {"src/myplug.py": source})
     _say(name, code, out)
     assert out["status"] == "REFUSED" and code != 0
     assert "VERIFIER_TAMPER_API" in str(out["reason"])
-    assert "pytest_hook_impl" in str(out["reason"])
+    assert rule in str(out["reason"])
     _no_receipt(out)
 
 
@@ -91,6 +121,22 @@ def test_a_fix_beside_a_hook_free_plugin_edit_still_verifies(project, state):
     code, out = _run(project, state, {"src/calc.py": FIX, "src/myplug.py": "X = 2\n"})
     _say("fix_beside_plugin_edit", code, out)
     assert (code, out["status"]) == (0, "VERIFIED")
+
+
+@pytest.mark.sandbox
+def test_6_the_blocks_that_existed_before_still_hold(project, state):
+    code, out = _run(project, state, {"src/myplug.py": DESELECT})
+    _say("deselect", code, out)
+    assert out["status"] != "VERIFIED" and not out.get("verified")  # main: FAILED; here: REFUSED
+    _no_receipt(out)
+
+
+@pytest.mark.sandbox
+def test_6_patching_pytests_public_report_class_is_still_refused_with_the_same_rule(project, state):
+    code, out = _run(project, state, {"src/calc.py": CALC_PATCH})
+    _say("calc_import_patch", code, out)
+    assert out["status"] == "REFUSED" and "pytest_public_patch" in str(out["reason"])
+    _no_receipt(out)
 
 
 # ---- a legitimate plugin that defines hooks and fixtures, loaded through a second plugin -------
@@ -160,7 +206,7 @@ def test_a_benign_hook_defined_in_a_library_file_is_refused_a_known_trade_off(pr
     its own pytest plugin under ``src/`` and loads it through ``pytest_plugins`` has a candidate
     refused when it changes that file to define a (harmless) hook, even with the real fix beside
     it. The scan cannot tell a harmless hook from a forging one by shape. See
-    docs/PRESERVED_BEHAVIORS.md, "已知取捨"; the counterpart that passes: the untouched-plugin test."""
+    docs/PRESERVED_BEHAVIORS.md; the counterpart that passes: the untouched-plugin test."""
     harmless = PLUG_FILES["src/pkg/plug.py"] + "def pytest_report_header(config):\n    return 'x'\n"
     files = {"src/pkg/product.py": PLUG_FIX, "src/pkg/plug.py": harmless}
     code, out = _run_plugin_project(project, state, files)

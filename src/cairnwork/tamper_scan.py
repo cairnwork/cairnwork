@@ -39,8 +39,7 @@ file a literal sensitive key (``sys.modules["pytest"] = fake``) is still refused
 Since #821 the pytest rules reach every candidate ``.py`` (a library file a protected conftest loads
 as a plugin runs inside pytest): ``pytest_hook_impl`` (not in a conftest) and ``pytest_internals``,
 which allows a type-hint import of a public fixture class from ``_pytest``. The new rules are in
-tamper_scan_plugin.py. Accepted false blocks: a plugin's non-fixture ``_pytest`` type imports, and a
-task that edits a file defining a hook.
+tamper_scan_plugin.py. False blocks: a plugin's non-fixture ``_pytest`` type import, a hook edit.
 """
 
 from __future__ import annotations
@@ -61,6 +60,7 @@ from cairnwork.tamper_scan_plugin import (
     OPTION_WRITE,
     PYTEST_INTERNALS,
     file_rules,
+    setattr_forge,
 )
 from cairnwork.tamper_scan_pytest import (
     PATCHED_INTERNALS,
@@ -229,7 +229,8 @@ def _imported_names(clause: str) -> list[tuple[str, str | None]]:
 def _hits(rule: Rule, text: str) -> bool:
     if rule.allow is not None and rule.allow.match(text):
         return False  # a whole line of an honest shape
-    return bool(rule.pattern.search(text))
+    forge = rule.name == "code_object_forge" and setattr_forge(text)
+    return forge or bool(rule.pattern.search(text))
 
 
 def _extra_rules(text: str, aliases: Table, in_tests: bool, budget: ScanBudget) -> list[str]:

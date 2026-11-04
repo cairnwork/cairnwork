@@ -24,7 +24,7 @@ from verify_helpers import BAD, base_of, candidate, verify
 pytestmark = pytest.mark.sandbox
 
 PLANT = (
-    "import importlib.util, marshal, os, sys\n"
+    "import importlib.abc, importlib.util, marshal, os, sys\n"
     "from pathlib import Path\n"
     "_d = os.path.join(os.environ['HOME'], 'alt')\n"
     "{redirect}\n"
@@ -33,7 +33,8 @@ PLANT = (
     "_data = (importlib.util.MAGIC_NUMBER + bytes(4)\n"
     "         + (int(_st.st_mtime) & 0xFFFFFFFF).to_bytes(4, 'little')\n"
     "         + (_st.st_size & 0xFFFFFFFF).to_bytes(4, 'little')\n"
-    "         + marshal.dumps(compile('EXPECTED = 6\\n', str(_src), 'exec')))\n"
+    "         + marshal.dumps(importlib.abc.InspectLoader.source_to_code(\n"
+    "             b'EXPECTED = 6\\n', str(_src))))\n"
     "for _p in {{str(_src), os.path.realpath(_src)}}:\n"
     "    _pyc = importlib.util.cache_from_source(_p)\n"
     "    os.makedirs(os.path.dirname(_pyc), exist_ok=True)\n"

@@ -20,11 +20,14 @@ run through ``exec``/``eval``, a helper in another file). Refused with ``VERIFIE
 - ``hook_file_touched``: a changed ``.py`` file that binds a known pytest or pluggy hook name, at
   any depth, or holds a string equal to one (``globals()["pytest_x"] = f``), in its base or its
   head version (an unchanged line may then change what runs). A version that does not parse is
-  searched as text for the names (whole words). Accepted false block: a task that fixes a pytest
+  searched as text for the names (whole words). Also bound: keyword names (``update(pytest_x=f)``),
+  ``match`` capture names and bytes literals. Accepted false block: a task that fixes a pytest
   plugin project itself. Not refused: ``pytest_my_helper``, or a log text that merely holds a name.
 - Not followed: a name put together from string pieces (``getattr(cfg, "plugin" + "manager")``),
   reversed, ``replace``d, or used through an alias. A scan for those needs its own bounded design
-  (STRING-BUILT-v1, not part of this change). Hook ownership is judged at run time (PR-2) by
+  (STRING-BUILT-v1, not part of this change). A refused name handed whole to a dynamic lookup is
+  not read either; a library file that holds an internals name in an ordinary string is an
+  accepted false block. Hook ownership is judged at run time (PR-2) by
   which file holds the function, however its name was made.
 
 Not scanned for (measured too common in honest code, DESIGN of #821): ``exec(`` and ``eval(``.
@@ -52,10 +55,29 @@ CODE_FORGE = (
     r"\bFunctionType\s*\(|\bCodeType\s*\(|\.\s*replace\s*\(\s*co_|\bco_filename\s*=(?!=)"
     rf"|\b__code__\s*{_ASSIGN}|\b__globals__\s*(?:\[[^\]]*\]\s*)?{_ASSIGN}"
     r"|\b__globals__\s*\.\s*(?:update|setdefault|pop|clear)\s*\("
-    r"|\bsetattr\s*\([^#;]{0,200}['\"]__(?:code|globals)__['\"]"
     r"|(?<![\w.])(?<!def\s)compile\s*\(|\bbuiltins\s*\.\s*compile\b"
     r"|=\s*compile\s*(?:[;#,)]|$)"  # an alias of the builtin
 )
+_FORGE_TOKENS = re.compile(r"""\bsetattr\s*\(|['"]__(?:code|globals)__['"]|[#;]""")
+
+
+def setattr_forge(line: str) -> bool:
+    """``setattr(`` then ``'__code__'``/``'__globals__'`` with no ``#`` or ``;`` between, one pass.
+
+    The same lines as the old ``[^#;]*`` pattern between them, without its quadratic cost.
+    """
+    seen = False
+    for match in _FORGE_TOKENS.finditer(line):
+        token = match.group()
+        if token in "#;":
+            seen = False
+        elif token.startswith("setattr"):
+            seen = True
+        elif seen:
+            return True
+    return False
+
+
 DYNAMIC_LOADER = r"\b(?:SourceFileLoader|spec_from_file_location|run_path|run_module)\b"
 
 HOOK_NAMES = frozenset(  # _pytest.hookspec of pytest 9.1.1 (pluggy 1.7.0), plus pytest_plugins
@@ -95,8 +117,15 @@ def hook_names_bound(source: bytes) -> set[str]:
             bound.add(node.attr)
         elif isinstance(node, ast.ExceptHandler) and node.name:
             bound.add(node.name)
-        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-            bound.add(node.value)  # a hook name written out: globals()["pytest_x"] = f
+        elif isinstance(node, ast.keyword) and node.arg:
+            bound.add(node.arg)  # update(pytest_x=f), dict(pytest_x=f)
+        elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
+            bound.add(node.name)  # case pytest_x:
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            bound.add(node.rest)
+        elif isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes)):
+            value = node.value  # a hook name written out: globals()["pytest_x"] = f
+            bound.add(value if isinstance(value, str) else value.decode("latin-1"))
     return bound & HOOK_NAMES
 
 
@@ -148,7 +177,7 @@ def file_rules(repo: Any, base: str, head: str, budget: ScanBudget) -> list[tupl
             data = blobs.get(oid)
             if data is None:
                 continue
-            if not budget.tokenize(data):
+            if oid == old and not budget.tokenize(data):  # the new blob was paid by the line scan
                 return [*found, (path, "scan_budget")]
             if _touches_hooks(data):
                 found.append((path, "hook_file_touched"))

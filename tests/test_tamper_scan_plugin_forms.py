@@ -1,13 +1,17 @@
 """#821 L1: a hook name written out as a string, scan cost of the file rules, newer syntax."""
 # ruff: noqa: E501
 
+import random
+import re
+import time
+
 import pytest
 from conftest import commit_change, git
 
 import cairnwork.tamper_scan as tamper_scan
-from cairnwork.tamper_scan import scan_patch
+from cairnwork.tamper_scan import _hits, scan_patch
 from cairnwork.tamper_scan_budget import MAX_READ, ScanBudget
-from cairnwork.tamper_scan_plugin import file_rules
+from cairnwork.tamper_scan_plugin import file_rules, hook_names_bound, setattr_forge
 
 LIB = "src/myplug.py"
 FN = "def _f(pyfuncitem):\n    return True\n"
@@ -107,3 +111,80 @@ def test_blobs_of_many_files_are_read_by_one_cat_file(repo, monkeypatch):
     head = commit_change(repo, {f"src/m{i}.py": f"x{i} = {i}\n" for i in range(30)})
     assert scan_patch(repo, base, head) == []
     assert [c for c in calls if c[0] == "cat-file"] == [("cat-file", "--batch")]
+
+
+# --- setattr(... '__code__') in one linear pass (#848 round 1) ---
+_OLD_SETATTR = re.compile(r"""\bsetattr\s*\([^#;]*['"]__(?:code|globals)__['"]""")
+
+
+def _forge(line):
+    return any(_hits(r, line) for r in tamper_scan.RULES if r.name == "code_object_forge")
+
+
+@pytest.mark.parametrize("gap", [0, 1, 200, 201, 5000])
+@pytest.mark.parametrize("attr", ["__code__", "__globals__"])
+def test_setattr_forge_far_gap_is_refused(gap, attr):
+    assert _forge("setattr(f, " + "x" * gap + f" '{attr}', g)")
+    assert setattr_forge("setattr(f," + " " * gap + f'"{attr}", g)')
+
+
+@pytest.mark.parametrize("sep", ["#", ";"])
+def test_setattr_forge_separator_is_not_refused(sep):
+    assert not setattr_forge(f"setattr(f, 1 {sep} '__code__')")
+    assert not setattr_forge(f"setattr(f {sep} " + "x" * 300 + " '__code__')")
+    assert setattr_forge(f"setattr(f {sep} 1); setattr(f, '__code__', g)")  # a later setattr
+
+
+def test_setattr_forge_reports_code_object_forge_with_line():
+    repo_line = "setattr(f, " + " " * 300 + "'__code__', g)"
+    assert [f.rule for f in tamper_scan.scan_added_lines("src/a.py", [(7, repo_line)])] == [
+        "code_object_forge"
+    ]
+
+
+def test_setattr_forge_many_setattr_one_line_is_fast():
+    line = "setattr(" * 20000
+    start = time.perf_counter()
+    assert not setattr_forge(line)
+    assert setattr_forge(line + " '__code__'")
+    assert time.perf_counter() - start < 1
+
+
+def test_setattr_forge_agrees_with_old_pattern():
+    rng = random.Random(848)
+    parts = ["setattr(", "setattr (", " ", "x", "#", ";", "'__code__'", '"__globals__"', "__code__"]
+    for _ in range(2000):
+        line = "".join(rng.choice(parts) for _ in range(rng.randint(1, 14)))
+        assert setattr_forge(line) == bool(_OLD_SETATTR.search(line)), line
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "setattr(" + " " * 240 + "g, '__code__', h.__code__)",
+        "setattr(" + "(g if True else g)" * 12 + ", '__code__', h.__code__)",
+    ],
+)
+def test_setattr_forge_long_first_argument_is_refused(line):
+    assert setattr_forge(line)
+    assert _forge(line)
+
+
+def test_setattr_forge_a_separator_resets_and_a_literal_is_needed(monkeypatch):
+    """The two parts of the scan each matter: the reset on ``#``/``;`` and the literal hit."""
+    assert not setattr_forge("setattr(f); g('__code__')")  # reset kills the first setattr
+    assert not setattr_forge("setattr(f, x)")  # no literal, no hit
+    assert not setattr_forge("'__code__'")  # a literal with no setattr before it
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "f(pytest_pyfunc_call=1)\n",
+        "match 1:\n    case pytest_pyfunc_call:\n        pass\n",
+        "x = b'pytest_pyfunc_call'\n",
+        "match {}:\n    case {**pytest_pyfunc_call}:\n        pass\n",
+    ],
+)
+def test_hook_names_bound_reads_keyword_match_and_bytes_forms(source):
+    assert hook_names_bound(source.encode()) == {"pytest_pyfunc_call"}
