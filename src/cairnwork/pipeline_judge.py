@@ -20,8 +20,10 @@ from cairnwork.deferred_store import consume
 from cairnwork.deferred_tests import (
     BaseUncomparable,
     TestCommitRejected,
+    TestFiles,
     base_comparison,
     check_roots_on_base,
+    deleted_of,
     ensure_test_commit,
     never_seen,
     new_tests,
@@ -60,7 +62,7 @@ def tests_with_teeth(task, specs, result, ctx: VerifyContext) -> tuple[str, ...]
     (DEFERRED_TESTS_NOT_RUN, #660), and BaseUncomparable when the base cannot tell (#234)."""
     check_roots_on_base(task.repo, task.base_commit, task.test_roots)  # before any base run
     ensure_test_commit(task.repo, task.test_commit, task.test_store)
-    paths = test_paths(task.repo, task.base_commit, task.test_commit, task.test_roots)
+    paths, deleted = test_paths(task.repo, task.base_commit, task.test_commit, task.test_roots)
     targets = new_tests(task.repo, task.base_commit, task.test_commit, paths)  # may refuse
     if missing := untargeted(paths, targets, (t for spec in specs for t in spec.targets)):
         hint = "name each such file, or each of its new or changed tests, as a verifier target"
@@ -73,7 +75,7 @@ def tests_with_teeth(task, specs, result, ctx: VerifyContext) -> tuple[str, ...]
         raise BaseUncomparable(comparison)
     if comparison.kind != "TEETH":
         raise TestCommitRejected(comparison.code, comparison.detail)
-    return paths
+    return TestFiles(paths, deleted)
 
 
 def judge_candidate(
@@ -126,7 +128,11 @@ def judge_candidate(
         return
     ids, observations, gate_note = _contract(task, runs, checks, declared, binding, result)
     spec = AcceptanceSpec(
-        task_id, digest, ids, tuple(task.allowed_files) + test_files, task.allow_deletions
+        task_id,
+        digest,
+        ids,
+        tuple(task.allowed_files) + test_files + deleted_of(test_files),
+        task.allow_deletions or bool(deleted_of(test_files)),  # a test file the tests removed
     )
     reach("NOTARIZING")
     verdict = notary.notarize(

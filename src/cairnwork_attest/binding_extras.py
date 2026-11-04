@@ -44,6 +44,15 @@ def _path_list(value: Any) -> bool:
     )
 
 
+def _deleted_paths(value: Any) -> bool:
+    """#798: the test files the test commit deleted, sorted and distinct (any number)."""
+    return (
+        isinstance(value, list)
+        and all(isinstance(p, str) and p and not p.startswith("/") for p in value)
+        and value == sorted(set(value))
+    )
+
+
 def _commitment(value: Any) -> bool:
     """#303: the salted hash of a blackbox declaration; a receiver pins what it recomputes from the
     declaration file (``cairnwork-verify blackbox-commitment``)."""
@@ -60,6 +69,7 @@ _SHA256 = re.compile(r"sha256:[0-9a-f]{64}")
 _CHECK_ID = re.compile(r"[a-z0-9_-]{1,40}")  # blackbox.py's check id
 EXTRAS = (
     Extra("import_paths", [], _path_list, "IMPORT_PATHS_MISMATCH"),
+    Extra("deleted_test_paths", [], _deleted_paths, "DELETED_TEST_PATHS_MISMATCH"),
     Extra("blackbox_commitment", "", _commitment, "BLACKBOX_COMMITMENT_MISMATCH"),
     Extra(
         "protection",
@@ -79,7 +89,33 @@ def binding_problem(binding: Mapping[str, Any]) -> str:
             value = binding[extra.key]
             if not extra.shape(value) or value == extra.empty:
                 return f"binding {extra.key} has the wrong shape or is empty"
+    if set(binding.get("deleted_test_paths", [])) & set(binding.get("test_paths", [])):
+        return "binding deleted_test_paths and test_paths share a path"  # #798
     return ""
+
+
+# #798: ``deleted_test_paths`` is the test files the test commit deleted, sorted and distinct and
+# never also in ``test_paths``. The executed tree is the head with those removed and the tests laid
+# over it (deferred_overlay.overlay_tree); Core's manifest then shows each as a DELETE.
+def deleted_paths(binding: dict[str, Any]) -> list[str]:
+    return binding.get("deleted_test_paths", [])
+
+
+def all_paths(binding: dict[str, Any]) -> list[str]:
+    """Every path the test commit changes: the laid and the deleted ones, sorted."""
+    return sorted([*binding["test_paths"], *deleted_paths(binding)])
+
+
+def manifest_problem(claimed: dict[Any, Any], binding: dict[str, Any]) -> VerifyResult | None:
+    """Confidential mode: each deleted test path is a DELETE entry of Core's manifest and a safe
+    path (the receiver cannot read the test commit here, so it checks the claim, not the file)."""
+    for path in deleted_paths(binding):
+        parts, entry = path.split("/"), claimed.get(path)
+        if {"", ".", ".."} & set(parts) or ".git" in {p.casefold() for p in parts}:
+            return _fail("OVERLAY_UNSUPPORTED_ENTRY", f"deleted test path {path!r}")
+        if not isinstance(entry, dict) or entry.get("change_type") != "DELETE":
+            return _fail("HEAD_TREE_MISMATCH", f"deleted test path {path} is not a deletion")
+    return None
 
 
 def policy_problem(policy: Mapping[str, Any]) -> str:

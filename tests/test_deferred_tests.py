@@ -40,7 +40,7 @@ FIX = {"src/calc.py": "def add(a, b):\n    return a + b\n"}
 CHECK = (("pytest", ("python3", "-m", "pytest", "-q", "tests/test_regression.py")),)
 
 
-def make_test_commit(project, files):
+def make_test_commit(project, files, delete=()):
     """A test commit on the base that exists only in the origin, as on GitHub: the
     project (Cairnwork's repository) gets it only when Cairnwork fetches it."""
     base = git(project, "rev-parse", "HEAD")
@@ -54,7 +54,7 @@ def make_test_commit(project, files):
     git(work, "config", "user.email", "t@e")
     git(work, "config", "user.name", "t")
     git(work, "checkout", "-q", "--detach", base)
-    test_commit = commit_change(work, files, message="tests")
+    test_commit = commit_change(work, files, delete=delete, message="tests")
     git(work, "push", "-q", "origin", f"{test_commit}:refs/heads/tests-{test_commit[:8]}")
     return base, test_commit
 

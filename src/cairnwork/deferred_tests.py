@@ -29,6 +29,14 @@ from pathlib import Path, PurePosixPath
 
 from cairnwork.base_teeth import base_teeth
 from cairnwork.deferred_nodes import test_functions
+from cairnwork.deferred_overlay import (  # noqa: F401  (re-exported: the one place importers look)
+    _REGULAR,
+    OVERLAY_RULE,
+    TestCommitRejected,
+    TestFiles,
+    deleted_of,
+    overlay_tree,
+)
 from cairnwork.gitcmd import OID, GitCommandError, run_git
 from cairnwork.issue_task import test_target
 from cairnwork.provenance import trailers
@@ -37,8 +45,6 @@ from cairnwork.workspace import ATTEMPT_REF_PREFIX
 from cairnwork_protocol.ids import MAX_ID_BYTES
 
 _IDENTITY = ("-c", "user.name=Cairnwork", "-c", "user.email=cairnwork@localhost")
-_REGULAR = ("100644", "100755")
-OVERLAY_RULE = "overlay-v1"  # how the tests are laid over a candidate (#229); bound in receipts
 # pytest reads these on its own; a test commit carries tests, not configuration.
 # Same names the candidate may not touch (verifiers.protected_verifier_inputs). __init__.py
 # stays allowed: it runs only when the tests themselves import their package.
@@ -49,12 +55,6 @@ _NOT_TEST_FILES = frozenset(
         "setup.py", "sitecustomize.py", "usercustomize.py",
     }
 )  # fmt: skip
-
-
-class TestCommitRejected(Exception):
-    def __init__(self, code: str, detail: str = "") -> None:
-        super().__init__(f"{code}: {detail}" if detail else code)
-        self.code = code
 
 
 def never_seen(repo: Path, test_commit: str) -> None:
@@ -127,8 +127,9 @@ def check_roots_on_base(repo: Path, base: str, roots: tuple[str, ...]) -> None:
 
 def test_paths(
     repo: Path, base: str, test_commit: str, roots: tuple[str, ...] = ("tests",)
-) -> tuple[str, ...]:
-    """The files the test commit adds or changes; refuse anything but plain test files, and any
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """The files the test commit adds or changes, and those it deletes (#798; a move is both);
+    refuse anything but plain test files, and any
     path that can never pass (#656): one over Core's text limit (receipts and the acceptance spec
     carry each path), or a Python file no verifier target can name (``untargeted`` requires it)."""
     try:
@@ -142,13 +143,13 @@ def test_paths(
     if parents[1:] != [base]:
         raise TestCommitRejected("TEST_COMMIT_NOT_ON_BASE", "its only parent must be the base")
     fields = raw.split("\0")
-    paths, target = [], test_target(roots)
+    paths, deleted, target = [], [], test_target(roots)
     for meta, path in zip(fields[0::2], fields[1::2], strict=False):
-        new_mode, status = meta.split()[1], meta.split()[4]
+        old_mode, new_mode, status = meta.split()[0][1:], meta.split()[1], meta.split()[4]
         posix = PurePosixPath(path)
         if (
-            status not in ("A", "M")
-            or new_mode not in _REGULAR
+            status not in ("A", "M", "D")
+            or (old_mode if status == "D" else new_mode) not in _REGULAR
             or not path.startswith(tuple(f"{r}/" for r in roots))
             or posix.name.casefold() in _NOT_TEST_FILES
             or posix.name.casefold().endswith(".pth")
@@ -163,10 +164,10 @@ def test_paths(
             raise TestCommitRejected(
                 "TEST_COMMIT_SCOPE", f"no verifier target can name {path!r} (names: [A-Za-z0-9_-])"
             )
-        paths.append(path)
+        (deleted if status == "D" else paths).append(path)
     if not paths:
         raise TestCommitRejected("TEST_COMMIT_EMPTY")
-    return tuple(paths)
+    return tuple(paths), tuple(deleted)
 
 
 def new_tests(repo: Path, base: str, test_commit: str, paths: tuple[str, ...]) -> frozenset[str]:
@@ -349,33 +350,6 @@ def not_run(runs, targets) -> list[str]:
     return sorted(set(targets) - ran)
 
 
-def overlay_tree(
-    repo: Path, head: str, test_commit: str, paths: tuple[str, ...], index: Path
-) -> str:  # fmt: skip
-    """``overlay-v1`` (#229): head's tree with each test path replaced or added by its regular
-    file (100644/100755) in test_commit; symlinks, gitlinks and paths with ``..`` or ``.git`` are
-    refused. Plumbing only, in the private index ``index`` (read-tree, update-index --cacheinfo,
-    write-tree), so worktree, attributes and config play no part: the verifier and the receiver
-    (cairnwork_attest.verify_binding) rebuild the same tree id. Returns it."""
-    try:
-        run_git(repo, "read-tree", head, index_file=index)
-        for path in paths:
-            parts = path.split("/")
-            if {"", ".", ".."} & set(parts) or ".git" in {p.casefold() for p in parts}:
-                raise TestCommitRejected("OVERLAY_UNSUPPORTED_ENTRY", repr(path))
-            meta, _, name = run_git(repo, "ls-tree", "-z", test_commit, "--", path).partition("\t")
-            mode, kind, blob = (meta.split() + ["", "", ""])[:3]
-            if name.rstrip("\0") != path or kind != "blob" or mode not in _REGULAR:
-                raise TestCommitRejected("OVERLAY_UNSUPPORTED_ENTRY", f"{mode or '-'} {path!r}")
-            run_git(
-                repo, "update-index", "--add", "--cacheinfo", f"{mode},{blob},{path}",
-                index_file=index,
-            )  # fmt: skip
-        return run_git(repo, "write-tree", index_file=index).strip()
-    except GitCommandError as exc:
-        raise TestCommitRejected("TEST_OVERLAY_FAILED", str(exc)) from exc
-
-
 def lay_tests_over(
     repo: Path, candidate: str, test_commit: str, paths: tuple[str, ...], attempt_id: str,
     run_root: Path, provenance: dict | None = None,
@@ -385,7 +359,7 @@ def lay_tests_over(
     if index.exists() or index.is_symlink():
         raise TestCommitRejected("TEST_OVERLAY_FAILED", f"{index} already exists")
     try:
-        tree = overlay_tree(repo, candidate, test_commit, paths, index)
+        tree = overlay_tree(repo, candidate, test_commit, paths, index, deleted_of(paths))
         message = f"Cairnwork attempt {attempt_id}: tests from {test_commit}{trailers(provenance)}"
         head = run_git(repo, *_IDENTITY, "commit-tree", tree, "-p", candidate, "-m", message)
         head = head.strip()
