@@ -75,8 +75,9 @@ def test_ac1_mismatch_writes_nothing(fx: dict[str, Any]) -> None:
     with pytest.raises(OutcomesError, match="OUTCOME_RECORD_MISMATCH"):
         record_call(fx["led"], verified(fx, attempt_id="nope"), inputs(fx), fx["db"])
     failed = {"status": "FAILED", "task_id": "t", "attempt_id": "none", "reason": "x"}
-    assert record_call(fx["led"], failed, inputs(fx), fx["db"]) == "ADDED"  # no row: allowed
-    assert len(fx["led"].read_text().splitlines()) == 1
+    with pytest.raises(OutcomesError, match="OUTCOME_RECORD_MISMATCH"):  # Core result, no row
+        record_call(fx["led"], failed, inputs(fx), fx["db"])
+    assert not fx["led"].exists()
 
 
 def test_ac2_edit_or_removal_refused_on_read(fx: dict[str, Any]) -> None:
