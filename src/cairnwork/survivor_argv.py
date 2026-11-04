@@ -7,12 +7,18 @@ it is cut to ARGV_ITEMS arguments and ARGV_CHARS characters. The environment is 
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 
 from cairnwork.p2p_probe_log import mask_secrets
 
 ARGV_ITEMS, ARGV_CHARS, MAX_LISTED = 3, 80, 5
+RAW_CHARS = 4096  # read this much of an argv, no more: the masking cost grows with its input
+# the record delimiters of reasons.explain(), as reasons._names (no import: reasons imports this)
+_DELIMITERS = re.compile(r"[\[\];:]")
+HIDDEN = "<redacted>"
+_VALUE_FLAGS = frozenset({"-u", "-a", "-p", "--user", "--auth"})  # their next word may be a secret
 UNREAD = "(argv not read)"
 
 
@@ -31,10 +37,23 @@ class Survivors(int):
         return Survivors(int(self) + other, self.argv)
 
 
+def _hide_values(words: list[str]) -> list[str]:
+    """Words after a masked value, or after -u/-a/-p, up to the next flag are hidden too: a quoted
+    value with a space in it, or ``user:password``, is more than one word once ps has joined it."""
+    out, hiding = [], False
+    for word in words:
+        hiding = hiding and not word.startswith("-")
+        out.append(HIDDEN if hiding and word != HIDDEN else word)
+        hiding = hiding or word == HIDDEN or word in _VALUE_FLAGS
+    return [w for i, w in enumerate(out) if not (i and w == HIDDEN == out[i - 1])]
+
+
 def prefix(text: str) -> str:
-    """The masked, cut form of one argv text; never raises."""
-    words = " ".join(mask_secrets(text).split()[:ARGV_ITEMS])
-    return words[:ARGV_CHARS] + ("..." if len(words) > ARGV_CHARS else "") or UNREAD
+    """The cut (RAW_CHARS), masked, then shortened form of one argv text; never raises. The order
+    matters: cutting last keeps a secret from being split, cutting first bounds the masking."""
+    words = _hide_values(mask_secrets(text[:RAW_CHARS]).split())[:ARGV_ITEMS]
+    shown = _DELIMITERS.sub("?", " ".join(words))
+    return shown[:ARGV_CHARS] + ("..." if len(shown) > ARGV_CHARS else "") or UNREAD
 
 
 def read_argv(pid: int) -> str:
@@ -42,12 +61,12 @@ def read_argv(pid: int) -> str:
     try:
         if sys.platform.startswith("linux"):
             with open(f"/proc/{pid}/cmdline", "rb") as handle:
-                return handle.read().decode("utf-8", "replace").replace("\0", " ")
+                return handle.read(RAW_CHARS).decode("utf-8", "replace").replace("\0", " ")
         done = subprocess.run(  # noqa: S603 - fixed argv, pid is an integer; no -E: no environment
             ["/bin/ps", "-ww", "-o", "args=", "-p", str(pid)],
-            capture_output=True, text=True, timeout=5, check=False,
+            capture_output=True, timeout=5, check=False,
         )  # fmt: skip
-        return done.stdout if done.returncode == 0 else ""
+        return done.stdout[:RAW_CHARS].decode("utf-8", "replace") if done.returncode == 0 else ""
     except (OSError, subprocess.SubprocessError):
         return ""
 
@@ -59,6 +78,6 @@ def note(seen: dict[int, str], pid: int) -> None:
 
 
 def listing(survivors: object) -> str:
-    """``" (argv: a b; c d)"`` for a Survivors that saw some, else ``""``."""
+    """``" (argv: a b, c d)"`` for a Survivors that saw some, else ``""``."""
     argv = getattr(survivors, "argv", ())
-    return f" (argv: {'; '.join(argv)})" if argv else ""
+    return f" (argv: {', '.join(argv)})" if argv else ""

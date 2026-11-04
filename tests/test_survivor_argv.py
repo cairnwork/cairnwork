@@ -4,6 +4,7 @@ argv, masked as the P2P log is, cut short); the count still decides, and the rul
 import os
 import subprocess
 import sys
+import time
 import uuid
 from typing import Any
 
@@ -65,7 +66,7 @@ def test_a_real_leaked_process_is_named_and_still_counted(tmp_path):
         [sys.executable, str(script)], tmp_path, env, 30, tmp_path / "log"
     )
     assert survivors == 1  # the rule is unchanged: one survivor
-    assert "-c" in survivors.argv[0] and sys.executable in survivors.argv[0]
+    assert survivors.argv[0].split()[0].startswith(sys.executable[: survivor_argv.ARGV_CHARS - 5])
     assert "leaky_marker" not in survivors.argv[0]  # third word is the cut
     assert subprocess.run(["/usr/bin/pgrep", "-f", "leaky_marker"], check=False).returncode == 1
 
@@ -94,3 +95,49 @@ def test_a_platform_shell_found_by_its_directory_is_named_too(tmp_path):
         [sys.executable, str(script)], tmp_path, env, 30, tmp_path / "log"
     )
     assert survivors >= 1 and any(a.startswith("/bin/sh -c") for a in survivors.argv)
+
+
+def test_the_raw_argv_is_cut_before_it_is_masked_so_a_huge_argument_is_quick():
+    started = time.monotonic()
+    out = survivor_argv.prefix("srv " + "a-" * 500_000)
+    assert time.monotonic() - started < 2 and len(out) <= survivor_argv.ARGV_CHARS + 3
+
+
+def test_a_secret_in_the_third_word_near_the_cut_is_masked_not_split():
+    # mask first, cut second: cut first would leave "--passwo..." or the start of the value
+    text = "x" * 55 + " --password hunter2secretvalue"
+    out = survivor_argv.prefix(text)
+    assert "hunter2" not in out and "secretvalue" not in out and "<redacted>" in out
+
+
+@pytest.mark.parametrize("text", [
+    "curl -u bob:hunter2 http://h", "curl -a hunter2 x", "srv -p hunter2 y",
+    "srv --password hunter2 more words", "srv --token=hunter2",
+])  # fmt: skip
+def test_credential_forms_in_the_first_words_are_masked(text):
+    assert "hunter2" not in survivor_argv.prefix(text) and "more" not in survivor_argv.prefix(text)
+
+
+def test_record_delimiters_are_replaced_in_each_prefix():
+    out = survivor_argv.prefix("a[b]c;d:e")
+    assert not set("[];:") & set(out)
+
+
+def test_only_the_first_listed_processes_and_the_cut_length_count(monkeypatch):
+    monkeypatch.setattr(survivor_argv, "read_argv", lambda pid: f"p{pid} " + "w" * 200)
+    seen: dict[int, str] = {}
+    for pid in range(survivor_argv.MAX_LISTED + 3):
+        survivor_argv.note(seen, pid)
+    assert len(seen) == survivor_argv.MAX_LISTED and set(seen) == set(
+        range(survivor_argv.MAX_LISTED)
+    )
+    assert all(len(v) == survivor_argv.ARGV_CHARS + 3 for v in seen.values())
+    survivor_argv.note(seen, 0)  # once each
+    assert len(seen) == survivor_argv.MAX_LISTED
+
+
+def test_a_non_utf8_argv_is_read_not_raised(monkeypatch):
+    done = subprocess.CompletedProcess([], 0, stdout=b"srv \xff\xfe go\n")
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(survivor_argv.subprocess, "run", lambda *a, **k: done)
+    assert survivor_argv.prefix(survivor_argv.read_argv(1)).startswith("srv ")
