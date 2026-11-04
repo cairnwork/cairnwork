@@ -145,7 +145,8 @@ def _own_code(info, item, _code=_checkout_code, _modules=sys.modules):
     """#797: the checkout's own code raised its own error: the innermost frame and the class of
     the OSError are both checkout code. A built-in OSError (an open() the sandbox denies) keeps
     the environment reading even when checkout code called open(). Anything that cannot be
-    established says False (#775). Helpers are bound at import, as in _Reporter."""
+    established says False (#775). The helpers, Path and os.path.realpath are bound at import;
+    rootpath.resolve(), Path methods and TracebackEntry.path are still looked up at call time."""
     try:
         cls_file = getattr(_modules.get(info.type.__module__), "__file__", None)
         return bool(cls_file) and _code(info.traceback[-1].path, item) and _code(cls_file, item)

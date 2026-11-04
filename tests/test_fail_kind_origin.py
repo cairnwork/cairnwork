@@ -6,6 +6,8 @@ under test (no fail_kind, so teeth); stdlib, site-packages, the test file and co
 import subprocess
 import sys
 
+import pytest
+
 from cairnwork import report_channel, report_guard
 
 T = "tests/test_x.py::"
@@ -16,12 +18,12 @@ LIB = (
 USE = "from lib import load\ndef test_a():\n    load()\n"
 
 
-def _run(tmp_path, files):
+def _run(tmp_path, files, target="tests/test_x.py", ini=""):
     for name, body in files.items():
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(body)
-    (tmp_path / "pytest.ini").write_text("[pytest]\npythonpath = .\n")
+    (tmp_path / "pytest.ini").write_text("[pytest]\npythonpath = .\n" + ini)
     guard = tmp_path / "guard"
     guard.mkdir()
     report_guard.install_plugin(guard)
@@ -35,7 +37,7 @@ def _run(tmp_path, files):
         }
         argv = [
             sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-c", "pytest.ini",
-            "-p", report_guard.MODULE, "tests/test_x.py",
+            "-p", report_guard.MODULE, target,
         ]  # fmt: skip
         subprocess.run(argv, cwd=tmp_path, env=env, capture_output=True, pass_fds=channel.pass_fds)
         return channel.read()
@@ -113,3 +115,38 @@ def test_a_builtin_oserror_raised_by_checkout_code_stays_env(tmp_path):
         v = _run(tmp_path / str(len(body)), {"lib.py": body, "tests/test_x.py": USE})
         assert v.outcomes == {f"{T}test_a": "failed"}
         assert v.fail_kind == {f"{T}test_a": "env"}
+
+
+@pytest.mark.parametrize("name", ["test_lib.py", "lib_test.py", "conftest.py"])
+def test_an_oserror_raised_by_a_root_level_test_named_file_stays_env(tmp_path, name):
+    """Outside any tests directory, so only the name rule keeps it out of the checkout code."""
+    body = f"from {name[:-3]} import load\ndef test_a():\n    load()\n"
+    v = _run(tmp_path, {name: LIB, "tests/test_x.py": body})
+    assert v.fail_kind == {f"{T}test_a": "env"}
+
+
+def test_an_oserror_class_and_raise_in_the_run_test_file_itself_stays_env(tmp_path):
+    """The test file is named and placed like checkout code; only the own-test-file check."""
+    body = LIB + "def test_a():\n    load()\n"
+    v = _run(tmp_path, {"check.py": body}, "check.py", "python_files = check.py\n")
+    assert v.fail_kind == {"check.py::test_a": "env"}
+
+
+def test_a_raising_frame_whose_file_does_not_exist_stays_env(tmp_path):
+    """The innermost frame names a checkout path with no file (compiled source): not code."""
+    ghost = "def load():\n    raise MissingThing(2, 'gone')\n"
+    lib = LIB.split("def load")[0] + f"exec(compile({ghost!r}, __file__ + '.ghost.py', 'exec'))\n"
+    v = _run(tmp_path, {"lib.py": lib, "tests/test_x.py": USE})
+    assert v.outcomes == {f"{T}test_a": "failed"}
+    assert v.fail_kind == {f"{T}test_a": "env"}
+
+
+def test_realpath_is_bound_when_the_plugin_is_imported(tmp_path):
+    """A test that later replaces os.path.realpath does not move the checkout boundary."""
+    head = (
+        "import os.path\nreal = os.path.realpath\n"
+        "os.path.realpath = lambda p, **k: '/elsewhere' if str(p).endswith('lib.py') else real(p)\n"
+    )
+    v = _run(tmp_path, {"lib.py": LIB, "tests/test_x.py": head + USE})
+    assert v.outcomes == {f"{T}test_a": "failed"}
+    assert v.fail_kind == {}
