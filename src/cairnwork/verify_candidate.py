@@ -56,9 +56,9 @@ from cairnwork.pipeline import (
     TaskResult,
     TaskSpec,
     check_task,
-    judge_candidate,
     tests_with_teeth,
 )
+from cairnwork.pipeline_judge import judge_candidate
 from cairnwork.recovery import _remove_leftovers
 from cairnwork.verify_context import VerifyContext
 from cairnwork.workspace import (

@@ -11,9 +11,12 @@ first (#311).
 from __future__ import annotations
 
 import shutil
+from functools import partial
 from pathlib import Path
 
 from cairnwork import protection
+from cairnwork.account_check import unusable
+from cairnwork.account_prelude import AccountUnusableBeforeRun, after_candidate_ran, busy_once_more
 from cairnwork.blackbox_judge import judge_blackbox
 from cairnwork.core_request import AcceptanceSpec, VerifierObservation
 from cairnwork.deferred_overlay import stray_deletions
@@ -34,6 +37,7 @@ from cairnwork.deferred_tests import (
 )
 from cairnwork.p2p import P2PPlan, run_plan
 from cairnwork.reasons import explain, verdict_reason
+from cairnwork.verifier_account import VerifierAccountError
 from cairnwork.verifiers import run_verifiers
 from cairnwork.verify_context import VerifyContext
 
@@ -111,10 +115,13 @@ def judge_candidate(
         # a pytest phase of this verify can be waiting for it there)
         checks, log = judge_blackbox(task.blackbox, ctx, subject, f"{result.attempt_id}-v")
         bb_logs = [str(log)] if log else []
-    runs = run_verifiers(ctx, judged, specs, f"{result.attempt_id}-v")
+    # #803: no candidate code ran as the account before this run unless a blackbox run (verify
+    # only, which judges any account error the same) came first: then a refusal is a plain error
+    first = run_verifiers if task.blackbox is None else partial(after_candidate_ran, run_verifiers)
+    runs = busy_once_more(first, ctx, judged, specs, f"{result.attempt_id}-v")
     verified_by = list(runs)  # the verifier runs alone, as the base run's check reads them
     if p2p is not None:
-        p2p_runs, result.p2p = run_plan(p2p, task, judged, result, ctx)
+        p2p_runs, result.p2p = after_candidate_ran(run_plan, p2p, task, judged, result, ctx)
         runs += p2p_runs
     # keep what came before, e.g. a failed base probe's tail (#331)
     result.logs = [*result.logs, *(str(run.log_path) for run in runs), *bb_logs]
@@ -184,3 +191,17 @@ def _contract(task, runs, checks, declared, binding, result):
         observations += (VerifierObservation(protection.GATE, artifact, digest, passed),)
         note = f" [{protection.reason(result.protection, minimum)}]"
     return ids, observations, note
+
+
+def judge_for(worker, task, specs, digest, notary, result, *args) -> None:
+    """``judge_candidate`` for the worker pipeline: a prelude refusal before any candidate code ran
+    as the account is no evidence for an isolated worker (UNCOMPARABLE, #803); otherwise the
+    infrastructure error it was."""
+    try:
+        judge_candidate(task, specs, digest, notary, result, *args)
+    except AccountUnusableBeforeRun as exc:
+        if worker.isolated is not True:
+            raise VerifierAccountError(exc.detail) from exc
+        found = unusable(exc.detail).comparison
+        result.verified, result.uncomparable = False, found.code
+        result.reason = found.worker_reason(isolated=True)
