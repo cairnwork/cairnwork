@@ -107,3 +107,10 @@ def test_the_candidate_reason_names_an_environment_error_on_a_target():
 
 def test_the_candidate_reason_is_unchanged_without_a_kind():
     assert why_not_passed(**BASE, returncode=1, fail_kind={}) == "pytest exit code 1"
+
+
+def test_a_target_skipped_on_the_base_is_not_teeth():
+    """Only ``failed`` gives teeth (a mutation to "anything but passed" must turn this red)."""
+    other = "tests/test_old.py::test_old"  # exit 1 needs some failed test in the record
+    got = judge({T1: "skipped", T2: "passed", other: "failed"}, {})
+    assert got.kind == "NO_TEETH"
