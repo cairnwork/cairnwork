@@ -125,19 +125,21 @@ def _source(item):
         return ""
 
 
-def _own_code(info, item):
+def _own_code(info, item, _path=Path, _realpath=os.path.realpath):
     """#797: the innermost frame that raised is code under test: a file inside the checkout
-    (``rootpath``) that is not a test file, a conftest or a site-packages file. Anything that
-    cannot be established says False (the caller then keeps the environment reading, #775)."""
+    (``rootpath``) that is not a test file, a conftest, a helper under a tests directory or a
+    site-packages file. Anything that cannot be established says False (the caller then keeps the
+    environment reading, #775). Path and realpath are bound at import, as in _Reporter."""
     try:
         frame = info.traceback[-1].path
         root = item.config.rootpath.resolve()
-        path = Path(os.path.realpath(str(frame)))
+        path = _path(_realpath(str(frame)))
         parts = path.relative_to(root).parts
         name = path.name
-        tests = path == Path(os.path.realpath(str(item.path)))
+        tests = path == _path(_realpath(str(item.path)))
         tests = tests or name == "conftest.py" or name.startswith("test_")
         tests = tests or name.endswith("_test.py")
+        tests = tests or any(p in ("tests", "test", "testing") for p in parts[:-1])
         pkgs = any(p in ("site-packages", "dist-packages") for p in parts)
         return path.is_file() and not tests and not pkgs
     except Exception:

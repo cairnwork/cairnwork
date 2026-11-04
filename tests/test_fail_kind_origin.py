@@ -81,3 +81,24 @@ def test_each_node_is_judged_on_its_own_innermost_frame(tmp_path):
     body = USE + "def test_b():\n    open('/nonexistent-dir-797/none.txt')\n"
     v = _run(tmp_path, {"lib.py": LIB, "tests/test_x.py": body})
     assert v.fail_kind == {f"{T}test_b": "env"}
+
+
+def test_an_oserror_raised_by_a_helper_under_a_tests_directory_stays_env(tmp_path):
+    body = "from helpers import load\ndef test_a():\n    load()\n"
+    files = {
+        "tests/helpers.py": LIB,
+        "tests/test_x.py": "import sys\nsys.path.insert(0, 'tests')\n",
+    }
+    files["tests/test_x.py"] += body
+    v = _run(tmp_path, files)
+    assert v.outcomes == {f"{T}test_a": "failed"}
+    assert v.fail_kind == {f"{T}test_a": "env"}
+
+
+def test_an_oserror_raised_in_site_packages_inside_the_checkout_stays_env(tmp_path):
+    head = "import sys\nsys.path.insert(0, 'venv/lib/site-packages')\n"
+    body = head + "from extlib import load\ndef test_a():\n    load()\n"
+    files = {"venv/lib/site-packages/extlib.py": LIB, "tests/test_x.py": body}
+    v = _run(tmp_path, files)
+    assert v.outcomes == {f"{T}test_a": "failed"}
+    assert v.fail_kind == {f"{T}test_a": "env"}
