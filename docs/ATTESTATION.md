@@ -290,7 +290,9 @@ receiver share): read head's tree into a private index, then for each test path 
 the test commit, which must be a regular file (`100644` or `100755`; symlinks, gitlinks and
 directories are refused, as are paths with an empty, `.` or `..` component or a `.git` component
 in any case: `OVERLAY_UNSUPPORTED_ENTRY`), add or replace exactly that path with
-`update-index --cacheinfo`, and `write-tree`. Plumbing only, so worktree, attributes and git
+`update-index --cacheinfo`, and `write-tree`. When the binding has `deleted_test_paths` (#798), each of
+them is first removed with `update-index --force-remove` (it must be absent from the test commit, and
+not also a test path); a receiver in confidential mode then needs a policy with `test_roots`. Plumbing only, so worktree, attributes and git
 config play no part. A receiver in full mode writes the rebuilt tree objects (no refs) into its
 repository.
 
