@@ -16,6 +16,8 @@ from test_old_python_inventory import CASES, FILES, UNAVAILABLE, rejection, stub
 
 SAMPLE = Path(__file__).parent / "editable_finder_sample.txt"
 INSTALL = "sys.path.insert(0, {site!r})\nimport __editable___pkgb_0_1_finder as f\nf.install()"
+# A hook that declines every path (ImportError means "not mine"), so imports still work on any OS.
+HOOK = "def odd(path):\n    raise ImportError\nsys.path_hooks.insert(0, odd)"
 
 
 def finder_site(tmp_path, mapping: dict, namespaces: dict) -> str:
@@ -59,7 +61,7 @@ def test_the_unavailable_reason_names_the_kind_of_failure(repo, tmp_path):
     from cairnwork.pipeline import TaskRejected, check_task
 
     commit_change(repo, FILES)
-    python = stub(tmp_path, setup="sys.path_hooks.insert(0, lambda path: None)")
+    python = stub(tmp_path, setup=HOOK)
     with pytest.raises(TaskRejected) as caught:
         check_task(task(repo, "pkgB/base.py"), verifier_python=python)
     assert "CalledProcessError" in str(caught.value) and "unknown path hook" in str(caught.value)
