@@ -356,7 +356,6 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
         report_too_big=verdict.too_big, notes=(profile.notes if profile else ()) + host_notes(),
         recorded=verdict.recorded, collect_errors=verdict.collect_errors,
         teardown_errors=verdict.teardown_errors, fail_kind=verdict.fail_kind, log_too_big=too_big,
-        skipped_deps=verdict.skipped_deps,
         collected=verdict.collected, collect_skipped=verdict.collect_skipped,
-        collection_finished=verdict.collection_finished,
+        collection_finished=verdict.collection_finished, skipped_deps=verdict.skipped_deps,
     )  # fmt: skip
