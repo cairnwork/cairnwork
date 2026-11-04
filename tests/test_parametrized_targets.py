@@ -129,3 +129,23 @@ def test_the_case_text_is_printable_by_the_repository_definition():
         ch = chr(code)
         expected = (ch == " " or ch.isprintable()) and ch not in "[]"
         assert target.fullmatch(f"tests/test_x.py::test_y[a{ch}b]") is expected, hex(code)
+
+
+@pytest.mark.parametrize(
+    ("ini", "want"),
+    [
+        ("", ("tests/a_test.py", "tests/test_a.py")),
+        ("[pytest]\npython_files = tests.py\n", ("tests/tests.py",)),
+        ("[pytest]\npython_files = check_*.py tests.py\n", ("tests/check_x.py", "tests/tests.py")),
+        ("[pytest]\npython_files =\n    t_*.py\n    *_t.py\n", ("tests/b_t.py", "tests/t_a.py")),
+    ],
+)
+def test_p2p_base_tests_follow_the_configured_python_files(repo, ini, want):
+    files = {n: "def test_a():\n    pass\n" for n in (
+        "tests/test_a.py", "tests/a_test.py", "tests/tests.py", "tests/check_x.py",
+        "tests/t_a.py", "tests/b_t.py")}  # fmt: skip
+    commit_change(repo, {**files, **({"pytest.ini": ini} if ini else {})})
+    task = SimpleNamespace(repo=repo, base_commit=git(repo, "rev-parse", "HEAD"),
+                           test_roots=("tests",))  # fmt: skip
+    got = p2p._base_tests(task, frozenset())
+    assert got == want

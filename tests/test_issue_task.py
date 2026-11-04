@@ -1,3 +1,4 @@
+import hashlib
 import json
 
 import pytest
@@ -159,3 +160,35 @@ def test_take_refuses_a_block_the_decoder_cannot_nest(setup, monkeypatch):  # no
     out = runner.take(setup["intake"], github, setup["clone"])
     assert out[0]["refused"] == "TASK_BLOCK_JSON_INVALID", out
     assert github.labels[7] == {runner.NEEDS_FIX}
+
+
+# The card hash take binds, computed on main before the CRLF fix, for body() of GOOD (LF).
+LF_BLOCK_SHA256 = hashlib.sha256(json.dumps(GOOD).encode()).hexdigest()
+
+
+def crlf(text):
+    return text.replace("\n", "\r\n")
+
+
+def test_crlf_body_parses_like_lf():  # AC1
+    lf, windows = parse_task_block(body()), parse_task_block(crlf(body()))
+    assert windows == lf
+
+
+def test_lf_block_hash_is_the_raw_block_hash():  # AC2: bound cards keep their hash
+    assert issue_task.task_block_sha256(body()) == LF_BLOCK_SHA256
+    assert parse_task_block(body()).block_sha256 == LF_BLOCK_SHA256
+    assert issue_task.task_block_text(body()) == json.dumps(GOOD)
+
+
+def test_crlf_and_lf_hash_the_same():  # AC3
+    pretty = json.dumps(GOOD, indent=2)
+    lf = f"x\n\n```eia-task\n{pretty}\n```\n"
+    assert issue_task.task_block_sha256(crlf(lf)) == issue_task.task_block_sha256(lf)
+    assert issue_task.task_block_sha256(crlf(lf)) == hashlib.sha256(pretty.encode()).hexdigest()
+    assert parse_task_block(crlf(lf)).block_sha256 == parse_task_block(lf).block_sha256
+
+
+def test_crlf_block_is_removed_from_the_worker_text():
+    text = runner._instructions("o/r", 1, {"title": "t", "body": crlf(body())}, "s")
+    assert "eia-task" not in text and "allowed_files" not in text
