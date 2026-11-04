@@ -164,11 +164,20 @@ def base_settings(repo: Path, base_commit: str | None) -> PytestSettings:
 
 
 def test_file_rule(repo: Path, base_commit: str | None) -> Callable[[str], bool]:
-    """Whether a path's file name matches the base's ``python_files``, the patterns the verifier's
-    ini carries (#793); pytest's default, test_*.py and *_test.py, when it sets none."""
-    configured = dict(base_settings(repo, base_commit).values).get("python_files")
-    patterns = tuple(_words(configured)) or ("test_*.py", "*_test.py")
-    return lambda path: any(fnmatch.fnmatch(posixpath.basename(path), p) for p in patterns)
+    """Whether a path matches the base's ``python_files``, the patterns the verifier's ini carries,
+    as pytest matches them (#793); pytest's default, test_*.py and *_test.py, when it sets none."""
+    configured = _render(dict(base_settings(repo, base_commit).values).get("python_files"))
+    patterns = tuple(_words(configured)) or ("test_*.py", "*_test.py")  # one line per item, split
+    return lambda path: any(_file_matches(p, path) for p in patterns)
+
+
+def _file_matches(pattern: str, path: str) -> bool:
+    """pytest's ``fnmatch_ex`` for a checkout-relative POSIX ``path``: a pattern without ``/``
+    matches the file name; one with ``/`` the absolute path, as ``*/pattern`` (``*`` crosses ``/``).
+    The checkout's own location is unknown here: ``/root`` stands in for it."""
+    if "/" not in pattern:
+        return fnmatch.fnmatch(posixpath.basename(path), pattern)
+    return fnmatch.fnmatch(f"/root/{path}", pattern if pattern.startswith("/") else f"*/{pattern}")
 
 
 def verifier_settings(
