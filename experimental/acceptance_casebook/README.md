@@ -60,3 +60,9 @@ agree with its columns) or it is `CASE_RECORD_MISMATCH`. With `--notary-db`, the
 file is re-hashed too. A confirmation line without a confirmer never counts. `DUPLICATE` is
 decided per (candidate, base, version, attempt); the same claim from another attempt is its own
 line, and the other kind is `CASE_CONFLICT`.
+
+Round 3: a login is refused whenever the process runs inside Claude Code (`CLAUDE_CODE_SESSION_ID`
+present, even empty, or `CLAUDECODE` set). A source reference must be a comment in this repository
+(ASCII digits). Source files must be regular files; anything unreadable makes the line not count
+instead of failing `list`. An `env:` source counts only for an anthropic agent whose digest is the
+session id's.

@@ -157,3 +157,41 @@ def test_human_confirms_human_with_another_login(src: str) -> None:
 def test_non_string_lineage_item_is_incomplete(src: str) -> None:
     conf = {**agent(src, "g1"), "lineage": [1]}
     assert independence_problem(claude("s1"), conf) == "IDENTITY_INCOMPLETE"
+
+
+# Round 3 (review desk b on #826)
+
+
+@pytest.mark.parametrize("env", [{ENV: ""}, {"CLAUDECODE": "1"}])
+def test_login_refused_inside_claude_code_however_signalled(src: str, env: dict) -> None:
+    with pytest.raises(IdentityError) as err:
+        resolve_actor(env, {"github_login": "me", "source_ref": URL, "source_file": src})
+    assert err.value.code == "IDENTITY_INVALID"
+
+
+def test_unreadable_source_on_read_is_unconfirmed_not_an_error(src: str, tmp_path: Path) -> None:
+    conf = {**agent(src, "g1"), "source_file": str(tmp_path)}  # a directory, not a file
+    assert independence_problem(claude("s1"), conf) == "IDENTITY_INCOMPLETE"
+
+
+@pytest.mark.parametrize(
+    "ref",
+    ["https://github.com/cairnwork/cairnwork/issues/772#issuecomment-",
+     "https://github.com/someone/else/issues/772#issuecomment-1"],
+)  # fmt: skip
+def test_comment_url_needs_digits_and_this_repository(src: str, ref: str) -> None:
+    with pytest.raises(IdentityError):
+        resolve_actor({}, {"github_login": "me", "source_ref": ref, "source_file": src})
+
+
+def test_human_link_rechecked_on_read(src: str) -> None:
+    conf = {**human(src, "reviewer"), "source_ref": "not-a-link"}
+    assert independence_problem(claude("s1"), conf) == "IDENTITY_INCOMPLETE"
+
+
+@pytest.mark.parametrize(
+    "change", [{"kind": "human"}, {"model_family": "google"}, {"source_sha256": "0" * 64}]
+)
+def test_env_source_needs_a_claude_agent_and_its_digest(change: dict) -> None:
+    conf = {**claude("s2"), **change}
+    assert independence_problem(claude("s1"), conf) == "IDENTITY_INCOMPLETE"

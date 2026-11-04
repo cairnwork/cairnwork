@@ -28,9 +28,9 @@ ENV_SESSION = "CLAUDE_CODE_SESSION_ID"
 FAMILIES = ("anthropic", "google", "openai", "deepseek", "xai", "meta", "mistral", "alibaba")
 REQUIRED = ("kind", "session_id", "lineage", "model_family", "source_ref", "source_sha256")
 _ID = re.compile(r"[a-z0-9._:@/-]+")
-_COMMENT_URL = re.compile(
-    r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(issues|pull)/\d+"
-    r"#(issuecomment|discussion_r|pullrequestreview)-?\d+"
+_COMMENT_URL = re.compile(  # a comment in this repository; ASCII digits only
+    r"https://github\.com/cairnwork/cairnwork/(issues|pull)/[0-9]+"
+    r"#(issuecomment-|discussion_r|pullrequestreview-)[0-9]+"
 )
 
 
@@ -54,8 +54,11 @@ def file_sha(path: str | None) -> str | None:
     if not path:
         return None
     try:
-        data = Path(path).read_bytes()
-    except OSError as exc:
+        file = Path(path)
+        if not file.is_file():  # a pipe or device would block the read
+            raise OSError("not a regular file")
+        data = file.read_bytes()
+    except (OSError, ValueError, TypeError) as exc:
         raise IdentityError("IDENTITY_INVALID", f"source file unreadable: {path!r}") from exc
     if not data.strip():
         raise IdentityError("IDENTITY_INVALID", f"source file is empty: {path!r}")
@@ -85,8 +88,8 @@ def resolve_actor(env: Mapping[str, str], opts: Mapping[str, str | None]) -> dic
     opts = {**opts, "source_file": str(Path(src).resolve()) if src else None}
     actor: dict[str, Any] = {"display": opts.get("display_name")}
     if opts.get("github_login"):
-        if env.get(ENV_SESSION):
-            raise IdentityError("IDENTITY_INVALID", f"{ENV_SESSION} is set: not a human")
+        if ENV_SESSION in env or env.get("CLAUDECODE"):
+            raise IdentityError("IDENTITY_INVALID", "running inside Claude Code: not a human")
         ref = opts.get("source_ref") or ""
         if not _COMMENT_URL.fullmatch(ref):
             raise IdentityError("IDENTITY_INVALID", "--source-ref must be a GitHub comment URL")
@@ -122,7 +125,8 @@ def _valid_id(value: Any) -> bool:
 def _source_holds(actor: dict[str, Any]) -> bool:
     if actor["source_ref"] == f"env:{ENV_SESSION}":
         expected = hashlib.sha256(actor["session_id"].encode()).hexdigest()
-        return actor["kind"] == "agent" and actor["source_sha256"] == expected
+        claude = actor["kind"] == "agent" and actor["model_family"] == "anthropic"
+        return claude and actor["source_sha256"] == expected
     try:
         return file_sha(actor.get("source_file")) == actor["source_sha256"]
     except IdentityError:
