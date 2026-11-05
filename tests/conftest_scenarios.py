@@ -137,10 +137,10 @@ SCENARIOS = {  # name: (kwargs of conftest_run, expected status, a code the reas
         "FAILED",
         "TEST_COMMIT_CONFTEST_UNCHECKED",
     ),
-    "a conftest in a directory with no base test": (
+    "a conftest in a directory with no base test, compared on the selected files": (
         {"path": "tests/empty/conftest.py", "regression": PLAIN},
-        "FAILED",
-        "TEST_COMMIT_CONFTEST_UNCHECKED",
+        "COMPLETED",
+        "",
     ),
     "P2P off": ({"mode": "off"}, "FAILED", "TEST_COMMIT_CONFTEST_UNCHECKED"),
 }
