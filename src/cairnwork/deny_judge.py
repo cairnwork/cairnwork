@@ -30,6 +30,7 @@ ALLOW = re.compile(
     r"(?:(\d+) duplicate reports? for )?Sandbox: .+?\(\d+\) allow(?:\(\d+\))? (?!deny)\S+(?: .*)?",
     re.S,
 )
+POLICY = re.compile(r"(?:\d+ duplicate reports? for )?System Policy:")  # CI 11/05: with the prefix
 # (operation, exact target) every sandboxed Python start hits (step 0); human-reviewed, exact
 # paths only. Reads that can change behaviour (/private/etc/ssl, preferences) are never benign.
 BENIGN_DENIES = frozenset(
@@ -105,7 +106,7 @@ def _event(line: str, window: Window):
         raise ValueError("an unreadable stream line") from exc
     if not isinstance(message, str) or not isinstance(stamp, str):
         raise ValueError("an unreadable stream line")
-    if message.startswith("System Policy:"):  # the account's own kill -9 -1, not a sandbox deny
+    if POLICY.match(message):  # the account's own kill -9 -1, a daemon's allow: not a sandbox deny
         return None
     body, _, suffix = message.rpartition("\n") if "\n" in message else (message, "", "")
     if suffix.startswith(TAG_PREFIX) and not TAG.fullmatch(suffix):

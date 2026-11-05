@@ -169,6 +169,11 @@ def test_a_non_utf8_path_and_a_newline_inside_the_path_are_parsed():
 def test_system_policy_lines_are_ignored():
     kill = line("System Policy: kill(1) deny(1) signal", tag="")
     assert judge(stream(kill), window()).state == "CLEAN"
+    # CI test-macos 11/05 (#884): the same line behind a duplicate-reports prefix
+    daemon = line(
+        "2 duplicate reports for System Policy: d(178) allow file-read-metadata /S", tag=""
+    )
+    assert judge(stream(daemon), window()).state == "CLEAN"
 
 
 def test_another_process_s_allow_lines_count_toward_volume_and_are_never_a_denial():
