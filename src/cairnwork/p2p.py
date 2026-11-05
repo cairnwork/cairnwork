@@ -66,6 +66,7 @@ from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRej
 from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.issue_task import test_target
 from cairnwork.p2p_collect import OVER_BUDGET, collected_side, no_targets, whole_base
+from cairnwork.p2p_conftest import check_conftest
 from cairnwork.p2p_nodes import passing_targets, require_nodes
 from cairnwork.p2p_probe_log import probe_log_tail
 from cairnwork.p2p_selection import DEFAULT_BUDGET_SECONDS, cap_note, select_p2p_targets
@@ -149,12 +150,14 @@ def plan_p2p(task, specs, test_files, mode, budget, result, ctx: VerifyContext) 
     """Select and probe; see the module docstring. In a base test file among ``test_files`` (the
     deferred tests), only the tests the test commit does not change are P2P tests."""
     rule: dict = {"configured": mode, "applied": mode, "budget_seconds": budget, "degraded": ""}
+    forced = check_conftest(task, test_files, mode, result, ctx, _base_tests, budget)  # #798
     if mode == "off":
         return P2PPlan(rule, None, budget)
     existing = _base_tests(task, frozenset(deleted_of(test_files)))  # #361; #798: not deleted ones
     tried: tuple[str, ...] | None = None
     for applied in (mode, "module-dir") if mode == "whole-suite" else (mode,):
         files = select_p2p_targets(task.allowed_files, existing, task.test_roots, applied)
+        files = tuple(sorted({*files, *forced}))  # #798: the files a test commit's conftest governs
         rule |= {"applied": applied, "selected_files": len(files)}
         rule |= cap_note(task.allowed_files, existing, task.test_roots, applied)  # #333
         if not files and rule["degraded"]:  # #117 F1: a failed probe is not "nothing to run"
@@ -256,20 +259,15 @@ def base_env_check(task, result, ctx: VerifyContext, *, without_tests=False, key
     For a task that will be probed after the worker (deferred tests, P2P not off), or with
     ``without_tests`` a verify call without deferred tests (#259; ``key_repo``: the repository it
     was cloned from, which keys the marker in place of ``task.repo``), the module-dir selection of
-    existing base tests is probed now, the same way (``_probe``): a timeout, a report over the cap,
-    an exit other than 0 or 1, no guard record, a teardown error or an exit 1 with no failed test
-    (#478), a surviving process or a mutated checkout (#285) raises UNCOMPARABLE
-    ``BASE_ENV_FAILED``. On a
-    dispatch, this means no worker quota is spent on a base that gives no evidence and the attempt
-    is not counted against the worker. Failing tests are fine (the base has the bug). Nothing from
-    the test commit is read. A pass is remembered per repository, base, files, import paths, budget,
-    verifier account and interpreter (``_env_fingerprint``) as a regular file in
-    ``base-env-ok/`` in the run root,
-    so only the first check of that base pays; the marker can only skip this check, never make
-    anything pass. On a dispatch the probes after the worker run as before; a verify call without
-    deferred tests has no later base run, so an environment that broke after a recorded pass in a
-    way the key misses (sandbox backend, system libraries, the account's home) shows up there as
-    a candidate failure again, as before #259."""
+    existing base tests is probed now, the same way (``_probe``): any unusable probe (#285, #478)
+    raises UNCOMPARABLE ``BASE_ENV_FAILED``. On a dispatch, no worker quota is spent on a base that
+    gives no evidence. Failing tests are fine (the base has the bug). Nothing from the test commit
+    is read. A pass is remembered per repository, base, files, import paths, budget, verifier
+    account and interpreter (``_env_fingerprint``) as a regular file in ``base-env-ok/`` in the run
+    root, so only the first check of that base pays; the marker can only skip this check, never
+    make anything pass. A verify call without deferred tests has no later base run, so an
+    environment that broke after a recorded pass in a way the key misses shows up there as a
+    candidate failure again, as before #259."""
     if task.p2p_mode == "off" or not (task.test_commit or without_tests):
         return
     try:

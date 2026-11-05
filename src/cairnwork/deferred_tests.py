@@ -1,8 +1,9 @@
 """Deferred tests: the tests that prove a fix are applied only after the worker is done.
 
 A task may name a ``test_commit``: a commit whose only parent is the task's base and
-which adds or changes files under ``tests/`` only (no ``conftest.py``, regular files
-only). The worker never gets it: its attempt clone holds the base. Cairnwork then
+which adds or changes files under ``tests/`` only (a ``conftest.py`` only as an additive
+fixture change, conftest_check.py and p2p_conftest.py, #798; regular files only). The worker never
+gets it: its attempt clone holds the base. Cairnwork then
 
 1. runs the verifiers on the test commit itself (base + tests) and requires a real
    failure there (base_comparison): tests that already pass prove nothing about the fix
@@ -56,6 +57,12 @@ _NOT_TEST_FILES = frozenset(
         "setup.py", "sitecustomize.py", "usercustomize.py",
     }
 )  # fmt: skip
+
+
+def _plain_conftest(path: PurePosixPath, status: str) -> bool:
+    """#798: a conftest.py (exact name) may be added or modified, never deleted or renamed; its
+    content is checked by conftest_check.py and p2p_conftest.py."""
+    return path.name == "conftest.py" and status in ("A", "M")
 
 
 def never_seen(repo: Path, test_commit: str) -> None:
@@ -152,7 +159,7 @@ def test_paths(
             status not in ("A", "M", "D")
             or (old_mode if status == "D" else new_mode) not in _REGULAR
             or not path.startswith(tuple(f"{r}/" for r in roots))
-            or posix.name.casefold() in _NOT_TEST_FILES
+            or (posix.name.casefold() in _NOT_TEST_FILES and not _plain_conftest(posix, status))
             or posix.name.casefold().endswith(".pth")
             or {x.casefold() for x in posix.parts} & _SITE_NAMES
         ):
