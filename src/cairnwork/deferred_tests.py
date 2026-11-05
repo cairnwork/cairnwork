@@ -27,6 +27,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from cairnwork import survivor_argv
 from cairnwork.base_teeth import base_teeth
 from cairnwork.deferred_nodes import test_functions
 from cairnwork.deferred_overlay import (  # noqa: F401  (re-exported: the one place importers look)
@@ -327,6 +328,7 @@ def base_comparison(runs, targets: frozenset[str]) -> Comparison:
         detail = "; ".join(
             f"{run.spec.verifier_id}: {code} (exit {run.returncode})"
             + (f", collection errors {_names(run.collect_errors)}" if run.collect_errors else "")
+            + (survivor_argv.listing(run.survivors) if code == "BASE_SURVIVORS" else "")
             + skip_hint(run)
             + ("; import fix-introduced symbols inside the test function"
                if set(run.collect_errors) & files else "")

@@ -58,3 +58,36 @@ def _sources(collected: list[str], files: list[str], file_of) -> dict[str, str]:
         if paths.setdefault(node, source) != source:
             paths[node] = ""
     return paths
+
+
+def well_formed(data: dict, collected: list, outcomes: dict, plugin_kinds: frozenset[str]):
+    """The shape checks of ``report_guard.parse_verdict`` (pure move, #796 step 0): the fields it
+    reads from a record whose nonce matched, or None when any is malformed (a candidate controls
+    the file: fail closed)."""
+    errors, skipped = data.get("collect_errors", []), data.get("collect_skipped", [])
+    renamed = data.get("renamed", [])
+    teardown = data.get("teardown_errors", [])
+    files = data.get("files", [])
+    kind = data.get("fail_kind", {})  # #775: node -> "setup" | "env" | "plugin:<module>" (#804)
+    if not isinstance(kind, dict) or not all(
+        n in outcomes and (v in ("setup", "env") or v in plugin_kinds) for n, v in kind.items()
+    ):
+        return None
+    file_of = data.get("file_of")  # absent: no test owns a named target
+    status = (data.get("exitstatus"), data.get("testsfailed"))  # exact ints: no bool, no None
+    if not all(type(n) is int for n in status):
+        return None
+    if not all(
+        isinstance(v, list) and all(isinstance(n, str) for n in v)
+        for v in (errors, skipped, renamed, teardown)
+    ):
+        return None
+    if not isinstance(files, list) or not all(isinstance(path, str) for path in files):
+        return None
+    if file_of is not None and not (
+        isinstance(file_of, list)
+        and len(file_of) == len(collected)
+        and all(type(n) is int and -1 <= n < len(files) for n in file_of)
+    ):
+        return None
+    return errors, skipped, renamed, teardown, files, kind, file_of, status

@@ -98,6 +98,33 @@
 - **重送邊界（`REPLAY_FORBIDDEN`）**：同一份已綁定的請求（`request_digest`）換冪等鍵或換 card 再送，已完成或已失敗的回 `REPLAY_FORBIDDEN`，進行中的回 `RECONCILIATION_REQUIRED`，都不會重跑。所以編輯過區塊、但綁定的請求內容沒變的 Issue，每一輪都會被擋下（安全，不會重跑）；要重做就換新的測試 commit，或真的改動請求內容（FAILED 的舊任務要先人工 SUPERSEDED，`cairnwork-route supersede`）。
 - 和 EIA 不重複：`cairnwork:queue` 是另一個標籤。要做 A/B 比較時，再明確把同一張 Issue 兩個標籤都貼上，兩邊各自開 PR，最後只合併一張。
 
+## 延後測試怎麼寫才不會被字面值作弊騙過
+
+候選在執行期間讀得到延後測試的原始碼，所以只比對字面期望值的測試，可能被「照著測試寫出剛好過關的答案」騙過，即使函式本身沒有做對。寫延後測試時：
+
+1. **輸入要和可見測試不同。** 可見測試用過的輸入，延後測試不要再用。
+2. **至少一條性質式或不等式斷言**，不要全部只比對字面值。例如檢查結果的範圍、單調性、和輸入的關係。
+3. **同一個函式至少呼叫兩次，輸入不同。** 單一輸入的答案最容易被硬編碼；多個輸入加上性質式斷言會提高硬編碼的成本。第 1–3 條只是提高成本，候選既然讀得到測試原始碼，仍可能逐一特判；真正保密要靠第 5 條。
+4. **型別檢查用 `isinstance`，不要用 `type(x) is int`。** 前者符合一般的 Python 型別語意，後者會誤擋合法的子類別。注意 `bool` 也是 `int` 的子類別，要排除時另外檢查 `not isinstance(x, bool)`。
+5. **需要真正保密的期望值，用黑箱檢查**（`cairnwork-verify run --blackbox <宣告檔>`，見 `docs/BLACKBOX_COVERAGE.md`）：期望值留在 Cairnwork 自己的程序裡，候選碼讀不到。一般 pytest 延後測試和候選碼同程序，不受這種保護。
+
+好壞對照（`square(x)` 應回傳 x 的平方）：
+
+```python
+# 弱：單一字面值，可以被硬編碼過關
+def test_square():
+    assert square(3) == 9
+
+
+# 較強：不同於可見測試的輸入、呼叫兩次、性質式斷言、isinstance
+def test_square_properties():
+    a, b = square(7), square(-12)
+    assert isinstance(a, int) and isinstance(b, int)
+    assert (a, b) == (49, 144)
+    assert b > a > 0  # 不等式
+    assert square(-5) == square(5)  # 性質：偶函數
+```
+
 ## 常設 KPI：7 天返工率
 
 每一張由 Cairnwork 從 Issue 交付、且已合併的 PR（下稱「原 PR」），都要記「7 天返工率」。它是第一層指標，和一次成功率（送進件的 Issue 中，第一次執行就產出可合併 PR 的比例）一起報告，不單獨拿來下結論。

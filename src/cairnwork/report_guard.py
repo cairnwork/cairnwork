@@ -74,7 +74,7 @@ from cairnwork.confined import MAX_REPORT_BYTES
 from cairnwork.pytest_config import PLUGINS
 from cairnwork.skip_hint import module_names as _module_names
 from cairnwork.verdict_record import Verdict as Verdict
-from cairnwork.verdict_record import _sources
+from cairnwork.verdict_record import _sources, well_formed
 
 FDS_ENV = "CAIRNWORK_GUARD_FDS"
 PATH_ENV = "CAIRNWORK_VERDICT_PATH"
@@ -346,32 +346,10 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
         isinstance(node, str) and isinstance(result, str) for node, result in outcomes.items()
     ):
         return Verdict(False, {})
-    errors, skipped = data.get("collect_errors", []), data.get("collect_skipped", [])
-    renamed = data.get("renamed", [])
-    teardown = data.get("teardown_errors", [])
-    files = data.get("files", [])
-    kind = data.get("fail_kind", {})  # #775: node -> "setup" | "env" | "plugin:<module>" (#804)
-    if not isinstance(kind, dict) or not all(
-        n in outcomes and (v in ("setup", "env") or v in PLUGIN_KINDS) for n, v in kind.items()
-    ):
+    shape = well_formed(data, collected, outcomes, PLUGIN_KINDS)
+    if shape is None:
         return Verdict(False, {})
-    file_of = data.get("file_of")  # absent: no test owns a named target
-    status = (data.get("exitstatus"), data.get("testsfailed"))  # exact ints: no bool, no None
-    if not all(type(n) is int for n in status):
-        return Verdict(False, {})
-    if not all(
-        isinstance(v, list) and all(isinstance(n, str) for n in v)
-        for v in (errors, skipped, renamed, teardown)
-    ):
-        return Verdict(False, {})
-    if not isinstance(files, list) or not all(isinstance(path, str) for path in files):
-        return Verdict(False, {})
-    if file_of is not None and not (
-        isinstance(file_of, list)
-        and len(file_of) == len(collected)
-        and all(type(n) is int and -1 <= n < len(files) for n in file_of)
-    ):
-        return Verdict(False, {})
+    errors, skipped, renamed, teardown, files, kind, file_of, status = shape
     ran = (
         bool(collected)
         and not errors

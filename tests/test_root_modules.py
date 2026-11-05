@@ -85,7 +85,9 @@ def test_the_module_inventory_is_matched_ignoring_case(repo, tmp_path):
     inventory is casefolded, as every other name check here is (ACH mutation scan)."""
     commit_change(repo, {"calc.py": "x = 1\n"})
     python = tmp_path / "python"
-    python.write_text("#!/bin/sh\necho '[\"Calc\"]'\n")
+    python.write_text(  # answers the version question (3.12), then lists Calc
+        "#!/bin/sh\ncase \"$3\" in *version_info*) echo '3 12';; *) echo '[\"Calc\"]';; esac\n"
+    )
     python.chmod(0o755)
     with pytest.raises(TaskRejected, match="PROTECTED_VERIFIER_INPUT"):
         check_task(task(repo, "calc.py"), verifier_python=str(python))
