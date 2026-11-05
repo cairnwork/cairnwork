@@ -13,15 +13,17 @@ run through ``exec``/``eval``, a helper in another file). Refused with ``VERIFIE
 - ``pytest_option_write``: an assignment to ``config.option.<name>`` or a ``setattr``/``vars``
   write on it.
 - ``code_object_forge``: building a function from a code object, rewriting ``__code__``,
-  ``__globals__`` or ``co_filename``, and the builtin ``compile``.
+  ``__globals__`` or ``co_filename``, the builtin ``compile``, and the wrappers ``source_to_code``
+  and ``codeop``.
 - ``dynamic_loader``: loading source from a path (``SourceFileLoader``, ``runpy``).
 - ``sourceless_binary``: a changed ``.pyc``, ``.pyo``, ``.so``, ``.pyd``, ``.dylib``, ``.zip``,
   ``.egg``, ``.whl`` or ``.pyz`` file, which no line scan can read.
 - ``hook_file_touched``: a changed ``.py`` file that binds a known pytest or pluggy hook name, at
   any depth, or holds a string equal to one (``globals()["pytest_x"] = f``), in its base or its
   head version (an unchanged line may then change what runs). A version that does not parse is
-  searched as text for the names (whole words). Also bound: keyword names (``update(pytest_x=f)``),
-  ``match`` capture names and bytes literals. Accepted false block: a task that fixes a pytest
+  searched as text for the names (whole words). Every identifier field is read (parameters,
+  keywords, ``match`` captures, type parameters, ``global`` names), bytes literals too. Accepted
+  false block: a task that fixes a pytest
   plugin project itself. Not refused: ``pytest_my_helper``, or a log text that merely holds a name.
 - Not followed: a name put together from string pieces (``getattr(cfg, "plugin" + "manager")``),
   reversed, ``replace``d, or used through an alias. A scan for those needs its own bounded design
@@ -57,6 +59,7 @@ CODE_FORGE = (
     r"|\b__globals__\s*\.\s*(?:update|setdefault|pop|clear)\s*\("
     r"|(?<![\w.])(?<!def\s)compile\s*\(|\bbuiltins\s*\.\s*compile\b"
     r"|=\s*compile\s*(?:[;#,)]|$)"  # an alias of the builtin
+    r"|\bsource_to_code\b|\bcodeop\b"  # stdlib wrappers that build a code object
 )
 _FORGE_TOKENS = re.compile(r"""\bsetattr\s*\(|['"]__(?:code|globals)__['"]|[#;]""")
 
@@ -102,31 +105,30 @@ SOURCELESS = (".pyc", ".pyo", ".so", ".pyd", ".dylib", ".zip", ".egg", ".whl", "
 _TEXT_NAMES = re.compile(rf"\b(?:{'|'.join(sorted(HOOK_NAMES))})\b")
 
 
+_NOT_NAMES = frozenset({"type_comment", "kind"})  # str fields that are not identifiers
+
+
 def hook_names_bound(source: bytes) -> set[str]:
-    """Hook names the module binds or writes as a whole string; a parse failure is raised."""
-    tree = ast.parse(source)
-    bound: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            bound.add(node.name)
-        elif isinstance(node, (ast.Import, ast.ImportFrom)):
-            bound.update(alias.asname or alias.name.split(".")[0] for alias in node.names)
-        elif isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
-            bound.add(node.id)  # assign, annotated and augmented assign, for, with, walrus
-        elif isinstance(node, ast.Attribute) and isinstance(node.ctx, (ast.Store, ast.Del)):
-            bound.add(node.attr)
-        elif isinstance(node, ast.ExceptHandler) and node.name:
-            bound.add(node.name)
-        elif isinstance(node, ast.keyword) and node.arg:
-            bound.add(node.arg)  # update(pytest_x=f), dict(pytest_x=f)
-        elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
-            bound.add(node.name)  # case pytest_x:
-        elif isinstance(node, ast.MatchMapping) and node.rest:
-            bound.add(node.rest)
-        elif isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes)):
-            value = node.value  # a hook name written out: globals()["pytest_x"] = f
-            bound.add(value if isinstance(value, str) else value.decode("latin-1"))
-    return bound & HOOK_NAMES
+    """Hook names the module binds or writes as a whole string; a parse failure is raised.
+
+    Every str (or list of str) field of every node counts, whatever the grammar calls it: a name,
+    a parameter (``arg``), a keyword, an alias, ``global``/``nonlocal`` names, a type parameter,
+    a ``match`` capture, an attribute, and a string or bytes literal. A new binding form in a later
+    Python is read without a change here (tests/test_tamper_scan_plugin_fields.py walks ``ast``).
+    """
+    found: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        for field in node._fields:
+            value = getattr(node, field, None)
+            if field in _NOT_NAMES:
+                continue
+            if isinstance(value, bytes):
+                value = value.decode("latin-1")
+            for text in value if isinstance(value, list) else (value,):
+                if isinstance(text, str):
+                    found.add(text)
+                    found.update(text.split("."))  # ``import a.b``
+    return found & HOOK_NAMES
 
 
 def _batch(repo: Any, oids: list[str]) -> dict[str, bytes]:
@@ -177,7 +179,7 @@ def file_rules(repo: Any, base: str, head: str, budget: ScanBudget) -> list[tupl
             data = blobs.get(oid)
             if data is None:
                 continue
-            if oid == old and not budget.tokenize(data):  # the new blob was paid by the line scan
+            if not budget.tokenize(data):
                 return [*found, (path, "scan_budget")]
             if _touches_hooks(data):
                 found.append((path, "hook_file_touched"))
