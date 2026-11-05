@@ -7,12 +7,11 @@ that Core must see pass. A test that already failed or was skipped on the base i
 regression and is left out.
 Failure paths, none of which can end VERIFIED:
 
-* base run itself unclean (a process outlived it, ``base-probe-survivors``, or it changed the
-  checkout, ``base-probe-mutated``; #285), or it left bytecode it may not supply
-  (``base-probe-forged``, #481): its own outcomes prove nothing, and the candidate run would block
-  on its leftover. UNCOMPARABLE (``P2P_BASE_PROBE_UNUSABLE``) in any mode, without trying a
-  narrower one (weaker evidence than the configured one); a false FAILED becomes "no evidence",
-  never VERIFIED;
+* base run itself unclean: a process outlived it (``base-probe-survivors``) or it changed the
+  checkout (``base-probe-mutated``; #285), so the candidate run would block on its leftover; or it
+  left bytecode it may not supply (``base-probe-forged``, #481), so its outcomes prove nothing.
+  UNCOMPARABLE (``P2P_BASE_PROBE_UNUSABLE``) in any mode, without trying a narrower one (weaker
+  evidence than the configured one); a false FAILED becomes "no evidence", never VERIFIED;
 * base probe times out, cannot report, or its report or log exceeds the size cap (a suite too
   large for one run, #184: ``base-probe-report-over-cap``, #481: ``base-probe-log-over-cap``), or
   a test's teardown failed there
@@ -48,6 +47,7 @@ call without deferred tests it applies only if the candidate also fails its own 
 ``p2p_time_budget_seconds`` bounds each run (probe, degraded probe, candidate run, re-run).
 The rule actually used (``P2PPlan.rule``, a dict) goes into the p2p observation's artifact hash
 (Core's record binds it), ``p2p-selection.json`` beside the verifier log, and the task result.
+Core's notarisation contract is unchanged.
 """
 
 from __future__ import annotations

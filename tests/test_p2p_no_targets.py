@@ -83,6 +83,14 @@ def test_nothing_selected_in_a_base_with_no_test_runs_nothing(monkeypatch):
     assert isinstance(got, P2PPlan) and probed == [] and got.rule["targets"] == 0
 
 
+def test_nothing_selected_in_a_base_of_exactly_the_cap_runs_the_whole_base(monkeypatch):
+    existing = tuple(f"tests/unit/test_x{i:02}.py" for i in range(MODULE_DIR_CAP))
+    one = ({"tests/unit/test_x00.py::t": "passed"}, "")
+    got, probed = plan(monkeypatch, existing, [one], mode="module-dir")
+    assert isinstance(got, P2PPlan) and probed == [existing]
+    assert got.rule["fallback"] == "all-base-tests"
+
+
 def test_nothing_selected_in_a_base_over_the_cap_is_uncomparable(monkeypatch):
     existing = tuple(f"tests/unit/test_x{i:02}.py" for i in range(MODULE_DIR_CAP + 1))
     got, probed = plan(monkeypatch, existing, [], mode="module-dir")
