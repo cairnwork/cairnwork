@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from cairnwork_attest.binding_extras import binding_problem
 from cairnwork_attest.bundle import read_bundle
 from cairnwork_attest.verify import verify_bundle
 from cairnwork_attest.verify_binding import PolicyError, load_policy
@@ -21,6 +22,17 @@ from tests.attest.binding_helpers import (
     resign,
     sign_bound,
 )
+
+
+def test_receipt_shape_allows_at_most_eight_import_paths():
+    from cairnwork.issue_task import check_import_paths
+
+    eight, nine = [f"d{i}" for i in range(8)], [f"d{i}" for i in range(9)]
+    assert binding_problem({"import_paths": eight}) == ""
+    assert binding_problem({"import_paths": nine})
+    assert check_import_paths(eight) == tuple(eight)  # the producer's cap is the same 8
+    with pytest.raises(ValueError):
+        check_import_paths(nine)
 
 
 def _world(tmp_path: Path, import_paths: tuple[str, ...]) -> dict:

@@ -74,7 +74,7 @@ def why_not_passed(
     if survivors:
         causes.append(
             f"{survivors} process(es) outlived the run, or the process list was unreadable"
-            + survivor_argv.listing(survivors)  # #814: masked argv prefixes, text only
+            + survivor_argv.listing(survivors)  # #814: allow-listed argv prefixes, text only
         )
     if log_too_big:
         causes.append("log over the size cap")

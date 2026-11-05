@@ -109,6 +109,15 @@ def test_a_value_near_the_cut_is_not_shown():
     assert "FAKE-VALUE-1" not in out and out == "<redacted>"
 
 
+def test_a_runner_with_an_unsupported_major_version_is_hidden_whole():
+    for command in ("python4 -m pytest", "ruby1.9 x"):
+        assert survivor_argv.prefix(command) == survivor_argv.HIDDEN
+
+
+def test_a_module_name_is_shown_only_after_minus_m():
+    assert survivor_argv.prefix("python -v pytest") == "python -v <redacted>"
+
+
 @pytest.mark.parametrize("text", [
     "sh --unlisted-option=FAKE-VALUE-1 go",  # long option the old rules did not name
     "sh --unlisted-option FAKE-VALUE-1",

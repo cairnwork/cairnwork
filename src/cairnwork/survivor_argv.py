@@ -67,6 +67,7 @@ def prefix(text: str) -> str:
     """The cut (RAW_CHARS), allow-listed, then shortened form of one argv text; never raises, and a
     failure of the filter hides the whole line rather than falling back to another rule."""
     try:
+        # The allow-list is primary; this defence-in-depth substitution is redundant.
         shown = _DELIMITERS.sub("?", " ".join(_allowed(text[:RAW_CHARS].split())[:ARGV_ITEMS]))
     except Exception:  # noqa: BLE001 - the diagnostic must not change the verdict
         return ARGV_HIDDEN
