@@ -30,7 +30,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from cairnwork import protection, runlock
+from cairnwork import protection, runlock, verify_scope
 from cairnwork.account_check import base_stage, precheck
 from cairnwork.blackbox import Declaration
 from cairnwork.confined import ATTEMPT_ENV, sweep_marked
@@ -107,10 +107,10 @@ def verify_candidate(
     _require_core_ids(verifiers)
     task = TaskSpec(
         f"verify-{secrets.token_hex(8)}", "verify", "verify", "", repo, base,
-        allowed_files, verifiers, test_commit=test_commit, blackbox=blackbox,
-        require_protection=require_protection, p2p_mode=intake.config()["p2p_selection"],
-        test_roots=test_roots, test_store=intake.test_store(), import_paths=import_paths,
-        p2p_budget=intake.config()["p2p_time_budget_seconds"],
+        verify_scope.changed_scope(repo, base, candidate, allowed_files), verifiers,
+        test_commit=test_commit, blackbox=blackbox, require_protection=require_protection,
+        p2p_mode=intake.config()["p2p_selection"], test_roots=test_roots, import_paths=import_paths,
+        test_store=intake.test_store(), p2p_budget=intake.config()["p2p_time_budget_seconds"],
     )  # fmt: skip
     account, python = intake.verifier_account(), intake.config()["verifier_python"]
     specs = check_task(
