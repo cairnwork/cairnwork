@@ -4,8 +4,8 @@ report_guard counts a wrapped OSError as environment only for EACCES, EPERM, ERO
 ENETUNREACH. This pins what the real backends return, so a backend change that moves a denial
 to another errno (and so out of reach of that rule) fails here. A ``None`` row is an operation
 the backend does not deny at all: on bwrap the host root is mounted read-only, so a read outside
-the read roots succeeds. Measured rows only; the known gaps are listed in
-docs/PRESERVED_BEHAVIORS.md."""
+the read roots succeeds. bwrap's network namespace has its own loopback, so a connect there is
+refused, not denied. Measured rows only; the known gaps are in docs/PRESERVED_BEHAVIORS.md."""
 
 import json
 import subprocess
@@ -27,16 +27,17 @@ def code(step):
     except OSError as exc:
         return errno.errorcode.get(exc.errno, str(exc.errno))
     return None
-def connect():
+def connect(host):
     with socket.socket() as s:
         s.settimeout(3)
-        s.connect(("127.0.0.1", 9))
+        s.connect((host, 9))
 print(json.dumps({
     "read_outside_roots": code(lambda: open(os.path.join(outside, "f")).close()),
     "read_host_file": code(lambda: open(host_file).close()),
     "write_outside_roots": code(lambda: open(os.path.join(outside, "new"), "w").close()),
     "write_host_dir": code(lambda: open("/usr/cairnwork-errno-probe", "w").close()),
-    "connect_loopback": code(connect),
+    "connect_loopback": code(lambda: connect("127.0.0.1")),
+    "connect_external": code(lambda: connect("192.0.2.1")),  # TEST-NET-1: never a real host
 }))
 """
 
@@ -47,13 +48,16 @@ MEASURED = {
         "write_outside_roots": "EPERM",
         "write_host_dir": "EPERM",
         "connect_loopback": "EPERM",
+        "connect_external": "EPERM",
     },
     "bwrap": {
-        "read_outside_roots": "ENOENT",  # /tmp is a private tree: the file is not there at all
+        # measured on CI test-linux-sandbox (x86-64 and arm64), #882
+        "read_outside_roots": "ENOENT",  # /tmp is a private tree: the path is not there at all
         "read_host_file": None,  # the root is bound read-only: reading is not denied
-        "write_outside_roots": "EROFS",
+        "write_outside_roots": "ENOENT",  # the same private /tmp
         "write_host_dir": "EROFS",
-        "connect_loopback": "ENETUNREACH",  # a new network namespace: loopback is down
+        "connect_loopback": "ECONNREFUSED",  # the namespace has its own loopback: nothing listens
+        "connect_external": "ENETUNREACH",  # a new network namespace: no route out
     },
 }
 

@@ -59,7 +59,7 @@
   - 自己開新 session、又清掉環境變數的子程序：帳號模式下，執行結束後會以該帳號執行 `kill -9 -1` 清掉它的所有程序，有任何殘留就判失敗；沒有帳號時仍然躲得過清除。帳號模式一次只能跑一個 verifier（獨占鎖）。每次開跑前，也會先確認該帳號底下沒有任何程序。
   - 專屬帳號保護的是擁有者不被 verifier 讀取，反方向不成立：sudoers 允許擁有者以該帳號執行任意 profile 的 sandbox-exec，所以任何以擁有者身分執行的程序，都能以該帳號執行程式碼。該帳號本身沒有任何特權，不能用來提升權限。
   - base 的失敗算不算環境錯誤（#775、#854）：判成環境錯誤、不算 teeth 的條件有兩種：(1) 最外層例外是 `OSError`；(2) 例外樹裡（exception group 的成員、`__cause__`、沒被壓掉的 `__context__`）有 errno 為 EACCES、EPERM、EROFS 或 ENETUNREACH 的 `OSError`。各 backend 實際回哪個 errno，由 `tests/test_denial_errno_sandbox.py` 釘住。**還擋不到的**：
-    - Linux bwrap 讀不到 private `/tmp` 裡的路徑時回 ENOENT，和檔案真的不存在分不出來，所以包在裡面的時候仍算 teeth。
+    - Linux bwrap 在 private `/tmp` 裡讀或寫不到的路徑回 ENOENT，和檔案真的不存在分不出來，所以包在裡面的時候仍算 teeth。bwrap 的網路命名空間有自己的 loopback：連本機回 ECONNREFUSED，沒有被擋，也不算環境；連外才是 ENETUNREACH（#882 CI 實測）。
     - 程式接住拒絕後轉成一般值（例如 `except OSError: return None`），或用 `os.access` 這類不丟例外的檢查。兩個 backend 都看不出來。
     - 反方向：誠實的 bug 如果自己把真的 `PermissionError` 包起來，會從 teeth 變成 UNCOMPARABLE。這是罕見的誤擋，量測見 #854 的 PR。
   - Seatbelt 只能用在 macOS，不是可以移植的正式 sandbox。
