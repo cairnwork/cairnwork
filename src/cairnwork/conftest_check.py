@@ -46,7 +46,7 @@ def without_conftests(paths: Iterable[str]) -> tuple[str, ...]:
 
 def governed(conftests: Iterable[str], existing: Iterable[str]) -> tuple[str, ...]:
     """The base test files under a conftest's directory: the tests it can change."""
-    dirs = tuple(dirname(c) + "/" for c in conftests)
+    dirs = tuple((dirname(c) + "/") if dirname(c) else "" for c in conftests)
     return tuple(sorted(t for t in existing if t.startswith(dirs)))
 
 
@@ -64,7 +64,7 @@ def check_conftests(repo: Path, base: str, test_commit: str, paths: Iterable[str
             _refuse(path, new.body[0] if new.body else None, "changes existing top-level code")
         table = _imports(new)
         for node in new.body[len(before) :]:
-            problem = _problem(node, own, table)
+            problem = _rebinds(node, table) or _problem(node, own, table)
             if problem:
                 _refuse(path, node, problem)
 
@@ -126,6 +126,20 @@ def _problem(node: ast.stmt, own: frozenset[str], table: dict[str, str]) -> str:
     return f"a {type(node).__name__} is not allowed"
 
 
+def _rebinds(node: ast.stmt, table: dict[str, str]) -> str:
+    """A new assignment or function that takes the name of an import would change what a decorator
+    (or any later name) resolves to, so the import table could not be trusted."""
+    if isinstance(node, ast.Assign):
+        names = {t.id for t in node.targets if isinstance(t, ast.Name)}
+    elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+        names = {node.target.id}
+    elif isinstance(node, ast.FunctionDef):
+        names = {node.name}
+    else:
+        return ""
+    return "a name that rebinds an import" if names & table.keys() else ""
+
+
 def _reserved(name: str) -> bool:
     return name.startswith(("pytest", "test", "collect_")) or (
         name.startswith("__") and name.endswith("__")
@@ -133,6 +147,8 @@ def _reserved(name: str) -> bool:
 
 
 def _known(root: str, own: frozenset[str]) -> bool:
+    """A module the repository has is a repository module first (it shadows a standard library
+    name on the verifier's path); otherwise the standard library or pytest."""
     return root in own or root == "pytest" or root in sys.stdlib_module_names
 
 

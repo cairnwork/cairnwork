@@ -23,7 +23,7 @@ from conftest_scenarios import project as _project  # noqa: F401  (the fixture, 
 from test_deferred_tests import FIX, SeeingWorker, make_test_commit, run
 
 import cairnwork.deferred_tests as dt
-from cairnwork.conftest_check import check_conftests, conftest_of, governed
+from cairnwork.conftest_check import _own_packages, check_conftests, conftest_of, governed
 from cairnwork_attest import binding_extras as bx
 
 pytestmark = pytest.mark.sandbox
@@ -99,6 +99,31 @@ def test_the_static_check_allows_only_additive_fixtures_and_literals(project, ad
     else:
         with pytest.raises(dt.TestCommitRejected, match="TEST_COMMIT_CONFTEST_STATIC"):
             check_conftests(project, base, commit, ["tests/conftest.py"])
+
+
+@pytest.mark.parametrize(
+    "addition",
+    [
+        "\nfrom pytest import fixture\nfixture = 1\n",
+        "\nimport pytest\npytest = 1\n",
+        "\nimport pytest\n\n\ndef pytest():\n    return 1\n",
+    ],
+)
+def test_the_static_check_refuses_a_name_that_rebinds_an_import(project, addition):
+    base, commit = _commit(project, {"tests/conftest.py": BASE_CONFTEST + addition})
+    with pytest.raises(dt.TestCommitRejected, match="rebinds an import"):
+        check_conftests(project, base, commit, ["tests/conftest.py"])
+
+
+def test_a_repository_module_named_like_the_standard_library_is_a_repository_module(project):
+    base, commit = _commit(project, {"src/random.py": "x = 1\n"})
+    assert "random" in _own_packages(project, commit)
+    base, commit = _commit(project, {"tests/conftest.py": BASE_CONFTEST + "\nimport random\n"})
+    check_conftests(project, base, commit, ["tests/conftest.py"])  # a stdlib name is fine too
+
+
+def test_a_conftest_at_the_repository_root_governs_every_base_test():
+    assert governed(["conftest.py"], ["tests/a.py", "x/b.py"]) == ("tests/a.py", "x/b.py")
 
 
 def test_helpers_pick_the_conftests_and_the_tests_under_their_directory():

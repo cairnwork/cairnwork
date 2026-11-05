@@ -8,9 +8,10 @@ the same outcome and the id set must be the same, else the test commit is refuse
 
 The comparison is only made when it can be trusted, else ``TEST_COMMIT_CONFTEST_UNCHECKED``, never
 "equal": P2P is on (not ``off``); the probe covers every base test file under each conftest's
-directory (forced coverage, independent of the mode's selection), within the module-dir cap and
-the time budget; on both sides the run was clean, collection finished with no collection error or
-skip, and every collected id has an outcome.
+directory and every file the P2P selection runs, as one set, within the time budget (a conftest's
+import-time effects reach the whole test process, not its directory only); on both sides the run
+was clean, collection finished with no collection error or skip, and every collected id has an
+outcome.
 
 The claim is narrow and stated: base outcomes are unchanged by the conftest. Behaviour that
 depends on the candidate's code is trusted test-author code, as any test file is. A receiver can
@@ -24,7 +25,7 @@ from pathlib import Path
 
 from cairnwork.conftest_check import conftest_of, governed
 from cairnwork.deferred_tests import TestCommitRejected, deleted_of, lay_tests_over
-from cairnwork.p2p_selection import MODULE_DIR_CAP
+from cairnwork.p2p_selection import select_p2p_targets
 from cairnwork.verifier_spec import VerifierSpec
 from cairnwork.verifiers import run_verifiers
 
@@ -43,14 +44,13 @@ def check_conftest(task, test_files, mode, result, ctx, base_tests, budget) -> t
         raise TestCommitRejected(
             UNCHECKED, "p2p_selection is off: nothing would check the conftest"
         )
-    forced = governed(conftests, base_tests(task, frozenset(deleted_of(test_files))))
-    if not forced or len(forced) > MODULE_DIR_CAP:
-        why = (
-            "no base test file under it"
-            if not forced
-            else f"{len(forced)} files, cap {MODULE_DIR_CAP}"
-        )
-        raise TestCommitRejected(UNCHECKED, f"{', '.join(conftests)}: {why}")
+    existing = base_tests(task, frozenset(deleted_of(test_files)))
+    # a conftest's import-time effects reach the whole test process: every file the P2P selection
+    # runs, plus every file under the conftest's directory, is compared (never the directory alone)
+    chosen = select_p2p_targets(task.allowed_files, existing, task.test_roots, mode)
+    forced = tuple(sorted({*chosen, *governed(conftests, existing)}))
+    if not forced:
+        raise TestCommitRejected(UNCHECKED, f"{', '.join(conftests)}: no base test file to compare")
     over = lay_tests_over(task.repo, task.base_commit, task.test_commit, conftests,
                           f"{result.attempt_id}-cf", Path(ctx.run_root))  # fmt: skip
     sides = {}

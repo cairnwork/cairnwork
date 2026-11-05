@@ -26,6 +26,16 @@ SHADOWED = {
     "    return 1\n",
     "tests/sub/test_val.py": "def test_val(val):\n    assert val == 1\n",
 }
+# an import-time effect of a repository module: it reaches every test of the process, not only the
+# files under the conftest that imports it (two files outside tests/sub, the affected one second)
+SIDEFX = {
+    "src/sidefx.py": "import os\nos.environ['W3B_FLAG'] = '1'\n",
+    "tests/other/test_a.py": "def test_a():\n    assert True\n",
+    "tests/other/test_env.py": "import os\n\n\ndef test_env():\n"
+    "    assert 'W3B_FLAG' not in os.environ\n",
+    "tests/sub/test_x.py": "def test_x():\n    assert True\n",
+}
+SLOW = "import time\n\n\ndef test_slow():\n    time.sleep(60)\n"
 SHADOW = "import pytest\n\n\n@pytest.fixture\ndef val():\n    return 2\n"
 
 
@@ -45,6 +55,7 @@ def conftest_run(
     path="tests/conftest.py",
     base_files=None,
     mode="whole-suite",
+    budget=300,
     key="k1",
 ):
     """One task whose test commit adds ``addition`` to the base conftest at ``path`` (or creates
@@ -54,7 +65,9 @@ def conftest_run(
     base_text = git(project, "show", f"HEAD:{path}") if _has(project, path) else ""
     files = {path: base_text + "\n" + addition, "tests/test_regression.py": regression}
     base, tests = make_test_commit(project, files)
-    return run(project, tmp_path, base, tests, SeeingWorker(FIX), key=key, p2p_mode=mode)
+    return run(
+        project, tmp_path, base, tests, SeeingWorker(FIX), key=key, p2p_mode=mode, p2p_budget=budget
+    )
 
 
 def _has(project, path):
@@ -92,6 +105,37 @@ SCENARIOS = {  # name: (kwargs of conftest_run, expected status, a code the reas
         },
         "FAILED",
         "TEST_COMMIT_CONFTEST_CHANGES_BASE",
+    ),
+    "an import side effect on a test outside its directory": (
+        {
+            "addition": "import sidefx\n",
+            "path": "tests/sub/conftest.py",
+            "base_files": SIDEFX,
+            "regression": PLAIN,
+        },
+        "FAILED",
+        "TEST_COMMIT_CONFTEST_CHANGES_BASE",
+    ),
+    "the same import in the root conftest": (
+        {"addition": "import sidefx\n", "base_files": SIDEFX, "regression": PLAIN},
+        "FAILED",
+        "TEST_COMMIT_CONFTEST_CHANGES_BASE",
+    ),
+    "a fixture-only conftest in a subdirectory": (
+        {"path": "tests/sub/conftest.py", "base_files": SIDEFX, "regression": PLAIN},
+        "COMPLETED",
+        "",
+    ),
+    "a probe over the time budget": (
+        {
+            "base_files": {
+                "tests/sub/test_slow.py": "import time\n\n\ndef test_slow():\n    time.sleep(60)\n"
+            },
+            "budget": 5,
+            "regression": PLAIN,
+        },
+        "FAILED",
+        "TEST_COMMIT_CONFTEST_UNCHECKED",
     ),
     "a conftest in a directory with no base test": (
         {"path": "tests/empty/conftest.py", "regression": PLAIN},
