@@ -13,6 +13,7 @@ import json
 from typing import Any
 
 from cairnwork import protection
+from cairnwork.conftest_check import conftest_of
 from cairnwork.deferred_overlay import deleted_of
 from cairnwork_protocol import (
     acceptance_contract_hash,
@@ -79,6 +80,7 @@ def binding_extras(task: Any, plan: Any, test_files: Any = ()) -> dict[str, Any]
         blackbox_commitment=task.blackbox.commitment() if task.blackbox else "",
         protection="" if found == protection.NONE else found,
         deleted_test_paths=sorted(deleted_of(test_files)),
+        conftest_paths=list(conftest_of(test_files)),
     )
 
 
