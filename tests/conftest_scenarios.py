@@ -36,6 +36,12 @@ SIDEFX = {
     "tests/sub/test_x.py": "def test_x():\n    assert True\n",
 }
 SLOW = "import time\n\n\ndef test_slow():\n    time.sleep(60)\n"
+LEAK = (  # a fixture that leaves process state; a new test of a base file uses it (CE1)
+    "\nimport os\nimport pytest\n\n\n@pytest.fixture\ndef leak():\n"
+    "    os.environ['W3B_FLAG'] = '1'\n"
+)
+USES_LEAK = "def test_a():\n    assert True\n\n\ndef test_new(leak):\n    assert True\n"
+SIBLING = {"tests/sub/random.py": "import os\nos.environ['W3B_FLAG'] = '1'\n"}  # CE4
 SHADOW = "import pytest\n\n\n@pytest.fixture\ndef val():\n    return 2\n"
 
 
@@ -56,6 +62,7 @@ def conftest_run(
     base_files=None,
     mode="whole-suite",
     budget=300,
+    extra_files=None,
     key="k1",
 ):
     """One task whose test commit adds ``addition`` to the base conftest at ``path`` (or creates
@@ -63,7 +70,11 @@ def conftest_run(
     if base_files:
         commit_change(project, base_files)
     base_text = git(project, "show", f"HEAD:{path}") if _has(project, path) else ""
-    files = {path: base_text + "\n" + addition, "tests/test_regression.py": regression}
+    files = {
+        path: base_text + "\n" + addition,
+        "tests/test_regression.py": regression,
+        **(extra_files or {}),
+    }
     base, tests = make_test_commit(project, files)
     return run(
         project, tmp_path, base, tests, SeeingWorker(FIX), key=key, p2p_mode=mode, p2p_budget=budget
@@ -125,6 +136,26 @@ SCENARIOS = {  # name: (kwargs of conftest_run, expected status, a code the reas
         {"path": "tests/sub/conftest.py", "base_files": SIDEFX, "regression": PLAIN},
         "COMPLETED",
         "",
+    ),
+    "a new test of a base file leaves process state that flips a base test elsewhere": (
+        {
+            "addition": LEAK,
+            "base_files": SIDEFX,
+            "regression": PLAIN,
+            "extra_files": {"tests/other/test_a.py": USES_LEAK},
+        },
+        "FAILED",
+        "TEST_COMMIT_CONFTEST_CHANGES_BASE",
+    ),
+    "a conftest that imports a same-directory module named like the standard library": (
+        {
+            "addition": "import random\n",
+            "path": "tests/sub/conftest.py",
+            "base_files": SIDEFX | SIBLING,
+            "regression": PLAIN,
+        },
+        "FAILED",
+        "TEST_COMMIT_CONFTEST_CHANGES_BASE",
     ),
     "a probe over the time budget": (
         {

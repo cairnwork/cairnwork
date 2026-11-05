@@ -12,8 +12,10 @@ runs first, at the producer and (full mode) at the receiver:
   whose only decorators are the pytest fixture decorator (resolved through the import table; literal
   arguments, no ``autouse``), never a ``pytest_*``, ``test*`` or dunder name. No classes.
 
-What it does not prove is stated: behaviour that depends on the candidate's code is trusted test
-author code, like any test file. Every refusal is ``TEST_COMMIT_CONFTEST_STATIC``.
+It is hygiene, not the guard: a name imported from the repository or rebound can carry behaviour
+it cannot see, and behaviour that depends on the candidate's code is trusted test author code, like
+any test file. The differential probe (p2p_conftest.py) is what holds. Every refusal is
+``TEST_COMMIT_CONFTEST_STATIC``.
 """
 
 from __future__ import annotations

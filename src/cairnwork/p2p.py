@@ -66,7 +66,7 @@ from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRej
 from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.issue_task import test_target
 from cairnwork.p2p_collect import OVER_BUDGET, collected_side, no_targets, whole_base
-from cairnwork.p2p_conftest import check_conftest
+from cairnwork.p2p_conftest import check_overlay, conftest_files
 from cairnwork.p2p_nodes import passing_targets, require_nodes
 from cairnwork.p2p_probe_log import probe_log_tail
 from cairnwork.p2p_selection import DEFAULT_BUDGET_SECONDS, cap_note, select_p2p_targets
@@ -150,7 +150,7 @@ def plan_p2p(task, specs, test_files, mode, budget, result, ctx: VerifyContext) 
     """Select and probe; see the module docstring. In a base test file among ``test_files`` (the
     deferred tests), only the tests the test commit does not change are P2P tests."""
     rule: dict = {"configured": mode, "applied": mode, "budget_seconds": budget, "degraded": ""}
-    forced = check_conftest(task, test_files, mode, result, ctx, _base_tests, budget)  # #798
+    forced = conftest_files(task, test_files, mode, _base_tests)  # #798
     if mode == "off":
         return P2PPlan(rule, None, budget)
     existing = _base_tests(task, frozenset(deleted_of(test_files)))  # #361; #798: not deleted ones
@@ -176,6 +176,7 @@ def plan_p2p(task, specs, test_files, mode, budget, result, ctx: VerifyContext) 
             raise BaseUncomparable(Comparison("UNCOMPARABLE", "P2P_BASE_PROBE_UNUSABLE", detail))
         if outcomes is not None:  # #793: removed and changed tests from what pytest collected
             side = collected_side(task, files, outcomes, test_files, ctx, budget, result.attempt_id)
+            check_overlay(task, test_files, files, outcomes, side, result, ctx, budget)  # #798
             selection = passing_targets(outcomes, side.changed_files, side.changed)
             plan = _plan(specs, rule | side.note(), selection, budget)
             if plan.spec is None and rule["degraded"]:  # G1: and none passes on the base

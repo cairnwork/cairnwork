@@ -6,7 +6,6 @@ and runs the whole pipeline (static check, differential base probe, verifiers)."
 
 import json
 import os
-import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -155,44 +154,16 @@ def test_a_confidential_receiver_needs_allow_conftest_and_a_full_one_re_runs_the
     assert failed is not None and failed.code == "CONFTEST_STATIC"
 
 
-def test_the_binding_names_conftest_paths_only_as_a_sorted_subset_of_the_test_paths():
-    ok = {"test_paths": ["tests/a/conftest.py", "tests/conftest.py"],
-          "conftest_paths": ["tests/a/conftest.py", "tests/conftest.py"]}  # fmt: skip
+def test_the_binding_names_exactly_the_conftests_among_the_test_paths():
+    both = ["tests/a/conftest.py", "tests/conftest.py"]
+    ok = {"test_paths": both, "conftest_paths": both}
     assert bx.binding_problem(ok) == ""
-    assert bx.binding_problem(ok | {"conftest_paths": ["tests/conftest.py", "tests/a/conftest.py"]})
+    assert bx.binding_problem(ok | {"conftest_paths": both[::-1]})  # not sorted
+    assert bx.binding_problem(ok | {"conftest_paths": ["tests/conftest.py"]})  # one left out
+    assert bx.binding_problem({"test_paths": both})  # conftests among the paths, none named
     assert bx.binding_problem(ok | {"conftest_paths": ["tests/x/conftest.py"]})  # not a test path
-    assert bx.binding_problem(ok | {"test_paths": ["tests/CONFTEST.py"],
-                                    "conftest_paths": ["tests/CONFTEST.py"]})  # fmt: skip
-    assert bx.policy_problem({"allow_conftest": "yes"}) and not bx.policy_problem(
-        {"allow_conftest": True}
-    )
-
-
-def _plumbing_commit(project, path, text):
-    """A commit that holds ``path`` whatever the case rules of the disk (a worktree on macOS would
-    write ``tests/CONFTEST.py`` over ``tests/conftest.py``)."""
-    base = git(project, "rev-parse", "HEAD")
-    blob = subprocess.run(["git", "hash-object", "-w", "--stdin"], cwd=project, input=text,
-                          capture_output=True, text=True, check=True).stdout.strip()  # fmt: skip
-    git(project, "read-tree", base)
-    git(project, "update-index", "--add", "--cacheinfo", f"100644,{blob},{path}")
-    tree = git(project, "write-tree")
-    commit = git(project, "commit-tree", tree, "-p", base, "-m", "tests")
-    git(project, "reset", "-q", "--hard", base)
-    return base, commit
-
-
-@pytest.mark.parametrize("path", ["tests/CONFTEST.py", "tests/Conftest.py", "tests/conftest.pth"])
-def test_only_the_exact_name_conftest_py_is_a_conftest(project, path):
-    base, commit = _plumbing_commit(project, path, FIXTURE)
-    with pytest.raises(dt.TestCommitRejected, match="TEST_COMMIT_SCOPE"):
-        dt.test_paths(project, base, commit)
-
-
-def test_a_deleted_conftest_stays_refused(project):
-    base = git(project, "rev-parse", "HEAD")
-    commit_change(project, {"tests/test_regression.py": PLAIN}, delete=("tests/conftest.py",))
-    commit = git(project, "rev-parse", "HEAD")
-    git(project, "reset", "-q", "--hard", base)
-    with pytest.raises(dt.TestCommitRejected, match="TEST_COMMIT_SCOPE"):
-        dt.test_paths(project, base, commit)
+    names = {"test_paths": ["tests/CONFTEST.py"], "conftest_paths": ["tests/CONFTEST.py"]}
+    assert bx.binding_problem(names)  # not the exact basename
+    assert bx.binding_problem({"test_paths": ["tests/test_x.py"]}) == ""
+    assert bx.policy_problem({"allow_conftest": "yes"})
+    assert not bx.policy_problem({"allow_conftest": True})

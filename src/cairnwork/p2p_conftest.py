@@ -1,21 +1,22 @@
 """#798 half 2: the differential base probe for a test commit that adds or changes a conftest.
 
-A conftest can change which base tests run or pass. Instead of listing what a conftest may not do,
-the test commit's conftest file(s) alone are laid over the BASE tree and the same probe (same
-files, pinned ini, sandbox) as the plain base probe is run on both trees. Every node id must have
-the same outcome and the id set must be the same, else the test commit is refused
+A conftest can change which base tests run or pass, and its import-time effects reach the whole
+test process. So the differential probe runs the way P2P really runs: the same set of files (the
+mode's selection plus every base test file under a conftest's directory) in one process, once on
+the BASE and once on the base with the WHOLE test commit laid over it. Every base test the test
+commit does not change, add or remove must keep its outcome, else the test commit is refused
 (``TEST_COMMIT_CONFTEST_CHANGES_BASE``: the test author's error, not the candidate's).
 
 The comparison is only made when it can be trusted, else ``TEST_COMMIT_CONFTEST_UNCHECKED``, never
-"equal": P2P is on (not ``off``); the probe covers every base test file under each conftest's
-directory and every file the P2P selection runs, as one set, within the time budget (a conftest's
-import-time effects reach the whole test process, not its directory only); on both sides the run
-was clean, collection finished with no collection error or skip, and every collected id has an
-outcome.
+"equal": P2P is on (not ``off``), there is a base test file, and the run with the test commit was
+clean within the time budget, collection finished with no collection error or skip, and every
+collected id has an outcome.
 
 The claim is narrow and stated: base outcomes are unchanged by the conftest. Behaviour that
-depends on the candidate's code is trusted test-author code, as any test file is. A receiver can
-re-run the static check (conftest_check.py) but not this probe: that part is the signer's word.
+depends on the candidate's code is trusted test-author code, as any test file is. The static check
+(conftest_check.py) is hygiene, not the guard: names imported or rebound can carry behaviour it
+cannot see; the probe is what holds. A receiver can re-run the static check but not this probe:
+that part is the signer's word.
 """
 
 from __future__ import annotations
@@ -33,10 +34,11 @@ CHANGES_BASE = "TEST_COMMIT_CONFTEST_CHANGES_BASE"
 UNCHECKED = "TEST_COMMIT_CONFTEST_UNCHECKED"
 
 
-def check_conftest(task, test_files, mode, result, ctx, base_tests, budget) -> tuple[str, ...]:
-    """The base test files the conftest governs (the probe must run them), once the differential
-    probe finds their outcomes unchanged; refuses otherwise. ``base_tests`` lists the existing
-    base test files (p2p._base_tests). ()  when the test commit has no conftest."""
+def conftest_files(task, test_files, mode, base_tests) -> tuple[str, ...]:
+    """The files the P2P probe must run when the test commit has a conftest: every file the mode's
+    selection runs plus every base test file under a conftest's directory, as one set (a
+    conftest's import-time effects reach the whole test process). () without a conftest; refused
+    UNCHECKED when P2P is off or there is no base test file at all."""
     conftests = conftest_of(test_files)
     if not conftests:
         return ()
@@ -45,25 +47,30 @@ def check_conftest(task, test_files, mode, result, ctx, base_tests, budget) -> t
             UNCHECKED, "p2p_selection is off: nothing would check the conftest"
         )
     existing = base_tests(task, frozenset(deleted_of(test_files)))
-    # a conftest's import-time effects reach the whole test process: every file the P2P selection
-    # runs, plus every file under the conftest's directory, is compared (never the directory alone)
     chosen = select_p2p_targets(task.allowed_files, existing, task.test_roots, mode)
     forced = tuple(sorted({*chosen, *governed(conftests, existing)}))
     if not forced:
         raise TestCommitRejected(UNCHECKED, f"{', '.join(conftests)}: no base test file to compare")
-    over = lay_tests_over(task.repo, task.base_commit, task.test_commit, conftests,
+    return forced
+
+
+def check_overlay(task, test_files, files, outcomes, side, result, ctx, budget) -> None:
+    """The differential probe, the way P2P really runs: the same ``files`` in one process on the
+    base (``outcomes``, the plain probe) and on the base with the WHOLE test commit laid over it.
+    Each base test the test commit does not change, add or remove (``side.changed``) must keep its
+    outcome; else TEST_COMMIT_CONFTEST_CHANGES_BASE. Does nothing without a conftest."""
+    if not conftest_of(test_files):
+        return
+    over = lay_tests_over(task.repo, task.base_commit, task.test_commit, test_files,
                           f"{result.attempt_id}-cf", Path(ctx.run_root))  # fmt: skip
-    sides = {}
-    for name, commit in (("base", task.base_commit), ("with the conftest", over)):
-        sides[name], why = _side(ctx, commit, forced, result, budget, name[:2])
-        if why:
-            raise TestCommitRejected(UNCHECKED, f"the probe {name} is unusable: {why}")
-    base_side, over_side = sides.values()
-    if base_side != over_side:
-        differ = sorted(n for n in {*base_side, *over_side} if base_side.get(n) != over_side.get(n))
+    after, why = _side(ctx, over, files, result, budget, "co")
+    if why:
+        raise TestCommitRejected(UNCHECKED, f"the probe with the test commit is unusable: {why}")
+    kept = {n: o for n, o in outcomes.items() if n.split("[", 1)[0] not in side.changed}
+    differ = sorted(n for n, o in kept.items() if after.get(n) != o)
+    if differ:
         shown = ", ".join(differ[:5]) + (" ..." if len(differ) > 5 else "")
         raise TestCommitRejected(CHANGES_BASE, f"{len(differ)} base test(s) differ: {shown}")
-    return forced
 
 
 def _side(ctx, commit, files, result, budget, tag) -> tuple[dict[str, str], str]:

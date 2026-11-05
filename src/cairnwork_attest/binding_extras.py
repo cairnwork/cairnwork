@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from cairnwork import protection
-from cairnwork.conftest_check import check_conftests
+from cairnwork.conftest_check import check_conftests, conftest_of
 from cairnwork.deferred_overlay import MAX_DELETED_TEST_PATHS, TestCommitRejected
 from cairnwork_attest.verify_response import VerifyResult, _fail
 
@@ -106,8 +106,8 @@ def binding_problem(binding: Mapping[str, Any]) -> str:
                 return f"binding {extra.key} has the wrong shape or is empty"
     if set(binding.get("deleted_test_paths", [])) & set(binding.get("test_paths", [])):
         return "binding deleted_test_paths and test_paths share a path"  # #798
-    if not set(binding.get("conftest_paths", [])) <= set(binding.get("test_paths", [])):
-        return "binding conftest_paths is not a subset of test_paths"  # #798
+    if binding.get("conftest_paths", []) != list(conftest_of(binding.get("test_paths", []))):
+        return "binding conftest_paths is not exactly the conftests among test_paths"  # #798
     return ""
 
 
