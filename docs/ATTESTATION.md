@@ -199,7 +199,7 @@ hashes or compares it (`MANIFEST_MISMATCH`, `BINDING_HASH_MISMATCH`, `RESPONSE_N
      - `UNREQUIRED_OBSERVATION_FAILED` (part of step 7, #430): every observation in `predicate.request.evidence_bundle` of an id the request's `required_verifier_ids` does not name must be `PASS`, as for a v0.2 receipt (#413). Required ids that are not a list of strings name none.
   8. `MANIFEST_MISMATCH`: The change manifest is recomputed from raw git tree objects between base and candidate commits (`read_change_set`), and its canonical `change_manifest_hash` matches both `predicate.request.change_set.diff_hash` and `cairnwork_protocol.change_manifest_hash(predicate.request.change_manifest)`.
   9. `RESPONSE_NOT_VERIFIED`: The verification response reports status `"VERIFIED"` and integrity `"VALID"` with HTTP 200, and matches `predicate.response.core_identity == predicate.core_identity` (both present, deep-equal); after the pin check (step 10), it satisfies `response_binding_problem` against the response's reported `core_identity` and echoes all five request hashes (`acceptance_contract_hash`, `change_set_hash`, `verification_plan_hash`, `evidence_bundle_hash`, and required `change_manifest_hash`).
-     - `RECEIPT_INCONSISTENT` (last, after step 10 and the rest of step 9, #440): the request's parts name each other as Core requires (the plan's `acceptance_contract_hash` and `change_set_hash`, and the evidence bundle's `acceptance_contract_hash`, `change_set_hash` and `verification_plan_hash`, are those of the request's contract, change set and plan), the contract's and the plan's `required_verifier_ids` are each a non-empty list of distinct, non-empty strings without surrounding whitespace or NUL (Core's rule, #445) and name the same set, and `predicate.verifier_observations` equals the request's observations. Core refuses a request that fails any of these, so a VERIFIED response to one is not its verdict.
+     - `RECEIPT_INCONSISTENT` (last, after step 10 and the rest of step 9, #440): the request's parts name each other as Core requires (the plan's `acceptance_contract_hash` and `change_set_hash`, and the evidence bundle's `acceptance_contract_hash`, `change_set_hash` and `verification_plan_hash`, are those of the request's contract, change set and plan), the contract's and the plan's `required_verifier_ids` are each a non-empty list of distinct, non-empty strings without surrounding whitespace or NUL (Core's rule, #445), each id is at most 512 UTF-8 bytes (#453), and the two lists name the same set; `predicate.verifier_observations` equals the request's observations. Core refuses a request that fails any of these, so a VERIFIED response to one is not its verdict.
   10. `CORE_IDENTITY_MISMATCH`: When an optional Core identity pin is provided (`--core-identity <json-file>` / `core_identity_pin`), it must match `predicate.response.core_identity`. It runs inside step 9: after the Core identity comparison, before the response binding and the echoed hashes.
 
 ### CLI Usage
@@ -382,6 +382,13 @@ Checks run in this order and the first failure is reported:
     `path::test[case]`, which names its test; #714). Full mode reads
     those tests from the test commit; confidential mode cannot, so there any target naming a test
     in the file counts, on the signer's word like the test contents (`TEST_PATH_NOT_TARGETED`).
+    A `conftest.py` among `test_paths` (#798) is exempt from that rule and bound by the optional key
+    `conftest_paths`, which must be exactly the paths in `test_paths` whose basename is `conftest.py`
+    (sorted). A confidential receiver refuses it (`CONFTEST_NOT_ALLOWED`) unless its policy sets
+    `allow_conftest: true`; a full receiver re-runs the static allowlist (`CONFTEST_STATIC`; hygiene,
+    not the guard). That the base tests keep their outcomes with the test commit laid over the base
+    (the differential probe, `p2p_conftest.py`) is the signer's word: `assurance.conftest_probe` is
+    `signer_claim` when `conftest_paths` is present.
     Every bound verifier id must be among the request's required verifier ids
     (`VERIFIER_NOT_REQUIRED`). The rule reads which tests a target names, not which ones pytest
     collected (#660). The producer also refuses a test commit whose new or changed tests are not
@@ -399,7 +406,7 @@ On success `VerifyResult.assurance` (Python API) and `verify --json` carry `assu
 `mode` (`full`/`confidential`), `test_source` (`policy_pinned` with `--policy`, otherwise
 `signer_choice`: the test commit the signer chose, which the receiver should read itself), `head`, `non_test_paths` (`verified` or
 `verified_against_core_manifest`), `test_contents` (`verified` or `not_verified`), `overlay`
-(`rebuilt` or `not_verified`), `verifier_runs` (always `signer_claim`) and `protection` (#303:
+(`rebuilt` or `not_verified`), `verifier_runs` (always `signer_claim`), `conftest_probe` (`signer_claim`, only with `conftest_paths`, #798) and `protection` (#303:
 the binding's level, checked in step 7; `"same_process_only"` when the binding has none) and
 `blackbox_checks` (#312, #373: `pinned` when the policy has `blackbox_checks`, `unpinned` when it
 pins a non-empty `blackbox_commitment` only, the weaker check, and `not_checked` without a policy or

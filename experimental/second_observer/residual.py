@@ -22,6 +22,9 @@ NEUTRAL_INI = frozenset(
 INI_KEYS, STRICT_ARGS, TABLE_PLUGINS = "INI_KEYS", "STRICT_ARGS", "TABLE_PLUGINS"
 IMPORTED_NAMES, CONFTEST_CODE = "IMPORTED_NAMES", "CONFTEST_CODE"
 PLUGINS_NONLITERAL, IMPORT_MODE = "PYTEST_PLUGINS_NONLITERAL", "IMPORT_MODE"
+# Version of the classification rules above; each row records it so old and new rows compare.
+# 2: IMPORTED_NAMES only for a from-import in a conftest or a star-import anywhere (#883).
+RULES_VERSION = 2
 
 
 def _unknown(label: str) -> str:
@@ -46,7 +49,9 @@ def _is_literal_plugins(value: ast.AST) -> bool:
 def _module_flags(tree: ast.Module, conftest: bool) -> set[str]:
     found: set[str] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        if conftest or any(alias.name == "*" for alias in node.names):
             found.add(IMPORTED_NAMES)
     for node in tree.body:
         names = []

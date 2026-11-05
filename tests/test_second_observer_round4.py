@@ -287,3 +287,27 @@ def test_missing_cw_verdict_is_uncomparable(tmp_path):
     raw = project.shadow_input(project.base, TARGET, cw_verdict=None)
     code, row, _ = project.shadow(raw)
     assert row["observer"] == "UNCOMPARABLE" and "cw_verdict" in row["detail"]
+
+
+def test_a_plain_from_import_in_the_test_module_is_not_imported_names(tmp_path):
+    # negative control (#883): the default test module does `from calc import add`
+    project = Project(tmp_path)
+    row = row_of(project, project.base)
+    assert "IMPORTED_NAMES" not in row["residual"]
+    assert row["residual_rules"] == 2
+
+
+STAR_TEST = {"tests/test_calc.py": CALC + "from helpers import *\n\n\ndef test_add():\n    pass\n"}
+
+
+@pytest.mark.parametrize(
+    ("base_files", "tests"),
+    [
+        ({"conftest.py": "from helpers import thing\n"}, None),
+        ({"tests/conftest.py": "from helpers import *\n"}, None),
+        (None, STAR_TEST),
+    ],
+)
+def test_imported_names_is_a_conftest_from_import_or_a_star_import(tmp_path, base_files, tests):
+    project = Project(tmp_path, tests=tests, base_files=base_files)
+    assert "IMPORTED_NAMES" in row_of(project, project.base)["residual"]
