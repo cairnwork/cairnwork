@@ -40,6 +40,8 @@ disagreements can be stratified (it records, it never changes a verdict; `unknow
 - `PYTEST_PLUGINS_NONLITERAL`: `pytest_plugins` is not a literal;
 - `IMPORT_MODE`: an import mode is configured.
 
+Not judged NA (known remainder): pytest before 8 ran nose-style setup/teardown hung on a function's attributes; the observer does not read them.
+
 Always-on pytest behaviour is also not reproduced and not recorded per row: the per-test warning
 filters, the conftest directories put on `sys.path`, the `PYTEST_CURRENT_TEST` variable, and
 assertion rewriting.

@@ -88,10 +88,20 @@ def test_unittest_target_with_class_xunit_is_na(tmp_path, hook):
     assert xunit_setup_na(module(tmp_path, text), "T.test_a") is True
 
 
-@pytest.mark.parametrize("hook", ["setup_module", "setup_function"])
+@pytest.mark.parametrize(
+    "hook", ["setup_module", "teardown_module", "setup_function", "teardown_function"]
+)
 def test_unittest_target_with_module_xunit_is_na(tmp_path, hook):
     text = f"import unittest\n\n\ndef {hook}(*a):\n    pass\n\n\nclass T(unittest.TestCase):\n    def test_a(self):\n        pass\n"
     assert xunit_setup_na(module(tmp_path, text), "T.test_a") is True
+
+
+@pytest.mark.parametrize(
+    "hook", ["setup_module", "teardown_module", "setup_function", "teardown_function"]
+)
+def test_runner_sees_module_xunit_for_a_unittest_target(tmp_path, hook):
+    text = f"import unittest\n\n\ndef {hook}(*a):\n    pass\n\n\nclass T(unittest.TestCase):\n    def test_a(self):\n        pass\n"
+    assert run_runner(tmp_path, text, "T.test_a")["detail"] == "XUNIT_SETUP"
 
 
 def test_unittest_own_setup_hooks_do_not_count(tmp_path):
@@ -210,16 +220,40 @@ def test_runner_sees_xunit_names_bound_without_def(tmp_path, kind):
     assert (got["status"], got["detail"]) == ("NA", "XUNIT_SETUP")
 
 
-def test_runner_sees_xunit_on_function_class_and_method(tmp_path):
-    func = "def test_a():\n    pass\n\n\ntest_a.setup = lambda *a: None\n"
-    assert run_runner(tmp_path, func, "test_a")["detail"] == "XUNIT_SETUP"
+def test_runner_sees_xunit_on_class_inheritance_and_module(tmp_path):
     base = "import unittest\n\n\nclass B(unittest.TestCase):\n    setup_class = classmethod(lambda c: None)\n\n\n"
     inherited = base + "class T(B):\n    def test_a(self):\n        pass\n"
     assert run_runner(tmp_path, inherited, "T.test_a")["detail"] == "XUNIT_SETUP"
-    meth = "import unittest\n\n\nclass T(unittest.TestCase):\n    def test_a(self):\n        pass\n\n    test_a.setup_method = 1\n"
-    assert run_runner(tmp_path, meth, "T.test_a")["detail"] == "XUNIT_SETUP"
     mod = "import unittest\n\nsetup_function = lambda *a: None\n\n\nclass T(unittest.TestCase):\n    def test_a(self):\n        pass\n"
     assert run_runner(tmp_path, mod, "T.test_a")["detail"] == "XUNIT_SETUP"
+
+
+def test_setup_attribute_on_the_function_or_method_object_is_still_judged(tmp_path):
+    """pytest runs no setup from these two places, so the observer must not call it NA."""
+    func = "def test_a():\n    pass\n\n\ntest_a.setup = lambda *a: None\n"
+    assert run_runner(tmp_path, func, "test_a")["status"] == "PASS"
+    meth = "import unittest\n\n\nclass T(unittest.TestCase):\n    def test_a(self):\n        pass\n\n    test_a.setup_method = 1\n"
+    assert run_runner(tmp_path, meth, "T.test_a")["status"] == "PASS"
+
+
+@pytest.mark.sandbox
+def test_ini_filterwarnings_error_is_observed_pass_and_listed_as_residual(tmp_path):
+    """Measured round-3 row 4: the ini form is not NA; cw FAIL, observer PASS, INI_KEYS."""
+    warn = "import warnings\n\n\ndef add(a, b):\n    warnings.warn('w')\n    return a + b\n"
+    ini = "[pytest]\nfilterwarnings =\n    error\n"
+    project = Project(tmp_path, base_files={"pytest.ini": ini})
+    cand = project.candidate({"src/calc.py": warn})
+    verdict = project.cw_verdict(cand, TARGET)
+    code, row, _ = project.shadow(project.shadow_input(cand, TARGET, cw_verdict=verdict))
+    assert (code, verdict, row["observer"]) == (0, "FAIL", "PASS")
+    assert "INI_KEYS" in row["residual"]
+
+
+def test_an_na_row_keeps_its_residual(tmp_path):
+    ini = "[pytest]\nfilterwarnings =\n    error\n"
+    project = Project(tmp_path, base_files={"pytest.ini": ini})
+    row = row_of(project, project.base, TARGET + "[5]")
+    assert row["observer"] == "NA" and "INI_KEYS" in row["residual"]
 
 
 def test_runner_still_judges_without_xunit_names(tmp_path):
