@@ -8,7 +8,8 @@ import pytest
 from conftest import commit_change
 from verify_helpers import base_of, candidate, verify
 
-from cairnwork.verify_scope import changed_scope
+from cairnwork.pipeline import TaskSpec
+from cairnwork.verify_scope import narrowed
 
 sandbox = pytest.mark.sandbox
 CMD = "python3 -m pytest -q pkg/tests/test_calc.py"
@@ -71,11 +72,43 @@ def test_nothing_listed_changed_keeps_todays_refusal(state, pkg_project):
     assert _code(out) == "PROTECTED_VERIFIER_INPUT", out
 
 
+def _task(repo, base, files):
+    return TaskSpec("k", "verify", "verify", "", repo, base, tuple(files), (("v", ("python3",)),))
+
+
 def test_the_list_is_kept_when_git_cannot_tell(pkg_project):
     base = base_of(pkg_project)
     for bad in ("HEAD", "z" * 40, base, "0" * 40, "--output=/tmp/x" + "0" * 26):
-        assert changed_scope(pkg_project, base, bad, ALLOW) == ALLOW
-    dup = ("pkg/__init__.py", "pkg/__init__.py")
+        assert narrowed(_task(pkg_project, base, ALLOW), bad).allowed_files == ALLOW
+
+
+def test_a_malformed_list_is_kept_whole_so_check_task_still_refuses_it(pkg_project):
+    base = base_of(pkg_project)
     fix = candidate(pkg_project, base, {"pkg/__init__.py": "VALUE = 2\n"})
-    assert changed_scope(pkg_project, base, fix, dup) == dup
-    assert changed_scope(pkg_project, base, fix, ALLOW) == ("pkg/__init__.py",)
+    init = "pkg/__init__.py"
+    for files in (
+        (init, init),  # duplicates, one of them changed
+        (init, ".github/workflows/ci.yml"),  # a protected path, unchanged
+        (init, "./pkg/fractions.py"),
+        (init, "pkg/"),
+        (init, "/abs/path.py"),
+        (init, "../up.py"),
+        tuple(f"pkg/m{i}.py" for i in range(10)) + (init,),  # 11 entries
+    ):
+        assert narrowed(_task(pkg_project, base, files), fix).allowed_files == files, files
+
+
+def test_only_check_task_sees_the_narrowed_list(pkg_project):
+    base = base_of(pkg_project)
+    fix = candidate(pkg_project, base, {"pkg/__init__.py": "VALUE = 2\n"})
+    task = _task(pkg_project, base, ALLOW)
+    assert narrowed(task, fix).allowed_files == ("pkg/__init__.py",)
+    assert task.allowed_files == ALLOW  # P2P, the receipt and the candidate check keep the list
+
+
+def test_an_unchanged_protected_path_in_the_list_is_still_refused(state, pkg_project):
+    base = base_of(pkg_project)
+    fix = candidate(pkg_project, base, {"pkg/__init__.py": "VALUE = 2\n"})
+    allowed = ("pkg/__init__.py", ".github/workflows/ci.yml")
+    code, out = verify(state, pkg_project, base, fix, allowed=allowed, tests=(CMD,))
+    assert _code(out) == "TASK_ALLOWED_FILES_PROTECTED", out
