@@ -11,6 +11,9 @@ from pathlib import Path
 from cairnwork.gitcmd import GitCommandError, run_git
 
 _REGULAR = ("100644", "100755")
+MAX_DELETED_TEST_PATHS = (
+    8  # a receipt binding carries at most this many (#870); the receiver reads it too
+)
 OVERLAY_RULE = "overlay-v1"  # how the tests are laid over a candidate (#229); bound in receipts
 
 
