@@ -10,7 +10,7 @@ import socket
 from pathlib import Path
 
 import pytest
-from observer_support import BUGGY, FIXED, Project, git
+from second_observer_support import BUGGY, FIXED, Project, git
 
 sandbox = pytest.mark.sandbox
 TARGET = "tests/test_calc.py::test_add"
