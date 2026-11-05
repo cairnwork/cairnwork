@@ -36,10 +36,17 @@ def add(ledger: dict[str, str], *extra: str, **kw: str) -> int:
     opt.update(kw)
     argv = ["add", "--casebook", str(Path(ledger["dir"]) / "cb.jsonl"), "--notary-db", ledger["db"]]
     argv += ["--task-id", "task-1", "--found-by", "reviewer-x"]
-    argv += ["--evidence", "ref-1"]
+    argv += ["--evidence-file", evidence(ledger, opt["candidate"], opt["kind"])]
     for k, v in opt.items():
         argv += [f"--{k}", v]
     return main([*argv, *extra])
+
+
+def evidence(ledger: dict[str, str], cand: str, kind: str, attempt: str = "a1") -> str:
+    path = Path(ledger["dir"]) / f"ev-{kind}-{cand[:8]}.json"
+    data = {"candidate": cand, "task_id": "task-1", "attempt_id": attempt, "kind": kind}
+    path.write_text(json.dumps({**data, "ref": "ref-1"}))
+    return str(path)
 
 
 def book(ledger: dict[str, str]) -> Path:
@@ -79,14 +86,14 @@ def test_ac2_duplicate_no_new_line(
     assert len(book(ledger).read_text().splitlines()) == 1
 
 
-def test_ac2_other_kind_conflict(
+def test_ac2_other_kind_refused_by_original_verdict(
     ledger: dict[str, str], capsys: pytest.CaptureFixture[str]
 ) -> None:
+    # #772: the row was accepted, so refused_good is refused before any conflict check
     assert add(ledger) == 0
     assert add(ledger, kind="refused_good") == 2
-    assert "CASE_CONFLICT" in capsys.readouterr().out
+    assert "CASE_ORIGIN_MISMATCH" in capsys.readouterr().out
     assert len(book(ledger).read_text().splitlines()) == 1
-    assert add(ledger, version="v2", kind="refused_good") == 0  # other version is a new case
 
 
 def test_ac3_list_intact_chain_prints_cases(
@@ -137,7 +144,7 @@ def test_concurrent_adds_keep_one_chain(ledger: dict[str, str]) -> None:
 
     case = {"candidate": ledger["cand"], "base": ledger["base"], "task_id": "task-1",
             "attempt_id": "a1", "kind": "accepted_bad", "found_by": "reviewer-x",
-            "evidence": "note-1"}  # fmt: skip
+            "evidence_file": evidence(ledger, ledger["cand"], "accepted_bad")}  # fmt: skip
     with ThreadPoolExecutor(8) as pool:
         db = Path(ledger["db"])
         done = list(pool.map(lambda i: add_case(book(ledger), db, {**case, "version": f"v{i}"}),

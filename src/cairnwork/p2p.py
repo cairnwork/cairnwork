@@ -64,7 +64,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import cairnwork_sandbox
-from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRejected
+from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRejected, deleted_of
 from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.issue_task import test_target
 from cairnwork.p2p_nodes import changed_tests, passing_targets, require_nodes
@@ -152,7 +152,7 @@ def plan_p2p(task, specs, test_files, mode, budget, result, ctx: VerifyContext) 
     rule: dict = {"configured": mode, "applied": mode, "budget_seconds": budget, "degraded": ""}
     if mode == "off":
         return P2PPlan(rule, None, budget)
-    existing = _base_tests(task, frozenset())  # #361: the same list as base_env_check
+    existing = _base_tests(task, frozenset(deleted_of(test_files)))  # #361; #798: not deleted ones
     changed_files = frozenset(test_files) & frozenset(existing)
     changed: frozenset[str] = frozenset()
     if changed_files:

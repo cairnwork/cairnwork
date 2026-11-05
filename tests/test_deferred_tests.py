@@ -40,7 +40,7 @@ FIX = {"src/calc.py": "def add(a, b):\n    return a + b\n"}
 CHECK = (("pytest", ("python3", "-m", "pytest", "-q", "tests/test_regression.py")),)
 
 
-def make_test_commit(project, files):
+def make_test_commit(project, files, delete=()):
     """A test commit on the base that exists only in the origin, as on GitHub: the
     project (Cairnwork's repository) gets it only when Cairnwork fetches it."""
     base = git(project, "rev-parse", "HEAD")
@@ -54,16 +54,16 @@ def make_test_commit(project, files):
     git(work, "config", "user.email", "t@e")
     git(work, "config", "user.name", "t")
     git(work, "checkout", "-q", "--detach", base)
-    test_commit = commit_change(work, files, message="tests")
+    test_commit = commit_change(work, files, delete=delete, message="tests")
     git(work, "push", "-q", "origin", f"{test_commit}:refs/heads/tests-{test_commit[:8]}")
     return base, test_commit
 
 
-def run(project, tmp_path, base, test_commit, worker, verifiers=CHECK, key="k1"):
+def run(project, tmp_path, base, test_commit, worker, verifiers=CHECK, key="k1", **task_kw):
     state = tmp_path / "state"
     state.mkdir(exist_ok=True)
     task = TaskSpec(key, "card-" + key, "fix add", "add() is off by one", project, base,
-                    ("src/calc.py",), verifiers, test_commit=test_commit)  # fmt: skip
+                    ("src/calc.py",), verifiers, test_commit=test_commit, **task_kw)  # fmt: skip
     return run_task(
         task,
         ledger=OwnershipLedger(state / "own.sqlite"),

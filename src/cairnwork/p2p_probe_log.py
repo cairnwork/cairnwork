@@ -74,13 +74,18 @@ def probe_log_tail(path: str | Path | None) -> str:
         raw = raw.partition(b"\n")[2]
         if not raw:
             return f"[tail omitted: no complete line in the last {_WINDOW_BYTES // 1024} KB]"
-    text = raw.decode("utf-8", errors="replace")
+    return mask_secrets(raw.decode("utf-8", errors="replace"))[-TAIL_CHARS:]
+
+
+def mask_secrets(text: str) -> str:
+    """``text`` without ANSI codes, hidden characters, URL credentials, or the masked forms listed
+    in ``probe_log_tail``; the same rules for any text that may carry a secret (#814 argv)."""
     text = _URL_USERINFO.sub(
         "", replace_hidden(_ANSI.sub("", text).replace("\r\n", "\n"), _HID, keep="\n\t")
     )
     for rx in (_HEADER, _BEARER, _COLON, _FLAG, _ENCODED):
         text = rx.sub(r"\1<redacted>", text)
-    return _mask_fields(text).replace(_HID, "?")[-TAIL_CHARS:]
+    return _mask_fields(text).replace(_HID, "?")
 
 
 def _is_key(name: str) -> bool:

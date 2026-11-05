@@ -71,10 +71,12 @@ def producer(tmp_path: Path) -> dict[str, Any]:
     return {"work": work, "base": base, "head": head, "other": other, "tests": tests}
 
 
-def executed(work: Path, head: str, tests: str, paths: tuple[str, ...]) -> tuple[str, str]:
+def executed(
+    work: Path, head: str, tests: str, paths: tuple[str, ...], deleted: tuple[str, ...] = ()
+) -> tuple[str, str]:
     """The executed tree (overlay-v1) and a scratch commit carrying it, as lay_tests_over does."""
     with tempfile.TemporaryDirectory() as tmp:
-        tree = overlay_tree(work, head, tests, paths, Path(tmp) / "index")
+        tree = overlay_tree(work, head, tests, paths, Path(tmp) / "index", deleted)
     judged = git(work, "commit-tree", tree, "-p", head, "-m", "scratch")
     return tree, judged
 
@@ -91,7 +93,7 @@ def notarize_bound(
     unchecked: bool | None = None, import_paths: tuple[str, ...] = (),
     blackbox_commitment: str = "", protection: str = "",
     required: tuple[str, ...] = ("pytest-0",), failing: tuple[str, ...] = (),
-    unrequired: tuple[str, ...] = (),
+    unrequired: tuple[str, ...] = (), deleted: tuple[str, ...] = (),
 ) -> dict[str, Any]:  # fmt: skip
     """Notarize one external-candidate run; head is what the binding claims, overlay_head what
     the tests were laid over (they differ only in negative controls). ``failing`` observations
@@ -102,12 +104,14 @@ def notarize_bound(
     claimed: str = head or p["head"]
     paths = paths or tuple(sorted(TESTS))
     tree, judged = tree_and_judged or executed(
-        p["work"], overlay_head or claimed, p["tests"], paths
+        p["work"], overlay_head or claimed, p["tests"], paths, deleted
     )
     binding = {
         "rule": rule, "base": p["base"], "head": claimed, "test_commit": p["tests"],
         "test_paths": sorted(paths), "executed_tree": tree, "verifiers": VERIFIERS,
     }  # fmt: skip
+    if deleted:  # #798, likewise
+        binding["deleted_test_paths"] = sorted(deleted)
     if import_paths:  # as verify_candidate._binding (#292): only when set
         binding["import_paths"] = list(import_paths)
     if blackbox_commitment:  # #303, likewise
@@ -115,7 +119,9 @@ def notarize_bound(
     if protection:  # #303 (cairnwork/protection.py): only when not same_process_only
         binding["protection"] = protection
     task = "verify-0123456789abcdef"
-    spec = AcceptanceSpec(task, binding_hash(binding), required, ("src/a.py", *paths))
+    spec = AcceptanceSpec(
+        task, binding_hash(binding), required, ("src/a.py", *paths, *deleted), bool(deleted)
+    )
     obs = tuple(
         VerifierObservation(v, "artifact-1", "sha256:" + "e" * 64, v not in failing)
         for v in (*required, *unrequired)

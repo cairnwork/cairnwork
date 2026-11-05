@@ -26,6 +26,7 @@
        - 任務開始前，如果這個測試 commit 已經在本機出現過（例如重試，或之前另一個任務用過同一個），就拒絕（`TEST_COMMIT_ALREADY_EXPOSED`）。重試時要把測試推成一個新的 commit。被 `cairnwork-verify` 用過（`<state>/verify-used-tests/<sha>` 已存在）的也一樣拒絕。worker 結束、抓取測試之前，用 `O_EXCL` 建立同一個 `verify-used-tests/<sha>` 登記（和 verify 共用，`deferred_store.consume`），所以兩個**同時執行**、用同一個測試 commit 的任務只有一個拿得到，另一個拒絕 `TEST_COMMIT_ALREADY_EXPOSED`；worker 失敗、候選被拒絕這類在抓取之前就結束的嘗試不登記，重試可以沿用同一個測試 commit。直接用程式建立、沒有 `test_store`（沒有 state 目錄）的 TaskSpec 只有「從未出現過」檢查。
        - **限制**：worker 和 Cairnwork 用同一個系統帳號，而修正的驗證 log 是 Core 公證的證據，必須保留。所以重試時如果新的測試內容和上一次相同，worker 仍可能從上一次的 log 讀到。要徹底解決，必須讓 worker 改在獨立的帳號或環境裡執行（設 `agy_run_as_user`，見下方「預設隔離範圍」；沒設時這個限制就是現狀）。
      - **每個延後測試檔的改動都要有 verifier 跑到（#651）**：測試 commit 裡每個 `.py` 檔，要嘛整檔（`tests/test_x.py`）出現在某個 verifier 的目標裡，要嘛它新增或改動的每個測試函式（和延後測試判定牙齒時用的同一組，`new_tests`）都被目標點名（`tests/test_x.py::test_y`，或包住它的類別 `tests/test_x.py::TestK`；或它的某一個參數化案例 `tests/test_x.py::test_y[case]`，算點名 `test_y`，#714）。verifier 目標可以是參數化的 node id（最後一段可帶一組 `[...]`，內容只收可印字元——以 Python 的 str.isprintable() 加上空白為準，控制、格式（零寬、方向標記）、分隔、代理、私用與未指派碼點都拒，也不能有方括號）；參數含空白時，Issue 裡的驗收指令要把這個目標加引號（指令以 shlex 切開），例如 `python3 -m pytest -q 'tests/test_x.py::test_y[a b]'`。點名一個案例只跑那個案例，同一個被改測試的其他案例不會被要求執行（與 `docs/ATTESTATION.md` 第 10 項同義）。沒有測試函式的 `.py`（輔助模組、`__init__.py`、只改 fixture 或常數的檔案）只能整檔點名；非 Python 檔（資料檔）不能當 pytest 目標，不要求。檔案裡沒改的測試仍由 P2P 負責。少了任何一個就在 base 執行之前拒絕（`DEFERRED_TESTS_NOT_TARGETED`），worker 路徑與 `cairnwork-verify` 相同。收據把整個測試 commit 記成已驗證，所以每個檔的改動都必須真的跑過；收件方驗證收據時也檢查同一規則（`docs/ATTESTATION.md`）。注意兩條路徑在這個檢查之前都已登記用掉這個測試 commit（要讀到檔名必須先抓進來），被拒後要改好 verifier 並推新的測試 commit。
+     - **目標指定成整個函式、而其中有參數化案例被 skip，這次執行會判失敗（#803）**：驗證的規則是 skip 一律不算通過（#44）。目標寫成 `tests/t.py::test_x`（整個函式）時，pytest 會跑它所有參數化案例；只要其中一個在這台主機被 skip，整個 verifier 執行就判失敗，即使其他案例都通過。要改成只點名不會 skip 的案例，用節點 id，例如 `tests/t.py::test_x[a]`（點名一個案例只跑那個案例，見上一條）。送題前先在目標主機確認每個被點名的節點都不是 skip。
      - **這條規則只看目標點名了哪些測試，看不到 pytest 實際收集了什麼（#660），所以再加兩道**：（1）讀檔時，類別從同一個檔裡較早定義的類別繼承的測試，pytest 會在子類別底下再收集一份，所以也算子類別的新測試，每一份都要被點名（或整檔）；新增或改動的測試若在 pytest 不收集的類別裡（類別有 `__init__` 或 `__new__`，自己的或繼承的），在 base 執行之前拒絕（`DEFERRED_TESTS_NOT_COLLECTED`），因為沒有 verifier 跑得到它。（2）base 執行後，每個新增或改動的測試都必須出現在某個 verifier 的 guard 紀錄裡（有被收集、跑過，結果不限），否則拒絕（`DEFERRED_TESTS_NOT_RUN`）；這一道排在 UNCOMPARABLE 之後、判牙齒之前。（3）驗證執行（跑候選版的那一次）後也一樣：每個新增或改動的測試都要出現在該次的 guard 紀錄裡；目標點名整個檔時，同檔別的測試通過不算數，缺一個就不送 Core、拒絕（`DEFERRED_TESTS_NOT_RUN_IN_VERIFICATION`，#697）。收件方只有第（1）道（完整模式），收據裡沒有 guard 紀錄，第（2）（3）道依簽署者說法。
      - **確認測試有效**（三態，#234，規則 `base-compare-v1`）：在「base + 測試」上跑 verifier，看 guard 紀錄（不是 JUnit 檔）。每個 verifier 都判，不提早結束：
        - 有延後測試的案例失敗，而且每個 verifier 都正常跑完（exit 0 或 1、有 guard 紀錄、沒有收集錯誤、log 沒有超過上限、沒有殘留行程、沒改動 checkout、沒有偽造的 bytecode）→ 有牙齒，繼續。
@@ -96,6 +97,33 @@
 - **worker 帳號（`agy_run_as_user`，#19 Phase B 呼叫端，#183）**：設了 `agy_dispatch` 之後，`config.json` 可再設 `"agy_run_as_user": "_cairnwork_worker"`（只能是帳號名稱：字母、數字、`_`、`-`，最長 64 字，否則 `BAD_CONFIG`；沒設 `agy_dispatch` 時設它也是 `BAD_CONFIG`，因為只有調度器能換帳號）。設了之後 worker 多傳 `--run-as-user=<帳號>` 給調度器，由調度器（仍以 owner 身分選帳號、持有租約）把 agy 本身跑在那個 macOS 帳號下：每次 attempt 在 `/Users/Shared/cairnwork-worker/worker-runs/<32 位十六進位 run tag>/` 複製一份 clone（不含 `.git`），經 `sudo -n -u <帳號> /Users/Shared/cairnwork-worker/bin/agy-worker-exec` 加 Seatbelt 執行，結束後把改動複製回 attempt clone（一次性 sudo 設定見 `scripts/setup_worker_user.sh`；調度器端見 Nexus-new #2884）。**有的隔離**：模型程序讀不到 owner 的家目錄、agy 帳號池、Cairnwork 的 repo／log 和其他 attempt；attempt clone 的快照規則不變（仍只收允許的檔案）。**沒有的隔離**：每個 run 共用同一個 worker uid，run 之間靠調度器的 per-run Seatbelt profile 分隔，不是靠檔案權限；調度器本身仍以 owner 身分執行。**證據：worker 收據**（調度器最低版本：Nexus-new commit `4f526e8cab743f036ae556b27a1e86c0456bc564`，PR 2903／#2888）。**只能在含這個 commit 的調度器上啟用 `agy_run_as_user`**：有 `--run-as-user`（fcdbc278b）但沒有 PR 2903 的調度器會把 worker 的 stderr 原樣轉出，worker 可以自己印一整組看起來正確的收據而通過檢查，Cairnwork 分不出真假，也沒有可靠的版本訊號可以拒絕舊版，所以這是部署前提，不是執行時檢查。收據格式：調度器每個 attempt 在 stderr 寫三行（前綴同狀態行 `NEXUS_AGY_DISPATCH`）：`WORKER_LAUNCH`（`run_as_user`、`run_root`、`run_root_id`、`wrapper_sha256`）、`WORKER_SWEEP`（`result`、`wrapper`、`left`）、`WORKER_CLEANUP`（`run_root_removed`、`worker_failure` 只留 `KIND:reason`），最終狀態行仍在最後；worker 自己印出的同形狀行會被調度器加上 `[provider]` 前綴，Cairnwork 不讀。worker 讀**所有**調度器行（最多 64 行、每行最多 64 KiB；超過行數、某行被截斷、或讀取失敗都當收據不完整；超過 64 KiB 的行其餘部分一律丟到換行為止，所以 worker 不能把收據藏在超長行的後段），只有下列全部成立才算隔離成功：每個有收據的 attempt 三行各一次、`WORKER_LAUNCH` 的帳號等於設定的帳號、`run_root` 是 `/Users/Shared/cairnwork-worker/worker-runs/<32 位十六進位>`、`WORKER_SWEEP` 是 `clean`／`CLEAN`／`left` 空、`run_root_removed` 為真、沒有 `worker_failure`；結束碼 0 時最後一行還必須是 `completed` 狀態，且它的 attempt 有 `WORKER_LAUNCH`。否則 attempt 失敗（`AgyWorkerAccountFailed`），原因碼：`WORKER_RECEIPT_MISSING`（沒有收據，例如調度器沒照旗標做）、`WORKER_RECEIPT_MISMATCH`（帳號或 run 目錄不對）、`WORKER_RECEIPT_DUPLICATE`、`WORKER_RECEIPT_INCOMPLETE`、`WORKER_RECEIPTS_UNKNOWN`、`WORKER_SWEEP_UNCLEAN`、`WORKER_RUN_ROOT_LEFT`、`WORKER_ACCOUNT_FAILED`（收據點名的 `worker_failure`）、`DISPATCH_STATUS_MISSING`（最後一行不是 `completed`，例如 Popen 失敗）。每次都在 agy log 旁留 `<attempt>.agy.worker.json`（owner 限定）：讀到的收據、事後清掃結果、找到的問題。**失敗即失敗（fail closed）**：調度器回報帳號、wrapper 或複製回來失敗（`failure_kind` 含 `AGY_WORKER_`／`RUN_AS_USER_`，不論結束碼），attempt 失敗原因是 `WORKER_FAILED: AgyWorkerAccountFailed: WORKER_ACCOUNT_FAILED: <failure_kind>`，絕不改以 owner 身分執行 agy；不認得這個旗標的舊版調度器會以結束碼 2 拒絕，同樣是失敗。**清理**：補不補清只看收據，不看調度器怎麼結束：收據證明已乾淨清掃（`clean`／`CLEAN`／`left` 空）且 `run_root_removed` 的 run 不再補清（這時 wrapper 的 `--sweep` 也會因目錄不存在拒絕，結束碼 64）；其他每個有 `WORKER_LAUNCH` 的 run，不論是逾時被殺、被別人以訊號殺掉、崩潰、輸出被佔住、或帶著 `failed` 最終狀態正常結束，都會事後補清，attempt 仍然失敗。owner 無法對另一個 uid 送訊號，worker 從調度器已寫出的 `WORKER_LAUNCH` 收據取得 run 目錄（不讀程序表猜；就算其他行遺失或讀取失敗，解析成功的收據照樣補清，attempt 仍然失敗）。收據沒顯示「已乾淨清掃並刪除」、目錄還在、而且目錄的 (dev, ino) 仍等於收據的 `run_root_id`（避免同一路徑已換成別的 run）的，就以 `sudo -n -u <帳號> /Users/Shared/cairnwork-worker/bin/agy-worker-exec --sweep <run_root>` 請 wrapper 殺掉那個 run 的 worker 程序，只有 wrapper 回報 `AGY_WORKER_SWEEP clean`（結束碼 0）才刪掉留下的 run 目錄（裡面有該次租用帳號的 agy session 檔）；清不乾淨、wrapper 拒絕、收據帳號或 `run_root_id` 不符、被訊號殺掉前沒有任何 `WORKER_LAUNCH` 收據（launch 情況不明）、或目錄已不在但沒有乾淨的 `WORKER_SWEEP`，attempt 失敗原因是 `WORKER_SWEEP_UNCLEAN`，run 目錄保留待人工處理。沒設時 argv 與行為跟只設 `agy_dispatch` 時完全相同（測試鎖定）。部署注意：第三輪 A/B 量測進行中不要在線上 state 啟用（其 PREREG 固定 worker 與 owner 同 uid），等第三輪定案後再開。
 - **重送邊界（`REPLAY_FORBIDDEN`）**：同一份已綁定的請求（`request_digest`）換冪等鍵或換 card 再送，已完成或已失敗的回 `REPLAY_FORBIDDEN`，進行中的回 `RECONCILIATION_REQUIRED`，都不會重跑。所以編輯過區塊、但綁定的請求內容沒變的 Issue，每一輪都會被擋下（安全，不會重跑）；要重做就換新的測試 commit，或真的改動請求內容（FAILED 的舊任務要先人工 SUPERSEDED，`cairnwork-route supersede`）。
 - 和 EIA 不重複：`cairnwork:queue` 是另一個標籤。要做 A/B 比較時，再明確把同一張 Issue 兩個標籤都貼上，兩邊各自開 PR，最後只合併一張。
+
+## 延後測試怎麼寫才不會被字面值作弊騙過
+
+候選在執行期間讀得到延後測試的原始碼，所以只比對字面期望值的測試，可能被「照著測試寫出剛好過關的答案」騙過，即使函式本身沒有做對。寫延後測試時：
+
+1. **輸入要和可見測試不同。** 可見測試用過的輸入，延後測試不要再用。
+2. **至少一條性質式或不等式斷言**，不要全部只比對字面值。例如檢查結果的範圍、單調性、和輸入的關係。
+3. **同一個函式至少呼叫兩次，輸入不同。** 單一輸入的答案最容易被硬編碼；多個輸入加上性質式斷言會提高硬編碼的成本。第 1–3 條只是提高成本，候選既然讀得到測試原始碼，仍可能逐一特判；真正保密要靠第 5 條。
+4. **型別檢查用 `isinstance`，不要用 `type(x) is int`。** 前者符合一般的 Python 型別語意，後者會誤擋合法的子類別。注意 `bool` 也是 `int` 的子類別，要排除時另外檢查 `not isinstance(x, bool)`。
+5. **需要真正保密的期望值，用黑箱檢查**（`cairnwork-verify run --blackbox <宣告檔>`，見 `docs/BLACKBOX_COVERAGE.md`）：期望值留在 Cairnwork 自己的程序裡，候選碼讀不到。一般 pytest 延後測試和候選碼同程序，不受這種保護。
+
+好壞對照（`square(x)` 應回傳 x 的平方）：
+
+```python
+# 弱：單一字面值，可以被硬編碼過關
+def test_square():
+    assert square(3) == 9
+
+
+# 較強：不同於可見測試的輸入、呼叫兩次、性質式斷言、isinstance
+def test_square_properties():
+    a, b = square(7), square(-12)
+    assert isinstance(a, int) and isinstance(b, int)
+    assert (a, b) == (49, 144)
+    assert b > a > 0  # 不等式
+    assert square(-5) == square(5)  # 性質：偶函數
+```
 
 ## 常設 KPI：7 天返工率
 

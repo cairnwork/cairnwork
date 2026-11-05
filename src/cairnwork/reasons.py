@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 
+from cairnwork import survivor_argv
 from cairnwork.textclean import replace_hidden
 
 MAX_NAMES = 5
@@ -73,6 +74,7 @@ def why_not_passed(
     if survivors:
         causes.append(
             f"{survivors} process(es) outlived the run, or the process list was unreadable"
+            + survivor_argv.listing(survivors)  # #814: masked argv prefixes, text only
         )
     if log_too_big:
         causes.append("log over the size cap")
@@ -120,3 +122,10 @@ def explain(runs) -> str:
     return (f" [{'; '.join(failed)}]" if failed else "") + (
         f" [notes {'; '.join(noted)}]" if noted else ""
     )
+
+
+def skip_hint(run) -> str:
+    """#813: the module a collector skipped for (``importorskip``); text for the reason, the
+    verdict is not read from it. The names come from the run's record: cut and cleaned here."""
+    deps = getattr(run, "skipped_deps", ())
+    return f"; skipped at collection, could not import {_names(deps)}" if deps else ""

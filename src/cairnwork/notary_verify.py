@@ -13,6 +13,7 @@ import json
 from typing import Any
 
 from cairnwork import protection
+from cairnwork.deferred_overlay import deleted_of
 from cairnwork_protocol import (
     acceptance_contract_hash,
     change_set_hash,
@@ -64,11 +65,11 @@ def nonempty_fields(**fields: Any) -> dict[str, Any]:
     return {key: value for key, value in fields.items() if value}
 
 
-def binding_extras(task: Any, plan: Any) -> dict[str, Any]:
+def binding_extras(task: Any, plan: Any, test_files: Any = ()) -> dict[str, Any]:
     """A receipt binding's optional keys (#292) for a verify task: its import paths and, #303, the
     blackbox declaration's commitment and the protection level of the verifier ids Core will
     require (the task's verifiers, the P2P plan's and the declared checks; judge_candidate checks
-    it against the ids it gives Core)."""
+    it against the ids it gives Core). #798: the test files the test commit deleted."""
     ids = [verifier_id for verifier_id, _ in task.verifiers]
     ids += [plan.spec.verifier_id] if plan is not None and plan.spec is not None else []
     ids += [check.verifier_id for check in task.blackbox.checks] if task.blackbox else []
@@ -77,6 +78,7 @@ def binding_extras(task: Any, plan: Any) -> dict[str, Any]:
         import_paths=list(task.import_paths),
         blackbox_commitment=task.blackbox.commitment() if task.blackbox else "",
         protection="" if found == protection.NONE else found,
+        deleted_test_paths=sorted(deleted_of(test_files)),
     )
 
 

@@ -10,7 +10,6 @@ rules stay small and easy to audit.
 
 from __future__ import annotations
 
-import json
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -19,6 +18,7 @@ from pathlib import Path
 from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.import_path_tree import normalize_import_paths
 from cairnwork.issue_task import DEFAULT_TEST_ROOTS, test_target
+from cairnwork.module_inventory import importable_names as _importable_names
 from cairnwork.namespace_shadow import import_name as _import_name
 from cairnwork.namespace_shadow import is_init_file as _is_init_file
 from cairnwork.namespace_shadow import namespace_shadows
@@ -36,12 +36,6 @@ _PROTECTED_NAMES = frozenset(
         "sitecustomize.py",
         "usercustomize.py",
     }
-)
-_MODULE_NAMES = (
-    "import json, pkgutil, sys; from importlib.metadata import packages_distributions; "
-    "print(json.dumps(sorted(sys.stdlib_module_names | "
-    "{module.name for module in pkgutil.iter_modules()} | "
-    "set(packages_distributions()))))"
 )
 
 
@@ -366,18 +360,3 @@ def _safe_root_modules(
 def _only_entry(project: tuple[dict[str, set[str]], set[str]] | None, name: str, path: str) -> bool:
     """Whether path is the base's only entry named name (None: unknown, so no)."""
     return project is not None and not project[0].get(name.casefold(), set()) - {path.casefold()}
-
-
-def _importable_names(python: str) -> set[str]:
-    result = subprocess.run(  # noqa: S603 - the configured verifier Python, fixed code
-        [python, "-I", "-c", _MODULE_NAMES],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=15,
-        cwd="/",
-    )
-    names = json.loads(result.stdout)
-    if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
-        raise ValueError("verifier module inventory is invalid")
-    return {name.casefold() for name in names} | {"_cairnwork_report_guard"}

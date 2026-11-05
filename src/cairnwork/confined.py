@@ -18,10 +18,11 @@ from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, replace
 
-from cairnwork import proc_cwd, proc_restrict, proc_start
+from cairnwork import proc_cwd, proc_restrict, proc_start, survivor_argv
 from cairnwork.pipe_copy import MAX_LOG_BYTES as MAX_LOG_BYTES  # re-exported (verifiers)
 from cairnwork.pipe_copy import MAX_REPORT_BYTES as MAX_REPORT_BYTES  # re-exported (report_guard)
 from cairnwork.pipe_copy import _limit_file_size, copy_capped
+from cairnwork.proc_linux import _linux_environment, _linux_processes  # moved (#814): size cap
 
 RUN_TOKEN_VAR = "CAIRNWORK_VERIFIER_RUN"
 ATTEMPT_ENV = "CAIRNWORK_ATTEMPT"  # marks every process of an attempt, for recovery
@@ -33,7 +34,7 @@ PS_TIMEOUT_SECONDS = 60
 
 def execute(
     argv, cwd, env, timeout, log_path, reap=None, pass_fds=()
-) -> tuple[int | None, bool, int]:
+) -> tuple[int | None, bool, survivor_argv.Survivors]:
     """Run in a new process group; the parent copies output into log_path (the child
     never holds the log's file descriptor); kill the group afterwards."""
     token = env.get(RUN_TOKEN_VAR)
@@ -80,16 +81,21 @@ def execute(
     return (None if timed_out else process.returncode), timed_out, survivors
 
 
-def _sweep_survivors(token: str, group: int, dirs: tuple[str, ...] = (), mark: str = "") -> int:
+def _sweep_survivors(
+    token: str, group: int, dirs: tuple[str, ...] = (), mark: str = ""
+) -> survivor_argv.Survivors:
     """Each process found at any look counts once; none only after two clean looks (#578, #599)."""
     found: set[int] = set()
+    argv: dict[int, str] = {}  # #814: what each found process ran, read before its kill
 
     def look() -> Sweep:  # confirm_gone, as recovery: one exited, a child it left is seen next
         one = sweep_marked(RUN_TOKEN_VAR, token, skip_group=group, dispatched=mark, cwd_dirs=dirs)
         found.update(pid for pid, why in one.held_by if why in ("marked", "cwd"))
+        argv.update(one.argv)
         return one
 
-    return len(found) if confirm_gone(look(), look).gone else max(1, len(found))
+    count = len(found) if confirm_gone(look(), look).gone else max(1, len(found))
+    return survivor_argv.Survivors(count, tuple(argv[pid] for pid in sorted(argv)))
 
 
 SWEEP_UNAVAILABLE = -1  # recovery.Decision.killed_processes when the table could not be read
@@ -115,6 +121,7 @@ class Sweep:
     restricted: str = ""  # not listed: Linux /proc may hide processes (hidepid, proc_restrict)
     vanished: int = 0  # marked processes that exited between the listing and their kill
     unconfirmed: bool = False  # clean, but not twice in a row within the window (confirm_gone)
+    argv: tuple[tuple[int, str], ...] = ()  # (pid, masked argv prefix) of marked ones (#814)
 
     @property
     def found(self) -> int:
@@ -196,11 +203,12 @@ def sweep_marked(
     ours = [r for r in rows if r[2] == mine and r[2] != theirs]  # another user's: not ours
     # Kill what the listing shows marked before re-reading the hidden ones: the re-read waits,
     # and a listed pid may meanwhile be reused by an unrelated process (#244 NIT).
-    killed, denied, vanished = _kill_marked([r for r in ours if r[3] is not None], marker)
+    seen: dict[int, str] = {}
+    killed, denied, vanished = _kill_marked([r for r in ours if r[3] is not None], marker, seen)
     plain = [r for r in ours if r[3] is not None and marker not in r[3]] if cwd_dirs else []
-    by_cwd = proc_cwd.kill_withheld_in(plain, cwd_dirs, mine) if cwd_dirs else ([], [], 0)
+    by_cwd = proc_cwd.kill_withheld_in(plain, cwd_dirs, mine, seen) if cwd_dirs else ([], [], 0)
     hidden = _resolve_hidden([r for r in ours if r[3] is None], mine)
-    late = _kill_marked([r for r in hidden if r[3] is not None], marker)
+    late = _kill_marked([r for r in hidden if r[3] is not None], marker, seen)
     killed, denied, vanished = killed + late[0], denied + late[1], vanished + late[2] + by_cwd[2]
     unreadable = [r[0] for r in hidden if r[3] is None]
     if dispatched and unreadable:
@@ -213,15 +221,18 @@ def sweep_marked(
     # dumpable included: after killing what it shows, such a look is never "gone".
     hidden_by = _restricted()
     return Sweep(not hidden_by, len(killed), len(denied), len(unreadable), len(held),
-                 tuple(held_by), hidden_by, vanished)  # fmt: skip
+                 tuple(held_by), hidden_by, vanished, argv=tuple(seen.items()))  # fmt: skip
 
 
-def _kill_marked(rows, marker: str) -> tuple[list[int], list[int], int]:
-    """(pids SIGKILL reached, pids that refused it, how many had exited) of rows with marker."""
+def _kill_marked(rows, marker: str, seen=None) -> tuple[list[int], list[int], int]:
+    """(pids SIGKILL reached, pids that refused it, how many had exited) of rows with marker;
+    ``seen``: gets each one's argv prefix, read before the kill (#814)."""
     killed, denied, vanished = [], [], 0
     for pid, _pgid, _uid, environment in rows:
         if marker not in environment:
             continue
+        if seen is not None:
+            survivor_argv.note(seen, pid)
         try:
             os.kill(pid, signal.SIGKILL)
             killed.append(pid)
@@ -346,51 +357,6 @@ def _parse_ps(stdout: str):
         rows.append((int(fields[0]), int(fields[1]), int(fields[2]),
                      None if hidden else set(command.split())))  # fmt: skip
     return rows
-
-
-def _linux_processes(proc: str = "/proc"):
-    rows = []
-    try:
-        entries = [p for p in os.listdir(proc) if p.isdigit()]
-    except OSError:
-        return None
-    for name in entries:
-        base = f"{proc}/{name}"
-        try:
-            uid, pgid = _linux_owner(base)
-        except (FileNotFoundError, ProcessLookupError):
-            continue  # gone
-        except (OSError, ValueError, IndexError, StopIteration):
-            # owner unknown: it may be one of ours; no process group, so no skip_group drops
-            # it (#244); a hidepid mount is refused as a whole (proc_restrict)
-            uid, pgid = os.getuid(), None
-        try:
-            environment = _linux_environment(base)
-        except (FileNotFoundError, ProcessLookupError):
-            continue  # gone
-        rows.append((int(name), pgid, uid, environment))
-    return rows
-
-
-def _linux_environment(base: str) -> set[str] | None:
-    """None: another user's, or one of ours that hides it (not dumpable). Raises if gone."""
-    try:
-        with open(f"{base}/environ", "rb") as handle:
-            return set(handle.read().decode("utf-8", "replace").split("\0"))
-    except (FileNotFoundError, ProcessLookupError):
-        raise
-    except OSError:
-        return None
-
-
-def _linux_owner(base: str) -> tuple[int, int]:
-    """(effective uid, process group) from status and stat, which every user can read: a
-    process that is not dumpable shows root as the owner of its /proc directory."""
-    with open(f"{base}/status") as handle:
-        uid = next(int(line.split()[2]) for line in handle if line.startswith("Uid:"))
-    with open(f"{base}/stat") as handle:
-        pgid = int(handle.read().rsplit(")", 1)[1].split()[2])  # after "(comm)": state ppid pgrp
-    return uid, pgid
 
 
 def _kill_group(pgid: int) -> None:
