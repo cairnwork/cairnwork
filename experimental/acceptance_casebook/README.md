@@ -66,3 +66,10 @@ present, even empty, or `CLAUDECODE` set). A source reference must be a comment 
 (ASCII digits). Source files must be regular files; anything unreadable makes the line not count
 instead of failing `list`. An `env:` source counts only for an anthropic agent whose digest is the
 session id's.
+
+Crash recovery (#772 step 3): a crash between the append and the head update leaves the head one
+line behind; `list`, `add` and `confirm` refuse it with no partial output. `python -m
+experimental.acceptance_casebook repair --casebook F` adopts the last line only in that exact
+state and appends a `"type": "repair"` line naming the stale and the adopted head; any other
+damage (an edited line, a partial last line, a head further behind) stays refused. Known limit,
+pinned by a test: rewriting the file and `F.head` together is not detected.
