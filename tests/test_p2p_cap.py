@@ -14,6 +14,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
+from p2p_side_stub import stub_side
 from test_p2p_plan import RESULT, TASK, make_run, plan, uncomparable
 
 from cairnwork import p2p
@@ -154,7 +155,7 @@ def _cap_task(monkeypatch, existing, changed, by_test_commit=frozenset(), outcom
         probed.append(files)
         return outcomes or {f"{files[0]}::t": "passed"}, ""
 
-    monkeypatch.setattr(p2p, "changed_tests", lambda repo, base, test_commit, paths: by_test_commit)
+    stub_side(monkeypatch, by_test_commit)
 
     base = lambda task, exclude: tuple(p for p in existing if p not in exclude)  # noqa: E731
     monkeypatch.setattr(p2p, "_base_tests", base)

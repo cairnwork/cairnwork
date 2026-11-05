@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from p2p_side_stub import stub_side
 
 from cairnwork import deferred_tests, p2p
 from cairnwork.core_request import VerifierObservation
@@ -46,6 +47,7 @@ def plan(monkeypatch, existing, probe_results, mode="whole-suite"):
 
     monkeypatch.setattr(p2p, "_base_tests", lambda task, exclude: existing)
     monkeypatch.setattr(p2p, "_probe", fake_probe)
+    stub_side(monkeypatch)
     try:
         return plan_p2p(TASK, (), (), mode, 30, RESULT, context("/runs")), probed
     except (P2PRejected, BaseUncomparable) as exc:

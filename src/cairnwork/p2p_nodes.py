@@ -8,7 +8,7 @@ passed and a target covers must have run and passed on the candidate; one that d
 a pass.
 
 A test file the test commit changes stays a P2P file. Its tests that the test commit adds,
-changes or removes (``changed_tests``) are left to the author's verifiers; every
+changes (``changed_tests``) or removes (p2p_collect.py) are left to the author's verifiers; every
 other test the base passed in it is bound by function, never by the whole file, which on the
 candidate also holds the test commit's tests.
 """
@@ -25,16 +25,16 @@ from cairnwork.verifiers import VerifierRun
 def changed_tests(
     repo: Path, base: str, test_commit: str, paths: tuple[str, ...]
 ) -> frozenset[str]:
-    """``deferred_tests.new_tests`` plus the test functions the test commit removes: the base
-    outcome of these says nothing about the candidate. A test changed only in a way the AST
-    comparison does not see (see ``new_tests``) is not in it, so it stays a P2P test."""
+    """The test functions present on both commits whose body the test commit changes: the base
+    outcome of these says nothing about the candidate. A test the AST reader sees on one side
+    only is not in it (#793: p2p_collect.py decides removal from what pytest collected), and a
+    test changed in a way the comparison does not see (``new_tests``) stays a P2P test."""
     found = set()
     for path in paths:
         if path.endswith(".py"):
             before = _test_functions(repo, f"{base}:{path}", present=True)  # on both commits
             after = _test_functions(repo, f"{test_commit}:{path}", present=True)
-            found |= {f"{path}::{n}" for n in before.keys() | after.keys()
-                      if before.get(n) != after.get(n)}  # fmt: skip
+            found |= {f"{path}::{n}" for n in before.keys() & after.keys() if before[n] != after[n]}
     return frozenset(found)
 
 
