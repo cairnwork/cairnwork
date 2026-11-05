@@ -146,7 +146,8 @@ def test_a_test_module_cannot_rebind_what_the_recorder_uses(tmp_path):
     """The os functions are bound when the plugin is imported: rebinding them in the test module
     (which runs later) leaves the record what an untouched run records."""
     raise_ = "import os\ndef _b(*a, **k):\n    raise RuntimeError('rebound')\n"
-    rebind = raise_ + "os.path.realpath = os.path.relpath = os.path.isabs = _b\n"
+    # not isabs: on Python 3.12 os.path.abspath calls it, so pytest's own report would crash
+    rebind = raise_ + "os.path.realpath = os.path.relpath = _b\n"
     shape = "raise ImportError(\"cannot import name 'x' from 'pkg'\", name='pkg', path=%s)\n"
     plain = "import os\n" + shape % "os.path.abspath('pkg/__init__.py')"
     forged = (
