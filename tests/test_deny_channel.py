@@ -171,6 +171,17 @@ def test_system_policy_lines_are_ignored():
     assert judge(stream(kill), window()).state == "CLEAN"
 
 
+def test_another_process_s_allow_lines_count_toward_volume_and_are_never_a_denial():
+    # CI test-macos 11/05: a system daemon's profile reported an allow; it made the run UNAVAILABLE
+    allow = "Sandbox: diskimaged(86) allow process-exec* /System/Library/Filesystems/x"
+    counted = line("Sandbox: y(87) allow(1) file-read-data /b", tag=OTHER)
+    assert judge(stream(line(allow, tag=""), counted), window()) == Evidence("CLEAN", "", 4, 3)
+    burst = [line(allow, tag="")] * (deny_channel.MAX_LINES_PER_SECOND + 1)
+    assert "volume" in judge(stream(*burst), window()).detail
+    evidence = judge(stream(line("Sandbox: x(5) allow(1) file-read-data /a")), window())
+    assert evidence == Evidence("UNAVAILABLE", "a tagged allow line")  # our tag is on denies only
+
+
 def test_a_canary_that_raises_never_stops_the_run(monkeypatch):
     monkeypatch.setattr(deny_channel, "_start", lambda path, window: None)
 
