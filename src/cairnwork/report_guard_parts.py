@@ -1,5 +1,5 @@
 """Parts of the report_guard plugin source kept out of report_guard.py (near the 400-line cap):
-the fixture table (a pure move). Plugin text, not parent code: the
+the fixture table (a pure move) and the import-error recorder. Plugin text, not parent code: the
 plugin cannot import cairnwork."""
 
 PARTS_SOURCE = """\
@@ -15,4 +15,28 @@ _PLUGIN_FIXTURES = {
                      "django_assert_num_queries", "mailoutbox"), "pytest_django.plugin"),
     "anyio_backend": "anyio.pytest_plugin",
 }
+
+
+def _import_error(node, call, report):
+    # #796: "cannot import name X from <module>" in a test module's own import statement. Reads
+    # only the exception (no import: that would run repo code); any error records nothing.
+    try:
+        exc = call.excinfo.value.__cause__
+        if not (isinstance(node, pytest.Module) and report.when == "collect"
+                and type(exc) is ImportError):
+            return None
+        text, tb, last = str(exc), exc.__traceback__, ""
+        while tb is not None:  # the innermost frame that is not the import machinery
+            name = tb.tb_frame.f_code.co_filename
+            last = last if name.startswith("<frozen importlib") else name
+            tb = tb.tb_next
+        real = os.path.realpath
+        origin = os.path.relpath(real(exc.path), real(node.config.rootpath))
+        if ("cannot import name" in text and "partially initialized" not in text
+                and isinstance(exc.name, str) and real(last) == real(str(node.path))
+                and not origin.startswith("..") and not os.path.isabs(origin)):
+            return {"node": node.nodeid, "module": exc.name, "origin": origin}
+    except Exception:
+        return None
+    return None
 """
