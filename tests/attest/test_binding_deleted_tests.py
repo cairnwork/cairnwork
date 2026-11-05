@@ -185,3 +185,13 @@ def test_a_policy_pins_the_deleted_paths(world, mode):
             deleted_test_paths=other,
         )
         assert check(world, repo=mode, policy=pol).code == "DELETED_TEST_PATHS_MISMATCH", other
+
+
+def test_the_deleted_paths_are_capped_like_the_import_path_list():
+    """#870: at most 8 (the sibling ``import_paths`` limit); 9 is refused with the shape reason."""
+    key = "deleted_test_paths"
+    eight = sorted(f"tests/t{n}.py" for n in range(8))
+    nine = sorted(f"tests/t{n}.py" for n in range(9))
+    assert binding_extras.binding_problem({key: eight, "test_paths": ["t.py"]}) == ""
+    got = binding_extras.binding_problem({key: nine, "test_paths": ["t.py"]})
+    assert got == f"binding {key} has the wrong shape or is empty"

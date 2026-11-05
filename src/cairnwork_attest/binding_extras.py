@@ -45,9 +45,11 @@ def _path_list(value: Any) -> bool:
 
 
 def _deleted_paths(value: Any) -> bool:
-    """#798: the test files the test commit deleted, sorted and distinct (any number)."""
+    """#798: the test files the test commit deleted, sorted and distinct; at most 8, as the
+    sibling path list (#870)."""
     return (
         isinstance(value, list)
+        and len(value) <= 8
         and all(isinstance(p, str) and p and not p.startswith("/") for p in value)
         and value == sorted(set(value))
     )
