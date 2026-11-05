@@ -62,8 +62,12 @@ rebuilt checkout). Final `sys.path` and environment are recorded in each row.
 
 ## NA (AC7)
 
-A target with parameters (fixtures, parametrize, usefixtures, skip or xfail marks), an async or
-generator test, a method of a class that is not a `unittest.TestCase`, or a module whose import
-needs a name only a `conftest.py` provides, is `NA`. Other import failures are `OBS_ERROR`. The
-rate on real tasks is Open 2 and is measured later, not here. Rule T (the test body must run) is
-step 2 (the `rule_t` field is `null` until then).
+A target is `NA` (never run, never PASS or FAIL) when:
+- its node name has `[...]` (reason `PARAMETRIZED`; the function name before `[` must be a valid name, else `UNCOMPARABLE`, and what follows `[` is used for nothing);
+- it has parameters or fixtures, marks such as parametrize, usefixtures, skip or xfail, is async or a generator, or is a method of a class that is not a `unittest.TestCase`;
+- its module import needs a name only a `conftest.py` provides;
+- an **autouse fixture** is defined in a `conftest.py` on the path from the rootdir to the test module, in the test module, or in a module they load through `pytest_plugins` (reason `AUTOUSE_FIXTURE`). The row lists the files and sets `autouse_in_candidate_change` when one of them is in the candidate's change: a candidate that adds an autouse fixture so that the observation becomes NA is itself a signal worth keeping. NA refuses nothing.
+
+The autouse detection is **static** (AST: `@pytest.fixture(autouse=...)` and `@fixture(autouse=...)`, anything but a literal `False` counts). A fixture registered dynamically (a decorator built at run time, a plugin loaded by a hook) is not seen. This is a known limit, in line with the threat model above: the observer is a raised bar only.
+
+Other import failures are `OBS_ERROR`. The NA rate on real tasks is Open 2 and is measured later, not here. Rule T (the test body must run) is step 2 (the `rule_t` field is `null` until then).

@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +18,7 @@ from cairnwork import pytest_config
 from cairnwork.gitcmd import OID
 
 REQUIRED = ("repo", "base", "candidate", "test_commit", "tested_tree", "target")
+NAME = re.compile(r"[A-Za-z_]\w*(::[A-Za-z_]\w*)?")
 HEX_OIDS = ("base", "candidate", "test_commit", "tested_tree")
 
 
@@ -38,6 +40,7 @@ class ShadowInput:
     cw_verdict: str
     cw_reason: str
     test_roots: tuple[str, ...]
+    na_reason: str = ""
 
 
 def plugins_sha256(plugins) -> str:
@@ -87,7 +90,8 @@ def check(raw: dict) -> ShadowInput:
     if plugins_sha256(live) != plugins_sha256(plugins):
         raise Uncomparable(f"installed plugins differ from the verifier's: now {sorted(live)}")
     file, _, name = str(raw["target"]).partition("::")
-    if not file.endswith(".py") or not name or "[" in name or ".." in file.split("/"):
+    base, bracket, _ = name.partition("[")  # what follows "[" is never used for anything
+    if not file.endswith(".py") or ".." in file.split("/") or not NAME.fullmatch(base):
         raise Uncomparable(f"target must be <file>.py::<test>, got {raw['target']!r}")
     if file.startswith("/"):
         raise Uncomparable("target file must be relative")
@@ -98,7 +102,8 @@ def check(raw: dict) -> ShadowInput:
         test_commit=raw["test_commit"],
         tested_tree=raw["tested_tree"],
         file=file,
-        name=name.replace("::", "."),
+        name=base.replace("::", "."),
+        na_reason="PARAMETRIZED" if bracket else "",
         interpreter=python,
         pythonpath=_ini_pythonpath(raw["ini_text"]),
         cw_verdict=str(raw.get("cw_verdict", "")),

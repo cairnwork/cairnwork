@@ -14,7 +14,9 @@ import sys
 import time
 from pathlib import Path
 
-from experimental.second_observer import OBS_ERROR, UNCOMPARABLE
+from cairnwork.gitcmd import run_git
+from experimental.second_observer import NA, OBS_ERROR, UNCOMPARABLE
+from experimental.second_observer.autouse import autouse_files
 from experimental.second_observer.inputs import ShadowInput, Uncomparable, load
 from experimental.second_observer.observe import run_observer
 from experimental.second_observer.rebuild import rebuild
@@ -55,11 +57,30 @@ def record(inp: ShadowInput, status: str, detail: str, started: float, extra: di
     }
 
 
+def static_na(inp: ShadowInput, checkout: Path, out: Path) -> dict:
+    """Why a direct call is not comparable (no run): parametrized node or autouse fixture."""
+    if inp.na_reason:
+        return {"na_reason": inp.na_reason}
+    roots = [checkout / rel for rel in inp.pythonpath]
+    files = autouse_files(checkout, inp.file, roots)
+    if not files:
+        return {}
+    changed = run_git(out / "repo.git", "diff", "--name-only", "-z", inp.base, inp.candidate)
+    return {
+        "na_reason": "AUTOUSE_FIXTURE",
+        "autouse_files": files,
+        "autouse_in_candidate_change": bool(set(files) & set(changed.split("\0"))),
+    }
+
+
 def observe(inp: ShadowInput, out: Path) -> dict:
     started, extra = time.monotonic(), {}
     work = out / "work"
     try:
         checkout = rebuild(inp, out, work)
+        gate = static_na(inp, checkout, out)
+        if gate:
+            return record(inp, NA, gate.pop("na_reason"), started, gate)
         seen = run_observer(inp, checkout, out)
         agrees = (
             None if seen.returncode is None else (seen.returncode == 0) == (seen.status == "PASS")

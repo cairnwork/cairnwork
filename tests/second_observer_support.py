@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 from cairnwork import pytest_config
 from cairnwork.deferred_tests import lay_tests_over
@@ -29,12 +30,12 @@ def git(repo, *args):
 
 
 class Project:
-    def __init__(self, root: Path, tests=None):
+    def __init__(self, root: Path, tests=None, base_files=None):
         self.root = root.resolve()
         self.repo = self.root / "project"
         self.repo.mkdir(parents=True)
         git(self.repo, "init", "-q", "-b", "main")
-        self.base = self.commit({"src/calc.py": BUGGY}, "base")
+        self.base = self.commit({"src/calc.py": BUGGY, **(base_files or {})}, "base")
         self.tests = tests or TESTS
         self.test_commit = self.commit(self.tests, "tests", parent=self.base)
 
@@ -86,7 +87,7 @@ class Project:
         raw.update(over)
         return {k: v for k, v in raw.items() if v is not None}
 
-    def shadow(self, raw: dict, name=None, protect=()):
+    def shadow(self, raw: dict, name=None, protect=()) -> tuple[int, Any, Path]:
         """Run the CLI on ``raw``; return (exit code, the one JSON row or None, the out dir)."""
         self.runs = getattr(self, "runs", 0) + 1
         name = name or f"out{self.runs}"
