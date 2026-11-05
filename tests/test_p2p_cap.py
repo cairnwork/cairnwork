@@ -18,7 +18,8 @@ from p2p_side_stub import stub_side
 from test_p2p_plan import RESULT, TASK, make_run, plan, uncomparable
 
 from cairnwork import p2p
-from cairnwork.p2p import P2PPlan, run_plan
+from cairnwork.deferred_tests import BaseUncomparable
+from cairnwork.p2p import P2PPlan
 from cairnwork.p2p_selection import MODULE_DIR_CAP, cap_note
 from cairnwork.p2p_selection import select_p2p_targets as _select
 from cairnwork.verify_context import VerifyContext
@@ -113,12 +114,10 @@ def test_a_rule_without_a_cut_is_unchanged(monkeypatch):
     assert "capped_dirs" not in got.rule and "cap" not in got.rule
 
 
-def test_a_cut_to_nothing_is_recorded_as_no_p2p_not_as_a_pass(monkeypatch, tmp_path):
+def test_a_cut_to_nothing_is_uncomparable_not_a_pass(monkeypatch):
     got, probed = plan(monkeypatch, flat(MODULE_DIR_CAP + 1), [], mode="module-dir")
-    assert isinstance(got, P2PPlan) and got.spec is None and probed == []
-    assert got.rule["targets"] == 0 and got.rule["capped_dirs"] == ["tests"]
-    runs, rule = run_plan(got, TASK, "c" * 40, None, VerifyContext.of(TASK, tmp_path))
-    assert runs == () and rule["capped_dirs"] == ["tests"]  # what the result's "p2p" shows
+    assert isinstance(got, BaseUncomparable) and probed == []  # #793 Step 3
+    assert got.comparison.code == "P2P_NO_TARGETS" and "capped: tests" in str(got)
 
 
 def test_a_degraded_cut_to_nothing_is_uncomparable_and_names_the_cut(monkeypatch):

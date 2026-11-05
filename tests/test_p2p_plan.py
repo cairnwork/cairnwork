@@ -78,12 +78,6 @@ def test_degraded_probe_that_failed_with_an_empty_module_dir_selection_is_uncomp
     assert uncomparable(got) and "base-probe-failed" in str(got)
 
 
-def test_module_dir_chosen_directly_with_nothing_selected_runs_nothing(monkeypatch):
-    got, probed = plan(monkeypatch, ("tests/unit/test_x.py",), [], mode="module-dir")
-    assert isinstance(got, P2PPlan) and got.spec is None and probed == []
-    assert got.rule["targets"] == 0 and got.rule["degraded"] == ""
-
-
 def test_a_degraded_probe_records_the_rule_actually_used(monkeypatch):
     existing = ("tests/a/test_b.py", "tests/a/test_c.py", "tests/z/test_slow.py")
     outcomes = {"tests/a/test_b.py::test_1": "passed", "tests/a/test_c.py::test_2": "passed"}
@@ -135,6 +129,7 @@ def test_no_base_passing_test_without_degradation_runs_nothing(monkeypatch):
     outcomes = {"tests/test_a.py::test_1": "failed"}
     got, _ = plan(monkeypatch, ("tests/test_a.py",), [(outcomes, "")])
     assert isinstance(got, P2PPlan) and got.spec is None and got.rule["targets"] == 0
+    assert got.rule["reason"] == "none-pass"  # #793 Step 3: said, not silent
 
 
 def test_tests_failing_or_skipped_on_the_base_are_left_out(monkeypatch):

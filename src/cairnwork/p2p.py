@@ -5,16 +5,13 @@ state's ``p2p_selection`` mode (p2p_selection.py), run them on the BASE to find 
 pass there, then run exactly those on the judged commit as one more verifier (``p2p-<mode>``)
 that Core must see pass. A test that already failed or was skipped on the base is not a
 regression and is left out.
-
 Failure paths, none of which can end VERIFIED:
 
-* base run itself unclean (a process outlived it, ``base-probe-survivors``, or it changed the
-  checkout, ``base-probe-mutated``; #285): the candidate run of the same tests would block on the
-  base's own leftover; or it left bytecode it may not supply (``base-probe-forged``, #481), so
-  its own outcomes prove nothing. Either way there is no usable comparison. UNCOMPARABLE
-  (``P2P_BASE_PROBE_UNUSABLE``) in any mode, without trying a narrower one: a narrower suite
-  would be weaker evidence than the configured one, and a false FAILED becomes "no evidence",
-  never VERIFIED;
+* base run itself unclean: a process outlived it (``base-probe-survivors``) or it changed the
+  checkout (``base-probe-mutated``; #285), so the candidate run would block on its leftover; or it
+  left bytecode it may not supply (``base-probe-forged``, #481), so its outcomes prove nothing.
+  UNCOMPARABLE (``P2P_BASE_PROBE_UNUSABLE``) in any mode, without trying a narrower one (weaker
+  evidence than the configured one); a false FAILED becomes "no evidence", never VERIFIED;
 * base probe times out, cannot report, or its report or log exceeds the size cap (a suite too
   large for one run, #184: ``base-probe-report-over-cap``, #481: ``base-probe-log-over-cap``), or
   a test's teardown failed there
@@ -25,31 +22,32 @@ Failure paths, none of which can end VERIFIED:
   would run the same files again, or selects no test file at all, or none of its tests passes on
   the base, the task is UNCOMPARABLE (``P2P_BASE_PROBE_UNUSABLE``, #234: no evidence, never
   verified; a degraded probe never turns into "nothing to run"). A probe that worked but found no
-  base-passing test is only recorded (``targets: 0``);
+  base-passing test is recorded (``targets: 0``, ``reason: none-pass``). A ``module-dir`` that
+  selects nothing from a base with test files runs all of them (``fallback``) within the cap and
+  budget, else UNCOMPARABLE ``P2P_NO_TARGETS`` (#793);
 * targets keep the order the probe ran them in (#287): a test that passes on the base only after
-  the tests before it (shared module state) must not be judged in another order;
-* a test file the test commit changes stays selected: its tests the test commit did not change are
-  bound like any other (p2p_nodes.py); the plan binds every base-passing node id, and a passed
-  candidate run that did not run one of them is not a pass, without a re-run;
-* the candidate run times out: its observation is not a pass, so Core says not verified;
+  the tests before it (shared module state) is not judged in another order;
+* a test file the test commit changes stays selected: its unchanged tests are bound like any other
+  (p2p_nodes.py); the plan binds every base-passing node id, and a passed candidate run that did
+  not run one of them is not a pass, without a re-run;
+* the candidate run times out: not a pass, so Core says not verified;
 * the candidate run fails only because a test failed (``VerifierRun.plain_failure``: no timeout,
   mutated checkout, surviving process or oversized log, and the guard reported a failed test):
   it is re-run once (flaky rule). A pass on the re-run is what Core sees, with the first run's
-  failing tests and integrity signals recorded in the rule (``rerun``) and ``p2p_rerun_passed``
-  set, so a clean pass and a pass after re-run can be told apart (the verdict is the same); a
-  second failure is what Core sees, so not verified. Any other failed run blocks as it is,
-  without a re-run;
+  failures and integrity signals in the rule (``rerun``) and ``p2p_rerun_passed`` set, so a
+  clean pass and a pass after re-run differ in the record; a second failure is what Core sees.
+  Any other failed run blocks as it is, without a re-run;
 * the p2p verifier id clashes with an author verifier: REFUSED.
 
 Before the worker starts (or, in a verify call without deferred tests, before the candidate's
-verifiers), ``base_env_check`` probes the ``module-dir`` files on the unchanged base the same way; a
-probe failure there is UNCOMPARABLE ``BASE_ENV_FAILED`` (environment, #234, #259). In a verify call
-without deferred tests, this result applies only if the candidate also fails its own verifiers.
+verifiers), ``base_env_check`` probes the ``module-dir`` files on the unchanged base the same way;
+a probe failure there is UNCOMPARABLE ``BASE_ENV_FAILED`` (environment, #234, #259); in a verify
+call without deferred tests it applies only if the candidate also fails its own verifiers.
 
 ``p2p_time_budget_seconds`` bounds each run (probe, degraded probe, candidate run, re-run).
-The rule actually used is a dict (``P2PPlan.rule``): it goes into the p2p observation's artifact
-hash (so Core's record binds it), into ``p2p-selection.json`` beside the verifier log, and into the
-task result. Core's notarisation contract is unchanged.
+The rule actually used (``P2PPlan.rule``, a dict) goes into the p2p observation's artifact hash
+(Core's record binds it), ``p2p-selection.json`` beside the verifier log, and the task result.
+Core's notarisation contract is unchanged.
 """
 
 from __future__ import annotations
@@ -67,7 +65,7 @@ import cairnwork_sandbox
 from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRejected, deleted_of
 from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.issue_task import test_target
-from cairnwork.p2p_collect import collected_side
+from cairnwork.p2p_collect import OVER_BUDGET, collected_side, no_targets, whole_base
 from cairnwork.p2p_nodes import passing_targets, require_nodes
 from cairnwork.p2p_probe_log import probe_log_tail
 from cairnwork.p2p_selection import DEFAULT_BUDGET_SECONDS, cap_note, select_p2p_targets
@@ -161,11 +159,15 @@ def plan_p2p(task, specs, test_files, mode, budget, result, ctx: VerifyContext) 
         rule |= cap_note(task.allowed_files, existing, task.test_roots, applied)  # #333
         if not files and rule["degraded"]:  # #117 F1: a failed probe is not "nothing to run"
             raise _unusable(rule, "no module-dir test to fall back on")
-        if not files:
+        if not files and existing:  # #793 Step 3: the whole base, or UNCOMPARABLE, never silent
+            files = whole_base(rule, existing)
+        if not files:  # no test file under the roots at all
             return P2PPlan(rule | {"targets": 0}, None, budget)
         if files == tried:  # the narrower mode would run the same files again
             raise _unusable(rule, "module-dir selects the same files")
         outcomes, why = _probe(task, files, result, ctx, budget)
+        if rule.get("fallback") and why in OVER_BUDGET:  # the whole base does not fit the budget
+            raise no_targets(rule, existing, why)
         if why in UNCLEAN:  # #285: no narrower mode, whatever was configured
             detail = f"{rule['degraded']}; " * bool(rule["degraded"]) + f"{why} in {applied} mode"
             raise BaseUncomparable(Comparison("UNCOMPARABLE", "P2P_BASE_PROBE_UNUSABLE", detail))
@@ -194,8 +196,8 @@ def _plan(specs, rule, selection, budget) -> P2PPlan:
     rule = rule | {"targets": len(targets), "targets_sha256": digest, "nodes": len(nodes),
                    "nodes_sha256": bound}  # fmt: skip
     rule |= {"changed_by_test_commit": left} if left else {}
-    if not targets:
-        return P2PPlan(rule, None, budget)
+    if not targets:  # the probe worked but no unchanged test passed on the base: said (#793)
+        return P2PPlan(rule | {"reason": "none-pass"}, None, budget)
     verifier_id = f"p2p-{rule['applied']}"
     if verifier_id in {spec.verifier_id for spec in specs}:
         raise P2PRejected("P2P_VERIFIER_ID_CLASH", verifier_id)  # check_task refuses first (#644)

@@ -27,12 +27,12 @@ MUL = "def mul(a, b):\n    return a * b\n"
 SUB_OFF = CALC.replace("a - b", "a + b")
 
 
-def _run(project, tmp_path, allowed, worker_files, test_files, check, mode="whole-suite"):
+def _run(project, tmp_path, allowed, worker_files, test_files, check, mode="whole-suite", **kw):
     base, test_commit = make_test_commit(project, test_files)
     state = tmp_path / "state"
     state.mkdir(exist_ok=True)
     task = TaskSpec("k1", "card", "fix", "fix it", project, base, allowed, check,
-                    test_commit=test_commit, p2p_mode=mode)  # fmt: skip
+                    test_commit=test_commit, p2p_mode=mode, **kw)  # fmt: skip
     return run_task(
         task,
         ledger=OwnershipLedger(state / "own.sqlite"),
