@@ -32,7 +32,12 @@ from pathlib import Path
 from posixpath import basename, dirname, splitext
 
 from cairnwork.gitcmd import GitCommandError
-from cairnwork.pytest_config import PytestConfigError, test_file_rule
+from cairnwork.pytest_config import (
+    DEFAULT_PYTHON_FILES,
+    PytestConfigError,
+    configured_python_files,
+    test_file_rule,
+)
 
 MODES = ("off", "whole-suite", "module-dir")
 DEFAULT_MODE = "whole-suite"  # Intake (cairnwork-route, issue runner)
@@ -44,9 +49,13 @@ VERIFIER_IDS = tuple(f"p2p-{mode}" for mode in MODES if mode != "off")
 
 
 def name_rule(repo: Path, base_commit: str | None) -> Callable[[str], bool] | None:
-    """The base's python_files rule for the name match (#870). None, the default names, when the
-    base config is unreadable: p2p._base_tests has already refused such a base before this runs."""
+    """The base's python_files rule for the name match (#870). None, the exact default names that
+    main matches, when the base sets no python_files or just pytest's default (so the default
+    selection is unchanged), or when its config is unreadable: p2p._base_tests has already
+    refused such a base before this runs."""
     try:
+        if set(configured_python_files(repo, base_commit)) <= set(DEFAULT_PYTHON_FILES):
+            return None
         return test_file_rule(repo, base_commit)
     except (GitCommandError, PytestConfigError):
         return None
