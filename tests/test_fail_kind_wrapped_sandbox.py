@@ -8,6 +8,7 @@ Before/after for the same candidates (main → this change):
   handles; a correct candidate. VERIFIED → VERIFIED.
 - b4: the same base, a wrong candidate. FAILED → FAILED.
 - d1: a candidate whose own failure wraps a denial-shaped OSError. FAILED → FAILED.
+- A wrapped OSError whose ``errno`` raises when read: the plugin fails, so the base is UNCOMPARABLE.
 """
 
 import sys
@@ -94,3 +95,18 @@ def test_d1_a_candidate_that_wraps_a_denial_in_its_own_failure_fails(project, st
     commit_change(project, {"src/calc.py": KEEP + "def load():\n    return 0\n"})  # plain teeth
     code, out = run_cli(project, state, TEST, {"src/calc.py": OWN_DENIAL})
     assert out["status"] == "FAILED" and out["verified"] is False, out["uncomparable"]
+
+
+ODD_ERRNO = KEEP + (
+    "class Odd(OSError):\n"
+    "    errno = property(lambda self: 1 / 0)\n"  # the walk reads it: the plugin itself fails
+    "def load():\n"
+    "    raise ExceptionGroup('load failed', [Odd()])\n"
+)
+
+
+def test_an_oserror_whose_errno_raises_makes_the_base_uncomparable(project, state):
+    # Codex #882 r1 (nit): the walk must fail closed when reading a wrapped error's errno raises
+    commit_change(project, {"src/calc.py": ODD_ERRNO})
+    code, out = run_cli(project, state, TEST, {"src/calc.py": SKIPS_THE_READ})
+    assert out["status"] == "UNCOMPARABLE" and out["verified"] is False, out
