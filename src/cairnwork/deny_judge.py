@@ -97,6 +97,12 @@ def judge_stream(handle, window: Window) -> Evidence:
         return Evidence("UNAVAILABLE", str(exc))
 
 
+def _foreign(message: str) -> bool:
+    """Another process's note through the Sandbox sender, not a sandbox report: no tag, no
+    "Sandbox:" report and no "deny(" anywhere in it, so it cannot be one of the run's denials."""
+    return TAG_PREFIX not in message and "Sandbox:" not in message and "deny(" not in message
+
+
 def _event(line: str, window: Window):
     """(second, count, ours, operation, target, pid) of one ndjson record; None if not a deny."""
     try:
@@ -116,6 +122,8 @@ def _event(line: str, window: Window):
     if match is None:
         allow = ALLOW.fullmatch(body)
         if allow is None:
+            if _foreign(message):  # #900: e.g. dirhelper's "set rootless flags" note
+                return (stamp[:19], 1, False, None, None, 0)  # volume only
             raise ValueError(f"an unparseable Sandbox line: {body[:120]!r}")
         if ours:  # the tag is only on the run's denies
             raise ValueError("a tagged allow line")
