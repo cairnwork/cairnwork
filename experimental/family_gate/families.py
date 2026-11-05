@@ -13,7 +13,7 @@ import json
 import re
 from dataclasses import dataclass
 
-FAMILY_FENCE = re.compile(r"```cairnwork-families[ \t]*\n(.*?)\n```", re.DOTALL)
+FAMILY_FENCE = re.compile(r"```cairnwork-families[ \t]*\r?\n(.*?)\r?\n```", re.DOTALL)
 KEYS = ("issue_author", "test_author")
 PREFIXES = {
     "anthropic": ("claude", "opus", "sonnet", "haiku", "fable"),
