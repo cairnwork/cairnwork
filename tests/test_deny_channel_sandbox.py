@@ -39,6 +39,9 @@ CHILD = (
 )
 
 
+EMPTY = "UNAVAILABLE: a canary line is missing (lines 0, peak 0/s)"  # #879: the host log, idle
+
+
 def _evidence(out) -> list[str]:
     """The run's one evidence line. Checked after the verdict: a flood from any process on the host
     makes it UNAVAILABLE by design (whole-stream volume), and then the denial cannot be judged."""
@@ -48,25 +51,31 @@ def _evidence(out) -> list[str]:
     return [line]
 
 
+def _verified(project, state, tests):
+    """``run_cli`` with the fix; once more when the host's log delivered no line at all (#879). A
+    second empty window fails: a channel that never sees its canaries must not pass as a skip."""
+    for again in ("", "# again\n"):
+        code, out = run_cli(project, state, tests + again, {"src/calc.py": FIX_DOUBLE})
+        assert code == 0 and out["status"] == "VERIFIED", out  # unchanged: step 1 only records
+        if not again and any(EMPTY in line for line in out["logs"]):
+            continue
+        return _evidence(out)
+    raise AssertionError("unreachable")
+
+
 def test_a_plain_base_failure_records_evidence_without_that_path(project, state):
-    code, out = run_cli(project, state, PLAIN, {"src/calc.py": FIX_DOUBLE})
-    assert code == 0 and out["status"] == "VERIFIED", out  # unchanged
-    (line,) = _evidence(out)
+    (line,) = _verified(project, state, PLAIN)
     # CLEAN, or DENIED by the interpreter alone (an editable venv's src dir, step 1 data)
     assert line.split(": ")[1] in ("CLEAN", "DENIED") and DENIED not in line, line
 
 
 def test_a_denial_the_test_catches_is_recorded_and_changes_no_verdict(project, state):
-    code, out = run_cli(project, state, CAUGHT, {"src/calc.py": FIX_DOUBLE})
-    assert code == 0 and out["status"] == "VERIFIED", out  # unchanged: step 1 only records
-    (line,) = _evidence(out)
+    (line,) = _verified(project, state, CAUGHT)
     assert ": DENIED: " in line and f"file-read-data {DENIED}" in line, line
 
 
 def test_a_child_process_denial_carries_the_run_tag(project, state):
-    code, out = run_cli(project, state, CHILD, {"src/calc.py": FIX_DOUBLE})
-    assert code == 0 and out["status"] == "VERIFIED", out
-    (line,) = _evidence(out)
+    (line,) = _verified(project, state, CHILD)
     assert ": DENIED: " in line and f"file-read-data {DENIED}" in line, line
 
 
