@@ -7,6 +7,7 @@ and many lines that add up within one patch. Past the budget the patch is refuse
 """
 
 import re
+import sys
 import types
 
 import pytest
@@ -155,9 +156,12 @@ def test_lines_that_add_up_past_the_patch_budget_refuse_the_patch(repo):
     line = ("value = alpha + beta  " * 200)[:4000] + "\n"
     per_file = MAX_READ * 6 // 10 // (4 * len(line)) * line  # each file reads ~60% of the budget
     base, head = _commit(repo, {"a.py": per_file, "b.py": per_file})
-    assert [(f.path, f.rule) for f in scan_patch(repo, base, head)] == [("src/b.py", SCAN_BUDGET)]
+    found = scan_patch(
+        repo, base, head, python=sys.executable
+    )  # the files are not valid Python: also hook_file_touched
+    assert [(f.path, f.rule) for f in found if f.rule == SCAN_BUDGET] == [("src/b.py", SCAN_BUDGET)]
     base, head = _commit(repo, {"a.py": "x = 2\n", "b.py": "y = 2\n"})
-    assert scan_patch(repo, base, head) == []
+    assert scan_patch(repo, base, head, python=sys.executable) == []
 
 
 @BOTH

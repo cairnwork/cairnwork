@@ -41,6 +41,20 @@
 | 24 | P1 | PR 內文只放驗證過的欄位 | PR 內文與 coord 訊息只放經過格式驗證的欄位（`publication_tokens`）；寫 GitHub 一律用 bot 身分（Nexus-new 靠安裝設定，不在這段程式裡）。`--gh` 檔名檢查只防設定錯誤，不是身分驗證（任何叫 nexus-agent-gh 的檔都過）；真正的身分探測見 #138 | EIA `eia_nightly.py:533-547` | planned（#58）；已有：PR 內文只含 Issue 號、task id、驗證過的 attempt 與 commit（`issue_runner.py` `_open_pr`） | `test:tests/test_issue_runner.py::test_a_strange_attempt_id_is_never_pushed`（部分）；其餘 planned（#58） |
 | 25 | P0 | 完成上限 | Cairnwork 自己不合併；worker 沒有核准、整合、推 main 的權限 | EIA `eia_nightly.py:377-428` | 部分：結構上沒有 merge／approve 呼叫，`draft_pr` 固定 `--draft --base main`，只推 `cairnwork/<issue>-<attempt>`（`issue_runner.py`）。缺：鎖住這些保證的測試（#56）；worker 與擁有者同帳號的缺口（#19 已關閉）見 `ISSUE_INTAKE.md`「預設隔離範圍」 | planned（#56） |
 
+## 已知取捨：repo 自帶 pytest hook 實作的專案（#821，PR-1）
+
+候選修正若新增、修改或刪除 repo 自己 `src/` 裡**定義 pytest hook 的檔案**（例如專案內的 pytest 外掛，經受保護 conftest 的 `pytest_plugins` 載入，而且外掛裡有良性 hook），會在跑 pytest 之前被拒：`VERIFIER_TAMPER_API`，原因碼為 `pytest_hook_impl`（新增行含 hook 實作）或 `hook_file_touched`（改動檔在 base 或 head 版本綁定了 pytest／pluggy 已知的 hook 名稱，或含與 hook 名完全相等的字串）。在 main 上同樣的候選原本是 VERIFIED。
+
+為什麼接受：靜態掃描無法從形狀分辨良性 hook 與竄改判定的 hook（兩者都是 hook 實作），只要放行就會留下「候選改外掛檔就能讓錯的修正得到 CORE_VERIFIED」的漏洞；改採例外清單等於回到被判 NO-GO 的設計。代價是修 pytest 外掛專案本身的任務得不到 VERIFIED，這類任務應由人處理。這不是安全邊界（同程序程式碼仍可繞過），只是拉高門檻；執行時歸屬稽核見後續 PR。不受影響的是「使用」外掛的專案：外掛來自已安裝套件、或 repo 內的外掛檔沒被候選碰到且候選不新增 hook 名。
+
+`hook_file_touched` 用驗證者自己的 Python 解析改動檔（一個批次子程序，`-I -S -B`，不信任掃描程序自己的 Python）。只有「一般語法錯誤」（非編碼）的檔案不算命中，只寫一行 log（`unparseable_by_verifier`，路徑用 %r，兩邊都解析失敗只記一次），不寫進候選紀錄；遞迴／記憶體錯誤、壞編碼、逾時、程序失敗或輸出格式不符一律 `scan_budget`（拒絕）。測試：`test:tests/test_tamper_scan_verifier_parse.py`。
+
+## 已知取捨：正當地子類別化 SourceLoader 或使用 codeop 的候選會被拒（#821，#848 第 3 輪）
+
+文字規則 `CODE_FORGE` 擋任何提到標準庫「由原始碼產生 code object」的包裝器（`source_to_code`、`codeop`）的行，所以候選若正當地子類別化 `SourceLoader`、或使用 `codeop`，會被拒（`code_object_forge`）。實測：28,650 個良性檔案中被擋 50 行、22 個檔，全部是標準庫或 vendored 的 loader／code 模組；SWE-bench Verified 500 個 gold patch 的新增行裡出現這兩個字的是 0。這是刻意的取捨（誤擋面小，放行則留下以標準庫包裝器造出 code object 的路），本次不改規則。
+
+照實鎖定的測試：`test:tests/test_tamper_scan_plugin_sandbox.py::test_a_benign_hook_defined_in_a_library_file_is_refused_a_known_trade_off`（真 Seatbelt）；通過的對照是同檔的 `test_an_untouched_plugin_with_hooks_and_fixtures_passes_with_a_real_fix`。
+
 ## 不帶過去的
 
 依 Nexus-new 的缺陷分流，以下判定為死碼、沒有負責人或只是操作 CLI，不列入：RULE-004、RULE-199、RULE-219、RULE-220、RULE-252。
@@ -58,6 +72,10 @@
   - sandbox 裡的程式可以用 sysctl `KERN_PROCARGS2` 讀到同一個使用者底下其他程序的參數和環境變數，裡面可能有 token。Seatbelt 規則擋不住。**已用專屬帳號解決（Issue #9）**：傳入 `VerifierAccount` 時，verifier 以 `cairnwork-verifier` 身分執行，macOS 不允許跨使用者讀取這些參數，見證測試在 `tests/test_verifier_account.py`。沒有傳入帳號時（例如 Linux）缺口仍在，所以 verifier 的 log 一律不交給 worker 或模型。
   - 自己開新 session、又清掉環境變數的子程序：帳號模式下，執行結束後會以該帳號執行 `kill -9 -1` 清掉它的所有程序，有任何殘留就判失敗；沒有帳號時仍然躲得過清除。帳號模式一次只能跑一個 verifier（獨占鎖）。每次開跑前，也會先確認該帳號底下沒有任何程序。
   - 專屬帳號保護的是擁有者不被 verifier 讀取，反方向不成立：sudoers 允許擁有者以該帳號執行任意 profile 的 sandbox-exec，所以任何以擁有者身分執行的程序，都能以該帳號執行程式碼。該帳號本身沒有任何特權，不能用來提升權限。
+  - base 的失敗算不算環境錯誤（#775、#854）：判成環境錯誤、不算 teeth 的條件有兩種：(1) 最外層例外是 `OSError`；(2) 例外樹裡（exception group 的成員、`__cause__`、沒被壓掉的 `__context__`）有 errno 為 EACCES、EPERM、EROFS 或 ENETUNREACH 的 `OSError`。各 backend 實際回哪個 errno，由 `tests/test_denial_errno_sandbox.py` 釘住。**還擋不到的**：
+    - Linux bwrap 在 private `/tmp` 裡讀或寫不到的路徑回 ENOENT，和檔案真的不存在分不出來，所以包在裡面的時候仍算 teeth。bwrap 的網路命名空間有自己的 loopback：連本機回 ECONNREFUSED，沒有被擋，也不算環境；連外才是 ENETUNREACH（#882 CI 實測）。
+    - 程式接住拒絕後轉成一般值（例如 `except OSError: return None`），或用 `os.access` 這類不丟例外的檢查。兩個 backend 都看不出來。
+    - 反方向：誠實的 bug 如果自己把真的 `PermissionError` 包起來，會從 teeth 變成 UNCOMPARABLE。這是罕見的誤擋，量測見 #854 的 PR。
   - Seatbelt 只能用在 macOS，不是可以移植的正式 sandbox。
   - Linux bwrap 後端（P2，`src/cairnwork_sandbox/bwrap.py`）：用「唯讀綁定根 + 具名遮蔽憑證」——整個根目錄唯讀綁定、只有寫入根可寫，所有 namespace 都隔離（無網路），丟掉全部 capability，禁止巢狀 user namespace；`/run`、`/tmp`（以及獨立目錄時的 `/var/run`）每次執行都是私有、空的 tmpfs，最後改成唯讀，只放回解析後仍在樹內的頂層 symlink（以檢查過的標準路徑重建；NixOS 的 `/run/current-system` 不放回，見 #469），以及 `/etc` 指到 `/run`、`/var/run` 內一般檔的頂層 symlink（如 `/etc/resolv.conf`；指到 `/tmp` 的不放回，那裡的檔案任何本機使用者都能換掉），以及這次執行自己在 `/tmp` 底下的讀寫根（讀根唯讀、只放回建 policy 時已存在的；寫根可寫，`--remount-ro` 不遞迴）；整棵樹本身或 `/run`、`/var/run` 內的讀寫根、包住私有樹的寫入根、真實路徑互相重疊的私有樹（如 `/tmp` 連到 `/run`）一律拒絕；除了上述讀寫根，執行內看不到主機 `/tmp` 的檔案（#391，`bwrap_private.py`）。完整說法：Linux 執行內（擁有者或專屬帳號模式）連不到主機在 `/run`、`/var/run`、`/tmp` 底下的 pathname socket（含執行中才建立的），只有兩個例外：(1) 這次執行自己在 `/tmp` 底下的讀寫根（呼叫端選的，原樣放回：工作與 private 目錄、直譯器的 prefix；Cairnwork 把執行放在必填的 `--state` 目錄，只有測試放在 pytest 的 `/tmp`）；(2) `/etc` 頂層 symlink 指到的 `/run`、`/var/run` 內一般檔，它的擁有者可在檢查與掛載之間換成 socket。這不是說 Linux 執行沒有任何主機 IPC 通道；`/var/tmp`、`/var/lib`、家目錄、`/srv` 仍開著（#471）。另外，具名憑證目錄（`~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.config`、`~/.docker`、`~/.kube`、`~/.claude`、`~/.codex`、`~/.gemini`、`~/.nexus`、`~/.local/state`、`~/.local/share/keyrings`、`~/.terraform.d`）用空 tmpfs 蓋掉（socket 樹 `/tmp/.X11-unix`、`/run/user`、`/run/libvirt` 在私有 `/tmp`、`/run` 裡）；憑證檔（`~/.netrc`、`~/.git-credentials`、`~/.npmrc`、`~/.pypirc`、`~/.pgpass`、`~/.my.cnf`、`~/.vault-token`、`~/.Xauthority`）與 root 等價 daemon socket（Docker／Podman／containerd／系統 D-Bus／LXD／Incus）在真實路徑用 `/dev/null` 蓋掉（唯讀綁定擋不住 connect() 到 pathname socket，network namespace 只蓋 abstract socket；`/run` 底下的名字可能連到 `/run` 外的 socket，所以仍列在清單上）。**取捨**：整個根仍可讀，sandbox 以「跑它的帳號」（啟動的帳號，或專屬驗證帳號）身分執行，所以 sandbox 內可讀範圍 ＝ 該帳號可讀範圍，只靠遮蔽清單擋已知憑證；私有樹以外（`/var/tmp`、`/var/lib`、家目錄、`/srv`）以及上述兩個例外裡的 pathname socket，該帳號能連就連得到，不是完整隔離（Seatbelt 的「只能讀白名單」在 Linux 沒有對應）；其他使用者的 0700 家目錄由 POSIX 權限擋住。Seatbelt（macOS）行為不變。見證測試同一份 `tests/test_sandbox.py`，Linux CI（`test-linux-sandbox`）在真的 bwrap 上實跑；「讀寫入根以外的檔案被拒」這兩項見證只適用 Seatbelt。
 - Gateway 怎麼把一類任務轉給 Cairnwork：Cairnwork 端的 `cairnwork-route` 已完成（`docs/GATEWAY_ROUTE.md`）；Gateway 端的分流、靜止閘門和開關由部署器負責人和整合負責人另外訂，F 條的「先驗證、晚切換」照做。

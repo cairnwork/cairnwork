@@ -2,6 +2,7 @@
 pass/fail summary of the visible tests, and never reaches the deferred tests or the logs."""
 
 import subprocess
+import sys
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -119,6 +120,8 @@ def _run(project, tmp_path, worker, verifiers, test_commit="", base=None, wrap=_
 class FakeAccount:
     """Stands in for a VerifierAccount on the account path: runs land in its run root (the real
     run_verifiers, without sudo) and the wrapper must remove them through ``remove``."""
+
+    python = sys.executable  # the scan of the probe's edit reads files with the account's Python
 
     def __init__(self, root: Path, fail_remove=False):
         self.run_root, self.removed, self.fail_remove = root, [], fail_remove

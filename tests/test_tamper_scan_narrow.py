@@ -1,5 +1,7 @@
 """tamper_scan narrowing (#221): each relaxation with lines that pass and lines still caught."""
 
+import sys
+
 import pytest
 from conftest import commit_change, git
 
@@ -33,11 +35,11 @@ def test_pure_comment_lines_are_skipped(line, caught):
         "@pytest.hookimpl(tryfirst=True)",
     ],
 )
-def test_pytest_rules_apply_to_test_code_only(line):
+def test_pytest_rules_apply_to_every_py_file_since_821(line):
     assert _rules(TEST, line)
     assert _rules("tests/helpers/util.py", line)
     assert _rules("src/pkg/testing/plugin.py", line)
-    assert _rules("src/pkg/plugin.py", line) == []
+    assert _rules("src/pkg/plugin.py", line)
     assert _rules("app_test.py", line)
 
 
@@ -163,6 +165,6 @@ def test_a_path_with_a_space_is_still_scanned(repo):
     """git appends a tab to an unquoted ``+++ b/a b.py`` header; the path keeps no tab."""
     base = git(repo, "rev-parse", "HEAD")
     head = commit_change(repo, {"src/my file.py": "import os\nos._exit(0)\n"})
-    assert [(f.path, f.rule) for f in scan_patch(repo, base, head)] == [
+    assert [(f.path, f.rule) for f in scan_patch(repo, base, head, python=sys.executable)] == [
         ("src/my file.py", "os_exit")
     ]

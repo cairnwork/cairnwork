@@ -1,5 +1,7 @@
 """Programs named in a worker's .git/config never run when Cairnwork collects its commit (#727)."""
 
+import sys
+
 import pytest
 from conftest import git
 
@@ -28,5 +30,5 @@ def test_worker_config_program_never_runs_on_collect(repo, tmp_path, key):
     marker = tmp_path / "worker-code-ran"
     git(clone, "config", key, f"touch {marker}")
     attempt = Attempt("a1", base, clone, _guarded_refs(repo, "a1"))
-    collect_candidate(repo, attempt, ("src/a.py",))
+    collect_candidate(repo, attempt, ("src/a.py",), python=sys.executable)
     assert not marker.exists()

@@ -6,6 +6,8 @@ declared encoding other than UTF-8 on an added line 1-2. The scan's diff runs wi
 and a changed ``.py`` file that the diff shows without its lines is unreadable.
 """
 
+import sys
+
 import pytest
 from conftest import commit_change, git
 
@@ -22,7 +24,7 @@ def _rules(path, text):
 
 
 def _found(repo, base, head):
-    return [(f.path, f.line, f.rule) for f in scan_patch(repo, base, head)]
+    return [(f.path, f.line, f.rule) for f in scan_patch(repo, base, head, python=sys.executable)]
 
 
 @pytest.mark.parametrize(

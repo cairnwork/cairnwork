@@ -1,6 +1,7 @@
 """DIFF_CHECK_FAILED names the rule and path:line, never candidate text (#227)."""
 
 import subprocess
+import sys
 
 import pytest
 from conftest import git
@@ -21,6 +22,7 @@ PATHS = ("a.py",)
 
 
 def refuse(repo, tmp_path, files):
+    """Not valid Python goes in a ``.txt``: an unparseable ``.py`` is refused earlier (#821)."""
     base = git(repo, "rev-parse", "HEAD")
     clone = create_attempt_clone(repo, base, tmp_path / "attempts", "a1").path
     for name, text in files.items():
@@ -30,7 +32,7 @@ def refuse(repo, tmp_path, files):
     git(clone, *WORKER, "commit", "-q", "-m", "candidate")
     made = Attempt("a1", base, clone, _guarded_refs(repo, "a1"))
     with pytest.raises(CandidateRejected) as info:
-        collect_candidate(repo, made, tuple(files), allow_deletions=True)
+        collect_candidate(repo, made, tuple(files), allow_deletions=True, python=sys.executable)
     assert info.value.code == "DIFF_CHECK_FAILED"
     return str(info.value)
 
@@ -50,9 +52,9 @@ def test_header_shaped_content_line_never_appears(repo, tmp_path, colour):
 
 def test_cr_payload_through_real_git(repo, tmp_path, colour):
     payload = f"# prefix\r{SECRET}:7: arbitrary candidate text   \n"
-    msg = refuse(repo, tmp_path, {"src/a.py": payload})
+    msg = refuse(repo, tmp_path, {"src/a.txt": payload})
     assert SECRET not in msg and "arbitrary" not in msg
-    assert msg.endswith("rule=git-diff-check; src/a.py:1: trailing whitespace.")
+    assert msg.endswith("rule=git-diff-check; src/a.txt:1: trailing whitespace.")
 
 
 def test_trailing_space_names_path_line_and_kind(repo, tmp_path):
@@ -86,7 +88,7 @@ def test_hundred_errors_are_capped_with_more(repo, tmp_path):
 
 
 def test_content_lines_never_appear(repo, tmp_path):
-    msg = refuse(repo, tmp_path, {"src/a.py": f"{SECRET} = 1 \n\t{SECRET}\n"})
+    msg = refuse(repo, tmp_path, {"src/a.txt": f"{SECRET} = 1 \n\t{SECRET}\n"})
     assert SECRET not in msg
 
 
@@ -193,10 +195,10 @@ def test_plus_prefixed_line_is_never_a_header():
 
 def test_kinds_match_real_git(repo, tmp_path):
     body = "a \n \tb\n        c\n<<<<<<< HEAD\n=======\n>>>>>>> x\n\n"
-    msg = refuse(repo, tmp_path, {"src/a.py": body})
-    assert "a.py:1: trailing whitespace." in msg
-    assert "a.py:2: space before tab in indent." in msg
-    assert "a.py:4: leftover conflict marker" in msg
+    msg = refuse(repo, tmp_path, {"src/a.txt": body})
+    assert "a.txt:1: trailing whitespace." in msg
+    assert "a.txt:2: space before tab in indent." in msg
+    assert "a.txt:4: leftover conflict marker" in msg
     assert msg.endswith("; +1 more")
 
 
@@ -211,10 +213,10 @@ FORGED = [
 
 @pytest.mark.parametrize("payload", FORGED)
 def test_forged_header_after_embedded_cr_never_appears(repo, tmp_path, colour, payload):
-    msg = refuse(repo, tmp_path, {"src/a.py": payload})
+    msg = refuse(repo, tmp_path, {"src/a.txt": payload})
     for sentinel in ("999", "12345678901234567890", "424242"):
         assert sentinel not in msg
-    assert "src/a.py:" in msg  # the real finding is still named
+    assert "src/a.txt:" in msg  # the real finding is still named
 
 
 def test_forged_header_unit_keeps_cr_inside_content_line():
@@ -224,8 +226,8 @@ def test_forged_header_unit_keeps_cr_inside_content_line():
 
 
 def test_combined_kind_is_accepted_and_matches_real_git(repo, tmp_path):
-    msg = refuse(repo, tmp_path, {"src/a.py": " \tx \n"})
-    assert msg.endswith("src/a.py:1: trailing whitespace, space before tab in indent.")
+    msg = refuse(repo, tmp_path, {"src/a.txt": " \tx \n"})
+    assert msg.endswith("src/a.txt:1: trailing whitespace, space before tab in indent.")
 
 
 @pytest.mark.parametrize(

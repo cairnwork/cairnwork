@@ -70,8 +70,10 @@ import stat
 from pathlib import Path
 
 from cairnwork.bytecode_hook import HOOK_SOURCE
+from cairnwork.collect_import import import_errors
 from cairnwork.confined import MAX_REPORT_BYTES
 from cairnwork.pytest_config import PLUGINS
+from cairnwork.report_guard_parts import PARTS_SOURCE
 from cairnwork.skip_hint import module_names as _module_names
 from cairnwork.verdict_record import Verdict as Verdict
 from cairnwork.verdict_record import _sources, well_formed
@@ -82,9 +84,11 @@ NONCE_ENV = "CAIRNWORK_VERDICT_NONCE"
 MODULE = "_cairnwork_report_guard"
 PLUGIN_KINDS = frozenset(f"plugin:{module}" for _, module, _ in PLUGINS)
 
-_PLUGIN_SOURCE = '''\
+_PLUGIN_SOURCE = (
+    '''\
 """Materialised by cairnwork.report_guard into each verifier run; edit it there."""
 
+import errno
 import json
 import os
 
@@ -93,19 +97,9 @@ import pytest
 _FDS_ENV = "CAIRNWORK_GUARD_FDS"
 _PATH_ENV = "CAIRNWORK_VERDICT_PATH"
 _NONCE_ENV = "CAIRNWORK_VERDICT_NONCE"
-# #804: fixture -> module of the pytest_config.PLUGINS entry that provides it. A setup error that
-# says one of them is missing is recorded as "plugin:<module>"; the parent keeps it as "plugin"
-# (base PLUGIN_NOT_INSTALLED) only when that module cannot be found in the verifier's Python.
-_PLUGIN_FIXTURES = {
-    **dict.fromkeys(("mocker", "class_mocker", "module_mocker", "package_mocker",
-                     "session_mocker"), "pytest_mock"),
-    # pytest-django: only names a project rarely defines itself (not db, client or settings)
-    **dict.fromkeys(("transactional_db", "django_db_setup", "django_db_blocker", "admin_client",
-                     "admin_user", "rf", "async_rf", "live_server", "django_user_model",
-                     "django_assert_num_queries", "mailoutbox"), "pytest_django.plugin"),
-    "anyio_backend": "anyio.pytest_plugin",
-}
-
+'''
+    + PARTS_SOURCE
+    + '''
 
 def _take():
     """Read the hand-over once and scrub it from os.environ. Runs at import: pytest loads
@@ -139,6 +133,26 @@ def _source(item):
         return ""
 
 
+def _denied_inside(exc, _codes=(errno.EACCES, errno.EPERM, errno.EROFS, errno.ENETUNREACH)):
+    """#854: a denial-shaped OSError wrapped in a failure (group member, cause, unsuppressed
+    context); past the bound, yes (fail closed). Other wrapped OSErrors stay plain failures."""
+    todo, seen = [exc], set()
+    while todo:
+        if not isinstance(cur := todo.pop(), BaseException) or id(cur) in seen:
+            continue
+        if len(seen) >= 64:  # the bound: a 65th distinct exception, not an empty cause slot
+            return True
+        seen.add(id(cur))
+        if cur is not exc and isinstance(cur, OSError) and cur.errno in _codes:
+            return True
+        members = getattr(cur, "exceptions", None)  # BaseExceptionGroup, or the backport's
+        todo.extend(members if isinstance(members, tuple) else ())
+        todo.append(cur.__cause__)
+        if not cur.__suppress_context__:
+            todo.append(cur.__context__)
+    return False
+
+
 def _missing(report):  # #813: the module a skip at collection says it could not import
     shown = report.longrepr[-1] if isinstance(report.longrepr, tuple) else ""
     return str(shown).partition("could not import '")[2].partition("'")[0][:100]
@@ -160,6 +174,7 @@ class _Reporter:
         self._renamed = []  # items whose node id or file changed after collection, or never seen
         self._collect_errors = []
         self._collect_skipped = []
+        self._import_errors = []  # #796: collectors that failed on "cannot import name"
         self._skipped_deps = []  # #813: per skipped collector, the module it could not import
         self._teardown_errors = []
         self._setup_failed = []  # #775: fixture raised before the body
@@ -173,6 +188,9 @@ class _Reporter:
         elif report.skipped:  # a module or directory skipped whole while collecting
             self._collect_skipped.append(report.nodeid)
             self._skipped_deps.append(_missing(report))
+
+    def pytest_exception_interact(self, node, call, report, _record=_import_error):
+        self._import_errors += filter(None, [_record(node, call, report)])
 
     def _original(self, item, nodeid, _source=_source):
         """The node id ``item`` had when collected; an item that was not seen collected, or whose
@@ -214,14 +232,15 @@ class _Reporter:
 
     @pytest.hookimpl(wrapper=True, tryfirst=True)
     def pytest_runtest_makereport(self, item, call, _original=_original, _keep_worst=_keep_worst,
-                                  _fixtures=_PLUGIN_FIXTURES):
+                                  _fixtures=_PLUGIN_FIXTURES, _denied_inside=_denied_inside):
         report = yield  # outermost: the report as every other hook left it
         nodeid, _ = _original(self, item, report.nodeid)
         if report.when == "call":  # #570: one per sub-test, then the test's own
             _keep_worst(self, nodeid, report.outcome)
             if report.failed:  # #775: an OSError says "environment", never a plain test failure
                 info = call.excinfo
-                oserr = info is not None and info.errisinstance(OSError)
+                oserr = info is not None and (info.errisinstance(OSError)
+                                              or _denied_inside(info.value))
                 self._env_ok[nodeid] = self._env_ok.get(nodeid, True) and oserr
         elif report.when == "setup" and report.outcome in ("skipped", "failed"):
             _keep_worst(self, nodeid, report.outcome)
@@ -249,6 +268,7 @@ class _Reporter:
                    "renamed": list(dict.fromkeys(self._renamed)),
                    "collect_errors": self._collect_errors,
                    "collect_skipped": self._collect_skipped,
+                   "collect_import_errors": self._import_errors,
                    "collect_skipped_deps": self._skipped_deps,
                    "teardown_errors": self._teardown_errors,
                    "collection_finished": self._finished,
@@ -276,6 +296,7 @@ def pytest_configure(config):
         config.pluginmanager.register(_Reporter(*_HANDOVER), "cairnwork_report_guard")
         _HANDOVER = None
 '''
+)
 
 
 def install_plugin(directory: Path) -> None:
@@ -367,6 +388,7 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
         collect_errors=tuple(errors),
         collect_skipped=tuple(skipped),
         skipped_deps=_module_names(data),
+        import_errors=import_errors(data),
         renamed=tuple(renamed),
         teardown_errors=tuple(teardown),
         fail_kind=kind,
