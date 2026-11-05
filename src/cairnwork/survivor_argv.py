@@ -1,8 +1,11 @@
 """Which processes outlived a run (#814): the start of each one's argv, read before its kill.
 
-Only a diagnostic for the task author; the verdict still follows the count alone. An argument may
-hold a secret, so each line goes through the P2P log's masking (p2p_probe_log.mask_secrets) before
-it is cut to ARGV_ITEMS arguments and ARGV_CHARS characters. The environment is never read.
+Only a diagnostic for the task author; the verdict follows the count alone. An argument may hold a
+secret in a spelling no masking rule names, so nothing is shown unless it is on an allow-list
+(#864): a known runner's base name (PROGRAMS), a known harmless flag (FLAGS), and the module after
+``-m`` when it is in MODULES. Every other word becomes ``<redacted>``; a runner not on the list
+hides the whole line. If the filter itself raises, the line is hidden whole (ARGV_HIDDEN), never
+shown through an older rule. The environment is never read.
 """
 
 from __future__ import annotations
@@ -11,14 +14,22 @@ import re
 import subprocess
 import sys
 
-from cairnwork.p2p_probe_log import mask_secrets
-
 ARGV_ITEMS, ARGV_CHARS, MAX_LISTED = 3, 80, 5
 RAW_CHARS = 4096  # read this much of an argv, no more: the masking cost grows with its input
 # the record delimiters of reasons.explain(), as reasons._names (no import: reasons imports this)
 _DELIMITERS = re.compile(r"[\[\];:]")
 HIDDEN = "<redacted>"
-_VALUE_FLAGS = frozenset({"-u", "-a", "-p", "--user", "--auth"})  # their next word may be a secret
+PROGRAMS = frozenset({
+    "python", "pytest", "node", "git", "sh", "bash", "zsh", "npm", "npx", "uv", "ruby", "java",
+    "go", "cargo", "make", "sleep", "gunicorn", "uvicorn",
+})  # fmt: skip
+_VERSIONED = re.compile(r"(python|ruby)[0-9.]*")
+FLAGS = frozenset({
+    "-m", "-c", "-v", "-vv", "-q", "-x", "-s", "-B", "-I", "-E", "-V", "-h",
+    "--version", "--help", "--serve",
+})  # fmt: skip
+MODULES = frozenset({"pytest", "http.server", "unittest", "pip", "venv", "uvicorn", "gunicorn"})
+ARGV_HIDDEN = "(argv hidden)"
 UNREAD = "(argv not read)"
 
 
@@ -37,22 +48,28 @@ class Survivors(int):
         return Survivors(int(self) + other, self.argv)
 
 
-def _hide_values(words: list[str]) -> list[str]:
-    """Words after a masked value, or after -u/-a/-p, up to the next flag are hidden too: a quoted
-    value with a space in it, or ``user:password``, is more than one word once ps has joined it."""
-    out, hiding = [], False
-    for word in words:
-        hiding = hiding and not word.startswith("-")
-        out.append(HIDDEN if hiding and word != HIDDEN else word)
-        hiding = hiding or word == HIDDEN or word in _VALUE_FLAGS
-    return [w for i, w in enumerate(out) if not (i and w == HIDDEN == out[i - 1])]
+def _allowed(words: list[str]) -> list[str]:
+    """The allow-listed words of ``words``; each run of the others is one HIDDEN."""
+    if not words:
+        return []
+    program = words[0].rsplit("/", 1)[-1].lower()
+    if program not in PROGRAMS and not _VERSIONED.fullmatch(program):
+        return [HIDDEN]
+    out = [program]
+    for before, word in zip(words, words[1:], strict=False):
+        keep = word in FLAGS or (before == "-m" and word in MODULES)
+        if keep or out[-1] != HIDDEN:
+            out.append(word if keep else HIDDEN)
+    return out
 
 
 def prefix(text: str) -> str:
-    """The cut (RAW_CHARS), masked, then shortened form of one argv text; never raises. The order
-    matters: cutting last keeps a secret from being split, cutting first bounds the masking."""
-    words = _hide_values(mask_secrets(text[:RAW_CHARS]).split())[:ARGV_ITEMS]
-    shown = _DELIMITERS.sub("?", " ".join(words))
+    """The cut (RAW_CHARS), allow-listed, then shortened form of one argv text; never raises, and a
+    failure of the filter hides the whole line rather than falling back to another rule."""
+    try:
+        shown = _DELIMITERS.sub("?", " ".join(_allowed(text[:RAW_CHARS].split())[:ARGV_ITEMS]))
+    except Exception:  # noqa: BLE001 - the diagnostic must not change the verdict
+        return ARGV_HIDDEN
     return shown[:ARGV_CHARS] + ("..." if len(shown) > ARGV_CHARS else "") or UNREAD
 
 

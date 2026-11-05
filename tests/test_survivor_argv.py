@@ -19,26 +19,26 @@ LEAK = (
 
 
 def test_a_secret_argument_is_masked_before_the_cut():
-    assert survivor_argv.prefix("srv --password hunter2 --port 80") == "srv --password <redacted>"
-    assert "hunter2" not in survivor_argv.prefix("GITHUB_TOKEN=hunter2 srv go")
+    assert survivor_argv.prefix("sh --password FAKE-VALUE-1 --port 80") == "sh <redacted>"
+    assert "FAKE-VALUE-1" not in survivor_argv.prefix("GITHUB_TOKEN=FAKE-VALUE-1 sh go")
     assert survivor_argv.prefix("") == survivor_argv.UNREAD
 
 
 def test_a_long_argument_is_cut_and_a_newline_cannot_start_a_line():
-    out = survivor_argv.prefix("srv " + "x" * 500 + "\n::error::boom")
+    out = survivor_argv.prefix("sh " + "x" * 500 + "\n::error::boom")
     assert len(out) <= survivor_argv.ARGV_CHARS + 3 and "\n" not in out
 
 
 def test_survivors_stays_an_int_and_keeps_argv_through_a_sum():
-    got = survivor_argv.Survivors(1, ("srv",)) + 2
-    assert got == 3 and got.argv == ("srv",) and isinstance(got, int)
-    assert survivor_argv.listing(got) == " (argv: srv)" and survivor_argv.listing(3) == ""
+    got = survivor_argv.Survivors(1, ("sh",)) + 2
+    assert got == 3 and got.argv == ("sh",) and isinstance(got, int)
+    assert survivor_argv.listing(got) == " (argv: sh)" and survivor_argv.listing(3) == ""
 
 
 def test_only_the_count_decides_the_reason_stays_the_same_without_argv():
     assert reasons.why_not_passed(**_run(survivors=2)).endswith("was unreadable")
-    named = reasons.why_not_passed(**_run(survivors=survivor_argv.Survivors(1, ("srv --x",))))
-    assert named.endswith("was unreadable (argv: srv --x)")
+    named = reasons.why_not_passed(**_run(survivors=survivor_argv.Survivors(1, ("sh -x",))))
+    assert named.endswith("was unreadable (argv: sh -x)")
 
 
 def _run(**over: Any) -> dict[str, Any]:
@@ -75,14 +75,14 @@ def test_a_real_leaked_process_is_named_and_still_counted(tmp_path):
 def test_the_base_verdict_detail_lists_the_argv():
     class Run:
         returncode, forged, timed_out, mutated = 0, False, False, False
-        survivors = survivor_argv.Survivors(1, ("srv --serve",))
+        survivors = survivor_argv.Survivors(1, ("sh --serve",))
         report_too_big = log_too_big = False
         collect_errors, teardown_errors, recorded, outcomes = (), (), True, {}
         spec = type("S", (), {"verifier_id": "v"})()
 
     got = base_comparison([Run()], frozenset({"t.py::test_x"}))
     assert got.kind == "UNCOMPARABLE" and got.code == "BASE_SURVIVORS"
-    assert "BASE_SURVIVORS (exit 0)" in got.detail and "(argv: srv --serve)" in got.detail
+    assert "BASE_SURVIVORS (exit 0)" in got.detail and "(argv: sh --serve)" in got.detail
 
 
 def test_a_platform_shell_found_by_its_directory_is_named_too(tmp_path):
@@ -95,28 +95,90 @@ def test_a_platform_shell_found_by_its_directory_is_named_too(tmp_path):
     *_, survivors = confined.execute(
         [sys.executable, str(script)], tmp_path, env, 30, tmp_path / "log"
     )
-    assert survivors >= 1 and any(a.startswith("/bin/sh -c") for a in survivors.argv)
+    assert survivors >= 1 and any(a.startswith("sh -c") for a in survivors.argv)
 
 
 def test_the_raw_argv_is_cut_before_it_is_masked_so_a_huge_argument_is_quick():
     started = time.monotonic()
-    out = survivor_argv.prefix("srv " + "a-" * 500_000)
+    out = survivor_argv.prefix("sh " + "a-" * 500_000)
     assert time.monotonic() - started < 2 and len(out) <= survivor_argv.ARGV_CHARS + 3
 
 
-def test_a_secret_in_the_third_word_near_the_cut_is_masked_not_split():
-    # mask first, cut second: cut first would leave "--passwo..." or the start of the value
-    text = "x" * 55 + " --password hunter2secretvalue"
-    out = survivor_argv.prefix(text)
-    assert "hunter2" not in out and "secretvalue" not in out and "<redacted>" in out
+def test_a_value_near_the_cut_is_not_shown():
+    out = survivor_argv.prefix("x" * 55 + " --password FAKE-VALUE-1")
+    assert "FAKE-VALUE-1" not in out and out == "<redacted>"
 
 
 @pytest.mark.parametrize("text", [
-    "curl -u bob:hunter2 http://h", "curl -a hunter2 x", "srv -p hunter2 y",
-    "srv --password hunter2 more words", "srv --token=hunter2",
+    "sh --unlisted-option=FAKE-VALUE-1 go",  # long option the old rules did not name
+    "sh --unlisted-option FAKE-VALUE-1",
+    "sh -zFAKE-VALUE-1",  # short flag with the value attached
+    "sh -Z FAKE-VALUE-1",
+    "sh 'FAKE-VALUE-1 two' more",  # a value with a space in it
+    "sh FAKE-VALUE-1",  # positional
+    "python3 -m pytest FAKE-VALUE-1",
+    "curl -u user:FAKE-VALUE-1 http://h",  # program not on the list
+    "/opt/FAKE-VALUE-1/bin/tool run",
+    "sh -c FAKE-VALUE-1",
+    "sh -x -v FAKE-VALUE-1",
 ])  # fmt: skip
-def test_credential_forms_in_the_first_words_are_masked(text):
-    assert "hunter2" not in survivor_argv.prefix(text) and "more" not in survivor_argv.prefix(text)
+def test_nothing_unlisted_is_shown(text):
+    assert "FAKE-VALUE-1" not in survivor_argv.prefix(text)
+    assert "two" not in survivor_argv.prefix(text)
+
+
+@pytest.mark.parametrize(("text", "shown"), [
+    ("/usr/bin/python3.12 -m pytest tests/FAKE-VALUE-1", "python3.12 -m pytest"),
+    ("/bin/sh -c sleep 60", "sh -c <redacted>"),
+    ("node --serve", "node --serve"),
+    ("tool run", "<redacted>"),
+])  # fmt: skip
+def test_a_known_runner_is_still_recognisable(text, shown):
+    assert survivor_argv.prefix(text) == shown
+
+
+def test_a_filter_error_hides_the_argv_and_does_not_fall_back(monkeypatch):
+    def boom(words):
+        raise RuntimeError("filter broke")
+
+    monkeypatch.setattr(survivor_argv, "_allowed", boom)
+    assert survivor_argv.prefix("sh -x FAKE-VALUE-1") == survivor_argv.ARGV_HIDDEN
+    got = survivor_argv.Survivors(2, (survivor_argv.prefix("sh go"),))
+    assert got == 2 and "hidden" in survivor_argv.listing(got)
+    assert reasons.why_not_passed(**_run(survivors=got)).endswith("(argv: (argv hidden))")
+
+
+def test_the_literal_limits_and_the_separator_between_prefixes():  # #836 item 1
+    assert (survivor_argv.ARGV_ITEMS, survivor_argv.ARGV_CHARS) == (3, 80)
+    assert survivor_argv.prefix("python" + "3" * 200) == "python" + "3" * 74 + "..."
+    both = survivor_argv.Survivors(2, ("sh -x", "node --serve"))
+    assert survivor_argv.listing(both) == " (argv: sh -x, node --serve)"
+
+
+def test_the_count_the_reason_text_and_the_receipt_are_unchanged_by_the_filter():
+    secret = survivor_argv.Survivors(2, (survivor_argv.prefix("sh --token FAKE-VALUE-1"),))
+    plain = reasons.why_not_passed(**_run(survivors=2))
+    named = reasons.why_not_passed(**_run(survivors=secret))
+    assert secret == 2 and int(secret) == 2 and plain.startswith(named.split(" (argv")[0])
+    assert "FAKE-VALUE-1" not in named
+
+
+def test_the_failure_reason_never_carries_an_unlisted_argument():  # path 1: result.reason
+    got = survivor_argv.Survivors(1, (survivor_argv.prefix("sh --unlisted=FAKE-VALUE-1 go"),))
+    assert "FAKE-VALUE-1" not in reasons.why_not_passed(**_run(survivors=got))
+
+
+def test_the_uncomparable_detail_never_carries_an_unlisted_argument():  # path 2: detail
+    class Run:
+        returncode, forged, timed_out, mutated = 0, False, False, False
+        survivors = survivor_argv.Survivors(1, (survivor_argv.prefix("sh -zFAKE-VALUE-1 a b"),))
+        report_too_big = log_too_big = False
+        collect_errors, teardown_errors, recorded, outcomes = (), (), True, {}
+        spec = type("S", (), {"verifier_id": "v"})()
+
+    got = base_comparison([Run()], frozenset({"t.py::test_x"}))
+    assert got.code == "BASE_SURVIVORS" and "(argv: sh <redacted>)" in got.detail
+    assert "FAKE-VALUE-1" not in got.detail
 
 
 def test_record_delimiters_are_replaced_in_each_prefix():
@@ -125,7 +187,7 @@ def test_record_delimiters_are_replaced_in_each_prefix():
 
 
 def test_only_the_first_listed_processes_and_the_cut_length_count(monkeypatch):
-    monkeypatch.setattr(survivor_argv, "read_argv", lambda pid: f"p{pid} " + "w" * 200)
+    monkeypatch.setattr(survivor_argv, "read_argv", lambda pid: "python" + "3" * 200)
     seen: dict[int, str] = {}
     for pid in range(survivor_argv.MAX_LISTED + 3):
         survivor_argv.note(seen, pid)
@@ -138,7 +200,7 @@ def test_only_the_first_listed_processes_and_the_cut_length_count(monkeypatch):
 
 
 def test_a_non_utf8_argv_is_read_not_raised(monkeypatch):
-    done = subprocess.CompletedProcess([], 0, stdout=b"srv \xff\xfe go\n")
+    done = subprocess.CompletedProcess([], 0, stdout=b"sh \xff\xfe go\n")
     monkeypatch.setattr(sys, "platform", "darwin")
     monkeypatch.setattr(survivor_argv.subprocess, "run", lambda *a, **k: done)
-    assert survivor_argv.prefix(survivor_argv.read_argv(1)).startswith("srv ")
+    assert survivor_argv.prefix(survivor_argv.read_argv(1)) == "sh <redacted>"
