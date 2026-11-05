@@ -10,11 +10,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from p2p_side_stub import collected_run
 from test_deferred_tests import CHECK, REGRESSION, make_test_commit
 from test_pipeline import EditWorker
 from verify_helpers import FIX, candidate, verify
 
-from cairnwork import p2p, pipeline_judge, verifiers, verify_cli
+from cairnwork import p2p, p2p_collect, pipeline_judge, verifiers, verify_cli
 from cairnwork.core_request import VerifierObservation
 from cairnwork.intake import Intake
 from cairnwork.journal import Journal
@@ -77,12 +78,15 @@ def stub(monkeypatch):
             # -e: the base env check before the worker (#234) passes, as the base does when stubbed;
             # a real run there would need a sandbox, which hosts without one (Linux CI) lack
             fields = {"-b": base, "-p": probe, "-e": ENV_OK}.get(run_id[-2:])
+            if run_id.endswith("-c") and probe:  # #793: the test commit collects the probe's ids
+                return tuple(collected_run(_run(s, ctx.run_root, run_id), probe) for s in specs)
             if fields is None:
                 return real(ctx, commit, specs, run_id, **kw)
             return tuple(_run(spec, ctx.run_root, run_id, **fields) for spec in specs)
 
         monkeypatch.setattr(pipeline_judge, "run_verifiers", fake)
         monkeypatch.setattr(p2p, "run_verifiers", fake)
+        monkeypatch.setattr(p2p_collect, "run_verifiers", fake)
         return calls
 
     return install

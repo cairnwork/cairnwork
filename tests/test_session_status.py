@@ -140,3 +140,13 @@ def test_rebinding_what_the_plugin_calls_after_import_does_not_change_the_record
     assert verdict.recorded and not verdict.ran
     assert verdict.outcomes == {"tests/test_x.py::test_x": "failed"}
     assert (verdict.exitstatus, verdict.testsfailed) == (1, 1)
+
+
+@pytest.mark.parametrize(
+    ("flag", "finished"),
+    [({}, False), ({"collection_finished": 1}, False), ({"collection_finished": "yes"}, False),
+     ({"collection_finished": True}, True)],
+)  # fmt: skip
+def test_only_a_literal_true_says_collection_finished(flag, finished):
+    # #793: a record without the flag, or with any value but true, is a stopped collection
+    assert _parse(PASSING | flag).collection_finished is finished

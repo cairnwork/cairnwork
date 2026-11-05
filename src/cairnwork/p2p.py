@@ -67,7 +67,8 @@ import cairnwork_sandbox
 from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRejected, deleted_of
 from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.issue_task import test_target
-from cairnwork.p2p_nodes import changed_tests, passing_targets, require_nodes
+from cairnwork.p2p_collect import collected_side
+from cairnwork.p2p_nodes import passing_targets, require_nodes
 from cairnwork.p2p_probe_log import probe_log_tail
 from cairnwork.p2p_selection import DEFAULT_BUDGET_SECONDS, cap_note, select_p2p_targets
 from cairnwork.pytest_config import PytestConfigError, test_file_rule
@@ -153,11 +154,6 @@ def plan_p2p(task, specs, test_files, mode, budget, result, ctx: VerifyContext) 
     if mode == "off":
         return P2PPlan(rule, None, budget)
     existing = _base_tests(task, frozenset(deleted_of(test_files)))  # #361; #798: not deleted ones
-    changed_files = frozenset(test_files) & frozenset(existing)
-    changed: frozenset[str] = frozenset()
-    if changed_files:
-        paths = tuple(sorted(changed_files))
-        changed = changed_tests(task.repo, task.base_commit, task.test_commit, paths)
     tried: tuple[str, ...] | None = None
     for applied in (mode, "module-dir") if mode == "whole-suite" else (mode,):
         files = select_p2p_targets(task.allowed_files, existing, task.test_roots, applied)
@@ -173,8 +169,10 @@ def plan_p2p(task, specs, test_files, mode, budget, result, ctx: VerifyContext) 
         if why in UNCLEAN:  # #285: no narrower mode, whatever was configured
             detail = f"{rule['degraded']}; " * bool(rule["degraded"]) + f"{why} in {applied} mode"
             raise BaseUncomparable(Comparison("UNCOMPARABLE", "P2P_BASE_PROBE_UNUSABLE", detail))
-        if outcomes is not None:
-            plan = _plan(specs, rule, passing_targets(outcomes, changed_files, changed), budget)
+        if outcomes is not None:  # #793: removed and changed tests from what pytest collected
+            side = collected_side(task, files, outcomes, test_files, ctx, budget, result.attempt_id)
+            selection = passing_targets(outcomes, side.changed_files, side.changed)
+            plan = _plan(specs, rule | side.note(), selection, budget)
             if plan.spec is None and rule["degraded"]:  # G1: and none passes on the base
                 raise _unusable(rule, "no module-dir test passes on the base")
             return plan
