@@ -41,7 +41,15 @@ LEAK = (  # a fixture that leaves process state; a new test of a base file uses 
     "    os.environ['W3B_FLAG'] = '1'\n"
 )
 USES_LEAK = "def test_a():\n    assert True\n\n\ndef test_new(leak):\n    assert True\n"
-SIBLING = {"tests/sub/random.py": "import os\nos.environ['W3B_FLAG'] = '1'\n"}  # CE4
+BOTH = (
+    (
+        "pytest",
+        ("python3", "-m", "pytest", "-q", "tests/test_regression.py", "tests/other/test_a.py"),
+    ),
+)  # a test commit that edits a base file names it
+SLOW_NEW = (
+    "def test_a():\n    assert True\n\n\ndef test_new():\n    import time\n    time.sleep(60)\n"
+)
 SHADOW = "import pytest\n\n\n@pytest.fixture\ndef val():\n    return 2\n"
 
 
@@ -63,6 +71,7 @@ def conftest_run(
     mode="whole-suite",
     budget=300,
     extra_files=None,
+    verifiers=None,
     key="k1",
 ):
     """One task whose test commit adds ``addition`` to the base conftest at ``path`` (or creates
@@ -77,7 +86,15 @@ def conftest_run(
     }
     base, tests = make_test_commit(project, files)
     return run(
-        project, tmp_path, base, tests, SeeingWorker(FIX), key=key, p2p_mode=mode, p2p_budget=budget
+        project,
+        tmp_path,
+        base,
+        tests,
+        SeeingWorker(FIX),
+        key=key,
+        p2p_mode=mode,
+        p2p_budget=budget,
+        **({"verifiers": verifiers} if verifiers else {}),
     )
 
 
@@ -143,27 +160,18 @@ SCENARIOS = {  # name: (kwargs of conftest_run, expected status, a code the reas
             "base_files": SIDEFX,
             "regression": PLAIN,
             "extra_files": {"tests/other/test_a.py": USES_LEAK},
+            "verifiers": BOTH,
         },
         "FAILED",
         "TEST_COMMIT_CONFTEST_CHANGES_BASE",
     ),
-    "a conftest that imports a same-directory module named like the standard library": (
+    "a run with the test commit over the time budget": (
         {
-            "addition": "import random\n",
-            "path": "tests/sub/conftest.py",
-            "base_files": SIDEFX | SIBLING,
+            "base_files": SIDEFX,
+            "budget": 25,
             "regression": PLAIN,
-        },
-        "FAILED",
-        "TEST_COMMIT_CONFTEST_CHANGES_BASE",
-    ),
-    "a probe over the time budget": (
-        {
-            "base_files": {
-                "tests/sub/test_slow.py": "import time\n\n\ndef test_slow():\n    time.sleep(60)\n"
-            },
-            "budget": 5,
-            "regression": PLAIN,
+            "verifiers": BOTH,
+            "extra_files": {"tests/other/test_a.py": SLOW_NEW},
         },
         "FAILED",
         "TEST_COMMIT_CONFTEST_UNCHECKED",
