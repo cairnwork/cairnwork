@@ -23,7 +23,7 @@ PROGRAMS = frozenset({
     "python", "pytest", "node", "git", "sh", "bash", "zsh", "npm", "npx", "uv", "ruby", "java",
     "go", "cargo", "make", "sleep", "gunicorn", "uvicorn",
 })  # fmt: skip
-_VERSIONED = re.compile(r"(python|ruby)[0-9.]*")
+_VERSIONED = re.compile(r"(python|ruby)([23](\.[0-9]{1,2})?)?")  # python3.12, not python3333...
 FLAGS = frozenset({
     "-m", "-c", "-v", "-vv", "-q", "-x", "-s", "-B", "-I", "-E", "-V", "-h",
     "--version", "--help", "--serve",

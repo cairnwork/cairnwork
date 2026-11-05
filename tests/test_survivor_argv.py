@@ -150,7 +150,16 @@ def test_a_filter_error_hides_the_argv_and_does_not_fall_back(monkeypatch):
 
 def test_the_literal_limits_and_the_separator_between_prefixes():  # #836 item 1
     assert (survivor_argv.ARGV_ITEMS, survivor_argv.ARGV_CHARS) == (3, 80)
-    assert survivor_argv.prefix("python" + "3" * 200) == "python" + "3" * 74 + "..."
+    assert survivor_argv.prefix("python3.12 -m pytest") == "python3.12 -m pytest"
+
+
+def test_a_long_or_odd_runner_version_is_hidden_not_shown(monkeypatch):  # desk b r1 (Codex)
+    for name in ("python" + "3" * 200, "python3.123", "python3.12.1", "ruby3.2.2", "python33"):
+        assert survivor_argv.prefix(name + " -m pytest") == survivor_argv.HIDDEN, name
+    for name in ("python", "python3", "python3.9", "python3.14", "ruby", "ruby3.2"):
+        assert survivor_argv.prefix(name).startswith(name), name
+    monkeypatch.setattr(survivor_argv, "ARGV_CHARS", 5)  # the cut still applies to what is shown
+    assert survivor_argv.prefix("python3 -m pytest") == "pytho..."
     both = survivor_argv.Survivors(2, ("sh -x", "node --serve"))
     assert survivor_argv.listing(both) == " (argv: sh -x, node --serve)"
 
@@ -187,7 +196,8 @@ def test_record_delimiters_are_replaced_in_each_prefix():
 
 
 def test_only_the_first_listed_processes_and_the_cut_length_count(monkeypatch):
-    monkeypatch.setattr(survivor_argv, "read_argv", lambda pid: "python" + "3" * 200)
+    monkeypatch.setattr(survivor_argv, "read_argv", lambda pid: "python3 -m pytest")
+    monkeypatch.setattr(survivor_argv, "ARGV_CHARS", 5)
     seen: dict[int, str] = {}
     for pid in range(survivor_argv.MAX_LISTED + 3):
         survivor_argv.note(seen, pid)
