@@ -19,7 +19,8 @@ CODES = {"PASS": 0, "FAIL": 1, "NA": 3, "OBS_ERROR": 4}
 # xunit-style setup pytest runs around a target; a name bound at run time in any way counts
 XUNIT_FUNCTION = ("setup_module", "teardown_module", "setup_function", "teardown_function",
                   "setup", "teardown", "setUpModule", "tearDownModule")  # fmt: skip
-XUNIT_UNITTEST_MODULE = ("setup_module", "teardown_module", "setup_function", "teardown_function")
+# *_function hooks are not run for TestCase methods (pytest 9.1.1, desk b)
+XUNIT_UNITTEST_MODULE = ("setup_module", "teardown_module")
 XUNIT_CLASS = ("setup_method", "teardown_method", "setup_class", "teardown_class")
 MARKS_NA = {"parametrize", "usefixtures", "skip", "skipif", "xfail", "filterwarnings"}
 

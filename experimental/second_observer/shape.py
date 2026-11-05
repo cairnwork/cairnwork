@@ -14,9 +14,7 @@ FUNCTION_XUNIT = frozenset(
     }
 )  # fmt: skip
 # unittest targets: pytest also calls these; unittest's own setUpModule / setUpClass do not count
-UNITTEST_MODULE_XUNIT = frozenset(
-    {"setup_module", "teardown_module", "setup_function", "teardown_function"}
-)
+UNITTEST_MODULE_XUNIT = frozenset({"setup_module", "teardown_module"})  # not *_function
 UNITTEST_CLASS_XUNIT = frozenset(
     {"setup_method", "teardown_method", "setup_class", "teardown_class"}
 )

@@ -88,20 +88,24 @@ def test_unittest_target_with_class_xunit_is_na(tmp_path, hook):
     assert xunit_setup_na(module(tmp_path, text), "T.test_a") is True
 
 
-@pytest.mark.parametrize(
-    "hook", ["setup_module", "teardown_module", "setup_function", "teardown_function"]
-)
-def test_unittest_target_with_module_xunit_is_na(tmp_path, hook):
-    text = f"import unittest\n\n\ndef {hook}(*a):\n    pass\n\n\nclass T(unittest.TestCase):\n    def test_a(self):\n        pass\n"
-    assert xunit_setup_na(module(tmp_path, text), "T.test_a") is True
+# desk b 15:28 (pytest 9.1.1 run): setup_function/teardown_function do not act on TestCase methods
+UNITTEST_MODULE_HOOKS = [("setup_module", True), ("teardown_module", True),
+                         ("setup_function", False), ("teardown_function", False)]  # fmt: skip
 
 
-@pytest.mark.parametrize(
-    "hook", ["setup_module", "teardown_module", "setup_function", "teardown_function"]
-)
-def test_runner_sees_module_xunit_for_a_unittest_target(tmp_path, hook):
+@pytest.mark.parametrize(("hook", "na"), UNITTEST_MODULE_HOOKS)
+def test_unittest_target_with_module_xunit_is_na(tmp_path, hook, na):
     text = f"import unittest\n\n\ndef {hook}(*a):\n    pass\n\n\nclass T(unittest.TestCase):\n    def test_a(self):\n        pass\n"
-    assert run_runner(tmp_path, text, "T.test_a")["detail"] == "XUNIT_SETUP"
+    assert xunit_setup_na(module(tmp_path, text), "T.test_a") is na
+
+
+@pytest.mark.parametrize(("hook", "na"), UNITTEST_MODULE_HOOKS)
+def test_runner_sees_module_xunit_for_a_unittest_target(tmp_path, hook, na):
+    text = f"import unittest\n\n\ndef {hook}(*a):\n    pass\n\n\nclass T(unittest.TestCase):\n    def test_a(self):\n        pass\n"
+    got = run_runner(tmp_path, text, "T.test_a")
+    assert (
+        (got["status"], got["detail"]) == ("NA", "XUNIT_SETUP") if na else got["status"] == "PASS"
+    )
 
 
 def test_unittest_own_setup_hooks_do_not_count(tmp_path):
@@ -224,8 +228,10 @@ def test_runner_sees_xunit_on_class_inheritance_and_module(tmp_path):
     base = "import unittest\n\n\nclass B(unittest.TestCase):\n    setup_class = classmethod(lambda c: None)\n\n\n"
     inherited = base + "class T(B):\n    def test_a(self):\n        pass\n"
     assert run_runner(tmp_path, inherited, "T.test_a")["detail"] == "XUNIT_SETUP"
-    mod = "import unittest\n\nsetup_function = lambda *a: None\n\n\nclass T(unittest.TestCase):\n    def test_a(self):\n        pass\n"
+    mod = "import unittest\n\nsetup_module = lambda *a: None\n\n\nclass T(unittest.TestCase):\n    def test_a(self):\n        pass\n"
     assert run_runner(tmp_path, mod, "T.test_a")["detail"] == "XUNIT_SETUP"
+    fn = mod.replace("setup_module", "setup_function")  # not run for TestCase methods: judged
+    assert run_runner(tmp_path, fn, "T.test_a")["status"] == "PASS"
 
 
 def test_setup_attribute_on_the_function_or_method_object_is_still_judged(tmp_path):
