@@ -382,13 +382,6 @@ Checks run in this order and the first failure is reported:
     `path::test[case]`, which names its test; #714). Full mode reads
     those tests from the test commit; confidential mode cannot, so there any target naming a test
     in the file counts, on the signer's word like the test contents (`TEST_PATH_NOT_TARGETED`).
-    A `conftest.py` among `test_paths` (#798) is exempt from that rule and bound by the optional key
-    `conftest_paths`, which must be exactly the paths in `test_paths` whose basename is `conftest.py`
-    (sorted). A confidential receiver refuses it (`CONFTEST_NOT_ALLOWED`) unless its policy sets
-    `allow_conftest: true`; a full receiver re-runs the static allowlist (`CONFTEST_STATIC`; hygiene,
-    not the guard). That the base tests keep their outcomes with the test commit laid over the base
-    (the differential probe, `p2p_conftest.py`) is the signer's word: `assurance.conftest_probe` is
-    `signer_claim` when `conftest_paths` is present.
     Every bound verifier id must be among the request's required verifier ids
     (`VERIFIER_NOT_REQUIRED`). The rule reads which tests a target names, not which ones pytest
     collected (#660). The producer also refuses a test commit whose new or changed tests are not
@@ -406,7 +399,7 @@ On success `VerifyResult.assurance` (Python API) and `verify --json` carry `assu
 `mode` (`full`/`confidential`), `test_source` (`policy_pinned` with `--policy`, otherwise
 `signer_choice`: the test commit the signer chose, which the receiver should read itself), `head`, `non_test_paths` (`verified` or
 `verified_against_core_manifest`), `test_contents` (`verified` or `not_verified`), `overlay`
-(`rebuilt` or `not_verified`), `verifier_runs` (always `signer_claim`), `conftest_probe` (`signer_claim`, only with `conftest_paths`, #798) and `protection` (#303:
+(`rebuilt` or `not_verified`), `verifier_runs` (always `signer_claim`) and `protection` (#303:
 the binding's level, checked in step 7; `"same_process_only"` when the binding has none) and
 `blackbox_checks` (#312, #373: `pinned` when the policy has `blackbox_checks`, `unpinned` when it
 pins a non-empty `blackbox_commitment` only, the weaker check, and `not_checked` without a policy or

@@ -116,10 +116,7 @@ def test_tests_that_only_break_on_the_base_are_uncomparable_but_plain_failed_for
     ("files", "code"),
     [
         ({"src/calc.py": "x = 1\n"}, "TEST_COMMIT_SCOPE"),
-        (
-            {"tests/pytest.ini": "[pytest]\n"},
-            "TEST_COMMIT_SCOPE",
-        ),
+        ({"tests/conftest.py": "x = 1\n"}, "TEST_COMMIT_SCOPE"),
     ],
 )
 def test_a_test_commit_may_only_add_plain_test_files(project, tmp_path, files, code):

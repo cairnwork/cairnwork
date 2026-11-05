@@ -31,10 +31,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cairnwork.collect_reader import read_collected
-from cairnwork.conftest_check import conftest_of
 from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRejected
 from cairnwork.gitcmd import GitCommandError, run_git
-from cairnwork.p2p_nodes import changed_tests, module_changed
+from cairnwork.p2p_nodes import changed_tests
 from cairnwork.p2p_selection import MODULE_DIR_CAP
 from cairnwork.verifier_spec import VerifierSpec
 from cairnwork.verifiers import run_verifiers
@@ -83,9 +82,6 @@ def collected_side(task, files, outcomes, test_files, ctx, budget, attempt_id) -
     both = {_function(n) for n in base_ids & test_ids}
     body = changed_tests(task.repo, task.base_commit, task.test_commit, paths) if paths else set()
     changed = frozenset(body & both) | {_function(n) for n in side.removed}
-    if conftest_of(test_files):  # #798: module-level code of an edited file may use a new fixture
-        over = module_changed(task.repo, task.base_commit, task.test_commit, paths)
-        changed |= {_function(n) for n in base_ids & test_ids if _file(n) in over}
     return CollectedSide(side.base_ids, side.test_ids, side.removed, side.dropped, edited, changed)
 
 
