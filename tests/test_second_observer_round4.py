@@ -191,3 +191,59 @@ def test_residual_is_unknown_when_the_input_is_unusable(tmp_path):
     raw = project.shadow_input(project.base, TARGET, interpreter="/no/such/python")
     code, row, _ = project.shadow(raw)
     assert code == 0 and row["residual"] == ["unknown"]
+
+
+# review round 1: xunit names bound at run time are caught by the runner (static cannot see them)
+BINDINGS = {
+    "call": "def make():\n    return lambda *a: None\n\n\nsetup_module = make()\n",
+    "attr": "import types\n\nhelper = types.SimpleNamespace(f=lambda *a: None)\nsetup_module = helper.f\n",
+    "from_import": "from os.path import join as setup_module\n",
+    "teardown": "teardown_function = lambda *a: None\n",
+}
+
+
+@pytest.mark.parametrize("kind", list(BINDINGS))
+def test_runner_sees_xunit_names_bound_without_def(tmp_path, kind):
+    text = BINDINGS[kind] + "\n\ndef test_a():\n    pass\n"
+    assert xunit_setup_na(module(tmp_path, text), "test_a") is False  # static is blind here
+    got = run_runner(tmp_path, text, "test_a")
+    assert (got["status"], got["detail"]) == ("NA", "XUNIT_SETUP")
+
+
+def test_runner_sees_xunit_on_function_class_and_method(tmp_path):
+    func = "def test_a():\n    pass\n\n\ntest_a.setup = lambda *a: None\n"
+    assert run_runner(tmp_path, func, "test_a")["detail"] == "XUNIT_SETUP"
+    base = "import unittest\n\n\nclass B(unittest.TestCase):\n    setup_class = classmethod(lambda c: None)\n\n\n"
+    inherited = base + "class T(B):\n    def test_a(self):\n        pass\n"
+    assert run_runner(tmp_path, inherited, "T.test_a")["detail"] == "XUNIT_SETUP"
+    meth = "import unittest\n\n\nclass T(unittest.TestCase):\n    def test_a(self):\n        pass\n\n    test_a.setup_method = 1\n"
+    assert run_runner(tmp_path, meth, "T.test_a")["detail"] == "XUNIT_SETUP"
+    mod = "import unittest\n\nsetup_function = lambda *a: None\n\n\nclass T(unittest.TestCase):\n    def test_a(self):\n        pass\n"
+    assert run_runner(tmp_path, mod, "T.test_a")["detail"] == "XUNIT_SETUP"
+
+
+def test_runner_still_judges_without_xunit_names(tmp_path):
+    plain = "def test_a():\n    pass\n"
+    uni = "import unittest\n\n\nclass T(unittest.TestCase):\n    @classmethod\n    def setUpClass(cls):\n        pass\n\n    def test_a(self):\n        pass\n"
+    assert run_runner(tmp_path, plain, "test_a")["status"] == "PASS"
+    assert run_runner(tmp_path, uni, "T.test_a")["status"] == "PASS"
+
+
+# review round 1: residual defaults to unknown; cw_verdict is required
+def test_a_rebuild_failure_leaves_residual_unknown(tmp_path, monkeypatch):
+    from experimental.second_observer import cli
+
+    def boom(*a, **k):
+        raise RuntimeError("rebuild broke")
+
+    monkeypatch.setattr(cli, "rebuild", boom)
+    project = Project(tmp_path)
+    row = row_of(project, project.base)
+    assert row["observer"] == "OBS_ERROR" and row["residual"] == ["unknown"]
+
+
+def test_missing_cw_verdict_is_uncomparable(tmp_path):
+    project = Project(tmp_path)
+    raw = project.shadow_input(project.base, TARGET, cw_verdict=None)
+    code, row, _ = project.shadow(raw)
+    assert row["observer"] == "UNCOMPARABLE" and "cw_verdict" in row["detail"]

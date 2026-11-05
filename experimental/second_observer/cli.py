@@ -53,7 +53,7 @@ def record(inp: ShadowInput, status: str, detail: str, started: float, extra: di
         "observer": status,
         "detail": detail,
         "rule_t": None,  # rule T is step 2
-        "residual": [],  # known divergence sources seen (residual.py); overwritten by extra
+        "residual": ["unknown"],  # until residual.py has read the checkout; extra overwrites it
         "elapsed_s": round(time.monotonic() - started, 3),
         "same_process": True,
         **extra,
@@ -108,7 +108,7 @@ def observe(inp: ShadowInput, out: Path) -> dict:
 
 
 def _raw_repo(path: Path) -> list[Path]:
-    try:
+    try:  # a missing "repo" means nothing extra is guarded here; load() reports the real error
         repo = json.loads(Path(path).read_text()).get("repo")
     except (OSError, ValueError, AttributeError):
         return []

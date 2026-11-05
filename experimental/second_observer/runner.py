@@ -16,6 +16,11 @@ import unittest
 
 sys.dont_write_bytecode = True
 CODES = {"PASS": 0, "FAIL": 1, "NA": 3, "OBS_ERROR": 4}
+# xunit-style setup pytest runs around a target; a name bound at run time in any way counts
+XUNIT_FUNCTION = ("setup_module", "teardown_module", "setup_function", "teardown_function",
+                  "setup", "teardown", "setUpModule", "tearDownModule")  # fmt: skip
+XUNIT_UNITTEST_MODULE = ("setup_module", "teardown_module", "setup_function", "teardown_function")
+XUNIT_CLASS = ("setup_method", "teardown_method", "setup_class", "teardown_class")
 MARKS_NA = {"parametrize", "usefixtures", "skip", "skipif", "xfail", "filterwarnings"}
 
 
@@ -84,6 +89,10 @@ def mark_names(obj):
     return {getattr(m, "name", "") for m in (found if isinstance(found, list) else [found])}
 
 
+def has_any(obj, names):
+    return any(hasattr(obj, n) for n in names)  # hasattr sees every binding form, not only def
+
+
 def judge(module, name):
     cls_name, _, member = name.rpartition(".")
     try:
@@ -96,12 +105,19 @@ def judge(module, name):
             marks |= mark_names(getattr(target, member, None))  # the method's own marks
             if marks & MARKS_NA:
                 return "NA", "marks"
+            method = getattr(target, member, None)
+            if has_any(module, XUNIT_UNITTEST_MODULE) or has_any(target, XUNIT_CLASS):
+                return "NA", "XUNIT_SETUP"
+            if has_any(method, XUNIT_CLASS):
+                return "NA", "XUNIT_SETUP"
             return judge_unittest(target, member)
         return "NA", "method of a non-unittest class"
     if not callable(target):
         return "OBS_ERROR", "target is not callable"
     if isinstance(target, type):  # a class-level node (file::Class) names no single test
         return "NA", "TARGET_SHAPE"
+    if has_any(module, XUNIT_FUNCTION) or has_any(target, XUNIT_FUNCTION):
+        return "NA", "XUNIT_SETUP"
     if inspect.signature(target).parameters or marks & MARKS_NA:
         return "NA", "parameters, fixtures or marks"
     if inspect.iscoroutinefunction(target) or inspect.isgeneratorfunction(target):

@@ -101,6 +101,8 @@ def _require_types(raw: dict) -> None:
     roots = raw.get("test_roots", ["tests"])
     if not _strings(roots, many=True) or not roots:
         raise Uncomparable("test_roots must be a non-empty list of strings")
+    if "cw_verdict" not in raw:
+        raise Uncomparable("missing cw_verdict")
     for key in ("cw_verdict", "cw_reason"):
         if not _strings(raw.get(key, "")):
             raise Uncomparable(f"{key} must be a string")
@@ -158,7 +160,7 @@ def check(raw: dict) -> ShadowInput:
         interpreter=python,
         ini_text=raw["ini_text"],
         pythonpath=_ini_pythonpath(raw["ini_text"]),
-        cw_verdict=raw.get("cw_verdict", ""),
+        cw_verdict=raw["cw_verdict"],
         cw_reason=raw.get("cw_reason", ""),
         test_roots=tuple(raw.get("test_roots") or ("tests",)),
     )
