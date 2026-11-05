@@ -7,6 +7,7 @@ return, so an added line is scanned piece by piece at each "\\r". An added line 
 bounded (#642).
 """
 
+import sys
 import time
 
 import pytest
@@ -27,7 +28,7 @@ def _scan(repo, content: bytes):
     git(repo, "add", "-A")
     git(repo, "commit", "-q", "-m", "candidate")
     head = git(repo, "rev-parse", "HEAD")
-    return [(f.path, f.line, f.rule) for f in scan_patch(repo, base, head)]
+    return [(f.path, f.line, f.rule) for f in scan_patch(repo, base, head, python=sys.executable)]
 
 
 @pytest.mark.parametrize(
@@ -135,9 +136,9 @@ def test_operator_diff_settings_do_not_change_how_the_diff_is_read(repo):
     git(repo, "add", "-A")
     git(repo, "commit", "-q", "-m", "candidate")
     head = git(repo, "rev-parse", "HEAD")
-    assert [(f.path, f.line, f.rule) for f in scan_patch(repo, base, head)] == [
-        ("src/z.py", 2, "os_exit")
-    ]
+    assert [
+        (f.path, f.line, f.rule) for f in scan_patch(repo, base, head, python=sys.executable)
+    ] == [("src/z.py", 2, "os_exit")]
 
 
 HEAD_A = "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n"

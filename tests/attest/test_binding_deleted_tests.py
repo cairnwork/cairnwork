@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from cairnwork import deferred_tests
 from cairnwork.notary import NotaryInputError
 from cairnwork.notary_verify import binding_extras as producer_extras
 from cairnwork_attest import binding_extras
@@ -185,3 +186,55 @@ def test_a_policy_pins_the_deleted_paths(world, mode):
             deleted_test_paths=other,
         )
         assert check(world, repo=mode, policy=pol).code == "DELETED_TEST_PATHS_MISMATCH", other
+
+
+def test_the_deleted_paths_are_capped_like_the_import_path_list():
+    """#870: at most 8 (the sibling ``import_paths`` limit); 9 is refused with the shape reason."""
+    key = "deleted_test_paths"
+    eight = sorted(f"tests/t{n}.py" for n in range(8))
+    nine = sorted(f"tests/t{n}.py" for n in range(9))
+    assert binding_extras.binding_problem({key: eight, "test_paths": ["t.py"]}) == ""
+    got = binding_extras.binding_problem({key: nine, "test_paths": ["t.py"]})
+    assert got == f"binding {key} has the wrong shape or is empty"
+
+
+def _delete_commit(repo: Path, count: int) -> tuple[str, str]:
+    """A test commit on the base that deletes ``count`` test files and adds one (real git)."""
+    from conftest import commit_change, git
+
+    commit_change(
+        repo, {f"tests/old{count}_{n}.py": "def test_x():\n    pass\n" for n in range(count)}
+    )
+    base = git(repo, "rev-parse", "HEAD")
+    test_commit = commit_change(
+        repo,
+        {"tests/test_new.py": "def test_y():\n    assert False\n"},
+        delete=[f"tests/old{count}_{n}.py" for n in range(count)],
+        message="tests",
+    )
+    return base, test_commit
+
+
+def test_the_producer_refuses_more_deleted_paths_than_the_receipt_can_carry(repo):
+    """#870: 9 deletions is refused by the real producer (test_paths), 8 passes and its binding
+    shape is accepted; the one constant is shared with the receiver's shape check."""
+    base, nine = _delete_commit(repo, 9)
+    with pytest.raises(deferred_tests.TestCommitRejected) as err:
+        deferred_tests.test_paths(repo, base, nine)
+    assert err.value.code == "TEST_COMMIT_SCOPE" and "9 deleted" in str(err.value)
+    from conftest import git
+
+    git(repo, "reset", "-q", "--hard", base)
+    base8, eight = _delete_commit(repo, 8)
+    paths, deleted = deferred_tests.test_paths(repo, base8, eight)
+    assert len(deleted) == 8
+    key = "deleted_test_paths"
+    assert binding_extras.binding_problem({key: sorted(deleted), "test_paths": list(paths)}) == ""
+
+
+def test_a_policy_cannot_pin_more_deleted_paths_than_the_cap():
+    """#870: policy_problem shares the shape check, so a pin of 9 is malformed, 8 is fine."""
+    key = "deleted_test_paths"
+    nine = sorted(f"tests/t{n}.py" for n in range(9))
+    assert binding_extras.policy_problem({key: nine[:8]}) == ""
+    assert binding_extras.policy_problem({key: nine}) == f"policy {key} has the wrong shape"
