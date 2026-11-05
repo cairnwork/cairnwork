@@ -71,6 +71,7 @@ from cairnwork import gitcmd, pytest_config, report_channel, report_guard
 from cairnwork.account_checkout import checkout_differences, make_account_checkout
 from cairnwork.account_checkout import remove_checkout as _remove_checkout
 from cairnwork.account_prelude import locked_prelude
+from cairnwork.blackbox_runner import HASH_SEED
 from cairnwork.bytecode_hook import host_notes
 from cairnwork.bytecode_roots import bytecode_findings
 from cairnwork.confined import ATTEMPT_ENV, MAX_LOG_BYTES, RUN_TOKEN_VAR
@@ -256,6 +257,7 @@ def _prepare_run(private: Path, ini: Path, ini_text: bytes, channel=None):
         PYTHON_DISABLE_REMOTE_DEBUG="1",  # 3.14+: no debugger script injected (bytecode_hook.py)
         PYTEST_DISABLE_PLUGIN_AUTOLOAD="1",
         PYTHONPATH=str(guard),
+        PYTHONHASHSEED=HASH_SEED,  # #870: base and head runs see one set/str hash order (#815)
     )
     if (backend := cairnwork_sandbox.select()) is not None:
         env.update(getattr(backend, "run_env", ()))  # macOS: USER, LOGNAME (#802)
