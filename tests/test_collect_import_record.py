@@ -6,6 +6,8 @@ import json
 import subprocess
 import sys
 
+import pytest
+
 from cairnwork import report_guard
 from cairnwork.collect_import import import_errors
 from cairnwork.verifiers import VerifierRun
@@ -133,11 +135,29 @@ ODD = {
 }  # fmt: skip
 
 
-def test_odd_exception_attributes_record_nothing_and_change_nothing(tmp_path):  # AC16
-    for n, (why, body) in enumerate(ODD.items()):
-        done, verdict = _run(tmp_path / str(n), {**PKG, NODE: body + "\ndef test_a(): pass\n"})
-        _unchanged(done, verdict)
-        assert verdict.import_errors == (), why
+@pytest.mark.parametrize("why", ODD)
+def test_odd_exception_attributes_record_nothing_and_change_nothing(tmp_path, why):  # AC16
+    done, verdict = _run(tmp_path, {**PKG, NODE: ODD[why] + "\ndef test_a(): pass\n"})
+    _unchanged(done, verdict)
+    assert verdict.import_errors == ()
+
+
+def test_a_test_module_cannot_rebind_what_the_recorder_uses(tmp_path):
+    """The os functions are bound when the plugin is imported: rebinding them in the test module
+    (which runs later) leaves the record what an untouched run records."""
+    raise_ = "import os\ndef _b(*a, **k):\n    raise RuntimeError('rebound')\n"
+    rebind = raise_ + "os.path.realpath = os.path.relpath = os.path.isabs = _b\n"
+    shape = "raise ImportError(\"cannot import name 'x' from 'pkg'\", name='pkg', path=%s)\n"
+    plain = "import os\n" + shape % "os.path.abspath('pkg/__init__.py')"
+    forged = (
+        rebind.replace("def _b", "_p = os.path.abspath('pkg/__init__.py')\ndef _b") + shape % "_p"
+    )
+    done, base = _run(tmp_path / "a", {**PKG, NODE: plain + "def test_a(): pass\n"})
+    _unchanged(done, base)
+    done, got = _run(tmp_path / "b", {**PKG, NODE: forged + "def test_a(): pass\n"})
+    _unchanged(done, got)
+    assert base.import_errors == ((NODE, "pkg", "pkg/__init__.py"),)
+    assert got.import_errors == base.import_errors
 
 
 def _record_with(entries):

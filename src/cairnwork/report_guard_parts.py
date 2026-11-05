@@ -17,10 +17,15 @@ _PLUGIN_FIXTURES = {
 }
 
 
-def _import_error(node, call, report):
-    # #796: "cannot import name X from <module>" in a test module's own import statement. The
-    # exception is the test's own object: read only values that are exactly str (str(exc) or
-    # os.fspath would run its code), before anything else; any error at all records nothing.
+def _import_error(node, call, report, _real=os.path.realpath, _rel=os.path.relpath,
+                  _abs=os.path.isabs, _str=str):
+    # #796: "cannot import name X from <module>" in a test module's own import statement. A
+    # record is a HINT, not proof of a failed import: a test module can raise an ImportError of
+    # this shape itself, and repo code can build one; the candidate run is what refuses a wrong
+    # fix. The exception is the test's own object: read only values that are exactly str (str(exc)
+    # or os.fspath would run its code), before anything else; the os functions and str are bound
+    # at import (as _Reporter's helpers) so a test module cannot rebind them; any error records
+    # nothing.
     try:
         exc = call.excinfo.value.__cause__
         if not (isinstance(node, pytest.Module) and report.when == "collect"
@@ -35,11 +40,10 @@ def _import_error(node, call, report):
             file = tb.tb_frame.f_code.co_filename
             last = last if file.startswith("<frozen importlib") else file
             tb = tb.tb_next
-        real = os.path.realpath
-        origin = os.path.relpath(real(path), real(node.config.rootpath))
+        origin = _rel(_real(path), _real(node.config.rootpath))
         if ("cannot import name" in text and "partially initialized" not in text
-                and real(last) == real(str(node.path))
-                and not origin.startswith("..") and not os.path.isabs(origin)):
+                and _real(last) == _real(_str(node.path))
+                and not origin.startswith("..") and not _abs(origin)):
             return {"node": node.nodeid, "module": name, "origin": origin}
     except BaseException:
         return None
