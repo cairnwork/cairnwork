@@ -33,6 +33,7 @@ from cairnwork.base_teeth import base_teeth
 from cairnwork.deferred_nodes import test_functions
 from cairnwork.deferred_overlay import (  # noqa: F401  (re-exported: the one place importers look)
     _REGULAR,
+    MAX_DELETED_TEST_PATHS,
     OVERLAY_RULE,
     TestCommitRejected,
     TestFiles,
@@ -175,6 +176,11 @@ def test_paths(
         (deleted if status == "D" else paths).append(path)
     if not paths:
         raise TestCommitRejected("TEST_COMMIT_EMPTY")
+    if len(deleted) > MAX_DELETED_TEST_PATHS:  # the receipt's binding refuses more (#870)
+        raise TestCommitRejected(
+            "TEST_COMMIT_SCOPE",
+            f"{len(deleted)} deleted test files (at most {MAX_DELETED_TEST_PATHS})",
+        )
     return tuple(paths), tuple(deleted)
 
 

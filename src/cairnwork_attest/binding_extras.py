@@ -20,7 +20,7 @@ from typing import Any
 
 from cairnwork import protection
 from cairnwork.conftest_check import check_conftests
-from cairnwork.deferred_overlay import TestCommitRejected
+from cairnwork.deferred_overlay import MAX_DELETED_TEST_PATHS, TestCommitRejected
 from cairnwork_attest.verify_response import VerifyResult, _fail
 
 
@@ -40,16 +40,18 @@ class Extra:
 def _path_list(value: Any) -> bool:
     return (
         isinstance(value, list)
-        and len(value) <= 8
+        and len(value) <= MAX_DELETED_TEST_PATHS
         and all(isinstance(p, str) and p and not p.startswith("/") for p in value)
         and len(set(value)) == len(value)
     )
 
 
 def _deleted_paths(value: Any) -> bool:
-    """#798: the test files the test commit deleted, sorted and distinct (any number)."""
+    """#798: the test files the test commit deleted, sorted and distinct, at most
+    MAX_DELETED_TEST_PATHS (#870; the producer's own limit)."""
     return (
         isinstance(value, list)
+        and len(value) <= MAX_DELETED_TEST_PATHS
         and all(isinstance(p, str) and p and not p.startswith("/") for p in value)
         and value == sorted(set(value))
     )
