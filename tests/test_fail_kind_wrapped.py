@@ -23,6 +23,9 @@ ENV = (
     "def test_nested():\n"
     "    inner = ExceptionGroup('b', [ExceptionGroup('c', [OSError(errno.EROFS, 'ro')])])\n"
     "    raise ExceptionGroup('a', [KeyError('k'), inner])\n"
+    "def test_nested_eperm():\n"
+    "    inner = ExceptionGroup('c', [ValueError('v'), denied()])\n"
+    "    raise ExceptionGroup('a', [ExceptionGroup('b', [KeyError('k'), inner])])\n"
     "def test_eacces_in_cause_of_a_member():\n"
     "    member = ValueError('m')\n"
     "    member.__cause__ = OSError(errno.EACCES, 'no')\n"
@@ -71,6 +74,7 @@ def test_a_wrapped_denial_is_env_at_any_depth_and_past_the_bound(tmp_path):
         "cause",
         "context",
         "nested",
+        "nested_eperm",
         "eacces_in_cause_of_a_member",
         "network_unreachable",
         "past_the_bound",
@@ -84,3 +88,39 @@ def test_plain_failures_and_other_wrapped_oserrors_keep_their_teeth(tmp_path):
     v = _run(tmp_path, PLAIN)
     assert set(v.outcomes.values()) == {"failed"} and len(v.outcomes) == 6
     assert v.fail_kind == {}
+
+
+SIZES = (
+    "import errno\n"
+    "def chain(n, last):\n"  # n distinct exceptions linked by __cause__
+    "    err = last\n"
+    "    for k in range(n - 1):\n"
+    "        err, err.__cause__ = ValueError(k), err\n"
+    "    return err\n"
+    "def group(n, last):\n"  # the group itself plus n - 1 members
+    "    return ExceptionGroup('g', [ValueError(k) for k in range(n - 2)] + [last])\n"
+    "def eperm():\n"
+    "    return PermissionError(errno.EPERM, 'denied')\n"
+    + "".join(
+        f"def test_{shape}_{n}_{kind}():\n"
+        f"    raise {shape}({n}, {'eperm()' if kind == 'eperm' else 'ValueError(-1)'})\n"
+        for shape in ("chain", "group")
+        for n in (63, 64, 65)
+        for kind in ("plain", "eperm")
+    )
+)
+
+
+def test_the_bound_counts_distinct_exceptions_so_64_plain_ones_keep_their_teeth(tmp_path):
+    # James 11/05 (#882 independent check): 64 plain exceptions said env, from the empty
+    # cause slots left after the 64th; 65 is past the bound (env, fail closed)
+    v = _run(tmp_path, SIZES)
+    env = {
+        f"{T}test_{s}_{n}_{k}"
+        for s in ("chain", "group")
+        for n in (63, 64, 65)
+        for k in ("plain", "eperm")
+        if k == "eperm" or n == 65
+    }
+    assert len(v.outcomes) == 12 and set(v.outcomes.values()) == {"failed"}
+    assert v.fail_kind == dict.fromkeys(env, "env")

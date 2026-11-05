@@ -145,10 +145,10 @@ def _denied_inside(exc, _codes=(errno.EACCES, errno.EPERM, errno.EROFS, errno.EN
     context); past the bound, yes (fail closed). Other wrapped OSErrors stay plain failures."""
     todo, seen = [exc], set()
     while todo:
-        if len(seen) >= 64:  # the bound
-            return True
         if not isinstance(cur := todo.pop(), BaseException) or id(cur) in seen:
             continue
+        if len(seen) >= 64:  # the bound: a 65th distinct exception, not an empty cause slot
+            return True
         seen.add(id(cur))
         if cur is not exc and isinstance(cur, OSError) and cur.errno in _codes:
             return True
