@@ -18,6 +18,7 @@ from cairnwork import protection
 from cairnwork.account_check import unusable
 from cairnwork.account_prelude import AccountUnusableBeforeRun, after_candidate_ran, busy_once_more
 from cairnwork.blackbox_judge import judge_blackbox
+from cairnwork.conftest_check import check_conftests, without_conftests
 from cairnwork.core_request import AcceptanceSpec, VerifierObservation
 from cairnwork.deferred_overlay import stray_deletions
 from cairnwork.deferred_store import consume
@@ -69,7 +70,9 @@ def tests_with_teeth(task, specs, result, ctx: VerifyContext) -> tuple[str, ...]
     ensure_test_commit(task.repo, task.test_commit, task.test_store)
     paths, deleted = test_paths(task.repo, task.base_commit, task.test_commit, task.test_roots)
     targets = new_tests(task.repo, task.base_commit, task.test_commit, paths)  # may refuse
-    if missing := untargeted(paths, targets, (t for spec in specs for t in spec.targets)):
+    check_conftests(task.repo, task.base_commit, task.test_commit, paths)  # #798
+    named = (t for spec in specs for t in spec.targets)
+    if missing := untargeted(without_conftests(paths), targets, named):
         hint = "name each such file, or each of its new or changed tests, as a verifier target"
         raise TestCommitRejected("DEFERRED_TESTS_NOT_TARGETED", f"{', '.join(missing)}; {hint}")
     runs = run_verifiers(ctx, task.test_commit, specs, f"{result.attempt_id}-b", deny=True)

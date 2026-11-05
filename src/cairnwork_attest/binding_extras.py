@@ -19,7 +19,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from cairnwork import protection
-from cairnwork.deferred_overlay import MAX_DELETED_TEST_PATHS
+from cairnwork.conftest_check import check_conftests, conftest_of
+from cairnwork.deferred_overlay import MAX_DELETED_TEST_PATHS, TestCommitRejected
 from cairnwork_attest.verify_response import VerifyResult, _fail
 
 
@@ -56,6 +57,16 @@ def _deleted_paths(value: Any) -> bool:
     )
 
 
+def _conftest_paths(value: Any) -> bool:
+    """#798: the conftest files the test commit adds or changes: sorted, distinct, exact name
+    (each a str before any sort, so a malformed receipt is a shape problem, not a TypeError)."""
+    return (
+        isinstance(value, list)
+        and all(isinstance(p, str) and p.rsplit("/", 1)[-1] == "conftest.py" for p in value)
+        and value == sorted(set(value))
+    )
+
+
 def _commitment(value: Any) -> bool:
     """#303: the salted hash of a blackbox declaration; a receiver pins what it recomputes from the
     declaration file (``cairnwork-verify blackbox-commitment``)."""
@@ -73,6 +84,7 @@ _CHECK_ID = re.compile(r"[a-z0-9_-]{1,40}")  # blackbox.py's check id
 EXTRAS = (
     Extra("import_paths", [], _path_list, "IMPORT_PATHS_MISMATCH"),
     Extra("deleted_test_paths", [], _deleted_paths, "DELETED_TEST_PATHS_MISMATCH"),
+    Extra("conftest_paths", [], _conftest_paths, "CONFTEST_PATHS_MISMATCH"),
     Extra("blackbox_commitment", "", _commitment, "BLACKBOX_COMMITMENT_MISMATCH"),
     Extra(
         "protection",
@@ -83,6 +95,7 @@ EXTRAS = (
     ),  # fmt: skip
 )
 KEYS = frozenset(extra.key for extra in EXTRAS)
+POLICY_ONLY = frozenset({"allow_conftest"})  # #798: a receiver policy key, never a binding key
 
 
 def binding_problem(binding: Mapping[str, Any]) -> str:
@@ -92,8 +105,13 @@ def binding_problem(binding: Mapping[str, Any]) -> str:
             value = binding[extra.key]
             if not extra.shape(value) or value == extra.empty:
                 return f"binding {extra.key} has the wrong shape or is empty"
-    if set(binding.get("deleted_test_paths", [])) & set(binding.get("test_paths", [])):
+    paths = binding.get("test_paths", [])
+    if not isinstance(paths, list) or not all(isinstance(p, str) for p in paths):
+        return "binding test_paths has the wrong shape"  # the caller checks it too; fail safe here
+    if set(binding.get("deleted_test_paths", [])) & set(paths):
         return "binding deleted_test_paths and test_paths share a path"  # #798
+    if binding.get("conftest_paths", []) != list(conftest_of(paths)):
+        return "binding conftest_paths is not exactly the conftests among test_paths"  # #798
     return ""
 
 
@@ -140,8 +158,30 @@ def roots_problem(policy: Any, binding: dict[str, Any], full: bool) -> VerifyRes
     return None
 
 
+def conftest_problem(ctx: Any) -> VerifyResult | None:
+    """#798: a receipt with ``conftest_paths`` is accepted by a confidential receiver only when its
+    policy sets ``allow_conftest`` (it cannot read the conftest), and a full receiver re-runs the
+    static check (conftest_check.py). That the base outcomes are unchanged (the differential probe,
+    p2p_conftest.py) is the signer's word; the assurance says so."""
+    paths = ctx.binding.get("conftest_paths", [])
+    if not paths:
+        return None
+    if not ctx.full and (ctx.policy or {}).get("allow_conftest") is not True:
+        return _fail(
+            "CONFTEST_NOT_ALLOWED", "the receipt has conftest paths; the policy must allow"
+        )
+    try:
+        if ctx.full:
+            check_conftests(ctx.repo, ctx.binding["base"], ctx.binding["test_commit"], paths)
+    except TestCommitRejected as exc:
+        return _fail("CONFTEST_STATIC", str(exc))
+    return None
+
+
 def policy_problem(policy: Mapping[str, Any]) -> str:
     """Why a pinned optional key in the policy is malformed (an empty pin is allowed)."""
+    if "allow_conftest" in policy and not isinstance(policy["allow_conftest"], bool):
+        return "policy allow_conftest must be a boolean"
     for extra in EXTRAS:
         if extra.key in policy and not extra.shape(policy[extra.key]):
             return f"policy {extra.key} has the wrong shape"
