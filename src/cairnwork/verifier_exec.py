@@ -12,9 +12,10 @@ import hashlib
 import json
 import os
 import stat
+from functools import partial
 from pathlib import Path
 
-from cairnwork import confined
+from cairnwork import confined, deny_channel
 
 
 def _same_directory(path: Path, before: os.stat_result) -> bool:
@@ -49,6 +50,26 @@ def _execute(argv, profile_path, checkout, env, timeout, log_path, account, back
         reap=account.reap,
     )
     return returncode, timed_out, survivors
+
+
+def _run_confined(deny, profile, python, argv, profile_path, checkout, env, *rest):
+    """Write the profile (tagged for a base run's deny channel, #797) and ``_execute`` under it;
+    ``rest`` is _execute's (timeout, log_path, account, backend, pass_fds). Returns the profile
+    used, _execute's three values and the deny evidence (None when not recorded)."""
+    backend = rest[3]
+    profile, tag = deny_channel.tagged(profile, backend.name, deny)
+    _write_new(profile_path, profile.text.encode())
+    canary = partial(_canary, python, profile_path, checkout, env, rest[2], backend)
+    with deny_channel.watch(deny, backend.name, tag, canary) as seen:
+        returncode, timed_out, survivors = _execute(argv, profile_path, checkout, env, *rest)
+    return profile, returncode, timed_out, survivors, seen.evidence
+
+
+def _canary(python, profile_path, checkout, env, account, backend, argv, log_path) -> str:
+    """Run ``python -I -S -c <argv>`` like a verifier (same policy, uid and cwd); its output."""
+    argv = [python, "-I", "-S", "-c", *argv]
+    _execute(argv, profile_path, checkout, dict(env), 10, log_path, account, backend)
+    return log_path.read_text(errors="replace") if log_path.exists() else ""
 
 
 def _record_digest(**fields) -> str:
