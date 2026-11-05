@@ -130,7 +130,7 @@ def test_ac6a_the_walker_classifies_by_exception(monkeypatch, error, kind):
     [
         b"# coding: nosuchcodec\nX = 1\n",  # an unknown codec
         b"\xef\xbb\xbf# coding: latin-1\nX = 1\n",  # BOM and a cookie that disagree
-        b"X = '\xff'\n",  # not UTF-8, no cookie: fails at the decode step
+        b"X = 1\nY = 2\nZ = '\xff'\n",  # bad byte after line 2: only the decode step sees it
     ],
 )
 def test_ac3_encoding_failures_are_not_unparseable(blob):
@@ -286,9 +286,10 @@ def test_ac6d_every_caller_passes_the_verifiers_interpreter():
     for name, call in (
         ("verify_candidate.py", "check_candidate_commit("),
         ("pipeline.py", "snapshot_candidate("),
+        ("../../experimental/visible_tests/feedback.py", "snapshot_candidate("),
     ):
         text = (src / name).read_text()
-        at = text.index(call, text.index("def "))
+        at = text.index(call, text.index("    def " if "feedback" in name else "def "))
         assert "python=verifier_interpreter(ctx)" in text[at : at + 300], name
 
 
@@ -323,3 +324,12 @@ def test_file_rules_still_takes_budget_per_blob(repo):
     head = commit_change(repo, {LIB: PLAIN + "Y = 2\n"})
     got = file_rules(repo, base, head, ScanBudget(tokenized=10), sys.executable)
     assert got == [(LIB, "scan_budget")]
+
+
+def test_unparseable_on_both_sides_is_logged_once_with_the_path_quoted(repo, caplog):
+    caplog.set_level("INFO", logger=plugin.log.name)
+    notes: list[str] = []
+    bad = "print 'x'\n"
+    assert _scan(repo, bad + "# a\n", old=bad, notes=notes) == set()
+    assert notes == [f"{LIB}: unparseable_by_verifier"]
+    assert [r.getMessage() for r in caplog.records] == [f"'{LIB}': unparseable_by_verifier"]

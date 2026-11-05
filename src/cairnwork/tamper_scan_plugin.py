@@ -211,7 +211,7 @@ def file_rules(
 
     Parsing is paid from the patch's budget (``scan_budget`` when it runs out), by ``python``, the
     interpreter the verifier will run (``verify_context.verifier_interpreter``). A blob that is
-    a plain ``SyntaxError`` there adds ``"<path>: unparseable_by_verifier"`` to ``notes``.
+    a plain ``SyntaxError`` there is logged once (``unparseable_by_verifier``; also in ``notes``).
     """
     if not (OID.fullmatch(head) and OID.fullmatch(base)):
         raise GitCommandError("base or head is not a full commit id")
@@ -246,13 +246,16 @@ def file_rules(
     if rows is None or budget.over:
         return [*found, *([(work[0][0], "scan_budget")] if work else [])]
     flagged: set[str] = set()
+    noted: set[str] = set()
     for (path, _), (kind, names) in zip(work, rows, strict=True):
         if kind == "fail":
             return [*found, (path, "scan_budget")]
         if kind == "syntax":
-            if notes is not None:
-                notes.append(f"{path}: unparseable_by_verifier")
-            log.info("%s: unparseable_by_verifier", path)
+            if path not in noted:  # both sides: once
+                noted.add(path)
+                if notes is not None:  # tests read it; production only logs
+                    notes.append(f"{path}: unparseable_by_verifier")
+                log.info("%r: unparseable_by_verifier", path)
         elif names and path not in flagged:
             flagged.add(path)
             found.append((path, "hook_file_touched"))

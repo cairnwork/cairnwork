@@ -47,7 +47,7 @@
 
 為什麼接受：靜態掃描無法從形狀分辨良性 hook 與竄改判定的 hook（兩者都是 hook 實作），只要放行就會留下「候選改外掛檔就能讓錯的修正得到 CORE_VERIFIED」的漏洞；改採例外清單等於回到被判 NO-GO 的設計。代價是修 pytest 外掛專案本身的任務得不到 VERIFIED，這類任務應由人處理。這不是安全邊界（同程序程式碼仍可繞過），只是拉高門檻；執行時歸屬稽核見後續 PR。不受影響的是「使用」外掛的專案：外掛來自已安裝套件、或 repo 內的外掛檔沒被候選碰到且候選不新增 hook 名。
 
-`hook_file_touched` 用驗證者自己的 Python 解析改動檔（一個批次子程序，`-I -S -B`，不信任掃描程序自己的 Python）。只有「一般語法錯誤」（非編碼）的檔案不算命中，只留 `unparseable_by_verifier` 紀錄；遞迴／記憶體錯誤、壞編碼、逾時、程序失敗或輸出格式不符一律 `scan_budget`（拒絕）。測試：`test:tests/test_tamper_scan_verifier_parse.py`。
+`hook_file_touched` 用驗證者自己的 Python 解析改動檔（一個批次子程序，`-I -S -B`，不信任掃描程序自己的 Python）。只有「一般語法錯誤」（非編碼）的檔案不算命中，只寫一行 log（`unparseable_by_verifier`，路徑用 %r，兩邊都解析失敗只記一次），不寫進候選紀錄；遞迴／記憶體錯誤、壞編碼、逾時、程序失敗或輸出格式不符一律 `scan_budget`（拒絕）。測試：`test:tests/test_tamper_scan_verifier_parse.py`。
 
 照實鎖定的測試：`test:tests/test_tamper_scan_plugin_sandbox.py::test_a_benign_hook_defined_in_a_library_file_is_refused_a_known_trade_off`（真 Seatbelt）；通過的對照是同檔的 `test_an_untouched_plugin_with_hooks_and_fixtures_passes_with_a_real_fix`。
 
