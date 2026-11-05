@@ -92,8 +92,15 @@ Anything else refuses the whole test, with the reason. The reasons fall into thr
 
 ## Review every draft before declaring it
 
+- Give each declared function at least two cases, and make at least one declared input one
+  that no visible test uses. A declaration whose inputs all appear in visible tests, or that
+  has a single case, cannot tell a real fix from one that is right only for the inputs it
+  has seen or only on its first call.
 - The blackbox compares exact JSON types. If a function returns `3.0`, `True` or a tuple, it
   does not match `3`, `1` or a list, although pytest's `==` passes. Confirm the return type.
+  A correct value returned as an instance of an `int` subclass does not match either. This is
+  deliberate: it is the same exact-type check that refuses an object built to compare equal
+  to anything.
 - `pytest.raises(T)` accepts subclasses of `T`. A declared exception may be compared exactly.
 - Several cases of one check run one after another in one process, so state can carry from one
   case to the next. The order may differ from the test's order.
