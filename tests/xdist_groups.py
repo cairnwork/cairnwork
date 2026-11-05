@@ -27,5 +27,9 @@ XDIST_GROUPS = {
         "test_local_worker_write_scope_links.py",
         "test_pause_guard.py",
     ),
+    # The deny channel reads the host-wide sandbox log (#797): one of its tests floods that log
+    # on purpose, and a burst over the cap drops other runs' lines (step 0 O3c). Its other tests
+    # assert their own evidence, so they must not run beside the flood.
+    "deny_log": ("test_deny_channel_sandbox.py",),
 }
 XDIST_GROUP_OF = {name: group for group, names in XDIST_GROUPS.items() for name in names}
