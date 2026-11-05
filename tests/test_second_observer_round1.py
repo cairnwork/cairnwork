@@ -174,3 +174,68 @@ def test_a_wrongly_typed_field_is_uncomparable(tmp_path, key, value):
     raw[key] = value
     uncomparable(project, raw)
     json.dumps(raw)
+
+
+# --- round 2: marks only the runner sees, the `mark.` spelling, the output check order ---------
+
+T = "def test_add():\n    assert add(2, 3) == 5\n"
+USES = "uses = pytest.mark.usefixtures('prime')\n"
+RUNNER_ONLY = {
+    "alias": USES + "\n\n@uses\n" + T,
+    "annotated": "pytestmark: list = [pytest.mark.usefixtures('prime')]\n\n\n" + T,
+    "conditional": "if True:\n    pytestmark = pytest.mark.usefixtures('prime')\n\n\n" + T,
+    "base_class": (
+        "import unittest\n\n\n@pytest.mark.usefixtures('prime')\n"
+        "class Base(unittest.TestCase):\n    pass\n\n\n"
+        "class TestU(Base):\n    def test_add(self):\n        self.assertEqual(add(2, 3), 5)\n"
+    ),
+    "method_alias": (
+        "import unittest\n\nuses = pytest.mark.usefixtures('prime')\n\n\n"
+        "class TestU(unittest.TestCase):\n    @uses\n    def test_add(self):\n"
+        "        self.assertEqual(add(2, 3), 5)\n"
+    ),
+}
+
+
+@pytest.mark.sandbox
+@pytest.mark.parametrize("form", sorted(RUNNER_ONLY))
+def test_marks_the_static_scan_cannot_see_are_na_through_the_runner(tmp_path, form):
+    text = "import pytest\nfrom calc import add\n\n" + RUNNER_ONLY[form]
+    project = Project(tmp_path, tests={"tests/test_calc.py": text})
+    name = "TestU::test_add" if "TestU" in text else "test_add"
+    row = row_of(project, project.candidate({"src/calc.py": FIXED}), f"tests/test_calc.py::{name}")
+    assert row["observer"] == "NA", row
+
+
+@pytest.mark.parametrize("where", ["function", "unittest_method"])
+def test_the_from_import_mark_spelling_is_found_statically(tmp_path, monkeypatch, where):
+    import cairnwork_sandbox
+
+    monkeypatch.setattr(
+        cairnwork_sandbox, "select", lambda: None
+    )  # only the static path can say NA
+    if where == "function":
+        body = "@mark.usefixtures('prime')\ndef test_add():\n    assert add(2, 3) == 5\n"
+        name = "test_add"
+    else:
+        body = (
+            "import unittest\n\n\nclass TestU(unittest.TestCase):\n    @mark.usefixtures('prime')\n"
+            "    def test_add(self):\n        self.assertEqual(add(2, 3), 5)\n"
+        )
+        name = "TestU::test_add"
+    text = f"from calc import add\nfrom pytest import mark\n\n\n{body}"
+    project = Project(tmp_path, tests={"tests/test_calc.py": text})
+    row = row_of(project, project.base, f"tests/test_calc.py::{name}")
+    assert row["observer"] == "NA" and row["detail"] == "MARKS"
+
+
+def test_an_unusable_input_still_cannot_write_into_the_repo(tmp_path):
+    from experimental.second_observer.cli import main
+
+    project = Project(tmp_path)
+    raw = project.shadow_input(project.base, TARGET, interpreter_identity="0" * 64)
+    source = tmp_path / "in.json"
+    source.write_text(json.dumps(raw))
+    out = project.repo / "shadow-out"
+    assert main(["--input", str(source), "--out", str(out)]) == 2
+    assert not out.exists()

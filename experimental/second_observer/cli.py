@@ -98,22 +98,32 @@ def observe(inp: ShadowInput, out: Path) -> dict:
         shutil.rmtree(work, ignore_errors=True)
 
 
+def _raw_repo(path: Path) -> list[Path]:
+    try:
+        repo = json.loads(Path(path).read_text()).get("repo")
+    except (OSError, ValueError, AttributeError):
+        return []
+    return [Path(repo)] if isinstance(repo, str) and repo else []
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="cairnwork-observe", description=__doc__)
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--protect", action="append", default=[], type=Path)
     args = parser.parse_args(argv)
-    try:
-        inp = load(args.input)
-    except Uncomparable as exc:  # nothing to rebuild: still one row, but only when out is fine
-        inp, reason = None, str(exc)
-    guards = [*args.protect, *([inp.repo] if inp else []), args.input]
+    # the output path is checked first, with the repo named in the raw input even when the input
+    # later turns out to be unusable: nothing is created or run before this passes
+    guards = [*args.protect, *_raw_repo(args.input), args.input]
     try:
         check_output(args.out, guards)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    try:
+        inp, reason = load(args.input), ""
+    except Uncomparable as exc:  # nothing to rebuild: still one row
+        inp, reason = None, str(exc)
     args.out.mkdir(mode=0o700)
     args.out = args.out.resolve()  # /var/folders is a symlink: the sandbox wants real paths
     if inp is None:

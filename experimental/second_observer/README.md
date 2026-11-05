@@ -70,4 +70,6 @@ A target is `NA` (never run, never PASS or FAIL) when:
 
 The autouse detection is **static** (AST: `@pytest.fixture(autouse=...)` and `@fixture(autouse=...)`, anything but a literal `False` counts). A fixture registered dynamically (a decorator built at run time, a plugin loaded by a hook) is not seen. This is a known limit, in line with the threat model above: the observer is a raised bar only.
 
+Marks are read in two ways: statically from the module's AST (so NA holds on a host with no sandbox backend) and again by the runner on the imported objects (forms the AST misses: an alias such as `uses = pytest.mark.usefixtures(...)` then `@uses`, an annotated or conditional `pytestmark`, a base class's marks). The rule is conservative: `pytestmark = pytest.mark.skipif(False, ...)` makes the whole module NA even though the condition is false.
+
 Other import failures are `OBS_ERROR`. The NA rate on real tasks is Open 2 and is measured later, not here. Rule T (the test body must run) is step 2 (the `rule_t` field is `null` until then).

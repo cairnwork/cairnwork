@@ -93,6 +93,7 @@ def judge(module, name):
     marks = mark_names(module) | mark_names(target)  # module, class and function level
     if cls_name:
         if isinstance(target, type) and issubclass(target, unittest.TestCase):
+            marks |= mark_names(getattr(target, member, None))  # the method's own marks
             if marks & MARKS_NA:
                 return "NA", "marks"
             return judge_unittest(target, member)

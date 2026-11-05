@@ -89,8 +89,10 @@ def _mark_names(node: ast.AST) -> set[str]:
         n.attr
         for n in ast.walk(node)
         if isinstance(n, ast.Attribute)
-        and isinstance(n.value, ast.Attribute)
-        and n.value.attr == "mark"
+        and (
+            (isinstance(n.value, ast.Attribute) and n.value.attr == "mark")  # pytest.mark.x
+            or (isinstance(n.value, ast.Name) and n.value.id == "mark")  # from pytest import mark
+        )
     }
 
 
