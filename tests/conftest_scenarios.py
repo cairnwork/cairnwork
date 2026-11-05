@@ -50,6 +50,23 @@ BOTH = (
 SLOW_NEW = (
     "def test_a():\n    assert True\n\n\ndef test_new():\n    import time\n    time.sleep(60)\n"
 )
+MODULE_LEVEL = (  # a module-level change in a base file: all its base tests are the author's
+    "import os\nos.environ['W3B_FLAG'] = '1'\n\n\ndef test_env():\n"
+    "    assert 'W3B_FLAG' not in os.environ\n\n\ndef test_new():\n    assert True\n"
+)
+NEW_ONLY = (
+    (
+        "pytest",
+        (
+            "python3",
+            "-m",
+            "pytest",
+            "-q",
+            "tests/test_regression.py",
+            "tests/other/test_env.py::test_new",
+        ),
+    ),
+)
 SHADOW = "import pytest\n\n\n@pytest.fixture\ndef val():\n    return 2\n"
 
 
@@ -164,6 +181,16 @@ SCENARIOS = {  # name: (kwargs of conftest_run, expected status, a code the reas
         },
         "FAILED",
         "TEST_COMMIT_CONFTEST_CHANGES_BASE",
+    ),
+    "a module-level change in an edited base file leaves that file's base tests out": (
+        {
+            "base_files": SIDEFX,
+            "regression": PLAIN,
+            "verifiers": NEW_ONLY,
+            "extra_files": {"tests/other/test_env.py": MODULE_LEVEL},
+        },
+        "COMPLETED",
+        "",
     ),
     "a run with the test commit over the time budget": (
         {
