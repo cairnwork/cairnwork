@@ -37,9 +37,7 @@ def _main(changed, tests, roots, cap=sel.MODULE_DIR_CAP):
         hit = {dirname(t) for t in tests if dirname(t) in mirror or basename(t) in named}
         for d in hit or root_level:
             out |= {
-                t
-                for t in tests
-                if dirname(t) == d and (size[d] <= cap or basename(t) in named)
+                t for t in tests if dirname(t) == d and (size[d] <= cap or basename(t) in named)
             }
     return out
 
