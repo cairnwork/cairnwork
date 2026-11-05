@@ -70,7 +70,7 @@ from cairnwork.issue_task import test_target
 from cairnwork.p2p_collect import collected_side
 from cairnwork.p2p_nodes import passing_targets, require_nodes
 from cairnwork.p2p_probe_log import probe_log_tail
-from cairnwork.p2p_selection import DEFAULT_BUDGET_SECONDS, cap_note, select_p2p_targets
+from cairnwork.p2p_selection import DEFAULT_BUDGET_SECONDS, cap_note, name_rule, select_p2p_targets
 from cairnwork.pytest_config import PytestConfigError, test_file_rule
 from cairnwork.verifiers import VerifierRun, VerifierSpec, run_verifiers
 from cairnwork.verify_context import VerifyContext
@@ -155,10 +155,11 @@ def plan_p2p(task, specs, test_files, mode, budget, result, ctx: VerifyContext) 
         return P2PPlan(rule, None, budget)
     existing = _base_tests(task, frozenset(deleted_of(test_files)))  # #361; #798: not deleted ones
     tried: tuple[str, ...] | None = None
+    is_test = name_rule(task.repo, task.base_commit)  # #870: names follow python_files
     for applied in (mode, "module-dir") if mode == "whole-suite" else (mode,):
-        files = select_p2p_targets(task.allowed_files, existing, task.test_roots, applied)
+        files = select_p2p_targets(task.allowed_files, existing, task.test_roots, applied, is_test)
         rule |= {"applied": applied, "selected_files": len(files)}
-        rule |= cap_note(task.allowed_files, existing, task.test_roots, applied)  # #333
+        rule |= cap_note(task.allowed_files, existing, task.test_roots, applied, is_test)  # #333
         if not files and rule["degraded"]:  # #117 F1: a failed probe is not "nothing to run"
             raise _unusable(rule, "no module-dir test to fall back on")
         if not files:
@@ -274,7 +275,8 @@ def base_env_check(task, result, ctx: VerifyContext, *, without_tests=False, key
         existing = _base_tests(task, frozenset())
     except P2PRejected as exc:
         raise _env_failed(str(exc)) from exc
-    files = select_p2p_targets(task.allowed_files, existing, task.test_roots, "module-dir")
+    is_test = name_rule(task.repo, task.base_commit)
+    files = select_p2p_targets(task.allowed_files, existing, task.test_roots, "module-dir", is_test)
     if not files:  # nothing to probe now; the steps after the worker decide, as before
         return
     python = ctx.python or getattr(ctx.account, "python", None) or sys.executable
