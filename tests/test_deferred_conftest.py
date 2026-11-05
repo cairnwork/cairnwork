@@ -178,3 +178,8 @@ def test_a_conftest_list_of_the_wrong_type_is_a_shape_problem_not_an_exception(b
     binding = {"test_paths": ["tests/conftest.py"], "conftest_paths": bad}
     assert "conftest_paths" in bx.binding_problem(binding)
     assert "conftest_paths" in bx.policy_problem({"conftest_paths": bad})
+
+
+@pytest.mark.parametrize("bad", [None, 3, [1], [None], [["x"]], "tests/conftest.py"])
+def test_a_test_path_list_of_the_wrong_type_is_a_shape_problem_not_an_exception(bad):
+    assert "test_paths" in bx.binding_problem({"test_paths": bad})

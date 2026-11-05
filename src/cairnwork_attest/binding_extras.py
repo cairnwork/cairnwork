@@ -105,9 +105,12 @@ def binding_problem(binding: Mapping[str, Any]) -> str:
             value = binding[extra.key]
             if not extra.shape(value) or value == extra.empty:
                 return f"binding {extra.key} has the wrong shape or is empty"
-    if set(binding.get("deleted_test_paths", [])) & set(binding.get("test_paths", [])):
+    paths = binding.get("test_paths", [])
+    if not isinstance(paths, list) or not all(isinstance(p, str) for p in paths):
+        return "binding test_paths has the wrong shape"  # the caller checks it too; fail safe here
+    if set(binding.get("deleted_test_paths", [])) & set(paths):
         return "binding deleted_test_paths and test_paths share a path"  # #798
-    if binding.get("conftest_paths", []) != list(conftest_of(binding.get("test_paths", []))):
+    if binding.get("conftest_paths", []) != list(conftest_of(paths)):
         return "binding conftest_paths is not exactly the conftests among test_paths"  # #798
     return ""
 
