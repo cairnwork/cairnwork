@@ -15,12 +15,10 @@ candidate also holds the test commit's tests.
 
 from __future__ import annotations
 
-import ast
-import copy
 from dataclasses import replace
 from pathlib import Path
 
-from cairnwork.deferred_tests import _test_functions, _tree
+from cairnwork.deferred_tests import _test_functions
 from cairnwork.verifiers import VerifierRun
 
 
@@ -38,35 +36,6 @@ def changed_tests(
             after = _test_functions(repo, f"{test_commit}:{path}", present=True)
             found |= {f"{path}::{n}" for n in before.keys() & after.keys() if before[n] != after[n]}
     return frozenset(found)
-
-
-def module_changed(
-    repo: Path, base: str, test_commit: str, paths: tuple[str, ...]
-) -> frozenset[str]:
-    """#798: the Python files among ``paths`` whose code outside the test function bodies changes
-    (imports, ``pytestmark``, fixtures, helpers, class attributes). Such a change may alter every
-    test of the file, so the caller leaves all its base tests to the author's verifiers."""
-    return frozenset(
-        p for p in paths if p.endswith(".py") and _skeleton(repo, f"{base}:{p}")
-        != _skeleton(repo, f"{test_commit}:{p}")
-    )  # fmt: skip
-
-
-def _is_test(node: ast.AST) -> bool:
-    return isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name.startswith("test")
-
-
-def _skeleton(repo: Path, blob: str) -> list[str]:
-    tree = _tree(repo, blob)
-    out = []
-    for node in tree.body if tree is not None else []:
-        if _is_test(node):
-            continue
-        if isinstance(node, ast.ClassDef):  # its test methods are per-test; the rest is code
-            node = copy.copy(node)
-            node.body = [m for m in node.body if not _is_test(m)]
-        out.append(ast.dump(node))
-    return out
 
 
 def _function(nodeid: str) -> str:

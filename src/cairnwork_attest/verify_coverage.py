@@ -24,7 +24,7 @@ from typing import Any
 
 from cairnwork.deferred_tests import TestCommitRejected, new_tests, untargeted
 from cairnwork.issue_task import test_target
-from cairnwork_attest.binding_extras import conftest_problem, required_ids
+from cairnwork_attest.binding_extras import required_ids
 from cairnwork_attest.verify_response import VerifyResult, _fail
 
 _PYTEST = ["python3", "-m", "pytest"]
@@ -66,10 +66,7 @@ def coverage_problem(ctx: Any) -> VerifyResult | None:
         )
     except TestCommitRejected as exc:  # the producer refuses such a test commit
         return _fail("TEST_PATH_NOT_TARGETED", f"cannot read the bound tests: {exc}")
-    if (problem := conftest_problem(ctx)) is not None:  # #798: a failed result is falsy
-        return problem
-    exempt = frozenset(binding.get("conftest_paths", []))  # validated: a subset of test_paths
-    if missing := untargeted(tuple(p for p in paths if p not in exempt), nodes, named):
+    if missing := untargeted(paths, nodes, named):
         return _fail("TEST_PATH_NOT_TARGETED", f"no bound verifier runs these: {list(missing)}")
     required = required_ids(ctx.request)
     extra = sorted({vid for vid, _ in verifiers if vid not in (required or [])})
