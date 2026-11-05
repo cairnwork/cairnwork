@@ -194,15 +194,15 @@ SCENARIOS = {  # name: (kwargs of conftest_run, expected status, a code the reas
         "FAILED",
         "TEST_COMMIT_CONFTEST_CHANGES_BASE",
     ),
-    "a module-level change in an edited base file leaves that file's base tests out": (
+    "a module-level change in an edited base file: not compared by the probe, still run by P2P": (
         {
             "base_files": SIDEFX,
             "regression": PLAIN,
             "verifiers": NEW_ONLY,
             "extra_files": {"tests/other/test_env.py": MODULE_LEVEL},
         },
-        "COMPLETED",
-        "",
+        "FAILED",
+        "p2p-whole-suite",
     ),
     "a run with the test commit over the time budget": (
         {
@@ -237,6 +237,17 @@ SCENARIOS = {  # name: (kwargs of conftest_run, expected status, a code the reas
             "base_files": SHADOWED,
             "regression": PLAIN,
             "extra_files": {"tests/sub/conftest.py": SHADOW},
+        },
+        "FAILED",
+        "TEST_COMMIT_CONFTEST_CHANGES_BASE",
+    ),
+    "a fixture override in module-dir mode: the conftest's files are compared too": (
+        {
+            "addition": SHADOW,
+            "path": "tests/sub/conftest.py",
+            "base_files": SHADOWED,
+            "regression": PLAIN,
+            "mode": "module-dir",
         },
         "FAILED",
         "TEST_COMMIT_CONFTEST_CHANGES_BASE",

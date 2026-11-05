@@ -31,7 +31,6 @@ from cairnwork.gitcmd import GitCommandError, run_git
 
 CONFTEST = "conftest.py"
 CODE = "TEST_COMMIT_CONFTEST_STATIC"
-_DEFS = (ast.FunctionDef, ast.AsyncFunctionDef)
 
 
 def conftest_of(paths: Iterable[str]) -> tuple[str, ...]:

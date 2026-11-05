@@ -57,8 +57,9 @@ def conftest_files(task, test_files, mode, base_tests) -> tuple[str, ...]:
 def check_overlay(task, test_files, files, outcomes, side, result, ctx, budget) -> None:
     """The differential probe, the way P2P really runs: the same ``files`` in one process on the
     base (``outcomes``, the plain probe) and on the base with the WHOLE test commit laid over it.
-    Each base test the test commit does not change, add or remove (``side.changed``) must keep its
-    outcome; else TEST_COMMIT_CONFTEST_CHANGES_BASE. Does nothing without a conftest."""
+    Each base test the test commit does not change, add or remove (``side.changed``), nor sits in a
+    file whose module-level code it changes (``side.probe_only``; P2P still runs those), must keep
+    its outcome; else TEST_COMMIT_CONFTEST_CHANGES_BASE. Does nothing without a conftest."""
     if not conftest_of(test_files):
         return
     over = lay_tests_over(task.repo, task.base_commit, task.test_commit, test_files,
@@ -66,7 +67,8 @@ def check_overlay(task, test_files, files, outcomes, side, result, ctx, budget) 
     after, why = _side(ctx, over, files, result, budget, "co")
     if why:
         raise TestCommitRejected(UNCHECKED, f"the probe with the test commit is unusable: {why}")
-    kept = {n: o for n, o in outcomes.items() if n.split("[", 1)[0] not in side.changed}
+    skip = side.changed | side.probe_only
+    kept = {n: o for n, o in outcomes.items() if n.split("[", 1)[0] not in skip}
     differ = sorted(n for n, o in kept.items() if after.get(n) != o)
     if differ:
         shown = ", ".join(differ[:5]) + (" ..." if len(differ) > 5 else "")
