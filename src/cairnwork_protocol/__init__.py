@@ -160,6 +160,6 @@ def response_binding_problem(
         return MANIFEST_HASH_MISMATCH
     try:  # canonical JSON, so false is not 0 and 1 is not true
         same = canonical_json(identity) == canonical_json(expected_identity)
-    except TypeError:
+    except (TypeError, RecursionError):
         same = False
     return None if same else IDENTITY_MISMATCH

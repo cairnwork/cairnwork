@@ -58,6 +58,11 @@ def test_ids_core_refuses_in_both_lists_refuse_v01(tmp_path, repo, ids):
     _refused(_v01(tmp_path, repo, _ids(ids, list(ids))))
 
 
+def test_only_one_bad_id_in_a_multi_element_list_refuses(tmp_path, repo):
+    ids = ["pytest", "p" * 513]
+    _refused(_v01(tmp_path, repo, _ids(ids, list(ids))))
+
+
 V02 = {k: BOTH_REFUSED[k] for k in ("duplicated", "empty", "leading_space", "513_bytes")}
 
 
