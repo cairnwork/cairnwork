@@ -153,7 +153,15 @@ def _read_and_check_bundle(bundle: Path, candidate: str) -> bytes:
         raw_payload = base64.b64decode(envelope["payload"], validate=True)
         statement = json.loads(raw_payload)
         subject = statement["subject"][0]["digest"]["gitCommit"]
-    except (OSError, KeyError, IndexError, TypeError, ValueError, binascii.Error) as exc:
+    except (
+        OSError,
+        KeyError,
+        IndexError,
+        TypeError,
+        ValueError,
+        binascii.Error,
+        RecursionError,
+    ) as exc:
         raise BundleError(f"statement shape: {exc}", code="STATEMENT_SHAPE") from exc
     if again != envelope:
         raise BundleError("bundle changed while being read", code="BUNDLE_CHANGED")

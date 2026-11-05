@@ -21,6 +21,7 @@ from publish_helpers import (
 )
 
 from cairnwork_attest.cli import main
+from cairnwork_attest.dsse import _sign_bytes
 from cairnwork_attest.publish import _git, publish_bundle
 
 pytestmark = pytest.mark.usefixtures("production_git_env")  # publish._git inherits os.environ
@@ -72,6 +73,22 @@ def test_noop_same_bundle(
     assert r2.ok is True
     assert r2.code == "NOOP"
     assert _notes_tip(bare) == tip_after_first
+
+
+def test_deeply_nested_payload_returns_statement_shape_refusal(
+    tmp_path: Path, publish_env: tuple[Path, Path, str], key: Ed25519PrivateKey
+) -> None:
+    src, _bare, candidate = publish_env
+    nested = '{"deep":' * 50000 + "{}" + "}" * 50000
+    payload = (
+        '{"_type":"https://in-toto.io/Statement/v1",'
+        '"predicateType":"https://cairnwork.github.io/attestation/verified-change/v0.1",'
+        f'"predicate":{nested},"subject":[{{"digest":{{"gitCommit":"{candidate}"}},'
+        f'"name":"git-commit:{candidate}"}}]}}'
+    ).encode()
+    bundle_file = _write_bundle(tmp_path, json.dumps(_sign_bytes(payload, key)).encode())
+    result = publish_bundle(bundle_file, src, candidate)
+    assert result.code == "STATEMENT_SHAPE"
 
 
 def test_conflict_different_bundle(

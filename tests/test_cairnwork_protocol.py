@@ -254,3 +254,20 @@ def test_core_identity_is_compared_type_exactly(echoed, expected, problem):
     assert (
         ours.response_binding_problem({"change_manifest": manifest}, response, expected) == problem
     )
+
+
+def test_deep_core_identity_returns_mismatch_instead_of_raising():
+    identity = {}
+    node = identity
+    for _ in range(2000):
+        node["deep"] = {}
+        node = node["deep"]
+    manifest = {"source_tree": "git-tree:a", "target_tree": "git-tree:b", "entries": []}
+    response = {
+        "hashes": {"change_manifest_hash": ours.change_manifest_hash(manifest)},
+        "core_identity": identity,
+    }
+    assert (
+        ours.response_binding_problem({"change_manifest": manifest}, response, identity)
+        == ours.IDENTITY_MISMATCH
+    )
