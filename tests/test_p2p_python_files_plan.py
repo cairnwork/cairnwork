@@ -22,7 +22,11 @@ ROOT_LEVEL = ("tests/test_app.py", "tests/test_misc.py")
 SUB = ("tests/sub/check_calc.py", "tests/sub/check_other.py")
 
 
-@pytest.mark.parametrize("ini", ["[pytest]\n", "[pytest]\npython_files = test_*.py *_test.py\n"])
+@pytest.mark.parametrize("ini", [
+        "[pytest]\n",
+        "[pytest]\npython_files = test_*.py *_test.py\n",
+        "[pytest]\npython_files = test_*.py\n",
+    ],)
 def test_the_default_python_files_select_exactly_what_main_selects(repo, ini):
     # R1: test_calc_extra.py holds the stem "calc" loosely, but main never counts it as named
     # after calc.py, so the root-level fallback still applies and the selection equals main's

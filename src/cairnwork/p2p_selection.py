@@ -65,13 +65,23 @@ def _under_root(path: str, roots: tuple[str, ...]) -> bool:
     return any(path == r or path.startswith(f"{r}/") for r in roots)
 
 
-def _named(test: str, stem: str, is_test: Callable[[str], bool] | None) -> bool:
-    """A test file named after a changed file's ``stem``: test_<stem>.py / <stem>_test.py, or with
-    the base's python_files rule any matching file holding the stem as a name part (#870)."""
+def _exact(test: str, stem: str) -> bool:
+    return basename(test) in {f"test_{stem}.py", f"{stem}_test.py"}
+
+
+def _by_rule(test: str, stem: str, is_test: Callable[[str], bool] | None) -> bool:
+    """A file the base's python_files rule accepts that holds the stem as a name part (#870)."""
     if is_test is None:
-        return basename(test) in {f"test_{stem}.py", f"{stem}_test.py"}
+        return False
     part = rf"(?:^|[-_.]){re.escape(stem)}(?:[-_.]|$)"
     return is_test(test) and bool(re.search(part, splitext(basename(test))[0]))
+
+
+def _named(test: str, stem: str, is_test: Callable[[str], bool] | None) -> bool:
+    """A test file named after a changed file's ``stem``. The exact names main matches always
+    count; the python_files rule only adds to them, so a selection is never smaller than
+    main's (#877)."""
+    return _exact(test, stem) or _by_rule(test, stem, is_test)
 
 
 def _mirror_subpath(changed_dir: str) -> str:
@@ -124,8 +134,9 @@ def _module_dir(
         tail = _mirror_subpath(dirname(changed))
         mirror = {f"{r}/{tail}" for r in test_roots} if tail else set()
         stem = splitext(basename(changed))[0]
-        hit = {dirname(t) for t in tests if dirname(t) in mirror or _named(t, stem, is_test)}
-        for d in hit or root_level:
+        base_hit = {dirname(t) for t in tests if dirname(t) in mirror or _exact(t, stem)}
+        rule_hit = {dirname(t) for t in tests if _by_rule(t, stem, is_test)}
+        for d in (base_hit or root_level) | rule_hit:
             whole = size[d] <= MODULE_DIR_CAP
             cut |= set() if whole else {d}
             selected |= {
