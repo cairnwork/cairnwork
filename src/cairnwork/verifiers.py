@@ -129,6 +129,7 @@ class VerifierRun:
     recorded: bool = False  # the guard's record was there and well-formed (base_comparison, #234)
     collect_errors: tuple[str, ...] = ()  # collectors the guard saw fail (B2, #234)
     skipped_deps: tuple[str, ...] = ()  # modules skipped collectors could not import (#813)
+    import_errors: tuple[tuple[str, str, str], ...] = ()  # #796: guard's import record, unread
     teardown_errors: tuple[str, ...] = ()  # tests whose teardown failed (#478, report_guard)
     fail_kind: dict[str, str] = field(default_factory=dict)  # #775: node -> setup/env/plugin
     forged: tuple[str, ...] = ()  # FORGED_BYTECODE findings (#289): a base run proves nothing
@@ -368,5 +369,5 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
         teardown_errors=verdict.teardown_errors, fail_kind=verdict.fail_kind, log_too_big=too_big,
         collected=verdict.collected, collect_skipped=verdict.collect_skipped,
         collection_finished=verdict.collection_finished, skipped_deps=verdict.skipped_deps,
-        deny_evidence=str(evidence) if evidence else "",
+        import_errors=verdict.import_errors, deny_evidence=str(evidence) if evidence else "",
     )  # fmt: skip
