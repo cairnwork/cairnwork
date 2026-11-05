@@ -99,7 +99,10 @@ def judge_stream(handle, window: Window) -> Evidence:
 
 def _foreign(message: str) -> bool:
     """Another process's note through the Sandbox sender, not a sandbox report: no tag, no
-    "Sandbox:" report and no "deny(" anywhere in it, so it cannot be one of the run's denials."""
+    "Sandbox:" report and no "deny(" anywhere in it, so it cannot be one of the run's denials. An
+    empty or redacted message names no sender, so it is never one."""
+    if message.strip() in ("", "<private>"):
+        return False
     return TAG_PREFIX not in message and "Sandbox:" not in message and "deny(" not in message
 
 

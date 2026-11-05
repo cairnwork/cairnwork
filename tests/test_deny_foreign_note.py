@@ -23,5 +23,8 @@ def test_a_note_with_a_tag_or_a_report_shape_stays_unreadable():
         line(f"{NOTE} deny(1)", tag=""),
         line("Sandbox: odd", tag=""),
         line(f"{NOTE} cwvtag-0123456789abcdef", tag=""),
+        line("", tag=""),  # desk-b r1: an empty or redacted message names no sender
+        line("  ", tag=""),
+        line("<private>", tag=""),
     ):
         assert judge(stream(kept), window()).state == "UNAVAILABLE", kept
