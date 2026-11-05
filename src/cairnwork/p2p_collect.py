@@ -34,6 +34,7 @@ from cairnwork.collect_reader import read_collected
 from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRejected
 from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.p2p_nodes import changed_tests
+from cairnwork.p2p_selection import MODULE_DIR_CAP
 from cairnwork.verifier_spec import VerifierSpec
 from cairnwork.verifiers import run_verifiers
 
@@ -103,6 +104,30 @@ def classify(base_ids, test_ids, edited, source, base_source) -> CollectedSide:
     return CollectedSide(
         frozenset(base_ids), frozenset(test_ids), frozenset(removed), frozenset(dropped)
     )
+
+
+OVER_BUDGET = ("base-probe-timeout", "base-probe-report-over-cap", "base-probe-log-over-cap")
+
+
+def no_targets(rule: dict, existing, why: str = "") -> BaseUncomparable:
+    """#793 Step 3: the base has test files under the roots but none can be a regression target
+    (the selection holds none, the whole base is over the cap or the budget): UNCOMPARABLE
+    ``P2P_NO_TARGETS``, never verified."""
+    detail = f"{len(existing)} base test file(s), none usable in {rule['applied']} mode"
+    detail += f" ({why})" if why else ""
+    cut = rule.get("capped_dirs")  # #333: a cut is named
+    detail += f"; capped: {', '.join(cut)} (over {rule['cap']} test files)" if cut else ""
+    return BaseUncomparable(Comparison("UNCOMPARABLE", "P2P_NO_TARGETS", detail))
+
+
+def whole_base(rule: dict, existing) -> tuple[str, ...]:
+    """#793 Step 3 (c): module-dir selected nothing, so the regression comparison is every base
+    test file under the roots, when that is within the cap; a cut or a larger base is
+    UNCOMPARABLE (the budget is checked by the probe that runs them)."""
+    if rule.get("capped_dirs") or len(existing) > MODULE_DIR_CAP:
+        raise no_targets(rule, existing, f"over {MODULE_DIR_CAP} test files")
+    rule |= {"selected_files": len(existing), "fallback": "all-base-tests"}
+    return existing
 
 
 def _collect(task, files, ctx, budget, attempt_id):
