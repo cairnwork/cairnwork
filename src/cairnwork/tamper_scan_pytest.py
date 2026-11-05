@@ -145,7 +145,8 @@ _HOOK = (
 PYTEST_HOOK_IMPL = (
     rf"^\s*(?:async\s+)?def\s+{_HOOK}|(?:^|[;:])\s*{_HOOK}\s*(?::[^=:;#]*)?=(?!=)"
     rf"|\bas\s+{_HOOK}|\bfrom\s+[\w.]+\s+import\b(?:(?!\bfrom\b)[^#;])*?(?<![\w.]){_HOOK}"
-    r"|\bpytest\s*\.\s*hookimpl\b|\bfrom\s+pytest\s+import\b(?:(?!\bfrom\b)[^#;])*?\bhookimpl\b"
+    r"|\bpytest\s*\.\s*hookimpl\b|@\s*[^\W\d]\w*\s*\.\s*hookimpl\b"
+    r"|\bfrom\s+pytest\s+import\b(?:(?!\bfrom\b)[^#;])*?\bhookimpl\b"
     r"|\bHookimplMarker\s*\(\s*(?:project_name\s*=\s*)?[rRuU]?['\"]pytest['\"]"
 )
 

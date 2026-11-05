@@ -61,16 +61,19 @@ def test_sensitive_targets_and_aliases_caught(path, line, expected_rule):
     ],
 )
 def test_more_sensitive_key_writes_caught_in_library_code(line):
-    assert _rules(LIBRARY, line) == ["sys_modules_write"]
+    assert "sys_modules_write" in _rules(LIBRARY, line)  # plus pytest_internals for a _pytest key
 
 
 def test_a_key_naming_pytest_internals_is_one_finding_per_rule_in_test_code():
-    # main's _pytest rule reads the key too; in library code only the write is refused
+    # the _pytest rule reads the key too, in library code as well since #821
     assert _rules(TEST, "sys.modules['_pytest.runner'] = fake") == [
         "sys_modules_write",
         "pytest_internals",
     ]
-    assert _rules(LIBRARY, "sys.modules['_pytest.runner'] = fake") == ["sys_modules_write"]
+    assert sorted(_rules(LIBRARY, "sys.modules['_pytest.runner'] = fake")) == [
+        "pytest_internals",
+        "sys_modules_write",
+    ]
 
 
 @BOTH

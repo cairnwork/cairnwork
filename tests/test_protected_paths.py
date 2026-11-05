@@ -2,6 +2,7 @@
 and check_candidate_commit re-checks protected paths on its own."""
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -140,7 +141,7 @@ def test_candidate_check_refuses_a_protected_path_even_when_allowed(repo, tmp_pa
     _commit(clone)
     # a future entry point that skips check_task passes the protected file as allowed
     with pytest.raises(CandidateRejected) as info:
-        collect_candidate(repo, attempt, ("scripts/check_size.py",))
+        collect_candidate(repo, attempt, ("scripts/check_size.py",), python=sys.executable)
     assert info.value.code == "PROTECTED_PATH"
 
 
@@ -149,7 +150,7 @@ def test_candidate_check_reports_scope_before_protection(repo, tmp_path):
     (clone / "SECURITY.md").write_text("nothing to see\n")
     _commit(clone)
     with pytest.raises(CandidateRejected) as info:
-        collect_candidate(repo, attempt, ("src/a.py",))
+        collect_candidate(repo, attempt, ("src/a.py",), python=sys.executable)
     assert info.value.code == "OUT_OF_SCOPE"
 
 
@@ -161,11 +162,13 @@ def test_write_through_a_tracked_symlink_is_out_of_scope(repo, tmp_path):
     (clone / "src" / "link.py").write_text("x = 99\n")  # follows the link: changes a.py
     _commit(clone)
     with pytest.raises(CandidateRejected) as info:
-        collect_candidate(repo, attempt, ("src/link.py",))
+        collect_candidate(repo, attempt, ("src/link.py",), python=sys.executable)
     assert info.value.code == "OUT_OF_SCOPE" and info.value.args[0] if False else True
     assert info.value.code == "OUT_OF_SCOPE"
     # naming the target as the allowed file is what lets the change in
-    assert collect_candidate(repo, attempt, ("src/a.py",)).paths == ("src/a.py",)
+    assert collect_candidate(repo, attempt, ("src/a.py",), python=sys.executable).paths == (
+        "src/a.py",
+    )
 
 
 @pytest.mark.parametrize("entry", [["a.py"], 7, None, {"a": 1}, ("a.py",)])
@@ -186,5 +189,5 @@ def test_candidate_check_refuses_a_new_src_cairnwork_package(repo, tmp_path):
     (clone / "src" / "cairnwork_tools" / "gate.py").write_text("x = 1\n")
     _commit(clone)
     with pytest.raises(CandidateRejected) as info:
-        collect_candidate(repo, attempt, ("src/cairnwork_tools/gate.py",))
+        collect_candidate(repo, attempt, ("src/cairnwork_tools/gate.py",), python=sys.executable)
     assert info.value.code == "PROTECTED_PATH"

@@ -232,13 +232,14 @@ def collect_candidate(
     attempt: Attempt,
     allowed_files: tuple[str, ...],
     *,
+    python: str,
     allow_deletions: bool = False,
 ) -> Candidate:
     """Fetch the clone's HEAD into repo and accept it, or raise CandidateRejected."""
     require_refs_unchanged(repo, attempt)
     head = _fetch_head(repo, attempt)
     return check_candidate_commit(
-        repo, attempt, head, allowed_files, allow_deletions=allow_deletions
+        repo, attempt, head, allowed_files, python=python, allow_deletions=allow_deletions
     )
 
 
@@ -248,9 +249,13 @@ def check_candidate_commit(
     head: str,
     allowed_files: tuple[str, ...],
     *,
+    python: str,
     allow_deletions: bool = False,
 ) -> Candidate:
-    """Accept head (already in repo) as the attempt's candidate, or raise CandidateRejected."""
+    """Accept head (already in repo) as the attempt's candidate, or raise CandidateRejected.
+
+    ``python`` is the verifier's interpreter (``verifier_interpreter(ctx)``): the tamper scan
+    reads the files the verifier will import with it."""
     base = attempt.base_commit
     if head == base:
         raise CandidateRejected("NO_COMMIT", "the worker made no commit")
@@ -272,7 +277,7 @@ def check_candidate_commit(
         if entry.after_mode in FORBIDDEN_MODES or entry.before_mode in FORBIDDEN_MODES:
             raise CandidateRejected("FORBIDDEN_MODE", f"{entry.path} ({entry.after_mode})")
     try:  # raises the bar, not a boundary (tamper_scan.py)
-        tamper = scan_patch(repo, base, head)
+        tamper = scan_patch(repo, base, head, python=python)
     except GitCommandError as exc:
         raise CandidateRejected("UNREADABLE_CHANGE", str(exc)) from exc
     if tamper:

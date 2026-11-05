@@ -1,5 +1,6 @@
 """Who wrote the candidate: worker, requested model and observed model (never a default)."""
 
+import sys
 import time
 
 import pytest
@@ -46,14 +47,18 @@ def test_the_candidate_commit_carries_the_trailers(repo, tmp_path):
     attempt = create_attempt_clone(repo, git(repo, "rev-parse", "HEAD"), tmp_path / "att", "a1")
     (attempt.path / "src" / "a.py").write_text("x = 2\n")
     info = provenance.make("agy", "m-1", "m-2")
-    commit = snapshot_candidate(repo, attempt, ("src/a.py",), provenance=info).candidate_commit
+    commit = snapshot_candidate(
+        repo, attempt, ("src/a.py",), provenance=info, python=sys.executable
+    ).candidate_commit
     assert provenance.parse(git(repo, "show", "-s", "--format=%B", commit)) == info
 
 
 def test_a_commit_without_provenance_says_unknown_not_claude(repo, tmp_path):
     attempt = create_attempt_clone(repo, git(repo, "rev-parse", "HEAD"), tmp_path / "att", "a1")
     (attempt.path / "src" / "a.py").write_text("x = 2\n")
-    commit = snapshot_candidate(repo, attempt, ("src/a.py",)).candidate_commit
+    commit = snapshot_candidate(
+        repo, attempt, ("src/a.py",), python=sys.executable
+    ).candidate_commit
     assert provenance.parse(git(repo, "show", "-s", "--format=%B", commit)) == UNKNOWN3
 
 

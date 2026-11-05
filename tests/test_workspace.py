@@ -1,3 +1,5 @@
+import sys
+
 import pytest
 from conftest import git
 
@@ -34,7 +36,7 @@ _ATTEMPTS = {}
 
 def collect(repo, clone, base, **kwargs):
     made = _ATTEMPTS.get(clone) or Attempt("a1", base, clone, _guarded_refs(repo, "a1"))
-    return collect_candidate(repo, made, ALLOWED, **kwargs)
+    return collect_candidate(repo, made, ALLOWED, **kwargs, python=sys.executable)
 
 
 def rejected_code(repo, clone, base, **kwargs):
@@ -263,7 +265,7 @@ def test_refs_pushed_into_cairnworks_repository_reject_the_candidate(repo, tmp_p
     commit(made.path)
     git(made.path, "push", "-q", str(repo), "HEAD:refs/replace/" + base)
     with pytest.raises(CandidateRejected) as info:
-        collect_candidate(repo, made, ALLOWED)
+        collect_candidate(repo, made, ALLOWED, python=sys.executable)
     assert info.value.code == "REPOSITORY_REFS_CHANGED"
 
 
@@ -278,7 +280,7 @@ def test_another_attempts_ref_changing_rejects_the_candidate(repo, tmp_path):
     git(repo, "update-ref", "refs/cairnwork/attempts/other", other)
     made = Attempt(made.attempt_id, made.base_commit, made.path, made_other_ref_first)
     with pytest.raises(CandidateRejected) as info:
-        collect_candidate(repo, made, ALLOWED)
+        collect_candidate(repo, made, ALLOWED, python=sys.executable)
     assert info.value.code == "REPOSITORY_REFS_CHANGED"
     assert head
 
@@ -290,7 +292,7 @@ def test_ordinary_branch_updates_by_cairnwork_are_allowed(repo, tmp_path):
     head = commit(made.path)
     git(repo, "commit", "-q", "--allow-empty", "-m", "main moved on")
     git(repo, "tag", "release")
-    assert collect_candidate(repo, made, ALLOWED).candidate_commit == head
+    assert collect_candidate(repo, made, ALLOWED, python=sys.executable).candidate_commit == head
 
 
 def test_gitlink_paths_must_stay_empty(repo, tmp_path):
@@ -304,7 +306,7 @@ def test_gitlink_paths_must_stay_empty(repo, tmp_path):
     (made.path / "vendor" / "lib").mkdir(parents=True, exist_ok=True)
     (made.path / "vendor" / "lib" / "leftover.py").write_text("x\n")
     with pytest.raises(CandidateRejected) as info:
-        collect_candidate(repo, made, ALLOWED)
+        collect_candidate(repo, made, ALLOWED, python=sys.executable)
     assert info.value.code == "DIRTY_TREE"
 
 
@@ -381,8 +383,8 @@ def test_concurrent_attempts_on_one_base_do_not_reject_each_other(repo, tmp_path
     for made, text in ((first, "x = 2\n"), (second, "x = 3\n")):
         (made.path / "src" / "a.py").write_text(text)
         commit(made.path)
-    assert collect_candidate(repo, second, ALLOWED)
-    assert collect_candidate(repo, first, ALLOWED)
+    assert collect_candidate(repo, second, ALLOWED, python=sys.executable)
+    assert collect_candidate(repo, first, ALLOWED, python=sys.executable)
 
 
 def test_deleted_attempt_ref_rejects_the_candidate(repo, tmp_path):
@@ -393,5 +395,5 @@ def test_deleted_attempt_ref_rejects_the_candidate(repo, tmp_path):
     commit(made.path)
     git(repo, "update-ref", "-d", "refs/cairnwork/attempts/old")
     with pytest.raises(CandidateRejected) as info:
-        collect_candidate(repo, made, ALLOWED)
+        collect_candidate(repo, made, ALLOWED, python=sys.executable)
     assert info.value.code == "REPOSITORY_REFS_CHANGED"
