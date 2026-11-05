@@ -18,26 +18,30 @@ green. Both happen inside the candidate's process; the boundary is the blackbox 
 (#303) and a verdict produced outside the candidate's process, not these scans or the hook.
 """
 
+import marshal
+
 import pytest
 from verify_helpers import BAD, base_of, candidate, verify
 
 pytestmark = pytest.mark.sandbox
 
+# The forged module's code object, made here (the candidate must not call compile itself).
+_CODE = (
+    repr(marshal.dumps(compile("EXPECTED = 6\n", "tests/helper.py", "exec")))
+    .replace("{", "{{")
+    .replace("}", "}}")
+)
 PLANT = (
-    "import importlib.util, os, py_compile, sys\n"
+    "import importlib.util, os, sys\n"
     "from pathlib import Path\n"
     "_d = os.path.join(os.environ['HOME'], 'alt')\n"
     "{redirect}\n"
     "_src = Path(__file__).parent.parent / 'tests' / 'helper.py'\n"
     "_st = os.stat(_src)\n"
-    "_tmp = os.path.join(os.environ['HOME'], 'forged.py')\n"
-    "Path(_tmp).write_text('EXPECTED = 6\\n')\n"
-    "py_compile.compile(_tmp, cfile=_tmp + 'c', doraise=True)\n"
-    "_forged = Path(_tmp + 'c').read_bytes()\n"
     "_data = (importlib.util.MAGIC_NUMBER + bytes(4)\n"
     "         + (int(_st.st_mtime) & 0xFFFFFFFF).to_bytes(4, 'little')\n"
     "         + (_st.st_size & 0xFFFFFFFF).to_bytes(4, 'little')\n"
-    "         + _forged[16:])\n"
+    "         + " + _CODE + ")\n"
     "for _p in {{str(_src), os.path.realpath(_src)}}:\n"
     "    _pyc = importlib.util.cache_from_source(_p)\n"
     "    os.makedirs(os.path.dirname(_pyc), exist_ok=True)\n"
