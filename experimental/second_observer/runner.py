@@ -125,7 +125,8 @@ def main():
         module = importlib.import_module(modname)
     except BaseException as exc:  # noqa: BLE001
         finish(result_path, *import_failure(root, path, exc))
-    finish(result_path, *judge(module, name))
+    else:
+        finish(result_path, *judge(module, name))
 
 
 main()
