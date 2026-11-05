@@ -72,8 +72,11 @@ def tests_with_teeth(task, specs, result, ctx: VerifyContext) -> tuple[str, ...]
     if missing := untargeted(paths, targets, (t for spec in specs for t in spec.targets)):
         hint = "name each such file, or each of its new or changed tests, as a verifier target"
         raise TestCommitRejected("DEFERRED_TESTS_NOT_TARGETED", f"{', '.join(missing)}; {hint}")
-    runs = run_verifiers(ctx, task.test_commit, specs, f"{result.attempt_id}-b")
+    runs = run_verifiers(ctx, task.test_commit, specs, f"{result.attempt_id}-b", deny=True)
     comparison = base_comparison(runs, targets)  # decided before the base logs go
+    for run in runs:  # #797 step 1: recorded only, no verdict reads it yet (deny_channel.py)
+        if run.deny_evidence:
+            result.logs.append(f"base deny evidence {run.spec.verifier_id}: {run.deny_evidence}")
     for run in runs:  # not evidence for Core; would show the tests to later workers
         shutil.rmtree(Path(run.log_path).parent, ignore_errors=True)
     if comparison.kind == "UNCOMPARABLE":
