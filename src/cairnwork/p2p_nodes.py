@@ -83,3 +83,8 @@ def require_nodes(nodes: tuple[str, ...], run: VerifierRun) -> tuple[VerifierRun
     why = f"{len(missing)} base-passing test(s) did not run on the candidate"
     observation = replace(run.observation, passed=False)
     return replace(run, observation=observation, plain_failure=False, why=why), missing
+
+
+def clean(name: str) -> str:
+    """A test id for the record: printable, bounded."""
+    return "".join(c if c.isprintable() else "?" for c in str(name))[:200]
