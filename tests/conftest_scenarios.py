@@ -67,7 +67,19 @@ NEW_ONLY = (
         ),
     ),
 )
+NAMES_MODULE = (  # the verifier names the new test and the module beside the conftest (CE4)
+    (
+        "pytest",
+        ("python3", "-m", "pytest", "-q", "tests/test_regression.py", "tests/sub/colorsys.py"),
+    ),
+)
 SHADOW = "import pytest\n\n\n@pytest.fixture\ndef val():\n    return 2\n"
+# a test-commit module beside a new conftest, named like a standard module the conftest imports;
+# importing it flips a base test in the same directory
+LOCAL_MODULE = {
+    "tests/sub/test_env.py": "import os\n\n\ndef test_env():\n"
+    "    assert 'W3B_FLAG' not in os.environ\n",
+}
 
 
 @pytest.fixture
@@ -207,6 +219,27 @@ SCENARIOS = {  # name: (kwargs of conftest_run, expected status, a code the reas
         {"path": "tests/empty/conftest.py", "regression": PLAIN},
         "COMPLETED",
         "",
+    ),
+    "a conftest import that resolves to a test-commit module beside it": (
+        {
+            "addition": "import colorsys\n",
+            "path": "tests/sub/conftest.py",
+            "base_files": LOCAL_MODULE,
+            "regression": PLAIN,
+            "extra_files": {"tests/sub/colorsys.py": "import os\nos.environ['W3B_FLAG'] = '1'\n"},
+            "verifiers": NAMES_MODULE,
+        },
+        "FAILED",
+        "TEST_COMMIT_CONFTEST_CHANGES_BASE",
+    ),
+    "two conftests: a fixture-only one and a second that flips a base test": (
+        {
+            "base_files": SHADOWED,
+            "regression": PLAIN,
+            "extra_files": {"tests/sub/conftest.py": SHADOW},
+        },
+        "FAILED",
+        "TEST_COMMIT_CONFTEST_CHANGES_BASE",
     ),
     "P2P off": ({"mode": "off"}, "FAILED", "TEST_COMMIT_CONFTEST_UNCHECKED"),
 }

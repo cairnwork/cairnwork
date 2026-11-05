@@ -58,11 +58,12 @@ def _deleted_paths(value: Any) -> bool:
 
 
 def _conftest_paths(value: Any) -> bool:
-    """#798: the conftest files the test commit adds or changes: sorted, distinct, exact name."""
+    """#798: the conftest files the test commit adds or changes: sorted, distinct, exact name
+    (each a str before any sort, so a malformed receipt is a shape problem, not a TypeError)."""
     return (
         isinstance(value, list)
-        and value == sorted(set(value))
         and all(isinstance(p, str) and p.rsplit("/", 1)[-1] == "conftest.py" for p in value)
+        and value == sorted(set(value))
     )
 
 
