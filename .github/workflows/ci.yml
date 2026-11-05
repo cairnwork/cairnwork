@@ -58,7 +58,11 @@ jobs:
         run: |
           sudo zsh scripts/setup_verifier_user.sh "$USER"
           zsh scripts/setup_verifier_python.sh
-      - run: uv run pytest -q
+      # #406 step 4: everything except the shared verifier account runs in parallel; files that
+      # share state are pinned to one worker by their xdist_group mark (tests/xdist_groups.py).
+      - run: uv run pytest -q -n auto --dist loadgroup -m "not verifier_account"
+      # The verifier account is one shared account: its tests stay serial.
+      - run: uv run pytest -q -m verifier_account
 
   # Linux bwrap backend, witnessed on real bwrap. On a GitHub ubuntu-24.04 runner an AppArmor
   # rule restricts capability-bearing user namespaces by default, so the job asserts available()
