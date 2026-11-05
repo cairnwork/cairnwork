@@ -20,7 +20,7 @@ from experimental.second_observer.autouse import autouse_files, marked_na
 from experimental.second_observer.inputs import ShadowInput, Uncomparable, load
 from experimental.second_observer.observe import run_observer
 from experimental.second_observer.rebuild import rebuild
-from experimental.second_observer.residual import residual
+from experimental.second_observer.residual import RULES_VERSION, residual
 from experimental.second_observer.shape import target_shape_na, xunit_setup_na
 
 PATH_REASON = "SHADOW_OUTPUT_PATH"
@@ -54,6 +54,7 @@ def record(inp: ShadowInput, status: str, detail: str, started: float, extra: di
         "detail": detail,
         "rule_t": None,  # rule T is step 2
         "residual": ["unknown"],  # until residual.py has read the checkout; extra overwrites it
+        "residual_rules": RULES_VERSION,
         "elapsed_s": round(time.monotonic() - started, 3),
         "same_process": True,
         **extra,
@@ -137,7 +138,8 @@ def main(argv: list[str] | None = None) -> int:
     args.out = args.out.resolve()  # /var/folders is a symlink: the sandbox wants real paths
     if inp is None:
         row = {"v": 1, "variant": "A", "observer": UNCOMPARABLE, "detail": reason,
-               "rule_t": None, "same_process": True, "residual": ["unknown"]}  # fmt: skip
+               "rule_t": None, "same_process": True, "residual": ["unknown"],
+               "residual_rules": RULES_VERSION}  # fmt: skip
     else:
         row = observe(inp, args.out)
     with (args.out / "shadow.jsonl").open("a") as handle:
