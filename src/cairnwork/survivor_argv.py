@@ -28,7 +28,7 @@ FLAGS = frozenset({
     "-m", "-c", "-v", "-vv", "-q", "-x", "-s", "-B", "-I", "-E", "-V", "-h",
     "--version", "--help", "--serve",
 })  # fmt: skip
-MODULES = frozenset({"pytest", "http.server", "unittest", "pip", "venv", "uvicorn", "gunicorn"})
+MODULES = frozenset({"pytest", "unittest", "pip", "venv", "uvicorn", "gunicorn"})
 ARGV_HIDDEN = "(argv hidden)"
 UNREAD = "(argv not read)"
 
