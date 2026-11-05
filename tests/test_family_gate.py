@@ -358,3 +358,18 @@ def test_off_matches_the_core_runner_main(setup, tmp_path, monkeypatch, capsys):
     assert [(n, task.sub("T", t)) for n, t in hubs[0].comments] == [
         (n, task.sub("T", t)) for n, t in hubs[1].comments
     ]
+
+
+# #870: a GitHub Issue body may come back with CRLF line endings
+def test_a_crlf_issue_body_still_parses_its_family_block():
+    body = 'Text\r\n```cairnwork-families\r\n{\r\n"issue_author": "opus"\r\n}\r\n```\r\nmore\r\n'
+    got = parse_annotation(body)
+    assert got is not None and not got.invalid and got.declared == {"issue_author": "opus"}
+
+
+def test_an_lf_only_body_parses_as_before():
+    body = 'Text\n```cairnwork-families\n{"issue_author": "opus", "test_author": "gpt-5"}\n```\n'
+    got = parse_annotation(body)
+    assert got is not None and not got.invalid
+    assert got.declared == {"issue_author": "opus", "test_author": "gpt-5"}
+    assert parse_annotation("no block\n") is None
