@@ -38,6 +38,7 @@ def snapshot_candidate(
     attempt: Attempt,
     allowed_files: tuple[str, ...],
     *,
+    python: str,
     allow_deletions: bool = False,
     provenance: dict | None = None,
 ) -> Candidate:
@@ -64,7 +65,7 @@ def snapshot_candidate(
     finally:
         index.unlink(missing_ok=True)
     return check_candidate_commit(
-        repo, attempt, head, allowed_files, allow_deletions=allow_deletions
+        repo, attempt, head, allowed_files, python=python, allow_deletions=allow_deletions
     )
 
 

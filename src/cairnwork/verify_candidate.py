@@ -60,7 +60,7 @@ from cairnwork.pipeline import (
 )
 from cairnwork.pipeline_judge import judge_candidate
 from cairnwork.recovery import _remove_leftovers
-from cairnwork.verify_context import VerifyContext
+from cairnwork.verify_context import VerifyContext, verifier_interpreter
 from cairnwork.workspace import (
     ATTEMPT_ID,
     Attempt,
@@ -288,14 +288,15 @@ def _judge_in(intake, task, specs, candidate, notary, result, ctx, *, source) ->
     clone = create_attempt_clone(task.repo, candidate, run_root, result.attempt_id)
     with unless_interrupted(partial(_remove_clone, run_root, result)):
         attempt = Attempt(clone.attempt_id, task.base_commit, clone.path, clone.refs_before)
-        check_candidate_commit(task.repo, attempt, candidate, task.allowed_files)
+        check_candidate_commit(
+            task.repo, attempt, candidate, task.allowed_files, python=verifier_interpreter(ctx)
+        )
         env = None if task.test_commit else _base_env(task, result, ctx, source)
         judged, test_files, binding = candidate, (), None
         if task.test_commit:
             _burn(intake, task.test_commit, record=True)  # before the tests are fetched
             mode = "bundle" if task.test_store and task.test_store.required else "auto"
-            # the same journal and row the worker path writes; cairnwork-attest reads it by
-            # (task_id, attempt_id), both in this run's output
+            # the worker path's journal row; cairnwork-attest reads it by (task_id, attempt_id)
             intake.journal.record(result.task_id, result.attempt_id, "TEST_SOURCE", mode)
             # base runs: an account failure is no evidence (#234)
             with base_stage(ctx.account, ctx.python):

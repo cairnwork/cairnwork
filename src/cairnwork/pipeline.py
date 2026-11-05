@@ -50,7 +50,7 @@ from cairnwork.verifiers import (
     parse_verifier,
     protected_verifier_inputs,
 )
-from cairnwork.verify_context import VerifyContext
+from cairnwork.verify_context import VerifyContext, verifier_interpreter
 from cairnwork.workspace import (
     CandidateRejected,
     WorkspaceError,
@@ -292,8 +292,7 @@ def _execute(
     except Exception as exc:  # noqa: BLE001 - an infrastructure failure, never success
         result.verified, result.uncomparable = False, ""
         result.reason = f"INFRA_ERROR: {type(exc).__name__}: {exc}"
-    # Anything else (KeyboardInterrupt, SystemExit) leaves the task DISPATCHED, as a crash does:
-    # the attempt's processes are not shown gone, so recovery sweeps it and fences it (#244).
+    # Anything else (KeyboardInterrupt, SystemExit) leaves it DISPATCHED: recovery fences it (#244)
     result.status = "COMPLETED" if result.verified else "FAILED"
     steps.reach("FINISHED", result.status, "" if result.verified else result.uncomparable)
     fence = None if result.verified or result.fence is None else (attempt_id, result.fence)
@@ -354,6 +353,7 @@ def _attempt(task, specs, digest, notary, worker, result, steps, ctx: VerifyCont
                 task.repo,
                 attempt,
                 task.allowed_files,
+                python=verifier_interpreter(ctx),
                 allow_deletions=task.allow_deletions,
                 provenance=provenance,
             )

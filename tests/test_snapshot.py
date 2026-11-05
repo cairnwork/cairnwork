@@ -1,4 +1,5 @@
 import os
+import sys
 
 import pytest
 from conftest import git
@@ -16,13 +17,13 @@ def attempt(repo, tmp_path):
 
 def code(repo, attempt, allowed=ALLOWED, **kwargs):
     with pytest.raises(CandidateRejected) as info:
-        snapshot_candidate(repo, attempt, allowed, **kwargs)
+        snapshot_candidate(repo, attempt, allowed, **kwargs, python=sys.executable)
     return info.value.code
 
 
 def test_edited_allowed_file_becomes_one_commit_on_base(repo, attempt):
     (attempt.path / "src" / "a.py").write_text("x = 2\n")
-    candidate = snapshot_candidate(repo, attempt, ALLOWED)
+    candidate = snapshot_candidate(repo, attempt, ALLOWED, python=sys.executable)
     assert git(repo, "rev-parse", f"{candidate.candidate_commit}^") == attempt.base_commit
     assert git(repo, "show", f"{candidate.candidate_commit}:src/a.py") == "x = 2"
     assert git(repo, "rev-parse", "refs/cairnwork/attempts/a1") == candidate.candidate_commit
@@ -32,7 +33,7 @@ def test_executable_bit_is_kept(repo, attempt):
     path = attempt.path / "src" / "a.py"
     path.write_text("x = 2\n")
     path.chmod(0o755)
-    candidate = snapshot_candidate(repo, attempt, ALLOWED)
+    candidate = snapshot_candidate(repo, attempt, ALLOWED, python=sys.executable)
     assert git(repo, "ls-tree", candidate.candidate_commit, "src/a.py").startswith("100755")
 
 
@@ -84,7 +85,7 @@ def test_worker_attributes_and_filters_do_not_run(repo, attempt, tmp_path):
     (attempt.path / ".git" / "info").mkdir(exist_ok=True)  # no git templates in the clone (#417)
     (attempt.path / ".git" / "info" / "attributes").write_text("* filter=evil\n")
     (attempt.path / "src" / "a.py").write_text("x = 2\n")
-    snapshot_candidate(repo, attempt, ALLOWED)
+    snapshot_candidate(repo, attempt, ALLOWED, python=sys.executable)
     assert not marker.exists()
 
 

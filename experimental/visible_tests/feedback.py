@@ -81,7 +81,7 @@ from cairnwork.verifiers import (
     parse_verifier,
     run_verifiers,
 )
-from cairnwork.verify_context import VerifyContext
+from cairnwork.verify_context import VerifyContext, verifier_interpreter
 from cairnwork.workspace import (
     ATTEMPT_REF_PREFIX,
     Attempt,
@@ -199,15 +199,19 @@ class VisibleTestsWorker:
         )
         root = workdir.parent / f"{workdir.name}-visible{turn}"
         run_id = f"{workdir.name}-vis{turn}"
+        ctx = VerifyContext.of(task, root, workdir.name, self.account, self.python)
         try:
             try:
                 candidate = snapshot_candidate(
-                    task.repo, attempt, task.allowed_files, allow_deletions=task.allow_deletions
+                    task.repo,
+                    attempt,
+                    task.allowed_files,
+                    python=verifier_interpreter(ctx),
+                    allow_deletions=task.allow_deletions,
                 )
             except CandidateRejected as exc:
                 return f"Cairnwork could not check your edit: {_why_rejected(exc.code)}\n{FOOTER}"
             root.mkdir(mode=0o700)
-            ctx = VerifyContext.of(task, root, workdir.name, self.account, self.python)
             runs = run_verifiers(
                 ctx, candidate.candidate_commit, specs, run_id, timeout=self.timeout
             )

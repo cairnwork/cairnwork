@@ -169,6 +169,28 @@ def test_a_non_utf8_path_and_a_newline_inside_the_path_are_parsed():
 def test_system_policy_lines_are_ignored():
     kill = line("System Policy: kill(1) deny(1) signal", tag="")
     assert judge(stream(kill), window()).state == "CLEAN"
+    # CI test-macos 11/05 (#884): the same line behind a duplicate-reports prefix
+    daemon = line(
+        "2 duplicate reports for System Policy: d(178) allow file-read-metadata /S", tag=""
+    )
+    assert judge(stream(daemon), window()).state == "CLEAN"
+
+
+def test_another_process_s_allow_lines_count_toward_volume_and_are_never_a_denial():
+    # CI test-macos 11/05: a system daemon's profile reported an allow; it made the run UNAVAILABLE
+    allow = "Sandbox: diskimaged(86) allow process-exec* /System/Library/Filesystems/x"
+    counted = line("Sandbox: y(87) allow(1) file-read-data /b", tag=OTHER)
+    assert judge(stream(line(allow, tag=""), counted), window()) == Evidence("CLEAN", "", 4, 3)
+    burst = [line(allow, tag="")] * (deny_channel.MAX_LINES_PER_SECOND + 1)
+    assert "volume" in judge(stream(*burst), window()).detail
+    evidence = judge(stream(line("Sandbox: x(5) allow(1) file-read-data /a")), window())
+    assert evidence == Evidence("UNAVAILABLE", "a tagged allow line")  # our tag is on denies only
+    # Codex #881 r1: a deny line whose process name looks like "x(1) allow(9)" stays a denial
+    named = judge(stream(line("Sandbox: x(1) allow(9) deny(1) file-read-data /secret")), window())
+    assert named == Evidence("DENIED", "file-read-data /secret", 3, 2)
+    # Codex #881 r2: a broken deny line (no count) is still unreadable, as on main, not an allow
+    broken = line("Sandbox: x(1) allow(9) deny /secret", tag="")
+    assert "unparseable" in judge(stream(broken), window()).detail
 
 
 def test_a_canary_that_raises_never_stops_the_run(monkeypatch):

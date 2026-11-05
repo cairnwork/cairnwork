@@ -1,5 +1,7 @@
 """The patch scan for verdict-forgery APIs (tamper_scan.py): a catch and a non-catch per rule."""
 
+import sys
+
 import pytest
 from conftest import commit_change, git
 
@@ -24,6 +26,18 @@ CASES = {
     "pytest_hook_impl": (
         "def pytest_runtest_makereport(item, call):",
         "def test_pytest_runtest_makereport_name():",
+    ),
+    "pytest_option_write": (
+        "    config.option.maxfail = 0",
+        "    n = config.option.maxfail  # a read",
+    ),
+    "code_object_forge": (
+        "    f.__code__ = g.__code__",
+        "    name = f.__code__.co_filename  # a read; re.compile( is another thing",
+    ),
+    "dynamic_loader": (
+        "    spec = importlib.util.spec_from_file_location('m', p)",
+        "    mod = importlib.import_module('json')",
     ),
     "guard_module": ("import _cairnwork_report_guard", "import cairnwork.report_guard_docs"),
     "fd_listing": (
@@ -112,10 +126,10 @@ def test_scan_patch_reads_only_added_lines_of_a_real_commit(repo):
     head = commit_change(
         repo, {"src/old.py": "import os\nx = 1\n", "src/new.py": "gc.get_objects()\n"}
     )
-    assert scan_patch(repo, mid, head)[0].rule == "gc_walk"
-    assert [(f.path, f.line, f.rule) for f in scan_patch(repo, base, mid)] == [
-        ("src/old.py", 2, "os_exit")
-    ]
+    assert scan_patch(repo, mid, head, python=sys.executable)[0].rule == "gc_walk"
+    assert [
+        (f.path, f.line, f.rule) for f in scan_patch(repo, base, mid, python=sys.executable)
+    ] == [("src/old.py", 2, "os_exit")]
     assert CODE == "VERIFIER_TAMPER_API"
 
 
@@ -125,5 +139,5 @@ def test_paths_git_quotes_are_still_scanned(repo):
     head = commit_change(
         repo, {'src/we"ird.py': "import os\nos._exit(0)\n", "src/café.py": "gc.get_objects()\n"}
     )
-    found = {(f.path, f.rule) for f in scan_patch(repo, base, head)}
+    found = {(f.path, f.rule) for f in scan_patch(repo, base, head, python=sys.executable)}
     assert found == {('src/we"ird.py', "os_exit"), ("src/café.py", "gc_walk")}
