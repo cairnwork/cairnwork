@@ -16,7 +16,7 @@ import unittest
 
 sys.dont_write_bytecode = True
 CODES = {"PASS": 0, "FAIL": 1, "NA": 3, "OBS_ERROR": 4}
-MARKS_NA = {"parametrize", "usefixtures", "skip", "skipif", "xfail"}
+MARKS_NA = {"parametrize", "usefixtures", "skip", "skipif", "xfail", "filterwarnings"}
 
 
 def finish(result_path, status, detail=""):
@@ -100,6 +100,8 @@ def judge(module, name):
         return "NA", "method of a non-unittest class"
     if not callable(target):
         return "OBS_ERROR", "target is not callable"
+    if isinstance(target, type):  # a class-level node (file::Class) names no single test
+        return "NA", "TARGET_SHAPE"
     if inspect.signature(target).parameters or marks & MARKS_NA:
         return "NA", "parameters, fixtures or marks"
     if inspect.iscoroutinefunction(target) or inspect.isgeneratorfunction(target):

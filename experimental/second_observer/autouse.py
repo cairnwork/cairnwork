@@ -80,7 +80,7 @@ def autouse_files(checkout: Path, test_file: str, extra_roots: list[Path]) -> li
     return sorted(hits)
 
 
-MARKS_NA = frozenset({"parametrize", "usefixtures", "skip", "skipif", "xfail"})
+MARKS_NA = frozenset({"parametrize", "usefixtures", "skip", "skipif", "xfail", "filterwarnings"})
 
 
 def _mark_names(node: ast.AST) -> set[str]:

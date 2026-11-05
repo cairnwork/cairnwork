@@ -42,6 +42,7 @@ class ShadowInput:
     cw_reason: str
     test_roots: tuple[str, ...]
     na_reason: str = ""
+    ini_text: str = ""
 
 
 def plugins_sha256(plugins) -> str:
@@ -155,6 +156,7 @@ def check(raw: dict) -> ShadowInput:
         name=base.replace("::", "."),
         na_reason="PARAMETRIZED" if bracket else "",
         interpreter=python,
+        ini_text=raw["ini_text"],
         pythonpath=_ini_pythonpath(raw["ini_text"]),
         cw_verdict=raw.get("cw_verdict", ""),
         cw_reason=raw.get("cw_reason", ""),

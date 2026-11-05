@@ -20,6 +20,8 @@ from experimental.second_observer.autouse import autouse_files, marked_na
 from experimental.second_observer.inputs import ShadowInput, Uncomparable, load
 from experimental.second_observer.observe import run_observer
 from experimental.second_observer.rebuild import rebuild
+from experimental.second_observer.residual import residual
+from experimental.second_observer.shape import target_shape_na, xunit_setup_na
 
 PATH_REASON = "SHADOW_OUTPUT_PATH"
 
@@ -51,6 +53,7 @@ def record(inp: ShadowInput, status: str, detail: str, started: float, extra: di
         "observer": status,
         "detail": detail,
         "rule_t": None,  # rule T is step 2
+        "residual": [],  # known divergence sources seen (residual.py); overwritten by extra
         "elapsed_s": round(time.monotonic() - started, 3),
         "same_process": True,
         **extra,
@@ -61,8 +64,12 @@ def static_na(inp: ShadowInput, checkout: Path, out: Path) -> dict:
     """Why a direct call is not comparable (no run): parametrized node or autouse fixture."""
     if inp.na_reason:
         return {"na_reason": inp.na_reason}
+    if target_shape_na(checkout / inp.file, inp.name):
+        return {"na_reason": "TARGET_SHAPE"}
     if marked_na(checkout / inp.file, inp.name):
         return {"na_reason": "MARKS"}
+    if xunit_setup_na(checkout / inp.file, inp.name):
+        return {"na_reason": "XUNIT_SETUP"}
     roots = [checkout / rel for rel in inp.pythonpath]
     files = autouse_files(checkout, inp.file, roots)
     if not files:
@@ -80,14 +87,16 @@ def observe(inp: ShadowInput, out: Path) -> dict:
     work = out / "work"
     try:
         checkout = rebuild(inp, out, work)
+        extra = {"residual": residual(inp, checkout)}
         gate = static_na(inp, checkout, out)
         if gate:
+            gate = {**extra, **gate}
             return record(inp, NA, gate.pop("na_reason"), started, gate)
         seen = run_observer(inp, checkout, out)
         agrees = (
             None if seen.returncode is None else (seen.returncode == 0) == (seen.status == "PASS")
         )
-        extra = {"sys_path": seen.sys_path, "env": dict(seen.env), "returncode": seen.returncode}
+        extra |= {"sys_path": seen.sys_path, "env": dict(seen.env), "returncode": seen.returncode}
         extra["exit_agrees"] = agrees
         return record(inp, seen.status, seen.detail, started, extra)
     except Uncomparable as exc:
@@ -128,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
     args.out = args.out.resolve()  # /var/folders is a symlink: the sandbox wants real paths
     if inp is None:
         row = {"v": 1, "variant": "A", "observer": UNCOMPARABLE, "detail": reason,
-               "rule_t": None, "same_process": True}  # fmt: skip
+               "rule_t": None, "same_process": True, "residual": ["unknown"]}  # fmt: skip
     else:
         row = observe(inp, args.out)
     with (args.out / "shadow.jsonl").open("a") as handle:

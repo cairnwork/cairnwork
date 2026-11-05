@@ -17,6 +17,33 @@ swallows the exception or skips the test body). It does not defend against seman
 cheats that notice they are being tested, or code that acts at import time. Every row is
 marked `same_process: true`; this is a raised bar, not a trust boundary.
 
+## AC2 is measured, not assumed
+
+The observer is a **shadow measurement only** and is never a basis for refusing anything. It is
+deliberately a bare call that stays independent of pytest: it does not imitate pytest behaviour,
+because imitating it would make it share the failure modes it exists to cross-check. So a
+correct fix can still make the two disagree. AC2 is therefore not "a correct fix never
+disagrees" but a measured quantity: the pre-registered pilot, on a stratified sample of real
+targets, reports the disagreement rate on correct candidates and the NA rate per reason, and a
+disagreement rate above 10% of judged targets stops expanding this line.
+
+Known residual classes. Each row carries a `residual` list naming the ones present, so
+disagreements can be stratified (it records, it never changes a verdict; `unknown:<CLASS>`, or
+`["unknown"]` for a row with no rebuilt checkout, means the item could not be read):
+- `INI_KEYS`: the ini the observer's input carries has a key outside the neutral set (testpaths,
+  python_files, python_classes, python_functions, markers, norecursedirs, minversion, pythonpath,
+  console_output_style, cache_dir);
+- `STRICT_ARGS`: the base config yields strict-mode arguments;
+- `TABLE_PLUGINS`: a table plugin is loaded with `-p` for the verifier;
+- `IMPORTED_NAMES`: a conftest or the test module has a from-import or star-import;
+- `CONFTEST_CODE`: a conftest has top-level statements other than import, def, class, docstring;
+- `PYTEST_PLUGINS_NONLITERAL`: `pytest_plugins` is not a literal;
+- `IMPORT_MODE`: an import mode is configured.
+
+Always-on pytest behaviour is also not reproduced and not recorded per row: the per-test warning
+filters, the conftest directories put on `sys.path`, the `PYTEST_CURRENT_TEST` variable, and
+assertion rewriting.
+
 ## Use
 
 ```
@@ -64,7 +91,9 @@ rebuilt checkout). Final `sys.path` and environment are recorded in each row.
 
 A target is `NA` (never run, never PASS or FAIL) when:
 - its node name has `[...]` (reason `PARAMETRIZED`; the function name before `[` must be a valid name, else `UNCOMPARABLE`, and what follows `[` is used for nothing);
-- it has parameters or fixtures, marks such as parametrize, usefixtures, skip or xfail, is async or a generator, or is a method of a class that is not a `unittest.TestCase`;
+- it is a class-level node (`file::Class`, reason `TARGET_SHAPE`; decided statically and again in the runner);
+- it has xunit-style setup that pytest runs around it (reason `XUNIT_SETUP`): module-level setup_module, teardown_module, setup_function, teardown_function, setup, teardown, setUpModule, tearDownModule for a function target; setup_method, teardown_method, setup_class, teardown_class on the class and module-level setup_module / setup_function for a unittest target (unittest's own setUpModule and setUpClass do not count);
+- it has parameters or fixtures, marks such as parametrize, usefixtures, skip, xfail or the built-in filterwarnings, is async or a generator, or is a method of a class that is not a `unittest.TestCase`;
 - its module import needs a name only a `conftest.py` provides;
 - an **autouse fixture** is defined in a `conftest.py` on the path from the rootdir to the test module, in the test module, or in a module they load through `pytest_plugins` (reason `AUTOUSE_FIXTURE`). The row lists the files and sets `autouse_in_candidate_change` when one of them is in the candidate's change: a candidate that adds an autouse fixture so that the observation becomes NA is itself a signal worth keeping. NA refuses nothing.
 
