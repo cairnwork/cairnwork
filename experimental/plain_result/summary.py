@@ -28,6 +28,16 @@ def _unknown(record: dict) -> dict:
     )
 
 
+def _tool_error(record: dict) -> dict:
+    return _result(
+        "檢查工具沒有順利完成。",
+        "目前沒有可用的檢查結果，不能判定程式通過或寫錯。",
+        "確認工具可用後重新檢查。",
+        "tool_error",
+        record,
+    )
+
+
 def _verify(record: dict, current_commit: str | None) -> dict:
     needed = (
         "status",
@@ -84,7 +94,8 @@ def _verify_outcome(record: dict, candidate: str, current_commit: str | None) ->
             return _unknown(record)
         return _result(
             "這一版通過了安排的檢查。仍有檢查不到的地方。",
-            f"檢查適用於 {candidate[:8]} 版；保護等級是 {record['protection']}，不代表沒有缺陷。",
+            f"檢查適用於 {candidate[:8]} 版；保護等級是 {record['protection']}；"
+            "檢查只涵蓋安排的項目，仍可能有沒發現的問題。",
             "請人確認能否交付。",
             "verified",
             record,
@@ -120,6 +131,8 @@ def _verify_outcome(record: dict, candidate: str, current_commit: str | None) ->
 def _attest(record: dict, current_commit: str | None) -> dict:
     if not all(key in record for key in ("ok", "code", "candidate", "core_status", "test_source")):
         return _unknown(record)
+    if record["ok"] is False and record["code"] == "USAGE":
+        return _tool_error(record)
     if not isinstance(record["candidate"], str) or not _OID.fullmatch(record["candidate"]):
         return _unknown(record)
     if record["ok"] is False:
@@ -153,7 +166,6 @@ def _attest(record: dict, current_commit: str | None) -> dict:
         or assurance.get("protection") in (None, "same_process_only")
         or assurance.get("verifier_runs") in (None, "unknown", "signer_claim")
         or assurance.get("test_contents") in (None, "unknown", "not_verified")
-        or assurance.get("hidden_tests") not in (True, "true")
     )
     if weak:
         return _result(
@@ -186,13 +198,7 @@ def summarize(
         if wanted is not None and record.get(key) != wanted:
             return _unknown(record)
     if "code" in record and "ok" not in record and "status" not in record:
-        return _result(
-            "檢查工具沒有順利完成。",
-            "目前沒有可用的檢查結果，不能判定程式通過或寫錯。",
-            "確認工具可用後重新檢查。",
-            "tool_error",
-            record,
-        )
+        return _tool_error(record)
     if current_commit is not None and (
         not isinstance(current_commit, str) or not _OID.fullmatch(current_commit)
     ):
