@@ -169,7 +169,11 @@ def test_the_binding_names_exactly_the_conftests_among_the_test_paths():
     assert not bx.policy_problem({"allow_conftest": True})
 
 
-@pytest.mark.parametrize("bad", [[["tests/conftest.py"]], [1, "tests/conftest.py"], [None]])
+WRONG_TYPES = [[["tests/conftest.py"]], [1, "tests/conftest.py"], [["a"], "b/conftest.py"],
+               [1, "b/conftest.py"], [None]]  # fmt: skip
+
+
+@pytest.mark.parametrize("bad", WRONG_TYPES)
 def test_a_conftest_list_of_the_wrong_type_is_a_shape_problem_not_an_exception(bad):
     binding = {"test_paths": ["tests/conftest.py"], "conftest_paths": bad}
     assert "conftest_paths" in bx.binding_problem(binding)
