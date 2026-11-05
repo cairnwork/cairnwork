@@ -18,25 +18,30 @@ _PLUGIN_FIXTURES = {
 
 
 def _import_error(node, call, report):
-    # #796: "cannot import name X from <module>" in a test module's own import statement. Reads
-    # only the exception (no import: that would run repo code); any error records nothing.
+    # #796: "cannot import name X from <module>" in a test module's own import statement. The
+    # exception is the test's own object: read only values that are exactly str (str(exc) or
+    # os.fspath would run its code), before anything else; any error at all records nothing.
     try:
         exc = call.excinfo.value.__cause__
         if not (isinstance(node, pytest.Module) and report.when == "collect"
                 and type(exc) is ImportError):
             return None
-        text, tb, last = str(exc), exc.__traceback__, ""
+        args, name, path = exc.args, exc.name, exc.path
+        if not (type(name) is str and type(path) is str and type(args) is tuple
+                and len(args) == 1 and type(args[0]) is str):
+            return None
+        text, tb, last = args[0], exc.__traceback__, ""
         while tb is not None:  # the innermost frame that is not the import machinery
-            name = tb.tb_frame.f_code.co_filename
-            last = last if name.startswith("<frozen importlib") else name
+            file = tb.tb_frame.f_code.co_filename
+            last = last if file.startswith("<frozen importlib") else file
             tb = tb.tb_next
         real = os.path.realpath
-        origin = os.path.relpath(real(exc.path), real(node.config.rootpath))
+        origin = os.path.relpath(real(path), real(node.config.rootpath))
         if ("cannot import name" in text and "partially initialized" not in text
-                and isinstance(exc.name, str) and real(last) == real(str(node.path))
+                and real(last) == real(str(node.path))
                 and not origin.startswith("..") and not os.path.isabs(origin)):
-            return {"node": node.nodeid, "module": exc.name, "origin": origin}
-    except Exception:
+            return {"node": node.nodeid, "module": name, "origin": origin}
+    except BaseException:
         return None
     return None
 """

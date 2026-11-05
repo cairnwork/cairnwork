@@ -122,6 +122,12 @@ ODD = {
     "name is not a string": "raise ImportError('cannot import name x', name=3, path='/x/y.py')",
     "a subclass": "raise ModuleNotFoundError('cannot import name x', name='pkg', path='/x/y.py')",
     "not an import error": "raise ValueError('cannot import name x')",
+    "str raising SystemExit": ("class E(ImportError):\n    pass\n"
+        "class S(str):\n    def __str__(self):\n        raise SystemExit(5)\n"
+        "raise ImportError(S('cannot import name x'), name='pkg', path='/x/y.py')"),
+    "fspath raising KeyboardInterrupt": ("class P:\n    def __fspath__(self):\n"
+        "        raise KeyboardInterrupt\n    def __str__(self):\n        raise KeyboardInterrupt\n"
+        "raise ImportError('cannot import name x', name='pkg', path=P())"),
     "an odd sys.modules entry": ("import sys, types\nsys.modules['pkg'] = types.ModuleType('pkg')\n"
                                  "raise ImportError('cannot import name x', name='pkg', path='')"),
 }  # fmt: skip
