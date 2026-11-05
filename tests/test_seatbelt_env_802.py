@@ -22,6 +22,7 @@ from cairnwork_sandbox import seatbelt
 
 mac_only = pytest.mark.skipif(sys.platform != "darwin", reason="needs macOS sandbox-exec")
 TZ_DATA = Path(seatbelt.TIMEZONE_DATA)
+READ_ROOTS = tuple(Path(p) for p in seatbelt.SYSTEM_READ_SUBPATHS)
 
 
 def _verify(repo, tmp_path, code):
@@ -45,15 +46,35 @@ def test_the_new_rules_are_realpaths_and_narrow():
     assert '(subpath "/private/var/db")' not in text and '(subpath "/private/etc")' not in text
 
 
-@mac_only
-def test_no_link_in_the_time_zone_data_leaves_it():
-    if not TZ_DATA.is_dir():
-        pytest.skip(f"{TZ_DATA} missing: macOS moved its time zone data; update seatbelt.py")
-    for root, dirs, files in os.walk(TZ_DATA):
+def _links_out_of(tree, roots):
+    """Links under tree whose real target is under none of roots."""
+    out = []
+    for root, dirs, files in os.walk(tree):
         for name in (*dirs, *files):
             path = Path(root, name)
-            if path.is_symlink():
-                assert Path(os.path.realpath(path)).is_relative_to(TZ_DATA), path
+            target = Path(os.path.realpath(path))
+            if path.is_symlink() and not any(target.is_relative_to(r) for r in roots):
+                out.append((path, target))
+    return out
+
+
+@mac_only
+def test_no_link_in_the_time_zone_data_leaves_the_read_roots():
+    # Some runner images link zoneinfo to /usr/share/zoneinfo.default (#886): fine while the
+    # target stays under a root the policy can read.
+    if not TZ_DATA.is_dir():
+        pytest.skip(f"{TZ_DATA} missing: macOS moved its time zone data; update seatbelt.py")
+    assert _links_out_of(TZ_DATA, READ_ROOTS) == []
+
+
+def test_the_link_check_flags_a_target_outside_every_root(tmp_path):
+    tree, inside, outside = tmp_path / "tz", tmp_path / "share", tmp_path / "etc"
+    for d in (tree, inside, outside):
+        d.mkdir()
+    (tree / "zoneinfo").symlink_to(inside)
+    (tree / "hosts").symlink_to(outside)
+    roots = (tree.resolve(), inside.resolve())
+    assert _links_out_of(tree, roots) == [(tree / "hosts", outside.resolve())]
 
 
 def _host_tzname():
@@ -77,6 +98,16 @@ def test_time_zone_data_is_readable(repo, tmp_path):
         "    time.tzset()\n"
         "    assert time.localtime().tm_zone == 'CST' and time.timezone == -8 * 3600\n"
     )
+    _passed(_verify(repo, tmp_path, code))
+
+
+@mac_only
+@pytest.mark.sandbox
+def test_the_zoneinfo_default_link_target_is_readable(repo, tmp_path):
+    target = Path("/usr/share/zoneinfo.default/America/New_York")  # a runner's zoneinfo (#886)
+    if not target.is_file():
+        pytest.skip(f"{target} missing on this host")
+    code = f"def test_read():\n    assert open({str(target)!r}, 'rb').read(4) == b'TZif'\n"
     _passed(_verify(repo, tmp_path, code))
 
 
