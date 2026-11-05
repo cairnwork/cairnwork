@@ -28,6 +28,8 @@ def test_a_huge_added_file_is_refused_by_the_budget_and_fast(tmp_path):
     repo = tmp_path / "r"
     repo.mkdir()
     git(repo, "init", "-q", "-b", "main")
+    git(repo, "config", "user.email", "test@example.invalid")  # CI has no global identity
+    git(repo, "config", "user.name", "test")
     commit_change(repo, {"src/a.py": "X = 1\n"})
     base = git(repo, "rev-parse", "HEAD")
     sha = commit_change(repo, {"src/a.py": "X = [" + "0," * 1_500_000 + "]\n"})
