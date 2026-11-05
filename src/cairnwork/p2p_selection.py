@@ -26,7 +26,18 @@ Modes (state config ``p2p_selection``):
 
 from __future__ import annotations
 
+import re
+from collections.abc import Callable
+from pathlib import Path
 from posixpath import basename, dirname, splitext
+
+from cairnwork.gitcmd import GitCommandError
+from cairnwork.pytest_config import (
+    DEFAULT_PYTHON_FILES,
+    PytestConfigError,
+    configured_python_files,
+    test_file_rule,
+)
 
 MODES = ("off", "whole-suite", "module-dir")
 DEFAULT_MODE = "whole-suite"  # Intake (cairnwork-route, issue runner)
@@ -37,8 +48,40 @@ MODULE_DIR_CAP = 25  # test files a module-dir directory may bring in whole (#33
 VERIFIER_IDS = tuple(f"p2p-{mode}" for mode in MODES if mode != "off")
 
 
+def name_rule(repo: Path, base_commit: str | None) -> Callable[[str], bool] | None:
+    """The base's python_files rule for the name match (#870). None, the exact default names that
+    main matches, when the base sets no python_files or just pytest's default (so the default
+    selection is unchanged), or when its config is unreadable: p2p._base_tests has already
+    refused such a base before this runs."""
+    try:
+        if set(configured_python_files(repo, base_commit)) <= set(DEFAULT_PYTHON_FILES):
+            return None
+        return test_file_rule(repo, base_commit)
+    except (GitCommandError, PytestConfigError):
+        return None
+
+
 def _under_root(path: str, roots: tuple[str, ...]) -> bool:
     return any(path == r or path.startswith(f"{r}/") for r in roots)
+
+
+def _exact(test: str, stem: str) -> bool:
+    return basename(test) in {f"test_{stem}.py", f"{stem}_test.py"}
+
+
+def _by_rule(test: str, stem: str, is_test: Callable[[str], bool] | None) -> bool:
+    """A file the base's python_files rule accepts that holds the stem as a name part (#870)."""
+    if is_test is None:
+        return False
+    part = rf"(?:^|[-_.]){re.escape(stem)}(?:[-_.]|$)"
+    return is_test(test) and bool(re.search(part, splitext(basename(test))[0]))
+
+
+def _named(test: str, stem: str, is_test: Callable[[str], bool] | None) -> bool:
+    """A test file named after a changed file's ``stem``. The exact names main matches always
+    count; the python_files rule only adds to them, so a selection is never smaller than
+    main's (#877)."""
+    return _exact(test, stem) or _by_rule(test, stem, is_test)
 
 
 def _mirror_subpath(changed_dir: str) -> str:
@@ -55,9 +98,12 @@ def select_p2p_targets(
     existing_tests: tuple[str, ...],
     test_roots: tuple[str, ...],
     mode: str = DEFAULT_MODE,
+    is_test: Callable[[str], bool] | None = None,
 ) -> tuple[str, ...]:
     """Existing test files to consider as P2P candidates (sorted, de-duplicated). Paths are
     repo-relative POSIX; ``existing_tests`` are the test files on the base under ``test_roots``.
+    ``is_test`` is the base's ``python_files`` rule (pytest_config.test_file_rule); a test then
+    names a change when it matches it and holds the changed file's stem as a name part (#870).
     Raises ValueError on an unknown mode."""
     if mode not in MODES:
         raise ValueError(f"unknown p2p_selection mode {mode!r}; one of {MODES}")
@@ -66,11 +112,14 @@ def select_p2p_targets(
     tests = frozenset(existing_tests)
     if mode == "whole-suite":
         return tuple(sorted(tests))
-    return tuple(sorted(_module_dir(changed_files, tests, test_roots)[0]))
+    return tuple(sorted(_module_dir(changed_files, tests, test_roots, is_test)[0]))
 
 
 def _module_dir(
-    changed_files: tuple[str, ...], tests: frozenset[str], test_roots: tuple[str, ...]
+    changed_files: tuple[str, ...],
+    tests: frozenset[str],
+    test_roots: tuple[str, ...],
+    is_test: Callable[[str], bool] | None = None,
 ) -> tuple[set[str], set[str]]:
     """(selected test files, directories cut to the files named after a change)."""
     size: dict[str, int] = {}
@@ -85,12 +134,14 @@ def _module_dir(
         tail = _mirror_subpath(dirname(changed))
         mirror = {f"{r}/{tail}" for r in test_roots} if tail else set()
         stem = splitext(basename(changed))[0]
-        names = {f"test_{stem}.py", f"{stem}_test.py"}
-        hit = {dirname(t) for t in tests if dirname(t) in mirror or basename(t) in names}
-        for d in hit or root_level:
+        base_hit = {dirname(t) for t in tests if dirname(t) in mirror or _exact(t, stem)}
+        rule_hit = {dirname(t) for t in tests if _by_rule(t, stem, is_test)}
+        for d in (base_hit or root_level) | rule_hit:
             whole = size[d] <= MODULE_DIR_CAP
             cut |= set() if whole else {d}
-            selected |= {t for t in tests if dirname(t) == d and (whole or basename(t) in names)}
+            selected |= {
+                t for t in tests if dirname(t) == d and (whole or _named(t, stem, is_test))
+            }
     return selected, cut
 
 
@@ -99,11 +150,12 @@ def cap_note(
     existing_tests: tuple[str, ...],
     test_roots: tuple[str, ...],
     mode: str,
+    is_test: Callable[[str], bool] | None = None,
 ) -> dict:
     """What the P2P rule adds when module-dir cut a directory (#333); {} when nothing was cut."""
     if mode != "module-dir":
         return {}
-    cut = _module_dir(changed_files, frozenset(existing_tests), test_roots)[1]
+    cut = _module_dir(changed_files, frozenset(existing_tests), test_roots, is_test)[1]
     return {"capped_dirs": sorted(cut), "cap": MODULE_DIR_CAP} if cut else {}
 
 

@@ -67,9 +67,10 @@ from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.issue_task import test_target
 from cairnwork.p2p_collect import OVER_BUDGET, collected_side, no_targets, whole_base
 from cairnwork.p2p_conftest import check_overlay, conftest_files
+from cairnwork.p2p_nodes import clean as _clean
 from cairnwork.p2p_nodes import passing_targets, require_nodes
 from cairnwork.p2p_probe_log import probe_log_tail
-from cairnwork.p2p_selection import DEFAULT_BUDGET_SECONDS, cap_note, select_p2p_targets
+from cairnwork.p2p_selection import DEFAULT_BUDGET_SECONDS, cap_note, name_rule, select_p2p_targets
 from cairnwork.pytest_config import PytestConfigError, test_file_rule
 from cairnwork.verifiers import VerifierRun, VerifierSpec, run_verifiers
 from cairnwork.verify_context import VerifyContext
@@ -155,11 +156,12 @@ def plan_p2p(task, specs, test_files, mode, budget, result, ctx: VerifyContext) 
         return P2PPlan(rule, None, budget)
     existing = _base_tests(task, frozenset(deleted_of(test_files)))  # #361; #798: not deleted ones
     tried: tuple[str, ...] | None = None
+    is_test = name_rule(task.repo, task.base_commit)  # #870
     for applied in (mode, "module-dir") if mode == "whole-suite" else (mode,):
-        files = select_p2p_targets(task.allowed_files, existing, task.test_roots, applied)
+        files = select_p2p_targets(task.allowed_files, existing, task.test_roots, applied, is_test)
         files = tuple(sorted({*files, *forced}))  # #798: the files a test commit's conftest governs
         rule |= {"applied": applied, "selected_files": len(files)}
-        rule |= cap_note(task.allowed_files, existing, task.test_roots, applied)  # #333
+        rule |= cap_note(task.allowed_files, existing, task.test_roots, applied, is_test)  # #333
         if not files and rule["degraded"]:  # #117 F1: a failed probe is not "nothing to run"
             raise _unusable(rule, "no module-dir test to fall back on")
         if not files and existing:  # #793 Step 3: the whole base, or UNCOMPARABLE, never silent
@@ -237,11 +239,6 @@ def _checked(plan, note, task, judged, result, ctx: VerifyContext, tag):
     return run, {"missing": [_clean(n) for n in missing[:50]]} if missing else {}
 
 
-def _clean(name: str) -> str:
-    """A test id for the record: printable, bounded."""
-    return "".join(c if c.isprintable() else "?" for c in str(name))[:200]
-
-
 def _run_once(spec, plan, note, task, judged, result, ctx: VerifyContext, tag) -> VerifierRun:
     run_id = f"{result.attempt_id}-{tag}"
     (run,) = run_verifiers(ctx, judged, (spec,), run_id, timeout=plan.timeout, note=note)
@@ -275,7 +272,8 @@ def base_env_check(task, result, ctx: VerifyContext, *, without_tests=False, key
         existing = _base_tests(task, frozenset())
     except P2PRejected as exc:
         raise _env_failed(str(exc)) from exc
-    files = select_p2p_targets(task.allowed_files, existing, task.test_roots, "module-dir")
+    rule = name_rule(task.repo, task.base_commit)
+    files = select_p2p_targets(task.allowed_files, existing, task.test_roots, "module-dir", rule)
     if not files:  # nothing to probe now; the steps after the worker decide, as before
         return
     python = ctx.python or getattr(ctx.account, "python", None) or sys.executable

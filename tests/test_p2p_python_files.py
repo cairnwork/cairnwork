@@ -9,6 +9,7 @@ from conftest import commit_change
 from test_p2p import FIX_BREAKS_NEG, SIBLING, configured_project, run
 
 from cairnwork.p2p import P2PRejected, _base_tests
+from cairnwork.p2p_selection import select_p2p_targets
 from cairnwork.pytest_config import _file_matches
 from cairnwork.pytest_config import test_file_rule as base_file_rule
 
@@ -66,3 +67,26 @@ def test_an_unreadable_base_config_refuses_the_base_test_listing(repo):
     with pytest.raises(P2PRejected) as got:
         _base_tests(task, frozenset())
     assert got.value.code == "P2P_BASE_UNREADABLE" and "not a regular file" in str(got.value)
+
+
+# #870: the name match of module-dir follows the base's python_files too
+NESTED = ("tests/sub/check_calc.py", "tests/sub/check_other.py")
+
+
+def test_a_custom_python_files_name_selects_the_test_of_a_changed_file(repo):
+    ini = "[pytest]\npython_files = check_*.py\n"
+    base = commit_change(repo, {"pytest.ini": ini, **{p: SIBLING for p in NESTED}})
+    changed, roots = ("src/calc.py",), ("tests",)
+    # what main does (no rule): check_calc.py is not "test_calc.py", nothing is picked
+    assert select_p2p_targets(changed, NESTED, roots, "module-dir") == ()
+    rule = base_file_rule(repo, base)
+    assert select_p2p_targets(changed, NESTED, roots, "module-dir", rule) == NESTED
+
+
+def test_without_a_python_files_setting_the_default_names_apply(repo):
+    base = commit_change(repo, {"pytest.ini": "[pytest]\n", **{p: SIBLING for p in NESTED}})
+    rule = base_file_rule(repo, base)
+    assert select_p2p_targets(("src/calc.py",), NESTED, ("tests",), "module-dir", rule) == ()
+    suite = ("tests/sub/test_calc.py", "tests/sub/test_other.py")
+    out = select_p2p_targets(("src/calc.py",), suite, ("tests",), "module-dir", rule)
+    assert out == suite

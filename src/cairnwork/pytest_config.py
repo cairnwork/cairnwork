@@ -181,12 +181,20 @@ def base_settings(repo: Path, base_commit: str | None) -> PytestSettings:
     return PytestSettings()
 
 
+DEFAULT_PYTHON_FILES = ("test_*.py", "*_test.py")
+
+
+def configured_python_files(repo: Path, base_commit: str | None) -> tuple[str, ...]:
+    """The base's own ``python_files`` patterns; empty when it sets none (#870)."""
+    configured = _render(dict(base_settings(repo, base_commit).values).get("python_files"))
+    return tuple(_words(configured))
+
+
 def test_file_rule(repo: Path, base_commit: str | None) -> Callable[[str], bool]:
     """Whether a path matches the base's ``python_files``, the patterns the verifier's ini carries,
     as pytest matches them (#793); pytest's default, test_*.py and *_test.py, when it sets none."""
-    configured = _render(dict(base_settings(repo, base_commit).values).get("python_files"))
-    default = ("test_*.py", "*_test.py")
-    patterns = tuple(_words(configured)) or default  # one line per item, split
+    default = DEFAULT_PYTHON_FILES
+    patterns = configured_python_files(repo, base_commit) or default  # one line per item, split
     if any("/" in p for p in patterns):  # its match can depend on where the checkout sits:
         patterns = (*patterns, *default)  # never select fewer files than the default (fail closed)
     return lambda path: any(_file_matches(p, path) for p in patterns)
