@@ -74,6 +74,7 @@ WAIT_SECONDS = 10.0  # for the header and for each canary's line
 SETTLE_SECONDS = 1.0  # after the closing canary's line: lines still in flight
 MAX_STREAM_BYTES = 32 << 20  # over it the stream is stopped: UNAVAILABLE (#859 review)
 POLL_SECONDS = 0.2  # how often the size guard looks at the stream file
+JOIN_SECONDS = 5.0  # how long the size guard gets to finish its last check
 CANARY = (
     "import os, socket, sys\n"
     "print(os.getpid(), flush=True)\n"
@@ -231,7 +232,9 @@ def _halt(guard: _SizeGuard | None, proc, window: Window) -> None:
     """Stop the guard, then the stream; never raises (a failure is the window's problem)."""
     if guard is not None:
         guard.done.set()
-        _guarded(window, "the size guard did not stop", guard.join, 5)
+        _guarded(window, "the size guard did not stop", guard.join, JOIN_SECONDS)
+        if guard.is_alive():  # #868: a stat still running: its check is not done, so no CLEAN
+            window.problem = window.problem or "the size guard did not stop"
     _guarded(window, "the stream did not stop", _stop, proc)
 
 

@@ -347,3 +347,23 @@ def test_lines_split_only_at_newline_so_unicode_separators_stay_inside_a_path():
     raw = {"timestamp": "2026-11-05 08:00:00.000001+0800", "eventMessage": f"{message}\n{TAG}"}
     evidence = judge(stream(json.dumps(raw, ensure_ascii=False) + "\n"), window())
     assert evidence == Evidence("DENIED", "file-read-data /a?b?c", 3, 2)  # shown cleaned
+
+
+def test_a_size_guard_still_checking_after_its_join_is_unavailable(monkeypatch, tmp_path):
+    entered, release = deny_channel.threading.Event(), deny_channel.threading.Event()
+
+    def slow(path):  # a stat that hangs (#868)
+        entered.set()
+        release.wait(5)
+        return ""
+
+    monkeypatch.setattr(deny_channel, "_over", slow)
+    monkeypatch.setattr(deny_channel, "POLL_SECONDS", 0.001)
+    monkeypatch.setattr(deny_channel, "JOIN_SECONDS", 0.05)
+    window = Window(TAG)
+    guard = deny_channel._SizeGuard(tmp_path / "s.ndjson", _Proc(), window)
+    assert entered.wait(5)
+    deny_channel._halt(guard, _Proc(), window)
+    release.set()
+    guard.join(timeout=5)
+    assert window.problem == "the size guard did not stop"
