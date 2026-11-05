@@ -81,9 +81,9 @@ from cairnwork.reasons import why_not_passed
 from cairnwork.run_scrub import close_private
 from cairnwork.verifier_account import lock_wait_seconds
 from cairnwork.verifier_exec import (  # low-level run primitives, split out for the 400-line cap
-    _execute,
     _file_sha256,
     _record_digest,
+    _run_confined,
     _write_new,
 )
 from cairnwork.verifier_spec import (  # re-exported for existing importers
@@ -140,6 +140,7 @@ class VerifierRun:
     collected: tuple[str, ...] = ()  # #793: node ids pytest collected (the guard's record)
     collect_skipped: tuple[str, ...] = ()  # #793: collectors skipped while collecting
     collection_finished: bool = False  # #793: collection was not stopped part way
+    deny_evidence: str = ""  # #797 step 1: a base run's deny channel (deny_channel.py); not hashed
 
 
 def run_verifiers(
@@ -150,6 +151,7 @@ def run_verifiers(
     *,
     timeout: int = DEFAULT_TIMEOUT_SECONDS,
     note: str = "",
+    deny: bool = False,
 ) -> tuple[VerifierRun, ...]:
     """Run each spec on a fresh checkout of candidate_commit; a failing test is not an error.
 
@@ -159,7 +161,8 @@ def run_verifiers(
     time. With a base commit, pytest settings come from that commit (pytest_config.py).
     ``import_paths`` (operator state config, #82) are checkout-relative dirs prepended to the
     verifier's import path so a src-layout project can import its own package. A non-empty note
-    (the P2P selection rule, p2p.py) is bound into each observation's artifact hash.
+    (the P2P selection rule, p2p.py) is bound into each observation's artifact hash. ``deny``
+    records each run's sandbox denials (a base run: deny_channel.py); it changes no verdict.
     """
     settings = pytest_config.verifier_settings(ctx.repo, ctx.base_commit, ctx.import_paths)
     if settings.pythonpath:
@@ -170,10 +173,11 @@ def run_verifiers(
         ctx = replace(ctx, run_root=account.run_root)
         # a prelude refusal is AccountUnusableBeforeRun (#803)
         with locked_prelude(account, python, lock_wait_seconds(len(specs), timeout)):
-            batch = _Batch(ctx, python, candidate_commit, timeout, settings, note)
+            batch = _Batch(ctx, python, candidate_commit, timeout, settings, note, deny)
             return _run_all(batch, specs, run_id)
     python = verifier_interpreter(ctx)
-    return _run_all(_Batch(ctx, python, candidate_commit, timeout, settings, note), specs, run_id)
+    batch = _Batch(ctx, python, candidate_commit, timeout, settings, note, deny)
+    return _run_all(batch, specs, run_id)
 
 
 @dataclass(frozen=True)
@@ -188,6 +192,7 @@ class _Batch:
     timeout: int
     settings: pytest_config.PytestSettings
     note: str
+    deny: bool = False
 
 
 def _run_all(batch: _Batch, specs, run_id) -> tuple[VerifierRun, ...]:
@@ -304,7 +309,7 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
         *(("--collect-only",) if spec.collect_only else ()),  # #793: collect_reader.py
     ]  # fmt: skip
     before = os.lstat(checkout)
-    profile = None
+    profile, evidence = None, None
     backend = cairnwork_sandbox.select()
     if backend is not None:
         profile = backend.policy(
@@ -312,11 +317,10 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
             write_roots=(checkout.parent, run_dir),
             mask_home_credentials=account is None,  # account uid can't enter the owner's home
         )
-        _write_new(profile_path, profile.text.encode())
-        fds = channel.pass_fds if channel else ()
-        returncode, timed_out, survivors = _execute(
-            argv, profile_path, checkout, env, timeout, log_path, account, backend, fds
-        )
+        profile, returncode, timed_out, survivors, evidence = _run_confined(
+            batch.deny, profile, python, argv, profile_path, checkout, env, timeout, log_path,
+            account, backend, channel.pass_fds if channel else (),
+        )  # fmt: skip
     else:
         _write_new(log_path, b"no sandbox backend available: verifier not executed\n")
         returncode, timed_out, survivors = None, False, 0
@@ -364,4 +368,5 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
         teardown_errors=verdict.teardown_errors, fail_kind=verdict.fail_kind, log_too_big=too_big,
         collected=verdict.collected, collect_skipped=verdict.collect_skipped,
         collection_finished=verdict.collection_finished, skipped_deps=verdict.skipped_deps,
+        deny_evidence=str(evidence) if evidence else "",
     )  # fmt: skip
