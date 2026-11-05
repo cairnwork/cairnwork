@@ -202,12 +202,14 @@ def _delete_commit(repo: Path, count: int) -> tuple[str, str]:
     """A test commit on the base that deletes ``count`` test files and adds one (real git)."""
     from conftest import commit_change, git
 
-    commit_change(repo, {f"tests/old{n}.py": "def test_x():\n    pass\n" for n in range(count)})
+    commit_change(
+        repo, {f"tests/old{count}_{n}.py": "def test_x():\n    pass\n" for n in range(count)}
+    )
     base = git(repo, "rev-parse", "HEAD")
     test_commit = commit_change(
         repo,
         {"tests/test_new.py": "def test_y():\n    assert False\n"},
-        delete=[f"tests/old{n}.py" for n in range(count)],
+        delete=[f"tests/old{count}_{n}.py" for n in range(count)],
         message="tests",
     )
     return base, test_commit
