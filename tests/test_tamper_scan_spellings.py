@@ -140,10 +140,7 @@ def test_a_hook_bound_in_a_test_helper_file_is_found(source):
 
 
 OWN_PLUGIN_MARKERS = [  # a project's own pluggy plugins: its marker and hooks are not pytest's
-    "import pluggy\nhookimpl = pluggy.HookimplMarker('myproj')",
-    "from pluggy import HookimplMarker\nmyproj_hookimpl = HookimplMarker(project_name='myproj')",
     "@myproj_hookimpl\ndef myproj_startup(app):\n    pass",
-    "import myproj\n@myproj.hookimpl\ndef register_commands(cli):\n    pass",
     "from myproj import hookimpl\n@hookimpl(tryfirst=True)\ndef startup(app):\n    pass",
     'def test_startup():\n    """The plugin marks startup with hookimpl."""',
     "x = 1  # registered through hookimpl",
@@ -154,6 +151,19 @@ OWN_PLUGIN_MARKERS = [  # a project's own pluggy plugins: its marker and hooks a
 def test_a_projects_own_plugin_marker_in_a_test_file_passes(source):
     compile(source, "test_calc.py", "exec")
     assert _rules(source, TEST) == set()
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "import pluggy\nhookimpl = pluggy.HookimplMarker('myproj')",
+        "from pluggy import HookimplMarker\nmark = HookimplMarker(project_name='myproj')",
+        "import myproj\n@myproj.hookimpl\ndef register_commands(cli):\n    pass",
+    ],
+)
+def test_since_821_a_pluggy_import_or_a_dotted_hookimpl_is_refused_in_any_file(source):
+    """Accepted false block: a project's own pluggy plugin looks like pytest's (#821, L1)."""
+    assert _rules(source, TEST) and _rules(source, LIBRARY)
 
 
 # Main's reading of alias spellings (call brackets kept as written) and what it refuses there.
@@ -227,7 +237,7 @@ HONEST = [
 def test_nearby_honest_lines_still_pass(source, path):
     compile(source, "calc.py", "exec")
     assert _rules(source, path) - {"pytest_internals"} == set()
-    if path == LIBRARY:
+    if path == LIBRARY and "_pytest" not in source:  # a _pytest name is refused everywhere (#821)
         assert _rules(source, path) == set()
 
 

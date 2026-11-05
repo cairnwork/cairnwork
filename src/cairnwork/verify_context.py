@@ -8,6 +8,7 @@ from the task the runs are for.
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -29,3 +30,14 @@ class VerifyContext:
         return cls(
             task.repo, run_root, attempt_id, account, python, task.base_commit, task.import_paths
         )
+
+
+def verifier_interpreter(ctx: VerifyContext) -> str:
+    """The Python the verifier runs: ``ctx.python``, else the account's, else this process's.
+
+    One expression for every reader (verifiers.run_verifiers, the tamper scan's parse of the
+    files the verifier will import), so what is scanned is read by the interpreter that imports it.
+    """
+    if ctx.python:
+        return ctx.python
+    return ctx.account.python if ctx.account is not None else sys.executable

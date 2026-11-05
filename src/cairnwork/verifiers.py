@@ -60,7 +60,6 @@ from __future__ import annotations
 import hashlib
 import os
 import secrets
-import sys
 import tempfile
 from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
@@ -93,7 +92,7 @@ from cairnwork.verifier_spec import (  # re-exported for existing importers
     parse_verifier,
     protected_verifier_inputs,
 )
-from cairnwork.verify_context import VerifyContext
+from cairnwork.verify_context import VerifyContext, verifier_interpreter
 from cairnwork.workspace import create_attempt_clone, unless_interrupted
 
 __all__ = [
@@ -167,12 +166,13 @@ def run_verifiers(
         require_plain_dirs(ctx.repo, candidate_commit, settings.pythonpath)
     account = ctx.account
     if account is not None:
-        ctx, python = replace(ctx, run_root=account.run_root), ctx.python or account.python
+        python = verifier_interpreter(ctx)
+        ctx = replace(ctx, run_root=account.run_root)
         # a prelude refusal is AccountUnusableBeforeRun (#803)
         with locked_prelude(account, python, lock_wait_seconds(len(specs), timeout)):
             batch = _Batch(ctx, python, candidate_commit, timeout, settings, note)
             return _run_all(batch, specs, run_id)
-    python = ctx.python or sys.executable
+    python = verifier_interpreter(ctx)
     return _run_all(_Batch(ctx, python, candidate_commit, timeout, settings, note), specs, run_id)
 
 
