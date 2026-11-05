@@ -69,12 +69,17 @@ def test_no_link_in_the_time_zone_data_leaves_the_read_roots():
 
 def test_the_link_check_flags_a_target_outside_every_root(tmp_path):
     tree, inside, outside = tmp_path / "tz", tmp_path / "share", tmp_path / "etc"
-    for d in (tree, inside, outside):
+    sibling = tmp_path / "share-not"  # shares a root's name as a string prefix, not as a path
+    for d in (tree, inside, outside, sibling):
         d.mkdir()
     (tree / "zoneinfo").symlink_to(inside)
     (tree / "hosts").symlink_to(outside)
+    (tree / "prefix").symlink_to(sibling)
     roots = (tree.resolve(), inside.resolve())
-    assert _links_out_of(tree, roots) == [(tree / "hosts", outside.resolve())]
+    assert sorted(_links_out_of(tree, roots)) == [
+        (tree / "hosts", outside.resolve()),
+        (tree / "prefix", sibling.resolve()),
+    ]
 
 
 def _host_tzname():
