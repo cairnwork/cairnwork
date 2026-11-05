@@ -27,7 +27,8 @@ LINE = re.compile(
 # another process's profile may also report allows: a line, not a denial. Tried only after LINE,
 # so a process name shaped like "x(1) allow(9)" cannot turn a deny line into an allow line.
 ALLOW = re.compile(
-    r"(?:(\d+) duplicate reports? for )?Sandbox: .+?\(\d+\) allow(?:\(\d+\))? .*", re.S
+    r"(?:(\d+) duplicate reports? for )?Sandbox: .+?\(\d+\) allow(?:\(\d+\))? (?!deny)\S+(?: .*)?",
+    re.S,
 )
 # (operation, exact target) every sandboxed Python start hits (step 0); human-reviewed, exact
 # paths only. Reads that can change behaviour (/private/etc/ssl, preferences) are never benign.

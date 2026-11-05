@@ -183,6 +183,9 @@ def test_another_process_s_allow_lines_count_toward_volume_and_are_never_a_denia
     # Codex #881 r1: a deny line whose process name looks like "x(1) allow(9)" stays a denial
     named = judge(stream(line("Sandbox: x(1) allow(9) deny(1) file-read-data /secret")), window())
     assert named == Evidence("DENIED", "file-read-data /secret", 3, 2)
+    # Codex #881 r2: a broken deny line (no count) is still unreadable, as on main, not an allow
+    broken = line("Sandbox: x(1) allow(9) deny /secret", tag="")
+    assert "unparseable" in judge(stream(broken), window()).detail
 
 
 def test_a_canary_that_raises_never_stops_the_run(monkeypatch):
