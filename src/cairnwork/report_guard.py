@@ -88,6 +88,7 @@ _PLUGIN_SOURCE = (
     '''\
 """Materialised by cairnwork.report_guard into each verifier run; edit it there."""
 
+import errno
 import json
 import os
 
@@ -130,6 +131,26 @@ def _source(item):
         return item.path.relative_to(item.config.rootpath).as_posix()
     except (AttributeError, TypeError, ValueError):
         return ""
+
+
+def _denied_inside(exc, _codes=(errno.EACCES, errno.EPERM, errno.EROFS, errno.ENETUNREACH)):
+    """#854: a denial-shaped OSError wrapped in a failure (group member, cause, unsuppressed
+    context); past the bound, yes (fail closed). Other wrapped OSErrors stay plain failures."""
+    todo, seen = [exc], set()
+    while todo:
+        if not isinstance(cur := todo.pop(), BaseException) or id(cur) in seen:
+            continue
+        if len(seen) >= 64:  # the bound: a 65th distinct exception, not an empty cause slot
+            return True
+        seen.add(id(cur))
+        if cur is not exc and isinstance(cur, OSError) and cur.errno in _codes:
+            return True
+        members = getattr(cur, "exceptions", None)  # BaseExceptionGroup, or the backport's
+        todo.extend(members if isinstance(members, tuple) else ())
+        todo.append(cur.__cause__)
+        if not cur.__suppress_context__:
+            todo.append(cur.__context__)
+    return False
 
 
 def _missing(report):  # #813: the module a skip at collection says it could not import
@@ -211,14 +232,15 @@ class _Reporter:
 
     @pytest.hookimpl(wrapper=True, tryfirst=True)
     def pytest_runtest_makereport(self, item, call, _original=_original, _keep_worst=_keep_worst,
-                                  _fixtures=_PLUGIN_FIXTURES):
+                                  _fixtures=_PLUGIN_FIXTURES, _denied_inside=_denied_inside):
         report = yield  # outermost: the report as every other hook left it
         nodeid, _ = _original(self, item, report.nodeid)
         if report.when == "call":  # #570: one per sub-test, then the test's own
             _keep_worst(self, nodeid, report.outcome)
             if report.failed:  # #775: an OSError says "environment", never a plain test failure
                 info = call.excinfo
-                oserr = info is not None and info.errisinstance(OSError)
+                oserr = info is not None and (info.errisinstance(OSError)
+                                              or _denied_inside(info.value))
                 self._env_ok[nodeid] = self._env_ok.get(nodeid, True) and oserr
         elif report.when == "setup" and report.outcome in ("skipped", "failed"):
             _keep_worst(self, nodeid, report.outcome)

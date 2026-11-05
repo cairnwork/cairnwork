@@ -1,4 +1,5 @@
 import subprocess
+import sys
 
 import pytest
 from conftest import git
@@ -44,7 +45,7 @@ def test_restriction_keeps_base_history_and_allows_fetch_back(repo, tmp_path):
     git(clone, "add", "-A")
     git(clone, *WORKER, "commit", "-q", "-m", "candidate")
     attempt = Attempt("a1", base, clone, _guarded_refs(repo, "a1"))
-    cand = collect_candidate(repo, attempt, ("src/a.py",))
+    cand = collect_candidate(repo, attempt, ("src/a.py",), python=sys.executable)
     assert cand.paths == ("src/a.py",)
 
 

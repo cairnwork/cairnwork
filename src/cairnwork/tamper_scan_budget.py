@@ -33,6 +33,7 @@ SCAN_BUDGET = "scan_budget"
 MAX_ALIASES = 64  # names in one alias table of a file, all kinds; honest code binds a handful
 MAX_READ = 1 << 21  # characters read per patch, every reading counted
 MAX_TOKENIZED = 1 << 24  # bytes of committed files tokenized per patch, long rows weighted
+SCAN_SECONDS = 30.0  # wall time of the verifier-interpreter parse (tamper_scan_plugin.py)
 ROW_COST = 64  # a row costs the tokenizer about this many bytes' worth even when empty (#690)
 Table = dict[str, set[str]]  # alias names by what they are bound to (sys, os, modules, pytest...)
 
@@ -40,8 +41,16 @@ Table = dict[str, set[str]]  # alias names by what they are bound to (sys, os, m
 class ScanBudget:
     """What is left of one patch's budget; ``over`` stays True once any limit is passed."""
 
-    def __init__(self, read: int = MAX_READ, tokenized: int = MAX_TOKENIZED) -> None:
+    def __init__(
+        self, read: int = MAX_READ, tokenized: int = MAX_TOKENIZED, seconds: float = SCAN_SECONDS
+    ) -> None:
         self.read_left, self.tokenized_left, self.over = read, tokenized, False
+        self.seconds_left = seconds
+
+    def spend_time(self, seconds: float, over: bool = False) -> None:
+        """Spend wall time of the verifier-interpreter parse; ``over`` when it was cut short."""
+        self.seconds_left -= seconds
+        self.over = self.over or over or self.seconds_left <= 0
 
     def read(self, texts: Iterable[str], aliases: Table | None = None) -> bool:
         """Spend ``texts`` (and check the ``aliases`` they are read with); False when over."""

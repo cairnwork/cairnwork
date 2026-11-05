@@ -5,50 +5,36 @@ report_guard.py), so it can in principle exit early, read the guard's hand-over,
 interpreter's objects, reach into pytest or redirect where bytecode is loaded from. This module
 refuses a patch whose added ``.py`` lines mention those APIs, before any candidate code runs.
 
-This raises the bar; it is not a boundary. It reads single added lines with regular
-expressions, so a name built from strings (``getattr(os, "_" + "exit")``, and likewise
-``getattr(pytest, "Test" + "Report")`` for the ``pytest_public_patch`` rule), a split line, a
-rebinding by assignment (``m = sys.modules``) or a non-``.py`` file that is imported later all
-pass: known residuals. Changes to the pytest classes listed in tamper_scan_pytest.py
-(``pytest_public_patch``) are refused in every file, library code included. An alias bound by an
-added import (``import os as o``, ``from sys import modules as m``, ``import pytest as p``)
-is followed on that line and the added lines after it (a name bound both to pytest or one of its
-classes and to ``sys.modules`` is read as each); an alias bound only in an unchanged
-(context) line, by a parenthesised import split over lines, a backslash continuation or
-``from sys import *`` is not seen. Text inside string literals is scanned like code, as for
-every rule (an aliased name in a string can be flagged). Which ``#`` starts a comment and which
-``;`` ends a statement is Python's own reading of the whole committed file (tamper_scan_tokens.py):
-each line is also scanned with every ``#`` and ``;`` inside a string literal masked, so one in a
-string, or a string opened on an earlier line, does not cut a statement short or hide one, and a
-foreign encoding declared on line 1 or 2 of the committed file is refused even when that line is
-unchanged. The diff is cut into lines only at a newline and file headers are read only between
-hunks, so no text inside an added line ends it early; a carriage return, which Python also reads as
-a line end, starts a new piece to scan. Python reads identifiers in NFKC form, so each piece is
-also matched with its identifier characters in that form (the rest as written), and a source
-encoding other than UTF-8 declared on an added line 1 or 2 is refused (``source_encoding``), as is
-an over-long added line, unread (``long_line``), and a patch past its scan budget, read no further
-(``scan_budget``, tamper_scan_budget.py). It catches the straightforward forms and the PoCs seen so
-far, and it fails closed with a dedicated reason so an operator can see why.
-The rule list is the one place to change; the alias and library checks reuse its names and
-allow-lists.
+This raises the bar; it is not a boundary. It reads single added lines with regular expressions, so
+a name built from strings (``getattr(os, "_" + "exit")``, and likewise ``getattr(pytest, "Test" +
+"Report")`` for the ``pytest_public_patch`` rule), a split line, a rebinding by assignment (``m =
+sys.modules``) or a non-``.py`` file that is imported later all pass: known residuals. Changes to
+the pytest classes listed in tamper_scan_pytest.py (``pytest_public_patch``) are refused in every
+file, library code included. An alias bound by an added import (``import os as o``, ``from sys
+import modules as m``, ``import pytest as p``) is followed on that line and the added lines after
+it; an alias bound only in an unchanged (context) line, by a parenthesised import split over lines,
+a backslash continuation or ``from sys import *`` is not seen. Text inside string literals is
+scanned like code, as for every rule (an aliased name in a string can be flagged). Which ``#``
+starts a comment and which ``;`` ends a statement is Python's own reading of the whole committed
+file (tamper_scan_tokens.py): each line is also scanned with every ``#`` and ``;`` inside a string
+literal masked, so one in a string, or a string opened on an earlier line, does not cut a statement
+short or hide one, and a foreign encoding declared on line 1 or 2 of the committed file is refused
+even when that line is unchanged. The diff is cut into lines as tamper_scan_diff.py says; a
+carriage return, which Python also reads as a line end, starts a new piece to scan. Python reads
+identifiers in NFKC form, so each piece is also matched with them in that form (nfkc_names), and a
+source encoding other than UTF-8 declared on line 1 or 2 is refused (``source_encoding``), as is an
+over-long added line, unread (``long_line``), and a patch past its scan budget (``scan_budget``,
+tamper_scan_budget.py); each fails closed with a dedicated reason.
 
 To keep honest code out of the net (#221): a line that starts with ``#`` and holds no code for
-Python (only a comment or plain string text) is skipped; the rules that only
-matter where pytest runs the candidate's test code (``sys.modules`` writes, ``_pytest`` internals,
-pytest hook implementations) apply in full only to test code (``conftest.py``, ``test_*.py``,
-``*_test.py`` and files under a ``tests``/``test``/``testing`` directory), so a library's own
-compatibility shims and pytest plugins pass; there, a literal stub of an unrelated module
-(``sys.modules["dep"] = MagicMock()``), ``sys.modules[__name__] = ...`` and a type-hint import of
-a public fixture class from ``_pytest`` are allowed. A library file that a conftest loads as a
-plugin runs inside pytest too, so there the most direct forgery steps are still refused: writing
-a literal sensitive key (``sys.modules["pytest"] = fake``) and importing ``_pytest``, also as a
-patch or monkeypatch target, which the call imports. A variable
-key (``sys.modules[spec.name] = mod``, as plugin loaders do), ``pluginmanager`` and hook
-implementations stay allowed in a library file: a known gap of this raised bar, as are literal
-key variants there (f-strings, implicit concatenation, ``update(pytest=...)``). The library
-``_pytest`` import rule also refuses a pytest plugin's own non-fixture type imports
-(``from _pytest.config import Config``): an accepted false-block cost, the same one test code
-already pays.
+Python (only a comment or plain string text) is skipped; the ``sys.modules`` write rule applies in
+full only to test code (``conftest.py``, ``test_*.py``, ``*_test.py`` and files under a
+``tests``/``test``/``testing`` directory): there a literal stub of an unrelated module
+(``sys.modules["dep"] = MagicMock()``) and ``sys.modules[__name__] = ...`` are allowed. In any other
+file a literal sensitive key (``sys.modules["pytest"] = fake``) is still refused; a variable key
+(``sys.modules[spec.name] = mod``) and literal key variants (``update(pytest=...)``) pass: a gap.
+Since #821 the pytest rules (``pytest_hook_impl``, ``pytest_internals``) reach every candidate
+``.py``, library files too; the rules added then and their false blocks: tamper_scan_plugin.py.
 """
 
 from __future__ import annotations
@@ -63,6 +49,14 @@ from cairnwork.gitcmd import OID, GitCommandError, run_git_bytes
 from cairnwork.tamper_scan_budget import SCAN_BUDGET, ScanBudget, Table
 from cairnwork.tamper_scan_budget import canonical as _canonical
 from cairnwork.tamper_scan_diff import MAX_LINE, added_lines
+from cairnwork.tamper_scan_plugin import (
+    CODE_FORGE,
+    DYNAMIC_LOADER,
+    OPTION_WRITE,
+    PYTEST_INTERNALS,
+    file_rules,
+    setattr_forge,
+)
 from cairnwork.tamper_scan_pytest import (
     PATCHED_INTERNALS,
     PYTEST_CLASSES,
@@ -149,13 +143,11 @@ RULES: tuple[Rule, ...] = (
         allow=_SYS_MODULES_STUB,
         tests_only=True,
     ),
-    _rule(
-        "pytest_internals",
-        r"\b_pytest\b|\bpluginmanager\b",
-        allow=PYTEST_HINT_IMPORT,
-        tests_only=True,
-    ),
-    _rule("pytest_hook_impl", PYTEST_HOOK_IMPL, skip_in_conftest=True, tests_only=True),
+    _rule("pytest_internals", PYTEST_INTERNALS, allow=PYTEST_HINT_IMPORT),
+    _rule("pytest_hook_impl", PYTEST_HOOK_IMPL, skip_in_conftest=True),
+    _rule("pytest_option_write", OPTION_WRITE),
+    _rule("code_object_forge", CODE_FORGE),
+    _rule("dynamic_loader", DYNAMIC_LOADER),
     _rule("guard_module", r"_cairnwork_report_guard"),
     _rule("fd_listing", r"/proc/(?:self|thread-self|\d+)/fd\b|/dev/fd\b"),
     # Setting sys.pycache_prefix at run time points imports and pytest's assertion rewriter at
@@ -232,7 +224,8 @@ def _imported_names(clause: str) -> list[tuple[str, str | None]]:
 def _hits(rule: Rule, text: str) -> bool:
     if rule.allow is not None and rule.allow.match(text):
         return False  # a whole line of an honest shape
-    return bool(rule.pattern.search(text))
+    forge = rule.name == "code_object_forge" and setattr_forge(text)
+    return forge or bool(rule.pattern.search(text))
 
 
 def _extra_rules(text: str, aliases: Table, in_tests: bool, budget: ScanBudget) -> list[str]:
@@ -262,7 +255,8 @@ class Finding:
     rule: str
 
     def __str__(self) -> str:
-        return f"{self.path}:{self.line} [{self.rule}]"
+        where = f"{self.path}:{self.line}" if self.line else self.path  # no line: a whole file
+        return f"{where} [{self.rule}]"
 
 
 def scan_added_lines(
@@ -303,18 +297,18 @@ def scan_added_lines(
             if _COMMENT_ONLY.match(piece) and view and view.skip and len(view.code) == len(piece):
                 continue  # a comment to Python, or string text with no code on the line
             # Main's reading, with its own alias table; a line main skips as a comment has none.
-            plain = () if _COMMENT_ONLY.match(piece) else (piece, _nfkc_names(piece))
+            plain = () if _COMMENT_ONLY.match(piece) else (piece, nfkc_names(piece))
             names = _rule_names(plain, aliases, masked_aliases, in_tests, in_conftest, budget)
             if code_aliases is not None and view is not None:  # aliases bound by code only
-                for text in dict.fromkeys((view.bound, _nfkc_names(view.bound))):
+                for text in dict.fromkeys((view.bound, nfkc_names(view.bound))):
                     _bind_aliases(text, code_aliases[0])  # the second also reads "import(":
                     _bind_aliases(text.replace("import(", "import ("), code_aliases[1])
-                both = dict.fromkeys((*plain, view.code, _nfkc_names(view.code)))
+                both = dict.fromkeys((*plain, view.code, nfkc_names(view.code)))
                 extra = (_extra_rules(t, a, in_tests, budget) for a in code_aliases for t in both)
                 names += [name for more in extra for name in more]
                 names = list(dict.fromkeys(names))
             code = piece if view is None else view.code  # "#", ";" in a string masked
-            masked = (code, _nfkc_names(code))  # read with a table of its own: only adds names
+            masked = (code, nfkc_names(code))  # read with a table of its own: only adds names
             if masked != plain or masked_aliases != aliases:
                 more = _rule_names(masked, masked_aliases, None, in_tests, in_conftest, budget)
                 names += [name for name in more if name not in names]
@@ -364,7 +358,7 @@ def _committed_coding(path: str, data: bytes | None, found: list[Finding]) -> li
     ]
 
 
-def _nfkc_names(text: str) -> str:
+def nfkc_names(text: str) -> str:  # the one normaliser of the line rules (STRING-BUILT later)
     """Identifier characters in NFKC form, the rest as written (no new operator or separator)."""
     pairs = ((char, unicodedata.normalize("NFKC", char)) for char in text)
     return "".join(new if ("a" + new).isidentifier() else old for old, new in pairs)
@@ -376,10 +370,13 @@ def _foreign_coding(text: str) -> bool:
     return found is not None and not _UTF8.fullmatch(found.group(1))
 
 
-def scan_patch(repo: Path, base: str, head: str) -> list[Finding]:
+def scan_patch(
+    repo: Path, base: str, head: str, *, python: str, notes: list[str] | None = None
+) -> list[Finding]:
     """Scan what ``head`` adds on top of ``base`` (both commits already in repo).
 
-    Only ``.py`` files are read, as text whatever git attributes or size settings say.
+    Only ``.py`` files are read, as text whatever git attributes or size settings say. ``python`` is
+    the verifier's interpreter (verifier_interpreter): file rules parse with it; ``notes``: records.
     """
     raw = run_git_bytes(  # bytes: no newline translation, so a lone "\r" stays inside its line
         repo, "-c", "diff.suppressBlankEmpty=false", "-c", "diff.interHunkContext=0",
@@ -394,7 +391,10 @@ def scan_patch(repo: Path, base: str, head: str) -> list[Finding]:
         raise GitCommandError("head is not a full commit id")
     found, budget = [], ScanBudget()  # one budget for the whole patch (#668)
     for path, lines in added_lines(diff).items():
-        if path.endswith(".py") and lines and not budget.over:  # the whole file, as committed
+        if (
+            path.endswith(".py") and not budget.over
+        ):  # the whole file, as committed (delete-only too)
             data = run_git_bytes(repo, "cat-file", "blob", f"{head}:{path}")
             found += scan_added_lines(path, lines, data, budget)
-    return found
+    more = [] if budget.over else file_rules(repo, base, head, budget, python, notes)  # over: done
+    return found + [Finding(path, 0, rule) for path, rule in more]

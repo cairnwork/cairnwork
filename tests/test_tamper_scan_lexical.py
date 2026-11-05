@@ -6,6 +6,7 @@ first checks with ``ast`` that Python compiles the statement the rule is about.
 """
 
 import ast
+import sys
 import unicodedata
 
 import pytest
@@ -123,7 +124,7 @@ def test_a_line_that_starts_inside_an_unchanged_string_is_read_with_the_whole_fi
     git(repo, "commit", "-qam", "candidate")
     head = git(repo, "rev-parse", "HEAD")
     assert ("src/a.py", 3, "os_exit") in {
-        (f.path, f.line, f.rule) for f in scan_patch(repo, base, head)
+        (f.path, f.line, f.rule) for f in scan_patch(repo, base, head, python=sys.executable)
     }
 
 
@@ -143,7 +144,7 @@ def test_an_encoding_declared_on_an_unchanged_first_line_is_refused(repo, cookie
     git(repo, "commit", "-qam", "candidate")
     head = git(repo, "rev-parse", "HEAD")
     assert ("src/a.py", 1, "source_encoding") in {
-        (f.path, f.line, f.rule) for f in scan_patch(repo, base, head)
+        (f.path, f.line, f.rule) for f in scan_patch(repo, base, head, python=sys.executable)
     }
 
 
@@ -175,7 +176,7 @@ def test_an_encoding_declaration_moved_up_to_line_2_is_refused(repo):
     git(repo, "commit", "-qam", "candidate")
     head = git(repo, "rev-parse", "HEAD")
     assert ("src/a.py", 2, "source_encoding") in {
-        (f.path, f.line, f.rule) for f in scan_patch(repo, base, head)
+        (f.path, f.line, f.rule) for f in scan_patch(repo, base, head, python=sys.executable)
     }
 
 
@@ -215,7 +216,7 @@ def test_a_tokenizer_error_of_any_type_gives_no_views(monkeypatch):
 
 def test_scan_patch_takes_only_a_full_commit_id(repo):
     with pytest.raises(GitCommandError):
-        scan_patch(repo, git(repo, "rev-parse", "HEAD"), "HEAD")
+        scan_patch(repo, git(repo, "rev-parse", "HEAD"), "HEAD", python=sys.executable)
 
 
 @pytest.mark.parametrize("path", [TEST, LIBRARY])
