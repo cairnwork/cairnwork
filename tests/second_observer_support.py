@@ -82,7 +82,7 @@ class Project:
             "tested_tree": self.tree(candidate),
             "target": target,
             "cw_verdict": "",
-            **describe_verifier(sys.executable, ini),
+            **describe_verifier(sys.executable, ini, ("src",)),
         }
         raw.update(over)
         return {k: v for k, v in raw.items() if v is not None}

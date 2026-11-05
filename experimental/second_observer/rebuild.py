@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from cairnwork.deferred_overlay import TestFiles
 from cairnwork.deferred_tests import TestCommitRejected, lay_tests_over, test_paths
 from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.workspace import WorkspaceError, create_attempt_clone
@@ -21,8 +22,9 @@ ATTEMPT_ID = "shadow"
 def _private_repo(shadow: Path, project: Path) -> Path:
     private = shadow / "repo.git"
     run_git(shadow, "init", "--quiet", "--bare", private.name)
-    objects = run_git(project, "rev-parse", "--absolute-git-dir").strip() + "/objects"
-    (private / "objects" / "info" / "alternates").write_text(objects + "\n")
+    common = Path(run_git(project, "rev-parse", "--git-common-dir").strip())
+    objects = (project / common if not common.is_absolute() else common) / "objects"
+    (private / "objects" / "info" / "alternates").write_text(f"{objects.resolve()}\n")
     return private
 
 
@@ -36,8 +38,9 @@ def rebuild(inp: ShadowInput, shadow: Path, work: Path) -> Path:
             parents = run_git(private, "rev-list", "--parents", "-n", "1", inp.candidate).split()
             if parents[1:] != [inp.base]:
                 raise Uncomparable("candidate's only parent is not the base")
-        paths = test_paths(private, inp.base, inp.test_commit, inp.test_roots)
-        tested = lay_tests_over(private, inp.candidate, inp.test_commit, paths, ATTEMPT_ID, shadow)
+        paths, deleted = test_paths(private, inp.base, inp.test_commit, inp.test_roots)
+        files = TestFiles(paths, deleted)  # as pipeline_judge hands them to lay_tests_over
+        tested = lay_tests_over(private, inp.candidate, inp.test_commit, files, ATTEMPT_ID, shadow)
         tree = run_git(private, "rev-parse", f"{tested}^{{tree}}").strip()
         if tree != inp.tested_tree:
             raise Uncomparable(f"rebuilt tree {tree} differs from the recorded {inp.tested_tree}")

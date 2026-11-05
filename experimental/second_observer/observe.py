@@ -87,6 +87,8 @@ def run_observer(
     )
     log = run_dir / "observer.log"
     if sandbox and backend is not None:
+        # Same arguments as verifiers._run_one_in (src/cairnwork/verifiers.py:310-314): the
+        # interpreter roots, write roots (checkout.parent, run_dir), owner mode (home masked).
         profile = backend.policy(
             read_roots=(*pytest_config.interpreter_roots(inp.interpreter), supervisor),
             write_roots=(checkout.parent, run_dir),

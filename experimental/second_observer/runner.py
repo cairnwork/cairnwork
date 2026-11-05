@@ -79,19 +79,26 @@ def judge_unittest(case, method):
     return ("PASS", "") if clean else ("FAIL", "unittest")
 
 
+def mark_names(obj):
+    found = getattr(obj, "pytestmark", None) or []
+    return {getattr(m, "name", "") for m in (found if isinstance(found, list) else [found])}
+
+
 def judge(module, name):
     cls_name, _, member = name.rpartition(".")
     try:
         target = getattr(module, cls_name or name)
     except BaseException as exc:  # noqa: BLE001 - the observer reports, never raises
         return "OBS_ERROR", f"lookup: {exc!r}"
+    marks = mark_names(module) | mark_names(target)  # module, class and function level
     if cls_name:
         if isinstance(target, type) and issubclass(target, unittest.TestCase):
+            if marks & MARKS_NA:
+                return "NA", "marks"
             return judge_unittest(target, member)
         return "NA", "method of a non-unittest class"
     if not callable(target):
         return "OBS_ERROR", "target is not callable"
-    marks = {m.name for m in (getattr(target, "pytestmark", None) or [])}
     if inspect.signature(target).parameters or marks & MARKS_NA:
         return "NA", "parameters, fixtures or marks"
     if inspect.iscoroutinefunction(target) or inspect.isgeneratorfunction(target):
