@@ -69,7 +69,9 @@ from cairnwork.tamper_scan_pytest import (
     PYTEST_HOOK_IMPL,
     PYTEST_PUBLIC_PATCH,
 )
+from cairnwork.tamper_scan_strings import StringScan
 from cairnwork.tamper_scan_tokens import added_file, file_views
+from cairnwork.tamper_scan_tokens import foreign_coding as _foreign_coding
 
 CODE = "VERIFIER_TAMPER_API"
 
@@ -91,9 +93,6 @@ def _rule(
 
 
 _COMMENT_ONLY = re.compile(r"^\s*#")
-# A PEP 263 encoding declaration (Python reads it on line 1 or 2) and the UTF-8 names it accepts.
-_CODING = re.compile(r"^[ \t\f]*#.*?coding[:=][ \t]*([-\w.]+)", re.ASCII)
-_UTF8 = re.compile(r"utf[-_]8(?:[-_][-\w.]*)?|utf8", re.ASCII | re.IGNORECASE)
 # sys.modules entries a forgery would swap; a literal key naming any other module is a test stub.
 _SENSITIVE_MODULE = (
     r"(?:_?pytest\w*|pluggy|py|_?cairnwork\w*|sys|os|builtins|importlib|gc|conftest|__main__)"
@@ -289,7 +288,8 @@ def scan_added_lines(
     budget = budget or ScanBudget()
     if source is not None and not found and not budget.tokenize(source):
         return [Finding(path, lines[0][0] if lines else 1, SCAN_BUDGET)]
-    views = (file_views(source) if source is not None and not found else None) or {}
+    strings = StringScan()  # watches the one tokenize pass of file_views (STRING-BUILT-v2)
+    views = (file_views(source, strings) if source is not None and not found else None) or {}
     code_aliases = [{k: set(v) for k, v in aliases.items()} for _ in range(2)] if views else None
     # Python also ends a source line at "\r" (CRLF included), so each piece is scanned on its own.
     for number, line in ((number, line) for number, line in lines if len(line) <= MAX_LINE):
@@ -320,6 +320,8 @@ def scan_added_lines(
             found += [Finding(path, number, name) for name in names]
             if budget.over:  # refused (scan_budget): the rest is not read (#668)
                 return found
+    built = [Finding(path, n, rule) for n, rule in strings.findings({n for n, _ in lines})]
+    found += [finding for finding in built if finding not in found]  # names built from pieces
     return found + _committed_coding(path, data, found)
 
 
@@ -367,12 +369,6 @@ def _nfkc_names(text: str) -> str:
     """Identifier characters in NFKC form, the rest as written (no new operator or separator)."""
     pairs = ((char, unicodedata.normalize("NFKC", char)) for char in text)
     return "".join(new if ("a" + new).isidentifier() else old for old, new in pairs)
-
-
-def _foreign_coding(text: str) -> bool:
-    """A comment declaring a source encoding other than UTF-8 (read by Python on line 1 or 2)."""
-    found = _CODING.match(text)
-    return found is not None and not _UTF8.fullmatch(found.group(1))
 
 
 def scan_patch(repo: Path, base: str, head: str) -> list[Finding]:

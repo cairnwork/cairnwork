@@ -23,8 +23,10 @@ also ends a line there, and a view is keyed by (git line number, piece index).
 from __future__ import annotations
 
 import io
+import re
 import tokenize
 from dataclasses import dataclass
+from typing import Any
 
 _MASK = "x"
 _QUOTES = frozenset("'\"")
@@ -61,8 +63,11 @@ class LineView:
 Views = dict[tuple[int, int], LineView]
 
 
-def file_views(data: bytes) -> Views | None:
-    """Views of every line of ``data`` (a whole ``.py`` file), or None when it cannot be read."""
+def file_views(data: bytes, observer: Any = None) -> Views | None:
+    """Views of every line of ``data`` (a whole ``.py`` file), or None when it cannot be read.
+
+    ``observer`` (tamper_scan_strings.StringScan) is fed each token of this one pass.
+    """
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError:
@@ -80,6 +85,8 @@ def file_views(data: bytes) -> Views | None:
     separators: set[tuple[int, int]] = set()
     code_rows: set[int] = set()  # rows holding a token other than plain string text or comment
     for token in tokens:
+        if observer is not None:
+            observer.feed(token)
         if token.type == tokenize.COMMENT:
             comments[token.start[0] - 1] = token.start[1]
         elif token.type == tokenize.OP and token.string == ";":
@@ -89,6 +96,8 @@ def file_views(data: bytes) -> Views | None:
             _mask(bare, token.start, token.end, None)
         if token.type not in _NO_CODE or _PREFIX_CODE & set(_prefix(token)):
             code_rows.update(range(token.start[0] - 1, token.end[0]))
+    if observer is not None:
+        observer.keys = keys
     views: Views = {}
     for index, (key, row) in enumerate(zip(keys, chars, strict=True)):
         start = comments.get(index, len(row))
@@ -146,3 +155,14 @@ def added_file(lines: list[tuple[int, str]]) -> bytes | None:
         return "\n".join(rows).encode("utf-8")
     except UnicodeEncodeError:
         return None
+
+
+# A PEP 263 encoding declaration (Python reads it on line 1 or 2) and the UTF-8 names it accepts.
+_CODING = re.compile(r"^[ \t\f]*#.*?coding[:=][ \t]*([-\w.]+)", re.ASCII)
+_UTF8 = re.compile(r"utf[-_]8(?:[-_][-\w.]*)?|utf8", re.ASCII | re.IGNORECASE)
+
+
+def foreign_coding(text: str) -> bool:
+    """A comment declaring a source encoding other than UTF-8 (read by Python on line 1 or 2)."""
+    found = _CODING.match(text)
+    return found is not None and not _UTF8.fullmatch(found.group(1))
