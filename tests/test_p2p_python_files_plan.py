@@ -20,6 +20,8 @@ ROOTS = ("tests",)
 R1_TESTS = ("tests/sub/test_calc_extra.py", "tests/test_app.py", "tests/test_misc.py")
 ROOT_LEVEL = ("tests/test_app.py", "tests/test_misc.py")
 SUB = ("tests/sub/check_calc.py", "tests/sub/check_other.py")
+# main falls back to the root-level tests; the rule adds tests/sub on top, never in place of them
+WITH_MAIN = (*SUB, "tests/test_x.py")
 
 
 @pytest.mark.parametrize(
@@ -64,13 +66,13 @@ def wired(repo, tmp_path, monkeypatch):
 def test_plan_p2p_selects_by_the_custom_python_files_of_the_base(wired):
     task, probed, ctx = wired
     got = p2p.plan_p2p(task, (), (), "module-dir", 30, RESULT, ctx)
-    assert isinstance(got, p2p.P2PPlan) and probed == [SUB]
+    assert isinstance(got, p2p.P2PPlan) and probed == [WITH_MAIN]
 
 
 def test_base_env_check_probes_by_the_custom_python_files_of_the_base(wired):
     task, probed, ctx = wired
     p2p.base_env_check(task, None, ctx)
-    assert probed == [SUB]
+    assert probed == [WITH_MAIN]
 
 
 @pytest.mark.parametrize(
@@ -88,5 +90,6 @@ def test_a_name_part_is_bounded_a_longer_word_is_not_a_hit(repo, test, named):
     ini = "[pytest]\npython_files = test_*.py *_test.py x_*.py *_app.py\n"
     rule = name_rule(repo, commit_change(repo, {"pytest.ini": ini}))
     got = select(("src/app.py",), (test, "tests/test_x.py"), ROOTS, "module-dir", rule)
-    # a hit selects the test's directory; no hit falls back to the root-level tests
-    assert got == ((test,) if named else ("tests/test_x.py",))
+    # main's root-level fallback always stays; a rule hit adds the test's directory on top
+    assert "tests/test_x.py" in got
+    assert (test in got) == named
