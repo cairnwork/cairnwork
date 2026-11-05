@@ -72,6 +72,7 @@ from pathlib import Path
 from cairnwork.bytecode_hook import HOOK_SOURCE
 from cairnwork.confined import MAX_REPORT_BYTES
 from cairnwork.pytest_config import PLUGINS
+from cairnwork.report_guard_parts import PARTS_SOURCE
 from cairnwork.skip_hint import module_names as _module_names
 from cairnwork.verdict_record import Verdict as Verdict
 from cairnwork.verdict_record import _sources, well_formed
@@ -82,7 +83,8 @@ NONCE_ENV = "CAIRNWORK_VERDICT_NONCE"
 MODULE = "_cairnwork_report_guard"
 PLUGIN_KINDS = frozenset(f"plugin:{module}" for _, module, _ in PLUGINS)
 
-_PLUGIN_SOURCE = '''\
+_PLUGIN_SOURCE = (
+    '''\
 """Materialised by cairnwork.report_guard into each verifier run; edit it there."""
 
 import json
@@ -93,19 +95,9 @@ import pytest
 _FDS_ENV = "CAIRNWORK_GUARD_FDS"
 _PATH_ENV = "CAIRNWORK_VERDICT_PATH"
 _NONCE_ENV = "CAIRNWORK_VERDICT_NONCE"
-# #804: fixture -> module of the pytest_config.PLUGINS entry that provides it. A setup error that
-# says one of them is missing is recorded as "plugin:<module>"; the parent keeps it as "plugin"
-# (base PLUGIN_NOT_INSTALLED) only when that module cannot be found in the verifier's Python.
-_PLUGIN_FIXTURES = {
-    **dict.fromkeys(("mocker", "class_mocker", "module_mocker", "package_mocker",
-                     "session_mocker"), "pytest_mock"),
-    # pytest-django: only names a project rarely defines itself (not db, client or settings)
-    **dict.fromkeys(("transactional_db", "django_db_setup", "django_db_blocker", "admin_client",
-                     "admin_user", "rf", "async_rf", "live_server", "django_user_model",
-                     "django_assert_num_queries", "mailoutbox"), "pytest_django.plugin"),
-    "anyio_backend": "anyio.pytest_plugin",
-}
-
+'''
+    + PARTS_SOURCE
+    + '''
 
 def _take():
     """Read the hand-over once and scrub it from os.environ. Runs at import: pytest loads
@@ -276,6 +268,7 @@ def pytest_configure(config):
         config.pluginmanager.register(_Reporter(*_HANDOVER), "cairnwork_report_guard")
         _HANDOVER = None
 '''
+)
 
 
 def install_plugin(directory: Path) -> None:
