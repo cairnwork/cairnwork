@@ -139,7 +139,7 @@ def test_a_deferred_test_commit_must_sit_under_a_root(pkg_project, tmp_path):
     assert paths_of(pkg_project, base, ok, PKG) == ("pkg/tests/test_regression.py",)
     with pytest.raises(Rejected, match="TEST_COMMIT_SCOPE"):
         paths_of(pkg_project, base, ok)  # default roots: not under tests/
-    for files in ({"pkg/tests/conftest.py": "x = 1\n"}, {"tests/test_r.py": PKG_TEST},
+    for files in ({"pkg/tests/setup.cfg": "x = 1\n"}, {"tests/test_r.py": PKG_TEST},
                   {"pkg/tests_x/test_r.py": PKG_TEST}):  # fmt: skip
         base, bad = make_test_commit(pkg_project, files)
         with pytest.raises(Rejected, match="TEST_COMMIT_SCOPE"):
@@ -184,7 +184,7 @@ def test_a_test_root_ends_in_test_or_tests_only(name):
 
 @pytest.mark.parametrize(
     "name",
-    ["conftest.py", "sitecustomize.py", "usercustomize.py", "setup.py", "x.pth", "X.PTH",
+    ["sitecustomize.py", "usercustomize.py", "setup.py", "x.pth", "X.PTH",
      "setup.cfg", "tox.ini", "pytest.ini", "pyproject.toml"],
 )  # fmt: skip
 def test_a_test_commit_refuses_the_names_a_candidate_may_not_touch(pkg_project, name):
