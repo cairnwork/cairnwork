@@ -31,9 +31,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cairnwork.collect_reader import read_collected
+from cairnwork.conftest_check import conftest_of
 from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRejected
 from cairnwork.gitcmd import GitCommandError, run_git
-from cairnwork.p2p_nodes import changed_tests
+from cairnwork.p2p_nodes import changed_tests, module_changed
 from cairnwork.p2p_selection import MODULE_DIR_CAP
 from cairnwork.verifier_spec import VerifierSpec
 from cairnwork.verifiers import run_verifiers
@@ -47,6 +48,9 @@ class CollectedSide:
     dropped: frozenset[str]  # base ids no longer collected but not removed: refused
     changed_files: frozenset[str] = frozenset()  # selected files the test commit edits
     changed: frozenset[str] = frozenset()  # path::function ids left to the author's verifiers
+    # #798: base tests of a file whose module-level code the test commit changes (with a conftest
+    # in the commit): left out of the differential probe's comparison only; P2P still runs them
+    probe_only: frozenset[str] = frozenset()
 
     def note(self) -> dict:
         """Bound into the P2P rule: counts and hashes, so the claim is auditable."""
@@ -82,7 +86,13 @@ def collected_side(task, files, outcomes, test_files, ctx, budget, attempt_id) -
     both = {_function(n) for n in base_ids & test_ids}
     body = changed_tests(task.repo, task.base_commit, task.test_commit, paths) if paths else set()
     changed = frozenset(body & both) | {_function(n) for n in side.removed}
-    return CollectedSide(side.base_ids, side.test_ids, side.removed, side.dropped, edited, changed)
+    probe_only: frozenset[str] = frozenset()
+    if conftest_of(test_files):  # #798: module-level code of an edited file may use a new fixture
+        over = module_changed(task.repo, task.base_commit, task.test_commit, paths)
+        probe_only = frozenset(_function(n) for n in base_ids & test_ids if _file(n) in over)
+    return CollectedSide(
+        side.base_ids, side.test_ids, side.removed, side.dropped, edited, changed, probe_only
+    )
 
 
 def classify(base_ids, test_ids, edited, source, base_source) -> CollectedSide:
