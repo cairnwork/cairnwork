@@ -49,6 +49,10 @@
 
 `hook_file_touched` 用驗證者自己的 Python 解析改動檔（一個批次子程序，`-I -S -B`，不信任掃描程序自己的 Python）。只有「一般語法錯誤」（非編碼）的檔案不算命中，只寫一行 log（`unparseable_by_verifier`，路徑用 %r，兩邊都解析失敗只記一次），不寫進候選紀錄；遞迴／記憶體錯誤、壞編碼、逾時、程序失敗或輸出格式不符一律 `scan_budget`（拒絕）。測試：`test:tests/test_tamper_scan_verifier_parse.py`。
 
+## 已知取捨：正當地子類別化 SourceLoader 或使用 codeop 的候選會被拒（#821，#848 第 3 輪）
+
+文字規則 `CODE_FORGE` 擋任何提到標準庫「由原始碼產生 code object」的包裝器（`source_to_code`、`codeop`）的行，所以候選若正當地子類別化 `SourceLoader`、或使用 `codeop`，會被拒（`code_object_forge`）。實測：28,650 個良性檔案中被擋 50 行、22 個檔，全部是標準庫或 vendored 的 loader／code 模組；SWE-bench Verified 500 個 gold patch 的新增行裡出現這兩個字的是 0。這是刻意的取捨（誤擋面小，放行則留下以標準庫包裝器造出 code object 的路），本次不改規則。
+
 照實鎖定的測試：`test:tests/test_tamper_scan_plugin_sandbox.py::test_a_benign_hook_defined_in_a_library_file_is_refused_a_known_trade_off`（真 Seatbelt）；通過的對照是同檔的 `test_an_untouched_plugin_with_hooks_and_fixtures_passes_with_a_real_fix`。
 
 ## 不帶過去的
