@@ -180,6 +180,9 @@ def test_another_process_s_allow_lines_count_toward_volume_and_are_never_a_denia
     assert "volume" in judge(stream(*burst), window()).detail
     evidence = judge(stream(line("Sandbox: x(5) allow(1) file-read-data /a")), window())
     assert evidence == Evidence("UNAVAILABLE", "a tagged allow line")  # our tag is on denies only
+    # Codex #881 r1: a deny line whose process name looks like "x(1) allow(9)" stays a denial
+    named = judge(stream(line("Sandbox: x(1) allow(9) deny(1) file-read-data /secret")), window())
+    assert named == Evidence("DENIED", "file-read-data /secret", 3, 2)
 
 
 def test_a_canary_that_raises_never_stops_the_run(monkeypatch):

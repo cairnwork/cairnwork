@@ -21,10 +21,13 @@ BACKGROUND_PER_SECOND = 50  # added to MAX_WINDOW_LINES per second of window: lo
 MAX_LINES_PER_SECOND = 1000  # any one-second bucket (O3c: 1018 foreign lines, nothing lost)
 STALL_SECONDS = 10.0  # no line at all for this long inside the window (background ~7 lines/s)
 MAX_LISTED = 8  # distinct substantive denials named in DENIED evidence
-LINE = re.compile(  # another process's profile may also report allows: a line, not a denial
-    r"(?:(\d+) duplicate reports? for )?Sandbox: (.+?)\((\d+)\) (deny\(\d+\)|allow(?:\(\d+\))?)"
-    r" (\S+) ?(.*)",
-    re.S,
+LINE = re.compile(
+    r"(?:(\d+) duplicate reports? for )?Sandbox: (.+?)\((\d+)\) deny\(\d+\) (\S+) ?(.*)", re.S
+)
+# another process's profile may also report allows: a line, not a denial. Tried only after LINE,
+# so a process name shaped like "x(1) allow(9)" cannot turn a deny line into an allow line.
+ALLOW = re.compile(
+    r"(?:(\d+) duplicate reports? for )?Sandbox: .+?\(\d+\) allow(?:\(\d+\))? .*", re.S
 )
 # (operation, exact target) every sandboxed Python start hits (step 0); human-reviewed, exact
 # paths only. Reads that can change behaviour (/private/etc/ssl, preferences) are never benign.
@@ -106,16 +109,17 @@ def _event(line: str, window: Window):
     body, _, suffix = message.rpartition("\n") if "\n" in message else (message, "", "")
     if suffix.startswith(TAG_PREFIX) and not TAG.fullmatch(suffix):
         raise ValueError("a malformed tag")
+    ours = suffix == window.tag
     match = LINE.fullmatch(body)
     if match is None:
-        raise ValueError(f"an unparseable Sandbox line: {body[:120]!r}")
-    count = int(match.group(1) or 1)
-    ours = suffix == window.tag
-    if match.group(4).startswith("allow"):  # counts toward volume; the tag is only on our denies
-        if ours:
+        allow = ALLOW.fullmatch(body)
+        if allow is None:
+            raise ValueError(f"an unparseable Sandbox line: {body[:120]!r}")
+        if ours:  # the tag is only on the run's denies
             raise ValueError("a tagged allow line")
-        return (stamp[:19], count, False, None, None, int(match.group(3)))
-    return (stamp[:19], count, ours, match.group(5), match.group(6), int(match.group(3)))
+        return (stamp[:19], int(allow.group(1) or 1), False, None, None, 0)  # volume only
+    count = int(match.group(1) or 1)
+    return (stamp[:19], count, ours, match.group(4), match.group(5), int(match.group(3)))
 
 
 class _Tally:
