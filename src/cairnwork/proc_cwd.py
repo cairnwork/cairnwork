@@ -242,7 +242,7 @@ def kill_withheld_in(rows, dirs, mine: int, seen=None) -> tuple[list[int], list[
     ``confirm_gone`` needs another clean look (#546). A start time unreadable at the first read is
     not counted: any process of the owner that ended after the listing reads so, and counting
     those kept a busy host from ever showing the attempt gone. ``seen``: gets each killed process's
-    masked argv prefix, read just before the kill (#814, survivor_argv)."""
+    allow-listed argv prefix, read just before the kill (#814, survivor_argv)."""
     killed: list[int] = []
     denied: list[int] = []
     vanished = 0

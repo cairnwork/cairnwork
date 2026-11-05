@@ -22,6 +22,8 @@ from cairnwork import protection
 from cairnwork.deferred_overlay import MAX_DELETED_TEST_PATHS
 from cairnwork_attest.verify_response import VerifyResult, _fail
 
+MAX_IMPORT_PATHS = 8  # issue_task.check_import_paths: 0-8 (pinned by test_binding_import_paths)
+
 
 def _equal(pinned: Any, recorded: Any) -> bool:
     return pinned == recorded
@@ -39,7 +41,7 @@ class Extra:
 def _path_list(value: Any) -> bool:
     return (
         isinstance(value, list)
-        and len(value) <= MAX_DELETED_TEST_PATHS
+        and len(value) <= MAX_IMPORT_PATHS
         and all(isinstance(p, str) and p and not p.startswith("/") for p in value)
         and len(set(value)) == len(value)
     )
