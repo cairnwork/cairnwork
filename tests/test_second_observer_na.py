@@ -74,3 +74,18 @@ def test_the_scan_reads_the_decorator_not_the_word(tmp_path, text, expected):
     (tmp_path / "tests").mkdir()
     (tmp_path / "tests" / "test_x.py").write_text("def test_x(): pass\n")
     assert autouse_files(tmp_path, "tests/test_x.py", []) == expected
+
+
+def test_marks_are_na_even_with_no_sandbox_backend(tmp_path, monkeypatch):
+    """NA is static: it must not depend on the sandbox being available (Linux CI, no backend)."""
+    import cairnwork_sandbox
+
+    monkeypatch.setattr(cairnwork_sandbox, "select", lambda: None)
+    marked = (
+        "import pytest\nfrom calc import add\n\n\n@pytest.mark.skip\ndef test_add():\n    pass\n"
+    )
+    project = Project(tmp_path / "a", tests={"tests/test_calc.py": marked})
+    assert row_of(project, project.base)["observer"] == "NA"
+    plain = Project(tmp_path / "b")
+    row = row_of(plain, plain.base)
+    assert row["observer"] == "OBS_ERROR" and "no sandbox backend" in row["detail"]

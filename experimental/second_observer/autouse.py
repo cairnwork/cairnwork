@@ -78,3 +78,39 @@ def autouse_files(checkout: Path, test_file: str, extra_roots: list[Path]) -> li
             if found is not None and found.resolve().is_relative_to(checkout):
                 queue.append(found.resolve())
     return sorted(hits)
+
+
+MARKS_NA = frozenset({"parametrize", "usefixtures", "skip", "skipif", "xfail"})
+
+
+def _mark_names(node: ast.AST) -> set[str]:
+    """Names of ``pytest.mark.<name>`` (or ``mark.<name>``) used anywhere under ``node``."""
+    return {
+        n.attr
+        for n in ast.walk(node)
+        if isinstance(n, ast.Attribute)
+        and isinstance(n.value, ast.Attribute)
+        and n.value.attr == "mark"
+    }
+
+
+def marked_na(test_path: Path, name: str) -> bool:
+    """Static: a module-level ``pytestmark`` or a decorator on the target (or its class) names a
+    mark that makes a direct call not comparable. Same rule as the runner, decided without
+    running anything, so it holds on a host with no sandbox."""
+    tree = ast.parse(test_path.read_bytes(), filename=str(test_path))
+    found: set[str] = set()
+    cls_name, _, func_name = name.rpartition(".")
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "pytestmark" for t in node.targets
+        ):
+            found |= _mark_names(node.value)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+            found |= {m for d in node.decorator_list for m in _mark_names(d)}
+        if isinstance(node, ast.ClassDef) and node.name == cls_name:
+            found |= {m for d in node.decorator_list for m in _mark_names(d)}
+            for item in node.body:
+                if isinstance(item, ast.FunctionDef) and item.name == func_name:
+                    found |= {m for d in item.decorator_list for m in _mark_names(d)}
+    return bool(found & MARKS_NA)

@@ -16,7 +16,7 @@ from pathlib import Path
 
 from cairnwork.gitcmd import run_git
 from experimental.second_observer import NA, OBS_ERROR, UNCOMPARABLE
-from experimental.second_observer.autouse import autouse_files
+from experimental.second_observer.autouse import autouse_files, marked_na
 from experimental.second_observer.inputs import ShadowInput, Uncomparable, load
 from experimental.second_observer.observe import run_observer
 from experimental.second_observer.rebuild import rebuild
@@ -61,6 +61,8 @@ def static_na(inp: ShadowInput, checkout: Path, out: Path) -> dict:
     """Why a direct call is not comparable (no run): parametrized node or autouse fixture."""
     if inp.na_reason:
         return {"na_reason": inp.na_reason}
+    if marked_na(checkout / inp.file, inp.name):
+        return {"na_reason": "MARKS"}
     roots = [checkout / rel for rel in inp.pythonpath]
     files = autouse_files(checkout, inp.file, roots)
     if not files:
