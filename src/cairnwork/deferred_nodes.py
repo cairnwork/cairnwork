@@ -20,12 +20,16 @@ tests), so a target naming the file still runs none of them. A ``unittest.TestCa
 its own ``__init__`` is collected by pytest's unittest support but is counted here as well: a test
 commit with one is refused, never wrongly accepted. Bases imported from another module are not
 read; neither are custom ``python_functions``/``python_classes`` settings. A class's decorators are
-part of each of its tests, and so are (#968) every statement of its class and of each base
-class defined earlier in the file that is not a function (``pytestmark``, attributes, flags),
-every module-level statement that is not an import, a function or a class, and each import,
-function or class those read, in turn. So a mark or skip condition changed anywhere in the file
-changes each test it may apply to. A class pytest does not collect keeps only its own
-decorators (#925: removing a class-level skip changes them all).
+part of each of its tests, and so are (#968, #979) its whole class less its ``test*`` methods
+(bases, keywords and metaclass, ``pytestmark``, attributes, flags, helper and setup methods,
+``__init_subclass__``) and the same of each base class defined earlier in the file; every
+module-level statement that is not an import, a function or a class, and every module-level
+function pytest runs for each test (xunit setup and teardown, ``pytest_*`` hooks, ``autouse``
+fixtures); and each import, function or class that any of those, the test's own decorators or
+its parameters (fixtures) read by name or by an identifier string (``usefixtures``), in turn.
+So a mark, skip or fixture changed anywhere in the file changes each test it may apply to. A
+class pytest does not collect keeps only its own decorators (#925: removing a class-level skip
+changes them all).
 
 ``hidden_tests`` (#925): what may give pytest a test that is not read above, at module level or
 in a class body, inside a block (``if``, ``try``, ``with``, a loop) or not: a ``test*`` function
