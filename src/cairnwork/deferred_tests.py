@@ -30,7 +30,7 @@ from pathlib import Path, PurePosixPath
 
 from cairnwork import survivor_argv
 from cairnwork.base_teeth import base_teeth
-from cairnwork.deferred_nodes import hidden_tests, test_functions
+from cairnwork.deferred_nodes import hidden_tests, local_names, test_functions
 from cairnwork.deferred_overlay import (  # noqa: F401  (re-exported: the one place importers look)
     _REGULAR,
     MAX_DELETED_TEST_PATHS,
@@ -200,14 +200,15 @@ def new_tests(repo: Path, base: str, test_commit: str, paths: tuple[str, ...]) -
     commit is refused (no teeth found, or the base run's DEFERRED_TESTS_NOT_RUN) when the file has
     no other new test; one beside a visible new test is not. A changed test inside a module-level
     block or a nested test class is refused, DEFERRED_TESTS_UNREADABLE (#925)."""
-    found = set()
+    found, local = set(), local_names(repo, test_commit)  # #925
     for path in paths:
         if not path.endswith(".py"):
             continue
         before = _test_functions(repo, f"{base}:{path}")
         tree = _tree(repo, f"{test_commit}:{path}") or _EMPTY
         after, uncollected = test_functions(tree)
-        if hidden_tests(tree) != hidden_tests(_tree(repo, f"{base}:{path}") or _EMPTY):  # #925
+        old = _tree(repo, f"{base}:{path}") or _EMPTY
+        if hidden_tests(tree, local) != hidden_tests(old, local):  # #925
             raise TestCommitRejected(
                 "DEFERRED_TESTS_UNREADABLE",
                 f"{path}: a test inside a module-level block or a nested test class changed;"
