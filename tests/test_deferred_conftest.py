@@ -249,3 +249,19 @@ def test_a_base_conftest_that_imports_a_changed_module_is_refused(project, tmp_p
         assert "TEST_COMMIT_CONFTEST_STATIC" in result.reason and "colorsys" in result.reason
     else:
         assert result.status == "COMPLETED", result.reason
+
+
+def test_a_conftest_import_through_the_base_pythonpath_is_refused(project, tmp_path):
+    """#924 r3 (cw#948 cross-model review): the base's pytest config puts ``tests/support`` on
+    the path; a base conftest imports ``helper`` from there and the test commit changes it."""
+    ini = "[pytest]\npythonpath = tests/support\n"
+    commit_change(project, {"pytest.ini": ini, "tests/support/helper.py": "X = 1\n",
+                            "tests/conftest.py": BASE_CONFTEST + "import helper\n"})  # fmt: skip
+    base, tests = make_test_commit(
+        project, {"tests/support/helper.py": RUNNER_PATCH, "tests/test_regression.py": PLAIN}
+    )
+    result = run(project, tmp_path, base, tests, SeeingWorker(BREAKS_BASE), key="k1",
+                 p2p_mode="whole-suite", p2p_budget=300)  # fmt: skip
+    assert result.status == "FAILED", result.reason
+    assert "TEST_COMMIT_CONFTEST_STATIC" in result.reason
+    assert "tests/support/helper.py" in result.reason

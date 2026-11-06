@@ -9,7 +9,8 @@ the test commit's own top directories (where every test-commit path lives).
 
 Resolution over-approximates pytest on purpose (refusing too much is the safe side):
 
-* absolute imports are tried under the repository root, ``src/`` and every directory above the
+* absolute imports are tried under the repository root, ``src/``, the verifier's import roots
+  (the task's import_paths and the base's ``pythonpath``, r3) and every directory above the
   importing file (prepend mode puts a conftest's or test module's base directory first on
   ``sys.path``, ahead of the standard library), each dotted prefix as ``.py`` or a package's
   ``__init__.py``; ``from M import n`` also tries ``M.n``;
@@ -32,18 +33,25 @@ from __future__ import annotations
 
 import ast
 from collections.abc import Iterable, Iterator
-from posixpath import dirname, join
+from posixpath import dirname, join, normpath
 
 MAX_FILES = 500  # unchanged modules followed per conftest before the walk refuses
 
 
 def reached_change(
-    conftest: str, tree: ast.Module, changed: frozenset[str], files: frozenset[str], read
+    conftest: str,
+    tree: ast.Module,
+    changed: frozenset[str],
+    files: frozenset[str],
+    read,
+    roots: Iterable[str] = (),
 ) -> str:
     """The first file in ``changed`` that ``conftest`` (parsed as ``tree``) can load, following
     imports through the unchanged ``files`` under the top directories of ``changed``; or a reason
-    when there are too many to follow; '' when none. ``read(path)`` parses a file of the tree."""
+    when there are too many to follow; '' when none. ``read(path)`` parses a file of the tree;
+    ``roots`` are the verifier's import roots besides the defaults (its pythonpath)."""
     tops = {path.split("/", 1)[0] for path in changed}
+    extra = [("" if n == "." else n) for n in (normpath(r).strip("/") for r in roots)]
     queue, seen = [(conftest, tree)], {conftest}
     for init in sorted(_inits(conftest) & files):  # the packages pytest imports the conftest in
         if init in changed:
@@ -52,7 +60,7 @@ def reached_change(
         queue.append((init, read(init)))
     while queue:
         here, parsed = queue.pop(0)
-        for target in sorted(_targets(here, parsed, files)):
+        for target in sorted(_targets(here, parsed, files, extra)):
             if target in changed:
                 return target
             if target in seen or target.split("/", 1)[0] not in tops:
@@ -64,9 +72,9 @@ def reached_change(
     return ""
 
 
-def _targets(here: str, tree: ast.Module, files: frozenset[str]) -> set[str]:
+def _targets(here: str, tree: ast.Module, files: frozenset[str], extra: list[str]) -> set[str]:
     """The files of the tree that one import in ``tree`` (the file ``here``) may load."""
-    roots = ["", "src", *_above(dirname(here))]
+    roots = ["", "src", *extra, *_above(dirname(here))]
     found: set[str] = set()
     for level, names in _imports(tree):
         if level:

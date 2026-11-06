@@ -100,3 +100,14 @@ def test_a_cycle_ends():
 def test_an_unchanged_package_init_above_the_conftest_is_followed():
     tree = {"tests/__init__.py": "from tests import helper\n", "tests/helper.py": ""}
     assert _reach("import pytest\n", tree, ["tests/helper.py"]) == "tests/helper.py"
+
+
+def test_the_verifier_s_import_roots_are_roots_too():
+    """r3 (cw#948 cross-model review): a base pythonpath entry puts its directory on sys.path."""
+    tree, changed = {"tests/support/helper.py": ""}, ["tests/support/helper.py"]
+    conftest, text = "tests/conftest.py", "import helper\n"
+    parsed, files = {}, frozenset(tree) | {conftest}
+    args = (conftest, ast.parse(text), frozenset(changed), files, parsed.__getitem__)
+    assert reached_change(*args) == ""
+    assert reached_change(*args, ("tests/support",)) == "tests/support/helper.py"
+    assert reached_change(*args, ("./tests/support/",)) == "tests/support/helper.py"

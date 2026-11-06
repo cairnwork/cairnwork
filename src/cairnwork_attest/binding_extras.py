@@ -174,7 +174,8 @@ def conftest_problem(ctx: Any) -> VerifyResult | None:
         )
     try:
         if ctx.full:
-            check_conftests(ctx.repo, ctx.binding["base"], ctx.binding["test_commit"], paths)
+            b = ctx.binding
+            check_conftests(ctx.repo, b["base"], b["test_commit"], paths, b.get("import_paths", []))
     except TestCommitRejected as exc:
         return _fail("CONFTEST_STATIC", str(exc))
     return None
