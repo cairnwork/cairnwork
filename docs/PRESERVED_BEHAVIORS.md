@@ -55,6 +55,20 @@
 
 照實鎖定的測試：`test:tests/test_tamper_scan_plugin_sandbox.py::test_a_benign_hook_defined_in_a_library_file_is_refused_a_known_trade_off`（真 Seatbelt）；通過的對照是同檔的 `test_an_untouched_plugin_with_hooks_and_fixtures_passes_with_a_real_fix`。
 
+## 已知取捨：區塊裡的測試、非 unittest 的 TestCase 一改就拒（#925）
+
+延後測試的 AST 讀取（`src/cairnwork/deferred_nodes.py`）只讀頂層的 `test*` 函式和頂層測試類別裡的 `test*` 方法。pytest 會收集、但這裡讀不到的測試，`hidden_tests` 都算進去，包括：
+
+- 寫在區塊裡的測試，例如版本檢查 `if sys.version_info >= ...:` 底下的 `def test_*`，以及 `try`、`with` 或迴圈裡的測試；
+- 用其他方式綁定的 `test*`／`Test*` 名字；
+- 從 `unittest` 以外匯入的 `TestCase`。`Test*` 是 pytest 的類別名稱規則，別處的 `TestCase` 可能帶有測試；只有 `from unittest import TestCase` 確定沒有。
+
+測試 commit 只要新增或改動這類測試就會被拒（`DEFERRED_TESTS_UNREADABLE`），即使同一個檔案裡另有看得見的新測試也一樣。
+
+為什麼接受：放行的話，target 只點名看得見的測試，區塊裡那個錯誤修正過不了的測試根本不會跑，錯的候選會得到 VERIFIED（#925 實測）。代價是真的要改版本檢查區塊裡測試的任務得不到 VERIFIED，要把測試移到頂層，或交給人處理。base 上沒動過的區塊測試不受影響。
+
+照實鎖定的測試：`test:tests/test_hidden_deferred_tests.py::test_a_changed_hidden_test_is_refused_beside_a_visible_one`（`version-block`、`if-block`、`testcase-elsewhere` 等）、`test_verify_refuses_a_hidden_test_a_wrong_fix_would_fail` 與 `test_verify_refuses_a_test_case_imported_from_a_base_helper`（真 Seatbelt）。沒動過的對照：`test_an_unchanged_hidden_test_a_local_def_and_literals_refuse_nothing`。
+
 ## 不帶過去的
 
 依 Nexus-new 的缺陷分流，以下判定為死碼、沒有負責人或只是操作 CLI，不列入：RULE-004、RULE-199、RULE-219、RULE-220、RULE-252。
