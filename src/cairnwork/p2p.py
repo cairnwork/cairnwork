@@ -93,8 +93,8 @@ class P2PPlan:
         return json.dumps(self.rule, sort_keys=True)
 
 
-def _base_tests(task, exclude: frozenset[str]) -> tuple[str, ...]:
-    """Test files under the roots on the base that are plain targets and match its python_files."""
+def _base_tests(task, exclude: frozenset[str], strict=True) -> tuple[str, ...]:
+    """Base test files under the roots that are plain targets and match python_files (#956)."""
     try:
         target, is_test = test_target(task.test_roots), test_file_rule(task.repo, task.base_commit)
         raw = run_git(task.repo, "ls-tree", "-r", "-z", "--name-only", task.base_commit,
@@ -103,7 +103,7 @@ def _base_tests(task, exclude: frozenset[str]) -> tuple[str, ...]:
         odd = untargetable(task, paths, target)  # reads the base's norecursedirs
     except (GitCommandError, PytestConfigError) as exc:
         raise P2PRejected("P2P_BASE_UNREADABLE", str(exc)) from exc
-    if odd:  # #930: never dropped silently (fail closed)
+    if odd and strict:  # #930: never dropped silently (fail closed); #956: env check only
         detail = f"{len(odd)} base test file(s) no target can name, e.g. {_clean(odd[0])}"
         raise BaseUncomparable(Comparison("UNCOMPARABLE", "P2P_BASE_UNTARGETABLE", detail))
     return tuple(sorted(p for p in paths if target.fullmatch(p)))  # pytest skips the rest (#930)
@@ -272,7 +272,7 @@ def base_env_check(task, result, ctx: VerifyContext, *, without_tests=False, key
     if task.p2p_mode == "off" or not (task.test_commit or without_tests):
         return
     try:
-        existing = _base_tests(task, frozenset())
+        existing = _base_tests(task, frozenset(), strict=not without_tests)  # #956
     except P2PRejected as exc:
         raise _env_failed(str(exc)) from exc
     rule = name_rule(task.repo, task.base_commit)
@@ -290,12 +290,12 @@ def base_env_check(task, result, ctx: VerifyContext, *, without_tests=False, key
     if marker is not None and _is_pass_marker(marker):
         return
     outcomes, why = _probe(task, files, result, ctx, task.p2p_budget, tag="e")
-    if outcomes is None:
+    if outcomes is None and not (without_tests and why == "base-probe-incomplete"):  # #956
         # #262: name the cause when no sandbox backend exists
         if why == "base-probe-failed" and cairnwork_sandbox.select() is None:
             why += " (no-sandbox: no usable sandbox backend, so nothing ran)"
         raise _env_failed(f"{why}: {len(files)} existing test file(s) near the change")
-    if marker is None:
+    if marker is None or outcomes is None:  # #956: an early stop is no pass to remember
         return
     try:  # an unwritten marker only means the next dispatch probes again
         marker.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
