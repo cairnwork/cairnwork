@@ -34,6 +34,7 @@ from dataclasses import dataclass
 
 _MASK = "x"
 _VERSION = re.compile(r"(\d{1,2}) (\d{1,3})\n?", re.ASCII)  # as module_inventory reads it
+_PROBE_SECONDS = 15  # the version probe's own limit (views_trusted)
 _QUOTES = frozenset("'\"")
 _SYNTAX = frozenset("#;")  # read as syntax outside a string, as text inside one
 _PARTS = ("START", "MIDDLE", "END")
@@ -74,7 +75,7 @@ def views_trusted(python: str) -> bool:
     try:
         done = subprocess.run(  # noqa: S603 - the verifier's interpreter, fixed code (parse_blobs)
             [python, "-I", "-S", "-B", "-c", "import sys; print(*sys.version_info[:2])"],
-            capture_output=True, text=True, timeout=15, check=False, env={}, cwd="/",
+            capture_output=True, text=True, timeout=_PROBE_SECONDS, check=False, env={}, cwd="/",
             stdin=subprocess.DEVNULL,
         )  # fmt: skip
     except (OSError, subprocess.SubprocessError, ValueError):

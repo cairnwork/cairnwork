@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 from conftest import commit_change, git
 
+import cairnwork.tamper_scan_tokens as tokens
 from cairnwork.tamper_scan import scan_added_lines, scan_patch
 from cairnwork.tamper_scan_tokens import file_views, views_trusted
 
@@ -60,7 +61,7 @@ def test_the_scanners_own_python_is_trusted():
 @pytest.mark.parametrize(
     ("version", "trusted"),
     [(_now(0), True), (_now(-1), True), (_now(1), False), ("3\n", False), ("3 x\n", False),
-     ("4 0\n3 0\n", False), (f"٣ {sys.version_info[1]}\n", False), ("", False)],
+     (_now(0) + "3 0\n", False), (f"٣ {sys.version_info[1]}\n", False), ("", False)],
     ids=["same", "older", "newer", "no-minor", "not-a-number", "two-lines", "arabic-digit",
          "empty"],
 )  # fmt: skip
@@ -74,6 +75,25 @@ def test_an_interpreter_that_fails_or_is_missing_is_not_trusted(tmp_path):
     failing.chmod(failing.stat().st_mode | stat.S_IXUSR)
     assert not views_trusted(str(failing))
     assert not views_trusted(str(tmp_path / "missing"))
+
+
+def _script(tmp_path, body, name="probe"):
+    script = tmp_path / name
+    script.write_text(f"#!/bin/sh\n{body}\n")
+    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+    return str(script)
+
+
+def test_the_probe_runs_with_an_empty_environment(tmp_path, monkeypatch):
+    monkeypatch.setenv("CW_LEAK", "1")
+    body = f'[ -z "${{CW_LEAK:-}}" ] && printf "{_now(0)}" || printf "{_now(1)}"'
+    leaky = _script(tmp_path, body)
+    assert views_trusted(leaky)  # with the environment passed on it would claim a newer Python
+
+
+def test_a_probe_past_its_time_limit_is_not_trusted(tmp_path, monkeypatch):
+    monkeypatch.setattr(tokens, "_PROBE_SECONDS", 0.5)
+    assert not views_trusted(_script(tmp_path, f'sleep 5; printf "{_now(0)}"'))
 
 
 def test_untrusted_views_skip_nothing_and_keep_the_rest():
@@ -94,6 +114,16 @@ def test_an_untrusted_scan_reads_a_comment_only_line():
     assert [f.rule for f in scan_added_lines(LIB, lines, data, trusted=False)] == [
         "pytest_public_patch"
     ]
+
+
+def test_an_untrusted_scan_reads_a_string_text_line_as_written():
+    """Review r1: an older tokenizer may read a "#" line as string text, its ";" masked; untrusted,
+    the line is also read as written, so an alias bound after the ";" is followed."""
+    line = "# x; import os as o; o._exit(0)"
+    data = f'S = """\n{line}\n"""\n'.encode()
+    assert file_views(data)[(2, 0)].skip  # string text to this Python
+    assert scan_added_lines(LIB, [(2, line)], data) == []
+    assert "os_exit" in {f.rule for f in scan_added_lines(LIB, [(2, line)], data, trusted=False)}
 
 
 def test_scan_patch_gates_the_comment_skip_on_the_verifiers_version(repo, tmp_path):

@@ -298,7 +298,7 @@ def scan_added_lines(
             if _COMMENT_ONLY.match(piece) and view and view.skip and len(view.code) == len(piece):
                 continue  # a comment to Python, or string text with no code on the line
             # Main's reading, with its own alias table; a line main skips as a comment has none.
-            plain = () if _COMMENT_ONLY.match(piece) else (piece, nfkc_names(piece))
+            plain = () if trusted and _COMMENT_ONLY.match(piece) else (piece, nfkc_names(piece))
             names = _rule_names(plain, aliases, masked_aliases, in_tests, in_conftest, budget)
             if code_aliases is not None and view is not None:  # aliases bound by code only
                 for text in dict.fromkeys((view.bound, nfkc_names(view.bound))):
