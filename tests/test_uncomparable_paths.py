@@ -18,7 +18,7 @@ from verify_helpers import FIX, candidate, verify
 from cairnwork import p2p, p2p_collect, pipeline_judge, verifiers, verify_cli
 from cairnwork.core_request import VerifierObservation
 from cairnwork.intake import Intake
-from cairnwork.journal import Journal
+from cairnwork.journal import Journal, no_evidence
 from cairnwork.notary import Notary
 from cairnwork.ownership import OwnershipLedger
 from cairnwork.pipeline import TaskSpec, run_task
@@ -326,6 +326,9 @@ def test_an_account_failure_after_the_worker_is_uncomparable_only_when_isolated(
     assert result.status == "FAILED" and calls == []
     prefix = "UNCOMPARABLE: " if isolated else ""
     assert result.reason.startswith(f"{prefix}VERIFIER_ACCOUNT_UNUSABLE: "), result.reason
+    expected = "VERIFIER_ACCOUNT_UNUSABLE" if isolated else ""  # the Issue comment reads both
+    entries = Journal(tmp_path / "wstate" / "journal.sqlite").entries(result.task_id)
+    assert (result.uncomparable, no_evidence(entries)) == (expected, expected)
 
 
 def test_an_account_failure_in_the_candidate_run_is_never_uncomparable(project, tmp_path, stub):
