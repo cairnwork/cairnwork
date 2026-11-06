@@ -67,7 +67,9 @@ def test_functions(tree: ast.Module) -> tuple[dict[str, str], frozenset[str]]:
             classes[node.name] = (methods, blocked, case, marks)
             if node.name.startswith("Test") or case:
                 tests = {n: b for n, b in methods.items() if n.startswith("test")}
-                tests = {n: module + marks + body for n, body in tests.items()}
+                # a class pytest does not collect gets no marks; its own decorators as before
+                own = "".join(ast.dump(d) for d in node.decorator_list)
+                tests = {n: (own if blocked else module + marks) + b for n, b in tests.items()}
                 functions.update({f"{node.name}::{n}": body for n, body in tests.items()})
                 if blocked:
                     uncollected.add(node.name)

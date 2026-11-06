@@ -111,6 +111,12 @@ REACH = {  # (on the base, in the test commit, the tests that change): #968 r3, 
                            {"TestX::test_y", "test_regression"}),
     "through-a-helper": ("def on():\n    return True\n" + HELPED,
                          "def on():\n    return False\n" + HELPED, {"test_y"}),
+    "module-pytestmark-class": ("pytestmark = pytest.mark.skip\n" + CLS, CLS,
+                                {"TestX::test_y", "test_regression"}),  # jeter r2
+    "uncollected-class": ("class TestX:\n    def __init__(self):\n        pass\n" + Y,
+                          "pytestmark = pytest.mark.filterwarnings('ignore')\nclass TestX:\n"
+                          "    def __init__(self):\n        pass\n" + Y,
+                          {"test_regression"}),  # jeter r2: no marks on a class pytest skips
     "unrelated": ("HELPER = 1\n" + FN, "HELPER = 2\n" + FN + FN.replace("test_y", "test_new"),
                   {"test_new"}),  # a statement no mark reads changes no test
 }  # fmt: skip

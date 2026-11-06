@@ -69,6 +69,8 @@
 
 照實鎖定的測試：`test:tests/test_hidden_deferred_tests.py::test_a_changed_hidden_test_is_refused_beside_a_visible_one`（`version-block`、`if-block`、`testcase-elsewhere` 等）、`test_verify_refuses_a_hidden_test_a_wrong_fix_would_fail` 與 `test_verify_refuses_a_test_case_imported_from_a_base_helper`（真 Seatbelt）、`test_a_test_case_from_a_module_the_tree_holds_is_hidden`（根目錄 `testing_helpers/` 等）、`test_a_test_case_name_the_test_commit_can_shadow_is_not_trusted`。沒動過的對照：`test_an_unchanged_hidden_test_a_local_def_and_literals_refuse_nothing`。
 
+標記也算測試的一部分（#968）：一個測試的指紋除了函式本身，還包含它的裝飾器、所屬類別和每個父類別（沿 MRO）的裝飾器與 `pytestmark`、模組的 `pytestmark`（包括從類別外設定的 `TestX.pytestmark`），以及這些標記讀到的模組層敘述，並一路追下去（裝飾器別名、`skipif` 條件和算它的 helper）。所以拿掉任何一層的 skip，受影響的每個測試（含子類別繼承的那份）都算改動，要被點名或整檔點名，否則 `DEFERRED_TESTS_NOT_TARGETED`。代價是過度近似：模組 `pytestmark` 一改，同檔每個測試都算改動。pytest 不收集的類別（有 `__init__`／`__new__`）不帶這些標記，只帶自己的裝飾器，避免只加一個 `filterwarnings` 就整個提交被拒。沒讀的（已知限制）：從別的模組繼承的測試（`class TestY(helpers.TestCase)`、`from helpers import Base`）、從別的模組匯入的標記內容、執行時才設定的標記，以及 conftest hook 加的標記。照實鎖定的測試：`test_removing_a_base_class_mark_changes_each_inherited_copy`、`test_a_mark_reached_from_outside_the_test_changes_it`、`test_verify_refuses_an_unrun_copy_of_a_test_whose_base_class_skip_was_removed`（真 Seatbelt）。
+
 ## 不帶過去的
 
 依 Nexus-new 的缺陷分流，以下判定為死碼、沒有負責人或只是操作 CLI，不列入：RULE-004、RULE-199、RULE-219、RULE-220、RULE-252。
