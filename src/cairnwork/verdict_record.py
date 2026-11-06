@@ -18,6 +18,7 @@ class Verdict:
     skipped_deps: tuple[str, ...] = ()  # modules the skipped collectors could not import (#813)
     # #796: (node, module, origin) of test modules that failed on "cannot import name"; unread
     import_errors: tuple[tuple[str, str, str], ...] = ()
+    submodule_errors: tuple[tuple[str, str, str], ...] = ()  # S3: (node, module, parent)
     renamed: tuple[str, ...] = ()  # items whose node id or file changed after collection
     paths: dict[str, str] = field(default_factory=dict)  # node id -> its file, as collected
     # #478: tests whose teardown failed. A shared fixture's finalizer runs at its last user's

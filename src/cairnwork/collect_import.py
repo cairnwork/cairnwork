@@ -4,11 +4,14 @@ Not part of the plugin source in report_guard.py: the plugin cannot import cairn
 records, per test module whose own import statement failed with "cannot import name X from
 <module>", the node id, the module and the file Python found it in (relative to the checkout).
 The record is candidate-reachable, so every field is re-validated here and anything malformed is
-dropped. ``as_failed`` (step 2) reads it for the base comparison."""
+dropped. ``as_failed`` (step 2) reads it for the base comparison. S3 adds a second record,
+``collect_missing_submodules`` (a new submodule of an in-repo package), parsed the same way."""
 
 from __future__ import annotations
 
+import keyword
 from dataclasses import replace
+from typing import TypedDict
 
 from cairnwork.skip_hint import is_module
 
@@ -53,6 +56,50 @@ def import_errors(data: dict) -> tuple[tuple[str, str, str], ...]:
         ):
             found.append((node, module, origin))
     return tuple(dict.fromkeys(found))
+
+
+def missing_submodules(data: dict) -> tuple[tuple[str, str, str], ...]:
+    """#796 S3: the ``(node, module, parent_origin)`` entries of ``collect_missing_submodules``
+    (a test module whose own import statement failed with "No module named 'pkg.newmod'" while
+    ``pkg`` was loaded from ``parent_origin``), each re-validated: a relative node path, a dotted
+    module name whose parts are identifiers and not keywords, and a relative path that is the
+    parent package's own ``__init__.py`` (any prefix, for src layouts). Kept apart from
+    ``collect_import_errors``: a reader of that list would read an entry as "the module exists".
+    Anything malformed is dropped; an old record without the field gives ``()``. Unread so far."""
+    raw = data.get("collect_missing_submodules")
+    if not isinstance(raw, list):
+        return ()
+    found = []
+    for entry in raw[:MAX_ENTRIES]:
+        if not isinstance(entry, dict):
+            continue
+        node, module = entry.get("node"), entry.get("module")
+        origin = entry.get("parent_origin")
+        if not (isinstance(node, str) and isinstance(module, str) and isinstance(origin, str)):
+            continue
+        parts = module.split(".")
+        tail = "/".join(parts[:-1]) + "/__init__.py"
+        if (
+            _relative(node)
+            and len(parts) > 1
+            and is_module(module)
+            and not any(keyword.iskeyword(part) for part in parts)
+            and _relative(origin)
+            and (origin == tail or origin.endswith("/" + tail))
+        ):
+            found.append((node, module, origin))
+    return tuple(dict.fromkeys(found))
+
+
+class ImportHints(TypedDict):
+    import_errors: tuple[tuple[str, str, str], ...]
+    submodule_errors: tuple[tuple[str, str, str], ...]
+
+
+def import_hints(data: dict) -> ImportHints:
+    """Both import records, as the ``Verdict`` fields of the same names (report_guard.py is at
+    its line cap, so it takes them in one place)."""
+    return ImportHints(import_errors=import_errors(data), submodule_errors=missing_submodules(data))
 
 
 def as_failed(run, targets, is_test):
