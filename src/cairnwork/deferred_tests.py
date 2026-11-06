@@ -43,7 +43,7 @@ from cairnwork.deferred_overlay import (  # noqa: F401  (re-exported: the one pl
 from cairnwork.gitcmd import OID, GitCommandError, run_git
 from cairnwork.issue_task import test_target
 from cairnwork.provenance import trailers
-from cairnwork.reasons import _names, skip_hint
+from cairnwork.reasons import COLLECT_HINT, _names, skip_hint
 from cairnwork.workspace import ATTEMPT_REF_PREFIX
 from cairnwork_protocol.ids import MAX_ID_BYTES
 
@@ -343,8 +343,7 @@ def base_comparison(runs, targets: frozenset[str]) -> Comparison:
             + (f", collection errors {_names(run.collect_errors)}" if run.collect_errors else "")
             + (survivor_argv.listing(run.survivors) if code == "BASE_SURVIVORS" else "")
             + skip_hint(run)
-            + ("; import fix-introduced symbols inside the test function"
-               if set(run.collect_errors) & files else "")
+            + (COLLECT_HINT if set(run.collect_errors) & files else "")
             for run, code in problems
         )  # fmt: skip
         return Comparison("UNCOMPARABLE", problems[0][1], detail)

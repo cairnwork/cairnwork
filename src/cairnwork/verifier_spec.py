@@ -51,6 +51,15 @@ class VerifierSpec:
     verifier_id: str
     targets: tuple[str, ...]
     collect_only: bool = False  # #793: pytest --collect-only; never a pass (collect_reader.py)
+    # #796: base runs only; a collect error ends that file, not the session (exit 1, not 2)
+    continue_on_collect_errors: bool = False
+
+    def flags(self) -> tuple[str, ...]:
+        """The pytest options these two fields add to the verifier's command line."""
+        return (
+            *(("--collect-only",) if self.collect_only else ()),
+            *(("--continue-on-collection-errors",) if self.continue_on_collect_errors else ()),
+        )
 
 
 def parse_verifier(verifier_id: str, argv: list[str], roots=DEFAULT_TEST_ROOTS) -> VerifierSpec:

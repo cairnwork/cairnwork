@@ -129,3 +129,11 @@ def skip_hint(run) -> str:
     verdict is not read from it. The names come from the run's record: cut and cleaned here."""
     deps = getattr(run, "skipped_deps", ())
     return f"; skipped at collection, could not import {_names(deps)}" if deps else ""
+
+
+# #796: the hint for a base collect error in a target file. A module-level ``from <in-repo module>
+# import <name>`` that fails on the base is accepted as teeth; anything else must move inside.
+COLLECT_HINT = (
+    "; import fix-introduced symbols inside the test function (a module-level"
+    " 'from <existing in-repo module> import <name>' is also accepted)"
+)

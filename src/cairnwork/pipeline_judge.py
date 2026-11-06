@@ -11,6 +11,7 @@ first (#311).
 from __future__ import annotations
 
 import shutil
+from dataclasses import replace
 from functools import partial
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from cairnwork import protection
 from cairnwork.account_check import unusable
 from cairnwork.account_prelude import AccountUnusableBeforeRun, after_candidate_ran, busy_once_more
 from cairnwork.blackbox_judge import judge_blackbox
+from cairnwork.collect_import import as_failed
 from cairnwork.conftest_check import check_conftests, without_conftests
 from cairnwork.core_request import AcceptanceSpec, VerifierObservation
 from cairnwork.deferred_overlay import stray_deletions
@@ -37,6 +39,7 @@ from cairnwork.deferred_tests import (
     untargeted,
 )
 from cairnwork.p2p import P2PPlan, run_plan
+from cairnwork.pytest_config import test_file_rule
 from cairnwork.reasons import explain, verdict_reason
 from cairnwork.verifier_account import VerifierAccountError
 from cairnwork.verifiers import run_verifiers
@@ -75,7 +78,19 @@ def tests_with_teeth(task, specs, result, ctx: VerifyContext) -> tuple[str, ...]
     if missing := untargeted(without_conftests(paths), targets, named):
         hint = "name each such file, or each of its new or changed tests, as a verifier target"
         raise TestCommitRejected("DEFERRED_TESTS_NOT_TARGETED", f"{', '.join(missing)}; {hint}")
-    runs = run_verifiers(ctx, task.test_commit, specs, f"{result.attempt_id}-b", deny=True)
+    # #796: a base run goes on after a collect error (never a collect-only spec): the other files
+    # still run, and a module-level import of a name the fix adds can be told from other errors
+    base = tuple(
+        s if s.collect_only else replace(s, continue_on_collect_errors=True) for s in specs
+    )
+    runs = run_verifiers(ctx, task.test_commit, base, f"{result.attempt_id}-b", deny=True)
+
+    def is_test(path: str) -> bool:  # asked only when a record qualifies: a base test file, or
+        # any file under a test root (a test package's own helper is not code the fix adds)
+        roots = tuple(f"{r}/" for r in task.test_roots)
+        return path.startswith(roots) or test_file_rule(task.repo, task.base_commit)(path)
+
+    runs = [as_failed(run, targets, is_test) for run in runs]  # before the base comparison
     comparison = base_comparison(runs, targets)  # decided before the base logs go
     for run in runs:  # #797 step 1: recorded only, no verdict reads it yet (deny_channel.py)
         if run.deny_evidence:
