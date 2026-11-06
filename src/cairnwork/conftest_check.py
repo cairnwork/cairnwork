@@ -13,7 +13,9 @@ runs first, at the producer and (full mode) at the receiver:
   arguments, no ``autouse``; literal parameter defaults, annotations that call nothing), never a
   ``pytest_*``, ``test*`` or dunder name. No classes;
 * no conftest of the test commit's tree, changed or not, has an import that can load a file the
-  test commit adds or changes (conftest_reach.py, #924); this runs even when no conftest changed.
+  test commit adds or changes (conftest_reach.py, #924); this runs even when no conftest changed,
+  at the producer and in the pipeline judge (a full receiver checks only the task's conftest
+  paths, #952).
 
 It is hygiene, not the guard: a name imported from the repository or rebound can carry behaviour
 it cannot see, and behaviour that depends on the candidate's code is trusted test author code, like
@@ -33,7 +35,6 @@ from posixpath import dirname
 from cairnwork.conftest_reach import reached_change
 from cairnwork.deferred_overlay import TestCommitRejected
 from cairnwork.gitcmd import GitCommandError, run_git, run_git_bytes
-from cairnwork.pytest_config import PytestConfigError, verifier_settings
 
 CONFTEST = "conftest.py"
 CODE = "TEST_COMMIT_CONFTEST_STATIC"
@@ -57,9 +58,7 @@ def governed(conftests: Iterable[str], existing: Iterable[str]) -> tuple[str, ..
     return tuple(sorted(t for t in existing if t.startswith(dirs)))
 
 
-def check_conftests(
-    repo: Path, base: str, test_commit: str, paths: Iterable[str], import_paths: Iterable[str] = ()
-) -> None:
+def check_conftests(repo: Path, base: str, test_commit: str, paths: Iterable[str]) -> None:
     """Refuse a conftest change the allowlist does not cover; see the module docstring."""
     paths = tuple(paths)
     names = conftest_of(paths)
@@ -76,24 +75,18 @@ def check_conftests(
             if problem:
                 _refuse(path, node, problem)
     if paths:
-        _check_reach(repo, base, test_commit, paths, tuple(import_paths))
+        _check_reach(repo, test_commit, paths)
 
 
-def _check_reach(
-    repo: Path, base: str, test_commit: str, paths: tuple[str, ...], import_paths: tuple[str, ...]
-) -> None:
+def _check_reach(repo: Path, test_commit: str, paths: tuple[str, ...]) -> None:
     """#924: no conftest of the test commit's tree, changed by it or not (a base conftest may
     already import a module the test commit changes), can load a file the test commit changes.
-    The verifier's import roots (the task's import_paths, the base's pythonpath) are roots too."""
-    try:
-        roots = verifier_settings(repo, base, import_paths).pythonpath
-    except (PytestConfigError, GitCommandError) as exc:
-        raise TestCommitRejected(CODE, f"the base's import roots cannot be read: {exc}") from exc
+    Names are matched under any directory, so the verifier's import roots need no reading."""
     files = _tree_files(repo, test_commit)
     read = partial(_read, repo, test_commit)
     for path in conftest_of(files):
         changed = frozenset(paths) - {path}
-        if hit := reached_change(path, read(path), changed, files, read, roots):
+        if hit := reached_change(path, read(path), changed, files, read):
             why = f"can load {hit}, which the test commit changes" if hit in changed else hit
             _refuse(path, None, f"an import that {why}")
 

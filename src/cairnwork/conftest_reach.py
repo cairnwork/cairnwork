@@ -9,11 +9,11 @@ the test commit's own top directories (where every test-commit path lives).
 
 Resolution over-approximates pytest on purpose (refusing too much is the safe side):
 
-* absolute imports are tried under the repository root, ``src/``, the verifier's import roots
-  (the task's import_paths and the base's ``pythonpath``, r3) and every directory above the
-  importing file (prepend mode puts a conftest's or test module's base directory first on
-  ``sys.path``, ahead of the standard library), each dotted prefix as ``.py`` or a package's
-  ``__init__.py``; ``from M import n`` also tries ``M.n``;
+* an absolute import of ``a.b.c`` may load, whatever directory is on ``sys.path`` (the repository
+  root, ``src/``, the verifier's import roots, a conftest's or test module's base directory in
+  prepend mode, or one a conftest puts there itself), every ``.py`` file of the tree whose path
+  ends in ``a``, ``a/b`` or ``a/b/c`` as a module or a package's ``__init__.py``, namespace
+  packages included (#924 r4/r5); ``from M import n`` also tries ``M.n``;
 * relative imports are resolved from the importing file's directory;
 * ``importlib.import_module("...")`` and ``__import__("...")`` with a literal name count as
   imports (a leading dot also relative to the file, a literal ``fromlist`` as submodules), and so
@@ -22,21 +22,20 @@ Resolution over-approximates pytest on purpose (refusing too much is the safe si
 * the ``__init__.py`` of the conftest's directory and of each directory above it count too:
   pytest may import the conftest as a module of that package (r2, cw#948 cross-model review).
 
-Whatever the roots, an absolute import whose top-level name is the stem of a changed ``.py``
-file, or the name of a package directory above one, counts as loading it (#924 r4: a conftest may
-put any directory on ``sys.path`` itself). A name built at run time, or an unchanged module
-outside the test commit's top directories that imports a test-commit file, is not followed: that
-is test author code, as in conftest_check.py.
-Nor are base test files: a changed module that only a base test file imports also runs its
-import-time code in the base run (a known residual, kept apart so that a test commit may still
-update a shared test helper).
+The bare name ``conftest`` is not matched: a changed conftest is checked by conftest_check.py
+itself. A name built at run time, or an unchanged module outside the test commit's top
+directories that imports a test-commit file, is not followed: that is test author code, as in
+conftest_check.py. Nor are base test files: a changed module that only a base test file imports
+also runs its import-time code in the base run (a known residual, #951, kept apart so that a test
+commit may still update a shared test helper). This runs at the producer and in the pipeline
+judge; a full receiver still checks only the task's conftest paths (#952).
 """
 
 from __future__ import annotations
 
 import ast
 from collections.abc import Iterable, Iterator
-from posixpath import dirname, join, normpath
+from posixpath import dirname, join
 
 MAX_FILES = 500  # unchanged modules followed per conftest before the walk refuses
 
@@ -47,26 +46,21 @@ def reached_change(
     changed: frozenset[str],
     files: frozenset[str],
     read,
-    roots: Iterable[str] = (),
 ) -> str:
     """The first file in ``changed`` that ``conftest`` (parsed as ``tree``) can load, following
     imports through the unchanged ``files`` under the top directories of ``changed``; or a reason
-    when there are too many to follow; '' when none. ``read(path)`` parses a file of the tree;
-    ``roots`` are the verifier's import roots besides the defaults (its pythonpath)."""
+    when there are too many to follow; '' when none. ``read(path)`` parses a file of the tree."""
     tops = {path.split("/", 1)[0] for path in changed}
-    extra = [("" if n == "." else n) for n in (normpath(r).strip("/") for r in roots)]
     queue, seen = [(conftest, tree)], {conftest}
     for init in sorted(_inits(conftest) & files):  # the packages pytest imports the conftest in
         if init in changed:
             return init
         seen.add(init)
         queue.append((init, read(init)))
-    by_name = _names(changed, files)
+    by_name = _names(files)
     while queue:
         here, parsed = queue.pop(0)
-        if hit := _named(parsed, by_name):
-            return hit
-        for target in sorted(_targets(here, parsed, files, extra)):
+        for target in sorted(_targets(here, parsed, files, by_name)):
             if target in changed:
                 return target
             if target in seen or target.split("/", 1)[0] not in tops:
@@ -78,44 +72,35 @@ def reached_change(
     return ""
 
 
-def _names(changed: frozenset[str], files: frozenset[str]) -> dict[str, str]:
-    """#924 r4: top-level module names a changed ``.py`` file may be imported as, whatever the
-    root: its stem, and the name of each package directory above it."""
-    out: dict[str, str] = {}
-    for path in sorted(p for p in changed if p.endswith(".py")):
-        stem = path.rsplit("/", 1)[-1][:-3]
-        if stem not in ("__init__", "conftest"):
-            out.setdefault(stem, path)
-        for directory in _above(dirname(path)):
-            if join(directory, "__init__.py") in files:
-                out.setdefault(directory.rsplit("/", 1)[-1], path)
+def _names(files: frozenset[str]) -> dict[str, set[str]]:
+    """#924 r5: each dotted name a ``.py`` file of the tree may be imported as, whatever directory
+    is on ``sys.path``: every trailing run of its path parts (``a/b/c.py`` as ``c``, ``b.c`` and
+    ``a.b.c``; ``a/b/__init__.py`` as ``b`` and ``a.b``), less the bare name ``conftest``."""
+    out: dict[str, set[str]] = {}
+    for path in files:
+        parts = path[:-3].split("/") if path.endswith(".py") else []
+        parts = parts[:-1] if parts[-1:] == ["__init__"] else parts
+        for k in range(len(parts)):
+            if (name := ".".join(parts[k:])) != "conftest":
+                out.setdefault(name, set()).add(path)
     return out
 
 
-def _named(tree: ast.Module, by_name: dict[str, str]) -> str:
-    """The changed file an absolute import in ``tree`` names by its top-level name, or ''."""
-    for level, names in _imports(tree):
-        for name in names if not level else ():
-            if hit := by_name.get(name.split(".", 1)[0]):
-                return hit
-    return ""
-
-
-def _targets(here: str, tree: ast.Module, files: frozenset[str], extra: list[str]) -> set[str]:
+def _targets(here: str, tree: ast.Module, files: frozenset[str], by_name) -> set[str]:
     """The files of the tree that one import in ``tree`` (the file ``here``) may load."""
-    roots = ["", "src", *extra, *_above(dirname(here))]
     found: set[str] = set()
     for level, names in _imports(tree):
-        if level:
+        for name in names:
+            parts = name.split(".") if name else []
+            if not level:  # every dotted prefix, as a file under any directory
+                for k in range(1, len(parts) + 1):
+                    found |= by_name.get(".".join(parts[:k]), set())
+                continue
             base = dirname(here)
             for _ in range(level - 1):
                 base = dirname(base)
-            starts = [base]  # the empty module name tries the package's own __init__.py
-        else:
-            starts = roots
-        for start in starts:
-            for name in names:
-                found |= _module_files(start, name.split(".") if name else []) & files
+            # the empty module name tries the package's own __init__.py
+            found |= _module_files(base, parts) & files
     return found
 
 

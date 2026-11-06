@@ -102,15 +102,18 @@ def test_an_unchanged_package_init_above_the_conftest_is_followed():
     assert _reach("import pytest\n", tree, ["tests/helper.py"]) == "tests/helper.py"
 
 
-def test_the_verifier_s_import_roots_are_roots_too():
-    """r3 (cw#948 cross-model review): a base pythonpath entry puts its directory on sys.path."""
-    tree, changed = {"tests/support/helper.py": ""}, ["tests/support/helper.py"]
-    conftest, text = "tests/conftest.py", "import helper\n"
-    parsed, files = {}, frozenset(tree) | {conftest}
-    args = (conftest, ast.parse(text), frozenset(changed), files, parsed.__getitem__)
-    assert reached_change(*args) == ""
-    assert reached_change(*args, ("tests/support",)) == "tests/support/helper.py"
-    assert reached_change(*args, ("./tests/support/",)) == "tests/support/helper.py"
+def test_an_unchanged_module_under_any_directory_is_followed_by_name():
+    """r3/r5: a base pythonpath entry or a conftest's own sys.path entry puts a directory first."""
+    tree = {"tests/support/helper.py": "import data\n", "tests/support/data.py": ""}
+    found = _reach("import helper\n", tree, ["tests/support/data.py"], conftest="tests/conftest.py")
+    assert found == "tests/support/data.py"
+
+
+def test_a_package_name_alone_does_not_match_a_changed_test_file():
+    """r5: importing ``tests.utils`` loads ``tests/__init__.py`` and ``tests/utils.py`` only."""
+    tree = {"tests/__init__.py": "", "tests/utils.py": "", "tests/test_foo.py": ""}
+    found = _reach("from tests.utils import x\n", tree, ["tests/test_foo.py"], "tests/conftest.py")
+    assert found == ""
 
 
 @pytest.mark.parametrize(
@@ -122,6 +125,7 @@ def test_the_verifier_s_import_roots_are_roots_too():
             {"tests/lib/pkg/__init__.py": "", "tests/lib/pkg/mod.py": ""},
             "tests/lib/pkg/mod.py",
         ),
+        ("import pkg.mod\n", {"tests/lib/pkg/mod.py": ""}, "tests/lib/pkg/mod.py"),  # namespace
     ],
 )
 def test_an_import_named_like_a_changed_module_is_a_hit(text, tree, changed):
