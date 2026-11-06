@@ -72,6 +72,13 @@ def _reach(conftest_text, tree, changed, conftest=CONFTEST):
         ("from . import helper\n", {"tests/sub/helper.txt": ""}, ""),  # data, not a module
         ("from . import helper\n", {"tests/helper.so": ""}, ""),  # another directory
         ("from . import helper\n", {"tests/x/tests/sub/helper.so": ""}, ""),  # same tail, deeper
+        # #980 Codex r1: a cached module in __pycache__ is the module beside it
+        ("from . import a\n", {"tests/sub/__pycache__/a.cpython-311.pyc": ""},
+         "tests/sub/__pycache__/a.cpython-311.pyc"),
+        ("import a\n", {"tests/__pycache__/a.cpython-311.pyc": ""},
+         "tests/__pycache__/a.cpython-311.pyc"),
+        ("from . import x\n", {"tests/sub/__pycache__/__init__.cpython-311.pyc": ""},
+         "tests/sub/__pycache__/__init__.cpython-311.pyc"),
     ],
 )  # fmt: skip
 def test_a_direct_import_of_a_changed_file_is_found(text, tree, hit):

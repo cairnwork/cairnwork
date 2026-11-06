@@ -85,11 +85,11 @@ def _names(files: frozenset[str]) -> dict[str, set[str]]:
     is on ``sys.path``: every trailing run of its path parts (``a/b/c.py`` as ``c``, ``b.c`` and
     ``a.b.c``; ``a/b/__init__.py`` as ``b`` and ``a.b``), less the bare name ``conftest``. A
     native extension or bytecode file counts under the part of its name before the first dot
-    (``colorsys.cpython-314-darwin.so`` as ``colorsys``, r6)."""
+    (``colorsys.cpython-314-darwin.so`` as ``colorsys``, r6), and a cached one in ``__pycache__``
+    as the module beside it (#980)."""
     out: dict[str, set[str]] = {}
     for path in files:
-        *dirs, name = path.split("/")
-        parts = [*dirs, name.split(".", 1)[0]] if name.endswith(MODULE_SUFFIXES) else []
+        parts = _stem(path).split("/") if path.endswith(MODULE_SUFFIXES) else []
         parts = parts[:-1] if parts[-1:] == ["__init__"] else parts
         for k in range(len(parts)):
             if (name := ".".join(parts[k:])) != "conftest":
@@ -178,8 +178,11 @@ def _module_files(start: str, parts: list[str], files: frozenset[str], by_name) 
 
 
 def _stem(path: str) -> str:
-    """``path`` less everything after the first dot of its file name."""
+    """``path`` less everything after the first dot of its file name, and less a ``__pycache__``
+    directory it is in: Python loads ``d/__pycache__/m.<tag>.pyc`` as the module ``d/m`` (#980)."""
     head, _, name = path.rpartition("/")
+    if head.rpartition("/")[2] == "__pycache__":
+        head = head.rpartition("/")[0]
     return join(head, name.split(".", 1)[0])
 
 
