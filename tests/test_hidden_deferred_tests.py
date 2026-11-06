@@ -1,9 +1,10 @@
 """#925: the AST reader (deferred_nodes) does not read every test pytest collects. A test commit
 that changes a test inside a module-level block or a nested test class is refused,
 DEFERRED_TESTS_UNREADABLE, also beside a visible new test (which before made a target naming
-only that test count as covering the file). Removing a class decorator changes each of the class's
-tests. An unchanged hidden test on the base, and a ``test*`` defined inside a function, refuse
-nothing."""
+only that test count as covering the file); so is one that binds a ``test*``/``Test*`` name another
+way (assignment, walrus, loop target, import) to anything but a literal. Removing a class
+decorator changes each of the class's tests. An unchanged hidden test on the base, a ``test*``
+defined inside a function and a literal ``test*`` value refuse nothing."""
 
 import pytest
 from conftest import commit_change
@@ -21,7 +22,21 @@ HIDDEN = {
     "with-block": "import contextlib\nwith contextlib.nullcontext():\n    def test_b():\n" + WRONG,
     "nested-class": "class TestOuter:\n    class TestInner:\n        def test_b(self):\n    "
     + WRONG,
+    # names bound another way (#925 r2): pytest collects whatever the module or class holds
+    "assign": "test_b = make_test()\n",
+    "annotated": "test_b: object = make_test()\n",
+    "augmented": "test_b = 0\ntest_b += make_test()\n",
+    "walrus": "if (test_b := make_test()):\n    pass\n",
+    "loop-target": "for test_b in [make_test()]:\n    pass\n",
+    "type-call": "TestB = type('TestB', (), {'test_b': make_test()})\n",
+    "nested-inherited": "class TestOuter:\n    class TestInner(Base):\n        pass\n",
+    "class-body": "class TestOuter:\n    test_b = staticmethod(make_test())\n",
+    "from-import": "from helpers import test_b\n",
+    "import-as": "import helpers as test_b\n",
 }
+NOT_HIDDEN = (  # a literal value, the TestCase base, a module: pytest collects none of them
+    "test_data = [1, 2, {'a': (3,)}]\nfrom unittest import TestCase\nimport testtools\n"
+)
 
 
 def _new_tests(project, files):
@@ -45,10 +60,10 @@ def test_removing_a_class_skip_changes_each_of_its_tests(project):
     assert untargeted((F,), nodes, (f"{F}::test_regression",)) == (F,)
 
 
-def test_an_unchanged_hidden_test_and_a_local_def_refuse_nothing(project):
+def test_an_unchanged_hidden_test_a_local_def_and_literals_refuse_nothing(project):
     local = "def test_c():\n    def test_inner():\n        pass\n    test_inner()\n"
     commit_change(project, {F: HIDDEN["if-block"]})
-    nodes = _new_tests(project, {F: HIDDEN["if-block"] + REGRESSION + local})
+    nodes = _new_tests(project, {F: HIDDEN["if-block"] + NOT_HIDDEN + REGRESSION + local})
     assert nodes == {f"{F}::test_regression", f"{F}::test_c"}
 
 

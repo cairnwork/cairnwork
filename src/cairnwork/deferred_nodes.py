@@ -22,9 +22,12 @@ commit with one is refused, never wrongly accepted. Bases imported from another 
 read; neither are custom ``python_functions``/``python_classes`` settings. A class's decorators are
 part of each of its tests (#925: removing a class-level skip changes them all).
 
-``hidden_tests`` (#925): the test-like definitions pytest may collect that are not read above, a
-``test*`` function or ``Test*`` class inside a module-level block (``if``, ``try``, ``with``, a
-loop) or a ``Test*`` class nested in a class. new_tests refuses a test commit that changes one.
+``hidden_tests`` (#925): what may give pytest a test that is not read above, at module level or
+in a class body, inside a block (``if``, ``try``, ``with``, a loop) or not: a ``test*`` function
+or ``Test*`` class in a block or nested in a class, and a ``test*``/``Test*`` name bound another
+way (assignment, walrus, loop or ``with`` target, ``from x import test_y``), unless the value is a
+literal. new_tests refuses a test commit that changes one. Names set at run time (``setattr``,
+``globals()``) are not seen.
 """
 
 from __future__ import annotations
@@ -33,6 +36,7 @@ import ast
 
 _DEFS = (ast.FunctionDef, ast.AsyncFunctionDef)
 _NOT_COLLECTED = frozenset({"__init__", "__new__"})
+_ASSIGNS = (ast.Assign, ast.AnnAssign, ast.AugAssign)
 
 
 def test_functions(tree: ast.Module) -> tuple[dict[str, str], frozenset[str]]:
@@ -76,27 +80,54 @@ def _members(
 
 
 def hidden_tests(tree: ast.Module) -> frozenset[str]:
-    """#925: ``ast.dump`` of each test-like definition test_functions does not read (see the module
-    docstring); not the bodies of functions, whose nested definitions pytest never collects."""
+    """#925: ``ast.dump`` of each statement that may give pytest a test test_functions does not read
+    (see the module docstring), at module level or in a class body, in a block or not; not inside
+    a function, whose local names pytest never collects."""
     found: set[str] = set()
+    scan = [node for node in tree.body if not isinstance(node, (*_DEFS, ast.ClassDef))]
     for node in tree.body:
         if isinstance(node, ast.ClassDef):
-            for item in node.body:
-                if isinstance(item, ast.ClassDef) and item.name.startswith("Test"):
-                    found.add(ast.dump(item))
-                elif not isinstance(item, (*_DEFS, ast.ClassDef)):
-                    _hidden(item, found)
-        elif not isinstance(node, _DEFS):
-            _hidden(node, found)
+            scan += [item for item in node.body if not isinstance(item, _DEFS)]
+    _hidden(ast.Module(body=scan, type_ignores=[]), found, None)
     return frozenset(found)
 
 
-def _hidden(node: ast.AST, found: set[str]) -> None:
+def _hidden(node: ast.AST, found: set[str], stmt: ast.AST | None) -> None:
     for child in ast.iter_child_nodes(node):
+        here = child if isinstance(child, ast.stmt) else stmt
         if isinstance(child, _DEFS):
             if child.name.startswith("test"):
                 found.add(ast.dump(child))
         elif isinstance(child, ast.ClassDef) and child.name.startswith("Test"):
             found.add(ast.dump(child))
+        elif isinstance(child, _ASSIGNS) and _literal(child.value):
+            continue  # a constant or a display of constants: pytest collects only callables
         else:
-            _hidden(child, found)
+            if here is not None and _binds_test(child):
+                found.add(ast.dump(here))
+            _hidden(child, found, here)
+
+
+def _binds_test(node: ast.AST) -> bool:
+    """A name binding pytest's default rules could collect: an assignment, walrus, loop or
+    ``with`` target, or an imported name (``from x import test_y``, ``import x as test_y``)."""
+    if isinstance(node, ast.Name):
+        names = [node.id] if isinstance(node.ctx, ast.Store) else []
+    elif isinstance(node, ast.ImportFrom):
+        names = [alias.asname or alias.name for alias in node.names]
+        names = [name for name in names if name != "TestCase"]  # the base class has no tests
+    elif isinstance(node, ast.Import):  # a plain import binds a module, which pytest never collects
+        names = [alias.asname for alias in node.names if alias.asname]
+    else:
+        names = []
+    return any(name.startswith(("test", "Test")) for name in names)
+
+
+def _literal(value: ast.expr | None) -> bool:
+    if value is None:  # an annotation only (``test_x: int``) binds nothing
+        return True
+    try:
+        ast.literal_eval(value)
+    except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+        return False
+    return True
