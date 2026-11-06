@@ -105,6 +105,9 @@ FLAG = "    pytestmark = [pytest.mark.skip] * SKIP\n" + Y
 CHAIN = "class TestX:\n    @C.mark\n" + Y
 ALL = {"test_y", "test_regression"}  # a module-level statement counts for every test
 ON = "def on():\n    return flag()\n"
+BASE = "class Base:\n    def __init_subclass__(cls, **kw):\n        pass\n"
+SUBCLASS = "class Base:\n    def __init_subclass__(cls):\n        {}\nclass TestX(Base):\n" + Y
+FX = "@pytest.fixture\ndef fx():\n    {}\n"
 HELPED = "COND = on()\n@pytest.mark.skipif(COND, reason='r')\n" + FN
 REACH = {  # (on the base, in the test commit, the tests that change): #968 r3, Codex r2
     "alias": ("s = pytest.mark.skip\n@s\n" + FN, "s = pytest.mark.xfail\n@s\n" + FN, ALL),
@@ -148,6 +151,30 @@ REACH = {  # (on the base, in the test commit, the tests that change): #968 r3, 
                             "from marks_b import s\nclass TestX:\n    @s\n" + Y, {"TestX::test_y"}),
     "import-source-pytestmark": ("from marks_a import s\npytestmark = s\n" + FN,
                                  "from marks_b import s\npytestmark = s\n" + FN, ALL),
+    # #979 r1 (Gemini, jeter): every other same-file place that can mark or skip a test
+    "metaclass": ("class Meta(type):\n    pass\nclass TestX(metaclass=Meta):\n" + Y,
+                  "class Meta(type):\n    x = 1\nclass TestX(metaclass=Meta):\n" + Y,
+                  {"TestX::test_y"}),
+    "class-keyword": (BASE + "class TestX(Base, on=True):\n" + Y,
+                      BASE + "class TestX(Base, on=False):\n" + Y, {"TestX::test_y"}),
+    "init-subclass": (SUBCLASS.format("cls.pytestmark = pytest.mark.skip"),
+                      SUBCLASS.format("pass"), {"TestX::test_y"}),
+    "class-helper": ("class TestX:\n    def mark(f):\n        return pytest.mark.skip(f)\n"
+                     "    @mark\n" + Y, "class TestX:\n    def mark(f):\n        return f\n"
+                     "    @mark\n" + Y, {"TestX::test_y"}),
+    "setup-method": ("class TestX:\n    def setup_method(self):\n        pytest.skip('r')\n" + Y,
+                     "class TestX:\n    def setup_method(self):\n        pass\n" + Y,
+                     {"TestX::test_y"}),
+    "setup-module": ("def setup_module():\n    pytest.skip('r', allow_module_level=True)\n" + FN,
+                     "def setup_module():\n    pass\n" + FN, ALL),
+    "autouse-fixture": ("@pytest.fixture(autouse=True)\ndef auto():\n    pytest.skip('r')\n" + FN,
+                        "@pytest.fixture(autouse=True)\ndef auto():\n    pass\n" + FN, ALL),
+    "hook": ("def pytest_runtest_setup(item):\n    pytest.skip('r')\n" + FN,
+             "def pytest_runtest_setup(item):\n    pass\n" + FN, ALL),
+    "fixture-argument": (FX.format("pytest.skip('r')") + "def test_y(fx):\n    pass\n",
+                         FX.format("pass") + "def test_y(fx):\n    pass\n", {"test_y"}),
+    "usefixtures": (FX.format("pytest.skip('r')") + "@pytest.mark.usefixtures('fx')\n" + FN,
+                    FX.format("pass") + "@pytest.mark.usefixtures('fx')\n" + FN, {"test_y"}),
     "module-constant": ("DATA = 1\n" + FN, "DATA = 2\n" + FN, ALL),  # counted whole: the cost
     "unrelated": (FN, "import json\ndef helper():\n    return json.dumps(1)\n" + FN
                   + "def test_new():\n    assert helper()\n", {"test_new"}),  # read by no mark

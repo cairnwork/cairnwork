@@ -53,6 +53,8 @@ _DEFS = (ast.FunctionDef, ast.AsyncFunctionDef)
 _SCOPES = (*_DEFS, ast.ClassDef)  # a ``global`` in either binds at module level
 _NOT_COLLECTED = frozenset({"__init__", "__new__"})
 _ASSIGNS = (ast.Assign, ast.AnnAssign, ast.AugAssign)
+_XUNIT = frozenset({"setup_module", "teardown_module", "setup_function", "teardown_function",
+                    "setUpModule", "tearDownModule", "setup", "teardown"})  # fmt: skip
 
 
 def test_functions(tree: ast.Module) -> tuple[dict[str, str], frozenset[str]]:
@@ -65,7 +67,7 @@ def test_functions(tree: ast.Module) -> tuple[dict[str, str], frozenset[str]]:
     for node in tree.body:
         if isinstance(node, _DEFS) and node.name.startswith("test"):
             functions[node.name] = _digest(
-                reach.module + ast.dump(node) + reach(node.decorator_list)
+                reach.module + ast.dump(node) + reach([*node.decorator_list, node.args])
             )
         elif isinstance(node, ast.ClassDef):
             methods, blocked, case, marks = _members(node, classes, reach)
@@ -94,12 +96,12 @@ def _members(node: ast.ClassDef, classes: dict[str, _Class], reach: _Reach) -> _
     decorators and every statement of its body that is not a function, with what they read, and
     every base's (pytest applies them along the MRO, #925, #968)."""
     methods = {
-        item.name: ast.dump(item) + reach(item.decorator_list)
+        item.name: ast.dump(item) + reach([*item.decorator_list, item.args])
         for item in node.body
         if isinstance(item, _DEFS)
     }
     blocked, case = bool(_NOT_COLLECTED & methods.keys()), False
-    marks = reach([*node.decorator_list, *(s for s in node.body if not isinstance(s, _DEFS))])
+    marks = reach([_shell(node)])  # decorators, bases, keywords, every statement but its tests
     for base in node.bases:
         last = base.id if isinstance(base, ast.Name) else getattr(base, "attr", "")
         case = case or last.endswith("TestCase")
@@ -129,12 +131,12 @@ class _Reach:
             names = _binds(stmt)
             for name in names:
                 self._by_name.setdefault(name, []).append(stmt)
-            if not names:
+            if not names or _for_every_test(stmt):
                 rest.append(stmt)
         self.module = self(rest)
 
     def __call__(self, nodes: list) -> str:
-        names = frozenset(n.id for x in nodes for n in ast.walk(x) if isinstance(n, ast.Name))
+        names = frozenset(name for x in nodes for n in ast.walk(x) if (name := _name(n)))
         if (found := self._found.get(names)) is None:
             self._found[names] = found = self._follow(names)
         return _digest("".join(ast.dump(n) for n in nodes) + found)
@@ -147,7 +149,7 @@ class _Reach:
             for stmt in self._by_name.get(names.pop(), ()):
                 if id(stmt) not in seen:
                     seen[id(stmt)] = shell = _shell(stmt)
-                    names += [n.id for n in ast.walk(shell) if isinstance(n, ast.Name)]
+                    names += [name for n in ast.walk(shell) if (name := _name(n))]
         found = sorted(seen.items(), key=lambda item: item[1].lineno)
         return "".join(self._dump(key, stmt) for key, stmt in found)
 
@@ -155,6 +157,30 @@ class _Reach:
         if (dump := self._dumps.get(key)) is None:
             self._dumps[key] = dump = _digest(ast.dump(stmt))
         return dump
+
+
+def _name(node: ast.AST) -> str:
+    """A name ``node`` may read: a variable, a parameter (a fixture), or a string that is an
+    identifier (``usefixtures("fx")``, ``getfixturevalue("fx")``)."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.arg):
+        return node.arg
+    value = getattr(node, "value", None) if isinstance(node, ast.Constant) else None
+    return value if isinstance(value, str) and value.isidentifier() else ""
+
+
+def _for_every_test(stmt: ast.stmt) -> bool:
+    """A module-level function pytest runs for every test of the file without a test naming it:
+    an xunit setup or teardown, a ``pytest_*`` hook, or an ``autouse`` fixture."""
+    if not isinstance(stmt, _DEFS):
+        return False
+    autouse = any(k.arg == "autouse" for d in stmt.decorator_list for k in _keywords(d))
+    return autouse or stmt.name in _XUNIT or stmt.name.startswith("pytest_")
+
+
+def _keywords(node: ast.AST) -> list[ast.keyword]:
+    return [k for n in ast.walk(node) if isinstance(n, ast.Call) for k in n.keywords]
 
 
 def _digest(text: str) -> str:
