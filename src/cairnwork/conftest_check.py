@@ -127,13 +127,16 @@ def _tree_files(repo: Path, commit: str) -> frozenset[str]:
 def _read(repo: Path, commit: str, path: str) -> ast.Module:
     """An unchanged file the walk follows. One that does not parse (Python 2, not UTF-8) cannot be
     refused for that, as the test author cannot change it (#948 r6): every dotted name in its text
-    counts as an import instead. A changed conftest is parsed strictly by check_conftests."""
+    counts as an import instead. Read as bytes, so a source encoding declaration is honoured
+    (r7). A changed conftest is parsed strictly by check_conftests."""
     try:
-        return _parse(repo, f"{commit}:{path}", path, present=True)
-    except TestCommitRejected as exc:
-        if exc.code != "TEST_COMMIT_UNPARSABLE":
-            raise
-    text = run_git_bytes(repo, "cat-file", "blob", f"{commit}:{path}")
+        text = run_git_bytes(repo, "cat-file", "blob", f"{commit}:{path}")
+    except GitCommandError as exc:
+        raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
+    try:
+        return ast.parse(text)
+    except (SyntaxError, ValueError, UnicodeError, MemoryError, RecursionError):
+        pass
     names = sorted(set(re.findall(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", text.decode("latin-1"))))
     return ast.Module(body=[ast.Import(names=[ast.alias(name=n) for n in names])], type_ignores=[])
 
