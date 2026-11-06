@@ -62,6 +62,15 @@ def _reach(conftest_text, tree, changed, conftest=CONFTEST):
         ("import colorsys\n", {"tests/colorsys.pyd": ""}, "tests/colorsys.pyd"),
         ("import colorsys\n", {"tests/colorsys.pyc": ""}, "tests/colorsys.pyc"),
         ("import colorsys\n", {"tests/colorsys.txt": ""}, ""),  # data, not a module
+        # #976: the same through a relative import
+        ("from . import helper\n", {"tests/sub/helper.cpython-314-darwin.so": ""},
+         "tests/sub/helper.cpython-314-darwin.so"),
+        ("from .. import helper\n", {"tests/helper.pyd": ""}, "tests/helper.pyd"),
+        ("from .pkg import x\n", {"tests/sub/pkg/x.pyc": ""}, "tests/sub/pkg/x.pyc"),
+        ("from . import x\n", {"tests/sub/__init__.cpython-314-darwin.so": ""},
+         "tests/sub/__init__.cpython-314-darwin.so"),
+        ("from . import helper\n", {"tests/sub/helper.txt": ""}, ""),  # data, not a module
+        ("from . import helper\n", {"tests/helper.so": ""}, ""),  # another directory
     ],
 )  # fmt: skip
 def test_a_direct_import_of_a_changed_file_is_found(text, tree, hit):
