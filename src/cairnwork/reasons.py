@@ -134,12 +134,20 @@ def why_not_passed(
     return "; ".join(causes)
 
 
+def _missing_modules(run) -> str:
+    """#796 S3: the new submodules a failed run's test files could not import (the guard's
+    re-validated record), so a candidate that does not add the module is told so; text only."""
+    modules = [module for _node, module, _origin in getattr(run, "submodule_errors", ())]
+    return f"; collection could not import {_names(modules)}" if modules else ""
+
+
 def explain(runs) -> str:
     """``[v1: cause; v2: cause]`` for the runs that failed, then ``[notes v3: note, note]`` for the
     backend notes of the runs that passed (Issue #584); ``""`` when every run passed without
     notes. Notes never change the verdict: they only say what the host left open around a run."""
     failed = [
         f"{run.spec.verifier_id}: {run.why or 'no cause recorded'}"
+        + _missing_modules(run)
         + "".join(f" ({note})" for note in run.notes)  # fixed strings from the backend
         for run in runs
         if not run.observation.passed
@@ -162,8 +170,10 @@ def skip_hint(run) -> str:
 
 
 # #796: the hint for a base collect error in a target file. A module-level ``from <in-repo module>
-# import <name>`` that fails on the base is accepted as teeth; anything else must move inside.
+# import <name>`` (or, #796 S3, ``import <in-repo package>.<new module>``) that fails on the base
+# is accepted as teeth; anything else must move inside.
 COLLECT_HINT = (
     "; import fix-introduced symbols inside the test function (a module-level"
-    " 'from <existing in-repo module> import <name>' is also accepted)"
+    " 'from <existing in-repo module> import <name>' or 'import <existing in-repo package>.<new"
+    " module>' is also accepted)"
 )

@@ -78,9 +78,10 @@ def _submodule_error(node, call, report, _real=os.path.realpath, _rel=os.path.re
                      _mods=sys.modules, _get=dict.get, _vars=vars, _mod=ModuleType):
     # #796 S3: "No module named 'pkg.newmod'" from a test module's own import statement, where
     # the parent package pkg is a regular package already loaded from an __init__.py in the
-    # checkout. A HINT like _import_error, reachable by base code and tests: read only exact
-    # values, and the parent only through its module dict (getattr could run a module
-    # __getattr__ in repo code); no find_spec, no import; any error records nothing.
+    # checkout. A HINT like _import_error, reachable by base code and tests: read values only
+    # after an exact-type check, and the parent only through its module dict (getattr could run
+    # a module __getattr__ in repo code); no find_spec, no import; any error records nothing. A
+    # dict lookup can still call a colliding key's __eq__ (test code): a hint, not evidence.
     try:
         exc = call.excinfo.value.__cause__
         if not (isinstance(node, pytest.Module) and report.when == "collect"
