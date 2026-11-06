@@ -21,15 +21,15 @@ its own ``__init__`` is collected by pytest's unittest support but is counted he
 commit with one is refused, never wrongly accepted. Bases imported from another module are not
 read; neither are custom ``python_functions``/``python_classes`` settings. A class's decorators are
 part of each of its tests, and so are (#968, #979) its whole class less its ``test*`` methods
-(bases, keywords and metaclass, ``pytestmark``, attributes, flags, helper and setup methods,
-``__init_subclass__``) and the same of each base class defined earlier in the file; every
-module-level statement that is not an import, a function or a class, and every module-level
-function pytest runs for each test (xunit setup and teardown, ``pytest_*`` hooks, ``autouse``
-fixtures); and each import, function or class that any of those, the test's own decorators or
-its parameters (fixtures) read by name or by an identifier string (``usefixtures``), in turn.
-So a mark, skip or fixture changed anywhere in the file changes each test it may apply to. A
-class pytest does not collect keeps only its own decorators (#925: removing a class-level skip
-changes them all).
+(bases, keywords and metaclass, ``pytestmark``, attributes, flags, helper and setup methods)
+and the same of each base class defined earlier in the file; every module-level statement that
+is not an import, a test or a plain function, whole: so every non-test class (its body runs at
+import), every decorated function (a fixture, ``autouse`` under any name), one whose defaults or
+annotations call something, and the functions pytest calls itself (xunit setup and teardown,
+``pytest_*`` hooks); and each import, plain function or class that any of those or the test's
+own decorators read by name, in turn. So whatever in the file runs at import or for every test
+changes every test (#979 r3, by construction). A class pytest does not collect keeps only its
+own decorators (#925: removing a class-level skip changes them all).
 
 ``hidden_tests`` (#925): what may give pytest a test that is not read above, at module level or
 in a class body, inside a block (``if``, ``try``, ``with``, a loop) or not: a ``test*`` function
@@ -57,6 +57,7 @@ _DEFS = (ast.FunctionDef, ast.AsyncFunctionDef)
 _SCOPES = (*_DEFS, ast.ClassDef)  # a ``global`` in either binds at module level
 _NOT_COLLECTED = frozenset({"__init__", "__new__"})
 _ASSIGNS = (ast.Assign, ast.AnnAssign, ast.AugAssign)
+_ACTS = (ast.Call, ast.NamedExpr, ast.Await, ast.Yield, ast.YieldFrom)  # may act when evaluated
 _XUNIT = frozenset({"setup_module", "teardown_module", "setup_function", "teardown_function",
                     "setUpModule", "tearDownModule", "setup", "teardown"})  # fmt: skip
 
@@ -71,7 +72,7 @@ def test_functions(tree: ast.Module) -> tuple[dict[str, str], frozenset[str]]:
     for node in tree.body:
         if isinstance(node, _DEFS) and node.name.startswith("test"):
             functions[node.name] = _digest(
-                reach.module + ast.dump(node) + reach([*node.decorator_list, node.args])
+                reach.module + ast.dump(node) + reach(node.decorator_list)
             )
         elif isinstance(node, ast.ClassDef):
             methods, blocked, case, marks = _members(node, classes, reach)
@@ -100,14 +101,14 @@ def _members(node: ast.ClassDef, classes: dict[str, _Class], reach: _Reach) -> _
     class less its ``test*`` methods, with what it reads in turn, so each base class defined
     earlier in the file too (pytest applies their marks along the MRO, #925, #968, #979)."""
     methods = {
-        item.name: ast.dump(item) + reach([*item.decorator_list, item.args])
+        item.name: ast.dump(item) + reach(item.decorator_list)
         for item in node.body
         if isinstance(item, _DEFS)
     }
     blocked, case = bool(_NOT_COLLECTED & methods.keys()), False
     marks = reach([_shell(node)])  # decorators, bases, keywords, every statement but its tests
     for base in node.bases:
-        last = base.id if isinstance(base, ast.Name) else getattr(base, "attr", "")
+        last = _base_name(base)
         case = case or last.endswith("TestCase")
         if isinstance(base, ast.Name) and base.id in classes:
             inherited, base_blocked, base_case, _ = classes[base.id]  # its marks: reach follows it
@@ -141,7 +142,7 @@ class _Reach:
         self.module = self(rest)
 
     def __call__(self, nodes: list) -> str:
-        names = frozenset(name for x in nodes for n in ast.walk(x) if (name := _name(n)))
+        names = frozenset(n.id for x in nodes for n in ast.walk(x) if isinstance(n, ast.Name))
         if (found := self._found.get(names)) is None:
             self._found[names] = found = self._follow(names)
         return _digest("".join(ast.dump(n) for n in nodes) + found)
@@ -155,13 +156,15 @@ class _Reach:
                 if id(stmt) not in seen:
                     seen[id(stmt)] = stmt
                     names += self._reads(stmt)
-        found = sorted(seen.items(), key=lambda item: item[1].lineno)
+        found = sorted(seen.items(), key=lambda item: (item[1].lineno, item[1].col_offset))
         return "".join(self._dump(key, stmt) for key, stmt in found)
 
     def _reads(self, stmt: ast.stmt) -> list[str]:
         """The names a statement's shell reads, walked once per statement (#979 r2)."""
         if (names := self._read.get(id(stmt))) is None:
-            self._read[id(stmt)] = names = [m for n in ast.walk(_shell(stmt)) if (m := _name(n))]
+            self._read[id(stmt)] = names = [
+                n.id for n in ast.walk(_shell(stmt)) if isinstance(n, ast.Name)
+            ]
         return names
 
     def _dump(self, key: int, stmt: ast.stmt) -> str:
@@ -170,29 +173,31 @@ class _Reach:
         return dump
 
 
-def _name(node: ast.AST) -> str:
-    """A name ``node`` may read: a variable, a parameter (a fixture), or a string that is an
-    identifier (``usefixtures("fx")``). Only decorators, parameters and followed statements are
-    read this way, not a test's body (``request.getfixturevalue("fx")`` there is not seen)."""
-    if isinstance(node, ast.Name):
-        return node.id
-    if isinstance(node, ast.arg):
-        return node.arg
-    value = getattr(node, "value", None) if isinstance(node, ast.Constant) else None
-    return value if isinstance(value, str) and value.isidentifier() else ""
-
-
 def _for_every_test(stmt: ast.stmt) -> bool:
-    """A module-level function pytest runs for every test of the file without a test naming it:
-    an xunit setup or teardown, a ``pytest_*`` hook, or an ``autouse`` fixture."""
-    if not isinstance(stmt, _DEFS):
+    """#979 r3, by construction: a module-level class or function that is not a test and that
+    can act at import or for every test without a test naming it. That is any class but a test
+    class (its body runs at import), and any function but a test that has a decorator (it runs
+    at import: a fixture, an ``autouse`` one under any alias), a default or annotation that
+    calls something, or a name pytest calls itself (xunit setup or teardown, a ``pytest_*``
+    hook). Only a plain function whose body runs when called stays out, followed by name."""
+    if isinstance(stmt, ast.ClassDef):
+        return not stmt.name.startswith("Test") and not any(
+            _base_name(base).endswith("TestCase") for base in stmt.bases
+        )
+    if not isinstance(stmt, _DEFS) or stmt.name.startswith("test"):
         return False
-    autouse = any(k.arg == "autouse" for d in stmt.decorator_list for k in _keywords(d))
-    return autouse or stmt.name in _XUNIT or stmt.name.startswith("pytest_")
+    args = stmt.args
+    evaluated = [*args.defaults, *args.kw_defaults, stmt.returns]
+    evaluated += [a.annotation for a in (*args.posonlyargs, *args.args, *args.kwonlyargs)]
+    evaluated += [a.annotation for a in (args.vararg, args.kwarg) if a]
+    acts = any(isinstance(n, _ACTS) for e in evaluated if e for n in ast.walk(e))
+    return (
+        bool(stmt.decorator_list) or acts or stmt.name in _XUNIT or stmt.name.startswith("pytest_")
+    )
 
 
-def _keywords(node: ast.AST) -> list[ast.keyword]:
-    return [k for n in ast.walk(node) if isinstance(n, ast.Call) for k in n.keywords]
+def _base_name(base: ast.expr) -> str:
+    return base.id if isinstance(base, ast.Name) else getattr(base, "attr", "")
 
 
 def _digest(text: str) -> str:
@@ -202,12 +207,8 @@ def _digest(text: str) -> str:
 def _binds(stmt: ast.stmt) -> set[str]:
     """The names a module-level import, function or class binds; none for any other statement,
     which counts whole (a star import is refused by hidden_tests when it changes)."""
-    if isinstance(stmt, _SCOPES):  # and a fixture's ``name=`` (#979 r2)
-        names = {stmt.name}
-        for k in (k for d in stmt.decorator_list for k in _keywords(d) if k.arg == "name"):
-            if isinstance(k.value, ast.Constant) and isinstance(k.value.value, str):
-                names.add(k.value.value)
-        return names
+    if isinstance(stmt, _SCOPES):
+        return {stmt.name}
     if isinstance(stmt, (ast.Import, ast.ImportFrom)):
         return {(alias.asname or alias.name).split(".")[0] for alias in stmt.names}
     return set()

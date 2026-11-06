@@ -80,7 +80,8 @@ MARKS = {  # (on the base, in the test commit, the tests that change): #968
     "base-class": ("@pytest.mark.skip\nclass TestBase:\n" + Y, "class TestBase:\n" + Y,
                    {"TestBase::test_y", "TestSub::test_y"}),
     "second-base": ("@pytest.mark.skip\nclass Marked:\n    pass\nclass Tests:\n" + Y,
-                    "class Marked:\n    pass\nclass Tests:\n" + Y, {"TestSub::test_y"}),
+                    "class Marked:\n    pass\nclass Tests:\n" + Y,
+                    {"TestSub::test_y", "Tests::test_y", "test_regression"}),  # a class: import
     "class-pytestmark": ("class TestBase:\n    " + SKIP + Y, "class TestBase:\n" + Y,
                          {"TestBase::test_y", "TestSub::test_y"}),
 }  # fmt: skip
@@ -108,6 +109,8 @@ ON = "def on():\n    return flag()\n"
 BASE = "class Base:\n    def __init_subclass__(cls, **kw):\n        pass\n"
 SUBCLASS = "class Base:\n    def __init_subclass__(cls):\n        {}\nclass TestX(Base):\n" + Y
 FX = "@pytest.fixture\ndef fx():\n    {}\n"
+METHOD_FX = "class TestX:\n    def test_y(self, fx):\n        pass\n"
+AUTO = "auto = pytest.fixture(autouse=True)\n@auto\ndef a():\n    {}\n"  # Gemini r2
 ALIAS = "@pytest.fixture(name='db')\ndef _db():\n    {}\n"  # jeter r2
 HELPED = "COND = on()\n@pytest.mark.skipif(COND, reason='r')\n" + FN
 REACH = {  # (on the base, in the test commit, the tests that change): #968 r3, Codex r2
@@ -155,11 +158,11 @@ REACH = {  # (on the base, in the test commit, the tests that change): #968 r3, 
     # #979 r1 (Gemini, jeter): every other same-file place that can mark or skip a test
     "metaclass": ("class Meta(type):\n    pass\nclass TestX(metaclass=Meta):\n" + Y,
                   "class Meta(type):\n    x = 1\nclass TestX(metaclass=Meta):\n" + Y,
-                  {"TestX::test_y"}),
+                  {"TestX::test_y", "test_regression"}),
     "class-keyword": (BASE + "class TestX(Base, on=True):\n" + Y,
                       BASE + "class TestX(Base, on=False):\n" + Y, {"TestX::test_y"}),
     "init-subclass": (SUBCLASS.format("cls.pytestmark = pytest.mark.skip"),
-                      SUBCLASS.format("pass"), {"TestX::test_y"}),
+                      SUBCLASS.format("pass"), {"TestX::test_y", "test_regression"}),
     "class-helper": ("class TestX:\n    def mark(f):\n        return pytest.mark.skip(f)\n"
                      "    @mark\n" + Y, "class TestX:\n    def mark(f):\n        return f\n"
                      "    @mark\n" + Y, {"TestX::test_y"}),
@@ -173,15 +176,22 @@ REACH = {  # (on the base, in the test commit, the tests that change): #968 r3, 
     "hook": ("def pytest_runtest_setup(item):\n    pytest.skip('r')\n" + FN,
              "def pytest_runtest_setup(item):\n    pass\n" + FN, ALL),
     "fixture-argument": (FX.format("pytest.skip('r')") + "def test_y(fx):\n    pass\n",
-                         FX.format("pass") + "def test_y(fx):\n    pass\n", {"test_y"}),
-    "method-fixture-argument": (FX.format("pytest.skip('r')") + "class TestX:\n"
-                                "    def test_y(self, fx):\n        pass\n",
-                                FX.format("pass") + "class TestX:\n"
-                                "    def test_y(self, fx):\n        pass\n", {"TestX::test_y"}),
+                         FX.format("pass") + "def test_y(fx):\n    pass\n", ALL),
+    "method-fixture-argument": (FX.format("pytest.skip('r')") + METHOD_FX,
+                                FX.format("pass") + METHOD_FX,
+                                {"TestX::test_y", "test_regression"}),
     "fixture-name-alias": (ALIAS.format("pytest.skip('r')") + "def test_y(db):\n    pass\n",
-                           ALIAS.format("pass") + "def test_y(db):\n    pass\n", {"test_y"}),
+                           ALIAS.format("pass") + "def test_y(db):\n    pass\n", ALL),
     "usefixtures": (FX.format("pytest.skip('r')") + "@pytest.mark.usefixtures('fx')\n" + FN,
-                    FX.format("pass") + "@pytest.mark.usefixtures('fx')\n" + FN, {"test_y"}),
+                    FX.format("pass") + "@pytest.mark.usefixtures('fx')\n" + FN, ALL),
+    # #979 r3 (Gemini r2), by construction: whatever runs at import counts for every test
+    "alias-autouse": (AUTO.format("pytest.skip('r')") + FN, AUTO.format("pass") + FN, ALL),
+    "class-body-at-import": (FN + "class Setup:\n    for n in ['test_y']:\n"
+                             "        globals()[n] = 1\n", FN + "class Setup:\n    pass\n", ALL),
+    "default-at-import": ("def h(x=print('a')):\n    pass\n" + FN,
+                          "def h(x=print('b')):\n    pass\n" + FN, ALL),
+    "plain-function-unread": (FN + "def h():\n    return 1\n", FN + "def h():\n    return 2\n",
+                              set()),  # control: a body that runs only when called
     "module-constant": ("DATA = 1\n" + FN, "DATA = 2\n" + FN, ALL),  # counted whole: the cost
     "unrelated": (FN, "import json\ndef helper():\n    return json.dumps(1)\n" + FN
                   + "def test_new():\n    assert helper()\n", {"test_new"}),  # read by no mark
