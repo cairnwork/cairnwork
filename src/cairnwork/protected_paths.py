@@ -72,7 +72,7 @@ def path_refusal(path: Any) -> tuple[str, str] | None:
     if len(path) > MAX_ID_BYTES:  # Core refuses a longer text (#645); SAFE_PATH is ASCII below
         return "TASK_ALLOWED_FILES_INVALID", f"{path[:40]!r}... is over {MAX_ID_BYTES} bytes"
     if is_protected(path):  # first, so ".github/x" is "protected" rather than "dotted"
-        return "TASK_ALLOWED_FILES_PROTECTED", path
+        return "TASK_ALLOWED_FILES_PROTECTED", protected_note(path)
     if not SAFE_PATH.fullmatch(path) or PurePosixPath(path).as_posix() != path:
         return "TASK_ALLOWED_FILES_INVALID", repr(path)
     if any(part.startswith(".") for part in PurePosixPath(path).parts):  # a/.env, a/../b
@@ -80,15 +80,35 @@ def path_refusal(path: Any) -> tuple[str, str] | None:
     return None
 
 
-def is_protected(path: str) -> bool:
+def protected_rule(path: str) -> str | None:
+    """The ``PROTECTED_NAMES`` or ``PROTECTED_PATHS`` pattern ``path`` matches (as written in the
+    list), or None when the path is not protected."""
     low = path.casefold()
     name = PurePosixPath(low).name
-    if any(fnmatch.fnmatchcase(name, pattern) for pattern in PROTECTED_NAMES):
-        return True
-    for rule in (r.casefold() for r in PROTECTED_PATHS):
+    for pattern in PROTECTED_NAMES:
+        if fnmatch.fnmatchcase(name, pattern):
+            return pattern
+    for entry in PROTECTED_PATHS:
+        rule = entry.casefold()
         if rule.endswith("*"):
             if low.startswith(rule[:-1]):
-                return True
+                return entry
         elif low == rule or low.startswith(rule + "/"):
-            return True
-    return False
+            return entry
+    return None
+
+
+def is_protected(path: str) -> bool:
+    return protected_rule(path) is not None
+
+
+def protected_note(path: str) -> str:
+    """#963: ``"<path>: protected by Cairnwork policy (rule: <pattern>)..."`` for a protected path,
+    ``""`` for any other: the refusal is a policy choice, not a finding about the change."""
+    rule = protected_rule(path)
+    if rule is None:
+        return ""
+    return (
+        f"{path}: protected by Cairnwork policy (rule: {rule!r} in protected_paths.py);"
+        " this is not a finding about the change"
+    )

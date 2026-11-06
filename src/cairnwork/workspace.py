@@ -42,7 +42,7 @@ from pathlib import Path
 from cairnwork.changeset import ChangeSetError, read_change_set
 from cairnwork.diffcheck import diff_check_detail
 from cairnwork.gitcmd import CLONE_ISOLATED, OID, GitCommandError, run_git, run_git_bytes
-from cairnwork.protected_paths import is_protected
+from cairnwork.protected_paths import is_protected, protected_note
 from cairnwork.tamper_scan import CODE as TAMPER_CODE
 from cairnwork.tamper_scan import scan_patch
 from cairnwork.treecompare import tree_differences
@@ -271,7 +271,7 @@ def check_candidate_commit(
         if entry.path not in allowed:
             raise CandidateRejected("OUT_OF_SCOPE", entry.path)
         if is_protected(entry.path):  # defense in depth: scope alone is not enough
-            raise CandidateRejected("PROTECTED_PATH", entry.path)
+            raise CandidateRejected("PROTECTED_PATH", protected_note(entry.path))
         if entry.change_type == "DELETE" and not allow_deletions:
             raise CandidateRejected("DELETION_FORBIDDEN", entry.path)
         if entry.after_mode in FORBIDDEN_MODES or entry.before_mode in FORBIDDEN_MODES:

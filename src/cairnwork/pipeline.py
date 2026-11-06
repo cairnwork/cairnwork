@@ -157,7 +157,7 @@ def check_task(task: TaskSpec, *, verifier_python: str | None = None) -> tuple[V
         if refusal:
             if refusal[0] == "TASK_ALLOWED_FILES_INVALID":
                 raise TaskRejected("BAD_SCOPE", f"{path!r} is not a clean repository path")
-            blocked.append(path)
+            blocked.append(refusal[1])  # the policy note (protected_paths.protected_note)
     if len(set(files)) != len(files):
         raise TaskRejected("BAD_SCOPE", "allowed_files has duplicates")
     try:  # the base pythonpath is an import root too (#351); a bad entry fails closed
