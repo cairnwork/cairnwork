@@ -185,7 +185,7 @@ def plan_p2p(task, specs, test_files, mode, budget, result, ctx: VerifyContext) 
                 raise _unusable(rule, "no module-dir test passes on the base")
             return plan
         rule["degraded"], tried = why, files
-    raise _unusable(rule, f"in {rule['applied']} mode")
+    raise _unusable(rule, f"in {rule['applied']} mode" + GOVERNS * bool(forced))  # #915
 
 
 def _unusable(rule: dict, why: str) -> BaseUncomparable:

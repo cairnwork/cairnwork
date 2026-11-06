@@ -76,6 +76,15 @@ NAMES_MODULE = (  # the verifier names the new test and the module beside the co
 SHADOW = "import pytest\n\n\n@pytest.fixture\ndef val():\n    return 2\n"
 # a test-commit module beside a new conftest, named like a standard module the conftest imports;
 # importing it flips a base test in the same directory
+# #915 (deep audit 02 F1): a base test far from the conftest and from module-dir's selection, and
+# a wrong candidate that fixes add and breaks sub, which only that far test calls
+FAR = {
+    "src/calc.py": CALC + "\n\ndef sub(a, b):\n    return a - b\n",
+    "tests/sub/test_x.py": "def test_x():\n    assert True\n",
+    "tests/other/test_far.py": "from calc import sub\ndef test_far():\n    assert sub(3, 1) == 2\n",
+}
+GOOD = {"src/calc.py": FIX["src/calc.py"] + "\n\ndef sub(a, b):\n    return a - b\n"}
+BAD = {"src/calc.py": FIX["src/calc.py"] + "\n\ndef sub(a, b):\n    return a + b\n"}
 LOCAL_MODULE = {
     "tests/sub/test_env.py": "import os\n\n\ndef test_env():\n"
     "    assert 'W3B_FLAG' not in os.environ\n",
@@ -102,6 +111,7 @@ def conftest_run(
     extra_files=None,
     verifiers=None,
     key="k1",
+    fix=FIX,
 ):
     """One task whose test commit adds ``addition`` to the base conftest at ``path`` (or creates
     the file when the base has none there) next to the new test ``regression``."""
@@ -119,7 +129,7 @@ def conftest_run(
         tmp_path,
         base,
         tests,
-        SeeingWorker(FIX),
+        SeeingWorker(fix),
         key=key,
         p2p_mode=mode,
         p2p_budget=budget,
@@ -270,7 +280,51 @@ SCENARIOS = {  # name: (kwargs of conftest_run, expected status, a code the reas
             "budget": 25,
         },
         "FAILED",
-        "selects the same files; they include every base test file under a test-commit conftest",
+        "selects the same files; with a test-commit conftest they are every base test file",
+    ),
+    "#915: an import side effect in module-dir mode, on a base test outside the selection": (
+        {
+            "addition": "import sidefx\n",
+            "path": "tests/sub/conftest.py",
+            "base_files": SIDEFX,
+            "regression": PLAIN,
+            "mode": "module-dir",
+        },
+        "FAILED",
+        "TEST_COMMIT_CONFTEST_CHANGES_BASE",
+    ),
+    "#915: an inert conftest in module-dir mode, a wrong candidate breaks a far base test": (
+        {
+            "path": "tests/sub/conftest.py",
+            "base_files": FAR,
+            "regression": PLAIN,
+            "mode": "module-dir",
+            "fix": BAD,
+        },
+        "FAILED",
+        "p2p-module-dir",
+    ),
+    "#915: the same task with a correct candidate": (
+        {
+            "path": "tests/sub/conftest.py",
+            "base_files": FAR,
+            "regression": PLAIN,
+            "mode": "module-dir",
+            "fix": GOOD,
+        },
+        "COMPLETED",
+        "",
+    ),
+    "#915: a module-dir probe over budget with a conftest: UNCOMPARABLE, no narrower set": (
+        {
+            "path": "tests/sub/conftest.py",
+            "regression": PLAIN,
+            "mode": "module-dir",
+            "base_files": {**FAR, "tests/other/test_slow.py": SLOW},
+            "budget": 25,
+        },
+        "FAILED",
+        "in module-dir mode; with a test-commit conftest they are every base test file",
     ),
     "P2P off": ({"mode": "off"}, "FAILED", "TEST_COMMIT_CONFTEST_UNCHECKED"),
 }
