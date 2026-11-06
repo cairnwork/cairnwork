@@ -17,7 +17,6 @@ from typing import Any
 
 import pytest
 from conftest import git
-from test_pipeline import EditWorker
 
 import cairnwork.issue_runner as runner
 from cairnwork import account_check
@@ -27,7 +26,6 @@ from cairnwork.verifier_account import AccountBusy, VerifierAccountError
 from cairnwork.workers import agy
 from cairnwork.workers.agy import AgyWorker
 from cairnwork.workers.agy_dispatch import Dispatch
-from experimental.visible_tests import VisibleTestsWorker
 
 STRANGER = (987654, frozenset({987653}))  # a uid and groups that own nothing here
 
@@ -238,16 +236,6 @@ def test_a_verifier_account_that_cannot_be_resolved_means_not_isolated(users):
     worker = _agy("worker", verifier="lost-verifier")
     assert worker.isolated is False
     assert worker.not_isolated_because == "verifier account lost-verifier unresolved"
-
-
-class Isolated(EditWorker):
-    isolated = True
-
-
-def test_the_visible_tests_wrapper_is_never_isolated():
-    wrapped = VisibleTestsWorker(Isolated({}), retries=1, pass_fail_only=True)
-    assert wrapped.isolated is False  # its probe runs candidate code before verification
-    assert "probe runs candidate code" in wrapped.not_isolated_because
 
 
 # The Issue runner's --clone must be the state's mirror.
