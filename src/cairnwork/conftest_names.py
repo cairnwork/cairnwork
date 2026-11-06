@@ -153,9 +153,13 @@ def _parse(path: str, data: bytes) -> ast.Module:
     except (SyntaxError, ValueError, UnicodeError, RecursionError, MemoryError):
         pass
     words = sorted(set(re.findall(r"[A-Za-z_]\w*", data.decode("latin-1"))))
-    args = ast.arguments([], [ast.arg(w) for w in words], None, [], [], None, [])
-    test = ast.FunctionDef("test_unparsed", args, [ast.Pass()], [], None, None, [])
-    return ast.Module([ast.Import([ast.alias(w) for w in words]), test], [])
+    args = ast.arguments(  # keywords: the field lists differ across Python versions (3.11)
+        posonlyargs=[], args=[ast.arg(arg=w) for w in words], kwonlyargs=[], kw_defaults=[],
+        defaults=[],
+    )  # fmt: skip
+    use = ast.Lambda(args=args, body=ast.Constant(value=None))  # every lambda's parameters count
+    imports = ast.Import(names=[ast.alias(name=w) for w in words])
+    return ast.Module(body=[imports, ast.Expr(value=use)], type_ignores=[])
 
 
 def _parents(directory: str) -> list[str]:
