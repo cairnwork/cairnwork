@@ -398,7 +398,7 @@ Checks run in this order and the first failure is reported:
     path matches the base's `python_files`, is a conftest or `__init__.py`, or is named by a
     verifier (`DATA_PATHS_INVALID`); a data file is exempt from the targeting rule above and never
     read for tests. That the file was not executed is the signer's word: `assurance.data_rule` is
-    `signer_claim` when `data_paths` is present. A malformed `data_rule` is `DATA_RULE_MISMATCH`.
+    `signer_claim` when `data_paths` is present. A malformed `data_rule` fails the binding shape (`STATEMENT_SHAPE`); a policy that pins `data_rule` and differs is `DATA_RULE_MISMATCH`.
     Every bound verifier id must be among the request's required verifier ids
     (`VERIFIER_NOT_REQUIRED`). The rule reads which tests a target names, not which ones pytest
     collected (#660). The producer also refuses a test commit whose new or changed tests are not

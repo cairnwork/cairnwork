@@ -27,7 +27,8 @@ def project(_project):  # noqa: F811
 
 def _commit(project, files, message="tests"):
     base = git(project, "rev-parse", "HEAD")
-    commit_change(project, files, message=message)
+    commit_change(project, files, message="tests")
+    git(project, "commit", "-q", "--amend", "--cleanup=verbatim", "-m", message)  # CRs kept
     commit = git(project, "rev-parse", "HEAD")
     git(project, "reset", "-q", "--hard", base)
     return base, commit
@@ -193,3 +194,25 @@ def test_ac9_the_parser_reads_one_trailer_sorted_and_none_as_empty():
 def test_ac10_the_policy_key_must_be_a_boolean():  # AC10
     assert bx.policy_problem({"allow_data_paths": "yes"})
     assert not bx.policy_problem({"allow_data_paths": True})
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["tests\r\n\r\n" + TRAILER.strip() + "\r\n", "tests\n\nbody\r" + TRAILER.strip() + "\n"],
+)
+def test_a_cr_in_the_commit_message_is_refused_end_to_end(project, message):  # review r1 #1
+    assert _code(_case(project, message=message)) == "DATA_PATHS_MISMATCH"
+
+
+def test_an_unparsable_declared_data_file_is_accepted(project):  # review r1 #4: never read
+    assert _code(_case(project, data_text="def broken(:\n")) is None
+
+
+def test_a_case_variant_target_of_a_data_path_fails(project):  # review r1 #3
+    ctx = _case(project, verifier="tests/data/LINT_CASE.py")
+    assert _code(ctx) == "DATA_PATHS_INVALID"
+
+
+def test_a_base_config_that_does_not_parse_is_a_result_not_an_exception(project):  # r1 #2
+    commit_change(project, {"pyproject.toml": "[tool.pytest.ini_options\n"}, message="broken")
+    assert _code(_case(project)) == "DATA_PATHS_INVALID"

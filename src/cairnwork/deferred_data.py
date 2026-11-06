@@ -32,7 +32,9 @@ def path_problem(path: object) -> str:
 def declared_data(message: str) -> tuple[str, ...]:
     """The sorted paths a commit message declares; () when it has no trailer line. Refuses
     (DATA_DECLARATION) a CR, a second trailer line, a trailer outside the last paragraph (or in a
-    one-paragraph message), an empty value, a duplicate, too many paths or a bad path."""
+    one-paragraph message), an empty value, a duplicate, too many paths or a bad path. Stricter
+    than git's trailer rules: a blank line holding spaces does not end a paragraph, a continuation
+    line is not read, and the key is case-sensitive; each only refuses or declares fewer files."""
     if "\r" in message:
         raise TestCommitRejected("DATA_DECLARATION", "carriage return in the message")
     prefix = DATA_TRAILER + ":"

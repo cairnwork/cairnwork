@@ -28,8 +28,8 @@ from cairnwork.deferred_data import (
     path_problem,
 )
 from cairnwork.deferred_overlay import MAX_DELETED_TEST_PATHS, TestCommitRejected
-from cairnwork.gitcmd import GitCommandError, run_git
-from cairnwork.pytest_config import test_file_rule
+from cairnwork.gitcmd import GitCommandError, run_git_bytes
+from cairnwork.pytest_config import PytestConfigError, test_file_rule
 from cairnwork_attest.verify_response import VerifyResult, _fail
 
 MAX_IMPORT_PATHS = 8  # issue_task.check_import_paths: 0-8 (pinned by test_binding_import_paths)
@@ -224,17 +224,18 @@ def data_problem(ctx: Any) -> VerifyResult | None:
         return _fail(
             "DATA_PATHS_NOT_ALLOWED", "the receipt has data paths; a full receiver must allow"
         )
-    try:
-        message = run_git(ctx.repo, "log", "-1", "--format=%B", binding["test_commit"], "--")
-        declared = declared_data(message)
-    except (TestCommitRejected, GitCommandError) as exc:
+    try:  # raw bytes: text mode would turn a CR into a newline the parser then accepts
+        raw = run_git_bytes(ctx.repo, "log", "-1", "--format=%B", binding["test_commit"], "--")
+        declared = declared_data(raw.decode("utf-8"))
+    except (TestCommitRejected, GitCommandError, UnicodeDecodeError) as exc:
         return _fail("DATA_PATHS_MISMATCH", f"cannot read the declaration: {str(exc)[:200]}")
     if list(declared) != data:
         return _fail("DATA_PATHS_MISMATCH", f"the test commit declares {list(declared)}")
-    why = data_rule_problem(
-        data, binding["test_paths"], binding.get("conftest_paths", []),
-        test_file_rule(ctx.repo, binding["base"]),
-    )  # fmt: skip
+    try:
+        is_test = test_file_rule(ctx.repo, binding["base"])
+    except PytestConfigError as exc:  # never raise out of verify_bound (#447)
+        return _fail("DATA_PATHS_INVALID", f"cannot read the base's python_files: {exc}"[:300])
+    why = data_rule_problem(data, binding["test_paths"], binding.get("conftest_paths", []), is_test)
     return _fail("DATA_PATHS_INVALID", why) if why else None
 
 
