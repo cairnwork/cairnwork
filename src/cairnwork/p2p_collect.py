@@ -235,8 +235,8 @@ DEFAULT_NORECURSEDIRS = ("*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_
 
 def skipped_dir(repo, base_commit) -> Callable[[str], bool]:
     """Whether pytest's recursion skips a directory of this name, by the base's ``norecursedirs``
-    (its own patterns replace the default, as in pytest). A pattern with ``/`` matches whole
-    paths: then no name counts as skipped, so such files are refused, never dropped (#930)."""
+    (its own patterns replace the default, as in pytest). A pattern with ``/`` matches a whole
+    path, never a bare name, so it skips nothing here: such files are refused, never dropped."""
     value = dict(base_settings(repo, base_commit).values).get("norecursedirs")
     if value is None:
         patterns: tuple[str, ...] = DEFAULT_NORECURSEDIRS
@@ -247,6 +247,4 @@ def skipped_dir(repo, base_commit) -> Callable[[str], bool]:
             patterns = tuple(shlex.split(_render(value) or ""))
         except ValueError as exc:
             raise PytestConfigError("norecursedirs at the base cannot be split") from exc
-    if any("/" in pattern for pattern in patterns):
-        return lambda name: False
     return lambda name: any(fnmatch.fnmatch(name, pattern) for pattern in patterns)
