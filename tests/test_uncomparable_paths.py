@@ -166,6 +166,7 @@ def test_worker_path_says_uncomparable_only_when_the_worker_ran_isolated(
     assert result.status == "FAILED" and not result.verified and calls == []
     prefix = "UNCOMPARABLE: " if isolated else ""
     assert result.reason.startswith(f"{prefix}{code}: "), result.reason
+    assert result.uncomparable == (code if isolated else "")  # the Issue comment reads this field
 
 
 # Real runs (sandbox): the module-level import style, the import-inside-the-test style, a failure
