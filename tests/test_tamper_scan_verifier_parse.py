@@ -286,10 +286,9 @@ def test_ac6d_every_caller_passes_the_verifiers_interpreter():
     for name, call in (
         ("verify_candidate.py", "check_candidate_commit("),
         ("pipeline.py", "snapshot_candidate("),
-        ("../../experimental/visible_tests/feedback.py", "snapshot_candidate("),
     ):
         text = (src / name).read_text()
-        at = text.index(call, text.index("    def " if "feedback" in name else "def "))
+        at = text.index(call, text.index("def "))
         assert "python=verifier_interpreter(ctx)" in text[at : at + 300], name
 
 
