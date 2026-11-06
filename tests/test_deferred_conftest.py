@@ -13,8 +13,11 @@ import pytest
 from conftest import commit_change, git
 from conftest_scenarios import (
     BASE_CONFTEST,
+    BREAKS_BASE,
     FIXTURE,
+    NAMES_HELPER,
     PLAIN,
+    RUNNER_PATCH,
     SCENARIOS,
     conftest_run,
 )
@@ -225,3 +228,24 @@ def test_a_base_test_named_by_the_python_files_rule_lets_the_probe_run(project, 
                           base_files=base, mode="module-dir")  # fmt: skip
     assert result.status == "COMPLETED", result.reason
     assert result.p2p["base_ran"] == 1 and result.p2p["targets"] == 1  # check_calc.py ran
+
+
+@pytest.mark.parametrize("imported", [True, False])
+def test_a_base_conftest_that_imports_a_changed_module_is_refused(project, tmp_path, imported):
+    """#924 r2 (cw#948 cross-model review): the test commit changes no conftest, only a module a
+    base conftest already imports. Before: a wrong fix that breaks a base test ended COMPLETED
+    (CORE_VERIFIED). Not imported by any conftest, the same change stays COMPLETED."""
+    importer = "import colorsys\n" if imported else ""
+    commit_change(project, {"tests/conftest.py": BASE_CONFTEST + importer,
+                            "tests/colorsys.py": "def test_helper():\n    pass\n"})  # fmt: skip
+    base, tests = make_test_commit(
+        project, {"tests/colorsys.py": RUNNER_PATCH, "tests/test_regression.py": PLAIN}
+    )
+    fix = BREAKS_BASE if imported else FIX
+    result = run(project, tmp_path, base, tests, SeeingWorker(fix), key="k1",
+                 p2p_mode="whole-suite", p2p_budget=300, verifiers=NAMES_HELPER)  # fmt: skip
+    if imported:
+        assert result.status == "FAILED", result.reason
+        assert "TEST_COMMIT_CONFTEST_STATIC" in result.reason and "colorsys" in result.reason
+    else:
+        assert result.status == "COMPLETED", result.reason

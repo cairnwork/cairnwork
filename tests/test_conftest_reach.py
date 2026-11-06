@@ -44,6 +44,18 @@ def _reach(conftest_text, tree, changed, conftest=CONFTEST):
             "tests/colorsys.py",
         ),  # inside a fixture body
         ("import util\n", {"src/util.py": ""}, ""),  # not changed by the test commit
+        # r2 (cw#948 cross-model review): plugin names, fromlist, a relative import_module name,
+        # and the package pytest may import the conftest in
+        ("pytest_plugins = ['tests.helper']\n", {"tests/helper.py": ""}, "tests/helper.py"),
+        ("pytest_plugins = 'helper'\n", {"tests/sub/helper.py": ""}, "tests/sub/helper.py"),
+        ("__import__('tests', fromlist=['helper'])\n", {"tests/helper.py": ""}, "tests/helper.py"),
+        (
+            "import importlib\nimportlib.import_module('..helper', package=__package__)\n",
+            {"tests/helper.py": ""},
+            "tests/helper.py",
+        ),
+        ("import pytest\n", {"tests/sub/__init__.py": ""}, "tests/sub/__init__.py"),
+        ("import pytest\n", {"tests/__init__.py": ""}, "tests/__init__.py"),
     ],
 )
 def test_a_direct_import_of_a_changed_file_is_found(text, tree, hit):
@@ -83,3 +95,8 @@ def test_too_many_modules_to_follow_is_a_reason_not_a_pass(monkeypatch):
 def test_a_cycle_ends():
     tree = {"tests/a.py": "import b\n", "tests/b.py": "import a\n", "tests/changed.py": ""}
     assert _reach("import a\n", tree, ["tests/changed.py"], conftest="tests/conftest.py") == ""
+
+
+def test_an_unchanged_package_init_above_the_conftest_is_followed():
+    tree = {"tests/__init__.py": "from tests import helper\n", "tests/helper.py": ""}
+    assert _reach("import pytest\n", tree, ["tests/helper.py"]) == "tests/helper.py"

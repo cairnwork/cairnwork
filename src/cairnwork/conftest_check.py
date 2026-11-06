@@ -11,7 +11,8 @@ runs first, at the producer and (full mode) at the receiver:
   packages, no star, no ``pytest_*`` name), a literal assignment to a plain name, or a function
   whose only decorators are the pytest fixture decorator (resolved through the import table; literal
   arguments, no ``autouse``), never a ``pytest_*``, ``test*`` or dunder name. No classes;
-* no import that can load a file the test commit adds or changes (conftest_reach.py, #924).
+* no conftest of the test commit's tree, changed or not, has an import that can load a file the
+  test commit adds or changes (conftest_reach.py, #924); this runs even when no conftest changed.
 
 It is hygiene, not the guard: a name imported from the repository or rebound can carry behaviour
 it cannot see, and behaviour that depends on the candidate's code is trusted test author code, like
@@ -56,11 +57,9 @@ def governed(conftests: Iterable[str], existing: Iterable[str]) -> tuple[str, ..
 
 def check_conftests(repo: Path, base: str, test_commit: str, paths: Iterable[str]) -> None:
     """Refuse a conftest change the allowlist does not cover; see the module docstring."""
-    paths, files = tuple(paths), frozenset[str]()
+    paths = tuple(paths)
     names = conftest_of(paths)
-    if not names:
-        return
-    own = _own_packages(repo, base)
+    own = _own_packages(repo, base) if names else frozenset[str]()
     for path in names:
         new = _parse(repo, f"{test_commit}:{path}", path, present=True)
         old = _parse(repo, f"{base}:{path}", path, present=False)
@@ -72,10 +71,18 @@ def check_conftests(repo: Path, base: str, test_commit: str, paths: Iterable[str
             problem = _rebinds(node, table) or _problem(node, own, table)
             if problem:
                 _refuse(path, node, problem)
-        files = files or _tree_files(repo, test_commit)
+    if paths:
+        _check_reach(repo, test_commit, paths)
+
+
+def _check_reach(repo: Path, test_commit: str, paths: tuple[str, ...]) -> None:
+    """#924: no conftest of the test commit's tree, changed by it or not (a base conftest may
+    already import a module the test commit changes), can load a file the test commit changes."""
+    files = _tree_files(repo, test_commit)
+    read = partial(_read, repo, test_commit)
+    for path in conftest_of(files):
         changed = frozenset(paths) - {path}
-        read = partial(_read, repo, test_commit)
-        if hit := reached_change(path, new, changed, files, read):  # #924
+        if hit := reached_change(path, read(path), changed, files, read):
             why = f"can load {hit}, which the test commit changes" if hit in changed else hit
             _refuse(path, None, f"an import that {why}")
 

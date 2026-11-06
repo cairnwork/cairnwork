@@ -15,10 +15,17 @@ Resolution over-approximates pytest on purpose (refusing too much is the safe si
   ``__init__.py``; ``from M import n`` also tries ``M.n``;
 * relative imports are resolved from the importing file's directory;
 * ``importlib.import_module("...")`` and ``__import__("...")`` with a literal name count as
-  imports; every import statement counts, at any depth (a fixture body's too).
+  imports (a leading dot also relative to the file, a literal ``fromlist`` as submodules), and so
+  do the literal names of a ``pytest_plugins`` assignment; every import counts, at any depth (a
+  fixture body's too);
+* the ``__init__.py`` of the conftest's directory and of each directory above it count too:
+  pytest may import the conftest as a module of that package (r2, cw#948 cross-model review).
 
 A name built at run time, or an unchanged module outside the test commit's top directories that
 imports a test-commit file, is not followed: that is test author code, as in conftest_check.py.
+Nor are base test files: a changed module that only a base test file imports also runs its
+import-time code in the base run (a known residual, kept apart so that a test commit may still
+update a shared test helper).
 """
 
 from __future__ import annotations
@@ -38,6 +45,11 @@ def reached_change(
     when there are too many to follow; '' when none. ``read(path)`` parses a file of the tree."""
     tops = {path.split("/", 1)[0] for path in changed}
     queue, seen = [(conftest, tree)], {conftest}
+    for init in sorted(_inits(conftest) & files):  # the packages pytest imports the conftest in
+        if init in changed:
+            return init
+        seen.add(init)
+        queue.append((init, read(init)))
     while queue:
         here, parsed = queue.pop(0)
         for target in sorted(_targets(here, parsed, files)):
@@ -79,9 +91,35 @@ def _imports(tree: ast.Module) -> Iterator[tuple[int, Iterable[str]]]:
             module = node.module or ""
             yield node.level, [module, *(f"{module}.{a.name}".lstrip(".") for a in node.names)]
         elif isinstance(node, ast.Call) and _dynamic(node.func) and node.args:
-            first = node.args[0]
-            if isinstance(first, ast.Constant) and isinstance(first.value, str):
-                yield 0, [first.value]
+            name = _text(node.args[0])
+            subs = [_text(x) for k in node.keywords if k.arg == "fromlist" for x in _items(k.value)]
+            names = [name, *(f"{name}.{sub}" for sub in subs if sub)] if name else []
+            dots = len(name) - len(name.lstrip("."))  # import_module(".x", package=...)
+            yield 0, [n.lstrip(".") for n in names]
+            if dots:
+                yield dots, [n.lstrip(".") for n in names]
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)) and _plugins(node):  # pytest_plugins
+            yield 0, [t for x in _items(node.value) if (t := _text(x))]
+
+
+def _text(node: ast.expr | None) -> str:
+    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else ""
+
+
+def _items(node: ast.expr | None) -> list[ast.expr]:
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        return list(node.elts)
+    return [node] if node is not None else []
+
+
+def _plugins(node: ast.Assign | ast.AnnAssign) -> bool:
+    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+    return any(isinstance(t, ast.Name) and t.id == "pytest_plugins" for t in targets)
+
+
+def _inits(conftest: str) -> set[str]:
+    """The ``__init__.py`` of the conftest's directory and of each directory above it."""
+    return {join(d, "__init__.py") for d in _above(dirname(conftest))}
 
 
 def _dynamic(func: ast.expr) -> bool:
