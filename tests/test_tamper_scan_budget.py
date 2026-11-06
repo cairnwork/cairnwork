@@ -137,7 +137,7 @@ def test_a_committed_file_past_the_tokenize_budget_is_refused_untokenized(monkey
 def test_an_unchanged_long_row_within_the_budget_is_still_tokenized_and_read(monkeypatch):
     tokenized = []
     real = scan.file_views
-    monkeypatch.setattr(scan, "file_views", lambda data: tokenized.append(1) or real(data))
+    monkeypatch.setattr(scan, "file_views", lambda *a: tokenized.append(1) or real(*a))
     data = _with_context_row(64 * 1024) + b"import os as o\no._exit(0)\n"
     lines = [(3, "import os as o"), (4, "o._exit(0)")]
     assert [(f.line, f.rule) for f in scan_added_lines(TEST, lines, data)] == [(4, "os_exit")]
