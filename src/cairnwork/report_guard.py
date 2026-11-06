@@ -126,13 +126,6 @@ def _take():
 _HANDOVER = _take()
 
 
-def _source(item):
-    try:
-        return item.path.relative_to(item.config.rootpath).as_posix()
-    except (AttributeError, TypeError, ValueError):
-        return ""
-
-
 def _denied_inside(exc, _codes=(errno.EACCES, errno.EPERM, errno.EROFS, errno.ENETUNREACH)):
     """#854: a denial-shaped OSError wrapped in a failure (group member, cause, unsuppressed
     context); past the bound, yes (fail closed). Other wrapped OSErrors stay plain failures."""
@@ -151,11 +144,6 @@ def _denied_inside(exc, _codes=(errno.EACCES, errno.EPERM, errno.EROFS, errno.EN
         if not cur.__suppress_context__:
             todo.append(cur.__context__)
     return False
-
-
-def _missing(report):  # #813: the module a skip at collection says it could not import
-    shown = report.longrepr[-1] if isinstance(report.longrepr, tuple) else ""
-    return str(shown).partition("could not import '")[2].partition("'")[0][:100]
 
 
 class _Reporter:
