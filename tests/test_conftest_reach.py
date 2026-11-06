@@ -1,0 +1,85 @@
+"""#924: a test-commit conftest may not import a file the test commit adds or changes, directly or
+through unchanged files in the test commit's top directories (conftest_reach.py). The whole-pipeline
+cases are in conftest_scenarios.py; these read the resolution rules alone."""
+
+import ast
+
+import pytest
+
+import cairnwork.conftest_reach as reach
+from cairnwork.conftest_reach import reached_change
+
+CONFTEST = "tests/sub/conftest.py"
+
+
+def _reach(conftest_text, tree, changed, conftest=CONFTEST):
+    parsed = {path: ast.parse(text) for path, text in tree.items()}
+    files = frozenset(tree) | {conftest}
+    return reached_change(
+        conftest, ast.parse(conftest_text), frozenset(changed), files, parsed.__getitem__
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "tree", "hit"),
+    [
+        ("import colorsys\n", {"tests/sub/colorsys.py": ""}, "tests/sub/colorsys.py"),
+        ("import colorsys\n", {"tests/colorsys.py": ""}, "tests/colorsys.py"),
+        ("from tests import helper\n", {"tests/helper.py": ""}, "tests/helper.py"),
+        ("from tests.pkg import x\n", {"tests/pkg/__init__.py": ""}, "tests/pkg/__init__.py"),
+        ("import tests.pkg.mod\n", {"tests/pkg/mod.py": ""}, "tests/pkg/mod.py"),
+        ("from . import helper\n", {"tests/sub/helper.py": ""}, "tests/sub/helper.py"),
+        ("from .. import helper\n", {"tests/helper.py": ""}, "tests/helper.py"),
+        ("from .pkg import x\n", {"tests/sub/pkg/x.py": ""}, "tests/sub/pkg/x.py"),
+        ("from . import x\n", {"tests/sub/__init__.py": ""}, "tests/sub/__init__.py"),
+        (
+            "import importlib\nimportlib.import_module('colorsys')\n",
+            {"tests/colorsys.py": ""},
+            "tests/colorsys.py",
+        ),
+        ("__import__('colorsys')\n", {"tests/colorsys.py": ""}, "tests/colorsys.py"),
+        (
+            "import pytest\n\n\n@pytest.fixture\ndef f():\n    import colorsys\n",
+            {"tests/colorsys.py": ""},
+            "tests/colorsys.py",
+        ),  # inside a fixture body
+        ("import util\n", {"src/util.py": ""}, ""),  # not changed by the test commit
+    ],
+)
+def test_a_direct_import_of_a_changed_file_is_found(text, tree, hit):
+    changed = [path for path in tree if path.startswith("tests/")]
+    assert _reach(text, tree, changed) == hit
+
+
+def test_an_unchanged_module_in_the_test_directories_is_followed():
+    tree = {"tests/util.py": "from tests import helper\n", "tests/helper.py": ""}
+    assert _reach("import tests.util\n", tree, ["tests/helper.py"]) == "tests/helper.py"
+    chain = {"tests/a.py": "import b\n", "tests/b.py": "import c\n", "tests/c.py": ""}
+    assert _reach("import a\n", chain, ["tests/c.py"], conftest="tests/conftest.py") == "tests/c.py"
+
+
+def test_a_file_outside_the_test_commit_s_top_directories_is_not_followed():
+    """The documented residual: an unchanged src module that imports a test-commit file."""
+    tree = {"src/util.py": "from tests import helper\n", "tests/helper.py": ""}
+    assert _reach("import util\n", tree, ["tests/helper.py"]) == ""
+
+
+def test_an_unrelated_change_and_an_unresolved_name_are_not_a_hit():
+    tree = {"tests/helper.py": "", "tests/other.py": ""}
+    assert _reach("import pytest\nimport os\n", tree, ["tests/helper.py"]) == ""
+    assert (
+        _reach("import importlib\nimportlib.import_module(name)\n", tree, ["tests/helper.py"]) == ""
+    )
+
+
+def test_too_many_modules_to_follow_is_a_reason_not_a_pass(monkeypatch):
+    monkeypatch.setattr(reach, "MAX_FILES", 3)
+    tree = {f"tests/m{i}.py": f"import m{i + 1}\n" for i in range(6)}
+    tree["tests/changed.py"] = ""
+    found = _reach("import m0\n", tree, ["tests/changed.py"], conftest="tests/conftest.py")
+    assert found == "has more than 3 modules to follow"
+
+
+def test_a_cycle_ends():
+    tree = {"tests/a.py": "import b\n", "tests/b.py": "import a\n", "tests/changed.py": ""}
+    assert _reach("import a\n", tree, ["tests/changed.py"], conftest="tests/conftest.py") == ""
