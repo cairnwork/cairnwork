@@ -51,8 +51,9 @@ def _section(text: str, section: str, form: str, name: str) -> dict[str, Any] | 
 
 def _pyproject(doc: Any, section: str, name: str) -> dict[str, Any] | None:
     """#928: pyproject.toml as pytest 9 reads it. [tool.pytest] counts only with a key besides
-    ``ini_options`` (an empty table is not a config: discovery goes on to tox.ini, setup.cfg);
-    with both, pytest stops with a usage error, so the base is refused."""
+    ``ini_options`` (an empty table is not a config: discovery goes on to tox.ini, setup.cfg)
+    and then wins over an empty ``ini_options``; with both non-empty, pytest stops with a usage
+    error, so the base is refused."""
     tool = doc.get("tool")
     tool_pytest = tool.get("pytest") if isinstance(tool, dict) else None
     if not isinstance(tool_pytest, dict):
@@ -63,7 +64,7 @@ def _pyproject(doc: Any, section: str, name: str) -> dict[str, Any] | None:
         raise PytestConfigError(f"{name} sets both [tool.pytest] and [tool.pytest.ini_options]")
     if section == "tool.pytest":
         return native or None
-    return dict(ini) if isinstance(ini, dict) else None
+    return dict(ini) if isinstance(ini, dict) and not native else None  # native keys come first
 
 
 def refuse_both_kinds(names) -> None:

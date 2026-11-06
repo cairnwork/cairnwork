@@ -35,6 +35,7 @@ def _pytest_collects(repo, base, tmp_path):
     return {line.split("::")[0] for line in done.stdout.splitlines() if "::" in line}
 
 
+NATIVE = '[tool.pytest]\npython_files = ["check_*.py"]\n'
 SAME_OR_MORE = {  # shape: (config files, what pytest collects there)
     "[DEFAULT] is not merged into [pytest]": (
         {"pytest.ini": "[DEFAULT]\npython_files = check_*.py\n[pytest]\n"},
@@ -42,6 +43,10 @@ SAME_OR_MORE = {  # shape: (config files, what pytest collects there)
     ),
     "an empty [tool.pytest] is not a config": (
         {"pyproject.toml": "[tool.pytest]\n", "tox.ini": "[pytest]\npython_files = check_*.py\n"},
+        {"tests/check_x.py"},
+    ),
+    "native keys win over an empty ini_options table": (
+        {"pyproject.toml": NATIVE + "[tool.pytest.ini_options]\n"},
         {"tests/check_x.py"},
     ),
     "a list item with a quote is a pattern": (
@@ -95,8 +100,6 @@ def test_shapes_pytest_reads_the_same_way_stay_found(repo):
     for config, source in (
         ({"pyproject.toml": "[tool.pytest.ini_options]\n"}, "pyproject.toml"),
         ({"pyproject.toml": '[tool.pytest]\nminversion = "9"\n'}, "pyproject.toml"),
-        ({"pyproject.toml": '[tool.pytest]\nminversion = "9"\n[tool.pytest.ini_options]\n'},
-         "pyproject.toml"),  # an empty ini_options beside native keys: pytest reads the native
         ({"pytest.toml": "", "tox.ini": "[pytest]\n"}, "pytest.toml"),
         ({"pytest.ini": "[pytest]\n[DEFAULT]\nx = 1\n", "setup.cfg": "[tool:pytest]\n"},
          "pytest.ini"),
