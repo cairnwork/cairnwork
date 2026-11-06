@@ -19,7 +19,16 @@ inherited the same way. pytest does not collect such a class (it warns and runs 
 tests), so a target naming the file still runs none of them. A ``unittest.TestCase`` subclass with
 its own ``__init__`` is collected by pytest's unittest support but is counted here as well: a test
 commit with one is refused, never wrongly accepted. Bases imported from another module are not
-read; neither are nested classes or custom ``python_functions``/``python_classes`` settings.
+read; neither are custom ``python_functions``/``python_classes`` settings. A class's decorators are
+part of each of its tests (#925: removing a class-level skip changes them all).
+
+``hidden_tests`` (#925): what may give pytest a test that is not read above, at module level or
+in a class body, inside a block (``if``, ``try``, ``with``, a loop) or not: a ``test*`` function
+or ``Test*`` class in a block or nested in a class, and a ``test*``/``Test*`` name bound another
+way (assignment, walrus, loop, ``with`` or ``match`` target, ``from x import test_y``), unless the
+value is a literal, a star import, and a function or class that declares a ``test*`` name
+``global``. new_tests refuses a test commit that changes one. Names set at run time
+(``setattr``, ``globals()``) are not seen.
 """
 
 from __future__ import annotations
@@ -27,7 +36,9 @@ from __future__ import annotations
 import ast
 
 _DEFS = (ast.FunctionDef, ast.AsyncFunctionDef)
+_SCOPES = (*_DEFS, ast.ClassDef)  # a ``global`` in either binds at module level
 _NOT_COLLECTED = frozenset({"__init__", "__new__"})
+_ASSIGNS = (ast.Assign, ast.AnnAssign, ast.AugAssign)
 
 
 def test_functions(tree: ast.Module) -> tuple[dict[str, str], frozenset[str]]:
@@ -43,7 +54,8 @@ def test_functions(tree: ast.Module) -> tuple[dict[str, str], frozenset[str]]:
             methods, blocked, case = _members(node, classes)
             classes[node.name] = (methods, blocked, case)
             if node.name.startswith("Test") or case:
-                tests = {n: body for n, body in methods.items() if n.startswith("test")}
+                deco = "".join(ast.dump(d) for d in node.decorator_list)  # #925: a class skip
+                tests = {n: deco + body for n, body in methods.items() if n.startswith("test")}
                 functions.update({f"{node.name}::{n}": body for n, body in tests.items()})
                 if blocked:
                     uncollected.add(node.name)
@@ -67,3 +79,73 @@ def _members(
             for name, body in inherited.items():
                 methods.setdefault(name, body)
     return methods, blocked, case
+
+
+def hidden_tests(tree: ast.Module) -> frozenset[str]:
+    """#925: ``ast.dump`` of each statement that may give pytest a test test_functions does not read
+    (see the module docstring), at module level or in a class body, in a block or not; not inside
+    a function, whose local names pytest never collects, unless it declares a ``test*`` name
+    ``global``: then the whole function or class counts, as it may bind a module-level test."""
+    found: set[str] = set()
+    scan = [node for node in tree.body if not isinstance(node, (*_DEFS, ast.ClassDef))]
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            scan += [item for item in node.body if not isinstance(item, _DEFS)]
+    _hidden(ast.Module(body=scan, type_ignores=[]), found, None)
+    for node in ast.walk(tree):
+        if isinstance(node, _SCOPES) and any(_global_test(inner) for inner in ast.walk(node)):
+            found.add(ast.dump(node))
+    return frozenset(found)
+
+
+def _global_test(node: ast.AST) -> bool:
+    names = node.names if isinstance(node, ast.Global) else []
+    return any(name.startswith(("test", "Test")) for name in names)
+
+
+def _hidden(node: ast.AST, found: set[str], stmt: ast.AST | None) -> None:
+    for child in ast.iter_child_nodes(node):
+        here = child if isinstance(child, ast.stmt) else stmt
+        if isinstance(child, _DEFS):
+            if child.name.startswith("test"):
+                found.add(ast.dump(child))
+        elif isinstance(child, ast.ClassDef) and child.name.startswith("Test"):
+            found.add(ast.dump(child))
+        elif isinstance(child, _ASSIGNS) and _literal(child.value):
+            continue  # a constant or a display of constants: pytest collects only callables
+        else:
+            if here is not None and _binds_test(child):
+                found.add(ast.dump(here))
+            _hidden(child, found, here)
+
+
+def _binds_test(node: ast.AST) -> bool:
+    """A name binding pytest's default rules could collect: an assignment, walrus, loop, ``with``
+    or ``match`` capture target, an imported name (``from x import test_y``, ``import x as
+    test_y``), or a star import, which binds whatever ``test*`` the other module holds."""
+    if isinstance(node, ast.Name):
+        names = [node.id] if isinstance(node.ctx, ast.Store) else []
+    elif isinstance(node, (ast.MatchAs, ast.MatchStar)):
+        names = [node.name] if node.name else []
+    elif isinstance(node, ast.MatchMapping):
+        names = [node.rest] if node.rest else []
+    elif isinstance(node, ast.ImportFrom):
+        names = [alias.asname or alias.name for alias in node.names]
+        names = [name for name in names if name != "TestCase"]  # the base class has no tests
+        if "*" in names:
+            return True
+    elif isinstance(node, ast.Import):  # a plain import binds a module, which pytest never collects
+        names = [alias.asname for alias in node.names if alias.asname]
+    else:
+        names = []
+    return any(name.startswith(("test", "Test")) for name in names)
+
+
+def _literal(value: ast.expr | None) -> bool:
+    if value is None:  # an annotation only (``test_x: int``) binds nothing
+        return True
+    try:
+        ast.literal_eval(value)
+    except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+        return False
+    return True

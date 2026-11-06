@@ -73,7 +73,9 @@ def test_a_test_the_ast_loses_but_pytest_collects_still_guards(repo, tmp_path, g
 def test_a_base_test_hidden_from_pytest_refuses_the_test_commit(repo, tmp_path, good):
     result = _case(repo, tmp_path, SUB_TEST, HIDDEN, (CALC if good else SUB_OFF) + MUL)
     assert not result.verified  # main: verified both ways (test_sub was "removed")
-    assert "TEST_COMMIT_DROPS_BASE_TESTS" in result.reason
+    # #925: a test inside a module-level block is refused before P2P (DEFERRED_TESTS_UNREADABLE);
+    # the inherited shapes below still reach P2P's TEST_COMMIT_DROPS_BASE_TESTS
+    assert result.reason.startswith("DEFERRED_TESTS_UNREADABLE"), result.reason
 
 
 @pytest.mark.parametrize("shape", sorted(INHERIT_HIDES))
