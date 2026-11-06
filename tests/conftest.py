@@ -13,14 +13,12 @@ pytest_plugins = ["verify_helpers"]
 # Fewer files per test git repo (#417): the tests' own git init/clone (subprocesses included)
 # copy no template directory (hook samples, info/exclude, description) and keep no reflogs.
 # Code under test must see the production git environment. Git calls that inherit it:
-# - cairnwork.gitcmd run_git/run_git_bytes (every core git call) and
-#   experimental/bm25_hints/commit_source.py: drop every GIT_* variable themselves.
+# - cairnwork.gitcmd run_git/run_git_bytes (every core git call) drop every GIT_* variable
+#   themselves.
 # - cairnwork_attest.publish._git (os.environ minus GIT_* other than GIT_CONFIG_COUNT/KEY/VALUE,
 #   #727): its tests (test_publish*.py,
 #   test_on_verified.py, test_check_run_gh.py) use the production_git_env fixture below.
 # - experimental/local_worker's git queries run under ``env -i``.
-# - experimental/bm25_hints/eval_hit_at_k.py (clone --shared, checkout; run by test_bm25_hints)
-#   only reads the checked-out files afterwards: no template, hook or reflog is involved.
 # - scripts/measure_p2p.py (clone, commit, push) and the scripts/drill_*.py demos (init, commit)
 #   are not run by any test; scripts/env_smoke.py (run by test_env_smoke) only reads refs/config.
 # No other src code runs git with the inherited environment.
