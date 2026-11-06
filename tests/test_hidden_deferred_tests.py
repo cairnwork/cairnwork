@@ -123,6 +123,7 @@ PLAIN_BASE = "class TestCase:\n    def setUp(self):\n        pass\n"
     [  # the base's own module, unchanged by the test commit, anywhere in the tree
         ({"testing_helpers.py": CASES}, "testing_helpers"),  # cw#964 Codex r1: root level
         ({"testing_helpers/__init__.py": CASES}, "testing_helpers"),  # a root package
+        ({"helpers/base.py": CASES}, "helpers.base"),  # a dotted import, its top in the tree
         ({"lib/cases/__init__.py": "from .impl import TestCase\n", "lib/cases/impl.py": CASES},
          "cases"),  # re-exported from a file with tests
         ({"fw/test/__init__.py": "from fw.test.base import TestCase\n",
