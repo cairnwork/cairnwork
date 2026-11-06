@@ -195,18 +195,19 @@ def roots_problem(policy: Any, binding: dict[str, Any], full: bool) -> VerifyRes
 def conftest_problem(ctx: Any) -> VerifyResult | None:
     """#798: a receipt with ``conftest_paths`` is accepted by a confidential receiver only when its
     policy sets ``allow_conftest`` (it cannot read the conftest), and a full receiver re-runs the
-    static check (conftest_check.py). That the base outcomes are unchanged (the differential probe,
-    p2p_conftest.py) is the signer's word; the assurance says so."""
-    paths = ctx.binding.get("conftest_paths", [])
-    if not paths:
-        return None
-    if not ctx.full and (ctx.policy or {}).get("allow_conftest") is not True:
+    static check (conftest_check.py) with every test path, also when no conftest changed: no
+    conftest of the tree may load a file the test commit changes (#924, #952). That the base
+    outcomes are unchanged (the differential probe, p2p_conftest.py) is the signer's word; the
+    assurance says so."""
+    paths, binding = ctx.binding.get("conftest_paths", []), ctx.binding
+    if paths and not ctx.full and (ctx.policy or {}).get("allow_conftest") is not True:
         return _fail(
             "CONFTEST_NOT_ALLOWED", "the receipt has conftest paths; the policy must allow"
         )
     try:
         if ctx.full:
-            check_conftests(ctx.repo, ctx.binding["base"], ctx.binding["test_commit"], paths)
+            tests = binding["test_paths"]
+            check_conftests(ctx.repo, binding["base"], binding["test_commit"], tests)
     except TestCommitRejected as exc:
         return _fail("CONFTEST_STATIC", str(exc))
     return None

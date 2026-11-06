@@ -299,3 +299,19 @@ def test_a_path_that_is_not_utf8_does_not_fail_the_check(project, monkeypatch):
     real = cc.run_git_bytes
     monkeypatch.setattr(cc, "run_git_bytes", lambda *a, **k: real(*a, **k) + b"\0data/\xff.bin")
     check_conftests(project, base, commit, ["tests/conftest.py"])
+
+
+@pytest.mark.parametrize("imported", [True, False])
+def test_a_full_receiver_refuses_a_base_conftest_that_imports_a_changed_module(project, imported):
+    """#952: the receipt names no conftest; the test commit changes only a module that a base
+    conftest imports. Before: a full receiver ran no conftest check and accepted it."""
+    importer = "import colorsys\n" if imported else ""
+    commit_change(project, {"tests/conftest.py": BASE_CONFTEST + importer,
+                            "tests/colorsys.py": "x = 1\n"})  # fmt: skip
+    files = {"tests/colorsys.py": RUNNER_PATCH, "tests/test_regression.py": PLAIN}
+    base, commit = _commit(project, files)
+    binding = {"base": base, "test_commit": commit, "test_paths": sorted(files)}
+    found = bx.conftest_problem(_ctx(binding, full=True, repo=project))
+    code = found.code if found is not None else ""  # a failed result is falsy
+    assert code == ("CONFTEST_STATIC" if imported else ""), found
+    assert bx.conftest_problem(_ctx(binding, full=False)) is None  # no conftest paths to allow

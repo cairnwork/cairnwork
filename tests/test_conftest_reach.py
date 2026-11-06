@@ -126,6 +126,11 @@ def test_a_package_name_alone_does_not_match_a_changed_test_file():
             "tests/lib/pkg/mod.py",
         ),
         ("import pkg.mod\n", {"tests/lib/pkg/mod.py": ""}, "tests/lib/pkg/mod.py"),  # namespace
+        (  # importing pkg.mod runs pkg/__init__.py first
+            "import pkg.mod\n",
+            {"tests/lib/pkg/__init__.py": "", "tests/lib/pkg/mod.py": ""},
+            "tests/lib/pkg/__init__.py",
+        ),
     ],
 )
 def test_an_import_named_like_a_changed_module_is_a_hit(text, tree, changed):
