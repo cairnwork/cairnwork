@@ -68,7 +68,11 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
   The claim is only "not run in-process through import, runpy, eval/exec of a code object or
   FunctionType, under its own name". Not covered: the file's text executed under another name,
   C-level eval, and a child that gets the file without naming it in argv (`python -` with the text
-  piped in); the bytecode hook's and the reporter's residuals apply. Honest code it refuses with
+  piped in); the bytecode hook's and the reporter's residuals apply. The latch is in-process
+  state: code in the run can reach it (through `gc`, or a caught refusal's traceback frames) and
+  clear it, and the guard on setting the hook's attributes only stops accidental replacement. This
+  gives no new power: the test commit is trusted, and candidate code already runs in-process and
+  can change test outcomes or exec the file's text under another name. Honest code it refuses with
   data declared: an argv entry that is a path object rather than text.
 - **Linux bubblewrap** (`src/cairnwork_sandbox/bwrap.py`): a read-only bind of the whole root,
   read-write binds for the write roots only, every namespace unshared (no network), all
