@@ -42,12 +42,13 @@ def _kind_causes(fail_kind) -> list[str]:
 
 
 def candidate_denial(outcomes, denied, write_roots) -> str:
-    """#962: the denied path when EVERY failed test of a candidate run died with a sandbox-denied
-    write (report_guard's ``denied``, kind ``env``) to a path outside ``write_roots``; else ``""``.
-    Wording only: the verdict stays FAILED. A plain failure or a mix keeps today's reason."""
-    failed = [node for node, result in outcomes.items() if result == "failed"]
+    """#962: the denied path when EVERY test that did not pass in a candidate run failed with an
+    EPERM denial (report_guard's ``denied``, kind ``env``) at a path outside ``write_roots``; else
+    ``""``. Wording only: the verdict stays FAILED. A plain failure, a skip or any other outcome in
+    the mix keeps today's reason; the caller passes nothing unless the run was otherwise clean."""
+    failed = [node for node, result in outcomes.items() if result != "passed"]
     roots = [os.path.normpath(str(root)) for root in write_roots]
-    paths = [denied.get(node, "") for node in failed]
+    paths = [denied.get(node, "") if outcomes[node] == "failed" else "" for node in failed]
     if not failed or not all(
         p.startswith("/") and not any(_within(p, r) for r in roots) for p in paths
     ):
@@ -118,9 +119,9 @@ def why_not_passed(
         causes.extend(_kind_causes(fail_kind or {}))
         if denied_path:  # #962: a candidate run; the same denial on a base run is BASE_ENV_ERROR
             causes.append(
-                f"the failing tests report a write denied at {_names([denied_path])[3:]}, outside"
-                " the run's write roots: unless the change raised this itself, likely the run"
-                " environment, not evidence about the change"
+                f"the failing tests report an operation not permitted (EPERM) at"
+                f" {_names([denied_path])[3:]}, outside the run's write roots: unless the change"
+                " raised this itself, likely the run environment, not evidence about the change"
             )
     elif ran_sandboxed and returncode == 0 and not tests_ran and not_run:
         causes.append(

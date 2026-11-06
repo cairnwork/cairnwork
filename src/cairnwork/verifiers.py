@@ -353,7 +353,7 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
         mutated=mutated, survivors=survivors, log_too_big=too_big, tests_ran=ran,
         report_too_big=verdict.too_big, forged=forged, not_run=not_run, renamed=verdict.renamed,
         exitstatus=verdict.exitstatus, testsfailed=verdict.testsfailed, fail_kind=verdict.fail_kind,
-        denied_path=_denial(batch, verdict, checkout, run_dir),
+        denied_path=_denial(batch, verdict, checkout, run_dir) if clean and not not_run else "",
     )  # fmt: skip
     digest = _record_digest(
         candidate_commit=candidate_commit,

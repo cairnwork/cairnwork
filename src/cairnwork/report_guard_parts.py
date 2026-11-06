@@ -50,14 +50,14 @@ def _import_error(node, call, report, _real=os.path.realpath, _rel=os.path.relpa
     return None
 
 
-def _denied_path(exc, _int=int):
-    # #962: the path of the first sandbox-denial errno (EPERM, EACCES) OSError in an exception's
-    # cause and context chain (at most 64 links); None when there is none. Wording only: the
-    # parent shows it in the reason and trusts nothing about it.
+def _denied_path(exc):
+    # #962: the path of the first EPERM OSError (a Seatbelt denial's errno; EACCES is plain file
+    # permissions) in an exception's cause and context chain (at most 64 links); None when there
+    # is none. Wording only: the parent shows it in the reason and trusts nothing about it.
     for _ in range(64):
         if not isinstance(exc, BaseException):
             return None
-        if isinstance(exc, OSError) and exc.errno in (1, 13) and type(exc.filename) is str:
+        if isinstance(exc, OSError) and exc.errno == 1 and type(exc.filename) is str:
             return exc.filename
         exc = exc.__cause__ or (None if exc.__suppress_context__ else exc.__context__)
     return None
