@@ -37,6 +37,7 @@ HIDDEN = {
     "star-import": "from helpers import *\n",  # #925 r3: pytest collects the test* it brings
     "match-capture": "match make_test():\n    case test_b:\n        pass\n",
     "global-in-function": "def _setup():\n    global test_b\n    test_b = make_test()\n_setup()\n",
+    "global-in-class": "class Holder:\n    global test_b\n    def test_b():\n" + WRONG,
 }
 NOT_HIDDEN = (  # a literal value, the TestCase base, a module: pytest collects none of them
     "test_data = [1, 2, {'a': (3,)}]\nfrom unittest import TestCase\nimport testtools\n"
