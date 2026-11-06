@@ -10,7 +10,8 @@ runs first, at the producer and (full mode) at the receiver:
 * a new node is an import (standard library, ``pytest`` or the repository's own top-level
   packages, no star, no ``pytest_*`` name), a literal assignment to a plain name, or a function
   whose only decorators are the pytest fixture decorator (resolved through the import table; literal
-  arguments, no ``autouse``), never a ``pytest_*``, ``test*`` or dunder name. No classes;
+  arguments, no ``autouse``; literal parameter defaults, annotations that call nothing), never a
+  ``pytest_*``, ``test*`` or dunder name. No classes;
 * no conftest of the test commit's tree, changed or not, has an import that can load a file the
   test commit adds or changes (conftest_reach.py, #924); this runs even when no conftest changed.
 
@@ -31,7 +32,7 @@ from posixpath import dirname
 
 from cairnwork.conftest_reach import reached_change
 from cairnwork.deferred_overlay import TestCommitRejected
-from cairnwork.gitcmd import GitCommandError, run_git
+from cairnwork.gitcmd import GitCommandError, run_git, run_git_bytes
 from cairnwork.pytest_config import PytestConfigError, verifier_settings
 
 CONFTEST = "conftest.py"
@@ -98,10 +99,13 @@ def _check_reach(
 
 
 def _tree_files(repo: Path, commit: str) -> frozenset[str]:
+    """The tree's paths; one that is not UTF-8 is kept undecodable (no import resolves to it)
+    rather than failing the whole check (#924 r4)."""
     try:
-        return frozenset(run_git(repo, "ls-tree", "-r", "-z", "--name-only", commit).split("\0"))
+        listing = run_git_bytes(repo, "ls-tree", "-r", "-z", "--name-only", commit)
     except GitCommandError as exc:
         raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
+    return frozenset(listing.decode("utf-8", "surrogateescape").split("\0"))
 
 
 def _read(repo: Path, commit: str, path: str) -> ast.Module:
@@ -243,6 +247,20 @@ def _fixture_problem(node: ast.FunctionDef, table: dict[str, str]) -> str:
             return "an autouse or starred fixture argument"
         if not all(_literal(a) for a in (*args, *(k.value for k in keywords))):
             return "a fixture argument that is not a literal"
+    return _signature_problem(node.args, node.returns)
+
+
+def _signature_problem(args: ast.arguments, returns: ast.expr | None) -> str:
+    """#924 r4: defaults and annotations run when the conftest is imported. A default must be a
+    literal; an annotation names a type (no call, walrus or lambda)."""
+    defaults = [*args.defaults, *(d for d in args.kw_defaults if d is not None)]
+    if not all(_literal(d) for d in defaults):
+        return "a parameter default that is not a literal"
+    params = (*args.posonlyargs, *args.args, *args.kwonlyargs, args.vararg, args.kwarg)
+    notes = [p.annotation for p in params if p is not None and p.annotation is not None]
+    runs = (ast.Call, ast.NamedExpr, ast.Lambda)
+    if any(isinstance(n, runs) for note in (*notes, returns) if note for n in ast.walk(note)):
+        return "an annotation that runs code"
     return ""
 
 

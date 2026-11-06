@@ -111,3 +111,30 @@ def test_the_verifier_s_import_roots_are_roots_too():
     assert reached_change(*args) == ""
     assert reached_change(*args, ("tests/support",)) == "tests/support/helper.py"
     assert reached_change(*args, ("./tests/support/",)) == "tests/support/helper.py"
+
+
+@pytest.mark.parametrize(
+    ("text", "tree", "changed"),
+    [  # #924 r4: matched by name, whatever directory the conftest put on sys.path
+        ("import helper\n", {"tests/lib/helper.py": ""}, "tests/lib/helper.py"),
+        (
+            "import pkg.mod\n",
+            {"tests/lib/pkg/__init__.py": "", "tests/lib/pkg/mod.py": ""},
+            "tests/lib/pkg/mod.py",
+        ),
+    ],
+)
+def test_an_import_named_like_a_changed_module_is_a_hit(text, tree, changed):
+    assert _reach(text, tree, [changed], conftest="tests/conftest.py") == changed
+
+
+def test_the_cap_is_exact(monkeypatch):
+    """#924 r4: MAX_FILES unchanged modules are followed; one more refuses."""
+    monkeypatch.setattr(reach, "MAX_FILES", 3)
+    chain = {f"tests/m{i}.py": f"import m{i + 1}\n" for i in range(3)}
+    chain["tests/m3.py"] = ""
+    assert _reach("import m0\n", {**chain, "tests/m3.py": ""}, ["tests/m3.py"]) == "tests/m3.py"
+    longer = {f"tests/m{i}.py": f"import m{i + 1}\n" for i in range(4)}
+    longer["tests/m4.py"] = ""
+    found = _reach("import m0\n", longer, ["tests/m4.py"], conftest="tests/conftest.py")
+    assert found == "has more than 3 modules to follow"

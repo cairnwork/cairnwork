@@ -24,6 +24,7 @@ from conftest_scenarios import (
 from conftest_scenarios import project as _project  # noqa: F401  (the fixture, re-exposed below)
 from test_deferred_tests import FIX, SeeingWorker, make_test_commit, run
 
+import cairnwork.conftest_check as cc
 import cairnwork.deferred_tests as dt
 from cairnwork import p2p_conftest
 from cairnwork.conftest_check import _own_packages, check_conftests, conftest_of, governed
@@ -93,6 +94,15 @@ def _commit(project, files, delete=()):
         ("\nimport functools\n\n\n@functools.cache\ndef x():\n    return 1\n", False),
         ("\nLIMIT = len('x')\n", False),  # not a literal
         ("\ndef pytest_configure(config):\n    pass\n", False),
+        # #924 r4: a default or an annotation runs when the conftest is imported
+        (
+            "\nimport os\nimport pytest\n\n\n@pytest.fixture\ndef x(d=os.getcwd()):\n"
+            "    return d\n",
+            False,
+        ),
+        ("\nimport pytest\n\n\n@pytest.fixture\ndef x(d: print()=1):\n    return d\n", False),
+        ("\nimport pytest\n\n\n@pytest.fixture\ndef x(*, d=print()):\n    return d\n", False),
+        ("\nimport pytest\n\n\n@pytest.fixture\ndef x(d: int = 2) -> int:\n    return d\n", True),
     ],
 )
 def test_the_static_check_allows_only_additive_fixtures_and_literals(project, addition, ok):
@@ -265,3 +275,27 @@ def test_a_conftest_import_through_the_base_pythonpath_is_refused(project, tmp_p
     assert result.status == "FAILED", result.reason
     assert "TEST_COMMIT_CONFTEST_STATIC" in result.reason
     assert "tests/support/helper.py" in result.reason
+
+
+def test_a_base_conftest_that_puts_a_directory_on_the_path_is_refused(project, tmp_path):
+    """#924 r4 (CE1 of the cw#948 Claude review): a base conftest inserts its own ``lib``
+    directory into sys.path and imports ``helper`` from it; the test commit changes only
+    ``tests/lib/helper.py``. Matched by name, whatever the roots."""
+    adds = "sys.path.insert(0, str(pathlib.Path(__file__).parent / 'lib'))\nimport helper\n"
+    commit_change(project, {"tests/conftest.py": BASE_CONFTEST + adds,
+                            "tests/lib/helper.py": "X = 1\n"})  # fmt: skip
+    base, tests = make_test_commit(
+        project, {"tests/lib/helper.py": RUNNER_PATCH, "tests/test_regression.py": PLAIN}
+    )
+    result = run(project, tmp_path, base, tests, SeeingWorker(BREAKS_BASE), key="k1",
+                 p2p_mode="whole-suite", p2p_budget=300)  # fmt: skip
+    assert result.status == "FAILED", result.reason
+    assert "TEST_COMMIT_CONFTEST_STATIC" in result.reason and "lib/helper.py" in result.reason
+
+
+def test_a_path_that_is_not_utf8_does_not_fail_the_check(project, monkeypatch):
+    """#924 r4: one undecodable path in the tree no longer refuses every task."""
+    base, commit = _commit(project, {"tests/conftest.py": BASE_CONFTEST + FIXTURE})
+    real = cc.run_git_bytes
+    monkeypatch.setattr(cc, "run_git_bytes", lambda *a, **k: real(*a, **k) + b"\0data/\xff.bin")
+    check_conftests(project, base, commit, ["tests/conftest.py"])
