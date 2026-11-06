@@ -77,7 +77,7 @@ from cairnwork.confined import ATTEMPT_ENV, MAX_LOG_BYTES, RUN_TOKEN_VAR
 from cairnwork.core_request import VerifierObservation
 from cairnwork.import_path_tree import require_plain_dirs
 from cairnwork.pycache_guard import PYCACHE_DIR
-from cairnwork.reasons import why_not_passed
+from cairnwork.reasons import candidate_denial, why_not_passed
 from cairnwork.run_scrub import close_private
 from cairnwork.verifier_account import lock_wait_seconds
 from cairnwork.verifier_exec import (  # low-level run primitives, split out for the 400-line cap
@@ -295,6 +295,14 @@ def _read_verdict(channel, path, nonce, plugins):
     return replace(verdict, fail_kind=pytest_config.plugin_kinds(verdict.fail_kind, plugins))
 
 
+def _denial(batch: _Batch, verdict, checkout, run_dir) -> str:
+    """#962: the denied path for a candidate run's reason; a base run gets none (it is judged as
+    BASE_ENV_ERROR, base_teeth.py)."""
+    if batch.deny:
+        return ""
+    return candidate_denial(verdict.outcomes, verdict.denied, (checkout.parent, run_dir))
+
+
 def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, channel) -> VerifierRun:
     ctx, candidate_commit, timeout = batch.ctx, batch.candidate_commit, batch.timeout
     account, python, attempt_id = ctx.account, batch.python, ctx.attempt_id
@@ -334,9 +342,8 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
     verdict = _read_verdict(channel, verdict_path, verdict_nonce, plugins)
     not_run = verdict.not_run(spec.targets)  # a target with no test that ran, a skipped module
     ran = profile is not None and verdict.ran and not not_run
-    clean = not timed_out and not mutated and survivors == 0 and not forged
     too_big = log_path.stat().st_size > MAX_LOG_BYTES
-    clean = clean and not too_big and not verdict.too_big
+    clean = not (timed_out or mutated or survivors or forged or too_big or verdict.too_big)
     passed = profile is not None and returncode == 0 and clean and ran  # ran: pytest said 0 too
     plain_failure = (
         profile is not None and returncode == 1 and clean and "failed" in verdict.outcomes.values()
@@ -346,6 +353,7 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
         mutated=mutated, survivors=survivors, log_too_big=too_big, tests_ran=ran,
         report_too_big=verdict.too_big, forged=forged, not_run=not_run, renamed=verdict.renamed,
         exitstatus=verdict.exitstatus, testsfailed=verdict.testsfailed, fail_kind=verdict.fail_kind,
+        denied_path=_denial(batch, verdict, checkout, run_dir),
     )  # fmt: skip
     digest = _record_digest(
         candidate_commit=candidate_commit,

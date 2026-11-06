@@ -7,6 +7,7 @@ The reasons are recorded next to the verifier id, so a failure is always explain
 
 from __future__ import annotations
 
+import os
 import re
 
 from cairnwork import survivor_argv
@@ -40,6 +41,25 @@ def _kind_causes(fail_kind) -> list[str]:
     return [f"{said[kind]} {_names([node])[3:]}" for node, kind in fail_kind.items()][:MAX_NAMES]
 
 
+def candidate_denial(outcomes, denied, write_roots) -> str:
+    """#962: the denied path when EVERY failed test of a candidate run died with a sandbox-denied
+    write (report_guard's ``denied``, kind ``env``) to a path outside ``write_roots``; else ``""``.
+    Wording only: the verdict stays FAILED. A plain failure or a mix keeps today's reason."""
+    failed = [node for node, result in outcomes.items() if result == "failed"]
+    roots = [os.path.normpath(str(root)) for root in write_roots]
+    paths = [denied.get(node, "") for node in failed]
+    if not failed or not all(
+        p.startswith("/") and not any(_within(p, r) for r in roots) for p in paths
+    ):
+        return ""
+    return paths[0]
+
+
+def _within(path: str, root: str) -> bool:
+    path = os.path.normpath(path)
+    return path == root or path.startswith(root.rstrip("/") + "/")
+
+
 def verdict_reason(verified: bool, verdict, recorded) -> str:
     """The reason string for a judged attempt. A verified attempt reads ``CORE_<status>``. Otherwise
     the readback's reason is shown (``recorded`` when present, so an unverified readback never reads
@@ -58,6 +78,7 @@ def why_not_passed(
     *, ran_sandboxed: bool, returncode, timed_out: bool, mutated, survivors: int,
     log_too_big: bool, tests_ran: bool, report_too_big: bool = False, forged=(), not_run=(),
     renamed=(), exitstatus=None, testsfailed=None, fail_kind=None,
+    denied_path="",
 ) -> str:  # fmt: skip
     """The causes that made a run fail, ``""`` if none (then the run passed)."""
     causes = []
@@ -95,6 +116,11 @@ def why_not_passed(
     if ran_sandboxed and not timed_out and returncode != 0:
         causes.append(f"pytest exit code {returncode}")
         causes.extend(_kind_causes(fail_kind or {}))
+        if denied_path:  # #962: a candidate run; the same denial on a base run is BASE_ENV_ERROR
+            causes.append(
+                f"the sandbox denied a write to {_names([denied_path])[3:]}, outside the run's"
+                " write roots: likely the run environment, not evidence about the change"
+            )
     elif ran_sandboxed and returncode == 0 and not tests_ran and not_run:
         causes.append(
             f"pytest passed but no test ran for a target or skipped module ({_names(not_run)})"
