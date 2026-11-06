@@ -154,6 +154,31 @@ def test_an_unchanged_conftest_that_does_not_parse_is_read_by_its_names(project,
     assert err.value.code == "TEST_COMMIT_CONFTEST_STATIC", err.value
 
 
+@pytest.mark.parametrize(
+    ("base_files", "refused"),
+    [
+        ({"tests/conftest.py": "import sys\nsys.path.insert(0, 'tests/vendor.zip')\n"}, True),
+        ({"tox.ini": "[pytest]\npythonpath = tests/vendor.zip\n"}, True),
+        ({"tests/conftest.py": "import sys\nsys.path.insert(0, 'tests/other.zip')\n"}, False),
+    ],
+)
+def test_a_changed_archive_a_conftest_or_the_configuration_names_is_refused(
+    project, base_files, refused
+):
+    """#948 r6 (layer1 ruling): an archive loads once its path is on sys.path, so a test commit
+    may not change one that a conftest or the root pytest configuration names; an archive no one
+    names (test data) passes. The rest is #967."""
+    commit_change(project, base_files)
+    base, commit = _commit(project, {"tests/vendor.zip": "PK"})
+    if not refused:
+        check_conftests(project, base, commit, ["tests/vendor.zip"])
+        return
+    with pytest.raises(dt.TestCommitRejected) as err:
+        check_conftests(project, base, commit, ["tests/vendor.zip"])
+    assert err.value.code == "TEST_COMMIT_CONFTEST_STATIC", err.value
+    assert "vendor.zip" in str(err.value)
+
+
 def test_a_conftest_at_the_repository_root_governs_every_base_test():
     assert governed(["conftest.py"], ["tests/a.py", "x/b.py"]) == ("tests/a.py", "x/b.py")
 

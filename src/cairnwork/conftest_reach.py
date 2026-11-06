@@ -28,8 +28,10 @@ directories that imports a test-commit file, is not followed: that is test autho
 conftest_check.py. Nor are base test files: a changed module that only a base test file imports
 also runs its import-time code in the base run (a known residual, #951, kept apart so that a test
 commit may still update a shared test helper). An archive (``.zip``, ``.whl``) loads only once
-its own path is on ``sys.path``, which no import names: a known residual. This runs at the
-producer, in the pipeline judge and at a full receiver, on every test path (#952).
+its own path is on ``sys.path``, which no import names: conftest_check.py refuses the direct form
+(a conftest or the pytest configuration naming the file); the rest is a known residual (#967).
+This runs at the producer, in the pipeline judge and at a full receiver, on every test path
+(#952).
 
 Expected false refusals (fail closed): a data file under a test directory that is named like a
 module some conftest imports (``tests/data/sample/calc.py`` when a conftest imports ``calc``).

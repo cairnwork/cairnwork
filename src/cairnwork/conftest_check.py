@@ -16,6 +16,8 @@ runs first, at the producer and (full mode) at the receiver:
   test commit adds or changes (conftest_reach.py, #924); this runs even when no conftest changed,
   at the producer, in the pipeline judge and at a full receiver (#952). An unchanged file that
   does not parse (a Python 2 sample) is not refused for that: its dotted names count as imports.
+  An archive the test commit changes is refused when a conftest or the root pytest configuration
+  names its file (#967 tracks the rest).
 
 It is hygiene, not the guard: a name imported from the repository or rebound can carry behaviour
 it cannot see, and behaviour that depends on the candidate's code is trusted test author code, like
@@ -39,6 +41,8 @@ from cairnwork.gitcmd import GitCommandError, run_git, run_git_bytes
 
 CONFTEST = "conftest.py"
 CODE = "TEST_COMMIT_CONFTEST_STATIC"
+ARCHIVES = (".zip", ".egg", ".whl", ".pyz")  # importable once on sys.path (#924 r6, #967)
+CONFIGS = ("pytest.ini", ".pytest.ini", "pyproject.toml", "tox.ini", "setup.cfg")
 
 
 def conftest_of(paths: Iterable[str]) -> tuple[str, ...]:
@@ -84,12 +88,30 @@ def _check_reach(repo: Path, test_commit: str, paths: tuple[str, ...]) -> None:
     already import a module the test commit changes), can load a file the test commit changes.
     Names are matched under any directory, so the verifier's import roots need no reading."""
     files = _tree_files(repo, test_commit)
+    _check_archives(repo, test_commit, paths, files)
     read = partial(_read, repo, test_commit)
     for path in conftest_of(files):
         changed = frozenset(paths) - {path}
         if hit := reached_change(path, read(path), changed, files, read):
             why = f"can load {hit}, which the test commit changes" if hit in changed else hit
             _refuse(path, None, f"an import that {why}")
+
+
+def _check_archives(repo: Path, commit: str, paths: tuple[str, ...], files: frozenset[str]) -> None:
+    """#924 r6: a module loads from an archive the test commit changes only once the archive's
+    own path is on ``sys.path``, which no import names. The direct forms are refused: a conftest
+    of the tree, or the root pytest configuration, whose text holds the archive's file name. A
+    path built otherwise is a known residual (#967)."""
+    names = {p.rsplit("/", 1)[-1] for p in paths if p.lower().endswith(ARCHIVES)}
+    sources = (*conftest_of(files), *(f for f in CONFIGS if f in files)) if names else ()
+    for path in sources:
+        try:
+            raw = run_git_bytes(repo, "cat-file", "blob", f"{commit}:{path}")
+        except GitCommandError as exc:
+            raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
+        text = raw.decode("utf-8", "surrogateescape")
+        if hit := sorted(n for n in names if n in text):
+            _refuse(path, None, f"names the archive {hit[0]}, which the test commit changes")
 
 
 def _tree_files(repo: Path, commit: str) -> frozenset[str]:
