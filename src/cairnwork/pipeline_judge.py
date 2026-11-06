@@ -85,8 +85,10 @@ def tests_with_teeth(task, specs, result, ctx: VerifyContext) -> tuple[str, ...]
     )
     runs = run_verifiers(ctx, task.test_commit, base, f"{result.attempt_id}-b", deny=True)
 
-    def is_test(path: str) -> bool:  # asked only when a record qualifies: the base's test files
-        return test_file_rule(task.repo, task.base_commit)(path)
+    def is_test(path: str) -> bool:  # asked only when a record qualifies: a base test file, or
+        # any file under a test root (a test package's own helper is not code the fix adds)
+        roots = tuple(f"{r}/" for r in task.test_roots)
+        return path.startswith(roots) or test_file_rule(task.repo, task.base_commit)(path)
 
     runs = [as_failed(run, targets, is_test) for run in runs]  # before the base comparison
     comparison = base_comparison(runs, targets)  # decided before the base logs go

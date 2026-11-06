@@ -247,6 +247,19 @@ def test_a_qualifying_file_beside_another_collect_error_is_uncomparable(project,
     assert code == 2 and out["uncomparable"]["code"] == "BASE_COLLECTION_ERROR"
 
 
+@pytest.mark.sandbox
+def test_a_missing_helper_of_a_test_package_stays_uncomparable(project, state):
+    """``from . import helper`` in a test package: the origin is tests/__init__.py, no test file by
+    name, but under a test root, so it is the test commit's gap, not code the fix adds."""
+    from conftest import commit_change
+
+    commit_change(project, {"tests/__init__.py": ""})
+    body = "from . import newrel_796\ndef test_double():\n    assert True\n"
+    code, out = run_cli(project, state, body, FIX_DOUBLE_FILES)
+    assert code == 2 and out["status"] == "UNCOMPARABLE", out
+    assert out["uncomparable"]["code"] == "BASE_COLLECTION_ERROR"
+
+
 FORGED = {  # AC: the record can be made to qualify; the candidate run is what refuses
     "test file raises it": "import os\nraise ImportError(\"cannot import name 'x' from 'calc'\",\n"
     "    name='calc', path=os.path.abspath('src/calc.py'))\ndef test_double(): pass\n",
