@@ -21,7 +21,6 @@ configuration file at the base fails the run (``PytestConfigError``).
 
 from __future__ import annotations
 
-import configparser
 import fnmatch
 import json
 import os
@@ -30,7 +29,6 @@ import re
 import shlex
 import shutil
 import subprocess
-import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from functools import lru_cache
@@ -38,6 +36,13 @@ from pathlib import Path
 from typing import Any
 
 from cairnwork.gitcmd import GitCommandError, run_git
+from cairnwork.pytest_config_files import (
+    _ALWAYS_FOUND,
+    _CANDIDATES,
+    PytestConfigError,
+    _section,
+    refuse_both_kinds,
+)
 
 # Copied from the base configuration. Each one only decides which tests exist and how
 # they run, never where configuration, plugins or reports come from:
@@ -99,26 +104,7 @@ IMPORT_MODES = frozenset({"prepend", "append", "importlib"})
 # From the base addopts only these survive (everything else is dropped): the import
 # mode, and options that make the run stricter (-W warning filters, strict markers/config).
 STRICT_OPTIONS = frozenset({"--strict-markers", "--strict-config"})
-# pytest's discovery order: (file, section or TOML table path, format).
-_CANDIDATES = (
-    ("pytest.ini", "pytest", "ini"),
-    (".pytest.ini", "pytest", "ini"),
-    ("pytest.toml", "pytest", "toml"),
-    (".pytest.toml", "pytest", "toml"),
-    ("pyproject.toml", "tool.pytest.ini_options", "toml"),
-    ("pyproject.toml", "tool.pytest", "toml"),
-    ("tox.ini", "pytest", "ini"),
-    ("setup.cfg", "tool:pytest", "ini"),
-)
 _KEY = re.compile(r"^[A-Za-z0-9_]+$")
-_ALWAYS_FOUND = ("pytest.ini", ".pytest.ini", "pytest.toml", ".pytest.toml")
-
-
-class PytestConfigError(Exception):
-    code = "PYTEST_CONFIG_ERROR"
-
-    def __init__(self, detail: str) -> None:
-        super().__init__(f"{self.code}: {detail}")
 
 
 @dataclass(frozen=True)
@@ -169,6 +155,7 @@ def base_settings(repo: Path, base_commit: str | None) -> PytestSettings:
         meta, path = entry.split("\t", 1)
         mode, kind, oid = meta.split()
         entries[path] = (mode, kind, oid)
+    refuse_both_kinds(entries)  # #928
     for name, section, form in _CANDIDATES:
         if name not in entries:
             continue
@@ -185,9 +172,18 @@ DEFAULT_PYTHON_FILES = ("test_*.py", "*_test.py")
 
 
 def configured_python_files(repo: Path, base_commit: str | None) -> tuple[str, ...]:
-    """The base's own ``python_files`` patterns; empty when it sets none (#870)."""
-    configured = _render(dict(base_settings(repo, base_commit).values).get("python_files"))
-    return tuple(_words(configured))
+    """The base's own ``python_files`` patterns; empty when it sets none (#870). #928: a list's
+    items as pytest takes them (whole) and as the verifier's ini splits them, both, so never fewer
+    files than either; a string split by shlex, and one shlex cannot split refuses the base
+    (pytest itself cannot start), never pytest's default."""
+    value = dict(base_settings(repo, base_commit).values).get("python_files")
+    if isinstance(value, list):
+        items = [str(item) for item in value]
+        return tuple(dict.fromkeys([*items, *(word for i in items for word in _words(i))]))
+    try:
+        return tuple(shlex.split(_render(value) or ""))
+    except ValueError as exc:
+        raise PytestConfigError("python_files at the base cannot be split") from exc
 
 
 def test_file_rule(repo: Path, base_commit: str | None) -> Callable[[str], bool]:
@@ -241,21 +237,6 @@ def gate_import_paths(
         return verifier_settings(repo, base_commit, import_paths).pythonpath
     except GitCommandError as exc:
         raise PytestConfigError(f"the base config cannot be read: {exc}") from exc
-
-
-def _section(text: str, section: str, form: str, name: str) -> dict[str, Any] | None:
-    try:
-        if form == "toml":
-            table: Any = tomllib.loads(text)
-            for part in section.split("."):
-                table = table.get(part) if isinstance(table, dict) else None
-            return dict(table) if isinstance(table, dict) else None
-        parser = configparser.ConfigParser(interpolation=None)
-        parser.optionxform = str  # type: ignore[assignment] # pytest's ini keys are case-sensitive
-        parser.read_string(text)
-    except (tomllib.TOMLDecodeError, configparser.Error) as exc:
-        raise PytestConfigError(f"{name} at the base cannot be parsed") from exc
-    return dict(parser.items(section)) if parser.has_section(section) else None
 
 
 def _settings(source: str, config: dict[str, Any]) -> PytestSettings:
