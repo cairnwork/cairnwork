@@ -20,7 +20,12 @@ tests), so a target naming the file still runs none of them. A ``unittest.TestCa
 its own ``__init__`` is collected by pytest's unittest support but is counted here as well: a test
 commit with one is refused, never wrongly accepted. Bases imported from another module are not
 read; neither are custom ``python_functions``/``python_classes`` settings. A class's decorators are
-part of each of its tests (#925: removing a class-level skip changes them all).
+part of each of its tests, and so are (#968) every statement of its class and of each base
+class defined earlier in the file that is not a function (``pytestmark``, attributes, flags),
+every module-level statement that is not an import, a function or a class, and each import,
+function or class those read, in turn. So a mark or skip condition changed anywhere in the file
+changes each test it may apply to. A class pytest does not collect keeps only its own
+decorators (#925: removing a class-level skip changes them all).
 
 ``hidden_tests`` (#925): what may give pytest a test that is not read above, at module level or
 in a class body, inside a block (``if``, ``try``, ``with``, a loop) or not: a ``test*`` function
@@ -36,6 +41,7 @@ new_tests refuses a test commit that changes one. Names set at run time (``setat
 from __future__ import annotations
 
 import ast
+import copy
 from collections.abc import Container
 from pathlib import Path
 
@@ -52,40 +58,102 @@ def test_functions(tree: ast.Module) -> tuple[dict[str, str], frozenset[str]]:
     """(node id -> ``ast.dump`` of its function, the ``Test*`` classes pytest does not collect);
     a node id is ``name`` or ``Class::name``, without the file."""
     functions: dict[str, str] = {}
-    classes: dict[str, tuple[dict[str, str], bool, bool]] = {}
+    classes: dict[str, _Class] = {}
     uncollected: set[str] = set()
+    reach = _Reach(tree)
     for node in tree.body:
         if isinstance(node, _DEFS) and node.name.startswith("test"):
-            functions[node.name] = ast.dump(node)
+            functions[node.name] = reach.module + ast.dump(node) + reach(node.decorator_list)
         elif isinstance(node, ast.ClassDef):
-            methods, blocked, case = _members(node, classes)
-            classes[node.name] = (methods, blocked, case)
+            methods, blocked, case, marks = _members(node, classes, reach)
+            classes[node.name] = (methods, blocked, case, marks)
             if node.name.startswith("Test") or case:
-                deco = "".join(ast.dump(d) for d in node.decorator_list)  # #925: a class skip
-                tests = {n: deco + body for n, body in methods.items() if n.startswith("test")}
+                tests = {n: b for n, b in methods.items() if n.startswith("test")}
+                # a class pytest does not collect gets no marks; its own decorators as before
+                own = "".join(ast.dump(d) for d in node.decorator_list)
+                tests = {
+                    n: (own if blocked else reach.module + marks) + b for n, b in tests.items()
+                }
                 functions.update({f"{node.name}::{n}": body for n, body in tests.items()})
                 if blocked:
                     uncollected.add(node.name)
     return functions, frozenset(uncollected)
 
 
-def _members(
-    node: ast.ClassDef, classes: dict[str, tuple[dict[str, str], bool, bool]]
-) -> tuple[dict[str, str], bool, bool]:
+_Class = tuple[dict[str, str], bool, bool, str]
+
+
+def _members(node: ast.ClassDef, classes: dict[str, _Class], reach: _Reach) -> _Class:
     """A class's methods, its own first, then each base's that it does not define; and whether
     it has an ``__init__`` or ``__new__`` (its own or a base's); and whether it is a TestCase
-    subclass (a base named ``*TestCase``, or an earlier class that is one)."""
-    methods = {item.name: ast.dump(item) for item in node.body if isinstance(item, _DEFS)}
+    subclass (a base named ``*TestCase``, or an earlier class that is one); and its marks: its
+    decorators and every statement of its body that is not a function, with what they read, and
+    every base's (pytest applies them along the MRO, #925, #968)."""
+    methods = {
+        item.name: ast.dump(item) + reach(item.decorator_list)
+        for item in node.body
+        if isinstance(item, _DEFS)
+    }
     blocked, case = bool(_NOT_COLLECTED & methods.keys()), False
+    marks = reach([*node.decorator_list, *(s for s in node.body if not isinstance(s, _DEFS))])
     for base in node.bases:
         last = base.id if isinstance(base, ast.Name) else getattr(base, "attr", "")
         case = case or last.endswith("TestCase")
         if isinstance(base, ast.Name) and base.id in classes:
-            inherited, base_blocked, base_case = classes[base.id]
-            blocked, case = blocked or base_blocked, case or base_case
+            inherited, base_blocked, base_case, base_marks = classes[base.id]
+            blocked, case, marks = blocked or base_blocked, case or base_case, marks + base_marks
             for name, body in inherited.items():
                 methods.setdefault(name, body)
-    return methods, blocked, case
+    return methods, blocked, case, marks
+
+
+class _Reach:
+    """#968: ``reach(nodes)`` is the ``ast.dump`` of ``nodes`` and of each module-level import,
+    function or class that binds a name they read, in turn (a class without its ``test*``
+    methods). ``module`` is ``reach`` of every other module-level statement, whole: assignments,
+    blocks and calls (``pytestmark``, ``TestX.pytestmark = ...``, ``setattr``, a flag), so no
+    form of mark or condition set at module level is missed."""
+
+    def __init__(self, tree: ast.Module) -> None:
+        self._by_name: dict[str, list[ast.stmt]] = {}
+        rest = []
+        for stmt in tree.body:
+            names = _binds(stmt)
+            for name in names:
+                self._by_name.setdefault(name, []).append(stmt)
+            if not names:
+                rest.append(stmt)
+        self.module = self(rest)
+
+    def __call__(self, nodes: list) -> str:
+        seen: dict[int, ast.stmt] = {}
+        names = [n.id for x in nodes for n in ast.walk(x) if isinstance(n, ast.Name)]
+        while names:
+            for stmt in self._by_name.get(names.pop(), ()):
+                if id(stmt) not in seen:
+                    seen[id(stmt)] = shell = _shell(stmt)
+                    names += [n.id for n in ast.walk(shell) if isinstance(n, ast.Name)]
+        found = sorted(seen.values(), key=lambda s: s.lineno)
+        return "".join(ast.dump(n) for n in [*nodes, *found])
+
+
+def _binds(stmt: ast.stmt) -> set[str]:
+    """The names a module-level import, function or class binds; none for any other statement,
+    which counts whole (a star import is refused by hidden_tests when it changes)."""
+    if isinstance(stmt, _SCOPES):
+        return {stmt.name}
+    if isinstance(stmt, (ast.Import, ast.ImportFrom)):
+        return {(alias.asname or alias.name).split(".")[0] for alias in stmt.names}
+    return set()
+
+
+def _shell(stmt: ast.stmt) -> ast.stmt:
+    """A class without its ``test*`` methods: those are tests of their own."""
+    if not isinstance(stmt, ast.ClassDef):
+        return stmt
+    shell = copy.copy(stmt)
+    shell.body = [m for m in stmt.body if not (isinstance(m, _DEFS) and m.name.startswith("test"))]
+    return shell
 
 
 def hidden_tests(tree: ast.Module, local: Container[str] | None = None) -> frozenset[str]:
