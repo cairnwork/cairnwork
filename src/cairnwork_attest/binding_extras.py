@@ -233,7 +233,7 @@ def data_problem(ctx: Any) -> VerifyResult | None:
         return _fail("DATA_PATHS_MISMATCH", f"the test commit declares {list(declared)}")
     try:
         is_test = test_file_rule(ctx.repo, binding["base"])
-    except PytestConfigError as exc:  # never raise out of verify_bound (#447)
+    except (PytestConfigError, GitCommandError) as exc:  # never raise out of verify_bound
         return _fail("DATA_PATHS_INVALID", f"cannot read the base's python_files: {exc}"[:300])
     why = data_rule_problem(data, binding["test_paths"], binding.get("conftest_paths", []), is_test)
     return _fail("DATA_PATHS_INVALID", why) if why else None

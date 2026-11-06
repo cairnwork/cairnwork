@@ -216,3 +216,11 @@ def test_a_case_variant_target_of_a_data_path_fails(project):  # review r1 #3
 def test_a_base_config_that_does_not_parse_is_a_result_not_an_exception(project):  # r1 #2
     commit_change(project, {"pyproject.toml": "[tool.pytest.ini_options\n"}, message="broken")
     assert _code(_case(project)) == "DATA_PATHS_INVALID"
+
+
+def test_a_base_tree_git_cannot_read_is_a_result_not_an_exception(project, monkeypatch):  # r2
+    def broken(repo, base):
+        raise bx.GitCommandError("ls-tree failed")
+
+    monkeypatch.setattr(bx, "test_file_rule", broken)
+    assert _code(_case(project)) == "DATA_PATHS_INVALID"
