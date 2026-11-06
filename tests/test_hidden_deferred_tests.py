@@ -119,21 +119,20 @@ PLAIN_BASE = "class TestCase:\n    def setUp(self):\n        pass\n"
 
 
 @pytest.mark.parametrize(
-    ("base_files", "module", "refused"),
+    ("base_files", "module"),
     [  # the base's own module, unchanged by the test commit, anywhere in the tree
-        ({"testing_helpers.py": CASES}, "testing_helpers", True),  # cw#964 Codex r1: root level
+        ({"testing_helpers.py": CASES}, "testing_helpers"),  # cw#964 Codex r1: root level
+        ({"testing_helpers/__init__.py": CASES}, "testing_helpers"),  # a root package
         ({"lib/cases/__init__.py": "from .impl import TestCase\n", "lib/cases/impl.py": CASES},
-         "cases", True),  # re-exported from a file with tests
+         "cases"),  # re-exported from a file with tests
         ({"fw/test/__init__.py": "from fw.test.base import TestCase\n",
-          "fw/test/base.py": PLAIN_BASE}, "fw.test", False),  # a framework base without tests
+          "fw/test/base.py": PLAIN_BASE}, "fw.test"),  # no tests, but a tree name: accepted cost
     ],
 )  # fmt: skip
-def test_a_test_case_from_a_base_module_with_tests_is_hidden(project, base_files, module, refused):
+def test_a_test_case_from_a_module_the_tree_holds_is_hidden(project, base_files, module):
+    """#925 (layer1 ruling on cw#964): the whole tree is listed, and a top-level module name
+    that is a file stem or a directory at any depth is not trusted, whatever the file holds."""
     commit_change(project, base_files)
-    files = {F: REGRESSION + f"from {module} import TestCase\n"}
-    if not refused:
-        assert _new_tests(project, files) == {f"{F}::test_regression"}
-        return
     with pytest.raises(Rejected) as err:
-        _new_tests(project, files)
+        _new_tests(project, {F: REGRESSION + f"from {module} import TestCase\n"})
     assert err.value.code == "DEFERRED_TESTS_UNREADABLE"
