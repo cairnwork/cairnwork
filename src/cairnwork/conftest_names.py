@@ -7,19 +7,22 @@ so the probe sees nothing. So:
 * a new top-level name (assignment, function, import, or a fixture's ``name=``) may not be one the
   base version of the same conftest already binds (Python and pytest use the last binding);
 * a name that can register a fixture (a function, a ``from M import n`` name, a fixture's
-  ``name=``) may not be one a base conftest above binds (a fixture here overrides that one) or one
-  a base Python file in the conftest's directory requests: any function parameter (test or
-  fixture) and any literal name passed to ``usefixtures`` or ``getfixturevalue``. A literal
-  assignment or a plain ``import M`` binds no fixture, and another module's globals are its own.
+  ``name=``) may not be one a base conftest above binds (a fixture here overrides that one) or
+  requests (a fixture above that depends on it would get this one), or one a base Python file in
+  the conftest's directory requests: any function parameter (test or fixture) and any literal
+  name passed to ``usefixtures`` or ``getfixturevalue``. A literal assignment or a plain
+  ``import M`` binds no fixture, and another module's globals are its own.
 
-The base files are read in one ``git cat-file --batch``. A base file that does not parse, or more
-than MAX_FILES of them, refuses rather than passes. A name a third-party plugin's fixture requests
-internally is not seen.
+The base files are read in one ``git cat-file --batch``; more than MAX_FILES of them refuses. A
+base file that does not parse counts every identifier in it (``_parse``). Not seen: a name a
+third-party plugin's fixture requests internally, the ini ``usefixtures`` option, and fixtures
+of a ``pytest_plugins`` module outside the directory.
 """
 
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 from posixpath import dirname, join
 
@@ -41,8 +44,9 @@ def taken_names(
     sources = _base_sources(repo, base, directory)
     for parent in _parents(directory):
         conftest = join(parent, "conftest.py") if parent else "conftest.py"
-        if conftest in sources:
-            names |= bound(_parse(conftest, sources[conftest]))
+        if conftest in sources:  # r2: what its own fixtures request may not be overridden either
+            tree = _parse(conftest, sources[conftest])
+            names |= bound(tree) | requested(tree)
     for file, data in sources.items():
         if _under(file, directory):
             names |= requested(_parse(file, data))
@@ -141,10 +145,17 @@ def _read(repo: Path, oids: list[str]) -> list[bytes]:
 
 
 def _parse(path: str, data: bytes) -> ast.Module:
+    """A base file the test author cannot change, so one that does not parse (Python 2, newer
+    syntax, not UTF-8) is not refused for that (#948 r6, r2 of #916): every identifier in its
+    text counts as both bound and requested, as an import and as a test's parameters."""
     try:
         return ast.parse(data)
-    except (SyntaxError, ValueError, RecursionError, MemoryError) as exc:
-        raise TestCommitRejected(CODE, f"cannot read the base file {path} for its names") from exc
+    except (SyntaxError, ValueError, UnicodeError, RecursionError, MemoryError):
+        pass
+    words = sorted(set(re.findall(r"[A-Za-z_]\w*", data.decode("latin-1"))))
+    args = ast.arguments([], [ast.arg(w) for w in words], None, [], [], None, [])
+    test = ast.FunctionDef("test_unparsed", args, [ast.Pass()], [], None, None, [])
+    return ast.Module([ast.Import([ast.alias(w) for w in words]), test], [])
 
 
 def _parents(directory: str) -> list[str]:

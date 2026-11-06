@@ -38,6 +38,24 @@ CASES = {  # name: (addition, fix, expected status, a code the reason must name)
     ),
     "control: a new fixture, correct fix": (NEW_FIXTURE, FIX, "COMPLETED", ""),
 }  # fmt: skip
+# r2 (reviewer's counterexample): the base check depends on a builtin fixture, and a nested
+# test-commit conftest overrides that builtin for the tests below it
+DEPENDS = {
+    "tests/conftest.py": BASE_CONFTEST + "import pytest\n\n\n@pytest.fixture\n"
+    "def check(monkeypatch):\n    def _c(ok):\n        if monkeypatch is not None:\n"
+    "            assert ok\n\n    return _c\n",
+    "tests/sub/test_guard.py": "from calc import add\n\n\ndef test_guard(check):\n"
+    "    check(add(0, 0) < 2)\n",
+}
+NESTED = {  # name: (addition to tests/sub/conftest.py, fix, expected status, code)
+    "a nested override of a builtin a base fixture above depends on, wrong fix": (
+        "import pytest\n\n\n@pytest.fixture\ndef monkeypatch():\n    return None\n", WRONG,
+        "FAILED", "TEST_COMMIT_CONFTEST_STATIC",
+    ),
+    "control: a nested new fixture, wrong fix": (
+        "import pytest\n" + NEW_FIXTURE, WRONG, "FAILED", "p2p-whole-suite: pytest exit code 1",
+    ),
+}  # fmt: skip
 
 
 @pytest.fixture
@@ -45,12 +63,15 @@ def project(_project):  # noqa: F811
     return _project
 
 
-@pytest.mark.parametrize("name", list(CASES))
+@pytest.mark.parametrize("name", [*CASES, *NESTED])
 def test_a_rebinding_that_weakens_a_base_check_is_refused(project, tmp_path, name):
-    addition, fix, status, code = CASES[name]
+    nested = name in NESTED
+    addition, fix, status, code = (NESTED if nested else CASES)[name]
     result = conftest_run(
-        project, tmp_path, addition=addition, regression=PLAIN, base_files=GUARDED, fix=fix
-    )
+        project, tmp_path, addition=addition, regression=PLAIN, fix=fix,
+        base_files=DEPENDS if nested else GUARDED, path="tests/sub/conftest.py" if nested
+        else "tests/conftest.py",
+    )  # fmt: skip
     if table := os.environ.get("SCENARIO_TABLE"):  # the before/after table of the PR body
         row = {"name": name, "status": result.status, "reason": result.reason[:160]}
         Path(table).open("a").write(json.dumps(row) + "\n")

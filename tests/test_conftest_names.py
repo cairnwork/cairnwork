@@ -117,10 +117,28 @@ def test_a_name_requested_only_outside_the_conftest_s_directory_is_free(repo):
     _check(repo, {"tests/sub/conftest.py": sub}, base_files=other)
 
 
-def test_a_base_file_that_does_not_parse_refuses_rather_than_passes(repo):
-    with pytest.raises(dt.TestCommitRejected, match="cannot read the base file"):
-        _check(repo, {"tests/conftest.py": ALLOWED["a new fixture with a new name"]},
-               base_files={"tests/data/broken.py": "def (:\n"})  # fmt: skip
+PY2 = {"tests/data/py2_sample.py": 'print "hello"\n'}  # never collected, not the author's
+
+
+def test_a_base_file_that_does_not_parse_counts_its_words_instead_of_refusing(repo):
+    _check(repo, {"tests/conftest.py": ALLOWED["a new fixture with a new name"]}, base_files=PY2)
+    hello = BASE + "\n\n@pytest.fixture\ndef hello():\n    return 1\n"
+    with pytest.raises(dt.TestCommitRejected, match=r"requests \(hello\)"):
+        _check(repo, {"tests/conftest.py": hello}, base_files=PY2)
+
+
+ROOT = "import pytest\n\n\n@pytest.fixture(autouse=True)\ndef guard(caplog):\n    return caplog\n"
+ABOVE = {  # r2: a name the root conftest above binds or its fixtures request; a same-name import
+    "a fixture the root conftest binds": "\n\n@pytest.fixture\ndef guard():\n    return 1\n",
+    "a builtin a fixture above depends on": "\n\n@pytest.fixture\ndef caplog():\n    return 1\n",
+    "a same-name import from another origin": "import os as pytest\n",
+}
+
+
+@pytest.mark.parametrize("name", list(ABOVE))
+def test_a_name_the_conftest_above_binds_or_requests_is_taken(repo, name):
+    with pytest.raises(dt.TestCommitRejected, match="TEST_COMMIT_CONFTEST_STATIC"):
+        _check(repo, {"tests/conftest.py": BASE + ABOVE[name]}, base_files={"conftest.py": ROOT})
 
 
 def test_bound_and_requested_read_every_form():

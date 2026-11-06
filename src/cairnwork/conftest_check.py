@@ -77,10 +77,10 @@ def check_conftests(repo: Path, base: str, test_commit: str, paths: Iterable[str
         before = [ast.dump(n) for n in old.body]
         if before != [ast.dump(n) for n in new.body[: len(before)]]:
             _refuse(path, new.body[0] if new.body else None, "changes existing top-level code")
-        table, taken = _imports(new), taken_names(repo, base, path, old)
+        table, old_table, taken = _imports(new), _imports(old), taken_names(repo, base, path, old)
         for node in new.body[len(before) :]:
             problem = _rebinds(node, table) or _problem(node, own, table)
-            problem = problem or _takes(node, taken, _imports(old))
+            problem = problem or _takes(node, taken, old_table)
             if problem:
                 _refuse(path, node, problem)
     if paths:
