@@ -124,7 +124,7 @@ def verify_candidate(
     cleanup(intake)
     result = TaskResult(task.idempotency_key, f"a{secrets.token_hex(8)}", "FAILED")
     notary = intake.notary
-    ctx = VerifyContext.of(task, intake.run_root, result.attempt_id, account, python)
+    ctx = VerifyContext.of(task, intake.run_root, "", account, python).started(result.attempt_id)
     status, binding, uncomparable = "FAILED", None, None
     with runlock.held(intake.state / "ownership.sqlite", exclusive=False):
         _require_accepting(intake)  # a drain that came in while we waited for the lock

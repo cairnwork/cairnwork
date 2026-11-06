@@ -165,6 +165,8 @@ def run_verifiers(
     (the P2P selection rule, p2p.py) is bound into each observation's artifact hash. ``deny``
     records each run's sandbox denials (a base run: deny_channel.py); it changes no verdict.
     """
+    if not ctx.hash_seed.isdecimal() or int(ctx.hash_seed) > 4294967295:  # #870: never unseeded
+        raise RuntimeError("cairnwork: a run needs its attempt's hash seed (0..4294967295)")
     settings = pytest_config.verifier_settings(ctx.repo, ctx.base_commit, ctx.import_paths)
     if settings.pythonpath:
         require_plain_dirs(ctx.repo, candidate_commit, settings.pythonpath)
@@ -303,6 +305,7 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
         account.share_run(private, ini, run_dir, home, tmp)
     if attempt_id:
         env[ATTEMPT_ENV] = attempt_id
+    env["PYTHONHASHSEED"] = ctx.hash_seed
     argv = [
         python, "-P", "-m", "pytest", "-q", "-p", "no:cacheprovider", "-c", str(ini),
         f"--rootdir={checkout}", f"--confcutdir={checkout}", "-o", "addopts=",
