@@ -304,7 +304,10 @@ class Notary:
                 conn.close()
         except sqlite3.Error:
             return False
-        return row is not None and request_matches(json.loads(row[0]), change)
+        try:
+            return row is not None and request_matches(json.loads(row[0]), change)
+        except (ValueError, RecursionError):  # #909: rewritten since _read, now unreadable
+            return False
 
     def _read(
         self, task_id: str, attempt_id: str, expected_candidate: str | None
@@ -323,8 +326,12 @@ class Notary:
         if row is None:
             return None
         base, candidate, request_hash, request_json, http_status, status, integrity, resp = row[:8]
-        exp, binding = row[8], None if row[9] is None else json.loads(row[9])
-        request, response = json.loads(request_json), json.loads(resp)
+        exp = row[8]
+        try:
+            binding = None if row[9] is None else json.loads(row[9])
+            request, response = json.loads(request_json), json.loads(resp)
+        except (ValueError, RecursionError):  # #909: a row too deep or malformed to read
+            binding, request, response = None, {}, {}  # never verified (_is_verified needs both)
         verified = _is_verified(http_status, status, integrity, response, request, request_hash)
         reason = self._identity_problem(request, response, exp) if verified else ""
         verified = (
