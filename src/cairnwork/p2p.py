@@ -103,8 +103,9 @@ def _base_tests(task, exclude: frozenset[str]) -> tuple[str, ...]:
         raise P2PRejected("P2P_BASE_UNREADABLE", str(exc)) from exc
     paths = [p for p in raw.split("\0") if p and p not in exclude and is_test(p)]
     if odd := untargetable(paths, target):  # #930: never dropped silently (fail closed)
-        raise P2PRejected("P2P_BASE_UNTARGETABLE", f"{len(odd)}, e.g. {_clean(odd[0])}")
-    return tuple(sorted(paths))
+        detail = f"{len(odd)} base test file(s) no target can name, e.g. {_clean(odd[0])}"
+        raise BaseUncomparable(Comparison("UNCOMPARABLE", "P2P_BASE_UNTARGETABLE", detail))
+    return tuple(sorted(p for p in paths if target.fullmatch(p)))  # pytest skips the rest (#930)
 
 
 UNCLEAN = ("base-probe-survivors", "base-probe-mutated", "base-probe-forged")  # never degraded

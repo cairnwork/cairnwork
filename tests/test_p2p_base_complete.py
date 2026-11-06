@@ -44,7 +44,8 @@ def test_a_base_test_under_a_dotted_directory_is_not_dropped_silently(project, t
     extra = {"tests/test_sibling.py": ADD, "tests/v1.0/test_far.py": SIBLING}
     result = run(project, tmp_path, {"src/calc.py": FIX_BREAKS_NEG}, mode="whole-suite",
                  extra=extra)  # fmt: skip
-    assert not result.verified and "P2P_BASE_UNTARGETABLE" in result.reason, result.reason
+    assert result.status == "FAILED" and not result.verified, result.reason  # before the worker
+    assert result.reason.startswith("UNCOMPARABLE: P2P_BASE_UNTARGETABLE: "), result.reason
 
 
 def test_a_hidden_directory_pytest_skips_is_no_reason_to_refuse(project, tmp_path):
@@ -52,3 +53,14 @@ def test_a_hidden_directory_pytest_skips_is_no_reason_to_refuse(project, tmp_pat
     commit_change(project, {"tests/.cache/test_tmp.py": SIBLING})
     result = run(project, tmp_path, {"src/calc.py": FIX_ADD}, mode="whole-suite")
     assert result.status == "COMPLETED", result.reason
+
+
+@pytest.mark.parametrize("skipped", ["tests/.cache/test_sibling.py", "tests/b.egg/test_sibling.py"])
+def test_a_test_file_pytest_skips_is_never_named_to_the_probe(project, tmp_path, skipped):
+    """#930 (review r1): a file under a directory pytest's default norecursedirs skips is left out
+    of the probe as on main. Named, it would be collected, and its module name clashes with
+    tests/test_sibling.py: the whole-suite probe fails and module-dir misses the neg() test."""
+    commit_change(project, {skipped: SIBLING})
+    result = run(project, tmp_path, {"src/calc.py": FIX_BREAKS_NEG}, mode="whole-suite")
+    assert result.status == "FAILED" and not result.verified, result.reason
+    assert result.p2p["degraded"] == "" and result.p2p["applied"] == "whole-suite"
