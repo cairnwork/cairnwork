@@ -26,8 +26,9 @@ part of each of its tests (#925: removing a class-level skip changes them all).
 in a class body, inside a block (``if``, ``try``, ``with``, a loop) or not: a ``test*`` function
 or ``Test*`` class in a block or nested in a class, and a ``test*``/``Test*`` name bound another
 way (assignment, walrus, loop, ``with`` or ``match`` target, ``from x import test_y``), unless the
-value is a literal, and a star import. new_tests refuses a test commit that changes one. Names set
-at run time (``setattr``, ``globals()``) are not seen.
+value is a literal, a star import, and a function that declares a ``test*`` name ``global``.
+new_tests refuses a test commit that changes one. Names set at run time (``setattr``,
+``globals()``) are not seen.
 """
 
 from __future__ import annotations
@@ -82,14 +83,23 @@ def _members(
 def hidden_tests(tree: ast.Module) -> frozenset[str]:
     """#925: ``ast.dump`` of each statement that may give pytest a test test_functions does not read
     (see the module docstring), at module level or in a class body, in a block or not; not inside
-    a function, whose local names pytest never collects."""
+    a function, whose local names pytest never collects, unless it declares a ``test*`` name
+    ``global``: then the whole function counts, as calling it may bind a module-level test."""
     found: set[str] = set()
     scan = [node for node in tree.body if not isinstance(node, (*_DEFS, ast.ClassDef))]
     for node in tree.body:
         if isinstance(node, ast.ClassDef):
             scan += [item for item in node.body if not isinstance(item, _DEFS)]
     _hidden(ast.Module(body=scan, type_ignores=[]), found, None)
+    for node in ast.walk(tree):
+        if isinstance(node, _DEFS) and any(_global_test(inner) for inner in ast.walk(node)):
+            found.add(ast.dump(node))
     return frozenset(found)
+
+
+def _global_test(node: ast.AST) -> bool:
+    names = node.names if isinstance(node, ast.Global) else []
+    return any(name.startswith(("test", "Test")) for name in names)
 
 
 def _hidden(node: ast.AST, found: set[str], stmt: ast.AST | None) -> None:
