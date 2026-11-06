@@ -1,7 +1,7 @@
 """A value nested deeper than ``json``/``canonical_json`` can recurse refuses with the step's own
 code instead of raising ``RecursionError`` (11/06 post-merge re-verification of #896, four places
-that caught only TypeError/ValueError): writing a bundle, reading a check-run reply, the notary's
-Core call and its readback of a stored identity or pin."""
+that caught only TypeError/ValueError, five cases): writing a bundle, reading a check-run reply,
+the notary's Core call, and its readback of a stored identity and of a pin."""
 
 from __future__ import annotations
 
