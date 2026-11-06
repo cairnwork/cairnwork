@@ -192,7 +192,7 @@ KEY_TASK = TaskSpec("k", "c", "t", "i", Path("/nonexistent/repo"), "1" * 40, ("s
 def unit(monkeypatch, tmp_path):
     """check(task, verifying): one base_env_check; returns how many probes ran in total."""
     probed: list = []
-    monkeypatch.setattr(p2p, "_base_tests", lambda task, exclude: ("tests/test_calc.py",))
+    monkeypatch.setattr(p2p, "_base_tests", lambda task, exclude, **_: ("tests/test_calc.py",))
     monkeypatch.setattr(
         p2p, "_probe", lambda *a, **k: (probed.append(a[0]), ({"t": "passed"}, ""))[1]
     )
@@ -246,7 +246,7 @@ def test_each_key_field_gets_a_fresh_probe(unit, tmp_path, vary):
 def test_other_files_near_the_change_get_a_fresh_probe(unit, monkeypatch):
     assert unit() == 1 and unit() == 1
     monkeypatch.setattr(
-        p2p, "_base_tests", lambda task, exclude: ("tests/test_calc.py", "tests/test_x.py")
+        p2p, "_base_tests", lambda task, exclude, **_: ("tests/test_calc.py", "tests/test_x.py")
     )
     assert unit() == 2
 
@@ -295,7 +295,7 @@ def test_a_marker_owned_by_another_uid_is_not_a_pass(unit, tmp_path, monkeypatch
 
 
 def test_a_base_whose_test_files_cannot_be_listed_is_a_failure(unit, monkeypatch):
-    def refuse(task, exclude):
+    def refuse(task, exclude, **_):
         raise P2PRejected("P2P_BASE_UNREADABLE", "ls-tree failed")
 
     monkeypatch.setattr(p2p, "_base_tests", refuse)
@@ -335,3 +335,12 @@ def test_with_a_sandbox_a_probe_failure_keeps_its_reason(project, tmp_path, prob
     result, worker, phases = dispatch(project, tmp_path / "s")
     assert_env_failed(result, worker, phases, core)
     assert "no-sandbox" not in result.reason
+
+
+def test_an_early_stopped_base_check_still_refuses_a_dispatch(unit, monkeypatch):
+    """#956: only a verify call without deferred tests lets an early stop through."""
+    monkeypatch.setattr(p2p, "_probe", lambda *a, **k: (None, "base-probe-incomplete"))
+    with pytest.raises(BaseUncomparable) as got:
+        unit()  # KEY_TASK has a test commit: the deferred tests will run on this base
+    assert got.value.comparison.code == "BASE_ENV_FAILED"
+    assert "base-probe-incomplete" in str(got.value)

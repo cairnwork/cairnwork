@@ -57,7 +57,7 @@ def wired(repo, tmp_path, monkeypatch):
         return {f"{files[0]}::t": "passed"}, ""
 
     stub_side(monkeypatch)
-    monkeypatch.setattr(p2p, "_base_tests", lambda task, exclude: tests)
+    monkeypatch.setattr(p2p, "_base_tests", lambda task, exclude, **_: tests)
     monkeypatch.setattr(p2p, "_probe", fake_probe)
     monkeypatch.setattr(p2p, "_env_fingerprint", lambda python: None)
     return task, probed, VerifyContext.of(task, tmp_path, RESULT.attempt_id)
