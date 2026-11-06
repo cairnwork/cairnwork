@@ -35,7 +35,9 @@ fails and the run has no record.
 Known limits (the claim above, no more): the file's text executed under another name, C-level
 eval, a child that gets the file without naming it in argv (``python -`` with the text piped in),
 and the residuals of the bytecode hook (bytecode_hook.py) and of the reporter (report_guard.py):
-code that reaches the reporter instance can still change what it writes.
+code that reaches the reporter instance can still change what it writes, and code that reaches the
+latch (through ``gc`` or a caught refusal's traceback frames) can clear it. The latch catches an
+accidental or swallowed refusal, not deliberate tampering (docs/SECURITY.md).
 """
 
 from __future__ import annotations

@@ -63,7 +63,8 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
   and `os.posix_spawn` when the program or an argv entry names one. "Names" is a text match on the
   last parts of the normalised name (separators, `.`, `..` and letter case folded), so a collision
   only refuses more. The refusal is a `BaseException` and is latched inside the hook: a run with
-  any refusal is never a pass, even when the test caught it, and a base run is UNCOMPARABLE
+  a recorded refusal is never a pass, even when the test caught it (unless code in the run
+  deliberately clears the latch, below), and such a base run is UNCOMPARABLE
   `DATA_EXEC_REFUSED`. The hook is probed at install; a hook that does not refuse means no record.
   The claim is only "not run in-process through import, runpy, eval/exec of a code object or
   FunctionType, under its own name". Not covered: the file's text executed under another name,
