@@ -306,6 +306,8 @@ def _base_problem(run) -> str:
     rc = run.returncode
     if run.forged:  # first, as p2p._probe: a scan after the run finds it, a timeout cannot cause it
         return "BASE_FORGED_BYTECODE"  # bytecode the run may not supply may have decided it (#481)
+    if getattr(run, "data_refused", ()):  # #850: the refusal, not the base, may have failed it
+        return "DATA_EXEC_REFUSED"
     if run.timed_out or rc is None:  # None without a timeout: no sandbox, nothing ran
         return "BASE_TIMEOUT" if run.timed_out else "BASE_NOT_EXECUTED"
     if run.survivors:  # a process outlived the base run (or cannot tell): as p2p._probe (#285)
