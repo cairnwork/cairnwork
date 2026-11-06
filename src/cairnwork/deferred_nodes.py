@@ -130,6 +130,7 @@ class _Reach:
         self._by_name: dict[str, list[ast.stmt]] = {}
         self._dumps: dict[int, str] = {}
         self._found: dict[frozenset[str], str] = {}
+        self._read: dict[int, list[str]] = {}
         rest = []
         for stmt in tree.body:
             names = _binds(stmt)
@@ -152,20 +153,27 @@ class _Reach:
         while names:
             for stmt in self._by_name.get(names.pop(), ()):
                 if id(stmt) not in seen:
-                    seen[id(stmt)] = shell = _shell(stmt)
-                    names += [name for n in ast.walk(shell) if (name := _name(n))]
+                    seen[id(stmt)] = stmt
+                    names += self._reads(stmt)
         found = sorted(seen.items(), key=lambda item: item[1].lineno)
         return "".join(self._dump(key, stmt) for key, stmt in found)
 
+    def _reads(self, stmt: ast.stmt) -> list[str]:
+        """The names a statement's shell reads, walked once per statement (#979 r2)."""
+        if (names := self._read.get(id(stmt))) is None:
+            self._read[id(stmt)] = names = [m for n in ast.walk(_shell(stmt)) if (m := _name(n))]
+        return names
+
     def _dump(self, key: int, stmt: ast.stmt) -> str:
         if (dump := self._dumps.get(key)) is None:
-            self._dumps[key] = dump = _digest(ast.dump(stmt))
+            self._dumps[key] = dump = _digest(ast.dump(_shell(stmt)))
         return dump
 
 
 def _name(node: ast.AST) -> str:
     """A name ``node`` may read: a variable, a parameter (a fixture), or a string that is an
-    identifier (``usefixtures("fx")``, ``getfixturevalue("fx")``)."""
+    identifier (``usefixtures("fx")``). Only decorators, parameters and followed statements are
+    read this way, not a test's body (``request.getfixturevalue("fx")`` there is not seen)."""
     if isinstance(node, ast.Name):
         return node.id
     if isinstance(node, ast.arg):
@@ -194,8 +202,12 @@ def _digest(text: str) -> str:
 def _binds(stmt: ast.stmt) -> set[str]:
     """The names a module-level import, function or class binds; none for any other statement,
     which counts whole (a star import is refused by hidden_tests when it changes)."""
-    if isinstance(stmt, _SCOPES):
-        return {stmt.name}
+    if isinstance(stmt, _SCOPES):  # and a fixture's ``name=`` (#979 r2)
+        names = {stmt.name}
+        for k in (k for d in stmt.decorator_list for k in _keywords(d) if k.arg == "name"):
+            if isinstance(k.value, ast.Constant) and isinstance(k.value.value, str):
+                names.add(k.value.value)
+        return names
     if isinstance(stmt, (ast.Import, ast.ImportFrom)):
         return {(alias.asname or alias.name).split(".")[0] for alias in stmt.names}
     return set()

@@ -108,6 +108,7 @@ ON = "def on():\n    return flag()\n"
 BASE = "class Base:\n    def __init_subclass__(cls, **kw):\n        pass\n"
 SUBCLASS = "class Base:\n    def __init_subclass__(cls):\n        {}\nclass TestX(Base):\n" + Y
 FX = "@pytest.fixture\ndef fx():\n    {}\n"
+ALIAS = "@pytest.fixture(name='db')\ndef _db():\n    {}\n"  # jeter r2
 HELPED = "COND = on()\n@pytest.mark.skipif(COND, reason='r')\n" + FN
 REACH = {  # (on the base, in the test commit, the tests that change): #968 r3, Codex r2
     "alias": ("s = pytest.mark.skip\n@s\n" + FN, "s = pytest.mark.xfail\n@s\n" + FN, ALL),
@@ -177,6 +178,8 @@ REACH = {  # (on the base, in the test commit, the tests that change): #968 r3, 
                                 "    def test_y(self, fx):\n        pass\n",
                                 FX.format("pass") + "class TestX:\n"
                                 "    def test_y(self, fx):\n        pass\n", {"TestX::test_y"}),
+    "fixture-name-alias": (ALIAS.format("pytest.skip('r')") + "def test_y(db):\n    pass\n",
+                           ALIAS.format("pass") + "def test_y(db):\n    pass\n", {"test_y"}),
     "usefixtures": (FX.format("pytest.skip('r')") + "@pytest.mark.usefixtures('fx')\n" + FN,
                     FX.format("pass") + "@pytest.mark.usefixtures('fx')\n" + FN, {"test_y"}),
     "module-constant": ("DATA = 1\n" + FN, "DATA = 2\n" + FN, ALL),  # counted whole: the cost
