@@ -335,7 +335,7 @@ def _recall(intake: Intake, repo: str, number: int) -> dict[str, Any] | None:
         known = json.loads(path.read_text()) if path.exists() else None
         if known is None or isinstance(known["task_id"], str):
             return known
-    except (ValueError, TypeError, KeyError):  # cut short, not JSON, or not the record's shape
+    except (ValueError, TypeError, KeyError, RecursionError):  # cut short, not JSON, wrong shape
         pass
     raise ValueError(f"ISSUE_RECORD_UNREADABLE: {path.name}")
 
