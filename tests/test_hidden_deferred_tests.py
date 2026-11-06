@@ -116,6 +116,35 @@ def test_verify_refuses_a_test_case_imported_from_a_base_helper(project, state):
     assert out["reason"].startswith("DEFERRED_TESTS_UNREADABLE"), out
 
 
+INHERIT = (
+    "class TestBase:\n    value = 2\n    def test_y(self):\n"
+    "        assert add(self.value, 3) == self.value + 3\n"
+    "class TestSub(TestBase):\n    value = 3\n"
+)
+WRONG_FIX = "def add(a, b):\n    return 0 if a == 3 else a + b\n"  # passes TestBase, not TestSub
+
+
+@pytest.mark.sandbox
+@pytest.mark.parametrize(("fix", "target", "status"), [
+    (WRONG_FIX, f"{F}::TestBase::test_y", "REFUSED"),  # main: VERIFIED, TestSub's copy never ran
+    (FIX, F, "VERIFIED"),  # the whole file named, a correct fix
+])  # fmt: skip
+def test_verify_refuses_an_unrun_copy_of_a_test_whose_base_class_skip_was_removed(
+    project, state, fix, target, status
+):
+    """#968: removing a base class's skip also unskips the copy a subclass inherits."""
+    commit_change(
+        project, {F: "import pytest\nfrom calc import add\n@pytest.mark.skip\n" + INHERIT}
+    )
+    base, test_commit = make_test_commit(project, {F: "import pytest\n" + REGRESSION + INHERIT})
+    cand = candidate(project, base, {"src/calc.py": fix})
+    command = f"python3 -m pytest -q {F}::test_regression {target}"
+    code, out = verify(state, project, base, cand, "--test-commit", test_commit, tests=(command,))
+    assert out["status"] == status, out
+    if status == "REFUSED":
+        assert out["reason"].startswith("DEFERRED_TESTS_NOT_TARGETED"), out
+
+
 @pytest.mark.parametrize("shadow", ["tests/unittest.py", "tests/lib/deep/unittest/__init__.py"])
 def test_a_test_case_name_the_test_commit_can_shadow_is_not_trusted(project, shadow):
     """#925: a test commit's own file named like the module, at any depth (prepend mode or a
