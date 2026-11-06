@@ -160,6 +160,36 @@ def developer_dirs() -> tuple[str, ...]:
     return (real.removesuffix("/Contents/Developer"),)
 
 
+LIBINFO_RULE = '(allow mach-lookup (global-name "com.apple.system.opendirectoryd.libinfo"))'
+LIBINFO_NOTE = "user-record lookup withheld: directory search path is not exactly /Local/Default"
+
+
+def _local_directory_only() -> bool:
+    """True only if ``dscl /Search -read /`` has one ``SearchPath:`` and one ``CSPSearchPath:``
+    line, each exactly ``/Local/Default``, and no continuation line; anything else (or an error,
+    timeout) is False (#527).
+    Not cached: a host can join a directory between runs."""
+    try:
+        done = subprocess.run(  # noqa: S603 - fixed argv
+            ["/usr/bin/dscl", "/Search", "-read", "/"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    lines = done.stdout.splitlines()
+    return (
+        done.returncode == 0
+        and not any(ln[:1].isspace() for ln in lines)
+        and all(
+            [ln[len(k) :].strip() for ln in lines if ln.startswith(k)] == ["/Local/Default"]
+            for k in ("SearchPath:", "CSPSearchPath:")
+        )
+    )
+
+
 def _pyc_under(root: Path) -> str:
     """#368: a filter for every ``*.pyc`` below root. Bytecode the run writes is never read back, so
     a redirected sys.pycache_prefix cannot load a forged pyc it removes before the after-run scan.
@@ -178,13 +208,14 @@ def build_profile(
 ) -> Profile:
     """Default-deny profile: reads from system + read_roots, writes to write_roots only.
 
-    ``allow_ipc`` False (the blackbox run, #311) drops the semaphore rule, so deny-by-default
-    refuses every IPC operation: the run can neither create nor open a named semaphore, POSIX
-    shared memory or an existing SysV object. The trailing ``(deny ipc*)`` only states that; the
-    dropped rule is what does it. What no profile closes on macOS: these namespaces are global, a
-    lookup of an absent name fails (ENOENT) before the sandbox is asked (EPERM), and creating a
-    new SysV object is not mediated, so whether a name or key exists stays observable
-    (docs/SECURITY.md, #316)."""
+    ``allow_ipc`` covers POSIX/SysV IPC only. False (the blackbox run, #311) drops the semaphore
+    rule, so deny-by-default refuses every IPC operation: the run can neither create nor open a
+    named semaphore, POSIX shared memory or an existing SysV object. The trailing ``(deny
+    ipc*)`` only states that; the dropped rule is what does it. What no profile closes on macOS:
+    these namespaces are global, a lookup of an absent name fails (ENOENT) before the sandbox is
+    asked (EPERM), and creating a new SysV object is not mediated, so whether a name or key
+    exists stays observable (docs/SECURITY.md, #316). The user-record lookup (``libinfo``, #527)
+    is allowed in every profile when ``_local_directory_only()`` holds, else noted (unhashed)."""
     real_home = sbpl_path(home or Path.home())
     for root in (*read_roots, *write_roots):
         _require_narrow(sbpl_path(root), real_home)
@@ -192,6 +223,7 @@ def build_profile(
     writes = [f'(subpath "{sbpl_path(p)}")' for p in write_roots]
     pycs = [_pyc_under(p) for p in write_roots]
     denied = [f'(subpath "{real_home}/{rel}")' for rel in CREDENTIAL_HOME_PATHS]
+    user_record = _local_directory_only()
     lines = [
         "(version 1)",
         "(deny default)",
@@ -217,13 +249,14 @@ def build_profile(
         *[f"(deny file-read-data {rule})" for rule in pycs],
         *[f"(deny file-write-create (require-all {rule} (vnode-type SYMLINK)))" for rule in pycs],
         *[f"(deny file-write-unlink {rule})" for rule in pycs],
+        *([LIBINFO_RULE] if user_record else []),
         "(deny network*)",
         *([] if allow_ipc else ["(deny ipc*)"]),
         "(deny file-read* file-write*",
         *[f"  {rule}" for rule in denied],
         ")",
     ]
-    return Profile("\n".join(lines) + "\n")
+    return Profile("\n".join(lines) + "\n", () if user_record else (LIBINFO_NOTE,))
 
 
 _TOO_BROAD = (

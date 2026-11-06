@@ -72,6 +72,7 @@ from pathlib import Path
 from cairnwork.bytecode_hook import HOOK_SOURCE
 from cairnwork.collect_import import import_errors
 from cairnwork.confined import MAX_REPORT_BYTES
+from cairnwork.data_exec_hook import plugin_source, refused
 from cairnwork.pytest_config import PLUGINS
 from cairnwork.report_guard_parts import PARTS_SOURCE
 from cairnwork.skip_hint import module_names as _module_names
@@ -291,15 +292,16 @@ def pytest_configure(config):
 )
 
 
-def install_plugin(directory: Path) -> None:
+def install_plugin(directory: Path, data_paths=()) -> None:
     """Write the standalone plugin into directory (which must be on the run's PYTHONPATH and a
     sandbox read root, and must not be writable by the candidate). The bytecode hook comes first
     (bytecode_hook.py): installed and probed before the plugin reads its hand-over, so a run
-    whose hook is not live has no record and fails."""
+    whose hook is not live has no record and fails. ``data_paths`` (#850) adds the data-exec
+    hook at the end (data_exec_hook.py); none adds nothing."""
     path = directory / f"{MODULE}.py"
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o640)
     with os.fdopen(fd, "w") as handle:
-        handle.write(HOOK_SOURCE + _PLUGIN_SOURCE)
+        handle.write(HOOK_SOURCE + _PLUGIN_SOURCE + plugin_source(data_paths))
     os.chmod(path, 0o640)  # not the umask-masked open() mode: the verifier account reads by group
 
 
@@ -359,12 +361,13 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
         isinstance(node, str) and isinstance(result, str) for node, result in outcomes.items()
     ):
         return Verdict(False, {})
-    shape = well_formed(data, collected, outcomes, PLUGIN_KINDS)
-    if shape is None:
+    shape, data_refused = well_formed(data, collected, outcomes, PLUGIN_KINDS), refused(data)
+    if shape is None or data_refused is None:
         return Verdict(False, {})
     errors, skipped, renamed, teardown, files, kind, file_of, status = shape
     ran = (
-        bool(collected)
+        not data_refused  # #850: a declared data file was executed, refused or not
+        and bool(collected)
         and not errors
         and not skipped
         and not renamed
@@ -389,4 +392,5 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
         testsfailed=status[1],
         collected=tuple(collected),
         collection_finished=data.get("collection_finished") is True,
+        data_refused=data_refused,
     )

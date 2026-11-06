@@ -190,7 +190,7 @@ def verify_bound(
     # #303: what the verdict rests on, already checked against Core's required ids (pin_problem)
     assurance["protection"] = bx.recorded_protection(binding)
     assurance["blackbox_checks"] = bx.checks_assurance(policy)
-    assurance |= {"conftest_probe": "signer_claim"} if binding.get("conftest_paths") else {}  # #798
+    assurance |= bx.assurance_extras(binding)  # #798, #850: the signer's word
     return VerifyResult(ok=True, code="OK", statement=statement, assurance=assurance)
 
 

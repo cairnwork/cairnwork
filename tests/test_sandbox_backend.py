@@ -85,6 +85,7 @@ PINNED_802 = {  # and time zone data and /etc/hosts readable
 def test_seatbelt_profile_is_pinned_as_of_the_posix_semaphore_change_116(monkeypatch, dirs):
     """Profile is pinned as of the POSIX-semaphore change (#116)."""
     monkeypatch.setattr(seatbelt, "developer_dirs", lambda: dirs)
+    monkeypatch.setattr(seatbelt, "_local_directory_only", lambda: False)  # #527 rule: own tests
     for profile in (
         seatbelt.build_profile(READS, WRITES, home=HOME),
         seatbelt.BACKEND.policy(READS, WRITES, home=HOME),
@@ -166,8 +167,8 @@ def test_sandbox_package_has_its_own_size_cap(tmp_path, monkeypatch):
     spec.loader.exec_module(module)
     package = tmp_path / "src" / "cairnwork_sandbox"
     package.mkdir(parents=True)
-    for i in range(4):
-        (package / f"m{i}.py").write_text("x = 1\n" * 301, encoding="utf-8")
+    for i in range(5):
+        (package / f"m{i}.py").write_text("x = 1\n" * 251, encoding="utf-8")
     monkeypatch.setattr(module, "SANDBOX", package)
     monkeypatch.setattr(module, "SCANNED", [tmp_path / "src"])
-    assert any("cairnwork_sandbox total 1204" in p for p in module.check(tmp_path))
+    assert any("cairnwork_sandbox total 1255" in p for p in module.check(tmp_path))

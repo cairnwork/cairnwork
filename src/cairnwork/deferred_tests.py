@@ -30,7 +30,7 @@ from pathlib import Path, PurePosixPath
 
 from cairnwork import survivor_argv
 from cairnwork.base_teeth import base_teeth
-from cairnwork.deferred_nodes import test_functions
+from cairnwork.deferred_nodes import hidden_tests, test_functions
 from cairnwork.deferred_overlay import (  # noqa: F401  (re-exported: the one place importers look)
     _REGULAR,
     MAX_DELETED_TEST_PATHS,
@@ -48,6 +48,7 @@ from cairnwork.workspace import ATTEMPT_REF_PREFIX
 from cairnwork_protocol.ids import MAX_ID_BYTES
 
 _IDENTITY = ("-c", "user.name=Cairnwork", "-c", "user.email=cairnwork@localhost")
+_EMPTY = ast.Module(body=[], type_ignores=[])  # a file that is not there (new, or deleted)
 # pytest reads these on its own; a test commit carries tests, not configuration.
 # Same names the candidate may not touch (verifiers.protected_verifier_inputs). __init__.py
 # stays allowed: it runs only when the tests themselves import their package.
@@ -195,16 +196,23 @@ def new_tests(repo: Path, base: str, test_commit: str, paths: tuple[str, ...]) -
     AST (decorators included, line numbers not). A new or changed test in a class pytest does not
     collect (an ``__init__`` or ``__new__``) is refused, DEFERRED_TESTS_NOT_COLLECTED: no verifier
     can run it (#660). Not seen: tests changed only through a fixture, helper or module constant,
-    nested classes, classes inherited from another module,
-    custom python_functions/python_classes. Such a test commit is refused (no teeth found, or the
-    base run's DEFERRED_TESTS_NOT_RUN), never wrongly accepted."""
+    classes inherited from another module, custom python_functions/python_classes. Such a test
+    commit is refused (no teeth found, or the base run's DEFERRED_TESTS_NOT_RUN) when the file has
+    no other new test; one beside a visible new test is not. A changed test inside a module-level
+    block or a nested test class is refused, DEFERRED_TESTS_UNREADABLE (#925)."""
     found = set()
     for path in paths:
         if not path.endswith(".py"):
             continue
         before = _test_functions(repo, f"{base}:{path}")
-        tree = _tree(repo, f"{test_commit}:{path}") or ast.Module(body=[], type_ignores=[])
+        tree = _tree(repo, f"{test_commit}:{path}") or _EMPTY
         after, uncollected = test_functions(tree)
+        if hidden_tests(tree) != hidden_tests(_tree(repo, f"{base}:{path}") or _EMPTY):  # #925
+            raise TestCommitRejected(
+                "DEFERRED_TESTS_UNREADABLE",
+                f"{path}: a test inside a module-level block or a nested test class changed;"
+                " Cairnwork cannot tell which tests it adds, so it cannot check they ran",
+            )
         for node_id, body in after.items():
             if before.get(node_id) != body:
                 if "::" in node_id and node_id.split("::", 1)[0] in uncollected:
@@ -306,6 +314,8 @@ def _base_problem(run) -> str:
     rc = run.returncode
     if run.forged:  # first, as p2p._probe: a scan after the run finds it, a timeout cannot cause it
         return "BASE_FORGED_BYTECODE"  # bytecode the run may not supply may have decided it (#481)
+    if getattr(run, "data_refused", ()):  # #850: the refusal, not the base, may have failed it
+        return "DATA_EXEC_REFUSED"
     if run.timed_out or rc is None:  # None without a timeout: no sandbox, nothing ran
         return "BASE_TIMEOUT" if run.timed_out else "BASE_NOT_EXECUTED"
     if run.survivors:  # a process outlived the base run (or cannot tell): as p2p._probe (#285)

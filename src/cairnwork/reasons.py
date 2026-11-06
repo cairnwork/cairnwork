@@ -57,7 +57,7 @@ def verdict_reason(verified: bool, verdict, recorded) -> str:
 def why_not_passed(
     *, ran_sandboxed: bool, returncode, timed_out: bool, mutated, survivors: int,
     log_too_big: bool, tests_ran: bool, report_too_big: bool = False, forged=(), not_run=(),
-    renamed=(), exitstatus=None, testsfailed=None, fail_kind=None,
+    renamed=(), exitstatus=None, testsfailed=None, fail_kind=None, data_refused=(),
 ) -> str:  # fmt: skip
     """The causes that made a run fail, ``""`` if none (then the run passed)."""
     causes = []
@@ -71,6 +71,8 @@ def why_not_passed(
         causes.append(
             f"FORGED_BYTECODE: bytecode cache holds code the run may not supply ({_names(forged)})"
         )
+    if data_refused:  # #850 data_exec_hook.py: refused even when the test caught the refusal
+        causes.append(f"DATA_EXEC_REFUSED: declared test data executed ({_names(data_refused)})")
     if survivors:
         causes.append(
             f"{survivors} process(es) outlived the run, or the process list was unreadable"
