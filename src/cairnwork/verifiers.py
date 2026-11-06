@@ -234,7 +234,7 @@ def _run_all(batch: _Batch, specs, run_id) -> tuple[VerifierRun, ...]:
     return tuple(runs)
 
 
-def _prepare_run(private: Path, ini: Path, ini_text: bytes, channel=None):
+def _prepare_run(private: Path, ini: Path, ini_text: bytes, channel=None, hash_seed=""):
     """Create the per-run directory (the only place besides the checkout the child may
     write), its HOME and TMPDIR, and the scrubbed environment."""
     run_dir = private / "run"
@@ -263,6 +263,8 @@ def _prepare_run(private: Path, ini: Path, ini_text: bytes, channel=None):
     if (backend := cairnwork_sandbox.select()) is not None:
         env.update(getattr(backend, "run_env", ()))  # macOS: USER, LOGNAME (#802)
     env[RUN_TOKEN_VAR] = secrets.token_hex(16)
+    if hash_seed:  # #870: the attempt's seed, shared by its base and head runs
+        env["PYTHONHASHSEED"] = hash_seed
     verdict_path, verdict_nonce = run_dir / "verdict.json", secrets.token_hex(16)
     if channel is not None:  # owner run: descriptors, no nonce or path in the environment
         env.update(channel.env())
@@ -299,13 +301,12 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
     log_path, ini = private / "verifier.log", private / "pytest.ini"
     profile_path = private / "profile.sb"
     run_dir, home, tmp, env, verdict_path, verdict_nonce = _prepare_run(
-        private, ini, ini_text, channel
+        private, ini, ini_text, channel, ctx.hash_seed
     )
     if account is not None:
         account.share_run(private, ini, run_dir, home, tmp)
     if attempt_id:
         env[ATTEMPT_ENV] = attempt_id
-    env["PYTHONHASHSEED"] = ctx.hash_seed
     argv = [
         python, "-P", "-m", "pytest", "-q", "-p", "no:cacheprovider", "-c", str(ini),
         f"--rootdir={checkout}", f"--confcutdir={checkout}", "-o", "addopts=",
