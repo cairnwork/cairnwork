@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import secrets
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
 from typing import Protocol
@@ -274,7 +274,7 @@ def _execute(
     is not COMPLETED/FAILED); ``status`` shows phase FINISHED instead of a dangling DISPATCHED."""
     attempt_id = f"a{secrets.token_hex(8)}"
     steps = _Steps(journal, record.task_id, attempt_id, on_reach)
-    ctx = replace(ctx, attempt_id=attempt_id)
+    ctx = ctx.started(attempt_id)
     try:
         steps.reach("DISPATCHED", str(Path(ctx.run_root).resolve()))
     except AlreadyDispatched:  # another runner took this task first

@@ -1,6 +1,6 @@
 """Parts of the report_guard plugin source kept out of report_guard.py (near the 400-line cap):
-the fixture table (a pure move) and the import-error recorder. Plugin text, not parent code: the
-plugin cannot import cairnwork."""
+the fixture table, _source and _missing (pure moves) and the import-error recorder. Plugin text,
+not parent code: the plugin cannot import cairnwork."""
 
 PARTS_SOURCE = """\
 # #804: fixture -> module of the pytest_config.PLUGINS entry that provides it. A setup error that
@@ -48,4 +48,16 @@ def _import_error(node, call, report, _real=os.path.realpath, _rel=os.path.relpa
     except BaseException:
         return None
     return None
+
+
+def _source(item):
+    try:
+        return item.path.relative_to(item.config.rootpath).as_posix()
+    except (AttributeError, TypeError, ValueError):
+        return ""
+
+
+def _missing(report):  # #813: the module a skip at collection says it could not import
+    shown = report.longrepr[-1] if isinstance(report.longrepr, tuple) else ""
+    return str(shown).partition("could not import '")[2].partition("'")[0][:100]
 """

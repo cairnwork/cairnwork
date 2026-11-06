@@ -91,6 +91,7 @@ _PLUGIN_SOURCE = (
 import errno
 import json
 import os
+import socket
 
 import pytest
 
@@ -126,16 +127,11 @@ def _take():
 _HANDOVER = _take()
 
 
-def _source(item):
-    try:
-        return item.path.relative_to(item.config.rootpath).as_posix()
-    except (AttributeError, TypeError, ValueError):
-        return ""
-
-
-def _denied_inside(exc, _codes=(errno.EACCES, errno.EPERM, errno.EROFS, errno.ENETUNREACH)):
+def _denied_inside(exc, _codes=(errno.EACCES, errno.EPERM, errno.EROFS, errno.ENETUNREACH),
+                   _lookup=socket.gaierror):
     """#854: a denial-shaped OSError wrapped in a failure (group member, cause, unsuppressed
-    context); past the bound, yes (fail closed). Other wrapped OSErrors stay plain failures."""
+    context), or #932 a failed host-name lookup (a closed network); past the bound, yes (fail
+    closed). Other wrapped OSErrors stay plain failures."""
     todo, seen = [exc], set()
     while todo:
         if not isinstance(cur := todo.pop(), BaseException) or id(cur) in seen:
@@ -143,7 +139,8 @@ def _denied_inside(exc, _codes=(errno.EACCES, errno.EPERM, errno.EROFS, errno.EN
         if len(seen) >= 64:  # the bound: a 65th distinct exception, not an empty cause slot
             return True
         seen.add(id(cur))
-        if cur is not exc and isinstance(cur, OSError) and cur.errno in _codes:
+        if cur is not exc and (isinstance(cur, _lookup) or isinstance(cur, OSError)
+                               and cur.errno in _codes):  # #932: a lookup's errno is EAI_*
             return True
         members = getattr(cur, "exceptions", None)  # BaseExceptionGroup, or the backport's
         todo.extend(members if isinstance(members, tuple) else ())
@@ -151,11 +148,6 @@ def _denied_inside(exc, _codes=(errno.EACCES, errno.EPERM, errno.EROFS, errno.EN
         if not cur.__suppress_context__:
             todo.append(cur.__context__)
     return False
-
-
-def _missing(report):  # #813: the module a skip at collection says it could not import
-    shown = report.longrepr[-1] if isinstance(report.longrepr, tuple) else ""
-    return str(shown).partition("could not import '")[2].partition("'")[0][:100]
 
 
 class _Reporter:
