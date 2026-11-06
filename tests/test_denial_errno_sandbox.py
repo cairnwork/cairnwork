@@ -1,7 +1,8 @@
 """#854 (#797 step 3): which errno each kind of sandbox denial gives a run, on each backend.
 
 report_guard counts a wrapped OSError as environment only for EACCES, EPERM, EROFS and
-ENETUNREACH. This pins what the real backends return, so a backend change that moves a denial
+ENETUNREACH, or a failed host-name lookup of any errno (#932, test_wrapped_dns_env.py). This
+pins what the real backends return, so a backend change that moves a denial
 to another errno (and so out of reach of that rule) fails here. A ``None`` row is an operation
 the backend does not deny at all: on bwrap the host root is mounted read-only, so a read outside
 the read roots succeeds. bwrap's network namespace has its own loopback, so a connect there is
