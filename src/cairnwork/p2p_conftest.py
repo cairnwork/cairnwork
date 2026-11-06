@@ -1,10 +1,10 @@
 """#798 half 2: the differential base probe for a test commit that adds or changes a conftest.
 
 A conftest can change which base tests run or pass, and its import-time effects reach the whole
-test process. So the differential probe runs the way P2P really runs: the same set of files (the
-mode's selection plus every base test file under a conftest's directory) in one process, once on
-the BASE and once on the base with the WHOLE test commit laid over it. Every base test the test
-commit does not change, add or remove must keep its outcome, else the test commit is refused
+test process. So the differential probe runs the way P2P really runs: the same set of files (every
+base test file under the test roots, in either mode: #915) in one process, once on the BASE and
+once on the base with the WHOLE test commit laid over it. Every base test the test commit does
+not change, add or remove must keep its outcome, else the test commit is refused
 (``TEST_COMMIT_CONFTEST_CHANGES_BASE``: the test author's error, not the candidate's).
 
 The comparison is only made when it can be trusted, else ``TEST_COMMIT_CONFTEST_UNCHECKED``, never
@@ -24,30 +24,30 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from cairnwork.conftest_check import conftest_of, governed
+from cairnwork.conftest_check import conftest_of
 from cairnwork.deferred_tests import TestCommitRejected, deleted_of, lay_tests_over
 from cairnwork.p2p_nodes import clean
-from cairnwork.p2p_selection import name_rule, select_p2p_targets
 from cairnwork.verifier_spec import VerifierSpec
 from cairnwork.verifiers import run_verifiers
 
 CHANGES_BASE = "TEST_COMMIT_CONFTEST_CHANGES_BASE"
 UNCHECKED = "TEST_COMMIT_CONFTEST_UNCHECKED"
-# #891: with a conftest, a whole-suite probe that cannot run cannot narrow (see conftest_files)
-GOVERNS = "; they include every base test file under a test-commit conftest's directory"
+# #891, #915: with a conftest, a probe that cannot run cannot narrow (see conftest_files)
+GOVERNS = "; with a test-commit conftest they are every base test file"
 
 
 def conftest_files(task, test_files, mode, base_tests) -> tuple[str, ...]:
-    """The files the P2P probe must run when the test commit has a conftest: every file the mode's
-    selection runs plus every base test file under a conftest's directory, as one set (a
-    conftest's import-time effects reach the whole test process). () without a conftest; refused
-    UNCHECKED when P2P is off or there is no base test file at all.
+    """The files the P2P probe must run when the test commit has a conftest: every base test file
+    under the test roots, in either mode (#915: a conftest's import-time effects reach the whole
+    test process, so a base test outside the module-dir selection and the conftest's directory
+    is reached too). () without a conftest; refused UNCHECKED when P2P is off or there is no base
+    test file at all.
 
-    #891, decided: the fallback keeps these files. In whole-suite mode they already hold every
-    base test (the mode's selection), wherever the conftest is; so when that probe cannot be used
-    (timeout, cap), the module-dir fallback selects the same files and the task is UNCOMPARABLE
-    (``P2P_BASE_PROBE_UNUSABLE``, detail ends with ``GOVERNS``): it fails closed. Dropping them
-    from the fallback would leave the conftest's effect on the other base tests unchecked."""
+    #891, decided, and #915: no narrower fallback. When the probe of these files cannot be used
+    (timeout, cap), a whole-suite task's module-dir fallback selects the same files and a
+    module-dir task has none, so the task is UNCOMPARABLE (``P2P_BASE_PROBE_UNUSABLE``, detail
+    ends with ``GOVERNS``): it fails closed. A narrower set would leave the conftest's effect on
+    the other base tests unchecked."""
     conftests = conftest_of(test_files)
     if not conftests:
         return ()
@@ -55,13 +55,10 @@ def conftest_files(task, test_files, mode, base_tests) -> tuple[str, ...]:
         raise TestCommitRejected(
             UNCHECKED, "p2p_selection is off: nothing would check the conftest"
         )
-    existing = base_tests(task, frozenset(deleted_of(test_files)))
-    rule = name_rule(task.repo, task.base_commit)  # #870: the same selection P2P makes
-    chosen = select_p2p_targets(task.allowed_files, existing, task.test_roots, mode, rule)
-    forced = tuple(sorted({*chosen, *governed(conftests, existing)}))
-    if not forced:
+    existing = tuple(sorted(base_tests(task, frozenset(deleted_of(test_files)))))
+    if not existing:
         raise TestCommitRejected(UNCHECKED, f"{', '.join(conftests)}: no base test file to compare")
-    return forced
+    return existing
 
 
 def check_overlay(task, test_files, files, outcomes, side, result, ctx, budget) -> None:
