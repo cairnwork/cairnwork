@@ -20,7 +20,8 @@ tests), so a target naming the file still runs none of them. A ``unittest.TestCa
 its own ``__init__`` is collected by pytest's unittest support but is counted here as well: a test
 commit with one is refused, never wrongly accepted. Bases imported from another module are not
 read; neither are custom ``python_functions``/``python_classes`` settings. A class's decorators are
-part of each of its tests (#925: removing a class-level skip changes them all).
+part of each of its tests, inherited copies included (#925: removing a class-level skip changes
+them all; #968: pytest applies a base class's marks to its subclasses).
 
 ``hidden_tests`` (#925): what may give pytest a test that is not read above, at module level or
 in a class body, inside a block (``if``, ``try``, ``with``, a loop) or not: a ``test*`` function
@@ -59,10 +60,11 @@ def test_functions(tree: ast.Module) -> tuple[dict[str, str], frozenset[str]]:
             functions[node.name] = ast.dump(node)
         elif isinstance(node, ast.ClassDef):
             methods, blocked, case = _members(node, classes)
+            deco = "".join(ast.dump(d) for d in node.decorator_list)  # #925: a class skip
+            methods = {n: deco + body for n, body in methods.items()}  # #968: inherited too
             classes[node.name] = (methods, blocked, case)
             if node.name.startswith("Test") or case:
-                deco = "".join(ast.dump(d) for d in node.decorator_list)  # #925: a class skip
-                tests = {n: deco + body for n, body in methods.items() if n.startswith("test")}
+                tests = {n: body for n, body in methods.items() if n.startswith("test")}
                 functions.update({f"{node.name}::{n}": body for n, body in tests.items()})
                 if blocked:
                     uncollected.add(node.name)

@@ -71,6 +71,18 @@ def test_removing_a_class_skip_changes_each_of_its_tests(project):
     assert untargeted((F,), nodes, (f"{F}::test_regression",)) == (F,)
 
 
+def test_removing_a_base_class_skip_changes_each_inherited_copy(project):
+    """#968: pytest applies a base class's marks to its subclasses, so the copy a subclass inherits
+    changes with the base's skip and must be targeted too."""
+    base = "class TestBase:\n    def test_y(self):\n        assert add(2, 2) == 4\n"
+    sub = "class TestSub(TestBase):\n    pass\n"
+    commit_change(project, {F: "import pytest\n" + REGRESSION + "@pytest.mark.skip\n" + base + sub})
+    nodes = _new_tests(project, {F: "import pytest\n" + REGRESSION + base + sub})
+    assert nodes == {f"{F}::TestBase::test_y", f"{F}::TestSub::test_y"}
+    named = (f"{F}::test_regression", f"{F}::TestBase::test_y")
+    assert untargeted((F,), nodes, named) == (F,)
+
+
 def test_an_unchanged_hidden_test_a_local_def_and_literals_refuse_nothing(project):
     local = "def test_c():\n    def test_inner():\n        pass\n    test_inner()\n"
     commit_change(project, {F: HIDDEN["if-block"]})
