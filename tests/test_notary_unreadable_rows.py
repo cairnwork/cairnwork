@@ -1,5 +1,6 @@
-"""#909: a stored notary row whose request, response or binding JSON is nested too deep (or is not
-JSON at all) reads back as not verified instead of raising, and ``bound_to`` answers False."""
+"""#909: a stored notary row whose request, response, binding or expected identity JSON is nested
+too deep, is not JSON at all, or is JSON but not an object reads back as not verified instead of
+raising, and ``bound_to`` answers False."""
 
 from __future__ import annotations
 
@@ -36,8 +37,12 @@ def _change(repo):
     return read_change_set(repo, git(repo, "rev-parse", "HEAD~1"), head_of(repo))
 
 
-@pytest.mark.parametrize("column", ["request_json", "response_json", "binding_json"])
-@pytest.mark.parametrize("value", [DEEP_TEXT, "{not json"], ids=["deep", "malformed"])
+@pytest.mark.parametrize(
+    "column", ["request_json", "response_json", "binding_json", "expected_identity"]
+)
+@pytest.mark.parametrize(
+    "value", [DEEP_TEXT, "{not json", "[1]", "null"], ids=["deep", "malformed", "list", "null"]
+)
 def test_an_unreadable_stored_row_is_not_verified(repo, tmp_path, notarized, column, value):
     _rewrite(tmp_path, column, value)
     verdict = notarized.verdict("task-1", "a1", expected_candidate=head_of(repo))
@@ -56,5 +61,16 @@ def test_bound_to_is_false_when_the_request_became_unreadable_after_the_read(
     good = notarized.verdict("task-1", "a1", expected_candidate=head_of(repo))
     assert good is not None and good.verified
     _rewrite(tmp_path, "request_json", DEEP_TEXT)  # a writer between _read and the second read
+    monkeypatch.setattr(notarized, "_read", lambda *_a: replace(good))
+    assert notarized.bound_to("task-1", "a1", _change(repo)) is False
+
+
+@pytest.mark.parametrize("value", ["[1]", "null", '"text"'], ids=["list", "null", "string"])
+def test_bound_to_is_false_for_a_stored_request_that_is_not_an_object(
+    repo, tmp_path, notarized, monkeypatch, value
+):
+    good = notarized.verdict("task-1", "a1", expected_candidate=head_of(repo))
+    assert good is not None and good.verified
+    _rewrite(tmp_path, "request_json", value)
     monkeypatch.setattr(notarized, "_read", lambda *_a: replace(good))
     assert notarized.bound_to("task-1", "a1", _change(repo)) is False
