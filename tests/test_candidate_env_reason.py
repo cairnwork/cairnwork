@@ -31,6 +31,12 @@ MUTATES = KEEP + (
     f"def load():\n    open(__file__, 'a').write('\\n')\n    open({DENIED!r}, 'w').close()\n"
     "    return 1\n"
 )  # rewrites its own checkout, then hits the denial
+RENAMES = KEEP + (
+    "def load():\n    import sys\n    f = sys._getframe()\n"
+    "    while f is not None and 'item' not in f.f_locals:\n        f = f.f_back\n"
+    "    f.f_locals['item']._nodeid += 'x'\n"
+    f"    open({DENIED!r}, 'w').close()\n    return 1\n"
+)  # renames its own pytest item after collection, then hits the denial
 
 
 @pytest.mark.sandbox
@@ -63,6 +69,13 @@ class TestRealSandbox:
         code, out = run_cli(project, state, TEST, {"src/calc.py": MUTATES})
         text = json.dumps(out)
         assert out["status"] == "FAILED" and "checkout changed" in text, out
+        assert WORDS not in text
+
+    def test_a_denial_after_renaming_the_item_keeps_todays_reason(self, project, state):
+        commit_change(project, {"src/calc.py": BASE_TEETH})
+        code, out = run_cli(project, state, TEST, {"src/calc.py": RENAMES})
+        text = json.dumps(out)
+        assert out["status"] == "FAILED" and "renamed after collection" in text, out
         assert WORDS not in text
 
     def test_ac4_the_base_run_keeps_base_env_error(self, project, state):
@@ -106,7 +119,7 @@ def test_ac4_a_base_run_gets_no_denied_path_wording():
 
     from cairnwork.verifiers import _denial
 
-    verdict = SimpleNamespace(outcomes={"a": "failed"}, denied={"a": "/private/tmp/x"})
+    verdict = SimpleNamespace(outcomes={"a": "failed"}, denied={"a": "/private/tmp/x"}, renamed=())
     assert (
         _denial(cast(Any, SimpleNamespace(deny=True)), verdict, Path("/w/c"), Path("/r")) == ""
     )  # base
@@ -146,3 +159,13 @@ def test_a_node_that_also_failed_another_way_has_no_denied_path(tmp_path):
     (tmp_path / "b").mkdir()
     rc, verdict = guard_run(tmp_path / "b", {"tests/test_sub.py": only}, "tests")
     assert list(verdict.denied) == ["tests/test_sub.py::test_sub"]  # every call was denied
+
+
+def test_a_node_with_another_oserror_too_has_no_denied_path(tmp_path):
+    """Every failed call must name a denied path: ENOENT then EPERM in one node gives none."""
+    from test_teardown_errors import guard_run
+
+    source = MIXED.replace("assert False", "raise FileNotFoundError(2, 'No such file', '/nope')")
+    rc, verdict = guard_run(tmp_path, {"tests/test_sub.py": source}, "tests")
+    assert verdict.fail_kind == {"tests/test_sub.py::test_sub": "env"}, verdict
+    assert verdict.denied == {}

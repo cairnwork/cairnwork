@@ -295,10 +295,11 @@ def _read_verdict(channel, path, nonce, plugins):
     return replace(verdict, fail_kind=pytest_config.plugin_kinds(verdict.fail_kind, plugins))
 
 
-def _denial(batch: _Batch, verdict, checkout, run_dir) -> str:
+def _denial(batch: _Batch, verdict, checkout, run_dir, clean=True) -> str:
     """#962: the denied path for a candidate run's reason; a base run gets none (it is judged as
-    BASE_ENV_ERROR, base_teeth.py)."""
-    if batch.deny:
+    BASE_ENV_ERROR, base_teeth.py), nor a run with any other failure of its own (``clean``: no
+    checkout change, forged bytecode, survivors, size cap or target not run; no renamed item)."""
+    if batch.deny or not clean or verdict.renamed:
         return ""
     return candidate_denial(verdict.outcomes, verdict.denied, (checkout.parent, run_dir))
 
@@ -353,7 +354,7 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
         mutated=mutated, survivors=survivors, log_too_big=too_big, tests_ran=ran,
         report_too_big=verdict.too_big, forged=forged, not_run=not_run, renamed=verdict.renamed,
         exitstatus=verdict.exitstatus, testsfailed=verdict.testsfailed, fail_kind=verdict.fail_kind,
-        denied_path=_denial(batch, verdict, checkout, run_dir) if clean and not not_run else "",
+        denied_path=_denial(batch, verdict, checkout, run_dir, clean and not not_run),
     )  # fmt: skip
     digest = _record_digest(
         candidate_commit=candidate_commit,
