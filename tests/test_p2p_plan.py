@@ -45,7 +45,7 @@ def plan(monkeypatch, existing, probe_results, mode="whole-suite"):
         probed.append(files)
         return next(results)
 
-    monkeypatch.setattr(p2p, "_base_tests", lambda task, exclude: existing)
+    monkeypatch.setattr(p2p, "_base_tests", lambda task, exclude, **_: existing)
     monkeypatch.setattr(p2p, "_probe", fake_probe)
     stub_side(monkeypatch)
     try:

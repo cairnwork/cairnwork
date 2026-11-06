@@ -17,7 +17,7 @@ from cairnwork.verify_context import VerifyContext
 def check(monkeypatch, tmp_path):
     """check(python): one base_env_check with that verifier Python; returns the probes so far."""
     probed: list = []
-    monkeypatch.setattr(p2p, "_base_tests", lambda task, exclude: ("tests/test_calc.py",))
+    monkeypatch.setattr(p2p, "_base_tests", lambda task, exclude, **_: ("tests/test_calc.py",))
     monkeypatch.setattr(p2p, "_probe", lambda *a, **k: probed.append(a) or ({"t": "passed"}, ""))
 
     def run(python):
