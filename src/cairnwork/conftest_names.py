@@ -14,9 +14,9 @@ so the probe sees nothing. So:
   ``import M`` binds no fixture, and another module's globals are its own.
 
 The base files are read in one ``git cat-file --batch``; more than MAX_FILES of them refuses. A
-base file that does not parse counts every identifier in it (``_parse``). Not seen: a name a
-third-party plugin's fixture requests internally, the ini ``usefixtures`` option, and fixtures
-of a ``pytest_plugins`` module outside the directory.
+base file that does not parse counts every identifier in it (``_parse``). The ini ``usefixtures``
+option counts for every directory (#982). Not seen: a name a third-party plugin's fixture
+requests internally, and fixtures of a ``pytest_plugins`` module outside the directory.
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ from posixpath import dirname, join
 
 from cairnwork.deferred_overlay import TestCommitRejected
 from cairnwork.gitcmd import GitCommandError, run_git, run_git_bytes
+from cairnwork.pytest_config import PytestConfigError, base_config
 
 CODE = "TEST_COMMIT_CONFTEST_STATIC"
 MAX_FILES = 5000  # base Python files read under one conftest's directory
@@ -39,18 +40,30 @@ def taken_names(
 ) -> tuple[frozenset[str], frozenset[str]]:
     """(names the conftest at ``path``, whose base version is ``old``, binds; fixture names the
     base requests or a conftest above binds): a new binding may take neither."""
-    names: set[str] = set()
     directory = dirname(path)
     sources = _base_sources(repo, base, directory)
+    every_function, names = _ini_requests(repo, base)  # #982
     for parent in _parents(directory):
         conftest = join(parent, "conftest.py") if parent else "conftest.py"
         if conftest in sources:  # r2: what its own fixtures request may not be overridden either
             tree = _parse(conftest, sources[conftest])
-            names |= bound(tree) | requested(tree)
+            names |= bound(tree) | requested(tree, every_function)
     for file, data in sources.items():
         if _under(file, directory):
-            names |= requested(_parse(file, data))
+            names |= requested(_parse(file, data), every_function)
     return frozenset(bound(old)), frozenset(names)
+
+
+def _ini_requests(repo: Path, base: str) -> tuple[bool, set[str]]:
+    """#982: (the base sets ``python_functions``, so any function may be a test; the names its
+    ``usefixtures`` option requests for every test). An unreadable configuration refuses."""
+    try:
+        _source, config = base_config(repo, base)
+        value = config.get("usefixtures") or ()
+        words = value.split() if isinstance(value, str) else [str(v) for v in value]
+    except (PytestConfigError, GitCommandError, ValueError, TypeError) as exc:
+        raise TestCommitRejected(CODE, "cannot read the base pytest configuration") from exc
+    return "python_functions" in config, set(words)
 
 
 def bound(tree: ast.Module) -> set[str]:
@@ -80,21 +93,34 @@ def bound_by(node: ast.stmt) -> set[str]:
     return set()
 
 
-def requested(tree: ast.Module) -> set[str]:
-    """Fixture names ``tree`` may request: every parameter of every function, and every literal
-    string passed to ``usefixtures`` or ``getfixturevalue``."""
+def requested(tree: ast.Module, every_function: bool = False) -> set[str]:
+    """Fixture names ``tree`` may request: the parameters of each function pytest may hand
+    fixtures, and every literal string passed to ``usefixtures`` or ``getfixturevalue``. #982: a
+    function counts when its name starts with ``test`` or ``pytest_``, it has a decorator, or its
+    name is used other than as a direct call (``pytest.fixture(f)``, ``return f``); every lambda
+    counts. Every function counts, as #916 did, with ``every_function`` (the base sets
+    ``python_functions``) or when a request's argument is not a literal string."""
+    callees = {id(n.func) for n in ast.walk(tree) if isinstance(n, ast.Call)}
+    used: set[str] = set()
     names: set[str] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda):
-            a = node.args
-            names |= {x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs)}
-        elif isinstance(node, ast.Call) and _call_name(node.func) in _REQUESTS:
-            names |= {
-                s.value
-                for arg in node.args
-                for s in ast.walk(arg)
-                if isinstance(s, ast.Constant) and isinstance(s.value, str)
-            }
+        if isinstance(node, ast.Name | ast.Attribute) and id(node) not in callees:
+            used.add(node.id if isinstance(node, ast.Name) else node.attr)
+        if isinstance(node, ast.Call) and _call_name(node.func) in _REQUESTS:
+            args = [*node.args, *(k.value for k in node.keywords)]
+            strings = {a.value for a in args if isinstance(a, ast.Constant)}
+            literal = [a for a in args if isinstance(a, ast.Constant) and isinstance(a.value, str)]
+            every_function |= len(literal) < len(args)  # a name it cannot read: count them all
+            names |= {v for v in strings if isinstance(v, str)}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            if not (every_function or node.decorator_list or node.name in used
+                    or node.name.startswith(("test", "pytest_"))):  # fmt: skip
+                continue
+        elif not isinstance(node, ast.Lambda):
+            continue
+        a = node.args
+        names |= {x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs)}
     return names
 
 

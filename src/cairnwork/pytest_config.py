@@ -146,8 +146,14 @@ class PytestSettings:
 def base_settings(repo: Path, base_commit: str | None) -> PytestSettings:
     """Read the root-level pytest configuration of base_commit from repo's objects
     (no base commit: no settings)."""
+    source, config = base_config(repo, base_commit)
+    return _settings(source, config) if source else PytestSettings()
+
+
+def base_config(repo: Path, base_commit: str | None) -> tuple[str, dict[str, Any]]:
+    """(file, every key of its pytest section) at base_commit; ``("", {})`` when none."""
     if base_commit is None:
-        return PytestSettings()
+        return "", {}
     names = sorted({name for name, _, _ in _CANDIDATES})
     listing = run_git(repo, "ls-tree", "-z", base_commit, "--", *names)
     entries = {}
@@ -164,8 +170,8 @@ def base_settings(repo: Path, base_commit: str | None) -> PytestSettings:
             raise PytestConfigError(f"{name} at the base is not a regular file")
         found = _section(run_git(repo, "cat-file", "blob", oid), section, form, name)
         if found is not None or name in _ALWAYS_FOUND:
-            return _settings(name, found or {})
-    return PytestSettings()
+            return name, found or {}
+    return "", {}
 
 
 DEFAULT_PYTHON_FILES = ("test_*.py", "*_test.py")
