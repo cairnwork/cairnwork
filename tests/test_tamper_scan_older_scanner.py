@@ -121,7 +121,8 @@ def test_an_untrusted_scan_reads_a_string_text_line_as_written():
     the line is also read as written, so an alias bound after the ";" is followed."""
     line = "# x; import os as o; o._exit(0)"
     data = f'S = """\n{line}\n"""\n'.encode()
-    assert file_views(data)[(2, 0)].skip  # string text to this Python
+    views = file_views(data)
+    assert views is not None and views[(2, 0)].skip  # string text to this Python
     assert scan_added_lines(LIB, [(2, line)], data) == []
     assert "os_exit" in {f.rule for f in scan_added_lines(LIB, [(2, line)], data, trusted=False)}
 
