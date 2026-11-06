@@ -92,6 +92,12 @@ def _side(ctx, commit, files, result, budget, tag) -> tuple[dict[str, str], str]
         shutil.rmtree(Path(run.log_path).parent, ignore_errors=True)  # not evidence for Core
 
 
+def complete(run) -> bool:
+    """#929: the run recorded, finished collecting, and gave every collected id an outcome (a base
+    whose own config stops the session early leaves collected tests unrun, so unbound)."""
+    return run.recorded and run.collection_finished and set(run.collected) <= set(run.outcomes)
+
+
 def _outcomes(run) -> tuple[dict[str, str], str]:
     bad = (
         ("forged-bytecode", run.forged), ("timeout", run.timed_out), ("survivors", run.survivors),

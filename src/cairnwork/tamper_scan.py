@@ -64,7 +64,7 @@ from cairnwork.tamper_scan_pytest import (
     PYTEST_HOOK_IMPL,
     PYTEST_PUBLIC_PATCH,
 )
-from cairnwork.tamper_scan_tokens import added_file, file_views
+from cairnwork.tamper_scan_tokens import added_file, file_views, views_trusted
 
 CODE = "VERIFIER_TAMPER_API"
 
@@ -264,6 +264,7 @@ def scan_added_lines(
     lines: list[tuple[int, str]],
     data: bytes | None = None,
     budget: ScanBudget | None = None,
+    trusted: bool = True,  # views_trusted (#919): when false, no line is skipped as a comment
 ) -> list[Finding]:
     """Findings for the added ``(line number, text)`` pairs of one file (``.py`` files only).
 
@@ -284,7 +285,7 @@ def scan_added_lines(
     budget = budget or ScanBudget()
     if source is not None and not found and not budget.tokenize(source):
         return [Finding(path, lines[0][0] if lines else 1, SCAN_BUDGET)]
-    views = (file_views(source) if source is not None and not found else None) or {}
+    views = (file_views(source, trusted) if source is not None and not found else None) or {}
     code_aliases = [{k: set(v) for k, v in aliases.items()} for _ in range(2)] if views else None
     # Python also ends a source line at "\r" (CRLF included), so each piece is scanned on its own.
     for number, line in ((number, line) for number, line in lines if len(line) <= MAX_LINE):
@@ -297,7 +298,7 @@ def scan_added_lines(
             if _COMMENT_ONLY.match(piece) and view and view.skip and len(view.code) == len(piece):
                 continue  # a comment to Python, or string text with no code on the line
             # Main's reading, with its own alias table; a line main skips as a comment has none.
-            plain = () if _COMMENT_ONLY.match(piece) else (piece, nfkc_names(piece))
+            plain = () if trusted and _COMMENT_ONLY.match(piece) else (piece, nfkc_names(piece))
             names = _rule_names(plain, aliases, masked_aliases, in_tests, in_conftest, budget)
             if code_aliases is not None and view is not None:  # aliases bound by code only
                 for text in dict.fromkeys((view.bound, nfkc_names(view.bound))):
@@ -389,12 +390,11 @@ def scan_patch(
         raise GitCommandError("git diff output is not UTF-8") from exc
     if not OID.fullmatch(head):  # read as "<commit>:<path>" below, so never an option
         raise GitCommandError("head is not a full commit id")
-    found, budget = [], ScanBudget()  # one budget for the whole patch (#668)
-    for path, lines in added_lines(diff).items():
-        if (
-            path.endswith(".py") and not budget.over
-        ):  # the whole file, as committed (delete-only too)
+    found, budget, files = [], ScanBudget(), added_lines(diff)  # one budget for the patch (#668)
+    trusted = bool(files) and views_trusted(python)  # no .py file changed: no process started
+    for path, lines in files.items():
+        if path.endswith(".py") and not budget.over:  # read whole, as committed (delete-only too)
             data = run_git_bytes(repo, "cat-file", "blob", f"{head}:{path}")
-            found += scan_added_lines(path, lines, data, budget)
+            found += scan_added_lines(path, lines, data, budget, trusted)
     more = [] if budget.over else file_rules(repo, base, head, budget, python, notes)  # over: done
     return found + [Finding(path, 0, rule) for path, rule in more]

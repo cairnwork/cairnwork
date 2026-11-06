@@ -25,15 +25,22 @@ part of each of its tests (#925: removing a class-level skip changes them all).
 ``hidden_tests`` (#925): what may give pytest a test that is not read above, at module level or
 in a class body, inside a block (``if``, ``try``, ``with``, a loop) or not: a ``test*`` function
 or ``Test*`` class in a block or nested in a class, and a ``test*``/``Test*`` name bound another
-way (assignment, walrus, loop, ``with`` or ``match`` target, ``from x import test_y``), unless the
-value is a literal, a star import, and a function or class that declares a ``test*`` name
-``global``. new_tests refuses a test commit that changes one. Names set at run time
-(``setattr``, ``globals()``) are not seen.
+way (assignment, walrus, loop, ``with`` or ``match`` target, ``from x import test_y``, a
+``TestCase`` imported relatively or from a module whose top-level name is a file stem or a
+directory anywhere in the test commit's tree, see ``local_names``), unless the value is a
+literal, a star import, and a function or class that declares a ``test*`` name ``global``.
+new_tests refuses a test commit that changes one. Names set at run time (``setattr``,
+``globals()``) are not seen.
 """
 
 from __future__ import annotations
 
 import ast
+from collections.abc import Container
+from pathlib import Path
+
+from cairnwork.deferred_overlay import TestCommitRejected
+from cairnwork.gitcmd import GitCommandError, run_git_bytes
 
 _DEFS = (ast.FunctionDef, ast.AsyncFunctionDef)
 _SCOPES = (*_DEFS, ast.ClassDef)  # a ``global`` in either binds at module level
@@ -81,17 +88,19 @@ def _members(
     return methods, blocked, case
 
 
-def hidden_tests(tree: ast.Module) -> frozenset[str]:
+def hidden_tests(tree: ast.Module, local: Container[str] | None = None) -> frozenset[str]:
     """#925: ``ast.dump`` of each statement that may give pytest a test test_functions does not read
     (see the module docstring), at module level or in a class body, in a block or not; not inside
     a function, whose local names pytest never collects, unless it declares a ``test*`` name
-    ``global``: then the whole function or class counts, as it may bind a module-level test."""
+    ``global``: then the whole function or class counts, as it may bind a module-level test.
+    ``local``: the names the test commit's tree may give a top-level module (``local_names``);
+    ``None`` trusts no imported ``TestCase``."""
     found: set[str] = set()
     scan = [node for node in tree.body if not isinstance(node, (*_DEFS, ast.ClassDef))]
     for node in tree.body:
         if isinstance(node, ast.ClassDef):
             scan += [item for item in node.body if not isinstance(item, _DEFS)]
-    _hidden(ast.Module(body=scan, type_ignores=[]), found, None)
+    _hidden(ast.Module(body=scan, type_ignores=[]), found, None, local)
     for node in ast.walk(tree):
         if isinstance(node, _SCOPES) and any(_global_test(inner) for inner in ast.walk(node)):
             found.add(ast.dump(node))
@@ -103,7 +112,7 @@ def _global_test(node: ast.AST) -> bool:
     return any(name.startswith(("test", "Test")) for name in names)
 
 
-def _hidden(node: ast.AST, found: set[str], stmt: ast.AST | None) -> None:
+def _hidden(node: ast.AST, found: set[str], stmt: ast.AST | None, local) -> None:
     for child in ast.iter_child_nodes(node):
         here = child if isinstance(child, ast.stmt) else stmt
         if isinstance(child, _DEFS):
@@ -114,15 +123,17 @@ def _hidden(node: ast.AST, found: set[str], stmt: ast.AST | None) -> None:
         elif isinstance(child, _ASSIGNS) and _literal(child.value):
             continue  # a constant or a display of constants: pytest collects only callables
         else:
-            if here is not None and _binds_test(child):
+            if here is not None and _binds_test(child, local):
                 found.add(ast.dump(here))
-            _hidden(child, found, here)
+            _hidden(child, found, here, local)
 
 
-def _binds_test(node: ast.AST) -> bool:
+def _binds_test(node: ast.AST, local: Container[str] | None) -> bool:
     """A name binding pytest's default rules could collect: an assignment, walrus, loop, ``with``
     or ``match`` capture target, an imported name (``from x import test_y``, ``import x as
-    test_y``), or a star import, which binds whatever ``test*`` the other module holds."""
+    test_y``), or a star import, which binds whatever ``test*`` the other module holds. A
+    ``TestCase`` from an absolute import whose top-level module name is not in ``local``
+    (unittest's, a framework's) does not count: such a base class holds no tests."""
     if isinstance(node, ast.Name):
         names = [node.id] if isinstance(node.ctx, ast.Store) else []
     elif isinstance(node, (ast.MatchAs, ast.MatchStar)):
@@ -131,7 +142,9 @@ def _binds_test(node: ast.AST) -> bool:
         names = [node.rest] if node.rest else []
     elif isinstance(node, ast.ImportFrom):
         names = [alias.asname or alias.name for alias in node.names]
-        names = [name for name in names if name != "TestCase"]  # the base class has no tests
+        top = (node.module or "").split(".", 1)[0]
+        if local is not None and not node.level and top not in local:
+            names = [name for name in names if name != "TestCase"]
         if "*" in names:
             return True
     elif isinstance(node, ast.Import):  # a plain import binds a module, which pytest never collects
@@ -149,3 +162,19 @@ def _literal(value: ast.expr | None) -> bool:
     except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
         return False
     return True
+
+
+def local_names(repo: Path, commit: str) -> frozenset[str]:
+    """#925: every name the test commit's tree may give a top-level module: the stem of each
+    ``.py`` file and the name of each directory, at any depth (prepend mode or a ``pythonpath``
+    entry may put any directory first on ``sys.path``). One ``ls-tree -r`` of the whole tree; an
+    imported ``TestCase`` whose top-level module has such a name is not trusted."""
+    try:
+        raw = run_git_bytes(repo, "ls-tree", "-r", "-z", "--name-only", commit, "--")
+    except GitCommandError as exc:
+        raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
+    names: set[str] = set()
+    for path in raw.decode("utf-8", "surrogateescape").split("\0"):
+        *dirs, name = path.split("/")
+        names.update([*dirs, name[:-3]] if name.endswith(".py") else dirs)
+    return frozenset(names)

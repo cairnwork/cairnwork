@@ -14,19 +14,27 @@ opened on an earlier line (an unchanged one included) holds both as plain text. 
   off (empty when ``skip``). tamper_scan reads the names an import binds from this text.
 
 tamper_scan scans ``code`` in addition to the line as written, so the view only adds findings, and
-skips a ``#`` line only when ``skip`` agrees. A file that is not UTF-8 or does not tokenize
-gets no views, so none of its lines is skipped as a comment (fail closed). Lines are numbered as
-git numbers them (split at ``"\\n"``); each git line is cut at ``"\\r"`` into pieces, as Python
-also ends a line there, and a view is keyed by (git line number, piece index).
+skips a ``#`` line only when ``skip`` agrees, and only when this Python is at least as new as
+the verifier's (``views_trusted``, #919): string syntax only grows (PEP 701 f-strings, t-strings),
+so an older tokenizer can read as a comment a line the verifier runs as code. A file that is not
+UTF-8 or does not tokenize gets no views, so none of its lines is skipped as a comment (fail
+closed). Lines are numbered as git numbers them (split at ``"\\n"``); each git line is cut at
+``"\\r"`` into pieces, as Python also ends a line there, and a view is keyed by (git line number,
+piece index).
 """
 
 from __future__ import annotations
 
 import io
+import re
+import subprocess
+import sys
 import tokenize
 from dataclasses import dataclass
 
 _MASK = "x"
+_VERSION = re.compile(r"(\d{1,2}) (\d{1,3})\n?", re.ASCII)  # as module_inventory reads it
+_PROBE_SECONDS = 15  # the version probe's own limit (views_trusted)
 _QUOTES = frozenset("'\"")
 _SYNTAX = frozenset("#;")  # read as syntax outside a string, as text inside one
 _PARTS = ("START", "MIDDLE", "END")
@@ -61,8 +69,25 @@ class LineView:
 Views = dict[tuple[int, int], LineView]
 
 
-def file_views(data: bytes) -> Views | None:
-    """Views of every line of ``data`` (a whole ``.py`` file), or None when it cannot be read."""
+def views_trusted(python: str) -> bool:
+    """Whether a line this Python reads as no code may be skipped for ``python`` (the verifier's):
+    this Python is at least its version (#919). A version that cannot be read: not trusted."""
+    try:
+        done = subprocess.run(  # noqa: S603 - the verifier's interpreter, fixed code (parse_blobs)
+            [python, "-I", "-S", "-B", "-c", "import sys; print(*sys.version_info[:2])"],
+            capture_output=True, text=True, timeout=_PROBE_SECONDS, check=False, env={}, cwd="/",
+            stdin=subprocess.DEVNULL,
+        )  # fmt: skip
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return False
+    found = _VERSION.fullmatch(done.stdout) if done.returncode == 0 else None
+    return found is not None and sys.version_info[:2] >= (int(found[1]), int(found[2]))
+
+
+def file_views(data: bytes, trusted: bool = True) -> Views | None:
+    """Views of every line of ``data`` (a whole ``.py`` file), or None when it cannot be read.
+
+    Not ``trusted`` (views_trusted): no line is ``skip``; code and bound are read as before."""
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError:
@@ -97,7 +122,7 @@ def file_views(data: bytes) -> Views | None:
                 row[column] = _MASK
         skip = index not in code_rows
         bound = "" if skip else "".join(bare[index][: comments.get(index, len(row))])
-        views[key] = LineView("".join(row), skip, bound)
+        views[key] = LineView("".join(row), skip and trusted, bound)
     return views
 
 

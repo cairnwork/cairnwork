@@ -38,9 +38,15 @@ HIDDEN = {
     "match-capture": "match make_test():\n    case test_b:\n        pass\n",
     "global-in-function": "def _setup():\n    global test_b\n    test_b = make_test()\n_setup()\n",
     "global-in-class": "class Holder:\n    global test_b\n    def test_b():\n" + WRONG,
+    # a TestCase the test commit's own tree may define can hold tests (Test* is a pytest name)
+    "testcase-local": "from test_regression import TestCase\n",  # the file the commit changes
+    "testcase-renamed": "from test_regression import Base as TestCase\n",
+    "testcase-relative": "from .unittest import TestCase\n",
+    "version-block": "import sys\nif sys.version_info >= (3, 8):\n    def test_b():\n" + WRONG,
 }
-NOT_HIDDEN = (  # a literal value, the TestCase base, a module: pytest collects none of them
+NOT_HIDDEN = (  # a literal value, a framework's TestCase base, a module: none holds a test
     "test_data = [1, 2, {'a': (3,)}]\nfrom unittest import TestCase\nimport testtools\n"
+    "from django.test import TestCase\n"  # no django module or directory in the tree
 )
 
 
@@ -81,3 +87,53 @@ def test_verify_refuses_a_hidden_test_a_wrong_fix_would_fail(project, state):
     code, out = verify(state, project, base, cand, "--test-commit", test_commit, tests=(command,))
     assert code == 2 and out["status"] == "REFUSED" and out["verified"] is False, out
     assert out["reason"].startswith("DEFERRED_TESTS_UNREADABLE"), out
+
+
+@pytest.mark.sandbox
+def test_verify_refuses_a_test_case_imported_from_a_base_helper(project, state):
+    """#925 follow-up. Before: VERIFIED. Any ``from x import TestCase`` was trusted, but pytest
+    collects the helper's ``TestCase`` tests in this module, and the target never ran them."""
+    helper = "from calc import add\nclass TestCase:\n    def test_b(self):\n" + WRONG
+    commit_change(project, {"tests/helpers.py": helper})  # on the base; the test commit keeps it
+    files = {F: REGRESSION + "from helpers import TestCase\n"}
+    base, test_commit = make_test_commit(project, files)
+    cand = candidate(project, base, {"src/calc.py": FIX})
+    command = f"python3 -m pytest -q {F}::test_regression"
+    code, out = verify(state, project, base, cand, "--test-commit", test_commit, tests=(command,))
+    assert code == 2 and out["status"] == "REFUSED", out
+    assert out["reason"].startswith("DEFERRED_TESTS_UNREADABLE"), out
+
+
+@pytest.mark.parametrize("shadow", ["tests/unittest.py", "tests/lib/deep/unittest/__init__.py"])
+def test_a_test_case_name_the_test_commit_can_shadow_is_not_trusted(project, shadow):
+    """#925: a test commit's own file named like the module, at any depth (prepend mode or a
+    pythonpath entry may put its directory first), may define a TestCase that holds tests."""
+    case = "class TestCase:\n    def test_b(self):\n" + WRONG
+    with pytest.raises(Rejected) as err:
+        _new_tests(project, {F: REGRESSION + "from unittest import TestCase\n", shadow: case})
+    assert err.value.code == "DEFERRED_TESTS_UNREADABLE"
+
+
+CASES = "class TestCase:\n    def test_b(self):\n" + WRONG
+PLAIN_BASE = "class TestCase:\n    def setUp(self):\n        pass\n"
+
+
+@pytest.mark.parametrize(
+    ("base_files", "module"),
+    [  # the base's own module, unchanged by the test commit, anywhere in the tree
+        ({"testing_helpers.py": CASES}, "testing_helpers"),  # cw#964 Codex r1: root level
+        ({"testing_helpers/__init__.py": CASES}, "testing_helpers"),  # a root package
+        ({"helpers/base.py": CASES}, "helpers.base"),  # a dotted import, its top in the tree
+        ({"lib/cases/__init__.py": "from .impl import TestCase\n", "lib/cases/impl.py": CASES},
+         "cases"),  # re-exported from a file with tests
+        ({"fw/test/__init__.py": "from fw.test.base import TestCase\n",
+          "fw/test/base.py": PLAIN_BASE}, "fw.test"),  # no tests, but a tree name: accepted cost
+    ],
+)  # fmt: skip
+def test_a_test_case_from_a_module_the_tree_holds_is_hidden(project, base_files, module):
+    """#925 (layer1 ruling on cw#964): the whole tree is listed, and a top-level module name
+    that is a file stem or a directory at any depth is not trusted, whatever the file holds."""
+    commit_change(project, base_files)
+    with pytest.raises(Rejected) as err:
+        _new_tests(project, {F: REGRESSION + f"from {module} import TestCase\n"})
+    assert err.value.code == "DEFERRED_TESTS_UNREADABLE"

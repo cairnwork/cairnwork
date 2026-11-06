@@ -65,8 +65,8 @@ import cairnwork_sandbox
 from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRejected, deleted_of
 from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.issue_task import test_target
-from cairnwork.p2p_collect import OVER_BUDGET, collected_side, no_targets, whole_base
-from cairnwork.p2p_conftest import GOVERNS, check_overlay, conftest_files
+from cairnwork.p2p_collect import OVER_BUDGET, collected_side, no_targets, untargetable, whole_base
+from cairnwork.p2p_conftest import GOVERNS, check_overlay, complete, conftest_files
 from cairnwork.p2p_nodes import clean as _clean
 from cairnwork.p2p_nodes import passing_targets, require_nodes
 from cairnwork.p2p_probe_log import probe_log_tail
@@ -99,15 +99,14 @@ def _base_tests(task, exclude: frozenset[str]) -> tuple[str, ...]:
         target, is_test = test_target(task.test_roots), test_file_rule(task.repo, task.base_commit)
         raw = run_git(task.repo, "ls-tree", "-r", "-z", "--name-only", task.base_commit,
                       "--", *task.test_roots)  # fmt: skip
+        paths = [p for p in raw.split("\0") if p and p not in exclude and is_test(p)]
+        odd = untargetable(task, paths, target)  # reads the base's norecursedirs
     except (GitCommandError, PytestConfigError) as exc:
         raise P2PRejected("P2P_BASE_UNREADABLE", str(exc)) from exc
-    return tuple(
-        sorted(
-            p for p in raw.split("\0")
-            if p and p not in exclude and target.fullmatch(p)
-            and is_test(p)
-        )
-    )  # fmt: skip
+    if odd:  # #930: never dropped silently (fail closed)
+        detail = f"{len(odd)} base test file(s) no target can name, e.g. {_clean(odd[0])}"
+        raise BaseUncomparable(Comparison("UNCOMPARABLE", "P2P_BASE_UNTARGETABLE", detail))
+    return tuple(sorted(p for p in paths if target.fullmatch(p)))  # pytest skips the rest (#930)
 
 
 UNCLEAN = ("base-probe-survivors", "base-probe-mutated", "base-probe-forged")  # never degraded
@@ -135,6 +134,8 @@ def _probe(task, files, result, ctx: VerifyContext, budget, tag="p"):
         reason = "base-probe-failed"
     elif run.returncode == 1 and "failed" not in run.outcomes.values():  # #478: not in the record
         reason = "base-probe-failed"
+    elif not complete(run):  # #929: an early stop leaves collected base tests unrun, so unbound
+        reason = "base-probe-incomplete"
     try:  # #331: the operator sees why the probe was unusable
         if reason is not None:
             tail = probe_log_tail(run.log_path)

@@ -211,8 +211,15 @@ def test_targets_keep_the_probe_order(monkeypatch):
 def test_a_clean_base_probe_returns_its_outcomes(monkeypatch, tmp_path):
     outcomes = {"tests/test_a.py::test_a": "passed"}
     run = make_run(True, outcomes=outcomes, log_dir=tmp_path)
+    run = replace(run, recorded=True, collection_finished=True, collected=tuple(outcomes))  # #929
     monkeypatch.setattr(p2p, "run_verifiers", lambda *a, **k: (run,))
     assert p2p._probe(TASK, ("tests/test_a.py",), RESULT, context(tmp_path), 30) == (outcomes, "")
+    early = replace(run, collected=(*outcomes, "tests/test_a.py::test_unrun"))  # #929: stopped
+    monkeypatch.setattr(p2p, "run_verifiers", lambda *a, **k: (early,))
+    assert p2p._probe(TASK, ("tests/test_a.py",), RESULT, context(tmp_path), 30) == (
+        None,
+        "base-probe-incomplete",
+    )
 
 
 # --- the candidate run: timeout and the flaky rule ------------------------------------------
