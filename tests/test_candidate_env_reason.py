@@ -119,13 +119,20 @@ def test_ac4_a_base_run_gets_no_denied_path_wording():
 
     from cairnwork.verifiers import _denial
 
-    verdict = SimpleNamespace(outcomes={"a": "failed"}, denied={"a": "/private/tmp/x"}, renamed=())
+    verdict = SimpleNamespace(
+        outcomes={"a": "failed"},
+        denied={"a": "/private/tmp/x"},
+        renamed=(),
+        data_refused=(),
+    )
     assert (
         _denial(cast(Any, SimpleNamespace(deny=True)), verdict, Path("/w/c"), Path("/r")) == ""
     )  # base
     assert _denial(cast(Any, SimpleNamespace(deny=False)), verdict, Path("/w/c"), Path("/r")) == (
         "/private/tmp/x"
     )
+    refused = SimpleNamespace(**{**vars(verdict), "data_refused": ("data/run.py",)})
+    assert _denial(cast(Any, SimpleNamespace(deny=False)), refused, Path("/w/c"), Path("/r")) == ""
 
 
 def test_only_eperm_names_a_path():
@@ -135,9 +142,12 @@ def test_only_eperm_names_a_path():
     plugin: dict = {"os": __import__("os")}
     exec(PARTS_SOURCE, plugin)  # plugin text, run as the guard runs it
     _denied_path = plugin["_denied_path"]
-    assert _denied_path(PermissionError(1, "Operation not permitted", "/p/x")) == "/p/x"
-    assert _denied_path(PermissionError(13, "Permission denied", "/p/x")) is None
-    assert _denied_path(RuntimeError("wrapped")) is None
+    from types import SimpleNamespace as Info
+
+    assert _denied_path(Info(value=PermissionError(1, "Operation not permitted", "/p/x"))) == "/p/x"
+    assert _denied_path(Info(value=PermissionError(13, "Permission denied", "/p/x"))) is None
+    assert _denied_path(Info(value=RuntimeError("wrapped"))) is None
+    assert _denied_path(None) is None  # a strict xpass fails with no exception
 
 
 MIXED = (

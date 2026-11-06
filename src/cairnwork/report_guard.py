@@ -236,7 +236,7 @@ class _Reporter:
                 oserr = info is not None and (info.errisinstance(OSError)
                                               or _denied_inside(info.value))
                 self._env_ok[nodeid] = self._env_ok.get(nodeid, True) and oserr
-                self._denied[nodeid] = self._denied.get(nodeid, True) and _denied_path(info.value)
+                self._denied[nodeid] = self._denied.get(nodeid, True) and _denied_path(info)
         elif report.when == "setup" and report.outcome in ("skipped", "failed"):
             _keep_worst(self, nodeid, report.outcome)
             if report.failed:  # a skip in a fixture is not an error
