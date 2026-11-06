@@ -252,5 +252,25 @@ SCENARIOS = {  # name: (kwargs of conftest_run, expected status, a code the reas
         "FAILED",
         "TEST_COMMIT_CONFTEST_CHANGES_BASE",
     ),
+    "two conftests in module-dir mode: the second one's files are compared too": (
+        {
+            "path": "tests/a/conftest.py",
+            "base_files": SHADOWED,
+            "regression": PLAIN,
+            "mode": "module-dir",
+            "extra_files": {"tests/sub/conftest.py": SHADOW},
+        },
+        "FAILED",
+        "TEST_COMMIT_CONFTEST_CHANGES_BASE",
+    ),
+    "a root conftest and a whole-suite base probe over budget: no narrower fallback (#891)": (
+        {
+            "base_files": {"tests/other/test_slow.py": SLOW},
+            "regression": PLAIN,
+            "budget": 25,
+        },
+        "FAILED",
+        "selects the same files; they include every base test file under a test-commit conftest",
+    ),
     "P2P off": ({"mode": "off"}, "FAILED", "TEST_COMMIT_CONFTEST_UNCHECKED"),
 }
