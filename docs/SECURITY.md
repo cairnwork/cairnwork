@@ -69,6 +69,26 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
   On Linux, when Yama's `ptrace_scope` is 0 (or cannot be read), a child of the run could write
   the pytest process's memory, and the run's notes say so (`bytecode hook: ptrace_scope 0`, read
   outside the sandbox; the verdict is unchanged).
+- **Declared test data is not executed, narrowly** (`src/cairnwork/data_exec_hook.py`, #850,
+  rule `exec-refuse-v1`): when a run declares test data files (none does yet: the producer is a
+  later step), the per-run plugin adds a second audit hook that refuses the `exec` and
+  `function.__new__` events for a code object whose file name names a declared path (import,
+  `runpy`, `exec`/`eval` of a code object, `types.FunctionType`), and `subprocess.Popen`, `os.exec`
+  and `os.posix_spawn` when the program or an argv entry names one. "Names" is a text match on the
+  last parts of the normalised name (separators, `.`, `..` and letter case folded), so a collision
+  only refuses more. The refusal is a `BaseException` and is latched inside the hook: a run with
+  a recorded refusal is never a pass, even when the test caught it (unless code in the run
+  deliberately clears the latch, below), and such a base run is UNCOMPARABLE
+  `DATA_EXEC_REFUSED`. The hook is probed at install; a hook that does not refuse means no record.
+  The claim is only "not run in-process through import, runpy, eval/exec of a code object or
+  FunctionType, under its own name". Not covered: the file's text executed under another name,
+  C-level eval, and a child that gets the file without naming it in argv (`python -` with the text
+  piped in); the bytecode hook's and the reporter's residuals apply. The latch is in-process
+  state: code in the run can reach it (through `gc`, or a caught refusal's traceback frames) and
+  clear it, and the guard on setting the hook's attributes only stops accidental replacement. This
+  gives no new power: the test commit is trusted, and candidate code already runs in-process and
+  can change test outcomes or exec the file's text under another name. Honest code it refuses with
+  data declared: an argv entry that is a path object rather than text.
 - **Linux bubblewrap** (`src/cairnwork_sandbox/bwrap.py`): a read-only bind of the whole root,
   read-write binds for the write roots only, every namespace unshared (no network), all
   capabilities dropped, nested user namespaces disabled. `/run`, `/tmp` (and `/var/run` where

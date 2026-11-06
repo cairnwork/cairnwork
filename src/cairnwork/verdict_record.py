@@ -31,6 +31,7 @@ class Verdict:
     testsfailed: int | None = None  # pytest's own count of failed tests, as recorded
     collected: tuple[str, ...] = ()  # #793: every node id pytest collected, as recorded
     collection_finished: bool = False  # #793: the guard's pytest_collection wrapper returned
+    data_refused: tuple[str, ...] = ()  # #850: declared data the data-exec hook refused to run
 
     def not_run(self, targets) -> tuple[str, ...]:
         """The named ``targets`` (``path`` or ``path::node``) that own no recorded test, then the
