@@ -36,7 +36,13 @@ from pathlib import Path
 from typing import Any
 
 from cairnwork.gitcmd import GitCommandError, run_git
-from cairnwork.pytest_config_files import _ALWAYS_FOUND, _CANDIDATES, PytestConfigError, _section
+from cairnwork.pytest_config_files import (
+    _ALWAYS_FOUND,
+    _CANDIDATES,
+    PytestConfigError,
+    _section,
+    refuse_both_kinds,
+)
 
 # Copied from the base configuration. Each one only decides which tests exist and how
 # they run, never where configuration, plugins or reports come from:
@@ -149,6 +155,7 @@ def base_settings(repo: Path, base_commit: str | None) -> PytestSettings:
         meta, path = entry.split("\t", 1)
         mode, kind, oid = meta.split()
         entries[path] = (mode, kind, oid)
+    refuse_both_kinds(entries)  # #928
     for name, section, form in _CANDIDATES:
         if name not in entries:
             continue
@@ -165,9 +172,18 @@ DEFAULT_PYTHON_FILES = ("test_*.py", "*_test.py")
 
 
 def configured_python_files(repo: Path, base_commit: str | None) -> tuple[str, ...]:
-    """The base's own ``python_files`` patterns; empty when it sets none (#870)."""
-    configured = _render(dict(base_settings(repo, base_commit).values).get("python_files"))
-    return tuple(_words(configured))
+    """The base's own ``python_files`` patterns; empty when it sets none (#870). #928: a list's
+    items as pytest takes them (whole) and as the verifier's ini splits them, both, so never fewer
+    files than either; a string split by shlex, and one shlex cannot split refuses the base
+    (pytest itself cannot start), never pytest's default."""
+    value = dict(base_settings(repo, base_commit).values).get("python_files")
+    if isinstance(value, list):
+        items = [str(item) for item in value]
+        return tuple(dict.fromkeys([*items, *(word for i in items for word in _words(i))]))
+    try:
+        return tuple(shlex.split(_render(value) or ""))
+    except ValueError as exc:
+        raise PytestConfigError("python_files at the base cannot be split") from exc
 
 
 def test_file_rule(repo: Path, base_commit: str | None) -> Callable[[str], bool]:
