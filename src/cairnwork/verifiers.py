@@ -307,7 +307,7 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
         python, "-P", "-m", "pytest", "-q", "-p", "no:cacheprovider", "-c", str(ini),
         f"--rootdir={checkout}", f"--confcutdir={checkout}", "-o", "addopts=",
         *batch.settings.args(plugins), "-p", report_guard.MODULE, *spec.targets,
-        *(("--collect-only",) if spec.collect_only else ()),  # #793: collect_reader.py
+        *spec.flags(),  # --collect-only (#793), --continue-on-collection-errors (#796)
     ]  # fmt: skip
     before = os.lstat(checkout)
     profile, evidence = None, None

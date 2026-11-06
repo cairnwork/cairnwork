@@ -168,11 +168,8 @@ def test_worker_path_says_uncomparable_only_when_the_worker_ran_isolated(
     assert result.reason.startswith(f"{prefix}{code}: "), result.reason
 
 
-# Real runs (sandbox): the module-level import style, the import-inside-the-test style, a failure
-# that only the candidate causes, and tests that already pass on the base.
-
+# Real runs (sandbox): a new module, import in the test, a candidate-only failure, a base pass.
 FIX_DOUBLE = FIX + "def double(a):\n    return 2 * a\n"
-AT_MODULE = "from calc import double\ndef test_double():\n    assert double(2) == 4\n"
 IN_FUNCTION = "def test_double():\n    from calc import double\n    assert double(2) == 4\n"
 
 
@@ -184,12 +181,14 @@ def run_cli(project, state, tests, cand_files):
 
 
 @pytest.mark.sandbox
-def test_a_fix_introduced_import_at_module_level_is_uncomparable(project, state):
-    code, out = run_cli(project, state, AT_MODULE, {"src/calc.py": FIX_DOUBLE})
+def test_a_fix_introduced_module_import_of_a_new_top_level_module_is_uncomparable(project, state):
+    # #796: a name added to an in-repo module has teeth at module level (test_collect_import_teeth)
+    tests = "import newmod\ndef test_double():\n    assert newmod.double(2) == 4\n"
+    code, out = run_cli(project, state, tests, {"src/calc.py": FIX_DOUBLE})
     assert code == 2 and out["status"] == "UNCOMPARABLE" and out["verified"] is False
     assert out["uncomparable"]["code"] == "BASE_COLLECTION_ERROR"
-    assert "tests/test_regression.py" in out["uncomparable"]["detail"]  # B2: the guard's record
-    assert "inside the test function" in out["uncomparable"]["detail"]
+    detail = out["uncomparable"]["detail"]  # B2: the guard's record names the file
+    assert "tests/test_regression.py" in detail and "inside the test function" in detail
     assert out["core_status"] == "" and out["binding"] is None
 
 

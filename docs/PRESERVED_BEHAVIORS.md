@@ -121,3 +121,9 @@ Cairnwork verifier 自己的環境問題（sandbox 擋了 `/usr/bin/git`，xcrun
 一致。兩個缺陷由整合負責人修復中。**教訓：verifier 失敗必須先排除環境因素**（在未修改的 base 上跑
 一次對照），否則會把環境 bug 誤判成 worker 或候選的問題——這也提醒，上面各級防線都假設 verifier
 本身是對的。
+
+## 延後測試的牙齒：「任一 target 失敗」的依賴（#796）
+
+`base_teeth`（`src/cairnwork/base_teeth.py`）在 base 上**任一個 target 失敗且沒有 `fail_kind`** 時就給牙齒（TEETH）。`collect_import.as_failed` 依賴這一點：檔案開頭 `from <repo 內既有模組> import <新名字>` 在 base 上失敗時，把該檔案**所有**新增或改動的 target 都標成失敗，其中沒用到那個名字的測試也一起拿到牙齒。這只在「任一 target 失敗就夠」時安全。若 `base_teeth` 改成逐個測試算牙齒，這一段就會放行沒有牙齒的測試（fail-open）：必須先改 `as_failed`（只標函式主體引用該名字的測試）。`tests/test_collect_import_teeth.py::test_base_teeth_still_grants_teeth_when_any_one_target_fails` 釘住這個行為；它失敗就表示這個依賴被改動了。
+
+同一段的信任邊界：guard 的 `collect_import_errors` 只是**候選版本也影響得到的提示**，不能單獨當證據。repo 程式能自己組出 traceback 最內層是測試檔的 `ImportError`，測試檔也能手動 `raise ImportError`，所以這份紀錄可以被做成「合格」。擋下錯誤候選的是候選版本的驗證：每個 target 都要 collect 且通過，偽造的錯誤在候選上一樣會丟出，結果不是 VERIFIED。兩個案例各有測試（`test_a_forged_import_error_*`）。
