@@ -71,16 +71,36 @@ def test_removing_a_class_skip_changes_each_of_its_tests(project):
     assert untargeted((F,), nodes, (f"{F}::test_regression",)) == (F,)
 
 
-def test_removing_a_base_class_skip_changes_each_inherited_copy(project):
-    """#968: pytest applies a base class's marks to its subclasses, so the copy a subclass inherits
-    changes with the base's skip and must be targeted too."""
-    base = "class TestBase:\n    def test_y(self):\n        assert add(2, 2) == 4\n"
-    sub = "class TestSub(TestBase):\n    pass\n"
-    commit_change(project, {F: "import pytest\n" + REGRESSION + "@pytest.mark.skip\n" + base + sub})
-    nodes = _new_tests(project, {F: "import pytest\n" + REGRESSION + base + sub})
-    assert nodes == {f"{F}::TestBase::test_y", f"{F}::TestSub::test_y"}
-    named = (f"{F}::test_regression", f"{F}::TestBase::test_y")
-    assert untargeted((F,), nodes, named) == (F,)
+Y = "    def test_y(self):\n        assert add(2, 2) == 4\n"
+SKIP = "pytestmark = pytest.mark.skip\n"
+MARKS = {  # (on the base, in the test commit, the tests that change): #968
+    "base-class": ("@pytest.mark.skip\nclass TestBase:\n" + Y, "class TestBase:\n" + Y,
+                   {"TestBase::test_y", "TestSub::test_y"}),
+    "second-base": ("@pytest.mark.skip\nclass Marked:\n    pass\nclass Tests:\n" + Y,
+                    "class Marked:\n    pass\nclass Tests:\n" + Y, {"TestSub::test_y"}),
+    "class-pytestmark": ("class TestBase:\n    " + SKIP + Y, "class TestBase:\n" + Y,
+                         {"TestBase::test_y", "TestSub::test_y"}),
+}  # fmt: skip
+
+
+@pytest.mark.parametrize("shape", sorted(MARKS))
+def test_removing_a_base_class_mark_changes_each_inherited_copy(project, shape):
+    """#968: pytest applies every base class's marks along the MRO, so a copy a subclass
+    inherits changes with any base's skip and must be targeted too."""
+    before, after, changed = MARKS[shape]
+    sub = "class TestSub(Marked, Tests):\n    pass\n" if shape == "second-base" else (
+        "class TestSub(TestBase):\n    pass\n")  # fmt: skip
+    commit_change(project, {F: "import pytest\n" + REGRESSION + before + sub})
+    nodes = _new_tests(project, {F: "import pytest\n" + REGRESSION + after + sub})
+    assert nodes == {f"{F}::{n}" for n in changed}
+    assert untargeted((F,), nodes, (f"{F}::test_regression",)) == (F,)
+
+
+def test_removing_a_module_pytestmark_changes_every_test(project):
+    test_y = "def test_y():\n    assert add(2, 2) == 4\n"
+    commit_change(project, {F: "import pytest\n" + SKIP + REGRESSION + test_y})
+    nodes = _new_tests(project, {F: "import pytest\n" + REGRESSION + test_y})
+    assert nodes == {f"{F}::test_regression", f"{F}::test_y"}
 
 
 def test_an_unchanged_hidden_test_a_local_def_and_literals_refuse_nothing(project):

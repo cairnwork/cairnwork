@@ -20,8 +20,9 @@ tests), so a target naming the file still runs none of them. A ``unittest.TestCa
 its own ``__init__`` is collected by pytest's unittest support but is counted here as well: a test
 commit with one is refused, never wrongly accepted. Bases imported from another module are not
 read; neither are custom ``python_functions``/``python_classes`` settings. A class's decorators are
-part of each of its tests, inherited copies included (#925: removing a class-level skip changes
-them all; #968: pytest applies a base class's marks to its subclasses).
+part of each of its tests, and so are its ``pytestmark`` assignment, every base class's marks
+(pytest applies them along the MRO) and the module's ``pytestmark`` (#925: removing a class-level
+skip changes them all; #968).
 
 ``hidden_tests`` (#925): what may give pytest a test that is not read above, at module level or
 in a class body, inside a block (``if``, ``try``, ``with``, a loop) or not: a ``test*`` function
@@ -53,41 +54,56 @@ def test_functions(tree: ast.Module) -> tuple[dict[str, str], frozenset[str]]:
     """(node id -> ``ast.dump`` of its function, the ``Test*`` classes pytest does not collect);
     a node id is ``name`` or ``Class::name``, without the file."""
     functions: dict[str, str] = {}
-    classes: dict[str, tuple[dict[str, str], bool, bool]] = {}
+    classes: dict[str, _Class] = {}
     uncollected: set[str] = set()
+    module = _marks(tree.body, [])  # #968: a module ``pytestmark`` applies to every test
     for node in tree.body:
         if isinstance(node, _DEFS) and node.name.startswith("test"):
-            functions[node.name] = ast.dump(node)
+            functions[node.name] = module + ast.dump(node)
         elif isinstance(node, ast.ClassDef):
-            methods, blocked, case = _members(node, classes)
-            deco = "".join(ast.dump(d) for d in node.decorator_list)  # #925: a class skip
-            methods = {n: deco + body for n, body in methods.items()}  # #968: inherited too
-            classes[node.name] = (methods, blocked, case)
+            methods, blocked, case, marks = _members(node, classes)
+            classes[node.name] = (methods, blocked, case, marks)
             if node.name.startswith("Test") or case:
-                tests = {n: body for n, body in methods.items() if n.startswith("test")}
+                tests = {n: b for n, b in methods.items() if n.startswith("test")}
+                tests = {n: module + marks + body for n, body in tests.items()}
                 functions.update({f"{node.name}::{n}": body for n, body in tests.items()})
                 if blocked:
                     uncollected.add(node.name)
     return functions, frozenset(uncollected)
 
 
-def _members(
-    node: ast.ClassDef, classes: dict[str, tuple[dict[str, str], bool, bool]]
-) -> tuple[dict[str, str], bool, bool]:
+_Class = tuple[dict[str, str], bool, bool, str]
+
+
+def _members(node: ast.ClassDef, classes: dict[str, _Class]) -> _Class:
     """A class's methods, its own first, then each base's that it does not define; and whether
     it has an ``__init__`` or ``__new__`` (its own or a base's); and whether it is a TestCase
-    subclass (a base named ``*TestCase``, or an earlier class that is one)."""
+    subclass (a base named ``*TestCase``, or an earlier class that is one); and its marks, its
+    own and every base's (pytest applies them along the MRO, #925, #968)."""
     methods = {item.name: ast.dump(item) for item in node.body if isinstance(item, _DEFS)}
     blocked, case = bool(_NOT_COLLECTED & methods.keys()), False
+    marks = _marks(node.body, node.decorator_list)
     for base in node.bases:
         last = base.id if isinstance(base, ast.Name) else getattr(base, "attr", "")
         case = case or last.endswith("TestCase")
         if isinstance(base, ast.Name) and base.id in classes:
-            inherited, base_blocked, base_case = classes[base.id]
-            blocked, case = blocked or base_blocked, case or base_case
+            inherited, base_blocked, base_case, base_marks = classes[base.id]
+            blocked, case, marks = blocked or base_blocked, case or base_case, marks + base_marks
             for name, body in inherited.items():
                 methods.setdefault(name, body)
-    return methods, blocked, case
+    return methods, blocked, case, marks
+
+
+def _marks(body: list[ast.stmt], decorators: list[ast.expr]) -> str:
+    """The marks a scope gives its tests: its decorators and a ``pytestmark`` assignment."""
+    found: list[ast.AST] = list(decorators)
+    for node in body:
+        targets = node.targets if isinstance(node, ast.Assign) else [getattr(node, "target", None)]
+        if isinstance(node, _ASSIGNS) and any(
+            isinstance(t, ast.Name) and t.id == "pytestmark" for t in targets
+        ):
+            found.append(node)
+    return "".join(ast.dump(n) for n in found)
 
 
 def hidden_tests(tree: ast.Module, local: Container[str] | None = None) -> frozenset[str]:
