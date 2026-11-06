@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import ast
 import copy
+import hashlib
 from collections.abc import Container
 from pathlib import Path
 
@@ -63,7 +64,9 @@ def test_functions(tree: ast.Module) -> tuple[dict[str, str], frozenset[str]]:
     reach = _Reach(tree)
     for node in tree.body:
         if isinstance(node, _DEFS) and node.name.startswith("test"):
-            functions[node.name] = reach.module + ast.dump(node) + reach(node.decorator_list)
+            functions[node.name] = _digest(
+                reach.module + ast.dump(node) + reach(node.decorator_list)
+            )
         elif isinstance(node, ast.ClassDef):
             methods, blocked, case, marks = _members(node, classes, reach)
             classes[node.name] = (methods, blocked, case, marks)
@@ -72,7 +75,8 @@ def test_functions(tree: ast.Module) -> tuple[dict[str, str], frozenset[str]]:
                 # a class pytest does not collect gets no marks; its own decorators as before
                 own = "".join(ast.dump(d) for d in node.decorator_list)
                 tests = {
-                    n: (own if blocked else reach.module + marks) + b for n, b in tests.items()
+                    n: _digest((own if blocked else reach.module + marks) + b)
+                    for n, b in tests.items()
                 }
                 functions.update({f"{node.name}::{n}": body for n, body in tests.items()})
                 if blocked:
@@ -108,14 +112,18 @@ def _members(node: ast.ClassDef, classes: dict[str, _Class], reach: _Reach) -> _
 
 
 class _Reach:
-    """#968: ``reach(nodes)`` is the ``ast.dump`` of ``nodes`` and of each module-level import,
-    function or class that binds a name they read, in turn (a class without its ``test*``
-    methods). ``module`` is ``reach`` of every other module-level statement, whole: assignments,
-    blocks and calls (``pytestmark``, ``TestX.pytestmark = ...``, ``setattr``, a flag), so no
-    form of mark or condition set at module level is missed."""
+    """#968: ``reach(nodes)`` is a digest of the ``ast.dump`` of ``nodes`` and of each
+    module-level import, function or class that binds a name they read, in turn (a class without
+    its ``test*`` methods). ``module`` is ``reach`` of every other module-level statement, whole:
+    assignments, blocks and calls (``pytestmark``, ``TestX.pytestmark = ...``, ``setattr``, a
+    flag), so no form of mark or condition set at module level is missed. Each statement is
+    dumped once and each set of names followed once, so a file costs about its size, not its
+    size times its tests (#979 r1)."""
 
     def __init__(self, tree: ast.Module) -> None:
         self._by_name: dict[str, list[ast.stmt]] = {}
+        self._dumps: dict[int, str] = {}
+        self._found: dict[frozenset[str], str] = {}
         rest = []
         for stmt in tree.body:
             names = _binds(stmt)
@@ -126,15 +134,31 @@ class _Reach:
         self.module = self(rest)
 
     def __call__(self, nodes: list) -> str:
+        names = frozenset(n.id for x in nodes for n in ast.walk(x) if isinstance(n, ast.Name))
+        if (found := self._found.get(names)) is None:
+            self._found[names] = found = self._follow(names)
+        return _digest("".join(ast.dump(n) for n in nodes) + found)
+
+    def _follow(self, start: frozenset[str]) -> str:
+        """The digests of the statements that bind ``start``, and in turn, in file order."""
         seen: dict[int, ast.stmt] = {}
-        names = [n.id for x in nodes for n in ast.walk(x) if isinstance(n, ast.Name)]
+        names = list(start)
         while names:
             for stmt in self._by_name.get(names.pop(), ()):
                 if id(stmt) not in seen:
                     seen[id(stmt)] = shell = _shell(stmt)
                     names += [n.id for n in ast.walk(shell) if isinstance(n, ast.Name)]
-        found = sorted(seen.values(), key=lambda s: s.lineno)
-        return "".join(ast.dump(n) for n in [*nodes, *found])
+        found = sorted(seen.items(), key=lambda item: item[1].lineno)
+        return "".join(self._dump(key, stmt) for key, stmt in found)
+
+    def _dump(self, key: int, stmt: ast.stmt) -> str:
+        if (dump := self._dumps.get(key)) is None:
+            self._dumps[key] = dump = _digest(ast.dump(stmt))
+        return dump
+
+
+def _digest(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()
 
 
 def _binds(stmt: ast.stmt) -> set[str]:

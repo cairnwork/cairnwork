@@ -77,8 +77,8 @@ def tests_with_teeth(task, specs, result, ctx: VerifyContext) -> tuple[str, ...]
     named = (t for spec in specs for t in spec.targets)
     if missing := untargeted(without_conftests(paths), targets, named):
         hint = (
-            "name each such file, or each of its new or changed tests, as a verifier target"
-            "（改了模組層或類別本體，請點名整個檔案）"
+            "name each such file, or each of its new or changed tests, as a verifier target; "
+            "改了模組層或類別本體，請點名整個檔案"
         )
         raise TestCommitRejected("DEFERRED_TESTS_NOT_TARGETED", f"{', '.join(missing)}; {hint}")
     # #796: a base run goes on after a collect error (never a collect-only spec): the other files

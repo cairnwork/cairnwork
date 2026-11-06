@@ -7,11 +7,14 @@ but a literal, or adds a star import. Removing a class decorator changes each of
 tests. An unchanged hidden test on the base, a ``test*`` defined inside a function and a literal
 ``test*`` value refuse nothing."""
 
+import ast
+
 import pytest
 from conftest import commit_change
 from test_deferred_tests import REGRESSION, make_test_commit
 from verify_helpers import FIX, candidate, verify
 
+from cairnwork.deferred_nodes import test_functions as read_tests
 from cairnwork.deferred_tests import TestCommitRejected as Rejected
 from cairnwork.deferred_tests import ensure_test_commit, new_tests, untargeted
 
@@ -159,6 +162,15 @@ def test_a_mark_reached_from_outside_the_test_changes_it(project, shape):
     commit_change(project, {F: "import pytest\n" + REGRESSION + before})
     nodes = _new_tests(project, {F: "import pytest\n" + REGRESSION + after})
     assert nodes == {f"{F}::{n}" for n in changed}
+
+
+def test_a_fingerprint_does_not_grow_with_the_file():
+    """#979 r1 (jeter): each test held a full copy of the module's statements, so memory grew as
+    tests times file size. A fingerprint is now a fixed-size digest of digests."""
+    data = "DATA = [" + ",".join(map(str, range(5000))) + "]\n"
+    text = "import pytest\n" + data + FN + "class TestX:\n" + Y
+    functions, _ = read_tests(ast.parse(text))
+    assert {len(v) for v in functions.values()} == {64}
 
 
 def test_removing_a_module_pytestmark_changes_every_test(project):
