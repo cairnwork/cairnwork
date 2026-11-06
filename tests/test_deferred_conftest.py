@@ -183,3 +183,22 @@ def test_a_conftest_list_of_the_wrong_type_is_a_shape_problem_not_an_exception(b
 @pytest.mark.parametrize("bad", [None, 3, [1], [None], [["x"]], "tests/conftest.py"])
 def test_a_test_path_list_of_the_wrong_type_is_a_shape_problem_not_an_exception(bad):
     assert "test_paths" in bx.binding_problem({"test_paths": bad})
+
+
+def test_a_base_test_named_by_the_python_files_rule_lets_the_probe_run(project, tmp_path):
+    """#870 (11/06 re-verification, variant 1): the only base test is named by the base's
+    python_files rule, not by a default name. The probe selects it as P2P does; on main the probe
+    found no base test file and refused TEST_COMMIT_CONFTEST_UNCHECKED."""
+    rule = {"pytest.ini": "[pytest]\npython_files = check_*.py\n"}
+    unit = (
+        "import sys, pathlib\nsys.path.insert(0, str(pathlib.Path(__file__).parents[2] / 'src'))\n"
+    )
+    base = {
+        **rule,
+        "tests/unit/check_calc.py": unit
+        + "from calc import add\ndef test_base_add():\n    assert add(2, 3)\n",
+    }
+    result = conftest_run(project, tmp_path, path="tests/new/conftest.py", regression=PLAIN,
+                          base_files=base, mode="module-dir")  # fmt: skip
+    assert result.status == "COMPLETED", result.reason
+    assert result.p2p["base_ran"] == 1 and result.p2p["targets"] == 1  # check_calc.py ran
