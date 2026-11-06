@@ -169,7 +169,7 @@ class Notary:
             pin = self._core_identity
             if pin is not None and canonical_json(expected) != canonical_json(pin):
                 return IDENTITY_MISMATCH
-        except RecursionError:  # a stored identity or pin nested too deep to compare
+        except (ValueError, RecursionError):  # a stored identity unreadable or nested too deep
             return IDENTITY_MISMATCH
         return ""
 
@@ -305,7 +305,8 @@ class Notary:
         except sqlite3.Error:
             return False
         try:
-            return row is not None and request_matches(json.loads(row[0]), change)
+            stored = None if row is None else json.loads(row[0])
+            return isinstance(stored, dict) and request_matches(stored, change)
         except (ValueError, RecursionError):  # #909: rewritten since _read, now unreadable
             return False
 
@@ -330,6 +331,9 @@ class Notary:
         try:
             binding = None if row[9] is None else json.loads(row[9])
             request, response = json.loads(request_json), json.loads(resp)
+            binding_ok = row[9] is None or isinstance(binding, dict)  # never written as JSON null
+            if not (isinstance(request, dict) and isinstance(response, dict) and binding_ok):
+                raise ValueError("a stored request, response or binding that is not an object")
         except (ValueError, RecursionError):  # #909: a row too deep or malformed to read
             binding, request, response = None, {}, {}  # never verified (_is_verified needs both)
         verified = _is_verified(http_status, status, integrity, response, request, request_hash)
