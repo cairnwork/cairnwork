@@ -69,6 +69,18 @@
 
 照實鎖定的測試：`test:tests/test_hidden_deferred_tests.py::test_a_changed_hidden_test_is_refused_beside_a_visible_one`（`version-block`、`if-block`、`testcase-elsewhere` 等）、`test_verify_refuses_a_hidden_test_a_wrong_fix_would_fail` 與 `test_verify_refuses_a_test_case_imported_from_a_base_helper`（真 Seatbelt）、`test_a_test_case_from_a_module_the_tree_holds_is_hidden`（根目錄 `testing_helpers/` 等）、`test_a_test_case_name_the_test_commit_can_shadow_is_not_trusted`。沒動過的對照：`test_an_unchanged_hidden_test_a_local_def_and_literals_refuse_nothing`。
 
+## 已知取捨：conftest 能載入的測試 commit 檔案一律拒（#924）
+
+conftest 匯入的模組在每個測試之前執行，可以改掉 runner 回報的結果，而 base 的每個結果都不變，差異探測看不出來。所以只要測試 commit 樹裡任何一個 conftest（有改沒改都算）的匯入可能載入測試 commit 新增或改動的檔案，就拒絕（`TEST_COMMIT_CONFTEST_STATIC`，`src/cairnwork/conftest_reach.py`）。在 producer、pipeline judge 和 full 接收端都會跑，接收端查全部 test paths（#952）。
+
+- 比對用名稱：每個模組檔（`.py`，以及 `.so`、`.pyd`、`.pyc`，取第一個點之前當名字）以路徑尾段任意長度建索引，所以不論哪個目錄在 `sys.path` 上都對得到。
+- 壓縮檔（`.zip`、`.egg`、`.whl`、`.pyz`）要先把它自己的路徑放進 `sys.path` 才能從裡面載入，import 寫的名字看不出來。直接寫法會拒：conftest 或根目錄 pytest 設定檔的原文出現那個壓縮檔的檔名。其餘（執行時組出的路徑、經由沒改動的 helper）是已知殘留，追蹤在 #967。不全拒的理由：解壓、打包類 repo 常用壓縮檔當測試資料。
+- 解析不了的未改動檔（例如 `examples/` 下的 Python 2 conftest）不會因此拒整個 repo，改把原文裡每個點號識別字當成匯入。
+
+誤拒的代價（失敗關閉）：測試目錄下的資料檔剛好和某個 conftest 匯入的模組同名（例如 conftest 匯入 `calc`，測試 commit 新增 `tests/data/sample/calc.py`）。沒蓋到的：執行時才組出的模組名；只被 base 測試檔匯入的改動模組（#951）。
+
+照實鎖定的測試：`tests/test_conftest_reach.py`（各種匯入寫法、原生擴充、名稱索引），`tests/test_deferred_conftest.py` 的全流程真 Seatbelt 情境、`test_a_changed_archive_a_conftest_or_the_configuration_names_is_refused`、`test_an_unchanged_conftest_that_does_not_parse_is_read_by_its_names`。
+
 ## 不帶過去的
 
 依 Nexus-new 的缺陷分流，以下判定為死碼、沒有負責人或只是操作 CLI，不列入：RULE-004、RULE-199、RULE-219、RULE-220、RULE-252。

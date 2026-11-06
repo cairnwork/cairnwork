@@ -10,7 +10,14 @@ runs first, at the producer and (full mode) at the receiver:
 * a new node is an import (standard library, ``pytest`` or the repository's own top-level
   packages, no star, no ``pytest_*`` name), a literal assignment to a plain name, or a function
   whose only decorators are the pytest fixture decorator (resolved through the import table; literal
-  arguments, no ``autouse``), never a ``pytest_*``, ``test*`` or dunder name. No classes.
+  arguments, no ``autouse``; literal parameter defaults, annotations that call nothing), never a
+  ``pytest_*``, ``test*`` or dunder name. No classes;
+* no conftest of the test commit's tree, changed or not, has an import that can load a file the
+  test commit adds or changes (conftest_reach.py, #924); this runs even when no conftest changed,
+  at the producer, in the pipeline judge and at a full receiver (#952). An unchanged file that
+  does not parse (a Python 2 sample) is not refused for that: its dotted names count as imports.
+  An archive the test commit changes is refused when a conftest or the root pytest configuration
+  names its file (#967 tracks the rest).
 
 It is hygiene, not the guard: a name imported from the repository or rebound can carry behaviour
 it cannot see, and behaviour that depends on the candidate's code is trusted test author code, like
@@ -21,16 +28,21 @@ any test file. The differential probe (p2p_conftest.py) is what holds. Every ref
 from __future__ import annotations
 
 import ast
+import re
 import sys
 from collections.abc import Iterable
+from functools import partial
 from pathlib import Path, PurePosixPath
 from posixpath import dirname
 
+from cairnwork.conftest_reach import reached_change
 from cairnwork.deferred_overlay import TestCommitRejected
-from cairnwork.gitcmd import GitCommandError, run_git
+from cairnwork.gitcmd import GitCommandError, run_git, run_git_bytes
 
 CONFTEST = "conftest.py"
 CODE = "TEST_COMMIT_CONFTEST_STATIC"
+ARCHIVES = (".zip", ".egg", ".whl", ".pyz")  # importable once on sys.path (#924 r6, #967)
+CONFIGS = ("pytest.ini", ".pytest.ini", "pyproject.toml", "tox.ini", "setup.cfg")
 
 
 def conftest_of(paths: Iterable[str]) -> tuple[str, ...]:
@@ -53,10 +65,9 @@ def governed(conftests: Iterable[str], existing: Iterable[str]) -> tuple[str, ..
 
 def check_conftests(repo: Path, base: str, test_commit: str, paths: Iterable[str]) -> None:
     """Refuse a conftest change the allowlist does not cover; see the module docstring."""
+    paths = tuple(paths)
     names = conftest_of(paths)
-    if not names:
-        return
-    own = _own_packages(repo, base)
+    own = _own_packages(repo, base) if names else frozenset[str]()
     for path in names:
         new = _parse(repo, f"{test_commit}:{path}", path, present=True)
         old = _parse(repo, f"{base}:{path}", path, present=False)
@@ -68,6 +79,66 @@ def check_conftests(repo: Path, base: str, test_commit: str, paths: Iterable[str
             problem = _rebinds(node, table) or _problem(node, own, table)
             if problem:
                 _refuse(path, node, problem)
+    if paths:
+        _check_reach(repo, test_commit, paths)
+
+
+def _check_reach(repo: Path, test_commit: str, paths: tuple[str, ...]) -> None:
+    """#924: no conftest of the test commit's tree, changed by it or not (a base conftest may
+    already import a module the test commit changes), can load a file the test commit changes.
+    Names are matched under any directory, so the verifier's import roots need no reading."""
+    files = _tree_files(repo, test_commit)
+    _check_archives(repo, test_commit, paths, files)
+    read = partial(_read, repo, test_commit)
+    for path in conftest_of(files):
+        changed = frozenset(paths) - {path}
+        if hit := reached_change(path, read(path), changed, files, read):
+            why = f"can load {hit}, which the test commit changes" if hit in changed else hit
+            _refuse(path, None, f"an import that {why}")
+
+
+def _check_archives(repo: Path, commit: str, paths: tuple[str, ...], files: frozenset[str]) -> None:
+    """#924 r6: a module loads from an archive the test commit changes only once the archive's
+    own path is on ``sys.path``, which no import names. The direct forms are refused: a conftest
+    of the tree, or the root pytest configuration, whose text holds the archive's file name. A
+    path built otherwise is a known residual (#967)."""
+    names = {p.rsplit("/", 1)[-1] for p in paths if p.lower().endswith(ARCHIVES)}
+    sources = (*conftest_of(files), *(f for f in CONFIGS if f in files)) if names else ()
+    for path in sources:
+        try:
+            raw = run_git_bytes(repo, "cat-file", "blob", f"{commit}:{path}")
+        except GitCommandError as exc:
+            raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
+        text = raw.decode("utf-8", "surrogateescape")
+        if hit := sorted(n for n in names if n in text):
+            _refuse(path, None, f"names the archive {hit[0]}, which the test commit changes")
+
+
+def _tree_files(repo: Path, commit: str) -> frozenset[str]:
+    """The tree's paths; one that is not UTF-8 is kept undecodable (no import resolves to it)
+    rather than failing the whole check (#924 r4)."""
+    try:
+        listing = run_git_bytes(repo, "ls-tree", "-r", "-z", "--name-only", commit)
+    except GitCommandError as exc:
+        raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
+    return frozenset(listing.decode("utf-8", "surrogateescape").split("\0"))
+
+
+def _read(repo: Path, commit: str, path: str) -> ast.Module:
+    """An unchanged file the walk follows. One that does not parse (Python 2, not UTF-8) cannot be
+    refused for that, as the test author cannot change it (#948 r6): every dotted name in its text
+    counts as an import instead. Read as bytes, so a source encoding declaration is honoured
+    (r7). A changed conftest is parsed strictly by check_conftests."""
+    try:
+        text = run_git_bytes(repo, "cat-file", "blob", f"{commit}:{path}")
+    except GitCommandError as exc:
+        raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
+    try:
+        return ast.parse(text)
+    except (SyntaxError, ValueError, UnicodeError, MemoryError, RecursionError):
+        pass
+    names = sorted(set(re.findall(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", text.decode("latin-1"))))
+    return ast.Module(body=[ast.Import(names=[ast.alias(name=n) for n in names])], type_ignores=[])
 
 
 def _refuse(path: str, node: ast.AST | None, why: str) -> None:
@@ -205,6 +276,20 @@ def _fixture_problem(node: ast.FunctionDef, table: dict[str, str]) -> str:
             return "an autouse or starred fixture argument"
         if not all(_literal(a) for a in (*args, *(k.value for k in keywords))):
             return "a fixture argument that is not a literal"
+    return _signature_problem(node.args, node.returns)
+
+
+def _signature_problem(args: ast.arguments, returns: ast.expr | None) -> str:
+    """#924 r4: defaults and annotations run when the conftest is imported. A default must be a
+    literal; an annotation names a type (no call, walrus or lambda)."""
+    defaults = [*args.defaults, *(d for d in args.kw_defaults if d is not None)]
+    if not all(_literal(d) for d in defaults):
+        return "a parameter default that is not a literal"
+    params = (*args.posonlyargs, *args.args, *args.kwonlyargs, args.vararg, args.kwarg)
+    notes = [p.annotation for p in params if p is not None and p.annotation is not None]
+    runs = (ast.Call, ast.NamedExpr, ast.Lambda)
+    if any(isinstance(n, runs) for note in (*notes, returns) if note for n in ast.walk(note)):
+        return "an annotation that runs code"
     return ""
 
 

@@ -74,6 +74,23 @@ NAMES_MODULE = (  # the verifier names the new test and the module beside the co
     ),
 )
 SHADOW = "import pytest\n\n\n@pytest.fixture\ndef val():\n    return 2\n"
+# #924: a test-commit module that turns a failed base test into a pass when imported; it leaves
+# the base outcomes (all passing) as they are, so the differential probe sees no difference
+RUNNER_PATCH = (
+    "import _pytest.reports as _r\n"
+    "_orig = _r.TestReport.from_item_and_call\n\n\n"
+    "def _f(cls, item, call):\n"
+    "    rep = _orig(item, call)\n"
+    "    if rep.when == 'call' and rep.failed and 'regression' not in item.nodeid:\n"
+    "        rep.outcome, rep.longrepr = 'passed', None\n"
+    "    return rep\n\n\n"
+    "_r.TestReport.from_item_and_call = classmethod(_f)\n\n\n"
+    "def test_helper():\n    pass\n"
+)
+NAMES_HELPER = (
+    ("pytest", ("python3", "-m", "pytest", "-q", "tests/test_regression.py", "tests/colorsys.py")),
+)
+BREAKS_BASE = {"src/calc.py": "def add(a, b):\n    return 0 if (a, b) == (2, 3) else a + b\n"}
 # a test-commit module beside a new conftest, named like a standard module the conftest imports;
 # importing it flips a base test in the same directory
 # #915 (deep audit 02 F1): a base test far from the conftest and from module-dir's selection, and
@@ -240,7 +257,27 @@ SCENARIOS = {  # name: (kwargs of conftest_run, expected status, a code the reas
             "verifiers": NAMES_MODULE,
         },
         "FAILED",
-        "TEST_COMMIT_CONFTEST_CHANGES_BASE",
+        "TEST_COMMIT_CONFTEST_STATIC",  # #924: refused before the probe (it saw CHANGES_BASE)
+    ),
+    "#924: a test-commit module the conftest imports changes the runner, beside a wrong fix": (
+        {
+            "addition": "import colorsys\n" + FIXTURE,
+            "extra_files": {"tests/colorsys.py": RUNNER_PATCH},
+            "verifiers": NAMES_HELPER,
+            "fix": BREAKS_BASE,
+        },
+        "FAILED",
+        "TEST_COMMIT_CONFTEST_STATIC",
+    ),
+    "#924 control: the same wrong fix with no such module fails P2P": (
+        {"fix": BREAKS_BASE},
+        "FAILED",
+        "p2p-whole-suite",
+    ),
+    "#924 narrow: a test-commit module no conftest imports leaves a fixture-only conftest alone": (
+        {"extra_files": {"tests/colorsys.py": RUNNER_PATCH}, "verifiers": NAMES_HELPER},
+        "COMPLETED",
+        "",
     ),
     "two conftests: a fixture-only one and a second that flips a base test": (
         {
