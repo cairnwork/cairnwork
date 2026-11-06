@@ -166,7 +166,8 @@ LIBINFO_NOTE = "user-record lookup withheld: directory search path is not exactl
 
 def _local_directory_only() -> bool:
     """True only if ``dscl /Search -read /`` has one ``SearchPath:`` and one ``CSPSearchPath:``
-    line, each exactly ``/Local/Default``; anything else (or an error, timeout) is False (#527).
+    line, each exactly ``/Local/Default``, and no continuation line; anything else (or an error,
+    timeout) is False (#527).
     Not cached: a host can join a directory between runs."""
     try:
         done = subprocess.run(  # noqa: S603 - fixed argv
@@ -179,9 +180,13 @@ def _local_directory_only() -> bool:
     except (OSError, subprocess.SubprocessError):
         return False
     lines = done.stdout.splitlines()
-    return done.returncode == 0 and all(
-        [ln[len(k) :].strip() for ln in lines if ln.startswith(k)] == ["/Local/Default"]
-        for k in ("SearchPath:", "CSPSearchPath:")
+    return (
+        done.returncode == 0
+        and not any(ln[:1].isspace() for ln in lines)
+        and all(
+            [ln[len(k) :].strip() for ln in lines if ln.startswith(k)] == ["/Local/Default"]
+            for k in ("SearchPath:", "CSPSearchPath:")
+        )
     )
 
 

@@ -167,8 +167,8 @@ def test_sandbox_package_has_its_own_size_cap(tmp_path, monkeypatch):
     spec.loader.exec_module(module)
     package = tmp_path / "src" / "cairnwork_sandbox"
     package.mkdir(parents=True)
-    for i in range(4):
-        (package / f"m{i}.py").write_text("x = 1\n" * 301, encoding="utf-8")
+    for i in range(5):
+        (package / f"m{i}.py").write_text("x = 1\n" * 251, encoding="utf-8")
     monkeypatch.setattr(module, "SANDBOX", package)
     monkeypatch.setattr(module, "SCANNED", [tmp_path / "src"])
-    assert any("cairnwork_sandbox total 1204" in p for p in module.check(tmp_path))
+    assert any("cairnwork_sandbox total 1255" in p for p in module.check(tmp_path))

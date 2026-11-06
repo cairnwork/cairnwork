@@ -20,8 +20,11 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
   `getpass.getuser()` still gives the pinned `cairnwork`. No file contents, no write, no network
   (DNS still fails). Guard: the rule is added only when `dscl /Search -read /` shows exactly
   `/Local/Default` for both `SearchPath:` and `CSPSearchPath:` (read at every profile build, 2 s
-  timeout); any other output, error or timeout withholds it (fail closed) and a `Policy.notes`
-  entry says so. `.membership` and `.api` stay denied.
+  timeout; a continuation line counts as other output); any other output, error or timeout
+  withholds it (fail closed), and in a verifier run a `Policy.notes` entry says so (the blackbox
+  run does not keep its notes). Read per profile build, so the base and candidate runs of one
+  attempt could differ if the host joins a directory in between. `.membership` and `.api` stay
+  denied (pinned in the sandboxed test).
   Also readable (#802): the time zone data (`/private/var/db/timezone`, where `/usr/share/zoneinfo`
   and `/etc/localtime` point; before, `zoneinfo` raised and `TZ=...; tzset()` silently gave UTC)
   and `/private/etc/hosts` (so `localhost` resolves; no other name does). A run's `USER` and

@@ -11,6 +11,7 @@ from cairnwork_sandbox import seatbelt
 
 mac_only = pytest.mark.skipif(sys.platform != "darwin", reason="needs macOS sandbox-exec")
 LOCAL = "SearchPath: /Local/Default\nCSPSearchPath: /Local/Default\n"
+RULE = '(allow mach-lookup (global-name "com.apple.system.opendirectoryd.libinfo"))'  # pinned
 
 
 def _runner(monkeypatch, out=None, code=0, error=None):
@@ -31,6 +32,19 @@ def _runner(monkeypatch, out=None, code=0, error=None):
         ("SearchPath: /Local/Default\nCSPSearchPath: /Active Directory/CORP\n", 0, None, False),
         ("SearchPath: /Local/Default\n", 0, None, False),
         (LOCAL + "SearchPath: /Local/Default\n", 0, None, False),
+        (
+            "SearchPath:\n /Local/Default\n /Active Directory/CORP\n"
+            + "CSPSearchPath: /Local/Default\n",
+            0,
+            None,
+            False,
+        ),  # dscl's form for values with spaces
+        (
+            "SearchPath: /Local/Default\n /Active Directory/CORP\nCSPSearchPath: /Local/Default\n",
+            0,
+            None,
+            False,
+        ),  # a continuation line after an exact first value
         (LOCAL, 1, None, False),
         (None, 0, subprocess.TimeoutExpired("dscl", 2), False),
         (None, 0, OSError("no dscl"), False),
@@ -46,7 +60,8 @@ def test_local_directory_only(monkeypatch, out, code, error, want):
 def test_the_rule_is_in_the_profile_only_when_the_guard_says_so(monkeypatch, allow_ipc, local):
     monkeypatch.setattr(seatbelt, "_local_directory_only", lambda: local)
     profile = seatbelt.build_profile((), (), home=Path("/nonexistent-home"), allow_ipc=allow_ipc)
-    assert (seatbelt.LIBINFO_RULE in profile.text) is local
+    assert (RULE in profile.text) is local  # the literal: no wider rule passes (review r1)
+    assert profile.text.count("mach-lookup") == int(local)
     assert (seatbelt.LIBINFO_NOTE in profile.notes) is (not local)
     if local:  # before the network deny, which comes last of the allow rules
         assert profile.text.index(seatbelt.LIBINFO_RULE) < profile.text.index("(deny network*)")
@@ -57,11 +72,19 @@ def test_the_rule_is_in_the_profile_only_when_the_guard_says_so(monkeypatch, all
 def test_the_user_record_resolves_but_dns_stays_closed(repo, tmp_path, monkeypatch):
     monkeypatch.setattr(seatbelt, "_local_directory_only", lambda: True)
     code = (
-        "import os, pwd, socket\n"
+        "import ctypes, os, pwd, socket\n"
         "import pytest\n"
+        "def look_up(name):\n"
+        "    lib = ctypes.CDLL('/usr/lib/libSystem.B.dylib')\n"
+        "    port = ctypes.c_uint(0)\n"
+        "    boot = ctypes.c_uint.in_dll(lib, 'bootstrap_port')\n"
+        "    return lib.bootstrap_look_up(boot, name.encode(), ctypes.byref(port))\n"
         "def test_lookup():\n"
         "    assert pwd.getpwuid(os.getuid()).pw_dir\n"
         "    with pytest.raises(socket.gaierror):\n"
         "        socket.getaddrinfo('example.com', 80)\n"
+        "    assert look_up('com.apple.system.opendirectoryd.libinfo') == 0\n"
+        "    for other in ('api', 'membership'):  # only libinfo is opened\n"
+        "        assert look_up('com.apple.system.opendirectoryd.' + other) != 0\n"
     )
     _passed(_verify(repo, tmp_path, code))
