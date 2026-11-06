@@ -21,8 +21,9 @@ its own ``__init__`` is collected by pytest's unittest support but is counted he
 commit with one is refused, never wrongly accepted. Bases imported from another module are not
 read; neither are custom ``python_functions``/``python_classes`` settings. A class's decorators are
 part of each of its tests, and so are its ``pytestmark`` assignment, every base class's marks
-(pytest applies them along the MRO) and the module's ``pytestmark`` (#925: removing a class-level
-skip changes them all; #968).
+(pytest applies them along the MRO), the module's ``pytestmark`` (also one set on a class from
+outside it), and the module-level statements any of these read, a decorator alias or a ``skipif``
+condition (#925: removing a class-level skip changes them all; #968).
 
 ``hidden_tests`` (#925): what may give pytest a test that is not read above, at module level or
 in a class body, inside a block (``if``, ``try``, ``with``, a loop) or not: a ``test*`` function
@@ -56,12 +57,13 @@ def test_functions(tree: ast.Module) -> tuple[dict[str, str], frozenset[str]]:
     functions: dict[str, str] = {}
     classes: dict[str, _Class] = {}
     uncollected: set[str] = set()
-    module = _marks(tree.body, [])  # #968: a module ``pytestmark`` applies to every test
+    close = _Closure(tree)
+    module = close(["pytestmark"])  # #968: a module ``pytestmark`` applies to every test
     for node in tree.body:
         if isinstance(node, _DEFS) and node.name.startswith("test"):
-            functions[node.name] = module + ast.dump(node)
+            functions[node.name] = module + ast.dump(node) + close(_names(node.decorator_list))
         elif isinstance(node, ast.ClassDef):
-            methods, blocked, case, marks = _members(node, classes)
+            methods, blocked, case, marks = _members(node, classes, close)
             classes[node.name] = (methods, blocked, case, marks)
             if node.name.startswith("Test") or case:
                 tests = {n: b for n, b in methods.items() if n.startswith("test")}
@@ -75,14 +77,18 @@ def test_functions(tree: ast.Module) -> tuple[dict[str, str], frozenset[str]]:
 _Class = tuple[dict[str, str], bool, bool, str]
 
 
-def _members(node: ast.ClassDef, classes: dict[str, _Class]) -> _Class:
+def _members(node: ast.ClassDef, classes: dict[str, _Class], close: _Closure) -> _Class:
     """A class's methods, its own first, then each base's that it does not define; and whether
     it has an ``__init__`` or ``__new__`` (its own or a base's); and whether it is a TestCase
     subclass (a base named ``*TestCase``, or an earlier class that is one); and its marks, its
     own and every base's (pytest applies them along the MRO, #925, #968)."""
-    methods = {item.name: ast.dump(item) for item in node.body if isinstance(item, _DEFS)}
+    methods = {
+        item.name: ast.dump(item) + close(_names(item.decorator_list))
+        for item in node.body
+        if isinstance(item, _DEFS)
+    }
     blocked, case = bool(_NOT_COLLECTED & methods.keys()), False
-    marks = _marks(node.body, node.decorator_list)
+    marks = _marks(node.body, node.decorator_list, close)
     for base in node.bases:
         last = base.id if isinstance(base, ast.Name) else getattr(base, "attr", "")
         case = case or last.endswith("TestCase")
@@ -94,8 +100,9 @@ def _members(node: ast.ClassDef, classes: dict[str, _Class]) -> _Class:
     return methods, blocked, case, marks
 
 
-def _marks(body: list[ast.stmt], decorators: list[ast.expr]) -> str:
-    """The marks a scope gives its tests: its decorators and a ``pytestmark`` assignment."""
+def _marks(body: list[ast.stmt], decorators: list[ast.expr], close: _Closure) -> str:
+    """The marks a class gives its tests: its decorators and a ``pytestmark`` assignment, with
+    the module-level statements they read (``close``)."""
     found: list[ast.AST] = list(decorators)
     for node in body:
         targets = node.targets if isinstance(node, ast.Assign) else [getattr(node, "target", None)]
@@ -103,7 +110,49 @@ def _marks(body: list[ast.stmt], decorators: list[ast.expr]) -> str:
             isinstance(t, ast.Name) and t.id == "pytestmark" for t in targets
         ):
             found.append(node)
-    return "".join(ast.dump(n) for n in found)
+    return "".join(ast.dump(n) for n in found) + close(_names(found))
+
+
+class _Closure:
+    """#968 r3: ``close(names)`` is the ``ast.dump`` of each module-level statement that binds one
+    of ``names``, and of those binding the names it reads in turn: a decorator alias, a ``skipif``
+    condition, a helper. A statement that sets an attribute ``pytestmark`` (``TestX.pytestmark =
+    ...``) or holds the text ``"pytestmark"`` (``setattr``) binds ``pytestmark``."""
+
+    def __init__(self, tree: ast.Module) -> None:
+        self._by_name: dict[str, list[ast.stmt]] = {}
+        for stmt in tree.body:
+            for name in _bound(stmt):
+                self._by_name.setdefault(name, []).append(stmt)
+
+    def __call__(self, names: list[str]) -> str:
+        seen: dict[int, ast.stmt] = {}
+        while names:
+            for stmt in self._by_name.get(names.pop(), ()):
+                if id(stmt) not in seen:
+                    seen[id(stmt)] = stmt
+                    names += _names([stmt])
+        return "".join(ast.dump(s) for s in sorted(seen.values(), key=lambda s: s.lineno))
+
+
+def _names(nodes: list) -> list[str]:
+    return [n.id for x in nodes for n in ast.walk(x) if isinstance(n, ast.Name)]
+
+
+def _bound(stmt: ast.stmt) -> set[str]:
+    if isinstance(stmt, _SCOPES):
+        return {stmt.name}
+    out: set[str] = set()
+    for node in ast.walk(stmt):
+        if isinstance(node, (ast.Name, ast.Attribute)) and isinstance(node.ctx, ast.Store):
+            out.add(node.id if isinstance(node, ast.Name) else node.attr)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            out |= {(alias.asname or alias.name).split(".")[0] for alias in node.names}
+        elif isinstance(node, _SCOPES):
+            out.add(node.name)
+        elif isinstance(node, ast.Constant) and node.value == "pytestmark":
+            out.add("pytestmark")
+    return out
 
 
 def hidden_tests(tree: ast.Module, local: Container[str] | None = None) -> frozenset[str]:

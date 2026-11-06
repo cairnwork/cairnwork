@@ -96,6 +96,36 @@ def test_removing_a_base_class_mark_changes_each_inherited_copy(project, shape):
     assert untargeted((F,), nodes, (f"{F}::test_regression",)) == (F,)
 
 
+FN = "def test_y():\n    assert add(2, 2) == 4\n"
+CLS = "class TestX:\n" + Y
+HELPED = "COND = on()\n@pytest.mark.skipif(COND, reason='r')\n" + FN
+REACH = {  # (on the base, in the test commit, the tests that change): #968 r3, Codex r2
+    "alias": ("s = pytest.mark.skip\n@s\n" + FN, "s = pytest.mark.xfail\n@s\n" + FN, {"test_y"}),
+    "skipif-condition": ("COND = True\n@pytest.mark.skipif(COND, reason='r')\n" + FN,
+                         "COND = False\n@pytest.mark.skipif(COND, reason='r')\n" + FN, {"test_y"}),
+    "method-alias": ("s = pytest.mark.skip\nclass TestX:\n    @s\n" + Y,
+                     "s = pytest.mark.xfail\nclass TestX:\n    @s\n" + Y, {"TestX::test_y"}),
+    "attribute-pytestmark": (CLS + "TestX.pytestmark = pytest.mark.skip\n", CLS,
+                             {"TestX::test_y", "test_regression"}),
+    "setattr-pytestmark": (CLS + "setattr(TestX, 'pytestmark', pytest.mark.skip)\n", CLS,
+                           {"TestX::test_y", "test_regression"}),
+    "through-a-helper": ("def on():\n    return True\n" + HELPED,
+                         "def on():\n    return False\n" + HELPED, {"test_y"}),
+    "unrelated": ("HELPER = 1\n" + FN, "HELPER = 2\n" + FN + FN.replace("test_y", "test_new"),
+                  {"test_new"}),  # a statement no mark reads changes no test
+}  # fmt: skip
+
+
+@pytest.mark.parametrize("shape", sorted(REACH))
+def test_a_mark_reached_from_outside_the_test_changes_it(project, shape):
+    """#968 r3: a mark a test gets from a module-level statement (an alias, a condition, a
+    ``pytestmark`` set from outside the class) is part of the test."""
+    before, after, changed = REACH[shape]
+    commit_change(project, {F: "import pytest\n" + REGRESSION + before})
+    nodes = _new_tests(project, {F: "import pytest\n" + REGRESSION + after})
+    assert nodes == {f"{F}::{n}" for n in changed}
+
+
 def test_removing_a_module_pytestmark_changes_every_test(project):
     test_y = "def test_y():\n    assert add(2, 2) == 4\n"
     commit_change(project, {F: "import pytest\n" + SKIP + REGRESSION + test_y})
