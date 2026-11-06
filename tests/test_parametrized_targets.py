@@ -96,7 +96,9 @@ def test_p2p_base_tests_stay_plain_files(repo):
                          "tests/test_[b].py": "def test_b():\n    pass\n"})  # fmt: skip
     task = SimpleNamespace(repo=repo, base_commit=git(repo, "rev-parse", "HEAD"),
                            test_roots=("tests",))  # fmt: skip
-    assert p2p._base_tests(task, frozenset()) == ("tests/test_a.py",)
+    with pytest.raises(p2p.P2PRejected) as got:  # #930: never a target, never dropped silently
+        p2p._base_tests(task, frozenset())
+    assert got.value.code == "P2P_BASE_UNTARGETABLE" and "tests/test_[b].py" in str(got.value)
 
 
 CASES = (

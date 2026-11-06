@@ -62,6 +62,7 @@ def _run(spec, run_root, run_id, rc=1, outcomes=None, recorded=True, **flags):
         recorded=recorded, report_too_big=flags.get("report_too_big", False),
         collect_errors=flags.get("collect_errors", ()), survivors=flags.get("survivors", 0),
         forged=flags.get("forged", ()), log_too_big=flags.get("log_too_big", False),
+        collection_finished=recorded, collected=tuple(outcomes),  # #929: a complete run
     )  # fmt: skip
 
 

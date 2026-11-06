@@ -209,3 +209,14 @@ def _digest(ids) -> str:
 
 def _named(ids: list[str]) -> str:
     return f"{len(ids)} base test(s): " + ", ".join(ids[:5]) + (" ..." if len(ids) > 5 else "")
+
+
+def untargetable(paths, target) -> list[str]:
+    """#930: base test files no verifier target can name (a path part outside the target grammar,
+    such as a dot or a non-ASCII letter) that pytest still collects: none of their directories is
+    one pytest's default ``norecursedirs`` skips (a leading dot, ``*.egg``)."""
+    return [
+        p for p in paths
+        if not target.fullmatch(p)
+        and not any(d.startswith(".") or d.endswith(".egg") for d in p.split("/")[:-1])
+    ]  # fmt: skip

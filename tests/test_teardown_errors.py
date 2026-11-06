@@ -103,7 +103,8 @@ def probe_run(tmp_path, rc, outcomes, teardown=()):
     (tmp_path / "log").mkdir(exist_ok=True)
     seen = VerifierObservation(spec.verifier_id, "x/verifier.log", "sha256:0", rc == 0)
     return VerifierRun(spec, rc, False, (), tmp_path / "log" / "verifier.log", seen, outcomes,
-                       recorded=True, teardown_errors=teardown)  # fmt: skip
+                       recorded=True, teardown_errors=teardown, collection_finished=True,
+                       collected=tuple(outcomes))  # fmt: skip
 
 
 def probe(monkeypatch, tmp_path, run_):
