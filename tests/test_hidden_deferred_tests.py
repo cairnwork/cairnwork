@@ -173,6 +173,10 @@ REACH = {  # (on the base, in the test commit, the tests that change): #968 r3, 
              "def pytest_runtest_setup(item):\n    pass\n" + FN, ALL),
     "fixture-argument": (FX.format("pytest.skip('r')") + "def test_y(fx):\n    pass\n",
                          FX.format("pass") + "def test_y(fx):\n    pass\n", {"test_y"}),
+    "method-fixture-argument": (FX.format("pytest.skip('r')") + "class TestX:\n"
+                                "    def test_y(self, fx):\n        pass\n",
+                                FX.format("pass") + "class TestX:\n"
+                                "    def test_y(self, fx):\n        pass\n", {"TestX::test_y"}),
     "usefixtures": (FX.format("pytest.skip('r')") + "@pytest.mark.usefixtures('fx')\n" + FN,
                     FX.format("pass") + "@pytest.mark.usefixtures('fx')\n" + FN, {"test_y"}),
     "module-constant": ("DATA = 1\n" + FN, "DATA = 2\n" + FN, ALL),  # counted whole: the cost
