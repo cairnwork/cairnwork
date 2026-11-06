@@ -26,7 +26,7 @@ def write_bundle(path: Path, envelope: Mapping[str, Any]) -> None:
     p = Path(path)
     try:
         data = canonical_json(envelope).encode("utf-8")
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, RecursionError) as exc:
         raise BundleError(f"cannot encode envelope: {exc}", code="BUNDLE_MALFORMED") from exc
 
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)

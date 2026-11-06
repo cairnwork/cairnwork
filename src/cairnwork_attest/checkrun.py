@@ -302,7 +302,7 @@ def post_check_run(
     try:
         created = json.loads(resp)
         run_id, html_url = created.get("id"), created.get("html_url")
-    except (ValueError, AttributeError):
+    except (ValueError, AttributeError, RecursionError):
         run_id = html_url = None
     run_id = run_id if isinstance(run_id, int) else None
     html_url = _clean(html_url) if isinstance(html_url, str) else None
