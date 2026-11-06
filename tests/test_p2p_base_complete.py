@@ -64,3 +64,14 @@ def test_a_test_file_pytest_skips_is_never_named_to_the_probe(project, tmp_path,
     result = run(project, tmp_path, {"src/calc.py": FIX_BREAKS_NEG}, mode="whole-suite")
     assert result.status == "FAILED" and not result.verified, result.reason
     assert result.p2p["degraded"] == "" and result.p2p["applied"] == "whole-suite"
+
+
+def test_a_hidden_directory_the_base_does_collect_is_not_dropped_silently(project, tmp_path):
+    """#930 (Codex r2): the base's own norecursedirs (here none) replaces pytest's default, so
+    pytest collects tests/.cache/test_far.py, the only base test of neg(): never dropped."""
+    extra = {"pytest.ini": "[pytest]\nnorecursedirs =\n", "tests/test_sibling.py": ADD,
+             "tests/.cache/test_far.py": SIBLING}  # fmt: skip
+    result = run(project, tmp_path, {"src/calc.py": FIX_BREAKS_NEG}, mode="whole-suite",
+                 extra=extra)  # fmt: skip
+    assert result.status == "FAILED" and not result.verified, result.reason
+    assert result.reason.startswith("UNCOMPARABLE: P2P_BASE_UNTARGETABLE: "), result.reason

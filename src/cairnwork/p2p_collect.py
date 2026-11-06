@@ -24,9 +24,12 @@ wrong acceptance). The removed tests join ``changed``: both are left to the auth
 from __future__ import annotations
 
 import ast
+import fnmatch
 import hashlib
 import re
+import shlex
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -36,6 +39,7 @@ from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRej
 from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.p2p_nodes import changed_tests, module_changed
 from cairnwork.p2p_selection import MODULE_DIR_CAP
+from cairnwork.pytest_config import PytestConfigError, _render, base_settings
 from cairnwork.verifier_spec import VerifierSpec
 from cairnwork.verifiers import run_verifiers
 
@@ -211,12 +215,38 @@ def _named(ids: list[str]) -> str:
     return f"{len(ids)} base test(s): " + ", ".join(ids[:5]) + (" ..." if len(ids) > 5 else "")
 
 
-def untargetable(paths, target) -> list[str]:
+def untargetable(task, paths, target) -> list[str]:
     """#930: base test files no verifier target can name (a path part outside the target grammar,
-    such as a dot or a non-ASCII letter) that pytest still collects: none of their directories is
-    one pytest's default ``norecursedirs`` skips (a leading dot, ``*.egg``)."""
-    return [
-        p for p in paths
-        if not target.fullmatch(p)
-        and not any(d.startswith(".") or d.endswith(".egg") for d in p.split("/")[:-1])
-    ]  # fmt: skip
+    such as a dot or a non-ASCII letter) that pytest still collects: none of their directories
+    below the test root is one the base's ``norecursedirs`` skips (skipped_dir)."""
+    roots, skipped = task.test_roots, skipped_dir(task.repo, task.base_commit)
+
+    def below(path: str) -> list[str]:
+        root = max((r for r in roots if path.startswith(f"{r}/")), key=len, default="")
+        return path[len(root) :].strip("/").split("/")[:-1]
+
+    return [p for p in paths if not target.fullmatch(p) and not any(map(skipped, below(p)))]
+
+
+# pytest's default norecursedirs (9.x), used when the base sets none
+DEFAULT_NORECURSEDIRS = ("*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv",
+                         "{arch}")  # fmt: skip
+
+
+def skipped_dir(repo, base_commit) -> Callable[[str], bool]:
+    """Whether pytest's recursion skips a directory of this name, by the base's ``norecursedirs``
+    (its own patterns replace the default, as in pytest). A pattern with ``/`` matches whole
+    paths: then no name counts as skipped, so such files are refused, never dropped (#930)."""
+    value = dict(base_settings(repo, base_commit).values).get("norecursedirs")
+    if value is None:
+        patterns: tuple[str, ...] = DEFAULT_NORECURSEDIRS
+    elif isinstance(value, list):
+        patterns = tuple(str(item) for item in value)
+    else:
+        try:
+            patterns = tuple(shlex.split(_render(value) or ""))
+        except ValueError as exc:
+            raise PytestConfigError("norecursedirs at the base cannot be split") from exc
+    if any("/" in pattern for pattern in patterns):
+        return lambda name: False
+    return lambda name: any(fnmatch.fnmatch(name, pattern) for pattern in patterns)

@@ -102,6 +102,42 @@ def test_p2p_base_tests_stay_plain_files(repo):
     assert "tests/test_[b].py" in got.value.comparison.detail
 
 
+@pytest.mark.parametrize(
+    ("config", "refused"),
+    [
+        ({}, False),  # pytest's default skips ".x"
+        ({"pytest.ini": "[pytest]\nnorecursedirs =\n"}, True),  # none skipped: collected
+        ({"pytest.ini": "[pytest]\nnorecursedirs = build\n"}, True),  # replaces the default
+        ({"pytest.ini": "[pytest]\nnorecursedirs = .x\n"}, False),
+        ({"pytest.toml": '[pytest]\nnorecursedirs = [".*"]\n'}, False),
+        ({"pytest.ini": "[pytest]\nnorecursedirs = tests/.x\n"}, True),  # a path: never exempt
+        ({"pytest.ini": "[pytest]\nnorecursedirs = tests\n"}, True),  # the root is not checked
+    ],
+)
+def test_p2p_base_tests_follow_the_bases_norecursedirs(repo, config, refused):
+    """#930 (Codex r2): a file under a directory the base's pytest would skip is left out; one
+    it would collect, and no target can name, is UNCOMPARABLE, never dropped silently."""
+    commit_change(repo, {"tests/test_a.py": "def test_a():\n    pass\n",
+                         "tests/.x/test_b.py": "def test_b():\n    pass\n", **config})  # fmt: skip
+    task = SimpleNamespace(repo=repo, base_commit=git(repo, "rev-parse", "HEAD"),
+                           test_roots=("tests",))  # fmt: skip
+    if not refused:
+        assert p2p._base_tests(task, frozenset()) == ("tests/test_a.py",)
+        return
+    with pytest.raises(p2p.BaseUncomparable) as got:
+        p2p._base_tests(task, frozenset())
+    assert got.value.comparison.code == "P2P_BASE_UNTARGETABLE"
+
+
+def test_p2p_an_unsplittable_norecursedirs_is_an_unreadable_base(repo):
+    commit_change(repo, {"tests/test_a.py": "def test_a():\n    pass\n",
+                         "pytest.ini": "[pytest]\nnorecursedirs = 'open\n"})  # fmt: skip
+    task = SimpleNamespace(repo=repo, base_commit=git(repo, "rev-parse", "HEAD"),
+                           test_roots=("tests",))  # fmt: skip
+    with pytest.raises(p2p.P2PRejected, match="P2P_BASE_UNREADABLE"):
+        p2p._base_tests(task, frozenset())
+
+
 CASES = (
     "import pytest\n@pytest.mark.parametrize('v', ['a b/c.d', 'other'])\n"
     "def test_y(v):\n    assert v == 'other'\n"

@@ -99,10 +99,11 @@ def _base_tests(task, exclude: frozenset[str]) -> tuple[str, ...]:
         target, is_test = test_target(task.test_roots), test_file_rule(task.repo, task.base_commit)
         raw = run_git(task.repo, "ls-tree", "-r", "-z", "--name-only", task.base_commit,
                       "--", *task.test_roots)  # fmt: skip
+        paths = [p for p in raw.split("\0") if p and p not in exclude and is_test(p)]
+        odd = untargetable(task, paths, target)  # reads the base's norecursedirs
     except (GitCommandError, PytestConfigError) as exc:
         raise P2PRejected("P2P_BASE_UNREADABLE", str(exc)) from exc
-    paths = [p for p in raw.split("\0") if p and p not in exclude and is_test(p)]
-    if odd := untargetable(paths, target):  # #930: never dropped silently (fail closed)
+    if odd:  # #930: never dropped silently (fail closed)
         detail = f"{len(odd)} base test file(s) no target can name, e.g. {_clean(odd[0])}"
         raise BaseUncomparable(Comparison("UNCOMPARABLE", "P2P_BASE_UNTARGETABLE", detail))
     return tuple(sorted(p for p in paths if target.fullmatch(p)))  # pytest skips the rest (#930)
