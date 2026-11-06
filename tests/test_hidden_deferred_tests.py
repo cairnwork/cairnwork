@@ -39,8 +39,8 @@ HIDDEN = {
     "global-in-function": "def _setup():\n    global test_b\n    test_b = make_test()\n_setup()\n",
     "global-in-class": "class Holder:\n    global test_b\n    def test_b():\n" + WRONG,
     # a TestCase the test commit's own tree may define can hold tests (Test* is a pytest name)
-    "testcase-local": "from conftest import TestCase\n",
-    "testcase-renamed": "from conftest import Base as TestCase\n",
+    "testcase-local": "from test_regression import TestCase\n",  # the file the commit changes
+    "testcase-renamed": "from test_regression import Base as TestCase\n",
     "testcase-relative": "from .unittest import TestCase\n",
     "version-block": "import sys\nif sys.version_info >= (3, 8):\n    def test_b():\n" + WRONG,
 }
@@ -111,4 +111,29 @@ def test_a_test_case_name_the_test_commit_can_shadow_is_not_trusted(project, sha
     case = "class TestCase:\n    def test_b(self):\n" + WRONG
     with pytest.raises(Rejected) as err:
         _new_tests(project, {F: REGRESSION + "from unittest import TestCase\n", shadow: case})
+    assert err.value.code == "DEFERRED_TESTS_UNREADABLE"
+
+
+CASES = "class TestCase:\n    def test_b(self):\n" + WRONG
+PLAIN_BASE = "class TestCase:\n    def setUp(self):\n        pass\n"
+
+
+@pytest.mark.parametrize(
+    ("base_files", "module", "refused"),
+    [  # the base's own module, unchanged by the test commit, anywhere in the tree
+        ({"testing_helpers.py": CASES}, "testing_helpers", True),  # cw#964 Codex r1: root level
+        ({"lib/cases/__init__.py": "from .impl import TestCase\n", "lib/cases/impl.py": CASES},
+         "cases", True),  # re-exported from a file with tests
+        ({"fw/test/__init__.py": "from fw.test.base import TestCase\n",
+          "fw/test/base.py": PLAIN_BASE}, "fw.test", False),  # a framework base without tests
+    ],
+)  # fmt: skip
+def test_a_test_case_from_a_base_module_with_tests_is_hidden(project, base_files, module, refused):
+    commit_change(project, base_files)
+    files = {F: REGRESSION + f"from {module} import TestCase\n"}
+    if not refused:
+        assert _new_tests(project, files) == {f"{F}::test_regression"}
+        return
+    with pytest.raises(Rejected) as err:
+        _new_tests(project, files)
     assert err.value.code == "DEFERRED_TESTS_UNREADABLE"

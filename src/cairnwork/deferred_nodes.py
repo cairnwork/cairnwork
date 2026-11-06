@@ -26,17 +26,18 @@ part of each of its tests (#925: removing a class-level skip changes them all).
 in a class body, inside a block (``if``, ``try``, ``with``, a loop) or not: a ``test*`` function
 or ``Test*`` class in a block or nested in a class, and a ``test*``/``Test*`` name bound another
 way (assignment, walrus, loop, ``with`` or ``match`` target, ``from x import test_y``, a
-``TestCase`` imported relatively or under a name in ``local``: the test commit's own files may
-hold tests), unless the value is a literal, a star import, and a function or class that declares a
-``test*`` name ``global``. new_tests refuses a test commit
-that changes one. Names set at run time (``setattr``, ``globals()``) are not seen.
+``TestCase`` imported relatively or from a module the test commit's tree may give tests, see
+``TestCaseSources``), unless the value is a literal, a star import, and a function or class that
+declares a ``test*`` name ``global``. new_tests refuses a test commit that changes one. Names set
+at run time (``setattr``, ``globals()``) are not seen.
 """
 
 from __future__ import annotations
 
 import ast
-from collections.abc import Iterable
+from collections.abc import Container, Iterable
 from pathlib import Path
+from posixpath import dirname
 
 from cairnwork.deferred_overlay import TestCommitRejected
 from cairnwork.gitcmd import GitCommandError, run_git_bytes
@@ -87,13 +88,13 @@ def _members(
     return methods, blocked, case
 
 
-def hidden_tests(tree: ast.Module, local: frozenset[str] | None = None) -> frozenset[str]:
+def hidden_tests(tree: ast.Module, local: Container[str] | None = None) -> frozenset[str]:
     """#925: ``ast.dump`` of each statement that may give pytest a test test_functions does not read
     (see the module docstring), at module level or in a class body, in a block or not; not inside
     a function, whose local names pytest never collects, unless it declares a ``test*`` name
     ``global``: then the whole function or class counts, as it may bind a module-level test.
-    ``local``: the module names the test commit's own top directories hold (``local_names``);
-    ``None`` trusts no imported ``TestCase``."""
+    ``local``: the modules the test commit's tree may give a ``TestCase`` with tests from
+    (``TestCaseSources``); ``None`` trusts no imported ``TestCase``."""
     found: set[str] = set()
     scan = [node for node in tree.body if not isinstance(node, (*_DEFS, ast.ClassDef))]
     for node in tree.body:
@@ -127,12 +128,12 @@ def _hidden(node: ast.AST, found: set[str], stmt: ast.AST | None, local) -> None
             _hidden(child, found, here, local)
 
 
-def _binds_test(node: ast.AST, local: frozenset[str] | None) -> bool:
+def _binds_test(node: ast.AST, local: Container[str] | None) -> bool:
     """A name binding pytest's default rules could collect: an assignment, walrus, loop, ``with``
     or ``match`` capture target, an imported name (``from x import test_y``, ``import x as
     test_y``), or a star import, which binds whatever ``test*`` the other module holds. A
-    ``TestCase`` from an absolute import outside ``local`` (unittest's, a framework's) does not
-    count: such a base class holds no tests."""
+    ``TestCase`` from an absolute import of a module not in ``local`` (unittest's, a framework's)
+    does not count: such a base class holds no tests."""
     if isinstance(node, ast.Name):
         names = [node.id] if isinstance(node.ctx, ast.Store) else []
     elif isinstance(node, (ast.MatchAs, ast.MatchStar)):
@@ -141,8 +142,7 @@ def _binds_test(node: ast.AST, local: frozenset[str] | None) -> bool:
         names = [node.rest] if node.rest else []
     elif isinstance(node, ast.ImportFrom):
         names = [alias.asname or alias.name for alias in node.names]
-        top = (node.module or "").split(".", 1)[0]
-        if local is not None and not node.level and top not in local:
+        if local is not None and not node.level and node.module not in local:
             names = [name for name in names if name != "TestCase"]
         if "*" in names:
             return True
@@ -163,19 +163,69 @@ def _literal(value: ast.expr | None) -> bool:
     return True
 
 
-def local_names(repo: Path, commit: str, paths: Iterable[str]) -> frozenset[str]:
-    """#925: the names a file of ``commit`` under the top directories of ``paths`` (the whole tree
-    for a top-level path) may be imported as, whatever directory is on ``sys.path``: each
-    directory's name and each ``.py`` file's stem. A ``TestCase`` imported under one may be the
-    test commit's own, with tests; a name that is not UTF-8 is kept undecodable."""
-    tops = {path.split("/", 1)[0] if "/" in path else "" for path in paths}
-    try:
-        raw = run_git_bytes(repo, "ls-tree", "-r", "-z", "--name-only", commit, "--",
-                            *(() if "" in tops else sorted(tops)))  # fmt: skip
-    except GitCommandError as exc:
-        raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
-    names: set[str] = set()
-    for path in raw.decode("utf-8", "surrogateescape").split("\0"):
-        *dirs, name = path.split("/")
-        names.update([*dirs, name[:-3]] if name.endswith(".py") else dirs)
-    return frozenset(names)
+class TestCaseSources:
+    """#925: ``module in sources`` when the test commit's tree may give an imported ``TestCase``
+    tests: a file the module can name under any directory on ``sys.path`` (``a/b.py`` or
+    ``a/b/__init__.py`` for ``a.b``, at any depth) is one the test commit adds or changes, defines
+    a ``test*`` function, cannot be read, or itself imports ``TestCase`` (or ``*``) from such a
+    file. A module the tree does not hold (unittest's, a framework's) is not in it. Not followed:
+    a ``TestCase`` that inherits tests from a class defined in another module."""
+
+    def __init__(self, repo: Path, commit: str, changed: Iterable[str]) -> None:
+        try:
+            raw = run_git_bytes(repo, "ls-tree", "-r", "-z", "--name-only", commit, "--")
+        except GitCommandError as exc:
+            raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
+        self._files = frozenset(raw.decode("utf-8", "surrogateescape").split("\0")) - {""}
+        self._repo, self._commit, self._changed = repo, commit, frozenset(changed)
+        self._seen: dict[str, bool] = {}
+
+    def __contains__(self, module: object) -> bool:
+        stem = str(module).replace(".", "/")
+        ends = (f"{stem}.py", f"{stem}/__init__.py")
+        named = (
+            f
+            for f in sorted(self._files)
+            if f in ends or f.endswith(("/" + ends[0], "/" + ends[1]))
+        )
+        return any(self._supplies(f) for f in named)
+
+    def _supplies(self, path: str) -> bool:
+        if path not in self._seen:
+            self._seen[path] = True  # a cycle stays untrusted
+            self._seen[path] = path in self._changed or self._gives_tests(path)
+        return self._seen[path]
+
+    def _gives_tests(self, path: str) -> bool:
+        try:
+            tree = ast.parse(
+                run_git_bytes(self._repo, "cat-file", "blob", f"{self._commit}:{path}")
+            )
+        except (
+            GitCommandError,
+            SyntaxError,
+            ValueError,
+            UnicodeError,
+            MemoryError,
+            RecursionError,
+        ):
+            return True
+        for node in ast.walk(tree):
+            if isinstance(node, _DEFS) and node.name.startswith("test"):
+                return True
+            if isinstance(node, ast.ImportFrom) and {"TestCase", "*"} & {
+                name for alias in node.names for name in (alias.name, alias.asname)
+            }:
+                if not node.level and node.module in self:
+                    return True
+                base = dirname(path)
+                for _ in range(node.level - 1):
+                    base = dirname(base)
+                stem = "/".join(p for p in (base, (node.module or "").replace(".", "/")) if p)
+                if node.level and any(
+                    self._supplies(f)
+                    for f in (f"{stem}.py", f"{stem}/__init__.py")
+                    if f in self._files
+                ):
+                    return True
+        return False
