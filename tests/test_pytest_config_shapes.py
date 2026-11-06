@@ -72,7 +72,7 @@ REFUSED = {
     },
     "a .pytest.toml next to a .pytest.ini": {".pytest.ini": "[pytest]\n", ".pytest.toml": ""},
     "[tool.pytest] and [tool.pytest.ini_options] together": {
-        "pyproject.toml": '[tool.pytest]\nminversion = "9"\n[tool.pytest.ini_options]\n',
+        "pyproject.toml": '[tool.pytest]\nminversion = "9"\n[tool.pytest.ini_options]\nx = "1"\n',
     },
 }
 
@@ -95,6 +95,8 @@ def test_shapes_pytest_reads_the_same_way_stay_found(repo):
     for config, source in (
         ({"pyproject.toml": "[tool.pytest.ini_options]\n"}, "pyproject.toml"),
         ({"pyproject.toml": '[tool.pytest]\nminversion = "9"\n'}, "pyproject.toml"),
+        ({"pyproject.toml": '[tool.pytest]\nminversion = "9"\n[tool.pytest.ini_options]\n'},
+         "pyproject.toml"),  # an empty ini_options beside native keys: pytest reads the native
         ({"pytest.toml": "", "tox.ini": "[pytest]\n"}, "pytest.toml"),
         ({"pytest.ini": "[pytest]\n[DEFAULT]\nx = 1\n", "setup.cfg": "[tool:pytest]\n"},
          "pytest.ini"),

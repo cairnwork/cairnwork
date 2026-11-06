@@ -59,7 +59,7 @@ def _pyproject(doc: Any, section: str, name: str) -> dict[str, Any] | None:
         return None
     native = {k: v for k, v in tool_pytest.items() if k != "ini_options"}
     ini = tool_pytest.get("ini_options")
-    if native and ini is not None:
+    if native and ini:  # as pytest tests it: an empty ini_options table beside them is no error
         raise PytestConfigError(f"{name} sets both [tool.pytest] and [tool.pytest.ini_options]")
     if section == "tool.pytest":
         return native or None
