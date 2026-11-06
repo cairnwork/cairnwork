@@ -24,7 +24,7 @@ TWO = (
 BASE_TEETH = KEEP + "def load():\n    return 0\n"  # plain assertion failure on the base
 WRITES = KEEP + f"def load():\n    open({DENIED!r}, 'w').close()\n    return 1\n"
 WRONG = KEEP + "def load():\n    return 2\n"
-WORDS = "sandbox denied a write"
+WORDS = "report a write denied at"
 
 
 @pytest.mark.sandbox
@@ -35,7 +35,7 @@ class TestRealSandbox:
         code, out = run_cli(project, state, TEST, {"src/calc.py": WRITES})
         text = json.dumps(out)
         assert out["status"] == "FAILED" and out["verified"] is False, out
-        assert WORDS in text and DENIED in text and "not evidence about the change" in text
+        assert WORDS in text and DENIED in text and "unless the change raised this itself" in text
 
     def test_ac1_negative_an_assertion_failure_keeps_todays_reason(self, project, state):
         commit_change(project, {"src/calc.py": BASE_TEETH})

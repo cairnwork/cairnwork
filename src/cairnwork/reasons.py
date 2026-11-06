@@ -118,8 +118,9 @@ def why_not_passed(
         causes.extend(_kind_causes(fail_kind or {}))
         if denied_path:  # #962: a candidate run; the same denial on a base run is BASE_ENV_ERROR
             causes.append(
-                f"the sandbox denied a write to {_names([denied_path])[3:]}, outside the run's"
-                " write roots: likely the run environment, not evidence about the change"
+                f"the failing tests report a write denied at {_names([denied_path])[3:]}, outside"
+                " the run's write roots: unless the change raised this itself, likely the run"
+                " environment, not evidence about the change"
             )
     elif ran_sandboxed and returncode == 0 and not tests_ran and not_run:
         causes.append(
