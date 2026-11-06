@@ -111,7 +111,7 @@ def _event(line: str, window: Window):
     try:
         record = json.loads(line)
         message, stamp = record["eventMessage"], record["timestamp"]
-    except (ValueError, KeyError, TypeError) as exc:
+    except (ValueError, KeyError, TypeError, RecursionError) as exc:  # #909: too deep as well
         raise ValueError("an unreadable stream line") from exc
     if not isinstance(message, str) or not isinstance(stamp, str):
         raise ValueError("an unreadable stream line")

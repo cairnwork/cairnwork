@@ -161,6 +161,40 @@ def test_a_test_module_cannot_rebind_what_the_recorder_uses(tmp_path):
     assert got.import_errors == base.import_errors
 
 
+def test_isabs_is_bound_at_import_too(tmp_path):  # #892 item 1
+    """isabs cannot be rebound to raise (pytest's abspath calls it); rebound to answer True for
+    the one relative origin, a recorder that looked it up at call time would drop the record."""
+    shape = "raise ImportError(\"cannot import name 'x' from 'pkg'\", name='pkg', path=_p)\n"
+    rebind = (
+        "import os\n_p = os.path.abspath('pkg/__init__.py')\n_o = os.path.isabs\n"
+        "os.path.isabs = lambda p: p == 'pkg/__init__.py' or _o(p)\n"
+    )
+    done, got = _run(tmp_path, {**PKG, NODE: rebind + shape + "def test_a(): pass\n"})
+    _unchanged(done, got)
+    assert got.import_errors == ((NODE, "pkg", "pkg/__init__.py"),)
+
+
+def test_a_base_exception_while_reading_the_traceback_records_nothing(tmp_path):  # #892 item 2
+    """Past the exact-type checks, the frames' file names are still the test's objects: a str
+    subclass whose startswith raises SystemExit (only for the recorder's own prefix: pytest's
+    report calls it too) must be caught like any other error."""
+    body = (
+        "import os\nclass S(str):\n    def startswith(self, prefix, *a):\n"
+        "        if prefix == '<frozen importlib':\n            raise SystemExit(5)\n"
+        "        return str.startswith(self, prefix, *a)\n"
+        "_c = compile(\"raise ImportError(\\\"cannot import name 'x' from 'pkg'\\\", name='pkg',"
+        " path=_p)\", S(__file__), 'exec')\n"
+        "exec(_c, {'_p': os.path.abspath('pkg/__init__.py')})\ndef test_a(): pass\n"
+    )
+    done, verdict = _run(tmp_path, {**PKG, NODE: body})
+    _unchanged(done, verdict)
+    assert verdict.import_errors == ()
+    # the same file with a harmless startswith is recorded: the catch is what held
+    calm = body.replace("raise SystemExit(5)", "pass")
+    done, verdict = _run(tmp_path / "again", {**PKG, NODE: calm})
+    assert verdict.import_errors == ((NODE, "pkg", "pkg/__init__.py"),)
+
+
 def _record_with(entries):
     return {"nonce": NONCE, "collected": [], "outcomes": {}, "exitstatus": 2, "testsfailed": 0,
             "collect_errors": [NODE], "collect_import_errors": entries}  # fmt: skip
