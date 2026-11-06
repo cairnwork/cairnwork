@@ -43,9 +43,9 @@ def conftest_files(task, test_files, mode, base_tests) -> tuple[str, ...]:
     conftest's import-time effects reach the whole test process). () without a conftest; refused
     UNCHECKED when P2P is off or there is no base test file at all.
 
-    #891, decided: the fallback keeps these files. When a whole-suite base probe cannot be used
-    (timeout, cap) and the conftest governs every base test (one at the test root does), the
-    module-dir fallback selects the same files and the task is UNCOMPARABLE
+    #891, decided: the fallback keeps these files. In whole-suite mode they already hold every
+    base test (the mode's selection), wherever the conftest is; so when that probe cannot be used
+    (timeout, cap), the module-dir fallback selects the same files and the task is UNCOMPARABLE
     (``P2P_BASE_PROBE_UNUSABLE``, detail ends with ``GOVERNS``): it fails closed. Dropping them
     from the fallback would leave the conftest's effect on the other base tests unchecked."""
     conftests = conftest_of(test_files)

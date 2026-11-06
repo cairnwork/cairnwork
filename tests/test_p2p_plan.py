@@ -123,6 +123,7 @@ def test_a_degraded_probe_that_would_run_the_same_files_is_uncomparable_without_
     assert uncomparable(got) and probed == [("tests/test_calc.py",)]
     assert "P2P_BASE_PROBE_UNUSABLE" in str(got) and "base-probe-report-over-cap" in str(got)
     assert "module-dir selects the same files" in str(got)
+    assert "conftest" not in str(got)  # #891: the conftest note only when a conftest forced files
 
 
 def test_no_base_passing_test_without_degradation_runs_nothing(monkeypatch):
