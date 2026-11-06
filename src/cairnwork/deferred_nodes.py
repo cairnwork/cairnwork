@@ -96,9 +96,9 @@ _Class = tuple[dict[str, str], bool, bool, str]
 def _members(node: ast.ClassDef, classes: dict[str, _Class], reach: _Reach) -> _Class:
     """A class's methods, its own first, then each base's that it does not define; and whether
     it has an ``__init__`` or ``__new__`` (its own or a base's); and whether it is a TestCase
-    subclass (a base named ``*TestCase``, or an earlier class that is one); and its marks: its
-    decorators and every statement of its body that is not a function, with what they read, and
-    every base's (pytest applies them along the MRO, #925, #968)."""
+    subclass (a base named ``*TestCase``, or an earlier class that is one); and its marks: the
+    class less its ``test*`` methods, with what it reads in turn, so each base class defined
+    earlier in the file too (pytest applies their marks along the MRO, #925, #968, #979)."""
     methods = {
         item.name: ast.dump(item) + reach([*item.decorator_list, item.args])
         for item in node.body
@@ -110,8 +110,8 @@ def _members(node: ast.ClassDef, classes: dict[str, _Class], reach: _Reach) -> _
         last = base.id if isinstance(base, ast.Name) else getattr(base, "attr", "")
         case = case or last.endswith("TestCase")
         if isinstance(base, ast.Name) and base.id in classes:
-            inherited, base_blocked, base_case, base_marks = classes[base.id]
-            blocked, case, marks = blocked or base_blocked, case or base_case, marks + base_marks
+            inherited, base_blocked, base_case, _ = classes[base.id]  # its marks: reach follows it
+            blocked, case = blocked or base_blocked, case or base_case
             for name, body in inherited.items():
                 methods.setdefault(name, body)
     return methods, blocked, case, marks
