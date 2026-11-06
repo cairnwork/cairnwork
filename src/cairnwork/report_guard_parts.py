@@ -50,6 +50,21 @@ def _import_error(node, call, report, _real=os.path.realpath, _rel=os.path.relpa
     return None
 
 
+def _denied_path(info):
+    # #962: the path of the first EPERM OSError (a Seatbelt denial's errno; EACCES is plain file
+    # permissions) in the cause and context chain (at most 64 links) of a call's exception info
+    # (None for a strict xpass); None when there is none. Wording only: the parent shows it in
+    # the reason and trusts nothing about it.
+    exc = getattr(info, "value", None)
+    for _ in range(64):
+        if not isinstance(exc, BaseException):
+            return None
+        if isinstance(exc, OSError) and exc.errno == 1 and type(exc.filename) is str:
+            return exc.filename
+        exc = exc.__cause__ or (None if exc.__suppress_context__ else exc.__context__)
+    return None
+
+
 def _source(item):
     try:
         return item.path.relative_to(item.config.rootpath).as_posix()

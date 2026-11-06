@@ -77,7 +77,7 @@ from cairnwork.pytest_config import PLUGINS
 from cairnwork.report_guard_parts import PARTS_SOURCE
 from cairnwork.skip_hint import module_names as _module_names
 from cairnwork.verdict_record import Verdict as Verdict
-from cairnwork.verdict_record import _sources, well_formed
+from cairnwork.verdict_record import _sources, denied_paths, well_formed
 
 FDS_ENV = "CAIRNWORK_GUARD_FDS"
 PATH_ENV = "CAIRNWORK_VERDICT_PATH"
@@ -173,6 +173,7 @@ class _Reporter:
         self._setup_failed = []  # #775: fixture raised before the body
         self._plugin_missing = {}  # #804: node -> the table plugin whose fixture was not found
         self._env_ok = {}  # #775: node -> every failed call raised an OSError so far
+        self._denied = {}  # #962: node -> the denied path, while every failed call has one
         self._finished = False  # #793: collection ran to its end (not stopped part way)
 
     def pytest_collectreport(self, report):
@@ -235,6 +236,7 @@ class _Reporter:
                 oserr = info is not None and (info.errisinstance(OSError)
                                               or _denied_inside(info.value))
                 self._env_ok[nodeid] = self._env_ok.get(nodeid, True) and oserr
+                self._denied[nodeid] = self._denied.get(nodeid, True) and _denied_path(info)
         elif report.when == "setup" and report.outcome in ("skipped", "failed"):
             _keep_worst(self, nodeid, report.outcome)
             if report.failed:  # a skip in a fixture is not an error
@@ -256,6 +258,7 @@ class _Reporter:
         kind.update(dict.fromkeys(self._setup_failed, "setup"))
         kind.update({n: "plugin:" + m for n, m in self._plugin_missing.items()})
         payload = {"nonce": self._nonce, "fail_kind": kind,
+                   "denied": {n: p for n, p in self._denied.items() if p and n in kind},
                    "collected": self._collected, "outcomes": self._outcomes,
                    "files": self._files, "file_of": self._file_of,
                    "renamed": list(dict.fromkeys(self._renamed)),
@@ -387,6 +390,7 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
         renamed=tuple(renamed),
         teardown_errors=tuple(teardown),
         fail_kind=kind,
+        denied=denied_paths(data, kind),
         paths=_sources(collected, files, file_of or ()),
         exitstatus=status[0],
         testsfailed=status[1],

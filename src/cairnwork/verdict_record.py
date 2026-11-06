@@ -27,6 +27,7 @@ class Verdict:
     # failed call raised an OSError) or "plugin" (#804: a table plugin's fixture was missing).
     # Absent: an ordinary test failure. ``outcomes`` are unchanged.
     fail_kind: dict[str, str] = field(default_factory=dict)
+    denied: dict[str, str] = field(default_factory=dict)  # #962: env node -> denied path, unread
     exitstatus: int | None = None  # pytest's own session status, as recorded (#276)
     testsfailed: int | None = None  # pytest's own count of failed tests, as recorded
     collected: tuple[str, ...] = ()  # #793: every node id pytest collected, as recorded
@@ -61,6 +62,18 @@ def _sources(collected: list[str], files: list[str], file_of) -> dict[str, str]:
         if paths.setdefault(node, source) != source:
             paths[node] = ""
     return paths
+
+
+def denied_paths(data: dict, kind: dict) -> dict[str, str]:
+    """#962: the record's ``denied`` (node -> path of a denied write) for the nodes of kind
+    ``env``; ``{}`` when it is not exactly that shape. Wording only: no verdict reads it."""
+    found = data.get("denied", {})
+    if not isinstance(found, dict) or not all(
+        kind.get(n) == "env" and isinstance(p, str) and p.startswith("/") and len(p) < 500
+        for n, p in found.items()
+    ):
+        return {}
+    return found
 
 
 def well_formed(data: dict, collected: list, outcomes: dict, plugin_kinds: frozenset[str]):
