@@ -66,7 +66,7 @@ from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRej
 from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.issue_task import test_target
 from cairnwork.p2p_collect import OVER_BUDGET, collected_side, no_targets, whole_base
-from cairnwork.p2p_conftest import check_overlay, conftest_files
+from cairnwork.p2p_conftest import GOVERNS, check_overlay, conftest_files
 from cairnwork.p2p_nodes import clean as _clean
 from cairnwork.p2p_nodes import passing_targets, require_nodes
 from cairnwork.p2p_probe_log import probe_log_tail
@@ -169,7 +169,7 @@ def plan_p2p(task, specs, test_files, mode, budget, result, ctx: VerifyContext) 
         if not files:  # no test file under the roots at all
             return P2PPlan(rule | {"targets": 0}, None, budget)
         if files == tried:  # the narrower mode would run the same files again
-            raise _unusable(rule, "module-dir selects the same files")
+            raise _unusable(rule, "module-dir selects the same files" + GOVERNS * bool(forced))
         outcomes, why = _probe(task, files, result, ctx, budget)
         if rule.get("fallback") and why in OVER_BUDGET:  # the whole base does not fit the budget
             raise no_targets(rule, existing, why)
@@ -257,10 +257,12 @@ def base_env_check(task, result, ctx: VerifyContext, *, without_tests=False, key
     For a task that will be probed after the worker (deferred tests, P2P not off), or with
     ``without_tests`` a verify call without deferred tests (#259; ``key_repo``: the repository it
     was cloned from, which keys the marker in place of ``task.repo``), the module-dir selection of
-    existing base tests is probed now, the same way (``_probe``): any unusable probe (#285, #478)
-    raises UNCOMPARABLE ``BASE_ENV_FAILED``. On a dispatch, no worker quota is spent on a base that
-    gives no evidence. Failing tests are fine (the base has the bug). Nothing from the test commit
-    is read. A pass is remembered per repository, base, files, import paths, budget, verifier
+    existing base tests is probed now, the same way (``_probe``): forged bytecode, a timeout, a
+    surviving process, a mutated checkout (#285), a report or log over the cap, an exit other than
+    0 or 1, no recorded outcome, a teardown error or an exit 1 with no failed test (#478) raises
+    UNCOMPARABLE ``BASE_ENV_FAILED``. On a dispatch, no worker quota is spent on a base that gives
+    no evidence. Failing tests are fine (the base has the bug). Nothing from the test commit is
+    read. A pass is remembered per repository, base, files, import paths, budget, verifier
     account and interpreter (``_env_fingerprint``) as a regular file in ``base-env-ok/`` in the run
     root, so only the first check of that base pays; the marker can only skip this check, never
     make anything pass. A verify call without deferred tests has no later base run, so an

@@ -26,19 +26,28 @@ from pathlib import Path
 
 from cairnwork.conftest_check import conftest_of, governed
 from cairnwork.deferred_tests import TestCommitRejected, deleted_of, lay_tests_over
+from cairnwork.p2p_nodes import clean
 from cairnwork.p2p_selection import name_rule, select_p2p_targets
 from cairnwork.verifier_spec import VerifierSpec
 from cairnwork.verifiers import run_verifiers
 
 CHANGES_BASE = "TEST_COMMIT_CONFTEST_CHANGES_BASE"
 UNCHECKED = "TEST_COMMIT_CONFTEST_UNCHECKED"
+# #891: with a conftest, a whole-suite probe that cannot run cannot narrow (see conftest_files)
+GOVERNS = "; they include every base test file under a test-commit conftest's directory"
 
 
 def conftest_files(task, test_files, mode, base_tests) -> tuple[str, ...]:
     """The files the P2P probe must run when the test commit has a conftest: every file the mode's
     selection runs plus every base test file under a conftest's directory, as one set (a
     conftest's import-time effects reach the whole test process). () without a conftest; refused
-    UNCHECKED when P2P is off or there is no base test file at all."""
+    UNCHECKED when P2P is off or there is no base test file at all.
+
+    #891, decided: the fallback keeps these files. In whole-suite mode they already hold every
+    base test (the mode's selection), wherever the conftest is; so when that probe cannot be used
+    (timeout, cap), the module-dir fallback selects the same files and the task is UNCOMPARABLE
+    (``P2P_BASE_PROBE_UNUSABLE``, detail ends with ``GOVERNS``): it fails closed. Dropping them
+    from the fallback would leave the conftest's effect on the other base tests unchecked."""
     conftests = conftest_of(test_files)
     if not conftests:
         return ()
@@ -72,7 +81,7 @@ def check_overlay(task, test_files, files, outcomes, side, result, ctx, budget) 
     kept = {n: o for n, o in outcomes.items() if n.split("[", 1)[0] not in skip}
     differ = sorted(n for n, o in kept.items() if after.get(n) != o)
     if differ:
-        shown = ", ".join(differ[:5]) + (" ..." if len(differ) > 5 else "")
+        shown = ", ".join(map(clean, differ[:5])) + (" ..." if len(differ) > 5 else "")
         raise TestCommitRejected(CHANGES_BASE, f"{len(differ)} base test(s) differ: {shown}")
 
 

@@ -22,6 +22,7 @@ from conftest_scenarios import project as _project  # noqa: F401  (the fixture, 
 from test_deferred_tests import FIX, SeeingWorker, make_test_commit, run
 
 import cairnwork.deferred_tests as dt
+from cairnwork import p2p_conftest
 from cairnwork.conftest_check import _own_packages, check_conftests, conftest_of, governed
 from cairnwork_attest import binding_extras as bx
 
@@ -132,6 +133,28 @@ def test_helpers_pick_the_conftests_and_the_tests_under_their_directory():
     assert governed(["tests/a/conftest.py"], ["tests/a/b/test_x.py", "tests/test_y.py"]) == (
         "tests/a/b/test_x.py",
     )
+    two = ["tests/a/conftest.py", "tests/b/conftest.py"]  # #891: every conftest's directory
+    assert governed(two, ["tests/a/test_x.py", "tests/b/test_y.py", "tests/test_z.py"]) == (
+        "tests/a/test_x.py",
+        "tests/b/test_y.py",
+    )
+
+
+def test_the_refusal_names_differing_tests_cleaned_and_bounded(monkeypatch):  # #891 nit
+    odd, long = "tests/test_a.py::test_x[\x1b[31m]", "tests/test_b.py::test_" + "y" * 400
+    monkeypatch.setattr(p2p_conftest, "lay_tests_over", lambda *a: "c" * 40)
+    monkeypatch.setattr(p2p_conftest, "_side", lambda *a: ({odd: "failed", long: "failed"}, ""))
+    task, side = (
+        SimpleNamespace(repo=None, base_commit="", test_commit=""),
+        SimpleNamespace(changed=set(), probe_only=set()),
+    )
+    result, ctx = SimpleNamespace(attempt_id="a"), SimpleNamespace(run_root="/nonexistent")
+    with pytest.raises(dt.TestCommitRejected) as raised:
+        p2p_conftest.check_overlay(task, ["tests/conftest.py"], (), {odd: "passed", long: "passed"},
+                                   side, result, ctx, 1)  # fmt: skip
+    detail = str(raised.value)
+    assert "\x1b" not in detail and "test_x[?[31m]" in detail
+    assert "y" * 200 not in detail and "y" * 150 in detail
 
 
 def _ctx(binding, *, full, policy=None, repo=None):
