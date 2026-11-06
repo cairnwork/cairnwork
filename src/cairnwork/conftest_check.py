@@ -10,7 +10,8 @@ runs first, at the producer and (full mode) at the receiver:
 * a new node is an import (standard library, ``pytest`` or the repository's own top-level
   packages, no star, no ``pytest_*`` name), a literal assignment to a plain name, or a function
   whose only decorators are the pytest fixture decorator (resolved through the import table; literal
-  arguments, no ``autouse``), never a ``pytest_*``, ``test*`` or dunder name. No classes.
+  arguments, no ``autouse``), never a ``pytest_*``, ``test*`` or dunder name. No classes;
+* no import that can load a file the test commit adds or changes (conftest_reach.py, #924).
 
 It is hygiene, not the guard: a name imported from the repository or rebound can carry behaviour
 it cannot see, and behaviour that depends on the candidate's code is trusted test author code, like
@@ -23,9 +24,11 @@ from __future__ import annotations
 import ast
 import sys
 from collections.abc import Iterable
+from functools import partial
 from pathlib import Path, PurePosixPath
 from posixpath import dirname
 
+from cairnwork.conftest_reach import reached_change
 from cairnwork.deferred_overlay import TestCommitRejected
 from cairnwork.gitcmd import GitCommandError, run_git
 
@@ -53,6 +56,7 @@ def governed(conftests: Iterable[str], existing: Iterable[str]) -> tuple[str, ..
 
 def check_conftests(repo: Path, base: str, test_commit: str, paths: Iterable[str]) -> None:
     """Refuse a conftest change the allowlist does not cover; see the module docstring."""
+    paths, files = tuple(paths), frozenset[str]()
     names = conftest_of(paths)
     if not names:
         return
@@ -68,6 +72,23 @@ def check_conftests(repo: Path, base: str, test_commit: str, paths: Iterable[str
             problem = _rebinds(node, table) or _problem(node, own, table)
             if problem:
                 _refuse(path, node, problem)
+        files = files or _tree_files(repo, test_commit)
+        changed = frozenset(paths) - {path}
+        read = partial(_read, repo, test_commit)
+        if hit := reached_change(path, new, changed, files, read):  # #924
+            why = f"can load {hit}, which the test commit changes" if hit in changed else hit
+            _refuse(path, None, f"an import that {why}")
+
+
+def _tree_files(repo: Path, commit: str) -> frozenset[str]:
+    try:
+        return frozenset(run_git(repo, "ls-tree", "-r", "-z", "--name-only", commit).split("\0"))
+    except GitCommandError as exc:
+        raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
+
+
+def _read(repo: Path, commit: str, path: str) -> ast.Module:
+    return _parse(repo, f"{commit}:{path}", path, present=True)
 
 
 def _refuse(path: str, node: ast.AST | None, why: str) -> None:
