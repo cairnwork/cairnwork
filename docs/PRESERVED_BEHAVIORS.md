@@ -61,7 +61,7 @@
 
 - 寫在區塊裡的測試，例如版本檢查 `if sys.version_info >= ...:` 底下的 `def test_*`，以及 `try`、`with` 或迴圈裡的測試；
 - 用其他方式綁定的 `test*`／`Test*` 名字；
-- 從 `unittest` 以外匯入的 `TestCase`。`Test*` 是 pytest 的類別名稱規則，別處的 `TestCase` 可能帶有測試；只有 `from unittest import TestCase` 確定沒有。
+- 相對匯入的 `TestCase`，或模組名稱對得到測試 commit 自己樹裡（改動檔所在的頂層目錄底下任何深度）某個 `.py` 或目錄的 `TestCase`。`Test*` 是 pytest 的類別名稱規則，這類 `TestCase` 可能是測試 commit 自己寫、帶有測試的類別，也可能遮蔽 `unittest`；`unittest`、`django.test` 這類框架的 `TestCase` 照常放行（代價：樹裡剛好有同名檔案或目錄時會誤拒）。
 
 測試 commit 只要新增或改動這類測試就會被拒（`DEFERRED_TESTS_UNREADABLE`），即使同一個檔案裡另有看得見的新測試也一樣。
 

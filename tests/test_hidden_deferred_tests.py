@@ -38,14 +38,15 @@ HIDDEN = {
     "match-capture": "match make_test():\n    case test_b:\n        pass\n",
     "global-in-function": "def _setup():\n    global test_b\n    test_b = make_test()\n_setup()\n",
     "global-in-class": "class Holder:\n    global test_b\n    def test_b():\n" + WRONG,
-    # a TestCase from anywhere but unittest may hold tests (Test* is a pytest class name)
-    "testcase-elsewhere": "from helpers import TestCase\n",
-    "testcase-renamed": "from helpers import Base as TestCase\n",
+    # a TestCase the test commit's own tree may define can hold tests (Test* is a pytest name)
+    "testcase-local": "from conftest import TestCase\n",
+    "testcase-renamed": "from conftest import Base as TestCase\n",
     "testcase-relative": "from .unittest import TestCase\n",
     "version-block": "import sys\nif sys.version_info >= (3, 8):\n    def test_b():\n" + WRONG,
 }
-NOT_HIDDEN = (  # a literal value, the TestCase base, a module: pytest collects none of them
+NOT_HIDDEN = (  # a literal value, a framework's TestCase base, a module: none holds a test
     "test_data = [1, 2, {'a': (3,)}]\nfrom unittest import TestCase\nimport testtools\n"
+    "from django.test import TestCase\n"  # no django module or directory in the tree
 )
 
 
@@ -94,10 +95,20 @@ def test_verify_refuses_a_test_case_imported_from_a_base_helper(project, state):
     collects the helper's ``TestCase`` tests in this module, and the target never ran them."""
     helper = "from calc import add\nclass TestCase:\n    def test_b(self):\n" + WRONG
     commit_change(project, {"tests/helpers.py": helper})  # on the base; the test commit keeps it
-    files = {F: REGRESSION + HIDDEN["testcase-elsewhere"]}
+    files = {F: REGRESSION + "from helpers import TestCase\n"}
     base, test_commit = make_test_commit(project, files)
     cand = candidate(project, base, {"src/calc.py": FIX})
     command = f"python3 -m pytest -q {F}::test_regression"
     code, out = verify(state, project, base, cand, "--test-commit", test_commit, tests=(command,))
     assert code == 2 and out["status"] == "REFUSED", out
     assert out["reason"].startswith("DEFERRED_TESTS_UNREADABLE"), out
+
+
+@pytest.mark.parametrize("shadow", ["tests/unittest.py", "tests/lib/deep/unittest/__init__.py"])
+def test_a_test_case_name_the_test_commit_can_shadow_is_not_trusted(project, shadow):
+    """#925: a test commit's own file named like the module, at any depth (prepend mode or a
+    pythonpath entry may put its directory first), may define a TestCase that holds tests."""
+    case = "class TestCase:\n    def test_b(self):\n" + WRONG
+    with pytest.raises(Rejected) as err:
+        _new_tests(project, {F: REGRESSION + "from unittest import TestCase\n", shadow: case})
+    assert err.value.code == "DEFERRED_TESTS_UNREADABLE"
