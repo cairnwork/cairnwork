@@ -56,8 +56,14 @@ def _reach(conftest_text, tree, changed, conftest=CONFTEST):
         ),
         ("import pytest\n", {"tests/sub/__init__.py": ""}, "tests/sub/__init__.py"),
         ("import pytest\n", {"tests/__init__.py": ""}, "tests/__init__.py"),
+        # r6 (cw#948 Claude review): a native extension or bytecode file is a module too
+        ("import colorsys\n", {"tests/colorsys.cpython-314-darwin.so": ""},
+         "tests/colorsys.cpython-314-darwin.so"),
+        ("import colorsys\n", {"tests/colorsys.pyd": ""}, "tests/colorsys.pyd"),
+        ("import colorsys\n", {"tests/colorsys.pyc": ""}, "tests/colorsys.pyc"),
+        ("import colorsys\n", {"tests/colorsys.txt": ""}, ""),  # data, not a module
     ],
-)
+)  # fmt: skip
 def test_a_direct_import_of_a_changed_file_is_found(text, tree, hit):
     changed = [path for path in tree if path.startswith("tests/")]
     assert _reach(text, tree, changed) == hit

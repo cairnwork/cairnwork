@@ -27,8 +27,12 @@ itself. A name built at run time, or an unchanged module outside the test commit
 directories that imports a test-commit file, is not followed: that is test author code, as in
 conftest_check.py. Nor are base test files: a changed module that only a base test file imports
 also runs its import-time code in the base run (a known residual, #951, kept apart so that a test
-commit may still update a shared test helper). This runs at the producer and in the pipeline
-judge; a full receiver still checks only the task's conftest paths (#952).
+commit may still update a shared test helper). An archive (``.zip``, ``.whl``) loads only once
+its own path is on ``sys.path``, which no import names: a known residual. This runs at the
+producer, in the pipeline judge and at a full receiver, on every test path (#952).
+
+Expected false refusals (fail closed): a data file under a test directory that is named like a
+module some conftest imports (``tests/data/sample/calc.py`` when a conftest imports ``calc``).
 """
 
 from __future__ import annotations
@@ -38,6 +42,7 @@ from collections.abc import Iterable, Iterator
 from posixpath import dirname, join
 
 MAX_FILES = 500  # unchanged modules followed per conftest before the walk refuses
+MODULE_SUFFIXES = (".py", ".pyc", ".so", ".pyd")  # files an import statement can load (r6)
 
 
 def reached_change(
@@ -73,12 +78,15 @@ def reached_change(
 
 
 def _names(files: frozenset[str]) -> dict[str, set[str]]:
-    """#924 r5: each dotted name a ``.py`` file of the tree may be imported as, whatever directory
+    """#924 r5: each dotted name a module file of the tree may be imported as, whatever directory
     is on ``sys.path``: every trailing run of its path parts (``a/b/c.py`` as ``c``, ``b.c`` and
-    ``a.b.c``; ``a/b/__init__.py`` as ``b`` and ``a.b``), less the bare name ``conftest``."""
+    ``a.b.c``; ``a/b/__init__.py`` as ``b`` and ``a.b``), less the bare name ``conftest``. A
+    native extension or bytecode file counts under the part of its name before the first dot
+    (``colorsys.cpython-314-darwin.so`` as ``colorsys``, r6)."""
     out: dict[str, set[str]] = {}
     for path in files:
-        parts = path[:-3].split("/") if path.endswith(".py") else []
+        *dirs, name = path.split("/")
+        parts = [*dirs, name.split(".", 1)[0]] if name.endswith(MODULE_SUFFIXES) else []
         parts = parts[:-1] if parts[-1:] == ["__init__"] else parts
         for k in range(len(parts)):
             if (name := ".".join(parts[k:])) != "conftest":

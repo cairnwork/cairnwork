@@ -135,6 +135,25 @@ def test_a_repository_module_named_like_the_standard_library_is_a_repository_mod
     check_conftests(project, base, commit, ["tests/conftest.py"])  # a stdlib name is fine too
 
 
+PY2_CONFTEST = "import helper\nprint 'legacy'\n"
+
+
+@pytest.mark.parametrize(
+    ("changed", "refused"), [("tests/test_new.py", False), ("tests/helper.py", True)]
+)
+def test_an_unchanged_conftest_that_does_not_parse_is_read_by_its_names(project, changed, refused):
+    """#948 r6 (Claude review FR-D): a Python 2 conftest the test commit cannot change refuses
+    nothing for not parsing; its dotted names still count as imports."""
+    commit_change(project, {"examples/legacy/conftest.py": PY2_CONFTEST})
+    base, commit = _commit(project, {changed: "x = 1\n"})
+    if not refused:
+        check_conftests(project, base, commit, [changed])
+        return
+    with pytest.raises(dt.TestCommitRejected) as err:
+        check_conftests(project, base, commit, [changed])
+    assert err.value.code == "TEST_COMMIT_CONFTEST_STATIC", err.value
+
+
 def test_a_conftest_at_the_repository_root_governs_every_base_test():
     assert governed(["conftest.py"], ["tests/a.py", "x/b.py"]) == ("tests/a.py", "x/b.py")
 

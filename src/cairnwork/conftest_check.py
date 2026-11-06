@@ -14,8 +14,8 @@ runs first, at the producer and (full mode) at the receiver:
   ``pytest_*``, ``test*`` or dunder name. No classes;
 * no conftest of the test commit's tree, changed or not, has an import that can load a file the
   test commit adds or changes (conftest_reach.py, #924); this runs even when no conftest changed,
-  at the producer and in the pipeline judge (a full receiver checks only the task's conftest
-  paths, #952).
+  at the producer, in the pipeline judge and at a full receiver (#952). An unchanged file that
+  does not parse (a Python 2 sample) is not refused for that: its dotted names count as imports.
 
 It is hygiene, not the guard: a name imported from the repository or rebound can carry behaviour
 it cannot see, and behaviour that depends on the candidate's code is trusted test author code, like
@@ -26,6 +26,7 @@ any test file. The differential probe (p2p_conftest.py) is what holds. Every ref
 from __future__ import annotations
 
 import ast
+import re
 import sys
 from collections.abc import Iterable
 from functools import partial
@@ -102,7 +103,17 @@ def _tree_files(repo: Path, commit: str) -> frozenset[str]:
 
 
 def _read(repo: Path, commit: str, path: str) -> ast.Module:
-    return _parse(repo, f"{commit}:{path}", path, present=True)
+    """An unchanged file the walk follows. One that does not parse (Python 2, not UTF-8) cannot be
+    refused for that, as the test author cannot change it (#948 r6): every dotted name in its text
+    counts as an import instead. A changed conftest is parsed strictly by check_conftests."""
+    try:
+        return _parse(repo, f"{commit}:{path}", path, present=True)
+    except TestCommitRejected as exc:
+        if exc.code != "TEST_COMMIT_UNPARSABLE":
+            raise
+    text = run_git_bytes(repo, "cat-file", "blob", f"{commit}:{path}")
+    names = sorted(set(re.findall(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", text.decode("latin-1"))))
+    return ast.Module(body=[ast.Import(names=[ast.alias(name=n) for n in names])], type_ignores=[])
 
 
 def _refuse(path: str, node: ast.AST | None, why: str) -> None:
