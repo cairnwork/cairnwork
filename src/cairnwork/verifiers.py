@@ -142,6 +142,7 @@ class VerifierRun:
     collect_skipped: tuple[str, ...] = ()  # #793: collectors skipped while collecting
     collection_finished: bool = False  # #793: collection was not stopped part way
     deny_evidence: str = ""  # #797 step 1: a base run's deny channel (deny_channel.py); not hashed
+    data_refused: tuple[str, ...] = ()  # #850: declared data was executed: never a pass
 
 
 def run_verifiers(
@@ -298,8 +299,9 @@ def _read_verdict(channel, path, nonce, plugins):
 def _denial(batch: _Batch, verdict, checkout, run_dir, clean=True) -> str:
     """#962: the denied path for a candidate run's reason; a base run gets none (it is judged as
     BASE_ENV_ERROR, base_teeth.py), nor a run with any other failure of its own (``clean``: no
-    checkout change, forged bytecode, survivors, size cap or target not run; no renamed item)."""
-    if batch.deny or not clean or verdict.renamed:
+    checkout change, forged bytecode, survivors, size cap or target not run; no renamed item and
+    no refused data execution)."""
+    if batch.deny or not clean or verdict.renamed or verdict.data_refused:
         return ""
     return candidate_denial(verdict.outcomes, verdict.denied, (checkout.parent, run_dir))
 
@@ -322,8 +324,7 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
         *batch.settings.args(plugins), "-p", report_guard.MODULE, *spec.targets,
         *spec.flags(),  # --collect-only (#793), --continue-on-collection-errors (#796)
     ]  # fmt: skip
-    before = os.lstat(checkout)
-    profile, evidence = None, None
+    before, profile, evidence = os.lstat(checkout), None, None
     backend = cairnwork_sandbox.select()
     if backend is not None:
         profile = backend.policy(
@@ -346,14 +347,14 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
     too_big = log_path.stat().st_size > MAX_LOG_BYTES
     clean = not (timed_out or mutated or survivors or forged or too_big or verdict.too_big)
     passed = profile is not None and returncode == 0 and clean and ran  # ran: pytest said 0 too
-    plain_failure = (
-        profile is not None and returncode == 1 and clean and "failed" in verdict.outcomes.values()
-    )
+    failed = "failed" in verdict.outcomes.values()
+    plain_failure = profile is not None and returncode == 1 and clean and failed
     why = "" if passed else why_not_passed(
         ran_sandboxed=profile is not None, returncode=returncode, timed_out=timed_out,
         mutated=mutated, survivors=survivors, log_too_big=too_big, tests_ran=ran,
         report_too_big=verdict.too_big, forged=forged, not_run=not_run, renamed=verdict.renamed,
         exitstatus=verdict.exitstatus, testsfailed=verdict.testsfailed, fail_kind=verdict.fail_kind,
+        data_refused=verdict.data_refused,
         denied_path=_denial(batch, verdict, checkout, run_dir, clean and not not_run),
     )  # fmt: skip
     digest = _record_digest(
@@ -383,4 +384,5 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
         collected=verdict.collected, collect_skipped=verdict.collect_skipped,
         collection_finished=verdict.collection_finished, skipped_deps=verdict.skipped_deps,
         import_errors=verdict.import_errors, deny_evidence=str(evidence) if evidence else "",
+        data_refused=verdict.data_refused,
     )  # fmt: skip
