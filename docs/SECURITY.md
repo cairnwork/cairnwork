@@ -11,6 +11,17 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
   allowed for every path, and `sysctl-read` and `process-exec` are allowed with no path filter
   (#461); writes only to the checkout and the per-run directory; no network; credential stores
   denied last. Behaviour unchanged.
+  Also allowed (#527): the read-only user-record lookup (mach service
+  `com.apple.system.opendirectoryd.libinfo`), so `pwd.getpwuid` and `grp.getgrgid` work (a target
+  test module that calls them at import no longer makes a correct fix UNCOMPARABLE), in every
+  profile including blackbox (`allow_ipc` covers POSIX/SysV IPC only). Accepted cost: the run can
+  read the real account record (owner mode: the owner's login name, full name, home and shell) and
+  list local accounts and groups; Linux bwrap already exposes the same via `/etc/passwd`.
+  `getpass.getuser()` still gives the pinned `cairnwork`. No file contents, no write, no network
+  (DNS still fails). Guard: the rule is added only when `dscl /Search -read /` shows exactly
+  `/Local/Default` for both `SearchPath:` and `CSPSearchPath:` (read at every profile build, 2 s
+  timeout); any other output, error or timeout withholds it (fail closed) and a `Policy.notes`
+  entry says so. `.membership` and `.api` stay denied.
   Also readable (#802): the time zone data (`/private/var/db/timezone`, where `/usr/share/zoneinfo`
   and `/etc/localtime` point; before, `zoneinfo` raised and `TZ=...; tzset()` silently gave UTC)
   and `/private/etc/hosts` (so `localhost` resolves; no other name does). A run's `USER` and

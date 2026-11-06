@@ -85,6 +85,7 @@ PINNED_802 = {  # and time zone data and /etc/hosts readable
 def test_seatbelt_profile_is_pinned_as_of_the_posix_semaphore_change_116(monkeypatch, dirs):
     """Profile is pinned as of the POSIX-semaphore change (#116)."""
     monkeypatch.setattr(seatbelt, "developer_dirs", lambda: dirs)
+    monkeypatch.setattr(seatbelt, "_local_directory_only", lambda: False)  # #527 rule: own tests
     for profile in (
         seatbelt.build_profile(READS, WRITES, home=HOME),
         seatbelt.BACKEND.policy(READS, WRITES, home=HOME),
