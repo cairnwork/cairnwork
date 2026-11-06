@@ -25,9 +25,9 @@ part of each of its tests (#925: removing a class-level skip changes them all).
 ``hidden_tests`` (#925): what may give pytest a test that is not read above, at module level or
 in a class body, inside a block (``if``, ``try``, ``with``, a loop) or not: a ``test*`` function
 or ``Test*`` class in a block or nested in a class, and a ``test*``/``Test*`` name bound another
-way (assignment, walrus, loop or ``with`` target, ``from x import test_y``), unless the value is a
-literal. new_tests refuses a test commit that changes one. Names set at run time (``setattr``,
-``globals()``) are not seen.
+way (assignment, walrus, loop, ``with`` or ``match`` target, ``from x import test_y``), unless the
+value is a literal, and a star import. new_tests refuses a test commit that changes one. Names set
+at run time (``setattr``, ``globals()``) are not seen.
 """
 
 from __future__ import annotations
@@ -109,13 +109,20 @@ def _hidden(node: ast.AST, found: set[str], stmt: ast.AST | None) -> None:
 
 
 def _binds_test(node: ast.AST) -> bool:
-    """A name binding pytest's default rules could collect: an assignment, walrus, loop or
-    ``with`` target, or an imported name (``from x import test_y``, ``import x as test_y``)."""
+    """A name binding pytest's default rules could collect: an assignment, walrus, loop, ``with``
+    or ``match`` capture target, an imported name (``from x import test_y``, ``import x as
+    test_y``), or a star import, which binds whatever ``test*`` the other module holds."""
     if isinstance(node, ast.Name):
         names = [node.id] if isinstance(node.ctx, ast.Store) else []
+    elif isinstance(node, (ast.MatchAs, ast.MatchStar)):
+        names = [node.name] if node.name else []
+    elif isinstance(node, ast.MatchMapping):
+        names = [node.rest] if node.rest else []
     elif isinstance(node, ast.ImportFrom):
         names = [alias.asname or alias.name for alias in node.names]
         names = [name for name in names if name != "TestCase"]  # the base class has no tests
+        if "*" in names:
+            return True
     elif isinstance(node, ast.Import):  # a plain import binds a module, which pytest never collects
         names = [alias.asname for alias in node.names if alias.asname]
     else:

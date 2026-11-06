@@ -2,9 +2,9 @@
 that changes a test inside a module-level block or a nested test class is refused,
 DEFERRED_TESTS_UNREADABLE, also beside a visible new test (which before made a target naming
 only that test count as covering the file); so is one that binds a ``test*``/``Test*`` name another
-way (assignment, walrus, loop target, import) to anything but a literal. Removing a class
-decorator changes each of the class's tests. An unchanged hidden test on the base, a ``test*``
-defined inside a function and a literal ``test*`` value refuse nothing."""
+way (assignment, walrus, loop or match target, import) to anything but a literal, or adds a star
+import. Removing a class decorator changes each of the class's tests. An unchanged hidden test on
+the base, a ``test*`` defined inside a function and a literal ``test*`` value refuse nothing."""
 
 import pytest
 from conftest import commit_change
@@ -33,6 +33,8 @@ HIDDEN = {
     "class-body": "class TestOuter:\n    test_b = staticmethod(make_test())\n",
     "from-import": "from helpers import test_b\n",
     "import-as": "import helpers as test_b\n",
+    "star-import": "from helpers import *\n",  # #925 r3: pytest collects the test* it brings
+    "match-capture": "match make_test():\n    case test_b:\n        pass\n",
 }
 NOT_HIDDEN = (  # a literal value, the TestCase base, a module: pytest collects none of them
     "test_data = [1, 2, {'a': (3,)}]\nfrom unittest import TestCase\nimport testtools\n"
