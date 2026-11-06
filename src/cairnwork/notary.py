@@ -161,12 +161,15 @@ class Notary:
         must also equal that. A pre-migration (NULL) row keeps the read-time identity."""
         if expected_identity is None:
             return response_binding_problem(request, response, self._expected_identity()) or ""
-        expected = json.loads(expected_identity)
-        reason = response_binding_problem(request, response, expected) or ""
-        if reason:
-            return reason
-        pin = self._core_identity
-        if pin is not None and canonical_json(expected) != canonical_json(pin):
+        try:
+            expected = json.loads(expected_identity)
+            reason = response_binding_problem(request, response, expected) or ""
+            if reason:
+                return reason
+            pin = self._core_identity
+            if pin is not None and canonical_json(expected) != canonical_json(pin):
+                return IDENTITY_MISMATCH
+        except RecursionError:  # a stored identity or pin nested too deep to compare
             return IDENTITY_MISMATCH
         return ""
 
@@ -363,5 +366,5 @@ class Notary:
             return 0, {"error": {"code": CORE_ERROR, "type": "MALFORMED_CORE_RESPONSE"}}
         try:
             return http_status, _frozen(response)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, RecursionError):
             return 0, {"error": {"code": CORE_ERROR, "type": "UNSERIALISABLE_CORE_RESPONSE"}}
