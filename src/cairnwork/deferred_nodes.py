@@ -19,7 +19,12 @@ inherited the same way. pytest does not collect such a class (it warns and runs 
 tests), so a target naming the file still runs none of them. A ``unittest.TestCase`` subclass with
 its own ``__init__`` is collected by pytest's unittest support but is counted here as well: a test
 commit with one is refused, never wrongly accepted. Bases imported from another module are not
-read; neither are nested classes or custom ``python_functions``/``python_classes`` settings.
+read; neither are custom ``python_functions``/``python_classes`` settings. A class's decorators are
+part of each of its tests (#925: removing a class-level skip changes them all).
+
+``hidden_tests`` (#925): the test-like definitions pytest may collect that are not read above, a
+``test*`` function or ``Test*`` class inside a module-level block (``if``, ``try``, ``with``, a
+loop) or a ``Test*`` class nested in a class. new_tests refuses a test commit that changes one.
 """
 
 from __future__ import annotations
@@ -43,7 +48,8 @@ def test_functions(tree: ast.Module) -> tuple[dict[str, str], frozenset[str]]:
             methods, blocked, case = _members(node, classes)
             classes[node.name] = (methods, blocked, case)
             if node.name.startswith("Test") or case:
-                tests = {n: body for n, body in methods.items() if n.startswith("test")}
+                deco = "".join(ast.dump(d) for d in node.decorator_list)  # #925: a class skip
+                tests = {n: deco + body for n, body in methods.items() if n.startswith("test")}
                 functions.update({f"{node.name}::{n}": body for n, body in tests.items()})
                 if blocked:
                     uncollected.add(node.name)
@@ -67,3 +73,30 @@ def _members(
             for name, body in inherited.items():
                 methods.setdefault(name, body)
     return methods, blocked, case
+
+
+def hidden_tests(tree: ast.Module) -> frozenset[str]:
+    """#925: ``ast.dump`` of each test-like definition test_functions does not read (see the module
+    docstring); not the bodies of functions, whose nested definitions pytest never collects."""
+    found: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            for item in node.body:
+                if isinstance(item, ast.ClassDef) and item.name.startswith("Test"):
+                    found.add(ast.dump(item))
+                elif not isinstance(item, (*_DEFS, ast.ClassDef)):
+                    _hidden(item, found)
+        elif not isinstance(node, _DEFS):
+            _hidden(node, found)
+    return frozenset(found)
+
+
+def _hidden(node: ast.AST, found: set[str]) -> None:
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, _DEFS):
+            if child.name.startswith("test"):
+                found.add(ast.dump(child))
+        elif isinstance(child, ast.ClassDef) and child.name.startswith("Test"):
+            found.add(ast.dump(child))
+        else:
+            _hidden(child, found)
