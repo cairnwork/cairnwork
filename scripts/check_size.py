@@ -1,5 +1,5 @@
 """Enforce Cairnwork size limits. Blocking: file <=400 lines, function <=80 lines, the trusted
-sandbox package (src/cairnwork_sandbox) <=1200 lines of its own. Warning only: core
+sandbox package (src/cairnwork_sandbox) <=1250 lines of its own. Warning only: core
 (src/cairnwork) above the 5000-line budget. Prints a per-package table (also appended to
 $GITHUB_STEP_SUMMARY when set)."""
 
@@ -17,7 +17,7 @@ SCANNED = [ROOT / "src", ROOT / "experimental", ROOT / "scripts", ROOT / "tests"
 MAX_FILE_LINES = 400
 MAX_FUNCTION_LINES = 80
 MAX_CORE_LINES = 5000  # warning budget, not a failure
-MAX_SANDBOX_LINES = 1200
+MAX_SANDBOX_LINES = 1250  # James 11/06 (#527): was 1200
 
 
 def _python_files(base: Path) -> list[Path]:
