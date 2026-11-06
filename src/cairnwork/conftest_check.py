@@ -18,6 +18,8 @@ runs first, at the producer and (full mode) at the receiver:
   does not parse (a Python 2 sample) is not refused for that: its dotted names count as imports.
   An archive the test commit changes is refused when a conftest or the root pytest configuration
   names its file (#967 tracks the rest).
+* no new name the base binds or its tests request (conftest_names.py, #916); an annotation is
+  names, attributes, literals, subscripts and ``|`` only (#916: an operator calls a dunder).
 
 It is hygiene, not the guard: a name imported from the repository or rebound can carry behaviour
 it cannot see, and behaviour that depends on the candidate's code is trusted test author code, like
@@ -35,6 +37,7 @@ from functools import partial
 from pathlib import Path, PurePosixPath
 from posixpath import dirname
 
+from cairnwork.conftest_names import bound_by, taken_names
 from cairnwork.conftest_reach import reached_change
 from cairnwork.deferred_overlay import TestCommitRejected
 from cairnwork.gitcmd import GitCommandError, run_git, run_git_bytes
@@ -74,9 +77,10 @@ def check_conftests(repo: Path, base: str, test_commit: str, paths: Iterable[str
         before = [ast.dump(n) for n in old.body]
         if before != [ast.dump(n) for n in new.body[: len(before)]]:
             _refuse(path, new.body[0] if new.body else None, "changes existing top-level code")
-        table = _imports(new)
+        table, taken = _imports(new), taken_names(repo, base, path, old)
         for node in new.body[len(before) :]:
             problem = _rebinds(node, table) or _problem(node, own, table)
+            problem = problem or _takes(node, taken, _imports(old))
             if problem:
                 _refuse(path, node, problem)
     if paths:
@@ -212,6 +216,29 @@ def _rebinds(node: ast.stmt, table: dict[str, str]) -> str:
     return "a name that rebinds an import" if names & table.keys() else ""
 
 
+def _takes(
+    node: ast.stmt, taken: tuple[frozenset[str], frozenset[str]], old_table: dict[str, str]
+) -> str:
+    """#916: a new binding of a name the base file binds, or a fixture name the base requests or a
+    conftest above binds (conftest_names.py). Importing again what the base file already imports
+    under that name changes nothing; a plain ``import M`` or a literal assignment registers no
+    fixture."""
+    own, fixtures = taken
+    names = bound_by(node)
+    if isinstance(node, ast.Import | ast.ImportFrom):
+        names -= {
+            n
+            for n, origin in _imports(ast.Module([node], [])).items()
+            if old_table.get(n) == origin
+        }
+    hit = names & own
+    if not isinstance(node, ast.Import | ast.Assign | ast.AnnAssign):
+        hit |= names & fixtures
+    if hit:
+        return f"a name the base binds or a base test requests ({', '.join(sorted(hit))[:120]})"
+    return ""
+
+
 def _reserved(name: str) -> bool:
     return name.startswith(("pytest", "test", "collect_")) or (
         name.startswith("__") and name.endswith("__")
@@ -246,6 +273,8 @@ def _import_problem(node: ast.Import | ast.ImportFrom, own: frozenset[str]) -> s
 
 def _assign_problem(node: ast.Assign | ast.AnnAssign) -> str:
     targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+    if isinstance(node, ast.AnnAssign) and not _plain(node.annotation):  # #916: runs at import
+        return "an annotation that is not a plain name"
     if len(targets) != 1 or not isinstance(targets[0], ast.Name) or node.value is None:
         return "an assignment that is not a plain name with a value"
     if _reserved(targets[0].id):
@@ -281,16 +310,28 @@ def _fixture_problem(node: ast.FunctionDef, table: dict[str, str]) -> str:
 
 def _signature_problem(args: ast.arguments, returns: ast.expr | None) -> str:
     """#924 r4: defaults and annotations run when the conftest is imported. A default must be a
-    literal; an annotation names a type (no call, walrus or lambda)."""
+    literal; an annotation is plain (``_plain``, #916: an operator calls a dunder too)."""
     defaults = [*args.defaults, *(d for d in args.kw_defaults if d is not None)]
     if not all(_literal(d) for d in defaults):
         return "a parameter default that is not a literal"
     params = (*args.posonlyargs, *args.args, *args.kwonlyargs, args.vararg, args.kwarg)
     notes = [p.annotation for p in params if p is not None and p.annotation is not None]
-    runs = (ast.Call, ast.NamedExpr, ast.Lambda)
-    if any(isinstance(n, runs) for note in (*notes, returns) if note for n in ast.walk(note)):
+    if not all(_plain(note) for note in (*notes, returns) if note):  # #916: allow-list
         return "an annotation that runs code"
     return ""
+
+
+_PLAIN = (ast.Name, ast.Attribute, ast.Constant, ast.Subscript, ast.Tuple, ast.List, ast.Load)
+
+
+def _plain(node: ast.expr) -> bool:
+    """An annotation made of names, attributes, literals, subscripts and ``|`` only: nothing in it
+    calls code (no call, lambda, comprehension or assignment expression)."""
+    return all(
+        isinstance(n, _PLAIN) or (isinstance(n, ast.BinOp) and isinstance(n.op, ast.BitOr))
+        or isinstance(n, ast.BitOr)
+        for n in ast.walk(node)
+    )  # fmt: skip
 
 
 def _origin(node: ast.expr, table: dict[str, str]) -> str:
