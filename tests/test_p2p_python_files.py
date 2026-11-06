@@ -9,6 +9,7 @@ from conftest import commit_change
 from test_p2p import FIX_BREAKS_NEG, SIBLING, configured_project, run
 
 from cairnwork.p2p import P2PRejected, _base_tests
+from cairnwork.p2p_conftest import conftest_files
 from cairnwork.p2p_selection import select_p2p_targets
 from cairnwork.pytest_config import _file_matches
 from cairnwork.pytest_config import test_file_rule as base_file_rule
@@ -90,3 +91,23 @@ def test_without_a_python_files_setting_the_default_names_apply(repo):
     suite = ("tests/sub/test_calc.py", "tests/sub/test_other.py")
     out = select_p2p_targets(("src/calc.py",), suite, ("tests",), "module-dir", rule)
     assert out == suite
+
+
+def test_the_conftest_probe_selects_by_the_base_file_rule(repo):
+    """#870: the conftest probe picks base tests as P2P does. A base test named by the base's
+    python_files rule (and by no default name) is selected, not refused UNCHECKED."""
+    base = commit_change(
+        repo,
+        {
+            "pytest.ini": "[pytest]\npython_files = check_*.py\n",
+            "tests/unit/check_calc.py": SIBLING,
+        },
+    )
+    task: Any = SimpleNamespace(
+        repo=repo, base_commit=base, test_roots=("tests",), allowed_files=("src/calc.py",)
+    )
+    test_files = ("tests/new/conftest.py", "tests/new/check_new.py")
+    files = conftest_files(
+        task, test_files, "module-dir", lambda _t, _d: ("tests/unit/check_calc.py",)
+    )
+    assert files == ("tests/unit/check_calc.py",)

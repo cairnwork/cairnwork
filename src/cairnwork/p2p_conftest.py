@@ -26,7 +26,7 @@ from pathlib import Path
 
 from cairnwork.conftest_check import conftest_of, governed
 from cairnwork.deferred_tests import TestCommitRejected, deleted_of, lay_tests_over
-from cairnwork.p2p_selection import select_p2p_targets
+from cairnwork.p2p_selection import name_rule, select_p2p_targets
 from cairnwork.verifier_spec import VerifierSpec
 from cairnwork.verifiers import run_verifiers
 
@@ -47,7 +47,8 @@ def conftest_files(task, test_files, mode, base_tests) -> tuple[str, ...]:
             UNCHECKED, "p2p_selection is off: nothing would check the conftest"
         )
     existing = base_tests(task, frozenset(deleted_of(test_files)))
-    chosen = select_p2p_targets(task.allowed_files, existing, task.test_roots, mode)
+    rule = name_rule(task.repo, task.base_commit)  # #870: the same selection P2P makes
+    chosen = select_p2p_targets(task.allowed_files, existing, task.test_roots, mode, rule)
     forced = tuple(sorted({*chosen, *governed(conftests, existing)}))
     if not forced:
         raise TestCommitRejected(UNCHECKED, f"{', '.join(conftests)}: no base test file to compare")
