@@ -101,3 +101,10 @@ def test_candidate_check_out_of_scope_has_no_policy_text(repo, tmp_path):
     with pytest.raises(CandidateRejected) as info:
         collect_candidate(repo, attempt, ("src/a.py",), python=sys.executable)
     assert info.value.code == "OUT_OF_SCOPE" and POLICY not in str(info.value)
+
+
+def test_the_note_cannot_carry_a_ci_log_command():
+    """A candidate file name is untrusted: a newline plus ``::warning::`` must not reach a log."""
+    note = protected_note("nexus/services/external_intelligence\n::warning::x##[group]y.py")
+    assert "\n" not in note and "::" not in note and "##[" not in note
+    assert POLICY in note and repr(RULE) in note

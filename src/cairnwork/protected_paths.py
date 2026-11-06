@@ -108,7 +108,9 @@ def protected_note(path: str) -> str:
     rule = protected_rule(path)
     if rule is None:
         return ""
+    # the path is candidate text: printable ASCII, cut, no "::" or "##[" a CI log reads as a command
+    shown = re.sub(r"[^ -~]", "?", path)[:200].replace("::", ": :").replace("##[", "# #[")
     return (
-        f"{path}: protected by Cairnwork policy (rule: {rule!r} in protected_paths.py);"
+        f"{shown}: protected by Cairnwork policy (rule: {rule!r} in protected_paths.py);"
         " this is not a finding about the change"
     )
