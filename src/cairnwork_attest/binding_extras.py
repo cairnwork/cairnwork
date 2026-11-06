@@ -20,7 +20,16 @@ from typing import Any
 
 from cairnwork import protection
 from cairnwork.conftest_check import check_conftests, conftest_of
+from cairnwork.deferred_data import (
+    DATA_RULE,
+    MAX_DATA_PATHS,
+    data_rule_problem,
+    declared_data,
+    path_problem,
+)
 from cairnwork.deferred_overlay import MAX_DELETED_TEST_PATHS, TestCommitRejected
+from cairnwork.gitcmd import GitCommandError, run_git
+from cairnwork.pytest_config import test_file_rule
 from cairnwork_attest.verify_response import VerifyResult, _fail
 
 MAX_IMPORT_PATHS = 8  # issue_task.check_import_paths: 0-8 (pinned by test_binding_import_paths)
@@ -69,6 +78,20 @@ def _conftest_paths(value: Any) -> bool:
     )
 
 
+def _data_paths(value: Any) -> bool:
+    """#850: the data files the test commit declares: sorted, distinct, safe ``.py`` paths."""
+    return (
+        isinstance(value, list)
+        and len(value) <= MAX_DATA_PATHS
+        and all(isinstance(p, str) and not path_problem(p) for p in value)
+        and value == sorted(set(value))
+    )
+
+
+def _data_rule(value: Any) -> bool:
+    return isinstance(value, str) and value in ("", DATA_RULE)
+
+
 def _commitment(value: Any) -> bool:
     """#303: the salted hash of a blackbox declaration; a receiver pins what it recomputes from the
     declaration file (``cairnwork-verify blackbox-commitment``)."""
@@ -87,6 +110,8 @@ EXTRAS = (
     Extra("import_paths", [], _path_list, "IMPORT_PATHS_MISMATCH"),
     Extra("deleted_test_paths", [], _deleted_paths, "DELETED_TEST_PATHS_MISMATCH"),
     Extra("conftest_paths", [], _conftest_paths, "CONFTEST_PATHS_MISMATCH"),
+    Extra("data_paths", [], _data_paths, "DATA_PATHS_MISMATCH"),
+    Extra("data_rule", "", _data_rule, "DATA_RULE_MISMATCH"),
     Extra("blackbox_commitment", "", _commitment, "BLACKBOX_COMMITMENT_MISMATCH"),
     Extra(
         "protection",
@@ -97,7 +122,9 @@ EXTRAS = (
     ),  # fmt: skip
 )
 KEYS = frozenset(extra.key for extra in EXTRAS)
-POLICY_ONLY = frozenset({"allow_conftest"})  # #798: a receiver policy key, never a binding key
+POLICY_ONLY = frozenset(
+    {"allow_conftest", "allow_data_paths"}
+)  # #798: a receiver policy key, never a binding key
 
 
 def binding_problem(binding: Mapping[str, Any]) -> str:
@@ -114,6 +141,11 @@ def binding_problem(binding: Mapping[str, Any]) -> str:
         return "binding deleted_test_paths and test_paths share a path"  # #798
     if binding.get("conftest_paths", []) != list(conftest_of(paths)):
         return "binding conftest_paths is not exactly the conftests among test_paths"  # #798
+    data = binding.get("data_paths", [])  # shapes are checked above: a list of str
+    if ("data_paths" in binding) != ("data_rule" in binding):
+        return "binding data_paths and data_rule come together"  # #850
+    if not set(data) <= set(paths) or set(data) & set(binding.get("conftest_paths", [])):
+        return "binding data_paths is not a subset of test_paths without the conftests"  # #850
     return ""
 
 
@@ -180,8 +212,48 @@ def conftest_problem(ctx: Any) -> VerifyResult | None:
     return None
 
 
+def data_problem(ctx: Any) -> VerifyResult | None:
+    """#850: a receipt with ``data_paths`` is accepted only by a full receiver whose policy sets
+    ``allow_data_paths: true``. It re-derives the declaration from the pinned test commit (the
+    binding's list is only a cross-check) and applies the rule itself. That the file did not run
+    is the signer's word (``assurance.data_rule``)."""
+    data, binding = binding_data(ctx.binding), ctx.binding
+    if not data:
+        return None
+    if not ctx.full or (ctx.policy or {}).get("allow_data_paths") is not True:
+        return _fail(
+            "DATA_PATHS_NOT_ALLOWED", "the receipt has data paths; a full receiver must allow"
+        )
+    try:
+        message = run_git(ctx.repo, "log", "-1", "--format=%B", binding["test_commit"], "--")
+        declared = declared_data(message)
+    except (TestCommitRejected, GitCommandError) as exc:
+        return _fail("DATA_PATHS_MISMATCH", f"cannot read the declaration: {str(exc)[:200]}")
+    if list(declared) != data:
+        return _fail("DATA_PATHS_MISMATCH", f"the test commit declares {list(declared)}")
+    why = data_rule_problem(
+        data, binding["test_paths"], binding.get("conftest_paths", []),
+        test_file_rule(ctx.repo, binding["base"]),
+    )  # fmt: skip
+    return _fail("DATA_PATHS_INVALID", why) if why else None
+
+
+def binding_data(binding: Mapping[str, Any]) -> list[str]:
+    return binding.get("data_paths", [])
+
+
+def assurance_extras(binding: Mapping[str, Any]) -> dict[str, str]:
+    """The assurance keys that rest on the signer's word for the optional keys (#798, #850)."""
+    return {
+        **({"conftest_probe": "signer_claim"} if binding.get("conftest_paths") else {}),
+        **({"data_rule": "signer_claim"} if binding.get("data_paths") else {}),
+    }
+
+
 def policy_problem(policy: Mapping[str, Any]) -> str:
     """Why a pinned optional key in the policy is malformed (an empty pin is allowed)."""
+    if "allow_data_paths" in policy and not isinstance(policy["allow_data_paths"], bool):
+        return "policy allow_data_paths must be a boolean"
     if "allow_conftest" in policy and not isinstance(policy["allow_conftest"], bool):
         return "policy allow_conftest must be a boolean"
     for extra in EXTRAS:

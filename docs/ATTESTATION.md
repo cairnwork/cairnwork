@@ -389,6 +389,16 @@ Checks run in this order and the first failure is reported:
     not the guard). That the base tests keep their outcomes with the test commit laid over the base
     (the differential probe, `p2p_conftest.py`) is the signer's word: `assurance.conftest_probe` is
     `signer_claim` when `conftest_paths` is present.
+    A test commit may declare `.py` files that are test data, not pytest targets (#850), in the
+    last paragraph of its message: `Cairnwork-Data: <path> [<path>...]`. The receipt then carries
+    `data_paths` (sorted, a subset of `test_paths`, no conftest) and `data_rule`
+    (`exec-refuse-v1`). Only a full receiver whose policy sets `allow_data_paths: true` accepts
+    them (`DATA_PATHS_NOT_ALLOWED`; a confidential receiver always refuses). It re-derives the
+    declaration from the pinned test commit (`DATA_PATHS_MISMATCH`) and checks that no declared
+    path matches the base's `python_files`, is a conftest or `__init__.py`, or is named by a
+    verifier (`DATA_PATHS_INVALID`); a data file is exempt from the targeting rule above and never
+    read for tests. That the file was not executed is the signer's word: `assurance.data_rule` is
+    `signer_claim` when `data_paths` is present. A malformed `data_rule` is `DATA_RULE_MISMATCH`.
     Every bound verifier id must be among the request's required verifier ids
     (`VERIFIER_NOT_REQUIRED`). The rule reads which tests a target names, not which ones pytest
     collected (#660). The producer also refuses a test commit whose new or changed tests are not
