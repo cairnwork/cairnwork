@@ -111,6 +111,12 @@ ODD = {
         "    __hash__ = str.__hash__\n" + _raise("S(\"No module named 'pkg.newmod'\")")),
     "the parent swapped for a non-module": (
         "import sys\nsys.modules['pkg'] = object()\n" + _raise('"No module named \'pkg.newmod\'"')),
+    "a non-module parent with an in-checkout __file__": (  # #970 review nit 1
+        "import os, sys\nclass P:\n    pass\np = P()\n"
+        "p.__file__ = os.path.abspath('pkg/__init__.py')\n"
+        "p.__path__ = [os.path.abspath('pkg')]\np.__spec__ = None\n"
+        "sys.modules['pkg'] = p\nimport pkg.newmod\n"
+    ),
     "the parent with no __file__": (
         "import sys, types\nsys.modules['pkg'] = types.ModuleType('pkg')\n"
         + _raise('"No module named \'pkg.newmod\'"').replace("import pkg\n", "")),

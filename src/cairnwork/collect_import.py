@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import keyword
 from dataclasses import replace
+from fnmatch import fnmatchcase
 from typing import TypedDict
 
 from cairnwork.skip_hint import is_module
@@ -18,6 +19,11 @@ from cairnwork.skip_hint import is_module
 MAX_ENTRIES = 100
 _MAX_PATH = 300
 _NOT_REPO = frozenset({".venv", "site-packages", "node_modules"})
+# #796 S3: more vendored or tool trees, for the new submodule record only (S2's list: #933)
+_NOT_REPO_S3 = _NOT_REPO | {"dist-packages", ".tox", ".nox", "_vendor", "vendor", "third_party"}
+# S3: a missing leaf with one of these names is test-suite or build output, not fix code
+_HELD_BACK = ("test*", "*_test", "*tests", "conftest*", "fixture*", "mock*",
+              "_version*", "version", "*_pb2*", "*_ext", "*_cy")  # fmt: skip
 
 
 def _relative(path: str) -> bool:
@@ -118,18 +124,46 @@ def as_failed(run, targets, is_test):
 
     DEPENDENCY: marking every target of the file failed is safe only because ``base_teeth`` grants
     TEETH when ANY target failed without a fail_kind (tests/test_collect_import_teeth.py pins it).
-    If it ever counts teeth per test, a target that never uses the missing name gets teeth."""
-    origin_of = {node: origin for node, _module, origin in run.import_errors}
+    If it ever counts teeth per test, a target that never uses the missing name gets teeth.
+
+    S3 (#796): a collect error recorded in ``submodule_errors`` ("No module named 'pkg.newmod'"
+    while ``pkg`` loaded from an in-repo ``__init__.py``) qualifies the same way when
+    ``_new_submodule`` passes; a node in both records must pass both. Residual (written in
+    PRESERVED_BEHAVIORS): a neutral-named missing module under the source tree is trusted as fix
+    code, and an extension or generated module the verifier cannot build is wrongly attributed
+    to the candidate (FAILED, never VERIFIED)."""
+    checks: dict[str, list[bool]] = {}  # node -> one verdict per entry; a node in both lists
+    for node, _module, origin in run.import_errors:  # must pass both rule sets
+        checks.setdefault(node, []).append(_in_repo(origin, is_test, _NOT_REPO))
+    for node, module, origin in run.submodule_errors:
+        checks.setdefault(node, []).append(_new_submodule(module, origin, is_test))
     files = {target.partition("::")[0] for target in targets}
     if not run.collect_errors:
         return run
     for node in run.collect_errors:
-        origin = origin_of.get(node)
-        if node not in files or origin is None or is_test(origin):
-            return run
-        if _NOT_REPO & set(origin.split("/")):
+        if node not in files or not checks.get(node) or not all(checks[node]):
             return run
     marked = [t for t in targets if t.partition("::")[0] in set(run.collect_errors)]
     outcomes = {**run.outcomes, **dict.fromkeys(marked, "failed")}
     collected = (*run.collected, *(t for t in marked if t not in run.collected))
     return replace(run, collect_errors=(), outcomes=outcomes, collected=collected)
+
+
+def _in_repo(origin: str, is_test, not_repo: frozenset[str]) -> bool:
+    """S2's rule for the file the base imported: not a test file, not under a vendored tree."""
+    return not is_test(origin) and not (not_repo & set(origin.split("/")))
+
+
+def _new_submodule(module: str, parent_origin: str, is_test) -> bool:
+    """#796 S3: the parent package passes the S2 rule (wider vendored list), and the missing
+    submodule looks like code the fix adds: no directory named tests/test above it, a leaf name
+    that is not test-suite or build output, and neither ``<leaf>.py`` nor ``<leaf>/__init__.py``
+    beside the parent's ``__init__.py`` would be a test file by the base's rule."""
+    folder, leaf = parent_origin.rpartition("/")[0], module.rpartition(".")[2]
+    would = (f"{folder}/{leaf}.py", f"{folder}/{leaf}/__init__.py")
+    return (
+        _in_repo(parent_origin, is_test, _NOT_REPO_S3)
+        and not {"tests", "test"} & set(folder.split("/"))
+        and not any(fnmatchcase(leaf, pattern) for pattern in _HELD_BACK)
+        and not any(is_test(path) for path in would)
+    )
