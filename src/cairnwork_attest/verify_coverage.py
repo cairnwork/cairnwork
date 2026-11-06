@@ -16,6 +16,13 @@ new_tests: a test a class inherits from another in the file is a test of that cl
 test in a class pytest does not collect (``__init__``/``__new__``) is refused
 (DEFERRED_TESTS_NOT_COLLECTED, reported as TEST_PATH_NOT_TARGETED). Confidential mode sees neither,
 as above.
+
+Data paths (#850): a test commit may declare ``.py`` files that are data, not tests, in a
+``Cairnwork-Data`` trailer; the receipt then carries ``data_paths`` and ``data_rule``. Only a full
+receiver whose policy sets ``allow_data_paths: true`` accepts them (DATA_PATHS_NOT_ALLOWED
+otherwise); it re-derives the declaration from the pinned test commit (DATA_PATHS_MISMATCH,
+DATA_PATHS_INVALID). A data file is not read for tests, is exempt from the rule above, and no
+verifier may name it. That it was not executed is the signer's word (``assurance.data_rule``).
 """
 
 from __future__ import annotations
@@ -24,7 +31,7 @@ from typing import Any
 
 from cairnwork.deferred_tests import TestCommitRejected, new_tests, untargeted
 from cairnwork.issue_task import test_target
-from cairnwork_attest.binding_extras import conftest_problem, required_ids
+from cairnwork_attest.binding_extras import conftest_problem, data_problem, required_ids
 from cairnwork_attest.verify_response import VerifyResult, _fail
 
 _PYTEST = ["python3", "-m", "pytest"]
@@ -53,14 +60,24 @@ def targets(argv: list[str]) -> tuple[str, ...]:
     return tuple(found)
 
 
+def _tests(paths: tuple[str, ...], data: frozenset[str]) -> tuple[str, ...]:
+    return tuple(p for p in paths if p not in data)
+
+
 def coverage_problem(ctx: Any) -> VerifyResult | None:
     """ctx is verify_binding's check context (binding and request; shapes already checked)."""
     binding = ctx.binding
     verifiers: list[Any] = binding["verifiers"]
     named, paths = [t for _, argv in verifiers for t in targets(argv)], tuple(binding["test_paths"])
+    data = frozenset(binding.get("data_paths", []))  # #850: declared data, never read for tests
+    if (problem := data_problem(ctx)) is not None:  # a failed result is falsy
+        return problem
+    folded = {path.casefold() for path in data}  # a case variant names the same file on macOS
+    if clash := sorted(t for t in named if t.split("::", 1)[0].casefold() in folded):
+        return _fail("DATA_PATHS_INVALID", f"a verifier names a data path: {clash}")
     try:
         nodes = (
-            new_tests(ctx.repo, binding["base"], binding["test_commit"], paths)
+            new_tests(ctx.repo, binding["base"], binding["test_commit"], _tests(paths, data))
             if ctx.full
             else [t for t in named if "::" in t]
         )
@@ -68,7 +85,7 @@ def coverage_problem(ctx: Any) -> VerifyResult | None:
         return _fail("TEST_PATH_NOT_TARGETED", f"cannot read the bound tests: {exc}")
     if (problem := conftest_problem(ctx)) is not None:  # #798: a failed result is falsy
         return problem
-    exempt = frozenset(binding.get("conftest_paths", []))  # validated: a subset of test_paths
+    exempt = frozenset(binding.get("conftest_paths", [])) | data  # validated subsets of test_paths
     if missing := untargeted(tuple(p for p in paths if p not in exempt), nodes, named):
         return _fail("TEST_PATH_NOT_TARGETED", f"no bound verifier runs these: {list(missing)}")
     required = required_ids(ctx.request)
