@@ -70,7 +70,7 @@ import stat
 from pathlib import Path
 
 from cairnwork.bytecode_hook import HOOK_SOURCE
-from cairnwork.collect_import import import_errors
+from cairnwork.collect_import import import_hints
 from cairnwork.confined import MAX_REPORT_BYTES
 from cairnwork.data_exec_hook import plugin_source, refused
 from cairnwork.pytest_config import PLUGINS
@@ -167,7 +167,7 @@ class _Reporter:
         self._renamed = []  # items whose node id or file changed after collection, or never seen
         self._collect_errors = []
         self._collect_skipped = []
-        self._import_errors = []  # #796: collectors that failed on "cannot import name"
+        self._hints = {"collect_import_errors": [], "collect_missing_submodules": []}  # #796
         self._skipped_deps = []  # #813: per skipped collector, the module it could not import
         self._teardown_errors = []
         self._setup_failed = []  # #775: fixture raised before the body
@@ -183,8 +183,8 @@ class _Reporter:
             self._collect_skipped.append(report.nodeid)
             self._skipped_deps.append(_missing(report))
 
-    def pytest_exception_interact(self, node, call, report, _record=_import_error):
-        self._import_errors += filter(None, [_record(node, call, report)])
+    def pytest_exception_interact(self, node, call, report, _hints=_collect_hints):
+        _hints(node, call, report, self._hints)
 
     def _original(self, item, nodeid, _source=_source):
         """The node id ``item`` had when collected; an item that was not seen collected, or whose
@@ -264,7 +264,7 @@ class _Reporter:
                    "renamed": list(dict.fromkeys(self._renamed)),
                    "collect_errors": self._collect_errors,
                    "collect_skipped": self._collect_skipped,
-                   "collect_import_errors": self._import_errors,
+                   **self._hints,  # #796: collect_import_errors, collect_missing_submodules
                    "collect_skipped_deps": self._skipped_deps,
                    "teardown_errors": self._teardown_errors,
                    "collection_finished": self._finished,
@@ -386,7 +386,7 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
         collect_errors=tuple(errors),
         collect_skipped=tuple(skipped),
         skipped_deps=_module_names(data),
-        import_errors=import_errors(data),
+        **import_hints(data),
         renamed=tuple(renamed),
         teardown_errors=tuple(teardown),
         fail_kind=kind,
