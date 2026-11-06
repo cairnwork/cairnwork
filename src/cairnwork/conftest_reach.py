@@ -14,7 +14,8 @@ Resolution over-approximates pytest on purpose (refusing too much is the safe si
   prepend mode, or one a conftest puts there itself), every ``.py`` file of the tree whose path
   ends in ``a``, ``a/b`` or ``a/b/c`` as a module or a package's ``__init__.py``, namespace
   packages included (#924 r4/r5); ``from M import n`` also tries ``M.n``;
-* relative imports are resolved from the importing file's directory;
+* relative imports are resolved from the importing file's directory, to the same kinds of
+  module file (#976);
 * ``importlib.import_module("...")`` and ``__import__("...")`` with a literal name count as
   imports (a leading dot also relative to the file, a literal ``fromlist`` as submodules), and so
   do the literal names of a ``pytest_plugins`` assignment; every import counts, at any depth (a
@@ -84,11 +85,11 @@ def _names(files: frozenset[str]) -> dict[str, set[str]]:
     is on ``sys.path``: every trailing run of its path parts (``a/b/c.py`` as ``c``, ``b.c`` and
     ``a.b.c``; ``a/b/__init__.py`` as ``b`` and ``a.b``), less the bare name ``conftest``. A
     native extension or bytecode file counts under the part of its name before the first dot
-    (``colorsys.cpython-314-darwin.so`` as ``colorsys``, r6)."""
+    (``colorsys.cpython-314-darwin.so`` as ``colorsys``, r6), and a cached one in ``__pycache__``
+    as the module beside it (#980)."""
     out: dict[str, set[str]] = {}
     for path in files:
-        *dirs, name = path.split("/")
-        parts = [*dirs, name.split(".", 1)[0]] if name.endswith(MODULE_SUFFIXES) else []
+        parts = _stem(path).split("/") if path.endswith(MODULE_SUFFIXES) else []
         parts = parts[:-1] if parts[-1:] == ["__init__"] else parts
         for k in range(len(parts)):
             if (name := ".".join(parts[k:])) != "conftest":
@@ -110,7 +111,7 @@ def _targets(here: str, tree: ast.Module, files: frozenset[str], by_name) -> set
             for _ in range(level - 1):
                 base = dirname(base)
             # the empty module name tries the package's own __init__.py
-            found |= _module_files(base, parts) & files
+            found |= _module_files(base, parts, files, by_name)
     return found
 
 
@@ -160,13 +161,29 @@ def _dynamic(func: ast.expr) -> bool:
     return isinstance(func, ast.Name) and func.id in ("__import__", "import_module")
 
 
-def _module_files(start: str, parts: list[str]) -> set[str]:
-    """Each dotted prefix of ``parts`` under ``start`` as a module file or a package init."""
-    out = {join(start, "__init__.py")} if start else set()
+def _module_files(start: str, parts: list[str], files: frozenset[str], by_name) -> set[str]:
+    """The files of the tree that are each dotted prefix of ``parts`` under ``start``, as a module
+    file or a package init: a ``.py`` file, or a native extension or bytecode file by the part of
+    its name before the first dot (#976, as ``_names``)."""
+    stems = {join(start, "__init__")} if start else set()
     for k in range(1, len(parts) + 1):
         stem = join(start, *parts[:k]) if start else join(*parts[:k])
-        out |= {f"{stem}.py", join(stem, "__init__.py")}
-    return {p.lstrip("/") for p in out}
+        stems |= {stem, join(stem, "__init__")}
+    stems = {stem.lstrip("/") for stem in stems}
+    out = {f"{stem}.py" for stem in stems} & files
+    for stem in stems:
+        key = stem.removesuffix("/__init__").replace("/", ".")
+        out |= {path for path in by_name.get(key, ()) if _stem(path) == stem}
+    return out
+
+
+def _stem(path: str) -> str:
+    """``path`` less everything after the first dot of its file name, and less a ``__pycache__``
+    directory it is in: Python loads ``d/__pycache__/m.<tag>.pyc`` as the module ``d/m`` (#980)."""
+    head, _, name = path.rpartition("/")
+    if head.rpartition("/")[2] == "__pycache__":
+        head = head.rpartition("/")[0]
+    return join(head, name.split(".", 1)[0])
 
 
 def _above(directory: str) -> list[str]:

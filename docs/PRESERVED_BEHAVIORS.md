@@ -73,7 +73,7 @@
 
 conftest 匯入的模組在每個測試之前執行，可以改掉 runner 回報的結果，而 base 的每個結果都不變，差異探測看不出來。所以只要測試 commit 樹裡任何一個 conftest（有改沒改都算）的匯入可能載入測試 commit 新增或改動的檔案，就拒絕（`TEST_COMMIT_CONFTEST_STATIC`，`src/cairnwork/conftest_reach.py`）。在 producer、pipeline judge 和 full 接收端都會跑，接收端查全部 test paths（#952）。
 
-- 比對用名稱：每個模組檔（`.py`，以及 `.so`、`.pyd`、`.pyc`，取第一個點之前當名字）以路徑尾段任意長度建索引，所以不論哪個目錄在 `sys.path` 上都對得到。
+- 比對用名稱：每個模組檔（`.py`，以及 `.so`、`.pyd`、`.pyc`，取第一個點之前當名字）以路徑尾段任意長度建索引，所以不論哪個目錄在 `sys.path` 上都對得到。相對匯入從匯入檔所在的目錄解析，同樣比對這四種模組檔（#976）。
 - 壓縮檔（`.zip`、`.egg`、`.whl`、`.pyz`）要先把它自己的路徑放進 `sys.path` 才能從裡面載入，import 寫的名字看不出來。直接寫法會拒：conftest 或根目錄 pytest 設定檔的原文出現那個壓縮檔的檔名。其餘（執行時組出的路徑、經由沒改動的 helper）是已知殘留，追蹤在 #967。不全拒的理由：解壓、打包類 repo 常用壓縮檔當測試資料。
 - 解析不了的未改動檔（例如 `examples/` 下的 Python 2 conftest）不會因此拒整個 repo，改把原文裡每個點號識別字當成匯入。
 
