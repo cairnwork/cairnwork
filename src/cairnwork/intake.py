@@ -40,7 +40,7 @@ from typing import Any
 from cairnwork import runlock, takeover
 from cairnwork.deferred_store import DeferredStore
 from cairnwork.gitcmd import GitCommandError, run_git
-from cairnwork.intake_config import DEFAULT_CONFIG, has_token, seconds_ok
+from cairnwork.intake_config import DEFAULT_CONFIG, has_token, seconds_ok, stored_config
 from cairnwork.intake_request import (
     IntakeRefused,
     bind_stored,
@@ -99,7 +99,7 @@ class Intake:
         path = self.state / "config.json"
         try:
             loaded = json.loads(path.read_text()) if path.exists() else {}
-        except ValueError as exc:  # truncated or not UTF-8: refused, never a traceback (#234)
+        except (ValueError, RecursionError) as exc:  # truncated, not UTF-8, too deep (#234, #909)
             raise IntakeRefused("BAD_CONFIG", f"{path} is not valid JSON: {exc}") from exc
         if not isinstance(loaded, dict) or set(loaded) - set(DEFAULT_CONFIG):
             raise IntakeRefused("BAD_CONFIG", f"{path} keys must be among {sorted(DEFAULT_CONFIG)}")
@@ -154,7 +154,7 @@ class Intake:
         if resolved is None or not os.path.isabs(resolved):
             return  # a gh we cannot name absolutely is not recorded (it would be BAD_CONFIG)
         path = self.state / "config.json"
-        loaded = json.loads(path.read_text()) if path.exists() else {}
+        loaded = stored_config(path)  # None when unreadable: left as is, config() refuses it
         if isinstance(loaded, dict) and loaded.get("gh") != resolved:
             tmp = path.with_suffix(".tmp")
             tmp.write_text(json.dumps({**loaded, "gh": resolved}, sort_keys=True))

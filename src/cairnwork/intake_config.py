@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -70,3 +71,12 @@ def has_token(token_file: Any) -> bool:
         return path.is_file() and bool(path.read_text(encoding="utf-8").strip())
     except (OSError, TypeError, ValueError):
         return False
+
+
+def stored_config(path: Path) -> Any:
+    """The state config as stored ({} when absent); None when it cannot be read: cut short, not
+    JSON, not UTF-8 or nested too deep (#909)."""
+    try:
+        return json.loads(path.read_text()) if path.exists() else {}
+    except (ValueError, RecursionError):
+        return None
