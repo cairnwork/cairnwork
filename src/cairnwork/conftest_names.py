@@ -29,9 +29,9 @@ from pathlib import Path
 from posixpath import dirname, join
 
 from cairnwork.deferred_overlay import TestCommitRejected
+from cairnwork.fixture_forms import CODE, _aliases, _fixture, module_level, registered
 from cairnwork.gitcmd import GitCommandError, run_git, run_git_bytes
 
-CODE = "TEST_COMMIT_CONFTEST_STATIC"
 MAX_FILES = 5000  # base Python files read under one conftest's directory
 _REQUESTS = frozenset({"usefixtures", "getfixturevalue"})
 
@@ -62,9 +62,10 @@ def taken_names(
 
 
 def bound(tree: ast.Module) -> set[str]:
-    """Top-level names ``tree`` binds, with each fixture's ``name=`` value."""
-    names: set[str] = set()
-    for node in tree.body:
+    """Names ``tree`` binds at module level (inside ``if``, ``try``, ``with`` and loops too), and
+    every name a fixture in it may register (fixture_forms.registered)."""
+    names = registered(tree)
+    for node in module_level(tree.body):
         names |= bound_by(node)
     return names
 
@@ -120,27 +121,27 @@ def _call_name(func: ast.expr) -> str:
 
 def _fixtures(tree: ast.Module) -> set[str]:
     """#982 item 4 r2: what an imported module's fixtures take: each fixture's name (a star
-    import, ``as`` or ``pytest_plugins`` registers it under that name), its ``name=`` and its
-    parameters, and every literal string passed to ``usefixtures`` or ``getfixturevalue``. A
-    fixture is a function with a decorator naming ``fixture``, or one passed to ``fixture(...)``."""
-    wrapped = {
-        a.id for n in ast.walk(tree) if isinstance(n, ast.Call) and "fixture" in _call_name(n.func)
-        for a in n.args if isinstance(a, ast.Name)
-    }  # fmt: skip
-    names = {
+    import, ``as`` or ``pytest_plugins`` registers it under that name), what ``registered`` reads,
+    its parameters, and every literal string passed to ``usefixtures`` or ``getfixturevalue``. A
+    fixture is a function with a decorator naming ``fixture`` or an alias of it, any decorated
+    module-level function (a factory decorator from another module may call ``fixture``, #982;
+    a method's ``@property`` is not), or one passed to a ``fixture`` call."""
+    names = registered(tree) | {
         s.value for n in ast.walk(tree)
         if isinstance(n, ast.Call) and _call_name(n.func) in _REQUESTS
         for arg in n.args for s in ast.walk(arg)
         if isinstance(s, ast.Constant) and isinstance(s.value, str)
     }  # fmt: skip
+    top, aliases = {id(n) for n in module_level(tree.body)}, _aliases(tree)
     for node in ast.walk(tree):
         if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             continue
-        marked = any("fixture" in ast.unparse(d) for d in node.decorator_list)
-        if marked or node.name in wrapped:
+        marked = any(  # main's rule kept: "fixture" anywhere in a decorator, even in a string
+            _fixture(d, aliases) or "fixture" in ast.unparse(d) for d in node.decorator_list
+        )
+        if marked or (node.decorator_list and id(node) in top) or node.name in names:
             a = node.args
-            names |= {node.name} | _given(node)
-            names |= {x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs)}
+            names |= {node.name} | {x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs)}
     return names
 
 
