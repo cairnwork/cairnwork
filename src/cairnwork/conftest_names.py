@@ -29,9 +29,9 @@ from pathlib import Path
 from posixpath import dirname, join
 
 from cairnwork.deferred_overlay import TestCommitRejected
+from cairnwork.fixture_forms import CODE, _aliases, _fixture, exported, module_level, registered
 from cairnwork.gitcmd import GitCommandError, run_git, run_git_bytes
 
-CODE = "TEST_COMMIT_CONFTEST_STATIC"
 MAX_FILES = 5000  # base Python files read under one conftest's directory
 _REQUESTS = frozenset({"usefixtures", "getfixturevalue"})
 
@@ -46,25 +46,33 @@ def taken_names(
     listing = _listing(repo, base)
     sources = _base_sources(repo, listing, directory)
     trees: dict[str, ast.Module] = {}
+    above = []
     for parent in _parents(directory):
         conftest = join(parent, "conftest.py") if parent else "conftest.py"
         if conftest in sources:  # r2: what its own fixtures request may not be overridden either
             trees[conftest] = tree = _parse(conftest, sources[conftest])
-            names |= bound(tree) | requested(tree)
+            above.append(tree)
+            names |= requested(tree)
     for file, data in sources.items():
         if _under(file, directory):
             trees[file] = tree = _parse(file, data)
             names |= requested(tree)
     conftests = {f: t for f, t in trees.items() if f.rsplit("/", 1)[-1] == "conftest.py"}
-    for tree in _imported(repo, listing, conftests).values():  # #982 item 4
-        names |= _fixtures(tree)  # r2: only its fixtures, not every function of app code
-    return frozenset(bound(old)), frozenset(names)
+    imported = _imported(repo, listing, conftests)  # #982 item 4
+    extra = exported([old, *trees.values(), *imported.values()])  # #998: re-exported aliases
+    for tree in above:
+        names |= bound(tree, extra)
+    for tree in imported.values():
+        names |= _fixtures(tree, extra)  # r2: only its fixtures, not every function of app code
+    return frozenset(bound(old, extra)), frozenset(names)
 
 
-def bound(tree: ast.Module) -> set[str]:
-    """Top-level names ``tree`` binds, with each fixture's ``name=`` value."""
-    names: set[str] = set()
-    for node in tree.body:
+def bound(tree: ast.Module, extra: frozenset[str] = frozenset()) -> set[str]:
+    """Names ``tree`` binds at module level (inside ``if``, ``try``, ``with`` and loops too), and
+    every name a fixture in it may register (fixture_forms.registered; ``extra``: aliases other
+    read modules export)."""
+    names = registered(tree, extra)
+    for node in module_level(tree.body):
         names |= bound_by(node)
     return names
 
@@ -118,29 +126,29 @@ def _call_name(func: ast.expr) -> str:
     return func.id if isinstance(func, ast.Name) else ""
 
 
-def _fixtures(tree: ast.Module) -> set[str]:
+def _fixtures(tree: ast.Module, extra: frozenset[str] = frozenset()) -> set[str]:
     """#982 item 4 r2: what an imported module's fixtures take: each fixture's name (a star
-    import, ``as`` or ``pytest_plugins`` registers it under that name), its ``name=`` and its
-    parameters, and every literal string passed to ``usefixtures`` or ``getfixturevalue``. A
-    fixture is a function with a decorator naming ``fixture``, or one passed to ``fixture(...)``."""
-    wrapped = {
-        a.id for n in ast.walk(tree) if isinstance(n, ast.Call) and "fixture" in _call_name(n.func)
-        for a in n.args if isinstance(a, ast.Name)
-    }  # fmt: skip
-    names = {
+    import, ``as`` or ``pytest_plugins`` registers it under that name), what ``registered`` reads,
+    its parameters, and every literal string passed to ``usefixtures`` or ``getfixturevalue``. A
+    fixture is a function with a decorator naming ``fixture`` or an alias of it, any decorated
+    module-level function (a factory decorator from another module may call ``fixture``, #982;
+    a method's ``@property`` is not), or one passed to a ``fixture`` call."""
+    names = registered(tree, extra) | {
         s.value for n in ast.walk(tree)
         if isinstance(n, ast.Call) and _call_name(n.func) in _REQUESTS
         for arg in n.args for s in ast.walk(arg)
         if isinstance(s, ast.Constant) and isinstance(s.value, str)
     }  # fmt: skip
+    top, aliases = {id(n) for n in module_level(tree.body)}, _aliases(tree, extra)
     for node in ast.walk(tree):
         if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             continue
-        marked = any("fixture" in ast.unparse(d) for d in node.decorator_list)
-        if marked or node.name in wrapped:
+        marked = any(  # main's rule kept: "fixture" anywhere in a decorator, even in a string
+            _fixture(d, aliases) or "fixture" in ast.unparse(d) for d in node.decorator_list
+        )
+        if marked or (node.decorator_list and id(node) in top) or node.name in names:
             a = node.args
-            names |= {node.name} | _given(node)
-            names |= {x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs)}
+            names |= {node.name} | {x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs)}
     return names
 
 
