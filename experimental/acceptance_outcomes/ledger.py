@@ -89,7 +89,8 @@ def record_call(
     call: dict[str, Any] = {k: inputs.get(k, "") for k in ("repo", "base", "candidate", "version")}
     if any(not call[k] for k in call):
         raise OutcomesError("OUTCOME_INVALID", "repo, base, candidate and version are required")
-    binding = result.get("binding") if isinstance(result.get("binding"), dict) else {}
+    binding = result.get("binding")
+    binding = binding if isinstance(binding, dict) else {}
     # #774: a test commit not given on the command line is the one the result was bound to
     call["test_commit"] = inputs.get("test_commit", "") or binding.get("test_commit") or ""
     identities = [

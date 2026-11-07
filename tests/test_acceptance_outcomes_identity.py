@@ -31,6 +31,7 @@ def result_for(fx: dict[str, Any], **updates: Any) -> dict[str, Any]:  # noqa: F
         ("candidate", "candidate_commit", "1" * 40),
         ("base", "base", "2" * 40),
         ("test_commit", "test_commit", "3" * 40),
+        ("repo", "repo", "/elsewhere"),  # review nit
     ],
 )
 def test_result_identity_mismatch_refused_with_notary_lost(
