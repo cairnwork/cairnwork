@@ -129,8 +129,8 @@ def _import_part(stmt: ast.stmt, reached: bool = False) -> list[ast.AST]:
         body = [m for m in stmt.body if not isinstance(m, _DEFS)]
         methods = [m for m in stmt.body if isinstance(m, _DEFS)]
         heads = [node for method in methods for node in _method_head(method)]
-        parts = [*stmt.decorator_list, *stmt.bases, *(k.value for k in stmt.keywords)]
-        parts += [*body, *heads]
+        parts: list[ast.AST] = [*stmt.decorator_list, *stmt.bases]
+        parts += [*(k.value for k in stmt.keywords), *body, *heads]
         if reached:
             parts += [m for m in methods if not _test(m)]
         else:
