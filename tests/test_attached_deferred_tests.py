@@ -29,6 +29,19 @@ WRITER = "def add_tests(cls):\n    cls.test_x = _impl\n    return cls\n"
 FN_IMPL = "def _impl():\n{}"
 INSTALL = "def _install():\n    globals().update({'test_x': _impl})\n_install()\n"
 META = "class Meta(type):\n    def __init__(cls, *a):\n        cls.test_x = _impl\n"
+OK = "def _ok(v):\n    assert v\n"
+LAMBDA = "_impl = lambda self: _ok({})\nTestX.test_x = _impl\n"  # not a def
+HOLDER = (
+    "class H:\n    @staticmethod\n    def add_tests(cls):\n        cls.test_x = _impl\n"
+    "        return cls\n@H.add_tests\n" + CLS
+)
+SUBCLASS = (
+    "class Base:\n    def __init_subclass__(cls):\n        cls._add()\n"
+    "    @classmethod\n    def _add(cls):\n        cls.test_x = _impl\n"
+    "class TestX(Base):\n    pass\n"
+)
+DEFAULT = "def _h(a=setattr(TestX, 'test_x', _impl)):\n    pass\n"
+DICT = "import sys\nsys.modules[__name__].__dict__['test_x'] = _impl\n"
 
 # (on the base, in the test commit) beside REGRESSION: each changes an attached test
 ATTACHED = {
@@ -60,6 +73,28 @@ ATTACHED = {
     # not readable: the value reaches an import, the statement itself unchanged
     "from-an-import": ("from helpers import impl\n" + CLS + "TestX.test_x = impl\n",
                        "from helpers import impl\n" + CLS + "TestX.test_x = impl\n"),
+    # Claude r1 on #1003: a value not bound by a def or class, a class holding the decorator,
+    # a classmethod run while a subclass is built, more attaching forms, each guard pinned
+    "trap-assigned": (CLS + OK + LAMBDA.format("add(2, 2) == 4"),
+                      CLS + OK + LAMBDA.format("add(2, 3) == 6")),
+    "trap-static-decorator": (IMPL.format(RIGHT) + HOLDER, IMPL.format(WRONG) + HOLDER),
+    "trap-init-subclass": (IMPL.format(RIGHT) + SUBCLASS, IMPL.format(WRONG) + SUBCLASS),
+    "trap-function-default": (CLS + IMPL.format(RIGHT) + DEFAULT,
+                              CLS + IMPL.format(WRONG) + DEFAULT),
+    "trap-dict": (FN_IMPL.format(RIGHT) + DICT, FN_IMPL.format(WRONG) + DICT),
+    "laundered-import": ("from helpers import impl\n" + CLS + "_v = impl\nTestX.test_x = _v\n",
+                         "from helpers import impl\n" + CLS + "_v = impl\nTestX.test_x = _v\n"),
+    "import-in-helper": (CLS + "def _go():\n    from helpers import impl\n    TestX.test_x = impl\n"
+                         "_go()\n",) * 2,
+    "for-target": ("", CLS + IMPL.format(WRONG) + "for TestX.test_x in [_impl]:\n    pass\n"),
+    "with-target": ("", CLS + IMPL.format(WRONG) + "with _cm() as TestX.test_x:\n    pass\n"),
+    "builtins-setattr": ("", "import builtins\n" + CLS + IMPL.format(WRONG)
+                         + "builtins.setattr(TestX, 'test_x', _impl)\n"),
+    "type-setattr": ("", CLS + IMPL.format(WRONG) + "type.__setattr__(TestX, 'test_x', _impl)\n"),
+    "a-test-class": ("", FN_IMPL.format(WRONG)
+                     + "globals()['TestY'] = type('TestY', (), {'test_x': staticmethod(_impl)})\n"),
+    "removed-unreadable": (CLS + IMPL.format(RIGHT) + "setattr(TestX, 'test_' + 'x', _impl)\n",
+                           CLS + IMPL.format(RIGHT)),
 }  # fmt: skip
 
 
@@ -85,7 +120,11 @@ CONTROLS = {  # no attached test: nothing refused, only test_regression is new
     "rewritten-as-a-def": CLS + "def test_x():\n" + RIGHT,
     "unchanged-readable": CLS + IMPL.format(RIGHT) + "TestX.test_x = _impl\n",
     "namespace-reads": "DATA = 1\nglobals().update({'DATA': len})\nN = len(globals())\n"
-    "X = globals().get('DATA')\n",
+    "X = globals().get('DATA')\nNAMES = [k for k in globals()]\n"
+    "for _k in vars(len):\n    pass\n",
+    "self-stores": "from helpers import make\nclass Base:\n    def setUp(self):\n"
+    "        self.test_client = make()\n        setattr(self, 'test_db', make())\n"
+    "class TestX(Base):\n    pass\n",
 }
 
 
@@ -95,6 +134,12 @@ def test_a_plain_assignment_or_an_unchanged_readable_attachment_refuses_nothing(
     commit_change(project, {F: "from calc import add\n" + body})
     nodes = _new_tests(project, {F: REGRESSION + body})
     assert f"{F}::test_regression" in nodes and not any("TestX::test_x" in n for n in nodes)
+
+
+def test_a_changed_literal_attribute_refuses_nothing(project):
+    commit_change(project, {F: "from calc import add\n" + CLS + "setattr(TestX, 'test_n', 3)\n"})
+    after = REGRESSION + CLS + "setattr(TestX, 'test_n', 4)\n"
+    assert _new_tests(project, {F: after}) == {f"{F}::test_regression"}
 
 
 def test_an_imported_class_decorator_is_the_known_limit(project):
@@ -136,10 +181,14 @@ def test_other_imports_and_a_class_body_pytestmark_import_add_nothing(project):
 
 
 @pytest.mark.sandbox
-def test_verify_refuses_the_trap_a_wrong_fix_would_fail(project, state):
-    """Before #994: VERIFIED. Only _impl's body changed; the target names test_regression."""
-    before, after = ATTACHED["trap-attribute"]
-    commit_change(project, {F: "from calc import add\n" + before})
+@pytest.mark.parametrize("shape", ["trap-attribute", "trap-assigned", "trap-static-decorator",
+                                   "for-target"])  # fmt: skip
+def test_verify_refuses_the_trap_a_wrong_fix_would_fail(project, state, shape):
+    """Before #994 (and, for the last three, at 766020301dd9): VERIFIED. The attached test fails
+    the fix; the target names test_regression only."""
+    before, after = ATTACHED[shape]
+    if before:
+        commit_change(project, {F: "from calc import add\n" + before})
     base, test_commit = make_test_commit(project, {F: REGRESSION + after})
     cand = candidate(project, base, {"src/calc.py": FIX})
     command = f"python3 -m pytest -q {F}::test_regression"
