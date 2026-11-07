@@ -67,6 +67,7 @@ from cairnwork.gitcmd import GitCommandError, run_git_bytes
 from cairnwork.issue_task import test_target
 from cairnwork.p2p_collect import OVER_BUDGET, collected_side, no_targets, under_roots, whole_base
 from cairnwork.p2p_conftest import GOVERNS, check_overlay, complete, conftest_files
+from cairnwork.p2p_ignore import untargetable
 from cairnwork.p2p_nodes import clean as _clean
 from cairnwork.p2p_nodes import passing_targets, require_nodes
 from cairnwork.p2p_probe_log import probe_log_tail
@@ -93,14 +94,13 @@ class P2PPlan:
         return json.dumps(self.rule, sort_keys=True)
 
 
-def _base_tests(task, exclude: frozenset[str], strict=True) -> tuple[str, ...]:
+def _base_tests(task, exclude: frozenset[str], *, strict=True, early=False) -> tuple[str, ...]:
     """Base test files under the roots that are plain targets and match python_files (#956)."""
     try:
         target, is_test = test_target(task.test_roots), test_file_rule(task.repo, task.base_commit)
         raw = run_git_bytes(task.repo, "ls-tree", "-r", "-z", "--name-only", task.base_commit, "--")
         paths = [p for p in under_roots(raw, task.test_roots) if p not in exclude and is_test(p)]
-        # #930 refuse what no target can name; #997 never exempt because "pytest skips that dir":
-        odd = [p for p in paths if not target.fullmatch(p)]  # that depends on inputs not read here
+        odd = untargetable(task, paths, target, early)  # #930, #997; #956 item 2: collect_ignore
     except (GitCommandError, PytestConfigError) as exc:
         raise P2PRejected("P2P_BASE_UNREADABLE", str(exc)) from exc
     if odd and strict:  # #930: never dropped silently (fail closed); #956: env check only
@@ -272,7 +272,7 @@ def base_env_check(task, result, ctx: VerifyContext, *, without_tests=False, key
     if task.p2p_mode == "off" or not (task.test_commit or without_tests):
         return
     try:
-        existing = _base_tests(task, frozenset(), strict=not without_tests)  # #956
+        existing = _base_tests(task, frozenset(), strict=not without_tests, early=True)  # #956
     except P2PRejected as exc:
         raise _env_failed(str(exc)) from exc
     rule = name_rule(task.repo, task.base_commit)

@@ -52,7 +52,7 @@ def test_a_base_that_cannot_run_its_tests_is_still_uncomparable_beside_a_far_fil
 
 def test_the_strict_selection_is_unchanged(project):  # deferred tests and plan_p2p: still refused
     base = commit_change(project, FAR)
-    task = SimpleNamespace(repo=project, base_commit=base, test_roots=("tests",))
+    task = SimpleNamespace(repo=project, base_commit=base, test_roots=("tests",), test_commit="")
     with pytest.raises(BaseUncomparable) as info:
         p2p._base_tests(task, frozenset())
     assert info.value.comparison.code == "P2P_BASE_UNTARGETABLE"
