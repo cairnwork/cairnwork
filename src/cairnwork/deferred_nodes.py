@@ -3,7 +3,7 @@
 deferred_tests.new_tests and p2p_nodes.changed_tests compare these between the base and the test
 commit. Read: each top-level ``test*`` function, and each ``test*`` method of a top-level test
 class, its own or one it inherits from a class defined earlier in the same file and named
-among its bases by a plain name (the first base that has it wins). pytest collects an inherited
+among its bases by a plain name (every base's version counts, #1009). pytest collects an inherited
 test under the subclass's own node id too, so a change to a parent's test is a change to each
 such copy, and a target naming one copy does not run the others.
 
@@ -115,7 +115,7 @@ def _members(node: ast.ClassDef, classes: dict[str, _Class], reach: _Reach) -> _
             blocked, case = blocked or base_blocked, case or base_case
             for name, body in inherited.items():  # every base's: the MRO may pick a later one's
                 if name not in own:  # (#1009); a change to any of them reads as a change
-                    methods[name] = methods.get(name, "") + body
+                    methods[name] = _digest(methods.get(name, "") + body)  # bounded per level
     return methods, blocked, case, marks
 
 

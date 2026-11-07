@@ -4,6 +4,7 @@ reading the file (every node id pytest collects a new test under, and DEFERRED_T
 and, after the base run, the guard's record (DEFERRED_TESTS_NOT_RUN)."""
 
 import ast
+import tracemalloc
 from pathlib import Path
 from typing import Any
 
@@ -282,11 +283,27 @@ DIAMOND = (
 )
 
 
-def test_a_change_to_the_method_the_mro_runs_changes_the_inherited_test():
-    """#1009: TestChild runs TestB.test_case (C3 MRO), not the first base's TestBase.test_case."""
-    funcs = [deferred_nodes.test_functions(ast.parse(DIAMOND.format(v)))[0] for v in (2, 3)]
+@pytest.mark.parametrize("bases", ["TestA, TestB", "TestB, TestA"])
+def test_a_change_to_the_method_the_mro_runs_changes_the_inherited_test(bases):
+    """#1009: TestChild runs TestB.test_case (C3 MRO), whichever base comes first."""
+    src = DIAMOND.replace("TestChild(TestA, TestB)", f"TestChild({bases})")
+    funcs = [deferred_nodes.test_functions(ast.parse(src.format(v)))[0] for v in (2, 3)]
     assert funcs[0]["TestChild::test_case"] != funcs[1]["TestChild::test_case"]
     assert funcs[0]["TestA::test_case"] == funcs[1]["TestA::test_case"]
+
+
+def test_a_deep_diamond_stays_small():
+    """#1016 review r1: base versions are digested per level, so depth costs linear, not 2**n."""
+    src = "class TestL0:\n    def test_x(self): pass\n" + "".join(
+        f"class TestA{i}(TestL{i}):\n    pass\nclass TestB{i}(TestL{i}):\n    pass\n"
+        f"class TestL{i + 1}(TestA{i}, TestB{i}):\n    pass\n"
+        for i in range(40)
+    )
+    tracemalloc.start()
+    deferred_nodes.test_functions(ast.parse(src))
+    peak = tracemalloc.get_traced_memory()[1]
+    tracemalloc.stop()
+    assert peak < 20_000_000
 
 
 def test_a_base_change_leaves_a_test_the_class_defines_itself_unchanged():
