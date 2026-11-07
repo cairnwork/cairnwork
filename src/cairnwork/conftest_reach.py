@@ -18,13 +18,15 @@ Resolution over-approximates pytest on purpose (refusing too much is the safe si
   module file (#976);
 * ``importlib.import_module("...")`` and ``__import__("...")`` with a literal name count as
   imports (a leading dot also relative to the file, a literal ``fromlist`` as submodules), and so
-  do the literal names of a ``pytest_plugins`` assignment; every import counts, at any depth (a
-  fixture body's too);
+  do the string literals put in ``pytest_plugins`` (assignment, slice assignment, ``+=``, ``+``,
+  a method call on the list, starred, comma-separated, #1010); every import counts, at any depth
+  (a fixture body's too);
 * the ``__init__.py`` of the conftest's directory and of each directory above it count too:
   pytest may import the conftest as a module of that package (r2, cw#948 cross-model review).
 
 The bare name ``conftest`` is not matched: a changed conftest is checked by conftest_check.py
-itself. A name built at run time, or an unchanged module outside the test commit's top
+itself. A name built at run time (a ``pytest_plugins`` value that is not a literal, or the list set
+or changed some other way, #1010), or an unchanged module outside the test commit's top
 directories that imports a test-commit file, is not followed: that is test author code, as in
 conftest_check.py. Nor are base test files: a changed module that only a base test file imports
 also runs its import-time code in the base run (a known residual, #951, kept apart so that a test
@@ -68,7 +70,8 @@ def reached_change(
     by_name = _names(files)
     while queue:
         here, parsed = queue.pop(0)
-        for target in sorted(_targets(here, parsed, files, by_name)):
+        targets = _targets(here, parsed, files, by_name)
+        for target in sorted(targets):
             if target in changed:
                 return target
             if target in seen or target.split("/", 1)[0] not in tops:
@@ -131,8 +134,55 @@ def _imports(tree: ast.Module) -> Iterator[tuple[int, Iterable[str]]]:
             yield 0, [n.lstrip(".") for n in names]
             if dots:
                 yield dots, [n.lstrip(".") for n in names]
-        elif isinstance(node, (ast.Assign, ast.AnnAssign)) and _plugins(node):  # pytest_plugins
-            yield 0, [t for x in _items(node.value) if (t := _text(x))]
+        elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)) and _plugins(node):
+            yield 0, _strings([node.value])
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            if isinstance(node.func.value, ast.Name) and node.func.value.id == "pytest_plugins":
+                yield 0, _strings(node.args)  # list methods take no keywords
+
+
+def _strings(values: list) -> list[str]:
+    """What a pytest_plugins value or call may name (#1010): each comma-separated part of every
+    string literal in it, as pytest splits them, and of literals joined by ``+`` (#1018 r1)."""
+    names: list[str] = []
+    for value in (value for value in values if value is not None):
+        order, todo = [], [value]
+        while todo:  # parents before children; no recursion on a long chain (#1018 r2)
+            order.append(node := todo.pop())
+            todo += ast.iter_child_nodes(node)
+        whole: dict[int, bool] = {}
+        for node in reversed(order):  # children first: is the node one joined string?
+            joins = isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add)
+            whole[id(node)] = _is_str(node) or (
+                joins and whole[id(node.left)] and whole[id(node.right)])  # fmt: skip
+        todo = [value]
+        while todo:
+            node = todo.pop()
+            if not whole[id(node)]:
+                todo += ast.iter_child_nodes(node)
+                continue
+            text = _joined(node) or ""  # a joined name stands alone: its parts are not names
+            names += [part.strip() for part in text.split(",") if part.strip()]
+    return names
+
+
+def _is_str(node: ast.AST) -> bool:
+    return isinstance(node, ast.Constant) and isinstance(node.value, str)
+
+
+def _joined(node: ast.AST) -> str | None:
+    """A string literal, or string literals joined by ``+``: pytest loads the joined name. No
+    recursion: a chain of thousands of ``+`` must not raise (#1018 r2)."""
+    parts, todo = [], [node]
+    while todo:
+        here = todo.pop()
+        if _is_str(here):
+            parts.append(here.value)  # type: ignore[attr-defined]
+        elif isinstance(here, ast.BinOp) and isinstance(here.op, ast.Add):
+            todo += [here.right, here.left]  # the left part is taken first
+        else:
+            return None
+    return "".join(parts)
 
 
 def _text(node: ast.expr | None) -> str:
@@ -145,9 +195,12 @@ def _items(node: ast.expr | None) -> list[ast.expr]:
     return [node] if node is not None else []
 
 
-def _plugins(node: ast.Assign | ast.AnnAssign) -> bool:
+def _plugins(node: ast.Assign | ast.AnnAssign | ast.AugAssign) -> bool:
+    """The statement binds ``pytest_plugins``: as a name, an item or slice, or one target of an
+    unpacking (#1010)."""
     targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-    return any(isinstance(t, ast.Name) and t.id == "pytest_plugins" for t in targets)
+    return any(isinstance(n, ast.Name) and n.id == "pytest_plugins"
+               for t in targets for n in ast.walk(t))  # fmt: skip
 
 
 def _inits(conftest: str) -> set[str]:

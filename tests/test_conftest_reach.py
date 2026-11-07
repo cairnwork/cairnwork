@@ -160,6 +160,69 @@ def test_an_import_named_like_a_changed_module_is_a_hit(text, tree, changed):
     assert _reach(text, tree, [changed], conftest="tests/conftest.py") == changed
 
 
+LITERAL_PLUGINS = [
+    'pytest_plugins = []\npytest_plugins += ["x"]\n',
+    'pytest_plugins = ()\npytest_plugins += ("x",)\n',
+    'pytest_plugins = []\npytest_plugins.append("x")\n',
+    'pytest_plugins = []\npytest_plugins.extend(["x"])\n',
+    'pytest_plugins = []\npytest_plugins.insert(0, "x")\n',
+    'pytest_plugins = ["base"] + ["x"]\n',
+    'pytest_plugins = ["x"] + ["base"]\n',
+    'pytest_plugins = [*["x"]]\n',
+    'pytest_plugins = []\npytest_plugins[:] = ["x"]\n',
+    'pytest_plugins, other = ["x"], 1\n',
+    'pytest_plugins = []\npytest_plugins.insert(0, *["x"])\n',
+    'pytest_plugins = "base, x"\n',  # pytest splits a string on commas
+    'pytest_plugins = []\npytest_plugins.__iadd__(["x"])\n',  # any method on the list (r2)
+    'pytest_plugins = ["te" + "sts.x"]\n',  # pytest loads the joined name (#1018 r1)
+]
+UNREAD_PLUGINS = [
+    'pytest_plugins = ["x"] if FLAG else []\n',
+    'pytest_plugins = [p for p in ("x",)]\n',
+    "pytest_plugins = PLUGINS\n",
+    'pytest_plugins = list(("x",))\n',
+    'pytest_plugins = [f"{NAME}"]\n',
+    "pytest_plugins = []\npytest_plugins.append(NAME)\n",
+    'import sys\nsetattr(sys.modules[__name__], "pytest_plugins", P)\n',
+    'globals()["pytest_plugins"] = P\n',
+    'def pytest_configure(config):\n    getattr(config, "pytest_plugins", None)\n',
+]
+TWO = {"tests/x.py": "", "tests/y.py": ""}
+
+
+@pytest.mark.parametrize("text", LITERAL_PLUGINS)
+def test_every_literal_pytest_plugins_form_names_exactly_its_modules(text):
+    """#1010: read, not guessed: the named module is a hit, another changed module is not."""
+    assert _reach(text, TWO, ["tests/x.py"]) == "tests/x.py"
+    assert _reach(text, TWO, ["tests/y.py"]) == ""
+
+
+@pytest.mark.parametrize("text", UNREAD_PLUGINS)
+def test_a_pytest_plugins_value_it_cannot_read_does_not_refuse_the_new_test_file(text):
+    """#1014 r2: a value built at run time is not followed (a residual on #1010): refusing every
+    changed module would refuse every task in such a repository, the test commit's own new test
+    file included."""
+    new = {**TWO, "tests/test_new.py": ""}
+    assert _reach(text, new, ["tests/test_new.py"]) == ""
+
+
+def test_the_parts_of_a_joined_plugin_name_are_not_plugins():
+    """#1018 r2: pytest loads only the joined name, so a module named like one part is no hit."""
+    tree = {"tests/x.py": "", "tests/te.py": ""}
+    assert _reach('pytest_plugins = ["te" + "sts.x"]\n', tree, ["tests/te.py"]) == ""
+
+
+def test_a_long_joined_plugin_name_does_not_raise():
+    """#1018 r2: 2,000 ``+`` are read without recursion (3.11 cannot parse 3,000)."""
+    for head in ("", "NAME + "):  # one joined string, and a chain with a name in front
+        text = "pytest_plugins = [" + head + " + ".join(['"x"'] + ['""'] * 2000) + "]\n"
+        assert _reach(text, {"tests/x.py": ""}, ["tests/x.py"]) == "tests/x.py"
+
+
+def test_append_on_another_name_does_not_add_a_pytest_plugin():
+    assert _reach('other.append("x")\n', {"tests/x.py": ""}, ["tests/x.py"]) == ""
+
+
 def test_the_cap_is_exact(monkeypatch):
     """#924 r4: MAX_FILES unchanged modules are followed; one more refuses."""
     monkeypatch.setattr(reach, "MAX_FILES", 3)
