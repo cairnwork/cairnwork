@@ -92,6 +92,92 @@ def test_the_origin_is_found_through_a_link_to_the_checkout(tmp_path):
     assert origin == [DENIED, "tests/conftest.py", 2]
 
 
+def test_a_frame_outside_the_checkout_is_skipped(tmp_path):
+    """#1006 (Claude, spec R2): the writer is a module outside the checkout, called from a
+    conftest inside it; the origin is that conftest's line, never a path out of the checkout."""
+    import os
+    from types import SimpleNamespace
+
+    from cairnwork.report_guard_parts import PARTS_SOURCE
+
+    plugin: dict = {"os": os}
+    exec(PARTS_SOURCE, plugin)
+    lib: dict = {}
+    exec(compile(f"def write():\n    {RAISE}\n", str(tmp_path / "lib/writer.py"), "exec"), lib)
+    held: dict = {"write": lib["write"]}
+    real = str(tmp_path / "repo/tests/conftest.py")
+    exec(compile("def held():\n    write()\n", real, "exec"), held)
+    with pytest.raises(PermissionError) as info:
+        held["held"]()
+    origin = plugin["_denied_origin"](SimpleNamespace(value=info.value), tmp_path / "repo")
+    assert origin == [DENIED, "tests/conftest.py", 2]
+
+
+PLUGIN_MISSING = (  # #1006 (Claude): the denial sits in the context of a table plugin's lookup
+    "import pytest\n\n\n@pytest.fixture\ndef held(request):\n    try:\n        "
+    + RAISE
+    + "\n    except PermissionError:\n        request.getfixturevalue('mocker')\n"
+    "\n\n@pytest.fixture\ndef plain():\n    " + RAISE + "\n"
+)
+
+
+def test_a_node_of_another_kind_writes_no_entry(tmp_path):
+    """Its kind becomes the plugin's, so the plugin writes no entry for it (the parent would drop
+    the whole map); its sibling's setup denial is kept."""
+    test = TEST + "\n\ndef test_plain(plain):\n    pass\n"
+    files = {"tests/conftest.py": PLUGIN_MISSING, "tests/test_a.py": test}
+    rc, v = guard_run(tmp_path, files, "tests")
+    assert v.fail_kind == {NODE: "plugin:pytest_mock", "tests/test_a.py::test_plain": "setup"}
+    assert v.setup_denied == {"tests/test_a.py::test_plain": (DENIED, "tests/conftest.py", 14)}
+
+
+EVIL = """class Evil(PermissionError):  # #1006 (Codex r1): every field the recorder reads, lying
+    errno = property(lambda self: 13)
+    filename = property(lambda self: "/fake")
+"""
+
+
+def test_an_error_subclass_cannot_change_what_is_recorded(tmp_path):
+    """The recorder reads the error's real fields (type() and the built-in descriptors), so a
+    test's subclass whose properties say EACCES and another path records the real EPERM path."""
+    raise_evil = RAISE.replace("raise PermissionError", "raise Evil")
+    conftest = f"import pytest\n{EVIL}\n\n@pytest.fixture\ndef held():\n    {raise_evil}\n"
+    rc, v = guard_run(tmp_path, {"tests/conftest.py": conftest, "tests/test_a.py": TEST}, "tests")
+    assert v.setup_denied == {NODE: (DENIED, "tests/conftest.py", 9)}
+
+
+def test_the_recorder_runs_no_code_of_the_error(tmp_path):
+    """Every attribute the recorder reads is a property that raises: none of them runs."""
+    import os
+    from types import SimpleNamespace
+
+    from cairnwork.report_guard_parts import PARTS_SOURCE
+
+    def ran(self):
+        raise AssertionError("the recorder ran test code")
+
+    names = ("errno", "filename", "__traceback__", "__cause__", "__context__",
+             "__suppress_context__", "__bool__", "__eq__", "__class__")  # fmt: skip
+    evil = type("Evil", (PermissionError,), {n: property(ran) for n in names})
+    plugin: dict = {"os": os}
+    exec(PARTS_SOURCE, plugin)
+    held: dict = {"Evil": evil}
+    real = str(tmp_path / "tests/conftest.py")
+    exec(compile(f"def held():\n    raise Evil(1, 'x', {DENIED!r})\n", real, "exec"), held)
+    with pytest.raises(PermissionError) as info:
+        held["held"]()
+    found = SimpleNamespace(value=info.value)
+    assert plugin["_denied_path"](found) == DENIED
+    assert plugin["_denied_origin"](found, tmp_path) == [DENIED, "tests/conftest.py", 2]
+    wrapped = SimpleNamespace(value=RuntimeError("wrapper"))
+    wrapped.value.__cause__ = info.value
+    assert plugin["_denied_path"](wrapped) == DENIED
+    other = evil(13, "x", DENIED)  # not EPERM: the recorder walks on through its real cause
+    assert plugin["_denied_path"](SimpleNamespace(value=other)) is None
+    vars(BaseException)["__cause__"].__set__(other, info.value)  # its own setter is a property
+    assert plugin["_denied_path"](SimpleNamespace(value=other)) == DENIED
+
+
 @pytest.mark.sandbox
 @pytest.mark.skipif(sys.platform != "darwin", reason="real Seatbelt denials")
 def test_a_real_denial_in_setup_reaches_the_verifier_run(repo, tmp_path):
@@ -118,6 +204,13 @@ SETUP = {"n": "setup"}
         {"n": [DENIED, "tests/conftest.py"]},
         {"n": (DENIED, "tests/conftest.py", 6)},  # JSON gives lists only
         {"n": [DENIED, None, 6]},
+        {"n": [DENIED, "../outside.py", 6]},  # #1006 (Codex r1): never out of the checkout
+        {"n": [DENIED, "..", 6]},
+        {"n": [DENIED, "tests/../../outside.py", 6]},
+        {"n": [DENIED, "./tests/conftest.py", 6]},  # #1006 (Claude): only a normalized path
+        {"n": [DENIED, "tests//conftest.py", 6]},
+        {"n": [DENIED, "tests/conftest.py\0", 6]},
+        {"n": [DENIED, ".", 6]},
         {"n": ["/" + "x" * 500, "tests/conftest.py", 6]},
         {"other": [DENIED, "tests/conftest.py", 6]},  # not a setup node
         [[DENIED, "tests/conftest.py", 6]],
