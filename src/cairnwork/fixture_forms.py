@@ -87,7 +87,8 @@ def _name(node: ast.expr) -> str:
 
 def _exact_aliases(tree: ast.Module) -> set[str]:
     """Names ``tree`` binds to ``fixture`` itself: ``from pytest import fixture as fx``, then
-    ``f = fx``, ``f: T = pytest.fixture`` and ``(f := ...)`` chains of those (no recursion)."""
+    ``f = fx``, ``f: T = pytest.fixture``, ``(f := ...)``, every target of ``a = f = ...`` and the
+    matching item of ``f, b = fx, 1`` (#1019 r1, Claude C2/C3), chained (no recursion)."""
     names = {
         a.asname or a.name
         for n in ast.walk(tree)
@@ -95,11 +96,20 @@ def _exact_aliases(tree: ast.Module) -> set[str]:
         for a in n.names
         if a.name == "fixture"
     }
-    pairs = [
-        (n.targets[0] if isinstance(n, ast.Assign) else n.target, n.value)
+    todo = [
+        (t, n.value)
         for n in ast.walk(tree)
         if isinstance(n, ast.Assign | ast.AnnAssign | ast.NamedExpr) and n.value is not None
+        for t in (n.targets if isinstance(n, ast.Assign) else [n.target])
     ]
+    pairs = []
+    while todo:  # pair a tuple target with a tuple value item by item
+        t, v = todo.pop()
+        if isinstance(t, ast.Tuple | ast.List) and isinstance(v, ast.Tuple | ast.List):
+            if len(t.elts) == len(v.elts):
+                todo += zip(t.elts, v.elts, strict=True)
+        else:
+            pairs.append((t, v))
     while True:
         more = {t.id for t, v in pairs if isinstance(t, ast.Name) and _exact(v, names)} - names
         if not more:

@@ -194,6 +194,8 @@ EXACT_UNREADABLE = {  # name: a call of fixture itself whose name= cannot be rea
     "an alias of an alias": "from pytest import fixture as fx\nf = fx\n(h := f)(name=make())(g)\n",
     "an annotated alias": "import pytest\nf: object = pytest.fixture\nf(name=make())(g)\n",
     "getattr": "import pytest\ngetattr(pytest, 'fixture')(**opts)(g)\n",
+    "a tuple-target alias": "import pytest\nfx, n = pytest.fixture, 1\nfx(name=make())(g)\n",
+    "a chained-assignment alias": "import pytest\na = fx = pytest.fixture\nfx(name=make())(g)\n",
     # #1019 r1 (Codex): a module defining its own fixture is not exempt where it registers one
     "a module's own fixture, called with an imported name": "import pytest\nfrom c import N\n\n\n"
     "def fixture(fn=None, **kw):\n    return pytest.fixture(fn, **kw)\n\n\n"
