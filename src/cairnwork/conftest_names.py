@@ -23,17 +23,22 @@ from __future__ import annotations
 
 import ast
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from posixpath import dirname, join
 
 from cairnwork.deferred_overlay import TestCommitRejected
 from cairnwork.gitcmd import GitCommandError, run_git, run_git_bytes
-from cairnwork.pytest_config import PytestConfigError, base_config
+from cairnwork.pytest_config import PytestConfigError, base_config, test_file_rule
 
 CODE = "TEST_COMMIT_CONFTEST_STATIC"
 MAX_FILES = 5000  # base Python files read under one conftest's directory
 _REQUESTS = frozenset({"usefixtures", "getfixturevalue"})
+_PREFIXES = ("test", "pytest_")  # pytest's default python_functions prefix, and hooks
+_DYNAMIC = frozenset(
+    {"globals", "vars", "locals", "setattr", "exec", "eval", "__import__", "import_module",
+     "register"}
+)  # fmt: skip
 
 
 def taken_names(
@@ -43,28 +48,34 @@ def taken_names(
     base requests or a conftest above binds): a new binding may take neither."""
     directory = dirname(path)
     sources = _base_sources(repo, base, directory)
-    every_function, names = _ini_requests(repo, base)  # #982
+    every_function, names, is_test = _ini_requests(repo, base)  # #982
     trees: list[ast.Module] = []
+    helpers: list[ast.Module] = []  # r3: only a module pytest does not collect is narrowed
     for parent in _parents(directory):
         conftest = join(parent, "conftest.py") if parent else "conftest.py"
         if conftest in sources:  # r2: what its own fixtures request may not be overridden either
             trees.append(tree := _parse(conftest, sources[conftest]))
             names |= bound(tree)
-    trees += [_parse(f, data) for f, data in sources.items() if _under(f, directory)]
-    names |= requested(trees, every_function)  # judged together: pytest collects across files
+    for file, data in sources.items():
+        if _under(file, directory):
+            plain = not is_test(file) and file.rsplit("/", 1)[-1] != "conftest.py"
+            (helpers if plain else trees).append(_parse(file, data))
+    names |= requested(trees, every_function, helpers)  # judged together: collection crosses files
     return frozenset(bound(old)), frozenset(names)
 
 
-def _ini_requests(repo: Path, base: str) -> tuple[bool, set[str]]:
+def _ini_requests(repo: Path, base: str) -> tuple[bool, set[str], Callable[[str], bool]]:
     """#982: (the base sets ``python_functions``, so any function may be a test; the names its
-    ``usefixtures`` option requests for every test). An unreadable configuration refuses."""
+    ``usefixtures`` option requests for every test; whether a path is a test module by its
+    ``python_files``). An unreadable configuration refuses."""
     try:
         _source, config = base_config(repo, base)
         value = config.get("usefixtures") or ()
         words = value.split() if isinstance(value, str) else [str(v) for v in value]
+        is_test = test_file_rule(repo, base)
     except (PytestConfigError, GitCommandError, ValueError, TypeError) as exc:
         raise TestCommitRejected(CODE, "cannot read the base pytest configuration") from exc
-    return "python_functions" in config, set(words)
+    return "python_functions" in config, set(words), is_test
 
 
 def bound(tree: ast.Module) -> set[str]:
@@ -94,39 +105,64 @@ def bound_by(node: ast.stmt) -> set[str]:
     return set()
 
 
-def requested(trees: Iterable[ast.Module], every_function: bool = False) -> set[str]:
-    """Fixture names ``trees`` may request: the parameters of each function pytest may hand
-    fixtures, and every literal string passed to ``usefixtures`` or ``getfixturevalue``. #982: a
-    function counts when its name starts with ``test`` or ``pytest_``, it has a decorator, or its
-    name is used in any of ``trees`` other than as a direct call (``pytest.fixture(f)``,
-    ``test_x = f``, ``return f``), imported under another name, or written as a string
-    (``getattr(m, "f")``); every lambda counts. pytest collects across files, so ``trees`` are
-    judged together (r2 of #984). Every function counts, as #916 did, with ``every_function`` (the
-    base sets ``python_functions``), when any of ``trees`` defines a collection hook
-    (``pytest_pycollect_makeitem``, ``pytest_collect_file``, ...), or when any request's argument
-    is not a literal string."""
+def requested(
+    trees: Iterable[ast.Module], every_function: bool = False, helpers: Iterable[ast.Module] = ()
+) -> set[str]:
+    """Fixture names the base modules may request: the parameters of each function pytest may
+    hand fixtures, and every literal string passed to ``usefixtures`` or ``getfixturevalue``.
+    In ``trees`` (test modules and conftests) every function counts, as in #916. #982: in
+    ``helpers`` (modules pytest does not collect) a function counts only when its name starts
+    with ``test`` or ``pytest_``, it has a decorator, or its name is used in any module other
+    than as a direct call (``pytest.fixture(f)``, ``test_x = checks.f``, ``return f``), imported
+    under another name, or written as a string; every lambda counts. All modules are judged
+    together (#984 r2). Every function counts with ``every_function`` (the base sets
+    ``python_functions``), or when any module renames or registers dynamically, defines a
+    collection hook or makes a request that is not a literal string (``_dynamic``, #984 r3)."""
     names: set[str] = set()
     used: set[str] = set()
     plain: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
-    for tree in trees:
+    for tree, narrowed in [*((t, False) for t in trees), *((t, True) for t in helpers)]:
         callees = {id(n.func) for n in ast.walk(tree) if isinstance(n, ast.Call)}
         for node in ast.walk(tree):
             used |= _uses(node, callees)
+            every_function |= _dynamic(node)
             if isinstance(node, ast.Call) and _call_name(node.func) in _REQUESTS:
-                args = [*node.args, *(k.value for k in node.keywords)]
-                strings = [a.value for a in args if isinstance(a, ast.Constant)]
-                strings = [v for v in strings if isinstance(v, str)]
-                every_function |= len(strings) < len(args)  # one it cannot read: count them all
-                names |= set(strings)
+                names |= {a.value for a in node.args if isinstance(a, ast.Constant)
+                          and isinstance(a.value, str)}  # fmt: skip
             if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
-                every_function |= _collects(node.name)  # a hook that may collect any function
-                if node.decorator_list or node.name.startswith(("test", "pytest_")):
+                if not narrowed or node.decorator_list or node.name.startswith(_PREFIXES):
                     names |= _params(node)
                 else:
                     plain.append(node)
             elif isinstance(node, ast.Lambda):
                 names |= _params(node)
     return names | {p for f in plain if every_function or f.name in used for p in _params(f)}
+
+
+def _dynamic(node: ast.AST) -> bool:
+    """#984 r3: a construct that may name, rename or collect a function where it cannot be read:
+    every function counts. A request whose argument is not a literal string; ``globals``,
+    ``vars``, ``locals``, ``setattr``, ``exec``, ``eval``, ``__import__``, ``import_module``,
+    ``register`` (a plugin), ``type`` with three arguments, a non-literal ``getattr``; a
+    ``metaclass``, ``__init_subclass__``, ``__dict__``; ``pytest_plugins``; a collection hook."""
+    if isinstance(node, ast.Call):
+        name, args = _call_name(node.func), [*node.args, *(k.value for k in node.keywords)]
+        literal = [a for a in args if isinstance(a, ast.Constant) and isinstance(a.value, str)]
+        return (
+            (name in _REQUESTS and len(literal) < len(args)) or name in _DYNAMIC
+            or (name == "type" and len(args) == 3)
+            or (name == "getattr" and not (len(args) > 1 and args[1] in literal))
+        )  # fmt: skip
+    if isinstance(node, ast.ClassDef):
+        return any(k.arg == "metaclass" for k in node.keywords)
+    if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+        return node.name == "__init_subclass__" or _collects(node.name)
+    if isinstance(node, ast.Attribute):
+        return node.attr == "__dict__"
+    if isinstance(node, ast.Assign | ast.AnnAssign | ast.AugAssign):
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        return any(isinstance(t, ast.Name) and t.id == "pytest_plugins" for t in targets)
+    return False
 
 
 def _uses(node: ast.AST, callees: set[int]) -> set[str]:

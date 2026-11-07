@@ -8,6 +8,9 @@ import cairnwork.deferred_tests as dt
 
 FIXTURE = "import pytest\n\n\n@pytest.fixture\ndef {}():\n    return 1\n"
 CONFTEST = "tests/sub/conftest.py"
+H = "tests/sub/helpers.py"
+STAR = "from helpers import *  # noqa: F403\n"
+A = "def check_a(dep):\n    return dep\n\n\n"  # a helper nothing names
 HELPERS = (
     "def make(path, data=None):\n    return path\n\n\n"
     "class Box:\n    def put(self, item):\n        return item\n"
@@ -21,11 +24,6 @@ FREE = {  # name: (new fixture, base files)
         {"tests/sub/helpers.py": "def make(path):\n    return path\n",
          "tests/sub/test_h.py": "from helpers import make\n\n\ndef test_h():\n"
          "    assert make(1)\n"},
-    ),
-    "a helper beside a test that calls it": (
-        "data",
-        {"tests/sub/test_h.py": "def _build(data):\n    return data\n\n\n"
-         "def test_h():\n    assert _build(1)\n"},
     ),
 }  # fmt: skip
 
@@ -63,8 +61,8 @@ STILL_TAKEN = {  # name: (new fixture, base files)
                  "    return request.getfixturevalue(name)\n\n\n"
                  "def make(data):\n    return data\n"},
     ),
-    "a test named testit (pytest's default prefix is test)": (
-        "env", {"tests/sub/test_t.py": "def testit(env):\n    pass\n"},
+    "a helper named testit a test module star-imports (pytest's default prefix is test)": (
+        "env", {H: "def testit(env):\n    pass\n", "tests/sub/test_s.py": STAR},
     ),
     # r2 of #984 (Gemini r1, jeter r1): pytest collects across files
     "a helper another file imports under a test name": (
@@ -79,9 +77,9 @@ STILL_TAKEN = {  # name: (new fixture, base files)
         "dep", {"tests/sub/vchecks.py": "def guard(dep):\n    return dep\n",
                 "tests/sub/test_g.py": "from vchecks import guard\n\ntest_guard = guard\n"},
     ),
-    "a helper found by a string": (
-        "dep", {"tests/sub/test_g.py": "def guard(dep):\n    return dep\n\n\n"
-                "test_guard = globals()['guard']\n"},
+    "a helper found by a literal getattr string": (
+        "dep", {H: "import sys\n\n\n" + A + "test_f = getattr(sys.modules[__name__], 'check_a')\n",
+                "tests/sub/test_g.py": "from helpers import test_f  # noqa: F401\n"},
     ),
     "a base collection hook above: every function counts again": (
         "dep", {"tests/conftest.py": BASE + "\n\ndef pytest_pycollect_makeitem(collector, name, "
@@ -93,10 +91,39 @@ STILL_TAKEN = {  # name: (new fixture, base files)
                  "    return request.getfixturevalue(name)\n",
                  "tests/sub/helpers.py": "def make(data):\n    return data\n"},
     ),
+    "a helper inside a test module (every function of a test module counts, r3)": (
+        "data",
+        {"tests/sub/test_h.py": "def _build(data):\n    return data\n\n\n"
+         "def test_h():\n    assert _build(1)\n"},
+    ),
+    # r3 of #984 (Gemini r2, jeter r2): a construct that may name or collect a function where it
+    # cannot be read makes every function count; each case is caught by that construct alone
+    "a helper module renaming through globals()": (
+        "dep", {H: A + "for _n, _f in list(globals().items()):\n    pass\n"}),
+    "setattr with a computed name": (
+        "dep", {H: A + "class Box:\n    pass\n\n\nfor _n in dir():\n"
+                "    setattr(Box, 'test_' + _n, None)\n"}),
+    "a metaclass": (
+        "dep", {H: "class Meta(type):\n    pass\n\n\nclass Box(metaclass=Meta):\n"
+                "    def check_a(self, dep):\n        return dep\n"}),
+    "__init_subclass__": (
+        "dep", {H: "class Base:\n    def __init_subclass__(cls):\n        pass\n\n\n"
+                "class Box(Base):\n    def check_a(self, dep):\n        return dep\n"}),
+    "__dict__": ("dep", {H: A + "NAMES = list(object.__dict__)\n"}),
+    "type() with three arguments": ("dep", {H: A + "Box = type('Box', (), {})\n"}),
+    "import_module": (
+        "dep", {H: "import importlib\n\nM = importlib.import_module('x')\n\n\n" + A}),
+    "getattr with a computed name": (
+        "dep", {H: A + "def find(m, n):\n    return getattr(m, 'check_' + n)\n"}),
+    "pytest_plugins in a base conftest above": (
+        "dep", {"tests/conftest.py": BASE + "pytest_plugins = ['plug']\n", H: A}),
+    "a plugin registered by a base conftest above": (
+        "dep", {"tests/conftest.py": BASE + "\n\ndef pytest_configure(config):\n"
+                "    config.pluginmanager.register(object())\n", H: A}),
     "the ini usefixtures option": ("iu", {"pytest.ini": "[pytest]\nusefixtures = iu other\n"}),
     "a base python_functions setting: every function counts again": (
         "cfg", {"pytest.ini": "[pytest]\npython_functions = check_*\n",
-                "tests/sub/test_c.py": "def check_it(cfg):\n    pass\n"},
+                H: "def check_it(cfg):\n    pass\n", "tests/sub/test_s.py": STAR},
     ),
 }  # fmt: skip
 
