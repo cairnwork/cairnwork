@@ -2,9 +2,10 @@
 
 pytest collects a ``test*`` attribute of a test class or a module however it got there. An
 *attaching store* puts a callable under a ``test*``/``Test*`` name from outside the class body:
-a name bound at module level or in a class body (``test_x = f``; a function's locals are never
-collected), an attribute target (``Cls.test_x = f``, ``sys.modules[__name__].test_x = f``, a
-``for`` or ``with`` target too), ``setattr`` (``builtins.setattr``, ``type.__setattr__``), or a
+a name bound at module level or in a class body to a name, an attribute, a lambda or a call of
+same-file code (``test_x = f``; a function's locals are never collected), an attribute target
+(``Cls.test_x = f``, ``sys.modules[__name__].test_x = f``, a ``for`` or ``with`` target too),
+``setattr`` (``builtins.setattr``, ``type.__setattr__``), or a
 ``globals()``/``vars()``/``locals()`` (``builtins.globals()`` too) or ``__dict__`` namespace
 written by a subscript or by ``update``/``setdefault``/``__setitem__``. A namespace bound to
 another name or handed to a function other than a builtin may be written where it is not
@@ -68,13 +69,11 @@ def attached(tree: ast.Module) -> tuple[frozenset[str], bool]:
         if not part:
             continue
         names = frozenset(n.id for x in part for n in ast.walk(x) if isinstance(n, ast.Name))
-        stores = [store for node in part for store in (*_stores(node), *_name_stores(node))]
+        stores = _scan(part, plain)
         for other in reach.statements(names):
             if (more := held.get(id(other))) is None:
                 parts = _import_part(other, reached=True)
-                held[id(other)] = more = [
-                    store for node in parts for store in (*_stores(node), *_name_stores(node))
-                ]
+                held[id(other)] = more = _scan(parts, plain)
             stores += more
         if not stores:
             continue
@@ -83,6 +82,10 @@ def attached(tree: ast.Module) -> tuple[frozenset[str], bool]:
         else:
             blind = True
     return frozenset(found), blind
+
+
+def _scan(nodes: list[ast.AST], plain: frozenset[str]) -> list[tuple[str | None, ast.expr]]:
+    return [store for node in nodes for store in (*_stores(node), *_name_stores(node, plain))]
 
 
 def _plain(tree: ast.Module) -> frozenset[str]:
@@ -163,9 +166,13 @@ def _stores(node: ast.AST) -> list[tuple[str | None, ast.expr]]:
     return found
 
 
-def _name_stores(node: ast.AST) -> list[tuple[str, ast.expr]]:
+def _name_stores(node: ast.AST, plain: frozenset[str]) -> list[tuple[str, ast.expr]]:
     """(name, value) of each ``test*`` name bound in ``node`` at module or class-body scope, not
-    in a nested scope: pytest never collects a function's locals (Claude r2, Gemini on #1003)."""
+    in a nested scope: pytest never collects a function's locals (Claude r2, Gemini on #1003).
+    Only a value that names a callable (a name, an attribute, a lambda) or a call made of
+    same-file code counts: pytest collects functions and classes, and data under a ``test*``
+    name (``test_data = load(...)``, a list, a path) is common; what an imported call returns
+    is not followed, as any other imported code."""
     if isinstance(node, (*_SCOPES, ast.Lambda, ast.comprehension)):
         return []
     found: list[tuple[str, ast.expr]] = []
@@ -175,7 +182,7 @@ def _name_stores(node: ast.AST) -> list[tuple[str, ast.expr]]:
         if item is not node and isinstance(item, (*_SCOPES, ast.Lambda, ast.comprehension)):
             continue
         for targets, value in _bindings(item):
-            if value is None or _literal(value):
+            if value is None or not _callable(value, plain):
                 continue
             for target in (t for x in targets for t in ast.walk(x)):
                 if isinstance(target, ast.Name) and isinstance(target.ctx, ast.Store):
@@ -183,6 +190,12 @@ def _name_stores(node: ast.AST) -> list[tuple[str, ast.expr]]:
                         found.append((target.id, value))
         pending.extend(ast.iter_child_nodes(item))
     return found
+
+
+def _callable(value: ast.expr, plain: frozenset[str]) -> bool:
+    if isinstance(value, (ast.Name, ast.Attribute, ast.Lambda)):
+        return True
+    return isinstance(value, ast.Call) and _names(value) <= plain
 
 
 def _bindings(item: ast.AST) -> list[tuple[list[ast.expr], ast.expr | None]]:
