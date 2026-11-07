@@ -103,39 +103,25 @@ def test_p2p_base_tests_stay_plain_files(repo):
 
 
 @pytest.mark.parametrize(
-    ("config", "refused"),
+    "config",
     [
-        ({}, False),  # pytest's default skips ".x"
-        ({"pytest.ini": "[pytest]\nnorecursedirs =\n"}, True),  # none skipped: collected
-        ({"pytest.ini": "[pytest]\nnorecursedirs = build\n"}, True),  # replaces the default
-        ({"pytest.ini": "[pytest]\nnorecursedirs = .x\n"}, False),
-        ({"pytest.toml": '[pytest]\nnorecursedirs = [".*"]\n'}, False),
-        ({"pytest.ini": "[pytest]\nnorecursedirs = tests/.x\n"}, True),  # a path: never exempt
-        ({"pytest.ini": "[pytest]\nnorecursedirs = tests\n"}, True),  # the root is not checked
+        {},  # pytest's default would skip ".x": still refused (#997)
+        {"pytest.ini": "[pytest]\nnorecursedirs =\n"},
+        {"pytest.ini": "[pytest]\nnorecursedirs = .x\n"},
+        {"pytest.toml": '[pytest]\nnorecursedirs = [".*"]\n'},
+        {"pytest.ini": "[pytest]\nnorecursedirs = 'open\n"},  # not read here any more
     ],
 )
-def test_p2p_base_tests_follow_the_bases_norecursedirs(repo, config, refused):
-    """#930 (Codex r2): a file under a directory the base's pytest would skip is left out; one
-    it would collect, and no target can name, is UNCOMPARABLE, never dropped silently."""
+def test_p2p_an_unnameable_base_test_is_refused_whatever_the_norecursedirs(repo, config):
+    """#930, #997: a file no target can name is UNCOMPARABLE, never dropped as "pytest skips
+    that directory": the base's own norecursedirs no longer decides it."""
     commit_change(repo, {"tests/test_a.py": "def test_a():\n    pass\n",
                          "tests/.x/test_b.py": "def test_b():\n    pass\n", **config})  # fmt: skip
     task = SimpleNamespace(repo=repo, base_commit=git(repo, "rev-parse", "HEAD"),
                            test_roots=("tests",))  # fmt: skip
-    if not refused:
-        assert p2p._base_tests(task, frozenset()) == ("tests/test_a.py",)
-        return
     with pytest.raises(p2p.BaseUncomparable) as got:
         p2p._base_tests(task, frozenset())
     assert got.value.comparison.code == "P2P_BASE_UNTARGETABLE"
-
-
-def test_p2p_an_unsplittable_norecursedirs_is_an_unreadable_base(repo):
-    commit_change(repo, {"tests/test_a.py": "def test_a():\n    pass\n",
-                         "pytest.ini": "[pytest]\nnorecursedirs = 'open\n"})  # fmt: skip
-    task = SimpleNamespace(repo=repo, base_commit=git(repo, "rev-parse", "HEAD"),
-                           test_roots=("tests",))  # fmt: skip
-    with pytest.raises(p2p.P2PRejected, match="P2P_BASE_UNREADABLE"):
-        p2p._base_tests(task, frozenset())
 
 
 CASES = (
@@ -188,32 +174,3 @@ def test_p2p_base_tests_follow_the_configured_python_files(repo, ini, want):
                            test_roots=("tests",))  # fmt: skip
     got = p2p._base_tests(task, frozenset())
     assert got == want
-
-
-@pytest.mark.parametrize(
-    "config",
-    [
-        {"pyproject.toml": "[tool.pytest.ini_options]\nnorecursedirs = ['build']\n"},
-        {"tox.ini": "[pytest]\nnorecursedirs = build\n"},
-        {"setup.cfg": "[tool:pytest]\nnorecursedirs = build\n"},
-    ],
-    ids=["pyproject", "tox", "setup_cfg"],
-)
-def test_p2p_norecursedirs_is_read_from_every_config_file(repo, config):
-    commit_change(repo, {"tests/test_a.py": "def test_a():\n    pass\n",
-                         "tests/.x/test_b.py": "def test_b():\n    pass\n", **config})  # fmt: skip
-    task = SimpleNamespace(repo=repo, base_commit=git(repo, "rev-parse", "HEAD"),
-                           test_roots=("tests",))  # fmt: skip
-    with pytest.raises(p2p.BaseUncomparable):  # build replaces the default: .x is collected
-        p2p._base_tests(task, frozenset())
-
-
-def test_the_default_norecursedirs_is_pytests_own(tmp_path, monkeypatch):
-    from _pytest.config import _prepareconfig  # noqa: PLC2701
-
-    from cairnwork.p2p_collect import DEFAULT_NORECURSEDIRS
-
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "empty.ini").write_text("[pytest]\n")
-    config = _prepareconfig(["-c", str(tmp_path / "empty.ini")])
-    assert tuple(config.getini("norecursedirs")) == DEFAULT_NORECURSEDIRS
