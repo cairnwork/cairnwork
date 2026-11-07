@@ -200,6 +200,9 @@ EXACT_UNREADABLE = {  # name: a call of fixture itself whose name= cannot be rea
     "a module's own fixture, called with an imported name": "import pytest\nfrom c import N\n\n\n"
     "def fixture(fn=None, **kw):\n    return pytest.fixture(fn, **kw)\n\n\n"
     "@fixture(name=N)\ndef g():\n    pass\n",
+    "a module's own fixture, called in a function with an imported name": "import pytest\n"
+    "from c import N\n\n\ndef fixture(fn=None, **kw):\n    return pytest.fixture(fn, **kw)\n\n\n"
+    "def make(unrelated):\n    return fixture(name=N)\n",
     "a wrapper forwarding its parameter, in a module without its own fixture": "import pytest\n\n\n"
     "def make(n):\n    return pytest.fixture(name=n)\n",
 }
