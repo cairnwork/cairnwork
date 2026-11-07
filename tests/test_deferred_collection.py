@@ -274,6 +274,28 @@ def test_a_class_inheriting_an_earlier_case_subclass_is_read():
     assert funcs == {"Base::test_b", "Sub::test_b", "Sub::test_s"}
 
 
+DIAMOND = (
+    "class TestBase:\n    def test_case(self): assert 1\n"
+    "class TestA(TestBase):\n    pass\n"
+    "class TestB(TestBase):\n    def test_case(self): assert {}\n"
+    "class TestChild(TestA, TestB):\n    pass\n"
+)
+
+
+def test_a_change_to_the_method_the_mro_runs_changes_the_inherited_test():
+    """#1009: TestChild runs TestB.test_case (C3 MRO), not the first base's TestBase.test_case."""
+    funcs = [deferred_nodes.test_functions(ast.parse(DIAMOND.format(v)))[0] for v in (2, 3)]
+    assert funcs[0]["TestChild::test_case"] != funcs[1]["TestChild::test_case"]
+    assert funcs[0]["TestA::test_case"] == funcs[1]["TestA::test_case"]
+
+
+def test_a_base_change_leaves_a_test_the_class_defines_itself_unchanged():
+    """#1009: no false change (more required targets) for a method the class overrides."""
+    texts = [DIAMOND.format(2).replace("assert 1", f"assert {v}") for v in (1, 5)]
+    funcs = [deferred_nodes.test_functions(ast.parse(t))[0] for t in texts]
+    assert funcs[0]["TestB::test_case"] == funcs[1]["TestB::test_case"]
+
+
 def test_a_plain_helper_class_is_not_read():
     funcs, bad = _nodes("class Helper:\n    def test_like(self): pass\n")
     assert funcs == set() and not bad
