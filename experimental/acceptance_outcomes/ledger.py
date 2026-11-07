@@ -89,10 +89,25 @@ def record_call(
     call: dict[str, Any] = {k: inputs.get(k, "") for k in ("repo", "base", "candidate", "version")}
     if any(not call[k] for k in call):
         raise OutcomesError("OUTCOME_INVALID", "repo, base, candidate and version are required")
-    call["test_commit"] = inputs.get("test_commit", "")
+    binding = result.get("binding")
+    binding = binding if isinstance(binding, dict) else {}
+    # #774: a test commit not given on the command line is the one the result was bound to
+    call["test_commit"] = inputs.get("test_commit", "") or binding.get("test_commit") or ""
+    identities = [
+        ("candidate", result.get("candidate_commit")),
+        ("candidate", binding.get("head")),
+        ("base", binding.get("base")),
+        ("test_commit", binding.get("test_commit")),
+        ("repo", result.get("repo")),
+    ]
+    for field, value in identities:
+        if value is not None and value != call[field]:
+            raise OutcomesError("OUTCOME_RECORD_MISMATCH", f"{field} differs from the result")
     verdict = _verdict_of(result)
     call.update(verdict=verdict, reason=str(result.get("reason") or result.get("error") or ""))
     call["task_id"], call["attempt_id"] = result.get("task_id", ""), result.get("attempt_id", "")
+    if "executed_tree" in result:
+        call["executed_tree"] = result["executed_tree"]
     lost = None if notary_lost is None else notary_lost.strip()
     if lost == "":  # given but empty or blank: never read as "flag not passed"
         raise OutcomesError("OUTCOME_INVALID", "notary-lost needs a reason")

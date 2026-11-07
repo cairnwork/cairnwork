@@ -34,3 +34,6 @@ Core lines. The flag is refused for a pre-Core result or together with a databas
 before this change keep their format and still read; to fix an old ledger start a new file.
 `core_status` is taken as given from the result JSON; without `--notary-db` there is no way to
 check whether it was altered.
+
+When present, result candidate, binding base and test commit, and repo identities are checked against
+the CLI inputs before recording, including with `--notary-lost`.
