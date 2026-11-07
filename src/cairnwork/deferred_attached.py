@@ -2,10 +2,12 @@
 
 pytest collects a ``test*`` attribute of a test class or a module however it got there. An
 *attaching store* puts a callable under a ``test*``/``Test*`` name from outside the class body:
-an attribute target (``Cls.test_x = f``, ``sys.modules[__name__].test_x = f``), ``setattr`` or a
-``globals()``/``vars()``/``locals()``/``__dict__`` subscript. Stores into ``self`` (an instance's
-own attribute, e.g. a client set in ``setUp``) and literal values are not counted: pytest
-collects neither.
+an attribute target (``Cls.test_x = f``, ``sys.modules[__name__].test_x = f``), ``setattr``, or a
+``globals()``/``vars()``/``locals()``/``__dict__`` namespace written by a subscript or by
+``update``/``setdefault``/``__setitem__``. A namespace bound to another name or handed to a
+function other than a builtin may be written where it is not followed: it counts as unreadable.
+Stores into ``self`` (an instance's own attribute, e.g. a client set in ``setUp``) and literal
+values are not counted: pytest collects neither.
 
 Each statement that runs at import (every module-level statement but a plain function, a class
 less its tests, a function's decorators and defaults) is searched together with the same-file
@@ -17,8 +19,10 @@ calls). One that holds an attaching store is *attaching*:
 - otherwise (a computed name, a value from an import): unreadable; a test commit that changes the
   file is refused while it is there, changed or not.
 
-Known limit (as #968 (b)): another module's code is not read, so a class decorator or a metaclass
-imported from one, or an imported function called at import, attaches nothing here."""
+Known limit (as #968 (b)): no other module's code is read, so nothing an import brings in is
+followed: a class decorator, a metaclass or a base class imported from elsewhere, or an imported
+function called at import or while a class is built, attaches nothing here. pytest collects from
+``__dict__`` only, so a module-level ``__getattr__``/``__dir__`` cannot add a test."""
 
 from __future__ import annotations
 
@@ -29,6 +33,7 @@ from cairnwork.deferred_nodes import _DEFS, _binds, _literal, _Reach
 from cairnwork.deferred_overlay import TestCommitRejected
 
 _HOLDERS = frozenset({"globals", "vars", "locals"})
+_WRITES = frozenset({"update", "setdefault", "__setitem__"})
 _BUILD = frozenset({"__init__", "__new__", "__init_subclass__", "__set_name__", "__prepare__"})
 _BUILTINS = frozenset(dir(builtins))
 
@@ -95,6 +100,8 @@ def _stores(node: ast.AST) -> list[tuple[str | None, ast.expr]]:
             value = item.value
             if value is None or _literal(value):
                 continue
+            if _holder(value):  # an alias (``ns = globals()``): what it writes is not followed
+                found.append((None, value))
             targets = item.targets if isinstance(item, ast.Assign) else [item.target]
             for target in (t for x in targets for t in ast.walk(x)):
                 if (name := _target(target)) != "":
@@ -102,7 +109,34 @@ def _stores(node: ast.AST) -> list[tuple[str | None, ast.expr]]:
         elif isinstance(item, ast.Call) and _setattr(item):
             if (name := _key(item.args[1])) != "":
                 found.append((name, item.args[2]))
+        elif isinstance(item, ast.Call):
+            found += [(n, v) for n, v in _call_stores(item) if n != "" and not _literal(v)]
     return found
+
+
+def _call_stores(call: ast.Call) -> list[tuple[str | None, ast.expr]]:
+    """A namespace written by a call (Codex r1 on #1003): ``ns.update(...)``, ``ns.setdefault``
+    or ``ns.__setitem__`` with literal names, else computed; a namespace handed to any function
+    but a builtin, which may write it, is computed."""
+    func = call.func
+    if isinstance(func, ast.Attribute) and func.attr in _WRITES and _holder(func.value):
+        if func.attr != "update":
+            key = _key(call.args[0]) if call.args else None
+            return [(key, call.args[1] if len(call.args) > 1 else call)]
+        pairs: list[tuple[str | None, ast.expr]] = []
+        for arg in call.args:
+            if isinstance(arg, ast.Dict):
+                items = zip(arg.keys, arg.values, strict=True)  # a ``**`` entry has no key
+                pairs += [(_key(k) if k else None, v) for k, v in items]
+            else:
+                pairs.append((None, arg))
+        for word in call.keywords:
+            name = word.arg if word.arg is None or _test_name(word.arg) else ""
+            pairs.append((name, word.value))
+        return pairs
+    builtin = isinstance(func, ast.Name) and func.id in _BUILTINS
+    given = [*call.args, *(word.value for word in call.keywords)]
+    return [] if builtin else [(None, arg) for arg in given if _holder(arg)]
 
 
 def _target(target: ast.AST) -> str | None:
@@ -123,11 +157,17 @@ def _setattr(call: ast.Call) -> bool:
     return not (isinstance(call.args[0], ast.Name) and call.args[0].id == "self")
 
 
-def _holder(value: ast.expr) -> bool:
-    """``globals()``, ``vars()``, ``locals()`` or anything's ``__dict__``: a namespace."""
+def _holder(value: ast.AST) -> bool:
+    """``globals()``, ``vars()``, ``locals()`` or anything's ``__dict__`` but ``self``'s: a
+    namespace pytest may collect from."""
     if isinstance(value, ast.Call) and isinstance(value.func, ast.Name):
         return value.func.id in _HOLDERS
-    return isinstance(value, ast.Attribute) and value.attr == "__dict__"
+    own = isinstance(value, ast.Attribute) and _is_self(value.value)
+    return isinstance(value, ast.Attribute) and value.attr == "__dict__" and not own
+
+
+def _is_self(node: ast.AST) -> bool:
+    return isinstance(node, ast.Name) and node.id == "self"
 
 
 def _key(node: ast.expr) -> str | None:

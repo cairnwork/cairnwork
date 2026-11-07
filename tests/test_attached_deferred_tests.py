@@ -6,8 +6,11 @@ An attaching statement that can be read statically (a literal name, a value made
 same-file code) counts with everything it reads, so a changed ``f`` behind an unchanged
 assignment is a change, refused DEFERRED_TESTS_UNREADABLE. One that cannot (a computed name, a
 value that reaches an import) refuses a test commit that changes its file whenever it is there.
-A module-level import binding ``pytestmark`` counts for every test. Known limit, pinned here: a
-class decorator or metaclass imported from another module is not read (as #968 (b))."""
+A module-level import binding ``pytestmark`` counts for every test. Known limit, pinned here: no
+other module's code is read (as #968 (b)), so nothing an import brings in is followed: a class
+decorator, a metaclass or a base class imported from elsewhere, or an imported function called at
+import or while a class is built. pytest collects from ``__dict__`` only (``_pytest/python.py``),
+so a module-level ``__getattr__`` or ``__dir__`` adds no test (Codex r1 on #1003, disputed)."""
 
 import pytest
 from conftest import commit_change
@@ -23,6 +26,8 @@ RIGHT = "    assert add(2, 2) == 4\n"
 CLS = "class TestX:\n    pass\n"
 IMPL = "def _impl(self):\n{}"
 WRITER = "def add_tests(cls):\n    cls.test_x = _impl\n    return cls\n"
+FN_IMPL = "def _impl():\n{}"
+INSTALL = "def _install():\n    globals().update({'test_x': _impl})\n_install()\n"
 META = "class Meta(type):\n    def __init__(cls, *a):\n        cls.test_x = _impl\n"
 
 # (on the base, in the test commit) beside REGRESSION: each changes an attached test
@@ -44,6 +49,14 @@ ATTACHED = {
                        IMPL.format(WRONG) + WRITER + "@add_tests\n" + CLS),
     "trap-metaclass": (IMPL.format(RIGHT) + META + "class TestX(metaclass=Meta):\n    pass\n",
                        IMPL.format(WRONG) + META + "class TestX(metaclass=Meta):\n    pass\n"),
+    # Codex r1 on #1003: a namespace written by a call, an alias, or a function given it
+    "namespace-update": ("", FN_IMPL.format(WRONG) + "globals().update({'test_x': _impl})\n"),
+    "update-keyword": ("", FN_IMPL.format(WRONG) + "globals().update(test_x=_impl)\n"),
+    "setdefault": ("", FN_IMPL.format(WRONG) + "globals().setdefault('test_x', _impl)\n"),
+    "trap-update-helper": (FN_IMPL.format(RIGHT) + INSTALL, FN_IMPL.format(WRONG) + INSTALL),
+    "alias": ("", FN_IMPL.format(WRONG) + "ns = globals()\nns['test_x'] = _impl\n"),
+    "handed-off": ("", FN_IMPL.format(WRONG) + "def fill(ns):\n    ns['test_x'] = _impl\n"
+                   "fill(globals())\n"),
     # not readable: the value reaches an import, the statement itself unchanged
     "from-an-import": ("from helpers import impl\n" + CLS + "TestX.test_x = impl\n",
                        "from helpers import impl\n" + CLS + "TestX.test_x = impl\n"),
@@ -71,6 +84,8 @@ CONTROLS = {  # no attached test: nothing refused, only test_regression is new
     "test-named-literal": CLS + "TestX.test_data = [1, 2]\nsetattr(TestX, 'test_n', 3)\n",
     "rewritten-as-a-def": CLS + "def test_x():\n" + RIGHT,
     "unchanged-readable": CLS + IMPL.format(RIGHT) + "TestX.test_x = _impl\n",
+    "namespace-reads": "DATA = 1\nglobals().update({'DATA': len})\nN = len(globals())\n"
+    "X = globals().get('DATA')\n",
 }
 
 
