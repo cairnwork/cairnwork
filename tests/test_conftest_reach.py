@@ -160,6 +160,27 @@ def test_an_import_named_like_a_changed_module_is_a_hit(text, tree, changed):
     assert _reach(text, tree, [changed], conftest="tests/conftest.py") == changed
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        'pytest_plugins = []\npytest_plugins += ["x"]\n',
+        'pytest_plugins = ()\npytest_plugins += ("x",)\n',
+        'pytest_plugins = []\npytest_plugins.append("x")\n',
+        'pytest_plugins = []\npytest_plugins.extend(["x"])\n',
+        'pytest_plugins = []\npytest_plugins.insert(0, "x")\n',
+        'pytest_plugins = ["base"] + ["x"]\n',
+        'pytest_plugins = [*["x"]]\n',
+        'pytest_plugins = []\npytest_plugins[:] = ["x"]\n',
+    ],
+)
+def test_all_literal_pytest_plugin_builders_find_changed_files(text):
+    assert _reach(text, {"tests/x.py": ""}, ["tests/x.py"]) == "tests/x.py"
+
+
+def test_append_on_another_name_does_not_add_a_pytest_plugin():
+    assert _reach('other.append("x")\n', {"tests/x.py": ""}, ["tests/x.py"]) == ""
+
+
 def test_the_cap_is_exact(monkeypatch):
     """#924 r4: MAX_FILES unchanged modules are followed; one more refuses."""
     monkeypatch.setattr(reach, "MAX_FILES", 3)

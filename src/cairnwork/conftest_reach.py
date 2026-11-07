@@ -18,7 +18,8 @@ Resolution over-approximates pytest on purpose (refusing too much is the safe si
   module file (#976);
 * ``importlib.import_module("...")`` and ``__import__("...")`` with a literal name count as
   imports (a leading dot also relative to the file, a literal ``fromlist`` as submodules), and so
-  do the literal names of a ``pytest_plugins`` assignment; every import counts, at any depth (a
+  do the literal names put in ``pytest_plugins`` (assignment, slice assignment, ``+=``, ``+``,
+  ``append``/``extend``/``insert``, starred, #1010); every import counts, at any depth (a
   fixture body's too);
 * the ``__init__.py`` of the conftest's directory and of each directory above it count too:
   pytest may import the conftest as a module of that package (r2, cw#948 cross-model review).
@@ -131,8 +132,13 @@ def _imports(tree: ast.Module) -> Iterator[tuple[int, Iterable[str]]]:
             yield 0, [n.lstrip(".") for n in names]
             if dots:
                 yield dots, [n.lstrip(".") for n in names]
-        elif isinstance(node, (ast.Assign, ast.AnnAssign)) and _plugins(node):  # pytest_plugins
+        elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)) and _plugins(node):
             yield 0, [t for x in _items(node.value) if (t := _text(x))]
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            if isinstance(node.func.value, ast.Name) and node.func.value.id == "pytest_plugins":
+                args = node.args[1:2] if node.func.attr == "insert" else node.args[:1]
+                if node.func.attr in ("append", "extend", "insert"):
+                    yield 0, [t for x in _items(args[0] if args else None) if (t := _text(x))]
 
 
 def _text(node: ast.expr | None) -> str:
@@ -141,12 +147,17 @@ def _text(node: ast.expr | None) -> str:
 
 def _items(node: ast.expr | None) -> list[ast.expr]:
     if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
-        return list(node.elts)
+        return [item for element in node.elts for item in _items(element)]
+    if isinstance(node, ast.Starred):
+        return _items(node.value)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return [*_items(node.left), *_items(node.right)]
     return [node] if node is not None else []
 
 
-def _plugins(node: ast.Assign | ast.AnnAssign) -> bool:
+def _plugins(node: ast.Assign | ast.AnnAssign | ast.AugAssign) -> bool:
     targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+    targets = [t.value if isinstance(t, ast.Subscript) else t for t in targets]  # [:] = (#1010)
     return any(isinstance(t, ast.Name) and t.id == "pytest_plugins" for t in targets)
 
 
