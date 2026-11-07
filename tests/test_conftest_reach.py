@@ -212,6 +212,13 @@ def test_the_parts_of_a_joined_plugin_name_are_not_plugins():
     assert _reach('pytest_plugins = ["te" + "sts.x"]\n', tree, ["tests/te.py"]) == ""
 
 
+def test_a_long_joined_plugin_name_does_not_raise():
+    """#1018 r2: a chain of thousands of ``+`` is read without recursion."""
+    for head in ("", "NAME + "):  # one joined string, and a chain with a name in front
+        text = "pytest_plugins = [" + head + " + ".join(['"x"'] + ['""'] * 5000) + "]\n"
+        assert _reach(text, {"tests/x.py": ""}, ["tests/x.py"]) == "tests/x.py"
+
+
 def test_append_on_another_name_does_not_add_a_pytest_plugin():
     assert _reach('other.append("x")\n', {"tests/x.py": ""}, ["tests/x.py"]) == ""
 

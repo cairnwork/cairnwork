@@ -145,24 +145,44 @@ def _strings(values: list) -> list[str]:
     """What a pytest_plugins value or call may name (#1010): each comma-separated part of every
     string literal in it, as pytest splits them, and of literals joined by ``+`` (#1018 r1)."""
     names: list[str] = []
-    todo = [value for value in values if value is not None]
-    while todo:
-        node = todo.pop()
-        if (text := _joined(node)) is None:
+    for value in (value for value in values if value is not None):
+        order, todo = [], [value]
+        while todo:  # parents before children; no recursion on a long chain (#1018 r2)
+            order.append(node := todo.pop())
             todo += ast.iter_child_nodes(node)
-        else:  # a joined name stands alone: its parts are not names (#1018 r2)
+        whole: dict[int, bool] = {}
+        for node in reversed(order):  # children first: is the node one joined string?
+            joins = isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add)
+            whole[id(node)] = _is_str(node) or (
+                joins and whole[id(node.left)] and whole[id(node.right)])  # fmt: skip
+        todo = [value]
+        while todo:
+            node = todo.pop()
+            if not whole[id(node)]:
+                todo += ast.iter_child_nodes(node)
+                continue
+            text = _joined(node) or ""  # a joined name stands alone: its parts are not names
             names += [part.strip() for part in text.split(",") if part.strip()]
     return names
 
 
+def _is_str(node: ast.AST) -> bool:
+    return isinstance(node, ast.Constant) and isinstance(node.value, str)
+
+
 def _joined(node: ast.AST) -> str | None:
-    """A string literal, or string literals joined by ``+``: pytest loads the joined name."""
-    if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        return node.value
-    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-        left, right = _joined(node.left), _joined(node.right)
-        return left + right if left is not None and right is not None else None
-    return None
+    """A string literal, or string literals joined by ``+``: pytest loads the joined name. No
+    recursion: a chain of thousands of ``+`` must not raise (#1018 r2)."""
+    parts, todo = [], [node]
+    while todo:
+        here = todo.pop()
+        if _is_str(here):
+            parts.append(here.value)  # type: ignore[attr-defined]
+        elif isinstance(here, ast.BinOp) and isinstance(here.op, ast.Add):
+            todo += [here.right, here.left]  # the left part is taken first
+        else:
+            return None
+    return "".join(parts)
 
 
 def _text(node: ast.expr | None) -> str:
