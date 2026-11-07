@@ -160,7 +160,8 @@ CONTROLS = {  # no attached test: nothing refused, only test_regression is new
     "self-stores": "from helpers import make\nclass Base:\n    def setUp(self):\n"
     "        self.test_client = make()\n        setattr(self, 'test_db', make())\n"
     "class TestX(Base):\n    pass\n",
-    "local-test-name": "def _h():\n    test_x = 1 + len([])\n    return test_x\n_h()\n",
+    "local-test-name": "from helpers import make\ndef _h():\n    test_x = make\n    return test_x\n"
+    "_h()\n",
     "module-literal-name": "test_data = {'a': 1}\n",
     "module-data-name": "import os\ntest_data_path = os.path.join('a', 'b')\n"
     "test_cases = [os.sep, os.pathsep]\n",
