@@ -19,7 +19,8 @@ Resolution over-approximates pytest on purpose (refusing too much is the safe si
 * ``importlib.import_module("...")`` and ``__import__("...")`` with a literal name count as
   imports (a leading dot also relative to the file, a literal ``fromlist`` as submodules), and so
   do the literal names put in ``pytest_plugins`` (assignment, slice assignment, ``+=``, ``+``,
-  ``append``/``extend``/``insert``, starred, #1010); every import counts, at any depth (a
+  ``append``/``extend``/``insert``, starred, comma-separated; a value it cannot read, or the list
+  set by name, counts as every changed module, #1010); every import counts, at any depth (a
   fixture body's too);
 * the ``__init__.py`` of the conftest's directory and of each directory above it count too:
   pytest may import the conftest as a module of that package (r2, cw#948 cross-model review).
@@ -47,6 +48,7 @@ from posixpath import dirname, join
 
 MAX_FILES = 500  # unchanged modules followed per conftest before the walk refuses
 MODULE_SUFFIXES = (".py", ".pyc", ".so", ".pyd")  # files an import statement can load (r6)
+ANY = "\0any module"  # #1010: stands for every module; no file is named so
 
 
 def reached_change(
@@ -69,7 +71,12 @@ def reached_change(
     by_name = _names(files)
     while queue:
         here, parsed = queue.pop(0)
-        for target in sorted(_targets(here, parsed, files, by_name)):
+        targets = _targets(here, parsed, files, by_name)
+        if ANY in targets:  # #1010: a pytest_plugins value it cannot read may name any module
+            if hit := sorted(p for p in changed if p.endswith(MODULE_SUFFIXES)):
+                return hit[0]
+            targets.discard(ANY)
+        for target in sorted(targets):
             if target in changed:
                 return target
             if target in seen or target.split("/", 1)[0] not in tops:
@@ -103,6 +110,9 @@ def _targets(here: str, tree: ast.Module, files: frozenset[str], by_name) -> set
     found: set[str] = set()
     for level, names in _imports(tree):
         for name in names:
+            if name == ANY:
+                found.add(ANY)
+                continue
             parts = name.split(".") if name else []
             if not level:  # every dotted prefix, as a file under any directory
                 for k in range(1, len(parts) + 1):
@@ -133,12 +143,29 @@ def _imports(tree: ast.Module) -> Iterator[tuple[int, Iterable[str]]]:
             if dots:
                 yield dots, [n.lstrip(".") for n in names]
         elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)) and _plugins(node):
-            yield 0, [t for x in _items(node.value) if (t := _text(x))]
+            yield 0, _strings([node.value])
         elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
             if isinstance(node.func.value, ast.Name) and node.func.value.id == "pytest_plugins":
-                args = node.args[1:2] if node.func.attr == "insert" else node.args[:1]
-                if node.func.attr in ("append", "extend", "insert"):
-                    yield 0, [t for x in _items(args[0] if args else None) if (t := _text(x))]
+                yield 0, _strings(node.args)  # list methods take no keywords
+        elif isinstance(node, ast.Constant) and node.value == "pytest_plugins":
+            yield 0, [ANY]  # set by name (setattr, globals()[...]): its value is not read
+
+
+def _strings(values: list) -> list[str]:
+    """What a pytest_plugins value or call may name (#1010): each comma-separated part of every
+    string literal in it, as pytest splits them; ANY when a part is not a literal (a name, a
+    call, an attribute, a comprehension, an f-string): refusing too much is the safe side."""
+    names: list[str] = []
+    for node in (n for value in values if value is not None for n in ast.walk(value)):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            names += [part.strip() for part in node.value.split(",") if part.strip()]
+        elif not isinstance(node, _LITERAL):
+            names.append(ANY)
+    return names
+
+
+_LITERAL = (ast.Constant, ast.List, ast.Tuple, ast.Set, ast.Starred, ast.BinOp, ast.Add,
+            ast.expr_context)  # fmt: skip
 
 
 def _text(node: ast.expr | None) -> str:
@@ -147,18 +174,16 @@ def _text(node: ast.expr | None) -> str:
 
 def _items(node: ast.expr | None) -> list[ast.expr]:
     if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
-        return [item for element in node.elts for item in _items(element)]
-    if isinstance(node, ast.Starred):
-        return _items(node.value)
-    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-        return [*_items(node.left), *_items(node.right)]
+        return list(node.elts)
     return [node] if node is not None else []
 
 
 def _plugins(node: ast.Assign | ast.AnnAssign | ast.AugAssign) -> bool:
+    """The statement binds ``pytest_plugins``: as a name, an item or slice, or one target of an
+    unpacking (#1010)."""
     targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-    targets = [t.value if isinstance(t, ast.Subscript) else t for t in targets]  # [:] = (#1010)
-    return any(isinstance(t, ast.Name) and t.id == "pytest_plugins" for t in targets)
+    return any(isinstance(n, ast.Name) and n.id == "pytest_plugins"
+               for t in targets for n in ast.walk(t))  # fmt: skip
 
 
 def _inits(conftest: str) -> set[str]:

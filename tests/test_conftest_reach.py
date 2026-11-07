@@ -160,21 +160,45 @@ def test_an_import_named_like_a_changed_module_is_a_hit(text, tree, changed):
     assert _reach(text, tree, [changed], conftest="tests/conftest.py") == changed
 
 
-@pytest.mark.parametrize(
-    "text",
-    [
-        'pytest_plugins = []\npytest_plugins += ["x"]\n',
-        'pytest_plugins = ()\npytest_plugins += ("x",)\n',
-        'pytest_plugins = []\npytest_plugins.append("x")\n',
-        'pytest_plugins = []\npytest_plugins.extend(["x"])\n',
-        'pytest_plugins = []\npytest_plugins.insert(0, "x")\n',
-        'pytest_plugins = ["base"] + ["x"]\n',
-        'pytest_plugins = [*["x"]]\n',
-        'pytest_plugins = []\npytest_plugins[:] = ["x"]\n',
-    ],
-)
-def test_all_literal_pytest_plugin_builders_find_changed_files(text):
-    assert _reach(text, {"tests/x.py": ""}, ["tests/x.py"]) == "tests/x.py"
+LITERAL_PLUGINS = [
+    'pytest_plugins = []\npytest_plugins += ["x"]\n',
+    'pytest_plugins = ()\npytest_plugins += ("x",)\n',
+    'pytest_plugins = []\npytest_plugins.append("x")\n',
+    'pytest_plugins = []\npytest_plugins.extend(["x"])\n',
+    'pytest_plugins = []\npytest_plugins.insert(0, "x")\n',
+    'pytest_plugins = ["base"] + ["x"]\n',
+    'pytest_plugins = ["x"] + ["base"]\n',
+    'pytest_plugins = [*["x"]]\n',
+    'pytest_plugins = []\npytest_plugins[:] = ["x"]\n',
+    'pytest_plugins, other = ["x"], 1\n',
+    'pytest_plugins = []\npytest_plugins.insert(0, *["x"])\n',
+    'pytest_plugins = "base, x"\n',  # pytest splits a string on commas
+]
+UNREAD_PLUGINS = [
+    'pytest_plugins = ["x"] if FLAG else []\n',
+    'pytest_plugins = [p for p in ("x",)]\n',
+    "pytest_plugins = PLUGINS\n",
+    'pytest_plugins = list(("x",))\n',
+    'pytest_plugins = [f"{NAME}"]\n',
+    "pytest_plugins = []\npytest_plugins.append(NAME)\n",
+    'import sys\nsetattr(sys.modules[__name__], "pytest_plugins", P)\n',
+    'globals()["pytest_plugins"] = P\n',
+]
+TWO = {"tests/x.py": "", "tests/y.py": ""}
+
+
+@pytest.mark.parametrize("text", LITERAL_PLUGINS)
+def test_every_literal_pytest_plugins_form_names_exactly_its_modules(text):
+    """#1010: read, not guessed: the named module is a hit, another changed module is not."""
+    assert _reach(text, TWO, ["tests/x.py"]) == "tests/x.py"
+    assert _reach(text, TWO, ["tests/y.py"]) == ""
+
+
+@pytest.mark.parametrize("text", UNREAD_PLUGINS)
+def test_a_pytest_plugins_value_it_cannot_read_may_load_any_changed_module(text):
+    """#1010: fail closed: any changed module is a hit; a changed data file is not."""
+    assert _reach(text, TWO, ["tests/y.py"]) == "tests/y.py"
+    assert _reach(text, {**TWO, "tests/data.json": ""}, ["tests/data.json"]) == ""
 
 
 def test_append_on_another_name_does_not_add_a_pytest_plugin():
