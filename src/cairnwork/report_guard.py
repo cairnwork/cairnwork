@@ -78,7 +78,7 @@ from cairnwork.report_denied import DENIED_SOURCE
 from cairnwork.report_guard_parts import PARTS_SOURCE
 from cairnwork.skip_hint import module_names as _module_names
 from cairnwork.verdict_record import Verdict as Verdict
-from cairnwork.verdict_record import _sources, denied_paths, well_formed
+from cairnwork.verdict_record import _sources, denied_paths, setup_denials, well_formed
 
 FDS_ENV = "CAIRNWORK_GUARD_FDS"
 PATH_ENV = "CAIRNWORK_VERDICT_PATH"
@@ -154,6 +154,7 @@ _HANDOVER = _take()
         self._plugin_missing = {}  # #804: node -> the table plugin whose fixture was not found
         self._env_ok = {}  # #775: node -> every failed call raised an OSError so far
         self._denied = {}  # #962: node -> the denied path, while every failed call has one
+        self._setup_denied = {}  # #962 step 2a: node -> [path, origin, line] of a setup denial
         self._finished = False  # #793: collection ran to its end (not stopped part way)
 
     def pytest_collectreport(self, report):
@@ -206,7 +207,8 @@ _HANDOVER = _take()
 
     @pytest.hookimpl(wrapper=True, tryfirst=True)
     def pytest_runtest_makereport(self, item, call, _original=_original, _keep_worst=_keep_worst,
-                                  _fixtures=_PLUGIN_FIXTURES, _denied_inside=_denied_inside):
+                                  _fixtures=_PLUGIN_FIXTURES, _denied_inside=_denied_inside,
+                                  _origin=_denied_origin):
         report = yield  # outermost: the report as every other hook left it
         nodeid, _ = _original(self, item, report.nodeid)
         if report.when == "call":  # #570: one per sub-test, then the test's own
@@ -221,6 +223,7 @@ _HANDOVER = _take()
             _keep_worst(self, nodeid, report.outcome)
             if report.failed:  # a skip in a fixture is not an error
                 self._setup_failed.append(nodeid)
+                self._setup_denied[nodeid] = _origin(call.excinfo, item.config.rootpath)
                 module = _fixtures.get(getattr(report.longrepr, "argname", None))
                 if module:
                     self._plugin_missing[nodeid] = module
@@ -239,6 +242,8 @@ _HANDOVER = _take()
         kind.update({n: "plugin:" + m for n, m in self._plugin_missing.items()})
         payload = {"nonce": self._nonce, "fail_kind": kind,
                    "denied": {n: p for n, p in self._denied.items() if p and n in kind},
+                   "setup_denied": {n: d for n, d in self._setup_denied.items()
+                                    if d and kind.get(n) == "setup"},
                    "collected": self._collected, "outcomes": self._outcomes,
                    "files": self._files, "file_of": self._file_of,
                    "renamed": list(dict.fromkeys(self._renamed)),
@@ -371,6 +376,7 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
         teardown_errors=tuple(teardown),
         fail_kind=kind,
         denied=denied_paths(data, kind),
+        setup_denied=setup_denials(data, kind),
         paths=_sources(collected, files, file_of or ()),
         exitstatus=status[0],
         testsfailed=status[1],
