@@ -53,6 +53,13 @@ class Evidence:
     detail: str = ""  # DENIED: the first distinct "operation target"s; UNAVAILABLE: why
     window_lines: int = 0
     peak_per_second: int = 0
+    # #991: every distinct (operation, exact target) of the run's own denials that ``detail`` would
+    # name without its MAX_LISTED cap. Only a DENIED evidence has any; never printed or compared.
+    denials: frozenset[tuple[str, str]] = field(default=frozenset(), compare=False, repr=False)
+
+    def denied(self, operation: str, target: str) -> bool:
+        """The run itself was denied ``operation`` on exactly ``target`` (DENIED evidence only)."""
+        return self.state == "DENIED" and (operation, target) in self.denials
 
     def __str__(self) -> str:
         detail = f" {self.detail}" if self.detail else ""
@@ -145,6 +152,7 @@ class _Tally:
         self.total, self.buckets = 0, Counter()
         self.seen: set[tuple[int, str]] = set()
         self.found: list[str] = []
+        self.denials: set[tuple[str, str]] = set()
         self.first = self.last = self.gap = 0.0
 
     def add(self, event) -> None:
@@ -165,6 +173,7 @@ class _Tally:
             self.seen.add((pid, target))
             if (pid, target) not in self.ignored and (operation, target) not in BENIGN_DENIES:
                 # the target is the run's own text (a path it chose): hidden characters go (#740)
+                self.denials.add((operation, target))
                 text = replace_hidden(f"{operation} {target}"[:200])
                 if text not in self.found and len(self.found) < MAX_LISTED:
                     self.found.append(text)
@@ -183,7 +192,7 @@ class _Tally:
                 "UNAVAILABLE", "stream volume over the cap: lines may be lost", total, peak
             )
         if self.found:  # the first few distinct ones, in stream order
-            return Evidence("DENIED", " | ".join(self.found), total, peak)
+            return Evidence("DENIED", " | ".join(self.found), total, peak, frozenset(self.denials))
         return Evidence("CLEAN", "", total, peak)
 
 
