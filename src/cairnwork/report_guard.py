@@ -74,6 +74,7 @@ from cairnwork.collect_import import import_hints
 from cairnwork.confined import MAX_REPORT_BYTES
 from cairnwork.data_exec_hook import plugin_source, refused
 from cairnwork.pytest_config import PLUGINS
+from cairnwork.report_denied import DENIED_SOURCE
 from cairnwork.report_guard_parts import PARTS_SOURCE
 from cairnwork.skip_hint import module_names as _module_names
 from cairnwork.verdict_record import Verdict as Verdict
@@ -128,30 +129,9 @@ def _take():
 _HANDOVER = _take()
 
 
-def _denied_inside(exc, _codes=(errno.EACCES, errno.EPERM, errno.EROFS, errno.ENETUNREACH),
-                   _lookup=socket.gaierror):
-    """#854: a denial-shaped OSError wrapped in a failure (group member, cause, unsuppressed
-    context), or #932 a failed host-name lookup (a closed network); past the bound, yes (fail
-    closed). Other wrapped OSErrors stay plain failures."""
-    todo, seen = [exc], set()
-    while todo:
-        if not isinstance(cur := todo.pop(), BaseException) or id(cur) in seen:
-            continue
-        if len(seen) >= 64:  # the bound: a 65th distinct exception, not an empty cause slot
-            return True
-        seen.add(id(cur))
-        if cur is not exc and (isinstance(cur, _lookup) or isinstance(cur, OSError)
-                               and cur.errno in _codes):  # #932: a lookup's errno is EAI_*
-            return True
-        members = getattr(cur, "exceptions", None)  # BaseExceptionGroup, or the backport's
-        todo.extend(members if isinstance(members, tuple) else ())
-        todo.append(cur.__cause__)
-        if not cur.__suppress_context__:
-            todo.append(cur.__context__)
-    return False
-
-
-class _Reporter:
+'''
+    + DENIED_SOURCE
+    + '''class _Reporter:
     # the hooks call their helpers and the json/os functions through default arguments bound at
     # import: rebinding a class or module attribute later does not change what is recorded
 
