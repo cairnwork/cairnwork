@@ -66,21 +66,17 @@ ATTACHED = {
                           + "builtins.globals()['test_x'] = _impl\n"),
     "trap-class-helper": (
         FN_IMPL.format(RIGHT) + "class Other:\n    pass\nclass TestX:\n"
-        "    def _add():\n        Other.test_x = _impl\n    _add()\n"
-        "    def test_regression(self):\n        pass\n",
+        "    def _add():\n        Other.test_x = _impl\n    _add()\n",
         FN_IMPL.format(WRONG) + "class Other:\n    pass\nclass TestX:\n"
-        "    def _add():\n        Other.test_x = _impl\n    _add()\n"
-        "    def test_regression(self):\n        pass\n",
+        "    def _add():\n        Other.test_x = _impl\n    _add()\n",
     ),
     "trap-method-decorator": (
         FN_IMPL.format(RIGHT) + "def reg(f):\n    Other.test_x = _impl\n    return f\n"
         "class Other:\n    pass\nclass TestX:\n    @reg\n"
-        "    def helper(self):\n        pass\n"
-        "    def test_regression(self):\n        pass\n",
+        "    def helper(self):\n        pass\n",
         FN_IMPL.format(WRONG) + "def reg(f):\n    Other.test_x = _impl\n    return f\n"
         "class Other:\n    pass\nclass TestX:\n    @reg\n"
-        "    def helper(self):\n        pass\n"
-        "    def test_regression(self):\n        pass\n",
+        "    def helper(self):\n        pass\n",
     ),
     "trap-setattr": (CLS + IMPL.format(RIGHT) + "setattr(TestX, 'test_x', _impl)\n",
                      CLS + IMPL.format(WRONG) + "setattr(TestX, 'test_x', _impl)\n"),
