@@ -29,6 +29,8 @@ class Verdict:
     # Absent: an ordinary test failure. ``outcomes`` are unchanged.
     fail_kind: dict[str, str] = field(default_factory=dict)
     denied: dict[str, str] = field(default_factory=dict)  # #962: env node -> denied path, unread
+    # #962 step 2a: setup node -> (denied path, origin file in the checkout or "", line); unread
+    setup_denied: dict[str, tuple[str, str, int]] = field(default_factory=dict)
     exitstatus: int | None = None  # pytest's own session status, as recorded (#276)
     testsfailed: int | None = None  # pytest's own count of failed tests, as recorded
     collected: tuple[str, ...] = ()  # #793: every node id pytest collected, as recorded
@@ -75,6 +77,25 @@ def denied_paths(data: dict, kind: dict) -> dict[str, str]:
     ):
         return {}
     return found
+
+
+def setup_denials(data: dict, kind: dict) -> dict[str, tuple[str, str, int]]:
+    """#962 step 2a: the record's ``setup_denied`` (node -> [path, origin, line]) for the nodes of
+    kind ``setup``; ``{}`` when any entry is not exactly that shape (fail closed: a node without
+    an entry is never a reproduced denial). Data only: no verdict reads it yet."""
+    found, kept = data.get("setup_denied", {}), {}
+    if not isinstance(found, dict):
+        return {}
+    for node, entry in found.items():
+        if kind.get(node) != "setup" or type(entry) is not list or len(entry) != 3:
+            return {}
+        path, origin, line = entry
+        if not (type(path) is str and path.startswith("/") and len(path) < 500
+                and type(origin) is str and not origin.startswith("/") and len(origin) < 500
+                and type(line) is int and line >= 0):  # fmt: skip
+            return {}
+        kept[node] = (path, origin, line)
+    return kept
 
 
 def well_formed(data: dict, collected: list, outcomes: dict, plugin_kinds: frozenset[str]):

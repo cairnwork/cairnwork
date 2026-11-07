@@ -144,6 +144,7 @@ class VerifierRun:
     collection_finished: bool = False  # #793: collection was not stopped part way
     deny_evidence: str = ""  # #797 step 1: a base run's deny channel (deny_channel.py); not hashed
     deny_denials: frozenset[tuple[str, str]] = frozenset()  # #991: its exact denials; not hashed
+    setup_denied: dict[str, tuple[str, str, int]] = field(default_factory=dict)  # #962; unhashed
     data_refused: tuple[str, ...] = ()  # #850: declared data was executed: never a pass
 
 
@@ -308,11 +309,13 @@ def _denial(batch: _Batch, verdict, checkout, run_dir, clean=True) -> str:
     return candidate_denial(verdict.outcomes, verdict.denied, (checkout.parent, run_dir))
 
 
+_RUN_FILES = ("verifier.log", "pytest.ini", "profile.sb")  # a run's private files
+
+
 def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, channel) -> VerifierRun:
     ctx, candidate_commit, timeout = batch.ctx, batch.candidate_commit, batch.timeout
     account, python, attempt_id = ctx.account, batch.python, ctx.attempt_id
-    log_path, ini = private / "verifier.log", private / "pytest.ini"
-    profile_path = private / "profile.sb"
+    log_path, ini, profile_path = map(private.joinpath, _RUN_FILES)
     run_dir, home, tmp, env, verdict_path, verdict_nonce = _prepare_run(
         private, ini, ini_text, channel, ctx.hash_seed
     )
@@ -387,4 +390,5 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
         import_errors=verdict.import_errors, submodule_errors=verdict.submodule_errors,
         deny_evidence=str(evidence) if evidence else "", data_refused=verdict.data_refused,
         deny_denials=evidence.denials if evidence else frozenset(),
+        setup_denied=verdict.setup_denied,
     )  # fmt: skip

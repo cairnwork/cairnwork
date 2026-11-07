@@ -58,19 +58,49 @@ def _import_error(node, call, report, _real=os.path.realpath, _rel=os.path.relpa
     return None
 
 
-def _denied_path(info):
-    # #962: the path of the first EPERM OSError (a Seatbelt denial's errno; EACCES is plain file
-    # permissions) in the cause and context chain (at most 64 links) of a call's exception info
-    # (None for a strict xpass); None when there is none. Wording only: the parent shows it in
-    # the reason and trusts nothing about it.
+def _denied_exc(info):
+    # #962: the first EPERM OSError (a Seatbelt denial's errno; EACCES is plain file permissions)
+    # with a str filename in the cause and context chain (at most 64 links) of a phase's exception
+    # info (None for a strict xpass); None when there is none.
     exc = getattr(info, "value", None)
     for _ in range(64):
         if not isinstance(exc, BaseException):
             return None
         if isinstance(exc, OSError) and exc.errno == 1 and type(exc.filename) is str:
-            return exc.filename
+            return exc
         exc = exc.__cause__ or (None if exc.__suppress_context__ else exc.__context__)
     return None
+
+
+def _denied_path(info, _exc=_denied_exc):
+    # #962: that error's path, or None. Wording only: the parent trusts nothing about it.
+    exc = _exc(info)
+    return None if exc is None else exc.filename
+
+
+def _denied_origin(info, root, _exc=_denied_exc, _real=os.path.realpath, _rel=os.path.relpath,
+                   _abs=os.path.isabs, _str=str):
+    # #962 step 2a: [denied path, origin, line] of a setup-phase denial, or None. The origin is
+    # the innermost frame of the denied error's own traceback whose absolute file lies in the
+    # checkout (realpath only to find it), relative to it; "" when that frame is a lambda or a
+    # comprehension (a <...> name), or none is in the checkout. Data for candidate_env.py, which
+    # reads the control tree's copy of that line; any error records nothing.
+    try:
+        exc = _exc(info)
+        if exc is None:
+            return None
+        top, tb, origin, line = _real(_str(root)), exc.__traceback__, "", 0
+        while tb is not None:
+            code = tb.tb_frame.f_code
+            if _abs(code.co_filename) and not code.co_filename.startswith("<"):
+                rel = _rel(_real(code.co_filename), top)
+                if rel != ".." and not rel.startswith("../") and not _abs(rel):
+                    origin = "" if code.co_name.startswith("<") else rel
+                    line = tb.tb_lineno or 0
+            tb = tb.tb_next
+        return [exc.filename, origin, line]
+    except BaseException:
+        return None
 
 
 def _submodule_error(node, call, report, _real=os.path.realpath, _rel=os.path.relpath,
