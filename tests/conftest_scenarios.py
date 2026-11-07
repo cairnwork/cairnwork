@@ -226,7 +226,9 @@ SCENARIOS = {  # name: (kwargs of conftest_run, expected status, a code the reas
         "FAILED",
         "TEST_COMMIT_CONFTEST_CHANGES_BASE",
     ),
-    "a module-level change in an edited base file: not compared by the probe, still run by P2P": (
+    # #979: a module-level statement counts for every test of its file, so a target naming only
+    # the new test no longer covers it; refused before P2P (still FAILED, now named for the cause)
+    "a module-level change in an edited base file: every test of the file must be targeted": (
         {
             "base_files": SIDEFX,
             "regression": PLAIN,
@@ -234,7 +236,7 @@ SCENARIOS = {  # name: (kwargs of conftest_run, expected status, a code the reas
             "extra_files": {"tests/other/test_env.py": MODULE_LEVEL},
         },
         "FAILED",
-        "p2p-whole-suite",
+        "DEFERRED_TESTS_NOT_TARGETED",
     ),
     "a run with the test commit over the time budget": (
         {
