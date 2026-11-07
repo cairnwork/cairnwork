@@ -2,8 +2,11 @@
 
 pytest collects a ``test*`` attribute of a test class or a module however it got there. An
 *attaching store* puts a callable under a ``test*``/``Test*`` name from outside the class body:
-a name bound at module level or directly in a top-level class body to a name, an attribute, a
-lambda or a call of same-file code (``test_x = f``; a function's locals are never collected), an
+a name bound at module level, in a module-level block or in a test class body (nested too) to a
+name, an attribute, a lambda, a call of same-file code, or a composite value (unpacking, a
+subscript, a condition, a boolean, a wrapping call) that holds a lambda or reads same-file code
+(#1024; ``test_x = f``; a function's locals are never collected, except a name it declares
+``global`` when it runs at import), an
 attribute target (``Cls.test_x = f``, ``sys.modules[__name__].test_x = f``, a ``for`` or
 ``with`` target too), ``setattr`` (``builtins.setattr``, ``type.__setattr__``), or a
 ``globals()``/``vars()``/``locals()`` (``builtins.globals()`` too) or ``__dict__`` namespace
@@ -36,7 +39,7 @@ from __future__ import annotations
 import ast
 import builtins
 
-from cairnwork.deferred_nodes import _DEFS, _SCOPES, _literal, _Reach
+from cairnwork.deferred_nodes import _DEFS, _SCOPES, _digest, _literal, _Reach
 from cairnwork.deferred_overlay import TestCommitRejected
 
 _HOLDERS = frozenset({"globals", "vars", "locals"})
@@ -78,7 +81,9 @@ def attached(tree: ast.Module) -> tuple[frozenset[str], bool]:
         if not stores:
             continue
         if all(name is not None and _names(value) <= plain for name, value in stores):
-            found.add(reach.module + reach(part))
+            # #1026 r1: the stores are part of the digest, so one dropping out is a change
+            kept = sorted(f"{name}={ast.dump(value)}" for name, value in stores)
+            found.add(reach.module + reach(part) + _digest("|".join(kept)))
         else:
             blind = True
     return frozenset(found), blind
@@ -167,26 +172,36 @@ def _stores(node: ast.AST) -> list[tuple[str | None, ast.expr]]:
 
 
 def _name_stores(node: ast.AST, plain: frozenset[str]) -> list[tuple[str, ast.expr]]:
-    """(name, value) of each ``test*`` name bound in ``node`` at module or class-body scope, not
-    in a nested scope: pytest never collects a function's locals (Claude r2, Gemini on #1003).
-    Only a value that names a callable (a name, an attribute, a lambda) or a call made of
-    same-file code counts: pytest collects functions and classes, and data under a ``test*``
-    name (``test_data = load(...)``, a list, a path) is common; what an imported call returns
-    is not followed, as any other imported code."""
-    if isinstance(node, (*_SCOPES, ast.Lambda, ast.comprehension)):
+    """(name, value) of each ``test*`` name bound in ``node`` at module or class-body scope (nested
+    classes too), not in a function's scope: pytest never collects a function's locals (Claude
+    r2, Gemini on #1003); a reached function counts only the names it declares ``global``
+    (#1024). Only a value that names a callable (a name, an attribute, a lambda), a call made of
+    same-file code, or a composite holding a lambda or reading same-file code counts: pytest
+    collects functions and classes, and data under a ``test*`` name (``test_data = load(...)``,
+    a list, a path) is common; what an imported call returns is not followed, as any other
+    imported code."""
+    if isinstance(node, ast.Lambda):
+        return []
+    # #1024: a reached function binds at module level only the names it declares ``global``
+    shared = {n for x in ast.walk(node) if isinstance(x, ast.Global) for n in x.names}
+    in_def = isinstance(node, _DEFS)
+    if in_def and not shared:
         return []
     found: list[tuple[str, ast.expr]] = []
     pending = [node]
     while pending:
         item = pending.pop()
-        if item is not node and isinstance(item, (*_SCOPES, ast.Lambda, ast.comprehension)):
+        if item is not node and isinstance(item, (*_DEFS, ast.Lambda, ast.comprehension)):
+            continue
+        if isinstance(item, ast.ClassDef):
+            pending.extend(item.body)
             continue
         for targets, value in _bindings(item):
             if value is None or not _callable(value, plain):
                 continue
             for target in (t for x in targets for t in ast.walk(x)):
                 if isinstance(target, ast.Name) and isinstance(target.ctx, ast.Store):
-                    if _test_name(target.id):
+                    if _test_name(target.id) and (not in_def or target.id in shared):
                         found.append((target.id, value))
         pending.extend(ast.iter_child_nodes(item))
     return found
@@ -195,7 +210,13 @@ def _name_stores(node: ast.AST, plain: frozenset[str]) -> list[tuple[str, ast.ex
 def _callable(value: ast.expr, plain: frozenset[str]) -> bool:
     if isinstance(value, (ast.Name, ast.Attribute, ast.Lambda)):
         return True
-    return isinstance(value, ast.Call) and _names(value) <= plain
+    if isinstance(value, ast.Call) and _names(value) <= plain:
+        return True
+    # #1024: a composite value (unpacking, a subscript, a condition, a boolean, a call wrapping
+    # same-file code) counts when it holds a lambda or reads a name ``plain`` allows; pure data
+    # (literals, an imported constant) stays inert.
+    lam = any(isinstance(part, ast.Lambda) for part in ast.walk(value))
+    return lam or bool(_names(value) & plain)
 
 
 def _bindings(item: ast.AST) -> list[tuple[list[ast.expr], ast.expr | None]]:

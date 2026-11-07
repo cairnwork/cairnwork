@@ -139,6 +139,26 @@ ATTACHED = {
     }.items()},
     "module-setattr": ("", "import sys\n" + FN_IMPL.format(WRONG)
                        + "sys.modules[__name__].__setattr__('test_x', _impl)\n"),
+    # #1024: the binding is unchanged and only the same-file function's body changes
+    **{shape: (FN_IMPL.format(RIGHT) + tail, FN_IMPL.format(WRONG) + tail) for shape, tail in {
+        "trap-tuple-unpack": "test_x, _other = (_impl, 1)\n",
+        "trap-subscript": "test_x = [_impl][0]\n",
+        "trap-conditional": "test_x = _impl if True else None\n",
+        "trap-boolean": "test_x = True and _impl\n",
+        "trap-module-for": "for test_x in (_impl,):\n    pass\n",
+        "trap-imported-mark": "import pytest\ntest_x = pytest.mark.slow(_impl)\n",
+        "trap-class-in-block": "if True:\n    class TestY:\n        test_x = _impl\n",
+        "trap-nested-class": "class Outer:\n    class TestY:\n        test_x = _impl\n",
+        "trap-global-helper": "def install():\n    global test_x\n    test_x = _impl\ninstall()\n",
+    }.items()},
+    # #1026 r1: a composite store that drops out of a statement that stays readable is a change
+    "dropped-store": (FN_IMPL.format(RIGHT) + "def _other():\n    pass\nclass TestX:\n"
+                      "    test_a = _other\n    test_b = [_impl][0]\n",
+                      FN_IMPL.format(RIGHT) + "def _other():\n    pass\nclass TestX:\n"
+                      "    test_a = _other\n    test_b = [_impl][0]\n"
+                      "class TestZ:\n    global _impl\n    _impl = len\n"),
+    # #1026 r1: the lambda arm of the composite rule: a lambda that reads no plain name
+    "composite-lambda": ("from helpers import impl\ntest_x = (lambda: impl(),)[0]\n",) * 2,
 }  # fmt: skip
 
 
@@ -161,6 +181,9 @@ def test_a_changed_attached_test_is_refused_beside_a_visible_one(project, shape)
 CONTROLS = {  # no attached test: nothing refused, only test_regression is new
     "plain-attribute": CLS + "TestX.helper = len\nconfig = type('C', (), {})\nconfig.debug = 1\n",
     "test-named-literal": CLS + "TestX.test_data = [1, 2]\nsetattr(TestX, 'test_n', 3)\n",
+    "global-filter": "from helpers import make\ndef _h():\n    global OTHER\n    OTHER = 1\n"
+    "    test_x = make\n    return test_x\n_h()\n",  # #1026 r1: only the global name counts
+    "module-data-values": "test_data = [1, 2]\ntest_label = 'sample'\ntest_count = 7\n",
     "rewritten-as-a-def": CLS + "def test_x():\n" + RIGHT,
     "unchanged-readable": CLS + IMPL.format(RIGHT) + "TestX.test_x = _impl\n",
     "namespace-reads": "DATA = 1\nglobals().update({'DATA': len})\nN = len(globals())\n"
