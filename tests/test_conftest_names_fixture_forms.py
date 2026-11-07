@@ -6,6 +6,7 @@ confirms every form registers the fixture and that the nested override disables 
 strict xfails on main (pre-existing before #988 too)."""
 
 import ast
+import sys
 
 import pytest
 from test_conftest_names import _check
@@ -236,6 +237,16 @@ def test_an_annotated_string_constant_name_is_read():
 
 def test_a_deep_conditional_chain_is_read_without_recursion():
     """#998 r3 (Claude): reading a deep chain must not raise RecursionError. 800 parses on every
-    supported Python; 3000 does not on 3.11 (#1019 CI)."""
+    supported Python (3000 does not on 3.11, #1019 CI); the read runs with only 100 frames to
+    spare, so a reader that recursed once per level would fail here."""
     chain = "import pytest\nf = " + " if c else ".join(["pytest.fixture"] * 800) + "\n"
-    assert "f" in _aliases(ast.parse(chain)) and _registered(ast.parse(chain)) == set()
+    tree, depth, frame = ast.parse(chain), 0, sys._getframe()
+    while frame is not None:
+        depth, frame = depth + 1, frame.f_back
+    limit = sys.getrecursionlimit()
+    sys.setrecursionlimit(depth + 100)
+    try:
+        aliases, names = _aliases(tree), _registered(tree)
+    finally:
+        sys.setrecursionlimit(limit)
+    assert "f" in aliases and names == set()
