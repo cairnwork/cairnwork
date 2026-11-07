@@ -146,6 +146,23 @@ def test_an_error_subclass_cannot_change_what_is_recorded(tmp_path):
     assert v.setup_denied == {NODE: (DENIED, "tests/conftest.py", 9)}
 
 
+def test_a_suppressed_context_does_not_supply_a_denied_path():
+    from types import SimpleNamespace
+
+    from cairnwork.report_guard_parts import PARTS_SOURCE
+
+    plugin: dict = {"os": __import__("os")}
+    exec(PARTS_SOURCE, plugin)
+    try:
+        try:
+            raise PermissionError(1, "Operation not permitted", DENIED)
+        except PermissionError:
+            raise RuntimeError("unrelated") from None
+    except RuntimeError as exc:
+        assert exc.__suppress_context__ is True
+        assert plugin["_denied_path"](SimpleNamespace(value=exc)) is None
+
+
 def test_the_recorder_runs_no_code_of_the_error(tmp_path):
     """Every attribute the recorder reads is a property that raises: none of them runs."""
     import os

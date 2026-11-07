@@ -85,6 +85,17 @@ def test_a_taken_name_or_import_time_code_is_refused(repo, name):
         _check(repo, {path: text}, base_files=USES)
 
 
+def test_a_helper_fixture_imported_directly_from_pytest_is_a_conflict(repo):
+    import ast
+
+    helper = "from pytest import fixture\n\n\n@fixture\ndef check():\n    return None\n"
+    with pytest.raises(dt.TestCommitRejected, match="TEST_COMMIT_CONFTEST_STATIC"):
+        _check(repo, {"tests/conftest.py": "import helper\n", "tests/helper.py": helper})
+    from cairnwork.conftest_names import _fixtures
+
+    assert _fixtures(ast.parse(helper)) == {"check"}
+
+
 ALLOWED = {
     "a new fixture with a new name": BASE + "\n\n@pytest.fixture\ndef two():\n    return 2\n",
     "importing again what the base imports": BASE + "import pytest\n",

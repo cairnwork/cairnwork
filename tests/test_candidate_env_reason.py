@@ -13,7 +13,7 @@ from conftest import commit_change
 from test_uncomparable_paths import run_cli
 
 from cairnwork.reasons import candidate_denial
-from cairnwork.verdict_record import denied_paths
+from cairnwork.verdict_record import denied_paths, well_formed
 
 DENIED = "/private/tmp/cw962-denied-probe"  # outside every write root of a run
 KEEP = "def add(a, b):\n    return a + b + 1\n"  # the project's own tests import it
@@ -112,6 +112,19 @@ def test_a_malformed_denied_record_is_ignored():
     assert denied_paths({"denied": {"a": 5}}, kind) == {}
     assert denied_paths({"denied": ["a"]}, kind) == {}
     assert denied_paths({}, kind) == {}
+
+
+def test_a_denied_path_over_the_length_cap_is_ignored():
+    kind = {"a": "env"}
+    assert denied_paths({"denied": {"a": "/" + "x" * 500}}, kind) == {}
+
+
+@pytest.mark.parametrize("field", ["exitstatus", "testsfailed"])
+@pytest.mark.parametrize("value", [False, True])
+def test_a_boolean_session_count_is_not_a_well_formed_verdict(field, value):
+    data = {"exitstatus": 0, "testsfailed": 0}
+    data[field] = value
+    assert well_formed(data, [], {}, frozenset()) is None
 
 
 def test_ac4_a_base_run_gets_no_denied_path_wording():
