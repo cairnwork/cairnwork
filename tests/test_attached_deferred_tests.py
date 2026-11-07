@@ -41,6 +41,7 @@ SUBCLASS = (
     "class TestX(Base):\n    pass\n"
 )
 DEFAULT = "def _h(a=setattr(TestX, 'test_x', _impl)):\n    pass\n"
+TRAP = "    assert add(2, 2) == WANT\n" + "TestX.test_x = _impl\n"  # only WANT changes
 DICT = "import sys\nsys.modules[__name__].__dict__['test_x'] = _impl\n"
 
 # (on the base, in the test commit) beside REGRESSION: each changes an attached test
@@ -82,6 +83,8 @@ ATTACHED = {
     "trap-function-default": (CLS + IMPL.format(RIGHT) + DEFAULT,
                               CLS + IMPL.format(WRONG) + DEFAULT),
     "trap-dict": (FN_IMPL.format(RIGHT) + DICT, FN_IMPL.format(WRONG) + DICT),
+    "trap-module-value": ("WANT = 4\n" + CLS + IMPL.format(TRAP),
+                          "WANT = 6\n" + CLS + IMPL.format(TRAP)),
     "laundered-import": ("from helpers import impl\n" + CLS + "_v = impl\nTestX.test_x = _v\n",
                          "from helpers import impl\n" + CLS + "_v = impl\nTestX.test_x = _v\n"),
     "import-in-helper": (CLS + "def _go():\n    from helpers import impl\n    TestX.test_x = impl\n"
@@ -182,10 +185,10 @@ def test_other_imports_and_a_class_body_pytestmark_import_add_nothing(project):
 
 @pytest.mark.sandbox
 @pytest.mark.parametrize("shape", ["trap-attribute", "trap-assigned", "trap-static-decorator",
-                                   "for-target"])  # fmt: skip
+                                   "trap-module-value", "for-target"])  # fmt: skip
 def test_verify_refuses_the_trap_a_wrong_fix_would_fail(project, state, shape):
-    """Before #994 (and, for the last three, at 766020301dd9): VERIFIED. The attached test fails
-    the fix; the target names test_regression only."""
+    """Each wrong candidate was VERIFIED before #994 or its r2 guards (the PR's table). The
+    attached test fails the fix; the target names test_regression only."""
     before, after = ATTACHED[shape]
     if before:
         commit_change(project, {F: "from calc import add\n" + before})
