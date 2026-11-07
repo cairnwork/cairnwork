@@ -58,6 +58,14 @@ BASES = {  # name: base files; each registers guard in tests/conftest.py from a 
         "tests/deco.py": "import pytest\n\nfx = pytest.fixture\n"},
     "from helpers import guard (built in a factory, fixture named in a longer string)": {
         "tests/helpers.py": NESTED},
+    "from helpers import guard (an exported alias used as a module attribute)": {
+        "tests/helpers.py": IMPL.replace("pytest\n", "pytest\nimport deco\n", 1)
+        + "guard = deco.fx()(_impl)\n",
+        "tests/deco.py": "import pytest\n\nfx = pytest.fixture\n"},
+    "from helpers import guard (an exported alias bound by a tuple assignment)": {
+        "tests/helpers.py": IMPL.replace("pytest\n", "pytest\nfrom deco import fx as wrap\n", 1)
+        + "guard = wrap()(_impl)\n",
+        "tests/deco.py": "import pytest\n\nfx, other = pytest.fixture, 1\n"},
 }  # fmt: skip
 CALL = "X = pytest.fixture(_impl, name='guard', autouse=True)"
 AUTO = "from calc import add\n\n\ndef _impl():\n    assert add(0, 0) < 2\n"
@@ -107,3 +115,23 @@ def test_an_override_of_an_imported_fixtures_dependency_is_refused(project, tmp_
         Path(table).open("a").write(json.dumps(row) + "\n")
     assert result.status == status, result.reason
     assert code in result.reason
+
+
+UNRELATED = {  # #998 r2 (Claude B4): an unrelated import shares a name a test file binds
+    "tests/conftest.py": BASE_CONFTEST + "from helpers import sh  # noqa: F401\n",
+    "tests/helpers.py": "from subprocess import run\n\n\n"
+    "def sh(*a, **kw):\n    return run(*a, **kw)\n",
+    "tests/sub/test_data.py": "def load_fixture(n):\n    return n\n\n\n"
+    "run = load_fixture('x')\n\n\ndef test_data():\n    assert run == 'x'\n",
+}  # fmt: skip
+
+
+def test_a_benign_nested_fixture_beside_an_unrelated_name_is_accepted(project, tmp_path):
+    result = conftest_run(
+        project, tmp_path, addition="import pytest\n" + NEW_FIXTURE, regression=PLAIN, fix=FIX,
+        base_files=UNRELATED, path="tests/sub/conftest.py",
+    )  # fmt: skip
+    if table := os.environ.get("SCENARIO_TABLE"):
+        row = {"name": "B4 benign", "status": result.status, "reason": result.reason[:160]}
+        Path(table).open("a").write(json.dumps(row) + "\n")
+    assert result.status == "COMPLETED", result.reason

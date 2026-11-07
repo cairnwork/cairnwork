@@ -15,10 +15,13 @@ CODE = "TEST_COMMIT_CONFTEST_STATIC"
 
 def exported(trees) -> frozenset[str]:
     """Names any of ``trees`` binds to ``fixture`` or an alias of it, through re-exports under any
-    name (#998 r1: ``from helper import fx`` where helper binds ``fx = pytest.fixture``)."""
+    name (#998 r1: ``from helper import fx`` where helper binds ``fx = pytest.fixture``). Only an
+    exact reference counts here (``_ref``; #998 r2, Claude): a name bound to an expression that
+    merely mentions the word, such as ``run = load_fixture()``, stays an alias of its own module
+    only, so it never makes an unrelated import of ``run`` elsewhere an alias."""
     names: frozenset[str] = frozenset()
     while True:
-        more = names.union(*(_aliases(tree, names) for tree in trees))
+        more = names.union(*(_aliases(tree, names, exact=True) for tree in trees))
         if more == names:
             return names
         names = more
@@ -63,25 +66,34 @@ def registered(tree: ast.Module, extra: frozenset[str] = frozenset()) -> set[str
     return names
 
 
-def _aliases(tree: ast.Module, extra: frozenset[str] = frozenset()) -> set[str]:
+def _aliases(
+    tree: ast.Module, extra: frozenset[str] = frozenset(), exact: bool = False
+) -> set[str]:
     """Names bound to ``fixture`` another way: ``from pytest import fixture as fx``,
-    ``f = pytest.fixture``, a name ``extra`` holds imported under any name (``exported``), and
-    names bound to those."""
+    ``f = pytest.fixture``, a name ``extra`` holds imported under any name or used as a module
+    attribute (``exported``), and names bound to those (a name, an annotated name, a module
+    attribute, an item of a tuple target or an assignment expression). ``exact``: the word must be
+    the whole name (``_fixture``)."""
     names = {
         a.asname or a.name
         for n in ast.walk(tree)
         if isinstance(n, ast.Import | ast.ImportFrom)
         for a in n.names
-        if "fixture" in a.name or a.name.rsplit(".", 1)[-1] in extra
+        if _word(a.name.rsplit(".", 1)[-1] if exact else a.name, exact)
+        or a.name.rsplit(".", 1)[-1] in extra
     } | (
         set(extra)
         if any(isinstance(n, ast.ImportFrom) and n.names[0].name == "*" for n in ast.walk(tree))
         else set()
     )  # a star import binds them all
+    names |= {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute) and n.attr in extra}
     while True:
-        more = {
-            t.id for n in ast.walk(tree) if isinstance(n, ast.Assign) and _fixture(n.value, names)
-            for t in n.targets if isinstance(t, ast.Name)
+        more = {  # #998 r2: m.fx = pytest.fixture exports fx; so do fx: T = ..., a, fx = ...
+            t.id if isinstance(t, ast.Name) else t.attr for n in ast.walk(tree)
+            if isinstance(n, ast.Assign | ast.AnnAssign | ast.NamedExpr) and n.value
+            and (_ref(n.value, names) if exact else _fixture(n.value, names))
+            for top in (n.targets if isinstance(n, ast.Assign) else [n.target])
+            for t in _items(top) if isinstance(t, ast.Name | ast.Attribute)
         } - names  # fmt: skip
         if not more:
             return names
@@ -92,6 +104,40 @@ def _fixture_call(node: ast.AST, aliases: set[str]) -> bool:
     """A call of ``fixture`` or an alias of it, or of what such a call returns (``_fixture`` reads
     the whole callee, so ``fixture(...)(fn)`` counts)."""
     return isinstance(node, ast.Call) and _fixture(node.func, aliases)
+
+
+def _items(target: ast.expr) -> Iterator[ast.expr]:
+    """The targets an assignment target binds: itself, or each item of a tuple or list."""
+    if isinstance(target, ast.Tuple | ast.List):
+        for item in target.elts:
+            yield from _items(item)
+    elif isinstance(target, ast.Starred):
+        yield from _items(target.value)
+    else:
+        yield target
+
+
+def _word(word: str, exact: bool) -> bool:
+    return word == "fixture" if exact else "fixture" in word
+
+
+def _ref(node: ast.expr, aliases: set[str]) -> bool:
+    """For ``exported``, only a value that is ``fixture`` or an alias of it itself: the name or
+    attribute, or ``getattr(m, "fixture")``. Not a call of one (its result is a decorator or a
+    fixture, read where it is made), and not any expression mentioning the word: across modules
+    either would spread to common names (``body = self.read()`` once ``read`` is an alias)."""
+    if isinstance(node, ast.Name | ast.Attribute):
+        word = node.id if isinstance(node, ast.Name) else node.attr
+        return word == "fixture" or word in aliases
+    # a, fx = 1, fixture; fx = fixture if c else f
+    if isinstance(node, ast.Tuple | ast.List | ast.IfExp):
+        items = node.elts if isinstance(node, ast.Tuple | ast.List) else [node.body, node.orelse]
+        return any(_ref(item, aliases) for item in items)
+    return (
+        isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        and node.func.id == "getattr" and len(node.args) > 1
+        and isinstance(node.args[1], ast.Constant) and node.args[1].value == "fixture"
+    )  # fmt: skip
 
 
 def _fixture(node: ast.expr, aliases: set[str]) -> bool:

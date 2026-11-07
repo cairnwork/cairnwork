@@ -62,6 +62,10 @@ NAME_VAR = ("import pytest\n\nCUSTOM = 'alias'\n\n\n@pytest.fixture(name=CUSTOM,
             "def _g():\n    pytest.fail('guard')\n")  # fmt: skip
 CALL_NAME = IMPL + "X = pytest.fixture(_impl, name='alias', autouse=True)\n"
 TWO_STEP_NAME = IMPL + "X = pytest.fixture(name='alias', autouse=True)(_impl)\n"
+USES_FX = (  # deco's fx, under another name, with a variable name=
+    "import pytest\nimport reg  # noqa: F401\nfrom deco import fx as wrap\n\nCUSTOM = 'alias'\n\n\n"
+    "def _impl():\n    pytest.fail('guard')\n\n\nX = wrap(_impl, name=CUSTOM, autouse=True)\n"
+)
 MISSED_IMPORTED = {  # name: (taken name, base files)
     "a name= in a call that registers it": (
         "alias", {ABOVE: "from helpers import X  # noqa: F401\n", "tests/helpers.py": CALL_NAME}),
@@ -84,6 +88,29 @@ MISSED_IMPORTED = {  # name: (taken name, base files)
                 "import pytest\n\n\ndef make():\n    @getattr(pytest, 'fixture '.strip())\n"
                 "    def guard(dep):\n        " + CHECK.replace("\n    ", "\n        ")
                 + "    return guard\n\n\nguard = make()\n"}),
+    "an alias assigned to a module attribute, imported under another name (#998 r2)": (
+        "alias", {ABOVE: "from helpers import X  # noqa: F401\n", "tests/deco.py": "fx = None\n",
+                  "tests/reg.py": "import pytest\nimport deco\n\ndeco.fx = pytest.fixture\n",
+                  "tests/helpers.py": USES_FX}),
+    "an annotated alias, imported under another name (#998 r2)": (
+        "alias", {ABOVE: "from helpers import X  # noqa: F401\n", "tests/reg.py": "",
+                  "tests/deco.py": "import pytest\nfrom typing import Any\n\n"
+                  "fx: Any = pytest.fixture\n", "tests/helpers.py": USES_FX}),
+    "an exported alias used as a module attribute (#998 r2, Claude A4)": (
+        "dep", {ABOVE: "from helpers import guard  # noqa: F401\n",
+                "tests/deco.py": "import pytest\n\nfx = pytest.fixture\n",
+                "tests/helpers.py": "import pytest\nimport deco\n\n\n"
+                "def _impl(dep):\n    " + CHECK + "\n\nguard = deco.fx(autouse=True)(_impl)\n"}),
+    "an exported alias bound by a tuple assignment (#998 r2, Claude A5)": (
+        "dep", {ABOVE: "from helpers import guard  # noqa: F401\n",
+                "tests/deco.py": "import pytest\n\nfx, other = pytest.fixture, 1\n",
+                "tests/helpers.py": "import pytest\nfrom deco import fx as wrap\n\n\n"
+                "def _impl(dep):\n    " + CHECK + "\n\nguard = wrap(autouse=True)(_impl)\n"}),
+    "an exported alias bound by an assignment expression (#998 r2)": (
+        "dep", {ABOVE: "from helpers import guard  # noqa: F401\n",
+                "tests/deco.py": "import pytest\n\nif (fx := pytest.fixture):\n    pass\n",
+                "tests/helpers.py": "import pytest\nfrom deco import fx as wrap\n\n\n"
+                "def _impl(dep):\n    " + CHECK + "\n\nguard = wrap(autouse=True)(_impl)\n"}),
     "a fixture factory decorator from another module": (
         "dep", {ABOVE: "from helpers import guard  # noqa: F401\n", "tests/deco.py":
                 "import pytest\n\n\ndef make(fn):\n    return pytest.fixture(autouse=True)(fn)\n",
@@ -222,3 +249,32 @@ def test_exported_follows_re_exports_under_any_name():
         "from c import h\nk = h\n", "from x import other\n",
     )]  # fmt: skip
     assert {"fx", "g", "h", "k"} <= exported(trees) and "other" not in exported(trees)
+
+
+# #998 r2 (Claude B4): a test file binds ``run`` to what a "fixture"-named loader returns, and a
+# helper imports an unrelated ``run`` and calls it with **kwargs. Only an exact reference to
+# fixture is exported, so the helper's ``run`` is no alias and the benign change is accepted.
+UNRELATED = {
+    ABOVE: PATH + "from helpers import sh  # noqa: F401\n",
+    "tests/helpers.py": "from subprocess import run\n\n\n"
+    "def sh(*a, **kw):\n    return run(*a, **kw)\n",
+    "tests/sub/test_data.py": "def load_fixture(n):\n    return n\n\n\nrun = load_fixture('x')\n",
+}
+
+
+def test_a_name_that_only_contains_the_word_is_not_exported(repo):
+    _check(repo, {CONFTEST: FIXTURE.format("fresh")}, path=CONFTEST, base_files=UNRELATED)
+    trees = [ast.parse(t) for t in UNRELATED.values()]
+    assert "run" not in exported(trees)
+
+
+def test_exported_reads_only_a_direct_reference():
+    """#998 r3: a name bound to a call, or to any expression mentioning the word, is an alias of its
+    own module only; exporting it spreads to common names (``body = self.read()``)."""
+    trees = [ast.parse(t) for t in (
+        "import pytest\nfx = pytest.fixture\nread = fx(scope='session')\n",
+        "marked = 'fixture' in text\nrun = load_fixture('x')\nwrapped = {a for a in fixtures}\n",
+        "import pytest\nkept, other = pytest.fixture, 1\nalso = getattr(pytest, 'fixture')\n",
+        "from loaders import load_fixture as named\nfrom pytest import fixture as plain\n",
+    )]  # fmt: skip
+    assert exported(trees) == {"fx", "kept", "other", "also", "plain"}
