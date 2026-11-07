@@ -115,6 +115,7 @@ class PytestSettings:
     import_mode: str | None = None
     dropped: tuple[str, ...] = ()
     strict_args: tuple[str, ...] = ()
+    addopts: str = ""  # the raw text, read only by collect_override (#960); not in the ini
 
     def ini_text(self, checkout: Path, plugins: tuple[str, ...] = ()) -> bytes:
         """The verifier's ini. pythonpath is absolute: pytest resolves it against the
@@ -259,7 +260,12 @@ def _settings(source: str, config: dict[str, Any]) -> PytestSettings:
         _import_mode(addopts),
         tuple(dropped),
         _strict_args(addopts),
+        _raw(config.get("addopts")),
     )
+
+
+def _raw(value: Any) -> str:
+    return " ".join(map(str, value)) if isinstance(value, list) else str(value or "")
 
 
 def _words(value: Any) -> list[str]:

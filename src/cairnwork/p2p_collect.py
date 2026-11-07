@@ -33,6 +33,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from cairnwork.collect_override import changes_collection
 from cairnwork.collect_reader import read_collected
 from cairnwork.conftest_check import conftest_of
 from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRejected
@@ -236,8 +237,12 @@ DEFAULT_NORECURSEDIRS = ("*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_
 def skipped_dir(repo, base_commit) -> Callable[[str], bool]:
     """Whether pytest's recursion skips a directory of this name, by the base's ``norecursedirs``
     (its own patterns replace the default, as in pytest). A pattern with ``/`` matches a whole
-    path, never a bare name, so it skips nothing here: such files are refused, never dropped."""
-    value = dict(base_settings(repo, base_commit).values).get("norecursedirs")
+    path, never a bare name, so it skips nothing here: such files are refused, never dropped.
+    #960: a base that can change its own collection (changes_collection) exempts nothing."""
+    settings = base_settings(repo, base_commit)
+    if base_commit is not None and changes_collection(repo, base_commit, settings.addopts):
+        return lambda name: False  # #960: the base may collect them: no exemption
+    value = dict(settings.values).get("norecursedirs")
     if value is None:
         patterns: tuple[str, ...] = DEFAULT_NORECURSEDIRS
     elif isinstance(value, list):
