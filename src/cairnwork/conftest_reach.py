@@ -118,6 +118,9 @@ def _targets(here: str, tree: ast.Module, files: frozenset[str], by_name) -> set
     return found
 
 
+_STORES = (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.NamedExpr)  # := too (#1027)
+
+
 def _imports(tree: ast.Module) -> Iterator[tuple[int, Iterable[str]]]:
     """(level, dotted names it may load) per import in ``tree``, at any depth."""
     for node in ast.walk(tree):
@@ -134,7 +137,7 @@ def _imports(tree: ast.Module) -> Iterator[tuple[int, Iterable[str]]]:
             yield 0, [n.lstrip(".") for n in names]
             if dots:
                 yield dots, [n.lstrip(".") for n in names]
-        elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)) and _plugins(node):
+        elif isinstance(node, _STORES) and _plugins(node):
             yield 0, _strings([node.value])
         elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
             if isinstance(node.func.value, ast.Name) and node.func.value.id == "pytest_plugins":
@@ -195,7 +198,7 @@ def _items(node: ast.expr | None) -> list[ast.expr]:
     return [node] if node is not None else []
 
 
-def _plugins(node: ast.Assign | ast.AnnAssign | ast.AugAssign) -> bool:
+def _plugins(node: ast.Assign | ast.AnnAssign | ast.AugAssign | ast.NamedExpr) -> bool:
     """The statement binds ``pytest_plugins``: as a name, an item or slice, or one target of an
     unpacking (#1010)."""
     targets = node.targets if isinstance(node, ast.Assign) else [node.target]

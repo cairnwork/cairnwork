@@ -26,6 +26,11 @@ TAKEN = {  # name: (new fixture, base files)
     "pytest_plugins it cannot read: every base file": (
         "dep", {ABOVE: "NAMES = ['far.fix']\npytest_plugins = [n for n in NAMES]\n",
                 "tests/far/fix.py": GUARD}),
+    "pytest_plugins bound by an assignment expression (#1027)": (
+        "dep", {ABOVE: "(pytest_plugins := ['helpers'])\n", "tests/helpers.py": GUARD}),
+    "pytest_plugins by an assignment expression it cannot read: every base file (#1027)": (
+        "dep", {ABOVE: "NAMES = ['far.fix']\n(pytest_plugins := [n for n in NAMES])\n",
+                "tests/far/fix.py": GUARD}),
     "a re-exported fixture": (
         "dep", {ABOVE: "from pkg.deep import guard\n", "tests/pkg/__init__.py": "",
                 "tests/pkg/deep.py": "from pkg.inner import guard\n", "tests/pkg/inner.py": GUARD}),

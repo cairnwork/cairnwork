@@ -197,6 +197,10 @@ def _imported(
     return out
 
 
+_Store = ast.Assign | ast.AnnAssign | ast.AugAssign | ast.NamedExpr  # := too (#1027)
+_STORES = (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.NamedExpr)
+
+
 def _imports(
     file: str, tree: ast.Module, index: dict[str, set[str]], listing: dict[str, str]
 ) -> set[str]:
@@ -211,7 +215,7 @@ def _imports(
                 up = dirname(up)
             head = ".".join(filter(None, [*(up.split("/") if node.level else ()), node.module]))
             modules |= {head} | {f"{head}.{a.name}".strip(".") for a in node.names}
-        elif (isinstance(node, ast.Assign | ast.AnnAssign | ast.AugAssign) and _assigns(
+        elif (isinstance(node, _STORES) and _assigns(
             node, "pytest_plugins")) or _extends(node):  # fmt: skip
             value = _plugins_value(node)
             items = value.elts if isinstance(value, ast.List | ast.Tuple) else [value]
@@ -235,10 +239,10 @@ def _plugins_value(node: ast.AST) -> ast.expr | None:
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
         ok = node.func.attr in ("append", "extend") and len(node.args) == 1 and not node.keywords
         return node.args[0] if ok else None
-    return node.value if isinstance(node, ast.Assign | ast.AnnAssign | ast.AugAssign) else None
+    return node.value if isinstance(node, _STORES) else None
 
 
-def _assigns(node: ast.Assign | ast.AnnAssign | ast.AugAssign, name: str) -> bool:
+def _assigns(node: _Store, name: str) -> bool:
     targets = node.targets if isinstance(node, ast.Assign) else [node.target]
     return any(isinstance(t, ast.Name) and t.id == name for t in targets)
 
