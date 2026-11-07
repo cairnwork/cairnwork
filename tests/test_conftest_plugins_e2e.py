@@ -21,7 +21,7 @@ CASES = {  # name: (base conftest addition, fix, expected status, code)
         'pytest_plugins = []\npytest_plugins.append("colorsys")\n', BREAKS_BASE, "FAILED",
         "TEST_COMMIT_CONFTEST_STATIC"),
     "a comma-separated string names the module, wrong fix": (
-        'pytest_plugins = "helpers, colorsys"\n', BREAKS_BASE, "FAILED",
+        'pytest_plugins = "helpers,colorsys"\n', BREAKS_BASE, "FAILED",
         "TEST_COMMIT_CONFTEST_STATIC"),
     "a list built at run time, correct fix": (
         "PLUGINS = ()\npytest_plugins = [p for p in PLUGINS]\n", FIX, "COMPLETED", ""),
