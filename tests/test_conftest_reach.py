@@ -174,6 +174,7 @@ LITERAL_PLUGINS = [
     'pytest_plugins = []\npytest_plugins.insert(0, *["x"])\n',
     'pytest_plugins = "base, x"\n',  # pytest splits a string on commas
     'pytest_plugins = []\npytest_plugins.__iadd__(["x"])\n',  # any method on the list (r2)
+    'pytest_plugins = ["te" + "sts.x"]\n',  # pytest loads the joined name (#1018 r1)
 ]
 UNREAD_PLUGINS = [
     'pytest_plugins = ["x"] if FLAG else []\n',
