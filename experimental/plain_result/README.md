@@ -16,6 +16,8 @@ confirmed problem, not covered, undetermined. Each tested or confirmed line name
 field it comes from. Only a record `summarize` shows as verified fills "tested", and only with the
 version, Core status, protection level, verifier ids and deferred test paths, never a feature.
 "Not covered" always says the overall coverage is unknown (no requirement-to-test record, #699).
-A FAILED run is a confirmed problem only when its reason has none of the environment phrases
-`reasons.py` writes, and even then it reads "not yet cleared of the environment"; otherwise it is
-undetermined, like UNCOMPARABLE, REFUSED, a pre-Core `error`, and attestation.
+A FAILED run is a confirmed problem only when it is for the current commit and its reason says
+nothing but that tests failed (every failed verifier's only cause is `pytest exit code 1`); even
+then it reads "not yet cleared of the environment". Every other cause (timeout, size cap,
+leftover processes, environment or setup error, a note, a check or gate) is undetermined, like
+UNCOMPARABLE, REFUSED, a pre-Core `error`, and attestation.

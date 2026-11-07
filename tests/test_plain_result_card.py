@@ -5,10 +5,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from cairnwork.reasons import why_not_passed
+from cairnwork.reasons import explain, why_not_passed
 from experimental.plain_result.card import card
 
 FIXTURES = Path(__file__).parent / "fixtures" / "plain_result"
@@ -72,8 +73,16 @@ def test_a_pass_not_for_this_commit_tests_nothing(current):
     assert result["tested"] == [] and result["undetermined"]
 
 
-def test_a_failed_run_is_a_problem_not_yet_cleared_of_the_environment():
-    result = card(_load("failed.json"))
+def _failed(**run) -> dict:
+    """A FAILED record whose reason the real producers wrote (reasons.why_not_passed, explain)."""
+    why = why_not_passed(**{**RUN, **run})
+    failed = SimpleNamespace(spec=SimpleNamespace(verifier_id="v"), why=why, notes=(),
+                             observation=SimpleNamespace(passed=False))  # fmt: skip
+    return {**_load("failed.json"), "reason": "CORE_FAILED" + explain([failed])}
+
+
+def test_a_plain_test_failure_is_a_problem_not_yet_cleared_of_the_environment():
+    result = card(_failed(), B)
     _check(result)
     assert result["confirmed_problem"][0]["source"] == "reason"
     assert "尚未排除環境因素" in result["confirmed_problem"][0]["text"]
@@ -88,15 +97,52 @@ def test_a_failed_run_is_a_problem_not_yet_cleared_of_the_environment():
         {"fail_kind": {"t::a": "plugin"}},
         {"denied_path": "/private/var/x"},
         {"ran_sandboxed": False},
+        {"timed_out": True},
+        {"log_too_big": True},
+        {"report_too_big": True},
+        {"survivors": 1},
+        {"exitstatus": 0, "testsfailed": 0},
+        {"returncode": 0, "tests_ran": False},
+        {"returncode": 2},
     ],
-    ids=["env", "setup", "plugin", "denied", "no-sandbox"],
-)
-def test_a_failure_the_environment_may_explain_is_undetermined(run):
-    """The reason text comes from the real producer, so a wording change there fails here."""
-    reason = why_not_passed(**{**RUN, **run})
-    result = card({**_load("failed.json"), "reason": reason})
+    ids=["env", "setup", "plugin", "denied", "no-sandbox", "timeout", "log-cap", "report-cap",
+         "survivors", "status-disagrees", "no-test-ran", "usage-error"],
+)  # fmt: skip
+def test_any_other_failure_cause_is_undetermined(run):
+    """Only "pytest exit code 1" alone is a test failure; every other cause the real producer
+    writes goes to undetermined, so a new cause there is undetermined by default."""
+    result = card(_failed(**run))
     _check(result)
     assert result["confirmed_problem"] == [] and result["undetermined"]
+
+
+OTHER_REASONS = [
+    None,
+    [],
+    "",
+    "verifier returned nonzero",
+    "CORE_FAILED [v: pytest exit code 1] [x]",
+]
+
+
+@pytest.mark.parametrize("reason", OTHER_REASONS)
+def test_a_reason_of_another_type_or_shape_is_undetermined(reason):
+    result = card({**_load("failed.json"), "reason": reason})
+    _check(result)
+    assert result["confirmed_problem"] == []
+
+
+def test_a_failure_of_another_commit_is_not_a_problem_of_this_one():
+    result = card(_failed(), A)
+    _check(result)
+    assert result["confirmed_problem"] == []
+
+
+def test_a_test_path_string_is_not_split_into_characters():
+    record = _verified_bound()
+    record["binding"] = {**record["binding"], "test_paths": "tests/test_x.py"}
+    result = card(record, A)
+    assert [line["source"] for line in result["tested"]][-1] == "binding.verifiers"
 
 
 @pytest.mark.parametrize(
