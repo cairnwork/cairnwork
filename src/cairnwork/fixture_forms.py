@@ -33,13 +33,12 @@ def registered(tree: ast.Module) -> set[str]:
     ``fixture(...)(fn)``), the functions passed to it and the targets of the assignment holding it.
     A ``name=`` of such a call that is not a literal counts every string constant of ``tree`` when
     it is a name the module binds to string constants only. Any other one is refused for a call of
-    ``fixture`` itself (``_exact``) outside a module that defines ``fixture``; for a call that only
-    mentions the word, or pytest's own source, it adds nothing, as on main (#998 r3, Claude)."""
+    ``fixture`` itself (``_exact``). Not refused, as on main: a call that only mentions the word,
+    and, in a module that defines ``fixture`` (pytest's own source), a call forwarding a parameter
+    of the function around it; the name is set where that wrapper is called (#998 r3, Claude;
+    #1019 r1, Codex: not the whole module)."""
     aliases, names = _aliases(tree), set()
-    exact, own = (
-        _exact_aliases(tree),
-        any(getattr(n, "name", None) == "fixture" for n in module_level(tree.body)),
-    )
+    exact, forwarded = _exact_aliases(tree), _forwarded(tree)
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign | ast.AnnAssign) and node.value is not None:
             if any(_fixture_call(c, aliases) for c in ast.walk(node.value)):
@@ -57,9 +56,33 @@ def registered(tree: ast.Module) -> set[str]:
                 try:
                     names |= _strings(tree, k.value)
                 except TestCommitRejected:
-                    if _exact(node.func, exact) and not own:
+                    if _exact(node.func, exact) and _name(k.value) not in forwarded.get(
+                        id(node), ()
+                    ):
                         raise
     return names
+
+
+def _forwarded(tree: ast.Module) -> dict[int, set[str]]:
+    """In a module that defines ``fixture``: each call inside a function, with the parameters of
+    the functions around it (a wrapper forwarding its own ``name``)."""
+    if not any(getattr(n, "name", None) == "fixture" for n in module_level(tree.body)):
+        return {}
+    out: dict[int, set[str]] = {}
+    for d in ast.walk(tree):
+        if isinstance(d, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda):
+            a = d.args
+            params = {
+                x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs, a.vararg, a.kwarg) if x
+            }
+            for c in ast.walk(d):
+                if isinstance(c, ast.Call):
+                    out.setdefault(id(c), set()).update(params)
+    return out
+
+
+def _name(node: ast.expr) -> str:
+    return node.id if isinstance(node, ast.Name) else ""
 
 
 def _exact_aliases(tree: ast.Module) -> set[str]:
@@ -162,8 +185,9 @@ def _strings(tree: ast.Module, value: ast.expr) -> set[str]:
     name = value.id if isinstance(value, ast.Name) else ""
     nodes = list(ast.walk(tree))
     strings = {n.value for n in nodes if isinstance(n, ast.Constant) and isinstance(n.value, str)}
-    good = {
-        id(n.targets[0]) for n in nodes if isinstance(n, ast.Assign) and len(n.targets) == 1
+    good = {  # N = "a", or N: str = "a" (#1019 r1, Codex)
+        id(n.targets[0] if isinstance(n, ast.Assign) else n.target) for n in nodes
+        if (isinstance(n, ast.AnnAssign) or isinstance(n, ast.Assign) and len(n.targets) == 1)
         and isinstance(n.value, ast.Constant) and isinstance(n.value.value, str)
     }  # fmt: skip
     if name and good.intersection(id(n) for n in nodes if getattr(n, "id", "") == name):

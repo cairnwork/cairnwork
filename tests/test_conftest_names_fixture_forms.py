@@ -194,6 +194,12 @@ EXACT_UNREADABLE = {  # name: a call of fixture itself whose name= cannot be rea
     "an alias of an alias": "from pytest import fixture as fx\nf = fx\n(h := f)(name=make())(g)\n",
     "an annotated alias": "import pytest\nf: object = pytest.fixture\nf(name=make())(g)\n",
     "getattr": "import pytest\ngetattr(pytest, 'fixture')(**opts)(g)\n",
+    # #1019 r1 (Codex): a module defining its own fixture is not exempt where it registers one
+    "a module's own fixture, called with an imported name": "import pytest\nfrom c import N\n\n\n"
+    "def fixture(fn=None, **kw):\n    return pytest.fixture(fn, **kw)\n\n\n"
+    "@fixture(name=N)\ndef g():\n    pass\n",
+    "a wrapper forwarding its parameter, in a module without its own fixture": "import pytest\n\n\n"
+    "def make(n):\n    return pytest.fixture(name=n)\n",
 }
 NOT_EXACT = {  # name: a module whose call only mentions the word; adds nothing, as on main
     "a helper of a module named fixtures": "from _pytest import fixtures\n\n\n"
@@ -215,6 +221,12 @@ def test_an_unreadable_name_of_a_call_that_only_mentions_the_word_adds_nothing(n
     """#998 r3 (Claude): pytest's own source has such calls; refusing them refused every conftest
     change of that repository (main refuses none)."""
     assert _registered(ast.parse(NOT_EXACT[name])) <= {"f", "cls", "fn", "name"}
+
+
+def test_an_annotated_string_constant_name_is_read():
+    """#1019 r1 (Codex): ``N: str = "alias"`` is as readable as ``N = "alias"``."""
+    text = "import pytest\nN: str = 'alias'\n\n\n@pytest.fixture(name=N)\ndef g(): pass\n"
+    assert "alias" in _registered(ast.parse(text))
 
 
 def test_a_deep_conditional_chain_is_read_without_recursion():
