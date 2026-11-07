@@ -65,17 +65,17 @@ ATTACHED = {
     "qualified-globals": ("", "import builtins\n" + FN_IMPL.format(WRONG)
                           + "builtins.globals()['test_x'] = _impl\n"),
     "trap-class-helper": (
-        FN_IMPL.format(RIGHT) + "class Other:\n    pass\nclass TestX:\n"
-        "    def _add():\n        Other.test_x = _impl\n    _add()\n",
-        FN_IMPL.format(WRONG) + "class Other:\n    pass\nclass TestX:\n"
-        "    def _add():\n        Other.test_x = _impl\n    _add()\n",
+        IMPL.format(RIGHT) + "class TestY:\n    pass\nclass TestX:\n"
+        "    def _add():\n        TestY.test_x = _impl\n    _add()\n",
+        IMPL.format(WRONG) + "class TestY:\n    pass\nclass TestX:\n"
+        "    def _add():\n        TestY.test_x = _impl\n    _add()\n",
     ),
     "trap-method-decorator": (
-        FN_IMPL.format(RIGHT) + "def reg(f):\n    Other.test_x = _impl\n    return f\n"
-        "class Other:\n    pass\nclass TestX:\n    @reg\n"
+        IMPL.format(RIGHT) + "def reg(f):\n    TestY.test_x = _impl\n    return f\n"
+        "class TestY:\n    pass\nclass TestX:\n    @reg\n"
         "    def helper(self):\n        pass\n",
-        FN_IMPL.format(WRONG) + "def reg(f):\n    Other.test_x = _impl\n    return f\n"
-        "class Other:\n    pass\nclass TestX:\n    @reg\n"
+        IMPL.format(WRONG) + "def reg(f):\n    TestY.test_x = _impl\n    return f\n"
+        "class TestY:\n    pass\nclass TestX:\n    @reg\n"
         "    def helper(self):\n        pass\n",
     ),
     "trap-setattr": (CLS + IMPL.format(RIGHT) + "setattr(TestX, 'test_x', _impl)\n",
