@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import ast
 import fnmatch
+import functools
 import hashlib
 import re
 import shlex
@@ -238,10 +239,9 @@ def skipped_dir(repo, base_commit) -> Callable[[str], bool]:
     """Whether pytest's recursion skips a directory of this name, by the base's ``norecursedirs``
     (its own patterns replace the default, as in pytest). A pattern with ``/`` matches a whole
     path, never a bare name, so it skips nothing here: such files are refused, never dropped.
-    #960: a base that can change its own collection (changes_collection) exempts nothing."""
+    #960: a base that can change its own collection (changes_collection) exempts nothing. That is
+    read only once a name would be exempted, so a base with no such name reads nothing more."""
     settings = base_settings(repo, base_commit)
-    if base_commit is not None and changes_collection(repo, base_commit, settings.addopts):
-        return lambda name: False  # #960: the base may collect them: no exemption
     value = dict(settings.values).get("norecursedirs")
     if value is None:
         patterns: tuple[str, ...] = DEFAULT_NORECURSEDIRS
@@ -252,4 +252,5 @@ def skipped_dir(repo, base_commit) -> Callable[[str], bool]:
             patterns = tuple(shlex.split(_render(value) or ""))
         except ValueError as exc:
             raise PytestConfigError("norecursedirs at the base cannot be split") from exc
-    return lambda name: any(fnmatch.fnmatch(name, pattern) for pattern in patterns)
+    overridden = functools.cache(lambda: changes_collection(repo, base_commit, settings.addopts))
+    return lambda name: any(fnmatch.fnmatch(name, p) for p in patterns) and not overridden()

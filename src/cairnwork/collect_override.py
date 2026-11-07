@@ -2,65 +2,42 @@
 a fact about the base? Read from git objects only (nothing is checked out or run).
 
 The default-skipped directories (``.*``, ``build`` ...) are exempt from the P2P targets only while
-pytest really skips them. The base can undo that in three ways this module looks for, and the
-caller then refuses (the existing ``P2P_BASE_UNTARGETABLE``) instead of exempting:
+pytest really skips them. Code or options the base gives pytest can undo that in more spellings
+than a reader can list (an ``-o`` in addopts, a hook a conftest defines, imports, assigns or
+registers, a plugin it loads, a write to ``config``), so this asks only whether the base gives
+pytest any such input at all. The caller then refuses (the existing ``P2P_BASE_UNTARGETABLE``)
+instead of exempting, when any of these holds:
 
-* its addopts mention ``norecursedirs`` (``-o norecursedirs=``);
-* a tracked ``conftest.py`` defines a collection hook or sets ``pytest_plugins`` at module level;
-* a tracked ``conftest.py`` cannot be read as Python, so it may do either.
+* its addopts are not empty;
+* it tracks a ``conftest.py`` anywhere (any case: APFS finds ``CONFTEST.PY`` as ``conftest.py``);
+* a root ``pyproject.toml``, ``setup.cfg`` or ``setup.py`` names a ``pytest11`` entry point.
+
+Plugins already installed in the verifier's interpreter are not the base's files and are not
+seen here (#986 asks pytest itself).
 """
 
 from __future__ import annotations
 
-import ast
 from pathlib import Path
 
-from cairnwork.gitcmd import run_git, run_git_bytes
+from cairnwork.gitcmd import run_git_bytes
 
-HOOKS = frozenset({"pytest_ignore_collect", "pytest_collect_directory", "pytest_collect_file"})
-_COMPOUND = ("body", "orelse", "finalbody", "handlers")
-
-
-def _module_level(nodes) -> bool:
-    for node in nodes:
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name in HOOKS:
-            return True
-        targets = []
-        if isinstance(node, ast.Assign):
-            targets = node.targets
-        elif isinstance(node, ast.AnnAssign | ast.AugAssign):
-            targets = [node.target]
-        if any(isinstance(t, ast.Name) and t.id == "pytest_plugins" for t in targets):
-            return True
-        if isinstance(node, ast.If | ast.Try | ast.With | ast.ExceptHandler) and any(
-            _module_level(getattr(node, field, [])) for field in _COMPOUND
-        ):
-            return True
-    return False
-
-
-def _conftests(repo: Path, base_commit: str) -> list[tuple[str, str, str]]:
-    rows = run_git(repo, "ls-tree", "-r", "-z", base_commit, "--").split("\0")
-    found = []
-    for row in filter(None, rows):
-        meta, _, path = row.partition("\t")
-        mode, kind, oid = meta.split()
-        if path.rsplit("/", 1)[-1] == "conftest.py":
-            found.append((path, f"{mode} {kind}", oid))
-    return found
+_PROJECT_FILES = frozenset({b"pyproject.toml", b"setup.cfg", b"setup.py"})
 
 
 def changes_collection(repo: Path, base_commit: str, addopts: str) -> bool:
-    """True when the base's own files may change what pytest collects (see the module text)."""
-    if "norecursedirs" in addopts:
+    """True when the base gives pytest options, conftest code or a plugin (see the module text)."""
+    if addopts.strip():
         return True
-    for _, kind, oid in _conftests(repo, base_commit):
-        if kind not in ("100644 blob", "100755 blob"):
+    rows = run_git_bytes(repo, "ls-tree", "-r", "-z", base_commit, "--").split(b"\0")
+    for row in filter(None, rows):
+        meta, _, path = row.partition(b"\t")
+        if path.rsplit(b"/", 1)[-1].lower() == b"conftest.py":
             return True
-        try:
-            tree = ast.parse(run_git_bytes(repo, "cat-file", "blob", oid))
-        except (SyntaxError, ValueError, UnicodeError, MemoryError, RecursionError):
-            return True
-        if _module_level(tree.body):
-            return True
+        if path.lower() in _PROJECT_FILES:
+            _, kind, oid = meta.split()
+            if kind != b"blob":  # a submodule there cannot be read: no exemption
+                return True
+            if b"pytest11" in run_git_bytes(repo, "cat-file", "blob", oid.decode("ascii")):
+                return True
     return False
