@@ -219,7 +219,7 @@ def test_other_imports_and_a_class_body_pytestmark_import_add_nothing(project):
 @pytest.mark.sandbox
 @pytest.mark.parametrize("shape", ["trap-attribute", "trap-assigned", "trap-static-decorator",
                                    "trap-module-value", "for-target", "trap-module-name",
-                                   "trap-class-helper"])  # fmt: skip
+                                   "trap-class-helper", "trap-method-decorator"])  # fmt: skip
 def test_verify_refuses_the_trap_a_wrong_fix_would_fail(project, state, shape):
     """Each wrong candidate was VERIFIED before #994 or its r2 guards (the PR's table). The
     attached test fails the fix; the target names test_regression only."""
