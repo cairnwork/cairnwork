@@ -2,10 +2,10 @@
 
 pytest collects a ``test*`` attribute of a test class or a module however it got there. An
 *attaching store* puts a callable under a ``test*``/``Test*`` name from outside the class body:
-a name bound at module level or in a class body to a name, an attribute, a lambda or a call of
-same-file code (``test_x = f``; a function's locals are never collected), an attribute target
-(``Cls.test_x = f``, ``sys.modules[__name__].test_x = f``, a ``for`` or ``with`` target too),
-``setattr`` (``builtins.setattr``, ``type.__setattr__``), or a
+a name bound at module level or directly in a top-level class body to a name, an attribute, a
+lambda or a call of same-file code (``test_x = f``; a function's locals are never collected), an
+attribute target (``Cls.test_x = f``, ``sys.modules[__name__].test_x = f``, a ``for`` or
+``with`` target too), ``setattr`` (``builtins.setattr``, ``type.__setattr__``), or a
 ``globals()``/``vars()``/``locals()`` (``builtins.globals()`` too) or ``__dict__`` namespace
 written by a subscript or by ``update``/``setdefault``/``__setitem__``. A namespace bound to
 another name or handed to a function other than a builtin may be written where it is not

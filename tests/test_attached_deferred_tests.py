@@ -1,7 +1,8 @@
 """#994: tests pytest collects that the AST reader does not read, attached outside a class body
 (``Cls.test_x = f``, ``setattr``, ``sys.modules[__name__]``, ``globals()``, a same-file class
-decorator or metaclass that writes ``test*``, a ``test*`` name bound at module level or in a class
-body, a class body's own helper or a method's decorator), and a ``pytestmark`` bound by an import.
+decorator or metaclass that writes ``test*``, a ``test*`` name bound at module level or in a
+top-level class body, a class body's own helper or a method's decorator), and a ``pytestmark``
+bound by an import.
 
 An attaching statement that can be read statically (a literal name, a value made only of
 same-file code) counts with everything it reads, so a changed ``f`` behind an unchanged
@@ -126,6 +127,18 @@ ATTACHED = {
                           "TestX.test_x = _impl\n",) * 2,
     "kw-only-default": ("", CLS + IMPL.format(WRONG)
                         + "def _h(*, a=setattr(TestX, 'test_x', _impl)):\n    pass\n"),
+    # Claude r3 on #1003: each test-name value form, a method's defaults, a module's __setattr__
+    **{shape: (IMPL.format(RIGHT) + tail, IMPL.format(WRONG) + tail) for shape, tail in {
+        "trap-name-attribute": "class _H:\n    f = staticmethod(_impl)\ntest_x = _H.f\n",
+        "trap-name-lambda": "test_x = lambda self=None: _impl(self)\n",
+        "trap-name-call": "class TestZ:\n    test_x = staticmethod(_impl)\n",
+        "trap-method-default": "class TestY:\n    pass\nclass Holder:\n"
+        "    def m(self, a=setattr(TestY, 'test_x', _impl)):\n        pass\n",
+        "trap-method-kw-default": "class TestY:\n    pass\nclass Holder:\n"
+        "    def m(self, *, a=setattr(TestY, 'test_x', _impl)):\n        pass\n",
+    }.items()},
+    "module-setattr": ("", "import sys\n" + FN_IMPL.format(WRONG)
+                       + "sys.modules[__name__].__setattr__('test_x', _impl)\n"),
 }  # fmt: skip
 
 
@@ -161,6 +174,10 @@ CONTROLS = {  # no attached test: nothing refused, only test_regression is new
     "module-literal-name": "test_data = {'a': 1}\n",
     "module-data-name": "import os\ntest_data_path = os.path.join('a', 'b')\n"
     "test_cases = [os.sep, os.pathsep]\n",
+    "local-test-name-in-block": "from helpers import make\nif True:\n    def _h():\n"
+    "        test_x = make\n        return test_x\n",
+    "test-method-named-in-class-body": "from helpers import make\nclass TestY:\n"
+    "    def test_a(self):\n        setattr(type(self), 'test_b', make)\n    alias = test_a\n",
 }
 
 
