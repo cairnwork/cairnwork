@@ -188,3 +188,32 @@ def test_p2p_base_tests_follow_the_configured_python_files(repo, ini, want):
                            test_roots=("tests",))  # fmt: skip
     got = p2p._base_tests(task, frozenset())
     assert got == want
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"pyproject.toml": "[tool.pytest.ini_options]\nnorecursedirs = ['build']\n"},
+        {"tox.ini": "[pytest]\nnorecursedirs = build\n"},
+        {"setup.cfg": "[tool:pytest]\nnorecursedirs = build\n"},
+    ],
+    ids=["pyproject", "tox", "setup_cfg"],
+)
+def test_p2p_norecursedirs_is_read_from_every_config_file(repo, config):
+    commit_change(repo, {"tests/test_a.py": "def test_a():\n    pass\n",
+                         "tests/.x/test_b.py": "def test_b():\n    pass\n", **config})  # fmt: skip
+    task = SimpleNamespace(repo=repo, base_commit=git(repo, "rev-parse", "HEAD"),
+                           test_roots=("tests",))  # fmt: skip
+    with pytest.raises(p2p.BaseUncomparable):  # build replaces the default: .x is collected
+        p2p._base_tests(task, frozenset())
+
+
+def test_the_default_norecursedirs_is_pytests_own(tmp_path, monkeypatch):
+    from _pytest.config import _prepareconfig  # noqa: PLC2701
+
+    from cairnwork.p2p_collect import DEFAULT_NORECURSEDIRS
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "empty.ini").write_text("[pytest]\n")
+    config = _prepareconfig(["-c", str(tmp_path / "empty.ini")])
+    assert tuple(config.getini("norecursedirs")) == DEFAULT_NORECURSEDIRS

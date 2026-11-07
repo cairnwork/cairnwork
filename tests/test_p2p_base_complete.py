@@ -22,6 +22,13 @@ def project(repo):  # test_p2p's project: a flat tests/ with test_calc.py and te
     return repo
 
 
+@pytest.fixture
+def bare(project):  # #960: the same project with no conftest (src comes from pytest.ini), so
+    commit_change(project, {"pytest.ini": "[pytest]\npythonpath = src\n"},  # nothing it gives
+                  delete=("tests/conftest.py",))  # fmt: skip  # pytest can undo the skip
+    return project
+
+
 @pytest.mark.parametrize("mode", ["whole-suite", "module-dir"])
 def test_an_early_stopped_base_probe_is_not_used(project, tmp_path, mode):
     """#929: the base stops after test_bug fails; test_neg is collected but never runs."""
@@ -48,20 +55,20 @@ def test_a_base_test_under_a_dotted_directory_is_not_dropped_silently(project, t
     assert result.reason.startswith("UNCOMPARABLE: P2P_BASE_UNTARGETABLE: "), result.reason
 
 
-def test_a_hidden_directory_pytest_skips_is_no_reason_to_refuse(project, tmp_path):
+def test_a_hidden_directory_pytest_skips_is_no_reason_to_refuse(bare, tmp_path):
     """#930 control: pytest's default norecursedirs skips '.*' directories, so they are ignored."""
-    commit_change(project, {"tests/.cache/test_tmp.py": SIBLING})
-    result = run(project, tmp_path, {"src/calc.py": FIX_ADD}, mode="whole-suite")
+    commit_change(bare, {"tests/.cache/test_tmp.py": SIBLING})
+    result = run(bare, tmp_path, {"src/calc.py": FIX_ADD}, mode="whole-suite")
     assert result.status == "COMPLETED", result.reason
 
 
 @pytest.mark.parametrize("skipped", ["tests/.cache/test_sibling.py", "tests/b.egg/test_sibling.py"])
-def test_a_test_file_pytest_skips_is_never_named_to_the_probe(project, tmp_path, skipped):
+def test_a_test_file_pytest_skips_is_never_named_to_the_probe(bare, tmp_path, skipped):
     """#930 (review r1): a file under a directory pytest's default norecursedirs skips is left out
     of the probe as on main. Named, it would be collected, and its module name clashes with
     tests/test_sibling.py: the whole-suite probe fails and module-dir misses the neg() test."""
-    commit_change(project, {skipped: SIBLING})
-    result = run(project, tmp_path, {"src/calc.py": FIX_BREAKS_NEG}, mode="whole-suite")
+    commit_change(bare, {skipped: SIBLING})
+    result = run(bare, tmp_path, {"src/calc.py": FIX_BREAKS_NEG}, mode="whole-suite")
     assert result.status == "FAILED" and not result.verified, result.reason
     assert result.p2p["degraded"] == "" and result.p2p["applied"] == "whole-suite"
 
