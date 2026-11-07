@@ -23,9 +23,9 @@ def project(repo):  # test_p2p's project: a flat tests/ with test_calc.py and te
 
 
 @pytest.fixture
-def bare(project):  # #960: the same project with no conftest (src comes from pytest.ini), so
-    commit_change(project, {"pytest.ini": "[pytest]\npythonpath = src\n"},  # nothing it gives
-                  delete=("tests/conftest.py",))  # fmt: skip  # pytest can undo the skip
+def bare(project):  # the same project with no conftest and no addopts (src from pytest.ini)
+    commit_change(project, {"pytest.ini": "[pytest]\npythonpath = src\n"},
+                  delete=("tests/conftest.py",))  # fmt: skip
     return project
 
 
@@ -55,22 +55,16 @@ def test_a_base_test_under_a_dotted_directory_is_not_dropped_silently(project, t
     assert result.reason.startswith("UNCOMPARABLE: P2P_BASE_UNTARGETABLE: "), result.reason
 
 
-def test_a_hidden_directory_pytest_skips_is_no_reason_to_refuse(bare, tmp_path):
-    """#930 control: pytest's default norecursedirs skips '.*' directories, so they are ignored."""
-    commit_change(bare, {"tests/.cache/test_tmp.py": SIBLING})
-    result = run(bare, tmp_path, {"src/calc.py": FIX_ADD}, mode="whole-suite")
-    assert result.status == "COMPLETED", result.reason
-
-
 @pytest.mark.parametrize("skipped", ["tests/.cache/test_sibling.py", "tests/b.egg/test_sibling.py"])
-def test_a_test_file_pytest_skips_is_never_named_to_the_probe(bare, tmp_path, skipped):
-    """#930 (review r1): a file under a directory pytest's default norecursedirs skips is left out
-    of the probe as on main. Named, it would be collected, and its module name clashes with
-    tests/test_sibling.py: the whole-suite probe fails and module-dir misses the neg() test."""
+def test_a_test_file_under_a_skipped_directory_is_refused_even_for_a_right_fix(bare, tmp_path,
+                                                                              skipped):  # fmt: skip
+    """#997 (was the #930 control): whether the project's pytest skips that directory depends on
+    inputs the verifier does not read, so the file is refused, never exempt. This is the cost: a
+    right fix in such a base is UNCOMPARABLE too (0 such files in the 12 repos counted on #997)."""
     commit_change(bare, {skipped: SIBLING})
-    result = run(bare, tmp_path, {"src/calc.py": FIX_BREAKS_NEG}, mode="whole-suite")
+    result = run(bare, tmp_path, {"src/calc.py": FIX_ADD}, mode="whole-suite")
     assert result.status == "FAILED" and not result.verified, result.reason
-    assert result.p2p["degraded"] == "" and result.p2p["applied"] == "whole-suite"
+    assert result.reason.startswith("UNCOMPARABLE: P2P_BASE_UNTARGETABLE: "), result.reason
 
 
 def test_a_hidden_directory_the_base_does_collect_is_not_dropped_silently(project, tmp_path):

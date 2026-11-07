@@ -63,9 +63,9 @@ from pathlib import Path
 
 import cairnwork_sandbox
 from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRejected, deleted_of
-from cairnwork.gitcmd import GitCommandError, run_git
+from cairnwork.gitcmd import GitCommandError, run_git_bytes
 from cairnwork.issue_task import test_target
-from cairnwork.p2p_collect import OVER_BUDGET, collected_side, no_targets, untargetable, whole_base
+from cairnwork.p2p_collect import OVER_BUDGET, collected_side, no_targets, under_roots, whole_base
 from cairnwork.p2p_conftest import GOVERNS, check_overlay, complete, conftest_files
 from cairnwork.p2p_nodes import clean as _clean
 from cairnwork.p2p_nodes import passing_targets, require_nodes
@@ -97,16 +97,16 @@ def _base_tests(task, exclude: frozenset[str], strict=True) -> tuple[str, ...]:
     """Base test files under the roots that are plain targets and match python_files (#956)."""
     try:
         target, is_test = test_target(task.test_roots), test_file_rule(task.repo, task.base_commit)
-        raw = run_git(task.repo, "ls-tree", "-r", "-z", "--name-only", task.base_commit,
-                      "--", *task.test_roots)  # fmt: skip
-        paths = [p for p in raw.split("\0") if p and p not in exclude and is_test(p)]
-        odd = untargetable(task, paths, target)  # reads the base's norecursedirs
+        raw = run_git_bytes(task.repo, "ls-tree", "-r", "-z", "--name-only", task.base_commit, "--")
+        paths = [p for p in under_roots(raw, task.test_roots) if p not in exclude and is_test(p)]
+        # #930 refuse what no target can name; #997 never exempt because "pytest skips that dir":
+        odd = [p for p in paths if not target.fullmatch(p)]  # that depends on inputs not read here
     except (GitCommandError, PytestConfigError) as exc:
         raise P2PRejected("P2P_BASE_UNREADABLE", str(exc)) from exc
     if odd and strict:  # #930: never dropped silently (fail closed); #956: env check only
         detail = f"{len(odd)} base test file(s) no target can name, e.g. {_clean(odd[0])}"
         raise BaseUncomparable(Comparison("UNCOMPARABLE", "P2P_BASE_UNTARGETABLE", detail))
-    return tuple(sorted(p for p in paths if target.fullmatch(p)))  # pytest skips the rest (#930)
+    return tuple(sorted(p for p in paths if target.fullmatch(p)))  # #956: env check keeps the rest
 
 
 UNCLEAN = ("base-probe-survivors", "base-probe-mutated", "base-probe-forged")  # never degraded
