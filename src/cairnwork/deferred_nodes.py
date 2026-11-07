@@ -3,7 +3,7 @@
 deferred_tests.new_tests and p2p_nodes.changed_tests compare these between the base and the test
 commit. Read: each top-level ``test*`` function, and each ``test*`` method of a top-level test
 class, its own or one it inherits from a class defined earlier in the same file and named
-among its bases by a plain name (the first base that has it wins). pytest collects an inherited
+among its bases by a plain name (every base's version counts, #1009). pytest collects an inherited
 test under the subclass's own node id too, so a change to a parent's test is a change to each
 such copy, and a target naming one copy does not run the others.
 
@@ -95,7 +95,7 @@ _Class = tuple[dict[str, str], bool, bool, str]
 
 
 def _members(node: ast.ClassDef, classes: dict[str, _Class], reach: _Reach) -> _Class:
-    """A class's methods, its own first, then each base's that it does not define; and whether
+    """A class's methods, its own first, then every base's that it does not define; and whether
     it has an ``__init__`` or ``__new__`` (its own or a base's); and whether it is a TestCase
     subclass (a base named ``*TestCase``, or an earlier class that is one); and its marks: the
     class less its ``test*`` methods, with what it reads in turn, so each base class defined
@@ -105,7 +105,7 @@ def _members(node: ast.ClassDef, classes: dict[str, _Class], reach: _Reach) -> _
         for item in node.body
         if isinstance(item, _DEFS)
     }
-    blocked, case = bool(_NOT_COLLECTED & methods.keys()), False
+    blocked, case, own = bool(_NOT_COLLECTED & methods.keys()), False, set(methods)
     marks = reach([_shell(node)])  # decorators, bases, keywords, every statement but its tests
     for base in node.bases:
         last = _base_name(base)
@@ -113,8 +113,9 @@ def _members(node: ast.ClassDef, classes: dict[str, _Class], reach: _Reach) -> _
         if isinstance(base, ast.Name) and base.id in classes:
             inherited, base_blocked, base_case, _ = classes[base.id]  # its marks: reach follows it
             blocked, case = blocked or base_blocked, case or base_case
-            for name, body in inherited.items():
-                methods.setdefault(name, body)
+            for name, body in inherited.items():  # every base's: the MRO may pick a later one's
+                if name not in own:  # (#1009); a change to any of them reads as a change
+                    methods[name] = _digest(methods.get(name, "") + body)  # bounded per level
     return methods, blocked, case, marks
 
 

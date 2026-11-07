@@ -4,6 +4,7 @@ reading the file (every node id pytest collects a new test under, and DEFERRED_T
 and, after the base run, the guard's record (DEFERRED_TESTS_NOT_RUN)."""
 
 import ast
+import tracemalloc
 from pathlib import Path
 from typing import Any
 
@@ -272,6 +273,44 @@ def test_a_class_inheriting_an_earlier_case_subclass_is_read():
     )
     funcs, _ = _nodes(src)
     assert funcs == {"Base::test_b", "Sub::test_b", "Sub::test_s"}
+
+
+DIAMOND = (
+    "class TestBase:\n    def test_case(self): assert 1\n"
+    "class TestA(TestBase):\n    pass\n"
+    "class TestB(TestBase):\n    def test_case(self): assert {}\n"
+    "class TestChild(TestA, TestB):\n    pass\n"
+)
+
+
+@pytest.mark.parametrize("bases", ["TestA, TestB", "TestB, TestA"])
+def test_a_change_to_the_method_the_mro_runs_changes_the_inherited_test(bases):
+    """#1009: TestChild runs TestB.test_case (C3 MRO), whichever base comes first."""
+    src = DIAMOND.replace("TestChild(TestA, TestB)", f"TestChild({bases})")
+    funcs = [deferred_nodes.test_functions(ast.parse(src.format(v)))[0] for v in (2, 3)]
+    assert funcs[0]["TestChild::test_case"] != funcs[1]["TestChild::test_case"]
+    assert funcs[0]["TestA::test_case"] == funcs[1]["TestA::test_case"]
+
+
+def test_a_deep_diamond_stays_small():
+    """#1016 review r1: base versions are digested per level, so depth costs linear, not 2**n."""
+    src = "class TestL0:\n    def test_x(self): pass\n" + "".join(
+        f"class TestA{i}(TestL{i}):\n    pass\nclass TestB{i}(TestL{i}):\n    pass\n"
+        f"class TestL{i + 1}(TestA{i}, TestB{i}):\n    pass\n"
+        for i in range(40)
+    )
+    tracemalloc.start()
+    deferred_nodes.test_functions(ast.parse(src))
+    peak = tracemalloc.get_traced_memory()[1]
+    tracemalloc.stop()
+    assert peak < 20_000_000
+
+
+def test_a_base_change_leaves_a_test_the_class_defines_itself_unchanged():
+    """#1009: no false change (more required targets) for a method the class overrides."""
+    texts = [DIAMOND.format(2).replace("assert 1", f"assert {v}") for v in (1, 5)]
+    funcs = [deferred_nodes.test_functions(ast.parse(t))[0] for t in texts]
+    assert funcs[0]["TestB::test_case"] == funcs[1]["TestB::test_case"]
 
 
 def test_a_plain_helper_class_is_not_read():
