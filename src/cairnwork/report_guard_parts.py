@@ -104,7 +104,8 @@ def _denied_origin(info, root, _exc=_denied_exc, _real=os.path.realpath, _rel=os
             code = tb.tb_frame.f_code
             if _abs(code.co_filename) and not code.co_filename.startswith("<"):
                 rel = _rel(_real(code.co_filename), top)
-                if rel != ".." and not rel.startswith(("../", "..\\\\")) and not _abs(rel):
+                out = rel in (".", "..") or rel.startswith(("../", "..\\\\"))
+                if not out and not _abs(rel):
                     origin = "" if code.co_name.startswith("<") else rel
                     line = tb.tb_lineno or 0
             tb = tb.tb_next

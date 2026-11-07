@@ -178,6 +178,41 @@ def test_the_recorder_runs_no_code_of_the_error(tmp_path):
     assert plugin["_denied_path"](SimpleNamespace(value=other)) == DENIED
 
 
+class _Errno(int):  # #1006 (Claude r2, X4): an errno whose comparison would run test code
+    def __eq__(self, other):
+        raise AssertionError("the recorder ran test code")
+
+    __hash__ = int.__hash__
+
+
+def test_an_errno_of_another_type_runs_no_code():
+    from types import SimpleNamespace
+
+    from cairnwork.report_guard_parts import PARTS_SOURCE
+
+    plugin: dict = {"os": __import__("os")}
+    exec(PARTS_SOURCE, plugin)
+    err = PermissionError(1, "x", DENIED)
+    err.errno = _Errno(1)
+    assert plugin["_denied_path"](SimpleNamespace(value=err)) is None
+
+
+def test_a_frame_named_by_the_checkout_itself_gives_no_origin(tmp_path):
+    """#1006 (Claude r2): a frame whose file is the checkout root gives "", as the parent wants."""
+    import os
+    from types import SimpleNamespace
+
+    from cairnwork.report_guard_parts import PARTS_SOURCE
+
+    plugin: dict = {"os": os}
+    exec(PARTS_SOURCE, plugin)
+    held: dict = {}
+    exec(compile(f"def held():\n    {RAISE}\n", str(tmp_path), "exec"), held)
+    with pytest.raises(PermissionError) as info:
+        held["held"]()
+    assert plugin["_denied_origin"](SimpleNamespace(value=info.value), tmp_path) == [DENIED, "", 0]
+
+
 @pytest.mark.sandbox
 @pytest.mark.skipif(sys.platform != "darwin", reason="real Seatbelt denials")
 def test_a_real_denial_in_setup_reaches_the_verifier_run(repo, tmp_path):
