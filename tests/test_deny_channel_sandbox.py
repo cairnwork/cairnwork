@@ -3,8 +3,10 @@ result's logs, and no verdict changes. A denial caught inside the test, or made 
 is seen through the run's tag."""
 
 import os
+import re
 import shutil
 import sys
+import warnings
 
 import pytest
 from conftest import commit_change
@@ -117,15 +119,28 @@ def test_a_run_that_is_not_a_base_run_records_nothing(repo, tmp_path):
     )
 
 
+BURST_PEAK = 100  # lines/s: #991 saw the run's own denial missing beside another process's burst
+
+
+def _peak(evidence: str) -> int:
+    match = re.search(r"peak (\d+)/s\)$", evidence)
+    return int(match.group(1)) if match else 0
+
+
 @pytest.mark.verifier_account
 def test_the_verifier_accounts_denial_is_recorded(repo, tmp_path):
     test = CAUGHT.replace("test_regression", "test_d")  # fails on ImportError: no calc here
+    hit = ("file-read-data", DENIED)
     run = _run(repo, tmp_path, test, account=VerifierAccount())
-    if "volume over the cap" in run.deny_evidence:  # another process's burst: once more
+    over = "volume over the cap" in run.deny_evidence  # another process's burst
+    if over or (hit not in run.deny_denials and _peak(run.deny_evidence) > BURST_PEAK):
+        # #991: below the cap, a burst has also lost the run's own denial: once more, said aloud
+        warnings.warn(f"#991 rerun, first run: {run.deny_evidence}", stacklevel=1)
         run = _run(repo, tmp_path, test + "# again\n", account=VerifierAccount())
-    assert (
-        run.deny_evidence.startswith("DENIED: ") and f"file-read-data {DENIED}" in run.deny_evidence
-    )
+    # #991: the summary names only the first MAX_LISTED denials, and the account's own start-up
+    # denials can fill it first; the exact set holds every one the run made
+    assert run.deny_evidence.startswith("DENIED: "), run.deny_evidence
+    assert hit in run.deny_denials, run.deny_evidence
 
 
 def test_a_base_that_floods_the_log_itself_is_unavailable(repo, tmp_path):  # AC-burst-own

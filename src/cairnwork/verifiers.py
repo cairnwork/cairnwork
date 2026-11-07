@@ -143,6 +143,7 @@ class VerifierRun:
     collect_skipped: tuple[str, ...] = ()  # #793: collectors skipped while collecting
     collection_finished: bool = False  # #793: collection was not stopped part way
     deny_evidence: str = ""  # #797 step 1: a base run's deny channel (deny_channel.py); not hashed
+    deny_denials: frozenset[tuple[str, str]] = frozenset()  # #991: its exact denials; not hashed
     data_refused: tuple[str, ...] = ()  # #850: declared data was executed: never a pass
 
 
@@ -325,8 +326,7 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
         *batch.settings.args(plugins), "-p", report_guard.MODULE, *spec.targets,
         *spec.flags(),  # --collect-only (#793), --continue-on-collection-errors (#796)
     ]  # fmt: skip
-    before, profile, evidence = os.lstat(checkout), None, None
-    backend = cairnwork_sandbox.select()
+    before, profile, evidence, backend = os.lstat(checkout), None, None, cairnwork_sandbox.select()
     if backend is not None:
         profile = backend.policy(
             read_roots=(*pytest_config.interpreter_roots(python), ini, private / "guard"),
@@ -386,4 +386,5 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
         collection_finished=verdict.collection_finished, skipped_deps=verdict.skipped_deps,
         import_errors=verdict.import_errors, submodule_errors=verdict.submodule_errors,
         deny_evidence=str(evidence) if evidence else "", data_refused=verdict.data_refused,
+        deny_denials=evidence.denials if evidence else frozenset(),
     )  # fmt: skip
