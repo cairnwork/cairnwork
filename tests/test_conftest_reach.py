@@ -206,6 +206,12 @@ def test_a_pytest_plugins_value_it_cannot_read_does_not_refuse_the_new_test_file
     assert _reach(text, new, ["tests/test_new.py"]) == ""
 
 
+def test_the_parts_of_a_joined_plugin_name_are_not_plugins():
+    """#1018 r2: pytest loads only the joined name, so a module named like one part is no hit."""
+    tree = {"tests/x.py": "", "tests/te.py": ""}
+    assert _reach('pytest_plugins = ["te" + "sts.x"]\n', tree, ["tests/te.py"]) == ""
+
+
 def test_append_on_another_name_does_not_add_a_pytest_plugin():
     assert _reach('other.append("x")\n', {"tests/x.py": ""}, ["tests/x.py"]) == ""
 

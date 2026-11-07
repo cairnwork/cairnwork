@@ -145,8 +145,12 @@ def _strings(values: list) -> list[str]:
     """What a pytest_plugins value or call may name (#1010): each comma-separated part of every
     string literal in it, as pytest splits them, and of literals joined by ``+`` (#1018 r1)."""
     names: list[str] = []
-    for node in (n for value in values if value is not None for n in ast.walk(value)):
-        if (text := _joined(node)) is not None:
+    todo = [value for value in values if value is not None]
+    while todo:
+        node = todo.pop()
+        if (text := _joined(node)) is None:
+            todo += ast.iter_child_nodes(node)
+        else:  # a joined name stands alone: its parts are not names (#1018 r2)
             names += [part.strip() for part in text.split(",") if part.strip()]
     return names
 
