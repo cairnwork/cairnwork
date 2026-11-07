@@ -202,7 +202,8 @@ def _exec(
         )
     except (OSError, subprocess.SubprocessError, UnicodeDecodeError) as exc:
         if isinstance(exc, subprocess.CalledProcessError) and exc.returncode in ok_codes:
-            return exc.stdout  # an exit status the caller reads (#1011)
+            if not exc.stderr:  # a status the caller reads, only when git said nothing (#1011)
+                return exc.stdout
         tail = stderr_tail(getattr(exc, "stderr", None))
         raise GitCommandError(
             f"git {_subcommand(args)} failed" + (f": {tail}" if tail else "")
