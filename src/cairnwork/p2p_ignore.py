@@ -27,15 +27,17 @@ from __future__ import annotations
 import ast
 import posixpath
 import shlex
+import sys
 from collections.abc import Callable
 
 from cairnwork.gitcmd import run_git, run_git_bytes
 from cairnwork.pytest_config import _render, base_settings
-from cairnwork.sys_path_names import DYNAMIC_ATTRS, DYNAMIC_NAMES
+from cairnwork.sys_path_names import DYNAMIC_ATTRS, DYNAMIC_NAMES, IMPORT_MODULES
 
 NAME = "collect_ignore"
 OPAQUE = frozenset({"pytest_plugins", "pytest_ignore_collect", "pytest_collect_directory",
-                    "pytest_collection", "pluginmanager", "modules", "__getattr__"})  # fmt: skip
+                    "pytest_collection", "pluginmanager", "modules", "__getattr__",
+                    "__setattr__", "__delattr__"})  # fmt: skip
 REGULAR = ("100644", "100755")
 UNKNOWN = object()  # a conftest whose collect_ignore cannot be read beyond doubt
 
@@ -116,10 +118,11 @@ def _path(directory: str, value: str) -> str | None:
 def _reader(repo, commit: str) -> Callable[[str], object]:
     """For a directory: its conftest's collect_ignore (a tuple), None (no conftest, or one that
     does not name it) or UNKNOWN."""
-    entries = {}
+    entries, modules = {}, set()
     raw = run_git(repo, "ls-tree", "-r", "-z", commit)
     for entry in filter(None, raw.split("\0")):
         meta, path = entry.split("\t", 1)
+        modules |= {part.removesuffix(".py") for part in path.split("/")}
         if posixpath.basename(path) == "conftest.py":
             entries[posixpath.dirname(path)] = (meta.split()[0], meta.split()[2])
     seen: dict[str, object] = {}
@@ -130,13 +133,13 @@ def _reader(repo, commit: str) -> Callable[[str], object]:
         if directory not in seen:
             mode, oid = entries[directory]
             data = run_git_bytes(repo, "cat-file", "blob", oid) if mode in REGULAR else None
-            seen[directory] = UNKNOWN if data is None else _listed(data)
+            seen[directory] = UNKNOWN if data is None else _listed(data, frozenset(modules))
         return seen[directory]
 
     return read
 
 
-def _listed(data: bytes) -> object:
+def _listed(data: bytes, modules: frozenset[str] = frozenset()) -> object:
     try:
         tree = ast.parse(data)  # bytes: Python's own decoding, coding cookie included
     except (SyntaxError, ValueError):
@@ -145,7 +148,7 @@ def _listed(data: bytes) -> object:
     for node in ast.walk(tree):
         names = _names(node)
         mentions += names.count(NAME)
-        opaque |= any(n in OPAQUE for n in names) or _dynamic(node)
+        opaque |= any(n in OPAQUE for n in names) or _dynamic(node) or _unsafe(node, modules)
     if opaque:
         return UNKNOWN
     if not mentions:
@@ -182,6 +185,28 @@ def _dynamic(node: ast.AST) -> bool:
     if isinstance(node, ast.Name):
         return node.id in DYNAMIC_NAMES or node.id == "__getattr__"
     return isinstance(node, ast.Attribute) and node.attr in DYNAMIC_ATTRS
+
+
+def _unsafe(node: ast.AST, modules: frozenset[str]) -> bool:
+    """An import that could reach the conftest's globals from elsewhere: a relative one, one whose
+    top-level name a repository path could provide (``modules``), a module outside the standard
+    library and pytest, an IMPORT_MODULES one (``builtins``, ``gc``, ``importlib``), or a name
+    in DYNAMIC_NAMES or DYNAMIC_ATTRS."""
+    if isinstance(node, ast.alias):
+        return {node.name.rsplit(".", 1)[-1], node.asname} & (
+            DYNAMIC_NAMES | DYNAMIC_ATTRS
+        ) != set()
+    if isinstance(node, ast.ImportFrom):
+        found = [node.module or ""] if node.level == 0 else [""]
+    else:
+        found = [a.name for a in node.names] if isinstance(node, ast.Import) else []
+    for module in found:
+        top = module.split(".")[0]
+        known = top == "pytest" or top in sys.stdlib_module_names
+        risky = top in IMPORT_MODULES or any(module.startswith(f"{m}.") for m in IMPORT_MODULES)
+        if top in modules or not known or risky or module in IMPORT_MODULES:
+            return True
+    return False
 
 
 def _binds(node: ast.stmt) -> bool:

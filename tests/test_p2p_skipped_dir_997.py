@@ -52,7 +52,7 @@ def test_the_wrong_candidate_is_refused_whatever_the_base_gives_pytest(far, tmp_
 
 def _base(repo):
     return SimpleNamespace(repo=repo, base_commit=git(repo, "rev-parse", "HEAD"),
-                           test_roots=("tests",))  # fmt: skip
+                           test_roots=("tests",), test_commit="")  # fmt: skip
 
 
 @pytest.mark.parametrize(

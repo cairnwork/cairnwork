@@ -41,3 +41,23 @@ def test_a_directory_a_nearer_conftest_collects_again_is_still_refused(project, 
     result = run(project, tmp_path, {"src/calc.py": FIX_ADD}, mode="whole-suite", extra=extra)
     assert result.status == "FAILED" and not result.verified, result.reason
     assert result.reason.startswith("UNCOMPARABLE: P2P_BASE_UNTARGETABLE: "), result.reason
+
+
+@pytest.fixture
+def alone(repo):  # the same project without tests/test_sibling.py: only tests/v1.0 binds neg()
+    commit_change(repo, {"src/calc.py": CALC, "tests/test_calc.py": ADD})
+    return repo
+
+
+ALIAS = "from builtins import globals as g\ng()['collect_' + 'ignore'] = []\n"
+
+
+def test_a_list_another_name_reaches_is_still_refused(alone, tmp_path):
+    """#992 r1: the root conftest ignores tests/v1.0, but tests/conftest.py empties its own list
+    through an import alias of a builtin, so pytest collects tests/v1.0/test_far.py, the only test
+    of neg(). Before r2 a wrong fix (breaks neg()) ended COMPLETED; now the alias is doubt."""
+    extra = {"conftest.py": "collect_ignore = ['tests/v1.0']\n",
+             "tests/conftest.py": CONFTEST + ALIAS, FAR: SIBLING}  # fmt: skip
+    result = run(alone, tmp_path, {"src/calc.py": FIX_BREAKS_NEG}, mode="whole-suite", extra=extra)
+    assert result.status == "FAILED" and not result.verified, result.reason
+    assert result.reason.startswith("UNCOMPARABLE: P2P_BASE_UNTARGETABLE: "), result.reason

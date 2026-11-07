@@ -29,6 +29,9 @@ IGNORED = {  # name: base files
         NEAR: "import pytest\n\n\n@pytest.fixture\ndef f():\n    return 1\n"},
     "testpaths above the directory": {
         ROOT: "collect_ignore = ['tests/v1.0']\n", "pytest.ini": "[pytest]\ntestpaths = tests\n"},
+    "a conftest importing the standard library and pytest": {
+        NEAR: "import os\nfrom pathlib import Path\n\nimport pytest\n\n"
+              "collect_ignore = ['v1.0']\n"},
 }  # fmt: skip
 KEPT = {  # name: (base files, what pytest does: "collected", or None when it ignores the file too)
     "a nearer conftest's own list replaces it": (
@@ -70,6 +73,40 @@ KEPT = {  # name: (base files, what pytest does: "collected", or None when it ig
     "an annotated binding": ({NEAR: "collect_ignore: list = ['v1.0']\n"}, None),
     "pytest_plugins": ({NEAR: "collect_ignore = ['v1.0']\npytest_plugins = []\n"}, None),
     "a conftest that does not parse": ({NEAR: "collect_ignore = ['v1.0'\n"}, None),
+    # #992 r1 review: other ways to reach a conftest's globals, and two surviving mutants
+    "an import alias of a builtin": (
+        {ROOT: "collect_ignore = ['tests/v1.0']\n",
+         NEAR: "from builtins import globals as g\ng()['collect_' + 'ignore'] = []\n"},
+        "collected"),
+    "an attribute of an imported builtins": (
+        {ROOT: "collect_ignore = ['tests/v1.0']\n",
+         NEAR: "import builtins as b\nb.vars()['collect_' + 'ignore'] = []\n"}, "collected"),
+    "gc clears the list": (
+        {NEAR: "import gc\ncollect_ignore = ['v1.0']\nfor o in gc.get_objects():\n"
+               "    if type(o) is list and o == ['v1.0']:\n        o.clear()\n"}, "collected"),
+    "the module's own __setattr__": (
+        {ROOT: "collect_ignore = ['tests/v1.0']\n",
+         NEAR: "import conftest as me\nme.__setattr__('collect_' + 'ignore', [])\n"}, "collected"),
+    "a repository module clears it": (
+        {NEAR: "collect_ignore = ['v1.0']\nimport helper_x  # noqa\n",
+         "tests/helper_x.py": "import conftest\nconftest.collect_ignore.clear()\n"}, "collected"),
+    "a repository module named like a standard one": (  # the conftest's directory comes first
+        {NEAR: "collect_ignore = ['v1.0']\nimport colorsys  # noqa\n",
+         "tests/colorsys.py": "import conftest\nconftest.collect_ignore.clear()\n"}, "collected"),
+    "a relative import of a module named like a standard one": (
+        {NEAR: "collect_ignore = ['v1.0']\nfrom .colorsys import x  # noqa\n",
+         "tests/__init__.py": "", "tests/colorsys.py": "x = 1\n"}, None),
+    "a third-party module": (  # it could change the list; pytest itself still ignores the file
+        {NEAR: "import pluggy  # noqa\n\ncollect_ignore = ['v1.0']\n"}, None),
+    "import_module through an alias": (
+        {ROOT: "collect_ignore = ['tests/v1.0']\n",
+         NEAR: "from importlib import import_module as im\n"
+               "im(__name__).__setattr__('collect_' + 'ignore', [])\n"}, "collected"),
+    "testpaths names the file below the directory": (
+        {NEAR: "collect_ignore = ['v1.0']\n",
+         "pytest.ini": "[pytest]\ntestpaths = tests/v1.0/test_far.py\n"}, "collected"),
+    "a later mention changes the list": (
+        {NEAR: "collect_ignore = ['v1.0']\ncollect_ignore.remove('v1.0')\n"}, "collected"),
 }  # fmt: skip
 
 

@@ -95,7 +95,7 @@ def test_p2p_base_tests_stay_plain_files(repo):
     commit_change(repo, {"tests/test_a.py": "def test_a():\n    pass\n",
                          "tests/test_[b].py": "def test_b():\n    pass\n"})  # fmt: skip
     task = SimpleNamespace(repo=repo, base_commit=git(repo, "rev-parse", "HEAD"),
-                           test_roots=("tests",))  # fmt: skip
+                           test_roots=("tests",), test_commit="")  # fmt: skip
     with pytest.raises(p2p.BaseUncomparable) as got:  # #930: never a target, never dropped silently
         p2p._base_tests(task, frozenset())
     assert got.value.comparison.code == "P2P_BASE_UNTARGETABLE"
@@ -118,7 +118,7 @@ def test_p2p_an_unnameable_base_test_is_refused_whatever_the_norecursedirs(repo,
     commit_change(repo, {"tests/test_a.py": "def test_a():\n    pass\n",
                          "tests/.x/test_b.py": "def test_b():\n    pass\n", **config})  # fmt: skip
     task = SimpleNamespace(repo=repo, base_commit=git(repo, "rev-parse", "HEAD"),
-                           test_roots=("tests",))  # fmt: skip
+                           test_roots=("tests",), test_commit="")  # fmt: skip
     with pytest.raises(p2p.BaseUncomparable) as got:
         p2p._base_tests(task, frozenset())
     assert got.value.comparison.code == "P2P_BASE_UNTARGETABLE"
@@ -171,6 +171,6 @@ def test_p2p_base_tests_follow_the_configured_python_files(repo, ini, want):
         "tests/t_a.py", "tests/b_t.py")}  # fmt: skip
     commit_change(repo, {**files, **({"pytest.ini": ini} if ini else {})})
     task = SimpleNamespace(repo=repo, base_commit=git(repo, "rev-parse", "HEAD"),
-                           test_roots=("tests",))  # fmt: skip
+                           test_roots=("tests",), test_commit="")  # fmt: skip
     got = p2p._base_tests(task, frozenset())
     assert got == want
