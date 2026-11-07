@@ -58,19 +58,61 @@ def _import_error(node, call, report, _real=os.path.realpath, _rel=os.path.relpa
     return None
 
 
-def _denied_path(info):
-    # #962: the path of the first EPERM OSError (a Seatbelt denial's errno; EACCES is plain file
-    # permissions) in the cause and context chain (at most 64 links) of a call's exception info
-    # (None for a strict xpass); None when there is none. Wording only: the parent shows it in
-    # the reason and trusts nothing about it.
+def _denied_exc(info, _sub=issubclass, _type=type, _base=BaseException,
+                _errno=OSError.errno.__get__, _file=OSError.filename.__get__,
+                _cause=BaseException.__cause__.__get__, _ctx=BaseException.__context__.__get__,
+                _quiet=BaseException.__suppress_context__.__get__):
+    # #962: the first EPERM OSError (a Seatbelt denial's errno; EACCES is plain file permissions)
+    # with a str filename in the cause and context chain (at most 64 links) of a phase's exception
+    # info (None for a strict xpass); None when there is none. #1006 (Codex r1): read through
+    # type() and the built-in descriptors, never the error's own attributes, so a test's OSError
+    # subclass (properties, __eq__, __bool__) runs no code here.
     exc = getattr(info, "value", None)
     for _ in range(64):
-        if not isinstance(exc, BaseException):
+        if not _sub(_type(exc), _base):
             return None
-        if isinstance(exc, OSError) and exc.errno == 1 and type(exc.filename) is str:
-            return exc.filename
-        exc = exc.__cause__ or (None if exc.__suppress_context__ else exc.__context__)
+        if _sub(_type(exc), OSError) and _type(_errno(exc)) is int and _errno(exc) == 1:
+            if _type(_file(exc)) is str:
+                return exc
+        cause = _cause(exc)
+        exc = cause if cause is not None else (None if _quiet(exc) else _ctx(exc))
     return None
+
+
+def _denied_path(info, _exc=_denied_exc, _file=OSError.filename.__get__):
+    # #962: that error's path, or None. Wording only: the parent trusts nothing about it. Read
+    # once and checked again (#1006, Claude): the record must stay JSON.
+    exc = _exc(info)
+    path = None if exc is None else _file(exc)
+    return path if type(path) is str else None
+
+
+def _denied_origin(info, root, _exc=_denied_exc, _real=os.path.realpath, _rel=os.path.relpath,
+                   _abs=os.path.isabs, _str=str, _file=OSError.filename.__get__,
+                   _tb=BaseException.__traceback__.__get__):
+    # #962 step 2a: [denied path, origin, line] of a setup-phase denial, or None. The origin is
+    # the innermost frame of the denied error's own traceback whose absolute file lies in the
+    # checkout (realpath only to find it), relative to it; "" when that frame is a lambda or a
+    # comprehension (a <...> name), or none is in the checkout. Data for candidate_env.py, which
+    # reads the control tree's copy of that line; any error records nothing.
+    try:
+        exc = _exc(info)
+        if exc is None:
+            return None
+        top, tb, origin, line = _real(_str(root)), _tb(exc), "", 0
+        while tb is not None:
+            code = tb.tb_frame.f_code
+            if _abs(code.co_filename) and not code.co_filename.startswith("<"):
+                rel = _rel(_real(code.co_filename), top)
+                out = rel in (".", "..") or rel.startswith(("../", "..\\\\"))
+                if not out and not _abs(rel):
+                    origin = "" if code.co_name.startswith("<") else rel
+                    line = tb.tb_lineno or 0
+            tb = tb.tb_next
+        path = _file(exc)
+        return [path, origin, line] if type(path) is str else None
+    except BaseException:
+        return None
 
 
 def _submodule_error(node, call, report, _real=os.path.realpath, _rel=os.path.relpath,
