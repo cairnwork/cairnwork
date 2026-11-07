@@ -175,6 +175,8 @@ LITERAL_PLUGINS = [
     'pytest_plugins = "base, x"\n',  # pytest splits a string on commas
     'pytest_plugins = []\npytest_plugins.__iadd__(["x"])\n',  # any method on the list (r2)
     'pytest_plugins = ["te" + "sts.x"]\n',  # pytest loads the joined name (#1018 r1)
+    'pytest_plugins = ["x"] + PLUGINS\n',  # the literal half of a partly unread value
+    'pytest_plugins = ["x"] * 1\n',  # a literal under another operator
 ]
 UNREAD_PLUGINS = [
     'pytest_plugins = ["x"] if FLAG else []\n',
