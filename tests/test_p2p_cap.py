@@ -135,7 +135,7 @@ def test_base_env_check_probes_the_capped_selection(monkeypatch, tmp_path, count
         probed.append(files)
         return {}, ""
 
-    monkeypatch.setattr(p2p, "_base_tests", lambda task, exclude: existing)
+    monkeypatch.setattr(p2p, "_base_tests", lambda task, exclude, **_: existing)
     monkeypatch.setattr(p2p, "_probe", fake_probe)
     monkeypatch.setattr(p2p, "_env_fingerprint", lambda python: None)
     task = SimpleNamespace(**{**vars(TASK), "allowed_files": ("src/pkg/b.py",)})
@@ -156,7 +156,7 @@ def _cap_task(monkeypatch, existing, changed, by_test_commit=frozenset(), outcom
 
     stub_side(monkeypatch, by_test_commit)
 
-    base = lambda task, exclude: tuple(p for p in existing if p not in exclude)  # noqa: E731
+    base = lambda task, exclude, **_: tuple(p for p in existing if p not in exclude)  # noqa: E731
     monkeypatch.setattr(p2p, "_base_tests", base)
     monkeypatch.setattr(p2p, "_probe", fake_probe)
     monkeypatch.setattr(p2p, "_env_fingerprint", lambda python: None)
@@ -241,7 +241,7 @@ def test_a_log_over_the_cap_twice_degrades_once_then_is_uncomparable(monkeypatch
         return (replace(run, log_too_big=True),)
 
     existing = ("tests/nested/test_big.py", "tests/test_calc.py")
-    monkeypatch.setattr(p2p, "_base_tests", lambda task, exclude: existing)
+    monkeypatch.setattr(p2p, "_base_tests", lambda task, exclude, **_: existing)
     monkeypatch.setattr(p2p, "run_verifiers", fake_run_verifiers)
     with pytest.raises(p2p.BaseUncomparable) as raised:
         p2p.plan_p2p(TASK, (), (), "whole-suite", 30, RESULT, context(TASK, tmp_path))

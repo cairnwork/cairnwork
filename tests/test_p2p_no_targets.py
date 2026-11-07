@@ -63,7 +63,9 @@ def test_a_file_the_test_commit_deletes_is_not_selected_after_a_degraded_probe(m
         seen.append(files)
         return next(probes)
 
-    monkeypatch.setattr(p2p, "_base_tests", lambda task, ex: tuple(f for f in base if f not in ex))
+    monkeypatch.setattr(
+        p2p, "_base_tests", lambda task, ex, **_: tuple(f for f in base if f not in ex)
+    )
     monkeypatch.setattr(p2p, "_probe", fake_probe)
     stub_side(monkeypatch)
     got = plan_p2p(TASK, (), Deleting(), "whole-suite", 30, RESULT, context("/runs"))

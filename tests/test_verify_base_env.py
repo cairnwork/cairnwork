@@ -197,7 +197,7 @@ SOURCE = Path("/nonexistent/mirror")
 def unit(monkeypatch, tmp_path):
     """check(task, verifying, key_repo): one check as the verify path calls it; probes so far."""
     probed: list = []
-    monkeypatch.setattr(p2p, "_base_tests", lambda task, exclude: ("tests/test_calc.py",))
+    monkeypatch.setattr(p2p, "_base_tests", lambda task, exclude, **_: ("tests/test_calc.py",))
     monkeypatch.setattr(
         p2p, "_probe", lambda *a, **k: (probed.append(a[0]), ({"t": "passed"}, ""))[1]
     )
