@@ -30,6 +30,7 @@ from pathlib import Path, PurePosixPath
 
 from cairnwork import survivor_argv
 from cairnwork.base_teeth import base_teeth
+from cairnwork.deferred_attached import refuse_attached
 from cairnwork.deferred_nodes import hidden_tests, local_names, test_functions
 from cairnwork.deferred_overlay import (  # noqa: F401  (re-exported: the one place importers look)
     _REGULAR,
@@ -199,7 +200,8 @@ def new_tests(repo: Path, base: str, test_commit: str, paths: tuple[str, ...]) -
     classes inherited from another module, custom python_functions/python_classes. Such a test
     commit is refused (no teeth found, or the base run's DEFERRED_TESTS_NOT_RUN) when the file has
     no other new test; one beside a visible new test is not. A changed test inside a module-level
-    block or a nested test class is refused, DEFERRED_TESTS_UNREADABLE (#925)."""
+    block or a nested test class is refused, DEFERRED_TESTS_UNREADABLE (#925); so is one attached
+    outside a class body that changed or cannot be read (#994, deferred_attached)."""
     found, local = set(), local_names(repo, test_commit)  # #925
     for path in paths:
         if not path.endswith(".py"):
@@ -214,6 +216,7 @@ def new_tests(repo: Path, base: str, test_commit: str, paths: tuple[str, ...]) -
                 f"{path}: a test inside a module-level block or a nested test class changed;"
                 " Cairnwork cannot tell which tests it adds, so it cannot check they ran",
             )
+        refuse_attached(path, tree, old)  # #994
         for node_id, body in after.items():
             if before.get(node_id) != body:
                 if "::" in node_id and node_id.split("::", 1)[0] in uncollected:
