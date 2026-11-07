@@ -151,4 +151,4 @@ def test_bound_and_requested_read_every_form():
         "@pytest.mark.usefixtures('u1', 'u2')\nclass T:\n    pass\n"
     )
     assert bound(tree) == {"c", "e", "x", "y", "z", "f", "alias", "T"}
-    assert requested(tree) == {"p", "q", "r", "s", "dyn", "u1", "u2"}
+    assert requested([tree]) == {"p", "q", "r", "s", "dyn", "u1", "u2"}

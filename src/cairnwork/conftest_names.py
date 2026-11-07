@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import ast
 import re
+from collections.abc import Iterable
 from pathlib import Path
 from posixpath import dirname, join
 
@@ -43,14 +44,14 @@ def taken_names(
     directory = dirname(path)
     sources = _base_sources(repo, base, directory)
     every_function, names = _ini_requests(repo, base)  # #982
+    trees: list[ast.Module] = []
     for parent in _parents(directory):
         conftest = join(parent, "conftest.py") if parent else "conftest.py"
         if conftest in sources:  # r2: what its own fixtures request may not be overridden either
-            tree = _parse(conftest, sources[conftest])
-            names |= bound(tree) | requested(tree, every_function)
-    for file, data in sources.items():
-        if _under(file, directory):
-            names |= requested(_parse(file, data), every_function)
+            trees.append(tree := _parse(conftest, sources[conftest]))
+            names |= bound(tree)
+    trees += [_parse(f, data) for f, data in sources.items() if _under(f, directory)]
+    names |= requested(trees, every_function)  # judged together: pytest collects across files
     return frozenset(bound(old)), frozenset(names)
 
 
@@ -93,41 +94,68 @@ def bound_by(node: ast.stmt) -> set[str]:
     return set()
 
 
-def requested(tree: ast.Module, every_function: bool = False) -> set[str]:
-    """Fixture names ``tree`` may request: the parameters of each function pytest may hand
+def requested(trees: Iterable[ast.Module], every_function: bool = False) -> set[str]:
+    """Fixture names ``trees`` may request: the parameters of each function pytest may hand
     fixtures, and every literal string passed to ``usefixtures`` or ``getfixturevalue``. #982: a
     function counts when its name starts with ``test`` or ``pytest_``, it has a decorator, or its
-    name is used other than as a direct call (``pytest.fixture(f)``, ``return f``); every lambda
-    counts. Every function counts, as #916 did, with ``every_function`` (the base sets
-    ``python_functions``) or when a request's argument is not a literal string."""
-    callees = {id(n.func) for n in ast.walk(tree) if isinstance(n, ast.Call)}
-    used: set[str] = set()
+    name is used in any of ``trees`` other than as a direct call (``pytest.fixture(f)``,
+    ``test_x = f``, ``return f``), imported under another name, or written as a string
+    (``getattr(m, "f")``); every lambda counts. pytest collects across files, so ``trees`` are
+    judged together (r2 of #984). Every function counts, as #916 did, with ``every_function`` (the
+    base sets ``python_functions``), when any of ``trees`` defines a collection hook
+    (``pytest_pycollect_makeitem``, ``pytest_collect_file``, ...), or when any request's argument
+    is not a literal string."""
     names: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Name | ast.Attribute) and id(node) not in callees:
-            used.add(node.id if isinstance(node, ast.Name) else node.attr)
-        if isinstance(node, ast.Call) and _call_name(node.func) in _REQUESTS:
-            args = [*node.args, *(k.value for k in node.keywords)]
-            strings = {a.value for a in args if isinstance(a, ast.Constant)}
-            literal = [a for a in args if isinstance(a, ast.Constant) and isinstance(a.value, str)]
-            every_function |= len(literal) < len(args)  # a name it cannot read: count them all
-            names |= {v for v in strings if isinstance(v, str)}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
-            if not (every_function or node.decorator_list or node.name in used
-                    or node.name.startswith(("test", "pytest_"))):  # fmt: skip
-                continue
-        elif not isinstance(node, ast.Lambda):
-            continue
-        a = node.args
-        names |= {x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs)}
-    return names
+    used: set[str] = set()
+    plain: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+    for tree in trees:
+        callees = {id(n.func) for n in ast.walk(tree) if isinstance(n, ast.Call)}
+        for node in ast.walk(tree):
+            used |= _uses(node, callees)
+            if isinstance(node, ast.Call) and _call_name(node.func) in _REQUESTS:
+                args = [*node.args, *(k.value for k in node.keywords)]
+                strings = [a.value for a in args if isinstance(a, ast.Constant)]
+                strings = [v for v in strings if isinstance(v, str)]
+                every_function |= len(strings) < len(args)  # one it cannot read: count them all
+                names |= set(strings)
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                every_function |= _collects(node.name)  # a hook that may collect any function
+                if node.decorator_list or node.name.startswith(("test", "pytest_")):
+                    names |= _params(node)
+                else:
+                    plain.append(node)
+            elif isinstance(node, ast.Lambda):
+                names |= _params(node)
+    return names | {p for f in plain if every_function or f.name in used for p in _params(f)}
+
+
+def _uses(node: ast.AST, callees: set[int]) -> set[str]:
+    """Names ``node`` uses other than as a direct call's function."""
+    if isinstance(node, ast.Name) and id(node) not in callees:
+        return {node.id}
+    if isinstance(node, ast.Attribute) and id(node) not in callees:
+        return {node.attr}
+    if isinstance(node, ast.Import | ast.ImportFrom):  # imported under another name
+        return {a.name.rsplit(".", 1)[-1] for a in node.names if a.asname}
+    if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value.isidentifier():
+        return {node.value}
+    return set()
+
+
+def _params(node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda) -> set[str]:
+    a = node.args
+    return {x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs)}
 
 
 def _call_name(func: ast.expr) -> str:
     if isinstance(func, ast.Attribute):
         return func.attr
     return func.id if isinstance(func, ast.Name) else ""
+
+
+def _collects(name: str) -> bool:
+    """A pytest hook that can collect a function under another rule than ``python_functions``."""
+    return name.startswith("pytest_") and "collect" in name
 
 
 def _base_sources(repo: Path, base: str, directory: str) -> dict[str, bytes]:
