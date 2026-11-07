@@ -173,20 +173,28 @@ def _name_stores(node: ast.AST, plain: frozenset[str]) -> list[tuple[str, ast.ex
     same-file code counts: pytest collects functions and classes, and data under a ``test*``
     name (``test_data = load(...)``, a list, a path) is common; what an imported call returns
     is not followed, as any other imported code."""
-    if isinstance(node, (*_SCOPES, ast.Lambda, ast.comprehension)):
+    if isinstance(node, ast.Lambda):
+        return []
+    # #1024: a reached function binds at module level only the names it declares ``global``
+    shared = {n for x in ast.walk(node) if isinstance(x, ast.Global) for n in x.names}
+    in_def = isinstance(node, _DEFS)
+    if in_def and not shared:
         return []
     found: list[tuple[str, ast.expr]] = []
     pending = [node]
     while pending:
         item = pending.pop()
-        if item is not node and isinstance(item, (*_SCOPES, ast.Lambda, ast.comprehension)):
+        if item is not node and isinstance(item, (*_DEFS, ast.Lambda, ast.comprehension)):
+            continue
+        if isinstance(item, ast.ClassDef):
+            pending.extend(item.body)
             continue
         for targets, value in _bindings(item):
             if value is None or not _callable(value, plain):
                 continue
             for target in (t for x in targets for t in ast.walk(x)):
                 if isinstance(target, ast.Name) and isinstance(target.ctx, ast.Store):
-                    if _test_name(target.id):
+                    if _test_name(target.id) and (not in_def or target.id in shared):
                         found.append((target.id, value))
         pending.extend(ast.iter_child_nodes(item))
     return found
@@ -195,7 +203,13 @@ def _name_stores(node: ast.AST, plain: frozenset[str]) -> list[tuple[str, ast.ex
 def _callable(value: ast.expr, plain: frozenset[str]) -> bool:
     if isinstance(value, (ast.Name, ast.Attribute, ast.Lambda)):
         return True
-    return isinstance(value, ast.Call) and _names(value) <= plain
+    if isinstance(value, ast.Call) and _names(value) <= plain:
+        return True
+    # #1024: a composite value (unpacking, a subscript, a condition, a boolean, a call wrapping
+    # same-file code) counts when it holds a lambda or reads a name ``plain`` allows; pure data
+    # (literals, an imported constant) stays inert.
+    lam = any(isinstance(part, ast.Lambda) for part in ast.walk(value))
+    return lam or bool(_names(value) & plain)
 
 
 def _bindings(item: ast.AST) -> list[tuple[list[ast.expr], ast.expr | None]]:
