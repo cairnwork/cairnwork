@@ -2,19 +2,21 @@
 
 pytest collects a ``test*`` attribute of a test class or a module however it got there. An
 *attaching store* puts a callable under a ``test*``/``Test*`` name from outside the class body:
-an attribute target (``Cls.test_x = f``, ``sys.modules[__name__].test_x = f``, a ``for`` or
-``with`` target too), ``setattr`` (``builtins.setattr``, ``type.__setattr__``), or a
-``globals()``/``vars()``/``locals()``/``__dict__`` namespace written by a subscript or by
-``update``/``setdefault``/``__setitem__``. A namespace bound to another name or handed to a
-function other than a builtin may be written where it is not followed: it counts as unreadable.
-Stores into ``self`` (an instance's own attribute, e.g. a client set in ``setUp``) and literal
-values are not counted: pytest collects neither.
+a name bound at module level or in a class body (``test_x = f``; a function's locals are never
+collected), an attribute target (``Cls.test_x = f``, ``sys.modules[__name__].test_x = f``, a
+``for`` or ``with`` target too), ``setattr`` (``builtins.setattr``, ``type.__setattr__``), or a
+``globals()``/``vars()``/``locals()`` (``builtins.globals()`` too) or ``__dict__`` namespace
+written by a subscript or by ``update``/``setdefault``/``__setitem__``. A namespace bound to
+another name or handed to a function other than a builtin may be written where it is not
+followed: it counts as unreadable. Stores into ``self`` (an instance's own attribute, e.g. a
+client set in ``setUp``) and literal values are not counted: pytest collects neither.
 
 Each statement that runs at import (every module-level statement but a plain function, a class
-less its tests, a function's decorators and defaults) is searched together with the same-file
-code it reaches by name (deferred_nodes._Reach: a class decorator or the class holding it, a
-metaclass, a base, a helper it calls; a reached class with every method but its tests). One that
-holds an attaching store is *attaching*:
+less its method bodies, every function's and method's decorators and defaults, a class body's
+own helper that it calls) is searched together with the same-file code it reaches by name
+(deferred_nodes._Reach: a class decorator or the class holding it, a metaclass, a base, a helper
+it calls; a reached class with every method but its tests). One that holds an attaching store is
+*attaching*:
 - readable statically (every store names a literal, and its value reads only names the file
   binds by nothing but a module-level ``def`` or ``class``, or builtins): it counts with
   everything it reaches and every other module-level statement, so a changed ``f`` behind an
@@ -66,11 +68,13 @@ def attached(tree: ast.Module) -> tuple[frozenset[str], bool]:
         if not part:
             continue
         names = frozenset(n.id for x in part for n in ast.walk(x) if isinstance(n, ast.Name))
-        stores = [store for node in part for store in _stores(node)]
+        stores = [store for node in part for store in (*_stores(node), *_name_stores(node))]
         for other in reach.statements(names):
             if (more := held.get(id(other))) is None:
                 parts = _import_part(other, reached=True)
-                held[id(other)] = more = [store for node in parts for store in _stores(node)]
+                held[id(other)] = more = [
+                    store for node in parts for store in (*_stores(node), *_name_stores(node))
+                ]
             stores += more
         if not stores:
             continue
@@ -108,19 +112,34 @@ def _plain(tree: ast.Module) -> frozenset[str]:
 
 def _import_part(stmt: ast.stmt, reached: bool = False) -> list[ast.AST]:
     """What of a module-level statement runs at import: a function's decorators and defaults (its
-    whole body too once ``reached``, called by what runs), a class's decorators, bases, keywords
-    and body less its methods (and, ``reached`` as a decorator's holder, a metaclass or a base,
-    every method but a test: any may run while a class is built, Claude r1 on #1003), any other
-    statement whole. A test class's own methods run only when its tests do, after collection."""
+    whole body too once ``reached``, called by what runs), a class's decorators, bases, keywords,
+    body less methods and every method's decorators and defaults; a non-reached class also includes
+    any non-test method whose name is read there, and a reached class includes every non-test
+    method body (Claude r2 and Gemini on #1003). Any other statement is whole. A test class's
+    other methods run only when its tests do, after collection."""
     if isinstance(stmt, _DEFS):
         args = stmt.args
         heads: list[ast.AST] = [*stmt.decorator_list, *args.defaults]
         heads += [d for d in args.kw_defaults if d]
         return [stmt] if reached else heads
     if isinstance(stmt, ast.ClassDef):
-        body = [m for m in stmt.body if not isinstance(m, _DEFS) or reached and not _test(m)]
-        return [*stmt.decorator_list, *stmt.bases, *(k.value for k in stmt.keywords), *body]
+        body = [m for m in stmt.body if not isinstance(m, _DEFS)]
+        methods = [m for m in stmt.body if isinstance(m, _DEFS)]
+        heads = [node for method in methods for node in _method_head(method)]
+        parts = [*stmt.decorator_list, *stmt.bases, *(k.value for k in stmt.keywords)]
+        parts += [*body, *heads]
+        if reached:
+            parts += [m for m in methods if not _test(m)]
+        else:
+            reads = {n.id for part in parts for n in ast.walk(part) if isinstance(n, ast.Name)}
+            parts += [m for m in methods if not _test(m) and m.name in reads]
+        return parts
     return [stmt]
+
+
+def _method_head(method: ast.FunctionDef | ast.AsyncFunctionDef) -> list[ast.AST]:
+    args = method.args
+    return [*method.decorator_list, *args.defaults, *(d for d in args.kw_defaults if d)]
 
 
 def _stores(node: ast.AST) -> list[tuple[str | None, ast.expr]]:
@@ -141,6 +160,28 @@ def _stores(node: ast.AST) -> list[tuple[str | None, ast.expr]]:
                 found.append((name, named[1]))
         elif isinstance(item, ast.Call):
             found += [(n, v) for n, v in _call_stores(item) if n != "" and not _literal(v)]
+    return found
+
+
+def _name_stores(node: ast.AST) -> list[tuple[str, ast.expr]]:
+    """(name, value) of each ``test*`` name bound in ``node`` at module or class-body scope, not
+    in a nested scope: pytest never collects a function's locals (Claude r2, Gemini on #1003)."""
+    if isinstance(node, (*_SCOPES, ast.Lambda, ast.comprehension)):
+        return []
+    found: list[tuple[str, ast.expr]] = []
+    pending = [node]
+    while pending:
+        item = pending.pop()
+        if item is not node and isinstance(item, (*_SCOPES, ast.Lambda, ast.comprehension)):
+            continue
+        for targets, value in _bindings(item):
+            if value is None or _literal(value):
+                continue
+            for target in (t for x in targets for t in ast.walk(x)):
+                if isinstance(target, ast.Name) and isinstance(target.ctx, ast.Store):
+                    if _test_name(target.id):
+                        found.append((target.id, value))
+        pending.extend(ast.iter_child_nodes(item))
     return found
 
 
@@ -212,8 +253,12 @@ def _setattr(call: ast.Call) -> tuple[ast.expr, ast.expr] | None:
 def _holder(value: ast.AST) -> bool:
     """``globals()``, ``vars()``, ``locals()`` or anything's ``__dict__`` but ``self``'s: a
     namespace pytest may collect from."""
-    if isinstance(value, ast.Call) and isinstance(value.func, ast.Name):
-        return value.func.id in _HOLDERS
+    if isinstance(value, ast.Call):
+        func = value.func
+        if isinstance(func, ast.Name):
+            return func.id in _HOLDERS
+        if isinstance(func, ast.Attribute):
+            return func.attr in _HOLDERS
     own = isinstance(value, ast.Attribute) and _is_self(value.value)
     return isinstance(value, ast.Attribute) and value.attr == "__dict__" and not own
 

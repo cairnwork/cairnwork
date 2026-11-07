@@ -1,6 +1,7 @@
 """#994: tests pytest collects that the AST reader does not read, attached outside a class body
 (``Cls.test_x = f``, ``setattr``, ``sys.modules[__name__]``, ``globals()``, a same-file class
-decorator or metaclass that writes ``test*``), and a ``pytestmark`` bound by an import.
+decorator or metaclass that writes ``test*``, a ``test*`` name bound at module level or in a class
+body, a class body's own helper or a method's decorator), and a ``pytestmark`` bound by an import.
 
 An attaching statement that can be read statically (a literal name, a value made only of
 same-file code) counts with everything it reads, so a changed ``f`` behind an unchanged
@@ -57,6 +58,30 @@ ATTACHED = {
     # the trap (owner, 11/07): the assignment stays byte-identical, only f's body changes
     "trap-attribute": (CLS + IMPL.format(RIGHT) + "TestX.test_x = _impl\n",
                        CLS + IMPL.format(WRONG) + "TestX.test_x = _impl\n"),
+    "trap-module-name": (FN_IMPL.format(RIGHT) + "test_x = _impl\n",
+                         FN_IMPL.format(WRONG) + "test_x = _impl\n"),
+    "trap-class-name": (IMPL.format(RIGHT) + "class TestX:\n    test_x = _impl\n",
+                        IMPL.format(WRONG) + "class TestX:\n    test_x = _impl\n"),
+    "qualified-globals": ("", "import builtins\n" + FN_IMPL.format(WRONG)
+                          + "builtins.globals()['test_x'] = _impl\n"),
+    "trap-class-helper": (
+        FN_IMPL.format(RIGHT) + "class Other:\n    pass\nclass TestX:\n"
+        "    def _add():\n        Other.test_x = _impl\n    _add()\n"
+        "    def test_regression(self):\n        pass\n",
+        FN_IMPL.format(WRONG) + "class Other:\n    pass\nclass TestX:\n"
+        "    def _add():\n        Other.test_x = _impl\n    _add()\n"
+        "    def test_regression(self):\n        pass\n",
+    ),
+    "trap-method-decorator": (
+        FN_IMPL.format(RIGHT) + "def reg(f):\n    Other.test_x = _impl\n    return f\n"
+        "class Other:\n    pass\nclass TestX:\n    @reg\n"
+        "    def helper(self):\n        pass\n"
+        "    def test_regression(self):\n        pass\n",
+        FN_IMPL.format(WRONG) + "def reg(f):\n    Other.test_x = _impl\n    return f\n"
+        "class Other:\n    pass\nclass TestX:\n    @reg\n"
+        "    def helper(self):\n        pass\n"
+        "    def test_regression(self):\n        pass\n",
+    ),
     "trap-setattr": (CLS + IMPL.format(RIGHT) + "setattr(TestX, 'test_x', _impl)\n",
                      CLS + IMPL.format(WRONG) + "setattr(TestX, 'test_x', _impl)\n"),
     "trap-decorator": (IMPL.format(RIGHT) + WRITER + "@add_tests\n" + CLS,
@@ -98,6 +123,13 @@ ATTACHED = {
                      + "globals()['TestY'] = type('TestY', (), {'test_x': staticmethod(_impl)})\n"),
     "removed-unreadable": (CLS + IMPL.format(RIGHT) + "setattr(TestX, 'test_' + 'x', _impl)\n",
                            CLS + IMPL.format(RIGHT)),
+    # Claude r2 on #1003: an import or an assignment over a def name, a keyword-only default
+    "import-over-def": (CLS + IMPL.format(RIGHT) + "from helpers import _impl\n"
+                        "TestX.test_x = _impl\n",) * 2,
+    "assigned-over-def": (CLS + IMPL.format(RIGHT) + "_impl = staticmethod(_impl)\n"
+                          "TestX.test_x = _impl\n",) * 2,
+    "kw-only-default": ("", CLS + IMPL.format(WRONG)
+                        + "def _h(*, a=setattr(TestX, 'test_x', _impl)):\n    pass\n"),
 }  # fmt: skip
 
 
@@ -128,6 +160,8 @@ CONTROLS = {  # no attached test: nothing refused, only test_regression is new
     "self-stores": "from helpers import make\nclass Base:\n    def setUp(self):\n"
     "        self.test_client = make()\n        setattr(self, 'test_db', make())\n"
     "class TestX(Base):\n    pass\n",
+    "local-test-name": "def _h():\n    test_x = 1 + len([])\n    return test_x\n_h()\n",
+    "module-literal-name": "test_data = {'a': 1}\n",
 }
 
 
@@ -185,7 +219,8 @@ def test_other_imports_and_a_class_body_pytestmark_import_add_nothing(project):
 
 @pytest.mark.sandbox
 @pytest.mark.parametrize("shape", ["trap-attribute", "trap-assigned", "trap-static-decorator",
-                                   "trap-module-value", "for-target"])  # fmt: skip
+                                   "trap-module-value", "for-target", "trap-module-name",
+                                   "trap-class-helper"])  # fmt: skip
 def test_verify_refuses_the_trap_a_wrong_fix_would_fail(project, state, shape):
     """Each wrong candidate was VERIFIED before #994 or its r2 guards (the PR's table). The
     attached test fails the fix; the target names test_regression only."""
