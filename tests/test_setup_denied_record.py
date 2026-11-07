@@ -210,6 +210,8 @@ SETUP = {"n": "setup"}
         {"n": [DENIED, "./tests/conftest.py", 6]},  # #1006 (Claude): only a normalized path
         {"n": [DENIED, "tests//conftest.py", 6]},
         {"n": [DENIED, "tests/conftest.py\0", 6]},
+        {"n": [DENIED, "..\\outside.py", 6]},  # #1006 (Codex r2): a Windows separator
+        {"n": [DENIED, "tests\\conftest.py", 6]},
         {"n": [DENIED, ".", 6]},
         {"n": ["/" + "x" * 500, "tests/conftest.py", 6]},
         {"other": [DENIED, "tests/conftest.py", 6]},  # not a setup node

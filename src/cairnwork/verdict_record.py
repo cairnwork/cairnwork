@@ -93,7 +93,8 @@ def setup_denials(data: dict, kind: dict) -> dict[str, tuple[str, str, int]]:
         path, origin, line = entry
         if not (type(path) is str and path.startswith("/") and len(path) < 500
                 and type(origin) is str and not origin.startswith("/") and len(origin) < 500
-                and (origin == "" or normpath(origin) == origin != "." and "\0" not in origin)
+                and (origin == "" or normpath(origin) == origin != ".")
+                and "\0" not in origin and "\\" not in origin  # #1006 r2: no Windows separator
                 and ".." not in origin.split("/")  # #1006: a file in the checkout, or none
                 and type(line) is int and line >= 0):  # fmt: skip
             return {}
