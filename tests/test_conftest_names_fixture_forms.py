@@ -235,6 +235,7 @@ def test_an_annotated_string_constant_name_is_read():
 
 
 def test_a_deep_conditional_chain_is_read_without_recursion():
-    """#998 r3 (Claude): a chain about 500 deep parses; reading it must not raise RecursionError."""
-    chain = "import pytest\nf = " + " if c else ".join(["pytest.fixture"] * 3000) + "\n"
+    """#998 r3 (Claude): reading a deep chain must not raise RecursionError. 800 parses on every
+    supported Python; 3000 does not on 3.11 (#1019 CI)."""
+    chain = "import pytest\nf = " + " if c else ".join(["pytest.fixture"] * 800) + "\n"
     assert "f" in _aliases(ast.parse(chain)) and _registered(ast.parse(chain)) == set()
