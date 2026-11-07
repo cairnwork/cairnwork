@@ -35,6 +35,11 @@ SIDEFX = {
     "    assert 'W3B_FLAG' not in os.environ\n",
     "tests/sub/test_x.py": "def test_x():\n    assert True\n",
 }
+# the same effect on a base test under the conftest's own directory (module-dir mode compares those)
+SIDEFX_SUB = {
+    "src/sidefx.py": SIDEFX["src/sidefx.py"],
+    "tests/sub/test_env.py": SIDEFX["tests/other/test_env.py"],
+}
 SLOW = "import time\n\n\ndef test_slow():\n    time.sleep(60)\n"
 LEAK = (  # a fixture that leaves process state; a new test of a base file uses it (CE1)
     "\nimport os\nimport pytest\n\n\n@pytest.fixture\ndef leak():\n"
@@ -188,7 +193,7 @@ SCENARIOS = {  # name: (kwargs of conftest_run, expected status, a code the reas
             "regression": PLAIN,
         },
         "FAILED",
-        "TEST_COMMIT_CONFTEST_CHANGES_BASE",
+        "TEST_COMMIT_CONFTEST_STATIC",  # #916: refused before the probe (it saw CHANGES_BASE)
     ),
     "an import side effect on a test outside its directory": (
         {
@@ -286,9 +291,9 @@ SCENARIOS = {  # name: (kwargs of conftest_run, expected status, a code the reas
             "extra_files": {"tests/sub/conftest.py": SHADOW},
         },
         "FAILED",
-        "TEST_COMMIT_CONFTEST_CHANGES_BASE",
+        "TEST_COMMIT_CONFTEST_STATIC",  # #916 (the probe saw CHANGES_BASE)
     ),
-    "a fixture override in module-dir mode: the conftest's files are compared too": (
+    "a fixture override in module-dir mode": (
         {
             "addition": SHADOW,
             "path": "tests/sub/conftest.py",
@@ -297,15 +302,26 @@ SCENARIOS = {  # name: (kwargs of conftest_run, expected status, a code the reas
             "mode": "module-dir",
         },
         "FAILED",
+        "TEST_COMMIT_CONFTEST_STATIC",  # #916 (the probe saw CHANGES_BASE)
+    ),
+    "an import side effect in module-dir mode: the conftest's files are compared too": (
+        {
+            "addition": "import sidefx\n",
+            "path": "tests/sub/conftest.py",
+            "base_files": SIDEFX_SUB,
+            "regression": PLAIN,
+            "mode": "module-dir",
+        },
+        "FAILED",
         "TEST_COMMIT_CONFTEST_CHANGES_BASE",
     ),
     "two conftests in module-dir mode: the second one's files are compared too": (
-        {
+        {  # #916: an import side effect, since a fixture override is now refused statically
             "path": "tests/a/conftest.py",
-            "base_files": SHADOWED,
+            "base_files": SIDEFX_SUB,
             "regression": PLAIN,
             "mode": "module-dir",
-            "extra_files": {"tests/sub/conftest.py": SHADOW},
+            "extra_files": {"tests/sub/conftest.py": "import sidefx\n"},
         },
         "FAILED",
         "TEST_COMMIT_CONFTEST_CHANGES_BASE",
