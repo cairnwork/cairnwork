@@ -150,6 +150,10 @@ class _Reach:
 
     def _follow(self, start: frozenset[str]) -> str:
         """The digests of the statements that bind ``start``, and in turn, in file order."""
+        return "".join(self._dump(id(stmt), stmt) for stmt in self.statements(start))
+
+    def statements(self, start: frozenset[str]) -> list[ast.stmt]:
+        """The module-level statements that bind ``start``, and in turn, in file order."""
         seen: dict[int, ast.stmt] = {}
         names = list(start)
         while names:
@@ -157,8 +161,7 @@ class _Reach:
                 if id(stmt) not in seen:
                     seen[id(stmt)] = stmt
                     names += self._reads(stmt)
-        found = sorted(seen.items(), key=lambda item: (item[1].lineno, item[1].col_offset))
-        return "".join(self._dump(key, stmt) for key, stmt in found)
+        return sorted(seen.values(), key=lambda stmt: (stmt.lineno, stmt.col_offset))
 
     def _reads(self, stmt: ast.stmt) -> list[str]:
         """The names a statement's shell reads, walked once per statement (#979 r2)."""
@@ -180,7 +183,10 @@ def _for_every_test(stmt: ast.stmt) -> bool:
     class (its body runs at import), and any function but a test that has a decorator (it runs
     at import: a fixture, an ``autouse`` one under any alias), a default or annotation that
     calls something, or a name pytest calls itself (xunit setup or teardown, a ``pytest_*``
-    hook). Only a plain function whose body runs when called stays out, followed by name."""
+    hook). Only a plain function whose body runs when called stays out, followed by name. #994:
+    so does an import binding ``pytestmark``, which pytest reads by name and nothing else does."""
+    if isinstance(stmt, (ast.Import, ast.ImportFrom)):
+        return "pytestmark" in _binds(stmt)
     if isinstance(stmt, ast.ClassDef):
         return not stmt.name.startswith("Test") and not any(
             _base_name(base).endswith("TestCase") for base in stmt.bases

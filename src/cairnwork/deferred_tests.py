@@ -28,7 +28,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from cairnwork import survivor_argv
+from cairnwork import deferred_attached, survivor_argv
 from cairnwork.base_teeth import base_teeth
 from cairnwork.deferred_nodes import hidden_tests, local_names, test_functions
 from cairnwork.deferred_overlay import (  # noqa: F401  (re-exported: the one place importers look)
@@ -217,6 +217,7 @@ def new_tests(repo: Path, base: str, test_commit: str, paths: tuple[str, ...]) -
                 f"{path}: a test inside a module-level block or a nested test class changed;"
                 " Cairnwork cannot tell which tests it adds, so it cannot check they ran",
             )
+        deferred_attached.refuse_attached(path, tree, old)  # #994
         for node_id, body in after.items():
             if before.get(node_id) != body:
                 if "::" in node_id and node_id.split("::", 1)[0] in uncollected:
