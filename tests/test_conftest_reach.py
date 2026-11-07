@@ -213,9 +213,9 @@ def test_the_parts_of_a_joined_plugin_name_are_not_plugins():
 
 
 def test_a_long_joined_plugin_name_does_not_raise():
-    """#1018 r2: a chain of thousands of ``+`` is read without recursion."""
+    """#1018 r2: 2,000 ``+`` are read without recursion (3.11 cannot parse 3,000)."""
     for head in ("", "NAME + "):  # one joined string, and a chain with a name in front
-        text = "pytest_plugins = [" + head + " + ".join(['"x"'] + ['""'] * 5000) + "]\n"
+        text = "pytest_plugins = [" + head + " + ".join(['"x"'] + ['""'] * 2000) + "]\n"
         assert _reach(text, {"tests/x.py": ""}, ["tests/x.py"]) == "tests/x.py"
 
 
