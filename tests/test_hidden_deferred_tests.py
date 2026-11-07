@@ -111,6 +111,7 @@ SUBCLASS = "class Base:\n    def __init_subclass__(cls):\n        {}\nclass Test
 FX = "@pytest.fixture\ndef fx():\n    {}\n"
 METHOD_FX = "class TestX:\n    def test_y(self, fx):\n        pass\n"
 AUTO = "auto = pytest.fixture(autouse=True)\n@auto\ndef a():\n    {}\n"  # Gemini r2
+CASE = "import unittest\nclass Checks(unittest.TestCase):\n    def test_c(self):\n        {}\n"
 ALIAS = "@pytest.fixture(name='db')\ndef _db():\n    {}\n"  # jeter r2
 HELPED = "COND = on()\n@pytest.mark.skipif(COND, reason='r')\n" + FN
 REACH = {  # (on the base, in the test commit, the tests that change): #968 r3, Codex r2
@@ -190,6 +191,8 @@ REACH = {  # (on the base, in the test commit, the tests that change): #968 r3, 
                              "        globals()[n] = 1\n", FN + "class Setup:\n    pass\n", ALL),
     "default-at-import": ("def h(x=print('a')):\n    pass\n" + FN,
                           "def h(x=print('b')):\n    pass\n" + FN, ALL),
+    "testcase-class-changed": (CASE.format("pass") + FN, CASE.format("assert 1") + FN,
+                               {"Checks::test_c"}),  # control: a test class is not import code
     "plain-function-unread": (FN + "def h():\n    return 1\n", FN + "def h():\n    return 2\n",
                               set()),  # control: a body that runs only when called
     "module-constant": ("DATA = 1\n" + FN, "DATA = 2\n" + FN, ALL),  # counted whole: the cost
