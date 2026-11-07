@@ -71,9 +71,12 @@ def never_seen(repo: Path, test_commit: str) -> None:
     """Before the worker starts: the test commit must not be on this machine yet. A retry
     or a sibling task that already fetched it would have left it (and its logs) where the
     worker can read them, so such a task needs a fresh test commit."""
-    try:
-        run_git(repo, "cat-file", "-e", f"{test_commit}^{{commit}}")
-    except GitCommandError:
+    try:  # exit 1 is the only "no such object"; any other git failure refuses (#1011)
+        found = run_git(repo, "rev-parse", "--verify", "--quiet", f"{test_commit}^{{commit}}",
+                        ok_codes=(0, 1))  # fmt: skip
+    except GitCommandError as exc:
+        raise TestCommitRejected("TEST_COMMIT_EXPOSURE_UNKNOWN", "git could not answer") from exc
+    if not found.strip():
         return
     raise TestCommitRejected("TEST_COMMIT_ALREADY_EXPOSED", "push the tests as a new commit")
 

@@ -139,6 +139,7 @@ def run_git(
     index_file: Path | None = None,
     isolate_config: bool = False,
     timeout: float = GIT_TIMEOUT_SECONDS,
+    ok_codes: tuple[int, ...] = (0,),
 ) -> str:
     """Run git in repo; index_file points git at a private index (GIT_INDEX_FILE).
 
@@ -151,7 +152,7 @@ def run_git(
     timeout is in seconds; pass NETWORK_TIMEOUT_SECONDS for a fetch or push over a network.
     A failure carries a bounded, sanitised tail of git's stderr (see stderr_tail).
     """
-    return _exec(repo, args, index_file, isolate_config, timeout, text=True)
+    return _exec(repo, args, index_file, isolate_config, timeout, text=True, ok_codes=ok_codes)
 
 
 def run_git_bytes(
@@ -174,6 +175,7 @@ def _exec(
     *,
     text: bool,
     stdin: bytes | None = None,
+    ok_codes: tuple[int, ...] = (0,),
 ) -> Any:  # str when text, else bytes
     if not timeout or timeout <= 0:
         raise ValueError(f"timeout must be a positive number of seconds, got {timeout!r}")
@@ -199,6 +201,8 @@ def _exec(
             env=env,
         )
     except (OSError, subprocess.SubprocessError, UnicodeDecodeError) as exc:
+        if isinstance(exc, subprocess.CalledProcessError) and exc.returncode in ok_codes:
+            return exc.stdout  # an exit status the caller reads (#1011)
         tail = stderr_tail(getattr(exc, "stderr", None))
         raise GitCommandError(
             f"git {_subcommand(args)} failed" + (f": {tail}" if tail else "")
