@@ -22,6 +22,7 @@ pytestmark = [
 ]
 
 DENIED = "/private/etc/protocols"  # exists, and the base policy denies reading it
+HIT = ("file-read-data", DENIED)
 PLAIN = "def test_regression():\n    from calc import double\n    assert double(2) == 4\n"
 CAUGHT = (
     "def test_regression():\n"
@@ -65,20 +66,28 @@ def _verified(project, state, tests):
     raise AssertionError("unreachable")
 
 
-def test_a_plain_base_failure_records_evidence_without_that_path(project, state):
+def test_a_plain_base_failure_records_evidence_without_that_path(project, state, repo, tmp_path):
     (line,) = _verified(project, state, PLAIN)
     # CLEAN, or DENIED by the interpreter alone (an editable venv's src dir, step 1 data)
-    assert line.split(": ")[1] in ("CLEAN", "DENIED") and DENIED not in line, line
+    assert line.split(": ")[1] in ("CLEAN", "DENIED"), line
+    run = _run_evidence(repo, tmp_path, PLAIN.replace("test_regression", "test_d"))
+    assert HIT not in run.deny_denials, run.deny_evidence
 
 
-def test_a_denial_the_test_catches_is_recorded_and_changes_no_verdict(project, state):
+def test_a_denial_the_test_catches_is_recorded_and_changes_no_verdict(
+    project, state, repo, tmp_path
+):
     (line,) = _verified(project, state, CAUGHT)
-    assert ": DENIED: " in line and f"file-read-data {DENIED}" in line, line
+    assert ": DENIED: " in line, line
+    run = _run_evidence(repo, tmp_path, CAUGHT.replace("test_regression", "test_d"))
+    assert HIT in run.deny_denials, run.deny_evidence
 
 
-def test_a_child_process_denial_carries_the_run_tag(project, state):
+def test_a_child_process_denial_carries_the_run_tag(project, state, repo, tmp_path):
     (line,) = _verified(project, state, CHILD)
-    assert ": DENIED: " in line and f"file-read-data {DENIED}" in line, line
+    assert ": DENIED: " in line, line
+    run = _run_evidence(repo, tmp_path, CHILD.replace("test_regression", "test_d"))
+    assert HIT in run.deny_denials, run.deny_evidence
 
 
 # run_verifiers directly: the owner and the verifier account, a base run and any other run. The
@@ -112,6 +121,20 @@ def _run(repo, tmp_path, test, deny=True, account=None):
     return run
 
 
+def _run_evidence(repo, tmp_path, test):
+    """Retry an empty canary window once, and skip when host log volume prevents judgment."""
+    for again in ("", "# again\n"):
+        run = _run(repo, tmp_path, test + again)
+        if not again and EMPTY in run.deny_evidence:
+            continue
+        if "UNAVAILABLE: stream volume over the cap" in run.deny_evidence:
+            pytest.skip(f"the host flooded the deny log during the run: {run.deny_evidence}")
+        if EMPTY in run.deny_evidence:
+            raise AssertionError(f"canary line still missing after retry: {run.deny_evidence}")
+        return run
+    raise AssertionError("unreachable")
+
+
 def test_a_run_that_is_not_a_base_run_records_nothing(repo, tmp_path):
     assert (
         _run(repo, tmp_path, CAUGHT.replace("test_regression", "test_d"), deny=False).deny_evidence
@@ -130,17 +153,16 @@ def _peak(evidence: str) -> int:
 @pytest.mark.verifier_account
 def test_the_verifier_accounts_denial_is_recorded(repo, tmp_path):
     test = CAUGHT.replace("test_regression", "test_d")  # fails on ImportError: no calc here
-    hit = ("file-read-data", DENIED)
     run = _run(repo, tmp_path, test, account=VerifierAccount())
     over = "volume over the cap" in run.deny_evidence  # another process's burst
-    if over or (hit not in run.deny_denials and _peak(run.deny_evidence) > BURST_PEAK):
+    if over or (HIT not in run.deny_denials and _peak(run.deny_evidence) > BURST_PEAK):
         # #991: below the cap, a burst has also lost the run's own denial: once more, said aloud
         warnings.warn(f"#991 rerun, first run: {run.deny_evidence}", stacklevel=1)
         run = _run(repo, tmp_path, test + "# again\n", account=VerifierAccount())
     # #991: the summary names only the first MAX_LISTED denials, and the account's own start-up
     # denials can fill it first; the exact set holds every one the run made
     assert run.deny_evidence.startswith("DENIED: "), run.deny_evidence
-    assert hit in run.deny_denials, run.deny_evidence
+    assert HIT in run.deny_denials, run.deny_evidence
 
 
 def test_a_base_that_floods_the_log_itself_is_unavailable(repo, tmp_path):  # AC-burst-own
