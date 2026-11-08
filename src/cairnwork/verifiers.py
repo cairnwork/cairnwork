@@ -146,6 +146,8 @@ class VerifierRun:
     deny_denials: frozenset[tuple[str, str]] = frozenset()  # #991: its exact denials; not hashed
     setup_denied: dict[str, tuple[str, str, int]] = field(default_factory=dict)  # #962; unhashed
     data_refused: tuple[str, ...] = ()  # #850: declared data was executed: never a pass
+    not_run: tuple[str, ...] = ()  # #962 R0b: named targets or skipped collectors missing
+    renamed: tuple[str, ...] = ()  # #962 R0b: items changed after collection
 
 
 def run_verifiers(
@@ -390,5 +392,5 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
         import_errors=verdict.import_errors, submodule_errors=verdict.submodule_errors,
         deny_evidence=str(evidence) if evidence else "", data_refused=verdict.data_refused,
         deny_denials=evidence.denials if evidence else frozenset(),
-        setup_denied=verdict.setup_denied,
+        setup_denied=verdict.setup_denied, not_run=tuple(not_run), renamed=verdict.renamed,
     )  # fmt: skip

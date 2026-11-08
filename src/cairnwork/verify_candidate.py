@@ -30,13 +30,12 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from cairnwork import protection, runlock, verify_scope
+from cairnwork import candidate_env, protection, runlock, verify_scope
 from cairnwork.account_check import base_stage, precheck
 from cairnwork.blackbox import Declaration
 from cairnwork.confined import ATTEMPT_ENV, sweep_marked
 from cairnwork.deferred_store import USED_DIR, consume
 from cairnwork.deferred_tests import (
-    BASE_COMPARE_RULE,
     OVERLAY_RULE,
     BaseUncomparable,
     TestCommitRejected,
@@ -72,6 +71,8 @@ from cairnwork.workspace import (
     unless_interrupted,
 )
 from cairnwork_protocol.ids import ID_RULE, core_ids
+
+_judge_for_verify = partial(judge_candidate, control=True)
 
 
 def _require_core_ids(verifiers: tuple[tuple[str, tuple[str, ...]], ...]) -> None:
@@ -136,7 +137,7 @@ def verify_candidate(
                 result.reason, status = str(exc), "REFUSED"
             except BaseUncomparable as exc:  # before Core: nothing notarised, nothing to sign
                 result.reason, status = f"UNCOMPARABLE: {exc}", "UNCOMPARABLE"
-                found, rule = exc.comparison, BASE_COMPARE_RULE
+                found, rule = exc.comparison, candidate_env.uncomparable_rule(exc.comparison.code)
                 uncomparable = {"code": found.code, "detail": found.detail, "rule": rule}
     judged = result.candidate_commit or candidate
     subject = binding["head"] if binding else judged  # a bound row names the head (#229)
@@ -311,9 +312,8 @@ def _judge_in(intake, task, specs, candidate, notary, result, ctx, *, source) ->
         digest = request_digest(task.request() | {"candidate": candidate})
         if binding:  # what a receiver can recompute, unlike the scratch paths in the request
             digest = binding_hash(binding)
-        judge_candidate(
-            task, specs, digest, notary, result, test_files, ctx, lambda _: None, plan, binding, env
-        )
+        _judge_for_verify(task, specs, digest, notary, result, test_files, ctx, lambda _: None,
+                          plan, binding, env)  # fmt: skip
         return binding
 
 

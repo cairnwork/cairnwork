@@ -58,7 +58,7 @@ def _import_error(node, call, report, _real=os.path.realpath, _rel=os.path.relpa
     return None
 
 
-def _denied_exc(info, _sub=issubclass, _type=type, _base=BaseException,
+def _denied_exc(info, explicit=False, _sub=issubclass, _type=type, _base=BaseException,
                 _errno=OSError.errno.__get__, _file=OSError.filename.__get__,
                 _cause=BaseException.__cause__.__get__, _ctx=BaseException.__context__.__get__,
                 _quiet=BaseException.__suppress_context__.__get__):
@@ -66,7 +66,8 @@ def _denied_exc(info, _sub=issubclass, _type=type, _base=BaseException,
     # with a str filename in the cause and context chain (at most 64 links) of a phase's exception
     # info (None for a strict xpass); None when there is none. #1006 (Codex r1): read through
     # type() and the built-in descriptors, never the error's own attributes, so a test's OSError
-    # subclass (properties, __eq__, __bool__) runs no code here.
+    # subclass (properties, __eq__, __bool__) runs no code here. explicit (#1030 r1): follow only
+    # __cause__ (raise ... from), never the implicit __context__ of an error raised while handling.
     exc = getattr(info, "value", None)
     for _ in range(64):
         if not _sub(_type(exc), _base):
@@ -75,7 +76,7 @@ def _denied_exc(info, _sub=issubclass, _type=type, _base=BaseException,
             if _type(_file(exc)) is str:
                 return exc
         cause = _cause(exc)
-        exc = cause if cause is not None else (None if _quiet(exc) else _ctx(exc))
+        exc = cause if cause is not None else (None if explicit or _quiet(exc) else _ctx(exc))
     return None
 
 
@@ -94,9 +95,11 @@ def _denied_origin(info, root, _exc=_denied_exc, _real=os.path.realpath, _rel=os
     # the innermost frame of the denied error's own traceback whose absolute file lies in the
     # checkout (realpath only to find it), relative to it; "" when that frame is a lambda or a
     # comprehension (a <...> name), or none is in the checkout. Data for candidate_env.py, which
-    # reads the control tree's copy of that line; any error records nothing.
+    # reads the control tree's copy of that line; any error records nothing. #1030 r1: the error
+    # setup raised, or one it names with raise ... from; a denial a fixture caught (only the
+    # __context__ of a later error, e.g. candidate code in its except block) records nothing.
     try:
-        exc = _exc(info)
+        exc = _exc(info, True)
         if exc is None:
             return None
         top, tb, origin, line = _real(_str(root)), _tb(exc), "", 0

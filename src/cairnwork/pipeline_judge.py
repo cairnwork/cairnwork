@@ -15,7 +15,7 @@ from dataclasses import replace
 from functools import partial
 from pathlib import Path
 
-from cairnwork import protection
+from cairnwork import candidate_env, protection
 from cairnwork.account_check import unusable
 from cairnwork.account_prelude import AccountUnusableBeforeRun, after_candidate_ran, busy_once_more
 from cairnwork.blackbox_judge import judge_blackbox
@@ -119,15 +119,14 @@ def judge_candidate(
     p2p: P2PPlan | None = None,
     binding: dict | None = None,
     unless_passed: BaseUncomparable | None = None,
+    control: bool = False,
 ) -> None:
-    """Verify result.candidate_commit and have Core notarise it; sets result.verified,
-    result.reason and result.logs. Shared by the worker pipeline and ``verify_candidate``;
-    reach(phase) records progress. A binding (verify_candidate only, #229) binds the verdict to
-    the tree that ran and to the binding's head instead of to result.candidate_commit.
-    ``unless_passed`` (verify_candidate only, #259): a failed base check, raised before Core is
-    asked when a verifier did not pass; when they all passed the candidate's own evidence stands.
-    When every run and check passed but a new test of the test commit is in no verifier run's
-    record, Core is not asked either (DEFERRED_TESTS_NOT_RUN_IN_VERIFICATION, #697)."""
+    """Verify result.candidate_commit and have Core notarise it (sets verified, reason, logs);
+    shared by the worker pipeline and ``verify_candidate``; reach(phase) records progress. Verify
+    only: a ``binding`` (#229) binds the verdict to the tree that ran and the binding's head;
+    ``unless_passed`` (#259), a failed base check, is raised before Core if a verifier did not
+    pass; ``control`` (#962 2b): a failure of setup denials the unchanged tree reproduces is
+    UNCOMPARABLE. Core is not asked when all passed but a new test is in no run's record (#697)."""
     judged = result.candidate_commit
     task_id = result.task_id
     reach("VERIFYING")
@@ -164,6 +163,8 @@ def judge_candidate(
             result.reason = f"DELETION_OUTSIDE_TEST_COMMIT: {stray[:5]}"
             return
     ids, observations, gate_note = _contract(task, runs, checks, declared, binding, result)
+    if control and not missing:  # #1030 r1 nit: a missing deferred test is reported as is
+        candidate_env.decide(task, verified_by, observations, ctx, result)
     spec = AcceptanceSpec(
         task_id,
         digest,
