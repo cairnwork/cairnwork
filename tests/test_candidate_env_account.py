@@ -1,13 +1,19 @@
 """#962 step 2b end to end: verify as the isolated account, real sandbox, real control run.
-A protected fixture writes a fixed path the sandbox denies on every tree (#774's shape)."""
+A protected fixture writes a fixed path the sandbox denies on every tree (#774's shape). macOS only:
+the denial signal is Seatbelt's EPERM, as in test_candidate_env_e2e."""
 
 import json
+import sys
 
 import pytest
 from conftest import commit_change
 from verify_helpers import verify
 
-pytestmark = [pytest.mark.sandbox, pytest.mark.verifier_account]
+pytestmark = [
+    pytest.mark.sandbox,
+    pytest.mark.verifier_account,
+    pytest.mark.skipif(sys.platform != "darwin", reason="Seatbelt"),
+]
 DENIED = "/private/tmp/cw962-account-denied"
 PATH = (
     "import pathlib, sys\nsys.path.insert(0, str(pathlib.Path(__file__).parent.parent / 'src'))\n"
