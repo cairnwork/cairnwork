@@ -10,3 +10,14 @@ Callers that show a summary to a person pass `current_commit`, `task_id` and `at
 The strong `attested` state needs `verifier_runs` other than `signer_claim`. `attest verify --json`
 always reports `verifier_runs: signer_claim` today (`verify_binding._assurance`), so real
 attestation output always renders the weak text; this fails closed on purpose.
+
+`card.card()` (#898 follow-up, same expiry) splits one record into four fixed cells: tested,
+confirmed problem, not covered, undetermined. Each tested or confirmed line names the record
+field it comes from. Only a record `summarize` shows as verified fills "tested", and only with the
+version, Core status, protection level, verifier ids and deferred test paths, never a feature.
+"Not covered" always says the overall coverage is unknown (no requirement-to-test record, #699).
+A FAILED run is a confirmed problem only when it is for the current commit and its reason says
+nothing but that tests failed (every failed verifier's only cause is `pytest exit code 1`); even
+then it reads "not yet cleared of the environment". Every other cause (timeout, size cap,
+leftover processes, environment or setup error, a note, a check or gate) is undetermined, like
+UNCOMPARABLE, REFUSED, a pre-Core `error`, and attestation.
