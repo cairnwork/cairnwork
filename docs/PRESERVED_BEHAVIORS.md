@@ -157,7 +157,7 @@ Cairnwork verifier 自己的環境問題（sandbox 擋了 `/usr/bin/git`，xcrun
 
 同一段的信任邊界：guard 的 `collect_import_errors` 只是**候選版本也影響得到的提示**，不能單獨當證據。repo 程式能自己組出 traceback 最內層是測試檔的 `ImportError`，測試檔也能手動 `raise ImportError`，所以這份紀錄可以被做成「合格」。擋下錯誤候選的是候選版本的驗證：每個 target 都要 collect 且通過，偽造的錯誤在候選上一樣會丟出，結果不是 VERIFIED。兩個案例各有測試（`test_a_forged_import_error_*`）。
 
-S3（同一段，`collect_missing_submodules`）：檔案開頭 `import pkg.newmod`／`from pkg.newmod import x`，`pkg` 是 base 上從 repo 內 `__init__.py` 載入的一般套件、`newmod` 在 base 上不存在時，同樣整個檔案的新增或改動 target 算有牙齒，依賴與信任邊界都和上面相同（`tests/test_collect_submodule_teeth.py::test_a_forged_missing_submodule_never_makes_a_wrong_candidate_verified`）。接受的誤擋：id 由被測程式產生而正確修正改變了它，或 id 含每次執行會變的內容（執行目錄的絕對路徑、時間、亂數），都會被拒，原因列出這些 id。刻意留下的殘餘：(1) 缺的模組名字中性（不是 `test*`、`*_test`、`*tests`、`conftest*`、`fixture*`、`mock*`）、放在原始碼樹下時，一律當成修正要新增的程式；測試套件自己缺的 helper 若取了中性名字，會被當成修正的一部分（和函式內 import 目前的信任相同）。(2) 修正新增的是 C/Cython 擴充或建置產生的模組、驗證環境又不建置時，base 給了牙齒、候選卻因 import 失敗而 FAILED：這是把環境缺口誤算到候選頭上（錯誤拒絕，不會 VERIFIED）。`_version*`、`version`、`*_pb2*`、`*_ext`、`*_cy` 這些名字已排除，只能縮小、不能完全關閉這個缺口。
+S3（同一段，`collect_missing_submodules`）：檔案開頭 `import pkg.newmod`／`from pkg.newmod import x`，`pkg` 是 base 上從 repo 內 `__init__.py` 載入的一般套件、`newmod` 在 base 上不存在時，同樣整個檔案的新增或改動 target 算有牙齒，依賴與信任邊界都和上面相同（`tests/test_collect_submodule_teeth.py::test_a_forged_missing_submodule_never_makes_a_wrong_candidate_verified`）。刻意留下的殘餘：(1) 缺的模組名字中性（不是 `test*`、`*_test`、`*tests`、`conftest*`、`fixture*`、`mock*`）、放在原始碼樹下時，一律當成修正要新增的程式；測試套件自己缺的 helper 若取了中性名字，會被當成修正的一部分（和函式內 import 目前的信任相同）。(2) 修正新增的是 C/Cython 擴充或建置產生的模組、驗證環境又不建置時，base 給了牙齒、候選卻因 import 失敗而 FAILED：這是把環境缺口誤算到候選頭上（錯誤拒絕，不會 VERIFIED）。`_version*`、`version`、`*_pb2*`、`*_ext`、`*_cy` 這些名字已排除，只能縮小、不能完全關閉這個缺口。
 
 ## 延後測試：base 跑過的測試在候選上都要跑到（#1034）
 
