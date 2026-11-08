@@ -83,6 +83,86 @@ def test_a_caught_denial_is_recorded_only_when_named_by_raise_from(tmp_path, lin
     assert v.setup_denied == ({NODE: (DENIED, "tests/conftest.py", 7)} if recorded else {})
 
 
+def _origin_for(tmp_path, source, candidate_source=None):
+    import os
+    from types import SimpleNamespace
+
+    from cairnwork.report_guard_parts import PARTS_SOURCE
+
+    plugin: dict = {"os": os}
+    exec(PARTS_SOURCE, plugin)
+    namespace = {}
+    if candidate_source:
+        candidate = {}
+        exec(compile(candidate_source, str(tmp_path / "src/app.py"), "exec"), candidate)
+        namespace.update(candidate)
+    exec(compile(source, str(tmp_path / "tests/conftest.py"), "exec"), namespace)
+    try:
+        namespace["held"]()
+    except (OSError, RuntimeError) as error:
+        return plugin["_denied_origin"](SimpleNamespace(value=error), tmp_path)
+    raise AssertionError("fixture did not raise")
+
+
+def test_ac1_bare_reraise_from_candidate_has_no_setup_record(tmp_path):
+    fixture = (
+        f"def held():\n    try:\n        raise PermissionError(1, 'x', {DENIED!r})\n"
+        "    except OSError:\n        return fallback_dir()\n"
+    )
+    assert _origin_for(tmp_path, fixture, "def fallback_dir():\n    raise\n") is None
+
+
+def test_ac2_reraise_exception_from_candidate_has_no_setup_record(tmp_path):
+    fixture = (
+        f"def held():\n    try:\n        raise PermissionError(1, 'x', {DENIED!r})\n"
+        "    except OSError:\n        return fallback_dir()\n"
+    )
+    candidate = "import sys\ndef fallback_dir():\n    raise sys.exc_info()[1]\n"
+    assert _origin_for(tmp_path, fixture, candidate) is None
+
+
+def test_ac3_candidate_chain_from_denial_has_no_setup_record(tmp_path):
+    fixture = (
+        f"def held():\n    try:\n        raise PermissionError(1, 'x', {DENIED!r})\n"
+        "    except OSError:\n        return fallback_dir()\n"
+    )
+    candidate = (
+        "import sys\ndef fallback_dir():\n    raise RuntimeError('x') from sys.exc_info()[1]\n"
+    )
+    assert _origin_for(tmp_path, fixture, candidate) is None
+
+
+def test_ac3_a_wrapper_from_candidate_code_under_a_tests_directory_has_no_record(tmp_path):
+    """The wrapper's file is judged against the denial's origin file, not by its name: candidate
+    code in a package's own tests/ directory is not the fixture."""
+    import os
+    from types import SimpleNamespace
+
+    from cairnwork.report_guard_parts import PARTS_SOURCE
+
+    plugin: dict = {"os": os}
+    exec(PARTS_SOURCE, plugin)
+    lib: dict = {}
+    wrap = "import sys\ndef fallback_dir():\n    raise RuntimeError('x') from sys.exc_info()[1]\n"
+    exec(compile(wrap, str(tmp_path / "pkg/tests/util.py"), "exec"), lib)
+    held: dict = {"fallback_dir": lib["fallback_dir"]}
+    fixture = (
+        f"def held():\n    try:\n        {RAISE}\n    except OSError:\n        fallback_dir()\n"
+    )
+    exec(compile(fixture, str(tmp_path / "tests/conftest.py"), "exec"), held)
+    with pytest.raises(RuntimeError) as info:
+        held["held"]()
+    assert plugin["_denied_origin"](SimpleNamespace(value=info.value), tmp_path) is None
+
+
+def test_ac4_the_fixture_chaining_the_denial_itself_keeps_the_record(tmp_path):
+    fixture = (
+        f"def held():\n    try:\n        {RAISE}\n"
+        "    except OSError as denied:\n        raise RuntimeError('no cache') from denied\n"
+    )
+    assert _origin_for(tmp_path, fixture) == [DENIED, "tests/conftest.py", 3]
+
+
 def test_a_checkout_reached_through_a_link_gives_the_same_origin(tmp_path):
     (tmp_path / "real").mkdir()
     (tmp_path / "link").symlink_to(tmp_path / "real")

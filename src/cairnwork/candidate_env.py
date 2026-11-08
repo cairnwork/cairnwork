@@ -6,8 +6,9 @@ it can only stop notarization with UNCOMPARABLE, and every uncertain shape fails
 Accepted residual (AC13, N12): when a protected fixture calls candidate code before its denied
 write (an assert before the write, or a branch on the result), a wrong candidate can be
 UNCOMPARABLE: unintentionally when it behaves like the base there (SX), or on purpose by
-re-running the fixture's own code (SBa). It is never VERIFIED: Core is not asked, and nothing
-downstream reads UNCOMPARABLE as a pass.
+re-running the fixture's own code (SBa). AC4 also pins a fixture that asks candidate code and
+then chains the denial itself. It is never VERIFIED: Core is not asked, and nothing downstream
+reads UNCOMPARABLE as a pass.
 """
 
 from __future__ import annotations
