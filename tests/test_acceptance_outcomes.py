@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -334,12 +335,27 @@ def test_tail_truncation_refused_on_append_and_read(fx: dict[str, Any]) -> None:
     assert led.read_text() == before
 
 
-def test_refused_but_correct_denominator_is_closed_failed_or_refused(fx: dict[str, Any]) -> None:
+def test_refused_but_correct_denominator_is_closed_failed_or_refused(
+    fx: dict[str, Any], repo: Path
+) -> None:
     led = fx["led"]
     ids = []
+    # #809: a notary-lost line is outside every rate, so the two FAILED lines get real rows
+    (repo / "src" / "a.py").write_text("x = 3\n")
+    git(repo, "commit", "-qam", "base 2")
+    base2 = git(repo, "rev-parse", "HEAD")
+    cand2 = setup_cli_fixture(fx["db"].parent, repo, attempt_id="a2")
+    with sqlite3.connect(fx["db"]) as db:
+        db.execute("DROP TRIGGER IF EXISTS core_verifications_no_update")
+        db.execute("UPDATE core_verifications SET status = 'FAILED'")
+    failed = [(fx["base"], fx["cand"], "a1"), (base2, cand2, "a2")]
     for n in range(4):
-        # #809: refused before Core, so no notary row; a notary-lost call is outside every rate
-        record_call(led, {"status": "REFUSED", "reason": f"w{n}"}, inputs(fx))
+        if n % 2 == 0:  # refused before Core: no notary row
+            record_call(led, {"status": "REFUSED", "reason": f"w{n}"}, inputs(fx))
+            continue
+        base, cand, attempt = failed[n // 2]
+        res = {"status": "FAILED", "task_id": "task-1", "attempt_id": attempt, "reason": f"w{n}"}
+        record_call(led, res, inputs(fx, base=base, candidate=cand), fx["db"])
     ids = [json.loads(x)["call_id"] for x in led.read_text().splitlines()]
     add_event(led, ids[0], {"type": "observed", "start": "a", "end": "b"})
     add_event(led, ids[0], {"type": "closed", "checks_done": True})  # no_defect_found

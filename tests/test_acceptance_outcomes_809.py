@@ -28,7 +28,7 @@ def test_ac1_notary_row_allows_only_one_call(fx: dict[str, Any]) -> None:  # noq
 
 def test_ac3_verified_raw_status_must_verify_notary_verdict(
     fx: dict[str, Any],  # noqa: F811
-) -> None:  # noqa: F811
+) -> None:
     with sqlite3.connect(fx["db"]) as db:
         db.execute("DROP TRIGGER IF EXISTS core_verifications_no_update")
         db.execute("UPDATE core_verifications SET integrity = 'INVALID'")

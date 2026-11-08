@@ -48,7 +48,8 @@ def _version_block(calls: list[dict[str, Any]], events: dict[str, list[dict[str,
     # #809: lost bindings remain visible, but are not eligible for any measured rate.
     lost = [c for c in calls if c.get("notary_lost")]
     lost_ids = {v: [c["call_id"] for c in lost if c["verdict"] == v] for v in counts}
-    rate_ids = {v: [i for i in ids[v] if i not in set(lost_ids[v])] for v in counts}
+    lost_set = {c["call_id"] for c in lost}
+    rate_ids = {v: [i for i in ids[v] if i not in lost_set] for v in counts}
     block: dict[str, Any] = {
         "total": len(calls),
         "reached_core": sum(1 for c in calls if not c["no_notary_row"]),

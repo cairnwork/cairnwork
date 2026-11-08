@@ -51,7 +51,8 @@ def _notary_state(
 ):
     """Return "row", "no_notary_row" (pre-Core only) or "notary_lost"; OUTCOME_RECORD_MISMATCH when
     the notary disagrees: a row with another candidate, base or status, a Core result without its
-    row (AC1c), or any row at all behind a call labelled as refused before Core."""
+    row (AC1c), or any row at all behind a call labelled as refused before Core. A VERIFIED row
+    must also pass the notary verdict (``verify_record``), not only its raw status (#809)."""
     reached = _reached_core(verdict, result)
     if lost is not None:
         if not reached or db is not None:
