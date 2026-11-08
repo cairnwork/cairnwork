@@ -5,21 +5,30 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
+from attest.test_attest_cli import setup_cli_fixture
+from conftest import git
 from test_acceptance_outcomes import call_id, confirm, finding, fx, inputs, verified
 
 from experimental.acceptance_outcomes import add_event, build_report, record_call
 
 
-def _two_verified(fx: dict[str, Any]) -> list[str]:
-    for n in range(2):
-        record_call(fx["led"], verified(fx, reason=f"w{n}"), inputs(fx), fx["db"])
+def _two_verified(fx: dict[str, Any], repo: Path) -> list[str]:
+    record_call(fx["led"], verified(fx), inputs(fx), fx["db"])
+    # #809: one notary row backs one call, so the second call gets its own row (attempt a2)
+    (repo / "src" / "a.py").write_text("x = 3\n")  # so the fixture's change is a new commit
+    git(repo, "commit", "-qam", "base 2")
+    base2 = git(repo, "rev-parse", "HEAD")
+    cand2 = setup_cli_fixture(fx["db"].parent, repo, attempt_id="a2")
+    second = inputs(fx, base=base2, candidate=cand2)
+    record_call(fx["led"], verified(fx, attempt_id="a2"), second, fx["db"])
     return [json.loads(x)["call_id"] for x in fx["led"].read_text().splitlines()]
 
 
-def test_closed_before_observed_stays_unknown(fx: dict[str, Any]) -> None:
-    keep, late = _two_verified(fx)
+def test_closed_before_observed_stays_unknown(fx: dict[str, Any], repo: Path) -> None:
+    keep, late = _two_verified(fx, repo)
     add_event(fx["led"], keep, {"type": "observed", "start": "a", "end": "b"})
     add_event(fx["led"], keep, {"type": "closed", "checks_done": True})
     before = build_report(fx["led"])["v1"]["VERIFIED"]

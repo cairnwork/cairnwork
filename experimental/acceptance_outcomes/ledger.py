@@ -13,7 +13,7 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
-from cairnwork_attest.record import AttestError, read_record
+from cairnwork_attest.record import AttestError, read_record, verify_record
 from experimental.acceptance_outcomes.store import OutcomesError, append_checked
 
 VERDICTS = ("VERIFIED", "FAILED", "REFUSED", "UNCOMPARABLE")
@@ -51,7 +51,8 @@ def _notary_state(
 ):
     """Return "row", "no_notary_row" (pre-Core only) or "notary_lost"; OUTCOME_RECORD_MISMATCH when
     the notary disagrees: a row with another candidate, base or status, a Core result without its
-    row (AC1c), or any row at all behind a call labelled as refused before Core."""
+    row (AC1c), or any row at all behind a call labelled as refused before Core. A VERIFIED row
+    must also pass the notary verdict (``verify_record``), not only its raw status (#809)."""
     reached = _reached_core(verdict, result)
     if lost is not None:
         if not reached or db is not None:
@@ -72,6 +73,11 @@ def _notary_state(
         raise OutcomesError("OUTCOME_RECORD_MISMATCH", "candidate or base differs from notary row")
     if rec.status != verdict:
         raise OutcomesError("OUTCOME_RECORD_MISMATCH", f"verdict {verdict} but row {rec.status}")
+    if verdict == "VERIFIED":
+        try:
+            verify_record(db, str(task), str(attempt), expected_candidate=call["candidate"])
+        except AttestError as exc:
+            raise OutcomesError("OUTCOME_RECORD_MISMATCH", f"notary verdict: {exc.code}") from exc
     return "row"
 
 
@@ -124,6 +130,16 @@ def record_call(
     def build(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
         if any(r.get("type") == "call" and r["call_id"] == call["call_id"] for r in rows):
             return None
+        # #809: one persisted notary-row binding can back only one call.
+        if state == "row" and any(
+            r.get("type") == "call"
+            and r.get("task_id") == call["task_id"]
+            and r.get("attempt_id") == call["attempt_id"]
+            and not r.get("no_notary_row")
+            and not r.get("notary_lost")
+            for r in rows
+        ):
+            raise OutcomesError("OUTCOME_DUPLICATE_ROW", "task and attempt already have a call")
         return {"type": "call", **call}
 
     return append_checked(path, build)
