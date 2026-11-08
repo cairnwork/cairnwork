@@ -88,30 +88,62 @@ def _denied_path(info, _exc=_denied_exc, _file=OSError.filename.__get__):
     return path if type(path) is str else None
 
 
-def _denied_origin(info, root, _exc=_denied_exc, _real=os.path.realpath, _rel=os.path.relpath,
-                   _abs=os.path.isabs, _str=str, _file=OSError.filename.__get__,
-                   _tb=BaseException.__traceback__.__get__):
-    # #962 step 2a: [denied path, origin, line] of a setup-phase denial, or None. The origin is
-    # the innermost frame of the denied error's own traceback whose absolute file lies in the
-    # checkout (realpath only to find it), relative to it; "" when that frame is a lambda or a
-    # comprehension (a <...> name), or none is in the checkout. Data for candidate_env.py, which
-    # reads the control tree's copy of that line; any error records nothing. #1030 r1: the error
-    # setup raised, or one it names with raise ... from; a denial a fixture caught (only the
-    # __context__ of a later error, e.g. candidate code in its except block) records nothing.
+def _checkout_rel(code, top, _real=os.path.realpath, _rel=os.path.relpath, _abs=os.path.isabs):
+    # #962 step 2a: the frame's file relative to the checkout top, or None when it is not an
+    # absolute file inside it (realpath only to find it).
+    if not _abs(code.co_filename) or code.co_filename.startswith("<"):
+        return None
+    rel = _rel(_real(code.co_filename), top)
+    out = rel in (".", "..") or rel.startswith(("../", "..\\\\"))
+    return None if out or _abs(rel) else rel
+
+
+def _checkout_frame(tb, top, _in=_checkout_rel):
+    # (origin, line) of a traceback's innermost checkout frame; "" when that frame is a lambda or
+    # a comprehension (a <...> name), or none is in the checkout.
+    origin, line = "", 0
+    while tb is not None:
+        code = tb.tb_frame.f_code
+        if _in(code, top) is not None:
+            origin = "" if code.co_name.startswith("<") else _in(code, top)
+            line = tb.tb_lineno or 0
+        tb = tb.tb_next
+    return origin, line
+
+
+def _denied_origin(info, root, _exc=_denied_exc, _real=os.path.realpath, _str=str,
+                   _file=OSError.filename.__get__, _tb=BaseException.__traceback__.__get__,
+                   _cause=BaseException.__cause__.__get__, _sub=issubclass, _type=type,
+                   _base=BaseException, _frame=_checkout_frame, _in=_checkout_rel):
+    # #962 step 2a: [denied path, origin, line] of a setup-phase denial, or None; the origin is
+    # the denied error's own innermost checkout frame (_checkout_frame, realpath only to find
+    # it). Data for candidate_env.py, which reads the control tree's copy of that line; any error
+    # records nothing. #1030 r1: the error setup raised, or one it names with raise ... from; a
+    # denial a fixture caught (only the __context__ of a later error) records nothing. #1031: nor
+    # one whose traceback holds a checkout frame twice (caught, then re-raised from code the
+    # handler called; pytest's and pluggy's own re-raises are outside the checkout), nor one
+    # wrapped (raise ... from) by an error raised outside the origin's file.
     try:
         exc = _exc(info, True)
         if exc is None:
             return None
-        top, tb, origin, line = _real(_str(root)), _tb(exc), "", 0
+        top, seen, tb = _real(_str(root)), set(), _tb(exc)
         while tb is not None:
-            code = tb.tb_frame.f_code
-            if _abs(code.co_filename) and not code.co_filename.startswith("<"):
-                rel = _rel(_real(code.co_filename), top)
-                out = rel in (".", "..") or rel.startswith(("../", "..\\\\"))
-                if not out and not _abs(rel):
-                    origin = "" if code.co_name.startswith("<") else rel
-                    line = tb.tb_lineno or 0
+            if _in(tb.tb_frame.f_code, top) is not None:
+                if id(tb.tb_frame) in seen:
+                    return None
+                seen.add(id(tb.tb_frame))
             tb = tb.tb_next
+        origin, line = _frame(_tb(exc), top)
+        outer = getattr(info, "value", None)
+        for _ in range(64):
+            if outer is exc:
+                break
+            if not _sub(_type(outer), _base) or _frame(_tb(outer), top)[0] != origin:
+                return None
+            outer = _cause(outer)
+        else:
+            return None
         path = _file(exc)
         return [path, origin, line] if type(path) is str else None
     except BaseException:

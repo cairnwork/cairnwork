@@ -234,6 +234,12 @@ def test_ac7_nonverifier_failed_observation_keeps_failed(control_tree):
     assert not _classify(_task(repo, commit), other=(SimpleNamespace(passed=False),))
 
 
+def test_ac6_a_matched_denial_with_deferred_tests_not_run_stays_failed(control_tree):
+    repo, commit = control_tree
+    candidate = _run(not_run=("tests/test_a.py",))
+    assert not _classify(_task(repo, commit), candidate=(candidate,))
+
+
 def test_r3_control_error_preserves_step_one_failed_reason(monkeypatch, control_tree):
     repo, commit = control_tree
     candidate = (_run(),)

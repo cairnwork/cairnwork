@@ -136,3 +136,62 @@ def test_ac5_seatbelt_profile_is_present_and_setup_residual_stays_uncomparable(t
     task, candidate, control = _runs(repo, tmp_path / "runs", FIXTURE, "def write(): return 0\n")
     assert candidate.notes == control.notes
     assert classify((candidate,), (control,), (candidate.observation,), task)
+
+
+@pytest.mark.parametrize(
+    "candidate_source",
+    [
+        "def fallback_dir():\n    changed = True\n    raise\n",
+        "import sys\ndef fallback_dir():\n    raise sys.exc_info()[1]\n",
+        "import sys\ndef fallback_dir():\n    raise RuntimeError('x') from sys.exc_info()[1]\n",
+    ],
+    ids=["bare-reraise", "raise-current-exception", "candidate-explicit-chain"],
+)
+def test_ac1_ac2_ac3_candidate_cannot_rethrow_setup_denial(tmp_path, repo, candidate_source):
+    test_source = (
+        "import pathlib, sys\n"
+        "sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / 'src'))\n"
+        "import pytest, app\n\n\n@pytest.fixture\ndef held():\n    try:\n"
+        f"        open({DENIED!r}, 'w')\n"
+        "    except OSError:\n        return app.fallback_dir()\n\n\n"
+        "def test_a(held):\n    assert held is not None\n"
+    )
+    base_source = "def fallback_dir():\n    raise\n"
+    task, candidate, control = _runs(
+        repo, tmp_path / "runs", test_source, candidate_source, base_source=base_source
+    )
+    assert candidate.setup_denied == {}
+    assert not classify((candidate,), (control,), (candidate.observation,), task)
+
+
+def test_ac4_fixture_chains_denial_after_candidate_query_stays_uncomparable(tmp_path, repo):
+    test_source = (
+        "import pathlib, sys\n"
+        "sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / 'src'))\n"
+        "import pytest, app\n\n\n@pytest.fixture\ndef held():\n    try:\n"
+        f"        open({DENIED!r}, 'w')\n"
+        "    except OSError as denied:\n"
+        "        if not app.has_fallback():\n"
+        "            raise RuntimeError('no cache') from denied\n"
+        "        return app.fallback_dir()\n\n\n"
+        "def test_a(held):\n    assert held is not None\n"
+    )
+    base_source = "def has_fallback(): return False\ndef fallback_dir(): return 'cache'\n"
+    wrong = "def has_fallback(): return 0\ndef fallback_dir(): return 'cache'\n"
+    task, candidate, control = _runs(
+        repo, tmp_path / "runs", test_source, wrong, base_source=base_source
+    )
+    assert candidate.setup_denied and candidate.setup_denied == control.setup_denied
+    assert classify((candidate,), (control,), (candidate.observation,), task)
+
+
+def test_ac5_fixture_bare_reraise_in_same_frame_keeps_setup_record(tmp_path, repo):
+    source = (
+        "import pytest\n\n\n@pytest.fixture\ndef held():\n    try:\n"
+        f"        open({DENIED!r}, 'w')\n"
+        "    except OSError:\n        raise\n\n\n"
+        "def test_a(held):\n    pass\n"
+    )
+    task, candidate, control = _runs(repo, tmp_path / "runs", source, "def write(): return 2\n")
+    assert candidate.setup_denied == control.setup_denied
+    assert classify((candidate,), (control,), (candidate.observation,), task)
