@@ -29,11 +29,18 @@ non-empty `core_status`) needs its notary row: without one `record` refuses it w
 `OUTCOME_RECORD_MISMATCH`. `no_notary_row` is only for results before Core (a pre-Core error, or
 REFUSED/UNCOMPARABLE with an empty `core_status`). If the notary database is gone, pass
 `--notary-lost REASON` (and no `--notary-db`): the line is marked `notary_lost` with the reason,
-counts as reached Core, and the report prints "unchecked binding N" next to each rate that uses
-Core lines. The flag is refused for a pre-Core result or together with a database. Lines written
+counts as reached Core, and the report prints "unchecked binding N" next to each rate. Such lines
+are outside every rate (numerator, denominator and coverage) and are listed per verdict under
+`cases notary_lost` (#809). The flag is refused for a pre-Core result or together with a database. Lines written
 before this change keep their format and still read; to fix an old ledger start a new file.
 `core_status` is taken as given from the result JSON; without `--notary-db` there is no way to
 check whether it was altered.
+
+One notary row backs one call (#809): a second call for the same task and attempt that is bound
+to a row is refused with `OUTCOME_DUPLICATE_ROW`, even with another reason or `call_ref`. A
+VERIFIED line is bound only when the notary verdict itself is verified for the candidate
+(`verify_record`); a row whose raw status says VERIFIED but whose verdict does not is refused
+with `OUTCOME_RECORD_MISMATCH`.
 
 When present, result candidate, binding base and test commit, and repo identities are checked against
 the CLI inputs before recording, including with `--notary-lost`.

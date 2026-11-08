@@ -45,16 +45,25 @@ def _version_block(calls: list[dict[str, Any]], events: dict[str, list[dict[str,
         by_call[c["call_id"]] = status_of(events.get(c["call_id"], []))
         status[by_call[c["call_id"]]].append(c["call_id"])
     ids = {v: [c["call_id"] for c in calls if c["verdict"] == v] for v in counts}
+    # #809: lost bindings remain visible, but are not eligible for any measured rate.
+    lost = [c for c in calls if c.get("notary_lost")]
+    lost_ids = {v: [c["call_id"] for c in lost if c["verdict"] == v] for v in counts}
+    rate_ids = {v: [i for i in ids[v] if i not in set(lost_ids[v])] for v in counts}
     block: dict[str, Any] = {
         "total": len(calls),
         "reached_core": sum(1 for c in calls if not c["no_notary_row"]),
         "unchecked_binding": sum(1 for c in calls if c.get("notary_lost")),
         "counts": counts,
-        "cases": {"all": [c["call_id"] for c in calls], **ids, **status},
+        "cases": {
+            "all": [c["call_id"] for c in calls],
+            **ids,
+            **status,
+            **({"notary_lost": lost_ids} if lost else {}),
+        },
     }
-    block["VERIFIED"] = _verified(ids["VERIFIED"], by_call, events)
-    block["refused_but_correct"] = _refused(ids["FAILED"] + ids["REFUSED"], by_call)
-    block["pre_core_refused_but_correct"] = _refused(ids[PRE_CORE], by_call)
+    block["VERIFIED"] = _verified(rate_ids["VERIFIED"], by_call, events)
+    block["refused_but_correct"] = _refused(rate_ids["FAILED"] + rate_ids["REFUSED"], by_call)
+    block["pre_core_refused_but_correct"] = _refused(rate_ids[PRE_CORE], by_call)
     return block
 
 
@@ -109,15 +118,21 @@ def format_report(report: dict[str, Any], *, cases: bool = False) -> str:
         kinds = ", ".join(f"{k} {n}" for k, n in v["overturned_by_kind"].items()) or "none"
         out.append(f"  VERIFIED: tracked {v['tracked']}, closed {v['closed']}, "
                    f"unknown {v['unknown']}, overturned {v['overturned']} ({kinds})")  # fmt: skip
-        out.append(f"  VERIFIED overturn rate: {v['text']}, coverage {v['coverage']}{unchecked}")
+        outside = ", notary-lost outside rate" if b["unchecked_binding"] else ""
+        out.append(f"  VERIFIED overturn rate: {v['text']}, coverage {v['coverage']}"
+                   f"{unchecked}{outside}")  # fmt: skip
         r = b["refused_but_correct"]
         out.append(
             f"  FAILED/REFUSED refused_but_correct: {r['text']}, "
-            f"coverage {r['coverage']}{unchecked}"
+            f"coverage {r['coverage']}{unchecked}{outside}"
         )
         p = b["pre_core_refused_but_correct"]
         out.append(f"  PRE_CORE refused_but_correct: {p['text']}, coverage {p['coverage']}")
         if cases:
             for name, ids in b["cases"].items():
-                out.append(f"  cases {name}: {' '.join(ids) or '-'}")
+                if isinstance(ids, dict):
+                    for verdict, case_ids in ids.items():
+                        out.append(f"  cases {name} {verdict}: {' '.join(case_ids) or '-'}")
+                else:
+                    out.append(f"  cases {name}: {' '.join(ids) or '-'}")
     return "\n".join(out)
