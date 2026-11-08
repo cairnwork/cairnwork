@@ -31,7 +31,10 @@ class TestFiles(tuple):  # noqa: SLOT001  (a tuple of the added or changed paths
     base_nodes: dict[str, tuple[str, ...]] = {}
 
     def __new__(
-        cls, paths: Iterable[str] = (), deleted: Iterable[str] = (), base_nodes=None
+        cls,
+        paths: Iterable[str] = (),
+        deleted: Iterable[str] = (),
+        base_nodes: dict[str, tuple[str, ...]] | None = None,
     ) -> TestFiles:
         self = super().__new__(cls, paths)
         self.deleted = tuple(deleted)

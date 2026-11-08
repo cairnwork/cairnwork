@@ -39,6 +39,7 @@ from cairnwork.deferred_tests import (
     untargeted,
 )
 from cairnwork.p2p import P2PPlan, run_plan
+from cairnwork.p2p_nodes import clean
 from cairnwork.pytest_config import test_file_rule
 from cairnwork.reasons import explain, verdict_reason
 from cairnwork.verifier_account import VerifierAccountError
@@ -209,7 +210,7 @@ def _not_run_refusal(missing, test_files, verified_by, judged) -> str:
     gone = _base_nodes_gone(test_files, verified_by)
     if not gone:
         return ""
-    shown = ", ".join(gone[:10]) + (f", +{len(gone) - 10} more" if len(gone) > 10 else "")
+    shown = ", ".join(map(clean, gone[:10])) + (f", +{len(gone) - 10} more" if gone[10:] else "")
     head = f"NAMED_TESTS_NOT_RUN: {len(gone)} test(s) the base run ran did not run on the candidate"
     return f"{head}: {shown}"
 

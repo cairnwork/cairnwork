@@ -128,6 +128,34 @@ def test_skipping_instead_of_dropping_is_not_verified(project, state):
     assert out["verified"] is False, out
 
 
+IMPORT_NEW = (  # #796: a top-level import of the name the fix adds; the base run cannot collect it
+    "import pytest\nfrom calc import mul\n"
+    "@pytest.mark.parametrize('a', [1, 2])\ndef test_new(a):\n    assert mul(a, 3) == 3 * a\n"
+)
+
+
+@sandbox
+def test_a_correct_fix_for_a_796_parametrised_test_is_verified(project, state):
+    """The base ids are taken before as_failed, which adds the function-level id of a #796 test;
+    the candidate runs only its cases, so taking them after as_failed refuses a correct fix."""
+    base, test_commit = _setup(project, state, IMPORT_NEW)
+    fix = CALC_FIX + "def mul(a, b):\n    return a * b\n"
+    out = _verify(project, state, base, test_commit, {"src/calc.py": fix})
+    assert out["verified"] is True, out
+
+
+def test_the_reason_is_printable_and_bounded():
+    from cairnwork.pipeline_judge import _not_run_refusal
+
+    odd = "tests/t.py::test_x[" + "\x1b[31m" + "a" * 300 + "]"
+    files = Files(("tests/t.py",), base_nodes={"v": (odd,)})
+    passed = SimpleNamespace(passed=True)
+    run = SimpleNamespace(spec=SimpleNamespace(verifier_id="v"), outcomes={}, observation=passed)
+    reason = _not_run_refusal([], files, [run], (run,))
+    assert reason.startswith("NAMED_TESTS_NOT_RUN: 1 test(s)")
+    assert "\x1b" not in reason and len(reason) < 300
+
+
 def _run(verifier_id, outcomes):
     return SimpleNamespace(spec=SimpleNamespace(verifier_id=verifier_id), outcomes=outcomes)
 
