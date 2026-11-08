@@ -71,6 +71,7 @@ def test_a_plain_base_failure_records_evidence_without_that_path(project, state,
     # CLEAN, or DENIED by the interpreter alone (an editable venv's src dir, step 1 data)
     assert line.split(": ")[1] in ("CLEAN", "DENIED"), line
     run = _run_evidence(repo, tmp_path, PLAIN.replace("test_regression", "test_d"))
+    assert run.deny_evidence.startswith(("CLEAN", "DENIED")), run.deny_evidence  # judged
     assert HIT not in run.deny_denials, run.deny_evidence
 
 
