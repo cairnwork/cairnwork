@@ -117,6 +117,7 @@ def test_dropping_one_case_of_a_new_parametrised_test_is_not_verified(project, s
 
 @sandbox
 def test_skipping_instead_of_dropping_is_not_verified(project, state):
+    """A pin, not a discriminator: a skip is not a pass on main either (report_guard, #44)."""
     base, test_commit = _setup(project, state, NEW)
     wrong = CALC_FIX.replace("a - b", "a + b")
     skip = (
