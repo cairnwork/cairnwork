@@ -70,6 +70,22 @@ def test_ac1b_call_phase_denial_is_failed(tmp_path, repo):
     assert not classify((candidate,), (control,), (candidate.observation,), task)
 
 
+HANDLED = (  # #1030 r1 (Claude): the fixture tolerates the denial, then candidate code fails
+    "import pytest\nimport app\n\n\n@pytest.fixture\ndef held():\n    try:\n"
+    f"        open({DENIED!r}, 'w')\n    except OSError:\n        return app.write()\n\n\n"
+    "def test_a(held):\n    assert held == 2\n"
+)
+
+
+def test_a_handled_denial_then_a_failing_candidate_is_failed(tmp_path, repo):
+    """The denial is only the context of the candidate's error: no setup record, so FAILED."""
+    wrong = "def write():\n    raise ValueError('still broken')\n"
+    task, candidate, control = _runs(repo, tmp_path / "runs", HANDLED, wrong)
+    assert not candidate.observation.passed and candidate.fail_kind
+    assert candidate.setup_denied == {}
+    assert not classify((candidate,), (control,), (candidate.observation,), task)
+
+
 def test_ac2_allowed_writer_stays_failed_and_its_fixed_pair_passes(tmp_path, repo, state):
     write = f"def write():\n    open({DENIED!r}, 'w')\n"
     task, wrong, control = _runs(

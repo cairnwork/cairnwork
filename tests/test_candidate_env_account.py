@@ -55,3 +55,21 @@ def test_ac2_the_write_made_by_an_allowed_file_stays_failed(account_state, repo)
 def test_ac11_owner_mode_has_no_control_run(state, repo):
     result = _verify(state, repo, LITERAL)
     assert result["status"] == "FAILED", result
+
+
+HANDLED = (  # #1030 r1 (Claude): the fixture tolerates the denial, then candidate code fails
+    "import pytest\nimport app\n\n\n@pytest.fixture\ndef held():\n    try:\n"
+    f"        open({DENIED!r}, 'w')\n    except OSError:\n        return app.work()\n"
+)
+
+
+def test_a_handled_denial_then_a_failing_candidate_is_failed(account_state, repo):
+    broken = "def work():\n    raise ValueError('{}')\n"
+    test = "def test_a(held):\n    assert held == 2\n"
+    files = {"src/app.py": broken.format(1), "tests/conftest.py": PATH + HANDLED}
+    files["tests/test_a.py"] = test
+    base = commit_change(repo, files)
+    wrong = commit_change(repo, {"src/app.py": broken.format(2)})
+    result = verify(account_state, repo, base, wrong, allowed=("src/app.py",), tests=RUN)[1]
+    assert result["status"] == "FAILED", result
+    assert result["uncomparable"] is None

@@ -211,6 +211,19 @@ def test_r1_missing_node_or_different_path_fails(control_tree):
     assert not _classify(_task(repo, commit), control=(other_path,))
 
 
+def test_r1_candidate_path_must_equal_the_control_literal(control_tree):
+    """#1030 r1 (M4): the control line writes the literal, the candidate's denial is elsewhere."""
+    repo, commit = control_tree
+    assert not _classify(_task(repo, commit), candidate=(_run(path="/private/tmp/other"),))
+
+
+def test_r2_an_allowed_file_under_a_test_root_is_not_a_test_origin(control_tree):
+    """#1030 r1 (M2): tests/conftest.py writes the literal on the control, but it is allowed."""
+    repo, commit = control_tree
+    allowed = ("src/app.py", "tests/conftest.py")
+    assert not _classify(_task(repo, commit, allowed=allowed))
+
+
 def test_r2_candidate_origin_must_equal_control_origin(control_tree):
     repo, commit = control_tree
     assert not _classify(_task(repo, commit), candidate=(_run(origin="tests/helper.py"),))

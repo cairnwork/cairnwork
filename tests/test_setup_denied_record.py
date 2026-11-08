@@ -64,6 +64,25 @@ def test_another_setup_error_records_nothing(tmp_path):
     assert v.fail_kind == {NODE: "setup"} and v.setup_denied == {}
 
 
+HANDLED = (  # #1030 r1 (Claude): the fixture catches the denial, then other code fails setup
+    "import pytest\n\n\n@pytest.fixture\ndef held():\n    try:\n        "
+    + RAISE
+    + "\n    except OSError as denied:\n        raise ValueError('fallback failed'){}\n"
+)
+
+
+@pytest.mark.parametrize(
+    "link,recorded", [("", False), (" from denied", True)], ids=["ctx", "cause"]
+)
+def test_a_caught_denial_is_recorded_only_when_named_by_raise_from(tmp_path, link, recorded):
+    """Only the implicit context of a later error (code run in the except block): no record.
+    The fixture naming it with raise ... from keeps the record at the denied write's line."""
+    files = {"tests/conftest.py": HANDLED.format(link), "tests/test_a.py": TEST}
+    rc, v = guard_run(tmp_path, files, "tests")
+    assert rc == 1 and v.fail_kind == {NODE: "setup"}
+    assert v.setup_denied == ({NODE: (DENIED, "tests/conftest.py", 7)} if recorded else {})
+
+
 def test_a_checkout_reached_through_a_link_gives_the_same_origin(tmp_path):
     (tmp_path / "real").mkdir()
     (tmp_path / "link").symlink_to(tmp_path / "real")

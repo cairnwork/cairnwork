@@ -163,7 +163,7 @@ def judge_candidate(
             result.reason = f"DELETION_OUTSIDE_TEST_COMMIT: {stray[:5]}"
             return
     ids, observations, gate_note = _contract(task, runs, checks, declared, binding, result)
-    if control:
+    if control and not missing:  # #1030 r1 nit: a missing deferred test is reported as is
         candidate_env.decide(task, verified_by, observations, ctx, result)
     spec = AcceptanceSpec(
         task_id,
