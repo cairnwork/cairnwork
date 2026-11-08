@@ -87,6 +87,8 @@ def tests_with_teeth(task, specs, result, ctx: VerifyContext) -> tuple[str, ...]
         s if s.collect_only else replace(s, continue_on_collect_errors=True) for s in specs
     )
     runs = run_verifiers(ctx, task.test_commit, base, f"{result.attempt_id}-b", deny=True)
+    # #1034: what the base run really ran, before as_failed adds function-level ids for a #796 file
+    nodes = {r.spec.verifier_id: tuple(r.outcomes) for r in runs if not r.spec.collect_only}
 
     def is_test(path: str) -> bool:  # asked only when a record qualifies: a base test file, or
         # any file under a test root (a test package's own helper is not code the fix adds)
@@ -104,7 +106,7 @@ def tests_with_teeth(task, specs, result, ctx: VerifyContext) -> tuple[str, ...]
         raise BaseUncomparable(comparison)
     if comparison.kind != "TEETH":
         raise TestCommitRejected(comparison.code, comparison.detail)
-    return TestFiles(paths, deleted)
+    return TestFiles(paths, deleted, nodes)
 
 
 def judge_candidate(
@@ -150,12 +152,9 @@ def judge_candidate(
     result.logs = [*result.logs, *(str(run.log_path) for run in runs), *bb_logs]
     if unless_passed is not None and not all(run.observation.passed for run in runs):
         raise unless_passed
-    if (missing := _not_run_here(task, verified_by, test_files)) and all(
-        o.passed for o in (*(run.observation for run in runs), *(c.observation for c in checks))
-    ):  # #697: a whole-file target passes on another test of that file; Core is not asked
-        result.reason = (
-            f"DEFERRED_TESTS_NOT_RUN_IN_VERIFICATION: no verifier collected or ran {missing}"
-        )
+    missing = _not_run_here(task, verified_by, test_files)
+    if refusal := _not_run_refusal(missing, test_files, verified_by, (*runs, *checks)):
+        result.reason = refusal  # #697, #1034: Core is not asked
         return
     # Core's ALLOW is whole-contract; only the test commit's files can be deleted (producer check)
     if deleted_of(test_files) and not task.allow_deletions:
@@ -195,6 +194,36 @@ def _not_run_here(task, runs, test_files) -> list[str]:
     if not (task.test_commit and test_files):
         return []
     return not_run(runs, new_tests(task.repo, task.base_commit, task.test_commit, test_files))
+
+
+def _not_run_refusal(missing, test_files, verified_by, judged) -> str:
+    """When every run and check in ``judged`` passed, the refusal for a test no run collected:
+    a new test missing from every verifier's record (#697: a whole-file target passes on another
+    test of that file), or a test the base run of a verifier ran (any outcome) that the
+    candidate's run of it did not (#1034: e.g. dropped by collection-time project code the
+    candidate changed). "" otherwise."""
+    if not all(item.observation.passed for item in judged):
+        return ""
+    if missing:
+        return f"DEFERRED_TESTS_NOT_RUN_IN_VERIFICATION: no verifier collected or ran {missing}"
+    gone = _base_nodes_gone(test_files, verified_by)
+    if not gone:
+        return ""
+    shown = ", ".join(gone[:10]) + (f", +{len(gone) - 10} more" if len(gone) > 10 else "")
+    head = f"NAMED_TESTS_NOT_RUN: {len(gone)} test(s) the base run ran did not run on the candidate"
+    return f"{head}: {shown}"
+
+
+def _base_nodes_gone(test_files, runs) -> list[str]:
+    """Full node ids (never cut at ``[``) the base run of a verifier recorded and the candidate's
+    run of that verifier did not (#1034). A verifier with no base record adds nothing."""
+    base = getattr(test_files, "base_nodes", {})
+    return sorted(
+        node
+        for run in runs
+        for node in base.get(run.spec.verifier_id, ())
+        if node not in run.outcomes
+    )
 
 
 def _contract(task, runs, checks, declared, binding, result):

@@ -27,10 +27,15 @@ class TestFiles(tuple):  # noqa: SLOT001  (a tuple of the added or changed paths
     """The test paths the verifiers and P2P see (added or changed), carrying the deleted ones."""
 
     deleted: tuple[str, ...] = ()
+    # #1034: per verifier, the node ids the base run recorded (full ids, parametrisation kept)
+    base_nodes: dict[str, tuple[str, ...]] = {}
 
-    def __new__(cls, paths: Iterable[str] = (), deleted: Iterable[str] = ()) -> TestFiles:
+    def __new__(
+        cls, paths: Iterable[str] = (), deleted: Iterable[str] = (), base_nodes=None
+    ) -> TestFiles:
         self = super().__new__(cls, paths)
         self.deleted = tuple(deleted)
+        self.base_nodes = dict(base_nodes or {})
         return self
 
 
