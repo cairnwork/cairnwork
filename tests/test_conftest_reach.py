@@ -177,6 +177,7 @@ LITERAL_PLUGINS = [
     'pytest_plugins = ["te" + "sts.x"]\n',  # pytest loads the joined name (#1018 r1)
     'pytest_plugins = ["x"] + PLUGINS\n',  # the literal half of a partly unread value
     'pytest_plugins = ["x"] * 1\n',  # a literal under another operator
+    '(pytest_plugins := ["x"])\n',  # an assignment expression binds it too (#1027)
 ]
 UNREAD_PLUGINS = [
     'pytest_plugins = ["x"] if FLAG else []\n',
@@ -184,6 +185,7 @@ UNREAD_PLUGINS = [
     "pytest_plugins = PLUGINS\n",
     'pytest_plugins = list(("x",))\n',
     'pytest_plugins = [f"{NAME}"]\n',
+    "(pytest_plugins := PLUGINS)\n",  # #1027
     "pytest_plugins = []\npytest_plugins.append(NAME)\n",
     'import sys\nsetattr(sys.modules[__name__], "pytest_plugins", P)\n',
     'globals()["pytest_plugins"] = P\n',

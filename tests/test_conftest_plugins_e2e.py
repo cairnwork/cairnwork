@@ -23,6 +23,9 @@ CASES = {  # name: (base conftest addition, fix, expected status, code)
     "a comma-separated string names the module, wrong fix": (
         'pytest_plugins = "helpers,colorsys"\n', BREAKS_BASE, "FAILED",
         "TEST_COMMIT_CONFTEST_STATIC"),
+    "an assignment expression names the module, wrong fix (#1027)": (
+        '(pytest_plugins := ["colorsys"])\n', BREAKS_BASE, "FAILED",
+        "TEST_COMMIT_CONFTEST_STATIC"),
     "a list built at run time, correct fix": (
         "PLUGINS = ()\npytest_plugins = [p for p in PLUGINS]\n", FIX, "COMPLETED", ""),
 }  # fmt: skip
