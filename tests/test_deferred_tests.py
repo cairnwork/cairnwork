@@ -331,7 +331,8 @@ def test_an_unparsable_test_commit_is_refused_before_any_base_run(project, tmp_p
     assert list((tmp_path / "state" / "runs").glob("*-b-v*")) == []  # never ran, no logs
 
 
-def test_ast_recursion_error_is_a_test_commit_refusal(project, monkeypatch):
+@pytest.mark.parametrize("exc", [RecursionError, MemoryError])
+def test_ast_recursion_error_is_a_test_commit_refusal(project, monkeypatch, exc):
     base, test_commit = make_test_commit(
         project, {"tests/test_regression.py": "def test_x(): pass\n"}
     )
@@ -339,7 +340,7 @@ def test_ast_recursion_error_is_a_test_commit_refusal(project, monkeypatch):
     blob = git(project, "rev-parse", f"{test_commit}:tests/test_regression.py")
 
     def deep(source):
-        raise RecursionError
+        raise exc
 
     monkeypatch.setattr(dt, "ast", SimpleNamespace(parse=deep, Module=dt.ast.Module))
     with pytest.raises(dt.TestCommitRejected) as err:

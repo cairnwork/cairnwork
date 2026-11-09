@@ -160,7 +160,7 @@ def _parse(repo: Path, blob: str, path: str, *, present: bool) -> ast.Module:
         raise TestCommitRejected("TEST_COMMIT_UNPARSABLE", f"{path} is not UTF-8") from exc
     try:
         return ast.parse(source)
-    except (SyntaxError, ValueError) as exc:
+    except (SyntaxError, ValueError, RecursionError, MemoryError) as exc:
         raise TestCommitRejected("TEST_COMMIT_UNPARSABLE", path) from exc
 
 
