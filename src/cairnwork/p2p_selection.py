@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from fnmatch import fnmatch
 from pathlib import Path
 from posixpath import basename, dirname, splitext
 
@@ -66,15 +67,23 @@ def _under_root(path: str, roots: tuple[str, ...]) -> bool:
 
 
 def _exact(test: str, stem: str) -> bool:
-    return basename(test) in {f"test_{stem}.py", f"{stem}_test.py"}
+    name = basename(test).replace("-", "_")
+    stem = stem.replace("-", "_")
+    return name in {f"test_{stem}.py", f"{stem}_test.py"}
 
 
 def _by_rule(test: str, stem: str, is_test: Callable[[str], bool] | None) -> bool:
-    """A file the base's python_files rule accepts that holds the stem as a name part (#870)."""
+    """A file accepted by the base's python_files rule (default rule if absent) whose name
+    holds the stem as a name part (#870, #1041)."""
+    basename_test = basename(test)
     if is_test is None:
-        return False
+        accepted = any(fnmatch(basename_test, pattern) for pattern in DEFAULT_PYTHON_FILES)
+    else:
+        accepted = is_test(test)
+    name = splitext(basename(test))[0].replace("-", "_")
+    stem = stem.replace("-", "_")
     part = rf"(?:^|[-_.]){re.escape(stem)}(?:[-_.]|$)"
-    return is_test(test) and bool(re.search(part, splitext(basename(test))[0]))
+    return accepted and bool(re.search(part, name))
 
 
 def _named(test: str, stem: str, is_test: Callable[[str], bool] | None) -> bool:
