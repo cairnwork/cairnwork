@@ -10,36 +10,29 @@ import sys
 SOURCES = (".py", ".pyc")
 
 
-def module_of(path: str) -> str:
-    """The top-level module name a source or cache file loads as (``pkg/__init__.py``: ``pkg``)."""
-    parts = path.replace(os.sep, "/").split("/")
-    stem = parts[-1].split(".", 1)[0]
-    if stem == "__init__" and len(parts) > 1:
-        return parts[-2]
-    if parts[-2:-1] == ["__pycache__"] and stem == "__init__" and len(parts) > 2:
-        return parts[-3]
-    return stem
-
-
 def main() -> int:
     fd_text, root, ini, target, guard, extra = sys.argv[1:]
     fd = int(fd_text)
     pytest_args = json.loads(extra)
     write = os.write
+    dumps = json.dumps
+    pending_module: str | None = None
 
     def record(row: dict) -> None:
         try:
-            write(fd, (json.dumps(row, separators=(",", ":")) + "\n").encode())
+            write(fd, (dumps(row, separators=(",", ":")) + "\n").encode())
         except OSError:
             pass  # Best effort only; the parent labels this same-process measurement.
 
     def audit(event: str, args: tuple) -> None:
+        nonlocal pending_module
         if event == "import" and args:
-            record({"module": str(args[0]), "origin": args[1] if len(args) > 1 else None})
+            pending_module = str(args[0])
+            record({"module": pending_module, "origin": args[1] if len(args) > 1 else None})
         elif event == "open" and args and isinstance(args[0], str) and args[0].endswith(SOURCES):
-            # the loader reads the file at import time: the path is written before any later
-            # candidate code can run (the import event itself rarely carries a filename)
-            record({"module": module_of(args[0]), "origin": args[0], "source": "open"})
+            # The import event carries the dotted name; the following open carries its file.
+            if pending_module:
+                record({"module": pending_module, "origin": args[0], "source": "open"})
 
     def dump_modules() -> None:
         for name, module in tuple(sys.modules.items()):

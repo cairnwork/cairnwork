@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sys
 import sysconfig
 from pathlib import Path
 
+from cairnwork.gitcmd import OID, run_git
+from cairnwork.pycache_guard import PYCACHE_DIR
 from experimental.import_origin.runner import Run, run_pytest
 from experimental.second_observer.cli import check_output
 from experimental.second_observer.inputs import ShadowInput, Uncomparable, load
@@ -41,56 +44,130 @@ def _module_names(checkout: Path, roots: tuple[str, ...]) -> set[str]:
         if not root.is_dir():
             continue
         for file in root.rglob("*.py"):
-            parts = file.relative_to(root).with_suffix("").parts
+            parts = file.relative_to(checkout).with_suffix("").parts
             if parts[-1] == "__init__":
                 parts = parts[:-1]
             if parts:
                 names.add(".".join(parts))
-                names.add(parts[-1])
     return names
 
 
-def _classify(origin: str | None, module: str, checkout: Path, inp: ShadowInput) -> str:
+def _changed_candidate_paths(inp: ShadowInput, out: Path) -> set[str]:
+    if not OID.fullmatch(inp.base) or not OID.fullmatch(inp.candidate):
+        raise Uncomparable("base and candidate must be 40-hex ids")
+    changed = run_git(
+        out / "repo.git",
+        "diff",
+        "--name-only",
+        "--no-renames",
+        "-z",
+        inp.base,
+        inp.candidate,
+        "--",
+    )
+    return {path for path in changed.split("\0") if path}
+
+
+def _candidate_file(path: Path, checkout: Path, changed: set[str]) -> bool:
+    try:
+        relative = path.resolve().relative_to(checkout.resolve()).as_posix()
+    except ValueError:
+        return False
+    return relative in changed
+
+
+def source_of(origin: str, out: Path) -> Path:
+    """The source file a cache file stands for. The run sets PYTHONPYCACHEPREFIX to
+    ``out/run/tmp/<PYCACHE_DIR>``, which mirrors each source directory's absolute path, so a
+    stdlib ``.pyc`` read from there must be judged by its source location, not the prefix."""
+    path = Path(os.path.realpath(origin))
+    prefix = Path(os.path.realpath(out / "run" / "tmp" / PYCACHE_DIR))
+    if _under(path, prefix):
+        path = Path("/") / path.relative_to(prefix)
+    elif path.parent.name == "__pycache__":
+        path = path.parent.parent / path.name
+    if path.suffix == ".pyc":
+        path = path.with_name(path.name.split(".", 1)[0] + ".py")
+    return path
+
+
+def _classify(
+    origin: str | None,
+    module: str,
+    checkout: Path,
+    inp: ShadowInput,
+    changed: set[str],
+    out: Path,
+) -> str:
     if origin in {"built-in", "frozen"}:
         return "stdlib" if module in sys.stdlib_module_names else "other"
     if not origin:
         return "unknown"  # an import event without a filename says nothing about the source
-    path = Path(origin)
+    path = source_of(origin, out)
     if any(_under(path, checkout / root) for root in inp.test_roots):
         return "test-tree"
-    if _under(path, checkout):
-        return "candidate-tree"
     paths = sysconfig.get_paths()
-    if any(_under(path, Path(paths[key])) for key in ("stdlib", "platstdlib")):
-        return "stdlib"
     if any(_under(path, Path(paths[key])) for key in ("purelib", "platlib")):
         return "site-packages"
+    if any(_under(path, Path(paths[key])) for key in ("stdlib", "platstdlib")):
+        return "stdlib"
+    if _under(path, checkout):
+        return "candidate-tree" if _candidate_file(path, checkout, changed) else "other"
     return "other"
 
 
-def classify(run: Run, inp: ShadowInput, checkout: Path) -> dict:
+def _names_agree(item: dict, out: Path) -> bool:
+    """A row counts only when its module name and its file agree. An ``open`` row is named by the
+    latest import event, which nested imports make unreliable (``pkg/__init__.py`` read while
+    ``_ast_unparse`` was the latest event), so the file's own module path must end with the
+    name; a path that does not exist (an interpreter probe) never counts."""
+    origin = item["origin"]
+    if item["source"] != "open" or origin in (None, "built-in", "frozen"):
+        return True
+    path = source_of(origin, out)
+    if not path.exists():
+        return False
+    parts = [*path.parent.parts, path.stem] if path.stem != "__init__" else [*path.parent.parts]
+    dotted = item["module"].split(".")
+    return parts[-len(dotted) :] == dotted
+
+
+def classify(run: Run, inp: ShadowInput, checkout: Path, out: Path) -> dict:
     support = _module_names(checkout, inp.test_roots)
-    protected = set(sys.stdlib_module_names) | support
+    changed = _changed_candidate_paths(inp, out)
     events, flagged = [], []
     for event in run.events:
         name, origin = event["module"], event.get("origin")
-        classification = _classify(origin, name, checkout, inp)
+        classification = _classify(origin, name, checkout, inp, changed, out)
         item = {
             "module": name,
             "origin": origin,
             "classification": classification,
             "source": event.get("source", "audit"),
         }
-        if name in protected:
+        stdlib_name = name.split(".", 1)[0] in sys.stdlib_module_names
+        support_name = name in support
+        if stdlib_name or support_name:
             events.append(item)
-            if classification == "candidate-tree":
+            if _names_agree(item, out) and (
+                (stdlib_name and classification in {"candidate-tree", "other"})
+                or (support_name and classification == "candidate-tree")
+            ):
                 flagged.append(item)
     return {
         "flags": [FLAG] if flagged else [],
         "events": events,
         "flagged_events": flagged,
         "probes": {
-            probe: any(event["module"] == name for event in run.events)
+            probe: any(
+                event["module"] == name
+                or (
+                    event.get("source") == "open"
+                    and isinstance(event.get("origin"), str)
+                    and source_of(event["origin"], out).stem == name
+                )
+                for event in run.events
+            )
             for probe, name in PROBES.items()
         },
         "capture": run.capture,
@@ -103,7 +180,7 @@ def observe(inp: ShadowInput, out: Path) -> dict:
     work = out / "work"
     try:
         checkout = rebuild(inp, out, work)
-        return classify(run_pytest(inp, checkout, out), inp, checkout)
+        return classify(run_pytest(inp, checkout, out), inp, checkout, out)
     except Uncomparable as exc:
         return {
             "detail": str(exc),

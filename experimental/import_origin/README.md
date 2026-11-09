@@ -13,3 +13,9 @@ can close the descriptor, monkeypatch writes, or forge lines; every row therefor
 `same_process: true`. The measurement checks whether origin capture sees known shapes. It does
 not stop them and does not change a Core verdict, receipt, or reason code. The tool writes only
 under its new output directory. It is default off, and Core never imports `experimental`.
+
+Known limits of same-process measurement include executing source from a non-`.py` file into
+`sys.modules['fractions']`, loading `spec_from_file_location` under another file name and then
+calling `os._exit` to skip the exit dump, and patching `json.dumps` or closing the capture
+descriptor before the hook's bindings are installed. These cases can evade or disrupt capture;
+the result is evidence about observed import origins, not a trust boundary.
