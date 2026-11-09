@@ -220,3 +220,51 @@ def test_classify_removes_parameterized_method_even_if_other_class_defines_name(
     ids = {"t.py::A::test_p[1]", "t.py::B::test_p[1]"}
     side = classify(ids, {"t.py::B::test_p[1]"}, {"t.py"}, lambda p: source, lambda p: base)
     assert side.removed == {"t.py::A::test_p[1]"} and side.dropped == set()
+
+
+def test_classify_drops_when_owning_class_inherits_base():
+    # #842 / #1072 (a): class A(Base) where Base defines test_x must be dropped, not removed
+    base = "class A:\n    def test_x(self): pass\n"
+    source = "class Base:\n    def test_x(self): pass\n\nclass A(Base):\n    __test__ = False\n"
+    side = classify({"t.py::A::test_x"}, set(), {"t.py"}, lambda p: source, lambda p: base)
+    assert side.removed == set() and side.dropped == {"t.py::A::test_x"}
+
+
+def test_classify_drops_when_owning_class_has_decorator():
+    # #842 / #1072 (b): class A with a decorator and no test_x body must be dropped, not removed
+    base = "class A:\n    def test_x(self): pass\n"
+    source = "@pytest.mark.usefixtures('fix')\nclass A:\n    pass\n"
+    side = classify({"t.py::A::test_x"}, set(), {"t.py"}, lambda p: source, lambda p: base)
+    assert side.removed == set() and side.dropped == {"t.py::A::test_x"}
+
+
+def test_classify_drops_when_module_level_import_alias_binds_name():
+    # #842 / #1072 (c): module-level `from helpers import test_x` not collected must be dropped
+    base = "def test_x(): pass\n"
+    source = "from helpers import test_x\n"
+    side = classify({"t.py::test_x"}, set(), {"t.py"}, lambda p: source, lambda p: base)
+    assert side.removed == set() and side.dropped == {"t.py::test_x"}
+
+
+def test_classify_drops_when_name_appears_in_setattr_string_constant():
+    # #842 / #1072 (d): setattr(A, "test_x", f) at class/module scope must be dropped
+    base = "def test_x(): pass\n"
+    source = "setattr(A, 'test_x', f)\n"
+    side = classify({"t.py::test_x"}, set(), {"t.py"}, lambda p: source, lambda p: base)
+    assert side.removed == set() and side.dropped == {"t.py::test_x"}
+
+
+def test_classify_drops_when_owning_class_inherits_object():
+    # #842 / #1072 (e): class A(object) without test_x body must be dropped (fail closed)
+    base = "class A:\n    def test_x(self): pass\n"
+    source = "class A(object):\n    pass\n"
+    side = classify({"t.py::A::test_x"}, set(), {"t.py"}, lambda p: source, lambda p: base)
+    assert side.removed == set() and side.dropped == {"t.py::A::test_x"}
+
+
+def test_classify_drops_when_module_level_setattr_rebinds_class_method():
+    # #1072 r2: a module-level setattr onto the owning class keeps the class-owned id dropped
+    base = "class A:\n    def test_x(self): pass\n"
+    source = "class A:\n    pass\n\nsetattr(A, 'test_x', f)\n"
+    side = classify({"t.py::A::test_x"}, set(), {"t.py"}, lambda p: source, lambda p: base)
+    assert side.removed == set() and side.dropped == {"t.py::A::test_x"}

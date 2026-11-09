@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -180,19 +181,37 @@ def _tree(text: str) -> ast.Module | None:
 def _scope_mentions(tree: ast.Module, owners: list[str], name: str) -> bool:
     """Whether ``name`` appears in the class chain ``owners`` (or module level if empty)."""
     body = tree.body
+    target_class: ast.ClassDef | None = None
     for owner in owners:
         found = [n for n in body if isinstance(n, ast.ClassDef) and n.name == owner]
         if not found:
             return False
-        body = found[-1].body
-    nodes = body if owners else [n for n in body if not isinstance(n, ast.ClassDef)]
+        target_class = found[-1]
+        body = target_class.body
+    if target_class is not None and (
+        target_class.bases or target_class.keywords or target_class.decorator_list
+    ):
+        return True
+    # Module-level statements outside classes always count: setattr(A, "test_x", f) rebinds it.
+    module = [n for n in tree.body if not isinstance(n, ast.ClassDef)]
+    nodes = [*body, *module] if owners else module
     kinds = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+    pattern = re.compile(rf"\b{re.escape(name)}\b")
     for node in nodes:
         for n in ast.walk(node):
             if isinstance(n, kinds) and n.name == name:
                 return True
             if isinstance(n, ast.Name) and n.id == name:
                 return True
+            if isinstance(n, ast.alias):
+                bound = n.asname or n.name.split(".")[-1]
+                if bound == name:
+                    return True
+            if isinstance(n, ast.Attribute) and n.attr == name:
+                return True
+            if isinstance(n, ast.Constant) and isinstance(n.value, str):
+                if pattern.search(n.value):
+                    return True
     return False
 
 
