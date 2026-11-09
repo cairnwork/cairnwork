@@ -5,8 +5,9 @@ Before/after for the same candidate (the fix in FIX), main -> this change:
 - a MemoryError, a RecursionError, a built-in OSError wrapped in a RuntimeError (cause or
   context only), a child that exited 127 or was killed by a signal: COMPLETED -> FAILED with
   BASE_ENV_ERROR (UNCOMPARABLE).
-- an AssertionError, an assert inside ``except OSError``, a checkout-defined OSError or
-  RuntimeError, a child that ran the code under test and exited 1: COMPLETED -> COMPLETED.
+- an AssertionError, an assert inside ``except OSError``, a checkout-defined RuntimeError,
+  a child that ran the code under test and exited 1: COMPLETED -> COMPLETED.
+- a checkout-defined OSError subclass: BASE_ENV_ERROR -> BASE_ENV_ERROR (as on main; #797's gate).
 - one target with real teeth next to an environment one: COMPLETED -> COMPLETED.
 """
 
@@ -46,7 +47,6 @@ TEETH = {
     'sys.path.insert(0, "src"); from calc import add; sys.exit(add(1, 1) - 2)\'], check=True)',
 }
 N5 = "try:\n        " + GONE + "\n    except OSError:\n        assert add(1, 1) == 2"
-OWN = "class Own{base}(OSError):\n    pass\ndef add(a, b):\n    raise Own{base}('broken')\n"
 
 
 def body(statement):
@@ -93,15 +93,20 @@ def test_n5_an_assert_inside_except_oserror_is_the_tests_own_judgement(
     assert (teeth, status, reason) == ("TEETH", "COMPLETED", "CORE_VERIFIED")
 
 
-@pytest.mark.parametrize(
-    "src",
-    [OWN.format(base="OSError"), OWN.replace("(OSError)", "(RuntimeError)").format(base="Run")],
-    ids=["n2_checkout_oserror_subclass", "n3_checkout_runtimeerror_subclass"],
-)
-def test_an_error_class_defined_by_the_checkout_is_behaviour(src, project, tmp_path, monkeypatch):
+def test_n3_a_checkout_defined_runtimeerror_is_behaviour(project, tmp_path, monkeypatch):
+    src = "class OwnRun(RuntimeError):\n    pass\ndef add(a, b):\n    raise OwnRun('broken')\n"
     tests = HEAD + "def test_r():\n    assert add(1, 1) == 2\n"
     status, reason, teeth = verdict(project, tmp_path, monkeypatch, tests, src=src)
     assert (teeth, status, reason) == ("TEETH", "COMPLETED", "CORE_VERIFIED")
+
+
+def test_n2_a_checkout_defined_oserror_subclass_is_environment_as_on_main(
+    project, tmp_path, monkeypatch
+):
+    src = "class OwnOS(OSError):\n    pass\ndef add(a, b):\n    raise OwnOS('broken')\n"
+    tests = HEAD + "def test_r():\n    assert add(1, 1) == 2\n"
+    status, reason, teeth = verdict(project, tmp_path, monkeypatch, tests, src=src)
+    assert teeth == "UNCOMPARABLE" and reason.startswith("BASE_ENV_ERROR: "), (status, reason)
 
 
 def test_ac6_one_target_with_real_teeth_is_enough_next_to_an_environment_one(

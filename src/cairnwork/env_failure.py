@@ -4,8 +4,8 @@ or RecursionError (resource limits), an OSError, or a ``subprocess.CalledProcess
 that could not run (exit 126/127, a signal, or stderr/output saying not found / permission denied
 / operation not permitted / cannot allocate memory). Any other nonzero exit stays a test failure:
 a child that ran the code under test and exited nonzero looks the same as an environment failure.
-A class defined by checkout code (its module file is under the checkout, outside site-packages)
-never counts: it is the code's own behaviour (#797). An AssertionError is a test's own judgement
+A subclass defined by checkout code counts too, as on main (errisinstance(OSError)); loosening
+that belongs to #797's own gate. An AssertionError is a test's own judgement
 and is not walked. Only moves a base from TEETH toward UNCOMPARABLE.
 
 Plugin text, not parent code (the plugin cannot import cairnwork): report_guard concatenates
@@ -34,22 +34,11 @@ _ENV_TEXT = re.compile(
 )
 
 
-def _ours(cls, root, _mod=type.__dict__["__module__"].__get__, _real=os.path.realpath):
-    # True when checkout code defines cls (its module's file is under root, outside site-packages)
-    try:
-        file = getattr(sys.modules.get(_mod(cls)), "__file__", None)
-        rel = os.path.relpath(_real(file), _real(str(root))) if isinstance(file, str) else ".."
-        site = {"site-packages", "dist-packages"} & set(_real(str(file)).split(os.sep))
-        return not (rel == ".." or rel.startswith(("../", os.sep)) or site)
-    except BaseException:
-        return False
-
-
-def _env_link(exc, root, _type=type, _sub=issubclass, _ours=_ours):
+def _env_link(exc, _type=type, _sub=issubclass):
     cls = _type(exc)
     if _sub(cls, (MemoryError, RecursionError, OSError)):
-        return not _ours(cls, root)
-    if _sub(cls, subprocess.CalledProcessError) and not _ours(cls, root):
+        return True
+    if _sub(cls, subprocess.CalledProcessError):
         code = exc.returncode
         parts = [p if isinstance(p, bytes) else str(p).encode() for p in (exc.stderr, exc.output)]
         return _type(code) is int and (code in (126, 127) or code < 0) or bool(
@@ -74,7 +63,7 @@ def _env_exc(info, root, _denied=_denied_inside, _type=type, _base=BaseException
             return _denied(exc)
         seen = set()
         for _ in range(64):
-            if _link(exc, root):
+            if _link(exc):
                 return True
             seen.add(id(exc))
             cause = _cause(exc)

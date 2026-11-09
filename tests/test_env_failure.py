@@ -113,7 +113,8 @@ def test_a_failed_child_is_environment_only_when_it_could_not_run(
     assert is_env_failure(info(wrapped), root) is expected
 
 
-def test_a_class_defined_by_checkout_code_is_behaviour_not_environment(root):
+def test_a_checkout_defined_subclass_is_environment_as_on_main(root):
+    # #808 N2: main's errisinstance(OSError) matched these too; loosening is #797's gate
     mod = module_in(
         root,
         "src/mine.py",
@@ -122,27 +123,11 @@ def test_a_class_defined_by_checkout_code_is_behaviour_not_environment(root):
         "class MyRuntime(RuntimeError):\n    pass\n",
         "_env808_mine",
     )
-    assert is_env_failure(info(mod.MyOSError("x")), root) is False
-    assert is_env_failure(info(mod.MyMemory("x")), root) is False
+    assert is_env_failure(info(mod.MyOSError("x")), root) is True
+    assert is_env_failure(info(mod.MyMemory("x")), root) is True
+    assert is_env_failure(info(chained(RuntimeError("x"), mod.MyOSError())), root) is True
+    # a checkout error class that is none of those, wrapping nothing, stays a test failure
     assert is_env_failure(info(mod.MyRuntime("wraps nothing")), root) is False
-    # a checkout wrapper does not hide a built-in environment error underneath it
-    assert is_env_failure(info(chained(mod.MyRuntime("x"), FileNotFoundError())), root) is True
-    # ... but a checkout OSError subclass in the chain is not one
-    assert is_env_failure(info(chained(RuntimeError("x"), mod.MyOSError())), root) is False
-
-
-def test_a_class_from_site_packages_inside_the_checkout_is_still_a_library_class(root):
-    mod = module_in(
-        root, ".venv/lib/python3/site-packages/libx.py", "class LibError(OSError):\n    pass\n",
-        "_env808_libx",
-    )  # fmt: skip
-    assert is_env_failure(info(mod.LibError("x")), root) is True
-
-
-def test_a_class_defined_outside_the_checkout_is_not_the_checkouts(root, tmp_path_factory):
-    other = tmp_path_factory.mktemp("elsewhere")
-    mod = module_in(other, "lib.py", "class Far(OSError):\n    pass\n", "_env808_far")
-    assert is_env_failure(info(mod.Far("x")), root) is True
 
 
 def test_a_hostile_exception_class_runs_no_code_and_never_raises(root):
