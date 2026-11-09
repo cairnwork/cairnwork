@@ -73,8 +73,8 @@ from cairnwork.bytecode_hook import HOOK_SOURCE
 from cairnwork.collect_import import import_hints
 from cairnwork.confined import MAX_REPORT_BYTES
 from cairnwork.data_exec_hook import plugin_source, refused
+from cairnwork.env_failure import ENV_SOURCE
 from cairnwork.pytest_config import PLUGINS
-from cairnwork.report_denied import DENIED_SOURCE
 from cairnwork.report_guard_parts import PARTS_SOURCE
 from cairnwork.skip_hint import module_names as _module_names
 from cairnwork.verdict_record import Verdict as Verdict
@@ -130,7 +130,7 @@ _HANDOVER = _take()
 
 
 '''
-    + DENIED_SOURCE
+    + ENV_SOURCE
     + '''class _Reporter:
     # the hooks call their helpers and the json/os functions through default arguments bound at
     # import: rebinding a class or module attribute later does not change what is recorded
@@ -207,7 +207,7 @@ _HANDOVER = _take()
 
     @pytest.hookimpl(wrapper=True, tryfirst=True)
     def pytest_runtest_makereport(self, item, call, _original=_original, _keep_worst=_keep_worst,
-                                  _fixtures=_PLUGIN_FIXTURES, _denied_inside=_denied_inside,
+                                  _fixtures=_PLUGIN_FIXTURES, _env=_env_exc,
                                   _origin=_denied_origin):
         report = yield  # outermost: the report as every other hook left it
         nodeid, _ = _original(self, item, report.nodeid)
@@ -215,8 +215,7 @@ _HANDOVER = _take()
             _keep_worst(self, nodeid, report.outcome)
             if report.failed:  # #775: an OSError says "environment", never a plain test failure
                 info = call.excinfo
-                oserr = info is not None and (info.errisinstance(OSError)
-                                              or _denied_inside(info.value))
+                oserr = info is not None and _env(info, item.config.rootpath)
                 self._env_ok[nodeid] = self._env_ok.get(nodeid, True) and oserr
                 self._denied[nodeid] = self._denied.get(nodeid, True) and _denied_path(info)
         elif report.when == "setup" and report.outcome in ("skipped", "failed"):

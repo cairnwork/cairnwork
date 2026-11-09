@@ -128,6 +128,34 @@ def test_a_test_commit_may_only_add_plain_test_files(project, tmp_path, files, c
     assert code in result.reason
 
 
+def test_deleting_an_untargetable_python_file_is_allowed(project):
+    commit_change(
+        project,
+        {
+            "tests/test_old.py": "def test_old():\n    pass\n",
+            "tests/legacy/old.helpers.py": "def helper():\n    pass\n",
+        },
+    )
+    base = git(project, "rev-parse", "HEAD")
+    base, test_commit = make_test_commit(
+        project, {"tests/test_regression.py": REGRESSION}, delete=("tests/legacy/old.helpers.py",)
+    )
+    dt.ensure_test_commit(project, test_commit)
+    paths, deleted = dt.test_paths(project, base, test_commit)
+    assert paths == ("tests/test_regression.py",)
+    assert deleted == ("tests/legacy/old.helpers.py",)
+
+
+def test_adding_an_untargetable_python_file_is_refused(project):
+    base, test_commit = make_test_commit(
+        project, {"tests/legacy/old.helpers.py": "def helper():\n    pass\n"}
+    )
+    dt.ensure_test_commit(project, test_commit)
+    with pytest.raises(dt.TestCommitRejected, match="no verifier target can name") as err:
+        dt.test_paths(project, base, test_commit)
+    assert err.value.code == "TEST_COMMIT_SCOPE"
+
+
 def test_test_commit_submodule_pointer_changes_are_seen_regardless_of_gitmodules_ignore(project):
     commit_change(
         project, {".gitmodules": '[submodule "tests/sub"]\n\tpath = tests/sub\n\tignore = all\n'}
@@ -301,6 +329,23 @@ def test_an_unparsable_test_commit_is_refused_before_any_base_run(project, tmp_p
     result = run(project, tmp_path, base, test_commit, SeeingWorker(FIX))
     assert "TEST_COMMIT_UNPARSABLE" in result.reason
     assert list((tmp_path / "state" / "runs").glob("*-b-v*")) == []  # never ran, no logs
+
+
+@pytest.mark.parametrize("exc", [RecursionError, MemoryError])
+def test_ast_recursion_error_is_a_test_commit_refusal(project, monkeypatch, exc):
+    base, test_commit = make_test_commit(
+        project, {"tests/test_regression.py": "def test_x(): pass\n"}
+    )
+    dt.ensure_test_commit(project, test_commit)
+    blob = git(project, "rev-parse", f"{test_commit}:tests/test_regression.py")
+
+    def deep(source):
+        raise exc
+
+    monkeypatch.setattr(dt, "ast", SimpleNamespace(parse=deep, Module=dt.ast.Module))
+    with pytest.raises(dt.TestCommitRejected) as err:
+        dt._tree(project, blob, present=True)
+    assert err.value.code == "TEST_COMMIT_UNPARSABLE" and blob in str(err.value)
 
 
 class ProvenanceWorker(WorkerDefaults):
