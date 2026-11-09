@@ -19,3 +19,12 @@ Known limits of same-process measurement include executing source from a non-`.p
 calling `os._exit` to skip the exit dump, and patching `json.dumps` or closing the capture
 descriptor before the hook's bindings are installed. These cases can evade or disrupt capture;
 the result is evidence about observed import origins, not a trust boundary.
+
+A `sys.meta_path` finder that imports another candidate module just before it returns the spec
+for a protected name can make the file read and the latest import event disagree; with
+`os._exit` skipping the exit dump, such a run can then go unflagged. The import-time flag for a
+shadowed protected name holds only when no such finder is installed.
+
+Origins are judged against the install paths that the verifier's interpreter reports, not the
+observer's own. A checkout file that the candidate did not change (for example a root
+`secrets.py` already in base) is classified `checkout-base` and is never flagged.

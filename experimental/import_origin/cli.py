@@ -6,8 +6,8 @@ import argparse
 import json
 import os
 import shutil
+import subprocess
 import sys
-import sysconfig
 from pathlib import Path
 
 from cairnwork.gitcmd import OID, run_git
@@ -91,6 +91,21 @@ def source_of(origin: str, out: Path) -> Path:
     return path
 
 
+def interpreter_paths(interpreter: str) -> dict[str, str]:
+    """The install paths of the interpreter the verifier ran, as that interpreter reports them.
+    The observer's own ``sysconfig`` names a different venv (and maybe another Python), so its
+    stdlib and site-packages would turn every honest import of the run into ``other``."""
+    code = "import json, sysconfig; print(json.dumps(sysconfig.get_paths()))"
+    done = subprocess.run(  # noqa: S603 - the verifier's own interpreter path, no shell
+        [interpreter, "-I", "-c", code],
+        capture_output=True, text=True, timeout=60, check=True,
+    )  # fmt: skip
+    paths = json.loads(done.stdout)
+    if not isinstance(paths, dict) or not all(isinstance(v, str) for v in paths.values()):
+        raise Uncomparable("the verifier interpreter did not report its install paths")
+    return paths
+
+
 def _classify(
     origin: str | None,
     module: str,
@@ -98,6 +113,7 @@ def _classify(
     inp: ShadowInput,
     changed: set[str],
     out: Path,
+    paths: dict[str, str],
 ) -> str:
     if origin in {"built-in", "frozen"}:
         return "stdlib" if module in sys.stdlib_module_names else "other"
@@ -106,13 +122,13 @@ def _classify(
     path = source_of(origin, out)
     if any(_under(path, checkout / root) for root in inp.test_roots):
         return "test-tree"
-    paths = sysconfig.get_paths()
-    if any(_under(path, Path(paths[key])) for key in ("purelib", "platlib")):
+    if any(key in paths and _under(path, Path(paths[key])) for key in ("purelib", "platlib")):
         return "site-packages"
-    if any(_under(path, Path(paths[key])) for key in ("stdlib", "platstdlib")):
+    if any(key in paths and _under(path, Path(paths[key])) for key in ("stdlib", "platstdlib")):
         return "stdlib"
     if _under(path, checkout):
-        return "candidate-tree" if _candidate_file(path, checkout, changed) else "other"
+        # A checkout file the candidate did not change was already in base: not its doing.
+        return "candidate-tree" if _candidate_file(path, checkout, changed) else "checkout-base"
     return "other"
 
 
@@ -135,10 +151,11 @@ def _names_agree(item: dict, out: Path) -> bool:
 def classify(run: Run, inp: ShadowInput, checkout: Path, out: Path) -> dict:
     support = _module_names(checkout, inp.test_roots)
     changed = _changed_candidate_paths(inp, out)
+    paths = interpreter_paths(inp.interpreter)
     events, flagged = [], []
     for event in run.events:
         name, origin = event["module"], event.get("origin")
-        classification = _classify(origin, name, checkout, inp, changed, out)
+        classification = _classify(origin, name, checkout, inp, changed, out, paths)
         item = {
             "module": name,
             "origin": origin,

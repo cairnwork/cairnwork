@@ -204,3 +204,51 @@ def test_dynamic_probe_is_reported_as_captured_or_not(project, tmp_path, probe):
     row = _row(project, tmp_path, project.candidate(edit), probe.lower())
     assert len((tmp_path / probe.lower() / "import_origin.jsonl").read_text().splitlines()) == 1
     assert row["probes"][probe] is True
+
+
+def test_unchanged_base_module_with_a_stdlib_name_is_not_flagged(tmp_path):
+    """A root ``secrets.py`` that base already had is the project's own module, not the
+    candidate's shadow: it is classified ``checkout-base`` and never flagged."""
+    base = BASE | {
+        "secrets.py": "TOKEN = 2\n",
+        "pkg/calc.py": "from secrets import TOKEN\n\n\ndef half():\n    return (1, 3)\n",
+    }
+    project = Project(tmp_path, tests={"pkg/tests/test_half.py": DEFERRED}, base_files=base)
+    edit = {"pkg/calc.py": "from secrets import TOKEN\n\n\ndef half():\n    return (1, TOKEN)\n"}
+    row = _row(project, tmp_path, project.candidate(edit), "base-secrets")
+    assert row["returncode"] == 0
+    assert row["flags"] == [], row["flagged_events"]
+    assert any(
+        event["module"] == "secrets" and event["classification"] == "checkout-base"
+        for event in row["events"]
+    ), [event for event in row["events"] if event["module"] == "secrets"]
+
+
+def test_stdlib_is_judged_by_the_verifier_interpreter_not_the_observer(tmp_path):
+    """The run's interpreter reports its own install paths; a file under its stdlib is
+    ``stdlib`` even when the observer's Python lives somewhere else."""
+    import stat
+    import sys
+
+    from experimental.import_origin.cli import _classify, interpreter_paths
+
+    other = tmp_path / "other-python" / "lib" / "python3"
+    (other / "fractions.py").parent.mkdir(parents=True)
+    (other / "fractions.py").write_text("")
+    fake = tmp_path / "python"
+    script = (
+        f"#!{sys.executable}\nimport json\n"
+        f"print(json.dumps({{'stdlib': {str(other)!r}, 'platstdlib': {str(other)!r}}}))\n"
+    )
+    fake.write_text(script)
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    paths = interpreter_paths(str(fake))
+    assert paths["stdlib"] == str(other)
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+
+    class Inp:
+        test_roots = ("tests",)
+
+    origin = str(other / "fractions.py")
+    assert _classify(origin, "fractions", checkout, Inp, set(), tmp_path, paths) == "stdlib"
