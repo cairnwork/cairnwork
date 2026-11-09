@@ -34,38 +34,48 @@ def _init_repo(tmp_path: Path) -> Path:
     return repo
 
 
+def _askpass_script(tmp_path: Path, marker: Path) -> Path:
+    script = tmp_path / "askpass.sh"
+    script.write_text(f"#!/bin/sh\ntouch {marker}\necho x\n")
+    script.chmod(0o755)
+    return script
+
+
 def test_a_configured_askpass_program_never_runs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """git really asks for a password here (``credential fill`` with no helper), so on the
+    old code the configured askpass program runs and answers; now git may not prompt at all."""
     repo = _init_repo(tmp_path)
     marker = tmp_path / "marker.txt"
-    script = tmp_path / "askpass.sh"
-    script.write_text(f"#!/bin/sh\ntouch {marker}\n")
-    script.chmod(0o755)
+    script = _askpass_script(tmp_path, marker)
     subprocess.run(["git", "-C", str(repo), "config", "core.askPass", str(script)], check=True)
-
     monkeypatch.setenv("SSH_ASKPASS", str(script))
     monkeypatch.setenv("SSH_ASKPASS_REQUIRE", "force")
+    request = b"protocol=https\nhost=example.invalid\n\n"
+    with pytest.raises(gitcmd.GitCommandError):  # no helper and no prompt: git cannot answer
+        gitcmd.run_git_bytes(repo, "-c", "credential.helper=", "credential", "fill", stdin=request)
+    assert not marker.exists()
 
-    seen_calls: list[tuple[list[str], dict[str, str]]] = []
+
+def test_the_child_environment_has_no_askpass_and_no_terminal_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _init_repo(tmp_path)
+    monkeypatch.setenv("SSH_ASKPASS", "/bin/false")
+    monkeypatch.setenv("SSH_ASKPASS_REQUIRE", "force")
+    seen: list[tuple[list[str], dict[str, str]]] = []
     real_run = gitcmd.subprocess.run
 
     def capturing_run(argv, **kw):
-        env = kw.get("env")
-        if env is not None:
-            seen_calls.append((list(argv), dict(env)))
+        seen.append((list(argv), dict(kw.get("env") or {})))
         return real_run(argv, **kw)
 
     monkeypatch.setattr(gitcmd.subprocess, "run", capturing_run)
-
     run_git(repo, "status")
-
-    assert seen_calls, "subprocess.run was not called"
-    cmd_call = next((argv, env) for argv, env in seen_calls if any("status" in arg for arg in argv))
-    argv, env = cmd_call
-    assert any("core.askPass=" in arg for arg in argv)
-    assert "SSH_ASKPASS" not in env
-    assert "SSH_ASKPASS_REQUIRE" not in env
+    argv, env = next((a, e) for a, e in seen if "status" in a)
+    assert "core.askPass=" in argv
+    assert "SSH_ASKPASS" not in env and "SSH_ASKPASS_REQUIRE" not in env
     assert env.get("GIT_TERMINAL_PROMPT") == "0"
 
 
