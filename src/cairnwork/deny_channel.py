@@ -26,6 +26,7 @@ from __future__ import annotations
 import os
 import secrets
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -73,6 +74,7 @@ __all__ = [
 LOG = "/usr/bin/log"
 WAIT_SECONDS = 10.0  # for the header and for each canary's line
 SETTLE_SECONDS = 1.0  # after the closing canary's line: lines still in flight
+_GROUPS: set[int] = set()  # watchdog pids that lead a process group with their log stream
 MAX_STREAM_BYTES = 32 << 20  # over it the stream is stopped: UNAVAILABLE (#859 review)
 POLL_SECONDS = 0.2  # how often the size guard looks at the stream file
 JOIN_SECONDS = 5.0  # how long the size guard gets to finish its last check
@@ -242,22 +244,31 @@ def _halt(guard: _SizeGuard | None, proc, window: Window) -> None:
 def _stop(proc) -> None:
     if proc is None:
         return
-    if proc.poll() is not None:
-        return
-    control = getattr(proc, "stdin", None)
-    if control is not None and not control.closed:
-        control.close()  # EOF asks the watchdog to stop and reap log stream.
-    else:  # small test doubles and a broken control pipe retain the old stop path
-        proc.terminate()
-    try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        proc.terminate()
+    if proc.poll() is None:
+        control = getattr(proc, "stdin", None)
+        if control is not None and not control.closed:
+            control.close()  # EOF asks the watchdog to stop and reap log stream.
+        else:  # small test doubles and a broken control pipe retain the old stop path
+            proc.terminate()
         try:
-            proc.wait(timeout=2)
+            proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()
+    _end_group(proc)
+
+
+def _end_group(proc) -> None:
+    """The watchdog leads its own process group, and log stream is in it: a watchdog that was
+    killed (or that we had to kill) cannot have stopped the stream, so end the group too."""
+    try:
+        _GROUPS.remove(proc.pid)  # once: a later call must not signal a reused group id
+    except KeyError:
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass  # the group is already gone
 
 
 def _start(path: Path, window: Window):
@@ -284,7 +295,9 @@ def _start(path: Path, window: Window):
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             pass_fds=(fd,),
+            start_new_session=True,  # log stream joins this group: _end_group
         )
+        _GROUPS.add(proc.pid)
     finally:
         os.close(fd)
     if not _wait(lambda: _found(path, b"\n", window), proc):

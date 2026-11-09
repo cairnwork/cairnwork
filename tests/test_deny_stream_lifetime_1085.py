@@ -38,7 +38,7 @@ def _reap_fake_log(tmp_path):
             pass
 
 
-def _launch(tmp_path: Path, *, cap: int = 32 << 20, hold: bool = True):
+def _launch(tmp_path: Path, *, cap: int = 32 << 20, hold: bool = True, mode: str = ""):
     pid_file = tmp_path / "log-pid"
     fast_file = tmp_path / "start-writing-fast"
     fake_log = tmp_path / "log"
@@ -65,8 +65,11 @@ def _launch(tmp_path: Path, *, cap: int = 32 << 20, hold: bool = True):
         "d._SizeGuard.run=lambda self: None; "
         "d.tempfile.tempdir=sys.argv[4]; "
         "ctx=d.recording('cwvtag-0123456789abcdef', lambda argv, log: ''); "
-        "box=ctx.__enter__(); print('ready', flush=True); "
-        "time.sleep(30) if sys.argv[5]=='hold' else None; ctx.__exit__(None,None,None)"
+        "box=ctx.__enter__(); print('ready', flush=True)\n"
+        "m=sys.argv[5]; go=Path(sys.argv[4])/'go'; end=time.time()+30\n"
+        "while m!='normal' and time.time()<end and not (m=='gate' and go.exists()):\n"
+        "    time.sleep(0.01)\n"
+        "ctx.__exit__(None,None,None); print(box.evidence.state, flush=True)"
     )
     proc = subprocess.Popen(
         [
@@ -78,7 +81,7 @@ def _launch(tmp_path: Path, *, cap: int = 32 << 20, hold: bool = True):
             str(fake_log),
             str(cap),
             str(tmp_path),
-            "hold" if hold else "normal",
+            mode or ("hold" if hold else "normal"),
         ],
         env={**os.environ, "FAKE_LOG_PID": str(pid_file), "FAKE_LOG_FAST": str(fast_file)},
         stdout=subprocess.PIPE,
@@ -167,3 +170,16 @@ def test_normal_exit_reaps_log_and_runs_it_under_watchdog(tmp_path):
     assert ppid != proc.pid, "fake log was not started by the watchdog"
     proc.communicate(timeout=5)
     assert _wait_gone(pid, 5), "fake log process remained after recording() exited"
+
+
+def test_a_killed_watchdog_still_has_its_stream_stopped(tmp_path):
+    proc, pid_file, fast_file = _launch(tmp_path, mode="gate")
+    pid, watchdog = map(int, _wait_file(pid_file).split())
+    fast_file.touch()
+    os.kill(watchdog, signal.SIGKILL)  # the watchdog dies without reaping log stream
+
+    (tmp_path / "go").touch()  # the recorder now finishes normally
+    out, _err = proc.communicate(timeout=20)
+
+    assert _wait_gone(pid, 5), "log stream outlived its killed watchdog"
+    assert out.split()[-1] == "UNAVAILABLE", out
