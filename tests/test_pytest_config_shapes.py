@@ -13,6 +13,7 @@ from test_p2p import FIX_BREAKS_NEG, SIBLING, configured_project, run
 from cairnwork.pipeline import TaskRejected
 from cairnwork.pytest_config import PytestConfigError, base_settings
 from cairnwork.pytest_config import test_file_rule as base_file_rule
+from cairnwork.pytest_config_files import _section
 
 PLAIN = "def test_x():\n    assert True\n"
 FILES = ("tests/test_core.py", "tests/check_x.py", "tests/it's_x.py", "tests/a b1.py",
@@ -37,6 +38,10 @@ def _pytest_collects(repo, base, tmp_path):
 
 NATIVE = '[tool.pytest]\npython_files = ["check_*.py"]\n'
 SAME_OR_MORE = {  # shape: (config files, what pytest collects there)
+    "an ini file with a UTF-8 BOM": (
+        {"pytest.ini": "\ufeff[pytest]\npython_files = check_*.py\n"},
+        {"tests/check_x.py"},
+    ),
     "[DEFAULT] is not merged into [pytest]": (
         {"pytest.ini": "[DEFAULT]\npython_files = check_*.py\n[pytest]\n"},
         {"tests/test_core.py"},
@@ -68,6 +73,17 @@ def test_the_rule_selects_every_file_pytest_collects(repo, tmp_path, shape):
     assert collected == expected  # the shape does what the audit saw pytest 9 do
     rule = base_file_rule(repo, base)
     assert all(rule(p) for p in collected)
+
+
+def test_ini_section_strips_one_leading_utf8_bom():
+    assert _section("\ufeff[pytest]\naddopts = -q\n", "pytest", "ini", "pytest.ini") == {
+        "addopts": "-q"
+    }
+
+
+def test_toml_section_with_a_bom_is_still_refused():
+    with pytest.raises(PytestConfigError, match="cannot be parsed"):
+        _section("\ufeff[pytest]\n", "pytest", "toml", "pytest.toml")
 
 
 REFUSED = {
