@@ -183,6 +183,28 @@ def _child_env() -> dict[str, str]:
     return env
 
 
+def _ssh_noninteractive(env: dict[str, str], repo: Path) -> None:
+    """Disable SSH prompts unless the operator supplied an SSH command.
+
+    An operator's core.sshCommand, GIT_SSH, or GIT_SSH_COMMAND owns its prompting
+    behavior. The two GIT_SSH variables are otherwise stripped with the unsafe GIT_* env.
+    """
+    for name in ("GIT_SSH", "GIT_SSH_COMMAND"):
+        if name in os.environ:
+            env[name] = os.environ[name]
+    if any(name in os.environ for name in ("GIT_SSH", "GIT_SSH_COMMAND")):
+        return
+    configured = subprocess.run(
+        ["git", "-C", str(repo), "config", "--get", "core.sshCommand"],
+        capture_output=True,
+        env=env,
+        timeout=GIT_TIMEOUT_SECONDS,
+    )
+    if configured.returncode == 0:
+        return
+    env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
+
+
 def _exec(
     repo: Path,
     args: tuple[str, ...],
@@ -197,6 +219,8 @@ def _exec(
     if not timeout or timeout <= 0:
         raise ValueError(f"timeout must be a positive number of seconds, got {timeout!r}")
     env = _child_env()
+    if timeout == NETWORK_TIMEOUT_SECONDS and _subcommand(args) in ("fetch", "push"):
+        _ssh_noninteractive(env, repo)
     mark = _MARK.get()
     if mark is not None:
         var, val = mark

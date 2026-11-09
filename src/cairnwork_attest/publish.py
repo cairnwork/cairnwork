@@ -53,6 +53,9 @@ _CONFIG_VAR = re.compile(r"GIT_CONFIG_(?:COUNT|KEY_[0-9]+|VALUE_[0-9]+)")
 def _git(repo: Path, *args: str, input: bytes | None = None) -> subprocess.CompletedProcess[str]:
     """Run git with prompts disabled and C-locale messages (stderr is matched).
 
+    Network fetch/push uses BatchMode unless core.sshCommand, GIT_SSH, or
+    GIT_SSH_COMMAND is configured; an operator's command decides prompting.
+
     gitcmd's options (no repository or configuration-declared hooks, no fsmonitor, no replace
     refs) and the caller's GIT_* variables dropped, except GIT_CONFIG_COUNT/KEY_n/VALUE_n: the
     post-verified hook's notes push gets its credential helper that way (docs/ATTESTATION.md).
@@ -64,6 +67,19 @@ def _git(repo: Path, *args: str, input: bytes | None = None) -> subprocess.Compl
         and k not in ("SSH_ASKPASS", "SSH_ASKPASS_REQUIRE")  # no password prompt program (#759)
     }
     env.update({"GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C", "LANGUAGE": "C"})
+    if args and args[0] in ("fetch", "push"):
+        for name in ("GIT_SSH", "GIT_SSH_COMMAND"):
+            if name in os.environ:
+                env[name] = os.environ[name]
+        if not any(name in os.environ for name in ("GIT_SSH", "GIT_SSH_COMMAND")):
+            configured = subprocess.run(
+                ["git", "-C", str(repo), "config", "--get", "core.sshCommand"],
+                capture_output=True,
+                env=env,
+                timeout=60,
+            )
+            if configured.returncode != 0:
+                env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
     try:
         hooks_off = config_hooks_off(repo, env)
     except GitCommandError as exc:  # a hook name -c cannot carry: git is not run
