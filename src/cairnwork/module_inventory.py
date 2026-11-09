@@ -1,11 +1,14 @@
 """The module names the verifier's Python can import, for the protected-input name rules.
 
-A verifier Python of 3.10 or newer runs ``_MODULE_NAMES`` as before. An older one (3.6 to 3.9,
-#790) lacks ``sys.stdlib_module_names`` and ``packages_distributions``, so it runs
-old_python_probe.py instead, and the standard-library names of Cairnwork's own Python are added.
-The version is asked first, by itself; any failure, any other version and any output that is not
-exactly the expected shape raise VerifierInventoryError (an environment reason): the task is refused
-before binding, as before, but with that code instead of a bare PROTECTED_VERIFIER_INPUT.
+A verifier Python of 3.10 or newer runs ``_MODULE_NAMES`` as before, then old_python_probe.py
+in its 3.10+ part (#811, #841): the probe refuses import hooks it cannot enumerate, or standard
+ones with other loaders or suffixes, and adds the meta_path finder names and namespace directories
+the three listings miss. An older one (3.6 to 3.9, #790) lacks ``sys.stdlib_module_names`` and
+``packages_distributions``, so it runs the whole of old_python_probe.py instead, and the
+standard-library names of Cairnwork's own Python are added. The version is asked first, by
+itself; any failure, any other version and any output that is not exactly the expected shape raise
+VerifierInventoryError (an environment reason): the task is refused before binding, as before, but
+with that code instead of a bare PROTECTED_VERIFIER_INPUT.
 """
 
 from __future__ import annotations
@@ -27,6 +30,7 @@ _MODULE_NAMES = (
     "set(packages_distributions()))))"
 )
 _OLD_PROBE = Path(__file__).with_name("old_python_probe.py")
+_PART_310 = 'PART = "3.10+"\n'
 
 
 class VerifierInventoryError(PytestConfigError):
@@ -41,17 +45,19 @@ def importable_names(python: str) -> set[str]:
         major, minor = _version(python)
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         raise VerifierInventoryError(f"the version question failed: {_why(exc)}") from exc
-    if (major, minor) >= (3, 10):
-        names = _names(json.loads(_run(python, _MODULE_NAMES)))
-    elif (3, 6) <= (major, minor):
-        try:
-            old = _run(python, _OLD_PROBE.read_text(encoding="utf-8"))
-            names = _old_names(old, [major, minor]) | set(sys.stdlib_module_names)
-        except (OSError, ValueError, subprocess.SubprocessError) as exc:
-            reason = f"Python {major}.{minor} cannot list its modules: {_why(exc)}"
-            raise VerifierInventoryError(reason) from exc
-    else:
+    if (major, minor) < (3, 6):
         raise VerifierInventoryError(f"Python {major}.{minor} is not supported")
+    modern = (major, minor) >= (3, 10)
+    if modern:
+        names = _names(json.loads(_run(python, _MODULE_NAMES)))
+    else:
+        names = set(sys.stdlib_module_names)
+    try:
+        probe = (_PART_310 if modern else "") + _OLD_PROBE.read_text(encoding="utf-8")
+        names |= _old_names(_run(python, probe), [major, minor])
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        reason = f"Python {major}.{minor} cannot list its modules: {_why(exc)}"
+        raise VerifierInventoryError(reason) from exc
     return {name.casefold() for name in names} | {"_cairnwork_report_guard"}
 
 

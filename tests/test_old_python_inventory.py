@@ -50,7 +50,7 @@ if {old}:
     import importlib.metadata
     del sys.stdlib_module_names
     del importlib.metadata.packages_distributions
-    sys.version_info = ({major}, {minor}, 0, "final", 0)
+sys.version_info = ({major}, {minor}, 0, "final", 0)  # 3.10+ runs the probe too (#811)
 sys.path.extend({extra!r})
 {setup}
 exec(compile(code, "<probe>", "exec"), {{"__name__": "__main__"}})
@@ -202,7 +202,8 @@ def test_main_s_probe_still_runs_on_3_10_and_newer(tmp_path, monkeypatch):
         module_inventory, "_run", lambda py, code: seen.append(code) or real(py, code)
     )
     module_inventory.importable_names(stub(tmp_path, version=(3, 12)))
-    assert seen == [module_inventory._VERSION, module_inventory._MODULE_NAMES]
+    assert seen[:2] == [module_inventory._VERSION, module_inventory._MODULE_NAMES]
+    assert len(seen) == 3 and seen[2].startswith(module_inventory._PART_310)  # #811
 
 
 def test_an_old_inventory_covers_main_s_inventory_of_the_same_site(tmp_path):

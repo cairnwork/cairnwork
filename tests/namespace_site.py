@@ -7,7 +7,9 @@ site-packages, each with ``answer() == 42`` in the installed copy:
   (``impl``, ``oracle``) and a regular ``reglib`` (``core``);
 - ``pkuco``: pkgutil-style (``extend_path``); ``legacyco``: setuptools' legacy ``-nspkg.pth``;
 - ``mylib`` and ``ownproj``: regular packages outside sys.path, found only by a ``sys.meta_path``
-  finder appended from a ``.pth`` file, as a setuptools >= 64 editable install does (#390);
+  finder appended from a ``.pth`` file, as a setuptools >= 64 editable install does (#390), in
+  its real PEP 660 shape: a module
+  ``__editable___*_finder`` with globals MAPPING and NAMESPACES, which the probe reads (#811);
   ``metans``: a namespace that only that finder supplies; ``sidefx``: a finder-backed package
   whose import writes a marker file (the probe must never import it).
 
@@ -32,6 +34,8 @@ FINDER = """\
 import importlib.machinery, importlib.util, os, sys
 
 _HOME = {home!r}
+MAPPING = {{"mylib": _HOME, "ownproj": _HOME, "sidefx": _HOME}}
+NAMESPACES = {{"metans": [_HOME]}}
 
 
 class _EditableFinder:
@@ -85,8 +89,8 @@ def make_site(root: Path, pytest_from: str | None = None) -> str:
         "pkuco/somelib/impl.py": answer,
         "legacyco/somelib/impl.py": answer,
         "legacyco-nspkg.pth": LEGACY_PTH,
-        "_cw_editable_finder.py": FINDER.format(home=str(editable)),
-        "_cw_editable.pth": "import _cw_editable_finder\n",
+        "__editable___cw_finder.py": FINDER.format(home=str(editable)),
+        "_cw_editable.pth": "import __editable___cw_finder\n",
     }.items():
         _write(site / rel, text)
     _write(editable / "mylib" / "__init__.py", "")
