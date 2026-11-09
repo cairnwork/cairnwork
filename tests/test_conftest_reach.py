@@ -86,6 +86,27 @@ def test_a_direct_import_of_a_changed_file_is_found(text, tree, hit):
     assert _reach(text, tree, changed) == hit
 
 
+@pytest.mark.parametrize(
+    ("text", "tree", "changed", "hit"),
+    [
+        ("from tests.pkg import *\n", {"tests/pkg/__init__.py": "", "tests/pkg/mod.py": ""},
+         ["tests/pkg/mod.py"], "tests/pkg/mod.py"),
+        ("from .pkg import *\n", {"tests/sub/pkg/__init__.py": "", "tests/sub/pkg/mod.py": ""},
+         ["tests/sub/pkg/mod.py"], "tests/sub/pkg/mod.py"),
+        ("from . import *\n", {"tests/sub/__init__.py": "", "tests/sub/mod.py": ""},
+         ["tests/sub/mod.py"], "tests/sub/mod.py"),
+        ("from tests.mod import *\n", {"tests/mod.py": "", "tests/other.py": ""},
+         ["tests/mod.py"], "tests/mod.py"),
+        ("from tests.pkg import *\n", {"tests/pkg/__init__.py": "", "tests/pkg/deep/x.py": ""},
+         ["tests/pkg/deep/x.py"], ""),
+        ("from tests.pkg import *\n", {"tests/pkg/__init__.py": "", "tests/other.py": ""},
+         ["tests/other.py"], ""),
+    ],
+)  # fmt: skip
+def test_star_import_reaches_only_direct_package_modules(text, tree, changed, hit):
+    assert _reach(text, tree, changed) == hit
+
+
 def test_an_unchanged_module_in_the_test_directories_is_followed():
     tree = {"tests/util.py": "from tests import helper\n", "tests/helper.py": ""}
     assert _reach("import tests.util\n", tree, ["tests/helper.py"]) == "tests/helper.py"

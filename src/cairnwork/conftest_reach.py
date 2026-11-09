@@ -105,16 +105,38 @@ def _targets(here: str, tree: ast.Module, files: frozenset[str], by_name) -> set
     found: set[str] = set()
     for level, names in _imports(tree):
         for name in names:
+            star = name == "*" or name.endswith(".*")
+            if star:
+                name = name[:-2] if name.endswith(".*") else ""
             parts = name.split(".") if name else []
-            if not level:  # every dotted prefix, as a file under any directory
-                for k in range(1, len(parts) + 1):
-                    found |= by_name.get(".".join(parts[:k]), set())
-                continue
             base = dirname(here)
             for _ in range(level - 1):
                 base = dirname(base)
-            # the empty module name tries the package's own __init__.py
-            found |= _module_files(base, parts, files, by_name)
+            if not level:  # every dotted prefix, as a file under any directory
+                for k in range(1, len(parts) + 1):
+                    found |= by_name.get(".".join(parts[:k]), set())
+                inits = {
+                    path
+                    for path in by_name.get(name, ())
+                    if _stem(path).rpartition("/")[2] == "__init__"
+                }
+            else:
+                # the empty module name tries the package's own __init__.py
+                found |= _module_files(base, parts, files, by_name)
+                package = join(base, *parts) if parts else base
+                inits = {
+                    path
+                    for path in _module_files(base, parts, files, by_name)
+                    if _stem(path) == join(package, "__init__")
+                }
+            if star:
+                directories = {dirname(init) for init in inits}
+                found |= {
+                    path
+                    for path in files
+                    if _stem(path).rpartition("/")[0] in directories
+                    and _stem(path).rpartition("/")[2] != "__init__"
+                }
     return found
 
 
