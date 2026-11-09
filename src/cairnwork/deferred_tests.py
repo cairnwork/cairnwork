@@ -55,8 +55,8 @@ _EMPTY = ast.Module(body=[], type_ignores=[])  # a file that is not there (new, 
 _SITE_NAMES = frozenset({"sitecustomize", "usercustomize"})  # also refused as package names
 _NOT_TEST_FILES = frozenset(
     {
-        "conftest.py", "pytest.ini", "setup.cfg", "tox.ini", "pyproject.toml",
-        "setup.py", "sitecustomize.py", "usercustomize.py",
+        "conftest.py", "pytest.ini", "setup.cfg", "tox.ini", "pyproject.toml", "pytest.toml",
+        ".pytest.toml", ".pytest.ini", "setup.py", "sitecustomize.py", "usercustomize.py",
     }
 )  # fmt: skip
 
