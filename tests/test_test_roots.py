@@ -185,7 +185,8 @@ def test_a_test_root_ends_in_test_or_tests_only(name):
 @pytest.mark.parametrize(
     "name",
     ["sitecustomize.py", "usercustomize.py", "setup.py", "x.pth", "X.PTH",
-     "setup.cfg", "tox.ini", "pytest.ini", "pyproject.toml"],
+     "setup.cfg", "tox.ini", "pytest.ini", "pyproject.toml", "pytest.toml", ".pytest.toml",
+     ".pytest.ini"],
 )  # fmt: skip
 def test_a_test_commit_refuses_the_names_a_candidate_may_not_touch(pkg_project, name):
     base, commit = make_test_commit(pkg_project, {f"pkg/tests/{name}": "x = 1\n"})

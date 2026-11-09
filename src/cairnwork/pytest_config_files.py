@@ -43,7 +43,7 @@ def _section(text: str, section: str, form: str, name: str) -> dict[str, Any] | 
         # configparser merges its keys into every section, [pytest] too)
         parser = configparser.ConfigParser(interpolation=None, default_section="\0")
         parser.optionxform = str  # type: ignore[assignment] # pytest's ini keys are case-sensitive
-        parser.read_string(text)
+        parser.read_string(text.removeprefix("\ufeff"))
     except (tomllib.TOMLDecodeError, configparser.Error) as exc:
         raise PytestConfigError(f"{name} at the base cannot be parsed") from exc
     return dict(parser.items(section)) if parser.has_section(section) else None
