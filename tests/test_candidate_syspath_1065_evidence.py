@@ -5,7 +5,8 @@ which calls ``verify_candidate`` through its CLI entry. E1 documents today's fal
 candidate is wrong but the test imports its fake ``fractions`` module and passes; the assertion is
 the required fix outcome (FAILED / not VERIFIED), so strict xfail becomes an XPASS failure after a
 fix. E2 is the same wrong fix without a shadow. E3 and E4 are honest controls for a sys.path edit
-alone and a harmless module alongside a correct fix.
+alone and a harmless module alongside a correct fix. E5 pins the cause: the same wrong fix and
+shadow without the sys.path edit already fails today.
 """
 
 import json
@@ -35,6 +36,7 @@ DEFERRED = (
 )
 SYSPATH = "import os\nimport sys\nsys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))\n"
 WRONG = {"pkg/calc.py": SYSPATH + "def half():\n    return (1, 3)\n"}
+WRONG_NO_SYSPATH = {"pkg/calc.py": "def half():\n    return (1, 3)\n"}
 CORRECT = {"pkg/calc.py": SYSPATH + "def half():\n    return (1, 2)\n"}
 SHADOW = {
     "pkg/fractions.py": (
@@ -94,7 +96,7 @@ def _verify(project, state, edit):
 
 
 @pytest.mark.parametrize("path", ["worker run_task", "verify_candidate via verify helper"])
-@pytest.mark.xfail(strict=True, reason="#1065 false green on main")
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="#1065 false green on main")
 def test_e1_wrong_fix_cannot_pass_by_shadowing_fractions(repo, tmp_path, path):
     """E1 covers worker ``run_task`` and verify ``verify_candidate``.
 
@@ -104,7 +106,7 @@ def test_e1_wrong_fix_cannot_pass_by_shadowing_fractions(repo, tmp_path, path):
     edit = WRONG | SHADOW
     if path == "worker run_task":
         result = _worker(repo, tmp_path, edit, "e1-worker")
-        assert result.status == "FAILED", result.reason
+        assert result.status != "COMPLETED", result.reason
     else:
         state = tmp_path / "state"
         state.mkdir(mode=0o700)
@@ -113,7 +115,8 @@ def test_e1_wrong_fix_cannot_pass_by_shadowing_fractions(repo, tmp_path, path):
         )
         (state / "ACCEPTING").touch()
         _code, out = _verify(repo, state, edit)
-        assert out["status"] == "FAILED" and out["verified"] is False, out
+        # any refusal (FAILED, or a REFUSED tamper code) is a fix; only VERIFIED is the false green
+        assert out["status"] != "VERIFIED" and out["verified"] is False, out
 
 
 @pytest.mark.parametrize("path", ["worker run_task", "verify_candidate via verify helper"])
@@ -175,3 +178,24 @@ def test_e4_honest_fix_with_sys_path_and_harmless_module_verifies(repo, tmp_path
         (state / "ACCEPTING").touch()
         _code, out = _verify(repo, state, edit)
         assert out["status"] == "VERIFIED" and out["verified"] is True, out
+
+
+@pytest.mark.parametrize("path", ["worker run_task", "verify_candidate via verify helper"])
+def test_e5_same_shadow_without_sys_path_edit_is_rejected(repo, tmp_path, path):
+    """E5 is E1 without the candidate's sys.path edit: the shadow alone is not imported.
+
+    Today both paths are FAILED, which pins the sys.path insertion as the cause of E1's green.
+    """
+    edit = WRONG_NO_SYSPATH | SHADOW
+    if path == "worker run_task":
+        result = _worker(repo, tmp_path, edit, "e5-worker")
+        assert result.status == "FAILED", result.reason
+    else:
+        state = tmp_path / "state"
+        state.mkdir(mode=0o700)
+        (state / "config.json").write_text(
+            json.dumps({"verifier_account": False, "test_roots": ["pkg/tests"]})
+        )
+        (state / "ACCEPTING").touch()
+        _code, out = _verify(repo, state, edit)
+        assert out["status"] == "FAILED" and out["verified"] is False, out
