@@ -103,6 +103,12 @@ def test_fu2_literals_names_bound_to_them_and_marks_keep_the_draft(tmp_path):
     assert item.protected(KINDS_NOW) and item.exact, item.reason(KINDS_NOW)
 
 
+def test_yield_fixture_autouse_import_refuses_siblings(tmp_path):
+    body = "@pytest.yield_fixture(autouse=True)\ndef prep():\n    import pkg.extra\n    yield\n"
+    item = run(tmp_path, HEAD + body + PLAIN)
+    assert item.refusal is not None and not item.protected(KINDS_NOW)
+
+
 @pytest.mark.parametrize(
     "flag",
     [

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from cairnwork.p2p_selection import DEFAULT_MODE, MODES, check_p2p_config
+from cairnwork.p2p_selection import DEFAULT_MODE, MODES, MODULE_DIR_CAP, cap_note, check_p2p_config
 from cairnwork.p2p_selection import select_p2p_targets as _select
 
 ROOTS = ("tests",)
@@ -117,3 +117,59 @@ def test_multiple_roots():
     suite = ("tests/test_notary.py", "pkg/tests/test_notary.py")
     out = select_p2p_targets(("src/cairnwork/notary.py",), suite, roots)
     assert set(out) == {"tests/test_notary.py", "pkg/tests/test_notary.py"}
+
+
+def test_dashed_script_stem_selects_matching_files_from_a_cut_directory():
+    suite = tuple(f"tests/test_other_{i}.py" for i in range(MODULE_DIR_CAP + 1)) + (
+        "tests/test_coord_tick_mergenag.py",
+        "tests/test_coord_tick_extra.py",
+    )
+    changed = ("bin/coord-tick",)
+    assert select_p2p_targets(changed, suite, ROOTS) == (
+        "tests/test_coord_tick_extra.py",
+        "tests/test_coord_tick_mergenag.py",
+    )
+    assert cap_note(changed, suite, ROOTS, "module-dir") == {
+        "capped_dirs": ["tests"],
+        "cap": MODULE_DIR_CAP,
+    }
+
+
+def test_dashed_test_filename_matches_underscored_changed_stem():
+    suite = tuple(f"tests/test_other_{i}.py" for i in range(MODULE_DIR_CAP + 1)) + (
+        "tests/test_coord-tick.py",
+    )
+    assert select_p2p_targets(("src/pkg/coord_tick.py",), suite, ROOTS) == (
+        "tests/test_coord-tick.py",
+    )
+
+
+def test_normalized_subdirectory_match_keeps_main_root_fallback():
+    suite = ("tests/test_a.py", "tests/unit/test_coord_tick.py")
+    selected = set(select_p2p_targets(("bin/coord-tick",), suite, ROOTS))
+    # Main's plain exact match found no directory, so it selected root-level tests.
+    main_selection = {"tests/test_a.py"}
+    assert main_selection <= selected
+
+
+def test_cut_directory_excludes_non_test_files_with_stem():
+    suite = tuple(f"tests/test_other_{i}.py" for i in range(21)) + (
+        "tests/conftest.py",
+        "tests/data_coord_tick.json",
+        "tests/helper_coord_tick.py",
+        "tests/test_coord_tick.pyi",
+        "tests/test_coord_tick_a.py",
+    )
+    selected = select_p2p_targets(("bin/coord-tick",), suite, ROOTS)
+    assert selected == ("tests/test_coord_tick_a.py",)
+
+
+def test_cut_directory_with_no_stem_match_still_selects_nothing():
+    suite = tuple(f"tests/test_other_{i}.py" for i in range(MODULE_DIR_CAP + 1))
+    assert select_p2p_targets(("bin/coord-tick",), suite, ROOTS) == ()
+
+
+def test_undashed_stem_keeps_both_exact_names():
+    suite = ("tests/test_calc.py", "tests/calc_test.py", "tests/test_other.py")
+    selected = select_p2p_targets(("bin/calc.py",), suite, ROOTS)
+    assert {"tests/calc_test.py", "tests/test_calc.py"} <= set(selected)

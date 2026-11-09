@@ -5,10 +5,16 @@ verifier's interpreter, so it must stay valid Python 3.6: no walrus, no importli
 f-strings, no positional-only parameters. Listing a name that is not importable only refuses more;
 missing one could let a candidate shadow it. So every source is read in full, and anything that
 cannot be enumerated (an unreadable directory or metadata file, an import hook not on the list
-below) raises, which exits non-zero and leaves every checked path protected. Output: one JSON line
+below, a standard hook or finder whose loaders or suffixes are not CPython's startup set, #841)
+raises, which exits non-zero and leaves every checked path protected. Output: one JSON line
 ``{"v": 1, "version": [major, minor], "names": [...]}``.
+
+On Python 3.10+ module_inventory runs it too, with ``PART = "3.10+"`` set first (#811): the same
+hook checks, then only what the 3.10+ listing misses (meta_path finder names and the
+identifier-named directories of every sys.path directory, importable as namespace packages).
 """
 
+import _imp
 import errno
 import importlib.machinery as machinery
 import json
@@ -16,6 +22,7 @@ import os
 import pkgutil
 import stat
 import sys
+import types
 import zipimport
 
 _FILE_FINDER_HOOK = machinery.FileFinder.path_hook((machinery.SourceFileLoader, [".py"])).__code__
@@ -123,11 +130,55 @@ def _editable_names(cls):
     return {str(key).split(".", 1)[0] for key in list(mapping) + list(spaces)}
 
 
+def _default_loaders():
+    """The (loader, suffixes) pairs CPython gives FileFinder at startup. An environment that adds
+    a suffix (to a hook, a finder, or the shared machinery lists) serves files no listing reads."""
+    source = [".py", ".pyw"] if sys.platform == "win32" else [".py"]
+    return [
+        (machinery.ExtensionFileLoader, _imp.extension_suffixes()),
+        (machinery.SourceFileLoader, source),
+        (machinery.SourcelessFileLoader, [".pyc"]),
+    ]
+
+
+def _exact(value, want):
+    """``value == want`` without running any ``__eq__`` of ``value`` (#1063): a str leaf must be
+    exactly str, any other leaf the same object, a sequence a list or tuple of equal length."""
+    if type(want) is str:
+        return type(value) is str and str.__eq__(value, want)
+    if type(want) in (list, tuple):
+        return (
+            (type(value) is list or type(value) is tuple)
+            and len(value) == len(want)
+            and all(_exact(v, w) for v, w in zip(value, want))  # noqa: B905 - no strict= on 3.6
+        )
+    return value is want
+
+
+def _default_hook(hook):
+    """The standard FileFinder path hook with the startup loaders (any other details: #841)."""
+    if type(hook) is not types.FunctionType or hook.__code__ is not _FILE_FINDER_HOOK:
+        return False
+    values = [c.cell_contents for c in hook.__closure__ or ()]
+    cells = dict(zip(hook.__code__.co_freevars, values))  # noqa: B905 - no strict= on 3.6
+    return cells["cls"] is machinery.FileFinder and _exact(
+        cells["loader_details"], _default_loaders()
+    )
+
+
+def _default_finder(importer):
+    """A FileFinder (not a subclass) whose loaders are the startup ones (#841)."""
+    want = [(suffix, loader) for loader, suffixes in _default_loaders() for suffix in suffixes]
+    return type(importer) is machinery.FileFinder and _exact(
+        getattr(importer, "_loaders", None), want
+    )
+
+
 def _check_path_machinery():
     for hook in sys.path_hooks:
         if (
             hook is not zipimport.zipimporter
-            and getattr(hook, "__code__", None) is not _FILE_FINDER_HOOK
+            and not _default_hook(hook)
             and not (
                 getattr(hook, "__name__", "") == "_path_hook"
                 and _is_editable(getattr(hook, "__self__", None), "_EditableNamespaceFinder")
@@ -141,7 +192,8 @@ def _check_path_machinery():
             importer = pkgutil.get_importer(entry)
         if (
             importer is not None
-            and not isinstance(importer, (machinery.FileFinder, zipimport.zipimporter))
+            and type(importer) is not zipimport.zipimporter
+            and not _default_finder(importer)
             and not _is_editable(importer, "_EditableNamespaceFinder")
         ):
             raise SystemExit("unknown path importer for " + repr(entry))
@@ -166,9 +218,31 @@ def _meta_path_names():
     return names
 
 
-def main():
+def _namespace_dirs():
+    """Identifier-named directories of every sys.path directory: the 3.10+ part (#811)."""
+    names, seen = set(), set()
+    for entry in list(sys.path):
+        if not entry or not _is_dir(entry) or os.path.realpath(entry) in seen:
+            continue
+        real = os.path.realpath(entry)
+        seen.add(real)
+        names.update(n for n in os.listdir(real) if n.isidentifier() and _is_dir(real + "/" + n))
+    return names
+
+
+def main(part=False):
     _check_path_machinery()
-    names = set(sys.builtin_module_names) | _meta_path_names()
+    names = _meta_path_names()
+    if part:
+        names.update(_namespace_dirs())
+    else:
+        names.update(_rest())
+    version = [sys.version_info[0], sys.version_info[1]]
+    sys.stdout.write(json.dumps({"v": 1, "version": version, "names": sorted(names)}) + "\n")
+
+
+def _rest():
+    names = set(sys.builtin_module_names)
     names.update(name.split(".", 1)[0] for name in list(sys.modules))
     names.update(module[1] for module in pkgutil.iter_modules())
     seen = set()
@@ -177,9 +251,8 @@ def main():
             _scan(entry, names, seen)
     names.discard(None)
     names.discard("")
-    version = [sys.version_info[0], sys.version_info[1]]
-    sys.stdout.write(json.dumps({"v": 1, "version": version, "names": sorted(names)}) + "\n")
+    return names
 
 
 if __name__ == "__main__":
-    main()
+    main(globals().get("PART") == "3.10+")

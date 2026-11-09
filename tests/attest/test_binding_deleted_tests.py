@@ -157,6 +157,145 @@ def test_confidential_mode_needs_test_roots_for_deleted_paths(world):
     assert check(world, repo="conf", policy=other).code == "TEST_ROOT_VIOLATION"
 
 
+def _world_deleting_path(tmp_path: Path, path: str) -> dict:
+    """Build a signed receipt whose real test commit deletes one protected config path."""
+    from tests.attest.binding_helpers import commit_on
+
+    p = producer(tmp_path)
+    base = commit_on(p["work"], p["base"], {path: "# config\n"}, "add config")
+    p["base"] = base
+    p["head"] = commit_on(p["work"], base, {"src/a.py": "x = 2\n"}, "fix")
+    git(p["work"], "checkout", "-q", "--detach", base)
+    git(p["work"], "rm", "-q", path)
+    (p["work"] / "tests/test_new.py").write_text(NEW["tests/test_new.py"])
+    git(p["work"], "add", "-A")
+    git(p["work"], "commit", "-q", "-m", "delete config in test commit")
+    p["tests"] = git(p["work"], "rev-parse", "HEAD")
+    git(p["work"], "branch", f"b-{p['tests'][:10]}", p["tests"])
+    state = tmp_path / "state"
+    run = notarize_bound(state, p, paths=("tests/test_new.py",), deleted=(path,), unchecked=True)
+    bundle = sign_bound(state, run, tmp_path / "bundle.json")
+    return {
+        **p,
+        "state": state,
+        "bundle": bundle,
+        "pub": state / "public.pem",
+        "tmp": tmp_path,
+        "full": receiver(tmp_path, "full", p["work"], p["head"], p["tests"]),
+        "conf": receiver(tmp_path, "conf", p["work"], p["head"]),
+    }
+
+
+@pytest.mark.parametrize("path", ["tests/conftest.py", "tests/pytest.ini"])
+@pytest.mark.parametrize(
+    ("mode", "roots"),
+    [("full", ["tests/"]), ("conf", ["tests/"]), ("full", None)],
+    ids=["full-with-roots", "conf-with-roots", "full-without-roots"],
+)
+def test_receiver_refuses_deleted_fixture_and_pytest_config(tmp_path, path, mode, roots):
+    w = _world_deleting_path(tmp_path, path)
+    roots_arg = {"test_roots": roots} if roots is not None else {}
+    pol = policy(w["state"], w["tmp"], w["tests"], **roots_arg)
+    result = check(w, repo=mode, policy=pol)
+    assert not result.ok and result.code == "TEST_SOURCE_MISMATCH", result
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "tests/CONFTEST.py",
+        "tests/x.pth",
+        "tests/X.PTH",
+        "tests/sitecustomize/h.py",
+        "tests/sub/PyProject.toml",
+    ],
+)
+@pytest.mark.parametrize(
+    ("mode", "roots"),
+    [("full", ["tests/"]), ("conf", ["tests/"]), ("full", None)],
+    ids=["full-with-roots", "conf-with-roots", "full-without-roots"],
+)
+def test_receiver_refuses_casefolded_deleted_test_sources(tmp_path, path, mode, roots):
+    w = _world_deleting_path(tmp_path, path)
+    roots_arg = {"test_roots": roots} if roots is not None else {}
+    pol = policy(w["state"], w["tmp"], w["tests"], **roots_arg)
+    result = check(w, repo=mode, policy=pol)
+    assert not result.ok and result.code == "TEST_SOURCE_MISMATCH", result
+
+
+def test_full_receiver_refuses_an_added_pytest_config_with_roots(tmp_path):
+    from tests.attest.binding_helpers import commit_on
+
+    p = producer(tmp_path)
+    tests = commit_on(
+        p["work"],
+        p["base"],
+        {"tests/test_new.py": NEW["tests/test_new.py"], "tests/pytest.ini": "[pytest]\n"},
+        "add test and pytest config",
+    )
+    p["tests"] = tests
+    state = tmp_path / "state"
+    run = notarize_bound(state, p, paths=("tests/test_new.py", "tests/pytest.ini"), unchecked=True)
+    bundle = sign_bound(state, run, tmp_path / "bundle.json")
+    w = {
+        **p,
+        "state": state,
+        "bundle": bundle,
+        "pub": state / "public.pem",
+        "tmp": tmp_path,
+        "full": receiver(tmp_path, "full", p["work"], p["head"], tests),
+    }
+    pol = policy(state, tmp_path, tests, test_roots=["tests/"])
+    result = check(w, policy=pol)
+    assert not result.ok and result.code == "TEST_SOURCE_MISMATCH", result
+    assert result.detail.startswith("test commit scope:"), result
+
+
+def test_a_multi_path_receipt_with_data_and_unsorted_deletions_verifies(tmp_path):
+    from tests.attest.binding_helpers import commit_on
+
+    p = producer(tmp_path)
+    base = commit_on(
+        p["work"],
+        p["base"],
+        {
+            "tests/old_z.py": "def test_z():\n    pass\n",
+            "tests/old_a.py": "def test_a():\n    pass\n",
+        },
+        "add tests to delete",
+    )
+    p["base"] = base
+    p["head"] = commit_on(p["work"], base, {"src/a.py": "x = 2\n"}, "fix")
+    git(p["work"], "checkout", "-q", "--detach", base)
+    (p["work"] / "tests/test_new.py").write_text(NEW["tests/test_new.py"])
+    (p["work"] / "tests/data.json").write_text('{"ok": true}\n')
+    git(p["work"], "rm", "-q", "tests/old_z.py", "tests/old_a.py")
+    git(p["work"], "add", "-A")
+    git(p["work"], "commit", "-q", "-m", "delete two tests")
+    tests = git(p["work"], "rev-parse", "HEAD")
+    git(p["work"], "branch", f"b-{tests[:10]}", tests)
+    p["tests"] = tests
+    paths = ("tests/test_new.py", "tests/data.json")
+    deleted = ("tests/old_z.py", "tests/old_a.py")
+    state = tmp_path / "state"
+    run = notarize_bound(state, p, paths=paths, deleted=deleted)
+    bundle = sign_bound(state, run, tmp_path / "bundle.json")
+    w = {
+        **p,
+        "state": state,
+        "bundle": bundle,
+        "pub": state / "public.pem",
+        "tmp": tmp_path,
+        "full": receiver(tmp_path, "full", p["work"], p["head"], tests),
+    }
+    pol = policy(state, tmp_path, tests, test_roots=["tests/"])
+    result = check(w, policy=pol)
+    assert result.ok, result
+    binding = statement(w)["predicate"]["binding"]
+    assert binding["test_paths"] == ["tests/data.json", "tests/test_new.py"]
+    assert binding["deleted_test_paths"] == ["tests/old_a.py", "tests/old_z.py"]
+
+
 @pytest.mark.parametrize(
     ("value", "ok"),
     [(["a/b.py"], True), ([], True), (["b", "a"], False), (["a", "a"], False), (["/a"], False),

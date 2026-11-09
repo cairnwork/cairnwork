@@ -58,7 +58,10 @@ def _git(repo: Path, *args: str, input: bytes | None = None) -> subprocess.Compl
     post-verified hook's notes push gets its credential helper that way (docs/ATTESTATION.md).
     """
     env = {
-        k: v for k, v in os.environ.items() if not k.startswith("GIT_") or _CONFIG_VAR.fullmatch(k)
+        k: v
+        for k, v in os.environ.items()
+        if (not k.startswith("GIT_") or _CONFIG_VAR.fullmatch(k))
+        and k not in ("SSH_ASKPASS", "SSH_ASKPASS_REQUIRE")  # no password prompt program (#759)
     }
     env.update({"GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C", "LANGUAGE": "C"})
     try:

@@ -41,14 +41,20 @@ from __future__ import annotations
 
 import posixpath
 import re
-import unicodedata
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from cairnwork.gitcmd import OID, GitCommandError, run_git_bytes
+from cairnwork.pytest_config import PytestConfigError, test_file_rule
 from cairnwork.tamper_scan_budget import SCAN_BUDGET, ScanBudget, Table
 from cairnwork.tamper_scan_budget import canonical as _canonical
-from cairnwork.tamper_scan_diff import MAX_LINE, added_lines
+from cairnwork.tamper_scan_diff import (
+    MAX_LINE,
+    added_lines,
+    foreign_coding,
+)
+from cairnwork.tamper_scan_diff import nfkc_names as nfkc_names
 from cairnwork.tamper_scan_plugin import (
     CODE_FORGE,
     DYNAMIC_LOADER,
@@ -86,15 +92,14 @@ def _rule(
 
 
 _COMMENT_ONLY = re.compile(r"^\s*#")
-# A PEP 263 encoding declaration (Python reads it on line 1 or 2) and the UTF-8 names it accepts.
-_CODING = re.compile(r"^[ \t\f]*#.*?coding[:=][ \t]*([-\w.]+)", re.ASCII)
-_UTF8 = re.compile(r"utf[-_]8(?:[-_][-\w.]*)?|utf8", re.ASCII | re.IGNORECASE)
 # sys.modules entries a forgery would swap; a literal key naming any other module is a test stub.
 _SENSITIVE_MODULE = (
     r"(?:_?pytest\w*|pluggy|py|_?cairnwork\w*|sys|os|builtins|importlib|gc|conftest|__main__)"
 )
 # Test code by module name: a test root package, a conftest or a test module, at any depth.
 _TEST_MODULE = r"(?:\w+\.)*(?:tests|test|testing|conftest|test_\w*|\w+_test)"
+_SENSITIVE_NAME = rf"(?:{_SENSITIVE_MODULE}|{_TEST_MODULE})(?:\.[\w.]*)?"
+_SENSITIVE_KEY = rf"(?:'{_SENSITIVE_NAME}'|\"{_SENSITIVE_NAME}\")"
 _STUB_NAME = (
     rf"(?:'(?!{_SENSITIVE_MODULE}(?:\.|')|{_TEST_MODULE}(?:\.|'))[\w.]+'"
     rf"|\"(?!{_SENSITIVE_MODULE}(?:\.|\")|{_TEST_MODULE}(?:\.|\"))[\w.]+\")"
@@ -111,13 +116,13 @@ _SYS_MODULES_STUB = (
 _TEST_DIRS = frozenset({"tests", "test", "testing"})
 
 
-def _is_test_path(path: str) -> bool:
-    """conftest.py, test_*.py / *_test.py, or any file under a tests/ test/ testing/ directory."""
+def _is_test_path(path: str, is_test: Callable[[str], bool] | None = None) -> bool:
+    """conftest.py, test_*.py / *_test.py, tests/ directory, or the base's python_files rule."""
     parts = path.split("/")
     name = parts[-1]
     if name == "conftest.py" or name.startswith("test_") or name.endswith("_test.py"):
         return True
-    return any(part in _TEST_DIRS for part in parts[:-1])
+    return any(part in _TEST_DIRS for part in parts[:-1]) or bool(is_test and is_test(path))
 
 
 RULES: tuple[Rule, ...] = (
@@ -138,6 +143,8 @@ RULES: tuple[Rule, ...] = (
         "sys_modules_write",
         r"\bsys\s*\.\s*modules\s*\[(?!\s*__name__\s*\])[^\]]*\]\s*=(?!=)"
         r"|\bdel\s+sys\s*\.\s*modules\b"
+        r"|\bdel\s+[^#;]*\bsys\s*\.\s*modules\s*\[\s*"
+        rf"{_SENSITIVE_KEY}\s*\]"
         r"|\bsys\s*\.\s*modules\s*\.\s*(?:pop|popitem|update|setdefault|clear"
         r"|__setitem__|__delitem__|__ior__)\s*\(|\bsys\s*\.\s*modules\s*\|=",
         allow=_SYS_MODULES_STUB,
@@ -185,8 +192,6 @@ _ALIAS_RULES = ("os_exit", "gc_walk", "pytest_public_patch")  # read on the alia
 
 # Library files: only a literal sensitive key (the names _SYS_MODULES_STUB refuses in test code),
 # so a plugin loader's sys.modules[spec.name] = mod and a stub of an unrelated module pass.
-_SENSITIVE_NAME = rf"(?:{_SENSITIVE_MODULE}|{_TEST_MODULE})(?:\.[\w.]*)?"
-_SENSITIVE_KEY = rf"""(?:'{_SENSITIVE_NAME}'|"{_SENSITIVE_NAME}")"""
 _MODULES = r"\bsys\s*\.\s*modules\s*"
 _LIBRARY_MODULES_WRITE = re.compile(
     rf"{_MODULES}\[\s*{_SENSITIVE_KEY}\s*\]\s*=(?!=)"
@@ -265,6 +270,7 @@ def scan_added_lines(
     data: bytes | None = None,
     budget: ScanBudget | None = None,
     trusted: bool = True,  # views_trusted (#919): when false, no line is skipped as a comment
+    is_test: Callable[[str], bool] | None = None,
 ) -> list[Finding]:
     """Findings for the added ``(line number, text)`` pairs of one file (``.py`` files only).
 
@@ -276,7 +282,7 @@ def scan_added_lines(
     if not path.endswith(".py"):
         return []
     in_conftest = posixpath.basename(path) == "conftest.py"
-    in_tests = _is_test_path(path)
+    in_tests = _is_test_path(path, is_test)
     # Aliases bound so far by the added lines, in order (context lines are not in the diff).
     aliases: dict[str, set[str]] = {key: set() for key in ("sys", "os", "gc", "modules", "_exit")}
     masked_aliases = {key: set(names) for key, names in aliases.items()}  # also from masked lines
@@ -293,7 +299,7 @@ def scan_added_lines(
             if not budget.piece():  # empty and skipped pieces still cost a pass (#668)
                 return found + [Finding(path, number, SCAN_BUDGET)]
             view = views.get((number, index))
-            if number <= 2 and _foreign_coding(piece):
+            if number <= 2 and foreign_coding(piece):
                 found.append(Finding(path, number, "source_encoding"))
             if _COMMENT_ONLY.match(piece) and view and view.skip and len(view.code) == len(piece):
                 continue  # a comment to Python, or string text with no code on the line
@@ -355,20 +361,8 @@ def _committed_coding(path: str, data: bytes | None, found: list[Finding]) -> li
     return [
         Finding(path, number, "source_encoding")
         for number, line in head
-        if number not in seen and any(_foreign_coding(piece) for piece in line.split("\r"))
+        if number not in seen and any(foreign_coding(piece) for piece in line.split("\r"))
     ]
-
-
-def nfkc_names(text: str) -> str:  # the one normaliser of the line rules (STRING-BUILT later)
-    """Identifier characters in NFKC form, the rest as written (no new operator or separator)."""
-    pairs = ((char, unicodedata.normalize("NFKC", char)) for char in text)
-    return "".join(new if ("a" + new).isidentifier() else old for old, new in pairs)
-
-
-def _foreign_coding(text: str) -> bool:
-    """A comment declaring a source encoding other than UTF-8 (read by Python on line 1 or 2)."""
-    found = _CODING.match(text)
-    return found is not None and not _UTF8.fullmatch(found.group(1))
 
 
 def scan_patch(
@@ -392,9 +386,13 @@ def scan_patch(
         raise GitCommandError("head is not a full commit id")
     found, budget, files = [], ScanBudget(), added_lines(diff)  # one budget for the patch (#668)
     trusted = bool(files) and views_trusted(python)  # no .py file changed: no process started
+    try:
+        is_test = test_file_rule(repo, base)
+    except (GitCommandError, PytestConfigError):
+        is_test = None
     for path, lines in files.items():
         if path.endswith(".py") and not budget.over:  # read whole, as committed (delete-only too)
             data = run_git_bytes(repo, "cat-file", "blob", f"{head}:{path}")
-            found += scan_added_lines(path, lines, data, budget, trusted)
+            found += scan_added_lines(path, lines, data, budget, trusted, is_test)
     more = [] if budget.over else file_rules(repo, base, head, budget, python, notes)  # over: done
     return found + [Finding(path, 0, rule) for path, rule in more]

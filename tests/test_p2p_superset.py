@@ -1,5 +1,7 @@
 """#877: the python_files rule only adds to main's selection, never replaces it, so the
-module-dir selection is always a superset of what main selects (R1 and R2 of the review)."""
+module-dir selection is always a superset of what main selects (R1 and R2 of the review).
+Since #1041, no-rule selection may also be wider than main's exact names via the default
+python_files name-part match, but it is always a superset of main's selection."""
 
 from __future__ import annotations
 
@@ -84,4 +86,4 @@ def test_the_selection_is_always_a_superset_of_mains(seed):
     changed, tests, rule = _case(random.Random(seed))
     got = set(select(changed, tests, ROOTS, "module-dir", rule))
     assert _main(changed, tests, ROOTS) <= got
-    assert set(select(changed, tests, ROOTS, "module-dir")) == _main(changed, tests, ROOTS)
+    assert _main(changed, tests, ROOTS) <= set(select(changed, tests, ROOTS, "module-dir"))
