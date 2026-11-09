@@ -11,6 +11,32 @@ from pathlib import Path
 
 import pytest
 
+_RECORDERS: list[subprocess.Popen] = []
+
+
+@pytest.fixture(autouse=True)
+def _reap_fake_log(tmp_path):
+    """A failing test must not leave its fake log writing: stop it if it is still ours."""
+    yield
+    while _RECORDERS:
+        recorder = _RECORDERS.pop()
+        if recorder.poll() is None:
+            recorder.kill()
+            recorder.wait(timeout=5)
+    pid_file = tmp_path / "log-pid"
+    text = pid_file.read_text() if pid_file.exists() else ""
+    if not text:
+        return
+    pid = int(text.split()[0])
+    argv = subprocess.run(
+        ["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True
+    ).stdout
+    if str(tmp_path / "log") in argv:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
 
 def _launch(tmp_path: Path, *, cap: int = 32 << 20, hold: bool = True):
     pid_file = tmp_path / "log-pid"
@@ -24,7 +50,8 @@ def _launch(tmp_path: Path, *, cap: int = 32 << 20, hold: bool = True):
         "    handle.flush()\n"
         "os.write(1, b'ready\\n')\n"
         "while not os.path.exists(os.environ['FAKE_LOG_FAST']): time.sleep(0.005)\n"
-        "while True:\n"
+        "deadline = time.monotonic() + 60  # never outlives a failed test for long\n"
+        "while time.monotonic() < deadline:\n"
         "    try: os.write(1, b'x' * 1024 + b'\\n')\n"
         "    except OSError: break\n"
         "    time.sleep(0.001)\n"
@@ -58,6 +85,7 @@ def _launch(tmp_path: Path, *, cap: int = 32 << 20, hold: bool = True):
         stderr=subprocess.PIPE,
         text=True,
     )
+    _RECORDERS.append(proc)
     return proc, pid_file, fast_file
 
 
