@@ -27,6 +27,7 @@ import os
 import secrets
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -239,14 +240,24 @@ def _halt(guard: _SizeGuard | None, proc, window: Window) -> None:
 
 
 def _stop(proc) -> None:
-    if proc is None or proc.poll() is not None:
+    if proc is None:
         return
-    proc.terminate()
+    if proc.poll() is not None:
+        return
+    control = getattr(proc, "stdin", None)
+    if control is not None and not control.closed:
+        control.close()  # EOF asks the watchdog to stop and reap log stream.
+    else:  # small test doubles and a broken control pipe retain the old stop path
+        proc.terminate()
     try:
         proc.wait(timeout=5)
     except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait()
+        proc.terminate()
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
 
 
 def _start(path: Path, window: Window):
@@ -255,10 +266,24 @@ def _start(path: Path, window: Window):
         return None
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     window.inode = os.fstat(fd).st_ino
+    argv = [LOG, "stream", "--style", "ndjson", "--predicate", 'sender=="Sandbox"']
+    watchdog = [
+        sys.executable,
+        "-I",
+        str(Path(__file__).with_name("deny_watch.py")),
+        str(fd),
+        str(path),
+        str(2 * MAX_STREAM_BYTES),
+        str(POLL_SECONDS),
+        *argv,
+    ]
     try:
-        argv = [LOG, "stream", "--style", "ndjson", "--predicate", 'sender=="Sandbox"']
         proc = subprocess.Popen(
-            argv, stdin=subprocess.DEVNULL, stdout=fd, stderr=subprocess.DEVNULL
+            watchdog,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            pass_fds=(fd,),
         )
     finally:
         os.close(fd)
