@@ -113,7 +113,7 @@ def classify(base_ids, test_ids, edited, source, base_source) -> CollectedSide:
             gone = (
                 _defines(bases[path], owners, name)
                 and test_trees[path] is not None
-                and not _scope_mentions(test_trees[path], owners, name)
+                and not _scope_mentions(test_trees[path], owners, name, texts[path])
             )
         (removed if gone else dropped).add(nodeid)
     return CollectedSide(
@@ -178,27 +178,109 @@ def _tree(text: str) -> ast.Module | None:
         return None  # nothing is provably defined: the id is dropped, never removed
 
 
-def _scope_mentions(tree: ast.Module, owners: list[str], name: str) -> bool:
-    """Whether ``name`` appears in the class chain ``owners`` (or module level if empty)."""
+def _scope_mentions(tree: ast.Module, owners: list[str], name: str, text: str = "") -> bool:
+    """Whether static source evidence can account for a collected name.
+
+    This cannot see dynamically built names (for example ``setattr(A, 'test_' + 'x', f)``),
+    setattr executed from inside another class, or rebinding through ``type(...)``.
+    """
+    pattern = re.compile(rf"\b{re.escape(name)}\b")
+    if not owners:
+        module = [n for n in tree.body if not isinstance(n, ast.ClassDef)]
+        return _mentions(module, name, pattern)
     body = tree.body
     target_class: ast.ClassDef | None = None
     for owner in owners:
         found = [n for n in body if isinstance(n, ast.ClassDef) and n.name == owner]
         if not found:
-            return False
+            return bool(pattern.search(text))
         target_class = found[-1]
         body = target_class.body
-    if target_class is not None and (
-        target_class.bases or target_class.keywords or target_class.decorator_list
+    if target_class is None:
+        return bool(pattern.search(text))
+    if target_class.keywords or any(not _pytest_decorator(d) for d in target_class.decorator_list):
+        return True
+    imported_testcase = any(
+        isinstance(n, ast.ImportFrom)
+        and n.module == "unittest"
+        and any(a.name == "TestCase" for a in n.names)
+        for n in tree.body
+    )
+    if any(
+        _base_may_supply(base, name, tree, set(), imported_testcase) for base in target_class.bases
     ):
         return True
-    # Module-level statements outside classes always count: setattr(A, "test_x", f) rebinds it.
     module = [n for n in tree.body if not isinstance(n, ast.ClassDef)]
-    nodes = [*body, *module] if owners else module
+    nodes = [*body, *module]
+    if any(_mentions_dunder_test(node) for node in nodes):
+        return True
+    if _mentions(body, name, pattern, include_nested_classes=False):
+        return True
+    return _mentions(module, name, pattern)
+
+
+def _pytest_decorator(node: ast.expr) -> bool:
+    """Recognize pytest.mark.<anything>, optionally called."""
+    if isinstance(node, ast.Call):
+        node = node.func
+    attrs = []
+    while isinstance(node, ast.Attribute):
+        attrs.append(node.attr)
+        node = node.value
+    return (
+        isinstance(node, ast.Name)
+        and node.id == "pytest"
+        and len(attrs) >= 2
+        and attrs[-1] == "mark"
+    )
+
+
+def _base_may_supply(
+    base: ast.expr, name: str, tree: ast.Module, seen: set[str], imported_testcase: bool
+) -> bool:
+    """Conservatively decide whether a class base can supply a test name."""
+    if isinstance(base, ast.Name):
+        if base.id in {"object", "TestCase"}:
+            return base.id == "TestCase" and not imported_testcase
+        if base.id in seen:
+            return True
+        classes = [n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == base.id]
+        if len(classes) != 1:
+            return True
+        cls = classes[0]
+        if cls.keywords:  # an inherited metaclass can add tests the source never names
+            return True
+        pattern = re.compile(rf"\b{re.escape(name)}\b")
+        if _mentions(cls.body, name, pattern, include_nested_classes=False):
+            return True
+        return any(
+            _base_may_supply(b, name, tree, seen | {base.id}, imported_testcase) for b in cls.bases
+        )
+    if isinstance(base, ast.Attribute) and isinstance(base.value, ast.Name):
+        if base.value.id == "unittest" and base.attr == "TestCase":
+            return False
+    return True
+
+
+def _mentions_dunder_test(node: ast.AST) -> bool:
+    return any(
+        (isinstance(n, ast.Name) and n.id == "__test__")
+        or (isinstance(n, ast.Constant) and n.value == "__test__")
+        or (isinstance(n, ast.arg) and n.arg == "__test__")
+        for n in ast.walk(node)
+    )
+
+
+def _mentions(
+    nodes: list[ast.stmt], name: str, pattern: re.Pattern, *, include_nested_classes: bool = True
+) -> bool:
+    """Search source-level identifiers, bindings, attributes and string constants."""
     kinds = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
-    pattern = re.compile(rf"\b{re.escape(name)}\b")
     for node in nodes:
-        for n in ast.walk(node):
+        walk = ast.walk(node)
+        for n in walk:
+            if not include_nested_classes and n is not node and isinstance(n, ast.ClassDef):
+                continue
             if isinstance(n, kinds) and n.name == name:
                 return True
             if isinstance(n, ast.Name) and n.id == name:

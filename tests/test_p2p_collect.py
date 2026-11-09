@@ -233,7 +233,7 @@ def test_classify_drops_when_owning_class_inherits_base():
 def test_classify_drops_when_owning_class_has_decorator():
     # #842 / #1072 (b): class A with a decorator and no test_x body must be dropped, not removed
     base = "class A:\n    def test_x(self): pass\n"
-    source = "@pytest.mark.usefixtures('fix')\nclass A:\n    pass\n"
+    source = "@other_deco\nclass A:\n    pass\n"
     side = classify({"t.py::A::test_x"}, set(), {"t.py"}, lambda p: source, lambda p: base)
     assert side.removed == set() and side.dropped == {"t.py::A::test_x"}
 
@@ -255,11 +255,11 @@ def test_classify_drops_when_name_appears_in_setattr_string_constant():
 
 
 def test_classify_drops_when_owning_class_inherits_object():
-    # #842 / #1072 (e): class A(object) without test_x body must be dropped (fail closed)
+    # #842 / #1072: object is a neutral base, so the absent method is provably removed
     base = "class A:\n    def test_x(self): pass\n"
     source = "class A(object):\n    pass\n"
     side = classify({"t.py::A::test_x"}, set(), {"t.py"}, lambda p: source, lambda p: base)
-    assert side.removed == set() and side.dropped == {"t.py::A::test_x"}
+    assert side.removed == {"t.py::A::test_x"} and side.dropped == set()
 
 
 def test_classify_drops_when_module_level_setattr_rebinds_class_method():
@@ -268,3 +268,57 @@ def test_classify_drops_when_module_level_setattr_rebinds_class_method():
     source = "class A:\n    pass\n\nsetattr(A, 'test_x', f)\n"
     side = classify({"t.py::A::test_x"}, set(), {"t.py"}, lambda p: source, lambda p: base)
     assert side.removed == set() and side.dropped == {"t.py::A::test_x"}
+
+
+def _classify_a(source):
+    base = "class A:\n    def test_x(self): pass\n"
+    side = classify({"t.py::A::test_x"}, set(), {"t.py"}, lambda p: source, lambda p: base)
+    return side.removed, side.dropped
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "if sys.platform == 'nope':\n    class A:\n        def test_x(self): pass\n",
+        "try:\n    class A:\n        def test_x(self): pass\nexcept Exception:\n    pass\n",
+    ],
+)
+def test_classify_drops_unresolvable_conditional_owner(source):
+    assert _classify_a(source) == (set(), {"t.py::A::test_x"})
+
+
+def test_classify_uses_whole_file_search_for_imported_owner():
+    assert _classify_a("from other import A\n") == ({"t.py::A::test_x"}, set())
+    assert _classify_a("from other import A\n# test_x\n") == (set(), {"t.py::A::test_x"})
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "import unittest\nclass A(unittest.TestCase): pass\n",
+        "from unittest import TestCase\nclass A(TestCase): pass\n",
+        "class A(object): pass\n",
+        "class Base: pass\nclass A(Base): pass\n",
+        "import pytest\n@pytest.mark.slow\nclass A: pass\n",
+        "import pytest\n@pytest.mark.usefixtures('f')\nclass A: pass\n",
+    ],
+)
+def test_classify_allows_neutral_bases_and_pytest_markers(source):
+    assert _classify_a(source) == ({"t.py::A::test_x"}, set())
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from other import TestCase\nclass A(TestCase): pass\n",
+        "@other_deco\nclass A: pass\n",
+        "class A(metaclass=M): pass\n",
+        "class A: pass\nA.test_x = f\n",
+        "class A: pass\nsetattr(A, '__test__', False)\n",
+        "class A:\n    __test__ = False\n",
+        "class Base(metaclass=M): pass\nclass A(Base): pass\n",
+        "class Base:\n    def test_x(self): pass\nclass A(Base):\n    __test__ = False\n",
+    ],
+)
+def test_classify_drops_when_static_evidence_can_preserve_test(source):
+    assert _classify_a(source) == (set(), {"t.py::A::test_x"})
