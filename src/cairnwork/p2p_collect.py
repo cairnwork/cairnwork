@@ -173,16 +173,89 @@ def _tree(text: str) -> ast.Module | None:
         return None  # nothing is provably defined: the id is dropped, never removed
 
 
+COMPOUND_STMTS = (
+    ast.If,
+    ast.Try,
+    ast.For,
+    ast.AsyncFor,
+    ast.While,
+    ast.With,
+    ast.AsyncWith,
+    getattr(ast, "Match", ()),
+)
+
+
+def _binds_in_scope(node: ast.AST, name: str) -> bool:
+    """Whether node binds name in the current scope (does not cross into nested scopes)."""
+    stack = [node]
+    while stack:
+        curr = stack.pop()
+        if isinstance(curr, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if curr.name == name:
+                return True
+            stack.extend(curr.decorator_list)
+            if isinstance(curr, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                stack.extend(curr.args.defaults)
+                stack.extend(curr.args.kw_defaults)
+            else:
+                stack.extend(curr.bases)
+            continue
+        if isinstance(
+            curr, (ast.Lambda, ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+        ):
+            continue
+        if (
+            isinstance(curr, ast.Name)
+            and curr.id == name
+            and isinstance(curr.ctx, (ast.Store, ast.Del))
+        ):
+            return True
+        if isinstance(curr, ast.Import) and any(
+            (a.asname or a.name.partition(".")[0]) == name for a in curr.names
+        ):
+            return True
+        if isinstance(curr, ast.ImportFrom) and any(
+            a.name == "*" or (a.asname or a.name) == name for a in curr.names
+        ):
+            return True
+        if isinstance(curr, (ast.Global, ast.Nonlocal)) and name in curr.names:
+            return True
+        if isinstance(curr, ast.ExceptHandler) and curr.name == name:
+            return True
+        if isinstance(curr, getattr(ast, "MatchAs", ())) and curr.name == name:
+            return True
+        for child in ast.iter_child_nodes(curr):
+            stack.append(child)
+    return False
+
+
+def _last_binding(body: list[ast.stmt], name: str) -> ast.stmt | None:
+    """The last statement in body binding name, or None; ValueError if a compound one binds it."""
+    last = None
+    for stmt in body:
+        if isinstance(stmt, COMPOUND_STMTS) and _binds_in_scope(stmt, name):
+            raise ValueError(f"{name} bound in compound statement")
+        if _binds_in_scope(stmt, name):
+            last = stmt
+    return last
+
+
 def _defines(tree: ast.Module | None, owners: list[str], name: str) -> bool:
     """Whether the base file itself has ``def name`` in the class chain ``owners``."""
     body = tree.body if tree is not None else []
     for owner in owners:
-        found = [n for n in body if isinstance(n, ast.ClassDef) and n.name == owner]
-        if not found:
+        try:
+            last = _last_binding(body, owner)
+        except ValueError:
             return False
-        body = found[-1].body
-    kinds = (ast.FunctionDef, ast.AsyncFunctionDef)
-    return any(isinstance(n, kinds) and n.name == name for n in body)
+        if not isinstance(last, ast.ClassDef):
+            return False
+        body = last.body
+    try:
+        last = _last_binding(body, name)
+    except ValueError:
+        return False
+    return isinstance(last, (ast.FunctionDef, ast.AsyncFunctionDef))
 
 
 def _source(task, commit: str, path: str) -> str:
