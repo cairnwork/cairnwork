@@ -1,6 +1,6 @@
-"""#877: the name match follows python_files only when the base sets its own; the default keeps
-main's exact names (R1), the plan and base_env_check pass the rule on (end to end), and a name
-part is bounded (myapp is not app)."""
+"""Since #1041, the default python_files rule also does the name-part match, adding
+test_calc_extra.py on top of main's root-level fallback, never in place of it; the plan and
+base_env_check pass the rule on (end to end), and a name part is bounded (myapp is not app)."""
 
 from __future__ import annotations
 
@@ -32,13 +32,14 @@ WITH_MAIN = (*SUB, "tests/test_x.py")
         "[pytest]\npython_files = test_*.py\n",
     ],
 )
-def test_the_default_python_files_select_exactly_what_main_selects(repo, ini):
-    # R1: test_calc_extra.py holds the stem "calc" loosely, but main never counts it as named
-    # after calc.py, so the root-level fallback still applies and the selection equals main's
+def test_the_default_python_files_add_to_what_main_selects(repo, ini):
+    # Since #1041, the default rule matches test_calc_extra.py by name part and adds its
+    # directory on top of main's root-level fallback; it never replaces that fallback.
     base = commit_change(repo, {"pytest.ini": ini})
     changed = ("src/calc.py",)
     on_main = select(changed, R1_TESTS, ROOTS, "module-dir")
-    assert on_main == ROOT_LEVEL
+    assert set(ROOT_LEVEL) <= set(on_main)
+    assert on_main == R1_TESTS
     assert select(changed, R1_TESTS, ROOTS, "module-dir", name_rule(repo, base)) == on_main
 
 
