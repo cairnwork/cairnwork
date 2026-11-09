@@ -106,7 +106,12 @@ def _mark(node: ast.expr) -> tuple[str, ast.Call | None] | None:
 
 def _fixture_decorator(node: ast.expr) -> ast.Call | bool:
     target = node.func if isinstance(node, ast.Call) else node
-    if dotted(target) in (["fixture"], ["pytest", "fixture"]):  # not pytest.mark.fixture
+    if dotted(target) in (
+        ["fixture"],
+        ["pytest", "fixture"],
+        ["yield_fixture"],
+        ["pytest", "yield_fixture"],
+    ):  # not pytest.mark.fixture
         return node if isinstance(node, ast.Call) else True
     return False
 
