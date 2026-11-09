@@ -49,7 +49,11 @@ def marked(var: str, value: str):
 
 
 # Options that config files cannot override: no hooks, no fsmonitor command, no
-# untracked cache, and replace refs ignored so a commit is always what it is.
+# untracked cache, no password prompts, and replace refs ignored so a commit is
+# always what it is.
+# Programs deliberately kept: credential helper and ssh command (operator configuration,
+# used only by network fetch/push of origin; local fetches from paths and bundles never
+# call them). Diff drivers, filters and submodules are follow-ups of #759.
 _SAFE_OPTIONS = (
     "--no-replace-objects",
     "-c",
@@ -58,6 +62,8 @@ _SAFE_OPTIONS = (
     "core.fsmonitor=false",
     "-c",
     "core.untrackedCache=false",
+    "-c",
+    "core.askPass=",
 )
 
 
@@ -166,6 +172,17 @@ def run_git_bytes(
     return _exec(repo, args, None, False, timeout, text=False, stdin=stdin)
 
 
+def _child_env() -> dict[str, str]:
+    """Base environment for git: no inherited GIT_*, no askpass, terminal prompts off."""
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith("GIT_") and k not in ("SSH_ASKPASS", "SSH_ASKPASS_REQUIRE")
+    }
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    return env
+
+
 def _exec(
     repo: Path,
     args: tuple[str, ...],
@@ -179,7 +196,7 @@ def _exec(
 ) -> Any:  # str when text, else bytes
     if not timeout or timeout <= 0:
         raise ValueError(f"timeout must be a positive number of seconds, got {timeout!r}")
-    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env = _child_env()
     mark = _MARK.get()
     if mark is not None:
         var, val = mark
@@ -213,7 +230,7 @@ def _exec(
 
 def hash_blob(repo: Path, data: bytes) -> str:
     """Store data as a blob in repo with no filters, from bytes the caller already read."""
-    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env = _child_env()
     try:
         done = subprocess.run(  # noqa: S603 - fixed git argv, no shell
             [
