@@ -27,6 +27,7 @@ from cairnwork.deferred_overlay import stray_deletions
 from cairnwork.deferred_store import consume
 from cairnwork.deferred_tests import (
     BaseUncomparable,
+    Comparison,
     TestCommitRejected,
     TestFiles,
     base_comparison,
@@ -47,6 +48,11 @@ from cairnwork.verifier_account import VerifierAccountError
 from cairnwork.verifier_spec import protected_verifier_inputs
 from cairnwork.verifiers import run_verifiers
 from cairnwork.verify_context import VerifyContext, verifier_interpreter
+
+
+def second_seed(seed: str) -> str:
+    """Return the next uint32 seed, so a base replay is deterministic from the attempt record."""
+    return str((int(seed) + 1) % 4294967296)
 
 
 def tests_unused(task, *, claim: bool) -> None:
@@ -138,7 +144,41 @@ def tests_with_teeth(
         raise BaseUncomparable(comparison)
     if comparison.kind != "TEETH":
         raise TestCommitRejected(comparison.code, comparison.detail)
+    second_ctx = replace(ctx, hash_seed=second_seed(ctx.hash_seed))
+    second_runs = run_verifiers(
+        second_ctx, task.test_commit, base, f"{result.attempt_id}-b2", deny=True
+    )
+    second_runs = [as_failed(run, targets, is_test) for run in second_runs]
+    second_comparison = base_comparison(second_runs, targets)
+    for run in second_runs:
+        if run.deny_evidence:
+            result.logs.append(f"base deny evidence {run.spec.verifier_id}: {run.deny_evidence}")
+    for run in second_runs:
+        shutil.rmtree(Path(run.log_path).parent, ignore_errors=True)
+    first_failed = _failed_targets(runs, targets)
+    second_failed = _failed_targets(second_runs, targets)
+    if second_comparison.kind == "UNCOMPARABLE" or first_failed != second_failed:
+        changed = sorted(first_failed ^ second_failed)
+        detail = (
+            f"targets changed: {changed}; failed at seed {ctx.hash_seed}: "
+            f"{sorted(first_failed)}; failed at seed {second_ctx.hash_seed}: "
+            f"{sorted(second_failed)}"
+        )
+        if second_comparison.kind == "UNCOMPARABLE":
+            detail += f"; second run: {second_comparison.code}: {second_comparison.detail}"
+        raise BaseUncomparable(Comparison("UNCOMPARABLE", "BASE_SEED_SENSITIVE", detail))
     return TestFiles(paths, deleted, nodes)
+
+
+def _failed_targets(runs, targets: frozenset[str]) -> frozenset[str]:
+    """Targets failed in a run, ignoring pytest parametrization suffixes."""
+    failed = {
+        node.split("[", 1)[0]
+        for run in runs
+        for node, outcome in run.outcomes.items()
+        if outcome == "failed"
+    }
+    return frozenset(target.split("[", 1)[0] for target in targets if target in failed)
 
 
 def judge_candidate(
