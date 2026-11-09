@@ -249,7 +249,7 @@ def test_full_receiver_refuses_an_added_pytest_config_with_roots(tmp_path):
     pol = policy(state, tmp_path, tests, test_roots=["tests/"])
     result = check(w, policy=pol)
     assert not result.ok and result.code == "TEST_SOURCE_MISMATCH", result
-    assert result.detail.startswith("test commit scope:"), result
+    assert result.detail == "test path 'tests/pytest.ini' is out of scope", result
 
 
 def test_a_multi_path_receipt_with_data_and_unsorted_deletions_verifies(tmp_path):

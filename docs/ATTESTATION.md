@@ -357,8 +357,9 @@ Checks run in this order and the first failure is reported:
 6. base: binding base == predicate base (== `--base`) (`BASE_MISMATCH`), present (`BASE_NOT_FOUND`)
 7. test source: `hidden_test_commit` and the policy's pins; in full mode the test commit is one
    commit on the base changing exactly `test_paths` (`TEST_SOURCE_MISMATCH`); with `test_roots`,
-   every bound test path must start with one of the roots, in both modes (`TEST_ROOT_VIOLATION`).
-   An out-of-scope deletion is refused, and full mode re-derives the scope from the test commit;
+   every bound test path must start with one of the roots, in both modes (`TEST_ROOT_VIOLATION`);
+   an out-of-scope test path (added, modified or deleted; a plain `conftest.py` may be added or
+   modified) is refused in both modes, and full mode re-derives the scope from the test commit;
    the binding's `protection` must be the level of the request's required verifier ids (a list of
    strings, else this refuses too), without
    the `_macos` suffix (`PROTECTION_LABEL_MISMATCH`; absent means `"same_process_only"`), and a
