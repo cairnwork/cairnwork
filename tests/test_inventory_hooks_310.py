@@ -160,3 +160,32 @@ def test_a_suffix_that_only_claims_equality_is_not_a_startup_suffix():
     ]
     assert probe._default_hook(machinery.FileFinder.path_hook(*probe._default_loaders()))
     assert not probe._default_hook(machinery.FileFinder.path_hook(*spoofed))
+
+
+class _ClaimsToBeAList(type):
+    def __eq__(cls, other):
+        return True
+
+    __hash__ = type.__hash__
+
+
+def test_a_container_that_only_claims_to_be_a_list_is_not_the_startup_table():
+    """The loader table must be exactly a list or tuple: a type whose metaclass says it equals
+    list, and whose iteration could change after the check, is refused (#1063)."""
+    from importlib import machinery
+
+    from cairnwork import old_python_probe as probe
+
+    want = [(s, loader) for loader, suffixes in probe._default_loaders() for s in suffixes]
+
+    class Table(metaclass=_ClaimsToBeAList):
+        def __len__(self):
+            return len(want)
+
+        def __iter__(self):
+            return iter(want)
+
+    finder: Any = machinery.FileFinder("/nowhere", *probe._default_loaders())
+    assert probe._default_finder(finder)
+    finder._loaders = Table()
+    assert not probe._default_finder(finder)

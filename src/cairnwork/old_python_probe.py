@@ -148,7 +148,7 @@ def _exact(value, want):
         return type(value) is str and str.__eq__(value, want)
     if type(want) in (list, tuple):
         return (
-            type(value) in (list, tuple)
+            (type(value) is list or type(value) is tuple)
             and len(value) == len(want)
             and all(_exact(v, w) for v, w in zip(value, want))  # noqa: B905 - no strict= on 3.6
         )
