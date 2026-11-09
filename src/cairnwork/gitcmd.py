@@ -183,25 +183,20 @@ def _child_env() -> dict[str, str]:
     return env
 
 
-def _ssh_noninteractive(env: dict[str, str], repo: Path) -> None:
-    """Disable SSH prompts unless the operator supplied an SSH command.
-
-    An operator's core.sshCommand, GIT_SSH, or GIT_SSH_COMMAND owns its prompting
-    behavior. The two GIT_SSH variables are otherwise stripped with the unsafe GIT_* env.
-    """
-    for name in ("GIT_SSH", "GIT_SSH_COMMAND"):
-        if name in os.environ:
-            env[name] = os.environ[name]
-    if any(name in os.environ for name in ("GIT_SSH", "GIT_SSH_COMMAND")):
-        return
-    configured = subprocess.run(
-        ["git", "-C", str(repo), "config", "--get", "core.sshCommand"],
-        capture_output=True,
-        env=env,
-        timeout=GIT_TIMEOUT_SECONDS,
-    )
-    if configured.returncode == 0:
-        return
+def ssh_batch_mode(env: dict[str, str], repo: Path) -> None:
+    """Make ssh fail instead of prompting (password, a key passphrase) on a network fetch or
+    push, unless the operator configured ``core.sshCommand``, which then decides prompting
+    (#759). The caller's GIT_SSH and GIT_SSH_COMMAND stay dropped with the other GIT_*
+    variables. When the setting cannot be read, BatchMode is set (it outranks the setting)."""
+    try:
+        configured = subprocess.run(  # noqa: S603, S607 - fixed argv, no shell
+            ["git", "-C", str(repo), "config", "--get", "core.sshCommand"],
+            capture_output=True, env=env, timeout=GIT_TIMEOUT_SECONDS, check=False,
+        )  # fmt: skip
+        if configured.returncode == 0:
+            return
+    except (OSError, subprocess.SubprocessError):
+        pass
     env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
 
 
@@ -220,7 +215,7 @@ def _exec(
         raise ValueError(f"timeout must be a positive number of seconds, got {timeout!r}")
     env = _child_env()
     if timeout == NETWORK_TIMEOUT_SECONDS and _subcommand(args) in ("fetch", "push"):
-        _ssh_noninteractive(env, repo)
+        ssh_batch_mode(env, repo)
     mark = _MARK.get()
     if mark is not None:
         var, val = mark

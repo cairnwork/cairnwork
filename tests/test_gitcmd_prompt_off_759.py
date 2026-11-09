@@ -193,3 +193,26 @@ def test_publish_network_fetch_does_not_rewrite_operator_ssh_command(
     publish._git(repo, "fetch", "origin")
     assert marker.exists()
     assert "BatchMode" not in marker.read_text()
+
+
+def test_a_caller_ssh_command_variable_is_still_dropped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GIT_SSH_COMMAND in the caller's environment is not the operator's configuration: it stays
+    dropped with the other GIT_* variables, and BatchMode is used."""
+    repo = _init_repo(tmp_path)
+    subprocess.run(
+        ["git", "-C", str(repo), "remote", "add", "origin", "ssh://example.invalid/x.git"],
+        check=True,
+    )
+    bindir, marker = _ssh_marker(tmp_path)
+    monkeypatch.setenv("PATH", f"{bindir}:{os.environ['PATH']}")
+    caller = tmp_path / "caller-ssh"
+    caller_marker = tmp_path / "caller-ssh-ran"
+    caller.write_text(f'#!/bin/sh\ntouch "{caller_marker}"\nexit 255\n')
+    caller.chmod(0o755)
+    monkeypatch.setenv("GIT_SSH_COMMAND", str(caller))
+    with pytest.raises(gitcmd.GitCommandError):
+        run_git(repo, "fetch", "origin", timeout=gitcmd.NETWORK_TIMEOUT_SECONDS)
+    assert not caller_marker.exists()
+    assert "-o\nBatchMode=yes" in marker.read_text()

@@ -14,7 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from cairnwork.gitcmd import _SAFE_OPTIONS, GitCommandError, config_hooks_off
+from cairnwork.gitcmd import _SAFE_OPTIONS, GitCommandError, config_hooks_off, ssh_batch_mode
 from cairnwork_attest.bundle import BundleError, read_bundle
 from cairnwork_attest.record import AttestError, parse_strict_json
 
@@ -53,8 +53,8 @@ _CONFIG_VAR = re.compile(r"GIT_CONFIG_(?:COUNT|KEY_[0-9]+|VALUE_[0-9]+)")
 def _git(repo: Path, *args: str, input: bytes | None = None) -> subprocess.CompletedProcess[str]:
     """Run git with prompts disabled and C-locale messages (stderr is matched).
 
-    Network fetch/push uses BatchMode unless core.sshCommand, GIT_SSH, or
-    GIT_SSH_COMMAND is configured; an operator's command decides prompting.
+    Network fetch/push runs ssh in BatchMode unless the operator configured core.sshCommand
+    (gitcmd.ssh_batch_mode, #759).
 
     gitcmd's options (no repository or configuration-declared hooks, no fsmonitor, no replace
     refs) and the caller's GIT_* variables dropped, except GIT_CONFIG_COUNT/KEY_n/VALUE_n: the
@@ -68,18 +68,7 @@ def _git(repo: Path, *args: str, input: bytes | None = None) -> subprocess.Compl
     }
     env.update({"GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C", "LANGUAGE": "C"})
     if args and args[0] in ("fetch", "push"):
-        for name in ("GIT_SSH", "GIT_SSH_COMMAND"):
-            if name in os.environ:
-                env[name] = os.environ[name]
-        if not any(name in os.environ for name in ("GIT_SSH", "GIT_SSH_COMMAND")):
-            configured = subprocess.run(
-                ["git", "-C", str(repo), "config", "--get", "core.sshCommand"],
-                capture_output=True,
-                env=env,
-                timeout=60,
-            )
-            if configured.returncode != 0:
-                env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
+        ssh_batch_mode(env, repo)
     try:
         hooks_off = config_hooks_off(repo, env)
     except GitCommandError as exc:  # a hook name -c cannot carry: git is not run
