@@ -26,8 +26,12 @@ for a protected name can make the file read and the latest import event disagree
 shadowed protected name holds only when no such finder is installed.
 
 Origins are judged against the install paths that the verifier's interpreter reports, not the
-observer's own. A checkout file that the candidate did not change is `checkout-base` (never flagged) only when
+observer's own. A checkout file that the candidate did not change, that base's tree has with the same bytes,
+is `checkout-base` (never flagged) only when
 its path below the checkout or an ini `pythonpath` root spells the module name, i.e. base itself
 imports it under that name (a root `secrets.py` already in base). Loaded under another name, for
 example base's `pkg/fractions.py` as `fractions` after a candidate `sys.path` edit, it is
-`checkout-shadow` and flagged. A candidate symlink is judged by the link's own path.
+`checkout-shadow` and flagged; a file base does not have with these bytes (written while the
+tests ran) is `checkout-generated` and flagged. Test-support names flag the same way, except
+a bare `conftest` that is only a shadow (pytest prepend mode loads a non-package
+`pkg/conftest.py` under that name). A candidate symlink is judged by the link's own path.

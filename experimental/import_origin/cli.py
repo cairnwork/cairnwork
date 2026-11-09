@@ -10,7 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from cairnwork.gitcmd import OID, run_git
+from cairnwork.gitcmd import OID, GitCommandError, run_git
 from cairnwork.pycache_guard import PYCACHE_DIR
 from experimental.import_origin.runner import Run, run_pytest
 from experimental.second_observer.cli import check_output
@@ -18,6 +18,7 @@ from experimental.second_observer.inputs import ShadowInput, Uncomparable, load
 from experimental.second_observer.rebuild import rebuild
 
 FLAG = "PROTECTED_NAME_FROM_CANDIDATE"
+CANDIDATE_CAUSED = frozenset({"candidate-tree", "checkout-generated", "checkout-shadow"})
 PROBES = {f"P{i}": f"p{i}_probe_target" for i in range(1, 5)}
 
 
@@ -152,12 +153,28 @@ def _classify(
             link_rel = ""
         if _candidate_file(path, checkout, changed) or link_rel in changed:
             return "candidate-tree"
-        # An unchanged file is base's own only where base itself imports it under this name:
-        # its path below the checkout or an ini pythonpath root spells the module. Loaded under
-        # another name (a candidate sys.path edit, pkg/fractions.py as ``fractions``), it is a
-        # shadow the candidate caused, and flags like a candidate file.
+        # A file base does not have with these bytes (written while the tests ran, or rewritten)
+        # is the candidate's doing. A base file is base's own only where base itself imports it
+        # under this name: its path below the checkout or an ini pythonpath root spells the
+        # module. Loaded under another name (a candidate sys.path edit, pkg/fractions.py as
+        # ``fractions``), it is a shadow the candidate caused.
+        if not _same_as_base(link, link_rel, inp, out):
+            return "checkout-generated"
         return "checkout-base" if _base_spelling(link, module, checkout, inp) else "checkout-shadow"
     return "other"
+
+
+def _same_as_base(path: Path, rel: str, inp: ShadowInput, out: Path) -> bool:
+    """Base's tree has ``rel`` and the file on disk still has base's blob."""
+    if not rel or not path.is_file():
+        return False
+    repo = out / "repo.git"
+    try:
+        blob = run_git(repo, "rev-parse", "--verify", "--quiet", f"{inp.base}:{rel}").strip()
+        disk = run_git(repo, "hash-object", "--no-filters", "--", str(path)).strip()
+    except (GitCommandError, OSError):
+        return False
+    return bool(blob) and blob == disk
 
 
 def _link_path(origin: str, out: Path) -> Path:
@@ -219,8 +236,15 @@ def classify(run: Run, inp: ShadowInput, checkout: Path, out: Path) -> dict:
         if stdlib_name or support_name:
             events.append(item)
             if _names_agree(item, out) and (
-                (stdlib_name and classification in {"candidate-tree", "checkout-shadow", "other"})
-                or (support_name and classification == "candidate-tree")
+                (stdlib_name and classification in CANDIDATE_CAUSED | {"other"})
+                or (
+                    support_name
+                    and classification in CANDIDATE_CAUSED
+                    and not (
+                        # pytest prepend mode loads a non-package pkg/conftest.py as ``conftest``
+                        name == "conftest" and classification == "checkout-shadow"
+                    )
+                )
             ):
                 flagged.append(item)
     return {

@@ -309,3 +309,22 @@ def test_candidate_symlink_to_an_unchanged_file_is_judged_by_the_link(tmp_path):
     row = _row(project, tmp_path, linked, "link")
     assert "PROTECTED_NAME_FROM_CANDIDATE" in row["flags"], row["events"]
     assert _fractions(row, "candidate-tree"), row["events"]
+
+
+def test_stdlib_named_file_written_into_the_checkout_at_run_time_is_flagged(project, tmp_path):
+    """The candidate writes a root ``secrets.py`` while the tests run; base never had it, so it
+    is ``checkout-generated`` and flagged, although its path spells the module."""
+    source = (
+        "import os\n"
+        "root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))\n"
+        "with open(os.path.join(root, 'secrets.py'), 'w') as f:\n"
+        "    f.write('TOKEN = 2\\n')\n"
+        "import secrets  # noqa: E402\n"
+        "def half(): return (1, secrets.TOKEN)\n"
+    )
+    row = _row(project, tmp_path, project.candidate({"pkg/calc.py": source}), "generated")
+    assert "PROTECTED_NAME_FROM_CANDIDATE" in row["flags"], row["events"]
+    assert any(
+        event["module"] == "secrets" and event["classification"] == "checkout-generated"
+        for event in row["flagged_events"]
+    ), [event for event in row["events"] if event["module"] == "secrets"]
