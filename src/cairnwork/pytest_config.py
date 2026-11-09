@@ -294,6 +294,11 @@ def _inside(entry: str) -> bool:
     )
 
 
+def _strict_on(option: str) -> bool:  # xfail_strict off or unknown would loosen the base
+    key, _, value = option.partition("=")
+    return key == "xfail_strict" and value.lower() in ("true", "1", "yes", "y", "t", "on")
+
+
 def _strict_args(tokens: list[str]) -> tuple[str, ...]:
     """-W filters and strict options from the base addopts, as separate argv items."""
     kept: list[str] = []
@@ -304,13 +309,9 @@ def _strict_args(tokens: list[str]) -> tuple[str, ...]:
             kept += ["-W", tokens[index + 1]]
         elif token.startswith("-W") and len(token) > 2:
             kept += ["-W", token[2:]]
-        elif (
-            token == "-o"
-            and index + 1 < len(tokens)
-            and tokens[index + 1].startswith("xfail_strict=")
-        ):
+        elif token == "-o" and index + 1 < len(tokens) and _strict_on(tokens[index + 1]):
             kept += ["-o", tokens[index + 1]]
-        elif token.startswith("-o") and token[2:].startswith("xfail_strict="):
+        elif token.startswith("-o") and _strict_on(token[2:]):
             kept += ["-o", token[2:]]
     return tuple(kept)
 

@@ -90,6 +90,7 @@ def test_only_a_known_import_mode_is_kept_from_addopts(repo, addopts, mode):
             ("-o", "xfail_strict=true", "--strict", "-W", "error"),
         ),
         ("-oxfail_strict=1 -o addopts=evil", ("-o", "xfail_strict=1")),
+        ("-o xfail_strict=false -oxfail_strict=0 -o xfail_strict=maybe", ()),
     ],
 )
 def test_only_strictness_options_are_kept_from_addopts(repo, addopts, kept):
