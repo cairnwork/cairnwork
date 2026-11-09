@@ -188,6 +188,8 @@ def recording(tag: str, run_canary: Callable[[list[str], Path], str]):
             if proc is not None and proc.poll() is not None:
                 window.problem = window.problem or "log stream exited during the run"
         _halt(guard, proc, window)  # stopped before the read: no line is still being written
+        if reason := _over(path):
+            window.problem = window.problem or reason
         evidence = _guarded(window, "the stream could not be judged", _judge_file, path, window)
         box.evidence = evidence or Evidence("UNAVAILABLE", window.problem)
     finally:
