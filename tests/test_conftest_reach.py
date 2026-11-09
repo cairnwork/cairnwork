@@ -101,6 +101,41 @@ def test_a_direct_import_of_a_changed_file_is_found(text, tree, hit):
          ["tests/pkg/deep/x.py"], ""),
         ("from tests.pkg import *\n", {"tests/pkg/__init__.py": "", "tests/other.py": ""},
          ["tests/other.py"], ""),
+        # A1: subpackage __init__ reached by star import
+        ("from tests.pkg import *\n", {
+            "tests/pkg/__init__.py": "",
+            "tests/pkg/sub/__init__.py": "",
+        },
+         ["tests/pkg/sub/__init__.py"], "tests/pkg/sub/__init__.py"),
+        # A2: module imported by reached subpackage __init__ is followed
+        ("from tests.pkg import *\n",
+         {
+            "tests/pkg/__init__.py": "",
+            "tests/pkg/sub/__init__.py": "from . import mod\n",
+            "tests/pkg/sub/mod.py": "",
+         },
+         ["tests/pkg/sub/mod.py"], "tests/pkg/sub/mod.py"),
+        # A6: relative star import reaches subpackage __init__
+        ("from .pkg import *\n", {
+            "tests/sub/pkg/__init__.py": "",
+            "tests/sub/pkg/sub2/__init__.py": "",
+        },
+         ["tests/sub/pkg/sub2/__init__.py"], "tests/sub/pkg/sub2/__init__.py"),
+        # M5: native .so as package init expands package modules
+        ("from tests.pkg import *\n", {
+            "tests/pkg/__init__.cpython-314-darwin.so": "",
+            "tests/pkg/mod.py": "",
+        },
+         ["tests/pkg/mod.py"], "tests/pkg/mod.py"),
+        # M5: cached __pycache__ init expands package modules
+        ("from tests.pkg import *\n", {
+            "tests/pkg/__pycache__/__init__.cpython-311.pyc": "",
+            "tests/pkg/mod.py": "",
+        },
+         ["tests/pkg/mod.py"], "tests/pkg/mod.py"),
+        # deeper file without init chain is not reached
+        ("from tests.pkg import *\n", {"tests/pkg/__init__.py": "", "tests/pkg/sub/deep/x.py": ""},
+         ["tests/pkg/sub/deep/x.py"], ""),
     ],
 )  # fmt: skip
 def test_star_import_reaches_only_direct_package_modules(text, tree, changed, hit):

@@ -22,7 +22,10 @@ Resolution over-approximates pytest on purpose (refusing too much is the safe si
   a method call on the list, starred, comma-separated, #1010); every import counts, at any depth
   (a fixture body's too);
 * the ``__init__.py`` of the conftest's directory and of each directory above it count too:
-  pytest may import the conftest as a module of that package (r2, cw#948 cross-model review).
+  pytest may import the conftest as a module of that package (r2, cw#948 cross-model review);
+* a star import (``from pkg import *`` or ``from .pkg import *``) reaches every module file
+  directly under the package directory, and child subpackages (their ``__init__`` files) one level
+  down (#981, #1057).
 
 The bare name ``conftest`` is not matched: a changed conftest is checked by conftest_check.py
 itself. A name built at run time (a ``pytest_plugins`` value that is not a literal, or the list set
@@ -122,20 +125,23 @@ def _targets(here: str, tree: ast.Module, files: frozenset[str], by_name) -> set
                 }
             else:
                 # the empty module name tries the package's own __init__.py
-                found |= _module_files(base, parts, files, by_name)
+                modules = _module_files(base, parts, files, by_name)
+                found |= modules
                 package = join(base, *parts) if parts else base
-                inits = {
-                    path
-                    for path in _module_files(base, parts, files, by_name)
-                    if _stem(path) == join(package, "__init__")
-                }
+                inits = {path for path in modules if _stem(path) == join(package, "__init__")}
             if star:
-                directories = {dirname(init) for init in inits}
+                directories = {dirname(_stem(init)) for init in inits}
                 found |= {
                     path
                     for path in files
-                    if _stem(path).rpartition("/")[0] in directories
-                    and _stem(path).rpartition("/")[2] != "__init__"
+                    if (
+                        _stem(path).rpartition("/")[0] in directories
+                        and _stem(path).rpartition("/")[2] != "__init__"
+                    )
+                    or (
+                        _stem(path).endswith("/__init__")
+                        and dirname(_stem(path)[:-9]) in directories
+                    )
                 }
     return found
 
