@@ -5,6 +5,9 @@ import sys
 import pytest
 from conftest import commit_change, git
 
+import cairnwork.tamper_scan as tamper_scan
+from cairnwork.gitcmd import GitCommandError
+from cairnwork.pytest_config import PytestConfigError
 from cairnwork.tamper_scan import CODE, RULES, added_lines, scan_added_lines, scan_patch
 
 # rule name -> (a line that must be caught, a similar line that must pass)
@@ -155,3 +158,56 @@ def test_custom_python_files_gets_test_only_rules(repo):
     )
     findings = scan_patch(repo, base, head, python=sys.executable)
     assert [(f.path, f.rule) for f in findings] == [("custom/check_tamper.py", "sys_modules_write")]
+
+
+def test_python_files_marked_file_keeps_library_del_rule(repo):
+    base = commit_change(repo, {"pytest.ini": "[pytest]\npython_files = check_*.py\n"})
+    head = commit_change(repo, {"custom/check_evil.py": "del foo, sys.modules['pytest']\n"})
+    findings = scan_patch(repo, base, head, python=sys.executable)
+    assert [(f.path, f.rule) for f in findings] == [("custom/check_evil.py", "sys_modules_write")]
+
+
+def test_python_files_rule_is_read_from_base_not_head(repo):
+    base = commit_change(repo, {"pytest.ini": "[pytest]\npython_files = check_*.py\n"})
+    head = commit_change(
+        repo,
+        {
+            "pytest.ini": "[pytest]\npython_files = other_*.py\n",
+            "custom/check_tamper.py": "sys.modules.clear()\n",
+        },
+    )
+    assert [(f.path, f.rule) for f in scan_patch(repo, base, head, python=sys.executable)] == [
+        ("custom/check_tamper.py", "sys_modules_write")
+    ]
+
+    base = git(repo, "rev-parse", "HEAD")
+    head = commit_change(
+        repo,
+        {
+            "pytest.ini": "[pytest]\npython_files = check_*.py\n",
+            "custom/check_tamper.py": "sys.modules.clear()\n",
+        },
+    )
+    # This must fail if scan_patch reads python_files from head: it would apply the test-only rule.
+    assert scan_patch(repo, base, head, python=sys.executable) == []
+
+
+@pytest.mark.parametrize("error", [PytestConfigError, GitCommandError])
+def test_python_files_config_error_falls_back_to_default_rule(repo, monkeypatch, error):
+    def fail(*args, **kwargs):
+        raise error("cannot read pytest config")
+
+    monkeypatch.setattr(tamper_scan, "test_file_rule", fail)
+    base = git(repo, "rev-parse", "HEAD")
+    head = commit_change(
+        repo,
+        {
+            "conftest.py": "sys.modules.clear()\n",
+            "test_case.py": "sys.modules.clear()\n",
+            "custom/check_tamper.py": "sys.modules.clear()\n",
+        },
+    )
+    assert [(f.path, f.rule) for f in scan_patch(repo, base, head, python=sys.executable)] == [
+        ("conftest.py", "sys_modules_write"),
+        ("test_case.py", "sys_modules_write"),
+    ]

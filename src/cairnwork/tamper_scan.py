@@ -98,6 +98,8 @@ _SENSITIVE_MODULE = (
 )
 # Test code by module name: a test root package, a conftest or a test module, at any depth.
 _TEST_MODULE = r"(?:\w+\.)*(?:tests|test|testing|conftest|test_\w*|\w+_test)"
+_SENSITIVE_NAME = rf"(?:{_SENSITIVE_MODULE}|{_TEST_MODULE})(?:\.[\w.]*)?"
+_SENSITIVE_KEY = rf"(?:'{_SENSITIVE_NAME}'|\"{_SENSITIVE_NAME}\")"
 _STUB_NAME = (
     rf"(?:'(?!{_SENSITIVE_MODULE}(?:\.|')|{_TEST_MODULE}(?:\.|'))[\w.]+'"
     rf"|\"(?!{_SENSITIVE_MODULE}(?:\.|\")|{_TEST_MODULE}(?:\.|\"))[\w.]+\")"
@@ -141,6 +143,8 @@ RULES: tuple[Rule, ...] = (
         "sys_modules_write",
         r"\bsys\s*\.\s*modules\s*\[(?!\s*__name__\s*\])[^\]]*\]\s*=(?!=)"
         r"|\bdel\s+sys\s*\.\s*modules\b"
+        r"|\bdel\s+[^#;]*\bsys\s*\.\s*modules\s*\[\s*"
+        rf"{_SENSITIVE_KEY}\s*\]"
         r"|\bsys\s*\.\s*modules\s*\.\s*(?:pop|popitem|update|setdefault|clear"
         r"|__setitem__|__delitem__|__ior__)\s*\(|\bsys\s*\.\s*modules\s*\|=",
         allow=_SYS_MODULES_STUB,
@@ -188,8 +192,6 @@ _ALIAS_RULES = ("os_exit", "gc_walk", "pytest_public_patch")  # read on the alia
 
 # Library files: only a literal sensitive key (the names _SYS_MODULES_STUB refuses in test code),
 # so a plugin loader's sys.modules[spec.name] = mod and a stub of an unrelated module pass.
-_SENSITIVE_NAME = rf"(?:{_SENSITIVE_MODULE}|{_TEST_MODULE})(?:\.[\w.]*)?"
-_SENSITIVE_KEY = rf"""(?:'{_SENSITIVE_NAME}'|"{_SENSITIVE_NAME}")"""
 _MODULES = r"\bsys\s*\.\s*modules\s*"
 _LIBRARY_MODULES_WRITE = re.compile(
     rf"{_MODULES}\[\s*{_SENSITIVE_KEY}\s*\]\s*=(?!=)"
