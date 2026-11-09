@@ -22,6 +22,7 @@ import os
 import pkgutil
 import stat
 import sys
+import types
 import zipimport
 
 _FILE_FINDER_HOOK = machinery.FileFinder.path_hook((machinery.SourceFileLoader, [".py"])).__code__
@@ -140,21 +141,36 @@ def _default_loaders():
     ]
 
 
+def _exact(value, want):
+    """``value == want`` without running any ``__eq__`` of ``value`` (#1063): a str leaf must be
+    exactly str, any other leaf the same object, a sequence a list or tuple of equal length."""
+    if type(want) is str:
+        return type(value) is str and str.__eq__(value, want)
+    if type(want) in (list, tuple):
+        return (
+            type(value) in (list, tuple)
+            and len(value) == len(want)
+            and all(_exact(v, w) for v, w in zip(value, want))  # noqa: B905 - no strict= on 3.6
+        )
+    return value is want
+
+
 def _default_hook(hook):
     """The standard FileFinder path hook with the startup loaders (any other details: #841)."""
-    if getattr(hook, "__code__", None) is not _FILE_FINDER_HOOK:
+    if type(hook) is not types.FunctionType or hook.__code__ is not _FILE_FINDER_HOOK:
         return False
-    values = [c.cell_contents for c in hook.__closure__]
+    values = [c.cell_contents for c in hook.__closure__ or ()]
     cells = dict(zip(hook.__code__.co_freevars, values))  # noqa: B905 - no strict= on 3.6
-    details = [(loader, list(suffixes)) for loader, suffixes in cells["loader_details"]]
-    return cells["cls"] is machinery.FileFinder and details == _default_loaders()
+    return cells["cls"] is machinery.FileFinder and _exact(
+        cells["loader_details"], _default_loaders()
+    )
 
 
 def _default_finder(importer):
     """A FileFinder (not a subclass) whose loaders are the startup ones (#841)."""
     want = [(suffix, loader) for loader, suffixes in _default_loaders() for suffix in suffixes]
-    return (
-        type(importer) is machinery.FileFinder and list(getattr(importer, "_loaders", ())) == want
+    return type(importer) is machinery.FileFinder and _exact(
+        getattr(importer, "_loaders", None), want
     )
 
 

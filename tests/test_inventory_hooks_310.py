@@ -10,6 +10,7 @@ test_old_python_inventory (this interpreter behind a script).
 
 import subprocess
 import sys
+from typing import Any
 
 import pytest
 from conftest import commit_change
@@ -33,6 +34,10 @@ SUFFIX = {
     "hook given another suffix": "import importlib.machinery as m\n"
     "sys.path_hooks[-1] = m.FileFinder.path_hook((m.SourceFileLoader, ['.py', '.txt']))\n"
     "sys.path_importer_cache.clear()",
+    "hook suffix subclass with a different value": "import importlib.machinery as m\n"
+    "class S(str):\n    def __eq__(self, other): return other == '.py'\n"
+    "sys.path_hooks[-1] = m.FileFinder.path_hook((m.SourceFileLoader, [S('.txt')]))\n"
+    "sys.path_importer_cache.clear()",
 }
 FINDERS = {
     "finder with other loaders": "import importlib.machinery as m\n"
@@ -41,6 +46,19 @@ FINDERS = {
     "FileFinder subclass": "import importlib.machinery as m, importlib._bootstrap_external as b\n"
     "F = type('F', (m.FileFinder,), {})\n"
     "sys.path_importer_cache['/nowhere'] = F('/nowhere', *b._get_supported_file_loaders())",
+    "finder suffix subclass with a different value": "import importlib.machinery as m, "
+    "importlib._bootstrap_external as b\n"
+    "class S(str):\n    def __eq__(self, other): return other == '.py'\n"
+    "f = m.FileFinder('/nowhere', *b._get_supported_file_loaders())\n"
+    "f._loaders = [(S('.txt'), l) if l is m.SourceFileLoader else (s, l) for s, l in f._loaders]\n"
+    "sys.path_importer_cache['/nowhere'] = f",
+    "loader metaclass equality spoof": "import importlib.machinery as m, "
+    "importlib._bootstrap_external as b\n"
+    "class M(type):\n    def __eq__(cls, other): return other is m.SourceFileLoader\n"
+    "class L(m.SourceFileLoader, metaclass=M): pass\n"
+    "f = m.FileFinder('/nowhere', *b._get_supported_file_loaders())\n"
+    "f._loaders = [(s, L) if l is m.SourceFileLoader else (s, l) for s, l in f._loaders]\n"
+    "sys.path_importer_cache['/nowhere'] = f",
 }
 
 
@@ -95,7 +113,10 @@ def test_a_standard_hook_with_another_suffix_fails_closed(repo, tmp_path, setup,
     )  # fmt: skip
     assert served.stdout == "42\n"
     commit_change(repo, FILES)
-    assert unavailable(repo, "pkgB/base.py", python)
+    assert rejection(repo, "pkgB/base.py", python) in (
+        "VERIFIER_PYTHON_INVENTORY_UNAVAILABLE",
+        "PROTECTED_VERIFIER_INPUT",
+    )
 
 
 @pytest.mark.parametrize("version", ((3, 9), MODERN))
@@ -116,3 +137,26 @@ def test_this_interpreter_and_its_venv_pass_the_checks():
     """The measured case (#811 prerequisite): a real venv Python, with virtualenv's finder."""
     names = module_inventory.importable_names(sys.executable)
     assert {"json", "pytest", "cairnwork"} <= names
+
+
+class _LooksLikePy(str):
+    def __eq__(self, other):
+        return other == ".py"
+
+    __hash__ = str.__hash__
+
+
+def test_a_suffix_that_only_claims_equality_is_not_a_startup_suffix():
+    """The hook check compares values, not ``__eq__``: a str subclass valued ".txt" that says it
+    equals ".py" is another suffix (#1063). The end-to-end hook case above is refused either way,
+    since such a hook also stops ``.py`` imports; this pins the check itself."""
+    from importlib import machinery
+
+    from cairnwork import old_python_probe as probe
+
+    spoofed: list[Any] = [
+        (loader, [_LooksLikePy(".txt") if s == ".py" else s for s in suffixes])
+        for loader, suffixes in probe._default_loaders()
+    ]
+    assert probe._default_hook(machinery.FileFinder.path_hook(*probe._default_loaders()))
+    assert not probe._default_hook(machinery.FileFinder.path_hook(*spoofed))
