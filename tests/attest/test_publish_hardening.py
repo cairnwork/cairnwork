@@ -328,8 +328,9 @@ def test_publish_git_sees_the_production_environment(publish_env) -> None:
     shown = _git(src, "config", "--show-origin", "--list")
     cmdline = [ln for ln in shown.stdout.splitlines() if ln.startswith("command line:")]
     assert shown.returncode == 0
-    # only the hardening options of gitcmd (#727), nothing from the test environment
+    # only the hardening options of gitcmd (#727, #759), nothing from the test environment
     assert sorted(ln.split("\t")[1] for ln in cmdline) == [
+        "core.askpass=",
         "core.fsmonitor=false",
         "core.hookspath=/dev/null",
         "core.untrackedcache=false",
