@@ -409,7 +409,11 @@ Checks run in this order and the first failure is reported:
     files show: a test a class inherits from an earlier class in the same file is a new test of
     that class too (so a target naming only the parent's copy does not cover the file), and a new
     or changed test in a class pytest does not collect (an `__init__` or `__new__`) fails with
-    `TEST_PATH_NOT_TARGETED` (detail `DEFERRED_TESTS_NOT_COLLECTED`). Confidential mode checks
+    `TEST_PATH_NOT_TARGETED` (detail `DEFERRED_TESTS_NOT_COLLECTED`). That reader only reads source and
+    never runs pytest collection, so the tests it reads can be more than pytest would run: a class
+    whose opt-out is invisible in the file (a base class from another module that sets
+    `__test__ = False`) still counts (#767). The receiver does not refuse these; it relies on the
+    signer's `DEFERRED_TESTS_NOT_RUN` check. Confidential mode checks
     neither and keeps taking the signer's word, as above
 
 On success `VerifyResult.assurance` (Python API) and `verify --json` carry `assurance`, what the receiver checked itself (`null` for v0.1):
