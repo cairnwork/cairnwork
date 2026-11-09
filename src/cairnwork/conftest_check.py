@@ -67,8 +67,15 @@ def governed(conftests: Iterable[str], existing: Iterable[str]) -> tuple[str, ..
 
 
 def check_conftests(repo: Path, base: str, test_commit: str, paths: Iterable[str]) -> None:
-    """Refuse a conftest change the allowlist does not cover; see the module docstring."""
-    paths = tuple(paths)
+    """Refuse a conftest change the allowlist does not cover; see the module docstring. Input
+    nested too deeply for the parser or for a walk of its tree is unparsable, refused (#1022)."""
+    try:
+        _check_conftests(repo, base, test_commit, tuple(paths))
+    except RecursionError as exc:
+        raise TestCommitRejected("TEST_COMMIT_UNPARSABLE", "a conftest nests too deeply") from exc
+
+
+def _check_conftests(repo: Path, base: str, test_commit: str, paths: tuple[str, ...]) -> None:
     names = conftest_of(paths)
     own = _own_packages(repo, base) if names else frozenset[str]()
     for path in names:
@@ -160,7 +167,7 @@ def _parse(repo: Path, blob: str, path: str, *, present: bool) -> ast.Module:
         raise TestCommitRejected("TEST_COMMIT_UNPARSABLE", f"{path} is not UTF-8") from exc
     try:
         return ast.parse(source)
-    except (SyntaxError, ValueError) as exc:
+    except (SyntaxError, ValueError, RecursionError, MemoryError) as exc:
         raise TestCommitRejected("TEST_COMMIT_UNPARSABLE", path) from exc
 
 
