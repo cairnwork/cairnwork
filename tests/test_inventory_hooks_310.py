@@ -13,7 +13,15 @@ import sys
 
 import pytest
 from conftest import commit_change
-from test_old_python_inventory import CASES, FILES, HOOKS, refused, stub, unavailable
+from test_old_python_inventory import (
+    CASES,
+    FILES,
+    HOOKS,
+    refused,
+    rejection,
+    stub,
+    unavailable,
+)
 
 from cairnwork import module_inventory
 
@@ -51,11 +59,26 @@ def test_a_namespace_directory_on_the_verifier_path_is_protected_on_3_10(repo, t
         del CASES["point.py"]
 
 
-@pytest.mark.parametrize("setup", sorted(HOOKS))
+QUIET = {  # hooks that leave every import working, so main's 3.10+ listing ran and allowed
+    "declining path hook": "def hook(path):\n    raise ImportError(path)\n"
+    "sys.path_hooks.insert(0, hook)\nsys.path_importer_cache.clear()",
+    "finder that finds nothing": "F = type('F', (), {'find_spec': staticmethod(lambda *a: None)})\n"
+    "sys.meta_path.insert(0, F())",
+}
+
+
+@pytest.mark.parametrize("setup", sorted(QUIET))
 def test_an_unknown_import_hook_fails_closed_on_3_10(repo, tmp_path, setup):
     """#811 gap 2: the old-Python hook allowlist now guards the 3.10+ listing too."""
     commit_change(repo, FILES)
-    assert unavailable(repo, "pkgB/base.py", stub(tmp_path, setup=HOOKS[setup], version=MODERN))
+    assert unavailable(repo, "pkgB/base.py", stub(tmp_path, setup=QUIET[setup], version=MODERN))
+
+
+@pytest.mark.parametrize("setup", sorted(HOOKS))
+def test_the_old_probe_s_hook_cases_are_refused_on_3_10(repo, tmp_path, setup):
+    """Some of these break imports outright, so either refusal code is a refusal."""
+    commit_change(repo, FILES)
+    assert rejection(repo, "pkgB/base.py", stub(tmp_path, setup=HOOKS[setup], version=MODERN))
 
 
 @pytest.mark.parametrize("version", ((3, 9), MODERN))

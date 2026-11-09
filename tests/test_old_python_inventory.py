@@ -50,7 +50,7 @@ if {old}:
     import importlib.metadata
     del sys.stdlib_module_names
     del importlib.metadata.packages_distributions
-    sys.version_info = ({major}, {minor}, 0, "final", 0)
+sys.version_info = ({major}, {minor}, 0, "final", 0)  # 3.10+ runs the probe too (#811)
 sys.path.extend({extra!r})
 {setup}
 exec(compile(code, "<probe>", "exec"), {{"__name__": "__main__"}})
