@@ -29,6 +29,9 @@ _PROTECTED_NAMES = frozenset(
     {
         "conftest.py",
         "pytest.ini",
+        "pytest.toml",
+        ".pytest.toml",
+        ".pytest.ini",
         "pyproject.toml",
         "setup.cfg",
         "tox.ini",

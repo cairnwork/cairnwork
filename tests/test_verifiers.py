@@ -234,6 +234,13 @@ def test_protected_verifier_inputs():
     assert protected_verifier_inputs(paths) == paths[1:]
 
 
+@pytest.mark.parametrize("name", ["pytest.toml", ".pytest.toml", ".pytest.ini"])
+def test_every_pytest_config_name_is_a_protected_verifier_input(name):
+    from cairnwork.verifiers import protected_verifier_inputs
+
+    assert protected_verifier_inputs((name, f"pkg/{name}")) == (name, f"pkg/{name}")
+
+
 def test_ini_in_a_parent_directory_is_ignored(project, tmp_path):
     (tmp_path / "runs").mkdir()
     (tmp_path / "runs" / "pytest.ini").write_text("[pytest]\naddopts = --co\n")

@@ -1,6 +1,8 @@
 """Which target tests give teeth on the base (#775). A target that failed in fixture setup, or
-whose every failed call raised an ``OSError``, failed because of the environment as much as the
-code (report_guard's ``fail_kind``): it gives no teeth. One target with real teeth is enough
+whose every failed call failed from the environment (an OSError, a MemoryError, a
+RecursionError, or a child process that could not run, in the exception or its cause/context
+chain; env_failure.py, #808), failed because of the environment as much as the code
+(report_guard's ``fail_kind``): it gives no teeth. One target with real teeth is enough
 (every target must still pass on the candidate). Without one, an environment failure makes the base
 UNCOMPARABLE rather than TEETH; no failure at all is NO_TEETH. Raw node ids are looked up in
 ``fail_kind`` before a ``[case]`` is folded into its target."""
@@ -36,6 +38,9 @@ def base_teeth(runs, targets) -> tuple[str, str, str]:
         detail = f"fixture setup failed for {_names(setup)}{hint}"
         return ("UNCOMPARABLE", "BASE_SETUP_ERROR", detail)
     if env:
-        detail = f"the test body raised an OSError for {_names(env)}"
+        detail = (
+            "the test body failed from the environment (OSError, MemoryError, RecursionError, "
+            f"or a subprocess that could not run) for {_names(env)}"
+        )
         return ("UNCOMPARABLE", "BASE_ENV_ERROR", detail)
     return ("NO_TEETH", "", "")

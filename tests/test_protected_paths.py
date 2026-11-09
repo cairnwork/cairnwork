@@ -89,6 +89,11 @@ def test_ordinary_paths_pass_every_entry_point(path):
     assert issue_verdict(path) is None and submit_verdict(path) is None
 
 
+@pytest.mark.parametrize("path", ["pytest.toml", ".pytest.toml", ".pytest.ini"])
+def test_every_pytest_config_name_is_protected(path):
+    assert is_protected(path)
+
+
 @pytest.mark.parametrize("path", OWN_GATE)
 def test_cairnworks_own_gate_files_are_protected(path):
     assert is_protected(path)

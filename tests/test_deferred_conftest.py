@@ -128,6 +128,18 @@ def test_the_static_check_refuses_a_name_that_rebinds_an_import(project, additio
         check_conftests(project, base, commit, ["tests/conftest.py"])
 
 
+@pytest.mark.parametrize("exc", [RecursionError, MemoryError])
+def test_a_conftest_too_deep_to_parse_is_a_refusal(project, monkeypatch, exc):
+    base, commit = _commit(project, {"tests/conftest.py": BASE_CONFTEST + "\nX = 1\n"})
+
+    def deep(source):
+        raise exc
+
+    monkeypatch.setattr(cc, "ast", SimpleNamespace(parse=deep, Module=cc.ast.Module))
+    with pytest.raises(dt.TestCommitRejected, match="TEST_COMMIT_UNPARSABLE"):
+        check_conftests(project, base, commit, ["tests/conftest.py"])
+
+
 def test_a_repository_module_named_like_the_standard_library_is_a_repository_module(project):
     base, commit = _commit(project, {"src/random.py": "x = 1\n"})
     assert "random" in _own_packages(project, commit)

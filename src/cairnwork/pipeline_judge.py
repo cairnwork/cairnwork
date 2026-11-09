@@ -19,6 +19,7 @@ from cairnwork import candidate_env, protection
 from cairnwork.account_check import unusable
 from cairnwork.account_prelude import AccountUnusableBeforeRun, after_candidate_ran, busy_once_more
 from cairnwork.blackbox_judge import judge_blackbox
+from cairnwork.changeset import ChangeSetError, read_change_set
 from cairnwork.collect_import import as_failed
 from cairnwork.conftest_check import check_conftests, without_conftests
 from cairnwork.core_request import AcceptanceSpec, VerifierObservation
@@ -40,11 +41,12 @@ from cairnwork.deferred_tests import (
 )
 from cairnwork.p2p import P2PPlan, run_plan
 from cairnwork.p2p_nodes import clean
-from cairnwork.pytest_config import test_file_rule
+from cairnwork.pytest_config import PytestConfigError, gate_import_paths, test_file_rule
 from cairnwork.reasons import explain, verdict_reason
 from cairnwork.verifier_account import VerifierAccountError
+from cairnwork.verifier_spec import protected_verifier_inputs
 from cairnwork.verifiers import run_verifiers
-from cairnwork.verify_context import VerifyContext
+from cairnwork.verify_context import VerifyContext, verifier_interpreter
 
 
 def tests_unused(task, *, claim: bool) -> None:
@@ -64,14 +66,43 @@ def tests_unused(task, *, claim: bool) -> None:
             task.test_store.require_imported(task.test_commit)
 
 
-def tests_with_teeth(task, specs, result, ctx: VerifyContext) -> tuple[str, ...]:
+def _sealing_with_tests(task, ctx: VerifyContext, candidate: str) -> None:
+    """#386: intake judged sealed packages (#382) without the hidden test commit, which it does
+    not fetch. Now that the commit is here, judge the candidate's own paths again with it: a test
+    that puts a sealed package on sys.path must not meet a candidate file that shadows a module
+    there. Fails closed when the change or the import paths cannot be read."""
+    try:
+        paths = tuple(read_change_set(task.repo, task.base_commit, candidate).paths)
+        roots = gate_import_paths(task.repo, task.base_commit, task.import_paths)
+        protected = protected_verifier_inputs(
+            paths,
+            task.test_roots,
+            repo=task.repo,
+            base_commit=task.base_commit,
+            python=verifier_interpreter(ctx),
+            import_paths=roots,
+            allow_deletions=task.allow_deletions,
+            test_commit=task.test_commit,
+        )
+    except (ChangeSetError, PytestConfigError) as exc:
+        raise TestCommitRejected("TEST_COMMIT_UNSEALS_CANDIDATE", str(exc)) from exc
+    if protected:
+        raise TestCommitRejected("TEST_COMMIT_UNSEALS_CANDIDATE", ", ".join(protected))
+
+
+def tests_with_teeth(
+    task, specs, result, ctx: VerifyContext, candidate: str | None = None
+) -> tuple[str, ...]:
     """Check a task's deferred tests once the worker is done: plain test files on the
     base whose test cases really fail there. Returns their paths; raises TestCommitRejected
     when they do not (NO_TEETH), leave a test file's changes out of every verifier target
     (DEFERRED_TESTS_NOT_TARGETED) or were not all collected and run by the base run
-    (DEFERRED_TESTS_NOT_RUN, #660), and BaseUncomparable when the base cannot tell (#234)."""
+    (DEFERRED_TESTS_NOT_RUN, #660), and BaseUncomparable when the base cannot tell (#234).
+    Callers judging a candidate pass it, so its paths meet the fetched tests (#386)."""
     check_roots_on_base(task.repo, task.base_commit, task.test_roots)  # before any base run
     ensure_test_commit(task.repo, task.test_commit, task.test_store)
+    if candidate is not None:
+        _sealing_with_tests(task, ctx, candidate)
     paths, deleted = test_paths(task.repo, task.base_commit, task.test_commit, task.test_roots)
     targets = new_tests(task.repo, task.base_commit, task.test_commit, paths)  # may refuse
     check_conftests(task.repo, task.base_commit, task.test_commit, paths)  # #798
