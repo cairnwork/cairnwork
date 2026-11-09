@@ -1,24 +1,19 @@
 """Deferred tests: the tests that prove a fix are applied only after the worker is done.
+A task may name a ``test_commit``: a commit whose only parent is the task's base and which adds
+or changes files under ``tests/`` only (a ``conftest.py`` only as an additive fixture change,
+conftest_check.py and p2p_conftest.py, #798; regular files only). The worker never gets it: its
+attempt clone holds the base. Cairnwork then:
 
-A task may name a ``test_commit``: a commit whose only parent is the task's base and
-which adds or changes files under ``tests/`` only (a ``conftest.py`` only as an additive
-fixture change, conftest_check.py and p2p_conftest.py, #798; regular files only). The worker never
-gets it: its attempt clone holds the base. Cairnwork then
+1. runs the verifiers on the test commit itself (base + tests) and requires a real failure there
+   (base_comparison): passing tests prove nothing (REFUSED); collection errors, timeouts, missing
+   sandbox/report, oversized logs, lingering processes, changed checkouts or forged bytecode make
+   the base unjudgeable (UNCOMPARABLE, #234);
+2. lays the test files over the worker's candidate in a private index and commits the result; the
+   verifiers run that commit, Core notarises it and a PR carries fix and tests together.
 
-1. runs the verifiers on the test commit itself (base + tests) and requires a real
-   failure there (base_comparison): tests that already pass prove nothing about the fix
-   (REFUSED); a base that cannot run them cleanly (collection error, timeout, no sandbox,
-   no report, a log over the cap, a process left running, a checkout the run changed, forged
-   bytecode) gives no evidence either way (UNCOMPARABLE, #234);
-2. lays the test files over the worker's candidate in a private index and commits the
-   result on top of it; that commit is what the verifiers run, Core notarises and a PR
-   would carry (fix and tests together).
-
-So the worker can neither read nor weaken the tests that judge it (the same idea as
-SWE-bench applying its tests after the model's patch), as long as it cannot reach the
-test commit elsewhere: the Issue runner never tells it the commit id. A test commit kept in
-the private store (deferred_store.py) is on no remote at all; one pushed to a public branch
-could still be found by a worker with network access.
+So the worker cannot read or weaken the tests (like SWE-bench applying tests after the patch)
+unless it reaches the commit elsewhere. The Issue runner never tells it the id; deferred_store.py
+is on no remote, though a public branch could expose it to a worker.
 """
 
 from __future__ import annotations
@@ -275,9 +270,14 @@ def _tree(repo: Path, blob: str, *, present: bool = False) -> ast.Module | None:
     except GitCommandError as exc:
         if present:
             raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
+        rev, path = blob.split(":", 1)
+        try:
+            exists = run_git(repo, "ls-tree", "--name-only", rev, "--", path)
+        except GitCommandError as check_exc:
+            raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(check_exc)) from check_exc
+        if exists:
+            raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
         return None  # a new file
-    except UnicodeDecodeError as exc:
-        raise TestCommitRejected("TEST_COMMIT_UNPARSABLE", f"{blob} is not UTF-8") from exc
     try:
         return ast.parse(source)
     except (SyntaxError, ValueError, RecursionError, MemoryError) as exc:
