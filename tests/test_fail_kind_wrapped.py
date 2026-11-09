@@ -1,9 +1,10 @@
 """#854 (#797 step 3): a denial-shaped OSError (EACCES, EPERM, EROFS, ENETUNREACH) inside a
 failure says "environment" too: an exception group member, a ``__cause__``, an unsuppressed
 ``__context__``, at any depth. Before, only the outermost exception was looked at, so a sandbox
-denial a test re-raised inside a group gave teeth and a wrong candidate could be VERIFIED. Other
-wrapped OSErrors (a missing file the code turned into its own error) stay a plain failure, as on
-main, and so does a denial the test caught and handled. End to end through the real plugin."""
+denial a test re-raised inside a group gave teeth and a wrong candidate could be VERIFIED. A
+denial the test caught and handled stays a plain failure. (A built-in OSError of another kind
+wrapped in the failure was a plain failure here until #808; it is environment now, see
+test_env_failure_e2e.py.) End to end through the real plugin."""
 
 from test_fail_kind_guard import T, _run
 
@@ -49,11 +50,6 @@ PLAIN = (
     "    except OSError:\n"
     "        pass\n"
     "    raise ExceptionGroup('bug', [AssertionError('wrong total')])\n"
-    "def test_own_error_from_a_missing_file():\n"
-    "    try:\n"
-    "        raise FileNotFoundError(errno.ENOENT, 'no config')\n"
-    "    except FileNotFoundError:\n"
-    "        raise LookupError('config not found')\n"
     "def test_context_suppressed_by_the_test():\n"
     "    try:\n"
     "        raise PermissionError(errno.EPERM, 'denied')\n"
@@ -84,9 +80,9 @@ def test_a_wrapped_denial_is_env_at_any_depth_and_past_the_bound(tmp_path):
     assert v.fail_kind == {f"{T}test_{n}": "env" for n in names}
 
 
-def test_plain_failures_and_other_wrapped_oserrors_keep_their_teeth(tmp_path):
+def test_plain_failures_keep_their_teeth(tmp_path):
     v = _run(tmp_path, PLAIN)
-    assert set(v.outcomes.values()) == {"failed"} and len(v.outcomes) == 6
+    assert set(v.outcomes.values()) == {"failed"} and len(v.outcomes) == 5
     assert v.fail_kind == {}
 
 
