@@ -13,7 +13,7 @@ confirming that all integrity invariants hold:
 4. Response echoed hashes match the four request component hashes (`acceptance_contract_hash`, `change_set_hash`, `verification_plan_hash`, `evidence_bundle_hash`).
 5. Core identity in the response matches the expected Core identity.
 6. Notary database row columns (`task_id`, `attempt_id`, `base_commit`, `candidate_commit`) match the bound request's `contract_id`, `change_set_id`, `source_revision`, and `target_revision`.
-7. Candidate commit is supplied by the caller and compared independently against the record's candidate commit and notary verdict. Every added or modified path in the binding's `test_paths` must also pass the deferred-test out-of-scope rule, which allows plain `conftest.py` files.
+7. Candidate commit is supplied by the caller and compared independently against the record's candidate commit and notary verdict.
 8. Recomputed `request_hash`: Must equal `"sha256:" + sha256(canonical_json(request))` as computed by the notary.
 9. Recomputed commit bindings: The record's `candidate_commit` must equal `change_set.target_revision` (stripped of `git-commit:` prefix) and `base_commit` must equal `change_set.source_revision` (stripped of `git-commit:` prefix).
 10. The row's base and candidate commits, `request_hash`, `http_status`, `status`, `integrity` and `response` from the first notary read must equal the notary verdict's (the second read); a difference is refused as `RECORD_MALFORMED`, naming the fields. The verdict does not carry `binding` or `recorded_at`, so those two are taken from the first read without this comparison.
@@ -357,8 +357,9 @@ Checks run in this order and the first failure is reported:
 6. base: binding base == predicate base (== `--base`) (`BASE_MISMATCH`), present (`BASE_NOT_FOUND`)
 7. test source: `hidden_test_commit` and the policy's pins; in full mode the test commit is one
    commit on the base changing exactly `test_paths` (`TEST_SOURCE_MISMATCH`); with `test_roots`,
-   every bound test path must start with one of the roots, in both modes (`TEST_ROOT_VIOLATION`).
-   An out-of-scope deletion is refused, and full mode re-derives the scope from the test commit;
+   every bound test path must start with one of the roots, in both modes (`TEST_ROOT_VIOLATION`);
+   an out-of-scope test path (added, modified or deleted; a plain `conftest.py` may be added or
+   modified) is refused in both modes, and full mode re-derives the scope from the test commit;
    the binding's `protection` must be the level of the request's required verifier ids (a list of
    strings, else this refuses too), without
    the `_macos` suffix (`PROTECTION_LABEL_MISMATCH`; absent means `"same_process_only"`), and a

@@ -16,7 +16,7 @@ from tests.attest.binding_helpers import (
     receiver,
     sign_bound,
 )
-from tests.attest.test_binding_deleted_tests import check
+from tests.attest.test_binding_deleted_tests import NEW, check
 
 FORBIDDEN = (
     "tests/pytest.ini",
@@ -71,3 +71,31 @@ def test_receiver_refuses_out_of_scope_added_test_paths(tmp_path, path, mode, ro
 def test_conftest_paths_remain_in_scope_for_added_bindings(path):
     assert not out_of_scope(path, "A")
     assert roots_problem(None, {"test_paths": [path]}, False, Path(".")) is None
+
+
+def test_full_receiver_rederives_scope_when_the_binding_omits_the_config(tmp_path):
+    """The binding lists only the test, but its test commit also adds pytest.ini: only the
+    full-mode re-derivation from the commit can see that (#1079)."""
+    p = producer(tmp_path)
+    tests = commit_on(
+        p["work"],
+        p["base"],
+        {"tests/test_new.py": NEW["tests/test_new.py"], "tests/pytest.ini": "[pytest]\n"},
+        "add test and pytest config",
+    )
+    p["tests"] = tests
+    state = tmp_path / "state"
+    run = notarize_bound(state, p, paths=("tests/test_new.py",), unchecked=True)
+    bundle = sign_bound(state, run, tmp_path / "bundle.json")
+    w = {
+        **p,
+        "state": state,
+        "bundle": bundle,
+        "pub": state / "public.pem",
+        "tmp": tmp_path,
+        "full": receiver(tmp_path, "full", p["work"], p["head"], tests),
+    }
+    pol = policy(state, tmp_path, tests, test_roots=["tests/"])
+    result = check(w, policy=pol)
+    assert not result.ok and result.code == "TEST_SOURCE_MISMATCH", result
+    assert result.detail.startswith("test commit scope:"), result
