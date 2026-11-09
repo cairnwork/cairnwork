@@ -301,7 +301,7 @@ def _judge_in(intake, task, specs, candidate, notary, result, ctx, *, source) ->
             intake.journal.record(result.task_id, result.attempt_id, "TEST_SOURCE", mode)
             # base runs: an account failure is no evidence (#234)
             with base_stage(ctx.account, ctx.python):
-                test_files = tests_with_teeth(task, specs, result, ctx)
+                test_files = tests_with_teeth(task, specs, result, ctx, candidate)
             judged = lay_tests_over(
                 task.repo, judged, task.test_commit, test_files, result.attempt_id, run_root
             )
