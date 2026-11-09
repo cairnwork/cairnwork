@@ -68,9 +68,31 @@ def _copy_checkout(cwd: Path, checkout: Path) -> bool:
     return result.returncode == 0
 
 
+def _set_checkout_modes(checkout: Path) -> None:
+    """Make the clone writable by the worker group without following symlinks."""
+    for current, directories, files in os.walk(checkout, followlinks=False):
+        root = Path(current)
+        os.chmod(root, 0o770)
+        directories[:] = [name for name in directories if not (root / name).is_symlink()]
+        for name in files:
+            path = root / name
+            if not path.is_symlink() and path.is_file():
+                os.chmod(path, 0o660)
+
+
+def _remaining_entries(root: Path) -> int:
+    """Count entries left after best-effort run-root removal, without following links."""
+    count = 0
+    for _current, directories, files in os.walk(root, followlinks=False):
+        count += len(directories) + len(files)
+    return count
+
+
 def _prepare_run_root(run_root: Path) -> bool:
     for name in ("tmp", "q"):
-        (run_root / name).mkdir(mode=0o770)
+        path = run_root / name
+        path.mkdir(mode=0o770)
+        os.chmod(path, 0o770)
     venv = run_root / "venv"
     created = _run(["uv", "venv", "-q", "--python", sys.executable, str(venv)], cwd=run_root)
     if created.returncode:
@@ -89,11 +111,9 @@ def _visible_tests(repo: Path) -> list[str]:
 def _safe_copy_back(checkout: Path, cwd: Path, paths: list[str]) -> bool:
     for rel in paths:
         source, target = checkout / rel, cwd / rel
-        if not _safe_relative(rel) or source.is_symlink() or target.is_symlink():
+        if not _safe_relative(rel):
             return False
-        if any(p.is_symlink() for p in source.parents if p != checkout.parent) or any(
-            p.is_symlink() for p in target.parents if p != cwd.parent
-        ):
+        if _has_symlink_inside(checkout, rel) or _has_symlink_inside(cwd, rel):
             return False
         if not source.exists():
             if target.exists():
@@ -107,11 +127,20 @@ def _safe_copy_back(checkout: Path, cwd: Path, paths: list[str]) -> bool:
     return True
 
 
+def _has_symlink_inside(root: Path, rel: str) -> bool:
+    current = root
+    for part in Path(rel).parts:
+        current = current / part
+        if current.is_symlink():
+            return True
+    return False
+
+
 def _snapshot(checkout: Path, paths: list[str]) -> dict[str, bytes | None] | None:
     snapshot: dict[str, bytes | None] = {}
     for rel in paths:
         path = checkout / rel
-        if path.is_symlink() or any(p.is_symlink() for p in path.parents if p != checkout.parent):
+        if not _safe_relative(rel) or _has_symlink_inside(checkout, rel):
             return None
         if path.exists() and not path.is_file():
             return None
@@ -130,85 +159,117 @@ def _has_changes(checkout: Path, before: dict[str, bytes | None]) -> bool:
     return False
 
 
+def _run_episode(prompt: str, model: str, timeout: int, cwd: Path, run_root: Path) -> int:
+    checkout = run_root / "checkout"
+    if not _prepare_run_root(run_root) or not _copy_checkout(cwd, checkout):
+        return 1
+    _set_checkout_modes(checkout)
+    allowed = _allowed(prompt)
+    before = _snapshot(checkout, allowed or [])
+    if before is None:
+        return 1
+    task_path = run_root / "task.json"
+    task_path.write_text(
+        json.dumps(
+            {
+                "task_id": f"agy-{secrets.token_hex(8)}",
+                "repo": "cairnwork",
+                "prompt": prompt,
+                "public_tests": _visible_tests(checkout),
+            }
+        ),
+        encoding="utf-8",
+    )
+    cli = _cli_args(task_path, checkout, model, timeout, allowed or [])
+    child = subprocess.Popen(
+        cli,
+        cwd=cwd,
+        env=_child_environment(cwd),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+        text=True,
+    )
+    output = _collect_output(child, timeout)
+    if output is None:
+        return 1
+    print(output, end="")
+    completed = child.returncode == 0 and "LOCAL_WORKER_EPISODE COMPLETED " in output
+    if not completed or not _has_changes(checkout, before):
+        return 1
+    return 0 if _safe_copy_back(checkout, cwd, allowed or []) else 1
+
+
+def _cli_args(
+    task: Path, checkout: Path, model: str, timeout: int, allowed: list[str]
+) -> list[str]:
+    cli = [
+        sys.executable,
+        "-m",
+        "experimental.local_worker.cli",
+        "run",
+        "--task",
+        str(task),
+        "--checkout",
+        str(checkout),
+        "--model",
+        model,
+        "--context-cap",
+        "65536",
+        "--canary-report",
+        str(CANARY),
+        "--max-wall-seconds",
+        str(timeout - 60),
+        "--runs",
+        str(RUNS),
+    ]
+    for path in allowed:
+        cli.extend(("--write-path", path))
+    return cli
+
+
+def _child_environment(cwd: Path) -> dict[str, str]:
+    env = dict(os.environ)
+    env["CAIRNWORK_ATTEMPT"] = cwd.name
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, (str(REPO_ROOT), env.get("PYTHONPATH", ""))))
+    return env
+
+
+def _collect_output(child: subprocess.Popen, timeout: int) -> str | None:
+    try:
+        output, _ = child.communicate(timeout=timeout - 10)
+    except subprocess.TimeoutExpired:
+        os.killpg(child.pid, signal.SIGKILL)
+        output, _ = child.communicate()
+        print(output, end="")
+        return None
+    return output
+
+
+def _cleanup_run_root(run_root: Path) -> None:
+    if not run_root.exists():
+        return
+    try:
+        shutil.rmtree(run_root)
+    except OSError:
+        print(
+            f"agy_shim: run-root cleanup left {_remaining_entries(run_root)} entries",
+            file=sys.stderr,
+        )
+
+
 def execute(prompt: str, model: str, timeout: int, cwd: Path) -> int:
     allowed = _allowed(prompt)
     if allowed is None:
         return 64
     run_root = RUNS / secrets.token_hex(16)
-    checkout = run_root / "checkout"
-    run_root.mkdir(parents=True, mode=0o700)
+    run_root.mkdir(parents=True, mode=0o750)
+    os.chmod(run_root, 0o750)
     try:
-        if not _prepare_run_root(run_root) or not _copy_checkout(cwd, checkout):
-            return 1
-        before = _snapshot(checkout, allowed)
-        if before is None:
-            return 1
-        task_path = run_root / "task.json"
-        task_path.write_text(
-            json.dumps(
-                {
-                    "task_id": f"agy-{secrets.token_hex(8)}",
-                    "repo": "cairnwork",
-                    "prompt": prompt,
-                    "public_tests": _visible_tests(checkout),
-                }
-            ),
-            encoding="utf-8",
-        )
-        cli = [
-            sys.executable,
-            "-m",
-            "experimental.local_worker.cli",
-            "run",
-            "--task",
-            str(task_path),
-            "--checkout",
-            str(checkout),
-            "--model",
-            model,
-            "--context-cap",
-            "65536",
-            "--canary-report",
-            str(CANARY),
-            "--max-wall-seconds",
-            str(timeout - 60),
-            "--runs",
-            str(RUNS),
-        ]
-        for path in allowed:
-            cli.extend(("--write-path", path))
-        child_env = dict(os.environ)
-        child_env["CAIRNWORK_ATTEMPT"] = cwd.name
-        child_env["PYTHONPATH"] = os.pathsep.join(
-            filter(None, (str(REPO_ROOT), child_env.get("PYTHONPATH", "")))
-        )
-        child = subprocess.Popen(
-            cli,
-            cwd=cwd,
-            env=child_env,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-            text=True,
-        )
-        try:
-            output, _ = child.communicate(timeout=timeout - 10)
-        except subprocess.TimeoutExpired:
-            os.killpg(child.pid, signal.SIGKILL)
-            output, _ = child.communicate()
-            print(output, end="")
-            return 1
-        print(output, end="")
-        completed = child.returncode == 0 and "LOCAL_WORKER_EPISODE COMPLETED " in output
-        if not completed or not _has_changes(checkout, before):
-            return 1
-        if not _safe_copy_back(checkout, cwd, allowed):
-            return 1
-        return 0
+        return _run_episode(prompt, model, timeout, cwd, run_root)
     finally:
-        if run_root.exists():
-            shutil.rmtree(run_root)
+        _cleanup_run_root(run_root)
 
 
 def main(argv: list[str] | None = None) -> int:

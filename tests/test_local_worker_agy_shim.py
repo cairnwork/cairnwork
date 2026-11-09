@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import sys
 from pathlib import Path
 
@@ -45,7 +46,15 @@ def fake_world(monkeypatch, tmp_path: Path, *, reason="COMPLETED", code=0, edit=
     runs = tmp_path / "runs"
     monkeypatch.setattr(agy_shim, "RUNS", runs)
     monkeypatch.setattr(agy_shim, "CANARY", tmp_path / "canary.json")
-    monkeypatch.setattr(agy_shim, "_prepare_run_root", lambda _root: True)
+
+    def prepare(root: Path) -> bool:
+        for name in ("tmp", "q"):
+            path = root / name
+            path.mkdir(mode=0o770)
+            path.chmod(0o770)
+        return True
+
+    monkeypatch.setattr(agy_shim, "_prepare_run_root", prepare)
 
     def clone(cwd: Path, checkout: Path) -> bool:
         checkout.mkdir(parents=True)
@@ -81,6 +90,54 @@ def test_exact_agy_argv_and_only_allowed_file_is_copied(tmp_path, monkeypatch, c
     assert (cwd / "b.py").read_text() == "base\n"
     assert not list(runs.iterdir())
     assert "LOCAL_WORKER_EPISODE COMPLETED" in capsys.readouterr().out
+
+
+def test_real_run_layout_modes(tmp_path, monkeypatch):
+    cwd = tmp_path / "attempt"
+    cwd.mkdir()
+    (cwd / "a.py").write_text("base\n")
+    fake_world(monkeypatch, tmp_path)
+    observed = {}
+    real_rmtree = shutil.rmtree
+
+    def inspect_then_remove(path):
+        root = Path(path)
+        checkout = root / "checkout"
+        for name, entry in (
+            ("root", root),
+            ("checkout", checkout),
+            ("tmp", root / "tmp"),
+            ("q", root / "q"),
+            ("file", checkout / "a.py"),
+        ):
+            observed[name] = entry.stat().st_mode & 0o777
+        real_rmtree(path)
+
+    monkeypatch.setattr(agy_shim.shutil, "rmtree", inspect_then_remove)
+    assert agy_shim.execute(PROMPT, "served-model", 600, cwd) == 0
+    assert observed == {
+        "root": 0o750,
+        "checkout": 0o770,
+        "tmp": 0o770,
+        "q": 0o770,
+        "file": 0o660,
+    }
+
+
+def test_cleanup_failure_does_not_change_successful_copy_back(tmp_path, monkeypatch, capsys):
+    cwd = tmp_path / "attempt"
+    cwd.mkdir()
+    (cwd / "a.py").write_text("base\n")
+    runs = fake_world(monkeypatch, tmp_path)
+
+    def fail_cleanup(_path):
+        raise PermissionError("worker left a residual entry")
+
+    monkeypatch.setattr(agy_shim.shutil, "rmtree", fail_cleanup)
+    assert agy_shim.execute(PROMPT, "served-model", 600, cwd) == 0
+    assert (cwd / "a.py").read_text() == "changed\n"
+    assert len(list(runs.iterdir())) == 1
+    assert capsys.readouterr().err.strip().endswith("left 7 entries")
 
 
 @pytest.mark.parametrize(
