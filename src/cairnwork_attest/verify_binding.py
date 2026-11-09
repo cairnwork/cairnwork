@@ -38,6 +38,7 @@ from cairnwork.deferred_tests import OVERLAY_RULE, TestCommitRejected, overlay_t
 from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.notary_verify import binding_hash
 from cairnwork_attest import binding_extras as bx
+from cairnwork_attest import receipt_scope
 from cairnwork_attest.binding_extras import KEYS, binding_problem, pin_problem, policy_problem
 from cairnwork_attest.record import AttestError, _digest, parse_strict_json
 from cairnwork_attest.verify_coverage import coverage_problem
@@ -305,7 +306,7 @@ def _test_source(ctx: _Ctx) -> VerifyResult | None:
         binding["rule"],
     ]:
         return _fail("TEST_SOURCE_MISMATCH", f"policy pins another test commit than {test_commit}")
-    problem = bx.roots_problem(ctx.policy, binding, ctx.full)
+    problem = receipt_scope.roots_problem(ctx.policy, binding, ctx.full, ctx.repo)
     if problem is not None:  # a failed VerifyResult is falsy
         return problem
     if not ctx.full:
@@ -387,8 +388,7 @@ def _head_tree(ctx: _Ctx) -> VerifyResult | None:
 
 
 def _assurance(full: bool, *, pinned: bool) -> dict[str, str]:
-    """What this receiver checked itself; the verifier runs are always the signer's word. Without
-    a policy the test source is whichever test commit the signer chose (``signer_choice``)."""
+    """Describe receiver checks; verifier runs are always the signer's word."""
     return {
         "mode": "full" if full else "confidential",
         "test_source": "policy_pinned" if pinned else "signer_choice",

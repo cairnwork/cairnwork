@@ -157,6 +157,44 @@ def test_confidential_mode_needs_test_roots_for_deleted_paths(world):
     assert check(world, repo="conf", policy=other).code == "TEST_ROOT_VIOLATION"
 
 
+def _world_deleting_path(tmp_path: Path, path: str) -> dict:
+    """Build a signed receipt whose real test commit deletes one protected config path."""
+    from tests.attest.binding_helpers import commit_on
+
+    p = producer(tmp_path)
+    base = commit_on(p["work"], p["base"], {path: "# config\n"}, "add config")
+    p["base"] = base
+    p["head"] = commit_on(p["work"], base, {"src/a.py": "x = 2\n"}, "fix")
+    git(p["work"], "checkout", "-q", "--detach", base)
+    git(p["work"], "rm", "-q", path)
+    (p["work"] / "tests/test_new.py").write_text(NEW["tests/test_new.py"])
+    git(p["work"], "add", "-A")
+    git(p["work"], "commit", "-q", "-m", "delete config in test commit")
+    p["tests"] = git(p["work"], "rev-parse", "HEAD")
+    git(p["work"], "branch", f"b-{p['tests'][:10]}", p["tests"])
+    state = tmp_path / "state"
+    run = notarize_bound(state, p, paths=("tests/test_new.py",), deleted=(path,), unchecked=True)
+    bundle = sign_bound(state, run, tmp_path / "bundle.json")
+    return {
+        **p,
+        "state": state,
+        "bundle": bundle,
+        "pub": state / "public.pem",
+        "tmp": tmp_path,
+        "full": receiver(tmp_path, "full", p["work"], p["head"], p["tests"]),
+        "conf": receiver(tmp_path, "conf", p["work"], p["head"]),
+    }
+
+
+@pytest.mark.parametrize("path", ["tests/conftest.py", "tests/pytest.ini"])
+@pytest.mark.parametrize("mode", ["full", "conf"])
+def test_receiver_refuses_deleted_fixture_and_pytest_config(tmp_path, path, mode):
+    w = _world_deleting_path(tmp_path, path)
+    pol = policy(w["state"], w["tmp"], w["tests"], test_roots=["tests/"])
+    result = check(w, repo=mode, policy=pol)
+    assert not result.ok and result.code == "TEST_SOURCE_MISMATCH", result
+
+
 @pytest.mark.parametrize(
     ("value", "ok"),
     [(["a/b.py"], True), ([], True), (["b", "a"], False), (["a", "a"], False), (["/a"], False),

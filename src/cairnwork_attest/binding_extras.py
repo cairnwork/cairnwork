@@ -175,23 +175,6 @@ def manifest_problem(claimed: dict[Any, Any], binding: dict[str, Any]) -> Verify
     return None
 
 
-def roots_problem(policy: Any, binding: dict[str, Any], full: bool) -> VerifyResult | None:
-    """Every test path (the deleted ones too) is under a policy ``test_roots``. A receipt with
-    deletions needs that pin in confidential mode: the receiver cannot read the test commit, so
-    without it a deleted path could be any file (#816 review)."""
-    if policy is None or "test_roots" not in policy:
-        if deleted_paths(binding) and not full:
-            return _fail("TEST_ROOT_VIOLATION", "deleted test paths need a policy with test_roots")
-        return None
-    roots = tuple(policy["test_roots"])
-    for path in all_paths(binding):
-        if not any(path.startswith(r.rstrip("/") + "/") for r in roots):
-            return _fail(
-                "TEST_ROOT_VIOLATION", f"test path {path[:200]!r} not under any allowed root"
-            )
-    return None
-
-
 def conftest_problem(ctx: Any) -> VerifyResult | None:
     """#798: a receipt with ``conftest_paths`` is accepted by a confidential receiver only when its
     policy sets ``allow_conftest`` (it cannot read the conftest), and a full receiver re-runs the

@@ -382,6 +382,8 @@ Checks run in this order and the first failure is reported:
     `path::test[case]`, which names its test; #714). Full mode reads
     those tests from the test commit; confidential mode cannot, so there any target naming a test
     in the file counts, on the signer's word like the test contents (`TEST_PATH_NOT_TARGETED`).
+    Bound verifier ids must be unique and cannot use reserved protection ids
+    (`VERIFIER_ID_INVALID`).
     A `conftest.py` among `test_paths` (#798) is exempt from that rule and bound by the optional key
     `conftest_paths`, which must be exactly the paths in `test_paths` whose basename is `conftest.py`
     (sorted). A confidential receiver refuses it (`CONFTEST_NOT_ALLOWED`) unless its policy sets
