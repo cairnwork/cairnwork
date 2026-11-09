@@ -280,3 +280,32 @@ def test_interpreter_roots_that_would_hide_candidate_files_are_uncomparable(tmp_
     fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
     with pytest.raises(Uncomparable):
         interpreter_paths(str(fake), checkout, tmp_path / "out")
+
+
+def test_unchanged_base_file_loaded_under_a_stdlib_name_by_a_candidate_path_edit_is_flagged(
+    tmp_path,
+):
+    """Base already has pkg/fractions.py; the candidate only adds the E1 sys.path edit, so the
+    unchanged file loads as stdlib ``fractions``. That shadow is the candidate's doing."""
+    base = BASE | {"pkg/fractions.py": SHADOW["pkg/fractions.py"]}
+    project = Project(tmp_path, tests={"pkg/tests/test_half.py": DEFERRED}, base_files=base)
+    row = _row(project, tmp_path, project.candidate(WRONG), "base-shadow")
+    assert "PROTECTED_NAME_FROM_CANDIDATE" in row["flags"]
+    assert _fractions(row, "checkout-shadow"), row["events"]
+
+
+def test_candidate_symlink_to_an_unchanged_file_is_judged_by_the_link(tmp_path):
+    """A new pkg/fractions.py symlink to an unchanged base file is a candidate file."""
+    from second_observer_support import git
+
+    base = BASE | {"pkg/_compat.py": SHADOW["pkg/fractions.py"]}
+    project = Project(tmp_path, tests={"pkg/tests/test_half.py": DEFERRED}, base_files=base)
+    git(project.repo, "checkout", "-q", "--detach", project.base)
+    (project.repo / "pkg" / "calc.py").write_text(WRONG["pkg/calc.py"])
+    (project.repo / "pkg" / "fractions.py").symlink_to("_compat.py")
+    git(project.repo, "add", "-A")
+    git(project.repo, "commit", "-q", "-m", "candidate with a link")
+    linked = git(project.repo, "rev-parse", "HEAD")
+    row = _row(project, tmp_path, linked, "link")
+    assert "PROTECTED_NAME_FROM_CANDIDATE" in row["flags"], row["events"]
+    assert _fractions(row, "candidate-tree"), row["events"]

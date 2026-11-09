@@ -145,9 +145,43 @@ def _classify(
     if any(_under(path, Path(paths[key])) for key in ("stdlib", "platstdlib")):
         return "stdlib"
     if _under(path, checkout):
-        # A checkout file the candidate did not change was already in base: not its doing.
-        return "candidate-tree" if _candidate_file(path, checkout, changed) else "checkout-base"
+        link = _link_path(origin, out)
+        try:
+            link_rel = link.relative_to(checkout.resolve()).as_posix()
+        except ValueError:
+            link_rel = ""
+        if _candidate_file(path, checkout, changed) or link_rel in changed:
+            return "candidate-tree"
+        # An unchanged file is base's own only where base itself imports it under this name:
+        # its path below the checkout or an ini pythonpath root spells the module. Loaded under
+        # another name (a candidate sys.path edit, pkg/fractions.py as ``fractions``), it is a
+        # shadow the candidate caused, and flags like a candidate file.
+        return "checkout-base" if _base_spelling(link, module, checkout, inp) else "checkout-shadow"
     return "other"
+
+
+def _link_path(origin: str, out: Path) -> Path:
+    """The file as the run named it: directories resolved, the last component not, so a new
+    candidate symlink to an unchanged file is judged by the link, not by its target."""
+    path = Path(origin)
+    prefix = Path(os.path.realpath(out / "run" / "tmp" / PYCACHE_DIR))
+    if path.suffix == ".pyc" or _under(path, prefix):
+        return source_of(origin, out)
+    return Path(os.path.realpath(path.parent)) / path.name
+
+
+def _base_spelling(path: Path, module: str, checkout: Path, inp: ShadowInput) -> bool:
+    for root in (".", *inp.pythonpath):
+        try:
+            rel = path.relative_to((checkout / root).resolve())
+        except ValueError:
+            continue
+        parts = rel.with_suffix("").parts
+        if parts and parts[-1] == "__init__":
+            parts = parts[:-1]
+        if ".".join(parts) == module:
+            return True
+    return False
 
 
 def _names_agree(item: dict, out: Path) -> bool:
@@ -185,7 +219,7 @@ def classify(run: Run, inp: ShadowInput, checkout: Path, out: Path) -> dict:
         if stdlib_name or support_name:
             events.append(item)
             if _names_agree(item, out) and (
-                (stdlib_name and classification in {"candidate-tree", "other"})
+                (stdlib_name and classification in {"candidate-tree", "checkout-shadow", "other"})
                 or (support_name and classification == "candidate-tree")
             ):
                 flagged.append(item)
