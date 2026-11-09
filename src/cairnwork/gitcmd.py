@@ -183,6 +183,23 @@ def _child_env() -> dict[str, str]:
     return env
 
 
+def ssh_batch_mode(env: dict[str, str], repo: Path) -> None:
+    """Make ssh fail instead of prompting (password, a key passphrase) on a network fetch or
+    push, unless the operator configured ``core.sshCommand``, which then decides prompting
+    (#759). The caller's GIT_SSH and GIT_SSH_COMMAND stay dropped with the other GIT_*
+    variables. When the setting cannot be read, BatchMode is set (it outranks the setting)."""
+    try:
+        configured = subprocess.run(  # noqa: S603, S607 - fixed argv, no shell
+            ["git", "-C", str(repo), "config", "--get", "core.sshCommand"],
+            capture_output=True, env=env, timeout=GIT_TIMEOUT_SECONDS, check=False,
+        )  # fmt: skip
+        if configured.returncode == 0:
+            return
+    except (OSError, subprocess.SubprocessError):
+        pass
+    env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
+
+
 def _exec(
     repo: Path,
     args: tuple[str, ...],
@@ -197,6 +214,8 @@ def _exec(
     if not timeout or timeout <= 0:
         raise ValueError(f"timeout must be a positive number of seconds, got {timeout!r}")
     env = _child_env()
+    if _subcommand(args) in ("fetch", "push"):  # any of them may reach origin over ssh; a
+        ssh_batch_mode(env, repo)  # local path or bundle never calls ssh, so this is harmless
     mark = _MARK.get()
     if mark is not None:
         var, val = mark
