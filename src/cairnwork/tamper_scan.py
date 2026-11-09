@@ -41,14 +41,18 @@ from __future__ import annotations
 
 import posixpath
 import re
-import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
 from cairnwork.gitcmd import OID, GitCommandError, run_git_bytes
 from cairnwork.tamper_scan_budget import SCAN_BUDGET, ScanBudget, Table
 from cairnwork.tamper_scan_budget import canonical as _canonical
-from cairnwork.tamper_scan_diff import MAX_LINE, added_lines
+from cairnwork.tamper_scan_diff import (
+    MAX_LINE,
+    added_lines,
+    foreign_coding,
+)
+from cairnwork.tamper_scan_diff import nfkc_names as nfkc_names
 from cairnwork.tamper_scan_plugin import (
     CODE_FORGE,
     DYNAMIC_LOADER,
@@ -86,9 +90,6 @@ def _rule(
 
 
 _COMMENT_ONLY = re.compile(r"^\s*#")
-# A PEP 263 encoding declaration (Python reads it on line 1 or 2) and the UTF-8 names it accepts.
-_CODING = re.compile(r"^[ \t\f]*#.*?coding[:=][ \t]*([-\w.]+)", re.ASCII)
-_UTF8 = re.compile(r"utf[-_]8(?:[-_][-\w.]*)?|utf8", re.ASCII | re.IGNORECASE)
 # sys.modules entries a forgery would swap; a literal key naming any other module is a test stub.
 _SENSITIVE_MODULE = (
     r"(?:_?pytest\w*|pluggy|py|_?cairnwork\w*|sys|os|builtins|importlib|gc|conftest|__main__)"
@@ -293,7 +294,7 @@ def scan_added_lines(
             if not budget.piece():  # empty and skipped pieces still cost a pass (#668)
                 return found + [Finding(path, number, SCAN_BUDGET)]
             view = views.get((number, index))
-            if number <= 2 and _foreign_coding(piece):
+            if number <= 2 and foreign_coding(piece):
                 found.append(Finding(path, number, "source_encoding"))
             if _COMMENT_ONLY.match(piece) and view and view.skip and len(view.code) == len(piece):
                 continue  # a comment to Python, or string text with no code on the line
@@ -355,20 +356,8 @@ def _committed_coding(path: str, data: bytes | None, found: list[Finding]) -> li
     return [
         Finding(path, number, "source_encoding")
         for number, line in head
-        if number not in seen and any(_foreign_coding(piece) for piece in line.split("\r"))
+        if number not in seen and any(foreign_coding(piece) for piece in line.split("\r"))
     ]
-
-
-def nfkc_names(text: str) -> str:  # the one normaliser of the line rules (STRING-BUILT later)
-    """Identifier characters in NFKC form, the rest as written (no new operator or separator)."""
-    pairs = ((char, unicodedata.normalize("NFKC", char)) for char in text)
-    return "".join(new if ("a" + new).isidentifier() else old for old, new in pairs)
-
-
-def _foreign_coding(text: str) -> bool:
-    """A comment declaring a source encoding other than UTF-8 (read by Python on line 1 or 2)."""
-    found = _CODING.match(text)
-    return found is not None and not _UTF8.fullmatch(found.group(1))
 
 
 def scan_patch(
