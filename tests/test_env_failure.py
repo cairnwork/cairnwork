@@ -192,3 +192,11 @@ def test_base_teeth_names_every_kind_of_environment_failure():
 def test_one_target_with_real_teeth_outweighs_an_environment_failure():
     runs = [run_of({"t.py::a": "failed", "t.py::b": "failed"}, {"t.py::a": "env"})]
     assert base_teeth(runs, {"t.py::a", "t.py::b"}) == ("TEETH", "", "")
+
+
+def test_a_cycle_in_the_chain_ends_the_walk(root):
+    a, b = ValueError("a"), ValueError("b")
+    a.__context__, b.__context__ = b, a
+    assert is_env_failure(info(a), root) is False
+    b.__cause__ = OSError()
+    assert is_env_failure(info(a), root) is True

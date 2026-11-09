@@ -64,19 +64,22 @@ def _env_exc(info, root, _denied=_denied_inside, _type=type, _base=BaseException
     # a call's exception info -> True when it, or a link of its cause/context chain (at most 64),
     # failed from the environment. Read through type() and the built-in descriptors, so a test's
     # exception class (properties, __eq__) runs no code here; an AssertionError is not walked;
-    # an unreadable chain or one past the bound is an environment failure (fail closed).
+    # a cycle ends the walk; an unreadable chain or one past the bound is an environment failure
+    # (fail closed).
     try:
         exc = top = getattr(info, "value", None)
         if not _sub(_type(exc), _base):
             return False
         if _sub(_type(exc), AssertionError):
             return _denied(exc)
+        seen = set()
         for _ in range(64):
             if _link(exc, root):
                 return True
+            seen.add(id(exc))
             cause = _cause(exc)
             exc = cause if cause is not None else (None if _quiet(exc) else _ctx(exc))
-            if exc is None or not _sub(_type(exc), _base):
+            if exc is None or id(exc) in seen or not _sub(_type(exc), _base):
                 return _denied(top)
         return True
     except BaseException:
