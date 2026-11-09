@@ -66,6 +66,9 @@ def roots_problem(
     problem = deleted_path_problem(deleted)
     if problem:
         return _fail("TEST_SOURCE_MISMATCH", problem)
+    for path in paths:
+        if out_of_scope(path, "A"):
+            return _fail("TEST_SOURCE_MISMATCH", f"test path {path[:200]!r} is out of scope")
     if full:
         problem = full_paths_problem(
             repo,

@@ -13,7 +13,7 @@ confirming that all integrity invariants hold:
 4. Response echoed hashes match the four request component hashes (`acceptance_contract_hash`, `change_set_hash`, `verification_plan_hash`, `evidence_bundle_hash`).
 5. Core identity in the response matches the expected Core identity.
 6. Notary database row columns (`task_id`, `attempt_id`, `base_commit`, `candidate_commit`) match the bound request's `contract_id`, `change_set_id`, `source_revision`, and `target_revision`.
-7. Candidate commit is supplied by the caller and compared independently against the record's candidate commit and notary verdict.
+7. Candidate commit is supplied by the caller and compared independently against the record's candidate commit and notary verdict. Every added or modified path in the binding's `test_paths` must also pass the deferred-test out-of-scope rule, which allows plain `conftest.py` files.
 8. Recomputed `request_hash`: Must equal `"sha256:" + sha256(canonical_json(request))` as computed by the notary.
 9. Recomputed commit bindings: The record's `candidate_commit` must equal `change_set.target_revision` (stripped of `git-commit:` prefix) and `base_commit` must equal `change_set.source_revision` (stripped of `git-commit:` prefix).
 10. The row's base and candidate commits, `request_hash`, `http_status`, `status`, `integrity` and `response` from the first notary read must equal the notary verdict's (the second read); a difference is refused as `RECORD_MALFORMED`, naming the fields. The verdict does not carry `binding` or `recorded_at`, so those two are taken from the first read without this comparison.

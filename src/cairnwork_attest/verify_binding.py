@@ -50,7 +50,8 @@ _BINDING_KEYS = {"rule", "base", "head", "test_commit", "test_paths", "executed_
 _REQUIRED_POLICY_KEYS = {"rule", "test_commit", "core_identity", "key_id"}
 _OPTIONAL_POLICY_KEYS = {"require_full", "test_roots", "blackbox_checks"} | KEYS | bx.POLICY_ONLY
 _POLICY_KEYS = _REQUIRED_POLICY_KEYS | _OPTIONAL_POLICY_KEYS
-_OID, _KEYID = (re.compile(r"^[0-9a-f]{40}$"), re.compile(r"^[0-9a-f]{64}$"))
+_OID = re.compile(r"^[0-9a-f]{40}$")
+_KEYID = re.compile(r"^[0-9a-f]{64}$")
 _REGULAR = ("100644", "100755")
 
 
@@ -387,7 +388,8 @@ def _head_tree(ctx: _Ctx) -> VerifyResult | None:
 
 
 def _assurance(full: bool, *, pinned: bool) -> dict[str, str]:
-    """Without a policy the test source is whichever test commit the signer chose
+    """What this receiver checked itself; the verifier runs are always the signer's word. Without
+    a policy the test source is whichever test commit the signer chose
     (``signer_choice``)."""
     return {
         "mode": "full" if full else "confidential",
