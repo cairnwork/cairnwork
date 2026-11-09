@@ -102,7 +102,10 @@ def test_the_candidate_reason_names_a_setup_error_on_a_target():
 
 def test_the_candidate_reason_names_an_environment_error_on_a_target():
     why = why_not_passed(**BASE, returncode=1, fail_kind={T2: "env"})
-    assert "environment error (OSError) in" in why and "test_two" in why
+    assert (
+        "environment error (OSError, MemoryError, RecursionError, child) in" in why
+        and "test_two" in why
+    )
 
 
 def test_the_candidate_reason_is_unchanged_without_a_kind():

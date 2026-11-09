@@ -368,7 +368,7 @@ def _attempt(task, specs, digest, notary, worker, result, steps, ctx: VerifyCont
                 steps.reach("TEST_SOURCE", mode)  # the mode of this run, read by cairnwork_attest
                 # an account failure here: no evidence (#234)
                 with base_stage(ctx.account, ctx.python):
-                    test_files = tests_with_teeth(task, specs, result, ctx)
+                    test_files = tests_with_teeth(task, specs, result, ctx, judged)
                     judged = lay_tests_over(
                         task.repo,
                         judged,
