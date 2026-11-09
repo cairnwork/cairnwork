@@ -184,3 +184,39 @@ def test_classify_matches_the_class_of_a_class_test():
 def test_classify_drops_a_test_the_last_class_of_that_name_does_not_define(base):
     side = classify({"t.py::A::test_a"}, set(), {"t.py"}, lambda p: "", lambda p: base)
     assert side.removed == set() and side.dropped == {"t.py::A::test_a"}
+
+
+def test_classify_removes_class_test_when_another_class_keeps_same_name():
+    # #842: removing A::test_x was dropped on main because B::test_x matched re.search
+    base = "class A:\n    def test_x(self): pass\nclass B:\n    def test_x(self): pass\n"
+    source = "class A:\n    pass\nclass B:\n    def test_x(self): pass\n"
+    ids = {"t.py::A::test_x", "t.py::B::test_x"}
+    side = classify(ids, {"t.py::B::test_x"}, {"t.py"}, lambda p: source, lambda p: base)
+    assert side.removed == {"t.py::A::test_x"} and side.dropped == set()
+
+
+def test_classify_removes_module_test_when_class_keeps_same_name():
+    # #842: removing module-level test_x was dropped on main because class B matched re.search
+    base = "def test_x(): pass\nclass B:\n    def test_x(self): pass\n"
+    source = "class B:\n    def test_x(self): pass\n"
+    ids = {"t.py::test_x", "t.py::B::test_x"}
+    side = classify(ids, {"t.py::B::test_x"}, {"t.py"}, lambda p: source, lambda p: base)
+    assert side.removed == {"t.py::test_x"} and side.dropped == set()
+
+
+def test_classify_drops_parameterized_case_when_function_still_collected():
+    # #842: removing a single case when the function still runs is dropped, never removed
+    base = "def test_p(x): pass\n"
+    source = "def test_p(x): pass\n"
+    ids = {"t.py::test_p[1]", "t.py::test_p[2]"}
+    side = classify(ids, {"t.py::test_p[2]"}, {"t.py"}, lambda p: source, lambda p: base)
+    assert side.removed == set() and side.dropped == {"t.py::test_p[1]"}
+
+
+def test_classify_removes_parameterized_method_even_if_other_class_defines_name():
+    # #842: removing A::test_p removes all its cases even when class B defines test_p
+    base = "class A:\n    def test_p(self, x): pass\nclass B:\n    def test_p(self, x): pass\n"
+    source = "class A:\n    pass\nclass B:\n    def test_p(self, x): pass\n"
+    ids = {"t.py::A::test_p[1]", "t.py::B::test_p[1]"}
+    side = classify(ids, {"t.py::B::test_p[1]"}, {"t.py"}, lambda p: source, lambda p: base)
+    assert side.removed == {"t.py::A::test_p[1]"} and side.dropped == set()

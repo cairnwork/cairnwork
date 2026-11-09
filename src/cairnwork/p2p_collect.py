@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import ast
 import hashlib
-import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -99,16 +98,21 @@ def classify(base_ids, test_ids, edited, source, base_source) -> CollectedSide:
     """Split the base ids the test commit no longer collects into removed and dropped.
 
     ``source`` / ``base_source`` give a file's text on the test commit / the base."""
-    removed, dropped, texts, bases = set(), set(), {}, {}
+    removed, dropped, texts, bases, test_trees = set(), set(), {}, {}, {}
+    collected_funcs = {_function(n) for n in test_ids}
     for nodeid in base_ids - test_ids:
         path = _file(nodeid)
         gone = False
-        if path in edited:
+        if path in edited and _function(nodeid) not in collected_funcs:
             if path not in texts:
-                texts[path], bases[path] = source(path), _tree(base_source(path))
+                texts[path] = source(path)
+                bases[path] = _tree(base_source(path))
+                test_trees[path] = _tree(texts[path])
             *owners, name = _function(nodeid).split("::")[1:]
-            gone = _defines(bases[path], owners, name) and not re.search(
-                rf"\b{re.escape(name)}\b", texts[path]
+            gone = (
+                _defines(bases[path], owners, name)
+                and test_trees[path] is not None
+                and not _scope_mentions(test_trees[path], owners, name)
             )
         (removed if gone else dropped).add(nodeid)
     return CollectedSide(
@@ -171,6 +175,25 @@ def _tree(text: str) -> ast.Module | None:
         return ast.parse(text)
     except (SyntaxError, ValueError):
         return None  # nothing is provably defined: the id is dropped, never removed
+
+
+def _scope_mentions(tree: ast.Module, owners: list[str], name: str) -> bool:
+    """Whether ``name`` appears in the class chain ``owners`` (or module level if empty)."""
+    body = tree.body
+    for owner in owners:
+        found = [n for n in body if isinstance(n, ast.ClassDef) and n.name == owner]
+        if not found:
+            return False
+        body = found[-1].body
+    nodes = body if owners else [n for n in body if not isinstance(n, ast.ClassDef)]
+    kinds = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+    for node in nodes:
+        for n in ast.walk(node):
+            if isinstance(n, kinds) and n.name == name:
+                return True
+            if isinstance(n, ast.Name) and n.id == name:
+                return True
+    return False
 
 
 def _defines(tree: ast.Module | None, owners: list[str], name: str) -> bool:
