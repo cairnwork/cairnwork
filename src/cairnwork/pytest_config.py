@@ -40,9 +40,17 @@ from cairnwork.pytest_config_files import (
     _ALWAYS_FOUND,
     _CANDIDATES,
     PytestConfigError,
-    _section,
     refuse_both_kinds,
 )
+from cairnwork.pytest_config_files import _section as _file_section
+
+
+def _section(text: str, section: str, form: str, name: str) -> dict[str, Any] | None:
+    try:
+        return _file_section(text, section, form, name)
+    except RecursionError as exc:
+        raise PytestConfigError(f"{name} at the base cannot be parsed") from exc
+
 
 # Copied from the base configuration. Each one only decides which tests exist and how
 # they run, never where configuration, plugins or reports come from:
@@ -71,6 +79,8 @@ BASE_KEYS = (
     "norecursedirs",
     "markers",
     "filterwarnings",
+    "usefixtures",
+    "log_level",
     "xfail_strict",
     "strict",
     "strict_xfail",
@@ -103,7 +113,7 @@ DJANGO_PINNED = ("django_find_project", "false")
 IMPORT_MODES = frozenset({"prepend", "append", "importlib"})
 # From the base addopts only these survive (everything else is dropped): the import
 # mode, and options that make the run stricter (-W warning filters, strict markers/config).
-STRICT_OPTIONS = frozenset({"--strict-markers", "--strict-config"})
+STRICT_OPTIONS = frozenset({"--strict-markers", "--strict-config", "--strict"})
 _KEY = re.compile(r"^[A-Za-z0-9_]+$")
 
 
@@ -284,6 +294,11 @@ def _inside(entry: str) -> bool:
     )
 
 
+def _strict_on(option: str) -> bool:  # xfail_strict off or unknown would loosen the base
+    key, _, value = option.partition("=")
+    return key == "xfail_strict" and value.lower() in ("true", "1", "yes", "y", "t", "on")
+
+
 def _strict_args(tokens: list[str]) -> tuple[str, ...]:
     """-W filters and strict options from the base addopts, as separate argv items."""
     kept: list[str] = []
@@ -294,6 +309,10 @@ def _strict_args(tokens: list[str]) -> tuple[str, ...]:
             kept += ["-W", tokens[index + 1]]
         elif token.startswith("-W") and len(token) > 2:
             kept += ["-W", token[2:]]
+        elif token == "-o" and index + 1 < len(tokens) and _strict_on(tokens[index + 1]):
+            kept += ["-o", tokens[index + 1]]
+        elif token.startswith("-o") and _strict_on(token[2:]):
+            kept += ["-o", token[2:]]
     return tuple(kept)
 
 

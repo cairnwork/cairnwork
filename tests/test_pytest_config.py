@@ -85,11 +85,42 @@ def test_only_a_known_import_mode_is_kept_from_addopts(repo, addopts, mode):
         ("-Werror::UserWarning --strict-config", ("-W", "error::UserWarning", "--strict-config")),
         ("--strict-markers --tb=no -x --rootdir=/ -W", ("--strict-markers",)),
         ("-c other.ini --confcutdir=/ -o addopts=", ()),
+        (
+            "-o xfail_strict=true --strict -W error",
+            ("-o", "xfail_strict=true", "--strict", "-W", "error"),
+        ),
+        ("-oxfail_strict=1 -o addopts=evil", ("-o", "xfail_strict=1")),
+        ("-o xfail_strict=false -oxfail_strict=0 -o xfail_strict=maybe", ()),
     ],
 )
 def test_only_strictness_options_are_kept_from_addopts(repo, addopts, kept):
     base = commit_change(repo, {"pytest.ini": f"[pytest]\naddopts = {addopts}\n"})
     assert base_settings(repo, base).strict_args == kept
+
+
+def test_usefixtures_and_log_level_are_copied_from_base_config(repo, tmp_path):
+    base = commit_change(
+        repo,
+        {
+            "pytest.ini": (
+                "[pytest]\nusefixtures = fix1 fix2\nlog_level = INFO\ncache_dir = /tmp/x\n"
+            )
+        },
+    )
+    settings = base_settings(repo, base)
+    ini = read_ini(settings.ini_text(tmp_path / "co"))
+    assert ini["usefixtures"] == "fix1 fix2"
+    assert ini["log_level"] == "INFO"
+    assert "usefixtures" not in settings.dropped
+    assert "log_level" not in settings.dropped
+    assert "cache_dir" in settings.dropped
+
+
+def test_deeply_nested_pyproject_raises_pytest_config_error(repo):
+    nested = "a = " + "[" * 5000 + "1" + "]" * 5000 + "\n"
+    base = commit_change(repo, {"pyproject.toml": nested})
+    with pytest.raises(PytestConfigError, match="pyproject.toml at the base cannot be parsed"):
+        base_settings(repo, base)
 
 
 def test_plugin_keys_need_the_plugin(repo, tmp_path):
