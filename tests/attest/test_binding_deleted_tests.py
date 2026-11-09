@@ -207,6 +207,7 @@ def test_receiver_refuses_deleted_fixture_and_pytest_config(tmp_path, path, mode
         "tests/x.pth",
         "tests/X.PTH",
         "tests/sitecustomize/h.py",
+        "tests/SiteCustomize/h.py",
         "tests/sub/PyProject.toml",
     ],
 )

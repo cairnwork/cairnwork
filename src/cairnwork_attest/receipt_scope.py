@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any
 
 from cairnwork.deferred_tests import (
-    _NOT_TEST_FILES,
-    _SITE_NAMES,
     TestCommitRejected,
+    out_of_scope,
     test_paths,
 )
 from cairnwork_attest.verify_response import VerifyResult, _fail
@@ -17,12 +16,7 @@ from cairnwork_attest.verify_response import VerifyResult, _fail
 def deleted_path_problem(paths: list[str]) -> str:
     """Check deleted names available in both receiver modes."""
     for path in paths:
-        parts, name = PurePosixPath(path).parts, PurePosixPath(path).name.casefold()
-        if (
-            name in _NOT_TEST_FILES
-            or name.endswith(".pth")
-            or {part.casefold() for part in parts} & _SITE_NAMES
-        ):
+        if out_of_scope(path, "D"):
             return f"deleted test path {path[:200]!r} is out of scope"
     return ""
 
