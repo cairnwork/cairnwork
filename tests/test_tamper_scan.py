@@ -141,3 +141,17 @@ def test_paths_git_quotes_are_still_scanned(repo):
     )
     found = {(f.path, f.rule) for f in scan_patch(repo, base, head, python=sys.executable)}
     assert found == {('src/we"ird.py', "os_exit"), ("src/café.py", "gc_walk")}
+
+
+def test_custom_python_files_gets_test_only_rules(repo):
+    """A test file named by a custom python_files setting gets test-only rules (#829)."""
+    base = commit_change(repo, {"pytest.ini": "[pytest]\npython_files = check_*.py\n"})
+    head = commit_change(
+        repo,
+        {
+            "custom/check_tamper.py": "sys.modules.clear()\n",
+            "custom/other.py": "sys.modules.clear()\n",
+        },
+    )
+    findings = scan_patch(repo, base, head, python=sys.executable)
+    assert [(f.path, f.rule) for f in findings] == [("custom/check_tamper.py", "sys_modules_write")]

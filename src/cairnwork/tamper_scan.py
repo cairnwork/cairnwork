@@ -41,10 +41,12 @@ from __future__ import annotations
 
 import posixpath
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from cairnwork.gitcmd import OID, GitCommandError, run_git_bytes
+from cairnwork.pytest_config import PytestConfigError, test_file_rule
 from cairnwork.tamper_scan_budget import SCAN_BUDGET, ScanBudget, Table
 from cairnwork.tamper_scan_budget import canonical as _canonical
 from cairnwork.tamper_scan_diff import (
@@ -112,13 +114,13 @@ _SYS_MODULES_STUB = (
 _TEST_DIRS = frozenset({"tests", "test", "testing"})
 
 
-def _is_test_path(path: str) -> bool:
-    """conftest.py, test_*.py / *_test.py, or any file under a tests/ test/ testing/ directory."""
+def _is_test_path(path: str, is_test: Callable[[str], bool] | None = None) -> bool:
+    """conftest.py, test_*.py / *_test.py, tests/ directory, or the base's python_files rule."""
     parts = path.split("/")
     name = parts[-1]
     if name == "conftest.py" or name.startswith("test_") or name.endswith("_test.py"):
         return True
-    return any(part in _TEST_DIRS for part in parts[:-1])
+    return any(part in _TEST_DIRS for part in parts[:-1]) or bool(is_test and is_test(path))
 
 
 RULES: tuple[Rule, ...] = (
@@ -266,6 +268,7 @@ def scan_added_lines(
     data: bytes | None = None,
     budget: ScanBudget | None = None,
     trusted: bool = True,  # views_trusted (#919): when false, no line is skipped as a comment
+    is_test: Callable[[str], bool] | None = None,
 ) -> list[Finding]:
     """Findings for the added ``(line number, text)`` pairs of one file (``.py`` files only).
 
@@ -277,7 +280,7 @@ def scan_added_lines(
     if not path.endswith(".py"):
         return []
     in_conftest = posixpath.basename(path) == "conftest.py"
-    in_tests = _is_test_path(path)
+    in_tests = _is_test_path(path, is_test)
     # Aliases bound so far by the added lines, in order (context lines are not in the diff).
     aliases: dict[str, set[str]] = {key: set() for key in ("sys", "os", "gc", "modules", "_exit")}
     masked_aliases = {key: set(names) for key, names in aliases.items()}  # also from masked lines
@@ -381,9 +384,13 @@ def scan_patch(
         raise GitCommandError("head is not a full commit id")
     found, budget, files = [], ScanBudget(), added_lines(diff)  # one budget for the patch (#668)
     trusted = bool(files) and views_trusted(python)  # no .py file changed: no process started
+    try:
+        is_test = test_file_rule(repo, base)
+    except (GitCommandError, PytestConfigError):
+        is_test = None
     for path, lines in files.items():
         if path.endswith(".py") and not budget.over:  # read whole, as committed (delete-only too)
             data = run_git_bytes(repo, "cat-file", "blob", f"{head}:{path}")
-            found += scan_added_lines(path, lines, data, budget, trusted)
+            found += scan_added_lines(path, lines, data, budget, trusted, is_test)
     more = [] if budget.over else file_rules(repo, base, head, budget, python, notes)  # over: done
     return found + [Finding(path, 0, rule) for path, rule in more]
