@@ -411,8 +411,8 @@ Checks run in this order and the first failure is reported:
     or changed test in a class pytest does not collect (an `__init__` or `__new__`) fails with
     `TEST_PATH_NOT_TARGETED` (detail `DEFERRED_TESTS_NOT_COLLECTED`). That reader only reads source and
     never runs pytest collection, so the tests it reads can be more than pytest would run: a class
-    whose opt-out is invisible in the file (a base class from another module that sets
-    `__test__ = False`) still counts (#767). The receiver does not refuse these; it relies on the
+    whose opt-out the reader does not read at all (`__test__ = False`, whether set in the file or
+    on a base class from another module) still counts (#767). The receiver does not refuse these; it relies on the
     signer's `DEFERRED_TESTS_NOT_RUN` check. Confidential mode checks
     neither and keeps taking the signer's word, as above
 
