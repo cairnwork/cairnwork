@@ -214,8 +214,8 @@ def _exec(
     if not timeout or timeout <= 0:
         raise ValueError(f"timeout must be a positive number of seconds, got {timeout!r}")
     env = _child_env()
-    if timeout == NETWORK_TIMEOUT_SECONDS and _subcommand(args) in ("fetch", "push"):
-        ssh_batch_mode(env, repo)
+    if _subcommand(args) in ("fetch", "push"):  # any of them may reach origin over ssh; a
+        ssh_batch_mode(env, repo)  # local path or bundle never calls ssh, so this is harmless
     mark = _MARK.get()
     if mark is not None:
         var, val = mark

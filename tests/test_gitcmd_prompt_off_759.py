@@ -216,3 +216,20 @@ def test_a_caller_ssh_command_variable_is_still_dropped(
         run_git(repo, "fetch", "origin", timeout=gitcmd.NETWORK_TIMEOUT_SECONDS)
     assert not caller_marker.exists()
     assert "-o\nBatchMode=yes" in marker.read_text()
+
+
+def test_a_fetch_with_the_default_timeout_also_uses_noninteractive_ssh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Origin fetches such as lineage.require_on_main use the default timeout; ssh still must
+    not prompt there."""
+    repo = _init_repo(tmp_path)
+    subprocess.run(
+        ["git", "-C", str(repo), "remote", "add", "origin", "ssh://example.invalid/x.git"],
+        check=True,
+    )
+    bindir, marker = _ssh_marker(tmp_path)
+    monkeypatch.setenv("PATH", f"{bindir}:{os.environ['PATH']}")
+    with pytest.raises(gitcmd.GitCommandError):
+        run_git(repo, "fetch", "origin", "main")
+    assert "-o\nBatchMode=yes" in marker.read_text()
