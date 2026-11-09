@@ -81,6 +81,14 @@ def test_other_failures_are_not_environment(exc, root):
     assert is_env_failure(info(exc), root) is False
 
 
+def test_an_oserror_that_is_also_an_assertion_error_stays_environment(root):
+    # #808 review: main judged this env (isinstance OSError); the AssertionError branch must not win
+    class Both(OSError, AssertionError):
+        pass
+
+    assert is_env_failure(info(Both("both")), root) is True
+
+
 def test_an_assertion_wrapping_a_sandbox_denial_still_counts_as_one(root):
     # #854: the denial rule is unchanged and still applies to an AssertionError
     exc = chained(AssertionError("x"), PermissionError(1, "denied"), how="context")

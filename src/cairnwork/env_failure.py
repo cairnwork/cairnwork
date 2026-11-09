@@ -50,6 +50,7 @@ def _env_exc(info, root, _denied=_denied_inside, _type=type, _base=BaseException
              _sub=issubclass, _link=_env_link,
              _cause=BaseException.__cause__.__get__, _ctx=BaseException.__context__.__get__,
              _quiet=BaseException.__suppress_context__.__get__):
+    # root is kept for signature compatibility (callers pass it); it is not read.
     # a call's exception info -> True when it, or a link of its cause/context chain (at most 64),
     # failed from the environment. Read through type() and the built-in descriptors, so a test's
     # exception class (properties, __eq__) runs no code here; an AssertionError is not walked;
@@ -59,6 +60,8 @@ def _env_exc(info, root, _denied=_denied_inside, _type=type, _base=BaseException
         exc = top = getattr(info, "value", None)
         if not _sub(_type(exc), _base):
             return False
+        if isinstance(exc, OSError):
+            return True
         if _sub(_type(exc), AssertionError):
             return _denied(exc)
         seen = set()
