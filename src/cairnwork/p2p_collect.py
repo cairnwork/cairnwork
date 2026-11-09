@@ -248,8 +248,13 @@ def _base_may_supply(
         if len(classes) != 1:
             return True
         cls = classes[0]
-        if cls.keywords:  # an inherited metaclass can add tests the source never names
-            return True
+        if cls.keywords or any(not _pytest_decorator(d) for d in cls.decorator_list):
+            return True  # an inherited metaclass or a decorator on the base can add tests
+        if any(
+            isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == "__init_subclass__"
+            for n in cls.body
+        ):
+            return True  # __init_subclass__ runs on A and can add tests the source never names
         pattern = re.compile(rf"\b{re.escape(name)}\b")
         if _mentions(cls.body, name, pattern, include_nested_classes=False):
             return True

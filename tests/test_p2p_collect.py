@@ -317,6 +317,8 @@ def test_classify_allows_neutral_bases_and_pytest_markers(source):
         "class A: pass\nsetattr(A, '__test__', False)\n",
         "class A:\n    __test__ = False\n",
         "class Base(metaclass=M): pass\nclass A(Base): pass\n",
+        "@inject\nclass Base: pass\nclass A(Base): pass\n",
+        "class Base:\n    def __init_subclass__(cls): pass\nclass A(Base): pass\n",
         "class Base:\n    def test_x(self): pass\nclass A(Base):\n    __test__ = False\n",
     ],
 )
