@@ -56,10 +56,13 @@ _NOT_TEST_FILES = frozenset(
 )  # fmt: skip
 
 
-def _plain_conftest(path: PurePosixPath, status: str) -> bool:
-    """#798: a conftest.py (exact name) may be added or modified, never deleted or renamed; its
-    content is checked by conftest_check.py and p2p_conftest.py."""
-    return path.name == "conftest.py" and status in ("A", "M")
+def out_of_scope(path: str, status: str) -> bool:
+    posix, name = PurePosixPath(path), PurePosixPath(path).name.casefold()
+    return (
+        (name in _NOT_TEST_FILES and (posix.name != "conftest.py" or status not in ("A", "M")))
+        or name.endswith(".pth")
+        or any(part.casefold() in _SITE_NAMES for part in posix.parts)
+    )
 
 
 def never_seen(repo: Path, test_commit: str) -> None:
@@ -154,14 +157,11 @@ def test_paths(
     paths, deleted, target = [], [], test_target(roots)
     for meta, path in zip(fields[0::2], fields[1::2], strict=False):
         old_mode, new_mode, status = meta.split()[0][1:], meta.split()[1], meta.split()[4]
-        posix = PurePosixPath(path)
         if (
             status not in ("A", "M", "D")
             or (old_mode if status == "D" else new_mode) not in _REGULAR
             or not path.startswith(tuple(f"{r}/" for r in roots))
-            or (posix.name.casefold() in _NOT_TEST_FILES and not _plain_conftest(posix, status))
-            or posix.name.casefold().endswith(".pth")
-            or {x.casefold() for x in posix.parts} & _SITE_NAMES
+            or out_of_scope(path, status)
         ):
             raise TestCommitRejected("TEST_COMMIT_SCOPE", f"{status} {new_mode} {path}")
         if len(path.encode("utf-8")) > MAX_ID_BYTES:

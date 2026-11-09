@@ -14,7 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from cairnwork.gitcmd import _SAFE_OPTIONS, GitCommandError, config_hooks_off
+from cairnwork.gitcmd import _SAFE_OPTIONS, GitCommandError, config_hooks_off, ssh_batch_mode
 from cairnwork_attest.bundle import BundleError, read_bundle
 from cairnwork_attest.record import AttestError, parse_strict_json
 
@@ -53,6 +53,9 @@ _CONFIG_VAR = re.compile(r"GIT_CONFIG_(?:COUNT|KEY_[0-9]+|VALUE_[0-9]+)")
 def _git(repo: Path, *args: str, input: bytes | None = None) -> subprocess.CompletedProcess[str]:
     """Run git with prompts disabled and C-locale messages (stderr is matched).
 
+    Network fetch/push runs ssh in BatchMode unless the operator configured core.sshCommand
+    (gitcmd.ssh_batch_mode, #759).
+
     gitcmd's options (no repository or configuration-declared hooks, no fsmonitor, no replace
     refs) and the caller's GIT_* variables dropped, except GIT_CONFIG_COUNT/KEY_n/VALUE_n: the
     post-verified hook's notes push gets its credential helper that way (docs/ATTESTATION.md).
@@ -64,6 +67,8 @@ def _git(repo: Path, *args: str, input: bytes | None = None) -> subprocess.Compl
         and k not in ("SSH_ASKPASS", "SSH_ASKPASS_REQUIRE")  # no password prompt program (#759)
     }
     env.update({"GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C", "LANGUAGE": "C"})
+    if args and args[0] in ("fetch", "push"):
+        ssh_batch_mode(env, repo)
     try:
         hooks_off = config_hooks_off(repo, env)
     except GitCommandError as exc:  # a hook name -c cannot carry: git is not run
