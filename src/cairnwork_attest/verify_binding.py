@@ -387,8 +387,8 @@ def _head_tree(ctx: _Ctx) -> VerifyResult | None:
 
 
 def _assurance(full: bool, *, pinned: bool) -> dict[str, str]:
-    """Without a policy the test source is whichever test commit the signer chose
-    (``signer_choice``)."""
+    """Receiver checks; verifier runs are always the signer's word. Without a policy the test
+    source is whichever test commit the signer chose (``signer_choice``)."""
     return {
         "mode": "full" if full else "confidential",
         "test_source": "policy_pinned" if pinned else "signer_choice",

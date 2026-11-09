@@ -56,7 +56,7 @@ _NOT_TEST_FILES = frozenset(
 )  # fmt: skip
 
 
-def out_of_scope(path: str, status: str) -> bool:
+def out_of_scope(path: str, status: str) -> bool:  # #798: conftest.py only added/modified
     posix, name = PurePosixPath(path), PurePosixPath(path).name.casefold()
     return (
         (name in _NOT_TEST_FILES and (posix.name != "conftest.py" or status not in ("A", "M")))
