@@ -173,8 +173,8 @@ def test_paths(
             raise TestCommitRejected(
                 "TEST_COMMIT_SCOPE", f"path over {MAX_ID_BYTES} UTF-8 bytes: {path[:80]}..."
             )
-        if path.endswith(".py") and not target.fullmatch(path):  # data files need no target
-            raise TestCommitRejected(
+        if status != "D" and path.endswith(".py") and not target.fullmatch(path):
+            raise TestCommitRejected(  # data and deleted files need no target
                 "TEST_COMMIT_SCOPE", f"no verifier target can name {path!r} (names: [A-Za-z0-9_-])"
             )
         (deleted if status == "D" else paths).append(path)
@@ -280,7 +280,7 @@ def _tree(repo: Path, blob: str, *, present: bool = False) -> ast.Module | None:
         raise TestCommitRejected("TEST_COMMIT_UNPARSABLE", f"{blob} is not UTF-8") from exc
     try:
         return ast.parse(source)
-    except (SyntaxError, ValueError) as exc:
+    except (SyntaxError, ValueError, RecursionError, MemoryError) as exc:
         raise TestCommitRejected("TEST_COMMIT_UNPARSABLE", blob) from exc
 
 
