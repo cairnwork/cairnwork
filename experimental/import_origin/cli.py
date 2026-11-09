@@ -91,19 +91,37 @@ def source_of(origin: str, out: Path) -> Path:
     return path
 
 
-def interpreter_paths(interpreter: str) -> dict[str, str]:
+ROOT_KEYS = ("stdlib", "platstdlib", "purelib", "platlib")
+
+
+def interpreter_paths(interpreter: str, *inside: Path) -> dict[str, str]:
     """The install paths of the interpreter the verifier ran, as that interpreter reports them.
     The observer's own ``sysconfig`` names a different venv (and maybe another Python), so its
-    stdlib and site-packages would turn every honest import of the run into ``other``."""
+    stdlib and site-packages would turn every honest import of the run into ``other``.
+    ``-I`` drops PYTHON* variables and the user site; ``-S`` is not used, because a venv's
+    prefix (and so its site-packages) is set by ``site``. A root that is ``/`` or contains one of
+    ``inside`` (the checkout, the output directory) would class candidate files as stdlib, so
+    the run is UNCOMPARABLE instead."""
     code = "import json, sysconfig; print(json.dumps(sysconfig.get_paths()))"
-    done = subprocess.run(  # noqa: S603 - the verifier's own interpreter path, no shell
-        [interpreter, "-I", "-c", code],
-        capture_output=True, text=True, timeout=60, check=True,
-    )  # fmt: skip
-    paths = json.loads(done.stdout)
-    if not isinstance(paths, dict) or not all(isinstance(v, str) for v in paths.values()):
+    try:
+        done = subprocess.run(  # noqa: S603 - the verifier's own interpreter path, no shell
+            [interpreter, "-I", "-c", code],
+            capture_output=True, text=True, timeout=60, check=True,
+        )  # fmt: skip
+        paths = json.loads(done.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        raise Uncomparable(f"the verifier interpreter did not report its paths: {exc}") from exc
+    if not isinstance(paths, dict) or not all(isinstance(paths.get(k), str) for k in ROOT_KEYS):
         raise Uncomparable("the verifier interpreter did not report its install paths")
-    return paths
+    for key in ROOT_KEYS:
+        root = Path(paths[key])
+        if not root.is_absolute() or root.resolve() == Path("/").resolve():
+            raise Uncomparable(f"interpreter {key} root {root} is not a usable install path")
+        if any(_under(place, root) for place in inside):
+            raise Uncomparable(
+                f"interpreter {key} root {root} contains {', '.join(map(str, inside))}"
+            )
+    return {key: paths[key] for key in ROOT_KEYS}
 
 
 def _classify(
@@ -122,9 +140,9 @@ def _classify(
     path = source_of(origin, out)
     if any(_under(path, checkout / root) for root in inp.test_roots):
         return "test-tree"
-    if any(key in paths and _under(path, Path(paths[key])) for key in ("purelib", "platlib")):
+    if any(_under(path, Path(paths[key])) for key in ("purelib", "platlib")):
         return "site-packages"
-    if any(key in paths and _under(path, Path(paths[key])) for key in ("stdlib", "platstdlib")):
+    if any(_under(path, Path(paths[key])) for key in ("stdlib", "platstdlib")):
         return "stdlib"
     if _under(path, checkout):
         # A checkout file the candidate did not change was already in base: not its doing.
@@ -151,7 +169,7 @@ def _names_agree(item: dict, out: Path) -> bool:
 def classify(run: Run, inp: ShadowInput, checkout: Path, out: Path) -> dict:
     support = _module_names(checkout, inp.test_roots)
     changed = _changed_candidate_paths(inp, out)
-    paths = interpreter_paths(inp.interpreter)
+    paths = interpreter_paths(inp.interpreter, checkout, out)
     events, flagged = [], []
     for event in run.events:
         name, origin = event["module"], event.get("origin")

@@ -238,7 +238,9 @@ def test_stdlib_is_judged_by_the_verifier_interpreter_not_the_observer(tmp_path)
     fake = tmp_path / "python"
     script = (
         f"#!{sys.executable}\nimport json\n"
-        f"print(json.dumps({{'stdlib': {str(other)!r}, 'platstdlib': {str(other)!r}}}))\n"
+        f"roots = dict.fromkeys(('stdlib', 'platstdlib'), {str(other)!r})\n"
+        f"roots |= dict.fromkeys(('purelib', 'platlib'), {str(other.parent / 'site')!r})\n"
+        "print(json.dumps(roots))\n"
     )
     fake.write_text(script)
     fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
@@ -252,3 +254,29 @@ def test_stdlib_is_judged_by_the_verifier_interpreter_not_the_observer(tmp_path)
 
     origin = str(other / "fractions.py")
     assert _classify(origin, "fractions", checkout, Inp, set(), tmp_path, paths) == "stdlib"
+
+
+@pytest.mark.parametrize("root", ["checkout-parent", "filesystem-root", "missing-key", "not-json"])
+def test_interpreter_roots_that_would_hide_candidate_files_are_uncomparable(tmp_path, root):
+    """A reported root that contains the checkout (or is ``/``), a missing key, or junk output
+    must not become a stdlib root: the run is UNCOMPARABLE."""
+    import stat
+    import sys
+
+    from experimental.import_origin.cli import interpreter_paths
+    from experimental.second_observer.inputs import Uncomparable
+
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    body = {
+        "checkout-parent": f"print(json.dumps(dict.fromkeys(KEYS, {str(tmp_path)!r})))",
+        "filesystem-root": "print(json.dumps(dict.fromkeys(KEYS, '/')))",
+        "missing-key": "print(json.dumps({'stdlib': '/opt/x'}))",
+        "not-json": "print('hello')",
+    }[root]
+    fake = tmp_path / "python"
+    keys = "('stdlib', 'platstdlib', 'purelib', 'platlib')"
+    fake.write_text(f"#!{sys.executable}\nimport json\nKEYS = {keys}\n{body}\n")
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    with pytest.raises(Uncomparable):
+        interpreter_paths(str(fake), checkout, tmp_path / "out")
