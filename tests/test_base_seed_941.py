@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -39,7 +40,9 @@ def _probe(project, tmp_path, code, seed):
     return task, (spec,), ctx, result
 
 
-def _fake_runs(monkeypatch, code, expected="alphabeta"):
+def _fake_runs(
+    monkeypatch, code, expected="alphabeta", outcomes_by_seed=None, survivors_by_seed=None
+):
     target = "tests/test_ordered.py::test_joined"
     outputs = {}
     for seed in (1, 2, 3, 4):
@@ -50,17 +53,18 @@ def _fake_runs(monkeypatch, code, expected="alphabeta"):
         ).strip()
 
     def fake(ctx, _commit, specs, run_id, *, deny):
-        outcome = "passed" if outputs[ctx.hash_seed] == expected else "failed"
+        outcome = "passed" if outputs.get(ctx.hash_seed, outputs["1"]) == expected else "failed"
+        outcomes = (outcomes_by_seed or {}).get(ctx.hash_seed, {target: outcome})
         return tuple(
             SimpleNamespace(
                 spec=spec,
-                outcomes={target: outcome},
+                outcomes=outcomes,
                 fail_kind={},
                 returncode=0 if outcome == "passed" else 1,
                 forged=(),
                 data_refused=(),
                 timed_out=False,
-                survivors=0,
+                survivors=(survivors_by_seed or {}).get(ctx.hash_seed, 0),
                 mutated=(),
                 report_too_big=False,
                 log_too_big=False,
@@ -76,6 +80,31 @@ def _fake_runs(monkeypatch, code, expected="alphabeta"):
     monkeypatch.setattr(pipeline_judge, "run_verifiers", fake)
     monkeypatch.setattr(pipeline_judge, "as_failed", lambda run, *args: run)
     return outputs
+
+
+def _sensitive_case(
+    project,
+    tmp_path,
+    monkeypatch,
+    *,
+    expected="alphabeta",
+    outcomes_by_seed=None,
+    survivors_by_seed=None,
+):
+    _fake_runs(
+        monkeypatch,
+        "print(''.join({'alpha', 'beta'}))",
+        expected=expected,
+        outcomes_by_seed=outcomes_by_seed,
+        survivors_by_seed=survivors_by_seed,
+    )
+    task, specs, ctx, result = _probe(
+        project,
+        tmp_path,
+        "def joined():\n    return ''.join({'alpha', 'beta'})\n",
+        1,
+    )
+    return task, specs, ctx, result
 
 
 def test_hash_order_sensitive_base_is_uncomparable(project, tmp_path, monkeypatch):
@@ -136,6 +165,69 @@ def test_second_run_uses_the_deterministic_distinct_seed(project, tmp_path, monk
     with pytest.raises(BaseUncomparable):
         pipeline_judge.tests_with_teeth(task, specs, result, ctx)
     assert seen == ["1", "2"]
+
+
+def test_second_run_not_run_is_seed_sensitive(project, tmp_path, monkeypatch):
+    target = "tests/test_ordered.py::test_joined"
+    task, specs, ctx, result = _sensitive_case(
+        project,
+        tmp_path,
+        monkeypatch,
+        outcomes_by_seed={"1": {target: "failed"}, "2": {target: "failed"}},
+    )
+    comparisons = iter((Comparison("TEETH"), Comparison("NOT_RUN", "DEFERRED_TESTS_NOT_RUN")))
+    monkeypatch.setattr(pipeline_judge, "base_comparison", lambda *args: next(comparisons))
+    with pytest.raises(BaseUncomparable) as caught:
+        pipeline_judge.tests_with_teeth(task, specs, result, ctx)
+    assert caught.value.comparison.code == "BASE_SEED_SENSITIVE"
+    assert "NOT_RUN" in caught.value.comparison.detail
+
+
+def test_second_run_base_problem_is_seed_sensitive(project, tmp_path, monkeypatch):
+    task, specs, ctx, result = _sensitive_case(
+        project,
+        tmp_path,
+        monkeypatch,
+        expected="never matches",
+        survivors_by_seed={"2": 1},
+    )
+    with pytest.raises(BaseUncomparable) as caught:
+        pipeline_judge.tests_with_teeth(task, specs, result, ctx)
+    assert caught.value.comparison.code == "BASE_SEED_SENSITIVE"
+    assert "UNCOMPARABLE BASE_SURVIVORS" in caught.value.comparison.detail
+
+
+def test_parametrized_failures_are_compared_by_full_node_id(project, tmp_path, monkeypatch):
+    alpha = "tests/test_ordered.py::test_joined[alpha]"
+    beta = "tests/test_ordered.py::test_joined[beta]"
+    task, specs, ctx, result = _sensitive_case(
+        project,
+        tmp_path,
+        monkeypatch,
+        outcomes_by_seed={"1": {alpha: "failed"}, "2": {beta: "failed"}},
+    )
+    with pytest.raises(BaseUncomparable) as caught:
+        pipeline_judge.tests_with_teeth(task, specs, result, ctx)
+    assert caught.value.comparison.code == "BASE_SEED_SENSITIVE"
+    assert repr(alpha) in caught.value.comparison.detail
+    assert repr(beta) in caught.value.comparison.detail
+
+
+def test_target_with_parameter_suffix_is_matched_by_prefix(monkeypatch):
+    target = "tests/t.py::test_case[0]"
+    run = SimpleNamespace(outcomes={target: "failed"})
+    assert pipeline_judge._failed_targets([run], frozenset({target})) == {target}
+
+
+@pytest.mark.parametrize("seed", ["", "not-a-number", "4294967296"])
+def test_invalid_replay_seed_is_uncomparable(project, tmp_path, monkeypatch, seed):
+    task, specs, ctx, result = _sensitive_case(project, tmp_path, monkeypatch)
+    ctx = replace(ctx, hash_seed=seed)
+    with pytest.raises(BaseUncomparable) as caught:
+        pipeline_judge.tests_with_teeth(task, specs, result, ctx)
+    assert caught.value.comparison == Comparison(
+        "UNCOMPARABLE", "BASE_SEED_SENSITIVE", f"hash seed not a uint32: {seed!r}"
+    )
 
 
 @pytest.mark.parametrize(

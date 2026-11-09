@@ -52,6 +52,8 @@ from cairnwork.verify_context import VerifyContext, verifier_interpreter
 
 def second_seed(seed: str) -> str:
     """Return the next uint32 seed, so a base replay is deterministic from the attempt record."""
+    if not seed.isdecimal() or int(seed) > 4294967295:
+        raise ValueError(f"hash seed not a uint32: {seed!r}")
     return str((int(seed) + 1) % 4294967296)
 
 
@@ -144,41 +146,76 @@ def tests_with_teeth(
         raise BaseUncomparable(comparison)
     if comparison.kind != "TEETH":
         raise TestCommitRejected(comparison.code, comparison.detail)
-    second_ctx = replace(ctx, hash_seed=second_seed(ctx.hash_seed))
-    second_runs = run_verifiers(
-        second_ctx, task.test_commit, base, f"{result.attempt_id}-b2", deny=True
-    )
+    _check_seed_replay(ctx, result, runs, targets, base, task.test_commit, is_test)
+    return TestFiles(paths, deleted, nodes)
+
+
+def _check_seed_replay(ctx, result, runs, targets, base, test_commit, is_test) -> None:
+    """A second base run must independently show the same teeth under a distinct seed."""
+    try:
+        replay_seed = second_seed(ctx.hash_seed)
+    except ValueError as exc:
+        detail = f"hash seed not a uint32: {ctx.hash_seed!r}"
+        raise BaseUncomparable(Comparison("UNCOMPARABLE", "BASE_SEED_SENSITIVE", detail)) from exc
+    second_ctx = replace(ctx, hash_seed=replay_seed)
+    second_runs = run_verifiers(second_ctx, test_commit, base, f"{result.attempt_id}-b2", deny=True)
     second_runs = [as_failed(run, targets, is_test) for run in second_runs]
     second_comparison = base_comparison(second_runs, targets)
     for run in second_runs:
         if run.deny_evidence:
-            result.logs.append(f"base deny evidence {run.spec.verifier_id}: {run.deny_evidence}")
+            result.logs.append(
+                f"second base deny evidence {result.attempt_id}-b2/{run.spec.verifier_id} "
+                f"(seed {second_ctx.hash_seed}): {run.deny_evidence}"
+            )
     for run in second_runs:
         shutil.rmtree(Path(run.log_path).parent, ignore_errors=True)
     first_failed = _failed_targets(runs, targets)
     second_failed = _failed_targets(second_runs, targets)
-    if second_comparison.kind == "UNCOMPARABLE" or first_failed != second_failed:
+    if second_comparison.kind != "TEETH" or first_failed != second_failed:
         changed = sorted(first_failed ^ second_failed)
-        detail = (
-            f"targets changed: {changed}; failed at seed {ctx.hash_seed}: "
-            f"{sorted(first_failed)}; failed at seed {second_ctx.hash_seed}: "
-            f"{sorted(second_failed)}"
+        detail = _seed_sensitive_detail(
+            changed,
+            first_failed,
+            second_failed,
+            ctx.hash_seed,
+            second_ctx.hash_seed,
+            second_comparison,
         )
-        if second_comparison.kind == "UNCOMPARABLE":
-            detail += f"; second run: {second_comparison.code}: {second_comparison.detail}"
         raise BaseUncomparable(Comparison("UNCOMPARABLE", "BASE_SEED_SENSITIVE", detail))
-    return TestFiles(paths, deleted, nodes)
 
 
 def _failed_targets(runs, targets: frozenset[str]) -> frozenset[str]:
-    """Targets failed in a run, ignoring pytest parametrization suffixes."""
-    failed = {
-        node.split("[", 1)[0]
+    """Failed full node IDs whose unparameterized target is in the deferred test set."""
+    target_prefixes = {target.split("[", 1)[0] for target in targets}
+    return frozenset(
+        node
         for run in runs
         for node, outcome in run.outcomes.items()
-        if outcome == "failed"
-    }
-    return frozenset(target.split("[", 1)[0] for target in targets if target in failed)
+        if outcome == "failed" and node.split("[", 1)[0] in target_prefixes
+    )
+
+
+def _seed_sensitive_detail(
+    changed, first_failed, second_failed, first_seed, second_seed, comparison
+):
+    """Bound candidate-controlled node IDs before placing them in a refusal detail."""
+    ids = sorted(set(changed) | set(first_failed) | set(second_failed))[:20]
+    quoted = [_quoted_node_id(node) for node in ids]
+    detail = (
+        f"failed node IDs differ or second run was invalid at seeds "
+        f"seed {first_seed} and seed {second_seed}: {quoted}"
+    )
+    if comparison.kind != "TEETH":
+        detail += f"; second run: {comparison.kind} {comparison.code}"
+    return detail
+
+
+def _quoted_node_id(node: str) -> str:
+    """Return a repr-quoted node ID no longer than 200 characters."""
+    candidate = node
+    while len(repr(candidate)) > 200:
+        candidate = candidate[: max(0, len(candidate) - (len(repr(candidate)) - 199))]
+    return repr(candidate)
 
 
 def judge_candidate(
