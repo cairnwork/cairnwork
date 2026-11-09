@@ -249,11 +249,15 @@ def test_stdlib_is_judged_by_the_verifier_interpreter_not_the_observer(tmp_path)
     checkout = tmp_path / "checkout"
     checkout.mkdir()
 
-    class Inp:
-        test_roots = ("tests",)
+    from types import SimpleNamespace
+    from typing import cast
+
+    from experimental.second_observer.inputs import ShadowInput
+
+    inp = cast(ShadowInput, SimpleNamespace(test_roots=("tests",)))
 
     origin = str(other / "fractions.py")
-    assert _classify(origin, "fractions", checkout, Inp, set(), tmp_path, paths) == "stdlib"
+    assert _classify(origin, "fractions", checkout, inp, set(), tmp_path, paths) == "stdlib"
 
 
 @pytest.mark.parametrize("root", ["checkout-parent", "filesystem-root", "missing-key", "not-json"])
