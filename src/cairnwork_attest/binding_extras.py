@@ -30,6 +30,7 @@ from cairnwork.deferred_data import (
 from cairnwork.deferred_overlay import MAX_DELETED_TEST_PATHS, TestCommitRejected
 from cairnwork.gitcmd import GitCommandError, run_git_bytes
 from cairnwork.pytest_config import PytestConfigError, test_file_rule
+from cairnwork_attest import receipt_scope
 from cairnwork_attest.verify_response import VerifyResult, _fail
 
 MAX_IMPORT_PATHS = 8  # issue_task.check_import_paths: 0-8 (pinned by test_binding_import_paths)
@@ -360,6 +361,14 @@ def checks_assurance(policy: Mapping[str, Any] | None) -> str:
     if not (policy or {}).get("blackbox_commitment"):
         return "not_checked"
     return "pinned" if "blackbox_checks" in (policy or {}) else "unpinned"
+
+
+def assurance_checks(full: bool, policy: Mapping[str, Any] | None) -> dict[str, str]:
+    """The receiver's blackbox and test-scope assurance values."""
+    return {
+        "blackbox_checks": checks_assurance(policy),
+        "test_scope": receipt_scope.test_scope_assurance(full, policy),
+    }
 
 
 def recorded_protection(binding: Mapping[str, Any]) -> str:
