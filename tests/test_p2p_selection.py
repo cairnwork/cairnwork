@@ -144,6 +144,26 @@ def test_dashed_test_filename_matches_underscored_changed_stem():
     )
 
 
+def test_normalized_subdirectory_match_keeps_main_root_fallback():
+    suite = ("tests/test_a.py", "tests/unit/test_coord_tick.py")
+    selected = set(select_p2p_targets(("bin/coord-tick",), suite, ROOTS))
+    # Main's plain exact match found no directory, so it selected root-level tests.
+    main_selection = {"tests/test_a.py"}
+    assert main_selection <= selected
+
+
+def test_cut_directory_excludes_non_test_files_with_stem():
+    suite = tuple(f"tests/test_other_{i}.py" for i in range(21)) + (
+        "tests/conftest.py",
+        "tests/data_coord_tick.json",
+        "tests/helper_coord_tick.py",
+        "tests/test_coord_tick.pyi",
+        "tests/test_coord_tick_a.py",
+    )
+    selected = select_p2p_targets(("bin/coord-tick",), suite, ROOTS)
+    assert selected == ("tests/test_coord_tick_a.py",)
+
+
 def test_cut_directory_with_no_stem_match_still_selects_nothing():
     suite = tuple(f"tests/test_other_{i}.py" for i in range(MODULE_DIR_CAP + 1))
     assert select_p2p_targets(("bin/coord-tick",), suite, ROOTS) == ()

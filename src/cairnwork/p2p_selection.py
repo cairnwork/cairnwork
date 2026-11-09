@@ -72,6 +72,10 @@ def _exact(test: str, stem: str) -> bool:
     return name in {f"test_{stem}.py", f"{stem}_test.py"}
 
 
+def _exact_plain(test: str, stem: str) -> bool:
+    return basename(test) in {f"test_{stem}.py", f"{stem}_test.py"}
+
+
 def _by_rule(test: str, stem: str, is_test: Callable[[str], bool] | None) -> bool:
     """A file accepted by the base's python_files rule (default rule if absent) whose name
     holds the stem as a name part (#870, #1041)."""
@@ -143,8 +147,12 @@ def _module_dir(
         tail = _mirror_subpath(dirname(changed))
         mirror = {f"{r}/{tail}" for r in test_roots} if tail else set()
         stem = splitext(basename(changed))[0]
-        base_hit = {dirname(t) for t in tests if dirname(t) in mirror or _exact(t, stem)}
-        rule_hit = {dirname(t) for t in tests if _by_rule(t, stem, is_test)}
+        base_hit = {dirname(t) for t in tests if dirname(t) in mirror or _exact_plain(t, stem)}
+        rule_hit = {
+            dirname(t)
+            for t in tests
+            if _by_rule(t, stem, is_test) or (_exact(t, stem) and not _exact_plain(t, stem))
+        }
         for d in (base_hit or root_level) | rule_hit:
             whole = size[d] <= MODULE_DIR_CAP
             cut |= set() if whole else {d}
