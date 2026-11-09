@@ -26,7 +26,9 @@ from __future__ import annotations
 import os
 import secrets
 import shutil
+import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -72,6 +74,7 @@ __all__ = [
 LOG = "/usr/bin/log"
 WAIT_SECONDS = 10.0  # for the header and for each canary's line
 SETTLE_SECONDS = 1.0  # after the closing canary's line: lines still in flight
+_GROUPS: set[int] = set()  # watchdog pids that lead a process group with their log stream
 MAX_STREAM_BYTES = 32 << 20  # over it the stream is stopped: UNAVAILABLE (#859 review)
 POLL_SECONDS = 0.2  # how often the size guard looks at the stream file
 JOIN_SECONDS = 5.0  # how long the size guard gets to finish its last check
@@ -239,14 +242,33 @@ def _halt(guard: _SizeGuard | None, proc, window: Window) -> None:
 
 
 def _stop(proc) -> None:
-    if proc is None or proc.poll() is not None:
+    if proc is None:
         return
-    proc.terminate()
+    if proc.poll() is None:
+        control = getattr(proc, "stdin", None)
+        if control is not None and not control.closed:
+            control.close()  # EOF asks the watchdog to stop and reap log stream.
+        else:  # small test doubles and a broken control pipe retain the old stop path
+            proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+    _end_group(proc)
+
+
+def _end_group(proc) -> None:
+    """The watchdog leads its own process group, and log stream is in it: a watchdog that was
+    killed (or that we had to kill) cannot have stopped the stream, so end the group too."""
     try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait()
+        _GROUPS.remove(proc.pid)  # once: a later call must not signal a reused group id
+    except KeyError:
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass  # the group is already gone
 
 
 def _start(path: Path, window: Window):
@@ -255,11 +277,27 @@ def _start(path: Path, window: Window):
         return None
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     window.inode = os.fstat(fd).st_ino
+    argv = [LOG, "stream", "--style", "ndjson", "--predicate", 'sender=="Sandbox"']
+    watchdog = [
+        sys.executable,
+        "-I",
+        str(Path(__file__).with_name("deny_watch.py")),
+        str(fd),
+        str(path),
+        str(2 * MAX_STREAM_BYTES),
+        str(POLL_SECONDS),
+        *argv,
+    ]
     try:
-        argv = [LOG, "stream", "--style", "ndjson", "--predicate", 'sender=="Sandbox"']
         proc = subprocess.Popen(
-            argv, stdin=subprocess.DEVNULL, stdout=fd, stderr=subprocess.DEVNULL
+            watchdog,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            pass_fds=(fd,),
+            start_new_session=True,  # log stream joins this group: _end_group
         )
+        _GROUPS.add(proc.pid)
     finally:
         os.close(fd)
     if not _wait(lambda: _found(path, b"\n", window), proc):
