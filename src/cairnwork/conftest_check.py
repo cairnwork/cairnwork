@@ -162,13 +162,28 @@ def _parse(repo: Path, blob: str, path: str, *, present: bool) -> ast.Module:
     except GitCommandError as exc:
         if present:
             raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
-        return ast.Module(body=[], type_ignores=[])  # a new file
+        return _empty_for_absent_base(repo, blob, path, exc)
     except UnicodeDecodeError as exc:
+        if not present:
+            return _empty_for_absent_base(repo, blob, path, exc)
         raise TestCommitRejected("TEST_COMMIT_UNPARSABLE", f"{path} is not UTF-8") from exc
     try:
         return ast.parse(source)
     except (SyntaxError, ValueError, RecursionError, MemoryError) as exc:
         raise TestCommitRejected("TEST_COMMIT_UNPARSABLE", path) from exc
+
+
+def _empty_for_absent_base(
+    repo: Path, blob: str, path: str, error: GitCommandError | UnicodeDecodeError
+) -> ast.Module:
+    """Only a path absent from the base tree is an empty module.
+
+    Unreadable presence checks fail closed.
+    """
+    base, separator, _ = blob.partition(":")
+    if not separator or path in _tree_files(repo, base):
+        raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(error)) from error
+    return ast.Module(body=[], type_ignores=[])
 
 
 def _own_packages(repo: Path, base: str) -> frozenset[str]:
