@@ -101,6 +101,20 @@ def test_receipt_accepts_targets_split_across_required_verifiers(tmp_path):
     assert _verify(unrequired, split, "full") == "VERIFIER_NOT_REQUIRED"
 
 
+@pytest.mark.parametrize(
+    "verifiers",
+    [
+        [
+            ["pytest-0", [*PYTEST, "tests/test_a.py"]],
+            ["pytest-0", [*PYTEST, "tests/test_new.py"]],
+        ],
+        [["protection", [*PYTEST, "tests/test_a.py", "tests/test_new.py"]]],
+    ],
+)
+def test_receipt_refuses_duplicate_or_reserved_verifier_ids(tmp_path, verifiers):
+    assert _verify(tmp_path, verifiers, "full") == "VERIFIER_ID_INVALID"
+
+
 def test_targets_are_read_from_the_one_argv_shape_the_producer_accepts():
     assert targets([*PYTEST, "-p", "no:cacheprovider", "tests/test_a.py"]) == ("tests/test_a.py",)
     assert targets(["python3", "-m", "pytest", "tests/a.py::t"]) == ("tests/a.py::t",)
