@@ -57,6 +57,10 @@ def _undetermined(record: dict, state: str, headline: str) -> list[dict]:
         return [_line(f"有檢查沒有通過，原因無法判定：{record['reason']}", "reason")]
     if state == "stale_commit":
         return [_line(headline, "candidate_commit")]
+    if state == "verified_version_unknown":
+        return [_line(headline, "candidate_commit")]
+    if state == "not_checked":
+        return [_line(f"沒有執行檢查：{record['error']}", "error")]
     if state in ("weak_assurance", "attested"):
         runs = record["assurance"].get("verifier_runs")
         return [_line(f"證明可以核驗，但測試是否真的執行：{runs}", "assurance.verifier_runs")]

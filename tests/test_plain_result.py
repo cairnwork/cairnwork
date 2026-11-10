@@ -76,6 +76,52 @@ def test_ac3_each_verifier_failure_has_its_own_copy():
     assert tool_error["state"] == "tool_error" and usage["state"] == "tool_error"
 
 
+@pytest.mark.parametrize("code", ["TASK_ALLOWED_FILES_PROTECTED", "VERIFIER_NOT_ALLOWED"])
+def test_error_shaped_scope_refusal_is_not_checked(code):
+    record = {
+        "error": code,
+        "detail": f"{code}: src/cairnwork/gitcmd.py: protected by policy; not a finding",
+    }
+    result = summarize(record)
+    assert result["state"] == "not_checked"
+    assert result["headline"] == "Cairnwork 沒有檢查這個改動。"
+    assert "不是對改動的判斷" in result["trust"]
+    assert "人工" in result["next_action"] or "人" in result["next_action"]
+
+
+def test_other_error_shapes_fail_closed():
+    assert summarize({"error": "RUNNER_CRASH", "detail": "stopped"})["state"] == "tool_error"
+    for record in (
+        {"error": 123},
+        {"error": ""},
+        {"error": "TASK_ALLOWED_FILES_PROTECTED", "status": "VERIFIED"},
+    ):
+        assert summarize(record)["state"] != "verified"
+    assert summarize({"error": 123})["state"] == "no_trustworthy_result"
+    assert summarize({"error": ""})["state"] == "no_trustworthy_result"
+    assert (
+        summarize({"error": "TASK_ALLOWED_FILES_PROTECTED", "status": "VERIFIED"})["state"]
+        == "no_trustworthy_result"
+    )
+
+
+def test_scope_error_for_other_task_is_still_untrusted():
+    record = {"error": "TASK_ALLOWED_FILES_PROTECTED", "task_id": "original"}
+    assert summarize(record, task_id="different")["state"] == "no_trustworthy_result"
+
+
+def test_verified_without_current_commit_names_unknown_version_fail_safely():
+    record = _load("verified_same_commit.json")
+    result = summarize(record, current_commit=None)
+    assert result["state"] == "verified_version_unknown"
+    assert record["candidate_commit"][:8] in result["headline"]
+    assert "目前版本" in result["headline"] and "不能確認" in result["headline"]
+    assert result["state"] != "verified"
+    assert summarize({**record, "protection": "unknown"}, None)["state"] == (
+        "no_trustworthy_result"
+    )
+
+
 @pytest.mark.parametrize(
     "change",
     [
@@ -132,7 +178,7 @@ def test_ac5_unknown_or_mixed_evidence_cannot_become_a_pass():
         assert summarize(record, A)["state"] == "no_trustworthy_result", record
     assert summarize("VERIFIED", A)["state"] == "no_trustworthy_result"  # type: ignore[arg-type]
     assert summarize(original, "not-a-commit")["state"] == "no_trustworthy_result"
-    assert summarize(original)["state"] == "no_trustworthy_result"
+    assert summarize(original)["state"] == "verified_version_unknown"
     task, attempt = original["task_id"], original["attempt_id"]
     assert summarize(original, A, task, attempt)["state"] == "verified"
     assert summarize(original, A, "verify-other", attempt)["state"] == "no_trustworthy_result"

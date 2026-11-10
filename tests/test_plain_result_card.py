@@ -163,6 +163,24 @@ def test_a_refusal_before_core_is_undetermined_with_its_code():
     assert result["undetermined"] == [{"text": "沒有執行驗收：PROTECTED_PATH", "source": "error"}]
 
 
+def test_scope_refusal_and_unknown_version_stay_undetermined():
+    refusal = card(
+        {
+            "error": "TASK_ALLOWED_FILES_PROTECTED",
+            "detail": "TASK_ALLOWED_FILES_PROTECTED: src/cairnwork/gitcmd.py: protected by policy",
+        }
+    )
+    unknown_version = card(_load("verified_same_commit.json"), current_commit=None)
+    for result in (refusal, unknown_version):
+        _check(result)
+        assert result["tested"] == [] and result["confirmed_problem"] == []
+        assert result["undetermined"]
+    assert refusal["state"] == "not_checked"
+    assert refusal["undetermined"][0]["source"] == "error"
+    assert unknown_version["state"] == "verified_version_unknown"
+    assert unknown_version["undetermined"][0]["source"] == "candidate_commit"
+
+
 def test_a_record_for_other_work_tests_nothing():
     result = card(_verified_bound(), A, task_id="verify-other")
     _check(result)
