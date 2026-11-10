@@ -11,7 +11,7 @@ import re
 import subprocess
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from cairnwork.gitcmd import _SAFE_OPTIONS, GitCommandError, config_hooks_off, ssh_batch_mode
@@ -222,7 +222,7 @@ def _existing_note(
     """
     if notes_tip is None:
         return None
-    proc = run(repo, "notes", f"--ref={working_ref}", "list", candidate)
+    proc = run(repo, "notes", f"--ref={working_ref}", "list", "--", candidate)
     if proc.returncode == 0:
         return proc.stdout.strip()
     if _NO_NOTE in proc.stderr.lower():
@@ -305,7 +305,11 @@ def publish_bundle(
         result = _fail(exc.code, exc.detail, candidate, notes_ref, remote, attempt, blob)
     finally:
         deleted = git(repo, "update-ref", "-d", "--", working_ref)
-        if deleted.returncode != 0:
+        if deleted.returncode != 0 and result is not None and result.ok:
+            # the remote already holds the note: a leftover private ref does not undo that
+            leftover = f"private ref {working_ref} not deleted: {deleted.stderr.strip()}"
+            result = replace(result, detail=_redact(leftover))
+        elif deleted.returncode != 0:
             detail = deleted.stderr.strip()
             if result is not None:  # keep what happened before the cleanup failed
                 detail += f"; {result.code}" + (f": {result.detail}" if result.detail else "")

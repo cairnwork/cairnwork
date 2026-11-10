@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -135,4 +136,22 @@ def test_local_notes_ref_untouched_and_private_ref_removed(
     assert git(src, "rev-parse", _NOTES_REF) == local_tip
     refs = git(src, "for-each-ref", "--format=%(refname)", "refs/notes/")
     assert refs.split() == [_NOTES_REF]
+    assert _read_note_from_bare(bare, candidate).encode() == bundle.read_bytes()
+
+
+def test_cleanup_failure_after_a_push_keeps_published(
+    tmp_path: Path, key: Ed25519PrivateKey
+) -> None:
+    """The remote already holds the note; a leftover private ref is reported, not a failure."""
+    src, bare, candidate = make_publish_env(tmp_path)
+    bundle = _write_bundle(tmp_path, _make_bundle_bytes(candidate, key))
+
+    def locked_run(repo: Path, *args: str, input: bytes | None = None):  # noqa: ANN202
+        if args[:2] == ("update-ref", "-d"):
+            return subprocess.CompletedProcess(args, 1, "", "ref locked\n")
+        return _git(repo, *args, input=input)
+
+    result = publish_bundle(bundle, src, candidate, run=locked_run)
+    assert (result.ok, result.code, result.notes_tip) == (True, "PUBLISHED", _remote_tip(bare))
+    assert result.detail is not None and "not deleted: ref locked" in result.detail
     assert _read_note_from_bare(bare, candidate).encode() == bundle.read_bytes()
