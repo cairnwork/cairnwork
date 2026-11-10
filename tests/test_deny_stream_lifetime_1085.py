@@ -199,4 +199,3 @@ def test_both_killed_keeps_stream_within_rlimit(tmp_path):
     assert _wait_gone(pid, 20), "fake log process remained after watchdog and recorder SIGKILL"
     size = stream.stat().st_size
     assert size <= 2 * cap, f"stream exceeded {2 * cap} bytes: {size}"
-
