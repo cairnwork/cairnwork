@@ -34,6 +34,7 @@ from cairnwork.collect_reader import read_collected
 from cairnwork.conftest_check import conftest_of
 from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRejected
 from cairnwork.gitcmd import GitCommandError, run_git
+from cairnwork.p2p_bindings import last_binding
 from cairnwork.p2p_nodes import changed_tests, module_changed
 from cairnwork.p2p_selection import MODULE_DIR_CAP
 from cairnwork.verifier_spec import VerifierSpec
@@ -305,13 +306,21 @@ def _mentions(
 def _defines(tree: ast.Module | None, owners: list[str], name: str) -> bool:
     """Whether the base file itself has ``def name`` in the class chain ``owners``."""
     body = tree.body if tree is not None else []
+    module = True
     for owner in owners:
-        found = [n for n in body if isinstance(n, ast.ClassDef) and n.name == owner]
-        if not found:
+        try:
+            last = last_binding(body, owner, module=module)
+        except ValueError:
             return False
-        body = found[-1].body
-    kinds = (ast.FunctionDef, ast.AsyncFunctionDef)
-    return any(isinstance(n, kinds) and n.name == name for n in body)
+        if not isinstance(last, ast.ClassDef):
+            return False
+        body = last.body
+        module = False
+    try:
+        last = last_binding(body, name, module=module)
+    except ValueError:
+        return False
+    return isinstance(last, (ast.FunctionDef, ast.AsyncFunctionDef))
 
 
 def _source(task, commit: str, path: str) -> str:
