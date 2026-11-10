@@ -26,6 +26,9 @@ MAX_LINES = 200
 MAX_BYTES = 16 * 1024
 MAX_ID = 200
 MAX_LINE = 512  # the masker is superlinear: cut each kept line before masking it
+# mask over a bounded window longer than what is shown, so a cut does not hide half a secret
+# from the masker
+PRE_MASK = 4
 WINDOW = 4 * MAX_BYTES  # read only the end of a log (64 KiB)
 
 
@@ -42,7 +45,7 @@ def capture(runs, *, home: str, hidden: bool = False, account: bool = False) -> 
         withheld = hidden or not account  # ids are candidate text too (parametrize ids)
         # mask only what will be shown, after cutting count and length: the masker is superlinear
         kept = [] if withheld else failed[:MAX_NODEIDS]
-        shown = [mask_secrets(node[:MAX_ID]) for node in kept]
+        shown = [mask_secrets(node[: MAX_ID * PRE_MASK])[:MAX_ID] for node in kept]
         tail, truncated, unavailable = "", False, False
         if not withheld:
             try:
@@ -84,16 +87,18 @@ def _tail(path: Path, home: str) -> tuple[str, bool]:
         raw = log.read(WINDOW).decode("utf-8", errors="replace")
     if size > WINDOW:  # a cut first line could hide half a secret from the masker: drop it
         raw = raw.partition("\n")[2]
-    lines = raw.splitlines(keepends=True)
-    kept = [line[:MAX_LINE] for line in lines[-MAX_LINES:]]
-    redacted = [mask_secrets(line) for line in kept]
+    # split on "\n" only: other line breaks stay inside a line, where the masker sees them
+    pieces = raw.split("\n")
+    lines = [piece + "\n" for piece in pieces[:-1]] + ([pieces[-1]] if pieces[-1] else [])
+    kept = lines[-MAX_LINES:]
+    redacted = [mask_secrets(line[: MAX_LINE * PRE_MASK])[:MAX_LINE] for line in kept]
     if home:
         redacted = [line.replace(home, "<home>") for line in redacted]
     encoded = "".join(redacted).encode("utf-8")
     cut = (
         size > WINDOW
         or len(lines) > MAX_LINES
-        or any(len(a) > len(b) for a, b in zip(lines[-MAX_LINES:], kept, strict=True))
+        or any(len(line) > MAX_LINE for line in kept)
         or len(encoded) > MAX_BYTES
     )
     return encoded[-MAX_BYTES:].decode("utf-8", errors="ignore"), cut

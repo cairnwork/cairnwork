@@ -48,3 +48,10 @@ def test_a_long_log_line_is_read_in_bounded_time(tmp_path):
     got, took = _timed(_run(path, {"n": "failed"}), account=True)
     assert took < LIMIT_SECONDS
     assert got["log_tail_unavailable"] is False
+
+
+def test_a_secret_split_by_a_control_character_in_a_log_line_is_still_masked(tmp_path):
+    path = tmp_path / "verifier.log"
+    path.write_text("ok\nsee https://u:p\rxxx@h/ now\n", newline="")
+    got = failure_evidence.capture([_run(path, {"n": "failed"})], home="", account=True)[0]
+    assert "u:p" not in got["log_tail"] and "ok" in got["log_tail"]
