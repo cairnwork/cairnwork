@@ -40,7 +40,8 @@ def test_repo_config_cannot_enable_ext_transport(tmp_path: Path, key: str) -> No
     marker = tmp_path / "MARKER"
     # ext:: splits its command on spaces; "% " is a literal space (git-remote-ext(1)).
     command = f"touch {marker}".replace(" ", "% ")
-    with pytest.raises(gitcmd.GitCommandError, match="not allowed"):
+    # The MARKER is the proof, not git's stderr wording, which a localized git may translate.
+    with pytest.raises(gitcmd.GitCommandError):
         run_git(repo, "fetch", f"ext::sh -c {command}")
     assert not marker.exists()
 

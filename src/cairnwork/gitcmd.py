@@ -69,6 +69,8 @@ _SAFE_OPTIONS = (
     "-c",
     "diff.external=",
     # ext:: runs any command; a repo's protocol.ext.allow=always must not turn it on (#1106).
+    # -c beats config files and GIT_CONFIG_COUNT/KEY/VALUE; it holds only while callers drop
+    # GIT_ALLOW_PROTOCOL and the other GIT_* variables (_child_env, cairnwork_attest.publish).
     "-c",
     "protocol.ext.allow=never",
 )
