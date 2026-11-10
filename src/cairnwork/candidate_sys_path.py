@@ -1,30 +1,29 @@
 """Refuse own import-system edits that can change what the deferred tests import (#1065).
 
-An own changed file whose new or changed statements name the import machinery (sys.modules,
-finders, importlib, __import__, runpy, pytest_plugins, or any dynamic-access word) is refused
-outright: such a swap needs no file. Statements are compared with the base blob (AST, comments
-dropped, keyed by enclosing def/class names and block headers), so a one-line fix in a file that
-already uses getattr is not refused, while a moved or rewritten machinery statement is. A file
+An own changed file whose added or removed statements reach the import machinery (sys.modules,
+finders, importlib, __import__, runpy, pytest_plugins, or any dynamic-access word; see
+candidate_statements.py) is refused outright: such a swap needs no file. A one-line fix in a
+function that never reaches machinery is not refused even when the file uses getattr elsewhere,
+while calling, moving or rewriting machinery, or flipping the block that wraps it, is. A file
 with only a path redirect or program launch (sys.path, __path__, site, PYTHONPATH, subprocess) is
 refused only when a file the candidate changed can shadow an imported module (candidate_shadow.py),
 so an honest edit that inserts its own directory still verifies.
-Residuals: shadow files written at run time and machinery reached through an alias (``from sys
-import modules``) without any listed word (left to the blackbox and verifier checks), sourceless
-signals (a ``.pyc`` without source is not scanned), sys.path outside the repo. Accepted false
-refusals: a new or changed statement using importlib or dynamic access in a signalling file; an
-added module some file imports, or a changed one sharing a module name, next to a redirect.
+Residuals (#1115), left to the blackbox and verifier checks: shadow files written at run time;
+machinery reached through an alias (``from sys import modules``) or another module without any
+listed word; other control-flow edits inside code that reaches machinery. Also unscanned: a
+``.pyc`` without source; sys.path outside the repo. Accepted false refusals: a new or changed call
+to same-file code reaching importlib or dynamic access; an added module some file imports, or a
+changed one sharing a module name, next to a redirect.
 """
 
 from __future__ import annotations
 
-import ast
-import copy
 import re
 import subprocess
-from collections import Counter
 from pathlib import Path
 
 from cairnwork.candidate_shadow import find_shadow_file
+from cairnwork.candidate_statements import machinery_changed
 from cairnwork.changeset import ChangeSetError, read_change_set
 from cairnwork.gitcmd import GitCommandError, run_git_bytes
 from cairnwork.sys_path_names import DYNAMIC_ATTRS, DYNAMIC_NAMES
@@ -43,8 +42,6 @@ _MACHINERY_WORDS = tuple(
         "pytest_plugins", *sorted(DYNAMIC_NAMES), *sorted(DYNAMIC_ATTRS),
     )
 )  # fmt: skip
-_BLOCKS = ("body", "orelse", "finalbody", "handlers", "cases")
-_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
 
 
 def refuse_new_sys_path_mutation(
@@ -101,7 +98,7 @@ def refuse_new_sys_path_mutation(
 
 def _blob_signal(repo: Path, base: str, commit: str, path: str, changed: dict[str, str]) -> str:
     """Read and scan one committed blob: "" (none), _REDIRECT (a path or program launch, which
-    needs a shadow file) or _MACHINERY (a new or changed statement names a machinery word).
+    needs a shadow file) or _MACHINERY (an added or removed statement reaches machinery).
     Unreadable or unparseable candidate source fails closed."""
     data = run_git_bytes(repo, "cat-file", "blob", f"{commit}:{path}")
     signal = scan_sys_path_blob(data)
@@ -109,35 +106,6 @@ def _blob_signal(repo: Path, base: str, commit: str, path: str, changed: dict[st
         raise ValueError(f"{commit}:{path} could not be parsed or decoded")
     if not signal:
         return ""
-    statements = _statements(data)
-    if statements is None:
-        raise ValueError(f"{commit}:{path} could not be parsed")
     added = changed[path] == "ADD"
-    old = b"" if added else run_git_bytes(repo, "cat-file", "blob", f"{base}:{path}")
-    new = statements - (_statements(old) or Counter())  # an unparseable base trusts nothing
-    words = (text.encode() for _, text in new)
-    return _MACHINERY if any(w in text for text in words for w in _MACHINERY_WORDS) else _REDIRECT
-
-
-def _statements(data: bytes) -> Counter[tuple[str, str]] | None:
-    """Every statement's own source (nested blocks emptied), keyed by its enclosing scope."""
-    found: Counter[tuple[str, str]] = Counter()
-
-    def visit(nodes: list[ast.AST], scope: str) -> None:
-        for node in nodes:
-            own, blocks = copy.copy(node), []
-            for field in _BLOCKS:
-                if isinstance(value := getattr(node, field, None), list):
-                    blocks.append(value)
-                    setattr(own, field, [])
-            text = ast.unparse(own)
-            found[scope, text] += 1
-            inner = f"{scope}/{node.name if isinstance(node, _SCOPES) else text}"
-            for block in blocks:
-                visit(block, inner)
-
-    try:
-        visit(list(ast.parse(data).body), "")
-    except (SyntaxError, ValueError, UnicodeError, RecursionError, MemoryError):
-        return None
-    return found
+    old = None if added else run_git_bytes(repo, "cat-file", "blob", f"{base}:{path}")
+    return _MACHINERY if machinery_changed(old, data, _MACHINERY_WORDS) else _REDIRECT

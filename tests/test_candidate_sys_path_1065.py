@@ -274,6 +274,19 @@ MACHINERY_EDITS = {
         "import sys\ndef _unused():\n    sys.modules['json'] = object()\n",
         "import sys\nsys.modules['json'] = object()\ndef _unused():\n    pass\n",
     ),
+    "dead base machinery called": (
+        "import sys\ndef _swap():\n    sys.modules['json'] = object()\n",
+        "import sys\ndef _swap():\n    sys.modules['json'] = object()\n_swap()\n",
+    ),
+    "called through another same-file def": (
+        "import sys\ndef _swap():\n    sys.modules['json'] = object()\ndef _go():\n    _swap()\n",
+        "import sys\ndef _swap():\n    sys.modules['json'] = object()\ndef _go():\n    _swap()\n"
+        "_go()\n",
+    ),
+    "wrapping condition flipped": (
+        "import sys\nif False:\n    sys.modules['json'] = object()\n",
+        "import sys\nif True:\n    sys.modules['json'] = object()\n",
+    ),
     "added beside an existing one": (
         "import sys\nVALUE = getattr(sys, 'version')\n",
         "import sys\nVALUE = getattr(sys, 'version')\nOTHER = getattr(sys, 'modules')\n",
