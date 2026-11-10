@@ -1,8 +1,9 @@
 """Refuse new import-path signals only when a reachable nested shadow file also exists (#1065).
 
-Residuals are runtime-built shadow files and sys.path pointing outside the repo. A pre-existing
-nested stdlib-named module (for example ``pkg/json.py``) plus a new sys.path edit is also refused;
-that accepted false refusal keeps the rule simple and protects a shadow that tests can reach.
+Residuals: runtime-built or obfuscated signals and shadow files, sourceless signals (a ``.pyc``
+without source is not scanned), and sys.path pointing outside the repo. Accepted false refusals
+with a new signal: a pre-existing nested stdlib-named module (``pkg/json.py``), an added module
+some tree file imports, or two tree files with one imported module name.
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ def refuse_new_sys_path_mutation(
         if test_commit is not None and not _OID.fullmatch(test_commit):
             raise ValueError("test commit must be a full 40-character object id")
         changes = read_change_set(repo, base, candidate)
+        added = frozenset(e.path for e in changes.entries if e.change_type == "ADD")
         own = set(allowed)
         for entry in changes.entries:
             if entry.change_type not in {"ADD", "MODIFY"} or not entry.path.endswith(".py"):
@@ -47,7 +49,7 @@ def refuse_new_sys_path_mutation(
                 _blob_signal(repo, base, entry.path) if entry.change_type == "MODIFY" else False
             )
             if candidate_signal and not base_signal:
-                shadow = find_shadow_file(repo, candidate, test_commit)
+                shadow = find_shadow_file(repo, candidate, test_commit, added)
                 if shadow:
                     raise CandidateRejected(
                         "CANDIDATE_SYS_PATH_MUTATION",

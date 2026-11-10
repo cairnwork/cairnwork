@@ -102,10 +102,13 @@ def test_existing_base_signal_is_not_a_new_mutation(project):
         "import sys\nsys.meta_path.insert(0, object())\n",
     ],
 )
-def test_added_file_import_system_forms_are_detected(repo, source):
+def test_added_file_import_system_forms_are_refused_next_to_a_shadow(repo, source):
+    assert scan_sys_path_blob(source.encode()) is True
     base = git(repo, "rev-parse", "HEAD")
-    cand = commit_change(repo, {"new_module.py": source})
-    candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, ("new_module.py",))
+    cand = commit_change(repo, {"new_module.py": source, "shadow/json.py": ""})
+    with pytest.raises(CandidateRejected) as got:
+        candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, ("new_module.py",))
+    assert "shadow/json.py" in str(got.value)
 
 
 SUBMODULE_PATH_REDIRECTS = {
@@ -120,12 +123,19 @@ SUBMODULE_PATH_REDIRECTS = {
 @pytest.mark.parametrize("source", SUBMODULE_PATH_REDIRECTS.values(), ids=SUBMODULE_PATH_REDIRECTS)
 @pytest.mark.parametrize("change_type", ["ADD", "MODIFY"])
 def test_candidate_submodule_path_redirects_are_refused(repo, source, change_type):
+    """``from pkg import helper`` makes ``helper`` an imported name; an added ``shadow/helper.py``
+    is the redirect target. Without that file the same edit is not refused."""
+    commit_change(repo, {"tests/test_h.py": "from pkg import helper\n", "pkg/helper.py": ""})
     base = git(repo, "rev-parse", "HEAD")
     path = "pkg/__init__.py"
     if change_type == "MODIFY":
         base = commit_change(repo, {path: "VALUE = 1\n"})
-    cand = commit_change(repo, {path: source})
-    candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, (path,))
+    alone = commit_change(repo, {path: source})
+    candidate_sys_path.refuse_new_sys_path_mutation(repo, base, alone, (path,))
+    cand = commit_change(repo, {"shadow/helper.py": ""})
+    with pytest.raises(CandidateRejected) as got:
+        candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, (path,))
+    assert "shadow/helper.py" in str(got.value)
 
 
 def test_signal_and_nested_stdlib_module_are_refused(repo):
@@ -175,6 +185,34 @@ def test_harmless_nested_module_does_not_refuse(repo):
         {"src/a.py": "import sys\nsys.path.insert(0, 'outside')\n", "pkg/harmless.py": ""},
     )
     candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, ("src/a.py",))
+
+
+def test_src_layout_module_the_tests_import_is_not_a_shadow(repo):
+    commit_change(repo, {"src/calc.py": "X = 1\n", "tests/test_c.py": "from calc import X\n"})
+    base = git(repo, "rev-parse", "HEAD")
+    cand = commit_change(repo, {"src/calc.py": "import sys\nsys.path.insert(0, 'src')\nX = 2\n"})
+    candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, ("src/calc.py",))
+
+
+def test_a_second_file_with_a_test_imported_name_is_a_shadow(repo):
+    commit_change(repo, {"src/calc.py": "X = 1\n", "tests/test_c.py": "from calc import X\n"})
+    commit_change(repo, {"vendor/calc.py": "X = 2\n"})
+    base = git(repo, "rev-parse", "HEAD")
+    cand = commit_change(repo, {"src/a.py": "import sys\nsys.path.insert(0, 'vendor')\n"})
+    with pytest.raises(CandidateRejected) as got:
+        candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, ("src/a.py",))
+    assert "calc.py" in str(got.value)
+
+
+def test_a_package_the_project_code_imports_can_be_shadowed(repo):
+    commit_change(repo, {"pkg/calc.py": "import requests\n", "tests/test_c.py": "import pkg\n"})
+    base = git(repo, "rev-parse", "HEAD")
+    cand = commit_change(
+        repo, {"src/a.py": "import sys\nsys.path.insert(0, 'shadow')\n", "shadow/requests.py": ""}
+    )
+    with pytest.raises(CandidateRejected) as got:
+        candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, ("src/a.py",))
+    assert "shadow/requests.py" in str(got.value)
 
 
 def test_root_stdlib_named_module_does_not_refuse(repo):
@@ -261,7 +299,7 @@ def test_package_path_redirect_hiding_in_a_shadow_module_is_refused_by_judge(pro
         )
     assert got.value.code == "CANDIDATE_SYS_PATH_MUTATION"
     assert "pkg/__init__.py" in str(got.value)
-    assert test_commit
+    assert "shadow/helper.py" in str(got.value), got.value  # not the project's own src/calc.py
 
 
 def test_changed_blob_read_failure_is_closed(project, monkeypatch):

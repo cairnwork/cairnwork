@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import re
 import sys
+from collections import Counter
 from importlib.machinery import all_suffixes
 from pathlib import Path
 
@@ -14,20 +15,34 @@ _OID = re.compile(r"^[0-9a-f]{40}$")
 _ALWAYS_SHADOW = frozenset({"pytest", "_pytest", "pluggy", "conftest", "py"})
 
 
-def find_shadow_file(repo: Path, candidate: str, test_commit: str | None = None) -> str | None:
-    """Return the first nested candidate file shadowing a standard or test-imported module."""
+def find_shadow_file(
+    repo: Path, candidate: str, test_commit: str | None = None, added: frozenset[str] = frozenset()
+) -> str | None:
+    """Return the first nested candidate file that can shadow an imported module.
+
+    A nested file named like a standard or pytest module always counts. A name some tree or test
+    file imports (every dotted part, so a ``__path__`` redirect of ``pkg.helper`` is seen) counts
+    when the candidate ``added`` that file or another file has the same module name, so a
+    project's own src-layout module (``src/calc.py`` imported as ``calc``) is not one. Names
+    compare case-insensitively; any unparseable ``.py`` in the trees fails closed."""
     commits = (candidate,) if test_commit is None else (candidate, test_commit)
-    names = set(sys.stdlib_module_names) | set(_ALWAYS_SHADOW)
+    always = {name.casefold() for name in (*sys.stdlib_module_names, *_ALWAYS_SHADOW)}
+    imported: set[str] = set()
     for commit in commits:
         _validate_oid(commit)
-        paths = _tree_paths(repo, commit)
-        for path in paths:
-            if _is_test(path):
-                names.update(_test_imports(repo, commit, path))
-    for path in _tree_paths(repo, candidate):
-        if module := _nested_module(path):
-            if module in names:
-                return path
+        for path in _tree_paths(repo, commit):
+            if _is_source(path):  # tests and the code they import can both import a shadow
+                imported.update(name.casefold() for name in _imports(repo, commit, path))
+    paths = _tree_paths(repo, candidate)
+    counts = Counter(name for path in paths if (name := _module_name(path)))
+    for path in sorted(paths, key=lambda p: p not in added):  # name an added file first
+        depth = path.count("/") - (
+            path.casefold().endswith("/__init__.py") or path.casefold() == "__init__.py"
+        )
+        if depth < 1 or not (module := _module_name(path)):  # root modules import as themselves
+            continue
+        if module in always or (module in imported and (path in added or counts[module] > 1)):
+            return path
     return None
 
 
@@ -43,17 +58,11 @@ def _tree_paths(repo: Path, commit: str) -> tuple[str, ...]:
     )
 
 
-def _is_test(path: str) -> bool:
-    name = path.rsplit("/", 1)[-1]
-    return (
-        name == "conftest.py"
-        or name.startswith("test_")
-        and name.endswith(".py")
-        or name.endswith("_test.py")
-    )
+def _is_source(path: str) -> bool:
+    return path.casefold().endswith(".py")
 
 
-def _test_imports(repo: Path, commit: str, path: str) -> set[str]:
+def _imports(repo: Path, commit: str, path: str) -> set[str]:
     raw = run_git_bytes(repo, "cat-file", "blob", f"{commit}:{path}")
     try:
         tree = ast.parse(raw, filename=path)
@@ -62,19 +71,19 @@ def _test_imports(repo: Path, commit: str, path: str) -> set[str]:
     names: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            names.update(alias.name.split(".", 1)[0] for alias in node.names)
+            names.update(part for alias in node.names for part in alias.name.split("."))
         elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
-            names.add(node.module.split(".", 1)[0])
+            names.update(node.module.split("."))  # a submodule can be redirected (__path__)
+            names.update(alias.name for alias in node.names if alias.name != "*")
     return names
 
 
-def _nested_module(path: str) -> str | None:
-    if "/" not in path:
-        return None
-    name = path.rsplit("/", 1)[-1]
+def _module_name(path: str) -> str | None:
+    """The importable name a tree file provides: a module stem or a package directory."""
+    name = path.rsplit("/", 1)[-1].casefold()  # compared case-insensitively: fail closed
     if name == "__init__.py":
-        parts = path.split("/")
-        return parts[-2] if len(parts) > 2 else None
+        parts = path.casefold().split("/")
+        return parts[-2] if len(parts) > 1 else None
     for suffix in sorted(all_suffixes(), key=len, reverse=True):  # .py, .pyc, extension modules
         if name.endswith(suffix) and len(name) > len(suffix):
             return name[: -len(suffix)]
