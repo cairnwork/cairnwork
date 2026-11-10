@@ -10,6 +10,7 @@ def _run(path, outcomes, targets=("tests/test_x.py",), passed=False):
     return SimpleNamespace(
         spec=SimpleNamespace(verifier_id="pytest-0", targets=targets),
         outcomes=outcomes,
+        collect_errors=(),
         log_path=path,
         observation=VerifierObservation("pytest-0", "artifact", "sha256:fixed", passed),
     )
@@ -25,6 +26,32 @@ def test_failed_nodeid_and_log_tail_are_recorded(tmp_path):
     )[0]
     assert got["failed_nodeids"] == ["tests/test_recall.py::test_budget"]
     assert "1509 > 1500" in got["log_tail"]
+
+
+def test_collection_errors_are_counted_as_failures(tmp_path):
+    path = tmp_path / "verifier.log"
+    path.write_text("collection error")
+    run = _run(path, {"tests/test_case.py::test_case": "failed"})
+    run.collect_errors = ("tests/test_broken.py",)
+    got = failure_evidence.capture([run], home="", account=True)[0]
+    assert got["failed_count"] == 2
+    assert got["failed_nodeids"] == ["tests/test_broken.py", "tests/test_case.py::test_case"]
+
+
+def test_a_long_withheld_nodeid_does_not_set_the_truncation_flag(tmp_path):
+    node = "tests/test_case.py::test_case[" + "x" * failure_evidence.MAX_ID + "]"
+    got = failure_evidence.capture([_run(tmp_path / "log", {node: "failed"})], home="")[0]
+    assert (got["failed_nodeids"], got["failed_nodeids_truncated"]) == ([], False)
+    assert got["failed_count"] == 1
+
+
+def test_long_nodeid_sets_the_truncation_flag(tmp_path):
+    node = "tests/test_case.py::test_case[" + "x" * failure_evidence.MAX_ID + "]"
+    got = failure_evidence.capture(
+        [_run(tmp_path / "log", {node: "failed"})], home="", account=True
+    )[0]
+    assert got["failed_nodeids"] == [failure_evidence.mask_secrets(node)[: failure_evidence.MAX_ID]]
+    assert got["failed_nodeids_truncated"] is True
 
 
 def test_nodeids_are_deduplicated_sorted_and_capped(tmp_path):

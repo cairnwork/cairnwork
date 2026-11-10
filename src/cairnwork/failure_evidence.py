@@ -25,7 +25,7 @@ MAX_NODEIDS = 20
 MAX_LINES = 200
 MAX_BYTES = 16 * 1024
 MAX_ID = 200
-WINDOW = 4 * MAX_BYTES  # read only the end of a log (up to 4 MiB)
+WINDOW = 4 * MAX_BYTES  # read only the end of a log (64 KiB)
 
 
 def capture(runs, *, home: str, hidden: bool = False, account: bool = False) -> list[dict]:
@@ -34,9 +34,13 @@ def capture(runs, *, home: str, hidden: bool = False, account: bool = False) -> 
     for run in runs:
         if run.observation.passed:
             continue
-        failed = sorted({node for node, outcome in run.outcomes.items() if outcome == "failed"})
+        failed = sorted(  # setup/teardown errors are "failed" outcomes; collectors are apart
+            {node for node, outcome in run.outcomes.items() if outcome == "failed"}
+            | set(run.collect_errors)
+        )
         withheld = hidden or not account  # ids are candidate text too (parametrize ids)
-        shown = [] if withheld else [mask_secrets(n)[:MAX_ID] for n in failed]
+        masked = [mask_secrets(n) for n in failed]
+        shown = [] if withheld else [node[:MAX_ID] for node in masked]
         tail, truncated, unavailable = "", False, False
         if not withheld:
             try:
@@ -47,7 +51,8 @@ def capture(runs, *, home: str, hidden: bool = False, account: bool = False) -> 
             {
                 "id": run.spec.verifier_id,
                 "failed_nodeids": shown[:MAX_NODEIDS],
-                "failed_nodeids_truncated": len(shown) > MAX_NODEIDS,
+                "failed_nodeids_truncated": len(shown) > MAX_NODEIDS
+                or (not withheld and any(len(node) > MAX_ID for node in masked[:MAX_NODEIDS])),
                 "failed_count": len(failed),
                 "log_tail": tail,
                 "log_tail_truncated": truncated,
