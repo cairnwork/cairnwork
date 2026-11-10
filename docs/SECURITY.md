@@ -335,8 +335,9 @@ your own or already semi-trusted. **Everything that account can read is then rea
 sandbox**; only the named credential list above is masked, so this is not complete read
 isolation (unlike Seatbelt's allow-list). A candidate can therefore read an unlisted plaintext
 secret the account owns and copy it into the retained verifier log, so **never hand a raw
-verifier log to a worker or a model** (`src/cairnwork/verifiers.py` says the same). For the same reason a result's `failure_evidence` (#1105) keeps a log tail only
-when the run used the dedicated account; its node ids are masked and capped, and all of it is
+verifier log to a worker or a model** (`src/cairnwork/verifiers.py` says the same). For the
+same reason a result's `failure_evidence` (#1105) keeps a log tail and node ids only when the run
+used the dedicated account (masked and capped; otherwise a count only), and all of it is
 candidate-controlled text to treat as untrusted. Other users'
 `0700` home directories are protected by ordinary POSIX permissions.
 

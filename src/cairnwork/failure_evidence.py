@@ -4,9 +4,10 @@ Evidence is best effort: it is never an input to observations, comparisons, or v
 string here is candidate-controlled text after best-effort masking (``mask_secrets``, a ``<home>``
 swap): treat it as untrusted. Node ids are masked and cut to ``MAX_ID`` characters.
 
-A log tail is kept only when the run used the dedicated verifier account: without it a candidate
-can read the launching account's plaintext secrets and print them, and the masker misses bare
-tokens (docs/SECURITY.md: never hand a raw verifier log to a worker or a model).
+A log tail or node id is kept only when the run used the dedicated verifier account: without it a
+candidate can read the launching account's plaintext secrets and print them (or put them in a
+parametrize id), and the masker misses bare tokens (docs/SECURITY.md: never hand a raw verifier
+log to a worker or a model); only the count is kept then.
 
 Deferred tests stay hidden (the pipeline deletes base logs for the same reason): with a test commit
 an entry keeps only how many tests failed, no tail and no node id, since a deferred conftest can
@@ -34,8 +35,8 @@ def capture(runs, *, home: str, hidden: bool = False, account: bool = False) -> 
         if run.observation.passed:
             continue
         failed = sorted({node for node, outcome in run.outcomes.items() if outcome == "failed"})
-        shown = [] if hidden else [mask_secrets(n)[:MAX_ID] for n in failed]
-        withheld = hidden or not account
+        withheld = hidden or not account  # ids are candidate text too (parametrize ids)
+        shown = [] if withheld else [mask_secrets(n)[:MAX_ID] for n in failed]
         tail, truncated, unavailable = "", False, False
         if not withheld:
             try:

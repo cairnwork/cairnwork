@@ -32,7 +32,7 @@ def test_nodeids_are_deduplicated_sorted_and_capped(tmp_path):
     path.write_text("tail")
     outcomes = {f"tests/test_{i:02}.py::test_a": "failed" for i in range(23)}
     outcomes["tests/test_00.py::test_a"] = "failed"
-    got = failure_evidence.capture([_run(path, outcomes)], home="")[0]
+    got = failure_evidence.capture([_run(path, outcomes)], home="", account=True)[0]
     assert got["failed_nodeids"] == sorted(outcomes)[:20]
     assert got["failed_nodeids_truncated"] is True
 
@@ -95,12 +95,14 @@ def test_without_the_dedicated_account_no_tail_is_kept(tmp_path):
     path.write_text("ghp_" + "A1b2C3d4" * 5 + "\n")  # a bare token the masker cannot see
     got = failure_evidence.capture([_run(path, {"tests/test_a.py::test_a": "failed"})], home="")[0]
     assert got["log_tail"] == "" and got["log_tail_withheld"] is True
-    assert got["failed_nodeids"] == ["tests/test_a.py::test_a"]
+    assert got["failed_nodeids"] == [] and got["failed_count"] == 1
 
 
 def test_node_ids_are_masked_and_capped(tmp_path):
     node = "tests/test_a.py::test_a[Bearer abc https://user:pass@h.example " + "Z" * 100_000 + "]"
-    got = failure_evidence.capture([_run(tmp_path / "log", {node: "failed"})], home="")[0]
+    got = failure_evidence.capture(
+        [_run(tmp_path / "log", {node: "failed"})], home="", account=True
+    )[0]
     (shown,) = got["failed_nodeids"]
     assert len(shown) <= failure_evidence.MAX_ID
     assert "user:pass" not in shown and "Bearer abc" not in shown
