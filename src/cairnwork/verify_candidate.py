@@ -159,7 +159,7 @@ def verify_candidate(
         "protection": result.protection,  # protection.py; "" when Core was never asked
         "tests_consumed": tests_consumed(intake, test_commit),
         "verifier_mode": "account" if account is not None else "sandbox_only",
-    }
+    } | {"failure_evidence": result.failure_evidence}  # record-only, never judged (#1105)
 
 
 def _status_fields(verified: bool, status: str, level: str) -> dict[str, str]:

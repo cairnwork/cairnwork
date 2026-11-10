@@ -15,7 +15,7 @@ from dataclasses import replace
 from functools import partial
 from pathlib import Path
 
-from cairnwork import candidate_env, protection
+from cairnwork import candidate_env, failure_evidence, protection
 from cairnwork.account_check import unusable
 from cairnwork.account_prelude import AccountUnusableBeforeRun, after_candidate_ran, busy_once_more
 from cairnwork.blackbox_judge import judge_blackbox
@@ -129,6 +129,7 @@ def tests_with_teeth(
         s if s.collect_only else replace(s, continue_on_collect_errors=True) for s in specs
     )
     runs = run_verifiers(ctx, task.test_commit, base, f"{result.attempt_id}-b", deny=True)
+    recorded_runs = runs
     # #1034: what the base run really ran, before as_failed adds function-level ids for a #796 file
     nodes = {r.spec.verifier_id: tuple(r.outcomes) for r in runs if not r.spec.collect_only}
 
@@ -139,6 +140,10 @@ def tests_with_teeth(
 
     runs = [as_failed(run, targets, is_test) for run in runs]  # before the base comparison
     comparison = base_comparison(runs, targets)  # decided before the base logs go
+    if comparison.kind == "UNCOMPARABLE":
+        result.failure_evidence.extend(
+            failure_evidence.capture_for_task(recorded_runs, task, paths)
+        )
     for run in runs:  # #797 step 1: recorded only, no verdict reads it yet (deny_channel.py)
         if run.deny_evidence:
             result.logs.append(f"base deny evidence {run.spec.verifier_id}: {run.deny_evidence}")
@@ -263,6 +268,7 @@ def judge_candidate(
         runs += p2p_runs
     # keep what came before, e.g. a failed base probe's tail (#331)
     result.logs = [*result.logs, *(str(run.log_path) for run in runs), *bb_logs]
+    result.failure_evidence = failure_evidence.capture_for_task(runs, task, test_files)
     if unless_passed is not None and not all(run.observation.passed for run in runs):
         raise unless_passed
     missing = _not_run_here(task, verified_by, test_files)
