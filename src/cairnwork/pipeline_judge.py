@@ -19,6 +19,7 @@ from cairnwork import candidate_env, protection
 from cairnwork.account_check import unusable
 from cairnwork.account_prelude import AccountUnusableBeforeRun, after_candidate_ran, busy_once_more
 from cairnwork.blackbox_judge import judge_blackbox
+from cairnwork.candidate_sys_path import refuse_new_sys_path_mutation
 from cairnwork.changeset import ChangeSetError, read_change_set
 from cairnwork.collect_import import as_failed
 from cairnwork.conftest_check import check_conftests, without_conftests
@@ -232,12 +233,14 @@ def judge_candidate(
     unless_passed: BaseUncomparable | None = None,
     control: bool = False,
 ) -> None:
-    """Verify result.candidate_commit and have Core notarise it (sets verified, reason, logs);
-    shared by the worker pipeline and ``verify_candidate``; reach(phase) records progress. Verify
-    only: a ``binding`` (#229) binds the verdict to the tree that ran and the binding's head;
-    ``unless_passed`` (#259), a failed base check, is raised before Core if a verifier did not
-    pass; ``control`` (#962 2b): a failure of setup denials the unchanged tree reproduces is
-    UNCOMPARABLE. Core is not asked when all passed but a new test is in no run's record (#697)."""
+    """Verify the candidate and have Core notarise it; shared by worker pipeline and verify.
+    ``reach`` records progress. A binding binds the verdict to the executed tree and candidate
+    head. A failed base check (``unless_passed``) blocks Core when a verifier fails; ``control``
+    makes an unchanged-tree setup failure UNCOMPARABLE. The static scan catches source-visible
+    mutation only; obfuscated or runtime-built forms remain OPEN (#1065). The same-process
+    observer (experimental/import_origin) does not change verdicts. A new test absent from run
+    records blocks Core (#697)."""
+    refuse_new_sys_path_mutation(task.repo, task.base_commit, result.candidate_commit)
     judged = result.candidate_commit
     task_id = result.task_id
     reach("VERIFYING")
