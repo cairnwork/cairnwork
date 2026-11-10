@@ -148,3 +148,60 @@ def last_binding(body: list[ast.stmt], name: str, *, module: bool = False) -> as
         if binds_in_scope(stmt, name, module=in_module_compound):
             last = stmt
     return last
+
+
+def class_bindings(tree: ast.Module, name: str):
+    """Yield ``(chain, stmt)`` for each class-body statement binding ``name`` (#1127).
+
+    ``chain`` is the tuple of enclosing class names, as in a pytest node id; it is ``None`` for a
+    class inside a function, which pytest never collects."""
+    for chain, cls in _classes(tree, ()):
+        for stmt in cls.body:
+            if binds_in_scope(stmt, name):
+                yield chain, stmt
+
+
+def _classes(node: ast.AST, chain: tuple[str, ...] | None):
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, ast.ClassDef):
+            sub = None if chain is None else (*chain, child.name)
+            yield sub, child
+            yield from _classes(child, sub)
+        elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            yield from _classes(child, None)
+        else:
+            yield from _classes(child, chain)
+
+
+SETTERS = {"setattr", "delattr", "update", "setdefault", "__setitem__", "__delitem__"}
+SETTERS |= {"__setattr__", "__delattr__"}
+
+
+def rebinds_by_string(tree: ast.Module, name: str) -> bool:
+    """Whether the file can rebind ``name`` in a way the binding walk does not follow (#1127):
+    ``globals()['name'] = f``, ``globals().update(name=f)``, ``setattr(mod, 'name', f)``,
+    ``TestA.name = f``. The base then may collect other code under that name."""
+    for n in ast.walk(tree):
+        store = isinstance(getattr(n, "ctx", None), (ast.Store, ast.Del))
+        if store and isinstance(n, ast.Subscript) and _is_str(n.slice, name):
+            return True
+        if store and isinstance(n, ast.Attribute) and n.attr == name:
+            if not (isinstance(n.value, ast.Name) and n.value.id in {"self", "cls"}):
+                return True
+        if isinstance(n, ast.Call) and _callee(n.func) in SETTERS:
+            keys = [k for a in n.args if isinstance(a, ast.Dict) for k in a.keys]
+            if any(_is_str(a, name) for a in [*n.args, *keys]):
+                return True
+            if any(k.arg == name for k in n.keywords):
+                return True
+    return False
+
+
+def _callee(func: ast.expr) -> str:
+    if isinstance(func, ast.Name):
+        return func.id
+    return func.attr if isinstance(func, ast.Attribute) else ""
+
+
+def _is_str(node: ast.AST | None, name: str) -> bool:
+    return isinstance(node, ast.Constant) and node.value == name

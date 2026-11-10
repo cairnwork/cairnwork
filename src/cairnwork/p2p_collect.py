@@ -34,7 +34,13 @@ from cairnwork.collect_reader import read_collected
 from cairnwork.conftest_check import conftest_of
 from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRejected
 from cairnwork.gitcmd import GitCommandError, run_git
-from cairnwork.p2p_bindings import last_binding, mentions_ast, walk_without_nested_classes
+from cairnwork.p2p_bindings import (
+    class_bindings,
+    last_binding,
+    mentions_ast,
+    rebinds_by_string,
+    walk_without_nested_classes,
+)
 from cairnwork.p2p_nodes import changed_tests, module_changed
 from cairnwork.p2p_selection import MODULE_DIR_CAP
 from cairnwork.verifier_spec import VerifierSpec
@@ -115,11 +121,29 @@ def classify(base_ids, test_ids, edited, source, base_source) -> CollectedSide:
                 _defines(bases[path], owners, name)
                 and test_trees[path] is not None
                 and not _scope_mentions(test_trees[path], owners, name, texts[path])
+                and not _hidden(test_trees[path], bases[path], name, path, test_ids, base_ids)
             )
         (removed if gone else dropped).add(nodeid)
     return CollectedSide(
         frozenset(base_ids), frozenset(test_ids), frozenset(removed), frozenset(dropped)
     )
+
+
+def _hidden(tree, base, name, path, test_ids, base_ids) -> bool:
+    """#1127: whether the test commit keeps ``name`` bound in a class body pytest does not collect
+    it from (a shadowed same-name class, a class pytest skips, a nested class, one in a function).
+    The base test's code is then still there, only hidden: dropped, never removed. A binding the
+    base already had, unchanged and not collected there either, does not count."""
+
+    def uncollected(source, ids):
+        got = {_function(n).partition("::")[2] for n in ids if _file(n) == path}
+        return {
+            (chain, ast.dump(stmt))
+            for chain, stmt in class_bindings(source, name)
+            if chain is None or "::".join((*chain, name)) not in got
+        }
+
+    return bool(uncollected(tree, test_ids) - uncollected(base, base_ids))
 
 
 OVER_BUDGET = ("base-probe-timeout", "base-probe-report-over-cap", "base-probe-log-over-cap")
@@ -193,8 +217,8 @@ def _scope_mentions(tree: ast.Module, owners: list[str], name: str, text: str = 
     target_class: ast.ClassDef | None = None
     for owner in owners:
         found = [n for n in body if isinstance(n, ast.ClassDef) and n.name == owner]
-        if not found:
-            return bool(pattern.search(text))
+        if not found:  # #1127: identifiers are NFKC-normalized, the raw text is not
+            return bool(pattern.search(text)) or _mentions(tree.body, name, pattern)
         target_class = found[-1]
         body = target_class.body
     if target_class is None:
@@ -291,7 +315,9 @@ def _mentions(
 
 def _defines(tree: ast.Module | None, owners: list[str], name: str) -> bool:
     """Whether the base file itself has ``def name`` in the class chain ``owners``."""
-    body = tree.body if tree is not None else []
+    if tree is None or rebinds_by_string(tree, name):  # #1127: may collect other code
+        return False
+    body = tree.body
     module = True
     for owner in owners:
         try:
