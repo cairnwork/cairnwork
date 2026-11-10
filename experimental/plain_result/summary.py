@@ -38,6 +38,17 @@ def _tool_error(record: dict) -> dict:
     )
 
 
+def _not_checked(record: dict) -> dict:
+    return _result(
+        "Cairnwork 沒有檢查這個改動。",
+        f"這是 Cairnwork 檢查範圍的限制（{record['error']}），"
+        "不是對改動的判斷；既不是通過，也不是失敗。",
+        "請人審查，或改用其他方式檢查。",
+        "not_checked",
+        record,
+    )
+
+
 def _verify(record: dict, current_commit: str | None) -> dict:
     needed = (
         "status",
@@ -73,8 +84,6 @@ def _verify_outcome(record: dict, candidate: str, current_commit: str | None) ->
         and record["verified"] is True
         and record["core_status"] == "VERIFIED"
     ):
-        if current_commit is None:
-            return _unknown(record)
         if current_commit is not None and current_commit != candidate:
             return _result(
                 f"先前檢查的是 {candidate[:8]} 版，現在是 "
@@ -92,6 +101,14 @@ def _verify_outcome(record: dict, candidate: str, current_commit: str | None) ->
             "same_process_only",
         ):
             return _unknown(record)
+        if current_commit is None:
+            return _result(
+                f"{candidate[:8]} 版通過了安排的檢查，但沒有提供目前版本，不能確認它就是這個改動。",
+                "檢查結果只適用於已知的候選版本；目前版本未知，因此不能視為目前工作的通過結果。",
+                "提供目前版本後再讀取結果。",
+                "verified_version_unknown",
+                record,
+            )
         return _result(
             "這一版通過了安排的檢查。仍有檢查不到的地方。",
             f"檢查適用於 {candidate[:8]} 版；保護等級是 {record['protection']}；"
@@ -197,6 +214,15 @@ def summarize(
     for key, wanted in (("task_id", task_id), ("attempt_id", attempt_id)):
         if wanted is not None and record.get(key) != wanted:
             return _unknown(record)
+    error = record.get("error")
+    if (
+        isinstance(error, str)
+        and error
+        and not any(key in record for key in ("status", "ok", "verified", "code"))
+    ):
+        if error in ("TASK_ALLOWED_FILES_PROTECTED", "VERIFIER_NOT_ALLOWED"):
+            return _not_checked(record)
+        return _tool_error(record)
     if "code" in record and "ok" not in record and "status" not in record:
         return _tool_error(record)
     if current_commit is not None and (

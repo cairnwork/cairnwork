@@ -21,3 +21,8 @@ nothing but that tests failed (every failed verifier's only cause is `pytest exi
 then it reads "not yet cleared of the environment". Every other cause (timeout, size cap,
 leftover processes, environment or setup error, a note, a check or gate) is undetermined, like
 UNCOMPARABLE, REFUSED, a pre-Core `error`, and attestation.
+
+Other summary states include `not_checked` for verifier scope refusals and
+`verified_version_unknown` when a VERIFIED candidate passed the arranged checks but the caller
+did not provide the current version. Both remain in the card's undetermined cell; neither is a
+pass for the current work.
