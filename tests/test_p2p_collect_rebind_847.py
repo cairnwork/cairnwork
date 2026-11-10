@@ -109,3 +109,17 @@ def test_a_plain_deleted_test_is_removed_control():
     base = "def test_a(): assert 0\n"
     side = _classify_single(base)
     assert side.removed == {"t.py::test_a"} and side.dropped == set()
+
+
+def test_a_module_level_global_in_a_branch_is_not_a_binding():
+    """Review f844fc68 (:221): a module-level ``global`` binds nothing: delete is removed."""
+    base = "if True:\n    global test_a\ndef test_a(): assert 0\n"
+    side = _classify_single(base)
+    assert side.removed == {"t.py::test_a"} and side.dropped == set()
+
+
+def test_a_class_level_global_in_a_branch_still_refuses_control():
+    """In a class body ``global`` sends the name to module scope: stay conservative."""
+    base = "class TestC:\n    if True:\n        global test_a\n    def test_a(self): assert 0\n"
+    side = _classify_single(base, "t.py::TestC::test_a")
+    assert side.removed == set() and side.dropped == {"t.py::TestC::test_a"}
