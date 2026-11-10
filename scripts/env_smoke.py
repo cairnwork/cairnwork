@@ -128,13 +128,22 @@ def _bare_is_green(probe: RepoProbe, commit: str, run_root: Path, timeout: int) 
 
 def _mirror_multi_branch_reason(repo: Path) -> str | None:
     """A reason if repo is a mirror whose origin is not single-branch (Issue #76), else None.
-    A repo with no origin fetch refspec (a local probe checkout) is not applicable."""
-    got = subprocess.run(  # noqa: S603, S607 - fixed argv, no shell
-        ["git", "-C", str(repo), "config", "--get-all", "remote.origin.fetch"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    A repo with no origin fetch refspec (a local probe checkout) is not applicable.
+    A git failure is a reason too (Issue #1106): only exit 1 (key unset) means not applicable."""
+    unsure = "refusing to treat the repo as single-branch"
+    try:
+        got = subprocess.run(  # noqa: S603, S607 - fixed argv, no shell
+            ["git", "-C", str(repo), "config", "--get-all", "remote.origin.fetch"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as err:
+        return f"could not read remote.origin.fetch ({err}); {unsure}"
+    if got.returncode == 1:
+        return None
+    if got.returncode != 0:
+        return f"could not read remote.origin.fetch (git exit {got.returncode}); {unsure}"
     specs = [s for s in got.stdout.splitlines() if s.strip()]
     advice = "re-clone with: git clone --single-branch --branch main <url>"
     if not specs:
@@ -143,20 +152,25 @@ def _mirror_multi_branch_reason(repo: Path) -> str | None:
     if any(spec.lstrip("+").split(":", 1)[0] != "refs/heads/main" for spec in specs):
         return f"mirror not single-branch; {advice}"
     # The config only governs future fetches; refuse a mirror that already holds a non-main branch.
-    refs = subprocess.run(  # noqa: S603, S607 - fixed argv, no shell
-        [
-            "git",
-            "-C",
-            str(repo),
-            "for-each-ref",
-            "--format=%(refname)",
-            "refs/heads/",
-            "refs/remotes/origin/",
-        ],  # fmt: skip
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        refs = subprocess.run(  # noqa: S603, S607 - fixed argv, no shell
+            [
+                "git",
+                "-C",
+                str(repo),
+                "for-each-ref",
+                "--format=%(refname)",
+                "refs/heads/",
+                "refs/remotes/origin/",
+            ],  # fmt: skip
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as err:
+        return f"could not list refs ({err}); {unsure}"
+    if refs.returncode != 0:
+        return f"could not list refs (git exit {refs.returncode}); {unsure}"
     allowed = {"refs/heads/main", "refs/remotes/origin/main", "refs/remotes/origin/HEAD"}
     if any(r not in allowed for r in refs.stdout.split()):
         return f"mirror holds a branch beyond main; {advice}"
