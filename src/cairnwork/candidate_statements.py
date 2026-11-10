@@ -4,14 +4,12 @@ Statements are compared with the base blob (AST, comments dropped, nested blocks
 by the enclosing def/class names, block headers and block fields). A statement is hot when its own
 source names a machinery word, or names a def or class whose body reaches an import-machinery
 word (``reach``: sys.modules, finders, importlib, __import__, runpy, pytest_plugins; directly or
-through other same-file defs). If that word scan misses, direct calls to getattr/setattr are
-allowed only with a safe literal identifier. vars stays refused exactly as on main. Rule (4) also
-refuses those names when defined, imported, bound, or used indirectly. Rule (5) refuses a direct
-getattr result when called, subscripted, or used as an attribute value for private or mutating
-attributes; ordinary reads such as ``getattr(opts, "name", "").strip()`` remain allowed. An added
-or removed hot statement makes the edit machinery, so writing, rewriting or moving machinery,
-calling dead base machinery, or flipping the condition that wraps it (the key of every statement
-inside changes) is caught, while a fix that calls a same-file helper is not.
+through other same-file defs). The word scan is main's; a statement whose only machinery words are
+getattr/setattr, every occurrence being a direct call that passes the literal-name rules, is
+exempted. vars is never exempted (see #1155). An added or removed hot statement makes the edit
+machinery, so writing, rewriting or moving machinery, calling dead base machinery, or flipping the
+condition that wraps it (the key of every statement inside changes) is caught, while a fix that
+calls a same-file helper is not.
 Residual (#1115): an edit to other control flow inside a function that reaches machinery (say an
 early return before it), and base machinery reached through aliases, registries or dunders, are
 not hot; broader lexical matching raised hot statements in real signalling files, so these are
@@ -101,11 +99,9 @@ def _visit(
         text = ast.unparse(own)
         key = (scope, text)
         found[key] += 1
-        if (
-            _has_word(text, words)
-            or _names(own) & hot_names
-            or _unsafe_dynamic_access(own, denylist)
-        ):
+        scan_hit = _has_word(text, words)
+        exempt = scan_hit and _exempt_dynamic_word_scan(text, own, words, denylist)
+        if (scan_hit and not exempt) or _names(own) & hot_names:
             hot.add(key)
         inner = f"{scope}/{node.name if isinstance(node, _DEFS) else text}"
         for field, block in blocks:  # the field keeps an if/else or try/else move visible
@@ -125,7 +121,7 @@ def _unsafe_dynamic_access(node: ast.AST, denylist: frozenset[str]) -> bool:
         if any(name in names | {"vars"} for name in _bound_identifiers(part)):
             return True
         if isinstance(part, ast.Attribute) and _is_direct_getattr(part.value):
-            if part.attr.startswith("_") or part.attr in _MUTATING_ATTRIBUTES:
+            if part.attr.startswith("_") or part.attr in denylist:
                 return True
         if isinstance(part, ast.Subscript) and _is_direct_getattr(part.value):
             return True
@@ -157,21 +153,18 @@ def _unsafe_dynamic_access(node: ast.AST, denylist: frozenset[str]) -> bool:
     return False
 
 
-_MUTATING_ATTRIBUTES = frozenset(
-    {
-        "append",
-        "extend",
-        "insert",
-        "remove",
-        "pop",
-        "clear",
-        "update",
-        "setdefault",
-        "add",
-        "discard",
-        "__call__",
-    }
-)
+def _exempt_dynamic_word_scan(
+    text: str, node: ast.AST, words: tuple[bytes, ...], denylist: frozenset[str]
+) -> bool:
+    """Exempt only word hits fully accounted for by safe direct getattr/setattr calls."""
+    other_words = tuple(word for word in words if word not in {b"getattr", b"setattr"})
+    if _has_word(text, other_words) or _unsafe_dynamic_access(node, denylist):
+        return False
+    calls = [part for part in ast.walk(node) if isinstance(part, ast.Call)]
+    direct = sum(
+        isinstance(call.func, ast.Name) and call.func.id in {"getattr", "setattr"} for call in calls
+    )
+    return text.count("getattr") + text.count("setattr") == direct
 
 
 def _is_direct_getattr(node: ast.AST) -> bool:

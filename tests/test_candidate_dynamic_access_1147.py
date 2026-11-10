@@ -60,6 +60,14 @@ WRONG_CASES = [
     ),
     ("wrong_getattr_nonliteral_name", "def r(n):\n    return getattr(sys, n)\n"),
     ("wrong_getattr_concat_name", "def r(o):\n    return getattr(o, 'meta' + '_path')\n"),
+    ("wrong_setattr_concat_name", "sys.__setattr__('meta' + '_path', [])\n"),
+    ("wrong_type_setattr", "type(sys).__setattr__(sys, n, [])\n"),
+    ("wrong_object_setattr", "object.__setattr__(sys, n, [])\n"),
+    ("wrong_inspect_getattr_static", "import inspect\ninspect.getattr_static(sys, n)\n"),
+    ("wrong_getattr_static_alias", "from inspect import getattr_static as g\ng(sys, n)\n"),
+    ("wrong_module_getattr_hook", "def __getattr__(name):\n    return 1\n"),
+    ("wrong_mixed_getattr_setattr", "f(getattr(a, 'b'), setattr)\n"),
+    ("wrong_getattr_word_string", "getattr(a, 'getattr')\n"),
     ("wrong_setattr_param_module", "def f(m):\n    setattr(m, 'path', [])\nf(sys)\n"),
     (
         "wrong_setattr_selfattr_chain",
@@ -190,6 +198,13 @@ HONEST_CASES = [
         "honest_getattr_result_string_method",
         "def f(opts):\n    return getattr(opts, 'name', '').strip()\n",
         "allow",
+    ),
+    (
+        "honest_frozen_dataclass_setattr",
+        "from dataclasses import dataclass\n@dataclass(frozen=True)\n"
+        "class W:\n    x: int\n    def __post_init__(self, v):\n"
+        "        object.__setattr__(self, 'x', v)\n",
+        "refuse",
     ),
 ]
 

@@ -45,8 +45,7 @@ _REACH_WORDS = tuple(
     )
 )  # fmt: skip
 _MACHINERY_WORDS = _REACH_WORDS + tuple(
-    word.encode()
-    for word in (*sorted(DYNAMIC_NAMES - {"getattr", "setattr"}), *sorted(DYNAMIC_ATTRS))
+    word.encode() for word in (*sorted(DYNAMIC_NAMES), *sorted(DYNAMIC_ATTRS))
 )
 
 # Literal attribute names that can expose import machinery, execute code, intercept runtime
@@ -78,6 +77,8 @@ DYNAMIC_ACCESS_DENYLIST = frozenset(
         "util",
         "machinery",
         "abc",
+        "add",
+        "discard",
         "__import__",
         "exec",
         "eval",
