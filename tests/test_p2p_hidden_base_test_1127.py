@@ -209,6 +209,38 @@ def test_a_deep_expression_does_not_crash_the_split():
     )
 
 
+# Codex r2 on #1130: the base excuse counts copies per scope path
+NESTED = "    def m(self):\n        def test_x(self):\n            assert True\n"
+
+
+def test_a_second_copy_of_an_excused_hidden_binding_is_dropped():
+    base = "class C1:\n" + NESTED + BASE_A
+    test = "class C1:\n" + NESTED + "class C2:\n" + NESTED + TEST_A
+    ids = ["t.py::TestA::test_x", "t.py::TestA::test_keep"]
+    assert _split(base, test, ids, ids[1:]) == (set(), {"t.py::TestA::test_x"})
+
+
+def test_an_excused_copy_moved_to_another_scope_is_dropped():
+    base = "class C1:\n" + NESTED + BASE_A
+    test = "class C2:\n" + NESTED + TEST_A
+    ids = ["t.py::TestA::test_x", "t.py::TestA::test_keep"]
+    assert _split(base, test, ids, ids[1:]) == (set(), {"t.py::TestA::test_x"})
+
+
+def test_deleting_the_live_test_next_to_a_dead_copy_the_base_had_is_removed():
+    # the base already shadowed the first TestA (never collected); the collected test_x is deleted
+    base = BASE_A + BASE_A
+    ids = ["t.py::TestA::test_x", "t.py::TestA::test_keep"]
+    assert _split(base, BASE_A + TEST_A, ids, ids[1:]) == ({"t.py::TestA::test_x"}, set())
+
+
+@pytest.mark.parametrize("value", ["1 + 2", "(1, 'a')", "-1", "[1, 2]", "{'a': 1}"])
+def test_a_literal_expression_with_the_test_name_is_not_a_test(value):
+    test = "class TestA:\n" + KEEP + f"    class Config:\n        test_x = {value}\n"
+    ids = ["t.py::TestA::test_x", "t.py::TestA::test_keep"]
+    assert _split(BASE_A, test, ids, ids[1:]) == ({"t.py::TestA::test_x"}, set())
+
+
 # Codex r1 on #1130: where the rebinding sits decides whether it counts
 CLASS_BASE = "def _other(self):\n    assert True\n" + BASE_A
 CLASS_TEST = "def _other(self):\n    assert True\nclass TestA:\n" + KEEP

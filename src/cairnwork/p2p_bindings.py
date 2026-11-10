@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ast
 import re
+from collections import Counter
 
 COMPOUND_STMTS = (
     ast.If,
@@ -151,34 +152,35 @@ def last_binding(body: list[ast.stmt], name: str, *, module: bool = False) -> as
 
 
 Shadow = tuple[list[ast.stmt], int, str]  # a later part of a scope that may rebind a name
+Scope = tuple[list[ast.stmt], tuple[str, ...], tuple[str, ...] | None, bool, tuple[Shadow, ...]]
 
 
-def hidden_bindings(tree: ast.Module, name: str, collected: set[str]) -> set[tuple]:
-    """``(chain, ast.dump)`` of each class- or function-body statement binding ``name`` where
-    pytest does not collect it (#1127): a function body, a class whose chain pytest did not
-    collect under ``name`` (``collected`` holds ``A::B::name`` ids of this file), or a binding a
-    later statement of the same scope shadows (also for the class chain). A constant or a bare
-    annotation is never a test and does not count. Iterative, and the shadowing is checked only
-    for a binding found, so a deep or long file costs one walk."""
-    found: set[tuple] = set()
-    # body, chain (None in a function), counts, shadow checks: (body, from index, name)
-    scopes: list[tuple[list[ast.stmt], tuple[str, ...] | None, bool, tuple[Shadow, ...]]] = [
-        (tree.body, (), False, ())
-    ]
+def hidden_bindings(tree: ast.Module, name: str, collected: set[str]) -> Counter:
+    """``(scope path, ast.dump)`` counts of each class- or function-body statement binding
+    ``name`` where pytest does not collect it (#1127): a function body, a class whose chain
+    pytest did not collect under ``name`` (``collected`` holds ``A::B::name`` ids of this file),
+    or a binding a later statement of the same scope shadows (also for the class chain). The
+    path names every enclosing class and function. A constant value or a bare annotation is never
+    a test and does not count. Iterative, and the shadowing is checked only for a binding found,
+    so a deep or long file costs one walk."""
+    found: Counter = Counter()
+    # body, path, chain (None in a function), counts, shadow checks
+    scopes: list[Scope] = [(tree.body, (), (), False, ())]
     while scopes:
-        body, chain, counts, shadows = scopes.pop()
+        body, path, chain, counts, shadows = scopes.pop()
         for i, stmt in enumerate(body):
             if counts and binds_in_scope(stmt, name) and not _never_a_test(stmt):
                 key = None if chain is None else "::".join((*chain, name))
                 checks = (*shadows, (body, i + 1, name))
                 if key not in collected or any(_shadowed(b, j, n) for b, j, n in checks):
-                    found.add((chain, ast.dump(stmt)))
+                    found[(path, ast.dump(stmt))] += 1
             for node in _scopes_in(stmt):
+                sub_path = (*path, node.name)
                 if isinstance(node, ast.ClassDef) and chain is not None:
                     sub = (*shadows, (body, i + 1, node.name))
-                    scopes.append((node.body, (*chain, node.name), True, sub))
+                    scopes.append((node.body, sub_path, (*chain, node.name), True, sub))
                 else:
-                    scopes.append((node.body, None, True, ()))
+                    scopes.append((node.body, sub_path, None, True, ()))
     return found
 
 
@@ -202,9 +204,17 @@ FUNCTIONS = (ast.FunctionDef, ast.AsyncFunctionDef)
 
 
 def _never_a_test(stmt: ast.stmt) -> bool:
-    if isinstance(stmt, ast.AnnAssign):
-        return stmt.value is None or isinstance(stmt.value, ast.Constant)
-    return isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.Constant)
+    """A value built only from literals (``1``, ``1 + 2``, ``(1, 'a')``) is never collected."""
+    if isinstance(stmt, ast.AnnAssign) and stmt.value is None:
+        return True
+    if not isinstance(stmt, (ast.Assign, ast.AnnAssign)) or stmt.value is None:
+        return False
+    return all(isinstance(n, LITERAL_PARTS) for n in ast.walk(stmt.value))
+
+
+LITERAL_PARTS = (ast.Constant, ast.BinOp, ast.UnaryOp, ast.BoolOp, ast.Compare, ast.Tuple)
+LITERAL_PARTS += (ast.List, ast.Set, ast.Dict, ast.expr_context, ast.operator, ast.unaryop)
+LITERAL_PARTS += (ast.boolop, ast.cmpop)
 
 
 SETTERS = {"setattr", "delattr", "update", "setdefault", "__setitem__", "__delitem__"}

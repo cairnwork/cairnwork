@@ -133,14 +133,15 @@ def _hidden(tree, base, name, path, test_ids, base_ids) -> bool:
     """#1127: whether the test commit keeps ``name`` bound where pytest does not collect it (a
     shadowed same-name class or method, a class pytest skips, a nested class, a function body).
     The base test's code is then still there, only hidden: dropped, never removed. A binding the
-    base already had, unchanged and not collected there either, does not count."""
+    base already had in the same scope, unchanged and not collected there either, does not
+    count; each copy counts once, so a second copy of an excused one is hidden."""
 
     def got(ids):
         return {_function(n).partition("::")[2] for n in ids if _file(n) == path}
 
     try:
         kept = hidden_bindings(tree, name, got(test_ids))
-        return bool(kept - hidden_bindings(base, name, got(base_ids)))
+        return bool(kept - hidden_bindings(base, name, got(base_ids)))  # counts, not a set
     except RecursionError:  # ast.dump of a very deep expression: not provably gone
         return True
 
