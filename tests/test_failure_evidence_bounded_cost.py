@@ -83,3 +83,11 @@ def test_finished_urls_are_kept_or_masked_as_before(tmp_path):
     assert first == "GET https://example.test/path x=1"
     assert "u:p" not in second and "<cut>" not in got["log_tail"]
     assert got["log_tail_truncated"] is False
+
+
+def test_a_cut_line_keeps_its_newline(tmp_path):
+    path = tmp_path / "verifier.log"
+    path.write_text("a" * (failure_evidence.MAX_LINE + 50) + "\nsecond\n")
+    got = failure_evidence.capture([_run(path, {"n": "failed"})], home="", account=True)[0]
+    first, second = got["log_tail"].splitlines()
+    assert first == "a" * failure_evidence.MAX_LINE and second == "second"

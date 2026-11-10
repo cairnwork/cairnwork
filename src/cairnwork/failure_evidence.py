@@ -98,7 +98,7 @@ def _tail(path: Path, home: str) -> tuple[str, bool]:
     pieces = raw.split("\n")
     lines = [piece + "\n" for piece in pieces[:-1]] + ([pieces[-1]] if pieces[-1] else [])
     kept = lines[-MAX_LINES:]
-    pairs = [_cut_open_url(mask_secrets(line[: MAX_LINE * PRE_MASK])[:MAX_LINE]) for line in kept]
+    pairs = [_shape_line(line) for line in kept]
     redacted = [text.replace(home, "<home>") if home else text for text, _ in pairs]
     encoded = "".join(redacted).encode("utf-8")
     cut = (
@@ -117,3 +117,11 @@ def _cut_open_url(text: str) -> tuple[str, bool]:
     if found is None:
         return text, False
     return text[: found.start()] + "<cut>" + text[found.end() :], True
+
+
+def _shape_line(line: str) -> tuple[str, bool]:
+    """Mask, cut to MAX_LINE and drop an open URL tail; a cut line keeps its newline."""
+    text, was_cut = _cut_open_url(mask_secrets(line[: MAX_LINE * PRE_MASK])[:MAX_LINE])
+    if line.endswith("\n") and not text.endswith("\n"):
+        text += "\n"
+    return text, was_cut
