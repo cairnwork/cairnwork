@@ -35,7 +35,7 @@ from cairnwork.conftest_check import conftest_of
 from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRejected
 from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.p2p_bindings import (
-    class_bindings,
+    hidden_bindings,
     last_binding,
     mentions_ast,
     rebinds_by_string,
@@ -130,20 +130,19 @@ def classify(base_ids, test_ids, edited, source, base_source) -> CollectedSide:
 
 
 def _hidden(tree, base, name, path, test_ids, base_ids) -> bool:
-    """#1127: whether the test commit keeps ``name`` bound in a class body pytest does not collect
-    it from (a shadowed same-name class, a class pytest skips, a nested class, one in a function).
+    """#1127: whether the test commit keeps ``name`` bound where pytest does not collect it (a
+    shadowed same-name class or method, a class pytest skips, a nested class, a function body).
     The base test's code is then still there, only hidden: dropped, never removed. A binding the
     base already had, unchanged and not collected there either, does not count."""
 
-    def uncollected(source, ids):
-        got = {_function(n).partition("::")[2] for n in ids if _file(n) == path}
-        return {
-            (chain, ast.dump(stmt))
-            for chain, stmt in class_bindings(source, name)
-            if chain is None or "::".join((*chain, name)) not in got
-        }
+    def got(ids):
+        return {_function(n).partition("::")[2] for n in ids if _file(n) == path}
 
-    return bool(uncollected(tree, test_ids) - uncollected(base, base_ids))
+    try:
+        kept = hidden_bindings(tree, name, got(test_ids))
+        return bool(kept - hidden_bindings(base, name, got(base_ids)))
+    except RecursionError:  # ast.dump of a very deep expression: not provably gone
+        return True
 
 
 OVER_BUDGET = ("base-probe-timeout", "base-probe-report-over-cap", "base-probe-log-over-cap")

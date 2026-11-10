@@ -161,6 +161,95 @@ def test_literal_rebinding_is_dropped(case):
     )
 
 
+# Sonnet counterexample round on #1130: a copy shadowed inside a collected chain, a def inside
+# a method, a constant that is never a test, and a deep AST
+X = "    def test_x(self):\n        assert True\n"
+TEST_A = "class TestA:\n" + KEEP
+MORE_HIDDEN = {
+    "copy-in-shadowed-class-next-to-live-one": (
+        TEST_A + "class TestB:\n" + X + "class TestB:\n    def test_x(self):\n        assert 1\n",
+        ["t.py::TestA::test_keep", "t.py::TestB::test_x"],
+    ),
+    "copy-under-if-false-before-live-method": (
+        TEST_A + "class TestB:\n    if False:\n        def test_x(self):\n            assert True\n"
+        "    def test_x(self):\n        assert 1\n",
+        ["t.py::TestA::test_keep", "t.py::TestB::test_x"],
+    ),
+    "def-inside-a-method-of-an-uncollected-class": (
+        "class Hid:\n    def m(self):\n        def test_x(self):\n            assert True\n"
+        + TEST_A,
+        ["t.py::TestA::test_keep"],
+    ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(MORE_HIDDEN))
+def test_more_hidden_shapes_are_dropped(case):
+    test, test_ids = MORE_HIDDEN[case]
+    ids = ["t.py::TestA::test_x", "t.py::TestA::test_keep"]
+    assert _split(BASE_A, test, ids, test_ids) == (set(), {"t.py::TestA::test_x"})
+
+
+@pytest.mark.parametrize("field", ["test_x = 1\n", "test_x: int = 0\n", "test_x: int\n"])
+def test_a_constant_with_the_test_name_in_another_class_is_not_a_test(field):
+    test = "class Cfg:\n    " + field + TEST_A
+    ids = ["t.py::TestA::test_x", "t.py::TestA::test_keep"]
+    assert _split(BASE_A, test, ids, ids[1:]) == ({"t.py::TestA::test_x"}, set())
+
+
+def test_a_deep_expression_does_not_crash_the_split():
+    deep = " + ".join(["f"] * 3000) + "\n"
+    ids = ["t.py::TestA::test_x", "t.py::TestA::test_keep"]
+    gone = {"t.py::TestA::test_x"}
+    assert _split(BASE_A, TEST_A + "v = " + deep, ids, ids[1:]) == (gone, set())
+    # bound to the test's name in an uncollected class: not provably gone, never a crash
+    assert _split(BASE_A, "class Hid:\n    test_x = " + deep + TEST_A, ids, ids[1:]) == (
+        set(),
+        gone,
+    )
+
+
+# Codex r1 on #1130: where the rebinding sits decides whether it counts
+CLASS_BASE = "def _other(self):\n    assert True\n" + BASE_A
+CLASS_TEST = "def _other(self):\n    assert True\nclass TestA:\n" + KEEP
+STRING_REBIND = {
+    # module or class level: any target counts, an alias of the class included
+    "module-level-class-alias": ("cls = TestA\ncls.test_x = _other\n", True),
+    "in-function-on-a-file-class": ("def _put():\n    TestA.test_x = _other\n_put()\n", True),
+    "in-function-on-sys-modules": (
+        "import sys\ndef _put():\n"
+        "    setattr(sys.modules[__name__].TestA, 'test_x', _other)\n_put()\n",
+        True,
+    ),
+    # inside a fixture, a store on a plain object does not touch what pytest collects
+    "fixture-setattr-on-self": (
+        "    def setup_method(self):\n        setattr(self, 'test_x', 1)\n",
+        False,
+    ),
+    "fixture-dict-update": (
+        "    def setup_method(self):\n        cfg = {}\n        cfg.update(test_x=1)\n",
+        False,
+    ),
+    "fixture-dict-subscript": (
+        "    def setup_method(self):\n        cfg = {}\n        cfg['test_x'] = 1\n",
+        False,
+    ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(STRING_REBIND))
+def test_a_rebinding_by_string_counts_only_where_it_can_change_collection(case):
+    extra, rebinds = STRING_REBIND[case]
+    base = (
+        CLASS_BASE + extra
+        if not extra.startswith("    ")
+        else CLASS_BASE.replace(KEEP, KEEP + extra)
+    )
+    ids = ["t.py::TestA::test_x", "t.py::TestA::test_keep"]
+    gone = {"t.py::TestA::test_x"}
+    assert _split(base, CLASS_TEST, ids, ids[1:]) == ((set(), gone) if rebinds else (gone, set()))
+
+
 # --- pins of what 1608c2b2 already got right
 def test_original_kept_in_if_with_top_level_shadow_is_dropped():
     test = "if True:\n" + "".join(f"    {ln}\n" for ln in BASE_A.splitlines())

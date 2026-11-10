@@ -150,27 +150,61 @@ def last_binding(body: list[ast.stmt], name: str, *, module: bool = False) -> as
     return last
 
 
-def class_bindings(tree: ast.Module, name: str):
-    """Yield ``(chain, stmt)`` for each class-body statement binding ``name`` (#1127).
-
-    ``chain`` is the tuple of enclosing class names, as in a pytest node id; it is ``None`` for a
-    class inside a function, which pytest never collects."""
-    for chain, cls in _classes(tree, ()):
-        for stmt in cls.body:
-            if binds_in_scope(stmt, name):
-                yield chain, stmt
+Shadow = tuple[list[ast.stmt], int, str]  # a later part of a scope that may rebind a name
 
 
-def _classes(node: ast.AST, chain: tuple[str, ...] | None):
-    for child in ast.iter_child_nodes(node):
-        if isinstance(child, ast.ClassDef):
-            sub = None if chain is None else (*chain, child.name)
-            yield sub, child
-            yield from _classes(child, sub)
-        elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
-            yield from _classes(child, None)
-        else:
-            yield from _classes(child, chain)
+def hidden_bindings(tree: ast.Module, name: str, collected: set[str]) -> set[tuple]:
+    """``(chain, ast.dump)`` of each class- or function-body statement binding ``name`` where
+    pytest does not collect it (#1127): a function body, a class whose chain pytest did not
+    collect under ``name`` (``collected`` holds ``A::B::name`` ids of this file), or a binding a
+    later statement of the same scope shadows (also for the class chain). A constant or a bare
+    annotation is never a test and does not count. Iterative, and the shadowing is checked only
+    for a binding found, so a deep or long file costs one walk."""
+    found: set[tuple] = set()
+    # body, chain (None in a function), counts, shadow checks: (body, from index, name)
+    scopes: list[tuple[list[ast.stmt], tuple[str, ...] | None, bool, tuple[Shadow, ...]]] = [
+        (tree.body, (), False, ())
+    ]
+    while scopes:
+        body, chain, counts, shadows = scopes.pop()
+        for i, stmt in enumerate(body):
+            if counts and binds_in_scope(stmt, name) and not _never_a_test(stmt):
+                key = None if chain is None else "::".join((*chain, name))
+                checks = (*shadows, (body, i + 1, name))
+                if key not in collected or any(_shadowed(b, j, n) for b, j, n in checks):
+                    found.add((chain, ast.dump(stmt)))
+            for node in _scopes_in(stmt):
+                if isinstance(node, ast.ClassDef) and chain is not None:
+                    sub = (*shadows, (body, i + 1, node.name))
+                    scopes.append((node.body, (*chain, node.name), True, sub))
+                else:
+                    scopes.append((node.body, None, True, ()))
+    return found
+
+
+def _shadowed(body: list[ast.stmt], start: int, name: str) -> bool:
+    return any(binds_in_scope(body[j], name) for j in range(start, len(body)))
+
+
+def _scopes_in(stmt: ast.stmt):
+    """``stmt`` itself when it is a class or function, else the classes and functions inside it
+    through blocks (never through another scope)."""
+    pending: list[ast.AST] = [stmt]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, (ast.ClassDef, *FUNCTIONS)):
+            yield node
+            continue
+        pending.extend(ast.iter_child_nodes(node))
+
+
+FUNCTIONS = (ast.FunctionDef, ast.AsyncFunctionDef)
+
+
+def _never_a_test(stmt: ast.stmt) -> bool:
+    if isinstance(stmt, ast.AnnAssign):
+        return stmt.value is None or isinstance(stmt.value, ast.Constant)
+    return isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.Constant)
 
 
 SETTERS = {"setattr", "delattr", "update", "setdefault", "__setitem__", "__delitem__"}
@@ -180,21 +214,57 @@ SETTERS |= {"__setattr__", "__delattr__"}
 def rebinds_by_string(tree: ast.Module, name: str) -> bool:
     """Whether the file can rebind ``name`` in a way the binding walk does not follow (#1127):
     ``globals()['name'] = f``, ``globals().update(name=f)``, ``setattr(mod, 'name', f)``,
-    ``TestA.name = f``. The base then may collect other code under that name."""
-    for n in ast.walk(tree):
+    ``TestA.name = f``. The base then may collect other code under that name. At module or class
+    level any such store counts; inside a function only one on a namespace (``globals()``,
+    ``sys.modules``, ``__dict__``, a class of this file) does, so ``self.name = 1`` or
+    ``config['name'] = 1`` in a fixture is not a rebinding."""
+    classes = {n.name for n in ast.walk(tree) if isinstance(n, ast.ClassDef)}
+    for n, in_function in _scoped(tree):
+        inside = classes if in_function else None  # None: module or class level
         store = isinstance(getattr(n, "ctx", None), (ast.Store, ast.Del))
         if store and isinstance(n, ast.Subscript) and _is_str(n.slice, name):
-            return True
-        if store and isinstance(n, ast.Attribute) and n.attr == name:
-            if not (isinstance(n.value, ast.Name) and n.value.id in {"self", "cls"}):
+            if _counts(n.value, inside):
                 return True
+        if store and isinstance(n, ast.Attribute) and n.attr == name and _counts(n.value, inside):
+            return True
         if isinstance(n, ast.Call) and _callee(n.func) in SETTERS:
             keys = [k for a in n.args if isinstance(a, ast.Dict) for k in a.keys]
-            if any(_is_str(a, name) for a in [*n.args, *keys]):
-                return True
-            if any(k.arg == name for k in n.keywords):
-                return True
+            named = any(_is_str(a, name) for a in [*n.args, *keys])
+            if named or any(k.arg == name for k in n.keywords):
+                func = n.func
+                target = func.value if isinstance(func, ast.Attribute) else None
+                if _callee(func) in {"setattr", "delattr"} and n.args:
+                    target = n.args[0]
+                if target is None or _counts(target, inside):
+                    return True
     return False
+
+
+def _scoped(tree: ast.Module):
+    """Every node with whether it sits inside a function body. Iterative: no recursion limit."""
+    pending: list[tuple[ast.AST, bool]] = [(tree, False)]
+    while pending:
+        node, in_function = pending.pop()
+        yield node, in_function
+        inner = in_function or isinstance(node, (*FUNCTIONS, ast.Lambda))
+        pending.extend((child, inner) for child in ast.iter_child_nodes(node))
+
+
+def _counts(target: ast.expr, classes: set[str] | None) -> bool:
+    """Outside a function (``classes`` None) every target counts; inside, only a namespace."""
+    return classes is None or _namespace(target, classes)
+
+
+def _namespace(node: ast.expr, classes: set[str]) -> bool:
+    """A namespace whose names pytest may collect: ``globals()``/``locals()``/``vars()``,
+    ``sys.modules[...]``, any ``__dict__``, or a class defined in this file."""
+    if isinstance(node, ast.Call):
+        return _callee(node.func) in {"globals", "locals", "vars", "__import__"}
+    if isinstance(node, ast.Subscript):
+        return _namespace(node.value, classes)
+    if isinstance(node, ast.Attribute):
+        return node.attr in {"__dict__", "modules"} or _namespace(node.value, classes)
+    return isinstance(node, ast.Name) and node.id in classes
 
 
 def _callee(func: ast.expr) -> str:
