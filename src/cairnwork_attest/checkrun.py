@@ -171,8 +171,7 @@ def build_summary(
     if full and _is_verified(offline):
         rows.append(("Checked against", _NOT_PINNED))
     if assurance:
-        formatted = ", ".join(f"{k}={v}" for k, v in sorted(assurance.items()))
-        rows.append(("Assurance", formatted))
+        rows.extend(("Assurance", f"{key}={value}") for key, value in sorted(assurance.items()))
     lines = ["Informational attestation report. Not an enforcing check.", ""]
     lines += [f"- {label}: {_clean(value)}" for label, value in rows]
     if not _is_verified(offline):
