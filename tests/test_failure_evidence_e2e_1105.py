@@ -1,5 +1,5 @@
-"""Issue #1105 point 1, end to end (run_task, real sandbox): a FAILED result names the failing
-test and carries its log tail, and breaking the evidence capture changes nothing in the verdict."""
+"""Issue #1105 point 1, end to end (run_task, real sandbox): a FAILED result counts a failing
+deferred test without naming it or keeping its log, and a broken capture changes no verdict."""
 
 import pytest
 from conftest import commit_change, git
@@ -21,13 +21,12 @@ def _failing(repo, tmp_path):
                 {"tests/test_calc.py": CALC_TESTS + MUL_TEST}, check)  # fmt: skip
 
 
-def test_a_failed_result_names_the_failing_test_and_keeps_its_log_tail(repo, tmp_path):
+def test_a_failed_result_counts_the_hidden_failure_and_leaks_nothing(repo, tmp_path):
     result = _failing(repo, tmp_path)
     assert result.status == "FAILED" and not result.verified
-    failed = [e for e in result.failure_evidence if e["failed_nodeids"]]
-    assert failed, result.failure_evidence
-    assert "tests/test_calc.py::test_mul" in failed[0]["failed_nodeids"]
-    assert "test_mul" in failed[0]["log_tail"] and not failed[0]["log_tail_withheld"]
+    assert sum(e["failed_hidden_count"] for e in result.failure_evidence) >= 1
+    assert all(e["log_tail_withheld"] for e in result.failure_evidence if e["failed_hidden_count"])
+    assert "test_mul" not in repr(result.failure_evidence)  # deferred tests stay hidden
 
 
 def test_a_broken_evidence_capture_leaves_the_verdict_unchanged(repo, tmp_path, monkeypatch):

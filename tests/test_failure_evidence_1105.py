@@ -1,6 +1,5 @@
 """Issue #1105 point 1: bounded verifier evidence is record-only."""
 
-import hashlib
 from types import SimpleNamespace
 
 from cairnwork import failure_evidence
@@ -58,17 +57,50 @@ def test_tail_is_limited_by_bytes(tmp_path):
     assert got["log_tail_truncated"] is True
 
 
-def test_bundle_withholds_deferred_or_uncertain_targets(tmp_path):
+def test_hidden_tests_keep_no_tail_and_only_a_count(tmp_path):
     path = tmp_path / "verifier.log"
     path.write_text("secret hidden test output")
-    hit = _run(path, {"tests/test_hidden.py::test_secret": "failed"}, ("tests/test_hidden.py",))
-    uncertain = _run(path, {"tests/test_hidden.py::test_secret": "failed"}, ())
-    for run in (hit, uncertain):
+    outcomes = {
+        "tests/test_hidden.py::test_secret": "failed",
+        "tests/test_open.py::test_a": "failed",
+    }
+    targets = [
+        ("tests/test_hidden.py",),
+        (),  # whole suite
+        ("tests/../tests/test_hidden.py",),
+        ("Tests/Test_Hidden.py",),
+        ("tests",),
+        ("-k", "secret"),
+    ]
+    for t in targets:
         got = failure_evidence.capture(
-            [run], home="", deferred_paths=("tests/test_hidden.py",), bundle=True
+            [_run(path, outcomes, t)],
+            home="",
+            deferred_paths=("tests/test_hidden.py",),
+            hidden=True,
         )[0]
-        assert got["log_tail_withheld"] is True and got["log_tail"] == ""
-        assert got["failed_nodeids"] == ["tests/test_hidden.py::test_secret"]
+        assert got["log_tail_withheld"] is True and got["log_tail"] == "", t
+        assert got["failed_nodeids"] == ["tests/test_open.py::test_a"], t
+        assert got["failed_hidden_count"] == 1, t
+
+
+def test_an_open_target_keeps_its_tail_even_with_hidden_tests(tmp_path):
+    path = tmp_path / "verifier.log"
+    path.write_text("open output")
+    got = failure_evidence.capture(
+        [_run(path, {"tests/test_open.py::test_a": "failed"}, ("tests/test_open.py",))],
+        home="", deferred_paths=("tests/test_hidden.py",), hidden=True,
+    )[0]  # fmt: skip
+    assert got["log_tail"] == "open output" and not got["log_tail_withheld"]
+
+
+def test_without_deferred_paths_everything_counts_as_hidden(tmp_path):
+    path = tmp_path / "verifier.log"
+    path.write_text("x")
+    run = _run(path, {"tests/test_a.py::test_a": "failed"})
+    got = failure_evidence.capture([run], home="", deferred_paths=(), hidden=True)[0]
+    assert got["log_tail_withheld"] and got["failed_nodeids"] == []
+    assert got["failed_hidden_count"] == 1
 
 
 def test_missing_log_has_explicit_unavailable_marker(tmp_path):
@@ -76,21 +108,11 @@ def test_missing_log_has_explicit_unavailable_marker(tmp_path):
     assert got["log_tail"] == "" and got["log_tail_unavailable"] is True
 
 
-def test_evidence_failure_cannot_change_observation_or_verdict_hashes(tmp_path, monkeypatch):
+def test_a_capture_error_becomes_a_marker_not_an_exception(tmp_path):
     run = _run(tmp_path / "missing", {"n": "failed"})
-
-    def decision():
-        evidence = failure_evidence.capture_safely([run], home="")
-        observation_hash = hashlib.sha256(repr(run.observation).encode()).hexdigest()
-        verdict = "VERIFIED" if run.observation.passed else "FAILED"
-        return observation_hash, verdict, evidence
-
-    baseline_hash, baseline_verdict, _ = decision()
-
-    def broken(*args, **kwargs):
-        raise RuntimeError("diagnostic failure")
-
-    monkeypatch.setattr(failure_evidence, "capture", broken)
-    failed_hash, failed_verdict, fallback = decision()
-    assert failed_hash == baseline_hash and failed_verdict == baseline_verdict == "FAILED"
-    assert fallback[0]["log_tail"] == "" and fallback[0]["log_tail_unavailable"] is True
+    run.outcomes = None  # malformed: capture itself raises
+    task = SimpleNamespace(test_commit="")
+    got = failure_evidence.capture_for_task([run], task, ())
+    assert got == [
+        {"id": "", "log_tail_unavailable": True, "failure_evidence_error": "AttributeError"}
+    ]
