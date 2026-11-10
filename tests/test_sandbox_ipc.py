@@ -261,6 +261,8 @@ def _verify(state, project, source: str, declared: str) -> dict:
 def _matched(out: dict) -> str:
     assert out["status"] != "VERIFIED" and not out["verified"], out
     reason = out["reason"]
+    if "CANDIDATE_SYS_PATH_MUTATION" in reason:  # #1065: refused before any run, so nothing was
+        return "[matched 0/1]"  # read; the blackbox policy itself stays covered above
     assert "blackbox:add: " in reason, reason
     return reason.split("blackbox:add: ", 1)[1]
 
@@ -284,7 +286,8 @@ def test_the_pytest_phase_of_the_same_verify_cannot_reach_the_blackbox(
     strongest reader (existence alone): the blackbox has run before the pytest phase writes."""
     out = _verify(state, project, _source(token, WRITE, PROBE_EXISTS), _declaration(tmp_path))
     assert "[matched 0/1]" in _matched(out), out["reason"]
-    if _seatbelt():  # the write did happen (under bwrap it died with the run's /dev/shm)
+    ran = "CANDIDATE_SYS_PATH_MUTATION" not in out["reason"]  # #1065 refuses before any run
+    if ran and _seatbelt():  # the write did happen (under bwrap it died with the run's /dev/shm)
         assert _host(tmp_path, "sem", f"/mp-cw{token}") == ["ok"]
 
 

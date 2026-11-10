@@ -1,12 +1,11 @@
 """#1065 evidence: candidate-owned sys.path edits can expose a shadow before deferred tests import.
 
 Every case runs through both real sandboxed paths: ``run_task`` (worker) and the ``verify`` helper
-which calls ``verify_candidate`` through its CLI entry. E1 documents today's false green: the
-candidate is wrong but the test imports its fake ``fractions`` module and passes; the assertion is
-the required fix outcome (FAILED / not VERIFIED), so strict xfail becomes an XPASS failure after a
-fix. E2 is the same wrong fix without a shadow. E3 and E4 are honest controls for a sys.path edit
-alone and a harmless module alongside a correct fix. E5 pins the cause: the same wrong fix and
-shadow without the sys.path edit already fails today.
+which calls ``verify_candidate`` through its CLI entry. E1 was the false green on main before
+#1065: the candidate is wrong but the test imports its fake ``fractions`` module and passes; it
+now asserts the fix outcome (refused / not VERIFIED). E2 is the same wrong fix without a shadow.
+E3 and E4 are honest controls for a sys.path edit alone and a harmless module alongside a correct
+fix. E5 pins the cause: the same wrong fix and shadow without the sys.path edit already fails.
 """
 
 import json
@@ -96,7 +95,6 @@ def _verify(project, state, edit):
 
 
 @pytest.mark.parametrize("path", ["worker run_task", "verify_candidate via verify helper"])
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason="#1065 false green on main")
 def test_e1_wrong_fix_cannot_pass_by_shadowing_fractions(repo, tmp_path, path):
     """E1 covers worker ``run_task`` and verify ``verify_candidate``.
 

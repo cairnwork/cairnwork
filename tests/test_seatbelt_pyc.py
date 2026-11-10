@@ -131,7 +131,9 @@ def test_a_pyc_swapped_for_a_symlink_end_to_end_is_not_verified(state, helper_pr
     files = {"src/calc.py": SWAPPED.format(redirect=REMOVED["built_rmtree"])}
     sha = candidate(helper_project, base, files)
     out = verify(state, helper_project, base, sha, "--import-path", "src")[1]
-    assert out["status"] == "FAILED" and not out["verified"], out
+    # #1065: the planted module names importlib, so the import scan refuses it before it runs.
+    assert out["status"] == "REFUSED" and not out["verified"], out
+    assert "CANDIDATE_SYS_PATH_MUTATION" in out["reason"], out
 
 
 CASE_PROBE = """
@@ -195,4 +197,6 @@ def test_a_pyc_stored_with_an_upper_case_suffix_end_to_end_is_not_verified(state
     files = {"src/calc.py": UPPER.format(redirect=REMOVED["built_rmtree"])}
     sha = candidate(helper_project, base, files)
     out = verify(state, helper_project, base, sha, "--import-path", "src")[1]
-    assert out["status"] == "FAILED" and not out["verified"], out
+    # #1065: the planted module names importlib, so the import scan refuses it before it runs.
+    assert out["status"] == "REFUSED" and not out["verified"], out
+    assert "CANDIDATE_SYS_PATH_MUTATION" in out["reason"], out

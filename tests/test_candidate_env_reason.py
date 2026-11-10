@@ -75,7 +75,9 @@ class TestRealSandbox:
         commit_change(project, {"src/calc.py": BASE_TEETH})
         code, out = run_cli(project, state, TEST, {"src/calc.py": RENAMES})
         text = json.dumps(out)
-        assert out["status"] == "FAILED" and "renamed after collection" in text, out
+        # #1065: the frame walk names f_locals (in-process machinery), so the import scan refuses
+        # the candidate before it runs; the renamed-item reason is not reached end to end here.
+        assert out["status"] == "REFUSED" and "CANDIDATE_SYS_PATH_MUTATION" in text, out
         assert WORDS not in text
 
     def test_ac4_the_base_run_keeps_base_env_error(self, project, state):

@@ -19,6 +19,7 @@ from cairnwork import candidate_env, protection
 from cairnwork.account_check import unusable
 from cairnwork.account_prelude import AccountUnusableBeforeRun, after_candidate_ran, busy_once_more
 from cairnwork.blackbox_judge import judge_blackbox
+from cairnwork.candidate_sys_path import refuse_new_sys_path_mutation
 from cairnwork.changeset import ChangeSetError, read_change_set
 from cairnwork.collect_import import as_failed
 from cairnwork.conftest_check import check_conftests, without_conftests
@@ -48,6 +49,7 @@ from cairnwork.verifier_account import VerifierAccountError
 from cairnwork.verifier_spec import protected_verifier_inputs
 from cairnwork.verifiers import run_verifiers
 from cairnwork.verify_context import VerifyContext, verifier_interpreter
+from cairnwork.workspace import CandidateRejected
 
 
 def second_seed(seed: str) -> str:
@@ -237,7 +239,9 @@ def judge_candidate(
     only: a ``binding`` (#229) binds the verdict to the tree that ran and the binding's head;
     ``unless_passed`` (#259), a failed base check, is raised before Core if a verifier did not
     pass; ``control`` (#962 2b): a failure of setup denials the unchanged tree reproduces is
-    UNCOMPARABLE. Core is not asked when all passed but a new test is in no run's record (#697)."""
+    UNCOMPARABLE. Core is not asked when all passed but a new test is in no run's record (#697).
+    #1065: candidate_sys_path refuses a shadowing import edit before any verifier runs."""
+    _refuse_candidate_sys_path(task, result)
     judged = result.candidate_commit
     task_id = result.task_id
     reach("VERIFYING")
@@ -295,6 +299,17 @@ def judge_candidate(
     result.verified = bool(verdict.verified and recorded and recorded.verified)
     result.reason = verdict_reason(result.verified, verdict, recorded) + explain(runs)
     result.reason += "".join(f" [{check.reason}]" for check in checks) + gate_note
+
+
+def _refuse_candidate_sys_path(task, result) -> None:
+    """Keep the pre-verification import scan bound to the candidate and its deferred tests."""
+    refuse_new_sys_path_mutation(
+        task.repo,
+        task.base_commit,
+        result.candidate_commit,
+        task.allowed_files,
+        task.test_commit or None,
+    )
 
 
 def _not_run_here(task, runs, test_files) -> list[str]:
@@ -360,6 +375,8 @@ def judge_for(worker, task, specs, digest, notary, result, *args) -> None:
     infrastructure error it was."""
     try:
         judge_candidate(task, specs, digest, notary, result, *args)
+    except CandidateRejected as exc:  # #1065: the candidate's own files, before any verifier ran
+        result.verified, result.reason = False, str(exc)
     except AccountUnusableBeforeRun as exc:
         if worker.isolated is not True:
             raise VerifierAccountError(exc.detail) from exc

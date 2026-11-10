@@ -108,7 +108,7 @@ def may_edit_sys_path(repo: Path, commit: str) -> bool:
         _leaves(path, target, links) for path, target in zip(links, blobs[len(oids) :], strict=True)
     ):
         return True
-    return any(_mentions(data) for data in blobs[: len(oids)])
+    return any(may_edit_sys_path_blob(data) for data in blobs[: len(oids)])
 
 
 def _python_blobs(repo: Path, commit: str) -> tuple[list[str], dict[str, str]] | None:
@@ -194,10 +194,27 @@ def _read_blobs(repo: Path, oids: list[str]) -> list[bytes] | None:
     return blobs
 
 
+def may_edit_sys_path_blob(data: bytes) -> bool:
+    """Whether one source blob may change import behavior; True also means unreadable."""
+    return _mentions(data)
+
+
 def _mentions(data: bytes) -> bool:
-    """Whether one file's bytes hold a path word or its syntax tree uses the import system."""
-    if any(word in data for word in _WORDS) or not _plain_encoding(data):
+    """Whether one source blob may change imports; preserve the existing scanner interface."""
+    return _scan_blob(data) is not False
+
+
+def scan_sys_path_blob(data: bytes) -> bool | None:
+    """Return a signal, or None when encoding/parsing prevents a trustworthy scan."""
+    return _scan_blob(data)
+
+
+def _scan_blob(data: bytes) -> bool | None:
+    """Scan one source blob; None distinguishes unreadable input from a detected signal."""
+    if any(word in data for word in _WORDS):
         return True
+    if not _plain_encoding(data):
+        return None
     if not _MAY_NAME.search(data):
         return False
     try:
@@ -205,7 +222,7 @@ def _mentions(data: bytes) -> bool:
             warnings.simplefilter("ignore")  # invalid escapes and the like are no answer
             tree = ast.parse(data)
     except (SyntaxError, ValueError, RecursionError, MemoryError):
-        return True  # unreadable: closed
+        return None  # callers fail closed when changed input cannot be parsed
     return _uses_import_system(tree)
 
 

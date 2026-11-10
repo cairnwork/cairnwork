@@ -29,6 +29,8 @@ PATH_WORDS = (
     "path_hooks",
     "importlib",
     "__import__",
+    "__path__",
+    "submodule_search_locations",
 )
 # sys attributes that neither read nor change the import system or start a program.
 SAFE_SYS = frozenset(

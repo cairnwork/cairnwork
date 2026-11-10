@@ -96,6 +96,18 @@ def test_pytest_mock_patching_sys_modules_by_name_may_edit(repo):
     assert _scan(repo, {"tests/test_a.py": src}) is True
 
 
+@pytest.mark.parametrize(
+    "source",
+    [
+        '__path__.insert(0, "shadow")\n',
+        '__spec__.submodule_search_locations.append("shadow")\n',
+    ],
+    ids=["package __path__", "spec search locations"],
+)
+def test_package_submodule_search_paths_may_edit(repo, source):
+    assert _scan(repo, {"pkg/__init__.py": source}) is True
+
+
 # 5. sys taken from os under another name; a relative module named os -------------------------
 
 

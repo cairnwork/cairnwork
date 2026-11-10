@@ -12,6 +12,7 @@ import sys
 from typing import Any
 
 import pytest
+from conftest import git
 from verify_helpers import FIX, VERIFY, base_of, candidate
 
 from cairnwork import pipeline_judge
@@ -20,6 +21,7 @@ from cairnwork.blackbox_judge import CheckVerdict
 from cairnwork.core_request import VerifierObservation
 from cairnwork.intake import Intake
 from cairnwork.notary import Notary
+from cairnwork.sys_path_scan import scan_sys_path_blob
 from cairnwork.verify_candidate import verify_candidate
 from cairnwork.verify_context import VerifyContext
 
@@ -127,7 +129,7 @@ def test_a_declared_check_that_yields_no_verdict_stays_required(state, project, 
     assert not out["verified"] and out["core_status"] == "UNVERIFIABLE", out
 
 
-def test_the_check_runs_on_the_bindings_head_not_the_tree_that_ran(monkeypatch):
+def test_the_check_runs_on_the_bindings_head_not_the_tree_that_ran(monkeypatch, project):
     """With deferred tests, the verifiers judge a tree with the tests laid over (which could hold
     the answers); the blackbox runs on the binding's head, the candidate alone."""
     from pathlib import Path
@@ -144,12 +146,28 @@ def test_the_check_runs_on_the_bindings_head_not_the_tree_that_ran(monkeypatch):
 
     monkeypatch.setattr(pipeline_judge, "run_verifiers", lambda *a, **k: ())
     monkeypatch.setattr(pipeline_judge, "judge_blackbox", capture)
-    task = SimpleNamespace(blackbox=DECLARED, repo=Path("r"), base_commit="b" * 40, import_paths=())
+    monkeypatch.setattr(pipeline_judge, "refuse_new_sys_path_mutation", lambda *a, **k: None)
+    base = base_of(project)
+    judged = candidate(project, base, {"src/calc.py": FIX})
+    bound = candidate(project, base, {"src/calc.py": FIX + "\n# binding head\n"})
+    assert scan_sys_path_blob(git(project, "show", f"{base}:src/calc.py").encode()) is False
+    assert scan_sys_path_blob(git(project, "show", f"{judged}:src/calc.py").encode()) is False
+    assert scan_sys_path_blob(git(project, "show", f"{bound}:src/calc.py").encode()) is False
+    # Both candidates are non-signalling equivalents, so this still tests which commit is judged.
+    task = SimpleNamespace(
+        blackbox=DECLARED,
+        repo=project,
+        base_commit=base,
+        import_paths=(),
+        test_commit=None,
+        allowed_files=(),
+    )
     for binding in (None, {"head": "head"}):
-        result = SimpleNamespace(candidate_commit="judged", task_id="t", attempt_id="a", logs=[])
+        result = SimpleNamespace(candidate_commit=judged, task_id="t", attempt_id="a", logs=[])
+        actual_binding = None if binding is None else {"head": bound}
         with pytest.raises(Stop):
             pipeline_judge.judge_candidate(
                 task, (), "d", None, result, (), VerifyContext.of(task, Path("x"), "a"),
-                lambda phase: None, binding=binding,
+                lambda phase: None, binding=actual_binding,
             )  # fmt: skip
-    assert seen == ["judged", "head"]
+    assert seen == [judged, bound]
