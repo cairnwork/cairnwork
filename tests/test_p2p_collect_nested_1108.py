@@ -24,3 +24,21 @@ def test_outer_class_test_is_dropped_when_nested_class_name_matches():
     source = "class A:\n    class test_x:\n        pass\n"
     side = _classify_a(source)
     assert side.removed == set() and side.dropped == {"t.py::A::test_x"}
+
+
+def test_outer_class_test_is_dropped_when_nested_class_decorator_mentions_name():
+    source = 'class A:\n    @add_test("test_x")\n    class I:\n        pass\n'
+    side = _classify_a(source)
+    assert side.removed == set() and side.dropped == {"t.py::A::test_x"}
+
+
+def test_outer_class_test_is_dropped_when_nested_class_base_mentions_name():
+    source = "class A:\n    class I(make_base(test_x)):\n        pass\n"
+    side = _classify_a(source)
+    assert side.removed == set() and side.dropped == {"t.py::A::test_x"}
+
+
+def test_outer_class_test_is_dropped_when_nested_class_keyword_mentions_name():
+    source = "class A:\n    class I(metaclass=M, tag=test_x):\n        pass\n"
+    side = _classify_a(source)
+    assert side.removed == set() and side.dropped == {"t.py::A::test_x"}
