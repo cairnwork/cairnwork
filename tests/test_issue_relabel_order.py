@@ -40,8 +40,8 @@ def test_the_new_label_is_added_before_the_old_one_is_removed():
     github = _Recorder()
     github.relabel(7, "cairnwork:running", "cairnwork:queue")
     assert github.calls == [
-        ("issue", "edit", "7", "-R", "James3014/demo", "--add-label", "cairnwork:running"),
-        ("issue", "edit", "7", "-R", "James3014/demo", "--remove-label", "cairnwork:queue"),
+        ("issue", "edit", "7", "-R", "james3014/demo", "--add-label", "cairnwork:running"),
+        ("issue", "edit", "7", "-R", "james3014/demo", "--remove-label", "cairnwork:queue"),
     ]
 
 

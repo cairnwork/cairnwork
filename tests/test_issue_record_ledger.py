@@ -11,7 +11,7 @@ from test_issue_runner import FakeGitHub, issue, setup  # noqa: F401
 import cairnwork.issue_runner as runner
 from cairnwork.issue_task import parse_task_block
 
-REPO = "James3014/demo"
+REPO = "james3014/demo"
 BLOCK_SHA = parse_task_block(issue()["body"]).block_sha256
 
 

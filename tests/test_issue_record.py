@@ -14,7 +14,7 @@ from cairnwork.intake import Intake
 
 
 def _record(setup, number=7):
-    return runner._record_path(setup["intake"], "James3014/demo", number)
+    return runner._record_path(setup["intake"], "james3014/demo", number)
 
 
 def _move_main(setup):
@@ -86,7 +86,7 @@ def test_settle_names_an_unreadable_record_and_settles_the_others(setup, monkeyp
 
 
 def test_a_crash_before_the_rename_leaves_the_old_record_and_no_temp_file(setup, monkeypatch):
-    runner._remember(setup["intake"], "James3014/demo", 7, "task-old", "sha256:old")
+    runner._remember(setup["intake"], "james3014/demo", 7, "task-old", "sha256:old")
     before = _record(setup).read_text()
     seen = []
 
@@ -96,12 +96,12 @@ def test_a_crash_before_the_rename_leaves_the_old_record_and_no_temp_file(setup,
 
     monkeypatch.setattr(os, "replace", crash)
     with pytest.raises(OSError, match="killed"):
-        runner._remember(setup["intake"], "James3014/demo", 7, "task-new", "sha256:new")
+        runner._remember(setup["intake"], "james3014/demo", 7, "task-new", "sha256:new")
     assert seen[0]["task_id"] == "task-new"
     assert _record(setup).read_text() == before
     assert sorted(p.name for p in _record(setup).parent.iterdir()) == [_record(setup).name]
 
 
 def test_the_record_is_private(setup):
-    runner._remember(setup["intake"], "James3014/demo", 7, "task-1", "sha256:x")
+    runner._remember(setup["intake"], "james3014/demo", 7, "task-1", "sha256:x")
     assert _record(setup).stat().st_mode & 0o077 == 0

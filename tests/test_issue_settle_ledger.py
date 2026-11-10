@@ -14,11 +14,11 @@ from test_issue_runner import FakeGitHub, _git_without_credentials, issue, setup
 import cairnwork.issue_runner as runner
 from cairnwork.intake import Intake
 
-REPO = "James3014/demo"
+REPO = "james3014/demo"
 SHA = "f" * 64
 FOREIGN = {  # rows a client bound under the record's task id; none of them is Issue 7's
     "another Issue": (f"gh:{REPO}#70:{SHA[:16]}", f"gh:{REPO}#70:{SHA}"),
-    "another repo": (f"gh:James3014/other#7:{SHA[:16]}", f"gh:James3014/other#7:{SHA}"),
+    "another repo": (f"gh:james3014/other#7:{SHA[:16]}", f"gh:james3014/other#7:{SHA}"),
     "a client key": ("client-key-1", f"gh:{REPO}#7:{SHA}"),
     "a client card": (f"gh:{REPO}#7:{SHA[:16]}", "client-card-1"),
     "a card of another Issue": (f"gh:{REPO}#7:{SHA[:16]}", f"gh:{REPO}#70:{SHA}"),

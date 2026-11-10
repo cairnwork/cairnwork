@@ -17,7 +17,7 @@ import cairnwork.issue_task as issue_task
 from cairnwork.intake import Intake
 from cairnwork.issue_task import IssueRefused
 
-REPO = "James3014/demo"
+REPO = "james3014/demo"
 CODE = "TASK_BOUND_REQUEST_UNREADABLE"
 
 

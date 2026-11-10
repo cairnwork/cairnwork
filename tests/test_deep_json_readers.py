@@ -37,11 +37,11 @@ def test_remember_gh_leaves_a_too_deep_config_alone(intake):
 
 
 def test_a_too_deep_issue_record_is_unreadable(intake):
-    path = runner._record_path(intake, "James3014/demo", 7)
+    path = runner._record_path(intake, "james3014/demo", 7)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(DEEP_TEXT)
     with pytest.raises(ValueError, match="ISSUE_RECORD_UNREADABLE"):
-        runner._recall(intake, "James3014/demo", 7)
+        runner._recall(intake, "james3014/demo", 7)
 
 
 def test_a_too_deep_stream_line_makes_the_evidence_unavailable():

@@ -180,7 +180,7 @@ def test_a_hook_skipped_by_an_error_stays_owed(setup, monkeypatch, tmp_path, why
 
         github.comment = then_break
     assert runner.settle(setup["intake"], github, setup["clone"]) == [{"issue": 7, "pr": PR}]
-    owed = [f"James3014__demo__7__{taken['task_id']}{issue_hook.OWED}"]
+    owed = [f"james3014__demo__7__{taken['task_id']}{issue_hook.OWED}"]
     assert _hook_runs(setup) == [] and _owed(setup) == owed
     assert runner.settle(setup["intake"], github, setup["clone"]) == []  # still skipped: kept
     assert _hook_runs(setup) == [] and _owed(setup) == owed
@@ -218,9 +218,9 @@ def test_an_owed_marker_of_another_repo_is_left_alone(setup, monkeypatch, tmp_pa
     """One state, one repo: a marker whose name only starts like this repo's (James3014/demo__x)
     is not this repo's to run."""
     github, taken, marker = _crashed_after_done(setup, monkeypatch, tmp_path)
-    other = marker.with_name(f"James3014__demo__x__7__{taken['task_id']}{issue_hook.OWED}")
+    other = marker.with_name(f"james3014__demo__x__7__{taken['task_id']}{issue_hook.OWED}")
     other.write_text(
-        json.dumps({"repo": "James3014/demo__x", "issue": 7, "task_id": taken["task_id"]})
+        json.dumps({"repo": "james3014/demo__x", "issue": 7, "task_id": taken["task_id"]})
     )
     marker.unlink()
     assert runner.settle(setup["intake"], github, setup["clone"]) == []
@@ -229,5 +229,5 @@ def test_an_owed_marker_of_another_repo_is_left_alone(setup, monkeypatch, tmp_pa
 
 def test_an_issue_run_again_keeps_what_an_earlier_task_owes(setup):  # noqa: F811
     for task_id in ("task-1", "task-2"):
-        issue_hook.owe(setup["intake"], "James3014/demo", 7, task_id)
-    assert _owed(setup) == [f"James3014__demo__7__task-{n}{issue_hook.OWED}" for n in (1, 2)]
+        issue_hook.owe(setup["intake"], "james3014/demo", 7, task_id)
+    assert _owed(setup) == [f"james3014__demo__7__task-{n}{issue_hook.OWED}" for n in (1, 2)]
