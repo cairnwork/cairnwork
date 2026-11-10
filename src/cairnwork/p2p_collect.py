@@ -185,7 +185,7 @@ COMPOUND_STMTS = (
 )
 
 
-def _binds_in_scope(node: ast.AST, name: str) -> bool:
+def _binds_in_scope(node: ast.AST, name: str, *, module: bool = False) -> bool:
     """Whether node binds name in the current scope (does not cross into nested scopes)."""
     stack = [node]
     while stack:
@@ -218,7 +218,7 @@ def _binds_in_scope(node: ast.AST, name: str) -> bool:
             a.name == "*" or (a.asname or a.name) == name for a in curr.names
         ):
             return True
-        if isinstance(curr, (ast.Global, ast.Nonlocal)) and name in curr.names:
+        if not module and isinstance(curr, (ast.Global, ast.Nonlocal)) and name in curr.names:
             return True
         if isinstance(curr, ast.ExceptHandler) and curr.name == name:
             return True
@@ -229,13 +229,16 @@ def _binds_in_scope(node: ast.AST, name: str) -> bool:
     return False
 
 
-def _last_binding(body: list[ast.stmt], name: str) -> ast.stmt | None:
+def _last_binding(body: list[ast.stmt], name: str, *, module: bool = False) -> ast.stmt | None:
     """The last statement in body binding name, or None; ValueError if a compound one binds it."""
     last = None
     for stmt in body:
-        if isinstance(stmt, COMPOUND_STMTS) and _binds_in_scope(stmt, name):
+        in_module_compound = module and isinstance(stmt, COMPOUND_STMTS)
+        if isinstance(stmt, COMPOUND_STMTS) and _binds_in_scope(
+            stmt, name, module=in_module_compound
+        ):
             raise ValueError(f"{name} bound in compound statement")
-        if _binds_in_scope(stmt, name):
+        if _binds_in_scope(stmt, name, module=in_module_compound):
             last = stmt
     return last
 
@@ -243,16 +246,18 @@ def _last_binding(body: list[ast.stmt], name: str) -> ast.stmt | None:
 def _defines(tree: ast.Module | None, owners: list[str], name: str) -> bool:
     """Whether the base file itself has ``def name`` in the class chain ``owners``."""
     body = tree.body if tree is not None else []
+    module = True
     for owner in owners:
         try:
-            last = _last_binding(body, owner)
+            last = _last_binding(body, owner, module=module)
         except ValueError:
             return False
         if not isinstance(last, ast.ClassDef):
             return False
         body = last.body
+        module = False
     try:
-        last = _last_binding(body, name)
+        last = _last_binding(body, name, module=module)
     except ValueError:
         return False
     return isinstance(last, (ast.FunctionDef, ast.AsyncFunctionDef))
