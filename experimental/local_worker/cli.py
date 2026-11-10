@@ -93,6 +93,7 @@ def build_manifest(a: argparse.Namespace, limits: Limits, endpoint: str) -> dict
         "server_model_id": a.model,  # confirmed listed by the server's /models
         "limits": asdict(limits),
         "temperature": a.temperature,
+        "reasoning_effort": a.reasoning_effort,
         "tools": list(tool_names(a.search_tool)),
         "tools_absent": [] if a.search_tool else list(TOOLS_ABSENT),
         "search_tool": a.search_tool,  # the guards' numbers are in "limits" (guards.py)
@@ -247,6 +248,15 @@ def _same_binding(
         raise corpus_io.InputRefused("the parent ran under another --allow-untracked list")
 
 
+def _settings(a: argparse.Namespace, limits: Limits) -> Settings:
+    return replace(
+        Settings(
+            a.model, limits, a.seed, a.temperature, a.write_scope, a.search_tool, a.untracked_allow
+        ),
+        reasoning_effort=a.reasoning_effort,
+    )
+
+
 def run_episode(a: argparse.Namespace, resume: bool) -> int:
     p = _prepare(a)
     task: Task = p["task"]
@@ -277,9 +287,7 @@ def run_episode(a: argparse.Namespace, resume: bool) -> int:
     eid = _episode_id(a, task)
     priv = corpus_io.private_dir(p["out_dir"], eid)
     tools = WorkerTools(p["run_root"], priv / "calls.jsonl", mode="worker")
-    settings = Settings(
-        a.model, p["limits"], a.seed, a.temperature, a.write_scope, a.search_tool, a.untracked_allow
-    )
+    settings = _settings(a, p["limits"])
     loop = AgentLoop(tools, p["endpoint"], task, settings)
     meta = {
         "episode_id": eid,
@@ -342,6 +350,7 @@ def parser() -> argparse.ArgumentParser:
         sp.add_argument("--split", default="pilot")
         sp.add_argument("--arm", default="L0" if name == "run" else "A")
         sp.add_argument("--seed", type=int, default=None)
+        sp.add_argument("--reasoning-effort", choices=("low", "medium", "high"), default=None)
         sp.add_argument("--temperature", type=float, default=0.0)
         sp.add_argument("--max-steps", type=int, default=40)
         sp.add_argument("--max-wall-seconds", type=float, default=1800.0)

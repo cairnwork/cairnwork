@@ -189,7 +189,7 @@ def verify_bound(
     assurance = _assurance(full, pinned=policy is not None)
     # #303: what the verdict rests on, already checked against Core's required ids (pin_problem)
     assurance["protection"] = bx.recorded_protection(binding)
-    assurance["blackbox_checks"] = bx.checks_assurance(policy)
+    assurance.update(bx.assurance_checks(full, policy))
     assurance |= bx.assurance_extras(binding)  # #798, #850: the signer's word
     return VerifyResult(ok=True, code="OK", statement=statement, assurance=assurance)
 

@@ -16,6 +16,7 @@ from cairnwork.base_teeth import base_teeth
 from cairnwork.collect_import import as_failed
 from cairnwork.deferred_tests import base_comparison
 from cairnwork.verifier_spec import VerifierSpec
+from cairnwork.verify_context import VerifyContext
 
 FILE = "tests/test_regression.py"
 OTHER = "tests/test_other.py"
@@ -167,10 +168,12 @@ def test_the_continue_flag_is_set_on_base_specs_and_never_on_collect_only(projec
     task = type("T", (), dict(repo=project, base_commit=base, test_commit=commit,
                               test_roots=("tests",), test_store=None))()  # fmt: skip
     specs = (VerifierSpec("a", (FILE,)), VerifierSpec("c", (FILE,), collect_only=True))
-    ctx = type("C", (), dict(run_root=project, attempt_id="x"))()
+    ctx = VerifyContext(project, project, attempt_id="x", hash_seed="1")
     result = type("R", (), dict(attempt_id="x", logs=[]))()
     pipeline_judge.tests_with_teeth(task, specs, result, ctx)  # type: ignore[arg-type]
     assert [(s.verifier_id, s.continue_on_collect_errors) for s in seen] == [
+        ("a", True),
+        ("c", False),
         ("a", True),
         ("c", False),
     ]

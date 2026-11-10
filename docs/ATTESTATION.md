@@ -429,7 +429,9 @@ the binding's level, checked in step 7; `"same_process_only"` when the binding h
 `blackbox_checks` (#312, #373: `pinned` when the policy has `blackbox_checks`, `unpinned` when it
 pins a non-empty `blackbox_commitment` only, the weaker check, and `not_checked` without a policy or
 a non-empty commitment pin; it says which check ids the receiver pinned, not that the checks ran;
-docs/SECURITY.md). Without `--json` the
+docs/SECURITY.md), and `test_scope` (`verified` when full mode re-derives scope under policy-pinned
+`test_roots`, `signer_choice` in full mode without that pin, and `not_verified` in confidential mode).
+Without `--json` the
 same object follows the `OK` line. A verify-action that predates v0.2 does not
 refuse these receipts with `STATEMENT_SHAPE`: what it does depends on the version. The untagged commits
 before v0.2 support return `UNSUPPORTED_PREDICATE_TYPE`; the tagged `v0.1.0` has no `policy`

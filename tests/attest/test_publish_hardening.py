@@ -328,13 +328,32 @@ def test_publish_git_sees_the_production_environment(publish_env) -> None:
     shown = _git(src, "config", "--show-origin", "--list")
     cmdline = [ln for ln in shown.stdout.splitlines() if ln.startswith("command line:")]
     assert shown.returncode == 0
-    # only the hardening options of gitcmd (#727, #759), nothing from the test environment
-    assert sorted(ln.split("\t")[1] for ln in cmdline) == [
+    # The six fixed hardening options are exact; declared filters are also passed
+    # only with disabling values (#727, #759 step 3).
+    options = [ln.split("\t")[1] for ln in cmdline]
+    assert sorted(option for option in options if not option.startswith("filter.")) == [
         "core.askpass=",
         "core.fsmonitor=false",
         "core.hookspath=/dev/null",
         "core.untrackedcache=false",
+        "diff.external=",
+        "submodule.recurse=false",
     ]
+    filters = [option.removeprefix("filter.") for option in options if option.startswith("filter.")]
+    required = {name.rsplit(".", 1)[0] for name in filters if name.endswith(".required=false")}
+    overrides = {
+        name.rsplit(".", 1)[0]
+        for name in filters
+        if name.rsplit(".", 1)[-1].split("=", 1)[0] in {"clean", "smudge", "process"}
+        and name.endswith("=")
+    }
+    assert all(
+        name.endswith("=")
+        if name.rsplit(".", 1)[-1].split("=", 1)[0] in {"clean", "smudge", "process"}
+        else name.endswith("=false")
+        for name in filters
+    )
+    assert overrides <= required
 
 
 def test_repository_hooks_never_run_during_publish(
