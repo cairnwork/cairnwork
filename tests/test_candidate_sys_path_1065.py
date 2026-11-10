@@ -43,7 +43,10 @@ def test_candidate_sys_path_shadow_is_refused_before_deferred_tests_run(project,
         },
     )
     assert test_commit  # the deferred test imports json and requires real json behavior
-    task = SimpleNamespace(repo=project, base_commit=base, blackbox=None)
+    changed = git(project, "diff", "--name-only", base, cand).split()
+    task = SimpleNamespace(
+        repo=project, base_commit=base, blackbox=None, allowed_files=tuple(changed)
+    )
     result = SimpleNamespace(candidate_commit=cand, task_id="task", attempt_id="attempt", logs=[])
 
     def verifier_must_not_run(*args, **kwargs):
@@ -79,7 +82,7 @@ def test_existing_base_signal_is_not_a_new_mutation(project):
     )
     assert scan_sys_path_blob(git(project, "show", f"{base}:src/calc.py").encode()) is True
     assert scan_sys_path_blob(git(project, "show", f"{cand}:src/calc.py").encode()) is True
-    candidate_sys_path.refuse_new_sys_path_mutation(project, base, cand)
+    candidate_sys_path.refuse_new_sys_path_mutation(project, base, cand, ("src/calc.py",))
 
 
 @pytest.mark.parametrize(
@@ -98,7 +101,7 @@ def test_added_file_import_system_forms_are_detected(repo, source):
     base = git(repo, "rev-parse", "HEAD")
     cand = commit_change(repo, {"new_module.py": source})
     with pytest.raises(CandidateRejected) as got:
-        candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand)
+        candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, ("new_module.py",))
     assert got.value.code == "CANDIDATE_SYS_PATH_MUTATION"
 
 
@@ -120,7 +123,7 @@ def test_candidate_submodule_path_redirects_are_refused(repo, source, change_typ
         base = commit_change(repo, {path: "VALUE = 1\n"})
     cand = commit_change(repo, {path: source})
     with pytest.raises(CandidateRejected) as got:
-        candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand)
+        candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, (path,))
     assert got.value.code == "CANDIDATE_SYS_PATH_MUTATION"
 
 
@@ -147,7 +150,10 @@ def test_package_path_redirect_hiding_in_a_shadow_module_is_refused_by_judge(pro
             "shadow/helper.py": "def answer():\n    return 'expected'\n",
         },
     )
-    task = SimpleNamespace(repo=project, base_commit=base, blackbox=None)
+    changed = git(project, "diff", "--name-only", base, cand).split()
+    task = SimpleNamespace(
+        repo=project, base_commit=base, blackbox=None, allowed_files=tuple(changed)
+    )
     result = SimpleNamespace(candidate_commit=cand, task_id="task", attempt_id="attempt", logs=[])
 
     def verifier_must_not_run(*args, **kwargs):
@@ -172,7 +178,7 @@ def test_changed_blob_read_failure_is_closed(project, monkeypatch):
 
     monkeypatch.setattr(candidate_sys_path, "run_git_bytes", unreadable)
     with pytest.raises(CandidateRejected) as got:
-        candidate_sys_path.refuse_new_sys_path_mutation(project, base, cand)
+        candidate_sys_path.refuse_new_sys_path_mutation(project, base, cand, ("src/calc.py",))
     assert got.value.code == "UNREADABLE_CHANGE"
 
 
@@ -180,5 +186,23 @@ def test_candidate_parse_failure_is_closed(repo):
     base = git(repo, "rev-parse", "HEAD")
     cand = commit_change(repo, {"new_module.py": "import sys\nif:\n    pass\n"})
     with pytest.raises(CandidateRejected) as got:
-        candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand)
+        candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, ("new_module.py",))
     assert got.value.code == "UNREADABLE_CHANGE"
+
+
+def test_files_outside_the_candidates_allowed_files_are_not_its_mutation(repo):
+    """On the worker path the judged commit also carries the deferred tests; those are the test
+    commit's, read by sys_path_scan, not the candidate's (#1065, worker pipeline)."""
+    base = git(repo, "rev-parse", "HEAD")
+    cand = commit_change(
+        repo,
+        {
+            "tests/test_hidden.py": "import sys\nsys.path.insert(0, 'x')\n",
+            "new_module.py": "VALUE = 1\n",
+        },
+    )
+    candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, ("new_module.py",))
+    with pytest.raises(CandidateRejected):
+        candidate_sys_path.refuse_new_sys_path_mutation(
+            repo, base, cand, ("new_module.py", "tests/test_hidden.py")
+        )

@@ -21,9 +21,9 @@ from cairnwork.blackbox_judge import CheckVerdict
 from cairnwork.core_request import VerifierObservation
 from cairnwork.intake import Intake
 from cairnwork.notary import Notary
+from cairnwork.sys_path_scan import scan_sys_path_blob
 from cairnwork.verify_candidate import verify_candidate
 from cairnwork.verify_context import VerifyContext
-from cairnwork.sys_path_scan import scan_sys_path_blob
 
 DECLARED = Declaration(
     secrets.token_hex(32), (Check("add", "calc", "add", (Case("c1", "[2,3]", "{}", "5"),)),)

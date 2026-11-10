@@ -17,12 +17,19 @@ from cairnwork.sys_path_scan import scan_sys_path_blob
 from cairnwork.workspace import CandidateRejected
 
 
-def refuse_new_sys_path_mutation(repo: Path, base: str, candidate: str) -> None:
-    """Refuse changed Python blobs with a new source-visible import-system signal."""
+def refuse_new_sys_path_mutation(
+    repo: Path, base: str, candidate: str, allowed: tuple[str, ...] | list[str]
+) -> None:
+    """Refuse changed Python blobs with a new source-visible import-system signal. Only the
+    candidate's own files (``allowed``) are read: on the worker path the judged commit also
+    carries the deferred tests, which ``sys_path_scan`` already reads as the test commit."""
     try:
         changes = read_change_set(repo, base, candidate)
+        own = set(allowed)
         for entry in changes.entries:
             if entry.change_type not in {"ADD", "MODIFY"} or not entry.path.endswith(".py"):
+                continue
+            if entry.path not in own:
                 continue
             candidate_signal = _blob_signal(repo, candidate, entry.path)
             base_signal = (

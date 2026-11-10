@@ -49,6 +49,7 @@ from cairnwork.verifier_account import VerifierAccountError
 from cairnwork.verifier_spec import protected_verifier_inputs
 from cairnwork.verifiers import run_verifiers
 from cairnwork.verify_context import VerifyContext, verifier_interpreter
+from cairnwork.workspace import CandidateRejected
 
 
 def second_seed(seed: str) -> str:
@@ -236,11 +237,11 @@ def judge_candidate(
     """Verify the candidate and have Core notarise it; shared by worker pipeline and verify.
     ``reach`` records progress. A binding binds the verdict to the executed tree and candidate
     head. A failed base check (``unless_passed``) blocks Core when a verifier fails; ``control``
-    makes an unchanged-tree setup failure UNCOMPARABLE. The static scan catches source-visible
-    mutation only; obfuscated or runtime-built forms remain OPEN (#1065). The same-process
-    observer (experimental/import_origin) does not change verdicts. A new test absent from run
-    records blocks Core (#697)."""
-    refuse_new_sys_path_mutation(task.repo, task.base_commit, result.candidate_commit)
+    makes an unchanged-tree setup failure UNCOMPARABLE; the #1065 scan is source-visible only
+    (candidate_sys_path.py). A new test absent from run records blocks Core (#697)."""
+    refuse_new_sys_path_mutation(
+        task.repo, task.base_commit, result.candidate_commit, task.allowed_files
+    )
     judged = result.candidate_commit
     task_id = result.task_id
     reach("VERIFYING")
@@ -363,6 +364,8 @@ def judge_for(worker, task, specs, digest, notary, result, *args) -> None:
     infrastructure error it was."""
     try:
         judge_candidate(task, specs, digest, notary, result, *args)
+    except CandidateRejected as exc:  # #1065: the candidate's own files, before any verifier ran
+        result.verified, result.reason = False, str(exc)
     except AccountUnusableBeforeRun as exc:
         if worker.isolated is not True:
             raise VerifierAccountError(exc.detail) from exc
