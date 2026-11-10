@@ -34,7 +34,7 @@ from cairnwork.collect_reader import read_collected
 from cairnwork.conftest_check import conftest_of
 from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRejected
 from cairnwork.gitcmd import GitCommandError, run_git
-from cairnwork.p2p_bindings import last_binding
+from cairnwork.p2p_bindings import last_binding, mentions_ast, walk_without_nested_classes
 from cairnwork.p2p_nodes import changed_tests, module_changed
 from cairnwork.p2p_selection import MODULE_DIR_CAP
 from cairnwork.verifier_spec import VerifierSpec
@@ -281,25 +281,11 @@ def _mentions(
     nodes: list[ast.stmt], name: str, pattern: re.Pattern, *, include_nested_classes: bool = True
 ) -> bool:
     """Search source-level identifiers, bindings, attributes and string constants."""
-    kinds = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
     for node in nodes:
-        walk = ast.walk(node)
+        walk = ast.walk(node) if include_nested_classes else walk_without_nested_classes(node)
         for n in walk:
-            if not include_nested_classes and n is not node and isinstance(n, ast.ClassDef):
-                continue
-            if isinstance(n, kinds) and n.name == name:
+            if mentions_ast(n, name, pattern, defs=True):
                 return True
-            if isinstance(n, ast.Name) and n.id == name:
-                return True
-            if isinstance(n, ast.alias):
-                bound = n.asname or n.name.split(".")[-1]
-                if bound == name:
-                    return True
-            if isinstance(n, ast.Attribute) and n.attr == name:
-                return True
-            if isinstance(n, ast.Constant) and isinstance(n.value, str):
-                if pattern.search(n.value):
-                    return True
     return False
 
 

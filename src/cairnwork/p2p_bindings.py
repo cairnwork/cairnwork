@@ -4,6 +4,7 @@ removed/dropped split. Moved out of p2p_collect.py to keep each file under 400 l
 from __future__ import annotations
 
 import ast
+import re
 
 COMPOUND_STMTS = (
     ast.If,
@@ -15,6 +16,66 @@ COMPOUND_STMTS = (
     ast.AsyncWith,
     ast.Match,
 )
+
+
+def walk_without_nested_classes(node: ast.AST):
+    """Walk a statement without entering any class nested inside it."""
+    pending = [node]
+    while pending:
+        current = pending.pop()
+        yield current
+        if isinstance(current, ast.ClassDef):
+            pending.extend(
+                item
+                for field in ("decorator_list", "bases", "keywords", "type_params")
+                for item in getattr(current, field, ())
+            )
+            if nested_class_body_is_dynamic(current):
+                pending.extend(current.body)
+            continue
+        pending.extend(ast.iter_child_nodes(current))  # a nested ClassDef is yielded, then pruned
+
+
+def nested_class_body_is_dynamic(node: ast.ClassDef) -> bool:
+    """Whether class-body code can inspect or mutate its enclosing namespace."""
+    dynamic_names = {
+        "_getframe",
+        "currentframe",
+        "f_locals",
+        "setattr",
+        "locals",
+        "vars",
+        "globals",
+        "__dict__",
+        "__set_name__",
+        "__init_subclass__",
+        "__class_getitem__",
+    }
+    dynamic_strings = dynamic_names | {"inspect", "sys"}
+    return any(
+        (isinstance(item, ast.Name) and item.id in dynamic_names)
+        or (isinstance(item, ast.Attribute) and item.attr in dynamic_names)
+        or (isinstance(item, ast.Constant) and item.value in dynamic_strings)
+        for statement in node.body
+        for item in ast.walk(statement)
+    )
+
+
+def mentions_ast(node: ast.AST, name: str, pattern: re.Pattern, defs: bool = False) -> bool:
+    defined = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+    if defs and isinstance(node, defined) and node.name == name:
+        return True
+    if isinstance(node, ast.Name) and node.id == name:
+        return True
+    if isinstance(node, ast.alias):
+        return (node.asname or node.name.split(".")[-1]) == name
+    if isinstance(node, ast.Attribute) and node.attr == name:
+        return True
+    return (
+        isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and bool(pattern.search(node.value))
+    )
 
 
 def binds_in_scope(node: ast.AST, name: str, *, module: bool = False) -> bool:
