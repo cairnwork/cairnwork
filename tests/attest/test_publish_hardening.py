@@ -328,8 +328,8 @@ def test_publish_git_sees_the_production_environment(publish_env) -> None:
     shown = _git(src, "config", "--show-origin", "--list")
     cmdline = [ln for ln in shown.stdout.splitlines() if ln.startswith("command line:")]
     assert shown.returncode == 0
-    # The six fixed hardening options are exact; declared filters are also passed
-    # only with disabling values (#727, #759 step 3).
+    # The seven fixed hardening options are exact; declared filters are also passed
+    # only with disabling values (#727, #759 step 3, #1106).
     options = [ln.split("\t")[1] for ln in cmdline]
     assert sorted(option for option in options if not option.startswith("filter.")) == [
         "core.askpass=",
@@ -337,6 +337,7 @@ def test_publish_git_sees_the_production_environment(publish_env) -> None:
         "core.hookspath=/dev/null",
         "core.untrackedcache=false",
         "diff.external=",
+        "protocol.ext.allow=never",
         "submodule.recurse=false",
     ]
     filters = [option.removeprefix("filter.") for option in options if option.startswith("filter.")]

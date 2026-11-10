@@ -68,6 +68,9 @@ _SAFE_OPTIONS = (
     "submodule.recurse=false",
     "-c",
     "diff.external=",
+    # ext:: runs any command; a repo's protocol.ext.allow=always must not turn it on (#1106).
+    "-c",
+    "protocol.ext.allow=never",
 )
 
 
