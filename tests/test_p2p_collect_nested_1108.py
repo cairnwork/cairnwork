@@ -42,3 +42,35 @@ def test_outer_class_test_is_dropped_when_nested_class_keyword_mentions_name():
     source = "class A:\n    class I(metaclass=M, tag=test_x):\n        pass\n"
     side = _classify_a(source)
     assert side.removed == set() and side.dropped == {"t.py::A::test_x"}
+
+
+def test_nested_class_in_if_is_checked_by_name():
+    side = _classify_a("class A:\n    if True:\n        class test_x: pass\n")
+    assert side.removed == set() and side.dropped == {"t.py::A::test_x"}
+
+
+def test_nested_class_in_try_is_checked_by_name():
+    side = _classify_a(
+        "class A:\n    try:\n        class test_x: pass\n    except Exception:\n        pass\n"
+    )
+    assert side.removed == set() and side.dropped == {"t.py::A::test_x"}
+
+
+def test_nested_class_in_with_is_checked_by_name():
+    side = _classify_a("class A:\n    with context():\n        class test_x: pass\n")
+    assert side.removed == set() and side.dropped == {"t.py::A::test_x"}
+
+
+def test_nested_class_type_params_are_checked_when_supported():
+    import sys
+
+    if sys.version_info < (3, 12):
+        return
+    side = _classify_a("class A:\n    class I[T: test_x]: pass\n")
+    assert side.removed == set() and side.dropped == {"t.py::A::test_x"}
+
+
+def test_nested_class_dynamic_namespace_body_is_walked():
+    source = "class A:\n    class I:\n        sys._getframe(1).f_locals['aliased'] = test_x\n"
+    side = _classify_a(source)
+    assert side.removed == set() and side.dropped == {"t.py::A::test_x"}
