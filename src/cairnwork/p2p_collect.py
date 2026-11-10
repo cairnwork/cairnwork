@@ -34,7 +34,7 @@ from cairnwork.collect_reader import read_collected
 from cairnwork.conftest_check import conftest_of
 from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRejected
 from cairnwork.gitcmd import GitCommandError, run_git
-from cairnwork.p2p_bindings import last_binding
+from cairnwork.p2p_bindings import last_binding, mentions_ast, walk_without_nested_classes
 from cairnwork.p2p_nodes import changed_tests, module_changed
 from cairnwork.p2p_selection import MODULE_DIR_CAP
 from cairnwork.verifier_spec import VerifierSpec
@@ -282,50 +282,11 @@ def _mentions(
 ) -> bool:
     """Search source-level identifiers, bindings, attributes and string constants."""
     for node in nodes:
-        if not include_nested_classes and isinstance(node, ast.ClassDef):
-            if node.name == name:
-                return True
-            if any(
-                any(_mentions_ast(n, name, pattern) for n in ast.walk(header))
-                for header in (*node.decorator_list, *node.bases, *node.keywords)
-            ):
-                return True
-            continue
-        walk = ast.walk(node) if include_nested_classes else _walk_without_nested_classes(node)
+        walk = ast.walk(node) if include_nested_classes else walk_without_nested_classes(node)
         for n in walk:
-            if _mentions_ast(n, name, pattern, defs=True):
+            if mentions_ast(n, name, pattern, defs=True):
                 return True
     return False
-
-
-def _walk_without_nested_classes(node: ast.AST):
-    """Walk a statement without entering any class nested inside it."""
-    pending = [node]
-    while pending:
-        current = pending.pop()
-        yield current
-        for child in ast.iter_child_nodes(current):
-            if isinstance(child, ast.ClassDef):
-                pending.extend((*child.decorator_list, *child.bases, *child.keywords))
-            else:
-                pending.append(child)
-
-
-def _mentions_ast(node: ast.AST, name: str, pattern: re.Pattern, defs: bool = False) -> bool:
-    defined = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
-    if defs and isinstance(node, defined) and node.name == name:
-        return True
-    if isinstance(node, ast.Name) and node.id == name:
-        return True
-    if isinstance(node, ast.alias):
-        return (node.asname or node.name.split(".")[-1]) == name
-    if isinstance(node, ast.Attribute) and node.attr == name:
-        return True
-    return (
-        isinstance(node, ast.Constant)
-        and isinstance(node.value, str)
-        and bool(pattern.search(node.value))
-    )
 
 
 def _defines(tree: ast.Module | None, owners: list[str], name: str) -> bool:
