@@ -1,4 +1,9 @@
-"""Own a deny-log stream until its recorder closes the pipe or the backstop cap is reached."""
+"""Own a deny-log stream until its recorder closes the pipe or the backstop cap is reached.
+
+The stream runs in this watchdog's process group, which the recorder ends on stop (also when the
+watchdog was killed). If the recorder and the watchdog are both killed at once, nothing ends the
+group: the stream may run on, but RLIMIT_FSIZE keeps its file at the 2x backstop
+(test_sigkill_keeps_stream_within_cap pins that bound; #1095)."""
 
 from __future__ import annotations
 
