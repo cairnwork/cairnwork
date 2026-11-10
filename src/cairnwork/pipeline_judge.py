@@ -234,11 +234,13 @@ def judge_candidate(
     unless_passed: BaseUncomparable | None = None,
     control: bool = False,
 ) -> None:
-    """Verify the candidate and have Core notarise it; shared by worker pipeline and verify.
-    ``reach`` records progress. A binding binds the verdict to the executed tree and candidate
-    head. A failed base check (``unless_passed``) blocks Core when a verifier fails; ``control``
-    makes an unchanged-tree setup failure UNCOMPARABLE; the #1065 scan is source-visible only
-    (candidate_sys_path.py). A new test absent from run records blocks Core (#697)."""
+    """Verify result.candidate_commit and have Core notarise it (sets verified, reason, logs);
+    shared by the worker pipeline and ``verify_candidate``; reach(phase) records progress. Verify
+    only: a ``binding`` (#229) binds the verdict to the tree that ran and the binding's head;
+    ``unless_passed`` (#259), a failed base check, is raised before Core if a verifier did not
+    pass; ``control`` (#962 2b): a failure of setup denials the unchanged tree reproduces is
+    UNCOMPARABLE. Core is not asked when all passed but a new test is in no run's record (#697).
+    #1065: candidate_sys_path refuses a shadowing import edit before any verifier runs."""
     _refuse_candidate_sys_path(task, result)
     judged = result.candidate_commit
     task_id = result.task_id

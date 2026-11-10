@@ -17,15 +17,20 @@ _ALWAYS_SHADOW = frozenset({"pytest", "_pytest", "pluggy", "conftest", "py"})
 
 
 def find_shadow_file(
-    repo: Path, candidate: str, test_commit: str | None = None, added: frozenset[str] = frozenset()
+    repo: Path,
+    candidate: str,
+    test_commit: str | None = None,
+    changed: dict[str, str] | None = None,
 ) -> str | None:
-    """Return the first nested candidate file that can shadow an imported module.
+    """Return the first nested file the candidate ``changed`` (path -> ADD/MODIFY) that can shadow
+    an imported module; base content is trusted, so unchanged files never count.
 
-    A nested file named like a standard or pytest module always counts. A name some tree or test
-    file imports (every dotted part, so a ``__path__`` redirect of ``pkg.helper`` is seen) counts
-    when the candidate ``added`` that file or another file has the same module name, so a
-    project's own src-layout module (``src/calc.py`` imported as ``calc``) is not one. Names
-    compare case-insensitively; any unparseable ``.py`` in the trees fails closed."""
+    A changed nested file named like a standard or pytest module counts. A name some tree or test
+    file imports (every dotted part, relative imports, import_module/__import__/importorskip
+    strings, so a ``__path__`` redirect of ``pkg.helper`` is seen) counts when the file was added
+    or another file has the same module name, so modifying a project's own src-layout module
+    (``src/calc.py`` imported as ``calc``) is not one. Names compare case-insensitively; an
+    unparseable ``.py`` in the trees fails closed."""
     commits = (candidate,) if test_commit is None else (candidate, test_commit)
     always = {name.casefold() for name in (*sys.stdlib_module_names, *_ALWAYS_SHADOW)}
     imported: set[str] = set()
@@ -36,13 +41,15 @@ def find_shadow_file(
                 imported.update(name.casefold() for name in _imports(repo, commit, path))
     paths = _tree_paths(repo, candidate)
     counts = Counter(name for path in paths if (name := _module_name(path)))
-    for path in sorted(paths, key=lambda p: p not in added):  # name an added file first
+    changed = changed or {}
+    for path in sorted(changed):
         depth = path.count("/") - (
             path.casefold().endswith("/__init__.py") or path.casefold() == "__init__.py"
         )
         if depth < 1 or not (module := _module_name(path)):  # root modules import as themselves
             continue
-        if module in always or (module in imported and (path in added or counts[module] > 1)):
+        added = changed[path] == "ADD"
+        if module in always or (module in imported and (added or counts[module] > 1)):
             return path
     return None
 
@@ -77,7 +84,8 @@ def _imports(repo: Path, commit: str, path: str) -> set[str]:
             names.update((node.module or "").split("."))  # a submodule can be redirected
             names.update(alias.name for alias in node.names if alias.name != "*")
         elif isinstance(node, ast.Call) and _call_name(node.func) in _IMPORT_CALLS:
-            for arg in node.args[:1]:  # importlib.import_module("x.y"), __import__, importorskip
+            named = (k.value for k in node.keywords if k.arg in {"name", "modname"})
+            for arg in (*node.args[:1], *named):  # import_module("x.y"), __import__, importorskip
                 if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
                     names.update(arg.value.lstrip(".").split("."))
     names.discard("")

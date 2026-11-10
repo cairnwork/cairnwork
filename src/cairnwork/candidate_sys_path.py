@@ -19,6 +19,7 @@ from cairnwork.sys_path_scan import scan_sys_path_blob
 from cairnwork.workspace import CandidateRejected
 
 _OID = re.compile(r"^[0-9a-f]{40}$")
+_OWN_KINDS = frozenset({"ADD", "MODIFY"})
 
 
 def refuse_new_sys_path_mutation(
@@ -28,33 +29,30 @@ def refuse_new_sys_path_mutation(
     allowed: tuple[str, ...] | list[str],
     test_commit: str | None = None,
 ) -> None:
-    """Refuse changed Python blobs with a new source-visible import-system signal. Only the
-    candidate's own files (``allowed``) are read for signals; test trees contribute imported names
-    for shadow detection only."""
+    """Refuse a changed own Python file with a source-visible import-system signal when a file the
+    candidate added or modified can shadow an imported module. Only ``allowed`` files are read for
+    signals; test trees contribute imported names for shadow detection only."""
     try:
         if not _OID.fullmatch(base) or not _OID.fullmatch(candidate):
             raise ValueError("base and candidate must be full 40-character object ids")
         if test_commit is not None and not _OID.fullmatch(test_commit):
             raise ValueError("test commit must be a full 40-character object id")
         changes = read_change_set(repo, base, candidate)
-        added = frozenset(e.path for e in changes.entries if e.change_type == "ADD")
-        own = set(allowed)
-        for entry in changes.entries:
-            if entry.change_type not in {"ADD", "MODIFY"} or not entry.path.endswith(".py"):
-                continue
-            if entry.path not in own:
-                continue
-            candidate_signal = _blob_signal(repo, candidate, entry.path)
-            base_signal = (
-                _blob_signal(repo, base, entry.path) if entry.change_type == "MODIFY" else False
-            )
-            if candidate_signal and not base_signal:
-                shadow = find_shadow_file(repo, candidate, test_commit, added)
+        own = set(allowed)  # on the worker path the judged commit also adds the hidden tests
+        changed = {
+            e.path: e.change_type
+            for e in changes.entries
+            if e.change_type in _OWN_KINDS and e.path in own
+        }
+        for path in changed:
+            if path.endswith(".py") and _blob_signal(repo, candidate, path):
+                # a base signal is no exemption: it may be a comment word next to a new redirect
+                shadow = find_shadow_file(repo, candidate, test_commit, changed)
                 if shadow:
                     raise CandidateRejected(
                         "CANDIDATE_SYS_PATH_MUTATION",
-                        f"{entry.path}: newly adds a source-visible sys.path/import-machinery "
-                        f"signal; {shadow} can shadow an imported module",
+                        f"{path}: has a source-visible sys.path/import-machinery signal; "
+                        f"{shadow} can shadow an imported module",
                     )
     except CandidateRejected:
         raise
