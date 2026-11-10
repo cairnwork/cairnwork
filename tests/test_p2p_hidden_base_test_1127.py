@@ -198,7 +198,7 @@ def test_a_constant_with_the_test_name_in_another_class_is_not_a_test(field):
 
 
 def test_a_deep_expression_does_not_crash_the_split():
-    deep = " + ".join(["f"] * 3000) + "\n"
+    deep = " + ".join(["f"] * 1500) + "\n"  # Python 3.11 still parses this depth
     ids = ["t.py::TestA::test_x", "t.py::TestA::test_keep"]
     gone = {"t.py::TestA::test_x"}
     assert _split(BASE_A, TEST_A + "v = " + deep, ids, ids[1:]) == (gone, set())
@@ -239,6 +239,14 @@ def test_a_literal_expression_with_the_test_name_is_not_a_test(value):
     test = "class TestA:\n" + KEEP + f"    class Config:\n        test_x = {value}\n"
     ids = ["t.py::TestA::test_x", "t.py::TestA::test_keep"]
     assert _split(BASE_A, test, ids, ids[1:]) == ({"t.py::TestA::test_x"}, set())
+
+
+def test_a_file_too_deep_to_parse_is_dropped_never_a_crash():
+    deep = TEST_A + "v = " + " + ".join(["f"] * 3000) + "\n"  # 3.11: RecursionError in parse
+    ids = ["t.py::TestA::test_x", "t.py::TestA::test_keep"]
+    got = _split(BASE_A, deep, ids, ids[1:])
+    gone = {"t.py::TestA::test_x"}
+    assert got in ((gone, set()), (set(), gone))  # removed where it parses, else dropped
 
 
 # Codex r1 on #1130: where the rebinding sits decides whether it counts

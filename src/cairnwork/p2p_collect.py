@@ -199,7 +199,7 @@ def _present(task, files) -> tuple[str, ...]:
 def _tree(text: str) -> ast.Module | None:
     try:
         return ast.parse(text)
-    except (SyntaxError, ValueError):
+    except (SyntaxError, ValueError, RecursionError):  # 3.11 cannot build a very deep AST
         return None  # nothing is provably defined: the id is dropped, never removed
 
 
