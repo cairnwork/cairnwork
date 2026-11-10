@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import shutil
 import signal
 import stat
 import subprocess
@@ -110,15 +111,29 @@ def alert(message: str) -> None:
 
 
 def _run(argv: list[str], seconds: int, env: dict[str, str]) -> tuple[int, bytes, bytes]:
-    """Its own session, so the group is stopped on every exit (what the hook started never
-    outlives it, timeout or not); cleanup is bounded too.
+    """Its own session, so the group is stopped on every exit, timeout or not; cleanup is bounded
+    too. hook_watch ends the group when this runner dies, even by SIGKILL (#1125). Limits: a
+    descendant that leaves the group (setsid), or one still holding the output pipe after the
+    hook exited when the runner is SIGKILLed, can outlive it.
 
     Output stays bytes: _tail decodes it leniently, so no output can lose the record.
     """
+    if shutil.which(argv[0], path=env.get("PATH")) is None:
+        raise FileNotFoundError(2, "No such file or directory", argv[0])
+    watcher = [
+        sys.executable,
+        "-I",
+        str(Path(__file__).with_name("hook_watch.py")),
+        str(seconds),
+        "--",
+        *argv,
+    ]
     with subprocess.Popen(
-        argv, cwd="/", stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        env=env, start_new_session=True,
+        watcher, cwd="/", stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, env=env, start_new_session=True,
     ) as proc:  # fmt: skip
+        assert proc.stdin is not None  # stdin=PIPE; the dup keeps it open past communicate()
+        control_fd = os.dup(proc.stdin.fileno())
         try:
             try:
                 out, err = proc.communicate(timeout=seconds)
@@ -131,6 +146,7 @@ def _run(argv: list[str], seconds: int, env: dict[str, str]) -> tuple[int, bytes
                 raise subprocess.TimeoutExpired(argv, seconds, out, err) from None
             return proc.returncode, out, err
         finally:  # every exit: what the hook left behind in its group must not outlive it
+            os.close(control_fd)
             _kill_group(proc)
 
 
