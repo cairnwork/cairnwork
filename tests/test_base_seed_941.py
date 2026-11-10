@@ -36,7 +36,7 @@ def _probe(project, tmp_path, code, seed):
     )()
     spec = parse_verifier("v", ["python3", "-m", "pytest", "-q", "tests/test_ordered.py"])
     ctx = VerifyContext(project, tmp_path / "runs", attempt_id="attempt", hash_seed=str(seed))
-    result = type("Result", (), dict(attempt_id="attempt", logs=[]))()
+    result = type("Result", (), dict(attempt_id="attempt", logs=[], failure_evidence=[]))()
     return task, (spec,), ctx, result
 
 
@@ -268,7 +268,7 @@ def test_initial_refusal_does_not_start_second_run(monkeypatch, tmp_path, kind, 
     )()
     spec = VerifierSpec("v", ("tests/test_x.py",))
     ctx = VerifyContext(Path("/repo"), tmp_path, attempt_id="attempt", hash_seed="1")
-    result = type("Result", (), dict(attempt_id="attempt", logs=[]))()
+    result = type("Result", (), dict(attempt_id="attempt", logs=[], failure_evidence=[]))()
     with pytest.raises((BaseUncomparable, _TestCommitRejected)):
         pipeline_judge.tests_with_teeth(task, (spec,), result, ctx)
     assert len(calls) == 1
