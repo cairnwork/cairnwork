@@ -215,6 +215,26 @@ def test_a_package_the_project_code_imports_can_be_shadowed(repo):
     assert "shadow/requests.py" in str(got.value)
 
 
+@pytest.mark.parametrize(
+    "importer",
+    [
+        "from . import helper\n",
+        "from .helper import X\n",
+        "import importlib\nimportlib.import_module('pkg.helper')\n",
+        "import pytest\npytest.importorskip('helper')\n",
+    ],
+)
+def test_relative_and_string_imports_name_a_shadow(repo, importer):
+    commit_change(repo, {"pkg/__init__.py": "", "pkg/test_h.py": importer})
+    base = git(repo, "rev-parse", "HEAD")
+    cand = commit_change(
+        repo, {"pkg/__init__.py": "__path__.insert(0, 'shadow')\n", "shadow/helper.py": ""}
+    )
+    with pytest.raises(CandidateRejected) as got:
+        candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, ("pkg/__init__.py",))
+    assert "shadow/helper.py" in str(got.value)
+
+
 def test_root_stdlib_named_module_does_not_refuse(repo):
     base = git(repo, "rev-parse", "HEAD")
     cand = commit_change(

@@ -12,6 +12,7 @@ from pathlib import Path
 from cairnwork.gitcmd import run_git_bytes
 
 _OID = re.compile(r"^[0-9a-f]{40}$")
+_IMPORT_CALLS = frozenset({"import_module", "__import__", "importorskip"})
 _ALWAYS_SHADOW = frozenset({"pytest", "_pytest", "pluggy", "conftest", "py"})
 
 
@@ -72,10 +73,19 @@ def _imports(repo: Path, commit: str, path: str) -> set[str]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             names.update(part for alias in node.names for part in alias.name.split("."))
-        elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
-            names.update(node.module.split("."))  # a submodule can be redirected (__path__)
+        elif isinstance(node, ast.ImportFrom):  # relative too: from . import helper
+            names.update((node.module or "").split("."))  # a submodule can be redirected
             names.update(alias.name for alias in node.names if alias.name != "*")
+        elif isinstance(node, ast.Call) and _call_name(node.func) in _IMPORT_CALLS:
+            for arg in node.args[:1]:  # importlib.import_module("x.y"), __import__, importorskip
+                if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                    names.update(arg.value.lstrip(".").split("."))
+    names.discard("")
     return names
+
+
+def _call_name(func: ast.expr) -> str:
+    return func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
 
 
 def _module_name(path: str) -> str | None:
