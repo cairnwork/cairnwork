@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import re
 import sys
+from importlib.machinery import all_suffixes
 from pathlib import Path
 
 from cairnwork.gitcmd import run_git_bytes
@@ -74,4 +75,7 @@ def _nested_module(path: str) -> str | None:
     if name == "__init__.py":
         parts = path.split("/")
         return parts[-2] if len(parts) > 2 else None
-    return name[:-3] if name.endswith(".py") else None
+    for suffix in sorted(all_suffixes(), key=len, reverse=True):  # .py, .pyc, extension modules
+        if name.endswith(suffix) and len(name) > len(suffix):
+            return name[: -len(suffix)]
+    return None

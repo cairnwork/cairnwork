@@ -143,6 +143,17 @@ def test_signal_and_nested_stdlib_module_are_refused(repo):
     assert "src/a.py" in str(got.value) and "pkg/fractions.py" in str(got.value)
 
 
+@pytest.mark.parametrize("shadow", ["pkg/fractions.pyc", "pkg/fractions.abi3.so"])
+def test_signal_and_nested_compiled_or_extension_shadow_are_refused(repo, shadow):
+    base = git(repo, "rev-parse", "HEAD")
+    cand = commit_change(
+        repo, {"src/a.py": "import sys\nsys.path.insert(0, 'outside')\n", shadow: ""}
+    )
+    with pytest.raises(CandidateRejected) as got:
+        candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, ("src/a.py",))
+    assert shadow in str(got.value)
+
+
 def test_signal_and_nested_test_import_package_are_refused(repo):
     base = git(repo, "rev-parse", "HEAD")
     commit_change(repo, {"tests/test_x.py": "import helpers\n"})
