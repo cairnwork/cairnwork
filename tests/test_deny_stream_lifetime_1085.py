@@ -197,5 +197,6 @@ def test_both_killed_keeps_stream_within_rlimit(tmp_path):
     fast_file.touch()
 
     assert _wait_gone(pid, 20), "fake log process remained after watchdog and recorder SIGKILL"
-    assert stream.stat().st_size <= 2 * cap, f"stream exceeded {2 * cap} bytes: {stream.stat().st_size}"
+    size = stream.stat().st_size
+    assert size <= 2 * cap, f"stream exceeded {2 * cap} bytes: {size}"
 
