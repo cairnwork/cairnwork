@@ -52,6 +52,7 @@ from cairnwork.deny_judge import (  # re-exported: the channel's callers and tes
     judge,
     judge_stream,
 )
+from cairnwork.deny_sweep import sweep_stale as _sweep_stale
 from cairnwork_sandbox.backend import Policy
 
 __all__ = [
@@ -167,11 +168,19 @@ def recording(tag: str, run_canary: Callable[[list[str], Path], str]):
     ``run_canary(argv, log_path)`` runs argv under the run's tagged policy and returns its output.
     A recorder failure never stops the body: the evidence is UNAVAILABLE."""
     window, box = Window(tag), Box(UNSUPPORTED)
+    try:
+        _sweep_stale()
+    except Exception:  # noqa: BLE001, S110 - #1124: a failed sweep must never stop the recording
+        pass
     made = _guarded(window, "no private directory", tempfile.mkdtemp, "", "cairnwork-deny.")
     if made is None:
         yield Box(Evidence("UNAVAILABLE", window.problem))
         return
     directory = Path(made)
+    try:
+        (directory / "owner.pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
+    except OSError:
+        pass
     path, proc, guard = directory / "stream.ndjson", None, None
     try:
         proc = _guarded(window, "log stream did not start", _start, path, window)
