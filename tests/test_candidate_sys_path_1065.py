@@ -9,6 +9,7 @@ from verify_helpers import base_of, candidate, verify
 
 from cairnwork import candidate_sys_path, pipeline_judge
 from cairnwork.sys_path_scan import scan_sys_path_blob
+from cairnwork.verify_context import VerifyContext
 from cairnwork.workspace import CandidateRejected
 
 sandbox = pytest.mark.sandbox
@@ -50,7 +51,9 @@ def test_candidate_sys_path_shadow_is_refused_before_deferred_tests_run(project,
 
     monkeypatch.setattr(pipeline_judge, "run_verifiers", verifier_must_not_run)
     with pytest.raises(CandidateRejected) as got:
-        pipeline_judge.judge_candidate(task, (), "digest", None, result, (), None, lambda _: None)
+        pipeline_judge.judge_candidate(
+            task, (), "digest", None, result, (), VerifyContext(project, project), lambda _: None
+        )
     assert got.value.code == "CANDIDATE_SYS_PATH_MUTATION"
     assert "src/calc.py" in str(got.value)
 

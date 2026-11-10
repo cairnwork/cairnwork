@@ -27,6 +27,7 @@ from test_sandbox_ipc import (
     test_the_blackbox_policy_reaches_no_leftover as _no_leftover,
 )
 
+from cairnwork.sys_path_scan import scan_sys_path_blob
 from cairnwork.verifier_account import VerifierAccount
 
 pytestmark = [pytest.mark.sandbox, pytest.mark.verifier_account]
@@ -61,11 +62,17 @@ def test_a_value_left_by_the_accounts_pytest_phase_does_not_reach_its_blackbox(
     account_state, project, tmp_path, token
 ):
     declared = _declaration(tmp_path)
-    first = _verify(account_state, project, _source(token, WRITE, WRONG), declared)
-    assert first["core_status"] == "FAILED_VERIFICATION", first
-    out = _verify(account_state, project, _source(token, READ), declared)
-    assert out["status"] != "VERIFIED" and out["core_status"] == "FAILED_VERIFICATION", out
-    assert "blackbox:add: MISMATCH [matched 0/1]" in out["reason"], out["reason"]
+    first_source = _source(token, WRITE, WRONG)
+    read_source = _source(token, READ)
+    assert not scan_sys_path_blob(b"def add(a, b):\n    return a + b + 1\n")
+    assert scan_sys_path_blob(first_source.encode())
+    assert scan_sys_path_blob(read_source.encode())
+    first = _verify(account_state, project, first_source, declared)
+    assert first["status"] == "REFUSED" and not first["verified"], first
+    assert "CANDIDATE_SYS_PATH_MUTATION" in first["reason"], first
+    out = _verify(account_state, project, read_source, declared)
+    assert out["status"] == "REFUSED" and not out["verified"], out
+    assert "CANDIDATE_SYS_PATH_MUTATION" in out["reason"], out
 
 
 def test_on_bwrap_nothing_left_outside_is_visible_inside(tmp_path, leftovers):  # noqa: F811
