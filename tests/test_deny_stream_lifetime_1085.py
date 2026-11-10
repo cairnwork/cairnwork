@@ -183,3 +183,19 @@ def test_a_killed_watchdog_still_has_its_stream_stopped(tmp_path):
 
     assert _wait_gone(pid, 5), "log stream outlived its killed watchdog"
     assert out.split()[-1] == "UNAVAILABLE", out
+
+
+def test_both_killed_keeps_stream_within_rlimit(tmp_path):
+    cap = 64 * 1024
+    proc, pid_file, fast_file = _launch(tmp_path, cap=cap, mode="gate")
+    pid, watchdog = map(int, _wait_file(pid_file).split())
+    stream = _stream_file(tmp_path)
+
+    os.kill(watchdog, signal.SIGKILL)
+    _kill_recorder(proc)
+
+    fast_file.touch()
+
+    assert _wait_gone(pid, 20), "fake log process remained after watchdog and recorder SIGKILL"
+    assert stream.stat().st_size <= 2 * cap, f"stream exceeded {2 * cap} bytes: {stream.stat().st_size}"
+
