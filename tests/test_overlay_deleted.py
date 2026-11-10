@@ -107,6 +107,7 @@ def _judge_deleting(repo, three, monkeypatch, deleted_by_candidate):
 
     from cairnwork import pipeline_judge
 
+    monkeypatch.setattr(pipeline_judge, "refuse_new_sys_path_mutation", lambda *a, **k: None)
     base, _, _ = three
     git(repo, "checkout", "-q", "--detach", base)
     judged = commit_change(repo, {"src/a.py": "x = 3\n"}, delete=deleted_by_candidate)
@@ -118,7 +119,14 @@ def _judge_deleting(repo, three, monkeypatch, deleted_by_candidate):
         raise _Stop
 
     monkeypatch.setattr(pipeline_judge, "_contract", stop)
-    task = SimpleNamespace(blackbox=None, repo=repo, base_commit=base, allow_deletions=False)
+    task = SimpleNamespace(
+        blackbox=None,
+        repo=repo,
+        base_commit=base,
+        allow_deletions=False,
+        test_commit=None,
+        allowed_files=(),
+    )
     result = SimpleNamespace(candidate_commit=judged, task_id="t", attempt_id="a", logs=[])
     files = TestFiles(("tests/test_new.py",), ("tests/test_a.py",))
     args: tuple[Any, ...] = (task, (), "d", None, result, files, None, lambda phase: None)

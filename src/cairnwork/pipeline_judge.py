@@ -239,9 +239,7 @@ def judge_candidate(
     head. A failed base check (``unless_passed``) blocks Core when a verifier fails; ``control``
     makes an unchanged-tree setup failure UNCOMPARABLE; the #1065 scan is source-visible only
     (candidate_sys_path.py). A new test absent from run records blocks Core (#697)."""
-    refuse_new_sys_path_mutation(
-        task.repo, task.base_commit, result.candidate_commit, task.allowed_files
-    )
+    _refuse_candidate_sys_path(task, result)
     judged = result.candidate_commit
     task_id = result.task_id
     reach("VERIFYING")
@@ -299,6 +297,17 @@ def judge_candidate(
     result.verified = bool(verdict.verified and recorded and recorded.verified)
     result.reason = verdict_reason(result.verified, verdict, recorded) + explain(runs)
     result.reason += "".join(f" [{check.reason}]" for check in checks) + gate_note
+
+
+def _refuse_candidate_sys_path(task, result) -> None:
+    """Keep the pre-verification import scan bound to the candidate and its deferred tests."""
+    refuse_new_sys_path_mutation(
+        task.repo,
+        task.base_commit,
+        result.candidate_commit,
+        task.allowed_files,
+        task.test_commit or None,
+    )
 
 
 def _not_run_here(task, runs, test_files) -> list[str]:

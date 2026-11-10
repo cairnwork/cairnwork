@@ -28,6 +28,7 @@ def test_candidate_sys_path_shadow_is_refused_before_deferred_tests_run(project,
             )
         },
     )
+    git(project, "fetch", "-q", "origin", test_commit)
     candidate_source = (
         "import pathlib\n"
         "import sys\n"
@@ -45,7 +46,11 @@ def test_candidate_sys_path_shadow_is_refused_before_deferred_tests_run(project,
     assert test_commit  # the deferred test imports json and requires real json behavior
     changed = git(project, "diff", "--name-only", base, cand).split()
     task = SimpleNamespace(
-        repo=project, base_commit=base, blackbox=None, allowed_files=tuple(changed)
+        repo=project,
+        base_commit=base,
+        test_commit=test_commit,
+        blackbox=None,
+        allowed_files=tuple(changed),
     )
     result = SimpleNamespace(candidate_commit=cand, task_id="task", attempt_id="attempt", logs=[])
 
@@ -66,7 +71,7 @@ def test_plain_fix_remains_verified(project, state):
     base = base_of(project)
     cand = candidate(project, base, {"src/calc.py": "def add(a, b):\n    return a + b\n"})
     code, out = verify(state, project, base, cand)
-    assert code == 0 and out["status"] == "VERIFIED" and out["verified"] is True
+    assert code == 0 and out["status"] == "VERIFIED" and out["verified"] is True, out
 
 
 def test_existing_base_signal_is_not_a_new_mutation(project):
@@ -100,9 +105,7 @@ def test_existing_base_signal_is_not_a_new_mutation(project):
 def test_added_file_import_system_forms_are_detected(repo, source):
     base = git(repo, "rev-parse", "HEAD")
     cand = commit_change(repo, {"new_module.py": source})
-    with pytest.raises(CandidateRejected) as got:
-        candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, ("new_module.py",))
-    assert got.value.code == "CANDIDATE_SYS_PATH_MUTATION"
+    candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, ("new_module.py",))
 
 
 SUBMODULE_PATH_REDIRECTS = {
@@ -122,9 +125,85 @@ def test_candidate_submodule_path_redirects_are_refused(repo, source, change_typ
     if change_type == "MODIFY":
         base = commit_change(repo, {path: "VALUE = 1\n"})
     cand = commit_change(repo, {path: source})
+    candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, (path,))
+
+
+def test_signal_and_nested_stdlib_module_are_refused(repo):
+    base = git(repo, "rev-parse", "HEAD")
+    cand = commit_change(
+        repo,
+        {
+            "src/a.py": "import sys\nsys.path.insert(0, 'outside')\n",
+            "pkg/fractions.py": "def Fraction(*args): return 1\n",
+        },
+    )
     with pytest.raises(CandidateRejected) as got:
-        candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, (path,))
+        candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, ("src/a.py",))
     assert got.value.code == "CANDIDATE_SYS_PATH_MUTATION"
+    assert "src/a.py" in str(got.value) and "pkg/fractions.py" in str(got.value)
+
+
+def test_signal_and_nested_test_import_package_are_refused(repo):
+    base = git(repo, "rev-parse", "HEAD")
+    commit_change(repo, {"tests/test_x.py": "import helpers\n"})
+    base = git(repo, "rev-parse", "HEAD")
+    cand = commit_change(
+        repo,
+        {"src/a.py": "import sys\nsys.path.insert(0, 'outside')\n", "pkg/helpers/__init__.py": ""},
+    )
+    with pytest.raises(CandidateRejected) as got:
+        candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, ("src/a.py",))
+    assert got.value.code == "CANDIDATE_SYS_PATH_MUTATION"
+    assert "pkg/helpers/__init__.py" in str(got.value)
+
+
+def test_harmless_nested_module_does_not_refuse(repo):
+    base = git(repo, "rev-parse", "HEAD")
+    cand = commit_change(
+        repo,
+        {"src/a.py": "import sys\nsys.path.insert(0, 'outside')\n", "pkg/harmless.py": ""},
+    )
+    candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, ("src/a.py",))
+
+
+def test_root_stdlib_named_module_does_not_refuse(repo):
+    base = git(repo, "rev-parse", "HEAD")
+    cand = commit_change(
+        repo,
+        {"src/a.py": "import sys\nsys.path.insert(0, 'outside')\n", "json.py": ""},
+    )
+    candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, ("src/a.py",))
+
+
+def test_shadow_file_without_signal_does_not_refuse(repo):
+    base = git(repo, "rev-parse", "HEAD")
+    cand = commit_change(repo, {"pkg/fractions.py": ""})
+    candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, ())
+
+
+def test_test_commit_import_can_define_shadow_name(repo):
+    base = git(repo, "rev-parse", "HEAD")
+    cand = commit_change(
+        repo,
+        {"src/a.py": "import sys\nsys.path.insert(0, 'outside')\n", "pkg/helpers.py": ""},
+    )
+    test_commit = commit_change(repo, {"tests/test_x.py": "import helpers\n"})
+    with pytest.raises(CandidateRejected) as got:
+        candidate_sys_path.refuse_new_sys_path_mutation(
+            repo, base, cand, ("src/a.py",), test_commit=test_commit
+        )
+    assert got.value.code == "CANDIDATE_SYS_PATH_MUTATION"
+
+
+def test_unparseable_candidate_test_file_fails_closed(repo):
+    base = git(repo, "rev-parse", "HEAD")
+    cand = commit_change(
+        repo,
+        {"src/a.py": "import sys\nsys.path.insert(0, 'outside')\n", "tests/test_x.py": "if:\n"},
+    )
+    with pytest.raises(CandidateRejected) as got:
+        candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, ("src/a.py",))
+    assert got.value.code == "UNREADABLE_CHANGE"
 
 
 def test_package_path_redirect_hiding_in_a_shadow_module_is_refused_by_judge(project, monkeypatch):
@@ -138,6 +217,7 @@ def test_package_path_redirect_hiding_in_a_shadow_module_is_refused_by_judge(pro
             )
         },
     )
+    git(project, "fetch", "-q", "origin", test_commit)
     candidate_source = (
         "import pathlib\n"
         "__path__.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'shadow'))\n"
@@ -152,7 +232,11 @@ def test_package_path_redirect_hiding_in_a_shadow_module_is_refused_by_judge(pro
     )
     changed = git(project, "diff", "--name-only", base, cand).split()
     task = SimpleNamespace(
-        repo=project, base_commit=base, blackbox=None, allowed_files=tuple(changed)
+        repo=project,
+        base_commit=base,
+        test_commit=test_commit,
+        blackbox=None,
+        allowed_files=tuple(changed),
     )
     result = SimpleNamespace(candidate_commit=cand, task_id="task", attempt_id="attempt", logs=[])
 
@@ -202,7 +286,6 @@ def test_files_outside_the_candidates_allowed_files_are_not_its_mutation(repo):
         },
     )
     candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, ("new_module.py",))
-    with pytest.raises(CandidateRejected):
-        candidate_sys_path.refuse_new_sys_path_mutation(
-            repo, base, cand, ("new_module.py", "tests/test_hidden.py")
-        )
+    candidate_sys_path.refuse_new_sys_path_mutation(
+        repo, base, cand, ("new_module.py", "tests/test_hidden.py")
+    )

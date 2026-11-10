@@ -146,6 +146,7 @@ def test_the_check_runs_on_the_bindings_head_not_the_tree_that_ran(monkeypatch, 
 
     monkeypatch.setattr(pipeline_judge, "run_verifiers", lambda *a, **k: ())
     monkeypatch.setattr(pipeline_judge, "judge_blackbox", capture)
+    monkeypatch.setattr(pipeline_judge, "refuse_new_sys_path_mutation", lambda *a, **k: None)
     base = base_of(project)
     judged = candidate(project, base, {"src/calc.py": FIX})
     bound = candidate(project, base, {"src/calc.py": FIX + "\n# binding head\n"})
@@ -153,7 +154,14 @@ def test_the_check_runs_on_the_bindings_head_not_the_tree_that_ran(monkeypatch, 
     assert scan_sys_path_blob(git(project, "show", f"{judged}:src/calc.py").encode()) is False
     assert scan_sys_path_blob(git(project, "show", f"{bound}:src/calc.py").encode()) is False
     # Both candidates are non-signalling equivalents, so this still tests which commit is judged.
-    task = SimpleNamespace(blackbox=DECLARED, repo=project, base_commit=base, import_paths=())
+    task = SimpleNamespace(
+        blackbox=DECLARED,
+        repo=project,
+        base_commit=base,
+        import_paths=(),
+        test_commit=None,
+        allowed_files=(),
+    )
     for binding in (None, {"head": "head"}):
         result = SimpleNamespace(candidate_commit=judged, task_id="t", attempt_id="a", logs=[])
         actual_binding = None if binding is None else {"head": bound}
