@@ -5,15 +5,13 @@ by the enclosing def/class names, block headers and block fields). A statement i
 source names a machinery word, or names a def or class whose body reaches an import-machinery
 word (``reach``: sys.modules, finders, importlib, __import__, runpy, pytest_plugins; directly or
 through other same-file defs). If that word scan misses, direct calls to getattr/setattr are
-allowed only with a safe literal identifier; vars is allowed only as vars(self) or vars(cls),
-when those names are not rebound in the file. Their targets are intentionally not inspected:
-parameters, aliases and other expressions cannot be resolved soundly here. Indirect uses and
-unknown call shapes are refused. Rule (5): a call whose func is itself a call to getattr is
-refused regardless of the attribute name; getattr used only to read an attribute remains subject
-to the safe-literal rule above. An added or removed hot statement makes the edit machinery, so
-writing, rewriting or moving machinery, calling dead base machinery, or flipping the condition
-that wraps it (the key of every statement inside changes) is caught, while a fix that calls a
-same-file helper is not.
+allowed only with a safe literal identifier. vars stays refused exactly as on main. Rule (4) also
+refuses those names when defined, imported, bound, or used indirectly. Rule (5) refuses a direct
+getattr result when called, subscripted, or used as an attribute value for private or mutating
+attributes; ordinary reads such as ``getattr(opts, "name", "").strip()`` remain allowed. An added
+or removed hot statement makes the edit machinery, so writing, rewriting or moving machinery,
+calling dead base machinery, or flipping the condition that wraps it (the key of every statement
+inside changes) is caught, while a fix that calls a same-file helper is not.
 Residual (#1115): an edit to other control flow inside a function that reaches machinery (say an
 early return before it), and base machinery reached through aliases, registries or dunders, are
 not hot; broader lexical matching raised hot statements in real signalling files, so these are
@@ -25,6 +23,7 @@ from __future__ import annotations
 import ast
 import copy
 from collections import Counter
+from collections.abc import Iterator
 
 _BLOCKS = ("body", "orelse", "finalbody", "handlers", "cases")
 _DEFS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
@@ -59,10 +58,9 @@ def _hot_statements(
     try:
         tree = ast.parse(data)
         hot_names = _hot_defs(tree, reach)
-        rebound = _reassigned_special_names(tree)
         found: Counter[Key] = Counter()
         hot: set[Key] = set()
-        _visit(list(tree.body), "", words, hot_names, rebound, denylist, found, hot)
+        _visit(list(tree.body), "", words, hot_names, denylist, found, hot)
     except _PARSE_ERRORS:
         return None
     return found, hot
@@ -90,7 +88,6 @@ def _visit(
     scope: str,
     words: tuple[bytes, ...],
     hot_names: set[str],
-    rebound: set[str],
     denylist: frozenset[str],
     found: Counter[Key],
     hot: set[Key],
@@ -107,52 +104,30 @@ def _visit(
         if (
             _has_word(text, words)
             or _names(own) & hot_names
-            or (not _has_word(text, words) and _unsafe_dynamic_access(own, rebound, denylist))
+            or _unsafe_dynamic_access(own, denylist)
         ):
             hot.add(key)
         inner = f"{scope}/{node.name if isinstance(node, _DEFS) else text}"
         for field, block in blocks:  # the field keeps an if/else or try/else move visible
-            _visit(block, f"{inner}:{field}", words, hot_names, rebound, denylist, found, hot)
+            _visit(block, f"{inner}:{field}", words, hot_names, denylist, found, hot)
 
 
-def _reassigned_special_names(tree: ast.Module) -> set[str]:
-    """Special vars receiver names assigned anywhere in the file."""
-    rebound = {
-        node.id
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Name)
-        and node.id in {"self", "cls"}
-        and isinstance(node.ctx, ast.Store)
-    }
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            if node.name in {"self", "cls"}:
-                rebound.add(node.name)
-        elif isinstance(node, (ast.Import, ast.ImportFrom)):
-            for alias in node.names:
-                name = alias.asname or alias.name.split(".")[0]
-                if name in {"self", "cls"}:
-                    rebound.add(name)
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
-            args = node.args
-            positional = [*args.posonlyargs, *args.args]
-            defaults = [None] * (len(positional) - len(args.defaults)) + list(args.defaults)
-            defaults.extend(args.kw_defaults)
-            for arg, default in zip([*positional, *args.kwonlyargs], defaults, strict=True):
-                if arg.arg in {"self", "cls"} and default is not None:
-                    rebound.add(arg.arg)
-    return rebound
-
-
-def _unsafe_dynamic_access(node: ast.AST, rebound: set[str], denylist: frozenset[str]) -> bool:
-    names = {"getattr", "setattr", "vars"}
+def _unsafe_dynamic_access(node: ast.AST, denylist: frozenset[str]) -> bool:
+    names = {"getattr", "setattr"}
     calls = [part for part in ast.walk(node) if isinstance(part, ast.Call)]
     direct = {id(call.func) for call in calls if isinstance(call.func, ast.Name)}
     for part in ast.walk(node):
-        named = isinstance(part, ast.Name) and part.id in names
-        attributed = isinstance(part, ast.Attribute) and part.attr in names
-        if (named and id(part) not in direct) or attributed:
+        if isinstance(part, ast.Name) and part.id in names | {"vars"}:
+            if part.id == "vars" or id(part) not in direct:
+                return True
+        if isinstance(part, ast.Attribute) and part.attr in names | {"vars"}:
+            return True
+        if any(name in names | {"vars"} for name in _bound_identifiers(part)):
+            return True
+        if isinstance(part, ast.Attribute) and _is_direct_getattr(part.value):
+            if part.attr.startswith("_") or part.attr in _MUTATING_ATTRIBUTES:
+                return True
+        if isinstance(part, ast.Subscript) and _is_direct_getattr(part.value):
             return True
     for call in calls:
         if (
@@ -166,15 +141,6 @@ def _unsafe_dynamic_access(node: ast.AST, rebound: set[str], denylist: frozenset
         kind = call.func.id
         if call.keywords or any(isinstance(arg, ast.Starred) for arg in call.args):
             return True
-        if kind == "vars":
-            if (
-                len(call.args) != 1
-                or not isinstance(call.args[0], ast.Name)
-                or call.args[0].id not in {"self", "cls"}
-                or call.args[0].id in rebound
-            ):
-                return True
-            continue
         if kind == "setattr" and len(call.args) != 3:
             return True
         if kind == "getattr" and len(call.args) not in {2, 3}:
@@ -189,6 +155,52 @@ def _unsafe_dynamic_access(node: ast.AST, rebound: set[str], denylist: frozenset
         ):
             return True
     return False
+
+
+_MUTATING_ATTRIBUTES = frozenset(
+    {
+        "append",
+        "extend",
+        "insert",
+        "remove",
+        "pop",
+        "clear",
+        "update",
+        "setdefault",
+        "add",
+        "discard",
+        "__call__",
+    }
+)
+
+
+def _is_direct_getattr(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "getattr"
+    )
+
+
+def _bound_identifiers(node: ast.AST) -> Iterator[str]:
+    """Yield identifier strings defined or bound by one AST node."""
+    if isinstance(node, _DEFS):
+        yield node.name
+    elif isinstance(node, (ast.Import, ast.ImportFrom)):
+        for alias in node.names:
+            yield from alias.name.split(".")
+            if alias.asname is not None:
+                yield alias.asname
+    elif isinstance(node, ast.arg):
+        yield node.arg
+    elif isinstance(node, ast.keyword) and node.arg is not None:
+        yield node.arg
+    elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name is not None:
+        yield node.name
+    elif isinstance(node, ast.MatchMapping) and node.rest is not None:
+        yield node.rest
+    elif isinstance(node, ast.ExceptHandler) and node.name is not None:
+        yield node.name
+    elif isinstance(node, (ast.Global, ast.Nonlocal)):
+        yield from node.names
 
 
 def _names(node: ast.AST) -> set[str]:

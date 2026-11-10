@@ -8,6 +8,17 @@ from cairnwork.workspace import CandidateRejected
 
 SIGNAL = "import sys\nsys.path.insert(0, 'x')\n"
 WRONG_CASES = [
+    ("wrong_getattr_function_name", "def getattr(x):\n    return x\n"),
+    ("wrong_getattr_class_name", "class getattr:\n    pass\n"),
+    ("wrong_getattr_async_function_name", "async def getattr(x):\n    return x\n"),
+    ("wrong_getattr_from_import", "from x import getattr\n"),
+    ("wrong_getattr_import_alias", "import getattr as g\n"),
+    ("wrong_getattr_import_asname", "import x as getattr\n"),
+    ("wrong_getattr_parameter", "def f(getattr):\n    return getattr\n"),
+    ("wrong_getattr_keyword", "f(getattr=1)\n"),
+    ("wrong_getattr_result_call", "def f(x):\n    return getattr(x, 'n').__call__()\n"),
+    ("wrong_getattr_result_subscript_write", "def f(x):\n    getattr(x, 'n')[0] = 1\n"),
+    ("wrong_getattr_result_mutation", "def f(x):\n    getattr(x, 'n').append(1)\n"),
     ("wrong_getattr_param_module", "def f(m):\n    return getattr(m, 'path')\nf(sys)\n"),
     (
         "wrong_getattr_selfattr_chain",
@@ -124,6 +135,36 @@ WRONG_CASES = [
         "wrong_container_stored_bound_method",
         "def r():\n    g = getattr(sys.path, 'append')\n    g('/evil')\n",
     ),
+    (
+        "wrong_vars_selfparam_module_function",
+        "def f(self, k):\n    vars(self)[k] = {}\nf(sys, 'mod' + 'ules')\n",
+    ),
+    (
+        "wrong_vars_selfparam_nested",
+        "def outer():\n    def f(self):\n        return vars(self)\n    return f(sys)\n",
+    ),
+    (
+        "wrong_vars_selfparam_lambda",
+        "g = lambda self: vars(self)\ndef r():\n    return g(sys)\n",
+    ),
+    (
+        "wrong_vars_selfparam_unbound_method",
+        "class C:\n    def v(self):\n        return vars(self)\ndef r():\n    return C.v(sys)\n",
+    ),
+    (
+        "wrong_vars_self_match_capture",
+        "def r(x):\n    match x:\n        case self:\n            return vars(self)\n",
+    ),
+    (
+        "wrong_vars_self_except_as",
+        "def r():\n    try:\n        raise RuntimeError\n"
+        "    except RuntimeError as self:\n        return vars(self)\n",
+    ),
+    (
+        "wrong_vars_cls_classmethod_module",
+        "class C:\n    @classmethod\n    def v(cls):\n        return vars(cls)\n"
+        "def r():\n    return C.v.__func__(sys)\n",
+    ),
 ]
 HONEST_CASES = [
     (
@@ -136,7 +177,7 @@ HONEST_CASES = [
         "class W:\n    def a(self):\n        setattr(self, 'active', True)\n",
         "allow",
     ),
-    ("honest_vars_self", "class W:\n    def v(self):\n        return vars(self)\n", "allow"),
+    ("honest_vars_self", "class W:\n    def v(self):\n        return vars(self)\n", "refuse"),
     ("honest_getattr_param", "def f(cfg):\n    return getattr(cfg, 'name', None)\n", "allow"),
     ("honest_getattr_opts_default", "def f(opts, d):\n    return getattr(opts, 'x', d)\n", "allow"),
     (
@@ -145,6 +186,11 @@ HONEST_CASES = [
         "refuse",
     ),
     ("honest_getattr_os_literal", "import os\ndef f():\n    return getattr(os, 'sep')\n", "allow"),
+    (
+        "honest_getattr_result_string_method",
+        "def f(opts):\n    return getattr(opts, 'name', '').strip()\n",
+        "allow",
+    ),
 ]
 
 
@@ -155,10 +201,15 @@ def _judge(repo, body):
     return candidate_sys_path.refuse_new_sys_path_mutation(repo, base, candidate, changed)
 
 
+def _assert_refused(repo, body):
+    with pytest.raises(CandidateRejected) as got:
+        _judge(repo, body)
+    assert got.value.code == "CANDIDATE_SYS_PATH_MUTATION"
+
+
 @pytest.mark.parametrize(("case", "body"), WRONG_CASES, ids=[case for case, _ in WRONG_CASES])
 def test_wrong_dynamic_access_cases_refuse(repo, case, body):
-    with pytest.raises(CandidateRejected):
-        _judge(repo, body)
+    _assert_refused(repo, body)
 
 
 @pytest.mark.parametrize(
@@ -166,27 +217,6 @@ def test_wrong_dynamic_access_cases_refuse(repo, case, body):
 )
 def test_honest_dynamic_access_cases_match_expectation(repo, case, body, expect):
     if expect == "refuse":
-        with pytest.raises(CandidateRejected):
-            _judge(repo, body)
+        _assert_refused(repo, body)
     else:
-        _judge(repo, body)
-
-
-VARS_REBOUND = {
-    "assignment": "self = object()\nclass W:\n    def f(self):\n        return vars(self)\n",
-    "walrus": "class W:\n    def f(self):\n        (self := object())\n        return vars(self)\n",
-    "for_target": "class W:\n    def f(self):\n        for self in ():\n"
-    "            return vars(self)\n",
-    "with_target": (
-        "from contextlib import nullcontext\nclass W:\n"
-        "    def f(self):\n        with nullcontext() as self:\n"
-        "            return vars(self)\n"
-    ),
-    "defaulted_parameter": "def f(self=object()):\n    return vars(self)\n",
-}
-
-
-@pytest.mark.parametrize("body", VARS_REBOUND.values(), ids=VARS_REBOUND)
-def test_vars_rebound_receiver_is_refused(repo, body):
-    with pytest.raises(CandidateRejected):
         _judge(repo, body)

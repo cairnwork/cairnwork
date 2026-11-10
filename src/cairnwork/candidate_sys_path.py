@@ -46,7 +46,7 @@ _REACH_WORDS = tuple(
 )  # fmt: skip
 _MACHINERY_WORDS = _REACH_WORDS + tuple(
     word.encode()
-    for word in (*sorted(DYNAMIC_NAMES - {"getattr", "setattr", "vars"}), *sorted(DYNAMIC_ATTRS))
+    for word in (*sorted(DYNAMIC_NAMES - {"getattr", "setattr"}), *sorted(DYNAMIC_ATTRS))
 )
 
 # Literal attribute names that can expose import machinery, execute code, intercept runtime
