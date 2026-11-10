@@ -20,6 +20,7 @@ from cairnwork_attest.record import AttestError, parse_strict_json
 
 _OID = re.compile(r"^[0-9a-f]{40}$")
 _REMOTE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*$")
+_NO_NOTE = "no note found"
 _RETRYABLE = (
     "fetch first",
     "non-fast-forward",
@@ -212,22 +213,21 @@ def _fetch_notes(
     return None
 
 
-def _existing_note(run: Runner, repo: Path, notes_tip: str | None, candidate: str) -> str | None:
-    """Read a candidate note blob from the fetched remote notes commit."""
+def _existing_note(
+    run: Runner, repo: Path, working_ref: str, notes_tip: str | None, candidate: str
+) -> str | None:
+    """Return the blob oid of the candidate's note on the fetched remote notes, None if none.
+
+    git resolves the notes tree itself, so any fanout depth is found (#510).
+    """
     if notes_tip is None:
         return None
-    paths = (candidate, f"{candidate[:2]}/{candidate[2:]}")
-    for path in paths:
-        proc = run(repo, "ls-tree", notes_tip, "--", path)
-        if proc.returncode != 0:
-            raise _GitFailure("NOTES_LIST_FAILED", proc.stderr.strip())
-        if not proc.stdout.strip():
-            continue
-        fields = proc.stdout.split()
-        if len(fields) >= 3 and fields[1] == "blob" and _OID.fullmatch(fields[2]):
-            return fields[2]
-        raise _GitFailure("NOTES_LIST_FAILED", "malformed note tree entry")
-    return None
+    proc = run(repo, "notes", f"--ref={working_ref}", "list", candidate)
+    if proc.returncode == 0:
+        return proc.stdout.strip()
+    if _NO_NOTE in proc.stderr.lower():
+        return None
+    raise _GitFailure("NOTES_LIST_FAILED", proc.stderr.strip())
 
 
 def _try_push(
@@ -287,7 +287,7 @@ def publish_bundle(
         blob = _store_blob(git, repo, raw)
         for attempt in range(1, max_attempts + 1):
             notes_tip = _fetch_notes(git, repo, remote, notes_ref, working_ref)
-            existing = _existing_note(git, repo, notes_tip, candidate)
+            existing = _existing_note(git, repo, working_ref, notes_tip, candidate)
             if existing is not None and existing != blob:
                 detail = f"existing note {existing} differs from {blob}"
                 result = _fail("NOTE_CONFLICT", detail, candidate, notes_ref, remote, attempt, blob)
@@ -296,7 +296,7 @@ def publish_bundle(
                 result = _ok("NOOP", candidate, notes_ref, remote, attempt, blob, notes_tip)
                 break
             tip = _try_push(git, repo, remote, notes_ref, working_ref, candidate, blob)
-            if tip is None or isinstance(tip, str):
+            if isinstance(tip, str):
                 result = _ok("PUBLISHED", candidate, notes_ref, remote, attempt, blob, tip)
                 break
             if attempt < max_attempts:
@@ -306,9 +306,12 @@ def publish_bundle(
     finally:
         deleted = git(repo, "update-ref", "-d", "--", working_ref)
         if deleted.returncode != 0:
+            detail = deleted.stderr.strip()
+            if result is not None:  # keep what happened before the cleanup failed
+                detail += f"; {result.code}" + (f": {result.detail}" if result.detail else "")
             result = _fail(
                 "LOCAL_REF_RESET_FAILED",
-                _redact(deleted.stderr.strip()),
+                _redact(detail),
                 candidate,
                 notes_ref,
                 remote,

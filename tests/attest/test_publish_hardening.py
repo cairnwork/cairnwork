@@ -114,7 +114,7 @@ def test_failed_push_reports_private_ref_cleanup_failure(
     r = publish_bundle(bundle_file, src, candidate, run=failing_run)
 
     assert (r.ok, r.code, r.attempts) == (False, "LOCAL_REF_RESET_FAILED", 1)
-    assert r.detail == "local ref locked"
+    assert r.detail == "local ref locked; PUSH_FAILED: rejected by policy"
     assert calls[-1][:2] == ("update-ref", "-d")
     assert calls[-1][3].startswith(f"{_NOTES_REF}-publish-")
     assert sum(args[0] == "push" for args in calls) == 1

@@ -93,3 +93,46 @@ def test_normal_publish_and_remote_note_noop(tmp_path: Path, key: Ed25519Private
 
     again = publish_bundle(bundle, src, candidate)
     assert (again.code, again.notes_tip) == ("NOOP", tip)
+
+
+def _mktree(repo: Path, entry: str) -> str:
+    proc = _git(repo, "mktree", input=(entry + "\n").encode())
+    assert proc.returncode == 0, proc.stderr
+    return proc.stdout.strip()
+
+
+def test_note_at_a_deeper_fanout_is_found(tmp_path: Path, key: Ed25519PrivateKey) -> None:
+    """git resolves any notes fanout depth; an ls-tree of two paths would miss aa/bb/rest."""
+    src, bare, candidate = make_publish_env(tmp_path)
+    bundle = _write_bundle(tmp_path, _make_bundle_bytes(candidate, key))
+    blob = _git(src, "hash-object", "-w", "--no-filters", "--stdin", input=bundle.read_bytes())
+    leaf = _mktree(src, f"100644 blob {blob.stdout.strip()}\t{candidate[4:]}")
+    mid = _mktree(src, f"040000 tree {leaf}\t{candidate[2:4]}")
+    root = _mktree(src, f"040000 tree {mid}\t{candidate[:2]}")
+    commit = git(src, "commit-tree", root, "-m", "deep fanout note")
+    git(src, "push", "origin", f"{commit}:{_NOTES_REF}")
+
+    result = publish_bundle(bundle, src, candidate)
+    assert (result.code, result.notes_tip) == ("NOOP", commit)
+
+    other_key = Ed25519PrivateKey.generate()
+    other = _write_bundle(tmp_path, _make_bundle_bytes(candidate, other_key), "other.json")
+    conflict = publish_bundle(other, src, candidate)
+    assert conflict.code == "NOTE_CONFLICT"
+    assert _remote_tip(bare) == commit
+
+
+def test_local_notes_ref_untouched_and_private_ref_removed(
+    tmp_path: Path, key: Ed25519PrivateKey
+) -> None:
+    src, bare, candidate = make_publish_env(tmp_path)
+    tree = git(src, "rev-parse", "HEAD^{tree}")
+    git(src, "notes", f"--ref={_NOTES_REF}", "add", "-m", "local only", tree)
+    local_tip = git(src, "rev-parse", _NOTES_REF)
+    bundle = _write_bundle(tmp_path, _make_bundle_bytes(candidate, key))
+
+    assert publish_bundle(bundle, src, candidate).code == "PUBLISHED"
+    assert git(src, "rev-parse", _NOTES_REF) == local_tip
+    refs = git(src, "for-each-ref", "--format=%(refname)", "refs/notes/")
+    assert refs.split() == [_NOTES_REF]
+    assert _read_note_from_bare(bare, candidate).encode() == bundle.read_bytes()
