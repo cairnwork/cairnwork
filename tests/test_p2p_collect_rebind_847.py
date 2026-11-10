@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from cairnwork.p2p_collect import classify
 
 
@@ -114,6 +116,34 @@ def test_a_plain_deleted_test_is_removed_control():
 def test_a_module_level_global_in_a_branch_is_not_a_binding():
     """Review f844fc68 (:221): a module-level ``global`` binds nothing: delete is removed."""
     base = "if True:\n    global test_a\ndef test_a(): assert 0\n"
+    side = _classify_single(base)
+    assert side.removed == {"t.py::test_a"} and side.dropped == set()
+
+
+@pytest.mark.parametrize(
+    "binding",
+    [
+        "match value:\n    case [*test_a]: pass\n",
+        "match value:\n    case {**test_a}: pass\n",
+        "_ = [test_a := 1 for _ in range(1)]\n",
+        "_ = (lambda x=(test_a := 1): x)\n",
+    ],
+    ids=["match-star", "match-mapping-rest", "comprehension-walrus", "lambda-default-walrus"],
+)
+@pytest.mark.parametrize("scope", ["module", "class"])
+def test_a_test_rebound_by_pattern_or_nested_expression_is_dropped(scope, binding):
+    if scope == "module":
+        base = f"def test_a(): assert 0\n{binding}"
+    else:
+        indented_binding = "    " + binding.replace("\n", "\n    ").rstrip()
+        base = f"class A:\n    def test_a(self): assert 0\n{indented_binding}\n"
+    test_id = "t.py::test_a" if scope == "module" else "t.py::A::test_a"
+    side = _classify_single(base, test_id)
+    assert side.removed == set() and side.dropped == {test_id}
+
+
+def test_comprehension_loop_variable_does_not_rebind_module_test():
+    base = "def test_a(): assert 0\n_ = [test_a for test_a in values]\n"
     side = _classify_single(base)
     assert side.removed == {"t.py::test_a"} and side.dropped == set()
 
