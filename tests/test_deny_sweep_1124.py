@@ -1,8 +1,13 @@
 """#1124: stale ``cairnwork-deny.*`` directories are swept when a recording starts; every safety
-rule of the sweep has a test that a one-line mutant of that rule makes fail."""
+rule of the sweep has a test that a one-line mutant of that rule makes fail. Recording tests that
+do not patch the temp dir sweep the real $TMPDIR, which is safe because only same-uid, dead-owner,
+>1 h cairnwork-deny.* entries qualify."""
 
 import os
+import threading
 import time
+
+import pytest
 
 from cairnwork import deny_channel, deny_sweep
 
@@ -47,6 +52,30 @@ def test_sweep_keeps_fresh_directory(tmp_path):
     assert fresh.exists()
 
 
+def test_sweep_uses_one_hour_staleness_boundary(tmp_path):
+    recent = tmp_path / "cairnwork-deny.under-hour"
+    _make_stale(recent, pid=_dead_pid())
+    old_3500 = 100_000.0
+    for path in (recent / "owner.pid", recent):
+        os.utime(path, (old_3500, old_3500))
+    expired = tmp_path / "cairnwork-deny.over-hour"
+    _make_stale(expired, pid=_dead_pid())
+    old_3700 = 99_800.0
+    for path in (expired / "owner.pid", expired):
+        os.utime(path, (old_3700, old_3700))
+
+    assert deny_sweep.sweep_stale(tmp_path, now=103_500.0) == 1
+    assert recent.exists()
+    assert not expired.exists()
+
+
+def test_sweep_does_not_treat_pid_zero_as_live(tmp_path):
+    stale = tmp_path / "cairnwork-deny.pidzero"
+    _make_stale(stale, pid=0)
+    assert deny_sweep.sweep_stale(tmp_path, time.time()) == 1
+    assert not stale.exists()
+
+
 def test_sweep_keeps_stale_directory_with_live_owner_pid(tmp_path):
     alive = tmp_path / "cairnwork-deny.alive"
     alive.mkdir()
@@ -58,6 +87,44 @@ def test_sweep_keeps_stale_directory_with_live_owner_pid(tmp_path):
     removed = deny_sweep.sweep_stale(tmp_path, time.time())
     assert removed == 0
     assert alive.exists()
+
+
+def test_sweep_keeps_stale_directory_when_pid_is_inaccessible(tmp_path, monkeypatch):
+    if os.getuid() == 0:
+        pytest.skip("root can signal every process")
+    stale = tmp_path / "cairnwork-deny.inaccessible"
+    stale.mkdir()
+    pid_file = stale / "owner.pid"
+    pid_file.write_text("1\n")
+    old = time.time() - 7200
+    os.utime(pid_file, (old, old))
+    os.utime(stale, (old, old))
+
+    def deny_signal(pid, sig):
+        raise PermissionError
+
+    monkeypatch.setattr(deny_sweep.os, "kill", deny_signal)
+    assert deny_sweep.sweep_stale(tmp_path, time.time()) == 0
+    assert stale.exists()
+
+
+def test_sweep_does_not_open_fifo_owner_pid(tmp_path):
+    stale = tmp_path / "cairnwork-deny.fifo"
+    stale.mkdir()
+    owner_pid = stale / "owner.pid"
+    os.mkfifo(owner_pid)
+    old = time.time() - 7200
+    os.utime(owner_pid, (old, old))
+    os.utime(stale, (old, old))
+    finished = threading.Event()
+
+    def sweep():
+        deny_sweep.sweep_stale(tmp_path, time.time())
+        finished.set()
+
+    worker = threading.Thread(target=sweep, daemon=True)
+    worker.start()
+    assert finished.wait(5), "sweep blocked while opening FIFO owner.pid"
 
 
 def test_sweep_keeps_symlink_and_untouched_target(tmp_path):
@@ -163,8 +230,9 @@ def test_sweep_does_not_follow_a_symlink_inside_a_stale_directory(tmp_path):
     d = tmp_path / "cairnwork-deny.withlink"
     _make_stale(d, pid=_dead_pid())
     (d / "link").symlink_to(outside, target_is_directory=True)
-    os.utime(d / "link", (time.time() - 7200,) * 2, follow_symlinks=False)
-    os.utime(d, (time.time() - 7200, time.time() - 7200))
+    old = time.time() - 7200
+    os.utime(d / "link", (old, old), follow_symlinks=False)
+    os.utime(d, (old, old))
     assert deny_sweep.sweep_stale(tmp_path, time.time()) == 1
     assert not d.exists()
     assert (outside / "keep.txt").read_text() == "keep"
