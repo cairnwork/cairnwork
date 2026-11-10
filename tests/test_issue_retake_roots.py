@@ -96,8 +96,8 @@ def test_a_row_under_the_key_with_another_card_is_no_retake(setup):
     block = task_block_sha256(body["body"])
     setup["intake"].submit(
         {
-            "idempotency_key": f"gh:James3014/demo#7:{block[:16]}",
-            "card_hash": f"gh:James3014/demo#7:{'0' * 64}",
+            "idempotency_key": f"gh:james3014/demo#7:{block[:16]}",
+            "card_hash": f"gh:james3014/demo#7:{'0' * 64}",
             "title": "another client",
             "instructions": "something else",
             "repo": str(setup["clone"]),
