@@ -37,8 +37,10 @@ class GitHub:
         return done.stdout
 
     def issues(self, label: str) -> list[dict[str, Any]]:
+        # closed mid-run, a running Issue still needs settling (#632); a queued one is not taken
+        state = "all" if label == "cairnwork:running" else "open"
         out = self._run(
-            "issue", "list", "-R", self.repo, "--state", "open", "--label", label,
+            "issue", "list", "-R", self.repo, "--state", state, "--label", label,
             "--limit", "50", "--json", "number,title,body",
         )  # fmt: skip
         return json.loads(out)
