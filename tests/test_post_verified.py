@@ -115,7 +115,8 @@ def test_on_and_ok_runs_the_hook_once_with_a_narrow_environment(rig, monkeypatch
                           "--repo-slug"]  # fmt: skip
     values = dict(zip(args[0::2], args[1::2], strict=True))
     assert values["--state"] == str(rig["intake"].state) and values["--candidate"] == commit
-    assert values["--attempt-id"] == "a" + "1" * 16 and values["--repo-slug"] == "James3014/demo"
+    assert values["--attempt-id"] == "a" + "1" * 16
+    assert values["--repo-slug"] == "james3014/demo"
     assert values["--repo"] == str(rig["clone"]) and values["--task-id"].startswith("t")
     assert TOKEN not in " ".join(args)  # never an argument
     assert (seen / "cwd").read_text().strip() == "/"

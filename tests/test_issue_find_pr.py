@@ -68,7 +68,7 @@ def test_the_query_names_this_repos_owner_not_just_the_branch(fake_gh):
     assert github.find_pr(BRANCH, SHA) == ""
     assert argv() == [
         "api",
-        "repos/James3014/demo/pulls?head=James3014%3Acairnwork%2F7-a1111111111111111"
+        "repos/james3014/demo/pulls?head=james3014%3Acairnwork%2F7-a1111111111111111"
         "&state=all&per_page=100",
     ]
 

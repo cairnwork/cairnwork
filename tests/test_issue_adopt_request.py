@@ -13,7 +13,7 @@ import cairnwork.issue_runner as runner
 import cairnwork.issue_task as issue_task
 from cairnwork.issue_task import IssueRefused, parse_task_block
 
-REPO = "James3014/demo"
+REPO = "james3014/demo"
 OTHER_BLOCK = {**BLOCK, "allowed_files": ["src/calc.py", "src/more.py"]}
 
 

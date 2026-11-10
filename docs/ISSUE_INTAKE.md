@@ -81,6 +81,7 @@
 
 - 用的是和 Gateway 轉送相同的 state，所以 `in-flight` 兩邊的任務都算得到；停止接新任務（`drain`）也同時對兩邊生效。
 - 冪等鍵由 Issue 號碼加上區塊雜湊組成：重複執行不會重複派工，也不會重複留言。
+- 同一個 repo 只用一個 state；repo slug 會以小寫儲存。
 - base 是專用 clone 的 `origin/main`（每次都先 fetch），不使用任何共用的工作目錄。
 - Cairnwork **不合併 PR**。draft PR 照一般規則審查，檢查全綠後由審查者合併。
 - 推送之前會再檢查一次：commit 格式、是否為 base 的後代、改動的檔案都在 `allowed_files` 裡。開 PR 之前會先查有沒有既有的 PR，所以中途失敗後重跑也不會重複開。

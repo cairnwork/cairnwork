@@ -15,12 +15,12 @@ import cairnwork.issue_runner as runner
 from cairnwork.intake import Intake, IntakeRefused
 from cairnwork.ownership import OwnershipLedger
 
-REPO = "James3014/demo"
+REPO = "james3014/demo"
 PAYLOAD = {  # the shape the issue runner submits: strings, lists, escapes, a non-ASCII title
     "allowed_files": ["src/calc.py"],
     "base_commit": "a" * 40,
-    "card_hash": "gh:James3014/demo#7:" + "b" * 64,
-    "idempotency_key": "gh:James3014/demo#7:" + "b" * 16,
+    "card_hash": "gh:james3014/demo#7:" + "b" * 64,
+    "idempotency_key": "gh:james3014/demo#7:" + "b" * 16,
     "instructions": 'line one\nsay "hi" \\ back',
     "repo": "/srv/clone",
     "title": "fix é",

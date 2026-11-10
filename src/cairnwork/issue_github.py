@@ -22,7 +22,7 @@ class GitHub:
     def __init__(self, gh: str, repo: str) -> None:
         if not REPO.fullmatch(repo):
             raise ValueError(f"repo must be OWNER/NAME, got {repo!r}")
-        self.gh, self.repo = gh, repo
+        self.gh, self.repo = gh, repo.lower()
 
     def _run(self, *args: str, stdin: str | None = None) -> str:
         try:

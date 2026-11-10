@@ -25,7 +25,8 @@ PR_URL = r"https://github\.com/{repo}/pull/[0-9]+"
 
 def pr_url(url: str, repo: str) -> str:
     """The PR URL gh printed, if it really is a PR of the configured repo; else empty."""
-    return url if re.fullmatch(PR_URL.format(repo=re.escape(repo)), url) else ""
+    match = re.fullmatch(r"https://github\.com/([^/]+/[^/]+)/pull/[0-9]+", url)
+    return url if match and match.group(1).casefold() == repo.casefold() else ""
 
 
 def verified_text(level: str) -> str:
