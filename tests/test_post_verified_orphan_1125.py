@@ -74,3 +74,27 @@ def test_deadline_ends_hook_without_runner(tmp_path):
         if proc.poll() is None:
             proc.kill()
             proc.wait()
+
+
+def test_the_hook_sees_only_the_env_it_was_given_whatever_the_locale():
+    # no LANG/LC_ALL: the watchdog interpreter would add LC_CTYPE (PEP 538) for the hook
+    code, out, _err = post_verified._run(["/usr/bin/env"], 10, {"PATH": "/usr/bin:/bin"})
+    keys = {line.split(b"=", 1)[0].decode() for line in out.splitlines() if b"=" in line}
+    assert code == 0 and keys <= {"PATH", "PWD", "SHLVL", "_"}, keys
+
+
+def test_a_hook_killed_by_a_signal_reports_128_plus_the_signal():
+    code, _out, _err = post_verified._run(
+        [sys.executable, "-c", "import os, signal; os.kill(os.getpid(), signal.SIGTERM)"],
+        10,
+        dict(os.environ),
+    )
+    assert code == 128 + signal.SIGTERM
+
+
+def test_an_exec_failure_keeps_its_reason(tmp_path):
+    binary = tmp_path / "not-a-program"
+    binary.write_bytes(b"\x00\x01\x02\x03")
+    binary.chmod(0o755)
+    code, _out, err = post_verified._run([str(binary)], 10, {"PATH": "/usr/bin:/bin"})
+    assert code != 0 and b"Exec format error" in err, (code, err)
