@@ -1,12 +1,17 @@
 """Record-only diagnostics for failed verifier runs (#1105).
 
-Evidence is best effort: it is never an input to observations, comparisons, or verdicts. Log
-redaction reuses the P2P masker, then replaces the current user's home prefix; it is not exhaustive.
+Evidence is best effort: it is never an input to observations, comparisons, or verdicts. Every
+string here is candidate-controlled text after best-effort masking (``mask_secrets``, a ``<home>``
+swap): treat it as untrusted. Node ids are masked and cut to ``MAX_ID`` characters.
 
-Deferred tests stay hidden (the pipeline deletes base logs for the same reason): when the task has a
-test commit, an entry keeps only how many tests failed. A deferred conftest or helper can print into
-any test's output, and the test commit may change files beyond the ones the pipeline names, so no
-log tail and no node id is kept; the full log stays on the run host.
+A log tail is kept only when the run used the dedicated verifier account: without it a candidate
+can read the launching account's plaintext secrets and print them, and the masker misses bare
+tokens (docs/SECURITY.md: never hand a raw verifier log to a worker or a model).
+
+Deferred tests stay hidden (the pipeline deletes base logs for the same reason): with a test commit
+an entry keeps only how many tests failed, no tail and no node id, since a deferred conftest can
+print into any test's output and the test commit may change files the pipeline does not name. The
+count comes from outcomes the candidate can forge: a small integer, accepted.
 """
 
 from __future__ import annotations
@@ -18,18 +23,21 @@ from cairnwork.p2p_probe_log import mask_secrets
 MAX_NODEIDS = 20
 MAX_LINES = 200
 MAX_BYTES = 16 * 1024
+MAX_ID = 200
+WINDOW = 4 * MAX_BYTES  # read only the end of a log (up to 4 MiB)
 
 
-def capture(runs, *, home: str, hidden: bool = False) -> list[dict]:
+def capture(runs, *, home: str, hidden: bool = False, account: bool = False) -> list[dict]:
     """Build bounded evidence for each nonpassing verifier; any caller failure must be ignored."""
     evidence = []
     for run in runs:
         if run.observation.passed:
             continue
         failed = sorted({node for node, outcome in run.outcomes.items() if outcome == "failed"})
-        shown = [] if hidden else failed
+        shown = [] if hidden else [mask_secrets(n)[:MAX_ID] for n in failed]
+        withheld = hidden or not account
         tail, truncated, unavailable = "", False, False
-        if not hidden:
+        if not withheld:
             try:
                 tail, truncated = _tail(Path(run.log_path), home)
             except Exception:  # noqa: BLE001 - evidence is best effort and cannot affect a verdict
@@ -42,18 +50,19 @@ def capture(runs, *, home: str, hidden: bool = False) -> list[dict]:
                 "failed_count": len(failed),
                 "log_tail": tail,
                 "log_tail_truncated": truncated,
-                "log_tail_withheld": hidden,
+                "log_tail_withheld": withheld,
                 "log_tail_unavailable": unavailable,
             }
         )
     return evidence
 
 
-def capture_for_task(runs, task) -> list[dict]:
+def capture_for_task(runs, task, ctx) -> list[dict]:
     """Attach diagnostics; with a test commit its tests are hidden. Never raises."""
     try:
-        hidden = bool(task.test_commit)
-        return capture(runs, home=str(Path.home().resolve()), hidden=hidden)
+        hidden, account = bool(task.test_commit), ctx.account is not None
+        home = str(Path.home().resolve())
+        return capture(runs, home=home, hidden=hidden, account=account)
     except Exception as exc:  # noqa: BLE001 - record-only collection must never affect judgment
         return [
             {"id": "", "log_tail_unavailable": True, "failure_evidence_error": type(exc).__name__}
@@ -61,9 +70,14 @@ def capture_for_task(runs, task) -> list[dict]:
 
 
 def _tail(path: Path, home: str) -> tuple[str, bool]:
-    raw = path.read_text(encoding="utf-8", errors="replace")
+    with path.open("rb") as log:
+        size = log.seek(0, 2)
+        log.seek(max(0, size - WINDOW))
+        raw = log.read().decode("utf-8", errors="replace")
+    if size > WINDOW:  # a cut first line could hide half a secret from the masker: drop it
+        raw = raw.partition("\n")[2]
     redacted = mask_secrets(raw).replace(home, "<home>") if home else mask_secrets(raw)
     lines = redacted.splitlines(keepends=True)
     encoded = "".join(lines[-MAX_LINES:]).encode("utf-8")
-    cut = len(encoded) > MAX_BYTES
-    return encoded[-MAX_BYTES:].decode("utf-8", errors="ignore"), len(lines) > MAX_LINES or cut
+    cut = size > WINDOW or len(lines) > MAX_LINES or len(encoded) > MAX_BYTES
+    return encoded[-MAX_BYTES:].decode("utf-8", errors="ignore"), cut

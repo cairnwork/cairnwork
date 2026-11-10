@@ -7,8 +7,8 @@ that is verified for the exact candidate commit makes it COMPLETED.
 Any exception after binding is recorded as FAILED with an ``INFRA_ERROR`` reason; a crash of this
 process leaves the task DISPATCHED until restart recovery. A FAILED task keeps its card: to retry,
 SUPERSEDE it (``takeover.supersede``), then submit anew; the takeover is refused while the old
-attempt's processes are not shown gone (#244): a worker raising ``unswept.WorkerMayLive`` gets its
-attempt marked in the FAILED move. A ``Worker`` edits its clone and has exited when ``run`` returns.
+attempt's processes are not shown gone (#244): a worker raising ``unswept.WorkerMayLive`` has its
+attempt marked in the FAILED move. A ``Worker`` edits its clone and must exit before ``run`` ends.
 """
 
 from __future__ import annotations
