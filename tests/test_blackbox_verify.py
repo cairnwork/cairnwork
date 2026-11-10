@@ -10,34 +10,59 @@ where the correct fix is VERIFIED, are in test_blackbox_account.py.
 """
 
 import pytest
-from conftest import commit_change
+from conftest import commit_change, git
 from verify_helpers import ATTACKS, CANDIDATES, CONTROL, base_of, candidate, declaration, verify
 
 import cairnwork_sandbox
+from cairnwork.sys_path_scan import scan_sys_path_blob
 
 
 def run_all(state, project, *extra):
     base = base_of(project)
     out = {}
+    signals = {}
+    assert scan_sys_path_blob(git(project, "show", f"{base}:src/calc.py").encode()) is False
     for name, source in CANDIDATES.items():
         sha = candidate(project, base, {"src/calc.py": source})
+        signals[name] = scan_sys_path_blob(git(project, "show", f"{sha}:src/calc.py").encode())
+        assert signals[name] is not None
         out[name] = verify(state, project, base, sha, "--import-path", "src", *extra)[1]
-    return out
+    return out, signals
 
 
 @pytest.mark.sandbox
-def test_without_a_declaration_the_swap_is_a_false_green(state, helper_project):
-    """The gap #303 is about, pinned: undeclared pytest tests stay unprotected."""
-    out = run_all(state, helper_project)
+def test_source_visible_swap_is_refused_without_a_declaration(state, helper_project):
+    """The import scan closes this false green when the swap is visible in candidate source."""
+    out, signals = run_all(state, helper_project)
     assert out["correct"]["status"] == "VERIFIED"
     assert out["wrong"]["status"] == "FAILED"
-    assert out["attack"]["status"] == "VERIFIED"
+    assert signals["attack"] is True
+    assert out["attack"]["status"] == "REFUSED" and not out["attack"]["verified"]
+    assert "CANDIDATE_SYS_PATH_MUTATION" in out["attack"]["reason"]
+
+    # A swap obscured from this static scan can still be a false green. This natural non-signalling
+    # equality spoof is an independent example of the same residual limit, and exercises
+    # undeclared pytest without relying on a source-visible import-system swap.
+    base = base_of(helper_project)
+    sha = candidate(helper_project, base, {"src/calc.py": ATTACKS["always_eq"]})
+    assert scan_sys_path_blob(git(helper_project, "show", f"{base}:src/calc.py").encode()) is False
+    assert scan_sys_path_blob(git(helper_project, "show", f"{sha}:src/calc.py").encode()) is False
+    out = verify(state, helper_project, base, sha, "--import-path", "src")[1]
+    assert out["status"] == "VERIFIED", out
 
 
 @pytest.mark.sandbox
 def test_declared_checks_never_pass_as_the_owner(state, helper_project, tmp_path):
-    out = run_all(state, helper_project, "--blackbox", str(declaration(tmp_path)))
+    """Import edits are refused first; owner-mode blackbox coverage remains in
+    tests/test_protection.py::test_the_cli_reports_the_level.
+    """
+    out, signals = run_all(state, helper_project, "--blackbox", str(declaration(tmp_path)))
     for name, matched in (("correct", 2), ("wrong", 0), ("attack", 0)):
+        if signals[name]:
+            assert name == "attack"
+            assert out[name]["status"] == "REFUSED" and not out[name]["verified"], name
+            assert "CANDIDATE_SYS_PATH_MUTATION" in out[name]["reason"], out[name]
+            continue
         assert out[name]["status"] == "FAILED" and not out[name]["verified"], name
         assert (
             "blackbox:add: VERIFICATION_INCOMPLETE: BLACKBOX_NEEDS_VERIFIER_ACCOUNT"
@@ -64,10 +89,22 @@ OWNER_ATTACKS = {
 def test_attacks_on_the_run_are_never_verified(state, helper_project, tmp_path, name):
     base = base_of(helper_project)
     sha = candidate(helper_project, base, {"src/calc.py": ATTACKS[name]})
+    base_signal = scan_sys_path_blob(git(helper_project, "show", f"{base}:src/calc.py").encode())
+    candidate_signal = scan_sys_path_blob(
+        git(helper_project, "show", f"{sha}:src/calc.py").encode()
+    )
+    assert base_signal is False
+    assert candidate_signal is not None
     declared = str(declaration(tmp_path))
     out = verify(state, helper_project, base, sha, "--import-path", "src", "--blackbox", declared)[
         1
     ]
+    if candidate_signal:
+        assert out["status"] == "REFUSED" and not out["verified"], out
+        assert "CANDIDATE_SYS_PATH_MUTATION" in out["reason"], out
+        # The blackbox owner's incomplete verdict is covered by
+        # tests/test_protection.py::test_the_cli_reports_the_level.
+        return
     assert out["status"] == "FAILED" and out["core_status"] == "FAILED_VERIFICATION", out
     backend = cairnwork_sandbox.platform_backend()
     if name == "child" and not (backend is not None and backend.name == "seatbelt"):
