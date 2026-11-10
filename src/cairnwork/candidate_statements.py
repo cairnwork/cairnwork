@@ -50,9 +50,10 @@ def _hot_statements(
     try:
         tree = ast.parse(data)
         hot_names = _hot_defs(tree, reach)
+        module_names = _module_names(tree)
         found: Counter[Key] = Counter()
         hot: set[Key] = set()
-        _visit(list(tree.body), "", words, hot_names, found, hot)
+        _visit(list(tree.body), "", words, hot_names, module_names, found, hot)
     except _PARSE_ERRORS:
         return None
     return found, hot
@@ -80,6 +81,7 @@ def _visit(
     scope: str,
     words: tuple[bytes, ...],
     hot_names: set[str],
+    module_names: set[str],
     found: Counter[Key],
     hot: set[Key],
 ) -> None:
@@ -92,11 +94,70 @@ def _visit(
         text = ast.unparse(own)
         key = (scope, text)
         found[key] += 1
-        if _has_word(text, words) or _names(own) & hot_names:
+        if (
+            _has_word(text, words)
+            or _names(own) & hot_names
+            or _unsafe_dynamic_access(own, module_names)
+        ):
             hot.add(key)
         inner = f"{scope}/{node.name if isinstance(node, _DEFS) else text}"
         for field, block in blocks:  # the field keeps an if/else or try/else move visible
-            _visit(block, f"{inner}:{field}", words, hot_names, found, hot)
+            _visit(block, f"{inner}:{field}", words, hot_names, module_names, found, hot)
+
+
+def _module_names(tree: ast.Module) -> set[str]:
+    """Names that statically resolve to modules, including simple aliases."""
+    modules: set[str] = set()
+    aliases: list[tuple[str, str]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for item in node.names:
+                name = item.asname or item.name.split(".")[0]
+                modules.add(name)
+        elif isinstance(node, ast.ImportFrom):
+            for item in node.names:
+                modules.add(item.asname or item.name)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            value = node.value
+            if isinstance(value, ast.Name):
+                aliases.extend((target.id, value.id) for target in _targets(node))
+    while aliases:
+        before = len(modules)
+        modules.update(name for name, source in aliases if source in modules)
+        aliases = [(name, source) for name, source in aliases if source not in modules]
+        if len(modules) == before:
+            break
+    return modules
+
+
+def _targets(node: ast.Assign | ast.AnnAssign) -> list[ast.Name]:
+    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+    return [target for item in targets for target in ast.walk(item) if isinstance(target, ast.Name)]
+
+
+def _unsafe_dynamic_access(node: ast.AST, module_names: set[str]) -> bool:
+    for call in (part for part in ast.walk(node) if isinstance(part, ast.Call)):
+        if not isinstance(call.func, ast.Name) or call.func.id not in {
+            "getattr",
+            "setattr",
+            "vars",
+        }:
+            continue
+        target = call.args[0] if call.args else None
+        if target is None or not isinstance(target, (ast.Name, ast.Attribute)):
+            return True
+        root = target
+        while isinstance(root, ast.Attribute):
+            root = root.value
+        if isinstance(root, ast.Name) and root.id in module_names:
+            return True
+        if call.func.id != "vars" and (
+            len(call.args) < 2
+            or not isinstance(call.args[1], ast.Constant)
+            or not isinstance(call.args[1].value, str)
+        ):
+            return True
+    return False
 
 
 def _names(node: ast.AST) -> set[str]:

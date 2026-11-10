@@ -45,7 +45,8 @@ _REACH_WORDS = tuple(
     )
 )  # fmt: skip
 _MACHINERY_WORDS = _REACH_WORDS + tuple(
-    word.encode() for word in (*sorted(DYNAMIC_NAMES), *sorted(DYNAMIC_ATTRS))
+    word.encode()
+    for word in (*sorted(DYNAMIC_NAMES - {"getattr", "setattr", "vars"}), *sorted(DYNAMIC_ATTRS))
 )
 
 
