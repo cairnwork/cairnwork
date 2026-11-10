@@ -4,15 +4,20 @@ Statements are compared with the base blob (AST, comments dropped, nested blocks
 by the enclosing def/class names, block headers and block fields). A statement is hot when its own
 source names a machinery word, or names a def or class whose body reaches an import-machinery
 word (``reach``: sys.modules, finders, importlib, __import__, runpy, pytest_plugins; directly or
-through other same-file defs). An added or removed hot statement makes the edit machinery, so
+through other same-file defs). If that word scan misses, direct calls to getattr/setattr are
+allowed only with a safe literal identifier; vars is allowed only as vars(self) or vars(cls),
+when those names are not rebound in the file. Their targets are intentionally not inspected:
+parameters, aliases and other expressions cannot be resolved soundly here. Indirect uses and
+unknown call shapes are refused. Rule (5): a call whose func is itself a call to getattr is
+refused regardless of the attribute name; getattr used only to read an attribute remains subject
+to the safe-literal rule above. An added or removed hot statement makes the edit machinery, so
 writing, rewriting or moving machinery, calling dead base machinery, or flipping the condition
 that wraps it (the key of every statement inside changes) is caught, while a fix that calls a
-same-file getattr helper is not.
+same-file helper is not.
 Residual (#1115): an edit to other control flow inside a function that reaches machinery (say an
 early return before it), and base machinery reached through aliases, registries or dunders, are
-not hot; reaching through the dynamic-access words as well raised the share of hot statements in
-real signalling files (cairnwork, _pytest, click, hypothesis, packaging) from 2-6% to 6-14%,
-so these are left to the blackbox and verifier checks.
+not hot; broader lexical matching raised hot statements in real signalling files, so these are
+left to the blackbox and verifier checks.
 """
 
 from __future__ import annotations
@@ -29,14 +34,18 @@ Key = tuple[str, str]
 
 
 def machinery_changed(
-    old: bytes | None, new: bytes, words: tuple[bytes, ...], reach: tuple[bytes, ...]
+    old: bytes | None,
+    new: bytes,
+    words: tuple[bytes, ...],
+    reach: tuple[bytes, ...],
+    denylist: frozenset[str],
 ) -> bool:
     """True when an added or removed statement is hot. ``old`` None means the file is new; an
     unparseable base trusts nothing. Raises ValueError when ``new`` cannot be parsed."""
-    after = _hot_statements(new, words, reach)
+    after = _hot_statements(new, words, reach, denylist)
     if after is None:
         raise ValueError("candidate source could not be parsed")
-    before = (Counter(), set()) if old is None else _hot_statements(old, words, reach)
+    before = (Counter(), set()) if old is None else _hot_statements(old, words, reach, denylist)
     if before is None:  # nothing in an unparseable base is trusted
         before = (Counter(), set())
     added = after[0] - before[0]
@@ -45,15 +54,15 @@ def machinery_changed(
 
 
 def _hot_statements(
-    data: bytes, words: tuple[bytes, ...], reach: tuple[bytes, ...]
+    data: bytes, words: tuple[bytes, ...], reach: tuple[bytes, ...], denylist: frozenset[str]
 ) -> tuple[Counter[Key], set[Key]] | None:
     try:
         tree = ast.parse(data)
         hot_names = _hot_defs(tree, reach)
-        module_names = _module_names(tree)
+        rebound = _reassigned_special_names(tree)
         found: Counter[Key] = Counter()
         hot: set[Key] = set()
-        _visit(list(tree.body), "", words, hot_names, module_names, found, hot)
+        _visit(list(tree.body), "", words, hot_names, rebound, denylist, found, hot)
     except _PARSE_ERRORS:
         return None
     return found, hot
@@ -81,7 +90,8 @@ def _visit(
     scope: str,
     words: tuple[bytes, ...],
     hot_names: set[str],
-    module_names: set[str],
+    rebound: set[str],
+    denylist: frozenset[str],
     found: Counter[Key],
     hot: set[Key],
 ) -> None:
@@ -97,64 +107,85 @@ def _visit(
         if (
             _has_word(text, words)
             or _names(own) & hot_names
-            or _unsafe_dynamic_access(own, module_names)
+            or (not _has_word(text, words) and _unsafe_dynamic_access(own, rebound, denylist))
         ):
             hot.add(key)
         inner = f"{scope}/{node.name if isinstance(node, _DEFS) else text}"
         for field, block in blocks:  # the field keeps an if/else or try/else move visible
-            _visit(block, f"{inner}:{field}", words, hot_names, module_names, found, hot)
+            _visit(block, f"{inner}:{field}", words, hot_names, rebound, denylist, found, hot)
 
 
-def _module_names(tree: ast.Module) -> set[str]:
-    """Names that statically resolve to modules, including simple aliases."""
-    modules: set[str] = set()
-    aliases: list[tuple[str, str]] = []
+def _reassigned_special_names(tree: ast.Module) -> set[str]:
+    """Special vars receiver names assigned anywhere in the file."""
+    rebound = {
+        node.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name)
+        and node.id in {"self", "cls"}
+        and isinstance(node.ctx, ast.Store)
+    }
     for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for item in node.names:
-                name = item.asname or item.name.split(".")[0]
-                modules.add(name)
-        elif isinstance(node, ast.ImportFrom):
-            for item in node.names:
-                modules.add(item.asname or item.name)
-        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
-            value = node.value
-            if isinstance(value, ast.Name):
-                aliases.extend((target.id, value.id) for target in _targets(node))
-    while aliases:
-        before = len(modules)
-        modules.update(name for name, source in aliases if source in modules)
-        aliases = [(name, source) for name, source in aliases if source not in modules]
-        if len(modules) == before:
-            break
-    return modules
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if node.name in {"self", "cls"}:
+                rebound.add(node.name)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                name = alias.asname or alias.name.split(".")[0]
+                if name in {"self", "cls"}:
+                    rebound.add(name)
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            args = node.args
+            positional = [*args.posonlyargs, *args.args]
+            defaults = [None] * (len(positional) - len(args.defaults)) + list(args.defaults)
+            defaults.extend(args.kw_defaults)
+            for arg, default in zip([*positional, *args.kwonlyargs], defaults, strict=True):
+                if arg.arg in {"self", "cls"} and default is not None:
+                    rebound.add(arg.arg)
+    return rebound
 
 
-def _targets(node: ast.Assign | ast.AnnAssign) -> list[ast.Name]:
-    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-    return [target for item in targets for target in ast.walk(item) if isinstance(target, ast.Name)]
-
-
-def _unsafe_dynamic_access(node: ast.AST, module_names: set[str]) -> bool:
-    for call in (part for part in ast.walk(node) if isinstance(part, ast.Call)):
-        if not isinstance(call.func, ast.Name) or call.func.id not in {
-            "getattr",
-            "setattr",
-            "vars",
-        }:
+def _unsafe_dynamic_access(node: ast.AST, rebound: set[str], denylist: frozenset[str]) -> bool:
+    names = {"getattr", "setattr", "vars"}
+    calls = [part for part in ast.walk(node) if isinstance(part, ast.Call)]
+    direct = {id(call.func) for call in calls if isinstance(call.func, ast.Name)}
+    for part in ast.walk(node):
+        named = isinstance(part, ast.Name) and part.id in names
+        attributed = isinstance(part, ast.Attribute) and part.attr in names
+        if (named and id(part) not in direct) or attributed:
+            return True
+    for call in calls:
+        if (
+            isinstance(call.func, ast.Call)
+            and isinstance(call.func.func, ast.Name)
+            and call.func.func.id == "getattr"
+        ):
+            return True
+        if not isinstance(call.func, ast.Name) or call.func.id not in names:
             continue
-        target = call.args[0] if call.args else None
-        if target is None or not isinstance(target, (ast.Name, ast.Attribute)):
+        kind = call.func.id
+        if call.keywords or any(isinstance(arg, ast.Starred) for arg in call.args):
             return True
-        root = target
-        while isinstance(root, ast.Attribute):
-            root = root.value
-        if isinstance(root, ast.Name) and root.id in module_names:
+        if kind == "vars":
+            if (
+                len(call.args) != 1
+                or not isinstance(call.args[0], ast.Name)
+                or call.args[0].id not in {"self", "cls"}
+                or call.args[0].id in rebound
+            ):
+                return True
+            continue
+        if kind == "setattr" and len(call.args) != 3:
             return True
-        if call.func.id != "vars" and (
-            len(call.args) < 2
-            or not isinstance(call.args[1], ast.Constant)
-            or not isinstance(call.args[1].value, str)
+        if kind == "getattr" and len(call.args) not in {2, 3}:
+            return True
+        name = call.args[1]
+        if (
+            not isinstance(name, ast.Constant)
+            or not isinstance(name.value, str)
+            or not name.value.isidentifier()
+            or name.value.startswith("_")
+            or name.value in denylist
         ):
             return True
     return False

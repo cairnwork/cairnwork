@@ -35,7 +35,7 @@ _OID = re.compile(r"^[0-9a-f]{40}$")
 _OWN_KINDS = frozenset({"ADD", "MODIFY"})
 _REDIRECT, _MACHINERY = "redirect", "machinery"
 # Fail closed: a signalling file counts as a pure redirect only if no new or changed statement
-# names one of these (unparsed source, so getattr(sys, "meta" + "_path") still falls here).
+# names one of these (unparsed source, so string-built machinery names still fall here).
 # Same-file calls are followed only into import machinery, not dynamic access (#1111 review).
 _REACH_WORDS = tuple(
     word.encode()
@@ -47,6 +47,60 @@ _REACH_WORDS = tuple(
 _MACHINERY_WORDS = _REACH_WORDS + tuple(
     word.encode()
     for word in (*sorted(DYNAMIC_NAMES - {"getattr", "setattr", "vars"}), *sorted(DYNAMIC_ATTRS))
+)
+
+# Literal attribute names that can expose import machinery, execute code, intercept runtime
+# behavior, or mutate containers holding that machinery. Container mutators reached through
+# getattr are refused; dunder mutators such as __setitem__ are already refused by the underscore
+# rule. Source: Python import machinery, execution primitives, and interception hooks.
+DYNAMIC_ACCESS_DENYLIST = frozenset(
+    {
+        "modules",
+        "path",
+        "meta_path",
+        "path_hooks",
+        "path_importer_cache",
+        "builtins",
+        "import_module",
+        "reload",
+        "find_spec",
+        "exec_module",
+        "loader",
+        "spec",
+        "builtin_module_names",
+        "stdlib_module_names",
+        "invalidate_caches",
+        "find_loader",
+        "create_module",
+        "load_module",
+        "origin",
+        "submodule_search_locations",
+        "util",
+        "machinery",
+        "abc",
+        "__import__",
+        "exec",
+        "eval",
+        "compile",
+        "open",
+        "settrace",
+        "setprofile",
+        "addaudithook",
+        "excepthook",
+        "displayhook",
+        "breakpointhook",
+        "append",
+        "insert",
+        "extend",
+        "remove",
+        "pop",
+        "popitem",
+        "clear",
+        "update",
+        "setdefault",
+        "sort",
+        "reverse",
+    }
 )
 
 
@@ -114,4 +168,8 @@ def _blob_signal(repo: Path, base: str, commit: str, path: str, changed: dict[st
         return ""
     added = changed[path] == "ADD"
     old = None if added else run_git_bytes(repo, "cat-file", "blob", f"{base}:{path}")
-    return _MACHINERY if machinery_changed(old, data, _MACHINERY_WORDS, _REACH_WORDS) else _REDIRECT
+    return (
+        _MACHINERY
+        if machinery_changed(old, data, _MACHINERY_WORDS, _REACH_WORDS, DYNAMIC_ACCESS_DENYLIST)
+        else _REDIRECT
+    )
