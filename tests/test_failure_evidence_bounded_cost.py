@@ -75,6 +75,26 @@ def test_an_unfinished_url_in_a_long_log_line_is_cut(tmp_path):
     assert got["log_tail_truncated"] is True
 
 
+def test_an_uncut_id_ending_in_a_url_is_kept(tmp_path):
+    node = "test https://example.test/path"
+    got = failure_evidence.capture(
+        [_run(tmp_path / "log", {node: "failed"})], home="", account=True
+    )[0]
+    assert got["failed_nodeids"] == [node] and got["failed_nodeids_truncated"] is False
+    path = tmp_path / "verifier.log"
+    path.write_text(node)
+    got = failure_evidence.capture([_run(path, {"n": "failed"})], home="", account=True)[0]
+    assert got["log_tail"] == node and got["log_tail_truncated"] is False
+
+
+def test_a_cut_line_keeps_a_complete_url_before_the_cut(tmp_path):
+    path = tmp_path / "verifier.log"
+    path.write_text("see https://example.test/path " + "x" * 3000 + "\n")
+    got = failure_evidence.capture([_run(path, {"n": "failed"})], home="", account=True)[0]
+    assert "https://example.test/path" in got["log_tail"] and "<cut>" not in got["log_tail"]
+    assert got["log_tail_truncated"] is True
+
+
 def test_finished_urls_are_kept_or_masked_as_before(tmp_path):
     path = tmp_path / "verifier.log"
     path.write_text("GET https://example.test/path x=1\nuse https://u:p@h/ now\n")
@@ -91,3 +111,26 @@ def test_a_cut_line_keeps_its_newline(tmp_path):
     got = failure_evidence.capture([_run(path, {"n": "failed"})], home="", account=True)[0]
     first, second = got["log_tail"].splitlines()
     assert first == "a" * failure_evidence.MAX_LINE and second == "second"
+
+
+def test_a_masking_that_lengthens_an_id_sets_the_flag_and_stays_within_the_limit(tmp_path):
+    node = "token=a " * 25
+    assert len(node) <= failure_evidence.MAX_ID
+    assert len(failure_evidence.mask_secrets(node)) > failure_evidence.MAX_ID
+    got = failure_evidence.capture(
+        [_run(tmp_path / "log", {node: "failed"})], home="", account=True
+    )[0]
+    (shown,) = got["failed_nodeids"]
+    assert got["failed_nodeids_truncated"] is True
+    assert len(shown) <= failure_evidence.MAX_ID
+
+
+def test_a_long_id_ending_in_an_open_url_is_cut_within_the_limit(tmp_path):
+    limit = failure_evidence.MAX_ID * failure_evidence.PRE_MASK
+    node = "a" * 100 + " https://u:" + "p" * limit
+    got = failure_evidence.capture(
+        [_run(tmp_path / "log", {node: "failed"})], home="", account=True
+    )[0]
+    (shown,) = got["failed_nodeids"]
+    assert "<cut>" in shown and "https://u:" not in shown
+    assert len(shown) <= failure_evidence.MAX_ID and got["failed_nodeids_truncated"] is True
