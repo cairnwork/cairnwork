@@ -5,11 +5,12 @@ from __future__ import annotations
 import ast
 import re
 import sys
+import warnings
 from collections import Counter
 from importlib.machinery import all_suffixes
 from pathlib import Path
 
-from cairnwork.gitcmd import run_git_bytes
+from cairnwork.gitcmd import GitCommandError, run_git_bytes
 
 _OID = re.compile(r"^[0-9a-f]{40}$")
 _IMPORT_CALLS = frozenset({"import_module", "__import__", "importorskip"})
@@ -31,19 +32,37 @@ def find_shadow_file(
     or another file has the same module name, so modifying a project's own src-layout module
     (``src/calc.py`` imported as ``calc``) is not one. Names compare case-insensitively; an
     unparseable ``.py`` the candidate changed fails closed, any other one imports nothing."""
-    commits = (candidate,) if test_commit is None else (candidate, test_commit)
+    commits = tuple(
+        dict.fromkeys((candidate,) if test_commit is None else (candidate, test_commit))
+    )
     always = {name.casefold() for name in (*sys.stdlib_module_names, *_ALWAYS_SHADOW)}
     changed = changed or {}
     imported: set[str] = set()
+    trees: dict[str, tuple[tuple[int, str, str, str], ...]] = {}
     for commit in commits:
         _validate_oid(commit)
-        for path in _tree_paths(repo, commit):
-            if _is_source(path):  # tests and the code they import can both import a shadow
-                names = _imports(repo, commit, path)
-                if names is None and path in changed:
-                    raise ValueError(f"{commit}:{path} could not be parsed")
-                imported.update(name.casefold() for name in names or ())
-    paths = _tree_paths(repo, candidate)
+        trees[commit] = _tree_entries(repo, commit)
+    sources = [
+        (commit, path, oid)
+        for commit in commits
+        for mode, typ, oid, path in trees[commit]
+        if _is_source(path)
+    ]
+    blobs = _read_source_blobs(repo, sources)
+    parsed: dict[str, set[str] | None] = {}
+    for commit, path, oid in sources:
+        if oid not in parsed:
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    parsed[oid] = _parse_imports(blobs[oid], path)
+            except (SyntaxError, ValueError, UnicodeError, MemoryError, RecursionError):
+                parsed[oid] = None
+        names = parsed[oid]
+        if names is None and path in changed:
+            raise ValueError(f"{commit}:{path} could not be parsed")
+        imported.update(name.casefold() for name in names or ())
+    paths = tuple(path for _, _, _, path in trees[candidate])
     counts = Counter(name for path in paths if (name := _module_name(path)))
     for path in sorted(changed):
         depth = path.count("/") - (
@@ -62,24 +81,62 @@ def _validate_oid(commit: str) -> None:
         raise ValueError("commit must be a full 40-character object id")
 
 
-def _tree_paths(repo: Path, commit: str) -> tuple[str, ...]:
-    raw = run_git_bytes(repo, "ls-tree", "-r", "-z", "--name-only", commit)
-    return tuple(
-        path for item in raw.split(b"\0") if (path := item.decode("utf-8", "surrogateescape"))
+def _tree_entries(repo: Path, commit: str) -> tuple[tuple[int, str, str, str], ...]:
+    raw = run_git_bytes(repo, "ls-tree", "-r", "-z", commit)
+    entries = []
+    for item in raw.split(b"\0"):
+        if not item:
+            continue
+        header, path = item.split(b"\t", 1)
+        mode, typ, oid = header.split(b" ")
+        entries.append(
+            (
+                int(mode, 8),
+                typ.decode("ascii"),
+                oid.decode("ascii"),
+                path.decode("utf-8", "surrogateescape"),
+            )
+        )
+    return tuple(entries)
+
+
+def _read_source_blobs(repo: Path, sources: list[tuple[str, str, str]]) -> dict[str, bytes]:
+    """Read each distinct source object in one batch; malformed or missing records fail closed."""
+    oids = list(dict.fromkeys(oid for _, _, oid in sources))
+    if not oids:
+        return {}
+    raw = run_git_bytes(
+        repo, "cat-file", "--batch", stdin="".join(f"{oid}\n" for oid in oids).encode()
     )
+    blobs: dict[str, bytes] = {}
+    pos = 0
+    for oid in oids:
+        end = raw.find(b"\n", pos)
+        header = raw[pos:end].split() if end >= 0 else []
+        if (
+            len(header) != 3
+            or header[0] != oid.encode()
+            or header[1] != b"blob"
+            or not header[2].isdigit()
+        ):
+            raise GitCommandError("git cat-file did not return a blob")
+        start, stop = end + 1, end + 1 + int(header[2])
+        if stop >= len(raw) or raw[stop : stop + 1] != b"\n":
+            raise GitCommandError("git cat-file returned a truncated blob")
+        blobs[oid] = raw[start:stop]
+        pos = stop + 1
+    if pos != len(raw):
+        raise GitCommandError("git cat-file returned unexpected data")
+    return blobs
 
 
 def _is_source(path: str) -> bool:
     return path.casefold().endswith(".py")
 
 
-def _imports(repo: Path, commit: str, path: str) -> set[str] | None:
-    """Names one file imports; None when it cannot be parsed (so it cannot import anything)."""
-    raw = run_git_bytes(repo, "cat-file", "blob", f"{commit}:{path}")
-    try:
-        tree = ast.parse(raw, filename=path)
-    except (SyntaxError, ValueError, UnicodeError, MemoryError, RecursionError):
-        return None
+def _parse_imports(raw: bytes, path: str) -> set[str]:
+    """Names one file imports; raises when it cannot be parsed (the caller treats that as None)."""
+    tree = ast.parse(raw, filename=path)
     names: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
