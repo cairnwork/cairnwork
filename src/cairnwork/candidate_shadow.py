@@ -30,18 +30,21 @@ def find_shadow_file(
     strings, so a ``__path__`` redirect of ``pkg.helper`` is seen) counts when the file was added
     or another file has the same module name, so modifying a project's own src-layout module
     (``src/calc.py`` imported as ``calc``) is not one. Names compare case-insensitively; an
-    unparseable ``.py`` in the trees fails closed."""
+    unparseable ``.py`` the candidate changed fails closed, any other one imports nothing."""
     commits = (candidate,) if test_commit is None else (candidate, test_commit)
     always = {name.casefold() for name in (*sys.stdlib_module_names, *_ALWAYS_SHADOW)}
+    changed = changed or {}
     imported: set[str] = set()
     for commit in commits:
         _validate_oid(commit)
         for path in _tree_paths(repo, commit):
             if _is_source(path):  # tests and the code they import can both import a shadow
-                imported.update(name.casefold() for name in _imports(repo, commit, path))
+                names = _imports(repo, commit, path)
+                if names is None and path in changed:
+                    raise ValueError(f"{commit}:{path} could not be parsed")
+                imported.update(name.casefold() for name in names or ())
     paths = _tree_paths(repo, candidate)
     counts = Counter(name for path in paths if (name := _module_name(path)))
-    changed = changed or {}
     for path in sorted(changed):
         depth = path.count("/") - (
             path.casefold().endswith("/__init__.py") or path.casefold() == "__init__.py"
@@ -70,12 +73,13 @@ def _is_source(path: str) -> bool:
     return path.casefold().endswith(".py")
 
 
-def _imports(repo: Path, commit: str, path: str) -> set[str]:
+def _imports(repo: Path, commit: str, path: str) -> set[str] | None:
+    """Names one file imports; None when it cannot be parsed (so it cannot import anything)."""
     raw = run_git_bytes(repo, "cat-file", "blob", f"{commit}:{path}")
     try:
         tree = ast.parse(raw, filename=path)
-    except (SyntaxError, ValueError, UnicodeError, MemoryError, RecursionError) as exc:
-        raise ValueError(f"{commit}:{path} could not be parsed") from exc
+    except (SyntaxError, ValueError, UnicodeError, MemoryError, RecursionError):
+        return None
     names: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):

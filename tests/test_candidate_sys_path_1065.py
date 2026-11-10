@@ -247,3 +247,55 @@ def test_files_outside_the_candidates_allowed_files_are_not_its_mutation(repo):
     candidate_sys_path.refuse_new_sys_path_mutation(
         repo, base, cand, ("new_module.py", "tests/test_hidden.py")
     )
+
+
+EXISTING_DYNAMIC = {
+    "getattr": "def pick(o):\n    return getattr(o, 'a')\n",
+    "re.compile": "import re\nimport subprocess\nPAT = re.compile('x')\n",
+    "cursor.execute": "import subprocess\ndef run(cursor):\n    cursor.execute('select 1')\n",
+}
+
+
+@pytest.mark.parametrize("existing", EXISTING_DYNAMIC.values(), ids=EXISTING_DYNAMIC)
+def test_a_one_line_fix_beside_unchanged_dynamic_access_is_not_refused(repo, existing):
+    """Only new or changed statements decide the machinery class (#1111 review at c15173d)."""
+    base = commit_change(repo, {"pkg/calc.py": existing + "def add(a, b):\n    return a + b + 1\n"})
+    cand = commit_change(repo, {"pkg/calc.py": existing + "def add(a, b):\n    return a + b\n"})
+    assert scan_sys_path_blob(git(repo, "show", f"{cand}:pkg/calc.py").encode()) is True
+    candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, _changed(repo, base, cand))
+
+
+MACHINERY_EDITS = {
+    "rewritten": (
+        "import sys\nVALUE = getattr(sys, 'version')\n",
+        "import sys\nVALUE = getattr(sys, 'mod' + 'ules')\n",
+    ),
+    "moved out of a dead function": (
+        "import sys\ndef _unused():\n    sys.modules['json'] = object()\n",
+        "import sys\nsys.modules['json'] = object()\ndef _unused():\n    pass\n",
+    ),
+    "added beside an existing one": (
+        "import sys\nVALUE = getattr(sys, 'version')\n",
+        "import sys\nVALUE = getattr(sys, 'version')\nOTHER = getattr(sys, 'modules')\n",
+    ),
+}
+
+
+@pytest.mark.parametrize(("old", "new"), MACHINERY_EDITS.values(), ids=MACHINERY_EDITS)
+def test_a_new_or_changed_machinery_statement_is_refused(repo, old, new):
+    base = commit_change(repo, {"pkg/calc.py": old})
+    cand = commit_change(repo, {"pkg/calc.py": new})
+    with pytest.raises(CandidateRejected) as got:
+        candidate_sys_path.refuse_new_sys_path_mutation(
+            repo, base, cand, _changed(repo, base, cand)
+        )
+    assert "in-process" in str(got.value)
+
+
+def test_an_unchanged_unparseable_fixture_does_not_refuse_an_honest_fix(repo):
+    """A deliberately broken fixture the candidate did not touch imports nothing."""
+    base = commit_change(
+        repo, {"tests/fixtures/broken.py": "if:\n", "pkg/calc.py": "import subprocess\nX = 1\n"}
+    )
+    cand = commit_change(repo, {"pkg/calc.py": "import subprocess\nX = 2\n"})
+    candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, _changed(repo, base, cand))
