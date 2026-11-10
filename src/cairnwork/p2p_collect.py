@@ -141,7 +141,9 @@ def _hidden(tree, base, name, path, test_ids, base_ids) -> bool:
 
     try:
         kept = hidden_bindings(tree, name, got(test_ids))
-        return bool(kept - hidden_bindings(base, name, got(base_ids)))  # counts, not a set
+        # #1122: the base side keeps the narrower detection, so a base excuse never grows
+        excused = hidden_bindings(base, name, got(base_ids), annotations=False)
+        return bool(kept - excused)  # counts, not a set
     except RecursionError:  # ast.dump of a very deep expression: not provably gone
         return True
 
@@ -324,15 +326,16 @@ def _defines(tree: ast.Module | None, owners: list[str], name: str) -> bool:
             last = last_binding(body, owner, module=module)
         except ValueError:
             return False
-        if not isinstance(last, ast.ClassDef):
-            return False
+        if not isinstance(last, ast.ClassDef) or last.name != owner:  # #1122: a walrus in
+            return False  # another class's header rebinds the name; it is not this class
         body = last.body
         module = False
     try:
         last = last_binding(body, name, module=module)
     except ValueError:
         return False
-    return isinstance(last, (ast.FunctionDef, ast.AsyncFunctionDef))
+    # #1122: a walrus in another def's header (annotation, default, decorator) is the last binding
+    return isinstance(last, (ast.FunctionDef, ast.AsyncFunctionDef)) and last.name == name
 
 
 def _source(task, commit: str, path: str) -> str:
