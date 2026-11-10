@@ -20,13 +20,12 @@ PROBE = "/installation/repositories"
 PROBE_TIMEOUT = 60
 REFUSAL_CODE = re.compile(r"[A-Z0-9_]{1,64}")
 TASK_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")  # plain text: no markdown, @, #, spaces
-PR_URL = r"https://github\.com/{repo}/pull/[0-9]+"
+PR_URL = r"https://github\.com/(?i:{repo})/pull/[0-9]+"  # GitHub may echo another case
 
 
 def pr_url(url: str, repo: str) -> str:
     """The PR URL gh printed, if it really is a PR of the configured repo; else empty."""
-    match = re.fullmatch(r"https://github\.com/([^/]+/[^/]+)/pull/[0-9]+", url)
-    return url if match and match.group(1).casefold() == repo.casefold() else ""
+    return url if re.fullmatch(PR_URL.format(repo=re.escape(repo)), url, re.ASCII) else ""
 
 
 def verified_text(level: str) -> str:
