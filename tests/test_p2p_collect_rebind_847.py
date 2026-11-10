@@ -165,3 +165,65 @@ def test_a_class_level_global_in_a_branch_still_refuses_control():
     base = "class TestC:\n    if True:\n        global test_a\n    def test_a(self): assert 0\n"
     side = _classify_single(base, "t.py::TestC::test_a")
     assert side.removed == set() and side.dropped == {"t.py::TestC::test_a"}
+
+
+@pytest.mark.parametrize(
+    "stmt",
+    [
+        "def f(x: (test_a := int)): pass\n",
+        "def f() -> (test_a := int): pass\n",
+        "def f(*, k: (test_a := int)): pass\n",
+        "def f(*a: (test_a := int)): pass\n",
+        "def f(**k: (test_a := int)): pass\n",
+        "def f(p: (test_a := int), /): pass\n",
+        "async def f(x: (test_a := int)): pass\n",
+        "def f(x=(test_a := 1)): pass\n",
+        "@(test_a := staticmethod)\ndef f(): pass\n",
+    ],
+    ids=[
+        "arg-annotation-walrus",
+        "return-annotation-walrus",
+        "kwonly-annotation-walrus",
+        "vararg-annotation-walrus",
+        "kwarg-annotation-walrus",
+        "posonly-annotation-walrus",
+        "async-arg-annotation-walrus",
+        "default-walrus",
+        "decorator-walrus",
+    ],
+)
+def test_a_test_rebound_by_function_annotation_walrus_is_dropped_not_removed(stmt):
+    base = f"def test_a(): assert 0\n{stmt}"
+    side = _classify_single(base)
+    assert side.removed == set() and side.dropped == {"t.py::test_a"}
+
+
+def test_a_function_plain_annotation_without_walrus_does_not_rebind_test():
+    base = "def test_a(): assert 0\ndef f(x: int) -> int: pass\n"
+    side = _classify_single(base)
+    assert side.removed == {"t.py::test_a"} and side.dropped == set()
+
+
+def test_a_class_rebound_by_another_class_header_walrus_is_dropped_not_removed():
+    base = (
+        "class TestX:\n    def test_a(self): assert 0\n"
+        "class Other(metaclass=(TestX := type)): pass\n"
+    )
+    side = _classify_single(base, "t.py::TestX::test_a")
+    assert side.removed == set() and side.dropped == {"t.py::TestX::test_a"}
+
+
+def test_a_later_same_name_def_still_counts_as_defined():
+    base = "def test_a(): assert 0\ndef test_a(): assert 1\n"
+    side = _classify_single(base)
+    assert side.removed == {"t.py::test_a"} and side.dropped == set()
+
+
+def test_a_class_header_walrus_does_not_borrow_the_other_class_s_same_name_test():
+    # the owner check must compare names: Other also has a test_a, but it is not TestX's test_a
+    base = (
+        "class TestX:\n    def test_a(self): assert 0\n"
+        "class Other(metaclass=(TestX := type)):\n    def test_a(self): assert 0\n"
+    )
+    side = _classify_single(base, "t.py::TestX::test_a")
+    assert side.removed == set() and side.dropped == {"t.py::TestX::test_a"}

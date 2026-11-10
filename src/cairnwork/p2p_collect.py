@@ -324,15 +324,16 @@ def _defines(tree: ast.Module | None, owners: list[str], name: str) -> bool:
             last = last_binding(body, owner, module=module)
         except ValueError:
             return False
-        if not isinstance(last, ast.ClassDef):
-            return False
+        if not isinstance(last, ast.ClassDef) or last.name != owner:  # #1122: a walrus in
+            return False  # another class's header rebinds the name; it is not this class
         body = last.body
         module = False
     try:
         last = last_binding(body, name, module=module)
     except ValueError:
         return False
-    return isinstance(last, (ast.FunctionDef, ast.AsyncFunctionDef))
+    # #1122: a walrus in another def's header (annotation, default, decorator) is the last binding
+    return isinstance(last, (ast.FunctionDef, ast.AsyncFunctionDef)) and last.name == name
 
 
 def _source(task, commit: str, path: str) -> str:

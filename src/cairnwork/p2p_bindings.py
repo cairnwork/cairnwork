@@ -91,6 +91,13 @@ def binds_in_scope(node: ast.AST, name: str, *, module: bool = False) -> bool:
             if isinstance(curr, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 stack.extend(curr.args.defaults)
                 stack.extend(d for d in curr.args.kw_defaults if d is not None)
+                args = curr.args
+                params = (*args.posonlyargs, *args.args, args.vararg, *args.kwonlyargs, args.kwarg)
+                stack.extend(
+                    p.annotation for p in params if p is not None and p.annotation is not None
+                )
+                if curr.returns is not None:
+                    stack.append(curr.returns)
             else:
                 stack.extend(curr.bases)
                 stack.extend(kw.value for kw in curr.keywords)
