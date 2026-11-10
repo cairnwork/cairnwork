@@ -286,22 +286,16 @@ def _mentions(
         if not include_nested_classes and isinstance(node, ast.ClassDef):
             if node.name == name:
                 return True
+            if any(
+                any(_mentions_ast(n, name, pattern) for n in ast.walk(header))
+                for header in (*node.decorator_list, *node.bases, *node.keywords)
+            ):
+                return True
             continue
         walk = ast.walk(node) if include_nested_classes else _walk_without_nested_classes(node)
         for n in walk:
-            if isinstance(n, kinds) and n.name == name:
+            if _mentions_ast(n, name, pattern, kinds):
                 return True
-            if isinstance(n, ast.Name) and n.id == name:
-                return True
-            if isinstance(n, ast.alias):
-                bound = n.asname or n.name.split(".")[-1]
-                if bound == name:
-                    return True
-            if isinstance(n, ast.Attribute) and n.attr == name:
-                return True
-            if isinstance(n, ast.Constant) and isinstance(n.value, str):
-                if pattern.search(n.value):
-                    return True
     return False
 
 
@@ -311,9 +305,27 @@ def _walk_without_nested_classes(node: ast.AST):
     while pending:
         current = pending.pop()
         yield current
-        pending.extend(
-            child for child in ast.iter_child_nodes(current) if not isinstance(child, ast.ClassDef)
-        )
+        for child in ast.iter_child_nodes(current):
+            if isinstance(child, ast.ClassDef):
+                pending.extend((*child.decorator_list, *child.bases, *child.keywords))
+            else:
+                pending.append(child)
+
+
+def _mentions_ast(node: ast.AST, name: str, pattern: re.Pattern, kinds=()) -> bool:
+    if isinstance(node, kinds) and node.name == name:
+        return True
+    if isinstance(node, ast.Name) and node.id == name:
+        return True
+    if isinstance(node, ast.alias):
+        return (node.asname or node.name.split(".")[-1]) == name
+    if isinstance(node, ast.Attribute) and node.attr == name:
+        return True
+    return (
+        isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and bool(pattern.search(node.value))
+    )
 
 
 def _defines(tree: ast.Module | None, owners: list[str], name: str) -> bool:
