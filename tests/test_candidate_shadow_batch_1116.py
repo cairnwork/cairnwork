@@ -10,7 +10,6 @@ from cairnwork.gitcmd import GitCommandError
 
 
 def test_git_reads_are_bounded_as_file_count_grows(repo, monkeypatch):
-    base = git(repo, "rev-parse", "HEAD")
     cand = commit_change(repo, {f"pkg/f{i}.py": "import json\n" for i in range(40)})
     calls = []
     original = candidate_shadow.run_git_bytes
@@ -24,7 +23,6 @@ def test_git_reads_are_bounded_as_file_count_grows(repo, monkeypatch):
     assert calls.count("ls-tree") == 1
     assert calls.count("cat-file") == 1
     assert len(calls) == 2
-    assert base
 
 
 def test_unchanged_syntaxwarning_is_suppressed(repo):
@@ -63,3 +61,56 @@ def test_shared_candidate_and_test_blob_has_same_import_result(repo):
         )
         == "pkg/helperx.py"
     )  # the test commit's import still counts
+
+
+def test_cat_file_batch_truncated_body_raises(repo, monkeypatch):
+    commit = commit_change(repo, {"pkg/mod.py": "x = 1\n"}, delete=["src/a.py", "src/b.py"])
+    original = candidate_shadow.run_git_bytes
+
+    def stub(*args, **kwargs):
+        if len(args) > 1 and args[1] == "cat-file":
+            raw = original(*args, **kwargs)
+            return raw[:-2]
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(candidate_shadow, "run_git_bytes", stub)
+    with pytest.raises(GitCommandError):
+        candidate_shadow.find_shadow_file(repo, commit, changed={})
+
+
+def test_cat_file_batch_extra_trailing_bytes_raise(repo, monkeypatch):
+    commit = commit_change(repo, {"pkg/mod.py": "x = 1\n"}, delete=["src/a.py", "src/b.py"])
+    original = candidate_shadow.run_git_bytes
+
+    def stub(*args, **kwargs):
+        if len(args) > 1 and args[1] == "cat-file":
+            raw = original(*args, **kwargs)
+            return raw + b"extra\n"
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(candidate_shadow, "run_git_bytes", stub)
+    with pytest.raises(GitCommandError):
+        candidate_shadow.find_shadow_file(repo, commit, changed={})
+
+
+def test_module_name_counts_come_from_candidate_tree_only(repo):
+    base = commit_change(
+        repo,
+        {"pkg/importer.py": "import helperx\n", "pkg/helperx.py": "x = 0\n"},
+        message="base with helperx",
+    )
+    cand = commit_change(
+        repo,
+        {"pkg/helperx.py": "x = 1\n"},
+        message="candidate modifies helperx",
+    )
+    git(repo, "checkout", base)
+    test_commit = commit_change(
+        repo,
+        {"other/helperx.py": "x = 2\n"},
+        message="test commit with another helperx",
+    )
+    result = candidate_shadow.find_shadow_file(
+        repo, cand, test_commit=test_commit, changed={"pkg/helperx.py": "MODIFY"}
+    )
+    assert result is None
