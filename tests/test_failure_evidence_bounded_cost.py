@@ -55,3 +55,31 @@ def test_a_secret_split_by_a_control_character_in_a_log_line_is_still_masked(tmp
     path.write_text("ok\nsee https://u:p\rxxx@h/ now\n", newline="")
     got = failure_evidence.capture([_run(path, {"n": "failed"})], home="", account=True)[0]
     assert "u:p" not in got["log_tail"] and "ok" in got["log_tail"]
+
+
+def test_an_unfinished_url_in_a_long_id_is_cut(tmp_path):
+    node = "t[a https://u:" + "p" * 300 + "p" * 900 + "@h/]"
+    assert node.index("@") > failure_evidence.MAX_ID * failure_evidence.PRE_MASK
+    got = failure_evidence.capture(
+        [_run(tmp_path / "log", {node: "failed"})], home="", account=True
+    )[0]
+    assert "u:p" not in str(got) and "https://u:" not in str(got)
+    assert got["failed_nodeids_truncated"] is True
+
+
+def test_an_unfinished_url_in_a_long_log_line_is_cut(tmp_path):
+    path = tmp_path / "verifier.log"
+    path.write_text("ok\nsee https://u:" + "p" * 3000 + "@h/\nnext\n")
+    got = failure_evidence.capture([_run(path, {"n": "failed"})], home="", account=True)[0]
+    assert "u:p" not in got["log_tail"] and "https://u:" not in got["log_tail"]
+    assert got["log_tail_truncated"] is True
+
+
+def test_finished_urls_are_kept_or_masked_as_before(tmp_path):
+    path = tmp_path / "verifier.log"
+    path.write_text("GET https://example.test/path x=1\nuse https://u:p@h/ now\n")
+    got = failure_evidence.capture([_run(path, {"n": "failed"})], home="", account=True)[0]
+    first, second = got["log_tail"].splitlines()
+    assert first == "GET https://example.test/path x=1"
+    assert "u:p" not in second and "<cut>" not in got["log_tail"]
+    assert got["log_tail_truncated"] is False

@@ -17,6 +17,7 @@ count comes from outcomes the candidate can forge: a small integer, accepted.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from cairnwork.p2p_probe_log import mask_secrets
@@ -29,6 +30,7 @@ MAX_LINE = 512  # the masker is superlinear: cut each kept line before masking i
 # mask over a bounded window longer than what is shown, so a cut does not hide half a secret
 # from the masker
 PRE_MASK = 4
+_OPEN_URL = re.compile(r"://[^ \t\n@]*$")  # a URL tail the masker never saw end: linear cost
 WINDOW = 4 * MAX_BYTES  # read only the end of a log (64 KiB)
 
 
@@ -45,7 +47,8 @@ def capture(runs, *, home: str, hidden: bool = False, account: bool = False) -> 
         withheld = hidden or not account  # ids are candidate text too (parametrize ids)
         # mask only what will be shown, after cutting count and length: the masker is superlinear
         kept = [] if withheld else failed[:MAX_NODEIDS]
-        shown = [mask_secrets(node[: MAX_ID * PRE_MASK])[:MAX_ID] for node in kept]
+        pairs = [_cut_open_url(mask_secrets(node[: MAX_ID * PRE_MASK])[:MAX_ID]) for node in kept]
+        shown = [text for text, _ in pairs]
         tail, truncated, unavailable = "", False, False
         if not withheld:
             try:
@@ -57,7 +60,11 @@ def capture(runs, *, home: str, hidden: bool = False, account: bool = False) -> 
                 "id": run.spec.verifier_id,
                 "failed_nodeids": shown,
                 "failed_nodeids_truncated": not withheld
-                and (len(failed) > MAX_NODEIDS or any(len(node) > MAX_ID for node in kept)),
+                and (
+                    len(failed) > MAX_NODEIDS
+                    or any(len(node) > MAX_ID for node in kept)
+                    or any(was_cut for _, was_cut in pairs)
+                ),
                 "failed_count": len(failed),
                 "log_tail": tail,
                 "log_tail_truncated": truncated,
@@ -91,14 +98,22 @@ def _tail(path: Path, home: str) -> tuple[str, bool]:
     pieces = raw.split("\n")
     lines = [piece + "\n" for piece in pieces[:-1]] + ([pieces[-1]] if pieces[-1] else [])
     kept = lines[-MAX_LINES:]
-    redacted = [mask_secrets(line[: MAX_LINE * PRE_MASK])[:MAX_LINE] for line in kept]
-    if home:
-        redacted = [line.replace(home, "<home>") for line in redacted]
+    pairs = [_cut_open_url(mask_secrets(line[: MAX_LINE * PRE_MASK])[:MAX_LINE]) for line in kept]
+    redacted = [text.replace(home, "<home>") if home else text for text, _ in pairs]
     encoded = "".join(redacted).encode("utf-8")
     cut = (
         size > WINDOW
         or len(lines) > MAX_LINES
         or any(len(line) > MAX_LINE for line in kept)
+        or any(was_cut for _, was_cut in pairs)
         or len(encoded) > MAX_BYTES
     )
     return encoded[-MAX_BYTES:].decode("utf-8", errors="ignore"), cut
+
+
+def _cut_open_url(text: str) -> tuple[str, bool]:
+    """Replace a URL tail with no end in sight: the masker needs the ``@`` or a space to see it."""
+    found = _OPEN_URL.search(text)
+    if found is None:
+        return text, False
+    return text[: found.start()] + "<cut>" + text[found.end() :], True
