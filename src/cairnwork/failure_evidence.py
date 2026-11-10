@@ -25,6 +25,7 @@ MAX_NODEIDS = 20
 MAX_LINES = 200
 MAX_BYTES = 16 * 1024
 MAX_ID = 200
+MAX_LINE = 512  # the masker is superlinear: cut each kept line before masking it
 WINDOW = 4 * MAX_BYTES  # read only the end of a log (64 KiB)
 
 
@@ -39,8 +40,9 @@ def capture(runs, *, home: str, hidden: bool = False, account: bool = False) -> 
             | set(run.collect_errors)
         )
         withheld = hidden or not account  # ids are candidate text too (parametrize ids)
-        masked = [mask_secrets(n) for n in failed]
-        shown = [] if withheld else [node[:MAX_ID] for node in masked]
+        # mask only what will be shown, after cutting count and length: the masker is superlinear
+        kept = [] if withheld else failed[:MAX_NODEIDS]
+        shown = [mask_secrets(node[:MAX_ID]) for node in kept]
         tail, truncated, unavailable = "", False, False
         if not withheld:
             try:
@@ -50,9 +52,9 @@ def capture(runs, *, home: str, hidden: bool = False, account: bool = False) -> 
         evidence.append(
             {
                 "id": run.spec.verifier_id,
-                "failed_nodeids": shown[:MAX_NODEIDS],
-                "failed_nodeids_truncated": len(shown) > MAX_NODEIDS
-                or (not withheld and any(len(node) > MAX_ID for node in masked[:MAX_NODEIDS])),
+                "failed_nodeids": shown,
+                "failed_nodeids_truncated": not withheld
+                and (len(failed) > MAX_NODEIDS or any(len(node) > MAX_ID for node in kept)),
                 "failed_count": len(failed),
                 "log_tail": tail,
                 "log_tail_truncated": truncated,
@@ -79,11 +81,19 @@ def _tail(path: Path, home: str) -> tuple[str, bool]:
     with path.open("rb") as log:
         size = log.seek(0, 2)
         log.seek(max(0, size - WINDOW))
-        raw = log.read().decode("utf-8", errors="replace")
+        raw = log.read(WINDOW).decode("utf-8", errors="replace")
     if size > WINDOW:  # a cut first line could hide half a secret from the masker: drop it
         raw = raw.partition("\n")[2]
-    redacted = mask_secrets(raw).replace(home, "<home>") if home else mask_secrets(raw)
-    lines = redacted.splitlines(keepends=True)
-    encoded = "".join(lines[-MAX_LINES:]).encode("utf-8")
-    cut = size > WINDOW or len(lines) > MAX_LINES or len(encoded) > MAX_BYTES
+    lines = raw.splitlines(keepends=True)
+    kept = [line[:MAX_LINE] for line in lines[-MAX_LINES:]]
+    redacted = [mask_secrets(line) for line in kept]
+    if home:
+        redacted = [line.replace(home, "<home>") for line in redacted]
+    encoded = "".join(redacted).encode("utf-8")
+    cut = (
+        size > WINDOW
+        or len(lines) > MAX_LINES
+        or any(len(a) > len(b) for a, b in zip(lines[-MAX_LINES:], kept, strict=True))
+        or len(encoded) > MAX_BYTES
+    )
     return encoded[-MAX_BYTES:].decode("utf-8", errors="ignore"), cut
