@@ -93,9 +93,19 @@ def binds_in_scope(node: ast.AST, name: str, *, module: bool = False) -> bool:
             else:
                 stack.extend(curr.bases)
             continue
-        if isinstance(
-            curr, (ast.Lambda, ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
-        ):
+        if isinstance(curr, ast.Lambda):
+            stack.extend(curr.args.defaults)
+            stack.extend(d for d in curr.args.kw_defaults if d is not None)
+            continue
+        if isinstance(curr, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+            if curr.generators:
+                stack.append(curr.generators[0].iter)
+            if isinstance(curr, ast.DictComp):
+                stack.extend((curr.key, curr.value))
+            else:
+                stack.append(curr.elt)
+            for generator in curr.generators:
+                stack.extend(generator.ifs)
             continue
         if (
             isinstance(curr, ast.Name)
@@ -116,6 +126,10 @@ def binds_in_scope(node: ast.AST, name: str, *, module: bool = False) -> bool:
         if isinstance(curr, ast.ExceptHandler) and curr.name == name:
             return True
         if isinstance(curr, ast.MatchAs) and curr.name == name:
+            return True
+        if isinstance(curr, ast.MatchStar) and curr.name == name:
+            return True
+        if isinstance(curr, ast.MatchMapping) and curr.rest == name:
             return True
         for child in ast.iter_child_nodes(curr):
             stack.append(child)

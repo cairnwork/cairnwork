@@ -9,7 +9,10 @@ import pytest
 from cairnwork import deny_channel as deny
 
 
-@pytest.mark.parametrize("size, expected", [(64, "UNAVAILABLE"), (8, "CLEAN")])
+@pytest.mark.parametrize(
+    "size, expected",
+    [(64, "UNAVAILABLE"), (8, "CLEAN"), (16, "CLEAN"), (17, "UNAVAILABLE")],
+)
 def test_the_cap_is_checked_again_after_the_stream_stops(monkeypatch, size, expected):
     """The guard is off (as between _halt's join and the stream stopping): only the check after
     _halt can see that the file went over the cap."""
@@ -51,6 +54,7 @@ def test_the_cap_is_checked_again_after_the_stream_stops(monkeypatch, size, expe
         )
 
     monkeypatch.setattr(deny, "MAX_STREAM_BYTES", 16)
+    monkeypatch.setattr(deny, "SETTLE_SECONDS", 0)
     monkeypatch.setattr(deny, "_start", start)
     monkeypatch.setattr(deny, "_SizeGuard", OffGuard)
     monkeypatch.setattr(deny, "_canary", lambda *args: None)
