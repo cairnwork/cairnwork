@@ -73,6 +73,9 @@ _SAFE_OPTIONS = (
     # GIT_ALLOW_PROTOCOL and the other GIT_* variables (_child_env, cairnwork_attest.publish).
     "-c",
     "protocol.ext.allow=never",
+    # log/show must print only the commit: no signature-check output (gpg) in a parsed %B (#1126).
+    "-c",
+    "log.showSignature=false",
 )
 
 
