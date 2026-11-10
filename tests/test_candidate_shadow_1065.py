@@ -91,13 +91,13 @@ def test_a_second_file_with_a_test_imported_name_is_a_shadow(repo):
 def test_a_signal_word_already_in_base_is_no_exemption(repo):
     commit_change(
         repo,
-        {"pkg/__init__.py": "# importlib\n", "tests/test_o.py": "from pkg import oracle\n"},
+        {"pkg/__init__.py": "# subprocess\n", "tests/test_o.py": "from pkg import oracle\n"},
     )
     base = commit_change(repo, {"pkg/oracle.py": "def answer():\n    return 1\n"})
     cand = commit_change(
         repo,
         {
-            "pkg/__init__.py": "# importlib\n__path__.insert(0, 'sub')\n",
+            "pkg/__init__.py": "# subprocess\n__path__.insert(0, 'sub')\n",
             "sub/oracle.py": "def answer():\n    return 2\n",
         },
     )

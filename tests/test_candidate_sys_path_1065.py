@@ -95,22 +95,37 @@ def test_existing_base_signal_without_a_shadow_is_not_refused(project):
     candidate_sys_path.refuse_new_sys_path_mutation(project, base, cand, ("src/calc.py",))
 
 
-@pytest.mark.parametrize(
-    "source",
-    [
-        "import importlib\nimportlib.import_module('json')\n",
-        "__import__('json')\n",
-        "exec('import sys')\n",
-        "import site\nsite.addsitedir('shadow')\n",
-        "import os\nos.environ['PYTHONPATH'] = 'shadow'\n",
-        "import sys\nsys.modules['json'] = object()\n",
-        "import sys\nsys.meta_path.insert(0, object())\n",
-    ],
-)
-def test_added_file_import_system_forms_are_refused_next_to_a_shadow(repo, source):
+MACHINERY_FORMS = [
+    "import importlib\nimportlib.import_module('json')\n",
+    "__import__('json')\n",
+    "exec('import sys')\n",
+    "import sys\nsys.modules['json'] = object()\n",
+    "import sys\nsys.meta_path.insert(0, object())\n",
+    "import sys\ngetattr(sys, 'mod' + 'ules')['json'] = object()\n",
+]
+REDIRECT_FORMS = [
+    "import site\nsite.addsitedir('shadow')\n",
+    "import os\nos.environ['PYTHONPATH'] = 'shadow'\n",
+]
+
+
+@pytest.mark.parametrize("source", MACHINERY_FORMS)
+def test_in_process_machinery_edits_are_refused_without_a_shadow(repo, source):
     assert scan_sys_path_blob(source.encode()) is True
     base = git(repo, "rev-parse", "HEAD")
-    cand = commit_change(repo, {"new_module.py": source, "shadow/json.py": ""})
+    cand = commit_change(repo, {"new_module.py": source})
+    with pytest.raises(CandidateRejected) as got:
+        candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, ("new_module.py",))
+    assert "in-process" in str(got.value)
+
+
+@pytest.mark.parametrize("source", REDIRECT_FORMS)
+def test_redirect_forms_are_refused_only_next_to_a_shadow(repo, source):
+    assert scan_sys_path_blob(source.encode()) is True
+    base = git(repo, "rev-parse", "HEAD")
+    alone = commit_change(repo, {"new_module.py": source})
+    candidate_sys_path.refuse_new_sys_path_mutation(repo, base, alone, ("new_module.py",))
+    cand = commit_change(repo, {"shadow/json.py": ""})
     with pytest.raises(CandidateRejected) as got:
         candidate_sys_path.refuse_new_sys_path_mutation(
             repo, base, cand, _changed(repo, base, cand)
