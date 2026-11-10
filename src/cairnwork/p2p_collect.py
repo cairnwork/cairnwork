@@ -34,6 +34,7 @@ from cairnwork.collect_reader import read_collected
 from cairnwork.conftest_check import conftest_of
 from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRejected
 from cairnwork.gitcmd import GitCommandError, run_git
+from cairnwork.p2p_bindings import last_binding
 from cairnwork.p2p_nodes import changed_tests, module_changed
 from cairnwork.p2p_selection import MODULE_DIR_CAP
 from cairnwork.verifier_spec import VerifierSpec
@@ -178,76 +179,6 @@ def _tree(text: str) -> ast.Module | None:
         return None  # nothing is provably defined: the id is dropped, never removed
 
 
-COMPOUND_STMTS = (
-    ast.If,
-    ast.Try,
-    ast.For,
-    ast.AsyncFor,
-    ast.While,
-    ast.With,
-    ast.AsyncWith,
-    ast.Match,
-)
-
-
-def _binds_in_scope(node: ast.AST, name: str, *, module: bool = False) -> bool:
-    """Whether node binds name in the current scope (does not cross into nested scopes)."""
-    stack = [node]
-    while stack:
-        curr = stack.pop()
-        if isinstance(curr, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            if curr.name == name:
-                return True
-            stack.extend(curr.decorator_list)
-            if isinstance(curr, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                stack.extend(curr.args.defaults)
-                stack.extend(d for d in curr.args.kw_defaults if d is not None)
-            else:
-                stack.extend(curr.bases)
-            continue
-        if isinstance(
-            curr, (ast.Lambda, ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
-        ):
-            continue
-        if (
-            isinstance(curr, ast.Name)
-            and curr.id == name
-            and isinstance(curr.ctx, (ast.Store, ast.Del))
-        ):
-            return True
-        if isinstance(curr, ast.Import) and any(
-            (a.asname or a.name.partition(".")[0]) == name for a in curr.names
-        ):
-            return True
-        if isinstance(curr, ast.ImportFrom) and any(
-            a.name == "*" or (a.asname or a.name) == name for a in curr.names
-        ):
-            return True
-        if not module and isinstance(curr, (ast.Global, ast.Nonlocal)) and name in curr.names:
-            return True
-        if isinstance(curr, ast.ExceptHandler) and curr.name == name:
-            return True
-        if isinstance(curr, ast.MatchAs) and curr.name == name:
-            return True
-        for child in ast.iter_child_nodes(curr):
-            stack.append(child)
-    return False
-
-
-def _last_binding(body: list[ast.stmt], name: str, *, module: bool = False) -> ast.stmt | None:
-    """The last statement in body binding name, or None; ValueError if a compound one binds it."""
-    last = None
-    for stmt in body:
-        in_module_compound = module and isinstance(stmt, COMPOUND_STMTS)
-        if isinstance(stmt, COMPOUND_STMTS) and _binds_in_scope(
-            stmt, name, module=in_module_compound
-        ):
-            raise ValueError(f"{name} bound in compound statement")
-        if _binds_in_scope(stmt, name, module=in_module_compound):
-            last = stmt
-    return last
-
-
 def _scope_mentions(tree: ast.Module, owners: list[str], name: str, text: str = "") -> bool:
     """Whether static source evidence can account for a collected name.
 
@@ -378,7 +309,7 @@ def _defines(tree: ast.Module | None, owners: list[str], name: str) -> bool:
     module = True
     for owner in owners:
         try:
-            last = _last_binding(body, owner, module=module)
+            last = last_binding(body, owner, module=module)
         except ValueError:
             return False
         if not isinstance(last, ast.ClassDef):
@@ -386,7 +317,7 @@ def _defines(tree: ast.Module | None, owners: list[str], name: str) -> bool:
         body = last.body
         module = False
     try:
-        last = _last_binding(body, name, module=module)
+        last = last_binding(body, name, module=module)
     except ValueError:
         return False
     return isinstance(last, (ast.FunctionDef, ast.AsyncFunctionDef))
