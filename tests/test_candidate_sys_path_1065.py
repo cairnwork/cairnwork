@@ -312,3 +312,22 @@ def test_an_unchanged_unparseable_fixture_does_not_refuse_an_honest_fix(repo):
     )
     cand = commit_change(repo, {"pkg/calc.py": "import subprocess\nX = 2\n"})
     candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, _changed(repo, base, cand))
+
+
+def test_a_fix_calling_a_same_file_getattr_helper_is_not_refused(repo):
+    """Same-file calls are followed into import machinery only (#1111 review at 225b181)."""
+    helper = "import subprocess\ndef _scale():\n    return getattr(object, '__name__') and 1\n"
+    base = commit_change(repo, {"pkg/calc.py": helper + "def half():\n    return (_scale(), 3)\n"})
+    cand = commit_change(repo, {"pkg/calc.py": helper + "def half():\n    return (_scale(), 2)\n"})
+    candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, _changed(repo, base, cand))
+
+
+def test_a_machinery_statement_moved_between_branches_is_refused(repo):
+    """The block field is part of the key, so an if/else move is a change."""
+    body = "    sys.modules['json'] = object()\n"
+    base = commit_change(repo, {"pkg/calc.py": f"import sys\nif False:\n{body}else:\n    pass\n"})
+    cand = commit_change(repo, {"pkg/calc.py": f"import sys\nif False:\n    pass\nelse:\n{body}"})
+    with pytest.raises(CandidateRejected):
+        candidate_sys_path.refuse_new_sys_path_mutation(
+            repo, base, cand, _changed(repo, base, cand)
+        )

@@ -1,16 +1,18 @@
 """Whether a candidate's edit to one Python file touches import machinery (#1065).
 
 Statements are compared with the base blob (AST, comments dropped, nested blocks emptied, keyed
-by the enclosing def/class names and block headers). A statement is hot when its own source names
-a machinery word, or names a def or class whose body reaches one (directly or through other
-same-file defs). An added or removed hot statement makes the edit machinery, so writing, rewriting
-or moving machinery, calling dead base machinery, or flipping the condition that wraps it (the
-key of every statement inside changes) is caught, while a fix elsewhere in a file that uses
-getattr is not.
+by the enclosing def/class names, block headers and block fields). A statement is hot when its own
+source names a machinery word, or names a def or class whose body reaches an import-machinery
+word (``reach``: sys.modules, finders, importlib, __import__, runpy, pytest_plugins; directly or
+through other same-file defs). An added or removed hot statement makes the edit machinery, so
+writing, rewriting or moving machinery, calling dead base machinery, or flipping the condition
+that wraps it (the key of every statement inside changes) is caught, while a fix that calls a
+same-file getattr helper is not.
 Residual (#1115): an edit to other control flow inside a function that reaches machinery (say an
-early return before it) is not hot. Counting those raised the share of hot statements in real
-signalling files (cairnwork, _pytest, click, hypothesis, packaging) from 6-13% to 20-29%, so it
-is left to the blackbox and verifier checks.
+early return before it), and base machinery reached through aliases, registries or dunders, are
+not hot; reaching through the dynamic-access words as well raised the share of hot statements in
+real signalling files (cairnwork, _pytest, click, hypothesis, packaging) from 2-6% to 6-14%,
+so these are left to the blackbox and verifier checks.
 """
 
 from __future__ import annotations
@@ -26,13 +28,15 @@ _PARSE_ERRORS = (SyntaxError, ValueError, UnicodeError, RecursionError, MemoryEr
 Key = tuple[str, str]
 
 
-def machinery_changed(old: bytes | None, new: bytes, words: tuple[bytes, ...]) -> bool:
+def machinery_changed(
+    old: bytes | None, new: bytes, words: tuple[bytes, ...], reach: tuple[bytes, ...]
+) -> bool:
     """True when an added or removed statement is hot. ``old`` None means the file is new; an
     unparseable base trusts nothing. Raises ValueError when ``new`` cannot be parsed."""
-    after = _hot_statements(new, words)
+    after = _hot_statements(new, words, reach)
     if after is None:
         raise ValueError("candidate source could not be parsed")
-    before = (Counter(), set()) if old is None else _hot_statements(old, words)
+    before = (Counter(), set()) if old is None else _hot_statements(old, words, reach)
     if before is None:  # nothing in an unparseable base is trusted
         before = (Counter(), set())
     added = after[0] - before[0]
@@ -40,10 +44,12 @@ def machinery_changed(old: bytes | None, new: bytes, words: tuple[bytes, ...]) -
     return any(k in after[1] for k in added) or any(k in before[1] for k in removed)
 
 
-def _hot_statements(data: bytes, words: tuple[bytes, ...]) -> tuple[Counter[Key], set[Key]] | None:
+def _hot_statements(
+    data: bytes, words: tuple[bytes, ...], reach: tuple[bytes, ...]
+) -> tuple[Counter[Key], set[Key]] | None:
     try:
         tree = ast.parse(data)
-        hot_names = _hot_defs(tree, words)
+        hot_names = _hot_defs(tree, reach)
         found: Counter[Key] = Counter()
         hot: set[Key] = set()
         _visit(list(tree.body), "", words, hot_names, found, hot)
@@ -53,7 +59,7 @@ def _hot_statements(data: bytes, words: tuple[bytes, ...]) -> tuple[Counter[Key]
 
 
 def _hot_defs(tree: ast.Module, words: tuple[bytes, ...]) -> set[str]:
-    """Names of defs and classes whose body names a machinery word or another hot def."""
+    """Names of defs and classes whose body names a ``words`` entry or another hot def."""
     refs: dict[str, set[str]] = {}
     hot: set[str] = set()
     for node in ast.walk(tree):
@@ -81,7 +87,7 @@ def _visit(
         own, blocks = copy.copy(node), []
         for field in _BLOCKS:
             if isinstance(value := getattr(node, field, None), list):
-                blocks.append(value)
+                blocks.append((field, value))
                 setattr(own, field, [])
         text = ast.unparse(own)
         key = (scope, text)
@@ -89,8 +95,8 @@ def _visit(
         if _has_word(text, words) or _names(own) & hot_names:
             hot.add(key)
         inner = f"{scope}/{node.name if isinstance(node, _DEFS) else text}"
-        for block in blocks:
-            _visit(block, inner, words, hot_names, found, hot)
+        for field, block in blocks:  # the field keeps an if/else or try/else move visible
+            _visit(block, f"{inner}:{field}", words, hot_names, found, hot)
 
 
 def _names(node: ast.AST) -> set[str]:

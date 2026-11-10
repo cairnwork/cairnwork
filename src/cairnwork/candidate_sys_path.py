@@ -1,7 +1,7 @@
 """Refuse own import-system edits that can change what the deferred tests import (#1065).
 
 An own changed file whose added or removed statements reach the import machinery (sys.modules,
-finders, importlib, __import__, runpy, pytest_plugins, or any dynamic-access word; see
+finders, importlib, __import__, runpy, pytest_plugins, or a dynamic-access word; see
 candidate_statements.py) is refused outright: such a swap needs no file. A one-line fix in a
 function that never reaches machinery is not refused even when the file uses getattr elsewhere,
 while calling, moving or rewriting machinery, or flipping the block that wraps it, is. A file
@@ -10,10 +10,11 @@ refused only when a file the candidate changed can shadow an imported module (ca
 so an honest edit that inserts its own directory still verifies.
 Residuals (#1115), left to the blackbox and verifier checks: shadow files written at run time;
 machinery reached through an alias (``from sys import modules``) or another module without any
-listed word; other control-flow edits inside code that reaches machinery. Also unscanned: a
-``.pyc`` without source; sys.path outside the repo. Accepted false refusals: a new or changed call
-to same-file code reaching importlib or dynamic access; an added module some file imports, or a
-changed one sharing a module name, next to a redirect.
+listed word; base machinery reached through same-file aliases, registries or dunders; other
+control-flow edits inside code that reaches machinery. Also unscanned: a ``.pyc`` without source;
+sys.path outside the repo. Accepted false refusals: a new or changed call to same-file code
+reaching import machinery; an added module some file imports, or a changed one sharing a module
+name, next to a redirect.
 """
 
 from __future__ import annotations
@@ -35,13 +36,17 @@ _OWN_KINDS = frozenset({"ADD", "MODIFY"})
 _REDIRECT, _MACHINERY = "redirect", "machinery"
 # Fail closed: a signalling file counts as a pure redirect only if no new or changed statement
 # names one of these (unparsed source, so getattr(sys, "meta" + "_path") still falls here).
-_MACHINERY_WORDS = tuple(
+# Same-file calls are followed only into import machinery, not dynamic access (#1111 review).
+_REACH_WORDS = tuple(
     word.encode()
     for word in (
         "sys.modules", "meta_path", "path_hooks", "path_importer_cache", "importlib", "runpy",
-        "pytest_plugins", *sorted(DYNAMIC_NAMES), *sorted(DYNAMIC_ATTRS),
+        "pytest_plugins", "__import__",
     )
 )  # fmt: skip
+_MACHINERY_WORDS = _REACH_WORDS + tuple(
+    word.encode() for word in (*sorted(DYNAMIC_NAMES), *sorted(DYNAMIC_ATTRS))
+)
 
 
 def refuse_new_sys_path_mutation(
@@ -108,4 +113,4 @@ def _blob_signal(repo: Path, base: str, commit: str, path: str, changed: dict[st
         return ""
     added = changed[path] == "ADD"
     old = None if added else run_git_bytes(repo, "cat-file", "blob", f"{base}:{path}")
-    return _MACHINERY if machinery_changed(old, data, _MACHINERY_WORDS) else _REDIRECT
+    return _MACHINERY if machinery_changed(old, data, _MACHINERY_WORDS, _REACH_WORDS) else _REDIRECT
