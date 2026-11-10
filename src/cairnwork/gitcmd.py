@@ -68,6 +68,9 @@ _SAFE_OPTIONS = (
     "submodule.recurse=false",
     "-c",
     "diff.external=",
+    # ext:: runs any command; a repo's protocol.ext.allow=always must not turn it on (#1106).
+    "-c",
+    "protocol.ext.allow=never",
 )
 
 
@@ -83,9 +86,8 @@ def config_execution_off(repo: Path | str, env: dict[str, str]) -> tuple[str, ..
 
     A name that ``-c`` cannot carry (it holds ``=``) is refused, and so is a listing that does
     not finish (timeout, git not started). The listing is every key, filtered here (a regex in
-    git, under a UTF-8 locale, skips a key that is not UTF-8). When it exits non-zero (no such
-    directory, a malformed file) nothing is added: the command itself reads the same
-    configuration and fails the same way before a hook or filter could run. Names are decoded
+    git, under a UTF-8 locale, skips a key that is not UTF-8). A non-zero exit means the
+    configuration could not be enumerated, so the command is refused. Names are decoded
     with surrogateescape, so ``-c`` carries the same bytes back to git (a name that is not UTF-8
     is still matched). Listing runs no hook, so it needs no _SAFE_OPTIONS.
     """
@@ -99,7 +101,9 @@ def config_execution_off(repo: Path | str, env: dict[str, str]) -> tuple[str, ..
             "git config (hook listing for safety options) failed; refusing to run git"
         ) from exc
     if done.returncode != 0:
-        return ()
+        raise GitCommandError(
+            "git config (hook listing for safety options) failed; refusing to run git"
+        )
     keys = done.stdout.decode("utf-8", "surrogateescape").split("\0")
     hooks = sorted({m.group(1) for k in keys if (m := _HOOK_KEY.fullmatch(k))})
     filters = sorted(

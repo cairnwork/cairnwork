@@ -149,3 +149,21 @@ def test_a_listing_that_cannot_run_refuses(tmp_path: Path, monkeypatch: pytest.M
         run_git(repo, "update-ref", "refs/x", head)
     assert subprocess.run(["git", "-C", str(repo), "rev-parse", "-q", "--verify", "refs/x"],
                           capture_output=True).returncode != 0  # fmt: skip
+
+
+def test_a_config_listing_returning_failure_refuses_to_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, marker, head = _repo(tmp_path)
+    _declare(repo, "mark", marker)
+    real = gitcmd.subprocess.run
+
+    def failed_listing(argv, **kwargs):
+        if "--list" in argv:
+            return subprocess.CompletedProcess(argv, 1, b"", b"config unavailable")
+        return real(argv, **kwargs)
+
+    monkeypatch.setattr(gitcmd.subprocess, "run", failed_listing)
+    with pytest.raises(GitCommandError, match="hook listing"):
+        run_git(repo, "update-ref", "refs/x", head)
+    assert not marker.exists()
