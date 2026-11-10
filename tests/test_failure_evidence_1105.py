@@ -57,50 +57,17 @@ def test_tail_is_limited_by_bytes(tmp_path):
     assert got["log_tail_truncated"] is True
 
 
-def test_hidden_tests_keep_no_tail_and_only_a_count(tmp_path):
+def test_with_a_test_commit_only_the_count_is_kept(tmp_path):
     path = tmp_path / "verifier.log"
-    path.write_text("secret hidden test output")
+    path.write_text("output a deferred conftest may have printed")
     outcomes = {
         "tests/test_hidden.py::test_secret": "failed",
         "tests/test_open.py::test_a": "failed",
     }
-    targets = [
-        ("tests/test_hidden.py",),
-        (),  # whole suite
-        ("tests/../tests/test_hidden.py",),
-        ("Tests/Test_Hidden.py",),
-        ("tests",),
-        ("-k", "secret"),
-    ]
-    for t in targets:
-        got = failure_evidence.capture(
-            [_run(path, outcomes, t)],
-            home="",
-            deferred_paths=("tests/test_hidden.py",),
-            hidden=True,
-        )[0]
-        assert got["log_tail_withheld"] is True and got["log_tail"] == "", t
-        assert got["failed_nodeids"] == ["tests/test_open.py::test_a"], t
-        assert got["failed_hidden_count"] == 1, t
-
-
-def test_an_open_target_keeps_its_tail_even_with_hidden_tests(tmp_path):
-    path = tmp_path / "verifier.log"
-    path.write_text("open output")
-    got = failure_evidence.capture(
-        [_run(path, {"tests/test_open.py::test_a": "failed"}, ("tests/test_open.py",))],
-        home="", deferred_paths=("tests/test_hidden.py",), hidden=True,
-    )[0]  # fmt: skip
-    assert got["log_tail"] == "open output" and not got["log_tail_withheld"]
-
-
-def test_without_deferred_paths_everything_counts_as_hidden(tmp_path):
-    path = tmp_path / "verifier.log"
-    path.write_text("x")
-    run = _run(path, {"tests/test_a.py::test_a": "failed"})
-    got = failure_evidence.capture([run], home="", deferred_paths=(), hidden=True)[0]
-    assert got["log_tail_withheld"] and got["failed_nodeids"] == []
-    assert got["failed_hidden_count"] == 1
+    for targets in [("tests/test_open.py",), ("tests/test_hidden.py",), ()]:
+        got = failure_evidence.capture([_run(path, outcomes, targets)], home="", hidden=True)[0]
+        assert got["log_tail"] == "" and got["log_tail_withheld"] is True
+        assert got["failed_nodeids"] == [] and got["failed_count"] == 2
 
 
 def test_missing_log_has_explicit_unavailable_marker(tmp_path):
@@ -112,7 +79,7 @@ def test_a_capture_error_becomes_a_marker_not_an_exception(tmp_path):
     run = _run(tmp_path / "missing", {"n": "failed"})
     run.outcomes = None  # malformed: capture itself raises
     task = SimpleNamespace(test_commit="")
-    got = failure_evidence.capture_for_task([run], task, ())
+    got = failure_evidence.capture_for_task([run], task)
     assert got == [
         {"id": "", "log_tail_unavailable": True, "failure_evidence_error": "AttributeError"}
     ]

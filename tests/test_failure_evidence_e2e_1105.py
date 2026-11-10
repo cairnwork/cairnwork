@@ -24,8 +24,8 @@ def _failing(repo, tmp_path):
 def test_a_failed_result_counts_the_hidden_failure_and_leaks_nothing(repo, tmp_path):
     result = _failing(repo, tmp_path)
     assert result.status == "FAILED" and not result.verified
-    assert sum(e["failed_hidden_count"] for e in result.failure_evidence) >= 1
-    assert all(e["log_tail_withheld"] for e in result.failure_evidence if e["failed_hidden_count"])
+    assert sum(e["failed_count"] for e in result.failure_evidence) >= 1
+    assert all(e["log_tail_withheld"] and not e["failed_nodeids"] for e in result.failure_evidence)
     assert "test_mul" not in repr(result.failure_evidence)  # deferred tests stay hidden
 
 

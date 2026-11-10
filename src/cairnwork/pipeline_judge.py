@@ -141,9 +141,7 @@ def tests_with_teeth(
     runs = [as_failed(run, targets, is_test) for run in runs]  # before the base comparison
     comparison = base_comparison(runs, targets)  # decided before the base logs go
     if comparison.kind == "UNCOMPARABLE":
-        result.failure_evidence.extend(
-            failure_evidence.capture_for_task(recorded_runs, task, paths)
-        )
+        result.failure_evidence.extend(failure_evidence.capture_for_task(recorded_runs, task))
     for run in runs:  # #797 step 1: recorded only, no verdict reads it yet (deny_channel.py)
         if run.deny_evidence:
             result.logs.append(f"base deny evidence {run.spec.verifier_id}: {run.deny_evidence}")
@@ -268,7 +266,7 @@ def judge_candidate(
         runs += p2p_runs
     # keep what came before, e.g. a failed base probe's tail (#331)
     result.logs = [*result.logs, *(str(run.log_path) for run in runs), *bb_logs]
-    result.failure_evidence = failure_evidence.capture_for_task(runs, task, test_files)
+    result.failure_evidence = failure_evidence.capture_for_task(runs, task)
     if unless_passed is not None and not all(run.observation.passed for run in runs):
         raise unless_passed
     missing = _not_run_here(task, verified_by, test_files)
