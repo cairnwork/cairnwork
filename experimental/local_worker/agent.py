@@ -283,6 +283,8 @@ class AgentLoop(CleanupMixin, GuardMixin, BaseCheckMixin, PrecheckMixin):
         }
         if s.seed is not None:
             payload["seed"] = s.seed
+        if s.reasoning_effort is not None:
+            payload["reasoning_effort"] = s.reasoning_effort
         return payload
 
     def _step(self, log: TurnLog, messages: list[dict], deadline: float) -> str | None:

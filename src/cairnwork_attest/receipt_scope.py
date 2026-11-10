@@ -13,6 +13,13 @@ from cairnwork.deferred_tests import (
 from cairnwork_attest.verify_response import VerifyResult, _fail
 
 
+def test_scope_assurance(full: bool, policy: Any) -> str:
+    """Say whether the receiver re-derived the test scope from pinned roots."""
+    if not full:
+        return "not_verified"
+    return "verified" if policy is not None and "test_roots" in policy else "signer_choice"
+
+
 def deleted_path_problem(paths: list[str]) -> str:
     """Check deleted names available in both receiver modes."""
     for path in paths:

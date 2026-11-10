@@ -67,6 +67,23 @@ def test_v02_full_offline_check_run_includes_assurance(v02_world: dict) -> None:
     assert "mode=full" in summary
     assert "test_contents=verified" in summary
     assert "overlay=rebuilt" in summary
+    expected_assurance = {
+        "mode": "full",
+        "test_source": "signer_choice",
+        "head": "verified",
+        "non_test_paths": "verified",
+        "test_contents": "verified",
+        "overlay": "rebuilt",
+        "verifier_runs": "signer_claim",
+        "protection": "same_process_only",
+        "blackbox_checks": "not_checked",
+        "test_scope": "signer_choice",
+    }
+    assurance_lines = set(summary.splitlines())
+    assert all(
+        f"- Assurance: {key}={value}" in assurance_lines
+        for key, value in expected_assurance.items()
+    )
 
 
 def test_v01_bundle_has_no_assurance(tmp_path: Path, repo: Path) -> None:
