@@ -33,11 +33,7 @@ def walk_without_nested_classes(node: ast.AST):
             if nested_class_body_is_dynamic(current):
                 pending.extend(current.body)
             continue
-        for child in ast.iter_child_nodes(current):
-            if isinstance(child, ast.ClassDef):
-                pending.append(child)
-            else:
-                pending.append(child)
+        pending.extend(ast.iter_child_nodes(current))  # a nested ClassDef is yielded, then pruned
 
 
 def nested_class_body_is_dynamic(node: ast.ClassDef) -> bool:
