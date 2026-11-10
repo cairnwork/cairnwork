@@ -181,7 +181,7 @@ COMPOUND_STMTS = (
     ast.While,
     ast.With,
     ast.AsyncWith,
-    getattr(ast, "Match", ()),
+    ast.Match,
 )
 
 
@@ -196,7 +196,7 @@ def _binds_in_scope(node: ast.AST, name: str, *, module: bool = False) -> bool:
             stack.extend(curr.decorator_list)
             if isinstance(curr, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 stack.extend(curr.args.defaults)
-                stack.extend(curr.args.kw_defaults)
+                stack.extend(d for d in curr.args.kw_defaults if d is not None)
             else:
                 stack.extend(curr.bases)
             continue
@@ -222,7 +222,7 @@ def _binds_in_scope(node: ast.AST, name: str, *, module: bool = False) -> bool:
             return True
         if isinstance(curr, ast.ExceptHandler) and curr.name == name:
             return True
-        if isinstance(curr, getattr(ast, "MatchAs", ())) and curr.name == name:
+        if isinstance(curr, ast.MatchAs) and curr.name == name:
             return True
         for child in ast.iter_child_nodes(curr):
             stack.append(child)
