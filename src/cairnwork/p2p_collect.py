@@ -283,10 +283,12 @@ def _mentions(
     """Search source-level identifiers, bindings, attributes and string constants."""
     kinds = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
     for node in nodes:
-        walk = ast.walk(node)
+        if not include_nested_classes and isinstance(node, ast.ClassDef):
+            if node.name == name:
+                return True
+            continue
+        walk = ast.walk(node) if include_nested_classes else _walk_without_nested_classes(node)
         for n in walk:
-            if not include_nested_classes and n is not node and isinstance(n, ast.ClassDef):
-                continue
             if isinstance(n, kinds) and n.name == name:
                 return True
             if isinstance(n, ast.Name) and n.id == name:
@@ -301,6 +303,17 @@ def _mentions(
                 if pattern.search(n.value):
                     return True
     return False
+
+
+def _walk_without_nested_classes(node: ast.AST):
+    """Walk a statement without entering any class nested inside it."""
+    pending = [node]
+    while pending:
+        current = pending.pop()
+        yield current
+        pending.extend(
+            child for child in ast.iter_child_nodes(current) if not isinstance(child, ast.ClassDef)
+        )
 
 
 def _defines(tree: ast.Module | None, owners: list[str], name: str) -> bool:
