@@ -1,24 +1,19 @@
 """Deferred tests: the tests that prove a fix are applied only after the worker is done.
+A task may name a ``test_commit``: a commit whose only parent is the task's base and which adds
+or changes files under ``tests/`` only (a ``conftest.py`` only as an additive fixture change,
+conftest_check.py and p2p_conftest.py, #798; regular files only). The worker never gets it: its
+attempt clone holds the base. Cairnwork then:
 
-A task may name a ``test_commit``: a commit whose only parent is the task's base and
-which adds or changes files under ``tests/`` only (a ``conftest.py`` only as an additive
-fixture change, conftest_check.py and p2p_conftest.py, #798; regular files only). The worker never
-gets it: its attempt clone holds the base. Cairnwork then
+1. runs the verifiers on the test commit itself (base + tests) and requires a real failure there
+   (base_comparison): passing tests prove nothing (REFUSED); collection errors, timeouts, missing
+   sandbox/report, oversized logs, lingering processes, changed checkouts or forged bytecode make
+   the base unjudgeable (UNCOMPARABLE, #234);
+2. lays the test files over the worker's candidate in a private index and commits the result; the
+   verifiers run that commit, Core notarises it and a PR carries fix and tests together.
 
-1. runs the verifiers on the test commit itself (base + tests) and requires a real
-   failure there (base_comparison): tests that already pass prove nothing about the fix
-   (REFUSED); a base that cannot run them cleanly (collection error, timeout, no sandbox,
-   no report, a log over the cap, a process left running, a checkout the run changed, forged
-   bytecode) gives no evidence either way (UNCOMPARABLE, #234);
-2. lays the test files over the worker's candidate in a private index and commits the
-   result on top of it; that commit is what the verifiers run, Core notarises and a PR
-   would carry (fix and tests together).
-
-So the worker can neither read nor weaken the tests that judge it (the same idea as
-SWE-bench applying its tests after the model's patch), as long as it cannot reach the
-test commit elsewhere: the Issue runner never tells it the commit id. A test commit kept in
-the private store (deferred_store.py) is on no remote at all; one pushed to a public branch
-could still be found by a worker with network access.
+So the worker cannot read or weaken the tests (like SWE-bench applying tests after the patch)
+unless it reaches the commit elsewhere. The Issue runner never tells it the id; deferred_store.py
+is on no remote, though a public branch could expose it to a worker.
 """
 
 from __future__ import annotations
@@ -61,10 +56,13 @@ _NOT_TEST_FILES = frozenset(
 )  # fmt: skip
 
 
-def _plain_conftest(path: PurePosixPath, status: str) -> bool:
-    """#798: a conftest.py (exact name) may be added or modified, never deleted or renamed; its
-    content is checked by conftest_check.py and p2p_conftest.py."""
-    return path.name == "conftest.py" and status in ("A", "M")
+def out_of_scope(path: str, status: str) -> bool:  # #798: conftest.py only added/modified
+    posix, name = PurePosixPath(path), PurePosixPath(path).name.casefold()
+    return (
+        (name in _NOT_TEST_FILES and (posix.name != "conftest.py" or status not in ("A", "M")))
+        or name.endswith(".pth")
+        or any(part.casefold() in _SITE_NAMES for part in posix.parts)
+    )
 
 
 def never_seen(repo: Path, test_commit: str) -> None:
@@ -159,14 +157,11 @@ def test_paths(
     paths, deleted, target = [], [], test_target(roots)
     for meta, path in zip(fields[0::2], fields[1::2], strict=False):
         old_mode, new_mode, status = meta.split()[0][1:], meta.split()[1], meta.split()[4]
-        posix = PurePosixPath(path)
         if (
             status not in ("A", "M", "D")
             or (old_mode if status == "D" else new_mode) not in _REGULAR
             or not path.startswith(tuple(f"{r}/" for r in roots))
-            or (posix.name.casefold() in _NOT_TEST_FILES and not _plain_conftest(posix, status))
-            or posix.name.casefold().endswith(".pth")
-            or {x.casefold() for x in posix.parts} & _SITE_NAMES
+            or out_of_scope(path, status)
         ):
             raise TestCommitRejected("TEST_COMMIT_SCOPE", f"{status} {new_mode} {path}")
         if len(path.encode("utf-8")) > MAX_ID_BYTES:
@@ -275,9 +270,14 @@ def _tree(repo: Path, blob: str, *, present: bool = False) -> ast.Module | None:
     except GitCommandError as exc:
         if present:
             raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
+        rev, path = blob.split(":", 1)
+        try:
+            exists = run_git(repo, "ls-tree", "--name-only", rev, "--", path)
+        except GitCommandError as check_exc:
+            raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(check_exc)) from check_exc
+        if exists:
+            raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
         return None  # a new file
-    except UnicodeDecodeError as exc:
-        raise TestCommitRejected("TEST_COMMIT_UNPARSABLE", f"{blob} is not UTF-8") from exc
     try:
         return ast.parse(source)
     except (SyntaxError, ValueError, RecursionError, MemoryError) as exc:

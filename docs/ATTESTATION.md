@@ -358,6 +358,8 @@ Checks run in this order and the first failure is reported:
 7. test source: `hidden_test_commit` and the policy's pins; in full mode the test commit is one
    commit on the base changing exactly `test_paths` (`TEST_SOURCE_MISMATCH`); with `test_roots`,
    every bound test path must start with one of the roots, in both modes (`TEST_ROOT_VIOLATION`);
+   an out-of-scope test path (added, modified or deleted; a plain `conftest.py` may be added or
+   modified) is refused in both modes, and full mode re-derives the scope from the test commit;
    the binding's `protection` must be the level of the request's required verifier ids (a list of
    strings, else this refuses too), without
    the `_macos` suffix (`PROTECTION_LABEL_MISMATCH`; absent means `"same_process_only"`), and a
@@ -382,6 +384,8 @@ Checks run in this order and the first failure is reported:
     `path::test[case]`, which names its test; #714). Full mode reads
     those tests from the test commit; confidential mode cannot, so there any target naming a test
     in the file counts, on the signer's word like the test contents (`TEST_PATH_NOT_TARGETED`).
+    Bound verifier ids must be unique and cannot use reserved protection ids
+    (`VERIFIER_ID_INVALID`).
     A `conftest.py` among `test_paths` (#798) is exempt from that rule and bound by the optional key
     `conftest_paths`, which must be exactly the paths in `test_paths` whose basename is `conftest.py`
     (sorted). A confidential receiver refuses it (`CONFTEST_NOT_ALLOWED`) unless its policy sets
@@ -425,7 +429,9 @@ the binding's level, checked in step 7; `"same_process_only"` when the binding h
 `blackbox_checks` (#312, #373: `pinned` when the policy has `blackbox_checks`, `unpinned` when it
 pins a non-empty `blackbox_commitment` only, the weaker check, and `not_checked` without a policy or
 a non-empty commitment pin; it says which check ids the receiver pinned, not that the checks ran;
-docs/SECURITY.md). Without `--json` the
+docs/SECURITY.md), and `test_scope` (`verified` when full mode re-derives scope under policy-pinned
+`test_roots`, `signer_choice` in full mode without that pin, and `not_verified` in confidential mode).
+Without `--json` the
 same object follows the `OK` line. A verify-action that predates v0.2 does not
 refuse these receipts with `STATEMENT_SHAPE`: what it does depends on the version. The untagged commits
 before v0.2 support return `UNSUPPORTED_PREDICATE_TYPE`; the tagged `v0.1.0` has no `policy`

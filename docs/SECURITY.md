@@ -280,6 +280,8 @@ the commitment alone and is accepted with a weaker check: at least one `blackbox
 Such a receiver still accepts a receipt whose Core request left out a declared check or named one
 the declaration lacks; its `assurance.blackbox_checks` is `unpinned`, so regenerate the policy
 (`not_checked` means no id check ran: no policy, or no non-empty commitment pin).
+In full mode, `assurance.test_scope=signer_choice` likewise means the policy did not pin `test_roots`,
+so the receiver did not re-derive the producer's test scope.
 What Core required is read from the contract, so both receipt versions also refuse a request whose
 contract and plan require different ids, whose plan or evidence names another contract, change set
 or plan, or whose `predicate.verifier_observations` differs from its observations

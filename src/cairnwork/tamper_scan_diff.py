@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import codecs
 import re
+import unicodedata
 
 from cairnwork.gitcmd import GitCommandError
 
@@ -18,6 +19,21 @@ _NO_LINES = re.compile(
     r"0+|e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
     r"|473a0f4c3be8a93681a267e3b1e9a7dcda1185436fe141f7749120a303721813"
 )
+# A PEP 263 encoding declaration (Python reads it on line 1 or 2) and the UTF-8 names it accepts.
+_CODING = re.compile(r"^[ \t\f]*#.*?coding[:=][ \t]*([-\w.]+)", re.ASCII)
+_UTF8 = re.compile(r"utf[-_]8(?:[-_][-\w.]*)?|utf8", re.ASCII | re.IGNORECASE)
+
+
+def nfkc_names(text: str) -> str:  # the one normaliser of the line rules (STRING-BUILT later)
+    """Identifier characters in NFKC form, the rest as written (no new operator or separator)."""
+    pairs = ((char, unicodedata.normalize("NFKC", char)) for char in text)
+    return "".join(new if ("a" + new).isidentifier() else old for old, new in pairs)
+
+
+def foreign_coding(text: str) -> bool:
+    """A comment declaring a source encoding other than UTF-8 (read by Python on line 1 or 2)."""
+    found = _CODING.match(text)
+    return found is not None and not _UTF8.fullmatch(found.group(1))
 
 
 def added_lines(diff: str) -> dict[str, list[tuple[int, str]]]:

@@ -48,8 +48,12 @@ def marked(var: str, value: str):
         _MARK.reset(token)
 
 
-# Options that config files cannot override: no hooks, no fsmonitor command, no
-# untracked cache, and replace refs ignored so a commit is always what it is.
+# Options that config files cannot override: no hooks, filters, fsmonitor command,
+# submodule recursion, external diff, untracked cache, or password prompts; replace
+# refs are ignored so a commit is always what it is.
+# Programs deliberately kept: credential helper and ssh command (operator configuration,
+# used only by network fetch/push of origin; local fetches from paths and bundles never
+# call them). Diff drivers remain disabled per call site.
 _SAFE_OPTIONS = (
     "--no-replace-objects",
     "-c",
@@ -58,6 +62,12 @@ _SAFE_OPTIONS = (
     "core.fsmonitor=false",
     "-c",
     "core.untrackedCache=false",
+    "-c",
+    "core.askPass=",
+    "-c",
+    "submodule.recurse=false",
+    "-c",
+    "diff.external=",
 )
 
 
@@ -65,18 +75,19 @@ _SAFE_OPTIONS = (
 # core.hooksPath does not turn off (#737). The friendly name may itself hold dots.
 # The name may also be empty (``[hook ""]``) or hold bytes that are not UTF-8.
 _HOOK_KEY = re.compile(r"hook\.(.*)\.[a-z][a-z0-9-]*", re.DOTALL)
+_FILTER_KEY = re.compile(r"filter\.(.*)\.(clean|smudge|process)", re.DOTALL)
 
 
-def config_hooks_off(repo: Path | str, env: dict[str, str]) -> tuple[str, ...]:
-    """``-c hook.<name>.enabled=false`` for every hook declared in the configuration git reads
-    in repo with env (system, global, repository and GIT_CONFIG_* pairs), to put after
-    _SAFE_OPTIONS. A name that ``-c`` cannot carry (it holds ``=``) is refused, and so is a
-    listing that does not finish (timeout, git not started). The listing is every key, filtered
-    here (a regex in git, under a UTF-8 locale, skips a key that is not UTF-8). When it exits
-    non-zero (no such directory, a malformed file) nothing is added: the command
-    itself reads the same configuration and fails the same way before any hook could run.
-    Names are decoded with surrogateescape, so ``-c`` carries the same bytes back to git (a name
-    that is not UTF-8 is still matched). Listing runs no hook, so it needs no _SAFE_OPTIONS.
+def config_execution_off(repo: Path | str, env: dict[str, str]) -> tuple[str, ...]:
+    """Return ``-c`` overrides disabling declared hooks and filters from one config listing.
+
+    A name that ``-c`` cannot carry (it holds ``=``) is refused, and so is a listing that does
+    not finish (timeout, git not started). The listing is every key, filtered here (a regex in
+    git, under a UTF-8 locale, skips a key that is not UTF-8). When it exits non-zero (no such
+    directory, a malformed file) nothing is added: the command itself reads the same
+    configuration and fails the same way before a hook or filter could run. Names are decoded
+    with surrogateescape, so ``-c`` carries the same bytes back to git (a name that is not UTF-8
+    is still matched). Listing runs no hook, so it needs no _SAFE_OPTIONS.
     """
     try:
         done = subprocess.run(  # noqa: S603 - fixed git argv, no shell
@@ -84,14 +95,30 @@ def config_hooks_off(repo: Path | str, env: dict[str, str]) -> tuple[str, ...]:
             capture_output=True, timeout=GIT_TIMEOUT_SECONDS, env={**env, "LC_ALL": "C"},
         )  # fmt: skip
     except (OSError, subprocess.SubprocessError) as exc:
-        raise GitCommandError("git config (hook listing) failed; refusing to run git") from exc
+        raise GitCommandError(
+            "git config (hook listing for safety options) failed; refusing to run git"
+        ) from exc
     if done.returncode != 0:
         return ()
-    names = sorted({m.group(1) for k in done.stdout.decode("utf-8", "surrogateescape").split("\0")
-                    if (m := _HOOK_KEY.fullmatch(k))})  # fmt: skip
-    if any("=" in n for n in names):
-        raise GitCommandError("a configuration-declared hook name holds '='; refusing to run git")
-    return tuple(x for n in names for x in ("-c", f"hook.{n}.enabled=false"))
+    keys = done.stdout.decode("utf-8", "surrogateescape").split("\0")
+    hooks = sorted({m.group(1) for k in keys if (m := _HOOK_KEY.fullmatch(k))})
+    filters = sorted(
+        {m.groups() for k in keys if (m := _FILTER_KEY.fullmatch(k))},
+    )
+    names = {n for n, _ in filters}
+    if any("=" in n for n in set(hooks) | names):
+        raise GitCommandError(
+            "a configuration-declared hook or filter name holds '='; refusing to run git"
+        )
+    options = [x for n in hooks for x in ("-c", f"hook.{n}.enabled=false")]
+    options.extend(x for n, key in filters for x in ("-c", f"filter.{n}.{key}="))
+    options.extend(x for n in sorted(names) for x in ("-c", f"filter.{n}.required=false"))
+    return tuple(options)
+
+
+def config_hooks_off(repo: Path | str, env: dict[str, str]) -> tuple[str, ...]:
+    """Compatibility name for callers that need all configuration-declared commands off."""
+    return config_execution_off(repo, env)
 
 
 # Greedy to the last '@' in the run free of space and tab (newlines count as part of the run, so
@@ -124,6 +151,14 @@ def _subcommand(args: tuple[str, ...]) -> str:
         elif not arg.startswith("-"):
             return arg
     return args[0] if args else "command"
+
+
+def _no_external_diff(args: tuple[str, ...]) -> tuple[str, ...]:
+    """Keep diff.external from running while preserving the normal internal diff output."""
+    if _subcommand(args) != "diff" or "--no-ext-diff" in args:
+        return args
+    index = args.index("diff")
+    return (*args[: index + 1], "--no-ext-diff", *args[index + 1 :])
 
 
 class GitCommandError(Exception):
@@ -166,6 +201,34 @@ def run_git_bytes(
     return _exec(repo, args, None, False, timeout, text=False, stdin=stdin)
 
 
+def _child_env() -> dict[str, str]:
+    """Base environment for git: no inherited GIT_*, no askpass, terminal prompts off."""
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith("GIT_") and k not in ("SSH_ASKPASS", "SSH_ASKPASS_REQUIRE")
+    }
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    return env
+
+
+def ssh_batch_mode(env: dict[str, str], repo: Path) -> None:
+    """Make ssh fail instead of prompting (password, a key passphrase) on a network fetch or
+    push, unless the operator configured ``core.sshCommand``, which then decides prompting
+    (#759). The caller's GIT_SSH and GIT_SSH_COMMAND stay dropped with the other GIT_*
+    variables. When the setting cannot be read, BatchMode is set (it outranks the setting)."""
+    try:
+        configured = subprocess.run(  # noqa: S603, S607 - fixed argv, no shell
+            ["git", "-C", str(repo), "config", "--get", "core.sshCommand"],
+            capture_output=True, env=env, timeout=GIT_TIMEOUT_SECONDS, check=False,
+        )  # fmt: skip
+        if configured.returncode == 0:
+            return
+    except (OSError, subprocess.SubprocessError):
+        pass
+    env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
+
+
 def _exec(
     repo: Path,
     args: tuple[str, ...],
@@ -179,7 +242,9 @@ def _exec(
 ) -> Any:  # str when text, else bytes
     if not timeout or timeout <= 0:
         raise ValueError(f"timeout must be a positive number of seconds, got {timeout!r}")
-    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env = _child_env()
+    if _subcommand(args) in ("fetch", "push"):  # any of them may reach origin over ssh; a
+        ssh_batch_mode(env, repo)  # local path or bundle never calls ssh, so this is harmless
     mark = _MARK.get()
     if mark is not None:
         var, val = mark
@@ -191,7 +256,14 @@ def _exec(
         env["GIT_CONFIG_SYSTEM"] = os.devnull
     try:
         done = subprocess.run(  # noqa: S603 - fixed git argv, no shell
-            ["git", *_SAFE_OPTIONS, *config_hooks_off(repo, env), "-C", str(repo), *args],
+            [
+                "git",
+                *_SAFE_OPTIONS,
+                *config_hooks_off(repo, env),
+                "-C",
+                str(repo),
+                *_no_external_diff(args),
+            ],
             check=True,
             input=stdin,
             capture_output=True,
@@ -213,7 +285,7 @@ def _exec(
 
 def hash_blob(repo: Path, data: bytes) -> str:
     """Store data as a blob in repo with no filters, from bytes the caller already read."""
-    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env = _child_env()
     try:
         done = subprocess.run(  # noqa: S603 - fixed git argv, no shell
             [

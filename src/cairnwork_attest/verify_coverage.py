@@ -29,6 +29,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from cairnwork import protection
 from cairnwork.deferred_tests import TestCommitRejected, new_tests, untargeted
 from cairnwork.issue_task import test_target
 from cairnwork_attest.binding_extras import conftest_problem, data_problem, required_ids
@@ -68,6 +69,11 @@ def coverage_problem(ctx: Any) -> VerifyResult | None:
     """ctx is verify_binding's check context (binding and request; shapes already checked)."""
     binding = ctx.binding
     verifiers: list[Any] = binding["verifiers"]
+    ids = [verifier_id for verifier_id, _ in verifiers]
+    if len(ids) != len(set(ids)) or any(protection.reserved(verifier_id) for verifier_id in ids):
+        return _fail(
+            "VERIFIER_ID_INVALID", "bound verifier ids must be unique and cannot be reserved"
+        )
     named, paths = [t for _, argv in verifiers for t in targets(argv)], tuple(binding["test_paths"])
     data = frozenset(binding.get("data_paths", []))  # #850: declared data, never read for tests
     if (problem := data_problem(ctx)) is not None:  # a failed result is falsy

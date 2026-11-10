@@ -101,6 +101,7 @@ class Settings:
     # refusals (whitespace on added lines, changes under these roots) instead of ending the run;
     # None (the default) leaves the loop exactly as it was
     precheck_roots: tuple[str, ...] | None = None
+    reasoning_effort: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "write_scope", normalize(self.write_scope))

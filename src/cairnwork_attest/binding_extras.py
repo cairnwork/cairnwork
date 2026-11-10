@@ -30,6 +30,7 @@ from cairnwork.deferred_data import (
 from cairnwork.deferred_overlay import MAX_DELETED_TEST_PATHS, TestCommitRejected
 from cairnwork.gitcmd import GitCommandError, run_git_bytes
 from cairnwork.pytest_config import PytestConfigError, test_file_rule
+from cairnwork_attest import receipt_scope
 from cairnwork_attest.verify_response import VerifyResult, _fail
 
 MAX_IMPORT_PATHS = 8  # issue_task.check_import_paths: 0-8 (pinned by test_binding_import_paths)
@@ -171,23 +172,6 @@ def manifest_problem(claimed: dict[Any, Any], binding: dict[str, Any]) -> Verify
         if not isinstance(entry, dict) or entry.get("change_type") != "DELETE":
             return _fail(
                 "HEAD_TREE_MISMATCH", f"deleted test path {path[:200]!r} is not a deletion"
-            )
-    return None
-
-
-def roots_problem(policy: Any, binding: dict[str, Any], full: bool) -> VerifyResult | None:
-    """Every test path (the deleted ones too) is under a policy ``test_roots``. A receipt with
-    deletions needs that pin in confidential mode: the receiver cannot read the test commit, so
-    without it a deleted path could be any file (#816 review)."""
-    if policy is None or "test_roots" not in policy:
-        if deleted_paths(binding) and not full:
-            return _fail("TEST_ROOT_VIOLATION", "deleted test paths need a policy with test_roots")
-        return None
-    roots = tuple(policy["test_roots"])
-    for path in all_paths(binding):
-        if not any(path.startswith(r.rstrip("/") + "/") for r in roots):
-            return _fail(
-                "TEST_ROOT_VIOLATION", f"test path {path[:200]!r} not under any allowed root"
             )
     return None
 
@@ -377,6 +361,14 @@ def checks_assurance(policy: Mapping[str, Any] | None) -> str:
     if not (policy or {}).get("blackbox_commitment"):
         return "not_checked"
     return "pinned" if "blackbox_checks" in (policy or {}) else "unpinned"
+
+
+def assurance_checks(full: bool, policy: Mapping[str, Any] | None) -> dict[str, str]:
+    """The receiver's blackbox and test-scope assurance values."""
+    return {
+        "blackbox_checks": checks_assurance(policy),
+        "test_scope": receipt_scope.test_scope_assurance(full, policy),
+    }
 
 
 def recorded_protection(binding: Mapping[str, Any]) -> str:
