@@ -102,6 +102,67 @@ def test_added_file_import_system_forms_are_detected(repo, source):
     assert got.value.code == "CANDIDATE_SYS_PATH_MUTATION"
 
 
+SUBMODULE_PATH_REDIRECTS = {
+    "__path__.insert": '__path__.insert(0, "shadow")\n',
+    "__path__.append": '__path__.append("shadow")\n',
+    "__path__ slice assignment": '__path__[:] = ["shadow"]\n',
+    "__path__ replacement": '__path__ = ["shadow"]\n',
+    "spec search locations": ('__spec__.submodule_search_locations.insert(0, "shadow")\n'),
+}
+
+
+@pytest.mark.parametrize("source", SUBMODULE_PATH_REDIRECTS.values(), ids=SUBMODULE_PATH_REDIRECTS)
+@pytest.mark.parametrize("change_type", ["ADD", "MODIFY"])
+def test_candidate_submodule_path_redirects_are_refused(repo, source, change_type):
+    base = git(repo, "rev-parse", "HEAD")
+    path = "pkg/__init__.py"
+    if change_type == "MODIFY":
+        base = commit_change(repo, {path: "VALUE = 1\n"})
+    cand = commit_change(repo, {path: source})
+    with pytest.raises(CandidateRejected) as got:
+        candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand)
+    assert got.value.code == "CANDIDATE_SYS_PATH_MUTATION"
+
+
+def test_package_path_redirect_hiding_in_a_shadow_module_is_refused_by_judge(project, monkeypatch):
+    base, test_commit = make_test_commit(
+        project,
+        {
+            "tests/test_regression.py": (
+                "from pkg import helper\n\n"
+                "def test_hidden_behavior():\n"
+                "    assert helper.answer() == 'expected'\n"
+            )
+        },
+    )
+    candidate_source = (
+        "import pathlib\n"
+        "__path__.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'shadow'))\n"
+    )
+    cand = candidate(
+        project,
+        base,
+        {
+            "pkg/__init__.py": candidate_source,
+            "shadow/helper.py": "def answer():\n    return 'expected'\n",
+        },
+    )
+    task = SimpleNamespace(repo=project, base_commit=base, blackbox=None)
+    result = SimpleNamespace(candidate_commit=cand, task_id="task", attempt_id="attempt", logs=[])
+
+    def verifier_must_not_run(*args, **kwargs):
+        raise AssertionError("candidate verifier ran before the static import scan")
+
+    monkeypatch.setattr(pipeline_judge, "run_verifiers", verifier_must_not_run)
+    with pytest.raises(CandidateRejected) as got:
+        pipeline_judge.judge_candidate(
+            task, (), "digest", None, result, (), VerifyContext(project, project), lambda _: None
+        )
+    assert got.value.code == "CANDIDATE_SYS_PATH_MUTATION"
+    assert "pkg/__init__.py" in str(got.value)
+    assert test_commit
+
+
 def test_changed_blob_read_failure_is_closed(project, monkeypatch):
     base = base_of(project)
     cand = candidate(project, base, {"src/calc.py": "def add(a, b):\n    return a + b\n"})
