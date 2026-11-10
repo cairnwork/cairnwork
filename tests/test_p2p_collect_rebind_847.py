@@ -227,3 +227,25 @@ def test_a_class_header_walrus_does_not_borrow_the_other_class_s_same_name_test(
     )
     side = _classify_single(base, "t.py::TestX::test_a")
     assert side.removed == set() and side.dropped == {"t.py::TestX::test_a"}
+
+
+def test_a_base_annotation_walrus_does_not_widen_the_1127_base_excuse():
+    # Opus review of #1135: the base's dead annotation walrus must not excuse the test commit's
+    # hidden copy (main: dropped). Ids as pytest collects them on 3.11-3.13.
+    base = (
+        "class TestZ:\n    def test_a(self): assert 0\n"
+        "class TestY:\n    def test_a(self): assert 0\n"
+        "    if False:\n        def f(self, x: (test_a := int)): pass\n"
+    )
+    test = (
+        "class TestZ:\n    pass\n"
+        "class TestY:\n    def test_a(self): assert 0\n    def test_a(self): assert 1\n"
+    )
+    side = classify(
+        {"t.py::TestZ::test_a", "t.py::TestY::test_a"},
+        {"t.py::TestY::test_a"},
+        {"t.py"},
+        lambda p: test,
+        lambda p: base,
+    )
+    assert "t.py::TestZ::test_a" in side.dropped and "t.py::TestZ::test_a" not in side.removed

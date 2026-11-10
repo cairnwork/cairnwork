@@ -141,7 +141,9 @@ def _hidden(tree, base, name, path, test_ids, base_ids) -> bool:
 
     try:
         kept = hidden_bindings(tree, name, got(test_ids))
-        return bool(kept - hidden_bindings(base, name, got(base_ids)))  # counts, not a set
+        # #1122: the base side keeps the narrower detection, so a base excuse never grows
+        excused = hidden_bindings(base, name, got(base_ids), annotations=False)
+        return bool(kept - excused)  # counts, not a set
     except RecursionError:  # ast.dump of a very deep expression: not provably gone
         return True
 

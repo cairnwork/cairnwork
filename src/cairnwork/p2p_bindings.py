@@ -79,8 +79,12 @@ def mentions_ast(node: ast.AST, name: str, pattern: re.Pattern, defs: bool = Fal
     )
 
 
-def binds_in_scope(node: ast.AST, name: str, *, module: bool = False) -> bool:
-    """Whether node binds name in the current scope (does not cross into nested scopes)."""
+def binds_in_scope(
+    node: ast.AST, name: str, *, module: bool = False, annotations: bool = True
+) -> bool:
+    """Whether node binds name in the current scope (does not cross into nested scopes).
+    ``annotations=False`` skips parameter and return annotations (#1122: the base side of #1127
+    keeps the older, narrower detection so the excuse it grants never widens)."""
     stack = [node]
     while stack:
         curr = stack.pop()
@@ -91,13 +95,8 @@ def binds_in_scope(node: ast.AST, name: str, *, module: bool = False) -> bool:
             if isinstance(curr, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 stack.extend(curr.args.defaults)
                 stack.extend(d for d in curr.args.kw_defaults if d is not None)
-                args = curr.args
-                params = (*args.posonlyargs, *args.args, args.vararg, *args.kwonlyargs, args.kwarg)
-                stack.extend(
-                    p.annotation for p in params if p is not None and p.annotation is not None
-                )
-                if curr.returns is not None:
-                    stack.append(curr.returns)
+                if annotations:
+                    stack.extend(_annotations(curr))
             else:
                 stack.extend(curr.bases)
                 stack.extend(kw.value for kw in curr.keywords)
@@ -163,7 +162,17 @@ Shadow = tuple[list[ast.stmt], int, str]  # a later part of a scope that may reb
 Scope = tuple[list[ast.stmt], tuple[str, ...], tuple[str, ...] | None, bool, tuple[Shadow, ...]]
 
 
-def hidden_bindings(tree: ast.Module, name: str, collected: set[str]) -> Counter:
+def _annotations(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> list[ast.expr]:
+    """#1122: parameter and return annotations, evaluated in the enclosing scope."""
+    args = fn.args
+    params = (*args.posonlyargs, *args.args, args.vararg, *args.kwonlyargs, args.kwarg)
+    found = [p.annotation for p in params if p is not None and p.annotation is not None]
+    return found if fn.returns is None else [*found, fn.returns]
+
+
+def hidden_bindings(
+    tree: ast.Module, name: str, collected: set[str], *, annotations: bool = True
+) -> Counter:
     """``(scope path, ast.dump)`` counts of each class- or function-body statement binding
     ``name`` where pytest does not collect it (#1127): a function body, a class whose chain
     pytest did not collect under ``name`` (``collected`` holds ``A::B::name`` ids of this file),
@@ -177,10 +186,16 @@ def hidden_bindings(tree: ast.Module, name: str, collected: set[str]) -> Counter
     while scopes:
         body, path, chain, counts, shadows = scopes.pop()
         for i, stmt in enumerate(body):
-            if counts and binds_in_scope(stmt, name) and not _never_a_test(stmt):
+            if (
+                counts
+                and binds_in_scope(stmt, name, annotations=annotations)
+                and not _never_a_test(stmt)
+            ):
                 key = None if chain is None else "::".join((*chain, name))
                 checks = (*shadows, (body, i + 1, name))
-                if key not in collected or any(_shadowed(b, j, n) for b, j, n in checks):
+                if key not in collected or any(
+                    _shadowed(b, j, n, annotations) for b, j, n in checks
+                ):
                     found[(path, ast.dump(stmt))] += 1
             for node in _scopes_in(stmt):
                 sub_path = (*path, node.name)
@@ -192,8 +207,10 @@ def hidden_bindings(tree: ast.Module, name: str, collected: set[str]) -> Counter
     return found
 
 
-def _shadowed(body: list[ast.stmt], start: int, name: str) -> bool:
-    return any(binds_in_scope(body[j], name) for j in range(start, len(body)))
+def _shadowed(body: list[ast.stmt], start: int, name: str, annotations: bool = True) -> bool:
+    return any(
+        binds_in_scope(body[j], name, annotations=annotations) for j in range(start, len(body))
+    )
 
 
 def _scopes_in(stmt: ast.stmt):
