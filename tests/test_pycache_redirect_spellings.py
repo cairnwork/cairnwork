@@ -23,6 +23,8 @@ import marshal
 import pytest
 from verify_helpers import BAD, base_of, candidate, verify
 
+from cairnwork.sys_path_scan import scan_sys_path_blob
+
 pytestmark = pytest.mark.sandbox
 
 # The forged module's code object, made here (the candidate must not call compile itself).
@@ -82,21 +84,27 @@ def test_a_spelled_out_redirect_is_refused_before_it_runs(state, helper_project,
     assert "[pycache_prefix]" in out["reason"], out["reason"]
 
 
-def test_a_redirect_built_from_strings_fails_on_the_planted_bytecode(state, helper_project):
+def test_a_redirect_built_from_strings_is_refused_for_sys_path_mutation(state, helper_project):
+    """This candidate is refused before verifier runs. Direct downstream guards remain covered
+    by tests/test_pycache_redirect.py (run_verifiers) and tests/test_blackbox.py (blackbox runs).
+    """
+    assert not scan_sys_path_blob(b"def add(a, b):\n    return a + b + 1\n")
+    assert scan_sys_path_blob(PLANT.format(redirect=BUILT).encode())
     out = run(state, helper_project, BUILT)
-    assert out["status"] == "FAILED" and not out["verified"], out
-    assert "FORGED_BYTECODE" in out["reason"] and "tests/helper.py" in out["reason"], out
+    assert out["status"] == "REFUSED" and not out["verified"], out
+    assert "CANDIDATE_SYS_PATH_MUTATION" in out["reason"], out
 
 
 @pytest.mark.parametrize("how", sorted(REMOVED))
 def test_bytecode_removed_before_the_run_ends_is_not_verified(state, helper_project, how):
-    """The gap bytecode_roots.py names: add is wrong, so only the forged helper passes it
-    (the last test here runs the same wrong add with nothing planted). The planted bytecode is
-    never loaded (bytecode_hook.py on both platforms, Seatbelt as well on macOS), so the wrong add
-    fails."""
+    """The candidate's sys.path mutation is refused before this historical bytecode case runs;
+    test_pycache_redirect.py covers bytecode handling by driving run_verifiers directly."""
+    source = PLANT.format(redirect=REMOVED[how])
+    assert not scan_sys_path_blob(b"def add(a, b):\n    return a + b + 1\n")
+    assert scan_sys_path_blob(source.encode())
     out = run(state, helper_project, REMOVED[how])
-    assert out["status"] == "FAILED" and not out["verified"], out
-    assert "pytest exit code 1" in out["reason"], out
+    assert out["status"] == "REFUSED" and not out["verified"], out
+    assert "CANDIDATE_SYS_PATH_MUTATION" in out["reason"], out
 
 
 HONEST_COMPILE = (
@@ -112,12 +120,17 @@ HONEST_COMPILE = (
 )
 
 
-def test_a_candidate_that_compiles_and_imports_its_own_module_passes(state, helper_project):
-    """Honest bytecode use is unaffected: the import compiles the source again."""
+def test_a_candidate_that_compiles_its_own_module_is_refused_for_sys_path_mutation(
+    state, helper_project
+):
+    """Honest bytecode use is refused because this candidate edits sys.path."""
+    assert not scan_sys_path_blob(b"def add(a, b):\n    return a + b + 1\n")
+    assert scan_sys_path_blob(HONEST_COMPILE.encode())
     base = base_of(helper_project)
     sha = candidate(helper_project, base, {"src/calc.py": HONEST_COMPILE})
     out = verify(state, helper_project, base, sha, "--import-path", "src")[1]
-    assert out["status"] == "VERIFIED" and out["verified"], out
+    assert out["status"] == "REFUSED" and not out["verified"], out
+    assert "CANDIDATE_SYS_PATH_MUTATION" in out["reason"], out
 
 
 def test_the_same_wrong_add_without_a_forgery_fails(state, helper_project):

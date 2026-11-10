@@ -65,6 +65,18 @@ def test_a_test_rebound_by_class_is_dropped_not_removed():
     assert side.removed == set() and side.dropped == {"t.py::test_a"}
 
 
+def test_a_test_rebound_by_class_keyword_walrus_is_dropped_not_removed():
+    base = "def test_a(): assert 0\nclass B(metaclass=(test_a := type)): pass\n"
+    side = _classify_single(base)
+    assert side.removed == set() and side.dropped == {"t.py::test_a"}
+
+
+def test_a_class_keyword_without_walrus_does_not_rebind_test():
+    base = "def test_a(): assert 0\nclass B(metaclass=type): pass\n"
+    side = _classify_single(base)
+    assert side.removed == {"t.py::test_a"}
+
+
 def test_a_test_rebound_by_del_is_dropped_not_removed():
     base = "def test_a(): assert 0\ndel test_a\n"
     side = _classify_single(base)

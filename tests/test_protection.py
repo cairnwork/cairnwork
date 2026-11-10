@@ -239,6 +239,8 @@ def test_a_binding_that_names_another_level_stops_the_run(monkeypatch):
     from types import SimpleNamespace
 
     monkeypatch.setattr(pipeline_judge, "run_verifiers", lambda *a, **k: [])
+    # fake commit ids: the #1065 scan of the candidate's files is not what this test is about
+    monkeypatch.setattr(pipeline_judge, "refuse_new_sys_path_mutation", lambda *a, **k: None)
     task = SimpleNamespace(
         blackbox=None, repo=Path("r"), base_commit="b" * 40, import_paths=(), allowed_files=(),
         allow_deletions=False, require_protection="", test_commit=None,

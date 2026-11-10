@@ -93,6 +93,7 @@ def binds_in_scope(node: ast.AST, name: str, *, module: bool = False) -> bool:
                 stack.extend(d for d in curr.args.kw_defaults if d is not None)
             else:
                 stack.extend(curr.bases)
+                stack.extend(kw.value for kw in curr.keywords)
             continue
         if isinstance(curr, ast.Lambda):
             stack.extend(curr.args.defaults)

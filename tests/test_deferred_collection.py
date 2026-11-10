@@ -196,6 +196,8 @@ def _judge(monkeypatch, verifier_run, p2p_runs=(), checks=()):
     named = "tests/test_x.py::TestK::test_m"
     monkeypatch.setattr(pipeline_judge, "run_verifiers", lambda *a, **k: [verifier_run])
     monkeypatch.setattr(pipeline_judge, "run_plan", lambda *a, **k: (list(p2p_runs), {}))
+    # fake commit ids: the #1065 scan of the candidate's files is not what these tests are about
+    monkeypatch.setattr(pipeline_judge, "refuse_new_sys_path_mutation", lambda *a, **k: None)
     monkeypatch.setattr(pipeline_judge, "new_tests", lambda *a, **k: frozenset({named}))
     if checks:  # a declared blackbox whose judged checks are the given verdicts
         monkeypatch.setattr(pipeline_judge, "judge_blackbox", lambda *a, **k: (tuple(checks), None))

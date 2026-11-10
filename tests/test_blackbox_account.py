@@ -3,7 +3,8 @@ test_blackbox_verify.py, plus one that tries to read the owner's answers from th
 
 The correct fix is VERIFIED with its check passing; the wrong fix, the ``sys.modules`` swap and the
 attacks on the run (verify_helpers.ATTACKS; pytest alone calls every one but child VERIFIED) fail
-on the check, so Core reports FAILED_VERIFICATION.
+on the check, so Core reports FAILED_VERIFICATION, unless the import scan refuses an in-process
+import edit first (#1065).
 """
 
 import json
@@ -62,6 +63,9 @@ def test_only_the_correct_fix_passes_its_check(account_state, helper_project, tm
     fooled = ("attack", "forge", "finder", "syspath", *NEW_ATTACKS)  # pytest alone: VERIFIED
     for name in ("wrong", "reader", *fooled):
         result = out[name]
+        if result["status"] == "REFUSED":  # an in-process import edit, refused first (#1065)
+            assert "CANDIDATE_SYS_PATH_MUTATION" in result["reason"], (name, result["reason"])
+            continue
         assert (result["status"], result["core_status"]) == ("FAILED", "FAILED_VERIFICATION"), name
         assert "blackbox:add: MISMATCH [matched 0/2]" in result["reason"], (name, result["reason"])
     # child's add is right; only its process outlives the run. Seatbelt cannot reap it, so the run
@@ -69,7 +73,9 @@ def test_only_the_correct_fix_passes_its_check(account_state, helper_project, tm
     # left and the right answer may pass (as for a verifier: test_verifier_account.py).
     survivors = "blackbox:add: VERIFICATION_INCOMPLETE: SURVIVORS"
     backend = cairnwork_sandbox.platform_backend()
-    if backend is not None and backend.name == "seatbelt":
+    if out["child"]["status"] == "REFUSED":  # #1065, as above
+        assert "CANDIDATE_SYS_PATH_MUTATION" in out["child"]["reason"], out["child"]
+    elif backend is not None and backend.name == "seatbelt":
         assert out["child"]["core_status"] == "FAILED_VERIFICATION", out["child"]
         assert survivors in out["child"]["reason"]
     else:
