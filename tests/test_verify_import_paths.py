@@ -57,7 +57,10 @@ def test_src_layout_is_uncomparable_without_the_flag_and_verified_with_it(state,
 def test_bad_import_path_is_refused_before_anything_runs(state, srcproject, bad):
     fix = candidate(srcproject, base_of(srcproject), {SRC_FILE: FIX})
     code, out = run(state, srcproject, fix, "--import-path", bad)
-    assert code == 2 and out["error"] == "BAD_IMPORT_PATH" and set(out) == {"error", "detail"}
+    assert code == 2 and out["error"] == "BAD_IMPORT_PATH"
+    # the uniform pre-run refusal record (#1152): nothing else, no run fields
+    assert set(out) == {"status", "verified", "reason", "error", "detail"}
+    assert (out["status"], out["verified"], out["reason"]) == ("REFUSED", False, "BAD_IMPORT_PATH")
     assert not (state / "ownership.sqlite").exists()  # prepare() never ran
 
 
