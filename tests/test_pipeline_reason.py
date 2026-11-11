@@ -51,3 +51,14 @@ def test_an_oversized_test_report_is_a_named_cause_only_when_flagged():
     )  # fmt: skip
     assert "test report over the size cap" not in why_not_passed(**base)
     assert "test report over the size cap" in why_not_passed(**base, report_too_big=True)
+
+
+def test_all_skipped_has_a_specific_failure_reason_but_default_stays_compatible():
+    base: dict[str, Any] = dict(
+        ran_sandboxed=True, returncode=0, timed_out=False, mutated=(), survivors=0,
+        log_too_big=False, tests_ran=False,
+    )  # fmt: skip
+    assert why_not_passed(**base) == "pytest passed but the guard saw no test run"
+    assert why_not_passed(**base, all_skipped=True) == (
+        "pytest passed but every collected test was skipped"
+    )

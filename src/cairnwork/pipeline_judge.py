@@ -45,6 +45,7 @@ from cairnwork.p2p import P2PPlan, run_plan
 from cairnwork.p2p_nodes import clean
 from cairnwork.pytest_config import PytestConfigError, gate_import_paths, test_file_rule
 from cairnwork.reasons import explain, verdict_reason
+from cairnwork.skip_evidence import raise_for_env_skips
 from cairnwork.verifier_account import VerifierAccountError
 from cairnwork.verifier_spec import protected_verifier_inputs
 from cairnwork.verifiers import run_verifiers
@@ -258,8 +259,8 @@ def judge_candidate(
         bb_logs = [str(log)] if log else []
     # #803: no candidate code ran as the account before this run unless a blackbox run (verify
     # only, which judges any account error the same) came first: then a refusal is a plain error
-    first = run_verifiers if task.blackbox is None else partial(after_candidate_ran, run_verifiers)
-    runs = busy_once_more(first, ctx, judged, specs, f"{result.attempt_id}-v")
+    runs = _candidate_runs(task, ctx, judged, specs, result)
+    raise_for_env_skips(runs, task.repo, task.base_commit, judged)
     verified_by = list(runs)  # the verifier runs alone, as the base run's check reads them
     if p2p is not None:
         p2p_runs, result.p2p = after_candidate_ran(run_plan, p2p, task, judged, result, ctx)
@@ -303,6 +304,11 @@ def judge_candidate(
     result.verified = bool(verdict.verified and recorded and recorded.verified)
     result.reason = verdict_reason(result.verified, verdict, recorded) + explain(runs)
     result.reason += "".join(f" [{check.reason}]" for check in checks) + gate_note
+
+
+def _candidate_runs(task, ctx, judged, specs, result):
+    first = run_verifiers if task.blackbox is None else partial(after_candidate_ran, run_verifiers)
+    return busy_once_more(first, ctx, judged, specs, f"{result.attempt_id}-v")
 
 
 def _refuse_candidate_sys_path(task, result) -> None:
