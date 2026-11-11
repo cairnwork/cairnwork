@@ -133,6 +133,7 @@ def tests_with_teeth(
     recorded_runs = runs
     # #1034: what the base run really ran, before as_failed adds function-level ids for a #796 file
     nodes = {r.spec.verifier_id: tuple(r.outcomes) for r in runs if not r.spec.collect_only}
+    base_skips = {r.spec.verifier_id: r.skips for r in runs if not r.spec.collect_only}
 
     def is_test(path: str) -> bool:  # asked only when a record qualifies: a base test file, or
         # any file under a test root (a test package's own helper is not code the fix adds)
@@ -153,7 +154,7 @@ def tests_with_teeth(
     if comparison.kind != "TEETH":
         raise TestCommitRejected(comparison.code, comparison.detail)
     _check_seed_replay(ctx, result, runs, targets, base, task.test_commit, is_test)
-    return TestFiles(paths, deleted, nodes)
+    return TestFiles(paths, deleted, nodes, base_skips)
 
 
 def _check_seed_replay(ctx, result, runs, targets, base, test_commit, is_test) -> None:
@@ -260,7 +261,6 @@ def judge_candidate(
     # #803: no candidate code ran as the account before this run unless a blackbox run (verify
     # only, which judges any account error the same) came first: then a refusal is a plain error
     runs = _candidate_runs(task, ctx, judged, specs, result)
-    raise_for_env_skips(runs, task.repo, task.base_commit, judged)
     verified_by = list(runs)  # the verifier runs alone, as the base run's check reads them
     if p2p is not None:
         p2p_runs, result.p2p = after_candidate_ran(run_plan, p2p, task, judged, result, ctx)
@@ -274,6 +274,7 @@ def judge_candidate(
     if refusal := _not_run_refusal(missing, test_files, verified_by, (*runs, *checks)):
         result.reason = refusal  # #697, #1034: Core is not asked
         return
+    raise_for_env_skips(runs, task.repo, task.base_commit, judged, test_files)
     # Core's ALLOW is whole-contract; only the test commit's files can be deleted (producer check)
     if deleted_of(test_files) and not task.allow_deletions:
         if stray := stray_deletions(task.repo, task.base_commit, judged, deleted_of(test_files)):

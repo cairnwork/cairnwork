@@ -18,7 +18,12 @@ _DELIMITERS = re.compile(r"[\[\];:]")
 
 
 def env_skip_comparison(
-    runs: tuple[Any, ...] | list[Any], repo: Path, base: str, judged: str
+    runs: tuple[Any, ...] | list[Any],
+    repo: Path,
+    base: str,
+    judged: str,
+    base_skips: dict[str, dict[str, tuple[str, str]]] | None = None,
+    deferred_files: tuple[str, ...] = (),
 ) -> Comparison | None:
     """Return UNCOMPARABLE only when every verifier has trusted all-skipped evidence."""
     changed = _changed_paths(repo, base, judged)
@@ -26,16 +31,24 @@ def env_skip_comparison(
         return None
     details = []
     for run in runs:
-        detail = _run_detail(run, changed, repo, base)
+        detail = _run_detail(run, changed, repo, base, base_skips or {}, deferred_files)
         if detail is None:
             return None
         details.append(detail)
     return Comparison("UNCOMPARABLE", "TESTS_SKIPPED_ENVIRONMENT", "; ".join(details))
 
 
-def raise_for_env_skips(runs, repo: Path, base: str, judged: str) -> None:
+def raise_for_env_skips(runs, repo: Path, base: str, judged: str, test_files=None) -> None:
     """Raise the verify-boundary signal when every verifier lacks environment evidence."""
-    if comparison := env_skip_comparison(runs, repo, base, judged):
+    comparison = env_skip_comparison(
+        runs,
+        repo,
+        base,
+        judged,
+        getattr(test_files, "base_skips", {}),
+        tuple(test_files or ()),
+    )
+    if comparison:
         raise BaseUncomparable(comparison)
 
 
@@ -46,18 +59,38 @@ def _changed_paths(repo: Path, base: str, judged: str) -> set[str] | None:
         return None
 
 
-def _run_detail(run: Any, changed: set[str], repo: Path, base: str) -> str | None:
+def _run_detail(
+    run: Any,
+    changed: set[str],
+    repo: Path,
+    base: str,
+    base_skips: dict[str, dict[str, tuple[str, str]]],
+    deferred_files: tuple[str, ...],
+) -> str | None:
     collected: tuple[str, ...] = tuple(getattr(run, "collected", ()))
     outcomes = getattr(run, "outcomes", {})
     skips: dict[str, tuple[str, str]] = getattr(run, "skips", {})
-    if not _clean_run(run) or not collected or set(outcomes) != set(collected):
+    if (
+        not _clean_run(run)
+        or not getattr(run, "collection_finished", False)
+        or getattr(run, "collect_errors", ())
+        or getattr(run, "collect_skipped", ())
+        or getattr(run, "skipped_deps", ())
+        or not collected
+        or set(outcomes) != set(collected)
+    ):
         return None
     if any(outcomes.get(node) != "skipped" for node in collected) or set(skips) != set(collected):
         return None
     evidence = [skips[node] for node in collected]
     if any(kind != "marker" or reason not in ENV_SKIP_REASONS for kind, reason in evidence):
         return None
-    files = {_node_file(node) for node in collected}
+    files_collected = {_node_file(node) for node in collected}
+    if deferred_files and not set(deferred_files) <= files_collected:
+        return None
+    if not base_skips or base_skips.get(run.spec.verifier_id) != skips:
+        return None
+    files = files_collected
     if "" in files or any(not _base_file(repo, base, path, changed) for path in files):
         return None
     reasons = ", ".join(dict.fromkeys(_clean(reason) for _, reason in evidence))

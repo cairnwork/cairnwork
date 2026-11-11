@@ -1,7 +1,5 @@
 """Real Seatbelt coverage for a pre-existing environment-skip marker."""
 
-import re
-
 import pytest
 from conftest import commit_change, git
 from verify_helpers import FIX, candidate, verify
@@ -35,13 +33,12 @@ def _assert_no_receipt(state, out):
         read_record(state / "notary.sqlite", out["task_id"], out["attempt_id"])
 
 
-def test_unchanged_test_with_environment_skip_is_uncomparable(project, state):
+def test_cli_path_without_a_base_run_keeps_environment_skip_failed(project, state):
     base = _base(project)
     cand = candidate(project, base, {"src/calc.py": FIX})
     code, out = verify(state, project, base, cand, tests=(COMMAND,))
-    assert code == 2 and out["status"] == "UNCOMPARABLE"
-    assert out["uncomparable"]["code"] == "TESTS_SKIPPED_ENVIRONMENT"
-    assert REASON in out["reason"] and not re.search(r"/(Users|private|var)/", out["reason"])
+    assert code == 2 and out["status"] == "FAILED"
+    assert "TESTS_SKIPPED_ENVIRONMENT" not in out["reason"]
     _assert_no_receipt(state, out)
 
 

@@ -8,6 +8,41 @@ from typing import Any
 from cairnwork.reasons import verdict_reason, why_not_passed
 
 
+def test_not_run_refusal_precedes_environment_skip(monkeypatch, tmp_path):
+    from cairnwork import pipeline_judge
+
+    task = SimpleNamespace(
+        blackbox=None,
+        repo=tmp_path,
+        base_commit="base",
+        allowed_files=(),
+        test_commit=None,
+    )
+    result = SimpleNamespace(
+        candidate_commit="candidate",
+        task_id="task",
+        attempt_id="attempt",
+        logs=[],
+        failure_evidence=[],
+        reason="",
+        verified=False,
+    )
+    run = SimpleNamespace(log_path=tmp_path / "run.log", observation=SimpleNamespace(passed=True))
+    monkeypatch.setattr(pipeline_judge, "_refuse_candidate_sys_path", lambda *_: None)
+    monkeypatch.setattr(pipeline_judge, "_candidate_runs", lambda *_: [run])
+    monkeypatch.setattr(pipeline_judge.failure_evidence, "capture_for_task", lambda *_: [])
+    monkeypatch.setattr(pipeline_judge, "_not_run_refusal", lambda *_: "NAMED_TESTS_NOT_RUN")
+    monkeypatch.setattr(
+        pipeline_judge,
+        "raise_for_env_skips",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("called too early")),
+    )
+    pipeline_judge.judge_candidate(
+        task, (), "digest", None, result, (), SimpleNamespace(), lambda *_: None
+    )
+    assert result.reason == "NAMED_TESTS_NOT_RUN"
+
+
 def _v(status, reason=""):
     return SimpleNamespace(status=status, reason=reason)
 

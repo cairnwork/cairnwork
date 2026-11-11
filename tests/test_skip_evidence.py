@@ -26,12 +26,23 @@ def _run(**changes: Any) -> SimpleNamespace:
         "survivors": 0,
         "log_too_big": False,
         "report_too_big": False,
+        "collection_finished": True,
         "collected": (NODE,),
         "outcomes": {NODE: "skipped"},
         "skips": {NODE: ("marker", ENV_SKIP_REASONS[0])},
     }
     values.update(changes)
     return SimpleNamespace(**values)
+
+
+def _compare(run, repo, base, judged, *, base_skips=None):
+    return env_skip_comparison(
+        [run],
+        repo,
+        base,
+        judged,
+        {run.spec.verifier_id: run.skips} if base_skips is None else base_skips,
+    )
 
 
 @pytest.fixture
@@ -53,7 +64,7 @@ def commits(repo):
 
 def test_all_environment_marker_skips_are_uncomparable(commits):
     repo, base, judged = commits
-    result = env_skip_comparison([_run()], repo, base, judged)
+    result = _compare(_run(), repo, base, judged)
     assert result == Comparison(
         "UNCOMPARABLE",
         "TESTS_SKIPPED_ENVIRONMENT",
@@ -64,7 +75,7 @@ def test_all_environment_marker_skips_are_uncomparable(commits):
 def test_detail_never_includes_host_paths_from_verifier_ids(commits):
     repo, base, judged = commits
     run = _run(spec=SimpleNamespace(verifier_id="/Users/private/verifier"))
-    result = env_skip_comparison([run], repo, base, judged)
+    result = _compare(run, repo, base, judged)
     assert result is not None and "/Users/" not in result.detail
 
 
@@ -79,7 +90,7 @@ def test_detail_never_includes_host_paths_from_verifier_ids(commits):
 def test_untrusted_skip_kind_or_reason_stays_failed(commits, evidence):
     repo, base, judged = commits
     run = _run(skips={NODE: evidence})
-    assert env_skip_comparison([run], repo, base, judged) is None
+    assert _compare(run, repo, base, judged) is None
 
 
 def test_changed_test_file_cannot_supply_environment_skip(commits):
@@ -87,7 +98,7 @@ def test_changed_test_file_cannot_supply_environment_skip(commits):
     git(repo, "checkout", "-q", "--detach", judged)
     commit_change(repo, {"tests/test_env.py": "def test_needs_sandbox(): assert False\n# edit\n"})
     edited = git(repo, "rev-parse", "HEAD").strip()
-    assert env_skip_comparison([_run()], repo, base, edited) is None
+    assert _compare(_run(), repo, base, edited) is None
 
 
 def test_runtime_skip_in_a_candidate_added_test_is_not_environment_evidence(commits):
@@ -101,7 +112,7 @@ def test_runtime_skip_in_a_candidate_added_test_is_not_environment_evidence(comm
         outcomes={node: "skipped"},
         skips={node: ("runtime", ENV_SKIP_REASONS[0])},
     )
-    assert env_skip_comparison([run], repo, base, added) is None
+    assert _compare(run, repo, base, added) is None
 
 
 @pytest.mark.parametrize(
@@ -113,6 +124,10 @@ def test_runtime_skip_in_a_candidate_added_test_is_not_environment_evidence(comm
         {"returncode": 1},
         {"timed_out": True},
         {"recorded": False},
+        {"collection_finished": False},
+        {"collect_errors": ("tests/test_env.py",)},
+        {"collect_skipped": ("tests/test_env.py",)},
+        {"skipped_deps": ("missing_dep",)},
         {"mutated": ("x",)},
         {"survivors": 1},
         {"log_too_big": True},
@@ -121,12 +136,44 @@ def test_runtime_skip_in_a_candidate_added_test_is_not_environment_evidence(comm
 )
 def test_incomplete_or_bad_run_stays_failed(commits, changes):
     repo, base, judged = commits
-    assert env_skip_comparison([_run(**changes)], repo, base, judged) is None
+    assert _compare(_run(**changes), repo, base, judged) is None
 
 
 def test_each_verifier_must_qualify(commits):
     repo, base, judged = commits
-    assert env_skip_comparison([_run(), _run(returncode=1)], repo, base, judged) is None
+    assert (
+        env_skip_comparison([_run(), _run(returncode=1)], repo, base, judged, {"v1": _run().skips})
+        is None
+    )
+
+
+def test_base_skip_mismatch_stays_failed(commits):
+    repo, base, judged = commits
+    assert _compare(_run(), repo, base, judged, base_skips={"v1": {}}) is None
+
+
+def test_missing_base_run_stays_failed(commits):
+    repo, base, judged = commits
+    assert env_skip_comparison([_run()], repo, base, judged) is None
+
+
+def test_identical_base_skips_are_uncomparable(commits):
+    repo, base, judged = commits
+    assert _compare(_run(), repo, base, judged) == Comparison(
+        "UNCOMPARABLE",
+        "TESTS_SKIPPED_ENVIRONMENT",
+        "v1: 1 skipped (needs macOS sandbox-exec; tests/test_env.py)",
+    )
+
+
+def test_each_deferred_file_must_be_collected(commits):
+    repo, base, judged = commits
+    assert (
+        env_skip_comparison(
+            [_run()], repo, base, judged, {"v1": _run().skips}, ("tests/test_other.py",)
+        )
+        is None
+    )
 
 
 def test_report_plugin_distinguishes_marker_and_runtime_skips(tmp_path):
