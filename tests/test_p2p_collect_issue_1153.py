@@ -99,7 +99,7 @@ def test_star_import_in_module_with_is_dropped_not_removed():
 def test_except_alias_rebind_is_dropped_not_removed():
     base = "def test_a(): assert 0\ntry:\n    pass\nexcept Exception as test_a:\n    pass\n"
     side = _classify_single(base)
-    assert side.removed == {"t.py::test_a"} and side.dropped == set()
+    assert side.removed == set() and side.dropped == {"t.py::test_a"}
 
 
 def test_comprehension_walrus_is_dropped_not_removed():
@@ -145,13 +145,16 @@ def test_pinned_847_lambda_rebind_is_dropped_not_removed():
     assert side.removed == set() and side.dropped == {"t.py::test_a"}
 
 
-def test_except_as_test_name_does_not_mask_prior_def():
+def test_except_as_test_name_is_a_rebind_in_a_maybe_run_block():
+    # Only a top-level def or one in a surely-run if branch counts (#1153); `except E as name`
+    # in a handler that may run rebinds the name, so the base cannot be trusted to supply it
+    # (pinned on main by tests/test_p2p_rebind_mutants_1154.py, #1168).
     base = (
         "import pytest\ndef test_a(): pass\ntry:\n    pass\n"
         "except ValueError as test_a:\n    pass\n"
     )
     side = _classify_single(base)
-    assert side.removed == {"t.py::test_a"} and side.dropped == set()
+    assert side.removed == set() and side.dropped == {"t.py::test_a"}
 
 
 def test_deep_if_elif_chain_does_not_raise_recursion_error():

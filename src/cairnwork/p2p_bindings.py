@@ -342,8 +342,10 @@ def last_module_def(body: list[ast.stmt], name: str) -> ast.AST | None:
                 elif isinstance(stmt, ast.Try):
                     visit(stmt.body, allow_def=False)
                     for h in stmt.handlers:
-                        if h.type is not None and binds_in_scope(h.type, name, module=True):
-                            last = h
+                        if h.name == name or (
+                            h.type is not None and binds_in_scope(h.type, name, module=True)
+                        ):
+                            last = h  # `except E as name` rebinds name too
                         visit(h.body, allow_def=False)
                     visit(stmt.orelse, allow_def=False)
                     visit(stmt.finalbody, allow_def=False)
