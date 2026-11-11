@@ -4,17 +4,12 @@
 
 One pass does two things:
 
-* **take**: every open Issue labelled ``cairnwork:queue`` whose queueing is trusted
-  (issue_task.queue_trusted) and whose ``eia-task`` block parses becomes a task in the
-  intake at ``--state`` (the same state the Gateway route uses, so ``in-flight`` sees
-  both). Base = ``origin/main`` of the dedicated ``--clone`` (fetched first; never a
-  shared working tree). Idempotency key and card hash come from the Issue number and the
-  block, so a re-run starts nothing new and an edited block is a new task. The Issue
-  gets ``cairnwork:running`` and a comment with the task id.
-* **settle**: for every ``cairnwork:running`` Issue, a COMPLETED, Core-verified task is
-  pushed as branch ``cairnwork/<issue>-<attempt>`` and opened as a **draft** PR (it is
-  reviewed and merged like any other PR; Cairnwork never merges). A FAILED task gets
-  a fixed-vocabulary comment (issue_publish) and ``cairnwork:failed``.
+* **take**: trusted queued Issues whose ``eia-task`` block parses become intake tasks in
+  ``--state`` (shared with Gateway ``in-flight``), based on the fetched ``origin/main`` of
+  the dedicated clone. Issue number and block hash provide idempotency; the Issue is then
+  labelled ``cairnwork:running`` and commented with its task id.
+* **settle**: a COMPLETED, Core-verified task opens a draft PR (Cairnwork never merges); a
+  FAILED task gets a fixed-vocabulary comment and ``cairnwork:failed``.
 
 GitHub calls use ``--gh`` (the bot's wrapper, checked); an error leaves the Issue for next pass.
 """
@@ -150,7 +145,13 @@ def _take_one(intake, github, clone, base, issue) -> dict[str, Any]:
     }
     # the ledger knows what was bound (a resubmit is refused once main moved, #404, #424), adopted
     # only if bound with this payload (#426); the record is a cache rewritten from it (#442)
-    if bound and adoptable(bound, intake.load_request, payload):
+    try:
+        can_adopt = bool(bound and adoptable(bound, intake.load_request, payload))
+    except IntakeRefused as exc:
+        if exc.code == "BAD_REQUEST" and bound.status != "FAILED":
+            raise RuntimeError(f"TASK_BOUND_REQUEST_INVALID: {bound.task_id}: {exc}") from exc
+        raise
+    if can_adopt:
         _remember(intake, github.repo, number, bound.task_id, task.block_sha256)
         github.relabel(number, RUNNING, QUEUE)  # taken before; only the label was missing
         return {"task_id": bound.task_id, "already": True}

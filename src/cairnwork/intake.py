@@ -388,12 +388,13 @@ class Intake:
 
 
 def _mirror_base(mirror: Path, source: Path, base: str) -> None:
-    """Fetch base from source into the mirror and pin it with a ref (no FETCH_HEAD, so
-    no lock between parallel fetches, and gc cannot drop it). Only source is read."""
+    """Fetch and pin base without FETCH_HEAD, locking parallel fetches out of gc."""
     try:
         run_git(
             mirror, "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", str(source),
             f"{base}:refs/cairnwork-bases/{base}",  # outside the guarded refs/cairnwork/
         )  # fmt: skip
     except GitCommandError as exc:
+        if not isinstance(exc.__cause__, subprocess.CalledProcessError):
+            raise OSError(f"Cairnwork could not run git: {exc}") from exc
         raise IntakeRefused("BAD_REQUEST", f"cannot fetch {base} from {source}") from exc
