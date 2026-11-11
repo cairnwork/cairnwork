@@ -186,11 +186,7 @@ def hidden_bindings(
     while scopes:
         body, path, chain, counts, shadows = scopes.pop()
         for i, stmt in enumerate(body):
-            if (
-                counts
-                and binds_in_scope(stmt, name, annotations=annotations)
-                and not _never_a_test(stmt)
-            ):
+            if counts and binds_in_scope(stmt, name) and not _never_a_test(stmt):
                 key = None if chain is None else "::".join((*chain, name))
                 checks = (*shadows, (body, i + 1, name))
                 if key not in collected or any(

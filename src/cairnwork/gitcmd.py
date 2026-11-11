@@ -3,7 +3,8 @@
 Stripping GIT_* keeps a hook environment (GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE)
 from pointing a command at another repository or index. Hooks, the fsmonitor
 command, configuration-declared hooks and the untracked cache are disabled and replace refs
-are ignored.
+are ignored. Only the file, https and ssh transports are allowed, and configured transport
+programs (upload-pack, receive-pack, git proxy, alternate refs command) are not run (#759).
 These options are a second line of defence: workers never get a checkout that
 shares Cairnwork's repository (see workspace.py), and Cairnwork never runs git
 inside a worker's repository except to fetch its HEAD.
@@ -50,10 +51,11 @@ def marked(var: str, value: str):
 
 # Options that config files cannot override: no hooks, filters, fsmonitor command,
 # submodule recursion, external diff, untracked cache, or password prompts; replace
-# refs are ignored so a commit is always what it is.
-# Programs deliberately kept: credential helper and ssh command (operator configuration,
-# used only by network fetch/push of origin; local fetches from paths and bundles never
-# call them). Diff drivers remain disabled per call site.
+# refs are ignored so a commit is always what it is. Transports: file, https, ssh only.
+# Programs deliberately kept: credential helper and ssh command (operator configuration).
+# They serve ssh and https remotes (network fetch/push); a local fetch from a path or bundle
+# normally does not call them, but a repo's url.<ssh>.insteadOf can still route one through
+# core.sshCommand. Diff drivers remain disabled per call site.
 _SAFE_OPTIONS = (
     "--no-replace-objects",
     "-c",
@@ -73,10 +75,28 @@ _SAFE_OPTIONS = (
     # GIT_ALLOW_PROTOCOL and the other GIT_* variables (_child_env, cairnwork_attest.publish).
     "-c",
     "protocol.ext.allow=never",
+    # A repo's alternate-refs program is not run (#759). Transport programs (git:// through
+    # core.gitProxy, <helper>:: remotes) are blocked by GIT_ALLOW_PROTOCOL, set in the child env.
+    "-c",
+    "core.alternateRefsCommand=",
     # log/show must print only the commit: no signature-check output (gpg) in a parsed %B (#1126).
     "-c",
     "log.showSignature=false",
 )
+
+
+def _safe_transport_args(args: tuple[str, ...]) -> tuple[str, ...]:
+    """Pin fetch and push to Git's built-in transport programs."""
+    subcommand = _subcommand(args)
+    if subcommand not in ("fetch", "push"):
+        return args
+    index = args.index(subcommand)
+    option = (
+        "--upload-pack=git-upload-pack"
+        if subcommand == "fetch"
+        else "--receive-pack=git-receive-pack"
+    )
+    return (*args[: index + 1], option, *args[index + 1 :])
 
 
 # hook.<friendly-name>.<key> (git 2.54 and later): hooks declared in configuration, which
@@ -210,14 +230,21 @@ def run_git_bytes(
     return _exec(repo, args, None, False, timeout, text=False, stdin=stdin)
 
 
+# GIT_ALLOW_PROTOCOL beats every protocol.*.allow setting, so git:// (core.gitProxy) and other
+# <helper>:: remotes never run (#759). Set in _child_env and in cairnwork_attest.publish._git.
+ALLOWED_PROTOCOLS = "file:https:ssh"
+
+
 def _child_env() -> dict[str, str]:
-    """Base environment for git: no inherited GIT_*, no askpass, terminal prompts off."""
+    """Base environment for git: no inherited GIT_*, no askpass, terminal prompts off, and
+    only the file, https and ssh transports."""
     env = {
         k: v
         for k, v in os.environ.items()
         if not k.startswith("GIT_") and k not in ("SSH_ASKPASS", "SSH_ASKPASS_REQUIRE")
     }
     env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GIT_ALLOW_PROTOCOL"] = ALLOWED_PROTOCOLS
     return env
 
 
@@ -271,7 +298,7 @@ def _exec(
                 *config_hooks_off(repo, env),
                 "-C",
                 str(repo),
-                *_no_external_diff(args),
+                *_no_external_diff(_safe_transport_args(args)),
             ],
             check=True,
             input=stdin,

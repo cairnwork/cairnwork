@@ -14,7 +14,14 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from cairnwork.gitcmd import _SAFE_OPTIONS, GitCommandError, config_hooks_off, ssh_batch_mode
+from cairnwork.gitcmd import (
+    _SAFE_OPTIONS,
+    ALLOWED_PROTOCOLS,
+    GitCommandError,
+    _safe_transport_args,
+    config_hooks_off,
+    ssh_batch_mode,
+)
 from cairnwork_attest.bundle import BundleError, read_bundle
 from cairnwork_attest.record import AttestError, parse_strict_json
 
@@ -67,6 +74,7 @@ def _git(repo: Path, *args: str, input: bytes | None = None) -> subprocess.Compl
         and k not in ("SSH_ASKPASS", "SSH_ASKPASS_REQUIRE")  # no password prompt program (#759)
     }
     env.update({"GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C", "LANGUAGE": "C"})
+    env["GIT_ALLOW_PROTOCOL"] = ALLOWED_PROTOCOLS  # beats any protocol.*.allow (#759)
     if args and args[0] in ("fetch", "push"):
         ssh_batch_mode(env, repo)
     try:
@@ -74,7 +82,7 @@ def _git(repo: Path, *args: str, input: bytes | None = None) -> subprocess.Compl
     except GitCommandError as exc:  # a hook name -c cannot carry: git is not run
         return subprocess.CompletedProcess(["git", *args], 1, "", str(exc))
     proc = subprocess.run(
-        ["git", *_SAFE_OPTIONS, *hooks_off, *args],
+        ["git", *_SAFE_OPTIONS, *hooks_off, *_safe_transport_args(args)],
         cwd=repo,
         env=env,
         capture_output=True,
