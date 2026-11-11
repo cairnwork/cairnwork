@@ -65,7 +65,16 @@ def main(argv: list[str] | None = None) -> int:
     except IntakeRefused as exc:
         return _emit({"error": exc.code, "detail": exc.detail}, 2)
     except TaskRejected as exc:
-        return _emit({"error": exc.code, "detail": str(exc)}, 2)
+        return _emit(
+            {
+                "status": "REFUSED",
+                "verified": False,
+                "reason": exc.code,
+                "error": exc.code,
+                "detail": str(exc),
+            },
+            2,
+        )
     except RunLockBusy as exc:
         return _emit({"error": exc.code, "detail": str(exc)}, 2)
     except (

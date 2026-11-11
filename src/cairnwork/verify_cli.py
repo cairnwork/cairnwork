@@ -73,7 +73,16 @@ def main(argv: list[str] | None = None) -> int:
     except IntakeRefused as exc:
         return _emit({"error": exc.code, "detail": exc.detail}, 2)
     except (TaskRejected, blackbox.BlackboxRejected) as exc:
-        return _emit({"error": exc.code, "detail": str(exc)}, 2)
+        return _emit(
+            {
+                "status": "REFUSED",
+                "verified": False,
+                "reason": exc.code,
+                "error": exc.code,
+                "detail": str(exc),
+            },
+            2,
+        )
     except (NotarySchemaMismatch, NotaryMissing) as exc:  # NOTARY_SCHEMA_OLDER: migrate-notary
         return _emit({"error": exc.code, "detail": str(exc)}, 2)
     except KeyboardInterrupt:  # #783: say what the interruption cost; the signal still ends the run
