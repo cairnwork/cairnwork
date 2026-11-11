@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import copy
+import re
 from collections import Counter
 from collections.abc import Sequence
 
@@ -236,6 +237,13 @@ def alias_machinery_changed(old: bytes | None, new: bytes) -> bool:
     return any(k in new_hot for k in added) or any(k in old_hot for k in removed)
 
 
+# module-level open(path, mode, ...) functions; any other receiver is treated as Path-like
+_PATH_FIRST_OPENERS = frozenset(
+    {"os", "io", "builtins", "gzip", "bz2", "lzma", "codecs", "tarfile"}
+)
+_MODE_TEXT = re.compile(r"[rwaxbtU+]{1,6}")
+
+
 def _is_write_call(call: ast.Call) -> bool:
     if isinstance(call.func, ast.Attribute) and call.func.attr in WRITE_ATTRS | {
         "write",
@@ -267,10 +275,17 @@ def _is_write_call(call: ast.Call) -> bool:
                 mode_arg = kw.value
                 break
         receiver = call.func.value if isinstance(call.func, ast.Attribute) else None
-        standard_receiver = isinstance(receiver, ast.Name) and receiver.id in {"os", "io"}
-        positional_mode = 1 if receiver is None or standard_receiver else 0
-        if mode_arg is None and len(call.args) > positional_mode:
-            mode_arg = call.args[positional_mode]
+        module_receiver = isinstance(receiver, ast.Name) and receiver.id in _PATH_FIRST_OPENERS
+        if mode_arg is None and (receiver is None or module_receiver):
+            mode_arg = call.args[1] if len(call.args) > 1 else None
+        elif mode_arg is None and call.args:
+            # a Path-like receiver takes the mode first; an aliased module takes it second
+            first = call.args[0]
+            text = first.value if isinstance(first, ast.Constant) else None
+            if not isinstance(text, str) or _MODE_TEXT.fullmatch(text):
+                mode_arg = first
+            elif len(call.args) > 1:
+                mode_arg = call.args[1]
         if mode_arg is not None:
             if not (isinstance(mode_arg, ast.Constant) and isinstance(mode_arg.value, str)):
                 return True

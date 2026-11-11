@@ -85,3 +85,28 @@ def test_unparseable_new_raises_value_error():
         alias_machinery_changed(None, b"def (syntax error")
     with pytest.raises(ValueError):
         runtime_shadow_added(None, b"def (syntax error")
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        "gzip.open('f.gz', 'w')",
+        "codecs.open('f', 'w')",
+        "bz2.open(path, 'a')",
+        "g.open('data/raw.gz', 'wb')",
+        "g.open('data/raw.gz', mode)",
+        "Path('f').open('a')",
+        "p.open(mode)",
+    ],
+)
+def test_runtime_shadow_added_open_write_through_module_and_path_receivers(call):
+    src = f"import sys\n{call}\nsys.path.insert(0, 'd')\n".encode()
+    assert runtime_shadow_added(None, src) is True
+
+
+@pytest.mark.parametrize(
+    "call", ["gzip.open('data/raw.gz')", "gzip.open(path, 'rb')", "Path('f').open('r', 1)"]
+)
+def test_runtime_shadow_added_open_read_through_module_and_path_receivers(call):
+    src = f"import sys\n{call}\nsys.path.insert(0, 'd')\n".encode()
+    assert runtime_shadow_added(None, src) is False
