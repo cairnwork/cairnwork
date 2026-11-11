@@ -78,7 +78,13 @@ from cairnwork.pytest_config import PLUGINS
 from cairnwork.report_guard_parts import PARTS_SOURCE
 from cairnwork.skip_hint import module_names as _module_names
 from cairnwork.verdict_record import Verdict as Verdict
-from cairnwork.verdict_record import _sources, denied_paths, setup_denials, well_formed
+from cairnwork.verdict_record import (
+    _parse_skips,
+    _sources,
+    denied_paths,
+    setup_denials,
+    well_formed,
+)
 
 FDS_ENV = "CAIRNWORK_GUARD_FDS"
 PATH_ENV = "CAIRNWORK_VERDICT_PATH"
@@ -140,7 +146,7 @@ _HANDOVER = _take()
         self._fd = report_fd
         self._nonce = nonce
         self._collected = []
-        self._outcomes = {}
+        self._outcomes, self._skips = {}, {}
         self._sources = {}  # id(item) -> (item, node id, file) when collected
         self._files = []
         self._file_of = []  # per collected item: its index in _files, -1 if it has none
@@ -199,11 +205,14 @@ _HANDOVER = _take()
 
     def pytest_collection_finish(self, session, _original=_original):
         index = {}
+        self._item_marks = _marker_items(session)
         for item in session.items:
             nodeid, source = _original(self, item, item.nodeid)
             self._collected.append(nodeid)
             self._file_of.append(index.setdefault(source, len(index)) if source else -1)
         self._files = list(index)
+
+    def pytest_runtest_logreport(self, report): _record_skip(self, report)
 
     @pytest.hookimpl(wrapper=True, tryfirst=True)
     def pytest_runtest_makereport(self, item, call, _original=_original, _keep_worst=_keep_worst,
@@ -251,7 +260,7 @@ _HANDOVER = _take()
                    **self._hints,  # #796: collect_import_errors, collect_missing_submodules
                    "collect_skipped_deps": self._skipped_deps,
                    "teardown_errors": self._teardown_errors,
-                   "collection_finished": self._finished,
+                   "collection_finished": self._finished, "skips": self._skips,
                    # pytest's own status: the parent requires it and the process's to agree
                    "exitstatus": int(exitstatus), "testsfailed": session.testsfailed}
         if self._fd is not None:
@@ -340,6 +349,7 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
         return Verdict(False, {})
     collected = data.get("collected")
     outcomes = data.get("outcomes")
+    skips = _parse_skips(data.get("skips", {}))
     # fail closed on any malformed shape (a candidate controls the file): node ids and outcomes
     # must be strings, else set()/membership/str compares could misbehave or crash the parent.
     if not isinstance(collected, list) or not all(isinstance(node, str) for node in collected):
@@ -347,6 +357,10 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
     if not isinstance(outcomes, dict) or not all(
         isinstance(node, str) and isinstance(result, str) for node, result in outcomes.items()
     ):
+        return Verdict(False, {})
+    if skips is None:
+        return Verdict(False, {})
+    if any(node not in outcomes for node in skips):
         return Verdict(False, {})
     shape, data_refused = well_formed(data, collected, outcomes, PLUGIN_KINDS), refused(data)
     if shape is None or data_refused is None:
@@ -366,6 +380,7 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
     return Verdict(
         ran,
         outcomes,
+        skips=skips,
         recorded=True,
         collect_errors=tuple(errors),
         collect_skipped=tuple(skipped),

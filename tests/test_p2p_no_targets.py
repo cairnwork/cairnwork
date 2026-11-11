@@ -59,7 +59,7 @@ def test_a_file_the_test_commit_deletes_is_not_selected_after_a_degraded_probe(m
     seen: list[tuple[str, ...]] = []
     probes = iter([(None, "base-probe-timeout"), ({"tests/test_root.py::t": "passed"}, "")])
 
-    def fake_probe(task, files, result, ctx, budget):
+    def fake_probe(task, files, result, ctx, budget, tag="p"):
         seen.append(files)
         return next(probes)
 
