@@ -319,6 +319,8 @@ def _defines(tree: ast.Module | None, owners: list[str], name: str) -> bool:
     """Whether the base file itself has ``def name`` in the class chain ``owners``."""
     if tree is None or rebinds_by_string(tree, name):  # #1127: may collect other code
         return False
+    from cairnwork.p2p_bindings import last_module_def
+
     body = tree.body
     module = True
     for owner in owners:
@@ -333,7 +335,10 @@ def _defines(tree: ast.Module | None, owners: list[str], name: str) -> bool:
     try:
         last = last_binding(body, name, module=module)
     except ValueError:
-        return False
+        if module:
+            last = last_module_def(body, name)
+        else:
+            return False
     # #1122: a walrus in another def's header (annotation, default, decorator) is the last binding
     return isinstance(last, (ast.FunctionDef, ast.AsyncFunctionDef)) and last.name == name
 

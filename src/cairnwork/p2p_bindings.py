@@ -306,3 +306,62 @@ def _callee(func: ast.expr) -> str:
 
 def _is_str(node: ast.AST | None, name: str) -> bool:
     return isinstance(node, ast.Constant) and node.value == name
+
+
+def last_module_def(body: list[ast.stmt], name: str) -> ast.AST | None:
+    """The last module-scope binding of name when resolving compound statements (#1153)."""
+    last: ast.AST | None = None
+
+    def visit(stmts: list[ast.stmt]) -> None:
+        nonlocal last
+        for stmt in stmts:
+            if isinstance(stmt, COMPOUND_STMTS):
+                if isinstance(stmt, ast.If):
+                    if binds_in_scope(stmt.test, name, module=True):
+                        last = stmt
+                    visit(stmt.body)
+                    visit(stmt.orelse)
+                elif isinstance(stmt, ast.Try):
+                    visit(stmt.body)
+                    for h in stmt.handlers:
+                        if h.name == name or (
+                            h.type is not None and binds_in_scope(h.type, name, module=True)
+                        ):
+                            last = h
+                        visit(h.body)
+                    visit(stmt.orelse)
+                    visit(stmt.finalbody)
+                elif isinstance(stmt, (ast.With, ast.AsyncWith)):
+                    if any(binds_in_scope(item, name, module=True) for item in stmt.items):
+                        last = stmt
+                    visit(stmt.body)
+                elif isinstance(stmt, (ast.For, ast.AsyncFor)):
+                    if binds_in_scope(stmt.target, name, module=True) or binds_in_scope(
+                        stmt.iter, name, module=True
+                    ):
+                        last = stmt
+                    visit(stmt.body)
+                    visit(stmt.orelse)
+                elif isinstance(stmt, ast.While):
+                    if binds_in_scope(stmt.test, name, module=True):
+                        last = stmt
+                    visit(stmt.body)
+                    visit(stmt.orelse)
+                elif isinstance(stmt, ast.Match):
+                    if binds_in_scope(stmt.subject, name, module=True):
+                        last = stmt
+                    for case in stmt.cases:
+                        if binds_in_scope(case.pattern, name, module=True) or (
+                            case.guard is not None and binds_in_scope(case.guard, name, module=True)
+                        ):
+                            last = case
+                        visit(case.body)
+                elif binds_in_scope(stmt, name, module=True):
+                    last = stmt
+            elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)) and stmt.name == name:
+                last = stmt
+            elif binds_in_scope(stmt, name, module=True):
+                last = stmt
+
+    visit(body)
+    return last
