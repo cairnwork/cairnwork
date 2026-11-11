@@ -21,7 +21,6 @@ from test_old_python_inventory import (
     refused,
     rejection,
     stub,
-    unavailable,
 )
 
 from cairnwork import module_inventory
@@ -89,7 +88,9 @@ QUIET = {  # hooks that leave every import working, so main's 3.10+ listing ran 
 def test_an_unknown_import_hook_fails_closed_on_3_10(repo, tmp_path, setup):
     """#811 gap 2: the old-Python hook allowlist now guards the 3.10+ listing too."""
     commit_change(repo, FILES)
-    assert unavailable(repo, "pkgB/base.py", stub(tmp_path, setup=QUIET[setup], version=MODERN))
+    assert rejection(repo, "pkgB/base.py", stub(tmp_path, setup=QUIET[setup], version=MODERN)) == (
+        "VERIFIER_PYTHON_INVENTORY_UNAVAILABLE"
+    )
 
 
 @pytest.mark.parametrize("setup", sorted(HOOKS))
@@ -123,7 +124,8 @@ def test_a_standard_hook_with_another_suffix_fails_closed(repo, tmp_path, setup,
 @pytest.mark.parametrize("setup", sorted(FINDERS))
 def test_a_standard_finder_with_other_loaders_fails_closed(repo, tmp_path, setup, version):
     commit_change(repo, FILES)
-    assert unavailable(repo, "pkgB/base.py", stub(tmp_path, setup=FINDERS[setup], version=version))
+    code = rejection(repo, "pkgB/base.py", stub(tmp_path, setup=FINDERS[setup], version=version))
+    assert code == "VERIFIER_PYTHON_INVENTORY_UNAVAILABLE"
 
 
 @pytest.mark.parametrize("version", ((3, 9), MODERN))

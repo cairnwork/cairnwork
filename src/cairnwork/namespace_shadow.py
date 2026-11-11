@@ -1,5 +1,4 @@
 """Candidate paths below the first level of an import root that take over a dotted name (#384).
-
 pytest puts the import paths, the checkout root and test directories in front of
 site-packages. A directory without ``__init__`` is a namespace portion: PathFinder keeps looking
 and, when no module or regular package of the name turns up anywhere on sys.path, merges every
@@ -155,6 +154,8 @@ def namespace_shadows(
     try:
         answer = _kinds(_run_probe(python or sys.executable, names), names)
         suffixes = _suffixes(_run_python(python or sys.executable, _SUFFIXES_PROBE, ""))
+    except subprocess.CalledProcessError:
+        return set(candidates)
     except (OSError, subprocess.SubprocessError) as exc:
         raise OSError(f"namespace probe could not run: {exc}") from exc
     except ValueError:

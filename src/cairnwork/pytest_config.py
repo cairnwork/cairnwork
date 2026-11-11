@@ -238,13 +238,13 @@ def gate_import_paths(
         failed = exc.__cause__
         if isinstance(failed, subprocess.CalledProcessError) and failed.returncode == 1:
             return import_paths
-        if not isinstance(failed, subprocess.CalledProcessError):
+        if isinstance(failed, (OSError, subprocess.TimeoutExpired)):
             raise OSError(f"git could not read the base: {exc}") from exc
         raise PytestConfigError(f"the base cannot be read: {exc}") from exc
     try:
         return verifier_settings(repo, base_commit, import_paths).pythonpath
     except GitCommandError as exc:
-        if not isinstance(exc.__cause__, subprocess.CalledProcessError):
+        if isinstance(exc.__cause__, (OSError, subprocess.TimeoutExpired)):
             raise OSError(f"git could not read the base config: {exc}") from exc
         raise PytestConfigError(f"the base config cannot be read: {exc}") from exc
 
