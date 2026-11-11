@@ -9,13 +9,14 @@ with only a path redirect or program launch (sys.path, __path__, site, PYTHONPAT
 refused only when a file the candidate changed can shadow an imported module (candidate_shadow.py),
 so an honest edit that inserts its own directory still verifies.
 Residuals (#1115), left to the blackbox and verifier checks: base machinery reached through
-same-file aliases, registries or dunders; other control-flow edits inside code that reaches
-machinery. Also unscanned: a ``.pyc`` without source; sys.path outside the repo; a write in one
-changed file and the path edit in another changed file is not combined. Accepted false refusals:
+registries, dunders or other unrecognized same-file alias forms; other control-flow edits inside
+code that reaches machinery. Also unscanned: a ``.pyc`` without source; sys.path outside the repo;
+a write in one changed file and the path edit in another changed file is not combined. Accepted
+false refusals:
 a new or changed call to same-file code reaching import machinery; an added module some file
 imports, or a changed one sharing a module name, next to a redirect; an added or changed
-statement pair that writes a file and edits sys.path in one file, and a changed statement that
-uses a sys alias on the import tables.
+write or path edit paired with an existing opposite signal in one file, and a changed statement
+that uses a sys alias on the import tables.
 """
 
 from __future__ import annotations

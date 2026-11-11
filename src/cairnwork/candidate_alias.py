@@ -92,25 +92,64 @@ def _collect_sys_names(tree: ast.Module) -> set[str]:
     while changed:
         before = len(sys_names)
         for node in ast.walk(tree):
-            if isinstance(node, ast.Assign):
-                if isinstance(node.value, ast.Name) and node.value.id in sys_names:
-                    for target in node.targets:
-                        if isinstance(target, ast.Name):
-                            sys_names.add(target.id)
-            elif isinstance(node, ast.NamedExpr):
-                if isinstance(node.value, ast.Name) and node.value.id in sys_names:
-                    if isinstance(node.target, ast.Name):
-                        sys_names.add(node.target.id)
+            if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
+                value = node.value
+                if value is None:
+                    continue
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for target in targets:
+                    sys_names.update(_sys_bound_names(target, value, sys_names))
+            elif isinstance(node, (ast.For, ast.AsyncFor)):
+                sys_names.update(_sys_bound_names(node.target, node.iter, sys_names))
+            elif isinstance(node, (ast.With, ast.AsyncWith)):
+                for item in node.items:
+                    if item.optional_vars is not None:
+                        sys_names.update(
+                            _sys_bound_names(item.optional_vars, item.context_expr, sys_names)
+                        )
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                positional = [*node.args.posonlyargs, *node.args.args]
+                defaults = [None] * (len(positional) - len(node.args.defaults)) + list(
+                    node.args.defaults
+                )
+                for arg, default in zip(positional, defaults, strict=False):
+                    if isinstance(default, ast.Name) and default.id in sys_names:
+                        sys_names.add(arg.arg)
+                for arg, default in zip(node.args.kwonlyargs, node.args.kw_defaults, strict=False):
+                    if isinstance(default, ast.Name) and default.id in sys_names:
+                        sys_names.add(arg.arg)
         changed = len(sys_names) > before
     return sys_names
+
+
+def _sys_bound_names(target: ast.AST, value: ast.AST, sys_names: set[str]) -> set[str]:
+    if isinstance(target, ast.Name):
+        if isinstance(value, ast.Name) and value.id in sys_names:
+            return {target.id}
+        if isinstance(value, (ast.Tuple, ast.List)) and any(
+            isinstance(item, ast.Name) and item.id in sys_names for item in value.elts
+        ):
+            return {target.id}
+        return set()
+    if isinstance(target, (ast.Tuple, ast.List)) and isinstance(value, (ast.Tuple, ast.List)):
+        return set().union(
+            *(
+                _sys_bound_names(t, v, sys_names)
+                for t, v in zip(target.elts, value.elts, strict=False)
+            )
+        )
+    return set()
 
 
 def _has_table_attr(expr: ast.AST, sys_names: set[str]) -> bool:
     return any(
         isinstance(node, ast.Attribute)
         and node.attr in TABLES
-        and isinstance(node.value, ast.Name)
-        and node.value.id in sys_names
+        and (
+            node.attr != "modules"
+            or isinstance(node.value, ast.Name)
+            and node.value.id in sys_names
+        )
         for node in ast.walk(expr)
     )
 
@@ -121,7 +160,9 @@ def _collect_table_names(tree: ast.Module, sys_names: set[str]) -> set[str]:
         if isinstance(node, ast.ImportFrom):
             if node.module == "sys" and node.level == 0:
                 for alias in node.names:
-                    if alias.name in TABLES:
+                    if alias.name == "*":
+                        table_names.update(TABLES)
+                    elif alias.name in TABLES:
                         table_names.add(alias.asname or alias.name)
 
     changed = True
@@ -155,11 +196,13 @@ def _is_alias_hot(node: ast.AST, sys_names: set[str], table_names: set[str]) -> 
             and part.value.id in sys_names
         ):
             return True
+        if isinstance(part, ast.Attribute) and part.attr in TABLES - {"modules"}:
+            return True
         if (
             isinstance(part, ast.ImportFrom)
             and part.module == "sys"
             and part.level == 0
-            and any(alias.name in TABLES for alias in part.names)
+            and any(alias.name == "*" or alias.name in TABLES for alias in part.names)
         ):
             return True
         if isinstance(part, ast.Name) and part.id in table_names:
@@ -194,7 +237,17 @@ def alias_machinery_changed(old: bytes | None, new: bytes) -> bool:
 
 
 def _is_write_call(call: ast.Call) -> bool:
-    if isinstance(call.func, ast.Attribute) and call.func.attr in WRITE_ATTRS:
+    if isinstance(call.func, ast.Attribute) and call.func.attr in WRITE_ATTRS | {
+        "write",
+        "writelines",
+        "writestr",
+    }:
+        return True
+    if isinstance(call.func, ast.Name) and call.func.id in {
+        "NamedTemporaryFile",
+        "FileIO",
+        "copyfileobj",
+    }:
         return True
     is_os_open = (
         isinstance(call.func, ast.Attribute)
@@ -213,8 +266,11 @@ def _is_write_call(call: ast.Call) -> bool:
             if kw.arg == "mode":
                 mode_arg = kw.value
                 break
-        if mode_arg is None and len(call.args) >= 2:
-            mode_arg = call.args[1]
+        receiver = call.func.value if isinstance(call.func, ast.Attribute) else None
+        standard_receiver = isinstance(receiver, ast.Name) and receiver.id in {"os", "io"}
+        positional_mode = 1 if receiver is None or standard_receiver else 0
+        if mode_arg is None and len(call.args) > positional_mode:
+            mode_arg = call.args[positional_mode]
         if mode_arg is not None:
             if not (isinstance(mode_arg, ast.Constant) and isinstance(mode_arg.value, str)):
                 return True
@@ -260,16 +316,9 @@ def runtime_shadow_added(old: bytes | None, new: bytes) -> bool:
         return False
 
     new_sys = _collect_sys_names(new_tree)
-    has_write = False
-    has_path_edit = False
-
-    for key, own in new_items:
-        if key in added_counts:
-            if not has_write and _is_write_statement(own):
-                has_write = True
-            if not has_path_edit and _is_path_edit_statement(own, new_sys, key[1]):
-                has_path_edit = True
-            if has_write and has_path_edit:
-                return True
-
-    return False
+    added_items = [own for key, own in new_items if key in added_counts]
+    added_write = any(_is_write_statement(own) for own in added_items)
+    added_path = any(_is_path_edit_statement(own, new_sys, ast.unparse(own)) for own in added_items)
+    new_write = any(_is_write_statement(own) for _, own in new_items)
+    new_path = any(_is_path_edit_statement(own, new_sys, ast.unparse(own)) for _, own in new_items)
+    return (added_write and new_path) or (added_path and new_write)

@@ -15,6 +15,28 @@ def test_alias_machinery_changed_unchanged_file():
     assert alias_machinery_changed(b"x = 1\n", b"x = 1\n") is False
 
 
+def test_alias_machinery_changed_tracks_binding_forms_and_any_receiver_tables():
+    sources = (
+        "import sys\nm: object = sys\nm.modules['x'] = 1\n",
+        "import sys\na, m = 1, sys\nm.modules['x'] = 1\n",
+        "import sys\nfor m in (sys,):\n    m.modules['x'] = 1\n",
+        "import sys\nwith sys as m:\n    m.modules['x'] = 1\n",
+        "import sys\ndef f(m=sys):\n    m.modules['x'] = 1\n",
+        "other.meta_path.append(finder)\n",
+    )
+    assert all(alias_machinery_changed(None, source.encode()) for source in sources)
+    assert (
+        alias_machinery_changed(
+            None, b"class Service:\n    def run(self):\n        self.modules()\n"
+        )
+        is False
+    )
+
+
+def test_sys_star_import_binds_all_table_names():
+    assert alias_machinery_changed(None, b"from sys import *\nmodules['x'] = 1\n") is True
+
+
 def test_runtime_shadow_added_open_write_and_path_insert():
     src = b"import sys\nopen('f', 'w').write('x')\nsys.path.insert(0, 'd')\n"
     assert runtime_shadow_added(None, src) is True
@@ -28,6 +50,34 @@ def test_runtime_shadow_added_open_default_read_mode_is_false():
 def test_runtime_shadow_added_open_non_literal_mode_is_true():
     src = b"import sys\nopen('f', mode)\nsys.path.insert(0, 'd')\n"
     assert runtime_shadow_added(None, src) is True
+
+
+def test_runtime_shadow_added_detects_method_and_helper_writes():
+    for write in (
+        "Path('f').open('w')",
+        "target.write('x')",
+        "target.writelines(lines)",
+        "archive.writestr('f', data)",
+        "NamedTemporaryFile(mode=mode)",
+        "FileIO('f', mode)",
+        "copyfileobj(src, dst)",
+    ):
+        source = f"import sys\n{write}\nsys.path.insert(0, 'd')\n".encode()
+        assert runtime_shadow_added(None, source), write
+    assert (
+        runtime_shadow_added(None, b"import sys\nPath('f').open()\nsys.path.insert(0, 'd')\n")
+        is False
+    )
+
+
+def test_runtime_shadow_added_combines_added_signal_with_base_state_signal():
+    old = b"import sys\nsys.path.insert(0, 'd')\nopen('f', 'w')\n"
+    new_write_added = old + b"open('g', 'w')\n"
+    assert runtime_shadow_added(old, new_write_added) is True
+
+    old = b"import sys\nopen('f', 'w')\n"
+    new_path_added = old + b"sys.path.insert(0, 'd')\n"
+    assert runtime_shadow_added(old, new_path_added) is True
 
 
 def test_unparseable_new_raises_value_error():
