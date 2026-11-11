@@ -216,6 +216,17 @@ def summarize(
             return _unknown(record)
     error = record.get("error")
     if (
+        record.get("status") == "REFUSED"
+        and record.get("reason") == error
+        and record.get("verified") is False
+        and isinstance(error, str)
+        and error
+        and not any(key in record for key in ("ok", "code"))
+    ):
+        if error in ("TASK_ALLOWED_FILES_PROTECTED", "VERIFIER_NOT_ALLOWED"):
+            return _not_checked(record)
+        return _tool_error(record)
+    if (
         isinstance(error, str)
         and error
         and not any(key in record for key in ("status", "ok", "verified", "code"))
