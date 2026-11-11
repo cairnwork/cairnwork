@@ -46,12 +46,15 @@ def test_only_parameter_segment_and_only_this_runs_checkout_are_normalised(tmp_p
     assert normalise_run_ids(foreign, root).outcomes == foreign.outcomes
 
 
-def test_placeholder_literal_and_colliding_ids_fail_closed(tmp_path):
+def test_placeholder_literal_is_escaped_without_conflating_checkout_root(tmp_path):
     root = tmp_path / "checkout"
     literal = Verdict(True, {f"t[{root}/a]": "passed", "t[<cw-checkout>/b]": "passed"})
-    assert normalise_run_ids(literal, root) is literal
-    collision = Verdict(True, {f"t[{root}/a]": "passed", "t[<cw-checkout>/a]": "failed"})
-    assert normalise_run_ids(collision, root) is collision
+    assert set(normalise_run_ids(literal, root).outcomes) == {
+        "t[<cw-checkout>/a]",
+        r"t[\<cw-checkout>/b]",
+    }
+    plain = Verdict(True, {r"t[a\b]": "passed", "t[x]": "passed"})
+    assert normalise_run_ids(plain, root).outcomes == plain.outcomes
 
 
 def test_raw_and_realpath_alias_collision_fails_closed(tmp_path):
@@ -71,6 +74,7 @@ def test_unmatched_note_requires_same_function_and_different_params():
     assert "per-run" in unmatched_note(gone, {"t.py::test_x[new]"})
     assert unmatched_note(gone, {"t.py::test_y[new]"}) == ""
     assert unmatched_note(gone, {"t.py::test_x[old]"}) == ""
+    assert "if a parametrised test id differs" in unmatched_note(gone, {"t.py::test_x[new]"})
 
 
 def test_conftest_overlay_uuid_ids_refuse_with_per_run_advice(monkeypatch):
@@ -108,3 +112,4 @@ def test_show_masks_paths_controls_and_bounds_text():
     assert mask_paths("bad /private/tmp/run/state and /var/folders/a/b/file") == (
         "bad <path> and <path>"
     )
+    assert show("test_cx[/x/y/z-1]").endswith("]")

@@ -10,9 +10,18 @@ ALLOWED = ("src/calc.py", "src/sel.py")
 
 
 def _case(
-    project, state, parametrisation, *, new_test=None, new_test_files=None, p2p="whole-suite"
+    project,
+    state,
+    parametrisation,
+    *,
+    new_test=None,
+    new_test_files=None,
+    existing_test=None,
+    p2p="whole-suite",
+    calc_base=CALC_BASE,
+    candidate_calc=CALC_FIX,
 ):
-    existing = (
+    existing = existing_test or (
         "import pathlib, pytest\nfrom calc import sub\n"
         f"@pytest.mark.parametrize('p', [{parametrisation}])\n"
         "def test_checkout_path(p):\n    assert p\n"
@@ -22,7 +31,7 @@ def _case(
         project,
         {
             "tests/conftest.py": CONFTEST,
-            "src/calc.py": CALC_BASE,
+            "src/calc.py": calc_base,
             "src/sel.py": KEEP,
             "tests/test_existing.py": existing,
         },
@@ -34,7 +43,7 @@ def _case(
     test_files = {"tests/test_new.py": new_test or default_test}
     test_files.update(new_test_files or {})
     base, test_commit = make_test_commit(project, test_files)
-    return _verify(project, state, base, test_commit, {"src/calc.py": CALC_FIX})
+    return _verify(project, state, base, test_commit, {"src/calc.py": candidate_calc})
 
 
 @sandbox
@@ -115,12 +124,32 @@ def test_checkout_path_parameter_in_deferred_test_is_verified_on_seed_replay(pro
 
 
 @sandbox
-def test_literal_placeholder_with_checkout_path_keeps_refusal(project, state):
+def test_literal_placeholder_next_to_checkout_path_stays_distinct(project, state):
+    # the literal is escaped, the checkout path is substituted: same ids in both runs, no merge
     parametrisation = "str(pathlib.Path(__file__).parents[1]), '<cw-checkout>/x'"
     out = _case(project, state, parametrisation, p2p="off")
+    assert out["verified"] is True, out
+
+
+@sandbox
+def test_candidate_literal_cannot_impersonate_base_checkout_path(project, state):
+    base_calc = "from pathlib import Path\nROOT = str(Path(__file__).parents[1])\n" + CALC_BASE
+    candidate_calc = "ROOT = '<cw-checkout>'\n" + CALC_FIX
+    out = _case(
+        project,
+        state,
+        "calc.ROOT",
+        existing_test=(
+            "import pytest, calc\nfrom calc import sub\n"
+            "@pytest.mark.parametrize('p', [calc.ROOT])\n"
+            "def test_checkout_path(p):\n    assert p\n"
+            "def test_sub():\n    assert sub(3, 1) == 2\n"
+        ),
+        new_test="from calc import add\ndef test_new():\n    assert add(1, 1) == 2\n",
+        calc_base=base_calc,
+        candidate_calc=candidate_calc,
+    )
     assert out["verified"] is False, out
-    assert "NAMED_TESTS_NOT_RUN" in out["reason"], out
-    assert "per-run" in out["reason"] and "ids=" in out["reason"], out
 
 
 @sandbox

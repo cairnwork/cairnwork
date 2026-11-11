@@ -12,11 +12,11 @@ from cairnwork.verdict_record import Verdict
 
 PLACEHOLDER = "<cw-checkout>"
 PER_RUN_NOTE = (
-    "a parametrised test id differs between runs (per-run value such as a time, a random value, "
+    "if a parametrised test id differs between runs (per-run value such as a time, a random value, "
     "or a path outside the checkout); give the parameters stable ids "
     "(pytest.param(..., id=...) or ids=) so the base and the candidate id match"
 )
-_PATH = re.compile(r"(?<![A-Za-z0-9._/-])/(?:[^\s/'\"<>]+/)+[^\s/'\"<>]*")
+_PATH = re.compile(r"(?<![A-Za-z0-9._/-])/(?:[^\s/'\"<>\]]+/)+[^\s/'\"<>\]]*")
 _MAP_FIELDS = ("outcomes", "paths", "fail_kind", "denied", "setup_denied")
 _TUPLE_FIELDS = ("collect_errors", "collect_skipped", "collected", "renamed", "teardown_errors")
 
@@ -31,17 +31,22 @@ def _normalise_id(nodeid: str, roots: tuple[str, ...]) -> str:
     prefix, marker, params = nodeid.partition("[")
     if not marker:
         return nodeid
-    for root in roots:
-        pattern = re.compile(rf"(?<![A-Za-z0-9._/-]){re.escape(root)}(?=$|/|[^A-Za-z0-9._/-])")
+    patterns = [
+        re.compile(rf"(?<![A-Za-z0-9._/-]){re.escape(root)}(?=$|/|[^A-Za-z0-9._/-])")
+        for root in roots
+    ]
+    if PLACEHOLDER not in params and not any(pattern.search(params) for pattern in patterns):
+        return nodeid  # ids without the checkout or the placeholder are left byte-identical
+    # escape a literal placeholder first, so it can never equal a substituted checkout root
+    params = params.replace("\\", "\\\\").replace(PLACEHOLDER, "\\" + PLACEHOLDER)
+    for pattern in patterns:
         params = pattern.sub(PLACEHOLDER, params)
     return prefix + marker + params
 
 
 def normalise_run_ids(verdict: Any, checkout_root: str | Path) -> Any:
-    """Replace this checkout's path in ids, unless doing so could conflate raw ids."""
+    """Replace this checkout's path while preserving distinct literal parameter values."""
     raw_ids = _ids(verdict)
-    if any(PLACEHOLDER in node for node in raw_ids):
-        return verdict
     checkout = str(checkout_root)
     roots = tuple(sorted({checkout, os.path.realpath(checkout)}, key=len, reverse=True))
     converted = {node: _normalise_id(node, roots) for node in raw_ids}
