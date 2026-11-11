@@ -44,9 +44,7 @@ from cairnwork.deferred_tests import (
     never_seen,
 )
 from cairnwork.gitcmd import CLONE_ISOLATED, OID, GitCommandError, run_git
-from cairnwork.import_path_tree import ImportPathError, require_plain_dirs
 from cairnwork.intake import Intake, IntakeRefused
-from cairnwork.issue_task import check_verify_import_paths
 from cairnwork.notary_verify import binding_extras, binding_hash
 from cairnwork.ownership import request_digest
 from cairnwork.p2p import base_env_check, p2p_for
@@ -54,11 +52,15 @@ from cairnwork.pipeline import (
     TaskRejected,
     TaskResult,
     TaskSpec,
-    check_task,
     tests_with_teeth,
 )
 from cairnwork.pipeline_judge import judge_candidate
 from cairnwork.recovery import _remove_leftovers
+from cairnwork.verify_candidate_checks import (
+    check_task_for_verify,
+    require_core_ids,
+    validate_import_paths,
+)
 from cairnwork.verify_context import VerifyContext, verifier_interpreter
 from cairnwork.workspace import (
     ATTEMPT_ID,
@@ -70,14 +72,8 @@ from cairnwork.workspace import (
     remove_attempt_clone,
     unless_interrupted,
 )
-from cairnwork_protocol.ids import ID_RULE, core_ids
 
 _judge_for_verify = partial(judge_candidate, control=True, env_skip_downgrade=True)
-
-
-def _require_core_ids(verifiers: tuple[tuple[str, tuple[str, ...]], ...]) -> None:
-    if not core_ids([vid for vid, _ in verifiers]):  # as Core, before anything runs (#490)
-        raise TaskRejected("BAD_VERIFIER", f"verifier {ID_RULE}")
 
 
 def verify_candidate(
@@ -90,22 +86,20 @@ def verify_candidate(
     blackbox: Declaration | None = None, require_protection: str = "",  # #303 (protection.py)
 ) -> dict[str, Any]:  # fmt: skip
     """``verified`` is true only for a Core verdict bound to what was judged: the candidate, or
-    with deferred tests the tree that ran (candidate plus tests) and its ``binding`` (#229), whose
-    head is the candidate. ``status`` is VERIFIED, FAILED, REFUSED or UNCOMPARABLE (#234: the base
+    with deferred tests the tree that ran (candidate plus tests) and its ``binding`` (#229), headed
+    by the candidate. ``status`` is VERIFIED, FAILED, REFUSED or UNCOMPARABLE (#234: the base
     could not be compared; ``uncomparable`` says why, Core is never asked). The account precheck
-    runs before the test commit is burned; ``tests_consumed`` says whether the test commit is now
-    used up (a retry needs a new one). Raises TaskRejected for malformed input and IntakeRefused
-    when drained or the mirror cannot be used. ``import_paths`` (#283, as the Issue pipeline's) are
+    precedes burn; ``tests_consumed`` says whether the tests are now used up.
+    Raises TaskRejected for malformed input and IntakeRefused when drained or mirror unusable.
+    ``import_paths`` (#283, as the Issue pipeline's) are
     directories prepended to the verifiers' import path for a src-layout repo; BAD_IMPORT_PATH
-    when one is malformed or is, or is inside, a test root. The state config's are not read."""
+    when one is malformed or is, or is inside, a test root. The state config's are not read.
+
+    Environment failures before the test commit is burned are explicit refusals. The shadow rules
+    see only the listed files the candidate changed (#866)."""
     test_roots = tuple(intake.config()["test_roots"])
-    try:
-        check_verify_import_paths(list(import_paths), test_roots)
-        if import_paths:
-            require_plain_dirs(repo, base, import_paths)
-    except (ValueError, ImportPathError) as exc:
-        raise TaskRejected("BAD_IMPORT_PATH", str(exc)) from exc
-    _require_core_ids(verifiers)
+    validate_import_paths(repo, base, import_paths, test_roots)
+    require_core_ids(verifiers)
     task = TaskSpec(
         f"verify-{secrets.token_hex(8)}", "verify", "verify", "", repo, base, allowed_files,
         verifiers, test_commit=test_commit, p2p_budget=intake.config()["p2p_time_budget_seconds"],
@@ -113,10 +107,9 @@ def verify_candidate(
         p2p_mode=intake.config()["p2p_selection"], test_roots=test_roots, import_paths=import_paths,
     )  # fmt: skip
     account, python = intake.verifier_account(), intake.config()["verifier_python"]
-    specs = check_task(  # the same scope, protected-file and verifier rules; the shadow rules
-        verify_scope.narrowed(task, candidate),
-        verifier_python=python or getattr(account, "python", None),
-    )  # see only the listed files the candidate changed (#866)
+    specs = check_task_for_verify(
+        verify_scope.narrowed(task, candidate), python or getattr(account, "python", None)
+    )
     if not OID.fullmatch(candidate):
         raise TaskRejected("BAD_CANDIDATE", "candidate must be a 40-hex commit id")
     _require_accepting(intake)

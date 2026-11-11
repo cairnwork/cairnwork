@@ -78,7 +78,7 @@ def test_an_account_without_its_venv_fails_closed(repo, tmp_path):
     is set, pipeline/intake); where that venv is missing every deep path is refused."""
     base = project(repo, ORACLES["namespace"])
     missing = VerifierAccount(root=tmp_path / "no-account").python
-    with pytest.raises(TaskRejected, match="PROTECTED_VERIFIER_INPUT: src/myproj/compute.py$"):
+    with pytest.raises(OSError, match="namespace probe could not run"):
         check_task(task(repo, base, ("src/myproj/compute.py",)), verifier_python=missing)
 
 

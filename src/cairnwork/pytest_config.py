@@ -10,13 +10,9 @@ dropped and named in a comment of the generated ini. ``addopts`` is never copied
 (it can load plugins, change the rootdir or the ini); only an ``--import-mode`` and
 options that make the run stricter (``-W``, ``--strict-markers``, ``--strict-config``)
 found in it are kept, so these settings are not more lenient than the target's own CI.
-Plugins are never autoloaded: ``PLUGINS`` are loaded with an explicit ``-p``, and only
-when the verifier's interpreter has them installed; a kept key that needs a missing
-plugin (``timeout``, ``asyncio_*``) fails the run instead of being dropped.
-
-Only the root-level file is read, in pytest's discovery order; a configuration file in
-a test directory of the target is not looked at. A malformed or non-regular (symlink)
-configuration file at the base fails the run (``PytestConfigError``).
+Plugins are never autoloaded: ``PLUGINS`` load with ``-p`` only when installed; a
+missing plugin required by a kept key fails the run. Only the root config is read; a malformed or
+non-regular file fails (``PytestConfigError``).
 """
 
 from __future__ import annotations
@@ -233,19 +229,22 @@ def gate_import_paths(
 ) -> tuple[str, ...]:
     """verifier_settings' pythonpath, for the shadow gate (pipeline.check_task, #351). Only a base
     that git shows is not a commit in repo (``rev-parse --verify`` exit 1) gives just import_paths:
-    nothing runs against it from there (intake refuses it as TASK_PATH_UNREADABLE, verify_candidate
-    cannot read the candidate's parent, a run cannot check it out). Any other failure to read the
-    base or its config is a PytestConfigError, so the gate fails closed."""
+    nothing runs (intake refuses TASK_PATH_UNREADABLE; verify cannot read its parent).
+    OSError/TimeoutExpired means environment error; every other failure is PytestConfigError."""
     try:
         run_git(repo, "rev-parse", "--verify", "--quiet", f"{base_commit}^{{commit}}")
     except GitCommandError as exc:
         failed = exc.__cause__
         if isinstance(failed, subprocess.CalledProcessError) and failed.returncode == 1:
             return import_paths
+        if isinstance(failed, (OSError, subprocess.TimeoutExpired)):
+            raise OSError(f"git could not read the base: {exc}") from exc
         raise PytestConfigError(f"the base cannot be read: {exc}") from exc
     try:
         return verifier_settings(repo, base_commit, import_paths).pythonpath
     except GitCommandError as exc:
+        if isinstance(exc.__cause__, (OSError, subprocess.TimeoutExpired)):
+            raise OSError(f"git could not read the base config: {exc}") from exc
         raise PytestConfigError(f"the base config cannot be read: {exc}") from exc
 
 

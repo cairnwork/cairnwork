@@ -11,6 +11,7 @@ from conftest import commit_change, git
 import cairnwork.pipeline as pipeline
 import cairnwork.pipeline_judge as pipeline_judge
 from cairnwork import pytest_config
+from cairnwork.gitcmd import GitCommandError
 from cairnwork.intake import Intake, IntakeRefused
 from cairnwork.journal import Journal
 from cairnwork.notary import Notary
@@ -31,6 +32,21 @@ addopts = -p evil --rootdir=/ --import-mode=importlib -x --strict-markers
 cache_dir = /tmp/x
 required_plugins = evil
 """
+
+
+def test_a_config_read_that_cannot_start_git_is_an_environment_error(repo, monkeypatch):
+    commit_change(repo, {"pytest.ini": "[pytest]\npythonpath = src\n"})
+    base = git(repo, "rev-parse", "HEAD")
+    original = pytest_config.run_git
+
+    def run_git(repo, *args, **kwargs):
+        if args and args[0] == "cat-file":
+            raise GitCommandError("cat-file could not start") from FileNotFoundError("git missing")
+        return original(repo, *args, **kwargs)
+
+    monkeypatch.setattr(pytest_config, "run_git", run_git)
+    with pytest.raises(OSError, match="git could not read the base config"):
+        pytest_config.gate_import_paths(repo, base, ("src",))
 
 
 def read_ini(text: bytes) -> dict[str, str]:

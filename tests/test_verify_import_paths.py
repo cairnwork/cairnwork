@@ -12,6 +12,7 @@ from conftest import commit_change
 from verify_helpers import FIX, base_of, candidate, verify
 
 from cairnwork import verify_candidate as vc
+from cairnwork import verify_candidate_checks
 from cairnwork.intake import Intake
 from cairnwork.pipeline import TaskRejected
 
@@ -71,7 +72,7 @@ def test_default_taskspec_import_paths_is_empty(state, srcproject, monkeypatch):
         seen.append(task.import_paths)
         raise TaskRejected("STOP", "captured")
 
-    monkeypatch.setattr(vc, "check_task", spy)
+    monkeypatch.setattr(verify_candidate_checks, "check_task", spy)
     fix = candidate(srcproject, base_of(srcproject), {SRC_FILE: FIX})
     kwargs: dict[str, Any] = dict(repo=srcproject, base=base_of(srcproject), candidate=fix)
     kwargs |= dict(allowed_files=(SRC_FILE,), verifiers=(("v", tuple(SRC_CMD.split())),))

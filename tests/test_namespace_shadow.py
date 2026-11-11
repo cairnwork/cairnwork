@@ -285,22 +285,24 @@ def test_the_probe_never_imports_a_concrete_package(repo, python):
     assert not marker.exists()
 
 
-def test_without_an_interpreter_every_deep_path_is_protected(repo):
+def test_without_an_interpreter_is_an_environment_error(repo):
     paths = ("src/nsco/myproj/core.py", "docs/guide/index.md")
-    assert gate(repo, paths, "/nonexistent/python") == paths
+    with pytest.raises(OSError, match="namespace probe could not run"):
+        gate(repo, paths, "/nonexistent/python")
 
 
-def test_without_the_base_listing_every_deep_path_is_protected(repo, python, monkeypatch):
+def test_without_the_base_listing_is_an_environment_error(repo, python, monkeypatch):
     real = namespace_shadow.run_git
 
     def no_listing(repo, *args, **kwargs):
         if args[0] == "ls-tree" and "-rz" in args:
-            raise GitCommandError("ls-tree failed")
+            raise GitCommandError("ls-tree failed") from FileNotFoundError("git missing")
         return real(repo, *args, **kwargs)
 
     monkeypatch.setattr(namespace_shadow, "run_git", no_listing)
     paths = ("src/nsco/myproj/core.py", "docs/guide/index.md")
-    assert gate(repo, paths, python) == paths
+    with pytest.raises(OSError, match="git could not list the base tree"):
+        gate(repo, paths, python)
 
 
 def test_a_base_that_is_no_commit_is_left_to_the_later_refusals(repo, python):
@@ -345,7 +347,9 @@ BAD_SUFFIXES = {
 
 
 @pytest.mark.parametrize("answer", BAD_SUFFIXES.values(), ids=BAD_SUFFIXES.keys())
-def test_a_bad_suffix_probe_protects_every_deep_path(repo, python, monkeypatch, answer):
+def test_a_bad_suffix_probe_is_an_environment_error_or_protects_invalid_output(
+    repo, python, monkeypatch, answer
+):
     real = namespace_shadow._run_python
 
     def run(python, code, stdin):
@@ -355,7 +359,11 @@ def test_a_bad_suffix_probe_protects_every_deep_path(repo, python, monkeypatch, 
 
     monkeypatch.setattr(namespace_shadow, "_run_python", run)
     paths = ("src/nsco/myproj/core.py", "src/other/core.py")
-    assert gate(repo, paths, python) == paths
+    if answer is _raises:
+        with pytest.raises(OSError, match="namespace probe could not run"):
+            gate(repo, paths, python)
+    else:
+        assert gate(repo, paths, python) == paths
 
 
 def test_the_probe_answers_one_entry_per_chain(python):
