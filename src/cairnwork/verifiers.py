@@ -76,6 +76,7 @@ from cairnwork.bytecode_roots import bytecode_findings
 from cairnwork.confined import ATTEMPT_ENV, MAX_LOG_BYTES, RUN_TOKEN_VAR
 from cairnwork.core_request import VerifierObservation
 from cairnwork.import_path_tree import require_plain_dirs
+from cairnwork.node_ids import normalise_run_ids
 from cairnwork.pycache_guard import PYCACHE_DIR
 from cairnwork.reasons import candidate_denial, why_not_passed
 from cairnwork.run_scrub import close_private
@@ -295,10 +296,11 @@ def _run_one(batch: _Batch, spec, checkout) -> VerifierRun:
                 channel.close()
 
 
-def _read_verdict(channel, path, nonce, plugins):
+def _read_verdict(channel, path, nonce, plugins, checkout):
     """The guard's record, with its ``plugin:<module>`` fail kinds made final (#804)."""
     verdict = channel.read() if channel else report_guard.read_verdict(path, nonce)
-    return replace(verdict, fail_kind=pytest_config.plugin_kinds(verdict.fail_kind, plugins))
+    verdict = replace(verdict, fail_kind=pytest_config.plugin_kinds(verdict.fail_kind, plugins))
+    return normalise_run_ids(verdict, checkout)
 
 
 def _denial(batch: _Batch, verdict, checkout, run_dir, clean=True) -> str:
@@ -347,7 +349,7 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
         returncode, timed_out, survivors = None, False, 0
     mutated = checkout_differences(ctx.repo, candidate_commit, checkout, before, account, python)
     forged = bytecode_findings(tmp, checkout, run_dir, spec.targets, account, python)
-    verdict = _read_verdict(channel, verdict_path, verdict_nonce, plugins)
+    verdict = _read_verdict(channel, verdict_path, verdict_nonce, plugins, checkout)
     not_run = verdict.not_run(spec.targets)  # a target with no test that ran, a skipped module
     ran = profile is not None and verdict.ran and not not_run
     too_big = log_path.stat().st_size > MAX_LOG_BYTES

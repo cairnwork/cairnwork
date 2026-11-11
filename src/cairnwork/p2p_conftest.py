@@ -26,6 +26,7 @@ from pathlib import Path
 
 from cairnwork.conftest_check import conftest_of
 from cairnwork.deferred_tests import TestCommitRejected, deleted_of, lay_tests_over
+from cairnwork.node_ids import unmatched_note
 from cairnwork.p2p_nodes import clean
 from cairnwork.verifier_spec import VerifierSpec
 from cairnwork.verifiers import run_verifiers
@@ -79,7 +80,9 @@ def check_overlay(task, test_files, files, outcomes, side, result, ctx, budget) 
     differ = sorted(n for n, o in kept.items() if after.get(n) != o)
     if differ:
         shown = ", ".join(map(clean, differ[:5])) + (" ..." if len(differ) > 5 else "")
-        raise TestCommitRejected(CHANGES_BASE, f"{len(differ)} base test(s) differ: {shown}")
+        note = unmatched_note(differ, after)
+        detail = f"{len(differ)} base test(s) differ: {shown}"
+        raise TestCommitRejected(CHANGES_BASE, f"{detail}; {note}" if note else detail)
 
 
 def _side(ctx, commit, files, result, budget, tag) -> tuple[dict[str, str], str]:
