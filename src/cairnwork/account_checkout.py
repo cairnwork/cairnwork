@@ -231,7 +231,10 @@ def make_account_checkout(account, python: str, repo: Path, commit: str, work: P
     WorkspaceError if it cannot be made exactly. ``python`` is the verifier's interpreter, already
     proven runnable as the account (``available``). The staging clone is always removed."""
     stage = work / STAGE
-    stage.mkdir(mode=0o750)
+    try:
+        stage.mkdir(mode=0o750)
+    except FileExistsError as exc:
+        raise WorkspaceError(f"leftover account staging path: {stage}") from exc
     target = work / clone_id
     try:
         source = create_attempt_clone(repo, commit, stage, clone_id).path
