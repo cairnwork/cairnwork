@@ -36,7 +36,9 @@ from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRej
 from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.node_ids import show, unmatched_note
 from cairnwork.p2p_bindings import (
+    binds_in_scope,
     hidden_bindings,
+    is_pytest_decorator,
     last_binding,
     last_module_def,
     mentions_ast,
@@ -231,14 +233,9 @@ def _scope_mentions(tree: ast.Module, owners: list[str], name: str, text: str = 
         body = target_class.body
     if target_class is None:
         return bool(pattern.search(text))
-    if target_class.keywords or any(not _pytest_decorator(d) for d in target_class.decorator_list):
+    if target_class.keywords or not all(map(is_pytest_decorator, target_class.decorator_list)):
         return True
-    imported_testcase = any(
-        isinstance(n, ast.ImportFrom)
-        and n.module == "unittest"
-        and any(a.name == "TestCase" for a in n.names)
-        for n in tree.body
-    )
+    imported_testcase = _is_unambiguous_testcase(tree)
     if any(
         _base_may_supply(base, name, tree, set(), imported_testcase) for base in target_class.bases
     ):
@@ -252,41 +249,25 @@ def _scope_mentions(tree: ast.Module, owners: list[str], name: str, text: str = 
     return _mentions(module, name, pattern)
 
 
-def _pytest_decorator(node: ast.expr) -> bool:
-    """Recognize pytest.mark.<anything>, optionally called."""
-    if isinstance(node, ast.Call):
-        node = node.func
-    attrs = []
-    while isinstance(node, ast.Attribute):
-        attrs.append(node.attr)
-        node = node.value
-    return (
-        isinstance(node, ast.Name)
-        and node.id == "pytest"
-        and len(attrs) >= 2
-        and attrs[-1] == "mark"
-    )
-
-
 def _base_may_supply(
     base: ast.expr, name: str, tree: ast.Module, seen: set[str], imported_testcase: bool
 ) -> bool:
     """Conservatively decide whether a class base can supply a test name."""
     if isinstance(base, ast.Name):
-        if base.id in {"object", "TestCase"}:
-            return base.id == "TestCase" and not imported_testcase
+        if base.id == "object":
+            return False
+        if base.id == "TestCase":
+            return not imported_testcase
         if base.id in seen:
             return True
         classes = [n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == base.id]
-        if len(classes) != 1:
+        bindings = [n for n in tree.body if binds_in_scope(n, base.id, module=True)]
+        if len(classes) != 1 or len(bindings) != 1 or bindings[0] is not classes[0]:
             return True
         cls = classes[0]
-        if cls.keywords or any(not _pytest_decorator(d) for d in cls.decorator_list):
+        if cls.keywords or any(not is_pytest_decorator(d) for d in cls.decorator_list):
             return True  # an inherited metaclass or a decorator on the base can add tests
-        if any(
-            isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == "__init_subclass__"
-            for n in cls.body
-        ):
+        if _module_mutates_base(tree, base.id) or _class_binds_hook(cls):
             return True  # __init_subclass__ runs on A and can add tests the source never names
         pattern = re.compile(rf"\b{re.escape(name)}\b")
         if _mentions(cls.body, name, pattern, include_nested_classes=False):
@@ -298,6 +279,39 @@ def _base_may_supply(
         if base.value.id == "unittest" and base.attr == "TestCase":
             return False
     return True
+
+
+def _is_unambiguous_testcase(tree: ast.Module) -> bool:
+    bindings = [n for n in tree.body if binds_in_scope(n, "TestCase", module=True)]
+    return (
+        len(bindings) == 1
+        and isinstance(bindings[0], ast.ImportFrom)
+        and bindings[0].module == "unittest"
+        and any(a.name == "TestCase" and a.asname in {None, "TestCase"} for a in bindings[0].names)
+    )
+
+
+def _module_mutates_base(tree: ast.Module, name: str) -> bool:
+    for stmt in tree.body:
+        pending: list[ast.AST] = [stmt]
+        while pending:
+            node = pending.pop()
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+                continue
+            if (
+                isinstance(node, ast.Attribute)
+                and node.attr == "__init_subclass__"
+                and isinstance(node.ctx, ast.Store)
+                and isinstance(node.value, ast.Name)
+                and node.value.id == name
+            ):
+                return True
+            pending.extend(ast.iter_child_nodes(node))
+    return False
+
+
+def _class_binds_hook(cls: ast.ClassDef) -> bool:
+    return any(binds_in_scope(stmt, "__init_subclass__") for stmt in cls.body)
 
 
 def _mentions_dunder_test(node: ast.AST) -> bool:
