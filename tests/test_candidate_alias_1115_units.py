@@ -158,3 +158,22 @@ def test_runtime_shadow_added_write_on_untrusted_receiver_stays_refused(source):
 def test_runtime_shadow_added_open_with_unpacked_arguments_fails_closed(call):
     src = f"import sys\n{call}\nsys.path.insert(0, 'd')\n".encode()
     assert runtime_shadow_added(None, src) is True
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        # security review on 4fa7013: the trusted object or io namespace is changed after binding
+        "import io\nbuf = io.StringIO()\nbuf.write = sink.write\nbuf.write('x')\n",
+        "import io\nbuf = io.StringIO()\npatch(buf)\nbuf.write('x')\n",
+        "import io\nbuf = io.StringIO()\nalias = buf\nbuf.write('x')\n",
+        "import io\nio.__dict__['StringIO'] = factory\nio.StringIO().write('x')\n",
+        "import io\nsys.modules['io'] = fake\nio.StringIO().write('x')\n",
+        "import io\nns['StringIO'] = factory\nio.StringIO().write('x')\n",
+        "import io\npatch(io)\nio.StringIO().write('x')\n",
+        "from io import StringIO\npatch(StringIO)\nStringIO().write('x')\n",
+    ],
+)
+def test_runtime_shadow_added_mutated_memory_stream_is_not_trusted(source):
+    src = f"import sys\n{source}sys.path.insert(0, 'd')\n".encode()
+    assert runtime_shadow_added(None, src) is True
