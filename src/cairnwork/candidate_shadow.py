@@ -28,16 +28,28 @@ def find_shadow_file(
 
     A changed nested file named like a standard or pytest module counts. A name some tree or test
     file imports (every dotted part, relative imports, import_module/__import__/importorskip
-    strings, so a ``__path__`` redirect of ``pkg.helper`` is seen) counts when the file was added
-    or another file has the same module name, so modifying a project's own src-layout module
-    (``src/calc.py`` imported as ``calc``) is not one. Names compare case-insensitively; an
-    unparseable ``.py`` the candidate changed fails closed, any other one imports nothing."""
+    strings, so a ``__path__`` redirect of ``pkg.helper`` is seen) counts when the file was added,
+    another file has the same module name, or it is a modified unique module outside an import root.
+    A modified module is already importable (not a shadow) if its root/parent directory is src or
+    lib, contains a pre-existing __init__.py with no other-directory top-level importer of that
+    name, or shares a root/parent directory with an unchanged bare top-level importer. Names compare
+    case-insensitively, directories case-exactly; an unparseable ``.py`` the candidate changed fails
+    closed, any other one imports nothing.
+
+    Accepted false refusal: a modified, uniquely named module in a non-conventional import root
+    (say app/foo.py made importable by a pytest pythonpath setting) that some other-directory test
+    imports is refused, but only when a changed file also carries a redirect signal.
+
+    Accepted residual: rule (c) exempts a modified module when an unchanged same-directory file
+    bare-imports the name, even if other tests rely on a redirect to bare-import it."""
     commits = tuple(
         dict.fromkeys((candidate,) if test_commit is None else (candidate, test_commit))
     )
     always = {name.casefold() for name in (*sys.stdlib_module_names, *_ALWAYS_SHADOW)}
     changed = changed or {}
     imported: set[str] = set()
+    importer_dirs: dict[str, set[str]] = {}
+    top_importers: dict[str, set[str]] = {}
     trees: dict[str, tuple[tuple[int, str, str, str], ...]] = {}
     for commit in commits:
         _validate_oid(commit)
@@ -50,30 +62,89 @@ def find_shadow_file(
     ]
     blobs = _read_source_blobs(repo, sources)
     parsed: dict[str, set[str] | None] = {}
+    parsed_top: dict[str, set[str]] = {}
     for commit, path, oid in sources:
         if oid not in parsed:
             try:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
                     parsed[oid] = _parse_imports(blobs[oid], path)
+                    parsed_top[oid] = _parse_top_level_imports(blobs[oid], path)
             except (SyntaxError, ValueError, UnicodeError, MemoryError, RecursionError):
                 parsed[oid] = None
+                parsed_top[oid] = set()
         names = parsed[oid]
         if names is None and path in changed:
             raise ValueError(f"{commit}:{path} could not be parsed")
-        imported.update(name.casefold() for name in names or ())
+        dir_name = path.rpartition("/")[0]
+        for raw_name in names or ():
+            imported.add(raw_name.casefold())
+        for raw_top in parsed_top.get(oid, set()):
+            top_name = raw_top.casefold()
+            top_importers.setdefault(top_name, set()).add(dir_name)
+            if path not in changed:
+                importer_dirs.setdefault(top_name, set()).add(dir_name)
     paths = tuple(path for _, _, _, path in trees[candidate])
     counts = Counter(name for path in paths if (name := _module_name(path)))
+    init_dirs = {
+        p.rpartition("/")[0]
+        for p in paths
+        if p.rsplit("/", 1)[-1] == "__init__.py" and changed.get(p) != "ADD"
+    }
     for path in sorted(changed):
-        depth = path.count("/") - (
-            path.casefold().endswith("/__init__.py") or path.casefold() == "__init__.py"
-        )
-        if depth < 1 or not (module := _module_name(path)):  # root modules import as themselves
-            continue
-        added = changed[path] == "ADD"
-        if module in always or (module in imported and (added or counts[module] > 1)):
+        if _is_shadow(
+            path, changed, always, imported, counts, init_dirs, importer_dirs, top_importers
+        ):
             return path
     return None
+
+
+def _is_shadow(
+    path: str,
+    changed: dict[str, str],
+    always: set[str],
+    imported: set[str],
+    counts: Counter[str],
+    init_dirs: set[str],
+    importer_dirs: dict[str, set[str]],
+    top_importers: dict[str, set[str]],
+) -> bool:
+    """Whether one changed path can shadow an imported module (#1065, #1148)."""
+    depth = path.count("/") - (
+        path.casefold().endswith("/__init__.py") or path.casefold() == "__init__.py"
+    )
+    if depth < 1 or not (module := _module_name(path)):  # root modules import as themselves
+        return False
+    added = changed[path] == "ADD"
+    return bool(
+        module in always
+        or (
+            module in imported
+            and (
+                added
+                or counts[module] > 1
+                or not _already_importable(path, module, init_dirs, importer_dirs, top_importers)
+            )
+        )
+    )
+
+
+def _already_importable(
+    path: str,
+    module: str,
+    init_dirs: set[str],
+    importer_dirs: dict[str, set[str]],
+    top_importers: dict[str, set[str]],
+) -> bool:
+    """Whether a modified module was already importable without a path redirect (#1148)."""
+    dir_path = path.rpartition("/")[0]
+    is_init = path.rsplit("/", 1)[-1] == "__init__.py"
+    pkg_dir = dir_path.rpartition("/")[0] if is_init else dir_path
+    if pkg_dir in {"src", "lib"}:
+        return True
+    if pkg_dir in init_dirs and not (top_importers.get(module, set()) - {dir_path}):
+        return True
+    return pkg_dir in importer_dirs.get(module, ())
 
 
 def _validate_oid(commit: str) -> None:
@@ -149,6 +220,25 @@ def _parse_imports(raw: bytes, path: str) -> set[str]:
             for arg in (*node.args[:1], *named):  # import_module("x.y"), __import__, importorskip
                 if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
                     names.update(arg.value.lstrip(".").split("."))
+    names.discard("")
+    return names
+
+
+def _parse_top_level_imports(raw: bytes, path: str) -> set[str]:
+    """Top-level module names one file imports as a top-level module (#1148)."""
+    tree = ast.parse(raw, filename=path)
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.update(alias.name.split(".", 1)[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            names.add(node.module.split(".", 1)[0])
+        elif isinstance(node, ast.Call) and _call_name(node.func) in _IMPORT_CALLS:
+            named = (k.value for k in node.keywords if k.arg in {"name", "modname"})
+            for arg in (*node.args[:1], *named):  # import_module("foo") is a top-level import
+                if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                    if not arg.value.startswith("."):
+                        names.add(arg.value.split(".", 1)[0])
     names.discard("")
     return names
 
