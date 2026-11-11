@@ -72,7 +72,7 @@ from cairnwork.workspace import (
 )
 from cairnwork_protocol.ids import ID_RULE, core_ids
 
-_judge_for_verify = partial(judge_candidate, control=True)
+_judge_for_verify = partial(judge_candidate, control=True, env_skip_downgrade=True)
 
 
 def _require_core_ids(verifiers: tuple[tuple[str, tuple[str, ...]], ...]) -> None:

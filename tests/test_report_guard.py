@@ -90,6 +90,31 @@ def test_a_failing_test_is_not_a_pass_but_outcomes_are_kept(tmp_path):
     assert not v.ran and v.outcomes == {"t.py::a": "failed"}  # kept so base_comparison sees it
 
 
+@pytest.mark.parametrize(
+    "skips,valid",
+    [
+        ({"x": {"kind": "marker", "reason": "needs macOS sandbox-exec"}}, True),
+        ([], False),
+        ({"x": {"kind": "unknown", "reason": "why"}}, False),
+        ({"x": {"kind": "marker", "reason": 3}}, False),
+        ({"x": {"kind": "marker", "reason": "why", "extra": True}}, False),
+    ],
+)
+def test_skip_evidence_round_trips_and_malformed_records_are_rejected(tmp_path, skips, valid):
+    path = _write(
+        tmp_path,
+        {
+            "nonce": NONCE,
+            "collected": ["x"],
+            "outcomes": {"x": "skipped"},
+            "skips": skips,
+        },
+    )
+    verdict = report_guard.read_verdict(path, NONCE)
+    assert verdict.recorded is valid
+    assert verdict.skips == ({"x": ("marker", "needs macOS sandbox-exec")} if valid else {})
+
+
 def test_the_plugin_records_a_passing_run_end_to_end(tmp_path):
     """Loaded with -p, the plugin writes a record at sessionfinish; a forged JUnit is moot."""
     (tmp_path / "tests").mkdir()

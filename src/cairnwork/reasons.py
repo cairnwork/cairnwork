@@ -80,6 +80,7 @@ def why_not_passed(
     log_too_big: bool, tests_ran: bool, report_too_big: bool = False, forged=(), not_run=(),
     renamed=(), exitstatus=None, testsfailed=None, fail_kind=None, data_refused=(),
     denied_path="",
+    all_skipped: bool = False,
 ) -> str:  # fmt: skip
     """The causes that made a run fail, ``""`` if none (then the run passed)."""
     causes = []
@@ -125,13 +126,31 @@ def why_not_passed(
                 f" {_names([denied_path])[3:]}, outside the run's write roots: unless the change"
                 " raised this itself, likely the run environment, not evidence about the change"
             )
-    elif ran_sandboxed and returncode == 0 and not tests_ran and not_run:
+    elif ran_sandboxed and returncode == 0 and not tests_ran and not_run and not all_skipped:
         causes.append(
             f"pytest passed but no test ran for a target or skipped module ({_names(not_run)})"
         )
     elif ran_sandboxed and returncode == 0 and not tests_ran and not renamed and not disagrees:
-        causes.append("pytest passed but the guard saw no test run")
+        causes.append(
+            "pytest passed but every collected test was skipped"
+            if all_skipped
+            else "pytest passed but the guard saw no test run"
+        )
     return "; ".join(causes)
+
+
+def all_skipped(collected, outcomes) -> bool:
+    """Whether a complete, nonempty collection has only skipped outcomes."""
+    return (
+        bool(collected)
+        and set(outcomes) == set(collected)
+        and all(outcome == "skipped" for outcome in outcomes.values())
+    )
+
+
+def plain_test_failure(sandboxed: bool, returncode, clean: bool, outcomes) -> bool:
+    """Whether a clean sandboxed pytest run reports a plain assertion failure."""
+    return sandboxed and returncode == 1 and clean and "failed" in outcomes.values()
 
 
 def _missing_modules(run) -> str:

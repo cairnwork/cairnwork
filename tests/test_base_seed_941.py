@@ -73,6 +73,7 @@ def _fake_runs(
                 teardown_errors=(),
                 log_path=ctx.run_root / run_id / "logs.txt",
                 deny_evidence="",
+                skips={},
             )
             for spec in specs
         )
