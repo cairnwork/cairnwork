@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 from conftest import commit_change, git
 
-from cairnwork import report_guard
+from cairnwork import pipeline_judge, report_guard
 from cairnwork.deferred_tests import Comparison
 from cairnwork.skip_evidence import ENV_SKIP_REASONS, env_skip_comparison
 
@@ -42,6 +42,7 @@ def _compare(run, repo, base, judged, *, base_skips=None):
         base,
         judged,
         {run.spec.verifier_id: run.skips} if base_skips is None else base_skips,
+        base_nodes={run.spec.verifier_id: run.collected},
     )
 
 
@@ -174,6 +175,42 @@ def test_each_deferred_file_must_be_collected(commits):
         )
         is None
     )
+
+
+def test_base_node_set_must_match_candidate_collection(commits):
+    repo, base, judged = commits
+    nodes = {"v1": (NODE, "tests/test_env.py::extra")}
+    assert (
+        env_skip_comparison([_run()], repo, base, judged, {"v1": _run().skips}, base_nodes=nodes)
+        is None
+    )
+
+
+def test_failed_blackbox_check_prevents_downgrade(commits):
+    repo, base, judged = commits
+    failed = SimpleNamespace(observation=SimpleNamespace(passed=False))
+    assert (
+        env_skip_comparison([_run()], repo, base, judged, {"v1": _run().skips}, checks=(failed,))
+        is None
+    )
+
+
+def test_worker_judge_keeps_identical_all_skips_failed(commits, monkeypatch):
+    repo, base, judged = commits
+    run = _run()
+    files = SimpleNamespace(base_skips={"v1": run.skips}, base_nodes={"v1": run.collected})
+    task = SimpleNamespace(repo=repo, base_commit=base)
+    result = SimpleNamespace(reason="")
+
+    def judge(*args, **kwargs):
+        pipeline_judge.raise_for_env_skips(
+            [run], task, judged, files, enabled=kwargs.get("env_skip_downgrade", False)
+        )
+        result.reason = "FAILED"
+
+    monkeypatch.setattr(pipeline_judge, "judge_candidate", judge)
+    pipeline_judge.judge_for(SimpleNamespace(isolated=True), task, None, None, None, result, files)
+    assert result.reason == "FAILED"
 
 
 def test_report_plugin_distinguishes_marker_and_runtime_skips(tmp_path):

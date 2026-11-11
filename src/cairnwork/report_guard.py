@@ -360,7 +360,7 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
         return Verdict(False, {})
     if skips is None:
         return Verdict(False, {})
-    if any(node not in outcomes or outcomes[node] != "skipped" for node in skips):
+    if any(node not in outcomes for node in skips):
         return Verdict(False, {})
     shape, data_refused = well_formed(data, collected, outcomes, PLUGIN_KINDS), refused(data)
     if shape is None or data_refused is None:

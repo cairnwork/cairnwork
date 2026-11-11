@@ -238,14 +238,13 @@ def judge_candidate(
     binding: dict | None = None,
     unless_passed: BaseUncomparable | None = None,
     control: bool = False,
+    env_skip_downgrade: bool = False,
 ) -> None:
     """Verify result.candidate_commit and have Core notarise it (sets verified, reason, logs);
-    shared by the worker pipeline and ``verify_candidate``; reach(phase) records progress. Verify
-    only: a ``binding`` (#229) binds the verdict to the tree that ran and the binding's head;
-    ``unless_passed`` (#259), a failed base check, is raised before Core if a verifier did not
-    pass; ``control`` (#962 2b): a failure of setup denials the unchanged tree reproduces is
-    UNCOMPARABLE. Core is not asked when all passed but a new test is in no run's record (#697).
-    #1065: candidate_sys_path refuses a shadowing import edit before any verifier runs."""
+    shared by worker and ``verify_candidate``. Verify only: ``binding`` (#229), ``unless_passed``
+    (#259, raised before Core if a verifier failed), ``control`` (#962 2b), ``env_skip_downgrade``
+    (#1151). Core is not asked when a new test is in no run's record (#697); #1065 sys.path
+    refusal runs first."""
     _refuse_candidate_sys_path(task, result)
     judged = result.candidate_commit
     task_id = result.task_id
@@ -274,7 +273,7 @@ def judge_candidate(
     if refusal := _not_run_refusal(missing, test_files, verified_by, (*runs, *checks)):
         result.reason = refusal  # #697, #1034: Core is not asked
         return
-    raise_for_env_skips(runs, task.repo, task.base_commit, judged, test_files)
+    raise_for_env_skips(runs, task, judged, test_files, checks, env_skip_downgrade)
     # Core's ALLOW is whole-contract; only the test commit's files can be deleted (producer check)
     if deleted_of(test_files) and not task.allow_deletions:
         if stray := stray_deletions(task.repo, task.base_commit, judged, deleted_of(test_files)):

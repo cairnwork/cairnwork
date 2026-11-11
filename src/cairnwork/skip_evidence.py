@@ -24,29 +24,38 @@ def env_skip_comparison(
     judged: str,
     base_skips: dict[str, dict[str, tuple[str, str]]] | None = None,
     deferred_files: tuple[str, ...] = (),
+    *,
+    base_nodes: dict[str, tuple[str, ...]] | None = None,
+    checks: tuple[Any, ...] = (),
 ) -> Comparison | None:
     """Return UNCOMPARABLE only when every verifier has trusted all-skipped evidence."""
     changed = _changed_paths(repo, base, judged)
-    if changed is None or not runs:
+    if changed is None or not runs or any(not check.observation.passed for check in checks):
         return None
     details = []
     for run in runs:
-        detail = _run_detail(run, changed, repo, base, base_skips or {}, deferred_files)
+        detail = _run_detail(
+            run, changed, repo, base, base_skips or {}, deferred_files, base_nodes or {}
+        )
         if detail is None:
             return None
         details.append(detail)
     return Comparison("UNCOMPARABLE", "TESTS_SKIPPED_ENVIRONMENT", "; ".join(details))
 
 
-def raise_for_env_skips(runs, repo: Path, base: str, judged: str, test_files=None) -> None:
+def raise_for_env_skips(runs, task, judged, test_files=None, checks=(), enabled=False) -> None:
     """Raise the verify-boundary signal when every verifier lacks environment evidence."""
+    if not enabled:
+        return
     comparison = env_skip_comparison(
         runs,
-        repo,
-        base,
+        task.repo,
+        task.base_commit,
         judged,
         getattr(test_files, "base_skips", {}),
         tuple(test_files or ()),
+        base_nodes=getattr(test_files, "base_nodes", {}),
+        checks=checks,
     )
     if comparison:
         raise BaseUncomparable(comparison)
@@ -66,6 +75,7 @@ def _run_detail(
     base: str,
     base_skips: dict[str, dict[str, tuple[str, str]]],
     deferred_files: tuple[str, ...],
+    base_nodes: dict[str, tuple[str, ...]],
 ) -> str | None:
     collected: tuple[str, ...] = tuple(getattr(run, "collected", ()))
     outcomes = getattr(run, "outcomes", {})
@@ -89,6 +99,8 @@ def _run_detail(
     if deferred_files and not set(deferred_files) <= files_collected:
         return None
     if not base_skips or base_skips.get(run.spec.verifier_id) != skips:
+        return None
+    if set(base_nodes.get(run.spec.verifier_id, ())) != set(collected):
         return None
     files = files_collected
     if "" in files or any(not _base_file(repo, base, path, changed) for path in files):
