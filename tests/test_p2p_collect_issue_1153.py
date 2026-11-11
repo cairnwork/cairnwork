@@ -63,7 +63,7 @@ def test_star_import_in_module_with_is_dropped_not_removed():
 def test_except_alias_rebind_is_dropped_not_removed():
     base = "def test_a(): assert 0\ntry:\n    pass\nexcept Exception as test_a:\n    pass\n"
     side = _classify_single(base)
-    assert side.removed == set() and side.dropped == {"t.py::test_a"}
+    assert side.removed == {"t.py::test_a"} and side.dropped == set()
 
 
 def test_comprehension_walrus_is_dropped_not_removed():
@@ -107,3 +107,21 @@ def test_pinned_847_lambda_rebind_is_dropped_not_removed():
     base = "def test_a(): assert 0\ntest_a = (lambda: None)\n"
     side = _classify_single(base)
     assert side.removed == set() and side.dropped == {"t.py::test_a"}
+
+
+def test_except_as_test_name_does_not_mask_prior_def():
+    base = (
+        "import pytest\ndef test_a(): pass\ntry:\n    pass\n"
+        "except ValueError as test_a:\n    pass\n"
+    )
+    side = _classify_single(base)
+    assert side.removed == {"t.py::test_a"} and side.dropped == set()
+
+
+def test_deep_if_elif_chain_does_not_raise_recursion_error():
+    branches = "if False:\n    def test_a(): pass\n" + "".join(
+        "elif False:\n    pass\n" for _ in range(1500)
+    )
+    base = f"def test_a(): pass\n{branches}"
+    side = _classify_single(base)
+    assert side.dropped == {"t.py::test_a"} and side.removed == set()

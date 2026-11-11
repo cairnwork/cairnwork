@@ -324,9 +324,7 @@ def last_module_def(body: list[ast.stmt], name: str) -> ast.AST | None:
                 elif isinstance(stmt, ast.Try):
                     visit(stmt.body)
                     for h in stmt.handlers:
-                        if h.name == name or (
-                            h.type is not None and binds_in_scope(h.type, name, module=True)
-                        ):
+                        if h.type is not None and binds_in_scope(h.type, name, module=True):
                             last = h
                         visit(h.body)
                     visit(stmt.orelse)
@@ -356,8 +354,6 @@ def last_module_def(body: list[ast.stmt], name: str) -> ast.AST | None:
                         ):
                             last = case
                         visit(case.body)
-                elif binds_in_scope(stmt, name, module=True):
-                    last = stmt
             elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)) and stmt.name == name:
                 last = stmt
             elif binds_in_scope(stmt, name, module=True):
