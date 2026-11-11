@@ -173,7 +173,7 @@ class DeferredStore:
             except FileExistsError:
                 raise TestCommitRejected("TEST_BUNDLE_EXISTS", "already imported") from None
             except GitCommandError as exc:
-                _raise_git_failure(exc)
+                _raise_git_failure(exc, supplied=True)
         return sha
 
     @staticmethod
@@ -231,8 +231,12 @@ def _only_parent(scratch: Path) -> str:
     return fields[1]
 
 
-def _raise_git_failure(exc: GitCommandError, prefix: str = "") -> NoReturn:
+def _raise_git_failure(
+    exc: GitCommandError, prefix: str = "", *, supplied: bool = False
+) -> NoReturn:
     """A completed git refusal is an Issue error; failure to run git is Cairnwork's."""
     if isinstance(exc.__cause__, subprocess.CalledProcessError):
+        raise TestCommitRejected("TEST_COMMIT_UNREADABLE", f"{prefix}{exc}") from exc
+    if supplied and not isinstance(exc.__cause__, OSError):
         raise TestCommitRejected("TEST_COMMIT_UNREADABLE", f"{prefix}{exc}") from exc
     raise OSError(f"Cairnwork could not run git: {prefix}{exc}") from exc
