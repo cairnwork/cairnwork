@@ -105,11 +105,16 @@ def test_refused_shape_preserves_old_plain_summary(code):
             "error": "TASK_ALLOWED_FILES_PROTECTED",
             "verified": False,
         },
-        {"status": "REFUSED", "reason": "BAD_SCOPE", "error": "BAD_SCOPE"},
+        # reason == error, so only the `verified is False` check keeps these out of not_checked
         {
             "status": "REFUSED",
-            "reason": "BAD_SCOPE",
-            "error": "BAD_SCOPE",
+            "reason": "TASK_ALLOWED_FILES_PROTECTED",
+            "error": "TASK_ALLOWED_FILES_PROTECTED",
+        },
+        {
+            "status": "REFUSED",
+            "reason": "TASK_ALLOWED_FILES_PROTECTED",
+            "error": "TASK_ALLOWED_FILES_PROTECTED",
             "verified": "false",
         },
     ],
