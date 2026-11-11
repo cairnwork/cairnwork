@@ -38,14 +38,18 @@ class Survivors(int):
     (compared, summed, stored, written as JSON): the verdict never reads ``argv``."""
 
     argv: tuple[str, ...]
+    reasons: tuple[str, ...]
 
-    def __new__(cls, count: int, argv: tuple[str, ...] = ()) -> Survivors:
+    def __new__(
+        cls, count: int, argv: tuple[str, ...] = (), reasons: tuple[str, ...] = ()
+    ) -> Survivors:
         self = super().__new__(cls, count)
         self.argv = tuple(argv)
+        self.reasons = tuple(reasons)
         return self
 
     def __add__(self, other: int) -> Survivors:
-        return Survivors(int(self) + other, self.argv)
+        return Survivors(int(self) + other, self.argv, self.reasons)
 
 
 def _allowed(words: list[str]) -> list[str]:
@@ -96,6 +100,12 @@ def note(seen: dict[int, str], pid: int) -> None:
 
 
 def listing(survivors: object) -> str:
-    """``" (argv: a b, c d)"`` for a Survivors that saw some, else ``""``."""
+    """Format the bounded argv and fixed reason evidence for surviving work."""
     argv = getattr(survivors, "argv", ())
-    return f" (argv: {', '.join(argv)})" if argv else ""
+    reasons = getattr(survivors, "reasons", ())
+    details = []
+    if argv:
+        details.append(f"argv: {', '.join(argv)}")
+    if reasons:
+        details.append(f"reason: {', '.join(reasons)}")
+    return f" ({'; '.join(details)})" if details else ""
