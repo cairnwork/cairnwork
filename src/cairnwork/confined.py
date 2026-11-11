@@ -76,7 +76,13 @@ def execute(
                 process.wait(timeout=None if finished else 10)
         survivors = _sweep_survivors(token, process.pid, dirs, mark) + escaped
         copier.join(timeout=10)  # a descendant that escaped the group may hold the pipe
-        if process.stdout is not None:  # always: stdout=PIPE
+        if copier.is_alive():
+            survivors = survivor_argv.Survivors(
+                int(survivors) + 1,
+                survivors.argv,
+                survivors.reasons + ("output copier still reading",),
+            )
+        elif process.stdout is not None:  # always: stdout=PIPE
             process.stdout.close()
     return (None if timed_out else process.returncode), timed_out, survivors
 
