@@ -38,6 +38,7 @@ from cairnwork.node_ids import show, unmatched_note
 from cairnwork.p2p_bindings import (
     hidden_bindings,
     last_binding,
+    last_module_def,
     mentions_ast,
     rebinds_by_string,
     walk_without_nested_classes,
@@ -338,7 +339,12 @@ def _defines(tree: ast.Module | None, owners: list[str], name: str) -> bool:
     try:
         last = last_binding(body, name, module=module)
     except ValueError:
-        return False
+        if not module:
+            return False
+        try:
+            last = last_module_def(body, name)
+        except RecursionError:
+            return False
     # #1122: a walrus in another def's header (annotation, default, decorator) is the last binding
     return isinstance(last, (ast.FunctionDef, ast.AsyncFunctionDef)) and last.name == name
 
