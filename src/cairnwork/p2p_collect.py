@@ -34,6 +34,7 @@ from cairnwork.collect_reader import read_collected
 from cairnwork.conftest_check import conftest_of
 from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRejected
 from cairnwork.gitcmd import GitCommandError, run_git
+from cairnwork.node_ids import show, unmatched_note
 from cairnwork.p2p_bindings import (
     hidden_bindings,
     last_binding,
@@ -88,7 +89,11 @@ def collected_side(task, files, outcomes, test_files, ctx, budget, attempt_id) -
         lambda p: _source(task, task.base_commit, p),
     )
     if side.dropped:
-        raise TestCommitRejected("TEST_COMMIT_DROPS_BASE_TESTS", _named(sorted(side.dropped)))
+        detail = _named(sorted(side.dropped))
+        note = unmatched_note(side.dropped, side.test_ids)
+        raise TestCommitRejected(
+            "TEST_COMMIT_DROPS_BASE_TESTS", f"{detail}; {note}" if note else detail
+        )
     paths = tuple(sorted(edited))
     both = {_function(n) for n in base_ids & test_ids}
     body = changed_tests(task.repo, task.base_commit, task.test_commit, paths) if paths else set()
@@ -361,7 +366,8 @@ def _digest(ids) -> str:
 
 
 def _named(ids: list[str]) -> str:
-    return f"{len(ids)} base test(s): " + ", ".join(ids[:5]) + (" ..." if len(ids) > 5 else "")
+    shown = ", ".join(map(show, ids[:5]))
+    return f"{len(ids)} base test(s): {shown}" + (" ..." if len(ids) > 5 else "")
 
 
 def under_roots(raw: bytes, roots) -> list[str]:

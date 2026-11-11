@@ -15,6 +15,7 @@ from typing import Any
 
 from cairnwork_attest.record import AttestError, read_record, verify_record
 from experimental.acceptance_outcomes.store import OutcomesError, append_checked
+from experimental.plain_result.summary import is_plain_refusal
 
 VERDICTS = ("VERIFIED", "FAILED", "REFUSED", "UNCOMPARABLE")
 PRE_CORE = "PRE_CORE"
@@ -26,6 +27,9 @@ EVENT_TYPES = ("observed", "finding", "confirmation", "closed")
 
 def _verdict_of(result: dict[str, Any]) -> str:
     status = result.get("status")
+    plain_refusal_fields = {"status", "verified", "reason", "error", "detail"}
+    if is_plain_refusal(result) and set(result).issubset(plain_refusal_fields):
+        return PRE_CORE
     if status in VERDICTS:
         return str(status)
     if result.get("error") or result.get("code") or result.get("refused"):

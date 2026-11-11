@@ -29,16 +29,19 @@ class TestFiles(tuple):  # noqa: SLOT001  (a tuple of the added or changed paths
     deleted: tuple[str, ...] = ()
     # #1034: per verifier, the node ids the base run recorded (full ids, parametrisation kept)
     base_nodes: dict[str, tuple[str, ...]] = {}
+    base_skips: dict[str, dict[str, tuple[str, str]]] = {}
 
     def __new__(
         cls,
         paths: Iterable[str] = (),
         deleted: Iterable[str] = (),
         base_nodes: dict[str, tuple[str, ...]] | None = None,
+        base_skips: dict[str, dict[str, tuple[str, str]]] | None = None,
     ) -> TestFiles:
         self = super().__new__(cls, paths)
         self.deleted = tuple(deleted)
         self.base_nodes = dict(base_nodes or {})
+        self.base_skips = {key: dict(value) for key, value in (base_skips or {}).items()}
         return self
 
 

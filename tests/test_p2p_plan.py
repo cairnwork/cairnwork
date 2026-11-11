@@ -41,7 +41,7 @@ def plan(monkeypatch, existing, probe_results, mode="whole-suite"):
     probed: list[tuple[str, ...]] = []
     results = iter(probe_results)
 
-    def fake_probe(task, files, result, ctx, budget):
+    def fake_probe(task, files, result, ctx, budget, tag="p"):
         probed.append(files)
         return next(results)
 
