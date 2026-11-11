@@ -171,7 +171,7 @@ def plan_p2p(task, specs, test_files, mode, budget, result, ctx: VerifyContext) 
             return P2PPlan(rule | {"targets": 0}, None, budget)
         if files == tried:  # the narrower mode would run the same files again
             raise _unusable(rule, "module-dir selects the same files" + GOVERNS * bool(forced))
-        outcomes, why = _probe(task, files, result, ctx, budget)
+        outcomes, why = _probe(task, files, result, ctx, budget, tag="p" if tried is None else "m")
         if rule.get("fallback") and why in OVER_BUDGET:  # the whole base does not fit the budget
             raise no_targets(rule, existing, why)
         if why in UNCLEAN:  # #285: no narrower mode, whatever was configured
