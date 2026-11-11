@@ -177,7 +177,7 @@ def test_a_non_utf8_base_path_is_protected(repo):
         ("tests",),
         frozenset(),
         repo=repo,
-        base_commit=commit,
+        base_commit=commit.decode(),
         python=sys.executable,
         allow_deletions=False,
     ) == {"src/pkg/new.py"}
