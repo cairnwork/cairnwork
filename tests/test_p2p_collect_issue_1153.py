@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from cairnwork.p2p_collect import classify
 
 
@@ -182,3 +184,34 @@ def test_def_in_non_constant_if_without_else_is_dropped():
     base = "if cond:\n    def test_a(): pass\n"
     side = _classify_single(base)
     assert side.dropped == {"t.py::test_a"} and side.removed == set()
+
+
+@pytest.mark.parametrize(
+    "wrap",
+    [
+        "while w:\n{}",
+        "for x in y:\n{}",
+        "with m:\n{}",
+        "try:\n{}\nexcept Exception:\n    pass",
+        "match v:\n    case 1:\n{}",
+    ],
+)
+def test_if_else_defs_inside_a_maybe_run_block_are_dropped(wrap):
+    # The both-branch rule must not reset allow_def inside a maybe-run block (Codex R1, #1171).
+    pad = "        " if wrap.startswith("match") else "    "
+    inner = "if c:\n    def test_a(): pass\nelse:\n    if d:\n        def test_a(): pass\n"
+    inner += "    else:\n        def test_a(): pass\n"
+    nested = "\n".join(pad + line for line in inner.rstrip("\n").split("\n"))
+    base = "def test_a(): assert 0\n" + wrap.format(nested) + "\n"
+    side = _classify_single(base)
+    assert side.removed == set() and side.dropped == {"t.py::test_a"}
+
+
+@pytest.mark.parametrize("cond", ["True", "False"])
+def test_a_constant_if_inside_a_maybe_run_block_keeps_it_maybe_run(cond):
+    branch = "if True:\n        def test_a(): pass\n"
+    if cond == "False":
+        branch = "if False:\n        pass\n    else:\n        def test_a(): pass\n"
+    base = "def test_a(): assert 0\nwhile w:\n    " + branch
+    side = _classify_single(base)
+    assert side.removed == set() and side.dropped == {"t.py::test_a"}
