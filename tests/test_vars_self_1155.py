@@ -12,6 +12,11 @@ ALLOWED = [
     ("plain_method", "class C:\n    def m(self):\n        return vars(self)\n"),
     ("classmethod", "class C:\n    @classmethod\n    def m(cls):\n        return vars(cls)\n"),
     ("alongside_code", "x = 1\nclass C:\n    def m(self):\n        return vars(self)\ny = 2\n"),
+    (
+        "self_call_from_init",
+        "class C:\n    def __init__(self):\n        self.m()\n"
+        "    def m(self):\n        return vars(self)\n",
+    ),
 ]
 
 REFUSED = [
@@ -75,6 +80,84 @@ REFUSED = [
     (
         "attribute",
         "import builtins\nclass C:\n    def m(self):\n        return builtins.vars(self)\n",
+    ),
+    (
+        "custom_decorator",
+        "def dec(f):\n    return f(sys)\nclass C:\n    @dec\n"
+        "    def m(self):\n        return vars(self)\n",
+    ),
+    ("property", "class C:\n    @property\n    def m(self):\n        return vars(self)\n"),
+    (
+        "wraps_call",
+        "import functools\nx = 1\nclass C:\n    @functools.wraps(x)\n"
+        "    def m(self):\n        return vars(self)\n",
+    ),
+    ("attribute_decorator", "class C:\n    @a.b\n    def m(self):\n        return vars(self)\n"),
+    (
+        "stacked_classmethod",
+        "def dec(f):\n    return f\nclass C:\n    @classmethod\n"
+        "    @dec\n    def m(cls):\n        return vars(cls)\n",
+    ),
+    (
+        "lambda_decorator",
+        "class C:\n    @(lambda f: f)\n    def m(self):\n        return vars(self)\n",
+    ),
+    ("receiver_default", "class C:\n    def m(self=sys):\n        return vars(self)\n"),
+    (
+        "receiver_default_unbound",
+        "class C:\n    def m(self=sys):\n        return vars(self)\ntype(C()).m()\n",
+    ),
+    ("receiver_annotation", "class C:\n    def m(self: int):\n        return vars(self)\n"),
+    (
+        "type_obj_unbound",
+        "class C:\n    def m(self):\n        return vars(self)\ntype(obj).m(sys)\n",
+    ),
+    ("class_alias", "class C:\n    def m(self):\n        return vars(self)\nD = C\nD.m(sys)\n"),
+    (
+        "parameter_method_reference",
+        "class C:\n    def m(self):\n        return vars(self)\ndef g(k):\n    return k.m(sys)\n",
+    ),
+    (
+        "cls_method_reference",
+        "class C:\n    def m(self):\n        return vars(self)\n"
+        "    @classmethod\n    def other(cls):\n        cls.m(sys)\n",
+    ),
+    (
+        "type_self_method_reference",
+        "class C:\n    def m(self):\n        return vars(self)\n"
+        "    def other(self):\n        type(self).m(sys)\n",
+    ),
+    ("subclass", "class C:\n    def m(self):\n        return vars(self)\nclass D(C):\n    pass\n"),
+    ("method_string", "class C:\n    def m(self):\n        return vars(self)\n'm'\n"),
+    (
+        "class_decorator",
+        "def dec(cls):\n    return cls\n@dec\nclass C:\n"
+        "    def m(self):\n        return vars(self)\n",
+    ),
+    (
+        "class_string",
+        "class C:\n    def m(self):\n        return vars(self)\n'C'\n",
+    ),
+    (
+        "nested_class_attribute",
+        "class Outer:\n    class Inner:\n        def m(self):\n            return vars(self)\n"
+        "Outer.Inner.m(sys)\n",
+    ),
+    (
+        "tuple_subscript_attribute",
+        "class C:\n    def m(self):\n        return vars(self)\n(C,)[0].m(sys)\n",
+    ),
+    (
+        "positional_only_receiver",
+        "class C:\n    def m(self, /):\n        return vars(self)\n",
+    ),
+    (
+        "aliased_vars_import",
+        "from builtins import vars as v\nclass C:\n    def m(self):\n        return vars(self)\n",
+    ),
+    (
+        "default_receiver_no_unbound_call",
+        "class C:\n    def m(self=sys):\n        return vars(self)\n",
     ),
 ]
 
