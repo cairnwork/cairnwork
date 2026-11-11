@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Iterator
 from pathlib import Path
 
 from cairnwork.textclean import replace_hidden
@@ -22,6 +23,9 @@ _KEYS = (
     r"|secret_access_key|secret_key|private_key"
 )
 _KEY = re.compile(_KEYS, re.IGNORECASE)
+# The longest matching alternative in _KEYS is 'secret_access_key' (17 chars); a longer suffix
+# can never match _KEYS.
+_MAX_KEY_LEN = len("secret_access_key")
 # colon form (#402): 'token: x', 'DB-PASSWORD : x', '"password": "x"'; value to line end
 _COLON = re.compile(rf"(?im)((?<!\w)(?:[\w-]{{0,64}}[_-])?(?:{_KEYS})[\"']?[ \t]*:[ \t]*)[^\n]+")
 # '--password x' with a space (#402): a flag whose name ends in a secret word, and its next word
@@ -77,11 +81,28 @@ def probe_log_tail(path: str | Path | None) -> str:
     return mask_secrets(raw.decode("utf-8", errors="replace"))[-TAIL_CHARS:]
 
 
+_SPLIT_RUNS = re.compile(r"([ \t\n]+)")
+
+
+def _mask_userinfo(text: str) -> str:
+    """Remove URL credentials (up to the last '@' of a whitespace-free run) in one pass."""
+    parts = _SPLIT_RUNS.split(text)
+    for i in range(0, len(parts), 2):
+        run = parts[i]
+        idx = run.find("://")
+        if idx != -1:
+            after_idx = idx + 3
+            last_at = run.rfind("@")
+            if last_at >= after_idx:
+                parts[i] = run[:after_idx] + run[last_at + 1 :]
+    return "".join(parts)
+
+
 def mask_secrets(text: str) -> str:
     """``text`` without ANSI codes, hidden characters, URL credentials, or the masked forms listed
     in ``probe_log_tail``; the same rules for any text that may carry a secret (#814 argv)."""
-    text = _URL_USERINFO.sub(
-        "", replace_hidden(_ANSI.sub("", text).replace("\r\n", "\n"), _HID, keep="\n\t")
+    text = _mask_userinfo(
+        replace_hidden(_ANSI.sub("", text).replace("\r\n", "\n"), _HID, keep="\n\t")
     )
     for rx in (_HEADER, _BEARER, _COLON, _FLAG, _ENCODED):
         text = rx.sub(r"\1<redacted>", text)
@@ -90,9 +111,19 @@ def mask_secrets(text: str) -> str:
 
 def _is_key(name: str) -> bool:
     """A secret word, or a name ending in one after '_' (GITHUB_TOKEN); full-width letters fold."""
+
+    def _candidates(n: str) -> Iterator[str]:
+        yield n
+        pos = len(n)
+        start = max(0, len(n) - 1 - _MAX_KEY_LEN)
+        while True:
+            pos = n.rfind("_", start, pos)
+            if pos == -1:
+                break
+            yield n[pos + 1 :]
+
     for n in (name, name.casefold(), unicodedata.normalize("NFKC", name).casefold()):
-        pieces = [n, *(n[i + 1 :] for i, c in enumerate(n) if c == "_")]
-        if any(_KEY.fullmatch(x) for x in pieces):
+        if any(_KEY.fullmatch(x) for x in _candidates(n)):
             return True
     return False
 
