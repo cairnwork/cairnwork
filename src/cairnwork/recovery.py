@@ -259,21 +259,24 @@ def _run_dirs(root: Path, attempt_id: str) -> tuple[list[Path], list[Path], list
     """The attempt's run directories under ``root``: verifier checkouts (``.work``), private
     run dirs (``.priv``...; a verify log stays as evidence, only its run/ goes) and clones.
     One walk for the owner side and the verifier-account side, so the two cannot drift."""
-    pattern = f"{attempt_id}-[{_RUN_TAGS}]-v*"
+    # #1190: second-seed base runs made before the "s" tag used "-b2"
+    patterns = (f"{attempt_id}-[{_RUN_TAGS}]-v*", f"{attempt_id}-b2-v*")
 
     # symlinks are listed too (dangling or not): they are unlinked, never followed (_remove_inside)
     def real(p: Path) -> bool:
         return p.is_symlink() or p.is_dir()
 
-    works = [w for w in root.glob(f"{pattern}.work") if real(w)]
+    works = [w for pattern in patterns for w in root.glob(f"{pattern}.work") if real(w)]
     privates = []
-    for private in root.glob(f"{pattern}.*"):  # verifier, base-test and P2P runs
+    for private in (p for pattern in patterns for p in root.glob(f"{pattern}.*")):  # P2P too
         if private.suffix == ".work" or not real(private):
             continue
         # a base-test or P2P run is not Core evidence and would show the tests: all of it goes
         keep_log = f"{attempt_id}-v-" in private.name and not private.is_symlink()
         privates.append(private / "run" if keep_log else private)
-    clones = sorted(p for p in root.glob(pattern) if real(p) and "." not in p.name)
+    clones = sorted(
+        p for pattern in patterns for p in root.glob(pattern) if real(p) and "." not in p.name
+    )
     return works, privates, clones
 
 

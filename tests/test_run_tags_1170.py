@@ -52,3 +52,12 @@ def test_a_two_letter_tag_is_not_matched(tmp_path):
     work.mkdir()
     assert work not in recovery._run_dirs(tmp_path, attempt)[0]
     assert work.resolve() not in proc_cwd.attempt_dirs([tmp_path], attempt)
+
+
+def test_a_legacy_b2_leftover_is_still_found(tmp_path):
+    """#1190: second-seed base runs made before the "s" tag used "-b2"."""
+    attempt = "a0123456789abcdef"
+    work = tmp_path / f"{attempt}-b2-v0.work"
+    work.mkdir()
+    assert work in recovery._run_dirs(tmp_path, attempt)[0]
+    assert work.resolve() in proc_cwd.attempt_dirs([tmp_path], attempt)

@@ -63,7 +63,7 @@ def _verified(project, state, tests):
         if not again and any(EMPTY in line for line in out["logs"]):
             continue
         assert any(
-            line.startswith("second base deny evidence ") and "-b2/" in line for line in out["logs"]
+            line.startswith("second base deny evidence ") and "-s/" in line for line in out["logs"]
         ), out["logs"]
         return _evidence(out)
     raise AssertionError("unreachable")
