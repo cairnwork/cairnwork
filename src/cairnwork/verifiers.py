@@ -77,7 +77,7 @@ from cairnwork.confined import ATTEMPT_ENV, MAX_LOG_BYTES, RUN_TOKEN_VAR
 from cairnwork.core_request import VerifierObservation
 from cairnwork.import_path_tree import require_plain_dirs
 from cairnwork.pycache_guard import PYCACHE_DIR
-from cairnwork.reasons import candidate_denial, why_not_passed
+from cairnwork.reasons import all_skipped, candidate_denial, plain_test_failure, why_not_passed
 from cairnwork.run_scrub import close_private
 from cairnwork.verifier_account import lock_wait_seconds
 from cairnwork.verifier_exec import (  # low-level run primitives, split out for the 400-line cap
@@ -120,6 +120,7 @@ class VerifierRun:
     log_path: Path
     observation: VerifierObservation
     outcomes: dict[str, str]
+    skips: dict[str, tuple[str, str]] = field(default_factory=dict)
     survivors: int = 0
     ran: bool = False
     # a plain test failure: the guard reported a failed test and nothing about the run itself
@@ -353,8 +354,7 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
     too_big = log_path.stat().st_size > MAX_LOG_BYTES
     clean = not (timed_out or mutated or survivors or forged or too_big or verdict.too_big)
     passed = profile is not None and returncode == 0 and clean and ran  # ran: pytest said 0 too
-    failed = "failed" in verdict.outcomes.values()
-    plain_failure = profile is not None and returncode == 1 and clean and failed
+    plain_failure = plain_test_failure(profile is not None, returncode, clean, verdict.outcomes)
     why = "" if passed else why_not_passed(
         ran_sandboxed=profile is not None, returncode=returncode, timed_out=timed_out,
         mutated=mutated, survivors=survivors, log_too_big=too_big, tests_ran=ran,
@@ -362,6 +362,7 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
         exitstatus=verdict.exitstatus, testsfailed=verdict.testsfailed, fail_kind=verdict.fail_kind,
         data_refused=verdict.data_refused,
         denied_path=_denial(batch, verdict, checkout, run_dir, clean and not not_run),
+        all_skipped=all_skipped(verdict.collected, verdict.outcomes),
     )  # fmt: skip
     digest = _record_digest(
         candidate_commit=candidate_commit,
@@ -387,7 +388,7 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
         report_too_big=verdict.too_big, notes=(profile.notes if profile else ()) + host_notes(),
         recorded=verdict.recorded, collect_errors=verdict.collect_errors,
         teardown_errors=verdict.teardown_errors, fail_kind=verdict.fail_kind, log_too_big=too_big,
-        collected=verdict.collected, collect_skipped=verdict.collect_skipped,
+        collected=verdict.collected, collect_skipped=verdict.collect_skipped, skips=verdict.skips,
         collection_finished=verdict.collection_finished, skipped_deps=verdict.skipped_deps,
         import_errors=verdict.import_errors, submodule_errors=verdict.submodule_errors,
         deny_evidence=str(evidence) if evidence else "", data_refused=verdict.data_refused,

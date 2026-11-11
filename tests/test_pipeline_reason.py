@@ -8,6 +8,41 @@ from typing import Any
 from cairnwork.reasons import verdict_reason, why_not_passed
 
 
+def test_not_run_refusal_precedes_environment_skip(monkeypatch, tmp_path):
+    from cairnwork import pipeline_judge
+
+    task = SimpleNamespace(
+        blackbox=None,
+        repo=tmp_path,
+        base_commit="base",
+        allowed_files=(),
+        test_commit=None,
+    )
+    result = SimpleNamespace(
+        candidate_commit="candidate",
+        task_id="task",
+        attempt_id="attempt",
+        logs=[],
+        failure_evidence=[],
+        reason="",
+        verified=False,
+    )
+    run = SimpleNamespace(log_path=tmp_path / "run.log", observation=SimpleNamespace(passed=True))
+    monkeypatch.setattr(pipeline_judge, "_refuse_candidate_sys_path", lambda *_: None)
+    monkeypatch.setattr(pipeline_judge, "_candidate_runs", lambda *_: [run])
+    monkeypatch.setattr(pipeline_judge.failure_evidence, "capture_for_task", lambda *_: [])
+    monkeypatch.setattr(pipeline_judge, "_not_run_refusal", lambda *_: "NAMED_TESTS_NOT_RUN")
+    monkeypatch.setattr(
+        pipeline_judge,
+        "raise_for_env_skips",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("called too early")),
+    )
+    pipeline_judge.judge_candidate(
+        task, (), "digest", None, result, (), SimpleNamespace(), lambda *_: None
+    )
+    assert result.reason == "NAMED_TESTS_NOT_RUN"
+
+
 def _v(status, reason=""):
     return SimpleNamespace(status=status, reason=reason)
 
@@ -51,3 +86,14 @@ def test_an_oversized_test_report_is_a_named_cause_only_when_flagged():
     )  # fmt: skip
     assert "test report over the size cap" not in why_not_passed(**base)
     assert "test report over the size cap" in why_not_passed(**base, report_too_big=True)
+
+
+def test_all_skipped_has_a_specific_failure_reason_but_default_stays_compatible():
+    base: dict[str, Any] = dict(
+        ran_sandboxed=True, returncode=0, timed_out=False, mutated=(), survivors=0,
+        log_too_big=False, tests_ran=False,
+    )  # fmt: skip
+    assert why_not_passed(**base) == "pytest passed but the guard saw no test run"
+    assert why_not_passed(**base, all_skipped=True) == (
+        "pytest passed but every collected test was skipped"
+    )
