@@ -41,6 +41,7 @@ from cairnwork.deferred_tests import (
     test_paths,
     untargeted,
 )
+from cairnwork.node_ids import show, unmatched_note
 from cairnwork.p2p import P2PPlan, run_plan
 from cairnwork.p2p_nodes import clean
 from cairnwork.pytest_config import PytestConfigError, gate_import_paths, test_file_rule
@@ -212,6 +213,9 @@ def _seed_sensitive_detail(
         f"failed node IDs differ or second run was invalid at seeds "
         f"seed {first_seed} and seed {second_seed}: {quoted}"
     )
+    note = unmatched_note(set(changed) | set(first_failed), set(second_failed))
+    if note:
+        detail += f"; {note}"
     if comparison.kind != "TEETH":
         detail += f"; second run: {comparison.kind} {comparison.code}"
     return detail
@@ -219,7 +223,7 @@ def _seed_sensitive_detail(
 
 def _quoted_node_id(node: str) -> str:
     """Return a repr-quoted node ID no longer than 200 characters."""
-    candidate = node
+    candidate = show(node)
     while len(repr(candidate)) > 200:
         candidate = candidate[: max(0, len(candidate) - (len(repr(candidate)) - 199))]
     return repr(candidate)
@@ -345,7 +349,8 @@ def _not_run_refusal(missing, test_files, verified_by, judged) -> str:
         return ""
     shown = ", ".join(map(clean, gone[:10])) + (f", +{len(gone) - 10} more" if gone[10:] else "")
     head = f"NAMED_TESTS_NOT_RUN: {len(gone)} test(s) the base run ran did not run on the candidate"
-    return f"{head}: {shown}"
+    note = unmatched_note(gone, {node for run in judged for node in run.outcomes})
+    return f"{head}: {shown}" + (f"; {note}" if note else "")
 
 
 def _base_nodes_gone(test_files, runs) -> list[str]:
