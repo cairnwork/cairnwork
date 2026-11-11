@@ -181,7 +181,13 @@ def _blob_signal(repo: Path, base: str, commit: str, path: str, changed: dict[st
         raise ValueError(f"{commit}:{path} could not be parsed or decoded")
     added = changed[path] == "ADD"
     old = None if added else run_git_bytes(repo, "cat-file", "blob", f"{base}:{path}")
-    if alias_machinery_changed(old, data):
+    try:
+        alias = alias_machinery_changed(old, data)
+    except ValueError:
+        if not signal:  # source that cannot parse cannot run; no import-system name either
+            return ""
+        raise
+    if alias:
         return _MACHINERY
     if not signal:
         return ""

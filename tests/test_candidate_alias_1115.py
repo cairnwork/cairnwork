@@ -159,3 +159,18 @@ def test_plain_import_sys_without_machinery_attributes_is_not_refused(repo):
     base = git(repo, "rev-parse", "HEAD")
     cand = commit_change(repo, {"src/a.py": "x = 1\nimport sys as s\nprint(s.argv)\n"})
     _run(repo, base, cand)
+
+
+def test_a_data_file_with_a_plain_syntax_error_is_not_scanned_as_source(repo):
+    # Source that cannot parse cannot run; with no import-system name it is not a signal (main).
+    base = git(repo, "rev-parse", "HEAD")
+    cand = commit_change(repo, {"src/sample.py": "# pytest_configure sample\nprint 'x'\n"})
+    _run(repo, base, cand)
+
+
+def test_an_unparseable_file_that_names_the_import_path_still_fails_closed(repo):
+    base = git(repo, "rev-parse", "HEAD")
+    cand = commit_change(repo, {"src/sample.py": "import sys\nsys.path.insert(0, 'x'\n"})
+    with pytest.raises(CandidateRejected) as got:
+        _run(repo, base, cand)
+    assert "cannot scan candidate import paths" in str(got.value)
