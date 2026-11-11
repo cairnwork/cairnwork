@@ -232,6 +232,12 @@ def _parse_top_level_imports(raw: bytes, path: str) -> set[str]:
             names.update(alias.name.split(".", 1)[0] for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
             names.add(node.module.split(".", 1)[0])
+        elif isinstance(node, ast.Call) and _call_name(node.func) in _IMPORT_CALLS:
+            named = (k.value for k in node.keywords if k.arg in {"name", "modname"})
+            for arg in (*node.args[:1], *named):  # import_module("foo") is a top-level import
+                if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                    if not arg.value.startswith("."):
+                        names.add(arg.value.split(".", 1)[0])
     names.discard("")
     return names
 

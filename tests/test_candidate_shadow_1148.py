@@ -169,3 +169,29 @@ def test_case_mismatched_src_directory_is_not_exempt(repo):
         )
     assert got.value.code == "CANDIDATE_SYS_PATH_MUTATION"
     assert "Lib/foo.py" in str(got.value)
+
+
+@pytest.mark.parametrize(
+    "importer",
+    [
+        'import importlib\nimportlib.import_module("foo")\n',
+        '__import__("foo")\n',
+        'import pytest\npytest.importorskip("foo")\n',
+    ],
+)
+def test_package_member_dynamically_imported_outside_package_is_refused(repo, importer):
+    # Codex R3 on #1172: a dynamic bare import must count as a top-level import too
+    commit_change(
+        repo,
+        {"pkg/__init__.py": "", "pkg/foo.py": "X = 1\n", "tests/test_t.py": importer},
+    )
+    base = git(repo, "rev-parse", "HEAD")
+    cand = commit_change(
+        repo,
+        {"pkg/foo.py": "X = 2\n", "conftest.py": "import sys\nsys.path.insert(0, 'pkg')\n"},
+    )
+    with pytest.raises(CandidateRejected) as got:
+        candidate_sys_path.refuse_new_sys_path_mutation(
+            repo, base, cand, _changed(repo, base, cand)
+        )
+    assert got.value.code == "CANDIDATE_SYS_PATH_MUTATION"
