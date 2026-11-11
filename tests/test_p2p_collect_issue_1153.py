@@ -125,3 +125,21 @@ def test_deep_if_elif_chain_does_not_raise_recursion_error():
     base = f"def test_a(): pass\n{branches}"
     side = _classify_single(base)
     assert side.dropped == {"t.py::test_a"} and side.removed == set()
+
+
+def test_def_in_constant_false_if_is_dropped():
+    base = "if False:\n    def test_a(): pass\n"
+    side = _classify_single(base)
+    assert side.dropped == {"t.py::test_a"} and side.removed == set()
+
+
+def test_def_in_constant_true_if_with_else_assign_is_removed():
+    base = "if True:\n    def test_a(): pass\nelse:\n    test_a = 1\n"
+    side = _classify_single(base)
+    assert side.removed == {"t.py::test_a"} and side.dropped == set()
+
+
+def test_def_in_non_constant_if_without_else_is_dropped():
+    base = "if cond:\n    def test_a(): pass\n"
+    side = _classify_single(base)
+    assert side.dropped == {"t.py::test_a"} and side.removed == set()

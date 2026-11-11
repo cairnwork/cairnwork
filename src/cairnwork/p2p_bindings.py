@@ -317,10 +317,28 @@ def last_module_def(body: list[ast.stmt], name: str) -> ast.AST | None:
         for stmt in stmts:
             if isinstance(stmt, COMPOUND_STMTS):
                 if isinstance(stmt, ast.If):
-                    if binds_in_scope(stmt.test, name, module=True):
-                        last = stmt
-                    visit(stmt.body)
-                    visit(stmt.orelse)
+                    if isinstance(stmt.test, ast.Constant):
+                        if not stmt.test.value:
+                            visit(stmt.orelse)
+                        else:
+                            visit(stmt.body)
+                    elif not binds_in_scope(stmt, name, module=True):
+                        pass
+                    else:
+                        body_last = last_module_def(stmt.body, name)
+                        else_last = last_module_def(stmt.orelse, name) if stmt.orelse else None
+                        body_def = (
+                            isinstance(body_last, (ast.FunctionDef, ast.AsyncFunctionDef))
+                            and body_last.name == name
+                        )
+                        else_def = (
+                            isinstance(else_last, (ast.FunctionDef, ast.AsyncFunctionDef))
+                            and else_last.name == name
+                        )
+                        if body_def and else_def:
+                            last = body_last
+                        else:
+                            last = stmt
                 elif isinstance(stmt, ast.Try):
                     visit(stmt.body)
                     for h in stmt.handlers:
