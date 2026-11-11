@@ -29,7 +29,14 @@ from pathlib import Path
 from posixpath import dirname, join
 
 from cairnwork.deferred_overlay import TestCommitRejected
-from cairnwork.fixture_forms import CODE, _aliases, _fixture, module_level, registered
+from cairnwork.fixture_forms import (
+    CODE,
+    _aliases,
+    _fixture,
+    module_level,
+    registered,
+    resolve_source_aliases,
+)
 from cairnwork.gitcmd import GitCommandError, run_git, run_git_bytes
 
 MAX_FILES = 5000  # base Python files read under one conftest's directory
@@ -46,25 +53,34 @@ def taken_names(
     listing = _listing(repo, base)
     sources = _base_sources(repo, listing, directory)
     trees: dict[str, ast.Module] = {}
+    parent_conftests: list[tuple[str, ast.Module]] = []
     for parent in _parents(directory):
         conftest = join(parent, "conftest.py") if parent else "conftest.py"
         if conftest in sources:  # r2: what its own fixtures request may not be overridden either
             trees[conftest] = tree = _parse(conftest, sources[conftest])
-            names |= bound(tree) | requested(tree)
+            parent_conftests.append((conftest, tree))
     for file, data in sources.items():
         if _under(file, directory):
             trees[file] = tree = _parse(file, data)
             names |= requested(tree)
     conftests = {f: t for f, t in trees.items() if f.rsplit("/", 1)[-1] == "conftest.py"}
-    for tree in _imported(repo, listing, conftests).values():  # #982 item 4
-        names |= _fixtures(tree)  # r2: only its fixtures, not every function of app code
-    return frozenset(bound(old)), frozenset(names)
+    index = _module_index(listing)
+    imported = _imported(repo, listing, conftests, index)
+    all_trees = {**trees, **imported}
+    if path not in all_trees:
+        all_trees[path] = old
+    resolved = resolve_source_aliases(all_trees, index)
+    for conftest, tree in parent_conftests:
+        names |= bound(tree, extra=resolved.get(conftest)) | requested(tree)
+    for f, tree in imported.items():
+        names |= _fixtures(tree, extra=resolved.get(f))
+    return frozenset(bound(old, extra=resolved.get(path))), frozenset(names)
 
 
-def bound(tree: ast.Module) -> set[str]:
+def bound(tree: ast.Module, extra: set[str] | None = None) -> set[str]:
     """Names ``tree`` binds at module level (inside ``if``, ``try``, ``with`` and loops too), and
     every name a fixture in it may register (fixture_forms.registered)."""
-    names = registered(tree)
+    names = registered(tree, extra=extra)
     for node in module_level(tree.body):
         names |= bound_by(node)
     return names
@@ -119,20 +135,20 @@ def _call_name(func: ast.expr) -> str:
     return func.id if isinstance(func, ast.Name) else ""
 
 
-def _fixtures(tree: ast.Module) -> set[str]:
+def _fixtures(tree: ast.Module, extra: set[str] | None = None) -> set[str]:
     """#982 item 4 r2: what an imported module's fixtures take: each fixture's name (a star
     import, ``as`` or ``pytest_plugins`` registers it under that name), what ``registered`` reads,
     its parameters, and every literal string passed to ``usefixtures`` or ``getfixturevalue``. A
     fixture is a function with a decorator naming ``fixture`` or an alias of it, any decorated
     module-level function (a factory decorator from another module may call ``fixture``, #982;
     a method's ``@property`` is not), or one passed to a ``fixture`` call."""
-    names = registered(tree) | {
+    names = registered(tree, extra=extra) | {
         s.value for n in ast.walk(tree)
         if isinstance(n, ast.Call) and _call_name(n.func) in _REQUESTS
         for arg in n.args for s in ast.walk(arg)
         if isinstance(s, ast.Constant) and isinstance(s.value, str)
     }  # fmt: skip
-    top, aliases = {id(n) for n in module_level(tree.body)}, _aliases(tree)
+    top, aliases = {id(n) for n in module_level(tree.body)}, _aliases(tree, extra=extra)
     for node in ast.walk(tree):
         if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             continue
@@ -171,19 +187,28 @@ def _base_sources(repo: Path, listing: dict[str, str], directory: str) -> dict[s
     return dict(zip(wanted, _read(repo, list(wanted.values())), strict=True))
 
 
+def _module_index(listing: dict[str, str]) -> dict[str, set[str]]:
+    index: dict[str, set[str]] = {}
+    for file in listing:
+        parts = file.removesuffix(".py").removesuffix("/__init__").split("/")
+        for i in range(len(parts)):
+            index.setdefault(".".join(parts[i:]), set()).add(file)
+    return index
+
+
 def _imported(
-    repo: Path, listing: dict[str, str], trees: dict[str, ast.Module]
+    repo: Path,
+    listing: dict[str, str],
+    trees: dict[str, ast.Module],
+    index: dict[str, set[str]] | None = None,
 ) -> dict[str, ast.Module]:
     """#982 item 4: a fixture is registered where it is imported but requests its dependencies in
     its own module. So the base modules ``trees`` import are read, followed through re-exports. A
     module matches every base file whose path ends with it; one in no base file is third-party
     (not seen). A ``pytest_plugins`` that is not a literal string or list of them imports every
     base file."""
-    index: dict[str, set[str]] = {}
-    for file in listing:
-        parts = file.removesuffix(".py").removesuffix("/__init__").split("/")
-        for i in range(len(parts)):
-            index.setdefault(".".join(parts[i:]), set()).add(file)
+    if index is None:
+        index = _module_index(listing)
     out: dict[str, ast.Module] = {}
     seen, todo = set(trees), list(trees.items())
     while todo:
