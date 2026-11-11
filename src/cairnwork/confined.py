@@ -56,7 +56,6 @@ def execute(
             preexec_fn=_limit_file_size,  # noqa: PLW1509 - only setrlimit, no locks
         )
         timed_out = finished = False
-        group_killed = False
         try:  # the group is killed on any way out after the start, an interrupt included (#537)
             copier = threading.Thread(target=copy_capped, args=(process.stdout, log), daemon=True)
             copier.start()
@@ -69,18 +68,13 @@ def execute(
             escaped = reap() if reap is not None else 0
             finished = True
         finally:
-            if process.returncode is None:
-                _kill_group(process.pid)
-                group_killed = True
-            # Once wait() reaps the leader, its pid may be reused as another group id.
+            _kill_group(process.pid)
             if not finished and reap is not None:  # interrupted: the account's processes too
                 with suppress(Exception):  # best effort (own deadline); the interrupt propagates
                     reap()
             with suppress(subprocess.TimeoutExpired):  # bounded only after an interrupt
                 process.wait(timeout=None if finished else 10)
-        # If the leader was reaped first, scan its group too; its pid may already be reused.
-        group = process.pid if group_killed else -1
-        survivors = _sweep_survivors(token, group, dirs, mark) + escaped
+        survivors = _sweep_survivors(token, process.pid, dirs, mark) + escaped
         copier.join(timeout=10)  # a descendant that escaped the group may hold the pipe
         if copier.is_alive():
             survivors = survivor_argv.Survivors(

@@ -76,7 +76,7 @@ def test_completed_copier_closes_pipe_and_reports_no_survivor(monkeypatch: Any, 
     assert streams and streams[0].closed
 
 
-def test_reaped_leader_group_is_not_signalled(monkeypatch: Any, tmp_path: Any):
+def test_group_kill_and_sweep_group_kept_after_normal_exit(monkeypatch: Any, tmp_path: Any):
     signalled = []
     swept_groups = []
     monkeypatch.setattr(confined, "_kill_group", signalled.append)
@@ -88,5 +88,5 @@ def test_reaped_leader_group_is_not_signalled(monkeypatch: Any, tmp_path: Any):
     monkeypatch.setattr(confined, "_sweep_survivors", sweep)
     env = {**os.environ, confined.RUN_TOKEN_VAR: TOKEN}
     confined.execute([sys.executable, "-c", "pass"], tmp_path, env, 5, tmp_path / "group.log")
-    assert signalled == []
-    assert swept_groups == [-1]
+    assert len(signalled) == 1
+    assert swept_groups == signalled
