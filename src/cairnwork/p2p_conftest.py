@@ -72,7 +72,7 @@ def check_overlay(task, test_files, files, outcomes, side, result, ctx, budget) 
         return
     over = lay_tests_over(task.repo, task.base_commit, task.test_commit, test_files,
                           f"{result.attempt_id}-cf", Path(ctx.run_root))  # fmt: skip
-    after, why = _side(ctx, over, files, result, budget, "co")
+    after, why = _side(ctx, over, files, result, budget, "o")
     if why:
         raise TestCommitRejected(UNCHECKED, f"the probe with the test commit is unusable: {why}")
     skip = side.changed | side.probe_only
