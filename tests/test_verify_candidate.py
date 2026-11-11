@@ -51,6 +51,17 @@ def test_a_file_outside_the_scope_is_refused(project, state):
     assert out["reason"].startswith("OUT_OF_SCOPE") and out["core_status"] == ""
 
 
+def test_a_missing_verifier_interpreter_is_an_explicit_refusal(project, state):
+    base = base_of(project)
+    path = "src/deep/pkg/module.py"
+    cand = candidate(project, base, {path: "value = 1\n"})
+    (state / "config.json").write_text(json.dumps({"verifier_python": "/missing/python"}))
+    code, out = verify(state, project, base, cand, allowed=(path,))
+    assert code == 2 and out["status"] == "REFUSED"
+    assert out["reason"].startswith("VERIFIER_ENVIRONMENT_ERROR")
+    assert out["verified"] is False
+
+
 def test_a_deletion_is_refused(project, state):
     base = base_of(project)
     cand = candidate(project, base, delete=("src/b.py",))

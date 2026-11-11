@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+import sys
 
 import pytest
 from test_issue_runner import BLOCK, FakeGitHub, issue  # noqa: F401
@@ -137,3 +138,46 @@ def test_namespace_git_refusal_still_refuses(setup, monkeypatch):
     result = runner.take(setup["intake"], github, setup["clone"])[0]
     assert "PROTECTED_VERIFIER_INPUT" in result["refused"]
     assert github.labels[7] == {runner.NEEDS_FIX}
+
+
+def test_absent_base_check_cannot_start_after_tree_refusal_leaves_issue_queued(setup, monkeypatch):
+    _prepare_namespace(setup)
+    github = FakeGitHub([_namespace_issue()])
+
+    def run_git(_repo, *args, **_kwargs):
+        if args and args[0] == "ls-tree":
+            error = subprocess.CalledProcessError(128, "git", stderr="tree refused")
+            raise GitCommandError("ls-tree failed") from error
+        if args and args[0] == "rev-parse":
+            raise GitCommandError("rev-parse could not start") from FileNotFoundError("git missing")
+        raise AssertionError(args)
+
+    monkeypatch.setattr(namespace_shadow, "run_git", run_git)
+    result = runner.take(setup["intake"], github, setup["clone"])[0]
+    _assert_environment_error(result, github)
+
+
+def test_a_non_utf8_base_path_is_protected(repo):
+    def plumbing(*args, input=None):
+        return subprocess.run(
+            ["git", "-C", str(repo), *args], input=input, capture_output=True, check=True
+        ).stdout.strip()
+
+    blob = plumbing("hash-object", "-w", "--stdin", input=b"value = 1\n")
+    subtree = plumbing("mktree", "-z", input=b"100644 blob " + blob + b"\tbad-\xff.py\0")
+    source = plumbing("mktree", "-z", input=b"040000 tree " + subtree + b"\tpkg\0")
+    root = plumbing("mktree", "-z", input=b"040000 tree " + source + b"\tsrc\0")
+    commit = plumbing(
+        "-c", "user.name=t", "-c", "user.email=t@e", "commit-tree", root, input=b"base\n"
+    )
+    plumbing("update-ref", "refs/heads/main", commit)
+    assert namespace_shadow.namespace_shadows(
+        ("src/pkg/new.py",),
+        ("src",),
+        ("tests",),
+        frozenset(),
+        repo=repo,
+        base_commit=commit,
+        python=sys.executable,
+        allow_deletions=False,
+    ) == {"src/pkg/new.py"}

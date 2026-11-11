@@ -229,9 +229,8 @@ def gate_import_paths(
 ) -> tuple[str, ...]:
     """verifier_settings' pythonpath, for the shadow gate (pipeline.check_task, #351). Only a base
     that git shows is not a commit in repo (``rev-parse --verify`` exit 1) gives just import_paths:
-    nothing runs against it from there (intake refuses it as TASK_PATH_UNREADABLE, verify_candidate
-    cannot read the candidate's parent, a run cannot check it out). Any other failure to read the
-    base or its config is a PytestConfigError, so the gate fails closed."""
+    nothing runs (intake refuses TASK_PATH_UNREADABLE; verify cannot read its parent).
+    OSError/TimeoutExpired means environment error; every other failure is PytestConfigError."""
     try:
         run_git(repo, "rev-parse", "--verify", "--quiet", f"{base_commit}^{{commit}}")
     except GitCommandError as exc:

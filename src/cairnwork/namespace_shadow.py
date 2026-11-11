@@ -37,9 +37,9 @@ from pathlib import Path
 from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.namespace_open_init import opens_its_path
 
-# Every suffix Python imports a first-level file by: source, sourceless bytecode and extension
-# modules. A committed ``.pyc``/``.so`` shadows just as a ``.py`` does (verified on APFS) and is not
-# covered by tamper_scan (``.py`` only) or pycache_guard (the TMPDIR prefix, not the checkout).
+# Python imports first-level source, sourceless bytecode and extension files by their suffix.
+# Committed ``.pyc``/``.so`` shadow like ``.py`` (APFS); tamper_scan covers only ``.py``, and
+# pycache_guard only TMPDIR, not the checkout.
 _SOURCE_SUFFIXES = (".py", ".pyc", ".pyo")
 _EXTENSION_SUFFIXES = (".so", ".pyd")
 _KINDS = frozenset({"none", "ns", "path", "meta"})
@@ -131,13 +131,13 @@ def namespace_shadows(
     try:
         tree = run_git(repo, "ls-tree", "-rz", "--end-of-options", base_commit)
     except GitCommandError as exc:
-        failed = exc.__cause__
-        if not isinstance(failed, subprocess.CalledProcessError):
+        if isinstance(exc.__cause__, (OSError, subprocess.TimeoutExpired)):
             raise OSError(f"git could not list the base tree: {exc}") from exc
-        if _absent(repo, base_commit):
-            # Nothing runs against it (pytest_config.gate_import_paths).
-            return set()
+        if isinstance(exc.__cause__, subprocess.CalledProcessError) and _absent(repo, base_commit):
+            return set()  # Nothing runs against it (pytest_config.gate_import_paths).
         return set(candidates)  # no proof of safety: refuse before binding or verification
+    except UnicodeError:  # Git ran, but its path encoding cannot be interpreted
+        return set(candidates)
     entries = [entry.split("\t", 1) for entry in tree.split("\0") if entry]
     listing = [path for _, path in entries]
     regular = {
@@ -364,9 +364,9 @@ def _absent(repo: Path, base_commit: str) -> bool:
         )
     except GitCommandError as exc:
         failed = exc.__cause__
-        if not isinstance(failed, subprocess.CalledProcessError):
+        if isinstance(failed, (OSError, subprocess.TimeoutExpired)):
             raise OSError(f"git could not check the base commit: {exc}") from exc
-        return failed.returncode == 1
+        return isinstance(failed, subprocess.CalledProcessError) and failed.returncode == 1
     return False
 
 
