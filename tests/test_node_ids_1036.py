@@ -57,6 +57,31 @@ def test_placeholder_literal_is_escaped_without_conflating_checkout_root(tmp_pat
     assert normalise_run_ids(plain, root).outcomes == plain.outcomes
 
 
+@pytest.mark.parametrize("reverse", [False, True])
+def test_backslash_escape_preserves_bytes_id_distinction(tmp_path, reverse):
+    root, other = tmp_path / "checkout", tmp_path / "other-run"
+    path_id = f"t[\\{root}]"
+    literal_id = "t[<cw-checkout>]"
+    path_verdict = Verdict(True, {path_id: "passed"})
+    literal_verdict = Verdict(True, {literal_id: "passed"})
+
+    if reverse:
+        path_verdict, literal_verdict = literal_verdict, path_verdict
+        path_root, literal_root = other, root
+    else:
+        path_root, literal_root = root, other
+
+    path_result = normalise_run_ids(path_verdict, path_root)
+    literal_result = normalise_run_ids(literal_verdict, literal_root)
+    assert set(path_result.outcomes) != set(literal_result.outcomes)
+    if reverse:
+        assert set(path_result.outcomes) == {r"t[\<cw-checkout>]"}
+        assert set(literal_result.outcomes) == {r"t[\\<cw-checkout>]"}
+    else:
+        assert set(path_result.outcomes) == {r"t[\\<cw-checkout>]"}
+        assert set(literal_result.outcomes) == {r"t[\<cw-checkout>]"}
+
+
 def test_raw_and_realpath_alias_collision_fails_closed(tmp_path):
     root = tmp_path / "checkout"
     root.mkdir()
