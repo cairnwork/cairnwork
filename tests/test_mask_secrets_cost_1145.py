@@ -214,6 +214,15 @@ def test_cost_many_underscores() -> None:
         p2p_probe_log._KEY = real_key
 
 
+def _best_of(fn, arg, runs: int = 5) -> float:
+    best = float("inf")
+    for _ in range(runs):
+        t0 = time.monotonic()
+        fn(arg)
+        best = min(best, time.monotonic() - t0)
+    return best
+
+
 def test_cost_many_schemes() -> None:
     from cairnwork.p2p_probe_log import mask_secrets
 
@@ -232,15 +241,9 @@ def test_cost_many_schemes() -> None:
 
     assert t1 < 1.0, f"10k :// took {t1:.3f}s >= 1.0s"
     assert t2 < 1.0, f"20k :// took {t2:.3f}s >= 1.0s"
-    if t1 < 0.01:
-        t0 = time.monotonic()
-        for _ in range(5):
-            mask_secrets(s10k)
-        t1 = (time.monotonic() - t0) / 5
-        t0 = time.monotonic()
-        for _ in range(5):
-            mask_secrets(s20k)
-        t2 = (time.monotonic() - t0) / 5
+    # growth ratio: best of 5 runs each, so one noisy run on a busy host cannot fail it
+    t1 = min(t1, _best_of(mask_secrets, s10k))
+    t2 = min(t2, _best_of(mask_secrets, s20k))
     assert t2 < 3.0 * max(t1, 0.001), (
         f"Growth {t2 / max(t1, 0.001):.2f}x >= 3x (t1={t1:.4f}s, t2={t2:.4f}s)"
     )
@@ -267,15 +270,9 @@ def test_cost_64kib_line_with_many_schemes() -> None:
     t2 = time.monotonic() - t0
 
     assert t2 < 1.0, f"64 KiB line took {t2:.3f}s >= 1.0s (old code takes >2.5s)"
-    if t1 < 0.01:
-        t0 = time.monotonic()
-        for _ in range(5):
-            mask_secrets(s_half)
-        t1 = (time.monotonic() - t0) / 5
-        t0 = time.monotonic()
-        for _ in range(5):
-            mask_secrets(s_full)
-        t2 = (time.monotonic() - t0) / 5
+    # growth ratio: best of 5 runs each, so one noisy run on a busy host cannot fail it
+    t1 = min(t1, _best_of(mask_secrets, s_half))
+    t2 = min(t2, _best_of(mask_secrets, s_full))
     assert t2 < 3.0 * max(t1, 0.001), (
         f"Growth {t2 / max(t1, 0.001):.2f}x >= 3x (t1={t1:.4f}s, t2={t2:.4f}s)"
     )
