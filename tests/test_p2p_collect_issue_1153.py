@@ -18,19 +18,55 @@ def test_def_in_module_if_is_resolved_like_pytest():
     assert side.removed == {"t.py::test_a"} and side.dropped == set()
 
 
-def test_def_in_module_try_is_resolved_like_pytest():
+# --- Still Refused (pass on both base and head) ---
+
+
+def test_def_in_module_try_both_branches_is_dropped():
     base = "try:\n    def test_a(): assert 0\nexcept Exception:\n    def test_a(): assert 1\n"
     side = _classify_single(base)
-    assert side.removed == {"t.py::test_a"} and side.dropped == set()
+    assert side.dropped == {"t.py::test_a"} and side.removed == set()
 
 
-def test_def_in_module_with_is_resolved_like_pytest():
+def test_def_in_module_with_is_dropped():
     base = "with open('f'):\n    def test_a(): assert 0\n"
     side = _classify_single(base)
-    assert side.removed == {"t.py::test_a"} and side.dropped == set()
+    assert side.dropped == {"t.py::test_a"} and side.removed == set()
 
 
-# --- Still Refused (pass on both base and head) ---
+def test_def_in_while_false_is_dropped():
+    base = "while False:\n    def test_a(): pass\n"
+    side = _classify_single(base)
+    assert side.dropped == {"t.py::test_a"} and side.removed == set()
+
+
+def test_def_in_for_empty_is_dropped():
+    base = "for _ in []:\n    def test_a(): pass\n"
+    side = _classify_single(base)
+    assert side.dropped == {"t.py::test_a"} and side.removed == set()
+
+
+def test_def_in_try_except_handler_is_dropped():
+    base = "try:\n    pass\nexcept Exception:\n    def test_a(): pass\n"
+    side = _classify_single(base)
+    assert side.dropped == {"t.py::test_a"} and side.removed == set()
+
+
+def test_def_in_try_else_is_dropped():
+    base = "try:\n    pass\nexcept Exception:\n    pass\nelse:\n    def test_a(): pass\n"
+    side = _classify_single(base)
+    assert side.dropped == {"t.py::test_a"} and side.removed == set()
+
+
+def test_def_in_match_case_is_dropped():
+    base = "match 1:\n    case 2:\n        def test_a(): pass\n"
+    side = _classify_single(base)
+    assert side.dropped == {"t.py::test_a"} and side.removed == set()
+
+
+def test_def_in_with_suppress_is_dropped():
+    base = "from contextlib import suppress\nwith suppress(Exception):\n    def test_a(): pass\n"
+    side = _classify_single(base)
+    assert side.dropped == {"t.py::test_a"} and side.removed == set()
 
 
 def test_star_import_after_def_is_dropped_not_removed():

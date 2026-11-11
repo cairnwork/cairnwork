@@ -308,61 +308,61 @@ def _is_str(node: ast.AST | None, name: str) -> bool:
     return isinstance(node, ast.Constant) and node.value == name
 
 
+def _is_name_def(node: ast.AST | None, name: str) -> bool:
+    return isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name
+
+
 def last_module_def(body: list[ast.stmt], name: str) -> ast.AST | None:
     """The last module-scope binding of name when resolving compound statements (#1153)."""
     last: ast.AST | None = None
 
-    def visit(stmts: list[ast.stmt]) -> None:
+    def visit(stmts: list[ast.stmt], allow_def: bool = True) -> None:
         nonlocal last
         for stmt in stmts:
             if isinstance(stmt, COMPOUND_STMTS):
                 if isinstance(stmt, ast.If):
                     if isinstance(stmt.test, ast.Constant):
                         if not stmt.test.value:
-                            visit(stmt.orelse)
+                            visit(stmt.orelse, allow_def=allow_def)
                         else:
-                            visit(stmt.body)
+                            visit(stmt.body, allow_def=allow_def)
                     elif not binds_in_scope(stmt, name, module=True):
                         pass
                     else:
                         body_last = last_module_def(stmt.body, name)
                         else_last = last_module_def(stmt.orelse, name) if stmt.orelse else None
-                        body_def = (
-                            isinstance(body_last, (ast.FunctionDef, ast.AsyncFunctionDef))
-                            and body_last.name == name
-                        )
-                        else_def = (
-                            isinstance(else_last, (ast.FunctionDef, ast.AsyncFunctionDef))
-                            and else_last.name == name
-                        )
-                        if body_def and else_def:
+                        if (
+                            allow_def
+                            and _is_name_def(body_last, name)
+                            and _is_name_def(else_last, name)
+                        ):
                             last = body_last
                         else:
                             last = stmt
                 elif isinstance(stmt, ast.Try):
-                    visit(stmt.body)
+                    visit(stmt.body, allow_def=False)
                     for h in stmt.handlers:
                         if h.type is not None and binds_in_scope(h.type, name, module=True):
                             last = h
-                        visit(h.body)
-                    visit(stmt.orelse)
-                    visit(stmt.finalbody)
+                        visit(h.body, allow_def=False)
+                    visit(stmt.orelse, allow_def=False)
+                    visit(stmt.finalbody, allow_def=False)
                 elif isinstance(stmt, (ast.With, ast.AsyncWith)):
                     if any(binds_in_scope(item, name, module=True) for item in stmt.items):
                         last = stmt
-                    visit(stmt.body)
+                    visit(stmt.body, allow_def=False)
                 elif isinstance(stmt, (ast.For, ast.AsyncFor)):
                     if binds_in_scope(stmt.target, name, module=True) or binds_in_scope(
                         stmt.iter, name, module=True
                     ):
                         last = stmt
-                    visit(stmt.body)
-                    visit(stmt.orelse)
+                    visit(stmt.body, allow_def=False)
+                    visit(stmt.orelse, allow_def=False)
                 elif isinstance(stmt, ast.While):
                     if binds_in_scope(stmt.test, name, module=True):
                         last = stmt
-                    visit(stmt.body)
-                    visit(stmt.orelse)
+                    visit(stmt.body, allow_def=False)
+                    visit(stmt.orelse, allow_def=False)
                 elif isinstance(stmt, ast.Match):
                     if binds_in_scope(stmt.subject, name, module=True):
                         last = stmt
@@ -371,9 +371,9 @@ def last_module_def(body: list[ast.stmt], name: str) -> ast.AST | None:
                             case.guard is not None and binds_in_scope(case.guard, name, module=True)
                         ):
                             last = case
-                        visit(case.body)
-            elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)) and stmt.name == name:
-                last = stmt
+                        visit(case.body, allow_def=False)
+            elif _is_name_def(stmt, name):
+                last = stmt if allow_def else ast.Pass()
             elif binds_in_scope(stmt, name, module=True):
                 last = stmt
 
