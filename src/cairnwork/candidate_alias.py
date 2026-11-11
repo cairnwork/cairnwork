@@ -276,13 +276,15 @@ def _is_write_call(call: ast.Call) -> bool:
                 break
         receiver = call.func.value if isinstance(call.func, ast.Attribute) else None
         module_receiver = isinstance(receiver, ast.Name) and receiver.id in _PATH_FIRST_OPENERS
-        if mode_arg is None and (receiver is None or module_receiver):
+        if mode_arg is None and receiver is None:
             mode_arg = call.args[1] if len(call.args) > 1 else None
         elif mode_arg is None and call.args:
-            # a Path-like receiver takes the mode first; an aliased module takes it second
+            # mode text first means a Path-like receiver, even under a module's (rebound) name;
+            # otherwise a module takes the mode second, and an unknown receiver fails closed
             first = call.args[0]
             text = first.value if isinstance(first, ast.Constant) else None
-            if not isinstance(text, str) or _MODE_TEXT.fullmatch(text):
+            mode_first = isinstance(text, str) and _MODE_TEXT.fullmatch(text)
+            if mode_first or (not isinstance(text, str) and not module_receiver):
                 mode_arg = first
             elif len(call.args) > 1:
                 mode_arg = call.args[1]

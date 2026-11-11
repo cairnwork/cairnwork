@@ -95,6 +95,8 @@ def test_unparseable_new_raises_value_error():
         "bz2.open(path, 'a')",
         "g.open('data/raw.gz', 'wb')",
         "g.open('data/raw.gz', mode)",
+        "gzip.open('w')",
+        "gzip.open(path, mode)",
         "Path('f').open('a')",
         "p.open(mode)",
     ],
