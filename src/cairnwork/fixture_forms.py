@@ -168,59 +168,88 @@ def _import_head(file: str, module: str, level: int) -> str:
     return ".".join(filter(None, [*(up.split("/") if level else ()), module]))
 
 
-def _is_fixture_binding(
+def _dotted(node: ast.expr) -> str:
+    parts = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Name):
+        parts.append(node.id)
+        return ".".join(reversed(parts))
+    return ""
+
+
+def _is_value_fixture(
     value: ast.expr,
     aliases: set[str],
     mod_map: dict[str, set[str]],
-    all_trees: dict[str, ast.Module],
-    index: dict[str, set[str]],
-    visited: set[str],
-    memo: dict[str, set[str]],
+    all_aliases: dict[str, set[str]],
 ) -> bool:
     if isinstance(value, ast.NamedExpr):
         value = value.value
     if _exact(value, aliases):
         return True
     if isinstance(value, ast.Attribute) and isinstance(value.value, ast.Name):
+        dot = f"{value.value.id}.{value.attr}"
+        if dot in aliases:
+            return True
         for target in mod_map.get(value.value.id, ()):
-            target_aliases = _file_fixture_aliases(target, all_trees, index, visited, memo)
-            if value.attr in target_aliases:
+            if value.attr in all_aliases.get(target, ()):
                 return True
     return False
 
 
-def _file_fixture_aliases(
+def _source_alias_inputs(
+    all_trees: dict[str, ast.Module], index: dict[str, set[str]]
+) -> tuple[
+    dict[str, dict[str, set[str]]],
+    dict[str, list[tuple[str, str, str]]],
+    dict[str, list[tuple[str, ast.expr]]],
+    dict[str, set[str]],
+]:
+    """Collect imports and module-level assignments without resolving their aliases yet."""
+    mod_maps: dict[str, dict[str, set[str]]] = {}
+    from_edges: dict[str, list[tuple[str, str, str]]] = {}
+    file_pairs: dict[str, list[tuple[str, ast.expr]]] = {}
+    all_aliases: dict[str, set[str]] = {}
+    for path, tree in all_trees.items():
+        stmts = list(module_level(tree.body))
+        aliases: set[str] = set()
+        mmap: dict[str, set[str]] = {}
+        edges: list[tuple[str, str, str]] = []
+        _collect_source_imports(path, stmts, all_trees, index, aliases, mmap, edges)
+        mod_maps[path] = mmap
+        from_edges[path] = edges
+        file_pairs[path] = _source_assignment_pairs(stmts)
+        all_aliases[path] = aliases
+    return mod_maps, from_edges, file_pairs, all_aliases
+
+
+def _collect_source_imports(
     path: str,
+    stmts: list[ast.stmt],
     all_trees: dict[str, ast.Module],
     index: dict[str, set[str]],
-    visited: set[str],
-    memo: dict[str, set[str]],
-) -> set[str]:
-    if path in memo:
-        return memo[path]
-    if path in visited or path not in all_trees:
-        return set()
-    visited = visited | {path}
-    tree = all_trees[path]
-    stmts = list(module_level(tree.body))
-    aliases: set[str] = set()
-    mod_map: dict[str, set[str]] = {}
+    aliases: set[str],
+    mod_map: dict[str, set[str]],
+    edges: list[tuple[str, str, str]],
+) -> None:
+    """Record fixture imports and imported module paths for one source file."""
     for node in stmts:
         if isinstance(node, ast.ImportFrom):
             if node.module == "pytest" and node.level == 0:
-                aliases |= {a.asname or a.name for a in node.names if a.name == "fixture"}
-            else:
-                head = _import_head(path, node.module or "", node.level)
-                for target in (index.get(head) or set()) & all_trees.keys():
-                    if target != path and target not in visited:
-                        target_aliases = _file_fixture_aliases(
-                            target, all_trees, index, visited, memo
-                        )
-                        for a in node.names:
-                            if a.name == "*":
-                                aliases |= target_aliases
-                            elif a.name in target_aliases:
-                                aliases.add(a.asname or a.name)
+                aliases.update(a.asname or a.name for a in node.names if a.name == "fixture")
+                continue
+            head = _import_head(path, node.module or "", node.level)
+            targets = (index.get(head) or set()) & all_trees.keys() - {path}
+            edges.extend(
+                (target, a.name, a.asname or a.name) for target in targets for a in node.names
+            )
+            for a in node.names:
+                sub = f"{head}.{a.name}".strip(".")
+                sub_targets = (index.get(sub) or set()) & all_trees.keys() - {path}
+                if sub_targets:
+                    mod_map.setdefault(a.asname or a.name, set()).update(sub_targets)
         elif isinstance(node, ast.Import):
             for a in node.names:
                 local = a.asname or a.name.split(".")[0]
@@ -228,47 +257,75 @@ def _file_fixture_aliases(
                 if targets:
                     mod_map.setdefault(local, set()).update(targets)
 
-    todo: list[tuple[ast.expr, ast.expr]] = []
-    for node in stmts:
-        if isinstance(node, ast.Assign | ast.AnnAssign | ast.NamedExpr) and node.value is not None:
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            for t in targets:
-                todo.append((t, node.value))
+
+def _source_assignment_pairs(stmts: list[ast.stmt]) -> list[tuple[str, ast.expr]]:
+    """Flatten module-level assignments to name/value pairs, including tuple unpacking."""
+    todo = [
+        (target, node.value)
+        for node in stmts
+        if isinstance(node, ast.Assign | ast.AnnAssign | ast.NamedExpr) and node.value is not None
+        for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+    ]
     pairs: list[tuple[str, ast.expr]] = []
     while todo:
-        t, v = todo.pop(0)
-        if isinstance(t, ast.Tuple | ast.List) and isinstance(v, ast.Tuple | ast.List):
-            if len(t.elts) == len(v.elts):
-                todo.extend(zip(t.elts, v.elts, strict=True))
-        elif isinstance(t, ast.Name):
-            pairs.append((t.id, v))
+        target, value = todo.pop(0)
+        if isinstance(target, ast.Tuple | ast.List) and isinstance(value, ast.Tuple | ast.List):
+            if len(target.elts) == len(value.elts):
+                todo.extend(zip(target.elts, value.elts, strict=True))
+        elif isinstance(target, ast.Name):
+            pairs.append((target.id, value))
+    return pairs
 
+
+def _propagate_source_aliases(
+    all_trees: dict[str, ast.Module],
+    mod_maps: dict[str, dict[str, set[str]]],
+    from_edges: dict[str, list[tuple[str, str, str]]],
+    file_pairs: dict[str, list[tuple[str, ast.expr]]],
+    all_aliases: dict[str, set[str]],
+) -> None:
+    """Grow finite alias sets until stable; every round adds values from finite source names."""
     changed = True
     while changed:
-        before = len(aliases)
-        for name, value in pairs:
-            if name not in aliases and _is_fixture_binding(
-                value, aliases, mod_map, all_trees, index, visited, memo
-            ):
-                aliases.add(name)
-        changed = len(aliases) > before
+        changed = False
+        for path in all_trees:
+            if _propagate_file_aliases(path, mod_maps, from_edges, file_pairs, all_aliases):
+                changed = True
 
-    memo[path] = aliases
-    return aliases
+
+def _propagate_file_aliases(
+    path: str,
+    mod_maps: dict[str, dict[str, set[str]]],
+    from_edges: dict[str, list[tuple[str, str, str]]],
+    file_pairs: dict[str, list[tuple[str, ast.expr]]],
+    all_aliases: dict[str, set[str]],
+) -> bool:
+    """Propagate each known alias through the imports and assignments in one file."""
+    aliases = all_aliases[path]
+    before = len(aliases)
+    for target, source, dest in from_edges[path]:
+        target_aliases = all_aliases[target]
+        if source == "*":
+            aliases.update(name for name in target_aliases if "." not in name)
+        elif source in target_aliases:
+            aliases.add(dest)
+    for local, targets in mod_maps[path].items():
+        for target in targets:
+            aliases.update(f"{local}.{name}" for name in all_aliases[target] if "." not in name)
+    for name, value in file_pairs[path]:
+        if name not in aliases and _is_value_fixture(value, aliases, mod_maps[path], all_aliases):
+            aliases.add(name)
+    return len(aliases) > before
 
 
 def resolve_source_aliases(
     all_trees: dict[str, ast.Module],
     index: dict[str, set[str]],
 ) -> dict[str, set[str]]:
-    """#1020: resolve fixture aliases by their source module: for `from m import x as y`
-    (and `import m` then `m.x`), look up the binding of x in module m, and treat y as a fixture
-    alias only if m binds x at MODULE LEVEL to pytest.fixture (directly, or itself through a
-    resolved alias). Star imports count only from modules conftest_names already reads."""
-    memo: dict[str, set[str]] = {}
-    for path in all_trees:
-        _file_fixture_aliases(path, all_trees, index, set(), memo)
-    return memo
+    """#1020: propagate fixture aliases across the modules conftest_names already reads."""
+    mod_maps, from_edges, file_pairs, all_aliases = _source_alias_inputs(all_trees, index)
+    _propagate_source_aliases(all_trees, mod_maps, from_edges, file_pairs, all_aliases)
+    return all_aliases
 
 
 def _fixture_call(node: ast.AST, aliases: set[str]) -> bool:
@@ -299,6 +356,10 @@ def _fixture(node: ast.expr, aliases: set[str]) -> bool:
         word = getattr(n, "id", getattr(n, "attr", ""))
         if isinstance(word, str) and ("fixture" in word or word in aliases):
             return True
+        if isinstance(n, ast.Attribute):
+            dot = _dotted(n)
+            if dot and dot in aliases:
+                return True
     return False
 
 
