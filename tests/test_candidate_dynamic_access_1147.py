@@ -185,7 +185,7 @@ HONEST_CASES = [
         "class W:\n    def a(self):\n        setattr(self, 'active', True)\n",
         "allow",
     ),
-    ("honest_vars_self", "class W:\n    def v(self):\n        return vars(self)\n", "refuse"),
+    ("honest_vars_self", "class W:\n    def v(self):\n        return vars(self)\n", "allow"),
     ("honest_getattr_param", "def f(cfg):\n    return getattr(cfg, 'name', None)\n", "allow"),
     ("honest_getattr_opts_default", "def f(opts, d):\n    return getattr(opts, 'x', d)\n", "allow"),
     (

@@ -30,6 +30,13 @@ _PARSE_ERRORS = (SyntaxError, ValueError, UnicodeError, RecursionError, MemoryEr
 Key = tuple[str, str]
 
 
+def _safe_vars_self(tree: ast.Module, statement: ast.AST) -> bool:
+    """Allow only vars(receiver) in an unrebound, directly declared instance/class method."""
+    from cairnwork.candidate_vars_self import safe_vars_self_statement
+
+    return safe_vars_self_statement(tree, statement)
+
+
 def machinery_changed(
     old: bytes | None,
     new: bytes,
@@ -58,7 +65,7 @@ def _hot_statements(
         hot_names = _hot_defs(tree, reach)
         found: Counter[Key] = Counter()
         hot: set[Key] = set()
-        _visit(list(tree.body), "", words, hot_names, denylist, found, hot)
+        _visit(list(tree.body), "", words, hot_names, denylist, found, hot, tree)
     except _PARSE_ERRORS:
         return None
     return found, hot
@@ -89,6 +96,7 @@ def _visit(
     denylist: frozenset[str],
     found: Counter[Key],
     hot: set[Key],
+    tree: ast.Module,
 ) -> None:
     for node in nodes:
         own, blocks = copy.copy(node), []
@@ -100,12 +108,12 @@ def _visit(
         key = (scope, text)
         found[key] += 1
         scan_hit = _has_word(text, words)
-        exempt = scan_hit and _exempt_dynamic_word_scan(text, own, words, denylist)
+        exempt = scan_hit and _exempt_dynamic_word_scan(text, own, words, denylist, tree, node)
         if (scan_hit and not exempt) or _names(own) & hot_names:
             hot.add(key)
         inner = f"{scope}/{node.name if isinstance(node, _DEFS) else text}"
         for field, block in blocks:  # the field keeps an if/else or try/else move visible
-            _visit(block, f"{inner}:{field}", words, hot_names, denylist, found, hot)
+            _visit(block, f"{inner}:{field}", words, hot_names, denylist, found, hot, tree)
 
 
 def _unsafe_dynamic_access(node: ast.AST, denylist: frozenset[str]) -> bool:
@@ -154,12 +162,32 @@ def _unsafe_dynamic_access(node: ast.AST, denylist: frozenset[str]) -> bool:
 
 
 def _exempt_dynamic_word_scan(
-    text: str, node: ast.AST, words: tuple[bytes, ...], denylist: frozenset[str]
+    text: str,
+    node: ast.AST,
+    words: tuple[bytes, ...],
+    denylist: frozenset[str],
+    tree: ast.Module,
+    original: ast.AST,
 ) -> bool:
     """Exempt only word hits fully accounted for by safe direct getattr/setattr calls."""
-    other_words = tuple(word for word in words if word not in {b"getattr", b"setattr"})
-    if _has_word(text, other_words) or _unsafe_dynamic_access(node, denylist):
+    other_words = tuple(word for word in words if word not in {b"getattr", b"setattr", b"vars"})
+    if _has_word(text, other_words):
         return False
+    vars_count = sum(isinstance(part, ast.Name) and part.id == "vars" for part in ast.walk(node))
+    if text.count("vars") != vars_count:
+        return False
+    if _unsafe_dynamic_access(node, denylist):
+        vars_names = [
+            part for part in ast.walk(node) if isinstance(part, ast.Name) and part.id == "vars"
+        ]
+        if not vars_names or not _safe_vars_self(tree, original):
+            return False
+        stripped = copy.deepcopy(node)
+        for part in ast.walk(stripped):
+            if isinstance(part, ast.Name) and part.id == "vars":
+                part.id = "__safe_vars_self__"
+        if _unsafe_dynamic_access(stripped, denylist):
+            return False
     calls = [part for part in ast.walk(node) if isinstance(part, ast.Call)]
     direct = sum(
         isinstance(call.func, ast.Name) and call.func.id in {"getattr", "setattr"} for call in calls
