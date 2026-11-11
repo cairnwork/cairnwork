@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import re
 
-from experimental.plain_result.summary import summarize
+from experimental.plain_result.summary import is_plain_refusal, summarize
 
 # The reason text of a FAILED run is wording only (reasons.py). Only the one shape that says
 # nothing but "the tests failed" counts as a problem: every failed verifier's only cause is
@@ -64,7 +64,7 @@ def _undetermined(record: dict, state: str, headline: str) -> list[dict]:
     if state in ("weak_assurance", "attested"):
         runs = record["assurance"].get("verifier_runs")
         return [_line(f"證明可以核驗，但測試是否真的執行：{runs}", "assurance.verifier_runs")]
-    if "error" in record and "status" not in record:  # verify_cli's pre-Core refusal or error
+    if is_plain_refusal(record) or ("error" in record and "status" not in record):
         return [_line(f"沒有執行驗收：{record['error']}", "error")]
     return [_line(headline, "")]
 

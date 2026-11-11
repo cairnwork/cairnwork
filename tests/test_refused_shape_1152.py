@@ -4,9 +4,11 @@ import json
 
 import pytest
 
-from cairnwork import route, verify_cli
+from cairnwork import blackbox, route, verify_cli
 from cairnwork.pipeline import TaskRejected
 from cairnwork.runlock import RunLockBusy
+from experimental.acceptance_outcomes.ledger import PRE_CORE, _verdict_of
+from experimental.plain_result.card import card
 from experimental.plain_result.summary import summarize
 
 
@@ -94,6 +96,83 @@ def test_refused_shape_preserves_old_plain_summary(code):
     assert new["state"] == old["state"]
 
 
-def test_forged_refused_shape_does_not_receive_not_checked_state():
-    result = summarize({"status": "REFUSED", "reason": "X", "error": "Y", "verified": False})
-    assert result["state"] != "not_checked"
+@pytest.mark.parametrize(
+    "record",
+    [
+        {
+            "status": "REFUSED",
+            "reason": "BAD_SCOPE",
+            "error": "TASK_ALLOWED_FILES_PROTECTED",
+            "verified": False,
+        },
+        {"status": "REFUSED", "reason": "BAD_SCOPE", "error": "BAD_SCOPE"},
+        {
+            "status": "REFUSED",
+            "reason": "BAD_SCOPE",
+            "error": "BAD_SCOPE",
+            "verified": "false",
+        },
+    ],
+)
+def test_forged_refused_shape_does_not_receive_not_checked_state(record):
+    assert summarize(record)["state"] != "not_checked"
+
+
+@pytest.mark.parametrize("code", ["TASK_ALLOWED_FILES_PROTECTED", "BAD_SCOPE"])
+def test_card_for_new_refusal_matches_old_error_record(code):
+    old = card({"error": code, "detail": "policy"})
+    new = card(
+        {
+            "status": "REFUSED",
+            "verified": False,
+            "reason": code,
+            "error": code,
+            "detail": "policy",
+        }
+    )
+    # Exclude only `source`, which echoes the input record and necessarily has different shape.
+    assert {key: value for key, value in new.items() if key != "source"} == {
+        key: value for key, value in old.items() if key != "source"
+    }
+
+
+def test_outcomes_keep_plain_refusal_pre_core_but_real_run_refusal():
+    plain = {
+        "status": "REFUSED",
+        "verified": False,
+        "reason": "BAD_SCOPE",
+        "error": "BAD_SCOPE",
+    }
+    assert _verdict_of(plain) == PRE_CORE
+    assert _verdict_of({**plain, "core_status": "REFUSED"}) == "REFUSED"
+
+
+def test_verify_cli_blackbox_rejection_has_uniform_shape(tmp_path, monkeypatch, capsys):
+    def reject(*args):
+        raise blackbox.BlackboxRejected("bad blackbox declaration")
+
+    monkeypatch.setattr(verify_cli, "_run", reject)
+    args = [
+        "--state",
+        str(tmp_path),
+        "run",
+        "--repo-path",
+        str(tmp_path),
+        "--base",
+        "a" * 40,
+        "--candidate",
+        "b" * 40,
+        "--allowed-file",
+        "src/x.py",
+        "--verifier",
+        "true",
+    ]
+    assert verify_cli.main(args) == 2
+    result = json.loads(capsys.readouterr().out)
+    assert result == {
+        "status": "REFUSED",
+        "verified": False,
+        "reason": blackbox.BAD,
+        "error": blackbox.BAD,
+        "detail": "bad blackbox declaration",
+    }

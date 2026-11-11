@@ -49,6 +49,19 @@ def _not_checked(record: dict) -> dict:
     )
 
 
+def is_plain_refusal(record: dict) -> bool:
+    """Whether a pre-Core REFUSED record is the plain error shape."""
+    error = record.get("error")
+    return (
+        record.get("status") == "REFUSED"
+        and record.get("reason") == error
+        and record.get("verified") is False
+        and isinstance(error, str)
+        and bool(error)
+        and not any(key in record for key in ("ok", "code"))
+    )
+
+
 def _verify(record: dict, current_commit: str | None) -> dict:
     needed = (
         "status",
@@ -215,14 +228,7 @@ def summarize(
         if wanted is not None and record.get(key) != wanted:
             return _unknown(record)
     error = record.get("error")
-    if (
-        record.get("status") == "REFUSED"
-        and record.get("reason") == error
-        and record.get("verified") is False
-        and isinstance(error, str)
-        and error
-        and not any(key in record for key in ("ok", "code"))
-    ):
+    if is_plain_refusal(record):
         if error in ("TASK_ALLOWED_FILES_PROTECTED", "VERIFIER_NOT_ALLOWED"):
             return _not_checked(record)
         return _tool_error(record)
