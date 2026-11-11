@@ -37,9 +37,8 @@ def test_not_run_refusal_precedes_environment_skip(monkeypatch, tmp_path):
         "raise_for_env_skips",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("called too early")),
     )
-    pipeline_judge.judge_candidate(
-        task, (), "digest", None, result, (), SimpleNamespace(), lambda *_: None
-    )
+    ctx: Any = SimpleNamespace()
+    pipeline_judge.judge_candidate(task, (), "digest", None, result, (), ctx, lambda *_: None)
     assert result.reason == "NAMED_TESTS_NOT_RUN"
 
 
