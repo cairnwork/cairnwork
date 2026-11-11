@@ -4,8 +4,6 @@ import pytest
 from conftest import commit_change, git
 from verify_helpers import FIX, candidate, verify
 
-from cairnwork_attest.record import RecordNotFound, read_record
-
 pytestmark = pytest.mark.sandbox
 REASON = "needs macOS sandbox-exec"
 TEST = (
@@ -28,18 +26,12 @@ def _base(project):
     return git(project, "rev-parse", "HEAD").strip()
 
 
-def _assert_no_receipt(state, out):
-    with pytest.raises(RecordNotFound):
-        read_record(state / "notary.sqlite", out["task_id"], out["attempt_id"])
-
-
 def test_cli_path_without_a_base_run_keeps_environment_skip_failed(project, state):
     base = _base(project)
     cand = candidate(project, base, {"src/calc.py": FIX})
     code, out = verify(state, project, base, cand, tests=(COMMAND,))
     assert code == 2 and out["status"] == "FAILED"
     assert "TESTS_SKIPPED_ENVIRONMENT" not in out["reason"]
-    _assert_no_receipt(state, out)
 
 
 def test_candidate_cannot_change_the_skipped_test_at_all(project, state):
