@@ -16,7 +16,12 @@ false refusals:
 a new or changed call to same-file code reaching import machinery; an added module some file
 imports, or a changed one sharing a module name, next to a redirect; an added or changed
 write or path edit paired with an existing opposite signal in one file, and a changed statement
-that uses a sys alias on the import tables.
+that uses a sys alias on the import tables. Any ``.write()``/``.writelines()`` call counts as a
+file write, so an in-memory ``io.StringIO().write()`` next to a path edit is refused too: a
+receiver-trust exemption was tried on #1176 and could be bypassed by rebinding io (#1178).
+Write-side residuals (#1178): subprocess/shell/archive writes, ``open`` reached by alias or
+``functools.partial``, attribute forms of FileIO/copyfileobj/NamedTemporaryFile, and
+``from sys import path`` or ``os.sys.path`` as the path edit.
 """
 
 from __future__ import annotations

@@ -8,12 +8,6 @@ import re
 from collections import Counter
 from collections.abc import Sequence
 
-from cairnwork.candidate_memory_stream import (
-    NO_MEMORY_STREAMS,
-    in_memory_receiver,
-    memory_stream_scope,
-)
-
 _BLOCK_FIELDS = ("body", "orelse", "finalbody", "handlers", "cases")
 _DEF_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
 _PARSE_ERRORS = (SyntaxError, ValueError, UnicodeError, RecursionError, MemoryError)
@@ -250,12 +244,12 @@ _PATH_FIRST_OPENERS = frozenset(
 _MODE_TEXT = re.compile(r"[rwaxbtU+]{1,6}")
 
 
-def _is_write_call(
-    call: ast.Call, safe: tuple[frozenset[str], frozenset[str]] = NO_MEMORY_STREAMS
-) -> bool:
-    if isinstance(call.func, ast.Attribute) and call.func.attr in {"write", "writelines"}:
-        return not in_memory_receiver(call.func.value, safe)
-    if isinstance(call.func, ast.Attribute) and call.func.attr in WRITE_ATTRS | {"writestr"}:
+def _is_write_call(call: ast.Call) -> bool:
+    if isinstance(call.func, ast.Attribute) and call.func.attr in WRITE_ATTRS | {
+        "write",
+        "writelines",
+        "writestr",
+    }:
         return True
     if isinstance(call.func, ast.Name) and call.func.id in {
         "NamedTemporaryFile",
@@ -298,7 +292,7 @@ def _is_write_call(
             any(isinstance(arg, ast.Starred) for arg in call.args)
             or any(kw.arg is None for kw in call.keywords)
         ):
-            return True
+            return True  # open(*a), open(**k): the mode cannot be read, fail closed
         if mode_arg is not None:
             if not (isinstance(mode_arg, ast.Constant) and isinstance(mode_arg.value, str)):
                 return True
@@ -307,10 +301,8 @@ def _is_write_call(
     return False
 
 
-def _is_write_statement(
-    node: ast.AST, safe: tuple[frozenset[str], frozenset[str]] = NO_MEMORY_STREAMS
-) -> bool:
-    return any(isinstance(part, ast.Call) and _is_write_call(part, safe) for part in ast.walk(node))
+def _is_write_statement(node: ast.AST) -> bool:
+    return any(isinstance(part, ast.Call) and _is_write_call(part) for part in ast.walk(node))
 
 
 def _is_path_edit_statement(node: ast.AST, sys_names: set[str], text: str) -> bool:
@@ -347,9 +339,8 @@ def runtime_shadow_added(old: bytes | None, new: bytes) -> bool:
 
     new_sys = _collect_sys_names(new_tree)
     added_items = [own for key, own in new_items if key in added_counts]
-    safe = memory_stream_scope(new_tree)
-    added_write = any(_is_write_statement(own, safe) for own in added_items)
+    added_write = any(_is_write_statement(own) for own in added_items)
     added_path = any(_is_path_edit_statement(own, new_sys, ast.unparse(own)) for own in added_items)
-    new_write = any(_is_write_statement(own, safe) for _, own in new_items)
+    new_write = any(_is_write_statement(own) for _, own in new_items)
     new_path = any(_is_path_edit_statement(own, new_sys, ast.unparse(own)) for _, own in new_items)
     return (added_write and new_path) or (added_path and new_write)
