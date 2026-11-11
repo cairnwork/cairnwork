@@ -32,6 +32,7 @@ import sys
 from pathlib import Path
 
 from cairnwork import survivor_argv
+from cairnwork.run_tags import RUN_TAGS
 from cairnwork.workspace import ATTEMPT_ID
 
 _MACOS = sys.platform == "darwin"
@@ -181,7 +182,7 @@ def attempt_dirs(roots, attempt_id: str) -> tuple[Path, ...]:
     skipped, and so is an entry that cannot be checked."""
     if not isinstance(attempt_id, str) or not ATTEMPT_ID.fullmatch(attempt_id):
         return ()
-    name = re.compile(rf"{re.escape(attempt_id)}-[vbpqre]-v([0-9]+|bb)(\.[^/]*)?")
+    name = re.compile(rf"{re.escape(attempt_id)}-[{re.escape(RUN_TAGS)}]-v([0-9]+|bb)(\.[^/]*)?")
     found: list[Path] = []
     for root in roots:
         try:

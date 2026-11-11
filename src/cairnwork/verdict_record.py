@@ -12,6 +12,7 @@ from posixpath import normpath
 class Verdict:
     ran: bool
     outcomes: dict[str, str]
+    skips: dict[str, tuple[str, str]] = field(default_factory=dict)  # node -> (kind, reason)
     too_big: bool = False  # the file exceeds MAX_REPORT_BYTES: nothing could be read from it
     recorded: bool = False  # sessionfinish wrote a well-formed record with our nonce (#234)
     collect_errors: tuple[str, ...] = ()  # node ids of collectors that failed (B2, #234)
@@ -55,6 +56,20 @@ def _within(nodeid: str, target: str) -> bool:
     """A test belongs to a target when it is that node, a node under it (``::``) or one of its
     parametrisations (``[``)."""
     return nodeid == target or nodeid.startswith((f"{target}::", f"{target}["))
+
+
+def _parse_skips(raw):
+    """Validate bounded per-node skip evidence from the candidate-writable report."""
+    if not isinstance(raw, dict) or len(raw) > 50:
+        return None
+    for node, value in raw.items():
+        if not isinstance(node, str) or not isinstance(value, dict):
+            return None
+        if set(value) != {"kind", "reason"} or value["kind"] not in ("marker", "runtime"):
+            return None
+        if not isinstance(value["reason"], str) or len(value["reason"]) > 200:
+            return None
+    return {node: (value["kind"], value["reason"]) for node, value in raw.items()}
 
 
 def _sources(collected: list[str], files: list[str], file_of) -> dict[str, str]:

@@ -155,3 +155,61 @@ def test_cleanup_failure_after_a_push_keeps_published(
     assert (result.ok, result.code, result.notes_tip) == (True, "PUBLISHED", _remote_tip(bare))
     assert result.detail is not None and "not deleted: ref locked" in result.detail
     assert _read_note_from_bare(bare, candidate).encode() == bundle.read_bytes()
+
+
+def test_rev_parse_failure_on_private_ref_returns_rev_parse_failed_without_push(
+    tmp_path: Path, key: Ed25519PrivateKey
+) -> None:
+    src, bare, candidate = make_publish_env(tmp_path)
+    bundle = _write_bundle(tmp_path, _make_bundle_bytes(candidate, key))
+    pushed = False
+
+    def rev_parse_fail_run(repo: Path, *args: str, input: bytes | None = None):  # noqa: ANN202
+        nonlocal pushed
+        if args[:1] == ("push",):
+            pushed = True
+        if (
+            args[:3] == ("rev-parse", "--verify", "--quiet")
+            and len(args) > 3
+            and args[3].endswith("^{commit}")
+            and "-publish-" in args[3]
+        ):
+            return subprocess.CompletedProcess(args, 1, "", "cannot resolve private ref\n")
+        return _git(repo, *args, input=input)
+
+    result = publish_bundle(bundle, src, candidate, run=rev_parse_fail_run)
+    assert not result.ok
+    assert result.code == "REV_PARSE_FAILED"
+    assert result.detail is not None and "cannot resolve private ref" in result.detail
+    assert not pushed
+    assert _remote_tip(bare) is None
+
+
+def test_retries_exhausted_with_cleanup_failure_reports_retries_exhausted(
+    tmp_path: Path, key: Ed25519PrivateKey
+) -> None:
+    src, bare, first_candidate = make_publish_env(tmp_path)
+    first_bundle = _write_bundle(tmp_path, _make_bundle_bytes(first_candidate, key), "first.json")
+    assert publish_bundle(first_bundle, src, first_candidate).code == "PUBLISHED"
+
+    candidate = _second_candidate(src)
+    bundle = _write_bundle(tmp_path, _make_bundle_bytes(candidate, key), "second.json")
+    push_attempts = 0
+
+    def retry_and_lock_run(repo: Path, *args: str, input: bytes | None = None):  # noqa: ANN202
+        nonlocal push_attempts
+        if args[:1] == ("push",):
+            push_attempts += 1
+            return subprocess.CompletedProcess(
+                args, 1, "", "error: failed to push some refs\n ! [rejected] non-fast-forward\n"
+            )
+        if args[:2] == ("update-ref", "-d") and push_attempts >= 2:
+            return subprocess.CompletedProcess(args, 1, "", "cannot delete ref: locked\n")
+        return _git(repo, *args, input=input)
+
+    result = publish_bundle(bundle, src, candidate, max_attempts=2, run=retry_and_lock_run)
+    assert not result.ok
+    assert result.code == "LOCAL_REF_RESET_FAILED"
+    assert result.detail is not None
+    assert "locked" in result.detail
+    assert "retries exhausted" in result.detail.lower()
