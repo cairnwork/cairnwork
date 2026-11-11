@@ -30,17 +30,18 @@ def find_shadow_file(
     file imports (every dotted part, relative imports, import_module/__import__/importorskip
     strings, so a ``__path__`` redirect of ``pkg.helper`` is seen) counts when the file was added,
     another file has the same module name, or it is a modified unique module outside an import root.
-    A modified module is already importable (not a shadow) if its directory is src or lib, contains
-    an __init__.py, or shares a directory with an unchanged importer. Names compare
-    case-insensitively; an unparseable ``.py`` the candidate changed fails closed, any other one
-    imports nothing.
+    A modified module is already importable (not a shadow) if its root/parent directory is src or
+    lib, contains a pre-existing __init__.py with no other-directory top-level importer of that
+    name, or shares a root/parent directory with an unchanged bare top-level importer. Names compare
+    case-insensitively, directories case-exactly; an unparseable ``.py`` the candidate changed fails
+    closed, any other one imports nothing.
 
     Accepted false refusal: a modified, uniquely named module in a non-conventional import root
     (say app/foo.py made importable by a pytest pythonpath setting) that some other-directory test
     imports is refused, but only when a changed file also carries a redirect signal.
 
-    Accepted residual: rule (c) exempts a modified module when any unchanged same-directory file
-    imports the name, even if other tests rely on a redirect to bare-import it."""
+    Accepted residual: rule (c) exempts a modified module when an unchanged same-directory file
+    bare-imports the name, even if other tests rely on a redirect to bare-import it."""
     commits = tuple(
         dict.fromkeys((candidate,) if test_commit is None else (candidate, test_commit))
     )
@@ -77,12 +78,12 @@ def find_shadow_file(
             raise ValueError(f"{commit}:{path} could not be parsed")
         dir_name = path.rpartition("/")[0]
         for raw_name in names or ():
-            name = raw_name.casefold()
-            imported.add(name)
+            imported.add(raw_name.casefold())
+        for raw_top in parsed_top.get(oid, set()):
+            top_name = raw_top.casefold()
+            top_importers.setdefault(top_name, set()).add(dir_name)
             if path not in changed:
-                importer_dirs.setdefault(name, set()).add(dir_name)
-        for raw_top in parsed_top.get(oid, ()):
-            top_importers.setdefault(raw_top.casefold(), set()).add(dir_name)
+                importer_dirs.setdefault(top_name, set()).add(dir_name)
     paths = tuple(path for _, _, _, path in trees[candidate])
     counts = Counter(name for path in paths if (name := _module_name(path)))
     init_dirs = {
@@ -143,7 +144,7 @@ def _already_importable(
         return True
     if pkg_dir in init_dirs and not (top_importers.get(module, set()) - {dir_path}):
         return True
-    return dir_path in importer_dirs.get(module, ())
+    return pkg_dir in importer_dirs.get(module, ())
 
 
 def _validate_oid(commit: str) -> None:
