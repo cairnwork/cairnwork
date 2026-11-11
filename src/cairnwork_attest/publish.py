@@ -246,7 +246,7 @@ def _try_push(
     working_ref: str,
     candidate: str,
     blob: str,
-) -> str | None | object:
+) -> str | object:
     """Add and push one captured note commit, or return _RETRY if another push won."""
     added = run(repo, "notes", f"--ref={working_ref}", "add", "-C", blob, "--", candidate)
     if added.returncode != 0:
@@ -321,6 +321,10 @@ def publish_bundle(
             detail = deleted.stderr.strip()
             if result is not None:  # keep what happened before the cleanup failed
                 detail += f"; {result.code}" + (f": {result.detail}" if result.detail else "")
+            else:
+                detail += (
+                    f"; PUSH_RETRIES_EXHAUSTED: retries exhausted after {max_attempts} attempts"
+                )
             result = _fail(
                 "LOCAL_REF_RESET_FAILED",
                 _redact(detail),
