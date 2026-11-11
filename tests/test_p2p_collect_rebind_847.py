@@ -249,3 +249,17 @@ def test_a_base_annotation_walrus_does_not_widen_the_1127_base_excuse():
         lambda p: base,
     )
     assert "t.py::TestZ::test_a" in side.dropped and "t.py::TestZ::test_a" not in side.removed
+
+
+def test_a_base_annotation_walrus_in_an_unchanged_helper_does_not_refuse_an_honest_deletion():
+    # #1144: the test commit deletes test_a and keeps Helper unchanged. The base's annotation
+    # walrus is an unchanged statement, so the base excuse must still see it: removed, not dropped.
+    helper = "class Helper:\n    def f(self, x: (test_a := int)): pass\n"
+    side = classify(
+        {"t.py::test_a"},
+        set(),
+        {"t.py"},
+        lambda p: helper,
+        lambda p: "def test_a(): assert 0\n" + helper,
+    )
+    assert side.removed == {"t.py::test_a"} and side.dropped == set()
