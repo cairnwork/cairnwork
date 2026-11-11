@@ -89,3 +89,83 @@ def test_changed_importer_in_the_same_directory_does_not_exempt(repo):
             repo, base, cand, _changed(repo, base, cand)
         )
     assert "deep/foo.py" in str(got.value)
+
+
+def test_package_member_bare_imported_outside_package_is_refused(repo):
+    commit_change(
+        repo,
+        {
+            "pkg/__init__.py": "",
+            "pkg/foo.py": "X = 1\n",
+            "tests/test_t.py": "import foo\n",
+        },
+    )
+    base = git(repo, "rev-parse", "HEAD")
+    cand = commit_change(
+        repo,
+        {"pkg/foo.py": "X = 2\n", "conftest.py": "import sys\nsys.path.insert(0, 'pkg')\n"},
+    )
+    with pytest.raises(CandidateRejected) as got:
+        candidate_sys_path.refuse_new_sys_path_mutation(
+            repo, base, cand, _changed(repo, base, cand)
+        )
+    assert got.value.code == "CANDIDATE_SYS_PATH_MUTATION"
+    assert "pkg/foo.py" in str(got.value)
+
+
+def test_candidate_added_init_does_not_exempt_package_member(repo):
+    commit_change(repo, {"deep/foo.py": "X = 1\n", "tests/test_t.py": "import foo\n"})
+    base = git(repo, "rev-parse", "HEAD")
+    cand = commit_change(
+        repo,
+        {
+            "deep/__init__.py": "",
+            "deep/foo.py": "X = 2\n",
+            "conftest.py": REDIR,
+        },
+    )
+    with pytest.raises(CandidateRejected) as got:
+        candidate_sys_path.refuse_new_sys_path_mutation(
+            repo, base, cand, _changed(repo, base, cand)
+        )
+    assert got.value.code == "CANDIDATE_SYS_PATH_MUTATION"
+    assert "deep/foo.py" in str(got.value)
+
+
+def test_modified_init_judges_parent_directory_not_itself(repo):
+    commit_change(
+        repo,
+        {"deep/pkg/__init__.py": "X = 1\n", "tests/test_t.py": "import pkg\n"},
+    )
+    base = git(repo, "rev-parse", "HEAD")
+    cand = commit_change(
+        repo,
+        {
+            "deep/pkg/__init__.py": "X = 2\n",
+            "conftest.py": REDIR,
+        },
+    )
+    with pytest.raises(CandidateRejected) as got:
+        candidate_sys_path.refuse_new_sys_path_mutation(
+            repo, base, cand, _changed(repo, base, cand)
+        )
+    assert got.value.code == "CANDIDATE_SYS_PATH_MUTATION"
+    assert "deep/pkg/__init__.py" in str(got.value)
+
+
+def test_case_mismatched_src_directory_is_not_exempt(repo):
+    commit_change(repo, {"Lib/foo.py": "X = 1\n", "tests/test_t.py": "import foo\n"})
+    base = git(repo, "rev-parse", "HEAD")
+    cand = commit_change(
+        repo,
+        {
+            "Lib/foo.py": "X = 2\n",
+            "conftest.py": "import sys\nsys.path.insert(0, 'Lib')\n",
+        },
+    )
+    with pytest.raises(CandidateRejected) as got:
+        candidate_sys_path.refuse_new_sys_path_mutation(
+            repo, base, cand, _changed(repo, base, cand)
+        )
+    assert got.value.code == "CANDIDATE_SYS_PATH_MUTATION"
+    assert "Lib/foo.py" in str(got.value)
