@@ -150,6 +150,42 @@ ATTACHED = {
         "trap-class-in-block": "if True:\n    class TestY:\n        test_x = _impl\n",
         "trap-nested-class": "class Outer:\n    class TestY:\n        test_x = _impl\n",
         "trap-global-helper": "def install():\n    global test_x\n    test_x = _impl\ninstall()\n",
+        # #1024 follow-up: evaluated annotations can run the same-file attachment helper.
+        "trap-argument-annotation": (
+            "def attach(f):\n    TestX.test_x = f\n    return f\n"
+            "def _h(arg: attach(_impl)):\n    pass\n"
+        ),
+        "trap-return-annotation": (
+            "def attach(f):\n    TestX.test_x = f\n    return f\n"
+            "def _h() -> attach(_impl):\n    pass\n"
+        ),
+        "trap-method-annotation": (
+            "def attach(f):\n    TestY.test_x = f\n    return f\n"
+            "class TestY:\n    def helper(self, arg: attach(_impl)):\n        pass\n"
+        ),
+        # A reached helper can bind module names with nested declarations and nested globals.
+        "trap-global-def": (
+            "def install():\n    global test_x\n"
+            "    def test_x():\n        assert add(2, 3) == 6\n"
+            "install()\n"
+        ),
+        "trap-nested-global": (
+            "def install():\n    def inner():\n        global test_x\n"
+            "        test_x = _impl\n    inner()\ninstall()\n"
+        ),
+        "trap-global-class": (
+            "def install():\n    global TestX\n"
+            "    class TestX:\n        test_x = _impl\ninstall()\n"
+        ),
+        # Class decorators and bases are evaluated even when the class is in a block.
+        "trap-block-class-decorator": (
+            "def attach(cls):\n    globals()['test_x'] = _impl\n    return cls\n"
+            "if True:\n    @attach\n    class Holder:\n        pass\n"
+        ),
+        "trap-block-class-base": (
+            "def make_base():\n    globals()['test_x'] = _impl\n"
+            "    return object\nif True:\n    class Holder(make_base()):\n        pass\n"
+        ),
     }.items()},
     # #1026 r1: a composite store that drops out of a statement that stays readable is a change
     "dropped-store": (FN_IMPL.format(RIGHT) + "def _other():\n    pass\nclass TestX:\n"
@@ -259,7 +295,10 @@ def test_other_imports_and_a_class_body_pytestmark_import_add_nothing(project):
 @pytest.mark.sandbox
 @pytest.mark.parametrize("shape", ["trap-attribute", "trap-assigned", "trap-static-decorator",
                                    "trap-module-value", "for-target", "trap-module-name",
-                                   "trap-class-helper", "trap-method-decorator"])  # fmt: skip
+                                   "trap-class-helper", "trap-method-decorator",
+                                   "trap-tuple-unpack", "trap-global-helper",
+                                   "trap-nested-global", "trap-global-def",
+                                   "trap-global-class"])  # fmt: skip
 def test_verify_refuses_the_trap_a_wrong_fix_would_fail(project, state, shape):
     """Each wrong candidate was VERIFIED before #994 or its r2 guards (the PR's table). The
     attached test fails the fix; the target names test_regression only."""
