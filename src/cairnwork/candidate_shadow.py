@@ -28,16 +28,27 @@ def find_shadow_file(
 
     A changed nested file named like a standard or pytest module counts. A name some tree or test
     file imports (every dotted part, relative imports, import_module/__import__/importorskip
-    strings, so a ``__path__`` redirect of ``pkg.helper`` is seen) counts when the file was added
-    or another file has the same module name, so modifying a project's own src-layout module
-    (``src/calc.py`` imported as ``calc``) is not one. Names compare case-insensitively; an
-    unparseable ``.py`` the candidate changed fails closed, any other one imports nothing."""
+    strings, so a ``__path__`` redirect of ``pkg.helper`` is seen) counts when the file was added,
+    another file has the same module name, or it is a modified unique module outside an import root.
+    A modified module is already importable (not a shadow) if its directory is src or lib, contains
+    an __init__.py, or shares a directory with an unchanged importer. Names compare
+    case-insensitively; an unparseable ``.py`` the candidate changed fails closed, any other one
+    imports nothing.
+
+    Accepted false refusal: a modified, uniquely named module in a non-conventional import root
+    (say app/foo.py made importable by a pytest pythonpath setting) that some other-directory test
+    imports is refused, but only when a changed file also carries a redirect signal.
+
+    Accepted residual: rule (b) only checks that the directory has an __init__.py, not how the
+    tests import it (a candidate modifying pkg/foo.py with pkg on sys.path and bare 'import foo'
+    still passes)."""
     commits = tuple(
         dict.fromkeys((candidate,) if test_commit is None else (candidate, test_commit))
     )
     always = {name.casefold() for name in (*sys.stdlib_module_names, *_ALWAYS_SHADOW)}
     changed = changed or {}
     imported: set[str] = set()
+    importer_dirs: dict[str, set[str]] = {}
     trees: dict[str, tuple[tuple[int, str, str, str], ...]] = {}
     for commit in commits:
         _validate_oid(commit)
@@ -61,19 +72,66 @@ def find_shadow_file(
         names = parsed[oid]
         if names is None and path in changed:
             raise ValueError(f"{commit}:{path} could not be parsed")
-        imported.update(name.casefold() for name in names or ())
+        for raw_name in names or ():
+            name = raw_name.casefold()
+            imported.add(name)
+            if path not in changed:
+                importer_dirs.setdefault(name, set()).add(path.rpartition("/")[0].casefold())
     paths = tuple(path for _, _, _, path in trees[candidate])
     counts = Counter(name for path in paths if (name := _module_name(path)))
+    init_dirs = {
+        p.rpartition("/")[0].casefold()
+        for p in paths
+        if p.rsplit("/", 1)[-1].casefold() == "__init__.py"
+    }
     for path in sorted(changed):
-        depth = path.count("/") - (
-            path.casefold().endswith("/__init__.py") or path.casefold() == "__init__.py"
-        )
-        if depth < 1 or not (module := _module_name(path)):  # root modules import as themselves
-            continue
-        added = changed[path] == "ADD"
-        if module in always or (module in imported and (added or counts[module] > 1)):
+        if _is_shadow(path, changed, always, imported, counts, init_dirs, importer_dirs):
             return path
     return None
+
+
+def _is_shadow(
+    path: str,
+    changed: dict[str, str],
+    always: set[str],
+    imported: set[str],
+    counts: Counter[str],
+    init_dirs: set[str],
+    importer_dirs: dict[str, set[str]],
+) -> bool:
+    """Whether one changed path can shadow an imported module (#1065, #1148)."""
+    depth = path.count("/") - (
+        path.casefold().endswith("/__init__.py") or path.casefold() == "__init__.py"
+    )
+    if depth < 1 or not (module := _module_name(path)):  # root modules import as themselves
+        return False
+    added = changed[path] == "ADD"
+    return bool(
+        module in always
+        or (
+            module in imported
+            and (
+                added
+                or counts[module] > 1
+                or not _already_importable(path, module, init_dirs, importer_dirs)
+            )
+        )
+    )
+
+
+def _already_importable(
+    path: str,
+    module: str,
+    init_dirs: set[str],
+    importer_dirs: dict[str, set[str]],
+) -> bool:
+    """Whether a modified module was already importable without a path redirect (#1148)."""
+    dir_path = path.rpartition("/")[0].casefold()
+    return (
+        dir_path in {"src", "lib"}
+        or dir_path in init_dirs
+        or dir_path in importer_dirs.get(module, ())
+    )
 
 
 def _validate_oid(commit: str) -> None:
