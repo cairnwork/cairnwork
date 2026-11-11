@@ -244,12 +244,92 @@ _PATH_FIRST_OPENERS = frozenset(
 _MODE_TEXT = re.compile(r"[rwaxbtU+]{1,6}")
 
 
-def _is_write_call(call: ast.Call) -> bool:
-    if isinstance(call.func, ast.Attribute) and call.func.attr in WRITE_ATTRS | {
-        "write",
-        "writelines",
-        "writestr",
-    }:
+_MEMORY_STREAMS = frozenset({"StringIO", "BytesIO"})
+_REBINDERS = frozenset(
+    {"setattr", "globals", "vars", "locals", "exec", "eval", "__builtins__", "__import__"}
+)
+
+
+def _memory_stream_scope(tree: ast.Module) -> tuple[frozenset[str], frozenset[str]]:
+    """(constructors, names): the io.StringIO/BytesIO spellings this file can trust, and the names
+    bound only to one of them. Both are empty when io, StringIO or BytesIO may be rebound."""
+    io_ok = True
+    bare: set[str] = set()
+    stores: Counter[str] = Counter()
+    for part in ast.walk(tree):
+        if isinstance(part, (ast.Import, ast.ImportFrom)):
+            trusted = isinstance(part, ast.ImportFrom) and part.module == "io" and part.level == 0
+            for alias in part.names:
+                bound = alias.asname or alias.name.split(".")[0]
+                stores[bound] += 1
+                if bound == "io" and not (isinstance(part, ast.Import) and alias.name == "io"):
+                    io_ok = False
+                if bound in _MEMORY_STREAMS:
+                    if not (trusted and alias.asname is None):
+                        return frozenset(), frozenset()
+                    bare.add(bound)
+        elif isinstance(part, ast.Name) and not isinstance(part.ctx, ast.Load):
+            stores[part.id] += 1
+        elif isinstance(part, ast.arg):
+            stores[part.arg] += 1
+        elif isinstance(part, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            stores[part.name] += 1
+        if (
+            isinstance(part, ast.Attribute)
+            and part.attr in _MEMORY_STREAMS
+            and not isinstance(part.ctx, ast.Load)
+        ):
+            return frozenset(), frozenset()
+        if isinstance(part, ast.Name) and part.id in _REBINDERS:
+            return frozenset(), frozenset()
+    if any(stores[name] != 1 for name in bare):
+        return frozenset(), frozenset()
+    if stores["io"] != 1:
+        io_ok = False
+    makers = frozenset({f"io.{name}" for name in _MEMORY_STREAMS} if io_ok else set()) | frozenset(
+        bare
+    )
+
+    good: Counter[str] = Counter()
+    for part in ast.walk(tree):
+        if (
+            isinstance(part, ast.Assign)
+            and len(part.targets) == 1
+            and isinstance(part.targets[0], ast.Name)
+        ):
+            if _memory_stream_call(part.value, makers):
+                good[part.targets[0].id] += 1
+        elif isinstance(part, ast.withitem) and isinstance(part.optional_vars, ast.Name):
+            if _memory_stream_call(part.context_expr, makers):
+                good[part.optional_vars.id] += 1
+    return makers, frozenset(name for name, n in good.items() if n == stores[name])
+
+
+def _memory_stream_call(value: ast.AST | None, makers: frozenset[str]) -> bool:
+    if not isinstance(value, ast.Call):
+        return False
+    func = value.func
+    if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+        return f"{func.value.id}.{func.attr}" in makers
+    return isinstance(func, ast.Name) and func.id in makers
+
+
+def _in_memory_receiver(receiver: ast.AST, scope: tuple[frozenset[str], frozenset[str]]) -> bool:
+    makers, names = scope
+    if isinstance(receiver, ast.Name):
+        return receiver.id in names
+    return _memory_stream_call(receiver, makers)
+
+
+_NO_MEMORY_STREAMS: tuple[frozenset[str], frozenset[str]] = (frozenset(), frozenset())
+
+
+def _is_write_call(
+    call: ast.Call, safe: tuple[frozenset[str], frozenset[str]] = _NO_MEMORY_STREAMS
+) -> bool:
+    if isinstance(call.func, ast.Attribute) and call.func.attr in {"write", "writelines"}:
+        return not _in_memory_receiver(call.func.value, safe)
+    if isinstance(call.func, ast.Attribute) and call.func.attr in WRITE_ATTRS | {"writestr"}:
         return True
     if isinstance(call.func, ast.Name) and call.func.id in {
         "NamedTemporaryFile",
@@ -288,6 +368,11 @@ def _is_write_call(call: ast.Call) -> bool:
                 mode_arg = first
             elif len(call.args) > 1:
                 mode_arg = call.args[1]
+        if mode_arg is None and (
+            any(isinstance(arg, ast.Starred) for arg in call.args)
+            or any(kw.arg is None for kw in call.keywords)
+        ):
+            return True
         if mode_arg is not None:
             if not (isinstance(mode_arg, ast.Constant) and isinstance(mode_arg.value, str)):
                 return True
@@ -296,8 +381,10 @@ def _is_write_call(call: ast.Call) -> bool:
     return False
 
 
-def _is_write_statement(node: ast.AST) -> bool:
-    return any(isinstance(part, ast.Call) and _is_write_call(part) for part in ast.walk(node))
+def _is_write_statement(
+    node: ast.AST, safe: tuple[frozenset[str], frozenset[str]] = _NO_MEMORY_STREAMS
+) -> bool:
+    return any(isinstance(part, ast.Call) and _is_write_call(part, safe) for part in ast.walk(node))
 
 
 def _is_path_edit_statement(node: ast.AST, sys_names: set[str], text: str) -> bool:
@@ -334,8 +421,9 @@ def runtime_shadow_added(old: bytes | None, new: bytes) -> bool:
 
     new_sys = _collect_sys_names(new_tree)
     added_items = [own for key, own in new_items if key in added_counts]
-    added_write = any(_is_write_statement(own) for own in added_items)
+    safe = _memory_stream_scope(new_tree)
+    added_write = any(_is_write_statement(own, safe) for own in added_items)
     added_path = any(_is_path_edit_statement(own, new_sys, ast.unparse(own)) for own in added_items)
-    new_write = any(_is_write_statement(own) for _, own in new_items)
+    new_write = any(_is_write_statement(own, safe) for _, own in new_items)
     new_path = any(_is_path_edit_statement(own, new_sys, ast.unparse(own)) for _, own in new_items)
     return (added_write and new_path) or (added_path and new_write)

@@ -112,3 +112,49 @@ def test_runtime_shadow_added_open_write_through_module_and_path_receivers(call)
 def test_runtime_shadow_added_open_read_through_module_and_path_receivers(call):
     src = f"import sys\n{call}\nsys.path.insert(0, 'd')\n".encode()
     assert runtime_shadow_added(None, src) is False
+
+
+@pytest.mark.parametrize(
+    "prelude, write",
+    [
+        ("import io\n", "io.StringIO().write('x')"),
+        ("import io\n", "io.BytesIO(b'').write(b'x')"),
+        ("import io\nbuf = io.StringIO()\n", "buf.write('x')"),
+        ("from io import StringIO\n", "StringIO().writelines(['x'])"),
+        ("import io\n", "with io.StringIO() as buf:\n    buf.write('x')"),
+    ],
+)
+def test_runtime_shadow_added_in_memory_stream_write_is_not_a_file_write(prelude, write):
+    # Codex R2 on #1176: io.StringIO().write() next to a sys.path edit must not be refused
+    src = f"import sys\n{prelude}{write}\nsys.path.insert(0, 'd')\n".encode()
+    assert runtime_shadow_added(None, src) is False
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        # the name is also bound to something else
+        "import io\nbuf = io.StringIO()\nbuf = open_file()\nbuf.write('x')\n",
+        "import io\nbuf = io.StringIO()\ndef f(buf):\n    buf.write('x')\n",
+        # io or the constructor names may be rebound
+        "import os as io\nbuf = io.StringIO()\nbuf.write('x')\n",
+        "import io\nio = handle\nio.StringIO().write('x')\n",
+        "from io import StringIO\nStringIO = factory\nStringIO().write('x')\n",
+        "from mylib import StringIO\nStringIO().write('x')\n",
+        "from io import StringIO as S\nS().write('x')\n",
+        "import io\nio.StringIO = factory\nio.StringIO().write('x')\n",
+        "import io\nsetattr(io, 'StringIO', factory)\nio.StringIO().write('x')\n",
+        # unknown receivers stay file writes
+        "f = os.fdopen(fd, 'w')\nf.write('x')\n",
+        "self.buf.write('x')\n",
+    ],
+)
+def test_runtime_shadow_added_write_on_untrusted_receiver_stays_refused(source):
+    src = f"import sys\n{source}sys.path.insert(0, 'd')\n".encode()
+    assert runtime_shadow_added(None, src) is True
+
+
+@pytest.mark.parametrize("call", ["open(*a)", "open(**k)", "p.open(**k)", "io.open(*a)"])
+def test_runtime_shadow_added_open_with_unpacked_arguments_fails_closed(call):
+    src = f"import sys\n{call}\nsys.path.insert(0, 'd')\n".encode()
+    assert runtime_shadow_added(None, src) is True
