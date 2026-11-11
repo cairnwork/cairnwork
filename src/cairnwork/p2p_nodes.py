@@ -21,6 +21,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from cairnwork.deferred_tests import _test_functions, _tree
+from cairnwork.node_ids import mask_paths, unmatched_note
 from cairnwork.verifiers import VerifierRun
 
 
@@ -112,10 +113,13 @@ def require_nodes(nodes: tuple[str, ...], run: VerifierRun) -> tuple[VerifierRun
     if not missing:
         return run, []
     why = f"{len(missing)} base-passing test(s) did not run on the candidate"
+    note = unmatched_note(missing, run.outcomes)
+    if note:
+        why += f"; {note}"
     observation = replace(run.observation, passed=False)
     return replace(run, observation=observation, plain_failure=False, why=why), missing
 
 
 def clean(name: str) -> str:
-    """A test id for the record: printable, bounded."""
-    return "".join(c if c.isprintable() else "?" for c in str(name))[:200]
+    """A test id for the record: printable, bounded and path-masked."""
+    return mask_paths(name)
