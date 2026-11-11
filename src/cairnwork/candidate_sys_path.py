@@ -8,13 +8,20 @@ while calling, moving or rewriting machinery, or flipping the block that wraps i
 with only a path redirect or program launch (sys.path, __path__, site, PYTHONPATH, subprocess) is
 refused only when a file the candidate changed can shadow an imported module (candidate_shadow.py),
 so an honest edit that inserts its own directory still verifies.
-Residuals (#1115), left to the blackbox and verifier checks: shadow files written at run time;
-machinery reached through an alias (``from sys import modules``) or another module without any
-listed word; base machinery reached through same-file aliases, registries or dunders; other
-control-flow edits inside code that reaches machinery. Also unscanned: a ``.pyc`` without source;
-sys.path outside the repo. Accepted false refusals: a new or changed call to same-file code
-reaching import machinery; an added module some file imports, or a changed one sharing a module
-name, next to a redirect.
+Residuals (#1115), left to the blackbox and verifier checks: base machinery reached through
+registries, dunders or other unrecognized same-file alias forms; other control-flow edits inside
+code that reaches machinery. Also unscanned: a ``.pyc`` without source; sys.path outside the repo;
+a write in one changed file and the path edit in another changed file is not combined. Accepted
+false refusals:
+a new or changed call to same-file code reaching import machinery; an added module some file
+imports, or a changed one sharing a module name, next to a redirect; an added or changed
+write or path edit paired with an existing opposite signal in one file, and a changed statement
+that uses a sys alias on the import tables. Any ``.write()``/``.writelines()`` call counts as a
+file write, so an in-memory ``io.StringIO().write()`` next to a path edit is refused too: a
+receiver-trust exemption was tried on #1176 and could be bypassed by rebinding io (#1178).
+Write-side residuals (#1178): subprocess/shell/archive writes, ``open`` reached by alias or
+``functools.partial``, attribute forms of FileIO/copyfileobj/NamedTemporaryFile, and
+``from sys import path`` or ``os.sys.path`` as the path edit.
 """
 
 from __future__ import annotations
@@ -23,6 +30,7 @@ import re
 import subprocess
 from pathlib import Path
 
+from cairnwork.candidate_alias import alias_machinery_changed, runtime_shadow_added
 from cairnwork.candidate_shadow import find_shadow_file
 from cairnwork.candidate_statements import machinery_changed
 from cairnwork.changeset import ChangeSetError, read_change_set
@@ -33,7 +41,7 @@ from cairnwork.workspace import CandidateRejected
 
 _OID = re.compile(r"^[0-9a-f]{40}$")
 _OWN_KINDS = frozenset({"ADD", "MODIFY"})
-_REDIRECT, _MACHINERY = "redirect", "machinery"
+_REDIRECT, _MACHINERY, _RUNTIME = "redirect", "machinery", "runtime-shadow"
 # Fail closed: a signalling file counts as a pure redirect only if no new or changed statement
 # names one of these (unparsed source, so string-built machinery names still fall here).
 # Same-file calls are followed only into import machinery, not dynamic access (#1111 review).
@@ -136,6 +144,12 @@ def refuse_new_sys_path_mutation(
                         f"{path}: edits the import machinery in-process (sys.modules, finders, "
                         "importlib, __import__, runpy or pytest_plugins)",
                     )
+                if signal == _RUNTIME:
+                    raise CandidateRejected(
+                        "CANDIDATE_SYS_PATH_MUTATION",
+                        f"{path}: writes a file and edits the import path in the same change "
+                        "(a shadow module can be created at run time)",
+                    )
                 shadow = find_shadow_file(repo, candidate, test_commit, changed)
                 if shadow:
                     raise CandidateRejected(
@@ -165,12 +179,20 @@ def _blob_signal(repo: Path, base: str, commit: str, path: str, changed: dict[st
     signal = scan_sys_path_blob(data)
     if signal is None:
         raise ValueError(f"{commit}:{path} could not be parsed or decoded")
-    if not signal:
-        return ""
     added = changed[path] == "ADD"
     old = None if added else run_git_bytes(repo, "cat-file", "blob", f"{base}:{path}")
-    return (
-        _MACHINERY
-        if machinery_changed(old, data, _MACHINERY_WORDS, _REACH_WORDS, DYNAMIC_ACCESS_DENYLIST)
-        else _REDIRECT
-    )
+    try:
+        alias = alias_machinery_changed(old, data)
+    except ValueError:
+        if not signal:  # source that cannot parse cannot run; no import-system name either
+            return ""
+        raise
+    if alias:
+        return _MACHINERY
+    if not signal:
+        return ""
+    if machinery_changed(old, data, _MACHINERY_WORDS, _REACH_WORDS, DYNAMIC_ACCESS_DENYLIST):
+        return _MACHINERY
+    if runtime_shadow_added(old, data):
+        return _RUNTIME
+    return _REDIRECT

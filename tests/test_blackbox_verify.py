@@ -99,8 +99,7 @@ def test_attacks_on_the_run_are_never_verified(state, helper_project, tmp_path, 
     out = verify(state, helper_project, base, sha, "--import-path", "src", "--blackbox", declared)[
         1
     ]
-    if candidate_signal and name != "syspath":  # syspath writes its shadow at run time (#1065
-        # residual): no file to see, so the blackbox check fails it as on main
+    if candidate_signal:
         assert out["status"] == "REFUSED" and not out["verified"], out
         assert "CANDIDATE_SYS_PATH_MUTATION" in out["reason"], out
         # The blackbox owner's incomplete verdict is covered by

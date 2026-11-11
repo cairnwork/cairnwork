@@ -156,6 +156,19 @@ def test_a_failed_run_is_kept_when_the_next_run_of_the_node_skips_in_setup(tmp_p
     assert rc == 1 and not v.ran and v.outcomes == {"tests/test_d.py::test_f": "failed"}
 
 
+def test_setup_skip_then_teardown_error_keeps_failed_record(tmp_path):
+    source = (
+        "import pytest\n"
+        "@pytest.fixture\n"
+        "def resource():\n"
+        "    yield\n"
+        "    raise RuntimeError('teardown error')\n"
+        "def test_f(resource): pytest.skip('setup skip')\n"
+    )
+    rc, v = guard_run(tmp_path, {"tests/test_d.py": source}, "tests")
+    assert rc == 1 and v.recorded and v.outcomes == {"tests/test_d.py::test_f": "failed"}
+
+
 SUB_TEST_IN_FIXTURE_AFTER_YIELD = (
     "import pytest\n"
     "@pytest.fixture\ndef checked(subtests):\n"

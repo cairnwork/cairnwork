@@ -53,6 +53,7 @@ from cairnwork.notary import Notary
 from cairnwork.ownership import OWNER, OwnershipLedger, OwnershipRecord
 from cairnwork.proc_cwd import attempt_dirs
 from cairnwork.reasons import _names
+from cairnwork.run_tags import RUN_TAGS as _RUN_TAGS
 from cairnwork.verifier_account import VerifierAccount, VerifierAccountError
 from cairnwork.workspace import WorkspaceError, remove_attempt_clone
 
@@ -252,7 +253,6 @@ _OTHER_ROOT = (
 _NOT_A_RUN_ID = "ATTEMPT_ID_NOT_A_RUN_ID: no directory was looked for"
 _RUN_ATTEMPT_ID = re.compile(r"a[0-9a-f]{16}")
 _RESULTS = ("COMPLETED", "FAILED")  # the run's own FINISHED details (pipeline.py)
-_RUN_TAGS = "vbpqre"  # verify, base-test, P2P probe / candidate run / re-run, base env (p2p.py)
 
 
 def _run_dirs(root: Path, attempt_id: str) -> tuple[list[Path], list[Path], list[Path]]:

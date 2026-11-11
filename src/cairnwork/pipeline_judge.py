@@ -41,10 +41,12 @@ from cairnwork.deferred_tests import (
     test_paths,
     untargeted,
 )
+from cairnwork.node_ids import show, unmatched_note
 from cairnwork.p2p import P2PPlan, run_plan
 from cairnwork.p2p_nodes import clean
 from cairnwork.pytest_config import PytestConfigError, gate_import_paths, test_file_rule
 from cairnwork.reasons import explain, verdict_reason
+from cairnwork.skip_evidence import raise_for_env_skips
 from cairnwork.verifier_account import VerifierAccountError
 from cairnwork.verifier_spec import protected_verifier_inputs
 from cairnwork.verifiers import run_verifiers
@@ -132,6 +134,7 @@ def tests_with_teeth(
     recorded_runs = runs
     # #1034: what the base run really ran, before as_failed adds function-level ids for a #796 file
     nodes = {r.spec.verifier_id: tuple(r.outcomes) for r in runs if not r.spec.collect_only}
+    base_skips = {r.spec.verifier_id: r.skips for r in runs if not r.spec.collect_only}
 
     def is_test(path: str) -> bool:  # asked only when a record qualifies: a base test file, or
         # any file under a test root (a test package's own helper is not code the fix adds)
@@ -152,7 +155,7 @@ def tests_with_teeth(
     if comparison.kind != "TEETH":
         raise TestCommitRejected(comparison.code, comparison.detail)
     _check_seed_replay(ctx, result, runs, targets, base, task.test_commit, is_test)
-    return TestFiles(paths, deleted, nodes)
+    return TestFiles(paths, deleted, nodes, base_skips)
 
 
 def _check_seed_replay(ctx, result, runs, targets, base, test_commit, is_test) -> None:
@@ -210,6 +213,9 @@ def _seed_sensitive_detail(
         f"failed node IDs differ or second run was invalid at seeds "
         f"seed {first_seed} and seed {second_seed}: {quoted}"
     )
+    note = unmatched_note(set(changed) | set(first_failed), set(second_failed))
+    if note:
+        detail += f"; {note}"
     if comparison.kind != "TEETH":
         detail += f"; second run: {comparison.kind} {comparison.code}"
     return detail
@@ -217,7 +223,7 @@ def _seed_sensitive_detail(
 
 def _quoted_node_id(node: str) -> str:
     """Return a repr-quoted node ID no longer than 200 characters."""
-    candidate = node
+    candidate = show(node)
     while len(repr(candidate)) > 200:
         candidate = candidate[: max(0, len(candidate) - (len(repr(candidate)) - 199))]
     return repr(candidate)
@@ -236,14 +242,13 @@ def judge_candidate(
     binding: dict | None = None,
     unless_passed: BaseUncomparable | None = None,
     control: bool = False,
+    env_skip_downgrade: bool = False,
 ) -> None:
     """Verify result.candidate_commit and have Core notarise it (sets verified, reason, logs);
-    shared by the worker pipeline and ``verify_candidate``; reach(phase) records progress. Verify
-    only: a ``binding`` (#229) binds the verdict to the tree that ran and the binding's head;
-    ``unless_passed`` (#259), a failed base check, is raised before Core if a verifier did not
-    pass; ``control`` (#962 2b): a failure of setup denials the unchanged tree reproduces is
-    UNCOMPARABLE. Core is not asked when all passed but a new test is in no run's record (#697).
-    #1065: candidate_sys_path refuses a shadowing import edit before any verifier runs."""
+    shared by worker and ``verify_candidate``. Verify only: ``binding`` (#229), ``unless_passed``
+    (#259, raised before Core if a verifier failed), ``control`` (#962 2b), ``env_skip_downgrade``
+    (#1151). Core is not asked when a new test is in no run's record (#697); #1065 sys.path
+    refusal runs first."""
     _refuse_candidate_sys_path(task, result)
     judged = result.candidate_commit
     task_id = result.task_id
@@ -258,8 +263,7 @@ def judge_candidate(
         bb_logs = [str(log)] if log else []
     # #803: no candidate code ran as the account before this run unless a blackbox run (verify
     # only, which judges any account error the same) came first: then a refusal is a plain error
-    first = run_verifiers if task.blackbox is None else partial(after_candidate_ran, run_verifiers)
-    runs = busy_once_more(first, ctx, judged, specs, f"{result.attempt_id}-v")
+    runs = _candidate_runs(task, ctx, judged, specs, result)
     verified_by = list(runs)  # the verifier runs alone, as the base run's check reads them
     if p2p is not None:
         p2p_runs, result.p2p = after_candidate_ran(run_plan, p2p, task, judged, result, ctx)
@@ -273,6 +277,7 @@ def judge_candidate(
     if refusal := _not_run_refusal(missing, test_files, verified_by, (*runs, *checks)):
         result.reason = refusal  # #697, #1034: Core is not asked
         return
+    raise_for_env_skips(runs, task, judged, test_files, checks, env_skip_downgrade)
     # Core's ALLOW is whole-contract; only the test commit's files can be deleted (producer check)
     if deleted_of(test_files) and not task.allow_deletions:
         if stray := stray_deletions(task.repo, task.base_commit, judged, deleted_of(test_files)):
@@ -303,6 +308,11 @@ def judge_candidate(
     result.verified = bool(verdict.verified and recorded and recorded.verified)
     result.reason = verdict_reason(result.verified, verdict, recorded) + explain(runs)
     result.reason += "".join(f" [{check.reason}]" for check in checks) + gate_note
+
+
+def _candidate_runs(task, ctx, judged, specs, result):
+    first = run_verifiers if task.blackbox is None else partial(after_candidate_ran, run_verifiers)
+    return busy_once_more(first, ctx, judged, specs, f"{result.attempt_id}-v")
 
 
 def _refuse_candidate_sys_path(task, result) -> None:
@@ -339,7 +349,8 @@ def _not_run_refusal(missing, test_files, verified_by, judged) -> str:
         return ""
     shown = ", ".join(map(clean, gone[:10])) + (f", +{len(gone) - 10} more" if gone[10:] else "")
     head = f"NAMED_TESTS_NOT_RUN: {len(gone)} test(s) the base run ran did not run on the candidate"
-    return f"{head}: {shown}"
+    note = unmatched_note(gone, {node for run in judged for node in run.outcomes})
+    return f"{head}: {shown}" + (f"; {note}" if note else "")
 
 
 def _base_nodes_gone(test_files, runs) -> list[str]:

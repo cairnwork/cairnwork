@@ -20,6 +20,21 @@ _PLUGIN_FIXTURES = {
 }
 
 
+def _marker_items(session):
+    return {item.nodeid: any(item.get_closest_marker(name) for name in ("skip", "skipif"))
+            for item in session.items}
+
+
+def _record_skip(reporter, report):
+    if report.outcome != "skipped" or getattr(report, "wasxfail", None):
+        return
+    shown = report.longrepr[2] if isinstance(report.longrepr, tuple) else str(report.longrepr)
+    reason = shown.removeprefix("Skipped: ")
+    if len(reporter._skips) < 50:
+        kind = "marker" if reporter._item_marks.get(report.nodeid, False) else "runtime"
+        reporter._skips[report.nodeid] = {"kind": kind, "reason": reason[:200]}
+
+
 def _innermost(exc):  # the file of the innermost frame that is not the import machinery
     tb, last = exc.__traceback__, ""
     while tb is not None:
