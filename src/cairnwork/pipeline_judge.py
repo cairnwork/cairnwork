@@ -166,13 +166,13 @@ def _check_seed_replay(ctx, result, runs, targets, base, test_commit, is_test) -
         detail = f"hash seed not a uint32: {ctx.hash_seed!r}"
         raise BaseUncomparable(Comparison("UNCOMPARABLE", "BASE_SEED_SENSITIVE", detail)) from exc
     second_ctx = replace(ctx, hash_seed=replay_seed)
-    second_runs = run_verifiers(second_ctx, test_commit, base, f"{result.attempt_id}-b2", deny=True)
+    second_runs = run_verifiers(second_ctx, test_commit, base, f"{result.attempt_id}-s", deny=True)
     second_runs = [as_failed(run, targets, is_test) for run in second_runs]
     second_comparison = base_comparison(second_runs, targets)
     for run in second_runs:
         if run.deny_evidence:
             result.logs.append(
-                f"second base deny evidence {result.attempt_id}-b2/{run.spec.verifier_id} "
+                f"second base deny evidence {result.attempt_id}-s/{run.spec.verifier_id} "
                 f"(seed {second_ctx.hash_seed}): {run.deny_evidence}"
             )
     for run in second_runs:

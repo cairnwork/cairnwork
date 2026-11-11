@@ -8,10 +8,10 @@ from pathlib import Path
 import cairnwork
 from cairnwork import proc_cwd, recovery, run_tags
 
-_RUN_ID = re.compile(r'attempt_id\}-([a-z]+)"')  # f"{result.attempt_id}-b"
-_TAG_ARG = re.compile(r'\btag="([a-z]+)"')  # tag="p" as a keyword or a default
-_TAG_ELSE = re.compile(r'\btag="[a-z]+" if [^\n]* else "([a-z]+)"')  # tag="p" if x else "m"
-_POSITIONAL = re.compile(r'\b(?:_checked|_side)\([^()]*,\s*"([a-z]+)"\)')  # _checked(..., "q")
+_RUN_ID = re.compile(r'attempt_id\}-([a-z0-9]+)"')  # f"{result.attempt_id}-b"
+_TAG_ARG = re.compile(r'\btag="([a-z0-9]+)"')  # tag="p" as a keyword or a default
+_TAG_ELSE = re.compile(r'\btag="[a-z0-9]+" if [^\n]* else "([a-z0-9]+)"')  # tag="p" if x else "m"
+_POSITIONAL = re.compile(r'\b(?:_checked|_side)\([^()]*,\s*"([a-z0-9]+)"\)')  # _checked(..., "q")
 # Names built the same way that are not verifier run directories.
 _NOT_RUN_DIRS = {"cf", "tested"}  # deferred overlay index/ref name; the attempt's tested ref
 
