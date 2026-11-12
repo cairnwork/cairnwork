@@ -232,6 +232,39 @@ def test_candidate_parse_failure_is_closed(repo):
     assert got.value.code == "UNREADABLE_CHANGE"
 
 
+def _assert_no_workflow_command_line(message):
+    assert all(not line.startswith(("::", "##[")) for line in message.splitlines())
+
+
+def test_newline_candidate_path_is_escaped_in_mutation_rejection(repo):
+    base = git(repo, "rev-parse", "HEAD")
+    path = "pkg\n::warning::x.py"
+    cand = commit_change(repo, {path: "import sys\nsys.modules['x'] = None\n"})
+
+    with pytest.raises(CandidateRejected) as got:
+        candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, (path,))
+
+    assert got.value.code == "CANDIDATE_SYS_PATH_MUTATION"
+    _assert_no_workflow_command_line(str(got.value))
+
+
+def test_newline_candidate_path_is_escaped_in_unreadable_rejection(repo, monkeypatch):
+    base = git(repo, "rev-parse", "HEAD")
+    path = "pkg\n::warning::x.py"
+    cand = commit_change(repo, {"pkg/module.py": "VALUE = 1\n"})
+
+    def unreadable(*args, **kwargs):
+        raise OSError(f"cannot read {path}")
+
+    monkeypatch.setattr(candidate_sys_path, "run_git_bytes", unreadable)
+
+    with pytest.raises(CandidateRejected) as got:
+        candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, ("pkg/module.py",))
+
+    assert got.value.code == "UNREADABLE_CHANGE"
+    _assert_no_workflow_command_line(str(got.value))
+
+
 def test_files_outside_the_candidates_allowed_files_are_not_its_mutation(repo):
     """On the worker path the judged commit also carries the deferred tests; those are the test
     commit's, read by sys_path_scan, not the candidate's (#1065, worker pipeline)."""
