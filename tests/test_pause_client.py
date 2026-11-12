@@ -130,6 +130,51 @@ def test_planner_secrets_block_transport(secret):
     assert fake.calls == [] and reply.reason == schema.Reason.PAUSE_SECRET_BLOCKED
 
 
+@pytest.mark.parametrize(
+    "messages",
+    [
+        ({"content": "sk-abcdef", "extra": "ghijk12345"},),  # split across adjacent fields
+        ({"sk-abcdefghijk12345": "x"},),  # in a key
+        ({"content": b"sk-abcdefghijk12345"},),  # bytes
+        ({"content": [{"text": ["nested", "/Users/alice/x"]}]},),  # nested
+    ],
+)
+def test_planner_secret_evasions_block_transport(messages):
+    fake = FakeTransport()
+    reply = HaikuPlanner(fake).plan(plan_request(messages))
+    assert fake.calls == [] and reply.reason == schema.Reason.PAUSE_SECRET_BLOCKED
+
+
+def test_non_string_scalars_do_not_crash_scan():
+    fake = FakeTransport(TransportResult(200, {"text": "plan"}))
+    reply = HaikuPlanner(fake).plan(plan_request(({"content": "ok", "n": 3, "none": None},)))
+    assert reply.text == "plan"
+
+
+@pytest.mark.parametrize("status", [600, 302, 0, -1, 404])
+def test_non_5xx_statuses_are_sent_once_and_refused(status):
+    fake = FakeTransport(TransportResult(status, {}))
+    reply = HaikuPlanner(fake).plan(plan_request())
+    assert len(fake.calls) == 1 and reply.reason == schema.Reason.PAUSE_PLANNER_REFUSED
+
+
+@pytest.mark.parametrize("body", [{"refusal": "no", "text": "ACCEPT"}, {"stop_reason": "refusal"}])
+def test_refusal_markers_never_yield_a_verdict(body):
+    reply = HaikuGate(FakeTransport(TransportResult(200, body))).review(gate_request())
+    assert reply.verdict is None and reply.reason == schema.Reason.PAUSE_GATE_REFUSAL
+
+
+@pytest.mark.parametrize("status", [None, "200", {"a": 1}, True, 1.5])
+def test_command_transport_bad_status_does_not_raise(status, tmp_path):
+    import sys
+
+    from experimental.pause.client import CommandTransport
+
+    script = "import json,sys;sys.stdin.read();print(json.dumps({'status': %r, 'body': {}}))"
+    transport = CommandTransport([sys.executable, "-c", script % (status,)])
+    assert transport.send("m", "e", [], 5.0).status == -1
+
+
 def test_gate_secret_blocks_transport():
     fake = FakeTransport()
     reply = HaikuGate(fake).review(gate_request("token=" + "b" * 45))
@@ -159,7 +204,6 @@ def test_gate_replay_is_read_only_and_uses_checkpoint_or_plan_hash(tmp_path):
     assert _tree(tmp_path) == before
     request_text = transport.calls[0][2][0]["content"]
     assert request_text == "plan"
-    assert hashlib.sha256(b"plan").hexdigest()
     assert not (tmp_path / "run_root").exists()
     assert not (tmp_path / schema.RECEIPTS_FILE).exists()
 
@@ -169,3 +213,26 @@ def test_no_agy_dispatch_reference():
     assert "agy_dispatch" not in "\n".join(
         p.read_text(encoding="utf-8") for p in package.glob("*.py")
     )
+
+
+def test_gate_replay_passes_checkpoint_hash_or_plan_hash(tmp_path):
+    from experimental.pause.interfaces import GateReply
+    from experimental.pause.replay import replay
+
+    seen = []
+
+    class RecordingGate:
+        def review(self, request):
+            seen.append(request)
+            return GateReply("ACCEPT", request.settings.model_id, request.settings.effort)
+
+    for name, checkpoint in (("a", "c" * 64), ("b", None)):
+        task = tmp_path / name
+        task.mkdir()
+        (task / "plan.txt").write_text("plan " + name, encoding="utf-8")
+        if checkpoint:
+            (task / "checkpoint.sha256").write_text(checkpoint + "\n", encoding="utf-8")
+    report = replay(tmp_path, RecordingGate(), SETTINGS)
+    assert [r.task_id for r in report.results] == ["a", "b"] and report.agreement is None
+    assert seen[0].checkpoint_sha256 == "c" * 64
+    assert seen[1].checkpoint_sha256 == hashlib.sha256(b"plan b").hexdigest()

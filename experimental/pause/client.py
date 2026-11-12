@@ -55,8 +55,9 @@ class CommandTransport:
         if not isinstance(envelope, dict):
             return TransportResult(status=result.returncode, body=None)
         body = envelope.get("body")
+        status = envelope.get("status", result.returncode)
         return TransportResult(
-            status=int(envelope.get("status", result.returncode)),
+            status=status if isinstance(status, int) and not isinstance(status, bool) else -1,
             body=body if isinstance(body, dict) else None,
             timed_out=bool(envelope.get("timed_out", False)),
             quota_blocked=bool(envelope.get("quota_blocked", False)),
@@ -74,7 +75,9 @@ class _Client:
 
     def _send(self, request: PlanRequest | GateRequest, messages: Sequence[dict], planner: bool):
         model, effort, timeout, attempts = self._settings(request)
-        blocked = any(self.scanner.scan(value) for value in _strings(messages))
+        pieces = list(_strings(messages))
+        # also scan the pieces joined, so a secret split across adjacent fields is still seen
+        blocked = any(self.scanner.scan(v) for v in (*pieces, "".join(pieces), "\n".join(pieces)))
         prefix = "PAUSE_PLANNER" if planner else "PAUSE_GATE"
         if blocked:
             return None, model, effort, Reason.PAUSE_SECRET_BLOCKED
@@ -86,14 +89,15 @@ class _Client:
                 if attempt + 1 < attempts:
                     continue
                 return None, model, effort, Reason[f"{prefix}_TIMEOUT"]
-            if result.status >= 500:
+            status = result.status if isinstance(result.status, int) else -1
+            if 500 <= status <= 599:
                 if attempt + 1 < attempts:
                     continue
                 return None, model, effort, Reason[f"{prefix}_REFUSED"]
-            if result.status in (401, 429) or result.status != 200:
+            if status != 200:
                 return None, model, effort, Reason[f"{prefix}_REFUSED"]
             body = result.body
-            if body is not None and body.get("stop_reason") == "refusal":
+            if body is not None and (body.get("stop_reason") == "refusal" or body.get("refusal")):
                 return None, model, effort, Reason[f"{prefix}_REFUSAL"]
             if body is None or not isinstance(body.get("text"), str):
                 return None, model, effort, Reason[f"{prefix}_BAD_OUTPUT"]
@@ -129,11 +133,17 @@ class HaikuGate(_Client):
 
 
 def _strings(value: object) -> Iterator[str]:
+    """Every string in a nested request: dict keys and values, bytes decoded, scalars as text."""
     if isinstance(value, str):
         yield value
+    elif isinstance(value, (bytes, bytearray)):
+        yield bytes(value).decode("utf-8", "replace")
     elif isinstance(value, dict):
-        for item in value.values():
+        for key, item in value.items():
+            yield from _strings(key)
             yield from _strings(item)
     elif isinstance(value, (list, tuple)):
         for item in value:
             yield from _strings(item)
+    elif value is not None:
+        yield str(value)
