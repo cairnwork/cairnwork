@@ -126,43 +126,81 @@ def _bare_is_green(probe: RepoProbe, commit: str, run_root: Path, timeout: int) 
         remove_attempt_clone(run_root, clone_id)
 
 
+def _run_git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(  # noqa: S603, S607 - fixed argv, no shell
+        ["git", "-C", str(repo), *args],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _include_applies(repo: Path, key: str, scratch: Path) -> bool:
+    """Whether an includeIf condition holds, asked of git itself. Unsure counts as holding."""
+    if not key.startswith("includeif."):
+        return True
+    cond = key[len("includeif.") : -len(".path")].replace("\\", "\\\\").replace('"', '\\"')
+    (scratch / "marker.cfg").write_text("[cairn]\n\tm = 1\n")
+    (scratch / "cond.cfg").write_text(f'[includeIf "{cond}"]\n\tpath = {scratch / "marker.cfg"}\n')
+    got = _run_git(
+        repo, "config", "--file", str(scratch / "cond.cfg"), "--includes", "--get", "cairn.m"
+    )
+    if got.returncode == 1 and not got.stderr.strip():
+        return False
+    return True
+
+
+def _include_problem(repo: Path) -> str | None:
+    """A reason if a config include target that git would read is missing or unreadable."""
+    listing = _run_git(
+        repo, "config", "--no-includes", "--show-origin", "--null", "--get-regexp",
+        r"^include(if\..*)?\.path$",
+    )  # fmt: skip
+    if listing.returncode not in (0, 1) or listing.stderr.strip():
+        return f"could not list config includes (git exit {listing.returncode})"
+    parts = listing.stdout.split("\0")  # --null: "<origin>\0<key>\n<value>\0" per entry
+    with tempfile.TemporaryDirectory() as scratch:
+        for origin, entry in zip(parts[0::2], parts[1::2], strict=False):
+            key, _, value = entry.partition("\n")
+            if not origin.startswith("file:"):
+                continue
+            target = Path(value).expanduser()
+            if not target.is_absolute():
+                target = (repo / origin.removeprefix("file:")).parent / target
+            if (not os.access(target, os.R_OK) or not target.is_file()) and _include_applies(
+                repo, key, Path(scratch)
+            ):
+                return f"config include {value!r} is missing or unreadable"
+    return None
+
+
 def _silent_read_failure(repo: Path) -> str | None:
     """git exits 0/1 and prints nothing when it cannot read a global config, an include.path
-    target or refs/heads (Issue #1120). Check those inputs ourselves; None if all are readable."""
-    home = Path(os.environ.get("HOME", "~")).expanduser()
-    xdg = Path(os.environ.get("XDG_CONFIG_HOME") or home / ".config")
-    for cfg in (home / ".gitconfig", xdg / "git" / "config"):
+    target or a ref directory (Issue #1120). Check those inputs ourselves; None if all fine."""
+    home = os.path.expanduser("~")
+    xdg = os.environ.get("XDG_CONFIG_HOME", "")
+    base = Path(xdg) if os.path.isabs(xdg) else Path(home) / ".config"
+    for cfg in (Path(home) / ".gitconfig", base / "git" / "config"):
         if os.path.lexists(cfg) and not os.access(cfg, os.R_OK):
             return f"global git config {cfg} is unreadable"
     try:
-        inc = subprocess.run(  # noqa: S603, S607 - fixed argv, no shell
-            ["git", "-C", str(repo), "config", "--no-includes", "--show-origin", "--null",
-             "--get-regexp", r"^include(if\..*)?\.path$"],  # fmt: skip
-            capture_output=True, text=True, check=False,
-        )  # fmt: skip
-        gitdir = subprocess.run(  # noqa: S603, S607 - fixed argv, no shell
-            ["git", "-C", str(repo), "rev-parse", "--absolute-git-dir"],
-            capture_output=True, text=True, check=False,
-        )  # fmt: skip
+        problem = _include_problem(repo)
+        common = _run_git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir")
     except OSError as err:
         return f"could not run git ({err})"
-    if inc.returncode not in (0, 1) or inc.stderr.strip():
-        return f"could not list config includes (git exit {inc.returncode})"
-    if gitdir.returncode != 0 or gitdir.stderr.strip() or not gitdir.stdout.strip():
-        return f"could not locate the git dir (git exit {gitdir.returncode})"
-    # --null: "<origin>\0<key>\n<value>\0" per entry.
-    parts = inc.stdout.split("\0")
-    for origin, entry in zip(parts[0::2], parts[1::2], strict=False):
-        value = entry.split("\n", 1)[1] if "\n" in entry else ""
-        target = Path(value).expanduser()
-        if not target.is_absolute():
-            base = origin.removeprefix("file:")
-            target = Path(base).parent / target
-        if not os.access(target, os.R_OK) or not target.is_file():
-            return f"config include {value!r} is missing or unreadable"
-    heads = Path(gitdir.stdout.strip()) / "refs" / "heads"
-    if not os.access(heads, os.R_OK | os.X_OK):
-        return f"{heads} is unreadable"
+    if problem is not None:
+        return problem
+    if common.returncode != 0 or common.stderr.strip() or not common.stdout.strip():
+        return f"could not locate the git dir (git exit {common.returncode})"
+    for sub in ("heads", "remotes"):
+        top = Path(common.stdout.strip()) / "refs" / sub
+        if not top.is_dir():  # absent, or a reftable stub: nothing to walk
+            continue
+        unreadable: list[OSError] = []
+        for _dir, _dirs, _files in os.walk(top, onerror=unreadable.append):
+            pass
+        if unreadable:
+            return f"{unreadable[0].filename} is unreadable"
     return None
 
 
