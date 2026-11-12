@@ -36,8 +36,8 @@ class CommandTransport:
     def send(
         self, model: str, effort: str, messages: Sequence[dict], timeout: float
     ) -> TransportResult:
-        payload = json.dumps({"model": model, "effort": effort, "messages": messages})
         try:
+            payload = json.dumps({"model": model, "effort": effort, "messages": messages})
             result = subprocess.run(
                 self.command,
                 input=payload,
@@ -48,12 +48,15 @@ class CommandTransport:
             )
         except subprocess.TimeoutExpired:
             return TransportResult(status=0, body=None, timed_out=True)
+        except (OSError, TypeError, ValueError):
+            return TransportResult(status=-1, body=None)  # unusable command or request
         try:
             envelope = json.loads(result.stdout)
         except (json.JSONDecodeError, TypeError):
             envelope = None
         if not isinstance(envelope, dict):
-            return TransportResult(status=result.returncode, body=None)
+            # exit 0 with unparseable output is a bad output, not an upstream refusal
+            return TransportResult(status=200 if result.returncode == 0 else -1, body=None)
         body = envelope.get("body")
         status = envelope.get("status", result.returncode)
         return TransportResult(

@@ -12,7 +12,7 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("private_key", re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----")),
     ("bearer_token", re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{16,}")),
     ("assigned_secret", re.compile(r"(?i)\b(?:key|token|secret)\s*=\s*[A-Za-z0-9+/=_-]{40,}")),
-    ("host_path", re.compile(r"/(?:Users/[^/\s]+|home/[^/\s]+)/")),
+    ("host_path", re.compile(r"/(?:Users|home)/[^/\s]+")),
     ("email", re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")),
 )
 

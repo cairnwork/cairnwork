@@ -241,3 +241,26 @@ def test_gate_replay_passes_checkpoint_hash_or_plan_hash(tmp_path):
     assert [r.task_id for r in report.results] == ["a", "b"] and report.agreement is None
     assert seen[0].checkpoint_sha256 == "c" * 64
     assert seen[1].checkpoint_sha256 == hashlib.sha256(b"plan b").hexdigest()
+
+
+def test_command_transport_unusable_command_or_output_never_raises():
+    import sys
+
+    from experimental.pause.client import CommandTransport
+
+    missing = CommandTransport(["/nonexistent/pause-transport"]).send("m", "e", [], 5.0)
+    assert missing.status == -1 and missing.body is None
+    unserializable = CommandTransport([sys.executable, "-c", "pass"]).send(
+        "m", "e", [{1: object()}], 5.0
+    )
+    assert unserializable.status == -1
+    garbage = CommandTransport([sys.executable, "-c", "print('not json')"]).send("m", "e", [], 5.0)
+    reply = HaikuPlanner(FakeTransport(garbage)).plan(plan_request())
+    assert reply.reason == schema.Reason.PAUSE_PLANNER_BAD_OUTPUT
+
+
+@pytest.mark.parametrize("text", ["/Users/alice", "cd /home/bob", "/Users/alice\n"])
+def test_host_path_without_trailing_slash_is_blocked(text):
+    fake = FakeTransport()
+    reply = HaikuPlanner(fake).plan(plan_request(({"content": text},)))
+    assert fake.calls == [] and reply.reason == schema.Reason.PAUSE_SECRET_BLOCKED
