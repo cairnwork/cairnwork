@@ -156,6 +156,14 @@ def test_a_secret_field_inside_another_fields_value_is_still_masked(tmp_path):
     assert "z=1" in tail and "color=token=" in tail
 
 
+def test_full_width_underscore_in_secret_name_is_masked(tmp_path):
+    log = tmp_path / "verifier.log"
+    log.write_text("ＡＰＩ＿ＫＥＹ=v1\nＳＥＣＲＥＴ＿ＫＥＹ=v3\nＧＩＴＨＵＢ＿ＴＯＫＥＮ=v2\n")
+    tail = probe_log_tail(log)
+    assert not any(value in tail for value in ("v1", "v2", "v3")), tail
+    assert tail.count("<redacted>") == 3
+
+
 def test_dotted_and_dotless_i_in_a_secret_name_still_count(tmp_path):
     log = tmp_path / "verifier.log"
     log.write_text("apİ_key=W1\napıkey=W2\nİd_token=W3\n")

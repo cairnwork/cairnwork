@@ -38,7 +38,7 @@ _HID = "\x00"  # stands for a hidden character until the field pass has read the
 # a name: a run of word characters and markers, not after a word character or a marker; only the
 # name is consumed, so a secret field inside another field's value is still found. After '-' a name
 # counts only when it holds a marker (as '?' started one there before #744; my-token stays shown)
-_NAME = re.compile(rf"(?<![\w{_HID}])([\w{_HID}]+)=")
+_NAME = re.compile(rf"(?<![\w{_HID}])([\w{_HID}\uFF3F]+)=")
 _VALUE = re.compile(r"[^&\s]+")
 TAIL_CHARS = 2048
 # any character fits in 4 bytes; twice that, so the window holds more than the tail. A window that
