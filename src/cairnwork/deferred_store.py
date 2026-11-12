@@ -131,11 +131,18 @@ class DeferredStore:
         self.check_dir()
         if not self.has(sha):
             raise TestCommitRejected("TEST_COMMIT_NOT_IMPORTED", sha)
-        try:
+        with _Scratch(
+            self.path, repo
+        ) as scratch:  # a repo that is no repository: refused, as before
+            try:  # the stored bundle is read on the store side first: its failure is ours (#1185)
+                run_git(scratch, "fetch", "--quiet", "--no-tags", str(self.bundle(sha)), HEAD_REF)
+            except GitCommandError as exc:
+                _raise_store_failure(exc)
+        try:  # the write into the supplied repo keeps the base classification
             run_git(repo, "fetch", "--quiet", "--no-tags", str(self.bundle(sha)), HEAD_REF)
             run_git(repo, "cat-file", "-e", f"{sha}^{{commit}}")
         except GitCommandError as exc:
-            _raise_store_failure(exc)
+            _raise_git_failure(exc)
 
     def import_bundle(self, repo: Path, bundle: Path, used: Path) -> str:
         """Validate a supplied bundle and store it canonically; return the test commit id."""
