@@ -51,9 +51,9 @@ def runs(monkeypatch):
     def install(rows):
         def wrap(real):
             def fake(ctx, commit, specs, run_id, **kw):
-                # #941 seed replay repeats the base run with the -b2 suffix.
+                # #941 seed replay repeats the base run with the -s suffix (#1190; was -b2).
                 tag = run_id.rsplit("-", 1)[-1]
-                fields = rows.get("b" if tag == "b2" else tag)
+                fields = rows.get("b" if tag == "s" else tag)
                 if fields is None:
                     return real(ctx, commit, specs, run_id, **kw)
                 if callable(fields):

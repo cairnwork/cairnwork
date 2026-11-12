@@ -78,8 +78,8 @@ def stub(monkeypatch):
         def fake(ctx, commit, specs, run_id, **kw):
             # -e: the base env check before the worker (#234) passes, as the base does when stubbed;
             # a real run there would need a sandbox, which hosts without one (Linux CI) lack
-            # #941 seed replay repeats the base run with the -b2 suffix.
-            tag = "-b" if run_id.endswith("-b2") else run_id[-2:]
+            # #941 seed replay repeats the base run with the -s suffix (#1190; was -b2).
+            tag = "-b" if run_id.endswith("-s") else run_id[-2:]
             fields = {"-b": base, "-p": probe, "-e": ENV_OK}.get(tag)
             if run_id.endswith("-c") and probe:  # #793: the test commit collects the probe's ids
                 return tuple(collected_run(_run(s, ctx.run_root, run_id), probe) for s in specs)
