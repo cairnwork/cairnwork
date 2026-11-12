@@ -45,6 +45,12 @@ from cairnwork.p2p_bindings import (
     rebinds_by_string,
     walk_without_nested_classes,
 )
+from cairnwork.p2p_inherit import (
+    class_binds_hook,
+    inherited_def,
+    mentions_dunder_test,
+    module_mutates_base,
+)
 from cairnwork.p2p_nodes import changed_tests, module_changed
 from cairnwork.p2p_selection import MODULE_DIR_CAP
 from cairnwork.verifier_spec import VerifierSpec
@@ -119,7 +125,8 @@ def classify(base_ids, test_ids, edited, source, base_source) -> CollectedSide:
     for nodeid in base_ids - test_ids:
         path = _file(nodeid)
         gone = False
-        if path in edited and _function(nodeid) not in collected_funcs:
+        one_case = "[" in nodeid and _function(nodeid) in collected_funcs  # #842 item 2
+        if path in edited and (one_case or _function(nodeid) not in collected_funcs):
             if path not in texts:
                 texts[path] = source(path)
                 bases[path] = _tree(base_source(path))
@@ -128,7 +135,7 @@ def classify(base_ids, test_ids, edited, source, base_source) -> CollectedSide:
             gone = (
                 _defines(bases[path], owners, name)
                 and test_trees[path] is not None
-                and not _scope_mentions(test_trees[path], owners, name, texts[path])
+                and (one_case or not _scope_mentions(test_trees[path], owners, name, texts[path]))
                 and not _hidden(test_trees[path], bases[path], name, path, test_ids, base_ids)
             )
         (removed if gone else dropped).add(nodeid)
@@ -242,7 +249,7 @@ def _scope_mentions(tree: ast.Module, owners: list[str], name: str, text: str = 
         return True
     module = [n for n in tree.body if not isinstance(n, ast.ClassDef)]
     nodes = [*body, *module]
-    if any(_mentions_dunder_test(node) for node in nodes):
+    if any(mentions_dunder_test(node) for node in nodes):
         return True
     if _mentions(body, name, pattern, include_nested_classes=False):
         return True
@@ -267,7 +274,7 @@ def _base_may_supply(
         cls = classes[0]
         if cls.keywords or any(not is_pytest_decorator(d) for d in cls.decorator_list):
             return True  # an inherited metaclass or a decorator on the base can add tests
-        if _module_mutates_base(tree, base.id) or _class_binds_hook(cls):
+        if module_mutates_base(tree, base.id) or class_binds_hook(cls):
             return True  # __init_subclass__ runs on A and can add tests the source never names
         pattern = re.compile(rf"\b{re.escape(name)}\b")
         if _mentions(cls.body, name, pattern, include_nested_classes=False):
@@ -291,38 +298,6 @@ def _is_unambiguous_testcase(tree: ast.Module) -> bool:
     )
 
 
-def _module_mutates_base(tree: ast.Module, name: str) -> bool:
-    for stmt in tree.body:
-        pending: list[ast.AST] = [stmt]
-        while pending:
-            node = pending.pop()
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
-                continue
-            if (
-                isinstance(node, ast.Attribute)
-                and node.attr == "__init_subclass__"
-                and isinstance(node.ctx, ast.Store)
-                and isinstance(node.value, ast.Name)
-                and node.value.id == name
-            ):
-                return True
-            pending.extend(ast.iter_child_nodes(node))
-    return False
-
-
-def _class_binds_hook(cls: ast.ClassDef) -> bool:
-    return any(binds_in_scope(stmt, "__init_subclass__") for stmt in cls.body)
-
-
-def _mentions_dunder_test(node: ast.AST) -> bool:
-    return any(
-        (isinstance(n, ast.Name) and n.id == "__test__")
-        or (isinstance(n, ast.Constant) and n.value == "__test__")
-        or (isinstance(n, ast.arg) and n.arg == "__test__")
-        for n in ast.walk(node)
-    )
-
-
 def _mentions(
     nodes: list[ast.stmt], name: str, pattern: re.Pattern, *, include_nested_classes: bool = True
 ) -> bool:
@@ -339,8 +314,7 @@ def _defines(tree: ast.Module | None, owners: list[str], name: str) -> bool:
     """Whether the base file itself has ``def name`` in the class chain ``owners``."""
     if tree is None or rebinds_by_string(tree, name):  # #1127: may collect other code
         return False
-    body = tree.body
-    module = True
+    body, module, cls = tree.body, True, None
     for owner in owners:
         try:
             last = last_binding(body, owner, module=module)
@@ -348,8 +322,7 @@ def _defines(tree: ast.Module | None, owners: list[str], name: str) -> bool:
             return False
         if not isinstance(last, ast.ClassDef) or last.name != owner:  # #1122: a walrus in
             return False  # another class's header rebinds the name; it is not this class
-        body = last.body
-        module = False
+        body, module, cls = last.body, False, last
     try:
         last = last_binding(body, name, module=module)
     except ValueError:
@@ -359,6 +332,8 @@ def _defines(tree: ast.Module | None, owners: list[str], name: str) -> bool:
             last = last_module_def(body, name)
         except RecursionError:
             return False
+    if last is None and cls is not None:  # #1128 item 1: inherited from one same-file base chain
+        return inherited_def(tree, cls, name)
     # #1122: a walrus in another def's header (annotation, default, decorator) is the last binding
     return isinstance(last, (ast.FunctionDef, ast.AsyncFunctionDef)) and last.name == name
 

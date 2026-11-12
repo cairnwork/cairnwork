@@ -3,7 +3,7 @@
 Each case passes the base / test-commit ids that ``pytest --collect-only`` really gives for the two
 sources (checked on CPython 3.14.7, pytest from uv.lock), then asks ``classify`` for the split.
 Found by the 2026-11-10 p2p re-verify of #1072 #1075 #1112 #1114; the false refusals of #1128 stay
-xfail(strict=True) here so that a change to them is seen.
+fixed in #1128 (test_honest_deletion_is_removed_1128).
 """
 
 from __future__ import annotations
@@ -96,8 +96,7 @@ def test_hidden_base_test_is_dropped(case):
     assert _split(base, test, base_ids, test_ids) == (set(), {nodeid})
 
 
-# --- #1128 false refusals (P2, not this fix): an honest deletion is refused as
-# TEST_COMMIT_DROPS_BASE_TESTS. Kept strict xfail so #1127 is seen not to change them.
+# --- #1128 false refusals, fixed: an honest deletion was refused as TEST_COMMIT_DROPS_BASE_TESTS.
 REFUSED = {
     # deleting a parent test also removes it from a same-file subclass (pre-existing)
     "inherited-by-same-file-subclass": (
@@ -133,7 +132,6 @@ REFUSED = {
 }
 
 
-@pytest.mark.xfail(strict=True, reason="#1128: honest deletion refused")
 @pytest.mark.parametrize("case", sorted(REFUSED))
 def test_honest_deletion_is_removed_1128(case):
     base, test, base_ids, test_ids, gone = REFUSED[case]

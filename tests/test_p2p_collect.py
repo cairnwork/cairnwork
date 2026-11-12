@@ -204,13 +204,13 @@ def test_classify_removes_module_test_when_class_keeps_same_name():
     assert side.removed == {"t.py::test_x"} and side.dropped == set()
 
 
-def test_classify_drops_parameterized_case_when_function_still_collected():
-    # #842: removing a single case when the function still runs is dropped, never removed
+def test_classify_removes_one_parameterized_case_when_function_still_collected():
+    # #842 item 2 (#1128): one case removed, the function still runs: that case is removed
     base = "def test_p(x): pass\n"
     source = "def test_p(x): pass\n"
     ids = {"t.py::test_p[1]", "t.py::test_p[2]"}
     side = classify(ids, {"t.py::test_p[2]"}, {"t.py"}, lambda p: source, lambda p: base)
-    assert side.removed == set() and side.dropped == {"t.py::test_p[1]"}
+    assert side.removed == {"t.py::test_p[1]"} and side.dropped == set()
 
 
 def test_classify_removes_parameterized_method_even_if_other_class_defines_name():
