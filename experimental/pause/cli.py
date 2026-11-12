@@ -38,7 +38,13 @@ def _configured_gate(path: str) -> tuple[Gate, CallSettings]:
         float(config["timeout_seconds"]),
         int(config["max_attempts"]),
     )
-    return HaikuGate(CommandTransport(config["transport_command"]), Scanner()), settings
+    command = config["transport_command"]
+    if not isinstance(command, list) or not command or not all(isinstance(c, str) for c in command):
+        raise ValueError("transport_command must be a non-empty list of strings")
+    names = config.get("scan_names", [])
+    if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+        raise ValueError("scan_names must be a list of strings")
+    return HaikuGate(CommandTransport(command), Scanner(tuple(names))), settings
 
 
 def main(

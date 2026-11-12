@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -119,6 +120,22 @@ def test_nonretryable_results_are_sent_once(status):
         "-----BEGIN RSA PRIVATE KEY-----",
         "Bearer abcdefghijklmnopqrstuvwxyz012345",
         "secret=" + "a" * 45,
+        "AWS_SECRET_ACCESS_KEY=" + "a" * 20,
+        "GITHUB_TOKEN=" + "a" * 20,
+        "client_secret=" + "a" * 20,
+        'key: "' + "a" * 20 + '"',
+        '{"token": "' + "a" * 20 + '"}',
+        "gho_abcdefghijk12345",
+        "ghs_abcdefghijk12345",
+        "ghu_abcdefghijk12345",
+        "ghr_abcdefghijk12345",
+        "xoxa-123456789012345678",
+        "xoxs-123456789012345678",
+        "xoxe-123456789012345678",
+        "AIza" + "a" * 20,
+        "/root/.ssh/id",
+        "/users/alice/x",
+        "C:\\Users\\alice\\x",
         "/Users/alice/private/file",
         "/home/alice/private/file",
         "a@b.example",
@@ -264,3 +281,54 @@ def test_host_path_without_trailing_slash_is_blocked(text):
     fake = FakeTransport()
     reply = HaikuPlanner(fake).plan(plan_request(({"content": text},)))
     assert fake.calls == [] and reply.reason == schema.Reason.PAUSE_SECRET_BLOCKED
+
+
+def test_configured_account_name_blocks_transport():
+    fake = FakeTransport()
+    scanner = Scanner(("jdoe",))
+    reply = HaikuPlanner(fake, scanner).plan(plan_request(({"content": "owner is JDoe here"},)))
+    assert fake.calls == [] and reply.reason == schema.Reason.PAUSE_SECRET_BLOCKED
+    ok = HaikuPlanner(FakeTransport(TransportResult(200, {"text": "p"})), scanner)
+    assert ok.plan(plan_request(({"content": "jdoes and ajdoe"},))).text == "p"
+
+
+def test_replay_agreement_value(tmp_path):
+    from experimental.pause.interfaces import GateReply
+    from experimental.pause.replay import replay
+
+    class Gate:
+        def review(self, request):
+            verdict = "ACCEPT" if request.task_id in ("a", "b") else "REJECT"
+            return GateReply(verdict, request.settings.model_id, request.settings.effort)
+
+    for name, expected in (("a", "ACCEPT"), ("b", "REJECT"), ("c", "REJECT"), ("d", "ACCEPT")):
+        task = tmp_path / name
+        task.mkdir()
+        (task / "plan.txt").write_text("p", encoding="utf-8")
+        (task / "expected_verdict.txt").write_text(expected, encoding="utf-8")
+    assert replay(tmp_path, Gate(), SETTINGS).agreement == 0.5  # a and c match, b and d do not
+
+
+@pytest.mark.parametrize("attempts", [1, 2, 3])
+def test_retry_count_is_exactly_max_attempts(attempts):
+    fake = FakeTransport(TransportResult(500, {}))
+    HaikuGate(fake).review(gate_request(settings=CallSettings("m", "e", 1.0, attempts)))
+    assert len(fake.calls) == attempts
+
+
+@pytest.mark.parametrize("command", ["abc", [], [1, 2], None])
+def test_gate_config_transport_command_must_be_a_string_list(command, tmp_path):
+    config = tmp_path / "g.json"
+    config.write_text(
+        json.dumps(
+            {
+                "model_id": "m",
+                "effort": "e",
+                "timeout_seconds": 1,
+                "max_attempts": 1,
+                "transport_command": command,
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert cli.main(["gate-replay", str(tmp_path), "--gate-config", str(config)]) == 2
