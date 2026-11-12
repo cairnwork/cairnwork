@@ -79,6 +79,22 @@ def mentions_ast(node: ast.AST, name: str, pattern: re.Pattern, defs: bool = Fal
     )
 
 
+def is_pytest_decorator(node: ast.expr) -> bool:
+    """Recognize pytest.mark.<anything>, optionally called."""
+    if isinstance(node, ast.Call):
+        node = node.func
+    attrs = []
+    while isinstance(node, ast.Attribute):
+        attrs.append(node.attr)
+        node = node.value
+    return (
+        isinstance(node, ast.Name)
+        and node.id == "pytest"
+        and len(attrs) >= 2
+        and attrs[-1] == "mark"
+    )
+
+
 def binds_in_scope(
     node: ast.AST, name: str, *, module: bool = False, annotations: bool = True
 ) -> bool:
