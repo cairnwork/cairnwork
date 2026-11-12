@@ -17,7 +17,7 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "assigned_secret",
         re.compile(
-            r"(?i)(?<![a-z0-9])(?:apikey|key|token|secret|passw(?:or)?d)[\"']?\s*[=:]\s*[\"']?[A-Za-z0-9+/=_-]{16,}"
+            r"(?:(?<![A-Za-z0-9])(?i:apikey|key|token|secret|passw(?:or)?d)|(?<=[a-z0-9])(?:Key|Token|Secret|Passw(?:or)?d))[\"']?\s*[=:]\s*[\"']?[A-Za-z0-9+/=_-]{16,}"
         ),
     ),
     # host paths: /Users/x, /home/x, /root/, C:\Users\x (any case)

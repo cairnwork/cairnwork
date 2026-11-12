@@ -122,6 +122,11 @@ def test_nonretryable_results_are_sent_once(status):
         "secret=" + "a" * 45,
         "AWS_SECRET_ACCESS_KEY=" + "a" * 20,
         "APIKEY=" + "a" * 20,
+        "accessToken=" + "a" * 20,
+        'clientSecret: "' + "a" * 20 + '"',
+        "secretAccessKey=" + "a" * 20,
+        "authToken=" + "a" * 20,
+        "privateKey=" + "a" * 20,
         "my-api-key=" + "a" * 20,
         "GITHUB_TOKEN=" + "a" * 20,
         "client_secret=" + "a" * 20,
@@ -349,3 +354,36 @@ def test_gate_config_transport_command_must_be_a_string_list(command, tmp_path):
 def test_ordinary_text_with_key_like_words_is_not_blocked(text):
     fake = FakeTransport(TransportResult(200, {"text": "plan"}))
     assert HaikuPlanner(fake).plan(plan_request(({"content": text},))).text == "plan"
+
+
+def test_gate_replay_end_to_end_blocks_configured_account_name(tmp_path, capsys):
+    import sys
+
+    candidates = tmp_path / "c"
+    for name, plan in (("blocked", "ask jdoe for the file"), ("fine", "edit the parser")):
+        task = candidates / name
+        task.mkdir(parents=True)
+        (task / "plan.txt").write_text(plan, encoding="utf-8")
+    script = (
+        "import json,sys;sys.stdin.read();"
+        "print(json.dumps({'status':200,'body':{'text':'ACCEPT'}}))"
+    )
+    config = tmp_path / "gate.json"
+    config.write_text(
+        json.dumps(
+            {
+                "model_id": "m",
+                "effort": "e",
+                "timeout_seconds": 5,
+                "max_attempts": 1,
+                "transport_command": [sys.executable, "-c", script],
+                "scan_names": ["jdoe"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert cli.main(["gate-replay", str(candidates), "--gate-config", str(config)]) == 0
+    results = {r["task_id"]: r for r in json.loads(capsys.readouterr().out)["results"]}
+    assert results["blocked"]["verdict"] is None
+    assert results["blocked"]["reason"] == schema.Reason.PAUSE_SECRET_BLOCKED.value
+    assert results["fine"]["verdict"] == "ACCEPT" and results["fine"]["reason"] is None
