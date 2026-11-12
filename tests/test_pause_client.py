@@ -121,6 +121,8 @@ def test_nonretryable_results_are_sent_once(status):
         "Bearer abcdefghijklmnopqrstuvwxyz012345",
         "secret=" + "a" * 45,
         "AWS_SECRET_ACCESS_KEY=" + "a" * 20,
+        "APIKEY=" + "a" * 20,
+        "my-api-key=" + "a" * 20,
         "GITHUB_TOKEN=" + "a" * 20,
         "client_secret=" + "a" * 20,
         'key: "' + "a" * 20 + '"',
@@ -332,3 +334,18 @@ def test_gate_config_transport_command_must_be_a_string_list(command, tmp_path):
         encoding="utf-8",
     )
     assert cli.main(["gate-replay", str(tmp_path), "--gate-config", str(config)]) == 2
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "monkey = this_is_a_normal_long_variable",
+        "monkey: this_is_a_normal_long_variable",
+        "turkey = another_very_long_identifier_name",
+        "token = next_token()",
+        "password: str",
+    ],
+)
+def test_ordinary_text_with_key_like_words_is_not_blocked(text):
+    fake = FakeTransport(TransportResult(200, {"text": "plan"}))
+    assert HaikuPlanner(fake).plan(plan_request(({"content": text},))).text == "plan"
