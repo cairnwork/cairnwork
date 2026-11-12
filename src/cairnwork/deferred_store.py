@@ -111,6 +111,8 @@ class DeferredStore:
             raise TestCommitRejected("TEST_COMMIT_NOT_IMPORTED", sha)
         with _Scratch(self.path, repo) as scratch:
             try:
+                # This is a Cairnwork-built bundle. A completed git failure here is
+                # a store failure, not evidence against the Issue.
                 run_git(
                     scratch,
                     "fetch",
@@ -142,14 +144,22 @@ class DeferredStore:
         self.check_dir()
         with _Scratch(self.path, repo) as scratch:
             try:
-                lines = run_git(scratch, "bundle", "list-heads", str(bundle)).split("\n")
+                try:
+                    lines = run_git(scratch, "bundle", "list-heads", str(bundle)).split("\n")
+                except GitCommandError as exc:
+                    _raise_git_failure(exc, supplied=True)
                 heads = [h.split() for h in lines if h.strip()]
                 if len(heads) != 1 or not OID.fullmatch(heads[0][0]):
                     raise TestCommitRejected("TEST_BUNDLE_SHAPE", "exactly one head is required")
                 sha, ref = heads[0][0], heads[0][1]
                 if not ref.startswith("refs/") and ref != "HEAD":
                     raise TestCommitRejected("TEST_BUNDLE_SHAPE", "unexpected head name")
-                run_git(scratch, "fetch", "--quiet", "--no-tags", str(bundle), f"{ref}:{HEAD_REF}")
+                try:
+                    run_git(
+                        scratch, "fetch", "--quiet", "--no-tags", str(bundle), f"{ref}:{HEAD_REF}"
+                    )
+                except GitCommandError as exc:
+                    _raise_git_failure(exc, supplied=True)
                 if run_git(scratch, "cat-file", "-t", sha).strip() != "commit":
                     raise TestCommitRejected("TEST_BUNDLE_SHAPE", "the head is not a commit")
                 parent = _only_parent(scratch)
@@ -173,7 +183,7 @@ class DeferredStore:
             except FileExistsError:
                 raise TestCommitRejected("TEST_BUNDLE_EXISTS", "already imported") from None
             except GitCommandError as exc:
-                _raise_git_failure(exc, supplied=True)
+                _raise_git_failure(exc)
         return sha
 
     @staticmethod
@@ -235,7 +245,7 @@ def _raise_git_failure(
     exc: GitCommandError, prefix: str = "", *, supplied: bool = False
 ) -> NoReturn:
     """A completed git refusal is an Issue error; failure to run git is Cairnwork's."""
-    if isinstance(exc.__cause__, subprocess.CalledProcessError):
+    if supplied and isinstance(exc.__cause__, subprocess.CalledProcessError):
         raise TestCommitRejected("TEST_COMMIT_UNREADABLE", f"{prefix}{exc}") from exc
     if supplied and isinstance(exc.__cause__, (subprocess.TimeoutExpired, UnicodeError)):
         raise TestCommitRejected("TEST_COMMIT_UNREADABLE", f"{prefix}{exc}") from exc
