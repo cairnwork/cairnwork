@@ -387,3 +387,44 @@ def test_gate_replay_end_to_end_blocks_configured_account_name(tmp_path, capsys)
     assert results["blocked"]["verdict"] is None
     assert results["blocked"]["reason"] == schema.Reason.PAUSE_SECRET_BLOCKED.value
     assert results["fine"]["verdict"] == "ACCEPT" and results["fine"]["reason"] is None
+
+
+_VALUE = "Zx9Qm4Rt7Ls2Vb8Nc3Wd"
+_NAMES = [
+    "api_key", "apiKey", "api-key", "API_KEY", "APIKEY", "apikey",
+    "access_token", "accessToken", "access-token", "ACCESS_TOKEN",
+    "client_secret", "clientSecret", "client-secret", "CLIENT_SECRET",
+    "secret_access_key", "secretAccessKey", "SECRET_ACCESS_KEY", "AWS_SECRET_ACCESS_KEY",
+    "auth_token", "authToken", "AUTH_TOKEN", "GITHUB_TOKEN",
+    "private_key", "privateKey", "PRIVATE_KEY",
+    "password", "Password", "passwd", "DB_PASSWORD", "dbPassword",
+    "token", "secret", "key", "Token", "Secret",
+]  # fmt: skip
+_FORMS = [
+    "{n}={v}", "{n} = {v}", "{n}: {v}", "{n}:{v}", '{n}: "{v}"', "{n}: '{v}'",
+    '"{n}": "{v}"', "'{n}': '{v}'", "{n} => {v}", '{n} => "{v}"', "export {n}={v}",
+    "--{n}={v}", "--{n} {v}",
+]  # fmt: skip
+
+
+@pytest.mark.parametrize("name", _NAMES)
+@pytest.mark.parametrize("form", _FORMS)
+def test_common_key_writing_family_is_blocked(name, form):
+    text = "run it with " + form.format(n=name, v=_VALUE) + " now"
+    fake = FakeTransport()
+    reply = HaikuPlanner(fake).plan(plan_request(({"content": text},)))
+    assert fake.calls == [] and reply.reason == schema.Reason.PAUSE_SECRET_BLOCKED, text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "monkey = " + _VALUE, "monkey: " + _VALUE, "turkey: " + _VALUE, "MONKEY=" + _VALUE,
+        "keyboard = " + _VALUE, "tokenizer: " + _VALUE, "secretary = " + _VALUE,
+        "passwordless: " + _VALUE, "token = next_token()", "password: str", "key = value",
+        "the key is in the lock", "set the token field and the secret field",
+    ],
+)  # fmt: skip
+def test_ordinary_text_family_is_not_blocked(text):
+    fake = FakeTransport(TransportResult(200, {"text": "plan"}))
+    assert HaikuPlanner(fake).plan(plan_request(({"content": text},))).text == "plan", text
