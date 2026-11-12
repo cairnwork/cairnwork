@@ -137,8 +137,8 @@ def _run_git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 def _include_applies(repo: Path, key: str, scratch: Path) -> bool:
     """Whether an includeIf condition holds, asked of git itself. Unsure counts as holding."""
-    if not key.startswith("includeif."):
-        return True
+    if not key.startswith("includeif.") or key.startswith("includeif.hasconfig:"):
+        return True  # hasconfig: depends on the real config; fail closed
     cond = key[len("includeif.") : -len(".path")].replace("\\", "\\\\").replace('"', '\\"')
     (scratch / "marker.cfg").write_text("[cairn]\n\tm = 1\n")
     (scratch / "cond.cfg").write_text(f'[includeIf "{cond}"]\n\tpath = {scratch / "marker.cfg"}\n')
@@ -181,7 +181,7 @@ def _silent_read_failure(repo: Path) -> str | None:
     xdg = os.environ.get("XDG_CONFIG_HOME", "")
     base = Path(xdg) if os.path.isabs(xdg) else Path(home) / ".config"
     for cfg in (Path(home) / ".gitconfig", base / "git" / "config"):
-        if os.path.lexists(cfg) and not os.access(cfg, os.R_OK):
+        if os.path.exists(cfg) and not os.access(cfg, os.R_OK):
             return f"global git config {cfg} is unreadable"
     try:
         problem = _include_problem(repo)
@@ -200,7 +200,7 @@ def _silent_read_failure(repo: Path) -> str | None:
         for _dir, _dirs, _files in os.walk(top, onerror=unreadable.append):
             pass
         if unreadable:
-            return f"{unreadable[0].filename} is unreadable"
+            return f"{unreadable[0].filename!r} is unreadable"
     return None
 
 
