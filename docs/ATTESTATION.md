@@ -309,8 +309,10 @@ commit:
   equal base -> head; each test path must be added or modified as a regular file. The test
   contents and the overlay are not verified.
 
-The **policy** is the receiver's own configuration (for verify-action: a protected path in the
-receiving repository), never shipped by the submitter or read from the receipt:
+The **policy** is the receiver's own configuration (for verify-action: inline JSON, for example
+from a repository variable, or an absolute path outside the verified checkout, never a file inside
+it, since the change being verified could edit that file), never shipped by the submitter or read
+from the receipt:
 
 ```json
 {"rule": "overlay-v1", "test_commit": "<40-hex>", "core_identity": {...}, "key_id": "<64-hex>"}
