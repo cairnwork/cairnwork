@@ -3,10 +3,11 @@ pinned with fakes only. docs/SECURITY.md "Recovery's sweep by working directory"
 the two residuals that have no test (PID reuse, path-based directory checks).
 
 No real process is read or signalled. The autouse fixture replaces ``os.kill`` first, with a
-recorder that never delegates and refuses any pid below 4,000,000, then every reader that would
-reach the kernel (``_system``, ``_argmax``, ``_sysctl``, ``_platform_binary``, ``_started``,
-``cwd_of``); ``_system`` raises, so a reader left unfaked fails the test instead of reading a real
-process. Rule for this module (10/29): no live probe or mutant of proc_cwd on a real host."""
+recorder that never delegates and refuses any pid below ``LOWEST_FAKE`` (4,000,000, or Linux
+``pid_max`` if higher), then every reader that would reach the kernel (``_system``, ``_argmax``,
+``_sysctl``, ``_platform_binary``, ``_started``, ``cwd_of``); ``_system`` raises, so a reader left
+unfaked fails the test instead of reading a real process.
+Rule for this module (10/29): no live probe or mutant of proc_cwd on a real host."""
 
 import os
 import signal
@@ -18,8 +19,19 @@ from test_proc_cwd import _procargs
 from cairnwork import proc_cwd
 
 ATTEMPT = "a0123456789abcdef"
-FAKE = 4_000_001  # the only pid in the fake table; above any macOS pid
-LOWEST_FAKE = 4_000_000
+
+
+def _lowest_fake() -> int:
+    """4,000,000, or Linux ``pid_max`` if higher, so no real pid counts as fake (#856)."""
+    try:
+        with open("/proc/sys/kernel/pid_max") as handle:
+            return max(4_000_000, int(handle.read().strip()))
+    except (OSError, ValueError):
+        return 4_000_000
+
+
+LOWEST_FAKE = _lowest_fake()
+FAKE = LOWEST_FAKE + 1  # the only pid in the fake table; above any real pid
 
 
 @dataclass
