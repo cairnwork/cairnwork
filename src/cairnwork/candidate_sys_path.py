@@ -141,21 +141,21 @@ def refuse_new_sys_path_mutation(
                 if signal == _MACHINERY:  # an in-process swap needs no file (#303 SWAP, finders)
                     raise CandidateRejected(
                         "CANDIDATE_SYS_PATH_MUTATION",
-                        f"{path}: edits the import machinery in-process (sys.modules, finders, "
+                        f"{path!r}: edits the import machinery in-process (sys.modules, finders, "
                         "importlib, __import__, runpy or pytest_plugins)",
                     )
                 if signal == _RUNTIME:
                     raise CandidateRejected(
                         "CANDIDATE_SYS_PATH_MUTATION",
-                        f"{path}: writes a file and edits the import path in the same change "
+                        f"{path!r}: writes a file and edits the import path in the same change "
                         "(a shadow module can be created at run time)",
                     )
                 shadow = find_shadow_file(repo, candidate, test_commit, changed)
                 if shadow:
                     raise CandidateRejected(
                         "CANDIDATE_SYS_PATH_MUTATION",
-                        f"{path}: has a source-visible sys.path/import-machinery signal; "
-                        f"{shadow} can shadow an imported module",
+                        f"{path!r}: has a source-visible sys.path/import-machinery signal; "
+                        f"{shadow!r} can shadow an imported module",
                     )
     except CandidateRejected:
         raise
@@ -167,7 +167,7 @@ def refuse_new_sys_path_mutation(
         subprocess.SubprocessError,
     ) as exc:
         # A failed scan cannot establish verifier integrity, so it must not lead to VERIFIED.
-        detail = f"cannot scan candidate import paths: {exc}"
+        detail = f"cannot scan candidate import paths: {exc!r}"
         raise CandidateRejected("UNREADABLE_CHANGE", detail) from exc
 
 
