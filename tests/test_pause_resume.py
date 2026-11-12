@@ -153,6 +153,20 @@ def test_reject_never_resumes_and_checkout_untouched(tmp_path, monkeypatch):
     assert rig.bared == [1]
 
 
+def test_ac4_zero_writes_means_the_resume_path_only_bare_run_runs_once_after_reject(
+    tmp_path, monkeypatch
+):
+    """Wording (layer1 ruling 2026-11-13): AC4's "zero writes after a REJECT" covers PAUSE's resume
+    path. The bare run that AC3 falls back to writes the checkout by design; it runs exactly once."""
+    rig = Rig(tmp_path, monkeypatch, replies=[NO])
+    before = dict(rig.checkout.files)
+    res = rig.go()
+    assert res.reason == Reason.PAUSE_GATE_REJECT_LIMIT
+    assert rig.resumed == []  # resume path: 0 calls, so 0 writes through it
+    assert rig.checkout.files == before  # and PAUSE itself wrote nothing to the checkout
+    assert rig.bared == [1]  # AC3: the bare run, exactly once
+
+
 def test_reject_limit_replans_then_accepts_or_stops(tmp_path, monkeypatch):
     rig = Rig(tmp_path, monkeypatch, replies=[NO, OK])
     assert rig.go(reject_limit=2).intervened and len(rig.planner.requests) == 2

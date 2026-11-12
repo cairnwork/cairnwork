@@ -1,4 +1,8 @@
-"""Cut selection, plan review and resume orchestration for #476 PAUSE step 3."""
+"""Cut selection, plan review and resume orchestration for #476 PAUSE step 3.
+
+Wording (layer1 ruling 2026-11-13): AC4's "zero writes after a REJECT" means PAUSE's resume path:
+``resume_runner`` is never called and PAUSE writes nothing to the checkout. The bare run that AC3
+falls back to after a REJECT or any other fallback writes the checkout by design and runs once."""
 
 from __future__ import annotations
 
