@@ -68,6 +68,15 @@ def _configured_gate(path: str) -> tuple[Gate, CallSettings]:
     return HaikuGate(CommandTransport(command), Scanner(tuple(names))), settings
 
 
+def default_run_factory(
+    args: list[str], planner: Planner, gate: Gate, ps: CallSettings, gs: CallSettings
+) -> int:
+    """No default real-flow wiring yet: ``resume`` needs a fresh run root and a guard window that
+    starts before the bare run changes the checkout, which is a design decision for the owner
+    (#476 step 3 follow-up). Until then callers inject ``run_factory`` (as the tests do)."""
+    raise ValueError("no default run factory: inject run_factory (real-flow wiring not designed)")
+
+
 def main(
     argv: list[str] | None = None,
     worker_main: Callable[[list[str]], int] | None = None,
@@ -109,10 +118,10 @@ def main(
                 remainder = args[:index] + args[index + 2 :]
             if not config_path or config_path.startswith("--"):
                 raise ValueError("--planner-config requires FILE")
-            if run_factory is None:
-                raise ValueError("--planner-config has no configured checkout/event controller")
             planner, gate, planner_settings, gate_settings = _configured_clients(config_path)
-            return run_factory(remainder, planner, gate, planner_settings, gate_settings)
+            return (run_factory or default_run_factory)(
+                remainder, planner, gate, planner_settings, gate_settings
+            )
         except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
             print(f"pause: --planner-config configuration or run error: {exc}", file=sys.stderr)
             return 2
