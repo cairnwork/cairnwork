@@ -51,21 +51,93 @@ def _plain(cls: ast.ClassDef, tree: ast.Module) -> bool:
     )
 
 
-def inherited_def(tree: ast.Module, cls: ast.ClassDef, name: str, seen: frozenset = frozenset()):
-    """Whether ``cls`` (which does not bind ``name`` itself) gets ``def name`` through a chain of
-    single same-file bases, each the only binding of its name. Anything else (several bases, an
-    imported or rebound base, a metaclass, a hook) is False: the id stays dropped, never removed."""
-    if not _plain(cls, tree) or len(cls.bases) != 1 or not isinstance(cls.bases[0], ast.Name):
-        return False
-    base = cls.bases[0].id
-    classes = [n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == base]
-    bound = [n for n in tree.body if binds_in_scope(n, base, module=True)]
-    if base in seen or len(classes) != 1 or bound != classes or not _plain(classes[0], tree):
-        return False
+def _same_bases(test: ast.Module, cls: ast.ClassDef) -> bool:
+    found = [n for n in test.body if isinstance(n, ast.ClassDef) and n.name == cls.name]
+    return len(found) == 1 and [ast.dump(b) for b in found[0].bases] == [
+        ast.dump(b) for b in cls.bases
+    ]
+
+
+def _drops(test: ast.Module, parent: ast.ClassDef, name: str) -> bool:
+    """The test commit's copy of ``parent`` no longer binds ``name`` at all."""
+    found = [n for n in test.body if isinstance(n, ast.ClassDef) and n.name == parent.name]
     try:
-        last = last_binding(classes[0].body, name)
+        return len(found) == 1 and last_binding(found[0].body, name) is None
     except ValueError:
         return False
-    if last is None:
-        return inherited_def(tree, classes[0], name, seen | {base})
-    return isinstance(last, (ast.FunctionDef, ast.AsyncFunctionDef)) and last.name == name
+
+
+def inherited_def(tree: ast.Module, cls: ast.ClassDef, name: str, test: ast.Module | None):
+    """Whether ``cls`` (module level, no binding of ``name`` itself) got ``def name`` through a
+    chain of single same-file bases, each the only binding of its name, AND the test commit kept
+    every base list of the chain and removed the name from the parent that defined it. Anything
+    else (several bases, an imported or rebound base, a metaclass, a hook, a nested class, an
+    un-inherited or re-based subclass) is False: the id stays dropped, never removed (#1128)."""
+    if test is None or cls not in tree.body:
+        return False
+    chain = [cls]
+    while True:
+        cur = chain[-1]
+        if not _plain(cur, tree) or len(cur.bases) != 1 or not isinstance(cur.bases[0], ast.Name):
+            return False
+        base = cur.bases[0].id
+        classes = [n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == base]
+        bound = [n for n in tree.body if binds_in_scope(n, base, module=True)]
+        if base in {c.name for c in chain} or len(classes) != 1 or bound != classes:
+            return False
+        if not _plain(classes[0], tree):
+            return False
+        try:
+            last = last_binding(classes[0].body, name)
+        except ValueError:
+            return False
+        chain.append(classes[0])
+        if last is not None:
+            break
+    if not (isinstance(last, (ast.FunctionDef, ast.AsyncFunctionDef)) and last.name == name):
+        return False
+    return all(_same_bases(test, c) for c in chain[:-1]) and _drops(test, chain[-1], name)
+
+
+def _chain_def(tree: ast.Module, owners: list[str], name: str):
+    body, module = tree.body, True
+    for owner in owners:
+        try:
+            last = last_binding(body, owner, module=module)
+        except ValueError:
+            return None
+        if not isinstance(last, ast.ClassDef):
+            return None
+        body, module = last.body, False
+    try:
+        last = last_binding(body, name, module=module)
+    except ValueError:
+        return None
+    return last if isinstance(last, (ast.FunctionDef, ast.AsyncFunctionDef)) else None
+
+
+def _parametrize(fn) -> list[ast.expr]:
+    return [
+        d
+        for d in fn.decorator_list
+        if any(isinstance(n, ast.Attribute) and n.attr == "parametrize" for n in ast.walk(d))
+    ]
+
+
+def case_removed(base, test, owners, name, case: str, text: str) -> bool:
+    """#842 item 2 (#1128): one parametrized case is gone and the function stays. Only when both
+    sides define the function with ``parametrize``, the test commit changed those decorators, and
+    no literal of the new decorators still spells a part of the case id (so a slice, a filter or
+    an unchanged decorator is not a deletion); a collection hook in the file can deselect
+    cases without touching the source, so it refuses."""
+    if "pytest_generate_tests" in text or "pytest_collection_modifyitems" in text:
+        return False
+    old, new = _chain_def(base, owners, name), _chain_def(test, owners, name)
+    if old is None or new is None or not _parametrize(new):
+        return False
+    if [ast.dump(d) for d in _parametrize(old)] == [ast.dump(d) for d in _parametrize(new)]:
+        return False
+    kept = {
+        str(n.value) for d in _parametrize(new) for n in ast.walk(d) if isinstance(n, ast.Constant)
+    }
+    return not kept & set(case.split("-"))

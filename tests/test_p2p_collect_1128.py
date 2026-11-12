@@ -132,3 +132,100 @@ def test_a_real_rebinding_next_to_an_annotation_is_still_dropped(case):
         set(),
         {"t.py::test_x"},
     )
+
+
+PD = "import pytest\n"
+PX = "@pytest.mark.parametrize('n', {})\ndef test_p(n):\n    assert n\n"
+# round-1 review of #1214 (must block): the case vanished but the source does not show a deletion
+CASE_KEPT = {
+    "identical-source": (PD + PX.format("[1, 2]"), PD + PX.format("[1, 2]")),
+    "identical-plus-generate-tests-hook": (
+        PD + PX.format("[1, 2]"),
+        PD + PX.format("[1, 2]") + "def pytest_generate_tests(metafunc):\n    pass\n",
+    ),
+    "value-still-in-source-sliced": (PD + PX.format("[1, 2]"), PD + PX.format("[1, 2][:1]")),
+    "value-still-in-source-filtered": (
+        PD + PX.format("[1, 2]"),
+        PD + PX.format("[n for n in (1, 2) if n < 2]"),
+    ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(CASE_KEPT))
+def test_a_vanished_case_without_a_deletion_in_the_source_is_dropped(case):
+    base, test = CASE_KEPT[case]
+    assert _split(base, test, _ids("test_p[1]", "test_p[2]"), _ids("test_p[1]")) == (
+        set(),
+        {"t.py::test_p[2]"},
+    )
+
+
+@pytest.mark.parametrize("kept", ["[1]", "[pytest.param(1)]"])
+def test_a_deleted_case_is_removed(kept):
+    removed, dropped = _split(
+        PD + PX.format("[1, 2]"),
+        PD + PX.format(kept),
+        _ids("test_p[1]", "test_p[2]"),
+        _ids("test_p[1]"),
+    )
+    assert removed == {"t.py::test_p[2]"} and not dropped
+
+
+def test_a_path_with_a_bracket_never_crashes_and_stays_refused():
+    # review of #1214: "[" in the path made one_case true and the id split raise ValueError
+    base = "def test_y():\n    assert True\ndef test_z():\n    assert True\n"
+    test = "def test_z():\n    assert True\n"
+    ids = ["tests/a[b]/t.py::test_y", "tests/a[b]/t.py::test_z"]
+    side = classify(set(ids), {ids[1]}, {"tests/a[b]/t.py"}, lambda p: test, lambda p: base)
+    assert side.removed | side.dropped == {ids[0]}
+
+
+TB = "class TestA:\n" + X + KEEP
+GONE = "class TestA:\n" + KEEP
+INHERIT_CHANGED = {
+    "un-inherited": (TB + "class TestB(TestA):\n    pass\n", TB + "class TestB:\n    pass\n"),
+    "base-swapped-to-same-file-class": (
+        "class C:\n    pass\n" + TB + "class TestB(TestA):\n    pass\n",
+        "class C:\n    pass\n" + TB + "class TestB(C):\n    pass\n",
+    ),
+    "base-swapped-to-imported-class": (
+        TB + "class TestB(TestA):\n    pass\n",
+        "from o import C\n" + TB + "class TestB(C):\n    pass\n",
+    ),
+    "nested-owner": (
+        TB + "class TestOuter:\n    class TestA:\n" + X + "    class TestB(TestA):\n        pass\n",
+        TB + "class TestOuter:\n    class TestA:\n" + X + "    class TestB:\n        pass\n",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(INHERIT_CHANGED))
+def test_a_subclass_that_stopped_inheriting_is_dropped(case):
+    base, test = INHERIT_CHANGED[case]
+    ids = ["TestB::test_x"] if case != "nested-owner" else ["TestOuter::TestB::test_x"]
+    removed, dropped = _split(base, test, _ids(*ids), [])
+    assert not removed and dropped == set(_ids(*ids))
+
+
+# base-side guards alone (the test side drops the rebinding / decorator, so only the base guard
+# stands between these and "removed")
+BASE_GUARD = {
+    "parent-rebound-in-base": (
+        "class TestA:\n" + X + KEEP + "class TestB(TestA):\n    pass\nTestA = object\n",
+        GONE + "class TestB(TestA):\n    pass\n",
+    ),
+    "parent-decorated-in-base": (
+        "def dec(c):\n    return c\n@dec\nclass TestA:\n"
+        + X
+        + KEEP
+        + "class TestB(TestA):\n    pass\n",
+        "def dec(c):\n    return c\n" + GONE + "class TestB(TestA):\n    pass\n",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(BASE_GUARD))
+def test_the_base_side_guards_of_the_inherited_chain_hold_alone(case):
+    base, test = BASE_GUARD[case]
+    removed, dropped = _split(base, test, _ids("TestB::test_x"), [])
+    assert not removed and dropped == {"t.py::TestB::test_x"}

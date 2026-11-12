@@ -46,6 +46,7 @@ from cairnwork.p2p_bindings import (
     walk_without_nested_classes,
 )
 from cairnwork.p2p_inherit import (
+    case_removed,
     class_binds_hook,
     inherited_def,
     mentions_dunder_test,
@@ -125,7 +126,8 @@ def classify(base_ids, test_ids, edited, source, base_source) -> CollectedSide:
     for nodeid in base_ids - test_ids:
         path = _file(nodeid)
         gone = False
-        one_case = "[" in nodeid and _function(nodeid) in collected_funcs  # #842 item 2
+        case = nodeid.partition("::")[2].partition("[")[2].removesuffix("]")  # #842 item 2
+        one_case = bool(case) and "[" not in path and _function(nodeid) in collected_funcs
         if path in edited and (one_case or _function(nodeid) not in collected_funcs):
             if path not in texts:
                 texts[path] = source(path)
@@ -133,9 +135,13 @@ def classify(base_ids, test_ids, edited, source, base_source) -> CollectedSide:
                 test_trees[path] = _tree(texts[path])
             *owners, name = _function(nodeid).split("::")[1:]
             gone = (
-                _defines(bases[path], owners, name)
+                _defines(bases[path], owners, name, test_trees[path])
                 and test_trees[path] is not None
-                and (one_case or not _scope_mentions(test_trees[path], owners, name, texts[path]))
+                and (
+                    case_removed(bases[path], test_trees[path], owners, name, case, texts[path])
+                    if one_case
+                    else not _scope_mentions(test_trees[path], owners, name, texts[path])
+                )
                 and not _hidden(test_trees[path], bases[path], name, path, test_ids, base_ids)
             )
         (removed if gone else dropped).add(nodeid)
@@ -310,7 +316,7 @@ def _mentions(
     return False
 
 
-def _defines(tree: ast.Module | None, owners: list[str], name: str) -> bool:
+def _defines(tree: ast.Module | None, owners: list[str], name: str, test=None) -> bool:
     """Whether the base file itself has ``def name`` in the class chain ``owners``."""
     if tree is None or rebinds_by_string(tree, name):  # #1127: may collect other code
         return False
@@ -333,7 +339,7 @@ def _defines(tree: ast.Module | None, owners: list[str], name: str) -> bool:
         except RecursionError:
             return False
     if last is None and cls is not None:  # #1128 item 1: inherited from one same-file base chain
-        return inherited_def(tree, cls, name)
+        return inherited_def(tree, cls, name, test)
     # #1122: a walrus in another def's header (annotation, default, decorator) is the last binding
     return isinstance(last, (ast.FunctionDef, ast.AsyncFunctionDef)) and last.name == name
 
