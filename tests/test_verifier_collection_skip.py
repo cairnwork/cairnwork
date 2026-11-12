@@ -322,7 +322,7 @@ def test_a_collected_skip_and_pass_do_not_mark_the_verifier_passed(repo, tmp_pat
     assert run.observation.passed is False
     assert run.returncode == 0
     assert "1 skipped" in run.why
-    assert "tests/test_mix.py::test_skipped" in run.why
+    assert "tests/test_mix.py??test_skipped" in run.why  # _names writes :: as ??
 
 
 # ---- the pass-to-pass verifier (run_task, real sandbox) -----------------------------------
