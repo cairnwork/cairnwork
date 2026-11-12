@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from cairnwork import confined, reasons, survivor_argv
+from cairnwork import confined, process_table_limit, reasons, survivor_argv
 from cairnwork.deferred_tests import base_comparison
 
 LEAK = (
@@ -36,9 +36,41 @@ def test_survivors_stays_an_int_and_keeps_argv_through_a_sum():
 
 
 def test_only_the_count_decides_the_reason_stays_the_same_without_argv():
-    assert reasons.why_not_passed(**_run(survivors=2)).endswith("was unreadable")
+    assert reasons.why_not_passed(**_run(survivors=2)).startswith("2 process(es) outlived the run")
     named = reasons.why_not_passed(**_run(survivors=survivor_argv.Survivors(1, ("sh -x",))))
-    assert named.endswith("was unreadable (argv: sh -x)")
+    assert named.endswith("outlived the run (argv: sh -x)")
+
+
+def test_unreadable_process_table_is_environment_limitation_not_survivor():
+    why = reasons.why_not_passed(**_run(survivors=confined.SWEEP_UNAVAILABLE))
+    assert why.startswith("ENVIRONMENT_LIMITATION:")
+    assert "outlived" not in why and "pytest exit code" not in why
+
+
+def test_listed_survivor_remains_a_failure_with_distinct_reason():
+    unreadable = reasons.why_not_passed(**_run(survivors=confined.SWEEP_UNAVAILABLE))
+    survivor = reasons.why_not_passed(**_run(survivors=1))
+    assert survivor.startswith("1 process(es) outlived the run")
+    assert survivor != unreadable
+
+
+def test_unavailable_sentinel_does_not_hide_a_known_survivor_when_summed():
+    unknown = survivor_argv.Survivors(confined.SWEEP_UNAVAILABLE)
+    assert unknown + 0 == confined.SWEEP_UNAVAILABLE
+    assert unknown + 1 == 1
+
+
+def test_tagged_seatbelt_process_table_denial_is_environmental_only_with_residue():
+    class Run:
+        survivors = 2
+        returncode = 1
+        deny_denials = frozenset({("file-read-data", "/bin")})
+
+    assert process_table_limit.table_unavailable(Run())
+    Run.returncode = 0
+    assert not process_table_limit.table_unavailable(Run())
+    Run.returncode, Run.survivors = 1, 0
+    assert not process_table_limit.table_unavailable(Run())
 
 
 def _run(**over: Any) -> dict[str, Any]:

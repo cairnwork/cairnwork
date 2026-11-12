@@ -88,10 +88,11 @@ def test_one_clean_look_is_not_enough(monkeypatch):
 
 def test_an_unreadable_table_counts_without_a_second_read(monkeypatch):
     """#114: a table that could not be read stays unknown; no second read waits for a cleaner
-    answer (an escaped process could use that time)."""
+    answer (an escaped process could use that time). #1196: it is reported as SWEEP_UNAVAILABLE (an
+    environment limit, never a pass), not as one invented survivor."""
     _table(monkeypatch, [])
     calls = _looks(monkeypatch, None, [])
-    assert confined._sweep_survivors(TOKEN, -1) == 1 and len(calls) == 1
+    assert confined._sweep_survivors(TOKEN, -1) == confined.SWEEP_UNAVAILABLE and len(calls) == 1
 
 
 def test_a_process_whose_environment_stays_hidden_counts(monkeypatch):

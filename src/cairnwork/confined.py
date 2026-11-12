@@ -100,7 +100,10 @@ def _sweep_survivors(
         argv.update(one.argv)
         return one
 
-    count = len(found) if confirm_gone(look(), look).gone else max(1, len(found))
+    final = confirm_gone(look(), look)
+    if not final.listed and not found:
+        return survivor_argv.Survivors(SWEEP_UNAVAILABLE)
+    count = len(found) if final.gone else max(1, len(found))
     return survivor_argv.Survivors(count, tuple(argv[pid] for pid in sorted(argv)))
 
 

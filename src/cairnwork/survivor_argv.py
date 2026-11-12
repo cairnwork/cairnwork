@@ -49,7 +49,8 @@ class Survivors(int):
         return self
 
     def __add__(self, other: int) -> Survivors:
-        return Survivors(int(self) + other, self.argv, self.reasons)
+        count = other if self < 0 and other > 0 else int(self) + other
+        return Survivors(count, self.argv, self.reasons)
 
 
 def _allowed(words: list[str]) -> list[str]:

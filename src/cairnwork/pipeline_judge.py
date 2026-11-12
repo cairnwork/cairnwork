@@ -1,11 +1,9 @@
 """The candidate-judging phase of one attempt, split out of pipeline.py for the 400-line cap.
 
 ``tests_with_teeth`` checks a task's deferred tests really fail on the base; ``judge_candidate``
-runs the verifiers over the candidate and has Core notarise it. Both take everything they need as
-arguments (no module-level state) and are called by ``pipeline._attempt``; ``judge_candidate`` is
-also shared with ``verify_candidate``. They never call back into ``pipeline``, so there is no cycle.
-``judge_candidate`` also runs a task's blackbox checks (#303, blackbox.py) when it declares any,
-first (#311).
+runs the verifiers over the candidate and has Core notarise it (blackbox checks first when a task
+declares any, #303/#311). Both take everything as arguments, are called by ``pipeline._attempt``
+(``judge_candidate`` also by ``verify_candidate``) and never call back into ``pipeline``.
 """
 
 from __future__ import annotations
@@ -44,6 +42,7 @@ from cairnwork.deferred_tests import (
 from cairnwork.node_ids import show, unmatched_note
 from cairnwork.p2p import P2PPlan, run_plan
 from cairnwork.p2p_nodes import clean
+from cairnwork.process_table_limit import refuse_unreadable
 from cairnwork.pytest_config import PytestConfigError, gate_import_paths, test_file_rule
 from cairnwork.reasons import explain, verdict_reason
 from cairnwork.skip_evidence import raise_for_env_skips
@@ -311,8 +310,9 @@ def judge_candidate(
 
 
 def _candidate_runs(task, ctx, judged, specs, result):
-    first = run_verifiers if task.blackbox is None else partial(after_candidate_ran, run_verifiers)
-    return busy_once_more(first, ctx, judged, specs, f"{result.attempt_id}-v")
+    first = partial(run_verifiers, deny=True)
+    first = first if task.blackbox is None else partial(after_candidate_ran, first)
+    return refuse_unreadable(busy_once_more(first, ctx, judged, specs, f"{result.attempt_id}-v"))
 
 
 def _refuse_candidate_sys_path(task, result) -> None:

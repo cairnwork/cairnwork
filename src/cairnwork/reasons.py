@@ -96,9 +96,13 @@ def why_not_passed(
         )
     if data_refused:  # #850 data_exec_hook.py: refused even when the test caught the refusal
         causes.append(f"DATA_EXEC_REFUSED: declared test data executed ({_names(data_refused)})")
-    if survivors:
+    if survivors < 0:
         causes.append(
-            f"{survivors} process(es) outlived the run, or the process list was unreadable"
+            "ENVIRONMENT_LIMITATION: process table unreadable; verifier result is inconclusive"
+        )
+    elif survivors:
+        causes.append(
+            f"{survivors} process(es) outlived the run"
             + survivor_argv.listing(survivors)  # #814: allow-listed argv prefixes, text only
         )
     if log_too_big:
