@@ -129,6 +129,7 @@ def _import_part(stmt: ast.stmt, reached: bool = False) -> list[ast.AST]:
         args = stmt.args
         heads: list[ast.AST] = [*stmt.decorator_list, *args.defaults]
         heads += [d for d in args.kw_defaults if d]
+        heads += _annotations(stmt)
         return [stmt] if reached else heads
     if isinstance(stmt, ast.ClassDef):
         body = [m for m in stmt.body if not isinstance(m, _DEFS)]
@@ -147,7 +148,19 @@ def _import_part(stmt: ast.stmt, reached: bool = False) -> list[ast.AST]:
 
 def _method_head(method: ast.FunctionDef | ast.AsyncFunctionDef) -> list[ast.AST]:
     args = method.args
-    return [*method.decorator_list, *args.defaults, *(d for d in args.kw_defaults if d)]
+    return [
+        *method.decorator_list,
+        *args.defaults,
+        *(d for d in args.kw_defaults if d),
+        *_annotations(method),
+    ]
+
+
+def _annotations(method: ast.FunctionDef | ast.AsyncFunctionDef) -> list[ast.AST]:
+    args = method.args
+    values = [a.annotation for a in (*args.posonlyargs, *args.args, *args.kwonlyargs)]
+    values += [a.annotation for a in (args.vararg, args.kwarg) if a]
+    return [*filter(None, values), *([method.returns] if method.returns else [])]
 
 
 def _stores(node: ast.AST) -> list[tuple[str | None, ast.expr]]:
@@ -180,31 +193,53 @@ def _name_stores(node: ast.AST, plain: frozenset[str]) -> list[tuple[str, ast.ex
     collects functions and classes, and data under a ``test*`` name (``test_data = load(...)``,
     a list, a path) is common; what an imported call returns is not followed, as any other
     imported code."""
-    if isinstance(node, ast.Lambda):
-        return []
-    # #1024: a reached function binds at module level only the names it declares ``global``
-    shared = {n for x in ast.walk(node) if isinstance(x, ast.Global) for n in x.names}
-    in_def = isinstance(node, _DEFS)
-    if in_def and not shared:
-        return []
     found: list[tuple[str, ast.expr]] = []
-    pending = [node]
+    _visit_name_stores(node, plain, found, "module", frozenset())
+    return found
+
+
+def _visit_name_stores(
+    node: ast.AST, plain: frozenset[str], found: list, scope: str, shared: frozenset[str]
+) -> None:
+    if isinstance(node, (*_DEFS, ast.Lambda, ast.comprehension)):
+        if isinstance(node, ast.Lambda):
+            return
+        if isinstance(node, _DEFS):
+            if scope == "function" and node.name in shared and _test_name(node.name):
+                found.append((node.name, ast.Name(id=node.name, ctx=ast.Load())))
+            names = _function_globals(node)
+            for child in node.body:
+                _visit_name_stores(child, plain, found, "function", names)
+        return
+    if isinstance(node, ast.ClassDef):
+        if scope == "function" and node.name in shared and _test_name(node.name):
+            found.append((node.name, ast.Name(id=node.name, ctx=ast.Load())))
+        for child in node.body:
+            _visit_name_stores(child, plain, found, "class", frozenset())
+        return
+    for targets, value in _bindings(node):
+        if value is None or not _callable(value, plain):
+            continue
+        for target in (t for x in targets for t in ast.walk(x)):
+            if not isinstance(target, ast.Name) or not isinstance(target.ctx, ast.Store):
+                continue
+            if _test_name(target.id) and (scope != "function" or target.id in shared):
+                found.append((target.id, value))
+    for child in ast.iter_child_nodes(node):
+        _visit_name_stores(child, plain, found, scope, shared)
+
+
+def _function_globals(node: ast.FunctionDef | ast.AsyncFunctionDef) -> frozenset[str]:
+    names = set()
+    pending: list[ast.AST] = list(node.body)
     while pending:
         item = pending.pop()
-        if item is not node and isinstance(item, (*_DEFS, ast.Lambda, ast.comprehension)):
+        if isinstance(item, (*_DEFS, ast.ClassDef, ast.Lambda)):
             continue
-        if isinstance(item, ast.ClassDef):
-            pending.extend(item.body)
-            continue
-        for targets, value in _bindings(item):
-            if value is None or not _callable(value, plain):
-                continue
-            for target in (t for x in targets for t in ast.walk(x)):
-                if isinstance(target, ast.Name) and isinstance(target.ctx, ast.Store):
-                    if _test_name(target.id) and (not in_def or target.id in shared):
-                        found.append((target.id, value))
+        if isinstance(item, ast.Global):
+            names.update(item.names)
         pending.extend(ast.iter_child_nodes(item))
-    return found
+    return frozenset(names)
 
 
 def _callable(value: ast.expr, plain: frozenset[str]) -> bool:
