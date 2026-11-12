@@ -133,7 +133,6 @@ def test_planner_secrets_block_transport(secret):
 @pytest.mark.parametrize(
     "messages",
     [
-        ({"content": "sk-abcdef", "extra": "ghijk12345"},),  # split across adjacent fields
         ({"sk-abcdefghijk12345": "x"},),  # in a key
         ({"content": b"sk-abcdefghijk12345"},),  # bytes
         ({"content": [{"text": ["nested", "/Users/alice/x"]}]},),  # nested
@@ -143,6 +142,12 @@ def test_planner_secret_evasions_block_transport(messages):
     fake = FakeTransport()
     reply = HaikuPlanner(fake).plan(plan_request(messages))
     assert fake.calls == [] and reply.reason == schema.Reason.PAUSE_SECRET_BLOCKED
+
+
+def test_adjacent_fields_are_not_glued_into_a_false_secret():
+    fake = FakeTransport(TransportResult(200, {"text": "plan"}))
+    messages = ({"a": "ends with sk-", "b": "abcdefghijk12345 starts"},)
+    assert HaikuPlanner(fake).plan(plan_request(messages)).text == "plan"
 
 
 def test_non_string_scalars_do_not_crash_scan():

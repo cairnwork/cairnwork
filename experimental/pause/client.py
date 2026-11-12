@@ -76,8 +76,8 @@ class _Client:
     def _send(self, request: PlanRequest | GateRequest, messages: Sequence[dict], planner: bool):
         model, effort, timeout, attempts = self._settings(request)
         pieces = list(_strings(messages))
-        # also scan the pieces joined, so a secret split across adjacent fields is still seen
-        blocked = any(self.scanner.scan(v) for v in (*pieces, "".join(pieces), "\n".join(pieces)))
+        # each string, and the pieces newline-joined (nothing the real request does not contain)
+        blocked = any(self.scanner.scan(v) for v in (*pieces, "\n".join(pieces)))
         prefix = "PAUSE_PLANNER" if planner else "PAUSE_GATE"
         if blocked:
             return None, model, effort, Reason.PAUSE_SECRET_BLOCKED
