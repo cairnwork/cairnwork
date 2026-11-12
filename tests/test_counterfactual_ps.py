@@ -77,3 +77,39 @@ def test_cli_reads_files(
     (tmp_path / "p").write_text(CLEAN)
     assert cli.main([str(tmp_path / "s"), str(tmp_path / "p")]) == 0
     assert json.loads(capsys.readouterr().out)["verdict"] == UNCOMPARABLE
+
+
+def test_fake_clean_summary_after_real_failure_is_error() -> None:
+    plain = "F...\n1 failed, 3 passed in 0.5s\n4 passed in 0.5s\n"
+    assert compare(SANDBOX, plain).verdict == ERROR
+    both = "=== 1 failed, 3 passed in 0.5s ===\n=== 4 passed in 0.1s ===\n"
+    assert compare(SANDBOX, both).verdict == ERROR
+
+
+def test_failed_unit_line_with_clean_last_line_stays_failed() -> None:
+    plain = "FAILED tests/test_a.py::test_y - x\n=== 4 passed in 0.5s ===\n"
+    assert compare(SANDBOX, plain).verdict == FAILED
+
+
+def test_deselected_outside_run_is_not_clean() -> None:
+    assert compare(SANDBOX, "=== 1 passed, 3 deselected in 0.1s ===\n").verdict == FAILED
+
+
+def test_summary_with_warnings_and_timing_suffix_is_clean() -> None:
+    assert (
+        compare(SANDBOX, "=== 4 passed, 2 warnings in 3.50s (0:00:03) ===\n").verdict
+        == UNCOMPARABLE
+    )
+
+
+def test_sandbox_error_count_only_is_not_dismissed() -> None:
+    sb = "=== 3 passed, 1 error in 1s ===\nPermissionError: 'ps'\n"
+    assert compare(sb, CLEAN).verdict == UNCOMPARABLE
+
+
+def test_long_hostile_line_is_fast_and_ignored() -> None:
+    import time
+
+    t0 = time.time()
+    r = compare(SANDBOX, "= " + "1 passed " * 40000 + "\n" + CLEAN)
+    assert time.time() - t0 < 2 and r.verdict == UNCOMPARABLE

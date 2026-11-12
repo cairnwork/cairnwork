@@ -6,6 +6,8 @@ compares the scored (in-sandbox) failures with an outside-the-sandbox re-run of 
 - FAILED -> UNCOMPARABLE only when the outside run is fully clean (passed, no failed/error/skipped) and the sandbox log
   carries a `ps` denial. Anything else stays FAILED. It never yields VERIFIED, changes no score, no denominator, no gate.
 - The result is a diagnostic only, never formal acceptance.
+- The outside run must use the same test selection as the sandbox run; `deselected` counts as not clean.
+- Exactly one pytest summary line is accepted; none or several (planted or concatenated) -> ERROR.
 - Missing pytest summary or a tripped guard in the outside run -> ERROR (never a pass).
 - Pure functions + an offline CLI that reads two existing files. Off unless `CAIRNWORK_EXPERIMENTAL_COUNTERFACTUAL_PS=1`.
 - Not imported by `src/cairnwork` (import-linter). Delete the directory to revert.
