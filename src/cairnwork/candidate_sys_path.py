@@ -19,6 +19,16 @@ write or path edit paired with an existing opposite signal in one file, and a ch
 that uses a sys alias on the import tables. Any ``.write()``/``.writelines()`` call counts as a
 file write, so an in-memory ``io.StringIO().write()`` next to a path edit is refused too: a
 receiver-trust exemption was tried on #1176 and could be bypassed by rebinding io (#1178).
+This also includes ``sys.stdout.write()`` and custom stream/network writer calls. Module-level
+``open(*args)`` or ``open(**kwargs)`` with an unknown mode is treated as a write. These are
+intentional fail-closed rules: the receiver and unpacked mode are rebindable, so a syntactic
+exception would trust candidate-controlled values. Issue #1189 measurement note: this checkout
+contains no task bank, correct-candidate corpus, or recent intake-run artifacts from which to
+count correct candidates refused by either rule. The measurable count here is therefore 0
+available candidates and 0/0 refusals; this is not an observed false-refusal rate. The checked-in
+unit tests are adversarial examples, not a representative candidate sample. A useful rate requires
+running the unchanged detector on an identified corpus of independently confirmed correct
+candidates and reporting each rule's numerator and the corpus denominator.
 Write-side residuals (#1178): subprocess/shell/archive writes, ``open`` reached by alias or
 ``functools.partial``, attribute forms of FileIO/copyfileobj/NamedTemporaryFile, and
 ``from sys import path`` or ``os.sys.path`` as the path edit.
