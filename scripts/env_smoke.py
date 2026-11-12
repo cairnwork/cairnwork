@@ -126,6 +126,46 @@ def _bare_is_green(probe: RepoProbe, commit: str, run_root: Path, timeout: int) 
         remove_attempt_clone(run_root, clone_id)
 
 
+def _silent_read_failure(repo: Path) -> str | None:
+    """git exits 0/1 and prints nothing when it cannot read a global config, an include.path
+    target or refs/heads (Issue #1120). Check those inputs ourselves; None if all are readable."""
+    home = Path(os.environ.get("HOME", "~")).expanduser()
+    xdg = Path(os.environ.get("XDG_CONFIG_HOME") or home / ".config")
+    for cfg in (home / ".gitconfig", xdg / "git" / "config"):
+        if os.path.lexists(cfg) and not os.access(cfg, os.R_OK):
+            return f"global git config {cfg} is unreadable"
+    try:
+        inc = subprocess.run(  # noqa: S603, S607 - fixed argv, no shell
+            ["git", "-C", str(repo), "config", "--no-includes", "--show-origin", "--null",
+             "--get-regexp", r"^include(if\..*)?\.path$"],  # fmt: skip
+            capture_output=True, text=True, check=False,
+        )  # fmt: skip
+        gitdir = subprocess.run(  # noqa: S603, S607 - fixed argv, no shell
+            ["git", "-C", str(repo), "rev-parse", "--absolute-git-dir"],
+            capture_output=True, text=True, check=False,
+        )  # fmt: skip
+    except OSError as err:
+        return f"could not run git ({err})"
+    if inc.returncode not in (0, 1) or inc.stderr.strip():
+        return f"could not list config includes (git exit {inc.returncode})"
+    if gitdir.returncode != 0 or gitdir.stderr.strip() or not gitdir.stdout.strip():
+        return f"could not locate the git dir (git exit {gitdir.returncode})"
+    # --null: "<origin>\0<key>\n<value>\0" per entry.
+    parts = inc.stdout.split("\0")
+    for origin, entry in zip(parts[0::2], parts[1::2], strict=False):
+        value = entry.split("\n", 1)[1] if "\n" in entry else ""
+        target = Path(value).expanduser()
+        if not target.is_absolute():
+            base = origin.removeprefix("file:")
+            target = Path(base).parent / target
+        if not os.access(target, os.R_OK) or not target.is_file():
+            return f"config include {value!r} is missing or unreadable"
+    heads = Path(gitdir.stdout.strip()) / "refs" / "heads"
+    if not os.access(heads, os.R_OK | os.X_OK):
+        return f"{heads} is unreadable"
+    return None
+
+
 def _mirror_multi_branch_reason(repo: Path) -> str | None:
     """A reason if repo is a mirror whose origin is not single-branch (Issue #76), else None.
     A repo with no origin fetch refspec (a local probe checkout) is not applicable.
@@ -140,10 +180,17 @@ def _mirror_multi_branch_reason(repo: Path) -> str | None:
         )
     except OSError as err:
         return f"could not read remote.origin.fetch ({err}); {unsure}"
+    if got.returncode not in (0, 1):
+        return f"could not read remote.origin.fetch (git exit {got.returncode}); {unsure}"
+    # git can exit 0/1 while having failed to read part of its config (Issue #1120): any stderr
+    # output means the answer is not trustworthy, so refuse before trusting the exit code.
+    if got.stderr.strip():
+        return f"git reported a problem reading remote.origin.fetch (stderr not empty); {unsure}"
+    silent = _silent_read_failure(repo)
+    if silent is not None:
+        return f"{silent}; {unsure}"
     if got.returncode == 1:
         return None
-    if got.returncode != 0:
-        return f"could not read remote.origin.fetch (git exit {got.returncode}); {unsure}"
     specs = [s for s in got.stdout.splitlines() if s.strip()]
     advice = "re-clone with: git clone --single-branch --branch main <url>"
     if not specs:
@@ -171,6 +218,8 @@ def _mirror_multi_branch_reason(repo: Path) -> str | None:
         return f"could not list refs ({err}); {unsure}"
     if refs.returncode != 0:
         return f"could not list refs (git exit {refs.returncode}); {unsure}"
+    if refs.stderr.strip():  # e.g. a corrupt ref is skipped with a warning and exit 0 (#1120)
+        return f"git reported a problem listing refs (stderr not empty); {unsure}"
     allowed = {"refs/heads/main", "refs/remotes/origin/main", "refs/remotes/origin/HEAD"}
     if any(r not in allowed for r in refs.stdout.split()):
         return f"mirror holds a branch beyond main; {advice}"
