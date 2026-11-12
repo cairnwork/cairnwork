@@ -76,6 +76,30 @@ def test_the_reason_names_an_exit_status_that_disagrees_with_the_record(
     assert why_not_passed(**BASE, returncode=returncode, **status) == why
 
 
+def test_collected_skips_are_named_without_changing_the_failure_reason():
+    why = why_not_passed(
+        **BASE,
+        returncode=0,
+        exitstatus=0,
+        testsfailed=0,
+        outcomes={
+            "tests/test_env.py::test_sandbox": "skipped",
+            "tests/test_ok.py::test_ok": "passed",
+        },
+    )
+    assert why == (
+        "pytest collected tests that did not pass (1 skipped; 1: tests/test_env.py??test_sandbox)"
+    )
+
+
+def test_collected_mixed_nonpassing_outcomes_are_counted_and_bounded():
+    outcomes = {f"tests/test_{i}.py::test_case": "xfailed" for i in range(7)}
+    why = why_not_passed(**BASE, returncode=0, exitstatus=0, testsfailed=0, outcomes=outcomes)
+    assert "7 xfailed" in why
+    assert "7: tests/test_0.py??test_case, tests/test_1.py??test_case, " in why
+    assert "+2 more" in why
+
+
 # ---- the plugin, end to end (descriptor hand-over, no sandbox) ----------------------------
 
 
