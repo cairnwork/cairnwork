@@ -96,3 +96,22 @@ def test_host_mirror_timeout_remains_oserror(project, store, tmp_path, monkeypat
     assert isinstance(err.value.__cause__, GitCommandError)
     assert isinstance(err.value.__cause__.__cause__, subprocess.TimeoutExpired)
     assert "Cairnwork could not run git" in str(err.value)
+
+
+@pytest.mark.parametrize("cause", [None, RuntimeError("unexpected failure")])
+def test_supplied_bundle_other_causes_remain_oserror(project, store, tmp_path, monkeypatch, cause):
+    _base, _sha, bundle = make_bundle(project, {"tests/test_regression.py": REGRESSION}, tmp_path)
+    real_run_git = deferred_store.run_git
+
+    def fake_run_git(repo, *args, **kwargs):
+        if args and args[0] == "bundle" and len(args) > 1 and args[1] == "list-heads":
+            error = GitCommandError("git bundle list-heads failed")
+            if cause is None:
+                raise error
+            raise error from cause
+        return real_run_git(repo, *args, **kwargs)
+
+    monkeypatch.setattr(deferred_store, "run_git", fake_run_git)
+    with pytest.raises(OSError, match="Cairnwork could not run git") as err:
+        store.import_bundle(project, bundle, used_dir(store))
+    assert not isinstance(err.value, TestCommitRejected)

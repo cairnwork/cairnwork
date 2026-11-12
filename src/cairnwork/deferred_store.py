@@ -120,7 +120,7 @@ class DeferredStore:
                     f"{HEAD_REF}:{HEAD_REF}",
                 )
             except GitCommandError as exc:
-                _raise_git_failure(exc)
+                _raise_git_failure(exc, supplied=True)
             try:
                 return _only_parent(scratch)
             except GitCommandError as exc:
@@ -237,6 +237,6 @@ def _raise_git_failure(
     """A completed git refusal is an Issue error; failure to run git is Cairnwork's."""
     if isinstance(exc.__cause__, subprocess.CalledProcessError):
         raise TestCommitRejected("TEST_COMMIT_UNREADABLE", f"{prefix}{exc}") from exc
-    if supplied and not isinstance(exc.__cause__, OSError):
+    if supplied and isinstance(exc.__cause__, (subprocess.TimeoutExpired, UnicodeError)):
         raise TestCommitRejected("TEST_COMMIT_UNREADABLE", f"{prefix}{exc}") from exc
     raise OSError(f"Cairnwork could not run git: {prefix}{exc}") from exc
