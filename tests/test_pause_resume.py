@@ -157,7 +157,7 @@ def test_ac4_zero_writes_means_the_resume_path_only_bare_run_runs_once_after_rej
     tmp_path, monkeypatch
 ):
     """Wording (layer1 ruling 2026-11-13): AC4's "zero writes after a REJECT" covers PAUSE's resume
-    path. The bare run that AC3 falls back to writes the checkout by design; it runs exactly once."""
+    path. The bare run that AC3 falls back to writes the checkout by design; it runs once."""
     rig = Rig(tmp_path, monkeypatch, replies=[NO])
     before = dict(rig.checkout.files)
     res = rig.go()
