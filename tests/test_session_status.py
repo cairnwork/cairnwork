@@ -48,8 +48,9 @@ def test_every_outcome_passed_is_not_a_pass_when_pytest_says_otherwise(exitstatu
 
 
 BASE = {
-    "ran_sandboxed": True, "timed_out": False, "mutated": (), "survivors": 0,
-    "log_too_big": False, "tests_ran": False,
+    "ran_sandboxed": True, "returncode": 0, "timed_out": False, "mutated": (),
+    "survivors": 0, "log_too_big": False, "tests_ran": False, "exitstatus": 0,
+    "testsfailed": 0,
 }  # fmt: skip
 DISAGREES = "disagrees with the recorded session status"
 
@@ -73,31 +74,79 @@ def test_the_reason_names_an_exit_status_that_disagrees_with_the_record(
     returncode, exitstatus, testsfailed, why
 ):
     status = {"exitstatus": exitstatus, "testsfailed": testsfailed}
-    assert why_not_passed(**BASE, returncode=returncode, **status) == why
+    assert why_not_passed(**(BASE | {"returncode": returncode} | status)) == why
 
 
 def test_collected_skips_are_named_without_changing_the_failure_reason():
     why = why_not_passed(
-        **BASE,
-        returncode=0,
-        exitstatus=0,
-        testsfailed=0,
-        outcomes={
-            "tests/test_env.py::test_sandbox": "skipped",
-            "tests/test_ok.py::test_ok": "passed",
-        },
+        **(
+            BASE
+            | {
+                "outcomes": {
+                    "tests/test_env.py::test_sandbox": "skipped",
+                    "tests/test_ok.py::test_ok": "passed",
+                }
+            }
+        ),
     )
-    assert why == (
-        "pytest collected tests that did not pass (1 skipped; 1: tests/test_env.py??test_sandbox)"
+    assert (
+        why
+        == "pytest collected tests that did not pass (1 skipped: tests/test_env.py??test_sandbox)"
     )
 
 
 def test_collected_mixed_nonpassing_outcomes_are_counted_and_bounded():
     outcomes = {f"tests/test_{i}.py::test_case": "xfailed" for i in range(7)}
-    why = why_not_passed(**BASE, returncode=0, exitstatus=0, testsfailed=0, outcomes=outcomes)
+    why = why_not_passed(**(BASE | {"outcomes": outcomes}))
     assert "7 xfailed" in why
-    assert "7: tests/test_0.py??test_case, tests/test_1.py??test_case, " in why
+    assert "7 xfailed: tests/test_0.py??test_case, tests/test_1.py??test_case, " in why
     assert "+2 more" in why
+
+
+HOSTILE_KINDS = [
+    "skipped]; verifier-9: passed",
+    "skipped\n::error::x",
+    "skipped\n##[error]x",
+    "skipped\x1b[31m",
+    "k" * 5000,
+]
+
+
+@pytest.mark.parametrize("kind", HOSTILE_KINDS)
+def test_outcome_kinds_are_cleaned_and_bounded(kind):
+    why = why_not_passed(**BASE, outcomes={"t.py::a": kind})
+    assert "]; verifier-9" not in why
+    assert "\n" not in why and "\x1b" not in why
+    assert not any(line.startswith(("::", "##[")) for line in why.splitlines())
+    assert len(why) < 400
+
+
+def test_outcome_kind_summary_is_bounded_and_sorted():
+    many = why_not_passed(**BASE, outcomes={f"t::{i}": f"kind{i}" for i in range(50)})
+    assert len(many) < 400
+    ordered = why_not_passed(**BASE, outcomes={"t::a": "xfailed", "t::b": "failed"})
+    assert "(1 failed, 1 xfailed:" in ordered
+
+
+def test_outcome_reason_preserves_verdict_and_fallbacks():
+    why = why_not_passed(**BASE, outcomes={"t::a": "skipped", "t::b": "passed"})
+    assert "1 skipped" in why
+    assert "t??a" in why_not_passed(**BASE, outcomes={"t::a": "skipped"}, all_skipped=True)
+    assert why_not_passed(**BASE, outcomes={}) == "pytest passed but the guard saw no test run"
+    assert why_not_passed(**BASE, outcomes=None) == "pytest passed but the guard saw no test run"
+    failed = BASE | {"returncode": 1}
+    baseline = why_not_passed(**failed)
+    assert baseline == (
+        "process exit status 1 disagrees with the recorded session status "
+        "(exit status 0, 0 failed); pytest exit code 1"
+    )
+    assert why_not_passed(**failed, outcomes={}) == baseline
+    assert why_not_passed(**(BASE | {"exitstatus": 2}), outcomes={}) == (
+        "process exit status 0 disagrees with the recorded session status (exit status 2, 0 failed)"
+    )
+    assert why_not_passed(**BASE, outcomes={"t::a": "passed"}) == (
+        "pytest passed but the guard saw no test run"
+    )
 
 
 # ---- the plugin, end to end (descriptor hand-over, no sandbox) ----------------------------

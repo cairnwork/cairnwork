@@ -42,16 +42,22 @@ def _kind_causes(fail_kind) -> list[str]:
 
 
 def _outcome_cause(outcomes) -> str:
-    """Summarize collected tests that did not pass; values come from the validated guard record."""
+    """Summarize collected tests that did not pass; outcome values are untrusted text."""
     failed = [(node, result) for node, result in outcomes.items() if result != "passed"]
     if not failed:
         return ""
     counts = {}
     for _node, result in failed:
         counts[result] = counts.get(result, 0) + 1
-    summary = ", ".join(f"{count} {kind}" for kind, count in sorted(counts.items()))
+    kinds = sorted(counts.items())
+    shown = [
+        f"{count} {_DELIMITERS.sub('?', replace_hidden(str(kind)))[:MAX_NAME_CHARS]}"
+        for kind, count in kinds[:MAX_NAMES]
+    ]
+    more = len(kinds) - len(shown)
+    summary = ", ".join(shown) + (f", +{more} more" if more > 0 else "")
     names = _names(node for node, _result in failed)
-    return f"pytest collected tests that did not pass ({summary}; {names})"
+    return f"pytest collected tests that did not pass ({summary}: {names.split(': ', 1)[1]})"
 
 
 def candidate_denial(outcomes, denied, write_roots) -> str:
