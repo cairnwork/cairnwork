@@ -1,4 +1,4 @@
-"""Issue #1195: a timed out private test bundle is refused once as an Issue error."""
+"""Issue #1195: a timeout reading the stored (Cairnwork-built) bundle stays an environment error."""
 
 import json
 import subprocess
@@ -11,7 +11,7 @@ import cairnwork.deferred_store as deferred_store
 import cairnwork.issue_runner as runner
 
 
-def test_bundle_timeout_is_rejected_once_without_environment_retry(setup, tmp_path, monkeypatch):
+def test_stored_bundle_timeout_in_take_stays_an_environment_error(setup, tmp_path, monkeypatch):
     intake, clone = setup["intake"], setup["clone"]
     config_path = intake.state / "config.json"
     config_path.write_text(json.dumps({**intake.config(), "test_source": "bundle"}))
@@ -32,9 +32,9 @@ def test_bundle_timeout_is_rejected_once_without_environment_retry(setup, tmp_pa
     monkeypatch.setattr(deferred_store, "run_git", timeout_bundle_fetch)
     github = FakeGitHub([issue(block={**BLOCK, "test_commit": test_commit})])
 
-    first = runner.take(intake, github, clone)
-    second = runner.take(intake, github, clone)
+    results = [runner.take(intake, github, clone) for _ in range(2)]
 
-    assert "refused" in first[0] and "TASK_TEST_COMMIT_UNREADABLE" in first[0]["refused"]
-    assert github.labels[7] == {runner.NEEDS_FIX}
-    assert second == []
+    for out in results:  # both passes: an environment error, left queued, never refused
+        assert "could not run git" in out[0]["error"]
+        assert "refused" not in out[0]
+    assert github.labels.get(7, set()) != {runner.NEEDS_FIX}

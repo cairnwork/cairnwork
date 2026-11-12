@@ -120,7 +120,7 @@ class DeferredStore:
                     f"{HEAD_REF}:{HEAD_REF}",
                 )
             except GitCommandError as exc:
-                _raise_git_failure(exc, supplied=True)
+                _raise_git_failure(exc)
             try:
                 return _only_parent(scratch)
             except GitCommandError as exc:
