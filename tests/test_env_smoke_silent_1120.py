@@ -173,3 +173,29 @@ def test_present_global_relative_include_passes(mirror, home):
     (home / "extra.cfg").write_text("[user]\n\tname = z\n")
     (home / ".gitconfig").write_text("[include]\n\tpath = extra.cfg\n")
     assert _mirror_multi_branch_reason(mirror) is None
+
+
+# Round-2 review of #1208: log-line injection through a directory name, hasconfig includes.
+@needs_user
+@pytest.mark.parametrize(
+    ("parent", "name"),
+    [("refs/heads", "a\n::error::x"), ("refs/remotes/origin", "p\n##[error]y")],
+)
+def test_hostile_dir_name_never_reaches_a_log_line_raw(mirror, parent, name):
+    (mirror / ".git" / parent / name).mkdir(parents=True)
+    _hide_dir(mirror / ".git" / parent / name)
+    reason = _mirror_multi_branch_reason(mirror)
+    assert reason is not None
+    assert "\n" not in reason
+    assert not any(line.startswith(("::", "##[")) for line in reason.splitlines())
+
+
+def test_matching_hasconfig_include_with_missing_target_is_refused(mirror):
+    _g(mirror, "config", "remote.origin.url", "https://x/y.git")
+    _g(mirror, "config", "includeIf.hasconfig:remote.*.url:https://x/**.path", "/nonexistent/x.cfg")
+    assert _mirror_multi_branch_reason(mirror) is not None
+
+
+def test_dangling_global_gitconfig_symlink_passes(mirror, home):
+    (home / ".gitconfig").symlink_to(home / "no-such-target")
+    assert _mirror_multi_branch_reason(mirror) is None
