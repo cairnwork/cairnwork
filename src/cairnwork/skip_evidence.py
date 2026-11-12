@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import re
+import shutil
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from cairnwork.deferred_tests import BaseUncomparable, Comparison
 from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.textclean import replace_hidden
+from cairnwork.verifiers import run_verifiers
 
 ENV_SKIP_REASONS = (
     "needs macOS sandbox-exec",
@@ -43,22 +45,48 @@ def env_skip_comparison(
     return Comparison("UNCOMPARABLE", "TESTS_SKIPPED_ENVIRONMENT", "; ".join(details))
 
 
-def raise_for_env_skips(runs, task, judged, test_files=None, checks=(), enabled=False) -> None:
-    """Raise the verify-boundary signal when every verifier lacks environment evidence."""
+def raise_for_env_skips(
+    runs, task, judged, test_files=None, checks=(), enabled=False, base=None
+) -> None:
+    """Raise the verify-boundary signal when every verifier lacks environment evidence.
+    ``base`` is ``(ctx, specs)``: with no deferred-test base run to compare against, the
+    verifiers are run once on the base commit, only when every candidate run is all environment
+    skips (#1151), so the comparison is never skipped for want of a record."""
     if not enabled:
         return
+    base_skips = getattr(test_files, "base_skips", {})
+    base_nodes = getattr(test_files, "base_nodes", {})
+    if not base_skips and base and runs and all(_env_skips(run) for run in runs):
+        base_skips, base_nodes = _base_run_record(task, *base)
     comparison = env_skip_comparison(
         runs,
         task.repo,
         task.base_commit,
         judged,
-        getattr(test_files, "base_skips", {}),
+        base_skips,
         tuple(test_files or ()),
-        base_nodes=getattr(test_files, "base_nodes", {}),
+        base_nodes=base_nodes,
         checks=checks,
     )
     if comparison:
         raise BaseUncomparable(comparison)
+
+
+def _base_run_record(task, ctx, specs):
+    """Per verifier, the skips and node ids of one run of ``specs`` on the base commit; empty
+    (so the candidate stays FAILED) when that run cannot be made."""
+    try:
+        runs = run_verifiers(ctx, task.base_commit, specs, f"{ctx.attempt_id}-eb", deny=True)
+    except Exception:  # noqa: BLE001  (any base-run failure: no evidence, fail closed)
+        return {}, {}
+    try:
+        recorded = [run for run in runs if not run.spec.collect_only and _env_skips(run)]
+        skips = {run.spec.verifier_id: run.skips for run in recorded}
+        nodes = {run.spec.verifier_id: tuple(run.outcomes) for run in recorded}
+    finally:  # a base run's logs are not evidence for Core and could show tests to a later worker
+        for run in runs:
+            shutil.rmtree(Path(run.log_path).parent, ignore_errors=True)
+    return skips, nodes
 
 
 def _changed_paths(repo: Path, base: str, judged: str) -> set[str] | None:
@@ -77,24 +105,11 @@ def _run_detail(
     deferred_files: tuple[str, ...],
     base_nodes: dict[str, tuple[str, ...]],
 ) -> str | None:
-    collected: tuple[str, ...] = tuple(getattr(run, "collected", ()))
-    outcomes = getattr(run, "outcomes", {})
-    skips: dict[str, tuple[str, str]] = getattr(run, "skips", {})
-    if (
-        not _clean_run(run)
-        or not getattr(run, "collection_finished", False)
-        or getattr(run, "collect_errors", ())
-        or getattr(run, "collect_skipped", ())
-        or getattr(run, "skipped_deps", ())
-        or not collected
-        or set(outcomes) != set(collected)
-    ):
+    evidence = _env_skips(run)
+    if evidence is None:
         return None
-    if any(outcomes.get(node) != "skipped" for node in collected) or set(skips) != set(collected):
-        return None
-    evidence = [skips[node] for node in collected]
-    if any(kind != "marker" or reason not in ENV_SKIP_REASONS for kind, reason in evidence):
-        return None
+    collected: tuple[str, ...] = tuple(run.collected)
+    skips: dict[str, tuple[str, str]] = run.skips
     files_collected = {_node_file(node) for node in collected}
     if deferred_files and not set(deferred_files) <= files_collected:
         return None
@@ -145,3 +160,27 @@ def _base_file(repo: Path, base: str, path: str, changed: set[str]) -> bool:
 
 def _clean(reason: str) -> str:
     return _DELIMITERS.sub("?", replace_hidden(reason))[:120]
+
+
+def _env_skips(run: Any) -> list[tuple[str, str]] | None:
+    """The ``(kind, reason)`` of each collected test of a clean run in which every test was
+    skipped by a whitelisted environment marker; None for any other run."""
+    collected: tuple[str, ...] = tuple(getattr(run, "collected", ()))
+    outcomes = getattr(run, "outcomes", {})
+    skips: dict[str, tuple[str, str]] = getattr(run, "skips", {})
+    if (
+        not _clean_run(run)
+        or not getattr(run, "collection_finished", False)
+        or getattr(run, "collect_errors", ())
+        or getattr(run, "collect_skipped", ())
+        or getattr(run, "skipped_deps", ())
+        or not collected
+        or set(outcomes) != set(collected)
+    ):
+        return None
+    if any(outcomes.get(node) != "skipped" for node in collected) or set(skips) != set(collected):
+        return None
+    evidence = [skips[node] for node in collected]
+    if any(kind != "marker" or reason not in ENV_SKIP_REASONS for kind, reason in evidence):
+        return None
+    return evidence

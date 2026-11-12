@@ -10,7 +10,7 @@ import pytest
 from conftest import commit_change, git
 
 from cairnwork import pipeline_judge, report_guard
-from cairnwork.deferred_tests import Comparison
+from cairnwork.deferred_tests import BaseUncomparable, Comparison
 from cairnwork.skip_evidence import ENV_SKIP_REASONS, env_skip_comparison
 
 NODE = "tests/test_env.py::test_needs_sandbox"
@@ -18,7 +18,7 @@ NODE = "tests/test_env.py::test_needs_sandbox"
 
 def _run(**changes: Any) -> SimpleNamespace:
     values = {
-        "spec": SimpleNamespace(verifier_id="v1"),
+        "spec": SimpleNamespace(verifier_id="v1", collect_only=False),
         "returncode": 0,
         "recorded": True,
         "timed_out": False,
@@ -245,3 +245,82 @@ def test_report_plugin_distinguishes_marker_and_runtime_skips(tmp_path):
         "test_skips.py::test_marker": ("marker", "needs macOS sandbox-exec"),
         "test_skips.py::test_runtime": ("runtime", "runtime reason"),
     }
+
+
+def _raise(monkeypatch, repo, base, judged, base_run, tmp_path):
+    """raise_for_env_skips on the verify path with no deferred tests: ``base_run`` is what the
+    one base run returns (an Exception instance is raised instead)."""
+    from cairnwork import skip_evidence
+
+    def fake(ctx, commit, specs, attempt, deny=False):
+        assert commit == base and deny and attempt == "a-eb"
+        if isinstance(base_run, Exception):
+            raise base_run
+        return [base_run]
+
+    monkeypatch.setattr(skip_evidence, "run_verifiers", fake)
+    task = SimpleNamespace(repo=repo, base_commit=base)
+    cand = _run()
+    skip_evidence.raise_for_env_skips(
+        [cand], task, judged, None, (), True, (SimpleNamespace(attempt_id="a"), ())
+    )
+
+
+def _base_run(tmp_path, **changes):
+    (tmp_path / "b").mkdir()
+    return _run(log_path=tmp_path / "b" / "verifier.log", **changes)
+
+
+def test_no_deferred_tests_an_identical_base_skip_set_is_uncomparable(
+    commits, monkeypatch, tmp_path
+):
+    repo, base, judged = commits
+    with pytest.raises(BaseUncomparable) as raised:
+        _raise(monkeypatch, repo, base, judged, _base_run(tmp_path), tmp_path)
+    assert raised.value.comparison.code == "TESTS_SKIPPED_ENVIRONMENT"
+    assert not (tmp_path / "b").exists()  # the base run's logs are removed
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"outcomes": {NODE: "passed"}},  # the base ran the test: the candidate's skip is its own
+        {"skips": {NODE: ("marker", "needs the cairnwork-verifier account")}},  # other reason
+        {"collected": (NODE, "tests/test_env.py::test_other"), "outcomes": {NODE: "skipped"}},
+        {"returncode": 1},  # an unclean base run is no evidence
+        {"recorded": False},
+    ],
+)
+def test_no_deferred_tests_a_base_that_differs_keeps_failed(
+    commits, monkeypatch, tmp_path, changes
+):
+    repo, base, judged = commits
+    _raise(monkeypatch, repo, base, judged, _base_run(tmp_path, **changes), tmp_path)
+
+
+def test_no_deferred_tests_a_base_run_that_cannot_be_made_keeps_failed(
+    commits, monkeypatch, tmp_path
+):
+    repo, base, judged = commits
+    _raise(monkeypatch, repo, base, judged, RuntimeError("busy"), tmp_path)
+
+
+def test_no_base_run_when_a_candidate_run_is_not_all_environment_skips(commits, monkeypatch):
+    from cairnwork import skip_evidence
+
+    repo, base, judged = commits
+
+    def fake(*args, **kwargs):
+        raise AssertionError("a base run was spent on a candidate with real test results")
+
+    monkeypatch.setattr(skip_evidence, "run_verifiers", fake)
+    run = _run(outcomes={NODE: "passed"})
+    skip_evidence.raise_for_env_skips(
+        [run],
+        SimpleNamespace(repo=repo, base_commit=base),
+        judged,
+        None,
+        (),
+        True,
+        (SimpleNamespace(attempt_id="a"), ()),
+    )
