@@ -18,7 +18,7 @@ import cairnwork.verifiers as verifiers
 STOPS = [KeyboardInterrupt(), SystemExit(3)]
 
 
-class StubProcess:  # Popen whose timed wait is interrupted and that never exits by itself
+class StubProcess:  # Popen that never exits by itself (the timed wait is stubbed in _execute)
     pid = 424242
     returncode = None
 
@@ -28,8 +28,6 @@ class StubProcess:  # Popen whose timed wait is interrupted and that never exits
 
     def wait(self, timeout=None):
         self.waits.append(timeout)
-        if len(self.waits) == 1:
-            raise self.stop
         if timeout is None:  # a sudo whose child the owner cannot kill: this never returns
             raise AssertionError("waited without a limit after the interrupt")
         raise subprocess.TimeoutExpired("sudo", timeout)
@@ -39,6 +37,12 @@ def _execute(monkeypatch, tmp_path, stop, reap):
     waits, killed = [], []
     monkeypatch.setattr(confined.subprocess, "Popen", lambda *a, **k: StubProcess(stop, waits))
     monkeypatch.setattr(confined, "_kill_group", killed.append)
+
+    def interrupted_wait(_pid, timeout):  # the timed wait for the leader, interrupted (#537)
+        waits.append(timeout)
+        raise stop
+
+    monkeypatch.setattr(confined, "_wait_unreaped", interrupted_wait)
     env = {confined.RUN_TOKEN_VAR: "t"}
     with pytest.raises(type(stop)):
         confined.execute(["x"], tmp_path, env, 5, tmp_path / "log", reap=reap)
