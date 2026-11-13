@@ -182,7 +182,7 @@ def _silent_read_failure(repo: Path) -> str | None:
     base = Path(xdg) if os.path.isabs(xdg) else Path(home) / ".config"
     for cfg in (Path(home) / ".gitconfig", base / "git" / "config"):
         if os.path.exists(cfg) and not os.access(cfg, os.R_OK):
-            return f"global git config {cfg} is unreadable"
+            return f"global git config {str(cfg)!r} is unreadable"
     try:
         problem = _include_problem(repo)
         common = _run_git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir")
