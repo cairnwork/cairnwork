@@ -9,7 +9,6 @@ from __future__ import annotations
 import ast
 import collections
 import posixpath
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -18,6 +17,12 @@ from experimental.committed_sys_path.evaluator import (
     StaticPathEvaluator,
     collect_aliases_and_env,
     find_path_edits,
+)
+from experimental.committed_sys_path.git_io import (
+    _rev_parse,
+    _show_file_bytes,
+    load_diff_info,
+    load_tree_dirs,
 )
 
 
@@ -31,16 +36,25 @@ class Verdict:
 
 
 def is_test_file(path: str) -> bool:
-    """Check if the given path belongs to test suites or test configuration."""
-    norm = posixpath.normpath(path)
-    base = posixpath.basename(norm)
-    if norm.startswith("tests/") or "/tests/" in norm or norm == "tests":
-        return True
-    if base.startswith("test_") or base.endswith("_test.py"):
-        return True
-    if base == "conftest.py":
-        return True
+    """Check if the given path is under top-level tests/ or is conftest.py."""
+    norm = posixpath.normpath(path).lstrip("./")
+    return norm == "tests" or norm.startswith("tests/") or norm == "conftest.py"
+
+
+def _is_allowlisted(path: str, prefixes: tuple[str, ...]) -> bool:
+    norm = posixpath.normpath(path).lstrip("./")
+    for p in prefixes:
+        clean = posixpath.normpath(p).strip("/")
+        if clean and (norm == clean or norm.startswith(clean + "/")):
+            return True
     return False
+
+
+def _parse_source(raw: bytes, path: str) -> ast.AST | None:
+    try:
+        return ast.parse(raw, filename=path)
+    except (SyntaxError, ValueError, UnicodeDecodeError, TypeError):
+        return None
 
 
 def check_source(
@@ -57,35 +71,32 @@ def check_source(
     if not include_tests and is_test_file(path):
         return Verdict("ACCEPT", "SKIPPED_TEST_FILE")
 
-    if any(path.startswith(prefix) for prefix in allowlist_prefixes):
+    if _is_allowlisted(path, allowlist_prefixes):
         return Verdict("ACCEPT", "ALLOWLISTED_PATH")
 
-    try:
-        new_text = new_source.decode("utf-8")
-        new_tree = ast.parse(new_text, filename=path)
-    except (UnicodeDecodeError, SyntaxError) as exc:
-        return Verdict("ERROR", "UNREADABLE_SOURCE", ({"error": str(exc), "path": path},))
+    new_tree = _parse_source(new_source, path)
+    if new_tree is None:
+        return Verdict("ERROR", "UNREADABLE_SOURCE", ({"error": "unparseable", "path": path},))
+    new_text = new_source.decode("utf-8", errors="replace")
 
     old_tree: ast.AST | None = None
-    old_text: str = ""
+    old_text = ""
     if old_source is not None:
-        try:
-            old_text = old_source.decode("utf-8")
-            old_tree = ast.parse(old_text, filename=path)
-        except (UnicodeDecodeError, SyntaxError):
-            old_tree = None
+        old_tree = _parse_source(old_source, path)
+        old_text = old_source.decode("utf-8", errors="replace")
 
     new_edits = find_path_edits(new_tree, new_text)
     old_edits = find_path_edits(old_tree, old_text) if old_tree else []
 
-    candidate_edits = _diff_path_edits(old_edits, new_edits)
+    new_st = collect_aliases_and_env(new_tree)
+    new_eval = StaticPathEvaluator(new_st, path)
+    old_eval = StaticPathEvaluator(collect_aliases_and_env(old_tree), path) if old_tree else None
+
+    candidate_edits = _diff_path_edits(old_edits, new_edits, old_eval, new_eval)
     if not candidate_edits:
         return Verdict("ACCEPT", "NO_NEW_PATH_EDITS")
 
-    _, _, _, _, env = collect_aliases_and_env(new_tree)
-    evaluator = StaticPathEvaluator(env, path)
-    findings = _evaluate_candidate_edits(candidate_edits, evaluator, committed_dirs, shadow_dirs)
-
+    findings = _evaluate_candidate_edits(candidate_edits, new_eval, committed_dirs, shadow_dirs)
     if not findings:
         return Verdict("ACCEPT", "COMMITTED_SEARCH_PATH")
 
@@ -94,16 +105,39 @@ def check_source(
     return Verdict("REJECT", "NON_COMMITTED_SEARCH_PATH", tuple(findings))
 
 
-def _diff_path_edits(old_edits: list[PathEdit], new_edits: list[PathEdit]) -> list[PathEdit]:
-    def edit_key(e: PathEdit) -> tuple[str, tuple[str, ...]]:
-        return (e.kind, tuple(ast.unparse(t) for t in e.target_nodes))
+def _resolve_edit_dirs(edit: PathEdit, evaluator: StaticPathEvaluator) -> tuple[str, ...] | None:
+    if not edit.target_nodes:
+        return None
+    dirs: list[str] = []
+    for node in edit.target_nodes:
+        ev = evaluator.evaluate(node)
+        if ev is None:
+            return None
+        repo_dir = evaluator.resolve_to_repo_dir(ev)
+        if repo_dir is None:
+            return None
+        dirs.append(repo_dir)
+    return tuple(dirs)
 
-    old_counts = collections.Counter(edit_key(e) for e in old_edits)
+
+def _diff_path_edits(
+    old_edits: list[PathEdit],
+    new_edits: list[PathEdit],
+    old_eval: StaticPathEvaluator | None,
+    new_eval: StaticPathEvaluator,
+) -> list[PathEdit]:
+    old_counts: collections.Counter[tuple[str, tuple[str, ...]]] = collections.Counter()
+    if old_eval is not None:
+        for e in old_edits:
+            dirs = _resolve_edit_dirs(e, old_eval)
+            if dirs is not None:
+                old_counts[(e.kind, dirs)] += 1
+
     candidate_edits: list[PathEdit] = []
     for e in new_edits:
-        k = edit_key(e)
-        if old_counts[k] > 0:
-            old_counts[k] -= 1
+        dirs = _resolve_edit_dirs(e, new_eval)
+        if dirs is not None and old_counts[(e.kind, dirs)] > 0:
+            old_counts[(e.kind, dirs)] -= 1
         else:
             candidate_edits.append(e)
     return candidate_edits
@@ -199,11 +233,11 @@ def check_commit(
     if not base_sha or not cand_sha:
         return Verdict("ERROR", "INVALID_COMMIT", ({"base": base, "candidate": candidate},))
 
-    committed_dirs = _load_committed_dirs(repo_path, base_sha)
+    committed_dirs = load_tree_dirs(repo_path, base_sha, cand_sha)
     if committed_dirs is None:
-        return Verdict("ERROR", "GIT_ERROR", ({"action": "load_committed_dirs", "ref": base_sha},))
+        return Verdict("ERROR", "GIT_ERROR", ({"action": "load_tree_dirs", "ref": base_sha},))
 
-    changed_files, shadow_dirs = _load_diff_info(repo_path, base_sha, cand_sha)
+    changed_files, shadow_dirs = load_diff_info(repo_path, base_sha, cand_sha)
     if changed_files is None:
         return Verdict(
             "ERROR",
@@ -243,73 +277,3 @@ def check_commit(
         )
         return Verdict("REJECT", reason, tuple(all_findings))
     return Verdict("ACCEPT", "ALL_COMMITTED")
-
-
-def _is_hex_oid(ref: str) -> bool:
-    return len(ref) == 40 and all(c in "0123456789abcdefABCDEF" for c in ref)
-
-
-def _rev_parse(repo: Path, ref: str) -> str | None:
-    if not ref or ref.startswith("-"):
-        return None
-    p = subprocess.run(
-        ["git", "-C", str(repo), "rev-parse", "--verify", "--end-of-options", f"{ref}^{{commit}}"],
-        capture_output=True,
-        text=True,
-    )
-    oid = p.stdout.strip()
-    return oid if p.returncode == 0 and _is_hex_oid(oid) else None
-
-
-def _load_committed_dirs(repo: Path, ref: str) -> frozenset[str] | None:
-    if not _is_hex_oid(ref):
-        return None
-    p = subprocess.run(
-        ["git", "-C", str(repo), "ls-tree", "-r", "--name-only", ref],
-        capture_output=True,
-        text=True,
-        errors="replace",
-    )
-    if p.returncode != 0:
-        return None
-    dirs = {"", "."}
-    for f in p.stdout.splitlines():
-        d = posixpath.dirname(f)
-        while d and d not in dirs:
-            dirs.add(d)
-            d = posixpath.dirname(d)
-    return frozenset(dirs)
-
-
-def _load_diff_info(
-    repo: Path, base: str, candidate: str
-) -> tuple[list[tuple[str, str]] | None, frozenset[str]]:
-    if not _is_hex_oid(base) or not _is_hex_oid(candidate):
-        return None, frozenset()
-    p = subprocess.run(
-        ["git", "-C", str(repo), "diff", "--name-status", "--no-renames", base, candidate, "--"],
-        capture_output=True,
-        text=True,
-        errors="replace",
-    )
-    if p.returncode != 0:
-        return None, frozenset()
-    changed_files: list[tuple[str, str]] = []
-    shadow_dirs: set[str] = set()
-    for line in p.stdout.splitlines():
-        parts = line.split("\t", 1)
-        if len(parts) == 2:
-            status, fpath = parts[0].strip(), parts[1].strip()
-            changed_files.append((status, fpath))
-            if fpath.endswith(".py") and status in ("A", "M"):
-                shadow_dirs.add(posixpath.dirname(fpath))
-    return changed_files, frozenset(shadow_dirs)
-
-
-def _show_file_bytes(repo: Path, ref: str, fpath: str) -> bytes | None:
-    if not _is_hex_oid(ref) or not fpath or fpath.startswith("-"):
-        return None
-    p = subprocess.run(
-        ["git", "-C", str(repo), "cat-file", "-p", f"{ref}:{fpath}"], capture_output=True
-    )
-    return p.stdout if p.returncode == 0 else None

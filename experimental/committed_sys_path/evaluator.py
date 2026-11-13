@@ -1,246 +1,209 @@
-"""Pure AST static analysis and path evaluation for committed_sys_path.
-
-Detects in-process search-path modifications and statically evaluates whether
-their target paths resolve to base-committed repository directories without
-shadow modules.
-"""
+"""Pure AST static analysis and POSIX/pathlib evaluation for committed_sys_path."""
 
 from __future__ import annotations
 
 import ast
 import posixpath
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 
 from experimental.committed_sys_path.aliases import (
-    _AliasState,
+    AliasState,
     collect_aliases_and_env,
     is_sys_expr,
     is_sys_path_expr,
 )
+from experimental.committed_sys_path.path_edits import PathEdit, find_path_edits
 
 __all__ = [
+    "EvalPath",
     "PathEdit",
     "StaticPathEvaluator",
     "collect_aliases_and_env",
-    "extract_new_path_targets",
     "find_path_edits",
     "is_sys_expr",
     "is_sys_path_expr",
 ]
 
+_CW_ROOT = "/_CW_ROOT_"
+
 
 @dataclass(frozen=True)
-class PathEdit:
-    """Represents a detected in-process search path edit."""
+class EvalPath:
+    """Statically evaluated path value with __file__-anchoring flag."""
 
-    lineno: int
-    kind: str
-    target_nodes: tuple[ast.AST, ...]
-    raw_stmt: str
+    path: str
+    anchored: bool
+    is_pathlib: bool = False
 
 
 class StaticPathEvaluator:
-    """Evaluates AST expressions resolving to repository-relative paths."""
+    """Evaluates AST expressions resolving to __file__-anchored repository paths."""
 
-    def __init__(self, env: dict[str, ast.AST], file_path: str) -> None:
-        self.env = env
+    def __init__(self, st: AliasState, file_path: str) -> None:
+        self.st = st
         self.file_path = file_path
 
-    def evaluate(self, node: ast.AST, depth: int = 0) -> tuple[str, list[str] | str] | None:
-        """Evaluate an AST expression into ('file', comps), ('dir', comps), or ('lit', str)."""
-        if depth > 10:
+    def evaluate(self, node: ast.AST, depth: int = 0) -> EvalPath | None:
+        """Evaluate an AST expression into an EvalPath or None if dynamic."""
+        if depth > 12:
             return None
         if isinstance(node, ast.Name):
             if node.id == "__file__":
-                return ("file", [])
-            return self.evaluate(self.env[node.id], depth + 1) if node.id in self.env else None
+                if self.st.file_rebound:
+                    return None
+                clean = posixpath.normpath(self.file_path).lstrip("/")
+                return EvalPath(f"{_CW_ROOT}/{clean}", anchored=True)
+            if node.id in self.st.env:
+                return self.evaluate(self.st.env[node.id], depth + 1)
+            return None
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            return ("lit", node.value)
+            return EvalPath(node.value, anchored=False)
         if isinstance(node, ast.Call):
             return self._eval_call(node, depth)
         if isinstance(node, ast.Attribute) and node.attr == "parent":
-            return self._up(self.evaluate(node.value, depth + 1), 1)
+            base = self.evaluate(node.value, depth + 1)
+            if base and base.is_pathlib:
+                return EvalPath(
+                    str(PurePosixPath(base.path).parent), anchored=base.anchored, is_pathlib=True
+                )
+            return None
         if isinstance(node, ast.Subscript):
             return self._eval_subscript(node, depth)
         if isinstance(node, ast.BinOp):
             return self._eval_binop(node, depth)
         return None
 
-    def _eval_call(self, node: ast.Call, depth: int) -> tuple[str, list[str] | str] | None:
-        fn_name = ast.unparse(node.func)
-        tail = fn_name.split(".")[-1]
-        if tail == "dirname" and node.args:
-            return self._up(self.evaluate(node.args[0], depth + 1), 1)
-        if tail in (
-            "abspath",
-            "realpath",
-            "resolve",
-            "absolute",
-            "str",
-            "fspath",
-            "Path",
-            "PurePath",
-        ):
-            if isinstance(node.func, ast.Attribute) and tail in ("resolve", "absolute"):
-                return self.evaluate(node.func.value, depth + 1)
-            if node.args:
-                if tail in ("Path", "PurePath") and len(node.args) > 1:
-                    return self._join([self.evaluate(a, depth + 1) for a in node.args])
-                return self.evaluate(node.args[0], depth + 1)
-        if tail == "join" and node.args and ("path" in fn_name or "join" in fn_name):
-            return self._join([self.evaluate(a, depth + 1) for a in node.args])
-        if tail == "joinpath" and isinstance(node.func, ast.Attribute):
-            parts = [self.evaluate(node.func.value, depth + 1)]
-            parts.extend(self.evaluate(a, depth + 1) for a in node.args)
-            return self._join(parts)
+    def _is_verified_ospath(self, node: ast.AST) -> bool:
+        if isinstance(node, ast.Name):
+            return node.id in self.st.ospath_aliases
+        if isinstance(node, ast.Attribute) and node.attr == "path":
+            return isinstance(node.value, ast.Name) and node.value.id in self.st.os_aliases
+        return False
+
+    def _eval_call(self, node: ast.Call, depth: int) -> EvalPath | None:
+        fn = node.func
+        if isinstance(fn, ast.Name):
+            if fn.id == "str" and self.st.str_trusted and len(node.args) == 1:
+                res = self.evaluate(node.args[0], depth + 1)
+                return EvalPath(res.path, anchored=res.anchored, is_pathlib=False) if res else None
+            if fn.id in self.st.path_cls_aliases and node.args:
+                return self._eval_path_cls(node.args, depth)
+            if fn.id in self.st.path_fn_aliases:
+                return self._eval_path_op(self.st.path_fn_aliases[fn.id], node.args, depth)
+            return None
+        if isinstance(fn, ast.Attribute):
+            if fn.attr in ("dirname", "join", "abspath", "realpath") and self._is_verified_ospath(
+                fn.value
+            ):
+                return self._eval_path_op(fn.attr, node.args, depth)
+            if (
+                fn.attr == "fspath"
+                and isinstance(fn.value, ast.Name)
+                and fn.value.id in self.st.os_aliases
+            ):
+                return self._eval_path_op("fspath", node.args, depth)
+            if (
+                fn.attr in _PATHLIB_NAMES
+                and isinstance(fn.value, ast.Name)
+                and fn.value.id in self.st.pathlib_aliases
+            ):
+                return self._eval_path_cls(node.args, depth)
+            base = self.evaluate(fn.value, depth + 1)
+            if base and base.is_pathlib:
+                if fn.attr in ("resolve", "absolute") and not node.args:
+                    return EvalPath(
+                        posixpath.normpath(base.path), anchored=base.anchored, is_pathlib=True
+                    )
+                if fn.attr == "joinpath" and node.args:
+                    return self._join_paths(
+                        base, [self.evaluate(a, depth + 1) for a in node.args], is_pathlib=True
+                    )
         return None
 
-    def _eval_subscript(
-        self, node: ast.Subscript, depth: int
-    ) -> tuple[str, list[str] | str] | None:
-        if isinstance(node.value, ast.Attribute) and node.value.attr == "parents":
-            k = node.slice
-            if isinstance(k, ast.Constant) and isinstance(k.value, int):
-                return self._up(self.evaluate(node.value.value, depth + 1), k.value + 1)
-        return None
+    def _eval_path_cls(self, args: list[ast.expr], depth: int) -> EvalPath | None:
+        if not args:
+            return None
+        first = self.evaluate(args[0], depth + 1)
+        if first is None:
+            return None
+        base = EvalPath(first.path, anchored=first.anchored, is_pathlib=True)
+        if len(args) == 1:
+            return base
+        return self._join_paths(
+            base, [self.evaluate(a, depth + 1) for a in args[1:]], is_pathlib=True
+        )
 
-    def _eval_binop(self, node: ast.BinOp, depth: int) -> tuple[str, list[str] | str] | None:
-        if isinstance(node.op, ast.Div):
-            return self._join(
-                [self.evaluate(node.left, depth + 1), self.evaluate(node.right, depth + 1)]
+    def _eval_path_op(self, op: str, args: list[ast.expr], depth: int) -> EvalPath | None:
+        if op == "dirname" and len(args) == 1:
+            p = self.evaluate(args[0], depth + 1)
+            return EvalPath(posixpath.dirname(p.path), anchored=p.anchored) if p else None
+        if op in ("abspath", "realpath") and len(args) == 1:
+            p = self.evaluate(args[0], depth + 1)
+            return (
+                EvalPath(posixpath.normpath(p.path), anchored=True) if (p and p.anchored) else None
             )
-        if isinstance(node.op, ast.Add):
-            lv, rv = self.evaluate(node.left, depth + 1), self.evaluate(node.right, depth + 1)
-            if lv and rv and lv[0] == "lit" and rv[0] == "lit":
-                return ("lit", str(lv[1]) + str(rv[1]))
-        return None
-
-    def _up(self, b: tuple[str, list[str] | str] | None, k: int) -> tuple[str, list[str]] | None:
-        if not b or b[0] not in ("file", "dir"):
-            return None
-        kind, comps_raw = b[0], b[1]
-        comps = list(comps_raw) if isinstance(comps_raw, list) else []
-        if kind == "file":
-            comps = []
-            k -= 1
-        comps.extend([".."] * k)
-        return ("dir", comps)
-
-    def _join(
-        self, parts: list[tuple[str, list[str] | str] | None]
-    ) -> tuple[str, list[str] | str] | None:
-        if any(p is None for p in parts) or parts[0] is None:
-            return None
-        first = ("dir", []) if parts[0][0] == "file" else parts[0]
-        if first[0] == "dir":
-            comps = list(first[1]) if isinstance(first[1], list) else []
-            for p in parts[1:]:
-                if (
-                    p is None
-                    or p[0] != "lit"
-                    or not isinstance(p[1], str)
-                    or p[1].startswith(("/", "~"))
-                ):
-                    return None
-                comps.extend(c for c in p[1].split("/") if c not in ("", "."))
-            return ("dir", comps)
-        if first[0] == "lit" and isinstance(first[1], str) and not first[1].startswith(("/", "~")):
-            joined = first[1]
-            for p in parts[1:]:
-                if (
-                    p is None
-                    or p[0] != "lit"
-                    or not isinstance(p[1], str)
-                    or p[1].startswith(("/", "~"))
-                ):
-                    return None
-                joined = posixpath.join(joined, p[1])
-            return ("lit", posixpath.normpath(joined))
-        return None
-
-    def resolve_to_repo_dir(self, eval_res: tuple[str, list[str] | str]) -> str | None:
-        """Resolve evaluated path to a normalized repository-relative directory path."""
-        kind, val = eval_res
-        if kind == "lit" and isinstance(val, str):
-            if val.startswith(("/", "~")):
+        if op == "fspath" and len(args) == 1:
+            p = self.evaluate(args[0], depth + 1)
+            return EvalPath(p.path, anchored=p.anchored, is_pathlib=False) if p else None
+        if op == "join" and args:
+            first = self.evaluate(args[0], depth + 1)
+            if first is None:
                 return None
-            norm = posixpath.normpath(val)
-        elif kind == "dir" and isinstance(val, list):
-            base = posixpath.dirname(self.file_path)
-            norm = posixpath.normpath(posixpath.join(base, *val)) if val else (base or "")
+            return self._join_paths(
+                first, [self.evaluate(a, depth + 1) for a in args[1:]], is_pathlib=False
+            )
+        return None
+
+    def _join_paths(
+        self, first: EvalPath, rest: list[EvalPath | None], *, is_pathlib: bool
+    ) -> EvalPath | None:
+        parts: list[str] = []
+        for p in rest:
+            if p is None or p.anchored or p.path.startswith(("/", "~")):
+                return None
+            parts.append(p.path)
+        if is_pathlib:
+            joined = str(PurePosixPath(first.path).joinpath(*parts))
         else:
+            joined = posixpath.join(first.path, *parts) if parts else first.path
+        return EvalPath(joined, anchored=first.anchored, is_pathlib=is_pathlib)
+
+    def _eval_subscript(self, node: ast.Subscript, depth: int) -> EvalPath | None:
+        if isinstance(node.value, ast.Attribute) and node.value.attr == "parents":
+            base = self.evaluate(node.value.value, depth + 1)
+            k = node.slice
+            if (
+                base
+                and base.is_pathlib
+                and isinstance(k, ast.Constant)
+                and isinstance(k.value, int)
+            ):
+                parents = PurePosixPath(base.path).parents
+                if 0 <= k.value < len(parents):
+                    return EvalPath(str(parents[k.value]), anchored=base.anchored, is_pathlib=True)
+        return None
+
+    def _eval_binop(self, node: ast.BinOp, depth: int) -> EvalPath | None:
+        lv, rv = self.evaluate(node.left, depth + 1), self.evaluate(node.right, depth + 1)
+        if lv is None or rv is None:
             return None
-        return None if norm.startswith("..") else ("" if norm in (".", "") else norm)
+        if isinstance(node.op, ast.Div) and lv.is_pathlib:
+            return self._join_paths(lv, [rv], is_pathlib=True)
+        if isinstance(node.op, ast.Add) and not lv.anchored and not rv.anchored:
+            return EvalPath(lv.path + rv.path, anchored=False)
+        return None
+
+    def resolve_to_repo_dir(self, eval_res: EvalPath) -> str | None:
+        """Resolve an __file__-anchored EvalPath to a repo-relative directory."""
+        if not eval_res.anchored:
+            return None
+        norm = posixpath.normpath(eval_res.path)
+        if norm == _CW_ROOT:
+            return ""
+        if norm.startswith(_CW_ROOT + "/"):
+            return norm[len(_CW_ROOT) + 1 :]
+        return None
 
 
-def extract_new_path_targets(value: ast.AST, st: _AliasState) -> list[ast.AST]:
-    """Extract individual target path expressions added in an assignment."""
-    if isinstance(value, ast.BinOp) and isinstance(value.op, ast.Add):
-        return extract_new_path_targets(value.left, st) + extract_new_path_targets(value.right, st)
-    if is_sys_path_expr(
-        value, st.sys_aliases, st.sys_funcs, st.path_aliases, st.path_funcs, st.env
-    ):
-        return []
-    if isinstance(value, (ast.List, ast.Tuple)):
-        return [elt.value if isinstance(elt, ast.Starred) else elt for elt in value.elts]
-    return [value]
-
-
-def find_path_edits(tree: ast.AST, source_text: str) -> list[PathEdit]:
-    """Find all in-process search path modification statements in the AST."""
-    sys_aliases, path_aliases, sys_funcs, path_funcs, env = collect_aliases_and_env(tree)
-    st = _AliasState(sys_aliases, path_aliases, sys_funcs, path_funcs, env)
-    lines = source_text.splitlines()
-    edits: list[PathEdit] = []
-    for node in ast.walk(tree):
-        _detect_call_edits(node, st, lines, edits)
-        _detect_assign_edits(node, st, lines, edits)
-    return edits
-
-
-def _detect_call_edits(
-    node: ast.AST, st: _AliasState, lines: list[str], edits: list[PathEdit]
-) -> None:
-    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
-        return
-    func = node.func
-    attr = func.attr
-    lineno = node.lineno
-    raw = lines[lineno - 1].strip() if 0 < lineno <= len(lines) else ""
-    if attr in ("insert", "append", "extend") and is_sys_path_expr(
-        func.value, st.sys_aliases, st.sys_funcs, st.path_aliases, st.path_funcs, st.env
-    ):
-        targets: list[ast.AST] = []
-        if attr == "insert" and len(node.args) >= 2:
-            targets = [node.args[1]]
-        elif attr in ("insert", "append") and node.args:
-            targets = [node.args[0]]
-        elif attr == "extend" and node.args:
-            arg = node.args[0]
-            targets = list(arg.elts) if isinstance(arg, (ast.List, ast.Tuple)) else [arg]
-        edits.append(PathEdit(lineno, f"sys.path.{attr}", tuple(targets), raw))
-    elif attr == "addsitedir" and isinstance(func.value, ast.Name) and func.value.id == "site":
-        edits.append(PathEdit(lineno, "site.addsitedir", tuple(node.args[:1]), raw))
-
-
-def _detect_assign_edits(
-    node: ast.AST, st: _AliasState, lines: list[str], edits: list[PathEdit]
-) -> None:
-    if not isinstance(node, (ast.Assign, ast.AugAssign)):
-        return
-    tgts = [node.target] if isinstance(node, ast.AugAssign) else node.targets
-    lineno = node.lineno
-    raw = lines[lineno - 1].strip() if 0 < lineno <= len(lines) else ""
-    for t in tgts:
-        if (
-            isinstance(t, ast.Name)
-            and t.id not in ("__path__", "submodule_search_locations")
-            and t.id not in st.path_aliases
-        ):
-            continue
-        if is_sys_path_expr(
-            t, st.sys_aliases, st.sys_funcs, st.path_aliases, st.path_funcs, st.env
-        ):
-            targets = extract_new_path_targets(node.value, st)
-            kind = "sys.path+=" if isinstance(node, ast.AugAssign) else "sys.path="
-            edits.append(PathEdit(lineno, kind, tuple(targets), raw))
+_PATHLIB_NAMES = frozenset({"Path", "PurePath", "PurePosixPath"})

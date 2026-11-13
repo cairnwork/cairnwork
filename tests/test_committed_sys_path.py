@@ -69,8 +69,16 @@ def test_ac2_dynamic_targets_and_unchanged_base() -> None:
         assert res.verdict == "REJECT"
         assert res.reason == "NON_COMMITTED_SEARCH_PATH"
 
-    old_code = b"import sys\nsys.path.insert(0, 'bin')\ndef foo(): return 1\n"
-    new_code = b"import sys\nsys.path.insert(0, 'bin')\ndef foo(): return 2\n"
+    old_code = (
+        b"import sys, os\n"
+        b"sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'bin'))\n"
+        b"def foo(): return 1\n"
+    )
+    new_code = (
+        b"import sys, os\n"
+        b"sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'bin'))\n"
+        b"def foo(): return 2\n"
+    )
     unchanged = check_source("src/x.py", old_code, new_code, BASE_DIRS)
     assert unchanged.verdict == "ACCEPT"
 
@@ -157,7 +165,7 @@ def test_failure_modes() -> None:
     assert err_source.verdict == "ERROR"
     assert err_source.reason == "UNREADABLE_SOURCE"
 
-    with patch("experimental.committed_sys_path._rev_parse", return_value=None):
+    with patch("experimental.committed_sys_path.git_io._rev_parse", return_value=None):
         commit_err = check_commit("/nowhere", "deadbeef", "12345678")
         assert commit_err.verdict == "ERROR"
         assert commit_err.reason == "INVALID_COMMIT"
@@ -227,3 +235,108 @@ def test_cex_counterexamples_matrix() -> None:
         assert v.verdict == expected_verdict, (
             f"CEX case {tag} expected {expected_verdict}, got {v.verdict} ({v.reason})"
         )
+
+
+@pytest.mark.parametrize(
+    ("fpath", "old_src", "new_src", "allow", "expected"),
+    [
+        (
+            "src/x.py",
+            None,
+            b"# coding: shift_jis\nimport sys\nsys.path.insert(0, '/tmp')\n",
+            (),
+            "REJECT",
+        ),
+        (
+            "src/x.py",
+            None,
+            b"import sys, os\nBIN = os.path.dirname(__file__)\n"
+            b"if False: BIN = '/tmp'\nsys.path.insert(0, BIN)\n",
+            (),
+            "REJECT",
+        ),
+        (
+            "src/x.py",
+            None,
+            b"import sys, os\nBIN = os.path.dirname(__file__)\n"
+            b"def f(BIN='/tmp'): sys.path.insert(0, BIN)\n",
+            (),
+            "REJECT",
+        ),
+        (
+            "src/x.py",
+            None,
+            b"import sys, os\n__file__ = '/tmp/x.py'\n"
+            b"sys.path.insert(0, os.path.dirname(__file__))\n",
+            (),
+            "REJECT",
+        ),
+        (
+            "src/x.py",
+            None,
+            b"import sys\ndef join(*a): return '/tmp'\n"
+            b"sys.path.insert(0, join(__file__, '..', 'bin'))\n",
+            (),
+            "REJECT",
+        ),
+        (
+            "src/x.py",
+            None,
+            b"import sys, os\nsys.path.insert(0, os.path.join(__file__, '..', 'bin'))\n",
+            (),
+            "REJECT",
+        ),
+        (
+            "src/x.py",
+            None,
+            b"import sys, os\nsys.path.insert(0, os.path.dirname('evil/'))\n",
+            (),
+            "REJECT",
+        ),
+        ("src/x.py", None, b"import sys\nsys.path.insert(0, 'bin')\n", (), "REJECT"),
+        ("src/x.py", None, b"import sys\nins = sys.path.insert\nins(0, '/tmp')\n", (), "REJECT"),
+        ("src/x.py", None, b"import sys\ngetattr(sys.path, 'insert')(0, '/tmp')\n", (), "REJECT"),
+        ("src/x.py", None, b"import sys\nlist.insert(sys.path, 0, '/tmp')\n", (), "REJECT"),
+        ("src/x.py", None, b"import sys\nsys.path.__iadd__(['/tmp'])\n", (), "REJECT"),
+        ("src/x.py", None, b"import sys\nsetattr(sys, 'path', ['/tmp'])\n", (), "REJECT"),
+        ("src/x.py", None, b"import sys\nsys.__dict__['path'].insert(0, '/tmp')\n", (), "REJECT"),
+        ("src/x.py", None, b"import sys\nvars(sys)['path'].insert(0, '/tmp')\n", (), "REJECT"),
+        (
+            "src/x.py",
+            b"import sys, os\nBIN = os.path.join(os.path.dirname(__file__), '..', 'bin')\n"
+            b"sys.path.insert(0, BIN)\n",
+            b"import sys\nBIN = '/tmp'\nsys.path.insert(0, BIN)\n",
+            (),
+            "REJECT",
+        ),
+        (
+            "src/x.py",
+            b"import sys\ndef add(p): sys.path.insert(0, p)\n",
+            b"import sys, tempfile\ndef add(p): sys.path.insert(0, p)\nadd(tempfile.mkdtemp())\n",
+            (),
+            "REJECT",
+        ),
+        ("src/pkg/test_foo.py", None, b"import sys\nsys.path.insert(0, '/tmp')\n", (), "REJECT"),
+        ("src/tests/x.py", None, b"import sys\nsys.path.insert(0, '/tmp')\n", (), "REJECT"),
+        ("src/x.py", None, b"import os\ngetattr(os, 'sys').path.insert(0, '/tmp')\n", (), "REJECT"),
+        ("src/x.py", None, b"import site as st\nst.addsitedir('/tmp')\n", (), "REJECT"),
+        ("src/x.py", None, b"from site import addsitedir as asd\nasd('/tmp')\n", (), "REJECT"),
+        ("src/x.py", None, b"\x00import sys\n", (), "ERROR"),
+        (
+            "experimental_evil/x.py",
+            None,
+            b"import sys\nsys.path.insert(0, '/tmp')\n",
+            ("experimental/",),
+            "REJECT",
+        ),
+        ("src/x.py", None, b"import sys\nsaved = sys.path[:]\n", (), "ACCEPT"),
+    ],
+)
+def test_round2_adversarial_regressions(
+    fpath: str, old_src: bytes | None, new_src: bytes, allow: tuple[str, ...], expected: str
+) -> None:
+    """Regression suite for Round 1 findings (CX-2..CX-14, Gemini nits, Nit 10-12)."""
+    res = check_source(fpath, old_src, new_src, BASE_DIRS, allowlist_prefixes=allow)
+    assert res.verdict == expected, (
+        f"{fpath}: expected {expected}, got {res.verdict} ({res.reason})"
+    )
