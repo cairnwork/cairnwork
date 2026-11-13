@@ -19,6 +19,10 @@ PASSING = {
 }  # fmt: skip
 
 
+def _kw(**over: Any) -> dict[str, Any]:
+    return {**BASE, **over}
+
+
 def _parse(payload):
     return report_guard.parse_verdict(json.dumps(payload).encode(), NONCE)
 
@@ -75,18 +79,15 @@ def test_the_reason_names_an_exit_status_that_disagrees_with_the_record(
     returncode, exitstatus, testsfailed, why
 ):
     status = {"exitstatus": exitstatus, "testsfailed": testsfailed}
-    assert why_not_passed(**(BASE | {"returncode": returncode} | status)) == why
+    assert why_not_passed(**_kw(returncode=returncode, **status)) == why
 
 
 def test_collected_skips_are_named_without_changing_the_failure_reason():
     why = why_not_passed(
-        **(
-            BASE
-            | {
-                "outcomes": {
-                    "tests/test_env.py::test_sandbox": "skipped",
-                    "tests/test_ok.py::test_ok": "passed",
-                }
+        **_kw(
+            outcomes={
+                "tests/test_env.py::test_sandbox": "skipped",
+                "tests/test_ok.py::test_ok": "passed",
             }
         ),
     )
@@ -98,7 +99,7 @@ def test_collected_skips_are_named_without_changing_the_failure_reason():
 
 def test_collected_mixed_nonpassing_outcomes_are_counted_and_bounded():
     outcomes = {f"tests/test_{i}.py::test_case": "xfailed" for i in range(7)}
-    why = why_not_passed(**(BASE | {"outcomes": outcomes}))
+    why = why_not_passed(**_kw(outcomes=outcomes))
     assert "7 xfailed" in why
     assert "7 xfailed: tests/test_0.py??test_case, tests/test_1.py??test_case, " in why
     assert "+2 more" in why
@@ -135,14 +136,14 @@ def test_outcome_reason_preserves_verdict_and_fallbacks():
     assert "t??a" in why_not_passed(**BASE, outcomes={"t::a": "skipped"}, all_skipped=True)
     assert why_not_passed(**BASE, outcomes={}) == "pytest passed but the guard saw no test run"
     assert why_not_passed(**BASE, outcomes=None) == "pytest passed but the guard saw no test run"
-    failed = BASE | {"returncode": 1}
+    failed = _kw(returncode=1)
     baseline = why_not_passed(**failed)
     assert baseline == (
         "process exit status 1 disagrees with the recorded session status "
         "(exit status 0, 0 failed); pytest exit code 1"
     )
     assert why_not_passed(**failed, outcomes={}) == baseline
-    assert why_not_passed(**(BASE | {"exitstatus": 2}), outcomes={}) == (
+    assert why_not_passed(**_kw(exitstatus=2), outcomes={}) == (
         "process exit status 0 disagrees with the recorded session status (exit status 2, 0 failed)"
     )
     assert why_not_passed(**BASE, outcomes={"t::a": "passed"}) == (
