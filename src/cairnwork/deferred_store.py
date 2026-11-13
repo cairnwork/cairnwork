@@ -120,18 +120,25 @@ class DeferredStore:
                     f"{HEAD_REF}:{HEAD_REF}",
                 )
             except GitCommandError as exc:
-                _raise_git_failure(exc)
+                _raise_store_failure(exc)
             try:
                 return _only_parent(scratch)
             except GitCommandError as exc:
-                _raise_git_failure(exc)
+                _raise_store_failure(exc)
 
     def fetch_into(self, repo: Path, sha: str) -> None:
         """Bring the stored commit into repo (the verifier's clone), after the worker."""
         self.check_dir()
         if not self.has(sha):
             raise TestCommitRejected("TEST_COMMIT_NOT_IMPORTED", sha)
-        try:
+        with _Scratch(
+            self.path, repo
+        ) as scratch:  # a repo that is no repository: refused, as before
+            try:  # the stored bundle is read on the store side first: its failure is ours (#1185)
+                run_git(scratch, "fetch", "--quiet", "--no-tags", str(self.bundle(sha)), HEAD_REF)
+            except GitCommandError as exc:
+                _raise_store_failure(exc)
+        try:  # the write into the supplied repo keeps the base classification
             run_git(repo, "fetch", "--quiet", "--no-tags", str(self.bundle(sha)), HEAD_REF)
             run_git(repo, "cat-file", "-e", f"{sha}^{{commit}}")
         except GitCommandError as exc:
@@ -214,7 +221,7 @@ class _Scratch:
                 (info / "alternates").write_text(f"{objects}\n")
         except GitCommandError as exc:
             shutil.rmtree(self.dir, ignore_errors=True)
-            _raise_git_failure(exc)
+            _raise_store_failure(exc)
         except OSError:
             shutil.rmtree(self.dir, ignore_errors=True)
             raise
@@ -229,6 +236,12 @@ def _only_parent(scratch: Path) -> str:
     if len(fields) != 2 or not OID.fullmatch(fields[1]):
         raise TestCommitRejected("TEST_COMMIT_NOT_ON_BASE", "its only parent must be the base")
     return fields[1]
+
+
+def _raise_store_failure(exc: GitCommandError) -> NoReturn:
+    """A git failure on Cairnwork's own storage (a stored bundle, its scratch) is never the
+    Issue's fault (#1185): even a completed refusal is an environment error."""
+    raise OSError(f"Cairnwork could not run git: {exc}") from exc
 
 
 def _raise_git_failure(
