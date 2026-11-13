@@ -5,6 +5,7 @@ what the plugin calls on the record path is bound when it is imported."""
 import json
 import subprocess
 import sys
+from typing import Any
 
 import pytest
 
@@ -47,7 +48,7 @@ def test_every_outcome_passed_is_not_a_pass_when_pytest_says_otherwise(exitstatu
     assert (v.exitstatus, v.testsfailed) == (exitstatus, testsfailed)
 
 
-BASE = {
+BASE: dict[str, Any] = {
     "ran_sandboxed": True, "returncode": 0, "timed_out": False, "mutated": (),
     "survivors": 0, "log_too_big": False, "tests_ran": False, "exitstatus": 0,
     "testsfailed": 0,
