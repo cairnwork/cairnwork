@@ -232,6 +232,66 @@ def test_candidate_parse_failure_is_closed(repo):
     assert got.value.code == "UNREADABLE_CHANGE"
 
 
+def _assert_no_workflow_command_line(message):
+    assert all(not line.startswith(("::", "##[")) for line in message.splitlines())
+
+
+def test_newline_candidate_path_is_escaped_in_mutation_rejection(repo):
+    base = git(repo, "rev-parse", "HEAD")
+    path = "pkg\n::warning::x.py"
+    cand = commit_change(repo, {path: "import sys\nsys.modules['x'] = None\n"})
+
+    with pytest.raises(CandidateRejected) as got:
+        candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, (path,))
+
+    assert got.value.code == "CANDIDATE_SYS_PATH_MUTATION"
+    _assert_no_workflow_command_line(str(got.value))
+
+
+def test_newline_candidate_path_is_escaped_in_unreadable_rejection(repo, monkeypatch):
+    base = git(repo, "rev-parse", "HEAD")
+    path = "pkg\n::warning::x.py"
+    cand = commit_change(repo, {"pkg/module.py": "VALUE = 1\n"})
+
+    def unreadable(*args, **kwargs):
+        raise OSError(f"cannot read {path}")
+
+    monkeypatch.setattr(candidate_sys_path, "run_git_bytes", unreadable)
+
+    with pytest.raises(CandidateRejected) as got:
+        candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, ("pkg/module.py",))
+
+    assert got.value.code == "UNREADABLE_CHANGE"
+    _assert_no_workflow_command_line(str(got.value))
+
+
+_NL = "\n::warning::x"
+_INJECT_CASES = {
+    "runtime": {f"pkg{_NL}.py": "import sys\nopen('a', 'w').write('x')\nsys.path.insert(0, '.')\n"},
+    "shadow_path": {
+        f"r{_NL}.py": "import sys\nsys.path.insert(0, 'sub')\n",
+        "d/json.py": "X = 1\n",
+    },
+    "shadow_name": {
+        "red.py": "import sys\nsys.path.insert(0, 'sub')\n",
+        f"d{_NL}/json.py": "X = 1\n",
+    },
+}
+
+
+@pytest.mark.parametrize("case", sorted(_INJECT_CASES))
+@pytest.mark.parametrize("variant", ["\n::warning::x", "\n##[error]x", "\u2028::x", "\x85::x"])
+def test_every_rejection_branch_escapes_a_hostile_candidate_path(repo, case, variant):
+    base = git(repo, "rev-parse", "HEAD")
+    files = {k.replace(_NL, variant): v for k, v in _INJECT_CASES[case].items()}
+    cand = commit_change(repo, files)
+    with pytest.raises(CandidateRejected) as got:
+        candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, tuple(files))
+    assert got.value.code == "CANDIDATE_SYS_PATH_MUTATION"
+    _assert_no_workflow_command_line(str(got.value))
+    assert "\x1b" not in str(got.value)
+
+
 def test_files_outside_the_candidates_allowed_files_are_not_its_mutation(repo):
     """On the worker path the judged commit also carries the deferred tests; those are the test
     commit's, read by sys_path_scan, not the candidate's (#1065, worker pipeline)."""

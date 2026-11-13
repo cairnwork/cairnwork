@@ -170,7 +170,13 @@ def test_the_verifier_accounts_denial_is_recorded(repo, tmp_path):
 
 
 def test_a_base_that_floods_the_log_itself_is_unavailable(repo, tmp_path):  # AC-burst-own
+    # #1102: under a heavily loaded host the burst can be slowed or its lines delayed, so the same
+    # flood reads "stalled" or "canary missing" once (still UNAVAILABLE, never judged). One more run
+    # for that; the volume reason is still required, and a second miss fails.
     run = _run(repo, tmp_path, BURST)
+    if not run.deny_evidence.startswith("UNAVAILABLE: stream volume over the cap"):
+        assert run.deny_evidence.startswith("UNAVAILABLE: "), run.deny_evidence  # never judged
+        run = _run(repo, tmp_path, BURST + "# again\n")
     assert run.deny_evidence.startswith("UNAVAILABLE: stream volume over the cap"), (
         run.deny_evidence
     )
