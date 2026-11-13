@@ -174,15 +174,36 @@ def _include_problem(repo: Path) -> str | None:
     return None
 
 
+def _config_files() -> list[Path]:
+    """The global config files git reads, resolved the way git does (an unreadable system config
+    makes git itself fail, which the exit-code check refuses)."""
+    env = os.environ
+    if "GIT_CONFIG_GLOBAL" in env:  # then git reads no ~/.gitconfig and no XDG config
+        files = [Path(env["GIT_CONFIG_GLOBAL"])]
+    else:
+        home = os.path.expanduser("~")
+        xdg = env.get("XDG_CONFIG_HOME", "")
+        base = Path(xdg) if os.path.isabs(xdg) else Path(home) / ".config"
+        files = [Path(home) / ".gitconfig", base / "git" / "config"]
+    return files
+
+
+def _unreadable(path: Path) -> bool:
+    try:
+        os.stat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return False  # absent, or a dangling link: git ignores it
+    except OSError:
+        return True  # e.g. a parent that cannot be searched
+    return not os.access(path, os.R_OK)
+
+
 def _silent_read_failure(repo: Path) -> str | None:
     """git exits 0/1 and prints nothing when it cannot read a global config, an include.path
     target or a ref directory (Issue #1120). Check those inputs ourselves; None if all fine."""
-    home = os.path.expanduser("~")
-    xdg = os.environ.get("XDG_CONFIG_HOME", "")
-    base = Path(xdg) if os.path.isabs(xdg) else Path(home) / ".config"
-    for cfg in (Path(home) / ".gitconfig", base / "git" / "config"):
-        if os.path.exists(cfg) and not os.access(cfg, os.R_OK):
-            return f"global git config {str(cfg)!r} is unreadable"
+    for cfg in _config_files():
+        if _unreadable(cfg):
+            return f"git config {str(cfg)!r} is unreadable"
     try:
         problem = _include_problem(repo)
         common = _run_git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir")
