@@ -387,4 +387,3 @@ def test_gate_replay_end_to_end_blocks_configured_account_name(tmp_path, capsys)
     assert results["blocked"]["verdict"] is None
     assert results["blocked"]["reason"] == schema.Reason.PAUSE_SECRET_BLOCKED.value
     assert results["fine"]["verdict"] == "ACCEPT" and results["fine"]["reason"] is None
-
