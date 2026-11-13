@@ -102,7 +102,9 @@ PARAM_REFUSED = {
 def test_one_parametrized_case_is_refused_when_the_function_is_not_the_base_one(case):
     base, test = PARAM_REFUSED[case]
     ids = (
-        ("test_x[1]", "test_x[2]") if "A" not in case else ("TestA::test_x[1]", "TestA::test_x[2]")
+        ("test_x[1]", "test_x[2]")
+        if "class" not in case
+        else ("TestA::test_x[1]", "TestA::test_x[2]")
     )
     removed, dropped = _split(base, test, _ids(*ids), _ids(ids[0]))
     assert _ids(ids[1])[0] in dropped and not removed
@@ -182,4 +184,32 @@ BASE_GUARD = {
 def test_the_base_side_guards_of_the_inherited_chain_hold_alone(case):
     base, test = BASE_GUARD[case]
     removed, dropped = _split(base, test, _ids("TestB::test_x"), [])
+    assert not removed and dropped == {"t.py::TestB::test_x"}
+
+
+# round-4 (Codex) on #1214: the parent is rebuilt or hidden at run time, the subclass stays refused
+PARENT_BASE = (
+    "class TestA:\n    def test_x(self):\n        assert True\n"
+    "    def test_keep(self):\n        assert True\nclass TestB(TestA):\n    pass\n"
+)
+HEAD = "class TestA:\n"
+TAIL = "    def test_keep(self):\n        assert True\nclass TestB(TestA):\n    pass\n"
+DYNAMIC_PARENT = {
+    "locals-and-test-false": HEAD
+    + "    locals()['test_' + 'x'] = lambda self: None\n    __test__ = False\n"
+    + TAIL,
+    "locals-only": HEAD + "    locals()['test_' + 'x'] = lambda self: None\n" + TAIL,
+    "setattr-after": "class TestA:\n"
+    + TAIL.split("class TestB")[0]
+    + "setattr(TestA, 'test_' + 'x', 1)\nclass TestB(TestA):\n    pass\n",
+    "test-false-parent": HEAD + "    __test__ = False\n" + TAIL,
+    "type-rebuild": HEAD
+    + TAIL.split("class TestB")[0]
+    + "TestA = type('TestA', (), {})\nclass TestB(TestA):\n    pass\n",
+}
+
+
+@pytest.mark.parametrize("case", sorted(DYNAMIC_PARENT))
+def test_a_rebuilt_or_hidden_parent_keeps_the_subclass_refused(case):
+    removed, dropped = _split(PARENT_BASE, DYNAMIC_PARENT[case], _ids("TestB::test_x"), [])
     assert not removed and dropped == {"t.py::TestB::test_x"}

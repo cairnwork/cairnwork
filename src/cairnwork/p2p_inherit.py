@@ -68,6 +68,20 @@ def _drops(test: ast.Module, parent: ast.ClassDef, name: str) -> bool:
         return False
 
 
+DYNAMIC = {"setattr", "delattr", "globals", "locals", "vars", "type", "__dict__", "_getframe"}
+DYNAMIC |= {"currentframe", "f_locals", "__set_name__", "__class_getitem__", "__init_subclass__"}
+
+
+def _dynamic(tree: ast.Module) -> bool:
+    """A file that can rebuild or hide class members at run time (``locals()[...]``, ``setattr``,
+    ``type(...)``, ``__dict__``, ``__test__``): the inherited path never trusts its source."""
+    return mentions_dunder_test(tree) or any(
+        (isinstance(n, ast.Name) and n.id in DYNAMIC)
+        or (isinstance(n, ast.Attribute) and n.attr in DYNAMIC)
+        for n in ast.walk(tree)
+    )
+
+
 def inherited_def(tree: ast.Module, cls: ast.ClassDef, name: str, test: ast.Module | None):
     """Whether ``cls`` (module level, no binding of ``name`` itself) got ``def name`` through a
     chain of single same-file bases, each the only binding of its name, AND the test commit kept
@@ -96,5 +110,7 @@ def inherited_def(tree: ast.Module, cls: ast.ClassDef, name: str, test: ast.Modu
         if last is not None:
             break
     if not (isinstance(last, (ast.FunctionDef, ast.AsyncFunctionDef)) and last.name == name):
+        return False
+    if _dynamic(tree) or _dynamic(test):  # #1128 round 4: a rebuilt or hidden parent is dropped
         return False
     return all(_same_bases(test, c) for c in chain[:-1]) and _drops(test, chain[-1], name)
