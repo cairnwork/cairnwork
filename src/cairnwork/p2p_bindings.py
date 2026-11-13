@@ -7,6 +7,8 @@ import ast
 import re
 from collections import Counter
 
+from cairnwork.p2p_dead_zone import live_statements
+
 COMPOUND_STMTS = (
     ast.If,
     ast.Try,
@@ -220,9 +222,8 @@ def hidden_bindings(
 
 
 def _shadowed(body: list[ast.stmt], start: int, name: str, annotations: bool = True) -> bool:
-    return any(
-        binds_in_scope(body[j], name, annotations=annotations) for j in range(start, len(body))
-    )
+    rest = body[start:] if annotations else live_statements(body[start:])  # #1139: base side
+    return any(binds_in_scope(stmt, name, annotations=annotations) for stmt in rest)
 
 
 def _scopes_in(stmt: ast.stmt):
