@@ -244,7 +244,7 @@ _PATH_FIRST_OPENERS = frozenset(
 _MODE_TEXT = re.compile(r"[rwaxbtU+]{1,6}")
 
 
-def _is_write_call(call: ast.Call) -> bool:
+def _is_write_call(call: ast.Call, openers: frozenset[str] = frozenset()) -> bool:
     if isinstance(call.func, ast.Attribute) and call.func.attr in WRITE_ATTRS | {
         "write",
         "writelines",
@@ -265,7 +265,7 @@ def _is_write_call(call: ast.Call) -> bool:
     )
     if is_os_open:
         return True
-    is_open = (isinstance(call.func, ast.Name) and call.func.id == "open") or (
+    is_open = (isinstance(call.func, ast.Name) and call.func.id in {"open", *openers}) or (
         isinstance(call.func, ast.Attribute) and call.func.attr == "open"
     )
     if is_open:
@@ -301,8 +301,23 @@ def _is_write_call(call: ast.Call) -> bool:
     return False
 
 
-def _is_write_statement(node: ast.AST) -> bool:
-    return any(isinstance(part, ast.Call) and _is_write_call(part) for part in ast.walk(node))
+def _imported_openers(tree: ast.Module) -> frozenset[str]:
+    """Names imported directly from known opener modules (#1178)."""
+    modules = {"builtins", "io", "os", "bz2", "lzma", "gzip", "codecs", "tarfile"}
+    openers = {"open", "BZ2File", "LZMAFile", "GzipFile"}
+    return frozenset(
+        alias.asname or alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module in modules
+        for alias in node.names
+        if alias.name in openers
+    )
+
+
+def _is_write_statement(node: ast.AST, openers: frozenset[str]) -> bool:
+    return any(
+        isinstance(part, ast.Call) and _is_write_call(part, openers) for part in ast.walk(node)
+    )
 
 
 def _is_path_edit_statement(node: ast.AST, sys_names: set[str], text: str) -> bool:
@@ -339,8 +354,9 @@ def runtime_shadow_added(old: bytes | None, new: bytes) -> bool:
 
     new_sys = _collect_sys_names(new_tree)
     added_items = [own for key, own in new_items if key in added_counts]
-    added_write = any(_is_write_statement(own) for own in added_items)
+    openers = _imported_openers(new_tree)
+    added_write = any(_is_write_statement(own, openers) for own in added_items)
     added_path = any(_is_path_edit_statement(own, new_sys, ast.unparse(own)) for own in added_items)
-    new_write = any(_is_write_statement(own) for _, own in new_items)
+    new_write = any(_is_write_statement(own, openers) for _, own in new_items)
     new_path = any(_is_path_edit_statement(own, new_sys, ast.unparse(own)) for _, own in new_items)
     return (added_write and new_path) or (added_path and new_write)

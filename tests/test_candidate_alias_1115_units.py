@@ -42,6 +42,19 @@ def test_runtime_shadow_added_open_write_and_path_insert():
     assert runtime_shadow_added(None, src) is True
 
 
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from builtins import open as emit\nemit('f', 'w')\n",
+        "from bz2 import BZ2File as emit\nemit('f', 'wb')\n",
+        "from lzma import LZMAFile as emit\nemit('f', 'w')\n",
+    ],
+)
+def test_runtime_shadow_added_imported_opener_alias(source):
+    src = f"import sys\n{source}sys.path.insert(0, 'd')\n".encode()
+    assert runtime_shadow_added(None, src) is True
+
+
 def test_runtime_shadow_added_open_default_read_mode_is_false():
     src = b"import sys\nopen('f')\nsys.path.insert(0, 'd')\n"
     assert runtime_shadow_added(None, src) is False
