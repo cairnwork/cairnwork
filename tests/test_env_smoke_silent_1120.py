@@ -199,3 +199,60 @@ def test_matching_hasconfig_include_with_missing_target_is_refused(mirror):
 def test_dangling_global_gitconfig_symlink_passes(mirror, home):
     (home / ".gitconfig").symlink_to(home / "no-such-target")
     assert _mirror_multi_branch_reason(mirror) is None
+
+
+# Round-1 cross-model review of #1208: checks the first tests left unpinned (mutants survived).
+@needs_user
+def test_unreadable_xdg_config_is_refused(mirror, home, monkeypatch):
+    xdg = home / "xdg"
+    (xdg / "git").mkdir(parents=True)
+    (xdg / "git" / "config").write_text("[user]\n\tname = x\n")
+    (xdg / "git" / "config").chmod(0)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
+    assert _mirror_multi_branch_reason(mirror) is not None
+
+
+@needs_user
+def test_hostile_global_config_path_never_reaches_a_log_line_raw(mirror, home, monkeypatch):
+    xdg = home / "x\n::error::y"
+    (xdg / "git").mkdir(parents=True)
+    (xdg / "git" / "config").write_text("[user]\n\tname = x\n")
+    (xdg / "git" / "config").chmod(0)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
+    reason = _mirror_multi_branch_reason(mirror)
+    assert reason is not None
+    assert "\n" not in reason
+
+
+def _only(monkeypatch, flag, code, stderr=""):
+    def fake_run(args, **kwargs):
+        got = _REAL_RUN(args, **kwargs)
+        if flag in args:
+            got = subprocess.CompletedProcess(args, code, "", stderr)
+        return got
+
+    monkeypatch.setattr(env_smoke.subprocess, "run", fake_run)
+
+
+@pytest.mark.parametrize("code", [2, 128])
+def test_refspec_read_exit_above_one_is_refused_by_its_own_check(mirror, monkeypatch, code):
+    _only(monkeypatch, "--get-all", code)
+    reason = _mirror_multi_branch_reason(mirror)
+    assert reason is not None
+    assert f"could not read remote.origin.fetch (git exit {code})" in reason
+
+
+@pytest.mark.parametrize(("code", "stderr"), [(128, ""), (0, "warning: x"), (1, "warning: x")])
+def test_include_listing_failure_is_refused(mirror, monkeypatch, code, stderr):
+    _only(monkeypatch, "--get-regexp", code, stderr)
+    reason = _mirror_multi_branch_reason(mirror)
+    assert reason is not None
+    assert "could not list config includes" in reason
+
+
+@pytest.mark.parametrize(("code", "stderr"), [(128, ""), (0, "warning: x")])
+def test_git_dir_lookup_failure_is_refused(mirror, monkeypatch, code, stderr):
+    _only(monkeypatch, "--git-common-dir", code, stderr)
+    reason = _mirror_multi_branch_reason(mirror)
+    assert reason is not None
+    assert "could not locate the git dir" in reason
