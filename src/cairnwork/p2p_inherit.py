@@ -53,6 +53,7 @@ def _plain(cls: ast.ClassDef, tree: ast.Module) -> bool:
 
 def _same_bases(test: ast.Module, cls: ast.ClassDef) -> bool:
     found = [n for n in test.body if isinstance(n, ast.ClassDef) and n.name == cls.name]
+    # defence in depth: _drops and the test-side _scope_mentions already refuse most re-basings
     return len(found) == 1 and [ast.dump(b) for b in found[0].bases] == [
         ast.dump(b) for b in cls.bases
     ]
@@ -124,18 +125,51 @@ def _parametrize(fn) -> list[ast.expr]:
     ]
 
 
+def _literal(node: ast.expr) -> bool:
+    """A constant, a signed number, a tuple or list of those, or ``pytest.param`` of those."""
+    if isinstance(node, ast.Constant):
+        return True
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        return isinstance(node.operand, ast.Constant)
+    if isinstance(node, (ast.Tuple, ast.List)):
+        return all(map(_literal, node.elts))
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+        return (
+            node.func.attr == "param"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "pytest"
+            and all(map(_literal, node.args))
+            and all(k.arg is not None and _literal(k.value) for k in node.keywords)
+        )
+    return False
+
+
+def _literal_cases(dec: ast.expr) -> bool:
+    """A ``parametrize(names, [literal, ...], ...)``: the cases are written out in the decorator
+    (a name, slice, operation or call may hold or produce a case the file still has)."""
+    if not isinstance(dec, ast.Call):
+        return False
+    values = dec.args[1] if len(dec.args) > 1 else None
+    for kw in dec.keywords:
+        values = kw.value if kw.arg == "argvalues" else values
+    rest = [*dec.args[2:], *(k.value for k in dec.keywords if k.arg != "argvalues")]
+    return isinstance(values, (ast.List, ast.Tuple)) and all(map(_literal, [*values.elts, *rest]))
+
+
 def case_removed(base, test, owners, name, case: str, text: str) -> bool:
     """#842 item 2 (#1128): one parametrized case is gone and the function stays. Only when both
-    sides define the function with ``parametrize``, the test commit changed those decorators, and
-    no literal of the new decorators still spells a part of the case id (so a slice, a filter or
-    an unchanged decorator is not a deletion); a collection hook in the file can deselect
-    cases without touching the source, so it refuses."""
+    sides define the function with ``parametrize``, the test commit changed those decorators, every
+    new case is a written-out literal, and no literal still spells a part of the case id (so a
+    slice, a name, a filter or an unchanged decorator is not a deletion). The collection-hook text
+    check is defence in depth: a hook can deselect a case without touching the source."""
     if "pytest_generate_tests" in text or "pytest_collection_modifyitems" in text:
         return False
     old, new = _chain_def(base, owners, name), _chain_def(test, owners, name)
     if old is None or new is None or not _parametrize(new):
         return False
     if [ast.dump(d) for d in _parametrize(old)] == [ast.dump(d) for d in _parametrize(new)]:
+        return False
+    if not all(map(_literal_cases, _parametrize(new))):
         return False
     kept = {
         str(n.value) for d in _parametrize(new) for n in ast.walk(d) if isinstance(n, ast.Constant)

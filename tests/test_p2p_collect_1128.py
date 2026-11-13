@@ -229,3 +229,48 @@ def test_the_base_side_guards_of_the_inherited_chain_hold_alone(case):
     base, test = BASE_GUARD[case]
     removed, dropped = _split(base, test, _ids("TestB::test_x"), [])
     assert not removed and dropped == {"t.py::TestB::test_x"}
+
+
+# round-2 review of #1214: the value is still in the file or still produced (must block)
+NOT_LITERAL = {
+    "name-slice": "CASES = [1, 2]\n" + PX.format("CASES[:1]"),
+    "name-pop": "CASES = [1, 2]\nCASES.pop()\n" + PX.format("CASES"),
+    "name-del": "CASES = [1, 2]\ndel CASES[1]\n" + PX.format("CASES"),
+    "named-constant": "TWO = 2\n" + PX.format("[1, TWO]"),
+    "computed-value": PX.format("[1, 1 + 1]"),
+    "computed-call": PX.format("[1, abs(-2)]"),
+    "function-call": "def cases():\n    return [1, 2][:1]\n" + PX.format("cases()"),
+    "hook-in-file-with-changed-literal": (
+        PX.format("[1]") + "def pytest_generate_tests(metafunc):\n    pass\n"
+    ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(NOT_LITERAL))
+def test_a_vanished_case_with_a_non_literal_parametrize_is_dropped(case):
+    test = PD + NOT_LITERAL[case]
+    assert _split(
+        PD + PX.format("[1, 2]"), test, _ids("test_p[1]", "test_p[2]"), _ids("test_p[1]")
+    ) == (
+        set(),
+        {"t.py::test_p[2]"},
+    )
+
+
+def test_deleted_tuple_and_ids_cases_are_removed():
+    tup = "@pytest.mark.parametrize(('n', 's'), {})\ndef test_p(n, s):\n    assert n\n"
+    removed, dropped = _split(
+        PD + tup.format("[(1, 'a'), (2, 'b')]"),
+        PD + tup.format("[(1, 'a')]"),
+        _ids("test_p[1-a]", "test_p[2-b]"),
+        _ids("test_p[1-a]"),
+    )
+    assert removed == {"t.py::test_p[2-b]"} and not dropped
+    ids = "@pytest.mark.parametrize('n', {}, ids={})\ndef test_p(n):\n    assert n\n"
+    removed, dropped = _split(
+        PD + ids.format("[1, 2]", "['one', 'two']"),
+        PD + ids.format("[1]", "['one']"),
+        _ids("test_p[one]", "test_p[two]"),
+        _ids("test_p[one]"),
+    )
+    assert removed == {"t.py::test_p[two]"} and not dropped
