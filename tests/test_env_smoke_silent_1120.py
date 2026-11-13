@@ -256,3 +256,46 @@ def test_git_dir_lookup_failure_is_refused(mirror, monkeypatch, code, stderr):
     reason = _mirror_multi_branch_reason(mirror)
     assert reason is not None
     assert "could not locate the git dir" in reason
+
+
+# Round-1 Codex review of #1208: the whole family of "a config file git reads is unreadable".
+def _cfg(path, mode=None):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("[user]\n\tname = x\n")
+    if mode is not None:
+        path.chmod(mode)
+    return path
+
+
+@needs_user
+def test_unreadable_git_config_global_file_is_refused(mirror, tmp_path, monkeypatch):
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(_cfg(tmp_path / "g" / "cfg", 0)))
+    assert _mirror_multi_branch_reason(mirror) is not None
+
+
+@needs_user
+def test_unsearchable_parent_of_an_existing_global_config_is_refused(mirror, home, monkeypatch):
+    xdg = home / "xdg"
+    _cfg(xdg / "git" / "config")
+    (xdg / "git").chmod(0)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
+    assert _mirror_multi_branch_reason(mirror) is not None
+
+
+@needs_user
+def test_unreadable_system_config_is_refused(mirror, tmp_path, monkeypatch):
+    monkeypatch.delenv("GIT_CONFIG_NOSYSTEM")
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", str(_cfg(tmp_path / "s" / "cfg", 0)))
+    assert _mirror_multi_branch_reason(mirror) is not None
+
+
+@needs_user
+def test_global_config_git_does_not_read_is_not_refused(mirror, home, tmp_path, monkeypatch):
+    _cfg(home / ".gitconfig", 0)  # ignored by git once GIT_CONFIG_GLOBAL is set
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(_cfg(tmp_path / "ok" / "cfg")))
+    assert _mirror_multi_branch_reason(mirror) is None
+
+
+def test_missing_git_config_global_file_passes(mirror, tmp_path, monkeypatch):
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "absent" / "cfg"))
+    assert _mirror_multi_branch_reason(mirror) is None
