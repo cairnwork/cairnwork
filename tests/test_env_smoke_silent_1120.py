@@ -317,3 +317,79 @@ def test_missing_include_given_on_the_command_line_is_refused(mirror, tmp_path, 
 def test_present_include_given_on_the_command_line_passes(mirror, tmp_path, monkeypatch):
     _env_include(monkeypatch, str(_cfg(tmp_path / "here.cfg")))
     assert _mirror_multi_branch_reason(mirror) is None
+
+
+# Round-3 Claude full review of #1208: a relative XDG_CONFIG_HOME (git resolves it against the
+# repo because of -C), a hostile include value, and a "~/" include.
+@needs_user
+@pytest.mark.parametrize("hide", ["xr/git/config", "xr/git"])
+def test_unreadable_config_under_a_relative_xdg_config_home_is_refused(mirror, monkeypatch, hide):
+    _cfg(mirror / "xr" / "git" / "config")
+    (mirror / hide).chmod(0)
+    monkeypatch.setenv("XDG_CONFIG_HOME", "xr")
+    assert _mirror_multi_branch_reason(mirror) is not None
+
+
+@pytest.mark.parametrize("present", [True, False])
+def test_readable_or_absent_config_under_a_relative_xdg_config_home_passes(
+    mirror, monkeypatch, present
+):
+    if present:
+        _cfg(mirror / "xr" / "git" / "config")
+    monkeypatch.setenv("XDG_CONFIG_HOME", "xr")
+    assert _mirror_multi_branch_reason(mirror) is None
+
+
+@needs_user
+def test_default_xdg_config_git_does_not_read_is_not_refused(mirror, home, monkeypatch):
+    _cfg(home / ".config" / "git" / "config", 0)  # git reads xr/ instead of ~/.config
+    monkeypatch.setenv("XDG_CONFIG_HOME", "xr")
+    assert _mirror_multi_branch_reason(mirror) is None
+
+
+@needs_user
+def test_empty_xdg_config_home_still_means_the_default_location(mirror, home, monkeypatch):
+    _cfg(home / ".config" / "git" / "config", 0)
+    monkeypatch.setenv("XDG_CONFIG_HOME", "")
+    assert _mirror_multi_branch_reason(mirror) is not None
+
+
+def test_hostile_include_value_never_reaches_a_log_line_raw(mirror):
+    _g(mirror, "config", "include.path", "/absent/x\n::error::pwn")
+    reason = _mirror_multi_branch_reason(mirror)
+    assert reason is not None
+    assert "\n" not in reason
+    assert not reason.startswith(("::", "##["))
+
+
+def test_present_tilde_include_passes(mirror, home):
+    (home / "ok.cfg").write_text("[user]\n\tname = y\n")
+    _g(mirror, "config", "include.path", "~/ok.cfg")
+    assert _mirror_multi_branch_reason(mirror) is None
+
+
+@pytest.mark.parametrize(("code", "stderr", "stdout"), [(128, "", None), (0, "warning: x", None)])
+def test_git_dir_lookup_failure_alone_is_refused_with_a_real_path(
+    mirror, monkeypatch, code, stderr, stdout
+):
+    def fake_run(args, **kwargs):
+        got = _REAL_RUN(args, **kwargs)
+        if "--git-common-dir" in args:
+            got = subprocess.CompletedProcess(args, code, got.stdout, stderr)
+        return got
+
+    monkeypatch.setattr(env_smoke.subprocess, "run", fake_run)
+    reason = _mirror_multi_branch_reason(mirror)
+    assert reason is not None
+    assert "could not locate the git dir" in reason
+
+
+def test_git_dir_lookup_with_no_output_is_refused(mirror, monkeypatch):
+    def fake_run(args, **kwargs):
+        got = _REAL_RUN(args, **kwargs)
+        if "--git-common-dir" in args:
+            got = subprocess.CompletedProcess(args, 0, "", "")
+        return got
+
+    monkeypatch.setattr(env_smoke.subprocess, "run", fake_run)
+    assert _mirror_multi_branch_reason(mirror) is not None
