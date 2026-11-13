@@ -119,7 +119,7 @@ def _is_shadow(
     return bool(
         module in always
         or (
-            module in imported
+            (module in imported or "*" in imported)
             and (
                 added
                 or counts[module] > 1
@@ -220,6 +220,8 @@ def _parse_imports(raw: bytes, path: str) -> set[str]:
             for arg in (*node.args[:1], *named):  # import_module("x.y"), __import__, importorskip
                 if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
                     names.update(arg.value.lstrip(".").split("."))
+                else:
+                    names.add("*")  # unknown module name fails closed for every nested file
     names.discard("")
     return names
 
