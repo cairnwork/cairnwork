@@ -1,6 +1,7 @@
-"""#1128: the three false refusals are fixed, and only the exact honest shapes: every neighbour that
-hides or keeps the base test's code stays refused (dropped). ``classify`` gets the ids pytest
-collects for the two sources, as in test_p2p_hidden_base_test_1127.py."""
+"""#1128 items 1 (same-file inherited test) and 3 (annotation-only) are fixed, and only the exact
+honest shapes: every neighbour that hides or keeps the base test's code stays refused (dropped).
+Item 2 (one parametrized case) stays refused, see test_p2p_hidden_base_test_1127.py. ``classify``
+gets the ids pytest collects for the two sources."""
 
 from __future__ import annotations
 
@@ -134,52 +135,6 @@ def test_a_real_rebinding_next_to_an_annotation_is_still_dropped(case):
     )
 
 
-PD = "import pytest\n"
-PX = "@pytest.mark.parametrize('n', {})\ndef test_p(n):\n    assert n\n"
-# round-1 review of #1214 (must block): the case vanished but the source does not show a deletion
-CASE_KEPT = {
-    "identical-source": (PD + PX.format("[1, 2]"), PD + PX.format("[1, 2]")),
-    "identical-plus-generate-tests-hook": (
-        PD + PX.format("[1, 2]"),
-        PD + PX.format("[1, 2]") + "def pytest_generate_tests(metafunc):\n    pass\n",
-    ),
-    "value-still-in-source-sliced": (PD + PX.format("[1, 2]"), PD + PX.format("[1, 2][:1]")),
-    "value-still-in-source-filtered": (
-        PD + PX.format("[1, 2]"),
-        PD + PX.format("[n for n in (1, 2) if n < 2]"),
-    ),
-}
-
-
-@pytest.mark.parametrize("case", sorted(CASE_KEPT))
-def test_a_vanished_case_without_a_deletion_in_the_source_is_dropped(case):
-    base, test = CASE_KEPT[case]
-    assert _split(base, test, _ids("test_p[1]", "test_p[2]"), _ids("test_p[1]")) == (
-        set(),
-        {"t.py::test_p[2]"},
-    )
-
-
-@pytest.mark.parametrize("kept", ["[1]", "[pytest.param(1)]"])
-def test_a_deleted_case_is_removed(kept):
-    removed, dropped = _split(
-        PD + PX.format("[1, 2]"),
-        PD + PX.format(kept),
-        _ids("test_p[1]", "test_p[2]"),
-        _ids("test_p[1]"),
-    )
-    assert removed == {"t.py::test_p[2]"} and not dropped
-
-
-def test_a_path_with_a_bracket_never_crashes_and_stays_refused():
-    # review of #1214: "[" in the path made one_case true and the id split raise ValueError
-    base = "def test_y():\n    assert True\ndef test_z():\n    assert True\n"
-    test = "def test_z():\n    assert True\n"
-    ids = ["tests/a[b]/t.py::test_y", "tests/a[b]/t.py::test_z"]
-    side = classify(set(ids), {ids[1]}, {"tests/a[b]/t.py"}, lambda p: test, lambda p: base)
-    assert side.removed | side.dropped == {ids[0]}
-
-
 TB = "class TestA:\n" + X + KEEP
 GONE = "class TestA:\n" + KEEP
 INHERIT_CHANGED = {
@@ -207,8 +162,7 @@ def test_a_subclass_that_stopped_inheriting_is_dropped(case):
     assert not removed and dropped == set(_ids(*ids))
 
 
-# base-side guards alone (the test side drops the rebinding / decorator, so only the base guard
-# stands between these and "removed")
+# base-side guards alone (the test side drops the rebinding / decorator)
 BASE_GUARD = {
     "parent-rebound-in-base": (
         "class TestA:\n" + X + KEEP + "class TestB(TestA):\n    pass\nTestA = object\n",
@@ -229,48 +183,3 @@ def test_the_base_side_guards_of_the_inherited_chain_hold_alone(case):
     base, test = BASE_GUARD[case]
     removed, dropped = _split(base, test, _ids("TestB::test_x"), [])
     assert not removed and dropped == {"t.py::TestB::test_x"}
-
-
-# round-2 review of #1214: the value is still in the file or still produced (must block)
-NOT_LITERAL = {
-    "name-slice": "CASES = [1, 2]\n" + PX.format("CASES[:1]"),
-    "name-pop": "CASES = [1, 2]\nCASES.pop()\n" + PX.format("CASES"),
-    "name-del": "CASES = [1, 2]\ndel CASES[1]\n" + PX.format("CASES"),
-    "named-constant": "TWO = 2\n" + PX.format("[1, TWO]"),
-    "computed-value": PX.format("[1, 1 + 1]"),
-    "computed-call": PX.format("[1, abs(-2)]"),
-    "function-call": "def cases():\n    return [1, 2][:1]\n" + PX.format("cases()"),
-    "hook-in-file-with-changed-literal": (
-        PX.format("[1]") + "def pytest_generate_tests(metafunc):\n    pass\n"
-    ),
-}
-
-
-@pytest.mark.parametrize("case", sorted(NOT_LITERAL))
-def test_a_vanished_case_with_a_non_literal_parametrize_is_dropped(case):
-    test = PD + NOT_LITERAL[case]
-    assert _split(
-        PD + PX.format("[1, 2]"), test, _ids("test_p[1]", "test_p[2]"), _ids("test_p[1]")
-    ) == (
-        set(),
-        {"t.py::test_p[2]"},
-    )
-
-
-def test_deleted_tuple_and_ids_cases_are_removed():
-    tup = "@pytest.mark.parametrize(('n', 's'), {})\ndef test_p(n, s):\n    assert n\n"
-    removed, dropped = _split(
-        PD + tup.format("[(1, 'a'), (2, 'b')]"),
-        PD + tup.format("[(1, 'a')]"),
-        _ids("test_p[1-a]", "test_p[2-b]"),
-        _ids("test_p[1-a]"),
-    )
-    assert removed == {"t.py::test_p[2-b]"} and not dropped
-    ids = "@pytest.mark.parametrize('n', {}, ids={})\ndef test_p(n):\n    assert n\n"
-    removed, dropped = _split(
-        PD + ids.format("[1, 2]", "['one', 'two']"),
-        PD + ids.format("[1]", "['one']"),
-        _ids("test_p[one]", "test_p[two]"),
-        _ids("test_p[one]"),
-    )
-    assert removed == {"t.py::test_p[two]"} and not dropped

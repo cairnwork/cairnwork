@@ -46,7 +46,6 @@ from cairnwork.p2p_bindings import (
     walk_without_nested_classes,
 )
 from cairnwork.p2p_inherit import (
-    case_removed,
     class_binds_hook,
     inherited_def,
     mentions_dunder_test,
@@ -126,9 +125,7 @@ def classify(base_ids, test_ids, edited, source, base_source) -> CollectedSide:
     for nodeid in base_ids - test_ids:
         path = _file(nodeid)
         gone = False
-        case = nodeid.partition("::")[2].partition("[")[2].removesuffix("]")  # #842 item 2
-        one_case = bool(case) and "[" not in path and _function(nodeid) in collected_funcs
-        if path in edited and (one_case or _function(nodeid) not in collected_funcs):
+        if path in edited and _function(nodeid) not in collected_funcs:
             if path not in texts:
                 texts[path] = source(path)
                 bases[path] = _tree(base_source(path))
@@ -137,11 +134,7 @@ def classify(base_ids, test_ids, edited, source, base_source) -> CollectedSide:
             gone = (
                 _defines(bases[path], owners, name, test_trees[path])
                 and test_trees[path] is not None
-                and (
-                    case_removed(bases[path], test_trees[path], owners, name, case, texts[path])
-                    if one_case
-                    else not _scope_mentions(test_trees[path], owners, name, texts[path])
-                )
+                and not _scope_mentions(test_trees[path], owners, name, texts[path])
                 and not _hidden(test_trees[path], bases[path], name, path, test_ids, base_ids)
             )
         (removed if gone else dropped).add(nodeid)

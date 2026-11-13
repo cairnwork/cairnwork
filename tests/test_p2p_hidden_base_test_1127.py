@@ -3,7 +3,7 @@
 Each case passes the base / test-commit ids that ``pytest --collect-only`` really gives for the two
 sources (checked on CPython 3.14.7, pytest from uv.lock), then asks ``classify`` for the split.
 Found by the 2026-11-10 p2p re-verify of #1072 #1075 #1112 #1114; the false refusals of #1128 stay
-fixed in #1128 (test_honest_deletion_is_removed_1128).
+fixed in #1128 items 1 and 3; item 2 stays strict xfail.
 """
 
 from __future__ import annotations
@@ -113,14 +113,6 @@ REFUSED = {
         ["t.py::TestA::test_keep", "t.py::TestB::test_keep"],
         {"t.py::TestA::test_x", "t.py::TestB::test_x"},
     ),
-    # #842 item 2: one parametrized case deleted, the function kept (not addressed by #1072)
-    "parametrized-case-deleted": (
-        "import pytest\n@pytest.mark.parametrize('n', [1, 2])\ndef test_x(n):\n    assert n\n",
-        "import pytest\n@pytest.mark.parametrize('n', [1])\ndef test_x(n):\n    assert n\n",
-        ["t.py::test_x[1]", "t.py::test_x[2]"],
-        ["t.py::test_x[1]"],
-        {"t.py::test_x[2]"},
-    ),
     # annotation-only `test_x: T` does not rebind, but counts as a binding (introduced by #1075)
     "annotation-only-is-not-a-rebinding": (
         "def test_x():\n    assert True\ntest_x: object\ndef test_keep():\n    assert True\n",
@@ -135,6 +127,27 @@ REFUSED = {
 @pytest.mark.parametrize("case", sorted(REFUSED))
 def test_honest_deletion_is_removed_1128(case):
     base, test, base_ids, test_ids, gone = REFUSED[case]
+    assert _split(base, test, base_ids, test_ids) == (gone, set())
+
+
+# #1128 item 2 stays open: one parametrized case deleted while the function is kept is dropped.
+# Three review rounds of #1214 found no rule that tells a deletion from a case whose value is still
+# in the file (a name, an `ids=` rename, a conftest deselect), so it is left as on main.
+REFUSED_842 = {
+    "parametrized-case-deleted": (
+        "import pytest\n@pytest.mark.parametrize('n', [1, 2])\ndef test_x(n):\n    assert n\n",
+        "import pytest\n@pytest.mark.parametrize('n', [1])\ndef test_x(n):\n    assert n\n",
+        ["t.py::test_x[1]", "t.py::test_x[2]"],
+        ["t.py::test_x[1]"],
+        {"t.py::test_x[2]"},
+    ),
+}
+
+
+@pytest.mark.xfail(strict=True, reason="#1128 item 2: honest deletion refused")
+@pytest.mark.parametrize("case", sorted(REFUSED_842))
+def test_one_parametrized_case_deleted_is_removed_1128(case):
+    base, test, base_ids, test_ids, gone = REFUSED_842[case]
     assert _split(base, test, base_ids, test_ids) == (gone, set())
 
 
