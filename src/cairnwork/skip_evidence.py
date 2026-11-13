@@ -76,7 +76,7 @@ def _base_run_record(task, ctx, specs):
     """Per verifier, the skips and node ids of one run of ``specs`` on the base commit; empty
     (so the candidate stays FAILED) when that run cannot be made."""
     try:
-        runs = run_verifiers(ctx, task.base_commit, specs, f"{ctx.attempt_id}-eb", deny=True)
+        runs = run_verifiers(ctx, task.base_commit, specs, f"{ctx.attempt_id}-x", deny=True)
     except Exception:  # noqa: BLE001  (any base-run failure: no evidence, fail closed)
         return {}, {}
     try:

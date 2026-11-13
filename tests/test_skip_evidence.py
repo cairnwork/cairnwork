@@ -289,7 +289,7 @@ def test_no_deferred_tests_an_identical_base_skip_set_is_uncomparable(
 ):
     repo, base, judged = commits
     calls, code = _raise(monkeypatch, repo, base, judged, _base_run(tmp_path), tmp_path)
-    assert calls == [(base, True, "a-eb")]  # exactly one base run, denied, on the base commit
+    assert calls == [(base, True, "a-x")]  # exactly one base run, denied, on the base commit
     assert code == "TESTS_SKIPPED_ENVIRONMENT"
     assert not (tmp_path / "b").exists()  # the base run's logs are removed
 
@@ -309,7 +309,7 @@ def test_no_deferred_tests_a_base_that_differs_keeps_failed(
 ):
     repo, base, judged = commits
     calls, code = _raise(monkeypatch, repo, base, judged, _base_run(tmp_path, **changes), tmp_path)
-    assert calls == [(base, True, "a-eb")]
+    assert calls == [(base, True, "a-x")]
     assert code is None  # nothing raised: the candidate stays FAILED
 
 
