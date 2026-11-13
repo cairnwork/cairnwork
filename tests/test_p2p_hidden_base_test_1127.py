@@ -122,15 +122,21 @@ REFUSED = {
         ["t.py::test_x[1]"],
         {"t.py::test_x[2]"},
     ),
-    # annotation-only `test_x: T` does not rebind, but counts as a binding (introduced by #1075)
-    "annotation-only-is-not-a-rebinding": (
-        "def test_x():\n    assert True\ntest_x: object\ndef test_keep():\n    assert True\n",
-        "def test_keep():\n    assert True\n",
-        ["t.py::test_x", "t.py::test_keep"],
-        ["t.py::test_keep"],
-        {"t.py::test_x"},
-    ),
 }
+
+
+ANNOTATION_ONLY = (
+    "def test_x():\n    assert True\ntest_x: object\ndef test_keep():\n    assert True\n",
+    "def test_keep():\n    assert True\n",
+    ["t.py::test_x", "t.py::test_keep"],
+    ["t.py::test_keep"],
+    {"t.py::test_x"},
+)
+
+
+def test_annotation_only_is_not_a_rebinding_1128():  # item 3, fixed
+    base, test, base_ids, test_ids, gone = ANNOTATION_ONLY
+    assert _split(base, test, base_ids, test_ids) == (gone, set())
 
 
 @pytest.mark.xfail(strict=True, reason="#1128: honest deletion refused")
