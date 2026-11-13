@@ -1,11 +1,12 @@
-"""Which statements bind a name in one scope (#847): the base-side half of p2p_collect's
-removed/dropped split. Moved out of p2p_collect.py to keep each file under 400 lines."""
+"""Which statements bind a name in one scope (#847): base-side half of p2p_collect's split."""
 
 from __future__ import annotations
 
 import ast
 import re
 from collections import Counter
+
+from cairnwork.p2p_dead_zone import live_statements
 
 COMPOUND_STMTS = (
     ast.If,
@@ -221,9 +222,8 @@ def hidden_bindings(
 
 
 def _shadowed(body: list[ast.stmt], start: int, name: str, annotations: bool = True) -> bool:
-    return any(
-        binds_in_scope(body[j], name, annotations=annotations) for j in range(start, len(body))
-    )
+    rest = live_statements(body[start:], type_checking=not annotations)  # #1139: base trusts TC
+    return any(binds_in_scope(stmt, name, annotations=annotations) for stmt in rest)
 
 
 def _scopes_in(stmt: ast.stmt):
