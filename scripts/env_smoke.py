@@ -174,7 +174,7 @@ def _include_problem(repo: Path) -> str | None:
     return None
 
 
-def _config_files() -> list[Path]:
+def _config_files(repo: Path) -> list[Path]:
     """The global config files git reads, resolved the way git does (an unreadable system config
     makes git itself fail, which the exit-code check refuses)."""
     env = os.environ
@@ -183,7 +183,7 @@ def _config_files() -> list[Path]:
     else:
         home = os.path.expanduser("~")
         xdg = env.get("XDG_CONFIG_HOME", "")
-        base = Path(xdg) if os.path.isabs(xdg) else Path(home) / ".config"
+        base = repo / xdg if xdg else Path(home) / ".config"  # relative: git runs in the repo
         files = [Path(home) / ".gitconfig", base / "git" / "config"]
     return files
 
@@ -201,7 +201,7 @@ def _unreadable(path: Path) -> bool:
 def _silent_read_failure(repo: Path) -> str | None:
     """git exits 0/1 and prints nothing when it cannot read a global config, an include.path
     target or a ref directory (Issue #1120). Check those inputs ourselves; None if all fine."""
-    for cfg in _config_files():
+    for cfg in _config_files(repo):
         if _unreadable(cfg):
             return f"git config {str(cfg)!r} is unreadable"
     try:
