@@ -299,3 +299,21 @@ def test_global_config_git_does_not_read_is_not_refused(mirror, home, tmp_path, 
 def test_missing_git_config_global_file_passes(mirror, tmp_path, monkeypatch):
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "absent" / "cfg"))
     assert _mirror_multi_branch_reason(mirror) is None
+
+
+# Round-2 Codex review of #1208: includes supplied on the command line (GIT_CONFIG_COUNT).
+def _env_include(monkeypatch, value):
+    n = int(os.environ.get("GIT_CONFIG_COUNT", "0"))
+    monkeypatch.setenv("GIT_CONFIG_COUNT", str(n + 1))
+    monkeypatch.setenv(f"GIT_CONFIG_KEY_{n}", "include.path")
+    monkeypatch.setenv(f"GIT_CONFIG_VALUE_{n}", value)
+
+
+def test_missing_include_given_on_the_command_line_is_refused(mirror, tmp_path, monkeypatch):
+    _env_include(monkeypatch, str(tmp_path / "absent.cfg"))
+    assert _mirror_multi_branch_reason(mirror) is not None
+
+
+def test_present_include_given_on_the_command_line_passes(mirror, tmp_path, monkeypatch):
+    _env_include(monkeypatch, str(_cfg(tmp_path / "here.cfg")))
+    assert _mirror_multi_branch_reason(mirror) is None
