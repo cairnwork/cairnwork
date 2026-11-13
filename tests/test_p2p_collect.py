@@ -205,7 +205,7 @@ def test_classify_removes_module_test_when_class_keeps_same_name():
 
 
 def test_classify_drops_parameterized_case_when_function_still_collected():
-    # #842: a missing case with no parametrize change at all is dropped, never removed (#1128)
+    # #842: removing a single case when the function still runs is dropped, never removed
     base = "def test_p(x): pass\n"
     source = "def test_p(x): pass\n"
     ids = {"t.py::test_p[1]", "t.py::test_p[2]"}
