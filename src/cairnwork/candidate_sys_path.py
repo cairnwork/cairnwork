@@ -19,6 +19,13 @@ write or path edit paired with an existing opposite signal in one file, and a ch
 that uses a sys alias on the import tables. Any ``.write()``/``.writelines()`` call counts as a
 file write, so an in-memory ``io.StringIO().write()`` next to a path edit is refused too: a
 receiver-trust exemption was tried on #1176 and could be bypassed by rebinding io (#1178).
+Two broad rules are intentional (#1189). Any ``.write()``/``.writelines()`` call counts as a
+file write, so ``sys.stdout.write()`` and custom stream or network writers count too. Any
+``open(...)`` or ``<x>.open(...)`` call whose mode cannot be read (starred or ``**``-unpacked
+arguments, or a non-literal mode) counts as a write. Each applies only next to a path edit that
+can shadow an imported module. Both fail closed because the receiver and the mode are
+rebindable, so a syntactic exception would trust candidate-controlled values. Their false-refusal
+rate on correct candidates is not measured here; see Issue #1189.
 Write-side residuals (#1178): subprocess/shell/archive writes, ``open`` reached by alias or
 ``functools.partial``, attribute forms of FileIO/copyfileobj/NamedTemporaryFile, and
 ``from sys import path`` or ``os.sys.path`` as the path edit.
