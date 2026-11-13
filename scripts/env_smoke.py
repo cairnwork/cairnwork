@@ -162,10 +162,10 @@ def _include_problem(repo: Path) -> str | None:
     with tempfile.TemporaryDirectory() as scratch:
         for origin, entry in zip(parts[0::2], parts[1::2], strict=False):
             key, _, value = entry.partition("\n")
-            if not origin.startswith("file:"):
-                continue
             target = Path(value).expanduser()
             if not target.is_absolute():
+                if not origin.startswith("file:"):
+                    continue  # git itself refuses a relative include given on the command line
                 target = (repo / origin.removeprefix("file:")).parent / target
             if (not os.access(target, os.R_OK) or not target.is_file()) and _include_applies(
                 repo, key, Path(scratch)
