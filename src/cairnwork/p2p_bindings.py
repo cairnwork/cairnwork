@@ -1,5 +1,4 @@
-"""Which statements bind a name in one scope (#847): the base-side half of p2p_collect's
-removed/dropped split. Moved out of p2p_collect.py to keep each file under 400 lines."""
+"""Which statements bind a name in one scope (#847): base-side half of p2p_collect's split."""
 
 from __future__ import annotations
 
