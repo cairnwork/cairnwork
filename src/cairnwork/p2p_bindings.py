@@ -133,6 +133,11 @@ def binds_in_scope(
             for generator in curr.generators:
                 stack.extend(generator.ifs)
             continue
+        if isinstance(curr, ast.AnnAssign) and curr.value is None:  # #1128: no value, no binding
+            stack.extend(
+                [curr.annotation, *([] if isinstance(curr.target, ast.Name) else [curr.target])]
+            )
+            continue
         if (
             isinstance(curr, ast.Name)
             and curr.id == name
@@ -149,11 +154,7 @@ def binds_in_scope(
             return True
         if not module and isinstance(curr, (ast.Global, ast.Nonlocal)) and name in curr.names:
             return True
-        if isinstance(curr, ast.ExceptHandler) and curr.name == name:
-            return True
-        if isinstance(curr, ast.MatchAs) and curr.name == name:
-            return True
-        if isinstance(curr, ast.MatchStar) and curr.name == name:
+        if isinstance(curr, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)) and curr.name == name:
             return True
         if isinstance(curr, ast.MatchMapping) and curr.rest == name:
             return True
