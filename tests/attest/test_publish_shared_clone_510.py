@@ -213,3 +213,25 @@ def test_retries_exhausted_with_cleanup_failure_reports_retries_exhausted(
     assert result.detail is not None
     assert "locked" in result.detail
     assert "retries exhausted" in result.detail.lower()
+
+
+def test_failed_push_keeps_local_only_note_and_removes_private_ref(
+    tmp_path: Path, key: Ed25519PrivateKey
+) -> None:
+    src, bare, candidate = make_publish_env(tmp_path)
+    tree = git(src, "rev-parse", "HEAD^{tree}")
+    git(src, "notes", f"--ref={_NOTES_REF}", "add", "-m", "local only", tree)
+    local_tip = git(src, "rev-parse", _NOTES_REF)
+    bundle = _write_bundle(tmp_path, _make_bundle_bytes(candidate, key))
+
+    def failing_push_run(repo: Path, *args: str, input: bytes | None = None):  # noqa: ANN202
+        if args[:1] == ("push",):
+            return subprocess.CompletedProcess(args, 1, "", "fatal: unable to access remote\n")
+        return _git(repo, *args, input=input)
+
+    result = publish_bundle(bundle, src, candidate, run=failing_push_run)
+    assert (result.ok, result.code) == (False, "PUSH_FAILED")
+    assert git(src, "rev-parse", _NOTES_REF) == local_tip
+    refs = git(src, "for-each-ref", "--format=%(refname)", "refs/notes/")
+    assert refs.split() == [_NOTES_REF]
+    assert _remote_tip(bare) is None
