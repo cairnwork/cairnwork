@@ -222,7 +222,7 @@ def hidden_bindings(
 
 
 def _shadowed(body: list[ast.stmt], start: int, name: str, annotations: bool = True) -> bool:
-    rest = body[start:] if annotations else live_statements(body[start:])  # #1139: base side
+    rest = live_statements(body[start:], type_checking=not annotations)  # #1139: base trusts TC
     return any(binds_in_scope(stmt, name, annotations=annotations) for stmt in rest)
 
 
