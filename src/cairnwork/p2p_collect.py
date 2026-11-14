@@ -124,13 +124,14 @@ def classify(base_ids, test_ids, edited, source, base_source) -> CollectedSide:
                 texts[path] = source(path)
                 bases[path] = _tree(base_source(path))
                 test_trees[path] = _tree(texts[path])
-            *owners, name = _function(nodeid).split("::")[1:]
-            gone = (
-                _defines(bases[path], owners, name)
-                and test_trees[path] is not None
-                and not _scope_mentions(test_trees[path], owners, name, texts[path])
-                and not _hidden(test_trees[path], bases[path], name, path, test_ids, base_ids)
-            )
+            if parts := _function(nodeid).split("::")[1:]:
+                *owners, name = parts
+                gone = (
+                    _defines(bases[path], owners, name)
+                    and test_trees[path] is not None
+                    and not _scope_mentions(test_trees[path], owners, name, texts[path])
+                    and not _hidden(test_trees[path], bases[path], name, path, test_ids, base_ids)
+                )
         (removed if gone else dropped).add(nodeid)
     return CollectedSide(
         frozenset(base_ids), frozenset(test_ids), frozenset(removed), frozenset(dropped)
@@ -195,15 +196,13 @@ def _collect(task, files, ctx, budget, attempt_id):
 
 
 def _present(task, files) -> tuple[str, ...]:
-    """The selected files that exist on the test commit (a deleted one is collected as absent)."""
+    """Selected files present on the test commit."""
+    args = ("ls-tree", "-r", "-z", "--name-only", task.test_commit, "--")
     try:
-        raw = run_git(
-            task.repo, "ls-tree", "-r", "-z", "--name-only", task.test_commit, "--", *files
-        )
+        raw = run_git(task.repo, *args, *(f":(literal){path}" for path in files))
     except GitCommandError as exc:
         raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
-    there = set(raw.split("\0"))
-    return tuple(f for f in files if f in there)
+    return tuple(f for f in files if f in set(raw.split("\0")))
 
 
 def _tree(text: str) -> ast.Module | None:
@@ -378,7 +377,7 @@ def _file(nodeid: str) -> str:
 
 
 def _function(nodeid: str) -> str:
-    return nodeid.split("[", 1)[0]
+    return (p := nodeid.partition("::"))[0] + p[1] + p[2].split("[", 1)[0]
 
 
 def _digest(ids) -> str:
