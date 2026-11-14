@@ -65,3 +65,55 @@ def test_common_key_writing_family_is_blocked(name, form):
 def test_ordinary_text_family_is_not_blocked(text):
     fake = FakeTransport(TransportResult(200, {"text": "plan"}))
     assert HaikuPlanner(fake).plan(plan_request(({"content": text},))).text == "plan", text
+
+
+# abbreviation + keyword family: myAPIKey=, clientAPIKey=, xAPIKEY=, myapitoken=, ...
+_ABBRS = ["api", "aws", "ssh", "jwt", "oauth", "auth", "access", "client", "private", "secret", "db"]
+_WORDS = ["key", "token", "secret", "password"]
+_PREFIXES = ["", "my", "client", "x", "user"]
+
+
+def _abbr_names():
+    for prefix in _PREFIXES:
+        for abbr in _ABBRS:
+            for word in _WORDS:
+                camel = prefix + abbr.upper() + word.capitalize()
+                yield camel  # myAPIKey
+                yield prefix + abbr.upper() + word.upper()  # xAPIKEY
+                yield prefix + abbr + word  # myapikey
+                yield prefix + abbr.capitalize() + word.capitalize()  # myApiKey
+
+
+@pytest.mark.parametrize("name", sorted(set(_abbr_names())))
+@pytest.mark.parametrize("form", ["{n}={v}", '{n}: "{v}"', "--{n} {v}", "export {n}={v}"])
+def test_abbreviation_camel_family_is_blocked(name, form):
+    text = "run " + form.format(n=name, v=_VALUE)
+    fake = FakeTransport()
+    reply = HaikuPlanner(fake).plan(plan_request(({"content": text},)))
+    assert fake.calls == [] and reply.reason == schema.Reason.PAUSE_SECRET_BLOCKED, text
+
+
+class _RaisingScanner:
+    def scan(self, text):
+        raise RuntimeError("boom " + text)
+
+
+@pytest.mark.parametrize("cls", ["planner", "gate"])
+def test_scan_failure_closes_without_sending_or_leaking(cls):
+    from experimental.pause.client import HaikuGate
+
+    fake = FakeTransport(TransportResult(200, {"text": "ACCEPT"}))
+    secret_text = "token=" + _VALUE
+    if cls == "planner":
+        reply = HaikuPlanner(fake, _RaisingScanner()).plan(
+            plan_request(({"content": secret_text},))
+        )
+    else:
+        from experimental.pause.interfaces import GateRequest
+
+        reply = HaikuGate(fake, _RaisingScanner()).review(
+            GateRequest("t", "c", secret_text, SETTINGS)
+        )
+    assert fake.calls == []
+    assert reply.reason == schema.Reason.PAUSE_SECRET_BLOCKED
+    assert _VALUE not in repr(reply)
