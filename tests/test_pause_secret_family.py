@@ -60,6 +60,10 @@ def test_common_key_writing_family_is_blocked(name, form):
         "keyboard = " + _VALUE, "tokenizer: " + _VALUE, "secretary = " + _VALUE,
         "passwordless: " + _VALUE, "token = next_token()", "password: str", "key = value",
         "the key is in the lock", "set the token field and the secret field",
+        "donkey = " + _VALUE, "hockey: " + _VALUE, "bypass=" + _VALUE, "compass: " + _VALUE,
+        "passport=" + _VALUE, "overpass=" + _VALUE, "PWD=/opt/app/build/output/dir",
+        "cd $PWD", "maxTokens: 4096", "tokens: " + _VALUE, "MonKey=" + _VALUE,
+        "passwords are rotated every ninety days", "hockeystick = " + _VALUE,
     ],
 )  # fmt: skip
 def test_ordinary_text_family_is_not_blocked(text):
@@ -119,3 +123,61 @@ def test_scan_failure_closes_without_sending_or_leaking(cls):
     assert fake.calls == []
     assert reply.reason == schema.Reason.PAUSE_SECRET_BLOCKED
     assert _VALUE not in repr(reply)
+
+
+_SHAPES = ["{n}={v}", "export {n}='{v}'", '"{n}": "{v}"', "--{n} {v}"]
+
+
+def _blocked(names, shapes=_SHAPES):
+    return [(n, f) for n in names for f in shapes]
+
+
+def _assert_blocked(name, shape):
+    from experimental.pause.secrets_scan import scan
+
+    text = "run " + shape.format(n=name, v=_VALUE)
+    assert scan(text), text
+
+
+@pytest.mark.parametrize(
+    ("name", "shape"),
+    _blocked(
+        "PGPASSWORD pgpassword GITHUBTOKEN githubtoken SESSIONTOKEN sessiontoken NPMTOKEN "
+        "HFTOKEN SLACKTOKEN BOTTOKEN APPSECRET appsecret REDISPASSWORD mysqlpassword "
+        "ADMINPASSWD".split()
+    ),
+)
+def test_flat_glued_secret_names_are_blocked(name, shape):
+    _assert_blocked(name, shape)
+
+
+@pytest.mark.parametrize(
+    ("name", "shape"),
+    _blocked("sessionToken refreshToken botToken stripeKey appSecret smtpPassword".split()),
+)
+def test_camel_names_without_listed_prefix_are_blocked(name, shape):
+    _assert_blocked(name, shape)
+
+
+@pytest.mark.parametrize(
+    ("name", "shape"),
+    _blocked(
+        "DB_PASS db_pass dbPass SMTP_PASS pass MYSQL_PWD DB_PWD PASSPHRASE KEY_PASSPHRASE "
+        "passphrase".split()
+    ),
+)
+def test_password_abbreviation_names_are_blocked(name, shape):
+    _assert_blocked(name, shape)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "api_key: `" + _VALUE + "`", "apiKey = `" + _VALUE + "`",
+        "TOKEN := " + _VALUE, "password := " + _VALUE,
+    ],
+)  # fmt: skip
+def test_backtick_quotes_and_walrus_assignment_are_blocked(text):
+    from experimental.pause.secrets_scan import scan
+
+    assert scan(text), text
