@@ -50,7 +50,7 @@ from cairnwork.intake_request import (
 )
 from cairnwork.issue_task import check_import_paths, check_test_roots
 from cairnwork.journal import Journal, no_evidence
-from cairnwork.lineage import require_on_main
+from cairnwork.lineage import require_on_main, verify_single_branch
 from cairnwork.notary import Notary
 from cairnwork.notary_migrate import refuse_unmigrated
 from cairnwork.ownership import (
@@ -233,11 +233,11 @@ class Intake:
         )
         python = config["verifier_python"] or getattr(self.verifier_account(), "python", None)
         check_submitted_paths(task, check_task(task, verifier_python=python))
-        mirror = config["mirror"]  # a bad config is refused here, not by the runner
-        source = task.repo
+        mirror, source = config["mirror"], task.repo  # a bad config is refused here, not by runner
         if mirror:  # the task is bound to Cairnwork's own repository, whatever the caller's
             if not Path(mirror).is_dir():
                 raise IntakeRefused("BAD_CONFIG", f"mirror {mirror} does not exist")
+            verify_single_branch(Path(mirror))
             payload = {**payload, "repo": mirror}
             task = task_from_payload(payload, task.test_roots, self.test_store(), task.import_paths)
         with self._intake_lock():

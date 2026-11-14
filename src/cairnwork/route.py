@@ -89,6 +89,10 @@ def main(argv: list[str] | None = None) -> int:
         return _emit({"error": exc.code, "detail": str(exc)}, 1)
     except (ReplayForbidden, ReconciliationRequired, TakeoverRefused) as exc:
         return _emit({"error": exc.code, "detail": str(exc)}, 2)
+    except RuntimeError as exc:
+        if str(exc).startswith("LINEAGE_MIRROR_NOT_SINGLE_BRANCH"):
+            return _emit({"error": "BAD_CONFIG", "detail": str(exc)}, 2)
+        return _emit({"error": "INTERNAL", "detail": f"{type(exc).__name__}: {exc}"}, 1)
     except Exception as exc:  # noqa: BLE001 - reported as unknown, never as success
         return _emit({"error": "INTERNAL", "detail": f"{type(exc).__name__}: {exc}"}, 1)
     stuck = [d for d in result.get("decisions", []) if d["reason"].startswith("RECOVERY_ERROR")]
