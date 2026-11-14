@@ -181,3 +181,18 @@ def test_backtick_quotes_and_walrus_assignment_are_blocked(text):
     from experimental.pause.secrets_scan import scan
 
     assert scan(text), text
+
+
+@pytest.mark.parametrize(("name", "shape"), _blocked("pwd PWD DBPWD dbpwd mysqlpwd Pwd".split()))
+def test_pwd_names_with_a_non_path_value_are_blocked(name, shape):
+    _assert_blocked(name, shape)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["PWD=/opt/app/build/output/dir", "pwd: /home/build/output/directory", "DBPWD=~/work/output/dir1"],
+)  # fmt: skip
+def test_pwd_with_a_path_value_is_not_blocked(text):
+    from experimental.pause.secrets_scan import scan
+
+    assert [h for h in scan(text) if h != "host_path"] == [], text
