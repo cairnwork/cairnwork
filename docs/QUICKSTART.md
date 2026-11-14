@@ -56,6 +56,10 @@ governance Cairnwork adds — and only a Core VERIFIED verdict marks the task do
 
 Create a state directory (one per target repository) and run the Issue intake:
 
+> **Current status:** the worker has been disabled since 2026-10-30, so the worker stage of
+> `run-once` cannot finish a task today; only the `cairnwork-verify` acceptance path is in use.
+> See [DRILLS.md](DRILLS.md).
+
 ```sh
 cairnwork init --dir ~/.cairnwork/<repo>            # writes config.json
 cairnwork-issues --state ~/.cairnwork/<repo> --repo OWNER/NAME --clone <mirror> run-once
