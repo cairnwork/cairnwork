@@ -24,7 +24,14 @@ def test_bracket_in_directory_still_classifies_removed_test(nodeid, base, test, 
 
 @pytest.mark.parametrize(
     ("nodeid", "expected"),
-    [("tests/t.py::test_y[value]", "tests/t.py::test_y")],
+    [
+        ("tests/t.py::test_y[value]", "tests/t.py::test_y"),
+        ("tests/a[b]/t.py::test_y[value]", "tests/a[b]/t.py::test_y"),
+        ("tests/a[b]/t.py::test_y", "tests/a[b]/t.py::test_y"),
+        ("tests/t.py::C::test_y[a]", "tests/t.py::C::test_y"),
+        ("tests/t.py::test_y[a[b]]", "tests/t.py::test_y"),
+        ("tests/t.py::test_y[x::y]", "tests/t.py::test_y"),
+    ],
 )
 def test_parametrize_suffix_is_removed_from_function_id(nodeid, expected):
     assert _function(nodeid) == expected
