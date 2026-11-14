@@ -329,7 +329,7 @@ class Intake:
         held = self.ledger.unswept_attempt(record.task_id)  # its processes are not shown gone
         return {
             "unswept": {"attempt_id": held.attempt_id, "last_refusal": held.refusal}
-            if held
+            if record.status == "FAILED" and held
             else None,
             "task_id": record.task_id,
             "idempotency_key": record.idempotency_key,
