@@ -225,7 +225,9 @@ def _with_mirror(state, mirror):
 
 def test_a_mirror_keeps_every_write_out_of_the_callers_repository(state, project, tmp_path):
     mirror = tmp_path / "mirror"
-    git(tmp_path, "clone", "-q", str(project), str(mirror))  # Cairnwork's own clone
+    git(
+        tmp_path, "clone", "-q", "--single-branch", "--branch", "main", str(project), str(mirror)
+    )  # Cairnwork's own clone
     _with_mirror(state, mirror)
     refs_before = git(project, "for-each-ref")
     route(state, "drain")
@@ -261,7 +263,8 @@ def test_a_missing_mirror_is_a_config_error(state, project, tmp_path):
 
 
 def test_a_request_from_the_mirror_itself_is_not_fetched_again(state, project):
-    _with_mirror(state, project)  # e.g. the Issue runner's clone is the mirror
+    git(project, "config", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main")
+    _with_mirror(state, project)  # e.g. the Issue runner's clone is the mirror (single-branch)
     route(state, "accept")
     code, out = route(state, "submit", stdin=request(project))
     assert code == 0, out
@@ -271,7 +274,7 @@ def test_a_request_from_the_mirror_itself_is_not_fetched_again(state, project):
 
 def test_another_submit_pinning_its_base_does_not_upset_a_running_attempt(state, project, tmp_path):
     mirror = tmp_path / "mirror"
-    git(tmp_path, "clone", "-q", str(project), str(mirror))
+    git(tmp_path, "clone", "-q", "--single-branch", "--branch", "main", str(project), str(mirror))
     _with_mirror(state, mirror)
     (state.parent / "delay").write_text("4")
     route(state, "accept")

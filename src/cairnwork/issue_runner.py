@@ -23,6 +23,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import sqlite3
 import sys
 import tempfile
@@ -35,6 +36,8 @@ from cairnwork.changeset import ChangeSetError, read_change_set
 from cairnwork.deferred_tests import TestCommitRejected
 from cairnwork.gitcmd import NETWORK_TIMEOUT_SECONDS, GitCommandError, run_git
 from cairnwork.intake import Intake, IntakeRefused
+from cairnwork.intake import verify_single_branch as _verify_single_branch
+from cairnwork.intake_config import stored_config
 from cairnwork.issue_github import GitHub
 from cairnwork.issue_publish import (
     TASK_ID,
@@ -70,36 +73,28 @@ TRUST_CHANGED = "TRUST_CHANGED_BEFORE_DISPATCH"
 DEFAULT_GH = str(Path.home() / ".config/nexus-agent-bot/bin/nexus-agent-gh")
 
 
-def _verify_single_branch(clone: Path) -> None:
-    """The mirror must be single-branch (only main), so the single-commit branches that hold
-    deferred hidden tests are never pre-fetched into it and reachable by the worker (Issue #76).
-    A wildcard fetch refspec means a full clone that pulled every branch."""
-    # check=False: git config exits 1 when the key is absent, which is the no-refspec case below,
-    # not a command failure — reading it through _git would raise a generic "git config failed".
+def _remember_gh(intake: Intake, gh: str) -> None:
+    resolved = shutil.which(gh)
+    if resolved is None or not os.path.isabs(resolved):
+        return
+    path = intake.state / "config.json"
+    loaded = stored_config(path)
+    if isinstance(loaded, dict) and loaded.get("gh") != resolved:
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({**loaded, "gh": resolved}, sort_keys=True))
+        tmp.chmod(0o600)
+        tmp.replace(path)
+
+
+def _clone_problem(intake: Intake, clone: Path) -> str:
+    mirror = intake.config()["mirror"]
+    if not mirror:
+        return ""
     try:
-        specs = [
-            s
-            for s in run_git(clone, "config", "--get-all", "remote.origin.fetch").splitlines()
-            if s
-        ]
-    except GitCommandError:
-        specs = []
-    advice = "re-clone with: git clone --single-branch --branch main <url>"
-    code = "LINEAGE_MIRROR_NOT_SINGLE_BRANCH"
-    if not specs:
-        raise RuntimeError(f"{code}: origin has no fetch refspec; {advice}")
-    for spec in specs:
-        # The source of a fetch refspec is "[+]<src>:<dst>"; accept only main exactly, so a
-        # wildcard ("refs/heads/*") or another branch ("refs/heads/mainline") is refused.
-        if spec.lstrip("+").split(":", 1)[0] != "refs/heads/main":
-            raise RuntimeError(f"{code}: origin fetch {spec!r} is not refs/heads/main; {advice}")
-    # The config only governs future fetches; a mirror full-cloned once and later reconfigured still
-    # holds the branches it already fetched. Refuse if any branch beyond main is actually present.
-    allowed = {"refs/heads/main", "refs/remotes/origin/main", "refs/remotes/origin/HEAD"}
-    refs = _git(clone, "for-each-ref", "--format=%(refname)", "refs/heads/", "refs/remotes/origin/")
-    extra = [r for r in refs.split() if r not in allowed]
-    if extra:
-        raise RuntimeError(f"{code}: mirror holds a branch beyond main ({extra[0]}); {advice}")
+        same = os.path.samefile(mirror, clone)
+    except OSError:
+        same = False
+    return "" if same else f"CLONE_NOT_STATE_MIRROR: {clone} is not the state's mirror {mirror}"
 
 
 def take(intake: Intake, github: GitHub, clone: Path) -> list[dict[str, Any]]:
@@ -372,7 +367,7 @@ def main(argv: list[str] | None = None) -> int:
     github = GitHub(args.gh, args.repo)
     clone = Path(args.clone).resolve()
     try:
-        if problem := intake.clone_problem(clone):  # before anything is fetched (#234)
+        if problem := _clone_problem(intake, clone):  # before anything is fetched (#234)
             raise RuntimeError(problem)
         _verify_origin(clone, github.repo)
         require_bot_gh(args.gh, github.repo, clone)
@@ -387,7 +382,7 @@ def main(argv: list[str] | None = None) -> int:
         except BlockingIOError:
             print(json.dumps({"error": "BUSY", "detail": "another run-once is working"}))
             return 2
-        intake.remember_gh(args.gh)
+        _remember_gh(intake, args.gh)
         result = {"take": take(intake, github, clone), "settle": settle(intake, github, clone)}
     finally:
         os.close(fd)

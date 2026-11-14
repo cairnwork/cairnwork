@@ -27,7 +27,6 @@ from __future__ import annotations
 import fcntl
 import json
 import os
-import shutil
 import stat
 import subprocess
 import sys
@@ -40,7 +39,7 @@ from typing import Any
 from cairnwork import runlock, takeover
 from cairnwork.deferred_store import DeferredStore
 from cairnwork.gitcmd import GitCommandError, run_git
-from cairnwork.intake_config import DEFAULT_CONFIG, has_token, seconds_ok, stored_config
+from cairnwork.intake_config import DEFAULT_CONFIG, has_token, seconds_ok
 from cairnwork.intake_request import (
     IntakeRefused,
     bind_stored,
@@ -67,6 +66,32 @@ from cairnwork.workers.agy_dispatch import valid_run_as_user
 from cairnwork_protocol.http import CoreHttpError, check_core_url, http_core_verify
 
 _spawn = subprocess.Popen  # replaced in tests
+
+
+def verify_single_branch(clone: Path) -> None:
+    """Require a main-only mirror, including refs fetched before its config changed (#76)."""
+    try:
+        specs = [
+            s
+            for s in run_git(clone, "config", "--get-all", "remote.origin.fetch").splitlines()
+            if s
+        ]
+    except GitCommandError:
+        specs = []
+    advice = "re-clone with: git clone --single-branch --branch main <url>"
+    code = "LINEAGE_MIRROR_NOT_SINGLE_BRANCH"
+    if not specs:
+        raise RuntimeError(f"{code}: origin has no fetch refspec; {advice}")
+    for spec in specs:
+        if spec.lstrip("+").split(":", 1)[0] != "refs/heads/main":
+            raise RuntimeError(f"{code}: origin fetch {spec!r} is not refs/heads/main; {advice}")
+    allowed = {"refs/heads/main", "refs/remotes/origin/main", "refs/remotes/origin/HEAD"}
+    refs = run_git(
+        clone, "for-each-ref", "--format=%(refname)", "refs/heads/", "refs/remotes/origin/"
+    )
+    extra = [r for r in refs.split() if r not in allowed]
+    if extra:
+        raise RuntimeError(f"{code}: mirror holds a branch beyond main ({extra[0]}); {advice}")
 
 
 @dataclass(frozen=True)
@@ -147,33 +172,6 @@ class Intake:
             raise IntakeRefused("BAD_CONFIG", str(exc)) from exc
         return {**DEFAULT_CONFIG, **loaded}
 
-    def remember_gh(self, gh: str) -> None:
-        """Record the (absolute) gh the Issue runner uses, for the runner that submit starts.
-        Call it under issues.lock: the config.json write is not otherwise serialised."""
-        resolved = shutil.which(gh)
-        if resolved is None or not os.path.isabs(resolved):
-            return  # a gh we cannot name absolutely is not recorded (it would be BAD_CONFIG)
-        path = self.state / "config.json"
-        loaded = stored_config(path)  # None when unreadable: left as is, config() refuses it
-        if isinstance(loaded, dict) and loaded.get("gh") != resolved:
-            tmp = path.with_suffix(".tmp")
-            tmp.write_text(json.dumps({**loaded, "gh": resolved}, sort_keys=True))
-            tmp.chmod(0o600)
-            tmp.replace(path)
-
-    def clone_problem(self, clone: Path) -> str:
-        """#234: a clone the Issue runner works in must be the state's mirror, the same directory
-        (a symlink or case alias is the same clone; another clone of the same origin is not, and
-        its refs and config can differ). "" when it is, or when the state names no mirror."""
-        mirror = self.config()["mirror"]
-        if not mirror:
-            return ""
-        try:  # the same file (st_dev, st_ino): symlink and case aliases are the mirror
-            same = os.path.samefile(mirror, clone)
-        except OSError:
-            same = False
-        return "" if same else f"CLONE_NOT_STATE_MIRROR: {clone} is not the state's mirror {mirror}"
-
     def test_store(self) -> DeferredStore:
         return DeferredStore.for_state(self.state, self.config().get("test_source"))
 
@@ -238,6 +236,7 @@ class Intake:
         if mirror:  # the task is bound to Cairnwork's own repository, whatever the caller's
             if not Path(mirror).is_dir():
                 raise IntakeRefused("BAD_CONFIG", f"mirror {mirror} does not exist")
+            verify_single_branch(Path(mirror))
             payload = {**payload, "repo": mirror}
             task = task_from_payload(payload, task.test_roots, self.test_store(), task.import_paths)
         with self._intake_lock():
