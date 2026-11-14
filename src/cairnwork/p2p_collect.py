@@ -124,13 +124,14 @@ def classify(base_ids, test_ids, edited, source, base_source) -> CollectedSide:
                 texts[path] = source(path)
                 bases[path] = _tree(base_source(path))
                 test_trees[path] = _tree(texts[path])
-            *owners, name = _function(nodeid).split("::")[1:]
-            gone = (
-                _defines(bases[path], owners, name)
-                and test_trees[path] is not None
-                and not _scope_mentions(test_trees[path], owners, name, texts[path])
-                and not _hidden(test_trees[path], bases[path], name, path, test_ids, base_ids)
-            )
+            if parts := _function(nodeid).split("::")[1:]:
+                *owners, name = parts
+                gone = (
+                    _defines(bases[path], owners, name)
+                    and test_trees[path] is not None
+                    and not _scope_mentions(test_trees[path], owners, name, texts[path])
+                    and not _hidden(test_trees[path], bases[path], name, path, test_ids, base_ids)
+                )
         (removed if gone else dropped).add(nodeid)
     return CollectedSide(
         frozenset(base_ids), frozenset(test_ids), frozenset(removed), frozenset(dropped)
@@ -378,7 +379,7 @@ def _file(nodeid: str) -> str:
 
 
 def _function(nodeid: str) -> str:
-    return nodeid.split("[", 1)[0]
+    return (p := nodeid.partition("::"))[0] + p[1] + p[2].split("[", 1)[0]
 
 
 def _digest(ids) -> str:
