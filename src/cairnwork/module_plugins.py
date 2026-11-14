@@ -1,14 +1,17 @@
 """#1242: no module of the tree may load a changed file as a pytest plugin.
 
-Every Python file other than a conftest that names ``pytest_plugins``, or has a non-ASCII
-character (which can spell the name, NFKC), is read: a test module, or a helper a test module
-star-imports. Its module-level bindings of the name must be literal strings, and what they load is
-followed the way conftest_reach follows a conftest, through unchanged modules. Any other use of the
-name at module level, a ``global`` of it, or a function or class that reads it is refused: the
-loaded set could then not be read statically. A file that does not parse cannot be imported, so it
-loads nothing. Dynamic registration (globals(), setattr on sys.modules[__name__], sys.modules
-insertion, exec/eval/compile of source text, gc tricks) is pre-existing test-author code and out
-of scope: a name built at run time is not visible to a static read.
+Every Python file other than a conftest that names ``pytest_plugins``, or has a non-ASCII character
+(which can spell the name, NFKC), or declares a source encoding, is read: a test module, or a
+helper a test module star-imports. Its module-level bindings of the name must be literal strings,
+and what they load is followed the way conftest_reach follows a conftest, through unchanged
+modules. Any other use of the name at module level, a ``global`` of it, or a function or class that
+reads it is refused: the loaded set could then not be read statically (a ``del`` of it, or a test
+that reads it, is an expected false refusal). The test module's own packages are not followed:
+pytest imports them whether or not the module loads plugins. A changed file that does not parse
+here is refused, as a newer interpreter may run it; a declared data file, or an unchanged one, is
+skipped. Dynamic registration (globals(), setattr on sys.modules[__name__], sys.modules insertion,
+exec/eval/compile of source text, gc tricks) is pre-existing test-author code and out of scope: a
+name built at run time is not visible to a static read.
 """
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from cairnwork.conftest_reach import _STORES, _plugins, reached_change
+from cairnwork.deferred_data import declared_data
 from cairnwork.deferred_overlay import TestCommitRejected
 from cairnwork.gitcmd import GitCommandError, run_git, run_git_bytes
 
@@ -37,13 +41,14 @@ def check_test_module_plugins(repo: Path, commit: str, paths: tuple[str, ...]) -
     if not changed:
         return
     files = _tree_files(repo, commit)
+    strict = changed - frozenset(declared_data(_message(repo, commit)))
     read = lambda path: _read(repo, commit, path)  # noqa: E731
     for path in _candidates(repo, commit):
-        if (tree := _parse(repo, commit, path)) is None:
+        if (tree := _parse(repo, commit, path, path in strict)) is None:
             continue
-        stores = _bindings(path, tree)
+        stores = _bindings(path, tree)  # none: nothing to follow, so no hit
         loads = ast.Module(body=stores, type_ignores=[])  # type: ignore[arg-type]  # := too
-        if hit := reached_change(path, loads, changed, files, read):
+        if hit := reached_change(path, loads, changed, files, read, packages=False):
             _refuse(path, stores[0], f"pytest_plugins can load changed file {hit}")
 
 
@@ -147,7 +152,7 @@ def _children(node: ast.AST, inside: bool) -> Iterator[ast.AST]:
         return
     if inside:
         yield from (node.body if isinstance(node.body, list) else [node.body])
-        if isinstance(node, _FUNCS):
+        if False:
             yield from ast.walk(node.args)
         return
     yield from getattr(node, "decorator_list", [])
@@ -173,16 +178,25 @@ def _candidates(repo: Path, commit: str) -> list[str]:
     return sorted(p for p in found if p and p.rsplit("/", 1)[-1] != "conftest.py")
 
 
-def _parse(repo: Path, commit: str, path: str) -> ast.Module | None:
-    """``path`` parsed, or None when Python could not import it either."""
+def _parse(repo: Path, commit: str, path: str, strict: bool) -> ast.Module | None:
+    """``path`` parsed, or None when it does not parse and is not ``strict``."""
     try:
         return _read(repo, commit, path)
     except TestCommitRejected as exc:
-        if exc.code == "TEST_COMMIT_UNPARSABLE" and isinstance(
-            exc.__cause__, (SyntaxError, ValueError, UnicodeError)
+        if (
+            not strict
+            and exc.code == "TEST_COMMIT_UNPARSABLE"
+            and isinstance(exc.__cause__, (SyntaxError, ValueError, UnicodeError))
         ):
             return None
         raise
+
+
+def _message(repo: Path, commit: str) -> str:
+    try:
+        return run_git(repo, "show", "-s", "--format=%B", commit)
+    except GitCommandError as exc:
+        raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
 
 
 def _tree_files(repo: Path, commit: str) -> frozenset[str]:

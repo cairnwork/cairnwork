@@ -59,13 +59,16 @@ def reached_change(
     changed: frozenset[str],
     files: frozenset[str],
     read,
+    *,
+    packages: bool = True,
 ) -> str:
     """The first file in ``changed`` that ``conftest`` (parsed as ``tree``) can load, following
     imports through the unchanged ``files`` under the top directories of ``changed``; or a reason
-    when there are too many to follow; '' when none. ``read(path)`` parses a file of the tree."""
+    when there are too many to follow; '' when none. ``read(path)`` parses a file of the tree.
+    ``packages``: start from the packages pytest imports the conftest in."""
     tops = {path.split("/", 1)[0] for path in changed}
     queue, seen = [(conftest, tree)], {conftest}
-    for init in sorted(_inits(conftest) & files):  # the packages pytest imports the conftest in
+    for init in sorted(_inits(conftest) & files if packages else ()):
         if init in changed:
             return init
         seen.add(init)

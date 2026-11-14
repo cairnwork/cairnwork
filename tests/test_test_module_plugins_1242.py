@@ -6,6 +6,7 @@ from conftest_scenarios import project as _project  # noqa: F401  (the fixture, 
 
 from cairnwork.conftest_check import check_conftests
 from cairnwork.deferred_overlay import TestCommitRejected
+from cairnwork.module_plugins import check_test_module_plugins
 
 
 @pytest.fixture
@@ -144,6 +145,8 @@ def test_unchanged_repo_plugin_module_is_accepted(project):
         'pytest_plugins = x = pytest_plugins = "json"\n',
         "match {}:\n case {**pytest_plugins}:\n  pass\n",
         "pytest_plugins = None\n",
+        'pytest_plugins = ["json"] + EXTRA\n',
+        'pytest_plugins = "json" + EXTRA\n',
     ],
 )
 def test_module_binding_routes_to_changed_plugin_are_refused(project, source):
@@ -223,7 +226,6 @@ def test_plugin_reachability_through_tree_is_refused(project, files, paths):
         "pytest_plugins: list\n",
         "import plug\n",
         "from helpers import *\n",
-        'pytest_plugins = "plug"\ndef broken(:\n',
     ],
 )
 def test_unrelated_or_non_plugin_bindings_are_accepted(project, source):
@@ -283,3 +285,39 @@ def test_an_unchanged_conftest_is_left_to_the_conftest_check(project):
     )
     base, commit = _commit(project, {"tests/other.py": "VALUE = 1\n"})
     check_conftests(project, base, commit, ["tests/other.py"])
+
+
+def test_a_changed_module_that_does_not_parse_here_is_refused(project):
+    source = 'pytest_plugins = "plug"\ndef broken(:\n'
+    base, commit = _commit(project, {"tests/test_case.py": source, "tests/plug.py": HOOK})
+    with pytest.raises(TestCommitRejected) as caught:
+        check_conftests(project, base, commit, ["tests/test_case.py", "tests/plug.py"])
+    assert caught.value.code == "TEST_COMMIT_UNPARSABLE"
+
+
+def test_declared_or_unchanged_unparsable_candidates_are_skipped(project):
+    commit_change(project, {"tests/test_old.py": "# caf\u00e9\ndef broken(:\n"})
+    base = git(project, "rev-parse", "HEAD")
+    commit_change(project, {"tests/data/x.py": "# caf\u00e9\ndef broken(:\n"})
+    git(project, "commit", "--amend", "-m", "data\n\nCairnwork-Data: tests/data/x.py")
+    commit = git(project, "rev-parse", "HEAD")
+    git(project, "reset", "-q", "--hard", base)
+    check_conftests(project, base, commit, ["tests/data/x.py"])
+
+
+@pytest.mark.parametrize(
+    "new",
+    [
+        {},
+        {"tests/test_u.py": "# caf\u00e9\ndef test_case(): pass\n"},
+        {"tests/test_u.py": "# pytest_plugins not used\ndef test_case(): pass\n"},
+        {"tests/test_u.py": 'pytest_plugins = "json"\ndef test_case(): pass\n'},
+    ],
+)
+def test_a_changed_package_init_is_not_a_plugin_of_the_tests_inside_it(project, new):
+    commit_change(
+        project,
+        {"tests/__init__.py": "", "tests/test_old.py": "# caf\u00e9\ndef test_case(): pass\n"},
+    )
+    _, commit = _commit(project, {"tests/__init__.py": "VALUE = 1\n", **new})
+    check_test_module_plugins(project, commit, ("tests/__init__.py", *new))
