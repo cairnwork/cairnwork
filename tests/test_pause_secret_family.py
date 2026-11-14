@@ -7,6 +7,7 @@ import pytest
 from experimental.pause import schema
 from experimental.pause.client import HaikuPlanner, TransportResult
 from experimental.pause.interfaces import CallSettings, PlanRequest
+from experimental.pause.secrets_scan import Scanner
 
 
 class FakeTransport:
@@ -99,8 +100,8 @@ def test_abbreviation_camel_family_is_blocked(name, form):
     assert fake.calls == [] and reply.reason == schema.Reason.PAUSE_SECRET_BLOCKED, text
 
 
-class _RaisingScanner:
-    def scan(self, text):
+class _RaisingScanner(Scanner):
+    def scan(self, text: str) -> list[str]:
         raise RuntimeError("boom " + text)
 
 
