@@ -7,7 +7,8 @@ followed the way conftest_reach follows a conftest, through unchanged modules. A
 name at module level, a ``global`` of it, or a function or class that reads it is refused: the
 loaded set could then not be read statically. A file that does not parse cannot be imported, so it
 loads nothing. Dynamic registration (globals(), setattr on sys.modules[__name__], sys.modules
-insertion, gc tricks) is pre-existing test-author code and out of scope.
+insertion, exec/eval/compile of source text, gc tricks) is pre-existing test-author code and out
+of scope: a name built at run time is not visible to a static read.
 """
 
 from __future__ import annotations
