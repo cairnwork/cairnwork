@@ -364,7 +364,7 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
         exitstatus=verdict.exitstatus, testsfailed=verdict.testsfailed, fail_kind=verdict.fail_kind,
         data_refused=verdict.data_refused,
         denied_path=_denial(batch, verdict, checkout, run_dir, clean and not not_run),
-        all_skipped=all_skipped(verdict.collected, verdict.outcomes),
+        all_skipped=all_skipped(verdict.collected, verdict.outcomes), outcomes=verdict.outcomes,
     )  # fmt: skip
     digest = _record_digest(
         candidate_commit=candidate_commit,
