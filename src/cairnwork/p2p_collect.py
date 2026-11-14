@@ -172,7 +172,7 @@ def _run_classification(base_ids, test_ids, edited, sources):
             raise ValueError
         if removed_set | dropped_set != expected:
             raise ValueError
-    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError, RecursionError):
         _analysis_failure("invalid child result")
     return frozenset(removed_set), frozenset(dropped_set)
 
@@ -234,11 +234,12 @@ def _run_child(argv, payload):
         if reader.is_alive() or writer.is_alive() or size >= CLASSIFY_OUTPUT_CAP:
             return b"", timed_out, 1
         return b"".join(output), timed_out, process.returncode
-    except OSError:
-        if process is not None:
+    except (OSError, RuntimeError):  # RuntimeError: a thread that cannot start
+        return b"", False, 1
+    finally:
+        if process is not None:  # every exit path: kill the whole group, reap the child
             _kill_child_group(process.pid)
             process.wait()
-        return b"", False, 1
 
 
 def _write_input(stream, payload):

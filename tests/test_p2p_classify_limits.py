@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
+import time
+from typing import Any
 
 import pytest
 from conftest import commit_change
@@ -79,3 +82,106 @@ def test_pipeline_analysis_timeout_is_refused_without_verification(monkeypatch, 
     )
     assert result.status == "FAILED" and not result.verified
     assert "TEST_COMMIT_ANALYSIS_LIMIT" in result.reason
+
+
+_OK = '{"removed":["t.py::a"],"dropped":["t.py::b"]}'
+_DEEP = 100_000
+
+
+def _emit(text: str) -> str:
+    return f"import sys; sys.stdout.write({text!r}); sys.stdout.flush(); "
+
+
+_FAILURES: dict[str, str] = {
+    "result-then-nonzero-exit": _emit(_OK) + "sys.exit(3)",
+    "result-then-self-signal": _emit(_OK)
+    + "import os,signal; os.kill(os.getpid(), signal.SIGKILL)",
+    "result-padded-past-output-cap": _emit(_OK)
+    + f"sys.stdout.write(' ' * ({p2p_collect.CLASSIFY_OUTPUT_CAP} + 10))",
+    "deep-json-top-level": f"import sys; sys.stdout.write('[' * {_DEEP} + ']' * {_DEEP})",
+    "deep-json-in-removed": "import sys; sys.stdout.write('{\"removed\":' + '[' * "
+    f"{_DEEP} + ']' * {_DEEP} + ',\"dropped\":[]}}')",
+    "missing-expected-id": _emit('{"removed":["t.py::a"],"dropped":[]}'),
+    "id-not-in-base": _emit('{"removed":["t.py::a","t.py::z"],"dropped":["t.py::b"]}'),
+    "id-in-both-lists": _emit('{"removed":["t.py::a","t.py::b"],"dropped":["t.py::b"]}'),
+    "duplicate-id": _emit('{"removed":["t.py::a","t.py::a"],"dropped":["t.py::b"]}'),
+    "non-string-member": _emit('{"removed":["t.py::a",1],"dropped":["t.py::b"]}'),
+    "top-level-non-object": _emit("[]"),
+    "extra-key": _emit('{"removed":["t.py::a"],"dropped":["t.py::b"],"x":[]}'),
+    "non-utf8": "import sys; sys.stdout.buffer.write(b'\\xff\\xfe')",
+    "empty-output": "pass",
+}
+
+
+@pytest.mark.parametrize("code", _FAILURES.values(), ids=_FAILURES.keys())
+def test_child_failure_modes_are_analysis_limit(monkeypatch, code):
+    monkeypatch.setattr(p2p_collect, "_classify_argv", lambda: _stub(code))
+    monkeypatch.setattr(p2p_collect, "CLASSIFY_TIMEOUT_SECONDS", 20)
+    with pytest.raises(Rejected) as caught:
+        p2p_collect.classify({"t.py::a", "t.py::b"}, set(), set(), lambda _: "", lambda _: "")
+    assert caught.value.code == "TEST_COMMIT_ANALYSIS_LIMIT"
+
+
+def test_timeout_kills_child_group_promptly(monkeypatch, tmp_path):
+    pid_file = tmp_path / "grandchild"
+    code = (
+        "import subprocess,sys,time; "
+        "g = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
+        "open(sys.argv[1], 'w').write(str(g.pid)); time.sleep(60)"
+    )
+    monkeypatch.setattr(p2p_collect, "_classify_argv", lambda: _stub(code, str(pid_file)))
+    monkeypatch.setattr(p2p_collect, "CLASSIFY_TIMEOUT_SECONDS", 1.5)
+    started = time.monotonic()
+    with pytest.raises(Rejected) as caught:
+        p2p_collect.classify({"t.py::a"}, set(), set(), lambda _: "", lambda _: "")
+    assert caught.value.code == "TEST_COMMIT_ANALYSIS_LIMIT"
+    assert time.monotonic() - started < 4
+    grandchild = int(pid_file.read_text())
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        try:
+            os.kill(grandchild, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.05)
+    pytest.fail("grandchild survived the group kill")
+
+
+_GONE = "def test_gone(): pass\ndef test_hidden(): pass\n"
+_REAL_CASES: dict[str, tuple[set[str], Any, Any]] = {
+    "removed-and-dropped-both-non-empty": (
+        {"t.py::test_gone", "t.py::test_hidden"},
+        {"t.py::test_gone"},
+        {"t.py::test_hidden"},
+    ),
+    "empty-input": (set(), set(), set()),
+}
+
+
+@pytest.mark.parametrize("case", _REAL_CASES.values(), ids=_REAL_CASES.keys())
+def test_real_child_runs_isolated(monkeypatch, tmp_path, case):
+    base_ids, removed, dropped = case
+    monkeypatch.setenv("CW_PARENT_SENTINEL", "leaked")
+    real: list[str] = p2p_collect._classify_argv()
+    probe = tmp_path / "probe.json"
+    spy = (
+        "import sys, os, json; "
+        "open(sys.argv[2], 'w').write(json.dumps("
+        "{'env': dict(os.environ), 'isolated': sys.flags.isolated, 'path0': sys.path[0]})); "
+        f"exec({real[5]!r})"
+    )
+    monkeypatch.setattr(
+        p2p_collect, "_classify_argv", lambda: [*real[:5], spy, real[6], str(probe)]
+    )
+    side = p2p_collect.classify(
+        base_ids,
+        {"t.py::test_kept"} if base_ids else set(),
+        {"t.py"},
+        lambda _: "if False:\n    def test_hidden(): pass\n",
+        lambda _: _GONE,
+    )
+    assert (side.removed, side.dropped) == (removed, dropped)
+    seen = json.loads(probe.read_text())
+    assert "CW_PARENT_SENTINEL" not in seen["env"] and "PATH" not in seen["env"]
+    assert seen["isolated"] == 1
+    assert real[1] == "-I"
