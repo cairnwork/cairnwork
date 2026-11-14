@@ -211,7 +211,7 @@ class _Scratch:
                 common = run_git(self.repo, "rev-parse", "--git-common-dir").strip()
             except GitCommandError as exc:
                 if self.supplied:
-                    _raise_git_failure(exc, f"{self.repo}: ", supplied=True)
+                    _raise_git_failure(exc, f"{self.repo}: ")
                 _raise_store_failure(exc)
             objects = Path(self.repo, common).resolve() / "objects"
         self.dir = Path(tempfile.mkdtemp(dir=self.parent, prefix=".scratch-"))

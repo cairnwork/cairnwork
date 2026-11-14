@@ -65,3 +65,39 @@ def test_candidate_bundle_git_refusal_keeps_its_refusal_code(
         store.import_bundle(project, bundle, used_dir(store))
 
     assert err.value.code == "TEST_COMMIT_UNREADABLE"
+
+
+@pytest.mark.parametrize("path", ["fetch_into", "import_bundle"])
+@pytest.mark.parametrize(
+    "cause",
+    [
+        subprocess.TimeoutExpired("git", 1),
+        FileNotFoundError("git"),
+        OSError("undecodable output"),  # UnicodeDecodeError reaches here as an OSError
+    ],
+    ids=["timeout", "git-missing", "undecodable"],
+)
+def test_scratch_rev_parse_host_failure_on_supplied_repo_is_environment(
+    project, store, tmp_path, monkeypatch, path, cause
+):  # noqa: F811
+    _base, sha, bundle = make_bundle(
+        project, {"tests/test_candidate.py": "def test_candidate():\n    pass\n"}, tmp_path
+    )
+    store.import_bundle(project, bundle, used_dir(store))
+    real_run_git = deferred_store.run_git
+
+    def fail_rev_parse(repo, *args, **kwargs):
+        if args == ("rev-parse", "--git-common-dir"):
+            error = GitCommandError("git rev-parse failed")
+            error.__cause__ = cause
+            raise error
+        return real_run_git(repo, *args, **kwargs)
+
+    monkeypatch.setattr(deferred_store, "run_git", fail_rev_parse)
+    with pytest.raises(OSError) as err:
+        if path == "fetch_into":
+            store.fetch_into(project, sha)
+        else:
+            store.import_bundle(project, bundle, used_dir(store))
+
+    assert not isinstance(err.value, CommitRejected)
