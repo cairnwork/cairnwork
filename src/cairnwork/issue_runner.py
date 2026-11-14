@@ -23,7 +23,6 @@ import json
 import os
 import re
 import shlex
-import shutil
 import sqlite3
 import sys
 import tempfile
@@ -36,8 +35,6 @@ from cairnwork.changeset import ChangeSetError, read_change_set
 from cairnwork.deferred_tests import TestCommitRejected
 from cairnwork.gitcmd import NETWORK_TIMEOUT_SECONDS, GitCommandError, run_git
 from cairnwork.intake import Intake, IntakeRefused
-from cairnwork.intake import verify_single_branch as _verify_single_branch
-from cairnwork.intake_config import stored_config
 from cairnwork.issue_github import GitHub
 from cairnwork.issue_publish import (
     TASK_ID,
@@ -50,6 +47,7 @@ from cairnwork.issue_publish import (
 from cairnwork.issue_task import TASK_FENCE, IssueRefused, adoptable, parse_task_block
 from cairnwork.lineage import require_on_main
 from cairnwork.lineage import verify_origin as _verify_origin
+from cairnwork.lineage import verify_single_branch as _verify_single_branch
 from cairnwork.notary import NotaryError
 from cairnwork.ownership import OwnershipError, OwnershipUnknown
 from cairnwork.pipeline import TaskRejected
@@ -71,30 +69,6 @@ COMMIT = re.compile(r"[0-9a-f]{40}")
 ISSUE_TAG = re.compile(r"<\s*/?\s*issue\b[^>]*>", re.IGNORECASE)
 TRUST_CHANGED = "TRUST_CHANGED_BEFORE_DISPATCH"
 DEFAULT_GH = str(Path.home() / ".config/nexus-agent-bot/bin/nexus-agent-gh")
-
-
-def _remember_gh(intake: Intake, gh: str) -> None:
-    resolved = shutil.which(gh)
-    if resolved is None or not os.path.isabs(resolved):
-        return
-    path = intake.state / "config.json"
-    loaded = stored_config(path)
-    if isinstance(loaded, dict) and loaded.get("gh") != resolved:
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({**loaded, "gh": resolved}, sort_keys=True))
-        tmp.chmod(0o600)
-        tmp.replace(path)
-
-
-def _clone_problem(intake: Intake, clone: Path) -> str:
-    mirror = intake.config()["mirror"]
-    if not mirror:
-        return ""
-    try:
-        same = os.path.samefile(mirror, clone)
-    except OSError:
-        same = False
-    return "" if same else f"CLONE_NOT_STATE_MIRROR: {clone} is not the state's mirror {mirror}"
 
 
 def take(intake: Intake, github: GitHub, clone: Path) -> list[dict[str, Any]]:
@@ -367,7 +341,7 @@ def main(argv: list[str] | None = None) -> int:
     github = GitHub(args.gh, args.repo)
     clone = Path(args.clone).resolve()
     try:
-        if problem := _clone_problem(intake, clone):  # before anything is fetched (#234)
+        if problem := intake.clone_problem(clone):  # before anything is fetched (#234)
             raise RuntimeError(problem)
         _verify_origin(clone, github.repo)
         require_bot_gh(args.gh, github.repo, clone)
@@ -382,7 +356,7 @@ def main(argv: list[str] | None = None) -> int:
         except BlockingIOError:
             print(json.dumps({"error": "BUSY", "detail": "another run-once is working"}))
             return 2
-        _remember_gh(intake, args.gh)
+        intake.remember_gh(args.gh)
         result = {"take": take(intake, github, clone), "settle": settle(intake, github, clone)}
     finally:
         os.close(fd)

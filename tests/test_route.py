@@ -134,6 +134,22 @@ def test_submit_refuses_a_base_that_is_not_on_origin_main(state, project):
     assert route(state, "in-flight")[1]["count"] == 0
 
 
+def test_submit_refuses_a_multi_branch_mirror_as_bad_config(state, project, tmp_path):
+    route(state, "accept")
+    mirror = tmp_path / "mirror"
+    git(tmp_path, "clone", "-q", "--single-branch", "--branch", "main", str(project), str(mirror))
+    head = git(mirror, "rev-parse", "HEAD").strip()
+    git(mirror, "update-ref", "refs/remotes/origin/hidden", head)
+    config = json.loads((state / "config.json").read_text())
+    config["mirror"] = str(mirror)
+    (state / "config.json").write_text(json.dumps(config))
+
+    code, out = route(state, "submit", stdin=request(project, "multi-branch-mirror"))
+
+    assert code == 2 and out["error"] == "BAD_CONFIG"
+    assert "LINEAGE_MIRROR_NOT_SINGLE_BRANCH" in out["detail"]
+
+
 def test_submitted_task_is_fixed_and_core_verified(state, project):
     route(state, "accept")
     code, out = route(state, "submit", stdin=request(project))

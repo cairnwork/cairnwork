@@ -35,14 +35,37 @@ def route_submit(repo, tmp_path, monkeypatch):
     return intake, mirror, payload
 
 
-@pytest.mark.parametrize("mirror_category", ["wildcard fetch refspec", "stored extra branch"])
+@pytest.mark.parametrize(
+    "mirror_category",
+    [
+        "wildcard fetch refspec",
+        "no fetch refspec",
+        "extra local branch",
+        "extra origin branch",
+        "non-origin remote branch",
+        "second remote branch",
+    ],
+)
 def test_route_submit_refuses_multi_branch_mirror(route_submit, mirror_category):
     _intake, mirror, payload = route_submit
     if mirror_category == "wildcard fetch refspec":
         git(mirror, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*")
-    else:
+    elif mirror_category == "no fetch refspec":
+        git(mirror, "config", "--unset-all", "remote.origin.fetch")
+    elif mirror_category == "extra local branch":
+        head = git(mirror, "rev-parse", "HEAD").strip()
+        git(mirror, "update-ref", "refs/heads/hidden", head)
+    elif mirror_category == "extra origin branch":
         head = git(mirror, "rev-parse", "HEAD").strip()
         git(mirror, "update-ref", "refs/remotes/origin/hidden", head)
+    elif mirror_category == "non-origin remote branch":
+        head = git(mirror, "rev-parse", "HEAD").strip()
+        git(mirror, "update-ref", "refs/remotes/upstream/hidden", head)
+    else:
+        head = git(mirror, "rev-parse", "HEAD").strip()
+        git(mirror, "remote", "add", "upstream", str(mirror))
+        git(mirror, "config", "remote.upstream.fetch", "+refs/heads/*:refs/remotes/upstream/*")
+        git(mirror, "update-ref", "refs/remotes/upstream/main", head)
 
     with pytest.raises(RuntimeError, match="LINEAGE_MIRROR_NOT_SINGLE_BRANCH"):
         _intake.submit(payload)
