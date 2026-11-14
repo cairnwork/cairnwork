@@ -165,3 +165,70 @@ def test_loop_else_rebinding_after_a_definite_break_is_dead() -> None:
     )
     assert _verdict(tail) == "dropped"
     assert _verdict("", tail) == "removed"
+
+
+@pytest.mark.parametrize(
+    "condition",
+    [
+        "(2 or 0) - 1",
+        "('' and 1) == ''",
+        "(b'' and 1) == b''",
+        "(0.5 or 0) == 0.5",
+        "('x' or '') == 'x'",
+    ],
+)
+def test_short_circuit_exit_returns_the_operand(condition: str) -> None:
+    tail = _body(f"if {condition}:\n    test_x = replacement\n")
+    assert _verdict("", tail) == "dropped"
+
+
+_BIG = "0x1" + "0" * 33  # 2**132, a raw literal above MAX_INT_BITS
+
+
+@pytest.mark.parametrize(
+    "condition",
+    [
+        "2**128 - 2**128", "(1 << 128) - (1 << 128)", "2**64 * 2**64 - 2**64 * 2**64",
+        "'a' * 4097 == ''", "b'a' * 4097 == b''", "'%d' % 1 == ''",
+        f"{_BIG} % 7 == 99", f"{_BIG} // 3 == 0",
+    ],
+)  # fmt: skip
+def test_oversized_falsy_constants_stay_unknown(condition: str) -> None:
+    tail = _body(f"if {condition}:\n    test_x = replacement\n")
+    assert _verdict("", tail) == "dropped"
+
+
+@pytest.mark.parametrize(
+    "condition",
+    [
+        "2**64 - 2**64", "(1 << 127) - (1 << 127)", "'a' * 4096 == ''", "b'a' * 4096 == b''",
+        "(0 and 5) == 1", "not (2 or 0)", "(1 + 2 * 3) == 8",
+    ],
+)  # fmt: skip
+def test_constants_at_the_size_limit_still_fold(condition: str) -> None:
+    tail = _body(f"if {condition}:\n    test_x = replacement\n")
+    assert _verdict(tail) == "dropped"
+    assert _verdict("", tail) == "removed"
+
+
+class _NoOperator:
+    def __getattr__(self, name: str):
+        def refuse(*_args: object) -> object:
+            raise AssertionError(f"operator.{name} called on an oversized operand")
+
+        return refuse
+
+
+@pytest.mark.parametrize(
+    "condition",
+    ["2 ** 129", "1 << 129", f"{_BIG} * 3", "'a' * 5000", "b'a' * 5000", f"{_BIG} // 3"],
+)
+def test_oversized_operands_are_refused_before_evaluation(
+    condition: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import ast
+
+    from cairnwork import p2p_dead_zone
+
+    monkeypatch.setattr(p2p_dead_zone, "operator", _NoOperator())
+    assert p2p_dead_zone._truth(ast.parse(condition, mode="eval").body, False) is None

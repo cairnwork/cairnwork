@@ -149,8 +149,8 @@ def _check_binary_limits(op: type[ast.operator], left: object, right: object) ->
         else:
             _check_repetition(left, right)
             _check_repetition(right, left)
-    elif op is ast.Mod:
-        if isinstance(left, (str, bytes)):
+    elif op in (ast.Mod, ast.FloorDiv):
+        if op is ast.Mod and isinstance(left, (str, bytes)):
             raise ValueError("string formatting is unsupported")
         if isinstance(left, int) and isinstance(right, int):
             _check_size(left)
