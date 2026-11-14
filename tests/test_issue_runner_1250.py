@@ -73,7 +73,7 @@ def test_candidate_bundle_git_refusal_keeps_its_refusal_code(
     [
         subprocess.TimeoutExpired("git", 1),
         FileNotFoundError("git"),
-        OSError("undecodable output"),  # UnicodeDecodeError reaches here as an OSError
+        UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"),
     ],
     ids=["timeout", "git-missing", "undecodable"],
 )
