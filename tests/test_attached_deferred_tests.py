@@ -195,6 +195,21 @@ ATTACHED = {
                       "class TestZ:\n    global _impl\n    _impl = len\n"),
     # #1026 r1: the lambda arm of the composite rule: a lambda that reads no plain name
     "composite-lambda": ("from helpers import impl\ntest_x = (lambda: impl(),)[0]\n",) * 2,
+    "match-capture": ("", "def _impl():\n    pass\nmatch _impl:\n    case test_x:\n        pass\n"),
+    "match-star-capture": (
+        "", "def _impl():\n    pass\nmatch [_impl]:\n    case [*test_x]:\n        pass\n"
+    ),
+    "match-rest-capture": ("", "def _impl():\n    pass\nmatch {'x': _impl}:\n"
+                           "    case {**test_x}:\n        pass\n"),
+    "comprehension-walrus": ("", "def _impl():\n    pass\n"
+                             "[0 for _ in [0] if (test_x := _impl)]\n"),
+    "dynamic-eval": ("", "test_x = eval('test_helper')\n"),
+    "dynamic-globals": ("", "test_x = globals()['test_helper']\n"),
+    "dynamic-locals": ("", "test_x = locals()['test_helper']\n"),
+    "dynamic-vars": ("", "test_x = vars()['test_helper']\n"),
+    "dynamic-exec": ("", "test_x = exec('test_helper')\n"),
+    "dynamic-getattr": ("", "test_x = getattr(locals(), 'test_helper')\n"),
+    "dynamic-import": ("", "test_x = __import__('test_module')\n"),
 }  # fmt: skip
 
 
@@ -237,6 +252,9 @@ CONTROLS = {  # no attached test: nothing refused, only test_regression is new
     "        test_x = make\n        return test_x\n",
     "test-method-named-in-class-body": "from helpers import make\nclass TestY:\n"
     "    def test_a(self):\n        setattr(type(self), 'test_b', make)\n    alias = test_a\n",
+    "match-data-capture": "match 1:\n    case test_data:\n        pass\n",
+    "walrus-data-comprehension": "test_data = [x for x in [1] if (item := x)]\n",
+    "dynamic-data-literal": "test_data = ['literal', 1]\n",
 }
 
 

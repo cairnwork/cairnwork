@@ -167,9 +167,14 @@ def pytest_collection_modifyitems(config, items):
         for item in items:
             if "verifier_account" in item.keywords:
                 item.add_marker(skip_account)
-    if cairnwork_sandbox.select() is not None:
+    require = os.environ.get("CAIRNWORK_REQUIRE_SANDBOX") == "1"
+    available = cairnwork_sandbox.select() is not None
+    # The 'sandbox' tests assert macOS Seatbelt behavior (sandbox-exec, BSD stat). A Linux host
+    # with a working bwrap makes select() non-None, but they must still skip there unless the
+    # job requires the sandbox.
+    if available and (require or sys.platform == "darwin"):
         return
-    if os.environ.get("CAIRNWORK_REQUIRE_SANDBOX") == "1":
+    if require:
         raise pytest.UsageError("CAIRNWORK_REQUIRE_SANDBOX=1 but sandbox-exec is unavailable")
     skip = pytest.mark.skip(reason="needs macOS sandbox-exec")
     for item in items:

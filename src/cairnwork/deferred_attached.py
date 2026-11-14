@@ -32,13 +32,20 @@ Known limit (as #968 (b)): no other module's code is read, so nothing an import 
 followed: a class decorator, a metaclass or a base class imported from elsewhere, or an imported
 function called at import or while a class is built, attaches nothing here. pytest collects from
 ``__dict__`` only, so a module-level ``__getattr__``/``__dir__`` cannot add a test. Other dynamic
-writes of a namespace (``setattr`` reached through a name, ``exec``) are #1007."""
+writes of a namespace (``setattr`` reached through a name) are #1007. Known limits (#1194): a
+same-file helper invoked by a decorator is not followed through the decorator's execution, and
+composites over assigned containers are not treated as code: broad rejection caused 10 local
+corpus false refusals and needs corpus measurement plus a narrower rule. A self-module import is
+also not distinguished from another module: this analysis receives an AST without its resolved
+module identity, so matching import names would be ambiguous. Other dynamic namespace writes,
+including ``exec``, are #1007."""
 
 from __future__ import annotations
 
 import ast
 import builtins
 
+from cairnwork.deferred_attached_scope import match_captures, pattern_names
 from cairnwork.deferred_nodes import _DEFS, _SCOPES, _digest, _literal, _Reach
 from cairnwork.deferred_overlay import TestCommitRejected
 
@@ -90,7 +97,24 @@ def attached(tree: ast.Module) -> tuple[frozenset[str], bool]:
 
 
 def _scan(nodes: list[ast.AST], plain: frozenset[str]) -> list[tuple[str | None, ast.expr]]:
-    return [store for node in nodes for store in (*_stores(node), *_name_stores(node, plain))]
+    stores = [store for node in nodes for store in (*_stores(node), *_name_stores(node, plain))]
+    if any(_blind_attribute_call(value) for _, value in stores):
+        stores.append((None, ast.Constant(value=None)))
+    return stores
+
+
+def _blind_attribute_call(value: ast.expr) -> bool:
+    for node in ast.walk(value):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        func = node.func
+        while isinstance(func, ast.Attribute):
+            if func.attr in {"__self__", "__builtins__", "__globals__", "__dict__"}:
+                return True
+            func = func.value
+        if isinstance(func, ast.Name) and (func.id in _BUILTINS or func.id == "builtins"):
+            return True
+    return False
 
 
 def _plain(tree: ast.Module) -> frozenset[str]:
@@ -201,7 +225,12 @@ def _name_stores(node: ast.AST, plain: frozenset[str]) -> list[tuple[str, ast.ex
 def _visit_name_stores(
     node: ast.AST, plain: frozenset[str], found: list, scope: str, shared: frozenset[str]
 ) -> None:
-    if isinstance(node, (*_DEFS, ast.Lambda, ast.comprehension)):
+    if isinstance(node, ast.comprehension):
+        _visit_name_stores(node.iter, plain, found, scope, shared)
+        for condition in node.ifs:
+            _visit_name_stores(condition, plain, found, scope, shared)
+        return
+    if isinstance(node, (*_DEFS, ast.Lambda)):
         if isinstance(node, ast.Lambda):
             return
         if isinstance(node, _DEFS):
@@ -217,8 +246,15 @@ def _visit_name_stores(
         for child in node.body:
             _visit_name_stores(child, plain, found, "class", frozenset())
         return
+    if isinstance(node, ast.Match):
+        if _callable(node.subject, plain):
+            found.extend(
+                (name, node.subject)
+                for name in match_captures(node)
+                if _test_name(name) and (scope != "function" or name in shared)
+            )
     for targets, value in _bindings(node):
-        if value is None or not _callable(value, plain):
+        if value is None or not (_callable(value, plain) or _blind_attribute_call(value)):
             continue
         for target in (t for x in targets for t in ast.walk(x)):
             if not isinstance(target, ast.Name) or not isinstance(target.ctx, ast.Store):
@@ -265,6 +301,14 @@ def _bindings(item: ast.AST) -> list[tuple[list[ast.expr], ast.expr | None]]:
         return [([item.target], item.iter)]
     if isinstance(item, (ast.With, ast.AsyncWith)):
         return [([w.optional_vars], w.context_expr) for w in item.items if w.optional_vars]
+    if isinstance(item, ast.Match):
+        return [
+            (
+                [ast.Name(id=name, ctx=ast.Store()) for name in pattern_names(case.pattern)],
+                item.subject,
+            )
+            for case in item.cases
+        ]
     return []
 
 
