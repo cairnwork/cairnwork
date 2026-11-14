@@ -41,6 +41,7 @@ from cairnwork.conftest_names import bound_by, taken_names
 from cairnwork.conftest_reach import reached_change
 from cairnwork.deferred_overlay import TestCommitRejected
 from cairnwork.gitcmd import GitCommandError, run_git, run_git_bytes
+from cairnwork.module_plugins import check_test_module_plugins
 
 CONFTEST = "conftest.py"
 CODE = "TEST_COMMIT_CONFTEST_STATIC"
@@ -76,6 +77,7 @@ def check_conftests(repo: Path, base: str, test_commit: str, paths: Iterable[str
 
 
 def _check_conftests(repo: Path, base: str, test_commit: str, paths: tuple[str, ...]) -> None:
+    check_test_module_plugins(repo, base, test_commit, paths)
     names = conftest_of(paths)
     own = _own_packages(repo, base) if names else frozenset[str]()
     for path in names:
