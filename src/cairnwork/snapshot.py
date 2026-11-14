@@ -20,6 +20,7 @@ from pathlib import Path
 
 from cairnwork.gitcmd import GitCommandError, hash_blob, run_git
 from cairnwork.provenance import trailers
+from cairnwork.textclean import shown
 from cairnwork.workspace import (
     ATTEMPT_REF_PREFIX,
     Attempt,
@@ -46,7 +47,7 @@ def snapshot_candidate(
     require_refs_unchanged(repo, attempt)
     index = attempt.path.parent / f"{attempt.attempt_id}.index"
     if index.exists() or index.is_symlink():
-        raise CandidateRejected("UNREADABLE_WORKTREE", f"{index} already exists")
+        raise CandidateRejected("UNREADABLE_WORKTREE", f"{shown(index)} already exists")
     try:
         run_git(repo, "read-tree", attempt.base_commit, index_file=index)
         for path in sorted(set(allowed_files)):
@@ -61,7 +62,7 @@ def snapshot_candidate(
         ).strip()
         run_git(repo, "update-ref", ATTEMPT_REF_PREFIX + attempt.attempt_id, head)
     except GitCommandError as exc:
-        raise CandidateRejected("UNREADABLE_WORKTREE", str(exc)) from exc
+        raise CandidateRejected("UNREADABLE_WORKTREE", shown(exc)) from exc
     finally:
         index.unlink(missing_ok=True)
     return check_candidate_commit(
@@ -72,19 +73,19 @@ def snapshot_candidate(
 def _stage(repo: Path, clone: Path, path: str, index: Path) -> None:
     full = clone / path
     if Path(path).is_absolute() or ".." in Path(path).parts:
-        raise CandidateRejected("OUT_OF_SCOPE", f"{path} leaves the clone")
+        raise CandidateRejected("OUT_OF_SCOPE", f"{shown(path)} leaves the clone")
     parent = clone
     for part in Path(path).parts[:-1]:
         parent = parent / part
         if parent.is_symlink():
-            raise CandidateRejected("FORBIDDEN_MODE", f"{path}: {part} is a symlink")
+            raise CandidateRejected("FORBIDDEN_MODE", f"{shown(path)}: {shown(part)} is a symlink")
     try:
         fd = os.open(full, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except FileNotFoundError:
         run_git(repo, "update-index", "--force-remove", "--", path, index_file=index)
         return
     except OSError as exc:  # a symlink (ELOOP), FIFO, unreadable file, ...
-        raise CandidateRejected("FORBIDDEN_MODE", f"{path}: {exc.strerror}") from exc
+        raise CandidateRejected("FORBIDDEN_MODE", f"{shown(path)}: {shown(exc.strerror)}") from exc
     info = os.fstat(fd)
     problem = (
         "is not a regular file"
@@ -97,11 +98,11 @@ def _stage(repo: Path, clone: Path, path: str, index: Path) -> None:
     )
     if problem:
         os.close(fd)
-        raise CandidateRejected("FORBIDDEN_MODE", f"{path} {problem}")
+        raise CandidateRejected("FORBIDDEN_MODE", f"{shown(path)} {problem}")
     with os.fdopen(fd, "rb") as handle:
         data = handle.read(MAX_FILE_BYTES + 1)
     if len(data) > MAX_FILE_BYTES:
-        raise CandidateRejected("FORBIDDEN_MODE", f"{path} grew while being read")
+        raise CandidateRejected("FORBIDDEN_MODE", f"{shown(path)} grew while being read")
     oid = hash_blob(repo, data)
     mode = "100755" if info.st_mode & stat.S_IXUSR else "100644"
     run_git(repo, "update-index", "--add", "--cacheinfo", f"{mode},{oid},{path}", index_file=index)

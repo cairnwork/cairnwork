@@ -45,6 +45,7 @@ from cairnwork.gitcmd import CLONE_ISOLATED, OID, GitCommandError, run_git, run_
 from cairnwork.protected_paths import is_protected, protected_note
 from cairnwork.tamper_scan import CODE as TAMPER_CODE
 from cairnwork.tamper_scan import scan_patch
+from cairnwork.textclean import shown
 from cairnwork.treecompare import tree_differences
 
 FORBIDDEN_MODES = frozenset({"120000", "160000"})  # symlink, submodule
@@ -104,15 +105,15 @@ def create_attempt_clone(repo: Path, base_commit: str, root: Path, attempt_id: s
         head = run_git(path, "rev-parse", "HEAD").strip()
         refs_before = _guarded_refs(repo, attempt_id)
     except (GitCommandError, OSError) as exc:
-        raise WorkspaceError(str(exc)) from exc
+        raise WorkspaceError(shown(exc)) from exc
     try:
         differences = tree_differences(repo, base_commit, path)
     except GitCommandError as exc:
-        raise WorkspaceError(str(exc)) from exc
+        raise WorkspaceError(shown(exc)) from exc
     if head != base_commit or differences:
         if head == base_commit:
             _refuse_case_collisions(repo, base_commit, path, differences)
-        raise WorkspaceError(f"{path} is not a clean checkout of {base_commit}")
+        raise WorkspaceError(f"{shown(path)} is not a clean checkout of {shown(base_commit)}")
     return Attempt(attempt_id, base_commit, path, refs_before)
 
 
@@ -265,21 +266,21 @@ def check_candidate_commit(
     try:
         change = read_change_set(repo, base, head)
     except ChangeSetError as exc:
-        raise CandidateRejected("UNREADABLE_CHANGE", str(exc)) from exc
+        raise CandidateRejected("UNREADABLE_CHANGE", shown(exc)) from exc
     allowed = set(allowed_files)
     for entry in change.entries:
         if entry.path not in allowed:
-            raise CandidateRejected("OUT_OF_SCOPE", entry.path)
+            raise CandidateRejected("OUT_OF_SCOPE", shown(entry.path))
         if is_protected(entry.path):  # defense in depth: scope alone is not enough
             raise CandidateRejected("PROTECTED_PATH", protected_note(entry.path))
         if entry.change_type == "DELETE" and not allow_deletions:
-            raise CandidateRejected("DELETION_FORBIDDEN", entry.path)
+            raise CandidateRejected("DELETION_FORBIDDEN", shown(entry.path))
         if entry.after_mode in FORBIDDEN_MODES or entry.before_mode in FORBIDDEN_MODES:
-            raise CandidateRejected("FORBIDDEN_MODE", f"{entry.path} ({entry.after_mode})")
+            raise CandidateRejected("FORBIDDEN_MODE", shown(f"{entry.path} ({entry.after_mode})"))
     try:  # raises the bar, not a boundary (tamper_scan.py)
         tamper = scan_patch(repo, base, head, python=python)
     except GitCommandError as exc:
-        raise CandidateRejected("UNREADABLE_CHANGE", str(exc)) from exc
+        raise CandidateRejected("UNREADABLE_CHANGE", shown(exc)) from exc
     if tamper:
         raise CandidateRejected(TAMPER_CODE, ", ".join(str(finding) for finding in tamper[:5]))
     try:
@@ -288,13 +289,13 @@ def check_candidate_commit(
         )
     except GitCommandError as exc:
         detail = diff_check_detail("whitespace errors in the change", exc.__cause__, change.paths)
-        raise CandidateRejected("DIFF_CHECK_FAILED", detail) from exc
+        raise CandidateRejected("DIFF_CHECK_FAILED", shown(detail)) from exc
     try:
         differences = tree_differences(repo, head, attempt.path)
     except GitCommandError as exc:
-        raise CandidateRejected("UNREADABLE_CHANGE", str(exc)) from exc
+        raise CandidateRejected("UNREADABLE_CHANGE", shown(exc)) from exc
     if differences:
-        raise CandidateRejected("DIRTY_TREE", ", ".join(differences[:5]))
+        raise CandidateRejected("DIRTY_TREE", ", ".join(map(shown, differences[:5])))
     return Candidate(base, head, tuple(change.paths))
 
 
