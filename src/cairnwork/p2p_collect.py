@@ -196,15 +196,13 @@ def _collect(task, files, ctx, budget, attempt_id):
 
 
 def _present(task, files) -> tuple[str, ...]:
-    """The selected files that exist on the test commit (a deleted one is collected as absent)."""
+    """Selected files present on the test commit."""
+    args = ("ls-tree", "-r", "-z", "--name-only", task.test_commit, "--")
     try:
-        raw = run_git(
-            task.repo, "ls-tree", "-r", "-z", "--name-only", task.test_commit, "--", *files
-        )
+        raw = run_git(task.repo, *args, *(f":(literal){path}" for path in files))
     except GitCommandError as exc:
         raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
-    there = set(raw.split("\0"))
-    return tuple(f for f in files if f in there)
+    return tuple(f for f in files if f in set(raw.split("\0")))
 
 
 def _tree(text: str) -> ast.Module | None:
