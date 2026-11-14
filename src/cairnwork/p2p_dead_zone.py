@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ast
 import copy
+import operator
 
 STOPS = (ast.Return, ast.Raise, ast.Break, ast.Continue)
 
@@ -22,17 +23,100 @@ def live_statements(stmts: list[ast.stmt], type_checking: bool = False) -> list[
     out: list[ast.stmt] = []
     for stmt in stmts:
         out.extend(_live(stmt, type_checking))
-        if isinstance(stmt, STOPS):
+        if _stops(stmt):
             break
     return out
 
 
 def _truth(test: ast.expr, tc: bool) -> bool | None:
     """The import-time truth of a constant test, or None when it is not known."""
-    if isinstance(test, ast.Constant):
-        return bool(test.value)
+    try:
+        return bool(_constant(test))
+    except (TypeError, ValueError, ZeroDivisionError, OverflowError):
+        pass
     name = test.id if isinstance(test, ast.Name) else getattr(test, "attr", None)
     return False if tc and name == "TYPE_CHECKING" else None
+
+
+def _constant(expr: ast.expr) -> object:
+    """Evaluate only literal values and explicitly supported operations on them."""
+    if isinstance(expr, ast.Constant):
+        return expr.value
+    if isinstance(expr, ast.UnaryOp):
+        value = _constant(expr.operand)
+        operation = {
+            ast.UAdd: operator.pos,
+            ast.USub: operator.neg,
+            ast.Not: operator.not_,
+            ast.Invert: operator.invert,
+        }.get(type(expr.op))
+        if operation is not None:
+            return operation(value)
+    elif isinstance(expr, ast.BinOp):
+        left, right = _constant(expr.left), _constant(expr.right)
+        operation = {
+            ast.Add: operator.add,
+            ast.Sub: operator.sub,
+            ast.Mult: operator.mul,
+            ast.Div: operator.truediv,
+            ast.FloorDiv: operator.floordiv,
+            ast.Mod: operator.mod,
+            ast.Pow: operator.pow,
+            ast.LShift: operator.lshift,
+            ast.RShift: operator.rshift,
+            ast.BitOr: operator.or_,
+            ast.BitXor: operator.xor,
+            ast.BitAnd: operator.and_,
+        }.get(type(expr.op))
+        if operation is not None:
+            return operation(left, right)
+    elif isinstance(expr, ast.BoolOp):
+        values = [_constant(value) for value in expr.values]
+        if isinstance(expr.op, ast.And):
+            return all(values)
+        if isinstance(expr.op, ast.Or):
+            return any(values)
+    elif isinstance(expr, ast.Compare):
+        left = _constant(expr.left)
+        operations = {
+            ast.Eq: operator.eq,
+            ast.NotEq: operator.ne,
+            ast.Lt: operator.lt,
+            ast.LtE: operator.le,
+            ast.Gt: operator.gt,
+            ast.GtE: operator.ge,
+            ast.Is: operator.is_,
+            ast.IsNot: operator.is_not,
+            ast.In: lambda a, b: a in b,
+            ast.NotIn: lambda a, b: a not in b,
+        }
+        for op, comparator in zip(expr.ops, expr.comparators, strict=True):
+            right = _constant(comparator)
+            operation = operations.get(type(op))
+            if operation is None:
+                raise ValueError("unsupported comparison")
+            if not operation(left, right):
+                return False
+            left = right
+        return True
+    raise ValueError("not a supported literal expression")
+
+
+def _stops(stmt: ast.stmt) -> bool:
+    """Whether this statement necessarily ends the current suite."""
+    if isinstance(stmt, STOPS):
+        return True
+    return (
+        isinstance(stmt, ast.If)
+        and bool(stmt.orelse)
+        and bool(stmt.body)
+        and _suite_stops(stmt.body)
+        and _suite_stops(stmt.orelse)
+    )
+
+
+def _suite_stops(stmts: list[ast.stmt]) -> bool:
+    return any(_stops(stmt) for stmt in stmts)
 
 
 def _live(stmt: ast.stmt, tc: bool) -> list[ast.stmt]:
