@@ -4,9 +4,15 @@ from __future__ import annotations
 
 import ast
 import copy
-import re
 from collections import Counter
 from collections.abc import Sequence
+
+from cairnwork.candidate_alias_writes import (
+    _imported_names,
+    _imported_openers,
+    _is_write_statement,
+    _module_aliases,
+)
 
 _BLOCK_FIELDS = ("body", "orelse", "finalbody", "handlers", "cases")
 _DEF_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
@@ -237,74 +243,6 @@ def alias_machinery_changed(old: bytes | None, new: bytes) -> bool:
     return any(k in new_hot for k in added) or any(k in old_hot for k in removed)
 
 
-# module-level open(path, mode, ...) functions; any other receiver is treated as Path-like
-_PATH_FIRST_OPENERS = frozenset(
-    {"os", "io", "builtins", "gzip", "bz2", "lzma", "codecs", "tarfile"}
-)
-_MODE_TEXT = re.compile(r"[rwaxbtU+]{1,6}")
-
-
-def _is_write_call(call: ast.Call) -> bool:
-    if isinstance(call.func, ast.Attribute) and call.func.attr in WRITE_ATTRS | {
-        "write",
-        "writelines",
-        "writestr",
-    }:
-        return True
-    if isinstance(call.func, ast.Name) and call.func.id in {
-        "NamedTemporaryFile",
-        "FileIO",
-        "copyfileobj",
-    }:
-        return True
-    is_os_open = (
-        isinstance(call.func, ast.Attribute)
-        and call.func.attr == "open"
-        and isinstance(call.func.value, ast.Name)
-        and call.func.value.id == "os"
-    )
-    if is_os_open:
-        return True
-    is_open = (isinstance(call.func, ast.Name) and call.func.id == "open") or (
-        isinstance(call.func, ast.Attribute) and call.func.attr == "open"
-    )
-    if is_open:
-        mode_arg = None
-        for kw in call.keywords:
-            if kw.arg == "mode":
-                mode_arg = kw.value
-                break
-        receiver = call.func.value if isinstance(call.func, ast.Attribute) else None
-        module_receiver = isinstance(receiver, ast.Name) and receiver.id in _PATH_FIRST_OPENERS
-        if mode_arg is None and receiver is None:
-            mode_arg = call.args[1] if len(call.args) > 1 else None
-        elif mode_arg is None and call.args:
-            # mode text first means a Path-like receiver, even under a module's (rebound) name;
-            # otherwise a module takes the mode second, and an unknown receiver fails closed
-            first = call.args[0]
-            text = first.value if isinstance(first, ast.Constant) else None
-            mode_first = isinstance(text, str) and _MODE_TEXT.fullmatch(text)
-            if mode_first or (not isinstance(text, str) and not module_receiver):
-                mode_arg = first
-            elif len(call.args) > 1:
-                mode_arg = call.args[1]
-        if mode_arg is None and (
-            any(isinstance(arg, ast.Starred) for arg in call.args)
-            or any(kw.arg is None for kw in call.keywords)
-        ):
-            return True  # open(*a), open(**k): the mode cannot be read, fail closed
-        if mode_arg is not None:
-            if not (isinstance(mode_arg, ast.Constant) and isinstance(mode_arg.value, str)):
-                return True
-            if any(ch in mode_arg.value for ch in ("w", "a", "x", "+")):
-                return True
-    return False
-
-
-def _is_write_statement(node: ast.AST) -> bool:
-    return any(isinstance(part, ast.Call) and _is_write_call(part) for part in ast.walk(node))
-
-
 def _is_path_edit_statement(node: ast.AST, sys_names: set[str], text: str) -> bool:
     for part in ast.walk(node):
         if (
@@ -339,8 +277,23 @@ def runtime_shadow_added(old: bytes | None, new: bytes) -> bool:
 
     new_sys = _collect_sys_names(new_tree)
     added_items = [own for key, own in new_items if key in added_counts]
-    added_write = any(_is_write_statement(own) for own in added_items)
+    openers = _imported_openers(new_tree)
+    writers = _imported_names(
+        new_tree,
+        frozenset({"NamedTemporaryFile", "copyfileobj"}),
+        frozenset({"tempfile", "shutil"}),
+    )
+    fileios = _imported_names(new_tree, frozenset({"FileIO"}), frozenset({"io"}))
+    flag_openers = _imported_names(new_tree, frozenset({"open"}), frozenset({"shelve", "dbm"}))
+    modules = _module_aliases(new_tree)
+    added_write = any(
+        _is_write_statement(own, openers, writers, modules, fileios, flag_openers)
+        for own in added_items
+    )
     added_path = any(_is_path_edit_statement(own, new_sys, ast.unparse(own)) for own in added_items)
-    new_write = any(_is_write_statement(own) for _, own in new_items)
+    new_write = any(
+        _is_write_statement(own, openers, writers, modules, fileios, flag_openers)
+        for _, own in new_items
+    )
     new_path = any(_is_path_edit_statement(own, new_sys, ast.unparse(own)) for _, own in new_items)
     return (added_write and new_path) or (added_path and new_write)
