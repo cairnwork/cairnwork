@@ -19,36 +19,47 @@ UNCOMPARABLE (``P2P_TEST_COLLECT_UNUSABLE``). ``changed`` is the AST body compar
 present on both commits (p2p_nodes.changed_tests), limited to tests pytest collected on both
 sides; a test the AST reader cannot see stays a P2P test (at worst a wrong refusal, never a
 wrong acceptance). The removed tests join ``changed``: both are left to the author's verifiers.
+AST classification has a 10-second process limit; timeout or child failure is refused
+(``TEST_COMMIT_ANALYSIS_LIMIT``).
 """
 
 from __future__ import annotations
 
-import ast
 import hashlib
-import re
+import json
+import os
 import shutil
+import signal
+import subprocess
+import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
+from cairnwork import p2p_classify_child as _classify_child
 from cairnwork.collect_reader import read_collected
 from cairnwork.conftest_check import conftest_of
 from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRejected
 from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.node_ids import show, unmatched_note
-from cairnwork.p2p_bindings import (
-    binds_in_scope,
-    hidden_bindings,
-    is_pytest_decorator,
-    last_binding,
-    last_module_def,
-    mentions_ast,
-    rebinds_by_string,
-    walk_without_nested_classes,
-)
 from cairnwork.p2p_nodes import changed_tests, module_changed
 from cairnwork.p2p_selection import MODULE_DIR_CAP
 from cairnwork.verifier_spec import VerifierSpec
 from cairnwork.verifiers import run_verifiers
+
+_base_may_supply = _classify_child._base_may_supply
+_class_binds_hook = _classify_child._class_binds_hook
+_defines = _classify_child._defines
+_hidden = _classify_child._hidden
+_is_unambiguous_testcase = _classify_child._is_unambiguous_testcase
+_mentions = _classify_child._mentions
+_mentions_dunder_test = _classify_child._mentions_dunder_test
+_module_mutates_base = _classify_child._module_mutates_base
+_scope_mentions = _classify_child._scope_mentions
+_tree = _classify_child._tree
+
+CLASSIFY_TIMEOUT_SECONDS = 10
+CLASSIFY_OUTPUT_CAP = 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -111,49 +122,143 @@ def collected_side(task, files, outcomes, test_files, ctx, budget, attempt_id) -
 
 
 def classify(base_ids, test_ids, edited, source, base_source) -> CollectedSide:
-    """Split the base ids the test commit no longer collects into removed and dropped.
-
-    ``source`` / ``base_source`` give a file's text on the test commit / the base."""
-    removed, dropped, texts, bases, test_trees = set(), set(), {}, {}, {}
-    collected_funcs = {_function(n) for n in test_ids}
-    for nodeid in base_ids - test_ids:
-        path = _file(nodeid)
-        gone = False
-        if path in edited and _function(nodeid) not in collected_funcs:
-            if path not in texts:
-                texts[path] = source(path)
-                bases[path] = _tree(base_source(path))
-                test_trees[path] = _tree(texts[path])
-            *owners, name = _function(nodeid).split("::")[1:]
-            gone = (
-                _defines(bases[path], owners, name)
-                and test_trees[path] is not None
-                and not _scope_mentions(test_trees[path], owners, name, texts[path])
-                and not _hidden(test_trees[path], bases[path], name, path, test_ids, base_ids)
-            )
-        (removed if gone else dropped).add(nodeid)
-    return CollectedSide(
-        frozenset(base_ids), frozenset(test_ids), frozenset(removed), frozenset(dropped)
-    )
+    """Classify missing ids in a bounded subprocess; source callables are read in the parent."""
+    base_ids, test_ids, edited = frozenset(base_ids), frozenset(test_ids), frozenset(edited)
+    collected_funcs = {_function(nodeid) for nodeid in test_ids}
+    needed = {
+        _file(nodeid)
+        for nodeid in base_ids - test_ids
+        if _file(nodeid) in edited and _function(nodeid) not in collected_funcs
+    }
+    sources = {
+        "test": {path: source(path) for path in sorted(needed)},
+        "base": {path: base_source(path) for path in sorted(needed)},
+    }
+    removed, dropped = _run_classification(base_ids, test_ids, edited, sources)
+    return CollectedSide(base_ids, test_ids, removed, dropped)
 
 
-def _hidden(tree, base, name, path, test_ids, base_ids) -> bool:
-    """#1127: whether the test commit keeps ``name`` bound where pytest does not collect it (a
-    shadowed same-name class or method, a class pytest skips, a nested class, a function body).
-    The base test's code is then still there, only hidden: dropped, never removed. A binding the
-    base already had in the same scope, unchanged and not collected there either, does not
-    count; each copy counts once, so a second copy of an excused one is hidden."""
-
-    def got(ids):
-        return {_function(n).partition("::")[2] for n in ids if _file(n) == path}
-
+def _run_classification(base_ids, test_ids, edited, sources):
+    payload = json.dumps(
+        {
+            "base_ids": sorted(base_ids),
+            "test_ids": sorted(test_ids),
+            "edited": sorted(edited),
+            "sources": sources,
+        }
+    ).encode()
+    output, timed_out, returncode = _run_child(_classify_argv(), payload)
+    if timed_out:
+        _analysis_failure("time limit exceeded")
+    if returncode != 0:
+        _analysis_failure("child process failed")
+    removed_set: set[str] = set()
+    dropped_set: set[str] = set()
     try:
-        kept = hidden_bindings(tree, name, got(test_ids))
-        # #1122: the base side keeps the narrow shadowing check, so its excuse never grows (#1144)
-        excused = hidden_bindings(base, name, got(base_ids), annotations=False)
-        return bool(kept - excused)  # counts, not a set
-    except RecursionError:  # ast.dump of a very deep expression: not provably gone
-        return True
+        result = json.loads(output)
+        raw_removed, raw_dropped = result["removed"], result["dropped"]
+        if set(result) != {"removed", "dropped"}:
+            raise ValueError
+        if not isinstance(raw_removed, list) or not isinstance(raw_dropped, list):
+            raise ValueError
+        if any(not isinstance(item, str) for item in raw_removed + raw_dropped):
+            raise ValueError
+        if len(raw_removed) != len(set(raw_removed)) or len(raw_dropped) != len(set(raw_dropped)):
+            raise ValueError
+        base = set(base_ids)
+        expected = base - set(test_ids)
+        removed_set, dropped_set = set(raw_removed), set(raw_dropped)
+        if not removed_set <= base or not dropped_set <= base or removed_set & dropped_set:
+            raise ValueError
+        if removed_set | dropped_set != expected:
+            raise ValueError
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError, RecursionError):
+        _analysis_failure("invalid child result")
+    return frozenset(removed_set), frozenset(dropped_set)
+
+
+def _classify_argv():
+    code = (
+        "import sys; sys.path.insert(0, sys.argv[1]); "
+        "from cairnwork.p2p_classify_child import main; main()"
+    )
+    return [
+        sys.executable,
+        "-I",
+        "-X",
+        "utf8",
+        "-c",
+        code,
+        str(Path(__file__).resolve().parent.parent),
+    ]
+
+
+def _run_child(argv, payload):
+    output: list[bytes] = []
+    size = 0
+    process = None
+    try:
+        process = subprocess.Popen(
+            argv,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env={},
+            start_new_session=True,
+        )
+        stdout = process.stdout
+        assert stdout is not None
+
+        def drain():
+            nonlocal size
+            while chunk := stdout.read(8192):
+                if size < CLASSIFY_OUTPUT_CAP:
+                    kept = chunk[: CLASSIFY_OUTPUT_CAP - size]
+                    output.append(kept)
+                    size += len(kept)
+
+        reader = threading.Thread(target=drain, daemon=True)
+        writer = threading.Thread(target=_write_input, args=(process.stdin, payload), daemon=True)
+        reader.start()
+        writer.start()
+        try:
+            process.wait(timeout=CLASSIFY_TIMEOUT_SECONDS)
+            timed_out = False
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            _kill_child_group(process.pid)
+            process.wait()
+        _kill_child_group(process.pid)
+        writer.join(timeout=1)
+        reader.join(timeout=1)
+        if reader.is_alive() or writer.is_alive() or size >= CLASSIFY_OUTPUT_CAP:
+            return b"", timed_out, 1
+        return b"".join(output), timed_out, process.returncode
+    except (OSError, RuntimeError):  # RuntimeError: a thread that cannot start
+        return b"", False, 1
+    finally:
+        if process is not None:  # every exit path: kill the whole group, reap the child
+            _kill_child_group(process.pid)
+            process.wait()
+
+
+def _write_input(stream, payload):
+    try:
+        stream.write(payload)
+        stream.close()
+    except (BrokenPipeError, OSError):
+        pass
+
+
+def _kill_child_group(group):
+    try:
+        os.killpg(group, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _analysis_failure(detail):
+    raise TestCommitRejected("TEST_COMMIT_ANALYSIS_LIMIT", detail)
 
 
 OVER_BUDGET = ("base-probe-timeout", "base-probe-report-over-cap", "base-probe-log-over-cap")
@@ -204,163 +309,6 @@ def _present(task, files) -> tuple[str, ...]:
         raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
     there = set(raw.split("\0"))
     return tuple(f for f in files if f in there)
-
-
-def _tree(text: str) -> ast.Module | None:
-    try:
-        return ast.parse(text)
-    except (SyntaxError, ValueError, RecursionError):  # 3.11 cannot build a very deep AST
-        return None  # nothing is provably defined: the id is dropped, never removed
-
-
-def _scope_mentions(tree: ast.Module, owners: list[str], name: str, text: str = "") -> bool:
-    """Whether static source evidence can account for a collected name.
-
-    This cannot see dynamically built names (for example ``setattr(A, 'test_' + 'x', f)``),
-    setattr executed from inside another class, or rebinding through ``type(...)``.
-    """
-    pattern = re.compile(rf"\b{re.escape(name)}\b")
-    if not owners:
-        module = [n for n in tree.body if not isinstance(n, ast.ClassDef)]
-        return _mentions(module, name, pattern)
-    body = tree.body
-    target_class: ast.ClassDef | None = None
-    for owner in owners:
-        found = [n for n in body if isinstance(n, ast.ClassDef) and n.name == owner]
-        if not found:  # #1127: identifiers are NFKC-normalized, the raw text is not
-            return bool(pattern.search(text)) or _mentions(tree.body, name, pattern)
-        target_class = found[-1]
-        body = target_class.body
-    if target_class is None:
-        return bool(pattern.search(text))
-    if target_class.keywords or not all(map(is_pytest_decorator, target_class.decorator_list)):
-        return True
-    imported_testcase = _is_unambiguous_testcase(tree)
-    if any(
-        _base_may_supply(base, name, tree, set(), imported_testcase) for base in target_class.bases
-    ):
-        return True
-    module = [n for n in tree.body if not isinstance(n, ast.ClassDef)]
-    nodes = [*body, *module]
-    if any(_mentions_dunder_test(node) for node in nodes):
-        return True
-    if _mentions(body, name, pattern, include_nested_classes=False):
-        return True
-    return _mentions(module, name, pattern)
-
-
-def _base_may_supply(
-    base: ast.expr, name: str, tree: ast.Module, seen: set[str], imported_testcase: bool
-) -> bool:
-    """Conservatively decide whether a class base can supply a test name."""
-    if isinstance(base, ast.Name):
-        if base.id == "object":
-            return False
-        if base.id == "TestCase":
-            return not imported_testcase
-        if base.id in seen:
-            return True
-        classes = [n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == base.id]
-        bindings = [n for n in tree.body if binds_in_scope(n, base.id, module=True)]
-        if len(classes) != 1 or len(bindings) != 1 or bindings[0] is not classes[0]:
-            return True
-        cls = classes[0]
-        if cls.keywords or any(not is_pytest_decorator(d) for d in cls.decorator_list):
-            return True  # an inherited metaclass or a decorator on the base can add tests
-        if _module_mutates_base(tree, base.id) or _class_binds_hook(cls):
-            return True  # __init_subclass__ runs on A and can add tests the source never names
-        pattern = re.compile(rf"\b{re.escape(name)}\b")
-        if _mentions(cls.body, name, pattern, include_nested_classes=False):
-            return True
-        return any(
-            _base_may_supply(b, name, tree, seen | {base.id}, imported_testcase) for b in cls.bases
-        )
-    if isinstance(base, ast.Attribute) and isinstance(base.value, ast.Name):
-        if base.value.id == "unittest" and base.attr == "TestCase":
-            return False
-    return True
-
-
-def _is_unambiguous_testcase(tree: ast.Module) -> bool:
-    bindings = [n for n in tree.body if binds_in_scope(n, "TestCase", module=True)]
-    return (
-        len(bindings) == 1
-        and isinstance(bindings[0], ast.ImportFrom)
-        and bindings[0].module == "unittest"
-        and any(a.name == "TestCase" and a.asname in {None, "TestCase"} for a in bindings[0].names)
-    )
-
-
-def _module_mutates_base(tree: ast.Module, name: str) -> bool:
-    for stmt in tree.body:
-        pending: list[ast.AST] = [stmt]
-        while pending:
-            node = pending.pop()
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
-                continue
-            if (
-                isinstance(node, ast.Attribute)
-                and node.attr == "__init_subclass__"
-                and isinstance(node.ctx, ast.Store)
-                and isinstance(node.value, ast.Name)
-                and node.value.id == name
-            ):
-                return True
-            pending.extend(ast.iter_child_nodes(node))
-    return False
-
-
-def _class_binds_hook(cls: ast.ClassDef) -> bool:
-    return any(binds_in_scope(stmt, "__init_subclass__") for stmt in cls.body)
-
-
-def _mentions_dunder_test(node: ast.AST) -> bool:
-    return any(
-        (isinstance(n, ast.Name) and n.id == "__test__")
-        or (isinstance(n, ast.Constant) and n.value == "__test__")
-        or (isinstance(n, ast.arg) and n.arg == "__test__")
-        for n in ast.walk(node)
-    )
-
-
-def _mentions(
-    nodes: list[ast.stmt], name: str, pattern: re.Pattern, *, include_nested_classes: bool = True
-) -> bool:
-    """Search source-level identifiers, bindings, attributes and string constants."""
-    for node in nodes:
-        walk = ast.walk(node) if include_nested_classes else walk_without_nested_classes(node)
-        for n in walk:
-            if mentions_ast(n, name, pattern, defs=True):
-                return True
-    return False
-
-
-def _defines(tree: ast.Module | None, owners: list[str], name: str) -> bool:
-    """Whether the base file itself has ``def name`` in the class chain ``owners``."""
-    if tree is None or rebinds_by_string(tree, name):  # #1127: may collect other code
-        return False
-    body = tree.body
-    module = True
-    for owner in owners:
-        try:
-            last = last_binding(body, owner, module=module)
-        except ValueError:
-            return False
-        if not isinstance(last, ast.ClassDef) or last.name != owner:  # #1122: a walrus in
-            return False  # another class's header rebinds the name; it is not this class
-        body = last.body
-        module = False
-    try:
-        last = last_binding(body, name, module=module)
-    except ValueError:
-        if not module:
-            return False
-        try:
-            last = last_module_def(body, name)
-        except RecursionError:
-            return False
-    # #1122: a walrus in another def's header (annotation, default, decorator) is the last binding
-    return isinstance(last, (ast.FunctionDef, ast.AsyncFunctionDef)) and last.name == name
 
 
 def _source(task, commit: str, path: str) -> str:
