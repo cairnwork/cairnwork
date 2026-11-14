@@ -68,7 +68,9 @@ def test_ordinary_text_family_is_not_blocked(text):
 
 
 # abbreviation + keyword family: myAPIKey=, clientAPIKey=, xAPIKEY=, myapitoken=, ...
-_ABBRS = ["api", "aws", "ssh", "jwt", "oauth", "auth", "access", "client", "private", "secret", "db"]
+_ABBRS = [
+    "api", "aws", "ssh", "jwt", "oauth", "auth", "access", "client", "private", "secret", "db",
+]  # fmt: skip
 _WORDS = ["key", "token", "secret", "password"]
 _PREFIXES = ["", "my", "client", "x", "user"]
 

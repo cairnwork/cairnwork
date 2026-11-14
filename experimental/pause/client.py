@@ -79,7 +79,10 @@ class _Client:
     def _send(self, request: PlanRequest | GateRequest, messages: Sequence[dict], planner: bool):
         model, effort, timeout, attempts = self._settings(request)
         pieces = list(_strings(messages))
-        blocked = any(self.scanner.scan(v) for v in pieces)
+        try:
+            blocked = any(self.scanner.scan(v) for v in pieces)
+        except Exception:  # noqa: BLE001  fail closed; never echo what broke the scanner
+            blocked = True
         prefix = "PAUSE_PLANNER" if planner else "PAUSE_GATE"
         if blocked:
             return None, model, effort, Reason.PAUSE_SECRET_BLOCKED

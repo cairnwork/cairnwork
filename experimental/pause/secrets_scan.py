@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import re
 
+# abbreviations that make a following key word a credential name even inside a longer word
+# (myAPIKey, xAPIKEY, clientapitoken, dbPassword); plain words such as monkey stay unblocked.
+_ABBRS = "api|aws|ssh|jwt|oauth|auth|access|client|private|secret|db"
+
 _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "api_key",
@@ -18,7 +22,8 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         "assigned_secret",
         re.compile(
             r"(?:(?<![A-Za-z0-9])(?i:apikey|key|token|secret|passw(?:or)?d)"
-            r"|(?<=[a-z0-9])(?:Key|Token|Secret|Passw(?:or)?d))"
+            r"|(?<=[A-Za-z0-9])(?:Key|Token|Secret|Passw(?:or)?d)"
+            r"|(?i:(?:" + _ABBRS + r")(?:key|token|secret|passw(?:or)?d)))"
             r"[\"']?\s*(?:=>|[=:])\s*[\"']?[A-Za-z0-9+/=_-]{16,}"
         ),
     ),
