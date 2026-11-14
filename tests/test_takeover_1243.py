@@ -66,20 +66,44 @@ def test_allowed_supersede_sweeps_before_setting_status(tmp_path, monkeypatch, a
 
 
 @pytest.mark.parametrize(
-    ("status", "expected"), [("BOUND", None), ("DISPATCHED", None), ("FAILED", "")]
+    ("status", "expected"),
+    [
+        ("BOUND", ""),
+        ("DISPATCHED", None),
+        ("FAILED", ""),
+        ("COMPLETED", None),
+        ("CANCELLED", None),
+    ],
 )
-def test_status_reports_unswept_only_for_failed_tasks(tmp_path, status, expected):
-    """Category: migrated LEGACY fences across pre-failure task statuses."""
+def test_status_reports_unswept_only_for_bound_or_failed_tasks(tmp_path, status, expected):
+    """Category: migrated LEGACY fences across task statuses."""
     (tmp_path / "state").mkdir()
     intake = Intake(tmp_path / "state")
     task_id = intake.ledger.bind("key", {"task": 1}, OWNER, "card").record.task_id
-    if status != "BOUND":
+    if status == "CANCELLED":
+        intake.ledger.set_status(task_id, "CANCELLED")
+    elif status != "BOUND":
         intake.ledger.set_status(task_id, "DISPATCHED")
     if status == "FAILED":
         intake.ledger.set_status(task_id, "FAILED")
+    if status == "COMPLETED":
+        intake.ledger.set_status(task_id, "COMPLETED")
     intake.ledger._on_conn(unswept.mark, task_id, unswept.LEGACY, "")
     out = intake.status(task_id=task_id)["unswept"]
     if expected is None:
         assert out is None
     else:
         assert out == {"attempt_id": unswept.LEGACY, "last_refusal": expected}
+
+
+def test_refused_bound_supersede_reason_shows_in_status(tmp_path):
+    """Category: a refused takeover of a BOUND task with a held LEGACY fence stays visible."""
+    (tmp_path / "state").mkdir()
+    intake = Intake(tmp_path / "state")
+    task_id = intake.ledger.bind("key", {"task": 1}, OWNER, "card").record.task_id
+    intake.ledger._on_conn(unswept.mark, task_id, unswept.LEGACY, "")
+    with pytest.raises(takeover.TakeoverRefused):
+        takeover.supersede(intake.ledger, task_id)
+    out = intake.status(task_id=task_id)["unswept"]
+    assert out is not None and out["last_refusal"].startswith("LEGACY_ATTEMPT_UNKNOWN")
+    assert intake.ledger.get(task_id=task_id).status == "BOUND"
