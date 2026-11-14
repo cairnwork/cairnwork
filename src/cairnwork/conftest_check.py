@@ -77,7 +77,7 @@ def check_conftests(repo: Path, base: str, test_commit: str, paths: Iterable[str
 
 
 def _check_conftests(repo: Path, base: str, test_commit: str, paths: tuple[str, ...]) -> None:
-    check_test_module_plugins(repo, base, test_commit, paths)
+    check_test_module_plugins(repo, test_commit, paths)
     names = conftest_of(paths)
     own = _own_packages(repo, base) if names else frozenset[str]()
     for path in names:
