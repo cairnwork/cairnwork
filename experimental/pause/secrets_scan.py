@@ -17,21 +17,26 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ),
     ("private_key", re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----")),
     ("bearer_token", re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{16,}")),
-    # NAME_KEY=..., GITHUB_TOKEN: "...", "client_secret": "...", key => "..." (= : or =>)
+    # NAME_KEY=..., GITHUB_TOKEN: "...", "client_secret": "...", key => "...", TOKEN := ...
+    # (separator = : => :=, optional quotes or backticks around name and value)
     (
         "assigned_secret",
         re.compile(
-            r"(?:(?<![A-Za-z0-9])(?i:apikey|key|token|secret|passw(?:or)?d)"
-            r"|(?<=[A-Za-z0-9])(?:Key|Token|Secret|Passw(?:or)?d)"
-            r"|(?i:(?:" + _ABBRS + r")(?:key|token|secret|passw(?:or)?d)))"
-            r"[\"']?\s*(?:=>|[=:])\s*[\"']?[A-Za-z0-9+/=_-]{16,}"
+            r"(?:(?<![A-Za-z0-9])(?i:apikey|key|token|secret|passw(?:or)?d|pass|passphrase)"
+            r"|(?<=[A-Za-z0-9])(?:Key|Token|Secret|Passw(?:or)?d|Pass|Pwd|Passphrase)"
+            r"|(?<=[_-])(?i:pwd)"
+            r"|(?i:(?:" + _ABBRS + r")(?:key|token|secret|passw(?:or)?d))"
+            r"|(?i:token|secret|passw(?:or)?d|passphrase))"
+            r"[\"'`]?\s*(?:=>|:=|[=:])\s*[\"'`]?[A-Za-z0-9+/=_-]{16,}"
         ),
     ),
     # command line: --api-key VALUE (space separated flag value)
     (
         "flag_secret",
         re.compile(
-            r"(?i)--[a-z0-9_-]*(?:apikey|key|token|secret|passw(?:or)?d)\s+[A-Za-z0-9+/=_-]{16,}"
+            r"(?i:--(?:[a-z0-9_-]*(?:apikey|key|token|secret|passw(?:or)?d|passphrase)"
+            r"|(?:[a-z0-9_-]*[_-])?(?:pass|pwd)))\s+[A-Za-z0-9+/=_-]{16,}"
+            r"|--[A-Za-z0-9_-]*[a-z0-9](?:Pass|Pwd)\s+[A-Za-z0-9+/=_-]{16,}"
         ),
     ),
     # host paths: /Users/x, /home/x, /root/, C:\Users\x (any case)
