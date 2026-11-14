@@ -44,10 +44,28 @@ def test_names_ending_in_a_credential_word_are_blocked(text):
     + ["--pwd /opt/app/build/output/dir", "--db-pwd ~/work/out/dir1",
        "pwd=./build/output/directory", "DB_PWD=C:/work/build/output/dir", "--pwd=../build/out/dir"]
     + [f"passport={_V}", f"keyboard={_V}", f"tokenizer={_V}", f"secretary: {_V}",
+       f"monkeys={_V}", f"compasses={_V}", f"keynote={_V}", f"compass={_V}", f"passports={_V}",
+       "pwd=/opt/app/build/output/dir", "DB_PWD=/opt/app/build/output/dir",
        "the key point is that passwords should rotate every quarter"],
 )  # fmt: skip
 def test_ordinary_words_and_pwd_paths_are_not_blocked(text):
     assert _secret_hits(text) == [], text
+
+
+_BLOCK_NAMES = (
+    "tokens keys secrets passwords accessTokens api_keys apikeys TOKEN_1 key1 password2 pwd2 "
+    "auth_token_v2 token_value secret_key_base private_key_pem password_hash my_password_old "
+    "DB_PASSWORD_PROD --_token"
+).split()
+_FORMS = ("{n}={v}", "{n}: {v}", '"{n}": "{v}"', "--{n} {v}", "--{n}={v}", "{n} = {v}",
+          "{n}=>{v}", "{n}:={v}")  # fmt: skip
+
+
+@pytest.mark.parametrize("name", _BLOCK_NAMES)
+def test_plural_and_suffixed_credential_names_are_blocked(name):
+    name = name.removeprefix("--")
+    for form in _FORMS:
+        assert _secret_hits(form.format(n=name, v=_V)), form.format(n=name, v=_V)
 
 
 def test_long_name_runs_scan_in_linear_time():
