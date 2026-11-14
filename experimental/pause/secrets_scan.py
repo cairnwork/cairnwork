@@ -30,12 +30,17 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"[\"'`]?\s*(?:=>|:=|[=:])\s*[\"'`]?[A-Za-z0-9+/=_-]{16,}"
         ),
     ),
+    # pwd is also the shell's working directory: block pwd=VALUE only when VALUE is not a path
+    (
+        "pwd_secret",
+        re.compile(r"(?i:pwd)[\"'`]?\s*(?:=>|:=|[=:])\s*[\"'`]?(?![/~.])[A-Za-z0-9+/=_-]{16,}"),
+    ),
     # command line: --api-key VALUE (space separated flag value)
     (
         "flag_secret",
         re.compile(
             r"(?i:--(?:[a-z0-9_-]*(?:apikey|key|token|secret|passw(?:or)?d|passphrase)"
-            r"|(?:[a-z0-9_-]*[_-])?(?:pass|pwd)))\s+[A-Za-z0-9+/=_-]{16,}"
+            r"|[a-z0-9_-]*pwd|(?:[a-z0-9_-]*[_-])?pass))\s+[A-Za-z0-9+/=_-]{16,}"
             r"|--[A-Za-z0-9_-]*[a-z0-9](?:Pass|Pwd)\s+[A-Za-z0-9+/=_-]{16,}"
         ),
     ),

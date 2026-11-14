@@ -190,7 +190,10 @@ def test_pwd_names_with_a_non_path_value_are_blocked(name, shape):
 
 @pytest.mark.parametrize(
     "text",
-    ["PWD=/opt/app/build/output/dir", "pwd: /home/build/output/directory", "DBPWD=~/work/output/dir1"],
+    [
+        "PWD=/opt/app/build/output/dir", "pwd: /home/build/output/directory",
+        "DBPWD=~/work/output/dir1",
+    ],
 )  # fmt: skip
 def test_pwd_with_a_path_value_is_not_blocked(text):
     from experimental.pause.secrets_scan import scan
