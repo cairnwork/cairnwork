@@ -94,7 +94,7 @@ def test_a_head_other_than_base_keeps_the_generic_error(repo, tmp_path, monkeypa
     )
     with pytest.raises(WorkspaceError) as info:
         create_attempt_clone(repo, base, tmp_path / "attempts", "a1")
-    assert str(info.value).endswith(f"is not a clean checkout of {base}")
+    assert str(info.value).endswith(f"is not a clean checkout of '{base}'")
 
 
 # The message itself, independent of the host's filesystem.

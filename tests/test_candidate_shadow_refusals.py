@@ -168,7 +168,7 @@ def test_a_file_outside_the_allowed_files_is_refused_before_it_runs(project, sta
     base = base_of(project)
     cand = candidate(project, base, {"src/calc.py": WRONG, path: EXIT})
     code, out = verify(state, project, base, cand)
-    assert code == 2 and out["status"] == "REFUSED" and out["reason"] == f"OUT_OF_SCOPE: {path}"
+    assert code == 2 and out["status"] == "REFUSED" and out["reason"] == f"OUT_OF_SCOPE: '{path}'"
 
 
 @sandbox

@@ -47,25 +47,27 @@ def colour(request, repo):
 def test_header_shaped_content_line_never_appears(repo, tmp_path, colour):
     msg = refuse(repo, tmp_path, {"src/a.py": f'v = "x:7: {SECRET}" \n'})
     assert SECRET not in msg
-    assert msg.endswith("rule=git-diff-check; src/a.py:1: trailing whitespace.")
+    assert msg.endswith("rule=git-diff-check; src/a.py:1: trailing whitespace.'")
 
 
 def test_cr_payload_through_real_git(repo, tmp_path, colour):
     payload = f"# prefix\r{SECRET}:7: arbitrary candidate text   \n"
     msg = refuse(repo, tmp_path, {"src/a.txt": payload})
     assert SECRET not in msg and "arbitrary" not in msg
-    assert msg.endswith("rule=git-diff-check; src/a.txt:1: trailing whitespace.")
+    assert msg.endswith("rule=git-diff-check; src/a.txt:1: trailing whitespace.'")
 
 
 def test_trailing_space_names_path_line_and_kind(repo, tmp_path):
     msg = refuse(repo, tmp_path, {"src/a.py": f"x = 1\ny = 2   # {SECRET}   \n"})
-    assert msg == f"DIFF_CHECK_FAILED: {OLD}; rule=git-diff-check; src/a.py:2: trailing whitespace."
+    assert (
+        msg == f"DIFF_CHECK_FAILED: '{OLD}; rule=git-diff-check; src/a.py:2: trailing whitespace.'"
+    )
     assert SECRET not in msg
 
 
 def test_blank_line_at_eof(repo, tmp_path):
     msg = refuse(repo, tmp_path, {"src/a.py": "x = 1\n\n"})
-    assert msg.endswith("rule=git-diff-check; src/a.py:2: new blank line at EOF.")
+    assert msg.endswith("rule=git-diff-check; src/a.py:2: new blank line at EOF.'")
 
 
 def test_ansi_escape_in_filename_is_stripped(repo, tmp_path):
@@ -77,14 +79,14 @@ def test_ansi_escape_in_filename_is_stripped(repo, tmp_path):
 @pytest.mark.parametrize("name", ["src/a\nb.py"])
 def test_newline_in_filename_falls_back(repo, tmp_path, name):
     # git prints the raw name, so the header cannot be matched to one changed path
-    assert refuse(repo, tmp_path, {name: "x = 1 \n"}) == f"DIFF_CHECK_FAILED: {OLD}"
+    assert refuse(repo, tmp_path, {name: "x = 1 \n"}) == f"DIFF_CHECK_FAILED: '{OLD}'"
 
 
 def test_hundred_errors_are_capped_with_more(repo, tmp_path):
     msg = refuse(repo, tmp_path, {"src/a.py": "".join(f"v{i} = {i} \n" for i in range(100))})
     assert msg.count("trailing whitespace.") == 5
     assert "src/a.py:1:" in msg and "src/a.py:5:" in msg and "src/a.py:6:" not in msg
-    assert msg.endswith("; +95 more")
+    assert msg.endswith("; +95 more'")
 
 
 def test_content_lines_never_appear(repo, tmp_path):
@@ -148,7 +150,7 @@ def test_non_utf8_git_output_falls_back_end_to_end(repo, tmp_path, monkeypatch):
     real = ws.run_git_bytes
     monkeypatch.setattr(ws, "run_git_bytes", bad)
     msg = refuse(repo, tmp_path, {"src/a.py": "x = 2\n"})
-    assert msg == f"DIFF_CHECK_FAILED: {OLD}"
+    assert msg == f"DIFF_CHECK_FAILED: '{OLD}'"
 
 
 def _line(n, path="a.py", kind="trailing whitespace."):
@@ -199,7 +201,7 @@ def test_kinds_match_real_git(repo, tmp_path):
     assert "a.txt:1: trailing whitespace." in msg
     assert "a.txt:2: space before tab in indent." in msg
     assert "a.txt:4: leftover conflict marker" in msg
-    assert msg.endswith("; +1 more")
+    assert msg.endswith("; +1 more'")
 
 
 FORGED = [
@@ -227,7 +229,7 @@ def test_forged_header_unit_keeps_cr_inside_content_line():
 
 def test_combined_kind_is_accepted_and_matches_real_git(repo, tmp_path):
     msg = refuse(repo, tmp_path, {"src/a.txt": " \tx \n"})
-    assert msg.endswith("src/a.txt:1: trailing whitespace, space before tab in indent.")
+    assert msg.endswith("src/a.txt:1: trailing whitespace, space before tab in indent.'")
 
 
 @pytest.mark.parametrize(
