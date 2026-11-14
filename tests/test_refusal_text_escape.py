@@ -221,6 +221,34 @@ def test_allowed_hostile_paths_escape_deletion_and_mode_refusals(
     assert len(str(caught).splitlines()) == 1
 
 
+BS = "\\"
+EXACT_CASES = [
+    ("a\\x0ab", "'a\\\\x0ab'"),
+    ("a\nb", "'a\\x0ab'"),
+    ("it's", "'it\\'s'"),
+    ("\\", "'\\\\'"),
+    ("a\\'b", "'a\\\\\\'b'"),
+    ("a" + chr(0x85) + "b", "'a\\x85b'"),
+    ("\x1b[31m", "'\\x1b[31m'"),
+    ("a" + chr(0x2028) + "b", "'a" + BS + "u2028b'"),
+    ("a" + chr(0x200B) + "b", "'a" + BS + "u200bb'"),
+    ("a" + chr(0x202E) + "b", "'a" + BS + "u202eb'"),
+    ("x" + chr(0xF0000), "'x\\U000f0000'"),
+    (chr(0xDCFF), "'" + BS + "udcff'"),
+]
+DISTINCT_PAIRS = [("a\\x0ab", "a\nb"), ("a\\'b", "a'b"), ("a\\\\nb", "a\\nb")]
+PASS_THROUGH = [
+    "plain/path",
+    "space name",
+    "caf" + chr(0xE9),
+    "cafe" + chr(0x301),
+    chr(0x4E2D) + chr(0x6587),
+    "[#-].",
+    "::error::x",
+    "##[group]x",
+]
+
+
 @pytest.mark.parametrize(
     "value",
     [E1(), E2(), E3(), E4(), E5(), E6()],
@@ -233,6 +261,12 @@ def test_shown_escapes_hidden_chars_and_quotes(value):
     assert result.startswith("'") and result.endswith("'")
     assert not any(is_hidden(char) for char in result)
     assert "\n" not in result and "\r" not in result
+    for raw, expected in EXACT_CASES:
+        assert shown(raw) == expected, raw
+    for left, right in DISTINCT_PAIRS:
+        assert shown(left) != shown(right), (left, right)
+    for raw in PASS_THROUGH:
+        assert shown(raw) == "'" + raw + "'", raw
 
 
 @pytest.mark.parametrize(
