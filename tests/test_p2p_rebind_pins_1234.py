@@ -50,13 +50,13 @@ CLASS_SHAPES = {
     ),
     "short-mark-decorator": (
         "import pytest\npytest.mark = lambda c: c\n"
-        "@pytest.mark\nclass TestX:\n    def test_a(self):\n        helper()\n",
+        "@pytest.mark\nclass TestX:\n    def test_b(self):\n        helper()\n",
         "t.py::TestX::test_a",
     ),
     "deep-mark-decorator": (
         "from types import SimpleNamespace\n"
         "pytest.foo = SimpleNamespace(bar=lambda c: c)\n"
-        "@pytest.foo.bar\nclass TestX:\n    def test_a(self):\n        helper()\n",
+        "@pytest.foo.bar\nclass TestX:\n    def test_b(self):\n        helper()\n",
         "t.py::TestX::test_a",
     ),
 }
