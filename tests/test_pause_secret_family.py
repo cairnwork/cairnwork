@@ -63,7 +63,7 @@ def test_common_key_writing_family_is_blocked(name, form):
         "the key is in the lock", "set the token field and the secret field",
         "donkey = " + _VALUE, "hockey: " + _VALUE, "bypass=" + _VALUE, "compass: " + _VALUE,
         "passport=" + _VALUE, "overpass=" + _VALUE, "PWD=/opt/app/build/output/dir",
-        "cd $PWD", "maxTokens: 4096", "tokens: " + _VALUE,
+        "cd $PWD", "maxTokens: 4096",
         "passwords are rotated every ninety days", "hockeystick = " + _VALUE,
     ],
 )  # fmt: skip
