@@ -13,13 +13,15 @@ _SAFE_NAMES = frozenset(
     "surpass keynote".split()
 )
 _SUFFIX = re.compile(r"(?:key|token|secret|pass(?:word|wd|phrase)?|pwd)$")
+_QUALIFIER = re.compile(r"(?:value|hash|old|new|prod|dev|test|base|pem|v\d+)$")
 _WORD = re.compile(r"(?:key|token|secret|pass(?:word|wd|phrase)?|pwd)")
 _PIECE = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+")
 # NAME_KEY=..., GITHUB_TOKEN: "...", "client_secret": "...", key => "...", TOKEN := ...
 # (separator = : => :=, optional quotes or backticks around name and value); the name must
 # start a word so each run of name characters is tried once
 _ASSIGNMENT = re.compile(
-    r"(?<![A-Za-z0-9_-])(?P<name>[A-Za-z_][A-Za-z0-9_-]*)[\"'`]?\s*(?:=>|:=|[=:])\s*"
+    r"(?<![A-Za-z0-9_-])(?:[A-Za-z_][A-Za-z0-9_.]*(?:\s*\[\s*[\"'`][A-Za-z_][A-Za-z0-9_-]*[\"'`]\s*\])*\s*\[\s*)?"
+    r"(?P<name>[A-Za-z_][A-Za-z0-9_-]*)[\"'`]?\s*\]?\s*(?:=>|:=|[=:])\s*"
     r"[\"'`]?(?P<value>[A-Za-z0-9+/=_-]{16,})"
 )
 # command line: --api-key VALUE or --api-key=VALUE
@@ -76,11 +78,11 @@ def _secret_word(name: str) -> str | None:
     glued name must end in the word; a separator or camelCase piece may be the word anywhere
     (token_value, DB_PASSWORD_PROD). The closed ordinary-word list exempts whole names."""
     glued = re.sub(r"[-_]", "", name).lower()
-    forms = _forms(glued)
+    forms = _forms(glued) + _forms(_QUALIFIER.sub("", glued, count=1))
     if any(f in _SAFE_NAMES for f in forms):
         return None
-    for form in forms:
-        found = _SUFFIX.search(form)
+    for form in (glued, *forms):
+        found = _SUFFIX.search(_QUALIFIER.sub("", form, count=1))
         if found:
             return found.group()
     for part in re.split(r"[-_]", name):
