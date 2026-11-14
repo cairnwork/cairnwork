@@ -152,7 +152,7 @@ def _children(node: ast.AST, inside: bool) -> Iterator[ast.AST]:
         return
     if inside:
         yield from (node.body if isinstance(node.body, list) else [node.body])
-        if False:
+        if isinstance(node, _FUNCS):
             yield from ast.walk(node.args)
         return
     yield from getattr(node, "decorator_list", [])
