@@ -93,30 +93,41 @@ def _mode_is_write(
     flag_mode: bool = False,
     single_mode_arg: bool = False,
 ) -> bool:
-    mode_arg = next((kw.value for kw in call.keywords if kw.arg in {"mode", "flag"}), None)
-    if mode_arg is None:
-        index = 0 if path_like else mode_index
-        mode_arg = call.args[index] if len(call.args) > index else None
-        if (
-            mode_arg is None
-            and single_mode_arg
-            and len(call.args) == 1
-            and not call.keywords
-            and isinstance(call.args[0], ast.Constant)
-            and isinstance(call.args[0].value, str)
-            and _MODE_TEXT.fullmatch(call.args[0].value)
-        ):
-            mode_arg = call.args[0]
-        if path_like and mode_arg is not None:
-            first = mode_arg.value if isinstance(mode_arg, ast.Constant) else None
-            if isinstance(first, str) and not _MODE_TEXT.fullmatch(first):
-                mode_arg = call.args[1] if len(call.args) > 1 else None
+    mode_keywords = {"mode", "flag"} if flag_mode else {"mode"}
+    keyword_modes = [kw.value for kw in call.keywords if kw.arg in mode_keywords]
+    if keyword_modes:
+        return any(
+            _mode_value_is_write(value, zip_mode, default_write, flag_mode)
+            for value in keyword_modes
+        )
+    index = 0 if path_like else mode_index
+    mode_arg = call.args[index] if len(call.args) > index else None
+    if (
+        mode_arg is None
+        and single_mode_arg
+        and len(call.args) == 1
+        and not call.keywords
+        and isinstance(call.args[0], ast.Constant)
+        and isinstance(call.args[0].value, str)
+        and _MODE_TEXT.fullmatch(call.args[0].value)
+    ):
+        mode_arg = call.args[0]
+    if path_like and mode_arg is not None:
+        first = mode_arg.value if isinstance(mode_arg, ast.Constant) else None
+        if isinstance(first, str) and not _MODE_TEXT.fullmatch(first):
+            mode_arg = call.args[1] if len(call.args) > 1 else None
     if mode_arg is None:
         if any(isinstance(arg, ast.Starred) for arg in call.args) or any(
             kw.arg is None for kw in call.keywords
         ):
             return True
         return default_write
+    return _mode_value_is_write(mode_arg, zip_mode, default_write, flag_mode)
+
+
+def _mode_value_is_write(
+    mode_arg: ast.AST, zip_mode: bool, default_write: bool, flag_mode: bool
+) -> bool:
     if not isinstance(mode_arg, ast.Constant):
         return True
     value = mode_arg.value
