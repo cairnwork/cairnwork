@@ -83,3 +83,12 @@ def test_leftover_work_directory_message_escapes_control_characters(tmp_path, mo
     with pytest.raises(WorkspaceError) as caught:
         verifiers._run_all(_batch(tmp_path), _specs(1), "r\n::error::x")
     assert "\n" not in str(caught.value)
+
+
+def test_blackbox_leftover_work_directory_is_workspace_error(tmp_path):
+    from cairnwork import blackbox_exec
+
+    ctx: Any = SimpleNamespace(run_root=tmp_path, account=None, attempt_id="")
+    (tmp_path / "run-vbb.work").mkdir()
+    with pytest.raises(WorkspaceError, match="leftover work directory"):
+        blackbox_exec._run(None, "c", "run", 1, (), ctx, "/usr/bin/python3")
