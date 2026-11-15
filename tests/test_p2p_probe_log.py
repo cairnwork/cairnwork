@@ -217,6 +217,36 @@ def test_dotted_and_dotless_i_in_a_secret_name_still_count(tmp_path):
     assert tail.count("<redacted>") == 3
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("x＿apİ_key=SV", "x＿apİ_key=<redacted>"),
+        ("x＿apİkey=SV", "x＿apİkey=<redacted>"),
+        ("x＿APİ_KEY=SV", "x＿APİ_KEY=<redacted>"),
+        ("x＿APİKEY=SV", "x＿APİKEY=<redacted>"),
+        ("x＿prİvate_key=SV", "x＿prİvate_key=<redacted>"),
+        ("x＿PRİVATE_KEY=SV", "x＿PRİVATE_KEY=<redacted>"),
+        ("--a-x＿apİ_key=SV", "--a-x＿apİ_key=<redacted>"),
+        ("a=x＿apİkey=SV", "a=x＿apİkey=<redacted>"),
+        ("k=1&x＿apİ_key=SV&z=1", "k=1&x＿apİ_key=<redacted>&z=1"),
+        ("a\x00x＿apİ_key=SV", "a?x＿apİ_key=<redacted>"),
+        ("x＿a\x00pİ_key=SV", "x＿a?pİ_key=<redacted>"),
+        ("x＿apİ=SV", "x＿apİ=SV"),
+        ("x＿İd=SV", "x＿İd=SV"),
+        ("x＿apİ_kex=SV", "x＿apİ_kex=SV"),
+        ("x＿İ_key=SV", "x＿İ_key=SV"),
+        ("my-x＿apİ_keys=SV", "my-x＿apİ_keys=SV"),
+        ("foo＿bar=SV", "foo＿bar=SV"),
+        ("my-token=SV", "my-token=SV"),
+        ("x-api＿key=SV", "x-api＿key=SV"),
+    ],
+)
+def test_full_width_underscore_keeps_dotted_capital_i_masked(tmp_path, text, expected):
+    log = tmp_path / "verifier.log"
+    log.write_text(text)
+    assert probe_log_tail(log) == expected
+
+
 _FORMS = {  # #402: one failing line per credential form the Issue lists
     "env_token": ("GITHUB_TOKEN=fake-token-123", "GITHUB_TOKEN=<redacted>"),
     "env_password": ("PYPI_PASSWORD=fake-token-123", "PYPI_PASSWORD=<redacted>"),

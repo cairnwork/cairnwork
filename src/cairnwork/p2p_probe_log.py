@@ -112,6 +112,7 @@ def mask_secrets(text: str) -> str:
 
 def _is_key(name: str) -> bool:
     """A secret word, or a name ending in one after '_' (GITHUB_TOKEN); full-width letters fold."""
+    name = name.replace("＿", "_")
 
     def _candidates(n: str) -> Iterator[str]:
         yield n
