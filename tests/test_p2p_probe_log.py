@@ -352,9 +352,12 @@ def test_look_alike_text_next_to_the_new_forms_is_left_alone(tmp_path):
         ("x﹏apİ_kex=SV", "x﹏apİ_kex=SV"),
         ("my-x︳apİ_keys=SV", "my-x︳apİ_keys=SV"),
         ("ⓣoken＝SECRETVAL", "ⓣoken＝<redacted>"),
-        ("token﹦SECRETVAL", "token﹦<redacted>"),
-        ("token⁼SECRETVAL", "token⁼<redacted>"),
-        ("token₌SECRETVAL", "token₌<redacted>"),
+        ("token﹦SV token⁼SV token₌SV", "token﹦<redacted> token⁼<redacted> token₌<redacted>"),
+        ("API_KEY⩵SV API_KEY⩶SV", "API_KEY⩵<redacted> API_KEY⩶<redacted>"),
+        (
+            "ﬁle=ok ﬃ=ok paﬆ_token=SV ㌀ secret=SV",
+            "ﬁle=ok ﬃ=ok paﬆ_token=<redacted> ㌀ secret=<redacted>",
+        ),
     ],
 )
 def test_low_line_lookalikes_full_width_equals_and_mixed_scripts_1313(tmp_path, text, expected):
@@ -387,9 +390,10 @@ def test_every_single_codepoint_nfkc_variant_of_key_char_is_masked_1313():
 
 
 @pytest.mark.parametrize("unit", ["-", "a-", "a_", "x-token-", "a＿", "a︳"])
-def test_one_long_line_of_word_characters_and_dashes_is_not_quadratic(tmp_path, unit):
-    log = tmp_path / "verifier.log"  # #402: unbounded name prefixes cost ~30 s on a 16 KB line
-    log.write_text("head\n" + unit * (15000 // len(unit)) + "\nEND\n")  # inside the 16 KB window
+def test_one_long_line_of_word_characters_and_dashes_is_not_quadratic(unit):
+    from cairnwork.p2p_probe_log import mask_secrets
+
+    text = "head\n" + unit * (65536 // len(unit)) + "\nEND\n"
     started = time.monotonic()
-    tail = probe_log_tail(log)
-    assert time.monotonic() - started < 5 and tail.endswith("END\n")
+    out = mask_secrets(text)
+    assert time.monotonic() - started < 5 and out.endswith("END\n")
