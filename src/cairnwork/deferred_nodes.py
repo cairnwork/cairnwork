@@ -69,13 +69,14 @@ def test_functions(tree: ast.Module) -> tuple[dict[str, str], frozenset[str]]:
     classes: dict[str, _Class] = {}
     uncollected: set[str] = set()
     reach = _Reach(tree)
+    aliases = _class_aliases(tree.body)
     for node in tree.body:
         if isinstance(node, _DEFS) and node.name.startswith("test"):
             functions[node.name] = _digest(
                 reach.module + ast.dump(node) + reach(node.decorator_list)
             )
         elif isinstance(node, ast.ClassDef):
-            methods, blocked, case, marks = _members(node, classes, reach)
+            methods, blocked, case, marks = _members(node, classes, reach, aliases)
             classes[node.name] = (methods, blocked, case, marks)
             if node.name.startswith("Test") or case:
                 tests = {n: b for n, b in methods.items() if n.startswith("test")}
@@ -88,13 +89,19 @@ def test_functions(tree: ast.Module) -> tuple[dict[str, str], frozenset[str]]:
                 functions.update({f"{node.name}::{n}": body for n, body in tests.items()})
                 if blocked:
                     uncollected.add(node.name)
+            _nested_members(node, node.name, functions, reach, classes)
     return functions, frozenset(uncollected)
 
 
 _Class = tuple[dict[str, str], bool, bool, str]
 
 
-def _members(node: ast.ClassDef, classes: dict[str, _Class], reach: _Reach) -> _Class:
+def _members(
+    node: ast.ClassDef,
+    classes: dict[str, _Class],
+    reach: _Reach,
+    aliases: dict[str, str] | None = None,
+) -> _Class:
     """A class's methods, its own first, then every base's that it does not define; and whether
     it has an ``__init__`` or ``__new__`` (its own or a base's); and whether it is a TestCase
     subclass (a base named ``*TestCase``, or an earlier class that is one); and its marks: the
@@ -110,13 +117,58 @@ def _members(node: ast.ClassDef, classes: dict[str, _Class], reach: _Reach) -> _
     for base in node.bases:
         last = _base_name(base)
         case = case or last.endswith("TestCase")
-        if isinstance(base, ast.Name) and base.id in classes:
-            inherited, base_blocked, base_case, _ = classes[base.id]  # its marks: reach follows it
+        target = base.id if isinstance(base, ast.Name) else ""
+        target = (aliases or {}).get(target, target)
+        if target in classes:
+            inherited, base_blocked, base_case, _ = classes[target]  # its marks: reach follows it
             blocked, case = blocked or base_blocked, case or base_case
             for name, body in inherited.items():  # every base's: the MRO may pick a later one's
                 if name not in own:  # (#1009); a change to any of them reads as a change
                     methods[name] = _digest(methods.get(name, "") + body)  # bounded per level
     return methods, blocked, case, marks
+
+
+def _class_aliases(body: list[ast.stmt]) -> dict[str, str]:
+    """Resolve module-level name aliases to earlier same-file classes."""
+    aliases: dict[str, str] = {}
+    classes: set[str] = set()
+    for item in body:
+        if isinstance(item, ast.ClassDef):
+            classes.add(item.name)
+        elif isinstance(item, ast.Assign) and len(item.targets) == 1:
+            target, value = item.targets[0], item.value
+            if isinstance(target, ast.Name) and isinstance(value, ast.Name):
+                source = aliases.get(value.id, value.id)
+                if source in classes:
+                    aliases[target.id] = source
+    return aliases
+
+
+def _nested_members(
+    node: ast.ClassDef,
+    prefix: str,
+    functions: dict[str, str],
+    reach: _Reach,
+    parents: dict[str, _Class],
+) -> None:
+    """Fingerprint tests in nested classes under every enclosing class marker."""
+    for item in node.body:
+        if not isinstance(item, ast.ClassDef):
+            continue
+        local = dict(parents)
+        for child in node.body:
+            if isinstance(child, ast.ClassDef):
+                local[child.name] = _members(child, local, reach)
+        methods, blocked, case, marks = _members(item, local, reach)
+        tests = {name: body for name, body in methods.items() if name.startswith("test")}
+        if item.name.startswith("Test") or case:
+            outer = reach([_shell(node)])
+            own = "".join(ast.dump(d) for d in item.decorator_list)
+            for name, body in tests.items():
+                functions[f"{prefix}::{item.name}::{name}"] = _digest(
+                    (own if blocked else outer + marks) + body
+                )
+        _nested_members(item, f"{prefix}::{item.name}", functions, reach, local)
 
 
 class _Reach:
@@ -243,10 +295,22 @@ def hidden_tests(tree: ast.Module, local: Container[str] | None = None) -> froze
         if isinstance(node, ast.ClassDef):
             scan += [item for item in node.body if not isinstance(item, _DEFS)]
     _hidden(ast.Module(body=scan, type_ignores=[]), found, None, local)
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            _nested_hidden_context(node, found)
     for node in ast.walk(tree):
         if isinstance(node, _SCOPES) and any(_global_test(inner) for inner in ast.walk(node)):
             found.add(ast.dump(node))
     return frozenset(found)
+
+
+def _nested_hidden_context(node: ast.ClassDef, found: set[str]) -> None:
+    """Include enclosing class markers in a nested test class's hidden fingerprint."""
+    for child in node.body:
+        if isinstance(child, ast.ClassDef):
+            if child.name.startswith("Test"):
+                found.add(ast.dump(_shell(node)))
+            _nested_hidden_context(child, found)
 
 
 def _global_test(node: ast.AST) -> bool:
