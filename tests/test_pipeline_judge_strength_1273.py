@@ -2,14 +2,24 @@
 
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
-from cairnwork import pipeline_judge
+from cairnwork import pipeline_judge, protection
 from cairnwork.verify_context import VerifyContext
 
 
-def test_a_missing_verified_ledger_verdict_cannot_leave_the_result_verified(monkeypatch):
+def cast_any(value: Any) -> Any:
+    return value
+
+
+@pytest.mark.parametrize(
+    ("notarized", "ledger"),
+    [(True, False), (False, True)],
+    ids=["ledger-not-verified", "notarize-not-verified"],
+)
+def test_either_unverified_term_cannot_leave_the_result_verified(monkeypatch, notarized, ledger):
     task = SimpleNamespace(
         blackbox=None,
         repo=Path("r"),
@@ -43,9 +53,9 @@ def test_a_missing_verified_ledger_verdict_cannot_leave_the_result_verified(monk
     monkeypatch.setattr(pipeline_judge, "raise_for_env_skips", lambda *_args, **_kwargs: None)
 
     core = SimpleNamespace(
-        notarize=lambda *_args: SimpleNamespace(verified=True, status="VERIFIED", reason=""),
+        notarize=lambda *_args: SimpleNamespace(verified=notarized, status="X", reason=""),
         verdict=lambda *_args, **_kwargs: SimpleNamespace(
-            verified=False, status="FAILED_VERIFICATION", reason="LEDGER_NOT_VERIFIED"
+            verified=ledger, status="X", reason="LEDGER_NOT_VERIFIED"
         ),
     )
     pipeline_judge.judge_candidate(
@@ -55,16 +65,15 @@ def test_a_missing_verified_ledger_verdict_cannot_leave_the_result_verified(monk
         core,
         result,
         (),
-        SimpleNamespace(),
+        cast_any(SimpleNamespace()),
         lambda *_: None,
     )
 
     assert result.verified is False
 
 
-def test_a_binding_with_a_different_protection_level_stops_the_run(monkeypatch):
-    from cairnwork import protection
-
+@pytest.mark.parametrize("level", [protection.WEAKEST, protection.FULL, protection.PARTIAL])
+def test_a_binding_with_a_different_protection_level_stops_the_run(monkeypatch, level):
     monkeypatch.setattr(pipeline_judge, "run_verifiers", lambda *a, **k: [])
     monkeypatch.setattr(pipeline_judge, "refuse_new_sys_path_mutation", lambda *a, **k: None)
     task = SimpleNamespace(
@@ -89,5 +98,5 @@ def test_a_binding_with_a_different_protection_level_stops_the_run(monkeypatch):
             (),
             VerifyContext.of(task, Path("x"), "a"),
             lambda *_: None,
-            binding={"head": "h", "protection": protection.WEAKEST},
+            binding={"head": "h", "protection": level},
         )
