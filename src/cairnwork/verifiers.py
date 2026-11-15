@@ -217,6 +217,9 @@ def _run_all(batch: _Batch, specs, run_id) -> tuple[VerifierRun, ...]:
     for index, spec in enumerate(specs):
         if index and ctx.account is not None:
             ctx.account.require_idle()  # survivors of the last spec
+            # The last spec's private/run must be gone before this one starts (#437 D): refuse,
+            # as the next account run would, instead of running on beside a leftover.
+            ctx.account.scrub_stale_runs()
         clone_id = f"{run_id}-v{index}"
         # The checkout sits alone in its own work directory, which the tests may write:
         # some create files next to their repository (Nexus-new: nexus-runtime-targets),

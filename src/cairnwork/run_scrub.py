@@ -239,8 +239,20 @@ def _recovery_steps(user: str, python: str, run: Path, private: Path) -> str:
     return "; ".join(steps)
 
 
-def _hint(user: str, python: str, path: Path) -> str:
-    """Recovery while ``private`` is still group-traversable (0750). Not for the run root itself."""
+def _hint(user: str, python: str, path: Path, root: Path | None = None) -> str:
+    """Recovery while ``private`` is still group-traversable (0750). Not for the run root itself.
+
+    A name ``run`` directly under the run root is not a ``private/run``: its parent is the root,
+    so the private-dir steps (chmod 700 of the parent) would hit the run root (#437 residual).
+    """
+    if root is not None and path.parent == root:
+        q_path = shlex.quote(str(path))
+        return (
+            f"{_shown(path)} sits directly in the run root and blocks the next account run. "
+            f"The owner must fix it without following links: ls -ld {q_path}. If it is a "
+            f"symlink, unlink that symlink only and do not remove or chmod its target; do not "
+            f"chmod the run root."
+        )
     private = path.parent if path.name == "run" else path
     run = private / "run"
     q_run, q_priv = shlex.quote(str(run)), shlex.quote(str(private))
@@ -356,7 +368,31 @@ def _seal(private: Path, root: Path, stuck: list[Path]) -> None:
 def _refuse(account, stuck: list[Path]) -> str:
     shown = ", ".join(_shown(path) for path in stuck[:8])
     extra = f" (+{len(stuck) - 8} more)" if len(stuck) > 8 else ""
-    return f"{shown}{extra}. {_hint(account.user, account.python, stuck[0])}"
+    return f"{shown}{extra}. {_hint(account.user, account.python, stuck[0], account.run_root)}"
+
+
+def _root_unsafe(root: Path) -> str | None:
+    """Refuse a run root someone else could swap names in (#437 E).
+
+    ``rmtree(root/private/run)`` follows a swapped ``private`` link, so the root must belong to
+    this process and be writable by neither group nor others (setup_verifier_user*.sh sets 2750).
+    """
+    try:
+        info = os.lstat(root)
+    except OSError as exc:
+        return f"cannot stat {_shown(root)}: {exc}"
+    shown = shlex.quote(str(root))
+    if info.st_uid != os.getuid():
+        return (
+            f"{_shown(root)} is not owned by this user (owner uid {info.st_uid}). The owner must "
+            f"fix it: ls -ld {shown}"
+        )
+    if info.st_mode & 0o022:
+        return (
+            f"{_shown(root)} is writable by group or others (mode {stat.S_IMODE(info.st_mode):o}). "
+            f"The owner must remove that: chmod g-w,o-w {shown}"
+        )
+    return None
 
 
 def stale_run_error(account) -> str | None:
@@ -383,6 +419,8 @@ def stale_run_error(account) -> str | None:
             f"following links: ls -ld {shown}. If it is a symlink, unlink it only and do not "
             f"remove its target."
         )
+    if (problem := _root_unsafe(root)) is not None:
+        return problem
     stuck: list[Path] = []
     for name in names:
         if name.endswith(".work"):
