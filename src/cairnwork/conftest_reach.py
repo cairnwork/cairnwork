@@ -35,7 +35,9 @@ conftest_check.py. Nor are base test files: a changed module that only a base te
 also runs its import-time code in the base run (a known residual, #951, kept apart so that a test
 commit may still update a shared test helper). An archive (``.zip``, ``.whl``) loads only once
 its own path is on ``sys.path``, which no import names: conftest_check.py refuses the direct form
-(a conftest or the pytest configuration naming the file); a conftest that changes ``sys.path`` and names an archive pattern or the archive's directory is refused too (archive_reach.py); the rest is a known residual (#967).
+(a conftest or the pytest configuration naming the file); a conftest that changes ``sys.path`` and
+names an archive pattern or the archive's directory is refused too (archive_reach.py); the rest is
+a known residual (#967).
 This runs at the producer, in the pipeline judge and at a full receiver, on every test path
 (#952).
 

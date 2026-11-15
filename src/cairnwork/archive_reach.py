@@ -5,8 +5,9 @@ Refused only when both hold, so that an archive that is only test data passes:
 
 * the conftest changes ``sys.path`` (``sys.path.insert/append/extend``, an assignment or ``+=``
   to ``sys.path`` or an item of it, ``site.addsitedir``); and
-* one of its string literals holds an archive suffix pattern (``".zip"``, ``"*.whl"``: a listing or a
-  suffix test, not a complete file name), or is the directory of a changed archive (the whole path, or its last name).
+* one of its string literals holds an archive suffix pattern (``".zip"``, ``"*.whl"``: a listing
+  or a suffix test, not a complete file name), or is the directory of a changed archive (the whole
+  path, or its last name).
 
 Residual (#967): a path built with no such literal (``os.listdir`` of a directory named
 elsewhere), an unchanged helper module that changes ``sys.path``, an archive under a name with
