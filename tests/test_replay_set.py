@@ -107,3 +107,64 @@ def test_for_status_swallows_a_task_without_repo():
             raise RuntimeError("no repo")
 
     assert replay_set.for_status("FAILED", Bad(), "x") == {"replay_set_error": "RuntimeError"}
+
+
+def _two_commits(tmp_path: Path, name: str, files_before: dict, files_after: dict):
+    repo = tmp_path / name
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "test@example.invalid")
+    _git(repo, "config", "user.name", "Test")
+    for path, data in files_before.items():
+        (repo / path).write_bytes(data)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "base")
+    task = Task()
+    task.base_commit = _git(repo, "rev-parse", "HEAD")
+    for path, data in files_after.items():
+        (repo / path).write_bytes(data)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "candidate")
+    return repo, task, _git(repo, "rev-parse", "HEAD")
+
+
+def _patch_hash(repo: Path, task: Task, candidate: str) -> str:
+    return replay_set.capture(task, candidate, repo=repo)["candidate_patch_sha256"]
+
+
+def test_patch_hash_ignores_git_diff_config(tmp_path):
+    lines = [f"line {i}\n".encode() for i in range(60)]
+    edited = list(lines)
+    edited[2], edited[40] = b"changed a\n", b"changed b\n"
+    repo, task, candidate = _two_commits(
+        tmp_path, "cfg", {"a.py": b"".join(lines), "b.py": b"x = 1\n"},
+        {"a.py": b"".join(edited), "c.py": b"x = 1\n"},
+    )  # fmt: skip
+    plain = _patch_hash(repo, task, candidate)
+    for key, value in (
+        ("color.ui", "always"), ("diff.noprefix", "true"), ("diff.srcPrefix", "X/"),
+        ("diff.context", "1"), ("diff.interHunkContext", "50"), ("diff.renames", "false"),
+    ):  # fmt: skip
+        _git(repo, "config", key, value)
+        assert _patch_hash(repo, task, candidate) == plain, key
+        _git(repo, "config", "--unset", key)
+
+
+def test_patch_hash_runs_no_textconv_driver(tmp_path):
+    repo, task, candidate = _two_commits(tmp_path, "tc", {"a.py": b"x = 1\n"}, {"a.py": b"x = 2\n"})
+    plain = _patch_hash(repo, task, candidate)
+    marker = tmp_path / "textconv-ran"
+    script = tmp_path / "conv.sh"
+    script.write_text(f'#!/bin/sh\ntouch "{marker}"\ncat "$1"\n')
+    script.chmod(0o755)
+    _git(repo, "config", "diff.foo.textconv", str(script))
+    (repo / ".gitattributes").write_text("*.py diff=foo\n")
+    assert _patch_hash(repo, task, candidate) == plain
+    assert not marker.exists()
+
+
+def test_patch_hash_covers_binary_change(tmp_path):
+    base = {"blob.bin": b"\x00\x01\x02"}
+    repo_a, task_a, cand_a = _two_commits(tmp_path, "ba", base, {"blob.bin": b"\x00\x01\x03"})
+    repo_b, task_b, cand_b = _two_commits(tmp_path, "bb", base, {"blob.bin": b"\x00\x01\x04"})
+    assert _patch_hash(repo_a, task_a, cand_a) != _patch_hash(repo_b, task_b, cand_b)
