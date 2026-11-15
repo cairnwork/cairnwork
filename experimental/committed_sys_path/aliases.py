@@ -9,6 +9,19 @@ from dataclasses import dataclass, field
 
 _OS_PATH_FNS = frozenset({"dirname", "join", "abspath", "realpath"})
 _PATHLIB_CLASSES = frozenset({"Path", "PurePath", "PurePosixPath"})
+_MUTATING_PATH_METHODS = frozenset(
+    {"insert", "append", "extend", "clear", "pop", "remove", "sort", "reverse"}
+)
+
+
+@dataclass(frozen=True)
+class PathEdit:
+    """Represents a detected in-process search path or guard edit."""
+
+    lineno: int
+    kind: str
+    target_nodes: tuple[ast.AST, ...]
+    raw_stmt: str
 
 
 @dataclass
@@ -31,6 +44,7 @@ class AliasState:
     pathlib_aliases: set[str] = field(default_factory=set)
     str_trusted: bool = True
     file_rebound: bool = False
+    rebound_names: frozenset[str] = frozenset()
     env: dict[str, ast.AST] = field(default_factory=dict)
 
 
@@ -52,9 +66,10 @@ def _count_bindings(tree: ast.AST) -> collections.Counter[str]:
         if isinstance(node, ast.Assign):
             for t in node.targets:
                 _collect_target_names(t, names)
-        elif isinstance(node, (ast.AnnAssign, ast.AugAssign, ast.NamedExpr)):
-            _collect_target_names(node.target, names)
-        elif isinstance(node, (ast.For, ast.AsyncFor)):
+        elif isinstance(
+            node,
+            (ast.AnnAssign, ast.AugAssign, ast.NamedExpr, ast.For, ast.AsyncFor, ast.comprehension),
+        ):
             _collect_target_names(node.target, names)
         elif isinstance(node, (ast.With, ast.AsyncWith)):
             for item in node.items:
@@ -65,23 +80,17 @@ def _count_bindings(tree: ast.AST) -> collections.Counter[str]:
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             names.append(node.name)
             args = node.args
-            for a in (*args.posonlyargs, *args.args, *args.kwonlyargs):
-                names.append(a.arg)
-            if args.vararg:
-                names.append(args.vararg.arg)
-            if args.kwarg:
-                names.append(args.kwarg.arg)
+            names.extend(
+                a.arg
+                for a in (*args.posonlyargs, *args.args, *args.kwonlyargs, args.vararg, args.kwarg)
+                if a
+            )
         elif isinstance(node, ast.ClassDef):
             names.append(node.name)
         elif isinstance(node, ast.Import):
-            for al in node.names:
-                names.append(al.asname or al.name.split(".")[0])
+            names.extend(al.asname or al.name.split(".")[0] for al in node.names)
         elif isinstance(node, ast.ImportFrom):
-            for al in node.names:
-                if al.name != "*":
-                    names.append(al.asname or al.name)
-        elif isinstance(node, ast.comprehension):
-            _collect_target_names(node.target, names)
+            names.extend(al.asname or al.name for al in node.names if al.name != "*")
         elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
             names.append(node.name)
         elif isinstance(node, ast.Delete):
@@ -180,7 +189,7 @@ def is_sys_path_expr(node: ast.AST, st: AliasState, depth: int = 0) -> bool:
         ):
             return True
         if is_sys_path_expr(node.value, st, depth + 1):
-            return True
+            return isinstance(node.ctx, (ast.Store, ast.Del)) or isinstance(node.slice, ast.Slice)
         if isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, int):
             idx = node.slice.value
             if isinstance(node.value, (ast.List, ast.Tuple)) and 0 <= idx < len(node.value.elts):
@@ -216,12 +225,10 @@ def _collect_top_imports(
                     continue
                 if a.name == "os":
                     st.os_aliases.add(local)
-                elif a.name == "os.path" and a.asname:
-                    st.ospath_aliases.add(local)
-                elif a.name == "posixpath":
-                    st.ospath_aliases.add(local)
                 elif a.name == "pathlib":
                     st.pathlib_aliases.add(local)
+                elif (a.name == "os.path" and a.asname) or a.name == "posixpath":
+                    st.ospath_aliases.add(local)
         elif isinstance(stmt, ast.ImportFrom) and stmt.module:
             for a in stmt.names:
                 if a.name == "*":
@@ -251,6 +258,53 @@ def _record_alias(name: str, val: ast.AST, st: AliasState) -> None:
         st.list_aliases.add(name)
 
 
+def _is_mutating_path_node(bn: ast.AST, st: AliasState) -> bool:
+    if isinstance(bn, ast.Call):
+        fn = bn.func
+        if isinstance(fn, ast.Attribute):
+            if fn.attr == "addsitedir":
+                return True
+            if fn.attr in _MUTATING_PATH_METHODS and is_sys_path_expr(fn.value, st):
+                return True
+            if (
+                fn.attr in ("insert", "append", "extend")
+                and isinstance(fn.value, ast.Name)
+                and fn.value.id in st.list_aliases
+                and bn.args
+                and is_sys_path_expr(bn.args[0], st)
+            ):
+                return True
+        elif isinstance(fn, ast.Name) and (
+            fn.id in st.addsitedir_aliases or fn.id in st.helper_funcs
+        ):
+            return True
+    elif isinstance(bn, ast.AugAssign):
+        return is_sys_path_expr(bn.target, st)
+    elif isinstance(bn, ast.Assign):
+        return any(is_sys_path_expr(sub, st) for t in bn.targets for sub in ast.walk(t))
+    elif isinstance(bn, ast.Delete):
+        return any(is_sys_path_expr(t, st) for t in bn.targets)
+    return False
+
+
+def _non_class_nodes(root: ast.AST) -> list[ast.AST]:
+    out: list[ast.AST] = []
+    stack: list[tuple[ast.AST, bool]] = [(root, False)]
+    while stack:
+        node, in_class = stack.pop()
+        if not in_class:
+            out.append(node)
+        if isinstance(node, ast.ClassDef):
+            b = {id(s) for s in node.body}
+            stack.extend((c, True if id(c) in b else in_class) for c in ast.iter_child_nodes(node))
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and in_class:
+            b = {id(s) for s in node.body}
+            stack.extend((c, id(c) not in b) for c in ast.iter_child_nodes(node))
+        else:
+            stack.extend((c, in_class) for c in ast.iter_child_nodes(node))
+    return out
+
+
 def _scan_node_aliases(node: ast.AST, st: AliasState) -> None:
     if isinstance(node, ast.Assign):
         if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
@@ -263,26 +317,34 @@ def _scan_node_aliases(node: ast.AST, st: AliasState) -> None:
                 for tgt, val in zip(targets, node.value.elts, strict=True):
                     if isinstance(tgt, ast.Name):
                         _record_alias(tgt.id, val, st)
-    elif isinstance(node, ast.NamedExpr) and isinstance(node.target, ast.Name):
+    elif (
+        isinstance(node, (ast.AnnAssign, ast.NamedExpr))
+        and node.value is not None
+        and isinstance(node.target, ast.Name)
+    ):
         _record_alias(node.target.id, node.value, st)
     elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-        for arg, default in zip(
-            reversed(node.args.args), reversed(node.args.defaults), strict=False
-        ):
+        args = node.args
+        all_pos = [*args.posonlyargs, *args.args]
+        for arg, default in zip(reversed(all_pos), reversed(args.defaults), strict=False):
             if default is not None:
                 _record_alias(arg.arg, default, st)
+        has_params = bool(
+            args.posonlyargs or args.args or args.kwonlyargs or args.vararg or args.kwarg
+        )
         for bn in ast.walk(node):
             if isinstance(bn, ast.Return) and bn.value is not None:
                 if is_sys_expr(bn.value, st):
                     st.sys_funcs.add(node.name)
                 elif is_sys_path_expr(bn.value, st):
                     st.path_funcs.add(node.name)
-            if is_sys_path_expr(bn, st) or (
-                isinstance(bn, ast.Call)
-                and isinstance(bn.func, ast.Attribute)
-                and bn.func.attr == "addsitedir"
-            ):
+            if has_params and _is_mutating_path_node(bn, st):
                 st.helper_funcs.add(node.name)
+
+
+def _alias_sizes(st: AliasState) -> tuple[int, ...]:
+    cols = (st.sys_aliases, st.path_aliases, st.sys_funcs, st.path_funcs, st.helper_funcs)
+    return (*map(len, cols), len(st.slice_copy_aliases))
 
 
 def collect_aliases_and_env(tree: ast.AST) -> AliasState:
@@ -291,28 +353,21 @@ def collect_aliases_and_env(tree: ast.AST) -> AliasState:
     st = AliasState(
         str_trusted=counts["str"] == 0,
         file_rebound=counts["__file__"] > 0,
+        rebound_names=frozenset(name for name, cnt in counts.items() if cnt > 0),
     )
     if counts["list"] > 0:
         st.list_aliases.discard("list")
     if isinstance(tree, ast.Module):
         _collect_top_imports(tree, counts, st)
         for stmt in tree.body:
-            if (
-                isinstance(stmt, ast.Assign)
-                and len(stmt.targets) == 1
-                and isinstance(stmt.targets[0], ast.Name)
-            ):
-                tid = stmt.targets[0].id
-                if counts[tid] == 1 and tid != "__file__":
-                    st.env[tid] = stmt.value
-            elif (
-                isinstance(stmt, ast.AnnAssign)
-                and isinstance(stmt.target, ast.Name)
-                and stmt.value is not None
-            ):
-                tid = stmt.target.id
-                if counts[tid] == 1 and tid != "__file__":
-                    st.env[tid] = stmt.value
+            if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
+                tgt, val = stmt.targets[0], stmt.value
+            elif isinstance(stmt, ast.AnnAssign) and stmt.value is not None:
+                tgt, val = stmt.target, stmt.value
+            else:
+                continue
+            if isinstance(tgt, ast.Name) and counts[tgt.id] == 1 and tgt.id != "__file__":
+                st.env[tgt.id] = val
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for a in node.names:
@@ -320,39 +375,19 @@ def collect_aliases_and_env(tree: ast.AST) -> AliasState:
                     st.sys_aliases.add(a.asname or "sys")
                 elif a.name == "site":
                     st.site_aliases.add(a.asname or "site")
-        elif isinstance(node, ast.ImportFrom) and node.module == "sys":
+        elif isinstance(node, ast.ImportFrom) and node.module in ("sys", "os", "site"):
             for a in node.names:
-                st.path_aliases.add(a.asname or "path") if a.name in (
-                    "path",
-                    "*",
-                ) else st.sys_aliases.add(a.asname or a.name)
-        elif isinstance(node, ast.ImportFrom) and node.module == "os":
-            for a in node.names:
-                if a.name == "sys":
+                if node.module == "sys" and a.name in ("path", "*"):
+                    st.path_aliases.add(a.asname or "path")
+                elif node.module == "os" and a.name == "sys":
                     st.sys_aliases.add(a.asname or "sys")
-        elif isinstance(node, ast.ImportFrom) and node.module == "site":
-            for a in node.names:
-                if a.name in ("addsitedir", "*"):
+                elif node.module == "site" and a.name in ("addsitedir", "*"):
                     st.addsitedir_aliases.add(a.asname or "addsitedir")
+    scan_nodes = _non_class_nodes(tree)
     for _ in range(8):
-        prev = (
-            len(st.sys_aliases),
-            len(st.path_aliases),
-            len(st.sys_funcs),
-            len(st.path_funcs),
-            len(st.helper_funcs),
-            len(st.slice_copy_aliases),
-        )
-        for node in ast.walk(tree):
+        prev = _alias_sizes(st)
+        for node in scan_nodes:
             _scan_node_aliases(node, st)
-        curr = (
-            len(st.sys_aliases),
-            len(st.path_aliases),
-            len(st.sys_funcs),
-            len(st.path_funcs),
-            len(st.helper_funcs),
-            len(st.slice_copy_aliases),
-        )
-        if curr == prev:
+        if _alias_sizes(st) == prev:
             break
     return st

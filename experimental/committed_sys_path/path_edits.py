@@ -3,26 +3,19 @@
 from __future__ import annotations
 
 import ast
-from dataclasses import dataclass
 
 from experimental.committed_sys_path.aliases import (
     AliasState,
+    PathEdit,
     _is_slice_copy,
     _is_sys_dict,
     collect_aliases_and_env,
     is_sys_expr,
     is_sys_path_expr,
 )
+from experimental.committed_sys_path.sys_guard import find_sys_and_escape_edits
 
-
-@dataclass(frozen=True)
-class PathEdit:
-    """Represents a detected in-process search path edit."""
-
-    lineno: int
-    kind: str
-    target_nodes: tuple[ast.AST, ...]
-    raw_stmt: str
+__all__ = ["PathEdit", "find_path_edits"]
 
 
 def _extract_new_path_targets(value: ast.AST, st: AliasState) -> list[ast.AST]:
@@ -49,36 +42,44 @@ def _build_parents(tree: ast.AST) -> dict[ast.AST, ast.AST]:
     return parents
 
 
-def _is_safe_readonly_use(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> bool:
-    parent = parents.get(node)
-    if isinstance(parent, ast.Attribute) and parent.value is node:
-        gp = parents.get(parent)
-        if (
-            isinstance(gp, ast.Call)
-            and gp.func is parent
-            and parent.attr in ("index", "count", "copy")
-        ):
-            return True
-    if (
-        isinstance(parent, ast.Subscript)
-        and parent.value is node
-        and isinstance(parent.ctx, ast.Load)
+def _flatten_targets(nodes: list[ast.expr] | tuple[ast.expr, ...]) -> list[ast.expr]:
+    flat: list[ast.expr] = []
+    for t in nodes:
+        if isinstance(t, (ast.Tuple, ast.List)):
+            flat.extend(_flatten_targets(t.elts))
+        elif isinstance(t, ast.Starred):
+            flat.extend(_flatten_targets([t.value]))
+        else:
+            flat.append(t)
+    return flat
+
+
+def _is_path_target(t: ast.AST, st: AliasState) -> bool:
+    if isinstance(t, ast.Name) and (
+        t.id in ("__path__", "submodule_search_locations") or t.id in st.path_aliases
     ):
-        if isinstance(parent.slice, ast.Slice):
-            return True
-        if isinstance(parent.slice, ast.Constant) and isinstance(parent.slice.value, int):
-            return True
-    if isinstance(parent, ast.Call) and isinstance(parent.func, ast.Name):
-        if parent.func.id in ("len", "iter", "list", "tuple") and node in parent.args:
-            return True
-    if isinstance(parent, ast.Compare) and all(
-        isinstance(op, (ast.In, ast.NotIn)) for op in parent.ops
-    ):
-        if node in parent.comparators:
-            return True
-    if isinstance(parent, (ast.For, ast.AsyncFor, ast.comprehension)) and parent.iter is node:
         return True
-    return False
+    return is_sys_path_expr(t, st)
+
+
+def _mark_handled_target(t: ast.AST, st: AliasState, handled: set[ast.AST]) -> None:
+    handled.add(t)
+    for sub in ast.walk(t):
+        if is_sys_path_expr(sub, st):
+            handled.add(sub)
+
+
+def _mark_handled_concat_sources(val: ast.AST, st: AliasState, handled: set[ast.AST]) -> None:
+    if isinstance(val, ast.BinOp) and isinstance(val.op, ast.Add):
+        handled.add(val)
+        _mark_handled_concat_sources(val.left, st, handled)
+        _mark_handled_concat_sources(val.right, st, handled)
+    elif is_sys_path_expr(val, st) or _is_slice_copy(val, st):
+        handled.add(val)
+        if isinstance(val, ast.Subscript):
+            handled.add(val.value)
+        elif isinstance(val, ast.Call) and isinstance(val.func, ast.Attribute):
+            handled.add(val.func.value)
 
 
 def _is_unhandled_machinery_ref(node: ast.AST, st: AliasState) -> bool:
@@ -136,7 +137,63 @@ def _detect_call_edit(
         and func.value.id in st.site_aliases
     ):
         handled.add(node)
-        edits.append(PathEdit(lineno, "site.addsitedir", tuple(node.args[:1]), raw))
+        tgts = tuple(node.args[:1]) or tuple(
+            kw.value for kw in node.keywords if kw.arg == "sitedir"
+        )
+        edits.append(PathEdit(lineno, "site.addsitedir", tgts, raw))
+    elif attr in ("syspath_prepend", "syspathinsert"):
+        handled.add(node)
+        tgts = tuple(node.args[:1]) or tuple(
+            kw.value for kw in node.keywords if kw.arg in ("path", "prepend")
+        )
+        edits.append(PathEdit(lineno, f"pytest.{attr}", tgts, raw))
+
+
+def _extract_assign_rhs_targets(node: ast.Assign | ast.AugAssign, st: AliasState) -> list[ast.AST]:
+    if (
+        isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], (ast.Tuple, ast.List))
+        and isinstance(node.value, (ast.Tuple, ast.List))
+    ):
+        lhs_elts = node.targets[0].elts
+        rhs_elts = node.value.elts
+        no_star = not any(isinstance(e, ast.Starred) for e in (*lhs_elts, *rhs_elts))
+        if no_star and len(lhs_elts) == len(rhs_elts):
+            picked: list[ast.AST] = []
+            for lhs_e, rhs_e in zip(lhs_elts, rhs_elts, strict=True):
+                if any(_is_path_target(sub, st) for sub in ast.walk(lhs_e)):
+                    picked.extend(_extract_new_path_targets(rhs_e, st))
+            return picked
+    return _extract_new_path_targets(node.value, st)
+
+
+def _is_path_alias_binding(node: ast.Assign, st: AliasState) -> bool:
+    if len(node.targets) != 1:
+        return False
+    tgt = node.targets[0]
+    if isinstance(tgt, ast.Name):
+        return (
+            tgt.id not in ("__path__", "submodule_search_locations")
+            and tgt.id in st.path_aliases
+            and (is_sys_path_expr(node.value, st) or _is_slice_copy(node.value, st))
+        )
+    if isinstance(tgt, (ast.Tuple, ast.List)) and isinstance(node.value, (ast.Tuple, ast.List)):
+        if len(tgt.elts) != len(node.value.elts):
+            return False
+        for lhs_e, rhs_e in zip(tgt.elts, node.value.elts, strict=True):
+            if not isinstance(lhs_e, ast.Name):
+                if any(_is_path_target(sub, st) for sub in ast.walk(lhs_e)):
+                    return False
+                continue
+            if lhs_e.id in ("__path__", "submodule_search_locations"):
+                return False
+            if lhs_e.id in st.path_aliases and not (
+                is_sys_path_expr(rhs_e, st) or _is_slice_copy(rhs_e, st)
+            ):
+                return False
+        return True
+    return False
 
 
 def _detect_assign_edit(
@@ -149,49 +206,51 @@ def _detect_assign_edit(
     ):
         handled.add(node)
         raw = lines[node.lineno - 1].strip() if 0 < node.lineno <= len(lines) else ""
-        edits.append(PathEdit(node.lineno, "site.addsitedir", tuple(node.args[:1]), raw))
+        tgts = tuple(node.args[:1]) or tuple(
+            kw.value for kw in node.keywords if kw.arg == "sitedir"
+        )
+        edits.append(PathEdit(node.lineno, "site.addsitedir", tgts, raw))
         return
     if not isinstance(node, (ast.Assign, ast.AugAssign)):
         return
+    if isinstance(node, ast.Assign) and _is_path_alias_binding(node, st):
+        return
     tgts = [node.target] if isinstance(node, ast.AugAssign) else node.targets
+    flat_tgts = _flatten_targets(tgts)
+    has_path_target = any(_is_path_target(t, st) for t in flat_tgts)
     lineno = node.lineno
     raw = lines[lineno - 1].strip() if 0 < lineno <= len(lines) else ""
-    if isinstance(node, ast.Assign) and _is_slice_copy(node.value, st):
-        handled.add(node.value)
-        if isinstance(node.value, ast.Subscript):
-            handled.add(node.value.value)
-        elif isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Attribute):
-            handled.add(node.value.func.value)
+    if isinstance(node, ast.Assign) and _is_slice_copy(node.value, st) and not has_path_target:
+        _mark_handled_concat_sources(node.value, st, handled)
+        return
+    if not has_path_target:
         return
     for t in tgts:
-        if (
-            isinstance(t, ast.Name)
-            and t.id not in ("__path__", "submodule_search_locations")
-            and t.id not in st.path_aliases
-        ):
-            continue
-        if is_sys_path_expr(t, st):
-            handled.add(t)
-            if isinstance(t, ast.Subscript):
-                handled.add(t.value)
-            targets = _extract_new_path_targets(node.value, st)
-            for tgt in targets:
-                handled.add(tgt)
-            if isinstance(node.value, ast.BinOp):
-                handled.add(node.value.left)
-                handled.add(node.value.right)
-            edits.append(
-                PathEdit(
-                    lineno,
-                    "sys.path+=" if isinstance(node, ast.AugAssign) else "sys.path=",
-                    tuple(targets),
-                    raw,
-                )
-            )
+        if any(_is_path_target(sub, st) for sub in _flatten_targets([t])):
+            _mark_handled_target(t, st, handled)
+    targets = _extract_assign_rhs_targets(node, st)
+    for tgt in targets:
+        handled.add(tgt)
+    _mark_handled_concat_sources(node.value, st, handled)
+    kind = "sys.path+=" if isinstance(node, ast.AugAssign) else "sys.path="
+    edits.append(PathEdit(lineno, kind, tuple(targets), raw))
+
+
+def _detect_delete_edit(
+    node: ast.AST, st: AliasState, lines: list[str], edits: list[PathEdit], handled: set[ast.AST]
+) -> None:
+    if not isinstance(node, ast.Delete):
+        return
+    lineno = node.lineno
+    raw = lines[lineno - 1].strip() if 0 < lineno <= len(lines) else ""
+    for t in node.targets:
+        if _is_path_target(t, st):
+            _mark_handled_target(t, st, handled)
+            edits.append(PathEdit(lineno, "sys.path.del", (), raw))
 
 
 def find_path_edits(tree: ast.AST, source_text: str) -> list[PathEdit]:
-    """Find all in-process search-path edits; fail closed on unrecognized path refs."""
+    """Find all in-process search-path and guard edits; fail closed on escapes."""
     st = collect_aliases_and_env(tree)
     parents = _build_parents(tree)
     lines = source_text.splitlines()
@@ -201,25 +260,16 @@ def find_path_edits(tree: ast.AST, source_text: str) -> list[PathEdit]:
     for node in ast.walk(tree):
         _detect_call_edit(node, st, lines, edits, handled_nodes)
         _detect_assign_edit(node, st, lines, edits, handled_nodes)
+        _detect_delete_edit(node, st, lines, edits, handled_nodes)
+
+    edits.extend(find_sys_and_escape_edits(tree, st, lines, parents, handled_nodes))
 
     for node in ast.walk(tree):
         if node in handled_nodes:
             continue
-        lineno = getattr(node, "lineno", 0)
-        raw = lines[lineno - 1].strip() if 0 < lineno <= len(lines) else ""
-        if is_sys_path_expr(node, st):
-            p = parents.get(node)
-            if p in handled_nodes or _is_safe_readonly_use(node, parents):
-                continue
-            if isinstance(p, (ast.Subscript, ast.Attribute)) and p.value is node:
-                if p in handled_nodes:
-                    continue
-            if isinstance(
-                p, (ast.IfExp, ast.BoolOp, ast.NamedExpr, ast.List, ast.Tuple, ast.BinOp)
-            ):
-                continue
-            edits.append(PathEdit(lineno, "unresolvable_edit", (), raw))
-        elif _is_unhandled_machinery_ref(node, st):
+        if _is_unhandled_machinery_ref(node, st):
+            lineno = getattr(node, "lineno", 0)
+            raw = lines[lineno - 1].strip() if 0 < lineno <= len(lines) else ""
             edits.append(PathEdit(lineno, "unresolvable_edit", (), raw))
 
     return edits
