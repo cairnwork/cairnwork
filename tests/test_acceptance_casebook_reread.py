@@ -44,6 +44,15 @@ def test_forged_case_line_is_never_eligible(lg, capsys, name, via_repair) -> Non
     assert all(c["line_sha256"] != _read_lines(_book(lg))[0][1][1] for c in eligible)
 
 
+@pytest.mark.parametrize("via_repair", [False, True])
+@pytest.mark.parametrize("kind", ["banana", "", "ACCEPTED_BAD", "refused", None, 1])
+def test_unknown_kind_on_a_refused_origin_is_never_eligible(lg, capsys, kind, via_repair) -> None:  # noqa: F811
+    assert _add(lg, lg["refused"], "a2", "refused_good") == 0
+    _forge(lg, {"kind": kind}, via_repair)  # type: ignore[dict-item]
+    states = [c["state"] for c in _list(lg, capsys, "--notary-db", lg["db"])]
+    assert states[0] != "origin_changed" and states[1] == "origin_changed"
+
+
 def test_honest_case_still_holds(lg, capsys) -> None:  # noqa: F811
     assert _add(lg, lg["cand"], "a1", "accepted_bad") == 0
     assert _add(lg, lg["refused"], "a2", "refused_good") == 0

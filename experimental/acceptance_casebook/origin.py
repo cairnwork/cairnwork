@@ -110,7 +110,9 @@ def origin_still_holds(notary_db: Path, case: dict[str, Any]) -> bool:
         rec, now = read_origin(notary_db, case["task_id"], case["attempt_id"])
         if rec.candidate_commit != case.get("candidate") or rec.base_commit != case.get("base"):
             return False  # the same rule ``add`` applies: the case names this row's commits
-        check_kind(str(case.get("kind")), now)  # and its kind agrees with the row's verdict
+        if case.get("kind") not in ("accepted_bad", "refused_good"):
+            return False  # check_kind reads any other kind as a refusal
+        check_kind(case["kind"], now)  # and its kind agrees with the row's verdict
     except (OriginError, KeyError):
         return False
     return now == case.get("origin")
