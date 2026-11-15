@@ -92,3 +92,30 @@ def test_raw_fd_is_closed_when_fdopen_fails(tmp_path, monkeypatch):
         AgyWorker(agy=str(binary)).run(workdir, task)
     with pytest.raises(OSError):
         os.fstat(fds[0])
+
+
+def test_no_fd_is_left_open_when_env_setup_fails(tmp_path, monkeypatch):
+    binary = tmp_path / "agy"
+    binary.write_text(f"#!{sys.executable}\npass\n")
+    binary.chmod(0o755)
+    workdir = tmp_path / f"attempt-{uuid.uuid4().hex[:8]}"
+    workdir.mkdir()
+    fds = []
+    real_open = os.open
+
+    def capture_open(*args, **kwargs):
+        fd = real_open(*args, **kwargs)
+        fds.append(fd)
+        return fd
+
+    def fail_env():
+        raise MemoryError("env")
+
+    monkeypatch.setattr(agy_module.os, "open", capture_open)
+    monkeypatch.setattr(agy_module, "_kept_env", fail_env)
+    task = SimpleNamespace(title="t", instructions="i", allowed_files=("a.py",))
+    with pytest.raises(MemoryError):
+        AgyWorker(agy=str(binary)).run(workdir, task)
+    for fd in fds:
+        with pytest.raises(OSError):
+            os.fstat(fd)

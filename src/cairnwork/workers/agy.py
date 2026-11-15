@@ -181,10 +181,10 @@ class AgyWorker:
                 "--print-timeout",
                 f"{self.timeout_seconds}s",
             ]
-        log_path = workdir.parent / f"{workdir.name}.agy.log"
-        fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         env = _kept_env() if dispatch is None else _run_env()
         env[ATTEMPT_ENV] = workdir.name
+        log_path = workdir.parent / f"{workdir.name}.agy.log"
+        fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         try:
             log = os.fdopen(fd, "wb")
         except BaseException:
