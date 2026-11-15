@@ -27,6 +27,49 @@ def _ids(verdict: Verdict) -> set[str]:
     return found
 
 
+def _split_top_level(text: str) -> list[str]:
+    """Split on ``::`` outside ``[...]`` so a case id like ``test_y[x::y]`` stays whole."""
+    parts: list[str] = []
+    depth = 0
+    start = 0
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char == "[":
+            depth += 1
+        elif char == "]" and depth:
+            depth -= 1
+        elif depth == 0 and text.startswith("::", index):
+            parts.append(text[start:index])
+            start = index + 2
+            index += 1
+        index += 1
+    parts.append(text[start:])
+    return parts
+
+
+def without_case(nodeid: str, *, all_parts: bool = False) -> str:
+    """Remove pytest case suffixes from name parts while preserving bracketed paths.
+
+    The file boundary is the first ``.py`` so ``::`` in a directory name is not
+    mistaken for pytest's file/name separator; ``::`` inside a case id is not a separator.
+    """
+    py_end = nodeid.find(".py")
+    if py_end >= 0:
+        path, suffix = nodeid[: py_end + 3], nodeid[py_end + 3 :]
+        if not suffix.startswith("::"):
+            return nodeid
+        suffix = suffix[2:]
+    else:
+        path, separator, suffix = nodeid.partition("::")
+        if not separator:
+            return nodeid
+    parts = _split_top_level(suffix)
+    for index in range(0 if all_parts else len(parts) - 1, len(parts)):
+        parts[index] = parts[index].split("[", 1)[0]
+    return path + "::" + "::".join(parts)
+
+
 def _normalise_id(nodeid: str, roots: tuple[str, ...]) -> str:
     prefix, marker, params = nodeid.partition("[")
     if not marker:
@@ -70,16 +113,17 @@ def mask_paths(text: str) -> str:
 
 def unmatched_note(gone, present) -> str:
     """Explain missing parameter variants only when their test function still exists."""
-    functions = {node.split("[", 1)[0] for node in present}
+    functions = {without_case(node) for node in present}
     for node in gone:
-        function, marker, params = node.partition("[")
+        function = without_case(node)
+        _, marker, params = node.rpartition("[")
         if (
             marker
             and function in functions
             and any(
-                other.partition("[")[2] != params
+                other.rpartition("[")[2] != params
                 for other in present
-                if other.startswith(function + "[")
+                if without_case(other) == function
             )
         ):
             return PER_RUN_NOTE

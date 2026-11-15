@@ -5,8 +5,26 @@ import pytest
 
 from cairnwork import p2p_conftest
 from cairnwork.deferred_overlay import TestCommitRejected as _TestCommitRejected
-from cairnwork.node_ids import mask_paths, normalise_run_ids, show, unmatched_note
+from cairnwork.node_ids import mask_paths, normalise_run_ids, show, unmatched_note, without_case
+from cairnwork.p2p_function import _function as function_from_p2p
+from cairnwork.p2p_nodes import _function as function_from_nodes
 from cairnwork.verdict_record import Verdict
+
+
+@pytest.mark.parametrize(
+    ("nodeid", "expected"),
+    [
+        ("dir[1]/test_a.py::test_x[case]", "dir[1]/test_a.py::test_x"),
+        ("a::b/test_c.py::test_d", "a::b/test_c.py::test_d"),
+        ("tests/test_x.py::TestClass::test_x[case]", "tests/test_x.py::TestClass::test_x"),
+        ("tests/t.py::test_y[x::y]", "tests/t.py::test_y"),
+        ("tests/t.py::C[a::b]::test_y[c::d]", "tests/t.py::C[a::b]::test_y"),
+    ],
+)
+def test_shared_node_id_parser_preserves_file_path_and_strips_case(nodeid, expected):
+    assert without_case(nodeid) == expected
+    assert function_from_p2p(nodeid) == expected
+    assert function_from_nodes(nodeid) == expected
 
 
 def test_raw_and_realpath_checkout_spellings_normalise_only_parameter_segment(tmp_path):

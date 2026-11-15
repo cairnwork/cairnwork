@@ -41,7 +41,7 @@ from cairnwork.deferred_tests import (
     test_paths,
     untargeted,
 )
-from cairnwork.node_ids import show, unmatched_note
+from cairnwork.node_ids import show, unmatched_note, without_case
 from cairnwork.p2p import P2PPlan, run_plan
 from cairnwork.p2p_nodes import clean
 from cairnwork.pytest_config import PytestConfigError, gate_import_paths, test_file_rule
@@ -194,12 +194,12 @@ def _check_seed_replay(ctx, result, runs, targets, base, test_commit, is_test) -
 
 def _failed_targets(runs, targets: frozenset[str]) -> frozenset[str]:
     """Failed full node IDs whose unparameterized target is in the deferred test set."""
-    target_prefixes = {target.split("[", 1)[0] for target in targets}
+    target_prefixes = {without_case(target) for target in targets}
     return frozenset(
         node
         for run in runs
         for node, outcome in run.outcomes.items()
-        if outcome == "failed" and node.split("[", 1)[0] in target_prefixes
+        if outcome == "failed" and without_case(node) in target_prefixes
     )
 
 
