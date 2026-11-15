@@ -34,6 +34,7 @@ _DIRECT_WRITERS = frozenset({"NamedTemporaryFile", "FileIO", "copyfileobj"})
 _MODE_TEXT = re.compile(r"[rwaxbtU+]{1,6}")
 _UNBOUND_OPEN = "\0unbound_builtin_open"
 _AMBIGUOUS_MODULE = "\0ambiguous_module"
+_LEGACY_MODULE_ALIAS = "\0legacy_module_alias:"
 _OS_OPEN_PREFIX = "\0os_open:"
 
 
@@ -62,6 +63,12 @@ def _is_write_call(
     receiver = call.func.value if isinstance(call.func, ast.Attribute) else None
     attr = call.func.attr if isinstance(call.func, ast.Attribute) else ""
     module = (modules or {}).get(receiver.id, receiver.id) if isinstance(receiver, ast.Name) else ""
+    if module.startswith(_LEGACY_MODULE_ALIAS):
+        module = module.removeprefix(_LEGACY_MODULE_ALIAS)
+        if attr == "open":
+            if isinstance(receiver, ast.Name) and receiver.id == "os":
+                return True
+            return _mode_is_write(call, path_like=True)
     if module == _AMBIGUOUS_MODULE:
         return True
     if isinstance(receiver, ast.Name) and module in _MODULES:
@@ -113,9 +120,8 @@ def _mode_is_write(
     index = 0 if path_like else mode_index
     mode_arg = call.args[index] if len(call.args) > index else None
     if (
-        mode_arg is None
-        and single_mode_arg
-        and len(call.args) == 1
+        single_mode_arg
+        and call.args
         and isinstance(call.args[0], ast.Constant)
         and isinstance(call.args[0].value, str)
         and _MODE_TEXT.fullmatch(call.args[0].value)
@@ -195,6 +201,7 @@ def _exclusive_imported_names(
         if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module in modules
         for alias in node.names
         if alias.name in names
+        and (alias.asname or alias.name) != "FileIO"
         and _has_only_import_binding(tree, alias.asname or alias.name, node, alias)
     )
 
@@ -231,7 +238,12 @@ def _module_aliases(tree: ast.Module) -> dict[str, str]:
     aliases: dict[str, str] = {}
     for name, imports in bindings.items():
         if len(imports) == 1 and _has_only_import_binding(tree, name, *imports[0][:2]):
-            aliases[name] = imports[0][2]
+            node, alias, module = imports[0]
+            aliases[name] = (
+                _LEGACY_MODULE_ALIAS + module
+                if alias.asname is not None and alias.asname != module
+                else module
+            )
         else:
             aliases[name] = _AMBIGUOUS_MODULE
     return aliases

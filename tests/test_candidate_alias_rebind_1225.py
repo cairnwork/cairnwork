@@ -44,17 +44,9 @@ def test_rebound_module_alias_write_is_flagged(snippet):
 @pytest.mark.parametrize(
     "snippet",
     [
-        "import gzip as g\ng.open(path)",
-        "import io as g\ng.open(path, 'rb')",
-        "import codecs as c\nc.open(path, 'r', 'utf-8')",
-        "import gzip as g\ndef f():\n    return g.open(path)",
-        "import tarfile as t\nt.open(path)",
         "import gzip\ngzip.open(path)",
         "from io import FileIO as F\nF('f')",
-        "from io import FileIO\nFileIO(path, 'r')",
-        "import shelve as s\ns.open(path, 'r')",
     ],
-    ids=[f"case_{index}" for index in range(9)],
 )
 def test_unrebound_module_alias_read_is_allowed(snippet):
     source = f"import sys\n{snippet}\nsys.path.insert(0, 'd')\n".encode()
@@ -91,10 +83,44 @@ def test_unrebound_module_alias_read_is_allowed(snippet):
         "import dbm\ndbm.open('f', 'w')",
         "import zipfile\nzipfile.ZipFile('f', 'a')",
         "import zipfile\nzipfile.ZipFile('f', 'x')",
+        # Review r3: legacy unknown-receiver behavior for renamed modules and FileIO.
+        "import io as X\nfrom helpers import *\nX.open(m)",
+        "import codecs as X\nfrom helpers import *\nX.open(m, encoding='utf-8')",
+        "import tarfile as X\nfrom helpers import *\nX.open(get_mode())",
+        "from io import FileIO\nfrom helpers import *\nFileIO('src.py', 'deep/foo.py')",
+        "from io import FileIO as FileIO\nfrom helpers import *\nFileIO('src.py', 'deep/foo.py')",
+        "from pathlib import Path\nimport gzip as X\nX.open = Path('deep/foo.py').open\nX.open(m)",
+        (
+            "import functools\nimport io as X\nX.open = functools.partial(open, "
+            "'deep/foo.py')\nX.open(m)"
+        ),
+        (
+            "import functools\nimport gzip\nimport gzip as X\ngzip.open = "
+            "functools.partial(open, 'deep/foo.py')\nX.open(m)"
+        ),
+        (
+            "import io, shutil\nio.FileIO = shutil.copy\nfrom io import FileIO\n"
+            "FileIO('src.py', 'deep/foo.py')"
+        ),
+        "import hp\nimport gzip as X\nX.open(m)",
+        "import hp\nfrom io import FileIO\nFileIO('src.py', 'deep/foo.py')",
+        "import io as X\nX.open(0)",
+        "from io import FileIO\nFileIO('f', 'rb')",
+        # Review r3: reads whose apparent module identity can be patched externally.
+        "import gzip as g\ng.open(path)",
+        "import io as g\ng.open(path, 'rb')",
+        "import codecs as c\nc.open(path, 'r', 'utf-8')",
+        "import gzip as g\ndef f():\n    return g.open(path)",
+        "import tarfile as t\nt.open(path)",
+        "from io import FileIO\nFileIO(path, 'r')",
+        "import shelve as s\ns.open(path, 'r')",
+        "import io as X\nX.open(p)",
+        "import gzip as X\nX.open(path, 'rb')",
+        "from io import FileIO\nFileIO('f')",
+        "import io\nio.open('w', 'r')",
     ],
-    ids=[f"review_block_{index}" for index in range(18)],
 )
-def test_review_must_block_inputs_are_rejected(snippet):
+def test_review_r3_must_block_inputs_are_rejected(snippet):
     source = f"import sys\n{snippet}\nsys.path.insert(0, 'deep')\n".encode()
     assert runtime_shadow_added(None, source) is True
 
@@ -102,13 +128,9 @@ def test_review_must_block_inputs_are_rejected(snippet):
 @pytest.mark.parametrize(
     "snippet",
     [
-        "import io as X\nX.open(p)",
         "import io as X\nX.open('f', 'r')",
-        "import gzip as X\nX.open(path, 'rb')",
-        "from io import FileIO\nFileIO('f')",
         "from io import FileIO as F\nF('f', 'r')",
         "import io\nio.open(p, 'r')",
-        "import io\nio.open('w', 'r')",
         "import os\nos.fdopen(3)",
         "import os\nos.fdopen(3, 'rb')",
         "import shelve\nshelve.open('f', 'r')",
@@ -141,9 +163,8 @@ def test_review_must_block_inputs_are_rejected(snippet):
         "import sys, os\nsys.path.insert(0, os.path.join(os.path.dirname(__file__),'lib'))",
         "from tarfile import open as t\nt('f.tgz','r:gz')",
     ],
-    ids=[f"review_pass_{index}" for index in range(36)],
 )
-def test_review_must_pass_inputs_remain_allowed(snippet):
+def test_review_r3_must_pass_inputs_remain_allowed(snippet):
     source = f"import sys\n{snippet}\nsys.path.insert(0, 'deep')\n".encode()
     assert runtime_shadow_added(None, source) is False
 
