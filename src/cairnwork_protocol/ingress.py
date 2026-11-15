@@ -166,6 +166,23 @@ class _DeadlineHandler(BaseHTTPRequestHandler):
             _log.info("ingress: client disconnected early")
 
 
+def _drain_body(handler: _DeadlineHandler) -> None:
+    """Read a bounded, short-lived part of the unread body so the refusal is not met by RST."""
+    values = handler.headers.get_all("Content-Length", [])
+    if len(values) != 1:
+        return
+    text = values[0].strip()
+    if not text.isascii() or not text.isdecimal():
+        return
+    try:
+        length = min(int(text), MAX_BODY_BYTES)
+        if length:
+            handler._deadline = min(handler._deadline, time.monotonic() + DRAIN_TIMEOUT_S)
+            handler.rfile.read(length)
+    except (OSError, OverflowError, TimeoutError, ValueError):
+        return  # the refusal stays fixed and the connection is closed even on a stalled body
+
+
 def _make_handler(
     token: str, routes: Mapping[str, Route], timeout: float
 ) -> type[BaseHTTPRequestHandler]:
@@ -195,22 +212,6 @@ def _make_handler(
             if self.command != "HEAD":
                 self.wfile.write(data)
 
-        def _drain_body(self) -> None:
-            values = self.headers.get_all("Content-Length", [])
-            if len(values) != 1:
-                return
-            text = values[0].strip()
-            if not text.isascii() or not text.isdecimal():
-                return
-            try:
-                length = min(int(text), MAX_BODY_BYTES)
-                if length:
-                    self._deadline = min(self._deadline, time.monotonic() + DRAIN_TIMEOUT_S)
-                    self.rfile.read(length)
-            except (OSError, OverflowError, TimeoutError, ValueError):
-                # Refusal remains fixed and the connection is closed even on a stalled body.
-                return
-
         def send_error(self, code: int, message: str | None = None, explain: str | None = None):
             # Stock pages are HTML and echo request text; every error is a fixed JSON code.
             self.close_connection = True
@@ -236,7 +237,7 @@ def _make_handler(
                 status, payload = route(read_body(self.headers, self.rfile))
             except IngressError as exc:
                 self.close_connection = True  # an unread body would poison keep-alive
-                self._drain_body()
+                _drain_body(self)
                 self._send(exc.status, {"error": exc.code})
                 return
             except Exception:  # noqa: BLE001 - fixed answer, no exception text
