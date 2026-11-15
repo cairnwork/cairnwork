@@ -128,6 +128,7 @@ def test_unparseable_new_raises_value_error():
     "call",
     [
         "gzip.open('f.gz', 'w')",
+        "gzip.open('w')",
         "codecs.open('f', 'w')",
         "bz2.open(path, 'a')",
         "g.open('data/raw.gz', 'wb')",
@@ -147,13 +148,68 @@ def test_runtime_shadow_added_open_write_through_module_and_path_receivers(call)
     [
         "gzip.open('data/raw.gz')",
         "gzip.open(path, 'rb')",
-        "gzip.open('w')",
         "Path('f').open('r', 1)",
     ],
 )
 def test_runtime_shadow_added_open_read_through_module_and_path_receivers(call):
     src = f"import sys\n{call}\nsys.path.insert(0, 'd')\n".encode()
     assert runtime_shadow_added(None, src) is False
+
+
+@pytest.mark.parametrize(
+    ("snippet", "expected"),
+    [
+        ("from pathlib import Path\nio = Path('m.py')\nio.open('w')", True),
+        ("from pathlib import Path\ngzip = Path('m.py')\ngzip.open('w')", True),
+        (
+            "from pathlib import Path\n"
+            "builtins = Path('m.py')\nbuiltins.open('a', encoding='utf-8')",
+            True,
+        ),
+        ("from pathlib import Path\ncodecs = Path('m.py')\ncodecs.open('x')", True),
+        ("from pathlib import Path\ntarfile = Path('m.py')\ntarfile.open('w+')", True),
+        ("from pathlib import Path\nbz2 = Path('m.py')\nbz2.open('wb')", True),
+        ("from pathlib import Path\nlzma = Path('m.py')\nlzma.open('w')", True),
+        ("def f(io):\n    io.open('w')", True),
+        ("for gzip in paths:\n    gzip.open('a', encoding='utf8')", True),
+        ("gzip.open('w')", True),
+        (
+            "import os\nif False:\n    import io as os\n"
+            "os.open('m.py', flags=os.O_WRONLY | os.O_CREAT)",
+            True,
+        ),
+        (
+            "import os\ntry:\n    pass\nexcept ImportError:\n    import gzip as os\n"
+            "os.open('m.py', flags=os.O_WRONLY | os.O_CREAT)",
+            True,
+        ),
+        (
+            "import os\nif False:\n    import zipfile as os\n"
+            "os.open('m.py', flags=os.O_WRONLY | os.O_CREAT)",
+            True,
+        ),
+        ("import io as os\nos.open('m.py', flags=0)", True),
+        ("import io\nb = io\nb.open(0, 'w')", True),
+        ("p.open(0, 'w')", True),
+        ("open('f', 0)", True),
+        ("open('f', False)", True),
+        ("Path('f').open(0)", True),
+        ("Path('f').open(False)", True),
+        ("open('w')", False),
+        ("open('f')", False),
+        ("import gzip\ngzip.open('data/raw.gz')", False),
+        ("import gzip\ngzip.open(path, 'rb')", False),
+        ("Path('f').open('r', 1)", False),
+        ("from tarfile import open as t\nt('f.tgz','r:gz')", False),
+        ("import shelve\nshelve.open('f', flag='r')", False),
+        ("from io import FileIO as F\nF('f')", False),
+        ("from zipfile import ZipFile as Z\nZ('f','r')", False),
+        ("from webbrowser import open as emit\nemit('u')", False),
+    ],
+)
+def test_runtime_shadow_added_review_cases(snippet, expected):
+    src = f"import sys\n{snippet}\nsys.path.insert(0, 'd')\n".encode()
+    assert runtime_shadow_added(None, src) is expected
 
 
 def test_runtime_shadow_added_in_memory_write_is_an_accepted_false_refusal():

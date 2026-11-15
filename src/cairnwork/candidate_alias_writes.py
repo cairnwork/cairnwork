@@ -34,6 +34,8 @@ _MODULES = frozenset(
 _DIRECT_WRITERS = frozenset({"NamedTemporaryFile", "FileIO", "copyfileobj"})
 _MODE_TEXT = re.compile(r"[rwaxbtU+]{1,6}")
 _UNBOUND_OPEN = "\0unbound_builtin_open"
+_AMBIGUOUS_MODULE = "\0ambiguous_module"
+_OS_OPEN_PREFIX = "\0os_open:"
 
 
 def _is_write_call(
@@ -54,17 +56,25 @@ def _is_write_call(
         if call.func.id == "FileIO" or call.func.id in fileios:
             return _mode_is_write(call)
         return True
+    if isinstance(call.func, ast.Name) and _OS_OPEN_PREFIX + call.func.id in openers:
+        return _mode_is_write(call, default_write=True, flag_mode=True)
     if isinstance(call.func, ast.Name) and call.func.id in flag_openers:
         return _mode_is_write(call, default_write=True, flag_mode=True)
     receiver = call.func.value if isinstance(call.func, ast.Attribute) else None
     attr = call.func.attr if isinstance(call.func, ast.Attribute) else ""
     module = (modules or {}).get(receiver.id, receiver.id) if isinstance(receiver, ast.Name) else ""
+    if module == _AMBIGUOUS_MODULE:
+        return True
     if isinstance(receiver, ast.Name) and module in _MODULES:
         if attr in {"BZ2File", "LZMAFile", "GzipFile", "ZipFile"}:
             return _mode_is_write(call, module == "zipfile")
         if module in {"shelve", "dbm"} and attr == "open":
             return _mode_is_write(call, default_write=True, mode_index=1, flag_mode=True)
-    is_os_open = isinstance(receiver, ast.Name) and module == "os" and attr == "open"
+    is_os_open = (
+        isinstance(receiver, ast.Name)
+        and (receiver.id == "os" or module == "os")
+        and attr == "open"
+    )
     if is_os_open:
         return True
     if isinstance(receiver, ast.Name) and module == "os" and attr == "fdopen":
@@ -79,6 +89,10 @@ def _is_write_call(
         plain_builtin_open = isinstance(call.func, ast.Name) and call.func.id == "open"
         use_single_mode = isinstance(call.func, ast.Name) and not (
             plain_builtin_open and _UNBOUND_OPEN in openers
+        )
+        use_single_mode = use_single_mode or (
+            isinstance(receiver, ast.Name)
+            and module in {"io", "gzip", "builtins", "codecs", "tarfile", "bz2", "lzma"}
         )
         return _mode_is_write(call, path_like=path_like, single_mode_arg=use_single_mode)
     return False
@@ -106,7 +120,6 @@ def _mode_is_write(
         mode_arg is None
         and single_mode_arg
         and len(call.args) == 1
-        and not call.keywords
         and isinstance(call.args[0], ast.Constant)
         and isinstance(call.args[0].value, str)
         and _MODE_TEXT.fullmatch(call.args[0].value)
@@ -135,10 +148,12 @@ def _mode_value_is_write(
         return not isinstance(value, str) or value in {"w", "x", "a"}
     if flag_mode:
         return not isinstance(value, str) or value != "r"
+    if isinstance(value, bool):
+        return not flag_mode or value
     if not isinstance(value, (str, int)):
         return True
     if isinstance(value, int):
-        return value != 0 or default_write
+        return value != 0 if flag_mode else True
     return any(ch in value for ch in ("w", "a", "x", "+"))
 
 
@@ -187,16 +202,33 @@ def _imported_openers(tree: ast.Module) -> frozenset[str]:
     """File-global aliases of file openers; control flow is deliberately ignored."""
     names = frozenset({"open", "BZ2File", "LZMAFile", "GzipFile", "ZipFile", "fdopen"})
     imported = _imported_names(tree, names, _MODULES | {"shelve", "dbm"})
-    return imported | ({_UNBOUND_OPEN} if not _module_binds_name(tree, "open") else set())
+    os_open_aliases = {
+        alias.asname or alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module == "os"
+        for alias in node.names
+        if alias.name == "open"
+    }
+    other_openers = _imported_names(tree, names, (_MODULES | {"shelve", "dbm"}) - {"os"})
+    exclusive_os_openers = os_open_aliases - other_openers
+    return (
+        imported
+        | {_OS_OPEN_PREFIX + name for name in exclusive_os_openers}
+        | ({_UNBOUND_OPEN} if not _module_binds_name(tree, "open") else set())
+    )
 
 
 def _module_aliases(tree: ast.Module) -> dict[str, str]:
+    bindings: dict[str, set[str]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Import):
+            continue
+        for alias in node.names:
+            if alias.name in _MODULES:
+                bindings.setdefault(alias.asname or alias.name, set()).add(alias.name)
     return {
-        alias.asname or alias.name: alias.name
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Import)
-        for alias in node.names
-        if alias.name in _MODULES
+        name: next(iter(modules)) if len(modules) == 1 else _AMBIGUOUS_MODULE
+        for name, modules in bindings.items()
     }
 
 
