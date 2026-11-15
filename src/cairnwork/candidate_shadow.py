@@ -23,25 +23,12 @@ def find_shadow_file(
     test_commit: str | None = None,
     changed: dict[str, str] | None = None,
 ) -> str | None:
-    """Return the first nested file the candidate ``changed`` (path -> ADD/MODIFY) that can shadow
-    an imported module; base content is trusted, so unchanged files never count.
+    """Return the first changed nested file that can shadow an imported module.
 
-    A changed nested file named like a standard or pytest module counts. A name some tree or test
-    file imports (every dotted part, relative imports, import_module/__import__/importorskip
-    strings, so a ``__path__`` redirect of ``pkg.helper`` is seen) counts when the file was added,
-    another file has the same module name, or it is a modified unique module outside an import root.
-    A modified module is already importable (not a shadow) if its root/parent directory is src or
-    lib, contains a pre-existing __init__.py with no other-directory top-level importer of that
-    name, or shares a root/parent directory with an unchanged bare top-level importer. Names compare
-    case-insensitively, directories case-exactly; an unparseable ``.py`` the candidate changed fails
-    closed, any other one imports nothing.
-
-    Accepted false refusal: a modified, uniquely named module in a non-conventional import root
-    (say app/foo.py made importable by a pytest pythonpath setting) that some other-directory test
-    imports is refused, but only when a changed file also carries a redirect signal.
-
-    Accepted residual: rule (c) exempts a modified module when an unchanged same-directory file
-    bare-imports the name, even if other tests rely on a redirect to bare-import it."""
+    Base content is trusted. Imported names include dotted and relative imports, plus dynamic
+    import calls in test files. Added, duplicate, or uniquely named modules outside import roots
+    may shadow imports; existing packages and import roots are handled by ``_is_shadow``.
+    Source-loader residuals are documented in ``candidate_sys_path.py``."""
     commits = tuple(
         dict.fromkeys((candidate,) if test_commit is None else (candidate, test_commit))
     )
@@ -119,7 +106,7 @@ def _is_shadow(
     return bool(
         module in always
         or (
-            module in imported
+            (module in imported or "*" in imported)
             and (
                 added
                 or counts[module] > 1
@@ -217,11 +204,29 @@ def _parse_imports(raw: bytes, path: str) -> set[str]:
             names.update(alias.name for alias in node.names if alias.name != "*")
         elif isinstance(node, ast.Call) and _call_name(node.func) in _IMPORT_CALLS:
             named = (k.value for k in node.keywords if k.arg in {"name", "modname"})
-            for arg in (*node.args[:1], *named):  # import_module("x.y"), __import__, importorskip
+            args = (*node.args[:1], *named)
+            unknown = any(k.arg is None for k in node.keywords) or not args
+            for arg in args:  # import_module("x.y"), __import__, importorskip
                 if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
                     names.update(arg.value.lstrip(".").split("."))
+                elif _is_test_file(path):
+                    unknown = True
+            if unknown and _is_test_file(path):
+                names.add("*")  # a dynamic test import fails closed for every nested file
     names.discard("")
     return names
+
+
+def _is_test_file(path: str) -> bool:
+    """Whether a source path follows the repository's conventional test-file names."""
+    parts = path.split("/")
+    leaf = parts[-1]
+    return (
+        any(part in {"test", "tests"} for part in parts[:-1])
+        or leaf.startswith("test_")
+        or leaf.endswith("_test.py")
+        or leaf == "conftest.py"
+    )
 
 
 def _parse_top_level_imports(raw: bytes, path: str) -> set[str]:

@@ -25,7 +25,10 @@ file write, so ``sys.stdout.write()`` and custom stream or network writers count
 arguments, or a non-literal mode) counts as a write. Each applies only next to a path edit that
 can shadow an imported module. Both fail closed because the receiver and the mode are
 rebindable, so a syntactic exception would trust candidate-controlled values. Their false-refusal
-rate on correct candidates is not measured here; see Issue #1189.
+rate on correct candidates is not measured here; see Issue #1189. A test file with any
+non-literal import call makes nested-module edits fail closed. Non-literal imports in
+source/library loaders (including ``src/``) are not collected, so dynamically loaded nested
+modules there remain a residual.
 Write-side residuals (#1178): subprocess/shell/archive writes, ``open`` reached by alias or
 ``functools.partial``, attribute forms of FileIO/copyfileobj/NamedTemporaryFile, and
 ``from sys import path`` or ``os.sys.path`` as the path edit.
