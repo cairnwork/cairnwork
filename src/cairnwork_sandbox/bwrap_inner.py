@@ -39,6 +39,7 @@ SYSTEM_PREFIXES = ("/usr/", "/nix/store/", "/gnu/store/", "/snap/")
 ETC = "/etc/"
 DANGLING_NOTE = "dangling credential links skipped, outside every read and write root: "
 DEPTH_NOTE = f"credential directories not scanned for links below depth {SCAN_DEPTH}: "
+VANISHED_NOTE = "credential subdirectories that vanished during the scan, skipped: "
 _NULL = ["--ro-bind", "/dev/null"]
 
 
@@ -60,13 +61,14 @@ def inner_link_masks(
     dangling target under one is refused (by ``mask``), any other is skipped and counted."""
     dirs, files = _hidden(masked)
     flags: list[str] = []
-    skipped = deep = 0
+    skipped = deep = vanished = 0
     for cred_dir in cred_dirs:
         if not os.path.isdir(cred_dir):
             continue
         base = os.path.realpath(cred_dir)
-        links, unscanned = _links_in(base)
+        links, unscanned, gone = _links_in(base)
         deep += unscanned
+        vanished += gone
         for link in links:
             real = os.path.realpath(link)
             if _covered(real, {base}) or _covered(real, dirs) or real in files:
@@ -89,7 +91,9 @@ def inner_link_masks(
             (dirs if added[0] == "--tmpfs" else files).add(added[-1])
             flags += added
     notes = [f"{DANGLING_NOTE}{skipped}"] if skipped else []
-    return flags, tuple(notes + ([f"{DEPTH_NOTE}{deep}"] if deep else []))
+    notes.extend((f"{DEPTH_NOTE}{deep}",) if deep else ())
+    notes.extend((f"{VANISHED_NOTE}{vanished}",) if vanished else ())
+    return flags, tuple(notes)
 
 
 def _stat_ok(link: str) -> bool:
@@ -126,18 +130,27 @@ def _covered(real: str, dirs: set[str]) -> bool:
         current = parent
 
 
-def _links_in(base: str) -> tuple[list[str], int]:
+def _links_in(base: str) -> tuple[list[str], int, int]:
     """Every symlink up to ``SCAN_DEPTH`` levels below ``base``, without following links, and the
-    number of directories at that depth left unscanned. Refused past ``SCAN_LIMIT`` entries or
+    number of directories at that depth left unscanned, and of subdirectories that vanished mid-scan
+    (skipped, counted). Refused past ``SCAN_LIMIT`` entries or
     when a directory cannot be scanned."""
     links: list[str] = []
-    seen = unscanned = 0
+    seen = unscanned = vanished = 0
     stack = [(base, 0)]
     while stack:
         current, depth = stack.pop()
         try:
             with os.scandir(current) as found:
                 entries = [(e.path, e.is_symlink(), e.is_dir(follow_symlinks=False)) for e in found]
+        except (FileNotFoundError, NotADirectoryError) as err:
+            if current != base:
+                vanished += 1
+                continue
+            raise SandboxError(
+                f"credential directory {base!r}: cannot scan {current!r} for links"
+                f" ({err.strerror}); a link left unscanned could leave its target readable"
+            ) from err
         except OSError as err:
             raise SandboxError(
                 f"credential directory {base!r}: cannot scan {current!r} for links"
@@ -156,4 +169,4 @@ def _links_in(base: str) -> tuple[list[str], int]:
                 stack.append((path, depth + 1))
             elif is_dir:
                 unscanned += 1
-    return links, unscanned
+    return links, unscanned, vanished
