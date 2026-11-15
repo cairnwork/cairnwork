@@ -26,6 +26,8 @@ from typing import Any, cast
 MAX_BODY_BYTES = 1 << 20
 MAX_LENGTH_DIGITS = 8
 REQUEST_TIMEOUT_S = 10.0
+MAX_TIMEOUT_S = 3600
+DRAIN_TIMEOUT_S = 1.0  # an early refusal never waits longer than this for the unread body
 
 _log = logging.getLogger("cairnwork.ingress")
 
@@ -61,7 +63,16 @@ def check_bind(host: str, port: int) -> None:
     if not isinstance(port, int) or isinstance(port, bool) or not 0 <= port <= 65535:
         raise IngressError("INGRESS_BIND_PORT_INVALID")
     if host == "localhost":
-        return
+        try:
+            addresses = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+            loopback = bool(addresses) and all(
+                ipaddress.ip_address(address[4][0]).is_loopback for address in addresses
+            )
+        except (OSError, ValueError):
+            loopback = False
+        if loopback:
+            return
+        raise IngressError("INGRESS_BIND_NOT_LOOPBACK")
     try:
         loopback = ipaddress.ip_address(host).is_loopback
     except ValueError:
@@ -155,6 +166,26 @@ class _DeadlineHandler(BaseHTTPRequestHandler):
             _log.info("ingress: client disconnected early")
 
 
+def _drain_body(handler: _DeadlineHandler) -> None:
+    """Read a bounded, short-lived part of the unread body so the refusal is not met by RST.
+
+    Bounded on purpose (MAX_BODY_BYTES, DRAIN_TIMEOUT_S): an upload larger than that can still
+    see a reset, because reading without limit would let a slow client hold the thread (#504)."""
+    values = handler.headers.get_all("Content-Length", [])
+    if len(values) != 1:
+        return
+    text = values[0].strip()
+    if not text.isascii() or not text.isdecimal():
+        return
+    try:
+        length = min(int(text), MAX_BODY_BYTES)
+        if length:
+            handler._deadline = min(handler._deadline, time.monotonic() + DRAIN_TIMEOUT_S)
+            handler.rfile.read(length)
+    except (OSError, OverflowError, TimeoutError, ValueError):
+        return  # the refusal stays fixed and the connection is closed even on a stalled body
+
+
 def _make_handler(
     token: str, routes: Mapping[str, Route], timeout: float
 ) -> type[BaseHTTPRequestHandler]:
@@ -193,6 +224,7 @@ def _make_handler(
                 self._send(code, {"error": _HTTP_CODES.get(code, "INGRESS_HTTP_ERROR")})
 
         def do_POST(self) -> None:
+            consumed = False
             try:
                 if len(self.headers.get_all("Host", [])) > 1:
                     raise IngressError("INGRESS_HOST_DUPLICATE")
@@ -206,9 +238,13 @@ def _make_handler(
                 route = table.get(self.path)
                 if route is None:
                     raise IngressError("INGRESS_NOT_FOUND", 404)
-                status, payload = route(read_body(self.headers, self.rfile))
+                body = read_body(self.headers, self.rfile)
+                consumed = True  # a route's own refusal must not wait for more body
+                status, payload = route(body)
             except IngressError as exc:
                 self.close_connection = True  # an unread body would poison keep-alive
+                if not consumed:
+                    _drain_body(self)
                 self._send(exc.status, {"error": exc.code})
                 return
             except Exception:  # noqa: BLE001 - fixed answer, no exception text
@@ -233,12 +269,16 @@ def serve(
 ) -> ThreadingHTTPServer:
     """Build (not start) a loopback-only server; refuses any non-loopback ``host``."""
     check_bind(host, port)
-    if (
-        not isinstance(timeout, (int, float))
-        or isinstance(timeout, bool)
-        or not math.isfinite(timeout)
-        or timeout <= 0
-    ):
+    try:
+        valid_timeout = (
+            isinstance(timeout, (int, float))
+            and not isinstance(timeout, bool)
+            and math.isfinite(timeout)
+            and 0 < timeout <= MAX_TIMEOUT_S
+        )
+    except OverflowError:
+        valid_timeout = False
+    if not valid_timeout:
         raise IngressError("INGRESS_TIMEOUT_INVALID")
     handler = _make_handler(token, routes, timeout)
 
@@ -246,4 +286,5 @@ def serve(
         address_family = socket.AF_INET6 if ":" in host else socket.AF_INET
         daemon_threads = True
 
-    return Server((host, port), handler)
+    # the checked name is not resolved again at bind time
+    return Server(("127.0.0.1" if host == "localhost" else host, port), handler)
