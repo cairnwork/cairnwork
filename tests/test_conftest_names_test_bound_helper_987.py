@@ -16,16 +16,20 @@ TAKEN = {  # name: test module text
     "bound through an alias": "from helpers import verify_token as v\n\ntest_login = v\n",
     "imported under a test name": "from helpers import verify_token as test_login\n",
     "bound next to other names": (
-        "from helpers import verify_token\n\nX = 1\ntest_a, test_b = verify_token, 2\n"),
+        "from helpers import verify_token\n\nX = 1\ntest_a, test_b = verify_token, 2\n"
+    ),
 }
 FREE = {  # name: test module text
     "imported, not bound under a test name": (
-        "from helpers import verify_token\n\n\ndef test_login():\n    assert verify_token(1)\n"),
+        "from helpers import verify_token\n\n\ndef test_login():\n    assert verify_token(1)\n"
+    ),
     "bound under a non-test name": "from helpers import verify_token\n\nchecker = verify_token\n",
     "imported, called in a test": (
-        "from helpers import verify_token\n\n\ndef test_x():\n    test_y = verify_token(1)\n"),
+        "from helpers import verify_token\n\n\ndef test_x():\n    test_y = verify_token(1)\n"
+    ),
     "a test name bound to another name": (
-        "from helpers import verify_token\n\nother = 1\ntest_login = other\n"),
+        "from helpers import verify_token\n\nother = 1\ntest_login = other\n"
+    ),
 }
 
 
@@ -49,7 +53,11 @@ def test_only_the_bound_helper_parameters_are_taken(repo):
 
 
 def test_a_relative_import_is_followed(repo):
-    base = {MODULE: "from ..helpers import verify_token\n\ntest_login = verify_token\n",
-            "tests/__init__.py": "", "tests/sub/__init__.py": "", "tests/helpers.py": HELPER}
+    base = {
+        MODULE: "from ..helpers import verify_token\n\ntest_login = verify_token\n",
+        "tests/__init__.py": "",
+        "tests/sub/__init__.py": "",
+        "tests/helpers.py": HELPER,
+    }
     with pytest.raises(dt.TestCommitRejected, match=r"base test requests \(dep\)"):
         _check(repo, {CONFTEST: FIXTURE.format("dep")}, path=CONFTEST, base_files=base)

@@ -17,8 +17,9 @@ The base files are read in one ``git cat-file --batch``; more than MAX_FILES of 
 base file that does not parse counts every identifier in it (``_parse``). What the base modules
 these conftests import (``from M import n``, ``pytest_plugins``) request counts too, followed
 through re-exports (``_imported``, #982 item 4). Not seen: a name a third-party plugin's fixture
-requests internally, the ini ``usefixtures`` option, a module a test module imports (except a helper it binds under a test name, #987), and a module
-imported by name at run time (``importlib``).
+requests internally, the ini ``usefixtures`` option, a module a test module imports (except a
+helper it binds under a test name, #987), and a module imported by name at run time
+(``importlib``).
 """
 
 from __future__ import annotations
@@ -222,7 +223,8 @@ def _test_named_imports(file: str, tree: ast.Module) -> list[tuple[str, str]]:
             isinstance(n, ast.Name) and n.id.startswith("test")
             for t in node.targets for n in ast.walk(t)
         ):  # fmt: skip
-            parts = node.value.elts if isinstance(node.value, ast.Tuple | ast.List) else [node.value]
+            val = node.value
+            parts = val.elts if isinstance(val, ast.Tuple | ast.List) else [val]
             used = {n.id for n in parts if isinstance(n, ast.Name)}
             out += [imports[u] for u in sorted(used) if u in imports]
     return out
