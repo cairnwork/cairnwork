@@ -156,3 +156,31 @@ def test_each_supported_dynamic_import_call_marks_unknown_import(call):
     raw = f"importlib\nname = 'foo'\n{call}\n".encode()
 
     assert "*" in candidate_shadow._parse_imports(raw, "test_dynamic.py")
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "conftest.py",
+        "sub/conftest.py",
+        "test/x.py",
+        "tests/unit/helper.py",
+        "tests/__init__.py",
+        "test_root.py",
+        "pkg/foo_test.py",
+    ],
+)
+def test_dynamic_import_marks_unknown_in_every_test_path(path):
+    assert "*" in candidate_shadow._parse_imports(
+        b"import importlib\nimportlib.import_module(name)\n", path
+    )
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["pkg/loader.py", "src/app/plugins.py", "testing/helpers.py", "tools/build.py", "tests.py"],
+)
+def test_dynamic_import_outside_test_paths_marks_nothing(path):
+    assert "*" not in candidate_shadow._parse_imports(
+        b"import importlib\nimportlib.import_module(name)\n", path
+    )

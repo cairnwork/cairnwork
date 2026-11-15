@@ -23,29 +23,12 @@ def find_shadow_file(
     test_commit: str | None = None,
     changed: dict[str, str] | None = None,
 ) -> str | None:
-    """Return the first nested file the candidate ``changed`` (path -> ADD/MODIFY) that can shadow
-    an imported module; base content is trusted, so unchanged files never count.
+    """Return the first changed nested file that can shadow an imported module.
 
-    A changed nested file named like a standard or pytest module counts. A name some tree or test
-    file imports (every dotted part, relative imports, import_module/__import__/importorskip
-    strings, so a ``__path__`` redirect of ``pkg.helper`` is seen) counts when the file was added,
-    another file has the same module name, or it is a modified unique module outside an import root.
-    A modified module is already importable (not a shadow) if its root/parent directory is src or
-    lib, contains a pre-existing __init__.py with no other-directory top-level importer of that
-    name, or shares a root/parent directory with an unchanged bare top-level importer. Names compare
-    case-insensitively, directories case-exactly; an unparseable ``.py`` the candidate changed fails
-    closed, any other one imports nothing.
-
-    Accepted false refusals: a test file with any non-literal import call makes nested-module
-    edits fail closed; a modified, uniquely named module in a non-conventional import root (say
-    app/foo.py made importable by a pytest pythonpath setting) that some other-directory test
-    imports is refused, but only when a changed file also carries a redirect signal.
-
-    Residual: non-literal imports in library/source loaders (including ``src/``) are not collected,
-    so a nested module loaded dynamically outside tests can be missed.
-
-    Accepted residual: rule (c) exempts a modified module when an unchanged same-directory file
-    bare-imports the name, even if other tests rely on a redirect to bare-import it."""
+    Base content is trusted. Imported names include dotted and relative imports, plus dynamic
+    import calls in test files. Added, duplicate, or uniquely named modules outside import roots
+    may shadow imports; existing packages and import roots are handled by ``_is_shadow``.
+    Source-loader residuals are documented in ``candidate_sys_path.py``."""
     commits = tuple(
         dict.fromkeys((candidate,) if test_commit is None else (candidate, test_commit))
     )
