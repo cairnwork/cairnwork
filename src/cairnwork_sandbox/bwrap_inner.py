@@ -77,10 +77,9 @@ def inner_link_masks(
                 continue
             if not owner and not account_may_traverse(os.path.dirname(real)):
                 continue
-            if not _stat_ok(link):
-                if not _covered(real, set(roots)):
-                    skipped += 1
-                    continue
+            if not _stat_ok(link) and not _covered(real, set(roots)):
+                skipped += 1
+                continue
             if real.startswith(ETC) and os.path.isdir(real):
                 raise SandboxError(
                     f"credential link {link!r} points to the /etc directory {real!r}; a mask there"
@@ -90,10 +89,8 @@ def inner_link_masks(
             added = mask(link)
             (dirs if added[0] == "--tmpfs" else files).add(added[-1])
             flags += added
-    notes = [f"{DANGLING_NOTE}{skipped}"] if skipped else []
-    notes.extend((f"{DEPTH_NOTE}{deep}",) if deep else ())
-    notes.extend((f"{VANISHED_NOTE}{vanished}",) if vanished else ())
-    return flags, tuple(notes)
+    counts = ((DANGLING_NOTE, skipped), (DEPTH_NOTE, deep), (VANISHED_NOTE, vanished))
+    return flags, tuple(f"{note}{n}" for note, n in counts if n)
 
 
 def _stat_ok(link: str) -> bool:
@@ -132,33 +129,35 @@ def _covered(real: str, dirs: set[str]) -> bool:
 
 def _links_in(base: str) -> tuple[list[str], int, int]:
     """Every symlink up to ``SCAN_DEPTH`` levels below ``base``, without following links, and the
-    number of directories at that depth left unscanned, and of subdirectories that vanished mid-scan
-    (skipped, counted). Refused past ``SCAN_LIMIT`` entries or
-    when a directory cannot be scanned."""
+    number of directories at that depth left unscanned, and of subdirectories that vanished
+    mid-scan. Refused past ``SCAN_LIMIT`` entries or when a directory cannot be scanned."""
     links: list[str] = []
     seen = unscanned = vanished = 0
     stack = [(base, 0)]
     while stack:
         current, depth = stack.pop()
-        if current != base and os.path.islink(current):  # swapped for a link after listing
-            links.append(current)
-            continue
+        fd = -1
         try:
-            with os.scandir(current) as found:
-                entries = [(e.path, e.is_symlink(), e.is_dir(follow_symlinks=False)) for e in found]
-        except FileNotFoundError as err:
-            if current != base:
+            fd = os.open(current, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            with os.scandir(fd) as found:
+                entries = [
+                    (os.path.join(current, e.name), e.is_symlink(), e.is_dir(follow_symlinks=False))
+                    for e in found
+                ]
+        except OSError as err:
+            if current != base and os.path.islink(current):  # swapped for a link after listing
+                links.append(current)
+                continue
+            if current != base and isinstance(err, FileNotFoundError):
                 vanished += 1
                 continue
             raise SandboxError(
                 f"credential directory {base!r}: cannot scan {current!r} for links"
                 f" ({err.strerror}); a link left unscanned could leave its target readable"
             ) from err
-        except OSError as err:
-            raise SandboxError(
-                f"credential directory {base!r}: cannot scan {current!r} for links"
-                f" ({err.strerror}); a link left unscanned could leave its target readable"
-            ) from err
+        finally:
+            if fd >= 0:
+                os.close(fd)
         seen += len(entries)
         if seen > SCAN_LIMIT:
             raise SandboxError(
