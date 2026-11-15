@@ -238,7 +238,7 @@ LITERAL_PLUGINS = [
     'for _k, pytest_plugins in [(1, ["x"])]:\n    pass\n',
     'async def _f():\n    async for pytest_plugins in (["x"],):\n        pass\n',
     'from contextlib import nullcontext\nwith nullcontext(["x"]) as pytest_plugins:\n    pass\n',
-    'async def _f():\n    async with a(["x"]) as pytest_plugins:\n        pass\n',
+    'import contextlib\nwith contextlib.nullcontext(["x"]) as pytest_plugins:\n    pass\n',
     'match ["x"]:\n    case pytest_plugins:\n        pass\n',
     'match ["x"]:\n    case [*pytest_plugins]:\n        pass\n',
     'match {"a": "x"}:\n    case {**pytest_plugins}:\n        pass\n',
@@ -253,6 +253,12 @@ UNREAD_PLUGINS = [
     "(pytest_plugins := PLUGINS)\n",  # #1027
     "for pytest_plugins in PLUGINS:\n    pass\n",
     "with ctx(PLUGINS) as pytest_plugins:\n    pass\n",
+    'with ctx(["x"]) as pytest_plugins:\n    pass\n',
+    'async def _f():\n    async with a(["x"]) as pytest_plugins:\n        pass\n',
+    (
+        "from contextlib import nullcontext\nnullcontext = ctx\n"
+        'with nullcontext(["x"]) as pytest_plugins:\n    pass\n'
+    ),
     "match PLUGINS:\n    case pytest_plugins:\n        pass\n",
     "pytest_plugins = []\npytest_plugins.append(NAME)\n",
     'import sys\nsetattr(sys.modules[__name__], "pytest_plugins", P)\n',
@@ -276,6 +282,16 @@ def test_a_pytest_plugins_value_it_cannot_read_does_not_refuse_the_new_test_file
     file included."""
     new = {**TWO, "tests/test_new.py": ""}
     assert _reach(text, new, ["tests/test_new.py"]) == ""
+
+
+def test_unverified_with_context_manager_does_not_trust_literal_arg():
+    """Only a verified contextlib.nullcontext call is unwrapped in conftest_reach (#1010)."""
+    assert _reach('with ctx(["x"]) as pytest_plugins:\n    pass\n', TWO, ["tests/x.py"]) == ""
+    local_ctx = {**TWO, "tests/contextlib.py": ""}
+    nc = (
+        'from contextlib import nullcontext\nwith nullcontext(["x"]) as pytest_plugins:\n    pass\n'
+    )
+    assert _reach(nc, local_ctx, ["tests/x.py"]) == ""
 
 
 def test_the_parts_of_a_joined_plugin_name_are_not_plugins():

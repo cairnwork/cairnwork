@@ -96,6 +96,9 @@ TAKEN = {  # name: (new fixture, base files)
     "pytest_plugins by with target it cannot read: every base file (#1010)": (
         "dep", {ABOVE: "with open('p') as pytest_plugins:\n    pass\n",
                 "tests/far/fix.py": GUARD}),
+    "pytest_plugins by unverified with target with literal arg: every base file (#1010)": (
+        "dep", {ABOVE: "with ctx(['helpers']) as pytest_plugins:\n    pass\n",
+                "tests/helpers.py": "", "tests/far/fix.py": GUARD}),
     "pytest_plugins bound by match capture (#1010)": (
         "dep", {ABOVE: "match ['helpers']:\n    case pytest_plugins:\n        pass\n",
                 "tests/helpers.py": GUARD}),

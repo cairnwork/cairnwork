@@ -109,7 +109,7 @@ def _names(files: frozenset[str]) -> dict[str, set[str]]:
 def _targets(here: str, tree: ast.Module, files: frozenset[str], by_name) -> set[str]:
     """The files of the tree that one import in ``tree`` (the file ``here``) may load."""
     found: set[str] = set()
-    for level, names in _imports(tree):
+    for level, names in _imports(tree, stdlib="contextlib" not in by_name):
         for name in names:
             star = name == "*" or name.endswith(".*")
             if star:
@@ -152,7 +152,7 @@ def _targets(here: str, tree: ast.Module, files: frozenset[str], by_name) -> set
 _STORES = (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.NamedExpr)  # := too (#1027)
 
 
-def _imports(tree: ast.Module) -> Iterator[tuple[int, Iterable[str]]]:
+def _imports(tree: ast.Module, *, stdlib: bool = True) -> Iterator[tuple[int, Iterable[str]]]:
     """(level, dotted names it may load) per import in ``tree``, at any depth."""
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -168,7 +168,7 @@ def _imports(tree: ast.Module) -> Iterator[tuple[int, Iterable[str]]]:
             yield 0, [n.lstrip(".") for n in names]
             if dots:
                 yield dots, [n.lstrip(".") for n in names]
-        elif values := _plugin_values(node):
+        elif values := _plugin_values(node, tree if stdlib else None):
             yield 0, _strings(values)
 
 
@@ -305,7 +305,7 @@ def _paired_values(target: ast.AST, value: ast.expr | None) -> list[ast.expr | N
     return [None]
 
 
-def _plugin_values(node: ast.AST) -> Sequence[ast.AST | None]:
+def _plugin_values(node: ast.AST, tree: ast.Module | None = None) -> Sequence[ast.AST | None]:
     """Expressions/patterns a node may feed into ``pytest_plugins`` (#1010)."""
     if isinstance(node, _STORES) and _plugins(node):
         return [node.value]
@@ -316,7 +316,7 @@ def _plugin_values(node: ast.AST) -> Sequence[ast.AST | None]:
         return [node.iter]
     if isinstance(node, ast.With | ast.AsyncWith):
         return [
-            item.context_expr
+            _with_expr(item.context_expr, tree)
             for item in node.items
             if item.optional_vars is not None and _mentions(item.optional_vars)
         ]
