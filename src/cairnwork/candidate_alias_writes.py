@@ -276,7 +276,12 @@ def _has_only_import_binding(
             bindings += node.name == name
         elif isinstance(node, ast.MatchMapping):
             bindings += node.rest == name
-    return bindings == 1 and import_node in tree.body and import_alias in import_node.names
+    return (
+        bindings == 1
+        and isinstance(import_node, (ast.Import, ast.ImportFrom))
+        and import_node in tree.body
+        and import_alias in import_node.names
+    )
 
 
 def _is_write_statement(
