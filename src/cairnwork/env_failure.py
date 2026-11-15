@@ -39,8 +39,9 @@ _ENV_TEXT = re.compile(
 )
 
 
-_LIB = tuple(os.path.realpath(p) + os.sep for p in {
-    sysconfig.get_path(k) or "/nonexistent" for k in ("stdlib", "platstdlib", "purelib", "platlib")})
+_LIB_KEYS = ("stdlib", "platstdlib", "purelib", "platlib")
+_LIB_DIRS = {sysconfig.get_path(k) or "/nonexistent" for k in _LIB_KEYS}
+_LIB = tuple(os.path.realpath(p) + os.sep for p in _LIB_DIRS)
 _VENV = ("site-packages", "dist-packages", ".venv", "venv", "node_modules")
 _DENY = (errno.EACCES, errno.EPERM, errno.EROFS, errno.ENETUNREACH)
 
