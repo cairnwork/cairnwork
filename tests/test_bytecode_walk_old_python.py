@@ -115,3 +115,39 @@ def test_helper_runs_under_a_real_older_python(tmp_path, planted):
     found = redirected_bytecode(checkout, (checkout.parent, run_dir), python=str(OLD[-1]))
     assert not any("bytecode scan failed" in item for item in found)
     assert bool(found) is planted
+
+
+def closed_tree(tmp_path: Path) -> tuple[Path, Path, Path]:
+    top, outside = tmp_path / "top", tmp_path / "outside"
+    (top / "mid" / "closed").mkdir(parents=True)
+    (outside / "closed").mkdir(parents=True)
+    (top / "mid" / "closed" / "f").write_text("x")
+    (top / "mid" / "closed").chmod(0)
+    (outside / "closed").chmod(0)
+    return top, top / "mid", outside
+
+
+def test_a_closed_directory_is_opened_through_handles(tmp_path):
+    top, _, _ = closed_tree(tmp_path)
+    here, found = bytecode_walk.opened(str(top / "mid" / "closed"))
+    assert here == bytecode_walk.ident(os.stat(top / "mid" / "closed"))
+    assert [name for name, *_ in found] == ["f"]
+    assert stat.S_IMODE((top / "mid" / "closed").stat().st_mode) == 0o700
+
+
+def test_a_middle_component_swapped_for_a_symlink_changes_no_mode_outside(tmp_path, monkeypatch):
+    top, mid, outside = closed_tree(tmp_path)
+    real_lstat, swapped = os.lstat, []
+
+    def lstat_then_swap(path, *args, **kwargs):
+        info = real_lstat(path, *args, **kwargs)
+        if not swapped:  # the run's live process replaces ``mid`` after the check
+            swapped.append(1)
+            mid.rename(top / "mid.real")
+            mid.symlink_to(outside)
+        return info
+
+    monkeypatch.setattr(bytecode_walk.os, "lstat", lstat_then_swap)
+    with pytest.raises(OSError):
+        bytecode_walk.opened(str(mid / "closed"))
+    assert stat.S_IMODE((outside / "closed").stat().st_mode) == 0

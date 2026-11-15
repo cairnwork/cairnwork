@@ -9,17 +9,16 @@ Directories are identified by (st_dev, st_ino), never by spelling: the kernel re
 case and NFC/NFD on APFS, firmlinks (/System/Volumes/Data), symlinks and ``..`` that a string
 comparison or realpath does not canonicalize (#289 review).
 
-1. **Listing.** Both write roots are listed without following a symlink; a directory closed to
-   its owner is opened (u+rwx) first, and one still not listable and searchable (an ACL) is an
-   error. Each directory becomes a node with its entries as edges:
-   subdirectories, and symlinks whose target (resolved by the kernel relative to the link's own
-   directory, after the whole listing has opened every closed directory in the roots) is a
-   directory. Every pyc-like name is reported, so is every other regular file that starts with
-   this Python's magic number (the run's Python names bytecode by ``BYTECODE_SUFFIXES``,
-   ``sys.implementation.cache_tag`` and pytest's ``PYC_TAIL``, all of which the run can change;
-   the owner judges only those outside the checkout's committed files), so is every error, a
-   symlink's included unless its target is missing, closed (by then only outside the roots),
-   looping or through a file (link_target).
+1. **Listing.** Both write roots are listed without following a symlink; a directory closed to its
+   owner is opened (u+rwx) first, one still not listable and searchable (an ACL) is an error. Each
+   directory becomes a node with its entries as edges: subdirectories, and symlinks whose target
+   (resolved by the kernel relative to the link's own directory, after the whole listing has
+   opened every closed directory in the roots) is a directory. Every pyc-like name is reported, so
+   is every other regular file that starts with this Python's magic number (the run's Python names
+   bytecode by ``BYTECODE_SUFFIXES``, ``sys.implementation.cache_tag`` and pytest's ``PYC_TAIL``,
+   all of which the run can change; the owner judges only those outside the checkout's committed
+   files), so is every error, a symlink's included unless its target is missing, closed (by then
+   only outside the roots), looping or through a file (link_target).
 2. **Graph.** When there is a pyc, the ancestors of the roots join as nodes (their entries are
    edges too, so /var -> /private/var counts; the step down towards each root is an edge even
    where an ancestor cannot be listed), and every node gets a ``..`` edge to the
@@ -49,7 +48,7 @@ import unicodedata
 from collections import deque
 
 MAX_PATH = 4096  # Linux PATH_MAX (macOS: 1024): no longer path can be opened
-NOFOLLOW = {"follow_symlinks": False} if os.chmod in os.supports_follow_symlinks else {}
+DIR_RO = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 MAGIC = importlib.util.MAGIC_NUMBER
 
 
@@ -81,20 +80,45 @@ def bytecode(name, fd):
         os.close(handle)
 
 
+def open_chain(path):
+    """A descriptor for ``path``, each component opened O_NOFOLLOW relative to its parent's."""
+    fd = os.open("/" if path.startswith("/") else ".", os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for name in filter(None, path.split("/")):
+            fd, prev = os.open(name, DIR_RO, dir_fd=fd), fd
+            os.close(prev)
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def open_mode(path, want, info):
+    """Set ``path``'s mode via its parent's handle (never by spelling), if still ``info``'s."""
+    head, name = os.path.split(path)
+    parent = open_chain(head)
+    try:
+        if ident(os.stat(name, dir_fd=parent, follow_symlinks=False)) != ident(info):
+            raise OSError(errno.ESTALE, "replaced while listed")
+        try:
+            os.chmod(name, want, dir_fd=parent, follow_symlinks=False)
+        except NotImplementedError:  # Linux: no nofollow chmod
+            os.chmod(name, want, dir_fd=parent)
+    finally:
+        os.close(parent)
+
+
 def opened(path):
     """The identity of directory ``path`` (never a symlink), opened first if closed to its owner,
     and its entries as (name, kind, identity or None, error or None), kind "dir" (identity set),
     "link", "bytecode" (a file starting as bytecode, not named like it) or "other". Listed
-    through a descriptor, so each entry is resolved relative to its own directory, not by the
-    listing's (possibly long) spelling. A directory that stays unlistable
-    or unsearchable after the mode fix (a macOS ACL survives it) is an error, so every directory
-    of the roots is both, or already a finding."""
+    through a descriptor. One still unlistable or unsearchable after the mode fix is an error."""
     info = os.lstat(path)
     if not stat.S_ISDIR(info.st_mode):
         raise NotADirectoryError(errno.ENOTDIR, "not a directory")
     if info.st_mode & 0o700 != 0o700:
-        os.chmod(path, stat.S_IMODE(info.st_mode) | 0o700, **NOFOLLOW)
-    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        open_mode(path, stat.S_IMODE(info.st_mode) | 0o700, info)
+    fd = open_chain(path)
     try:
         if ident(os.fstat(fd)) != ident(info):
             raise OSError(errno.ESTALE, "replaced while listed")
@@ -141,7 +165,7 @@ def resolve_links(links, edges, out):
     each resolving to a directory becomes an edge; an error is an error row."""
     for (here, path), names in links.items():
         try:
-            fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            fd = os.open(path, DIR_RO)
         except OSError as exc:
             out["errors"].extend([index, rel, exc.strerror or str(exc)] for index, rel, _ in names)
             continue
