@@ -210,7 +210,9 @@ def test_a_task_naming_a_reserved_p2p_verifier_id_is_refused(state, project, mod
     assert got.value.code == "BAD_VERIFIER" and vid in str(got.value)
 
 
-@pytest.mark.parametrize("bad", ["HEAD", "main", "--output=x", "abc1234", "a" * 39 + " "])
+@pytest.mark.parametrize(
+    "bad", ["HEAD", "main", "--output=x", "abc1234", "a" * 39 + " ", "a" * 40 + "\n"]
+)
 def test_import_paths_with_a_non_hex_base_is_bad_base_and_never_reaches_git(
     state, project, monkeypatch, bad
 ):
@@ -237,3 +239,14 @@ def test_import_paths_with_a_real_base_still_reaches_the_tree_check(state, proje
             import_paths=("tests",),
         )  # fmt: skip
     assert got.value.code == "BAD_IMPORT_PATH"
+
+
+@pytest.mark.parametrize("bad", [None, 123, b"a" * 40])
+def test_import_paths_with_a_non_string_base_is_bad_base(state, project, bad):
+    with pytest.raises(TaskRejected) as got:
+        verify_candidate(
+            Intake(state), repo=project, base=bad, candidate="1" * 40,
+            allowed_files=("src/calc.py",), verifiers=(("pytest", ("python3", "-m", "pytest")),),
+            import_paths=("src",),
+        )  # fmt: skip
+    assert got.value.code == "BAD_BASE"
