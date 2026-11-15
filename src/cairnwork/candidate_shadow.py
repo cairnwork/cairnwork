@@ -36,9 +36,13 @@ def find_shadow_file(
     case-insensitively, directories case-exactly; an unparseable ``.py`` the candidate changed fails
     closed, any other one imports nothing.
 
-    Accepted false refusal: a modified, uniquely named module in a non-conventional import root
-    (say app/foo.py made importable by a pytest pythonpath setting) that some other-directory test
+    Accepted false refusals: a test file with any non-literal import call makes nested-module
+    edits fail closed; a modified, uniquely named module in a non-conventional import root (say
+    app/foo.py made importable by a pytest pythonpath setting) that some other-directory test
     imports is refused, but only when a changed file also carries a redirect signal.
+
+    Residual: non-literal imports in library/source loaders (including ``src/``) are not collected,
+    so a nested module loaded dynamically outside tests can be missed.
 
     Accepted residual: rule (c) exempts a modified module when an unchanged same-directory file
     bare-imports the name, even if other tests rely on a redirect to bare-import it."""
@@ -217,13 +221,29 @@ def _parse_imports(raw: bytes, path: str) -> set[str]:
             names.update(alias.name for alias in node.names if alias.name != "*")
         elif isinstance(node, ast.Call) and _call_name(node.func) in _IMPORT_CALLS:
             named = (k.value for k in node.keywords if k.arg in {"name", "modname"})
-            for arg in (*node.args[:1], *named):  # import_module("x.y"), __import__, importorskip
+            args = (*node.args[:1], *named)
+            unknown = any(k.arg is None for k in node.keywords) or not args
+            for arg in args:  # import_module("x.y"), __import__, importorskip
                 if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
                     names.update(arg.value.lstrip(".").split("."))
-                else:
-                    names.add("*")  # unknown module name fails closed for every nested file
+                elif _is_test_file(path):
+                    unknown = True
+            if unknown and _is_test_file(path):
+                names.add("*")  # a dynamic test import fails closed for every nested file
     names.discard("")
     return names
+
+
+def _is_test_file(path: str) -> bool:
+    """Whether a source path follows the repository's conventional test-file names."""
+    parts = path.split("/")
+    leaf = parts[-1]
+    return (
+        any(part in {"test", "tests"} for part in parts[:-1])
+        or leaf.startswith("test_")
+        or leaf.endswith("_test.py")
+        or leaf == "conftest.py"
+    )
 
 
 def _parse_top_level_imports(raw: bytes, path: str) -> set[str]:
