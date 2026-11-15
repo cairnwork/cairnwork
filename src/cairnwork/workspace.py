@@ -396,4 +396,4 @@ def make_work_dir(work: Path) -> None:
     try:
         work.mkdir(mode=0o700)
     except FileExistsError as exc:
-        raise WorkspaceError(f"leftover work directory: {work}") from exc
+        raise WorkspaceError(f"leftover work directory: {str(work)!r}") from exc

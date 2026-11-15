@@ -75,3 +75,11 @@ def test_leftover_work_directory_is_workspace_error(tmp_path, monkeypatch):
 def test_owner_mode_never_requires_idle(tmp_path, monkeypatch):
     _stub_run(monkeypatch)
     verifiers._run_all(_batch(tmp_path), _specs(2), "run")
+
+
+def test_leftover_work_directory_message_escapes_control_characters(tmp_path, monkeypatch):
+    _stub_run(monkeypatch)
+    (tmp_path / "r\n::error::x-v0.work").mkdir()
+    with pytest.raises(WorkspaceError) as caught:
+        verifiers._run_all(_batch(tmp_path), _specs(1), "r\n::error::x")
+    assert "\n" not in str(caught.value)
