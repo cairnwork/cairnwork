@@ -191,3 +191,55 @@ def test_exception_attribute_hook_is_line_based():
     for ok in ("def path(root):", "    def name(self):", "def args(parser):",
                "async def path(self):", "def errno_text(x):", "    @property"):  # fmt: skip
         assert not re.search(rule, ok), ok
+
+
+class _Meta(type):
+    """A candidate metaclass: any comparison or subclass probe on its classes is recorded."""
+
+    calls: list = []
+
+    def __eq__(cls, other):
+        _Meta.calls.append("eq")
+        return True
+
+    def __hash__(cls):
+        return id(cls)
+
+    def __subclasscheck__(cls, sub):
+        _Meta.calls.append("subclasscheck")
+        return True
+
+    def __instancecheck__(cls, obj):
+        _Meta.calls.append("instancecheck")
+        return True
+
+
+def test_report_cause_and_innermost_run_no_metaclass_code():
+    """Codex r1 / Claude review: ``in (A, B)`` compares with ==, so a report class or an error
+    class with a candidate metaclass ran its __eq__; identity checks run nothing."""
+    plugin = _plugin(PARTS_SOURCE)
+    _Meta.calls.clear()
+    hostile_report = _Meta("R", (TestReport,), {})
+    report = hostile_report("n", ("f", 0, "n"), {}, "passed", None, "collect", [])
+    call = CallInfo.from_call(lambda: 1, "collect")
+    assert plugin["_report_cause"](call, report) is None
+    hostile_error = _Meta("C", (ImportError,), {})
+    assert plugin["_innermost"](hostile_error("x")) == ""
+    assert _Meta.calls == []
+
+
+def test_env_exc_reads_the_real_class_not_a_spoofed_one():
+    from cairnwork.env_failure import ENV_SOURCE
+
+    plugin = _plugin(ENV_SOURCE)
+    calls = []
+
+    class Spoof(Exception):
+        @property
+        def __class__(self):
+            calls.append("class")
+            return OSError
+
+    info = type("Info", (), {"value": Spoof("x")})()
+    plugin["_env_exc"](info, "/")
+    assert calls == []
