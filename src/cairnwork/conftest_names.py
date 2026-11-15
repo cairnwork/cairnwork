@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import ast
 import re
+from collections.abc import Iterator
 from pathlib import Path
 from posixpath import dirname, join
 
@@ -34,7 +35,6 @@ from cairnwork.fixture_forms import (
     _aliases,
     _fixture,
     _import_head,
-    assignment_callables,
     module_level,
     registered,
     resolve_source_aliases,
@@ -43,6 +43,35 @@ from cairnwork.gitcmd import GitCommandError, run_git, run_git_bytes
 
 MAX_FILES = 5000  # base Python files read under one conftest's directory
 _REQUESTS = frozenset({"usefixtures", "getfixturevalue"})
+
+
+def assignment_callables(tree: ast.Module) -> set[str]:
+    """Select names of functions passed within calls in module-level assignments."""
+    words: set[str] = set()
+    for stmt in module_level(tree.body):
+        if not isinstance(stmt, ast.Assign | ast.AnnAssign | ast.AugAssign):
+            continue
+        value = getattr(stmt, "value", None)
+        if value is None:
+            continue
+        calls = [node for node in ast.walk(value) if isinstance(node, ast.Call)]
+        args = [arg for call in calls for arg in call.args]
+        args.extend(keyword.value for call in calls for keyword in call.keywords)
+        for arg in args:
+            words.update(
+                node.id if isinstance(node, ast.Name) else node.attr
+                for node in _call_arg_nodes(arg)
+                if isinstance(node, ast.Name | ast.Attribute)
+            )
+    return words
+
+
+def _call_arg_nodes(node: ast.AST) -> Iterator[ast.AST]:
+    if isinstance(node, ast.Lambda):
+        return
+    yield node
+    for child in ast.iter_child_nodes(node):
+        yield from _call_arg_nodes(child)
 
 
 def taken_names(
@@ -147,12 +176,13 @@ def _fixtures(
     fixture is a function with a decorator naming ``fixture`` or an alias of it, any decorated
     module-level function (a factory decorator from another module may call ``fixture``, #982;
     a method's ``@property`` is not), or one passed to a ``fixture`` call."""
-    names = registered(tree, extra=extra) | set(called or ()) | {
+    names = registered(tree, extra=extra) | {
         s.value for n in ast.walk(tree)
         if isinstance(n, ast.Call) and _call_name(n.func) in _REQUESTS
         for arg in n.args for s in ast.walk(arg)
         if isinstance(s, ast.Constant) and isinstance(s.value, str)
     }  # fmt: skip
+    selectors = names | set(called or ()) | assignment_callables(tree)
     top, aliases = {id(n) for n in module_level(tree.body)}, _aliases(tree, extra=extra)
     for node in ast.walk(tree):
         if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
@@ -160,7 +190,7 @@ def _fixtures(
         marked = any(  # main's rule kept: "fixture" anywhere in a decorator, even in a string
             _fixture(d, aliases) or "fixture" in ast.unparse(d) for d in node.decorator_list
         )
-        if marked or (node.decorator_list and id(node) in top) or node.name in names:
+        if marked or (node.decorator_list and id(node) in top) or node.name in selectors:
             a = node.args
             names |= {node.name} | {x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs)}
     return names

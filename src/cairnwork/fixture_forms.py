@@ -1,4 +1,7 @@
-"""Read fixture registrations and aliases in base modules for conftest_names."""
+"""#982 (#998): the names a base module's fixtures may register, however they are written, for
+conftest_names. A fixture(...) call, a two-step fixture(...)(fn), an assignment holding one, an
+alias of pytest.fixture the module binds, and a ``name=`` that cannot be read (refused, fail
+closed)."""
 
 from __future__ import annotations
 
@@ -26,10 +29,15 @@ def module_level(body: list[ast.stmt]) -> Iterator[ast.stmt]:
 
 
 def registered(tree: ast.Module, extra: set[str] | None = None) -> set[str]:
-    """Find fixture names from calls, aliases, assignment targets and literal ``name=`` values.
-
-    Unknown fixture names fail closed. Wrapper parameters are counted at their call sites.
-    """
+    """#982: names a fixture in ``tree`` may register, however it is written: every literal
+    ``name=`` of any call; for a call of ``fixture`` or an alias of it (``_aliases``; also
+    ``fixture(...)(fn)``), the functions passed to it and the targets of the assignment holding it.
+    A ``name=`` of such a call that is not a literal counts every string constant of ``tree`` when
+    it is a name the module binds to string constants only. Any other one is refused for a call of
+    ``fixture`` itself (``_exact``). Not refused, as on main: a call that only mentions the word,
+    and, in a module that defines ``fixture`` (pytest's own source), a call forwarding a parameter
+    of the function around it; the name is set where that wrapper is called (#998 r3, Claude;
+    #1019 r1, Codex: not the whole module)."""
     aliases, names = _aliases(tree, extra=extra), set()
     exact, forwarded = _exact_aliases(tree), _forwarded(tree)
     for node in ast.walk(tree):
@@ -37,6 +45,9 @@ def registered(tree: ast.Module, extra: set[str] | None = None) -> set[str]:
             if any(_fixture_call(c, aliases) for c in ast.walk(node.value)):
                 targets = node.targets if isinstance(node, ast.Assign) else [node.target]
                 names |= {n.id for t in targets for n in ast.walk(t) if isinstance(n, ast.Name)}
+                for lam in (n for n in ast.walk(node.value) if isinstance(n, ast.Lambda)):
+                    a = lam.args  # a lambda inside a fixture assignment may be the registered fn
+                    names |= {x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs)}
         if not isinstance(node, ast.Call):
             continue
         fixture = _fixture_call(node, aliases)
@@ -56,28 +67,9 @@ def registered(tree: ast.Module, extra: set[str] | None = None) -> set[str]:
     return names
 
 
-def assignment_callables(tree: ast.Module) -> set[str]:
-    """Names and lambda parameters passed inside calls in module-level assignments."""
-    args = [
-        arg
-        for stmt in module_level(tree.body)
-        if isinstance(stmt, ast.Assign | ast.AnnAssign | ast.AugAssign)
-        and getattr(stmt, "value", None)
-        for call in ast.walk(stmt.value)
-        if isinstance(call, ast.Call)
-        for arg in (*call.args, *(keyword.value for keyword in call.keywords))
-    ]
-    return {
-        word
-        for arg in args
-        for node in ast.walk(arg)
-        for word in (getattr(node, "id", ""), getattr(node, "attr", ""), getattr(node, "arg", ""))
-        if word
-    }
-
-
 def _forwarded(tree: ast.Module) -> dict[int, set[str]]:
-    """Parameter names forwarded to fixture calls inside local wrappers."""
+    """In a module that defines ``fixture``: each call inside a function, with the parameters of
+    the functions around it (a wrapper forwarding its own ``name``)."""
     if not any(getattr(n, "name", None) == "fixture" for n in module_level(tree.body)):
         return {}
     out: dict[int, set[str]] = {}
@@ -98,7 +90,9 @@ def _name(node: ast.expr) -> str:
 
 
 def _exact_aliases(tree: ast.Module) -> set[str]:
-    """Names ``tree`` binds to fixture itself, including chained and unpacked aliases."""
+    """Names ``tree`` binds to ``fixture`` itself: ``from pytest import fixture as fx``, then
+    ``f = fx``, ``f: T = pytest.fixture``, ``(f := ...)``, every target of ``a = f = ...`` and the
+    matching item of ``f, b = fx, 1`` (#1019 r1, Claude C2/C3), chained (no recursion)."""
     names = {
         a.asname or a.name
         for n in ast.walk(tree)
@@ -344,6 +338,7 @@ def _fixture_call(node: ast.AST, aliases: set[str]) -> bool:
 
 
 def _items(target: ast.expr) -> Iterator[ast.expr]:
+    """The targets an assignment target binds: itself, or each item of a tuple or list."""
     if isinstance(target, ast.Tuple | ast.List):
         for item in target.elts:
             yield from _items(item)
