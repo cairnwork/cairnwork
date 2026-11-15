@@ -19,6 +19,7 @@ is on no remote, though a public branch could expose it to a worker.
 from __future__ import annotations
 
 import ast
+import subprocess
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -35,7 +36,7 @@ from cairnwork.deferred_overlay import (  # noqa: F401  (re-exported: the one pl
     deleted_of,
     overlay_tree,
 )
-from cairnwork.gitcmd import OID, GitCommandError, run_git
+from cairnwork.gitcmd import OID, GitCommandError, commit_present, run_git
 from cairnwork.issue_task import test_target
 from cairnwork.p2p_function import _without_case as _nodeid_without_case
 from cairnwork.provenance import trailers
@@ -46,15 +47,11 @@ from cairnwork_protocol.ids import MAX_ID_BYTES
 _IDENTITY = ("-c", "user.name=Cairnwork", "-c", "user.email=cairnwork@localhost")
 _EMPTY = ast.Module(body=[], type_ignores=[])  # a file that is not there (new, or deleted)
 # pytest reads these on its own; a test commit carries tests, not configuration.
-# Same names the candidate may not touch (verifiers.protected_verifier_inputs). __init__.py
-# stays allowed: it runs only when the tests themselves import their package.
+# Protected verifier inputs; __init__.py stays allowed for test imports.
 _SITE_NAMES = frozenset({"sitecustomize", "usercustomize"})  # also refused as package names
-_NOT_TEST_FILES = frozenset(
-    {
-        "conftest.py", "pytest.ini", "setup.cfg", "tox.ini", "pyproject.toml", "pytest.toml",
-        ".pytest.toml", ".pytest.ini", "setup.py", "sitecustomize.py", "usercustomize.py",
-    }
-)  # fmt: skip
+_NOT_TEST_FILES = frozenset({"conftest.py", "pytest.ini", "setup.cfg", "tox.ini",
+                             "pyproject.toml", "pytest.toml", ".pytest.toml", ".pytest.ini",
+                             "setup.py", "sitecustomize.py", "usercustomize.py"})  # fmt: skip
 
 
 def out_of_scope(path: str, status: str) -> bool:  # #798: conftest.py only added/modified
@@ -96,19 +93,22 @@ def ensure_test_commit(repo: Path, test_commit: str, store=None) -> None:
             raise TestCommitRejected("TEST_COMMIT_NOT_IMPORTED", test_commit)
         store.fetch_into(repo, test_commit)
         return
-    try:
-        run_git(repo, "cat-file", "-e", f"{test_commit}^{{commit}}")
+    if commit_present(repo, test_commit):
         return
-    except GitCommandError:
-        pass
     if store is not None and store.has(test_commit):
         store.fetch_into(repo, test_commit)
         return
     try:
         run_git(repo, "fetch", "--quiet", "--no-tags", "origin", test_commit)
-        run_git(repo, "cat-file", "-e", f"{test_commit}^{{commit}}")
+        if not commit_present(repo, test_commit):
+            raise GitCommandError("origin fetch did not provide test commit")
     except GitCommandError as exc:
-        raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
+        detail = str(exc).casefold()
+        if any(word in detail for word in ("no space left", "disk quota", "read-only file system")):
+            raise OSError(f"Cairnwork storage failure: {exc}") from exc
+        if isinstance(exc.__cause__, subprocess.CalledProcessError):
+            raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
+        raise OSError(f"Cairnwork could not run git: {exc}") from exc
 
 
 def check_roots_on_base(repo: Path, base: str, roots: tuple[str, ...]) -> None:

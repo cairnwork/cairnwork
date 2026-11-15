@@ -132,6 +132,8 @@ def verify_candidate(
                 result.reason, status = f"UNCOMPARABLE: {exc}", "UNCOMPARABLE"
                 found, rule = exc.comparison, candidate_env.uncomparable_rule(exc.comparison.code)
                 uncomparable = {"code": found.code, "detail": found.detail, "rule": rule}
+            except OSError as exc:
+                result.reason, status = f"INFRA_ERROR: {type(exc).__name__}: {exc}", "FAILED"
     judged = result.candidate_commit or candidate
     subject = binding["head"] if binding else judged  # a bound row names the head (#229)
     verdict = notary.verdict(result.task_id, result.attempt_id, expected_candidate=subject)

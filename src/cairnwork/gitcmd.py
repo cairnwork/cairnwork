@@ -236,6 +236,17 @@ def run_git(
     return _exec(repo, args, index_file, isolate_config, timeout, text=True, ok_codes=ok_codes)
 
 
+def commit_present(repo: Path, oid: str) -> bool:
+    """Return whether oid names a commit; only Git's explicit exit 1 means absent."""
+    try:
+        found = run_git(
+            repo, "rev-parse", "--verify", "--quiet", f"{oid}^{{commit}}", ok_codes=(0, 1)
+        )
+    except GitCommandError as exc:
+        raise OSError(f"Cairnwork could not run git: {exc}") from exc
+    return bool(found.strip())
+
+
 def run_git_bytes(
     repo: Path, *args: str, timeout: float = GIT_TIMEOUT_SECONDS, stdin: bytes | None = None
 ) -> bytes:
