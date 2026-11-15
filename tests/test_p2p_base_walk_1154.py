@@ -54,7 +54,8 @@ def test_base_side_compound_rebinding_is_counted_when_it_shadows_hidden_class_te
         "    if True:\n"
         "        test_a = object()\n"
     )
-    side = _split(base, base.split("def test_a(): pass\n", 1)[1])
+    test = "class Hidden:\n    def test_a(self): pass\n"  # no rebinding on the candidate side
+    side = _split(base, test)
     assert side.removed == {"t.py::test_a"}
     assert side.dropped == set()
 
