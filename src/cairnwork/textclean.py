@@ -23,3 +23,24 @@ def replace_hidden(text: str, repl: str | Callable[[str], str] = "?", keep: str 
     return "".join(
         (repl(c) if callable(repl) else repl) if is_hidden(c) and c not in keep else c for c in text
     )
+
+
+def shown(text: object) -> str:
+    """Return text as one quoted token, escaping hidden characters and quotes."""
+    value = str(text)
+    escaped = []
+    for char in value:
+        code = ord(char)
+        if is_hidden(char):
+            escaped.append(
+                f"\\x{code:02x}"
+                if code <= 0xFF
+                else f"\\u{code:04x}"
+                if code <= 0xFFFF
+                else f"\\U{code:08x}"
+            )
+        elif char in ("\\", "'"):
+            escaped.append("\\" + char)
+        else:
+            escaped.append(char)
+    return "'" + "".join(escaped) + "'"

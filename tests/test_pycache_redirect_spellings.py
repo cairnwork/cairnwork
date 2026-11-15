@@ -80,7 +80,7 @@ def run(state, project, redirect):
 def test_a_spelled_out_redirect_is_refused_before_it_runs(state, helper_project, how):
     out = run(state, helper_project, SPELLED[how])
     assert out["status"] == "REFUSED", out
-    assert out["reason"].startswith("VERIFIER_TAMPER_API: src/calc.py:"), out["reason"]
+    assert out["reason"].startswith("VERIFIER_TAMPER_API: 'src/calc.py:"), out["reason"]
     assert "[pycache_prefix]" in out["reason"], out["reason"]
 
 
