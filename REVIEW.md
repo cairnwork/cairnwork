@@ -11,7 +11,7 @@ Tag these `[introduced]` when the PR causes them; they block the merge.
 - A doc lies: `README.md`, `docs/`, `AGENTS.md`, a docstring, CLI help or the PR body says the code does something it does not do, or no longer does. Docs count as code here.
 - A config points the wrong way: a workflow, `pyproject.toml`, ruff, pytest or pyright setting, script default or environment variable that sends work to the wrong path, branch, account, model or check, or that silently skips tests (skipped sandbox tests count).
 - A test still passes with the change reverted or with a wrong implementation.
-- A CI limit breaks: file ≤400 lines, function ≤80 lines, `cairnwork_sandbox` ≤1,200 lines, import cycles, core importing `experimental`.
+- A CI limit breaks: file ≤400 lines, function ≤80 lines, `cairnwork_sandbox` ≤1,250 lines, import cycles, core importing `experimental`.
 
 Style, naming and "could be cleaner" are `[nit]` and never block.
 

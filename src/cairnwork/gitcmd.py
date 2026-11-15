@@ -153,7 +153,24 @@ def config_hooks_off(repo: Path | str, env: dict[str, str]) -> tuple[str, ...]:
 # Greedy to the last '@' in the run free of space and tab (newlines count as part of the run, so
 # one planted in the userinfo cannot split it): a password may itself hold '@' or '/'.
 # Fail-closed: an '@' later in a path also removes the text before it.
-_URL_USERINFO = re.compile(r"(?<=://)[^ \t]*@")
+_SPLIT_RUNS = re.compile(r"([ \t]+)")
+
+
+def _mask_userinfo(text: str) -> str:
+    """Cut from the first '://' to the last '@' of each run free of space and tab, in one pass.
+
+    Same text the greedy regex ``(?<=://)[^ \\t]*@`` removed, without rescanning to the end of the
+    run from every '://' (quadratic on a long run, #1145).
+    """
+    parts = _SPLIT_RUNS.split(text)
+    for i in range(0, len(parts), 2):
+        run = parts[i]
+        idx = run.find("://")
+        if idx != -1:
+            last_at = run.rfind("@")
+            if last_at >= idx + 3:
+                parts[i] = run[: idx + 3] + run[last_at + 1 :]
+    return "".join(parts)
 
 
 def stderr_tail(raw: str | bytes | None) -> str:
@@ -167,7 +184,7 @@ def stderr_tail(raw: str | bytes | None) -> str:
     """
     if isinstance(raw, bytes):
         raw = raw.decode("utf-8", "replace")
-    text = _URL_USERINFO.sub("", replace_hidden(raw or "", "", keep="\n")).strip()
+    text = _mask_userinfo(replace_hidden(raw or "", "", keep="\n")).strip()
     return text.replace("\n", " | ")[-STDERR_TAIL_CHARS:]
 
 

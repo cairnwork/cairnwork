@@ -59,10 +59,7 @@ def execute(
         try:  # the group is killed on any way out after the start, an interrupt included (#537)
             copier = threading.Thread(target=copy_capped, args=(process.stdout, log), daemon=True)
             copier.start()
-            try:
-                process.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                timed_out = True
+            timed_out = not _wait_unreaped(process.pid, timeout)
             # Another account's processes: the owner cannot signal them; reap() kills them
             # all and says how many were running (the main one, if it timed out, included).
             escaped = reap() if reap is not None else 0
@@ -85,6 +82,18 @@ def execute(
         elif process.stdout is not None:  # always: stdout=PIPE
             process.stdout.close()
     return (None if timed_out else process.returncode), timed_out, survivors
+
+
+def _wait_unreaped(pid: int, timeout: float | None) -> bool:
+    """True if the leader exited within timeout. It is left unreaped (a zombie), so its process
+    group id stays reserved until the group has been signalled (#1163)."""
+    deadline = None if timeout is None else time.monotonic() + timeout
+    while True:
+        if os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None:
+            return True
+        if deadline is not None and time.monotonic() >= deadline:
+            return False
+        time.sleep(0.005)
 
 
 def _sweep_survivors(

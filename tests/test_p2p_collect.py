@@ -204,6 +204,25 @@ def test_classify_removes_module_test_when_class_keeps_same_name():
     assert side.removed == {"t.py::test_x"} and side.dropped == set()
 
 
+def test_classify_removes_module_test_defined_in_every_elif_branch():
+    base = """\
+if first:
+    def test_x(): pass
+elif second:
+    def test_x(): pass
+else:
+    def test_x(): pass
+"""
+    side = classify({"t.py::test_x"}, set(), {"t.py"}, lambda p: "", lambda p: base)
+    assert side.removed == {"t.py::test_x"} and side.dropped == set()
+
+
+def test_classify_removes_module_test_from_constant_true_branch():
+    base = "if True:\n    def test_x(): pass\nelse:\n    test_x = 1\n"
+    side = classify({"t.py::test_x"}, set(), {"t.py"}, lambda p: "", lambda p: base)
+    assert side.removed == {"t.py::test_x"} and side.dropped == set()
+
+
 def test_classify_drops_parameterized_case_when_function_still_collected():
     # #842: removing a single case when the function still runs is dropped, never removed
     base = "def test_p(x): pass\n"

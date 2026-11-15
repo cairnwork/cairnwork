@@ -42,7 +42,7 @@ def test_deferred_store_environment_failure_stays_queued(setup, monkeypatch, fai
     _assert_queued_error(out, github)
 
 
-def test_deferred_store_actual_git_refusal_still_needs_fix(setup, monkeypatch):
+def test_deferred_store_scratch_git_failure_is_environment_not_candidate(setup, monkeypatch):
     test_commit = "c" * 40
     github = FakeGitHub([issue(block={**BLOCK, "test_commit": test_commit})])
     monkeypatch.setattr(DeferredStore, "has", lambda self, sha: True)
@@ -54,14 +54,22 @@ def test_deferred_store_actual_git_refusal_still_needs_fix(setup, monkeypatch):
         ),
     )
     out = runner.take(setup["intake"], github, setup["clone"])[0]
-    assert out["refused"].startswith("TASK_TEST_COMMIT_UNREADABLE")
-    assert github.labels[7] == {runner.NEEDS_FIX}
+    _assert_queued_error(out, github)  # scratch's own rev-parse failing is environment (#1250)
 
 
 @pytest.mark.parametrize("failure", [FileNotFoundError("git"), subprocess.TimeoutExpired("git", 1)])
 def test_mirror_base_environment_failure_stays_queued(setup, monkeypatch, failure):
     mirror = setup["clone"].parent / "state-mirror"
-    git(setup["clone"], "clone", "-q", str(setup["clone"]), str(mirror))
+    git(
+        setup["clone"],
+        "clone",
+        "-q",
+        "--single-branch",
+        "--branch",
+        "main",
+        str(setup["clone"]),
+        str(mirror),
+    )
     (setup["intake"].state / "config.json").write_text(json.dumps({"mirror": str(mirror)}))
     github = FakeGitHub([issue()])
 
@@ -75,7 +83,16 @@ def test_mirror_base_environment_failure_stays_queued(setup, monkeypatch, failur
 
 def test_mirror_base_actual_git_refusal_still_needs_fix(setup, monkeypatch):
     mirror = setup["clone"].parent / "state-mirror"
-    git(setup["clone"], "clone", "-q", str(setup["clone"]), str(mirror))
+    git(
+        setup["clone"],
+        "clone",
+        "-q",
+        "--single-branch",
+        "--branch",
+        "main",
+        str(setup["clone"]),
+        str(mirror),
+    )
     (setup["intake"].state / "config.json").write_text(json.dumps({"mirror": str(mirror)}))
     github = FakeGitHub([issue()])
 

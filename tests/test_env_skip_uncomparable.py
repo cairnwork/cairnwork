@@ -26,12 +26,12 @@ def _base(project):
     return git(project, "rev-parse", "HEAD").strip()
 
 
-def test_cli_path_without_a_base_run_keeps_environment_skip_failed(project, state):
+def test_cli_path_without_deferred_tests_runs_the_base_and_is_uncomparable(project, state):
     base = _base(project)
     cand = candidate(project, base, {"src/calc.py": FIX})
     code, out = verify(state, project, base, cand, tests=(COMMAND,))
-    assert code == 2 and out["status"] == "FAILED"
-    assert "TESTS_SKIPPED_ENVIRONMENT" not in out["reason"]
+    assert code == 2 and out["status"] == "UNCOMPARABLE" and out["verified"] is False
+    assert out["uncomparable"]["code"] == "TESTS_SKIPPED_ENVIRONMENT"
 
 
 def test_candidate_cannot_change_the_skipped_test_at_all(project, state):
