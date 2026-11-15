@@ -18,13 +18,20 @@ from cairnwork.verdict_record import Verdict
         ("a::b/test_c.py::test_d", "a::b/test_c.py::test_d"),
         ("tests/test_x.py::TestClass::test_x[case]", "tests/test_x.py::TestClass::test_x"),
         ("tests/t.py::test_y[x::y]", "tests/t.py::test_y"),
-        ("tests/t.py::C[a::b]::test_y[c::d]", "tests/t.py::C[a::b]::test_y"),
     ],
 )
 def test_shared_node_id_parser_preserves_file_path_and_strips_case(nodeid, expected):
     assert without_case(nodeid) == expected
     assert function_from_p2p(nodeid) == expected
     assert function_from_nodes(nodeid) == expected
+
+
+def test_case_ids_containing_double_colon_are_stripped_in_every_part():
+    nodeid = "tests/t.py::C[a::b]::test_y[c::d]"
+    assert without_case(nodeid) == "tests/t.py::C[a::b]::test_y"
+    assert without_case(nodeid, all_parts=True) == "tests/t.py::C::test_y"
+    assert function_from_p2p(nodeid) == "tests/t.py::C::test_y"
+    assert function_from_nodes(nodeid) == "tests/t.py::C::test_y"
 
 
 def test_raw_and_realpath_checkout_spellings_normalise_only_parameter_segment(tmp_path):
