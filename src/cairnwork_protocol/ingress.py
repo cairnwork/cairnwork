@@ -27,6 +27,7 @@ MAX_BODY_BYTES = 1 << 20
 MAX_LENGTH_DIGITS = 8
 REQUEST_TIMEOUT_S = 10.0
 MAX_TIMEOUT_S = 3600
+DRAIN_TIMEOUT_S = 1.0  # an early refusal never waits longer than this for the unread body
 
 _log = logging.getLogger("cairnwork.ingress")
 
@@ -204,6 +205,7 @@ def _make_handler(
             try:
                 length = min(int(text), MAX_BODY_BYTES)
                 if length:
+                    self._deadline = min(self._deadline, time.monotonic() + DRAIN_TIMEOUT_S)
                     self.rfile.read(length)
             except (OSError, OverflowError, TimeoutError, ValueError):
                 # Refusal remains fixed and the connection is closed even on a stalled body.

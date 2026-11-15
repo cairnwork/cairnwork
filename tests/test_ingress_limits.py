@@ -80,3 +80,28 @@ def test_early_refusals_with_body_return_fixed_json(
     conn.close()
     assert response.status == status
     assert json.loads(data) == {"error": expected}
+
+
+def test_early_refusal_with_stalled_body_answers_promptly():
+    import time
+
+    httpd = serve("127.0.0.1", 0, "token", {"/ok": lambda body: (200, {})}, timeout=30)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", httpd.server_port, timeout=10)
+        conn.putrequest("POST", "/ok")
+        conn.putheader("Content-Length", "100000")
+        conn.endheaders()
+        conn.send(b"x" * 10)  # the rest never arrives
+        start = time.monotonic()
+        response = conn.getresponse()
+        data = response.read()
+        conn.close()
+        assert response.status == 401
+        assert json.loads(data) == {"error": "INGRESS_UNAUTHORIZED"}
+        assert time.monotonic() - start < 5
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join()
