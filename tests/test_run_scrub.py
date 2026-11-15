@@ -305,7 +305,7 @@ def test_remove_runs_the_unlock_as_the_account(tmp_path, monkeypatch):
         lambda: type("B", (), {"unconfined": staticmethod(lambda argv: ["sandbox-exec", *argv])})(),
     )
     ran: list[list[str]] = []
-    monkeypatch.setattr(va.subprocess, "run", lambda argv, **_k: ran.append(list(argv)))
+    monkeypatch.setattr(va, "_run_bounded", lambda argv, _timeout: ran.append(list(argv)))
     root = tmp_path / "cairn"
     (root / "runs" / "rid-v0.abcd1234").mkdir(parents=True)
     va.VerifierAccount(user="acct", root=root).remove(root / "runs" / "rid-v0.abcd1234")

@@ -98,6 +98,35 @@ def _backend() -> Backend:
     return backend
 
 
+_TERM_GRACE_SECONDS = 5
+
+
+def _run_bounded(argv: list[str], timeout: float) -> None:
+    """Run ``argv`` (output dropped). On timeout end only this child, then raise (#437 H).
+
+    ``subprocess.run`` kills with SIGKILL, which sudo cannot pass on, so the command it started as
+    the account kept running. SIGTERM goes to our own child's pid only (no pkill, no process group);
+    sudo relays it. Never reported as success: the caller sees VerifierAccountError.
+    """
+    proc = subprocess.Popen(  # noqa: S603 - fixed argv, path checked by the caller
+        argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.terminate()
+        try:
+            proc.wait(timeout=_TERM_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+        raise VerifierAccountError(f"account cleanup timed out after {timeout:g}s") from None
+    except BaseException:
+        proc.kill()
+        proc.wait()
+        raise
+
+
 @dataclass(frozen=True)
 class VerifierAccount:
     user: str = DEFAULT_USER
@@ -315,9 +344,7 @@ class VerifierAccount:
         from cairnwork.run_scrub import account_delete_argv
 
         for argv in account_delete_argv(self.user, str(real), _backend().unconfined, self.python):
-            subprocess.run(  # noqa: S603 - fixed argv, path checked above
-                argv, capture_output=True, timeout=60, check=False
-            )
+            _run_bounded(argv, 60)
 
     @staticmethod
     def share_run(private: Path, ini: Path, run_dir: Path, home: Path, tmp: Path) -> None:
