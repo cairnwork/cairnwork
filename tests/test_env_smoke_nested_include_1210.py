@@ -89,3 +89,33 @@ def test_nested_nonmatching_includeif_with_missing_target_passes(mirror, tmp_pat
     mid.write_text(f'[includeIf "gitdir:/nonexistent/"]\n\tpath = {tmp_path / "gone.cfg"}\n')
     _g(mirror, "config", "include.path", str(mid))
     assert _include_problem(mirror) is None
+
+
+@pytest.mark.parametrize("prefix", ["gitdir:", "gitdir/i:"])
+def test_top_level_relative_gitdir_includeif_with_missing_target_is_refused(
+    tmp_path, monkeypatch, prefix
+):
+    home = tmp_path / "home"
+    repo = home / "repo"
+    repo.mkdir(parents=True)
+    _g(repo, "init")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    (home / ".gitconfig").write_text(f'[includeIf "{prefix}./"]\n\tpath = gone.cfg\n')
+    assert _include_problem(repo) is not None
+
+
+@pytest.mark.parametrize("prefix", ["gitdir:", "gitdir/i:"])
+def test_nested_relative_gitdir_includeif_with_missing_target_is_refused(mirror, prefix):
+    mid = mirror.parent / "mid.cfg"
+    mid.write_text(f'[includeIf "{prefix}./{mirror.name}/"]\n\tpath = gone.cfg\n')
+    _g(mirror, "config", "include.path", str(mid))
+    assert _include_problem(mirror) is not None
+
+
+def test_nested_relative_gitdir_nonmatching_includeif_passes(mirror):
+    mid = mirror.parent / "mid.cfg"
+    mid.write_text('[includeIf "gitdir:./nonexistent/"]\n\tpath = gone.cfg\n')
+    _g(mirror, "config", "include.path", str(mid))
+    assert _include_problem(mirror) is None
