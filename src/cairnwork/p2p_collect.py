@@ -42,7 +42,6 @@ from cairnwork.conftest_check import conftest_of
 from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRejected
 from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.node_ids import show, unmatched_note
-from cairnwork.p2p_collect_1128 import inherited_same_file_definitions
 from cairnwork.p2p_function import _function
 from cairnwork.p2p_nodes import changed_tests, module_changed
 from cairnwork.p2p_selection import MODULE_DIR_CAP
@@ -128,7 +127,11 @@ def classify(base_ids, test_ids, edited, source, base_source) -> CollectedSide:
     base_ids, test_ids, edited = frozenset(base_ids), frozenset(test_ids), frozenset(edited)
     collected_funcs = {_function(nodeid) for nodeid in test_ids}
     missing = base_ids - test_ids
-    needed = {_file(nodeid) for nodeid in missing if _file(nodeid) in edited}
+    needed = {
+        _file(nodeid)
+        for nodeid in missing
+        if _file(nodeid) in edited and _function(nodeid) not in collected_funcs
+    }
     sources = {
         "test": {path: source(path) for path in sorted(needed)},
         "base": {path: base_source(path) for path in sorted(needed)},
@@ -142,14 +145,8 @@ def classify(base_ids, test_ids, edited, source, base_source) -> CollectedSide:
         and _function(nodeid) in collected_funcs
         and "[" in nodeid.partition("::")[-1]
     }
-    # A same-file inherited test is defined by its base class. Keep this exception local to a
-    # statically resolvable class chain; the child classifier remains authoritative otherwise.
-    inherited_removed = inherited_same_file_definitions(
-        dropped, sources.get("base", {}), sources.get("test", {})
-    )
-    allowed_removed = case_removed | inherited_removed
-    removed |= allowed_removed
-    dropped -= allowed_removed
+    removed |= case_removed
+    dropped -= case_removed
     return CollectedSide(base_ids, test_ids, removed, dropped)
 
 

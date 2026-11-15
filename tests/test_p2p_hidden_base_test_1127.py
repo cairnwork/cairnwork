@@ -2,8 +2,8 @@
 
 Each case passes the base / test-commit ids that ``pytest --collect-only`` really gives for the two
 sources (checked on CPython 3.14.7, pytest from uv.lock), then asks ``classify`` for the split.
-Found by the 2026-11-10 p2p re-verify of #1072 #1075 #1112 #1114; the false refusals of #1128 stay
-xfail(strict=True) here so that a change to them is seen.
+Found by the 2026-11-10 p2p re-verify of #1072 #1075 #1112 #1114. #1128 item 1 stays a strict
+xfail; item 2 is covered by tests/test_p2p_collect_1128.py.
 """
 
 from __future__ import annotations
@@ -96,33 +96,21 @@ def test_hidden_base_test_is_dropped(case):
     assert _split(base, test, base_ids, test_ids) == (set(), {nodeid})
 
 
-# --- #1128: honest deletions of a direct same-file parent method are removed only when the
-# test-side source proves the inheritance shape is unambiguous.
-REFUSED = {
-    # deleting a parent test also removes it from a same-file subclass (pre-existing)
-    "inherited-by-same-file-subclass": (
-        "class TestA:\n    def test_x(self):\n        assert True\n"
-        + KEEP
-        + "class TestB(TestA):\n    pass\n",
-        "class TestA:\n" + KEEP + "class TestB(TestA):\n    pass\n",
-        [
-            "t.py::TestA::test_x",
-            "t.py::TestA::test_keep",
-            "t.py::TestB::test_x",
-            "t.py::TestB::test_keep",
-        ],
-        ["t.py::TestA::test_keep", "t.py::TestB::test_keep"],
-        {"t.py::TestA::test_x", "t.py::TestB::test_x"},
-    ),
-    # #842 item 2: one parametrized case deleted, the function kept (not addressed by #1072)
-    "parametrized-case-deleted": (
-        "import pytest\n@pytest.mark.parametrize('n', [1, 2])\ndef test_x(n):\n    assert n\n",
-        "import pytest\n@pytest.mark.parametrize('n', [1])\ndef test_x(n):\n    assert n\n",
-        ["t.py::test_x[1]", "t.py::test_x[2]"],
-        ["t.py::test_x[1]"],
-        {"t.py::test_x[2]"},
-    ),
-}
+# --- #1128 item 1 stays refused: deleting TestA.test_x also removes TestB's inherited copy.
+INHERITED_DELETE = (
+    "class TestA:\n    def test_x(self):\n        assert True\n"
+    + KEEP
+    + "class TestB(TestA):\n    pass\n",
+    "class TestA:\n" + KEEP + "class TestB(TestA):\n    pass\n",
+    [
+        "t.py::TestA::test_x",
+        "t.py::TestA::test_keep",
+        "t.py::TestB::test_x",
+        "t.py::TestB::test_keep",
+    ],
+    ["t.py::TestA::test_keep", "t.py::TestB::test_keep"],
+    {"t.py::TestA::test_x", "t.py::TestB::test_x"},
+)
 
 
 ANNOTATION_ONLY = (
@@ -139,9 +127,9 @@ def test_annotation_only_is_not_a_rebinding_1128():  # item 3, fixed
     assert _split(base, test, base_ids, test_ids) == (gone, set())
 
 
-@pytest.mark.parametrize("case", sorted(REFUSED))
-def test_honest_deletion_is_removed_1128(case):
-    base, test, base_ids, test_ids, gone = REFUSED[case]
+@pytest.mark.xfail(strict=True, reason="#1128 item 1 remains refused (fail-closed)")
+def test_honest_inherited_base_test_deletion_1128():
+    base, test, base_ids, test_ids, gone = INHERITED_DELETE
     assert _split(base, test, base_ids, test_ids) == (gone, set())
 
 

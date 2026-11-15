@@ -1,18 +1,41 @@
-"""Regression coverage for the two honest deletion shapes in Issue #1128."""
+"""#1128 item 2: only missing parameter cases of still-collected functions are removed."""
+
+from __future__ import annotations
+
+import subprocess
+import sys
 
 import pytest
 
 from cairnwork.p2p_collect import classify
 
 
-def split(base, test, base_ids, test_ids):
-    side = classify(set(base_ids), set(test_ids), {"t.py"}, lambda _: test, lambda _: base)
+def collect(tmp_path, source, filename="test_sample.py"):
+    path = tmp_path / filename
+    path.write_text(source)
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q", str(path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode in {0, 5}, result.stderr
+    return {line.strip() for line in result.stdout.splitlines() if "::" in line}
+
+
+def split(base_ids, test_ids, base, test, edited=("test_sample.py",)):
+    side = classify(
+        base_ids,
+        test_ids,
+        edited,
+        lambda _: test,
+        lambda _: base,
+    )
     return side.removed, side.dropped
 
 
-def _ids(*names):
-    return [f"t.py::{name}" for name in names]
-
+BASE = "import pytest\n@pytest.mark.parametrize('n', [1, 2])\ndef test_x(n): pass\n"
+ONE_CASE = "import pytest\n@pytest.mark.parametrize('n', [1])\ndef test_x(n): pass\n"
 
 ANNOTATED_REBIND = {
     "with-value": "test_x: object = _other\n",
@@ -27,132 +50,68 @@ def test_a_real_rebinding_next_to_an_annotation_is_still_dropped(case):
     base = other + "def test_x():\n    assert True\n" + ANNOTATED_REBIND[case]
     base += "def test_keep():\n    assert True\n"
     test = other + "def test_keep():\n    assert True\n"
-    assert split(base, test, _ids("test_x", "test_keep"), _ids("test_keep")) == (
-        set(),
-        {"t.py::test_x"},
-    )
-
-
-def test_deleted_same_file_base_test_removes_inherited_id():
-    base = "class TestA:\n    def test_x(self): pass\nclass TestB(TestA): pass\n"
-    test = "class TestA: pass\nclass TestB(TestA): pass\n"
-    ids = {"t.py::TestA::test_x", "t.py::TestB::test_x"}
-    assert split(base, test, ids, set()) == (ids, set())
-
-
-def test_param_case_removed_while_function_remains_is_removed():
-    base = "import pytest\n@pytest.mark.parametrize('n', [1, 2])\ndef test_x(n): pass\n"
-    test = "import pytest\n@pytest.mark.parametrize('n', [1])\ndef test_x(n): pass\n"
-    assert split(base, test, {"t.py::test_x[1]", "t.py::test_x[2]"}, {"t.py::test_x[1]"}) == (
-        {"t.py::test_x[2]"},
-        set(),
-    )
-
-
-def test_real_test_drop_remains_refused():
-    base = "class TestA:\n    def test_x(self): pass\n    def test_keep(self): pass\n"
-    test = (
-        "class TestA:\n    if False:\n        def test_x(self): pass\n"
-        "    def test_keep(self): pass\n"
-    )
     assert split(
+        {"t.py::test_x", "t.py::test_keep"},
+        {"t.py::test_keep"},
         base,
         test,
-        {"t.py::TestA::test_x", "t.py::TestA::test_keep"},
-        {"t.py::TestA::test_keep"},
-    ) == (
+        edited=("t.py",),
+    ) == (set(), {"t.py::test_x"})
+
+
+def test_missing_param_case_is_removed_when_function_is_collected(tmp_path):
+    base_ids = collect(tmp_path, BASE)
+    test_ids = collect(tmp_path, ONE_CASE)
+    assert split(base_ids, test_ids, BASE, ONE_CASE) == (
+        {"test_sample.py::test_x[2]"},
         set(),
-        {"t.py::TestA::test_x"},
     )
 
 
-def test_subclass_override_that_is_deleted_remains_refused():
-    base = "class TestA: pass\nclass TestB(TestA):\n    def test_x(self): pass\n"
-    test = "class TestA: pass\nclass TestB(TestA):\n    if False:\n        def test_x(self): pass\n"
-    assert split(base, test, {"t.py::TestB::test_x"}, set()) == (
+def test_plain_test_removed_stays_must_block(tmp_path):
+    base = "def test_x(): pass\ndef test_keep(): pass\n"
+    test = "if False:\n    def test_x(): pass\ndef test_keep(): pass\n"
+    assert split(collect(tmp_path, base), collect(tmp_path, test), base, test) == (
         set(),
-        {"t.py::TestB::test_x"},
+        {"test_sample.py::test_x"},
     )
 
 
-def test_param_case_removed_with_function_remains_refused():
-    base = (
-        "import pytest\n@pytest.mark.parametrize('n', [1, 2])\n"
-        "def test_x(n): pass\ndef test_keep(): pass\n"
-    )
-    test = (
-        "import pytest\n@pytest.mark.parametrize('n', [1])\n"
-        "def test_x(n): pass\ndef test_keep(): pass\n"
-    )
-    base_ids = {"t.py::test_x[1]", "t.py::test_x[2]", "t.py::test_keep"}
-    test_ids = {"t.py::test_x[1]", "t.py::test_keep"}
-    assert split(base, test, base_ids, test_ids) == ({"t.py::test_x[2]"}, set())
-
-
-BLOCKED_INHERITANCE = {
-    "hidden-class-copy": (
-        "class Base: pass\nclass Hidden:\n    def test_x(self): pass\n"
-        "class TestB(Base):\n    def test_k(self): pass\n"
-    ),
-    "conditional-parent-method": (
-        "class Base:\n    if False:\n        def test_x(self): pass\n"
-        "class TestB(Base):\n    def test_k(self): pass\n"
-    ),
-    "function-dunder-test": (
-        "def _f(self): pass\n_f.__test__=False\nclass Base:\n    test_x=_f\n"
-        "class TestB(Base):\n    def test_k(self): pass\n"
-    ),
-    "parent-rebound": (
-        "def _f(self): pass\n_f.__test__=False\nclass Base: pass\nBase.test_x=_f\n"
-        "class TestB(Base):\n    def test_k(self): pass\n"
-    ),
-    "mixin-shadow": (
-        "class Mix:\n    test_x=None\nclass Base:\n    def test_x(self): pass\n"
-        "class TestB(Mix, Base):\n    def test_k(self): pass\n"
-    ),
-    "nested-owner-method": (
-        "class Base:\n    def test_x(self): pass\nclass TestB(Base):\n"
-        "    class Inner:\n        def test_x(self): pass\n    def test_k(self): pass\n"
-    ),
-    "dynamic-type-parent": (
-        "class Base:\n    def test_x(self): pass\nclass TestB(Base):\n"
-        "    def test_k(self): pass\nBase = type('Base',(),{'test_x':lambda self: None})\n"
-    ),
-    "owner-hidden": "class Base: pass\nclass TestB(Base):\n    __test__ = False\n",
-}
-
-
-@pytest.mark.parametrize("case", sorted(BLOCKED_INHERITANCE))
-def test_ambiguous_parent_deletion_stays_dropped(case):
-    base = (
-        "class Base:\n    def test_x(self): pass\nclass TestB(Base):\n    def test_k(self): pass\n"
-    )
-    test = BLOCKED_INHERITANCE[case]
-    ids = {"t.py::TestB::test_x", "t.py::TestB::test_k"}
-    assert split(base, test, ids, {"t.py::TestB::test_k"}) == (set(), {"t.py::TestB::test_x"})
-
-
-def test_deleted_whole_parametrized_function_is_removed():
-    base = (
-        "import pytest\n@pytest.mark.parametrize('n', [1, 2])\n"
-        "def test_x(n): pass\ndef test_keep(): pass\n"
-    )
+def test_deleted_whole_parametrized_function_keeps_main_behavior(tmp_path):
     test = "def test_keep(): pass\n"
-    ids = {"t.py::test_x[1]", "t.py::test_x[2]", "t.py::test_keep"}
-    assert split(base, test, ids, {"t.py::test_keep"}) == (
-        {"t.py::test_x[1]", "t.py::test_x[2]"},
+    base = BASE + "def test_keep(): pass\n"
+    assert split(collect(tmp_path, base), collect(tmp_path, test), base, test) == (
+        {"test_sample.py::test_x[1]", "test_sample.py::test_x[2]"},
         set(),
     )
 
 
-def test_parent_method_delete_removes_inherited_ids_in_children():
-    base = (
-        "class TestA:\n    def test_x(self): pass\n"
-        "class TestB(TestA):\n    def test_k(self): pass\n"
-    )
-    test = "class TestA: pass\nclass TestB(TestA):\n    def test_k(self): pass\n"
-    ids = {"t.py::TestA::test_x", "t.py::TestB::test_x", "t.py::TestB::test_k"}
-    assert split(base, test, ids, {"t.py::TestB::test_k"}) == (
-        {"t.py::TestA::test_x", "t.py::TestB::test_x"},
+def test_missing_case_in_unedited_file_stays_dropped(tmp_path):
+    base_ids = collect(tmp_path, BASE)
+    test_ids = collect(tmp_path, ONE_CASE)
+    assert split(base_ids, test_ids, BASE, ONE_CASE, edited=()) == (
         set(),
+        {"test_sample.py::test_x[2]"},
+    )
+
+
+def test_plain_id_is_not_a_removed_parameter_case_when_function_is_collected(tmp_path):
+    base = "def test_x(): pass\n"
+    test = "import pytest\n@pytest.mark.parametrize('n', [1])\ndef test_x(n): pass\n"
+    assert split(collect(tmp_path, base), collect(tmp_path, test), base, test) == (
+        set(),
+        {"test_sample.py::test_x"},
+    )
+
+
+def test_missing_case_when_function_is_not_collected_is_not_newly_removed(tmp_path):
+    test = (
+        "import pytest\nif False:\n    @pytest.mark.parametrize('n', [1])\n"
+        "    def test_x(n): pass\n"
+    )
+    base_ids = collect(tmp_path, BASE)
+    test_ids = collect(tmp_path, test)
+    assert split(base_ids, test_ids, BASE, test) == (
+        set(),
+        {"test_sample.py::test_x[1]", "test_sample.py::test_x[2]"},
     )
