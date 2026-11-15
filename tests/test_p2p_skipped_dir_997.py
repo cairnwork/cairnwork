@@ -120,3 +120,14 @@ def test_a_root_configured_in_another_case_still_reads_the_tracked_files(bare): 
     with pytest.raises(p2p.BaseUncomparable) as info:  # tracked tests/..., targets spell Tests/
         p2p._base_tests(task, frozenset())
     assert info.value.comparison.code == "P2P_BASE_UNTARGETABLE"
+
+
+def test_a_linked_directory_under_a_root_is_untargetable_1000(far):
+    """#1000: pytest follows a directory symlink; ls-tree shows one blob. Fail closed (strict)."""
+    (far / "tests" / "linked").symlink_to("../elsewhere")
+    git(far, "add", "-A")
+    git(far, "commit", "-q", "-m", "directory link")
+    with pytest.raises(p2p.BaseUncomparable) as info:
+        p2p._base_tests(_base(far), frozenset())
+    assert info.value.comparison.code == "P2P_BASE_UNTARGETABLE"
+    assert p2p._base_tests(_base(far), frozenset(), strict=False)  # the env check still reads
