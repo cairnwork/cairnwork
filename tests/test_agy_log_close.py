@@ -38,3 +38,31 @@ def test_log_is_closed_when_popen_fails(tmp_path, monkeypatch):
 
     assert len(opened) == 1
     assert opened[0].closed
+
+
+def test_log_is_closed_when_setup_before_popen_fails(tmp_path, monkeypatch):
+    binary = tmp_path / "agy"
+    binary.write_text(f"#!{sys.executable}\npass\n")
+    binary.chmod(0o755)
+    workdir = tmp_path / f"attempt-{uuid.uuid4().hex[:8]}"
+    workdir.mkdir()
+    opened = []
+    real_fdopen = os.fdopen
+
+    def capture_fdopen(*args, **kwargs):
+        log = real_fdopen(*args, **kwargs)
+        opened.append(log)
+        return log
+
+    def fail_mark():
+        raise OSError("no boot mark")
+
+    monkeypatch.setattr(agy_module.os, "fdopen", capture_fdopen)
+    monkeypatch.setattr(agy_module.proc_start, "boot_mark", fail_mark)
+    task = SimpleNamespace(title="t", instructions="i", allowed_files=("a.py",))
+
+    with pytest.raises(OSError, match="no boot mark"):
+        AgyWorker(agy=str(binary)).run(workdir, task)
+
+    assert len(opened) == 1
+    assert opened[0].closed

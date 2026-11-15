@@ -192,9 +192,9 @@ class AgyWorker:
         env = _kept_env() if dispatch is None else _run_env()
         env[ATTEMPT_ENV] = workdir.name
         log = os.fdopen(fd, "wb")
-        mark = proc_start.boot_mark()  # before the start: what predates it is not the run's
-        dirs = (os.path.realpath(workdir),)  # now: the run may swap it (#578, #537)
-        try:
+        try:  # nothing between fdopen and a started process may leak the log
+            mark = proc_start.boot_mark()  # before the start: what predates it is not the run's
+            dirs = (os.path.realpath(workdir),)  # now: the run may swap it (#578, #537)
             process = subprocess.Popen(  # noqa: S603 - fixed argv, no shell
                 argv,
                 cwd=workdir,
