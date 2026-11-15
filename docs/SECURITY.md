@@ -159,6 +159,14 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
       the policy is refused rather than leave a link unscanned.
       Residual: deeper levels are not scanned (counted in the policy notes), so a link below
       them leaves its target readable. Each real target is masked once.
+      Known over-refusals (fail closed, #423): non-ASCII, colon and parenthesis paths fail the
+      policy path whitelist `^/[A-Za-z0-9 _./+@~-]*$` on both backends; a root-owned 0700
+      subdirectory in a credential directory refuses the run; owner mode refuses a link target
+      it cannot stat; a credential subdirectory that disappears or is renamed during the link scan
+      refuses the run (skipping it would leave a renamed subtree's links unscanned, so it stays
+      closed). Residual (#427): a link to an outside directory is masked with a tmpfs, but
+      that directory is not itself scanned, so a link inside it leaves its own target readable
+      (second hop); this is not yet confirmed on real bwrap.
     - **Socket trees**: `/tmp/.X11-unix` (an X server lets a process inject input and run commands
       outside the sandbox), `/run/user` (the systemd user bus and session agents) and `/run/libvirt`
       (every libvirt daemon socket) are hidden by the private `/tmp` and `/run` (subject to the two
