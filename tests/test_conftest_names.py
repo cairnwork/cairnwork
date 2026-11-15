@@ -157,9 +157,42 @@ def test_bound_and_requested_read_every_form():
 
     tree = ast.parse(
         "import a.b as c\nfrom d import e\nx = y = 1\nz: int = 2\n"
+        "for lp in ():\n    pass\nwith ctx() as wt:\n    pass\n"
+        "match m:\n    case [mc, *ms] as ma:\n        pass\n    case {**mr}:\n        pass\n"
         "@pytest.fixture(name='alias')\ndef f(p, /, q, *, r):\n"
         "    request.getfixturevalue('dyn')\n    return lambda s: s\n"
         "@pytest.mark.usefixtures('u1', 'u2')\nclass T:\n    pass\n"
     )
-    assert bound(tree) == {"c", "e", "x", "y", "z", "f", "alias", "T"}
+    assert bound(tree) == {
+        "c",
+        "e",
+        "x",
+        "y",
+        "z",
+        "lp",
+        "wt",
+        "mc",
+        "ms",
+        "ma",
+        "mr",
+        "f",
+        "alias",
+        "T",
+    }
     assert requested(tree) == {"p", "q", "r", "s", "dyn", "u1", "u2"}
+
+
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        ("async def _():\n    async for af in ():\n        pass\n", {"af"}),
+        ("async def _():\n    async with c() as aw:\n        pass\n", {"aw"}),
+    ],
+)
+def test_bound_by_async_for_and_with(code, expected):
+    import ast
+
+    from cairnwork.conftest_names import bound_by
+
+    stmt = ast.parse(code).body[0].body[0]  # type: ignore[attr-defined]
+    assert bound_by(stmt) == expected

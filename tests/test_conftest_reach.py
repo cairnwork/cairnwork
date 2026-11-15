@@ -234,6 +234,15 @@ LITERAL_PLUGINS = [
     'pytest_plugins = ["x"] + PLUGINS\n',  # the literal half of a partly unread value
     'pytest_plugins = ["x"] * 1\n',  # a literal under another operator
     '(pytest_plugins := ["x"])\n',  # an assignment expression binds it too (#1027)
+    'for pytest_plugins in (["x"],):\n    pass\n',  # #1010 loop target
+    'for _k, pytest_plugins in [(1, ["x"])]:\n    pass\n',
+    'async def _f():\n    async for pytest_plugins in (["x"],):\n        pass\n',
+    'from contextlib import nullcontext\nwith nullcontext(["x"]) as pytest_plugins:\n    pass\n',
+    'async def _f():\n    async with a(["x"]) as pytest_plugins:\n        pass\n',
+    'match ["x"]:\n    case pytest_plugins:\n        pass\n',
+    'match ["x"]:\n    case [*pytest_plugins]:\n        pass\n',
+    'match {"a": "x"}:\n    case {**pytest_plugins}:\n        pass\n',
+    'match v:\n    case ["x"] as pytest_plugins:\n        pass\n',
 ]
 UNREAD_PLUGINS = [
     'pytest_plugins = ["x"] if FLAG else []\n',
@@ -242,6 +251,9 @@ UNREAD_PLUGINS = [
     'pytest_plugins = list(("x",))\n',
     'pytest_plugins = [f"{NAME}"]\n',
     "(pytest_plugins := PLUGINS)\n",  # #1027
+    "for pytest_plugins in PLUGINS:\n    pass\n",
+    "with ctx(PLUGINS) as pytest_plugins:\n    pass\n",
+    "match PLUGINS:\n    case pytest_plugins:\n        pass\n",
     "pytest_plugins = []\npytest_plugins.append(NAME)\n",
     'import sys\nsetattr(sys.modules[__name__], "pytest_plugins", P)\n',
     'globals()["pytest_plugins"] = P\n',
@@ -281,6 +293,19 @@ def test_a_long_joined_plugin_name_does_not_raise():
 
 def test_append_on_another_name_does_not_add_a_pytest_plugin():
     assert _reach('other.append("x")\n', {"tests/x.py": ""}, ["tests/x.py"]) == ""
+
+
+@pytest.mark.parametrize(
+    ("text", "target"),
+    [
+        ('for other in (["x"],):\n    pass\n', "tests/x.py"),
+        ('with c(["x"]) as other:\n    pass\n', "tests/x.py"),
+        ('match ["x"]:\n    case other:\n        pass\n', "tests/x.py"),
+        ('match d:\n    case {"y": pytest_plugins}:\n        pass\n', "tests/y.py"),
+    ],
+)
+def test_other_loop_with_or_match_does_not_add_a_pytest_plugin(text, target):
+    assert _reach(text, {target: ""}, [target]) == ""
 
 
 def test_the_cap_is_exact(monkeypatch):
