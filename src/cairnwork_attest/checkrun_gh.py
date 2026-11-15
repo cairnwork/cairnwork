@@ -64,6 +64,11 @@ def gh_http(gh: Path) -> GhHttp:
             )
         except subprocess.TimeoutExpired as exc:
             raise OSError("gh api timed out") from exc
-        return _parse_include(proc.stdout)
+        status, out = _parse_include(proc.stdout)
+        if (
+            proc.returncode != 0 and status < 300
+        ):  # gh exits non-zero on 4xx/5xx: that stays HTTP_ERROR
+            raise OSError("gh api failed")
+        return status, out
 
     return call
