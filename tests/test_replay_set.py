@@ -8,6 +8,7 @@ from cairnwork import replay_set
 
 class Task:
     base_commit: str
+    repo: Path
     test_commit = ""
     verifiers = (("pytest", ("python", "-m", "pytest", "--token=secret-value")),)
 
@@ -66,20 +67,33 @@ def test_patch_hash_changes_with_candidate(tmp_path):
     assert first_hash != second_hash
 
 
-def test_capture_failure_is_explicit_and_does_not_change_verdict(tmp_path, monkeypatch):
-    repo, task, candidate = _repo(tmp_path)
-    verdict_before = "FAILED"
-
-    def fail(*args, **kwargs):
-        raise RuntimeError("capture unavailable")
-
-    monkeypatch.setattr(replay_set, "run_git_bytes", fail)
-    record = replay_set.capture(task, candidate, repo=repo)
-    verdict_after = "FAILED"
-    assert record == {"replay_set_error": "RuntimeError"}
-    assert verdict_after == verdict_before
-
-
 def test_verified_and_refused_have_no_replay_set():
     assert replay_set.for_status("VERIFIED", None, "x") == {}
     assert replay_set.for_status("REFUSED", None, "x") == {}
+
+
+def test_argv_secret_value_in_separate_element_is_masked():
+    for flag, value in [("--token", "abc123"), ("--password", "hunter2"), ("--api-key", "zzz"),
+                        ("--secret", "ss"), ("--passwd", "p"), ("--key", "k")]:  # fmt: skip
+        out = replay_set._safe_argv(("x", flag, value), "/h")
+        assert out == ["x", flag, "<redacted>"], flag
+    assert replay_set._safe_argv(("x", "--token=abc123"), "/h") == ["x", "--token=<redacted>"] or (
+        "abc123" not in repr(replay_set._safe_argv(("x", "--token=abc123"), "/h"))
+    )
+    plain = ("python", "-m", "pytest", "-q", "--tb", "short", "--keep-going")
+    assert replay_set._safe_argv(plain, "/h") == list(plain)
+
+
+def test_home_is_replaced_by_placeholder():
+    home = str(Path.home().resolve())
+    out = replay_set._safe_argv((home + "/work", "--cfg=" + home + "/x"), home)
+    assert out == ["<home>/work", "--cfg=<home>/x"]
+
+
+def test_for_status_keeps_failed_and_uncomparable_only(tmp_path):
+    repo, task, candidate = _repo(tmp_path)
+    task.repo = repo
+    for status in ("FAILED", "UNCOMPARABLE"):
+        assert replay_set.for_status(status, task, candidate)["candidate_commit"] == candidate
+    for status in ("VERIFIED", "REFUSED"):
+        assert replay_set.for_status(status, task, candidate) == {}

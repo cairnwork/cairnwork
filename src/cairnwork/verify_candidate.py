@@ -154,7 +154,7 @@ def verify_candidate(
         "verifier_mode": "account" if account is not None else "sandbox_only",
     } | {
         "failure_evidence": result.failure_evidence,
-        "replay_set": replay_set.for_status(status, task, candidate),
+        "replay_set": replay_set.for_status(status, task, candidate, result.verified),
     }  # record-only, never judged (#1105)
 
 
