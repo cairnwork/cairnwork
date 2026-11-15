@@ -43,7 +43,8 @@ def _innermost(exc, _type=type, _tb=BaseException.__traceback__.__get__,
                _next=TracebackType.tb_next.__get__, _frame=TracebackType.tb_frame.__get__,
                _code=FrameType.f_code.__get__, _filename=CodeType.co_filename.__get__):
     # Only exact ImportError instances reach the traceback; all links use builtin descriptors.
-    if _type(exc) not in (ImportError, ModuleNotFoundError):
+    kind = _type(exc)
+    if kind is not ImportError and kind is not ModuleNotFoundError:
         return ""
     tb, last = _tb(exc), ""
     for _ in range(256):
@@ -62,7 +63,8 @@ def _innermost(exc, _type=type, _tb=BaseException.__traceback__.__get__,
 
 def _report_cause(call, report, _type=type, _base=BaseException, _sub=issubclass):
     # Exact pytest objects keep the subsequent instance-field reads away from candidate hooks.
-    if (_type(call) is not CallInfo or _type(report) not in (CollectReport, TestReport)):
+    kind = _type(report)  # identity, never == or `in`: a metaclass __eq__ would run
+    if _type(call) is not CallInfo or (kind is not CollectReport and kind is not TestReport):
         return None
     when = report.when
     if _type(when) is not str or when != "collect":
