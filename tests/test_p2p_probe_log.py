@@ -302,7 +302,64 @@ def test_look_alike_text_next_to_the_new_forms_is_left_alone(tmp_path):
     assert probe_log_tail(log) == text
 
 
-@pytest.mark.parametrize("unit", ["-", "a-", "a_", "x-token-"])
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("API︳KEY=SV", "API︳KEY=<redacted>"),
+        ("API︴KEY=SV", "API︴KEY=<redacted>"),
+        ("API﹍KEY=SV", "API﹍KEY=<redacted>"),
+        ("API﹎KEY=SV", "API﹎KEY=<redacted>"),
+        ("API﹏KEY=SV", "API﹏KEY=<redacted>"),
+        ("ＡＰＩ︳ＫＥＹ=SV", "ＡＰＩ︳ＫＥＹ=<redacted>"),
+        ("ＳＥＣＲＥＴ︴ＡＣＣＥＳＳ﹍ＫＥＹ=SV", "ＳＥＣＲＥＴ︴ＡＣＣＥＳＳ﹍ＫＥＹ=<redacted>"),
+        ("ＧＩＴＨＵＢ﹎ＴＯＫＥＮ=SV", "ＧＩＴＨＵＢ﹎ＴＯＫＥＮ=<redacted>"),
+        ("ＰＲＩＶＡＴＥ﹏ＫＥＹ=SV", "ＰＲＩＶＡＴＥ﹏ＫＥＹ=<redacted>"),
+        ("deploy-github︳token=SV", "deploy-github︳token=<redacted>"),
+        ("ci-db︴password=SV", "ci-db︴password=<redacted>"),
+        ("my-app﹍secret=SV", "my-app﹍secret=<redacted>"),
+        ("foo-bar﹎api_key=SV", "foo-bar﹎api_key=<redacted>"),
+        ("foo-bar﹏api﹏key=SV", "foo-bar﹏api﹏key=<redacted>"),
+        ("--x-b︳token=SV", "--x-b︳token=<redacted>"),
+        ("GITHUB_TOKEN＝SV", "GITHUB_TOKEN＝<redacted>"),
+        ("password＝SV", "password＝<redacted>"),
+        ("ＡＰＩ＿ＫＥＹ＝SV", "ＡＰＩ＿ＫＥＹ＝<redacted>"),
+        ("API︳KEY＝SV", "API︳KEY＝<redacted>"),
+        ("--token＝SV", "--token＝<redacted>"),
+        ("--github-token＝SV", "--github-token＝<redacted>"),
+        ("client-secret＝SV", "client-secret＝<redacted>"),
+        ("api-key＝SV", "api-key＝<redacted>"),
+        ("env＝PASSWORD＝SV", "env＝PASSWORD＝<redacted>"),
+        ("k=1&access_token＝SV&z=1", "k=1&access_token＝<redacted>&z=1"),
+        ("ＡＰİ＿ＫＥＹ=SV", "ＡＰİ＿ＫＥＹ=<redacted>"),
+        ("ＡＰİ︳ＫＥＹ=SV", "ＡＰİ︳ＫＥＹ=<redacted>"),
+        ("ＡＰİ﹍ＫＥＹ＝SV", "ＡＰİ﹍ＫＥＹ＝<redacted>"),
+        ("ＡＰı＿ＫＥＹ=SV", "ＡＰı＿ＫＥＹ=<redacted>"),
+        ("x︳apİ_key=SV", "x︳apİ_key=<redacted>"),
+        ("x﹏APİ_KEY=SV", "x﹏APİ_KEY=<redacted>"),
+        ("ＰＲİＶＡＴＥ＿ＫＥＹ=SV", "ＰＲİＶＡＴＥ＿ＫＥＹ=<redacted>"),
+        ("İＤ＿ＴＯＫＥＮ=SV", "İＤ＿ＴＯＫＥＮ=<redacted>"),
+        ("ＰＡßＷＯＲＤ=SV", "ＰＡßＷＯＲＤ=<redacted>"),
+        ("my-token＝SV", "my-token＝SV"),
+        ("deploy-github_token＝SV", "deploy-github_token＝SV"),
+        ("x-api＿key＝SV", "x-api＿key＝SV"),
+        ("x-api︳key=SV", "x-api︳key=SV"),
+        ("my-api﹏key=SV", "my-api﹏key=SV"),
+        ("token︳=SV", "token︳=SV"),
+        ("︳︳=SV", "︳︳=SV"),
+        ("foo︳bar=SV", "foo︳bar=SV"),
+        ("foo＝bar", "foo＝bar"),
+        ("x︳apİ=SV", "x︳apİ=SV"),
+        ("x﹏apİ_kex=SV", "x﹏apİ_kex=SV"),
+        ("my-x︳apİ_keys=SV", "my-x︳apİ_keys=SV"),
+    ],
+)
+def test_low_line_lookalikes_full_width_equals_and_mixed_scripts_1313(tmp_path, text, expected):
+    log = tmp_path / "verifier.log"
+    log.write_text(text)
+    assert probe_log_tail(log) == expected
+
+
+@pytest.mark.parametrize("unit", ["-", "a-", "a_", "x-token-", "a＿", "a︳"])
 def test_one_long_line_of_word_characters_and_dashes_is_not_quadratic(tmp_path, unit):
     log = tmp_path / "verifier.log"  # #402: unbounded name prefixes cost ~30 s on a 16 KB line
     log.write_text("head\n" + unit * (15000 // len(unit)) + "\nEND\n")  # inside the 16 KB window

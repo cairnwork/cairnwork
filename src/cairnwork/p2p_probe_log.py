@@ -36,10 +36,12 @@ _FLAG_HEAD = re.compile(r"(?<![\w-])--([\w-]{0,64})$")  # the flag name up to a 
 # a URL-encoded 'name%3Dvalue' (#402)
 _ENCODED = re.compile(rf"(?i)((?<!\w)[\w-]{{0,64}}(?:{_KEYS})%3d)[^&\s]+")
 _HID = "\x00"  # stands for a hidden character until the field pass has read the name (#744)
+_LOW = "\ufe33\ufe34\ufe4d-\ufe4f\uff3f"  # non-ASCII low-line look-alikes that fold to '_' (#1313)
+_LOW_RE = re.compile(f"[{_LOW}]")
 # a name: a run of word characters and markers, not after a word character or a marker; only the
 # name is consumed, so a secret field inside another field's value is still found. After '-' a name
 # counts only when it holds a marker (as '?' started one there before #744; my-token stays shown)
-_NAME = re.compile(rf"(?<![\w{_HID}])([\w{_HID}\uFF3F]+)=")
+_NAME = re.compile(rf"(?<![\w{_HID}{_LOW}])([\w{_HID}{_LOW}]+)[=\uFF1D]")
 _VALUE = re.compile(r"[^&\s]+")
 TAIL_CHARS = 2048
 # any character fits in 4 bytes; twice that, so the window holds more than the tail. A window that
@@ -111,8 +113,8 @@ def mask_secrets(text: str) -> str:
 
 
 def _is_key(name: str) -> bool:
-    """A secret word, or a name ending in one after '_' (GITHUB_TOKEN); full-width letters fold."""
-    name = name.replace("＿", "_")
+    """A secret word, or a name ending in one after '_' (GITHUB_TOKEN); NFKC + case folded."""
+    name = unicodedata.normalize("NFKC", name)
 
     def _candidates(n: str) -> Iterator[str]:
         yield n
@@ -124,7 +126,7 @@ def _is_key(name: str) -> bool:
                 break
             yield n[pos + 1 :]
 
-    for n in (name, name.casefold(), unicodedata.normalize("NFKC", name).casefold()):
+    for n in (name, name.casefold()):
         if any(_KEY.fullmatch(x) for x in _candidates(n)):
             return True
     return False
@@ -139,8 +141,9 @@ def _is_secret_name(text: str, start: int, name: str, names: tuple[str, str]) ->
         # a dashed name counts only as a whole known one: client-secret, api-key, x-auth-token
         word = re.search(r"\w{1,64}$", text[max(0, start - 65) : start - 1])
         dashed = word is not None and bool(_KEY.fullmatch(f"{word.group()}_{name}".casefold()))
-        full_width_suffix = "\uff3f" in name and _is_key(name.rsplit("\uff3f", 1)[-1])
-        return dashed or full_width_suffix
+        low_parts = _LOW_RE.split(name, 1)
+        low_suffix = len(low_parts) > 1 and _is_key(low_parts[1])
+        return dashed or low_suffix
     return any(_is_key(n) for n in names)
 
 
