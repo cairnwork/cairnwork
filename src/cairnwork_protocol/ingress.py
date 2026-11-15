@@ -283,4 +283,5 @@ def serve(
         address_family = socket.AF_INET6 if ":" in host else socket.AF_INET
         daemon_threads = True
 
-    return Server((host, port), handler)
+    # the checked name is not resolved again at bind time
+    return Server(("127.0.0.1" if host == "localhost" else host, port), handler)

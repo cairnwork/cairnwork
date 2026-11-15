@@ -155,3 +155,16 @@ def test_localhost_resolution_failure_is_refused(monkeypatch, result):
     with pytest.raises(IngressError) as err:
         check_bind("localhost", 8080)
     assert err.value.code == "INGRESS_BIND_NOT_LOOPBACK"
+
+
+def test_localhost_is_bound_as_numeric_loopback(monkeypatch):
+    addresses = []
+    real_init = ingress.ThreadingHTTPServer.__init__
+
+    def spy(self, address, *args, **kwargs):
+        addresses.append(address[0])
+        real_init(self, address, *args, **kwargs)
+
+    monkeypatch.setattr(ingress.ThreadingHTTPServer, "__init__", spy)
+    serve("localhost", 0, "token", {}, timeout=2).server_close()
+    assert addresses == ["127.0.0.1"]
