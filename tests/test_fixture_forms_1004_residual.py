@@ -262,3 +262,31 @@ def test_module_alias_controls_do_not_conflict(repo, case):
     }
     nested = "import pytest\n\n\n@pytest.fixture\ndef fresh():\n    return 1\n"
     _check(repo, {NESTED: nested}, path=NESTED, base_files=base)
+
+
+# Deliberate fail-closed trade-off (review r3): a helper function passed as a call argument may be
+# registered as a fixture by the callee, which static reading cannot tell. A nested fixture that
+# shares the helper's name is therefore refused; the same name with no call passing it is accepted.
+SAME_NAME_PASSED = "def session():\n    return 1\n\n\nclient = make(session=session)\n"
+SAME_NAME_NOT_PASSED = "def session():\n    return 1\n\n\nclient = make()\n"
+
+
+def _same_name_check(repo, helper):
+    base = {
+        ABOVE: "import sys, pathlib\n"
+        "sys.path.insert(0, str(pathlib.Path(__file__).parent))\n" + PLUGIN,
+        HELPER: helper,
+    }
+    nested = "import pytest\n\n\n@pytest.fixture\ndef session():\n    return 1\n"
+    _check(repo, {NESTED: nested}, path=NESTED, base_files=base)
+
+
+def test_same_name_helper_passed_to_a_call_is_refused_conservatively(repo):
+    with pytest.raises(dt.TestCommitRejected) as refused:
+        _same_name_check(repo, SAME_NAME_PASSED)
+    assert refused.value.code == "TEST_COMMIT_CONFTEST_STATIC"
+    assert "session" in str(refused.value)
+
+
+def test_same_name_helper_not_passed_to_a_call_is_accepted(repo):
+    _same_name_check(repo, SAME_NAME_NOT_PASSED)
