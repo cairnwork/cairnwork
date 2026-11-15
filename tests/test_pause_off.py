@@ -113,8 +113,42 @@ def test_a_planner_configuration_is_refused_until_the_planner_is_wired(capsys, a
     seen = []
     assert pause_cli.main(argv, worker_main=lambda a: seen.append(a) or 0) == 2
     err = capsys.readouterr().err
-    assert seen == [] and "--planner-config is not wired yet" in err
+    assert seen == [] and ("requires an injected run_factory" in err or "usage:" in err)
     assert not any(code in err for code in schema.Reason)  # a CLI refusal, not a reason code
+
+
+def test_planner_flag_dispatches_to_the_injected_flow(tmp_path, monkeypatch, capsys):
+    from experimental.pause.interfaces import CallSettings
+
+    task = tmp_path / "task.json"
+    task.write_text('{"task_id":"t"}')
+    seen = []
+
+    def factory(path):
+        seen.append(path)
+        return (
+            object(),
+            object(),
+            CallSettings("p", "low", 1, 1),
+            CallSettings("g", "low", 1, 1),
+            object(),
+        )
+
+    class Result:
+        output = "R0\n"
+        code = 0
+
+    monkeypatch.setattr("experimental.pause.cli.run_flow", lambda *a, **k: (Result(), {"ok": True}))
+    monkeypatch.setattr("experimental.pause.cli.receipt_module.append", lambda *a: None)
+    assert (
+        pause_cli.main(
+            ["run", "--planner-config", "config.json", "--task", str(task)],
+            run_factory=factory,  # pyright: ignore[reportArgumentType]
+        )
+        == 0
+    )
+    assert seen == ["config.json"]
+    assert capsys.readouterr().out == 'R0\n{"ok":true}\n'
 
 
 @pytest.mark.parametrize("argv", [[], ["resume", "--task", "t.json"], ["--task", "t.json"]])
