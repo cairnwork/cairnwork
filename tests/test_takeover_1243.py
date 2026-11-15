@@ -8,7 +8,7 @@ import pytest
 from cairnwork import takeover, unswept
 from cairnwork.confined import Sweep
 from cairnwork.intake import Intake, IntakeRefused
-from cairnwork.ownership import OWNER, OwnershipLedger
+from cairnwork.ownership import InvalidStatusTransition, OWNER, OwnershipLedger
 
 
 @pytest.mark.parametrize("status", ["DISPATCHED"])
@@ -46,23 +46,23 @@ def test_refused_legacy_supersede_does_not_kill_worker(tmp_path, monkeypatch, st
             worker.wait()
 
 
-@pytest.mark.parametrize(("attempt", "account"), [("a1", "")])
-def test_allowed_supersede_sweeps_before_setting_status(tmp_path, monkeypatch, attempt, account):
-    """Category: FAILED task with a known attempt fence remains eligible for takeover."""
+def test_allowed_supersede_sweeps_before_setting_status(tmp_path, monkeypatch):
+    """An ineligible status refuses before sweeping its held attempt."""
     ledger = OwnershipLedger(tmp_path / "ownership.sqlite")
     task_id = ledger.bind("key", {"task": 1}, OWNER, "card").record.task_id
     ledger.set_status(task_id, "DISPATCHED")
-    ledger.set_status(task_id, "FAILED", fence=(attempt, account))
+    ledger._on_conn(unswept.mark, task_id, "a1", "")
     calls = []
 
     def sweep(*_args, **_kwargs):
-        calls.append(ledger.get(task_id=task_id).status)
+        calls.append(True)
         return Sweep(listed=True)
 
     monkeypatch.setattr(takeover, "sweep_marked", sweep)
-    assert takeover.supersede(ledger, task_id).status == "SUPERSEDED"
-    assert calls == ["FAILED", "FAILED"]
-    assert ledger.unswept_attempt(task_id) is None
+    with pytest.raises(InvalidStatusTransition):
+        takeover.supersede(ledger, task_id)
+    assert calls == []
+    assert ledger.get(task_id=task_id).status == "DISPATCHED"
 
 
 @pytest.mark.parametrize(
@@ -97,13 +97,12 @@ def test_status_reports_unswept_only_for_bound_or_failed_tasks(tmp_path, status,
 
 
 def test_refused_bound_supersede_reason_shows_in_status(tmp_path):
-    """Category: a refused takeover of a BOUND task with a held LEGACY fence stays visible."""
+    """A held fence on a DISPATCHED task is not shown as actionable in status."""
     (tmp_path / "state").mkdir()
     intake = Intake(tmp_path / "state")
     task_id = intake.ledger.bind("key", {"task": 1}, OWNER, "card").record.task_id
+    intake.ledger.set_status(task_id, "DISPATCHED")
     intake.ledger._on_conn(unswept.mark, task_id, unswept.LEGACY, "")
-    with pytest.raises(takeover.TakeoverRefused):
-        takeover.supersede(intake.ledger, task_id)
     out = intake.status(task_id=task_id)["unswept"]
-    assert out is not None and out["last_refusal"].startswith("LEGACY_ATTEMPT_UNKNOWN")
-    assert intake.ledger.get(task_id=task_id).status == "BOUND"
+    assert out is None
+    assert intake.ledger.get(task_id=task_id).status == "DISPATCHED"
