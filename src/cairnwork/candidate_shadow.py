@@ -218,6 +218,10 @@ def _parse_imports(raw: bytes, path: str) -> set[str]:
             names.update(alias.name for alias in node.names if alias.name != "*")
         elif isinstance(node, ast.Call) and _is_dynamic_import(node.func, aliases):
             named = (k.value for k in node.keywords if k.arg in {"name", "modname"})
+            if any(isinstance(arg, ast.Starred) for arg in node.args) or any(
+                keyword.arg is None for keyword in node.keywords
+            ):
+                names.add("*")
             for arg in (*node.args[:1], *named):  # import_module("x.y"), __import__, importorskip
                 if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
                     names.update(arg.value.lstrip(".").split("."))
@@ -239,10 +243,16 @@ def _parse_top_level_imports(raw: bytes, path: str) -> set[str]:
             names.add(node.module.split(".", 1)[0])
         elif isinstance(node, ast.Call) and _is_dynamic_import(node.func, aliases):
             named = (k.value for k in node.keywords if k.arg in {"name", "modname"})
+            if any(isinstance(arg, ast.Starred) for arg in node.args) or any(
+                keyword.arg is None for keyword in node.keywords
+            ):
+                names.add("*")
             for arg in (*node.args[:1], *named):  # import_module("foo") is a top-level import
                 if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
                     if not arg.value.startswith("."):
                         names.add(arg.value.split(".", 1)[0])
+                else:
+                    names.add("*")
     names.discard("")
     return names
 
