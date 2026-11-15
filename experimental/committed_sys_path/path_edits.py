@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+from collections.abc import Sequence
 
 from experimental.committed_sys_path.aliases import (
     AliasState,
@@ -42,7 +43,7 @@ def _build_parents(tree: ast.AST) -> dict[ast.AST, ast.AST]:
     return parents
 
 
-def _flatten_targets(nodes: list[ast.expr] | tuple[ast.expr, ...]) -> list[ast.expr]:
+def _flatten_targets(nodes: Sequence[ast.expr]) -> list[ast.expr]:
     flat: list[ast.expr] = []
     for t in nodes:
         if isinstance(t, (ast.Tuple, ast.List)):
