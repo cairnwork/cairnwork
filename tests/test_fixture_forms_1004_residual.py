@@ -200,3 +200,65 @@ def test_registration_forms_found_only_through_call_arguments_are_refused(repo, 
         _check(repo, {NESTED: nested}, path=NESTED, base_files=base)
     assert refused.value.code == "TEST_COMMIT_CONFTEST_STATIC"
     assert "a name the base binds or a base test requests (dep)" in str(refused.value)
+
+
+# Review r2 (Codex on 3b99aa56): the same function reached through a module alias or attribute.
+PKG_G = {"tests/pkg/other.py": "def _g(dep):\n    return dep\n", "tests/pkg/__init__.py": ""}
+MODULE_FORMS = {
+    "import other as o": (
+        OTHER_G,
+        "import pytest\nimport other as o\nguard = pytest.fixture()(o._g)\n",
+    ),
+    "import other directly": (
+        OTHER_G,
+        "import pytest\nimport other\nguard = pytest.fixture()(other._g)\n",
+    ),
+    "import a.b as o": (
+        PKG_G,
+        "import pytest\nimport pkg.other as o\nguard = pytest.fixture()(o._g)\n",
+    ),
+    "import a.b dotted use": (
+        PKG_G,
+        "import pytest\nimport pkg.other\nguard = pytest.fixture()(pkg.other._g)\n",
+    ),
+    "from a import b": (
+        PKG_G,
+        "import pytest\nfrom pkg import other\nguard = pytest.fixture()(other._g)\n",
+    ),
+    "from . import other": (
+        OTHER_G,
+        "import pytest\nfrom . import other\nguard = pytest.fixture()(other._g)\n",
+    ),
+    "alias in wrapper call": (
+        OTHER_G,
+        "import pytest\nimport other as o\n" + WRAP + "guard = pytest.fixture()(wrap(fn=o._g))\n",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(MODULE_FORMS))
+def test_module_alias_registrations_are_refused(repo, case):
+    others, helper = MODULE_FORMS[case]
+    base = {
+        ABOVE: "import sys, pathlib\n"
+        "sys.path.insert(0, str(pathlib.Path(__file__).parent))\n" + PLUGIN,
+        **others,
+        HELPER: helper,
+    }
+    nested = "import pytest\n\n\n@pytest.fixture\ndef dep():\n    return 1\n"
+    with pytest.raises(dt.TestCommitRejected) as refused:
+        _check(repo, {NESTED: nested}, path=NESTED, base_files=base)
+    assert refused.value.code == "TEST_COMMIT_CONFTEST_STATIC"
+
+
+@pytest.mark.parametrize("case", list(MODULE_FORMS))
+def test_module_alias_controls_do_not_conflict(repo, case):
+    others, helper = MODULE_FORMS[case]
+    base = {
+        ABOVE: "import sys, pathlib\n"
+        "sys.path.insert(0, str(pathlib.Path(__file__).parent))\n" + PLUGIN,
+        **{path: text.replace("dep", "path") for path, text in others.items()},
+        HELPER: helper,
+    }
+    nested = "import pytest\n\n\n@pytest.fixture\ndef fresh():\n    return 1\n"
+    _check(repo, {NESTED: nested}, path=NESTED, base_files=base)
