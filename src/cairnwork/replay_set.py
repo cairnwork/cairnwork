@@ -14,9 +14,11 @@ from cairnwork.p2p_probe_log import mask_secrets
 def capture(task, candidate_commit: str, *, repo: Path) -> dict:
     """Return a bounded replay description; recording failures never affect the verdict."""
     try:
-        patch = run_git_bytes(  # plumbing: no operator diff config, no textconv driver
-            repo, "diff-tree", "-r", "-p", "--binary", "--no-textconv", "--no-renames",
-            "--full-index", task.base_commit, candidate_commit,
+        # Raw change list (modes, full blob ids, paths): names the candidate's change exactly and,
+        # unlike a textual patch, no operator diff setting or textconv driver can alter it.
+        patch = run_git_bytes(
+            repo, "diff-tree", "-r", "--raw", "-z", "--no-renames", "--full-index",
+            task.base_commit, candidate_commit,
         )  # fmt: skip
         source = Path(__file__).parent
         try:

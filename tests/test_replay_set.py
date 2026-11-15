@@ -144,6 +144,8 @@ def test_patch_hash_ignores_git_diff_config(tmp_path):
     for key, value in (
         ("color.ui", "always"), ("diff.noprefix", "true"), ("diff.srcPrefix", "X/"),
         ("diff.context", "1"), ("diff.interHunkContext", "50"), ("diff.renames", "false"),
+        ("diff.suppressBlankEmpty", "true"), ("diff.algorithm", "patience"),
+        ("diff.external", "/bin/false"),
     ):  # fmt: skip
         _git(repo, "config", key, value)
         assert _patch_hash(repo, task, candidate) == plain, key
