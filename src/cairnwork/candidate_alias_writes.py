@@ -23,8 +23,7 @@ _WRITE_ATTRS = frozenset(
     }
 )
 
-# The imported-name set is file-global and deliberately ignores control flow. A false positive
-# is safer than missing a writer hidden behind a conditional import or alias.
+# Only unconditional, unshadowed module imports may establish module identity.
 _PATH_FIRST_OPENERS = frozenset(
     {"os", "io", "builtins", "gzip", "bz2", "lzma", "codecs", "tarfile", "shelve", "dbm"}
 )
@@ -52,14 +51,14 @@ def _is_write_call(
         "writestr",
     }:
         return True
-    if isinstance(call.func, ast.Name) and call.func.id in _DIRECT_WRITERS | writers | fileios:
-        if call.func.id == "FileIO" or call.func.id in fileios:
-            return _mode_is_write(call)
-        return True
     if isinstance(call.func, ast.Name) and _OS_OPEN_PREFIX + call.func.id in openers:
         return _mode_is_write(call, default_write=True, flag_mode=True)
     if isinstance(call.func, ast.Name) and call.func.id in flag_openers:
         return _mode_is_write(call, default_write=True, flag_mode=True)
+    if isinstance(call.func, ast.Name) and call.func.id in _DIRECT_WRITERS | writers | fileios:
+        if call.func.id in fileios:
+            return _mode_is_write(call)
+        return True
     receiver = call.func.value if isinstance(call.func, ast.Attribute) else None
     attr = call.func.attr if isinstance(call.func, ast.Attribute) else ""
     module = (modules or {}).get(receiver.id, receiver.id) if isinstance(receiver, ast.Name) else ""
@@ -111,7 +110,7 @@ def _mode_is_write(
     keyword_modes = [kw.value for kw in call.keywords if kw.arg in mode_keywords]
     if keyword_modes:
         return any(
-            _mode_value_is_write(value, zip_mode, default_write, flag_mode)
+            _mode_value_is_write(value, zip_mode, flag_mode)
             for value in keyword_modes
         )
     index = 0 if path_like else mode_index
@@ -135,12 +134,10 @@ def _mode_is_write(
         ):
             return True
         return default_write
-    return _mode_value_is_write(mode_arg, zip_mode, default_write, flag_mode)
+    return _mode_value_is_write(mode_arg, zip_mode, flag_mode)
 
 
-def _mode_value_is_write(
-    mode_arg: ast.AST, zip_mode: bool, default_write: bool, flag_mode: bool
-) -> bool:
+def _mode_value_is_write(mode_arg: ast.AST, zip_mode: bool, flag_mode: bool) -> bool:
     if not isinstance(mode_arg, ast.Constant):
         return True
     value = mode_arg.value
@@ -148,8 +145,6 @@ def _mode_value_is_write(
         return not isinstance(value, str) or value in {"w", "x", "a"}
     if flag_mode:
         return not isinstance(value, str) or value != "r"
-    if isinstance(value, bool):
-        return not flag_mode or value
     if not isinstance(value, (str, int)):
         return True
     if isinstance(value, int):
@@ -198,6 +193,20 @@ def _imported_names(
     )
 
 
+def _exclusive_imported_names(
+    tree: ast.Module, names: frozenset[str], modules: frozenset[str]
+) -> frozenset[str]:
+    return frozenset(
+        alias.asname or alias.name
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module in modules
+        for alias in node.names
+        if alias.name in names and _has_only_import_binding(
+            tree, alias.asname or alias.name, node, alias
+        )
+    )
+
+
 def _imported_openers(tree: ast.Module) -> frozenset[str]:
     """File-global aliases of file openers; control flow is deliberately ignored."""
     names = frozenset({"open", "BZ2File", "LZMAFile", "GzipFile", "ZipFile", "fdopen"})
@@ -219,17 +228,49 @@ def _imported_openers(tree: ast.Module) -> frozenset[str]:
 
 
 def _module_aliases(tree: ast.Module) -> dict[str, str]:
-    bindings: dict[str, set[str]] = {}
+    bindings: dict[str, list[tuple[ast.AST, ast.alias, str]]] = {}
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Import):
-            continue
-        for alias in node.names:
-            if alias.name in _MODULES:
-                bindings.setdefault(alias.asname or alias.name, set()).add(alias.name)
-    return {
-        name: next(iter(modules)) if len(modules) == 1 else _AMBIGUOUS_MODULE
-        for name, modules in bindings.items()
-    }
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name in _MODULES:
+                    bindings.setdefault(alias.asname or alias.name, []).append(
+                        (node, alias, alias.name)
+                    )
+    aliases: dict[str, str] = {}
+    for name, imports in bindings.items():
+        if len(imports) == 1 and _has_only_import_binding(tree, name, *imports[0][:2]):
+            aliases[name] = imports[0][2]
+        else:
+            aliases[name] = _AMBIGUOUS_MODULE
+    return aliases
+
+
+def _has_only_import_binding(
+    tree: ast.Module, name: str, import_node: ast.AST, import_alias: ast.alias
+) -> bool:
+    """Trust only one direct module-body import and no other binding of its name."""
+    bindings = 0
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id == name and isinstance(
+            node.ctx, (ast.Store, ast.Del)
+        ):
+            bindings += 1
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bindings += node.name == name
+        elif isinstance(node, ast.arg):
+            bindings += node.arg == name
+        elif isinstance(node, ast.alias):
+            bound = node.asname or node.name.split(".")[0]
+            bindings += bound == name
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
+            bindings += name in node.names
+        elif isinstance(node, ast.ExceptHandler):
+            bindings += node.name == name
+        elif isinstance(node, (ast.MatchAs, ast.MatchStar)):
+            bindings += node.name == name
+        elif isinstance(node, ast.MatchMapping):
+            bindings += node.rest == name
+    return bindings == 1 and import_node in tree.body and import_alias in import_node.names
 
 
 def _is_write_statement(

@@ -8,6 +8,7 @@ from collections import Counter
 from collections.abc import Sequence
 
 from cairnwork.candidate_alias_writes import (
+    _exclusive_imported_names,
     _imported_names,
     _imported_openers,
     _is_write_statement,
@@ -19,24 +20,6 @@ _DEF_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
 _PARSE_ERRORS = (SyntaxError, ValueError, UnicodeError, RecursionError, MemoryError)
 
 TABLES = frozenset({"modules", "meta_path", "path_hooks", "path_importer_cache"})
-
-WRITE_ATTRS = frozenset(
-    {
-        "write_text",
-        "write_bytes",
-        "copyfile",
-        "copy",
-        "copy2",
-        "copytree",
-        "move",
-        "rename",
-        "replace",
-        "symlink",
-        "link",
-        "extract",
-        "extractall",
-    }
-)
 
 PATH_WORDS = frozenset(
     {
@@ -283,7 +266,7 @@ def runtime_shadow_added(old: bytes | None, new: bytes) -> bool:
         frozenset({"NamedTemporaryFile", "copyfileobj"}),
         frozenset({"tempfile", "shutil"}),
     )
-    fileios = _imported_names(new_tree, frozenset({"FileIO"}), frozenset({"io"}))
+    fileios = _exclusive_imported_names(new_tree, frozenset({"FileIO"}), frozenset({"io"}))
     flag_openers = _imported_names(new_tree, frozenset({"open"}), frozenset({"shelve", "dbm"}))
     modules = _module_aliases(new_tree)
     added_write = any(
