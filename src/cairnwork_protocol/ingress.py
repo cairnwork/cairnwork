@@ -26,6 +26,7 @@ from typing import Any, cast
 MAX_BODY_BYTES = 1 << 20
 MAX_LENGTH_DIGITS = 8
 REQUEST_TIMEOUT_S = 10.0
+MAX_TIMEOUT_S = 3600
 
 _log = logging.getLogger("cairnwork.ingress")
 
@@ -61,7 +62,16 @@ def check_bind(host: str, port: int) -> None:
     if not isinstance(port, int) or isinstance(port, bool) or not 0 <= port <= 65535:
         raise IngressError("INGRESS_BIND_PORT_INVALID")
     if host == "localhost":
-        return
+        try:
+            addresses = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+            loopback = bool(addresses) and all(
+                ipaddress.ip_address(address[4][0]).is_loopback for address in addresses
+            )
+        except (OSError, ValueError):
+            loopback = False
+        if loopback:
+            return
+        raise IngressError("INGRESS_BIND_NOT_LOOPBACK")
     try:
         loopback = ipaddress.ip_address(host).is_loopback
     except ValueError:
@@ -184,6 +194,21 @@ def _make_handler(
             if self.command != "HEAD":
                 self.wfile.write(data)
 
+        def _drain_body(self) -> None:
+            values = self.headers.get_all("Content-Length", [])
+            if len(values) != 1:
+                return
+            text = values[0].strip()
+            if not text.isascii() or not text.isdecimal():
+                return
+            try:
+                length = min(int(text), MAX_BODY_BYTES)
+                if length:
+                    self.rfile.read(length)
+            except (OSError, OverflowError, TimeoutError, ValueError):
+                # Refusal remains fixed and the connection is closed even on a stalled body.
+                return
+
         def send_error(self, code: int, message: str | None = None, explain: str | None = None):
             # Stock pages are HTML and echo request text; every error is a fixed JSON code.
             self.close_connection = True
@@ -209,6 +234,7 @@ def _make_handler(
                 status, payload = route(read_body(self.headers, self.rfile))
             except IngressError as exc:
                 self.close_connection = True  # an unread body would poison keep-alive
+                self._drain_body()
                 self._send(exc.status, {"error": exc.code})
                 return
             except Exception:  # noqa: BLE001 - fixed answer, no exception text
@@ -233,12 +259,16 @@ def serve(
 ) -> ThreadingHTTPServer:
     """Build (not start) a loopback-only server; refuses any non-loopback ``host``."""
     check_bind(host, port)
-    if (
-        not isinstance(timeout, (int, float))
-        or isinstance(timeout, bool)
-        or not math.isfinite(timeout)
-        or timeout <= 0
-    ):
+    try:
+        valid_timeout = (
+            isinstance(timeout, (int, float))
+            and not isinstance(timeout, bool)
+            and math.isfinite(timeout)
+            and 0 < timeout <= MAX_TIMEOUT_S
+        )
+    except OverflowError:
+        valid_timeout = False
+    if not valid_timeout:
         raise IngressError("INGRESS_TIMEOUT_INVALID")
     handler = _make_handler(token, routes, timeout)
 
