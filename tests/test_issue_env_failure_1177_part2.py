@@ -42,7 +42,7 @@ def test_deferred_store_environment_failure_stays_queued(setup, monkeypatch, fai
     _assert_queued_error(out, github)
 
 
-def test_deferred_store_actual_git_refusal_still_needs_fix(setup, monkeypatch):
+def test_deferred_store_scratch_git_failure_is_environment_not_candidate(setup, monkeypatch):
     test_commit = "c" * 40
     github = FakeGitHub([issue(block={**BLOCK, "test_commit": test_commit})])
     monkeypatch.setattr(DeferredStore, "has", lambda self, sha: True)
@@ -54,8 +54,7 @@ def test_deferred_store_actual_git_refusal_still_needs_fix(setup, monkeypatch):
         ),
     )
     out = runner.take(setup["intake"], github, setup["clone"])[0]
-    assert out["refused"].startswith("TASK_TEST_COMMIT_UNREADABLE")
-    assert github.labels[7] == {runner.NEEDS_FIX}
+    _assert_queued_error(out, github)  # scratch's own rev-parse failing is environment (#1250)
 
 
 @pytest.mark.parametrize("failure", [FileNotFoundError("git"), subprocess.TimeoutExpired("git", 1)])
