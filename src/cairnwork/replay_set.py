@@ -38,11 +38,14 @@ def for_status(status: str, task, candidate: str, verified: bool = False) -> dic
     """Only a refusing verdict (FAILED, UNCOMPARABLE) keeps a replay set."""
     if verified or status not in {"FAILED", "UNCOMPARABLE"}:
         return {}
-    return capture(task, candidate, repo=task.repo)
+    try:
+        return capture(task, candidate, repo=task.repo)
+    except Exception as exc:  # noqa: BLE001 - e.g. task.repo itself raising; record-only
+        return {"replay_set_error": type(exc).__name__}
 
 
 _SECRET_FLAG = re.compile(
-    r"^--?(?:[a-z0-9_-]*(?:token|password|passwd|secret|api-?key|apikey|credential)[a-z0-9_-]*|key|p)$",
+    r"^--?(?:[a-z0-9_-]*(?:token|password|passwd|pwd|secret|api-?key|apikey|credential|private-?key|auth)[a-z0-9_-]*|key|p)$",
     re.IGNORECASE,
 )
 

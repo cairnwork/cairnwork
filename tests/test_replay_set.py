@@ -74,7 +74,8 @@ def test_verified_and_refused_have_no_replay_set():
 
 def test_argv_secret_value_in_separate_element_is_masked():
     for flag, value in [("--token", "abc123"), ("--password", "hunter2"), ("--api-key", "zzz"),
-                        ("--secret", "ss"), ("--passwd", "p"), ("--key", "k")]:  # fmt: skip
+                        ("--secret", "ss"), ("--passwd", "p"), ("--key", "k"), ("--pwd", "q"),
+                        ("--private-key", "pk"), ("--auth", "a")]:  # fmt: skip
         out = replay_set._safe_argv(("x", flag, value), "/h")
         assert out == ["x", flag, "<redacted>"], flag
     assert replay_set._safe_argv(("x", "--token=abc123"), "/h") == ["x", "--token=<redacted>"] or (
@@ -97,3 +98,12 @@ def test_for_status_keeps_failed_and_uncomparable_only(tmp_path):
         assert replay_set.for_status(status, task, candidate)["candidate_commit"] == candidate
     for status in ("VERIFIED", "REFUSED"):
         assert replay_set.for_status(status, task, candidate) == {}
+
+
+def test_for_status_swallows_a_task_without_repo():
+    class Bad:
+        @property
+        def repo(self):
+            raise RuntimeError("no repo")
+
+    assert replay_set.for_status("FAILED", Bad(), "x") == {"replay_set_error": "RuntimeError"}
