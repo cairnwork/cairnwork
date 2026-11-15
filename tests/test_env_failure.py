@@ -122,7 +122,7 @@ def test_a_failed_child_is_environment_only_when_it_could_not_run(
 
 
 def test_a_checkout_defined_subclass_is_environment_as_on_main(root):
-    # #808 N2: main's errisinstance(OSError) matched these too; loosening is #797's gate
+    # #808 N2: with no traceback (never raised) it stays environment, as on main; #797 below
     mod = module_in(
         root,
         "src/mine.py",
@@ -193,3 +193,67 @@ def test_a_cycle_in_the_chain_ends_the_walk(root):
     assert is_env_failure(info(a), root) is False
     b.__cause__ = OSError()
     assert is_env_failure(info(a), root) is True
+
+
+def raised(mod, func):
+    try:
+        getattr(mod, func)()
+    except BaseException as exc:  # noqa: BLE001
+        return exc
+    raise AssertionError("did not raise")
+
+
+CHECKOUT_SRC = (
+    "import errno, socket\n"
+    "class MyNotFound(FileNotFoundError):\n    pass\n"
+    "def explicit(): raise MyNotFound('mine')\n"
+    "def plain(): raise FileNotFoundError('gone')\n"
+    "def timeout(): raise TimeoutError('slow')\n"
+    "def wrapped():\n"
+    "    try:\n        explicit()\n    except OSError as e:\n"
+    "        raise RuntimeError('x') from e\n"
+    "def denied(): raise PermissionError(errno.EACCES, 'denied')\n"
+    "def gai(): raise socket.gaierror(-2, 'no name')\n"
+    "def c_open(): open('/nonexistent/dir/file')\n"
+    "def c_perm(): open('/', 'w')\n"
+)
+
+
+@pytest.mark.parametrize("func", ["explicit", "plain", "timeout", "wrapped"])
+def test_797_an_oserror_raised_by_checkout_code_gives_teeth(func, root):  # AC1
+    mod = module_in(root, "src/m797.py", CHECKOUT_SRC, "_env808_m797")
+    assert is_env_failure(info(raised(mod, func)), root) is False
+
+
+@pytest.mark.parametrize("func", ["c_open", "c_perm", "denied", "gai"])
+def test_797_checkout_calls_into_stdlib_and_denials_stay_environment(func, root):
+    mod = module_in(root, "src/m797.py", CHECKOUT_SRC, "_env808_m797")
+    assert is_env_failure(info(raised(mod, func)), root) is True
+
+
+def test_797_stdlib_raised_oserror_in_a_test_body_stays_environment(root):
+    # #775 negative: the test body's open() hits a real PermissionError in the stdlib
+    mod = module_in(root, "tests/test_body.py", CHECKOUT_SRC, "_env808_body")
+    assert is_env_failure(info(raised(mod, "c_perm")), root) is True
+
+
+def test_797_an_oserror_raised_outside_the_checkout_stays_environment(root, tmp_path_factory):
+    other = tmp_path_factory.mktemp("elsewhere")
+    mod = module_in(other, "lib.py", CHECKOUT_SRC, "_env808_other")
+    assert is_env_failure(info(raised(mod, "explicit")), root) is True
+
+
+def test_797_a_checkout_path_inside_site_packages_is_not_the_checkout(root):
+    mod = module_in(root, ".venv/lib/site-packages/lib.py", CHECKOUT_SRC, "_env808_sp")
+    assert is_env_failure(info(raised(mod, "explicit")), root) is True
+
+
+def test_797_stdlib_explicit_raise_stays_environment_even_under_the_root():
+    import shutil
+    import sysconfig
+    from pathlib import Path
+
+    lib = Path(sysconfig.get_path("stdlib")).resolve()
+    with pytest.raises(shutil.SameFileError) as caught:
+        shutil.copyfile(__file__, __file__)  # stdlib raises SameFileError (an OSError) itself
+    assert is_env_failure(info(caught.value), lib.parent) is True
