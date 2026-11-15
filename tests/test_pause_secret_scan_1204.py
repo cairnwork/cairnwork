@@ -18,6 +18,18 @@ def _value() -> str:
     return "v" * 22
 
 
+def _expected_category(text: str) -> str:
+    if "Bearer" in text:
+        return "bearer_token"
+    if "/root" in text:
+        return "host_path"
+    if text.startswith("bob"):
+        return "account_name"
+    if "--api-key=" in text or "--token=" in text:
+        return "flag_secret"
+    return "assigned_secret"
+
+
 @pytest.mark.parametrize(
     "text",
     [
@@ -47,7 +59,21 @@ def _value() -> str:
 )
 def test_review_must_block_cases(text: str) -> None:
     configured_names = ("bob",) if text.startswith("bob") else ()
-    assert scan(text, names=configured_names)
+    assert scan(text, names=configured_names) == [_expected_category(text)]
+
+
+@pytest.mark.parametrize(
+    "text", ["token = None,", "--token=value,", "password=x)", "secret = ok;", "key: abc]"]
+)
+def test_short_word_with_trailing_punctuation_is_not_a_secret(text: Any) -> None:
+    assert scan(text) == []
+
+
+@pytest.mark.parametrize(
+    "text", ["token=abcdefghijklmnop,", "token=a,b", "token = abcdefghijklmnop)"]
+)
+def test_trailing_punctuation_does_not_hide_real_values(text: Any) -> None:
+    assert scan(text) == ["assigned_secret"]
 
 
 @pytest.mark.parametrize(

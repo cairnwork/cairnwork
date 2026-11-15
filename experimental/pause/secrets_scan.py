@@ -74,6 +74,7 @@ def scan(text: str, names: tuple[str, ...] = ()) -> list[str]:
                     word is None
                     or (word == "pwd" and _is_path(value))
                     or re.fullmatch(r"[A-Za-z_]\w{0,14}\(\)", value)  # old 16-char floor kept
+                    or _is_short_word_with_trailing_punctuation(value)
                 ):
                     continue
                 hits.append(category)
@@ -129,3 +130,11 @@ class Scanner:
 
     def scan(self, text: str) -> list[str]:
         return scan(text, self.names)
+
+
+def _is_short_word_with_trailing_punctuation(value: str) -> bool:
+    """An unquoted word under the 16-char floor plus trailing , ; ) ] } (``token = None,``)."""
+    if value[:1] in "\"'`":
+        return False
+    stripped = value.rstrip(",;)]}")
+    return stripped != value and len(stripped) < 16 and re.fullmatch(r"\w*", stripped) is not None
