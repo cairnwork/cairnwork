@@ -167,7 +167,10 @@ class _DeadlineHandler(BaseHTTPRequestHandler):
 
 
 def _drain_body(handler: _DeadlineHandler) -> None:
-    """Read a bounded, short-lived part of the unread body so the refusal is not met by RST."""
+    """Read a bounded, short-lived part of the unread body so the refusal is not met by RST.
+
+    Bounded on purpose (MAX_BODY_BYTES, DRAIN_TIMEOUT_S): an upload larger than that can still
+    see a reset, because reading without limit would let a slow client hold the thread (#504)."""
     values = handler.headers.get_all("Content-Length", [])
     if len(values) != 1:
         return

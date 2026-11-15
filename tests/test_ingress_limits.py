@@ -168,3 +168,18 @@ def test_localhost_is_bound_as_numeric_loopback(monkeypatch):
     monkeypatch.setattr(ingress.ThreadingHTTPServer, "__init__", spy)
     serve("localhost", 0, "token", {}, timeout=2).server_close()
     assert addresses == ["127.0.0.1"]
+
+
+def test_drain_never_reads_more_than_the_body_cap():
+    import time
+    from types import SimpleNamespace
+
+    reads = []
+    handler = SimpleNamespace(
+        headers=SimpleNamespace(get_all=lambda *_a: ["99999999"]),
+        rfile=SimpleNamespace(read=lambda n: reads.append(n) or b""),
+        _deadline=time.monotonic() + 60,
+    )
+    ingress._drain_body(handler)  # type: ignore[arg-type]
+    assert reads == [ingress.MAX_BODY_BYTES]
+    assert handler._deadline <= time.monotonic() + ingress.DRAIN_TIMEOUT_S
