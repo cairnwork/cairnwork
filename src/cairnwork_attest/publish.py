@@ -36,6 +36,7 @@ _RETRYABLE = (
     "lock failure",
 )
 _RETRY = object()
+_GIT_TIMEOUT_SECONDS = 120
 Runner = Callable[..., "subprocess.CompletedProcess[str]"]
 
 
@@ -81,14 +82,19 @@ def _git(repo: Path, *args: str, input: bytes | None = None) -> subprocess.Compl
         hooks_off = config_hooks_off(repo, env)
     except GitCommandError as exc:  # a hook name -c cannot carry: git is not run
         return subprocess.CompletedProcess(["git", *args], 1, "", str(exc))
-    proc = subprocess.run(
-        ["git", *_SAFE_OPTIONS, *hooks_off, *_safe_transport_args(args)],
-        cwd=repo,
-        env=env,
-        capture_output=True,
-        check=False,
-        input=input,
-    )
+    argv = ["git", *_SAFE_OPTIONS, *hooks_off, *_safe_transport_args(args)]
+    try:
+        proc = subprocess.run(
+            argv,
+            cwd=repo,
+            env=env,
+            capture_output=True,
+            check=False,
+            input=input,
+            timeout=_GIT_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(argv, 124, "", "git command timed out")
     return subprocess.CompletedProcess(
         proc.args,
         proc.returncode,

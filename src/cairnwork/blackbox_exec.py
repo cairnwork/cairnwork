@@ -41,7 +41,7 @@ from cairnwork.verifier_account import VerifierAccount, VerifierAccountError, lo
 from cairnwork.verifier_exec import _execute, _write_new
 from cairnwork.verifiers import DEFAULT_TIMEOUT_SECONDS, _prepare_run
 from cairnwork.verify_context import VerifyContext
-from cairnwork.workspace import create_attempt_clone, unless_interrupted
+from cairnwork.workspace import create_attempt_clone, make_work_dir, unless_interrupted
 
 RUNNER_SHA256 = hashlib.sha256(_RUNNER_SOURCE.encode()).hexdigest()
 
@@ -91,8 +91,7 @@ def _run(declaration, commit, run_id, timeout, paths, ctx: VerifyContext, python
     account = ctx.account
     clone_id = f"{run_id}-vbb"  # recovery finds it with the verifiers' (recovery._run_dirs)
     work = Path(ctx.run_root) / f"{clone_id}.work"
-    work.parent.mkdir(parents=True, exist_ok=True)
-    work.mkdir(mode=0o700)
+    make_work_dir(work)
     with gitcmd.marked(ATTEMPT_ENV, ctx.attempt_id) if ctx.attempt_id else nullcontext():
         remove = partial(_remove_checkout, work, clone_id, account)
         with unless_interrupted(remove, keep=account is None):  # as verifiers._run_all

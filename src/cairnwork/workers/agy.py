@@ -1,28 +1,23 @@
 """A worker that asks an Agy (Antigravity CLI) model to edit the attempt clone.
 
-The model runs in print mode with ``--mode accept-edits --sandbox`` and the
-clone as its working directory. What that actually allows was probed on
-2026-10-20 (docs/DRILLS.md); it is not a security boundary. Cairnwork never
-trusts the worker: it snapshots only the allowed files and rejects any other
-change in the clone.
-The agy process runs in its own process group, which is killed afterwards. It
-gets only the environment it needs: it signs in from files under HOME (checked
-2026-10-20), plus locale, config dirs, CA bundles and proxies. Other variables in
-Cairnwork's environment do not reach it; proxy URLs may carry credentials, and
-agy can read anything under HOME, so this narrows exposure, it is no boundary.
-Its output is copied into the log by the parent, capped like a verifier log; a
-process it started outside its group is killed if it still carries the attempt
-marker, and one that still holds the output afterwards fails the run, fenced (#537). If that
+The model runs in print mode with ``--mode accept-edits --sandbox`` and the clone as its working
+directory. What that actually allows was probed on 2026-10-20 (docs/DRILLS.md); it is not a security
+boundary. Cairnwork never trusts the worker: it snapshots only the allowed files and rejects any
+other change in the clone. The agy process runs in its own process group, which is killed
+afterwards. It gets only the environment it needs: it signs in from files under HOME (checked
+2026-10-20), plus locale, config dirs, CA bundles and proxies. Other variables in Cairnwork's
+environment do not reach it; proxy URLs may carry credentials, and agy can read anything under HOME,
+so this narrows exposure, it is no boundary. Its output is copied into the log by the parent, capped
+like a verifier log; a process it started outside its group is killed if it still carries the
+attempt marker, and one that still holds the output afterwards fails the run, fenced (#537). If that
 sweep cannot show the marked processes gone (a kill refused, the table unreadable), the run raises
-WorkerMayLive, so the attempt is fenced like an unswept worker account's (#244, #63): on the
-owner's account, or with ``agy_run_as_user`` on the worker account (its takeover sweep covers
-the owner's marked processes too).
-With an account-pool dispatcher configured (agy_dispatch.py) the worker runs that
-instead of agy, prompt on stdin, same environment plus the pool's tuning variables.
-With ``agy_run_as_user`` set as well, the dispatcher runs agy as that worker account,
-and the attempt succeeds only if the dispatcher's worker receipts prove it ran as that
-account and was swept clean; a run left behind by a killed dispatcher is swept through
-the wrapper (agy_receipts.py).
+WorkerMayLive, so the attempt is fenced like an unswept worker account's (#244, #63): on the owner's
+account, or with ``agy_run_as_user`` on the worker account (its takeover sweep covers the owner's
+marked processes too). With an account-pool dispatcher configured (agy_dispatch.py) the worker runs
+that instead of agy, prompt on stdin, same environment plus the pool's tuning variables. With
+``agy_run_as_user`` set as well, the dispatcher runs agy as that worker account, and the attempt
+succeeds only if the dispatcher's worker receipts prove it ran as that account and was swept clean;
+a run left behind by a killed dispatcher is swept through the wrapper (agy_receipts.py).
 """
 
 from __future__ import annotations
@@ -83,8 +78,7 @@ Rules:
   researchers or background tasks (in this mode they never report back).
 {hidden_tests}"""
 
-# Only true for a task with deferred tests (test_commit): otherwise the judging tests are
-# the repository's own, which the worker may and should read.
+# Only for a task with deferred tests (test_commit); else the judging tests are the repo's own.
 HIDDEN_TESTS = """- The tests that will judge your fix are not in this repository; do not look for
   them. Read the source you need directly.
 """
@@ -187,22 +181,30 @@ class AgyWorker:
                 "--print-timeout",
                 f"{self.timeout_seconds}s",
             ]
-        log_path = workdir.parent / f"{workdir.name}.agy.log"
-        fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         env = _kept_env() if dispatch is None else _run_env()
         env[ATTEMPT_ENV] = workdir.name
-        log = os.fdopen(fd, "wb")
-        mark = proc_start.boot_mark()  # before the start: what predates it is not the run's
-        dirs = (os.path.realpath(workdir),)  # now: the run may swap it (#578, #537)
-        process = subprocess.Popen(  # noqa: S603 - fixed argv, no shell
-            argv,
-            cwd=workdir,
-            env=env,
-            stdin=subprocess.DEVNULL if dispatch is None else subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT if dispatch is None else subprocess.PIPE,
-            start_new_session=True,
-        )
+        log_path = workdir.parent / f"{workdir.name}.agy.log"
+        fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        try:
+            log = os.fdopen(fd, "wb")
+        except BaseException:
+            os.close(fd)
+            raise
+        try:  # nothing between fdopen and a started process may leak the log
+            mark = proc_start.boot_mark()  # before the start: what predates it is not the run's
+            dirs = (os.path.realpath(workdir),)  # now: the run may swap it (#578, #537)
+            process = subprocess.Popen(  # noqa: S603 - fixed argv, no shell
+                argv,
+                cwd=workdir,
+                env=env,
+                stdin=subprocess.DEVNULL if dispatch is None else subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT if dispatch is None else subprocess.PIPE,
+                start_new_session=True,
+            )
+        except BaseException:
+            log.close()
+            raise
         reader = None
         try:  # an exception before _await owns the process must not leave agy's group running
             if dispatch is not None:
@@ -274,8 +276,7 @@ class AgyWorker:
                 f"unknown; log {log_path}",
                 self.run_as,
             ) from timed_out
-        # a holder without the marker is not one the sweep finds (#537 A); one found only by its
-        # working directory in the clone is the same kind of leftover, killed or not: fenced too
+        # a holder with no marker (#537 A) or found only by its cwd in the clone: fenced too
         if held or by_cwd:
             raise AgyWorkerUnswept(
                 "WORKER_SWEEP_UNCLEAN: "
@@ -328,8 +329,7 @@ def _settle_worker_run(dispatch, reader, process, held, timed_out, log_path) -> 
     found = agy_receipts.problems(receipts)
     completion = agy_receipts.completion_problem(receipts) if code == 0 else None
     signalled = code < 0  # ours or not (#244): a later launch may be unrecorded
-    # no final status line: it ended outside its protocol (a crash, os._exit), so a launch
-    # after the last receipt may be unrecorded too, whatever the exit code (#546)
+    # no final status line: ended outside its protocol (crash, os._exit), any exit code (#546)
     unfinished = receipts.final is None and not signalled
     ended = ["TIMED_OUT"] * (timed_out is not None) + [held] * bool(held)  # "HELD" or "CWD"
     ended += [f"KILLED_BY_SIGNAL: {-code}; launches after the last receipt unknown"] * signalled

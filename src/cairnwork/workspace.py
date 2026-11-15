@@ -388,3 +388,12 @@ def _make_tree_writable(path: Path) -> None:
                     os.chmod(name, stat.S_IRWXU, dir_fd=dir_fd)
     finally:
         os.close(top)
+
+
+def make_work_dir(work: Path) -> None:
+    """Create the 0700 work directory; a leftover one is a WorkspaceError, not a raw crash."""
+    work.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        work.mkdir(mode=0o700)
+    except FileExistsError as exc:
+        raise WorkspaceError(f"leftover work directory: {str(work)!r}") from exc
