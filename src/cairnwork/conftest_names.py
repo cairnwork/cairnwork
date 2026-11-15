@@ -17,7 +17,7 @@ The base files are read in one ``git cat-file --batch``; more than MAX_FILES of 
 base file that does not parse counts every identifier in it (``_parse``). What the base modules
 these conftests import (``from M import n``, ``pytest_plugins``) request counts too, followed
 through re-exports (``_imported``, #982 item 4). Not seen: a name a third-party plugin's fixture
-requests internally, the ini ``usefixtures`` option, a module a test module imports, and a module
+requests internally, the ini ``usefixtures`` option, a module a test module imports (except a helper it binds under a test name, #987), and a module
 imported by name at run time (``importlib``).
 """
 
@@ -66,6 +66,7 @@ def taken_names(
             names |= requested(tree)
     conftests = {f: t for f, t in trees.items() if f.rsplit("/", 1)[-1] == "conftest.py"}
     index = _module_index(listing)
+    names |= _test_bound_helpers(repo, listing, index, trees, directory)
     imported = _imported(repo, listing, conftests, index)
     all_trees = {**trees, **imported}
     if path not in all_trees:
@@ -164,6 +165,67 @@ def _fixtures(
             a = node.args
             names |= {node.name} | {x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs)}
     return names
+
+
+def _test_bound_helpers(
+    repo: Path,
+    listing: dict[str, str],
+    index: dict[str, set[str]],
+    trees: dict[str, ast.Module],
+    directory: str,
+) -> set[str]:
+    """#987: a test module under ``directory`` that imports ``f`` (``from M import f``) and binds
+    it under a test name (``test_x = f``, or ``from M import f as test_x``) makes pytest collect
+    ``f`` with its own parameters. Those count, from a base file outside ``directory`` too. Only
+    this form: other imported functions are not read (#982). Every base file matching ``M`` is
+    read; if ``f`` is no top-level def there, every parameter in it counts (fail closed)."""
+    wanted: dict[str, set[str]] = {}  # module file -> function names
+    for file, tree in trees.items():
+        if file.rsplit("/", 1)[-1] == "conftest.py" or not _under(file, directory):
+            continue
+        for module, orig in _test_named_imports(file, tree):
+            for target in index.get(module, ()):
+                wanted.setdefault(target, set()).add(orig)
+    files = sorted(wanted)
+    names: set[str] = set()
+    for file, data in zip(files, _read(repo, [listing[f] for f in files]), strict=True):
+        tree = trees[file] if file in trees else _parse(file, data)
+        defs = {
+            n.name: n for n in tree.body if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)
+        }
+        for orig in wanted[file]:
+            names |= _params(defs[orig]) if orig in defs else requested(tree)
+    return names
+
+
+def _params(node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+    a = node.args
+    return {x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs, a.vararg, a.kwarg) if x}
+
+
+def _test_named_imports(file: str, tree: ast.Module) -> list[tuple[str, str]]:
+    """(module, name) of each ``from module import name`` that ends up under a name starting
+    with ``test``: directly (``as test_x``) or through ``test_x = alias`` at module level."""
+    imports: dict[str, tuple[str, str]] = {}
+    out: list[tuple[str, str]] = []
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom):
+            up = dirname(file)
+            for _ in range(max(node.level - 1, 0)):
+                up = dirname(up)
+            head = ".".join(filter(None, [*(up.split("/") if node.level else ()), node.module]))
+            for a in node.names:
+                imports[a.asname or a.name] = (head, a.name)
+                if (a.asname or a.name).startswith("test"):
+                    out.append((head, a.name))
+        elif isinstance(node, ast.Assign) and any(  # a tuple value: every imported name in it
+            isinstance(n, ast.Name) and n.id.startswith("test")
+            for t in node.targets for n in ast.walk(t)
+        ):  # fmt: skip
+            parts = node.value.elts if isinstance(node.value, ast.Tuple | ast.List) else [node.value]
+            used = {n.id for n in parts if isinstance(n, ast.Name)}
+            out += [imports[u] for u in sorted(used) if u in imports]
+    return out
 
 
 def _listing(repo: Path, base: str) -> dict[str, str]:
