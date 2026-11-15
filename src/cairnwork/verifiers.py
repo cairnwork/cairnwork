@@ -94,7 +94,7 @@ from cairnwork.verifier_spec import (  # re-exported for existing importers
     protected_verifier_inputs,
 )
 from cairnwork.verify_context import VerifyContext, verifier_interpreter
-from cairnwork.workspace import create_attempt_clone, unless_interrupted
+from cairnwork.workspace import create_attempt_clone, make_work_dir, unless_interrupted
 
 __all__ = [
     "DEFAULT_TIMEOUT_SECONDS",
@@ -215,14 +215,15 @@ def _run_all(batch: _Batch, specs, run_id) -> tuple[VerifierRun, ...]:
         raise VerifierRejected(f"duplicate verifier ids in {ids}")
     runs = []
     for index, spec in enumerate(specs):
+        if index and ctx.account is not None:
+            ctx.account.require_idle()  # survivors of the last spec
         clone_id = f"{run_id}-v{index}"
         # The checkout sits alone in its own work directory, which the tests may write:
         # some create files next to their repository (Nexus-new: nexus-runtime-targets),
         # and that must stay inside this run. Under the account the checkout is its own copy, which
         # it may rename (sticky only protects the owner's names): _same_directory catches that.
         work = Path(ctx.run_root) / f"{clone_id}.work"
-        work.parent.mkdir(parents=True, exist_ok=True)
-        work.mkdir(mode=0o700)
+        make_work_dir(work)
         mark = gitcmd.marked(ATTEMPT_ENV, ctx.attempt_id) if ctx.attempt_id else nullcontext()
         with mark:
             # Kept on an interrupt for recovery's cwd sweep, except an account's checkout: its
