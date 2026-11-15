@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import ast
 import re
-from collections.abc import Iterator
 from pathlib import Path
 from posixpath import dirname, join
 
@@ -34,44 +33,15 @@ from cairnwork.fixture_forms import (
     CODE,
     _aliases,
     _fixture,
-    _import_head,
     module_level,
     registered,
     resolve_source_aliases,
 )
 from cairnwork.gitcmd import GitCommandError, run_git, run_git_bytes
+from cairnwork.imported_callable_uses import assignment_callables, imported_callable_uses
 
 MAX_FILES = 5000  # base Python files read under one conftest's directory
 _REQUESTS = frozenset({"usefixtures", "getfixturevalue"})
-
-
-def assignment_callables(tree: ast.Module) -> set[str]:
-    """Select names of functions passed within calls in module-level assignments."""
-    words: set[str] = set()
-    for stmt in module_level(tree.body):
-        if not isinstance(stmt, ast.Assign | ast.AnnAssign | ast.AugAssign):
-            continue
-        value = getattr(stmt, "value", None)
-        if value is None:
-            continue
-        calls = [node for node in ast.walk(value) if isinstance(node, ast.Call)]
-        args = [arg for call in calls for arg in call.args]
-        args.extend(keyword.value for call in calls for keyword in call.keywords)
-        for arg in args:
-            words.update(
-                node.id if isinstance(node, ast.Name) else node.attr
-                for node in _call_arg_nodes(arg)
-                if isinstance(node, ast.Name | ast.Attribute)
-            )
-    return words
-
-
-def _call_arg_nodes(node: ast.AST) -> Iterator[ast.AST]:
-    if isinstance(node, ast.Lambda):
-        return
-    yield node
-    for child in ast.iter_child_nodes(node):
-        yield from _call_arg_nodes(child)
 
 
 def taken_names(
@@ -103,7 +73,7 @@ def taken_names(
     resolved = resolve_source_aliases(all_trees, index)
     for conftest, tree in parent_conftests:
         names |= bound(tree, extra=resolved.get(conftest)) | requested(tree)
-    called = _imported_callable_uses(imported, index)
+    called = imported_callable_uses(imported, index)
     for f, tree in imported.items():
         names |= _fixtures(tree, extra=resolved.get(f), called=called.get(f, set()))
     return frozenset(bound(old, extra=resolved.get(path))), frozenset(names)
@@ -194,31 +164,6 @@ def _fixtures(
             a = node.args
             names |= {node.name} | {x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs)}
     return names
-
-
-def _imported_callable_uses(
-    trees: dict[str, ast.Module], index: dict[str, set[str]]
-) -> dict[str, set[str]]:
-    """Follow call-argument function names through imported-module aliases."""
-    uses = {file: assignment_callables(tree) for file, tree in trees.items()}
-    edges: list[tuple[str, str, str, str]] = []
-    for file, tree in trees.items():
-        for node in module_level(tree.body):
-            if not isinstance(node, ast.ImportFrom):
-                continue
-            head = _import_head(file, node.module or "", node.level)
-            for target in (index.get(head) or set()) & trees.keys() - {file}:
-                edges.extend(
-                    (file, target, alias.name, alias.asname or alias.name) for alias in node.names
-                )
-    changed = True
-    while changed:
-        changed = False
-        for importer, target, source, local in edges:
-            if local in uses[importer] and source not in uses[target]:
-                uses[target].add(source)
-                changed = True
-    return uses
 
 
 def _listing(repo: Path, base: str) -> dict[str, str]:
