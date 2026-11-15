@@ -61,7 +61,16 @@ def test_deferred_store_actual_git_refusal_still_needs_fix(setup, monkeypatch):
 @pytest.mark.parametrize("failure", [FileNotFoundError("git"), subprocess.TimeoutExpired("git", 1)])
 def test_mirror_base_environment_failure_stays_queued(setup, monkeypatch, failure):
     mirror = setup["clone"].parent / "state-mirror"
-    git(setup["clone"], "clone", "-q", str(setup["clone"]), str(mirror))
+    git(
+        setup["clone"],
+        "clone",
+        "-q",
+        "--single-branch",
+        "--branch",
+        "main",
+        str(setup["clone"]),
+        str(mirror),
+    )
     (setup["intake"].state / "config.json").write_text(json.dumps({"mirror": str(mirror)}))
     github = FakeGitHub([issue()])
 
@@ -75,7 +84,16 @@ def test_mirror_base_environment_failure_stays_queued(setup, monkeypatch, failur
 
 def test_mirror_base_actual_git_refusal_still_needs_fix(setup, monkeypatch):
     mirror = setup["clone"].parent / "state-mirror"
-    git(setup["clone"], "clone", "-q", str(setup["clone"]), str(mirror))
+    git(
+        setup["clone"],
+        "clone",
+        "-q",
+        "--single-branch",
+        "--branch",
+        "main",
+        str(setup["clone"]),
+        str(mirror),
+    )
     (setup["intake"].state / "config.json").write_text(json.dumps({"mirror": str(mirror)}))
     github = FakeGitHub([issue()])
 

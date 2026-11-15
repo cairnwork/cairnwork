@@ -49,6 +49,20 @@ def test_no_ps_signature_stays_failed() -> None:
     assert compare(log, CLEAN).verdict == FAILED
 
 
+@pytest.mark.parametrize(
+    ("signature", "expected"),
+    [
+        # Different denied file; a later mention of ps is not the denied filename.
+        ("PermissionError: [Errno 13] Permission denied: '/tmp/data' while checking 'ps'", FAILED),
+        # The denied filename field names ps, so this is a genuine ps denial.
+        ("PermissionError: [Errno 1] Operation not permitted: 'ps'", UNCOMPARABLE),
+    ],
+)
+def test_permission_error_matches_only_denied_filename(signature: str, expected: str) -> None:
+    sandbox = f"FAILED tests/test_a.py::test_x - {signature}\n=== 1 failed in 1s ===\n"
+    assert compare(sandbox, CLEAN).verdict == expected
+
+
 def test_ps_string_planted_in_text_does_not_hide_real_failure_outside() -> None:
     plain = "FAILED tests/test_a.py::test_x - nope\n=== 1 failed, 3 passed in 1s ===\n"
     assert compare(SANDBOX + "echo 'ps: Operation not permitted'", plain).verdict == FAILED

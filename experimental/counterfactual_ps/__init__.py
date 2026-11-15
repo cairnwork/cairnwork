@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass
 
 PS_DENIAL = re.compile(
-    r"PermissionError:.*'(?:/bin/)?ps'"
+    r"PermissionError: (?:\[Errno \d+\] [^:\n]*: )?'(?:/bin/)?ps'(?=\s|$)"
     r"|/bin/ps: Operation not permitted"
     r"|\bps: Operation not permitted"
 )
