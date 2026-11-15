@@ -357,7 +357,7 @@ def scan_unchanged_shadows(
         if tree is None:
             continue
         text = raw.decode("utf-8", errors="replace")
-        edits = find_path_edits(tree, text)
+        edits = find_path_edits(tree, text, shadow_only=True)
         ev = StaticPathEvaluator(collect_aliases_and_env(tree), fp)
         caller_dir = _norm_dir(posixpath.dirname(norm_repo_path(fp)))
         findings.extend(
