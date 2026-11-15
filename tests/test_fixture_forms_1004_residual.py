@@ -290,3 +290,69 @@ def test_same_name_helper_passed_to_a_call_is_refused_conservatively(repo):
 
 def test_same_name_helper_not_passed_to_a_call_is_accepted(repo):
     _same_name_check(repo, SAME_NAME_NOT_PASSED)
+
+
+# Review r4 (Claude on 662555ce): sub-package helpers, relative imports and annotated or augmented
+# assignments of a module-alias attribute.
+SUB_PLUGIN = "pytest_plugins = ['pkg.helpers']\n"
+SUB_HELPER = "tests/pkg/helpers.py"
+SUB_G = "def _g(dep):\n    return dep\n"
+SUB_FORMS = {
+    "from . import other": (
+        {"tests/pkg/other.py": SUB_G, "tests/pkg/__init__.py": ""},
+        "import pytest\nfrom . import other\nguard = pytest.fixture()(other._g)\n",
+    ),
+    "from .other import _g": (
+        {"tests/pkg/other.py": SUB_G, "tests/pkg/__init__.py": ""},
+        "import pytest\nfrom .other import _g\nguard = pytest.fixture()(_g)\n",
+    ),
+    "from .. import other": (
+        {"tests/other.py": SUB_G, "tests/pkg/__init__.py": ""},
+        "import pytest\nfrom .. import other\nguard = pytest.fixture()(other._g)\n",
+    ),
+    "annotated alias attribute": (
+        {"tests/pkg/other.py": SUB_G, "tests/pkg/__init__.py": ""},
+        "import pytest\nimport pkg.other as o\nguard: object = pytest.fixture()(o._g)\n",
+    ),
+    "augmented alias attribute": (
+        {"tests/pkg/other.py": SUB_G, "tests/pkg/__init__.py": ""},
+        "import pytest\nimport pkg.other as o\nguard = []\nguard += pytest.fixture()(o._g)\n",
+    ),
+}
+
+
+def _sub_base(others, helper, rename=False):
+    files = {**others, SUB_HELPER: helper}
+    if rename:
+        files = {k: v.replace("dep", "path") for k, v in files.items()}
+    return {
+        ABOVE: "import sys, pathlib\n"
+        "sys.path.insert(0, str(pathlib.Path(__file__).parent))\n" + SUB_PLUGIN,
+        **files,
+    }
+
+
+def _sub_cases(names):
+    return [(n, SUB_FORMS[n]) for n in names]
+
+
+def _sub_refused_and_control(repo, names):
+    for i, (name, (others, helper)) in enumerate(_sub_cases(names)):
+        blocked, control = f"tests/sub{i}/conftest.py", f"tests/ctl{i}/conftest.py"
+        nested = "import pytest\n\n\n@pytest.fixture\ndef dep():\n    return 1\n"
+        with pytest.raises(dt.TestCommitRejected) as refused:
+            _check(repo, {blocked: nested}, path=blocked, base_files=_sub_base(others, helper))
+        assert refused.value.code == "TEST_COMMIT_CONFTEST_STATIC", name
+        assert "(dep)" in str(refused.value), name
+        fresh = "import pytest\n\n\n@pytest.fixture\ndef fresh():\n    return 1\n"
+        _check(repo, {control: fresh}, path=control, base_files=_sub_base(others, helper, True))
+
+
+def test_subpackage_relative_import_registrations_are_refused(repo):
+    _sub_refused_and_control(
+        repo, ["from . import other", "from .other import _g", "from .. import other"]
+    )
+
+
+def test_annotated_and_augmented_module_alias_registrations_are_refused(repo):
+    _sub_refused_and_control(repo, ["annotated alias attribute", "augmented alias attribute"])
