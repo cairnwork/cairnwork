@@ -51,3 +51,39 @@ def test_missing_scan_base_remains_an_error(tmp_path):
     missing = tmp_path / "missing"
     with pytest.raises(SandboxError, match="cannot scan"):
         bwrap_inner._links_in(str(missing))
+
+
+def test_not_a_directory_on_subdirectory_fails_closed(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    child = home / ".aws" / "child"
+    child.mkdir(parents=True)
+    original = os.scandir
+
+    def scandir(path):
+        if os.fspath(path) == str(child):
+            raise NotADirectoryError(20, "Not a directory", str(child))
+        return original(path)
+
+    monkeypatch.setattr(bwrap_inner.os, "scandir", scandir)
+    with pytest.raises(SandboxError):
+        bwrap.BACKEND.policy((), (), home=home)
+
+
+def test_subdirectory_swapped_for_a_link_is_masked(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    cred = home / ".aws"
+    child = cred / "child"
+    outside = tmp_path / "secret"
+    cred.mkdir(parents=True)
+    child.mkdir()
+    outside.mkdir()
+    original = os.path.islink
+
+    def islink(path):
+        if os.fspath(path) == str(child):
+            return True  # swapped after the listing saw a real directory
+        return original(path)
+
+    monkeypatch.setattr(bwrap_inner.os.path, "islink", islink)
+    links, _, _ = bwrap_inner._links_in(str(cred))
+    assert str(child) in links

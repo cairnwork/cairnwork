@@ -140,10 +140,13 @@ def _links_in(base: str) -> tuple[list[str], int, int]:
     stack = [(base, 0)]
     while stack:
         current, depth = stack.pop()
+        if current != base and os.path.islink(current):  # swapped for a link after listing
+            links.append(current)
+            continue
         try:
             with os.scandir(current) as found:
                 entries = [(e.path, e.is_symlink(), e.is_dir(follow_symlinks=False)) for e in found]
-        except (FileNotFoundError, NotADirectoryError) as err:
+        except FileNotFoundError as err:
             if current != base:
                 vanished += 1
                 continue
