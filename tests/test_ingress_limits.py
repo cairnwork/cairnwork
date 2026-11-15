@@ -105,3 +105,53 @@ def test_early_refusal_with_stalled_body_answers_promptly():
         httpd.shutdown()
         httpd.server_close()
         thread.join()
+
+
+def _raise_422(body):
+    raise IngressError("X", 422)
+
+
+def test_route_refusal_after_full_body_answers_promptly():
+    import time
+
+    httpd = serve("127.0.0.1", 0, "token", {"/r": _raise_422}, timeout=3)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", httpd.server_port, timeout=10)
+        conn.request("POST", "/r", body=b"abcdef", headers={"Authorization": "Bearer token"})
+        start = time.monotonic()
+        response = conn.getresponse()
+        data = response.read()
+        conn.close()
+        assert response.status == 422
+        assert json.loads(data) == {"error": "X"}
+        assert time.monotonic() - start < 1.5
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join()
+
+
+@pytest.mark.parametrize("timeout", [3600.0001, 3601, -(10**400), float("nan"), float("inf"), True])
+def test_more_invalid_timeouts(timeout):
+    with pytest.raises(IngressError):
+        serve("127.0.0.1", 0, "token", {}, timeout=timeout)
+
+
+@pytest.mark.parametrize("timeout", [3600, 3600.0])
+def test_cap_itself_is_accepted(timeout):
+    serve("127.0.0.1", 0, "token", {}, timeout=timeout).server_close()
+
+
+@pytest.mark.parametrize("result", [[], socket.gaierror("x"), OSError("x")])
+def test_localhost_resolution_failure_is_refused(monkeypatch, result):
+    def fake(*_a, **_k):
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(ingress.socket, "getaddrinfo", fake)
+    with pytest.raises(IngressError) as err:
+        check_bind("localhost", 8080)
+    assert err.value.code == "INGRESS_BIND_NOT_LOOPBACK"

@@ -221,6 +221,7 @@ def _make_handler(
                 self._send(code, {"error": _HTTP_CODES.get(code, "INGRESS_HTTP_ERROR")})
 
         def do_POST(self) -> None:
+            consumed = False
             try:
                 if len(self.headers.get_all("Host", [])) > 1:
                     raise IngressError("INGRESS_HOST_DUPLICATE")
@@ -234,10 +235,13 @@ def _make_handler(
                 route = table.get(self.path)
                 if route is None:
                     raise IngressError("INGRESS_NOT_FOUND", 404)
-                status, payload = route(read_body(self.headers, self.rfile))
+                body = read_body(self.headers, self.rfile)
+                consumed = True  # a route's own refusal must not wait for more body
+                status, payload = route(body)
             except IngressError as exc:
                 self.close_connection = True  # an unread body would poison keep-alive
-                _drain_body(self)
+                if not consumed:
+                    _drain_body(self)
                 self._send(exc.status, {"error": exc.code})
                 return
             except Exception:  # noqa: BLE001 - fixed answer, no exception text
