@@ -172,7 +172,12 @@ class DeferredStore:
                 fd, tmp = tempfile.mkstemp(dir=self.path, prefix=".import-", suffix=".bundle")
                 os.close(fd)
                 try:
-                    run_git(scratch, "bundle", "create", "-q", tmp, HEAD_REF, f"^{parent}")
+                    try:
+                        run_git(scratch, "bundle", "create", "-q", tmp, HEAD_REF, f"^{parent}")
+                    except GitCommandError as exc:
+                        if isinstance(exc.__cause__, subprocess.CalledProcessError):
+                            _raise_store_failure(exc)
+                        _raise_git_failure(exc, supplied=True)
                     os.chmod(tmp, 0o600)  # git replaced the file: set the mode after
                     os.link(tmp, self.bundle(sha))  # fails if one is already stored
                 finally:

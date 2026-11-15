@@ -38,6 +38,7 @@ from cairnwork.fixture_forms import (
     resolve_source_aliases,
 )
 from cairnwork.gitcmd import GitCommandError, run_git, run_git_bytes
+from cairnwork.imported_callable_uses import assignment_callables, imported_callable_uses
 
 MAX_FILES = 5000  # base Python files read under one conftest's directory
 _REQUESTS = frozenset({"usefixtures", "getfixturevalue"})
@@ -72,8 +73,9 @@ def taken_names(
     resolved = resolve_source_aliases(all_trees, index)
     for conftest, tree in parent_conftests:
         names |= bound(tree, extra=resolved.get(conftest)) | requested(tree)
+    called = imported_callable_uses(imported, index)
     for f, tree in imported.items():
-        names |= _fixtures(tree, extra=resolved.get(f))
+        names |= _fixtures(tree, extra=resolved.get(f), called=called.get(f, set()))
     return frozenset(bound(old, extra=resolved.get(path))), frozenset(names)
 
 
@@ -135,7 +137,9 @@ def _call_name(func: ast.expr) -> str:
     return func.id if isinstance(func, ast.Name) else ""
 
 
-def _fixtures(tree: ast.Module, extra: set[str] | None = None) -> set[str]:
+def _fixtures(
+    tree: ast.Module, extra: set[str] | None = None, called: set[str] | None = None
+) -> set[str]:
     """#982 item 4 r2: what an imported module's fixtures take: each fixture's name (a star
     import, ``as`` or ``pytest_plugins`` registers it under that name), what ``registered`` reads,
     its parameters, and every literal string passed to ``usefixtures`` or ``getfixturevalue``. A
@@ -148,6 +152,7 @@ def _fixtures(tree: ast.Module, extra: set[str] | None = None) -> set[str]:
         for arg in n.args for s in ast.walk(arg)
         if isinstance(s, ast.Constant) and isinstance(s.value, str)
     }  # fmt: skip
+    selectors = names | set(called or ()) | assignment_callables(tree)
     top, aliases = {id(n) for n in module_level(tree.body)}, _aliases(tree, extra=extra)
     for node in ast.walk(tree):
         if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
@@ -155,7 +160,7 @@ def _fixtures(tree: ast.Module, extra: set[str] | None = None) -> set[str]:
         marked = any(  # main's rule kept: "fixture" anywhere in a decorator, even in a string
             _fixture(d, aliases) or "fixture" in ast.unparse(d) for d in node.decorator_list
         )
-        if marked or (node.decorator_list and id(node) in top) or node.name in names:
+        if marked or (node.decorator_list and id(node) in top) or node.name in selectors:
             a = node.args
             names |= {node.name} | {x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs)}
     return names

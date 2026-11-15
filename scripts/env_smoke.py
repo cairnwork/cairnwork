@@ -150,27 +150,33 @@ def _include_applies(repo: Path, key: str, scratch: Path) -> bool:
     return True
 
 
-def _include_problem(repo: Path) -> str | None:
-    """A reason if a config include target that git would read is missing or unreadable."""
+def _include_problem(repo: Path, cfg: Path | None = None, scratch=None, chain=()) -> str | None:
+    """A reason if an include target git reads is missing or unreadable, nested ones too."""
+    if scratch is None:
+        with tempfile.TemporaryDirectory() as tmp:
+            return _include_problem(repo.resolve(), None, Path(tmp))
     listing = _run_git(
-        repo, "config", "--no-includes", "--show-origin", "--null", "--get-regexp",
-        r"^include(if\..*)?\.path$",
+        repo, "config", *(["--file", str(cfg)] if cfg else []), "--no-includes", "--show-origin",
+        "--null", "--get-regexp", r"^include(if\..*)?\.path$",
     )  # fmt: skip
     if listing.returncode not in (0, 1) or listing.stderr.strip():
         return f"could not list config includes (git exit {listing.returncode})"
     parts = listing.stdout.split("\0")  # --null: "<origin>\0<key>\n<value>\0" per entry
-    with tempfile.TemporaryDirectory() as scratch:
-        for origin, entry in zip(parts[0::2], parts[1::2], strict=False):
-            key, _, value = entry.partition("\n")
-            target = Path(value).expanduser()
-            if not target.is_absolute():
-                if not origin.startswith("file:"):
-                    continue  # git itself refuses a relative include given on the command line
-                target = (repo / origin.removeprefix("file:")).parent / target
-            if (not os.access(target, os.R_OK) or not target.is_file()) and _include_applies(
-                repo, key, Path(scratch)
-            ):
-                return f"config include {value!r} is missing or unreadable"
+    for origin, entry in zip(parts[0::2], parts[1::2], strict=False):
+        key, _, value = entry.partition("\n")
+        target = Path(value).expanduser()
+        if not target.is_absolute():
+            if not origin.startswith("file:"):
+                continue  # git itself refuses a relative include given on the command line
+            target = (repo / origin.removeprefix("file:")).parent / target
+        if not _include_applies(repo, key, scratch):
+            continue  # git does not read it
+        if not os.access(target, os.R_OK) or not target.is_file():
+            return f"config include {value!r} is missing or unreadable"
+        if target.resolve() in chain or len(chain) >= 10:  # 10: git's own include depth limit
+            return f"config include {value!r} is part of an include cycle or nested too deeply"
+        if nested := _include_problem(repo, target, scratch, (*chain, target.resolve())):
+            return nested
     return None
 
 
