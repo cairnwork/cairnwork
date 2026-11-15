@@ -35,6 +35,7 @@ _MACHINERY_WRITES: list[tuple[str, str]] = [
         "sys_modules_param_escape_d1",
         "import sys\nfake = object()\ndef f(m):\n    m['calc'] = fake\nf(sys.modules)\n",
     ),
+    ("from_sys_meta_path_insert", "from sys import meta_path as mp\nmp.insert(0, object())\n"),
 ]
 
 _LOADER_AND_EXEC_CALLS: list[tuple[str, str]] = [
@@ -154,6 +155,8 @@ def test_1198_readonly_probe_and_string_literal_controls_accept() -> None:
         b"c = machinery.FileFinder.path_hook((machinery.SourceFileLoader, ['.py'])).__code__\n"
         b"hooks = [x for x in sys.path_hooks]\n"
         b"finders = [f for f in sys.meta_path if isinstance(f, machinery.FileFinder)]\n"
+        b"mp = sys.meta_path\n"
+        b"_ = len(mp)\n"
         b"print(sys.modules.get('x'), list(sys.modules),\n"
         b"      sys.path_importer_cache.get('y'), list(sys.path_importer_cache))\n"
     )
@@ -247,3 +250,20 @@ def test_git_runtime_py_write_with_dirname_insert_rejected(tmp_path: Path) -> No
     cand = _git_1198(repo, "rev-parse", "HEAD")
 
     assert check_commit(repo, base, cand).verdict == "REJECT"
+
+
+def test_1198_readonly_open_and_non_module_write_accept() -> None:
+    """Read-only .py open() and non-module (.txt/.json) file writes must ACCEPT."""
+    code = (
+        b"from pathlib import Path\n"
+        b"with open('calc.py', 'r') as f:\n"
+        b"    _ = f.read()\n"
+        b"with open('calc.py') as f2:\n"
+        b"    _ = f2.read()\n"
+        b"_ = Path('calc.py').open('r').read()\n"
+        b"with open('/tmp/report.txt', 'w') as out:\n"
+        b"    out.write('ok')\n"
+        b"Path('/tmp/data.json').write_text('{}')\n"
+    )
+    res = check_source("src/x.py", None, code, BASE_DIRS)
+    assert res.verdict == "ACCEPT", f"readonly/non-module: got {res.verdict} ({res.reason})"

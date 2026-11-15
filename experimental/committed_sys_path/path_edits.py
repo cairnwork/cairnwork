@@ -14,6 +14,8 @@ from experimental.committed_sys_path.aliases import (
     is_sys_expr,
     is_sys_path_expr,
 )
+from experimental.committed_sys_path.machinery_guard import find_machinery_and_loader_edits
+from experimental.committed_sys_path.runtime_write_guard import find_runtime_write_edits
 from experimental.committed_sys_path.sys_guard import find_sys_and_escape_edits
 
 __all__ = ["PathEdit", "find_path_edits"]
@@ -250,7 +252,9 @@ def _detect_delete_edit(
             edits.append(PathEdit(lineno, "sys.path.del", (), raw))
 
 
-def find_path_edits(tree: ast.AST, source_text: str) -> list[PathEdit]:
+def find_path_edits(
+    tree: ast.AST, source_text: str, *, shadow_only: bool = False
+) -> list[PathEdit]:
     """Find all in-process search-path and guard edits; fail closed on escapes."""
     st = collect_aliases_and_env(tree)
     parents = _build_parents(tree)
@@ -261,9 +265,18 @@ def find_path_edits(tree: ast.AST, source_text: str) -> list[PathEdit]:
     for node in ast.walk(tree):
         _detect_call_edit(node, st, lines, edits, handled_nodes)
         _detect_assign_edit(node, st, lines, edits, handled_nodes)
-        _detect_delete_edit(node, st, lines, edits, handled_nodes)
+        if not shadow_only:
+            _detect_delete_edit(node, st, lines, edits, handled_nodes)
+
+    if shadow_only:
+        edits.extend(
+            find_runtime_write_edits(tree, st, lines, parents, handled_nodes, shadow_only=True)
+        )
+        return edits
 
     edits.extend(find_sys_and_escape_edits(tree, st, lines, parents, handled_nodes))
+    edits.extend(find_machinery_and_loader_edits(tree, st, lines, parents, handled_nodes))
+    edits.extend(find_runtime_write_edits(tree, st, lines, parents, handled_nodes))
 
     for node in ast.walk(tree):
         if node in handled_nodes:
