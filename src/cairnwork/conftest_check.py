@@ -17,7 +17,8 @@ runs first, at the producer and (full mode) at the receiver:
   at the producer, in the pipeline judge and at a full receiver (#952). An unchanged file that
   does not parse (a Python 2 sample) is not refused for that: its dotted names count as imports.
   An archive the test commit changes is refused when a conftest or the root pytest configuration
-  names its file (#967 tracks the rest).
+  names its file, or a conftest changes ``sys.path`` and names an archive suffix or the archive's
+  directory (archive_reach.py, #967; the rest is a documented residual).
 * no new name the base binds or its tests request (conftest_names.py, #916); an annotation is
   names, attributes, literals, subscripts and ``|`` only (#916: an operator calls a dunder).
 
@@ -37,6 +38,7 @@ from functools import partial
 from pathlib import Path, PurePosixPath
 from posixpath import dirname
 
+from cairnwork.archive_reach import archive_path_reason
 from cairnwork.conftest_names import bound_by, taken_names
 from cairnwork.conftest_reach import reached_change
 from cairnwork.deferred_overlay import TestCommitRejected
@@ -115,7 +117,8 @@ def _check_archives(repo: Path, commit: str, paths: tuple[str, ...], files: froz
     own path is on ``sys.path``, which no import names. The direct forms are refused: a conftest
     of the tree, or the root pytest configuration, whose text holds the archive's file name. A
     path built otherwise is a known residual (#967)."""
-    names = {p.rsplit("/", 1)[-1] for p in paths if p.lower().endswith(ARCHIVES)}
+    archives = [p for p in paths if p.lower().endswith(ARCHIVES)]
+    names = {p.rsplit("/", 1)[-1] for p in archives}
     sources = (*conftest_of(files), *(f for f in CONFIGS if f in files)) if names else ()
     for path in sources:
         try:
@@ -125,6 +128,8 @@ def _check_archives(repo: Path, commit: str, paths: tuple[str, ...], files: froz
         text = raw.decode("utf-8", "surrogateescape")
         if hit := sorted(n for n in names if n in text):
             _refuse(path, None, f"names the archive {hit[0]}, which the test commit changes")
+        if PurePosixPath(path).name == CONFTEST and (why := archive_path_reason(text, archives)):
+            _refuse(path, None, f"{why}, and the test commit changes an archive (#967)")
 
 
 def _tree_files(repo: Path, commit: str) -> frozenset[str]:
