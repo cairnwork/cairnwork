@@ -42,7 +42,7 @@ def _plain_file_link(task, name: bytes, blob: bytes, modes: dict) -> bool:
         target = run_git_bytes(task.repo, "cat-file", "blob", blob.decode("ascii"))
     except GitCommandError:  # unreadable: doubt
         return False
-    if not target or b"\0" in target or target.startswith(b"/"):
-        return False
+    # Only a name `ls-tree` printed is in `modes`: an empty, NUL, absolute or `..`-escaping target
+    # joins to a path that is never one of them, so it is doubt without a separate check.
     joined = posixpath.normpath(posixpath.join(posixpath.dirname(name), target))
-    return not joined.startswith(b"..") and modes.get(joined) in PLAIN_MODES
+    return modes.get(joined) in PLAIN_MODES

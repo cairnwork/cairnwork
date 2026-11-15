@@ -13,7 +13,7 @@ from conftest import commit_change, git
 from test_p2p import FIX_BREAKS_NEG, SIBLING, run
 from test_p2p_base_complete import ADD, bare, project  # noqa: F401 - the fixtures
 
-from cairnwork import p2p
+from cairnwork import p2p, p2p_links
 
 INI = "[pytest]\npythonpath = src\n"
 FAR = {"tests/test_sibling.py": ADD, "tests/.cache/test_far.py": SIBLING}
@@ -179,3 +179,19 @@ def test_only_a_link_to_a_plain_tracked_file_is_no_doubt_1000(bare, link, target
         assert info.value.comparison.code == "P2P_BASE_UNTARGETABLE"
     else:
         assert "tests/test_to_file.py" in p2p._base_tests(_base(bare), frozenset())
+
+
+@pytest.mark.parametrize("target", [b"", b"bad\0target", b"/absolute.py"])
+def test_invalid_symlink_target_is_doubt(bare, monkeypatch, target):  # noqa: F811
+    monkeypatch.setattr(p2p_links, "run_git_bytes", lambda *_: target)
+    assert not p2p_links._plain_file_link(
+        _base(bare), b"tests/link.py", b"0" * 40, {b"tests/absolute.py": b"100644"}
+    )
+
+
+def test_unreadable_symlink_target_is_doubt(bare, monkeypatch):  # noqa: F811
+    def fail(*_):
+        raise p2p_links.GitCommandError("git cat-file failed")
+
+    monkeypatch.setattr(p2p_links, "run_git_bytes", fail)
+    assert not p2p_links._plain_file_link(_base(bare), b"tests/link.py", b"0" * 40, {})
