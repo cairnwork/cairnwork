@@ -100,7 +100,7 @@ def test_early_refusal_with_stalled_body_answers_promptly():
         conn.close()
         assert response.status == 401
         assert json.loads(data) == {"error": "INGRESS_UNAUTHORIZED"}
-        assert time.monotonic() - start < 5
+        assert time.monotonic() - start < 2.5
     finally:
         httpd.shutdown()
         httpd.server_close()
