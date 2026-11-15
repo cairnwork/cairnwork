@@ -208,3 +208,32 @@ def test_a_task_naming_a_reserved_p2p_verifier_id_is_refused(state, project, mod
             allowed_files=("src/calc.py",), verifiers=(("pytest", argv), (vid, argv)),
         )  # fmt: skip
     assert got.value.code == "BAD_VERIFIER" and vid in str(got.value)
+
+
+@pytest.mark.parametrize("bad", ["HEAD", "main", "--output=x", "abc1234", "a" * 39 + " "])
+def test_import_paths_with_a_non_hex_base_is_bad_base_and_never_reaches_git(
+    state, project, monkeypatch, bad
+):
+    import cairnwork.import_path_tree as tree
+
+    def boom(*args, **kwargs):
+        raise AssertionError("git called before the base was validated")
+
+    monkeypatch.setattr(tree, "run_git", boom)
+    with pytest.raises(TaskRejected) as got:
+        verify_candidate(
+            Intake(state), repo=project, base=bad, candidate="1" * 40,
+            allowed_files=("src/calc.py",), verifiers=(("pytest", ("python3", "-m", "pytest")),),
+            import_paths=("src",),
+        )  # fmt: skip
+    assert got.value.code == "BAD_BASE"
+
+
+def test_import_paths_with_a_real_base_still_reaches_the_tree_check(state, project):
+    with pytest.raises(TaskRejected) as got:
+        verify_candidate(
+            Intake(state), repo=project, base=base_of(project), candidate="1" * 40,
+            allowed_files=("src/calc.py",), verifiers=(("pytest", ("python3", "-m", "pytest")),),
+            import_paths=("tests",),
+        )  # fmt: skip
+    assert got.value.code == "BAD_IMPORT_PATH"
