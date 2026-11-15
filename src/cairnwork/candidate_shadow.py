@@ -209,14 +209,13 @@ def _parse_imports(raw: bytes, path: str) -> set[str]:
     """Names one file imports; raises when it cannot be parsed (the caller treats that as None)."""
     tree = ast.parse(raw, filename=path)
     names: set[str] = set()
-    aliases = _import_aliases(tree)
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             names.update(part for alias in node.names for part in alias.name.split("."))
         elif isinstance(node, ast.ImportFrom):  # relative too: from . import helper
             names.update((node.module or "").split("."))  # a submodule can be redirected
             names.update(alias.name for alias in node.names if alias.name != "*")
-        elif isinstance(node, ast.Call) and _is_dynamic_import(node.func, aliases):
+        elif isinstance(node, ast.Call) and _call_name(node.func) in _IMPORT_CALLS:
             named = (k.value for k in node.keywords if k.arg in {"name", "modname"})
             for arg in (*node.args[:1], *named):  # import_module("x.y"), __import__, importorskip
                 if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
@@ -231,13 +230,12 @@ def _parse_top_level_imports(raw: bytes, path: str) -> set[str]:
     """Top-level module names one file imports as a top-level module (#1148)."""
     tree = ast.parse(raw, filename=path)
     names: set[str] = set()
-    aliases = _import_aliases(tree)
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             names.update(alias.name.split(".", 1)[0] for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
             names.add(node.module.split(".", 1)[0])
-        elif isinstance(node, ast.Call) and _is_dynamic_import(node.func, aliases):
+        elif isinstance(node, ast.Call) and _call_name(node.func) in _IMPORT_CALLS:
             named = (k.value for k in node.keywords if k.arg in {"name", "modname"})
             for arg in (*node.args[:1], *named):  # import_module("foo") is a top-level import
                 if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
@@ -249,82 +247,6 @@ def _parse_top_level_imports(raw: bytes, path: str) -> set[str]:
 
 def _call_name(func: ast.expr) -> str:
     return func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
-
-
-def _import_aliases(tree: ast.AST) -> dict[str, set[str]]:
-    """Resolve visible importlib/builtins aliases, including simple name assignments."""
-    aliases: dict[str, set[str]] = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for item in node.names:
-                root = item.name.split(".", 1)[0]
-                if root in {"importlib", "builtins", "pytest"}:
-                    aliases[item.asname or root] = {root}
-        elif isinstance(node, ast.ImportFrom) and node.module in {
-            "importlib",
-            "builtins",
-            "pytest",
-        }:
-            for item in node.names:
-                if item.name != "*":
-                    target = (
-                        "dynamic" if _known_import_function(node.module, item.name) else "unknown"
-                    )
-                    aliases[item.asname or item.name] = {target}
-
-    assignments = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr))
-    ]
-    for _ in range(len(assignments)):
-        changed = False
-        for node in assignments:
-            value = node.value
-            category = _alias_category(value, aliases)
-            if category is None:
-                continue
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            for target in targets:
-                if isinstance(target, ast.Name):
-                    before = aliases.setdefault(target.id, set())
-                    if category not in before:
-                        before.add(category)
-                        changed = True
-        if not changed:
-            break
-    return aliases
-
-
-def _known_import_function(module: str, name: str) -> bool:
-    return (
-        (module == "importlib" and name == "import_module")
-        or (module == "builtins" and name == "__import__")
-        or (module == "pytest" and name == "importorskip")
-    )
-
-
-def _alias_category(node: ast.expr, aliases: dict[str, set[str]]) -> str | None:
-    if isinstance(node, ast.Name):
-        if node.id in {"__import__", "importorskip"}:
-            return "dynamic"
-        categories = aliases.get(node.id, set())
-        for category in ("dynamic", "unknown", "importlib", "builtins", "pytest"):
-            if category in categories:
-                return category
-    if isinstance(node, ast.Attribute):
-        roots = _alias_category(node.value, aliases)
-        if roots in {"importlib", "builtins", "pytest"}:
-            return "dynamic" if _known_import_function(roots, node.attr) else "unknown"
-        if roots in {"dynamic", "unknown"}:
-            return roots
-    return None
-
-
-def _is_dynamic_import(func: ast.expr, aliases: dict[str, set[str]]) -> bool:
-    if _call_name(func) in _IMPORT_CALLS:
-        return True
-    return _alias_category(func, aliases) in {"dynamic", "unknown"}
 
 
 def _module_name(path: str) -> str | None:
