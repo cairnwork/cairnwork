@@ -30,7 +30,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from cairnwork import candidate_env, protection, runlock, verify_scope
+from cairnwork import candidate_env, protection, replay_set, runlock, verify_scope
 from cairnwork.account_check import base_stage, precheck
 from cairnwork.blackbox import Declaration
 from cairnwork.confined import ATTEMPT_ENV, sweep_marked
@@ -152,7 +152,10 @@ def verify_candidate(
         "protection": result.protection,  # protection.py; "" when Core was never asked
         "tests_consumed": tests_consumed(intake, test_commit),
         "verifier_mode": "account" if account is not None else "sandbox_only",
-    } | {"failure_evidence": result.failure_evidence}  # record-only, never judged (#1105)
+    } | {
+        "failure_evidence": result.failure_evidence,
+        "replay_set": replay_set.for_status(status, task, candidate),
+    }  # record-only, never judged (#1105)
 
 
 def _status_fields(verified: bool, status: str, level: str) -> dict[str, str]:
