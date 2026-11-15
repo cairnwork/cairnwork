@@ -90,10 +90,6 @@ def _mode_is_write(
     mode_arg = next((kw.value for kw in call.keywords if kw.arg in {"mode", "flag"}), None)
     if mode_arg is None:
         index = 0 if path_like else mode_index
-        if not path_like and len(call.args) == 1 and isinstance(call.args[0], ast.Constant):
-            first = call.args[0].value
-            if isinstance(first, str) and _MODE_TEXT.fullmatch(first):
-                index = 0
         mode_arg = call.args[index] if len(call.args) > index else None
         if path_like and mode_arg is not None:
             first = mode_arg.value if isinstance(mode_arg, ast.Constant) else None

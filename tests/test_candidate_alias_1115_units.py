@@ -60,6 +60,17 @@ def test_runtime_shadow_added_open_default_read_mode_is_false():
     assert runtime_shadow_added(None, src) is False
 
 
+def test_runtime_shadow_added_open_single_argument_that_looks_like_mode_is_read():
+    src = b"import sys\nopen('w')\nsys.path.insert(0, 'd')\n"
+    assert runtime_shadow_added(None, src) is False
+
+
+@pytest.mark.parametrize("call", ["open('x', 'w')", "open('x', mode='a')"])
+def test_runtime_shadow_added_open_positional_and_keyword_write_modes(call):
+    src = f"import sys\n{call}\nsys.path.insert(0, 'd')\n".encode()
+    assert runtime_shadow_added(None, src) is True
+
+
 def test_runtime_shadow_added_open_non_literal_mode_is_true():
     src = b"import sys\nopen('f', mode)\nsys.path.insert(0, 'd')\n"
     assert runtime_shadow_added(None, src) is True
@@ -108,7 +119,6 @@ def test_unparseable_new_raises_value_error():
         "bz2.open(path, 'a')",
         "g.open('data/raw.gz', 'wb')",
         "g.open('data/raw.gz', mode)",
-        "gzip.open('w')",
         "gzip.open(path, mode)",
         "Path('f').open('a')",
         "p.open(mode)",
@@ -120,7 +130,13 @@ def test_runtime_shadow_added_open_write_through_module_and_path_receivers(call)
 
 
 @pytest.mark.parametrize(
-    "call", ["gzip.open('data/raw.gz')", "gzip.open(path, 'rb')", "Path('f').open('r', 1)"]
+    "call",
+    [
+        "gzip.open('data/raw.gz')",
+        "gzip.open(path, 'rb')",
+        "gzip.open('w')",
+        "Path('f').open('r', 1)",
+    ],
 )
 def test_runtime_shadow_added_open_read_through_module_and_path_receivers(call):
     src = f"import sys\n{call}\nsys.path.insert(0, 'd')\n".encode()
