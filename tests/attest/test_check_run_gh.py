@@ -64,7 +64,7 @@ def test_gh_mode_ignores_env_token(tmp_path, monkeypatch):
 
 def test_gh_http_error_is_reported(tmp_path):
     key = Ed25519PrivateKey.generate()
-    gh = _gh(tmp_path, head="HTTP/2.0 403 Forbidden", body='{"message": "no"}')
+    gh = _gh(tmp_path, head="HTTP/2.0 403 Forbidden", body='{"message": "no"}', code=1)
     result = post_check_run(_bundle(tmp_path, key), SLUG, token=None, gh=gh)
     assert (result.ok, result.code, result.detail) == (False, "HTTP_ERROR", "HTTP 403: no")
 
