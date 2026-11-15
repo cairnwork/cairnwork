@@ -19,7 +19,8 @@ _HEADER = re.compile(
 )
 _BEARER = re.compile(r"(?i)(\bbearer[ \t]+)\S+")
 _KEYS = (
-    r"(?:access_|refresh_|id_|auth_|session_)?token|password|passwd|pwd|secret|client_secret|api_?key"
+    r"(?:access_|refresh_|id_|auth_|session_)?token|password|passwd|pwd|secret|client_secret|"
+    r"api_?key"
     r"|secret_access_key|secret_key|private_key"
 )
 _KEY = re.compile(_KEYS, re.IGNORECASE)
@@ -136,7 +137,9 @@ def _is_secret_name(text: str, start: int, name: str, names: tuple[str, str]) ->
             return any(_is_key(n) for n in (*names, full))
         # a dashed name counts only as a whole known one: client-secret, api-key, x-auth-token
         word = re.search(r"\w{1,64}$", text[max(0, start - 65) : start - 1])
-        return word is not None and bool(_KEY.fullmatch(f"{word.group()}_{name}".casefold()))
+        dashed = word is not None and bool(_KEY.fullmatch(f"{word.group()}_{name}".casefold()))
+        full_width_suffix = "\uff3f" in name and _is_key(name.rsplit("\uff3f", 1)[-1])
+        return dashed or full_width_suffix
     return any(_is_key(n) for n in names)
 
 

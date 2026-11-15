@@ -158,10 +158,55 @@ def test_a_secret_field_inside_another_fields_value_is_still_masked(tmp_path):
 
 def test_full_width_underscore_in_secret_name_is_masked(tmp_path):
     log = tmp_path / "verifier.log"
-    log.write_text("ＡＰＩ＿ＫＥＹ=v1\nＳＥＣＲＥＴ＿ＫＥＹ=v3\nＧＩＴＨＵＢ＿ＴＯＫＥＮ=v2\n")
+    log.write_text(
+        "\n".join(
+            (
+                "ＡＰＩ＿ＫＥＹ=v1",
+                "ＳＥＣＲＥＴ＿ＫＥＹ=v3",
+                "ＧＩＴＨＵＢ＿ＴＯＫＥＮ=v2",
+            )
+        )
+        + "\n"
+    )
     tail = probe_log_tail(log)
     assert not any(value in tail for value in ("v1", "v2", "v3")), tail
     assert tail.count("<redacted>") == 3
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("deploy-github＿token=v", "deploy-github＿token=<redacted>"),
+        (
+            "x-ＧＩＴＨＵＢ＿ＴＯＫＥＮ=v",
+            "x-ＧＩＴＨＵＢ＿ＴＯＫＥＮ=<redacted>",
+        ),
+        ("ci-db＿password=v", "ci-db＿password=<redacted>"),
+        ("my-app＿secret=v", "my-app＿secret=<redacted>"),
+        ("foo-bar＿api_key=v", "foo-bar＿api_key=<redacted>"),
+        ("ＡＰＩ＿ＫＥＹ=v1", "ＡＰＩ＿ＫＥＹ=<redacted>"),
+        ("ＳＥＣＲＥＴ＿ＫＥＹ=v3", "ＳＥＣＲＥＴ＿ＫＥＹ=<redacted>"),
+        (
+            "ＧＩＴＨＵＢ＿ＴＯＫＥＮ=v2",
+            "ＧＩＴＨＵＢ＿ＴＯＫＥＮ=<redacted>",
+        ),
+        ("API＿KEY=v", "API＿KEY=<redacted>"),
+        ("SECRET＿ACCESS＿KEY=v", "SECRET＿ACCESS＿KEY=<redacted>"),
+        ("--x-b＿token=v", "--x-b＿token=<redacted>"),
+        ("color=x＿token=s", "color=x＿token=<redacted>"),
+        ("my-token=v", "my-token=v"),
+        ("deploy-github_token=v", "deploy-github_token=v"),
+        ("x-api＿key=v", "x-api＿key=v"),
+        ("my-api＿key=v", "my-api＿key=v"),
+        ("token＿=v", "token＿=v"),
+        ("＿＿=v", "＿＿=v"),
+        ("a=1 ＿=2", "a=1 ＿=2"),
+    ],
+)
+def test_dashed_name_cut_at_full_width_underscore_matches_main(tmp_path, text, expected):
+    log = tmp_path / "verifier.log"
+    log.write_text(text)
+    assert probe_log_tail(log) == expected
 
 
 def test_dotted_and_dotless_i_in_a_secret_name_still_count(tmp_path):
