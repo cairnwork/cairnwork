@@ -45,6 +45,9 @@ def registered(tree: ast.Module, extra: set[str] | None = None) -> set[str]:
             if any(_fixture_call(c, aliases) for c in ast.walk(node.value)):
                 targets = node.targets if isinstance(node, ast.Assign) else [node.target]
                 names |= {n.id for t in targets for n in ast.walk(t) if isinstance(n, ast.Name)}
+                for lam in (n for n in ast.walk(node.value) if isinstance(n, ast.Lambda)):
+                    a = lam.args  # a lambda inside a fixture assignment may be the registered fn
+                    names |= {x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs)}
         if not isinstance(node, ast.Call):
             continue
         fixture = _fixture_call(node, aliases)

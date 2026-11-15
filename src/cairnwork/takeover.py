@@ -34,7 +34,13 @@ from typing import NoReturn
 from cairnwork import unswept
 from cairnwork.confined import ATTEMPT_ENV, Sweep, confirm_gone, sweep_marked
 from cairnwork.journal import Journal, dispatch_mark
-from cairnwork.ownership import OwnershipLedger, OwnershipRecord, TakeoverRefused
+from cairnwork.ownership import (
+    TRANSITIONS,
+    InvalidStatusTransition,
+    OwnershipLedger,
+    OwnershipRecord,
+    TakeoverRefused,
+)
 
 
 def supersede(
@@ -50,6 +56,9 @@ def supersede(
     held = ledger.unswept_attempt(task_id)
     if held is None:
         return ledger.set_status(task_id, "SUPERSEDED")
+    current = ledger.get(task_id=task_id)
+    if "SUPERSEDED" not in TRANSITIONS.get(current.status, frozenset()):
+        raise InvalidStatusTransition(f"{current.status} -> SUPERSEDED")
     entries = journal.entries(task_id) if journal is not None else []
     if held.attempt_id != unswept.LEGACY:
         attempts = [(held.attempt_id, held.account)]

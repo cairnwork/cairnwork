@@ -277,7 +277,7 @@ def judge_candidate(
     if refusal := _not_run_refusal(missing, test_files, verified_by, (*runs, *checks)):
         result.reason = refusal  # #697, #1034: Core is not asked
         return
-    raise_for_env_skips(runs, task, judged, test_files, checks, env_skip_downgrade)
+    raise_for_env_skips(runs, task, judged, test_files, checks, env_skip_downgrade, (ctx, specs))
     # Core's ALLOW is whole-contract; only the test commit's files can be deleted (producer check)
     if deleted_of(test_files) and not task.allow_deletions:
         if stray := stray_deletions(task.repo, task.base_commit, judged, deleted_of(test_files)):

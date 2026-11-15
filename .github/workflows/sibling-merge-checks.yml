@@ -18,7 +18,7 @@ permissions: {}
 jobs:
   checks:
     if: github.event_name != 'issue_comment' || github.event.issue.pull_request
-    uses: James3014/Nexus-new/.github/workflows/sibling-merge-checks.yml@89824d487de94c5d4a6b5ee9e5ee4300be9a1ec0  # Nexus-new main as of 2026-11-03 (#3190); bump by PR
+    uses: James3014/Nexus-new/.github/workflows/sibling-merge-checks.yml@c72f214c9b4865fbc1ed88a371ccf4c40562d41b  # Nexus-new main as of 2026-11-13 (#3427, CONDITIONAL ACCEPT); bump by PR
     permissions:
       contents: read
       issues: read

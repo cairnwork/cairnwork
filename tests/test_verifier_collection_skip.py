@@ -303,6 +303,28 @@ def test_a_verifier_target_whose_module_is_skipped_at_collection_does_not_count_
         assert "tests/test_ext.py" in run.why
 
 
+@pytest.mark.sandbox
+def test_a_collected_skip_and_pass_do_not_mark_the_verifier_passed(repo, tmp_path):
+    head = commit_change(
+        repo,
+        {
+            "tests/test_mix.py": (
+                "import pytest\n"
+                "def test_skipped():\n    pytest.skip('not available')\n"
+                "def test_passed():\n    assert True\n"
+            ),
+        },
+    )
+    spec = parse_verifier("pytest", ["python3", "-m", "pytest", "-q", "tests/test_mix.py"])
+    (run,) = run_verifiers(
+        VerifyContext(repo, tmp_path / "runs", python=sys.executable), head, (spec,), "mixed-skip"
+    )
+    assert run.observation.passed is False
+    assert run.returncode == 0
+    assert "1 skipped" in run.why
+    assert "tests/test_mix.py??test_skipped" in run.why  # _names writes :: as ??
+
+
 # ---- the pass-to-pass verifier (run_task, real sandbox) -----------------------------------
 
 

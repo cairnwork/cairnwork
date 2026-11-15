@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -66,6 +67,17 @@ def test_gh_http_error_is_reported(tmp_path):
     gh = _gh(tmp_path, head="HTTP/2.0 403 Forbidden", body='{"message": "no"}', code=1)
     result = post_check_run(_bundle(tmp_path, key), SLUG, token=None, gh=gh)
     assert (result.ok, result.code, result.detail) == (False, "HTTP_ERROR", "HTTP 403: no")
+
+
+def test_gh_nonzero_exit_with_success_output_is_refused(tmp_path, monkeypatch):
+    key = Ed25519PrivateKey.generate()
+    parsed = b'HTTP/2.0 201 Created\r\nContent-Type: application/json\r\n\r\n{"id": 9}'
+    monkeypatch.setattr(
+        "cairnwork_attest.checkrun_gh.subprocess.run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 1, parsed, b"auth failed"),
+    )
+    result = post_check_run(_bundle(tmp_path, key), SLUG, token=None, gh=_gh(tmp_path))
+    assert (result.ok, result.code) == (False, "NETWORK_ERROR")
 
 
 def test_gh_without_output_is_network_error(tmp_path):

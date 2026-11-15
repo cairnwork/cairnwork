@@ -142,7 +142,7 @@ def test_a_corrupt_stored_bundle_is_unreadable_not_success(project, store, tmp_p
     _b, sha, bundle = make_bundle(project, {"tests/test_regression.py": REGRESSION}, tmp_path)
     store.import_bundle(project, bundle, used_dir(store))
     store.bundle(sha).write_bytes(b"corrupt")
-    with pytest.raises(TestCommitRejected, match="TEST_COMMIT_UNREADABLE"):
+    with pytest.raises(OSError, match="could not run git"):  # Cairnwork's own store (#1185)
         ensure_test_commit(project, sha, store)
     assert subprocess.run(
         ["git", "-C", str(project), "cat-file", "-e", sha], check=False

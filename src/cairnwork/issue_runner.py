@@ -47,6 +47,7 @@ from cairnwork.issue_publish import (
 from cairnwork.issue_task import TASK_FENCE, IssueRefused, adoptable, parse_task_block
 from cairnwork.lineage import require_on_main
 from cairnwork.lineage import verify_origin as _verify_origin
+from cairnwork.lineage import verify_single_branch as _verify_single_branch
 from cairnwork.notary import NotaryError
 from cairnwork.ownership import OwnershipError, OwnershipUnknown
 from cairnwork.pipeline import TaskRejected
@@ -68,38 +69,6 @@ COMMIT = re.compile(r"[0-9a-f]{40}")
 ISSUE_TAG = re.compile(r"<\s*/?\s*issue\b[^>]*>", re.IGNORECASE)
 TRUST_CHANGED = "TRUST_CHANGED_BEFORE_DISPATCH"
 DEFAULT_GH = str(Path.home() / ".config/nexus-agent-bot/bin/nexus-agent-gh")
-
-
-def _verify_single_branch(clone: Path) -> None:
-    """The mirror must be single-branch (only main), so the single-commit branches that hold
-    deferred hidden tests are never pre-fetched into it and reachable by the worker (Issue #76).
-    A wildcard fetch refspec means a full clone that pulled every branch."""
-    # check=False: git config exits 1 when the key is absent, which is the no-refspec case below,
-    # not a command failure — reading it through _git would raise a generic "git config failed".
-    try:
-        specs = [
-            s
-            for s in run_git(clone, "config", "--get-all", "remote.origin.fetch").splitlines()
-            if s
-        ]
-    except GitCommandError:
-        specs = []
-    advice = "re-clone with: git clone --single-branch --branch main <url>"
-    code = "LINEAGE_MIRROR_NOT_SINGLE_BRANCH"
-    if not specs:
-        raise RuntimeError(f"{code}: origin has no fetch refspec; {advice}")
-    for spec in specs:
-        # The source of a fetch refspec is "[+]<src>:<dst>"; accept only main exactly, so a
-        # wildcard ("refs/heads/*") or another branch ("refs/heads/mainline") is refused.
-        if spec.lstrip("+").split(":", 1)[0] != "refs/heads/main":
-            raise RuntimeError(f"{code}: origin fetch {spec!r} is not refs/heads/main; {advice}")
-    # The config only governs future fetches; a mirror full-cloned once and later reconfigured still
-    # holds the branches it already fetched. Refuse if any branch beyond main is actually present.
-    allowed = {"refs/heads/main", "refs/remotes/origin/main", "refs/remotes/origin/HEAD"}
-    refs = _git(clone, "for-each-ref", "--format=%(refname)", "refs/heads/", "refs/remotes/origin/")
-    extra = [r for r in refs.split() if r not in allowed]
-    if extra:
-        raise RuntimeError(f"{code}: mirror holds a branch beyond main ({extra[0]}); {advice}")
 
 
 def take(intake: Intake, github: GitHub, clone: Path) -> list[dict[str, Any]]:

@@ -41,6 +41,25 @@ def _kind_causes(fail_kind) -> list[str]:
     return [f"{said[kind]} {_names([node])[3:]}" for node, kind in fail_kind.items()][:MAX_NAMES]
 
 
+def _outcome_cause(outcomes) -> str:
+    """Summarize collected tests that did not pass; outcome values are untrusted text."""
+    failed = [(node, result) for node, result in outcomes.items() if result != "passed"]
+    if not failed:
+        return ""
+    counts = {}
+    for _node, result in failed:
+        counts[result] = counts.get(result, 0) + 1
+    kinds = sorted(counts.items())
+    shown = [
+        f"{count} {_DELIMITERS.sub('?', replace_hidden(str(kind)))[:MAX_NAME_CHARS]}"
+        for kind, count in kinds[:MAX_NAMES]
+    ]
+    more = len(kinds) - len(shown)
+    summary = ", ".join(shown) + (f", +{more} more" if more > 0 else "")
+    names = _names(node for node, _result in failed)
+    return f"pytest collected tests that did not pass ({summary}: {names.split(': ', 1)[1]})"
+
+
 def candidate_denial(outcomes, denied, write_roots) -> str:
     """#962: the denied path when EVERY test that did not pass in a candidate run failed with an
     EPERM denial (report_guard's ``denied``, kind ``env``) at a path outside ``write_roots``; else
@@ -81,6 +100,7 @@ def why_not_passed(
     renamed=(), exitstatus=None, testsfailed=None, fail_kind=None, data_refused=(),
     denied_path="",
     all_skipped: bool = False,
+    outcomes=None,
 ) -> str:  # fmt: skip
     """The causes that made a run fail, ``""`` if none (then the run passed)."""
     causes = []
@@ -131,10 +151,14 @@ def why_not_passed(
             f"pytest passed but no test ran for a target or skipped module ({_names(not_run)})"
         )
     elif ran_sandboxed and returncode == 0 and not tests_ran and not renamed and not disagrees:
+        cause = _outcome_cause(outcomes or {})
         causes.append(
-            "pytest passed but every collected test was skipped"
-            if all_skipped
-            else "pytest passed but the guard saw no test run"
+            cause
+            or (
+                "pytest passed but every collected test was skipped"
+                if all_skipped
+                else "pytest passed but the guard saw no test run"
+            )
         )
     return "; ".join(causes)
 
