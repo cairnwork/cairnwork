@@ -132,7 +132,7 @@ class DeferredStore:
         if not self.has(sha):
             raise TestCommitRejected("TEST_COMMIT_NOT_IMPORTED", sha)
         with _Scratch(
-            self.path, repo
+            self.path, repo, supplied=True
         ) as scratch:  # a repo that is no repository: refused, as before
             try:  # the stored bundle is read on the store side first: its failure is ours (#1185)
                 run_git(scratch, "fetch", "--quiet", "--no-tags", str(self.bundle(sha)), HEAD_REF)
@@ -147,7 +147,7 @@ class DeferredStore:
     def import_bundle(self, repo: Path, bundle: Path, used: Path) -> str:
         """Validate a supplied bundle and store it canonically; return the test commit id."""
         self.check_dir()
-        with _Scratch(self.path, repo) as scratch:
+        with _Scratch(self.path, repo, supplied=True) as scratch:
             try:
                 lines = run_git(scratch, "bundle", "list-heads", str(bundle)).split("\n")
                 heads = [h.split() for h in lines if h.strip()]
@@ -200,8 +200,8 @@ class _Scratch:
     """A throwaway bare repository inside the store (owner-only); with ``repo`` it borrows
     that repository's objects (alternates), so a bundle's prerequisite can be resolved."""
 
-    def __init__(self, parent: Path, repo: Path | None) -> None:
-        self.parent, self.repo = parent, repo
+    def __init__(self, parent: Path, repo: Path | None, *, supplied: bool = False) -> None:
+        self.parent, self.repo, self.supplied = parent, repo, supplied
         self.dir = parent
 
     def __enter__(self) -> Path:
@@ -210,7 +210,9 @@ class _Scratch:
             try:
                 common = run_git(self.repo, "rev-parse", "--git-common-dir").strip()
             except GitCommandError as exc:
-                _raise_git_failure(exc, f"{self.repo}: ")
+                if self.supplied:
+                    _raise_git_failure(exc, f"{self.repo}: ")
+                _raise_store_failure(exc)
             objects = Path(self.repo, common).resolve() / "objects"
         self.dir = Path(tempfile.mkdtemp(dir=self.parent, prefix=".scratch-"))
         try:

@@ -17,6 +17,7 @@ from cairnwork.p2p_bindings import (
     rebinds_by_string,
     walk_without_nested_classes,
 )
+from cairnwork.p2p_function import _function
 
 
 def classify_payload(data: dict) -> dict:
@@ -26,7 +27,7 @@ def classify_payload(data: dict) -> dict:
     for nodeid in base_ids - test_ids:
         path = _file(nodeid)
         gone = False
-        if path in edited and _function(nodeid) not in collected_funcs:
+        if "::" in nodeid and path in edited and _function(nodeid) not in collected_funcs:
             if path not in texts:
                 texts[path] = data["sources"]["test"][path]
                 bases[path] = _tree(data["sources"]["base"][path])
@@ -48,10 +49,6 @@ def main() -> None:
 
 def _file(nodeid: str) -> str:
     return nodeid.partition("::")[0]
-
-
-def _function(nodeid: str) -> str:
-    return nodeid.split("[", 1)[0]
 
 
 def _hidden(tree, base, name, path, test_ids, base_ids) -> bool:

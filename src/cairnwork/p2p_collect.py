@@ -42,6 +42,7 @@ from cairnwork.conftest_check import conftest_of
 from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRejected
 from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.node_ids import show, unmatched_note
+from cairnwork.p2p_function import _function
 from cairnwork.p2p_nodes import changed_tests, module_changed
 from cairnwork.p2p_selection import MODULE_DIR_CAP
 from cairnwork.verifier_spec import VerifierSpec
@@ -300,15 +301,13 @@ def _collect(task, files, ctx, budget, attempt_id):
 
 
 def _present(task, files) -> tuple[str, ...]:
-    """The selected files that exist on the test commit (a deleted one is collected as absent)."""
+    """Selected files present on the test commit."""
+    args = ("ls-tree", "-r", "-z", "--name-only", task.test_commit, "--")
     try:
-        raw = run_git(
-            task.repo, "ls-tree", "-r", "-z", "--name-only", task.test_commit, "--", *files
-        )
+        raw = run_git(task.repo, *args, *(f":(literal){path}" for path in files))
     except GitCommandError as exc:
         raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
-    there = set(raw.split("\0"))
-    return tuple(f for f in files if f in there)
+    return tuple(f for f in files if f in set(raw.split("\0")))
 
 
 def _source(task, commit: str, path: str) -> str:
@@ -323,10 +322,6 @@ def _source(task, commit: str, path: str) -> str:
 
 def _file(nodeid: str) -> str:
     return nodeid.partition("::")[0]
-
-
-def _function(nodeid: str) -> str:
-    return nodeid.split("[", 1)[0]
 
 
 def _digest(ids) -> str:
