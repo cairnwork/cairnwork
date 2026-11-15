@@ -330,3 +330,47 @@ def test_commit_style_out_of_scope_path_is_quoted(monkeypatch, tmp_path):
         )
     assert caught.value.code == "OUT_OF_SCOPE"
     assert len(str(caught.value).splitlines()) == 1
+
+
+@pytest.mark.parametrize(
+    ("site", "code"),
+    [
+        ("require_refs_unchanged", "UNREADABLE_REPOSITORY"),
+        ("_fetch_head", "UNREADABLE_WORKTREE"),
+        ("_parents", "UNREADABLE_CHANGE"),
+    ],
+)
+@pytest.mark.parametrize("hostile", [E1(), E2(), E3()], ids=["E1", "E2", "E3"])
+def test_workspace_git_error_sites_escape_with_shown_1300(
+    site, code, hostile, monkeypatch, tmp_path
+):
+    import cairnwork.workspace as workspace
+    from cairnwork.gitcmd import GitCommandError
+    from cairnwork.textclean import shown
+    from cairnwork.workspace import CandidateRejected
+
+    err = GitCommandError(str(hostile))
+
+    def boom(*_a, **_k):
+        raise err
+
+    attempt: Any = SimpleNamespace(
+        base_commit="a" * 40,
+        path=tmp_path / "clone",
+        attempt_id="att-1300",
+        refs_before={},
+    )
+    with pytest.raises(CandidateRejected) as caught:
+        if site == "require_refs_unchanged":
+            monkeypatch.setattr(workspace, "_guarded_refs", boom)
+            workspace.require_refs_unchanged(Path("repo"), attempt)
+        elif site == "_fetch_head":
+            monkeypatch.setattr(workspace, "run_git", boom)
+            workspace._fetch_head(Path("repo"), attempt)
+        else:
+            monkeypatch.setattr(workspace, "run_git", boom)
+            workspace._parents(Path("repo"), "b" * 40)
+
+    assert caught.value.code == code
+    assert len(str(caught.value).splitlines()) == 1
+    assert str(caught.value) == f"{code}: {shown(err)}"

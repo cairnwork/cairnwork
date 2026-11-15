@@ -332,7 +332,7 @@ def require_refs_unchanged(repo: Path, attempt: Attempt) -> None:
     try:
         now = _guarded_refs(repo, attempt.attempt_id)
     except GitCommandError as exc:
-        raise CandidateRejected("UNREADABLE_REPOSITORY", str(exc)) from exc
+        raise CandidateRejected("UNREADABLE_REPOSITORY", shown(exc)) from exc
     if not _refs_acceptable(dict(attempt.refs_before), dict(now)):
         raise CandidateRejected(
             "REPOSITORY_REFS_CHANGED", "guarded refs changed during the attempt"
@@ -353,7 +353,7 @@ def _fetch_head(repo: Path, attempt: Attempt) -> str:
         )
         head = run_git(repo, "rev-parse", "--verify", f"{ref}^{{commit}}").strip()
     except GitCommandError as exc:
-        raise CandidateRejected("UNREADABLE_WORKTREE", str(exc)) from exc
+        raise CandidateRejected("UNREADABLE_WORKTREE", shown(exc)) from exc
     if not OID.fullmatch(head):
         raise CandidateRejected("UNREADABLE_WORKTREE", f"HEAD {head!r} is malformed")
     return head
@@ -363,7 +363,7 @@ def _parents(repo: Path, commit: str) -> list[str]:
     try:
         return run_git(repo, "rev-list", "--parents", "-n", "1", commit).split()[1:]
     except GitCommandError as exc:
-        raise CandidateRejected("UNREADABLE_CHANGE", str(exc)) from exc
+        raise CandidateRejected("UNREADABLE_CHANGE", shown(exc)) from exc
 
 
 # macOS has lchmod/fchmodat(AT_SYMLINK_NOFOLLOW); Linux (CI only: without Seatbelt no
