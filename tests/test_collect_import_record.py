@@ -243,3 +243,28 @@ def test_the_record_does_not_change_whether_the_run_ran(tmp_path):
 
 def test_a_verifier_run_carries_the_field_with_an_empty_default():
     assert VerifierRun.__dataclass_fields__["import_errors"].default == ()
+
+
+PATH_HOOK = (
+    "import sys, pytest\n"
+    "def _get(self):\n"
+    "    if sys._getframe(1).f_code.co_name == '_node_paths' and %s:\n"
+    "        raise SystemExit(5)\n"
+    "    return self.__dict__['_p']\n"
+    "def _set(self, v):\n"
+    "    self.__dict__['_p'] = v\n"
+    "pytest.Module.path = property(_get, _set)\n"
+)
+
+
+def test_a_base_exception_on_a_reachable_read_records_nothing_1008(tmp_path):
+    """The catch in _import_error held for a str-subclass file name before #1008; now that the
+    exact-str check refuses it first, pin the catch itself: a read of node.path that raises
+    SystemExit records nothing, and the same run without the raise records the hint."""
+    body = "from pkg import new_fn\ndef test_a(): pass\n"
+    done, verdict = _run(tmp_path, {**PKG, NODE: body, "conftest.py": PATH_HOOK % "True"})
+    _unchanged(done, verdict)
+    assert verdict.import_errors == ()
+    done, verdict = _run(tmp_path / "again", {**PKG, NODE: body,
+                                              "conftest.py": PATH_HOOK % "False"})  # fmt: skip
+    assert verdict.import_errors == ((NODE, "pkg", "pkg/__init__.py"),)

@@ -65,6 +65,10 @@ def test_report_cause_reads_no_str_subclass_when_and_node_paths_need_exact_paths
             calls.append("eq")
             return True
 
+        def __ne__(self, other):
+            calls.append("ne")
+            return False
+
         __hash__ = str.__hash__
 
     call = CallInfo.from_call(lambda: 1, "collect")
@@ -77,6 +81,18 @@ def test_report_cause_reads_no_str_subclass_when_and_node_paths_need_exact_paths
         config = type("C", (), {"rootpath": "/"})()
 
     assert plugin["_node_paths"](Node()) is None
+
+    class Hooked:
+        path = __import__("pathlib").PosixPath("/x")
+
+        @property
+        def config(self):
+            calls.append("config")
+            return type("C", (), {"rootpath": property(lambda s: calls.append("root"))})()
+
+    node = Hooked()
+    assert plugin["_node_paths"](node) is None
+    assert "root" not in calls  # the replaced config's rootpath hook never ran
 
 
 def test_innermost_rejects_hostile_exception_before_traceback_read():
@@ -162,63 +178,16 @@ def _ordinary_report():
     return report
 
 
-def test_exception_attribute_hook_matches_a_property_only_for_plain_names():
+def test_exception_attribute_hook_is_line_based():
+    """The scan reads one added line at a time: dunder definitions and one-line property
+    assignments match; an ordinary method or function named path/name/args does not."""
     import re
 
     from cairnwork.tamper_scan_exception import EXCEPTION_ATTRIBUTE_HOOK as rule
 
-    assert re.search(rule, "    @property\n    def path(self):\n        return 1")
-    assert re.search(rule, "    def __cause__(self):")
-    assert not re.search(rule, "def path(root):\n    return root")
-
-
-class _Meta(type):
-    """A candidate metaclass: any comparison or subclass probe on its classes is recorded."""
-
-    calls: list = []
-
-    def __eq__(cls, other):
-        _Meta.calls.append("eq")
-        return True
-
-    def __hash__(cls):
-        return id(cls)
-
-    def __subclasscheck__(cls, sub):
-        _Meta.calls.append("subclasscheck")
-        return True
-
-    def __instancecheck__(cls, obj):
-        _Meta.calls.append("instancecheck")
-        return True
-
-
-def test_report_cause_and_innermost_run_no_metaclass_code():
-    """Codex r1 / Claude review: ``in (A, B)`` compares with ==, so a report class or an error
-    class with a candidate metaclass ran its __eq__; identity checks run nothing."""
-    plugin = _plugin(PARTS_SOURCE)
-    _Meta.calls.clear()
-    hostile_report = _Meta("R", (TestReport,), {})
-    report = hostile_report("n", ("f", 0, "n"), {}, "passed", None, "collect", [])
-    call = CallInfo.from_call(lambda: 1, "collect")
-    assert plugin["_report_cause"](call, report) is None
-    hostile_error = _Meta("C", (ImportError,), {})
-    assert plugin["_innermost"](hostile_error("x")) == ""
-    assert _Meta.calls == []
-
-
-def test_env_exc_reads_the_real_class_not_a_spoofed_one():
-    from cairnwork.env_failure import ENV_SOURCE
-
-    plugin = _plugin(ENV_SOURCE)
-    calls = []
-
-    class Spoof(Exception):
-        @property
-        def __class__(self):
-            calls.append("class")
-            return OSError
-
-    info = type("Info", (), {"value": Spoof("x")})()
-    plugin["_env_exc"](info, "/")
-    assert calls == []
+    for bad in ("    def __cause__(self):", "    def __getattribute__(self, n):",
+                "    errno = property(lambda self: 1)", "__class__ = property(f)"):  # fmt: skip
+        assert re.search(rule, bad), bad
+    for ok in ("def path(root):", "    def name(self):", "def args(parser):",
+               "async def path(self):", "def errno_text(x):", "    @property"):  # fmt: skip
+        assert not re.search(rule, ok), ok

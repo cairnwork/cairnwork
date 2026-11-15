@@ -7,6 +7,7 @@ import sys
 from pathlib import PosixPath
 from types import CodeType, FrameType, ModuleType, TracebackType
 from _pytest._code.code import ExceptionInfo
+from _pytest.config import Config
 from _pytest.reports import CollectReport, TestReport
 from _pytest.runner import CallInfo
 
@@ -84,7 +85,10 @@ def _report_cause(call, report, _type=type, _base=BaseException, _sub=issubclass
 def _node_paths(node, _type=type, _str=str):
     # the module file and the root, only when pytest's own PosixPath objects: no __fspath__ or
     # __str__ of a replaced attribute runs.
-    path, root = node.path, node.config.rootpath
+    config = node.config
+    if _type(config) is not Config:  # rootpath is then pytest's own property
+        return None
+    path, root = node.path, config.rootpath
     if _type(path) is not PosixPath or _type(root) is not PosixPath:
         return None
     return _str(path), _str(root)
