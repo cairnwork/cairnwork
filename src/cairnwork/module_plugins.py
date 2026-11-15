@@ -1,8 +1,7 @@
 """#1242: no module of the tree may load a changed file as a pytest plugin.
 
-Every Python file other than a conftest that names ``pytest_plugins``, or has a non-ASCII character
-(which can spell the name, NFKC), or declares a source encoding, is read: a test module, or a
-helper a test module star-imports. Its module-level bindings of the name must be literal strings,
+Every Python file other than a conftest is parsed: a test module, or a helper a test module
+star-imports. Its module-level bindings of the name must be literal strings,
 and what they load is followed the way conftest_reach follows a conftest, through unchanged
 modules. Any other use of the name at module level, a ``global`` of it, or a function or class that
 reads it is refused: the loaded set could then not be read statically (a ``del`` of it, or a test
@@ -30,9 +29,6 @@ NAME = "pytest_plugins"
 Store = ast.Assign | ast.AnnAssign | ast.AugAssign | ast.NamedExpr
 _FUNCS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
 _MATCH = (ast.MatchAs, ast.MatchStar)
-# a file naming pytest_plugins, holding a character outside printable ASCII (an NFKC spelling of
-# it), or declaring a source encoding (whose bytes may not be UTF-8)
-_PATTERNS = ("-e", "pytest_plugins", "-e", "[^ -~]", "-e", "coding[:=]")
 
 
 def check_test_module_plugins(repo: Path, commit: str, paths: tuple[str, ...]) -> None:
@@ -168,14 +164,12 @@ def _children(node: ast.AST, inside: bool) -> Iterator[ast.AST]:
 
 
 def _candidates(repo: Path, commit: str) -> list[str]:
-    args = ("grep", "-I", "-l", "-z", "-E", *_PATTERNS, commit, "--", "*.py")
-    try:
-        raw = run_git(repo, *args, ok_codes=(0, 1))  # 1: no file matches
-    except GitCommandError as exc:
-        raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
-    prefix = f"{commit}:"
-    found = (p.removeprefix(prefix) for p in raw.split("\0"))
-    return sorted(p for p in found if p and p.rsplit("/", 1)[-1] != "conftest.py")
+    """Parse Python modules directly; source text can hide identifiers from grep."""
+    return sorted(
+        path
+        for path in _tree_files(repo, commit)
+        if path.endswith(".py") and path.rsplit("/", 1)[-1] != "conftest.py"
+    )
 
 
 def _parse(repo: Path, commit: str, path: str, strict: bool) -> ast.Module | None:

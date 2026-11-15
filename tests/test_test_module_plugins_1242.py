@@ -278,6 +278,20 @@ def test_a_plugin_name_spelled_in_another_source_encoding_is_refused(project):
         check_conftests(project, base, commit, ["tests/test_case.py", "tests/plug.py"])
 
 
+def test_a_changed_test_module_with_an_escape_spelled_plugin_name_is_parsed(project):
+    source = r'\u0070ytest_plugins = "tests.plug"' + "\ndef test_case(): pass\n"
+    base, commit = _commit(
+        project,
+        {
+            "tests/test_case.py": source,
+            "tests/plug.py": HOOK,
+        },
+    )
+    with pytest.raises(TestCommitRejected) as caught:
+        check_conftests(project, base, commit, ["tests/test_case.py", "tests/plug.py"])
+    assert caught.value.code == "TEST_COMMIT_UNPARSABLE"
+
+
 def test_an_unchanged_conftest_is_left_to_the_conftest_check(project):
     commit_change(
         project,
