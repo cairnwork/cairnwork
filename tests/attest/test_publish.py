@@ -20,6 +20,7 @@ from publish_helpers import (
     make_publish_env,
 )
 
+from cairnwork_attest import publish as publish_module
 from cairnwork_attest.cli import main
 from cairnwork_attest.dsse import _sign_bytes
 from cairnwork_attest.publish import _git, publish_bundle
@@ -31,12 +32,16 @@ def test_publish_git_timeout_is_a_failure(tmp_path: Path, monkeypatch: pytest.Mo
     repo = tmp_path / "repo"
     repo.mkdir()
 
+    seen: dict[str, object] = {}
+
     def timed_out(*args, **kwargs):
+        seen.update(kwargs)
         raise subprocess.TimeoutExpired(args[0], timeout=120)
 
     monkeypatch.setattr("cairnwork_attest.publish.config_hooks_off", lambda repo, env: [])
     monkeypatch.setattr("cairnwork_attest.publish.subprocess.run", timed_out)
     result = _git(repo, "fetch", "origin", "refs/notes/cairnwork")
+    assert seen.get("timeout") == publish_module._GIT_TIMEOUT_SECONDS
     assert result.returncode != 0
     assert "timed out" in result.stderr
 
