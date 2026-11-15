@@ -142,19 +142,14 @@ def classify(base_ids, test_ids, edited, source, base_source) -> CollectedSide:
         and _function(nodeid) in collected_funcs
         and "[" in nodeid.partition("::")[-1]
     }
-    removed_param_functions = {
-        nodeid
-        for nodeid in removed
-        if "[" in nodeid.partition("::")[-1] and _function(nodeid) not in collected_funcs
-    }
     # A same-file inherited test is defined by its base class. Keep this exception local to a
     # statically resolvable class chain; the child classifier remains authoritative otherwise.
     inherited_removed = inherited_same_file_definitions(
         dropped, sources.get("base", {}), sources.get("test", {})
     )
     allowed_removed = case_removed | inherited_removed
-    removed = (removed | allowed_removed) - removed_param_functions
-    dropped = (dropped - allowed_removed) | removed_param_functions
+    removed |= allowed_removed
+    dropped -= allowed_removed
     return CollectedSide(base_ids, test_ids, removed, dropped)
 
 

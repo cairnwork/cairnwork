@@ -96,8 +96,8 @@ def test_hidden_base_test_is_dropped(case):
     assert _split(base, test, base_ids, test_ids) == (set(), {nodeid})
 
 
-# --- #1128 false refusals (P2, not this fix): an honest deletion is refused as
-# TEST_COMMIT_DROPS_BASE_TESTS. Kept strict xfail so #1127 is seen not to change them.
+# --- #1128: honest deletions of a direct same-file parent method are removed only when the
+# test-side source proves the inheritance shape is unambiguous.
 REFUSED = {
     # deleting a parent test also removes it from a same-file subclass (pre-existing)
     "inherited-by-same-file-subclass": (
