@@ -107,7 +107,10 @@ def origin_still_holds(notary_db: Path, case: dict[str, Any]) -> bool:
     except OSError:
         return False
     try:
-        _, now = read_origin(notary_db, case["task_id"], case["attempt_id"])
-    except OriginError:
+        rec, now = read_origin(notary_db, case["task_id"], case["attempt_id"])
+        if rec.candidate_commit != case.get("candidate") or rec.base_commit != case.get("base"):
+            return False  # the same rule ``add`` applies: the case names this row's commits
+        check_kind(str(case.get("kind")), now)  # and its kind agrees with the row's verdict
+    except (OriginError, KeyError):
         return False
     return now == case.get("origin")
