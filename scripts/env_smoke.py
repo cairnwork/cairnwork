@@ -150,14 +150,19 @@ def _include_applies(repo: Path, key: str, scratch: Path) -> bool:
     return True
 
 
+_MAX_INCLUDE_DEPTH = 10  # git's own limit: deeper includes make git itself fail
+
+
 def _include_problem(repo: Path) -> str | None:
     """A reason if a config include target that git would read is missing or unreadable.
     Follows includes inside included files too (git reads those, and ignores a missing one)."""
     with tempfile.TemporaryDirectory() as scratch:
-        return _includes_in(repo, None, Path(scratch), set())
+        return _includes_in(repo.resolve(), None, Path(scratch), ())
 
 
-def _includes_in(repo: Path, cfg: Path | None, scratch: Path, seen: set[Path]) -> str | None:
+def _includes_in(
+    repo: Path, cfg: Path | None, scratch: Path, chain: tuple[Path, ...]
+) -> str | None:
     """Check the include.path entries of the repo's config (cfg None) or of one included file."""
     source = ["--file", str(cfg)] if cfg is not None else []
     listing = _run_git(
@@ -179,11 +184,12 @@ def _includes_in(repo: Path, cfg: Path | None, scratch: Path, seen: set[Path]) -
             if applies:
                 return f"config include {value!r} is missing or unreadable"
             continue
+        if not applies:
+            continue  # git does not read it
         resolved = target.resolve()
-        if not applies or resolved in seen:
-            continue  # not read by git, or a cycle (git stops at its own depth limit)
-        seen.add(resolved)
-        nested = _includes_in(repo, target, scratch, seen)
+        if resolved in chain or len(chain) >= _MAX_INCLUDE_DEPTH:
+            return f"config include {value!r} is part of an include cycle or nested too deeply"
+        nested = _includes_in(repo, target, scratch, (*chain, resolved))
         if nested is not None:
             return nested
     return None
