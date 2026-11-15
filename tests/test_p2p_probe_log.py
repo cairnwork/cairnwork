@@ -351,12 +351,39 @@ def test_look_alike_text_next_to_the_new_forms_is_left_alone(tmp_path):
         ("x︳apİ=SV", "x︳apİ=SV"),
         ("x﹏apİ_kex=SV", "x﹏apİ_kex=SV"),
         ("my-x︳apİ_keys=SV", "my-x︳apİ_keys=SV"),
+        ("ⓣoken＝SECRETVAL", "ⓣoken＝<redacted>"),
+        ("token﹦SECRETVAL", "token﹦<redacted>"),
+        ("token⁼SECRETVAL", "token⁼<redacted>"),
+        ("token₌SECRETVAL", "token₌<redacted>"),
     ],
 )
 def test_low_line_lookalikes_full_width_equals_and_mixed_scripts_1313(tmp_path, text, expected):
     log = tmp_path / "verifier.log"
     log.write_text(text)
     assert probe_log_tail(log) == expected
+
+
+def test_every_single_codepoint_nfkc_variant_of_key_char_is_masked_1313():
+    import unicodedata
+
+    from cairnwork.p2p_probe_log import mask_secrets
+
+    for cp in range(0x110000):
+        ch = chr(cp)
+        nf = unicodedata.normalize("NFKC", ch)
+        if nf == ch or len(nf) != 1:
+            continue
+        low = nf.casefold()
+        if low in "token":
+            idx = "token".index(low)
+            sample = "token"[:idx] + ch + "token"[idx + 1 :] + "=SECRETVAL"
+            assert mask_secrets(sample) == sample[:-9] + "<redacted>", (hex(cp), sample)
+        elif nf == "_":
+            sample = f"api{ch}key=SECRETVAL"
+            assert mask_secrets(sample) == f"api{ch}key=<redacted>", (hex(cp), sample)
+        elif nf == "=":
+            sample = f"token{ch}SECRETVAL"
+            assert mask_secrets(sample) == f"token{ch}<redacted>", (hex(cp), sample)
 
 
 @pytest.mark.parametrize("unit", ["-", "a-", "a_", "x-token-", "a＿", "a︳"])
