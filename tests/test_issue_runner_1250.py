@@ -1,18 +1,18 @@
 """Issue #1250: scratch repository failures are environment errors."""
+# ruff: noqa: F811
 
 import subprocess
 
 import pytest
-from test_deferred_store import make_bundle, used_dir
-from test_issue_runner import BLOCK, FakeGitHub, issue
+from test_deferred_store import make_bundle, store, used_dir  # noqa: F401
+from test_deferred_tests import project as project  # noqa: F401 - fixture
+from test_issue_runner import BLOCK, FakeGitHub, issue, setup  # noqa: F401
 
 import cairnwork.deferred_store as deferred_store
 import cairnwork.issue_runner as runner
 from cairnwork.deferred_store import DeferredStore
 from cairnwork.deferred_tests import TestCommitRejected as CommitRejected
 from cairnwork.gitcmd import GitCommandError
-
-pytest_plugins = ("test_deferred_store", "test_issue_runner")
 
 
 def _git_failure(command):
