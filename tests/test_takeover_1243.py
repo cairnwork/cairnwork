@@ -8,7 +8,7 @@ import pytest
 from cairnwork import takeover, unswept
 from cairnwork.confined import Sweep
 from cairnwork.intake import Intake, IntakeRefused
-from cairnwork.ownership import InvalidStatusTransition, OWNER, OwnershipLedger
+from cairnwork.ownership import OWNER, InvalidStatusTransition, OwnershipLedger
 
 
 @pytest.mark.parametrize("status", ["DISPATCHED"])
