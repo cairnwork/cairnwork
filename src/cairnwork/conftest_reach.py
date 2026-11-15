@@ -226,6 +226,85 @@ def _items(node: ast.expr | None) -> list[ast.expr]:
     return [node] if node is not None else []
 
 
+_DYNAMIC = frozenset({"setattr", "delattr", "exec", "eval", "globals", "locals", "vars"})
+
+
+def _nullcontext_imports(tree: ast.Module, name: str, from_import: bool) -> set[int]:
+    if from_import:
+        return {
+            id(a)
+            for s in tree.body
+            if isinstance(s, ast.ImportFrom) and s.level == 0 and s.module == "contextlib"
+            for a in s.names
+            if a.name == "nullcontext" and (a.asname or a.name) == name
+        }
+    return {
+        id(a)
+        for s in tree.body
+        if isinstance(s, ast.Import)
+        for a in s.names
+        if a.name == "contextlib" and (a.asname or a.name) == name
+    }
+
+
+def _with_expr(expr: ast.expr, tree: ast.Module | None) -> ast.expr | None:
+    if tree is None or not isinstance(expr, ast.Call):
+        return None
+    if len(expr.args) != 1 or expr.keywords or isinstance(expr.args[0], ast.Starred):
+        return None
+    fn = expr.func
+    if isinstance(fn, ast.Name):
+        name, from_import = fn.id, True
+    elif isinstance(fn, ast.Attribute) and fn.attr == "nullcontext":
+        if not isinstance(fn.value, ast.Name):
+            return None
+        name, from_import = fn.value.id, False
+    else:
+        return None
+    good = _nullcontext_imports(tree, name, from_import)
+    if not good:
+        return None
+    for n in ast.walk(tree):
+        if isinstance(n, ast.alias):
+            if n.name == "*" or (id(n) not in good and (n.asname or n.name.split(".")[0]) == name):
+                return None
+        elif (
+            (isinstance(n, ast.Name) and not isinstance(n.ctx, ast.Load) and n.id == name)
+            or (isinstance(n, ast.Name) and n.id in _DYNAMIC)
+            or (isinstance(n, ast.Attribute) and not isinstance(n.ctx, ast.Load))
+            or (isinstance(n, ast.MatchMapping) and n.rest == name)
+            or (isinstance(n, ast.arg) and n.arg == name)
+            or getattr(n, "name", None) == name
+        ):
+            return None
+    return expr.args[0]
+
+
+def _plain_index(node: ast.AST) -> bool:
+    if isinstance(node, ast.Slice):
+        return all(_plain_index(x) for x in (node.lower, node.upper, node.step) if x is not None)
+    return isinstance(node, ast.Constant) and type(node.value) is int
+
+
+def _paired_values(target: ast.AST, value: ast.expr | None) -> list[ast.expr | None]:
+    if not _mentions(target):
+        return []
+    is_sub = (
+        isinstance(target, ast.Subscript)
+        and isinstance(target.value, ast.Name)
+        and target.value.id == "pytest_plugins"
+        and _plain_index(target.slice)
+    )
+    if isinstance(target, ast.Name) or is_sub:
+        return [value]
+    if isinstance(target, ast.Tuple | ast.List) and isinstance(value, ast.Tuple | ast.List):
+        plain = not any(isinstance(e, ast.Starred) for e in (*target.elts, *value.elts))
+        if plain and len(target.elts) == len(value.elts):
+            pairs = zip(target.elts, value.elts, strict=True)
+            return [v for sub, val in pairs for v in _paired_values(sub, val)]
+    return [None]
+
+
 def _plugin_values(node: ast.AST) -> Sequence[ast.AST | None]:
     """Expressions/patterns a node may feed into ``pytest_plugins`` (#1010)."""
     if isinstance(node, _STORES) and _plugins(node):

@@ -28,7 +28,7 @@ import re
 from pathlib import Path
 from posixpath import dirname, join
 
-from cairnwork.conftest_reach import _mentions, _pattern_bound
+from cairnwork.conftest_reach import _mentions, _paired_values, _pattern_bound, _with_expr
 from cairnwork.deferred_overlay import TestCommitRejected
 from cairnwork.fixture_forms import (
     CODE,
@@ -122,19 +122,21 @@ def _given(node: ast.AST) -> set[str]:
 def requested(tree: ast.Module) -> set[str]:
     """Fixture names ``tree`` may request: every parameter of every function, and every literal
     string passed to ``usefixtures`` or ``getfixturevalue``."""
-    names: set[str] = set()
+    names = _req_args(tree)
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda):
             a = node.args
             names |= {x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs)}
-        elif isinstance(node, ast.Call) and _call_name(node.func) in _REQUESTS:
-            names |= {
-                s.value
-                for arg in node.args
-                for s in ast.walk(arg)
-                if isinstance(s, ast.Constant) and isinstance(s.value, str)
-            }
     return names
+
+
+def _req_args(tree: ast.AST) -> set[str]:
+    return {
+        s.value for n in ast.walk(tree)
+        if isinstance(n, ast.Call) and _call_name(n.func) in _REQUESTS
+        for arg in n.args for s in ast.walk(arg)
+        if isinstance(s, ast.Constant) and isinstance(s.value, str)
+    }  # fmt: skip
 
 
 def _call_name(func: ast.expr) -> str:
@@ -152,12 +154,7 @@ def _fixtures(
     fixture is a function with a decorator naming ``fixture`` or an alias of it, any decorated
     module-level function (a factory decorator from another module may call ``fixture``, #982;
     a method's ``@property`` is not), or one passed to a ``fixture`` call."""
-    names = registered(tree, extra=extra) | {
-        s.value for n in ast.walk(tree)
-        if isinstance(n, ast.Call) and _call_name(n.func) in _REQUESTS
-        for arg in n.args for s in ast.walk(arg)
-        if isinstance(s, ast.Constant) and isinstance(s.value, str)
-    }  # fmt: skip
+    names = registered(tree, extra=extra) | _req_args(tree)
     selectors = names | set(called or ()) | assignment_callables(tree)
     top, aliases = {id(n) for n in module_level(tree.body)}, _aliases(tree, extra=extra)
     for node in ast.walk(tree):
@@ -247,7 +244,7 @@ def _imports(
                 up = dirname(up)
             head = ".".join(filter(None, [*(up.split("/") if node.level else ()), node.module]))
             modules |= {head} | {f"{head}.{a.name}".strip(".") for a in node.names}
-        elif values := _plugins_values(node):
+        elif values := _plugins_values(node, tree if "contextlib" not in index else None):
             for value in values:
                 items = value.elts if isinstance(value, ast.List | ast.Tuple) else [value]
                 if not all(isinstance(v, ast.Constant) and isinstance(v.value, str) for v in items):
@@ -255,32 +252,6 @@ def _imports(
                 strings = [v.value for v in items if isinstance(v, ast.Constant)]
                 modules |= {m.strip() for v in strings if isinstance(v, str) for m in v.split(",")}
     return {f for m in modules if m for f in index.get(m, ())}
-
-
-def _with_expr(expr: ast.expr) -> ast.expr | None:
-    if isinstance(expr, ast.Call) and _call_name(expr.func) == "nullcontext":
-        if len(expr.args) == 1 and not expr.keywords and not isinstance(expr.args[0], ast.Starred):
-            return expr.args[0]
-    return None
-
-
-def _paired_values(target: ast.AST, value: ast.expr | None) -> list[ast.expr | None]:
-    if not _mentions(target):
-        return []
-    is_sub = (
-        isinstance(target, ast.Subscript)
-        and isinstance(target.value, ast.Name)
-        and target.value.id == "pytest_plugins"
-        and not _mentions(target.slice)
-    )
-    if isinstance(target, ast.Name) or is_sub:
-        return [value]
-    if isinstance(target, ast.Tuple | ast.List) and isinstance(value, ast.Tuple | ast.List):
-        plain = not any(isinstance(e, ast.Starred) for e in (*target.elts, *value.elts))
-        if plain and len(target.elts) == len(value.elts):
-            pairs = zip(target.elts, value.elts, strict=True)
-            return [v for sub, val in pairs for v in _paired_values(sub, val)]
-    return [None]
 
 
 def _match_case_values(pattern: ast.pattern, subject: ast.expr) -> list[ast.expr | None]:
@@ -308,7 +279,7 @@ def _match_case_values(pattern: ast.pattern, subject: ast.expr) -> list[ast.expr
     return [None]
 
 
-def _plugins_values(node: ast.AST) -> list[ast.expr | None]:
+def _plugins_values(node: ast.AST, tree: ast.Module | None = None) -> list[ast.expr | None]:
     """Values bound to or added to ``pytest_plugins``; ``[None]`` stops fail-closed (#1010)."""
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
         if isinstance(node.func.value, ast.Name) and node.func.value.id == "pytest_plugins":
@@ -331,7 +302,7 @@ def _plugins_values(node: ast.AST) -> list[ast.expr | None]:
         out: list[ast.expr | None] = []
         for item in node.items:
             if item.optional_vars is not None and _mentions(item.optional_vars):
-                inner = _with_expr(item.context_expr)
+                inner = _with_expr(item.context_expr, tree)
                 out += [None] if inner is None else _paired_values(item.optional_vars, inner)
         return out
     if isinstance(node, ast.Match):
