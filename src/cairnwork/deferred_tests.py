@@ -246,10 +246,10 @@ def untargeted(
     return tuple(missing)
 
 
-def _without_case(node_id: str) -> str:
+def _without_case(node_id: str, all_parts: bool = False) -> str:
     """``path::name[case]`` -> ``path::name``; a ``[`` in the path part is left alone, so a
     target the producer's grammar refuses (``tests/test_x.py[x]``) names no file here either."""
-    return _nodeid_without_case(node_id)
+    return _nodeid_without_case(node_id, all_parts=all_parts)
 
 
 def _named(node: str, targets: frozenset[str]) -> bool:
@@ -375,12 +375,7 @@ def base_comparison(runs, targets: frozenset[str]) -> Comparison:
 def not_run(runs, targets) -> list[str]:
     """The ``targets`` no run's guard record holds (collected and run, any outcome; a
     parametrisation counts): the base run's check (#660) and the verification run's (#697)."""
-    ran = {
-        form
-        for run in runs
-        for nodeid in run.outcomes
-        for form in (_nodeid_without_case(nodeid), _nodeid_without_case(nodeid, all_parts=True))
-    }
+    ran = {f for r in runs for n in r.outcomes for f in (_without_case(n), _without_case(n, True))}
     return sorted(set(targets) - ran)
 
 
