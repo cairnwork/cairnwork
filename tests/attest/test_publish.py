@@ -27,6 +27,41 @@ from cairnwork_attest.publish import _git, publish_bundle
 pytestmark = pytest.mark.usefixtures("production_git_env")  # publish._git inherits os.environ
 
 
+def test_publish_git_timeout_is_a_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def timed_out(*args, **kwargs):
+        raise subprocess.TimeoutExpired(args[0], timeout=120)
+
+    monkeypatch.setattr("cairnwork_attest.publish.config_hooks_off", lambda repo, env: [])
+    monkeypatch.setattr("cairnwork_attest.publish.subprocess.run", timed_out)
+    result = _git(repo, "fetch", "origin", "refs/notes/cairnwork")
+    assert result.returncode != 0
+    assert "timed out" in result.stderr
+
+
+def test_publish_push_timeout_returns_failed_result(
+    tmp_path: Path,
+    publish_env: tuple[Path, Path, str],
+    key: Ed25519PrivateKey,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    src, _bare, candidate = publish_env
+    bundle = _write_bundle(tmp_path, _make_bundle_bytes(candidate, key))
+    real_run = subprocess.run
+
+    def timeout_push(argv, **kwargs):
+        if "push" in argv:
+            raise subprocess.TimeoutExpired(argv, timeout=120)
+        return real_run(argv, **kwargs)
+
+    monkeypatch.setattr("cairnwork_attest.publish.subprocess.run", timeout_push)
+    result = publish_bundle(bundle, src, candidate)
+    assert (result.ok, result.code) == (False, "PUSH_FAILED")
+    assert result.detail == "git command timed out"
+
+
 @pytest.fixture
 def key() -> Ed25519PrivateKey:
     return Ed25519PrivateKey.generate()
