@@ -33,6 +33,7 @@ _MODULES = frozenset(
 )
 _DIRECT_WRITERS = frozenset({"NamedTemporaryFile", "FileIO", "copyfileobj"})
 _MODE_TEXT = re.compile(r"[rwaxbtU+]{1,6}")
+_UNBOUND_OPEN = "\0unbound_builtin_open"
 
 
 def _is_write_call(
@@ -75,7 +76,11 @@ def _is_write_call(
         path_like = receiver is not None and (
             not isinstance(receiver, ast.Name) or module not in _PATH_FIRST_OPENERS
         )
-        return _mode_is_write(call, path_like=path_like)
+        plain_builtin_open = isinstance(call.func, ast.Name) and call.func.id == "open"
+        use_single_mode = isinstance(call.func, ast.Name) and not (
+            plain_builtin_open and _UNBOUND_OPEN in openers
+        )
+        return _mode_is_write(call, path_like=path_like, single_mode_arg=use_single_mode)
     return False
 
 
@@ -86,11 +91,22 @@ def _mode_is_write(
     mode_index: int = 1,
     path_like: bool = False,
     flag_mode: bool = False,
+    single_mode_arg: bool = False,
 ) -> bool:
     mode_arg = next((kw.value for kw in call.keywords if kw.arg in {"mode", "flag"}), None)
     if mode_arg is None:
         index = 0 if path_like else mode_index
         mode_arg = call.args[index] if len(call.args) > index else None
+        if (
+            mode_arg is None
+            and single_mode_arg
+            and len(call.args) == 1
+            and not call.keywords
+            and isinstance(call.args[0], ast.Constant)
+            and isinstance(call.args[0].value, str)
+            and _MODE_TEXT.fullmatch(call.args[0].value)
+        ):
+            mode_arg = call.args[0]
         if path_like and mode_arg is not None:
             first = mode_arg.value if isinstance(mode_arg, ast.Constant) else None
             if isinstance(first, str) and not _MODE_TEXT.fullmatch(first):
@@ -115,6 +131,35 @@ def _mode_is_write(
     return any(ch in value for ch in ("w", "a", "x", "+"))
 
 
+def _module_binds_name(tree: ast.Module, name: str) -> bool:
+    """Conservatively detect any module binding that can shadow the builtin name."""
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Name)
+            and node.id == name
+            and isinstance(node.ctx, (ast.Store, ast.Del))
+        ):
+            return True
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            and node.name == name
+        ):
+            return True
+        if isinstance(node, ast.arg) and node.arg == name:
+            return True
+        if isinstance(node, ast.alias) and (node.asname or node.name.split(".")[0]) == name:
+            return True
+        if isinstance(node, (ast.Global, ast.Nonlocal)) and name in node.names:
+            return True
+        if isinstance(node, ast.ExceptHandler) and node.name == name:
+            return True
+        if isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name == name:
+            return True
+        if isinstance(node, ast.MatchMapping) and node.rest == name:
+            return True
+    return False
+
+
 def _imported_names(
     tree: ast.Module, names: frozenset[str], modules: frozenset[str]
 ) -> frozenset[str]:
@@ -130,7 +175,8 @@ def _imported_names(
 def _imported_openers(tree: ast.Module) -> frozenset[str]:
     """File-global aliases of file openers; control flow is deliberately ignored."""
     names = frozenset({"open", "BZ2File", "LZMAFile", "GzipFile", "ZipFile", "fdopen"})
-    return _imported_names(tree, names, _MODULES | {"shelve", "dbm"})
+    imported = _imported_names(tree, names, _MODULES | {"shelve", "dbm"})
+    return imported | ({_UNBOUND_OPEN} if not _module_binds_name(tree, "open") else set())
 
 
 def _module_aliases(tree: ast.Module) -> dict[str, str]:

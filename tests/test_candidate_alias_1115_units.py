@@ -65,6 +65,19 @@ def test_runtime_shadow_added_open_single_argument_that_looks_like_mode_is_read(
     assert runtime_shadow_added(None, src) is False
 
 
+def test_runtime_shadow_added_path_open_alias_with_single_mode_argument_is_write():
+    src = (
+        b"import sys\nfrom gzip import open as opener\nfrom pathlib import Path\n"
+        b"opener = Path('f').open\nopener('w')\nsys.path.insert(0, 'd')\n"
+    )
+    assert runtime_shadow_added(None, src) is True
+
+
+def test_runtime_shadow_added_rebound_builtin_open_single_mode_argument_is_write():
+    src = b"import sys\nopen = something\nopen('w')\nsys.path.insert(0, 'd')\n"
+    assert runtime_shadow_added(None, src) is True
+
+
 @pytest.mark.parametrize("call", ["open('x', 'w')", "open('x', mode='a')"])
 def test_runtime_shadow_added_open_positional_and_keyword_write_modes(call):
     src = f"import sys\n{call}\nsys.path.insert(0, 'd')\n".encode()
