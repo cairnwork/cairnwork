@@ -70,7 +70,9 @@ def test_methods_of_parametrized_class_do_not_collide():
         {second},
         {"tests/t.py"},
         lambda _: "class TestResource:\n    def test_delete(self): pass\n",
-        lambda _: "class TestResource:\n    def test_get(self): pass\n    def test_delete(self): pass\n",
+        lambda _: (
+            "class TestResource:\n    def test_get(self): pass\n    def test_delete(self): pass\n"
+        ),
     )
     assert side.removed == {first}
     assert side.dropped == set()

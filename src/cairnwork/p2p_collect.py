@@ -45,6 +45,7 @@ from cairnwork.p2p_bindings import (
     rebinds_by_string,
     walk_without_nested_classes,
 )
+from cairnwork.p2p_function import _function
 from cairnwork.p2p_nodes import changed_tests, module_changed
 from cairnwork.p2p_selection import MODULE_DIR_CAP
 from cairnwork.verifier_spec import VerifierSpec
@@ -374,28 +375,6 @@ def _source(task, commit: str, path: str) -> str:
 
 def _file(nodeid: str) -> str:
     return nodeid.partition("::")[0]
-
-
-def _function(nodeid: str) -> str:
-    path, separator, test_id = nodeid.partition("::")
-    if not separator:
-        return nodeid
-    parts = []
-    start = depth = 0
-    index = 0
-    while index < len(test_id):
-        char = test_id[index]
-        if char == "[":
-            depth += 1
-        elif char == "]":
-            depth = max(0, depth - 1)
-        elif test_id.startswith("::", index) and depth == 0:
-            parts.append(test_id[start:index])
-            start = index + 2
-            index += 1
-        index += 1
-    parts.append(test_id[start:])
-    return "::".join([path, *(part.split("[", 1)[0] for part in parts)])
 
 
 def _digest(ids) -> str:
