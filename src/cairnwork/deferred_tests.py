@@ -375,7 +375,12 @@ def base_comparison(runs, targets: frozenset[str]) -> Comparison:
 def not_run(runs, targets) -> list[str]:
     """The ``targets`` no run's guard record holds (collected and run, any outcome; a
     parametrisation counts): the base run's check (#660) and the verification run's (#697)."""
-    ran = {_nodeid_without_case(nodeid) for run in runs for nodeid in run.outcomes}
+    ran = {
+        form
+        for run in runs
+        for nodeid in run.outcomes
+        for form in (_nodeid_without_case(nodeid), _nodeid_without_case(nodeid, all_parts=True))
+    }
     return sorted(set(targets) - ran)
 
 

@@ -23,7 +23,9 @@ def base_teeth(runs, targets) -> tuple[str, str, str]:
     plugin: list[str] = []
     for run in runs:
         for nodeid, outcome in run.outcomes.items():
-            if outcome != "failed" or _without_case(nodeid) not in targets:
+            if outcome != "failed" or not (
+                {_without_case(nodeid), _without_case(nodeid, all_parts=True)} & targets
+            ):
                 continue
             kind = run.fail_kind.get(nodeid)
             if kind is None:
