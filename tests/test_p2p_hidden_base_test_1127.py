@@ -139,7 +139,6 @@ def test_annotation_only_is_not_a_rebinding_1128():  # item 3, fixed
     assert _split(base, test, base_ids, test_ids) == (gone, set())
 
 
-@pytest.mark.xfail(strict=True, reason="#1128: honest deletion refused")
 @pytest.mark.parametrize("case", sorted(REFUSED))
 def test_honest_deletion_is_removed_1128(case):
     base, test, base_ids, test_ids, gone = REFUSED[case]
