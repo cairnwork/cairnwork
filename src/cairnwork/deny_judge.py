@@ -56,6 +56,7 @@ class Evidence:
     # #991: every distinct (operation, exact target) of the run's own denials that ``detail`` would
     # name without its MAX_LISTED cap. Only a DENIED evidence has any; never printed or compared.
     denials: frozenset[tuple[str, str]] = field(default=frozenset(), compare=False, repr=False)
+    loss_count: int = 0  # tagged duplicate reports: denied records the stream could not preserve
 
     def denied(self, operation: str, target: str) -> bool:
         """The run itself was denied ``operation`` on exactly ``target`` (DENIED evidence only)."""
@@ -150,6 +151,7 @@ class _Tally:
         self.canaries, self.ignored = canaries, canaries | retired
         self.complete, self.opened = complete, False
         self.total, self.buckets = 0, Counter()
+        self.loss_count = 0
         self.seen: set[tuple[int, str]] = set()
         self.found: list[str] = []
         self.denials: set[tuple[str, str]] = set()
@@ -170,6 +172,7 @@ class _Tally:
         self.total += count
         self.buckets[second] += count
         if ours:
+            self.loss_count += count if count > 1 else 0
             self.seen.add((pid, target))
             if (pid, target) not in self.ignored and (operation, target) not in BENIGN_DENIES:
                 # the target is the run's own text (a path it chose): hidden characters go (#740)
@@ -184,6 +187,14 @@ class _Tally:
         total, peak = self.total, max(self.buckets.values())
         if not self.canaries <= self.seen:
             return Evidence("UNAVAILABLE", "a canary line is missing", total, peak)
+        if self.loss_count:
+            return Evidence(
+                "UNAVAILABLE",
+                f"the run's deny stream lost {self.loss_count} reports",
+                total,
+                peak,
+                loss_count=self.loss_count,
+            )
         if self.gap > STALL_SECONDS:
             return Evidence("UNAVAILABLE", f"the stream stalled {self.gap:.0f}s", total, peak)
         cap = MAX_WINDOW_LINES + BACKGROUND_PER_SECOND * (self.last - self.first + 1)
