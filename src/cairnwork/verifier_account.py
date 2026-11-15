@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cairnwork import confined, lock_queue, verifier_escape
+from cairnwork.account_proc import run_bounded
 from cairnwork_sandbox import Backend, platform_backend
 
 SUDO = "/usr/bin/sudo"
@@ -96,6 +97,11 @@ def _backend() -> Backend:
     if backend is None:
         raise VerifierAccountError("no sandbox backend on this platform")
     return backend
+
+
+def _run_bounded(argv: list[str], timeout: float) -> None:
+    """Bounded account cleanup (#437 H); see ``account_proc.run_bounded``."""
+    run_bounded(argv, timeout, VerifierAccountError)
 
 
 @dataclass(frozen=True)
@@ -315,9 +321,7 @@ class VerifierAccount:
         from cairnwork.run_scrub import account_delete_argv
 
         for argv in account_delete_argv(self.user, str(real), _backend().unconfined, self.python):
-            subprocess.run(  # noqa: S603 - fixed argv, path checked above
-                argv, capture_output=True, timeout=60, check=False
-            )
+            _run_bounded(argv, 60)
 
     @staticmethod
     def share_run(private: Path, ini: Path, run_dir: Path, home: Path, tmp: Path) -> None:
