@@ -8,6 +8,14 @@ from contextlib import suppress
 TERM_GRACE_SECONDS = 5
 
 
+def _kill_and_reap(proc: subprocess.Popen[bytes]) -> None:
+    """SIGKILL our own child and wait a bounded time; a child that stays is left to the caller."""
+    with suppress(OSError):
+        proc.kill()
+    with suppress(subprocess.TimeoutExpired):
+        proc.wait(timeout=TERM_GRACE_SECONDS)
+
+
 def run_bounded(argv: list[str], timeout: float, fail: type[Exception]) -> None:
     """Run ``argv`` (output dropped). On timeout end only this child, then raise ``fail``.
 
@@ -26,12 +34,8 @@ def run_bounded(argv: list[str], timeout: float, fail: type[Exception]) -> None:
         try:
             proc.wait(timeout=TERM_GRACE_SECONDS)
         except subprocess.TimeoutExpired:
-            with suppress(OSError):
-                proc.kill()
-            proc.wait()
+            _kill_and_reap(proc)
         raise fail(f"account cleanup timed out after {timeout:g}s") from None
     except BaseException:
-        with suppress(OSError):
-            proc.kill()
-        proc.wait()
+        _kill_and_reap(proc)
         raise

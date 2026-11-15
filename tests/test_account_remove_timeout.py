@@ -11,9 +11,18 @@ from cairnwork.verifier_account import VerifierAccount, VerifierAccountError
 
 
 class _Child:
-    def __init__(self, hangs, ignores_term=False, term_error=None, wait_error=None):
+    def __init__(
+        self,
+        hangs,
+        ignores_term=False,
+        term_error=None,
+        wait_error=None,
+        kill_error=None,
+        never_exits=False,
+    ):
         self.hangs, self.ignores_term, self.events = hangs, ignores_term, []
         self.term_error, self.wait_error = term_error, wait_error
+        self.kill_error, self.never_exits = kill_error, never_exits
 
     def wait(self, timeout=None):
         self.events.append(("wait", timeout))
@@ -22,8 +31,10 @@ class _Child:
         stuck = self.hangs and not (
             "terminate" in [e[0] for e in self.events] and not self.ignores_term
         )
-        if "kill" in [e[0] for e in self.events]:
+        if "kill" in [e[0] for e in self.events] and not self.never_exits:
             stuck = False
+        if self.never_exits and timeout is not None and self.hangs:
+            raise subprocess.TimeoutExpired("sudo", timeout)
         if stuck and timeout is not None:
             raise subprocess.TimeoutExpired("sudo", timeout)
         return 0
@@ -35,6 +46,8 @@ class _Child:
 
     def kill(self):
         self.events.append(("kill",))
+        if self.kill_error:
+            raise self.kill_error
 
 
 def _account(tmp_path):
@@ -107,3 +120,27 @@ def test_interrupt_kills_the_own_child_and_propagates(tmp_path, monkeypatch):
     with pytest.raises(KeyboardInterrupt):
         account.remove(run)
     assert "kill" in [e[0] for e in child.events]
+
+
+def test_unsignalable_child_never_hangs_and_still_fails(tmp_path, monkeypatch):
+    account, run = _account(tmp_path)
+    err = PermissionError("denied")
+    child = _Child(hangs=True, ignores_term=True, term_error=err, kill_error=err, never_exits=True)
+    _patch(monkeypatch, child, [])
+    with pytest.raises(VerifierAccountError, match="timed out"):
+        account.remove(run)
+    assert all(e[1] is not None for e in child.events if e[0] == "wait"), "no unbounded wait"
+
+
+def test_interrupt_with_unkillable_child_still_propagates(tmp_path, monkeypatch):
+    account, run = _account(tmp_path)
+    child = _Child(
+        hangs=True,
+        wait_error=KeyboardInterrupt(),
+        kill_error=PermissionError("x"),
+        never_exits=True,
+    )
+    _patch(monkeypatch, child, [])
+    with pytest.raises(KeyboardInterrupt):
+        account.remove(run)
+    assert all(e[1] is not None for e in child.events if e[0] == "wait")
