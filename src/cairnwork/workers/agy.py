@@ -194,15 +194,19 @@ class AgyWorker:
         log = os.fdopen(fd, "wb")
         mark = proc_start.boot_mark()  # before the start: what predates it is not the run's
         dirs = (os.path.realpath(workdir),)  # now: the run may swap it (#578, #537)
-        process = subprocess.Popen(  # noqa: S603 - fixed argv, no shell
-            argv,
-            cwd=workdir,
-            env=env,
-            stdin=subprocess.DEVNULL if dispatch is None else subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT if dispatch is None else subprocess.PIPE,
-            start_new_session=True,
-        )
+        try:
+            process = subprocess.Popen(  # noqa: S603 - fixed argv, no shell
+                argv,
+                cwd=workdir,
+                env=env,
+                stdin=subprocess.DEVNULL if dispatch is None else subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT if dispatch is None else subprocess.PIPE,
+                start_new_session=True,
+            )
+        except BaseException:
+            log.close()
+            raise
         reader = None
         try:  # an exception before _await owns the process must not leave agy's group running
             if dispatch is not None:

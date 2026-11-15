@@ -177,6 +177,12 @@ def test_observed_model_comes_from_the_dispatcher_status_of_the_launch_operation
     assert _observed(dispatch, _launch(OP)) == "gemini-3.8-flash-high"
 
 
+def test_deeply_nested_status_output_has_no_observed_model(tmp_path):
+    path = fake_dispatcher(tmp_path, "print('[' * 100000)")
+    dispatch = agy_dispatch.Dispatch(path, run_as_user="w")
+    assert agy_dispatch.operation_model(dispatch, OP, {}) is None
+
+
 def test_the_stderr_status_line_is_never_a_source(tmp_path):
     dispatch = _stub(tmp_path, {})  # --status finds nothing; the reader's line has a value
     assert _observed(dispatch, _launch(OP)) == "unknown"
