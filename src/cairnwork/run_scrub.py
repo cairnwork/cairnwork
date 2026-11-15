@@ -52,7 +52,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from cairnwork.run_tree import _private_name, _real_dir, run_tree_ok, seal_private
+from cairnwork.run_tree import _private_name, _real_dir, root_problem, run_tree_ok, seal_private
 
 
 def _shown(path: Path) -> str:
@@ -240,18 +240,12 @@ def _recovery_steps(user: str, python: str, run: Path, private: Path) -> str:
 
 
 def _hint(user: str, python: str, path: Path, root: Path | None = None) -> str:
-    """Recovery while ``private`` is still group-traversable (0750). Not for the run root itself.
-
-    A name ``run`` directly under the run root is not a ``private/run``: its parent is the root,
-    so the private-dir steps (chmod 700 of the parent) would hit the run root (#437 residual).
-    """
-    if root is not None and path.parent == root:
-        q_path = shlex.quote(str(path))
+    """Recovery while ``private`` is 0750. A ``run`` directly in the run root is no private/run."""
+    if root is not None and path.parent == root and path.name == "run":
         return (
-            f"{_shown(path)} sits directly in the run root and blocks the next account run. "
-            f"The owner must fix it without following links: ls -ld {q_path}. If it is a "
-            f"symlink, unlink that symlink only and do not remove or chmod its target; do not "
-            f"chmod the run root."
+            f"{_shown(path)} sits directly in the run root. Check it without following links: "
+            f"ls -ld {shlex.quote(str(path))}. If a symlink, unlink that symlink only; "
+            f"never chmod the root."
         )
     private = path.parent if path.name == "run" else path
     run = private / "run"
@@ -371,30 +365,6 @@ def _refuse(account, stuck: list[Path]) -> str:
     return f"{shown}{extra}. {_hint(account.user, account.python, stuck[0], account.run_root)}"
 
 
-def _root_unsafe(root: Path) -> str | None:
-    """Refuse a run root someone else could swap names in (#437 E).
-
-    ``rmtree(root/private/run)`` follows a swapped ``private`` link, so the root must belong to
-    this process and be writable by neither group nor others (setup_verifier_user*.sh sets 2750).
-    """
-    try:
-        info = os.lstat(root)
-    except OSError as exc:
-        return f"cannot stat {_shown(root)}: {exc}"
-    shown = shlex.quote(str(root))
-    if info.st_uid != os.getuid():
-        return (
-            f"{_shown(root)} is not owned by this user (owner uid {info.st_uid}). The owner must "
-            f"fix it: ls -ld {shown}"
-        )
-    if info.st_mode & 0o022:
-        return (
-            f"{_shown(root)} is writable by group or others (mode {stat.S_IMODE(info.st_mode):o}). "
-            f"The owner must remove that: chmod g-w,o-w {shown}"
-        )
-    return None
-
-
 def stale_run_error(account) -> str | None:
     """Why the next account run must not start, or None when no private/run residue remains.
 
@@ -419,8 +389,8 @@ def stale_run_error(account) -> str | None:
             f"following links: ls -ld {shown}. If it is a symlink, unlink it only and do not "
             f"remove its target."
         )
-    if (problem := _root_unsafe(root)) is not None:
-        return problem
+    if (problem := root_problem(root)) is not None:
+        return f"{_shown(root)} {problem}. The owner must fix it: ls -ld {shlex.quote(str(root))}"
     stuck: list[Path] = []
     for name in names:
         if name.endswith(".work"):
