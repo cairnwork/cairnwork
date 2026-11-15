@@ -4,7 +4,7 @@ import subprocess
 
 import pytest
 
-from cairnwork import deferred_store, deferred_tests
+from cairnwork import deferred_store, deferred_tests, gitprobe
 from cairnwork.deferred_store import DeferredStore
 from cairnwork.deferred_tests import TestCommitRejected as Rejected
 from cairnwork.gitcmd import GitCommandError, commit_present
@@ -91,7 +91,7 @@ def test_ensure_test_commit_does_not_treat_git_failure_as_missing(tmp_path, monk
 
 
 def test_ensure_test_commit_keeps_real_missing_candidate_rejection(tmp_path, monkeypatch):
-    monkeypatch.setattr(deferred_tests, "origin_reachable", lambda *a: None)
+    monkeypatch.setattr(gitprobe, "origin_reachable", lambda *a: None)
     monkeypatch.setattr(deferred_tests, "commit_present", lambda *a: False)
 
     def reject_fetch(*args, **kwargs):
@@ -106,7 +106,7 @@ def test_ensure_test_commit_keeps_real_missing_candidate_rejection(tmp_path, mon
 
 
 def test_ensure_test_commit_origin_timeout_is_infrastructure(tmp_path, monkeypatch):
-    monkeypatch.setattr(deferred_tests, "origin_reachable", lambda *a: None)
+    monkeypatch.setattr(gitprobe, "origin_reachable", lambda *a: None)
     monkeypatch.setattr(deferred_tests, "commit_present", lambda *a: False)
 
     def timeout(*args, **kwargs):
@@ -158,3 +158,42 @@ def test_reachable_origin_without_commit_still_rejects_candidate(tmp_path):
     with pytest.raises(Rejected) as exc:
         deferred_tests.ensure_test_commit(repo, "b" * 40)
     assert exc.value.code == "TEST_COMMIT_UNREADABLE"
+
+
+def test_candidate_controlled_text_cannot_fake_a_disk_failure(tmp_path):
+    cause = subprocess.CalledProcessError(128, ["git"])
+    for name in ("No space left.bundle", "Disk quota.bundle", "Read-only file system.bundle"):
+        exc = GitCommandError(f"git bundle failed: {tmp_path / name}: No space left on device")
+        exc.__cause__ = cause
+        with pytest.raises(Rejected) as raised:
+            deferred_store._raise_git_failure(exc, supplied=True)
+        assert raised.value.code == "TEST_COMMIT_UNREADABLE"
+
+
+def test_real_storage_exhaustion_is_infrastructure(tmp_path, monkeypatch):
+    monkeypatch.setattr(deferred_store, "storage_exhausted", lambda *a: True)
+    exc = GitCommandError("git failed")
+    exc.__cause__ = subprocess.CalledProcessError(128, ["git"])
+    with pytest.raises(OSError, match="storage failure"):
+        deferred_store._raise_git_failure(exc)
+
+
+def test_fetch_ok_but_commit_missing_with_disk_words_stays_candidate_rejection(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(gitprobe, "origin_reachable", lambda *a: None)
+    monkeypatch.setattr(deferred_tests, "commit_present", lambda *a: False)
+
+    def fetch(*args, **kwargs):
+        return "No space left on device"
+
+    monkeypatch.setattr(deferred_tests, "run_git", fetch)
+    with pytest.raises(Rejected) as raised:
+        deferred_tests.ensure_test_commit(tmp_path, "a" * 40)
+    assert raised.value.code == "TEST_COMMIT_UNREADABLE"
+
+
+def test_storage_exhausted_probe_sees_full_and_healthy(tmp_path, monkeypatch):
+    assert gitprobe.storage_exhausted(tmp_path) is False
+    monkeypatch.setattr(gitprobe.shutil, "disk_usage", lambda p: type("U", (), {"free": 0})())
+    assert gitprobe.storage_exhausted(tmp_path) is True

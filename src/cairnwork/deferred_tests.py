@@ -24,7 +24,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from cairnwork import deferred_attached, survivor_argv
+from cairnwork import deferred_attached, gitprobe, survivor_argv
 from cairnwork.base_teeth import base_teeth
 from cairnwork.deferred_nodes import hidden_tests, local_names, test_functions
 from cairnwork.deferred_overlay import (  # noqa: F401  (re-exported: the one place importers look)
@@ -36,7 +36,7 @@ from cairnwork.deferred_overlay import (  # noqa: F401  (re-exported: the one pl
     deleted_of,
     overlay_tree,
 )
-from cairnwork.gitcmd import OID, GitCommandError, commit_present, origin_reachable, run_git
+from cairnwork.gitcmd import OID, GitCommandError, commit_present, run_git
 from cairnwork.issue_task import test_target
 from cairnwork.p2p_function import _without_case as _nodeid_without_case
 from cairnwork.provenance import trailers
@@ -99,14 +99,13 @@ def ensure_test_commit(repo: Path, test_commit: str, store=None) -> None:
         store.fetch_into(repo, test_commit)
         return
     try:
-        origin_reachable(repo)
+        gitprobe.origin_reachable(repo)
         run_git(repo, "fetch", "--quiet", "--no-tags", "origin", test_commit)
         if not commit_present(repo, test_commit):
-            raise GitCommandError("origin fetch did not provide test commit")
+            raise TestCommitRejected("TEST_COMMIT_UNREADABLE", "origin did not provide it")
     except GitCommandError as exc:
-        if any(w in str(exc).casefold() for w in ("no space left", "disk quota", "read-only file")):
-            raise OSError(f"Cairnwork storage failure: {exc}") from exc
-        if isinstance(exc.__cause__, subprocess.CalledProcessError):
+        candidate = isinstance(exc.__cause__, subprocess.CalledProcessError)
+        if candidate and not gitprobe.storage_exhausted(repo):
             raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
         raise OSError(f"Cairnwork could not run git: {exc}") from exc
 

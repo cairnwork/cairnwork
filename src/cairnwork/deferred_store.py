@@ -28,6 +28,7 @@ from typing import NoReturn
 
 from cairnwork.deferred_tests import TestCommitRejected
 from cairnwork.gitcmd import OID, GitCommandError, commit_present, run_git
+from cairnwork.gitprobe import storage_exhausted
 
 HEAD_REF = "refs/cairnwork/test"
 USED_DIR = "verify-used-tests"  # <state>/verify-used-tests/<sha>: one per test commit ever used
@@ -209,6 +210,7 @@ class _Scratch:
 
     def __init__(self, parent: Path, repo: Path | None, *, supplied: bool = False) -> None:
         self.parent, self.repo, self.supplied = parent, repo, supplied
+        _SEEN_DIRS.update(d for d in (parent, repo) if d is not None and d.is_dir())
         self.dir = parent
 
     def __enter__(self) -> Path:
@@ -255,9 +257,11 @@ def _raise_store_failure(exc: GitCommandError) -> NoReturn:
     raise OSError(f"Cairnwork could not run git: {exc}") from exc
 
 
-def _disk_failure(exc: GitCommandError) -> bool:
-    detail = str(exc).casefold()
-    return any(word in detail for word in ("no space left", "disk quota", "read-only file system"))
+_SEEN_DIRS: set[Path] = set()  # where this process wrote: probed, never git's text (#1298)
+
+
+def _disk_failure(_exc: GitCommandError) -> bool:
+    return storage_exhausted(Path(tempfile.gettempdir()), *_SEEN_DIRS)
 
 
 def _raise_git_failure(
