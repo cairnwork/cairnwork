@@ -377,7 +377,22 @@ def _file(nodeid: str) -> str:
 
 
 def _function(nodeid: str) -> str:
-    return (p := nodeid.partition("::"))[0] + p[1] + p[2].split("[", 1)[0]
+    parts = []
+    start = depth = 0
+    index = 0
+    while index < len(nodeid):
+        char = nodeid[index]
+        if char == "[":
+            depth += 1
+        elif char == "]":
+            depth = max(0, depth - 1)
+        elif nodeid.startswith("::", index) and depth == 0:
+            parts.append(nodeid[start:index])
+            start = index + 2
+            index += 1
+        index += 1
+    parts.append(nodeid[start:])
+    return "::".join([parts[0], *(part.split("[", 1)[0] for part in parts[1:])])
 
 
 def _digest(ids) -> str:

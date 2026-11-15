@@ -29,12 +29,43 @@ def test_bracket_in_directory_still_classifies_removed_test(nodeid, base, test, 
         ("tests/a[b]/t.py::test_y[value]", "tests/a[b]/t.py::test_y"),
         ("tests/a[b]/t.py::test_y", "tests/a[b]/t.py::test_y"),
         ("tests/t.py::C::test_y[a]", "tests/t.py::C::test_y"),
+        ("tests/t.py::TestResource[sqlite]::test_get", "tests/t.py::TestResource::test_get"),
+        ("tests/t.py::TestResource[sqlite]::test_get[x]", "tests/t.py::TestResource::test_get"),
+        ("tests/t.py::TestResource[a[b]]::test_get[x[y]]", "tests/t.py::TestResource::test_get"),
+        ("tests/t.py::C[a::b]::test_y", "tests/t.py::C::test_y"),
         ("tests/t.py::test_y[a[b]]", "tests/t.py::test_y"),
         ("tests/t.py::test_y[x::y]", "tests/t.py::test_y"),
     ],
 )
 def test_parametrize_suffix_is_removed_from_function_id(nodeid, expected):
     assert _function(nodeid) == expected
+
+
+def test_removed_method_in_parametrized_class_is_removed_not_dropped():
+    nodeid = "tests/t.py::TestResource[sqlite]::test_get"
+    side = classify(
+        {nodeid},
+        set(),
+        {"tests/t.py"},
+        lambda _: "class TestResource:\n    pass\n",
+        lambda _: "class TestResource:\n    def test_get(self): pass\n",
+    )
+    assert side.removed == {nodeid}
+    assert side.dropped == set()
+
+
+def test_methods_of_parametrized_class_do_not_collide():
+    first = "tests/t.py::TestResource[sqlite]::test_get"
+    second = "tests/t.py::TestResource[sqlite]::test_delete"
+    side = classify(
+        {first, second},
+        {second},
+        {"tests/t.py"},
+        lambda _: "class TestResource:\n    def test_delete(self): pass\n",
+        lambda _: "class TestResource:\n    def test_get(self): pass\n    def test_delete(self): pass\n",
+    )
+    assert side.removed == {first}
+    assert side.dropped == set()
 
 
 @pytest.mark.parametrize("nodeid", ["t.py"])
