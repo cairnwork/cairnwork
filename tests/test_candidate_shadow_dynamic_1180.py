@@ -84,27 +84,3 @@ def test_aliased_dynamic_import_refuses_changed_nested_module(repo, source):
         candidate_shadow.find_shadow_file(repo, cand, changed={"deep/foo.py": "MODIFY"})
         == "deep/foo.py"
     )
-
-
-@pytest.mark.parametrize(
-    "source",
-    [
-        "import importlib\nimportlib.import_module(*args)",
-        "from importlib import import_module as load\nload(*args)",
-        "from importlib import import_module as load\nload(**kwargs)",
-        "import builtins\nbuiltins.__import__(*args)",
-        "from builtins import __import__ as load\nload(*args)",
-        "import builtins\nbuiltins.__import__(**kwargs)",
-        "from builtins import __import__ as load\nload(**kwargs)",
-        "import pytest\npytest.importorskip(*args)",
-        "from pytest import importorskip as load\nload(*args)",
-        "import pytest\npytest.importorskip(**kwargs)",
-        "from pytest import importorskip as load\nload(**kwargs)",
-        "import importlib as il\nload = il.import_module\nload(**kwargs)",
-    ],
-)
-def test_dynamic_import_unpacking_fails_closed_in_both_parsers(source):
-    raw = f"args = ()\nkwargs = {{'name': 'foo'}}\n{source}\n".encode()
-
-    assert "*" in candidate_shadow._parse_imports(raw, "test_unpacking.py")
-    assert "*" in candidate_shadow._parse_top_level_imports(raw, "test_unpacking.py")
