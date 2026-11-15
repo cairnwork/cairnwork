@@ -213,7 +213,7 @@ def operation_model(dispatch: Dispatch, operation_id: object, env: dict[str, str
             timeout=STATUS_QUERY_SECONDS, check=False,
         )  # fmt: skip
         record = json.loads(done.stdout) if done.returncode == 0 else {}
-    except (OSError, subprocess.SubprocessError, ValueError):
+    except (OSError, subprocess.SubprocessError, ValueError, RecursionError):
         return None
     if not isinstance(record, dict) or record.get("operation_id") != operation_id:
         return None

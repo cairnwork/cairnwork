@@ -1,3 +1,3 @@
 """Run directory tag letters shared by execution, recovery, and process cleanup."""
 
-RUN_TAGS = "vbpqremcos"
+RUN_TAGS = "vbpqremcosx"
