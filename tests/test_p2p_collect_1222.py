@@ -25,6 +25,14 @@ def test_bracket_in_directory_still_classifies_removed_test(nodeid, base, test, 
 @pytest.mark.parametrize(
     ("nodeid", "expected"),
     [
+        (
+            "tests/a[b/test_x.py::test_case[param]",
+            "tests/a[b/test_x.py::test_case",
+        ),
+        (
+            "tests/a[b]/test_x.py::test_case[param]",
+            "tests/a[b]/test_x.py::test_case",
+        ),
         ("tests/t.py::test_y[value]", "tests/t.py::test_y"),
         ("tests/a[b]/t.py::test_y[value]", "tests/a[b]/t.py::test_y"),
         ("tests/a[b]/t.py::test_y", "tests/a[b]/t.py::test_y"),
