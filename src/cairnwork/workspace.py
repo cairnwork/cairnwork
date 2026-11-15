@@ -205,7 +205,7 @@ def remove_attempt_clone(root: Path, attempt_id: str) -> None:
         _make_tree_writable(path)
         shutil.rmtree(path)
     except OSError as exc:
-        raise WorkspaceError(f"could not remove {path}: {exc}") from exc
+        raise WorkspaceError(f"could not remove {shown(path)}: {shown(exc)}") from exc
 
 
 @contextmanager
