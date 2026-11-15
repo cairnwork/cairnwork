@@ -54,3 +54,33 @@ def test_each_supported_dynamic_import_call_marks_unknown_import(call):
     raw = f"importlib\nname = 'foo'\n{call}\n".encode()
 
     assert "*" in candidate_shadow._parse_imports(raw, "test_dynamic.py")
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from importlib import import_module as load\nload(name)",
+        "import importlib as il\nil.import_module(name)",
+        "from builtins import __import__ as load\nload(name)",
+        "import builtins as bi\nbi.__import__(name)",
+        "import importlib as il\nload = il.import_module\nload(name)",
+        "import builtins as bi\nfirst = bi.__import__\nload = first\nload(name)",
+        "from importlib import unknown_loader as load\nload(name)",
+    ],
+)
+def test_aliased_dynamic_import_refuses_changed_nested_module(repo, source):
+    importer = "name = 'foo'\n" + source
+    commit_change(repo, {"deep/foo.py": "VALUE = 1\n", "tests/test_t.py": importer})
+    cand = commit_change(
+        repo,
+        {
+            "deep/foo.py": "VALUE = 2\n",
+            "conftest.py": "import sys\nsys.path.insert(0, 'deep')\n",
+        },
+    )
+
+    assert "*" in candidate_shadow._parse_imports(importer.encode(), "test_alias.py")
+    assert (
+        candidate_shadow.find_shadow_file(repo, cand, changed={"deep/foo.py": "MODIFY"})
+        == "deep/foo.py"
+    )
