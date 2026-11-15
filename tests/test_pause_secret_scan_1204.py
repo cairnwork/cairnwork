@@ -156,3 +156,8 @@ def test_pwd_absolute_path_tradeoff_and_path_class() -> None:
 def test_a_long_call_value_stays_blocked_as_before() -> None:
     assert scan("token = " + "get_the_secret_value_now" + "()") == ["assigned_secret"]
     assert scan("token = next_token()") == []
+
+
+@pytest.mark.parametrize("gap", ["\x0b", "\x0c", "\r", "\u2028", "\xa0", "\u2003"])
+def test_any_whitespace_after_assignment_separator_is_blocked(gap: Any) -> None:
+    assert "assigned_secret" in scan("token=" + gap + _value())

@@ -22,7 +22,7 @@ _PIECE = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+")
 # start a word so each run of name characters is tried once
 _ASSIGNMENT = re.compile(
     r"(?<![A-Za-z0-9_-])(?:[A-Za-z_][A-Za-z0-9_.]*(?:\s*\[\s*[\"'`][A-Za-z_][A-Za-z0-9_-]*[\"'`]\s*\])*\s*\[\s*)?"
-    r"(?P<name>[A-Za-z_][A-Za-z0-9_-]*)[\"'`]?\s*\]?\s*(?:=>|:=|[=:])[ \t]*"
+    r"(?P<name>[A-Za-z_][A-Za-z0-9_-]*)[\"'`]?\s*\]?\s*(?:=>|:=|[=:])\s*"
     r"(?=(?P<value>\"[^\"\n]{6,}\"|'[^'\n]{6,}'|`[^`\n]{6,}`|"
     r"(?=[^\s]*[^A-Za-z0-9_])[^\s]+|[A-Za-z0-9+/=_-]{16,}))"
 )
