@@ -115,3 +115,88 @@ def test_indirect_imported_fixture_controls_do_not_conflict(repo, case):
         path=NESTED,
         base_files=base,
     )
+
+
+# Review record r1 (#1286): benign helper code must not be refused, and forms that only the
+# call-argument walk catches must stay refused.
+OTHER_G = {"tests/other.py": "def _g(dep):\n    return dep\n"}
+WRAP = "def wrap(fn):\n    return fn\n"
+G_DEF = "def _g(dep):\n    return dep\n"
+
+BENIGN = {
+    "lambda parameter x": ("x", "ITEMS = sorted([3, 1], key=lambda x: -x)\n"),
+    "lambda parameter row": ("row", "ROWS = sorted([(1, 2)], key=lambda row: row[0])\n"),
+    "nested keyword timeout": ("timeout", "CFG = dict(a=dict(timeout=3))\n"),
+    "generator variable item": ("item", "L = list(item for item in range(3))\n"),
+    "list comprehension variable": ("elem", "L = list([elem for elem in range(3)])\n"),
+    "keyword scope of unrelated call": (
+        "scope",
+        "import pytest\nR = list(pytest.fixture(scope='function')(len))\n",
+    ),
+    "attribute name": ("name", "import os\nN = str(os.path.basename(__file__).name)\n"),
+    "flag constant I": ("I", "import re\nRX = re.compile('a', re.I)\n"),
+    "keyword value session": ("session", "client = make(session=session)\n"),
+    "keyword name only": ("retries", "CALL = make(retries=3)\n"),
+    "dict comprehension key": ("k", "D = dict({k: 1 for k in 'ab'})\n"),
+    "lambda default": ("d", "F = sorted([1], key=lambda v, d=1: v)\n"),
+    "annotated assignment lambda": ("q", "A: list = sorted([1], key=lambda q: q)\n"),
+    "augmented assignment keyword": ("w", "A = []\nA += sorted([1], key=lambda w: w)\n"),
+}
+
+BLOCKED_FORMS = {
+    "lambda with unused parameter": {
+        HELPER: "import pytest\nguard = pytest.fixture()(lambda dep: 1)\n",
+    },
+    "lambda wrapped by call": {
+        HELPER: "import pytest\n" + WRAP + "guard = pytest.fixture()(wrap(lambda dep: 1))\n",
+    },
+    "keyword argument function": {
+        HELPER: "import pytest\n" + WRAP + G_DEF + "guard = pytest.fixture()(wrap(fn=_g))\n",
+    },
+    "annotated assignment imported function": {
+        **OTHER_G,
+        HELPER: "import pytest\nfrom other import _g\nguard: object = pytest.fixture()(_g)\n",
+    },
+    "augmented assignment imported function": {
+        **OTHER_G,
+        HELPER: "import pytest\nfrom other import _g\nguard = []\nguard += pytest.fixture()(_g)\n",
+    },
+    "annotated assignment local function": {
+        HELPER: "import pytest\n" + G_DEF + "guard: object = pytest.fixture()(_g)\n",
+    },
+    "augmented assignment local function": {
+        HELPER: "import pytest\n" + G_DEF + "guard = []\nguard += pytest.fixture()(_g)\n",
+    },
+    "keyword function through imported alias": {
+        **OTHER_G,
+        HELPER: "import pytest\nfrom other import _g as h\n"
+        + WRAP
+        + "guard = pytest.fixture()(wrap(fn=h))\n",
+    },
+}
+
+
+@pytest.mark.parametrize("case", list(BENIGN))
+def test_benign_helper_call_words_are_not_taken_names(repo, case):
+    name, helper = BENIGN[case]
+    base = {
+        ABOVE: "import sys, pathlib\n"
+        "sys.path.insert(0, str(pathlib.Path(__file__).parent))\n" + PLUGIN,
+        HELPER: helper,
+    }
+    nested = f"import pytest\n\n\n@pytest.fixture\ndef {name}():\n    return 1\n"
+    _check(repo, {NESTED: nested}, path=NESTED, base_files=base)
+
+
+@pytest.mark.parametrize("case", list(BLOCKED_FORMS))
+def test_registration_forms_found_only_through_call_arguments_are_refused(repo, case):
+    base = {
+        ABOVE: "import sys, pathlib\n"
+        "sys.path.insert(0, str(pathlib.Path(__file__).parent))\n" + PLUGIN,
+        **BLOCKED_FORMS[case],
+    }
+    nested = "import pytest\n\n\n@pytest.fixture\ndef dep():\n    return 1\n"
+    with pytest.raises(dt.TestCommitRejected) as refused:
+        _check(repo, {NESTED: nested}, path=NESTED, base_files=base)
+    assert refused.value.code == "TEST_COMMIT_CONFTEST_STATIC"
+    assert "a name the base binds or a base test requests (dep)" in str(refused.value)
