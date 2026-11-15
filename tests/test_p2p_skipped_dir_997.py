@@ -148,3 +148,34 @@ def test_a_symlink_outside_or_deleted_is_no_reason_to_refuse_1000(bare, where): 
     git(bare, "add", "-A")
     git(bare, "commit", "-q", "-m", "link")
     assert p2p._base_tests(_base(bare), exclude) == ("tests/test_calc.py", "tests/test_sibling.py")
+
+
+@pytest.mark.parametrize(
+    ("link", "target", "refused"),
+    [
+        (
+            "tests/test_to_file.py",
+            "test_calc.py",
+            False,
+        ),  # a plain tracked file: pytest runs that one
+        ("tests/to_dir", "../docs", True),
+        ("tests/to_missing", "nowhere.py", True),
+        ("tests/to_link.py", "test_to_file.py", True),  # a link to a link is doubt
+        ("tests/escape.py", "../../outside.py", True),
+    ],
+)
+def test_only_a_link_to_a_plain_tracked_file_is_no_doubt_1000(bare, link, target, refused):  # noqa: F811
+    (bare / "docs").mkdir(exist_ok=True)
+    (bare / "docs/readme.txt").write_text("x\n")
+    (bare / "tests/test_to_file.py").symlink_to("test_calc.py")
+    (bare / link).parent.mkdir(parents=True, exist_ok=True)
+    if not (bare / link).is_symlink():
+        (bare / link).symlink_to(target)
+    git(bare, "add", "-A")
+    git(bare, "commit", "-q", "-m", "links")
+    if refused:
+        with pytest.raises(p2p.BaseUncomparable) as info:
+            p2p._base_tests(_base(bare), frozenset())
+        assert info.value.comparison.code == "P2P_BASE_UNTARGETABLE"
+    else:
+        assert "tests/test_to_file.py" in p2p._base_tests(_base(bare), frozenset())
