@@ -9,6 +9,7 @@ UNCOMPARABLE rather than TEETH; no failure at all is NO_TEETH. Raw node ids are 
 
 from __future__ import annotations
 
+from cairnwork.p2p_function import _without_case
 from cairnwork.reasons import _names
 
 _PLUGIN_HINT = "; install the plugin in the verifier's Python (pytest_config.PLUGINS)"
@@ -22,7 +23,9 @@ def base_teeth(runs, targets) -> tuple[str, str, str]:
     plugin: list[str] = []
     for run in runs:
         for nodeid, outcome in run.outcomes.items():
-            if outcome != "failed" or nodeid.split("[", 1)[0] not in targets:
+            if outcome != "failed" or not (
+                {_without_case(nodeid), _without_case(nodeid, all_parts=True)} & targets
+            ):
                 continue
             kind = run.fail_kind.get(nodeid)
             if kind is None:

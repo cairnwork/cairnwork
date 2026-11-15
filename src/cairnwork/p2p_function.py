@@ -1,7 +1,8 @@
 """Helpers for interpreting pytest node ids in P2P collection."""
 
 
-def _function(nodeid: str) -> str:
+def _without_case(nodeid: str, *, all_parts: bool = False) -> str:
+    """Remove case suffixes while preserving bracketed paths and nested node boundaries."""
     path, separator, test_id = nodeid.partition("::")
     if not separator:
         return nodeid
@@ -20,4 +21,10 @@ def _function(nodeid: str) -> str:
             index += 1
         index += 1
     parts.append(test_id[start:])
-    return "::".join([path, *(part.split("[", 1)[0] for part in parts)])
+    for index in range(0 if all_parts else len(parts) - 1, len(parts)):
+        parts[index] = parts[index].split("[", 1)[0]
+    return "::".join([path, *parts])
+
+
+def _function(nodeid: str) -> str:
+    return _without_case(nodeid, all_parts=True)

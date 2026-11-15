@@ -37,6 +37,7 @@ from cairnwork.deferred_overlay import (  # noqa: F401  (re-exported: the one pl
 )
 from cairnwork.gitcmd import OID, GitCommandError, run_git
 from cairnwork.issue_task import test_target
+from cairnwork.p2p_function import _without_case as _nodeid_without_case
 from cairnwork.provenance import trailers
 from cairnwork.reasons import COLLECT_HINT, _names, skip_hint
 from cairnwork.workspace import ATTEMPT_REF_PREFIX
@@ -245,11 +246,10 @@ def untargeted(
     return tuple(missing)
 
 
-def _without_case(node_id: str) -> str:
+def _without_case(node_id: str, all_parts: bool = False) -> str:
     """``path::name[case]`` -> ``path::name``; a ``[`` in the path part is left alone, so a
     target the producer's grammar refuses (``tests/test_x.py[x]``) names no file here either."""
-    path, sep, names = node_id.partition("::")
-    return path + sep + names.split("[", 1)[0] if sep else node_id
+    return _nodeid_without_case(node_id, all_parts=all_parts)
 
 
 def _named(node: str, targets: frozenset[str]) -> bool:
@@ -375,7 +375,7 @@ def base_comparison(runs, targets: frozenset[str]) -> Comparison:
 def not_run(runs, targets) -> list[str]:
     """The ``targets`` no run's guard record holds (collected and run, any outcome; a
     parametrisation counts): the base run's check (#660) and the verification run's (#697)."""
-    ran = {nodeid.split("[", 1)[0] for run in runs for nodeid in run.outcomes}
+    ran = {f for r in runs for n in r.outcomes for f in (_without_case(n), _without_case(n, True))}
     return sorted(set(targets) - ran)
 
 
