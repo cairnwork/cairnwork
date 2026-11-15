@@ -66,3 +66,29 @@ def test_log_is_closed_when_setup_before_popen_fails(tmp_path, monkeypatch):
 
     assert len(opened) == 1
     assert opened[0].closed
+
+
+def test_raw_fd_is_closed_when_fdopen_fails(tmp_path, monkeypatch):
+    binary = tmp_path / "agy"
+    binary.write_text(f"#!{sys.executable}\npass\n")
+    binary.chmod(0o755)
+    workdir = tmp_path / f"attempt-{uuid.uuid4().hex[:8]}"
+    workdir.mkdir()
+    fds = []
+    real_open = os.open
+
+    def capture_open(*args, **kwargs):
+        fd = real_open(*args, **kwargs)
+        fds.append(fd)
+        return fd
+
+    def fail_fdopen(*_a, **_k):
+        raise MemoryError("no file object")
+
+    monkeypatch.setattr(agy_module.os, "open", capture_open)
+    monkeypatch.setattr(agy_module.os, "fdopen", fail_fdopen)
+    task = SimpleNamespace(title="t", instructions="i", allowed_files=("a.py",))
+    with pytest.raises(MemoryError):
+        AgyWorker(agy=str(binary)).run(workdir, task)
+    with pytest.raises(OSError):
+        os.fstat(fds[0])

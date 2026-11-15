@@ -78,8 +78,7 @@ Rules:
   researchers or background tasks (in this mode they never report back).
 {hidden_tests}"""
 
-# Only true for a task with deferred tests (test_commit): otherwise the judging tests are
-# the repository's own, which the worker may and should read.
+# Only for a task with deferred tests (test_commit); else the judging tests are the repo's own.
 HIDDEN_TESTS = """- The tests that will judge your fix are not in this repository; do not look for
   them. Read the source you need directly.
 """
@@ -186,7 +185,11 @@ class AgyWorker:
         fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         env = _kept_env() if dispatch is None else _run_env()
         env[ATTEMPT_ENV] = workdir.name
-        log = os.fdopen(fd, "wb")
+        try:
+            log = os.fdopen(fd, "wb")
+        except BaseException:
+            os.close(fd)
+            raise
         try:  # nothing between fdopen and a started process may leak the log
             mark = proc_start.boot_mark()  # before the start: what predates it is not the run's
             dirs = (os.path.realpath(workdir),)  # now: the run may swap it (#578, #537)
@@ -273,8 +276,7 @@ class AgyWorker:
                 f"unknown; log {log_path}",
                 self.run_as,
             ) from timed_out
-        # a holder without the marker is not one the sweep finds (#537 A); one found only by its
-        # working directory in the clone is the same kind of leftover, killed or not: fenced too
+        # a holder with no marker (#537 A) or found only by its cwd in the clone: fenced too
         if held or by_cwd:
             raise AgyWorkerUnswept(
                 "WORKER_SWEEP_UNCLEAN: "
@@ -327,8 +329,7 @@ def _settle_worker_run(dispatch, reader, process, held, timed_out, log_path) -> 
     found = agy_receipts.problems(receipts)
     completion = agy_receipts.completion_problem(receipts) if code == 0 else None
     signalled = code < 0  # ours or not (#244): a later launch may be unrecorded
-    # no final status line: it ended outside its protocol (a crash, os._exit), so a launch
-    # after the last receipt may be unrecorded too, whatever the exit code (#546)
+    # no final status line: ended outside its protocol (crash, os._exit), any exit code (#546)
     unfinished = receipts.final is None and not signalled
     ended = ["TIMED_OUT"] * (timed_out is not None) + [held] * bool(held)  # "HELD" or "CWD"
     ended += [f"KILLED_BY_SIGNAL: {-code}; launches after the last receipt unknown"] * signalled
