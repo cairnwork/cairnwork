@@ -247,6 +247,15 @@ def commit_present(repo: Path, oid: str) -> bool:
     return bool(found.strip())
 
 
+def origin_reachable(repo: Path) -> None:
+    """Raise OSError unless origin exists and answers: a missing remote, network or permission
+    failure is infrastructure, not a verdict on the candidate (checked before any fetch)."""
+    try:
+        run_git(repo, "ls-remote", "--quiet", "origin", "HEAD", timeout=NETWORK_TIMEOUT_SECONDS)
+    except GitCommandError as exc:
+        raise OSError(f"Cairnwork could not reach origin: {exc}") from exc
+
+
 def run_git_bytes(
     repo: Path, *args: str, timeout: float = GIT_TIMEOUT_SECONDS, stdin: bytes | None = None
 ) -> bytes:

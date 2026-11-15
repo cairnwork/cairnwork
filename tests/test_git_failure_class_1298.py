@@ -91,6 +91,7 @@ def test_ensure_test_commit_does_not_treat_git_failure_as_missing(tmp_path, monk
 
 
 def test_ensure_test_commit_keeps_real_missing_candidate_rejection(tmp_path, monkeypatch):
+    monkeypatch.setattr(deferred_tests, "origin_reachable", lambda *a: None)
     monkeypatch.setattr(deferred_tests, "commit_present", lambda *a: False)
 
     def reject_fetch(*args, **kwargs):
@@ -105,6 +106,7 @@ def test_ensure_test_commit_keeps_real_missing_candidate_rejection(tmp_path, mon
 
 
 def test_ensure_test_commit_origin_timeout_is_infrastructure(tmp_path, monkeypatch):
+    monkeypatch.setattr(deferred_tests, "origin_reachable", lambda *a: None)
     monkeypatch.setattr(deferred_tests, "commit_present", lambda *a: False)
 
     def timeout(*args, **kwargs):
@@ -115,3 +117,44 @@ def test_ensure_test_commit_origin_timeout_is_infrastructure(tmp_path, monkeypat
     monkeypatch.setattr(deferred_tests, "run_git", timeout)
     with pytest.raises(OSError, match="could not run git"):
         deferred_tests.ensure_test_commit(tmp_path, "a" * 40)
+
+
+def _git(cwd, *args):
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+        cwd=cwd, check=True, capture_output=True,
+    )  # fmt: skip
+
+
+def _commit_repo(path):
+    path.mkdir()
+    _git(path, "init", "-q")
+    (path / "f").write_text("x")
+    _git(path, "add", "f")
+    _git(path, "commit", "-qm", "c")
+
+
+def test_no_origin_remote_is_infrastructure_not_candidate_rejection(tmp_path):
+    repo = tmp_path / "repo"
+    _commit_repo(repo)
+    with pytest.raises(OSError, match="reach origin"):
+        deferred_tests.ensure_test_commit(repo, "b" * 40)
+
+
+def test_unreachable_origin_is_infrastructure(tmp_path):
+    repo = tmp_path / "repo"
+    _commit_repo(repo)
+    _git(repo, "remote", "add", "origin", str(tmp_path / "gone"))
+    with pytest.raises(OSError, match="reach origin"):
+        deferred_tests.ensure_test_commit(repo, "b" * 40)
+
+
+def test_reachable_origin_without_commit_still_rejects_candidate(tmp_path):
+    origin = tmp_path / "origin"
+    _commit_repo(origin)
+    repo = tmp_path / "repo"
+    _commit_repo(repo)
+    _git(repo, "remote", "add", "origin", str(origin))
+    with pytest.raises(Rejected) as exc:
+        deferred_tests.ensure_test_commit(repo, "b" * 40)
+    assert exc.value.code == "TEST_COMMIT_UNREADABLE"
