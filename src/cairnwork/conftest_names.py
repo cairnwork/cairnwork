@@ -33,6 +33,8 @@ from cairnwork.fixture_forms import (
     CODE,
     _aliases,
     _fixture,
+    _import_head,
+    assignment_callables,
     module_level,
     registered,
     resolve_source_aliases,
@@ -72,8 +74,9 @@ def taken_names(
     resolved = resolve_source_aliases(all_trees, index)
     for conftest, tree in parent_conftests:
         names |= bound(tree, extra=resolved.get(conftest)) | requested(tree)
+    called = _imported_callable_uses(imported, index)
     for f, tree in imported.items():
-        names |= _fixtures(tree, extra=resolved.get(f))
+        names |= _fixtures(tree, extra=resolved.get(f), called=called.get(f, set()))
     return frozenset(bound(old, extra=resolved.get(path))), frozenset(names)
 
 
@@ -135,14 +138,16 @@ def _call_name(func: ast.expr) -> str:
     return func.id if isinstance(func, ast.Name) else ""
 
 
-def _fixtures(tree: ast.Module, extra: set[str] | None = None) -> set[str]:
+def _fixtures(
+    tree: ast.Module, extra: set[str] | None = None, called: set[str] | None = None
+) -> set[str]:
     """#982 item 4 r2: what an imported module's fixtures take: each fixture's name (a star
     import, ``as`` or ``pytest_plugins`` registers it under that name), what ``registered`` reads,
     its parameters, and every literal string passed to ``usefixtures`` or ``getfixturevalue``. A
     fixture is a function with a decorator naming ``fixture`` or an alias of it, any decorated
     module-level function (a factory decorator from another module may call ``fixture``, #982;
     a method's ``@property`` is not), or one passed to a ``fixture`` call."""
-    names = registered(tree, extra=extra) | {
+    names = registered(tree, extra=extra) | set(called or ()) | {
         s.value for n in ast.walk(tree)
         if isinstance(n, ast.Call) and _call_name(n.func) in _REQUESTS
         for arg in n.args for s in ast.walk(arg)
@@ -159,6 +164,31 @@ def _fixtures(tree: ast.Module, extra: set[str] | None = None) -> set[str]:
             a = node.args
             names |= {node.name} | {x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs)}
     return names
+
+
+def _imported_callable_uses(
+    trees: dict[str, ast.Module], index: dict[str, set[str]]
+) -> dict[str, set[str]]:
+    """Follow call-argument function names through imported-module aliases."""
+    uses = {file: assignment_callables(tree) for file, tree in trees.items()}
+    edges: list[tuple[str, str, str, str]] = []
+    for file, tree in trees.items():
+        for node in module_level(tree.body):
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            head = _import_head(file, node.module or "", node.level)
+            for target in (index.get(head) or set()) & trees.keys() - {file}:
+                edges.extend(
+                    (file, target, alias.name, alias.asname or alias.name) for alias in node.names
+                )
+    changed = True
+    while changed:
+        changed = False
+        for importer, target, source, local in edges:
+            if local in uses[importer] and source not in uses[target]:
+                uses[target].add(source)
+                changed = True
+    return uses
 
 
 def _listing(repo: Path, base: str) -> dict[str, str]:
