@@ -1,28 +1,23 @@
 """A worker that asks an Agy (Antigravity CLI) model to edit the attempt clone.
 
-The model runs in print mode with ``--mode accept-edits --sandbox`` and the
-clone as its working directory. What that actually allows was probed on
-2026-10-20 (docs/DRILLS.md); it is not a security boundary. Cairnwork never
-trusts the worker: it snapshots only the allowed files and rejects any other
-change in the clone.
-The agy process runs in its own process group, which is killed afterwards. It
-gets only the environment it needs: it signs in from files under HOME (checked
-2026-10-20), plus locale, config dirs, CA bundles and proxies. Other variables in
-Cairnwork's environment do not reach it; proxy URLs may carry credentials, and
-agy can read anything under HOME, so this narrows exposure, it is no boundary.
-Its output is copied into the log by the parent, capped like a verifier log; a
-process it started outside its group is killed if it still carries the attempt
-marker, and one that still holds the output afterwards fails the run, fenced (#537). If that
+The model runs in print mode with ``--mode accept-edits --sandbox`` and the clone as its working
+directory. What that actually allows was probed on 2026-10-20 (docs/DRILLS.md); it is not a security
+boundary. Cairnwork never trusts the worker: it snapshots only the allowed files and rejects any
+other change in the clone. The agy process runs in its own process group, which is killed
+afterwards. It gets only the environment it needs: it signs in from files under HOME (checked
+2026-10-20), plus locale, config dirs, CA bundles and proxies. Other variables in Cairnwork's
+environment do not reach it; proxy URLs may carry credentials, and agy can read anything under HOME,
+so this narrows exposure, it is no boundary. Its output is copied into the log by the parent, capped
+like a verifier log; a process it started outside its group is killed if it still carries the
+attempt marker, and one that still holds the output afterwards fails the run, fenced (#537). If that
 sweep cannot show the marked processes gone (a kill refused, the table unreadable), the run raises
-WorkerMayLive, so the attempt is fenced like an unswept worker account's (#244, #63): on the
-owner's account, or with ``agy_run_as_user`` on the worker account (its takeover sweep covers
-the owner's marked processes too).
-With an account-pool dispatcher configured (agy_dispatch.py) the worker runs that
-instead of agy, prompt on stdin, same environment plus the pool's tuning variables.
-With ``agy_run_as_user`` set as well, the dispatcher runs agy as that worker account,
-and the attempt succeeds only if the dispatcher's worker receipts prove it ran as that
-account and was swept clean; a run left behind by a killed dispatcher is swept through
-the wrapper (agy_receipts.py).
+WorkerMayLive, so the attempt is fenced like an unswept worker account's (#244, #63): on the owner's
+account, or with ``agy_run_as_user`` on the worker account (its takeover sweep covers the owner's
+marked processes too). With an account-pool dispatcher configured (agy_dispatch.py) the worker runs
+that instead of agy, prompt on stdin, same environment plus the pool's tuning variables. With
+``agy_run_as_user`` set as well, the dispatcher runs agy as that worker account, and the attempt
+succeeds only if the dispatcher's worker receipts prove it ran as that account and was swept clean;
+a run left behind by a killed dispatcher is swept through the wrapper (agy_receipts.py).
 """
 
 from __future__ import annotations
