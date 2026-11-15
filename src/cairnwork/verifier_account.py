@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cairnwork import confined, lock_queue, verifier_escape
+from cairnwork.account_proc import run_bounded
 from cairnwork_sandbox import Backend, platform_backend
 
 SUDO = "/usr/bin/sudo"
@@ -98,33 +99,9 @@ def _backend() -> Backend:
     return backend
 
 
-_TERM_GRACE_SECONDS = 5
-
-
 def _run_bounded(argv: list[str], timeout: float) -> None:
-    """Run ``argv`` (output dropped). On timeout end only this child, then raise (#437 H).
-
-    ``subprocess.run`` kills with SIGKILL, which sudo cannot pass on, so the command it started as
-    the account kept running. SIGTERM goes to our own child's pid only (no pkill, no process group);
-    sudo relays it. Never reported as success: the caller sees VerifierAccountError.
-    """
-    proc = subprocess.Popen(  # noqa: S603 - fixed argv, path checked by the caller
-        argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-    )
-    try:
-        proc.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        proc.terminate()
-        try:
-            proc.wait(timeout=_TERM_GRACE_SECONDS)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-        raise VerifierAccountError(f"account cleanup timed out after {timeout:g}s") from None
-    except BaseException:
-        proc.kill()
-        proc.wait()
-        raise
+    """Bounded account cleanup (#437 H); see ``account_proc.run_bounded``."""
+    run_bounded(argv, timeout, VerifierAccountError)
 
 
 @dataclass(frozen=True)

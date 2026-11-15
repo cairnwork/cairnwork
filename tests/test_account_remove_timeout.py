@@ -11,13 +11,14 @@ from cairnwork.verifier_account import VerifierAccount, VerifierAccountError
 
 
 class _Child:
-    pids = 4242
-
-    def __init__(self, hangs, ignores_term=False):
+    def __init__(self, hangs, ignores_term=False, term_error=None, wait_error=None):
         self.hangs, self.ignores_term, self.events = hangs, ignores_term, []
+        self.term_error, self.wait_error = term_error, wait_error
 
     def wait(self, timeout=None):
         self.events.append(("wait", timeout))
+        if self.wait_error and timeout == 60:
+            raise self.wait_error
         stuck = self.hangs and not (
             "terminate" in [e[0] for e in self.events] and not self.ignores_term
         )
@@ -29,6 +30,8 @@ class _Child:
 
     def terminate(self):
         self.events.append(("terminate",))
+        if self.term_error:
+            raise self.term_error
 
     def kill(self):
         self.events.append(("kill",))
@@ -77,3 +80,30 @@ def test_cleanup_that_finishes_is_untouched(tmp_path, monkeypatch):
     _patch(monkeypatch, child, spawned)
     account.remove(run)
     assert spawned and all(e[0] == "wait" for e in child.events)
+
+
+def test_waits_are_the_documented_bounds(tmp_path, monkeypatch):
+    account, run = _account(tmp_path)
+    child = _Child(hangs=True, ignores_term=True)
+    _patch(monkeypatch, child, [])
+    with pytest.raises(VerifierAccountError):
+        account.remove(run)
+    assert child.events[0] == ("wait", 60) and ("wait", 5) in child.events
+
+
+def test_terminate_that_cannot_signal_still_ends_with_a_kill_and_a_failure(tmp_path, monkeypatch):
+    account, run = _account(tmp_path)
+    child = _Child(hangs=True, ignores_term=True, term_error=PermissionError("denied"))
+    _patch(monkeypatch, child, [])
+    with pytest.raises(VerifierAccountError, match="timed out"):
+        account.remove(run)
+    assert "kill" in [e[0] for e in child.events]
+
+
+def test_interrupt_kills_the_own_child_and_propagates(tmp_path, monkeypatch):
+    account, run = _account(tmp_path)
+    child = _Child(hangs=False, wait_error=KeyboardInterrupt())
+    _patch(monkeypatch, child, [])
+    with pytest.raises(KeyboardInterrupt):
+        account.remove(run)
+    assert "kill" in [e[0] for e in child.events]
