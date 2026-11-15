@@ -109,10 +109,7 @@ def _mode_is_write(
     mode_keywords = {"mode", "flag"} if flag_mode else {"mode"}
     keyword_modes = [kw.value for kw in call.keywords if kw.arg in mode_keywords]
     if keyword_modes:
-        return any(
-            _mode_value_is_write(value, zip_mode, flag_mode)
-            for value in keyword_modes
-        )
+        return any(_mode_value_is_write(value, zip_mode, flag_mode) for value in keyword_modes)
     index = 0 if path_like else mode_index
     mode_arg = call.args[index] if len(call.args) > index else None
     if (
@@ -145,11 +142,7 @@ def _mode_value_is_write(mode_arg: ast.AST, zip_mode: bool, flag_mode: bool) -> 
         return not isinstance(value, str) or value in {"w", "x", "a"}
     if flag_mode:
         return not isinstance(value, str) or value != "r"
-    if not isinstance(value, (str, int)):
-        return True
-    if isinstance(value, int):
-        return value != 0 if flag_mode else True
-    return any(ch in value for ch in ("w", "a", "x", "+"))
+    return not isinstance(value, str) or any(ch in value for ch in ("w", "a", "x", "+"))
 
 
 def _module_binds_name(tree: ast.Module, name: str) -> bool:
@@ -201,9 +194,8 @@ def _exclusive_imported_names(
         for node in tree.body
         if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module in modules
         for alias in node.names
-        if alias.name in names and _has_only_import_binding(
-            tree, alias.asname or alias.name, node, alias
-        )
+        if alias.name in names
+        and _has_only_import_binding(tree, alias.asname or alias.name, node, alias)
     )
 
 
@@ -251,8 +243,10 @@ def _has_only_import_binding(
     """Trust only one direct module-body import and no other binding of its name."""
     bindings = 0
     for node in ast.walk(tree):
-        if isinstance(node, ast.Name) and node.id == name and isinstance(
-            node.ctx, (ast.Store, ast.Del)
+        if (
+            isinstance(node, ast.Name)
+            and node.id == name
+            and isinstance(node.ctx, (ast.Store, ast.Del))
         ):
             bindings += 1
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
