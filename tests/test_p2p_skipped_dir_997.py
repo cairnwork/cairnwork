@@ -122,12 +122,29 @@ def test_a_root_configured_in_another_case_still_reads_the_tracked_files(bare): 
     assert info.value.comparison.code == "P2P_BASE_UNTARGETABLE"
 
 
-def test_a_linked_directory_under_a_root_is_untargetable_1000(far):
-    """#1000: pytest follows a directory symlink; ls-tree shows one blob. Fail closed (strict)."""
-    (far / "tests" / "linked").symlink_to("../elsewhere")
-    git(far, "add", "-A")
-    git(far, "commit", "-q", "-m", "directory link")
+@pytest.mark.parametrize("link", ["tests/linked", "tests/test_x.py", "tests/pkg/deep_link"])
+def test_a_symlink_under_a_root_is_untargetable_1000(bare, link):  # noqa: F811 - the fixture
+    """#1000: pytest follows a directory link, ls-tree shows one blob: fail closed (strict only).
+    Built on ``bare`` so the link is the only reason to refuse."""
+    path = bare / link
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.symlink_to("../elsewhere")
+    git(bare, "add", "-A")
+    git(bare, "commit", "-q", "-m", "link")
     with pytest.raises(p2p.BaseUncomparable) as info:
-        p2p._base_tests(_base(far), frozenset())
+        p2p._base_tests(_base(bare), frozenset())
     assert info.value.comparison.code == "P2P_BASE_UNTARGETABLE"
-    assert p2p._base_tests(_base(far), frozenset(), strict=False)  # the env check still reads
+    assert "tests/test_calc.py" in p2p._base_tests(_base(bare), frozenset(), strict=False)
+
+
+@pytest.mark.parametrize("where", ["docs/linked", "excluded"])
+def test_a_symlink_outside_or_deleted_is_no_reason_to_refuse_1000(bare, where):  # noqa: F811
+    exclude = frozenset()
+    if where == "excluded":
+        where, exclude = "tests/gone", frozenset({"tests/gone"})
+    path = bare / where
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.symlink_to("../elsewhere")
+    git(bare, "add", "-A")
+    git(bare, "commit", "-q", "-m", "link")
+    assert p2p._base_tests(_base(bare), exclude) == ("tests/test_calc.py", "tests/test_sibling.py")
