@@ -122,13 +122,21 @@ def test_a_root_configured_in_another_case_still_reads_the_tracked_files(bare): 
     assert info.value.comparison.code == "P2P_BASE_UNTARGETABLE"
 
 
-@pytest.mark.parametrize("link", ["tests/linked", "tests/test_x.py", "tests/pkg/deep_link"])
-def test_a_symlink_under_a_root_is_untargetable_1000(bare, link):  # noqa: F811 - the fixture
+@pytest.mark.parametrize(
+    ("link", "target"),
+    [
+        ("tests/linked", "../elsewhere"),
+        ("tests/test_x.py", "../elsewhere"),
+        ("tests/pkg/deep_link", "../elsewhere"),
+        ("tests/test_alias.py", "test_calc.py"),  # a link to a tracked plain file: still doubt
+    ],
+)
+def test_a_symlink_under_a_root_is_untargetable_1000(bare, link, target):  # noqa: F811 - fixture
     """#1000: pytest follows a directory link, ls-tree shows one blob: fail closed (strict only).
     Built on ``bare`` so the link is the only reason to refuse."""
     path = bare / link
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.symlink_to("../elsewhere")
+    path.symlink_to(target)
     git(bare, "add", "-A")
     git(bare, "commit", "-q", "-m", "link")
     with pytest.raises(p2p.BaseUncomparable) as info:
