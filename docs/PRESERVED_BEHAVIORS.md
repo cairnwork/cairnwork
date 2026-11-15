@@ -162,3 +162,12 @@ S3（同一段，`collect_missing_submodules`）：檔案開頭 `import pkg.newm
 ## 延後測試：base 跑過的測試在候選上都要跑到（#1034）
 
 有延後測試時，同一個 verifier 在 base 執行（base 程式＋延後測試）的 guard 紀錄裡的每個完整 node id，候選的驗證執行都要有，否則 `NAMED_TESTS_NOT_RUN`、不送 Core（`tests/test_named_nodes.py`）。接受的誤擋：id 由被測程式產生而正確修正改變了它，或 id 含每次執行會變的內容（執行目錄的絕對路徑、時間、亂數），都會被拒，原因列出這些 id。刻意留下的殘餘：(1) 收集時的程式保留同一個 id、卻換掉 `item.obj` 或參數，id 比對看不出來；(2) #796 檔（檔案開頭 import 修正才有的名字）在 base 沒有逐案例紀錄，只以函式為單位；(3) 沒有延後測試的 verify 沒有 base 執行可比。
+
+## 改了 package 的 `__init__.py` 時的兩個誤拒（#866，承 #790／#840）
+
+這兩個拒絕是**故意的防護，但目前也誤拒合理修正**（P2 誤拒，不會放行錯誤候選）。原因相同：候選改了直接位於測試根之上的 `pkg/__init__.py`，內容就不可信，它能在 import 時改 `sys.path`，把 `pkg` 放到最前面（已用 pytest 實跑確認：`pkg/colorsys.py` 取代標準庫）。所以 `sealed_packages` 對有被碰的 `__init__` 的套件不再「封住」，同層名稱規則重新生效。
+
+- **A 同層模組與標準庫同名**（`verifier_spec.py`：`protected_verifier_inputs` 把沒封住的 `pkg` 當 import 根，`_safe_root_modules` 的名稱規則；`_risky_above_roots` 是第二道，兩道各自擋得住）：改了 `pkg/__init__.py` 的候選，若也改 `pkg/json.py` 這類與標準庫（或 base 其他入口）同名的檔，回 `PROTECTED_VERIFIER_INPUT`。防的是：改過的 `__init__` 把 `pkg` 插到最前，同名檔取代測試實際 import 的標準庫模組。目前**沒有**只放行「`__init__` 內容不動 `sys.path`」的證據機制，所以整類保留拒絕。狀態：故意防護；若要收窄，需要先證明 `__init__` 不會編輯 `sys.path`（`may_edit_sys_path` 只看 base／測試 commit，不看候選的新內容），不能直接放寬名稱規則。
+- **B 刪一個檔並改 `__init__.py`**：允許刪除時，`pkg/__init__.py` 受保護（可能被刪成讓 pytest 改插入 `pkg`，同 #360）；關閉刪除時，`workspace.py` `collect_candidate` 對刪除回 `DELETION_FORBIDDEN`（#12、#13 的刪除檢查，任務沒有宣告允許刪除就不能刪）。兩個閘各自成立，合起來使「刪檔＋改 `__init__`」無解。狀態：每個閘本身是故意防護；**兩者組合造成的誤拒待收窄**（可行的最小做法見設計說明：允許刪除時，只在候選沒有刪除 `__init__` 本身、且 `__init__` 通過 sys.path 檢查時放行修改）。目前不改行為。
+
+驗收測試：`tests/test_init_change_pins_866.py` 釘住現行拒絕；它失敗就表示這兩個拒絕被放寬了，要走 #866 的設計與審查，不是順手改。
