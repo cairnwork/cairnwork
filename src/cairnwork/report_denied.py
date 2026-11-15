@@ -26,9 +26,7 @@ def _denied_inside(exc, _codes=(errno.EACCES, errno.EPERM, errno.EROFS, errno.EN
             return True
         members = _members(cur) if _sub(_type(cur), BaseExceptionGroup) else ()
         if _type(members) is tuple:
-            if len(members) > 64:  # fail closed, as the bound above does
-                return True
-            todo.extend(members)
+            todo.extend(members)  # the 65th distinct exception popped is the bound
         todo.append(_cause(cur))
         if not _quiet(cur):
             todo.append(_context(cur))

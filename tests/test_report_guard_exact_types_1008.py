@@ -48,6 +48,37 @@ def test_denied_inside_fails_closed_on_a_group_past_the_bound():
     assert plugin["_denied_inside"](denied)
 
 
+def test_denied_inside_repeated_member_is_not_a_denial():
+    """Codex r1: 65 repeats of one plain exception are one distinct exception, as on main."""
+    plugin = _plugin(DENIED_SOURCE)
+    one = ValueError(1)
+    assert not plugin["_denied_inside"](BaseExceptionGroup("rep", [one] * 65))
+
+
+def test_report_cause_reads_no_str_subclass_when_and_node_paths_need_exact_paths():
+    """Codex r1: a replaced ``report.when`` or ``node.path`` runs none of its own code."""
+    plugin = _plugin(PARTS_SOURCE)
+    calls = []
+
+    class When(str):
+        def __eq__(self, other):
+            calls.append("eq")
+            return True
+
+        __hash__ = str.__hash__
+
+    call = CallInfo.from_call(lambda: 1, "collect")
+    report = TestReport("n", ("f", 0, "n"), {}, "passed", None, "collect", [])
+    report.when = When("collect")
+    assert plugin["_report_cause"](call, report) is None and calls == []
+
+    class Node:
+        path = "not-a-path"
+        config = type("C", (), {"rootpath": "/"})()
+
+    assert plugin["_node_paths"](Node()) is None
+
+
 def test_innermost_rejects_hostile_exception_before_traceback_read():
     plugin = _plugin(PARTS_SOURCE)
     calls = []
@@ -129,3 +160,13 @@ def _ordinary_report():
     report = object.__new__(TestReport)
     vars(report).update(when="collect")
     return report
+
+
+def test_exception_attribute_hook_matches_a_property_only_for_plain_names():
+    import re
+
+    from cairnwork.tamper_scan_exception import EXCEPTION_ATTRIBUTE_HOOK as rule
+
+    assert re.search(rule, "    @property\n    def path(self):\n        return 1")
+    assert re.search(rule, "    def __cause__(self):")
+    assert not re.search(rule, "def path(root):\n    return root")

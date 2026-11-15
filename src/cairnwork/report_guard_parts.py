@@ -4,6 +4,7 @@ not parent code: the plugin cannot import cairnwork."""
 
 PARTS_SOURCE = """\
 import sys
+from pathlib import PosixPath
 from types import CodeType, FrameType, ModuleType, TracebackType
 from _pytest._code.code import ExceptionInfo
 from _pytest.reports import CollectReport, TestReport
@@ -63,7 +64,8 @@ def _report_cause(call, report, _type=type, _base=BaseException, _sub=issubclass
     # Exact pytest objects keep the subsequent instance-field reads away from candidate hooks.
     if (_type(call) is not CallInfo or _type(report) not in (CollectReport, TestReport)):
         return None
-    if report.when != "collect":
+    when = report.when
+    if _type(when) is not str or when != "collect":
         return None
     info = call.excinfo
     if _type(info) is not ExceptionInfo:
@@ -75,6 +77,15 @@ def _report_cause(call, report, _type=type, _base=BaseException, _sub=issubclass
     if not _sub(_type(outer), _base):
         return None
     return BaseException.__cause__.__get__(outer)
+
+
+def _node_paths(node, _type=type, _str=str):
+    # the module file and the root, only when pytest's own PosixPath objects: no __fspath__ or
+    # __str__ of a replaced attribute runs.
+    path, root = node.path, node.config.rootpath
+    if _type(path) is not PosixPath or _type(root) is not PosixPath:
+        return None
+    return _str(path), _str(root)
 
 
 def _import_error(node, call, report, _real=os.path.realpath, _rel=os.path.relpath,
@@ -98,9 +109,12 @@ def _import_error(node, call, report, _real=os.path.realpath, _rel=os.path.relpa
                 and len(args) == 1 and type(args[0]) is str):
             return None
         text, last = args[0], _last(exc)
-        origin = _rel(_real(path), _real(node.config.rootpath))
+        paths = _node_paths(node)
+        if paths is None:
+            return None
+        origin = _rel(_real(path), _real(paths[1]))
         if ("cannot import name" in text and "partially initialized" not in text
-                and _real(last) == _real(_str(node.path))
+                and _real(last) == _real(paths[0])
                 and not origin.startswith("..") and not _abs(origin)):
             return {"node": node.nodeid, "module": name, "origin": origin}
     except BaseException:
@@ -223,10 +237,11 @@ def _submodule_error(node, call, report, _real=os.path.realpath, _rel=os.path.re
             return None
         parent = _get(_mods, name.rpartition(".")[0])
         file = _get(_vars(parent), "__file__") if type(parent) is _mod else None
-        if not (type(file) is str and _base(file) == "__init__.py"
-                and _real(_last(exc)) == _real(_str(node.path))):
+        paths = _node_paths(node)
+        if not (type(file) is str and _base(file) == "__init__.py" and paths is not None
+                and _real(_last(exc)) == _real(paths[0])):
             return None
-        origin = _rel(_real(file), _real(node.config.rootpath))
+        origin = _rel(_real(file), _real(paths[1]))
         if not origin.startswith("..") and not _abs(origin):
             return {"node": node.nodeid, "module": name, "parent_origin": origin}
     except BaseException:
