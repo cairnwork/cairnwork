@@ -119,3 +119,77 @@ def test_no_fd_is_left_open_when_env_setup_fails(tmp_path, monkeypatch):
     for fd in fds:
         with pytest.raises(OSError):
             os.fstat(fd)
+
+
+def test_log_and_pipes_are_closed_when_thread_start_fails(tmp_path, monkeypatch):
+    binary = tmp_path / "agy"
+    binary.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(5)\n")
+    binary.chmod(0o755)
+    workdir = tmp_path / f"attempt-{uuid.uuid4().hex[:8]}"
+    workdir.mkdir()
+    opened, procs = [], []
+    real_fdopen = os.fdopen
+    real_popen = agy_module.subprocess.Popen
+
+    def capture_fdopen(*args, **kwargs):
+        log = real_fdopen(*args, **kwargs)
+        opened.append(log)
+        return log
+
+    def capture_popen(*args, **kwargs):
+        proc = real_popen(*args, **kwargs)
+        if args and str(binary) in str(args[0]):
+            procs.append(proc)
+        return proc
+
+    def fail_start(self):
+        raise RuntimeError("cannot start thread")
+
+    monkeypatch.setattr(agy_module.os, "fdopen", capture_fdopen)
+    monkeypatch.setattr(agy_module.subprocess, "Popen", capture_popen)
+    monkeypatch.setattr(agy_module.threading.Thread, "start", fail_start)
+    task = SimpleNamespace(title="t", instructions="i", allowed_files=("a.py",))
+
+    with pytest.raises(RuntimeError, match="cannot start thread"):
+        AgyWorker(agy=str(binary)).run(workdir, task)
+
+    assert len(opened) == 1 and opened[0].closed
+    assert len(procs) == 1 and procs[0].stdout.closed
+
+
+def test_dispatch_log_and_all_pipes_closed_when_reader_start_fails(tmp_path, monkeypatch):
+    binary = tmp_path / "agy"
+    binary.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(5)\n")
+    binary.chmod(0o755)
+    workdir = tmp_path / f"attempt-{uuid.uuid4().hex[:8]}"
+    workdir.mkdir()
+    opened, procs = [], []
+    real_fdopen = os.fdopen
+    real_popen = agy_module.subprocess.Popen
+
+    def capture_fdopen(*args, **kwargs):
+        log = real_fdopen(*args, **kwargs)
+        opened.append(log)
+        return log
+
+    def capture_popen(*args, **kwargs):
+        proc = real_popen(*args, **kwargs)
+        if args and str(binary) in str(args[0]):
+            procs.append(proc)
+        return proc
+
+    def fail_start(self):
+        raise RuntimeError("cannot start reader")
+
+    monkeypatch.setattr(agy_module.os, "fdopen", capture_fdopen)
+    monkeypatch.setattr(agy_module.subprocess, "Popen", capture_popen)
+    monkeypatch.setattr(agy_module.agy_dispatch.StatusReader, "start", fail_start)
+    task = SimpleNamespace(title="t", instructions="i", allowed_files=("a.py",))
+    dispatch = agy_module.agy_dispatch.Dispatch(path=str(binary))
+
+    with pytest.raises(RuntimeError, match="cannot start reader"):
+        AgyWorker(agy=str(binary), dispatch=dispatch).run(workdir, task)
+
+    assert len(opened) == 1 and opened[0].closed
+    assert len(procs) == 1
+    assert procs[0].stdin.closed and procs[0].stdout.closed and procs[0].stderr.closed
