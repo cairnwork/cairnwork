@@ -88,7 +88,6 @@ def attached(tree: ast.Module) -> tuple[frozenset[str], bool]:
         if not stores:
             continue
         if all(name is not None and _names(value) <= plain for name, value in stores):
-            # #1026 r1: the stores are part of the digest, so one dropping out is a change
             kept = sorted(f"{name}={ast.dump(value)}" for name, value in stores)
             found.add(reach.module + reach(part) + _digest("|".join(kept)))
         else:
@@ -105,7 +104,11 @@ def _scan(nodes: list[ast.AST], plain: frozenset[str]) -> list[tuple[str | None,
 
 def _blind_attribute_call(value: ast.expr) -> bool:
     for node in ast.walk(value):
-        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Name) and node.func.id in _HOLDERS:
+            return True
+        if not isinstance(node.func, ast.Attribute):
             continue
         func = node.func
         while isinstance(func, ast.Attribute):
@@ -283,9 +286,6 @@ def _callable(value: ast.expr, plain: frozenset[str]) -> bool:
         return True
     if isinstance(value, ast.Call) and _names(value) <= plain:
         return True
-    # #1024: a composite value (unpacking, a subscript, a condition, a boolean, a call wrapping
-    # same-file code) counts when it holds a lambda or reads a name ``plain`` allows; pure data
-    # (literals, an imported constant) stays inert.
     lam = any(isinstance(part, ast.Lambda) for part in ast.walk(value))
     return lam or bool(_names(value) & plain)
 
@@ -364,16 +364,15 @@ def _setattr(call: ast.Call) -> tuple[ast.expr, ast.expr] | None:
 
 
 def _holder(value: ast.AST) -> bool:
-    """``globals()``, ``vars()``, ``locals()`` or anything's ``__dict__`` but ``self``'s: a
-    namespace pytest may collect from."""
     if isinstance(value, ast.Call):
         func = value.func
         if isinstance(func, ast.Name):
             return func.id in _HOLDERS
         if isinstance(func, ast.Attribute):
             return func.attr in _HOLDERS
-    own = isinstance(value, ast.Attribute) and _is_self(value.value)
-    return isinstance(value, ast.Attribute) and value.attr == "__dict__" and not own
+    return (
+        isinstance(value, ast.Attribute) and value.attr == "__dict__" and not _is_self(value.value)
+    )
 
 
 def _is_self(node: ast.AST) -> bool:
@@ -381,14 +380,12 @@ def _is_self(node: ast.AST) -> bool:
 
 
 def _key(node: ast.expr) -> str | None:
-    """A literal name: itself if ``test*``, else ""; None if not a literal."""
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value if _test_name(node.value) else ""
     return None
 
 
 def _test_name(name: str) -> bool:
-    """pytest's default prefixes, ``testing``/``test_mode`` included: it collects those too."""
     return name.startswith(("test", "Test"))
 
 
@@ -397,4 +394,7 @@ def _test(method: ast.stmt) -> bool:
 
 
 def _names(value: ast.expr) -> set[str]:
-    return {n.id for n in ast.walk(value) if isinstance(n, ast.Name)}
+    key = value.slice if isinstance(value, ast.Subscript) and _holder(value.value) else None
+    return {n.id for n in ast.walk(value) if isinstance(n, ast.Name)} | (
+        {key.value} if isinstance(key, ast.Constant) and isinstance(key.value, str) else set()
+    )

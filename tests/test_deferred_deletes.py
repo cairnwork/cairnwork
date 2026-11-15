@@ -27,9 +27,16 @@ MOVE_VERIFIERS = (
 @pytest.fixture
 def project(_project):  # noqa: F811
     commit_change(_project, {"tests/test_old.py": OLD})
-    os.symlink("test_old.py", _project / "tests/link.py")
-    commit_change(_project, {}, message="a symlink in the tests")
     return _project
+
+
+@pytest.fixture
+def linked(project):
+    """The tests hold a tracked symlink; a link under a test root is doubt (#1000), so only the
+    test commit that deletes it is judged (a deleted link is not counted)."""
+    os.symlink("test_old.py", project / "tests/link.py")
+    commit_change(project, {}, message="a symlink in the tests")
+    return project
 
 
 def _files(project, base, commit):
@@ -61,7 +68,7 @@ def test_a_moved_test_file_is_a_deletion_plus_an_addition(project, tmp_path):
     names = [line.split("\t")[1] for line in _files(project, base, result.candidate_commit)]
     assert "tests/test_moved.py" in names and "tests/test_old.py" in names
     assert git(project, "ls-tree", "--name-only", result.candidate_commit, "tests/").split() == [
-        "tests/conftest.py", "tests/link.py", "tests/test_moved.py", "tests/test_regression.py",
+        "tests/conftest.py", "tests/test_moved.py", "tests/test_regression.py",
     ]  # fmt: skip
 
 
@@ -84,7 +91,8 @@ def test_the_worker_still_cannot_delete_a_file_itself(project, tmp_path):
     ["tests/conftest.py", "src/calc.py", "tests/link.py"],
     ids=["conftest", "outside the test root", "symlink"],
 )
-def test_deleting_anything_but_a_plain_test_file_is_still_refused(project, tmp_path, delete):
+def test_deleting_anything_but_a_plain_test_file_is_still_refused(linked, tmp_path, delete):
+    project = linked
     base, tests = make_test_commit(
         project, {"tests/test_regression.py": REGRESSION}, delete=(delete,)
     )
