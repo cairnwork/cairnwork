@@ -148,7 +148,7 @@ def test_ac5_scope_and_cli_default_off(monkeypatch: pytest.MonkeyPatch) -> None:
     assert exp_res.verdict == "ACCEPT"
 
     safe_env_code = (
-        b"import subprocess, machinery\n"
+        b"import subprocess, importlib.machinery as machinery\n"
         b"subprocess.run(['python'], env={'PYTHONPATH': '/tmp'})\n"
         b"_H = machinery.FileFinder.path_hook((machinery.SourceFileLoader, ['.py'])).__code__\n"
     )
@@ -171,66 +171,72 @@ def test_failure_modes() -> None:
         assert commit_err.reason == "INVALID_COMMIT"
 
 
+_D = "import tempfile\nd=tempfile.mkdtemp()\n"
+_DP = _D + "P=d+'/calc.py'\n"
+_CEX_CASES: dict[str, tuple[str, str]] = {
+    "A0": (f"{_D}import sys\nsys.path.insert(0,d)", "REJECT"),
+    "A1": (f"{_D}from sys import path as sp\nsp.insert(0,d)", "REJECT"),
+    "A2": (f"{_D}import os\nos.sys.path.insert(0,d)", "REJECT"),
+    "A3": (f"{_D}import sys\nm=[sys][0]\nm.path.insert(0,d)", "REJECT"),
+    "A4": (f"{_D}import sys\nm=sys if True else None\nm.path.insert(0,d)", "REJECT"),
+    "A5": (f"{_D}import sys\ngetattr(sys,'path').insert(0,d)", "REJECT"),
+    "A6": (f"{_D}import importlib\nimportlib.import_module('sys').path.insert(0,d)", "REJECT"),
+    "A7": (f"{_D}import sys\ndef g(): return sys\ng().path.insert(0,d)", "REJECT"),
+    "A8": (f"{_D}import sys\n(m:=sys).path.insert(0,d)", "REJECT"),
+    "A9": (f"{_D}import sys\np=sys.path[:]\nsys.path[:]=[d]+p", "REJECT"),
+    # B1, B2, B4, D2 are out-of-scope here and deferred to #1198.
+    "B1": (
+        "import subprocess,tempfile\n"
+        "subprocess.run(['python','x'],env={'PYTHONPATH':tempfile.mkdtemp()})",
+        "ACCEPT",
+    ),
+    "B2": (f"{_D}import os\nos.environ['PYTHONPATH']=d", "ACCEPT"),
+    "B3": (f"{_D}import site\nsite.addsitedir(d)", "REJECT"),
+    "B4": (f"{_D}sp_dir=tempfile.mkdtemp()\nopen(sp_dir+'/x.pth','w').write(d)", "ACCEPT"),
+    "C1": (f"{_DP}import sys\no=open\no(P,'w').write('X=2')\nsys.path.insert(0,d)", "REJECT"),
+    "C2": (
+        f"{_DP}import sys,builtins\ngetattr(builtins,'open')(P,'w')\nsys.path.insert(0,d)",
+        "REJECT",
+    ),
+    "C3": (
+        f"{_DP}import sys,functools\nfunctools.partial(open,P,'w')()\nsys.path.insert(0,d)",
+        "REJECT",
+    ),
+    "C4": (f"{_DP}import sys\ne=open\n[e][0](P,'w')\nsys.path.insert(0,d)", "REJECT"),
+    "C5": (f"{_DP}import sys,bz2\nbz2.BZ2File(P,'w')\nsys.path.insert(0,d)", "REJECT"),
+    "C6": (f"{_DP}import sys,os\nos.system('echo X=2 > '+P)\nsys.path.insert(0,d)", "REJECT"),
+    "C7": (f"{_D}import sys\nsys.path.insert(0,d)", "REJECT"),
+    # D1 passes sys into an unknown function swap(sys), blocked by positive-rule sys_escape.
+    "D1": ("import sys\nfake=object()\ndef swap(m): m.modules['calc']=fake\nswap(sys)", "REJECT"),
+    "D2": ("o=open\no('calc.py','w').write('X=2')", "ACCEPT"),
+    "D3": (
+        "import sys,os\nsys.path.insert(0,os.path.join(os.path.dirname(__file__),'shadow'))",
+        "REJECT",
+    ),
+    "E1": (
+        "import sys,os\nsys.path.insert(0,os.path.join(os.path.dirname(__file__),'..','bin'))",
+        "ACCEPT",
+    ),
+    "E2": (
+        "import sys,os\nsys.path.insert(0,os.path.join(os.path.dirname(__file__),'src'))",
+        "ACCEPT",
+    ),
+    "E3": (
+        "import sys,os\nsys.path.insert(0,os.path.join(os.path.dirname(__file__),'nodir'))",
+        "REJECT",
+    ),
+    "E4": (
+        "import sys\nfrom pathlib import Path\n"
+        "sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'src'))",
+        "ACCEPT",
+    ),
+}
+
+
 def test_cex_counterexamples_matrix() -> None:
     """Verify all counterexamples A0-A9, B1-B4, C1-C7, D1-D3, E1-E4 match specification."""
-    cex_cases = {
-        "A0": ("import sys, tempfile\nd=tempfile.mkdtemp()\nsys.path.insert(0,d)", "REJECT"),
-        "A1": ("from sys import path as sp\nsp.insert(0,d)", "REJECT"),
-        "A2": ("import os\nos.sys.path.insert(0,d)", "REJECT"),
-        "A3": ("import sys\nm=[sys][0]\nm.path.insert(0,d)", "REJECT"),
-        "A4": ("import sys\nm=sys if True else None\nm.path.insert(0,d)", "REJECT"),
-        "A5": ("import sys\ngetattr(sys,'path').insert(0,d)", "REJECT"),
-        "A6": ("import importlib\nimportlib.import_module('sys').path.insert(0,d)", "REJECT"),
-        "A7": ("import sys\ndef g(): return sys\ng().path.insert(0,d)", "REJECT"),
-        "A8": ("import sys\n(m:=sys).path.insert(0,d)", "REJECT"),
-        "A9": ("import sys\np=sys.path[:]\nsys.path[:]=[d]+p", "REJECT"),
-        "B1": (
-            "import subprocess,tempfile\n"
-            "subprocess.run(['python','x'],env={'PYTHONPATH':tempfile.mkdtemp()})",
-            "ACCEPT",
-        ),
-        "B2": ("import os\nos.environ['PYTHONPATH']=d", "ACCEPT"),
-        "B3": ("import site\nsite.addsitedir(d)", "REJECT"),
-        "B4": ("open(sp_dir+'/x.pth','w').write(d)", "ACCEPT"),
-        "C1": ("import sys\no=open\no(P,'w').write('X=2')\nsys.path.insert(0,d)", "REJECT"),
-        "C2": (
-            "import sys,builtins\ngetattr(builtins,'open')(P,'w')\nsys.path.insert(0,d)",
-            "REJECT",
-        ),
-        "C3": (
-            "import sys,functools\nfunctools.partial(open,P,'w')()\nsys.path.insert(0,d)",
-            "REJECT",
-        ),
-        "C4": ("import sys\n[e][0](P,'w')\nsys.path.insert(0,d)", "REJECT"),
-        "C5": ("import sys,bz2\nbz2.BZ2File(P,'w')\nsys.path.insert(0,d)", "REJECT"),
-        "C6": ("import sys,os\nos.system('echo X=2 > '+P)\nsys.path.insert(0,d)", "REJECT"),
-        "C7": ("import sys\nsys.path.insert(0,d)", "REJECT"),
-        "D1": ("import sys\ndef swap(m): m.modules['calc']=fake\nswap(sys)", "ACCEPT"),
-        "D2": ("o=open\no('calc.py','w').write('X=2')", "ACCEPT"),
-        "D3": (
-            "import sys,os\nsys.path.insert(0,os.path.join(os.path.dirname(__file__),'shadow'))",
-            "REJECT",
-        ),
-        "E1": (
-            "import sys,os\nsys.path.insert(0,os.path.join(os.path.dirname(__file__),'..','bin'))",
-            "ACCEPT",
-        ),
-        "E2": (
-            "import sys,os\nsys.path.insert(0,os.path.join(os.path.dirname(__file__),'src'))",
-            "ACCEPT",
-        ),
-        "E3": (
-            "import sys,os\nsys.path.insert(0,os.path.join(os.path.dirname(__file__),'nodir'))",
-            "REJECT",
-        ),
-        "E4": (
-            "import sys\nfrom pathlib import Path\n"
-            "sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'src'))",
-            "ACCEPT",
-        ),
-    }
     shadows = frozenset({"src/shadow"})
-    for tag, (code_str, expected_verdict) in cex_cases.items():
+    for tag, (code_str, expected_verdict) in _CEX_CASES.items():
         v = check_source("src/x.py", None, code_str.encode("utf-8"), BASE_DIRS, shadow_dirs=shadows)
         assert v.verdict == expected_verdict, (
             f"CEX case {tag} expected {expected_verdict}, got {v.verdict} ({v.reason})"
