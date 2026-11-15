@@ -134,7 +134,7 @@ def test_ac4_shadow_modules_in_committed_dirs() -> None:
 
 
 def test_ac5_scope_and_cli_default_off(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AC5: Test files & allowlists skipped; subprocess env ignored; CLI default off."""
+    """AC5: Test files & allowlists skipped; non-PYTHONPATH env & .__code__ accepted; CLI off."""
     code = b"import sys, tempfile\nsys.path.insert(0, tempfile.mkdtemp())\n"
     assert check_source("tests/test_dyn.py", None, code, BASE_DIRS).verdict == "ACCEPT"
     assert (
@@ -149,7 +149,7 @@ def test_ac5_scope_and_cli_default_off(monkeypatch: pytest.MonkeyPatch) -> None:
 
     safe_env_code = (
         b"import subprocess, importlib.machinery as machinery\n"
-        b"subprocess.run(['python'], env={'PYTHONPATH': '/tmp'})\n"
+        b"subprocess.run(['python'], env={'OTHER_VAR': '/tmp'})\n"
         b"_H = machinery.FileFinder.path_hook((machinery.SourceFileLoader, ['.py'])).__code__\n"
     )
     assert check_source("src/x.py", None, safe_env_code, BASE_DIRS).verdict == "ACCEPT"
@@ -184,15 +184,15 @@ _CEX_CASES: dict[str, tuple[str, str]] = {
     "A7": (f"{_D}import sys\ndef g(): return sys\ng().path.insert(0,d)", "REJECT"),
     "A8": (f"{_D}import sys\n(m:=sys).path.insert(0,d)", "REJECT"),
     "A9": (f"{_D}import sys\np=sys.path[:]\nsys.path[:]=[d]+p", "REJECT"),
-    # B1, B2, B4, D2 are out-of-scope here and deferred to #1198.
+    # B1, B2, B4, D2 were deferred in #1230 and are enforced in #1198.
     "B1": (
         "import subprocess,tempfile\n"
         "subprocess.run(['python','x'],env={'PYTHONPATH':tempfile.mkdtemp()})",
-        "ACCEPT",
+        "REJECT",
     ),
-    "B2": (f"{_D}import os\nos.environ['PYTHONPATH']=d", "ACCEPT"),
+    "B2": (f"{_D}import os\nos.environ['PYTHONPATH']=d", "REJECT"),
     "B3": (f"{_D}import site\nsite.addsitedir(d)", "REJECT"),
-    "B4": (f"{_D}sp_dir=tempfile.mkdtemp()\nopen(sp_dir+'/x.pth','w').write(d)", "ACCEPT"),
+    "B4": (f"{_D}sp_dir=tempfile.mkdtemp()\nopen(sp_dir+'/x.pth','w').write(d)", "REJECT"),
     "C1": (f"{_DP}import sys\no=open\no(P,'w').write('X=2')\nsys.path.insert(0,d)", "REJECT"),
     "C2": (
         f"{_DP}import sys,builtins\ngetattr(builtins,'open')(P,'w')\nsys.path.insert(0,d)",
@@ -208,7 +208,7 @@ _CEX_CASES: dict[str, tuple[str, str]] = {
     "C7": (f"{_D}import sys\nsys.path.insert(0,d)", "REJECT"),
     # D1 passes sys into an unknown function swap(sys), blocked by positive-rule sys_escape.
     "D1": ("import sys\nfake=object()\ndef swap(m): m.modules['calc']=fake\nswap(sys)", "REJECT"),
-    "D2": ("o=open\no('calc.py','w').write('X=2')", "ACCEPT"),
+    "D2": ("o=open\no('calc.py','w').write('X=2')", "REJECT"),
     "D3": (
         "import sys,os\nsys.path.insert(0,os.path.join(os.path.dirname(__file__),'shadow'))",
         "REJECT",
@@ -230,11 +230,20 @@ _CEX_CASES: dict[str, tuple[str, str]] = {
         "sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'src'))",
         "ACCEPT",
     ),
+    "F1": ("import sys\nsys.meta_path.insert(0,object())", "REJECT"),
+    "F2": ("import sys\nsys.path_hooks.append(lambda p:None)", "REJECT"),
+    "F3": ("import sys\nfake=object()\nsys.modules['calc']=fake", "REJECT"),
+    "F4": (
+        "import importlib.util\nimportlib.util.spec_from_file_location('calc','/tmp/calc.py')",
+        "REJECT",
+    ),
+    "F5": ("import runpy\nrunpy.run_path('/tmp/calc.py')", "REJECT"),
+    "F6": ("from pathlib import Path\nPath('calc.py').write_text('X=2')", "REJECT"),
 }
 
 
 def test_cex_counterexamples_matrix() -> None:
-    """Verify all counterexamples A0-A9, B1-B4, C1-C7, D1-D3, E1-E4 match specification."""
+    """Verify counterexamples A0-A9, B1-B4, C1-C7, D1-D3, E1-E4, F1-F6 match spec."""
     shadows = frozenset({"src/shadow"})
     for tag, (code_str, expected_verdict) in _CEX_CASES.items():
         v = check_source("src/x.py", None, code_str.encode("utf-8"), BASE_DIRS, shadow_dirs=shadows)
