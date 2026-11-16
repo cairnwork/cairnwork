@@ -34,3 +34,10 @@ def test_loss_never_turns_failed_into_verified():
     assert failed_before.state == "DENIED"
     assert failed_after.state == "UNAVAILABLE"
     assert failed_after.state != "VERIFIED"
+
+
+def test_singular_duplicate_report_is_loss_too():
+    one = line("1 duplicate report for Sandbox: cat(301) deny(1) file-read-data /private/x")
+    evidence = judge(stream(one), window())
+    assert evidence.state == "UNAVAILABLE"
+    assert evidence.loss_count == 1

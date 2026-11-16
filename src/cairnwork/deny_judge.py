@@ -140,7 +140,8 @@ def _event(line: str, window: Window):
             raise ValueError("a tagged allow line")
         return (stamp[:19], int(allow.group(1) or 1), False, None, None, 0)  # volume only
     count = int(match.group(1) or 1)
-    return (stamp[:19], count, ours, match.group(4), match.group(5), int(match.group(3)))
+    dup = match.group(1) is not None  # #995: a coalesced report, even "1 duplicate report"
+    return (stamp[:19], count, ours, match.group(4), match.group(5), int(match.group(3)), dup)
 
 
 class _Tally:
@@ -160,7 +161,7 @@ class _Tally:
     def add(self, event) -> None:
         if event is None:
             return
-        second, count, ours, operation, target, pid = event
+        second, count, ours, operation, target, pid, *rest = event
         if not self.opened and not (ours and (pid, target) in self.canaries):
             return  # before the window
         moment = _moment(second)
@@ -172,7 +173,7 @@ class _Tally:
         self.total += count
         self.buckets[second] += count
         if ours:
-            self.loss_count += count if count > 1 else 0
+            self.loss_count += count if rest and rest[0] else 0
             self.seen.add((pid, target))
             if (pid, target) not in self.ignored and (operation, target) not in BENIGN_DENIES:
                 # the target is the run's own text (a path it chose): hidden characters go (#740)
