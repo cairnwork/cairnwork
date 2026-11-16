@@ -88,3 +88,24 @@ def test_filename():
     done, verdict = _run(tmp_path, source, declared=())
     assert done.returncode == 0, done.stdout + done.stderr
     assert verdict.ran and verdict.data_refused == ()
+
+
+def test_str_subclass_filename_on_reassigned_code_keeps_data_refusal(tmp_path):
+    source = """
+calls = []
+class Filename(str):
+    def __eq__(self, other):
+        calls.append("eq")
+        return False
+    __hash__ = str.__hash__
+def target():
+    pass
+def test_filename():
+    code = compile("pass", "ordinary.py", "exec").replace(co_filename=Filename("ordinary.py"))
+    object.__setattr__(target, "__code__", code)
+    target.__defaults__ = ()
+    assert calls == []
+"""
+    done, verdict = _run(tmp_path, source)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert verdict.ran and verdict.data_refused == ()
