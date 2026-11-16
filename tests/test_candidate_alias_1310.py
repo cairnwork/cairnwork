@@ -8,6 +8,9 @@ from cairnwork.candidate_alias import runtime_shadow_added
     [
         "import gzip, shutil\ngzip.open = shutil.copy\ngzip.open('src.py','deep/foo.py')",
         "import gzip\ngzip.open = helper\ngzip.open('deep/foo.py')",
+        "import shutil\n(w,) = (shutil.copy,)\nw('src.py','deep/foo.py')",
+        "import shutil\nw: object = shutil.copy\nw('src.py','deep/foo.py')",
+        "import gzip as g\ng.open = helper\ng.open('deep/foo.py')",
         "import shutil\nw = shutil.copy\nw('src.py','deep/foo.py')",
         "import io\nfrom pathlib import Path\nio = Path('deep/foo.py')\nio.open(m)",
         "from io import open as o\nfrom os import open as o\no('deep/foo.py', flags=577)",
@@ -36,6 +39,8 @@ def test_runtime_shadow_added_detects_print_file_openers(snippet):
         "import gzip\nx = gzip.open('f')\n",
         "from io import open as o\no('f')\n",
         "import io\nio.open('f','r')\n",
+        "c.write = handler\n",
+        "c.open = handler\nc.open('f')\n",
     ],
 )
 def test_runtime_shadow_added_keeps_read_only_openers_false(snippet):

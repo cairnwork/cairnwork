@@ -285,19 +285,41 @@ def _has_only_import_binding(
 _WRITER_REFS = _WRITE_ATTRS | {"open", "FileIO", "write", "writelines", "writestr"}
 
 
-def _is_writer_reference(node: ast.AST) -> bool:
-    """An attribute or name that is a file writer, used as a value rather than called."""
+def _is_writer_reference(node: ast.AST | None) -> bool:
+    """An attribute or name that is a file writer, used as a value rather than called; a tuple
+    or list holding one counts (``(w,) = (shutil.copy,)``)."""
+    if isinstance(node, (ast.Tuple, ast.List)):
+        return any(_is_writer_reference(item) for item in node.elts)
     if isinstance(node, ast.Attribute):
         return node.attr in _WRITER_REFS
     return isinstance(node, ast.Name) and node.id in _DIRECT_WRITERS
 
 
-def _is_writer_assign(node: ast.AST) -> bool:
-    """``w = shutil.copy`` or ``gzip.open = shutil.copy``: a writer rebound where the call
-    detector cannot follow it. Refused conservatively (only ever adds a refusal)."""
-    if not isinstance(node, ast.Assign):
+def _patches_module_writer(target: ast.AST, modules: dict[str, str]) -> bool:
+    """``gzip.open = helper``: a writer attribute of a module replaced. An attribute of an
+    ordinary object (``handler.write = f``) is not."""
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return any(_patches_module_writer(item, modules) for item in target.elts)
+    return (
+        isinstance(target, ast.Attribute)
+        and target.attr in _WRITER_REFS
+        and isinstance(target.value, ast.Name)
+        and (target.value.id in _MODULES | {"shutil"} or target.value.id in modules)
+    )
+
+
+def _is_writer_assign(node: ast.AST, modules: dict[str, str]) -> bool:
+    """``w = shutil.copy`` or ``gzip.open = helper``: a writer rebound where the call detector
+    cannot follow it. Refused conservatively (only ever adds a refusal)."""
+    if isinstance(node, ast.Assign):
+        targets, value = node.targets, node.value
+    elif isinstance(node, ast.AnnAssign):
+        targets, value = [node.target], node.value
+    elif isinstance(node, ast.NamedExpr):
+        targets, value = [node.target], node.value
+    else:
         return False
-    return _is_writer_reference(node.value) or any(_is_writer_reference(t) for t in node.targets)
+    return _is_writer_reference(value) or any(_patches_module_writer(t, modules) for t in targets)
 
 
 def _is_write_statement(
@@ -309,7 +331,7 @@ def _is_write_statement(
     flag_openers: frozenset[str],
 ) -> bool:
     return any(
-        _is_writer_assign(part)
+        _is_writer_assign(part, modules)
         or (
             isinstance(part, ast.Call)
             and _is_write_call(part, openers, writers, modules, fileios, flag_openers)
