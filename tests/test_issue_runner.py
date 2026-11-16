@@ -103,6 +103,7 @@ def test_a_trusted_issue_is_taken_once(setup):
     assert first[0]["duplicate"] is False and len(setup["started"]) == 1
     assert github.labels[7] == {runner.RUNNING} and len(github.comments) == 1
     github.labels[7] = {runner.QUEUE}  # e.g. the relabel had failed: the next pass retries
+    base = git(setup["clone"], "rev-parse", "origin/main")  # the base bound by the first take
     commit_change(setup["origin"].parent / "clone", {"other.txt": "main moved\n"})
     # main moved upstream (#1266: a local main ahead of origin/main is no longer a clean mirror)
     git(setup["clone"], "push", "-q", "origin", "main")
@@ -117,7 +118,6 @@ def test_a_trusted_issue_is_taken_once(setup):
     assert edited["refused"].startswith("TASK_BOUND_REQUEST_DIFFERS") and "already" not in edited
     assert github.labels[7] == {runner.NEEDS_FIX}
     assert len(setup["started"]) == 1 and len(github.comments) == 2
-    base = git(setup["clone"], "rev-parse", "origin/main")
     status = setup["intake"].status(task_id=first[0]["task_id"])
     assert status["status"] == "BOUND"
     request = setup["intake"].load_request(first[0]["task_id"])
