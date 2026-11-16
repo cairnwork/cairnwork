@@ -23,6 +23,10 @@ def test_a_case_on_the_file_itself_names_nothing(target):
         ("tests/dir[1]/test_t.py::test_f[a]::b]", "tests/dir[1]/test_t.py::test_f"),
         ("q]/test_t.py::test_f[x.py::y]", "q]/test_t.py::test_f"),
         ("tests/test_t.py::TestC::test_g[k]::m]", "tests/test_t.py::TestC::test_g"),
+        ("odd[/test_t.py::test_f[a]]x.py::b]", "odd[/test_t.py::test_f"),
+        ("odd[/test_t.py::test_f[]]].py::z]", "odd[/test_t.py::test_f"),
+        ("odd[/test_t.py::TestC::test_h[a]]x.py::b]", "odd[/test_t.py::TestC::test_h"),
+        ("w]x[/test_t.py::test_f[a]]x.py::b]", "w]x[/test_t.py::test_f"),
     ],
 )
 def test_failed_targets_find_a_case_id_with_brackets(failed, target):
@@ -59,6 +63,11 @@ def test_passing_targets_see_a_changed_test_through_odd_case_ids(path, case):
         ("odd[/test_t.py::test_f[plain]", "odd[/test_t.py::test_f"),
         ("tests/dir[1]/test_x.py", "tests/dir[1]/test_x.py"),
         ("test_func[case]", "test_func"),
+        ("odd[/test_t.py::test_f[a]]x.py::b]", "odd[/test_t.py::test_f"),
+        ("odd[/test_t.py::test_f[]]].py::z]", "odd[/test_t.py::test_f"),
+        ("odd[/test_t.py::TestC::test_h[a]]x.py::b]", "odd[/test_t.py::TestC::test_h"),
+        ("w]x[/test_t.py::test_f[a]]x.py::b]", "w]x[/test_t.py::test_f"),
+        ("odd[/test_t.py::test_f[x.py::y]", "odd[/test_t.py::test_f"),
     ],
 )
 def test_without_case_matches_origin_main(nodeid, expected, all_parts):
