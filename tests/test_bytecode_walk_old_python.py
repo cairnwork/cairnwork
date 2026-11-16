@@ -151,3 +151,62 @@ def test_a_middle_component_swapped_for_a_symlink_changes_no_mode_outside(tmp_pa
     with pytest.raises(OSError):
         bytecode_walk.opened(str(mid / "closed"))
     assert stat.S_IMODE((outside / "closed").stat().st_mode) == 0
+
+
+def swap_last_for_link(top: Path, mid: Path, outside: Path, monkeypatch, nofollow_chmod: bool):
+    """After the parent is opened, just before the identity check, the last component is replaced
+    by a symlink to outside/closed. Returns the chmod calls made. ``nofollow_chmod`` False makes a
+    nofollow chmod raise NotImplementedError, as on Linux."""
+    real_stat, real_chmod, swapped, chmods = os.stat, os.chmod, [], []
+
+    def stat_after_swap(path, *args, **kwargs):
+        if path == "closed" and kwargs.get("dir_fd") is not None and not swapped:
+            swapped.append(1)
+            (mid / "closed").rename(top / "closed.real")
+            (mid / "closed").symlink_to(outside / "closed")
+        return real_stat(path, *args, **kwargs)
+
+    def chmod_recorded(path, mode, *args, **kwargs):
+        chmods.append((path, kwargs.get("follow_symlinks", True)))
+        if not nofollow_chmod and kwargs.get("follow_symlinks", True) is False:
+            raise NotImplementedError("no nofollow chmod")
+        return real_chmod(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", stat_after_swap)
+    monkeypatch.setattr(os, "chmod", chmod_recorded)
+    return chmods
+
+
+def test_a_last_component_swapped_for_a_symlink_is_refused_before_any_chmod(tmp_path, monkeypatch):
+    top, mid, outside = closed_tree(tmp_path)
+    chmods = swap_last_for_link(top, mid, outside, monkeypatch, nofollow_chmod=True)
+    with pytest.raises(OSError):
+        bytecode_walk.opened(str(mid / "closed"))
+    assert chmods == []  # the identity check stops it; nothing was chmodded, not even the link
+    assert stat.S_IMODE((outside / "closed").stat().st_mode) == 0
+
+
+def test_without_a_nofollow_chmod_the_mode_is_still_set_through_the_handle(tmp_path, monkeypatch):
+    top, mid, _ = closed_tree(tmp_path)
+    real_chmod, calls = os.chmod, []
+
+    def no_nofollow(path, mode, *args, **kwargs):
+        calls.append(kwargs.get("follow_symlinks", True))
+        if kwargs.get("follow_symlinks", True) is False:
+            raise NotImplementedError("no nofollow chmod")
+        return real_chmod(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(os, "chmod", no_nofollow)
+    _here, found = bytecode_walk.opened(str(mid / "closed"))
+    assert calls == [False, True]
+    assert [name for name, *_ in found] == ["f"]
+    assert stat.S_IMODE((mid / "closed").stat().st_mode) == 0o700
+
+
+def test_a_symlink_swap_is_refused_in_the_fallback_too(tmp_path, monkeypatch):
+    top, mid, outside = closed_tree(tmp_path)
+    chmods = swap_last_for_link(top, mid, outside, monkeypatch, nofollow_chmod=False)
+    with pytest.raises(OSError):
+        bytecode_walk.opened(str(mid / "closed"))
+    assert chmods == []  # refused by the identity check, so neither chmod form ran
+    assert stat.S_IMODE((outside / "closed").stat().st_mode) == 0
