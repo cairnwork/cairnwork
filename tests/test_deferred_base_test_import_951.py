@@ -195,3 +195,19 @@ def test_a_commit_changing_more_than_25_modules_still_counts_the_26th(tmp_path):
     stats = _measure(repo, changed)
     assert stats["with_imported_changed_module"] == 1
     assert stats["commits_available"] == 2
+
+
+def test_a_renamed_module_counts_under_its_old_path_the_base_test_imports(tmp_path):
+    """Base test imports pkg.old; the commit renames pkg/old.py to pkg/new.py. The old path is
+    changed (deleted), so the import counts. Listing only the new path (-M) would miss it."""
+    repo = tmp_path / "r"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _commit(
+        repo,
+        {"pkg/__init__.py": "", "pkg/old.py": "X = 1\n", "tests/test_base.py": "import pkg.old\n"},
+        "base",
+    )
+    _git(repo, "mv", "pkg/old.py", "pkg/new.py")
+    changed = _commit(repo, {"tests/test_new.py": "def test_new():\n    pass\n"}, "rename")
+    assert _measure(repo, changed)["with_imported_changed_module"] == 1

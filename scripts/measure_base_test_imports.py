@@ -63,7 +63,11 @@ def sample(repo: str, sha: str) -> list[str]:
 
 def changed(repo: str, sha: str) -> list[tuple[str, str]]:
     # --root: a root commit diffs against the empty tree; others diff against their parent.
-    out = git(repo, "diff-tree", "--root", "--no-commit-id", "--name-status", "-r", "-M", sha)
+    # --no-renames: a rename shows as D(old path)+A(new path), so the old path a base test
+    # imports still counts as changed (with -M only the new path would be listed).
+    out = git(
+        repo, "diff-tree", "--root", "--no-commit-id", "--name-status", "-r", "--no-renames", sha
+    )
     rows = [line.split("\t") for line in out.splitlines() if "\t" in line]
     return [(r[0][0], r[-1]) for r in rows]
 
