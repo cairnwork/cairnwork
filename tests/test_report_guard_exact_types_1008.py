@@ -5,6 +5,7 @@
 
 from _pytest.reports import TestReport
 from _pytest.runner import CallInfo
+from conftest import real_info
 
 from cairnwork.report_denied import DENIED_SOURCE
 from cairnwork.report_guard_parts import PARTS_SOURCE
@@ -243,8 +244,8 @@ def test_env_exc_reads_the_real_class_not_a_spoofed_one():
             calls.append("class")
             return OSError
 
-    info = type("Info", (), {"value": Spoof("x")})()
-    plugin["_env_exc"](info, "/")
+    info = real_info(Spoof("x"))
+    assert plugin["_env_exc"](info, "/") is False  # the real class is Exception, not OSError
     assert calls == []
 
 
