@@ -143,7 +143,7 @@ def _include_applies(repo: Path, key: str, scratch: Path, origin: str = "") -> b
     if m := re.match(r"^(gitdir(?:/i)?):\./(.*)$", cond, re.DOTALL):
         if not origin.startswith("file:"):
             return True
-        base = re.sub(r"([\\*?\[])", r"\\\1", (repo / origin[5:]).parent.resolve().as_posix())
+        base = re.sub(r"([\\*?\[])", r"\\\1", (repo / origin[5:]).resolve().parent.as_posix())
         cond = f"{m.group(1)}:{base}/{m.group(2)}"
     cond = cond.replace("\\", "\\\\").replace('"', '\\"')
     (scratch / "marker.cfg").write_text("[cairn]\n\tm = 1\n")
