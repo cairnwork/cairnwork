@@ -26,7 +26,7 @@ class _Process:
         return 0
 
 
-def _setup(monkeypatch, *, alive=False, fail_start=False):
+def _setup(monkeypatch, *, alive=(), fail_start=False):
     events = []
     process = _Process()
 
@@ -51,7 +51,8 @@ def _setup(monkeypatch, *, alive=False, fail_start=False):
             events.append("join")
 
         def is_alive(self):
-            return alive
+            # Only the named threads stay alive, so each liveness check is pinned on its own.
+            return ("writer" if self.target is child_run._write_input else "reader") in alive
 
     monkeypatch.setattr(child_run.subprocess, "Popen", popen)
     monkeypatch.setattr(child_run.threading, "Thread", Thread)
@@ -87,7 +88,12 @@ def test_process_group_is_killed_before_threads_join(monkeypatch):
 
 
 def test_live_reader_refuses_result(monkeypatch):
-    _setup(monkeypatch, alive=True)
+    _setup(monkeypatch, alive=("reader",))
+    assert _run() == (b"", False, 1)
+
+
+def test_live_writer_refuses_result(monkeypatch):
+    _setup(monkeypatch, alive=("writer",))
     assert _run() == (b"", False, 1)
 
 
