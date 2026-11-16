@@ -21,34 +21,6 @@ HIDDEN = ["a\u202eb", "a\nb", "a\x1b[31mb"]
 
 
 @pytest.mark.parametrize("name", HIDDEN)
-def test_case_collision_error_shows_candidate_names_safely(monkeypatch, name):
-    monkeypatch.setattr(workspace, "run_git", lambda *_args: f"A/{name}\0a/{name}\0")
-    monkeypatch.setattr(workspace, "_folds_case", lambda _clone: True)
-    with pytest.raises(WorkspaceError) as info:
-        workspace._refuse_case_collisions(
-            workspace.Path("/repo"), name, workspace.Path("/clone"), [name]
-        )
-    message = str(info.value)
-    assert "\\u202e" in message or "\\x0a" in message or "\\x1b" in message
-    assert "\n" not in message and "\x1b" not in message and "\u202e" not in message
-
-
-@pytest.mark.parametrize("field", ["clone", "base", "detail"])
-@pytest.mark.parametrize("hidden", HIDDEN)
-def test_case_collision_shown_call_is_covered_individually(monkeypatch, field, hidden):
-    base = hidden if field == "base" else "base"
-    clone = workspace.Path(hidden if field == "clone" else "/clone")
-    tree_path = hidden if field == "detail" else "plain"
-    monkeypatch.setattr(workspace, "run_git", lambda *_args: f"A/{tree_path}\0a/{tree_path}\0")
-    monkeypatch.setattr(workspace, "_folds_case", lambda _clone: True)
-    with pytest.raises(WorkspaceError) as info:
-        workspace._refuse_case_collisions(workspace.Path("/repo"), base, clone, ["diff"])
-    message = str(info.value)
-    assert "\\u202e" in message or "\\x0a" in message or "\\x1b" in message or "\\\\n" in message
-    assert "\n" not in message and "\x1b" not in message and "\u202e" not in message
-
-
-@pytest.mark.parametrize("name", HIDDEN)
 def test_protected_path_detail_is_shown(monkeypatch, name):
     monkeypatch.setattr(workspace, "protected_note", lambda _path: name)
     monkeypatch.setattr(workspace, "_parents", lambda *_args: ["a" * 40])

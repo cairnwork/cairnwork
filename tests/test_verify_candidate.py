@@ -280,3 +280,12 @@ def test_a_task_naming_a_reserved_p2p_verifier_id_is_refused(state, project, mod
             allowed_files=("src/calc.py",), verifiers=(("pytest", argv), (vid, argv)),
         )  # fmt: skip
     assert got.value.code == "BAD_VERIFIER" and vid in str(got.value)
+
+
+@pytest.mark.parametrize("text", HIDDEN)
+def test_check_parent_rejection_shows_hidden_candidate_name(monkeypatch, tmp_path, text):
+    monkeypatch.setattr(verify_module, "run_git", lambda *_args, **_kwargs: "x y\n")
+    with pytest.raises(verify_module.CandidateRejected) as info:
+        verify_module._check_parent(tmp_path, "b" * 40, text)
+    message = str(info.value)
+    assert "\n" not in message and "\x1b" not in message and "\u202e" not in message

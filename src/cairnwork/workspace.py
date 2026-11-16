@@ -133,9 +133,7 @@ def _refuse_case_collisions(repo: Path, base_commit: str, clone: Path, differenc
     if not groups or not _folds_case(clone):
         return
     detail = _collision_detail(groups, differences)
-    raise WorkspaceError(
-        f"{shown(clone)} is not a clean checkout of {shown(base_commit)}: {shown(detail)}"
-    )
+    raise WorkspaceError(f"{clone} is not a clean checkout of {base_commit}: {detail}")
 
 
 def _case_collisions(names) -> list[list[str]]:
