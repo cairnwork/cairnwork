@@ -58,18 +58,18 @@ def test_completed_exit_required_before_judge(tmp_path, monkeypatch, exit_reason
 
 
 @pytest.mark.parametrize(
-    "record",
+    "record,expected",
     [
-        _record("TIMEOUT"),
-        None,
-        {"spec_feedback": {"needs_spec": False}},
-        _record("COMPLETED", needs_spec=True),
+        (_record("TIMEOUT"), "PAUSE_R1_INCOMPLETE"),
+        (None, "PAUSE_WORKER_CRASH"),
+        ({"spec_feedback": {"needs_spec": False}}, "PAUSE_R1_INCOMPLETE"),
+        (_record("COMPLETED", needs_spec=True), "PAUSE_R1_INCOMPLETE"),
     ],
 )
-def test_incomplete_or_needs_spec_does_not_win(tmp_path, monkeypatch, record):
+def test_incomplete_or_needs_spec_does_not_win(tmp_path, monkeypatch, record, expected):
     calls = []
     result, rec, r0, _ = _run(tmp_path, monkeypatch, record, lambda r: calls.append(r))
-    _assert_fallback(result, rec, r0, "PAUSE_R1_INCOMPLETE")
+    _assert_fallback(result, rec, r0, expected)
     assert calls == []
 
 
