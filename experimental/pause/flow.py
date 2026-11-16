@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import stat
-import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +18,7 @@ from experimental.pause import receipt
 from experimental.pause.guard import TreeGuard
 from experimental.pause.interfaces import CallSettings, Gate, GuardUnavailable, Planner, PlanRequest
 from experimental.pause.schema import GATE_VERDICTS, Reason
+from experimental.pause.scope import _scope_ok
 
 
 @dataclass(frozen=True)
@@ -56,78 +55,6 @@ class Runner(Protocol):
 
 def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def _scope_ok(checkout: Path, scope: list[str] | None, base: str) -> bool:
-    """Check every changed path and file mode in a completed R1 patch against write_scope."""
-    if len(base) != 40 or any(c not in "0123456789abcdef" for c in base):
-        return False
-    proc = subprocess.run(
-        ["git", "-C", str(checkout), "diff", "--name-only", "-z", "--no-renames", base],
-        capture_output=True,
-        check=False,
-    )
-    if proc.returncode:
-        return False
-    allowed = tuple(scope or ())
-    untracked = subprocess.run(
-        ["git", "-C", str(checkout), "ls-files", "--others", "--exclude-standard", "-z"],
-        capture_output=True,
-        check=False,
-    )
-    ignored = subprocess.run(
-        [
-            "git",
-            "-C",
-            str(checkout),
-            "ls-files",
-            "--others",
-            "--ignored",
-            "--exclude-standard",
-            "-z",
-        ],
-        capture_output=True,
-        check=False,
-    )
-    if untracked.returncode or ignored.returncode:
-        return False
-    tracked = {p.decode("utf-8", "surrogateescape") for p in proc.stdout.split(b"\0") if p}
-    new_paths = {
-        p.decode("utf-8", "surrogateescape")
-        for p in (untracked.stdout + ignored.stdout).split(b"\0")
-        if p
-    }
-    paths = tracked | new_paths
-    raw = subprocess.run(
-        ["git", "-C", str(checkout), "diff", "--raw", "--no-renames", base],
-        capture_output=True,
-        check=False,
-        text=True,
-    )
-    if raw.returncode:
-        return False
-    # Raw mode 120000 is a symlink and 160000 a gitlink; neither is an accepted regular patch.
-    for line in raw.stdout.splitlines():
-        header = line.split("\t", 1)[0].split()
-        if len(header) >= 2 and any(
-            mode.lstrip(":") not in ("000000", "100644", "100755") for mode in header[:2]
-        ):
-            return False
-    for path in paths:
-        if path == ".git" or path.startswith(".git/"):
-            return False
-        if path in new_paths:
-            try:
-                kind = (checkout / path).lstat().st_mode
-            except OSError:
-                return False
-            if not stat.S_ISREG(kind):
-                return False
-        if scope is not None and not any(
-            path == root or path.startswith(root + "/") for root in allowed
-        ):
-            return False
-    return True
 
 
 def _cut(record: dict | None) -> tuple[int | None, str]:
@@ -323,6 +250,8 @@ def _r1_reason(
             or any(c not in "0123456789abcdef" for c in base)
         ):
             return str(Reason.PAUSE_SCOPE_VIOLATION), None, None
+        if r1.base_sha is not None and r1.base_sha != base:
+            return str(Reason.PAUSE_SCOPE_VIOLATION), None, None
         if not _scope_ok(r1.checkout, scope, base):
             return str(Reason.PAUSE_SCOPE_VIOLATION), None, None
     except (OSError, ValueError, RuntimeError):
@@ -348,7 +277,7 @@ def _r1_reason(
         return str(Reason.PAUSE_GUARD_UNAVAILABLE), None, None
     try:
         verdict = core_verdict(r1)
-    except (OSError, RuntimeError, TimeoutError, ValueError, GuardUnavailable):
+    except Exception:  # noqa: BLE001 - Any Core failure keeps R0 unverified.
         return str(Reason.PAUSE_R1_NOT_VERIFIED), None, None
     try:
         after = _checkout_digest(r1.checkout)

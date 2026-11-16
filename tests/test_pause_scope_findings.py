@@ -73,7 +73,7 @@ def test_raw_diff_failure_fails_closed(tmp_path, monkeypatch):
             return subprocess.CompletedProcess(args, 1, b"", b"failed")
         return real_run(args, **kwargs)
 
-    monkeypatch.setattr("experimental.pause.flow.subprocess.run", failing_run)
+    monkeypatch.setattr("experimental.pause.scope.subprocess.run", failing_run)
     assert not _scope_ok(root, ["src"], _git(root, "rev-parse", "HEAD").stdout.decode().strip())
 
 

@@ -21,10 +21,8 @@ from experimental.local_worker import cli as worker_cli
 from experimental.pause import receipt as receipt_module
 from experimental.pause import replay as replay_module
 from experimental.pause.client import CommandTransport, HaikuGate, HaikuPlanner
-from experimental.pause.core_judge import CoreJudge
 from experimental.pause.flow import CoreVerdict, Runner, RunResult, run_flow
 from experimental.pause.interfaces import CallSettings, Gate, Planner
-from experimental.pause.runner import WorkerRunner
 from experimental.pause.schema import RECEIPTS_FILE
 from experimental.pause.secrets_scan import Scanner
 
@@ -81,6 +79,9 @@ def _configured_run(
     Runner,
     Callable[[RunResult], CoreVerdict] | None,
 ]:
+    from experimental.pause.core_judge import CoreJudge
+    from experimental.pause.runner import WorkerRunner
+
     config = json.loads(Path(config_path).read_text(encoding="utf-8"))
     if not isinstance(config, dict):
         raise ValueError("run config must be an object")
@@ -131,8 +132,9 @@ def _worker_options(runner: Runner, worker_args: list[str]) -> Any:
     parsed = worker_cli.parser().parse_known_args(["run", *worker_args])[0]
     if parsed.clean_run_root:
         raise ValueError("PAUSE cannot use --clean-run-root because it needs the R0 run root")
-    if isinstance(runner, WorkerRunner) and runner.runs_dir is None:
-        runner.runs_dir = parsed.runs.expanduser()
+    target: Any = runner
+    if hasattr(target, "runs_dir") and target.runs_dir is None:
+        target.runs_dir = parsed.runs.expanduser()
     return parsed
 
 

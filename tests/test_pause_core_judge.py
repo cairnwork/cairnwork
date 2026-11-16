@@ -92,7 +92,7 @@ def test_judge_does_not_run_copied_post_commit_hook(tmp_path: Path) -> None:
     assert not marker.exists()
 
 
-def test_judge_rejects_filter_configuration_before_candidate_commit(tmp_path: Path) -> None:
+def test_judge_does_not_read_or_run_r1_filter_configuration(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     git(repo, "init", "-q")
@@ -102,14 +102,39 @@ def test_judge_rejects_filter_configuration_before_candidate_commit(tmp_path: Pa
     (repo / ".gitattributes").write_text("* filter=x\n")
     git(repo, "add", ".")
     git(repo, "commit", "-qm", "base")
-    git(repo, "config", "filter.x.clean", "touch forbidden-marker")
+    marker = tmp_path / "forbidden-marker"
+    git(repo, "config", "filter.x.clean", f"touch {marker}; cat")
     transcript = tmp_path / "t.json"
     transcript.write_text("{}")
     result = RunResult(
         0, "", tmp_path, repo, transcript, {}, base_sha=git(repo, "rev-parse", "HEAD")
     )
-    with pytest.raises(ValueError, match="filter"):
-        CoreJudge(tmp_path / "state", (), verify=lambda *_a, **_k: {"status": "FAILED"})(result)
+    verdict = CoreJudge(tmp_path / "state", (), verify=lambda *_a, **_k: {"status": "FAILED"})(
+        result
+    )
+    assert verdict.status == "FAILED" and not marker.exists()
+
+
+def test_allowed_files_use_pinned_base_including_r1_commits(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "-q")
+    (repo / "src").mkdir()
+    (repo / "src/a.py").write_text("base\n")
+    git(repo, "add", ".")
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@invalid", "commit", "-qm", "base")
+    base = git(repo, "rev-parse", "HEAD")
+    (repo / "src/a.py").write_text("R1 committed\n")
+    git(repo, "add", "src/a.py")
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@invalid", "commit", "-qm", "R1")
+    observed: dict[str, Any] = {}
+    item = RunResult(0, "", tmp_path, repo, None, {}, base_sha=base)
+    CoreJudge(
+        tmp_path / "state",
+        (),
+        verify=lambda _intake, **kwargs: observed.update(kwargs) or {"status": "FAILED"},
+    )(item)
+    assert set(observed["allowed_files"]) == {"src/a.py"}
 
 
 def test_judge_requires_status(tmp_path: Path) -> None:

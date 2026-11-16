@@ -1,10 +1,11 @@
-"""Run Cairnwork Core against a committed copy of R1 without touching its checkout."""
+"""Run Cairnwork Core against a clean-base reconstruction of R1."""
 
 from __future__ import annotations
 
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 from collections.abc import Callable, Sequence
@@ -14,37 +15,34 @@ from typing import Any
 from cairnwork.intake import Intake
 from cairnwork.verify_candidate import verify_candidate
 from experimental.pause.flow import CoreVerdict, RunResult
+from experimental.pause.git_env import hardened_git_env
 from experimental.pause.guard import TreeGuard
 
 _SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
+_GIT_OPTIONS = (
+    "-c",
+    "core.autocrlf=false",
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "core.fsmonitor=false",
+)
 
 
 def _env() -> dict[str, str]:
-    """The caller's environment without its git config: read at call time, so no global or
-    system filter, hook or fsmonitor can change what is committed as the candidate."""
-    return {
-        **os.environ,
-        "GIT_CONFIG_GLOBAL": "/dev/null",
-        "GIT_CONFIG_NOSYSTEM": "1",
-        "GIT_AUTHOR_NAME": "Cairnwork PAUSE",
-        "GIT_AUTHOR_EMAIL": "pause@cairnwork.invalid",
-        "GIT_COMMITTER_NAME": "Cairnwork PAUSE",
-        "GIT_COMMITTER_EMAIL": "pause@cairnwork.invalid",
-    }
+    env = hardened_git_env()
+    env.update(
+        GIT_AUTHOR_NAME="Cairnwork PAUSE",
+        GIT_AUTHOR_EMAIL="pause@cairnwork.invalid",
+        GIT_COMMITTER_NAME="Cairnwork PAUSE",
+        GIT_COMMITTER_EMAIL="pause@cairnwork.invalid",
+    )
+    return env
 
 
 def _git(repo: Path, *args: str) -> str:
     result = subprocess.run(
-        [
-            "git",
-            "-C",
-            str(repo),
-            "-c",
-            "core.hooksPath=/dev/null",
-            "-c",
-            "core.fsmonitor=false",
-            *args,
-        ],
+        ["git", "-C", str(repo), *_GIT_OPTIONS, *args],
         capture_output=True,
         text=True,
         check=False,
@@ -55,8 +53,129 @@ def _git(repo: Path, *args: str) -> str:
     return result.stdout
 
 
+def _clone(source: Path, repo: Path) -> None:
+    result = subprocess.run(
+        [
+            "git",
+            *_GIT_OPTIONS,
+            "clone",
+            "--no-hardlinks",
+            "--no-checkout",
+            "--",
+            str(source),
+            str(repo),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=_env(),
+    )
+    if result.returncode:
+        raise RuntimeError(f"git clone failed: {result.stderr.strip()}")
+
+
+def _remove_working_entries(repo: Path) -> None:
+    for child in repo.iterdir():
+        if child.name == ".git":
+            continue
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+
+
+def _entries(root: Path) -> dict[bytes, tuple[int, bytes, Path]]:
+    entries: dict[bytes, tuple[int, bytes, Path]] = {}
+    for current, dirs, files in os.walk(root, followlinks=False):
+        parent = Path(current)
+        dirs[:] = [name for name in dirs if not (parent == root and name == ".git")]
+        for name in [*dirs, *files]:
+            path = parent / name
+            rel = path.relative_to(root)
+            mode = path.lstat().st_mode
+            if stat.S_ISDIR(mode):
+                continue
+            if stat.S_ISLNK(mode):
+                data = os.fsencode(os.readlink(path))
+                git_mode = 0o120000
+            elif stat.S_ISREG(mode):
+                data = path.read_bytes()
+                git_mode = 0o100755 if mode & 0o111 else 0o100644
+            else:
+                raise ValueError(f"unsupported non-regular checkout entry: {rel}")
+            entries[os.fsencode(rel.as_posix())] = (git_mode, data, path)
+    return entries
+
+
+def _copy_working_tree(source: Path, target: Path) -> dict[bytes, tuple[int, bytes, Path]]:
+    entries = _entries(source)
+    for current, dirs, files in os.walk(source, followlinks=False):
+        parent = Path(current)
+        dirs[:] = [name for name in dirs if not (parent == source and name == ".git")]
+        for name in dirs:
+            src = parent / name
+            rel = src.relative_to(source)
+            dest = target / rel
+            if src.is_symlink():
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.symlink_to(os.readlink(src))
+                dirs.remove(name)
+            else:
+                dest.mkdir(parents=True, exist_ok=True)
+        for name in files:
+            src = parent / name
+            rel = src.relative_to(source)
+            dest = target / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if src.is_symlink():
+                dest.symlink_to(os.readlink(src))
+            else:
+                mode = src.stat().st_mode
+                dest.write_bytes(src.read_bytes())
+                os.chmod(dest, stat.S_IMODE(mode))
+    return entries
+
+
+def _tree_entries(repo: Path, candidate: str) -> dict[bytes, tuple[int, bytes]]:
+    listing = subprocess.run(
+        ["git", "-C", str(repo), *_GIT_OPTIONS, "ls-tree", "-r", "-z", "--full-tree", candidate],
+        capture_output=True,
+        check=False,
+        env=_env(),
+    )
+    if listing.returncode:
+        raise RuntimeError("cannot enumerate Core candidate tree")
+    entries: dict[bytes, tuple[int, bytes]] = {}
+    for row in listing.stdout.split(b"\0"):
+        if not row:
+            continue
+        header, path = row.split(b"\t", 1)
+        mode_text, kind, object_id = header.split(b" ", 2)
+        if kind != b"blob":
+            raise ValueError("candidate tree contains a non-blob entry")
+        blob = subprocess.run(
+            ["git", "-C", str(repo), *_GIT_OPTIONS, "cat-file", "blob", object_id.decode("ascii")],
+            capture_output=True,
+            check=False,
+            env=_env(),
+        )
+        if blob.returncode:
+            raise RuntimeError("cannot read Core candidate blob")
+        entries[path] = (int(mode_text, 8), blob.stdout)
+    return entries
+
+
+def _require_raw_match(
+    source_entries: dict[bytes, tuple[int, bytes, Path]],
+    committed_entries: dict[bytes, tuple[int, bytes]],
+) -> None:
+    expected = {path: (mode, data) for path, (mode, data, _entry) in source_entries.items()}
+    if expected != committed_entries:
+        raise ValueError("Core candidate bytes or paths differ from R1 working tree")
+
+
 class CoreJudge:
-    """Callable Core adapter; verification runs only in a disposable copy of R1."""
+    """Callable Core adapter; verification runs only in a disposable clean-base repository."""
 
     def __init__(
         self,
@@ -74,52 +193,21 @@ class CoreJudge:
         if r1.checkout is None:
             raise ValueError("R1 checkout is required")
         before = TreeGuard(r1.checkout).digest()
-        base = r1.base_sha  # from the runner, never from R1's own record or output
+        base = r1.base_sha
         if type(base) is not str or not _SHA_RE.fullmatch(base):
             raise ValueError("R1 base_sha (set by the runner) must be 40 lowercase hex")
         with tempfile.TemporaryDirectory(prefix="cairnwork-pause-core-") as temp:
             repo = Path(temp) / "repo"
-            shutil.copytree(r1.checkout, repo, symlinks=True)
-            self._refuse_git_filters(repo)
+            _clone(r1.checkout, repo)
+            _git(repo, "checkout", "--detach", base)
+            _remove_working_entries(repo)
+            source_entries = _copy_working_tree(r1.checkout, repo)
             _git(repo, "add", "-A")
-            _git(
-                repo,
-                "-c",
-                "user.name=Cairnwork PAUSE",
-                "-c",
-                "user.email=pause@cairnwork.invalid",
-                "commit",
-                "--allow-empty",
-                "--no-verify",
-                "-m",
-                "PAUSE candidate",
-            )
+            _git(repo, "commit", "--allow-empty", "--no-verify", "-m", "PAUSE candidate")
             candidate = _git(repo, "rev-parse", "HEAD").strip()
-            raw = subprocess.run(
-                [
-                    "git",
-                    "-C",
-                    str(repo),
-                    "-c",
-                    "core.hooksPath=/dev/null",
-                    "-c",
-                    "core.fsmonitor=false",
-                    "diff",
-                    "--name-only",
-                    "-z",
-                    "--no-renames",
-                    base,
-                    candidate,
-                ],
-                capture_output=True,
-                check=False,
-                env=_env(),
-            )
-            if raw.returncode:
-                raise RuntimeError("cannot enumerate Core candidate paths")
-            paths = tuple(
-                item.decode("utf-8", "surrogateescape") for item in raw.stdout.split(b"\0") if item
-            )
+            committed_entries = _tree_entries(repo, candidate)
+            _require_raw_match(source_entries, committed_entries)
+            paths = self._changed_paths(repo, base, candidate)
             result = self.verify(
                 self.intake,
                 repo=repo,
@@ -129,21 +217,33 @@ class CoreJudge:
                 verifiers=self.verifiers,
                 import_paths=self.import_paths,
             )
-            after = TreeGuard(r1.checkout).digest()
-            if after != before:
+            if TreeGuard(r1.checkout).digest() != before:
                 raise RuntimeError("Core judge changed R1 checkout")
             if not isinstance(result, dict) or type(result.get("status")) is not str:
                 raise ValueError("Core result must contain a string status")
             return CoreVerdict(result["status"], before)
 
     @staticmethod
-    def _refuse_git_filters(repo: Path) -> None:
-        config = repo / ".git" / "config"
-        if not config.is_file():
-            return
-        rows = _git(repo, "config", "--file", str(config), "--list").splitlines()
-        forbidden = ("filter.", "core.hookspath", "core.fsmonitor", "core.attributesfile")
-        for row in rows:
-            key = row.split("=", 1)[0].lower()
-            if key.startswith(forbidden) or key == "include" or key.startswith("include."):
-                raise ValueError(f"unsafe copied git config key: {key}")
+    def _changed_paths(repo: Path, base: str, candidate: str) -> tuple[str, ...]:
+        raw = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo),
+                *_GIT_OPTIONS,
+                "diff",
+                "--name-only",
+                "-z",
+                "--no-renames",
+                base,
+                candidate,
+            ],
+            capture_output=True,
+            check=False,
+            env=_env(),
+        )
+        if raw.returncode:
+            raise RuntimeError("cannot enumerate Core candidate paths")
+        return tuple(
+            item.decode("utf-8", "surrogateescape") for item in raw.stdout.split(b"\0") if item
+        )

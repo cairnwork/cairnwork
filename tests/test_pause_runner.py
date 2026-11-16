@@ -364,6 +364,7 @@ def test_real_runner_flow_selects_only_verified_r1(
     assert first.episode_id == ("ep_r1" if expected == "R1" else "ep_r0")
     assert receipt["core_verdict"] == verdict
     if expected == "R1":
+        assert first.base_sha == base
         assert first.root != r0.parent
         assert first.checkout != r0
         assert len(first.guard_before_plan or "") == 64
