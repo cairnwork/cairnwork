@@ -1,5 +1,6 @@
 """Offline acceptance for the post-hoc R0/R1 PAUSE flow."""
 
+import hashlib
 import json
 import subprocess
 from dataclasses import replace
@@ -53,6 +54,7 @@ def _scenario(tmp_path, monkeypatch, cut="CUT", planner=None, gate=None, scope=T
         tmp_path / "R1" / "checkout",
         guard_before_plan="digest",
         guard_at_plan_arrival="digest" if guard else "changed",
+        git_config_sha256="0" * 64,
         record={
             "verification": {"exit_reason": "COMPLETED"},
             "spec_feedback": {"needs_spec": False},
@@ -65,7 +67,9 @@ def _scenario(tmp_path, monkeypatch, cut="CUT", planner=None, gate=None, scope=T
         return r0 if mode == "run" else r1
 
     monkeypatch.setattr("experimental.pause.flow._checkout_digest", lambda path: "a" * 64)
-    monkeypatch.setattr("experimental.pause.flow._scope_ok", lambda path, _, base: scope)
+    monkeypatch.setattr(
+        "experimental.pause.flow._scope_ok", lambda path, _, base, _config_pin: scope
+    )
     return (
         runner,
         calls,
@@ -198,6 +202,7 @@ def test_real_scope_check_rejects_unsafe_r1_and_keeps_r0(tmp_path, monkeypatch, 
             subprocess.check_output(
                 ["git", "-C", str(checkout), "rev-parse", "HEAD"], text=True
             ).strip(),
+            hashlib.sha256((checkout / ".git" / "config").read_bytes()).hexdigest(),
         )
         return
     base = subprocess.check_output(

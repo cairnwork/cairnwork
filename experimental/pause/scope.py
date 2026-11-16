@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import stat
 import subprocess
@@ -19,7 +20,9 @@ _GIT_OPTIONS = (
 )
 
 
-def _scope_ok(checkout: Path, scope: list[str] | None, base: str) -> bool:
+def _scope_ok(
+    checkout: Path, scope: list[str] | None, base: str, git_config_sha256: str | None = None
+) -> bool:
     """Check all changed paths, file modes, and workspace entries against write_scope."""
     if len(base) != 40 or any(c not in "0123456789abcdef" for c in base):
         return False
@@ -27,7 +30,7 @@ def _scope_ok(checkout: Path, scope: list[str] | None, base: str) -> bool:
         return False
     if _git_output(checkout, "rev-parse", "--show-toplevel").strip() != str(checkout.resolve()):
         return False
-    if not _repo_metadata_ok(checkout):
+    if not _repo_metadata_ok(checkout, git_config_sha256):
         return False
     proc = _git_run(checkout, "diff", "--name-only", "-z", "--no-renames", base)
     if proc.returncode:
@@ -124,13 +127,13 @@ def _regular_tree(checkout: Path) -> bool:
         return False
 
 
-def _repo_metadata_ok(checkout: Path) -> bool:
+def _repo_metadata_ok(checkout: Path, git_config_sha256: str | None = None) -> bool:
     git_dir = checkout / ".git"
     config = git_dir / "config"
     if (
         git_dir.is_symlink()
-        or not config.is_file()
-        or config.is_symlink()
+        or git_config_sha256 is None
+        or not _config_matches(config, git_config_sha256)
         or (git_dir / "refs" / "replace").exists()
     ):
         return False
@@ -159,6 +162,16 @@ def _repo_metadata_ok(checkout: Path) -> bool:
     if any(name == key or name.startswith(key + ".") for name in names for key in forbidden):
         return False
     return _filemode_is_safe(config) and _replace_refs_are_absent(git_dir)
+
+
+def _config_matches(config: Path, expected: str) -> bool:
+    """Require a regular config file with the runner-captured bytes."""
+    try:
+        info = config.lstat()
+        actual = hashlib.sha256(config.read_bytes()).hexdigest()
+        return stat.S_ISREG(info.st_mode) and actual == expected
+    except OSError:
+        return False
 
 
 def _filemode_is_safe(config: Path) -> bool:

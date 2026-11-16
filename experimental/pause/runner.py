@@ -264,7 +264,8 @@ class WorkerRunner:
         self.prepare(r0_checkout, checkout, base)
         try:
             before = TreeGuard(checkout).digest()
-        except GuardUnavailable:
+            git_config_sha256 = _git_config_sha256(checkout)
+        except (GuardUnavailable, OSError):
             return RunResult(2, "", root, checkout, guard_before_plan=None)
         plan_dir = out / "pause-plans"
         plan_dir.mkdir(parents=True, exist_ok=True)
@@ -310,6 +311,7 @@ class WorkerRunner:
             before,
             arrival,
             base,
+            git_config_sha256,
         )
 
 
@@ -323,3 +325,12 @@ def _write_plan(path: Path, plan: str) -> None:
         return
     with os.fdopen(fd, "w", encoding="utf-8") as stream:
         stream.write(plan)
+
+
+def _git_config_sha256(checkout: Path) -> str:
+    """Hash a regular, non-symlink .git/config or fail closed."""
+    config = checkout / ".git" / "config"
+    info = config.lstat()
+    if not stat.S_ISREG(info.st_mode):
+        raise GuardUnavailable("Git config is not a regular file")
+    return hashlib.sha256(config.read_bytes()).hexdigest()

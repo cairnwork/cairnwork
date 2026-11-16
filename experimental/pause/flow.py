@@ -33,6 +33,7 @@ class RunResult:
     guard_before_plan: str | None = None
     guard_at_plan_arrival: str | None = None
     base_sha: str | None = None  # the pinned base the runner checked R1 out at (Core's base)
+    git_config_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -252,7 +253,7 @@ def _r1_reason(
             return str(Reason.PAUSE_SCOPE_VIOLATION), None, None
         if r1.base_sha is not None and r1.base_sha != base:
             return str(Reason.PAUSE_SCOPE_VIOLATION), None, None
-        if not _scope_ok(r1.checkout, scope, base):
+        if not _scope_ok(r1.checkout, scope, base, r1.git_config_sha256):
             return str(Reason.PAUSE_SCOPE_VIOLATION), None, None
     except (OSError, ValueError, RuntimeError):
         return str(Reason.PAUSE_GUARD_UNAVAILABLE), None, None

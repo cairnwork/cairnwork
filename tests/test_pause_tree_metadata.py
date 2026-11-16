@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -118,6 +119,7 @@ def _results(tmp_path: Path, mutation: str) -> tuple[RunResult, RunResult, str]:
         "same",
         "same",
         base,
+        hashlib.sha256((checkout / ".git" / "config").read_bytes()).hexdigest(),
     )
     return r0, r1, base
 
@@ -211,7 +213,8 @@ def test_git_representable_change_selects_r1(tmp_path: Path, mutation: str) -> N
 def test_scope_rejects_nonregular_untracked_entry(tmp_path: Path) -> None:
     checkout, base = _repo(tmp_path / "checkout")
     os.mkfifo(checkout / "outside.pipe")
-    assert not _scope_ok(checkout, ["src"], base)
+    pin = hashlib.sha256((checkout / ".git" / "config").read_bytes()).hexdigest()
+    assert not _scope_ok(checkout, ["src"], base, pin)
 
 
 def test_judge_rejects_nonregular_checkout_entry(tmp_path: Path) -> None:
@@ -224,7 +227,8 @@ def test_judge_rejects_nonregular_checkout_entry(tmp_path: Path) -> None:
 def test_scope_pins_top_level_check(tmp_path: Path, monkeypatch: Any) -> None:
     checkout, base = _repo(tmp_path / "checkout")
     monkeypatch.setattr("experimental.pause.scope._git_output", lambda *_a: "/elsewhere")
-    assert not _scope_ok(checkout, ["src"], base)
+    pin = hashlib.sha256((checkout / ".git" / "config").read_bytes()).hexdigest()
+    assert not _scope_ok(checkout, ["src"], base, pin)
 
 
 def test_scope_pins_core_worktree_refusal(tmp_path: Path) -> None:
@@ -238,4 +242,5 @@ def test_scope_pins_core_worktree_refusal(tmp_path: Path) -> None:
 def test_scope_pins_core_filemode_false_refusal(tmp_path: Path) -> None:
     checkout, base = _repo(tmp_path / "checkout")
     _git(checkout, "config", "core.filemode", "false")
-    assert not _scope_ok(checkout, ["src"], base)
+    pin = hashlib.sha256((checkout / ".git" / "config").read_bytes()).hexdigest()
+    assert not _scope_ok(checkout, ["src"], base, pin)

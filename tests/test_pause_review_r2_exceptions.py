@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -82,6 +83,7 @@ def _case(tmp_path: Path, mutation: str = "edit") -> tuple[RunResult, RunResult,
         "same",
         "same",
         base,
+        hashlib.sha256((checkout / ".git" / "config").read_bytes()).hexdigest(),
     )
     return r0, r1, base
 
