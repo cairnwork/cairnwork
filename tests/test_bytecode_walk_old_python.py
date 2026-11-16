@@ -162,7 +162,7 @@ def swap_last_for_link(top: Path, mid: Path, outside: Path, monkeypatch, raise_o
     def swap():
         if not swapped:
             swapped.append(1)
-            (mid / "closed").rename(top / "closed.real")
+            (mid / "closed").rename(mid / "closed.real")
             (mid / "closed").symlink_to(outside / "closed")
 
     def stat_after_swap(path, *args, **kwargs):
@@ -186,6 +186,7 @@ def test_a_last_component_swapped_for_a_symlink_is_refused_before_any_chmod(tmp_
     chmods = swap_last_for_link(top, mid, outside, monkeypatch, "stat")
     with pytest.raises(OSError):
         bytecode_walk.opened(str(mid / "closed"))
+    assert (mid / "closed").is_symlink()  # the swap really happened
     assert chmods == []  # the identity check stops it; nothing was chmodded, not even the link
     assert stat.S_IMODE((outside / "closed").stat().st_mode) == 0
 
@@ -197,6 +198,7 @@ def test_a_swap_after_the_identity_check_chmods_without_following_the_link(tmp_p
         bytecode_walk.opened(str(mid / "closed"))
     except OSError:
         pass  # the swapped-in link is not a directory the listing may use
+    assert (mid / "closed").is_symlink()  # the swap really happened
     assert chmods and all(call == ("closed", False) for call in chmods)  # by name, nofollow
     assert stat.S_IMODE((outside / "closed").stat().st_mode) == 0
 
