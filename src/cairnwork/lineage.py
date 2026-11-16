@@ -15,6 +15,7 @@ from cairnwork.gitcmd import GitCommandError, run_git
 ORIGIN = re.compile(r"https://github\.com/([^/:@\s]+/[^/:@\s]+)")
 COMMIT = re.compile(r"[0-9a-f]{40}")
 MAIN_REFSPEC = "+refs/heads/main:refs/remotes/origin/main"
+ORIGIN_MAIN = "refs/remotes/origin/main"
 
 
 def verify_origin(clone: Path, repo: str) -> None:
@@ -57,10 +58,27 @@ def require_on_main(clone: Path, base: str, *, fetch: bool = True) -> None:
             raise RuntimeError(f"LINEAGE_BASE_NOT_COMMIT: {base!r} is not a commit")
     except GitCommandError as exc:
         raise RuntimeError(f"LINEAGE_BASE_NOT_COMMIT: {base!r} is not a commit here") from exc
+    if not _in_main_history(clone, base):
+        raise RuntimeError(f"LINEAGE_BASE_NOT_ON_MAIN: {base} is not in origin/main")
+
+
+def refuse_grafts(clone: Path) -> None:
+    grafts = Path(clone, run_git(clone, "rev-parse", "--git-path", "info/grafts").strip())
+    if grafts.exists():
+        raise RuntimeError("LINEAGE_GRAFTS_REFUSED: .git/info/grafts rewrites history")
+
+
+def _in_main_history(clone: Path, commit: str) -> bool:
+    """The one ancestry test (#1266): is ``commit`` equal to or an ancestor of origin/main?
+
+    Read from the real objects: replace refs are switched off, and a ``.git/info/grafts`` file,
+    which rewrites parents, is refused outright (LINEAGE_GRAFTS_REFUSED) rather than trusted."""
+    refuse_grafts(clone)
     try:
-        run_git(clone, "merge-base", "--is-ancestor", base, "refs/remotes/origin/main")
-    except GitCommandError as exc:
-        raise RuntimeError(f"LINEAGE_BASE_NOT_ON_MAIN: {base} is not in origin/main") from exc
+        run_git(clone, "--no-replace-objects", "merge-base", "--is-ancestor", commit, ORIGIN_MAIN)
+    except GitCommandError:
+        return False
+    return True
 
 
 def verify_single_branch(clone: Path) -> None:
@@ -99,3 +117,46 @@ def verify_single_branch(clone: Path) -> None:
     extra = [r for r in refs.split() if r not in allowed]
     if extra:
         raise RuntimeError(f"{code}: mirror holds a branch beyond main ({extra[0]}); {advice}")
+    _refuse_foreign_history(clone, code, advice)
+
+
+# Refs Cairnwork writes itself, each matched by exact shape (#1266); a nested or lookalike name
+# (refs/cairnwork/attempts/x/y, refs/cairnwork-bases/<short>) is not a mirror ref and is judged.
+# - refs/cairnwork/attempts/<attempt_id> and ...-tested: a collected candidate
+#   (workspace._fetch_head, deferred_tests.lay_tests_over); not in main's history. The id charset
+#   is workspace.ATTEMPT_ID (no "/"), so the shape is one path segment.
+# - refs/cairnwork-bases/<40 hex>: the intake's pin of a task base (intake._mirror_base, the full
+#   lowercase commit sha); with require_base_on_main false it may sit off main.
+OWN_REF = re.compile(
+    r"refs/cairnwork/attempts/[A-Za-z0-9][A-Za-z0-9_-]{0,63}(?:-tested)?"
+    r"|refs/cairnwork-bases/[0-9a-f]{40}"
+)
+# The three refs verify_single_branch's name check allows: their tips must still be on main, so a
+# local main or origin/HEAD moved onto foreign history is refused (origin/main is main itself).
+MAIN_REFS = frozenset({"refs/heads/main", "refs/remotes/origin/main", "refs/remotes/origin/HEAD"})
+
+
+def _refuse_foreign_history(clone: Path, code: str, advice: str) -> None:
+    """Every other ref (tags, notes, stash, replace, ...) may name only a commit in origin/main's
+    history, so the mirror carries nothing beyond main."""
+    refuse_grafts(clone)
+    for ref in run_git(clone, "for-each-ref", "--format=%(refname)").split():
+        if OWN_REF.fullmatch(ref):
+            continue
+        if ref.startswith(("refs/heads/", "refs/remotes/")) and ref not in MAIN_REFS:
+            continue  # a stray branch is already refused by the name check above
+        tip = ""
+        if not ref.startswith("refs/replace/"):  # a replace ref rewrites history: always refused
+            try:  # origin/HEAD may be a symref; ^{commit} resolves it
+                tip = run_git(
+                    clone,
+                    "--no-replace-objects",
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    f"{ref}^{{commit}}",
+                ).strip()
+            except GitCommandError:
+                tip = ""
+        if not tip or not _in_main_history(clone, tip):
+            raise RuntimeError(f"{code}: mirror holds {ref}, not in main's history; {advice}")
