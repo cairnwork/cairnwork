@@ -210,7 +210,7 @@ class _Scratch:
 
     def __init__(self, parent: Path, repo: Path | None, *, supplied: bool = False) -> None:
         self.parent, self.repo, self.supplied = parent, repo, supplied
-        _SEEN_DIRS.update(d for d in (parent, repo) if d is not None and d.is_dir())
+        _SEEN_DIRS.add(parent)  # only directories the verifier made, never the supplied repo
         self.dir = parent
 
     def __enter__(self) -> Path:

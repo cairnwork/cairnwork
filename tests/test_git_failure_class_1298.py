@@ -197,3 +197,39 @@ def test_storage_exhausted_probe_sees_full_and_healthy(tmp_path, monkeypatch):
     assert gitprobe.storage_exhausted(tmp_path) is False
     monkeypatch.setattr(gitprobe.shutil, "disk_usage", lambda p: type("U", (), {"free": 0})())
     assert gitprobe.storage_exhausted(tmp_path) is True
+
+
+def test_fetch_failure_with_exhausted_storage_is_infrastructure(tmp_path, monkeypatch):
+    monkeypatch.setattr(gitprobe, "origin_reachable", lambda *a: None)
+    monkeypatch.setattr(deferred_tests, "commit_present", lambda *a: False)
+
+    def fetch(*args, **kwargs):
+        error = GitCommandError("git fetch failed")
+        error.__cause__ = subprocess.CalledProcessError(128, ["git", "fetch"])
+        raise error
+
+    monkeypatch.setattr(deferred_tests, "run_git", fetch)
+    monkeypatch.setattr(gitprobe, "storage_exhausted", lambda *a: True)
+    with pytest.raises(OSError, match="could not run git"):
+        deferred_tests.ensure_test_commit(tmp_path, "a" * 40)
+
+
+@pytest.mark.parametrize("repo_writable", [True, False])
+def test_malformed_bundle_stays_candidate_rejection_whatever_the_repo_mount(
+    tmp_path, monkeypatch, repo_writable
+):
+    repo = tmp_path / "repo"
+    _commit_repo(repo)
+    store_dir = tmp_path / "store"
+    store_dir.mkdir(mode=0o700)
+    store = DeferredStore(store_dir)
+    sha = "c" * 40
+    store.bundle(sha).write_bytes(b"not a bundle")
+
+    def probe(*dirs):  # a read-only supplied repo reads as exhausted if it is ever probed
+        return repo in dirs and not repo_writable
+
+    monkeypatch.setattr(deferred_store, "storage_exhausted", probe)
+    with pytest.raises(Rejected) as raised:
+        store.import_bundle(repo, store.bundle(sha), tmp_path / "used")
+    assert raised.value.code == "TEST_COMMIT_UNREADABLE"
