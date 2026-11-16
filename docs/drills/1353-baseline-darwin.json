@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-16T07:58:45+00:00",
+  "generated_at": "2026-11-16T08:40:15+00:00",
   "platform": "darwin",
   "probes": [
     {
@@ -467,7 +467,7 @@
       "probe": "base",
       "raw_return": {
         "code": "BASE_MISMATCH",
-        "detail": "base 88e29362738da9fd5621580efbfcd071e7b2f603 != expected_base 1111111111111111111111111111111111111111"
+        "detail": "base 98f4725242ae5ab49b1c470cf5ec2b8dd75c3cfb != expected_base 1111111111111111111111111111111111111111"
       },
       "reason": "",
       "route": "verify_bundle"
@@ -527,7 +527,7 @@
       "probe": "head",
       "raw_return": {
         "code": "HEAD_MISMATCH",
-        "detail": "subject 1184516d7abe93937295fb62acd2f1c43ba120a8, binding head 1184516d7abe93937295fb62acd2f1c43ba120a8, expected 'bd0e9c28cf0cb79a8b18b05a2fccb0cf73f34fe3'"
+        "detail": "subject da1f82942522ede8ed3f6ac278817a8156b418c4, binding head da1f82942522ede8ed3f6ac278817a8156b418c4, expected '559cb8f2819a077152477d8678f45a1dd7b30397'"
       },
       "reason": "",
       "route": "verify_bundle"

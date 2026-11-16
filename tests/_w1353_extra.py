@@ -117,7 +117,7 @@ def _c7(state, decl):
 
     rows = []
     try:
-        verify_cli._run(
+        raw_result = verify_cli._run(
             Intake(Path("/no-such-intake")),
             SimpleNamespace(
                 require_protection=True,
@@ -133,8 +133,6 @@ def _c7(state, decl):
         )
     except TaskRejected as exc:
         raw_result = exc.code
-    else:
-        raw_result = "ACCEPTED"
     rows.append(
         row(
             "C7",

@@ -9,6 +9,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 
 def _load(name, *, register=True):
     path = Path(__file__).with_name(name + ".py")
@@ -23,6 +25,9 @@ def _load(name, *, register=True):
 
 probe = _load("_w1353_probe")
 extra = _load("_w1353_extra", register=False)
+_ACCOUNT_GAP = (
+    "[blackbox:add: VERIFICATION_INCOMPLETE: BLACKBOX_NEEDS_VERIFIER_ACCOUNT [matched 1/1]]"
+)
 
 
 def test_c1_c4_evasions_are_runnable_and_live():
@@ -86,6 +91,11 @@ def test_c1_c4_evasions_are_runnable_and_live():
         )
         # Linux: derived from src/cairnwork/verify_candidate.py:130-140, not yet observed on CI
         assert c1 == ["REFUSED"] * 3 and c4 == ["REFUSED"] * 2
+        assert all(
+            "pytest exit code 1" in r["reason"].lower()
+            for r in rows
+            if r["class_id"] in {"C1_MUTANT", "C2_MUTANT", "C4_MUTANT"}
+        )
         assert other_mutants == ["FAILED", "FAILED"]
     else:
         # Darwin without Seatbelt: observed locally; base preflight prevents candidate execution.
@@ -124,27 +134,69 @@ def test_observed_values_are_recomputed_from_raw_route_returns():
 def _literal_observations(source):
     tree = ast.parse(source)
 
-    def literal(node):
-        if isinstance(node, ast.Constant):
-            return True
-        if isinstance(node, ast.JoinedStr):
-            return all(isinstance(part, ast.Constant) for part in node.values)
-        return (
-            isinstance(node, ast.Call)
-            and bool(node.args or node.keywords)
-            and all(literal(arg) for arg in node.args)
-            and all(literal(keyword.value) for keyword in node.keywords)
+    def literal_tree(node):
+        return isinstance(node, ast.Constant) or (
+            isinstance(node, (ast.List, ast.Tuple))
+            and all(literal_tree(item) for item in node.elts)
         )
+
+    def allowed(node):
+        if isinstance(node, ast.Call):
+            if (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr == "join"
+                and isinstance(node.func.value, ast.Constant)
+                and node.args
+                and literal_tree(node.args[0])
+            ):
+                return False
+            return True
+        if isinstance(node, (ast.Attribute, ast.Subscript)):
+            return True
+        return (
+            isinstance(node, ast.Name)
+            and bool(bindings.get(node.id))
+            and all(
+                isinstance(value, (ast.Call, ast.Attribute, ast.Subscript))
+                for value in bindings[node.id]
+            )
+        )
+
+    bindings = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, (ast.AnnAssign, ast.NamedExpr, ast.AugAssign)):
+            targets = [node.target]
+        else:
+            continue
+        for target in targets:
+            for name in ast.walk(target):
+                if isinstance(name, ast.Name):
+                    bindings.setdefault(name.id, []).append(node.value)
+
+    row_names = {"row"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            row_names.update(
+                alias.asname or alias.name
+                for alias in node.names
+                if node.module == "_w1353_probe" and alias.name == "row"
+            )
 
     flagged = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "row":
+        is_row_call = isinstance(node, ast.Call) and (
+            (isinstance(node.func, ast.Name) and node.func.id in row_names)
+            or (isinstance(node.func, ast.Attribute) and node.func.attr == "row")
+        )
+        if is_row_call and isinstance(node, ast.Call):
             raw = (
                 node.args[3]
                 if len(node.args) > 3
                 else next((kw.value for kw in node.keywords if kw.arg == "raw"), None)
             )
-            if raw is None or literal(raw):
+            if raw is None or not allowed(raw):
                 flagged.append(node.lineno)
         if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
@@ -153,19 +205,113 @@ def _literal_observations(source):
                 for target in targets
                 for name in ast.walk(target)
             ):
-                if literal(node.value):
+                if not allowed(node.value):
                     flagged.append(node.lineno)
     return flagged
 
 
-def test_literal_observation_checker_rejects_constant_raw_values():
-    row_literal = (
-        'row("C9", "timeout", "...", "blackbox:add: VERIFICATION_INCOMPLETE: TIMEOUT", "x", "y")'
-    )
-    assigned_literal = 'observed = str("PASS")'
-    assert _literal_observations(row_literal)
-    assert _literal_observations(assigned_literal)
-    assert not _literal_observations('row("C9", "timeout", route(), result(), "x", "y")')
+@pytest.mark.parametrize(
+    "source",
+    [
+        'R = "blackbox:add: PASS [matched 1/1]"\nrow("C9", "t", "r", R, "x", "y")',
+        'def f():\n    r = "PASS"\n    return row("C9", "t", "r", r, "x", "y")',
+        'row("C9", "t", "r", "PASS" if flag else "FAIL", "x", "y")',
+        'row("C9", "t", "r", "PA" + "SS", "x", "y")',
+        'row("C9", "t", "r", "".join(["PASS"]), "x", "y")',
+        'row("C9", "t", "r", f"{\'PASS\'}", "x", "y")',
+        'probe.row("C9", "t", "r", "PASS", "x", "y")',
+        'from _w1353_probe import row as rec\nrec("C9", "t", "r", "PASS", "x", "y")',
+        'observed = "VER" + "IFIED"',
+        'row("C9", "timeout", "...", "blackbox:add: VERIFICATION_INCOMPLETE: TIMEOUT", "x", "y")',
+        'observed = "PASS"',
+    ],
+)
+def test_literal_observation_checker_rejects_constant_raw_values(source):
+    assert _literal_observations(source)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        'row("C9", "t", route(), result(), "x", "y")',
+        'row("C8", name, "verify_bundle", check(path), wanted, "REFUSED")',
+        'row("C6", "x", "judge", verdict.reason, "PASS", "y")',
+    ],
+)
+def test_literal_observation_checker_allows_route_derived_raw_values(source):
+    assert not _literal_observations(source)
+
+
+def test_literal_observation_checker_accepts_current_probe_call_sites():
+    sources = Path(__file__).parent.glob("_w1353_*.py")
+    assert all(not _literal_observations(path.read_text()) for path in sources)
+
+
+@pytest.mark.parametrize(
+    ("status", "reason", "expected"),
+    [
+        (
+            "FAILED",
+            "CORE_FAILED_VERIFICATION [pytest-0: 2 process(es) outlived the run, or "
+            "the process list was unreadable] " + _ACCOUNT_GAP,
+            "REFUSED",
+        ),
+        (
+            "FAILED",
+            "CORE_FAILED_VERIFICATION [pytest-0: timed out] " + _ACCOUNT_GAP,
+            "REFUSED",
+        ),
+        (
+            "FAILED",
+            "CORE_FAILED_VERIFICATION [pytest-0: items renamed after collection "
+            "(1: tests/test_calc.py)] " + _ACCOUNT_GAP,
+            "REFUSED",
+        ),
+        (
+            "FAILED",
+            "CORE_FAILED_VERIFICATION [pytest-0: DATA_EXEC_REFUSED: declared test data "
+            "executed (1: x)] " + _ACCOUNT_GAP,
+            "REFUSED",
+        ),
+        (
+            "FAILED",
+            "CORE_FAILED_VERIFICATION [pytest-0: process exit status 0 disagrees with the "
+            "recorded session status (exit status 1, 1 failed)] " + _ACCOUNT_GAP,
+            "REFUSED",
+        ),
+        (
+            "FAILED",
+            "CORE_FAILED_VERIFICATION [pytest-0: log over the size cap] " + _ACCOUNT_GAP,
+            "REFUSED",
+        ),
+        (
+            "FAILED",
+            "CORE_FAILED_VERIFICATION [pytest-0: test report over the size cap] " + _ACCOUNT_GAP,
+            "REFUSED",
+        ),
+        (
+            "FAILED",
+            "CORE_FAILED_VERIFICATION " + _ACCOUNT_GAP,
+            "NOT_RUN",
+        ),
+        (
+            "FAILED",
+            "CORE_FAILED_VERIFICATION " + _ACCOUNT_GAP + " [protection: PASS [partial_macos]]",
+            "NOT_RUN",
+        ),
+        (
+            "FAILED",
+            "CORE_FAILED_VERIFICATION [pytest-0: checkout changed "
+            "(1: changed tests/test_calc.py)] "
+            "[blackbox:add: VERIFICATION_INCOMPLETE: CHECKOUT_CHANGED]",
+            "REFUSED",
+        ),
+        ("REFUSED", "CANDIDATE_SYS_PATH_MUTATION: 'src/calc.py': ...", "REFUSED"),
+        ("TIMEOUT", "verify_cli exceeded 120 seconds", "HARNESS_TIMEOUT"),
+    ],
+)
+def test_blackbox_classification_counts_only_account_gaps_as_not_run(status, reason, expected):
+    assert probe.blackbox_classification(status, reason) == expected
 
 
 def test_candidate_routes_match_pinned_main_outputs():
@@ -181,11 +327,9 @@ def test_candidate_routes_match_pinned_main_outputs():
     c2_blackbox = [r for r in rows if r["class_id"] == "C2" and r["probe"].startswith("blackbox-")]
     assert len(c2_blackbox) == 2
     assert all(r["classification"] == "NOT_RUN" for r in c2_blackbox)
+    # Linux: C2 is observed on CI as VERIFIED.
     expected = ["VERIFIED", "VERIFIED"]
-    if sys.platform == "linux":
-        # Linux: C2 is observed on CI as VERIFIED.
-        expected = ["VERIFIED", "VERIFIED"]
-    elif not _sandbox_available():
+    if not _sandbox_available():
         expected = ["UNCOMPARABLE", "UNCOMPARABLE"]
     assert c2 == expected
     # Linux: derived from src/cairnwork/verify_candidate.py:130-140, not yet observed on CI

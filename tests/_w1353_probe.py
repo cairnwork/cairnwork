@@ -159,20 +159,52 @@ def blackbox_result(result):
 
 
 def blackbox_classification(status, reason):
-    missing_account_only = "BLACKBOX_NEEDS_VERIFIER_ACCOUNT" in reason and not any(
-        marker in reason.lower()
-        for marker in (
-            "pytest exit code",
-            "checkout changed",
-            "mismatch",
-            "forged_bytecode",
-            "survivors",
-            "unprotected",
+    if status == "TIMEOUT":
+        return "HARNESS_TIMEOUT"
+    segments = _gate_segments(reason)
+    failing = [
+        segment
+        for segment in segments
+        if segment.startswith("pytest-")
+        or (
+            segment.startswith("blackbox:")
+            and ": PASS " not in segment
+            and not segment.endswith(": PASS")
         )
+        or (segment.startswith("protection:") and ": PASS " not in segment)
+    ]
+    missing_account_only = bool(failing) and all(
+        segment.startswith("blackbox:")
+        and "VERIFICATION_INCOMPLETE: BLACKBOX_NEEDS_VERIFIER_ACCOUNT" in segment
+        for segment in failing
     )
-    if "VERIFICATION_INCOMPLETE" in status or status == "UNCOMPARABLE" or missing_account_only:
+    if missing_account_only:
         return "NOT_RUN"
     return "REFUSED"
+
+
+def _gate_segments(reason):
+    segments = []
+    start = None
+    depth = 0
+    for index, char in enumerate(reason):
+        if char == "[":
+            if depth == 0:
+                start = index + 1
+            depth += 1
+        elif char == "]" and depth:
+            depth -= 1
+            if depth == 0 and start is not None:
+                segment = reason[start:index]
+                if segment.startswith(("pytest-", "blackbox:", "protection:")):
+                    segments.append(segment)
+    return segments
+
+
+def verification_classification(status, verified, refused):
+    if status == "TIMEOUT":
+        return "HARNESS_TIMEOUT"
+    return verified if status.startswith("VERIFIED") else refused
 
 
 def evasion_sources():
@@ -210,7 +242,13 @@ def _pass_mutant(parent, state, cid, n, src, evasion, bad_test):
     label = "C3_MUTANT" if cid == "C3" else f"{cid}_MUTANT"
     name = f"evasion-{n}-replaced-by-pass" if cid == "C3" else "evasion-replaced-by-pass"
     return row(
-        label, name, "verify_cli run", status, "FAILED", "HONEST_FAILED", result.get("reason", "")
+        label,
+        name,
+        "verify_cli run",
+        status,
+        "FAILED",
+        verification_classification(status, "HONEST_VERIFIED", "HONEST_FAILED"),
+        result.get("reason", ""),
     )
 
 
@@ -232,7 +270,7 @@ def _c1_c4(parent, state, decl):
                     "verify_cli run",
                     result,
                     "VERIFIED",
-                    "VERIFIED_WRONG" if status.startswith("VERIFIED") else "REFUSED",
+                    verification_classification(status, "VERIFIED_WRONG", "REFUSED"),
                     result.get("reason", ""),
                 )
             )
@@ -270,7 +308,7 @@ def _c5_honest(parent, state):
                 "verify_cli run",
                 res,
                 "VERIFIED",
-                "VERIFIED_WRONG" if status.startswith("VERIFIED") else "REFUSED",
+                verification_classification(status, "VERIFIED_WRONG", "REFUSED"),
                 res.get("reason", ""),
             )
         )
@@ -286,7 +324,7 @@ def _c5_honest(parent, state):
                 "verify_cli run",
                 res,
                 "VERIFIED",
-                "HONEST_VERIFIED" if status.startswith("VERIFIED") else "HONEST_FAILED",
+                verification_classification(status, "HONEST_VERIFIED", "HONEST_FAILED"),
                 res.get("reason", ""),
             )
         )
