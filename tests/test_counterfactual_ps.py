@@ -127,3 +127,40 @@ def test_long_hostile_line_is_fast_and_ignored() -> None:
     t0 = time.time()
     r = compare(SANDBOX, "= " + "1 passed " * 40000 + "\n" + CLEAN)
     assert time.time() - t0 < 2 and r.verdict == UNCOMPARABLE
+
+
+def _sb(line: str) -> str:
+    return f"FAILED tests/test_a.py::test_x - {line}\n=== 1 failed in 1s ===\n"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "PermissionError: [Errno 13] Permission denied: '/usr/bin/ps'",
+        "PermissionError: [Errno 1] Operation not permitted: '/bin/ps'",
+        "ps: Permission denied",
+        "/usr/bin/ps: Permission denied",
+        "/bin/ps: Permission denied",
+    ],
+)
+def test_other_ps_denial_shapes_are_matched(line: str) -> None:
+    assert compare(_sb(line), CLEAN).verdict == UNCOMPARABLE
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "PermissionError: [Errno 13] Permission denied: '/tmp/ps'",
+        "PermissionError: [Errno 13] Permission denied: '/opt/bin/ps'",
+        "PermissionError: [Errno 13] Permission denied: '/usr/bin/psql'",
+        "PermissionError: [Errno 1] Operation not permitted: '/tmp/a:ps'",
+        "PermissionError: [Errno 1] Operation not permitted: 'a: ps'",
+        "PermissionError: [Errno 1] Operation not permitted: '\"ps\"'",
+        "PermissionError: [Errno 1] Operation not permitted: 'ps'x",
+        "ps: Permission denied.bak",
+        "grep: Permission denied",
+        "/tmp/ps: Permission denied",
+    ],
+)
+def test_lookalike_shapes_stay_failed(line: str) -> None:
+    assert compare(_sb(line), CLEAN).verdict == FAILED

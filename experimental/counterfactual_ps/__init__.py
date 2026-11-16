@@ -14,10 +14,11 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+_PS = r"(?:/(?:usr/)?bin/)?ps"  # bare name or a full path to the system tool only
 PS_DENIAL = re.compile(
-    r"PermissionError: (?:\[Errno \d+\] [^:\n]*: )?'(?:/bin/)?ps'(?=\s|$)"
-    r"|/bin/ps: Operation not permitted"
-    r"|\bps: Operation not permitted"
+    rf"PermissionError: (?:\[Errno \d+\] [^:\n]*: )?'{_PS}'(?=\s|$)"
+    rf"|(?:^|(?<=\s)){_PS}: (?:Operation not permitted|Permission denied)(?=\s|$)",
+    re.M,
 )
 _UNIT = re.compile(r"^(FAILED|SUBFAILED)(\([^)]*\))? (\S+)", re.M)
 _COUNT = re.compile(r"(\d+) (passed|failed|errors?|skipped|xfailed|xpassed|deselected|warnings?)")
