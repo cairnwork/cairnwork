@@ -176,11 +176,60 @@ def test_judge_rejects_changed_checkout_digest(tmp_path: Path, monkeypatch: Any)
 
         def digest(self) -> str:
             type(self).count += 1
-            return "a" * 64 if type(self).count < 4 else "b" * 64
+            return "a" * 64 if type(self).count < 5 else "b" * 64
 
     monkeypatch.setattr("experimental.pause.core_judge.TreeGuard", ChangingGuard)
     with pytest.raises(RuntimeError, match="changed R1 checkout"):
         CoreJudge(tmp_path / "state", (), verify=lambda *_a, **_k: {"status": "FAILED"})(result)
+
+
+def test_judge_rejects_copy_that_does_not_match_entry_tree(tmp_path: Path, monkeypatch: Any) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "-q")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.invalid")
+    (repo / "a").write_text("base\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "base")
+    base = git(repo, "rev-parse", "HEAD")
+    (repo / "a").write_text("A\n")
+    entry_digest = TreeGuard(repo).digest()
+    transcript = tmp_path / "t.json"
+    transcript.write_text("{}")
+    result = RunResult(0, "", tmp_path, repo, transcript, {}, base_sha=base)
+    seen: list[str] = []
+    from experimental.pause import core_judge
+
+    original_clone = core_judge._clone
+    original_candidate_digest = core_judge._candidate_tree_digest
+
+    def clone_with_transient_change(source: Path, destination: Path) -> None:
+        (repo / "a").write_text("B\n")
+        original_clone(source, destination)
+
+    def verify(_intake: Any, **kwargs: Any) -> dict[str, str]:
+        seen.append(git(kwargs["repo"], "show", f"{kwargs['candidate']}:a"))
+        return {"status": "VERIFIED"}
+
+    def candidate_digest_then_restore(
+        candidate_repo: Path, candidate: str, excluded: frozenset[str]
+    ) -> str:
+        digest = original_candidate_digest(candidate_repo, candidate, excluded)
+        (repo / "a").write_text("A\n")
+        return digest
+
+    monkeypatch.setattr(core_judge, "_clone", clone_with_transient_change)
+    monkeypatch.setattr(core_judge, "_candidate_tree_digest", candidate_digest_then_restore)
+    try:
+        with pytest.raises(
+            ValueError, match="Core candidate filesystem tree differs from R1 judge-entry tree"
+        ):
+            CoreJudge(tmp_path / "state", (), verify=verify)(result)
+    finally:
+        (repo / "a").write_text("A\n")
+    assert seen == []
+    assert TreeGuard(repo).digest() == entry_digest
 
 
 def test_judge_takes_base_from_runner_not_from_r1_record(tmp_path: Path) -> None:

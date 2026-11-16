@@ -264,14 +264,25 @@ class CoreJudge:
         base = r1.base_sha
         if type(base) is not str or not _SHA_RE.fullmatch(base):
             raise ValueError("R1 base_sha (set by the runner) must be 40 lowercase hex")
+        base_entries = _tree_entries(r1.checkout, base)
+        entry_source_entries = _entries(r1.checkout)
+        excluded = _validate_checkout_shape(
+            r1.checkout, entry_source_entries, set(base_entries)
+        )
+        before_copy = TreeGuard(
+            r1.checkout, exclude_git=True, exclude_paths=excluded
+        ).digest()
         with tempfile.TemporaryDirectory(prefix="cairnwork-pause-core-") as temp:
             repo = Path(temp) / "repo"
             _clone(r1.checkout, repo)
             _git(repo, "checkout", "--detach", base)
             _remove_working_entries(repo)
             source_entries = _copy_working_tree(r1.checkout, repo)
-            base_entries = _tree_entries(repo, base)
-            excluded = _validate_checkout_shape(r1.checkout, source_entries, set(base_entries))
+            copied_excluded = _validate_checkout_shape(
+                r1.checkout, source_entries, set(base_entries)
+            )
+            if copied_excluded != excluded:
+                raise ValueError("R1 checkout shape changed while Core copy was made")
             _git(repo, "add", "-A")
             _git(repo, "commit", "--allow-empty", "--no-verify", "-m", "PAUSE candidate")
             candidate = _git(repo, "rev-parse", "HEAD").strip()
@@ -281,8 +292,10 @@ class CoreJudge:
             source_digest = TreeGuard(
                 r1.checkout, exclude_git=True, exclude_paths=excluded
             ).digest()
-            if _candidate_tree_digest(repo, candidate, excluded) != source_digest:
-                raise ValueError("Core candidate filesystem tree differs from R1 checkout")
+            if _candidate_tree_digest(repo, candidate, excluded) != before_copy:
+                raise ValueError("Core candidate filesystem tree differs from R1 judge-entry tree")
+            if source_digest != before_copy:
+                raise ValueError("R1 checkout changed while Core copy was made")
             result = self.verify(
                 self.intake,
                 repo=repo,
