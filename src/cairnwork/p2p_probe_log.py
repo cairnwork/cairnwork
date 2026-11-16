@@ -162,18 +162,28 @@ def _nfkc_index(text: str) -> tuple[str, list[int]]:
     return "".join(out), idx
 
 
-def _mask_fields(text: str) -> str:
-    """Mask the value of every secret-named field. A name counts with its hidden characters
-    dropped, or by its last piece after one; case is ignored (as before #744, plus case folding)."""
-    norm, idx = _nfkc_index(text)
-    out, pos = [], 0
-    for m in _NAME.finditer(norm):
+def _field_matches(source: str, idx: list[int] | None, text: str) -> Iterator[tuple[int, int]]:
+    for m in _NAME.finditer(source):
         orig_start = idx[m.start()] if idx else m.start()
         orig_end = (idx[m.end() - 1] if idx else m.end() - 1) + 1
         name = m.group(1)
         raw_name = text[orig_start : orig_end - 1]
         names = (name.replace(_HID, ""), name.rsplit(_HID, 1)[-1])
-        if orig_start < pos or not _is_secret_name(norm, m.start(), name, raw_name, names):
+        if _is_secret_name(source, m.start(), name, raw_name, names):
+            yield orig_start, orig_end
+
+
+def _mask_fields(text: str) -> str:
+    """Mask the value of every secret-named field. A name counts with its hidden characters
+    dropped, or by its last piece after one; case is ignored (as before #744, plus case folding)."""
+    matches = list(_field_matches(text, None, text))
+    if not text.isascii():
+        norm, idx = _nfkc_index(text)
+        matches.extend(_field_matches(norm, idx, text))
+        matches.sort()
+    out, pos = [], 0
+    for orig_start, orig_end in matches:
+        if orig_start < pos:
             continue
         value = _VALUE.match(text, orig_end)
         if value is not None:
