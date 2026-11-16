@@ -93,6 +93,9 @@ def test_gitlink_and_symlink_are_preserved(tmp_path):
     changes = record(repo, task, candidate)["patch"]["changes"]
     assert {item["old"][1] for item in changes} == {"commit", "blob"}
     assert {item["old"][0] for item in changes} == {"160000", "120000"}
+    # an OID-only change of a gitlink or symlink changes the fingerprint
+    assert {item["path"] for item in changes} == {"sub", "link"}
+    assert all(item["old"][2] != item["new"][2] for item in changes)
 
 
 def test_diff_settings_do_not_change_hash(tmp_path):
@@ -131,3 +134,35 @@ def test_for_status_only_records_unverified_failures(tmp_path):
         assert replay_set.for_status(status, task, candidate)["candidate_commit"] == candidate
     for status in ("VERIFIED", "REFUSED", "FAILED"):
         assert replay_set.for_status(status, task, candidate, verified=(status == "FAILED")) == {}
+
+
+def test_an_empty_subtree_changes_the_fingerprint(tmp_path):
+    repo, task, _ = commits(tmp_path, {"a": b"x"}, {"a": b"y"})
+    base = task.base_commit  # pyright: ignore[reportAttributeAccessIssue]
+    empty = subprocess.run(
+        ["git", "-C", str(repo), "mktree"], input="", check=True, text=True, capture_output=True
+    ).stdout.strip()
+    base_tree = git(repo, "rev-parse", f"{base}^{{tree}}")
+    entries = git(repo, "ls-tree", base_tree) + f"\n040000 tree {empty}\tempty"
+    tree = subprocess.run(
+        ["git", "-C", str(repo), "mktree"],
+        input=entries + "\n",
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.strip()
+    candidate = git(repo, "commit-tree", tree, "-p", base, "-m", "empty subtree")
+    patch = record(repo, task, candidate)["patch"]
+    same = record(repo, task, base)["patch"]
+    assert patch["sha256"] != same["sha256"]
+    assert [c["path"] for c in patch["changes"]] == ["empty"]
+
+
+def test_streamed_hash_matches_the_plain_json_hash(tmp_path):
+    import hashlib
+    import json
+
+    repo, task, candidate = commits(tmp_path, {"a": b"1", "b": b"1"}, {"a": b"2", "b": b"3"})
+    patch = record(repo, task, candidate)["patch"]
+    plain = json.dumps(patch["changes"], ensure_ascii=True, separators=(",", ":")).encode()
+    assert patch["sha256"] == hashlib.sha256(plain).hexdigest()

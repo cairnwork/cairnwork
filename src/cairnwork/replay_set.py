@@ -14,7 +14,7 @@ _MAX_CHANGES = 256 * 1024
 
 
 def _tree(repo: Path, commit: str) -> dict[str, tuple[str, str, str]]:
-    raw = run_git_bytes(repo, "ls-tree", "-r", "-z", "--full-tree", commit)
+    raw = run_git_bytes(repo, "ls-tree", "-r", "-t", "-z", "--full-tree", commit)
     result = {}
     for entry in raw.split(b"\0"):
         if entry:
@@ -28,20 +28,27 @@ def capture(task, candidate: str, *, repo: Path) -> dict:
     """Return bounded tree changes; failures are diagnostic only."""
     try:
         old, new = _tree(repo, task.base_commit), _tree(repo, candidate)
-        changes = []
+        digest, size = hashlib.sha256(b"["), 2
+        changes: list[dict[str, object]] | None = []
         for path in sorted(old.keys() | new.keys()):
             before, after = old.get(path), new.get(path)
-            if before != after:
-                changes.append(
-                    {
-                        "path": path,
-                        "old": list(before) if before else None,
-                        "new": list(after) if after else None,
-                    }
-                )
-        encoded = json.dumps(changes, ensure_ascii=True, separators=(",", ":")).encode()
-        patch: dict[str, object] = {"sha256": hashlib.sha256(encoded).hexdigest()}
-        if len(encoded) <= _MAX_CHANGES:
+            if before == after:
+                continue
+            item = {
+                "path": path,
+                "old": list(before) if before else None,
+                "new": list(after) if after else None,
+            }
+            blob = json.dumps(item, ensure_ascii=True, separators=(",", ":")).encode()
+            digest.update((b"," if size > 2 else b"") + blob)
+            size += len(blob) + 1
+            if changes is not None:  # past the cap only the hash keeps growing
+                changes.append(item)
+                if size > _MAX_CHANGES:
+                    changes = None
+        digest.update(b"]")
+        patch: dict[str, object] = {"sha256": digest.hexdigest()}
+        if changes is not None:
             patch["changes"] = changes
         return {
             "base": task.base_commit,
