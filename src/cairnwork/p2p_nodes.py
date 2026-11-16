@@ -22,6 +22,7 @@ from pathlib import Path
 
 from cairnwork.deferred_tests import _test_functions, _tree
 from cairnwork.node_ids import mask_paths, unmatched_note
+from cairnwork.p2p_function import _function
 from cairnwork.verifiers import VerifierRun
 
 
@@ -68,10 +69,6 @@ def _skeleton(repo: Path, blob: str) -> list[str]:
             node.body = [m for m in node.body if not _is_test(m)]
         out.append(ast.dump(node))
     return out
-
-
-def _function(nodeid: str) -> str:
-    return nodeid.split("[", 1)[0]
 
 
 def passing_targets(

@@ -8,6 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from cairnwork.p2p_function import _without_case
 from cairnwork.verdict_record import Verdict
 
 PLACEHOLDER = "<cw-checkout>"
@@ -70,16 +71,14 @@ def mask_paths(text: str) -> str:
 
 def unmatched_note(gone, present) -> str:
     """Explain missing parameter variants only when their test function still exists."""
-    functions = {node.split("[", 1)[0] for node in present}
+    functions = {_without_case(node) for node in present}
     for node in gone:
-        function, marker, params = node.partition("[")
+        fn = _without_case(node)
         if (
-            marker
-            and function in functions
+            fn != node
+            and fn in functions
             and any(
-                other.partition("[")[2] != params
-                for other in present
-                if other.startswith(function + "[")
+                other != fn and other != node for other in present if _without_case(other) == fn
             )
         ):
             return PER_RUN_NOTE

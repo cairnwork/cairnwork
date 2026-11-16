@@ -27,7 +27,7 @@ from pathlib import Path
 from cairnwork.conftest_check import conftest_of
 from cairnwork.deferred_tests import TestCommitRejected, deleted_of, lay_tests_over
 from cairnwork.node_ids import unmatched_note
-from cairnwork.p2p_nodes import clean
+from cairnwork.p2p_nodes import _function, clean
 from cairnwork.verifier_spec import VerifierSpec
 from cairnwork.verifiers import run_verifiers
 
@@ -76,7 +76,7 @@ def check_overlay(task, test_files, files, outcomes, side, result, ctx, budget) 
     if why:
         raise TestCommitRejected(UNCHECKED, f"the probe with the test commit is unusable: {why}")
     skip = side.changed | side.probe_only
-    kept = {n: o for n, o in outcomes.items() if n.split("[", 1)[0] not in skip}
+    kept = {n: o for n, o in outcomes.items() if _function(n) not in skip}
     differ = sorted(n for n, o in kept.items() if after.get(n) != o)
     if differ:
         shown = ", ".join(map(clean, differ[:5])) + (" ..." if len(differ) > 5 else "")
