@@ -40,6 +40,9 @@ def test_runtime_shadow_added_detects_print_file_openers(snippet):
         "from io import open as o\no('f')\n",
         "import io\nio.open('f','r')\n",
         "c.write = handler\n",
+        "import shutil\nimport shutil\nshutil.which('git')\n",
+        "import io\nbuf = io.BytesIO()\nw = buf.write\nw(b'x')\n",
+        "class C: ...\ngzip = C()\ngzip.open = handler\n",
         "c.open = handler\nc.open('f')\n",
     ],
 )

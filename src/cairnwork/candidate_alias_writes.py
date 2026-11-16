@@ -30,6 +30,7 @@ _PATH_FIRST_OPENERS = frozenset(
 _MODULES = frozenset(
     {"os", "io", "builtins", "gzip", "bz2", "lzma", "codecs", "tarfile", "shelve", "dbm", "zipfile"}
 )
+_COPY_MODULES = frozenset({"shutil", "tempfile"})
 _DIRECT_WRITERS = frozenset({"NamedTemporaryFile", "FileIO", "copyfileobj"})
 _MODE_TEXT = re.compile(r"[rwaxbtU+]{1,6}")
 _UNBOUND_OPEN = "\0unbound_builtin_open"
@@ -229,13 +230,18 @@ def _module_aliases(tree: ast.Module) -> dict[str, str]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.name in _MODULES:
+                if alias.name in _MODULES | _COPY_MODULES:
                     bindings.setdefault(alias.asname or alias.name, []).append(
                         (node, alias, alias.name)
                     )
     aliases: dict[str, str] = {}
     for name, imports in bindings.items():
-        if len(imports) == 1 and _has_only_import_binding(tree, name, *imports[0][:2]):
+        single = len(imports) == 1 and _has_only_import_binding(tree, name, *imports[0][:2])
+        if imports[0][2] in _COPY_MODULES:
+            if single:  # only for naming a writer module; calls on it are not judged by it
+                aliases[name] = imports[0][2]
+            continue
+        if single:
             node, alias, module = imports[0]
             aliases[name] = (
                 _LEGACY_MODULE_ALIAS + module
@@ -285,13 +291,18 @@ def _has_only_import_binding(
 _WRITER_REFS = _WRITE_ATTRS | {"open", "FileIO", "write", "writelines", "writestr"}
 
 
-def _is_writer_reference(node: ast.AST | None) -> bool:
+def _is_writer_reference(node: ast.AST | None, modules: dict[str, str]) -> bool:
     """An attribute or name that is a file writer, used as a value rather than called; a tuple
     or list holding one counts (``(w,) = (shutil.copy,)``)."""
     if isinstance(node, (ast.Tuple, ast.List)):
-        return any(_is_writer_reference(item) for item in node.elts)
+        return any(_is_writer_reference(item, modules) for item in node.elts)
     if isinstance(node, ast.Attribute):
-        return node.attr in _WRITER_REFS
+        # only an attribute of an imported writer module (or its alias): ``buf.write`` is not
+        return (
+            node.attr in _WRITER_REFS
+            and isinstance(node.value, ast.Name)
+            and node.value.id in modules
+        )
     return isinstance(node, ast.Name) and node.id in _DIRECT_WRITERS
 
 
@@ -304,7 +315,7 @@ def _patches_module_writer(target: ast.AST, modules: dict[str, str]) -> bool:
         isinstance(target, ast.Attribute)
         and target.attr in _WRITER_REFS
         and isinstance(target.value, ast.Name)
-        and (target.value.id in _MODULES | {"shutil"} or target.value.id in modules)
+        and target.value.id in modules
     )
 
 
@@ -319,7 +330,9 @@ def _is_writer_assign(node: ast.AST, modules: dict[str, str]) -> bool:
         targets, value = [node.target], node.value
     else:
         return False
-    return _is_writer_reference(value) or any(_patches_module_writer(t, modules) for t in targets)
+    return _is_writer_reference(value, modules) or any(
+        _patches_module_writer(t, modules) for t in targets
+    )
 
 
 def _is_write_statement(
