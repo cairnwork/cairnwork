@@ -99,3 +99,27 @@ def verify_single_branch(clone: Path) -> None:
     extra = [r for r in refs.split() if r not in allowed]
     if extra:
         raise RuntimeError(f"{code}: mirror holds a branch beyond main ({extra[0]}); {advice}")
+    _refuse_foreign_history(clone, code, advice)
+
+
+_OWN_OR_CHECKED = ("refs/heads/", "refs/remotes/", "refs/cairnwork-bases/")
+
+
+def _refuse_foreign_history(clone: Path, code: str, advice: str) -> None:
+    """Every other ref (tags, notes, stash, replace, ...) may name only a commit in origin/main's
+    history, so it carries nothing beyond main (#1266). A single-branch clone fetches the tags
+    of main's own history, so those pass. refs/cairnwork-bases/ is Cairnwork's own pin namespace
+    (intake._mirror_base) and is not judged here."""
+    refs = run_git(clone, "for-each-ref", "--format=%(refname)").split()
+    for ref in refs:
+        if ref.startswith(_OWN_OR_CHECKED):
+            continue
+        try:
+            if ref.startswith("refs/replace/"):
+                raise GitCommandError(ref)  # a replace ref rewrites what main's history reads as
+            tip = run_git(clone, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}").strip()
+            run_git(clone, "merge-base", "--is-ancestor", tip, "refs/remotes/origin/main")
+        except GitCommandError as exc:
+            raise RuntimeError(
+                f"{code}: mirror holds {ref}, which is not in main's history; {advice}"
+            ) from exc
