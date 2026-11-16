@@ -44,6 +44,9 @@ class Reason(StrEnum):
     # step 3: the resumed run's final patch has a path outside write_scope, or a non-regular
     # file (symlink 120000, gitlink 160000); the resumed result is discarded
     PAUSE_SCOPE_VIOLATION = "PAUSE_SCOPE_VIOLATION"
+    # #1356: a resumed run must be complete and Core-verified to win.
+    PAUSE_R1_INCOMPLETE = "PAUSE_R1_INCOMPLETE"
+    PAUSE_R1_NOT_VERIFIED = "PAUSE_R1_NOT_VERIFIED"
     # AC8: a checkout change before the plan arrived was rolled back and triggered PAUSE (the
     # only code an intervention may carry); the guard could not be applied (fail closed)
     PAUSE_GUARD_ROLLED_BACK = "PAUSE_GUARD_ROLLED_BACK"

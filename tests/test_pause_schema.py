@@ -36,7 +36,7 @@ AMENDMENT_2 = {  # the five fallback classes' missing codes, and AC8
     "PAUSE_GUARD_UNAVAILABLE",
 }
 GATE_API = {"PAUSE_GATE_TIMEOUT", "PAUSE_GATE_REFUSED", "PAUSE_GATE_QUOTA_EXHAUSTED"}
-STEP_3 = {"PAUSE_SCOPE_VIOLATION"}  # the final patch left write_scope or is not regular files
+STEP_3 = {"PAUSE_SCOPE_VIOLATION", "PAUSE_R1_INCOMPLETE", "PAUSE_R1_NOT_VERIFIED"}
 AC5_FIELDS = {  # AC5's list, plus what AC2 and AC8 need
     "task_id",
     "checkpoint_sha256",

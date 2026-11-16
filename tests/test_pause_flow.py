@@ -50,6 +50,10 @@ def _scenario(tmp_path, monkeypatch, cut="CUT", planner=None, gate=None, scope=T
         tmp_path / "R1" / "checkout",
         guard_before_plan="digest",
         guard_at_plan_arrival="digest" if guard else "changed",
+        record={
+            "verification": {"exit_reason": "COMPLETED"},
+            "spec_feedback": {"needs_spec": False},
+        },
     )
     calls = []
 
@@ -114,6 +118,7 @@ def test_reject_or_fallback_returns_r0(tmp_path, monkeypatch, gate_reply, planne
         planner_settings=SETTINGS,
         gate_settings=SETTINGS,
         runner=runner,
+        core_verdict=lambda _: "VERIFIED",
     )
     assert result is r0 and receipt["reason"] == expected
     assert all(mode != "resume" for mode, _ in calls)
@@ -129,6 +134,7 @@ def test_accept_uses_fresh_r1_and_binds_receipt(tmp_path, monkeypatch):
         planner_settings=SETTINGS,
         gate_settings=SETTINGS,
         runner=runner,
+        core_verdict=lambda _: "VERIFIED",
     )
     assert result is r1 and [mode for mode, _ in calls] == ["run", "resume"]
     assert calls[1][1]["cut"] == 2 and calls[1][1]["plan"] == "plan"

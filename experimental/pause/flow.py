@@ -1,7 +1,8 @@
 """Post-hoc two-run PAUSE orchestration (#476 step 3c, Option A).
 
 The runner owns local_worker invocation and returns its durable result metadata. Keeping that
-boundary injectable makes failures replayable without a model or worker process.
+boundary injectable makes failures replayable without a model or worker process. R1 wins only when
+its completed, spec-sufficient patch is marked exactly VERIFIED by Core.
 """
 
 from __future__ import annotations
@@ -128,7 +129,18 @@ def _cut(record: dict | None) -> tuple[int | None, str]:
 
 
 def _attempt_resume(
-    r0, parent, cut, digest, task_id, planner, gate, planner_settings, gate_settings, runner, args
+    r0,
+    parent,
+    cut,
+    digest,
+    task_id,
+    planner,
+    gate,
+    planner_settings,
+    gate_settings,
+    runner,
+    args,
+    core_verdict,
 ):
     from experimental.pause.interfaces import GateRequest
 
@@ -180,7 +192,7 @@ def _attempt_resume(
         resumed = runner("resume", list(args), parent=r0.transcript, cut=cut, plan=reply.text)
     except (OSError, RuntimeError, TimeoutError):
         return None, info, str(Reason.PAUSE_WORKER_CRASH)
-    return resumed, info, _r1_reason(r0, resumed, parent)
+    return resumed, info, _r1_reason(r0, resumed, parent, core_verdict)
 
 
 def run_flow(
@@ -193,6 +205,7 @@ def run_flow(
     gate_settings: CallSettings,
     runner: Runner,
     event_seq: Callable[[str], int] | None = None,
+    core_verdict: Callable[[RunResult], str] | None = None,
 ) -> tuple[RunResult, dict]:
     """Run bare R0, then optionally plan/gate and resume in fresh R1; return the winner."""
     r0 = runner("run", list(args))
@@ -226,6 +239,7 @@ def run_flow(
                 gate_settings,
                 runner,
                 args,
+                core_verdict,
             )
             if resumed is not None and reason is None:
                 return resumed, receipt.build(
@@ -256,7 +270,12 @@ def _write_scope(parent: dict) -> list[str] | None:
     return scope if isinstance(scope, list) else None
 
 
-def _r1_reason(r0: RunResult, r1: RunResult, parent: dict) -> str | None:
+def _r1_reason(
+    r0: RunResult,
+    r1: RunResult,
+    parent: dict,
+    core_verdict: Callable[[RunResult], str] | None,
+) -> str | None:
     if r1.root.resolve() == r0.root.resolve() or r1.checkout.resolve() == r0.checkout.resolve():
         return str(Reason.PAUSE_SCOPE_VIOLATION)
     if r1.guard_before_plan is None or r1.guard_before_plan != r1.guard_at_plan_arrival:
@@ -266,7 +285,28 @@ def _r1_reason(r0: RunResult, r1: RunResult, parent: dict) -> str | None:
             return str(Reason.PAUSE_SCOPE_VIOLATION)
     except (OSError, ValueError, RuntimeError):
         return str(Reason.PAUSE_GUARD_UNAVAILABLE)
-    return None if r1.code == 0 else str(Reason.PAUSE_WORKER_CRASH)
+    if r1.code != 0:
+        return str(Reason.PAUSE_WORKER_CRASH)
+    record = r1.record
+    if not isinstance(record, dict):
+        return str(Reason.PAUSE_R1_INCOMPLETE)
+    verification = record.get("verification")
+    feedback = record.get("spec_feedback")
+    if (
+        not isinstance(verification, dict)
+        or verification.get("exit_reason") != "COMPLETED"
+        or (isinstance(feedback, dict) and feedback.get("needs_spec") is True)
+    ):
+        return str(Reason.PAUSE_R1_INCOMPLETE)
+    if core_verdict is None:
+        return str(Reason.PAUSE_R1_NOT_VERIFIED)
+    try:
+        verdict = core_verdict(r1)
+    except (OSError, RuntimeError, TimeoutError, ValueError):
+        return str(Reason.PAUSE_R1_NOT_VERIFIED)
+    if type(verdict) is not str or verdict != "VERIFIED":
+        return str(Reason.PAUSE_R1_NOT_VERIFIED)
+    return None
 
 
 def _checkout_digest(checkout: Path) -> str:
