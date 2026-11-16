@@ -48,13 +48,12 @@ def _split_top_level(text: str) -> list[str]:
     return parts
 
 
-def without_case(nodeid: str, *, all_parts: bool = False) -> str:
-    """Remove pytest case suffixes from name parts while preserving bracketed paths.
+def _locate(nodeid: str) -> tuple[str, list[str]] | None:
+    """(file path, name parts) of a node id, or None when it has no ``::`` file boundary.
 
     The file boundary is the first ``.py`` followed by ``::`` (``dir.pyx/`` is not one), so
     ``::`` in a directory name is not mistaken for pytest's file/name separator; ``::`` inside
-    a case id is not a separator.
-    """
+    a case id is not a separator."""
     boundary = next(
         (
             m.end()
@@ -64,24 +63,39 @@ def without_case(nodeid: str, *, all_parts: bool = False) -> str:
         None,
     )
     if boundary is not None:
-        path, suffix = nodeid[:boundary], nodeid[boundary:]
-        if not suffix:
-            return nodeid
-        suffix = suffix[2:]
-    else:
-        path, separator, suffix = nodeid.partition("::")
-        if not separator:
-            return nodeid.split("[", 1)[0] if all_parts else nodeid
-    parts = _split_top_level(suffix)
+        if boundary == len(nodeid):
+            return None
+        return nodeid[:boundary], _split_top_level(nodeid[boundary + 2 :])
+    path, separator, suffix = nodeid.partition("::")
+    return (path, _split_top_level(suffix)) if separator else None
+
+
+def without_case(nodeid: str, *, all_parts: bool = False) -> str:
+    """Remove pytest case suffixes from name parts while preserving bracketed paths."""
+    located = _locate(nodeid)
+    if located is None:
+        return nodeid.split("[", 1)[0] if all_parts else nodeid
+    path, parts = located
     for index in range(0 if all_parts else len(parts) - 1, len(parts)):
         parts[index] = parts[index].split("[", 1)[0]
     return path + "::" + "::".join(parts)
 
 
+def _case_start(nodeid: str) -> int:
+    """Index of the ``[`` that opens the last name part's case id, or -1."""
+    located = _locate(nodeid)
+    if located is None:
+        return nodeid.find("[")
+    last = located[1][-1]
+    inside = last.find("[")
+    return -1 if inside < 0 else len(nodeid) - len(last) + inside
+
+
 def _normalise_id(nodeid: str, roots: tuple[str, ...]) -> str:
-    prefix, marker, params = nodeid.partition("[")
-    if not marker:
+    start = _case_start(nodeid)
+    if start < 0:
         return nodeid
+    prefix, marker, params = nodeid[:start], "[", nodeid[start + 1 :]
     patterns = [
         re.compile(rf"(?<![A-Za-z0-9._/-]){re.escape(root)}(?=$|/|[^A-Za-z0-9._/-])")
         for root in roots
@@ -124,12 +138,13 @@ def unmatched_note(gone, present) -> str:
     functions = {without_case(node) for node in present}
     for node in gone:
         function = without_case(node)
-        _, marker, params = node.rpartition("[")
+        start = _case_start(node)
+        params = node[start + 1 :]
         if (
-            marker
+            start >= 0
             and function in functions
             and any(
-                other.rpartition("[")[2] != params
+                other[_case_start(other) + 1 :] != params
                 for other in present
                 if without_case(other) == function
             )
