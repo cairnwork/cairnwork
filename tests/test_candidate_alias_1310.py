@@ -60,3 +60,35 @@ def test_runtime_shadow_added_detects_print_file_openers(snippet):
 def test_runtime_shadow_added_keeps_read_only_openers_false(snippet):
     wrapped = f"import sys\n{snippet}sys.path.insert(0, 'deep')\n"
     assert runtime_shadow_added(None, wrapped.encode()) is False
+
+
+# Pinned by the independent review of b8703f10 (must refuse / must allow), one shape each.
+_MUST_REFUSE = [
+    "w = open\nw('deep/foo.py','w').close()",
+    "from os import open as o\nw = o\nw('deep/foo.py', 577)",
+    "from gzip import open as g\nw = g\nw('deep/foo.py','wb').close()",
+    "from tempfile import NamedTemporaryFile as N\nw = N\nw(dir='deep', delete=False)",
+    "import tempfile\nw = tempfile.NamedTemporaryFile\nw(dir='deep', delete=False)",
+    "import io\nio.FileIO = helper\nio.FileIO('deep/foo.py','w')",
+    "import io, shutil\nio.FileIO = shutil.copy\nio.FileIO('src.py','deep/foo.py')",
+    "w = FileIO\nw('deep/foo.py','w')",
+    "import os.path\nw = os.link\nw('src.py','deep/foo.py')",
+]
+_MUST_ALLOW = [
+    "import io\nr = io.open\nr('f','r')\n",
+    "import os\nwrite = os.write\nwrite(1, b'x')\n",
+    "import sys\nemit = sys.stdout.write\n",
+    "from pathlib import Path\norig = Path.write_text\n",
+]
+
+
+@pytest.mark.parametrize("snippet", _MUST_REFUSE)
+def test_runtime_shadow_added_refuses_rebound_writers(snippet):
+    wrapped = f"import sys\n{snippet}\nsys.path.insert(0, 'deep')\n"
+    assert runtime_shadow_added(None, wrapped.encode()) is True
+
+
+@pytest.mark.parametrize("snippet", _MUST_ALLOW)
+def test_runtime_shadow_added_allows_reader_and_pipe_references(snippet):
+    wrapped = f"import sys\n{snippet}\nsys.path.insert(0, 'deep')\n"
+    assert runtime_shadow_added(None, wrapped.encode()) is False

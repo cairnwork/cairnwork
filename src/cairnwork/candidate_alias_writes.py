@@ -230,10 +230,9 @@ def _module_aliases(tree: ast.Module) -> dict[str, str]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.name in _MODULES | _COPY_MODULES:
-                    bindings.setdefault(alias.asname or alias.name, []).append(
-                        (node, alias, alias.name)
-                    )
+                root = alias.name if alias.asname else alias.name.split(".")[0]
+                if root in _MODULES | _COPY_MODULES:
+                    bindings.setdefault(alias.asname or root, []).append((node, alias, root))
     aliases: dict[str, str] = {}
     for name, imports in bindings.items():
         single = len(imports) == 1 and _has_only_import_binding(tree, name, *imports[0][:2])
@@ -288,7 +287,16 @@ def _has_only_import_binding(
     )
 
 
-_WRITER_REFS = _WRITE_ATTRS | {"open", "FileIO", "write", "writelines", "writestr"}
+_WRITER_REFS = _WRITE_ATTRS | {
+    "open",
+    "FileIO",
+    "NamedTemporaryFile",
+    "write",
+    "writelines",
+    "writestr",
+}
+# Used as a value, ``io.open`` and ``os.write`` are readers or pipe writers: not refused.
+_WRITER_VALUES = _WRITE_ATTRS | {"FileIO", "NamedTemporaryFile", "copyfileobj"}
 
 
 def _names_module(name: str, modules: dict[str, str]) -> bool:
@@ -297,19 +305,21 @@ def _names_module(name: str, modules: dict[str, str]) -> bool:
     return modules.get(name, _AMBIGUOUS_MODULE) != _AMBIGUOUS_MODULE
 
 
-def _is_writer_reference(node: ast.AST | None, modules: dict[str, str]) -> bool:
-    """An attribute or name that is a file writer, used as a value rather than called; a tuple
-    or list holding one counts (``(w,) = (shutil.copy,)``)."""
+def _is_writer_reference(
+    node: ast.AST | None, modules: dict[str, str], names: frozenset[str]
+) -> bool:
+    """A file writer used as a value rather than called: an attribute of an imported writer
+    module (``shutil.copy``), or a name that is, or is imported as, a writer or opener. A tuple
+    or list holding one counts (``(w,) = (shutil.copy,)``). ``buf.write`` is not."""
     if isinstance(node, (ast.Tuple, ast.List)):
-        return any(_is_writer_reference(item, modules) for item in node.elts)
+        return any(_is_writer_reference(item, modules, names) for item in node.elts)
     if isinstance(node, ast.Attribute):
-        # only an attribute of an imported writer module (or its alias): ``buf.write`` is not
         return (
-            node.attr in _WRITER_REFS
+            node.attr in _WRITER_VALUES
             and isinstance(node.value, ast.Name)
             and _names_module(node.value.id, modules)
         )
-    return isinstance(node, ast.Name) and node.id in _DIRECT_WRITERS
+    return isinstance(node, ast.Name) and node.id in names
 
 
 def _patches_module_writer(target: ast.AST, modules: dict[str, str]) -> bool:
@@ -325,20 +335,33 @@ def _patches_module_writer(target: ast.AST, modules: dict[str, str]) -> bool:
     )
 
 
-def _is_writer_assign(node: ast.AST, modules: dict[str, str]) -> bool:
+def _is_writer_assign(node: ast.AST, modules: dict[str, str], names: frozenset[str]) -> bool:
     """``w = shutil.copy`` or ``gzip.open = helper``: a writer rebound where the call detector
     cannot follow it. Refused conservatively (only ever adds a refusal)."""
     if isinstance(node, ast.Assign):
         targets, value = node.targets, node.value
-    elif isinstance(node, ast.AnnAssign):
-        targets, value = [node.target], node.value
-    elif isinstance(node, ast.NamedExpr):
+    elif isinstance(node, (ast.AnnAssign, ast.NamedExpr)):
         targets, value = [node.target], node.value
     else:
         return False
-    return _is_writer_reference(value, modules) or any(
+    return _is_writer_reference(value, modules, names) or any(
         _patches_module_writer(t, modules) for t in targets
     )
+
+
+def _writer_names(
+    openers: frozenset[str], writers: frozenset[str], fileios: frozenset[str]
+) -> frozenset[str]:
+    """Names that are file writers or openers: imported ones, and the builtin ``open``."""
+    names = set(_DIRECT_WRITERS | writers | fileios)
+    for name in openers:
+        if name == _UNBOUND_OPEN:
+            names.add("open")
+        elif name.startswith(_OS_OPEN_PREFIX):
+            names.add(name.removeprefix(_OS_OPEN_PREFIX))
+        elif not name.startswith("\0"):
+            names.add(name)
+    return frozenset(names)
 
 
 def _is_write_statement(
@@ -349,8 +372,9 @@ def _is_write_statement(
     fileios: frozenset[str],
     flag_openers: frozenset[str],
 ) -> bool:
+    names = _writer_names(openers, writers, fileios)
     return any(
-        _is_writer_assign(part, modules)
+        _is_writer_assign(part, modules, names)
         or (
             isinstance(part, ast.Call)
             and _is_write_call(part, openers, writers, modules, fileios, flag_openers)
