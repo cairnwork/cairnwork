@@ -178,6 +178,12 @@ def test_py_inside_directory_name_is_not_the_file_boundary_1269(nodeid, expected
     assert without_case(nodeid) == expected
 
 
-def test_bare_name_without_file_strips_case_for_every_part_only_1269():
-    assert without_case("test_func[case]", all_parts=True) == "test_func"
-    assert without_case("test_func[case]") == "test_func[case]"
+@pytest.mark.parametrize("all_parts", [False, True])
+def test_bare_names_lose_case_and_bare_file_paths_stay_whole_1269(all_parts):
+    assert without_case("test_func[case]", all_parts=all_parts) == "test_func"
+    assert without_case("tests/dir[1]/test_x.py", all_parts=all_parts) == "tests/dir[1]/test_x.py"
+
+
+def test_unmatched_note_bare_names_and_unparameterised_variants_1269():
+    assert "per-run" in unmatched_note({"test_x[a]"}, {"test_x[b]"})
+    assert unmatched_note({"t.py::test_x[a]"}, {"t.py::test_x[a]"}) == ""

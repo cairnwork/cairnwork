@@ -74,11 +74,17 @@ def without_case(nodeid: str, *, all_parts: bool = False) -> str:
     """Remove pytest case suffixes from name parts while preserving bracketed paths."""
     located = _locate(nodeid)
     if located is None:
-        return nodeid.split("[", 1)[0] if all_parts else nodeid
+        # no file boundary: a bare file path stays whole, a bare name loses its case id
+        return nodeid if nodeid.endswith(".py") else nodeid.split("[", 1)[0]
     path, parts = located
     for index in range(0 if all_parts else len(parts) - 1, len(parts)):
         parts[index] = parts[index].split("[", 1)[0]
     return path + "::" + "::".join(parts)
+
+
+def _params(nodeid: str) -> str:
+    start = _case_start(nodeid)
+    return nodeid[start + 1 :] if start >= 0 else ""
 
 
 def _case_start(nodeid: str) -> int:
@@ -138,15 +144,12 @@ def unmatched_note(gone, present) -> str:
     functions = {without_case(node) for node in present}
     for node in gone:
         function = without_case(node)
-        start = _case_start(node)
-        params = node[start + 1 :]
+        params = _params(node)
         if (
-            start >= 0
+            _case_start(node) >= 0
             and function in functions
             and any(
-                other[_case_start(other) + 1 :] != params
-                for other in present
-                if without_case(other) == function
+                _params(other) != params for other in present if without_case(other) == function
             )
         ):
             return PER_RUN_NOTE
