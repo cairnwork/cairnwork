@@ -291,6 +291,12 @@ def _has_only_import_binding(
 _WRITER_REFS = _WRITE_ATTRS | {"open", "FileIO", "write", "writelines", "writestr"}
 
 
+def _names_module(name: str, modules: dict[str, str]) -> bool:
+    """``name`` is bound once, by an import. A name rebound anywhere (assignment, loop or with
+    target, def, class, another import) is ambiguous and is not taken for the module."""
+    return modules.get(name, _AMBIGUOUS_MODULE) != _AMBIGUOUS_MODULE
+
+
 def _is_writer_reference(node: ast.AST | None, modules: dict[str, str]) -> bool:
     """An attribute or name that is a file writer, used as a value rather than called; a tuple
     or list holding one counts (``(w,) = (shutil.copy,)``)."""
@@ -301,7 +307,7 @@ def _is_writer_reference(node: ast.AST | None, modules: dict[str, str]) -> bool:
         return (
             node.attr in _WRITER_REFS
             and isinstance(node.value, ast.Name)
-            and node.value.id in modules
+            and _names_module(node.value.id, modules)
         )
     return isinstance(node, ast.Name) and node.id in _DIRECT_WRITERS
 
@@ -315,7 +321,7 @@ def _patches_module_writer(target: ast.AST, modules: dict[str, str]) -> bool:
         isinstance(target, ast.Attribute)
         and target.attr in _WRITER_REFS
         and isinstance(target.value, ast.Name)
-        and target.value.id in modules
+        and _names_module(target.value.id, modules)
     )
 
 
