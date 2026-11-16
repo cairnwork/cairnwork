@@ -19,11 +19,47 @@ from types import SimpleNamespace
 import pytest
 from conftest import git
 
+from cairnwork import account_checkout
 from cairnwork.account_check import base_stage
 from cairnwork.account_checkout import COPY_HELPER, SHARE_HELPER, STAGE, make_account_checkout
 from cairnwork.deferred_tests import BaseUncomparable, base_comparison
 from cairnwork.verifier_account import VerifierAccount, VerifierAccountError
 from cairnwork.workspace import WorkspaceError
+
+
+@pytest.mark.parametrize("entry", ["a\u202eb", "a\nb", "a\x1b[31mb"])
+def test_account_copy_difference_is_rendered_on_one_line(monkeypatch, tmp_path, entry):
+    target = tmp_path / "checkout"
+    target.mkdir()
+    uid = os.getuid()
+    monkeypatch.setattr(account_checkout.pwd, "getpwnam", lambda _user: SimpleNamespace(pw_uid=uid))
+    monkeypatch.setattr(
+        account_checkout.os,
+        "lstat",
+        lambda _path: SimpleNamespace(st_mode=stat.S_IFDIR, st_uid=uid),
+    )
+    monkeypatch.setattr(account_checkout, "tree_differences", lambda *_args: [entry])
+    with pytest.raises(WorkspaceError) as info:
+        account_checkout._check_copy(target, SimpleNamespace(user="owner"), tmp_path, "a" * 40)
+    assert "\\x" in str(info.value) or "\\u202e" in str(info.value)
+    assert "\n" not in str(info.value)
+
+
+@pytest.mark.parametrize("commit", ["a\u202eb", "a\nb", "a\x1b[31mb"])
+def test_account_copy_commit_is_rendered_on_one_line(monkeypatch, tmp_path, commit):
+    target = tmp_path / "checkout"
+    target.mkdir()
+    uid = os.getuid()
+    monkeypatch.setattr(account_checkout.pwd, "getpwnam", lambda _user: SimpleNamespace(pw_uid=uid))
+    monkeypatch.setattr(
+        account_checkout.os,
+        "lstat",
+        lambda _path: SimpleNamespace(st_mode=stat.S_IFDIR, st_uid=uid),
+    )
+    monkeypatch.setattr(account_checkout, "tree_differences", lambda *_args: ["x"])
+    with pytest.raises(WorkspaceError) as info:
+        account_checkout._check_copy(target, SimpleNamespace(user="owner"), tmp_path, commit)
+    assert str(info.value).isprintable()
 
 
 def _copy(source, target, timeout=20, prefix=""):
