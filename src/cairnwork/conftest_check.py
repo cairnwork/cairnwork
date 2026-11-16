@@ -38,7 +38,7 @@ from functools import partial
 from pathlib import Path, PurePosixPath
 from posixpath import dirname
 
-from cairnwork.archive_reach import archive_path_reason
+from cairnwork.archive_reach import ARCHIVES, archive_path_reason
 from cairnwork.conftest_names import bound_by, taken_names
 from cairnwork.conftest_reach import reached_change
 from cairnwork.deferred_overlay import TestCommitRejected
@@ -47,7 +47,6 @@ from cairnwork.module_plugins import check_test_module_plugins
 
 CONFTEST = "conftest.py"
 CODE = "TEST_COMMIT_CONFTEST_STATIC"
-ARCHIVES = (".zip", ".egg", ".whl", ".pyz")  # importable once on sys.path (#924 r6, #967)
 CONFIGS = ("pytest.ini", ".pytest.ini", "pyproject.toml", "tox.ini", "setup.cfg")
 
 
