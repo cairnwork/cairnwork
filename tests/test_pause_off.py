@@ -95,6 +95,9 @@ def test_a_different_900s_outcome_is_not_hidden(through_pause, field, value):
     assert strip(paused) != strip(bare)
 
 
+WORKER_REQUIRED = ["--checkout", "c", "--model", "m", "--context-cap", "1", "--canary-report", "r"]
+
+
 def test_the_worker_gets_the_arguments_unchanged(monkeypatch):
     seen = []
     argv = ["run", "--task", "t.json", "--checkout", "c", "--write-path", "src", "--plan", "p"]
@@ -143,7 +146,7 @@ def test_planner_flag_dispatches_to_the_injected_flow(tmp_path, monkeypatch, cap
     monkeypatch.setattr("experimental.pause.cli.receipt_module.append", lambda *a: None)
     assert (
         pause_cli.main(
-            ["run", "--planner-config", "config.json", "--task", str(task)],
+            ["run", "--planner-config", "config.json", "--task", str(task), *WORKER_REQUIRED],
             run_factory=factory,  # pyright: ignore[reportArgumentType]
         )
         == 0
@@ -195,7 +198,7 @@ def test_configured_runs_append_receipts_to_same_out(tmp_path, monkeypatch, caps
         "equals": [f"--out={out}"],
         "prefix": [f"--ou={out}"],
     }[spelling]
-    argv = ["run", "--planner-config", "cfg", "--task", str(task), *flag]
+    argv = ["run", "--planner-config", "cfg", "--task", str(task), *WORKER_REQUIRED, *flag]
 
     def factory(_):
         return object(), object(), object(), object(), object()
