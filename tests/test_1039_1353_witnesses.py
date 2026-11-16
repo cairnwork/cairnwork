@@ -25,6 +25,10 @@ def _load(name, *, register=True):
 
 probe = _load("_w1353_probe")
 extra = _load("_w1353_extra", register=False)
+_NO_SANDBOX_BASE = (
+    "UNCOMPARABLE: BASE_ENV_FAILED: unchanged base: base-probe-failed "
+    "(no-sandbox: no usable sandbox backend, so nothing ran)"
+)
 _ACCOUNT_GAP = (
     "[blackbox:add: VERIFICATION_INCOMPLETE: BLACKBOX_NEEDS_VERIFIER_ACCOUNT [matched 1/1]]"
 )
@@ -33,7 +37,6 @@ _ACCOUNT_GAP = (
 def test_c1_c4_evasions_are_runnable_and_live():
     """C1-C4; each source compiles, imports, calls add, and its removal changes C2's verdict."""
     rows = probe.core_rows()
-    _diag(rows)
     got = [
         r
         for r in rows
@@ -327,7 +330,15 @@ def test_candidate_routes_match_pinned_main_outputs():
     ]
     c2_blackbox = [r for r in rows if r["class_id"] == "C2" and r["probe"].startswith("blackbox-")]
     assert len(c2_blackbox) == 2
-    assert all(r["classification"] == "NOT_RUN" for r in c2_blackbox)
+    if sys.platform == "linux" or _sandbox_available():
+        assert all(r["classification"] == "NOT_RUN" for r in c2_blackbox)
+    else:
+        # Darwin without a usable Seatbelt (observed under Core's verifier, itself sandboxed): the
+        # base probe cannot run, so the blackbox route fails closed before any account gap.
+        assert [(r["observed"], r["classification"]) for r in c2_blackbox] == [
+            ("UNCOMPARABLE", "REFUSED")
+        ] * 2
+        assert all(_NO_SANDBOX_BASE in r["reason"] for r in c2_blackbox)
     # Linux: C2 is observed on CI as VERIFIED.
     expected = ["VERIFIED", "VERIFIED"]
     if not (sys.platform == "linux" or _sandbox_available()):
@@ -343,7 +354,6 @@ def test_candidate_routes_match_pinned_main_outputs():
 def test_class_results_are_pinned():
     """C6-C10; raw current judge, policy, runner and receipt outcomes are pinned."""
     rows = extra.extra_rows()
-    _diag(rows)
     assert len([r for r in rows if r["class_id"] == "C6"]) >= 3
     controls = {r["probe"]: r["observed"] for r in rows if r["class_id"] == "CONTROL"}
     assert controls["owner-correct"] == "blackbox:add: PASS [matched 1/1] low-entropy"
@@ -355,7 +365,11 @@ def test_class_results_are_pinned():
     }
     assert len([r for r in rows if r["class_id"] == "C7"]) == 3
     c7_b = next(r for r in rows if r["probe"] == "b-one-tampered-pytest")
-    assert c7_b["classification"] == "NOT_RUN"
+    if sys.platform == "linux" or _sandbox_available():
+        assert c7_b["classification"] == "NOT_RUN"
+    else:  # as C2 above: observed under Core's verifier
+        assert (c7_b["observed"], c7_b["classification"]) == ("UNCOMPARABLE", "REFUSED")
+        assert _NO_SANDBOX_BASE in c7_b["reason"]
     if "BLACKBOX_NEEDS_VERIFIER_ACCOUNT" in c7_b["reason"]:
         assert "pytest exit code 1" not in c7_b["reason"]
     c8 = {r["probe"]: r["observed"] for r in rows if r["class_id"] == "C8"}
@@ -396,12 +410,3 @@ def c2_unavailable(rows):
     return [
         r["observed"] for r in rows if r["class_id"] == "C2" and r["probe"].startswith("verify-cli")
     ]
-
-
-def _diag(rows):  # TEMPORARY diagnostic for #1358 Core run; must not reach the final head
-    from cairnwork_sandbox import select
-
-    print("DIAG select", sys.platform, select(), sys.executable, file=sys.stderr)
-    for r in rows:
-        print("DIAG", r["class_id"], r["probe"], r["observed"], r["classification"],
-              "|", r["reason"][:500].replace("\n", " "), file=sys.stderr)

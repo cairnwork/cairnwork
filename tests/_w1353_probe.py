@@ -103,7 +103,7 @@ def _cairnwork_src():
 
 
 # -I drops PYTHONPATH, the only way Core's verifier exposes the checkout under test (the verifier
-# venv has no cairnwork installed); put that same package first explicitly, isolation otherwise kept.
+# venv has no cairnwork installed); put that same package first, isolation otherwise kept.
 # -I also drops PYTHONDONTWRITEBYTECODE, so -B: no __pycache__ written into the checkout under test.
 _LAUNCH = (
     "import runpy, sys; sys.path.insert(0, sys.argv.pop(1)); "
