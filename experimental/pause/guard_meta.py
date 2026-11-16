@@ -37,6 +37,15 @@ class Meta:
         return sum(len(n) + len(v) for n, v in self.xattrs) + len(self.acl)
 
 
+def _no_acl_if_present(path: bytes, st: os.stat_result) -> bytes:
+    """acl_get_link_np said ENOENT: that means "no extended ACL" only while the entry is still the
+    one stat-ed before. Gone, or another inode (removed and replaced out of the sandbox): raise."""
+    now = os.stat(path, follow_symlinks=False)  # FileNotFoundError: fail closed
+    if (now.st_dev, now.st_ino) != (st.st_dev, st.st_ino):
+        raise OSError(errno.ESTALE, "entry replaced while reading its ACL", os.fsdecode(path))
+    return b""
+
+
 if sys.platform == "darwin":
     _libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
     _NOFOLLOW, _ACL_EXTENDED = 0x0001, 0x00000100
@@ -69,11 +78,11 @@ if sys.platform == "darwin":
     def _get(path: bytes, name: bytes) -> bytes:
         return _sized(path, lambda b, n: _libc.getxattr(path, name, b, n, 0, _NOFOLLOW))
 
-    def _acl_get(path: bytes) -> bytes:
+    def _acl_get(path: bytes, st: os.stat_result) -> bytes:
         acl = _libc.acl_get_link_np(path, _ACL_EXTENDED)
         if not acl:
-            if ctypes.get_errno() == errno.ENOENT:  # the entry exists (just stat-ed): no ACL
-                return b""
+            if ctypes.get_errno() == errno.ENOENT:  # no ACL, if the entry is still the stat-ed one
+                return _no_acl_if_present(path, st)
             _ok(-1, path)
         try:
             text = _libc.acl_to_text(acl, None)
@@ -96,7 +105,7 @@ else:  # Linux; where os has no listxattr, the first read fails closed
     def _get(path: bytes, name: bytes) -> bytes:
         return os.getxattr(path, name, follow_symlinks=False)
 
-    def _acl_get(path: bytes) -> bytes:
+    def _acl_get(path: bytes, st: os.stat_result) -> bytes:
         return b""  # POSIX ACLs are the system.posix_acl_* attributes, read above
 
 
@@ -108,7 +117,7 @@ def read(path: bytes, st: os.stat_result) -> Meta:
             if e.errno not in _NO_ATTRS:
                 raise
             xattrs = ()
-        acl = _acl_get(path)
+        acl = _acl_get(path, st)
     except OSError as e:
         raise GuardUnavailable(f"attributes of {os.fsdecode(path)!r}: {e.strerror}") from e
     return Meta(st.st_uid, st.st_gid, xattrs, acl)
