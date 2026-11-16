@@ -94,10 +94,10 @@ def main(
             return 2
         try:
             planner, gate, ps, gs, runner = run_factory(config_path)
-            task_arg = worker_args[worker_args.index("--task") + 1]
-            task_id = json.loads(Path(task_arg).read_text(encoding="utf-8"))["task_id"]
-            # the worker's own parser decides --out (every spelling: --out P, --out=P, prefixes)
-            out_arg = worker_cli.parser().parse_known_args([args[0], *worker_args])[0].out
+            # Use the worker parser's own option semantics for task and output path.
+            parsed = worker_cli.parser().parse_known_args([args[0], *worker_args])[0]
+            task_id = json.loads(parsed.task.read_text(encoding="utf-8"))["task_id"]
+            out_arg = parsed.out
             receipt_path = Path(out_arg).expanduser().resolve() / RECEIPTS_FILE
             result, rec = run_flow(
                 worker_args,

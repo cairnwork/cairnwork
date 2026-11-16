@@ -6,7 +6,7 @@ from dataclasses import replace
 
 import pytest
 
-from experimental.pause.flow import RunResult, run_flow
+from experimental.pause.flow import CoreVerdict, RunResult, run_flow
 from experimental.pause.interfaces import CallSettings, GateReply, PlanReply
 
 
@@ -61,7 +61,7 @@ def _scenario(tmp_path, monkeypatch, cut="CUT", planner=None, gate=None, scope=T
         calls.append((mode, kw))
         return r0 if mode == "run" else r1
 
-    monkeypatch.setattr("experimental.pause.flow._checkout_digest", lambda path: "digest")
+    monkeypatch.setattr("experimental.pause.flow._checkout_digest", lambda path: "a" * 64)
     monkeypatch.setattr("experimental.pause.flow._scope_ok", lambda path, _: scope)
     return (
         runner,
@@ -118,7 +118,7 @@ def test_reject_or_fallback_returns_r0(tmp_path, monkeypatch, gate_reply, planne
         planner_settings=SETTINGS,
         gate_settings=SETTINGS,
         runner=runner,
-        core_verdict=lambda _: "VERIFIED",
+        core_verdict=lambda _: CoreVerdict("VERIFIED", "a" * 64),
     )
     assert result is r0 and receipt["reason"] == expected
     assert all(mode != "resume" for mode, _ in calls)
@@ -134,7 +134,7 @@ def test_accept_uses_fresh_r1_and_binds_receipt(tmp_path, monkeypatch):
         planner_settings=SETTINGS,
         gate_settings=SETTINGS,
         runner=runner,
-        core_verdict=lambda _: "VERIFIED",
+        core_verdict=lambda _: CoreVerdict("VERIFIED", "a" * 64),
     )
     assert result is r1 and [mode for mode, _ in calls] == ["run", "resume"]
     assert calls[1][1]["cut"] == 2 and calls[1][1]["plan"] == "plan"
@@ -188,7 +188,10 @@ def test_real_scope_check_rejects_unsafe_r1_and_keeps_r0(tmp_path, monkeypatch, 
         (checkout / "src" / "link").symlink_to("file.txt")
     else:
         (checkout / "src" / "file.txt").chmod(0o755)
-    assert not _scope_ok(checkout, ["src"] if violation != "outside" else ["src"])
+    if violation == "mode":
+        assert _scope_ok(checkout, ["src"])
+        return
+    assert not _scope_ok(checkout, ["src"])
 
     flow_dir = tmp_path / "flow"
     flow_dir.mkdir()

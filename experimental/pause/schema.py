@@ -7,7 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass, fields
 from enum import StrEnum
 
-RECEIPT_SCHEMA = "cairnwork.pause.receipt/v1"
+RECEIPT_SCHEMA = "cairnwork.pause.receipt/v2"
 RECEIPTS_FILE = "pause-receipts.jsonl"  # one JSON line per receipt; only with the flag on
 
 
@@ -78,6 +78,8 @@ class ReceiptFields:
     gate_model_id: str | None
     gate_effort: str | None
     gate_verdict: str | None
+    core_verdict: str | None
+    core_tree_sha256: str | None
     reason: str | None
     intervened: bool
     guard_rollbacks: int

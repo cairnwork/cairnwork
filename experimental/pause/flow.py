@@ -18,8 +18,8 @@ from typing import Protocol
 
 from experimental.pause import receipt
 from experimental.pause.guard import TreeGuard
-from experimental.pause.interfaces import CallSettings, Gate, Planner, PlanRequest
-from experimental.pause.schema import Reason
+from experimental.pause.interfaces import CallSettings, Gate, GuardUnavailable, Planner, PlanRequest
+from experimental.pause.schema import GATE_VERDICTS, Reason
 
 
 @dataclass(frozen=True)
@@ -33,6 +33,12 @@ class RunResult:
     episode_id: str | None = None
     guard_before_plan: str | None = None
     guard_at_plan_arrival: str | None = None
+
+
+@dataclass(frozen=True)
+class CoreVerdict:
+    status: str
+    tree_sha256: str
 
 
 class Runner(Protocol):
@@ -99,9 +105,9 @@ def _scope_ok(checkout: Path, scope: list[str] | None) -> bool:
         return False
     # Raw mode 120000 is a symlink and 160000 a gitlink; neither is an accepted regular patch.
     for line in raw.stdout.splitlines():
-        fields = line.split()
-        if len(fields) >= 5 and any(
-            mode not in ("000000", "100644", "100755") for mode in fields[1:3]
+        header = line.split("\t", 1)[0].split()
+        if len(header) >= 2 and any(
+            mode.lstrip(":") not in ("000000", "100644", "100755") for mode in header[:2]
         ):
             return False
     for path in paths:
@@ -128,6 +134,35 @@ def _cut(record: dict | None) -> tuple[int | None, str]:
     return cut["cut_turn_index"], ""
 
 
+def _empty_info() -> dict[str, str | None]:
+    return dict.fromkeys(
+        (
+            "plan",
+            "planner_model_id",
+            "planner_effort",
+            "gate_model_id",
+            "gate_effort",
+            "gate_verdict",
+            "core_verdict",
+            "core_tree_sha256",
+        )
+    )
+
+
+def _load_parent(transcript: Path) -> dict | None:
+    """R0's transcript, or None when it is unreadable or lacks turns/messages (R0 stays)."""
+    try:
+        parent = json.loads(transcript.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    ok = (
+        isinstance(parent, dict)
+        and isinstance(parent.get("turns"), list)
+        and isinstance(parent.get("messages"), list)
+    )
+    return parent if ok else None
+
+
 def _attempt_resume(
     r0,
     parent,
@@ -144,14 +179,7 @@ def _attempt_resume(
 ):
     from experimental.pause.interfaces import GateRequest
 
-    info = {
-        "plan": None,
-        "planner_model_id": None,
-        "planner_effort": None,
-        "gate_model_id": None,
-        "gate_effort": None,
-        "gate_verdict": None,
-    }
+    info = _empty_info()
     turn = next((item for item in parent["turns"] if item["index"] == cut), None)
     if turn is None or turn["assistant_msg_index"] < 0:
         return None, info, str(Reason.PAUSE_NO_CUT)
@@ -177,7 +205,10 @@ def _attempt_resume(
     if checked is None:
         return None, info, str(Reason.PAUSE_GATE_BAD_OUTPUT)
     info.update(
-        gate_model_id=checked.model_id, gate_effort=checked.effort, gate_verdict=checked.verdict
+        gate_model_id=checked.model_id,
+        gate_effort=checked.effort,
+        # an unknown verdict is not recorded: the receipt only carries ACCEPT or REJECT
+        gate_verdict=checked.verdict if checked.verdict in GATE_VERDICTS else None,
     )
     if checked.reason:
         return None, info, str(checked.reason)
@@ -192,7 +223,9 @@ def _attempt_resume(
         resumed = runner("resume", list(args), parent=r0.transcript, cut=cut, plan=reply.text)
     except (OSError, RuntimeError, TimeoutError):
         return None, info, str(Reason.PAUSE_WORKER_CRASH)
-    return resumed, info, _r1_reason(r0, resumed, parent, core_verdict)
+    reason, verdict, tree = _r1_reason(r0, resumed, parent, core_verdict)
+    info.update(core_verdict=verdict, core_tree_sha256=tree)
+    return resumed, info, reason
 
 
 def run_flow(
@@ -205,28 +238,20 @@ def run_flow(
     gate_settings: CallSettings,
     runner: Runner,
     event_seq: Callable[[str], int] | None = None,
-    core_verdict: Callable[[RunResult], str] | None = None,
+    core_verdict: Callable[[RunResult], CoreVerdict] | None = None,
 ) -> tuple[RunResult, dict]:
     """Run bare R0, then optionally plan/gate and resume in fresh R1; return the winner."""
     r0 = runner("run", list(args))
     transcript = r0.transcript
     cut, reason = _cut(r0.record)
     checkpoint = None
-    info = {
-        "plan": None,
-        "planner_model_id": None,
-        "planner_effort": None,
-        "gate_model_id": None,
-        "gate_effort": None,
-        "gate_verdict": None,
-    }
+    info = _empty_info()
     if cut is not None and transcript is not None:
-        parent = json.loads(transcript.read_text(encoding="utf-8"))
-        digest = checkpoint = _sha(transcript)
-        turn = next((t for t in parent["turns"] if t["index"] == cut), None)
-        if turn is None or turn["assistant_msg_index"] < 0:
-            reason = "PAUSE_NO_CUT"
+        parent = _load_parent(transcript)
+        if parent is None:
+            reason = str(Reason.PAUSE_NO_CUT)
         else:
+            digest = checkpoint = _sha(transcript)
             resumed, info, reason = _attempt_resume(
                 r0,
                 parent,
@@ -265,31 +290,38 @@ def run_flow(
     return r0, rec
 
 
-def _write_scope(parent: dict) -> list[str] | None:
+def _write_scope(parent: dict) -> list[str] | None | str:
     scope = parent.get("write_scope")
-    return scope if isinstance(scope, list) else None
+    if scope is None:
+        return None
+    if not isinstance(scope, list) or not all(type(item) is str for item in scope):
+        return str(Reason.PAUSE_SCOPE_VIOLATION)
+    return scope
 
 
 def _r1_reason(
     r0: RunResult,
     r1: RunResult,
     parent: dict,
-    core_verdict: Callable[[RunResult], str] | None,
-) -> str | None:
+    core_verdict: Callable[[RunResult], CoreVerdict] | None,
+) -> tuple[str | None, str | None, str | None]:
     if r1.root.resolve() == r0.root.resolve() or r1.checkout.resolve() == r0.checkout.resolve():
-        return str(Reason.PAUSE_SCOPE_VIOLATION)
+        return str(Reason.PAUSE_SCOPE_VIOLATION), None, None
     if r1.guard_before_plan is None or r1.guard_before_plan != r1.guard_at_plan_arrival:
-        return str(Reason.PAUSE_GUARD_UNAVAILABLE)
+        return str(Reason.PAUSE_GUARD_UNAVAILABLE), None, None
     try:
-        if not _scope_ok(r1.checkout, _write_scope(parent)):
-            return str(Reason.PAUSE_SCOPE_VIOLATION)
+        scope = _write_scope(parent)
+        if isinstance(scope, str):
+            return scope, None, None
+        if not _scope_ok(r1.checkout, scope):
+            return str(Reason.PAUSE_SCOPE_VIOLATION), None, None
     except (OSError, ValueError, RuntimeError):
-        return str(Reason.PAUSE_GUARD_UNAVAILABLE)
+        return str(Reason.PAUSE_GUARD_UNAVAILABLE), None, None
     if r1.code != 0:
-        return str(Reason.PAUSE_WORKER_CRASH)
+        return str(Reason.PAUSE_WORKER_CRASH), None, None
     record = r1.record
     if not isinstance(record, dict):
-        return str(Reason.PAUSE_R1_INCOMPLETE)
+        return str(Reason.PAUSE_R1_INCOMPLETE), None, None
     verification = record.get("verification")
     feedback = record.get("spec_feedback")
     if (
@@ -297,16 +329,35 @@ def _r1_reason(
         or verification.get("exit_reason") != "COMPLETED"
         or (isinstance(feedback, dict) and feedback.get("needs_spec") is True)
     ):
-        return str(Reason.PAUSE_R1_INCOMPLETE)
+        return str(Reason.PAUSE_R1_INCOMPLETE), None, None
     if core_verdict is None:
-        return str(Reason.PAUSE_R1_NOT_VERIFIED)
+        return str(Reason.PAUSE_R1_NOT_VERIFIED), None, None
+    try:
+        before = _checkout_digest(r1.checkout)
+    except GuardUnavailable:
+        return str(Reason.PAUSE_GUARD_UNAVAILABLE), None, None
     try:
         verdict = core_verdict(r1)
-    except (OSError, RuntimeError, TimeoutError, ValueError):
-        return str(Reason.PAUSE_R1_NOT_VERIFIED)
-    if type(verdict) is not str or verdict != "VERIFIED":
-        return str(Reason.PAUSE_R1_NOT_VERIFIED)
-    return None
+    except (OSError, RuntimeError, TimeoutError, ValueError, GuardUnavailable):
+        return str(Reason.PAUSE_R1_NOT_VERIFIED), None, None
+    try:
+        after = _checkout_digest(r1.checkout)
+    except GuardUnavailable:
+        return str(Reason.PAUSE_GUARD_UNAVAILABLE), None, None
+    status = (
+        verdict.status if isinstance(verdict, CoreVerdict) and type(verdict.status) is str else None
+    )
+    tree = (
+        verdict.tree_sha256
+        if isinstance(verdict, CoreVerdict) and type(verdict.tree_sha256) is str
+        else None
+    )
+    valid_tree = tree is not None and len(tree) == 64 and all(c in "0123456789abcdef" for c in tree)
+    if status != "VERIFIED" or tree != before or before != after:
+        if status is None or status == "VERIFIED" or not valid_tree:
+            return str(Reason.PAUSE_R1_NOT_VERIFIED), None, None
+        return str(Reason.PAUSE_R1_NOT_VERIFIED), status, tree
+    return None, status, tree
 
 
 def _checkout_digest(checkout: Path) -> str:
