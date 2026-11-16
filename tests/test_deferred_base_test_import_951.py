@@ -69,6 +69,7 @@ from pathlib import Path  # noqa: E402
 
 _SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "measure_base_test_imports.py"
 _spec = importlib.util.spec_from_file_location("measure_base_test_imports", _SCRIPT)
+assert _spec is not None and _spec.loader is not None
 measure_mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(measure_mod)
 
