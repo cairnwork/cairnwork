@@ -60,7 +60,7 @@ def _env_exc(info, root, _denied=_denied_inside, _type=type, _base=BaseException
         exc = top = getattr(info, "value", None)
         if not _sub(_type(exc), _base):
             return False
-        if isinstance(exc, OSError):
+        if _sub(_type(exc), OSError):  # the real class, not exc.__class__
             return True
         if _sub(_type(exc), AssertionError):
             return _denied(exc)

@@ -4,7 +4,12 @@ not parent code: the plugin cannot import cairnwork."""
 
 PARTS_SOURCE = """\
 import sys
-from types import ModuleType
+from pathlib import PosixPath
+from types import CodeType, FrameType, ModuleType, TracebackType
+from _pytest._code.code import ExceptionInfo
+from _pytest.config import Config
+from _pytest.reports import CollectReport, TestReport
+from _pytest.runner import CallInfo
 
 # #804: fixture -> module of the pytest_config.PLUGINS entry that provides it. A setup error that
 # says one of them is missing is recorded as "plugin:<module>"; the parent keeps it as "plugin"
@@ -35,13 +40,58 @@ def _record_skip(reporter, report):
         reporter._skips[report.nodeid] = {"kind": kind, "reason": reason[:200]}
 
 
-def _innermost(exc):  # the file of the innermost frame that is not the import machinery
-    tb, last = exc.__traceback__, ""
-    while tb is not None:
-        file = tb.tb_frame.f_code.co_filename
+def _innermost(exc, _type=type, _tb=BaseException.__traceback__.__get__,
+               _next=TracebackType.tb_next.__get__, _frame=TracebackType.tb_frame.__get__,
+               _code=FrameType.f_code.__get__, _filename=CodeType.co_filename.__get__):
+    # Only exact ImportError instances reach the traceback; all links use builtin descriptors.
+    kind = _type(exc)
+    if kind is not ImportError and kind is not ModuleNotFoundError:
+        return ""
+    tb, last = _tb(exc), ""
+    for _ in range(256):
+        if _type(tb) is not TracebackType:
+            break
+        file = _filename(_code(_frame(tb)))
+        if _type(file) is not str:
+            return ""
         last = last if file.startswith("<frozen importlib") else file
-        tb = tb.tb_next
+        tb = _next(tb)
+    else:
+        if tb is not None:
+            return ""
     return last
+
+
+def _report_cause(call, report, _type=type, _base=BaseException, _sub=issubclass):
+    # Exact pytest objects keep the subsequent instance-field reads away from candidate hooks.
+    kind = _type(report)  # identity, never == or `in`: a metaclass __eq__ would run
+    if _type(call) is not CallInfo or (kind is not CollectReport and kind is not TestReport):
+        return None
+    when = report.when
+    if _type(when) is not str or when != "collect":
+        return None
+    info = call.excinfo
+    if _type(info) is not ExceptionInfo:
+        return None
+    fields = info._excinfo
+    if _type(fields) is not tuple or len(fields) != 3:
+        return None
+    outer = fields[1]
+    if not _sub(_type(outer), _base):
+        return None
+    return BaseException.__cause__.__get__(outer)
+
+
+def _node_paths(node, _type=type, _str=str):
+    # the module file and the root, only when pytest's own PosixPath objects: no __fspath__ or
+    # __str__ of a replaced attribute runs.
+    config = node.config
+    if _type(config) is not Config:  # rootpath is then pytest's own property
+        return None
+    path, root = node.path, config.rootpath
+    if _type(path) is not PosixPath or _type(root) is not PosixPath:
+        return None
+    return _str(path), _str(root)
 
 
 def _import_error(node, call, report, _real=os.path.realpath, _rel=os.path.relpath,
@@ -54,18 +104,23 @@ def _import_error(node, call, report, _real=os.path.realpath, _rel=os.path.relpa
     # at import (as _Reporter's helpers) so a test module cannot rebind them; any error records
     # nothing.
     try:
-        exc = call.excinfo.value.__cause__
-        if not (isinstance(node, pytest.Module) and report.when == "collect"
-                and type(exc) is ImportError):
+        exc = _report_cause(call, report)
+        if type(exc) is not ImportError:
             return None
-        args, name, path = exc.args, exc.name, exc.path
+        if type(node) is not pytest.Module:
+            return None
+        args = BaseException.args.__get__(exc)
+        name, path = ImportError.name.__get__(exc), ImportError.path.__get__(exc)
         if not (type(name) is str and type(path) is str and type(args) is tuple
                 and len(args) == 1 and type(args[0]) is str):
             return None
         text, last = args[0], _last(exc)
-        origin = _rel(_real(path), _real(node.config.rootpath))
+        paths = _node_paths(node)
+        if paths is None:
+            return None
+        origin = _rel(_real(path), _real(paths[1]))
         if ("cannot import name" in text and "partially initialized" not in text
-                and _real(last) == _real(_str(node.path))
+                and _real(last) == _real(paths[0])
                 and not origin.startswith("..") and not _abs(origin)):
             return {"node": node.nodeid, "module": name, "origin": origin}
     except BaseException:
@@ -175,21 +230,24 @@ def _submodule_error(node, call, report, _real=os.path.realpath, _rel=os.path.re
     # a module __getattr__ in repo code); no find_spec, no import; any error records nothing. A
     # dict lookup can still call a colliding key's __eq__ (test code): a hint, not evidence.
     try:
-        exc = call.excinfo.value.__cause__
-        if not (isinstance(node, pytest.Module) and report.when == "collect"
-                and type(exc) is ModuleNotFoundError):
+        exc = _report_cause(call, report)
+        if type(exc) is not ModuleNotFoundError:
             return None
-        args, name, path = exc.args, exc.name, exc.path
+        if type(node) is not pytest.Module:
+            return None
+        args = BaseException.args.__get__(exc)
+        name, path = ModuleNotFoundError.name.__get__(exc), ModuleNotFoundError.path.__get__(exc)
         if not (type(name) is str and "." in name and path is None and type(args) is tuple
                 and len(args) == 1 and type(args[0]) is str
                 and args[0] == "No module named '" + name + "'"):
             return None
         parent = _get(_mods, name.rpartition(".")[0])
         file = _get(_vars(parent), "__file__") if type(parent) is _mod else None
-        if not (type(file) is str and _base(file) == "__init__.py"
-                and _real(_last(exc)) == _real(_str(node.path))):
+        paths = _node_paths(node)
+        if not (type(file) is str and _base(file) == "__init__.py" and paths is not None
+                and _real(_last(exc)) == _real(paths[0])):
             return None
-        origin = _rel(_real(file), _real(node.config.rootpath))
+        origin = _rel(_real(file), _real(paths[1]))
         if not origin.startswith("..") and not _abs(origin):
             return {"node": node.nodeid, "module": name, "parent_origin": origin}
     except BaseException:
