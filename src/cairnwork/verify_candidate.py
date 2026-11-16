@@ -91,9 +91,8 @@ def verify_candidate(
     could not be compared; ``uncomparable`` says why, Core is never asked). The account precheck
     precedes burn; ``tests_consumed`` says whether the tests are now used up.
     Raises TaskRejected for malformed input and IntakeRefused when drained or mirror unusable.
-    ``import_paths`` (#283, as the Issue pipeline's) are
-    directories prepended to the verifiers' import path for a src-layout repo; BAD_IMPORT_PATH
-    when one is malformed or is, or is inside, a test root. The state config's are not read.
+    ``import_paths`` (#283) are directories prepended to the verifiers' import path for a
+    src-layout repo; BAD_IMPORT_PATH when malformed or inside a test root. Config's are not read.
 
     Environment failures before the test commit is burned are explicit refusals. The shadow rules
     see only the listed files the candidate changed (#866)."""
