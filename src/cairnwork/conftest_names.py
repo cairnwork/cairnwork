@@ -29,6 +29,7 @@ import re
 from pathlib import Path
 from posixpath import dirname, join
 
+from cairnwork.conftest_reach import _mentions, _paired_values, _pattern_bound, _with_expr
 from cairnwork.conftest_test_imports import _test_named_imports
 from cairnwork.deferred_overlay import TestCommitRejected
 from cairnwork.fixture_forms import (
@@ -94,8 +95,13 @@ def bound(tree: ast.Module, extra: set[str] | None = None) -> set[str]:
 def bound_by(node: ast.stmt) -> set[str]:
     if isinstance(node, ast.Assign):
         return {n.id for t in node.targets for n in ast.walk(t) if isinstance(n, ast.Name)}
-    if isinstance(node, ast.AnnAssign | ast.AugAssign):
+    if isinstance(node, ast.AnnAssign | ast.AugAssign | ast.For | ast.AsyncFor):
         return {n.id for n in ast.walk(node.target) if isinstance(n, ast.Name)}
+    if isinstance(node, ast.With | ast.AsyncWith):
+        targets = [i.optional_vars for i in node.items if i.optional_vars is not None]
+        return {n.id for t in targets for n in ast.walk(t) if isinstance(n, ast.Name)}
+    if isinstance(node, ast.Match):
+        return {n for c in node.cases for p in ast.walk(c.pattern) if (n := _pattern_bound(p))}
     if isinstance(node, ast.Import | ast.ImportFrom):
         return {(a.asname or a.name).split(".")[0] for a in node.names}
     if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
@@ -119,19 +125,21 @@ def _given(node: ast.AST) -> set[str]:
 def requested(tree: ast.Module) -> set[str]:
     """Fixture names ``tree`` may request: every parameter of every function, and every literal
     string passed to ``usefixtures`` or ``getfixturevalue``."""
-    names: set[str] = set()
+    names = _req_args(tree)
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda):
             a = node.args
             names |= {x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs)}
-        elif isinstance(node, ast.Call) and _call_name(node.func) in _REQUESTS:
-            names |= {
-                s.value
-                for arg in node.args
-                for s in ast.walk(arg)
-                if isinstance(s, ast.Constant) and isinstance(s.value, str)
-            }
     return names
+
+
+def _req_args(tree: ast.AST) -> set[str]:
+    return {
+        s.value for n in ast.walk(tree)
+        if isinstance(n, ast.Call) and _call_name(n.func) in _REQUESTS
+        for arg in n.args for s in ast.walk(arg)
+        if isinstance(s, ast.Constant) and isinstance(s.value, str)
+    }  # fmt: skip
 
 
 def _call_name(func: ast.expr) -> str:
@@ -149,12 +157,7 @@ def _fixtures(
     fixture is a function with a decorator naming ``fixture`` or an alias of it, any decorated
     module-level function (a factory decorator from another module may call ``fixture``, #982;
     a method's ``@property`` is not), or one passed to a ``fixture`` call."""
-    names = registered(tree, extra=extra) | {
-        s.value for n in ast.walk(tree)
-        if isinstance(n, ast.Call) and _call_name(n.func) in _REQUESTS
-        for arg in n.args for s in ast.walk(arg)
-        if isinstance(s, ast.Constant) and isinstance(s.value, str)
-    }  # fmt: skip
+    names = registered(tree, extra=extra) | _req_args(tree)
     selectors = names | set(called or ()) | assignment_callables(tree)
     top, aliases = {id(n) for n in module_level(tree.body)}, _aliases(tree, extra=extra)
     for node in ast.walk(tree):
@@ -275,10 +278,6 @@ def _imported(
     return out
 
 
-_Store = ast.Assign | ast.AnnAssign | ast.AugAssign | ast.NamedExpr  # := too (#1027)
-_STORES = (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.NamedExpr)
-
-
 def _imports(
     file: str, tree: ast.Module, index: dict[str, set[str]], listing: dict[str, str]
 ) -> set[str]:
@@ -293,36 +292,70 @@ def _imports(
                 up = dirname(up)
             head = ".".join(filter(None, [*(up.split("/") if node.level else ()), node.module]))
             modules |= {head} | {f"{head}.{a.name}".strip(".") for a in node.names}
-        elif (isinstance(node, _STORES) and _assigns(
-            node, "pytest_plugins")) or _extends(node):  # fmt: skip
-            value = _plugins_value(node)
-            items = value.elts if isinstance(value, ast.List | ast.Tuple) else [value]
-            if not all(isinstance(v, ast.Constant) and isinstance(v.value, str) for v in items):
-                return set(listing)  # cannot read which modules: all of them
-            strings = [v.value for v in items if isinstance(v, ast.Constant)]
-            modules |= {m.strip() for v in strings if isinstance(v, str) for m in v.split(",")}
+        elif values := _plugins_values(node, tree if "contextlib" not in index else None):
+            for value in values:
+                items = value.elts if isinstance(value, ast.List | ast.Tuple) else [value]
+                if not all(isinstance(v, ast.Constant) and isinstance(v.value, str) for v in items):
+                    return set(listing)  # cannot read which modules: all of them
+                strings = [v.value for v in items if isinstance(v, ast.Constant)]
+                modules |= {m.strip() for v in strings if isinstance(v, str) for m in v.split(",")}
     return {f for m in modules if m for f in index.get(m, ())}
 
 
-def _extends(node: ast.AST) -> bool:
-    """A method call on ``pytest_plugins`` (r2): ``append(x)``, ``extend(xs)``, or any other."""
-    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
-        return False
-    owner = node.func.value
-    return isinstance(owner, ast.Name) and owner.id == "pytest_plugins"
+def _match_case_values(pattern: ast.pattern, subject: ast.expr) -> list[ast.expr | None]:
+    if not any(_pattern_bound(p) == "pytest_plugins" for p in ast.walk(pattern)):
+        return []
+    if isinstance(pattern, ast.MatchAs):
+        if pattern.name != "pytest_plugins":
+            return _match_case_values(pattern.pattern, subject) if pattern.pattern else []
+        if isinstance(pattern.pattern, ast.MatchValue):
+            return [pattern.pattern.value]
+        if isinstance(pattern.pattern, ast.MatchSequence):
+            elts = [p.value for p in pattern.pattern.patterns if isinstance(p, ast.MatchValue)]
+            if len(elts) == len(pattern.pattern.patterns):
+                return [ast.List(elts=elts, ctx=ast.Load())]
+        return [subject]
+    if isinstance(pattern, ast.MatchSequence) and isinstance(subject, ast.List | ast.Tuple):
+        no_star = not any(
+            isinstance(x, ast.MatchStar | ast.Starred) for x in (*pattern.patterns, *subject.elts)
+        )
+        if no_star and len(pattern.patterns) == len(subject.elts):
+            pairs = zip(pattern.patterns, subject.elts, strict=True)
+            return [v for p, s in pairs for v in _match_case_values(p, s)]
+    if isinstance(pattern, ast.MatchOr):
+        return [v for sub in pattern.patterns for v in _match_case_values(sub, subject)]
+    return [None]
 
 
-def _plugins_value(node: ast.AST) -> ast.expr | None:
-    """What a ``pytest_plugins`` statement adds; None (every base file) when it cannot be read."""
+def _plugins_values(node: ast.AST, tree: ast.Module | None = None) -> list[ast.expr | None]:
+    """Values bound to or added to ``pytest_plugins``; ``[None]`` stops fail-closed (#1010)."""
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-        ok = node.func.attr in ("append", "extend") and len(node.args) == 1 and not node.keywords
-        return node.args[0] if ok else None
-    return node.value if isinstance(node, _STORES) else None
-
-
-def _assigns(node: _Store, name: str) -> bool:
-    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-    return any(isinstance(t, ast.Name) and t.id == name for t in targets)
+        if isinstance(node.func.value, ast.Name) and node.func.value.id == "pytest_plugins":
+            ok = node.func.attr in ("append", "extend") and len(node.args) == 1
+            return [node.args[0] if ok and not node.keywords else None]
+    if isinstance(node, ast.NamedExpr) and node.target.id == "pytest_plugins":
+        return [node.value]
+    if isinstance(node, ast.AugAssign) and _mentions(node.target):
+        return [node.value] if isinstance(node.target, ast.Name) else [None]
+    if isinstance(node, ast.AnnAssign):
+        return _paired_values(node.target, node.value)
+    if isinstance(node, ast.Assign):
+        return [v for t in node.targets for v in _paired_values(t, node.value)]
+    if isinstance(node, ast.For | ast.AsyncFor) and _mentions(node.target):
+        if isinstance(node.iter, ast.List | ast.Tuple) and node.iter.elts:
+            if not any(isinstance(e, ast.Starred) for e in node.iter.elts):
+                return [v for item in node.iter.elts for v in _paired_values(node.target, item)]
+        return [None]
+    if isinstance(node, ast.With | ast.AsyncWith):
+        out: list[ast.expr | None] = []
+        for item in node.items:
+            if item.optional_vars is not None and _mentions(item.optional_vars):
+                inner = _with_expr(item.context_expr, tree)
+                out += [None] if inner is None else _paired_values(item.optional_vars, inner)
+        return out
+    if isinstance(node, ast.Match):
+        return [v for c in node.cases for v in _match_case_values(c.pattern, node.subject)]
+    return []
 
 
 def _read(repo: Path, oids: list[str]) -> list[bytes]:

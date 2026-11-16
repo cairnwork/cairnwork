@@ -217,11 +217,11 @@ def _run_all(batch: _Batch, specs, run_id) -> tuple[VerifierRun, ...]:
     for index, spec in enumerate(specs):
         if index and ctx.account is not None:
             ctx.account.require_idle()  # survivors of the last spec
+            ctx.account.scrub_stale_runs()  # #437 D: no run beside the last spec's leftover run/
         clone_id = f"{run_id}-v{index}"
-        # The checkout sits alone in its own work directory, which the tests may write:
-        # some create files next to their repository (Nexus-new: nexus-runtime-targets),
-        # and that must stay inside this run. Under the account the checkout is its own copy, which
-        # it may rename (sticky only protects the owner's names): _same_directory catches that.
+        # The checkout sits alone in its own work directory, which the tests may write (some
+        # create files next to their repository: Nexus-new nexus-runtime-targets). Under the account
+        # the checkout is its own copy, which it may rename: _same_directory catches that.
         work = Path(ctx.run_root) / f"{clone_id}.work"
         make_work_dir(work)
         mark = gitcmd.marked(ATTEMPT_ENV, ctx.attempt_id) if ctx.attempt_id else nullcontext()
