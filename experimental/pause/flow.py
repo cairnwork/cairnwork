@@ -277,7 +277,7 @@ def _r1_reason(
         return str(Reason.PAUSE_GUARD_UNAVAILABLE), None, None
     try:
         verdict = core_verdict(r1)
-    except Exception:  # noqa: BLE001 - Any Core failure keeps R0 unverified.
+    except (Exception, SystemExit, KeyboardInterrupt):  # noqa: BLE001 - Core failures keep R0.
         return str(Reason.PAUSE_R1_NOT_VERIFIED), None, None
     try:
         after = _checkout_digest(r1.checkout)

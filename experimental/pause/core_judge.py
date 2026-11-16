@@ -8,7 +8,7 @@ import shutil
 import stat
 import subprocess
 import tempfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -107,12 +107,80 @@ def _entries(root: Path) -> dict[bytes, tuple[int, bytes, Path]]:
     return entries
 
 
+def _validate_checkout_shape(
+    root: Path, entries: dict[bytes, tuple[int, bytes, Path]], base_paths: set[bytes]
+) -> frozenset[str]:
+    """Refuse unrepresented state, except parents emptied by a tracked deletion."""
+    represented = _parent_directories(entries)
+    base_directories = _parent_directories(base_paths)
+    excluded: set[str] = set()
+    for current, dirs, files in os.walk(root, followlinks=False):
+        parent = Path(current)
+        dirs[:] = [name for name in dirs if not (parent == root and name == ".git")]
+        if stat.S_IMODE(parent.lstat().st_mode) != 0o755:
+            raise ValueError(f"unsupported checkout directory mode: {parent.relative_to(root)}")
+        for name in [*dirs, *files]:
+            path = parent / name
+            mode = path.lstat().st_mode
+            rel = path.relative_to(root)
+            if stat.S_ISDIR(mode):
+                if stat.S_IMODE(mode) != 0o755:
+                    raise ValueError(f"unsupported checkout directory mode: {rel}")
+                path_bytes = os.fsencode(rel.as_posix())
+                if path_bytes not in represented and path_bytes not in base_directories:
+                    raise ValueError(f"checkout directory contains no committed file: {rel}")
+                if path_bytes not in represented:
+                    excluded.add(rel.as_posix())
+            elif stat.S_ISREG(mode) and stat.S_IMODE(mode) not in (0o644, 0o755):
+                raise ValueError(f"unsupported checkout file mode: {rel}")
+    return frozenset(excluded)
+
+
+def _parent_directories(paths: Iterable[bytes]) -> set[bytes]:
+    """List directories that contain a tracked file, including nested ancestors."""
+    parents: set[bytes] = set()
+    for path in paths:
+        parent = path.rpartition(b"/")[0]
+        while parent:
+            parents.add(parent)
+            parent = parent.rpartition(b"/")[0]
+    return parents
+
+
+def _candidate_tree_digest(repo: Path, candidate: str, excluded: frozenset[str]) -> str:
+    """Checkout Core's commit with a fixed umask, then hash its filesystem tree."""
+    with tempfile.TemporaryDirectory(prefix="cairnwork-pause-tree-") as temp:
+        checkout = Path(temp) / "checkout"
+        checkout.mkdir(mode=0o755)
+        os.chmod(checkout, 0o755)
+        command = [
+            "/bin/sh",
+            "-c",
+            'umask 022; exec "$@"',
+            "cairnwork-pause-checkout",
+            "git",
+            "--git-dir",
+            str(repo / ".git"),
+            "--work-tree",
+            str(checkout),
+            *_GIT_OPTIONS,
+            "checkout",
+            "--force",
+            "--detach",
+            candidate,
+        ]
+        result = subprocess.run(command, capture_output=True, check=False, env=_env())
+        if result.returncode:
+            raise RuntimeError("cannot materialize Core candidate tree")
+        return TreeGuard(checkout, exclude_git=True, exclude_paths=excluded).digest()
+
+
 def _copy_working_tree(source: Path, target: Path) -> dict[bytes, tuple[int, bytes, Path]]:
     entries = _entries(source)
     for current, dirs, files in os.walk(source, followlinks=False):
         parent = Path(current)
         dirs[:] = [name for name in dirs if not (parent == source and name == ".git")]
-        for name in dirs:
+        for name in list(dirs):
             src = parent / name
             rel = src.relative_to(source)
             dest = target / rel
@@ -202,12 +270,19 @@ class CoreJudge:
             _git(repo, "checkout", "--detach", base)
             _remove_working_entries(repo)
             source_entries = _copy_working_tree(r1.checkout, repo)
+            base_entries = _tree_entries(repo, base)
+            excluded = _validate_checkout_shape(r1.checkout, source_entries, set(base_entries))
             _git(repo, "add", "-A")
             _git(repo, "commit", "--allow-empty", "--no-verify", "-m", "PAUSE candidate")
             candidate = _git(repo, "rev-parse", "HEAD").strip()
             committed_entries = _tree_entries(repo, candidate)
             _require_raw_match(source_entries, committed_entries)
             paths = self._changed_paths(repo, base, candidate)
+            source_digest = TreeGuard(
+                r1.checkout, exclude_git=True, exclude_paths=excluded
+            ).digest()
+            if _candidate_tree_digest(repo, candidate, excluded) != source_digest:
+                raise ValueError("Core candidate filesystem tree differs from R1 checkout")
             result = self.verify(
                 self.intake,
                 repo=repo,

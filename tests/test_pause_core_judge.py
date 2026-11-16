@@ -171,12 +171,12 @@ def test_judge_rejects_changed_checkout_digest(tmp_path: Path, monkeypatch: Any)
     class ChangingGuard:
         count = 0
 
-        def __init__(self, _path: Path) -> None:
+        def __init__(self, _path: Path, **_options: Any) -> None:
             pass
 
         def digest(self) -> str:
             type(self).count += 1
-            return "a" * 64 if type(self).count == 1 else "b" * 64
+            return "a" * 64 if type(self).count < 4 else "b" * 64
 
     monkeypatch.setattr("experimental.pause.core_judge.TreeGuard", ChangingGuard)
     with pytest.raises(RuntimeError, match="changed R1 checkout"):
