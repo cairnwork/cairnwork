@@ -41,7 +41,7 @@ def test_forged_case_line_is_never_eligible(lg, capsys, name, via_repair) -> Non
     states = [c["state"] for c in _list(lg, capsys, "--notary-db", lg["db"])]
     assert states[0] != "origin_changed" and states[1] == "origin_changed"
     eligible = eligible_cases(_book(lg), Path(lg["db"]))
-    assert all(c["line_sha256"] != _read_lines(_book(lg))[0][1][1] for c in eligible)
+    assert eligible == []  # the forged line (and the unconfirmed honest one) never count
 
 
 @pytest.mark.parametrize("via_repair", [False, True])
