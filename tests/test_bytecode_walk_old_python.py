@@ -186,19 +186,23 @@ def test_a_last_component_swapped_for_a_symlink_is_refused_before_any_chmod(tmp_
     assert stat.S_IMODE((outside / "closed").stat().st_mode) == 0
 
 
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or not hasattr(os, "O_PATH"), reason="needs O_PATH"
+)
 def test_without_a_nofollow_chmod_the_mode_is_still_set_through_the_handle(tmp_path, monkeypatch):
     top, mid, _ = closed_tree(tmp_path)
     real_chmod, calls = os.chmod, []
 
     def no_nofollow(path, mode, *args, **kwargs):
-        calls.append(kwargs.get("follow_symlinks", True))
+        proc = isinstance(path, str) and path.startswith("/proc/self/fd/")
+        calls.append(path if proc else kwargs.get("follow_symlinks", True))
         if kwargs.get("follow_symlinks", True) is False:
             raise NotImplementedError("no nofollow chmod")
         return real_chmod(path, mode, *args, **kwargs)
 
     monkeypatch.setattr(os, "chmod", no_nofollow)
     _here, found = bytecode_walk.opened(str(mid / "closed"))
-    assert calls == [False, True]
+    assert calls[0] is False and calls[1].startswith("/proc/self/fd/") and len(calls) == 2
     assert [name for name, *_ in found] == ["f"]
     assert stat.S_IMODE((mid / "closed").stat().st_mode) == 0o700
 
