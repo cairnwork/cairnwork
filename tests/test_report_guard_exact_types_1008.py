@@ -1,4 +1,7 @@
 """Candidate reachable exception/report values must not run hooks in report guard helpers."""
+# pyright: reportArgumentType=false, reportAttributeAccessIssue=false, reportOptionalMemberAccess=false
+# pyright: reportIncompatibleMethodOverride=false, reportAssignmentType=false
+# (hostile test doubles: they break the declared types on purpose)
 
 from _pytest.reports import TestReport
 from _pytest.runner import CallInfo
