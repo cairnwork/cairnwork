@@ -19,7 +19,10 @@ def test_v5_post_verified_hook_does_not_outlive_a_killed_runner(tmp_path):
         "import sys; from cairnwork.post_verified import _run; "
         f"_run([sys.executable, '-c', {hook_code!r}], 30, {{}})"
     )
-    runner = subprocess.Popen([sys.executable, "-c", runner_code])
+    runner = subprocess.Popen(
+        [sys.executable, "-c", runner_code],
+        env={**os.environ, "PYTHONPATH": os.pathsep.join(p for p in sys.path if p)},
+    )
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline and not pid_file.exists():
         time.sleep(0.05)

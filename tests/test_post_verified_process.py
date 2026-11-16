@@ -110,7 +110,13 @@ def test_a_broken_stderr_pipe_does_not_change_the_exit_code(tmp_path):
     read, write = os.pipe()
     os.close(read)  # nobody will ever read the alert
     code = "from cairnwork.post_verified import alert; alert('x' * 100)"
-    done = subprocess.run([sys.executable, "-c", code], stderr=write, check=False, timeout=60)
+    done = subprocess.run(
+        [sys.executable, "-c", code],
+        env={**os.environ, "PYTHONPATH": os.pathsep.join(p for p in sys.path if p)},
+        stderr=write,
+        check=False,
+        timeout=60,
+    )
     os.close(write)
     assert done.returncode == 0
 

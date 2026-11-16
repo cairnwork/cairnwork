@@ -3,9 +3,9 @@
 import json
 import secrets
 import subprocess
-import sys
 
 import pytest
+from _child_python import run_module
 from conftest import commit_change, git
 
 VERIFY = "python3 -m pytest -q tests/test_calc.py"
@@ -76,7 +76,7 @@ def verify(state, project, base, cand, *extra, allowed=("src/calc.py",), tests=(
     for command in tests:
         args += ["--verifier", command]
     done = subprocess.run(
-        [sys.executable, "-I", "-m", "cairnwork.verify_cli", "--state", str(state), "run", *args]
+        run_module("cairnwork.verify_cli") + ["--state", str(state), "run", *args]
         + list(extra),
         capture_output=True, text=True, timeout=300, check=False,
     )  # fmt: skip
@@ -91,7 +91,7 @@ def cli(state, *args):
     if "--repo-path" in args:
         configure_origin(state, args[args.index("--repo-path") + 1])
     done = subprocess.run(
-        [sys.executable, "-I", "-m", "cairnwork.verify_cli", "--state", str(state), *args],
+        run_module("cairnwork.verify_cli") + ["--state", str(state), *args],
         capture_output=True, text=True, timeout=120, check=False,
     )  # fmt: skip
     return done.returncode, json.loads(done.stdout)

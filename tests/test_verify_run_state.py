@@ -5,6 +5,7 @@ import subprocess
 import sys
 
 import pytest
+from _child_python import run_module
 from conftest import commit_change, git
 from test_deferred_tests import CHECK, REGRESSION, make_test_commit
 from verify_helpers import FIX, base_of, candidate, cli, has_object, in_process, make_mirror, verify
@@ -160,7 +161,7 @@ def test_a_killed_run_is_cleaned_up(project, state):
     base = base_of(project)
     cand = candidate(project, base, {"src/calc.py": FIX})
     proc = subprocess.Popen(
-        [sys.executable, "-I", "-m", "cairnwork.verify_cli", "--state", str(state), "run",
+        run_module("cairnwork.verify_cli") + ["--state", str(state), "run",
          "--repo-path", str(project), "--base", base, "--candidate", cand,
          "--allowed-file", "src/calc.py", "--verifier", f"python3 -m pytest -q tests/{name}.py"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
