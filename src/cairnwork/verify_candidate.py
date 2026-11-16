@@ -30,7 +30,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from cairnwork import candidate_env, protection, runlock, verify_scope
+from cairnwork import candidate_env, protection, replay_set, runlock, verify_scope
 from cairnwork.account_check import base_stage, precheck
 from cairnwork.blackbox import Declaration
 from cairnwork.confined import ATTEMPT_ENV, sweep_marked
@@ -56,6 +56,7 @@ from cairnwork.pipeline import (
 )
 from cairnwork.pipeline_judge import judge_candidate
 from cairnwork.recovery import _remove_leftovers
+from cairnwork.textclean import shown
 from cairnwork.verify_candidate_checks import (
     check_task_for_verify,
     require_core_ids,
@@ -155,7 +156,7 @@ def verify_candidate(
         "protection": result.protection,  # protection.py; "" when Core was never asked
         "tests_consumed": tests_consumed(intake, test_commit),
         "verifier_mode": "account" if account is not None else "sandbox_only",
-    } | {"failure_evidence": result.failure_evidence}  # record-only, never judged (#1105)
+    } | replay_set.record_only(result, status, task, candidate)  # never judged (#1105)
 
 
 def _status_fields(verified: bool, status: str, level: str) -> dict[str, str]:
@@ -203,7 +204,7 @@ def _scratch(intake: Intake, source: Path, repo: Path, task: TaskSpec, candidate
         run_git(path, "fetch", "--quiet", "--no-tags", str(repo), task.base_commit, candidate)
     except GitCommandError as exc:
         shutil.rmtree(path, ignore_errors=True)
-        raise WorkspaceError(f"cannot prepare a scratch clone: {exc}") from exc
+        raise WorkspaceError(f"cannot prepare a scratch clone: {shown(exc)}") from exc
     try:
         yield path
     finally:
@@ -212,15 +213,19 @@ def _scratch(intake: Intake, source: Path, repo: Path, task: TaskSpec, candidate
 
 def _check_parent(repo: Path, base: str, candidate: str) -> None:
     """In the caller's repository, read-only and before anything is fetched anywhere: the
-    candidate must be one commit directly on the base. A candidate built on top of a hidden
-    test commit is refused here, so it can never bring that commit into a store Cairnwork
-    checks (and so cannot make the commit look already seen)."""
+    candidate must be one commit directly on the base. A candidate built on a hidden test
+    commit is refused here, so it never brings that commit into a store Cairnwork checks."""
     try:
         parents = run_git(repo, "rev-list", "--parents", "-n", "1", candidate).split()[1:]
     except GitCommandError as exc:
-        raise WorkspaceError(f"cannot read {candidate} in {repo}: {exc}") from exc
+        raise WorkspaceError(
+            f"cannot read {shown(candidate)} in {shown(repo)}: {shown(exc)}"
+        ) from exc
     if parents != [base]:
-        raise CandidateRejected("NOT_ONE_COMMIT_ON_BASE", f"parents of {candidate} are {parents}")
+        found = ", ".join(map(shown, parents))
+        raise CandidateRejected(
+            "NOT_ONE_COMMIT_ON_BASE", f"parents of {shown(candidate)} are {found}"
+        )
 
 
 def _absolute(url: str, source: Path) -> str:

@@ -43,6 +43,10 @@ CASES = {
         "    mod = importlib.import_module('json')",
     ),
     "guard_module": ("import _cairnwork_report_guard", "import cairnwork.report_guard_docs"),
+    "exception_attribute_hook": (
+        "    def __getattribute__(self, name):",
+        "    def describe(self):  # an ordinary method is fine\n    def path(root):",
+    ),
     "fd_listing": (
         "    names = os.listdir('/proc/self/fd')",
         "    p = '/proc/cpuinfo'  # other /proc files and /dev/null are fine",
