@@ -237,12 +237,18 @@ def run_git(
 
 
 def commit_present(repo: Path, oid: str) -> bool:
-    """Return whether oid names a commit; only Git's explicit exit 1 means absent."""
+    """Return whether oid names a commit; a broken supplied repository stays unreadable."""
     try:
         found = run_git(
             repo, "rev-parse", "--verify", "--quiet", f"{oid}^{{commit}}", ok_codes=(0, 1)
         )
     except GitCommandError as exc:
+        try:
+            run_git(repo, "rev-parse", "--git-dir")
+        except GitCommandError as health:
+            if isinstance(health.__cause__, subprocess.CalledProcessError):
+                return False
+            raise OSError(f"Cairnwork could not run git: {health}") from health
         raise OSError(f"Cairnwork could not run git: {exc}") from exc
     return bool(found.strip())
 

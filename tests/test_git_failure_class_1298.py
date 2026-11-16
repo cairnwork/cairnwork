@@ -37,12 +37,19 @@ def test_commit_present_propagates_git_infrastructure_failure(tmp_path, monkeypa
         raise _git_error(cause)
 
     monkeypatch.setattr("cairnwork.gitcmd.run_git", fail)
-    with pytest.raises(OSError):
-        commit_present(tmp_path, "a" * 40)
+    if isinstance(cause, subprocess.CalledProcessError):
+        assert commit_present(tmp_path, "a" * 40) is False
+    else:
+        with pytest.raises(OSError):
+            commit_present(tmp_path, "a" * 40)
 
 
 def test_commit_present_only_exit_one_means_missing(tmp_path, monkeypatch):
     monkeypatch.setattr("cairnwork.gitcmd.run_git", lambda *a, **kw: "", raising=False)
+    assert commit_present(tmp_path, "a" * 40) is False
+
+
+def test_commit_present_reports_a_broken_repository_as_missing(tmp_path):
     assert commit_present(tmp_path, "a" * 40) is False
 
 
@@ -91,32 +98,22 @@ def test_ensure_test_commit_does_not_treat_git_failure_as_missing(tmp_path, monk
 
 
 def test_ensure_test_commit_keeps_real_missing_candidate_rejection(tmp_path, monkeypatch):
-    monkeypatch.setattr(gitprobe, "origin_reachable", lambda *a: None)
-    monkeypatch.setattr(deferred_tests, "commit_present", lambda *a: False)
-
-    def reject_fetch(*args, **kwargs):
-        error = GitCommandError("origin rejected commit")
-        error.__cause__ = subprocess.CalledProcessError(128, ["git", "fetch"])
-        raise error
-
-    monkeypatch.setattr(deferred_tests, "run_git", reject_fetch)
+    origin = tmp_path / "origin"
+    _commit_repo(origin)
+    repo = tmp_path / "repo"
+    _commit_repo(repo)
     with pytest.raises(Rejected) as exc:
-        deferred_tests.ensure_test_commit(tmp_path, "a" * 40)
+        deferred_tests.ensure_test_commit(
+            repo, "a" * 40, origin_url=str(origin), allowed_protocols=("file",)
+        )
     assert exc.value.code == "TEST_COMMIT_UNREADABLE"
 
 
 def test_ensure_test_commit_origin_timeout_is_infrastructure(tmp_path, monkeypatch):
-    monkeypatch.setattr(gitprobe, "origin_reachable", lambda *a: None)
-    monkeypatch.setattr(deferred_tests, "commit_present", lambda *a: False)
-
-    def timeout(*args, **kwargs):
-        error = GitCommandError("git fetch failed: timeout")
-        error.__cause__ = subprocess.TimeoutExpired(["git", "fetch"], 300)
-        raise error
-
-    monkeypatch.setattr(deferred_tests, "run_git", timeout)
-    with pytest.raises(OSError, match="could not run git"):
-        deferred_tests.ensure_test_commit(tmp_path, "a" * 40)
+    repo = tmp_path / "repo"
+    _commit_repo(repo)
+    with pytest.raises(OSError, match="no verifier-owned origin"):
+        deferred_tests.ensure_test_commit(repo, "a" * 40)
 
 
 def _git(cwd, *args):
@@ -137,7 +134,7 @@ def _commit_repo(path):
 def test_no_origin_remote_is_infrastructure_not_candidate_rejection(tmp_path):
     repo = tmp_path / "repo"
     _commit_repo(repo)
-    with pytest.raises(OSError, match="reach origin"):
+    with pytest.raises(OSError, match="no verifier-owned origin"):
         deferred_tests.ensure_test_commit(repo, "b" * 40)
 
 
@@ -146,7 +143,9 @@ def test_unreachable_origin_is_infrastructure(tmp_path):
     _commit_repo(repo)
     _git(repo, "remote", "add", "origin", str(tmp_path / "gone"))
     with pytest.raises(OSError, match="reach origin"):
-        deferred_tests.ensure_test_commit(repo, "b" * 40)
+        deferred_tests.ensure_test_commit(
+            repo, "b" * 40, origin_url=str(tmp_path / "gone"), allowed_protocols=("file",)
+        )
 
 
 def test_reachable_origin_without_commit_still_rejects_candidate(tmp_path):
@@ -156,7 +155,9 @@ def test_reachable_origin_without_commit_still_rejects_candidate(tmp_path):
     _commit_repo(repo)
     _git(repo, "remote", "add", "origin", str(origin))
     with pytest.raises(Rejected) as exc:
-        deferred_tests.ensure_test_commit(repo, "b" * 40)
+        deferred_tests.ensure_test_commit(
+            repo, "b" * 40, origin_url=str(origin), allowed_protocols=("file",)
+        )
     assert exc.value.code == "TEST_COMMIT_UNREADABLE"
 
 
@@ -170,6 +171,18 @@ def test_candidate_controlled_text_cannot_fake_a_disk_failure(tmp_path):
         assert raised.value.code == "TEST_COMMIT_UNREADABLE"
 
 
+def test_bundle_named_like_disk_error_stays_candidate_rejection(tmp_path):
+    repo = tmp_path / "repo"
+    _commit_repo(repo)
+    store_dir = tmp_path / "store"
+    store_dir.mkdir(mode=0o700)
+    bundle = store_dir / "No space left.bundle"
+    bundle.write_bytes(b"not a bundle")
+    with pytest.raises(Rejected) as raised:
+        DeferredStore(store_dir).import_bundle(repo, bundle, tmp_path / "used")
+    assert raised.value.code == "TEST_COMMIT_UNREADABLE"
+
+
 def test_real_storage_exhaustion_is_infrastructure(tmp_path, monkeypatch):
     monkeypatch.setattr(deferred_store, "storage_exhausted", lambda *a: True)
     exc = GitCommandError("git failed")
@@ -181,15 +194,14 @@ def test_real_storage_exhaustion_is_infrastructure(tmp_path, monkeypatch):
 def test_fetch_ok_but_commit_missing_with_disk_words_stays_candidate_rejection(
     tmp_path, monkeypatch
 ):
-    monkeypatch.setattr(gitprobe, "origin_reachable", lambda *a: None)
-    monkeypatch.setattr(deferred_tests, "commit_present", lambda *a: False)
-
-    def fetch(*args, **kwargs):
-        return "No space left on device"
-
-    monkeypatch.setattr(deferred_tests, "run_git", fetch)
+    origin = tmp_path / "origin"
+    _commit_repo(origin)
+    repo = tmp_path / "repo"
+    _commit_repo(repo)
     with pytest.raises(Rejected) as raised:
-        deferred_tests.ensure_test_commit(tmp_path, "a" * 40)
+        deferred_tests.ensure_test_commit(
+            repo, "a" * 40, origin_url=str(origin), allowed_protocols=("file",)
+        )
     assert raised.value.code == "TEST_COMMIT_UNREADABLE"
 
 
@@ -200,18 +212,62 @@ def test_storage_exhausted_probe_sees_full_and_healthy(tmp_path, monkeypatch):
 
 
 def test_fetch_failure_with_exhausted_storage_is_infrastructure(tmp_path, monkeypatch):
-    monkeypatch.setattr(gitprobe, "origin_reachable", lambda *a: None)
-    monkeypatch.setattr(deferred_tests, "commit_present", lambda *a: False)
+    repo = tmp_path / "repo"
+    _commit_repo(repo)
+    monkeypatch.setattr(
+        gitprobe.tempfile, "mkdtemp", lambda **kw: (_ for _ in ()).throw(OSError("disk full"))
+    )
+    with pytest.raises(OSError, match="disk full"):
+        deferred_tests.ensure_test_commit(repo, "a" * 40, origin_url="https://example.invalid/x")
 
-    def fetch(*args, **kwargs):
-        error = GitCommandError("git fetch failed")
-        error.__cause__ = subprocess.CalledProcessError(128, ["git", "fetch"])
-        raise error
 
-    monkeypatch.setattr(deferred_tests, "run_git", fetch)
-    monkeypatch.setattr(gitprobe, "storage_exhausted", lambda *a: True)
-    with pytest.raises(OSError, match="could not run git"):
-        deferred_tests.ensure_test_commit(tmp_path, "a" * 40)
+def test_full_verifier_temp_volume_overrides_missing_ref(tmp_path, monkeypatch):
+    origin, repo = tmp_path / "origin", tmp_path / "repo"
+    _commit_repo(origin)
+    _commit_repo(repo)
+    monkeypatch.setattr(gitprobe.shutil, "disk_usage", lambda _p: type("Usage", (), {"free": 0})())
+    with pytest.raises(OSError, match="storage failure"):
+        deferred_tests.ensure_test_commit(
+            repo, "b" * 40, origin_url=str(origin), allowed_protocols=("file",)
+        )
+
+
+@pytest.mark.parametrize("read_only", [False, True])
+def test_missing_origin_commit_is_unreadable_independent_of_repo_mode(tmp_path, read_only):
+    origin, repo = tmp_path / "origin", tmp_path / "repo"
+    _commit_repo(origin)
+    _commit_repo(repo)
+    if read_only:
+        (repo / ".git").chmod(0o555)
+    try:
+        with pytest.raises(Rejected) as raised:
+            deferred_tests.ensure_test_commit(
+                repo, "b" * 40, origin_url=str(origin), allowed_protocols=("file",)
+            )
+        assert raised.value.code == "TEST_COMMIT_UNREADABLE"
+    finally:
+        if read_only:
+            (repo / ".git").chmod(0o755)
+
+
+def test_present_remote_commit_write_into_read_only_repo_is_infrastructure(tmp_path):
+    origin, repo = tmp_path / "origin", tmp_path / "repo"
+    _commit_repo(origin)
+    (origin / "f").write_text("remote-only")
+    _git(origin, "add", "f")
+    _git(origin, "commit", "-qm", "remote")
+    sha = subprocess.run(
+        ["git", "-C", str(origin), "rev-parse", "HEAD"], check=True, capture_output=True, text=True
+    ).stdout.strip()
+    _commit_repo(repo)
+    (repo / ".git").chmod(0o555)
+    try:
+        with pytest.raises(OSError):
+            deferred_tests.ensure_test_commit(
+                repo, sha, origin_url=str(origin), allowed_protocols=("file",)
+            )
+    finally:
+        (repo / ".git").chmod(0o755)
 
 
 @pytest.mark.parametrize("repo_writable", [True, False])

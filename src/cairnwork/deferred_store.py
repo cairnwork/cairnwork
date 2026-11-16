@@ -121,11 +121,11 @@ class DeferredStore:
                     f"{HEAD_REF}:{HEAD_REF}",
                 )
             except GitCommandError as exc:
-                _raise_store_failure(exc)
+                _raise_store_failure(exc, self.path)
             try:
                 return _only_parent(scratch)
             except GitCommandError as exc:
-                _raise_store_failure(exc)
+                _raise_store_failure(exc, self.path)
 
     def fetch_into(self, repo: Path, sha: str) -> None:
         """Bring the stored commit into repo (the verifier's clone), after the worker."""
@@ -138,7 +138,7 @@ class DeferredStore:
             try:  # the stored bundle is read on the store side first: its failure is ours (#1185)
                 run_git(scratch, "fetch", "--quiet", "--no-tags", str(self.bundle(sha)), HEAD_REF)
             except GitCommandError as exc:
-                _raise_store_failure(exc)
+                _raise_store_failure(exc, self.path)
         try:  # the write into the supplied repo keeps the base classification
             run_git(repo, "fetch", "--quiet", "--no-tags", str(self.bundle(sha)), HEAD_REF)
             if not commit_present(repo, sha):
@@ -162,13 +162,13 @@ class DeferredStore:
                 try:
                     is_commit = run_git(scratch, "cat-file", "-t", sha).strip() == "commit"
                 except GitCommandError as exc:
-                    _raise_store_failure(exc)
+                    _raise_store_failure(exc, self.path)
                 if not is_commit:
                     raise TestCommitRejected("TEST_BUNDLE_SHAPE", "the head is not a commit")
                 try:
                     parent = _only_parent(scratch)
                 except GitCommandError as exc:
-                    _raise_store_failure(exc)
+                    _raise_store_failure(exc, self.path)
                 try:  # the base must already be the mirror's own, not carried by the bundle
                     if not commit_present(repo, parent):
                         raise TestCommitRejected(
@@ -184,8 +184,8 @@ class DeferredStore:
                         run_git(scratch, "bundle", "create", "-q", tmp, HEAD_REF, f"^{parent}")
                     except GitCommandError as exc:
                         if isinstance(exc.__cause__, subprocess.CalledProcessError):
-                            _raise_store_failure(exc)
-                        _raise_git_failure(exc, supplied=True)
+                            _raise_store_failure(exc, self.path)
+                        _raise_git_failure(exc, supplied=True, owned_dirs=(self.path,))
                     os.chmod(tmp, 0o600)  # git replaced the file: set the mode after
                     os.link(tmp, self.bundle(sha))  # fails if one is already stored
                 finally:
@@ -193,7 +193,7 @@ class DeferredStore:
             except FileExistsError:
                 raise TestCommitRejected("TEST_BUNDLE_EXISTS", "already imported") from None
             except GitCommandError as exc:
-                _raise_git_failure(exc, supplied=True)
+                _raise_git_failure(exc, supplied=True, owned_dirs=(self.path,))
         return sha
 
     @staticmethod
@@ -210,7 +210,6 @@ class _Scratch:
 
     def __init__(self, parent: Path, repo: Path | None, *, supplied: bool = False) -> None:
         self.parent, self.repo, self.supplied = parent, repo, supplied
-        _SEEN_DIRS.add(parent)  # only directories the verifier made, never the supplied repo
         self.dir = parent
 
     def __enter__(self) -> Path:
@@ -221,7 +220,7 @@ class _Scratch:
             except GitCommandError as exc:
                 if self.supplied:
                     _raise_git_failure(exc, f"{self.repo}: ")
-                _raise_store_failure(exc)
+                _raise_store_failure(exc, self.parent)
             objects = Path(self.repo, common).resolve() / "objects"
         self.dir = Path(tempfile.mkdtemp(dir=self.parent, prefix=".scratch-"))
         try:
@@ -232,7 +231,7 @@ class _Scratch:
                 (info / "alternates").write_text(f"{objects}\n")
         except GitCommandError as exc:
             shutil.rmtree(self.dir, ignore_errors=True)
-            _raise_store_failure(exc)
+            _raise_store_failure(exc, self.parent)
         except OSError:
             shutil.rmtree(self.dir, ignore_errors=True)
             raise
@@ -249,26 +248,27 @@ def _only_parent(scratch: Path) -> str:
     return fields[1]
 
 
-def _raise_store_failure(exc: GitCommandError) -> NoReturn:
+def _raise_store_failure(exc: GitCommandError, *owned_dirs: Path) -> NoReturn:
     """A git failure on Cairnwork's own storage (a stored bundle, its scratch) is never the
     Issue's fault (#1185): even a completed refusal is an environment error."""
-    if _disk_failure(exc):
+    if _disk_failure(exc, *owned_dirs):
         raise OSError(f"Cairnwork storage failure: {exc}") from exc
     raise OSError(f"Cairnwork could not run git: {exc}") from exc
 
 
-_SEEN_DIRS: set[Path] = set()  # where this process wrote: probed, never git's text (#1298)
-
-
-def _disk_failure(_exc: GitCommandError) -> bool:
-    return storage_exhausted(Path(tempfile.gettempdir()), *_SEEN_DIRS)
+def _disk_failure(_exc: GitCommandError, *owned_dirs: Path) -> bool:
+    return storage_exhausted(Path(tempfile.gettempdir()), *owned_dirs)
 
 
 def _raise_git_failure(
-    exc: GitCommandError, prefix: str = "", *, supplied: bool = False
+    exc: GitCommandError,
+    prefix: str = "",
+    *,
+    supplied: bool = False,
+    owned_dirs: tuple[Path, ...] = (),
 ) -> NoReturn:
     """A completed git refusal is an Issue error; failure to run git is Cairnwork's."""
-    if _disk_failure(exc):
+    if _disk_failure(exc, *owned_dirs):
         raise OSError(f"Cairnwork storage failure: {prefix}{exc}") from exc
     if isinstance(exc.__cause__, subprocess.CalledProcessError):
         raise TestCommitRejected("TEST_COMMIT_UNREADABLE", f"{prefix}{exc}") from exc

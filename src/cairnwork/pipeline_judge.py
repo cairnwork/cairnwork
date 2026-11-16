@@ -112,7 +112,7 @@ def tests_with_teeth(
     (DEFERRED_TESTS_NOT_RUN, #660), and BaseUncomparable when the base cannot tell (#234).
     Callers judging a candidate pass it, so its paths meet the fetched tests (#386)."""
     check_roots_on_base(task.repo, task.base_commit, task.test_roots)  # before any base run
-    ensure_test_commit(task.repo, task.test_commit, task.test_store)
+    ensure_test_commit(task.repo, task.test_commit, task.test_store, origin_url=task.origin_url)
     if candidate is not None:
         _sealing_with_tests(task, ctx, candidate)
     paths, deleted = test_paths(task.repo, task.base_commit, task.test_commit, task.test_roots)

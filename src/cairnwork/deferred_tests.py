@@ -19,7 +19,6 @@ is on no remote, though a public branch could expose it to a worker.
 from __future__ import annotations
 
 import ast
-import subprocess
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -77,7 +76,9 @@ def never_seen(repo: Path, test_commit: str) -> None:
     raise TestCommitRejected("TEST_COMMIT_ALREADY_EXPOSED", "push the tests as a new commit")
 
 
-def ensure_test_commit(repo: Path, test_commit: str, store=None) -> None:
+def ensure_test_commit(
+    repo: Path, test_commit: str, store=None, *, origin_url=None, allowed_protocols=("https", "ssh")
+) -> None:
     """Fetch the test commit into repo only now, after the worker is done: until then
     nothing on this machine holds the tests (the Issue runner reads its parent via the
     GitHub API, or from the private store). With a store (deferred_store.py, Issue #119)
@@ -99,15 +100,9 @@ def ensure_test_commit(repo: Path, test_commit: str, store=None) -> None:
         store.fetch_into(repo, test_commit)
         return
     try:
-        gitprobe.origin_reachable(repo)
-        run_git(repo, "fetch", "--quiet", "--no-tags", "origin", test_commit)
-        if not commit_present(repo, test_commit):
-            raise TestCommitRejected("TEST_COMMIT_UNREADABLE", "origin did not provide it")
-    except GitCommandError as exc:
-        candidate = isinstance(exc.__cause__, subprocess.CalledProcessError)
-        if candidate and not gitprobe.storage_exhausted(repo):
-            raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
-        raise OSError(f"Cairnwork could not run git: {exc}") from exc
+        gitprobe.fetch_to_supplied(repo, origin_url, test_commit, protocols=allowed_protocols)
+    except gitprobe.TestCommitUnavailable as exc:
+        raise TestCommitRejected("TEST_COMMIT_UNREADABLE", "origin did not provide it") from exc
 
 
 def check_roots_on_base(repo: Path, base: str, roots: tuple[str, ...]) -> None:
