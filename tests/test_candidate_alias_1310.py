@@ -8,6 +8,8 @@ from cairnwork.candidate_alias import runtime_shadow_added
     [
         "import gzip, shutil\ngzip.open = shutil.copy\ngzip.open('src.py','deep/foo.py')",
         "import gzip\ngzip.open = helper\ngzip.open('deep/foo.py')",
+        "import gzip\n(gzip.open,) = (handler,)\ngzip.open('deep/foo.py')",
+        "import shutil\n(w := shutil.copy)\nw('src.py','deep/foo.py')",
         "import shutil\n(w,) = (shutil.copy,)\nw('src.py','deep/foo.py')",
         "import shutil\nw: object = shutil.copy\nw('src.py','deep/foo.py')",
         "import gzip as g\ng.open = helper\ng.open('deep/foo.py')",
