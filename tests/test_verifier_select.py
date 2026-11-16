@@ -52,28 +52,111 @@ def test_unknown_account_is_refused() -> None:
         verifier_select.select_account("unknown")
 
 
-def test_parent_component_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def _use_account(monkeypatch: pytest.MonkeyPatch, root: Path) -> None:
+    """Whitelist entry with an EXISTING user (lookup patched) so only the root can refuse."""
     monkeypatch.setitem(
         verifier_select.VERIFIER_ACCOUNTS,
         "cairnwork-verifier2",
-        VerifierAccount(user="other", root=tmp_path / ".." / "outside"),
+        VerifierAccount(user="cairnwork-verifier2", root=root),
     )
+    monkeypatch.setattr(verifier_select.pwd, "getpwnam", lambda _u: object())
+
+
+def _root_shapes(tmp_path: Path) -> dict[str, Path]:
+    real = tmp_path / "real"
+    real.mkdir()
+    (tmp_path / "file").write_text("x")
+    (tmp_path / "lnk").symlink_to(real, target_is_directory=True)
+    (tmp_path / "parentlink").symlink_to(tmp_path, target_is_directory=True)
+    return {
+        "relative": Path("rel/root"),
+        "dotdot": real / ".." / "real",
+        "symlink_root": tmp_path / "lnk",
+        "symlink_parent": tmp_path / "parentlink" / "real",
+        "missing": tmp_path / "missing",
+        "not_a_directory": tmp_path / "file",
+    }
+
+
+def test_good_root_with_existing_user_is_accepted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _root_shapes(tmp_path)
+    _use_account(monkeypatch, tmp_path / "real")
+    assert verifier_select.select_account("cairnwork-verifier2").root == tmp_path / "real"
+
+
+@pytest.mark.parametrize(
+    "shape",
+    ["relative", "dotdot", "symlink_root", "symlink_parent", "missing", "not_a_directory"],
+)
+def test_root_shapes_are_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shape: str
+) -> None:
+    root = _root_shapes(tmp_path)[shape]
+    _use_account(monkeypatch, root)
     with pytest.raises(IntakeRefused, match="BAD_VERIFIER_ACCOUNT"):
+        verifier_select.select_account("cairnwork-verifier2")
+
+
+def test_parent_component_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _use_account(monkeypatch, _root_shapes(tmp_path)["dotdot"])
+    with pytest.raises(IntakeRefused, match="invalid verifier root"):
         verifier_select.select_account("cairnwork-verifier2")
 
 
 def test_symlink_root_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    target = tmp_path / "target"
-    target.mkdir()
-    link = tmp_path / "link"
-    link.symlink_to(target, target_is_directory=True)
+    _use_account(monkeypatch, _root_shapes(tmp_path)["symlink_root"])
+    with pytest.raises(IntakeRefused, match="unsafe verifier root"):
+        verifier_select.select_account("cairnwork-verifier2")
+
+
+def test_unknown_name_never_falls_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _root_shapes(tmp_path)
     monkeypatch.setitem(
         verifier_select.VERIFIER_ACCOUNTS,
-        "cairnwork-verifier2",
-        VerifierAccount(user="other", root=link),
+        "cairnwork-verifier",
+        VerifierAccount(user="cairnwork-verifier", root=tmp_path / "real"),
     )
-    with pytest.raises(IntakeRefused, match="BAD_VERIFIER_ACCOUNT"):
-        verifier_select.select_account("cairnwork-verifier2")
+    monkeypatch.setattr(verifier_select.pwd, "getpwnam", lambda _u: object())
+    for name in ["", "cairnwork-verifier3", "Cairnwork-Verifier2", "cairnwork-verifier2 "]:
+        with pytest.raises(IntakeRefused, match="unknown verifier account"):
+            verifier_select.select_account(name)
+
+
+def test_whitelist_accounts_are_distinct() -> None:
+    accounts = verifier_select.VERIFIER_ACCOUNTS
+    assert accounts["cairnwork-verifier"] == VerifierAccount()
+    first, second = accounts["cairnwork-verifier"], accounts["cairnwork-verifier2"]
+    assert first.user != second.user
+    assert first.root != second.root
+    assert not first.root.is_relative_to(second.root)
+    assert not second.root.is_relative_to(first.root)
+
+
+def test_cli_run_passes_selected_account(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _root_shapes(tmp_path)["symlink_root"].parent / "real"
+    _use_account(monkeypatch, root)
+    state = tmp_path / "state"
+    _config(state)
+    seen: list[Any] = []
+
+    def fake_verify(intake: Any, **_kwargs: Any) -> dict[str, Any]:
+        seen.append(intake)
+        return {"verified": True}
+
+    monkeypatch.setattr(verify_cli, "verify_candidate", fake_verify)
+    code = verify_cli.main(
+        ["--verifier-account", "cairnwork-verifier2", "--state", str(state), "run",
+         "--repo-path", "r", "--base", "a", "--candidate", "b",
+         "--allowed-file", "f", "--verifier", "v"]
+    )  # fmt: skip
+    capsys.readouterr()
+    assert code == 0
+    assert len(seen) == 1
+    assert seen[0].verifier_account() == VerifierAccount(user="cairnwork-verifier2", root=root)
 
 
 def test_nonexistent_user_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
