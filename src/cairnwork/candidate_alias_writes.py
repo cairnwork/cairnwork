@@ -217,11 +217,9 @@ def _imported_openers(tree: ast.Module) -> frozenset[str]:
         for alias in node.names
         if alias.name == "open"
     }
-    other_openers = _imported_names(tree, names, (_MODULES | {"shelve", "dbm"}) - {"os"})
-    exclusive_os_openers = os_open_aliases - other_openers
     return (
         imported
-        | {_OS_OPEN_PREFIX + name for name in exclusive_os_openers}
+        | {_OS_OPEN_PREFIX + name for name in os_open_aliases}
         | ({_UNBOUND_OPEN} if not _module_binds_name(tree, "open") else set())
     )
 
@@ -284,6 +282,24 @@ def _has_only_import_binding(
     )
 
 
+_WRITER_REFS = _WRITE_ATTRS | {"open", "FileIO", "write", "writelines", "writestr"}
+
+
+def _is_writer_reference(node: ast.AST) -> bool:
+    """An attribute or name that is a file writer, used as a value rather than called."""
+    if isinstance(node, ast.Attribute):
+        return node.attr in _WRITER_REFS
+    return isinstance(node, ast.Name) and node.id in _DIRECT_WRITERS
+
+
+def _is_writer_assign(node: ast.AST) -> bool:
+    """``w = shutil.copy`` or ``gzip.open = shutil.copy``: a writer rebound where the call
+    detector cannot follow it. Refused conservatively (only ever adds a refusal)."""
+    if not isinstance(node, ast.Assign):
+        return False
+    return _is_writer_reference(node.value) or any(_is_writer_reference(t) for t in node.targets)
+
+
 def _is_write_statement(
     node: ast.AST,
     openers: frozenset[str],
@@ -293,7 +309,10 @@ def _is_write_statement(
     flag_openers: frozenset[str],
 ) -> bool:
     return any(
-        isinstance(part, ast.Call)
-        and _is_write_call(part, openers, writers, modules, fileios, flag_openers)
+        _is_writer_assign(part)
+        or (
+            isinstance(part, ast.Call)
+            and _is_write_call(part, openers, writers, modules, fileios, flag_openers)
+        )
         for part in ast.walk(node)
     )
