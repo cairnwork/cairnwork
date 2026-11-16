@@ -255,18 +255,27 @@ def _halt(guard: _SizeGuard | None, proc, window: Window) -> None:
 def _stop(proc) -> None:
     if proc is None:
         return
-    if proc.poll() is None:
-        control = getattr(proc, "stdin", None)
-        if control is not None and not control.closed:
-            control.close()  # EOF asks the watchdog to stop and reap log stream.
-        else:  # small test doubles and a broken control pipe retain the old stop path
-            proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-    _end_group(proc)
+    close_error = None
+    try:
+        if proc.poll() is None:
+            control = getattr(proc, "stdin", None)
+            try:
+                if control is not None and not control.closed:
+                    control.close()  # EOF asks the watchdog to stop and reap log stream.
+                else:  # small test doubles and a broken control pipe retain the old stop path
+                    proc.terminate()
+            except OSError as exc:  # #1363: still stop and end the group, then report it
+                close_error = exc
+                proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+    finally:
+        _end_group(proc)
+    if close_error is not None:
+        raise close_error
 
 
 def _end_group(proc) -> None:
