@@ -29,6 +29,7 @@ import re
 from pathlib import Path
 from posixpath import dirname, join
 
+from cairnwork.conftest_test_imports import _test_named_imports
 from cairnwork.deferred_overlay import TestCommitRejected
 from cairnwork.fixture_forms import (
     CODE,
@@ -194,40 +195,23 @@ def _test_bound_helpers(
         defs = {
             n.name: n for n in tree.body if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)
         }
+        closure = None
         for orig in wanted[file]:
-            names |= _params(defs[orig]) if orig in defs else requested(tree)
+            if orig == "*":  # a star import brings the module's test-named functions
+                names |= {x for n, d in defs.items() if n.startswith("test") for x in _params(d)}
+            elif orig in defs:
+                names |= _params(defs[orig])
+            else:  # a re-export: every parameter in the module and in what it imports
+                if closure is None:
+                    more = _imported(repo, listing, {file: tree}, index)
+                    closure = [tree, *more.values()]
+                names |= set().union(*(requested(t) for t in closure))
     return names
 
 
 def _params(node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
     a = node.args
     return {x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs, a.vararg, a.kwarg) if x}
-
-
-def _test_named_imports(file: str, tree: ast.Module) -> list[tuple[str, str]]:
-    """(module, name) of each ``from module import name`` that ends up under a name starting
-    with ``test``: directly (``as test_x``) or through ``test_x = alias`` at module level."""
-    imports: dict[str, tuple[str, str]] = {}
-    out: list[tuple[str, str]] = []
-    for node in tree.body:
-        if isinstance(node, ast.ImportFrom):
-            up = dirname(file)
-            for _ in range(max(node.level - 1, 0)):
-                up = dirname(up)
-            head = ".".join(filter(None, [*(up.split("/") if node.level else ()), node.module]))
-            for a in node.names:
-                imports[a.asname or a.name] = (head, a.name)
-                if (a.asname or a.name).startswith("test"):
-                    out.append((head, a.name))
-        elif isinstance(node, ast.Assign) and any(  # a tuple value: every imported name in it
-            isinstance(n, ast.Name) and n.id.startswith("test")
-            for t in node.targets for n in ast.walk(t)
-        ):  # fmt: skip
-            val = node.value
-            parts = val.elts if isinstance(val, ast.Tuple | ast.List) else [val]
-            used = {n.id for n in parts if isinstance(n, ast.Name)}
-            out += [imports[u] for u in sorted(used) if u in imports]
-    return out
 
 
 def _listing(repo: Path, base: str) -> dict[str, str]:

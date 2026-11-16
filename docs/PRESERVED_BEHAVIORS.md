@@ -162,3 +162,5 @@ S3（同一段，`collect_missing_submodules`）：檔案開頭 `import pkg.newm
 ## 延後測試：base 跑過的測試在候選上都要跑到（#1034）
 
 有延後測試時，同一個 verifier 在 base 執行（base 程式＋延後測試）的 guard 紀錄裡的每個完整 node id，候選的驗證執行都要有，否則 `NAMED_TESTS_NOT_RUN`、不送 Core（`tests/test_named_nodes.py`）。接受的誤擋：id 由被測程式產生而正確修正改變了它，或 id 含每次執行會變的內容（執行目錄的絕對路徑、時間、亂數），都會被拒，原因列出這些 id。刻意留下的殘餘：(1) 收集時的程式保留同一個 id、卻換掉 `item.obj` 或參數，id 比對看不出來；(2) #796 檔（檔案開頭 import 修正才有的名字）在 base 沒有逐案例紀錄，只以函式為單位；(3) 沒有延後測試的 verify 沒有 base 執行可比。
+
+測試模組以測試名字綁定 helper 時（#987，`conftest_names`），conftest 新 fixture 名不得取 helper 的參數名；刻意留下的殘餘（只列類別）：(1) 星號匯入只讀被匯入模組裡 `test*` 開頭的函式，星號再匯出星號不追；(2) 以 `setattr`、`globals()`、`importlib` 在執行時綁定的名字不讀；(3) 模組層以外（函式或類別內）的綁定不讀。以上都只是縮小、不放過 main 已擋的。
