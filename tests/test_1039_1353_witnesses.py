@@ -25,6 +25,7 @@ def _load(name, *, register=True):
 
 probe = _load("_w1353_probe")
 extra = _load("_w1353_extra", register=False)
+_literal_observations = _load("_w1353_guard", register=False)._literal_observations
 _NO_SANDBOX_BASE = probe._NO_SANDBOX_BASE
 _ACCOUNT_GAP = probe._ACCOUNT_GAP
 
@@ -118,7 +119,7 @@ def test_observed_values_are_recomputed_from_raw_route_returns():
         assert item["observed"] == derived
         assert isinstance(item["matches_spec"], bool)
     sources = list(Path(__file__).parent.glob("_w1353_*.py"))
-    assert all(not _literal_observations(path.read_text()) for path in sources)
+    assert all(not _scan(path) for path in sources)
     tree = ast.parse(Path(__file__).read_text())
     assert not any(
         isinstance(n, ast.Call)
@@ -130,83 +131,8 @@ def test_observed_values_are_recomputed_from_raw_route_returns():
     )
 
 
-def _literal_observations(source):
-    tree = ast.parse(source)
-
-    def literal_tree(node):
-        return isinstance(node, ast.Constant) or (
-            isinstance(node, (ast.List, ast.Tuple))
-            and all(literal_tree(item) for item in node.elts)
-        )
-
-    def allowed(node):
-        if isinstance(node, ast.Call):
-            if (
-                isinstance(node.func, ast.Attribute)
-                and node.func.attr == "join"
-                and isinstance(node.func.value, ast.Constant)
-                and node.args
-                and literal_tree(node.args[0])
-            ):
-                return False
-            return True
-        if isinstance(node, (ast.Attribute, ast.Subscript)):
-            return True
-        return (
-            isinstance(node, ast.Name)
-            and bool(bindings.get(node.id))
-            and all(
-                isinstance(value, (ast.Call, ast.Attribute, ast.Subscript))
-                for value in bindings[node.id]
-            )
-        )
-
-    bindings = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            targets = node.targets
-        elif isinstance(node, (ast.AnnAssign, ast.NamedExpr, ast.AugAssign)):
-            targets = [node.target]
-        else:
-            continue
-        for target in targets:
-            for name in ast.walk(target):
-                if isinstance(name, ast.Name):
-                    bindings.setdefault(name.id, []).append(node.value)
-
-    row_names = {"row"}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom):
-            row_names.update(
-                alias.asname or alias.name
-                for alias in node.names
-                if node.module == "_w1353_probe" and alias.name == "row"
-            )
-
-    flagged = []
-    for node in ast.walk(tree):
-        is_row_call = isinstance(node, ast.Call) and (
-            (isinstance(node.func, ast.Name) and node.func.id in row_names)
-            or (isinstance(node.func, ast.Attribute) and node.func.attr == "row")
-        )
-        if is_row_call and isinstance(node, ast.Call):
-            raw = (
-                node.args[3]
-                if len(node.args) > 3
-                else next((kw.value for kw in node.keywords if kw.arg == "raw"), None)
-            )
-            if raw is None or not allowed(raw):
-                flagged.append(node.lineno)
-        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            if any(
-                isinstance(name, ast.Name) and name.id == "observed"
-                for target in targets
-                for name in ast.walk(target)
-            ):
-                if not allowed(node.value):
-                    flagged.append(node.lineno)
-    return flagged
+def _scan(path):
+    return _literal_observations(path.read_text(), probe=path.name == "_w1353_probe.py")
 
 
 @pytest.mark.parametrize(
@@ -223,6 +149,35 @@ def _literal_observations(source):
         'observed = "VER" + "IFIED"',
         'row("C9", "timeout", "...", "blackbox:add: VERIFICATION_INCOMPLETE: TIMEOUT", "x", "y")',
         'observed = "PASS"',
+        'row("C9","t","r",str("PASS"),"x","y")',
+        'row("C9","t","r",{"s":"PASS"}["s"],"x","y")',
+        'row("C9","t","r",dict(status="PASS"),"x","y")',
+        'import consts\nrow("C9","t","r",consts.PASS,"x","y")',
+        'R = str("PASS")\nrow("C9","t","r",R,"x","y")',
+        'row("C9","t","r",(lambda: "PASS")(),"x","y")',
+        (
+            "from types import SimpleNamespace\n"
+            'row("C9","t","r",SimpleNamespace(status="PASS"),"x","y")'
+        ),
+        'rec = row\nrec("C9","t","r","PASS","x","y")',
+        'getattr(probe, "row")("C9","t","r","PASS","x","y")',
+        'rows.append({"class_id": "C9", "observed": "PASS"})',
+        'item["observed"] = "PASS"',
+        'out = SimpleNamespace(observed="PASS")',
+        'def verify():\n    return "PASS"\nrow("C9","t","r",verify(),"x","y")',
+        'def check():\n    return "PASS"\nrow("C9","t","r",check(),"x","y")',
+        'def f(v):\n    return row("C9","t","r",v,"x","y")',
+        'from cairnwork.text import strip\nrow("C9","t","r",strip("PASS"),"x","y")',
+        'from cairnwork import text\nrow("C9","t","r",text.strip("PASS"),"x","y")',
+        (
+            "try:\n"
+            "    f()\n"
+            "except ValueError as exc:\n"
+            "    r = exc.args[0]\n"
+            'row("C9","t","r",r,"x","y")'
+        ),
+        'def row(*a):\n    return {"observed": observed}\n',
+        'from cairnwork import verify_cli\nrow("C9","t","r",verify_cli._run,"x","y")',
     ],
 )
 def test_literal_observation_checker_rejects_constant_raw_values(source):
@@ -232,9 +187,32 @@ def test_literal_observation_checker_rejects_constant_raw_values(source):
 @pytest.mark.parametrize(
     "source",
     [
-        'row("C9", "t", route(), result(), "x", "y")',
-        'row("C8", name, "verify_bundle", check(path), wanted, "REFUSED")',
-        'row("C6", "x", "judge", verdict.reason, "PASS", "y")',
+        (
+            "from cairnwork import blackbox_judge\n"
+            "(verdict,) = blackbox_judge.judge_run(a, b, c)\n"
+            'row("C6","x","judge",verdict.reason,"PASS","y")'
+        ),
+        (
+            "from _w1353_probe import verify\n"
+            "result = verify(1,2,3,4)\n"
+            'status = result.get("status", result.get("error", "FAILED"))\n'
+            'row("C9","t","r",status,"x","y")'
+        ),
+        (
+            "from cairnwork_attest.verify import verify_bundle\n"
+            "def check(path):\n"
+            "    return verify_bundle(path)\n"
+            'row("C8","n","verify_bundle",check(p),"w","REFUSED")'
+        ),
+        (
+            "from cairnwork.pipeline import TaskRejected\n"
+            "from cairnwork import verify_cli\n"
+            "try:\n"
+            "    raw_result = verify_cli._run(a, b)\n"
+            "except TaskRejected as exc:\n"
+            "    raw_result = exc.code\n"
+            'row("C7","a","r",raw_result,"x","y")'
+        ),
     ],
 )
 def test_literal_observation_checker_allows_route_derived_raw_values(source):
@@ -243,7 +221,13 @@ def test_literal_observation_checker_allows_route_derived_raw_values(source):
 
 def test_literal_observation_checker_accepts_current_probe_call_sites():
     sources = Path(__file__).parent.glob("_w1353_*.py")
-    assert all(not _literal_observations(path.read_text()) for path in sources)
+    assert all(not _scan(path) for path in sources)
+
+
+def test_literal_observation_checker_mutation_control():
+    assert not _literal_observations(
+        'row("C9","t","r",str("PASS"),"x","y")', route_predicate=lambda node: True
+    )
 
 
 @pytest.mark.parametrize(
