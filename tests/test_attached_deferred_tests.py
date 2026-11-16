@@ -280,6 +280,14 @@ def test_an_imported_class_decorator_is_the_known_limit(project):
     assert _new_tests(project, {F: REGRESSION + body}) == {f"{F}::test_regression"}
 
 
+def test_an_import_time_call_the_reader_cannot_classify_is_the_known_limit(project):
+    """#1007: a call to imported code at import is not followed and refuses nothing (measured
+    false-refusal cost too high to fail closed). Pinned so a change here is a decision."""
+    body = "import helpers\nhelpers.run()\n" + CLS
+    commit_change(project, {F: "from calc import add\n" + body})
+    assert _new_tests(project, {F: REGRESSION + body}) == {f"{F}::test_regression"}
+
+
 def test_an_unparsable_file_with_an_attached_test_is_never_read_as_empty(project):
     with pytest.raises(Rejected) as err:
         _new_tests(project, {F: REGRESSION + ATTACHED["attribute"][1] + "def broken(:\n"})

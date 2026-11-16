@@ -21,7 +21,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from cairnwork.deferred_tests import _test_functions, _tree
-from cairnwork.node_ids import mask_paths, unmatched_note
+from cairnwork.node_ids import mask_paths, unmatched_note, without_case
 from cairnwork.verifiers import VerifierRun
 
 
@@ -71,7 +71,7 @@ def _skeleton(repo: Path, blob: str) -> list[str]:
 
 
 def _function(nodeid: str) -> str:
-    return nodeid.split("[", 1)[0]
+    return without_case(nodeid, all_parts=True)
 
 
 def passing_targets(

@@ -234,6 +234,15 @@ LITERAL_PLUGINS = [
     'pytest_plugins = ["x"] + PLUGINS\n',  # the literal half of a partly unread value
     'pytest_plugins = ["x"] * 1\n',  # a literal under another operator
     '(pytest_plugins := ["x"])\n',  # an assignment expression binds it too (#1027)
+    'for pytest_plugins in (["x"],):\n    pass\n',  # #1010 loop target
+    'for _k, pytest_plugins in [(1, ["x"])]:\n    pass\n',
+    'async def _f():\n    async for pytest_plugins in (["x"],):\n        pass\n',
+    'from contextlib import nullcontext\nwith nullcontext(["x"]) as pytest_plugins:\n    pass\n',
+    'import contextlib\nwith contextlib.nullcontext(["x"]) as pytest_plugins:\n    pass\n',
+    'match ["x"]:\n    case pytest_plugins:\n        pass\n',
+    'match ["x"]:\n    case [*pytest_plugins]:\n        pass\n',
+    'match {"a": "x"}:\n    case {**pytest_plugins}:\n        pass\n',
+    'match v:\n    case ["x"] as pytest_plugins:\n        pass\n',
 ]
 UNREAD_PLUGINS = [
     'pytest_plugins = ["x"] if FLAG else []\n',
@@ -242,6 +251,8 @@ UNREAD_PLUGINS = [
     'pytest_plugins = list(("x",))\n',
     'pytest_plugins = [f"{NAME}"]\n',
     "(pytest_plugins := PLUGINS)\n",  # #1027
+    "for pytest_plugins in PLUGINS:\n    pass\n",
+    "match PLUGINS:\n    case pytest_plugins:\n        pass\n",
     "pytest_plugins = []\npytest_plugins.append(NAME)\n",
     'import sys\nsetattr(sys.modules[__name__], "pytest_plugins", P)\n',
     'globals()["pytest_plugins"] = P\n',
@@ -266,6 +277,85 @@ def test_a_pytest_plugins_value_it_cannot_read_does_not_refuse_the_new_test_file
     assert _reach(text, new, ["tests/test_new.py"]) == ""
 
 
+def test_unverified_with_context_manager_fails_closed():
+    """Unverified with-bindings of pytest_plugins fail closed in conftest_reach (#1010)."""
+    for text in (
+        "with ctx(PLUGINS) as pytest_plugins:\n    pass\n",
+        'with ctx(["x"]) as pytest_plugins:\n    pass\n',
+        'async def _f():\n    async with a(["x"]) as pytest_plugins:\n        pass\n',
+        (
+            "from contextlib import nullcontext\nnullcontext = ctx\n"
+            'with nullcontext(["x"]) as pytest_plugins:\n    pass\n'
+        ),
+    ):
+        assert _reach(text, TWO, ["tests/x.py"]) != ""
+    local_ctx = {**TWO, "tests/contextlib.py": ""}
+    nc = (
+        'from contextlib import nullcontext\nwith nullcontext(["x"]) as pytest_plugins:\n    pass\n'
+    )
+    assert _reach(nc, local_ctx, ["tests/x.py"]) != ""
+    tree = {"tests/safe.py": "", "tests/evil.py": ""}
+    cm_evil = (
+        "from contextlib import nullcontext\nclass CM:\n"
+        "    def __enter__(self): return ['evil']\n    def __exit__(self, *a): return False\n"
+        "with nullcontext(['safe']) as _s, CM() as pytest_plugins:\n    pass\n"
+    )
+    assert _reach(cm_evil, tree, ["tests/evil.py"]) != ""
+    shadow_cm = (
+        "from contextlib import nullcontext\nclass CM:\n"
+        "    def __enter__(self): return ['evil']\n    def __exit__(self, *a): return False\n"
+        "nullcontext = CM\nwith nullcontext(['safe']) as pytest_plugins:\n    pass\n"
+    )
+    assert _reach(shadow_cm, tree, ["tests/evil.py"]) != ""
+    safe_only = (
+        "from contextlib import nullcontext\n"
+        "with nullcontext(['safe']) as pytest_plugins:\n    pass\n"
+    )
+    assert _reach(safe_only, tree, ["tests/evil.py"]) == ""
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "from contextlib import nullcontext\nfrom helpers import *\n"
+        "with nullcontext(['safe']) as pytest_plugins:\n    pass\n",
+        "from contextlib import nullcontext\nfrom helpers import nullcontext\n"
+        "with nullcontext(['safe']) as pytest_plugins:\n    pass\n",
+        "import contextlib\nimport helpers as contextlib\n"
+        "with contextlib.nullcontext(['safe']) as pytest_plugins:\n    pass\n",
+        "from contextlib import nullcontext\ndef _g():\n    global nullcontext\n"
+        "    from helpers import nullcontext\n_g()\n"
+        "with nullcontext(['safe']) as pytest_plugins:\n    pass\n",
+        "from helpers import nullcontext\n"
+        "with nullcontext(['safe']) as pytest_plugins:\n    pass\n",
+        "from contextlib import nullcontext\nclass nullcontext:\n"
+        "    def __init__(self, x): pass\n    def __enter__(self): return ['evil']\n"
+        "    def __exit__(self, *a): return False\n"
+        "with nullcontext(['safe']) as pytest_plugins:\n    pass\n",
+    ],
+)
+def test_shadowed_or_foreign_nullcontext_with_binding_refuses(text):
+    """#1010: shadowed, starred, or non-contextlib nullcontext must fail closed in reach."""
+    tree = {"tests/safe.py": "", "tests/evil.py": "", "tests/helpers.py": ""}
+    assert _reach(text, tree, ["tests/evil.py"]) != ""
+    for local in ("tests/contextlib.py", "tests/sub/contextlib.py"):
+        local_tree = {"tests/safe.py": "", "tests/evil.py": "", local: ""}
+        for nc in (
+            "from contextlib import nullcontext\n"
+            "with nullcontext(['safe']) as pytest_plugins:\n    pass\n",
+            "import contextlib\n"
+            "with contextlib.nullcontext(['safe']) as pytest_plugins:\n    pass\n",
+        ):
+            assert _reach(nc, local_tree, ["tests/evil.py"]) != ""
+    for ok in (
+        "from contextlib import nullcontext\n"
+        "with nullcontext(['safe']) as pytest_plugins:\n    pass\n",
+        "import contextlib as c\nwith c.nullcontext(['safe']) as pytest_plugins:\n    pass\n",
+        "import os\nwith open(os.devnull) as _fh:\n    pass\npytest_plugins = ['safe']\n",
+    ):
+        assert _reach(ok, {"tests/safe.py": "", "tests/evil.py": ""}, ["tests/evil.py"]) == ""
+
+
 def test_the_parts_of_a_joined_plugin_name_are_not_plugins():
     """#1018 r2: pytest loads only the joined name, so a module named like one part is no hit."""
     tree = {"tests/x.py": "", "tests/te.py": ""}
@@ -281,6 +371,19 @@ def test_a_long_joined_plugin_name_does_not_raise():
 
 def test_append_on_another_name_does_not_add_a_pytest_plugin():
     assert _reach('other.append("x")\n', {"tests/x.py": ""}, ["tests/x.py"]) == ""
+
+
+@pytest.mark.parametrize(
+    ("text", "target"),
+    [
+        ('for other in (["x"],):\n    pass\n', "tests/x.py"),
+        ('with c(["x"]) as other:\n    pass\n', "tests/x.py"),
+        ('match ["x"]:\n    case other:\n        pass\n', "tests/x.py"),
+        ('match d:\n    case {"y": pytest_plugins}:\n        pass\n', "tests/y.py"),
+    ],
+)
+def test_other_loop_with_or_match_does_not_add_a_pytest_plugin(text, target):
+    assert _reach(text, {target: ""}, [target]) == ""
 
 
 def test_the_cap_is_exact(monkeypatch):

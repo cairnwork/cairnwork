@@ -97,6 +97,21 @@ conftest 匯入的模組在每個測試之前執行，可以改掉 runner 回報
 限制：樣本是 repo 自己的開發 commit（原始碼與測試一起改），不是任務的測試 commit；純測試 commit 只有 54 個。tests/ 外模組的高比例反映的是「原始碼和測試一起改」，在任務的測試 commit 裡本來就不該出現。
 建議（本張不實作）：不做「變更任何被 base 測試匯入的模組就拒」的全拒規則（誤拒共用 helper 更新）。若要收緊，只加一條針對 tests/ 外模組的規則：測試 commit 不得改 tests/ 以外、被 base 測試檔匯入的 `.py`（任務的測試 commit 本來只該動測試樹），tests/ 內 helper 維持現狀接受。上線前先用真實任務測試 commit 量誤拒率。
 
+## 已知取捨：import 時其他動態寫入測試命名空間不擋（#1007，接 #994）
+
+延後測試的 AST 讀取（`src/cairnwork/deferred_attached.py`）只認得能靜態讀出的寫入形式（#994）。剩下讀不到的寫入，按類別列出，處置都是「不擋、列為已知限制」：
+
+- 透過別的名字取得的 `setattr` 類呼叫（呼叫者的名字無法回溯到內建）；
+- 以字串形式執行的程式碼；
+- 其他模組的程式在 import 時替測試命名空間加測試（匯入的類別裝飾器、metaclass、基底，或 import 時被呼叫的匯入函式；見 #968 (b)）；
+- 只為副作用而 import、之後不再使用的模組。
+
+為什麼不做失敗關閉：#1007 要求先量測誤拒。量測（2026-11-16，Nexus-new 與 cairnwork 的 2441 個 `test_*.py`，import 時才執行的位置）：含「呼叫者不是名字或屬性」或字串執行／動態取屬性類呼叫的檔案 33 個（1.35%）；含任何非內建、非同檔、非 pytest 的 import 時呼叫的檔案 700 個（28.7%）。前者不是 0，後者過半以上會是日常寫法，兩者擋下都會誤拒真實測試檔（含只改一行測試的 commit），所以這一輪不新增拒絕。只收緊的原則不變：main 已擋的形式一個都不放。
+
+代價：這幾類形式新增的測試，target 只點名看得見的測試時，可能得到 VERIFIED。需要更窄的規則並重新量測，才能改成擋。
+
+照實鎖定的測試：`tests/test_attached_deferred_tests.py::test_an_import_time_call_the_reader_cannot_classify_is_the_known_limit`（只釘類別，不含可重現寫法），以及同檔 `test_an_imported_class_decorator_is_the_known_limit`。
+
 ## 不帶過去的
 
 依 Nexus-new 的缺陷分流，以下判定為死碼、沒有負責人或只是操作 CLI，不列入：RULE-004、RULE-199、RULE-219、RULE-220、RULE-252。
@@ -176,3 +191,26 @@ S3（同一段，`collect_missing_submodules`）：檔案開頭 `import pkg.newm
 ## 延後測試：base 跑過的測試在候選上都要跑到（#1034）
 
 有延後測試時，同一個 verifier 在 base 執行（base 程式＋延後測試）的 guard 紀錄裡的每個完整 node id，候選的驗證執行都要有，否則 `NAMED_TESTS_NOT_RUN`、不送 Core（`tests/test_named_nodes.py`）。接受的誤擋：id 由被測程式產生而正確修正改變了它，或 id 含每次執行會變的內容（執行目錄的絕對路徑、時間、亂數），都會被拒，原因列出這些 id。刻意留下的殘餘：(1) 收集時的程式保留同一個 id、卻換掉 `item.obj` 或參數，id 比對看不出來；(2) #796 檔（檔案開頭 import 修正才有的名字）在 base 沒有逐案例紀錄，只以函式為單位；(3) 沒有延後測試的 verify 沒有 base 執行可比。
+
+## 改了 package 的 `__init__.py` 時的兩個誤拒（#866，承 #790／#840）
+
+這兩個拒絕是**故意的防護，但目前也誤拒合理修正**（P2 誤拒，不會放行錯誤候選）。原因相同：候選改了直接位於測試根之上的 `pkg/__init__.py`，內容就不可信，它能在 import 時改 `sys.path`，把 `pkg` 放到最前面（已用 pytest 實跑確認：`pkg/colorsys.py` 取代標準庫）。所以 `sealed_packages` 對有被碰的 `__init__` 的套件不再「封住」，同層名稱規則重新生效。
+
+- **A 同層模組與標準庫同名**（`verifier_spec.py`：`protected_verifier_inputs` 把沒封住的 `pkg` 當 import 根，`_safe_root_modules` 的名稱規則；`_risky_above_roots` 是第二道，兩道各自擋得住）：改了 `pkg/__init__.py` 的候選，若也改 `pkg/json.py` 這類與標準庫（或 base 其他入口）同名的檔，回 `PROTECTED_VERIFIER_INPUT`。防的是：改過的 `__init__` 把 `pkg` 插到最前，同名檔取代測試實際 import 的標準庫模組。目前**沒有**只放行「`__init__` 內容不動 `sys.path`」的證據機制，所以整類保留拒絕。狀態：故意防護；若要收窄，需要先證明 `__init__` 不會編輯 `sys.path`（`may_edit_sys_path` 只看 base／測試 commit，不看候選的新內容），不能直接放寬名稱規則。
+- **B 刪一個檔並改 `__init__.py`**：允許刪除時，`pkg/__init__.py` 受保護（可能被刪成讓 pytest 改插入 `pkg`，同 #360）；關閉刪除時，`workspace.py` `collect_candidate` 對刪除回 `DELETION_FORBIDDEN`（#12、#13 的刪除檢查，任務沒有宣告允許刪除就不能刪）。兩個閘各自成立，合起來使「刪檔＋改 `__init__`」無解。狀態：每個閘本身是故意防護；**兩者組合造成的誤拒待收窄**（可行的最小做法見設計說明：允許刪除時，只在候選沒有刪除 `__init__` 本身、且 `__init__` 通過 sys.path 檢查時放行修改）。目前不改行為。
+
+驗收測試：`tests/test_init_change_pins_866.py` 釘住現行拒絕；它失敗就表示這兩個拒絕被放寬了，要走 #866 的設計與審查，不是順手改。
+
+## 延後測試的資料檔：不自動推斷「沒被 import」（#850）
+
+test commit 新增的非測試 `.py`（範例樹、lint fixture、故意不能 import 的檔）要整檔列為 verifier target，但列了就讓 pytest 在收集時中止。現行答案是**作者宣告**，不是自動推斷：test commit 訊息最後一段寫 `Cairnwork-Data: <path> ...`（接收端 #950：收據帶 `data_paths`、`data_rule: exec-refuse-v1`，收據仍綁該檔 hash；執行期 #959：`data_exec_hook` 設計上拒絕在行程內 import、runpy、exec／eval 或 Popen 該路徑，鎖存後讓整次執行失敗；**目前尚未接進真實 verifier 執行**：`verifiers.py` 的 `_prepare_run` 沒傳 `data_paths`，`report_guard.py` 只在有 `data_paths` 時才安裝 hook，所以今天沒有任何真實執行會裝它，接線屬下方的 producer 接線）。`allow_data_paths` 預設關，機密接收端一律拒絕。
+
+**決定：不做「沒有測試 import 它就只綁 hash」的自動推斷。** 「沒人 import」是執行期行為，靜態讀取只看得到字面 import，看不到的載入方式會讓真的跑進 verifier 的檔只被綁 hash（放行方向的錯誤）。保留拒絕的三個壞候選：
+
+1. **conftest／外掛載入**：`conftest.py` 或測試檔有 `pytest_plugins = ["tests.fixtures.shim"]`，`shim.py` 不是測試檔名、沒有 import 語句，收集時被載入並可註冊把所有測試標為通過的 hook（#1242 同族）。
+2. **字串組出的模組名**：`importlib.import_module("tests.fixtures." + name)`、`__import__(f"fx_{kind}")`、`runpy.run_path(.../"gen.py")`，目標檔名沒有字面出現，執行時卻會跑並能改掉 `pytest`、`socket` 或被測程式。
+3. **同層 sys.path import、`exec(open(p).read())`、`-p`／`PYTHONPATH`／zip**：模組名不能不重放 pytest 的 import 模式就對回路徑，名稱比對不是過度比對（無害拒絕）就是漏比對（#967 殘餘）。
+
+宣告設計對這三者的答案（hook 接線後）：被宣告的檔若在執行期以自己的名字被載入，`DataExecRefused` 會讓該次執行失敗（base 跑變 `UNCOMPARABLE DATA_EXEC_REFUSED`，不算有牙齒）。殘餘（以別名執行檔案文字、C 層 eval）需要有意作弊的作者，屬 #843 的信任模型（test commit 作者本來就持有判定權），不是 worker 繞過。`Cairnwork-Data` 是作者宣告，exec hook 抓的是意外，不是惡意作者。
+
+尚未做：producer 端接線。`module_plugins.py` 讀 `declared_data`（只用來擋改動模組的外掛），但 producer 還沒有用宣告來放寬 untargeted 規則（`deferred_tests.py` 242-245 行），也沒有把 `data_paths` 傳給 `_prepare_run`／`install_plugin`，所以用 trailer 的 test commit 接收端放行、producer 端仍回 `DEFERRED_TESTS_NOT_TARGETED`，exec hook 也不會在真實執行裡啟動。該接線會放寬 untargeted 拒絕，需先有獨立 spec 與跨家設計審查，另開 Design Issue（#1334）追蹤；在那之前本條目是現行行為與設計意圖的說明，不是已生效的防護。

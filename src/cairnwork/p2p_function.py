@@ -1,11 +1,14 @@
 """Helpers for interpreting pytest node ids in P2P collection."""
 
+from cairnwork.node_ids import locate
+
 
 def _without_case(nodeid: str, *, all_parts: bool = False) -> str:
     """Remove case suffixes while preserving bracketed paths and nested node boundaries."""
-    path, separator, test_id = nodeid.partition("::")
-    if not separator:
-        return nodeid
+    located = locate(nodeid)
+    if located is None:
+        return nodeid  # a bare name or file path is returned whole
+    path, test_id = located
     parts = []
     start = depth = 0
     index = 0
