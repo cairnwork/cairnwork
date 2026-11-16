@@ -83,6 +83,21 @@ conftest 匯入的模組在每個測試之前執行，可以改掉 runner 回報
 
 照實鎖定的測試：`tests/test_conftest_reach.py`（各種匯入寫法、原生擴充、名稱索引），`tests/test_deferred_conftest.py` 的全流程真 Seatbelt 情境、`test_a_changed_archive_a_conftest_or_the_configuration_names_is_refused`、`test_an_unchanged_conftest_that_does_not_parse_is_read_by_its_names`。
 
+## 已知取捨：import 時其他動態寫入測試命名空間不擋（#1007，接 #994）
+
+延後測試的 AST 讀取（`src/cairnwork/deferred_attached.py`）只認得能靜態讀出的寫入形式（#994）。剩下讀不到的寫入，按類別列出，處置都是「不擋、列為已知限制」：
+
+- 透過別的名字取得的 `setattr` 類呼叫（呼叫者的名字無法回溯到內建）；
+- 以字串形式執行的程式碼；
+- 其他模組的程式在 import 時替測試命名空間加測試（匯入的類別裝飾器、metaclass、基底，或 import 時被呼叫的匯入函式；見 #968 (b)）；
+- 只為副作用而 import、之後不再使用的模組。
+
+為什麼不做失敗關閉：#1007 要求先量測誤拒。量測（2026-11-16，Nexus-new 與 cairnwork 的 2441 個 `test_*.py`，import 時才執行的位置）：含「呼叫者不是名字或屬性」或字串執行／動態取屬性類呼叫的檔案 33 個（1.35%）；含任何非內建、非同檔、非 pytest 的 import 時呼叫的檔案 700 個（28.7%）。前者不是 0，後者過半以上會是日常寫法，兩者擋下都會誤拒真實測試檔（含只改一行測試的 commit），所以這一輪不新增拒絕。只收緊的原則不變：main 已擋的形式一個都不放。
+
+代價：這幾類形式新增的測試，target 只點名看得見的測試時，可能得到 VERIFIED。需要更窄的規則並重新量測，才能改成擋。
+
+照實鎖定的測試：`tests/test_attached_deferred_tests.py::test_an_import_time_call_the_reader_cannot_classify_is_the_known_limit`（只釘類別，不含可重現寫法），以及同檔 `test_an_imported_class_decorator_is_the_known_limit`。
+
 ## 不帶過去的
 
 依 Nexus-new 的缺陷分流，以下判定為死碼、沒有負責人或只是操作 CLI，不列入：RULE-004、RULE-199、RULE-219、RULE-220、RULE-252。
