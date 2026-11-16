@@ -91,3 +91,54 @@ def test_a_real_thread_race_has_exactly_one_winner(project, tmp_path, round_):  
         assert seen["supersede"].endswith("DISPATCHED -> SUPERSEDED")
         assert worker.calls == 1 and seen["run"].reason != "NOT_BOUND"
         assert ledger.get(task_id=task_id).status != "SUPERSEDED"
+
+
+class _GatedConnection:
+    """Proxy a connection; each ``BEGIN`` first waits for the other side (or times out)."""
+
+    def __init__(self, conn, gate):
+        self._conn, self._gate = conn, gate
+
+    def execute(self, sql, *args):
+        if sql.strip().upper().startswith("BEGIN"):
+            try:
+                self._gate.wait(timeout=1.0)
+            except threading.BrokenBarrierError:
+                self._gate.reset()
+        return self._conn.execute(sql, *args)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+def test_two_moves_that_start_together_cannot_both_write(project, tmp_path, monkeypatch):  # noqa: F811
+    """Line both sides up before every transaction start, so a split check-and-update lets both in.
+
+    With the single ``BEGIN IMMEDIATE`` the second side reads only after the first has committed
+    and is refused, so one write lands. If the check and the update were separate transactions,
+    both sides would pass the check on BOUND and meet again before the update: two writes land."""
+    from cairnwork.ownership import OwnershipError, OwnershipLedger
+
+    ledger, notary, journal = _stores(tmp_path)
+    task_id = _bind(ledger, task(project))
+    gate, wins = threading.Barrier(2), []
+    real_connect = OwnershipLedger._connect
+    monkeypatch.setattr(
+        OwnershipLedger, "_connect", lambda self: _GatedConnection(real_connect(self), gate)
+    )
+
+    def mover(status):
+        try:
+            ledger.set_status(task_id, status, expected_from="BOUND")
+            wins.append(status)
+        except OwnershipError:
+            pass
+
+    threads = [threading.Thread(target=mover, args=(s,)) for s in ("DISPATCHED", "SUPERSEDED")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    monkeypatch.undo()
+    assert len(wins) == 1
+    assert ledger.get(task_id=task_id).status == wins[0]
