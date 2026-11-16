@@ -159,3 +159,21 @@ def test_bad_ref_exits_nonzero(tmp_path):
     )  # fmt: skip
     assert done.returncode != 0
     assert "no-such-ref-951" in done.stderr
+
+
+@pytest.mark.parametrize("prefix", ["tests", "src", "test"])
+def test_a_root_dir_prefixed_module_is_counted_under_its_bare_import_name(tmp_path, prefix):
+    """A base test imports ``helper``; the commit changes ``<prefix>/helper.py`` (pytest puts
+    ``<prefix>`` on sys.path). Dropping that prefix from ROOT_DIRS must fail this test."""
+    repo = tmp_path / "r"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _commit(
+        repo, {f"{prefix}/helper.py": "H = 1\n", "tests/test_base.py": "import helper\n"}, "base"
+    )
+    changed = _commit(
+        repo,
+        {f"{prefix}/helper.py": "H = 2\n", "tests/test_new.py": "def test_new():\n    pass\n"},
+        "change helper",
+    )
+    assert _measure(repo, changed)["with_imported_changed_module"] == 1
