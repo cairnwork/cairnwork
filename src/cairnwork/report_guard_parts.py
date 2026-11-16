@@ -167,11 +167,13 @@ def _denied_path(info, _exc=_denied_exc, _file=OSError.filename.__get__):
 
 
 def _checkout_rel(code, top, _real=os.path.realpath, _rel=os.path.relpath, _abs=os.path.isabs,
-                  _s=str.__str__):
+                  _type=type):
     # #962 step 2a: the frame's file relative to the checkout top, or None when it is not an
-    # absolute file inside it (realpath only to find it). #1368: co_filename and co_name may be
-    # str subclasses (code.replace); str.__str__ reads an exact copy without their methods.
-    file = _s(code.co_filename)
+    # absolute file inside it (realpath only to find it). #1368: a co_filename that is not an
+    # exact str (code.replace) raises before any use, so _denied_origin records nothing (doubt).
+    file = code.co_filename
+    if _type(file) is not str:
+        raise TypeError("co_filename")
     if not _abs(file) or file.startswith("<"):
         return None
     rel = _rel(_real(file), top)
@@ -179,14 +181,18 @@ def _checkout_rel(code, top, _real=os.path.realpath, _rel=os.path.relpath, _abs=
     return None if out or _abs(rel) else rel
 
 
-def _checkout_frame(tb, top, _in=_checkout_rel, _s=str.__str__):
+def _checkout_frame(tb, top, _in=_checkout_rel, _type=type):
     # (origin, line) of a traceback's innermost checkout frame; "" when that frame is a lambda or
-    # a comprehension (a <...> name), or none is in the checkout.
+    # a comprehension (a <...> name), or none is in the checkout. #1368: a co_name that is not an
+    # exact str raises, like _checkout_rel, so _denied_origin records nothing.
     origin, line = "", 0
     while tb is not None:
         code = tb.tb_frame.f_code
         if _in(code, top) is not None:
-            origin = "" if _s(code.co_name).startswith("<") else _in(code, top)
+            name = code.co_name
+            if _type(name) is not str:
+                raise TypeError("co_name")
+            origin = "" if name.startswith("<") else _in(code, top)
             line = tb.tb_lineno or 0
         tb = tb.tb_next
     return origin, line

@@ -10,6 +10,7 @@ import os
 import types
 
 import pytest
+from _pytest._code.code import ExceptionInfo
 from _pytest.reports import TestReport
 from test_fail_kind_guard import T, _run
 
@@ -61,41 +62,51 @@ def test_record_skip_keeps_the_str_xfail_reason_behaviour():
     assert reporter._skips == {"t.py::s": {"kind": "runtime", "reason": "why"}}
 
 
-def _hostile_frame_tb(tmp_path, calls):
-    class Name(str):
-        def startswith(self, *args):
-            calls.append("startswith")
-            return True
+class _Name(str):
+    calls = []
 
-        def __eq__(self, other):
-            calls.append("eq")
-            return str.__eq__(self, other)
+    def startswith(self, *args):
+        self.calls.append("startswith")
+        return True
 
-        __hash__ = str.__hash__
+    def __eq__(self, other):
+        self.calls.append("eq")
+        return str.__eq__(self, other)
 
+    __hash__ = str.__hash__
+
+
+def _denied_in(top, **names):
     def raiser():
         raise PermissionError(1, "denied", "/x")
 
-    top = os.path.realpath(tmp_path)
-    code = raiser.__code__.replace(
-        co_filename=Name(os.path.join(top, "test_a.py")), co_name=Name("raiser")
-    )
+    code = raiser.__code__.replace(co_filename=os.path.join(top, "test_a.py"))
+    code = code.replace(**{k: v(getattr(code, k)) for k, v in names.items()})
     try:
         types.FunctionType(code, {})()
     except PermissionError as denied:
-        return top, denied.__traceback__
+        return denied
     raise AssertionError("not raised")
 
 
-def test_checkout_frame_reads_a_str_subclass_file_and_name_as_plain_text(tmp_path):
+@pytest.mark.parametrize("field", ["co_filename", "co_name"])
+def test_a_str_subclass_code_file_or_name_records_no_setup_denial(tmp_path, field):
     plugin = _plugin(PARTS_SOURCE)
-    calls = []
-    top, tb = _hostile_frame_tb(tmp_path, calls)
-    origin, line = plugin["_checkout_frame"](tb, top)
-    assert calls == []
-    assert origin == "test_a.py" and type(origin) is str and line > 0
-    assert plugin["_checkout_rel"](tb.tb_next.tb_frame.f_code, top) == "test_a.py"
-    assert calls == []
+    top = os.path.realpath(tmp_path)
+    _Name.calls.clear()
+    denied = _denied_in(top, **{field: _Name})
+    with pytest.raises(TypeError):
+        plugin["_checkout_frame"](denied.__traceback__, top)
+    assert plugin["_denied_origin"](ExceptionInfo.from_exception(denied), top) is None  # doubt
+    assert _Name.calls == []
+
+
+def test_an_exact_str_code_file_still_records_its_setup_denial(tmp_path):
+    plugin = _plugin(PARTS_SOURCE)
+    top = os.path.realpath(tmp_path)
+    denied = _denied_in(top)
+    record = plugin["_denied_origin"](ExceptionInfo.from_exception(denied), top)
+    assert record is not None and record[:2] == ["/x", "test_a.py"] and record[2] > 0
 
 
 def test_denied_inside_doubts_a_class_namespace_key_that_is_not_a_str():
