@@ -17,7 +17,7 @@ from dataclasses import dataclass
 _PS = r"(?:/(?:usr/)?bin/)?ps"  # bare name or a full path to the system tool only
 PS_DENIAL = re.compile(
     rf"PermissionError: (?:\[Errno \d+\] [^:\n]*: )?'{_PS}'(?=\s|$)"
-    rf"|(?:^|(?<=\s)){_PS}: (?:Operation not permitted|Permission denied)(?=\s|$)",
+    rf"|^(?:E\s+)?{_PS}: (?:Operation not permitted|Permission denied)\s*$",
     re.M,
 )
 _UNIT = re.compile(r"^(FAILED|SUBFAILED)(\([^)]*\))? (\S+)", re.M)

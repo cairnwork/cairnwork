@@ -130,6 +130,11 @@ def test_long_hostile_line_is_fast_and_ignored() -> None:
 
 
 def _sb(line: str) -> str:
+    """The denial on its own line (the bare tool shapes match whole lines only)."""
+    return f"FAILED tests/test_a.py::test_x - boom\n{line}\n=== 1 failed in 1s ===\n"
+
+
+def _sb_inline(line: str) -> str:
     return f"FAILED tests/test_a.py::test_x - {line}\n=== 1 failed in 1s ===\n"
 
 
@@ -141,10 +146,14 @@ def _sb(line: str) -> str:
         "ps: Permission denied",
         "/usr/bin/ps: Permission denied",
         "/bin/ps: Permission denied",
+        "E   ps: Permission denied",
     ],
 )
 def test_other_ps_denial_shapes_are_matched(line: str) -> None:
     assert compare(_sb(line), CLEAN).verdict == UNCOMPARABLE
+    assert compare(_sb_inline(line), CLEAN).verdict == (
+        UNCOMPARABLE if line.startswith("PermissionError") else FAILED
+    )
 
 
 @pytest.mark.parametrize(
@@ -159,6 +168,11 @@ def test_other_ps_denial_shapes_are_matched(line: str) -> None:
         "PermissionError: [Errno 1] Operation not permitted: 'ps'x",
         "ps: Permission denied.bak",
         "grep: Permission denied",
+        "attacker text: ps: Permission denied",
+        "ps: Permission denied by attacker",
+        "x ps: Operation not permitted",
+        "a\nb ps: Permission denied suffix\nc",
+        "note /usr/bin/ps: Permission denied",
         "/tmp/ps: Permission denied",
     ],
 )
