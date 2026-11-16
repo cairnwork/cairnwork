@@ -191,3 +191,18 @@ def test_a_skip_marker_is_still_marker_skip_evidence(tmp_path):
         "import pytest\n@pytest.mark.skip(reason='plain')\ndef test_a():\n    pass\n",
     )
     assert verdict.skips == {T + "test_a": ("marker", "plain")}
+
+
+@pytest.mark.parametrize(("name", "kind"), [("Odd('skip')", "runtime"), ("'skip'", "marker")])
+def test_a_mark_with_a_non_str_name_is_not_marker_skip_evidence(tmp_path, name, kind):
+    verdict = _run(
+        tmp_path,
+        "import pytest\n"
+        "from _pytest.mark.structures import Mark\n"
+        "class Odd(str):\n"
+        "    pass\n"
+        f"pytestmark = [Mark({name}, (), {{'reason': 'odd'}}, _ispytest=True)]\n"
+        "def test_a():\n"
+        "    pass\n",
+    )
+    assert verdict.skips == {T + "test_a": (kind, "odd")}
