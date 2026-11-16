@@ -15,6 +15,7 @@ from cairnwork.gitcmd import GitCommandError, run_git
 ORIGIN = re.compile(r"https://github\.com/([^/:@\s]+/[^/:@\s]+)")
 COMMIT = re.compile(r"[0-9a-f]{40}")
 MAIN_REFSPEC = "+refs/heads/main:refs/remotes/origin/main"
+ORIGIN_MAIN = "refs/remotes/origin/main"
 
 
 def verify_origin(clone: Path, repo: str) -> None:
@@ -57,10 +58,27 @@ def require_on_main(clone: Path, base: str, *, fetch: bool = True) -> None:
             raise RuntimeError(f"LINEAGE_BASE_NOT_COMMIT: {base!r} is not a commit")
     except GitCommandError as exc:
         raise RuntimeError(f"LINEAGE_BASE_NOT_COMMIT: {base!r} is not a commit here") from exc
+    if not _in_main_history(clone, base):
+        raise RuntimeError(f"LINEAGE_BASE_NOT_ON_MAIN: {base} is not in origin/main")
+
+
+def refuse_grafts(clone: Path) -> None:
+    grafts = Path(clone, run_git(clone, "rev-parse", "--git-path", "info/grafts").strip())
+    if grafts.exists():
+        raise RuntimeError("LINEAGE_GRAFTS_REFUSED: .git/info/grafts rewrites history")
+
+
+def _in_main_history(clone: Path, commit: str) -> bool:
+    """The one ancestry test (#1266): is ``commit`` equal to or an ancestor of origin/main?
+
+    Read from the real objects: replace refs are switched off, and a ``.git/info/grafts`` file,
+    which rewrites parents, is refused outright (LINEAGE_GRAFTS_REFUSED) rather than trusted."""
+    refuse_grafts(clone)
     try:
-        run_git(clone, "merge-base", "--is-ancestor", base, "refs/remotes/origin/main")
-    except GitCommandError as exc:
-        raise RuntimeError(f"LINEAGE_BASE_NOT_ON_MAIN: {base} is not in origin/main") from exc
+        run_git(clone, "--no-replace-objects", "merge-base", "--is-ancestor", commit, ORIGIN_MAIN)
+    except GitCommandError:
+        return False
+    return True
 
 
 def verify_single_branch(clone: Path) -> None:
@@ -99,3 +117,38 @@ def verify_single_branch(clone: Path) -> None:
     extra = [r for r in refs.split() if r not in allowed]
     if extra:
         raise RuntimeError(f"{code}: mirror holds a branch beyond main ({extra[0]}); {advice}")
+    _refuse_foreign_history(clone, code, advice)
+
+
+# Namespaces Cairnwork writes itself, each with its own rule (#1266):
+# - refs/cairnwork/attempts/<attempt_id> and ...-tested: a collected candidate
+#   (workspace._fetch_head, deferred_tests.lay_tests_over); not in main's history.
+# - refs/cairnwork-bases/<sha>: the intake's pin of a task base (intake._mirror_base); with
+#   require_base_on_main false it may sit off main.
+# Anything else under refs/cairnwork/ (e.g. refs/cairnwork/test) is not a mirror ref and is judged.
+OWN_NAMESPACES = ("refs/cairnwork/attempts/", "refs/cairnwork-bases/")
+CHECKED_NAMESPACES = ("refs/heads/", "refs/remotes/")  # judged by the branch rules above
+
+
+def _refuse_foreign_history(clone: Path, code: str, advice: str) -> None:
+    """Every other ref (tags, notes, stash, replace, ...) may name only a commit in origin/main's
+    history, so the mirror carries nothing beyond main."""
+    refuse_grafts(clone)
+    for ref in run_git(clone, "for-each-ref", "--format=%(refname)").split():
+        if ref.startswith(OWN_NAMESPACES + CHECKED_NAMESPACES):
+            continue
+        tip = ""
+        if not ref.startswith("refs/replace/"):  # a replace ref rewrites history: always refused
+            try:
+                tip = run_git(
+                    clone,
+                    "--no-replace-objects",
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    f"{ref}^{{commit}}",
+                ).strip()
+            except GitCommandError:
+                tip = ""
+        if not tip or not _in_main_history(clone, tip):
+            raise RuntimeError(f"{code}: mirror holds {ref}, not in main's history; {advice}")
