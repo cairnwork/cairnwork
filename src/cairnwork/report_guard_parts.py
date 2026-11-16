@@ -138,7 +138,14 @@ def _denied_exc(info, explicit=False, _sub=issubclass, _type=type, _base=BaseExc
     # type() and the built-in descriptors, never the error's own attributes, so a test's OSError
     # subclass (properties, __eq__, __bool__) runs no code here. explicit (#1030 r1): follow only
     # __cause__ (raise ... from), never the implicit __context__ of an error raised while handling.
-    exc = getattr(info, "value", None)
+    # #1308: only an exact ExceptionInfo is read (its _excinfo tuple, never .value); any other
+    # object, a test's own with a .value, gives None.
+    if _type(info) is not ExceptionInfo:
+        return None
+    fields = info._excinfo
+    if _type(fields) is not tuple or len(fields) != 3:
+        return None
+    exc = fields[1]
     for _ in range(64):
         if not _sub(_type(exc), _base):
             return None
@@ -205,7 +212,7 @@ def _denied_origin(info, root, _exc=_denied_exc, _real=os.path.realpath, _str=st
                 seen.add(id(tb.tb_frame))
             tb = tb.tb_next
         origin, line = _frame(_tb(exc), top)
-        outer = getattr(info, "value", None)
+        outer = info._excinfo[1]  # info is an exact ExceptionInfo: _exc returned its error
         for _ in range(64):
             if outer is exc:
                 break

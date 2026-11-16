@@ -6,7 +6,7 @@ runs of the guard (no sandbox: the EPERM is raised by the test code itself)."""
 import sys
 
 import pytest
-from conftest import commit_change
+from conftest import commit_change, real_info
 from test_teardown_errors import guard_run
 
 from cairnwork.verdict_record import setup_denials
@@ -85,7 +85,6 @@ def test_a_caught_denial_is_recorded_only_when_named_by_raise_from(tmp_path, lin
 
 def _origin_for(tmp_path, source, candidate_source=None):
     import os
-    from types import SimpleNamespace
 
     from cairnwork.report_guard_parts import PARTS_SOURCE
 
@@ -100,7 +99,7 @@ def _origin_for(tmp_path, source, candidate_source=None):
     try:
         namespace["held"]()
     except (OSError, RuntimeError) as error:
-        return plugin["_denied_origin"](SimpleNamespace(value=error), tmp_path)
+        return plugin["_denied_origin"](real_info(error), tmp_path)
     raise AssertionError("fixture did not raise")
 
 
@@ -136,7 +135,6 @@ def test_ac3_a_wrapper_from_candidate_code_under_a_tests_directory_has_no_record
     """The wrapper's file is judged against the denial's origin file, not by its name: candidate
     code in a package's own tests/ directory is not the fixture."""
     import os
-    from types import SimpleNamespace
 
     from cairnwork.report_guard_parts import PARTS_SOURCE
 
@@ -152,7 +150,7 @@ def test_ac3_a_wrapper_from_candidate_code_under_a_tests_directory_has_no_record
     exec(compile(fixture, str(tmp_path / "tests/conftest.py"), "exec"), held)
     with pytest.raises(RuntimeError) as info:
         held["held"]()
-    assert plugin["_denied_origin"](SimpleNamespace(value=info.value), tmp_path) is None
+    assert plugin["_denied_origin"](real_info(info.value), tmp_path) is None
 
 
 def test_ac4_the_fixture_chaining_the_denial_itself_keeps_the_record(tmp_path):
@@ -174,7 +172,6 @@ def test_a_checkout_reached_through_a_link_gives_the_same_origin(tmp_path):
 def test_the_origin_is_found_through_a_link_to_the_checkout(tmp_path):
     """The checkout is named through a link, the frame by its real path: both are resolved."""
     import os
-    from types import SimpleNamespace
 
     from cairnwork.report_guard_parts import PARTS_SOURCE
 
@@ -187,7 +184,7 @@ def test_the_origin_is_found_through_a_link_to_the_checkout(tmp_path):
     exec(compile(f"def held():\n    {RAISE}\n", real, "exec"), held)
     with pytest.raises(PermissionError) as info:
         held["held"]()
-    origin = plugin["_denied_origin"](SimpleNamespace(value=info.value), tmp_path / "link")
+    origin = plugin["_denied_origin"](real_info(info.value), tmp_path / "link")
     assert origin == [DENIED, "tests/conftest.py", 2]
 
 
@@ -195,7 +192,6 @@ def test_a_frame_outside_the_checkout_is_skipped(tmp_path):
     """#1006 (Claude, spec R2): the writer is a module outside the checkout, called from a
     conftest inside it; the origin is that conftest's line, never a path out of the checkout."""
     import os
-    from types import SimpleNamespace
 
     from cairnwork.report_guard_parts import PARTS_SOURCE
 
@@ -208,7 +204,7 @@ def test_a_frame_outside_the_checkout_is_skipped(tmp_path):
     exec(compile("def held():\n    write()\n", real, "exec"), held)
     with pytest.raises(PermissionError) as info:
         held["held"]()
-    origin = plugin["_denied_origin"](SimpleNamespace(value=info.value), tmp_path / "repo")
+    origin = plugin["_denied_origin"](real_info(info.value), tmp_path / "repo")
     assert origin == [DENIED, "tests/conftest.py", 2]
 
 
@@ -246,8 +242,6 @@ def test_an_error_subclass_cannot_change_what_is_recorded(tmp_path):
 
 
 def test_a_suppressed_context_does_not_supply_a_denied_path():
-    from types import SimpleNamespace
-
     from cairnwork.report_guard_parts import PARTS_SOURCE
 
     plugin: dict = {"os": __import__("os")}
@@ -259,13 +253,12 @@ def test_a_suppressed_context_does_not_supply_a_denied_path():
             raise RuntimeError("unrelated") from None
     except RuntimeError as exc:
         assert exc.__suppress_context__ is True
-        assert plugin["_denied_path"](SimpleNamespace(value=exc)) is None
+        assert plugin["_denied_path"](real_info(exc)) is None
 
 
 def test_the_recorder_runs_no_code_of_the_error(tmp_path):
     """Every attribute the recorder reads is a property that raises: none of them runs."""
     import os
-    from types import SimpleNamespace
 
     from cairnwork.report_guard_parts import PARTS_SOURCE
 
@@ -282,16 +275,17 @@ def test_the_recorder_runs_no_code_of_the_error(tmp_path):
     exec(compile(f"def held():\n    raise Evil(1, 'x', {DENIED!r})\n", real, "exec"), held)
     with pytest.raises(PermissionError) as info:
         held["held"]()
-    found = SimpleNamespace(value=info.value)
+    found = real_info(info.value)
     assert plugin["_denied_path"](found) == DENIED
     assert plugin["_denied_origin"](found, tmp_path) == [DENIED, "tests/conftest.py", 2]
-    wrapped = SimpleNamespace(value=RuntimeError("wrapper"))
-    wrapped.value.__cause__ = info.value
+    wrapper = RuntimeError("wrapper")
+    wrapper.__cause__ = info.value
+    wrapped = real_info(wrapper)
     assert plugin["_denied_path"](wrapped) == DENIED
     other = evil(13, "x", DENIED)  # not EPERM: the recorder walks on through its real cause
-    assert plugin["_denied_path"](SimpleNamespace(value=other)) is None
+    assert plugin["_denied_path"](real_info(other)) is None
     vars(BaseException)["__cause__"].__set__(other, info.value)  # its own setter is a property
-    assert plugin["_denied_path"](SimpleNamespace(value=other)) == DENIED
+    assert plugin["_denied_path"](real_info(other)) == DENIED
 
 
 class _Errno(int):  # #1006 (Claude r2, X4): an errno whose comparison would run test code
@@ -302,21 +296,18 @@ class _Errno(int):  # #1006 (Claude r2, X4): an errno whose comparison would run
 
 
 def test_an_errno_of_another_type_runs_no_code():
-    from types import SimpleNamespace
-
     from cairnwork.report_guard_parts import PARTS_SOURCE
 
     plugin: dict = {"os": __import__("os")}
     exec(PARTS_SOURCE, plugin)
     err = PermissionError(1, "x", DENIED)
     err.errno = _Errno(1)
-    assert plugin["_denied_path"](SimpleNamespace(value=err)) is None
+    assert plugin["_denied_path"](real_info(err)) is None
 
 
 def test_a_frame_named_by_the_checkout_itself_gives_no_origin(tmp_path):
     """#1006 (Claude r2): a frame whose file is the checkout root gives "", as the parent wants."""
     import os
-    from types import SimpleNamespace
 
     from cairnwork.report_guard_parts import PARTS_SOURCE
 
@@ -326,7 +317,7 @@ def test_a_frame_named_by_the_checkout_itself_gives_no_origin(tmp_path):
     exec(compile(f"def held():\n    {RAISE}\n", str(tmp_path), "exec"), held)
     with pytest.raises(PermissionError) as info:
         held["held"]()
-    assert plugin["_denied_origin"](SimpleNamespace(value=info.value), tmp_path) == [DENIED, "", 0]
+    assert plugin["_denied_origin"](real_info(info.value), tmp_path) == [DENIED, "", 0]
 
 
 @pytest.mark.sandbox

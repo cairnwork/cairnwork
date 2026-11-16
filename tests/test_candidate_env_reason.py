@@ -157,11 +157,11 @@ def test_only_eperm_names_a_path():
     plugin: dict = {"os": __import__("os")}
     exec(PARTS_SOURCE, plugin)  # plugin text, run as the guard runs it
     _denied_path = plugin["_denied_path"]
-    from types import SimpleNamespace as Info
+    from conftest import real_info
 
-    assert _denied_path(Info(value=PermissionError(1, "Operation not permitted", "/p/x"))) == "/p/x"
-    assert _denied_path(Info(value=PermissionError(13, "Permission denied", "/p/x"))) is None
-    assert _denied_path(Info(value=RuntimeError("wrapped"))) is None
+    assert _denied_path(real_info(PermissionError(1, "Operation not permitted", "/p/x"))) == "/p/x"
+    assert _denied_path(real_info(PermissionError(13, "Permission denied", "/p/x"))) is None
+    assert _denied_path(real_info(RuntimeError("wrapped"))) is None
     assert _denied_path(None) is None  # a strict xpass fails with no exception
 
 
