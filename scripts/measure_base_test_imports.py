@@ -21,7 +21,6 @@ from collections import Counter
 from pathlib import PurePosixPath
 
 DEADLINE_SECONDS = 540
-MAX_MODULES_PER_COMMIT = 25
 DEFAULT_REF = "origin/main"
 # pytest/rootdir conventions that make a path importable without them
 ROOT_DIRS = ("src", "tests", "test")
@@ -57,9 +56,9 @@ def in_tests_dir(path: str) -> bool:
     return any(part in ("tests", "test") for part in PurePosixPath(path).parts[:-1])
 
 
-def sample(repo: str, sha: str, limit: int) -> list[str]:
+def sample(repo: str, sha: str) -> list[str]:
     out = git(repo, "log", "--no-merges", "--format=%H", sha, "--", "tests", "test", "*test_*.py")
-    return out.split()[:limit]
+    return out.split()
 
 
 def changed(repo: str, sha: str) -> list[tuple[str, str]]:
@@ -114,14 +113,16 @@ def imported_by_base_test(repo: str, sha: str, path: str) -> bool:
 
 def measure(repo: str, sha: str, limit: int, deadline: float) -> Counter:
     stats: Counter = Counter()
-    for commit in sample(repo, sha, limit):
+    commits = sample(repo, sha)
+    stats["commits_available"] = len(commits)  # the sample is cut at --limit; this shows the cut
+    for commit in commits[:limit]:
         if time.monotonic() > deadline:
             stats["stopped_by_deadline"] += 1
             break
         stats["commits"] += 1
         rows = changed(repo, commit)
         mods = [p for st, p in rows if st in "MDR" and p.endswith(".py") and not is_test_file(p)]
-        hits = {p for p in mods[:MAX_MODULES_PER_COMMIT] if imported_by_base_test(repo, commit, p)}
+        hits = {p for p in mods if imported_by_base_test(repo, commit, p)}
         pure = all(in_tests_dir(p) or is_test_file(p) for _, p in rows)  # what a task commit is
         stats["pure_test_commits"] += pure
         stats["pure_test_commits_with_imported_changed_module"] += pure and bool(hits)
@@ -140,7 +141,7 @@ def report(repo: str, ref: str, sha: str, stats: Counter) -> None:
     print(f"== {repo}")
     print(f"ref: {ref} -> {sha}")
     for key in sorted(stats):
-        pct = f" ({100 * stats[key] / n:.1f}%)" if key != "commits" else ""
+        pct = "" if key in ("commits", "commits_available") else f" ({100 * stats[key] / n:.1f}%)"
         print(f"{key}: {stats[key]}{pct}")
 
 

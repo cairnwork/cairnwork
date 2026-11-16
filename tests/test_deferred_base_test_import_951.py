@@ -177,3 +177,20 @@ def test_a_root_dir_prefixed_module_is_counted_under_its_bare_import_name(tmp_pa
         "change helper",
     )
     assert _measure(repo, changed)["with_imported_changed_module"] == 1
+
+
+def test_a_commit_changing_more_than_25_modules_still_counts_the_26th(tmp_path):
+    """No per-commit module cap: the base test imports mod25 (the 26th changed module)."""
+    repo = tmp_path / "r"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    mods = {f"pkg/mod{i:02d}.py": "X = 1\n" for i in range(26)}
+    _commit(repo, {**mods, "tests/test_base.py": "import pkg.mod25\n"}, "base")
+    changed = _commit(
+        repo,
+        {**{k: "X = 2\n" for k in mods}, "tests/test_new.py": "def test_new():\n    pass\n"},
+        "change 26 modules",
+    )
+    stats = _measure(repo, changed)
+    assert stats["with_imported_changed_module"] == 1
+    assert stats["commits_available"] == 2
