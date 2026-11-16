@@ -27,16 +27,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import shutil
-import signal
-import subprocess
 import sys
-import threading
 from dataclasses import dataclass
 from pathlib import Path
 
 from cairnwork import p2p_classify_child as _classify_child
+from cairnwork.child_run import run_child
 from cairnwork.collect_reader import read_collected
 from cairnwork.conftest_check import conftest_of
 from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRejected
@@ -195,67 +192,10 @@ def _classify_argv():
 
 
 def _run_child(argv, payload):
-    output: list[bytes] = []
-    size = 0
-    process = None
-    try:
-        process = subprocess.Popen(
-            argv,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            env={},
-            start_new_session=True,
-        )
-        stdout = process.stdout
-        assert stdout is not None
-
-        def drain():
-            nonlocal size
-            while chunk := stdout.read(8192):
-                if size < CLASSIFY_OUTPUT_CAP:
-                    kept = chunk[: CLASSIFY_OUTPUT_CAP - size]
-                    output.append(kept)
-                    size += len(kept)
-
-        reader = threading.Thread(target=drain, daemon=True)
-        writer = threading.Thread(target=_write_input, args=(process.stdin, payload), daemon=True)
-        reader.start()
-        writer.start()
-        try:
-            process.wait(timeout=CLASSIFY_TIMEOUT_SECONDS)
-            timed_out = False
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            _kill_child_group(process.pid)
-            process.wait()
-        _kill_child_group(process.pid)
-        writer.join(timeout=1)
-        reader.join(timeout=1)
-        if reader.is_alive() or writer.is_alive() or size >= CLASSIFY_OUTPUT_CAP:
-            return b"", timed_out, 1
-        return b"".join(output), timed_out, process.returncode
-    except (OSError, RuntimeError):  # RuntimeError: a thread that cannot start
-        return b"", False, 1
-    finally:
-        if process is not None:  # every exit path: kill the whole group, reap the child
-            _kill_child_group(process.pid)
-            process.wait()
-
-
-def _write_input(stream, payload):
-    try:
-        stream.write(payload)
-        stream.close()
-    except (BrokenPipeError, OSError):
-        pass
-
-
-def _kill_child_group(group):
-    try:
-        os.killpg(group, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
-        pass
+    """The classifier child under this module's own limits (read at call time)."""
+    return run_child(
+        argv, payload, timeout=CLASSIFY_TIMEOUT_SECONDS, output_cap=CLASSIFY_OUTPUT_CAP
+    )
 
 
 def _analysis_failure(detail):
