@@ -117,7 +117,7 @@ def test_a_planner_configuration_is_refused_until_the_planner_is_wired(capsys, a
     seen = []
     assert pause_cli.main(argv, worker_main=lambda a: seen.append(a) or 0) == 2
     err = capsys.readouterr().err
-    assert seen == [] and ("requires an injected run_factory" in err or "usage:" in err)
+    assert seen == [] and ("configured run failed closed" in err or "usage:" in err)
     assert not any(code in err for code in schema.Reason)  # a CLI refusal, not a reason code
 
 
@@ -136,6 +136,7 @@ def test_planner_flag_dispatches_to_the_injected_flow(tmp_path, monkeypatch, cap
             CallSettings("p", "low", 1, 1),
             CallSettings("g", "low", 1, 1),
             object(),
+            None,
         )
 
     class Result:
@@ -201,7 +202,7 @@ def test_configured_runs_append_receipts_to_same_out(tmp_path, monkeypatch, caps
     argv = ["run", "--planner-config", "cfg", "--task", str(task), *WORKER_REQUIRED, *flag]
 
     def factory(_):
-        return object(), object(), object(), object(), object()
+        return object(), object(), object(), object(), object(), None
 
     for _ in range(2):
         assert pause_cli.main(argv, run_factory=factory) == 0  # pyright: ignore[reportArgumentType]
