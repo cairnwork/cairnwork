@@ -239,3 +239,71 @@ def test_what_a_test_module_imports_is_not_read(repo, monkeypatch):
             "def test_h():\n    assert x\n", "tests/a.py": "x = 1\n", "tests/b.py": "y = 1\n",
             "tests/c.py": "z = 1\n"}  # fmt: skip
     _check(repo, {CONFTEST: FIXTURE.format("free")}, path=CONFTEST, base_files=base)
+
+
+@pytest.mark.parametrize(
+    ("code", "reads_all"),
+    [
+        (
+            "from contextlib import nullcontext\nfrom helpers import *\n"
+            "with nullcontext(['helpers']) as pytest_plugins:\n    pass\n",
+            True,
+        ),
+        (
+            "from contextlib import nullcontext\nfrom helpers import nullcontext\n"
+            "with nullcontext(['helpers']) as pytest_plugins:\n    pass\n",
+            True,
+        ),
+        (
+            "import contextlib\nimport helpers as contextlib\n"
+            "with contextlib.nullcontext(['helpers']) as pytest_plugins:\n    pass\n",
+            True,
+        ),
+        (
+            "from contextlib import nullcontext\ndef _g():\n    global nullcontext\n"
+            "    from helpers import nullcontext\n_g()\n"
+            "with nullcontext(['helpers']) as pytest_plugins:\n    pass\n",
+            True,
+        ),
+        (
+            "from helpers import nullcontext\n"
+            "with nullcontext(['helpers']) as pytest_plugins:\n    pass\n",
+            True,
+        ),
+        (
+            "X = []\nmatch [*X, ['helpers'], ['other']]:\n"
+            "    case [_a, pytest_plugins, *_r]:\n        pass\n",
+            True,
+        ),
+        (
+            "from contextlib import nullcontext\n"
+            "with nullcontext(['helpers']) as pytest_plugins:\n    pass\n",
+            False,
+        ),
+        (
+            "import contextlib as c\n"
+            "with c.nullcontext(['helpers']) as pytest_plugins:\n    pass\n",
+            False,
+        ),
+        (
+            "import os\nwith open(os.devnull) as _fh:\n    pass\npytest_plugins = ['helpers']\n",
+            False,
+        ),
+        (
+            "match [['other'], ['helpers']]:\n    case [_a, pytest_plugins]:\n        pass\n",
+            False,
+        ),
+    ],
+)
+def test_shadowed_nullcontext_or_starred_match_reads_every_base_file(repo, code, reads_all):
+    files = {
+        ABOVE: PATH + code,
+        "tests/helpers.py": "X = 1\n",
+        "tests/other.py": "X = 1\n",
+        "tests/far/fix.py": GUARD,
+    }
+    if reads_all:
+        with pytest.raises(dt.TestCommitRejected, match=r"base test requests \(dep\)"):
+            _check(repo, {CONFTEST: FIXTURE.format("dep")}, path=CONFTEST, base_files=files)
+    else:
+        _check(repo, {CONFTEST: FIXTURE.format("dep")}, path=CONFTEST, base_files=files)

@@ -296,34 +296,64 @@ def test_unverified_with_context_manager_fails_closed():
     assert _reach(nc, local_ctx, ["tests/x.py"]) != ""
     tree = {"tests/safe.py": "", "tests/evil.py": ""}
     cm_evil = (
-        "from contextlib import nullcontext\n"
-        "class CM:\n"
-        "    def __enter__(self):\n"
-        "        return ['evil']\n"
-        "    def __exit__(self, *a):\n"
-        "        return False\n"
-        "with nullcontext(['safe']) as _s, CM() as pytest_plugins:\n"
-        "    pass\n"
+        "from contextlib import nullcontext\nclass CM:\n"
+        "    def __enter__(self): return ['evil']\n    def __exit__(self, *a): return False\n"
+        "with nullcontext(['safe']) as _s, CM() as pytest_plugins:\n    pass\n"
     )
     assert _reach(cm_evil, tree, ["tests/evil.py"]) != ""
     shadow_cm = (
-        "from contextlib import nullcontext\n"
-        "class CM:\n"
-        "    def __enter__(self):\n"
-        "        return ['evil']\n"
-        "    def __exit__(self, *a):\n"
-        "        return False\n"
-        "nullcontext = CM\n"
-        "with nullcontext(['safe']) as pytest_plugins:\n"
-        "    pass\n"
+        "from contextlib import nullcontext\nclass CM:\n"
+        "    def __enter__(self): return ['evil']\n    def __exit__(self, *a): return False\n"
+        "nullcontext = CM\nwith nullcontext(['safe']) as pytest_plugins:\n    pass\n"
     )
     assert _reach(shadow_cm, tree, ["tests/evil.py"]) != ""
     safe_only = (
         "from contextlib import nullcontext\n"
-        "with nullcontext(['safe']) as pytest_plugins:\n"
-        "    pass\n"
+        "with nullcontext(['safe']) as pytest_plugins:\n    pass\n"
     )
     assert _reach(safe_only, tree, ["tests/evil.py"]) == ""
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "from contextlib import nullcontext\nfrom helpers import *\n"
+        "with nullcontext(['safe']) as pytest_plugins:\n    pass\n",
+        "from contextlib import nullcontext\nfrom helpers import nullcontext\n"
+        "with nullcontext(['safe']) as pytest_plugins:\n    pass\n",
+        "import contextlib\nimport helpers as contextlib\n"
+        "with contextlib.nullcontext(['safe']) as pytest_plugins:\n    pass\n",
+        "from contextlib import nullcontext\ndef _g():\n    global nullcontext\n"
+        "    from helpers import nullcontext\n_g()\n"
+        "with nullcontext(['safe']) as pytest_plugins:\n    pass\n",
+        "from helpers import nullcontext\n"
+        "with nullcontext(['safe']) as pytest_plugins:\n    pass\n",
+        "from contextlib import nullcontext\nclass nullcontext:\n"
+        "    def __init__(self, x): pass\n    def __enter__(self): return ['evil']\n"
+        "    def __exit__(self, *a): return False\n"
+        "with nullcontext(['safe']) as pytest_plugins:\n    pass\n",
+    ],
+)
+def test_shadowed_or_foreign_nullcontext_with_binding_refuses(text):
+    """#1010: shadowed, starred, or non-contextlib nullcontext must fail closed in reach."""
+    tree = {"tests/safe.py": "", "tests/evil.py": "", "tests/helpers.py": ""}
+    assert _reach(text, tree, ["tests/evil.py"]) != ""
+    for local in ("tests/contextlib.py", "tests/sub/contextlib.py"):
+        local_tree = {"tests/safe.py": "", "tests/evil.py": "", local: ""}
+        for nc in (
+            "from contextlib import nullcontext\n"
+            "with nullcontext(['safe']) as pytest_plugins:\n    pass\n",
+            "import contextlib\n"
+            "with contextlib.nullcontext(['safe']) as pytest_plugins:\n    pass\n",
+        ):
+            assert _reach(nc, local_tree, ["tests/evil.py"]) != ""
+    for ok in (
+        "from contextlib import nullcontext\n"
+        "with nullcontext(['safe']) as pytest_plugins:\n    pass\n",
+        "import contextlib as c\nwith c.nullcontext(['safe']) as pytest_plugins:\n    pass\n",
+        "import os\nwith open(os.devnull) as _fh:\n    pass\npytest_plugins = ['safe']\n",
+    ):
+        assert _reach(ok, {"tests/safe.py": "", "tests/evil.py": ""}, ["tests/evil.py"]) == ""
 
 
 def test_the_parts_of_a_joined_plugin_name_are_not_plugins():
