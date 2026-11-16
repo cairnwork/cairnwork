@@ -155,6 +155,7 @@ def test_log_and_pipes_are_closed_when_thread_start_fails(tmp_path, monkeypatch)
 
     assert len(opened) == 1 and opened[0].closed
     assert len(procs) == 1 and procs[0].stdout.closed
+    assert procs[0].returncode is not None and procs[0].returncode < 0
 
 
 def test_dispatch_log_and_all_pipes_closed_when_reader_start_fails(tmp_path, monkeypatch):
@@ -193,3 +194,92 @@ def test_dispatch_log_and_all_pipes_closed_when_reader_start_fails(tmp_path, mon
     assert len(opened) == 1 and opened[0].closed
     assert len(procs) == 1
     assert procs[0].stdin.closed and procs[0].stdout.closed and procs[0].stderr.closed
+    assert procs[0].returncode is not None and procs[0].returncode < 0
+
+
+@pytest.mark.parametrize("fail_name", ["_feed", "copy_capped"])
+def test_dispatch_feed_or_copier_start_failure_stops_and_closes(tmp_path, monkeypatch, fail_name):
+    binary = tmp_path / "agy"
+    binary.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(5)\n")
+    binary.chmod(0o755)
+    workdir = tmp_path / f"attempt-{uuid.uuid4().hex[:8]}"
+    workdir.mkdir()
+    opened, procs = [], []
+    real_fdopen = os.fdopen
+    real_popen = agy_module.subprocess.Popen
+    real_start = agy_module.threading.Thread.start
+    fail_target = getattr(agy_module, fail_name)
+
+    def capture_fdopen(*args, **kwargs):
+        log = real_fdopen(*args, **kwargs)
+        opened.append(log)
+        return log
+
+    def capture_popen(*args, **kwargs):
+        proc = real_popen(*args, **kwargs)
+        if args and str(binary) in str(args[0]):
+            procs.append(proc)
+        return proc
+
+    def maybe_fail_start(self):
+        if getattr(self, "_target", None) is fail_target:
+            raise RuntimeError(f"cannot start {fail_name}")
+        return real_start(self)
+
+    monkeypatch.setattr(agy_module.os, "fdopen", capture_fdopen)
+    monkeypatch.setattr(agy_module.subprocess, "Popen", capture_popen)
+    monkeypatch.setattr(agy_module.threading.Thread, "start", maybe_fail_start)
+    task = SimpleNamespace(title="t", instructions="i", allowed_files=("a.py",))
+    dispatch = agy_module.agy_dispatch.Dispatch(path=str(binary))
+
+    with pytest.raises(RuntimeError, match=f"cannot start {fail_name}"):
+        AgyWorker(agy=str(binary), dispatch=dispatch).run(workdir, task)
+
+    assert len(opened) == 1 and opened[0].closed
+    assert len(procs) == 1
+    assert procs[0].stdin.closed and procs[0].stdout.closed and procs[0].stderr.closed
+    assert procs[0].returncode is not None and procs[0].returncode < 0
+
+
+def test_start_failure_while_held_leaves_streams_open(tmp_path, monkeypatch):
+    binary = tmp_path / "agy"
+    binary.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(5)\n")
+    binary.chmod(0o755)
+    workdir = tmp_path / f"attempt-{uuid.uuid4().hex[:8]}"
+    workdir.mkdir()
+    opened, procs = [], []
+    real_fdopen = os.fdopen
+    real_popen = agy_module.subprocess.Popen
+
+    def capture_fdopen(*args, **kwargs):
+        log = real_fdopen(*args, **kwargs)
+        opened.append(log)
+        return log
+
+    def capture_popen(*args, **kwargs):
+        proc = real_popen(*args, **kwargs)
+        if args and str(binary) in str(args[0]):
+            procs.append(proc)
+        return proc
+
+    def fail_start(self):
+        raise RuntimeError("cannot start thread")
+
+    monkeypatch.setattr(agy_module.os, "fdopen", capture_fdopen)
+    monkeypatch.setattr(agy_module.subprocess, "Popen", capture_popen)
+    monkeypatch.setattr(agy_module.threading.Thread, "start", fail_start)
+    monkeypatch.setattr(agy_module, "_stop", lambda *_a, **_k: (True, "", None))
+    task = SimpleNamespace(title="t", instructions="i", allowed_files=("a.py",))
+
+    try:
+        with pytest.raises(RuntimeError, match="cannot start thread"):
+            AgyWorker(agy=str(binary)).run(workdir, task)
+        assert len(opened) == 1 and not opened[0].closed
+        assert len(procs) == 1 and not procs[0].stdout.closed
+    finally:
+        for proc in procs:
+            proc.kill()
+            proc.wait()
+        for log in opened:
+            if not log.closed:
+                log.close()
