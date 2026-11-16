@@ -96,12 +96,27 @@ def repo(root: Path, source: str, test_source: str, *, files=None):
     return base, git("rev-parse", "HEAD")
 
 
+def _cairnwork_src():
+    import cairnwork
+
+    return str(Path(cairnwork.__file__).resolve().parent.parent)
+
+
+# -I drops PYTHONPATH, the only way Core's verifier exposes the checkout under test (the verifier
+# venv has no cairnwork installed); put that same package first explicitly, isolation otherwise kept.
+_LAUNCH = (
+    "import runpy, sys; sys.path.insert(0, sys.argv.pop(1)); "
+    "runpy.run_module('cairnwork.verify_cli', run_name='__main__', alter_sys=True)"
+)
+
+
 def verify(root, state, base, cand, declaration=None, strict=False):
     args = [
         sys.executable,
         "-I",
-        "-m",
-        "cairnwork.verify_cli",
+        "-c",
+        _LAUNCH,
+        _cairnwork_src(),
         "--state",
         str(state),
         "run",

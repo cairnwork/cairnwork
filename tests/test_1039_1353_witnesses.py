@@ -33,6 +33,7 @@ _ACCOUNT_GAP = (
 def test_c1_c4_evasions_are_runnable_and_live():
     """C1-C4; each source compiles, imports, calls add, and its removal changes C2's verdict."""
     rows = probe.core_rows()
+    _diag(rows)
     got = [
         r
         for r in rows
@@ -342,6 +343,7 @@ def test_candidate_routes_match_pinned_main_outputs():
 def test_class_results_are_pinned():
     """C6-C10; raw current judge, policy, runner and receipt outcomes are pinned."""
     rows = extra.extra_rows()
+    _diag(rows)
     assert len([r for r in rows if r["class_id"] == "C6"]) >= 3
     controls = {r["probe"]: r["observed"] for r in rows if r["class_id"] == "CONTROL"}
     assert controls["owner-correct"] == "blackbox:add: PASS [matched 1/1] low-entropy"
@@ -394,3 +396,12 @@ def c2_unavailable(rows):
     return [
         r["observed"] for r in rows if r["class_id"] == "C2" and r["probe"].startswith("verify-cli")
     ]
+
+
+def _diag(rows):  # TEMPORARY diagnostic for #1358 Core run; must not reach the final head
+    from cairnwork_sandbox import select
+
+    print("DIAG select", sys.platform, select(), sys.executable, file=sys.stderr)
+    for r in rows:
+        print("DIAG", r["class_id"], r["probe"], r["observed"], r["classification"],
+              "|", r["reason"][:500].replace("\n", " "), file=sys.stderr)
