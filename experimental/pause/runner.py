@@ -17,6 +17,7 @@ from typing import Any
 
 from experimental.local_worker import cli as worker_cli
 from experimental.pause.flow import RunResult
+from experimental.pause.git_env import hardened_git_env
 from experimental.pause.guard import TreeGuard
 from experimental.pause.interfaces import GuardUnavailable
 
@@ -28,7 +29,22 @@ _LINE_RE = re.compile(
 
 def _git(repo: Path, *args: str) -> str:
     result = subprocess.run(
-        ["git", "-C", str(repo), *args], capture_output=True, text=True, check=False
+        [
+            "git",
+            "-C",
+            str(repo),
+            "-c",
+            "core.autocrlf=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "core.fsmonitor=false",
+            *args,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=hardened_git_env(),
     )
     if result.returncode:
         raise RuntimeError(f"git {args[0]} failed: {result.stderr.strip()}")
@@ -84,14 +100,43 @@ def _prepare(r0_checkout: Path, checkout: Path, base: str) -> None:
         mode=r0_checkout.parent.stat().st_mode & 0o777, parents=True, exist_ok=True
     )
     subprocess.run(
-        ["git", "clone", "--no-hardlinks", "--no-checkout", "--", str(r0_checkout), str(checkout)],
+        [
+            "git",
+            "-c",
+            "core.autocrlf=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "core.fsmonitor=false",
+            "clone",
+            "--no-hardlinks",
+            "--no-checkout",
+            "--",
+            str(r0_checkout),
+            str(checkout),
+        ],
         check=True,
         capture_output=True,
+        env=hardened_git_env(),
     )
     subprocess.run(
-        ["git", "-C", str(checkout), "checkout", "--detach", base],
+        [
+            "git",
+            "-C",
+            str(checkout),
+            "-c",
+            "core.autocrlf=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "core.fsmonitor=false",
+            "checkout",
+            "--detach",
+            base,
+        ],
         check=True,
         capture_output=True,
+        env=hardened_git_env(),
     )
     _copy_access(r0_checkout, checkout)
     if _git(checkout, "status", "--porcelain", "--ignored"):
