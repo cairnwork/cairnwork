@@ -111,7 +111,13 @@ def _intake(args) -> Intake:
     state = Path(args.state).resolve()
     if args.verifier_account is None:
         return Intake(state)
-    return SelectedIntake(state, select_account(args.verifier_account))
+    intake = SelectedIntake(state, select_account(args.verifier_account))
+    if not intake.config()["verifier_account"]:  # never silently ignore an explicit account
+        raise IntakeRefused(
+            "VERIFIER_ACCOUNT_NOT_ENABLED",
+            "--verifier-account needs verifier_account: true in the state config.json",
+        )
+    return intake
 
 
 def _migrate(intake: Intake) -> dict[str, Any]:

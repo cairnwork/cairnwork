@@ -105,3 +105,24 @@ def test_cli_rejects_bad_name_before_default_account_use(
     )
     assert code == 2
     assert json.loads(capsys.readouterr().out)["error"] == "BAD_VERIFIER_ACCOUNT"
+
+
+def test_cli_refuses_explicit_account_when_config_disables_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    monkeypatch.setitem(
+        verifier_select.VERIFIER_ACCOUNTS,
+        "cairnwork-verifier2",
+        VerifierAccount(user="cairnwork-verifier2", root=root),
+    )
+    monkeypatch.setattr(verifier_select.pwd, "getpwnam", lambda _u: object())
+    state = tmp_path / "state"
+    _config(state, enabled=False)
+    code = verify_cli.main(
+        ["--verifier-account", "cairnwork-verifier2", "--state", str(state), "cleanup"]
+    )
+    out = json.loads(capsys.readouterr().out)
+    assert code == 2
+    assert out["error"] == "VERIFIER_ACCOUNT_NOT_ENABLED"
