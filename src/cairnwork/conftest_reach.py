@@ -51,6 +51,7 @@ from posixpath import dirname, join
 
 MAX_FILES = 500  # unchanged modules followed per conftest before the walk refuses
 MODULE_SUFFIXES = (".py", ".pyc", ".so", ".pyd")  # files an import statement can load (r6)
+_DYNAMIC = frozenset({"setattr", "delattr", "exec", "eval", "globals", "locals", "vars"})
 
 
 def reached_change(
@@ -76,7 +77,8 @@ def reached_change(
     by_name = _names(files)
     while queue:
         here, parsed = queue.pop(0)
-        targets = _targets(here, parsed, files, by_name)
+        if (targets := _targets(here, parsed, files, by_name)) is None:
+            return "has an unreadable pytest_plugins with-binding"
         for target in sorted(targets):
             if target in changed:
                 return target
@@ -106,10 +108,12 @@ def _names(files: frozenset[str]) -> dict[str, set[str]]:
     return out
 
 
-def _targets(here: str, tree: ast.Module, files: frozenset[str], by_name) -> set[str]:
+def _targets(here: str, tree: ast.Module, files: frozenset[str], by_name) -> set[str] | None:
     """The files of the tree that one import in ``tree`` (the file ``here``) may load."""
     found: set[str] = set()
     for level, names in _imports(tree, stdlib="contextlib" not in by_name):
+        if level < 0:
+            return None
         for name in names:
             star = name == "*" or name.endswith(".*")
             if star:
@@ -169,7 +173,10 @@ def _imports(tree: ast.Module, *, stdlib: bool = True) -> Iterator[tuple[int, It
             if dots:
                 yield dots, [n.lstrip(".") for n in names]
         elif values := _plugin_values(node, tree if stdlib else None):
-            yield 0, _strings(values)
+            if isinstance(node, ast.With | ast.AsyncWith) and None in values:
+                yield -1, ()
+            else:
+                yield 0, _strings(values)
 
 
 def _strings(values: Sequence[ast.AST | None]) -> list[str]:
@@ -226,24 +233,16 @@ def _items(node: ast.expr | None) -> list[ast.expr]:
     return [node] if node is not None else []
 
 
-_DYNAMIC = frozenset({"setattr", "delattr", "exec", "eval", "globals", "locals", "vars"})
-
-
 def _nullcontext_imports(tree: ast.Module, name: str, from_import: bool) -> set[int]:
-    if from_import:
-        return {
-            id(a)
-            for s in tree.body
-            if isinstance(s, ast.ImportFrom) and s.level == 0 and s.module == "contextlib"
-            for a in s.names
-            if a.name == "nullcontext" and (a.asname or a.name) == name
-        }
+    stmt = ast.ImportFrom if from_import else ast.Import
+    target = "nullcontext" if from_import else "contextlib"
     return {
         id(a)
         for s in tree.body
-        if isinstance(s, ast.Import)
+        if isinstance(s, stmt)
+        and (not isinstance(s, ast.ImportFrom) or (s.level == 0 and s.module == "contextlib"))
         for a in s.names
-        if a.name == "contextlib" and (a.asname or a.name) == name
+        if a.name == target and (a.asname or a.name) == name
     }
 
 
@@ -255,22 +254,25 @@ def _with_expr(expr: ast.expr, tree: ast.Module | None) -> ast.expr | None:
     fn = expr.func
     if isinstance(fn, ast.Name):
         name, from_import = fn.id, True
-    elif isinstance(fn, ast.Attribute) and fn.attr == "nullcontext":
-        if not isinstance(fn.value, ast.Name):
-            return None
+    elif (
+        isinstance(fn, ast.Attribute)
+        and fn.attr == "nullcontext"
+        and isinstance(fn.value, ast.Name)
+    ):
         name, from_import = fn.value.id, False
     else:
         return None
-    good = _nullcontext_imports(tree, name, from_import)
-    if not good:
+    if not (good := _nullcontext_imports(tree, name, from_import)):
         return None
     for n in ast.walk(tree):
         if isinstance(n, ast.alias):
             if n.name == "*" or (id(n) not in good and (n.asname or n.name.split(".")[0]) == name):
                 return None
         elif (
-            (isinstance(n, ast.Name) and not isinstance(n.ctx, ast.Load) and n.id == name)
-            or (isinstance(n, ast.Name) and n.id in _DYNAMIC)
+            (
+                isinstance(n, ast.Name)
+                and (n.id in _DYNAMIC or (not isinstance(n.ctx, ast.Load) and n.id == name))
+            )
             or (isinstance(n, ast.Attribute) and not isinstance(n.ctx, ast.Load))
             or (isinstance(n, ast.MatchMapping) and n.rest == name)
             or (isinstance(n, ast.arg) and n.arg == name)
@@ -289,13 +291,12 @@ def _plain_index(node: ast.AST) -> bool:
 def _paired_values(target: ast.AST, value: ast.expr | None) -> list[ast.expr | None]:
     if not _mentions(target):
         return []
-    is_sub = (
+    if isinstance(target, ast.Name) or (
         isinstance(target, ast.Subscript)
         and isinstance(target.value, ast.Name)
         and target.value.id == "pytest_plugins"
         and _plain_index(target.slice)
-    )
-    if isinstance(target, ast.Name) or is_sub:
+    ):
         return [value]
     if isinstance(target, ast.Tuple | ast.List) and isinstance(value, ast.Tuple | ast.List):
         plain = not any(isinstance(e, ast.Starred) for e in (*target.elts, *value.elts))
@@ -316,9 +317,9 @@ def _plugin_values(node: ast.AST, tree: ast.Module | None = None) -> Sequence[as
         return [node.iter]
     if isinstance(node, ast.With | ast.AsyncWith):
         return [
-            _with_expr(item.context_expr, tree)
-            for item in node.items
-            if item.optional_vars is not None and _mentions(item.optional_vars)
+            _with_expr(i.context_expr, tree)
+            for i in node.items
+            if i.optional_vars is not None and _mentions(i.optional_vars)
         ]
     if isinstance(node, ast.Match):
         pats = [
@@ -327,8 +328,7 @@ def _plugin_values(node: ast.AST, tree: ast.Module | None = None) -> Sequence[as
             for p in ast.walk(c.pattern)
             if _pattern_bound(p) == "pytest_plugins"
         ]
-        if pats:
-            # Never walk MatchMapping keys: case {"y": pytest_plugins} binds d["y"], not "y".
+        if pats:  # Never walk MatchMapping keys: case {"y": pytest_plugins} binds d["y"], not "y".
             return [
                 node.subject,
                 *(p.pattern for p in pats if isinstance(p, ast.MatchAs) and p.pattern is not None),
@@ -343,9 +343,7 @@ def _mentions(node: ast.AST) -> bool:
 def _pattern_bound(node: ast.AST) -> str | None:
     if isinstance(node, ast.MatchAs | ast.MatchStar):
         return node.name
-    if isinstance(node, ast.MatchMapping):
-        return node.rest
-    return None
+    return node.rest if isinstance(node, ast.MatchMapping) else None
 
 
 def _plugins(node: ast.Assign | ast.AnnAssign | ast.AugAssign | ast.NamedExpr) -> bool:

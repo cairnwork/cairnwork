@@ -252,13 +252,6 @@ UNREAD_PLUGINS = [
     'pytest_plugins = [f"{NAME}"]\n',
     "(pytest_plugins := PLUGINS)\n",  # #1027
     "for pytest_plugins in PLUGINS:\n    pass\n",
-    "with ctx(PLUGINS) as pytest_plugins:\n    pass\n",
-    'with ctx(["x"]) as pytest_plugins:\n    pass\n',
-    'async def _f():\n    async with a(["x"]) as pytest_plugins:\n        pass\n',
-    (
-        "from contextlib import nullcontext\nnullcontext = ctx\n"
-        'with nullcontext(["x"]) as pytest_plugins:\n    pass\n'
-    ),
     "match PLUGINS:\n    case pytest_plugins:\n        pass\n",
     "pytest_plugins = []\npytest_plugins.append(NAME)\n",
     'import sys\nsetattr(sys.modules[__name__], "pytest_plugins", P)\n',
@@ -284,14 +277,53 @@ def test_a_pytest_plugins_value_it_cannot_read_does_not_refuse_the_new_test_file
     assert _reach(text, new, ["tests/test_new.py"]) == ""
 
 
-def test_unverified_with_context_manager_does_not_trust_literal_arg():
-    """Only a verified contextlib.nullcontext call is unwrapped in conftest_reach (#1010)."""
-    assert _reach('with ctx(["x"]) as pytest_plugins:\n    pass\n', TWO, ["tests/x.py"]) == ""
+def test_unverified_with_context_manager_fails_closed():
+    """Unverified with-bindings of pytest_plugins fail closed in conftest_reach (#1010)."""
+    for text in (
+        "with ctx(PLUGINS) as pytest_plugins:\n    pass\n",
+        'with ctx(["x"]) as pytest_plugins:\n    pass\n',
+        'async def _f():\n    async with a(["x"]) as pytest_plugins:\n        pass\n',
+        (
+            "from contextlib import nullcontext\nnullcontext = ctx\n"
+            'with nullcontext(["x"]) as pytest_plugins:\n    pass\n'
+        ),
+    ):
+        assert _reach(text, TWO, ["tests/x.py"]) != ""
     local_ctx = {**TWO, "tests/contextlib.py": ""}
     nc = (
         'from contextlib import nullcontext\nwith nullcontext(["x"]) as pytest_plugins:\n    pass\n'
     )
-    assert _reach(nc, local_ctx, ["tests/x.py"]) == ""
+    assert _reach(nc, local_ctx, ["tests/x.py"]) != ""
+    tree = {"tests/safe.py": "", "tests/evil.py": ""}
+    cm_evil = (
+        "from contextlib import nullcontext\n"
+        "class CM:\n"
+        "    def __enter__(self):\n"
+        "        return ['evil']\n"
+        "    def __exit__(self, *a):\n"
+        "        return False\n"
+        "with nullcontext(['safe']) as _s, CM() as pytest_plugins:\n"
+        "    pass\n"
+    )
+    assert _reach(cm_evil, tree, ["tests/evil.py"]) != ""
+    shadow_cm = (
+        "from contextlib import nullcontext\n"
+        "class CM:\n"
+        "    def __enter__(self):\n"
+        "        return ['evil']\n"
+        "    def __exit__(self, *a):\n"
+        "        return False\n"
+        "nullcontext = CM\n"
+        "with nullcontext(['safe']) as pytest_plugins:\n"
+        "    pass\n"
+    )
+    assert _reach(shadow_cm, tree, ["tests/evil.py"]) != ""
+    safe_only = (
+        "from contextlib import nullcontext\n"
+        "with nullcontext(['safe']) as pytest_plugins:\n"
+        "    pass\n"
+    )
+    assert _reach(safe_only, tree, ["tests/evil.py"]) == ""
 
 
 def test_the_parts_of_a_joined_plugin_name_are_not_plugins():
