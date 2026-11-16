@@ -180,6 +180,7 @@ class _Ended:
     first. No process is started: pid -1 is never signalled (os.kill and killpg are refused)."""
 
     pid = -1
+    stdin = None
 
     def __init__(self, code: int, timeout: bool):
         self.returncode, self.timeout = code, timeout
