@@ -212,9 +212,8 @@ def _scratch(intake: Intake, source: Path, repo: Path, task: TaskSpec, candidate
 
 def _check_parent(repo: Path, base: str, candidate: str) -> None:
     """In the caller's repository, read-only and before anything is fetched anywhere: the
-    candidate must be one commit directly on the base. A candidate built on top of a hidden
-    test commit is refused here, so it can never bring that commit into a store Cairnwork
-    checks (and so cannot make the commit look already seen)."""
+    candidate must be one commit directly on the base. A candidate built on a hidden test
+    commit is refused here, so it never brings that commit into a store Cairnwork checks."""
     try:
         parents = run_git(repo, "rev-list", "--parents", "-n", "1", candidate).split()[1:]
     except GitCommandError as exc:
@@ -222,9 +221,9 @@ def _check_parent(repo: Path, base: str, candidate: str) -> None:
             f"cannot read {shown(candidate)} in {shown(repo)}: {shown(exc)}"
         ) from exc
     if parents != [base]:
+        found = ", ".join(map(shown, parents))
         raise CandidateRejected(
-            "NOT_ONE_COMMIT_ON_BASE",
-            f"parents of {shown(candidate)} are {', '.join(map(shown, parents))}",
+            "NOT_ONE_COMMIT_ON_BASE", f"parents of {shown(candidate)} are {found}"
         )
 
 
