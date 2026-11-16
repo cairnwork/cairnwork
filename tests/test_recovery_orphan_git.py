@@ -8,6 +8,7 @@ import sys
 import time
 
 import pytest
+from _child_python import child_env
 from conftest import commit_change
 from test_deferred_tests import REGRESSION, make_test_commit
 from test_recovery_leftovers import (
@@ -78,7 +79,7 @@ os.execv({real_git!r}, [{real_git!r}, *args])
             [sys.executable, str(DRIVER), str(repo), str(state), base, tests, step],
             stdout=subprocess.DEVNULL,
             stderr=err,
-            env=env,
+            env=child_env(env),
         )
 
     deadline = time.monotonic() + 120

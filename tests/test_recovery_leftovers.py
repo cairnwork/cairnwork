@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 import pytest
-from _child_python import run_module
+from _child_python import child_env, run_module
 from conftest import commit_change
 from run_root_scope import own_attempt
 from test_deferred_tests import REGRESSION, make_test_commit
@@ -76,6 +76,7 @@ def _driver(p2p_project, state, step, *account):
             [sys.executable, str(DRIVER), str(repo), str(state), base, tests, step, *account],
             stdout=subprocess.DEVNULL,
             stderr=err,
+            env=child_env(),
         )
 
 
