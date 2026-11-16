@@ -155,3 +155,7 @@ blackbox 路徑的候選樹與一般 verify 相同（宣告 `module: calc`，che
 產生的 verifier ini 只有 base 的 `pytest.ini` 裡允許的鍵（`testpaths`、`python_*`、`norecursedirs`、`asyncio_mode`、`filterwarnings`），`addopts` 被丟掉，只保留其中的 `--import-mode=importlib`（Nexus-new 的 addopts 裡沒有 `-W` 或 strict 選項）；plugin 以 `-p` 明確載入 pytest-asyncio、pytest-timeout、anyio。實際執行的 pytest 參數記在 JSON 的 `pytest_argv`。證據：`docs/drills/2026-10-20-nexus-new-verifier.json`。
 
 這只證明「一個 Nexus-new 測試檔可以在 Cairnwork 的 verifier 裡正確地過與不過」。候選版本是演練腳本自己做的 commit，不是 agent 交出的修改，也沒有經過 Core 公證；還沒有跑過真正的 Nexus-new Issue。只讀 repo 根目錄的設定檔；需要網路、外部服務或 HOME 裡快取的測試，在 sandbox 裡仍然會失敗。
+
+## Issue #1353 Stage 2 baseline drill
+
+Run `.venv/bin/python scripts/drill_1353_baseline.py` to measure the pinned main behavior for C1–C10 and ten correct controls. The generated `docs/drills/1353-baseline-<platform>.json` stores each production route, its raw return value, the derived observed status, the spec expectation, and whether they match. `NOT_RUN` records an actual incomplete result from the current route (including missing verifier-account results); it is not substituted for a guessed verdict. `VERIFIED-wrong` counts tamper probes whose measured result is VERIFIED. Owner-mode blackbox runs are not comparable to verifier-account PASS because this host has no dedicated account. C10 remains a documented same-interpreter known residual.

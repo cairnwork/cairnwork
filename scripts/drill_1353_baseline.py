@@ -4,49 +4,79 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import re
 import sys
+import types
 from datetime import UTC, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEST = (ROOT / "docs/drills").resolve()
-sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "src"))
-sys.path.insert(0, str(ROOT / "tests"))
 
 
-def output_dir(value: str) -> Path:
+def load(name):
+    path = ROOT / "tests" / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def bootstrap_tests():
+    """Expose local test helpers without changing sys.path."""
+    for name, path in (("tests", ROOT / "tests"), ("tests.attest", ROOT / "tests" / "attest")):
+        package = types.ModuleType(name)
+        package.__path__ = [str(path)]
+        sys.modules[name] = package
+    load_as("xdist_groups", ROOT / "tests" / "xdist_groups.py")
+    load_as("conftest", ROOT / "tests" / "conftest.py")
+
+
+def load_as(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def output_dir(value):
     target = Path(value)
-    if not target.is_absolute():
-        target = ROOT / target
+    target = target if target.is_absolute() else ROOT / target
     target = target.resolve()
     if target != DEST and DEST not in target.parents:
         raise SystemExit("--out must resolve beneath docs/drills/")
     return target
 
 
-def totals(rows: list[dict]) -> dict:
+def totals(rows):
     tamper = [
-        row for row in rows if re.fullmatch(r"C\d+", row["class_id"]) and row["class_id"] != "C10"
+        r
+        for r in rows
+        if re.fullmatch(r"C\d+", r["class_id"])
+        and r["class_id"] != "C10"
+        and r["classification"] not in {"HONEST_VERIFIED", "HONEST_FAILED"}
     ]
     return {
         "N_tamper": len(tamper),
-        "N_honest": sum(row["class_id"] == "HONEST" for row in rows),
-        "NOT_RUN": sum(row["classification"] == "NOT_RUN" for row in rows),
-        "VERIFIED-wrong": sum(row["classification"] == "VERIFIED_WRONG" for row in tamper),
-        "spec_mismatch_count": sum(not row["matches_spec"] for row in rows),
+        "N_honest": sum(r["class_id"] == "HONEST" for r in rows),
+        "NOT_RUN": sum(r["classification"] == "NOT_RUN" for r in rows),
+        "VERIFIED-wrong": sum(r["classification"] == "VERIFIED_WRONG" for r in tamper),
+        "spec_mismatch_count": sum(not r["matches_spec"] for r in rows),
     }
 
 
-def main() -> int:
+def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", default="docs/drills/")
     args = parser.parse_args()
-    from test_1039_1353_witnesses import run_baseline_probes
-
-    rows = sorted(run_baseline_probes(), key=lambda row: (row["class_id"], row["probe"]))
+    bootstrap_tests()
+    core = load("_w1353_probe")
+    extra = load("_w1353_extra")
+    rows = sorted(core.core_rows() + extra.extra_rows(), key=lambda r: (r["class_id"], r["probe"]))
     data = {
         "generated_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
         "platform": sys.platform,
