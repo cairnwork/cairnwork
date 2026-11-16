@@ -4,11 +4,10 @@
 from __future__ import annotations
 
 import argparse
-import importlib.util
+import importlib
 import json
 import re
 import sys
-import types
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -16,33 +15,11 @@ ROOT = Path(__file__).resolve().parents[1]
 DEST = (ROOT / "docs/drills").resolve()
 
 
-def load(name):
-    path = ROOT / "tests" / f"{name}.py"
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
 def bootstrap_tests():
-    """Expose local test helpers without changing sys.path."""
-    for name, path in (("tests", ROOT / "tests"), ("tests.attest", ROOT / "tests" / "attest")):
-        package = types.ModuleType(name)
-        package.__path__ = [str(path)]
-        sys.modules[name] = package
-    load_as("xdist_groups", ROOT / "tests" / "xdist_groups.py")
-    load_as("conftest", ROOT / "tests" / "conftest.py")
-
-
-def load_as(name, path):
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
+    """Make the local test helpers importable the way pytest's rootdir conftest does."""
+    for path in (ROOT / "tests", ROOT):
+        if str(path) not in sys.path:
+            sys.path.insert(0, str(path))
 
 
 def output_dir(value):
@@ -76,8 +53,8 @@ def main():
     parser.add_argument("--out", default="docs/drills/")
     args = parser.parse_args()
     bootstrap_tests()
-    core = load("_w1353_probe")
-    extra = load("_w1353_extra")
+    core = importlib.import_module("_w1353_probe")
+    extra = importlib.import_module("_w1353_extra")
     rows = sorted(core.core_rows() + extra.extra_rows(), key=lambda r: (r["class_id"], r["probe"]))
     data = {
         "generated_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
