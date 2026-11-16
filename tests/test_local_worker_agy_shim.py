@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import shutil
+import stat
 import sys
 from pathlib import Path
 
@@ -28,6 +30,65 @@ ARGV = [
     "--print-timeout",
     "600s",
 ]
+
+
+def test_set_checkout_modes_uses_regular_files_and_directories_only(tmp_path):
+    checkout = tmp_path / "checkout"
+    nested = checkout / "nested"
+    nested.mkdir(parents=True)
+    inside = checkout / "inside.py"
+    nested_file = nested / "nested.py"
+    inside.write_text("inside")
+    nested_file.write_text("nested")
+    outside = tmp_path / "outside.py"
+    outside.write_text("outside")
+    outside.chmod(0o600)
+    outside_dir = tmp_path / "outside-dir"
+    outside_dir.mkdir()
+    outside_dir.chmod(0o711)
+    (checkout / "file-link").symlink_to(outside)
+    (checkout / "dir-link").symlink_to(outside_dir, target_is_directory=True)
+
+    agy_shim._set_checkout_modes(checkout)
+
+    assert stat.S_IMODE(inside.stat().st_mode) == 0o660
+    assert stat.S_IMODE(nested_file.stat().st_mode) == 0o660
+    assert stat.S_IMODE(checkout.stat().st_mode) == 0o770
+    assert stat.S_IMODE(nested.stat().st_mode) == 0o770
+    assert stat.S_IMODE(outside.stat().st_mode) == 0o600
+    assert stat.S_IMODE(outside_dir.stat().st_mode) == 0o711
+
+
+def test_set_checkout_modes_does_not_chmod_file_swapped_for_symlink(tmp_path, monkeypatch):
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    target = checkout / "file.py"
+    target.write_text("inside")
+    outside = tmp_path / "outside.py"
+    outside.write_text("outside")
+    outside.chmod(0o600)
+    real_open = os.open
+    real_is_symlink = Path.is_symlink
+
+    def replace_with_link(path):
+        result = real_is_symlink(path)
+        if path == target:
+            link = checkout / "replacement"
+            link.symlink_to(outside)
+            os.replace(link, target)
+        return result
+
+    def replace_before_open(path, flags, *args, **kwargs):
+        if path == "file.py" and kwargs.get("dir_fd") is not None:
+            link = checkout / "replacement"
+            link.symlink_to(outside)
+            os.replace(link, target)
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "is_symlink", replace_with_link)
+    monkeypatch.setattr(agy_shim.os, "open", replace_before_open)
+    agy_shim._set_checkout_modes(checkout)
+    assert stat.S_IMODE(outside.stat().st_mode) == 0o600
 
 
 class FakeProcess:

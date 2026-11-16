@@ -39,10 +39,12 @@ class GuardChannel:
         return report_guard.read_verdict_fd(self._report.fileno(), self.nonce)
 
     def close(self) -> None:
-        if self._nonce_read >= 0:
-            os.close(self._nonce_read)
-            self._nonce_read = -1
-        self._report.close()
+        nonce_read, self._nonce_read = self._nonce_read, -1  # never retry a close
+        try:
+            if nonce_read >= 0:
+                os.close(nonce_read)
+        finally:  # #1364: a raising close above must not leave the report open
+            self._report.close()
 
 
 def open_channel(private: Path) -> GuardChannel:
