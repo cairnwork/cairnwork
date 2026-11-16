@@ -243,3 +243,18 @@ def test_env_exc_reads_the_real_class_not_a_spoofed_one():
     info = type("Info", (), {"value": Spoof("x")})()
     plugin["_env_exc"](info, "/")
     assert calls == []
+
+
+def test_a_wrapped_oserror_that_replaces_errno_is_doubt_and_runs_no_code():
+    """The walk reads errno through the built-in descriptor, so a property on a test's OSError
+    subclass never runs; main failed closed when that read raised, so a class that replaces
+    errno is still doubt (True) here."""
+    plugin = _plugin(DENIED_SOURCE)
+    calls = []
+
+    class Odd(OSError):
+        errno = property(lambda self: calls.append("errno"))
+
+    assert plugin["_denied_inside"](ExceptionGroup("g", [Odd()])) is True
+    assert calls == []
+    assert plugin["_denied_inside"](ExceptionGroup("g", [FileNotFoundError(2, "x")])) is False

@@ -8,7 +8,8 @@ def _denied_inside(exc, _codes=(errno.EACCES, errno.EPERM, errno.EROFS, errno.EN
                    _cause=BaseException.__cause__.__get__,
                    _context=BaseException.__context__.__get__,
                    _quiet=BaseException.__suppress_context__.__get__,
-                   _errno=OSError.errno.__get__, _members=BaseExceptionGroup.exceptions.__get__):
+                   _errno=OSError.errno.__get__, _members=BaseExceptionGroup.exceptions.__get__,
+                   _mro=type.__dict__["__mro__"].__get__, _kdict=type.__dict__["__dict__"].__get__):
     """#854: a denial-shaped OSError wrapped in a failure (group member, cause, unsuppressed
     context), or #932 a failed host-name lookup (a closed network); past the bound, yes (fail
     closed). Other wrapped OSErrors stay plain failures."""
@@ -20,6 +21,10 @@ def _denied_inside(exc, _codes=(errno.EACCES, errno.EPERM, errno.EROFS, errno.EN
             return True
         seen.add(id(cur))
         error_no = _errno(cur) if _sub(_type(cur), OSError) else None
+        if _sub(_type(cur), OSError) and any(  # a class that replaces errno (a property): doubt
+                _type(_kdict(k).get("errno", 0)) is not int for k in _mro(_type(cur))
+                if k is not OSError):
+            return True
         if cur is not exc and (_sub(_type(cur), _lookup)
                                or _type(error_no) is int and error_no in _codes):
             # #932: a lookup's errno is EAI_*
