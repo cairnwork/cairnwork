@@ -234,3 +234,31 @@ def _no_origin_in_test_repos(request, monkeypatch):
     from cairnwork import intake
 
     monkeypatch.setitem(intake.DEFAULT_CONFIG, "require_base_on_main", False)
+
+
+@pytest.fixture(autouse=True)
+def _configure_task_origin_from_test_fixture(monkeypatch):
+    """Pass the test-created origin as verifier-owned TaskSpec config when available.
+
+    A few legacy tests create deferred commits in the `make_test_commit` helper and then
+    construct TaskSpec directly. The helper's local origin stands in for verifier config;
+    production code still never reads the supplied repo's remote configuration.
+    """
+    from cairnwork.pipeline import TaskSpec
+
+    original = TaskSpec.__init__
+
+    def init(task, *args, **kwargs):
+        if kwargs.get("test_commit") and not kwargs.get("origin_url"):
+            repo = kwargs.get("repo") or (args[4] if len(args) > 4 else None)
+            if repo is not None:
+                try:
+                    origin = git(repo, "remote", "get-url", "origin")
+                except subprocess.CalledProcessError:
+                    pass
+                else:
+                    if origin.startswith(("/", "file://")):
+                        kwargs["origin_url"] = origin
+        original(task, *args, **kwargs)
+
+    monkeypatch.setattr(TaskSpec, "__init__", init)

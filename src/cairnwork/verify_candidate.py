@@ -87,15 +87,12 @@ def verify_candidate(
     blackbox: Declaration | None = None, require_protection: str = "",  # #303 (protection.py)
 ) -> dict[str, Any]:  # fmt: skip
     """``verified`` is true only for a Core verdict bound to what was judged: the candidate, or
-    with deferred tests the tree that ran (candidate plus tests) and its ``binding`` (#229), headed
-    by the candidate. ``status`` is VERIFIED, FAILED, REFUSED or UNCOMPARABLE (#234: the base
-    could not be compared; ``uncomparable`` says why, Core is never asked). The account precheck
-    precedes burn; ``tests_consumed`` says whether the tests are now used up.
+    with deferred tests the tree that ran and its ``binding`` (#229). ``status`` is VERIFIED,
+    FAILED, REFUSED or UNCOMPARABLE (#234: the base could not be compared; ``uncomparable`` says
+    why, Core is never asked). The account precheck precedes burn; ``tests_consumed``: used up.
     Raises TaskRejected for malformed input and IntakeRefused when drained or mirror unusable.
-    ``import_paths`` (#283, as the Issue pipeline's) are
-    directories prepended to the verifiers' import path for a src-layout repo; BAD_IMPORT_PATH
-    when one is malformed or is, or is inside, a test root. The state config's are not read.
-
+    ``import_paths`` (#283) are directories prepended to the verifiers' import path for a
+    src-layout repo; BAD_IMPORT_PATH when malformed or inside a test root. Config's are not read.
     Environment failures before the test commit is burned are explicit refusals. The shadow rules
     see only the listed files the candidate changed (#866)."""
     if not isinstance(base, str) or not OID.fullmatch(base):
@@ -108,6 +105,7 @@ def verify_candidate(
         verifiers, test_commit=test_commit, p2p_budget=intake.config()["p2p_time_budget_seconds"],
         blackbox=blackbox, require_protection=require_protection, test_store=intake.test_store(),
         p2p_mode=intake.config()["p2p_selection"], test_roots=test_roots, import_paths=import_paths,
+        origin_url=intake.config().get("origin_url") or None,
     )  # fmt: skip
     account, python = intake.verifier_account(), intake.config()["verifier_python"]
     specs = check_task_for_verify(
@@ -135,6 +133,8 @@ def verify_candidate(
                 result.reason, status = f"UNCOMPARABLE: {exc}", "UNCOMPARABLE"
                 found, rule = exc.comparison, candidate_env.uncomparable_rule(exc.comparison.code)
                 uncomparable = {"code": found.code, "detail": found.detail, "rule": rule}
+            except OSError as exc:
+                result.reason, status = f"INFRA_ERROR: {type(exc).__name__}: {exc}", "FAILED"
     judged = result.candidate_commit or candidate
     subject = binding["head"] if binding else judged  # a bound row names the head (#229)
     verdict = notary.verdict(result.task_id, result.attempt_id, expected_candidate=subject)

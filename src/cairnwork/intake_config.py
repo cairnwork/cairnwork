@@ -57,7 +57,17 @@ DEFAULT_CONFIG = {
     # recorded and alerted, never a verdict; None (the default) runs nothing.
     "post_verified_hook": None,
     "post_verified_hook_seconds": 300,
+    # The deferred tests' origin (a git URL or path), owned by the verifier: only this state
+    # config supplies it, never the supplied repository's .git/config. None: none configured.
+    "origin_url": None,
 }
+
+
+def one_line(value: Any, optional: bool = False) -> bool:
+    """A non-empty one-line string without NUL (None passes when ``optional``)."""
+    if value is None:
+        return optional
+    return isinstance(value, str) and bool(value) and not any(c in value for c in "\n\r\0")
 
 
 def seconds_ok(value: Any) -> bool:

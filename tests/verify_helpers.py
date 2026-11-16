@@ -52,7 +52,24 @@ def candidate(project, base, files=None, delete=()):
     return sha
 
 
+def configure_origin(state, project):
+    """Simulate the verifier's own config: the deferred tests' origin is verifier-owned state
+    (never read from the supplied repo), so a run that needs it gets it from config.json."""
+    path = state / "config.json"
+    try:
+        config = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return  # unreadable or malformed config: the test is about that, leave it as is
+    origin = subprocess.run(
+        ["git", "-C", str(project), "remote", "get-url", "origin"],
+        capture_output=True, text=True, check=False,
+    ).stdout.strip()  # fmt: skip
+    if origin and isinstance(config, dict) and "origin_url" not in config:
+        path.write_text(json.dumps({**config, "origin_url": origin}))
+
+
 def verify(state, project, base, cand, *extra, allowed=("src/calc.py",), tests=(VERIFY,)):
+    configure_origin(state, project)
     args = ["--repo-path", str(project), "--base", base, "--candidate", cand]
     for name in allowed:
         args += ["--allowed-file", name]
@@ -71,6 +88,8 @@ def base_of(project):
 
 
 def cli(state, *args):
+    if "--repo-path" in args:
+        configure_origin(state, args[args.index("--repo-path") + 1])
     done = subprocess.run(
         [sys.executable, "-I", "-m", "cairnwork.verify_cli", "--state", str(state), *args],
         capture_output=True, text=True, timeout=120, check=False,

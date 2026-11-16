@@ -19,7 +19,7 @@ def _new_tests(project, old, new):
     commit_change(project, {FILE: old})
     base = git(project, "rev-parse", "HEAD")
     _, new_commit = make_test_commit(project, {FILE: new})
-    ensure_test_commit(project, new_commit)
+    ensure_test_commit(project, new_commit, origin_url=git(project, "remote", "get-url", "origin"))
     return new_tests(project, base, new_commit, (FILE,))
 
 

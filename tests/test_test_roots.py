@@ -130,7 +130,7 @@ PKG_TEST = "from calc import add\ndef test_regression():\n    assert add(1, 1) =
 
 
 def paths_of(repo, base, commit, *roots):
-    ensure_test_commit(repo, commit)
+    ensure_test_commit(repo, commit, origin_url=git(repo, "remote", "get-url", "origin"))
     return _paths(repo, base, commit, *roots)[0]
 
 
