@@ -159,7 +159,8 @@ def test_only_run_is_offered(capsys, argv):
     assert seen == [] and "usage" in capsys.readouterr().err
 
 
-def test_configured_runs_append_receipts_to_same_out(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("spelling", ["split", "equals", "prefix"])
+def test_configured_runs_append_receipts_to_same_out(tmp_path, monkeypatch, capsys, spelling):
     from experimental.pause import receipt
 
     task = tmp_path / "task.json"
@@ -189,7 +190,12 @@ def test_configured_runs_append_receipts_to_same_out(tmp_path, monkeypatch, caps
         )
 
     monkeypatch.setattr(pause_cli, "run_flow", flow)
-    argv = ["run", "--planner-config", "cfg", "--task", str(task), "--out", str(out)]
+    flag = {
+        "split": ["--out", str(out)],
+        "equals": [f"--out={out}"],
+        "prefix": [f"--ou={out}"],
+    }[spelling]
+    argv = ["run", "--planner-config", "cfg", "--task", str(task), *flag]
 
     def factory(_):
         return object(), object(), object(), object(), object()
