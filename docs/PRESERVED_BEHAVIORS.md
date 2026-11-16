@@ -85,12 +85,12 @@ conftest 匯入的模組在每個測試之前執行，可以改掉 runner 回報
 
 殘餘（#951，已量測，未實作）：只被 base 測試檔（不是 conftest）匯入、而測試 commit 改動的模組，不在 conftest 檢查範圍內，也算「未擋」。類別：錯誤接受，要測試作者自己的程式。照實鎖定現行行為：`tests/test_deferred_base_test_import_951.py`（現行結果 COMPLETED；`xfail(strict=True)` 的孿生測試在規則上線那天會翻成失敗，提醒移除）。
 
-量測（`scripts/measure_base_test_imports.py`，唯讀，各取近 300 個含測試檔變更的 commit，2026-11-16；用 `git grep` 看 parent 的 import，只認 `import x`／`from x import`，`from pkg import x` 沒算，所以是下限）：
+量測（`scripts/measure_base_test_imports.py`，唯讀，各取固定 ref（origin/main 量測當時的 sha，表內列出）往回近 300 個含測試檔變更的 commit，2026-11-16；用 `git grep` 看 parent 的 import，只認完整匯入路徑（`import a.b.c`／`from a.b.c import`，tests/ 與 src/ 前綴另算一次），`from pkg import x` 沒算，所以是下限）：
 
 | repo | 同 commit 改了非測試模組且被 base 測試檔匯入 | 其中位於 tests/ 的共用 helper | 純測試 commit | 純測試 commit 中改了被匯入模組 |
 | --- | --- | --- | --- | --- |
-| cairnwork | 228/300（76.0%） | 11（3.7%） | 35 | 0 |
-| Nexus-new | 208/300（69.3%） | 2（0.7%） | 19 | 0 |
+| cairnwork | 227/300（75.7%） | 11（3.7%） | 35 | 0 |
+| Nexus-new | 201/300（67.0%） | 2（0.7%） | 20 | 0 |
 
 限制：樣本是 repo 自己的開發 commit（原始碼與測試一起改），不是任務的測試 commit；純測試 commit 只有 54 個。tests/ 外模組的高比例反映的是「原始碼和測試一起改」，在任務的測試 commit 裡本來就不該出現。
 建議（本張不實作）：不做「變更任何被 base 測試匯入的模組就拒」的全拒規則（誤拒共用 helper 更新）。若要收緊，只加一條針對 tests/ 外模組的規則：測試 commit 不得改 tests/ 以外、被 base 測試檔匯入的 `.py`（任務的測試 commit 本來只該動測試樹），tests/ 內 helper 維持現狀接受。上線前先用真實任務測試 commit 量誤拒率。
