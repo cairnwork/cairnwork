@@ -78,8 +78,8 @@ _SAFE_SYS_ATTRS = frozenset(
         "__spec__",
     }
 )
-_DEFERRED_SYS_ATTRS = frozenset({"meta_path", "path_hooks", "path_importer_cache", "modules"})
-_SAFE_PATH_READ_FUNCS = frozenset(
+MACHINERY_SYS_ATTRS = frozenset({"meta_path", "path_hooks", "path_importer_cache", "modules"})
+SAFE_PATH_READ_FUNCS = frozenset(
     {
         "len",
         "iter",
@@ -102,20 +102,20 @@ _SAFE_PATH_READ_FUNCS = frozenset(
 )
 
 
-def _unwrap_transparent_parent(
+def unwrap_transparent_parent(
     node: ast.AST,
     parents: dict[ast.AST, ast.AST],
-    check_fn: Callable[[ast.AST, AliasState], bool],
-    st: AliasState,
+    check_fn: Callable[[ast.AST], bool],
 ) -> ast.AST:
+    """Walk up transparent conditional, boolean, and walrus expressions."""
     cur = node
     for _ in range(16):
         p = parents.get(cur)
-        if isinstance(p, ast.IfExp) and cur in (p.body, p.orelse) and check_fn(p, st):
+        if isinstance(p, ast.IfExp) and cur in (p.body, p.orelse) and check_fn(p):
             cur = p
-        elif isinstance(p, ast.BoolOp) and cur in p.values and check_fn(p, st):
+        elif isinstance(p, ast.BoolOp) and cur in p.values and check_fn(p):
             cur = p
-        elif isinstance(p, ast.NamedExpr) and cur is p.value and check_fn(p, st):
+        elif isinstance(p, ast.NamedExpr) and cur is p.value and check_fn(p):
             cur = p
         else:
             break
@@ -139,20 +139,19 @@ def _is_matching_rhs(node: ast.AST, st: AliasState, is_path: bool) -> bool:
     return is_sys_expr(node, st)
 
 
-def _is_safe_binding(
+def is_safe_alias_binding(
     node: ast.AST,
     parents: dict[ast.AST, ast.AST],
     allowed_names: set[str],
-    st: AliasState,
-    *,
-    is_path: bool = False,
+    match_rhs: Callable[[ast.AST], bool],
 ) -> bool:
+    """Return True if node is solely bound to/from a tracked alias outside a class."""
     p = parents.get(node)
     if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
         if node.id not in allowed_names:
             return False
         if isinstance(p, ast.Assign) and len(p.targets) == 1 and p.targets[0] is node:
-            return not _in_class_body(p, parents) and _is_matching_rhs(p.value, st, is_path)
+            return not _in_class_body(p, parents) and match_rhs(p.value)
         if isinstance(p, (ast.Tuple, ast.List)):
             gp = parents.get(p)
             if (
@@ -164,14 +163,11 @@ def _is_safe_binding(
             ):
                 for lhs_e, rhs_e in zip(p.elts, gp.value.elts, strict=True):
                     if lhs_e is node:
-                        return not _in_class_body(gp, parents) and _is_matching_rhs(
-                            rhs_e, st, is_path
-                        )
+                        return not _in_class_body(gp, parents) and match_rhs(rhs_e)
         if isinstance(p, ast.AnnAssign) and p.target is node:
-            rhs_ok = p.value is None or _is_matching_rhs(p.value, st, is_path)
-            return not _in_class_body(p, parents) and rhs_ok
+            return not _in_class_body(p, parents) and (p.value is None or match_rhs(p.value))
         if isinstance(p, ast.NamedExpr) and p.target is node:
-            return not _in_class_body(p, parents) and _is_matching_rhs(p.value, st, is_path)
+            return not _in_class_body(p, parents) and match_rhs(p.value)
         return False
 
     if isinstance(p, ast.Assign) and len(p.targets) == 1 and p.value is node:
@@ -204,7 +200,7 @@ def _is_safe_sys_use(
     st: AliasState,
     handled: set[ast.AST],
 ) -> bool:
-    top = _unwrap_transparent_parent(node, parents, is_sys_expr, st)
+    top = unwrap_transparent_parent(node, parents, lambda n: is_sys_expr(n, st))
     p = parents.get(top)
     if isinstance(p, ast.Attribute) and p.value is top:
         if p.attr == "path":
@@ -212,11 +208,11 @@ def _is_safe_sys_use(
         if isinstance(p.ctx, ast.Store):
             return p.attr in _SAFE_WRITABLE_SYS_ATTRS
         return isinstance(p.ctx, ast.Load) and p.attr in (
-            _SAFE_SYS_ATTRS | _SAFE_WRITABLE_SYS_ATTRS | _DEFERRED_SYS_ATTRS
+            _SAFE_SYS_ATTRS | _SAFE_WRITABLE_SYS_ATTRS | MACHINERY_SYS_ATTRS
         )
     if isinstance(p, ast.Compare) and all(isinstance(op, (ast.Is, ast.IsNot)) for op in p.ops):
         return True
-    return _is_safe_binding(top, parents, st.sys_aliases, st, is_path=False)
+    return is_safe_alias_binding(top, parents, st.sys_aliases, lambda n: is_sys_expr(n, st))
 
 
 def is_safe_path_readonly(node: ast.AST, parents: dict[ast.AST, ast.AST], st: AliasState) -> bool:
@@ -242,7 +238,7 @@ def is_safe_path_readonly(node: ast.AST, parents: dict[ast.AST, ast.AST], st: Al
         gp = parents.get(p)
         if isinstance(gp, ast.Call) and isinstance(gp.func, ast.Name):
             return (
-                gp.func.id in _SAFE_PATH_READ_FUNCS
+                gp.func.id in SAFE_PATH_READ_FUNCS
                 and gp.func.id not in st.rebound_names
                 and p in gp.args
             )
@@ -250,7 +246,7 @@ def is_safe_path_readonly(node: ast.AST, parents: dict[ast.AST, ast.AST], st: Al
         has_kw_star = any(kw.arg is None for kw in p.keywords)
         if (
             not has_kw_star
-            and p.func.id in _SAFE_PATH_READ_FUNCS
+            and p.func.id in SAFE_PATH_READ_FUNCS
             and p.func.id not in st.rebound_names
             and node in p.args
         ):
@@ -266,7 +262,7 @@ def _is_safe_sys_path_use(
     st: AliasState,
     handled: set[ast.AST],
 ) -> bool:
-    top = _unwrap_transparent_parent(node, parents, is_sys_path_expr, st)
+    top = unwrap_transparent_parent(node, parents, lambda n: is_sys_path_expr(n, st))
     p = parents.get(top)
     if is_safe_path_readonly(top, parents, st):
         return True
@@ -274,7 +270,12 @@ def _is_safe_sys_path_use(
         return True
     if isinstance(p, (ast.Subscript, ast.Attribute)) and p.value is top and p in handled:
         return True
-    return _is_safe_binding(top, parents, st.path_aliases | st.slice_copy_aliases, st, is_path=True)
+    return is_safe_alias_binding(
+        top,
+        parents,
+        st.path_aliases | st.slice_copy_aliases,
+        lambda n: _is_matching_rhs(n, st, True),
+    )
 
 
 def find_sys_and_escape_edits(

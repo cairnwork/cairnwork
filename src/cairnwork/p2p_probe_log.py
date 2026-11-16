@@ -19,7 +19,8 @@ _HEADER = re.compile(
 )
 _BEARER = re.compile(r"(?i)(\bbearer[ \t]+)\S+")
 _KEYS = (
-    r"(?:access_|refresh_|id_|auth_|session_)?token|password|passwd|pwd|secret|client_secret|api_?key"
+    r"(?:access_|refresh_|id_|auth_|session_)?token|password|passwd|pwd|secret|client_secret|"
+    r"api_?key"
     r"|secret_access_key|secret_key|private_key"
 )
 _KEY = re.compile(_KEYS, re.IGNORECASE)
@@ -38,7 +39,7 @@ _HID = "\x00"  # stands for a hidden character until the field pass has read the
 # a name: a run of word characters and markers, not after a word character or a marker; only the
 # name is consumed, so a secret field inside another field's value is still found. After '-' a name
 # counts only when it holds a marker (as '?' started one there before #744; my-token stays shown)
-_NAME = re.compile(rf"(?<![\w{_HID}])([\w{_HID}]+)=")
+_NAME = re.compile(rf"(?<![\w{_HID}])([\w{_HID}\uFF3F]+)=")
 _VALUE = re.compile(r"[^&\s]+")
 TAIL_CHARS = 2048
 # any character fits in 4 bytes; twice that, so the window holds more than the tail. A window that
@@ -111,6 +112,7 @@ def mask_secrets(text: str) -> str:
 
 def _is_key(name: str) -> bool:
     """A secret word, or a name ending in one after '_' (GITHUB_TOKEN); full-width letters fold."""
+    name = name.replace("＿", "_")
 
     def _candidates(n: str) -> Iterator[str]:
         yield n
@@ -136,7 +138,9 @@ def _is_secret_name(text: str, start: int, name: str, names: tuple[str, str]) ->
             return any(_is_key(n) for n in (*names, full))
         # a dashed name counts only as a whole known one: client-secret, api-key, x-auth-token
         word = re.search(r"\w{1,64}$", text[max(0, start - 65) : start - 1])
-        return word is not None and bool(_KEY.fullmatch(f"{word.group()}_{name}".casefold()))
+        dashed = word is not None and bool(_KEY.fullmatch(f"{word.group()}_{name}".casefold()))
+        full_width_suffix = "\uff3f" in name and _is_key(name.rsplit("\uff3f", 1)[-1])
+        return dashed or full_width_suffix
     return any(_is_key(n) for n in names)
 
 

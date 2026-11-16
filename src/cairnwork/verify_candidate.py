@@ -97,6 +97,8 @@ def verify_candidate(
 
     Environment failures before the test commit is burned are explicit refusals. The shadow rules
     see only the listed files the candidate changed (#866)."""
+    if not isinstance(base, str) or not OID.fullmatch(base):
+        raise TaskRejected("BAD_BASE", "base_commit must be a 40-hex commit id")
     test_roots = tuple(intake.config()["test_roots"])
     validate_import_paths(repo, base, import_paths, test_roots)
     require_core_ids(verifiers)
