@@ -17,15 +17,20 @@ from experimental.pause.flow import CoreVerdict, RunResult
 from experimental.pause.guard import TreeGuard
 
 _SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
-_ENV = {
-    **os.environ,
-    "GIT_CONFIG_GLOBAL": "/dev/null",
-    "GIT_CONFIG_NOSYSTEM": "1",
-    "GIT_AUTHOR_NAME": "Cairnwork PAUSE",
-    "GIT_AUTHOR_EMAIL": "pause@cairnwork.invalid",
-    "GIT_COMMITTER_NAME": "Cairnwork PAUSE",
-    "GIT_COMMITTER_EMAIL": "pause@cairnwork.invalid",
-}
+
+
+def _env() -> dict[str, str]:
+    """The caller's environment without its git config: read at call time, so no global or
+    system filter, hook or fsmonitor can change what is committed as the candidate."""
+    return {
+        **os.environ,
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_AUTHOR_NAME": "Cairnwork PAUSE",
+        "GIT_AUTHOR_EMAIL": "pause@cairnwork.invalid",
+        "GIT_COMMITTER_NAME": "Cairnwork PAUSE",
+        "GIT_COMMITTER_EMAIL": "pause@cairnwork.invalid",
+    }
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -43,7 +48,7 @@ def _git(repo: Path, *args: str) -> str:
         capture_output=True,
         text=True,
         check=False,
-        env=_ENV,
+        env=_env(),
     )
     if result.returncode:
         raise RuntimeError(f"git {args[0]} failed: {result.stderr.strip()}")
@@ -108,7 +113,7 @@ class CoreJudge:
                 ],
                 capture_output=True,
                 check=False,
-                env=_ENV,
+                env=_env(),
             )
             if raw.returncode:
                 raise RuntimeError("cannot enumerate Core candidate paths")

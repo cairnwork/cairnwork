@@ -173,3 +173,30 @@ def test_judge_takes_base_from_runner_not_from_r1_record(tmp_path: Path) -> None
     with pytest.raises(ValueError):
         judge(result)
     assert calls == []
+
+
+def test_judge_ignores_callers_global_git_filter(tmp_path: Path, monkeypatch: Any) -> None:
+    """A clean filter from the caller's global git config must not run on the candidate."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "-q")
+    (repo / "a").write_text("a\n")
+    git(repo, "add", "a")
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base")
+    base = git(repo, "rev-parse", "HEAD")
+    (repo / ".gitattributes").write_text("* filter=x\n")
+    (repo / "a").write_text("candidate\n")
+    marker = tmp_path / "filter-ran"
+    config = tmp_path / "global.gitconfig"
+    config.write_text(f'[filter "x"]\n\tclean = "touch {marker}; cat"\n')
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
+    seen: list[Any] = []
+
+    def verify(*_a: Any, **k: Any) -> dict[str, str]:
+        seen.append(git(k["repo"], "show", f"{k['candidate']}:a"))
+        return {"status": "FAILED"}
+
+    result = RunResult(0, "", tmp_path, repo, None, {}, base_sha=base)
+    CoreJudge(tmp_path / "state", (), verify=verify)(result)
+    assert not marker.exists()
+    assert seen == ["candidate"]
