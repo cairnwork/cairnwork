@@ -51,13 +51,14 @@ def _split_top_level(text: str) -> list[str]:
 def without_case(nodeid: str, *, all_parts: bool = False) -> str:
     """Remove pytest case suffixes from name parts while preserving bracketed paths.
 
-    The file boundary is the first ``.py`` so ``::`` in a directory name is not
-    mistaken for pytest's file/name separator; ``::`` inside a case id is not a separator.
+    The file boundary is the first ``.py`` followed by ``::`` (``dir.pyx/`` is not one), so
+    ``::`` in a directory name is not mistaken for pytest's file/name separator; ``::`` inside
+    a case id is not a separator.
     """
-    py_end = nodeid.find(".py")
-    if py_end >= 0:
-        path, suffix = nodeid[: py_end + 3], nodeid[py_end + 3 :]
-        if not suffix.startswith("::"):
+    found = re.search(r"\.py(?=::|$)", nodeid)
+    if found:
+        path, suffix = nodeid[: found.end()], nodeid[found.end() :]
+        if not suffix:
             return nodeid
         suffix = suffix[2:]
     else:

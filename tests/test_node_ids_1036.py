@@ -163,3 +163,15 @@ def test_show_masks_paths_controls_and_bounds_text():
         "bad <path> and <path>"
     )
     assert show("test_cx[/x/y/z-1]").endswith("]")
+
+
+@pytest.mark.parametrize(
+    ("nodeid", "expected"),
+    [
+        ("dir.pyx/tests/t.py::test_x[param]", "dir.pyx/tests/t.py::test_x"),
+        ("a.pyc/t.py::C::test_x[p]", "a.pyc/t.py::C::test_x"),
+        ("dir.py/t.py::test_x[a.py::b]", "dir.py/t.py::test_x"),
+    ],
+)
+def test_py_inside_directory_name_is_not_the_file_boundary_1269(nodeid, expected):
+    assert without_case(nodeid) == expected
