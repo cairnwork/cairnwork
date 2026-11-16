@@ -2,6 +2,7 @@
 the bare ``local_worker run``: the same episode line (less the volatile fields that schema.py
 lists), the same local model requests, no cloud request and no PAUSE receipt."""
 
+import json
 import socket
 
 import pytest
@@ -156,3 +157,45 @@ def test_only_run_is_offered(capsys, argv):
     seen = []
     assert pause_cli.main(argv, worker_main=lambda a: seen.append(a) or 0) == 2
     assert seen == [] and "usage" in capsys.readouterr().err
+
+
+def test_configured_runs_append_receipts_to_same_out(tmp_path, monkeypatch, capsys):
+    from experimental.pause import receipt
+
+    task = tmp_path / "task.json"
+    task.write_text('{"task_id":"t"}')
+    out = tmp_path / "out"
+    out.mkdir()
+
+    class Result:
+        output = "ok\n"
+        code = 0
+
+    def flow(args, *, event_seq, **kwargs):
+        return Result(), receipt.build(
+            task_id="t",
+            intervened=False,
+            event_seq=event_seq("decision"),
+            reason="PAUSE_NO_CUT",
+            episode_id=None,
+            checkpoint_sha256=None,
+            cut_turn_index=None,
+            plan=None,
+            planner_model_id=None,
+            planner_effort=None,
+            gate_model_id=None,
+            gate_effort=None,
+            gate_verdict=None,
+        )
+
+    monkeypatch.setattr(pause_cli, "run_flow", flow)
+    argv = ["run", "--planner-config", "cfg", "--task", str(task), "--out", str(out)]
+
+    def factory(_):
+        return object(), object(), object(), object(), object()
+
+    for _ in range(2):
+        assert pause_cli.main(argv, run_factory=factory) == 0  # pyright: ignore[reportArgumentType]
+        capsys.readouterr()
+    rows = [json.loads(line) for line in (out / schema.RECEIPTS_FILE).read_text().splitlines()]
+    assert [row["event_seq"] for row in rows] == [0, 1]

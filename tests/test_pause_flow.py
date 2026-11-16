@@ -1,6 +1,8 @@
 """Offline acceptance for the post-hoc R0/R1 PAUSE flow."""
 
 import json
+import subprocess
+from dataclasses import replace
 
 import pytest
 
@@ -153,3 +155,52 @@ def test_bad_r1_is_discarded_and_r0_wins(tmp_path, monkeypatch, scope, guard, re
         runner=runner,
     )
     assert result is r0 and receipt["reason"] == reason and receipt["intervened"] is False
+
+
+def _git(checkout, *args):
+    subprocess.run(["git", "-C", str(checkout), *args], check=True, capture_output=True)
+
+
+@pytest.mark.parametrize("violation", ["outside", "symlink", "mode"])
+def test_real_scope_check_rejects_unsafe_r1_and_keeps_r0(tmp_path, monkeypatch, violation):
+    from experimental.pause.flow import _scope_ok
+
+    real_scope_ok = _scope_ok
+
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    _git(checkout, "init", "-q")
+    _git(checkout, "config", "user.email", "test@example.invalid")
+    _git(checkout, "config", "user.name", "Test")
+    (checkout / "src").mkdir()
+    (checkout / "src" / "file.txt").write_text("original")
+    _git(checkout, "add", "src/file.txt")
+    _git(checkout, "commit", "-qm", "base")
+    if violation == "outside":
+        (checkout / "other.txt").write_text("outside scope")
+    elif violation == "symlink":
+        (checkout / "src" / "link").symlink_to("file.txt")
+    else:
+        (checkout / "src" / "file.txt").chmod(0o755)
+    assert not _scope_ok(checkout, ["src"] if violation != "outside" else ["src"])
+
+    flow_dir = tmp_path / "flow"
+    flow_dir.mkdir()
+    _, _, r0, r1, planner, gate = _scenario(flow_dir, monkeypatch)
+    monkeypatch.setattr("experimental.pause.flow._scope_ok", real_scope_ok)
+    r1 = replace(r1, checkout=checkout)
+
+    def actual_runner(mode, args, **kwargs):
+        return r0 if mode == "run" else r1
+
+    result, rec = run_flow(
+        [],
+        task_id="t",
+        planner=planner,
+        gate=gate,
+        planner_settings=SETTINGS,
+        gate_settings=SETTINGS,
+        runner=actual_runner,
+    )
+    assert result is r0
+    assert rec["intervened"] is False and rec["reason"] == "PAUSE_SCOPE_VIOLATION"

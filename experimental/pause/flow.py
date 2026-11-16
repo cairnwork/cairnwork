@@ -127,6 +127,62 @@ def _cut(record: dict | None) -> tuple[int | None, str]:
     return cut["cut_turn_index"], ""
 
 
+def _attempt_resume(
+    r0, parent, cut, digest, task_id, planner, gate, planner_settings, gate_settings, runner, args
+):
+    from experimental.pause.interfaces import GateRequest
+
+    info = {
+        "plan": None,
+        "planner_model_id": None,
+        "planner_effort": None,
+        "gate_model_id": None,
+        "gate_effort": None,
+        "gate_verdict": None,
+    }
+    turn = next((item for item in parent["turns"] if item["index"] == cut), None)
+    if turn is None or turn["assistant_msg_index"] < 0:
+        return None, info, str(Reason.PAUSE_NO_CUT)
+    request = PlanRequest(
+        task_id, digest, tuple(parent["messages"][: turn["assistant_msg_index"]]), planner_settings
+    )
+    try:
+        reply = planner.plan(request)
+    except (OSError, RuntimeError, TimeoutError):
+        return None, info, str(Reason.PAUSE_PLANNER_TIMEOUT)
+    if reply is None:
+        return None, info, str(Reason.PAUSE_PLANNER_BAD_OUTPUT)
+    info.update(planner_model_id=reply.model_id, planner_effort=reply.effort)
+    if reply.reason:
+        return None, info, str(reply.reason)
+    if reply.text is None:
+        return None, info, str(Reason.PAUSE_PLANNER_BAD_OUTPUT)
+    info["plan"] = reply.text
+    try:
+        checked = gate.review(GateRequest(task_id, digest, reply.text, gate_settings))
+    except (OSError, RuntimeError, TimeoutError):
+        return None, info, str(Reason.PAUSE_GATE_BAD_OUTPUT)
+    if checked is None:
+        return None, info, str(Reason.PAUSE_GATE_BAD_OUTPUT)
+    info.update(
+        gate_model_id=checked.model_id, gate_effort=checked.effort, gate_verdict=checked.verdict
+    )
+    if checked.reason:
+        return None, info, str(checked.reason)
+    if checked.verdict != "ACCEPT":
+        reason = (
+            Reason.PAUSE_GATE_REJECT_LIMIT
+            if checked.verdict == "REJECT"
+            else Reason.PAUSE_GATE_BAD_OUTPUT
+        )
+        return None, info, str(reason)
+    try:
+        resumed = runner("resume", list(args), parent=r0.transcript, cut=cut, plan=reply.text)
+    except (OSError, RuntimeError, TimeoutError):
+        return None, info, str(Reason.PAUSE_WORKER_CRASH)
+    return resumed, info, _r1_reason(r0, resumed, parent)
+
+
 def run_flow(
     args: list[str],
     *,
@@ -143,8 +199,14 @@ def run_flow(
     transcript = r0.transcript
     cut, reason = _cut(r0.record)
     checkpoint = None
-    plan_text = None
-    pmodel = peffort = gmodel = geffort = verdict = None
+    info = {
+        "plan": None,
+        "planner_model_id": None,
+        "planner_effort": None,
+        "gate_model_id": None,
+        "gate_effort": None,
+        "gate_verdict": None,
+    }
     if cut is not None and transcript is not None:
         parent = json.loads(transcript.read_text(encoding="utf-8"))
         digest = checkpoint = _sha(transcript)
@@ -152,71 +214,30 @@ def run_flow(
         if turn is None or turn["assistant_msg_index"] < 0:
             reason = "PAUSE_NO_CUT"
         else:
-            request = PlanRequest(
-                task_id,
+            resumed, info, reason = _attempt_resume(
+                r0,
+                parent,
+                cut,
                 digest,
-                tuple(parent["messages"][: turn["assistant_msg_index"]]),
+                task_id,
+                planner,
+                gate,
                 planner_settings,
+                gate_settings,
+                runner,
+                args,
             )
-            try:
-                reply = planner.plan(request)
-            except (OSError, RuntimeError, TimeoutError):
-                reply = None
-                reason = str(Reason.PAUSE_PLANNER_TIMEOUT)
-            if reply is None:
-                pass
-            else:
-                pmodel, peffort = reply.model_id, reply.effort
-                if reply.reason:
-                    reason = str(reply.reason)
-                elif reply.text is None:
-                    reason = str(Reason.PAUSE_PLANNER_BAD_OUTPUT)
-                else:
-                    plan_text = reply.text
-                    from experimental.pause.interfaces import GateRequest
-
-                    try:
-                        checked = gate.review(
-                            GateRequest(task_id, digest, plan_text, gate_settings)
-                        )
-                    except (OSError, RuntimeError, TimeoutError):
-                        checked = None
-                        reason = str(Reason.PAUSE_GATE_BAD_OUTPUT)
-                    if checked is not None:
-                        gmodel, geffort, verdict = checked.model_id, checked.effort, checked.verdict
-                        if checked.reason:
-                            reason = str(checked.reason)
-                        elif verdict != "ACCEPT":
-                            reason = str(
-                                Reason.PAUSE_GATE_REJECT_LIMIT
-                                if verdict == "REJECT"
-                                else Reason.PAUSE_GATE_BAD_OUTPUT
-                            )
-                        else:
-                            try:
-                                resumed = runner(
-                                    "resume", list(args), parent=transcript, cut=cut, plan=plan_text
-                                )
-                            except (OSError, RuntimeError, TimeoutError):
-                                reason = str(Reason.PAUSE_WORKER_CRASH)
-                            else:
-                                reason = _r1_reason(r0, resumed, parent)
-                                if reason is None:
-                                    return resumed, receipt.build(
-                                        task_id=task_id,
-                                        intervened=True,
-                                        event_seq=(event_seq or (lambda _: 0))("decision"),
-                                        episode_id=resumed.episode_id,
-                                        checkpoint_sha256=digest,
-                                        cut_turn_index=cut,
-                                        plan=plan_text,
-                                        planner_model_id=pmodel,
-                                        planner_effort=peffort,
-                                        gate_model_id=gmodel,
-                                        gate_effort=geffort,
-                                        gate_verdict="ACCEPT",
-                                        reason=None,
-                                    )
+            if resumed is not None and reason is None:
+                return resumed, receipt.build(
+                    task_id=task_id,
+                    intervened=True,
+                    event_seq=(event_seq or (lambda _: 0))("decision"),
+                    episode_id=resumed.episode_id,
+                    checkpoint_sha256=digest,
+                    cut_turn_index=cut,
+                    reason=None,
+                    **info,
+                )
     rec = receipt.build(
         task_id=task_id,
         intervened=False,
@@ -224,12 +245,7 @@ def run_flow(
         episode_id=r0.episode_id,
         checkpoint_sha256=checkpoint,
         cut_turn_index=cut,
-        plan=plan_text,
-        planner_model_id=pmodel,
-        planner_effort=peffort,
-        gate_model_id=gmodel,
-        gate_effort=geffort,
-        gate_verdict=verdict,
+        **info,
         reason=reason or str(Reason.PAUSE_NO_CUT),
     )
     return r0, rec

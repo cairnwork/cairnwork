@@ -122,3 +122,16 @@ def append(path: Path, rec: dict) -> None:
             raise ValueError("event_seq does not follow the file's last receipt")
     with path.open("a") as f:
         f.write(json.dumps(rec, separators=(",", ":")) + "\n")
+
+
+def next_event_seq(path: Path) -> int:
+    """Return the next sequence after the last append-only receipt, or zero for a new log."""
+    if not path.exists():
+        return 0
+    text = path.read_text()
+    if text and not text.endswith("\n"):
+        raise ValueError("the receipts file does not end with a newline")
+    rows = [json.loads(line) for line in text.splitlines()]
+    if rows and verify_log(rows):
+        raise ValueError("the receipts file is invalid")
+    return rows[-1]["event_seq"] + 1 if rows else 0

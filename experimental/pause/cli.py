@@ -96,6 +96,12 @@ def main(
             planner, gate, ps, gs, runner = run_factory(config_path)
             task_arg = worker_args[worker_args.index("--task") + 1]
             task_id = json.loads(Path(task_arg).read_text(encoding="utf-8"))["task_id"]
+            out_arg = (
+                worker_args[worker_args.index("--out") + 1]
+                if "--out" in worker_args
+                else str(worker_cli.DEFAULT_OUT)
+            )
+            receipt_path = Path(out_arg).expanduser().resolve() / RECEIPTS_FILE
             result, rec = run_flow(
                 worker_args,
                 task_id=task_id,
@@ -104,13 +110,9 @@ def main(
                 planner_settings=ps,
                 gate_settings=gs,
                 runner=runner,
+                event_seq=lambda _: receipt_module.next_event_seq(receipt_path),
             )
-            out_arg = (
-                worker_args[worker_args.index("--out") + 1]
-                if "--out" in worker_args
-                else str(worker_cli.DEFAULT_OUT)
-            )
-            receipt_module.append(Path(out_arg).expanduser().resolve() / RECEIPTS_FILE, rec)
+            receipt_module.append(receipt_path, rec)
         except (OSError, ValueError, KeyError, IndexError, TypeError) as exc:
             print(f"pause: configured run failed closed: {exc}", file=sys.stderr)
             return 2
