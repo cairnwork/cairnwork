@@ -1,7 +1,9 @@
 """#423: a credential-link target with non-ASCII letters, parentheses or a colon is no longer a
-false refusal; every line-forging character stays refused. Vanished subdirectories are skipped."""
+false refusal; every line-forging character stays refused. A directory vanishing or renamed
+mid-scan still refuses."""
 
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -49,33 +51,88 @@ def test_policy_for_a_link_into_a_non_ascii_dir_is_one_flag_per_line(tmp_path):
     assert lines[lines.index(real) - 1] == "--tmpfs"
 
 
-def test_a_vanished_subdirectory_is_skipped_and_counted(tmp_path, monkeypatch):
-    base = tmp_path / "cred"
-    (base / "gone").mkdir(parents=True)
-    (base / "kept").mkdir()
-    (base / "kept" / "l").symlink_to("/nowhere")
-    real_scandir = os.scandir
+def test_credential_path_itself_keeps_the_strict_check(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".ssh").symlink_to(_outside(tmp_path, "文件"))
+    with pytest.raises(SandboxError):
+        bwrap.BACKEND.policy((), (), home=home)
+
+
+def _outside(tmp_path, name):
+    target = tmp_path / name
+    target.mkdir(exist_ok=True)
+    (target / "secret").write_text("x")
+    return target
+
+
+def _hook_scandir(monkeypatch, victim, action):
+    """Run ``action`` right before ``victim`` is opened for scanning (a race at that moment)."""
+    real = os.scandir
 
     def scandir(path):
-        if str(path).endswith("/gone"):
-            raise FileNotFoundError(2, "No such file or directory")
-        return real_scandir(path)
+        if str(path).endswith(victim):
+            action(str(path))
+        return real(path)
 
     monkeypatch.setattr(bwrap_inner.os, "scandir", scandir)
-    links, unscanned, vanished = bwrap_inner._links_in(str(base))
-    assert [Path(p).name for p in links] == ["l"] and unscanned == 0 and vanished == 1
 
 
-@pytest.mark.parametrize("err", [FileNotFoundError(2, "x"), PermissionError(13, "x")])
-def test_eacces_below_and_a_missing_credential_directory_stay_refused(tmp_path, monkeypatch, err):
+def _home(tmp_path, depth):
+    outside = _outside(tmp_path, "outside")
+    home = tmp_path / "home"
+    leaf = home / ".aws" / "/".join(["a"] * depth)
+    leaf.mkdir(parents=True)
+    (leaf / "l").symlink_to(outside / "secret")
+    return home
+
+
+def _rename_to_dir(path):
+    os.rename(path, path + "2")
+
+
+def _rename_to_file(path):
+    os.rename(path, path + "2")
+    Path(path).write_text("x")
+
+
+@pytest.mark.parametrize(
+    ("depth", "action", "victim"),
+    [
+        (1, _rename_to_dir, "/a"),
+        (1, _rename_to_file, "/a"),
+        (2, _rename_to_dir, "/a"),
+    ],
+    ids=["renamed", "renamed-and-replaced-by-file", "renamed-above-depth-2"],
+)
+def test_renamed_credential_subtree_still_refuses(tmp_path, monkeypatch, depth, action, victim):
+    home = _home(tmp_path, depth)
+    if depth == 2:
+        # the rename happens when "a/a" is about to be scanned: "a" is moved away first
+        victim = "/a/a"
+        action = lambda p: os.rename(p[: -len("/a")], p[: -len("/a")] + "2")  # noqa: E731
+    _hook_scandir(monkeypatch, victim, action)
+    with pytest.raises(SandboxError):
+        bwrap.BACKEND.policy((), (), home=home)
+
+
+def test_a_credential_subdirectory_vanishing_during_the_scan_refuses(tmp_path, monkeypatch):
+    home = _home(tmp_path, 1)
+    _hook_scandir(monkeypatch, "/a", lambda p: shutil.rmtree(p))
+    with pytest.raises(SandboxError):
+        bwrap.BACKEND.policy((), (), home=home)
+
+
+@pytest.mark.parametrize(
+    "err", [FileNotFoundError(2, "x"), NotADirectoryError(20, "x"), PermissionError(13, "x")]
+)
+def test_links_in_refuses_when_a_subdirectory_cannot_be_opened(tmp_path, monkeypatch, err):
     base = tmp_path / "cred"
     (base / "sub").mkdir(parents=True)
     orig = os.scandir
-    # ENOENT on the base itself, EACCES on a subdirectory: both refuse (fail closed)
-    fail_on = str(base) if isinstance(err, FileNotFoundError) else "/sub"
 
     def scandir(path):
-        if str(path).endswith(fail_on):
+        if str(path).endswith("/sub"):
             raise err
         return orig(path)
 
@@ -84,71 +141,17 @@ def test_eacces_below_and_a_missing_credential_directory_stay_refused(tmp_path, 
         bwrap_inner._links_in(str(base))
 
 
-def _flaky_scandir(monkeypatch, name, method, err):
-    """Make one child's DirEntry.<method> raise ``err`` (a racing delete or an unreadable entry)."""
-    real = os.scandir
-
-    class Entry:
-        def __init__(self, e):
-            self._e, self.path = e, e.path
-
-        def is_symlink(self):
-            return self._call("is_symlink")
-
-        def is_dir(self, **kw):
-            return self._call("is_dir", **kw)
-
-        def _call(self, which, **kw):
-            if self._e.name == name and which == method:
-                raise err
-            return getattr(self._e, which)(**kw)
-
-    class Scan:
-        def __init__(self, path):
-            self._s = real(path)
-
-        def __enter__(self):
-            return (Entry(e) for e in self._s.__enter__())
-
-        def __exit__(self, *a):
-            return self._s.__exit__(*a)
-
-    monkeypatch.setattr(bwrap_inner.os, "scandir", Scan)
-
-
-@pytest.mark.parametrize("method", ["is_dir", "is_symlink"])
-@pytest.mark.parametrize("err", [FileNotFoundError(2, "x"), NotADirectoryError(20, "x")])
-def test_a_child_vanishing_mid_scan_skips_only_that_child(tmp_path, monkeypatch, method, err):
+@pytest.mark.parametrize("err", [FileNotFoundError(2, "x"), PermissionError(13, "x")])
+def test_a_missing_credential_directory_scan_stays_refused(tmp_path, monkeypatch, err):
     base = tmp_path / "cred"
     base.mkdir()
-    for n in ("a", "racer", "z"):
-        (base / n).symlink_to("/nowhere")
-    _flaky_scandir(monkeypatch, "racer", method, err)
-    links, _, vanished = bwrap_inner._links_in(str(base))
-    assert sorted(Path(p).name for p in links) == ["a", "z"] and vanished == 0
-
-
-@pytest.mark.parametrize("method", ["is_dir", "is_symlink"])
-def test_a_child_with_eacces_still_refuses(tmp_path, monkeypatch, method):
-    base = tmp_path / "cred"
-    base.mkdir()
-    (base / "racer").symlink_to("/nowhere")
-    _flaky_scandir(monkeypatch, "racer", method, PermissionError(13, "x"))
-    with pytest.raises(SandboxError):
-        bwrap_inner._links_in(str(base))
-
-
-def test_only_opening_current_vanishing_skips_the_directory(tmp_path, monkeypatch):
-    base = tmp_path / "cred"
-    (base / "gone").mkdir(parents=True)
-    (base / "l").symlink_to("/nowhere")
-    real = os.scandir
+    orig = os.scandir
 
     def scandir(path):
-        if str(path).endswith("/gone"):
-            raise NotADirectoryError(20, "x")
-        return real(path)
+        if str(path) == str(base):
+            raise err
+        return orig(path)
 
     monkeypatch.setattr(bwrap_inner.os, "scandir", scandir)
-    links, _, vanished = bwrap_inner._links_in(str(base))
-    assert [Path(p).name for p in links] == ["l"] and vanished == 1
+    with pytest.raises(SandboxError):
+        bwrap_inner._links_in(str(base))
