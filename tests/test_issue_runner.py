@@ -104,6 +104,8 @@ def test_a_trusted_issue_is_taken_once(setup):
     assert github.labels[7] == {runner.RUNNING} and len(github.comments) == 1
     github.labels[7] = {runner.QUEUE}  # e.g. the relabel had failed: the next pass retries
     commit_change(setup["origin"].parent / "clone", {"other.txt": "main moved\n"})
+    # main moved upstream (#1266: a local main ahead of origin/main is no longer a clean mirror)
+    git(setup["clone"], "push", "-q", "origin", "main")
     again = runner.take(setup["intake"], github, setup["clone"])
     assert again[0]["already"] is True and again[0]["task_id"] == first[0]["task_id"]
     assert github.labels[7] == {runner.RUNNING}
