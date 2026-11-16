@@ -37,6 +37,7 @@ import os
 import re
 import shutil
 import subprocess
+import unicodedata
 from functools import lru_cache
 from pathlib import Path
 
@@ -165,6 +166,15 @@ def _safe(path: Path | str) -> str:
     return real
 
 
+def _safe_link(path: Path | str) -> str:
+    """``_safe`` for a link target (#423): also ``():`` and non-ASCII letters, marks, digits."""
+    real = os.path.realpath(path)  # an embedded NUL raises ValueError: also a refusal
+    rest = "".join("a" if ord(c) > 127 and unicodedata.category(c)[0] in "LMN" else c for c in real)
+    if not re.fullmatch(r"/[A-Za-z0-9 _./+@~():-]*", rest):
+        raise SandboxError(f"path {real!r} has characters not allowed in a policy")
+    return real
+
+
 def _require_narrow(root: str, real_home: str) -> None:
     """A write root may not be '/', a system or temp root, $HOME, or any ancestor of $HOME."""
     if root in _TOO_BROAD or root == real_home or real_home.startswith(root.rstrip("/") + "/"):
@@ -251,12 +261,14 @@ def _credential_masks(
     """The credential masks under ``home`` (#341, #378), then the outside targets of the links in
     the credential directories (#377), all through the one ``mask_target`` rule."""
 
-    def mask(path: str) -> list[str]:
-        return mask_target(path, home, writes, reads, _TOO_BROAD, _safe)
+    def mask(path: str, check=_safe) -> list[str]:
+        return mask_target(path, home, writes, reads, _TOO_BROAD, check)
 
     flags = [flag for rel in _home_cred_masks(home, owner) for flag in mask(f"{home}/{rel}")]
     cred_dirs = [f"{home}/{rel}" for rel in _CRED_DIRS]
-    inner, notes = inner_link_masks(cred_dirs, owner, flags, mask, writes + reads)
+    inner, notes = inner_link_masks(
+        cred_dirs, owner, flags, lambda p: mask(p, _safe_link), writes + reads
+    )
     return flags + inner, notes
 
 
@@ -311,7 +323,7 @@ def _binary() -> str:
 
 def wrap(argv: list[str], policy_path: Path) -> list[str]:
     binary = _binary()
-    flags = [line for line in Path(policy_path).read_text().splitlines() if line]
+    flags = [line for line in Path(policy_path).read_text(encoding="utf-8").splitlines() if line]
     return [binary, *flags, "--", *argv]
 
 
