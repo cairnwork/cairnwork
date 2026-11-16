@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -38,7 +39,8 @@ def test_flag_off_does_not_import_core_verification_chain() -> None:
         "assert 'experimental.pause.core_judge' not in sys.modules; "
         "assert 'cairnwork.verify_candidate' not in sys.modules"
     )
-    subprocess.run([sys.executable, "-c", code], check=True)
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(p for p in sys.path if p)}
+    subprocess.run([sys.executable, "-c", code], check=True, env=env)
 
 
 def test_hardened_git_environment_removes_inherited_git_controls(monkeypatch: Any) -> None:
