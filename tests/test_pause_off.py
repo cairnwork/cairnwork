@@ -2,6 +2,7 @@
 the bare ``local_worker run``: the same episode line (less the volatile fields that schema.py
 lists), the same local model requests, no cloud request and no PAUSE receipt."""
 
+import json
 import socket
 
 import pytest
@@ -94,6 +95,9 @@ def test_a_different_900s_outcome_is_not_hidden(through_pause, field, value):
     assert strip(paused) != strip(bare)
 
 
+WORKER_REQUIRED = ["--checkout", "c", "--model", "m", "--context-cap", "1", "--canary-report", "r"]
+
+
 def test_the_worker_gets_the_arguments_unchanged(monkeypatch):
     seen = []
     argv = ["run", "--task", "t.json", "--checkout", "c", "--write-path", "src", "--plan", "p"]
@@ -113,8 +117,42 @@ def test_a_planner_configuration_is_refused_until_the_planner_is_wired(capsys, a
     seen = []
     assert pause_cli.main(argv, worker_main=lambda a: seen.append(a) or 0) == 2
     err = capsys.readouterr().err
-    assert seen == [] and "--planner-config is not wired yet" in err
+    assert seen == [] and ("requires an injected run_factory" in err or "usage:" in err)
     assert not any(code in err for code in schema.Reason)  # a CLI refusal, not a reason code
+
+
+def test_planner_flag_dispatches_to_the_injected_flow(tmp_path, monkeypatch, capsys):
+    from experimental.pause.interfaces import CallSettings
+
+    task = tmp_path / "task.json"
+    task.write_text('{"task_id":"t"}')
+    seen = []
+
+    def factory(path):
+        seen.append(path)
+        return (
+            object(),
+            object(),
+            CallSettings("p", "low", 1, 1),
+            CallSettings("g", "low", 1, 1),
+            object(),
+        )
+
+    class Result:
+        output = "R0\n"
+        code = 0
+
+    monkeypatch.setattr("experimental.pause.cli.run_flow", lambda *a, **k: (Result(), {"ok": True}))
+    monkeypatch.setattr("experimental.pause.cli.receipt_module.append", lambda *a: None)
+    assert (
+        pause_cli.main(
+            ["run", "--planner-config", "config.json", "--task", str(task), *WORKER_REQUIRED],
+            run_factory=factory,  # pyright: ignore[reportArgumentType]
+        )
+        == 0
+    )
+    assert seen == ["config.json"]
+    assert capsys.readouterr().out == 'R0\n{"ok":true}\n'
 
 
 @pytest.mark.parametrize("argv", [[], ["resume", "--task", "t.json"], ["--task", "t.json"]])
@@ -122,3 +160,51 @@ def test_only_run_is_offered(capsys, argv):
     seen = []
     assert pause_cli.main(argv, worker_main=lambda a: seen.append(a) or 0) == 2
     assert seen == [] and "usage" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("spelling", ["split", "equals", "prefix"])
+def test_configured_runs_append_receipts_to_same_out(tmp_path, monkeypatch, capsys, spelling):
+    from experimental.pause import receipt
+
+    task = tmp_path / "task.json"
+    task.write_text('{"task_id":"t"}')
+    out = tmp_path / "out"
+    out.mkdir()
+
+    class Result:
+        output = "ok\n"
+        code = 0
+
+    def flow(args, *, event_seq, **kwargs):
+        return Result(), receipt.build(
+            task_id="t",
+            intervened=False,
+            event_seq=event_seq("decision"),
+            reason="PAUSE_NO_CUT",
+            episode_id=None,
+            checkpoint_sha256=None,
+            cut_turn_index=None,
+            plan=None,
+            planner_model_id=None,
+            planner_effort=None,
+            gate_model_id=None,
+            gate_effort=None,
+            gate_verdict=None,
+        )
+
+    monkeypatch.setattr(pause_cli, "run_flow", flow)
+    flag = {
+        "split": ["--out", str(out)],
+        "equals": [f"--out={out}"],
+        "prefix": [f"--ou={out}"],
+    }[spelling]
+    argv = ["run", "--planner-config", "cfg", "--task", str(task), *WORKER_REQUIRED, *flag]
+
+    def factory(_):
+        return object(), object(), object(), object(), object()
+
+    for _ in range(2):
+        assert pause_cli.main(argv, run_factory=factory) == 0  # pyright: ignore[reportArgumentType]
+        capsys.readouterr()
+    rows = [json.loads(line) for line in (out / schema.RECEIPTS_FILE).read_text().splitlines()]
+    assert [row["event_seq"] for row in rows] == [0, 1]

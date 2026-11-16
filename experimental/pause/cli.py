@@ -5,9 +5,9 @@
 
 Without ``--planner-config`` (the flag off, the default) ``run`` passes the arguments unchanged to
 ``python -m experimental.local_worker.cli run``: the same episode, the same output, no cloud
-request and no PAUSE receipt (AC1). ``--planner-config`` is refused (exit 2, before the worker
-runs; a CLI message, not a schema.Reason) until step 3 wires the planner, the gate and the
-resume. ``gate-replay`` (step 2) only runs the gate over saved plans: no worker, no run
+request and no PAUSE receipt (AC1). With ``--planner-config``, ``main`` uses the supplied
+``run_factory`` to build the planner, gate and two-run runner; without one it fails closed before
+starting a worker. ``gate-replay`` (step 2) only runs the gate over saved plans: no worker, no run
 directory, nothing written."""
 
 from __future__ import annotations
@@ -18,9 +18,12 @@ from collections.abc import Callable
 from pathlib import Path
 
 from experimental.local_worker import cli as worker_cli
+from experimental.pause import receipt as receipt_module
 from experimental.pause import replay as replay_module
 from experimental.pause.client import CommandTransport, HaikuGate
-from experimental.pause.interfaces import CallSettings, Gate
+from experimental.pause.flow import run_flow
+from experimental.pause.interfaces import CallSettings, Gate, Planner
+from experimental.pause.schema import RECEIPTS_FILE
 from experimental.pause.secrets_scan import Scanner
 
 FLAG = "--planner-config"
@@ -51,6 +54,8 @@ def main(
     argv: list[str] | None = None,
     worker_main: Callable[[list[str]], int] | None = None,
     gate_factory: Callable[[str], tuple[Gate, CallSettings]] | None = None,
+    run_factory: Callable[[str], tuple[Planner, Gate, CallSettings, CallSettings, Callable]]
+    | None = None,
 ) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if args[:1] == ["gate-replay"]:
@@ -73,8 +78,44 @@ def main(
         print(USAGE, file=sys.stderr)
         return 2
     if any(a == FLAG or a.startswith(FLAG + "=") for a in args[1:]):
-        print("pause: --planner-config is not wired yet (#476 steps 2-3)", file=sys.stderr)
-        return 2
+        try:
+            index = args.index(FLAG)
+            config_path = args[index + 1]
+            worker_args = args[1:index] + args[index + 2 :]
+        except (ValueError, IndexError):
+            pair = next((a.split("=", 1)[1] for a in args[1:] if a.startswith(FLAG + "=")), None)
+            if pair is None:
+                print(USAGE, file=sys.stderr)
+                return 2
+            config_path = pair
+            worker_args = [a for a in args[1:] if not a.startswith(FLAG + "=")]
+        if run_factory is None:
+            print("pause: --planner-config requires an injected run_factory", file=sys.stderr)
+            return 2
+        try:
+            planner, gate, ps, gs, runner = run_factory(config_path)
+            # Use the worker parser's own option semantics for task and output path.
+            parsed = worker_cli.parser().parse_known_args([args[0], *worker_args])[0]
+            task_id = json.loads(parsed.task.read_text(encoding="utf-8"))["task_id"]
+            out_arg = parsed.out
+            receipt_path = Path(out_arg).expanduser().resolve() / RECEIPTS_FILE
+            result, rec = run_flow(
+                worker_args,
+                task_id=task_id,
+                planner=planner,
+                gate=gate,
+                planner_settings=ps,
+                gate_settings=gs,
+                runner=runner,
+                event_seq=lambda _: receipt_module.next_event_seq(receipt_path),
+            )
+            receipt_module.append(receipt_path, rec)
+        except (OSError, ValueError, KeyError, IndexError, TypeError, SystemExit) as exc:
+            print(f"pause: configured run failed closed: {exc}", file=sys.stderr)
+            return 2
+        print(result.output, end="")
+        print(json.dumps(rec, separators=(",", ":")))
+        return result.code
     return (worker_main or worker_cli.main)(args)
 
 
