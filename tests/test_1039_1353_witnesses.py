@@ -329,7 +329,7 @@ def test_candidate_routes_match_pinned_main_outputs():
     assert all(r["classification"] == "NOT_RUN" for r in c2_blackbox)
     # Linux: C2 is observed on CI as VERIFIED.
     expected = ["VERIFIED", "VERIFIED"]
-    if not _sandbox_available():
+    if not (sys.platform == "linux" or _sandbox_available()):
         expected = ["UNCOMPARABLE", "UNCOMPARABLE"]
     assert c2 == expected
     # Linux: derived from src/cairnwork/verify_candidate.py:130-140, not yet observed on CI
