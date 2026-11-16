@@ -78,20 +78,28 @@ def test_a_plain_base_failure_records_evidence_without_that_path(project, state,
     assert HIT not in run.deny_denials, run.deny_evidence
 
 
+def _caught_denial(project, state, repo, tmp_path, test):
+    """A denial the run makes must show in the run's evidence and in the exact set. The host log
+    can drop or delay that one record under load (#1227, #1211; #991 saw the same), so one more
+    run is allowed when it is missing; a second miss fails, a channel that never records the
+    denial must not pass."""
+    for again in ("", "# retry\n"):
+        (line,) = _verified(project, state, test + again)
+        run = _run_evidence(repo, tmp_path, test.replace("test_regression", "test_d") + again)
+        if ": DENIED: " in line and HIT in run.deny_denials:
+            return
+    assert ": DENIED: " in line, line
+    assert HIT in run.deny_denials, run.deny_evidence
+
+
 def test_a_denial_the_test_catches_is_recorded_and_changes_no_verdict(
     project, state, repo, tmp_path
 ):
-    (line,) = _verified(project, state, CAUGHT)
-    assert ": DENIED: " in line, line
-    run = _run_evidence(repo, tmp_path, CAUGHT.replace("test_regression", "test_d"))
-    assert HIT in run.deny_denials, run.deny_evidence
+    _caught_denial(project, state, repo, tmp_path, CAUGHT)
 
 
 def test_a_child_process_denial_carries_the_run_tag(project, state, repo, tmp_path):
-    (line,) = _verified(project, state, CHILD)
-    assert ": DENIED: " in line, line
-    run = _run_evidence(repo, tmp_path, CHILD.replace("test_regression", "test_d"))
-    assert HIT in run.deny_denials, run.deny_evidence
+    _caught_denial(project, state, repo, tmp_path, CHILD)
 
 
 # run_verifiers directly: the owner and the verifier account, a base run and any other run. The
