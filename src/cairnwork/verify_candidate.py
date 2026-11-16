@@ -93,7 +93,6 @@ def verify_candidate(
     Raises TaskRejected for malformed input and IntakeRefused when drained or mirror unusable.
     ``import_paths`` (#283) are directories prepended to the verifiers' import path for a
     src-layout repo; BAD_IMPORT_PATH when malformed or inside a test root. Config's are not read.
-
     Environment failures before the test commit is burned are explicit refusals. The shadow rules
     see only the listed files the candidate changed (#866)."""
     if not isinstance(base, str) or not OID.fullmatch(base):
