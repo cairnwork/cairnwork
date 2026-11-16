@@ -10,6 +10,19 @@ from xdist_groups import XDIST_GROUP_OF
 pytest_plugins = ["verify_helpers"]
 
 
+def real_info(exc):
+    """A real pytest ExceptionInfo for ``exc`` (#1308: the guards read nothing else)."""
+    from _pytest._code.code import ExceptionInfo
+
+    getter = vars(BaseException)["__traceback__"].__get__  # no code of a test's error runs
+    tb = (
+        getter(exc)
+        if isinstance(type(exc), type) and issubclass(type(exc), BaseException)
+        else None
+    )
+    return ExceptionInfo.from_exc_info((type(exc), exc, tb), exprinfo="")  # type: ignore[arg-type]
+
+
 # Fewer files per test git repo (#417): the tests' own git init/clone (subprocesses included)
 # copy no template directory (hook samples, info/exclude, description) and keep no reflogs.
 # Code under test must see the production git environment. Git calls that inherit it:
