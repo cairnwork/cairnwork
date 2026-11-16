@@ -29,6 +29,19 @@ def _grafts(clone, text):
     path.write_text(text)
 
 
+def _advance_origin(clone):
+    """origin/main moves one commit ahead of local main, so main is an ancestor of it."""
+    git(clone, "checkout", "-q", "-b", "adv")
+    commit_change(clone, {"adv.txt": "x\n"})
+    git(clone, "update-ref", "refs/remotes/origin/main", "adv")
+    git(clone, "checkout", "-q", "main")
+    git(clone, "branch", "-q", "-D", "adv")
+
+
+def _origin_head_to(clone, side):
+    git(clone, "update-ref", "--no-deref", "refs/remotes/origin/HEAD", side)
+
+
 MUST_PASS = {
     "tag-on-main": lambda c, side: git(c, "update-ref", "refs/tags/v1", "origin/main"),
     "annotated-tag-on-main": lambda c, side: git(c, "tag", "-a", "-m", "m", "v1", "origin/main"),
@@ -38,6 +51,13 @@ MUST_PASS = {
     "attempt": lambda c, side: git(c, "update-ref", "refs/cairnwork/attempts/att-1", side),
     "attempt-tested": lambda c, side: git(
         c, "update-ref", "refs/cairnwork/attempts/att-1-tested", side
+    ),
+    "attempt-max-length-id": lambda c, side: git(
+        c, "update-ref", "refs/cairnwork/attempts/" + "a" * 64, side
+    ),
+    "main-behind-origin-main": lambda c, side: _advance_origin(c),
+    "origin-head-at-origin-main": lambda c, side: git(
+        c, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"
     ),
 }
 MUST_BLOCK = {
@@ -55,6 +75,28 @@ MUST_BLOCK = {
     "attempt-lookalike": lambda c, side: git(c, "update-ref", "refs/cairnwork/attemptsX/a", side),
     "stray-branch": lambda c, side: git(c, "update-ref", "refs/heads/feature", side),
     "other-remote": lambda c, side: git(c, "update-ref", "refs/remotes/upstream/main", side),
+    "main-on-side-commit": lambda c, side: git(c, "update-ref", "refs/heads/main", side),
+    "origin-head-on-side-commit": _origin_head_to,
+    "attempt-nested": lambda c, side: git(c, "update-ref", "refs/cairnwork/attempts/x/y", side),
+    "attempt-bad-id-char": lambda c, side: git(
+        c, "update-ref", "refs/cairnwork/attempts/a.b", side
+    ),
+    "attempt-id-leading-dash": lambda c, side: git(
+        c, "update-ref", "refs/cairnwork/attempts/-a", side
+    ),
+    "attempt-id-too-long": lambda c, side: git(
+        c, "update-ref", "refs/cairnwork/attempts/" + "a" * 65, side
+    ),
+    "bases-short": lambda c, side: git(c, "update-ref", "refs/cairnwork-bases/" + "a" * 39, side),
+    "bases-uppercase": lambda c, side: git(
+        c, "update-ref", "refs/cairnwork-bases/" + "A" * 40, side
+    ),
+    "bases-slash": lambda c, side: git(
+        c, "update-ref", "refs/cairnwork-bases/" + "a" * 20 + "/" + "a" * 19, side
+    ),
+    "bases-too-long": lambda c, side: git(
+        c, "update-ref", "refs/cairnwork-bases/" + "a" * 41, side
+    ),
     "grafts-file": lambda c, side: _grafts(c, f"{git(c, 'rev-parse', 'origin/main')} {side}\n"),
     "empty-grafts-file": lambda c, side: _grafts(c, ""),
     "tag-made-to-look-like-main-by-grafts": lambda c, side: (

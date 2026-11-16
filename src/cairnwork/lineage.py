@@ -120,14 +120,20 @@ def verify_single_branch(clone: Path) -> None:
     _refuse_foreign_history(clone, code, advice)
 
 
-# Namespaces Cairnwork writes itself, each with its own rule (#1266):
+# Refs Cairnwork writes itself, each matched by exact shape (#1266); a nested or lookalike name
+# (refs/cairnwork/attempts/x/y, refs/cairnwork-bases/<short>) is not a mirror ref and is judged.
 # - refs/cairnwork/attempts/<attempt_id> and ...-tested: a collected candidate
-#   (workspace._fetch_head, deferred_tests.lay_tests_over); not in main's history.
-# - refs/cairnwork-bases/<sha>: the intake's pin of a task base (intake._mirror_base); with
-#   require_base_on_main false it may sit off main.
-# Anything else under refs/cairnwork/ (e.g. refs/cairnwork/test) is not a mirror ref and is judged.
-OWN_NAMESPACES = ("refs/cairnwork/attempts/", "refs/cairnwork-bases/")
-CHECKED_NAMESPACES = ("refs/heads/", "refs/remotes/")  # judged by the branch rules above
+#   (workspace._fetch_head, deferred_tests.lay_tests_over); not in main's history. The id charset
+#   is workspace.ATTEMPT_ID (no "/"), so the shape is one path segment.
+# - refs/cairnwork-bases/<40 hex>: the intake's pin of a task base (intake._mirror_base, the full
+#   lowercase commit sha); with require_base_on_main false it may sit off main.
+OWN_REF = re.compile(
+    r"refs/cairnwork/attempts/[A-Za-z0-9][A-Za-z0-9_-]{0,63}(?:-tested)?"
+    r"|refs/cairnwork-bases/[0-9a-f]{40}"
+)
+# The three refs verify_single_branch's name check allows: their tips must still be on main, so a
+# local main or origin/HEAD moved onto foreign history is refused (origin/main is main itself).
+MAIN_REFS = frozenset({"refs/heads/main", "refs/remotes/origin/main", "refs/remotes/origin/HEAD"})
 
 
 def _refuse_foreign_history(clone: Path, code: str, advice: str) -> None:
@@ -135,11 +141,13 @@ def _refuse_foreign_history(clone: Path, code: str, advice: str) -> None:
     history, so the mirror carries nothing beyond main."""
     refuse_grafts(clone)
     for ref in run_git(clone, "for-each-ref", "--format=%(refname)").split():
-        if ref.startswith(OWN_NAMESPACES + CHECKED_NAMESPACES):
+        if OWN_REF.fullmatch(ref):
             continue
+        if ref.startswith(("refs/heads/", "refs/remotes/")) and ref not in MAIN_REFS:
+            continue  # a stray branch is already refused by the name check above
         tip = ""
         if not ref.startswith("refs/replace/"):  # a replace ref rewrites history: always refused
-            try:
+            try:  # origin/HEAD may be a symref; ^{commit} resolves it
                 tip = run_git(
                     clone,
                     "--no-replace-objects",
