@@ -1,5 +1,6 @@
 """Regression coverage for fail-closed write scope handling."""
 
+import hashlib
 import subprocess
 
 import pytest
@@ -26,6 +27,10 @@ def _repo(tmp_path):
     return root
 
 
+def _pin(root):
+    return hashlib.sha256((root / ".git" / "config").read_bytes()).hexdigest()
+
+
 @pytest.mark.parametrize("change", ["edit", "delete", "new", "chmod", "none", "ignored"])
 def test_scope_allows_in_scope_changes(tmp_path, change):
     root = _repo(tmp_path)
@@ -39,7 +44,9 @@ def test_scope_allows_in_scope_changes(tmp_path, change):
         (root / "src/a.py").chmod(0o755)
     elif change == "ignored":
         (root / "src/x.log").write_text("ignored\n")
-    assert _scope_ok(root, ["src"])
+    assert _scope_ok(
+        root, ["src"], _git(root, "rev-parse", "HEAD").stdout.decode().strip(), _pin(root)
+    )
 
 
 @pytest.mark.parametrize(
@@ -60,7 +67,9 @@ def test_scope_refuses_out_of_scope_or_symlinks(tmp_path, change):
     else:
         (root / "src/a.py").unlink()
         (root / "src/a.py").symlink_to("README.md")
-    assert not _scope_ok(root, ["src"])
+    assert not _scope_ok(
+        root, ["src"], _git(root, "rev-parse", "HEAD").stdout.decode().strip(), _pin(root)
+    )
 
 
 def test_raw_diff_failure_fails_closed(tmp_path, monkeypatch):
@@ -73,8 +82,32 @@ def test_raw_diff_failure_fails_closed(tmp_path, monkeypatch):
             return subprocess.CompletedProcess(args, 1, b"", b"failed")
         return real_run(args, **kwargs)
 
-    monkeypatch.setattr("experimental.pause.flow.subprocess.run", failing_run)
-    assert not _scope_ok(root, ["src"])
+    monkeypatch.setattr("experimental.pause.scope.subprocess.run", failing_run)
+    assert not _scope_ok(
+        root, ["src"], _git(root, "rev-parse", "HEAD").stdout.decode().strip(), _pin(root)
+    )
+
+
+def test_scope_is_pinned_to_base_after_head_moves(tmp_path):
+    root = _repo(tmp_path)
+    base = _git(root, "rev-parse", "HEAD").stdout.decode().strip()
+    (root / "README.md").write_text("out of scope committed\n")
+    _git(root, "add", "README.md")
+    _git(root, "commit", "-qm", "out of scope")
+    assert not _scope_ok(root, ["src"], base, _pin(root))
+
+
+def test_scope_allows_committed_in_scope_change_from_base(tmp_path):
+    root = _repo(tmp_path)
+    base = _git(root, "rev-parse", "HEAD").stdout.decode().strip()
+    (root / "src/a.py").write_text("in scope committed\n")
+    _git(root, "add", "src/a.py")
+    _git(root, "commit", "-qm", "in scope")
+    assert _scope_ok(root, ["src"], base, _pin(root))
+
+
+def test_scope_refuses_invalid_base(tmp_path):
+    assert not _scope_ok(_repo(tmp_path), ["src"], "bad")
 
 
 @pytest.mark.parametrize("scope", ["src", {}, ["src", 1]])

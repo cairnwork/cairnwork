@@ -45,5 +45,7 @@ def test_configured_run_uses_worker_selected_task(tmp_path, monkeypatch, spellin
     monkeypatch.setattr(cli, "run_flow", fake_flow)
     monkeypatch.setattr(cli.receipt_module, "append", lambda *_: None)
     monkeypatch.setattr(cli.receipt_module, "next_event_seq", lambda _: 0)
-    assert cli.main(args, run_factory=cast(Any, lambda _: (None, None, None, None, None))) == 0
+    assert (
+        cli.main(args, run_factory=cast(Any, lambda _: (None, None, None, None, None, None))) == 0
+    )
     assert captured["task_id"] == "second"

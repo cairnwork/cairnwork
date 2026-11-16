@@ -46,8 +46,17 @@ def outside(path: Path | str, checkout: Path | str) -> bool:
 class TreeGuard:
     """The CheckoutGuard of AC8 over a real checkout; see the module docstring."""
 
-    def __init__(self, root: Path, *, max_files: int = MAX_FILES, max_bytes: int = MAX_BYTES):
+    def __init__(
+        self,
+        root: Path,
+        *,
+        max_files: int = MAX_FILES,
+        max_bytes: int = MAX_BYTES,
+        exclude_git: bool = False,
+        exclude_paths: frozenset[str] = frozenset(),
+    ):
         self.root, self.max_files, self.max_bytes = Path(root), max_files, max_bytes
+        self.exclude_git, self.exclude_paths = exclude_git, exclude_paths
 
     def digest(self) -> str:
         try:
@@ -76,6 +85,10 @@ class TreeGuard:
             names = sorted(e.name for e in it)
         for name in names:
             rel = prefix + name
+            if self.exclude_git and not prefix and name == ".git":
+                continue
+            if any(rel == path or rel.startswith(path + "/") for path in self.exclude_paths):
+                continue
             st = os.stat(name, dir_fd=fd, follow_symlinks=False)
             meta = guard_meta.read(os.fsencode(self.root / rel), st)
             count[0] += 1

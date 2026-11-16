@@ -92,9 +92,10 @@ def test_one_controller_per_event_log_in_a_private_directory(checkout, tmp_path)
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root reads a mode 000 directory")
 def test_the_digest_fails_closed_when_it_cannot_see_the_checkout(checkout, tmp_path):
-    for limits in ({"max_files": 3}, {"max_bytes": 10}):
-        with pytest.raises(GuardUnavailable):
-            TreeGuard(checkout, **limits).digest()
+    with pytest.raises(GuardUnavailable):
+        TreeGuard(checkout, max_files=3).digest()
+    with pytest.raises(GuardUnavailable):
+        TreeGuard(checkout, max_bytes=10).digest()
     with pytest.raises(GuardUnavailable):
         TreeGuard(tmp_path / "missing").digest()
     os.symlink(checkout, tmp_path / "via-link")
