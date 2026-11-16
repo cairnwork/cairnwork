@@ -25,13 +25,8 @@ def _load(name, *, register=True):
 
 probe = _load("_w1353_probe")
 extra = _load("_w1353_extra", register=False)
-_NO_SANDBOX_BASE = (
-    "UNCOMPARABLE: BASE_ENV_FAILED: unchanged base: base-probe-failed "
-    "(no-sandbox: no usable sandbox backend, so nothing ran)"
-)
-_ACCOUNT_GAP = (
-    "[blackbox:add: VERIFICATION_INCOMPLETE: BLACKBOX_NEEDS_VERIFIER_ACCOUNT [matched 1/1]]"
-)
+_NO_SANDBOX_BASE = probe._NO_SANDBOX_BASE
+_ACCOUNT_GAP = probe._ACCOUNT_GAP
 
 
 def test_c1_c4_evasions_are_runnable_and_live():
@@ -61,7 +56,7 @@ def test_c1_c4_evasions_are_runnable_and_live():
     baseline = next(
         r["observed"] for r in got if r["class_id"] == "C2" and r["probe"] == "verify-cli-1"
     )
-    if sys.platform == "linux" or _sandbox_available():
+    if sys.platform == "linux" or probe.sandbox_available():
         # Linux runs the normal verifier without blackbox; the C2 pytest mutation passes.
         assert baseline.startswith("VERIFIED")
         assert all(r["observed"] == "VERIFIED" for r in got if r["class_id"] == "C2")
@@ -69,7 +64,7 @@ def test_c1_c4_evasions_are_runnable_and_live():
         assert baseline == "UNCOMPARABLE"
     mutant = next(r["observed"] for r in rows if r["class_id"] == "C2_MUTANT")
     assert mutant == (
-        "FAILED" if sys.platform == "linux" or _sandbox_available() else "UNCOMPARABLE"
+        "FAILED" if sys.platform == "linux" or probe.sandbox_available() else "UNCOMPARABLE"
     )
     c3_rows = [r for r in rows if r["class_id"] == "C3"]
     c3 = [r["observed"] for r in c3_rows]
@@ -81,7 +76,7 @@ def test_c1_c4_evasions_are_runnable_and_live():
         r["observed"] for r in rows if r["class_id"] == "C4" and r["probe"].startswith("verify-cli")
     ]
     other_mutants = [r["observed"] for r in rows if r["class_id"] in {"C1_MUTANT", "C4_MUTANT"}]
-    if sys.platform == "linux" or _sandbox_available():
+    if sys.platform == "linux" or probe.sandbox_available():
         assert mutant != baseline
         # Linux: derived from src/cairnwork/reasons.py:112, not yet observed on CI
         assert c3 == ["FAILED"] * 4 and c3_mutants == ["FAILED", "FAILED"]
@@ -103,7 +98,7 @@ def test_c1_c4_evasions_are_runnable_and_live():
         assert other_mutants == ["FAILED", "FAILED"]
     else:
         # Darwin without Seatbelt: observed locally; base preflight prevents candidate execution.
-        assert c1 == ["REFUSED"] * 3 and c2_unavailable(rows) == ["UNCOMPARABLE"] * 2
+        assert c1 == ["REFUSED"] * 3 and probe.c2_unavailable(rows) == ["UNCOMPARABLE"] * 2
         assert c3 == ["UNCOMPARABLE"] * 4 and c3_mutants == ["UNCOMPARABLE"] * 2
         assert c4 == ["REFUSED"] * 2
         assert other_mutants == ["UNCOMPARABLE", "UNCOMPARABLE"]
@@ -330,7 +325,7 @@ def test_candidate_routes_match_pinned_main_outputs():
     ]
     c2_blackbox = [r for r in rows if r["class_id"] == "C2" and r["probe"].startswith("blackbox-")]
     assert len(c2_blackbox) == 2
-    if sys.platform == "linux" or _sandbox_available():
+    if sys.platform == "linux" or probe.sandbox_available():
         assert all(r["classification"] == "NOT_RUN" for r in c2_blackbox)
     else:
         # Darwin without a usable Seatbelt (observed under Core's verifier, itself sandboxed): the
@@ -341,7 +336,7 @@ def test_candidate_routes_match_pinned_main_outputs():
         assert all(_NO_SANDBOX_BASE in r["reason"] for r in c2_blackbox)
     # Linux: C2 is observed on CI as VERIFIED.
     expected = ["VERIFIED", "VERIFIED"]
-    if not (sys.platform == "linux" or _sandbox_available()):
+    if not (sys.platform == "linux" or probe.sandbox_available()):
         expected = ["UNCOMPARABLE", "UNCOMPARABLE"]
     assert c2 == expected
     # Linux: derived from src/cairnwork/verify_candidate.py:130-140, not yet observed on CI
@@ -365,7 +360,7 @@ def test_class_results_are_pinned():
     }
     assert len([r for r in rows if r["class_id"] == "C7"]) == 3
     c7_b = next(r for r in rows if r["probe"] == "b-one-tampered-pytest")
-    if sys.platform == "linux" or _sandbox_available():
+    if sys.platform == "linux" or probe.sandbox_available():
         assert c7_b["classification"] == "NOT_RUN"
     else:  # as C2 above: observed under Core's verifier
         assert (c7_b["observed"], c7_b["classification"]) == ("UNCOMPARABLE", "REFUSED")
@@ -398,15 +393,3 @@ def test_class_results_are_pinned():
     }
     assert "outside-runner return=-1" in c10["runner-sniff-1"]["reason"]
     assert "python -P -m _cairnwork_blackbox_runner" in c10["runner-sniff-1"]["reason"]
-
-
-def _sandbox_available():
-    from cairnwork_sandbox import select
-
-    return sys.platform == "darwin" and select() is not None
-
-
-def c2_unavailable(rows):
-    return [
-        r["observed"] for r in rows if r["class_id"] == "C2" and r["probe"].startswith("verify-cli")
-    ]

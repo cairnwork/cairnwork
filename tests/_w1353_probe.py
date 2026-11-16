@@ -10,6 +10,26 @@ from functools import cache
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+_NO_SANDBOX_BASE = (
+    "UNCOMPARABLE: BASE_ENV_FAILED: unchanged base: base-probe-failed "
+    "(no-sandbox: no usable sandbox backend, so nothing ran)"
+)
+_ACCOUNT_GAP = (
+    "[blackbox:add: VERIFICATION_INCOMPLETE: BLACKBOX_NEEDS_VERIFIER_ACCOUNT [matched 1/1]]"
+)
+
+
+def sandbox_available():
+    from cairnwork_sandbox import select
+
+    return sys.platform == "darwin" and select() is not None
+
+
+def c2_unavailable(rows):
+    return [
+        r["observed"] for r in rows if r["class_id"] == "C2" and r["probe"].startswith("verify-cli")
+    ]
+
 
 def _scrub(value):
     return (
