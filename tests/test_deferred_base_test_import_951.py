@@ -68,10 +68,16 @@ import time  # noqa: E402
 from pathlib import Path  # noqa: E402
 
 _SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "measure_base_test_imports.py"
-_spec = importlib.util.spec_from_file_location("measure_base_test_imports", _SCRIPT)
-assert _spec is not None and _spec.loader is not None
-measure_mod = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(measure_mod)
+
+
+def _load_measure_mod():
+    # loaded lazily: the script is new in this PR, so a module-level load would fail to
+    # collect this file on the base commit (the first tests above must still collect there).
+    spec = importlib.util.spec_from_file_location("measure_base_test_imports", _SCRIPT)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def _git(repo, *args):
@@ -94,7 +100,7 @@ def _commit(repo, files, msg):
 
 
 def _measure(repo, sha):
-    return measure_mod.measure(str(repo), sha, 300, time.monotonic() + 60)
+    return _load_measure_mod().measure(str(repo), sha, 300, time.monotonic() + 60)
 
 
 def _same_basename_repo(tmp_path):
