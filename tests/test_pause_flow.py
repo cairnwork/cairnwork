@@ -41,7 +41,10 @@ def _scenario(tmp_path, monkeypatch, cut="CUT", planner=None, gate=None, scope=T
             }
         )
     )
-    record = {"first_edit_cut": {"cut_status": cut, "cut_turn_index": 2 if cut == "CUT" else None}}
+    record = {
+        "first_edit_cut": {"cut_status": cut, "cut_turn_index": 2 if cut == "CUT" else None},
+        "base_sha": "b" * 40,
+    }
     r0 = RunResult(0, "R0 output\n", tmp_path / "R0", tmp_path / "R0" / "checkout", t0, record)
     r1 = RunResult(
         0,
@@ -62,7 +65,7 @@ def _scenario(tmp_path, monkeypatch, cut="CUT", planner=None, gate=None, scope=T
         return r0 if mode == "run" else r1
 
     monkeypatch.setattr("experimental.pause.flow._checkout_digest", lambda path: "a" * 64)
-    monkeypatch.setattr("experimental.pause.flow._scope_ok", lambda path, _: scope)
+    monkeypatch.setattr("experimental.pause.flow._scope_ok", lambda path, _, base: scope)
     return (
         runner,
         calls,
@@ -189,9 +192,18 @@ def test_real_scope_check_rejects_unsafe_r1_and_keeps_r0(tmp_path, monkeypatch, 
     else:
         (checkout / "src" / "file.txt").chmod(0o755)
     if violation == "mode":
-        assert _scope_ok(checkout, ["src"])
+        assert _scope_ok(
+            checkout,
+            ["src"],
+            subprocess.check_output(
+                ["git", "-C", str(checkout), "rev-parse", "HEAD"], text=True
+            ).strip(),
+        )
         return
-    assert not _scope_ok(checkout, ["src"])
+    base = subprocess.check_output(
+        ["git", "-C", str(checkout), "rev-parse", "HEAD"], text=True
+    ).strip()
+    assert not _scope_ok(checkout, ["src"], base)
 
     flow_dir = tmp_path / "flow"
     flow_dir.mkdir()

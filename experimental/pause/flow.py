@@ -33,6 +33,7 @@ class RunResult:
     episode_id: str | None = None
     guard_before_plan: str | None = None
     guard_at_plan_arrival: str | None = None
+    base_sha: str | None = None  # the pinned base the runner checked R1 out at (Core's base)
 
 
 @dataclass(frozen=True)
@@ -57,10 +58,12 @@ def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _scope_ok(checkout: Path, scope: list[str] | None) -> bool:
+def _scope_ok(checkout: Path, scope: list[str] | None, base: str) -> bool:
     """Check every changed path and file mode in a completed R1 patch against write_scope."""
+    if len(base) != 40 or any(c not in "0123456789abcdef" for c in base):
+        return False
     proc = subprocess.run(
-        ["git", "-C", str(checkout), "diff", "--name-only", "-z", "--no-renames", "HEAD"],
+        ["git", "-C", str(checkout), "diff", "--name-only", "-z", "--no-renames", base],
         capture_output=True,
         check=False,
     )
@@ -96,7 +99,7 @@ def _scope_ok(checkout: Path, scope: list[str] | None) -> bool:
     }
     paths = tracked | new_paths
     raw = subprocess.run(
-        ["git", "-C", str(checkout), "diff", "--raw", "--no-renames", "HEAD"],
+        ["git", "-C", str(checkout), "diff", "--raw", "--no-renames", base],
         capture_output=True,
         check=False,
         text=True,
@@ -313,7 +316,14 @@ def _r1_reason(
         scope = _write_scope(parent)
         if isinstance(scope, str):
             return scope, None, None
-        if not _scope_ok(r1.checkout, scope):
+        base = (r0.record or {}).get("base_sha")
+        if (
+            type(base) is not str
+            or len(base) != 40
+            or any(c not in "0123456789abcdef" for c in base)
+        ):
+            return str(Reason.PAUSE_SCOPE_VIOLATION), None, None
+        if not _scope_ok(r1.checkout, scope, base):
             return str(Reason.PAUSE_SCOPE_VIOLATION), None, None
     except (OSError, ValueError, RuntimeError):
         return str(Reason.PAUSE_GUARD_UNAVAILABLE), None, None
