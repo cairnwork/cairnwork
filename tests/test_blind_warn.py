@@ -5,6 +5,7 @@ and real (sandbox) for one end-to-end case. Every failure must give warn=false a
 """
 
 import json
+import os
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -166,7 +167,13 @@ def test_core_does_not_import_the_package():
     # the enforcer is lint-imports ("Core must not import experimental"); this checks the runtime
     code = "import sys, cairnwork.intake; print(any(m.startswith('experimental') for m in sys))"
     code = code.replace("in sys)", "in sys.modules)")
-    done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+    done = subprocess.run(
+        [sys.executable, "-c", code],
+        env={**os.environ, "PYTHONPATH": os.pathsep.join(p for p in sys.path if p)},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
     assert done.stdout.strip() == "False"
 
 

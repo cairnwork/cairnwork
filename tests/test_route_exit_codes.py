@@ -2,9 +2,9 @@
 
 import json
 import subprocess
-import sys
 
 import pytest
+from _child_python import run_module
 from test_recovery import project  # noqa: F401 - fixture, used through crashed
 from test_recovery_leftovers import _routable, _stuck_dir
 
@@ -16,7 +16,7 @@ def crashed(request):
 
 def route(state, *args):
     done = subprocess.run(
-        [sys.executable, "-I", "-m", "cairnwork.route", "--state", str(state), *args],
+        run_module("cairnwork.route") + ["--state", str(state), *args],
         capture_output=True, text=True, timeout=120, check=False,
     )  # fmt: skip
     return done.returncode, json.loads(done.stdout)

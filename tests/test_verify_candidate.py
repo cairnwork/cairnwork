@@ -3,10 +3,10 @@ applies to its own worker's output, without a worker and without a ledger record
 
 import json
 import subprocess
-import sys
 from typing import Any, cast
 
 import pytest
+from _child_python import run_module
 from conftest import commit_change, git
 from core_http_server import core_http_server
 from test_deferred_tests import CHECK, REGRESSION, make_test_commit
@@ -110,7 +110,7 @@ def test_a_correct_candidate_is_verified_and_leaves_no_task_behind(project, stat
     assert out["core_status"] == "VERIFIED" and out["reason"] == "CORE_VERIFIED"
     no_ledger_trace(state)
     route = subprocess.run(
-        [sys.executable, "-I", "-m", "cairnwork.route", "--state", str(state), "in-flight"],
+        run_module("cairnwork.route") + ["--state", str(state), "in-flight"],
         capture_output=True, text=True, check=True,
     )  # fmt: skip
     assert json.loads(route.stdout)["count"] == 0
@@ -162,7 +162,7 @@ def test_malformed_input_is_a_usage_error_or_a_refusal(project, state):
     code, out = verify(state, project, base, cand, allowed=("tests/test_calc.py",))
     assert code == 2 and out["error"] == "PROTECTED_VERIFIER_INPUT"
     done = subprocess.run(
-        [sys.executable, "-I", "-m", "cairnwork.verify_cli", "--state", str(state), "run"],
+        run_module("cairnwork.verify_cli") + ["--state", str(state), "run"],
         capture_output=True, text=True, check=False,
     )  # fmt: skip
     assert done.returncode == 3 and json.loads(done.stdout)["error"] == "USAGE"
