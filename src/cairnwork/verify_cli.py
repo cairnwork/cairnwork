@@ -4,6 +4,7 @@
         --allowed-file F [...] --verifier CMD [...] [--test-commit SHA] \\
         [--import-path DIR ...]    # src layout: DIR joins the verifiers' import path (#283)
         [--blackbox FILE]          # the owner's function-level checks and answers (#303)
+        [--verifier-account NAME]  # global option before `run`: cairnwork-verifier2 (default none)
         [--require-protection]     # strict mode: not VERIFIED unless protected (protection.py)
     cairnwork-verify --state DIR blackbox-commitment --blackbox FILE   # for a receiver's policy
     cairnwork-verify --state DIR import-tests --repo-path P --bundle FILE
@@ -45,6 +46,7 @@ from cairnwork.notary import NotarySchemaMismatch
 from cairnwork.notary_migrate import NotaryMissing, migrate_notary
 from cairnwork.pipeline import TaskRejected
 from cairnwork.runlock import RunLockBusy
+from cairnwork.verifier_select import SelectedIntake, select_account
 from cairnwork.verify_candidate import cleanup, tests_consumed, verify_candidate
 
 
@@ -57,7 +59,10 @@ class _Parser(argparse.ArgumentParser):
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    intake = Intake(Path(args.state).resolve())
+    try:
+        intake = _intake(args)
+    except IntakeRefused as exc:  # a bad --verifier-account: nothing ran, no fallback account
+        return _emit({"error": exc.code, "detail": exc.detail}, 2)
     try:
         if args.command == "cleanup":
             return _emit(cleanup(intake), 0)
@@ -100,6 +105,19 @@ def main(argv: list[str] | None = None) -> int:
         used = tests_consumed(intake, getattr(args, "test_commit", ""))  # a retry needs new tests?
         return _emit({"error": "INTERNAL", "detail": detail, "tests_consumed": used}, 1)
     return _emit(result, 0 if result["verified"] is True else 2)  # UNCOMPARABLE is never 0
+
+
+def _intake(args) -> Intake:
+    state = Path(args.state).resolve()
+    if args.verifier_account is None:
+        return Intake(state)
+    intake = SelectedIntake(state, select_account(args.verifier_account))
+    if not intake.config()["verifier_account"]:  # never silently ignore an explicit account
+        raise IntakeRefused(
+            "VERIFIER_ACCOUNT_NOT_ENABLED",
+            "--verifier-account needs verifier_account: true in the state config.json",
+        )
+    return intake
 
 
 def _migrate(intake: Intake) -> dict[str, Any]:
@@ -201,6 +219,7 @@ def _run(intake: Intake, args) -> dict[str, Any]:
 
 def _parser() -> argparse.ArgumentParser:
     parser = _Parser(prog="cairnwork-verify")
+    parser.add_argument("--verifier-account", default=None)
     parser.add_argument("--state", required=True)
     commands = parser.add_subparsers(dest="command", required=True, parser_class=_Parser)
     commands.add_parser("cleanup")
