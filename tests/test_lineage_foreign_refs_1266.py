@@ -123,6 +123,26 @@ def test_foreign_history_is_refused(setup, make):
         lineage.verify_single_branch(clone)
 
 
+@pytest.mark.parametrize(
+    "ref",
+    ["refs/heads/main", "refs/remotes/origin/HEAD"],
+)
+def test_allowed_branch_refs_off_main_are_refused(setup, ref):
+    """The names are allowed, but a tip outside origin/main history is not."""
+    clone = setup["clone"]
+    git(clone, "update-ref", "--no-deref", ref, _side(clone))
+    with pytest.raises(RuntimeError, match="LINEAGE_MIRROR_NOT_SINGLE_BRANCH"):
+        lineage.verify_single_branch(clone)
+
+
+@pytest.mark.parametrize("prefix", ["refs/cairnwork-basesX/", "refs/cairnwork-bases-/"])
+def test_a_lookalike_bases_namespace_is_refused(setup, prefix):
+    clone = setup["clone"]
+    git(clone, "update-ref", prefix + "a" * 40, _side(clone))
+    with pytest.raises(RuntimeError, match="LINEAGE_MIRROR_NOT_SINGLE_BRANCH"):
+        lineage.verify_single_branch(clone)
+
+
 def test_a_clean_single_branch_mirror_still_passes(setup):
     lineage.verify_single_branch(setup["clone"])
 
