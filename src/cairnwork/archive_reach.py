@@ -109,7 +109,7 @@ def _sys_names(tree: ast.AST) -> tuple[set[str], set[str]]:
             else:
                 continue
             names = {t.id for t in targets if isinstance(t, ast.Name)}
-            if isinstance(node.value, ast.Subscript):
+            if node.value is None or isinstance(node.value, ast.Subscript):
                 continue  # a copy (``sys.path[:]``) or an item (``sys.path[0]``), not the list
             if _is_sys_mod(node.value, mods):
                 mods |= names
