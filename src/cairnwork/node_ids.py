@@ -27,59 +27,34 @@ def _ids(verdict: Verdict) -> set[str]:
     return found
 
 
-def _split_top_level(text: str) -> list[str]:
-    """Split on ``::`` outside ``[...]`` so a case id like ``test_y[x::y]`` stays whole."""
-    parts: list[str] = []
-    depth = 0
-    start = 0
-    index = 0
-    while index < len(text):
-        char = text[index]
-        if char == "[":
-            depth += 1
-        elif char == "]" and depth:
-            depth -= 1
-        elif depth == 0 and text.startswith("::", index):
-            parts.append(text[start:index])
-            start = index + 2
-            index += 1
-        index += 1
-    parts.append(text[start:])
-    return parts
+def locate(nodeid: str) -> tuple[str, str] | None:
+    """(file path, name part) of a node id, or None when it has no ``::`` at all.
 
-
-def _locate(nodeid: str) -> tuple[str, list[str]] | None:
-    """(file path, name parts) of a node id, or None when it has no ``::`` file boundary.
-
-    The file boundary is the first ``.py`` followed by ``::`` (``dir.pyx/`` is not one), so
-    ``::`` in a directory name is not mistaken for pytest's file/name separator; ``::`` inside
-    a case id is not a separator."""
-    boundary = next(
-        (
-            m.end()
-            for m in re.finditer(r"\.py(?=::|$)", nodeid)
-            if nodeid.count("[", 0, m.start()) == nodeid.count("]", 0, m.start())
-        ),  # a ``.py::`` inside a case id has an open bracket before it
-        None,
-    )
-    if boundary is not None:
-        if boundary == len(nodeid):
-            return None
-        return nodeid[:boundary], _split_top_level(nodeid[boundary + 2 :])
-    path, separator, suffix = nodeid.partition("::")
-    return (path, _split_top_level(suffix)) if separator else None
+    The file boundary is the first ``.py`` followed by ``::`` whose prefix has no open ``[``
+    (``dir.pyx/`` is not one; a ``.py::`` inside a case id or a ``[`` directory is skipped; a
+    stray ``]`` in a directory name is ignored). Without such a boundary the first ``::``
+    splits file from name. Name parts never contain ``[``, so the case id starts at the
+    first ``[`` after the boundary."""
+    for match in re.finditer(r"\.py(?=::)", nodeid):
+        depth = 0
+        for char in nodeid[: match.start()]:
+            depth += (char == "[") - (char == "]" and depth > 0)
+        if depth == 0:
+            return nodeid[: match.end()], nodeid[match.end() + 2 :]
+    path, separator, name = nodeid.partition("::")
+    return (path, name) if separator else None
 
 
 def without_case(nodeid: str, *, all_parts: bool = False) -> str:
-    """Remove pytest case suffixes from name parts while preserving bracketed paths."""
-    located = _locate(nodeid)
+    """Remove the pytest case id (from the first ``[`` of the name) keeping bracketed paths.
+
+    ``all_parts`` is kept for callers; name parts never contain ``[`` so it changes nothing."""
+    located = locate(nodeid)
     if located is None:
         # no file boundary: a bare file path stays whole, a bare name loses its case id
         return nodeid if nodeid.endswith(".py") else nodeid.split("[", 1)[0]
-    path, parts = located
-    for index in range(0 if all_parts else len(parts) - 1, len(parts)):
-        parts[index] = parts[index].split("[", 1)[0]
-    return path + "::" + "::".join(parts)
+    path, name = located
+    return path + "::" + name.split("[", 1)[0]
 
 
 def _params(nodeid: str) -> str:
@@ -88,13 +63,13 @@ def _params(nodeid: str) -> str:
 
 
 def _case_start(nodeid: str) -> int:
-    """Index of the ``[`` that opens the last name part's case id, or -1."""
-    located = _locate(nodeid)
+    """Index of the ``[`` that opens the case id, or -1."""
+    located = locate(nodeid)
     if located is None:
         return nodeid.find("[")
-    last = located[1][-1]
-    inside = last.find("[")
-    return -1 if inside < 0 else len(nodeid) - len(last) + inside
+    path, name = located
+    inside = name.find("[")
+    return -1 if inside < 0 else len(path) + 2 + inside
 
 
 def _normalise_id(nodeid: str, roots: tuple[str, ...]) -> str:
@@ -149,7 +124,9 @@ def unmatched_note(gone, present) -> str:
             _case_start(node) >= 0
             and function in functions
             and any(
-                _params(other) != params for other in present if without_case(other) == function
+                _params(other) != params
+                for other in present
+                if _case_start(other) >= 0 and without_case(other) == function
             )
         ):
             return PER_RUN_NOTE
