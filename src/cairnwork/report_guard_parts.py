@@ -4,8 +4,10 @@ not parent code: the plugin cannot import cairnwork."""
 
 PARTS_SOURCE = """\
 import sys
+import pytest
 from pathlib import PosixPath
 from types import CodeType, FrameType, ModuleType, TracebackType
+from _pytest.mark.structures import Mark
 from _pytest._code.code import ExceptionInfo
 from _pytest.config import Config
 from _pytest.reports import CollectReport, TestReport
@@ -25,13 +27,19 @@ _PLUGIN_FIXTURES = {
 }
 
 
-def _marker_items(session):
-    return {item.nodeid: any(item.get_closest_marker(name) for name in ("skip", "skipif"))
+def _marker_items(session, _type=type, _mark=Mark):
+    # #1368: a node's own marks, not get_closest_marker (pytest compares a mark's name with ==
+    # and we took bool() of the mark): only an exact Mark with an exact str name counts; any
+    # other mark leaves the skip "runtime", the side the parent does not take as evidence.
+    return {item.nodeid: any(_type(m) is _mark and _type(m.name) is str
+                             and m.name in ("skip", "skipif")
+                             for node in item.listchain() for m in node.own_markers)
             for item in session.items}
 
 
 def _record_skip(reporter, report):
-    if report.outcome != "skipped" or getattr(report, "wasxfail", None):
+    xfail = getattr(report, "wasxfail", None)  # #1368: only an exact str reason is an xfail
+    if report.outcome != "skipped" or type(xfail) is str and xfail:
         return
     shown = report.longrepr[2] if isinstance(report.longrepr, tuple) else str(report.longrepr)
     reason = shown.removeprefix("Skipped: ")
@@ -165,27 +173,48 @@ def _denied_path(info, _exc=_denied_exc, _file=OSError.filename.__get__):
     return path if type(path) is str else None
 
 
-def _checkout_rel(code, top, _real=os.path.realpath, _rel=os.path.relpath, _abs=os.path.isabs):
+def _checkout_rel(code, top, _real=os.path.realpath, _rel=os.path.relpath, _abs=os.path.isabs,
+                  _type=type):
     # #962 step 2a: the frame's file relative to the checkout top, or None when it is not an
-    # absolute file inside it (realpath only to find it).
-    if not _abs(code.co_filename) or code.co_filename.startswith("<"):
+    # absolute file inside it (realpath only to find it). #1368: a co_filename that is not an
+    # exact str (code.replace) raises before any use, so _denied_origin records nothing (doubt).
+    file = code.co_filename
+    if _type(file) is not str:
+        raise TypeError("co_filename")
+    if not _abs(file) or file.startswith("<"):
         return None
-    rel = _rel(_real(code.co_filename), top)
+    rel = _rel(_real(file), top)
     out = rel in (".", "..") or rel.startswith(("../", "..\\\\"))
     return None if out or _abs(rel) else rel
 
 
-def _checkout_frame(tb, top, _in=_checkout_rel):
+def _checkout_frame(tb, top, _in=_checkout_rel, _type=type):
     # (origin, line) of a traceback's innermost checkout frame; "" when that frame is a lambda or
-    # a comprehension (a <...> name), or none is in the checkout.
+    # a comprehension (a <...> name), or none is in the checkout. #1368: a co_name that is not an
+    # exact str raises, like _checkout_rel, so _denied_origin records nothing.
     origin, line = "", 0
     while tb is not None:
         code = tb.tb_frame.f_code
         if _in(code, top) is not None:
-            origin = "" if code.co_name.startswith("<") else _in(code, top)
+            name = code.co_name
+            if _type(name) is not str:
+                raise TypeError("co_name")
+            origin = "" if name.startswith("<") else _in(code, top)
             line = tb.tb_lineno or 0
         tb = tb.tb_next
     return origin, line
+
+
+def _fixture_plugin(table, longrepr, _type=type):
+    # #1368: lookup only exact strings; test objects never reach dict hashing or equality.
+    name = getattr(longrepr, "argname", None)
+    return table.get(name) if _type(name) is str else None
+
+
+def _exit_status(value, _type=type, _code=pytest.ExitCode, _int=int.__int__):
+    # #1368: only exact ints and pytest ExitCode values enter the record; anything else is
+    # None, which the parent refuses (exitstatus must be an exact int).
+    return _int(value) if _type(value) is int or _type(value) is _code else None
 
 
 def _denied_origin(info, root, _exc=_denied_exc, _real=os.path.realpath, _str=str,

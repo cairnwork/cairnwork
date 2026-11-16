@@ -22,7 +22,8 @@ def _denied_inside(exc, _codes=(errno.EACCES, errno.EPERM, errno.EROFS, errno.EN
         seen.add(id(cur))
         error_no = _errno(cur) if _sub(_type(cur), OSError) else None
         if _sub(_type(cur), OSError) and any(  # a class that replaces errno (a property): doubt
-                _type(_kdict(k).get("errno", 0)) is not int for k in _mro(_type(cur))
+                any(_type(key) is not str for key in _kdict(k))
+                or _type(_kdict(k).get("errno", 0)) is not int for k in _mro(_type(cur))
                 if k is not OSError):
             return True
         if cur is not exc and (_sub(_type(cur), _lookup)

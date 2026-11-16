@@ -232,7 +232,7 @@ _HANDOVER = _take()
             if report.failed:  # a skip in a fixture is not an error
                 self._setup_failed.append(nodeid)
                 self._setup_denied[nodeid] = _origin(call.excinfo, item.config.rootpath)
-                module = _fixtures.get(getattr(report.longrepr, "argname", None))
+                module = _fixture_plugin(_fixtures, report.longrepr)
                 if module:
                     self._plugin_missing[nodeid] = module
         elif report.when == "teardown" and report.failed:  # #478: a fixture raised after yield
@@ -262,7 +262,7 @@ _HANDOVER = _take()
                    "teardown_errors": self._teardown_errors,
                    "collection_finished": self._finished, "skips": self._skips,
                    # pytest's own status: the parent requires it and the process's to agree
-                   "exitstatus": int(exitstatus), "testsfailed": session.testsfailed}
+                   "exitstatus": _exit_status(exitstatus), "testsfailed": session.testsfailed}
         if self._fd is not None:
             data = dumps(payload).encode()
             ftruncate(self._fd, 0)
