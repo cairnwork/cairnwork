@@ -167,6 +167,47 @@ PRECISE = [
     (G + "sys.path.insert(0, os.path.dirname(__file__))", "tests/data/s.zip", False),
     (G + "sys.path.insert(0, './vendor/other.zip')", "tests/data/s.zip", False),
     (G + "sys.path.insert(0, 'src')\nX = '.egg'", "t/v.egg", False),
+    # keyword arguments, bytes literals, a lone glob character, a bare-name rebind
+    (G + "import site\nsite.addsitedir(sitedir=glob.glob('*.zip')[0])", "t/v.zip", True),
+    (
+        G + "from zipimport import zipimporter\nzipimporter(path=glob.glob('*.zip')[0])",
+        "t/v.zip",
+        True,
+    ),
+    (
+        "def f(monkeypatch):\n    monkeypatch.syspath_prepend(path=ROOT)",
+        "t/v.zip",
+        True,
+    ),
+    (G + "sys.path.insert(0, b'tests/data')", "tests/data/v.zip", True),
+    (G + "sys.path.insert(0, b'.whl')", "t/v.whl", True),
+    (G + "sys.path.insert(0, 'tests/data/[ab]')", "tests/data/v.zip", True),
+    (G + "sys.path.insert(0, 'tests/data/v?')", "tests/data/v.zip", True),
+    (G + "p = sys.path\np = ['data']", "tests/data/s.zip", False),
+    (G + "p: list = sys.path\np: list = ['data']", "tests/data/s.zip", False),
+    # the remaining mutants: keyword in a path builder, __setitem__, alias chains in any order,
+    # other pure builders, no-op annotations, a call with no arguments
+    (G + "sys.path.insert(0, str(object=ROOT))", "t/v.zip", True),
+    (G + "sys.path.__setitem__(0, glob.glob('*.zip')[0])", "t/v.zip", True),
+    (G + "v = u\nu = t\nt = s\ns = sys\nv.path.insert(0, glob.glob('*.zip')[0])", "t/v.zip", True),
+    (G + "sys.path.extend(os.walk.__call__('src'))", "t/v.zip", True),
+    (G + "sys.path.insert(0, '')", "./v.zip", False),
+    (G + "x = dict()\nsys.path.insert(0, 'src')", "t/v.zip", False),
+    (G + "sys.path: list", "t/v.zip", False),
+    (G + "sys.path.extend(sys.path.copy())", "t/v.zip", False),
+    (G + "sys.path.insert(0, str(Path.cwd()))", "t/v.zip", False),
+    (G + "sys.path.insert(0, str(Path('src').joinpath('lib')))", "t/v.zip", False),
+    (
+        G + "from os.path import join, normpath, dirname\nsys.path.insert(0, join('a', 'b'))",
+        "t/v.zip",
+        False,
+    ),
+    (G + "from os.path import normpath\nsys.path.insert(0, normpath('src'))", "t/v.zip", False),
+    (G + "from os.path import dirname\nsys.path.insert(0, dirname(__file__))", "t/v.zip", False),
+    (G + "sys.path.extend([*('src', 'lib')])", "t/v.zip", False),
+    (G + "sys.path = sys.path[1:] + ['src']", "t/v.zip", False),
+    (G + "sys.path.extend({'src'})", "t/v.zip", False),
+    (G + "sys.path.extend(('src',))", "t/v.zip", False),
 ]
 
 
