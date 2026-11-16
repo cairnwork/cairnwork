@@ -86,7 +86,9 @@ def ensure_test_commit(
     a ``required`` store refuses a commit that was not imported instead of falling back.
     It does so before looking at repo: a commit that is already there but never went
     through the store reached the machine by another route (a fetch from origin, a push)
-    and must not pass as "bundle" (#189); one the store holds is fetched from its bundle."""
+    and must not pass as "bundle" (#189); one the store holds is fetched from its bundle.
+    Without a required store, a locally present commit is accepted without a configured
+    verifier-owned origin; Git operations ignore replacement refs (#1312)."""
     if not OID.fullmatch(test_commit):
         raise TestCommitRejected("TEST_COMMIT_INVALID", "not a 40-hex commit id")
     if store is not None and store.required:  # provenance first, presence never suffices

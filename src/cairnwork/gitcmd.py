@@ -237,7 +237,11 @@ def run_git(
 
 
 def commit_present(repo: Path, oid: str) -> bool:
-    """Return whether oid names a commit; a broken supplied repository stays unreadable."""
+    """Return whether oid names a commit; a broken supplied repository stays unreadable.
+
+    A health-check failure after rev-parse fails returns False: supplied-repo damage is
+    the candidate's fault and is reported as TEST_COMMIT_UNREADABLE (#1185).
+    """
     try:
         found = run_git(
             repo, "rev-parse", "--verify", "--quiet", f"{oid}^{{commit}}", ok_codes=(0, 1)

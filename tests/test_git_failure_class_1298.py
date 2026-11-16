@@ -45,8 +45,19 @@ def test_commit_present_propagates_git_infrastructure_failure(tmp_path, monkeypa
 
 
 def test_commit_present_only_exit_one_means_missing(tmp_path, monkeypatch):
-    monkeypatch.setattr("cairnwork.gitcmd.run_git", lambda *a, **kw: "", raising=False)
+    calls = 0
+    monkeypatch.setattr("cairnwork.gitcmd.config_hooks_off", lambda *a: ())
+
+    def exit_one_then_healthy(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise subprocess.CalledProcessError(1, args[0], output="", stderr="")
+        return subprocess.CompletedProcess(args[0], 0, stdout="", stderr="")
+
+    monkeypatch.setattr("cairnwork.gitcmd.subprocess.run", exit_one_then_healthy)
     assert commit_present(tmp_path, "a" * 40) is False
+    assert calls == 1
 
 
 def test_commit_present_reports_a_broken_repository_as_missing(tmp_path):
@@ -198,6 +209,13 @@ def test_fetch_ok_but_commit_missing_with_disk_words_stays_candidate_rejection(
     _commit_repo(origin)
     repo = tmp_path / "repo"
     _commit_repo(repo)
+    monkeypatch.setattr(
+        gitprobe,
+        "fetch_to_supplied",
+        lambda *a, **kw: (_ for _ in ()).throw(
+            gitprobe.TestCommitUnavailable("No space left on device")
+        ),
+    )
     with pytest.raises(Rejected) as raised:
         deferred_tests.ensure_test_commit(
             repo, "a" * 40, origin_url=str(origin), allowed_protocols=("file",)

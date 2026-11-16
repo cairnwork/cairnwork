@@ -39,6 +39,13 @@ def test_pr_head_is_the_journal_candidate_and_the_notarized_commit(setup, tmp_pa
     git(author, "push", "-q", "origin", f"{tests}:refs/heads/hidden-tests")
     github = FakeGitHub([issue(block={**BLOCK, "test_commit": tests})])
     github.commits[tests] = [base]
+    submit = type(intake).submit
+
+    def submit_with_local_origin(self, payload):
+        # Issue runner normally pins github.repo; this test substitutes its local bare origin.
+        return submit(self, {**payload, "origin_url": str(origin)})
+
+    monkeypatch.setattr(type(intake), "submit", submit_with_local_origin)
     taken = runner.take(intake, github, clone)[0]
     assert "task_id" in taken, taken
 
