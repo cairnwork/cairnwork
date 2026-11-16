@@ -341,4 +341,5 @@ def test_r1_base_mismatch_is_scope_violation(tmp_path):
 @pytest.mark.parametrize("mutation", ["conditional_include", "worktree", "autocrlf", "replace_ref"])
 def test_r1_git_config_and_replace_ref_tampering_fails_scope(tmp_path, mutation):
     _r0, r1, base = _case(tmp_path, mutation)
-    assert not _scope_ok(r1.checkout, ["src"], base)
+    pin = hashlib.sha256((r1.checkout / ".git" / "config").read_bytes()).hexdigest()
+    assert not _scope_ok(r1.checkout, ["src"], base, pin)

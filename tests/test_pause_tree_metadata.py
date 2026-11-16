@@ -236,7 +236,8 @@ def test_scope_pins_core_worktree_refusal(tmp_path: Path) -> None:
     _git(checkout, "config", "core.worktree", str(tmp_path / "elsewhere"))
     from experimental.pause.scope import _repo_metadata_ok
 
-    assert not _repo_metadata_ok(checkout)
+    pin = hashlib.sha256((checkout / ".git" / "config").read_bytes()).hexdigest()
+    assert _repo_metadata_ok(checkout, pin) is False
 
 
 def test_scope_pins_core_filemode_false_refusal(tmp_path: Path) -> None:
