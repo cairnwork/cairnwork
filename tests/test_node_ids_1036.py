@@ -171,7 +171,13 @@ def test_show_masks_paths_controls_and_bounds_text():
         ("dir.pyx/tests/t.py::test_x[param]", "dir.pyx/tests/t.py::test_x"),
         ("a.pyc/t.py::C::test_x[p]", "a.pyc/t.py::C::test_x"),
         ("dir.py/t.py::test_x[a.py::b]", "dir.py/t.py::test_x"),
+        ("tests/doc.txt::test_x[foo.py::bar]", "tests/doc.txt::test_x"),
     ],
 )
 def test_py_inside_directory_name_is_not_the_file_boundary_1269(nodeid, expected):
     assert without_case(nodeid) == expected
+
+
+def test_bare_name_without_file_strips_case_for_every_part_only_1269():
+    assert without_case("test_func[case]", all_parts=True) == "test_func"
+    assert without_case("test_func[case]") == "test_func[case]"

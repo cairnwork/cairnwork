@@ -55,16 +55,23 @@ def without_case(nodeid: str, *, all_parts: bool = False) -> str:
     ``::`` in a directory name is not mistaken for pytest's file/name separator; ``::`` inside
     a case id is not a separator.
     """
-    found = re.search(r"\.py(?=::|$)", nodeid)
-    if found:
-        path, suffix = nodeid[: found.end()], nodeid[found.end() :]
+    boundary = next(
+        (
+            m.end()
+            for m in re.finditer(r"\.py(?=::|$)", nodeid)
+            if nodeid.count("[", 0, m.start()) == nodeid.count("]", 0, m.start())
+        ),  # a ``.py::`` inside a case id has an open bracket before it
+        None,
+    )
+    if boundary is not None:
+        path, suffix = nodeid[:boundary], nodeid[boundary:]
         if not suffix:
             return nodeid
         suffix = suffix[2:]
     else:
         path, separator, suffix = nodeid.partition("::")
         if not separator:
-            return nodeid
+            return nodeid.split("[", 1)[0] if all_parts else nodeid
     parts = _split_top_level(suffix)
     for index in range(0 if all_parts else len(parts) - 1, len(parts)):
         parts[index] = parts[index].split("[", 1)[0]
