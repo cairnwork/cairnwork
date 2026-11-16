@@ -10,7 +10,10 @@ permissions:
 
 # A new push to a pull request cancels that pull request's older runs, and a new push to main
 # cancels main's older runs, so the few macOS runners are not spent on superseded heads. Each main
-# commit contains the ones before it, so the newest main run still tests every merged change.
+# commit contains the ones before it, so a run of the newest main commit tests every merged change.
+# GitHub does not guarantee the order in which runs enter a group: if an older main push enters
+# last it cancels the newer run, and the newest commit is then tested by the next push to main
+# (or a re-run of its cancelled run). PR heads are always tested before merge, unaffected by this.
 concurrency:
   group: ci-${{ github.event.pull_request.number || 'main' }}
   cancel-in-progress: true
