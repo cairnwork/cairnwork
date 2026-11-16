@@ -109,17 +109,27 @@ def _refuse_foreign_history(clone: Path, code: str, advice: str) -> None:
     """Every other ref (tags, notes, stash, replace, ...) may name only a commit in origin/main's
     history, so it carries nothing beyond main (#1266). A single-branch clone fetches the tags
     of main's own history, so those pass. refs/cairnwork-bases/ is Cairnwork's own pin namespace
-    (intake._mirror_base) and is not judged here."""
-    refs = run_git(clone, "for-each-ref", "--format=%(refname)").split()
+    (intake._mirror_base) and is not judged here. Objects no ref reaches are not judged either: the
+    working clone legitimately holds the runner's own candidate commits (issue_runner.take runs
+    this on it), and the mirror only ever fetches MAIN_REFSPEC."""
+    grafts = Path(clone, _git(clone, "rev-parse", "--git-path", "info/grafts").strip())
+    if grafts.exists():  # a grafts file rewrites parents, so ancestry below would read fake history
+        raise RuntimeError(f"{code}: mirror has a grafts file; {advice}")
+    refs = _git(clone, "for-each-ref", "--format=%(refname)").split()
     for ref in refs:
         if ref.startswith(_OWN_OR_CHECKED):
             continue
         try:
             if ref.startswith("refs/replace/"):
                 raise GitCommandError(ref)  # a replace ref rewrites what main's history reads as
-            tip = run_git(clone, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}").strip()
-            run_git(clone, "merge-base", "--is-ancestor", tip, "refs/remotes/origin/main")
+            tip = _git(clone, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}").strip()
+            _git(clone, "merge-base", "--is-ancestor", tip, "refs/remotes/origin/main")
         except GitCommandError as exc:
             raise RuntimeError(
                 f"{code}: mirror holds {ref}, which is not in main's history; {advice}"
             ) from exc
+
+
+def _git(clone: Path, *args: str) -> str:
+    """run_git with replace refs switched off, so ancestry is read from the real objects."""
+    return run_git(clone, "--no-replace-objects", *args)

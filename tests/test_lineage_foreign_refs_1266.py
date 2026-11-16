@@ -75,3 +75,24 @@ def test_the_own_pin_namespace_is_left_to_its_owner(setup):
     clone = setup["clone"]
     git(clone, "update-ref", "refs/cairnwork-bases/" + "a" * 40, _side(clone))
     lineage.verify_single_branch(clone)  # open question in #1266: not judged here
+
+
+def test_a_grafts_file_cannot_make_a_side_commit_pass_as_main_history(setup):
+    clone = setup["clone"]
+    side = _side(clone)
+    git(clone, "update-ref", "refs/tags/v1", side)
+    main_tip = git(clone, "rev-parse", "origin/main")
+    grafts = clone / ".git" / "info" / "grafts"
+    grafts.parent.mkdir(exist_ok=True)
+    grafts.write_text(f"{main_tip} {side}\n")  # main's tip now "descends from" the side commit
+    with pytest.raises(RuntimeError, match="LINEAGE_MIRROR_NOT_SINGLE_BRANCH.*grafts"):
+        lineage.verify_single_branch(clone)
+
+
+def test_an_empty_grafts_file_is_refused_too(setup):
+    clone = setup["clone"]
+    grafts = clone / ".git" / "info" / "grafts"
+    grafts.parent.mkdir(exist_ok=True)
+    grafts.write_text("")
+    with pytest.raises(RuntimeError, match="grafts"):
+        lineage.verify_single_branch(clone)
