@@ -63,10 +63,11 @@ from pathlib import Path
 
 import cairnwork_sandbox
 from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRejected, deleted_of
-from cairnwork.gitcmd import GitCommandError, run_git_bytes
+from cairnwork.gitcmd import GitCommandError
 from cairnwork.issue_task import test_target
 from cairnwork.p2p_collect import OVER_BUDGET, collected_side, no_targets, under_roots, whole_base
 from cairnwork.p2p_conftest import GOVERNS, check_overlay, complete, conftest_files
+from cairnwork.p2p_links import base_tree
 from cairnwork.p2p_nodes import clean as _clean
 from cairnwork.p2p_nodes import passing_targets, require_nodes
 from cairnwork.p2p_probe_log import probe_log_tail
@@ -97,10 +98,9 @@ def _base_tests(task, exclude: frozenset[str], strict=True) -> tuple[str, ...]:
     """Base test files under the roots that are plain targets and match python_files (#956)."""
     try:
         target, is_test = test_target(task.test_roots), test_file_rule(task.repo, task.base_commit)
-        raw = run_git_bytes(task.repo, "ls-tree", "-r", "-z", "--name-only", task.base_commit, "--")
+        raw, links = base_tree(task, exclude)  # #1000: a symlink under a root is doubt
         paths = [p for p in under_roots(raw, task.test_roots) if p not in exclude and is_test(p)]
-        # #930 refuse what no target can name; #997 never exempt because "pytest skips that dir":
-        odd = [p for p in paths if not target.fullmatch(p)]  # that depends on inputs not read here
+        odd = [p for p in paths if not target.fullmatch(p)] + links  # #930, #997: no exemption
     except (GitCommandError, PytestConfigError) as exc:
         raise P2PRejected("P2P_BASE_UNREADABLE", str(exc)) from exc
     if odd and strict:  # #930: never dropped silently (fail closed); #956: env check only

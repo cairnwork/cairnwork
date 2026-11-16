@@ -10,7 +10,8 @@ import re
 # render_pass or compilePass stay blocked: an extra refusal is the safe side.
 _SAFE_NAMES = frozenset(
     "monkey donkey turkey hockey jockey whiskey bypass compass overpass underpass trespass "
-    "surpass keynote".split()
+    "surpass keynote publickey primarykey sortkey partitionkey foreignkey cachekey "
+    "idempotencykey nexttoken pagetoken".split()
 )
 _SUFFIX = re.compile(r"(?:key|token|secret|pass(?:word|wd|phrase)?|pwd)$")
 _QUALIFIER = re.compile(r"(?:value|hash|old|new|prod|dev|test|base|pem|v\d+)$")
@@ -22,12 +23,14 @@ _PIECE = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+")
 _ASSIGNMENT = re.compile(
     r"(?<![A-Za-z0-9_-])(?:[A-Za-z_][A-Za-z0-9_.]*(?:\s*\[\s*[\"'`][A-Za-z_][A-Za-z0-9_-]*[\"'`]\s*\])*\s*\[\s*)?"
     r"(?P<name>[A-Za-z_][A-Za-z0-9_-]*)[\"'`]?\s*\]?\s*(?:=>|:=|[=:])\s*"
-    r"[\"'`]?(?P<value>[A-Za-z0-9+/=_-]{16,})"
+    r"(?=(?P<value>\"[^\"\n]{6,}\"|'[^'\n]{6,}'|`[^`\n]{6,}`|"
+    r"(?=[^\s]*[^A-Za-z0-9_])[^\s]+|[A-Za-z0-9+/=_-]{16,}))"
 )
 # command line: --api-key VALUE or --api-key=VALUE
 _FLAG = re.compile(
-    r"(?<![A-Za-z0-9_-])--(?P<name>[A-Za-z_][A-Za-z0-9_-]*)(?:\s+|\s*=\s*)[\"'`]?"
-    r"(?P<value>[A-Za-z0-9+/=_-]{16,})"
+    r"(?<![A-Za-z0-9_-])--(?P<name>[A-Za-z_][A-Za-z0-9_-]*)(?:\s+|\s*=\s*)"
+    r"(?=(?P<value>\"[^\"\n]{6,}\"|'[^'\n]{6,}'|`[^`\n]{6,}`|"
+    r"(?=[^\s]*[^A-Za-z0-9_])[^\s]+|[A-Za-z0-9+/=_-]{16,}))"
 )
 
 _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -51,17 +54,37 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 def scan(text: str, names: tuple[str, ...] = ()) -> list[str]:
     """Return matched categories only; never include the matched text. ``names`` are configured
     account or host names (AC4): a whole-word, case-insensitive hit is ``account_name``."""
-    hits = [name for name, pattern in _PATTERNS if pattern.search(text)]
+    normalized = re.sub(r"[\u00ad\u200b-\u200d\u2060\u2061-\u2064\ufeff]", "", text)
+    joined = re.sub(r"(=>|:=|[=:])[ \t]*(?:\r\n|\n)+[ \t]*", r"\1", normalized)
+    compact = re.sub(r"\s+", "", normalized)
+    wrapped = re.sub(r"\r?\n", "", normalized)
+    hits = []
+    for name, pattern in _PATTERNS:
+        variants = (text, normalized)
+        if name in {"api_key", "bearer_token"}:
+            variants += (compact, wrapped)
+        if any(pattern.search(variant) for variant in variants):
+            hits.append(name)
     for pattern, category in ((_ASSIGNMENT, "assigned_secret"), (_FLAG, "flag_secret")):
-        for match in pattern.finditer(text):
-            word = _secret_word(match.group("name"))
-            if word is None or (word == "pwd" and _is_path(match.group("value"))):
+        for candidate in (text, joined):
+            for match in pattern.finditer(candidate):
+                word = _secret_word(match.group("name"))
+                value = match.group("value")
+                if (
+                    word is None
+                    or (word == "pwd" and _is_path(value))
+                    or re.fullmatch(r"[A-Za-z_]\w{0,14}\(\)", value)  # old 16-char floor kept
+                    or _is_short_word_with_trailing_punctuation(value)
+                ):
+                    continue
+                hits.append(category)
+                break
+            else:
                 continue
-            hits.append(category)
             break
     for name in names:
         word = r"(?i)(?<![A-Za-z0-9])" + re.escape(name) + r"(?![A-Za-z0-9])"
-        if name and re.search(word, text):
+        if name and (re.search(word, text) or re.search(word, normalized)):
             hits.append("account_name")
             break
     return hits
@@ -94,8 +117,8 @@ def _secret_word(name: str) -> str | None:
 
 
 def _is_path(value: str) -> bool:
-    """pwd is also the working directory: a value starting with /, ~, . or a drive prefix is a
-    path. Any other value, a bare relative path included, stays blocked (safe side)."""
+    """A pwd-named value starting with / is accepted as a path, even if it could be a secret."""
+    value = value.strip("\"'`")
     return value.startswith(("/", "~", ".")) or bool(re.match(r"(?i)^[a-z]:[\\/]", value))
 
 
@@ -107,3 +130,11 @@ class Scanner:
 
     def scan(self, text: str) -> list[str]:
         return scan(text, self.names)
+
+
+def _is_short_word_with_trailing_punctuation(value: str) -> bool:
+    """An unquoted word under the 16-char floor plus trailing , ; ) ] } (``token = None,``)."""
+    if value[:1] in "\"'`":
+        return False
+    stripped = value.rstrip(",;)]}")
+    return stripped != value and len(stripped) < 16 and re.fullmatch(r"\w*", stripped) is not None

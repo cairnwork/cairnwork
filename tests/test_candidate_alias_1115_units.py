@@ -42,9 +42,46 @@ def test_runtime_shadow_added_open_write_and_path_insert():
     assert runtime_shadow_added(None, src) is True
 
 
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from builtins import open as emit\nemit('f', 'w')\n",
+        "from bz2 import BZ2File as emit\nemit('f', 'wb')\n",
+        "from lzma import LZMAFile as emit\nemit('f', 'w')\n",
+    ],
+)
+def test_runtime_shadow_added_imported_opener_alias(source):
+    src = f"import sys\n{source}sys.path.insert(0, 'd')\n".encode()
+    assert runtime_shadow_added(None, src) is True
+
+
 def test_runtime_shadow_added_open_default_read_mode_is_false():
     src = b"import sys\nopen('f')\nsys.path.insert(0, 'd')\n"
     assert runtime_shadow_added(None, src) is False
+
+
+def test_runtime_shadow_added_open_single_argument_that_looks_like_mode_is_read():
+    src = b"import sys\nopen('w')\nsys.path.insert(0, 'd')\n"
+    assert runtime_shadow_added(None, src) is False
+
+
+def test_runtime_shadow_added_path_open_alias_with_single_mode_argument_is_write():
+    src = (
+        b"import sys\nfrom gzip import open as opener\nfrom pathlib import Path\n"
+        b"opener = Path('f').open\nopener('w')\nsys.path.insert(0, 'd')\n"
+    )
+    assert runtime_shadow_added(None, src) is True
+
+
+def test_runtime_shadow_added_rebound_builtin_open_single_mode_argument_is_write():
+    src = b"import sys\nopen = something\nopen('w')\nsys.path.insert(0, 'd')\n"
+    assert runtime_shadow_added(None, src) is True
+
+
+@pytest.mark.parametrize("call", ["open('x', 'w')", "open('x', mode='a')"])
+def test_runtime_shadow_added_open_positional_and_keyword_write_modes(call):
+    src = f"import sys\n{call}\nsys.path.insert(0, 'd')\n".encode()
+    assert runtime_shadow_added(None, src) is True
 
 
 def test_runtime_shadow_added_open_non_literal_mode_is_true():
@@ -91,11 +128,11 @@ def test_unparseable_new_raises_value_error():
     "call",
     [
         "gzip.open('f.gz', 'w')",
+        "gzip.open('w')",
         "codecs.open('f', 'w')",
         "bz2.open(path, 'a')",
         "g.open('data/raw.gz', 'wb')",
         "g.open('data/raw.gz', mode)",
-        "gzip.open('w')",
         "gzip.open(path, mode)",
         "Path('f').open('a')",
         "p.open(mode)",
@@ -107,11 +144,72 @@ def test_runtime_shadow_added_open_write_through_module_and_path_receivers(call)
 
 
 @pytest.mark.parametrize(
-    "call", ["gzip.open('data/raw.gz')", "gzip.open(path, 'rb')", "Path('f').open('r', 1)"]
+    "call",
+    [
+        "gzip.open('data/raw.gz')",
+        "gzip.open(path, 'rb')",
+        "Path('f').open('r', 1)",
+    ],
 )
 def test_runtime_shadow_added_open_read_through_module_and_path_receivers(call):
     src = f"import sys\n{call}\nsys.path.insert(0, 'd')\n".encode()
     assert runtime_shadow_added(None, src) is False
+
+
+@pytest.mark.parametrize(
+    ("snippet", "expected"),
+    [
+        ("from pathlib import Path\nio = Path('m.py')\nio.open('w')", True),
+        ("from pathlib import Path\ngzip = Path('m.py')\ngzip.open('w')", True),
+        (
+            "from pathlib import Path\n"
+            "builtins = Path('m.py')\nbuiltins.open('a', encoding='utf-8')",
+            True,
+        ),
+        ("from pathlib import Path\ncodecs = Path('m.py')\ncodecs.open('x')", True),
+        ("from pathlib import Path\ntarfile = Path('m.py')\ntarfile.open('w+')", True),
+        ("from pathlib import Path\nbz2 = Path('m.py')\nbz2.open('wb')", True),
+        ("from pathlib import Path\nlzma = Path('m.py')\nlzma.open('w')", True),
+        ("def f(io):\n    io.open('w')", True),
+        ("for gzip in paths:\n    gzip.open('a', encoding='utf8')", True),
+        ("gzip.open('w')", True),
+        (
+            "import os\nif False:\n    import io as os\n"
+            "os.open('m.py', flags=os.O_WRONLY | os.O_CREAT)",
+            True,
+        ),
+        (
+            "import os\ntry:\n    pass\nexcept ImportError:\n    import gzip as os\n"
+            "os.open('m.py', flags=os.O_WRONLY | os.O_CREAT)",
+            True,
+        ),
+        (
+            "import os\nif False:\n    import zipfile as os\n"
+            "os.open('m.py', flags=os.O_WRONLY | os.O_CREAT)",
+            True,
+        ),
+        ("import io as os\nos.open('m.py', flags=0)", True),
+        ("import io\nb = io\nb.open(0, 'w')", True),
+        ("p.open(0, 'w')", True),
+        ("open('f', 0)", True),
+        ("open('f', False)", True),
+        ("Path('f').open(0)", True),
+        ("Path('f').open(False)", True),
+        ("open('w')", False),
+        ("open('f')", False),
+        ("import gzip\ngzip.open('data/raw.gz')", False),
+        ("import gzip\ngzip.open(path, 'rb')", False),
+        ("Path('f').open('r', 1)", False),
+        ("from tarfile import open as t\nt('f.tgz','r:gz')", False),
+        ("import shelve\nshelve.open('f', flag='r')", False),
+        ("from io import FileIO as F\nF('f')", False),
+        ("from zipfile import ZipFile as Z\nZ('f','r')", False),
+        ("from webbrowser import open as emit\nemit('u')", False),
+    ],
+)
+def test_runtime_shadow_added_review_cases(snippet, expected):
+    src = f"import sys\n{snippet}\nsys.path.insert(0, 'd')\n".encode()
+    assert runtime_shadow_added(None, src) is expected
 
 
 def test_runtime_shadow_added_in_memory_write_is_an_accepted_false_refusal():
@@ -125,3 +223,67 @@ def test_runtime_shadow_added_in_memory_write_is_an_accepted_false_refusal():
 def test_runtime_shadow_added_open_with_unpacked_arguments_fails_closed(call):
     src = f"import sys\n{call}\nsys.path.insert(0, 'd')\n".encode()
     assert runtime_shadow_added(None, src) is True
+
+
+@pytest.mark.parametrize(
+    "snippet",
+    [
+        "import bz2\nbz2.BZ2File('f','wb')\n",
+        "import bz2 as b\nb.BZ2File('f','wb')\n",
+        "import lzma\nlzma.LZMAFile('f','wb')\n",
+        "import gzip\ngzip.GzipFile('f','wb')\n",
+        "import bz2\nbz2.BZ2File('f', mode='w')\n",
+        "import bz2\nbz2.BZ2File('f', **k)\n",
+        "from io import FileIO as F\nF('f','w')\n",
+        "from tempfile import NamedTemporaryFile as N\nN(delete=False)\n",
+        "from shutil import copyfileobj as c\nimport io\nc(io.BytesIO(b'x'), io.FileIO('f','w'))\n",
+        "import os\nos.fdopen(3,'w')\n",
+        "from os import fdopen as fd\nfd(3,'w')\n",
+        "import os as o\no.fdopen(3,'w')\n",
+        "from shelve import open as so\nso('f')\n",
+        "from dbm import open as so\nso('f','c')\n",
+        "from zipfile import ZipFile as Z\nZ('f','w')\n",
+        "import zipfile\nzipfile.ZipFile('f','w')\n",
+        "from io import open as e\ne('f','w')\n",
+        "from os import open as e\ne('f',1)\n",
+        "from gzip import open as e\ne('f','wb')\n",
+        "from gzip import GzipFile as e\ne('f','wb')\n",
+        "from codecs import open as e\ne('f','w')\n",
+        "from tarfile import open as e\ne('f','w')\n",
+    ],
+)
+def test_runtime_shadow_added_rejects_aliased_file_writers(snippet):
+    src = f"import sys\n{snippet}sys.path.insert(0, 'd')\n".encode()
+    assert runtime_shadow_added(None, src) is True
+
+
+@pytest.mark.parametrize(
+    "snippet",
+    [
+        "from bz2 import BZ2File as e\ne('f','rb')\n",
+        "import bz2\nbz2.BZ2File('f')\n",
+        "import bz2\nbz2.BZ2File('f', mode='r')\n",
+        "import lzma\nlzma.LZMAFile('f','rb')\n",
+        "import gzip\ngzip.GzipFile('f','rb')\n",
+        "from io import FileIO as F\nF('f')\n",
+        "from io import FileIO as F\nF('f','r')\n",
+        "from zipfile import ZipFile as Z\nZ('f')\n",
+        "from zipfile import ZipFile as Z\nZ('f','r')\n",
+        "from json import dumps as emit\nemit('f')\n",
+        "from webbrowser import open as emit\nemit('u')\n",
+        "def emit(a,b): return a\nemit('f','w')\n",
+        "from .bz2 import BZ2File as e\ne('f','w')\n",
+        "from bz2 import BZ2File as e\n",
+        "import sys, os\nsys.path.insert(0, os.path.join(os.path.dirname(__file__),'lib'))\n",
+        "from tarfile import open as t\nt('f.tgz','r:gz')\n",
+    ],
+)
+def test_runtime_shadow_added_preserves_reads_and_unrelated_calls(snippet):
+    src = f"import sys\n{snippet}sys.path.insert(0, 'd')\n".encode()
+    assert runtime_shadow_added(None, src) is False
+
+
+def test_runtime_shadow_added_detects_old_aliased_write_with_new_path_edit():
+    old = b"from bz2 import BZ2File as e\ne('f','w')\n"
+    new = old + b"import sys\nsys.path.insert(0,'d')\n"
+    assert runtime_shadow_added(old, new) is True

@@ -290,3 +290,45 @@ def test_check_parent_rejection_shows_hidden_candidate_name(monkeypatch, tmp_pat
         verify_module._check_parent(tmp_path, "b" * 40, text)
     message = str(info.value)
     assert "\n" not in message and "\x1b" not in message and "\u202e" not in message
+
+
+@pytest.mark.parametrize(
+    "bad", ["HEAD", "main", "--output=x", "abc1234", "a" * 39 + " ", "a" * 40 + "\n"]
+)
+def test_import_paths_with_a_non_hex_base_is_bad_base_and_never_reaches_git(
+    state, project, monkeypatch, bad
+):
+    import cairnwork.import_path_tree as tree
+
+    def boom(*args, **kwargs):
+        raise AssertionError("git called before the base was validated")
+
+    monkeypatch.setattr(tree, "run_git", boom)
+    with pytest.raises(TaskRejected) as got:
+        verify_candidate(
+            Intake(state), repo=project, base=bad, candidate="1" * 40,
+            allowed_files=("src/calc.py",), verifiers=(("pytest", ("python3", "-m", "pytest")),),
+            import_paths=("src",),
+        )  # fmt: skip
+    assert got.value.code == "BAD_BASE"
+
+
+def test_import_paths_with_a_real_base_still_reaches_the_tree_check(state, project):
+    with pytest.raises(TaskRejected) as got:
+        verify_candidate(
+            Intake(state), repo=project, base=base_of(project), candidate="1" * 40,
+            allowed_files=("src/calc.py",), verifiers=(("pytest", ("python3", "-m", "pytest")),),
+            import_paths=("tests",),
+        )  # fmt: skip
+    assert got.value.code == "BAD_IMPORT_PATH"
+
+
+@pytest.mark.parametrize("bad", [None, 123, b"a" * 40])
+def test_import_paths_with_a_non_string_base_is_bad_base(state, project, bad):
+    with pytest.raises(TaskRejected) as got:
+        verify_candidate(
+            Intake(state), repo=project, base=bad, candidate="1" * 40,
+            allowed_files=("src/calc.py",), verifiers=(("pytest", ("python3", "-m", "pytest")),),
+            import_paths=("src",),
+        )  # fmt: skip
+    assert got.value.code == "BAD_BASE"

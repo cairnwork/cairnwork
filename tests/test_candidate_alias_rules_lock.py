@@ -101,6 +101,25 @@ def test_read_modes_stay_allowed(opener):
     assert runtime_shadow_added(None, _SYS + f"{opener}\n".encode() + _PATH_EDIT) is False
 
 
+def test_rebound_open_checks_mode_when_flag_is_also_present():
+    source = (
+        b"def open(*args, **kwargs): pass\n"
+        + _SYS
+        + b"open('f', flag='r', mode='w')\n"
+        + _PATH_EDIT
+    )
+    assert runtime_shadow_added(None, source) is True
+
+
+@pytest.mark.parametrize(
+    ("call", "expected"),
+    [("shelve.open('f', flag='r')", False), ("shelve.open('f', flag='c')", True)],
+)
+def test_shelve_flag_modes_keep_their_read_and_write_meaning(call, expected):
+    source = _SYS + b"import shelve\n" + call.encode() + b"\n" + _PATH_EDIT
+    assert runtime_shadow_added(None, source) is expected
+
+
 def test_aliased_sys_path_edit_after_write_is_a_shadow():
     source = b"import sys as s\nopen('f', 'w')\ns.path.insert(0, 'd')\n"
     assert runtime_shadow_added(None, source) is True

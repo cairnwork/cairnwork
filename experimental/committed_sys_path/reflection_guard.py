@@ -21,7 +21,9 @@ _SENSITIVE_ATTRS = frozenset(
     "getattr setattr delattr __getattribute__ __setattr__ __import__ import_module reload "
     "__dict__ __builtins__ __globals__ addsitedir insert append extend syspath_prepend "
     "syspathinsert spec_from_file_location module_from_spec exec_module load_module "
-    "load_source run_path run_module write_text write_bytes".split()
+    "load_source run_path run_module write_text write_bytes "
+    "SourceFileLoader SourcelessFileLoader ExtensionFileLoader FileFinder PathFinder "
+    "create_module path_hook".split()
 )
 _BUILTIN_GUARD_CALLS = frozenset(
     "__import__ import_module getattr setattr delattr globals locals vars "
