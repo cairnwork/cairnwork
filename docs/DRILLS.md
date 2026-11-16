@@ -1,5 +1,19 @@
 # 演練紀錄
 
+## Issue #1353 Stage 2：Baseline & True Negative Witnesses
+
+此基準呼叫目前驗證器的入口，記錄 C1–C10 的原始結果，不修正驗證器。執行：
+
+```sh
+python scripts/drill_1353_baseline.py
+```
+
+腳本只寫入 `docs/drills/`；`--out` 可指定該目錄內的子目錄。每筆 probe 記錄 `class_id`、`probe`、實際呼叫的 `route`、原始 `observed`、`expected_on_main`、`matches_spec`、`classification`、`platform` 和 `reason`。`NOT_RUN` 只用於程式回報的未執行結果，並附原始原因。總計包含 `N_tamper`、`N_honest`、`NOT_RUN`、`VERIFIED-wrong` 及 `spec_mismatch_count`；spec 不相符會列入 JSON，不會改寫成預期值。只有 macOS 實測結果不得外推成 Linux bwrap 結果。
+
+`partial_macos` 表示至少一個 blackbox 檢查通過，但驗證仍包含可由候選同程序影響的 pytest 權威；它不是全黑箱保護。`VERIFIED-wrong` 是攻擊/錯誤探針中仍被判為 VERIFIED 的數量。C10 是同程序 runner 可被候選辨識並分歧回傳的已知結構殘餘，不宣稱此路徑能防住它。
+
+blackbox 路徑的候選樹與一般 verify 相同（宣告 `module: calc`，checkout 以 `import_paths=("src",)` 讓 runner 找得到 `src/calc.py`）。釘住的預期隨沙盒是否可用（與測試 skip 標記同一個探針 `cairnwork_sandbox.select()`）而變：可用時釘此機器實測（擁有者模式沒有驗證帳號，永遠不能 PASS：正確候選為 `BLACKBOX_NEEDS_VERIFIER_ACCOUNT [matched 1/1]`、錯誤候選 `[matched 0/1]`；此路徑固定走擁有者模式），不可用時釘 `NO_SANDBOX`。`CONTROL` 列是走同一路徑的正確／錯誤對照，證明 fixture 本身能 import。Linux bwrap 專屬項目在 macOS 維持 NOT_RUN。
+
 議會 H 條：裸骨幹必須通過正常、失敗、重啟、回退四種演練，才可以搬入任何實驗能力。這裡只寫實際跑出來的結果。
 
 ## 現況：worker 停用（2026-10-30 起）
@@ -141,3 +155,7 @@
 產生的 verifier ini 只有 base 的 `pytest.ini` 裡允許的鍵（`testpaths`、`python_*`、`norecursedirs`、`asyncio_mode`、`filterwarnings`），`addopts` 被丟掉，只保留其中的 `--import-mode=importlib`（Nexus-new 的 addopts 裡沒有 `-W` 或 strict 選項）；plugin 以 `-p` 明確載入 pytest-asyncio、pytest-timeout、anyio。實際執行的 pytest 參數記在 JSON 的 `pytest_argv`。證據：`docs/drills/2026-10-20-nexus-new-verifier.json`。
 
 這只證明「一個 Nexus-new 測試檔可以在 Cairnwork 的 verifier 裡正確地過與不過」。候選版本是演練腳本自己做的 commit，不是 agent 交出的修改，也沒有經過 Core 公證；還沒有跑過真正的 Nexus-new Issue。只讀 repo 根目錄的設定檔；需要網路、外部服務或 HOME 裡快取的測試，在 sandbox 裡仍然會失敗。
+
+## Issue #1353 Stage 2 baseline drill
+
+Run `.venv/bin/python scripts/drill_1353_baseline.py` to measure the pinned main behavior for C1–C10 and ten correct controls. The generated `docs/drills/1353-baseline-<platform>.json` stores each production route, its raw return value, the derived observed status, the spec expectation, and whether they match. `NOT_RUN` records a missing verifier-account gap; `HARNESS_TIMEOUT` records the measurement harness timing out and is not counted as a verifier refusal. Neither is substituted for a guessed verdict. `VERIFIED-wrong` counts tamper probes whose measured result is VERIFIED. Owner-mode blackbox runs are not comparable to verifier-account PASS because this host has no dedicated account. C10 remains a documented same-interpreter known residual.
