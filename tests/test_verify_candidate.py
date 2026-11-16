@@ -4,7 +4,7 @@ applies to its own worker's output, without a worker and without a ledger record
 import json
 import subprocess
 import sys
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from conftest import commit_change, git
@@ -18,6 +18,7 @@ from cairnwork.gitcmd import GitCommandError
 from cairnwork.intake import Intake
 from cairnwork.ownership import OwnershipLedger
 from cairnwork.pipeline import TaskRejected
+from cairnwork.textclean import shown
 from cairnwork.verify_candidate import verify_candidate
 
 sandbox = pytest.mark.sandbox
@@ -39,14 +40,13 @@ def test_scratch_git_error_shows_exception_safely(monkeypatch, tmp_path, text):
             verify_module.Intake(tmp_path),
             tmp_path,
             tmp_path,
-            type("Task", (), {"base_commit": "b" * 40})(),
+            cast(Any, type("Task", (), {"base_commit": "b" * 40})()),
             "c" * 40,
             "scratch",
         ):
             pass
     message = str(info.value)
-    if "\n" not in text:
-        assert "\\u202e" in message or "\\x1b" in message
+    assert "\\u202e" in message or "\\x0a" in message or "\\x1b" in message
     assert "\n" not in message and "\x1b" not in message and "\u202e" not in message
 
 
@@ -67,10 +67,11 @@ def test_check_parent_rejection_shows_candidate_and_parent_list(monkeypatch, tmp
     )
     with pytest.raises(verify_module.CandidateRejected) as info:
         verify_module._check_parent(tmp_path, "b" * 40, "safe-candidate")
-    message = str(info.value)
-    if "\n" not in text:
-        assert "\\u202e" in message or "\\x1b" in message
-    assert "\n" not in message and "\x1b" not in message and "\u202e" not in message
+    parents = f"safe-candidate {text}\n".split()[1:]
+    expected = (
+        f"NOT_ONE_COMMIT_ON_BASE: parents of 'safe-candidate' are {', '.join(map(shown, parents))}"
+    )
+    assert str(info.value) == expected  # one escape per parent, not a list repr
 
 
 @pytest.mark.parametrize("text", HIDDEN)

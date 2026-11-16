@@ -221,7 +221,8 @@ def _check_parent(repo: Path, base: str, candidate: str) -> None:
         ) from exc
     if parents != [base]:
         raise CandidateRejected(
-            "NOT_ONE_COMMIT_ON_BASE", f"parents of {shown(candidate)} are {shown(parents)}"
+            "NOT_ONE_COMMIT_ON_BASE",
+            f"parents of {shown(candidate)} are {', '.join(map(shown, parents))}",
         )
 
 
