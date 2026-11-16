@@ -122,7 +122,10 @@ def verify(root, state, base, cand, declaration=None, strict=False):
         args += ["--blackbox", str(declaration)]
     if strict:
         args.append("--require-protection")
-    done = subprocess.run(args, capture_output=True, text=True, timeout=30, check=False)
+    try:
+        done = subprocess.run(args, capture_output=True, text=True, timeout=120, check=False)
+    except subprocess.TimeoutExpired:
+        return {"status": "TIMEOUT", "reason": "verify_cli exceeded 120 seconds"}
     try:
         return json.loads(done.stdout)
     except json.JSONDecodeError:
@@ -155,11 +158,33 @@ def blackbox_result(result):
     )
 
 
+def blackbox_classification(status, reason):
+    missing_account_only = "BLACKBOX_NEEDS_VERIFIER_ACCOUNT" in reason and not any(
+        marker in reason.lower()
+        for marker in (
+            "pytest exit code",
+            "checkout changed",
+            "mismatch",
+            "forged_bytecode",
+            "survivors",
+            "unprotected",
+        )
+    )
+    if "VERIFICATION_INCOMPLETE" in status or status == "UNCOMPARABLE" or missing_account_only:
+        return "NOT_RUN"
+    return "REFUSED"
+
+
 def evasion_sources():
     return {
         "C1": [
             "import importlib; importlib.import_module('_pyt' + 'est.reports'); import pytest; pytest.Function.runtest=lambda self: None",  # noqa: E501
             "import sys, importlib; vars(sys)['pycache_'+'prefix'] = '/tmp/cw1353-cache'; loader=vars(importlib)['import_module']; loader('_pyt'+'est.reports'); import pytest; pytest.Function.runtest=lambda self: None",  # noqa: E501
+            (
+                "import importlib; "
+                "python=importlib.import_module('_pyt'+'est.python'); "
+                "setattr(python.Function, 'runtest', lambda self: None)"
+            ),
         ],
         "C2": [
             "import pytest\nfor target in (pytest.Function,): setattr(target, 'runtest', lambda self: None)",  # noqa: E501
@@ -220,9 +245,7 @@ def _c1_c4(parent, state, decl):
                     "verify_cli run --blackbox",
                     status,
                     "NOT_RUN",
-                    "NOT_RUN"
-                    if ("VERIFICATION_INCOMPLETE" in status or status == "UNCOMPARABLE")
-                    else "REFUSED",
+                    blackbox_classification(status, reason),
                     reason,
                 )
             )

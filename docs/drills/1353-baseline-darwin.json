@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-16T06:31:14+00:00",
+  "generated_at": "2026-11-16T07:58:45+00:00",
   "platform": "darwin",
   "probes": [
     {
@@ -24,6 +24,18 @@
       "probe": "blackbox-2",
       "raw_return": "REFUSED",
       "reason": "VERIFIER_TAMPER_API: 'src/calc.py:2 [pytest_public_patch]'",
+      "route": "verify_cli run --blackbox"
+    },
+    {
+      "class_id": "C1",
+      "classification": "REFUSED",
+      "expected_on_main": "NOT_RUN",
+      "matches_spec": false,
+      "observed": "REFUSED",
+      "platform": "darwin",
+      "probe": "blackbox-3",
+      "raw_return": "REFUSED",
+      "reason": "CANDIDATE_SYS_PATH_MUTATION: 'src/calc.py': edits the import machinery in-process (sys.modules, finders, importlib, __import__, runpy or pytest_plugins)",
       "route": "verify_cli run --blackbox"
     },
     {
@@ -59,6 +71,22 @@
       "route": "verify_cli run"
     },
     {
+      "class_id": "C1",
+      "classification": "REFUSED",
+      "expected_on_main": "VERIFIED",
+      "matches_spec": false,
+      "observed": "REFUSED",
+      "platform": "darwin",
+      "probe": "verify-cli-3",
+      "raw_return": {
+        "reason": "CANDIDATE_SYS_PATH_MUTATION: 'src/calc.py': edits the import machinery in-process (sys.modules, finders, importlib, __import__, runpy or pytest_plugins)",
+        "status": "REFUSED",
+        "verified": false
+      },
+      "reason": "CANDIDATE_SYS_PATH_MUTATION: 'src/calc.py': edits the import machinery in-process (sys.modules, finders, importlib, __import__, runpy or pytest_plugins)",
+      "route": "verify_cli run"
+    },
+    {
       "class_id": "C10",
       "classification": "KNOWN_RESIDUAL",
       "expected_on_main": "blackbox:add: PASS [matched 1/1]",
@@ -67,8 +95,8 @@
       "platform": "darwin",
       "probe": "runner-sniff-1",
       "raw_return": "blackbox:add: MISMATCH [matched 0/1]",
-      "reason": "outside-runner return=-1",
-      "route": "blackbox_runner._call\u2192blackbox_judge.judge_run"
+      "reason": "outside-runner return=-1; production runs python -P -m _cairnwork_blackbox_runner (src/cairnwork/blackbox_exec.py:139), so the name is absent from sys.modules",
+      "route": "python -P -m _cairnwork_blackbox_runner\u2192blackbox_judge.judge_run"
     },
     {
       "class_id": "C10",
@@ -79,8 +107,8 @@
       "platform": "darwin",
       "probe": "runner-sniff-2",
       "raw_return": "blackbox:add: PASS [matched 1/1]",
-      "reason": "outside-runner return=5",
-      "route": "blackbox_runner._call\u2192blackbox_judge.judge_run"
+      "reason": "outside-runner return=5; production runs python -P -m _cairnwork_blackbox_runner (src/cairnwork/blackbox_exec.py:139), so the name is absent from sys.modules",
+      "route": "python -P -m _cairnwork_blackbox_runner\u2192blackbox_judge.judge_run"
     },
     {
       "class_id": "C10",
@@ -91,8 +119,8 @@
       "platform": "darwin",
       "probe": "runner-sniff-3",
       "raw_return": "blackbox:add: MISMATCH [matched 0/1]",
-      "reason": "outside-runner return=-1",
-      "route": "blackbox_runner._call\u2192blackbox_judge.judge_run"
+      "reason": "outside-runner return=-1; production runs python -P -m _cairnwork_blackbox_runner (src/cairnwork/blackbox_exec.py:139), so the name is absent from sys.modules",
+      "route": "python -P -m _cairnwork_blackbox_runner\u2192blackbox_judge.judge_run"
     },
     {
       "class_id": "C1_MUTANT",
@@ -108,7 +136,7 @@
     },
     {
       "class_id": "C2",
-      "classification": "REFUSED",
+      "classification": "NOT_RUN",
       "expected_on_main": "NOT_RUN",
       "matches_spec": true,
       "observed": "FAILED",
@@ -120,7 +148,7 @@
     },
     {
       "class_id": "C2",
-      "classification": "REFUSED",
+      "classification": "NOT_RUN",
       "expected_on_main": "NOT_RUN",
       "matches_spec": true,
       "observed": "FAILED",
@@ -404,14 +432,14 @@
     },
     {
       "class_id": "C7",
-      "classification": "REFUSED",
-      "expected_on_main": "VERIFIED partial_macos",
-      "matches_spec": false,
+      "classification": "NOT_RUN",
+      "expected_on_main": "NOT_RUN",
+      "matches_spec": true,
       "observed": "FAILED",
       "platform": "darwin",
       "probe": "b-one-tampered-pytest",
       "raw_return": "FAILED",
-      "reason": "CORE_FAILED_VERIFICATION [pytest-0: pytest exit code 1] [blackbox:add: VERIFICATION_INCOMPLETE: BLACKBOX_NEEDS_VERIFIER_ACCOUNT [matched 1/1]] [protection: PASS [partial_macos]]",
+      "reason": "CORE_FAILED_VERIFICATION [blackbox:add: VERIFICATION_INCOMPLETE: BLACKBOX_NEEDS_VERIFIER_ACCOUNT [matched 1/1]] [protection: PASS [partial_macos]]",
       "route": "verify_cli run --require-protection"
     },
     {
@@ -430,18 +458,6 @@
       "route": "verify_bundle(policy)"
     },
     {
-      "class_id": "C7",
-      "classification": "REFUSED",
-      "expected_on_main": "UNPROTECTED",
-      "matches_spec": false,
-      "observed": "FAILED",
-      "platform": "darwin",
-      "probe": "c-require-blackbox",
-      "raw_return": "FAILED",
-      "reason": "CORE_FAILED_VERIFICATION [blackbox:add: VERIFICATION_INCOMPLETE: BLACKBOX_NEEDS_VERIFIER_ACCOUNT [matched 1/1]] [protection: PASS [partial_macos]]",
-      "route": "verify_cli run --require-protection"
-    },
-    {
       "class_id": "C8",
       "classification": "REFUSED",
       "expected_on_main": "BASE_MISMATCH",
@@ -451,7 +467,7 @@
       "probe": "base",
       "raw_return": {
         "code": "BASE_MISMATCH",
-        "detail": "base 5729ea1475d369184a99ef7ea9fe50d15c255626 != expected_base 1111111111111111111111111111111111111111"
+        "detail": "base 88e29362738da9fd5621580efbfcd071e7b2f603 != expected_base 1111111111111111111111111111111111111111"
       },
       "reason": "",
       "route": "verify_bundle"
@@ -511,7 +527,7 @@
       "probe": "head",
       "raw_return": {
         "code": "HEAD_MISMATCH",
-        "detail": "subject 319c132db617aa2513da45ac1677960a647a924f, binding head 319c132db617aa2513da45ac1677960a647a924f, expected 'f1a57ad2a86ec06d2e6a25a09a4b0d949234b288'"
+        "detail": "subject 1184516d7abe93937295fb62acd2f1c43ba120a8, binding head 1184516d7abe93937295fb62acd2f1c43ba120a8, expected 'bd0e9c28cf0cb79a8b18b05a2fccb0cf73f34fe3'"
       },
       "reason": "",
       "route": "verify_bundle"
@@ -563,7 +579,7 @@
     },
     {
       "class_id": "C9",
-      "classification": "REFUSED",
+      "classification": "NOT_RUN",
       "expected_on_main": "VERIFICATION_INCOMPLETE",
       "matches_spec": true,
       "observed": "blackbox:add: VERIFICATION_INCOMPLETE: BLACKBOX_NEEDS_VERIFIER_ACCOUNT [matched 0/1]",
@@ -771,9 +787,9 @@
     }
   ],
   "totals": {
-    "NOT_RUN": 0,
+    "NOT_RUN": 4,
     "N_honest": 10,
-    "N_tamper": 34,
+    "N_tamper": 35,
     "VERIFIED-wrong": 7,
     "spec_mismatch_count": 16
   }

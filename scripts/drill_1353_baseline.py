@@ -19,6 +19,7 @@ DEST = (ROOT / "docs/drills").resolve()
 def load(name):
     path = ROOT / "tests" / f"{name}.py"
     spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
     spec.loader.exec_module(module)
@@ -37,6 +38,7 @@ def bootstrap_tests():
 
 def load_as(name, path):
     spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
     spec.loader.exec_module(module)

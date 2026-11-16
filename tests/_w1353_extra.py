@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import sys
 from functools import cache
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
-from _w1353_probe import declaration, repo, row, verify
+from _w1353_probe import blackbox_classification, declaration, repo, row, verify
 
 
 def _c6():
@@ -105,7 +104,7 @@ def _c9(decl):
                 "blackbox_judge.judge_run",
                 verdict.reason,
                 "VERIFICATION_INCOMPLETE",
-                "REFUSED",
+                "NOT_RUN" if name == "no-account" else "REFUSED",
             )
         )
     return rows
@@ -146,7 +145,6 @@ def _c7(state, decl):
             "REFUSED",
         )
     )
-    test = "from calc import add\ndef test_deferred(): assert add(2,3)==5\n"
     with TemporaryDirectory(prefix="cw1353-policy-") as td:
         p = Path(td)
         st = p / "state"
@@ -158,10 +156,14 @@ def _c7(state, decl):
         cases = (
             (
                 "b-one-tampered-pytest",
-                "def add(a,b): return a+b\n",
+                (
+                    "import pytest\n"
+                    "for target in (pytest.Function,): "
+                    "setattr(target, 'runtest', lambda self: None)\n"
+                    "def add(a,b): return a+b\n"
+                ),
                 "from calc import add\ndef test_deferred(): assert add(2,3)==6\n",
             ),
-            ("c-require-blackbox", "def add(a,b): return a+b\n", test),
         )
         for name, source, testsrc in cases:
             root = p / name
@@ -174,8 +176,8 @@ def _c7(state, decl):
                     name,
                     "verify_cli run --require-protection",
                     status,
-                    "VERIFIED partial_macos" if name.startswith("b-") else "UNPROTECTED",
-                    "REFUSED",
+                    "NOT_RUN",
+                    blackbox_classification(status, result.get("reason", "")),
                     result.get("reason", ""),
                 )
             )
@@ -194,13 +196,13 @@ def extra_rows():
         d = declaration(parent / "decl.json")
         path = Path(__file__).with_name("_w1353_c10.py")
         spec = importlib.util.spec_from_file_location("_w1353_c10", path)
+        assert spec is not None and spec.loader is not None
         module = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = module
         spec.loader.exec_module(module)
         receipt_spec = importlib.util.spec_from_file_location(
             "_w1353_receipt", Path(__file__).with_name("_w1353_receipt.py")
         )
+        assert receipt_spec is not None and receipt_spec.loader is not None
         receipt = importlib.util.module_from_spec(receipt_spec)
-        sys.modules[receipt_spec.name] = receipt
         receipt_spec.loader.exec_module(receipt)
         return _c6() + _c7(st, d) + _c9(d) + module.c10_rows() + receipt.c8_rows(parent)

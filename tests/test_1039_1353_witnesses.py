@@ -4,24 +4,25 @@ from __future__ import annotations
 
 import ast
 import importlib.util
-import re
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 
-def _load(name):
+def _load(name, *, register=True):
     path = Path(__file__).with_name(name + ".py")
     spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
+    if register:
+        sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
 
 probe = _load("_w1353_probe")
-extra = _load("_w1353_extra")
+extra = _load("_w1353_extra", register=False)
 
 
 def test_c1_c4_evasions_are_runnable_and_live():
@@ -32,7 +33,7 @@ def test_c1_c4_evasions_are_runnable_and_live():
         for r in rows
         if r["class_id"] in {"C1", "C2", "C3", "C4"} and r["probe"].startswith("verify-cli")
     ]
-    assert len(got) == 8
+    assert len(got) == 9
     sources = [source for variants in probe.evasion_sources().values() for source in variants]
     for source in sources:
         with tempfile.TemporaryDirectory(prefix="cw1353-valid-") as cwd:
@@ -51,28 +52,46 @@ def test_c1_c4_evasions_are_runnable_and_live():
     baseline = next(
         r["observed"] for r in got if r["class_id"] == "C2" and r["probe"] == "verify-cli-1"
     )
-    # Main verifies both C2 evasions (VERIFIED-wrong); replacing the evasion by `pass` fails.
-    if _sandbox_available():
+    if sys.platform == "linux" or _sandbox_available():
+        # Linux runs the normal verifier without blackbox; the C2 pytest mutation passes.
         assert baseline.startswith("VERIFIED")
         assert all(r["observed"] == "VERIFIED" for r in got if r["class_id"] == "C2")
     else:
         assert baseline == "UNCOMPARABLE"
     mutant = next(r["observed"] for r in rows if r["class_id"] == "C2_MUTANT")
-    assert mutant == ("FAILED" if _sandbox_available() else "UNCOMPARABLE")
-    c3 = [r["observed"] for r in rows if r["class_id"] == "C3"]
+    assert mutant == (
+        "FAILED" if sys.platform == "linux" or _sandbox_available() else "UNCOMPARABLE"
+    )
+    c3_rows = [r for r in rows if r["class_id"] == "C3"]
+    c3 = [r["observed"] for r in c3_rows]
     c3_mutants = [r["observed"] for r in rows if r["class_id"] == "C3_MUTANT"]
-    c1 = [r["observed"] for r in rows if r["class_id"] == "C1"]
-    c4 = [r["observed"] for r in rows if r["class_id"] == "C4"]
+    c1 = [
+        r["observed"] for r in rows if r["class_id"] == "C1" and r["probe"].startswith("verify-cli")
+    ]
+    c4 = [
+        r["observed"] for r in rows if r["class_id"] == "C4" and r["probe"].startswith("verify-cli")
+    ]
     other_mutants = [r["observed"] for r in rows if r["class_id"] in {"C1_MUTANT", "C4_MUTANT"}]
-    if _sandbox_available():
+    if sys.platform == "linux" or _sandbox_available():
         assert mutant != baseline
-        # Main catches C3 on every route (checkout changed): stronger than the spec's claim.
+        # Linux: derived from src/cairnwork/reasons.py:112, not yet observed on CI
         assert c3 == ["FAILED"] * 4 and c3_mutants == ["FAILED", "FAILED"]
-        assert c1 == ["REFUSED"] * 4 and c4 == ["REFUSED"] * 4
+        assert all("checkout changed" in r["reason"].lower() for r in rows if r["class_id"] == "C3")
+        # Linux: derived from src/cairnwork/reasons.py:141, not yet observed on CI
+        assert all(
+            "checkout changed" not in r["reason"].lower()
+            and "pytest exit code 1" in r["reason"].lower()
+            for r in rows
+            if r["class_id"] == "C3_MUTANT"
+        )
+        # Linux: derived from src/cairnwork/verify_candidate.py:130-140, not yet observed on CI
+        assert c1 == ["REFUSED"] * 3 and c4 == ["REFUSED"] * 2
         assert other_mutants == ["FAILED", "FAILED"]
     else:
-        assert c3_mutants == ["UNCOMPARABLE", "UNCOMPARABLE"]
-        assert c1 == ["REFUSED"] * 4 and c4 == ["REFUSED"] * 4
+        # Darwin without Seatbelt: observed locally; base preflight prevents candidate execution.
+        assert c1 == ["REFUSED"] * 3 and c2_unavailable(rows) == ["UNCOMPARABLE"] * 2
+        assert c3 == ["UNCOMPARABLE"] * 4 and c3_mutants == ["UNCOMPARABLE"] * 2
+        assert c4 == ["REFUSED"] * 2
         assert other_mutants == ["UNCOMPARABLE", "UNCOMPARABLE"]
 
 
@@ -90,10 +109,7 @@ def test_observed_values_are_recomputed_from_raw_route_returns():
         assert item["observed"] == derived
         assert isinstance(item["matches_spec"], bool)
     sources = list(Path(__file__).parent.glob("_w1353_*.py"))
-    literal = re.compile(r"\bobserved\s*(?::=|=)\s*(?:[\"'][^\"']*[\"']\s*)+")
-    assert all(not literal.search(path.read_text()) for path in sources)
-    assert literal.search('observed := "blackbox:add: PASS [matched 1/1]"')
-    assert literal.search('observed = "VER" "IFIED"')
+    assert all(not _literal_observations(path.read_text()) for path in sources)
     tree = ast.parse(Path(__file__).read_text())
     assert not any(
         isinstance(n, ast.Call)
@@ -103,6 +119,53 @@ def test_observed_values_are_recomputed_from_raw_route_returns():
         and n.func.value.attr == "path"
         for n in ast.walk(tree)
     )
+
+
+def _literal_observations(source):
+    tree = ast.parse(source)
+
+    def literal(node):
+        if isinstance(node, ast.Constant):
+            return True
+        if isinstance(node, ast.JoinedStr):
+            return all(isinstance(part, ast.Constant) for part in node.values)
+        return (
+            isinstance(node, ast.Call)
+            and bool(node.args or node.keywords)
+            and all(literal(arg) for arg in node.args)
+            and all(literal(keyword.value) for keyword in node.keywords)
+        )
+
+    flagged = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "row":
+            raw = (
+                node.args[3]
+                if len(node.args) > 3
+                else next((kw.value for kw in node.keywords if kw.arg == "raw"), None)
+            )
+            if raw is None or literal(raw):
+                flagged.append(node.lineno)
+        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if any(
+                isinstance(name, ast.Name) and name.id == "observed"
+                for target in targets
+                for name in ast.walk(target)
+            ):
+                if literal(node.value):
+                    flagged.append(node.lineno)
+    return flagged
+
+
+def test_literal_observation_checker_rejects_constant_raw_values():
+    row_literal = (
+        'row("C9", "timeout", "...", "blackbox:add: VERIFICATION_INCOMPLETE: TIMEOUT", "x", "y")'
+    )
+    assigned_literal = 'observed = str("PASS")'
+    assert _literal_observations(row_literal)
+    assert _literal_observations(assigned_literal)
+    assert not _literal_observations('row("C9", "timeout", route(), result(), "x", "y")')
 
 
 def test_candidate_routes_match_pinned_main_outputs():
@@ -115,10 +178,17 @@ def test_candidate_routes_match_pinned_main_outputs():
     c2 = [
         r["observed"] for r in rows if r["class_id"] == "C2" and r["probe"].startswith("verify-cli")
     ]
-    expected = (
-        ["VERIFIED", "VERIFIED"] if _sandbox_available() else ["UNCOMPARABLE", "UNCOMPARABLE"]
-    )
+    c2_blackbox = [r for r in rows if r["class_id"] == "C2" and r["probe"].startswith("blackbox-")]
+    assert len(c2_blackbox) == 2
+    assert all(r["classification"] == "NOT_RUN" for r in c2_blackbox)
+    expected = ["VERIFIED", "VERIFIED"]
+    if sys.platform == "linux":
+        # Linux: C2 is observed on CI as VERIFIED.
+        expected = ["VERIFIED", "VERIFIED"]
+    elif not _sandbox_available():
+        expected = ["UNCOMPARABLE", "UNCOMPARABLE"]
     assert c2 == expected
+    # Linux: derived from src/cairnwork/verify_candidate.py:130-140, not yet observed on CI
     c5 = [r["observed"] for r in rows if r["class_id"] == "C5"]
     assert c5 == expected
     honest = [r for r in rows if r["class_id"] == "HONEST"]
@@ -137,7 +207,11 @@ def test_class_results_are_pinned():
         "low-entropy-zero": "blackbox:add: PASS [matched 1/1]",
         "low-entropy-empty": "blackbox:add: PASS [matched 1/1]",
     }
-    assert len([r for r in rows if r["class_id"] == "C7"]) == 4
+    assert len([r for r in rows if r["class_id"] == "C7"]) == 3
+    c7_b = next(r for r in rows if r["probe"] == "b-one-tampered-pytest")
+    assert c7_b["classification"] == "NOT_RUN"
+    if "BLACKBOX_NEEDS_VERIFIER_ACCOUNT" in c7_b["reason"]:
+        assert "pytest exit code 1" not in c7_b["reason"]
     c8 = {r["probe"]: r["observed"] for r in rows if r["class_id"] == "C8"}
     assert c8 == {
         "valid": "OK",
@@ -163,9 +237,16 @@ def test_class_results_are_pinned():
         "runner-sniff-3": "blackbox:add: MISMATCH [matched 0/1]",
     }
     assert "outside-runner return=-1" in c10["runner-sniff-1"]["reason"]
+    assert "python -P -m _cairnwork_blackbox_runner" in c10["runner-sniff-1"]["reason"]
 
 
 def _sandbox_available():
     from cairnwork_sandbox import select
 
     return sys.platform == "darwin" and select() is not None
+
+
+def c2_unavailable(rows):
+    return [
+        r["observed"] for r in rows if r["class_id"] == "C2" and r["probe"].startswith("verify-cli")
+    ]

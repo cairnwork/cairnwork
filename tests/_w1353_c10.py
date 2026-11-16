@@ -42,11 +42,13 @@ def _record(n, raw, outside, blackbox, blackbox_judge, BlackboxRun):
     return row(
         "C10",
         f"runner-sniff-{n}",
-        "blackbox_runner._call→blackbox_judge.judge_run",
+        "python -P -m _cairnwork_blackbox_runner→blackbox_judge.judge_run",
         verdict.reason,
         "blackbox:add: PASS [matched 1/1]",
         "KNOWN_RESIDUAL",
-        f"outside-runner return={outside}",
+        f"outside-runner return={outside}; production runs "
+        "python -P -m _cairnwork_blackbox_runner "
+        "(src/cairnwork/blackbox_exec.py:139), so the name is absent from sys.modules",
     )
 
 
