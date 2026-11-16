@@ -71,6 +71,7 @@ from cairnwork.tamper_scan_pytest import (
     PYTEST_PUBLIC_PATCH,
 )
 from cairnwork.tamper_scan_tokens import added_file, file_views, views_trusted
+from cairnwork.textclean import shown
 
 CODE = "VERIFIER_TAMPER_API"
 
@@ -260,7 +261,8 @@ class Finding:
     rule: str
 
     def __str__(self) -> str:
-        where = f"{self.path}:{self.line}" if self.line else self.path  # no line: a whole file
+        path = shown(self.path)[1:-1]  # candidate-controlled: hidden characters are escaped
+        where = f"{path}:{self.line}" if self.line else path  # no line: a whole file
         return f"{where} [{self.rule}]"
 
 

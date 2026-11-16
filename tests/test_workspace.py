@@ -3,6 +3,8 @@ import sys
 import pytest
 from conftest import git
 
+from cairnwork import workspace
+from cairnwork.changeset import GitChangeSet, ManifestEntry
 from cairnwork.workspace import (
     Attempt,
     CandidateRejected,
@@ -15,6 +17,64 @@ from cairnwork.workspace import (
 
 ALLOWED = ("src/a.py",)
 WORKER = ("-c", "user.email=w@example.invalid", "-c", "user.name=w")
+HIDDEN = ["a\u202eb", "a\nb", "a\x1b[31mb"]
+
+
+@pytest.mark.parametrize("name", HIDDEN)
+def test_case_collision_error_shows_candidate_names_safely(monkeypatch, name):
+    monkeypatch.setattr(workspace, "run_git", lambda *_args: f"A/{name}\0a/{name}\0")
+    monkeypatch.setattr(workspace, "_folds_case", lambda _clone: True)
+    with pytest.raises(WorkspaceError) as info:
+        workspace._refuse_case_collisions(
+            workspace.Path("/repo"), name, workspace.Path("/clone"), [name]
+        )
+    message = str(info.value)
+    assert "\\u202e" in message or "\\x0a" in message or "\\x1b" in message
+    assert "\n" not in message and "\x1b" not in message and "\u202e" not in message
+
+
+@pytest.mark.parametrize("field", ["clone", "base", "detail"])
+@pytest.mark.parametrize("hidden", HIDDEN)
+def test_case_collision_shown_call_is_covered_individually(monkeypatch, field, hidden):
+    base = hidden if field == "base" else "base"
+    clone = workspace.Path(hidden if field == "clone" else "/clone")
+    tree_path = hidden if field == "detail" else "plain"
+    monkeypatch.setattr(workspace, "run_git", lambda *_args: f"A/{tree_path}\0a/{tree_path}\0")
+    monkeypatch.setattr(workspace, "_folds_case", lambda _clone: True)
+    with pytest.raises(WorkspaceError) as info:
+        workspace._refuse_case_collisions(workspace.Path("/repo"), base, clone, ["diff"])
+    message = str(info.value)
+    assert "\\u202e" in message or "\\x0a" in message or "\\x1b" in message or "\\\\n" in message
+    assert "\n" not in message and "\x1b" not in message and "\u202e" not in message
+
+
+@pytest.mark.parametrize("name", HIDDEN)
+def test_protected_path_detail_is_shown(monkeypatch, name):
+    monkeypatch.setattr(workspace, "protected_note", lambda _path: name)
+    monkeypatch.setattr(workspace, "_parents", lambda *_args: ["a" * 40])
+    monkeypatch.setattr(
+        workspace,
+        "read_change_set",
+        lambda *_args: GitChangeSet(
+            "a" * 40,
+            "c" * 40,
+            "d" * 40,
+            "e" * 40,
+            (ManifestEntry(name, "MODIFY", "1", "2", "100644", "100644"),),
+        ),
+    )
+    monkeypatch.setattr(workspace, "is_protected", lambda _path: True)
+    with pytest.raises(CandidateRejected) as info:
+        workspace.check_candidate_commit(
+            workspace.Path("/repo"),
+            workspace.Attempt("a1", "a" * 40, workspace.Path("/clone"), ()),
+            "c" * 40,
+            (name,),
+            python=sys.executable,
+        )
+    message = str(info.value)
+    assert "\\u202e" in message or "\\x0a" in message or "\\x1b" in message
+    assert "\n" not in message and "\x1b" not in message and "\u202e" not in message
 
 
 @pytest.fixture

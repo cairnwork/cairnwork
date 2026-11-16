@@ -133,7 +133,9 @@ def _refuse_case_collisions(repo: Path, base_commit: str, clone: Path, differenc
     if not groups or not _folds_case(clone):
         return
     detail = _collision_detail(groups, differences)
-    raise WorkspaceError(f"{clone} is not a clean checkout of {base_commit}: {detail}")
+    raise WorkspaceError(
+        f"{shown(clone)} is not a clean checkout of {shown(base_commit)}: {shown(detail)}"
+    )
 
 
 def _case_collisions(names) -> list[list[str]]:
@@ -272,7 +274,7 @@ def check_candidate_commit(
         if entry.path not in allowed:
             raise CandidateRejected("OUT_OF_SCOPE", shown(entry.path))
         if is_protected(entry.path):  # defense in depth: scope alone is not enough
-            raise CandidateRejected("PROTECTED_PATH", protected_note(entry.path))
+            raise CandidateRejected("PROTECTED_PATH", shown(protected_note(entry.path)))
         if entry.change_type == "DELETE" and not allow_deletions:
             raise CandidateRejected("DELETION_FORBIDDEN", shown(entry.path))
         if entry.after_mode in FORBIDDEN_MODES or entry.before_mode in FORBIDDEN_MODES:

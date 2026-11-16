@@ -56,6 +56,7 @@ from cairnwork.pipeline import (
 )
 from cairnwork.pipeline_judge import judge_candidate
 from cairnwork.recovery import _remove_leftovers
+from cairnwork.textclean import shown
 from cairnwork.verify_candidate_checks import (
     check_task_for_verify,
     require_core_ids,
@@ -200,7 +201,7 @@ def _scratch(intake: Intake, source: Path, repo: Path, task: TaskSpec, candidate
         run_git(path, "fetch", "--quiet", "--no-tags", str(repo), task.base_commit, candidate)
     except GitCommandError as exc:
         shutil.rmtree(path, ignore_errors=True)
-        raise WorkspaceError(f"cannot prepare a scratch clone: {exc}") from exc
+        raise WorkspaceError(f"cannot prepare a scratch clone: {shown(exc)}") from exc
     try:
         yield path
     finally:
@@ -215,9 +216,13 @@ def _check_parent(repo: Path, base: str, candidate: str) -> None:
     try:
         parents = run_git(repo, "rev-list", "--parents", "-n", "1", candidate).split()[1:]
     except GitCommandError as exc:
-        raise WorkspaceError(f"cannot read {candidate} in {repo}: {exc}") from exc
+        raise WorkspaceError(
+            f"cannot read {shown(candidate)} in {shown(repo)}: {shown(exc)}"
+        ) from exc
     if parents != [base]:
-        raise CandidateRejected("NOT_ONE_COMMIT_ON_BASE", f"parents of {candidate} are {parents}")
+        raise CandidateRejected(
+            "NOT_ONE_COMMIT_ON_BASE", f"parents of {shown(candidate)} are {shown(parents)}"
+        )
 
 
 def _absolute(url: str, source: Path) -> str:

@@ -13,12 +13,84 @@ from test_deferred_tests import CHECK, REGRESSION, make_test_commit
 from verify_helpers import FIX, base_of, candidate, has_object, verify
 
 from cairnwork import p2p_selection
+from cairnwork import verify_candidate as verify_module
+from cairnwork.gitcmd import GitCommandError
 from cairnwork.intake import Intake
 from cairnwork.ownership import OwnershipLedger
 from cairnwork.pipeline import TaskRejected
 from cairnwork.verify_candidate import verify_candidate
 
 sandbox = pytest.mark.sandbox
+HIDDEN = ["a\u202eb", "a\nb", "a\x1b[31mb"]
+
+
+def _raise_git_error(detail):
+    def raise_error(*_args, **_kwargs):
+        raise GitCommandError(detail)
+
+    return raise_error
+
+
+@pytest.mark.parametrize("text", HIDDEN)
+def test_scratch_git_error_shows_exception_safely(monkeypatch, tmp_path, text):
+    monkeypatch.setattr(verify_module, "run_git", _raise_git_error(text))
+    with pytest.raises(verify_module.WorkspaceError) as info:
+        with verify_module._scratch(
+            verify_module.Intake(tmp_path),
+            tmp_path,
+            tmp_path,
+            type("Task", (), {"base_commit": "b" * 40})(),
+            "c" * 40,
+            "scratch",
+        ):
+            pass
+    message = str(info.value)
+    if "\n" not in text:
+        assert "\\u202e" in message or "\\x1b" in message
+    assert "\n" not in message and "\x1b" not in message and "\u202e" not in message
+
+
+@pytest.mark.parametrize("text", HIDDEN)
+def test_check_parent_git_error_shows_candidate_repo_and_exception(monkeypatch, tmp_path, text):
+    monkeypatch.setattr(verify_module, "run_git", _raise_git_error(text))
+    with pytest.raises(verify_module.WorkspaceError) as info:
+        verify_module._check_parent(tmp_path, "b" * 40, "safe-candidate")
+    message = str(info.value)
+    assert "\\u202e" in message or "\\x0a" in message or "\\x1b" in message or "\\\\n" in message
+    assert "\n" not in message and "\x1b" not in message and "\u202e" not in message
+
+
+@pytest.mark.parametrize("text", HIDDEN)
+def test_check_parent_rejection_shows_candidate_and_parent_list(monkeypatch, tmp_path, text):
+    monkeypatch.setattr(
+        verify_module, "run_git", lambda *_args, **_kwargs: f"safe-candidate {text}\n"
+    )
+    with pytest.raises(verify_module.CandidateRejected) as info:
+        verify_module._check_parent(tmp_path, "b" * 40, "safe-candidate")
+    message = str(info.value)
+    if "\n" not in text:
+        assert "\\u202e" in message or "\\x1b" in message
+    assert "\n" not in message and "\x1b" not in message and "\u202e" not in message
+
+
+@pytest.mark.parametrize("text", HIDDEN)
+def test_check_parent_error_shows_repo_path(monkeypatch, tmp_path, text):
+    monkeypatch.setattr(verify_module, "run_git", _raise_git_error("safe error"))
+    with pytest.raises(verify_module.WorkspaceError) as info:
+        verify_module._check_parent(tmp_path / text, "b" * 40, "safe-candidate")
+    message = str(info.value)
+    assert "\\u202e" in message or "\\x0a" in message or "\\x1b" in message
+    assert "\n" not in message and "\x1b" not in message and "\u202e" not in message
+
+
+@pytest.mark.parametrize("text", HIDDEN)
+def test_check_parent_error_shows_candidate(monkeypatch, tmp_path, text):
+    monkeypatch.setattr(verify_module, "run_git", _raise_git_error("safe error"))
+    with pytest.raises(verify_module.WorkspaceError) as info:
+        verify_module._check_parent(tmp_path, "b" * 40, text)
+    message = str(info.value)
+    assert "\\u202e" in message or "\\x0a" in message or "\\x1b" in message
+    assert "\n" not in message and "\x1b" not in message and "\u202e" not in message
 
 
 def no_ledger_trace(state):

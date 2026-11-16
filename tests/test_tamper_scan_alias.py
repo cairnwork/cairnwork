@@ -283,3 +283,13 @@ def test_a_pytest_class_alias_bound_earlier_is_followed_in_library_code():
 )
 def test_honest_uses_of_pytest_public_classes_pass(path, snippet):
     assert _rules(path, snippet) == []
+
+
+@pytest.mark.parametrize("path", ["a‮b.py", "a\nb.py", "a\x1b[31mb.py"])
+def test_finding_text_escapes_hidden_path_characters_1257(path: str) -> None:
+    from cairnwork.tamper_scan import Finding
+
+    for line in (3, 0):
+        text = str(Finding(path, line, "rule"))
+        assert text.isprintable() and "\n" not in text
+        assert text.startswith("a\\") and text.endswith("[rule]")
