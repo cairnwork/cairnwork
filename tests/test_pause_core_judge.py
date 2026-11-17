@@ -169,18 +169,69 @@ def test_judge_rejects_changed_checkout_digest(tmp_path: Path, monkeypatch: Any)
     )
 
     class ChangingGuard:
-        count = 0
-
-        def __init__(self, _path: Path, **_options: Any) -> None:
-            pass
+        def __init__(self, _path: Path, **options: Any) -> None:
+            self.exclude_git = options.get("exclude_git", False)
 
         def digest(self) -> str:
-            type(self).count += 1
-            return "a" * 64 if type(self).count < 4 else "b" * 64
+            return "a" * 64 if self.exclude_git else "b" * 64
+
+        def digest_pair(self, **_options: Any) -> tuple[str, str]:
+            return "a" * 64, "a" * 64
 
     monkeypatch.setattr("experimental.pause.core_judge.TreeGuard", ChangingGuard)
     with pytest.raises(RuntimeError, match="changed R1 checkout"):
         CoreJudge(tmp_path / "state", (), verify=lambda *_a, **_k: {"status": "FAILED"})(result)
+
+
+def test_judge_rejects_copy_that_does_not_match_entry_tree(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "-q")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.invalid")
+    (repo / "a").write_text("base\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "base")
+    base = git(repo, "rev-parse", "HEAD")
+    (repo / "a").write_text("A\n")
+    entry_digest = TreeGuard(repo).digest()
+    transcript = tmp_path / "t.json"
+    transcript.write_text("{}")
+    result = RunResult(0, "", tmp_path, repo, transcript, {}, base_sha=base)
+    seen: list[str] = []
+    from experimental.pause import core_judge
+
+    original_clone = core_judge._clone
+    original_candidate_digest = core_judge._candidate_tree_digest
+
+    def clone_with_transient_change(source: Path, destination: Path) -> None:
+        (repo / "a").write_text("B\n")
+        original_clone(source, destination)
+
+    def verify(_intake: Any, **kwargs: Any) -> dict[str, str]:
+        seen.append(git(kwargs["repo"], "show", f"{kwargs['candidate']}:a"))
+        return {"status": "VERIFIED"}
+
+    def candidate_digest_then_restore(
+        candidate_repo: Path, candidate: str, excluded: frozenset[str]
+    ) -> str:
+        digest = original_candidate_digest(candidate_repo, candidate, excluded)
+        (repo / "a").write_text("A\n")
+        return digest
+
+    monkeypatch.setattr(core_judge, "_clone", clone_with_transient_change)
+    monkeypatch.setattr(core_judge, "_candidate_tree_digest", candidate_digest_then_restore)
+    try:
+        with pytest.raises(
+            ValueError, match="Core candidate filesystem tree differs from R1 judge-entry tree"
+        ):
+            CoreJudge(tmp_path / "state", (), verify=verify)(result)
+    finally:
+        (repo / "a").write_text("A\n")
+    assert seen == []
+    assert TreeGuard(repo).digest() == entry_digest
 
 
 def test_judge_takes_base_from_runner_not_from_r1_record(tmp_path: Path) -> None:
@@ -225,3 +276,110 @@ def test_judge_ignores_callers_global_git_filter(tmp_path: Path, monkeypatch: An
     CoreJudge(tmp_path / "state", (), verify=verify)(result)
     assert not marker.exists()
     assert seen == ["candidate"]
+
+
+def test_judge_rejects_excluded_directory_file_added_after_entries_snapshot(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """An excluded directory cannot gain a file after source entries were enumerated."""
+    from experimental.pause import core_judge
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "-q")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.invalid")
+    (repo / "empty-after-delete").mkdir()
+    (repo / "empty-after-delete" / "tracked").write_text("base\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "base")
+    base = git(repo, "rev-parse", "HEAD")
+    (repo / "empty-after-delete" / "tracked").unlink()
+    transcript = tmp_path / "t.json"
+    transcript.write_text("{}")
+    result = RunResult(0, "", tmp_path, repo, transcript, {}, base_sha=base)
+    original_entries = core_judge._entries
+    original_copy = core_judge._copy_working_tree
+    entries_calls = 0
+
+    def entries_then_add(path: Path):
+        nonlocal entries_calls
+        entries = original_entries(path)
+        entries_calls += 1
+        if path == repo and entries_calls == 1:
+            (repo / "empty-after-delete" / "late").write_text("late\n")
+        return entries
+
+    def copy_then_remove(source: Path, target: Path):
+        copied = original_copy(source, target)
+        (repo / "empty-after-delete" / "late").unlink(missing_ok=True)
+        return copied
+
+    monkeypatch.setattr(core_judge, "_entries", entries_then_add)
+    monkeypatch.setattr(core_judge, "_copy_working_tree", copy_then_remove)
+    with pytest.raises(ValueError):
+        CoreJudge(tmp_path / "state", (), verify=lambda *_a, **_k: {"status": "VERIFIED"})(result)
+    assert entries_calls >= 1
+
+
+def test_judge_accepts_unchanged_excluded_empty_directory(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "-q")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.invalid")
+    (repo / "empty-after-delete").mkdir()
+    (repo / "empty-after-delete" / "tracked").write_text("base\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "base")
+    base = git(repo, "rev-parse", "HEAD")
+    (repo / "empty-after-delete" / "tracked").unlink()
+    result = RunResult(0, "", tmp_path, repo, None, {}, base_sha=base)
+    verdict = CoreJudge(tmp_path / "state", (), verify=lambda *_a, **_k: {"status": "VERIFIED"})(
+        result
+    )
+    assert verdict.status == "VERIFIED"
+
+
+def test_judge_preserves_failed_core_status_and_tree(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "-q")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.invalid")
+    (repo / "a").write_text("base\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "base")
+    base = git(repo, "rev-parse", "HEAD")
+    (repo / "a").write_text("candidate\n")
+    before = TreeGuard(repo).digest()
+    result = RunResult(0, "", tmp_path, repo, None, {}, base_sha=base)
+    verdict = CoreJudge(tmp_path / "state", (), verify=lambda *_a, **_k: {"status": "FAILED"})(
+        result
+    )
+    assert verdict.status == "FAILED"
+    assert verdict.tree_sha256 == before == TreeGuard(repo).digest()
+
+
+def test_judge_verifies_add_delete_mode_mix_with_unchanged_tree(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "-q")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.invalid")
+    (repo / "delete").write_text("old\n")
+    (repo / "keep").write_text("base\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "base")
+    base = git(repo, "rev-parse", "HEAD")
+    (repo / "delete").unlink()
+    (repo / "keep").write_text("new\n")
+    (repo / "add").write_text("added\n")
+    (repo / "add").chmod(0o755)
+    before = TreeGuard(repo).digest()
+    result = RunResult(0, "", tmp_path, repo, None, {}, base_sha=base)
+    verdict = CoreJudge(tmp_path / "state", (), verify=lambda *_a, **_k: {"status": "VERIFIED"})(
+        result
+    )
+    assert verdict.status == "VERIFIED"
+    assert verdict.tree_sha256 == before == TreeGuard(repo).digest()

@@ -172,6 +172,12 @@ def _candidate_tree_digest(repo: Path, candidate: str, excluded: frozenset[str])
         result = subprocess.run(command, capture_output=True, check=False, env=_env())
         if result.returncode:
             raise RuntimeError("cannot materialize Core candidate tree")
+        for path in excluded:
+            try:
+                os.lstat(checkout / path)
+            except FileNotFoundError:
+                continue
+            raise ValueError(f"Core candidate contains excluded checkout path: {path}")
         return TreeGuard(checkout, exclude_git=True, exclude_paths=excluded).digest()
 
 
@@ -260,18 +266,26 @@ class CoreJudge:
     def __call__(self, r1: RunResult) -> CoreVerdict:
         if r1.checkout is None:
             raise ValueError("R1 checkout is required")
-        before = TreeGuard(r1.checkout).digest()
         base = r1.base_sha
         if type(base) is not str or not _SHA_RE.fullmatch(base):
             raise ValueError("R1 base_sha (set by the runner) must be 40 lowercase hex")
+        base_entries = _tree_entries(r1.checkout, base)
+        entry_source_entries = _entries(r1.checkout)
+        excluded = _validate_checkout_shape(r1.checkout, entry_source_entries, set(base_entries))
+        source_tree, before_copy = TreeGuard(r1.checkout).digest_pair(
+            exclude_git=True, exclude_paths=excluded
+        )
         with tempfile.TemporaryDirectory(prefix="cairnwork-pause-core-") as temp:
             repo = Path(temp) / "repo"
             _clone(r1.checkout, repo)
             _git(repo, "checkout", "--detach", base)
             _remove_working_entries(repo)
             source_entries = _copy_working_tree(r1.checkout, repo)
-            base_entries = _tree_entries(repo, base)
-            excluded = _validate_checkout_shape(r1.checkout, source_entries, set(base_entries))
+            copied_excluded = _validate_checkout_shape(
+                r1.checkout, source_entries, set(base_entries)
+            )
+            if copied_excluded != excluded:
+                raise ValueError("R1 checkout shape changed while Core copy was made")
             _git(repo, "add", "-A")
             _git(repo, "commit", "--allow-empty", "--no-verify", "-m", "PAUSE candidate")
             candidate = _git(repo, "rev-parse", "HEAD").strip()
@@ -281,8 +295,10 @@ class CoreJudge:
             source_digest = TreeGuard(
                 r1.checkout, exclude_git=True, exclude_paths=excluded
             ).digest()
-            if _candidate_tree_digest(repo, candidate, excluded) != source_digest:
-                raise ValueError("Core candidate filesystem tree differs from R1 checkout")
+            if _candidate_tree_digest(repo, candidate, excluded) != before_copy:
+                raise ValueError("Core candidate filesystem tree differs from R1 judge-entry tree")
+            if source_digest != before_copy:
+                raise ValueError("R1 checkout changed while Core copy was made")
             result = self.verify(
                 self.intake,
                 repo=repo,
@@ -292,11 +308,11 @@ class CoreJudge:
                 verifiers=self.verifiers,
                 import_paths=self.import_paths,
             )
-            if TreeGuard(r1.checkout).digest() != before:
+            if TreeGuard(r1.checkout).digest() != source_tree:
                 raise RuntimeError("Core judge changed R1 checkout")
             if not isinstance(result, dict) or type(result.get("status")) is not str:
                 raise ValueError("Core result must contain a string status")
-            return CoreVerdict(result["status"], before)
+            return CoreVerdict(result["status"], source_tree)
 
     @staticmethod
     def _changed_paths(repo: Path, base: str, candidate: str) -> tuple[str, ...]:

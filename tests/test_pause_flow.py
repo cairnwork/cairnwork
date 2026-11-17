@@ -4,10 +4,14 @@ import hashlib
 import json
 import subprocess
 from dataclasses import replace
+from pathlib import Path
+from typing import Any
 
 import pytest
 
+from experimental.pause.core_judge import CoreJudge
 from experimental.pause.flow import CoreVerdict, RunResult, run_flow
+from experimental.pause.guard import TreeGuard
 from experimental.pause.interfaces import CallSettings, GateReply, PlanReply
 
 
@@ -147,6 +151,77 @@ def test_accept_uses_fresh_r1_and_binds_receipt(tmp_path, monkeypatch):
     assert calls[1][1]["cut"] == 2 and calls[1][1]["plan"] == "plan"
     assert receipt["intervened"] is True and receipt["gate_verdict"] == "ACCEPT"
     assert receipt["checkpoint_sha256"] and receipt["plan_sha256"]
+
+
+def test_flow_keeps_r0_when_core_copy_differs_from_r1_entry_tree(tmp_path, monkeypatch):
+    flow_dir = tmp_path / "flow"
+    flow_dir.mkdir()
+    _runner, _calls, r0, r1, planner, gate = _scenario(flow_dir, monkeypatch)
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    _git(checkout, "init", "-q")
+    _git(checkout, "config", "user.name", "Test")
+    _git(checkout, "config", "user.email", "test@example.invalid")
+    (checkout / "a").write_text("base\n")
+    _git(checkout, "add", ".")
+    _git(checkout, "commit", "-qm", "base")
+    base = subprocess.check_output(
+        ["git", "-C", str(checkout), "rev-parse", "HEAD"], text=True
+    ).strip()
+    (checkout / "a").write_text("A\n")
+    r0 = replace(r0, record={**(r0.record or {}), "base_sha": base})
+    r1 = replace(r1, checkout=checkout, base_sha=base)
+    monkeypatch.setattr("experimental.pause.flow._scope_ok", lambda *_args: True)
+    monkeypatch.setattr(
+        "experimental.pause.flow._checkout_digest", lambda path: TreeGuard(path).digest()
+    )
+
+    from experimental.pause import core_judge
+
+    original_clone = core_judge._clone
+    original_candidate_digest = core_judge._candidate_tree_digest
+
+    def clone_with_transient_change(source: Path, destination: Path) -> None:
+        (checkout / "a").write_text("B\n")
+        original_clone(source, destination)
+
+    seen: list[str] = []
+
+    def verify(_intake: Any, **kwargs: Any) -> dict[str, str]:
+        seen.append(
+            subprocess.check_output(
+                ["git", "-C", str(kwargs["repo"]), "show", f"{kwargs['candidate']}:a"],
+                text=True,
+            ).strip()
+        )
+        return {"status": "VERIFIED"}
+
+    def candidate_digest_then_restore(
+        candidate_repo: Path, candidate: str, excluded: frozenset[str]
+    ) -> str:
+        digest = original_candidate_digest(candidate_repo, candidate, excluded)
+        (checkout / "a").write_text("A\n")
+        return digest
+
+    monkeypatch.setattr(core_judge, "_clone", clone_with_transient_change)
+    monkeypatch.setattr(core_judge, "_candidate_tree_digest", candidate_digest_then_restore)
+    judge = CoreJudge(tmp_path / "state", (), verify=verify)
+    try:
+        result, receipt = run_flow(
+            [],
+            task_id="t",
+            planner=planner,
+            gate=gate,
+            planner_settings=SETTINGS,
+            gate_settings=SETTINGS,
+            runner=lambda mode, args, **_kwargs: r0 if mode == "run" else r1,
+            core_verdict=judge,
+        )
+    finally:
+        (checkout / "a").write_text("A\n")
+    assert result is r0
+    assert receipt["reason"] == "PAUSE_R1_NOT_VERIFIED"
+    assert seen == []
 
 
 @pytest.mark.parametrize(
