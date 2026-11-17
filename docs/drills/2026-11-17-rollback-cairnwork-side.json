@@ -42,7 +42,7 @@
         "attempt_id": "a3612c84bcf783b78",
         "candidate_commit": "",
         "core_verified": false,
-        "detail": "/private/tmp/claude-501/-Users-james-workspace/dd63a40d-ea73-44de-a4b0-8f6d7b56c0ea/scratchpad/rollback-work-135825/state/runs",
+        "detail": "<drill dir>/state/runs",
         "idempotency_key": "rollback-a",
         "owner": "cairnwork",
         "phase": "DISPATCHED",
@@ -153,5 +153,5 @@
   ],
   "verifier_account_used": false,
   "verifier_mode_note": "local verifier (drill_normal.ACCOUNT forced to None): the cairnwork-verifier account slot is not yet approved by lab; this rollback did not use the account",
-  "worker": "fixed stub named agy on PATH (drill-local, not the real agy, no model); log line shows the stub ran: 'scratchpad/bin/agy: line 3' (its env-based log line failed, the fix still ran after 12 s)"
+  "worker": "fixed stub named agy on PATH (drill-local, not the real agy, no model); log line shows the stub ran: '<drill dir>/bin/agy: line 3' (its env-based log line failed, the fix still ran after 12 s)"
 }
