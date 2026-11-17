@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -213,5 +214,51 @@ def test_ac8_real_runner_change_between_digests(
     )
     assert not resume_calls
     assert result.episode_id == "ep_r0"
+    assert rec["reason"] == schema.Reason.PAUSE_GUARD_UNAVAILABLE and not rec["intervened"]
+    assert receipt.verify(rec) == []
+
+
+def test_ac8_real_runner_time_only_change_between_digests_stops_the_run(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Same-tree before/arrival digests bind mtime and ctime (runner bind_times=True): a change
+    that only moves app.py's mtime must still stop the run, and the run must not resume."""
+    args, repo, base, out = _setup(tmp_path)
+    transcript = out / "private" / "ep_r0" / "transcript.json"
+    worker = _r0_worker(base, out, transcript)
+
+    class TouchingGuard:
+        count = 0
+
+        def __init__(self, path: Path, **options) -> None:
+            self.guard = TreeGuard(path, **options)
+            self.path = path
+
+        def digest(self) -> str:
+            type(self).count += 1
+            if type(self).count == 2:
+                os.utime(self.path / "app.py", ns=(1_000_000_000, 1_000_000_000))
+            return self.guard.digest()
+
+    monkeypatch.setattr("experimental.pause.runner.TreeGuard", TouchingGuard)
+    resume_calls: list[bool] = []
+
+    def tracked(argv: list[str]) -> int:
+        if argv[0] == "resume":
+            resume_calls.append(True)
+        return worker(argv)
+
+    runner = WorkerRunner(tracked, tmp_path / "runs")
+    monkeypatch.setattr(agy_dispatch, "Dispatch", lambda *_a, **_k: pytest.fail("agy dispatch"))
+    result, rec = run_flow(
+        args,
+        task_id="time-only",
+        planner=FakePlanner([PlanReply("safe", "p", "low")]),
+        gate=FakeGate([GateReply("ACCEPT", "g", "low")]),
+        planner_settings=SETTINGS,
+        gate_settings=SETTINGS,
+        runner=runner,
+    )
+    assert not resume_calls
     assert rec["reason"] == schema.Reason.PAUSE_GUARD_UNAVAILABLE and not rec["intervened"]
     assert receipt.verify(rec) == []
