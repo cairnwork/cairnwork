@@ -282,7 +282,7 @@ def test_checkout_change_between_plan_digests_stops_resume(
     class ChangingGuard:
         count = 0
 
-        def __init__(self, _path: Path) -> None:
+        def __init__(self, _path: Path, **_options) -> None:
             pass
 
         def digest(self) -> str:

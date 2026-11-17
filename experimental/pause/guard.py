@@ -54,9 +54,11 @@ class TreeGuard:
         max_bytes: int = MAX_BYTES,
         exclude_git: bool = False,
         exclude_paths: frozenset[str] = frozenset(),
+        bind_times: bool = False,
     ):
         self.root, self.max_files, self.max_bytes = Path(root), max_files, max_bytes
         self.exclude_git, self.exclude_paths = exclude_git, exclude_paths
+        self.bind_times = bind_times
 
     def digest(self) -> str:
         try:
@@ -67,7 +69,7 @@ class TreeGuard:
         try:
             st = os.fstat(root_fd)
             meta = guard_meta.read(os.fsencode(self.root), st)
-            self._add(h, ".", "d", stat.S_IMODE(st.st_mode), b"", meta)
+            self._add(h, ".", "d", stat.S_IMODE(st.st_mode), b"", meta, self._times(st))
             self._walk(h, root_fd, "", [1, meta.size()])
         except (OSError, RecursionError) as e:
             raise GuardUnavailable(f"checkout walk: {e}") from e
@@ -85,8 +87,9 @@ class TreeGuard:
         try:
             st = os.fstat(root_fd)
             meta = guard_meta.read(os.fsencode(self.root), st)
-            self._add(full, ".", "d", stat.S_IMODE(st.st_mode), b"", meta)
-            self._add(filtered, ".", "d", stat.S_IMODE(st.st_mode), b"", meta)
+            times = self._times(st)
+            self._add(full, ".", "d", stat.S_IMODE(st.st_mode), b"", meta, times)
+            self._add(filtered, ".", "d", stat.S_IMODE(st.st_mode), b"", meta, times)
             self._walk_pair(
                 full, filtered, root_fd, "", [1, meta.size()], exclude_git, exclude_paths
             )
@@ -125,9 +128,10 @@ class TreeGuard:
             if stat.S_ISDIR(st.st_mode):
                 if excluded_path and rel not in exclude_paths:
                     raise ValueError(f"excluded directory contains an unlisted directory: {rel}")
-                self._add(full, rel, "d", mode, b"", meta)
+                times = self._times(st)
+                self._add(full, rel, "d", mode, b"", meta, times)
                 if not excluded:
-                    self._add(filtered, rel, "d", mode, b"", meta)
+                    self._add(filtered, rel, "d", mode, b"", meta, times)
                 sub = os.open(name, _DIR, dir_fd=fd)
                 try:
                     self._walk_pair(
@@ -144,29 +148,43 @@ class TreeGuard:
             elif stat.S_ISLNK(st.st_mode):
                 if excluded_path:
                     raise ValueError(f"excluded directory contains an entry: {rel}")
+                if self._leaves(rel):
+                    raise GuardUnavailable(f"{rel!r} points outside the checkout")
                 target = os.fsencode(os.readlink(name, dir_fd=fd))
-                self._add(full, rel, "l", 0, target, meta)
+                times = self._times(st)
+                self._add(full, rel, "l", 0, target, meta, times)
                 if not excluded:
-                    self._add(filtered, rel, "l", 0, target, meta)
+                    self._add(filtered, rel, "l", 0, target, meta, times)
             elif stat.S_ISREG(st.st_mode):
                 if excluded_path:
                     raise ValueError(f"excluded directory contains an entry: {rel}")
                 if st.st_nlink != 1:
                     raise GuardUnavailable(f"{rel!r} has {st.st_nlink} hard links")
                 content = self._content(fd, name, st)
-                self._add(full, rel, "f", mode, content, meta)
+                times = self._times(st)
+                self._add(full, rel, "f", mode, content, meta, times)
                 if not excluded:
-                    self._add(filtered, rel, "f", mode, content, meta)
+                    self._add(filtered, rel, "f", mode, content, meta, times)
             else:
                 if excluded_path:
                     raise ValueError(f"excluded directory contains an entry: {rel}")
-                self._add(full, rel, "o", mode, b"", meta)
-                if not excluded:
-                    self._add(filtered, rel, "o", mode, b"", meta)
+                raise GuardUnavailable(f"{rel!r} is not a file, directory or symlink")
 
     @staticmethod
-    def _add(h, rel: str, kind: str, mode: int, ref: bytes, meta: guard_meta.Meta) -> None:
+    def _add(
+        h, rel: str, kind: str, mode: int, ref: bytes, meta: guard_meta.Meta, times: bytes = b""
+    ) -> None:
         h.update(b"%s\0%s\0%o\0%s\0%s\0" % (os.fsencode(rel), kind.encode(), mode, ref, meta.key()))
+        if times:
+            h.update(times + b"\0")
+
+    def _leaves(self, rel: str) -> bool:
+        """True when a symlink target is not inside the checkout (an ancestor counts as outside)."""
+        top = os.path.realpath(self.root)
+        return os.path.commonpath([os.path.realpath(self.root / rel), top]) != top
+
+    def _times(self, st: os.stat_result) -> bytes:
+        return b"%d:%d" % (st.st_mtime_ns, st.st_ctime_ns) if self.bind_times else b""
 
     def _walk(self, h, fd: int, prefix: str, count: list[int]) -> None:
         """Entries in sorted order, depth first; ``count`` is [entries, bytes] so far."""
@@ -188,20 +206,24 @@ class TreeGuard:
                 )
             mode = stat.S_IMODE(st.st_mode)
             if stat.S_ISDIR(st.st_mode):
-                self._add(h, rel, "d", mode, b"", meta)
+                self._add(h, rel, "d", mode, b"", meta, self._times(st))
                 sub = os.open(name, _DIR, dir_fd=fd)
                 try:
                     self._walk(h, sub, rel + "/", count)
                 finally:
                     os.close(sub)
             elif stat.S_ISLNK(st.st_mode):
-                self._add(h, rel, "l", 0, os.fsencode(os.readlink(name, dir_fd=fd)), meta)
+                if self._leaves(rel):
+                    raise GuardUnavailable(f"{rel!r} points outside the checkout")
+                self._add(
+                    h, rel, "l", 0, os.fsencode(os.readlink(name, dir_fd=fd)), meta, self._times(st)
+                )
             elif stat.S_ISREG(st.st_mode):
                 if st.st_nlink != 1:  # a second name, maybe outside the checkout's write deny
                     raise GuardUnavailable(f"{rel!r} has {st.st_nlink} hard links")
-                self._add(h, rel, "f", mode, self._content(fd, name, st), meta)
+                self._add(h, rel, "f", mode, self._content(fd, name, st), meta, self._times(st))
             else:
-                self._add(h, rel, "o", mode, b"", meta)
+                raise GuardUnavailable(f"{rel!r} is not a file, directory or symlink")
 
     @staticmethod
     def _content(fd: int, name: str, st: os.stat_result) -> bytes:

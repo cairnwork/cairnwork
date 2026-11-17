@@ -70,7 +70,12 @@ def test_the_digest_sees_every_kind_of_change(name, checkout):
     before = guard.digest()
     assert guard.digest() == before
     CHANGES[name](checkout)
-    assert guard.digest() != before
+    try:
+        after = guard.digest()
+    except GuardUnavailable:  # a symlink out of the checkout is refused outright (fail closed)
+        assert name == "dir_to_symlink"
+        return
+    assert after != before
 
 
 def test_one_controller_per_event_log_in_a_private_directory(checkout, tmp_path):

@@ -263,7 +263,7 @@ class WorkerRunner:
         checkout = root / "checkout"
         self.prepare(r0_checkout, checkout, base)
         try:
-            before = TreeGuard(checkout).digest()
+            before = TreeGuard(checkout, bind_times=True).digest()
             git_config_sha256 = _git_config_sha256(checkout)
         except (GuardUnavailable, OSError):
             return RunResult(2, "", root, checkout, guard_before_plan=None)
@@ -286,7 +286,7 @@ class WorkerRunner:
         stream = io.StringIO()
         with contextlib.redirect_stdout(stream):
             try:
-                arrival = TreeGuard(checkout).digest()
+                arrival = TreeGuard(checkout, bind_times=True).digest()
             except GuardUnavailable:
                 return RunResult(2, "", root, checkout, guard_before_plan=before)
             if before != arrival:
