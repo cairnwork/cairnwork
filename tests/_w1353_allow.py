@@ -6,10 +6,7 @@ import ast
 from pathlib import Path
 from typing import Any, cast
 
-from tests._w1353_allow_alias import loop_target_names as _loop_target_names
-from tests._w1353_allow_alias import raw_alias as _raw_alias
-from tests._w1353_allow_alias import scope_nodes as _scope_nodes
-from tests._w1353_allow_imports import literal_string, target_names
+from tests._w1353_allow_imports import literal_string
 
 ORACLES = {
     ("_w1353_probe", "verify"),
@@ -233,78 +230,6 @@ def _call_is_oracle(
     return len(binders.get(name, [])) == 1
 
 
-def _raw_names(tree, names, modules, binders, adapters) -> dict[ast.AST, set[str]]:
-    safe: dict[ast.AST, set[str]] = {}
-    scopes = [
-        tree,
-        *(n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))),
-    ]
-    for fn in scopes:
-        bindings: dict[str, list[ast.AST]] = {}
-        stores: dict[str, int] = {}
-        aug_targets = {id(n.target) for n in _scope_nodes(fn) if isinstance(n, ast.AugAssign)}
-        for n in _scope_nodes(fn):
-            if (
-                isinstance(n, ast.Name)
-                and isinstance(n.ctx, (ast.Store, ast.Del))
-                and id(n) not in aug_targets
-            ):
-                stores[n.id] = stores.get(n.id, 0) + 1
-            if isinstance(n, ast.arg):
-                stores[n.arg] = stores.get(n.arg, 0) + 1
-            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                stores[n.name] = stores.get(n.name, 0) + 1
-            if isinstance(n, (ast.Import, ast.ImportFrom)):
-                for alias in n.names:
-                    local = alias.asname or (
-                        alias.name.split(".")[0] if isinstance(n, ast.Import) else alias.name
-                    )
-                    stores[local] = stores.get(local, 0) + 1
-            if isinstance(n, ast.ExceptHandler) and n.name:
-                stores[n.name] = stores.get(n.name, 0) + 1
-            if isinstance(n, (ast.MatchAs, ast.MatchStar)) and n.name:
-                stores[n.name] = stores.get(n.name, 0) + 1
-            if isinstance(n, ast.MatchMapping) and n.rest:
-                stores[n.rest] = stores.get(n.rest, 0) + 1
-            if isinstance(n, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
-                value = n.value
-                if value is None:
-                    continue
-                targets = n.targets if isinstance(n, ast.Assign) else [n.target]
-                for target in targets:
-                    if isinstance(target, (ast.Attribute, ast.Subscript)):
-                        continue
-                    for name in target_names(target):
-                        bindings.setdefault(name, []).append(value)
-        good = set()
-        for name, values in bindings.items():
-            if stores.get(name, 0) != len(values):
-                continue
-            if all(_call_is_oracle(v, names, modules, binders, adapters) for v in values):
-                good.add(name)
-            elif all(
-                isinstance(v, (ast.Tuple, ast.List))
-                and len(v.elts) == 1
-                and _call_is_oracle(v.elts[0], names, modules, binders, adapters)
-                for v in values
-            ):
-                good.add(name)
-        raw = set(good) | _loop_target_names(fn)
-        while True:
-            aliases = {
-                name
-                for name, values in bindings.items()
-                if name not in raw
-                and stores.get(name, 0) == len(values)
-                and all(_raw_alias(v, raw, modules) for v in values)
-            }
-            if not aliases - raw:
-                break
-            raw.update(aliases)
-        safe[fn] = raw
-    return safe
-
-
 def _contains_forbidden(node: ast.AST, names: set[str]) -> bool:
     return any(
         isinstance(n, ast.Call)
@@ -386,9 +311,26 @@ def check(source: str, path: str = "witness.py") -> list[int]:
     modules = {name: module for name, module in modules.items() if name not in poisoned}
     row_names -= poisoned
     trusted_rows -= poisoned
-    raw_by_fn = _raw_names(tree, oracle_names, modules, bindings, adapters)
-    return scan(
-        tree, path, bindings, oracle_names, modules, row_names, trusted_rows, adapters, raw_by_fn
+    from tests._w1353_allow_positions import position_findings
+
+    position_issues, raw_by_fn = position_findings(
+        tree, oracle_names, modules, bindings, adapters, row_names
+    )
+    return sorted(
+        set(
+            scan(
+                tree,
+                path,
+                bindings,
+                oracle_names,
+                modules,
+                row_names,
+                trusted_rows,
+                adapters,
+                raw_by_fn,
+            )
+        )
+        | set(position_issues)
     )
 
 

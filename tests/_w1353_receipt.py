@@ -146,18 +146,24 @@ def _c8_mutations(parent, state, p, bundle, pub, full, candidate):
         else:
             edited["predicate"]["binding"]["blackbox_commitment"] = value
         path = resign(state, rechain(edited), parent / f"{name}.json", rehash=True)
-        if name == "blackbox_commitment":
-            pinned = policy(
-                state,
-                parent,
-                p["tests"],
-                blackbox_commitment="sha256:" + "d" * 64,
-                protection="partial_macos" if sys.platform == "darwin" else "partial",
+        route_result = (
+            bundle_route(
+                path,
+                pub,
+                full,
+                candidate,
+                policy=policy(
+                    state,
+                    parent,
+                    p["tests"],
+                    blackbox_commitment="sha256:" + "d" * 64,
+                    protection="partial_macos" if sys.platform == "darwin" else "partial",
+                ),
             )
-            observed = bundle_route(path, pub, full, candidate, policy=pinned)
-        else:
-            observed = bundle_route(path, pub, full, candidate)
-        rows.append(row("C8", name, "verify_" + "bundle", observed, wanted, "REFUSED"))
+            if name == "blackbox_commitment"
+            else bundle_route(path, pub, full, candidate)
+        )
+        rows.append(row("C8", name, "verify_" + "bundle", route_result, wanted, "REFUSED"))
     rows.extend(_c8_policy_cases(parent, state, p, pub, full, candidate, bundle))
     return rows
 

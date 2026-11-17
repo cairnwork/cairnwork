@@ -282,33 +282,43 @@ def _c5_honest(parent, state):
         src = f"class {cls}(int):\n def __eq__(self, other): return True\n __hash__=int.__hash__\ndef add(a,b): return {cls}(a+b+1)\n"  # noqa: E501
         root = parent / f"C5-{n}"
         base, cand = repo(root, src, test)
-        res = verify_route(root, state, base, cand)
-        status = res.get("status", res.get("error", "FAILED"))
+        res_liar = verify_route(root, state, base, cand)
+        status_liar = res_liar.get("status", res_liar.get("error", "FAILED"))
+        expected_liar = (
+            "HARNESS_TIMEOUT"
+            if status_liar == "TIMEOUT"
+            else ("VERIFIED_WRONG" if status_liar.startswith("VERIFIED") else "REFUSED")
+        )
         rows.append(
             row(
                 "C5",
                 f"liar-int-{n}",
                 "verify_cli run",
-                res,
+                res_liar,
                 "VERIFIED",
-                verification_classification(status, "VERIFIED_WRONG", "REFUSED"),
-                res.get("reason") or "",
+                expected_liar,
+                res_liar.get("reason") or "",
             )
         )
     for n in range(10):
         root = parent / f"honest-{n}"
         base, cand = repo(root, "def add(a,b): return a+b\n# correct fix\n", test)
-        res = verify_route(root, state, base, cand)
-        status = res.get("status", res.get("error", "FAILED"))
+        res_honest = verify_route(root, state, base, cand)
+        status_honest = res_honest.get("status", res_honest.get("error", "FAILED"))
+        expected_honest = (
+            "HARNESS_TIMEOUT"
+            if status_honest == "TIMEOUT"
+            else ("HONEST_VERIFIED" if status_honest.startswith("VERIFIED") else "HONEST_FAILED")
+        )
         rows.append(
             row(
                 "HONEST",
                 f"correct-{n + 1:02}",
                 "verify_cli run",
-                res,
+                res_honest,
                 "VERIFIED",
-                verification_classification(status, "HONEST_VERIFIED", "HONEST_FAILED"),
-                res.get("reason") or "",
+                expected_honest,
+                res_honest.get("reason") or "",
             )
         )
     return rows

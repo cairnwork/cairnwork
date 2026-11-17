@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import builtins
 import hashlib
+from functools import lru_cache
 from pathlib import Path
 
 # Builtins observed in the real witness sources. Reflective names (including
@@ -67,6 +68,7 @@ def _module_aliases(tree):
     return aliases
 
 
+@lru_cache(maxsize=65536)
 def _function_for(node, tree):
     found = [
         fn

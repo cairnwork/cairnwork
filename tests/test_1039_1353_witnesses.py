@@ -24,6 +24,7 @@ from tests._w1353_allow_cases import (
     ROUND_FOUR_MUST_BLOCK,
     ROUND_THREE_MUST_BLOCK,
 )
+from tests._w1353_allow_round10_tests import *  # noqa: F403
 
 test_byte_edits_trip_pin_and_name_the_file = (
     round6_pin_tests.test_byte_edits_trip_pin_and_name_the_file
@@ -80,7 +81,6 @@ def _load(name, *, register=True):
 
 probe = _load("_w1353_probe")
 extra = _load("_w1353_extra", register=False)
-_NO_SANDBOX_BASE = probe._NO_SANDBOX_BASE
 _ACCOUNT_GAP = probe._ACCOUNT_GAP
 
 
@@ -338,7 +338,7 @@ def test_candidate_routes_match_pinned_main_outputs():
         assert [(r["observed"], r["classification"]) for r in c2_blackbox] == [
             ("UNCOMPARABLE", "REFUSED")
         ] * 2
-        assert all(_NO_SANDBOX_BASE in r["reason"] for r in c2_blackbox)
+        assert all(probe._NO_SANDBOX_BASE in r["reason"] for r in c2_blackbox)
     # Linux: C2 is observed on CI as VERIFIED.
     expected = ["VERIFIED", "VERIFIED"]
     if not (sys.platform == "linux" or probe.sandbox_available()):
@@ -369,7 +369,7 @@ def test_class_results_are_pinned():
         assert c7_b["classification"] == "NOT_RUN"
     else:  # as C2 above: observed under Core's verifier
         assert (c7_b["observed"], c7_b["classification"]) == ("UNCOMPARABLE", "REFUSED")
-        assert _NO_SANDBOX_BASE in c7_b["reason"]
+        assert probe._NO_SANDBOX_BASE in c7_b["reason"]
     if "BLACKBOX_NEEDS_VERIFIER_ACCOUNT" in c7_b["reason"]:
         assert "pytest exit code 1" not in c7_b["reason"]
     c8 = {r["probe"]: r["observed"] for r in rows if r["class_id"] == "C8"}

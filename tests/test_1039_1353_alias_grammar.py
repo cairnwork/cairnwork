@@ -28,7 +28,7 @@ MUST_BLOCK = {
         "for alias in (result,):",
         '    alias["status"] = "VERIFIED"',
     ],
-    "with-target-subscript-store": ["with Manager() as alias:", '    alias["status"] = "VERIFIED"'],
+    "with-target-subscript-store": ["with result as alias:", '    alias["status"] = "VERIFIED"'],
     "boolop-alias-store": ["alias = result or {}", 'alias["status"] = "VERIFIED"'],
     "ifexp-alias-store": ["alias = result if True else None", 'alias["status"] = "VERIFIED"'],
     "subscript-extract-store": ["box = [result]", "alias = box[0]", 'alias["status"] = "VERIFIED"'],

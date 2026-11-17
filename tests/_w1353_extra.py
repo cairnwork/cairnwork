@@ -17,7 +17,6 @@ from _w1353_probe import (
     evasion_sources,
     repo,
     row,
-    verification_classification,
     verify,
 )
 
@@ -39,7 +38,11 @@ def cli_route(*args):
 def _normal_row(cid, n, root, state, base, candidate):
     result = verify(root, state, base, candidate)
     status = result.get("status", result.get("error", "FAILED"))
-    expected = verification_classification(status, "VERIFIED_WRONG", "REFUSED")
+    expected = (
+        "HARNESS_TIMEOUT"
+        if status == "TIMEOUT"
+        else ("VERIFIED_WRONG" if status.startswith("VERIFIED") else "REFUSED")
+    )
     name = f"verify-cli-{n}"
     if cid == "C1":
         return row(
@@ -103,7 +106,11 @@ def _mutant_row(cid, parent, state, n, src, evasion, bad_test):
     base, candidate = repo(root, src.replace(evasion, "pass"), bad_test)
     result = verify(root, state, base, candidate)
     status = result.get("status", result.get("error", "FAILED"))
-    expected = verification_classification(status, "HONEST_VERIFIED", "HONEST_FAILED")
+    expected = (
+        "HARNESS_TIMEOUT"
+        if status == "TIMEOUT"
+        else ("HONEST_VERIFIED" if status.startswith("VERIFIED") else "HONEST_FAILED")
+    )
     name = f"evasion-{n}-replaced-by-pass" if cid == "C3" else "evasion-replaced-by-pass"
     if cid == "C1":
         return row(
@@ -184,15 +191,15 @@ def _c6():
                 }
             ).encode()
         )
-        (verdict,) = blackbox_judge.judge_run(spec, "c" * 40, run)
+        (verdict_first,) = blackbox_judge.judge_run(spec, "c" * 40, run)
         rows.append(
             row(
                 "C6",
                 f"low-entropy-{name}",
                 "blackbox_judge.judge_run",
-                verdict.reason,
+                verdict_first.reason,
                 "PASS",
-                "VERIFIED_WRONG" if "PASS" in verdict.reason else "REFUSED",
+                "VERIFIED_WRONG" if "PASS" in verdict_first.reason else "REFUSED",
             )
         )
     for name, value in (("correct", True), ("wrong", False)):
@@ -212,13 +219,13 @@ def _c6():
             ],
         }
         spec = blackbox.parse(json.dumps(payload).encode())
-        (verdict,) = blackbox_judge.judge_run(spec, "c" * 40, run)
+        (verdict_second,) = blackbox_judge.judge_run(spec, "c" * 40, run)
         rows.append(
             row(
                 "CONTROL",
                 f"owner-{name}",
                 "blackbox_judge.judge_run",
-                verdict.reason,
+                verdict_second.reason,
                 "blackbox:add: PASS [matched 1/1] low-entropy"
                 if value
                 else "blackbox:add: MISMATCH [matched 0/1] low-entropy",
