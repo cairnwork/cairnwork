@@ -105,23 +105,8 @@ def _load_parent(transcript: Path) -> dict | None:
     return parent if ok else None
 
 
-def _attempt_resume(
-    r0,
-    parent,
-    cut,
-    digest,
-    task_id,
-    planner,
-    gate,
-    planner_settings,
-    gate_settings,
-    runner,
-    args,
-    core_verdict,
-):
-    from experimental.pause.interfaces import GateRequest
-
-    info = _empty_info()
+def _plan_stage(parent, cut, digest, task_id, planner, planner_settings, info):
+    """Plan R1 from the cut. Returns (reply, reason); fills info in place."""
     turns = parent["turns"]
     if any(
         not isinstance(item, dict)
@@ -129,19 +114,19 @@ def _attempt_resume(
         or type(item.get("assistant_msg_index")) is not int
         for item in turns
     ):
-        return None, info, str(Reason.PAUSE_NO_CUT)
+        return None, str(Reason.PAUSE_NO_CUT)
     turn = next((item for item in turns if item["index"] == cut), None)
     if turn is None or turn["assistant_msg_index"] < 0:
-        return None, info, str(Reason.PAUSE_NO_CUT)
+        return None, str(Reason.PAUSE_NO_CUT)
     request = PlanRequest(
         task_id, digest, tuple(parent["messages"][: turn["assistant_msg_index"]]), planner_settings
     )
     try:
         reply = planner.plan(request)
     except (Exception, SystemExit):  # noqa: BLE001 - R1 failures keep R0.
-        return None, info, str(Reason.PAUSE_PLANNER_TIMEOUT)
+        return None, str(Reason.PAUSE_PLANNER_TIMEOUT)
     if not isinstance(reply, PlanReply):
-        return None, info, str(Reason.PAUSE_PLANNER_BAD_OUTPUT)
+        return None, str(Reason.PAUSE_PLANNER_BAD_OUTPUT)
     bad_planner_metadata = type(reply.model_id) is not str or type(reply.effort) is not str
     info.update(planner_model_id=reply.model_id, planner_effort=reply.effort)
     for key in ("planner_model_id", "planner_effort"):
@@ -156,18 +141,25 @@ def _attempt_resume(
             and (type(reply.reason) not in (str, Reason) or str(reply.reason) not in known_reasons)
         )
     ):
-        return None, info, str(Reason.PAUSE_PLANNER_BAD_OUTPUT)
+        return None, str(Reason.PAUSE_PLANNER_BAD_OUTPUT)
     if reply.reason:
-        return None, info, str(reply.reason)
+        return None, str(reply.reason)
     if reply.text is None:
-        return None, info, str(Reason.PAUSE_PLANNER_BAD_OUTPUT)
+        return None, str(Reason.PAUSE_PLANNER_BAD_OUTPUT)
     info["plan"] = reply.text
+    return reply, None
+
+
+def _gate_stage(task_id, digest, plan_text, gate, gate_settings, info):
+    """Review the plan. Returns (checked, reason); fills info in place."""
+    from experimental.pause.interfaces import GateRequest
+
     try:
-        checked = gate.review(GateRequest(task_id, digest, reply.text, gate_settings))
+        checked = gate.review(GateRequest(task_id, digest, plan_text, gate_settings))
     except (Exception, SystemExit):  # noqa: BLE001 - R1 failures keep R0.
-        return None, info, str(Reason.PAUSE_GATE_BAD_OUTPUT)
+        return None, str(Reason.PAUSE_GATE_BAD_OUTPUT)
     if not isinstance(checked, GateReply):
-        return None, info, str(Reason.PAUSE_GATE_BAD_OUTPUT)
+        return None, str(Reason.PAUSE_GATE_BAD_OUTPUT)
     bad_gate_metadata = type(checked.model_id) is not str or type(checked.effort) is not str
     info.update(
         gate_model_id=checked.model_id,
@@ -190,16 +182,40 @@ def _attempt_resume(
         )
         or (checked.verdict is not None and checked.verdict not in GATE_VERDICTS)
     ):
-        return None, info, str(Reason.PAUSE_GATE_BAD_OUTPUT)
+        return None, str(Reason.PAUSE_GATE_BAD_OUTPUT)
     if checked.reason:
-        return None, info, str(checked.reason)
+        return None, str(checked.reason)
     if checked.verdict != "ACCEPT":
         reason = (
             Reason.PAUSE_GATE_REJECT_LIMIT
             if checked.verdict == "REJECT"
             else Reason.PAUSE_GATE_BAD_OUTPUT
         )
-        return None, info, str(reason)
+        return None, str(reason)
+    return checked, None
+
+
+def _attempt_resume(
+    r0,
+    parent,
+    cut,
+    digest,
+    task_id,
+    planner,
+    gate,
+    planner_settings,
+    gate_settings,
+    runner,
+    args,
+    core_verdict,
+):
+    info = _empty_info()
+    reply, reason = _plan_stage(parent, cut, digest, task_id, planner, planner_settings, info)
+    if reply is None:
+        return None, info, reason
+    _checked, reason = _gate_stage(task_id, digest, reply.text, gate, gate_settings, info)
+    if reason is not None:
+        return None, info, reason
     try:
         resumed = runner("resume", list(args), parent=r0.transcript, cut=cut, plan=reply.text)
     except (Exception, SystemExit):  # noqa: BLE001 - R1 failures keep R0.
