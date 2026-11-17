@@ -5,7 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 
 
-def test_ac7_trusted_workflow_wiring_and_empty_approvers() -> None:
+def test_ac7_trusted_workflow_wiring_and_owner_only_approvers() -> None:
     workflow = (ROOT / ".github/workflows/pin-guard-trusted.yml").read_text(encoding="utf-8")
     assert "pull_request_target:" in workflow
     assert "trusted/scripts/ci/pin_guard.py" in workflow
@@ -22,7 +22,8 @@ def test_ac7_trusted_workflow_wiring_and_empty_approvers() -> None:
         .splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     ]
-    assert logins == []
+    assert logins == ["James3014"]
+    assert not any("[bot]" in login or "nexus-agent" in login.lower() for login in logins)
     assert "default branch" in workflow
     assert "data only" in workflow
     fetch = 'git -C head fetch -q --no-tags "$BASE_REPO_URL" "$BASE_SHA"'
