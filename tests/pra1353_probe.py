@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -44,7 +45,7 @@ def row(cid, probe, route, raw, expected, classification, reason=""):
         observed = str(raw.get("status", raw.get("error", raw.get("code", raw))))
         saved = {
             key: raw[key]
-            for key in ("status", "error", "verified", "reason", "code", "detail")
+            for key in ("status", "error", "verified", "reason", "code", "detail", "outside")
             if key in raw
         }
     elif hasattr(raw, "status"):
@@ -90,12 +91,19 @@ def repo(root: Path, source: str, test_source: str, *, files=None):
 
     def git(*args):
         return subprocess.run(
-            ["git", "-C", str(root), *args], check=True, capture_output=True, text=True, timeout=10
+            ["git", "-C", str(root), *args],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"},
         ).stdout.strip()
 
     git("init", "-q", "-b", "main", "--template=")
     git("config", "user.email", "probe@example.invalid")
     git("config", "user.name", "probe")
+    git("config", "core.fsmonitor", "false")
+    git("config", "core.hooksPath", "/dev/null")
     (root / "src").mkdir()
     (root / "tests").mkdir()
     (root / "src/calc.py").write_text("def add(a, b):\n    return a + b\n")
@@ -282,7 +290,7 @@ def _pass_mutant(parent, state, cid, n, src, evasion, bad_test):
         label,
         name,
         "verify_cli run",
-        status,
+        dict(result, status=status),
         "FAILED",
         verification_classification(status, "HONEST_VERIFIED", "HONEST_FAILED"),
         result.get("reason", ""),
@@ -318,7 +326,7 @@ def _c1_c4(parent, state, decl):
                     cid,
                     f"blackbox-{n}",
                     "verify_cli run --blackbox",
-                    status,
+                    result,
                     "NOT_RUN",
                     blackbox_classification(status, reason),
                     reason,

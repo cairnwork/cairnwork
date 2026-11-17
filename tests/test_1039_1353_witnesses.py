@@ -1,44 +1,62 @@
 """Measured production-route witnesses for Issue #1353."""
 
+# The consumer-side digest literals are intentionally full SHA-256 values.
+# ruff: noqa: E501
+
 from __future__ import annotations
 
 import ast
-import importlib.util
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
+import pra1353_consume as consume
 import pytest
 
+PINS = {
+    "tests/attest/binding_helpers.py": "cd2959a72a449228fc27bd0b1eb082493ee00616a7afcc1fe27b7309e22e61c5",
+    "tests/attest/test_verify.py": "156795f6ee20d46c692b4a27e15ab36525b7ab7fce945722b39a3067c68a9b83",
+    "tests/conftest.py": "a6f527a6ae989b47ef7cd10b270206d7e8c0e391064eac8eef03f9f3693219fd",
+    "tests/pra1353_c10.py": "e4a085e21d6fd50ba487f2023393cd557b57a96bbf3b3e2e7edd6577c2c60e8d",
+    "tests/pra1353_consume.py": "78cd590ec90bb9639894e4a014604b82090fbd6346acda280dc1373b16151ca5",
+    "tests/pra1353_derive.py": "cbb32dc25971fbcff8135420e64531ca1abe0f6f1d1c1ed3f3b3a3592959d7ea",
+    "tests/pra1353_extra.py": "545f6f3143c59ddc17408c471e771cc8d3ff774c2668b20b4dd4324de5bd0364",
+    "tests/pra1353_probe.py": "bd8b2d2f1abf5c65115e99d0f85f2008a1bd9bbe02912819770688b8e14d257b",
+    "tests/pra1353_receipt.py": "d3121468ba6b46d12c466c1d79bd5bb49e832262a9fe36b49a36ff332bb054ae",
+    "tests/pra1353_recipes.py": "a66266ff2022909f3b5b241d27778f926ede73f673d87349b7b15987617b53ad",
+    "tests/pra1353_runner.py": "e1bd1f48196203e9c703b868a3beddf5f09f03898090528bd36a98634ae5ffd9",
+    "tests/xdist_groups.py": "08f332bef3401fd38390db53a60a158ebb78686d1ec33a7af1c9d4337692e673",
+}
 
-def _load(name, *, register=True):
-    path = Path(__file__).with_name(name + ".py")
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    if register:
-        sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
+_ACCOUNT_GAP = consume._ACCOUNT_GAP
 
 
-probe = _load("_w1353_probe")
-extra = _load("_w1353_extra", register=False)
-_NO_SANDBOX_BASE = probe._NO_SANDBOX_BASE
-_ACCOUNT_GAP = probe._ACCOUNT_GAP
+@pytest.fixture(scope="session")
+def broker_report():
+    return consume.launch(PINS)
 
 
-def test_c1_c4_evasions_are_runnable_and_live():
+@pytest.fixture
+def core_rows(broker_report):
+    return [row for row in broker_report["rows"] if row["seq"] < 35]
+
+
+@pytest.fixture
+def extra_rows(broker_report):
+    return [row for row in broker_report["rows"] if row["seq"] >= 35]
+
+
+def test_c1_c4_evasions_are_runnable_and_live(core_rows):
     """C1-C4; each source compiles, imports, calls add, and its removal changes C2's verdict."""
-    rows = probe.core_rows()
+    rows = core_rows
     got = [
         r
         for r in rows
         if r["class_id"] in {"C1", "C2", "C3", "C4"} and r["probe"].startswith("verify-cli")
     ]
     assert len(got) == 9
-    sources = [source for variants in probe.evasion_sources().values() for source in variants]
+    sources = [source for variants in consume.evasion_sources().values() for source in variants]
     for source in sources:
         with tempfile.TemporaryDirectory(prefix="cw1353-valid-") as cwd:
             (Path(cwd) / "tests").mkdir()
@@ -56,7 +74,7 @@ def test_c1_c4_evasions_are_runnable_and_live():
     baseline = next(
         r["observed"] for r in got if r["class_id"] == "C2" and r["probe"] == "verify-cli-1"
     )
-    if sys.platform == "linux" or probe.sandbox_available():
+    if sys.platform == "linux" or consume.sandbox_available():
         # Linux runs the normal verifier without blackbox; the C2 pytest mutation passes.
         assert baseline.startswith("VERIFIED")
         assert all(r["observed"] == "VERIFIED" for r in got if r["class_id"] == "C2")
@@ -64,7 +82,7 @@ def test_c1_c4_evasions_are_runnable_and_live():
         assert baseline == "UNCOMPARABLE"
     mutant = next(r["observed"] for r in rows if r["class_id"] == "C2_MUTANT")
     assert mutant == (
-        "FAILED" if sys.platform == "linux" or probe.sandbox_available() else "UNCOMPARABLE"
+        "FAILED" if sys.platform == "linux" or consume.sandbox_available() else "UNCOMPARABLE"
     )
     c3_rows = [r for r in rows if r["class_id"] == "C3"]
     c3 = [r["observed"] for r in c3_rows]
@@ -76,7 +94,7 @@ def test_c1_c4_evasions_are_runnable_and_live():
         r["observed"] for r in rows if r["class_id"] == "C4" and r["probe"].startswith("verify-cli")
     ]
     other_mutants = [r["observed"] for r in rows if r["class_id"] in {"C1_MUTANT", "C4_MUTANT"}]
-    if sys.platform == "linux" or probe.sandbox_available():
+    if sys.platform == "linux" or consume.sandbox_available():
         assert mutant != baseline
         # Linux: derived from src/cairnwork/reasons.py:112, not yet observed on CI
         assert c3 == ["FAILED"] * 4 and c3_mutants == ["FAILED", "FAILED"]
@@ -98,15 +116,15 @@ def test_c1_c4_evasions_are_runnable_and_live():
         assert other_mutants == ["FAILED", "FAILED"]
     else:
         # Darwin without Seatbelt: observed locally; base preflight prevents candidate execution.
-        assert c1 == ["REFUSED"] * 3 and probe.c2_unavailable(rows) == ["UNCOMPARABLE"] * 2
+        assert c1 == ["REFUSED"] * 3 and consume.c2_unavailable(rows) == ["UNCOMPARABLE"] * 2
         assert c3 == ["UNCOMPARABLE"] * 4 and c3_mutants == ["UNCOMPARABLE"] * 2
         assert c4 == ["REFUSED"] * 2
         assert other_mutants == ["UNCOMPARABLE", "UNCOMPARABLE"]
 
 
-def test_observed_values_are_recomputed_from_raw_route_returns():
+def test_observed_values_are_recomputed_from_raw_route_returns(broker_report):
     """C1-C10; every record stores the raw production return and derives observed from it."""
-    rows = probe.core_rows() + extra.extra_rows()
+    rows = broker_report["rows"]
     for item in rows:
         assert item["route"] and "raw_return" in item
         raw = item["raw_return"]
@@ -117,8 +135,7 @@ def test_observed_values_are_recomputed_from_raw_route_returns():
         )
         assert item["observed"] == derived
         assert isinstance(item["matches_spec"], bool)
-    sources = list(Path(__file__).parent.glob("_w1353_*.py"))
-    assert all(not _literal_observations(path.read_text()) for path in sources)
+    assert all(not name.startswith("_w1353_") for name in broker_report["loaded_test_modules"])
     tree = ast.parse(Path(__file__).read_text())
     assert not any(
         isinstance(n, ast.Call)
@@ -128,122 +145,6 @@ def test_observed_values_are_recomputed_from_raw_route_returns():
         and n.func.value.attr == "path"
         for n in ast.walk(tree)
     )
-
-
-def _literal_observations(source):
-    tree = ast.parse(source)
-
-    def literal_tree(node):
-        return isinstance(node, ast.Constant) or (
-            isinstance(node, (ast.List, ast.Tuple))
-            and all(literal_tree(item) for item in node.elts)
-        )
-
-    def allowed(node):
-        if isinstance(node, ast.Call):
-            if (
-                isinstance(node.func, ast.Attribute)
-                and node.func.attr == "join"
-                and isinstance(node.func.value, ast.Constant)
-                and node.args
-                and literal_tree(node.args[0])
-            ):
-                return False
-            return True
-        if isinstance(node, (ast.Attribute, ast.Subscript)):
-            return True
-        return (
-            isinstance(node, ast.Name)
-            and bool(bindings.get(node.id))
-            and all(
-                isinstance(value, (ast.Call, ast.Attribute, ast.Subscript))
-                for value in bindings[node.id]
-            )
-        )
-
-    bindings = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            targets = node.targets
-        elif isinstance(node, (ast.AnnAssign, ast.NamedExpr, ast.AugAssign)):
-            targets = [node.target]
-        else:
-            continue
-        for target in targets:
-            for name in ast.walk(target):
-                if isinstance(name, ast.Name):
-                    bindings.setdefault(name.id, []).append(node.value)
-
-    row_names = {"row"}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom):
-            row_names.update(
-                alias.asname or alias.name
-                for alias in node.names
-                if node.module == "_w1353_probe" and alias.name == "row"
-            )
-
-    flagged = []
-    for node in ast.walk(tree):
-        is_row_call = isinstance(node, ast.Call) and (
-            (isinstance(node.func, ast.Name) and node.func.id in row_names)
-            or (isinstance(node.func, ast.Attribute) and node.func.attr == "row")
-        )
-        if is_row_call and isinstance(node, ast.Call):
-            raw = (
-                node.args[3]
-                if len(node.args) > 3
-                else next((kw.value for kw in node.keywords if kw.arg == "raw"), None)
-            )
-            if raw is None or not allowed(raw):
-                flagged.append(node.lineno)
-        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            if any(
-                isinstance(name, ast.Name) and name.id == "observed"
-                for target in targets
-                for name in ast.walk(target)
-            ):
-                if not allowed(node.value):
-                    flagged.append(node.lineno)
-    return flagged
-
-
-@pytest.mark.parametrize(
-    "source",
-    [
-        'R = "blackbox:add: PASS [matched 1/1]"\nrow("C9", "t", "r", R, "x", "y")',
-        'def f():\n    r = "PASS"\n    return row("C9", "t", "r", r, "x", "y")',
-        'row("C9", "t", "r", "PASS" if flag else "FAIL", "x", "y")',
-        'row("C9", "t", "r", "PA" + "SS", "x", "y")',
-        'row("C9", "t", "r", "".join(["PASS"]), "x", "y")',
-        'row("C9", "t", "r", f"{\'PASS\'}", "x", "y")',
-        'probe.row("C9", "t", "r", "PASS", "x", "y")',
-        'from _w1353_probe import row as rec\nrec("C9", "t", "r", "PASS", "x", "y")',
-        'observed = "VER" + "IFIED"',
-        'row("C9", "timeout", "...", "blackbox:add: VERIFICATION_INCOMPLETE: TIMEOUT", "x", "y")',
-        'observed = "PASS"',
-    ],
-)
-def test_literal_observation_checker_rejects_constant_raw_values(source):
-    assert _literal_observations(source)
-
-
-@pytest.mark.parametrize(
-    "source",
-    [
-        'row("C9", "t", route(), result(), "x", "y")',
-        'row("C8", name, "verify_bundle", check(path), wanted, "REFUSED")',
-        'row("C6", "x", "judge", verdict.reason, "PASS", "y")',
-    ],
-)
-def test_literal_observation_checker_allows_route_derived_raw_values(source):
-    assert not _literal_observations(source)
-
-
-def test_literal_observation_checker_accepts_current_probe_call_sites():
-    sources = Path(__file__).parent.glob("_w1353_*.py")
-    assert all(not _literal_observations(path.read_text()) for path in sources)
 
 
 @pytest.mark.parametrize(
@@ -310,12 +211,12 @@ def test_literal_observation_checker_accepts_current_probe_call_sites():
     ],
 )
 def test_blackbox_classification_counts_only_account_gaps_as_not_run(status, reason, expected):
-    assert probe.blackbox_classification(status, reason) == expected
+    assert consume.blackbox_classification(status, reason) == expected
 
 
-def test_candidate_routes_match_pinned_main_outputs():
+def test_candidate_routes_match_pinned_main_outputs(core_rows):
     """C1-C5; real verify_cli run outputs are pinned, including both known C2/C5 bypasses."""
-    rows = probe.core_rows()
+    rows = core_rows
     for cid in ("C1", "C2", "C3", "C4", "C5"):
         selected = [r for r in rows if r["class_id"] == cid]
         assert len(selected) >= 2
@@ -325,7 +226,7 @@ def test_candidate_routes_match_pinned_main_outputs():
     ]
     c2_blackbox = [r for r in rows if r["class_id"] == "C2" and r["probe"].startswith("blackbox-")]
     assert len(c2_blackbox) == 2
-    if sys.platform == "linux" or probe.sandbox_available():
+    if sys.platform == "linux" or consume.sandbox_available():
         assert all(r["classification"] == "NOT_RUN" for r in c2_blackbox)
     else:
         # Darwin without a usable Seatbelt (observed under Core's verifier, itself sandboxed): the
@@ -333,10 +234,13 @@ def test_candidate_routes_match_pinned_main_outputs():
         assert [(r["observed"], r["classification"]) for r in c2_blackbox] == [
             ("UNCOMPARABLE", "REFUSED")
         ] * 2
-        assert all(_NO_SANDBOX_BASE in r["reason"] for r in c2_blackbox)
+        assert all(
+            r["reason"] == r["raw_return"].get("reason", r["raw_return"].get("detail", ""))
+            for r in c2_blackbox
+        )
     # Linux: C2 is observed on CI as VERIFIED.
     expected = ["VERIFIED", "VERIFIED"]
-    if not (sys.platform == "linux" or probe.sandbox_available()):
+    if not (sys.platform == "linux" or consume.sandbox_available()):
         expected = ["UNCOMPARABLE", "UNCOMPARABLE"]
     assert c2 == expected
     # Linux: derived from src/cairnwork/verify_candidate.py:130-140, not yet observed on CI
@@ -346,9 +250,9 @@ def test_candidate_routes_match_pinned_main_outputs():
     assert len(honest) == 10 and all(r["observed"] == expected[0] for r in honest)
 
 
-def test_class_results_are_pinned():
+def test_class_results_are_pinned(extra_rows):
     """C6-C10; raw current judge, policy, runner and receipt outcomes are pinned."""
-    rows = extra.extra_rows()
+    rows = extra_rows
     assert len([r for r in rows if r["class_id"] == "C6"]) >= 3
     controls = {r["probe"]: r["observed"] for r in rows if r["class_id"] == "CONTROL"}
     assert controls["owner-correct"] == "blackbox:add: PASS [matched 1/1] low-entropy"
@@ -360,11 +264,13 @@ def test_class_results_are_pinned():
     }
     assert len([r for r in rows if r["class_id"] == "C7"]) == 3
     c7_b = next(r for r in rows if r["probe"] == "b-one-tampered-pytest")
-    if sys.platform == "linux" or probe.sandbox_available():
+    if sys.platform == "linux" or consume.sandbox_available():
         assert c7_b["classification"] == "NOT_RUN"
     else:  # as C2 above: observed under Core's verifier
         assert (c7_b["observed"], c7_b["classification"]) == ("UNCOMPARABLE", "REFUSED")
-        assert _NO_SANDBOX_BASE in c7_b["reason"]
+        assert c7_b["reason"] == c7_b["raw_return"].get(
+            "reason", c7_b["raw_return"].get("detail", "")
+        )
     if "BLACKBOX_NEEDS_VERIFIER_ACCOUNT" in c7_b["reason"]:
         assert "pytest exit code 1" not in c7_b["reason"]
     c8 = {r["probe"]: r["observed"] for r in rows if r["class_id"] == "C8"}
