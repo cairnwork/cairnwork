@@ -24,7 +24,7 @@ from experimental.pause.interfaces import (
     PlanReply,
     PlanRequest,
 )
-from experimental.pause.schema import GATE_VERDICTS, Reason
+from experimental.pause.schema import FALLBACK_REASONS, GATE_VERDICTS, Reason
 from experimental.pause.scope import _scope_ok
 
 LOCAL_UNREACHABLE_EXIT = 3  # == EndpointUnreachable.exit_code (pinned by a test)
@@ -97,7 +97,7 @@ def _load_parent(transcript: Path) -> dict | None:
     """R0's transcript, or None when it is unreadable or lacks turns/messages (R0 stays)."""
     try:
         parent = json.loads(transcript.read_text(encoding="utf-8"))
-    except (OSError, ValueError, RecursionError):
+    except (OSError, ValueError, RecursionError, AttributeError, TypeError):
         return None
     ok = (
         isinstance(parent, dict)
@@ -134,7 +134,7 @@ def _plan_stage(parent, cut, digest, task_id, planner, planner_settings, info):
     for key in ("planner_model_id", "planner_effort"):
         if type(info[key]) is not str:
             info[key] = None
-    known_reasons = {str(reason) for reason in Reason}
+    known_reasons = {str(reason) for reason in FALLBACK_REASONS}
     if (
         bad_planner_metadata
         or type(reply.text) not in (str, type(None))
@@ -146,7 +146,7 @@ def _plan_stage(parent, cut, digest, task_id, planner, planner_settings, info):
         return None, str(Reason.PAUSE_PLANNER_BAD_OUTPUT)
     if reply.reason:
         return None, str(reply.reason)
-    if reply.text is None:
+    if reply.text is None or not receipt.encodable(reply.text):
         return None, str(Reason.PAUSE_PLANNER_BAD_OUTPUT)
     info["plan"] = reply.text
     return reply, None
@@ -172,7 +172,7 @@ def _gate_stage(task_id, digest, plan_text, gate, gate_settings, info):
     for key in ("gate_model_id", "gate_effort"):
         if type(info[key]) is not str:
             info[key] = None
-    known_reasons = {str(reason) for reason in Reason}
+    known_reasons = {str(reason) for reason in FALLBACK_REASONS}
     if (
         bad_gate_metadata
         or (
@@ -282,17 +282,16 @@ def run_flow(
                 except (Exception, SystemExit):  # noqa: BLE001 - unrecordable R1 falls back to R0.
                     reason = str(Reason.PAUSE_R1_NOT_VERIFIED)
                     info.update(core_verdict=None, core_tree_sha256=None)
-    rec = receipt.build(
+    values = dict(
         task_id=task_id,
         intervened=False,
         event_seq=(event_seq or (lambda _: 0))("decision"),
         episode_id=r0.episode_id,
         checkpoint_sha256=checkpoint,
         cut_turn_index=cut,
-        **info,
         reason=reason or str(Reason.PAUSE_NO_CUT),
     )
-    return r0, rec
+    return r0, receipt.build_r0(values, info)
 
 
 def _write_scope(parent: dict) -> list[str] | None | str:
