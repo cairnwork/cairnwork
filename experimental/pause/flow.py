@@ -27,6 +27,8 @@ from experimental.pause.interfaces import (
 from experimental.pause.schema import GATE_VERDICTS, Reason
 from experimental.pause.scope import _scope_ok
 
+LOCAL_UNREACHABLE_EXIT = 3  # == EndpointUnreachable.exit_code (pinned by a test)
+
 
 @dataclass(frozen=True)
 class RunResult:
@@ -334,6 +336,8 @@ def _r1_reason(
             return str(Reason.PAUSE_SCOPE_VIOLATION), None, None
     except Exception:  # noqa: BLE001 - R1 failures keep R0.
         return str(Reason.PAUSE_GUARD_UNAVAILABLE), None, None
+    if r1.code == LOCAL_UNREACHABLE_EXIT:
+        return str(Reason.PAUSE_LOCAL_UNREACHABLE), None, None
     if r1.code != 0:
         return str(Reason.PAUSE_WORKER_CRASH), None, None
     record = r1.record
@@ -346,6 +350,8 @@ def _r1_reason(
         or verification.get("exit_reason") != "COMPLETED"
         or (isinstance(feedback, dict) and feedback.get("needs_spec") is True)
     ):
+        if _endpoint_unreachable(record):
+            return str(Reason.PAUSE_LOCAL_UNREACHABLE), None, None
         return str(Reason.PAUSE_R1_INCOMPLETE), None, None
     if core_verdict is None:
         return str(Reason.PAUSE_R1_NOT_VERIFIED), None, None
@@ -375,6 +381,18 @@ def _r1_reason(
             return str(Reason.PAUSE_R1_NOT_VERIFIED), None, None
         return str(Reason.PAUSE_R1_NOT_VERIFIED), status, tree
     return None, status, tree
+
+
+def _endpoint_unreachable(record: dict) -> bool:
+    """A worker that aborted because the local endpoint could not be connected to (#1406)."""
+    verification = record.get("verification")
+    termination = record.get("termination")
+    return (
+        isinstance(verification, dict)
+        and verification.get("exit_reason") == "ERROR_ABORT"
+        and isinstance(termination, dict)
+        and termination.get("abort_cause") == "endpoint_unreachable"
+    )
 
 
 def _checkout_digest(checkout: Path) -> str:

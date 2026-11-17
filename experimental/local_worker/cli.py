@@ -393,7 +393,7 @@ def main(argv: list[str] | None = None) -> int:
         return run_episode(a, resume=a.cmd == "resume")
     except (corpus_io.InputRefused, RefusedStart, EndpointError, ValueError) as exc:
         print(f"LOCAL_WORKER_EPISODE_REFUSED {type(exc).__name__}: {exc}", file=sys.stderr)
-        return 2
+        return getattr(exc, "exit_code", 2)
 
 
 if __name__ == "__main__":
