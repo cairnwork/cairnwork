@@ -66,7 +66,11 @@ def _sha(path: Path) -> str:
 
 
 def _cut(record: dict | None) -> tuple[int | None, str]:
-    cut = (record or {}).get("first_edit_cut", {})
+    if not isinstance(record, dict):
+        return None, "PAUSE_NO_CUT"
+    cut = record.get("first_edit_cut")
+    if not isinstance(cut, dict):
+        return None, "PAUSE_NO_CUT"
     if cut.get("cut_status") != "CUT" or type(cut.get("cut_turn_index")) is not int:
         return None, "PAUSE_NO_CUT"
     return cut["cut_turn_index"], ""
@@ -91,7 +95,7 @@ def _load_parent(transcript: Path) -> dict | None:
     """R0's transcript, or None when it is unreadable or lacks turns/messages (R0 stays)."""
     try:
         parent = json.loads(transcript.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return None
     ok = (
         isinstance(parent, dict)
@@ -118,7 +122,15 @@ def _attempt_resume(
     from experimental.pause.interfaces import GateRequest
 
     info = _empty_info()
-    turn = next((item for item in parent["turns"] if item["index"] == cut), None)
+    turns = parent["turns"]
+    if any(
+        not isinstance(item, dict)
+        or type(item.get("index")) is not int
+        or type(item.get("assistant_msg_index")) is not int
+        for item in turns
+    ):
+        return None, info, str(Reason.PAUSE_NO_CUT)
+    turn = next((item for item in turns if item["index"] == cut), None)
     if turn is None or turn["assistant_msg_index"] < 0:
         return None, info, str(Reason.PAUSE_NO_CUT)
     request = PlanRequest(
@@ -126,11 +138,25 @@ def _attempt_resume(
     )
     try:
         reply = planner.plan(request)
-    except Exception:  # noqa: BLE001 - R1 failures keep R0.
+    except (Exception, SystemExit):  # noqa: BLE001 - R1 failures keep R0.
         return None, info, str(Reason.PAUSE_PLANNER_TIMEOUT)
     if not isinstance(reply, PlanReply):
         return None, info, str(Reason.PAUSE_PLANNER_BAD_OUTPUT)
+    bad_planner_metadata = type(reply.model_id) is not str or type(reply.effort) is not str
     info.update(planner_model_id=reply.model_id, planner_effort=reply.effort)
+    for key in ("planner_model_id", "planner_effort"):
+        if type(info[key]) is not str:
+            info[key] = None
+    known_reasons = {str(reason) for reason in Reason}
+    if (
+        bad_planner_metadata
+        or type(reply.text) not in (str, type(None))
+        or (
+            reply.reason is not None
+            and (type(reply.reason) not in (str, Reason) or str(reply.reason) not in known_reasons)
+        )
+    ):
+        return None, info, str(Reason.PAUSE_PLANNER_BAD_OUTPUT)
     if reply.reason:
         return None, info, str(reply.reason)
     if reply.text is None:
@@ -138,16 +164,33 @@ def _attempt_resume(
     info["plan"] = reply.text
     try:
         checked = gate.review(GateRequest(task_id, digest, reply.text, gate_settings))
-    except Exception:  # noqa: BLE001 - R1 failures keep R0.
+    except (Exception, SystemExit):  # noqa: BLE001 - R1 failures keep R0.
         return None, info, str(Reason.PAUSE_GATE_BAD_OUTPUT)
     if not isinstance(checked, GateReply):
         return None, info, str(Reason.PAUSE_GATE_BAD_OUTPUT)
+    bad_gate_metadata = type(checked.model_id) is not str or type(checked.effort) is not str
     info.update(
         gate_model_id=checked.model_id,
         gate_effort=checked.effort,
         # an unknown verdict is not recorded: the receipt only carries ACCEPT or REJECT
         gate_verdict=checked.verdict if checked.verdict in GATE_VERDICTS else None,
     )
+    for key in ("gate_model_id", "gate_effort"):
+        if type(info[key]) is not str:
+            info[key] = None
+    known_reasons = {str(reason) for reason in Reason}
+    if (
+        bad_gate_metadata
+        or (
+            checked.reason is not None
+            and (
+                type(checked.reason) not in (str, Reason)
+                or str(checked.reason) not in known_reasons
+            )
+        )
+        or (checked.verdict is not None and checked.verdict not in GATE_VERDICTS)
+    ):
+        return None, info, str(Reason.PAUSE_GATE_BAD_OUTPUT)
     if checked.reason:
         return None, info, str(checked.reason)
     if checked.verdict != "ACCEPT":
@@ -207,16 +250,20 @@ def run_flow(
                 core_verdict,
             )
             if resumed is not None and reason is None:
-                return resumed, receipt.build(
-                    task_id=task_id,
-                    intervened=True,
-                    event_seq=(event_seq or (lambda _: 0))("decision"),
-                    episode_id=resumed.episode_id,
-                    checkpoint_sha256=digest,
-                    cut_turn_index=cut,
-                    reason=None,
-                    **info,
-                )
+                try:
+                    return resumed, receipt.build(
+                        task_id=task_id,
+                        intervened=True,
+                        event_seq=(event_seq or (lambda _: 0))("decision"),
+                        episode_id=resumed.episode_id,
+                        checkpoint_sha256=digest,
+                        cut_turn_index=cut,
+                        reason=None,
+                        **info,
+                    )
+                except (Exception, SystemExit):  # noqa: BLE001 - unrecordable R1 falls back to R0.
+                    reason = str(Reason.PAUSE_R1_NOT_VERIFIED)
+                    info.update(core_verdict=None, core_tree_sha256=None)
     rec = receipt.build(
         task_id=task_id,
         intervened=False,
@@ -292,7 +339,7 @@ def _r1_reason(
         return str(Reason.PAUSE_GUARD_UNAVAILABLE), None, None
     try:
         verdict = core_verdict(r1)
-    except (Exception, SystemExit, KeyboardInterrupt):  # noqa: BLE001 - Core failures keep R0.
+    except (Exception, SystemExit):  # noqa: BLE001 - Core failures keep R0.
         return str(Reason.PAUSE_R1_NOT_VERIFIED), None, None
     try:
         after = _checkout_digest(r1.checkout)
