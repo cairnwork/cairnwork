@@ -24,6 +24,15 @@ MUST_BLOCK = {
     "alias-ior": ["alias = result", 'alias |= {"status": "VERIFIED"}'],
     "module-alias-attr-store": ["m = verify_cli", "m.SOME_GLOBAL = None"],
     "from-imported-module-attr-store": ["blackbox.parse = json.loads"],
+    "for-loop-target-subscript-store": [
+        "for alias in (result,):",
+        '    alias["status"] = "VERIFIED"',
+    ],
+    "with-target-subscript-store": ["with Manager() as alias:", '    alias["status"] = "VERIFIED"'],
+    "boolop-alias-store": ["alias = result or {}", 'alias["status"] = "VERIFIED"'],
+    "ifexp-alias-store": ["alias = result if True else None", 'alias["status"] = "VERIFIED"'],
+    "subscript-extract-store": ["box = [result]", "alias = box[0]", 'alias["status"] = "VERIFIED"'],
+    "subscript-augassign-store": ["box = [result]", 'box[0] |= {"status": "VERIFIED"}'],
 }
 
 MUST_PASS = {

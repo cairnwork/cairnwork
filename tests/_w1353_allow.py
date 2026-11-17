@@ -6,6 +6,7 @@ import ast
 from pathlib import Path
 from typing import Any, cast
 
+from tests._w1353_allow_alias import loop_target_names as _loop_target_names
 from tests._w1353_allow_alias import raw_alias as _raw_alias
 from tests._w1353_allow_alias import scope_nodes as _scope_nodes
 from tests._w1353_allow_imports import literal_string, target_names
@@ -288,7 +289,7 @@ def _raw_names(tree, names, modules, binders, adapters) -> dict[ast.AST, set[str
                 for v in values
             ):
                 good.add(name)
-        raw = set(good)
+        raw = set(good) | _loop_target_names(fn)
         while True:
             aliases = {
                 name
