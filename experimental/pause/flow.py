@@ -236,7 +236,12 @@ def _r1_reason(
     parent: dict,
     core_verdict: Callable[[RunResult], CoreVerdict] | None,
 ) -> tuple[str | None, str | None, str | None]:
-    if r1.root.resolve() == r0.root.resolve() or r1.checkout.resolve() == r0.checkout.resolve():
+    try:
+        same_root = r1.root.resolve() == r0.root.resolve()
+        same_checkout = r1.checkout.resolve() == r0.checkout.resolve()
+    except Exception:  # noqa: BLE001 - R1 failures keep R0.
+        return str(Reason.PAUSE_GUARD_UNAVAILABLE), None, None
+    if same_root or same_checkout:
         return str(Reason.PAUSE_SCOPE_VIOLATION), None, None
     if r1.guard_before_plan is None or r1.guard_before_plan != r1.guard_at_plan_arrival:
         return str(Reason.PAUSE_GUARD_UNAVAILABLE), None, None

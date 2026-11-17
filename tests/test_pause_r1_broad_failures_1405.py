@@ -17,7 +17,7 @@ class Planner:
     def __init__(self, error: Exception | None = None):
         self.error = error
 
-    def plan(self, _request: Any) -> PlanReply:
+    def plan(self, request: Any) -> PlanReply:
         if self.error:
             raise self.error
         return PlanReply("plan", "p", "low")
@@ -27,7 +27,7 @@ class Gate:
     def __init__(self, error: Exception | None = None):
         self.error = error
 
-    def review(self, _request: Any) -> GateReply:
+    def review(self, request: Any) -> GateReply:
         if self.error:
             raise self.error
         return GateReply("ACCEPT", "g", "low")
@@ -104,7 +104,7 @@ def _run(r0: RunResult, r1: RunResult, *, planner=None, gate=None, runner=None, 
         gate=gate or Gate(),
         planner_settings=SETTINGS,
         gate_settings=SETTINGS,
-        runner=runner or (lambda mode, _args, **_kwargs: r0 if mode == "run" else r1),
+        runner=runner or (lambda mode, args, **_kwargs: r0 if mode == "run" else r1),
         core_verdict=judge or (lambda _result: CoreVerdict("REJECTED", "0" * 64)),
     )
 
@@ -137,7 +137,7 @@ def test_r1_gate_keyerror_keeps_r0(tmp_path):
 def test_r1_runner_indexerror_keeps_r0(tmp_path):
     r0, r1 = _case(tmp_path)
 
-    def runner(mode, _args, **_kwargs):
+    def runner(mode, args, **_kwargs):
         if mode == "resume":
             raise IndexError("worker")
         return r0
@@ -170,9 +170,23 @@ def test_r1_checkout_digest_calledprocesserror_keeps_r0(tmp_path, monkeypatch):
 def test_r1_scope_ok_keyerror_keeps_r0(tmp_path, monkeypatch):
     r0, r1 = _case(tmp_path)
 
-    def fail(*_args, **_kwargs):
+    def fail(*args, **_kwargs):
         raise KeyError("scope")
 
     monkeypatch.setattr(flow, "_scope_ok", fail)
     result, rec = _run(r0, r1)
+    _assert_fallback(result, rec, "PAUSE_GUARD_UNAVAILABLE")
+
+
+class _BrokenPath:
+    def resolve(self):
+        raise RuntimeError("resolve")
+
+
+def test_r1_resolve_runtimeerror_keeps_r0(tmp_path):
+    import dataclasses
+
+    r0, r1 = _case(tmp_path)
+    broken = dataclasses.replace(r1, root=_BrokenPath())  # type: ignore[arg-type]
+    result, rec = _run(r0, broken)
     _assert_fallback(result, rec, "PAUSE_GUARD_UNAVAILABLE")
