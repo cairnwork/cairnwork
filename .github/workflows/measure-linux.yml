@@ -1,0 +1,50 @@
+name: measure-linux
+
+# TEST-ONLY (cairnwork#1353 Stage 3 rerun). Never merge. Runs the frozen Stage 3 harness on real
+# bwrap with the dedicated verifier account and prints category statistics only.
+on:
+  pull_request:
+    paths:
+      - .github/workflows/measure-linux.yml
+
+permissions:
+  contents: read
+
+jobs:
+  measure-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CAIRNWORK_REQUIRE_SANDBOX: "1"
+      CAIRNWORK_REQUIRE_VERIFIER_ACCOUNT: "1"
+      CAIRNWORK_VERIFIER_ROOT: "/var/lib/cairnwork"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          python-version: "3.13"
+      - run: uv sync --locked
+      - name: Install bubblewrap and zsh
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap zsh
+          bwrap --version
+      - name: Lift the AppArmor userns restriction
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Create the verifier account and its Python
+        run: |
+          sudo sh scripts/setup_verifier_user_linux.sh "$USER"
+          zsh scripts/setup_verifier_python.sh
+      - name: Run the Stage 3 measurement (frozen harness, full corpus)
+        run: |
+          uv run python -m experimental.protected_accept.measure --out "$RUNNER_TEMP/m.json"
+      - name: Category statistics only
+        run: |
+          uv run python - <<'PY'
+          import json, os, collections
+          r = json.load(open(os.path.join(os.environ["RUNNER_TEMP"], "m.json")))
+          print({k: v for k, v in r.items() if k not in ("rows", "git_sha")})
+          c = collections.Counter((x.get("cls"), x.get("kind"), x.get("protected_code"), x.get("classification")) for x in r["rows"])
+          for k, v in sorted(c.items(), key=str):
+              print(k, v)
+          PY
