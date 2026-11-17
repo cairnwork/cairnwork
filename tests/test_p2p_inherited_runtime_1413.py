@@ -76,7 +76,10 @@ def test_real_honest_inherited_deletion_is_removed(tmp_path):
     ],
     ids=["I1-inherited", "T7-uncollected-parent"],
 )
-@pytest.mark.parametrize("payload_exposed", ["absent", "malformed", "integer", "same-name"])
+@pytest.mark.parametrize(
+    "payload_exposed",
+    ["absent", "malformed", "integer", "same-name", "space-in-owner", "trailing-space"],
+)
 def test_missing_or_invalid_runtime_fact_keeps_inherited_id_dropped(
     base, test, base_ids, test_ids, payload_exposed
 ):
@@ -92,7 +95,11 @@ def test_missing_or_invalid_runtime_fact_keeps_inherited_id_dropped(
         payload["exposed"] = [4]
     elif payload_exposed == "same-name":
         payload["exposed"] = ["t.py::Helper::test_x"]
-    assert all("test_x" in node for node in classify_payload(payload)["dropped"])
+    elif payload_exposed == "space-in-owner":
+        payload["exposed"] = ["t.py::Bad Owner::test_other"]
+    elif payload_exposed == "trailing-space":
+        payload["exposed"] = ["t.py::Helper::test_other "]
+    assert set(classify_payload(payload)["dropped"]) == set(base_ids)
 
 
 @pytest.mark.parametrize(
