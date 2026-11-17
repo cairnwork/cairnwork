@@ -1,0 +1,97 @@
+name: measure-linux
+
+# TEST-ONLY (cairnwork#1353 Stage 3 confirmatory rerun under the owner-approved amended gate). Never merge. Runs the frozen Stage 3 harness on real
+# bwrap with the dedicated verifier account and prints category statistics only.
+on:
+  pull_request:
+    paths:
+      - .github/workflows/measure-linux.yml
+
+permissions:
+  contents: read
+
+jobs:
+  measure-linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      CAIRNWORK_REQUIRE_SANDBOX: "1"
+      CAIRNWORK_REQUIRE_VERIFIER_ACCOUNT: "1"
+      CAIRNWORK_VERIFIER_ROOT: "/var/lib/cairnwork"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          python-version: "3.13"
+      - run: uv sync --locked
+      - name: Install bubblewrap and zsh
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap zsh
+          bwrap --version
+      - name: Lift the AppArmor userns restriction
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Create the verifier account and its Python
+        run: |
+          sudo sh scripts/setup_verifier_user_linux.sh "$USER"
+          zsh scripts/setup_verifier_python.sh
+      - name: Run the Stage 3 measurement (frozen harness, full corpus)
+        run: |
+          uv run python -m experimental.protected_accept.measure --out "$RUNNER_TEMP/m.json"
+      - name: Category statistics only
+        run: |
+          uv run python - <<'PY'
+          import json, os, collections
+          r = json.load(open(os.path.join(os.environ["RUNNER_TEMP"], "m.json")))
+          print({k: v for k, v in r.items() if k not in ("rows", "git_sha")})
+          c = collections.Counter((x.get("cls"), x.get("kind"), x.get("protected_code"), x.get("classification")) for x in r["rows"])
+          for k, v in sorted(c.items(), key=str):
+              print(k, v)
+          PY
+      - name: Amended gate (owner-approved 2026-11-17, recorded before this run)
+        run: |
+          uv run python - <<'PY'
+          import json, os, collections
+          r = json.load(open(os.path.join(os.environ["RUNNER_TEMP"], "m.json")))
+          rows = [x for x in r["rows"] if not x.get("known_residual")]
+          def reason(x):
+              c = str(x.get("protected_code") or "").strip()
+              return c if c and c not in ("UNKNOWN", "TOOL_DEFECT", "NONE") else ""
+          fc = [x for x in rows if x["classification"] == "tamper_blocked_incomplete" and reason(x)]
+          fc_ids = {id(x) for x in fc}
+          rest = [x for x in rows if id(x) not in fc_ids]
+          bad = [x for x in rest if x["classification"] in ("NOT_RUN/UNCOMPARABLE", "tamper_blocked_incomplete")]
+          honest = [x for x in rows if x["kind"] == "honest"]
+          tamper = [x for x in rows if x["kind"] == "tamper"]
+          deltas = r.get("incremental_wall_median")
+          g = {
+              "n_honest": len(honest), "n_tamper": len(tamper),
+              "fail_closed_tamper_with_reason": len(fc),
+              "fail_closed_reasons": dict(collections.Counter(reason(x) for x in fc)),
+              "tamper_incomplete_without_reason": sum(1 for x in rest if x["classification"] == "tamper_blocked_incomplete"),
+              "remaining_rows": len(rest), "not_run_plus_uncomparable_remaining": len(bad),
+              "rate_remaining": (len(bad) / len(rest)) if rest else None,
+              "honest_not_run": sum(1 for x in honest if x["classification"] in ("NOT_RUN/UNCOMPARABLE", "TOOL_DEFECT") or x.get("protected_status") in ("INCOMPLETE", "NOT_RUN", "UNCOMPARABLE")),
+              "verified_wrong": sum(1 for x in rows if x["classification"] == "VERIFIED_WRONG"),
+              "fail_closed_rows_protected_pass": sum(1 for x in fc if x.get("protected_status") == "PROTECTED_PASS"),
+              "tool_defect": r.get("tool_defect"),
+              "honest_blocked": r.get("honest_blocked"),
+              "incremental_wall_median": deltas,
+              "incremental_wall_p90": r.get("incremental_wall_p90"),
+              "sandbox_kind": r["host"]["sandbox_kind"], "account_available": r["host"]["account_available"],
+          }
+          gates = {
+              "N": g["n_tamper"] >= 18 and g["n_honest"] >= 10,
+              "tamper_to_PROTECTED_PASS_0": g["verified_wrong"] == 0 and g["fail_closed_rows_protected_pass"] == 0,
+              "TOOL_DEFECT_0": g["tool_defect"] == 0,
+              "NOT_RUN_UNCOMPARABLE_le_20pct_amended": g["rate_remaining"] is not None and g["rate_remaining"] <= 0.20,
+              "wall_median_le_15s": deltas is not None and deltas <= 15,
+              "real_env": g["sandbox_kind"] is not None and g["account_available"],
+          }
+          print("AMENDED", json.dumps(g, sort_keys=True))
+          print("GATES", json.dumps(gates, sort_keys=True), "ALL_PASS" if all(gates.values()) else "NOT_ALL_PASS")
+          PY
