@@ -19,6 +19,7 @@ from experimental.pause.schema import (
     RECEIPT_FIELDS,
     RECEIPT_SCHEMA,
     TRIGGER_REASONS,
+    Reason,
 )
 
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
@@ -79,6 +80,15 @@ def _problems(rec: dict) -> list[str]:
     return out
 
 
+def encodable(text: str) -> bool:
+    """Whether ``sha256_text`` can hash ``text`` (UTF-8, so no lone surrogates)."""
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def build(*, task_id: str, intervened: bool, event_seq: int, **values: Any) -> dict:
     """The sealed receipt; ``plan`` (the text) becomes plan_sha256. ValueError if inconsistent."""
     plan = values.pop("plan", None)
@@ -119,6 +129,16 @@ def verify_log(rows: list[dict]) -> list[str]:
     if not out and any(b["event_seq"] <= a["event_seq"] for a, b in itertools.pairwise(rows)):
         out.append("event_seq is not strictly increasing")
     return out
+
+
+def build_r0(values: dict[str, Any], info: dict) -> dict:
+    """R0's fallback receipt; stage details that cannot be recorded give way to R0-only data."""
+    try:
+        return build(**values, **info)
+    except Exception:  # noqa: BLE001 - unrecordable stage details must not drop R0.
+        if values["reason"] not in {str(r) for r in FALLBACK_REASONS}:
+            values["reason"] = str(Reason.PAUSE_NO_CUT)
+        return build(**{**values, **dict.fromkeys(info)})
 
 
 def append(path: Path, rec: dict) -> None:

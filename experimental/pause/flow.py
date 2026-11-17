@@ -12,7 +12,7 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Protocol
 
 from experimental.pause import receipt
 from experimental.pause.guard import TreeGuard
@@ -93,11 +93,9 @@ def _empty_info() -> dict[str, str | None]:
 
 def _load_parent(transcript: Path) -> dict | None:
     """R0's transcript, or None when it is unreadable or lacks turns/messages (R0 stays)."""
-    if not isinstance(transcript, Path):
-        return None
     try:
         parent = json.loads(transcript.read_text(encoding="utf-8"))
-    except (OSError, ValueError, RecursionError):
+    except (OSError, ValueError, RecursionError, AttributeError, TypeError):
         return None
     ok = (
         isinstance(parent, dict)
@@ -146,11 +144,7 @@ def _plan_stage(parent, cut, digest, task_id, planner, planner_settings, info):
         return None, str(Reason.PAUSE_PLANNER_BAD_OUTPUT)
     if reply.reason:
         return None, str(reply.reason)
-    if reply.text is None:
-        return None, str(Reason.PAUSE_PLANNER_BAD_OUTPUT)
-    try:
-        reply.text.encode("utf-8")
-    except UnicodeEncodeError:
+    if reply.text is None or not receipt.encodable(reply.text):
         return None, str(Reason.PAUSE_PLANNER_BAD_OUTPUT)
     info["plan"] = reply.text
     return reply, None
@@ -233,16 +227,6 @@ def _attempt_resume(
     return resumed, info, reason
 
 
-def _fallback_receipt(values: dict[str, Any], info: dict) -> dict:
-    """R0's receipt; stage details that cannot be recorded give way to R0-only data."""
-    try:
-        return receipt.build(**values, **info)
-    except Exception:  # noqa: BLE001 - unrecordable stage details must not drop R0.
-        if values["reason"] not in {str(r) for r in FALLBACK_REASONS}:
-            values["reason"] = str(Reason.PAUSE_NO_CUT)
-        return receipt.build(**{**values, **_empty_info()})
-
-
 def run_flow(
     args: list[str],
     *,
@@ -305,7 +289,7 @@ def run_flow(
         cut_turn_index=cut,
         reason=reason or str(Reason.PAUSE_NO_CUT),
     )
-    return r0, _fallback_receipt(values, info)
+    return r0, receipt.build_r0(values, info)
 
 
 def _write_scope(parent: dict) -> list[str] | None | str:
