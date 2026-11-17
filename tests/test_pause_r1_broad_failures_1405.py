@@ -190,3 +190,63 @@ def test_r1_resolve_runtimeerror_keeps_r0(tmp_path):
     broken = dataclasses.replace(r1, root=_BrokenPath())  # type: ignore[arg-type]
     result, rec = _run(r0, broken)
     _assert_fallback(result, rec, "PAUSE_GUARD_UNAVAILABLE")
+
+
+def test_r1_checkout_digest_second_call_keeps_r0(tmp_path, monkeypatch):
+    r0, r1 = _case(tmp_path)
+    real = flow._checkout_digest
+    calls: list[int] = []
+
+    def second_fails(checkout):
+        calls.append(1)
+        if len(calls) == 2:
+            raise ValueError("digest")
+        return real(checkout)
+
+    monkeypatch.setattr(flow, "_checkout_digest", second_fails)
+    result, rec = _run(r0, r1, judge=lambda _r1: flow.CoreVerdict("VERIFIED", "0" * 64))
+    _assert_fallback(result, rec, "PAUSE_GUARD_UNAVAILABLE")
+
+
+class _MalformedPlanner:
+    def plan(self, request):
+        return object()
+
+
+class _MalformedGate:
+    def review(self, request):
+        return object()
+
+
+def test_r1_planner_malformed_reply_keeps_r0(tmp_path):
+    r0, r1 = _case(tmp_path)
+    result, rec = _run(r0, r1, planner=_MalformedPlanner())
+    _assert_fallback(result, rec, "PAUSE_PLANNER_BAD_OUTPUT")
+
+
+def test_r1_gate_malformed_reply_keeps_r0(tmp_path):
+    r0, r1 = _case(tmp_path)
+    result, rec = _run(r0, r1, gate=_MalformedGate())
+    _assert_fallback(result, rec, "PAUSE_GATE_BAD_OUTPUT")
+
+
+def test_r1_runner_none_reply_keeps_r0(tmp_path):
+    r0, r1 = _case(tmp_path)
+
+    def runner(mode, args, **_kwargs):
+        return r0 if mode == "run" else None
+
+    result, rec = _run(r0, r1, runner=runner)
+    _assert_fallback(result, rec, "PAUSE_WORKER_CRASH")
+
+
+def test_r1_runner_systemexit_keeps_r0(tmp_path):
+    r0, r1 = _case(tmp_path)
+
+    def runner(mode, args, **_kwargs):
+        if mode == "run":
+            return r0
+        raise SystemExit(3)
+
+    result, rec = _run(r0, r1, runner=runner)
+    _assert_fallback(result, rec, "PAUSE_WORKER_CRASH")

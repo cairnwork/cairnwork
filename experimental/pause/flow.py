@@ -16,7 +16,14 @@ from typing import Protocol
 
 from experimental.pause import receipt
 from experimental.pause.guard import TreeGuard
-from experimental.pause.interfaces import CallSettings, Gate, Planner, PlanRequest
+from experimental.pause.interfaces import (
+    CallSettings,
+    Gate,
+    GateReply,
+    Planner,
+    PlanReply,
+    PlanRequest,
+)
 from experimental.pause.schema import GATE_VERDICTS, Reason
 from experimental.pause.scope import _scope_ok
 
@@ -121,7 +128,7 @@ def _attempt_resume(
         reply = planner.plan(request)
     except Exception:  # noqa: BLE001 - R1 failures keep R0.
         return None, info, str(Reason.PAUSE_PLANNER_TIMEOUT)
-    if reply is None:
+    if not isinstance(reply, PlanReply):
         return None, info, str(Reason.PAUSE_PLANNER_BAD_OUTPUT)
     info.update(planner_model_id=reply.model_id, planner_effort=reply.effort)
     if reply.reason:
@@ -133,7 +140,7 @@ def _attempt_resume(
         checked = gate.review(GateRequest(task_id, digest, reply.text, gate_settings))
     except Exception:  # noqa: BLE001 - R1 failures keep R0.
         return None, info, str(Reason.PAUSE_GATE_BAD_OUTPUT)
-    if checked is None:
+    if not isinstance(checked, GateReply):
         return None, info, str(Reason.PAUSE_GATE_BAD_OUTPUT)
     info.update(
         gate_model_id=checked.model_id,
@@ -152,7 +159,9 @@ def _attempt_resume(
         return None, info, str(reason)
     try:
         resumed = runner("resume", list(args), parent=r0.transcript, cut=cut, plan=reply.text)
-    except Exception:  # noqa: BLE001 - R1 failures keep R0.
+    except (Exception, SystemExit):  # noqa: BLE001 - R1 failures keep R0.
+        return None, info, str(Reason.PAUSE_WORKER_CRASH)
+    if not isinstance(resumed, RunResult):
         return None, info, str(Reason.PAUSE_WORKER_CRASH)
     reason, verdict, tree = _r1_reason(r0, resumed, parent, core_verdict)
     info.update(core_verdict=verdict, core_tree_sha256=tree)
