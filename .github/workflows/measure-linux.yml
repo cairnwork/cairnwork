@@ -49,8 +49,10 @@ jobs:
           r = json.load(open(os.path.join(os.environ["RUNNER_TEMP"], "m.json")))
           print({k: v for k, v in r.items() if k not in ("rows", "git_sha")})
           c = collections.Counter((x.get("cls"), x.get("kind"), x.get("protected_code"), x.get("classification")) for x in r["rows"])
-          for k, v in sorted(c.items(), key=str):
-              print(k, v)
+          lines = [str({k: v for k, v in r.items() if k not in ("rows", "git_sha")})]
+          lines += [f"{k} {v}" for k, v in sorted(c.items(), key=str)]
+          print("\n".join(lines))
+          print("::notice title=CLASS_COUNTS::" + "%0A".join(x.replace("%", "%25") for x in lines))
           PY
       - name: Amended gate (owner-approved 2026-11-17, recorded before this run)
         run: |
@@ -94,4 +96,5 @@ jobs:
           }
           print("AMENDED", json.dumps(g, sort_keys=True))
           print("GATES", json.dumps(gates, sort_keys=True), "ALL_PASS" if all(gates.values()) else "NOT_ALL_PASS")
+          print("::notice title=AMENDED_GATES::AMENDED " + json.dumps(g, sort_keys=True) + "%0AGATES " + json.dumps(gates, sort_keys=True) + (" ALL_PASS" if all(gates.values()) else " NOT_ALL_PASS"))
           PY
