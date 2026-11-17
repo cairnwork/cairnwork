@@ -1,6 +1,7 @@
 import os
 import stat
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -110,7 +111,7 @@ def test_the_ignored_flags_do_not_change_the_key(tmp_path):
     path.write_text("x")
     real = os.stat(path, follow_symlinks=False)
 
-    def with_flags(flags):
+    def with_flags(flags) -> Any:  # a stand-in for os.stat_result, which cannot be built
         return SimpleNamespace(
             st_uid=real.st_uid,
             st_gid=real.st_gid,
