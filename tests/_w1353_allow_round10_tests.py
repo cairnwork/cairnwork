@@ -50,7 +50,10 @@ def test_round_ten_position_mutation_is_live(monkeypatch):
         'verdict = result\nrow("C1", "x", "r", verdict.reason, "FAILED", "REFUSED")',
         'row("C1", "x", "r", result, "FAILED", "REFUSED", result.get("reason") or "")',
         "blackbox_result(result)",
-        'ok = result.get("status", "").startswith("VERIFIED")',
+        'ok = result.get("status", "").startswith("VERIFIED")\nassert ok',
+        "status, reason = blackbox_result(result)",
+        'text = str(result.get("status"))\nassert text',
+        'assert f"{result}"',
         'box = {}\nbox["k"] = 1',
     ],
 )

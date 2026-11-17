@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 
+from tests._w1353_allow_alias import blackbox_unpack as _blackbox_unpack
 from tests._w1353_allow_alias import scope_nodes
 
 PURE_BUILTINS = {"str", "int", "float", "bool", "len", "repr", "blackbox_result"}
@@ -54,9 +55,42 @@ def _scope_bindings(scope: ast.AST) -> dict[str, list[ast.AST]]:
     return found
 
 
+def _computed_raw(node: ast.AST, raw: set[str], oracle) -> bool:
+    """A value computed at an expression sink stays raw, so it must reach a sink too."""
+    if isinstance(node, ast.Call):
+        func = node.func
+        if isinstance(func, ast.Name):
+            return (
+                func.id in PURE_BUILTINS
+                and len(node.args) == 1
+                and not node.keywords
+                and _raw_expr(node.args[0], raw, oracle)
+            )
+        return (
+            isinstance(func, ast.Attribute)
+            and func.attr == "startswith"
+            and len(node.args) == 1
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+            and not node.keywords
+            and _raw_expr(func.value, raw, oracle)
+        )
+    if isinstance(node, ast.Compare):
+        return any(_raw_expr(item, raw, oracle) for item in (node.left, *node.comparators))
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        return _raw_expr(node.operand, raw, oracle)
+    if isinstance(node, ast.FormattedValue):
+        return _raw_expr(node.value, raw, oracle)
+    if isinstance(node, ast.JoinedStr):
+        return any(_raw_expr(item, raw, oracle) for item in node.values)
+    return False
+
+
 def _raw_expr(node: ast.AST, raw: set[str], oracle) -> bool:
     if isinstance(node, ast.Name):
         return isinstance(node.ctx, ast.Load) and node.id in raw
+    if _computed_raw(node, raw, oracle):
+        return True
     if isinstance(node, ast.Call):
         if oracle(node):
             return True
@@ -203,6 +237,10 @@ def _allowed_parent(
         return node is parent.operand
     if isinstance(parent, ast.FormattedValue):
         return node is parent.value
+    if isinstance(parent, ast.Expr):
+        return _computed_raw(node, raw, oracle)
+    if _blackbox_unpack(node, parent, bindings):
+        return True
     if isinstance(parent, (ast.Assign, ast.AnnAssign)) and parent.value is node:
         target = _is_single_name_assign(parent)
         if target is None:
@@ -317,6 +355,14 @@ def position_findings(tree, oracle_names, modules, binders, adapters, row_names)
             if not _raw_expr(node, raw, is_oracle):
                 continue
             parent = parents.get(node)
+            if (
+                isinstance(parent, ast.Call)
+                and isinstance(parent.func, ast.Name)
+                and parent.func.id in PURE_BUILTINS - {"blackbox_result"}
+                and (parent.func.id in binders or parent.func.id in local_bindings)
+            ):
+                findings.add(getattr(node, "lineno", 1))
+                continue
             parent_wraps = isinstance(parent, ast.expr) and _raw_expr(parent, raw, is_oracle)
             if isinstance(parent, ast.Call) and is_oracle(parent):
                 parent_wraps = False

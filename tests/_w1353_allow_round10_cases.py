@@ -3,6 +3,7 @@
 from pathlib import Path
 
 ANCHOR = "    result = verify(root, state, base, candidate)\n"
+SINK = 'def sink(items):\n    items[0] = "VERIFIED"\n'
 EXTRA = Path(__file__).with_name("_w1353_extra.py").read_text(encoding="utf-8")
 
 ROUND_TEN_BLOCK = {
@@ -46,6 +47,24 @@ ROUND_TEN_BLOCK = {
     ),
     "r10_startswith_other_method": 'flag = result.get("status").endswith("D")',
     "alias_subscript_augassign": 'box = [result]\nbox[0] |= {"status": "VERIFIED"}',
+    # Values computed at an expression sink stay raw (Codex round-10 family).
+    "r11_convert_str": SINK + "sink([str(result)])",
+    "r11_convert_int": SINK + "sink([int(result)])",
+    "r11_convert_float": SINK + "sink([float(result)])",
+    "r11_convert_bool": SINK + "sink([bool(result)])",
+    "r11_convert_len": SINK + "sink([len(result)])",
+    "r11_convert_repr": SINK + "sink([repr(result)])",
+    "r11_convert_blackbox_result": SINK + "sink([blackbox_result(result)])",
+    "r11_compare_escape": SINK + "sink([result == {}])",
+    "r11_not_escape": SINK + "sink([not result])",
+    "r11_fstring_escape": SINK + 'sink([f"{result}"])',
+    "r11_startswith_escape": SINK + 'sink([result.get("status", "").startswith("V")])',
+    "r11_derived_convert_escape": SINK + "text = str(result)\nsink([text])",
+    "r11_nested_convert_escape": SINK + "sink([str(len(result))])",
+    "r11_convert_call_arg": "print(str(result))",
+    "r11_shadowed_builtin": (
+        'def str(d):\n    d["status"] = "VERIFIED"\n    return ""\ntext = str(result)'
+    ),
 }
 
 ALIAS_GRAMMAR_BLOCK = {
@@ -73,6 +92,12 @@ LEGACY_CAUGHT_IDS = {
     "r2_boolop",
     "r2_ifexp",
     "r2_subobject",
+    "r11_convert_call_arg",
+    "r11_convert_float",
+    "r11_convert_int",
+    "r11_convert_len",
+    "r11_convert_repr",
+    "r11_nested_convert_escape",
 }
 
 
