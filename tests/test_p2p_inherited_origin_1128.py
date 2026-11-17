@@ -342,3 +342,35 @@ def test_two_detached_subclasses_with_a_shadowed_origin_stay_dropped():
 )
 def test_deleted_origin_without_a_kept_copy_is_removed(base, test):
     assert _split(base, test, B_IDS, T_IDS) == ({"t.py::TestB::test_x"}, set())
+
+
+G = "    def _g(self):\n        assert True\n"
+SET_X = 'setattr(Base, "test" + "_x", Base._g)\n'
+DETACHED = "class CheckB(Base):\n    pass\nclass TestB:\n" + KEEP
+DYNAMIC = {
+    # #1426 Codex round 2: the test assembled at runtime is invisible to the AST checks
+    "D1-setattr-and-switch-off": (
+        "class Base:\n" + G + SET_X + "class TestB(Base):\n" + KEEP + "TestB.__test__ = False\n",
+        [],
+    ),
+    "D2-setattr-detach": ("class Base:\n" + G + SET_X + DETACHED, T_IDS),
+    "D3-exec-in-body": (
+        'class Base:\n    exec("def test" + "_x(self):\\n    assert True")\nclass TestB:\n' + KEEP,
+        T_IDS,
+    ),
+    "D4-three-arg-type": (
+        'Base = type("Base", (), {"test" + "_x": lambda self: None})\nclass TestB:\n' + KEEP,
+        T_IDS,
+    ),
+    "D5-dunder-setattr": (
+        "class Base:\n" + G + SET_X.replace("setattr", "type.__setattr__") + DETACHED,
+        T_IDS,
+    ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(DYNAMIC))
+def test_runtime_assembled_test_stays_dropped(case):
+    test, test_ids = DYNAMIC[case]
+    base = "class Base:\n" + X + "class TestB(Base):\n" + KEEP
+    assert "t.py::TestB::test_x" in _split(base, test, B_IDS, test_ids)[1]

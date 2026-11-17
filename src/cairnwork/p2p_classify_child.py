@@ -48,6 +48,7 @@ def classify_payload(data: dict) -> dict:
                     and not _scope_mentions(test_tree, [origin], name, texts[path])
                     and not _scope_mentions(test_tree, owners, name, texts[path])
                     and not _kept_uncollected(test_tree, name, path, test_ids)
+                    and not _assembles_at_runtime(test_tree)
                     and f"{path}::{origin}::{name}" not in test_ids
                     # a same-name test still collected elsewhere in the file: moved, not removed
                     and not any(
@@ -83,6 +84,25 @@ def _hidden(tree, base, name, path, test_ids, base_ids) -> bool:
         return bool(kept - excused)  # counts, not a set
     except RecursionError:  # ast.dump of a very deep expression: not provably gone
         return True
+
+
+_RUNTIME = {"setattr", "delattr", "__setattr__", "__delattr__", "exec", "eval", "compile"}
+_RUNTIME |= {"globals", "vars", "locals", "__import__"}
+
+
+def _assembles_at_runtime(tree: ast.Module) -> bool:
+    """#1426: a test built at runtime (``setattr(Base, "test" + "_x", f)``, ``exec``, a three-arg
+    ``type``) or a class switched off from outside (``TestB.__test__ = False``) is invisible to the
+    AST checks, so an inherited deletion in such a file excuses nothing."""
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Attribute) and n.attr in {"__test__", "__dict__"}:
+            return True
+        if isinstance(n, ast.Call):
+            f = n.func
+            callee = f.id if isinstance(f, ast.Name) else getattr(f, "attr", None)
+            if callee in _RUNTIME or (callee == "type" and len(n.args) == 3):
+                return True
+    return _mentions_dunder_test(tree)
 
 
 def _kept_uncollected(tree, name, path, test_ids) -> bool:
