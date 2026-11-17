@@ -35,6 +35,7 @@ from cairnwork.deferred_tests import (
     check_roots_on_base,
     deleted_of,
     ensure_test_commit,
+    ghost_targets,
     never_seen,
     new_tests,
     not_run,
@@ -125,8 +126,8 @@ def tests_with_teeth(
             "改了模組層或類別本體，請點名整個檔案"
         )
         raise TestCommitRejected("DEFERRED_TESTS_NOT_TARGETED", f"{', '.join(missing)}; {hint}")
-    # #796: a base run goes on after a collect error (never a collect-only spec): the other files
-    # still run, and a module-level import of a name the fix adds can be told from other errors
+    # #796: a base run goes on after a collect error (not a collect-only spec): other files still
+    # run, and a module-level import of a name the fix adds can be told from other errors
     base = tuple(
         s if s.collect_only else replace(s, continue_on_collect_errors=True) for s in specs
     )
@@ -142,7 +143,8 @@ def tests_with_teeth(
         return path.startswith(roots) or test_file_rule(task.repo, task.base_commit)(path)
 
     runs = [as_failed(run, targets, is_test) for run in runs]  # before the base comparison
-    comparison = base_comparison(runs, targets)  # decided before the base logs go
+    ghosts = ghost_targets(task.repo, task.test_commit, paths, targets)
+    comparison = base_comparison(runs, targets, ghosts)  # decided before the base logs go
     if comparison.kind == "UNCOMPARABLE":
         result.failure_evidence.extend(failure_evidence.capture_for_task(recorded_runs, task, ctx))
     for run in runs:  # #797 step 1: recorded only, no verdict reads it yet (deny_channel.py)
@@ -154,11 +156,11 @@ def tests_with_teeth(
         raise BaseUncomparable(comparison)
     if comparison.kind != "TEETH":
         raise TestCommitRejected(comparison.code, comparison.detail)
-    _check_seed_replay(ctx, result, runs, targets, base, task.test_commit, is_test)
+    _check_seed_replay(ctx, result, runs, targets, base, task.test_commit, is_test, ghosts)
     return TestFiles(paths, deleted, nodes, base_skips)
 
 
-def _check_seed_replay(ctx, result, runs, targets, base, test_commit, is_test) -> None:
+def _check_seed_replay(ctx, result, runs, targets, base, test_commit, is_test, ghosts) -> None:
     """A second base run must independently show the same teeth under a distinct seed."""
     try:
         replay_seed = second_seed(ctx.hash_seed)
@@ -168,7 +170,7 @@ def _check_seed_replay(ctx, result, runs, targets, base, test_commit, is_test) -
     second_ctx = replace(ctx, hash_seed=replay_seed)
     second_runs = run_verifiers(second_ctx, test_commit, base, f"{result.attempt_id}-s", deny=True)
     second_runs = [as_failed(run, targets, is_test) for run in second_runs]
-    second_comparison = base_comparison(second_runs, targets)
+    second_comparison = base_comparison(second_runs, targets, ghosts)
     for run in second_runs:
         if run.deny_evidence:
             result.logs.append(
@@ -327,19 +329,17 @@ def _refuse_candidate_sys_path(task, result) -> None:
 
 
 def _not_run_here(task, runs, test_files) -> list[str]:
-    """Every new or changed test must be in the verification run's guard record too (#697), as
-    in the base run's (base_comparison, #660)."""
+    """Every new or changed test must be in the verification run's guard record too (#697)."""
     if not (task.test_commit and test_files):
         return []
-    return not_run(runs, new_tests(task.repo, task.base_commit, task.test_commit, test_files))
+    targets = new_tests(task.repo, task.base_commit, task.test_commit, test_files)
+    return not_run(runs, targets, ghost_targets(task.repo, task.test_commit, test_files, targets))
 
 
 def _not_run_refusal(missing, test_files, verified_by, judged) -> str:
-    """When every run and check in ``judged`` passed, the refusal for a test no run collected:
-    a new test missing from every verifier's record (#697: a whole-file target passes on another
-    test of that file), or a test the base run of a verifier ran (any outcome) that the
-    candidate's run of it did not (#1034: e.g. dropped by collection-time project code the
-    candidate changed). "" otherwise."""
+    """When every run and check in ``judged`` passed, the refusal for a test no run collected: a
+    new test missing from every verifier's record (#697: a whole-file target passes on another
+    test of that file), or one the base run ran that the candidate's run did not (#1034)."""
     if not all(item.observation.passed for item in judged):
         return ""
     if missing:

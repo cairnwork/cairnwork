@@ -26,6 +26,7 @@ from pathlib import Path, PurePosixPath
 from cairnwork import deferred_attached, gitprobe, survivor_argv
 from cairnwork.base_teeth import base_teeth
 from cairnwork.deferred_nodes import hidden_tests, local_names, test_functions
+from cairnwork.deferred_not_run import not_run
 from cairnwork.deferred_overlay import (  # noqa: F401  (re-exported: the one place importers look)
     _REGULAR,
     MAX_DELETED_TEST_PATHS,
@@ -35,6 +36,7 @@ from cairnwork.deferred_overlay import (  # noqa: F401  (re-exported: the one pl
     deleted_of,
     overlay_tree,
 )
+from cairnwork.deferred_speculative import speculative_ids
 from cairnwork.gitcmd import OID, GitCommandError, commit_present, run_git
 from cairnwork.issue_task import test_target
 from cairnwork.p2p_function import _without_case as _nodeid_without_case
@@ -222,6 +224,12 @@ def new_tests(repo: Path, base: str, test_commit: str, paths: tuple[str, ...]) -
     return frozenset(found)
 
 
+def ghost_targets(repo: Path, test_commit: str, paths: tuple[str, ...], targets) -> frozenset:
+    """The ``targets`` that only an unresolved imported base could have invented (#1430)."""
+    trees = {p: _tree(repo, f"{test_commit}:{p}") or _EMPTY for p in paths if p.endswith(".py")}
+    return frozenset(f"{p}::{n}" for p, t in trees.items() for n in speculative_ids(t)) & targets
+
+
 def untargeted(
     paths: tuple[str, ...], nodes: Iterable[str], targets: Iterable[str]
 ) -> tuple[str, ...]:
@@ -340,11 +348,12 @@ def _base_problem(run) -> str:
     return ""
 
 
-def base_comparison(runs, targets: frozenset[str]) -> Comparison:
+def base_comparison(runs, targets: frozenset[str], speculative=frozenset()) -> Comparison:
     """Every run is judged (no short-circuit): one uncomparable run makes it UNCOMPARABLE even when
     another has teeth. Then every new or changed test (``targets``) must be in some run's guard
     record (collected and run, any outcome), or the receipt would bind tests no verifier ran
     (NOT_RUN, #660; the static target rule, ``untargeted``, cannot see what pytest collects).
+    ``speculative``: the targets ``not_run`` may drop as proven ghosts (#1430; empty = none).
     Teeth: one of them failed in the guard's record."""
     problems = [(run, code) for run in runs if (code := _base_problem(run))]
     if problems:
@@ -358,7 +367,7 @@ def base_comparison(runs, targets: frozenset[str]) -> Comparison:
             for run, code in problems
         )  # fmt: skip
         return Comparison("UNCOMPARABLE", problems[0][1], detail)
-    if missing := not_run(runs, targets):  # #660: the receipt would bind a test that never ran
+    if missing := not_run(runs, targets, speculative):  # #660: never ran, yet bound
         detail = f"no verifier collected or ran {missing}" + "".join(map(skip_hint, runs))
         return Comparison("NOT_RUN", "DEFERRED_TESTS_NOT_RUN", detail)
     verdict = base_teeth(runs, targets)  # #775: a fixture or OSError failure is not teeth
@@ -366,34 +375,6 @@ def base_comparison(runs, targets: frozenset[str]) -> Comparison:
         return Comparison(*verdict)
     codes = [run.returncode for run in runs]
     return Comparison("NO_TEETH", "TESTS_DO_NOT_FAIL_ON_BASE", f"pytest exit codes {codes}")
-
-
-def not_run(runs, targets) -> list[str]:
-    """The ``targets`` no run's guard record holds (collected and run, any outcome; a
-    parametrisation counts): the base run's check (#660) and the verification run's (#697).
-    A target absent from every clean, complete collection is a static-analysis ghost (#1430)."""
-    ran = {f for r in runs for n in r.outcomes for f in (_without_case(n), _without_case(n, True))}
-    missing = set(targets) - ran
-    if runs and all(
-        r.collection_finished
-        and r.collected
-        and not r.collect_errors
-        and not r.collect_skipped
-        and set(r.outcomes) <= set(r.collected)  # a record that disagrees with itself: keep all
-        for r in runs
-    ):
-        collected = {_without_case(n) for r in runs for n in r.collected}
-        missing = {
-            target
-            for target in missing
-            if any(
-                node == _without_case(target)
-                or node.startswith(_without_case(target).rstrip("/") + "::")
-                or _without_case(target).startswith(node.rstrip("/") + "::")
-                for node in collected
-            )
-        }
-    return sorted(missing)
 
 
 def lay_tests_over(
