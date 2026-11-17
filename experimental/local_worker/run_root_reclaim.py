@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import math
 import os
@@ -186,7 +187,7 @@ def reclaim_stale(
         return Report(())
 
 
-def add_cli_option(parser: object) -> None:
+def add_cli_option(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--reclaim-older-than-hours", type=float, default=48)
 
 
@@ -198,8 +199,6 @@ def reclaim_for_episode(runs: Path, hours: float, root: Path) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    import argparse
-
     parser = argparse.ArgumentParser(description="Reclaim old local worker run roots.")
     parser.add_argument("--runs", type=Path, required=True)
     parser.add_argument("--older-than-hours", type=float, default=48)
