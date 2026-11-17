@@ -370,9 +370,25 @@ def base_comparison(runs, targets: frozenset[str]) -> Comparison:
 
 def not_run(runs, targets) -> list[str]:
     """The ``targets`` no run's guard record holds (collected and run, any outcome; a
-    parametrisation counts): the base run's check (#660) and the verification run's (#697)."""
+    parametrisation counts): the base run's check (#660) and the verification run's (#697).
+    A target absent from every clean, complete collection is a static-analysis ghost (#1430)."""
     ran = {f for r in runs for n in r.outcomes for f in (_without_case(n), _without_case(n, True))}
-    return sorted(set(targets) - ran)
+    missing = set(targets) - ran
+    if runs and all(
+        r.collection_finished and not r.collect_errors and not r.collect_skipped for r in runs
+    ):
+        collected = {_without_case(n) for r in runs for n in r.collected}
+        missing = {
+            target
+            for target in missing
+            if any(
+                node == _without_case(target)
+                or node.startswith(_without_case(target).rstrip("/") + "::")
+                or _without_case(target).startswith(node.rstrip("/") + "::")
+                for node in collected
+            )
+        }
+    return sorted(missing)
 
 
 def lay_tests_over(
