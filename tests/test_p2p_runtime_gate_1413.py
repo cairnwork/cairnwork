@@ -191,9 +191,34 @@ def test_well_formed_exposed_at_the_classify_boundary(exposed, verdict):
     assert getattr(classify(*BOUNDARY, exposed=exposed), verdict) == {"a.py::test_x"}
 
 
-@pytest.mark.parametrize("item", ["a.py::H::test_x[1]", "a.py::test_x"], ids=["param", "two-part"])
-def test_child_treats_a_malformed_exposed_entry_as_no_fact(item):
+def _child(exposed):
     sources = {"test": {"a.py": ""}, "base": {"a.py": "def test_x(): pass"}}
     payload = {"base_ids": ["a.py::test_x"], "test_ids": [], "edited": ["a.py"]}
-    payload |= {"sources": sources, "exposed": [item]}
-    assert classify_payload(payload)["dropped"] == ["a.py::test_x"]
+    return classify_payload(payload | {"sources": sources, "exposed": exposed})
+
+
+MALFORMED_ENTRIES = {
+    "param": "a.py::H::test_x[1]",
+    "two-part": "a.py::test_x",
+    "trailing-space": "a.py::H::test_x ",
+    "non-ascii": "a.py::H::test_x\u00e9",
+    "space-in-owner": "a.py::Bad Owner::test_other",
+    "empty-part": "a.py::::test_other",
+    "tab": "a.py::H::test_other\t",
+}
+
+
+@pytest.mark.parametrize("item", MALFORMED_ENTRIES.values(), ids=MALFORMED_ENTRIES.keys())
+def test_malformed_exposed_entry_is_no_fact_at_both_boundaries(item):
+    """The child applies the same check as the parent (collect_reader._valid_exposed_id)."""
+    assert _child([item])["dropped"] == ["a.py::test_x"]
+    assert classify(*BOUNDARY, exposed=(item,)).dropped == {"a.py::test_x"}
+
+
+@pytest.mark.parametrize(
+    "exposed, verdict",
+    [([], "removed"), (["b.py::H::test_x"], "removed"), (["a.py::H::test_x"], "dropped")],
+    ids=["empty", "other-file", "same-file"],
+)
+def test_child_honours_a_well_formed_fact(exposed, verdict):
+    assert _child(exposed)[verdict] == ["a.py::test_x"]
