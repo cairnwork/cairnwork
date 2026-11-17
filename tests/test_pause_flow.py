@@ -10,8 +10,8 @@ from typing import Any
 import pytest
 
 from experimental.pause.core_judge import CoreJudge
-from experimental.pause.guard import TreeGuard
 from experimental.pause.flow import CoreVerdict, RunResult, run_flow
+from experimental.pause.guard import TreeGuard
 from experimental.pause.interfaces import CallSettings, GateReply, PlanReply
 
 

@@ -260,18 +260,15 @@ class CoreJudge:
     def __call__(self, r1: RunResult) -> CoreVerdict:
         if r1.checkout is None:
             raise ValueError("R1 checkout is required")
-        before = TreeGuard(r1.checkout).digest()
         base = r1.base_sha
         if type(base) is not str or not _SHA_RE.fullmatch(base):
             raise ValueError("R1 base_sha (set by the runner) must be 40 lowercase hex")
         base_entries = _tree_entries(r1.checkout, base)
         entry_source_entries = _entries(r1.checkout)
-        excluded = _validate_checkout_shape(
-            r1.checkout, entry_source_entries, set(base_entries)
+        excluded = _validate_checkout_shape(r1.checkout, entry_source_entries, set(base_entries))
+        source_tree, before_copy = TreeGuard(r1.checkout).digest_pair(
+            exclude_git=True, exclude_paths=excluded
         )
-        before_copy = TreeGuard(
-            r1.checkout, exclude_git=True, exclude_paths=excluded
-        ).digest()
         with tempfile.TemporaryDirectory(prefix="cairnwork-pause-core-") as temp:
             repo = Path(temp) / "repo"
             _clone(r1.checkout, repo)
@@ -305,11 +302,11 @@ class CoreJudge:
                 verifiers=self.verifiers,
                 import_paths=self.import_paths,
             )
-            if TreeGuard(r1.checkout).digest() != before:
+            if TreeGuard(r1.checkout).digest() != source_tree:
                 raise RuntimeError("Core judge changed R1 checkout")
             if not isinstance(result, dict) or type(result.get("status")) is not str:
                 raise ValueError("Core result must contain a string status")
-            return CoreVerdict(result["status"], before)
+            return CoreVerdict(result["status"], source_tree)
 
     @staticmethod
     def _changed_paths(repo: Path, base: str, candidate: str) -> tuple[str, ...]:
