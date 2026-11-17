@@ -34,7 +34,8 @@ def test_a_symlink_inside_the_checkout_still_starts(tmp_path):
 
 
 def test_a_flag_change_found_when_the_plan_arrives_stops_the_run(tmp_path):
-    if not hasattr(os, "chflags") or not hasattr(stat, "UF_HIDDEN"):
+    chflags = getattr(os, "chflags", None)  # BSD only; pyright on Linux has no os.chflags
+    if chflags is None or not hasattr(stat, "UF_HIDDEN"):
         pytest.skip("file flags are unavailable")
     checkout = tmp_path / "checkout"
     checkout.mkdir()
@@ -42,10 +43,10 @@ def test_a_flag_change_found_when_the_plan_arrives_stops_the_run(tmp_path):
     path.write_text("x")
     before = TreeGuard(checkout).digest()  # unbound: chflags also moves ctime, which would mask it
     try:
-        os.chflags(path, stat.UF_HIDDEN)
+        chflags(path, getattr(stat, "UF_HIDDEN", 0x8000))
         assert TreeGuard(checkout).digest() != before
     finally:
-        os.chflags(path, 0)
+        chflags(path, 0)
 
 
 def test_an_mtime_only_change_found_when_the_plan_arrives_stops_the_run(tmp_path):
@@ -123,7 +124,10 @@ def test_the_ignored_flags_do_not_change_the_key(tmp_path):
     plain = guard_meta.read(os.fsencode(path), with_flags(0)).key()
     system_managed = 0x20 | 0x40 | 0x40000000  # UF_COMPRESSED, UF_TRACKED, SF_DATALESS
     assert guard_meta.read(os.fsencode(path), with_flags(system_managed)).key() == plain
-    assert guard_meta.read(os.fsencode(path), with_flags(stat.UF_HIDDEN)).key() != plain
+    assert (
+        guard_meta.read(os.fsencode(path), with_flags(getattr(stat, "UF_HIDDEN", 0x8000))).key()
+        != plain
+    )
 
 
 def test_bind_times_binds_mtime_and_ctime_separately(tmp_path):
