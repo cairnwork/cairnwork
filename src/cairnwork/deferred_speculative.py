@@ -19,9 +19,15 @@ def speculative_ids(tree: ast.Module) -> frozenset[str]:
     speculative: set[str] = set()
     aliases = class_aliases(tree.body)
     reach = _Reach(tree)
+    # a name bound twice (class redefined, or assigned): pytest collects only its last binding
+    rebound = {t.id for n in ast.walk(tree) if isinstance(n, ast.Assign)
+               for t in n.targets if isinstance(t, ast.Name)}  # fmt: skip
     for node in tree.body:
         if not isinstance(node, ast.ClassDef):
             continue
+        if node.name in classes:
+            rebound.add(node.name)
+            speculative = {i for i in speculative if not i.startswith(f"{node.name}::")}
         own = {item.name for item in node.body if isinstance(item, _DEFS)}
         targets = [aliases.get(id(node), {}).get(b.id, b.id) if isinstance(b, ast.Name) else ""
                    for b in node.bases]  # fmt: skip
@@ -31,7 +37,7 @@ def speculative_ids(tree: ast.Module) -> frozenset[str]:
                       for name in cls}  # fmt: skip
         members = _members(node, classes, reach, aliases.get(id(node), {}))
         methods, _, case, _ = members
-        if node.name.startswith("Test") or case:
+        if node.name not in rebound and (node.name.startswith("Test") or case):
             speculative.update(
                 f"{node.name}::{name}"
                 for name in methods

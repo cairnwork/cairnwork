@@ -218,3 +218,57 @@ def test_each_unclean_run_keeps_speculative_ghost():
     ]
     for bad in bad_runs:
         assert not_run([_clean_run(), bad], {_GHOST}, {_GHOST}) == [_GHOST], bad
+
+
+def _spec(src):
+    return speculative_ids(ast.parse(src))
+
+
+def test_speculative_ids_ignore_redefined_and_own_and_resolved_members():
+    base = "from base_mod import Base\n"
+    redefined = base + "class TestA:\n    def test_new(self): pass\nclass TestA(Base): pass\n"
+    assert _spec(redefined) == frozenset()
+    assert (
+        _spec(
+            base
+            + "class TestZ:\n    def test_new(self): pass\n"
+            + "class TestA(Base):\n    def test_new(self): pass\n"
+        )
+        == frozenset()
+    )
+    assert (
+        _spec(base + "class TestB:\n    def test_new(self): pass\nclass TestA(TestB, Base): pass\n")
+        == frozenset()
+    )
+    assert (
+        _spec(
+            base
+            + "class TestZ:\n    def test_new(self): pass\nclass TestA(Base): pass\nTestA = None\n"
+        )
+        == frozenset()
+    )
+    assert _spec(
+        base + "class TestZ:\n    def test_new(self): pass\nclass TestA(Base): pass\n"
+    ) == {"TestA::test_new"}
+
+
+def test_collected_target_without_outcome_not_dropped_even_if_speculative():
+    run = _run(collected=[_SIBLING, _GHOST], outcomes={_SIBLING: "passed"})
+    assert not_run([run], {_GHOST}, {_GHOST}) == [_GHOST]
+
+
+def test_redefined_class_real_collection_keeps_target(tmp_path):
+    files = {
+        "base_mod.py": "class Base:\n    pass\n",
+        "test_x.py": (
+            "from base_mod import Base\n\n"
+            "class TestA:\n    def test_new(self):\n        assert False\n\n"
+            "class TestA(Base):\n    def test_kept(self):\n        pass\n"
+        ),
+    }
+    target = "test_x.py::TestA::test_new"
+    collected = _collected(tmp_path, files)
+    assert target not in collected
+    ids = _spec(files["test_x.py"])
+    run = _run(collected=collected, outcomes=dict.fromkeys(collected, "passed"))
+    assert not_run([run], {target}, ids & {target}) == [target]
