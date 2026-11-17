@@ -11,6 +11,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from cairnwork_sandbox import select
+from tests._w1353_allow_rowreg import issue
 
 _NO_SANDBOX_BASE = (
     "UNCOMPARABLE: BASE_ENV_FAILED: unchanged base: base-probe-failed "
@@ -72,18 +73,20 @@ def row(cid, probe, route, raw, expected, classification, reason=""):
         matches = "VERIFICATION_INCOMPLETE:" in observed
     elif expected == "PASS":
         matches = observed == "PASS" or ": PASS " in observed
-    return {
-        "class_id": cid,
-        "probe": probe,
-        "route": route,
-        "observed": observed,
-        "raw_return": saved,
-        "expected_on_main": expected,
-        "matches_spec": matches,
-        "classification": classification,
-        "platform": sys.platform,
-        "reason": reason,
-    }
+    return issue(
+        {
+            "class_id": cid,
+            "probe": probe,
+            "route": route,
+            "observed": observed,
+            "raw_return": saved,
+            "expected_on_main": expected,
+            "matches_spec": matches,
+            "classification": classification,
+            "platform": sys.platform,
+            "reason": reason,
+        }
+    )
 
 
 def _git(root: Path, *args: str) -> str:

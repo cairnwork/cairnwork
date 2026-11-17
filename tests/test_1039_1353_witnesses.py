@@ -26,13 +26,12 @@ from tests._w1353_allow_cases import (
 )
 from tests._w1353_allow_round10_tests import *  # noqa: F403
 from tests._w1353_allow_round13_tests import *  # noqa: F403
+from tests._w1353_allow_round14_tests import *  # noqa: F403
+from tests._w1353_allow_round14_tests import registered, thaw
 
-test_byte_edits_trip_pin_and_name_the_file = (
-    round6_pin_tests.test_byte_edits_trip_pin_and_name_the_file
-)
-test_every_trusted_helper_pin_entry_exists = (
-    round6_pin_tests.test_every_trusted_helper_pin_entry_exists
-)
+r6 = round6_pin_tests
+test_byte_edits_trip_pin_and_name_the_file = r6.test_byte_edits_trip_pin_and_name_the_file
+test_every_trusted_helper_pin_entry_exists = r6.test_every_trusted_helper_pin_entry_exists
 test_missing_pinned_file_is_a_mismatch = round6_pin_tests.test_missing_pinned_file_is_a_mismatch
 test_new_pin_helper_passes_witness_grammar = (
     round6_pin_tests.test_new_pin_helper_passes_witness_grammar
@@ -87,7 +86,7 @@ _ACCOUNT_GAP = probe._ACCOUNT_GAP
 
 def test_c1_c4_evasions_are_runnable_and_live():
     """C1-C4; each source compiles, imports, calls add, and its removal changes C2's verdict."""
-    rows = probe.core_rows()
+    rows = registered(probe.core_rows())
     got = [
         r
         for r in rows
@@ -162,10 +161,10 @@ def test_c1_c4_evasions_are_runnable_and_live():
 
 def test_observed_values_are_recomputed_from_raw_route_returns():
     """C1-C10; every record stores the raw production return and derives observed from it."""
-    rows = probe.core_rows() + extra.extra_rows()
+    rows = registered(probe.core_rows() + extra.extra_rows())
     for item in rows:
         assert item["route"] and "raw_return" in item
-        raw = item["raw_return"]
+        raw = thaw(item["raw_return"])
         derived = (
             str(raw.get("status", raw.get("error", raw.get("code", raw))))
             if isinstance(raw, dict)
@@ -321,7 +320,7 @@ def test_blackbox_classification_counts_only_account_gaps_as_not_run(status, rea
 
 def test_candidate_routes_match_pinned_main_outputs():
     """C1-C5; real verify_cli run outputs are pinned, including both known C2/C5 bypasses."""
-    rows = probe.core_rows()
+    rows = registered(probe.core_rows())
     for cid in ("C1", "C2", "C3", "C4", "C5"):
         selected = [r for r in rows if r["class_id"] == cid]
         assert len(selected) >= 2
@@ -353,7 +352,7 @@ def test_candidate_routes_match_pinned_main_outputs():
 
 def test_class_results_are_pinned():
     """C6-C10; raw current judge, policy, runner and receipt outcomes are pinned."""
-    rows = extra.extra_rows()
+    rows = registered(extra.extra_rows())
     assert len([r for r in rows if r["class_id"] == "C6"]) >= 3
     controls = {r["probe"]: r["observed"] for r in rows if r["class_id"] == "CONTROL"}
     assert controls["owner-correct"] == "blackbox:add: PASS [matched 1/1] low-entropy"

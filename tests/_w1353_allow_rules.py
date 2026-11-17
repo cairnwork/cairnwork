@@ -23,7 +23,7 @@ from tests._w1353_allow_imports import advanced_findings, import_findings, sink_
 _SINK_ROW_PINS = {
     (3, 11): "efd8dce450611350f94804065f7dd0e6ed16e373b65ed3e132991ed43a0132e9",
     (3, 12): "7c84f013210405e6239f3b59be5e1163eaa224248bf5b00bc137dbf0b16d096a",
-    (3, 13): "5c6f12ad59a79790b4b72a2e9f0a5e3778f582f9fc8f08b46729e6f0dbd5b13b",
+    (3, 13): "7b1e73edacaac358df1ffdf0c9fd4ed6d54d48a9fecb77eed0f98e925ce0383f",
 }
 SINK_PINS = {"_w1353_probe.row": _SINK_ROW_PINS.get(sys.version_info[:2], "")}
 
@@ -39,6 +39,7 @@ ALLOWED_IMPORTS = {
         "functools",
         "pathlib",
         "tempfile",
+        "tests",
         "cairnwork_sandbox",
         "_w1353_probe",
         "_w1353_extra",

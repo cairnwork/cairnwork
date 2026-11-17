@@ -312,6 +312,7 @@ def check(source: str, path: str = "witness.py") -> list[int]:
     row_names -= poisoned
     trusted_rows -= poisoned
     from tests._w1353_allow_positions import position_findings
+    from tests._w1353_allow_row_rules import row_rule_findings
     from tests._w1353_allow_syntax import syntax_findings
 
     position_issues, raw_by_fn = position_findings(
@@ -332,6 +333,7 @@ def check(source: str, path: str = "witness.py") -> list[int]:
             )
         )
         | set(position_issues)
+        | set(row_rule_findings(tree, path))
         | (
             set(syntax_findings(tree))
             if Path(path).stem.startswith("_w1353_")
