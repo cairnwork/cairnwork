@@ -5,9 +5,9 @@ fresh clone that holds only head, base and (full mode) the test commit."""
 import json
 import shutil
 import subprocess
-import sys
 
 import pytest
+from _child_python import run_module
 from conftest import git
 from test_deferred_tests import CHECK, REGRESSION, make_test_commit
 from verify_helpers import FIX, base_of, candidate, verify
@@ -21,7 +21,7 @@ VERIFIER = " ".join(CHECK[0][1])
 
 def attest(*args):
     done = subprocess.run(
-        [sys.executable, "-I", "-m", "cairnwork_attest.cli", *map(str, args)],
+        run_module("cairnwork_attest.cli") + [*map(str, args)],
         capture_output=True, text=True, timeout=120, check=False,
     )  # fmt: skip
     return done.returncode, done.stdout, done.stderr
