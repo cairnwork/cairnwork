@@ -8,6 +8,7 @@ import pytest
 
 from experimental.pause.core_judge import CoreJudge
 from experimental.pause.flow import RunResult
+from experimental.pause.guard import TreeGuard
 
 
 def git(root: Path, *args: str) -> str:
@@ -116,3 +117,141 @@ def test_judge_rejects_excluded_directory_file_added_during_clone(
         CoreJudge(tmp_path / "state", (), verify=verify)(result)
     assert verify_calls == []
     (repo / "empty-after-delete" / "during-clone").unlink(missing_ok=True)
+
+
+def _excluded_checkout(tmp_path: Path) -> tuple[Path, str]:
+    repo = tmp_path / "excluded-repo"
+    repo.mkdir()
+    git(repo, "init", "-q")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.invalid")
+    (repo / "a").write_text("base\n")
+    (repo / "D").mkdir()
+    (repo / "D" / "tracked").write_text("base\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "base")
+    base = git(repo, "rev-parse", "HEAD")
+    (repo / "a").write_text("candidate\n")
+    (repo / "D" / "tracked").unlink()
+    return repo, base
+
+
+def _add_excluded_entry(repo: Path, kind: str) -> None:
+    import os
+
+    directory = repo / "D"
+    if kind == "file":
+        (directory / "x").write_text("transient\n")
+    elif kind == "executable":
+        path = directory / "x"
+        path.write_text("transient\n")
+        path.chmod(0o755)
+    elif kind == "symlink":
+        os.symlink("../a", directory / "x")
+    elif kind == "nested-file":
+        (directory / "E").mkdir()
+        (directory / "E" / "x").write_text("transient\n")
+    elif kind == "dotfile":
+        (directory / ".x").write_text("transient\n")
+    else:
+        (directory / "E").mkdir()
+
+
+def _remove_excluded_entries(repo: Path) -> None:
+    import shutil
+
+    for entry in (repo / "D").iterdir():
+        if entry.is_dir() and not entry.is_symlink():
+            shutil.rmtree(entry)
+        else:
+            entry.unlink()
+
+
+@pytest.mark.parametrize(
+    "kind", ["file", "executable", "symlink", "nested-file", "dotfile", "empty-dir"]
+)
+@pytest.mark.parametrize("remove_at", ["after-pair", "before-clone", "after-clone", "before-copy"])
+def test_judge_rejects_entries_under_excluded_directories(
+    tmp_path: Path, monkeypatch: Any, kind: str, remove_at: str
+) -> None:
+    """Excluded directories may contain only excluded directories."""
+    from experimental.pause import core_judge
+    from experimental.pause.guard import TreeGuard
+
+    repo, base = _excluded_checkout(tmp_path)
+    result = RunResult(0, "", tmp_path, repo, None, {}, base_sha=base)
+    original_shape = core_judge._validate_checkout_shape
+    original_pair = TreeGuard.digest_pair
+    original_clone = core_judge._clone
+    original_copy = core_judge._copy_working_tree
+    shape_calls = 0
+
+    def shape(path: Path, entries: dict, paths: set):
+        nonlocal shape_calls
+        excluded = original_shape(path, entries, paths)
+        shape_calls += 1
+        if shape_calls == 1:
+            _add_excluded_entry(repo, kind)
+        return excluded
+
+    def pair(guard, **kwargs):
+        digests = original_pair(guard, **kwargs)
+        if remove_at == "after-pair":
+            _remove_excluded_entries(repo)
+        return digests
+
+    def clone(source: Path, destination: Path) -> None:
+        if remove_at == "before-clone":
+            _remove_excluded_entries(repo)
+        original_clone(source, destination)
+        if remove_at == "after-clone":
+            _remove_excluded_entries(repo)
+
+    def copy(source: Path, destination: Path):
+        if remove_at == "before-copy":
+            _remove_excluded_entries(repo)
+        return original_copy(source, destination)
+
+    monkeypatch.setattr(core_judge, "_validate_checkout_shape", shape)
+    monkeypatch.setattr(TreeGuard, "digest_pair", pair)
+    monkeypatch.setattr(core_judge, "_clone", clone)
+    monkeypatch.setattr(core_judge, "_copy_working_tree", copy)
+
+    def verify(_intake: Any, **_kwargs: Any) -> dict[str, str]:
+        _add_excluded_entry(repo, kind)
+        return {"status": "VERIFIED"}
+
+    with pytest.raises(ValueError):
+        CoreJudge(tmp_path / "state", (), verify=verify)(result)
+
+
+@pytest.mark.parametrize(
+    "case", ["unchanged", "excluded-empty", "nested-excluded-empty", "failed", "mixed"]
+)
+def test_judge_accepts_stable_excluded_shapes_and_records_core_result(
+    tmp_path: Path, case: str
+) -> None:
+    """Stable snapshots retain the digest and Core verdict semantics."""
+    repo, base = _excluded_checkout(tmp_path)
+    if case in {"excluded-empty", "nested-excluded-empty"}:
+        (repo / "D" / "tracked").write_text("base\n")
+        if case == "nested-excluded-empty":
+            (repo / "D" / "E").mkdir()
+            (repo / "D" / "E" / "tracked").write_text("nested\n")
+            git(repo, "add", "D/E/tracked")
+            git(repo, "commit", "-qm", "nested base")
+            base = git(repo, "rev-parse", "HEAD")
+            (repo / "D" / "E" / "tracked").unlink()
+        (repo / "D" / "tracked").unlink()
+    elif case == "mixed":
+        (repo / "a").unlink()
+        executable = repo / "new-executable"
+        executable.write_text("new\n")
+        executable.chmod(0o755)
+    entry = TreeGuard(repo).digest()
+    status = "FAILED" if case == "failed" else "VERIFIED"
+    verdict = CoreJudge(tmp_path / "state", (), verify=lambda *_a, **_kw: {"status": status})(
+        RunResult(0, "", tmp_path, repo, None, {}, base_sha=base)
+    )
+    assert (verdict.status, verdict.tree_sha256) == (status, entry)
+    assert TreeGuard(repo).digest() == entry

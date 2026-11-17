@@ -142,3 +142,154 @@ def test_flow_keeps_r0_when_source_changes_after_flow_digest(tmp_path, monkeypat
     assert (checkout / "a").read_text() == (
         "A\n" if change_point == "before-copy-snapshot" else "B\n"
     )
+
+
+def _excluded_flow_checkout(
+    tmp_path: Path, r0: RunResult
+) -> tuple[RunResult, RunResult, Path, str]:
+    r0, checkout, _base = _checkout(tmp_path, r0)
+    (checkout / "D").mkdir()
+    (checkout / "D" / "tracked").write_text("base\n")
+    _git(checkout, "add", "D/tracked")
+    _git(checkout, "commit", "-qm", "excluded directory base")
+    base = subprocess.check_output(
+        ["git", "-C", str(checkout), "rev-parse", "HEAD"], text=True
+    ).strip()
+    (checkout / "D" / "tracked").unlink()
+    r0 = replace(r0, record={**(r0.record or {}), "base_sha": base})
+    r1 = replace(
+        r0,
+        root=tmp_path / "R1",
+        checkout=checkout,
+        base_sha=base,
+        guard_before_plan="digest",
+        guard_at_plan_arrival="digest",
+        git_config_sha256="0" * 64,
+        record={
+            "verification": {"exit_reason": "COMPLETED"},
+            "spec_feedback": {"needs_spec": False},
+        },
+    )
+    return r0, r1, checkout, base
+
+
+@pytest.mark.parametrize(
+    "kind", ["file", "executable", "symlink", "nested-file", "dotfile", "empty-dir"]
+)
+def test_flow_keeps_r0_when_excluded_entry_crosses_judge_snapshot(
+    tmp_path: Path, monkeypatch: Any, kind: str
+) -> None:
+    """The flow snapshot must match the tree Core actually receives."""
+    import os
+    import shutil
+
+    from experimental.pause import core_judge
+    from experimental.pause.guard import TreeGuard
+
+    r0, r1, checkout, _base = _excluded_flow_checkout(tmp_path, _scenario(tmp_path)[0])
+    directory = checkout / "D"
+
+    def add() -> None:
+        if kind == "file":
+            (directory / "x").write_text("transient\n")
+        elif kind == "executable":
+            path = directory / "x"
+            path.write_text("transient\n")
+            path.chmod(0o755)
+        elif kind == "symlink":
+            os.symlink("../a", directory / "x")
+        elif kind == "nested-file":
+            (directory / "E").mkdir()
+            (directory / "E" / "x").write_text("transient\n")
+        elif kind == "dotfile":
+            (directory / ".x").write_text("transient\n")
+        else:
+            (directory / "E").mkdir()
+
+    def remove() -> None:
+        for entry in directory.iterdir():
+            if entry.is_dir() and not entry.is_symlink():
+                shutil.rmtree(entry)
+            else:
+                entry.unlink()
+
+    monkeypatch.setattr("experimental.pause.flow._scope_ok", lambda *_args: True)
+    original_shape = core_judge._validate_checkout_shape
+    original_pair = TreeGuard.digest_pair
+    shape_calls = 0
+
+    def shape(path: Path, entries: dict, paths: set):
+        nonlocal shape_calls
+        excluded = original_shape(path, entries, paths)
+        shape_calls += 1
+        if shape_calls == 1:
+            add()
+        return excluded
+
+    def pair(guard, **kwargs):
+        digests = original_pair(guard, **kwargs)
+        remove()
+        return digests
+
+    monkeypatch.setattr(core_judge, "_validate_checkout_shape", shape)
+    monkeypatch.setattr(TreeGuard, "digest_pair", pair)
+    add()
+
+    def judge_with_flow_window(item):
+        remove()
+        verdict = CoreJudge(
+            tmp_path / "state",
+            (),
+            verify=lambda *_a, **_kw: add() or {"status": "VERIFIED"},
+        )(item)
+        return verdict
+
+    result, receipt = run_flow(
+        [],
+        task_id="task",
+        planner=Planner(),
+        gate=Gate(),
+        planner_settings=SETTINGS,
+        gate_settings=SETTINGS,
+        runner=lambda mode, _args, **_kwargs: r0 if mode == "run" else r1,
+        core_verdict=judge_with_flow_window,
+    )
+    assert result is r0
+    assert receipt["reason"] == "PAUSE_R1_NOT_VERIFIED"
+
+
+@pytest.mark.parametrize("status", ["VERIFIED", "FAILED"])
+def test_flow_records_stable_core_tree_and_selects_only_verified(
+    tmp_path: Path, monkeypatch: Any, status: str
+) -> None:
+    """Stable excluded empty directories preserve Core's verdict and bound digest."""
+    from experimental.pause.guard import TreeGuard
+
+    r0, r1, checkout, base = _excluded_flow_checkout(tmp_path, _scenario(tmp_path)[0])
+    (checkout / "D" / "E").mkdir()
+    (checkout / "D" / "E" / "tracked").write_text("nested\n")
+    _git(checkout, "add", "D/E/tracked")
+    _git(checkout, "commit", "-qm", "nested directory base")
+    base = subprocess.check_output(
+        ["git", "-C", str(checkout), "rev-parse", "HEAD"], text=True
+    ).strip()
+    (checkout / "D" / "E" / "tracked").unlink()
+    r0 = replace(r0, record={**(r0.record or {}), "base_sha": base})
+    r1 = replace(r1, base_sha=base)
+    entry = TreeGuard(checkout).digest()
+    monkeypatch.setattr("experimental.pause.flow._scope_ok", lambda *_args: True)
+    result, receipt = run_flow(
+        [],
+        task_id="task",
+        planner=Planner(),
+        gate=Gate(),
+        planner_settings=SETTINGS,
+        gate_settings=SETTINGS,
+        runner=lambda mode, _args, **_kwargs: r0 if mode == "run" else r1,
+        core_verdict=CoreJudge(
+            tmp_path / "state", (), verify=lambda *_a, **_kw: {"status": status}
+        ),
+    )
+    assert receipt["core_tree_sha256"] == entry
+    assert receipt["core_verdict"] == status
+    assert result is (r1 if status == "VERIFIED" else r0)

@@ -120,10 +120,11 @@ class TreeGuard:
                     f"the checkout exceeds {self.max_files} entries or {self.max_bytes} bytes"
                 )
             mode = stat.S_IMODE(st.st_mode)
-            excluded = (exclude_git and (rel == ".git" or rel.startswith(".git/"))) or any(
-                rel == path or rel.startswith(path + "/") for path in exclude_paths
-            )
+            excluded_path = any(rel == path or rel.startswith(path + "/") for path in exclude_paths)
+            excluded = (exclude_git and (rel == ".git" or rel.startswith(".git/"))) or excluded_path
             if stat.S_ISDIR(st.st_mode):
+                if excluded_path and rel not in exclude_paths:
+                    raise ValueError(f"excluded directory contains an unlisted directory: {rel}")
                 self._add(full, rel, "d", mode, b"", meta)
                 if not excluded:
                     self._add(filtered, rel, "d", mode, b"", meta)
@@ -141,11 +142,15 @@ class TreeGuard:
                 finally:
                     os.close(sub)
             elif stat.S_ISLNK(st.st_mode):
+                if excluded_path:
+                    raise ValueError(f"excluded directory contains an entry: {rel}")
                 target = os.fsencode(os.readlink(name, dir_fd=fd))
                 self._add(full, rel, "l", 0, target, meta)
                 if not excluded:
                     self._add(filtered, rel, "l", 0, target, meta)
             elif stat.S_ISREG(st.st_mode):
+                if excluded_path:
+                    raise ValueError(f"excluded directory contains an entry: {rel}")
                 if st.st_nlink != 1:
                     raise GuardUnavailable(f"{rel!r} has {st.st_nlink} hard links")
                 content = self._content(fd, name, st)
@@ -153,6 +158,8 @@ class TreeGuard:
                 if not excluded:
                     self._add(filtered, rel, "f", mode, content, meta)
             else:
+                if excluded_path:
+                    raise ValueError(f"excluded directory contains an entry: {rel}")
                 self._add(full, rel, "o", mode, b"", meta)
                 if not excluded:
                     self._add(filtered, rel, "o", mode, b"", meta)
