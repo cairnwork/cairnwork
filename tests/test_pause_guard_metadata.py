@@ -129,7 +129,7 @@ def test_the_ignored_flags_do_not_change_the_key(tmp_path):
 def test_bind_times_binds_mtime_and_ctime_separately(tmp_path):
     guard = TreeGuard(tmp_path, bind_times=True)
 
-    def at(mtime, ctime):
+    def at(mtime, ctime) -> Any:  # a stand-in for os.stat_result, which cannot be built
         return SimpleNamespace(st_mtime_ns=mtime, st_ctime_ns=ctime)
 
     base = guard._times(at(10, 20))
