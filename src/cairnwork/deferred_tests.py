@@ -375,7 +375,12 @@ def not_run(runs, targets) -> list[str]:
     ran = {f for r in runs for n in r.outcomes for f in (_without_case(n), _without_case(n, True))}
     missing = set(targets) - ran
     if runs and all(
-        r.collection_finished and not r.collect_errors and not r.collect_skipped for r in runs
+        r.collection_finished
+        and r.collected
+        and not r.collect_errors
+        and not r.collect_skipped
+        and set(r.outcomes) <= set(r.collected)  # a record that disagrees with itself: keep all
+        for r in runs
     ):
         collected = {_without_case(n) for r in runs for n in r.collected}
         missing = {

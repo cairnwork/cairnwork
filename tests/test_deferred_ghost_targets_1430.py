@@ -82,7 +82,9 @@ def _real_pytest_collection(tmp_path):
         timeout=120,
         check=False,
     ).stdout
+    assert out.strip(), "pytest collected nothing"
     collected = [line for line in out.splitlines() if "::" in line]
+    assert "test_x.py::TestUnit::test_new" in collected
     targets = {f"test_x.py::{n}" for n in test_functions(ast.parse(_FILE))[0]}
     return collected, targets
 
@@ -100,3 +102,14 @@ def test_the_same_fixture_still_refuses_a_real_test_that_did_not_run(tmp_path):
     ran = [n for n in collected if not n.endswith("TestUnit::test_new")]
     run = _run(collected=collected, outcomes=dict.fromkeys(ran, "passed"))
     assert not_run([run], targets) == ["test_x.py::TestUnit::test_new"]
+
+
+def test_empty_collection_keeps_every_target():
+    target = "tests/test_unit.py::EndToEnd::test_x"
+    assert not_run([_run(collected=[])], {target}) == [target]
+
+
+def test_outcomes_outside_the_collected_record_keep_ghost_targets():
+    ghost = "tests/test_unit.py::EndToEnd::test_x"
+    run = _run(collected=["a.py::t"], outcomes={"tests/test_unit.py::Unit::test_x": "passed"})
+    assert not_run([run], {ghost}) == [ghost]
