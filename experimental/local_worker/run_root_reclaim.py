@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import math
 import os
 import shutil
@@ -82,6 +83,48 @@ def _tree_size(fd: int) -> int:
     return total
 
 
+def _plan(root: Path, cutoff: float, now: float) -> RootResult | list[tuple[str, int]]:
+    """Open the root, decide skip or the rebuildable dirs (name, size); the fd is closed on return
+    so the later in-use probe cannot see this process's own handle."""
+    try:
+        fd = os.open(root, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY)
+    except OSError:
+        return RootResult(root.name, "unavailable")
+    try:
+        with os.scandir(fd) as entries:
+            names = [entry.name for entry in entries]
+        if CLAIM in names:
+            return RootResult(root.name, "claimed")
+        if now - _latest_mtime(fd) < cutoff:
+            return RootResult(root.name, "recent")
+        candidates: list[tuple[str, int]] = []
+        for name in names:
+            if name not in RECLAIM_DIRS:
+                continue
+            if not stat.S_ISDIR(os.stat(name, dir_fd=fd, follow_symlinks=False).st_mode):
+                continue
+            child = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY, dir_fd=fd)
+            try:
+                candidates.append((name, _tree_size(child)))
+            finally:
+                os.close(child)
+        return candidates
+    finally:
+        os.close(fd)
+
+
+def _delete(root: Path, candidates: list[tuple[str, int]]) -> int:
+    fd = os.open(root, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY)
+    done = 0
+    try:
+        for name, size in candidates:
+            shutil.rmtree(name, dir_fd=fd)  # never follows a link
+            done += size
+    finally:
+        os.close(fd)
+    return done
+
+
 def _reclaim_root(
     root: Path,
     runs: Path,
@@ -93,46 +136,20 @@ def _reclaim_root(
     if not eligible(root, runs):
         return RootResult(root.name, "ineligible")
     try:
-        fd = os.open(root, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY)
-    except OSError:
-        return RootResult(root.name, "unavailable")
-    reclaimed = 0
-    try:
-        with os.scandir(fd) as entries:
-            names = [entry.name for entry in entries]
-        if CLAIM in names:
-            return RootResult(root.name, "claimed")
-        if now - _latest_mtime(fd) < cutoff:
-            return RootResult(root.name, "recent")
+        plan = _plan(root, cutoff, now)
+        if isinstance(plan, RootResult):
+            return plan
+        if not plan:  # nothing rebuildable left: no lsof, no work
+            return RootResult(root.name, "nothing")
         if in_use(root):
             return RootResult(root.name, "in_use")
-        candidates: list[tuple[str, int]] = []
-        for name in names:
-            if name not in RECLAIM_DIRS:
-                continue
-            info = os.stat(name, dir_fd=fd, follow_symlinks=False)
-            if not stat.S_ISDIR(info.st_mode):
-                continue
-            child = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY, dir_fd=fd)
-            try:
-                candidates.append((name, _tree_size(child)))
-            finally:
-                os.close(child)
         if dry_run:
-            return RootResult(root.name, "would_reclaim", sum(size for _, size in candidates))
-        for name, size in candidates:
-            shutil.rmtree(name, dir_fd=fd)
-            reclaimed += size
-        return RootResult(root.name, "reclaimed", reclaimed)
+            return RootResult(root.name, "would_reclaim", sum(size for _, size in plan))
+        return RootResult(root.name, "reclaimed", _delete(root, plan))
     except OSError:
-        return RootResult(root.name, "error", reclaimed)
+        return RootResult(root.name, "error")
     except Exception as exc:  # noqa: BLE001  injected probes must fail closed per root
-        return RootResult(root.name, f"error ({type(exc).__name__})", reclaimed)
-    finally:
-        try:
-            os.close(fd)
-        except OSError:
-            pass  # Closing a maintenance fd must not escape into the worker episode.
+        return RootResult(root.name, f"error ({type(exc).__name__})")
 
 
 def reclaim_stale(
@@ -174,11 +191,10 @@ def add_cli_option(parser: object) -> None:
 
 
 def reclaim_for_episode(runs: Path, hours: float, root: Path) -> None:
-    try:
+    # Best-effort: reclamation can never change this episode's outcome.
+    with contextlib.suppress(Exception):
         report = reclaim_stale(runs, hours, exclude=root)
         print(f"LOCAL_WORKER_RECLAIM {report.reclaimed} {report.bytes_reclaimed}", file=sys.stderr)
-    except (OSError, ValueError):
-        pass  # Reclamation is best-effort; it cannot change this episode's outcome.
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -191,7 +207,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     report = reclaim_stale(args.runs, args.older_than_hours, dry_run=args.dry_run)
     for row in report.roots:
-        print(f"{row.root} {row.outcome} {row.bytes_reclaimed}")
+        print(f"{row.root!r} {row.outcome} {row.bytes_reclaimed}")
     return 0
 
 
