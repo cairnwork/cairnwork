@@ -148,7 +148,7 @@ class TreeGuard:
             elif stat.S_ISLNK(st.st_mode):
                 if excluded_path:
                     raise ValueError(f"excluded directory contains an entry: {rel}")
-                if outside(self.root / rel, self.root):
+                if self._leaves(rel):
                     raise GuardUnavailable(f"{rel!r} points outside the checkout")
                 target = os.fsencode(os.readlink(name, dir_fd=fd))
                 times = self._times(st)
@@ -177,6 +177,11 @@ class TreeGuard:
         h.update(b"%s\0%s\0%o\0%s\0%s\0" % (os.fsencode(rel), kind.encode(), mode, ref, meta.key()))
         if times:
             h.update(times + b"\0")
+
+    def _leaves(self, rel: str) -> bool:
+        """True when a symlink target is not inside the checkout (an ancestor counts as outside)."""
+        top = os.path.realpath(self.root)
+        return os.path.commonpath([os.path.realpath(self.root / rel), top]) != top
 
     def _times(self, st: os.stat_result) -> bytes:
         return b"%d:%d" % (st.st_mtime_ns, st.st_ctime_ns) if self.bind_times else b""
@@ -208,7 +213,7 @@ class TreeGuard:
                 finally:
                     os.close(sub)
             elif stat.S_ISLNK(st.st_mode):
-                if outside(self.root / rel, self.root):
+                if self._leaves(rel):
                     raise GuardUnavailable(f"{rel!r} points outside the checkout")
                 self._add(
                     h, rel, "l", 0, os.fsencode(os.readlink(name, dir_fd=fd)), meta, self._times(st)

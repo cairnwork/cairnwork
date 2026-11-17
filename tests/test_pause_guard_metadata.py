@@ -1,8 +1,10 @@
 import os
 import stat
+from types import SimpleNamespace
 
 import pytest
 
+from experimental.pause import guard_meta
 from experimental.pause.guard import TreeGuard
 from experimental.pause.interfaces import GuardUnavailable
 
@@ -83,3 +85,41 @@ def test_a_special_file_in_the_pair_walk_also_stops(tmp_path):
     os.mkfifo(checkout / "pipe")
     with pytest.raises(GuardUnavailable, match="is not a file, directory or symlink"):
         _pair(checkout)
+
+
+def test_a_symlink_out_of_the_checkout_stops_the_pair_walk_too(tmp_path):
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    (checkout / "link").symlink_to(tmp_path / "outside")
+    with pytest.raises(GuardUnavailable, match="points outside the checkout"):
+        _pair(checkout)
+
+
+def test_a_symlink_to_an_ancestor_of_the_checkout_stops_the_guard(tmp_path):
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    (checkout / "up").symlink_to("..")
+    with pytest.raises(GuardUnavailable, match="points outside the checkout"):
+        TreeGuard(checkout).digest()
+    with pytest.raises(GuardUnavailable, match="points outside the checkout"):
+        _pair(checkout)
+
+
+def test_the_ignored_flags_do_not_change_the_key(tmp_path):
+    path = tmp_path / "file"
+    path.write_text("x")
+    real = os.stat(path, follow_symlinks=False)
+
+    def with_flags(flags):
+        return SimpleNamespace(
+            st_uid=real.st_uid,
+            st_gid=real.st_gid,
+            st_dev=real.st_dev,
+            st_ino=real.st_ino,
+            st_flags=flags,
+        )
+
+    plain = guard_meta.read(os.fsencode(path), with_flags(0)).key()
+    system_managed = 0x20 | 0x40 | 0x40000000  # UF_COMPRESSED, UF_TRACKED, SF_DATALESS
+    assert guard_meta.read(os.fsencode(path), with_flags(system_managed)).key() == plain
+    assert guard_meta.read(os.fsencode(path), with_flags(stat.UF_HIDDEN)).key() != plain
