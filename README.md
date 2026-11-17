@@ -64,7 +64,7 @@ cairnwork demo        # 五分鐘示範：隔離 clone、範圍檢查、驗證�
 
 ## 目前狀態：worker 停用
 
-核心唯一的 worker 是 Agy 帳號池，2026-10-30 起停用。目前實際使用的只有 `cairnwork-verify` 這條驗收路徑；`cairnwork run`、Issue intake、route 的 worker 階段暫時無法跑完。另由誰來當 worker，另行決定。現行部署版本是 `1662f01`（2026-10-31 部署）。演練的現況見 [docs/DRILLS.md](docs/DRILLS.md)：用到真 agent worker 的演練標為「未重跑」，不需要 worker 的演練預計在現行 main 上重跑。
+核心唯一的 worker 是 Agy 帳號池，2026-10-30 起停用。目前實際使用的只有 `cairnwork-verify` 這條驗收路徑；`cairnwork run`、Issue intake、route 的 worker 階段暫時無法跑完。另由誰來當 worker，另行決定。現行部署版本是 `763ccd0`（2026-11-17 21:42 部署，前一版是 2026-11-03 起的 `bce3495`；先前這裡寫的 `1662f01` 已過期）。演練的現況見 [docs/DRILLS.md](docs/DRILLS.md)：用到真 agent worker 的演練標為「未重跑」，不需要 worker 的演練已在部署版 `763ccd0` 上重跑（2026-11-18）。
 
 ## 硬性限制（CI 強制）
 

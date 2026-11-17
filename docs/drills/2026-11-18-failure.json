@@ -1,0 +1,17 @@
+{
+  "command": "CAIRNWORK_REQUIRE_SANDBOX=1 nice -n 19 uv run pytest -q tests/test_pipeline.py",
+  "date": "2026-11-18",
+  "deployed_sha": "763ccd0e",
+  "drill": "failure",
+  "duration_s": "63.49",
+  "failed": 0,
+  "host": "mini; deploy ~/.local/share/cairnwork/deploy/current -> deploy/763ccd0e… (flipped 2026-11-17 21:42 +0800 from bce34955)",
+  "main_sha": "763ccd0e",
+  "note": "pytest from a checkout at the deployed SHA (the deploy venv is built --no-dev and has no pytest); src/ is identical to the deployed tree",
+  "passed": 30,
+  "result": "PASS",
+  "scope": "automated tests only; the real-agent part is NOT_RUN (worker paused since 10/30)",
+  "skipped": 0,
+  "verifier_account_used": false,
+  "worker": "none (test-internal fixed scripts)"
+}

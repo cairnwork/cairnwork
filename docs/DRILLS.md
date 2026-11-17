@@ -21,7 +21,7 @@ blackbox 路徑的候選樹與一般 verify 相同（宣告 `module: calc`，che
 - 核心唯一的 worker 是 Agy 帳號池，2026-10-30 起停用。目前實際使用的只有 `cairnwork-verify` 這條驗收路徑。
 - 因此 `cairnwork run`、Issue intake、route 的 worker 階段暫時無法跑完。
 - 另由誰來當 worker，另行決定。
-- 現行部署版本是 `1662f01`（2026-10-31 部署）。
+- 現行部署版本是 `763ccd0`（`763ccd0e0dfb9592ff1a24f60b708f837e43d912`，2026-11-17 21:42 部署，Mac mini `~/.local/share/cairnwork/deploy/current`）。前一版是 2026-11-03 起的 `bce3495`，先前這裡寫的 `1662f01` 已過期。回退＝把 `current` 切回 `deploy/bce34955…`（兩版的 notary schema 都是 3，不需遷移）。
 - 2026-11-01 在 main `c513c4e`（`c513c4ed3bf2411776872f02fffebc2089dc67a1`）上重跑了不需要 worker 的部分：驗證帳號、重啟與失敗的自動測試、route 的 Cairnwork 端與回退。全部照預期，見下方「2026-11-01 重跑」。這是 main，不是部署版本，所以不代表 `1662f01` 的行為。
 - 凡是用到真 agent worker 的演練，標「未重跑：worker 停用（10/30 起）」，那部分仍是 2026-10-20 在更早版本上的舊紀錄。
 
@@ -32,6 +32,17 @@ blackbox 路徑的候選樹與一般 verify 相同（宣告 `module: calc`，che
 | 重啟 | 自動測試：**通過**（2026-11-01，`c513c4e`，26 passed）。用真的 kill -9 殺測試自己生的子程序，涵蓋 DISPATCHED、WORKER_STARTED、CANDIDATE、TEST_SOURCE、VERIFYING、NOTARIZING、FINISHED 七個時間點，以及孤兒程序、鎖衝突、重複執行恢復。真 agent 的部分**未重跑：worker 停用（10/30 起）**，仍是 2026-10-20 的舊紀錄 | `docs/drills/2026-11-01-restart.json`、`docs/drills/2026-10-20-restart.json` |
 | 驗證帳號 | **通過**（2026-11-01，`c513c4e`）：`cairnwork-verify` 以 `cairnwork-verifier` 帳號執行，正確候選 VERIFIED 兩次、已知錯誤的候選 FAILED_VERIFICATION 一次；執行中的 checkout 檔案與 pytest 程序都屬於 `cairnwork-verifier`，結束後帳號程序數為 0 | `docs/drills/2026-11-01-verifier-account.json` |
 | 回退 | **未驗收（跨系統）**。Cairnwork 端在 2026-11-01、`c513c4e` 重跑通過：worker 換成固定腳本（不呼叫 agy 或模型），drain 後新任務被拒（`NOT_ACCEPTING`）、重送拿回同一個任務，任務在 Cairnwork 內完成且沒有重跑；route 自動測試 15 passed。Gateway 轉送自 2026-10-21 起依維護者決定停車（`docs/GATEWAY_ROUTE.md`），`off` 只在環境變數層確認，沒有一筆線上任務回到 SelfHosted 完成，所以跨系統回退沒有驗收證據。用真 agy 的 `scripts/drill_rollback.py` **未重跑：worker 停用（10/30 起）**。重開 route 前要照 #39 在當前版本重做三個見證 | `docs/drills/2026-11-01-rollback-cairnwork-side.json`、`docs/drills/2026-10-20-route.json`、`docs/drills/2026-10-20-rollback-cairnwork-side.json`（都只有 Cairnwork 端） |
+
+## 2026-11-18 部署版重跑（deploy `763ccd0`，不經真 worker；Refs #520）
+
+2026-11-17 21:42 把正式部署從 `bce3495` 換到 main `763ccd0`（`git archive` 加 `uv sync --frozen --no-dev --no-editable`，切換前 890 個 state 的 `in-flight` 都是 0，切換後 verify、attest、issues、route 四支執行檔自檢 OK）。以下在這個部署版上重跑。
+
+| 演練 | 結果 | 說明 | 紀錄 |
+|---|---|---|---|
+| 驗證帳號 | **沿用 2026-11-17 紀錄** | `cairnwork-verifier` 帳號當時被 PAUSE 正式槽占用，layer1 決定不插隊。`89116e46..763ccd0` 只改了 `experimental/`、`tests/`、`docs/`，`src/`、`pyproject.toml`、`uv.lock` 完全相同，所以 11/17 在 `89116e46` 的帳號模式結果（正確 VERIFIED、已知錯誤 FAILED、正確再 VERIFIED）適用於部署版。 | `docs/drills/2026-11-17-verifier-account.json` |
+| 重啟 | **PASS**（自動測試） | `tests/test_recovery.py` 26 passed、0 failed、0 skipped。部署 venv 不含 pytest，所以在同一個 SHA 的 checkout 跑。真 agent 部分未重跑：worker 停用（10/30 起）。 | `docs/drills/2026-11-18-restart.json` |
+| 失敗 | **PASS**（自動測試） | `tests/test_pipeline.py` 30 passed、0 failed、0 skipped。 | `docs/drills/2026-11-18-failure.json` |
+| route 的 Cairnwork 端與回退 | **PASS**（Cairnwork 端） | `scripts/drill_rollback.py` 用部署 venv 的 python 執行，所以每個 `cairnwork-route` 呼叫都跑部署版程式。worker 是 PATH 上的固定腳本（不是真 agy，無模型）；驗證用本機模式，未用驗證帳號。A 為 COMPLETED、Core VERIFIED（task `task-3f2f41e20b2b442597e0651a8afe13ee`、attempt `abaa09cc0ed0290dd`）。第一次執行沒設 `verifier_python`，verifier 落到沒有 pytest 的部署 venv，A 判 FAILED（route 各步仍照預期）；這是演練設定缺口，補上 `verifier_python` 後重跑即為本筆。route 自動測試 16 passed。跨系統回退仍未驗收（Gateway 轉送停車）。 | `docs/drills/2026-11-18-rollback-cairnwork-side.json` |
 
 ## 2026-11-17 重跑（main `89116e46`，不經真 worker；Refs #520）
 
