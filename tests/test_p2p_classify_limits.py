@@ -51,7 +51,9 @@ def test_same_child_finishes_within_limit(monkeypatch):
     code = 'import time; time.sleep(.02); print(\'{"removed":[],"dropped":["t.py::test_a"]}\')'
     monkeypatch.setattr(p2p_collect, "_classify_argv", lambda: _stub(code))
     monkeypatch.setattr(p2p_collect, "CLASSIFY_TIMEOUT_SECONDS", 1)
-    side = p2p_collect.classify({"t.py::test_a"}, set(), set(), lambda _: "", lambda _: "", exposed=())
+    side = p2p_collect.classify(
+        {"t.py::test_a"}, set(), set(), lambda _: "", lambda _: "", exposed=()
+    )
     assert side.removed == set() and side.dropped == {"t.py::test_a"}
 
 
@@ -119,7 +121,9 @@ def test_child_failure_modes_are_analysis_limit(monkeypatch, code):
     monkeypatch.setattr(p2p_collect, "_classify_argv", lambda: _stub(code))
     monkeypatch.setattr(p2p_collect, "CLASSIFY_TIMEOUT_SECONDS", 20)
     with pytest.raises(Rejected) as caught:
-        p2p_collect.classify({"t.py::a", "t.py::b"}, set(), set(), lambda _: "", lambda _: "", exposed=())
+        p2p_collect.classify(
+            {"t.py::a", "t.py::b"}, set(), set(), lambda _: "", lambda _: "", exposed=()
+        )
     assert caught.value.code == "TEST_COMMIT_ANALYSIS_LIMIT"
 
 

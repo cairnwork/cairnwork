@@ -5,7 +5,9 @@ from cairnwork.p2p_collect import classify
 
 def _classify_a(source: str):
     base = "class A:\n    def test_x(self): pass\n    class I:\n        def test_x(self): pass\n"
-    return classify({"t.py::A::test_x"}, set(), {"t.py"}, lambda path: source, lambda path: base, exposed=())
+    return classify(
+        {"t.py::A::test_x"}, set(), {"t.py"}, lambda path: source, lambda path: base, exposed=()
+    )
 
 
 def test_outer_class_test_is_removed_when_only_nested_class_keeps_name():

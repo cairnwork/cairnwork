@@ -10,7 +10,9 @@ from cairnwork.p2p_collect import classify
 
 
 def _split(base, test, base_ids, test_ids):
-    side = classify(set(base_ids), set(test_ids), {"t.py"}, lambda p: test, lambda p: base, exposed=())
+    side = classify(
+        set(base_ids), set(test_ids), {"t.py"}, lambda p: test, lambda p: base, exposed=()
+    )
     return side.removed, side.dropped
 
 

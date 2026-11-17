@@ -19,7 +19,9 @@ BASE_A = "class TestA:\n    def test_x(self):\n        assert True\n" + KEEP
 
 
 def _split(base: str, test: str, base_ids, test_ids):
-    side = classify(set(base_ids), set(test_ids), {"t.py"}, lambda p: test, lambda p: base, exposed=())
+    side = classify(
+        set(base_ids), set(test_ids), {"t.py"}, lambda p: test, lambda p: base, exposed=()
+    )
     return side.removed, side.dropped
 
 

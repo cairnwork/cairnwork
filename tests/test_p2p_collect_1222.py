@@ -82,7 +82,9 @@ def test_methods_of_parametrized_class_do_not_collide():
 
 @pytest.mark.parametrize("nodeid", ["t.py"])
 def test_malformed_node_id_is_dropped_without_raising(nodeid):
-    side = classify({nodeid}, set(), {nodeid}, lambda _: "", lambda _: "def test_y(): pass\n", exposed=())
+    side = classify(
+        {nodeid}, set(), {nodeid}, lambda _: "", lambda _: "def test_y(): pass\n", exposed=()
+    )
     assert side.removed == set()
     assert side.dropped == {nodeid}
 
