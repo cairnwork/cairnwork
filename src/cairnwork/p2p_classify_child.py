@@ -23,7 +23,9 @@ from cairnwork.p2p_function import _function
 def classify_payload(data: dict) -> dict:
     base_ids, test_ids, edited = map(set, (data["base_ids"], data["test_ids"], data["edited"]))
     exposed = data.get("exposed")
-    if not isinstance(exposed, list) or any(not isinstance(item, str) for item in exposed):
+    if not isinstance(exposed, list) or any(
+        not isinstance(item, str) or item.count("::") < 2 or "[" in item for item in exposed
+    ):
         exposed = None
     texts, bases, test_trees, removed, dropped = {}, {}, {}, set(), set()
     collected_funcs = {_function(n) for n in test_ids}

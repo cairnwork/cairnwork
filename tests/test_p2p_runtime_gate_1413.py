@@ -162,5 +162,38 @@ def test_real_collect_only_fact_alone_turns_removed_into_dropped(tmp_path, shape
     node = f"{TARGET}::test_x" if top else f"{TARGET}::TestA::test_x"
     test_ids = set(record["collected"])
     args = ({node, *test_ids}, test_ids, {TARGET}, lambda _: test, lambda _: base)
-    print("AST_ALONE", shape, top, node in classify(*args, exposed=()).removed)
+    assert (node in classify(*args, exposed=()).removed) == (shape in MISSED_BY_AST)
     assert classify(*args, exposed=tuple(record["uncollected_exposed"])).dropped == {node}
+
+
+BOUNDARY = ({"a.py::test_x"}, set(), {"a.py"}, lambda _: "", lambda _: "def test_x(): pass\n")
+
+
+@pytest.mark.parametrize(
+    "exposed",
+    ["a.py::H::test_x", ("a.py::H::test_x[1]",), (4,), ("a.py::test_x",), [None], {"x": 1}],
+    ids=["str", "param", "int", "two-part", "none-item", "dict"],
+)
+def test_malformed_exposed_at_the_classify_boundary_keeps_the_id_dropped(exposed):
+    assert classify(*BOUNDARY, exposed=exposed).dropped == {"a.py::test_x"}
+
+
+@pytest.mark.parametrize(
+    "exposed, verdict",
+    [
+        ((), "removed"),
+        (("a.py::Helper::test_x",), "dropped"),
+        (("b.py::Helper::test_x",), "removed"),
+    ],
+    ids=["empty", "same-file", "other-file"],
+)
+def test_well_formed_exposed_at_the_classify_boundary(exposed, verdict):
+    assert getattr(classify(*BOUNDARY, exposed=exposed), verdict) == {"a.py::test_x"}
+
+
+@pytest.mark.parametrize("item", ["a.py::H::test_x[1]", "a.py::test_x"], ids=["param", "two-part"])
+def test_child_treats_a_malformed_exposed_entry_as_no_fact(item):
+    sources = {"test": {"a.py": ""}, "base": {"a.py": "def test_x(): pass"}}
+    payload = {"base_ids": ["a.py::test_x"], "test_ids": [], "edited": ["a.py"]}
+    payload |= {"sources": sources, "exposed": [item]}
+    assert classify_payload(payload)["dropped"] == ["a.py::test_x"]

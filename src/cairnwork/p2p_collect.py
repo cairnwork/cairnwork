@@ -34,7 +34,7 @@ from pathlib import Path
 
 from cairnwork import p2p_classify_child as _classify_child
 from cairnwork.child_run import run_child
-from cairnwork.collect_reader import read_collected
+from cairnwork.collect_reader import _valid_exposed_id, read_collected
 from cairnwork.conftest_check import conftest_of
 from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRejected
 from cairnwork.gitcmd import GitCommandError, run_git
@@ -136,11 +136,18 @@ def classify(base_ids, test_ids, edited, source, base_source, *, exposed=None) -
         "test": {path: source(path) for path in sorted(needed)},
         "base": {path: base_source(path) for path in sorted(needed)},
     }
-    runtime_names = (
-        None if exposed is None else sorted(entry for entry in exposed if _file(entry) in edited)
-    )
+    runtime_names = _edited_exposure(exposed, edited)
     removed, dropped = _run_classification(base_ids, test_ids, edited, sources, runtime_names)
     return CollectedSide(base_ids, test_ids, removed, dropped)
+
+
+def _edited_exposure(exposed, edited):
+    """Entries of a well-formed collect-only fact in edited files; anything else is no fact."""
+    if not isinstance(exposed, (tuple, list)) or not all(
+        isinstance(entry, str) and _valid_exposed_id(entry) for entry in exposed
+    ):
+        return None
+    return sorted(entry for entry in exposed if _file(entry) in edited)
 
 
 def _run_classification(base_ids, test_ids, edited, sources, exposed=None):
