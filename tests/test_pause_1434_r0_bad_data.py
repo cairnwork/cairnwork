@@ -72,7 +72,7 @@ def test_r0_non_json_episode_id_keeps_valid_fallback_receipt(tmp_path: Path) -> 
     _assert_r0_fallback(*_run(r0, r1))
 
 
-def test_r0_non_json_episode_id_cli_writes_receipt(tmp_path: Path, monkeypatch: Any) -> None:
+def test_r0_non_json_episode_id_cli_writes_receipt(tmp_path: Path) -> None:
     r0, r1 = _case(tmp_path)
     r0 = replace(r0, episode_id=_NotJson())
     _transcript(r0.transcript, [{"index": 2, "assistant_msg_index": "bad"}])
