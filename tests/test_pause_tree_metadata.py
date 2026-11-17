@@ -183,13 +183,16 @@ def test_unrepresented_tree_state_keeps_r0(tmp_path: Path, mutation: str) -> Non
     assert rec["reason"] == "PAUSE_R1_NOT_VERIFIED"
 
 
-@pytest.mark.parametrize(
-    "exception", [SystemExit(3), KeyboardInterrupt()], ids=["system-exit", "keyboard-interrupt"]
-)
-def test_judge_baseexception_keeps_r0(tmp_path: Path, exception: BaseException) -> None:
-    result, rec = _flow(tmp_path, "edit", exception)
+def test_judge_systemexit_keeps_r0(tmp_path: Path) -> None:
+    result, rec = _flow(tmp_path, "edit", SystemExit(3))
     assert result.code == 7 and rec["intervened"] is False
     assert rec["reason"] == "PAUSE_R1_NOT_VERIFIED"
+
+
+def test_judge_keyboardinterrupt_propagates(tmp_path: Path) -> None:
+    # #1417: Ctrl-C must propagate, not be turned into PAUSE_R1_NOT_VERIFIED.
+    with pytest.raises(KeyboardInterrupt):
+        _flow(tmp_path, "edit", KeyboardInterrupt())
 
 
 @pytest.mark.parametrize(
