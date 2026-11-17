@@ -1,94 +1,98 @@
-"""Standalone source for the pytest plugin's runtime exposed-test fact.
-
-This text is concatenated into the materialised plugin. Keep it self-contained: the verifier
-checkout may not be importable from the plugin's read-only directory.
-"""
+"""Standalone source for the pytest plugin's optional exposed-test fact."""
 
 EXPOSED_SOURCE = r"""\
 import fnmatch
-import sys
-from pathlib import Path
 from types import ModuleType
 
-
-def _exposed_matches(option, name):
-    return any(name.startswith(part) or ("*" in part or "?" in part or "[" in part)
-               and fnmatch.fnmatch(name, part) for part in option)
-
-
-def _exposed_module_classes(value, found, seen):
-    identity = id(value)
-    if identity in seen:
-        return
-    seen.add(identity)
-    if isinstance(value, type):
-        found.add(value)
-    elif isinstance(value, dict):
-        for item in value.values():
-            _exposed_module_classes(item, found, seen)
-    elif isinstance(value, (list, tuple, set, frozenset)):
-        for item in value:
-            _exposed_module_classes(item, found, seen)
+_TYPE_DICT = type.__dict__["__dict__"]
+_TYPE_MRO = type.__dict__["__mro__"]
+_TYPE_QUALNAME = type.__dict__["__qualname__"]
+_TYPE_MODULE = type.__dict__["__module__"]
+_TYPE_SUBCLASSES = type.__dict__["__subclasses__"]
+_MAX_CLASSES = 200000
+_MAX_PAIRS = 2000000
+_MAX_REPORT_BYTES = 0
+_EXPOSED_COUNT = 2000
+_EXPOSED_NAME = 512
+_EXPOSED_TOTAL = 512 * 1024
+_COLLECTORS = []
 
 
-def _exposed_live_classes():
-    pending, seen, found = list(type.__subclasses__(object)), set(), set()
+def pytest_collectstart(collector):
+    import pytest
+
+    if isinstance(collector, pytest.Module):
+        _COLLECTORS.append(collector)
+
+
+def _target_modules(session):
+    modules = {}
+    for collector in _COLLECTORS:
+        module = collector.__dict__.get("_obj")
+        if type(module) is not ModuleType:
+            continue
+        name = ModuleType.__dict__["__dict__"].__get__(module, ModuleType).get("__name__")
+        if type(name) is str:
+            modules[name] = collector.nodeid.partition("::")[0]
+    return modules
+
+
+def _live_classes():
+    pending, found = [object], {}
     while pending:
         cls = pending.pop()
-        if cls in seen:
+        if id(cls) in found:
             continue
-        seen.add(cls)
-        found.add(cls)
-        pending.extend(type.__subclasses__(cls))
-    return found
+        found[id(cls)] = cls
+        if len(found) > _MAX_CLASSES:
+            return None
+        pending.extend(_TYPE_SUBCLASSES(cls))
+    return found.values()
+
+
+def _is_test_name(name, functions):
+    return any(name.startswith(part) or ("*" in part or "?" in part or "[" in part)
+               and fnmatch.fnmatch(name, part) for part in functions)
+
+
+def _without_params(node):
+    path, _, rest = node.partition("::")
+    return f"{path}::{rest.split('[', 1)[0]}"
 
 
 def _exposed_uncollected(session):
-    root = Path(session.config.rootpath).resolve()
-    files = session.config.getini("python_files")
+    if not session.config.option.collectonly:
+        return None
+    modules, classes = _target_modules(session), _live_classes()
+    if classes is None:
+        return None
+    collected = {_without_params(item.nodeid) for item in session.items}
     functions = session.config.getini("python_functions")
-    modules = {}
-    for module in tuple(sys.modules.values()):
-        if not isinstance(module, ModuleType):
-            continue
-        filename = getattr(module, "__file__", None)
-        if not isinstance(filename, str):
-            continue
-        path = Path(filename).resolve()
-        try:
-            relative = path.relative_to(root).as_posix()
-        except ValueError:
-            continue
-        if _exposed_matches(files, path.name):
-            modules[module.__name__] = (module, relative)
-    classes, seen = _exposed_live_classes(), set()
-    for module, _ in modules.values():
-        for value in module.__dict__.values():
-            _exposed_module_classes(value, classes, seen)
-    collected = {node.rsplit("[", 1)[0] if node.endswith("]") and "[" in node else node
-                 for node in (item.nodeid for item in session.items)}
-    result = set()
+    result, pairs, total = set(), 0, 0
     for cls in classes:
-        module = modules.get(getattr(cls, "__module__", ""))
-        if module is None:
+        path = modules.get(_TYPE_MODULE.__get__(cls, type))
+        if path is None:
             continue
-        relative = module[1]
-        qualname = getattr(cls, "__qualname__", None)
-        if not isinstance(qualname, str):
-            continue
-        owner = qualname.replace(".", "::")
-        for name in dir(cls):
-            if not _exposed_matches(functions, name):
-                continue
-            try:
-                value = getattr(cls, name)
-            except Exception:
-                continue
-            if callable(value):
-                node = f"{relative}::{owner}::{name}"
-                if node not in collected:
+        owner = _TYPE_QUALNAME.__get__(cls, type).replace(".", "::")
+        seen = set()
+        for base in _TYPE_MRO.__get__(cls, type):
+            for name, value in _TYPE_DICT.__get__(base, type).items():
+                if type(name) is not str or name in seen:
+                    continue
+                seen.add(name)
+                pairs += 1
+                if pairs > _MAX_PAIRS:
+                    return None
+                if not _is_test_name(name, functions) or not (
+                        callable(value) or issubclass(type(value), (staticmethod, classmethod))):
+                    continue
+                node = f"{path}::{owner}::{name}"
+                if node not in collected and node not in result:
                     result.add(node)
-                    if len(result) > 5000 or len(node) > 1024:
+                    total += len(node)
+                    if len(node) > _EXPOSED_NAME or len(result) > _EXPOSED_COUNT:
+                        return None
+                    if total > _EXPOSED_TOTAL:
                         return None
     return sorted(result)
 
@@ -96,7 +100,7 @@ def _exposed_uncollected(session):
 def _exposed_or_none(session):
     try:
         return _exposed_uncollected(session)
-    except Exception:  # noqa: BLE001 - collection evidence is optional; never disrupt pytest
+    except BaseException:  # optional evidence must not alter the pytest run
         return None
 """
 

@@ -64,9 +64,21 @@ def _exposed(raw, targets: frozenset[str], unknown: frozenset[str]) -> tuple[str
         return None
     if len(set(raw)) != len(raw):
         return None
+    if any(not _valid_exposed_id(item) for item in raw):
+        return None
     if any(_file(item) not in targets or _file(item) in unknown for item in raw):
         return None
     return tuple(sorted(raw))
+
+
+def _valid_exposed_id(item: str) -> bool:
+    parts = item.split("::")
+    return (
+        len(parts) >= 3
+        and all(parts)
+        and "[" not in parts[-1]
+        and all(32 <= ord(char) <= 126 and not char.isspace() for char in item)
+    )
 
 
 def _unclean(run) -> str:

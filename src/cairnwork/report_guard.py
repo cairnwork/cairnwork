@@ -254,8 +254,10 @@ _HANDOVER = _take()
                    "exitstatus": _exit_status(exitstatus), "testsfailed": session.testsfailed}
         if self._uncollected_exposed is not None:
             payload["uncollected_exposed"] = self._uncollected_exposed
-        if self._fd is not None:
+        data = dumps(payload).encode()  # the optional fact never makes the record too big
+        if len(data) > _MAX_REPORT_BYTES and payload.pop("uncollected_exposed", None) is not None:
             data = dumps(payload).encode()
+        if self._fd is not None:
             ftruncate(self._fd, 0)
             written = 0
             while written < len(data):
@@ -288,7 +290,10 @@ def install_plugin(directory: Path, data_paths=()) -> None:
     path = directory / f"{MODULE}.py"
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o640)
     with os.fdopen(fd, "w") as handle:
-        handle.write(HOOK_SOURCE + _PLUGIN_SOURCE + plugin_source(data_paths))
+        source = _PLUGIN_SOURCE.replace(
+            "_MAX_REPORT_BYTES = 0", f"_MAX_REPORT_BYTES = {MAX_REPORT_BYTES}"
+        )
+        handle.write(HOOK_SOURCE + source + plugin_source(data_paths))
     os.chmod(path, 0o640)  # not the umask-masked open() mode: the verifier account reads by group
 
 
