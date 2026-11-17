@@ -16,7 +16,7 @@ from typing import Protocol
 
 from experimental.pause import receipt
 from experimental.pause.guard import TreeGuard
-from experimental.pause.interfaces import CallSettings, Gate, GuardUnavailable, Planner, PlanRequest
+from experimental.pause.interfaces import CallSettings, Gate, Planner, PlanRequest
 from experimental.pause.schema import GATE_VERDICTS, Reason
 from experimental.pause.scope import _scope_ok
 
@@ -119,7 +119,7 @@ def _attempt_resume(
     )
     try:
         reply = planner.plan(request)
-    except (OSError, RuntimeError, TimeoutError):
+    except Exception:  # noqa: BLE001 - R1 failures keep R0.
         return None, info, str(Reason.PAUSE_PLANNER_TIMEOUT)
     if reply is None:
         return None, info, str(Reason.PAUSE_PLANNER_BAD_OUTPUT)
@@ -131,7 +131,7 @@ def _attempt_resume(
     info["plan"] = reply.text
     try:
         checked = gate.review(GateRequest(task_id, digest, reply.text, gate_settings))
-    except (OSError, RuntimeError, TimeoutError):
+    except Exception:  # noqa: BLE001 - R1 failures keep R0.
         return None, info, str(Reason.PAUSE_GATE_BAD_OUTPUT)
     if checked is None:
         return None, info, str(Reason.PAUSE_GATE_BAD_OUTPUT)
@@ -152,7 +152,7 @@ def _attempt_resume(
         return None, info, str(reason)
     try:
         resumed = runner("resume", list(args), parent=r0.transcript, cut=cut, plan=reply.text)
-    except (OSError, RuntimeError, TimeoutError):
+    except Exception:  # noqa: BLE001 - R1 failures keep R0.
         return None, info, str(Reason.PAUSE_WORKER_CRASH)
     reason, verdict, tree = _r1_reason(r0, resumed, parent, core_verdict)
     info.update(core_verdict=verdict, core_tree_sha256=tree)
@@ -255,7 +255,7 @@ def _r1_reason(
             return str(Reason.PAUSE_SCOPE_VIOLATION), None, None
         if not _scope_ok(r1.checkout, scope, base, r1.git_config_sha256):
             return str(Reason.PAUSE_SCOPE_VIOLATION), None, None
-    except (OSError, ValueError, RuntimeError):
+    except Exception:  # noqa: BLE001 - R1 failures keep R0.
         return str(Reason.PAUSE_GUARD_UNAVAILABLE), None, None
     if r1.code != 0:
         return str(Reason.PAUSE_WORKER_CRASH), None, None
@@ -274,7 +274,7 @@ def _r1_reason(
         return str(Reason.PAUSE_R1_NOT_VERIFIED), None, None
     try:
         before = _checkout_digest(r1.checkout)
-    except GuardUnavailable:
+    except Exception:  # noqa: BLE001 - R1 failures keep R0.
         return str(Reason.PAUSE_GUARD_UNAVAILABLE), None, None
     try:
         verdict = core_verdict(r1)
@@ -282,7 +282,7 @@ def _r1_reason(
         return str(Reason.PAUSE_R1_NOT_VERIFIED), None, None
     try:
         after = _checkout_digest(r1.checkout)
-    except GuardUnavailable:
+    except Exception:  # noqa: BLE001 - R1 failures keep R0.
         return str(Reason.PAUSE_GUARD_UNAVAILABLE), None, None
     status = (
         verdict.status if isinstance(verdict, CoreVerdict) and type(verdict.status) is str else None
