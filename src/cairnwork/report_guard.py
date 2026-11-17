@@ -30,22 +30,7 @@ path from the environment, writes a matching record and exits — reading the no
 environment is no harder than reading the old argv path, so this is partial mitigation, not a
 boundary.
 
-Raising the bar (this module, ``report_channel`` and ``tamper_scan``): when the verifier runs as
-the owner (no verifier account) the nonce and the report destination no longer sit in the
-environment. The parent hands the child two inherited file descriptors (``pass_fds``): a pipe
-holding the nonce and an anonymous (already unlinked) file for the record; only their numbers
-travel in ``CAIRNWORK_GUARD_FDS``. The plugin reads the nonce, closes that pipe and removes every
-guard variable from ``os.environ`` when its module is imported, which is before any conftest or
-test module (interpreter start-up hooks such as ``sitecustomize.py`` and ``.pth`` files run
-earlier; they are protected verifier inputs a candidate cannot add). The parent reads the record
-from its own descriptor, so there is no path to guess, replace or plant. Candidate patches are
-also scanned for the APIs such a forgery needs (tamper_scan.py, reason ``VERIFIER_TAMPER_API``).
-Both are a higher hurdle, not a boundary: a process that shares the interpreter can still scan its
-open descriptors or build the API names from strings. Under a verifier account sudo closes
-descriptors above 2, so that path keeps the environment hand-over (path and nonce); the plugin
-removes it from ``os.environ`` once read, but the process's original environment stays readable
-(``/proc/self/environ`` on Linux, ``KERN_PROCARGS2`` for the same uid on macOS), so on that path
-the nonce is still within reach of the code under test.
+The owner-mode hand-over details are documented in ``report_channel``.
 
 The record also carries pytest's own exit status and failure count (#276): a run passes only
 when both are 0 and the process exits with status 0 too, so a process whose exit status
@@ -75,6 +60,7 @@ from cairnwork.confined import MAX_REPORT_BYTES
 from cairnwork.data_exec_hook import plugin_source, refused
 from cairnwork.env_failure import ENV_SOURCE
 from cairnwork.pytest_config import PLUGINS
+from cairnwork.report_guard_exposed import EXPOSED_SOURCE, exposed_values
 from cairnwork.report_guard_parts import PARTS_SOURCE
 from cairnwork.skip_hint import module_names as _module_names
 from cairnwork.verdict_record import Verdict as Verdict
@@ -108,6 +94,7 @@ _PATH_ENV = "CAIRNWORK_VERDICT_PATH"
 _NONCE_ENV = "CAIRNWORK_VERDICT_NONCE"
 '''
     + PARTS_SOURCE
+    + EXPOSED_SOURCE
     + '''
 
 def _take():
@@ -162,6 +149,7 @@ _HANDOVER = _take()
         self._denied = {}  # #962: node -> the denied path, while every failed call has one
         self._setup_denied = {}  # #962 step 2a: node -> [path, origin, line] of a setup denial
         self._finished = False  # #793: collection ran to its end (not stopped part way)
+        self._uncollected_exposed = None
 
     def pytest_collectreport(self, report):
         if report.failed:
@@ -204,6 +192,7 @@ _HANDOVER = _take()
         return result
 
     def pytest_collection_finish(self, session, _original=_original):
+        self._uncollected_exposed = _exposed_or_none(session)
         index = {}
         self._item_marks = _marker_items(session)
         for item in session.items:
@@ -263,6 +252,8 @@ _HANDOVER = _take()
                    "collection_finished": self._finished, "skips": self._skips,
                    # pytest's own status: the parent requires it and the process's to agree
                    "exitstatus": _exit_status(exitstatus), "testsfailed": session.testsfailed}
+        if self._uncollected_exposed is not None:
+            payload["uncollected_exposed"] = self._uncollected_exposed
         if self._fd is not None:
             data = dumps(payload).encode()
             ftruncate(self._fd, 0)
@@ -397,4 +388,5 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
         collected=tuple(collected),
         collection_finished=data.get("collection_finished") is True,
         data_refused=data_refused,
+        uncollected_exposed=exposed_values(data),
     )

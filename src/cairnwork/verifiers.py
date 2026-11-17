@@ -39,14 +39,8 @@ live outside what the child may write. The candidate's code still runs in the
 same process as pytest, so it can forge the report inside the per-run
 directory; a pass is evidence, not proof.
 
-Known gap: Seatbelt does not stop a sandboxed process from reading other
-processes' arguments and environment (sysctl KERN_PROCARGS2) when they run as
-the same user, so tokens in other processes' environments are readable and could
-be printed into the verifier log. A VerifierAccount closes that (another uid);
-any process the account still runs after a verifier is killed and fails the run,
-and none may run before the next one. Without one, a process that leaves the
-run's process group is killed only if it still carries the run token in its
-environment. Either way, never pass raw verifier logs to a worker or a model.
+The Seatbelt process visibility gap is documented in ``report_channel``.
+
 Python runs with ``-P`` so the checkout is never on ``sys.path`` before the real
 pytest (a root ``pytest.py`` cannot replace it). Callers must keep tests,
 pytest configuration and shadowing root-level modules out of the files a candidate
@@ -150,6 +144,7 @@ class VerifierRun:
     data_refused: tuple[str, ...] = ()  # #850: declared data was executed: never a pass
     not_run: tuple[str, ...] = ()  # #962 R0b: named targets or skipped collectors missing
     renamed: tuple[str, ...] = ()  # #962 R0b: items changed after collection
+    uncollected_exposed: tuple[str, ...] | None = None
 
 
 def run_verifiers(
@@ -389,12 +384,12 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
         spec, returncode, timed_out, mutated, log_path, observation, verdict.outcomes,
         survivors=survivors, ran=ran, plain_failure=plain_failure, why=why, forged=forged,
         report_too_big=verdict.too_big, notes=(profile.notes if profile else ()) + host_notes(),
-        recorded=verdict.recorded, collect_errors=verdict.collect_errors,
+        collect_errors=verdict.collect_errors, uncollected_exposed=verdict.uncollected_exposed,
         teardown_errors=verdict.teardown_errors, fail_kind=verdict.fail_kind, log_too_big=too_big,
         collected=verdict.collected, collect_skipped=verdict.collect_skipped, skips=verdict.skips,
         collection_finished=verdict.collection_finished, skipped_deps=verdict.skipped_deps,
         import_errors=verdict.import_errors, submodule_errors=verdict.submodule_errors,
         deny_evidence=str(evidence) if evidence else "", data_refused=verdict.data_refused,
-        deny_denials=evidence.denials if evidence else frozenset(),
+        deny_denials=evidence.denials if evidence else frozenset(), recorded=verdict.recorded,
         setup_denied=verdict.setup_denied, not_run=tuple(not_run), renamed=verdict.renamed,
     )  # fmt: skip
