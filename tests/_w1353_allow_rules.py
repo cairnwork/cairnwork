@@ -15,6 +15,7 @@ from tests._w1353_allow import (
     _arg_ok,
     _call_is_oracle,
 )
+from tests._w1353_allow_alias import function_for as _function_for
 from tests._w1353_allow_imports import advanced_findings, import_findings, sink_findings
 
 # ast.dump of a function differs between CPython minor versions, so the row() pin is
@@ -93,15 +94,6 @@ REFLECTIVE_IMPORTS = {
     "pickle",
 }
 BLOCK_ROW_ATTRIBUTES = True
-
-
-def _function_for(node, tree):
-    found = [
-        fn
-        for fn in ast.walk(tree)
-        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and node in ast.walk(fn)
-    ]
-    return min(found, key=lambda fn: sum(1 for _ in ast.walk(fn))) if found else None
 
 
 def _shape(node, tree, path, oracle_names, row_names, modules, parents, findings):
@@ -349,14 +341,20 @@ def _bindings(
     if isinstance(node, (ast.Attribute, ast.Subscript)) and isinstance(
         node.ctx, (ast.Store, ast.Del)
     ):
+        if isinstance(node, ast.Attribute):
+            findings.add(node.lineno)
         raw = raw_by_fn.get(_function_for(node, tree) or tree, set())
         base = node.value
-        while isinstance(base, (ast.Attribute, ast.Subscript)):
+        while isinstance(base, (ast.NamedExpr, ast.Attribute, ast.Subscript)):
             base = base.value
         if (
             isinstance(base, ast.Name)
             and base.id in row_names | oracle_names | modules.keys() | raw
         ):
+            findings.add(node.lineno)
+    if isinstance(node, ast.AugAssign) and isinstance(node.op, ast.BitOr):
+        raw = raw_by_fn.get(_function_for(node, tree) or tree, set())
+        if isinstance(node.target, ast.Name) and node.target.id in raw:
             findings.add(node.lineno)
 
 

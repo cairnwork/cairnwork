@@ -6,6 +6,8 @@ import ast
 from pathlib import Path
 from typing import Any, cast
 
+from tests._w1353_allow_alias import raw_alias as _raw_alias
+from tests._w1353_allow_alias import scope_nodes as _scope_nodes
 from tests._w1353_allow_imports import literal_string, target_names
 
 ORACLES = {
@@ -73,6 +75,8 @@ def _module_oracles(
         if isinstance(n, ast.ImportFrom) and n.level == 0 and n.module:
             for a in n.names:
                 local = a.asname or a.name
+                if n.module == "cairnwork" and a.name == "blackbox":
+                    module_aliases[local] = "cairnwork.blackbox"
                 if (n.module, a.name) in ORACLES:
                     oracle_names.add(local)
                 if n.module.startswith("_w1353_") and a.name == "row":
@@ -228,13 +232,7 @@ def _call_is_oracle(
     return len(binders.get(name, [])) == 1
 
 
-def _raw_names(
-    tree: ast.Module,
-    names: set[str],
-    modules: dict[str, str],
-    binders: dict[str, list[ast.AST]],
-    adapters: set[str],
-) -> dict[ast.AST, set[str]]:
+def _raw_names(tree, names, modules, binders, adapters) -> dict[ast.AST, set[str]]:
     safe: dict[ast.AST, set[str]] = {}
     scopes = [
         tree,
@@ -243,8 +241,13 @@ def _raw_names(
     for fn in scopes:
         bindings: dict[str, list[ast.AST]] = {}
         stores: dict[str, int] = {}
+        aug_targets = {id(n.target) for n in _scope_nodes(fn) if isinstance(n, ast.AugAssign)}
         for n in _scope_nodes(fn):
-            if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del)):
+            if (
+                isinstance(n, ast.Name)
+                and isinstance(n.ctx, (ast.Store, ast.Del))
+                and id(n) not in aug_targets
+            ):
                 stores[n.id] = stores.get(n.id, 0) + 1
             if isinstance(n, ast.arg):
                 stores[n.arg] = stores.get(n.arg, 0) + 1
@@ -268,6 +271,8 @@ def _raw_names(
                     continue
                 targets = n.targets if isinstance(n, ast.Assign) else [n.target]
                 for target in targets:
+                    if isinstance(target, (ast.Attribute, ast.Subscript)):
+                        continue
                     for name in target_names(target):
                         bindings.setdefault(name, []).append(value)
         good = set()
@@ -283,19 +288,20 @@ def _raw_names(
                 for v in values
             ):
                 good.add(name)
-        safe[fn] = good
+        raw = set(good)
+        while True:
+            aliases = {
+                name
+                for name, values in bindings.items()
+                if name not in raw
+                and stores.get(name, 0) == len(values)
+                and all(_raw_alias(v, raw, modules) for v in values)
+            }
+            if not aliases - raw:
+                break
+            raw.update(aliases)
+        safe[fn] = raw
     return safe
-
-
-def _scope_nodes(scope: ast.AST) -> Any:
-    pending = list(ast.iter_child_nodes(scope))
-    while pending:
-        node = pending.pop()
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
-            yield node
-            continue
-        yield node
-        pending.extend(ast.iter_child_nodes(node))
 
 
 def _contains_forbidden(node: ast.AST, names: set[str]) -> bool:
