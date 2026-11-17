@@ -182,8 +182,8 @@ def test_ac8_real_runner_change_between_digests(
     class InjectingGuard:
         count = 0
 
-        def __init__(self, path: Path) -> None:
-            self.guard = TreeGuard(path)
+        def __init__(self, path: Path, **options) -> None:
+            self.guard = TreeGuard(path, **options)
             self.path = path
 
         def digest(self) -> str:

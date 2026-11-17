@@ -11,6 +11,7 @@ import ctypes
 import errno
 import hashlib
 import os
+import stat
 import sys
 from dataclasses import dataclass
 
@@ -23,6 +24,7 @@ _NO_ATTRS = (errno.ENOTSUP, errno.EOPNOTSUPP)  # the file system keeps no extend
 class Meta:
     uid: int
     gid: int
+    flags: int
     xattrs: tuple[tuple[bytes, bytes], ...]  # (name, value), sorted by name
     acl: bytes  # the extended ACL as text (macOS); b"" when there is none
 
@@ -31,6 +33,8 @@ class Meta:
         for name, value in self.xattrs:
             h.update(b"%d:%s%d:%s" % (len(name), name, len(value), value))
         acl = hashlib.sha256(self.acl).hexdigest().encode()
+        if self.flags:
+            return b"%d:%d:%d:%s:%s" % (self.uid, self.gid, self.flags, h.hexdigest().encode(), acl)
         return b"%d:%d:%s:%s" % (self.uid, self.gid, h.hexdigest().encode(), acl)
 
     def size(self) -> int:
@@ -120,4 +124,9 @@ def read(path: bytes, st: os.stat_result) -> Meta:
         acl = _acl_get(path, st)
     except OSError as e:
         raise GuardUnavailable(f"attributes of {os.fsdecode(path)!r}: {e.strerror}") from e
-    return Meta(st.st_uid, st.st_gid, xattrs, acl)
+    ignored = (
+        getattr(stat, "UF_COMPRESSED", 0x20)
+        | getattr(stat, "UF_TRACKED", 0x40)
+        | getattr(stat, "SF_DATALESS", 0x40000000)
+    )
+    return Meta(st.st_uid, st.st_gid, getattr(st, "st_flags", 0) & ~ignored, xattrs, acl)
