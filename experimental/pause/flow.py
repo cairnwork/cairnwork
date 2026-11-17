@@ -252,36 +252,40 @@ def run_flow(
         if parent is None:
             reason = str(Reason.PAUSE_NO_CUT)
         else:
-            digest = checkpoint = _sha(transcript)
-            resumed, info, reason = _attempt_resume(
-                r0,
-                parent,
-                cut,
-                digest,
-                task_id,
-                planner,
-                gate,
-                planner_settings,
-                gate_settings,
-                runner,
-                args,
-                core_verdict,
-            )
-            if resumed is not None and reason is None:
-                try:
-                    return resumed, receipt.build(
-                        task_id=task_id,
-                        intervened=True,
-                        event_seq=(event_seq or (lambda _: 0))("decision"),
-                        episode_id=resumed.episode_id,
-                        checkpoint_sha256=digest,
-                        cut_turn_index=cut,
-                        reason=None,
-                        **info,
-                    )
-                except (Exception, SystemExit):  # noqa: BLE001 - unrecordable R1 falls back to R0.
-                    reason = str(Reason.PAUSE_R1_NOT_VERIFIED)
-                    info.update(core_verdict=None, core_tree_sha256=None)
+            try:
+                digest = checkpoint = _sha(transcript)
+            except OSError:
+                reason = str(Reason.PAUSE_NO_CUT)
+            else:
+                resumed, info, reason = _attempt_resume(
+                    r0,
+                    parent,
+                    cut,
+                    digest,
+                    task_id,
+                    planner,
+                    gate,
+                    planner_settings,
+                    gate_settings,
+                    runner,
+                    args,
+                    core_verdict,
+                )
+                if resumed is not None and reason is None:
+                    try:
+                        return resumed, receipt.build(
+                            task_id=task_id,
+                            intervened=True,
+                            event_seq=(event_seq or (lambda _: 0))("decision"),
+                            episode_id=resumed.episode_id,
+                            checkpoint_sha256=digest,
+                            cut_turn_index=cut,
+                            reason=None,
+                            **info,
+                        )
+                    except (Exception, SystemExit):  # noqa: BLE001 - unrecordable R1 falls back to R0.
+                        reason = str(Reason.PAUSE_R1_NOT_VERIFIED)
+                        info.update(core_verdict=None, core_tree_sha256=None)
     values = dict(
         task_id=task_id,
         intervened=False,
