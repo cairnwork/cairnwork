@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from tests import _w1353_allow_positions as positions
@@ -20,6 +22,7 @@ __all__ = (
     "test_round_ten_covers_prior_alias_grammar",
     "test_round_ten_position_mutation_is_live",
     "test_round_ten_benign_positions_remain_allowed",
+    "test_blackbox_adapter_is_trusted_only_as_pinned",
 )
 
 
@@ -60,3 +63,18 @@ def test_round_ten_position_mutation_is_live(monkeypatch):
 def test_round_ten_benign_positions_remain_allowed(source):
     fixture = "from _w1353_probe import verify, row, blackbox_result\nresult = verify(1)\n" + source
     assert not check(fixture, "tests/_w1353_extra.py")
+
+
+def test_blackbox_adapter_is_trusted_only_as_pinned():
+    import ast
+
+    from tests._w1353_allow import _binders
+    from tests._w1353_allow_alias import blackbox_trusted
+
+    probe = (Path(__file__).with_name("_w1353_probe.py")).read_text(encoding="utf-8")
+    edited = probe.replace('result.get("detail", "")', 'result.update(status="VERIFIED")')
+    swapped = "from _w1353_probe import declaration as blackbox_result\n"
+    plain = "from _w1353_probe import blackbox_result\n"
+    for source, trusted in ((probe, True), (edited, False), (swapped, False), (plain, True)):
+        tree = ast.parse(source)
+        assert blackbox_trusted(tree, _binders(tree)) is trusted

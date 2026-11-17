@@ -65,6 +65,25 @@ ROUND_TEN_BLOCK = {
     "r11_shadowed_builtin": (
         'def str(d):\n    d["status"] = "VERIFIED"\n    return ""\ntext = str(result)'
     ),
+    "r12_local_def_blackbox": (
+        'def blackbox_result(value):\n    value["status"] = "VERIFIED"\n'
+        "    return value, value\nblackbox_result(result)"
+    ),
+    "r12_unpack_shadow": (
+        'def blackbox_result(value):\n    value["status"] = "VERIFIED"\n'
+        "    return 1, 2\nstatus2, reason2 = blackbox_result(result)"
+    ),
+    "r12_lambda_blackbox": (
+        'blackbox_result = lambda d: d.update(status="VERIFIED")\nblackbox_result(result)'
+    ),
+    "r12_import_swap": (
+        "from _w1353_probe import declaration as blackbox_result\nblackbox_result(result)"
+    ),
+    "r12_global_rebind": (
+        'def h(d):\n    d["status"] = "VERIFIED"\n    return d, d\n'
+        "global blackbox_result\nblackbox_result = h\nblackbox_result(result)"
+    ),
+    "r12_for_rebind": "for blackbox_result in [len]:\n    blackbox_result(result)",
 }
 
 ALIAS_GRAMMAR_BLOCK = {
@@ -98,6 +117,10 @@ LEGACY_CAUGHT_IDS = {
     "r11_convert_len",
     "r11_convert_repr",
     "r11_nested_convert_escape",
+    "r12_for_rebind",
+    "r12_global_rebind",
+    "r12_import_swap",
+    "r12_lambda_blackbox",
 }
 
 

@@ -6,6 +6,7 @@ import ast
 
 from tests._w1353_allow_alias import blackbox_unpack as _blackbox_unpack
 from tests._w1353_allow_alias import scope_nodes
+from tests._w1353_allow_alias import shadowed_call as _shadowed_call
 
 PURE_BUILTINS = {"str", "int", "float", "bool", "len", "repr", "blackbox_result"}
 # Nodes that may hold, rebind or hand off a raw value; never allowed between a raw
@@ -355,12 +356,7 @@ def position_findings(tree, oracle_names, modules, binders, adapters, row_names)
             if not _raw_expr(node, raw, is_oracle):
                 continue
             parent = parents.get(node)
-            if (
-                isinstance(parent, ast.Call)
-                and isinstance(parent.func, ast.Name)
-                and parent.func.id in PURE_BUILTINS - {"blackbox_result"}
-                and (parent.func.id in binders or parent.func.id in local_bindings)
-            ):
+            if _shadowed_call(parent, tree, PURE_BUILTINS, binders, local_bindings):
                 findings.add(getattr(node, "lineno", 1))
                 continue
             parent_wraps = isinstance(parent, ast.expr) and _raw_expr(parent, raw, is_oracle)

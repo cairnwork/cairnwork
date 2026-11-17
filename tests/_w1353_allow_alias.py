@@ -44,3 +44,44 @@ def blackbox_unpack(node: ast.AST, parent: ast.AST | None, bindings) -> bool:
             for item in parent.targets[0].elts
         )
     )
+
+
+_BLACKBOX_DEF = ast.dump(
+    ast.parse(
+        "def blackbox_result(result):\n"
+        '    return result.get("status", result.get("error", "FAILED")), result.get(\n'
+        '        "reason", result.get("detail", "")\n'
+        "    )\n"
+    ).body[0]
+)
+_PROBE_MODULES = {"_w1353_probe", "tests._w1353_probe"}
+
+
+def blackbox_trusted(tree: ast.Module, bindings) -> bool:
+    """The file's only `blackbox_result` is the pinned probe adapter or its plain import."""
+    found = bindings.get("blackbox_result", [])
+    if len(found) != 1 or found[0] not in tree.body:
+        return False
+    node = found[0]
+    if isinstance(node, ast.ImportFrom):
+        local = [a for a in node.names if (a.asname or a.name) == "blackbox_result"]
+        return (
+            node.level == 0
+            and node.module in _PROBE_MODULES
+            and len(local) == 1
+            and local[0].name == "blackbox_result"
+        )
+    return isinstance(node, ast.FunctionDef) and ast.dump(node) == _BLACKBOX_DEF
+
+
+def shadowed_call(parent, tree: ast.Module, pure, bindings, local_bindings) -> bool:
+    """A pure-converter call whose name is rebound (or an unpinned `blackbox_result`)."""
+    if not (
+        isinstance(parent, ast.Call)
+        and isinstance(parent.func, ast.Name)
+        and parent.func.id in pure
+    ):
+        return False
+    if parent.func.id == "blackbox_result":
+        return not blackbox_trusted(tree, bindings)
+    return parent.func.id in bindings or parent.func.id in local_bindings
