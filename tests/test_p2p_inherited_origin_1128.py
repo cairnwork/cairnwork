@@ -224,3 +224,38 @@ def test_origin_is_none_when_two_ancestors_define_the_name():
     assert _inherited_origin(ast.parse(two), ["TestC"], "test_x") is None
     one = "class A:\n" + X + "class B:\n" + KEEP + "class TestC(A, B):\n    pass\n"
     assert _inherited_origin(ast.parse(one), ["TestC"], "test_x") == "A"
+
+
+MOVED = {
+    # #1426 review: the inherited test's code moved to another collected class (Codex, Gemini)
+    "moved-to-unrelated-class": (
+        "class TestA:\n" + X + KEEP + "class TestB(TestA):\n    pass\n",
+        "class TestA:\n" + KEEP + "class TestB(TestA):\n    pass\nclass TestC:\n" + X,
+        [
+            "t.py::TestA::test_x",
+            "t.py::TestA::test_keep",
+            "t.py::TestB::test_x",
+            "t.py::TestB::test_keep",
+        ],
+        ["t.py::TestA::test_keep", "t.py::TestB::test_keep", "t.py::TestC::test_x"],
+    ),
+    "moved-to-sibling-subclass": (
+        "class Base:\n" + X + KEEP + "class TestA(Base):\n    pass\nclass TestB(Base):\n    pass\n",
+        "class Base:\n" + KEEP + "class TestA(Base):\n" + X + "class TestB(Base):\n    pass\n",
+        [
+            "t.py::TestA::test_x",
+            "t.py::TestA::test_keep",
+            "t.py::TestB::test_x",
+            "t.py::TestB::test_keep",
+        ],
+        ["t.py::TestA::test_x", "t.py::TestA::test_keep", "t.py::TestB::test_keep"],
+    ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(MOVED))
+def test_inherited_test_moved_to_another_collected_class_stays_dropped(case):
+    base, test, base_ids, test_ids = MOVED[case]
+    removed, dropped = _split(base, test, base_ids, test_ids)
+    assert "t.py::TestB::test_x" in dropped
+    assert "t.py::TestB::test_x" not in removed

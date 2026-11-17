@@ -49,6 +49,10 @@ def classify_payload(data: dict) -> dict:
                     and not _scope_mentions(test_tree, owners, name, texts[path])
                     and not _hidden(test_tree, bases[path], name, path, test_ids, base_ids)
                     and f"{path}::{origin}::{name}" not in test_ids
+                    # a same-name test still collected elsewhere in the file: moved, not removed
+                    and not any(
+                        _file(f) == path and f.rpartition("::")[2] == name for f in collected_funcs
+                    )
                 )
         (removed if gone else dropped).add(nodeid)
     return {"removed": sorted(removed), "dropped": sorted(dropped)}
