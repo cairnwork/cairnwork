@@ -68,9 +68,7 @@ def _sha(path: Path) -> str:
 
 
 def _cut(record: dict | None) -> tuple[int | None, str]:
-    if not isinstance(record, dict):
-        return None, "PAUSE_NO_CUT"
-    cut = record.get("first_edit_cut")
+    cut = record.get("first_edit_cut") if isinstance(record, dict) else None
     if not isinstance(cut, dict):
         return None, "PAUSE_NO_CUT"
     if cut.get("cut_status") != "CUT" or type(cut.get("cut_turn_index")) is not int:
@@ -243,17 +241,16 @@ def run_flow(
 ) -> tuple[RunResult, dict]:
     """Run bare R0, then optionally plan/gate and resume in fresh R1; return the winner."""
     r0 = runner("run", list(args))
-    transcript = r0.transcript
     cut, reason = _cut(r0.record)
     checkpoint = None
     info = _empty_info()
-    if cut is not None and transcript is not None:
-        parent = _load_parent(transcript)
+    if cut is not None and r0.transcript is not None:
+        parent = _load_parent(r0.transcript)
         if parent is None:
             reason = str(Reason.PAUSE_NO_CUT)
         else:
             try:
-                digest = checkpoint = _sha(transcript)
+                digest = checkpoint = _sha(r0.transcript)
             except OSError:
                 reason = str(Reason.PAUSE_NO_CUT)
             else:
