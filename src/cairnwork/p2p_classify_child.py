@@ -39,17 +39,28 @@ def classify_payload(data: dict) -> dict:
                 bases[path] = _tree(data["sources"]["base"][path])
                 test_trees[path] = _tree(texts[path])
             *owners, name = _function(nodeid).split("::")[1:]
-            gone = (
-                _defines(bases[path], owners, name)
-                and test_trees[path] is not None
-                and not _scope_mentions(test_trees[path], owners, name, texts[path])
-                and not _hidden(test_trees[path], bases[path], name, path, test_ids, base_ids)
-            )
-            # #1413
-            if gone and (
-                exposed is None
-                or any(_file(item) == path and item.rpartition("::")[2] == name for item in exposed)
-            ):
+            test_tree = test_trees[path]
+            if _defines(bases[path], owners, name):
+                gone = (
+                    test_tree is not None
+                    and not _scope_mentions(test_tree, owners, name, texts[path])
+                    and not _hidden(test_tree, bases[path], name, path, test_ids, base_ids)
+                )
+            else:
+                origin = _inherited_origin(bases[path], owners, name)
+                gone = (
+                    origin is not None
+                    and test_tree is not None
+                    and not _scope_mentions(test_tree, [origin], name, texts[path])
+                    and not _scope_mentions(test_tree, owners, name, texts[path])
+                    and not _kept_uncollected(test_tree, name, path, test_ids)
+                    and f"{path}::{origin}::{name}" not in test_ids
+                    and not any(
+                        _file(func) == path and func.rpartition("::")[2] == name
+                        for func in collected_funcs
+                    )
+                )
+            if gone and _runtime_exposes(exposed, path, name):
                 gone = False
         (removed if gone else dropped).add(nodeid)
     return {"removed": sorted(removed), "dropped": sorted(dropped)}
@@ -79,6 +90,22 @@ def _hidden(tree, base, name, path, test_ids, base_ids) -> bool:
         excused = hidden_bindings(base, name, got(base_ids), annotations=False)
         return bool(kept - excused)  # counts, not a set
     except RecursionError:  # ast.dump of a very deep expression: not provably gone
+        return True
+
+
+def _runtime_exposes(exposed, path, name) -> bool:
+    """Whether collect-only found an uncollected live test with this name in the file."""
+    return exposed is None or any(
+        _file(item) == path and item.rpartition("::")[2] == name for item in exposed
+    )
+
+
+def _kept_uncollected(tree, name, path, test_ids) -> bool:
+    """An inherited deletion excuses no binding left uncollected in the source file."""
+    got = {_function(n).partition("::")[2] for n in test_ids if _file(n) == path}
+    try:
+        return bool(hidden_bindings(tree, name, got))
+    except RecursionError:
         return True
 
 
@@ -233,6 +260,73 @@ def _defines(tree: ast.Module | None, owners: list[str], name: str) -> bool:
             return False
     # #1122: a walrus in another def's header (annotation, default, decorator) is the last binding
     return isinstance(last, (ast.FunctionDef, ast.AsyncFunctionDef)) and last.name == name
+
+
+def _inherited_origin(tree: ast.Module | None, owners: list[str], name: str) -> str | None:
+    """Find one unambiguous same-file ancestor that defines an inherited test."""
+    if tree is None or len(owners) != 1 or rebinds_by_string(tree, name):
+        return None
+    owner = owners[0]
+    classes = [n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == owner]
+    try:
+        binding = last_binding(tree.body, owner, module=True)
+    except ValueError:
+        return None
+    if (
+        len(classes) != 1
+        or binding is not classes[0]
+        or not _safe_inheritance_class(tree, classes[0], name)
+    ):
+        return None
+    pattern = re.compile(rf"\b{re.escape(name)}\b")
+    origins: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(cls: ast.ClassDef) -> bool:
+        for base in cls.bases:
+            if not isinstance(base, ast.Name) or base.id == "TestCase":
+                return False
+            if base.id == "object":
+                continue
+            ancestors = [n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == base.id]
+            bindings = [n for n in tree.body if binds_in_scope(n, base.id, module=True)]
+            if len(ancestors) != 1 or len(bindings) != 1 or bindings[0] is not ancestors[0]:
+                return False
+            ancestor = ancestors[0]
+            if not _safe_inheritance_class(tree, ancestor, name, allow_name=True):
+                return False
+            if base.id not in visited:
+                visited.add(base.id)
+                if _mentions(ancestor.body, name, pattern, include_nested_classes=False):
+                    if not _defines(tree, [base.id], name):
+                        return False
+                    origins.add(base.id)
+                if not visit(ancestor):
+                    return False
+        return True
+
+    if not visit(classes[0]) or len(origins) != 1:
+        return None
+    return next(iter(origins))
+
+
+def _safe_inheritance_class(tree, cls, name, *, allow_name=False) -> bool:
+    return (
+        not cls.keywords
+        and all(map(is_pytest_decorator, cls.decorator_list))
+        and not _class_binds_hook(cls)
+        and not _module_mutates_base(tree, cls.name)
+        and not _mentions_dunder_test(cls)
+        and (
+            allow_name
+            or not _mentions(
+                cls.body,
+                name,
+                re.compile(rf"\b{re.escape(name)}\b"),
+                include_nested_classes=False,
+            )
+        )
+    )
 
 
 if __name__ == "__main__":

@@ -5,9 +5,12 @@ The P2P base probe (p2p.py) records the node ids pytest ran on the base for the 
 guard (collect_reader.py), on the test commit (``test_ids``). A base id missing there is:
 
 * ``removed`` when the test commit edited its file (a deferred test file), the base file defines
-  the test there (a ``def`` of that name in the node id's class, or at module level), and the
-  name no longer appears in that file's source on the test commit: the author removed it, so
-  its base outcome says nothing about the candidate and it is not required;
+  the test there (a ``def`` of that name in the node id's class, at module level, or inherited
+  from one unambiguous same-file ancestor), and the name no longer appears in that file's source
+  on the test commit: the author removed it, so its base outcome says nothing about the candidate
+  and it is not required. Inherited ids qualify only when the origin and subclass scopes no longer
+  mention the name, no uncollected binding remains, the origin id is also gone, no same-name test
+  remains collected in the file, and runtime collect-only reports no matching exposure;
 * ``dropped`` otherwise. The test commit made pytest stop collecting a base test without
   removing it (a changed base class, decorator, condition, or a test the base file inherits or
   builds dynamically, whose name was never in that file): the test commit is refused
