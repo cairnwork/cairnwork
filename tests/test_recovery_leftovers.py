@@ -1,5 +1,4 @@
 """#173: the hidden-test run directories do not survive a crash, and a failed cleanup is loud.
-
 Real processes are SIGKILLed during P2P; failed cleanup is reported, never counted as clean.
 """
 
