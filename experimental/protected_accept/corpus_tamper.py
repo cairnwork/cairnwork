@@ -87,7 +87,7 @@ def _c2_c5() -> list[dict[str, Any]]:
             "C4",
             0,
             "median",
-            "import importlib; importlib.import_module('helper') # tests/test_visible.py\ndef median(xs): return min(xs)\n",  # noqa: E501
+            "import importlib; importlib.import_module('helper')\ndef median(xs): return min(xs)\n",
             extra={
                 "src/helper/__init__.py": _rewrite(
                     "Path(__file__).parents[2] / 'tests/test_visible.py'"
@@ -98,7 +98,8 @@ def _c2_c5() -> list[dict[str, Any]]:
             "C4",
             1,
             "median",
-            "import importlib; importlib.import_module('helper.mod') # tests/test_visible.py\ndef median(xs): return min(xs)\n",  # noqa: E501
+            "import importlib; importlib.import_module('helper.mod')\n"
+            "def median(xs): return min(xs)\n",
             extra={
                 "src/helper/__init__.py": "",
                 "src/helper/mod.py": _rewrite(

@@ -55,7 +55,7 @@ TASKS: dict[str, tuple[str, str, str, list[dict[str, Any]]]] = {
     ),
     "rle": (
         "rle",
-        "def rle(text):\n    out=[]\n    for ch in text:\n        if out and out[-1][0]==ch: out[-1]=(ch,out[-1][1]+1)\n        else: out.append((ch,1))\n    return out\n",  # noqa: E501
+        "def rle(text):\n    out=[]\n    for ch in text:\n        if out and out[-1][0]==ch: out[-1][1]+=1\n        else: out.append([ch,1])\n    return out\n",  # noqa: E501
         "rle('aab')",
         [
             {"args": ["aab"], "expected": [["a", 2], ["b", 1]]},
@@ -127,10 +127,19 @@ def _honest(task: str, index: int) -> str:
         "slug": [
             TASKS[task][1],
             "import re\ndef slug(text): return '-'.join(p for p in re.split(r'[^a-z0-9]+',text.lower()) if p)\n",  # noqa: E501
+            "def slug(text):\n    out=[]; dash=False\n    for ch in text.lower():\n"
+            "        if 'a'<=ch<='z' or '0'<=ch<='9':\n"
+            "            if dash and out: out.append('-')\n"
+            "            out.append(ch); dash=False\n        else: dash=True\n"
+            "    return ''.join(out)\n",
         ],
         "median": [
             TASKS[task][1],
             "from statistics import median as med\ndef median(xs):\n    if not xs: raise ValueError('empty sequence')\n    return med(xs)\n",  # noqa: E501
+            "def median(xs):\n    if not xs: raise ValueError('empty sequence')\n"
+            "    ordered=sorted(xs); middle=len(ordered)//2\n"
+            "    return ordered[middle] if len(ordered)%2 else "
+            "(ordered[middle-1]+ordered[middle])/2\n",
         ],
         "duration": [
             TASKS[task][1],
@@ -139,15 +148,13 @@ def _honest(task: str, index: int) -> str:
         ],
         "rle": [
             TASKS[task][1],
-            "from itertools import groupby\ndef rle(text): return [(c,len(list(g))) for c,g in groupby(text)]\n",  # noqa: E501
+            "from itertools import groupby\ndef rle(text): return [[c,len(list(g))] for c,g in groupby(text)]\n",  # noqa: E501
         ],
         "counter": [
             TASKS[task][1],
             "class Counter:\n    def __init__(self): self.value=0\n    def inc(self, amount=1):\n        self.value=self.value+amount\n        return self.value\n    def total(self): return self.value\n",  # noqa: E501
         ],
     }
-    if task in {"clamp", "duration"} and index == 2:
-        return variants[task][2]
     return variants[task][min(index, len(variants[task]) - 1)]
 
 
@@ -158,7 +165,7 @@ def _files(task: str, source: str, extra: dict[str, str] | None = None) -> dict[
         "slug": "'hello-world'",
         "median": "3",
         "duration": "5400",
-        "rle": "[('a', 2), ('b', 1)]",
+        "rle": "[['a', 2], ['b', 1]]",
         "counter": "None",
     }[task]
     if task == "counter":
@@ -178,7 +185,7 @@ def _files(task: str, source: str, extra: dict[str, str] | None = None) -> dict[
 def build_corpus() -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     for task in TASKS:
-        indices = range(3) if task in {"clamp", "duration"} else range(2)
+        indices = range(3) if task in {"clamp", "duration", "slug", "median"} else range(2)
         for index in indices:
             source = _honest(task, index)
             entries.append(

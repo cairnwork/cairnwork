@@ -1,10 +1,72 @@
 from __future__ import annotations
 
-import re
+import os
+import subprocess
+import sys
+from pathlib import Path
 from typing import Any
 
+from cairnwork import blackbox_judge
+from cairnwork.blackbox_exec import BlackboxRun
+from cairnwork.blackbox_runner import MODULE, install_runner
 from experimental.protected_accept.corpus import ENTRIES, TASKS, declaration
 from experimental.protected_accept.policy import declaration_problems
+
+
+def _run_source(tmp_path: Path, source: str, declared: Any, timeout: int = 5) -> list[str]:
+    checkout, guard = tmp_path / "co", tmp_path / "guard"
+    checkout.mkdir(parents=True)
+    guard.mkdir()
+    module = declared.checks[0].module
+    (checkout / f"{module}.py").write_text(source)
+    real = os.path.realpath(checkout)
+    out = tmp_path / "out.json"
+    install_runner(guard, declared.runner_input([real], str(out)))
+    env = {"PATH": os.environ["PATH"], "PYTHONPATH": str(guard), "PYTHONDONTWRITEBYTECODE": "1"}
+    try:
+        done = subprocess.run(
+            [sys.executable, "-P", "-m", MODULE],
+            cwd=checkout,
+            env=env,
+            check=False,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return ["TIMEOUT"]
+    run = BlackboxRun(
+        out.read_bytes() if out.exists() else None,
+        done.returncode,
+        False,
+        0,
+        (),
+        (),
+        tmp_path / "log",
+        real,
+        "sha256",
+        True,
+    )
+    return [v.reason for v in blackbox_judge.judge_run(declared, "c" * 40, run)]
+
+
+def test_honest_sources_pass_every_hidden_case(tmp_path: Path) -> None:
+    for entry in (item for item in ENTRIES if item["kind"] == "honest"):
+        total = len(TASKS[entry["task"]][3])
+        expected = f"blackbox:{entry['task']}: PASS [matched {total}/{total}]"
+        assert _run_source(tmp_path / entry["id"], entry["source"], entry["declaration"]) == [
+            expected
+        ], entry["id"]
+
+
+def test_tamper_sources_fail_full_hidden_cases(tmp_path: Path) -> None:
+    for entry in (item for item in ENTRIES if item["kind"] == "tamper"):
+        reasons = _run_source(
+            tmp_path / entry["id"],
+            entry["source"],
+            entry["declaration"],
+            timeout=1 if entry["cls"] == "C9" else 5,
+        )
+        passed = any(": PASS " in reason for reason in reasons)
+        assert passed is entry["known_residual"], (entry["id"], reasons)
 
 
 def test_corpus_shape_and_declarations() -> None:
@@ -33,8 +95,16 @@ def test_corpus_shape_and_declarations() -> None:
         for cls in (f"C{i}" for i in range(1, 10))
     }
     assert all("runtest" in source for source in by_class["C2"])
-    assert all("test_visible" in source for source in by_class["C3"] + by_class["C4"])
-    assert "__init__.py" in ENTRIES[0]["files"] or any("helper" in str(e["files"]) for e in ENTRIES)
+    assert all("test_visible" in source for source in by_class["C3"])
+    c4 = [entry for entry in ENTRIES if entry["cls"] == "C4"]
+    assert all(
+        any(
+            "test_visible.py" in content
+            for path, content in entry["files"].items()
+            if path.startswith("src/helper")
+        )
+        for entry in c4
+    )
     assert "os.kill" in by_class["C9"][1] and "sleep" in by_class["C9"][0]
 
 
@@ -49,56 +119,13 @@ def test_honest_sources_pass_visible_case_in_process() -> None:
             "slug": "hello-world",
             "median": 3,
             "duration": 5400,
-            "rle": [("a", 2), ("b", 1)],
+            "rle": [["a", 2], ["b", 1]],
         }
         if task == "counter":
             counter = namespace["Counter"]()
             assert counter.inc() == 1 and counter.inc(3) == 4 and counter.total() == 4
         else:
             assert eval(expression, namespace) == expected[task]
-
-
-def test_wrong_tamper_sources_and_expected_residual() -> None:
-    expected = {
-        "clamp": 5,
-        "slug": "hello-world",
-        "median": 3,
-        "duration": 5400,
-        "rle": [("a", 2), ("b", 1)],
-    }
-    safe_import = {"C1", "C2", "C3", "C4", "C7", "C9"}
-    for entry in (item for item in ENTRIES if item["kind"] == "tamper"):
-        assert entry["expect_protected"] == "not PASS"
-        if entry["cls"] in safe_import:
-            source = entry["source"]
-            assert any(
-                token in source
-                for token in ("runtest", "test_visible", "os.kill", "sleep", "renamed_duration")
-            )
-            continue
-        namespace: dict[str, Any] = {"__name__": entry["task"]}
-        source = re.sub(r"^import pytest.*\n", "", entry["source"], flags=re.MULTILINE)
-        if entry["cls"] != "C10":
-            source = re.sub(r"^import sys.*\n", "", source, flags=re.MULTILINE)
-        source = re.sub(r"^import os.*\n", "", source, flags=re.MULTILINE)
-        source = re.sub(
-            r"^from pathlib.*\n|^Path\(.*\)\.touch\(\)\n", "", source, flags=re.MULTILINE
-        )
-        if entry["task"] == "counter":
-            continue
-        exec(compile(source, entry["task"], "exec"), namespace)
-        if entry["task"] == "clamp":
-            result = namespace["clamp"](8, 0, 5)
-            assert result != expected["clamp"] or entry["cls"] == "C5"
-        elif entry["task"] == "slug":
-            result = namespace["slug"]("Hello World!")
-            assert str(result) != expected["slug"] or entry["cls"] == "C5"
-        elif entry["task"] == "median":
-            assert namespace["median"]([1, 9, 3]) != expected["median"]
-        elif entry["task"] == "duration" and "parse_duration" in namespace:
-            assert namespace["parse_duration"]("1h30m") != expected["duration"]
-        elif entry["task"] == "rle":
-            assert namespace["rle"]("aab") != expected["rle"]
 
 
 def test_low_entropy_intent_is_rejected() -> None:
@@ -115,3 +142,12 @@ def test_declared_function_is_defined_by_honest_sources() -> None:
             assert f"import {function}" in entry["files"]["tests/test_visible.py"], entry["id"]
     renamed = next(e for e in ENTRIES if e["id"] == "duration-C7-0")
     assert "def parse_duration(" not in renamed["source"]
+
+
+def test_independent_honest_variants_at_least_ten() -> None:
+    independent = [
+        entry
+        for entry in ENTRIES
+        if entry["kind"] == "honest" and entry["source"] != entry["expected_source"]
+    ]
+    assert len(independent) >= 10
