@@ -47,7 +47,7 @@ def classify_payload(data: dict) -> dict:
                     and test_tree is not None
                     and not _scope_mentions(test_tree, [origin], name, texts[path])
                     and not _scope_mentions(test_tree, owners, name, texts[path])
-                    and not _hidden(test_tree, bases[path], name, path, test_ids, base_ids)
+                    and not _kept_uncollected(test_tree, name, path, test_ids)
                     and f"{path}::{origin}::{name}" not in test_ids
                     # a same-name test still collected elsewhere in the file: moved, not removed
                     and not any(
@@ -82,6 +82,16 @@ def _hidden(tree, base, name, path, test_ids, base_ids) -> bool:
         excused = hidden_bindings(base, name, got(base_ids), annotations=False)
         return bool(kept - excused)  # counts, not a set
     except RecursionError:  # ast.dump of a very deep expression: not provably gone
+        return True
+
+
+def _kept_uncollected(tree, name, path, test_ids) -> bool:
+    """#1426: an inherited deletion excuses nothing. Any binding of ``name`` that pytest does not
+    collect may be the origin's def kept under a shadowed same-name class: dropped, not removed."""
+    got = {_function(n).partition("::")[2] for n in test_ids if _file(n) == path}
+    try:
+        return bool(hidden_bindings(tree, name, got))
+    except RecursionError:
         return True
 
 

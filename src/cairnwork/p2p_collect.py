@@ -9,7 +9,8 @@ guard (collect_reader.py), on the test commit (``test_ids``). A base id missing 
   from one unambiguous same-file ancestor), and the name no longer appears in that file's source
   on the test commit: the author removed it, so its base outcome says nothing about the candidate
   and it is not required. Inherited ids qualify only when the origin and subclass scopes no longer
-  mention the name, no hidden binding remains, and the origin id is also gone;
+  mention the name, no uncollected binding of it remains anywhere in the file (none is excused),
+  the origin id is also gone, and no same-name test is still collected in the file (moved);
 * ``dropped`` otherwise. The test commit made pytest stop collecting a base test without
   removing it (a changed base class, decorator, condition, or a test the base file inherits or
   builds dynamically, whose name was never in that file): the test commit is refused

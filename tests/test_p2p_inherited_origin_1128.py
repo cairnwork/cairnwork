@@ -259,3 +259,86 @@ def test_inherited_test_moved_to_another_collected_class_stays_dropped(case):
     removed, dropped = _split(base, test, base_ids, test_ids)
     assert "t.py::TestB::test_x" in dropped
     assert "t.py::TestB::test_x" not in removed
+
+
+B7 = "class Base:\n" + X + KEEP + "class TestB(Base):\n    pass\n"
+B_IDS = ["t.py::TestB::test_x", "t.py::TestB::test_keep"]
+T_IDS = ["t.py::TestB::test_keep"]
+SHADOWED = {
+    # #1426 Claude review: the origin's def kept byte-for-byte under a shadowed same-name class
+    "C1-detach": (B7, "class Base:\n" + X + "class Base:\n" + KEEP + "class TestB:\n" + KEEP),
+    "C5-reparent": (
+        B7,
+        "class Base:\n"
+        + X
+        + "class Base:\n"
+        + KEEP
+        + "class Clean:\n"
+        + KEEP
+        + "class TestB(Clean):\n    pass\n",
+    ),
+    "C6-shadow-after": (B7, "class Base:\n" + X + "class TestB:\n" + KEEP + "class Base:\n" + KEEP),
+    "C8-mixin": (
+        "class Mixin:\n" + X + "class TestB(Mixin):\n" + KEEP,
+        "class Mixin:\n" + X + "class Mixin:\n    pass\nclass TestB:\n" + KEEP,
+    ),
+    "C11-three-levels": (
+        "class Base:\n" + X + "class Mid(Base):\n    pass\nclass TestB(Mid):\n" + KEEP,
+        "class Base:\n"
+        + X
+        + "class Base:\n    pass\nclass Mid(Base):\n    pass\nclass TestB:\n"
+        + KEEP,
+    ),
+    "Me-base-side-init-subclass": (
+        "class Base:\n"
+        + X
+        + KEEP
+        + "    def __init_subclass__(cls, **kw):\n        super().__init_subclass__(**kw)\n"
+        + "class TestB(Base):\n    pass\n",
+        "class Base:\n" + KEEP + "class TestB(Base):\n    pass\n",
+    ),
+    "Mf-ancestor-mentions-without-def": (
+        "def _g(self):\n    assert True\nclass Mid:\n    test_x = _g\nclass TestB(Mid):\n" + KEEP,
+        "def _g(self):\n    assert True\nclass Mid:\n    pass\nclass TestB(Mid):\n" + KEEP,
+    ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(SHADOWED))
+def test_shadowed_or_unprovable_origin_stays_dropped(case):
+    base, test = SHADOWED[case]
+    assert _split(base, test, B_IDS, T_IDS) == (set(), {"t.py::TestB::test_x"})
+
+
+def test_two_detached_subclasses_with_a_shadowed_origin_stay_dropped():
+    base = (
+        "class Base:\n" + X + KEEP + "class TestB(Base):\n    pass\nclass TestC(Base):\n    pass\n"
+    )
+    test = (
+        "class Base:\n"
+        + X
+        + "class Base:\n"
+        + KEEP
+        + "class TestB:\n"
+        + KEEP
+        + "class TestC:\n"
+        + KEEP
+    )
+    gone = {"t.py::TestB::test_x", "t.py::TestC::test_x"}
+    kept = ["t.py::TestB::test_keep", "t.py::TestC::test_keep"]
+    assert _split(base, test, [*gone, *kept], kept) == (set(), gone)
+
+
+@pytest.mark.parametrize(
+    "base,test",
+    [
+        (
+            "class Mixin:\n" + X + "class TestB(Mixin):\n" + KEEP,
+            "class Mixin:\n    pass\nclass TestB(Mixin):\n" + KEEP,
+        ),
+        (B7, "class Base:\n" + KEEP + "class TestB:\n" + KEEP),
+    ],
+    ids=["P2-mixin", "P4-deleted-and-detached"],
+)
+def test_deleted_origin_without_a_kept_copy_is_removed(base, test):
+    assert _split(base, test, B_IDS, T_IDS) == ({"t.py::TestB::test_x"}, set())
