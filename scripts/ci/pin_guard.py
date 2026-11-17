@@ -62,23 +62,44 @@ def _pin_table(path: Path) -> set[str]:
             raise ValueError("invalid zipped table")
         entries = dict(zip(keys, hashes, strict=True))
     elif isinstance(value, ast.Dict):
-        entries = {_literal(k): _literal(v) for k, v in zip(value.keys, value.values, strict=True)}
+        pairs = zip(value.keys, value.values, strict=True)
+        decoded = [
+            (_literal(key) if key is not None else None, _literal(item)) for key, item in pairs
+        ]
+        if any(not isinstance(key, str) for key, _ in decoded):
+            raise ValueError("invalid pin table key")
+        entries = {key: item for key, item in decoded}
     else:
         raise ValueError("unsupported pin table")
-    if not entries or any(not isinstance(key, str) for key in entries):
+    if not entries:
         raise ValueError("empty or invalid pin table")
-    return set(entries)
+    pinned: set[str] = set()
+    for key in entries:
+        if not isinstance(key, str):
+            raise ValueError("empty or invalid pin table")
+        pinned.add(key)
+    return pinned
 
 
 def _changed(head: Path, base_sha: str, head_sha: str) -> set[str]:
     base = subprocess.run(
-        ["git", "-C", str(head), "merge-base", base_sha, head_sha],
+        ["git", "-C", str(head), "merge-base", "--end-of-options", base_sha, head_sha],
         check=True,
         capture_output=True,
         text=True,
     ).stdout.strip()
     result = subprocess.run(
-        ["git", "-C", str(head), "diff", "--name-only", "--no-renames", base, head_sha],
+        [
+            "git",
+            "-C",
+            str(head),
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "--end-of-options",
+            base,
+            head_sha,
+        ],
         check=True,
         capture_output=True,
         text=True,
@@ -99,11 +120,14 @@ def _approval(comments: Path | None, approvers: set[str], head_sha: str) -> str:
         body = comment.get("body", "") if isinstance(comment, dict) else ""
         if not isinstance(body, str):
             continue
+        created, updated = comment.get("created_at"), comment.get("updated_at")
+        if not isinstance(created, str) or not isinstance(updated, str) or created != updated:
+            continue
         for line in body.splitlines():
             match = APPROVAL.fullmatch(line)
             if not match:
                 continue
-            if login not in approvers:
+            if not isinstance(login, str) or login.lower() not in approvers:
                 denied = True
             elif match.group(1).lower() == head_sha.lower():
                 return "PIN_CHANGE_APPROVED"
@@ -118,6 +142,8 @@ def _approval(comments: Path | None, approvers: set[str], head_sha: str) -> str:
 
 def evaluate(args: argparse.Namespace) -> tuple[int, str, list[str]]:
     trusted = Path(args.trusted)
+    if not trusted.is_dir():
+        raise ValueError("trusted tree is not a directory")
     pin_file = trusted / "tests/_w1353_allow_pins.py"
     guarded = set(FIXED_PATHS)
     if pin_file.exists():
@@ -129,7 +155,7 @@ def evaluate(args: argparse.Namespace) -> tuple[int, str, list[str]]:
     approvers = set()
     if approver_file.exists():
         approvers = {
-            line.strip()
+            line.strip().lower()
             for line in approver_file.read_text(encoding="utf-8").splitlines()
             if line.strip() and not line.lstrip().startswith("#")
         }
@@ -146,6 +172,10 @@ def main() -> int:
     parser.add_argument("--comments")
     args = parser.parse_args()
     try:
+        if not re.fullmatch(r"[0-9a-fA-F]{40}", args.base_sha) or not re.fullmatch(
+            r"[0-9a-fA-F]{40}", args.head_sha
+        ):
+            raise ValueError("invalid commit SHA")
         code, result, paths = evaluate(args)
     except Exception:  # Fail closed for every unexpected parsing, I/O, or git error.  # noqa: BLE001
         code, result, paths = 2, "PIN_GUARD_INCOMPLETE", []

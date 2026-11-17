@@ -1,3 +1,8 @@
+# Runs from the default branch. The PR head is checked out as data only and is never imported
+# or executed. The script, pin table and approver list come only from the trusted tree. The
+# publish job has statuses:write and never touches PR content. This is report-only, not a
+# required check, until the owner adds it. A same-repository PR can add its own workflow posting
+# a fake status. Edited approval comments are ignored.
 name: pin-guard-trusted
 
 on:
@@ -73,19 +78,22 @@ jobs:
         id: gate
         env:
           BASE_SHA: ${{ steps.refs.outputs.base_sha }}
+          BASE_REPO_URL: ${{ github.server_url }}/${{ github.repository }}
           HEAD_SHA: ${{ steps.refs.outputs.head_sha }}
           COMMENTS: ${{ runner.temp }}/comments.json
           EVENT_NAME: ${{ github.event_name }}
         run: |
           rc=0
-          comment_arg=(--comments "$COMMENTS")
+          if ! git -C head cat-file -e "${BASE_SHA}^{commit}"; then
+            git -C head fetch -q --no-tags "$BASE_REPO_URL" "$BASE_SHA" || true
+          fi
           python3 -I trusted/scripts/ci/pin_guard.py --trusted trusted --head head \
-            --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA" "${comment_arg[@]}" || rc=$?
+            --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA" --comments "$COMMENTS" || rc=$?
           echo "gate_rc=$rc" >> "$GITHUB_OUTPUT"
 
   publish:
     needs: analyze
-    if: always() && (github.event_name != 'issue_comment' || github.event.issue.pull_request)
+    if: always() && (github.event_name != 'issue_comment' || github.event.issue.pull_request) && needs.analyze.result != 'cancelled' && needs.analyze.outputs.head_sha != ''
     runs-on: ubuntu-latest
     permissions:
       contents: read

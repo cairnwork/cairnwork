@@ -23,3 +23,21 @@ def test_ac7_trusted_workflow_wiring_and_empty_approvers() -> None:
         if line.strip() and not line.lstrip().startswith("#")
     ]
     assert logins == []
+    assert "default branch" in workflow
+    assert "data only" in workflow
+    fetch = 'git -C head fetch -q --no-tags "$BASE_REPO_URL" "$BASE_SHA"'
+    assert "BASE_REPO_URL" in workflow and fetch in workflow
+    assert "cancelled" in workflow
+    lines = workflow.splitlines()
+    in_run = False
+    run_indent = 0
+    for line in lines:
+        indent = len(line) - len(line.lstrip())
+        stripped = line.strip()
+        if in_run and indent <= run_indent and stripped and not stripped.startswith("#"):
+            in_run = False
+        if in_run or stripped.startswith("run:"):
+            assert "${{" not in line
+        if stripped.startswith("run: |"):
+            in_run = True
+            run_indent = indent

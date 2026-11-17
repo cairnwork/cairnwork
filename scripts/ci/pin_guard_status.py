@@ -6,7 +6,7 @@ import os
 import sys
 
 OUTCOMES = {
-    "success": ("success", "No guarded pin changes"),
+    "success": ("success", "No unapproved guarded pin changes"),
     "unapproved": ("failure", "Guarded pin changes need approval"),
     "error": ("error", "Pin guard could not run or failed closed"),
 }
