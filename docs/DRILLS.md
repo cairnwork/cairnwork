@@ -37,7 +37,7 @@ blackbox 路徑的候選樹與一般 verify 相同（宣告 `module: calc`，che
 
 | 演練 | 結果 | 說明 | 紀錄 |
 |---|---|---|---|
-| 驗證帳號 | **NOT_RUN** | lab 尚未核准 `cairnwork-verifier` 時段，本次沒有啟動帳號模式（`drill_normal` 只要帳號可用就會自動啟用，因此未跑任何會觸發它的腳本）。核准後重跑 11/01 的三個候選。 | `docs/drills/2026-11-17-verifier-account.json` |
+| 驗證帳號 | **PASS**（2026-11-17，mini，lab 核准時段） | 三個候選經 `cairnwork-verify` 帳號模式判定：正確修正 VERIFIED（task `verify-e90eccf606336f40`）、已知錯誤 FAILED（exit 2）、正確修正重跑 VERIFIED（exit 0）；結束後帳號程序 0。第一次執行的 exit code 未擷取。 | `docs/drills/2026-11-17-verifier-account.json` |
 | 重啟 | **PASS**（自動測試） | `tests/test_recovery.py` 26 passed、0 failed、0 skipped（95.7 秒）。真 agent 部分未重跑：worker 停用（10/30 起）。 | `docs/drills/2026-11-17-restart.json` |
 | 失敗 | **PASS**（自動測試） | `tests/test_pipeline.py` 30 passed、0 failed、0 skipped（66.8 秒）。 | `docs/drills/2026-11-17-failure.json` |
 | route 的 Cairnwork 端與回退 | **PASS**（Cairnwork 端，本機驗證） | 與 11/01 相同步驟（影子 `check`、`accept`、交件 A、A 在 DISPATCHED 時 `drain`、新冪等鍵回 `NOT_ACCEPTING`、重送拿回同一任務、`recover` 無決定、完成後重送為 `duplicate`）。worker 用**固定腳本**（PATH 上的 stub，不是真 agy，無模型）；驗證改用本機模式，**未用驗證帳號**。跨系統回退仍未驗收（Gateway 轉送停車）。 | `docs/drills/2026-11-17-rollback-cairnwork-side.json` |
