@@ -12,6 +12,7 @@ deadline itself, so a server that drips headers or body cannot hold a request pa
 
 from __future__ import annotations
 
+import errno
 import http.client
 import ipaddress
 import json
@@ -32,6 +33,11 @@ _PATH = re.compile(r"(/[A-Za-z0-9._~-]+)*")
 
 class EndpointError(RuntimeError):
     """The endpoint answered badly or not at all: the episode aborts (ERROR_ABORT)."""
+
+
+class EndpointUnreachable(EndpointError):
+    """The endpoint could not be connected to (refused / unreachable); the episode aborts
+    (ERROR_ABORT, abort_cause endpoint_unreachable)."""
 
 
 class EndpointTimeout(EndpointError):
@@ -168,6 +174,14 @@ class LoopbackEndpoint:
         except (OSError, http.client.HTTPException) as exc:
             if fired.is_set() or self.clock() >= deadline:  # the watchdog shut the socket down
                 raise EndpointTimeout("endpoint passed the deadline") from None
+            if isinstance(exc, OSError) and exc.errno in (
+                errno.ECONNREFUSED,
+                errno.ENETUNREACH,
+                errno.EHOSTUNREACH,
+            ):
+                raise EndpointUnreachable(
+                    f"endpoint request failed: {type(exc).__name__}: {exc}"
+                ) from None
             raise EndpointError(f"endpoint request failed: {type(exc).__name__}: {exc}") from None
         finally:
             if watchdog is not None:

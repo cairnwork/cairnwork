@@ -61,6 +61,7 @@ from experimental.local_worker.endpoint import (
     EndpointContextLimit,
     EndpointError,
     EndpointTimeout,
+    EndpointUnreachable,
     first_message,
     parse_usage,
 )
@@ -89,6 +90,7 @@ class _StatusUnavailable(RuntimeError):
 
 
 _ABORT_CAUSES = (  # checked in order; any other Exception is an internal_error
+    (EndpointUnreachable, "endpoint_unreachable"),
     (EndpointError, "endpoint_error"),
     (WorkerIsolationError, "worker_isolation"),
     (_StatusUnavailable, "status_unavailable"),

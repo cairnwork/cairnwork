@@ -283,6 +283,8 @@ def _r1_reason(
         or verification.get("exit_reason") != "COMPLETED"
         or (isinstance(feedback, dict) and feedback.get("needs_spec") is True)
     ):
+        if _endpoint_unreachable(record):
+            return str(Reason.PAUSE_LOCAL_UNREACHABLE), None, None
         return str(Reason.PAUSE_R1_INCOMPLETE), None, None
     if core_verdict is None:
         return str(Reason.PAUSE_R1_NOT_VERIFIED), None, None
@@ -312,6 +314,18 @@ def _r1_reason(
             return str(Reason.PAUSE_R1_NOT_VERIFIED), None, None
         return str(Reason.PAUSE_R1_NOT_VERIFIED), status, tree
     return None, status, tree
+
+
+def _endpoint_unreachable(record: dict) -> bool:
+    """A worker that aborted because the local endpoint could not be connected to (#1406)."""
+    verification = record.get("verification")
+    termination = record.get("termination")
+    return (
+        isinstance(verification, dict)
+        and verification.get("exit_reason") == "ERROR_ABORT"
+        and isinstance(termination, dict)
+        and termination.get("abort_cause") == "endpoint_unreachable"
+    )
 
 
 def _checkout_digest(checkout: Path) -> str:
