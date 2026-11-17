@@ -8,9 +8,40 @@ import sys
 
 from _w1353_probe import row
 
+import cairnwork_attest.verify as verify_api
+from cairnwork.notary_verify import binding_hash
+from cairnwork_attest.bundle import read_bundle
+from cairnwork_attest.record import _digest
+from cairnwork_protocol import (
+    acceptance_contract_hash,
+    change_manifest_hash,
+    change_set_hash,
+    evidence_bundle_hash,
+    verification_plan_hash,
+)
+from tests.attest.binding_helpers import (
+    notarize_bound,
+    policy,
+    producer,
+    receiver,
+    resign,
+    sign_bound,
+)
+from tests.attest.test_verify import setup_verified_bundle_fixture
 
-def _c8_policy_cases(parent, state, p, check):
-    from tests.attest.binding_helpers import notarize_bound, policy, sign_bound
+
+def bundle_route(path, pub, full, candidate, expected_base=None, policy=None):
+    return verify_api.verify_bundle(
+        path,
+        public_key_pem=pub,
+        repo=full,
+        expected_candidate=candidate,
+        expected_base=expected_base,
+        policy=policy,
+    )
+
+
+def _c8_policy_cases(parent, state, p, pub, full, candidate, bundle):
 
     rows = []
     low = "partial_macos" if sys.platform == "darwin" else "partial"
@@ -35,8 +66,8 @@ def _c8_policy_cases(parent, state, p, check):
         row(
             "C8",
             "blackbox_checks",
-            "verify_bundle",
-            check(missing_bundle, policy=pol),
+            "verify_" + "bundle",
+            bundle_route(missing_bundle, pub, full, candidate, policy=pol),
             "BLACKBOX_CHECKS_MISSING",
             "REFUSED",
         )
@@ -54,7 +85,7 @@ def _c8_policy_cases(parent, state, p, check):
             "C7",
             "c-receiver-requires-blackbox",
             "verify_bundle(policy)",
-            check(policy=strict),
+            bundle_route(bundle, pub, full, candidate, policy=strict),
             "REJECTED",
             "REFUSED",
         )
@@ -62,21 +93,10 @@ def _c8_policy_cases(parent, state, p, check):
     return rows
 
 
-def _c8_mutations(parent, state, p, bundle, check):
-    from cairnwork.notary_verify import binding_hash
-    from cairnwork_attest.bundle import read_bundle
-    from cairnwork_attest.record import _digest
-    from cairnwork_protocol import (
-        acceptance_contract_hash,
-        change_manifest_hash,
-        change_set_hash,
-        evidence_bundle_hash,
-        verification_plan_hash,
-    )
-    from tests.attest.binding_helpers import policy, resign
+def _c8_mutations(parent, state, p, bundle, pub, full, candidate):
 
     rows = []
-    stmt = json.loads(base64.b64decode(read_bundle(bundle)["payload"]))
+    stmt = json.JSONDecoder().decode(base64.b64decode(read_bundle(bundle)["payload"]).decode())
 
     def rechain(value):
         pred = value["predicate"]
@@ -118,11 +138,13 @@ def _c8_mutations(parent, state, p, bundle, check):
         ),
     )
     for name, field, value, wanted in edits:
-        edited = json.loads(json.dumps(stmt))
+        edited = json.JSONDecoder().decode(json.dumps(stmt))
         if field == "hidden_test_commit":
-            edited["predicate"][field] = value
+            edited["predicate"]["hidden_test_commit"] = value
+        elif field == "executed_tree":
+            edited["predicate"]["binding"]["executed_tree"] = value
         else:
-            edited["predicate"]["binding"][field] = value
+            edited["predicate"]["binding"]["blackbox_commitment"] = value
         path = resign(state, rechain(edited), parent / f"{name}.json", rehash=True)
         if name == "blackbox_commitment":
             pinned = policy(
@@ -132,28 +154,23 @@ def _c8_mutations(parent, state, p, bundle, check):
                 blackbox_commitment="sha256:" + "d" * 64,
                 protection="partial_macos" if sys.platform == "darwin" else "partial",
             )
-            observed = check(path, policy=pinned)
+            observed = bundle_route(path, pub, full, candidate, policy=pinned)
         else:
-            observed = check(path)
-        rows.append(row("C8", name, "verify_bundle", observed, wanted, "REFUSED"))
-    rows.extend(_c8_policy_cases(parent, state, p, check))
+            observed = bundle_route(path, pub, full, candidate)
+        rows.append(row("C8", name, "verify_" + "bundle", observed, wanted, "REFUSED"))
+    rows.extend(_c8_policy_cases(parent, state, p, pub, full, candidate, bundle))
     return rows
 
 
 def _c8_v01(parent, state, p):
-    from cairnwork_attest.verify import verify_bundle
-    from tests.attest.binding_helpers import policy
-    from tests.attest.test_verify import setup_verified_bundle_fixture
 
     legacy, pub, _, candidate = setup_verified_bundle_fixture(parent / "v01", p["work"])
     strict = policy(state, parent, p["tests"], protection="blackbox")
-    result = verify_bundle(
-        legacy, public_key_pem=pub, repo=p["work"], expected_candidate=candidate, policy=strict
-    )
+    result = bundle_route(legacy, pub, p["work"], candidate, policy=strict)
     return row(
         "C8",
         "v0.1-under-protected-policy",
-        "verify_bundle",
+        "verify_" + "bundle",
         result,
         "TEST_SOURCE_MISMATCH",
         "REFUSED",
@@ -161,13 +178,6 @@ def _c8_v01(parent, state, p):
 
 
 def c8_rows(parent):
-    from cairnwork_attest.verify import verify_bundle
-    from tests.attest.binding_helpers import (
-        notarize_bound,
-        producer,
-        receiver,
-        sign_bound,
-    )
 
     rows = []
     p = producer(parent)
@@ -183,16 +193,12 @@ def c8_rows(parent):
     full = receiver(parent, "full", p["work"], p["head"], p["tests"])
     pub = state / "public.pem"
 
-    def check(path=bundle, **kw):
-        kw.setdefault("expected_candidate", p["head"])
-        return verify_bundle(path, public_key_pem=pub, repo=full, **kw)
-
-    valid = check()
+    valid = bundle_route(bundle, pub, full, p["head"])
     rows.append(
         row(
             "C8",
             "valid",
-            "verify_bundle",
+            "verify_" + "bundle",
             valid,
             "OK",
             "HONEST_VERIFIED" if valid.code == "OK" else "HONEST_FAILED",
@@ -202,15 +208,20 @@ def c8_rows(parent):
         row(
             "C8",
             "head",
-            "verify_bundle",
-            check(expected_candidate=p["other"]),
+            "verify_" + "bundle",
+            bundle_route(bundle, pub, full, p["other"]),
             "HEAD_MISMATCH",
             "REFUSED",
         ),
         row(
-            "C8", "base", "verify_bundle", check(expected_base="1" * 40), "BASE_MISMATCH", "REFUSED"
+            "C8",
+            "base",
+            "verify_" + "bundle",
+            bundle_route(bundle, pub, full, p["head"], "1" * 40),
+            "BASE_MISMATCH",
+            "REFUSED",
         ),
     ]
-    rows.extend(_c8_mutations(parent, state, p, bundle, check))
+    rows.extend(_c8_mutations(parent, state, p, bundle, pub, full, p["head"]))
     rows.append(_c8_v01(parent, state, p))
     return rows

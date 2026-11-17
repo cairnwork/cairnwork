@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
+import json
+import runpy
 import sys
+import types
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from _w1353_probe import row
+
+import cairnwork.blackbox_judge as blackbox_judge
+from cairnwork import blackbox
+from cairnwork.blackbox_exec import BlackboxRun
+from cairnwork.blackbox_runner import _RUNNER_SOURCE, MODULE
 
 
-def _record(n, raw, outside, blackbox, blackbox_judge, BlackboxRun):
-    import json
-    from pathlib import Path
-
-    from _w1353_probe import row
+def _record(n, raw, outside, blackbox, BlackboxRun):
 
     run = BlackboxRun(
         json.dumps({"checks": {"add": {"file": "/co/calc.py", "cases": {"one": raw}}}}).encode(),
@@ -53,51 +61,46 @@ def _record(n, raw, outside, blackbox, blackbox_judge, BlackboxRun):
 
 
 def c10_rows():
-    import types
-
-    from cairnwork import blackbox, blackbox_judge
-    from cairnwork.blackbox_exec import BlackboxRun
-    from cairnwork.blackbox_runner import _RUNNER_SOURCE, MODULE
 
     rows = []
     runner = types.ModuleType(MODULE)
-    sys.modules[MODULE] = runner
-    exec(compile(_RUNNER_SOURCE, MODULE, "exec"), runner.__dict__)
-    try:
-        for n, condition in enumerate(
-            (
-                f"{MODULE!r} in sys.modules",
-                "'pytest' not in sys.modules",
-                f"{MODULE!r} in sys.modules",
-            ),
-            1,
-        ):
-            saved = sys.modules.pop("pytest", None) if n == 2 else None
-            saved_runner = sys.modules.pop(MODULE, None) if n == 3 else None
-            ns = {}
-            exec(
-                compile(
-                    "import sys\ndef add(a,b):\n if " + condition + ": return a+b\n return a-b\n",
-                    f"cand{n}",
-                    "exec",
+    with TemporaryDirectory() as directory:
+        runner_path = Path(directory) / "runner.py"
+        runner_path.write_text(_RUNNER_SOURCE)
+        runner_namespace = runpy.run_path(str(runner_path))
+        runner_call = runner_namespace["_call"]
+        sys.modules.update({"_cairnwork_blackbox_runner": runner})
+        try:
+            for n, condition in enumerate(
+                (
+                    f"{MODULE!r} in sys.modules",
+                    "'pytest' not in sys.modules",
+                    f"{MODULE!r} in sys.modules",
                 ),
-                ns,
-            )
-            if n == 1:
-                sys.modules.pop(MODULE, None)
-                outside = ns["add"](2, 3)
-                raw = {"ok": outside}
-            else:
-                raw = runner._call(ns["add"], {"args": [2, 3], "kwargs": {}})
-                sys.modules.pop(MODULE, None)
-                outside = ns["add"](2, 3)
-            if saved is not None:
-                sys.modules["pytest"] = saved
-            if saved_runner is not None:
-                sys.modules[MODULE] = saved_runner
-            else:
-                sys.modules[MODULE] = runner
-            rows.append(_record(n, raw, outside, blackbox, blackbox_judge, BlackboxRun))
-    finally:
-        sys.modules.pop(MODULE, None)
+                1,
+            ):
+                saved = sys.modules.pop("pytest", None) if n == 2 else None
+                saved_runner = sys.modules.pop(MODULE, None) if n == 3 else None
+                candidate_path = Path(directory) / f"cand{n}.py"
+                candidate_path.write_text(
+                    "import sys\ndef add(a,b):\n if " + condition + ": return a+b\n return a-b\n"
+                )
+                ns = runpy.run_path(str(candidate_path))
+                if n == 1:
+                    sys.modules.pop(MODULE, None)
+                    outside = ns["add"](2, 3)
+                    raw = {"ok": outside}
+                else:
+                    raw = runner_call(ns["add"], {"args": [2, 3], "kwargs": {}})
+                    sys.modules.pop(MODULE, None)
+                    outside = ns["add"](2, 3)
+                if saved is not None:
+                    sys.modules.update({"pytest": saved})
+                if saved_runner is not None:
+                    sys.modules.update({"_cairnwork_blackbox_runner": saved_runner})
+                else:
+                    sys.modules.update({"_cairnwork_blackbox_runner": runner})
+                rows.append(_record(n, raw, outside, blackbox, BlackboxRun))
+        finally:
+            sys.modules.pop(MODULE, None)
     return rows

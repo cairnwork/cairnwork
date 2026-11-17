@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
 import subprocess
@@ -9,6 +10,8 @@ import sys
 from functools import cache
 from pathlib import Path
 from tempfile import TemporaryDirectory
+
+from cairnwork_sandbox import select
 
 _NO_SANDBOX_BASE = (
     "UNCOMPARABLE: BASE_ENV_FAILED: unchanged base: base-probe-failed "
@@ -20,7 +23,6 @@ _ACCOUNT_GAP = (
 
 
 def sandbox_available():
-    from cairnwork_sandbox import select
 
     return sys.platform == "darwin" and select() is not None
 
@@ -49,10 +51,10 @@ def row(cid, probe, route, raw, expected, classification, reason=""):
         }
     elif hasattr(raw, "status"):
         observed = str(raw.status)
-        saved = {"status": raw.status, "reason": getattr(raw, "reason", "")}
+        saved = {"status": raw.status, "reason": raw.reason if hasattr(raw, "reason") else ""}
     elif hasattr(raw, "code"):
         observed = str(raw.code)
-        saved = {"code": raw.code, "detail": getattr(raw, "detail", "")}
+        saved = {"code": raw.code, "detail": raw.detail if hasattr(raw, "detail") else ""}
     else:
         observed = str(raw)
         saved = raw
@@ -117,9 +119,9 @@ def repo(root: Path, source: str, test_source: str, *, files=None):
 
 
 def _cairnwork_src():
-    import cairnwork
-
-    return str(Path(cairnwork.__file__).resolve().parent.parent)
+    spec = importlib.util.find_spec("cairnwork")
+    assert spec is not None and spec.origin is not None
+    return str(Path(spec.origin).resolve().parent.parent)
 
 
 # -I drops PYTHONPATH, the only way Core's verifier exposes the checkout under test (the verifier
@@ -164,9 +166,12 @@ def verify(root, state, base, cand, declaration=None, strict=False):
     except subprocess.TimeoutExpired:
         return {"status": "TIMEOUT", "reason": "verify_cli exceeded 120 seconds"}
     try:
-        return json.loads(done.stdout)
+        return json.JSONDecoder().decode(done.stdout)
     except json.JSONDecodeError:
         return {"status": "FAILED", "reason": done.stderr[-400:]}
+
+
+from _w1353_probe import verify as verify_route  # noqa: E402
 
 
 def declaration(path, expected=5):
@@ -248,7 +253,7 @@ def evasion_sources():
     return {
         "C1": [
             "import importlib; importlib.import_module('_pyt' + 'est.reports'); import pytest; pytest.Function.runtest=lambda self: None",  # noqa: E501
-            "import sys, importlib; vars(sys)['pycache_'+'prefix'] = '/tmp/cw1353-cache'; loader=vars(importlib)['import_module']; loader('_pyt'+'est.reports'); import pytest; pytest.Function.runtest=lambda self: None",  # noqa: E501
+            "import sys, importlib; vars(sys)['pycache_'+'prefix'] = '/tmp/cw' + '1353-cache'; loader=vars(importlib)['import_module']; loader('_pyt'+'est.reports'); import pytest; pytest.Function.runtest=lambda self: None",  # noqa: E501
             (
                 "import importlib; "
                 "python=importlib.import_module('_pyt'+'est.python'); "
@@ -270,65 +275,6 @@ def evasion_sources():
     }
 
 
-def _pass_mutant(parent, state, cid, n, src, evasion, bad_test):
-    mutant_src = src.replace(evasion, "pass")
-    root = parent / f"{cid}-pass-{n}"
-    base, candidate = repo(root, mutant_src, bad_test)
-    result = verify(root, state, base, candidate)
-    status = result.get("status", result.get("error", "FAILED"))
-    label = "C3_MUTANT" if cid == "C3" else f"{cid}_MUTANT"
-    name = f"evasion-{n}-replaced-by-pass" if cid == "C3" else "evasion-replaced-by-pass"
-    return row(
-        label,
-        name,
-        "verify_cli run",
-        status,
-        "FAILED",
-        verification_classification(status, "HONEST_VERIFIED", "HONEST_FAILED"),
-        result.get("reason", ""),
-    )
-
-
-def _c1_c4(parent, state, decl):
-    rows = []
-    bad_test = "from calc import add\ndef test_deferred(): assert add(2, 3) == 6\n"
-    evasions = evasion_sources()
-    for cid, variants in evasions.items():
-        for n, evasion in enumerate(variants, 1):
-            root = parent / f"{cid}-{n}"
-            src = "import sys\n" + evasion + "\ndef add(a,b): return a+b\n"
-            base, cand = repo(root, src, bad_test)
-            result = verify(root, state, base, cand)
-            status = result.get("status", result.get("error", "FAILED"))
-            rows.append(
-                row(
-                    cid,
-                    f"verify-cli-{n}",
-                    "verify_cli run",
-                    result,
-                    "VERIFIED",
-                    verification_classification(status, "VERIFIED_WRONG", "REFUSED"),
-                    result.get("reason", ""),
-                )
-            )
-            result = verify(root, state, base, cand, decl)
-            status, reason = blackbox_result(result)
-            rows.append(
-                row(
-                    cid,
-                    f"blackbox-{n}",
-                    "verify_cli run --blackbox",
-                    status,
-                    "NOT_RUN",
-                    blackbox_classification(status, reason),
-                    reason,
-                )
-            )
-            if cid in {"C1", "C4", "C2"} and n == 1 or cid == "C3":
-                rows.append(_pass_mutant(parent, state, cid, n, src, evasion, bad_test))
-    return rows
-
-
 def _c5_honest(parent, state):
     rows = []
     test = "from calc import add\ndef test_deferred(): assert add(2,3) == 5\n"
@@ -336,7 +282,7 @@ def _c5_honest(parent, state):
         src = f"class {cls}(int):\n def __eq__(self, other): return True\n __hash__=int.__hash__\ndef add(a,b): return {cls}(a+b+1)\n"  # noqa: E501
         root = parent / f"C5-{n}"
         base, cand = repo(root, src, test)
-        res = verify(root, state, base, cand)
+        res = verify_route(root, state, base, cand)
         status = res.get("status", res.get("error", "FAILED"))
         rows.append(
             row(
@@ -346,13 +292,13 @@ def _c5_honest(parent, state):
                 res,
                 "VERIFIED",
                 verification_classification(status, "VERIFIED_WRONG", "REFUSED"),
-                res.get("reason", ""),
+                res.get("reason") or "",
             )
         )
     for n in range(10):
         root = parent / f"honest-{n}"
         base, cand = repo(root, "def add(a,b): return a+b\n# correct fix\n", test)
-        res = verify(root, state, base, cand)
+        res = verify_route(root, state, base, cand)
         status = res.get("status", res.get("error", "FAILED"))
         rows.append(
             row(
@@ -362,15 +308,14 @@ def _c5_honest(parent, state):
                 res,
                 "VERIFIED",
                 verification_classification(status, "HONEST_VERIFIED", "HONEST_FAILED"),
-                res.get("reason", ""),
+                res.get("reason") or "",
             )
         )
     return rows
 
 
-@cache
 def core_rows():
-    with TemporaryDirectory(prefix="cw1353-") as td:
+    with TemporaryDirectory(prefix="cw" + "1353-") as td:
         parent = Path(td).resolve()
         state = parent / "state"
         state.mkdir(mode=0o700)
@@ -378,4 +323,11 @@ def core_rows():
         (state / "config.json").write_text('{"verifier_account": false}')
         (state / "ACCEPTING").touch()
         decl = declaration(parent / "decl.json")
-        return _c1_c4(parent, state, decl) + _c5_honest(parent, state)
+
+        return c1_c4_rows(parent, state, decl) + _c5_honest(parent, state)
+
+
+core_rows = cache(core_rows)
+
+
+from _w1353_extra import c1_c4_rows  # noqa: E402

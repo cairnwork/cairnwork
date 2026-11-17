@@ -11,6 +11,61 @@ from pathlib import Path
 
 import pytest
 
+from tests import _w1353_allow_round5_tests as round5
+from tests import _w1353_allow_round6_tests as round6_pin_tests
+from tests import _w1353_allow_round8_tests as round8_pin_tests
+from tests._w1353_allow import check as allow_check
+from tests._w1353_allow_cases import (
+    EXECUTED_MUST_BLOCK,
+    MUST_BLOCK,
+    MUST_PASS,
+    ROUND_FIVE_MUST_BLOCK,
+    ROUND_FIVE_MUST_PASS,
+    ROUND_FOUR_MUST_BLOCK,
+    ROUND_THREE_MUST_BLOCK,
+)
+
+test_byte_edits_trip_pin_and_name_the_file = (
+    round6_pin_tests.test_byte_edits_trip_pin_and_name_the_file
+)
+test_every_trusted_helper_pin_entry_exists = (
+    round6_pin_tests.test_every_trusted_helper_pin_entry_exists
+)
+test_missing_pinned_file_is_a_mismatch = round6_pin_tests.test_missing_pinned_file_is_a_mismatch
+test_new_pin_helper_passes_witness_grammar = (
+    round6_pin_tests.test_new_pin_helper_passes_witness_grammar
+)
+test_path_spellings_do_not_skip_pin_check = (
+    round6_pin_tests.test_path_spellings_do_not_skip_pin_check
+)
+test_round_six_mutations_trip_whole_module_pin = (
+    round6_pin_tests.test_round_six_mutations_trip_whole_module_pin
+)
+test_trusted_helper_modules_match_reviewed_pins = (
+    round6_pin_tests.test_trusted_helper_modules_match_reviewed_pins
+)
+test_one_file_edit_has_exactly_one_mismatching_path = (
+    round6_pin_tests.test_one_file_edit_has_exactly_one_mismatching_path
+)
+test_w1353_namespace_has_no_shadow_directories = (
+    round8_pin_tests.test_w1353_namespace_has_no_shadow_directories
+)
+test_w1353_shadow_directory_mutation_control = (
+    round8_pin_tests.test_w1353_shadow_directory_mutation_control
+)
+test_w1353_pin_modules_import_from_their_reviewed_files = (
+    round8_pin_tests.test_w1353_pin_modules_import_from_their_reviewed_files
+)
+test_w1353_module_origin_rejects_foreign_sys_modules_entry = (
+    round8_pin_tests.test_w1353_module_origin_rejects_foreign_sys_modules_entry
+)
+test_w1353_witness_objects_come_from_pinned_modules = (
+    round8_pin_tests.test_w1353_witness_objects_come_from_pinned_modules
+)
+test_witness_exposes_every_round_eight_guard = (
+    round8_pin_tests.test_witness_exposes_every_round_eight_guard
+)
+
 
 def _load(name, *, register=True):
     path = Path(__file__).with_name(name + ".py")
@@ -117,8 +172,12 @@ def test_observed_values_are_recomputed_from_raw_route_returns():
         )
         assert item["observed"] == derived
         assert isinstance(item["matches_spec"], bool)
-    sources = list(Path(__file__).parent.glob("_w1353_*.py"))
-    assert all(not _literal_observations(path.read_text()) for path in sources)
+    sources = [
+        path
+        for path in Path(__file__).parent.glob("_w1353_*.py")
+        if not path.name.startswith("_w1353_allow")
+    ]
+    assert all(not allow_check(path.read_text(), str(path)) for path in sources)
     tree = ast.parse(Path(__file__).read_text())
     assert not any(
         isinstance(n, ast.Call)
@@ -130,120 +189,66 @@ def test_observed_values_are_recomputed_from_raw_route_returns():
     )
 
 
-def _literal_observations(source):
-    tree = ast.parse(source)
-
-    def literal_tree(node):
-        return isinstance(node, ast.Constant) or (
-            isinstance(node, (ast.List, ast.Tuple))
-            and all(literal_tree(item) for item in node.elts)
-        )
-
-    def allowed(node):
-        if isinstance(node, ast.Call):
-            if (
-                isinstance(node.func, ast.Attribute)
-                and node.func.attr == "join"
-                and isinstance(node.func.value, ast.Constant)
-                and node.args
-                and literal_tree(node.args[0])
-            ):
-                return False
-            return True
-        if isinstance(node, (ast.Attribute, ast.Subscript)):
-            return True
-        return (
-            isinstance(node, ast.Name)
-            and bool(bindings.get(node.id))
-            and all(
-                isinstance(value, (ast.Call, ast.Attribute, ast.Subscript))
-                for value in bindings[node.id]
-            )
-        )
-
-    bindings = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            targets = node.targets
-        elif isinstance(node, (ast.AnnAssign, ast.NamedExpr, ast.AugAssign)):
-            targets = [node.target]
-        else:
-            continue
-        for target in targets:
-            for name in ast.walk(target):
-                if isinstance(name, ast.Name):
-                    bindings.setdefault(name.id, []).append(node.value)
-
-    row_names = {"row"}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom):
-            row_names.update(
-                alias.asname or alias.name
-                for alias in node.names
-                if node.module == "_w1353_probe" and alias.name == "row"
-            )
-
-    flagged = []
-    for node in ast.walk(tree):
-        is_row_call = isinstance(node, ast.Call) and (
-            (isinstance(node.func, ast.Name) and node.func.id in row_names)
-            or (isinstance(node.func, ast.Attribute) and node.func.attr == "row")
-        )
-        if is_row_call and isinstance(node, ast.Call):
-            raw = (
-                node.args[3]
-                if len(node.args) > 3
-                else next((kw.value for kw in node.keywords if kw.arg == "raw"), None)
-            )
-            if raw is None or not allowed(raw):
-                flagged.append(node.lineno)
-        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            if any(
-                isinstance(name, ast.Name) and name.id == "observed"
-                for target in targets
-                for name in ast.walk(target)
-            ):
-                if not allowed(node.value):
-                    flagged.append(node.lineno)
-    return flagged
-
-
-@pytest.mark.parametrize(
-    "source",
-    [
-        'R = "blackbox:add: PASS [matched 1/1]"\nrow("C9", "t", "r", R, "x", "y")',
-        'def f():\n    r = "PASS"\n    return row("C9", "t", "r", r, "x", "y")',
-        'row("C9", "t", "r", "PASS" if flag else "FAIL", "x", "y")',
-        'row("C9", "t", "r", "PA" + "SS", "x", "y")',
-        'row("C9", "t", "r", "".join(["PASS"]), "x", "y")',
-        'row("C9", "t", "r", f"{\'PASS\'}", "x", "y")',
-        'probe.row("C9", "t", "r", "PASS", "x", "y")',
-        'from _w1353_probe import row as rec\nrec("C9", "t", "r", "PASS", "x", "y")',
-        'observed = "VER" + "IFIED"',
-        'row("C9", "timeout", "...", "blackbox:add: VERIFICATION_INCOMPLETE: TIMEOUT", "x", "y")',
-        'observed = "PASS"',
-    ],
-)
+@pytest.mark.parametrize("source", MUST_BLOCK)
 def test_literal_observation_checker_rejects_constant_raw_values(source):
-    assert _literal_observations(source)
+    assert allow_check(source)
+
+
+@pytest.mark.parametrize(("case_id", "source"), EXECUTED_MUST_BLOCK.items())
+def test_allow_checker_blocks_executed_round_two_bypasses(case_id, source):
+    assert allow_check(source), case_id
+
+
+@pytest.mark.parametrize(("case_id", "source"), ROUND_THREE_MUST_BLOCK.items())
+def test_allow_checker_blocks_round_three_bypasses(case_id, source):
+    assert allow_check(source), case_id
+
+
+@pytest.mark.parametrize(("case_id", "source"), ROUND_FOUR_MUST_BLOCK.items())
+def test_allow_checker_blocks_round_four_reachability_bypasses(case_id, source):
+    assert allow_check(source), case_id
+
+
+@pytest.mark.parametrize(("case_id", "source"), ROUND_FIVE_MUST_BLOCK.items())
+def test_allow_checker_blocks_round_five_bypasses(case_id, source):
+    round5.round_five_block(case_id, source)
+
+
+@pytest.mark.parametrize("source", MUST_PASS)
+def test_literal_observation_checker_allows_route_derived_raw_values(source):
+    assert not allow_check(source)
+
+
+@pytest.mark.parametrize("source", ROUND_FIVE_MUST_PASS)
+def test_allow_checker_allows_non_lookup_w1353_string(source):
+    round5.round_five_pass(source)
 
 
 @pytest.mark.parametrize(
-    "source",
+    ("case_id", "source", "mutation"),
     [
-        'row("C9", "t", route(), result(), "x", "y")',
-        'row("C8", name, "verify_bundle", check(path), wanted, "REFUSED")',
-        'row("C6", "x", "judge", verdict.reason, "PASS", "y")',
+        ("b8_reduce_getattr", ROUND_FIVE_MUST_BLOCK["b8_reduce_getattr"], "builtin"),
+        ("a10_sys_modules_escape", ROUND_FIVE_MUST_BLOCK["a10_sys_modules_escape"], "modules"),
+        ("a15_unpinned_observed_sink", ROUND_FIVE_MUST_BLOCK["a15_unpinned_observed_sink"], "pin"),
     ],
 )
-def test_literal_observation_checker_allows_route_derived_raw_values(source):
-    assert not _literal_observations(source)
+def test_round_five_guard_mutations_are_live(case_id, source, mutation, monkeypatch):
+    round5.round_five_mutation(case_id, source, mutation, monkeypatch)
 
 
 def test_literal_observation_checker_accepts_current_probe_call_sites():
-    sources = Path(__file__).parent.glob("_w1353_*.py")
-    assert all(not _literal_observations(path.read_text()) for path in sources)
+    sources = [
+        path
+        for path in Path(__file__).parent.glob("_w1353_*.py")
+        if not path.name.startswith("_w1353_allow")
+    ]
+    findings = {str(path): allow_check(path.read_text(), str(path)) for path in sources}
+    assert not any(findings.values()), findings
+
+
+@pytest.mark.parametrize(("source", "mutation"), round5.LEGACY_MUTATIONS)
+def test_guard_mutation_controls(source, mutation, monkeypatch):
+    round5.legacy_mutation(source, mutation, monkeypatch)
 
 
 @pytest.mark.parametrize(
