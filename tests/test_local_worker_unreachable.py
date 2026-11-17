@@ -42,7 +42,7 @@ def test_pinned_abort_cause_vocabulary_keeps_old_values() -> None:
 
 
 class _ErrorHandler(http.server.BaseHTTPRequestHandler):
-    def log_message(self, _format: str, *_args: object) -> None:
+    def log_message(self, format: str, *_args: object) -> None:  # noqa: A002 - matches BaseHTTPRequestHandler
         pass
 
     def do_POST(self) -> None:
