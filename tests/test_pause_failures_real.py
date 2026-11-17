@@ -221,8 +221,9 @@ def test_ac8_real_runner_change_between_digests(
 def test_ac8_real_runner_time_only_change_between_digests_stops_the_run(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
-    """Same-tree before/arrival digests bind mtime and ctime (runner bind_times=True): a change
-    that only moves app.py's mtime must still stop the run, and the run must not resume."""
+    """Same-tree before/arrival digests bind mtime and ctime (runner bind_times=True). os.utime
+    moves ctime as well, so this test shows the time binding as a pair, not mtime alone (mtime
+    alone is pinned by test_pause_guard_metadata). Without the binding the run would resume."""
     args, repo, base, out = _setup(tmp_path)
     transcript = out / "private" / "ep_r0" / "transcript.json"
     worker = _r0_worker(base, out, transcript)

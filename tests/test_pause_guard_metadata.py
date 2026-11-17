@@ -124,3 +124,15 @@ def test_the_ignored_flags_do_not_change_the_key(tmp_path):
     system_managed = 0x20 | 0x40 | 0x40000000  # UF_COMPRESSED, UF_TRACKED, SF_DATALESS
     assert guard_meta.read(os.fsencode(path), with_flags(system_managed)).key() == plain
     assert guard_meta.read(os.fsencode(path), with_flags(stat.UF_HIDDEN)).key() != plain
+
+
+def test_bind_times_binds_mtime_and_ctime_separately(tmp_path):
+    guard = TreeGuard(tmp_path, bind_times=True)
+
+    def at(mtime, ctime):
+        return SimpleNamespace(st_mtime_ns=mtime, st_ctime_ns=ctime)
+
+    base = guard._times(at(10, 20))
+    assert guard._times(at(11, 20)) != base  # mtime alone
+    assert guard._times(at(10, 21)) != base  # ctime alone
+    assert TreeGuard(tmp_path)._times(at(11, 21)) == b""  # unbound: nothing
