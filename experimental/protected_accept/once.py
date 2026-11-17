@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 import time
 from pathlib import Path
 
@@ -13,7 +14,15 @@ _COMMITMENT = re.compile(r"[0-9a-f]{64}\Z")
 class OnceStore:
     def __init__(self, root: Path):
         self.root = root
+        try:
+            info = self.root.lstat()
+        except FileNotFoundError:
+            info = None
+        if info is not None and stat.S_ISLNK(info.st_mode):
+            raise ValueError("once store root cannot be a symlink")
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if stat.S_ISLNK(self.root.lstat().st_mode):
+            raise ValueError("once store root cannot be a symlink")
         os.chmod(self.root, 0o700)
 
     def _path(self, commitment: str) -> Path:
@@ -32,4 +41,4 @@ class OnceStore:
         return True
 
     def used(self, commitment: str) -> bool:
-        return self._path(commitment).exists()
+        return os.path.lexists(self._path(commitment))

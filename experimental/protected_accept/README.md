@@ -8,6 +8,7 @@
 - A sandbox profile is required; account and sandbox status are reported separately.
 - Entropy checks refuse checks that a constant or guessed report can satisfy.
 - One declaration commitment may be attempted once in a store.
+- The lock is keyed by the salted commitment, so a re-salted declaration is a new attempt; the Stage 3 harness counts attempts.
 - Candidate reports remain untrusted, including their module path and outcomes.
 - This package is default off and is never imported by core.
 

@@ -104,6 +104,7 @@ def test_judge_outcomes_and_worker_view() -> None:
 
 def test_once_store_is_exclusive_and_private(tmp_path: Path) -> None:
     store = OnceStore(tmp_path / "once")
+    assert stat_mode(store.root) == 0o700
     commitment = "a" * 64
     assert store.consume(commitment, COMMIT)
     assert not store.consume(commitment, "d" * 40)
@@ -111,6 +112,20 @@ def test_once_store_is_exclusive_and_private(tmp_path: Path) -> None:
     assert stat_mode(store.root / f"{commitment}.used") == 0o600
     with pytest.raises(ValueError):
         store.consume("../bad", COMMIT)
+
+
+def test_once_store_rejects_symlink_root_and_used_link(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    root_link = tmp_path / "root-link"
+    root_link.symlink_to(target, target_is_directory=True)
+    with pytest.raises(ValueError, match="symlink"):
+        OnceStore(root_link)
+    store = OnceStore(tmp_path / "once-links")
+    dangling = store.root / f"{'b' * 64}.used"
+    dangling.symlink_to(tmp_path / "missing")
+    assert store.used("b" * 64)
+    assert not store.consume("b" * 64, COMMIT)
 
 
 def stat_mode(path: Path) -> int:
@@ -132,6 +147,9 @@ def test_run_protected_lock_order_and_failures(tmp_path: Path, monkeypatch) -> N
         raise RuntimeError("fail")
 
     monkeypatch.setattr("experimental.protected_accept.run.run_blackbox", fake_run)
+    bad_commit = run_protected(good, context(object()), "bad", "r0", store)
+    assert (bad_commit.status, bad_commit.code) == ("REFUSED", "BAD_COMMIT")
+    assert not store.used(good.commitment().removeprefix("sha256:"))
     accountless = run_protected(good, context(None), COMMIT, "r1", store)
     assert (accountless.status, accountless.code) == ("REFUSED", "NEEDS_VERIFIER_ACCOUNT")
     digest = good.commitment().removeprefix("sha256:")
@@ -144,6 +162,22 @@ def test_run_protected_lock_order_and_failures(tmp_path: Path, monkeypatch) -> N
     assert store.used(digest)
     reused = run_protected(good, context(object()), COMMIT, "r4", store)
     assert (reused.status, reused.code) == ("REFUSED", "DECLARATION_REUSED")
+
+
+def test_run_protected_passes_zero_timeout(tmp_path: Path, monkeypatch) -> None:
+    good = declaration([{"expected": 5}, {"expected": 9}])
+    seen = []
+
+    def fake_run(*_args, **kwargs):
+        seen.append(kwargs)
+        return run(answers([{"ok": 5}, {"ok": 9}]))
+
+    monkeypatch.setattr("experimental.protected_accept.run.run_blackbox", fake_run)
+    result = run_protected(
+        good, context(object()), COMMIT, "r1", OnceStore(tmp_path / "once"), timeout=0
+    )
+    assert (result.status, result.code) == ("PROTECTED_PASS", "OK")
+    assert seen == [{"timeout": 0}]
 
 
 def test_negative_control_owner_comparator_removed(monkeypatch) -> None:
@@ -184,3 +218,168 @@ def test_class_check_with_only_degenerate_calls_is_low_entropy() -> None:
     assert declaration_problems(parse(json.dumps(raw).encode())) == ("TOO_FEW_CASES:acc",)
     check["cases"][0] = case("k0", [call(0), call(12)])
     assert declaration_problems(parse(json.dumps(raw).encode())) == ()
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        pytest.param(
+            (
+                "function",
+                {"expected": 5.0, "tolerance": {"abs_tol": 3}},
+                {"expected": 7.0, "tolerance": {"abs_tol": 3}},
+            ),
+            id="abs-overlap",
+        ),
+        pytest.param(
+            (
+                "function",
+                {"expected": 5.0, "tolerance": {"rel_tol": 0.9}},
+                {"expected": 7.0, "tolerance": {"rel_tol": 0.9}},
+            ),
+            id="rel-overlap",
+        ),
+        pytest.param(("function", {"expected": [True]}, {"expected": [False]}), id="bool-leaf"),
+        pytest.param(("function", {"expected": [0]}, {"expected": [1]}), id="int-leaf"),
+        pytest.param(("function", {"expected": [None]}, {"expected": [[]]}), id="null-empty"),
+        pytest.param(
+            ("function", {"expected": {"a": True}}, {"expected": {"a": False}}), id="dict-value"
+        ),
+        pytest.param(
+            (
+                "function",
+                {"expected": 1.0, "tolerance": {"abs_tol": 0}},
+                {"expected": -1.0, "tolerance": {"abs_tol": 0}},
+            ),
+            id="float-sign",
+        ),
+        pytest.param(("class", [12, True], [12, False]), id="class-bool-call"),
+        pytest.param(("class", [12, 0], [12, 1]), id="class-int-call"),
+        pytest.param(
+            (
+                "class",
+                [12, {"expected": 5.0, "tolerance": {"abs_tol": 3}}],
+                [12, {"expected": 7.0, "tolerance": {"abs_tol": 3}}],
+            ),
+            id="class-tolerance-overlap",
+        ),
+    ],
+)
+def test_constant_or_guessable_report_is_refused(values) -> None:
+    """A report guessed from constants or degenerate leaves must not pass precheck."""
+    kind, first, second = values
+    if kind == "function":
+        decl = declaration([first, second])
+    else:
+
+        def call(value):
+            outcome = value if isinstance(value, dict) else {"expected": value}
+            return {"method": "m", "args": [], "kwargs": {}, **outcome}
+
+        check = {
+            "id": "add",
+            "module": "sample",
+            "class": "Thing",
+            "cases": [
+                {"id": "k0", "calls": [call(v) for v in first]},
+                {"id": "k1", "calls": [call(v) for v in second]},
+            ],
+        }
+        decl = parse(json.dumps({"salt": SALT, "checks": [check]}).encode())
+    assert declaration_problems(decl)
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        pytest.param([{"expected": 5}, {"expected": 9}], id="integers"),
+        pytest.param([{"expected": 2}, {"expected": 3}], id="nearby-integers"),
+        pytest.param([{"expected": 2}, {"expected": -2}], id="signed-integers"),
+        pytest.param(
+            [{"raises": {"type": "ValueError", "message": "bad"}}, {"expected": 9}],
+            id="raise-and-value",
+        ),
+        pytest.param(
+            [
+                {"raises": {"type": "ValueError", "message": "bad"}},
+                {"raises": {"type": "ValueError", "message": "worse"}},
+            ],
+            id="raises",
+        ),
+        pytest.param(
+            [
+                {"expected": 0.5, "tolerance": {"abs_tol": 1e-9}},
+                {"expected": 0.25, "tolerance": {"abs_tol": 1e-9}},
+            ],
+            id="small-floats",
+        ),
+        pytest.param(
+            [
+                {"expected": 5.0, "tolerance": {"abs_tol": 0.5}},
+                {"expected": 7.0, "tolerance": {"abs_tol": 0.5}},
+            ],
+            id="separate-windows",
+        ),
+        pytest.param([{"expected": [3, 4]}, {"expected": [5]}], id="lists"),
+        pytest.param({"class_calls": [[0, 12], [7, 11]]}, id="class-calls"),
+    ],
+)
+def test_honest_declarations_pass_precheck(values) -> None:
+    if isinstance(values, dict):
+
+        def call(value):
+            outcome = value if isinstance(value, dict) else {"expected": value}
+            return {"method": "m", "args": [], "kwargs": {}, **outcome}
+
+        check = {
+            "id": "add",
+            "module": "sample",
+            "class": "Thing",
+            "cases": [
+                {"id": f"k{index}", "calls": [call(value) for value in calls]}
+                for index, calls in enumerate(values["class_calls"])
+            ],
+        }
+        decl = parse(json.dumps({"salt": SALT, "checks": [check]}).encode())
+    else:
+        decl = declaration(values)
+    assert declaration_problems(decl) == ()
+
+
+def test_one_failing_check_of_several_is_mismatch() -> None:
+    raw = {
+        "salt": SALT,
+        "checks": [
+            {
+                "id": name,
+                "module": "sample",
+                "function": name,
+                "cases": [
+                    {"id": f"c{i}", "args": [], "expected": val} for i, val in enumerate((5, 9))
+                ],
+            }
+            for name in ("x", "y")
+        ],
+    }
+    decl = parse(json.dumps(raw).encode())
+    report = json.dumps(
+        {
+            "checks": {
+                "x": {"file": f"{CHECKOUT}/sample.py", "cases": {"c0": {"ok": 5}, "c1": {"ok": 9}}},
+                "y": {"file": f"{CHECKOUT}/sample.py", "cases": {"c0": {"ok": 6}, "c1": {"ok": 9}}},
+            }
+        }
+    ).encode()
+    result = judge_module.judge(decl, COMMIT, run(report))
+    assert (result.status, result.code) == ("MISMATCH", "MISMATCH:y")
+
+
+def test_judge_error_is_incomplete(monkeypatch) -> None:
+    good = declaration([{"expected": 5}, {"expected": 9}])
+
+    def fail(*_args):
+        raise RuntimeError("oracle error")
+
+    monkeypatch.setattr(judge_module, "judge_run", fail)
+    result = judge_module.judge(good, COMMIT, run(answers([{"ok": 5}, {"ok": 9}])))
+    assert (result.status, result.code) == ("INCOMPLETE", "JUDGE_ERROR")
