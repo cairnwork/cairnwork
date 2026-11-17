@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +17,14 @@ from tests._w1353_allow import (
 )
 from tests._w1353_allow_imports import advanced_findings, import_findings, sink_findings
 
-SINK_PINS = {"_w1353_probe.row": "5c6f12ad59a79790b4b72a2e9f0a5e3778f582f9fc8f08b46729e6f0dbd5b13b"}
+# ast.dump of a function differs between CPython minor versions, so the row() pin is
+# keyed by the running interpreter. An interpreter with no pin gets "" and fails closed.
+_SINK_ROW_PINS = {
+    (3, 11): "efd8dce450611350f94804065f7dd0e6ed16e373b65ed3e132991ed43a0132e9",
+    (3, 12): "7c84f013210405e6239f3b59be5e1163eaa224248bf5b00bc137dbf0b16d096a",
+    (3, 13): "5c6f12ad59a79790b4b72a2e9f0a5e3778f582f9fc8f08b46729e6f0dbd5b13b",
+}
+SINK_PINS = {"_w1353_probe.row": _SINK_ROW_PINS.get(sys.version_info[:2], "")}
 
 # Top-level package names used by today's witness files. Reflective and loader
 # imports are deliberately absent; selected harness helpers are listed below.
