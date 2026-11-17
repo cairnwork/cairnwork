@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import subprocess
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from experimental.pause import cli, flow, receipt
 from experimental.pause.flow import CoreVerdict, RunResult, run_flow
@@ -206,3 +209,45 @@ def test_cli_writes_fallback_receipt(tmp_path: Path, monkeypatch: Any) -> None:
     records = (out / cli.RECEIPTS_FILE).read_text().splitlines()
     rec = json.loads(records[-1])
     assert rec["reason"] == "PAUSE_NO_CUT" and receipt.verify(rec) == []
+
+
+@pytest.mark.parametrize("record", [["x"], "x", 1])
+def test_record_truthy_not_dict_keeps_r0(tmp_path: Path, record: Any) -> None:
+    r0, r1 = _case(tmp_path)
+    r0 = dataclasses.replace(r0, record=record)
+    _assert_fallback(*_run(r0, r1), "PAUSE_NO_CUT")
+
+
+class _BadMetaGate:
+    def __init__(self, model_id: Any, effort: Any) -> None:
+        self.model_id = model_id
+        self.effort = effort
+
+    def review(self, request: Any) -> GateReply:
+        return GateReply("ACCEPT", self.model_id, self.effort)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("model_id,effort", [(123, "low"), ("m", 5)], ids=["model_id", "effort"])
+def test_gate_metadata_not_str_falls_back(tmp_path: Path, model_id: Any, effort: Any) -> None:
+    r0, r1 = _case(tmp_path)
+    result, rec = run_flow(
+        [],
+        task_id="task",
+        planner=Planner(),
+        gate=_BadMetaGate(model_id, effort),
+        planner_settings=SETTINGS,
+        gate_settings=SETTINGS,
+        runner=lambda mode, args, **_kwargs: r0 if mode == "run" else r1,
+        core_verdict=lambda _r: CoreVerdict("REJECTED", "0" * 64),
+    )
+    _assert_fallback(result, rec, "PAUSE_GATE_BAD_OUTPUT")
+
+
+class _BadEffortPlanner:
+    def plan(self, request: Any) -> PlanReply:
+        return PlanReply("plan", "m", 5)  # type: ignore[arg-type]
+
+
+def test_planner_effort_not_str_falls_back(tmp_path: Path) -> None:
+    r0, r1 = _case(tmp_path)
+    _assert_fallback(*_run(r0, r1, planner=_BadEffortPlanner()), "PAUSE_PLANNER_BAD_OUTPUT")
