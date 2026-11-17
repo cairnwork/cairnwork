@@ -63,26 +63,19 @@ def _tolerance(item) -> tuple[float, float] | None:
     return number(raw.get("rel_tol", 0)), number(raw.get("abs_tol", 0))
 
 
-def _expected_number(item) -> float | None:
-    value = json.loads(item.expected)
+def _float(value: Any) -> float | None:
     if type(value) is dict and set(value) == {FLOAT}:
         return float.fromhex(value[FLOAT])
     return None
 
 
-def _match_number(item, value: float) -> bool:
-    expected = _expected_number(item)
-    tolerance = _tolerance(item)
-    if expected is None or tolerance is None:
-        return item.expected == json.dumps(value, separators=(",", ":"))
-    rel_tol, abs_tol = tolerance
+def _fits(value: float, expected: float, tolerance: tuple[float, float] | None) -> bool:
+    rel_tol, abs_tol = tolerance or (0.0, 0.0)
     return math.isclose(value, expected, rel_tol=rel_tol, abs_tol=abs_tol)
 
 
 def _window_edges(expected: float, tolerance: tuple[float, float] | None) -> tuple[float, float]:
     rel_tol, abs_tol = tolerance or (0.0, 0.0)
-    if rel_tol >= 1:
-        return -math.inf, math.inf
     if expected > 0:
         return expected - max(abs_tol, rel_tol * expected), max(
             expected + abs_tol, expected / (1 - rel_tol)
@@ -94,21 +87,33 @@ def _window_edges(expected: float, tolerance: tuple[float, float] | None) -> tup
     return -abs_tol, abs_tol
 
 
-def _windows_overlap(left, right) -> bool:
-    a, b = _expected_number(left), _expected_number(right)
-    if a is None or b is None:
-        return left.expected == right.expected
-    tolerances = (_tolerance(left), _tolerance(right))
-    candidates = {a, b, a / 2 + b / 2}
-    for expected, tolerance in zip((a, b), tolerances, strict=True):
-        candidates.update(_window_edges(expected, tolerance))
-    return any(_match_number(left, value) and _match_number(right, value) for value in candidates)
+def _floats_meet(a: float, b: float, left, right) -> bool:
+    if max((left or (0.0, 0.0))[0], (right or (0.0, 0.0))[0]) >= 1:
+        return True
+    candidates = {a, b, a / 2 + b / 2, *_window_edges(a, left), *_window_edges(b, right)}
+    return any(_fits(value, a, left) and _fits(value, b, right) for value in candidates)
+
+
+def _values_meet(a: Any, b: Any, left, right) -> bool:
+    """True when one reported value would satisfy both expected values."""
+    fa, fb = _float(a), _float(b)
+    if fa is not None and fb is not None:
+        return _floats_meet(fa, fb, left, right)
+    if type(a) is list and type(b) is list:
+        return len(a) == len(b) and all(
+            _values_meet(x, y, left, right) for x, y in zip(a, b, strict=True)
+        )
+    if type(a) is dict and type(b) is dict and fa is None and fb is None:
+        return a.keys() == b.keys() and all(_values_meet(a[k], b[k], left, right) for k in a)
+    return type(a) is type(b) and a == b
 
 
 def _distinct(left, right) -> bool:
-    if _tolerance(left) is None and _tolerance(right) is None:
+    if left.raises or right.raises:
         return _key(left) != _key(right)
-    return not _windows_overlap(left, right)
+    return not _values_meet(
+        json.loads(left.expected), json.loads(right.expected), _tolerance(left), _tolerance(right)
+    )
 
 
 def _has_distinct_answers(safe_cases: list, kind: str) -> bool:

@@ -21,9 +21,14 @@ class OnceStore:
         if info is not None and stat.S_ISLNK(info.st_mode):
             raise ValueError("once store root cannot be a symlink")
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        if stat.S_ISLNK(self.root.lstat().st_mode):
-            raise ValueError("once store root cannot be a symlink")
-        os.chmod(self.root, 0o700)
+        try:
+            fd = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        except OSError as exc:
+            raise ValueError("once store root cannot be a symlink") from exc
+        try:
+            os.fchmod(fd, 0o700)
+        finally:
+            os.close(fd)
 
     def _path(self, commitment: str) -> Path:
         if not _COMMITMENT.fullmatch(commitment):

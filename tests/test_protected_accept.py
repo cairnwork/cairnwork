@@ -263,6 +263,17 @@ def test_class_check_with_only_degenerate_calls_is_low_entropy() -> None:
             ),
             id="class-tolerance-overlap",
         ),
+        pytest.param(
+            ("function", *({"expected": [x], "tolerance": {"abs_tol": 0.1}} for x in (2.0, 2.1))),
+            id="nested-tolerance-overlap",
+        ),
+        pytest.param(
+            (
+                "function",
+                *({"expected": {"a": [x, 9]}, "tolerance": {"abs_tol": 0.5}} for x in (2.0, 2.5)),
+            ),
+            id="deep-tolerance-overlap",
+        ),
     ],
 )
 def test_constant_or_guessable_report_is_refused(values) -> None:
@@ -322,6 +333,10 @@ def test_constant_or_guessable_report_is_refused(values) -> None:
         ),
         pytest.param([{"expected": [3, 4]}, {"expected": [5]}], id="lists"),
         pytest.param({"class_calls": [[0, 12], [7, 11]]}, id="class-calls"),
+        pytest.param(
+            [{"expected": [x], "tolerance": {"abs_tol": 0.1}} for x in (2.0, 2.3)],
+            id="nested-separate-windows",
+        ),
     ],
 )
 def test_honest_declarations_pass_precheck(values) -> None:
