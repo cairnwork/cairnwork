@@ -55,6 +55,7 @@ def round_five_pass(source):
 def round_five_mutation(case_id, source, mutation, monkeypatch):
     import tests._w1353_allow_imports as imports
     import tests._w1353_allow_rules as rules
+    import tests._w1353_allow_syntax as syntax
 
     path = {
         "a10_sys_modules_escape": "tests/_w1353_receipt.py",
@@ -62,6 +63,7 @@ def round_five_mutation(case_id, source, mutation, monkeypatch):
         "a15_unpinned_observed_sink": "tests/_w1353_probe.py",
     }.get(case_id, "witness.py")
     assert allow_check(source, path)
+    monkeypatch.setattr(syntax, "syntax_findings", lambda tree: [])
     if mutation == "builtin":
         monkeypatch.setattr(imports, "SAFE_BUILTINS", imports.SAFE_BUILTINS | {"getattr"})
     elif mutation == "modules":

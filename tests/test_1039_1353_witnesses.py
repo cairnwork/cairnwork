@@ -25,6 +25,7 @@ from tests._w1353_allow_cases import (
     ROUND_THREE_MUST_BLOCK,
 )
 from tests._w1353_allow_round10_tests import *  # noqa: F403
+from tests._w1353_allow_round13_tests import *  # noqa: F403
 
 test_byte_edits_trip_pin_and_name_the_file = (
     round6_pin_tests.test_byte_edits_trip_pin_and_name_the_file
@@ -339,7 +340,6 @@ def test_candidate_routes_match_pinned_main_outputs():
             ("UNCOMPARABLE", "REFUSED")
         ] * 2
         assert all(probe._NO_SANDBOX_BASE in r["reason"] for r in c2_blackbox)
-    # Linux: C2 is observed on CI as VERIFIED.
     expected = ["VERIFIED", "VERIFIED"]
     if not (sys.platform == "linux" or probe.sandbox_available()):
         expected = ["UNCOMPARABLE", "UNCOMPARABLE"]

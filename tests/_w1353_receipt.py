@@ -41,6 +41,36 @@ def bundle_route(path, pub, full, candidate, expected_base=None, policy=None):
     )
 
 
+def _rechain(value):
+    pred = value["predicate"]
+    binding = pred["binding"]
+    request = pred["request"]
+    contract = request["acceptance_contract"]
+    contract["requirements_hash"] = binding_hash(binding)
+    target = "git-tree:" + binding["executed_tree"]
+    request["change_set"]["target_revision"] = target
+    request["change_manifest"]["target_tree"] = target
+    hashes = {
+        "acceptance_contract_hash": acceptance_contract_hash(contract),
+        "change_set_hash": change_set_hash(request["change_set"]),
+        "verification_plan_hash": verification_plan_hash(request["verification_plan"]),
+        "evidence_bundle_hash": evidence_bundle_hash(request["evidence_bundle"]),
+        "change_manifest_hash": change_manifest_hash(request["change_manifest"]),
+    }
+    plan = request["verification_plan"]
+    evidence = request["evidence_bundle"]
+    plan["acceptance_contract_hash"] = hashes["acceptance_contract_hash"]
+    plan["change_set_hash"] = hashes["change_set_hash"]
+    evidence["acceptance_contract_hash"] = hashes["acceptance_contract_hash"]
+    evidence["change_set_hash"] = hashes["change_set_hash"]
+    hashes["verification_plan_hash"] = verification_plan_hash(plan)
+    evidence["verification_plan_hash"] = hashes["verification_plan_hash"]
+    hashes["evidence_bundle_hash"] = evidence_bundle_hash(evidence)
+    pred["request_hash"] = _digest(request)
+    pred["response"]["hashes"] = hashes
+    return value
+
+
 def _c8_policy_cases(parent, state, p, pub, full, candidate, bundle):
 
     rows = []
@@ -98,35 +128,6 @@ def _c8_mutations(parent, state, p, bundle, pub, full, candidate):
     rows = []
     stmt = json.JSONDecoder().decode(base64.b64decode(read_bundle(bundle)["payload"]).decode())
 
-    def rechain(value):
-        pred = value["predicate"]
-        binding = pred["binding"]
-        request = pred["request"]
-        contract = request["acceptance_contract"]
-        contract["requirements_hash"] = binding_hash(binding)
-        target = "git-tree:" + binding["executed_tree"]
-        request["change_set"]["target_revision"] = target
-        request["change_manifest"]["target_tree"] = target
-        hashes = {
-            "acceptance_contract_hash": acceptance_contract_hash(contract),
-            "change_set_hash": change_set_hash(request["change_set"]),
-            "verification_plan_hash": verification_plan_hash(request["verification_plan"]),
-            "evidence_bundle_hash": evidence_bundle_hash(request["evidence_bundle"]),
-            "change_manifest_hash": change_manifest_hash(request["change_manifest"]),
-        }
-        plan = request["verification_plan"]
-        evidence = request["evidence_bundle"]
-        plan["acceptance_contract_hash"] = hashes["acceptance_contract_hash"]
-        plan["change_set_hash"] = hashes["change_set_hash"]
-        evidence["acceptance_contract_hash"] = hashes["acceptance_contract_hash"]
-        evidence["change_set_hash"] = hashes["change_set_hash"]
-        hashes["verification_plan_hash"] = verification_plan_hash(plan)
-        evidence["verification_plan_hash"] = hashes["verification_plan_hash"]
-        hashes["evidence_bundle_hash"] = evidence_bundle_hash(evidence)
-        pred["request_hash"] = _digest(request)
-        pred["response"]["hashes"] = hashes
-        return value
-
     edits = (
         ("test_commit", "hidden_test_commit", "e" * 40, "TEST_SOURCE_MISMATCH"),
         ("executed_tree", "executed_tree", "e" * 40, "TREE_MISMATCH"),
@@ -145,7 +146,7 @@ def _c8_mutations(parent, state, p, bundle, pub, full, candidate):
             edited["predicate"]["binding"]["executed_tree"] = value
         else:
             edited["predicate"]["binding"]["blackbox_commitment"] = value
-        path = resign(state, rechain(edited), parent / f"{name}.json", rehash=True)
+        path = resign(state, _rechain(edited), parent / f"{name}.json", rehash=True)
         route_result = (
             bundle_route(
                 path,

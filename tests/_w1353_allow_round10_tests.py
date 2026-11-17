@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from tests import _w1353_allow_positions as positions
+from tests import _w1353_allow_syntax as syntax
 from tests._w1353_allow import check
 from tests._w1353_allow_round10_cases import (
     ALIAS_GRAMMAR_BLOCK,
@@ -40,6 +41,7 @@ def test_round_ten_position_mutation_is_live(monkeypatch):
     """Drop only the position findings (keep the raw names the legacy row pins use)."""
     original = positions.position_findings
     monkeypatch.setattr(positions, "position_findings", lambda *args: ([], original(*args)[1]))
+    monkeypatch.setattr(syntax, "syntax_findings", lambda tree: [])
     assert not check(EXTRA, "tests/_w1353_extra.py")
     for case_id in ROUND_TEN_MUTATION_IDS:
         findings = check(source_for(ROUND_TEN_BLOCK[case_id]), "tests/_w1353_extra.py")
@@ -61,7 +63,11 @@ def test_round_ten_position_mutation_is_live(monkeypatch):
     ],
 )
 def test_round_ten_benign_positions_remain_allowed(source):
-    fixture = "from _w1353_probe import verify, row, blackbox_result\nresult = verify(1)\n" + source
+    lines = "\n".join("    " + line for line in source.splitlines())
+    fixture = (
+        "from _w1353_probe import verify, row, blackbox_result\n"
+        "def _fixture():\n    result = verify(1)\n" + lines
+    )
     assert not check(fixture, "tests/_w1353_extra.py")
 
 

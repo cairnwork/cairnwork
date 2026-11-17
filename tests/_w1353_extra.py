@@ -6,7 +6,6 @@ import importlib.util
 import json
 import types
 from dataclasses import replace
-from functools import cache
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -26,6 +25,8 @@ from cairnwork import blackbox
 from cairnwork.blackbox_exec import BlackboxRun
 from cairnwork.intake import Intake
 from cairnwork.pipeline import TaskRejected
+
+_CACHE = {}
 
 
 def cli_route(*args):
@@ -64,6 +65,7 @@ def _normal_row(cid, n, root, state, base, candidate):
 def _blackbox_row(cid, n, root, state, base, candidate, decl):
     result = verify(root, state, base, candidate, decl)
     status, reason = blackbox_result(result)
+    observed_status = result.get("status", result.get("error", "FAILED"))
     expected = blackbox_classification(status, reason)
     name = f"blackbox-{n}"
     if cid == "C1":
@@ -71,7 +73,7 @@ def _blackbox_row(cid, n, root, state, base, candidate, decl):
             "C1",
             name,
             "verify_cli run --blackbox",
-            result.get("status"),
+            observed_status,
             "NOT_RUN",
             expected,
             reason,
@@ -81,7 +83,7 @@ def _blackbox_row(cid, n, root, state, base, candidate, decl):
             "C2",
             name,
             "verify_cli run --blackbox",
-            result.get("status"),
+            observed_status,
             "NOT_RUN",
             expected,
             reason,
@@ -91,13 +93,13 @@ def _blackbox_row(cid, n, root, state, base, candidate, decl):
             "C3",
             name,
             "verify_cli run --blackbox",
-            result.get("status"),
+            observed_status,
             "NOT_RUN",
             expected,
             reason,
         )
     return row(
-        "C4", name, "verify_cli run --blackbox", result.get("status"), "NOT_RUN", expected, reason
+        "C4", name, "verify_cli run --blackbox", observed_status, "NOT_RUN", expected, reason
     )
 
 
@@ -117,7 +119,7 @@ def _mutant_row(cid, parent, state, n, src, evasion, bad_test):
             "C1_MUTANT",
             name,
             "verify_cli run",
-            result.get("status"),
+            status,
             "FAILED",
             expected,
             result.get("reason") or "",
@@ -127,7 +129,7 @@ def _mutant_row(cid, parent, state, n, src, evasion, bad_test):
             "C2_MUTANT",
             name,
             "verify_cli run",
-            result.get("status"),
+            status,
             "FAILED",
             expected,
             result.get("reason") or "",
@@ -137,7 +139,7 @@ def _mutant_row(cid, parent, state, n, src, evasion, bad_test):
             "C3_MUTANT",
             name,
             "verify_cli run",
-            result.get("status"),
+            status,
             "FAILED",
             expected,
             result.get("reason") or "",
@@ -146,7 +148,7 @@ def _mutant_row(cid, parent, state, n, src, evasion, bad_test):
         "C4_MUTANT",
         name,
         "verify_cli run",
-        result.get("status"),
+        status,
         "FAILED",
         expected,
         result.get("reason") or "",
@@ -318,7 +320,7 @@ def _c7(state, decl):
                     "C7",
                     name,
                     "verify_cli run --require-protection",
-                    result.get("status"),
+                    status,
                     "NOT_RUN",
                     blackbox_classification(status, reason),
                     reason,
@@ -328,6 +330,8 @@ def _c7(state, decl):
 
 
 def extra_rows():
+    if "extra_rows" in _CACHE:
+        return _CACHE["extra_rows"]
     with TemporaryDirectory(prefix="cw" + "1353-extra-") as td:
         parent = Path(td).resolve()
         st = parent / "state"
@@ -347,7 +351,6 @@ def extra_rows():
         assert receipt_spec is not None and receipt_spec.loader is not None
         receipt = importlib.util.module_from_spec(receipt_spec)
         receipt_spec.loader.exec_module(receipt)
-        return _c6() + _c7(st, d) + _c9(d) + module.c10_rows() + receipt.c8_rows(parent)
-
-
-extra_rows = cache(extra_rows)
+        result = _c6() + _c7(st, d) + _c9(d) + module.c10_rows() + receipt.c8_rows(parent)
+        _CACHE["extra_rows"] = result
+        return result

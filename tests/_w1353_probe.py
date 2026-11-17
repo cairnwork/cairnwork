@@ -7,7 +7,6 @@ import json
 import re
 import subprocess
 import sys
-from functools import cache
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -20,6 +19,7 @@ _NO_SANDBOX_BASE = (
 _ACCOUNT_GAP = (
     "[blackbox:add: VERIFICATION_INCOMPLETE: BLACKBOX_NEEDS_VERIFIER_ACCOUNT [matched 1/1]]"
 )
+_CACHE = {}
 
 
 def sandbox_available():
@@ -86,18 +86,18 @@ def row(cid, probe, route, raw, expected, classification, reason=""):
     }
 
 
+def _git(root: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(root), *args], check=True, capture_output=True, text=True, timeout=10
+    ).stdout.strip()
+
+
 def repo(root: Path, source: str, test_source: str, *, files=None):
     root = root.resolve()
     root.mkdir()
-
-    def git(*args):
-        return subprocess.run(
-            ["git", "-C", str(root), *args], check=True, capture_output=True, text=True, timeout=10
-        ).stdout.strip()
-
-    git("init", "-q", "-b", "main", "--template=")
-    git("config", "user.email", "probe@example.invalid")
-    git("config", "user.name", "probe")
+    _git(root, "init", "-q", "-b", "main", "--template=")
+    _git(root, "config", "user.email", "probe@example.invalid")
+    _git(root, "config", "user.name", "probe")
     (root / "src").mkdir()
     (root / "tests").mkdir()
     (root / "src/calc.py").write_text("def add(a, b):\n    return a + b\n")
@@ -109,13 +109,13 @@ def repo(root: Path, source: str, test_source: str, *, files=None):
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(value)
-    git("add", "-A")
-    git("commit", "-q", "-m", "base")
-    base = git("rev-parse", "HEAD")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "base")
+    base = _git(root, "rev-parse", "HEAD")
     (root / "src/calc.py").write_text(source)
-    git("add", "-A")
-    git("commit", "-q", "-m", "candidate")
-    return base, git("rev-parse", "HEAD")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "candidate")
+    return base, _git(root, "rev-parse", "HEAD")
 
 
 def _cairnwork_src():
@@ -325,6 +325,8 @@ def _c5_honest(parent, state):
 
 
 def core_rows():
+    if "core_rows" in _CACHE:
+        return _CACHE["core_rows"]
     with TemporaryDirectory(prefix="cw" + "1353-") as td:
         parent = Path(td).resolve()
         state = parent / "state"
@@ -334,10 +336,9 @@ def core_rows():
         (state / "ACCEPTING").touch()
         decl = declaration(parent / "decl.json")
 
-        return c1_c4_rows(parent, state, decl) + _c5_honest(parent, state)
-
-
-core_rows = cache(core_rows)
+        result = c1_c4_rows(parent, state, decl) + _c5_honest(parent, state)
+        _CACHE["core_rows"] = result
+        return result
 
 
 from _w1353_extra import c1_c4_rows  # noqa: E402
