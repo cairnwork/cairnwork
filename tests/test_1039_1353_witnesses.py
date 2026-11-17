@@ -25,7 +25,8 @@ def _load(name, *, register=True):
 
 probe = _load("_w1353_probe")
 extra = _load("_w1353_extra", register=False)
-_literal_observations = _load("_w1353_guard", register=False)._literal_observations
+guard = _load("_w1353_guard", register=False)
+_literal_observations = guard._literal_observations
 _NO_SANDBOX_BASE = probe._NO_SANDBOX_BASE
 _ACCOUNT_GAP = probe._ACCOUNT_GAP
 
@@ -119,7 +120,7 @@ def test_observed_values_are_recomputed_from_raw_route_returns():
         assert item["observed"] == derived
         assert isinstance(item["matches_spec"], bool)
     sources = list(Path(__file__).parent.glob("_w1353_*.py"))
-    assert all(not _scan(path) for path in sources)
+    _assert_current_scan(sources)
     tree = ast.parse(Path(__file__).read_text())
     assert not any(
         isinstance(n, ast.Call)
@@ -135,50 +136,28 @@ def _scan(path):
     return _literal_observations(path.read_text(), probe=path.name == "_w1353_probe.py")
 
 
+def _assert_current_scan(sources):
+    findings = {path.name: _scan(path) for path in sources if _scan(path)}
+    assert findings == {}
+
+
+_MUST_BLOCK = guard._MUST_BLOCK
+
+
 @pytest.mark.parametrize(
     "source",
     [
         'R = "blackbox:add: PASS [matched 1/1]"\nrow("C9", "t", "r", R, "x", "y")',
-        'def f():\n    r = "PASS"\n    return row("C9", "t", "r", r, "x", "y")',
         'row("C9", "t", "r", "PASS" if flag else "FAIL", "x", "y")',
         'row("C9", "t", "r", "PA" + "SS", "x", "y")',
-        'row("C9", "t", "r", "".join(["PASS"]), "x", "y")',
         'row("C9", "t", "r", f"{\'PASS\'}", "x", "y")',
-        'probe.row("C9", "t", "r", "PASS", "x", "y")',
         'from _w1353_probe import row as rec\nrec("C9", "t", "r", "PASS", "x", "y")',
-        'observed = "VER" + "IFIED"',
-        'row("C9", "timeout", "...", "blackbox:add: VERIFICATION_INCOMPLETE: TIMEOUT", "x", "y")',
         'observed = "PASS"',
         'row("C9","t","r",str("PASS"),"x","y")',
-        'row("C9","t","r",{"s":"PASS"}["s"],"x","y")',
-        'row("C9","t","r",dict(status="PASS"),"x","y")',
-        'import consts\nrow("C9","t","r",consts.PASS,"x","y")',
-        'R = str("PASS")\nrow("C9","t","r",R,"x","y")',
-        'row("C9","t","r",(lambda: "PASS")(),"x","y")',
-        (
-            "from types import SimpleNamespace\n"
-            'row("C9","t","r",SimpleNamespace(status="PASS"),"x","y")'
-        ),
-        'rec = row\nrec("C9","t","r","PASS","x","y")',
         'getattr(probe, "row")("C9","t","r","PASS","x","y")',
-        'rows.append({"class_id": "C9", "observed": "PASS"})',
-        'item["observed"] = "PASS"',
-        'out = SimpleNamespace(observed="PASS")',
-        'def verify():\n    return "PASS"\nrow("C9","t","r",verify(),"x","y")',
-        'def check():\n    return "PASS"\nrow("C9","t","r",check(),"x","y")',
-        'def f(v):\n    return row("C9","t","r",v,"x","y")',
-        'from cairnwork.text import strip\nrow("C9","t","r",strip("PASS"),"x","y")',
-        'from cairnwork import text\nrow("C9","t","r",text.strip("PASS"),"x","y")',
-        (
-            "try:\n"
-            "    f()\n"
-            "except ValueError as exc:\n"
-            "    r = exc.args[0]\n"
-            'row("C9","t","r",r,"x","y")'
-        ),
         'def row(*a):\n    return {"observed": observed}\n',
-        'from cairnwork import verify_cli\nrow("C9","t","r",verify_cli._run,"x","y")',
-    ],
+    ]
+    + _MUST_BLOCK,
 )
 def test_literal_observation_checker_rejects_constant_raw_values(source):
     assert _literal_observations(source)
@@ -186,34 +165,7 @@ def test_literal_observation_checker_rejects_constant_raw_values(source):
 
 @pytest.mark.parametrize(
     "source",
-    [
-        (
-            "from cairnwork import blackbox_judge\n"
-            "(verdict,) = blackbox_judge.judge_run(a, b, c)\n"
-            'row("C6","x","judge",verdict.reason,"PASS","y")'
-        ),
-        (
-            "from _w1353_probe import verify\n"
-            "result = verify(1,2,3,4)\n"
-            'status = result.get("status", result.get("error", "FAILED"))\n'
-            'row("C9","t","r",status,"x","y")'
-        ),
-        (
-            "from cairnwork_attest.verify import verify_bundle\n"
-            "def check(path):\n"
-            "    return verify_bundle(path)\n"
-            'row("C8","n","verify_bundle",check(p),"w","REFUSED")'
-        ),
-        (
-            "from cairnwork.pipeline import TaskRejected\n"
-            "from cairnwork import verify_cli\n"
-            "try:\n"
-            "    raw_result = verify_cli._run(a, b)\n"
-            "except TaskRejected as exc:\n"
-            "    raw_result = exc.code\n"
-            'row("C7","a","r",raw_result,"x","y")'
-        ),
-    ],
+    guard._ROUTE_PASS_CASES,
 )
 def test_literal_observation_checker_allows_route_derived_raw_values(source):
     assert not _literal_observations(source)
@@ -221,13 +173,60 @@ def test_literal_observation_checker_allows_route_derived_raw_values(source):
 
 def test_literal_observation_checker_accepts_current_probe_call_sites():
     sources = Path(__file__).parent.glob("_w1353_*.py")
-    assert all(not _scan(path) for path in sources)
+    _assert_current_scan(sources)
 
 
 def test_literal_observation_checker_mutation_control():
     assert not _literal_observations(
         'row("C9","t","r",str("PASS"),"x","y")', route_predicate=lambda node: True
     )
+    source = 'import cairnwork_evil as ce\nrow("C9","t","r",ce._run(1),"x","y")'
+    assert _literal_observations(source)
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setitem(guard._collect.__globals__, "PACKAGES", frozenset({"cairnwork_evil"}))
+    try:
+        assert not _literal_observations(source)
+    finally:
+        monkeypatch.undo()
+
+
+@pytest.mark.parametrize(
+    ("calls", "blocked"),
+    [
+        ('emit(judge_run(1))\nemit("PASS")', True),
+        ("cb = emit\nemit(judge_run(1))", True),
+        ("emit()", True),
+        ('emit(*["PASS"])', True),
+        ("emit(judge_run(1))\nemit(judge_run(2))", False),
+    ],
+)
+def test_interprocedural_observation_arguments(calls, blocked):
+    default = '="PASS"' if "emit()" in calls else ""
+    source = (
+        "from cairnwork.blackbox_judge import judge_run\n"
+        "from _w1353_probe import row\n"
+        f"def emit(r{default}): return row('C9','t','r',r,'x','y')\n" + calls
+    )
+    assert bool(_literal_observations(source)) is blocked
+
+
+def test_real_probe_constant_mutation_is_detected():
+    source = Path(__file__).with_name("_w1353_probe.py").read_text()
+    tree = ast.parse(source)
+    call = next(
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "row"
+    )
+    raw = call.args[3]
+    assert raw.end_lineno is not None and raw.end_col_offset is not None
+    lines = source.splitlines(keepends=True)
+    lines[raw.lineno - 1] = (
+        lines[raw.lineno - 1][: raw.col_offset]
+        + '"PASS"'
+        + lines[raw.end_lineno - 1][raw.end_col_offset :]
+    )
+    assert _literal_observations("".join(lines), probe=True)
 
 
 @pytest.mark.parametrize(
