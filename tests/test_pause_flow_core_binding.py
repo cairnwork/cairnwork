@@ -16,12 +16,12 @@ from experimental.pause.interfaces import CallSettings, GateReply, PlanReply
 
 
 class Planner:
-    def plan(self, _request):
+    def plan(self, request):
         return PlanReply("plan", "p-model", "low")
 
 
 class Gate:
-    def review(self, _request):
+    def review(self, request):
         return GateReply("ACCEPT", "g-model", "medium")
 
 
@@ -134,7 +134,7 @@ def test_flow_keeps_r0_when_source_changes_after_flow_digest(tmp_path, monkeypat
         gate=gate,
         planner_settings=SETTINGS,
         gate_settings=SETTINGS,
-        runner=lambda mode, _args, **_kwargs: r0 if mode == "run" else r1,
+        runner=lambda mode, args, **_kwargs: r0 if mode == "run" else r1,
         core_verdict=core_verdict,
     )
     assert result is r0
@@ -252,7 +252,7 @@ def test_flow_keeps_r0_when_excluded_entry_crosses_judge_snapshot(
         gate=Gate(),
         planner_settings=SETTINGS,
         gate_settings=SETTINGS,
-        runner=lambda mode, _args, **_kwargs: r0 if mode == "run" else r1,
+        runner=lambda mode, args, **_kwargs: r0 if mode == "run" else r1,
         core_verdict=judge_with_flow_window,
     )
     assert result is r0
@@ -286,7 +286,7 @@ def test_flow_records_stable_core_tree_and_selects_only_verified(
         gate=Gate(),
         planner_settings=SETTINGS,
         gate_settings=SETTINGS,
-        runner=lambda mode, _args, **_kwargs: r0 if mode == "run" else r1,
+        runner=lambda mode, args, **_kwargs: r0 if mode == "run" else r1,
         core_verdict=CoreJudge(
             tmp_path / "state", (), verify=lambda *_a, **_kw: {"status": status}
         ),
@@ -328,46 +328,26 @@ def test_flow_core_tree_matches_snapshot_variants(
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "secret").write_text("outside\n")
-    pair = TreeGuard.digest_pair
-    clone = core_judge._clone
-    copy = core_judge._copy_working_tree
+    target, name, after = {
+        "after-digest-pair": (TreeGuard, "digest_pair", True),
+        "before-clone": (core_judge, "_clone", False),
+        "after-clone": (core_judge, "_clone", True),
+        "before-copy": (core_judge, "_copy_working_tree", False),
+    }[point]
+    original = getattr(target, name)
 
-    def swap() -> None:
-        _swap_excluded_path(checkout, outside, kind)
+    def inject(*args: Any, **kwargs: Any) -> Any:
+        if not after:
+            _swap_excluded_path(checkout, outside, kind)
+        value = original(*args, **kwargs)
+        if after:
+            _swap_excluded_path(checkout, outside, kind)
+        return value
 
-    if point == "after-digest-pair":
-
-        def pair_then_swap(guard, **kwargs):
-            value = pair(guard, **kwargs)
-            swap()
-            return value
-
-        monkeypatch.setattr(TreeGuard, "digest_pair", pair_then_swap)
-    elif point == "before-clone":
-
-        def clone_after_swap(source, destination):
-            swap()
-            return clone(source, destination)
-
-        monkeypatch.setattr(core_judge, "_clone", clone_after_swap)
-    elif point == "after-clone":
-
-        def clone_then_swap(source, destination):
-            clone(source, destination)
-            swap()
-
-        monkeypatch.setattr(core_judge, "_clone", clone_then_swap)
-    else:
-
-        def copy_after_swap(source, destination):
-            swap()
-            return copy(source, destination)
-
-        monkeypatch.setattr(core_judge, "_copy_working_tree", copy_after_swap)
-
+    monkeypatch.setattr(target, name, inject)
     copy_with_injection = core_judge._copy_working_tree
 
-    def copy_then_restore(source, destination):
+    def copy_then_restore(source: Path, destination: Path) -> Any:
         value = copy_with_injection(source, destination)
         _restore_excluded_path(checkout)
         return value
@@ -394,7 +374,7 @@ def test_flow_core_tree_matches_snapshot_variants(
         gate=Gate(),
         planner_settings=SETTINGS,
         gate_settings=SETTINGS,
-        runner=lambda mode, _args, **_kwargs: r0 if mode == "run" else r1,
+        runner=lambda mode, args, **_kwargs: r0 if mode == "run" else r1,
         core_verdict=CoreJudge(
             tmp_path / "state", (), verify=lambda *_a, **_kw: {"status": "VERIFIED"}
         ),

@@ -169,7 +169,7 @@ def test_flow_keeps_r0_when_core_copy_differs_from_r1_entry_tree(tmp_path, monke
         ["git", "-C", str(checkout), "rev-parse", "HEAD"], text=True
     ).strip()
     (checkout / "a").write_text("A\n")
-    r0 = replace(r0, record={**r0.record, "base_sha": base})
+    r0 = replace(r0, record={**(r0.record or {}), "base_sha": base})
     r1 = replace(r1, checkout=checkout, base_sha=base)
     monkeypatch.setattr("experimental.pause.flow._scope_ok", lambda *_args: True)
     monkeypatch.setattr(
@@ -214,7 +214,7 @@ def test_flow_keeps_r0_when_core_copy_differs_from_r1_entry_tree(tmp_path, monke
             gate=gate,
             planner_settings=SETTINGS,
             gate_settings=SETTINGS,
-            runner=lambda mode, _args, **_kwargs: r0 if mode == "run" else r1,
+            runner=lambda mode, args, **_kwargs: r0 if mode == "run" else r1,
             core_verdict=judge,
         )
     finally:
