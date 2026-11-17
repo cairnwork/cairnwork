@@ -89,3 +89,18 @@ def test_other_os_errors_stay_endpoint_error(monkeypatch: pytest.MonkeyPatch) ->
     with pytest.raises(EndpointError) as caught:
         endpoint.chat({"messages": []}, time.monotonic() + 5)
     assert type(caught.value) is EndpointError
+
+
+def test_refusal_after_connecting_is_not_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only a failure while connecting means unreachable; one during the request is an
+    endpoint_error (Codex review of PR #1421)."""
+
+    def sent(self: http.client.HTTPConnection, *_args: object, **_kwargs: object) -> None:
+        raise OSError(errno.ECONNREFUSED, "reset after connect")
+
+    monkeypatch.setattr(http.client.HTTPConnection, "connect", lambda self: None)
+    monkeypatch.setattr(http.client.HTTPConnection, "request", sent)
+    endpoint = LoopbackEndpoint("http://127.0.0.1:9/v1")
+    with pytest.raises(EndpointError) as caught:
+        endpoint.chat({"messages": []}, time.monotonic() + 5)
+    assert type(caught.value) is EndpointError

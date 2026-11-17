@@ -153,8 +153,10 @@ class LoopbackEndpoint:
         conn = http.client.HTTPConnection(t.host, t.port, timeout=self._remaining(deadline))
         watchdog: threading.Timer | None = None
         fired = threading.Event()  # set by the watchdog before it shuts the socket down
+        connected = False  # only a failure before the connection is up is "unreachable"
         try:
             conn.connect()
+            connected = True
             sock = conn.sock
             if sock is None or not peer_is_loopback(sock.getpeername()):
                 raise EndpointError("connected peer is not a loopback address")
@@ -174,10 +176,15 @@ class LoopbackEndpoint:
         except (OSError, http.client.HTTPException) as exc:
             if fired.is_set() or self.clock() >= deadline:  # the watchdog shut the socket down
                 raise EndpointTimeout("endpoint passed the deadline") from None
-            if isinstance(exc, OSError) and exc.errno in (
-                errno.ECONNREFUSED,
-                errno.ENETUNREACH,
-                errno.EHOSTUNREACH,
+            if (
+                not connected
+                and isinstance(exc, OSError)
+                and exc.errno
+                in (
+                    errno.ECONNREFUSED,
+                    errno.ENETUNREACH,
+                    errno.EHOSTUNREACH,
+                )
             ):
                 raise EndpointUnreachable(
                     f"endpoint request failed: {type(exc).__name__}: {exc}"
