@@ -65,7 +65,7 @@ def _real_pytest_collection(tmp_path):
 
     (tmp_path / "base_mod.py").write_text(_BASE)
     (tmp_path / "test_x.py").write_text(_FILE)
-    out = subprocess.run(
+    proc = subprocess.run(
         [
             sys.executable,
             "-m",
@@ -81,7 +81,9 @@ def _real_pytest_collection(tmp_path):
         text=True,
         timeout=120,
         check=False,
-    ).stdout
+    )
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    out = proc.stdout
     assert out.strip(), "pytest collected nothing"
     collected = [line for line in out.splitlines() if "::" in line]
     assert "test_x.py::TestUnit::test_new" in collected
