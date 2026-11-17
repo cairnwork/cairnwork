@@ -34,10 +34,15 @@ _PATH = re.compile(r"(/[A-Za-z0-9._~-]+)*")
 class EndpointError(RuntimeError):
     """The endpoint answered badly or not at all: the episode aborts (ERROR_ABORT)."""
 
+    exit_code = 2  # the worker's exit when this escapes before an episode starts
+
 
 class EndpointUnreachable(EndpointError):
     """The endpoint could not be connected to (refused / unreachable); the episode aborts
-    (ERROR_ABORT, abort_cause endpoint_unreachable)."""
+    (ERROR_ABORT, abort_cause endpoint_unreachable). Exit 3 when it happens before an episode
+    starts (R1 start probe): pause maps exit 3 to PAUSE_LOCAL_UNREACHABLE (#1406)."""
+
+    exit_code = 3
 
 
 class EndpointTimeout(EndpointError):

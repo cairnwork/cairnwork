@@ -92,15 +92,19 @@ def test_other_os_errors_stay_endpoint_error(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_refusal_after_connecting_is_not_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Only a failure while connecting means unreachable; one during the request is an
-    endpoint_error (Codex review of PR #1421)."""
+    """The connection is up (a real listening socket), so the request phase runs; a refusal
+    raised there is an endpoint_error, not unreachable (Codex review of PR #1421)."""
+    server = http.server.HTTPServer(("127.0.0.1", 0), _ErrorHandler)  # listens; accepts later
+    try:
 
-    def sent(self: http.client.HTTPConnection, *_args: object, **_kwargs: object) -> None:
-        raise OSError(errno.ECONNREFUSED, "reset after connect")
+        def sent(self: http.client.HTTPConnection, *_args: object, **_kwargs: object) -> None:
+            assert self.sock is not None  # the request phase is reached only after connecting
+            raise OSError(errno.ECONNREFUSED, "reset after connect")
 
-    monkeypatch.setattr(http.client.HTTPConnection, "connect", lambda self: None)
-    monkeypatch.setattr(http.client.HTTPConnection, "request", sent)
-    endpoint = LoopbackEndpoint("http://127.0.0.1:9/v1")
-    with pytest.raises(EndpointError) as caught:
-        endpoint.chat({"messages": []}, time.monotonic() + 5)
-    assert type(caught.value) is EndpointError
+        monkeypatch.setattr(http.client.HTTPConnection, "request", sent)
+        endpoint = LoopbackEndpoint(f"http://127.0.0.1:{server.server_address[1]}/v1")
+        with pytest.raises(EndpointError) as caught:
+            endpoint.chat({"messages": []}, time.monotonic() + 5)
+        assert type(caught.value) is EndpointError
+    finally:
+        server.server_close()

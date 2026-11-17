@@ -27,6 +27,8 @@ from experimental.pause.interfaces import (
 from experimental.pause.schema import GATE_VERDICTS, Reason
 from experimental.pause.scope import _scope_ok
 
+LOCAL_UNREACHABLE_EXIT = 3  # == EndpointUnreachable.exit_code (pinned by a test)
+
 
 @dataclass(frozen=True)
 class RunResult:
@@ -271,6 +273,8 @@ def _r1_reason(
             return str(Reason.PAUSE_SCOPE_VIOLATION), None, None
     except Exception:  # noqa: BLE001 - R1 failures keep R0.
         return str(Reason.PAUSE_GUARD_UNAVAILABLE), None, None
+    if r1.code == LOCAL_UNREACHABLE_EXIT:
+        return str(Reason.PAUSE_LOCAL_UNREACHABLE), None, None
     if r1.code != 0:
         return str(Reason.PAUSE_WORKER_CRASH), None, None
     record = r1.record
