@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import ast
 import hashlib
 import json
 import os
@@ -28,6 +27,16 @@ _SEALED_PACKAGE_FILES = {
     "tests/__init__.py": b'"""Sealed namespace for witness imports."""\n',
     "tests/attest/__init__.py": b'"""Sealed namespace for attestation helpers."""\n',
 }
+_PRODUCT_TOP_LEVELS = {
+    "cairnwork",
+    "cairnwork_attest",
+    "cairnwork_protocol",
+    "cairnwork_quickstart",
+    "cairnwork_sandbox",
+}
+# Third-party contents are trusted as part of the installed interpreter environment; their
+# origins are allow-listed below, but their individual bytes are not pinned. nexus-certify loads
+# ``product``; pytest loads ``py`` in the pinned test-helper dependency closure.
 _THIRD_PARTY_TOP_LEVELS = {
     "cryptography",
     "_cffi_backend",
@@ -82,10 +91,11 @@ def validate_rows(rows: Any) -> None:
 def launch(
     pins: dict[str, str],
     *,
-    runner: Path = RUNNER,
+    runner: Path | None = None,
     run=subprocess.run,
     interpreter: str | Path = sys.executable,
 ):
+    runner = runner or ROOT / "tests" / "pra1353_runner.py"
     check_pins(pins)
     pin_bytes = {name: (ROOT / name).read_bytes() for name in pins}
     for name, data in pin_bytes.items():
@@ -107,6 +117,7 @@ def launch(
             target = sealed / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
+        _make_read_only(sealed)
         cwd = temp_root / "empty"
         cwd.mkdir()
         stdlib_roots = [Path(paths["stdlib"]), Path(paths["platstdlib"])]
@@ -122,39 +133,63 @@ def launch(
             "GIT_CONFIG_GLOBAL": os.devnull,
             "GIT_CONFIG_NOSYSTEM": "1",
         }
-        completed = run(
-            [
-                str(interpreter),
-                "-I",
-                "-S",
-                "-B",
-                str(sealed / Path(runner).relative_to(ROOT)),
-                *(str(path) for path in [*roots, *imports]),
-            ],
-            cwd=cwd,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=900,
-            check=False,
-        )
-        report = decode_report(completed)
-        _validate_module_origins(report.get("modules"), pins, source_pins, sealed, roots, imports)
-        if any(sealed.rglob("*.pyc")):
-            raise ValueError("sealed runner wrote bytecode")
+        try:
+            completed = run(
+                [
+                    str(interpreter),
+                    "-I",
+                    "-S",
+                    "-B",
+                    str(sealed / Path(runner).relative_to(ROOT)),
+                    *(str(path) for path in [*roots, *imports]),
+                ],
+                cwd=cwd,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=900,
+                check=False,
+            )
+            report = decode_report(completed)
+            _validate_module_origins(
+                report.get("modules"), pins, source_pins, sealed, roots, imports
+            )
+            if any(sealed.rglob("*.pyc")):
+                raise ValueError("sealed runner wrote bytecode")
+        finally:
+            _restore_permissions(sealed)
     return report
 
 
 def _tracked_source_bytes() -> dict[str, bytes]:
     done = subprocess.run(
-        ["git", "-C", str(ROOT), "ls-files", "-z", "src/"],
+        ["git", "-C", str(ROOT), "-c", "core.fsmonitor=false", "ls-files", "-z", "src/"],
         check=True,
         capture_output=True,
         timeout=10,
-        env={"PATH": "/usr/bin:/bin", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"},
+        env={
+            "PATH": "/usr/bin:/bin",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "core.fsmonitor",
+            "GIT_CONFIG_VALUE_0": "false",
+        },
     )
     names = [part.decode() for part in done.stdout.split(b"\0") if part]
     return {name: (ROOT / name).read_bytes() for name in names}
+
+
+def _make_read_only(root: Path) -> None:
+    for path in sorted(root.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+        path.chmod(0o555 if path.is_dir() else 0o444)
+    root.chmod(0o555)
+
+
+def _restore_permissions(root: Path) -> None:
+    for path in root.rglob("*"):
+        path.chmod(0o755 if path.is_dir() else 0o644)
+    root.chmod(0o755)
 
 
 def _neutralize(value: str) -> str:
@@ -219,19 +254,7 @@ def _validate_module_origins(
         if expected is not None and path != expected.resolve():
             raise ValueError(f"pinned runner module origin mismatch: {_neutralize(name)}")
         if _is_under(path, sealed):
-            if not (
-                (name == "__main__" and origin is None)
-                or (isinstance(origin, str) and Path(origin).resolve() == path)
-            ):
-                raise ValueError(f"runner module origin disagrees with file: {_neutralize(name)}")
-            if loader != "SourceFileLoader" and not (name == "__main__" and loader == "NoneType"):
-                raise ValueError(f"sealed module is not source loaded: {_neutralize(name)}")
-            relative = path.relative_to(sealed.resolve()).as_posix()
-            if relative not in all_expected:
-                raise ValueError(f"sealed module is not pinned: {_neutralize(name)}")
-            digest = hashlib.sha256(path.read_bytes()).hexdigest()
-            if all_expected.get(relative) != digest:
-                raise ValueError(f"sealed module bytes changed: {_neutralize(name)}")
+            _validate_sealed_module(name, path, origin, loader, all_expected, sealed)
         elif any(_is_under(path, root) for root in stdlib_roots) and not any(
             _is_under(path, root) for root in imports[2:]
         ):
@@ -255,6 +278,29 @@ def _validate_module_origins(
         raise ValueError("retired witness module was imported")
     if "_openssl" in seen_names and "_cffi_backend" not in seen_names:
         raise ValueError("in-memory OpenSSL bridge lacks its CFFI backend")
+
+
+def _validate_sealed_module(name, path, origin, loader, expected_hashes, sealed):
+    if not (
+        (name == "__main__" and origin is None)
+        or (isinstance(origin, str) and Path(origin).resolve() == path)
+    ):
+        raise ValueError(f"runner module origin disagrees with file: {_neutralize(name)}")
+    if loader != "SourceFileLoader" and not (name == "__main__" and loader == "NoneType"):
+        raise ValueError(f"sealed module is not source loaded: {_neutralize(name)}")
+    relative = path.relative_to(sealed.resolve()).as_posix()
+    if relative not in expected_hashes:
+        raise ValueError(f"sealed module is not pinned: {_neutralize(name)}")
+    if name != "__main__" and _module_name(relative) != name:
+        raise ValueError(f"sealed module name disagrees with file: {_neutralize(name)}")
+    top_level = name.split(".")[0]
+    if top_level in _THIRD_PARTY_TOP_LEVELS:
+        raise ValueError(f"third-party module loaded from sealed tree: {_neutralize(name)}")
+    if relative.startswith("src/") and top_level not in _PRODUCT_TOP_LEVELS:
+        raise ValueError(f"unapproved sealed product module: {_neutralize(name)}")
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    if expected_hashes.get(relative) != digest:
+        raise ValueError(f"sealed module bytes changed: {_neutralize(name)}")
 
 
 def _is_under(path: Path, root: Path) -> bool:
@@ -296,104 +342,3 @@ def blackbox_classification(status, reason):
     from pra1353_derive import blackbox_classification as classify
 
     return classify(status, reason)
-
-
-def evasion_sources():
-    return {
-        "C1": [
-            "import importlib; importlib.import_module('_pyt' + 'est.reports'); import pytest; pytest.Function.runtest=lambda self: None",
-            "import sys, importlib; vars(sys)['pycache_'+'prefix'] = '/tmp/cw1353-cache'; loader=vars(importlib)['import_module']; loader('_pyt'+'est.reports'); import pytest; pytest.Function.runtest=lambda self: None",
-            "import importlib; python=importlib.import_module('_pyt'+'est.python'); setattr(python.Function, 'runtest', lambda self: None)",
-        ],
-        "C2": [
-            "import pytest\nfor target in (pytest.Function,): setattr(target, 'runtest', lambda self: None)",
-            "import pytest\nF = pytest.Function\nF.runtest = lambda self: None",
-        ],
-        "C3": [
-            "from pathlib import Path\ntarget=Path('tests/test_calc.py'); print('from calc import add\\ndef test_deferred(): assert add(2,3)==5', file=target.open('w'))",
-            "from functools import partial\nfrom pathlib import Path\ntarget=Path('tests/test_calc.py'); writer=partial(open, target, 'w'); writer().write('from calc import add\\ndef test_deferred(): assert add(2,3)==5')\nimport os\nos.sys.path.insert(0, 'src')",
-        ],
-        "C4": [
-            "from pathlib import Path\nimport importlib\nPath('src/pkg').mkdir(); Path('src/pkg/__init__.py').write_text(\"from pathlib import Path\\nPath('tests/test_calc.py').write_text('from calc import add\\\\ndef test_deferred(): assert add(2,3)==5')\\n\")\nname='pkg'; importlib.import_module(name)",
-            "from pathlib import Path\nimport importlib\nPath('src/pkg').mkdir(); Path('src/pkg/__init__.py').write_text(\"from pathlib import Path\\nPath('tests/test_calc.py').write_text('from calc import add\\\\ndef test_deferred(): assert add(2,3)==5')\\n\")\nPath('src/pkg/mod.py').write_text('VALUE=2')\nname='pkg.mod'; module=importlib.import_module(name)",
-        ],
-    }
-
-
-def _literal_observations(source):
-    tree = ast.parse(source)
-
-    def literal_tree(node):
-        return isinstance(node, ast.Constant) or (
-            isinstance(node, (ast.List, ast.Tuple))
-            and all(literal_tree(item) for item in node.elts)
-        )
-
-    def allowed(node):
-        if isinstance(node, ast.Call):
-            if (
-                isinstance(node.func, ast.Attribute)
-                and node.func.attr == "join"
-                and isinstance(node.func.value, ast.Constant)
-                and node.args
-                and literal_tree(node.args[0])
-            ):
-                return False
-            return True
-        if isinstance(node, (ast.Attribute, ast.Subscript)):
-            return True
-        return (
-            isinstance(node, ast.Name)
-            and bool(bindings.get(node.id))
-            and all(
-                isinstance(value, (ast.Call, ast.Attribute, ast.Subscript))
-                for value in bindings[node.id]
-            )
-        )
-
-    bindings = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            targets = node.targets
-        elif isinstance(node, (ast.AnnAssign, ast.NamedExpr, ast.AugAssign)):
-            targets = [node.target]
-        else:
-            continue
-        for target in targets:
-            for name in ast.walk(target):
-                if isinstance(name, ast.Name):
-                    bindings.setdefault(name.id, []).append(node.value)
-
-    row_names = {"row"}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom):
-            row_names.update(
-                alias.asname or alias.name
-                for alias in node.names
-                if node.module == "_w1353_probe" and alias.name == "row"
-            )
-
-    flagged = []
-    for node in ast.walk(tree):
-        is_row_call = isinstance(node, ast.Call) and (
-            (isinstance(node.func, ast.Name) and node.func.id in row_names)
-            or (isinstance(node.func, ast.Attribute) and node.func.attr == "row")
-        )
-        if is_row_call and isinstance(node, ast.Call):
-            raw = (
-                node.args[3]
-                if len(node.args) > 3
-                else next((kw.value for kw in node.keywords if kw.arg == "raw"), None)
-            )
-            if raw is None or not allowed(raw):
-                flagged.append(node.lineno)
-        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            if any(
-                isinstance(name, ast.Name) and name.id == "observed"
-                for target in targets
-                for name in ast.walk(target)
-            ):
-                if not allowed(node.value):
-                    flagged.append(node.lineno)
-    return flagged

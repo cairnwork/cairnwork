@@ -2,13 +2,85 @@
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 from typing import Any
 
 import pytest
-from pra1353_consume import _literal_observations
 from pra1353_derive import derive
 from pra1353_recipes import FIELDS, REASONS, RECIPES, ROUTES
+
+
+def _literal_observations(source):
+    tree = ast.parse(source)
+    bindings = {}
+    row_names = {"row"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, (ast.AnnAssign, ast.NamedExpr, ast.AugAssign)):
+            targets = [node.target]
+        elif isinstance(node, ast.ImportFrom) and node.module == "_w1353_probe":
+            row_names.update(
+                alias.asname or alias.name for alias in node.names if alias.name == "row"
+            )
+            continue
+        else:
+            continue
+        for target in targets:
+            for name in ast.walk(target):
+                if isinstance(name, ast.Name):
+                    bindings.setdefault(name.id, []).append(node.value)
+
+    def literal_tree(node):
+        return isinstance(node, ast.Constant) or (
+            isinstance(node, (ast.List, ast.Tuple))
+            and all(literal_tree(item) for item in node.elts)
+        )
+
+    def allowed(node):
+        if isinstance(node, ast.Call):
+            return not (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr == "join"
+                and isinstance(node.func.value, ast.Constant)
+                and node.args
+                and literal_tree(node.args[0])
+            )
+        if isinstance(node, (ast.Attribute, ast.Subscript)):
+            return True
+        return (
+            isinstance(node, ast.Name)
+            and bool(bindings.get(node.id))
+            and all(
+                isinstance(value, (ast.Call, ast.Attribute, ast.Subscript))
+                for value in bindings[node.id]
+            )
+        )
+
+    flagged = []
+    for node in ast.walk(tree):
+        call = isinstance(node, ast.Call) and (
+            (isinstance(node.func, ast.Name) and node.func.id in row_names)
+            or (isinstance(node.func, ast.Attribute) and node.func.attr == "row")
+        )
+        if call and isinstance(node, ast.Call):
+            raw = (
+                node.args[3]
+                if len(node.args) > 3
+                else next((kw.value for kw in node.keywords if kw.arg == "raw"), None)
+            )
+            if raw is None or not allowed(raw):
+                flagged.append(node.lineno)
+        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if any(
+                isinstance(name, ast.Name) and name.id == "observed"
+                for target in targets
+                for name in ast.walk(target)
+            ) and not allowed(node.value):
+                flagged.append(node.lineno)
+    return flagged
 
 
 @pytest.mark.parametrize(

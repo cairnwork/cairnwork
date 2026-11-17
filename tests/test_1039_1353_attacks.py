@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib._bootstrap_external as bootstrap_external
 import json
 import py_compile
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -14,13 +15,68 @@ import pytest
 from test_1039_1353_runner import _report, _runner
 from test_1039_1353_witnesses import PINS
 
+_TIMESTAMP_PYC: Any = vars(bootstrap_external)["_code_to_timestamp_pyc"]
+
+
+@pytest.fixture(autouse=True)
+def isolated_repo(monkeypatch, tmp_path):
+    """Run filesystem attacks against a temporary checkout, never this worktree."""
+    real_root = consume.ROOT
+    root = tmp_path / "repo"
+    root.mkdir()
+    for relative in PINS:
+        source = real_root / relative
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+    attack_source = Path(__file__)
+    attack_target = root / "tests" / attack_source.name
+    attack_target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(attack_source, attack_target)
+    source_files = {}
+    for source in (real_root / "src").rglob("*.py"):
+        relative = source.relative_to(real_root).as_posix()
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+        source_files[relative] = target
+    monkeypatch.setattr(consume, "ROOT", root)
+    monkeypatch.setattr(
+        consume,
+        "_tracked_source_bytes",
+        lambda: {name: path.read_bytes() for name, path in source_files.items()},
+    )
+
+
+@pytest.mark.parametrize("name", ["pytest", "cryptography", "_pytest", "pluggy"])
+def test_sealed_src_rejects_a_self_pinned_non_product_module(tmp_path, name):
+    sealed = tmp_path / "sealed"
+    forged = sealed / "src" / f"{name}.py"
+    forged.parent.mkdir(parents=True)
+    forged.write_text("FORGED = True\n")
+    digest = consume.hashlib.sha256(forged.read_bytes()).hexdigest()
+    item = {
+        "name": name,
+        "file": str(forged),
+        "origin": str(forged),
+        "loader": "SourceFileLoader",
+    }
+    expected = (
+        "third-party module loaded from sealed tree"
+        if name in consume._THIRD_PARTY_TOP_LEVELS
+        else "unapproved sealed product module"
+    )
+    with pytest.raises(ValueError, match=expected):
+        consume._validate_module_origins([item], {}, {f"src/{name}.py": digest}, sealed, [], [])
+
 
 def test_launch_seals_sources_and_rebuilds_a_clean_environment(monkeypatch, tmp_path):
     import importlib._bootstrap_external as bootstrap_external
 
     monkeypatch.setenv("CW1353_CANARY", "visible-only-to-caller")
-    py_compile.compile(__file__, doraise=True)
-    assert Path(bootstrap_external.cache_from_source(__file__)).exists()
+    source = consume.ROOT / "tests" / "test_1039_1353_attacks.py"
+    py_compile.compile(str(source), doraise=True)
+    assert Path(bootstrap_external.cache_from_source(str(source))).exists()
     poison = tmp_path / "poison"
     poison.mkdir()
     (poison / "json.py").write_text("raise RuntimeError('PYTHONPATH shadow loaded')\n")
@@ -33,6 +89,9 @@ def test_launch_seals_sources_and_rebuilds_a_clean_environment(monkeypatch, tmp_
         sealed_runner = Path(args[4])
         observed["runner_bytes"] = sealed_runner.read_bytes()
         observed["sealed_root"] = sealed_runner.parents[1]
+        assert sealed_runner.stat().st_mode & 0o222 == 0
+        with pytest.raises(PermissionError):
+            sealed_runner.write_bytes(b"tampered")
         return subprocess.CompletedProcess(args, 0, json.dumps(_report()), "")
 
     report = consume.launch(PINS, run=fake_run)
@@ -82,7 +141,7 @@ def test_package_and_pyc_shadows_are_not_copied_into_the_sealed_run(monkeypatch)
     code = compile("FORGED = True\n", str(source), "exec")
     cache = Path(bootstrap_external.cache_from_source(str(source)))
     cache.parent.mkdir(exist_ok=True)
-    cache_data = bootstrap_external._code_to_timestamp_pyc(code, int(stat.st_mtime), stat.st_size)
+    cache_data = _TIMESTAMP_PYC(code, int(stat.st_mtime), stat.st_size)
     previous = cache.read_bytes() if cache.exists() else None
     cache.write_bytes(cache_data)
     try:
@@ -160,7 +219,7 @@ def test_forged_timestamp_bytecode_is_not_copied(relative):
     cache = Path(bootstrap_external.cache_from_source(str(source)))
     cache.parent.mkdir(parents=True, exist_ok=True)
     code = compile("FORGED = True\n", str(source), "exec")
-    forged = bootstrap_external._code_to_timestamp_pyc(code, int(stat.st_mtime), stat.st_size)
+    forged = _TIMESTAMP_PYC(code, int(stat.st_mtime), stat.st_size)
     previous = cache.read_bytes() if cache.exists() else None
     cache.write_bytes(forged)
     try:
@@ -251,6 +310,17 @@ def test_a2_package_shadow_cannot_change_real_runner_rows():
         report = consume.launch(PINS)
         assert len(report["rows"]) == 56
         assert all(row["observed"] != "FORGED" for row in report["rows"])
+        modules = {item["name"]: item for item in report["modules"]}
+        assert all(
+            name in modules
+            and Path(modules[name]["file"]).as_posix().endswith(relative)
+            and modules[name]["origin"] == modules[name]["file"]
+            and modules[name]["loader"] == "SourceFileLoader"
+            for name, relative in (
+                ("pra1353_c10", "tests/pra1353_c10.py"),
+                ("pra1353_receipt", "tests/pra1353_receipt.py"),
+            )
+        )
         paths = consume.sysconfig.get_paths()
         dependencies = [Path(paths["purelib"]), Path(paths["platlib"])]
         assert all(
@@ -281,7 +351,7 @@ def test_forged_timestamp_pyc_is_not_copied(relative: str) -> None:
     stat = source.stat()
     cache = Path(bootstrap_external.cache_from_source(str(source)))
     cache.parent.mkdir(parents=True, exist_ok=True)
-    forged = bootstrap_external._code_to_timestamp_pyc(
+    forged = _TIMESTAMP_PYC(
         compile("FORGED = True\n", str(source), "exec"), int(stat.st_mtime), stat.st_size
     )
     previous = cache.read_bytes() if cache.exists() else None

@@ -13,20 +13,22 @@ from pathlib import Path
 
 import pra1353_consume as consume
 import pytest
+from pra1353_probe import evasion_sources
 from test_1039_1353_recipes import _matches
+from test_1039_1353_static import _literal_observations
 
 PINS = {
     "tests/attest/binding_helpers.py": "cd2959a72a449228fc27bd0b1eb082493ee00616a7afcc1fe27b7309e22e61c5",
     "tests/attest/test_verify.py": "156795f6ee20d46c692b4a27e15ab36525b7ab7fce945722b39a3067c68a9b83",
     "tests/conftest.py": "a6f527a6ae989b47ef7cd10b270206d7e8c0e391064eac8eef03f9f3693219fd",
     "tests/pra1353_c10.py": "9b0a046af21c817ece0100bdd039945b4e5a1549cfb3e5b3c4e5a8ebedf503c3",
-    "tests/pra1353_consume.py": "cc157af0eea457c8590a3f9f6b829245183ed36680bbcbc3f128b71f94851416",
+    "tests/pra1353_consume.py": "c9b0bdf7d5ede2396776715acd32b67a1a2e15d7d675f1e71eb823552bdb1ec0",
     "tests/pra1353_derive.py": "3e301ec245fba896b12798554ccb8391f2facaf6409567772882aad7592d534e",
-    "tests/pra1353_extra.py": "545f6f3143c59ddc17408c471e771cc8d3ff774c2668b20b4dd4324de5bd0364",
+    "tests/pra1353_extra.py": "1ef6960689f633fe9dfa411572091f2bd99e1e0f2435798a9ebe37def50c6d52",
     "tests/pra1353_probe.py": "bd8b2d2f1abf5c65115e99d0f85f2008a1bd9bbe02912819770688b8e14d257b",
     "tests/pra1353_receipt.py": "d3121468ba6b46d12c466c1d79bd5bb49e832262a9fe36b49a36ff332bb054ae",
     "tests/pra1353_recipes.py": "87b8cf6e1d3c3618bc797ea9511b347e8d413dd752197ab5b368663efa2440b6",
-    "tests/pra1353_runner.py": "160467611bbdd931dfe890b5c6ed1e304408dd1c9803c32cf56f81e0c54802e3",
+    "tests/pra1353_runner.py": "19b79e3f2ff17e3db5e3004e7ebf620ccb82d0b348c8408697bbd3a8dc124ed5",
     "tests/xdist_groups.py": "08f332bef3401fd38390db53a60a158ebb78686d1ec33a7af1c9d4337692e673",
 }
 
@@ -57,7 +59,7 @@ def test_c1_c4_evasions_are_runnable_and_live(core_rows):
         if r["class_id"] in {"C1", "C2", "C3", "C4"} and r["probe"].startswith("verify-cli")
     ]
     assert len(got) == 9
-    sources = [source for variants in consume.evasion_sources().values() for source in variants]
+    sources = [source for variants in evasion_sources().values() for source in variants]
     for source in sources:
         with tempfile.TemporaryDirectory(prefix="cw1353-valid-") as cwd:
             (Path(cwd) / "tests").mkdir()
@@ -72,6 +74,7 @@ def test_c1_c4_evasions_are_runnable_and_live(core_rows):
                 timeout=10,
             )
             assert completed.returncode == 0, completed.stderr
+
     baseline = next(
         r["observed"] for r in got if r["class_id"] == "C2" and r["probe"] == "verify-cli-1"
     )
@@ -141,7 +144,7 @@ def test_observed_values_are_recomputed_from_raw_route_returns(broker_report):
         )
     assert all(not item["name"].startswith("_w1353_") for item in broker_report["modules"])
     witness_sources = Path(__file__).parent.glob("pra1353_*.py")
-    assert all(not consume._literal_observations(path.read_text()) for path in witness_sources)
+    assert all(not _literal_observations(path.read_text()) for path in witness_sources)
     tree = ast.parse(Path(__file__).read_text())
     assert not any(
         isinstance(n, ast.Call)
@@ -222,7 +225,7 @@ def test_blackbox_classification_counts_only_account_gaps_as_not_run(status, rea
 
 def test_literal_observation_checker_accepts_current_probe_call_sites():
     sources = Path(__file__).parent.glob("pra1353_*.py")
-    assert all(not consume._literal_observations(path.read_text()) for path in sources)
+    assert all(not _literal_observations(path.read_text()) for path in sources)
 
 
 def test_candidate_routes_match_pinned_main_outputs(core_rows):

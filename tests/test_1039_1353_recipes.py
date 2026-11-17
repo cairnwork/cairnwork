@@ -5,6 +5,7 @@ import hashlib
 import runpy
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pra1353_recipes import RECIPES
@@ -236,7 +237,7 @@ def test_recipe_meaning_matches_independent_literal_table():
     ids=["expected", "classification"],
 )
 def test_repinning_a_changed_recipe_does_not_change_consumer_expectation(field, replacement):
-    changed = list(RECIPES)
+    changed: list[Any] = list(RECIPES)
     recipe = list(changed[48])
     recipe[field] = replacement
     changed[48] = tuple(recipe)

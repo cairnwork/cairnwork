@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import types
+from typing import Any
 
 
 def _bootstrap(import_roots):
@@ -35,7 +36,7 @@ def _bootstrap(import_roots):
     import cairnwork  # noqa: F401
 
     rows = core_rows() + extra_rows()
-    recipes = [dict(zip(FIELDS, values, strict=True)) for values in RECIPES]
+    recipes: list[dict[str, Any]] = [dict(zip(FIELDS, values, strict=True)) for values in RECIPES]
     for recipe in recipes:
         recipe["reason"] = REASONS.get(recipe["seq"], "")
         recipe["route"] = ROUTES[recipe.pop("route_id")]

@@ -227,3 +227,52 @@ def test_site_pth_cannot_preload_a_pinned_runner_helper(tmp_path, monkeypatch):
 def test_module_origin_audit_fails_closed(module, pins, roots):
     with pytest.raises(ValueError):
         consume._validate_module_origins([module], pins, {}, consume.ROOT, roots, roots)
+
+
+def test_tracked_source_listing_disables_repo_fsmonitor(monkeypatch):
+    observed = {}
+
+    def fake_run(args, **kwargs):
+        observed["args"] = args
+        observed["env"] = kwargs["env"]
+        return subprocess.CompletedProcess(args, 0, b"", b"")
+
+    monkeypatch.setattr(consume.subprocess, "run", fake_run)
+    assert consume._tracked_source_bytes() == {}
+    assert observed["args"][3:6] == ["-c", "core.fsmonitor=false", "ls-files"]
+    assert observed["env"]["GIT_CONFIG_COUNT"] == "1"
+    assert observed["env"]["GIT_CONFIG_KEY_0"] == "core.fsmonitor"
+    assert observed["env"]["GIT_CONFIG_VALUE_0"] == "false"
+
+
+@pytest.mark.parametrize(
+    "name",
+    (
+        "cairnwork",
+        "cairnwork_attest",
+        "cairnwork_protocol",
+        "cairnwork_quickstart",
+        "cairnwork_sandbox",
+    ),
+)
+def test_product_source_module_is_allowed_in_sealed_src(tmp_path, name):
+    sealed = tmp_path / "sealed"
+    product = sealed / "src" / name / "sample.py"
+    product.parent.mkdir(parents=True)
+    product.write_text("VALUE = 1\n")
+    digest = consume.hashlib.sha256(product.read_bytes()).hexdigest()
+    consume._validate_module_origins(
+        [
+            {
+                "name": f"{name}.sample",
+                "file": str(product),
+                "origin": str(product),
+                "loader": "SourceFileLoader",
+            }
+        ],
+        {},
+        {f"src/{name}/sample.py": digest},
+        sealed,
+        [],
+        [],
+    )
