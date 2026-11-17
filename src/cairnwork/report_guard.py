@@ -94,7 +94,7 @@ _PATH_ENV = "CAIRNWORK_VERDICT_PATH"
 _NONCE_ENV = "CAIRNWORK_VERDICT_NONCE"
 '''
     + PARTS_SOURCE
-    + EXPOSED_SOURCE
+    + EXPOSED_SOURCE.replace("_MAX_REPORT_BYTES = 0", f"_MAX_REPORT_BYTES = {MAX_REPORT_BYTES}")
     + '''
 
 def _take():
@@ -290,10 +290,7 @@ def install_plugin(directory: Path, data_paths=()) -> None:
     path = directory / f"{MODULE}.py"
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o640)
     with os.fdopen(fd, "w") as handle:
-        source = _PLUGIN_SOURCE.replace(
-            "_MAX_REPORT_BYTES = 0", f"_MAX_REPORT_BYTES = {MAX_REPORT_BYTES}"
-        )
-        handle.write(HOOK_SOURCE + source + plugin_source(data_paths))
+        handle.write(HOOK_SOURCE + _PLUGIN_SOURCE + plugin_source(data_paths))
     os.chmod(path, 0o640)  # not the umask-masked open() mode: the verifier account reads by group
 
 
