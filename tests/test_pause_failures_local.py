@@ -1,8 +1,7 @@
 """AC3 probes whether local-worker output distinguishes endpoint failure classes.
 
-The durable records distinguish TIMEOUT from ERROR_ABORT, but refused, unreachable, and OOM
-all persist ERROR_ABORT with abort_cause=endpoint_error. PAUSE_LOCAL_UNREACHABLE therefore has
-no local-worker producer: the durable output discards the endpoint message needed to classify it.
+Connection failures persist endpoint_unreachable and map to PAUSE_LOCAL_UNREACHABLE; OOM and
+other endpoint errors stay endpoint_error and map to PAUSE_R1_INCOMPLETE.
 """
 
 from __future__ import annotations
@@ -19,8 +18,12 @@ from pause_fakes import FakeGate, FakePlanner
 
 from cairnwork.workers import agy_dispatch
 from experimental.local_worker import cli
-from experimental.local_worker.endpoint import EndpointError, EndpointTimeout
-from experimental.pause import receipt, schema
+from experimental.local_worker.endpoint import (
+    EndpointError,
+    EndpointTimeout,
+    EndpointUnreachable,
+)
+from experimental.pause import flow, receipt, schema
 from experimental.pause.flow import run_flow
 from experimental.pause.guard import TreeGuard
 from experimental.pause.interfaces import CallSettings, GateReply, PlanReply
@@ -29,18 +32,25 @@ from experimental.pause.runner import WorkerRunner
 SETTINGS = CallSettings("configured-model", "low", 1, 1)
 
 
+def test_pause_exit_code_matches_endpoint_unreachable() -> None:
+    assert flow.LOCAL_UNREACHABLE_EXIT == EndpointUnreachable.exit_code == 3
+    assert EndpointError.exit_code == 2
+
+
 class FailingEndpoint:
     def __init__(self, _url: str, kind: str) -> None:
         self.url = "http://127.0.0.1:234/v1"
         self.kind = kind
 
     def models(self, _deadline: float) -> list[str]:
+        if self.kind == "refused-start":
+            raise EndpointUnreachable("connection refused at start")
         return [] if self.kind == "model-missing" else ["served-model"]
 
     def chat(self, _payload: dict[str, Any], _deadline: float) -> dict[str, Any]:
         failures: dict[str, Exception] = {
-            "refused": EndpointError("connection refused"),
-            "unreachable": EndpointError("network is unreachable"),
+            "refused": EndpointUnreachable("connection refused"),
+            "unreachable": EndpointUnreachable("network is unreachable"),
             "timeout": EndpointTimeout("endpoint timed out"),
             "oom": EndpointError("endpoint answered HTTP 500: out of memory"),
         }
@@ -165,13 +175,26 @@ def replay_outcome(outcome: dict[str, Any]) -> Any:
 @pytest.mark.parametrize(
     ("kind", "worker_code", "exit_reason", "abort_cause", "flow_reason"),
     [
-        ("refused", 0, "ERROR_ABORT", "endpoint_error", schema.Reason.PAUSE_R1_INCOMPLETE),
-        ("unreachable", 0, "ERROR_ABORT", "endpoint_error", schema.Reason.PAUSE_R1_INCOMPLETE),
+        (
+            "refused",
+            0,
+            "ERROR_ABORT",
+            "endpoint_unreachable",
+            schema.Reason.PAUSE_LOCAL_UNREACHABLE,
+        ),
+        (
+            "unreachable",
+            0,
+            "ERROR_ABORT",
+            "endpoint_unreachable",
+            schema.Reason.PAUSE_LOCAL_UNREACHABLE,
+        ),
         ("timeout", 0, "TIMEOUT", None, schema.Reason.PAUSE_R1_INCOMPLETE),
         ("oom", 0, "ERROR_ABORT", "endpoint_error", schema.Reason.PAUSE_R1_INCOMPLETE),
         ("model-missing", 2, None, None, schema.Reason.PAUSE_WORKER_CRASH),
+        ("refused-start", 3, None, None, schema.Reason.PAUSE_LOCAL_UNREACHABLE),
     ],
-    ids=["refused", "unreachable", "timeout", "oom", "model-missing"],
+    ids=["refused", "unreachable", "timeout", "oom", "model-missing", "refused-start"],
 )
 def test_ac3_local_model_failures(
     tmp_path: Path,
