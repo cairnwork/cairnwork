@@ -1,0 +1,8 @@
+{
+  "date": "2026-11-17",
+  "drill": "verifier-account",
+  "main_sha": "89116e46",
+  "pending": "rerun the three cases (correct, known-bad, correct) once lab approves; see DRILLS.md",
+  "reason": "cairnwork-verifier slot not yet approved by lab (requested 13:5x CST via coord msg lab; drill_normal auto-enables the account whenever it is available, so no run was started)",
+  "result": "NOT_RUN"
+}
