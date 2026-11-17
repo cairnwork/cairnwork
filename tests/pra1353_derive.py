@@ -14,7 +14,8 @@ def derive(raw, recipe, platform):
             if key in raw
         }
     else:
-        observed, saved = str(raw), raw
+        observed = str(raw)
+        saved = raw
     status = raw.get("status", raw.get("error", "FAILED")) if isinstance(raw, dict) else raw
     reason_value = _rule_value(recipe["reason"], raw, recipe, status, platform)
     reason = re.sub(r"/(?:private/)?(?:var/folders|tmp)/[^\s:]+", "<temporary-path>", reason_value)

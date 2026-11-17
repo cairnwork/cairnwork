@@ -11,6 +11,7 @@ import json
 import os
 import subprocess
 import sys
+import sysconfig
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,25 @@ _ACCOUNT_GAP = (
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "tests" / "pra1353_runner.py"
 SEQUENCES = set(range(56))
+_SEALED_PACKAGE_FILES = {
+    "tests/__init__.py": b'"""Sealed namespace for witness imports."""\n',
+    "tests/attest/__init__.py": b'"""Sealed namespace for attestation helpers."""\n',
+}
+_THIRD_PARTY_TOP_LEVELS = {
+    "cryptography",
+    "_cffi_backend",
+    "cffi",
+    "nexus_certify",
+    "nexus_core",
+    "_pytest",
+    "_virtualenv",
+    "iniconfig",
+    "pluggy",
+    "product",
+    "py",
+    "pygments",
+    "pytest",
+}
 
 
 def check_pins(pins: dict[str, str]) -> None:
@@ -35,7 +55,9 @@ def check_pins(pins: dict[str, str]) -> None:
 
 def decode_report(completed: Any) -> dict[str, Any]:
     if completed.returncode != 0:
-        raise ValueError(f"runner exited {completed.returncode}: {completed.stderr[-400:]}")
+        raise ValueError(
+            f"runner exited {completed.returncode}: {_neutralize(completed.stderr[-400:])}"
+        )
     lines = completed.stdout.splitlines()
     if len(lines) != 1 or not lines[0]:
         raise ValueError("runner did not produce exactly one JSON record")
@@ -62,40 +84,185 @@ def launch(
     *,
     runner: Path = RUNNER,
     run=subprocess.run,
-    extra_env: dict[str, str] | None = None,
-    cwd_override: Path | None = None,
+    interpreter: str | Path = sys.executable,
 ):
     check_pins(pins)
+    pin_bytes = {name: (ROOT / name).read_bytes() for name in pins}
+    for name, data in pin_bytes.items():
+        if hashlib.sha256(data).hexdigest() != pins[name]:
+            raise ValueError(f"pin changed while sealing: {_neutralize(name)}")
+    source_bytes = _tracked_source_bytes()
+    source_pins = {name: hashlib.sha256(data).hexdigest() for name, data in source_bytes.items()}
+    paths = sysconfig.get_paths()
     with tempfile.TemporaryDirectory(prefix="cw1353-consumer-") as tmp:
-        cwd = Path(tmp) / "empty"
+        temp_root = Path(tmp).resolve()
+        sealed = temp_root / "sealed"
+        (sealed / "tests").mkdir(parents=True)
+        (sealed / "src").mkdir()
+        for name, data in {**pin_bytes, **source_bytes}.items():
+            target = sealed / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+        for name, data in _SEALED_PACKAGE_FILES.items():
+            target = sealed / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+        cwd = temp_root / "empty"
         cwd.mkdir()
-        if cwd_override is not None:
-            cwd = cwd_override
+        stdlib_roots = [Path(paths["stdlib"]), Path(paths["platstdlib"])]
+        roots = [*stdlib_roots, Path(paths["platstdlib"]) / "lib-dynload"]
+        roots = list(dict.fromkeys(roots))
+        imports = [sealed / "src", sealed / "tests", Path(paths["purelib"]), Path(paths["platlib"])]
         env = {
-            "PATH": os.pathsep.join((str(Path(sys.executable).parent), "/usr/bin", "/bin")),
-            "HOME": tmp,
-            "TMPDIR": tmp,
+            "PATH": "/usr/bin:/bin",
+            "HOME": str(temp_root),
+            "TMPDIR": str(temp_root),
             "PYTHONHASHSEED": "0",
             "LANG": "C.UTF-8",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
         }
-        env.update(extra_env or {})
         completed = run(
-            [sys.executable, "-I", "-B", str(runner)],
+            [
+                str(interpreter),
+                "-I",
+                "-S",
+                "-B",
+                str(sealed / Path(runner).relative_to(ROOT)),
+                *(str(path) for path in [*roots, *imports]),
+            ],
             cwd=cwd,
             env=env,
             capture_output=True,
             text=True,
-            timeout=240,
+            timeout=900,
             check=False,
         )
-    report = decode_report(completed)
-    allowed = {_module_name(name) for name in pins if name.startswith("tests/")}
-    if "tests/pra1353_runner.py" in pins:
-        allowed.add("__main__")
-    loaded = set(report.get("loaded_test_modules", []))
-    if any(name.startswith("_w1353_") for name in loaded) or not loaded <= allowed:
-        raise ValueError(f"runner loaded unpinned test modules: {sorted(loaded - allowed)}")
+        report = decode_report(completed)
+        _validate_module_origins(report.get("modules"), pins, source_pins, sealed, roots, imports)
+        if any(sealed.rglob("*.pyc")):
+            raise ValueError("sealed runner wrote bytecode")
     return report
+
+
+def _tracked_source_bytes() -> dict[str, bytes]:
+    done = subprocess.run(
+        ["git", "-C", str(ROOT), "ls-files", "-z", "src/"],
+        check=True,
+        capture_output=True,
+        timeout=10,
+        env={"PATH": "/usr/bin:/bin", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"},
+    )
+    names = [part.decode() for part in done.stdout.split(b"\0") if part]
+    return {name: (ROOT / name).read_bytes() for name in names}
+
+
+def _neutralize(value: str) -> str:
+    return "\n".join(
+        "| " + line if line.lstrip().startswith(("::", "##[")) else line
+        for line in value.splitlines()
+    )
+
+
+def _module_expectations(
+    pins: dict[str, str], source_pins: dict[str, str], sealed: Path
+) -> tuple[dict[str, Path], dict[str, Path], dict[str, str]]:
+    pinned_paths = {name: sealed / name for name in pins if name.startswith(("tests/", "scripts/"))}
+    generated = {
+        name: hashlib.sha256(data).hexdigest() for name, data in _SEALED_PACKAGE_FILES.items()
+    }
+    all_expected = {**pins, **source_pins, **generated}
+    paths = {name: (sealed / name).resolve() for name in all_expected}
+    pinned_names = {_module_name(name): path for name, path in pinned_paths.items()}
+    expected_names = {_module_name(name): path for name, path in paths.items()}
+    pinned_names["__main__"] = sealed / "tests/pra1353_runner.py"
+    return pinned_names, expected_names, all_expected
+
+
+def _validate_module_origins(
+    modules: Any,
+    pins: dict[str, str],
+    source_pins: dict[str, str],
+    sealed: Path,
+    stdlib_roots: list[Path],
+    imports: list[Path],
+) -> None:
+    if not isinstance(modules, list):
+        raise ValueError("runner module-origin report missing")
+    pinned_names, expected_names, all_expected = _module_expectations(pins, source_pins, sealed)
+    seen_names = set()
+    for item in modules:
+        if not isinstance(item, dict) or not isinstance(item.get("name"), str):
+            raise ValueError("invalid runner module-origin entry")
+        name, filename = item["name"], item.get("file")
+        seen_names.add(name)
+        loader = item.get("loader")
+        expected = pinned_names.get(name)
+        if filename is None:
+            if item.get("origin") not in {"built-in", "frozen"}:
+                # cryptography's CFFI OpenSSL bridge creates this runtime module in memory.
+                if name == "_openssl" and item.get("origin") is None and loader == "NoneType":
+                    continue
+                raise ValueError(
+                    f"runner module without file is not builtin or frozen: {_neutralize(name)}"
+                )
+            continue
+        if not isinstance(filename, str):
+            raise ValueError("invalid runner module file")
+        path = Path(filename).resolve()
+        origin = item.get("origin")
+        if origin is not None and not isinstance(origin, str):
+            raise ValueError(f"runner module origin missing: {_neutralize(name)}")
+        named_path = expected_names.get(name)
+        if named_path is not None and path != named_path:
+            raise ValueError(f"module name served from wrong sealed file: {_neutralize(name)}")
+        if expected is not None and path != expected.resolve():
+            raise ValueError(f"pinned runner module origin mismatch: {_neutralize(name)}")
+        if _is_under(path, sealed):
+            if not (
+                (name == "__main__" and origin is None)
+                or (isinstance(origin, str) and Path(origin).resolve() == path)
+            ):
+                raise ValueError(f"runner module origin disagrees with file: {_neutralize(name)}")
+            if loader != "SourceFileLoader" and not (name == "__main__" and loader == "NoneType"):
+                raise ValueError(f"sealed module is not source loaded: {_neutralize(name)}")
+            relative = path.relative_to(sealed.resolve()).as_posix()
+            if relative not in all_expected:
+                raise ValueError(f"sealed module is not pinned: {_neutralize(name)}")
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            if all_expected.get(relative) != digest:
+                raise ValueError(f"sealed module bytes changed: {_neutralize(name)}")
+        elif any(_is_under(path, root) for root in stdlib_roots) and not any(
+            _is_under(path, root) for root in imports[2:]
+        ):
+            if origin != "frozen" and (
+                not isinstance(origin, str) or Path(origin).resolve() != path
+            ):
+                raise ValueError(f"stdlib module origin disagrees with file: {_neutralize(name)}")
+        elif any(_is_under(path, root) for root in imports):
+            if origin is None and name.split(".")[0] == "cryptography":
+                pass
+            elif not isinstance(origin, str) or Path(origin).resolve() != path:
+                raise ValueError(
+                    f"dependency module origin disagrees with file: {_neutralize(name)}"
+                )
+            top_level = name.split(".")[0]
+            if top_level not in _THIRD_PARTY_TOP_LEVELS or top_level in expected_names:
+                raise ValueError(f"unapproved dependency module: {_neutralize(name)}")
+        else:
+            raise ValueError(f"runner module outside allowed roots: {_neutralize(name)}")
+    if any(name.startswith("_w1353_") for name in seen_names):
+        raise ValueError("retired witness module was imported")
+    if "_openssl" in seen_names and "_cffi_backend" not in seen_names:
+        raise ValueError("in-memory OpenSSL bridge lacks its CFFI backend")
+
+
+def _is_under(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
 
 
 def _module_name(relative):
@@ -103,6 +270,11 @@ def _module_name(relative):
     parts = list(path.with_suffix("").parts)
     if parts[-1] == "__init__":
         parts.pop()
+    if parts[0] == "src":
+        parts.pop(0)
+        return ".".join(parts)
+    if parts[0] == "tests":
+        return parts[-1] if len(parts) == 2 and parts[1] != "attest" else ".".join(parts)
     if len(parts) == 2:
         return parts[-1]
     return ".".join(parts)

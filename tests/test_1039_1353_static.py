@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 from pra1353_consume import _literal_observations
 from pra1353_derive import derive
-from pra1353_recipes import FIELDS, RECIPES
+from pra1353_recipes import FIELDS, REASONS, RECIPES, ROUTES
 
 
 @pytest.mark.parametrize(
@@ -51,6 +51,9 @@ def test_retired_witness_files_are_absent():
 
 def test_every_runtime_computed_main_row_field_uses_a_derive_rule():
     recipes: list[dict[str, Any]] = [dict(zip(FIELDS, values, strict=True)) for values in RECIPES]
+    for recipe in recipes:
+        recipe["reason"] = REASONS.get(recipe["seq"], "")
+        recipe["route"] = ROUTES[recipe.pop("route_id")]
     expected_rules = {
         "classification": {*range(0, 25), *range(25, 35), *range(35, 38), 41, 42, 43, 47},
         "reason": {*range(0, 35), 41, *range(44, 47)},

@@ -13,19 +13,20 @@ from pathlib import Path
 
 import pra1353_consume as consume
 import pytest
+from test_1039_1353_recipes import _matches
 
 PINS = {
     "tests/attest/binding_helpers.py": "cd2959a72a449228fc27bd0b1eb082493ee00616a7afcc1fe27b7309e22e61c5",
     "tests/attest/test_verify.py": "156795f6ee20d46c692b4a27e15ab36525b7ab7fce945722b39a3067c68a9b83",
     "tests/conftest.py": "a6f527a6ae989b47ef7cd10b270206d7e8c0e391064eac8eef03f9f3693219fd",
-    "tests/pra1353_c10.py": "e4a085e21d6fd50ba487f2023393cd557b57a96bbf3b3e2e7edd6577c2c60e8d",
-    "tests/pra1353_consume.py": "78cd590ec90bb9639894e4a014604b82090fbd6346acda280dc1373b16151ca5",
-    "tests/pra1353_derive.py": "cbb32dc25971fbcff8135420e64531ca1abe0f6f1d1c1ed3f3b3a3592959d7ea",
+    "tests/pra1353_c10.py": "9b0a046af21c817ece0100bdd039945b4e5a1549cfb3e5b3c4e5a8ebedf503c3",
+    "tests/pra1353_consume.py": "cc157af0eea457c8590a3f9f6b829245183ed36680bbcbc3f128b71f94851416",
+    "tests/pra1353_derive.py": "3e301ec245fba896b12798554ccb8391f2facaf6409567772882aad7592d534e",
     "tests/pra1353_extra.py": "545f6f3143c59ddc17408c471e771cc8d3ff774c2668b20b4dd4324de5bd0364",
     "tests/pra1353_probe.py": "bd8b2d2f1abf5c65115e99d0f85f2008a1bd9bbe02912819770688b8e14d257b",
     "tests/pra1353_receipt.py": "d3121468ba6b46d12c466c1d79bd5bb49e832262a9fe36b49a36ff332bb054ae",
-    "tests/pra1353_recipes.py": "a66266ff2022909f3b5b241d27778f926ede73f673d87349b7b15987617b53ad",
-    "tests/pra1353_runner.py": "e1bd1f48196203e9c703b868a3beddf5f09f03898090528bd36a98634ae5ffd9",
+    "tests/pra1353_recipes.py": "87b8cf6e1d3c3618bc797ea9511b347e8d413dd752197ab5b368663efa2440b6",
+    "tests/pra1353_runner.py": "160467611bbdd931dfe890b5c6ed1e304408dd1c9803c32cf56f81e0c54802e3",
     "tests/xdist_groups.py": "08f332bef3401fd38390db53a60a158ebb78686d1ec33a7af1c9d4337692e673",
 }
 
@@ -135,7 +136,12 @@ def test_observed_values_are_recomputed_from_raw_route_returns(broker_report):
         )
         assert item["observed"] == derived
         assert isinstance(item["matches_spec"], bool)
-    assert all(not name.startswith("_w1353_") for name in broker_report["loaded_test_modules"])
+        assert item["matches_spec"] == _matches(
+            item["observed"], item["expected_on_main"], item["reason"]
+        )
+    assert all(not item["name"].startswith("_w1353_") for item in broker_report["modules"])
+    witness_sources = Path(__file__).parent.glob("pra1353_*.py")
+    assert all(not consume._literal_observations(path.read_text()) for path in witness_sources)
     tree = ast.parse(Path(__file__).read_text())
     assert not any(
         isinstance(n, ast.Call)
@@ -214,6 +220,11 @@ def test_blackbox_classification_counts_only_account_gaps_as_not_run(status, rea
     assert consume.blackbox_classification(status, reason) == expected
 
 
+def test_literal_observation_checker_accepts_current_probe_call_sites():
+    sources = Path(__file__).parent.glob("pra1353_*.py")
+    assert all(not consume._literal_observations(path.read_text()) for path in sources)
+
+
 def test_candidate_routes_match_pinned_main_outputs(core_rows):
     """C1-C5; real verify_cli run outputs are pinned, including both known C2/C5 bypasses."""
     rows = core_rows
@@ -234,10 +245,7 @@ def test_candidate_routes_match_pinned_main_outputs(core_rows):
         assert [(r["observed"], r["classification"]) for r in c2_blackbox] == [
             ("UNCOMPARABLE", "REFUSED")
         ] * 2
-        assert all(
-            r["reason"] == r["raw_return"].get("reason", r["raw_return"].get("detail", ""))
-            for r in c2_blackbox
-        )
+        assert all(consume._NO_SANDBOX_BASE in r["reason"] for r in c2_blackbox)
     # Linux: C2 is observed on CI as VERIFIED.
     expected = ["VERIFIED", "VERIFIED"]
     if not (sys.platform == "linux" or consume.sandbox_available()):
@@ -268,9 +276,7 @@ def test_class_results_are_pinned(extra_rows):
         assert c7_b["classification"] == "NOT_RUN"
     else:  # as C2 above: observed under Core's verifier
         assert (c7_b["observed"], c7_b["classification"]) == ("UNCOMPARABLE", "REFUSED")
-        assert c7_b["reason"] == c7_b["raw_return"].get(
-            "reason", c7_b["raw_return"].get("detail", "")
-        )
+        assert consume._NO_SANDBOX_BASE in c7_b["reason"]
     if "BLACKBOX_NEEDS_VERIFIER_ACCOUNT" in c7_b["reason"]:
         assert "pytest exit code 1" not in c7_b["reason"]
     c8 = {r["probe"]: r["observed"] for r in rows if r["class_id"] == "C8"}

@@ -41,17 +41,22 @@ def _record(n, raw, outside, blackbox, blackbox_judge, BlackboxRun):
         ).encode()
     )
     (verdict,) = blackbox_judge.judge_run(spec, "c" * 40, run)
+    raw_return = _raw_return(verdict, outside)
     return row(
         "C10",
         f"runner-sniff-{n}",
         "python -P -m _cairnwork_blackbox_runner→blackbox_judge.judge_run",
-        {"status": verdict.reason, "detail": "", "outside": outside},
+        raw_return,
         "blackbox:add: PASS [matched 1/1]",
         "KNOWN_RESIDUAL",
         f"outside-runner return={outside}; production runs "
         "python -P -m _cairnwork_blackbox_runner "
         "(src/cairnwork/blackbox_exec.py:139), so the name is absent from sys.modules",
     )
+
+
+def _raw_return(verdict, outside):
+    return {"status": verdict.reason, "detail": "", "outside": outside}
 
 
 def c10_rows():

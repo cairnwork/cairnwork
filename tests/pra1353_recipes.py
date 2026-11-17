@@ -1,31 +1,297 @@
-"""Pinned row recipes; compressed to keep the data module reviewable and under 400 lines."""
+"""Pinned row recipes; plain literal data for review."""
 
-import base64
-import json
-import zlib
-
-FIELDS = ("seq", "recipe_id", "class_id", "probe", "route", "expected", "classification", "reason")
-_DATA = (
-    "c-qaFU2~#H6o&r_m8+eqkhMSXYj4&VGI67jQry|9Y>GncOxPgpG?2vo_0zNmwT6znHA%!93x"
-    "q!Jn{!S-ea!7`<Mc%EXS2~bIX&qk`SHX=biXpgI5M}lzPvR=p2#o$w8w+Xfqfw_e;0Yoy6TN"
-    "646=wP^1UEUH@DsLW&g|Abv~bt?aS%p$E7P@ups5h$=&HK0yn61GmC@pamHUXUJTPLpUP*B>"
-    "-poUvk6^3`oU54`Bof*I9B5RXzKMGPhPX9AeBo^!Ip9no13$hxs*Y5*}3cuhW|4+SFU4EJik"
-    "oQDctKK?52o-OQI<lK6t?>xS^GT;g2tv1>%+_73AQlXo8z&B^Bi3Q_%wPRw0h--o|Zk(=Oc{"
-    "avOI*yraaAbsHl9FKTEicKCgafV>D*N_K#ai~zkzp_kNt3ISsgDeWAxe-SVhDW;NY1EXVUVc"
-    ";*aG*zpig#o~*S*h9~S{Mk7TCY?MA4}B$&Pc(T*1p#O*Qit4Iq1j-6vm3e^jHrI40OgwQ?tY"
-    "GGz_@LxKgtN>@*B?#){4bd*Ub%W|U+#v@Zr&V_Gp&LtOyKxbU%VEqM`gAy}BLe^kBA(9gCnk"
-    "Qq0%zHn{6fZ4dE^+js)1&GFNtuI=eFJLw9Xnk3A`657Z($M;9*5(VaO_0`Ct2ST2Z-TYH+O_"
-    "!tvJ;~9)v3)FK%P*YFZBzq9$&zFq6YAy&0~4Tl1%XB%FIO0c8+HMpM3t6ovBZM?eV5JnQWpL"
-    "(@pghRx*HZ($vZP%LIQP8K5y~>15bqnXTSO2k1)F0PH&6*d59%{+uvjLQ(e%trbFESc`r3vX"
-    "m>>eA65LPVH4xW5MUFYs{k}w4ovyJc(Do8H*qbAK2Uod7flOlp1`NGVv75Vy3JDa7jmF^;z)"
-    "b>)VWO8tiR0De#x7DY__MU?zNb?AvaSGk-l33id6RLgrHNOv<gxGj(ppu4nf>WokR`C=q}uM"
-    "Wx8h<OwsgV6kLEPUy>3#?nkTe`>YfVG^alQL5(PqDEP?U_Aei_F1<_zvm5H#~(O-cXTtfJ$q"
-    "ZPj=pgz;E|G2P9`}BRZ%`j5x_^+|K2UiD+3nImnPBuy_&aW+8?;g@{M6G3_lDakvwzp=x_6-"
-    "R{Wh~)WLf^mXEr@eBL#Ry=>f;eTRNUck-2M$Nl2?V|y~VnD&NS_o%U36o4YN^q%oCdIrMMrr"
-    "t9-M$dq2s&K7lh9HjS+x<7olX+a6K<@Q6MB7(yz0z(#X4)=8KCnO+@yhO9_@lvO)bsjRRZ;*"
-    "oX{QV`3sR;DbKaZSuZOXKYF48RQ}D$P`C<`enrL1@)QLMC_xA+_idm=(%3fHQODg-BU^<iD*"
-    "xnZp5M<%a-@4(LGP+=i&g}WH*S|h@|MDdZMgwnTJKi1<0FOngA`dKlO!o?0+5PKD5qvUmK38"
-    "J{Vk}x>J(Ro-StJ9N;7&D1$y(@_C6A+U^+|>OLw|5s00hh0G-~4vnR2~UfFq$eK2)TitLxo&"
-    "E<A}P"
+# ruff: noqa: E501
+FIELDS = ("seq", "class_id", "probe", "route_id", "expected", "classification")
+ROUTES = (
+    "verify_cli run",
+    "verify_cli run --blackbox",
+    "blackbox_judge.judge_run",
+    "verify_cli._run --require-protection",
+    "verify_cli run --require-protection",
+    "python -P -m _cairnwork_blackbox_runner→blackbox_judge.judge_run",
+    "verify_bundle",
+    "verify_bundle(policy)",
 )
-RECIPES = tuple(tuple(row) for row in json.loads(zlib.decompress(base64.b85decode("".join(_DATA)))))
+RECIPES = (
+    (
+        0,
+        "C1",
+        "verify-cli-1",
+        0,
+        "VERIFIED",
+        "@rule:verification_classification:VERIFIED_WRONG,REFUSED",
+    ),
+    (1, "C1", "blackbox-1", 1, "NOT_RUN", "@rule:blackbox_classification"),
+    (
+        2,
+        "C1_MUTANT",
+        "evasion-replaced-by-pass",
+        0,
+        "FAILED",
+        "@rule:verification_classification:HONEST_VERIFIED,HONEST_FAILED",
+    ),
+    (
+        3,
+        "C1",
+        "verify-cli-2",
+        0,
+        "VERIFIED",
+        "@rule:verification_classification:VERIFIED_WRONG,REFUSED",
+    ),
+    (4, "C1", "blackbox-2", 1, "NOT_RUN", "@rule:blackbox_classification"),
+    (
+        5,
+        "C1",
+        "verify-cli-3",
+        0,
+        "VERIFIED",
+        "@rule:verification_classification:VERIFIED_WRONG,REFUSED",
+    ),
+    (6, "C1", "blackbox-3", 1, "NOT_RUN", "@rule:blackbox_classification"),
+    (
+        7,
+        "C2",
+        "verify-cli-1",
+        0,
+        "VERIFIED",
+        "@rule:verification_classification:VERIFIED_WRONG,REFUSED",
+    ),
+    (8, "C2", "blackbox-1", 1, "NOT_RUN", "@rule:blackbox_classification"),
+    (
+        9,
+        "C2_MUTANT",
+        "evasion-replaced-by-pass",
+        0,
+        "FAILED",
+        "@rule:verification_classification:HONEST_VERIFIED,HONEST_FAILED",
+    ),
+    (
+        10,
+        "C2",
+        "verify-cli-2",
+        0,
+        "VERIFIED",
+        "@rule:verification_classification:VERIFIED_WRONG,REFUSED",
+    ),
+    (11, "C2", "blackbox-2", 1, "NOT_RUN", "@rule:blackbox_classification"),
+    (
+        12,
+        "C3",
+        "verify-cli-1",
+        0,
+        "VERIFIED",
+        "@rule:verification_classification:VERIFIED_WRONG,REFUSED",
+    ),
+    (13, "C3", "blackbox-1", 1, "NOT_RUN", "@rule:blackbox_classification"),
+    (
+        14,
+        "C3_MUTANT",
+        "evasion-1-replaced-by-pass",
+        0,
+        "FAILED",
+        "@rule:verification_classification:HONEST_VERIFIED,HONEST_FAILED",
+    ),
+    (
+        15,
+        "C3",
+        "verify-cli-2",
+        0,
+        "VERIFIED",
+        "@rule:verification_classification:VERIFIED_WRONG,REFUSED",
+    ),
+    (16, "C3", "blackbox-2", 1, "NOT_RUN", "@rule:blackbox_classification"),
+    (
+        17,
+        "C3_MUTANT",
+        "evasion-2-replaced-by-pass",
+        0,
+        "FAILED",
+        "@rule:verification_classification:HONEST_VERIFIED,HONEST_FAILED",
+    ),
+    (
+        18,
+        "C4",
+        "verify-cli-1",
+        0,
+        "VERIFIED",
+        "@rule:verification_classification:VERIFIED_WRONG,REFUSED",
+    ),
+    (19, "C4", "blackbox-1", 1, "NOT_RUN", "@rule:blackbox_classification"),
+    (
+        20,
+        "C4_MUTANT",
+        "evasion-replaced-by-pass",
+        0,
+        "FAILED",
+        "@rule:verification_classification:HONEST_VERIFIED,HONEST_FAILED",
+    ),
+    (
+        21,
+        "C4",
+        "verify-cli-2",
+        0,
+        "VERIFIED",
+        "@rule:verification_classification:VERIFIED_WRONG,REFUSED",
+    ),
+    (22, "C4", "blackbox-2", 1, "NOT_RUN", "@rule:blackbox_classification"),
+    (
+        23,
+        "C5",
+        "liar-int-1",
+        0,
+        "VERIFIED",
+        "@rule:verification_classification:VERIFIED_WRONG,REFUSED",
+    ),
+    (
+        24,
+        "C5",
+        "liar-int-2",
+        0,
+        "VERIFIED",
+        "@rule:verification_classification:VERIFIED_WRONG,REFUSED",
+    ),
+    (
+        25,
+        "HONEST",
+        "correct-01",
+        0,
+        "VERIFIED",
+        "@rule:verification_classification:HONEST_VERIFIED,HONEST_FAILED",
+    ),
+    (
+        26,
+        "HONEST",
+        "correct-02",
+        0,
+        "VERIFIED",
+        "@rule:verification_classification:HONEST_VERIFIED,HONEST_FAILED",
+    ),
+    (
+        27,
+        "HONEST",
+        "correct-03",
+        0,
+        "VERIFIED",
+        "@rule:verification_classification:HONEST_VERIFIED,HONEST_FAILED",
+    ),
+    (
+        28,
+        "HONEST",
+        "correct-04",
+        0,
+        "VERIFIED",
+        "@rule:verification_classification:HONEST_VERIFIED,HONEST_FAILED",
+    ),
+    (
+        29,
+        "HONEST",
+        "correct-05",
+        0,
+        "VERIFIED",
+        "@rule:verification_classification:HONEST_VERIFIED,HONEST_FAILED",
+    ),
+    (
+        30,
+        "HONEST",
+        "correct-06",
+        0,
+        "VERIFIED",
+        "@rule:verification_classification:HONEST_VERIFIED,HONEST_FAILED",
+    ),
+    (
+        31,
+        "HONEST",
+        "correct-07",
+        0,
+        "VERIFIED",
+        "@rule:verification_classification:HONEST_VERIFIED,HONEST_FAILED",
+    ),
+    (
+        32,
+        "HONEST",
+        "correct-08",
+        0,
+        "VERIFIED",
+        "@rule:verification_classification:HONEST_VERIFIED,HONEST_FAILED",
+    ),
+    (
+        33,
+        "HONEST",
+        "correct-09",
+        0,
+        "VERIFIED",
+        "@rule:verification_classification:HONEST_VERIFIED,HONEST_FAILED",
+    ),
+    (
+        34,
+        "HONEST",
+        "correct-10",
+        0,
+        "VERIFIED",
+        "@rule:verification_classification:HONEST_VERIFIED,HONEST_FAILED",
+    ),
+    (35, "C6", "low-entropy-true", 2, "PASS", "@rule:pass_classification"),
+    (36, "C6", "low-entropy-zero", 2, "PASS", "@rule:pass_classification"),
+    (37, "C6", "low-entropy-empty", 2, "PASS", "@rule:pass_classification"),
+    (38, "CONTROL", "owner-correct", 2, "@rule:control_expected", "HONEST_VERIFIED"),
+    (39, "CONTROL", "owner-wrong", 2, "@rule:control_expected", "HONEST_FAILED"),
+    (40, "C7", "a-no-blackbox", 3, "UNPROTECTED", "REFUSED"),
+    (41, "C7", "b-one-tampered-pytest", 4, "NOT_RUN", "@rule:blackbox_classification"),
+    (42, "C9", "timeout", 2, "VERIFICATION_INCOMPLETE", "@rule:c9_classification"),
+    (43, "C9", "no-account", 2, "VERIFICATION_INCOMPLETE", "@rule:c9_classification"),
+    (44, "C10", "runner-sniff-1", 5, "blackbox:add: PASS [matched 1/1]", "KNOWN_RESIDUAL"),
+    (45, "C10", "runner-sniff-2", 5, "blackbox:add: PASS [matched 1/1]", "KNOWN_RESIDUAL"),
+    (46, "C10", "runner-sniff-3", 5, "blackbox:add: PASS [matched 1/1]", "KNOWN_RESIDUAL"),
+    (47, "C8", "valid", 6, "OK", "@rule:c8_valid_classification"),
+    (48, "C8", "head", 6, "HEAD_MISMATCH", "REFUSED"),
+    (49, "C8", "base", 6, "BASE_MISMATCH", "REFUSED"),
+    (50, "C8", "test_commit", 6, "TEST_SOURCE_MISMATCH", "REFUSED"),
+    (51, "C8", "executed_tree", 6, "TREE_MISMATCH", "REFUSED"),
+    (52, "C8", "blackbox_commitment", 6, "BLACKBOX_COMMITMENT_MISMATCH", "REFUSED"),
+    (53, "C8", "blackbox_checks", 6, "BLACKBOX_CHECKS_MISSING", "REFUSED"),
+    (54, "C7", "c-receiver-requires-blackbox", 7, "REJECTED", "REFUSED"),
+    (55, "C8", "v0.1-under-protected-policy", 6, "TEST_SOURCE_MISMATCH", "REFUSED"),
+)
+REASONS = {
+    0: "@rule:verify_reason",
+    1: "@rule:blackbox_reason",
+    2: "@rule:verify_reason",
+    3: "@rule:verify_reason",
+    4: "@rule:blackbox_reason",
+    5: "@rule:verify_reason",
+    6: "@rule:blackbox_reason",
+    7: "@rule:verify_reason",
+    8: "@rule:blackbox_reason",
+    9: "@rule:verify_reason",
+    10: "@rule:verify_reason",
+    11: "@rule:blackbox_reason",
+    12: "@rule:verify_reason",
+    13: "@rule:blackbox_reason",
+    14: "@rule:verify_reason",
+    15: "@rule:verify_reason",
+    16: "@rule:blackbox_reason",
+    17: "@rule:verify_reason",
+    18: "@rule:verify_reason",
+    19: "@rule:blackbox_reason",
+    20: "@rule:verify_reason",
+    21: "@rule:verify_reason",
+    22: "@rule:blackbox_reason",
+    23: "@rule:verify_reason",
+    24: "@rule:verify_reason",
+    25: "@rule:verify_reason",
+    26: "@rule:verify_reason",
+    27: "@rule:verify_reason",
+    28: "@rule:verify_reason",
+    29: "@rule:verify_reason",
+    30: "@rule:verify_reason",
+    31: "@rule:verify_reason",
+    32: "@rule:verify_reason",
+    33: "@rule:verify_reason",
+    34: "@rule:verify_reason",
+    38: "owner mode: direct judge only; matched count is observable",
+    39: "owner mode: direct judge only; matched count is observable",
+    41: "@rule:blackbox_reason",
+    44: "@rule:c10_reason",
+    45: "@rule:c10_reason",
+    46: "@rule:c10_reason",
+}
