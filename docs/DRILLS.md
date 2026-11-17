@@ -33,6 +33,15 @@ blackbox 路徑的候選樹與一般 verify 相同（宣告 `module: calc`，che
 | 驗證帳號 | **通過**（2026-11-01，`c513c4e`）：`cairnwork-verify` 以 `cairnwork-verifier` 帳號執行，正確候選 VERIFIED 兩次、已知錯誤的候選 FAILED_VERIFICATION 一次；執行中的 checkout 檔案與 pytest 程序都屬於 `cairnwork-verifier`，結束後帳號程序數為 0 | `docs/drills/2026-11-01-verifier-account.json` |
 | 回退 | **未驗收（跨系統）**。Cairnwork 端在 2026-11-01、`c513c4e` 重跑通過：worker 換成固定腳本（不呼叫 agy 或模型），drain 後新任務被拒（`NOT_ACCEPTING`）、重送拿回同一個任務，任務在 Cairnwork 內完成且沒有重跑；route 自動測試 15 passed。Gateway 轉送自 2026-10-21 起依維護者決定停車（`docs/GATEWAY_ROUTE.md`），`off` 只在環境變數層確認，沒有一筆線上任務回到 SelfHosted 完成，所以跨系統回退沒有驗收證據。用真 agy 的 `scripts/drill_rollback.py` **未重跑：worker 停用（10/30 起）**。重開 route 前要照 #39 在當前版本重做三個見證 | `docs/drills/2026-11-01-rollback-cairnwork-side.json`、`docs/drills/2026-10-20-route.json`、`docs/drills/2026-10-20-rollback-cairnwork-side.json`（都只有 Cairnwork 端） |
 
+## 2026-11-17 重跑（main `89116e46`，不經真 worker；Refs #520）
+
+| 演練 | 結果 | 說明 | 紀錄 |
+|---|---|---|---|
+| 驗證帳號 | **PASS**（2026-11-17，mini，lab 核准時段） | 三個候選經 `cairnwork-verify` 帳號模式判定：正確修正 VERIFIED（task `verify-e90eccf606336f40`）、已知錯誤 FAILED（exit 2）、正確修正重跑 VERIFIED（exit 0）；結束後帳號程序 0。第一次執行的 exit code 未擷取。 | `docs/drills/2026-11-17-verifier-account.json` |
+| 重啟 | **PASS**（自動測試） | `tests/test_recovery.py` 26 passed、0 failed、0 skipped（95.7 秒）。真 agent 部分未重跑：worker 停用（10/30 起）。 | `docs/drills/2026-11-17-restart.json` |
+| 失敗 | **PASS**（自動測試） | `tests/test_pipeline.py` 30 passed、0 failed、0 skipped（66.8 秒）。 | `docs/drills/2026-11-17-failure.json` |
+| route 的 Cairnwork 端與回退 | **PASS**（Cairnwork 端，本機驗證） | 與 11/01 相同步驟（影子 `check`、`accept`、交件 A、A 在 DISPATCHED 時 `drain`、新冪等鍵回 `NOT_ACCEPTING`、重送拿回同一任務、`recover` 無決定、完成後重送為 `duplicate`）。worker 用**固定腳本**（PATH 上的 stub，不是真 agy，無模型）；驗證改用本機模式，**未用驗證帳號**。跨系統回退仍未驗收（Gateway 轉送停車）。 | `docs/drills/2026-11-17-rollback-cairnwork-side.json` |
+
 ## 2026-11-01 重跑（main `c513c4e`，不經 worker）
 
 這一輪沒有呼叫 agy 或任何模型。在 macOS（Seatbelt）上執行，驗證帳號的時段經 lab 核准，所有帳號模式的執行在台北時間 14:21 前結束，結束後 `ps -axo user= | grep -c '^cairnwork-verifier'` 為 0。
