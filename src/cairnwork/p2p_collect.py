@@ -91,6 +91,9 @@ def collected_side(task, files, outcomes, test_files, ctx, budget, attempt_id) -
         if unknown:
             raise TestCommitRejected("TEST_COMMIT_COLLECT_ERROR", _named(unknown))
         test_ids = frozenset(got.ids)
+        exposed = got.exposed
+    else:
+        exposed = ()
     edited = frozenset(test_files) & frozenset(files)
     there = frozenset(present)
     side = classify(
@@ -99,6 +102,7 @@ def collected_side(task, files, outcomes, test_files, ctx, budget, attempt_id) -
         edited,
         lambda p: _source(task, task.test_commit, p) if p in there else "",
         lambda p: _source(task, task.base_commit, p),
+        exposed=exposed,
     )
     if side.dropped:
         detail = _named(sorted(side.dropped))
@@ -119,7 +123,7 @@ def collected_side(task, files, outcomes, test_files, ctx, budget, attempt_id) -
     )
 
 
-def classify(base_ids, test_ids, edited, source, base_source) -> CollectedSide:
+def classify(base_ids, test_ids, edited, source, base_source, *, exposed=None) -> CollectedSide:
     """Classify missing ids in a bounded subprocess; source callables are read in the parent."""
     base_ids, test_ids, edited = frozenset(base_ids), frozenset(test_ids), frozenset(edited)
     collected_funcs = {_function(nodeid) for nodeid in test_ids}
@@ -132,17 +136,21 @@ def classify(base_ids, test_ids, edited, source, base_source) -> CollectedSide:
         "test": {path: source(path) for path in sorted(needed)},
         "base": {path: base_source(path) for path in sorted(needed)},
     }
-    removed, dropped = _run_classification(base_ids, test_ids, edited, sources)
+    runtime_names = (
+        None if exposed is None else sorted(entry for entry in exposed if _file(entry) in edited)
+    )
+    removed, dropped = _run_classification(base_ids, test_ids, edited, sources, runtime_names)
     return CollectedSide(base_ids, test_ids, removed, dropped)
 
 
-def _run_classification(base_ids, test_ids, edited, sources):
+def _run_classification(base_ids, test_ids, edited, sources, exposed=None):
     payload = json.dumps(
         {
             "base_ids": sorted(base_ids),
             "test_ids": sorted(test_ids),
             "edited": sorted(edited),
             "sources": sources,
+            "exposed": exposed,
         }
     ).encode()
     output, timed_out, returncode = _run_child(_classify_argv(), payload)

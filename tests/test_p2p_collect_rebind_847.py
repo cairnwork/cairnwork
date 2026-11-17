@@ -8,7 +8,7 @@ from cairnwork.p2p_collect import classify
 
 
 def _classify_single(base: str, test_id: str = "t.py::test_a"):
-    return classify({test_id}, set(), {"t.py"}, lambda p: "x = 1\n", lambda p: base)
+    return classify({test_id}, set(), {"t.py"}, lambda p: "x = 1\n", lambda p: base, exposed=())
 
 
 def test_a_test_rebound_by_assignment_is_dropped_not_removed():
@@ -247,6 +247,7 @@ def test_a_base_annotation_walrus_does_not_widen_the_1127_base_excuse():
         {"t.py"},
         lambda p: test,
         lambda p: base,
+        exposed=(),
     )
     assert "t.py::TestZ::test_a" in side.dropped and "t.py::TestZ::test_a" not in side.removed
 
@@ -261,5 +262,6 @@ def test_a_base_annotation_walrus_in_an_unchanged_helper_does_not_refuse_an_hone
         {"t.py"},
         lambda p: helper,
         lambda p: "def test_a(): assert 0\n" + helper,
+        exposed=(),
     )
     assert side.removed == {"t.py::test_a"} and side.dropped == set()
