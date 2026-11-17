@@ -42,7 +42,9 @@ def expiry_check(
         if cap.name in retained:
             if not (cap / "OWNER").exists():
                 problems.append(f"{cap.name}: retained but OWNER is missing")
-            elif (cap / "EXPIRES").read_text().strip() != "retained":
+            elif not (cap / "EXPIRES").is_file() or (
+                (cap / "EXPIRES").read_text().strip() != "retained"
+            ):
                 problems.append(f"{cap.name}: retained but EXPIRES is not 'retained'")
             continue
         if cap.name in pending:
@@ -153,6 +155,13 @@ def test_a_retained_capability_still_needs_its_owner_file(tmp_path):
     retained_capability(tmp_path, "keep", "retained", owner=False)
     problems, _ = expiry_check(tmp_path, TODAY, retained={"keep": "r"})
     assert problems == ["keep: retained but OWNER is missing"]
+
+
+def test_a_retained_capability_without_an_expires_file_is_a_problem_not_a_crash(tmp_path):
+    retained_capability(tmp_path, "keep", "retained")
+    (tmp_path / "keep" / "EXPIRES").unlink()
+    problems, _ = expiry_check(tmp_path, TODAY, retained={"keep": "r"})
+    assert problems == ["keep: retained but EXPIRES is not 'retained'"]
 
 
 def test_a_retained_capability_must_say_retained(tmp_path):
