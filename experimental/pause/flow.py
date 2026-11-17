@@ -261,7 +261,7 @@ def _r1_reason(
         return str(Reason.PAUSE_WORKER_CRASH), None, None
     record = r1.record
     if not isinstance(record, dict):
-        return str(Reason.PAUSE_R1_INCOMPLETE), None, None
+        return str(Reason.PAUSE_WORKER_CRASH), None, None
     verification = record.get("verification")
     feedback = record.get("spec_feedback")
     if (
