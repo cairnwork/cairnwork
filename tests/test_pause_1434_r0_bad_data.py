@@ -68,6 +68,7 @@ def _assert_cli_fallback(code: int, path: Path) -> None:
 def test_r0_non_json_episode_id_keeps_valid_fallback_receipt(tmp_path: Path) -> None:
     r0, r1 = _case(tmp_path)
     r0 = replace(r0, episode_id=_NotJson())
+    assert r0.transcript is not None
     _transcript(r0.transcript, [{"index": 2, "assistant_msg_index": "bad"}])
     _assert_r0_fallback(*_run(r0, r1))
 
@@ -75,6 +76,7 @@ def test_r0_non_json_episode_id_keeps_valid_fallback_receipt(tmp_path: Path) -> 
 def test_r0_non_json_episode_id_cli_writes_receipt(tmp_path: Path) -> None:
     r0, r1 = _case(tmp_path)
     r0 = replace(r0, episode_id=_NotJson())
+    assert r0.transcript is not None
     _transcript(r0.transcript, [{"index": 2, "assistant_msg_index": "bad"}])
     code, path = _cli_run(tmp_path, r0, r1)
     _assert_cli_fallback(code, path)
