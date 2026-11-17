@@ -1,5 +1,6 @@
 """Race regressions for binding Core's verdict to its source snapshot."""
 
+import os
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,7 @@ import pytest
 from experimental.pause.core_judge import CoreJudge
 from experimental.pause.flow import RunResult
 from experimental.pause.guard import TreeGuard
+from experimental.pause.interfaces import GuardUnavailable
 
 
 def git(root: Path, *args: str) -> str:
@@ -153,6 +155,10 @@ def _add_excluded_entry(repo: Path, kind: str) -> None:
         (directory / "E" / "x").write_text("transient\n")
     elif kind == "dotfile":
         (directory / ".x").write_text("transient\n")
+    elif kind == "fifo":
+        os.mkfifo(directory / "x")
+    elif kind == "hardlink":
+        os.link(repo / "a", directory / "x")
     else:
         (directory / "E").mkdir()
 
@@ -168,7 +174,8 @@ def _remove_excluded_entries(repo: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    "kind", ["file", "executable", "symlink", "nested-file", "dotfile", "empty-dir"]
+    "kind",
+    ["file", "executable", "symlink", "nested-file", "dotfile", "empty-dir", "fifo", "hardlink"],
 )
 @pytest.mark.parametrize("remove_at", ["after-pair", "before-clone", "after-clone", "before-copy"])
 def test_judge_rejects_entries_under_excluded_directories(
@@ -226,7 +233,15 @@ def test_judge_rejects_entries_under_excluded_directories(
 
 
 @pytest.mark.parametrize(
-    "case", ["unchanged", "excluded-empty", "nested-excluded-empty", "failed", "mixed"]
+    "case",
+    [
+        "unchanged",
+        "excluded-empty",
+        "nested-excluded-empty",
+        "prefix-siblings-unicode",
+        "failed",
+        "mixed",
+    ],
 )
 def test_judge_accepts_stable_excluded_shapes_and_records_core_result(
     tmp_path: Path, case: str
@@ -243,6 +258,17 @@ def test_judge_accepts_stable_excluded_shapes_and_records_core_result(
             base = git(repo, "rev-parse", "HEAD")
             (repo / "D" / "E" / "tracked").unlink()
         (repo / "D" / "tracked").unlink()
+    elif case == "prefix-siblings-unicode":
+        for name in ("D2/f", "D.x", "src/Dé x/tracked", "src/keep"):
+            path = repo / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("base\n")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", "prefix and unicode paths")
+        base = git(repo, "rev-parse", "HEAD")
+        (repo / "D").rmdir()
+        (repo / "src/Dé x/tracked").unlink()
+        (repo / "D2/f").write_text("changed\n")
     elif case == "mixed":
         (repo / "a").unlink()
         executable = repo / "new-executable"
@@ -255,3 +281,98 @@ def test_judge_accepts_stable_excluded_shapes_and_records_core_result(
     )
     assert (verdict.status, verdict.tree_sha256) == (status, entry)
     assert TreeGuard(repo).digest() == entry
+
+
+def _swap_excluded_path(repo: Path, outside: Path, kind: str) -> None:
+    directory = repo / "D"
+    directory.rmdir()
+    if kind in {"file-0644", "file-0755"}:
+        directory.write_text("transient\n")
+        directory.chmod(0o644 if kind == "file-0644" else 0o755)
+    elif kind == "symlink-a":
+        os.symlink("a", directory)
+    elif kind == "symlink-outside":
+        os.symlink(str(outside), directory)
+    elif kind == "fifo":
+        os.mkfifo(directory)
+    else:
+        os.link(repo / "a", directory)
+
+
+def _restore_excluded_path(repo: Path) -> None:
+    directory = repo / "D"
+    directory.unlink()
+    directory.mkdir(mode=0o755)
+    directory.chmod(0o755)
+
+
+def _install_excluded_swap_hooks(
+    monkeypatch: Any, repo: Path, kind: str, point: str, outside: Path
+) -> None:
+    from experimental.pause import core_judge
+
+    pair = TreeGuard.digest_pair
+    clone = core_judge._clone
+    copy = core_judge._copy_working_tree
+
+    def swap() -> None:
+        _swap_excluded_path(repo, outside, kind)
+
+    if point == "after-digest-pair":
+
+        def pair_then_swap(guard, **kwargs):
+            value = pair(guard, **kwargs)
+            swap()
+            return value
+
+        monkeypatch.setattr(TreeGuard, "digest_pair", pair_then_swap)
+    elif point == "before-clone":
+
+        def clone_after_swap(source, destination):
+            swap()
+            return clone(source, destination)
+
+        monkeypatch.setattr(core_judge, "_clone", clone_after_swap)
+    elif point == "after-clone":
+
+        def clone_then_swap(source, destination):
+            clone(source, destination)
+            swap()
+
+        monkeypatch.setattr(core_judge, "_clone", clone_then_swap)
+    else:
+
+        def copy_after_swap(source, destination):
+            swap()
+            return copy(source, destination)
+
+        monkeypatch.setattr(core_judge, "_copy_working_tree", copy_after_swap)
+
+    copy_with_injection = core_judge._copy_working_tree
+
+    def copy_then_restore(source, destination):
+        value = copy_with_injection(source, destination)
+        _restore_excluded_path(repo)
+        return value
+
+    monkeypatch.setattr(core_judge, "_copy_working_tree", copy_then_restore)
+
+
+@pytest.mark.parametrize(
+    "kind",
+    ["file-0644", "file-0755", "symlink-a", "symlink-outside"],
+)
+@pytest.mark.parametrize(
+    "point", ["after-digest-pair", "before-clone", "after-clone", "before-copy"]
+)
+def test_judge_core_tree_matches_snapshot_variants(
+    tmp_path: Path, monkeypatch: Any, kind: str, point: str
+) -> None:
+    repo, base = _excluded_checkout(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret").write_text("outside\n")
+    result = RunResult(0, "", tmp_path, repo, None, {}, base_sha=base)
+    _install_excluded_swap_hooks(monkeypatch, repo, kind, point, outside)
+    with pytest.raises((ValueError, RuntimeError, GuardUnavailable)):
+        CoreJudge(tmp_path / "state", (), verify=lambda *_a, **_kw: {"status": "VERIFIED"})(result)

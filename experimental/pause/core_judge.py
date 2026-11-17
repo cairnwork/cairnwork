@@ -172,6 +172,12 @@ def _candidate_tree_digest(repo: Path, candidate: str, excluded: frozenset[str])
         result = subprocess.run(command, capture_output=True, check=False, env=_env())
         if result.returncode:
             raise RuntimeError("cannot materialize Core candidate tree")
+        for path in excluded:
+            try:
+                os.lstat(checkout / path)
+            except FileNotFoundError:
+                continue
+            raise ValueError(f"Core candidate contains excluded checkout path: {path}")
         return TreeGuard(checkout, exclude_git=True, exclude_paths=excluded).digest()
 
 

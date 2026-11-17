@@ -1,6 +1,7 @@
 """Flow-level regressions for the Core source-tree binding."""
 
 import json
+import os
 import subprocess
 from dataclasses import replace
 from pathlib import Path
@@ -293,3 +294,110 @@ def test_flow_records_stable_core_tree_and_selects_only_verified(
     assert receipt["core_tree_sha256"] == entry
     assert receipt["core_verdict"] == status
     assert result is (r1 if status == "VERIFIED" else r0)
+
+
+def _swap_excluded_path(repo: Path, outside: Path, kind: str) -> None:
+    directory = repo / "D"
+    directory.rmdir()
+    if kind in {"file-0644", "file-0755"}:
+        directory.write_text("transient\n")
+        directory.chmod(0o644 if kind == "file-0644" else 0o755)
+    elif kind == "symlink-a":
+        os.symlink("a", directory)
+    else:
+        os.symlink(str(outside), directory)
+
+
+def _restore_excluded_path(repo: Path) -> None:
+    directory = repo / "D"
+    directory.unlink()
+    directory.mkdir(mode=0o755)
+    directory.chmod(0o755)
+
+
+@pytest.mark.parametrize("kind", ["file-0644", "file-0755", "symlink-a", "symlink-outside"])
+@pytest.mark.parametrize(
+    "point", ["after-digest-pair", "before-clone", "after-clone", "before-copy"]
+)
+def test_flow_core_tree_matches_snapshot_variants(
+    tmp_path: Path, monkeypatch: Any, kind: str, point: str
+) -> None:
+    from experimental.pause import core_judge
+
+    r0, _r1, checkout, base = _excluded_flow_checkout(tmp_path, _scenario(tmp_path)[0])
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret").write_text("outside\n")
+    pair = TreeGuard.digest_pair
+    clone = core_judge._clone
+    copy = core_judge._copy_working_tree
+
+    def swap() -> None:
+        _swap_excluded_path(checkout, outside, kind)
+
+    if point == "after-digest-pair":
+
+        def pair_then_swap(guard, **kwargs):
+            value = pair(guard, **kwargs)
+            swap()
+            return value
+
+        monkeypatch.setattr(TreeGuard, "digest_pair", pair_then_swap)
+    elif point == "before-clone":
+
+        def clone_after_swap(source, destination):
+            swap()
+            return clone(source, destination)
+
+        monkeypatch.setattr(core_judge, "_clone", clone_after_swap)
+    elif point == "after-clone":
+
+        def clone_then_swap(source, destination):
+            clone(source, destination)
+            swap()
+
+        monkeypatch.setattr(core_judge, "_clone", clone_then_swap)
+    else:
+
+        def copy_after_swap(source, destination):
+            swap()
+            return copy(source, destination)
+
+        monkeypatch.setattr(core_judge, "_copy_working_tree", copy_after_swap)
+
+    copy_with_injection = core_judge._copy_working_tree
+
+    def copy_then_restore(source, destination):
+        value = copy_with_injection(source, destination)
+        _restore_excluded_path(checkout)
+        return value
+
+    monkeypatch.setattr(core_judge, "_copy_working_tree", copy_then_restore)
+    monkeypatch.setattr("experimental.pause.flow._scope_ok", lambda *_args: True)
+    r1 = replace(
+        r0,
+        root=tmp_path / "R1",
+        checkout=checkout,
+        base_sha=base,
+        guard_before_plan="digest",
+        guard_at_plan_arrival="digest",
+        git_config_sha256="0" * 64,
+        record={
+            "verification": {"exit_reason": "COMPLETED"},
+            "spec_feedback": {"needs_spec": False},
+        },
+    )
+    result, receipt = run_flow(
+        [],
+        task_id="task",
+        planner=Planner(),
+        gate=Gate(),
+        planner_settings=SETTINGS,
+        gate_settings=SETTINGS,
+        runner=lambda mode, _args, **_kwargs: r0 if mode == "run" else r1,
+        core_verdict=CoreJudge(
+            tmp_path / "state", (), verify=lambda *_a, **_kw: {"status": "VERIFIED"}
+        ),
+    )
+    assert result is r0, receipt
+    assert receipt["reason"] == "PAUSE_R1_NOT_VERIFIED"
