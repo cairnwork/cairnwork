@@ -19,7 +19,9 @@ from experimental.acceptance_casebook.identity import (
     resolve_actor,
 )
 from experimental.acceptance_casebook.origin import read_origin
+from experimental.acceptance_casebook.replay_inputs import bound_inputs as _bound_inputs
 from experimental.acceptance_casebook.replay_out import append as _append_output
+from experimental.acceptance_casebook.replay_runner import RealRunner, RunnerFailure
 from experimental.acceptance_casebook.store import (
     CasebookError,
     _read_chain,
@@ -33,12 +35,20 @@ def RUNNER(*_: Any) -> Any:
     return {"exit_code": 1, "verdict": None}
 
 
+_DEFAULT_RUNNER = RUNNER
+_ACTIVE_RUNNER: Any = None
+
+
 _SHA = re.compile(r"[0-9a-f]{40}\Z")
 _ZERO = "0" * 64
 
 
 def _digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def _setup_failed(*_: Any) -> Any:
+    raise RunnerFailure("VERSION_ENV")
 
 
 def _same_path(left: Path, right: Path) -> bool:
@@ -99,9 +109,11 @@ def _run_one(
     case: dict[str, Any], args: dict[str, Any], repeat: int
 ) -> tuple[str, str, int, str | None]:
     try:
-        value = RUNNER(case, args)
+        value = (_ACTIVE_RUNNER or RUNNER)(case, args)
     except (TimeoutError, subprocess.TimeoutExpired):
         return "UNREPLAYABLE", "TIMEOUT", 124, None
+    except RunnerFailure as exc:
+        return "UNREPLAYABLE", exc.reason, 1, None
     except Exception:  # noqa: BLE001 - injected runner failures must become UNREPLAYABLE
         return "UNREPLAYABLE", "RUNNER_ERROR", 1, None
     if isinstance(value, str) and value in ("accepted", "refused"):
@@ -111,50 +123,16 @@ def _run_one(
     code, verdict = value.get("exit_code"), value.get("verdict")
     if type(code) is not int:  # bool, float, str or None is never a real exit code
         return "UNREPLAYABLE", "UNREADABLE_OUTPUT", 1, None
-    if verdict == "VERIFIED" and code == 0:
+    if (verdict == "VERIFIED" or verdict == "accepted") and code == 0:
         mapped = "accepted"
-    elif verdict == "FAILED" and code == 0:
-        mapped = "refused"
+    elif (verdict == "FAILED" and code == 0) or (verdict == "refused" and code == 2):
+        mapped = "refused"  # "refused" with exit 2 is the real runner's checked verdict
     elif verdict == "REFUSED":
         return "UNREPLAYABLE", "PRE_CORE_REFUSED", int(code or 1), None
     else:
         return "UNREPLAYABLE", "UNREADABLE_OUTPUT", int(code or 1), None
     output = str(value.get("output", verdict))
     return mapped, "", int(code), output
-
-
-def _bound_inputs(case: dict[str, Any], inputs: Any, request: dict[str, Any]) -> dict[str, Any]:
-    raw = inputs.get(case["line_sha256"]) if isinstance(inputs, dict) else None
-    if not isinstance(raw, dict):
-        raise CasebookError("REPLAY_INPUT_MISMATCH")
-    if set(raw) != {"allowed_file", "verifier"}:
-        raise CasebookError("REPLAY_INPUT_MISMATCH")
-    for key in ("base", "candidate"):
-        value = case.get(key)
-        if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{40}", value) is None:
-            raise CasebookError("REPLAY_INPUT_MISMATCH")
-    contract = request.get("acceptance_contract", {})
-    plan = request.get("verification_plan", {})
-    bindings = {
-        "allowed_paths": raw.get("allowed_file"),
-        "required_verifier_ids": raw.get("verifier"),
-    }
-    expected = {
-        "allowed_paths": contract.get("allowed_paths", request.get("allowed_paths")),
-        "required_verifier_ids": plan.get(
-            "required_verifier_ids",
-            contract.get("required_verifier_ids", request.get("required_verifier_ids")),
-        ),
-    }
-    for key, supplied in bindings.items():
-        if not isinstance(supplied, list) or not all(isinstance(v, str) for v in supplied):
-            raise CasebookError("REPLAY_INPUT_MISMATCH")
-        bound = expected[key]
-        if not isinstance(bound, list) or not all(isinstance(v, str) for v in bound):
-            raise CasebookError("REPLAY_INPUT_MISMATCH")
-        if sorted(supplied) != sorted(bound):
-            raise CasebookError("REPLAY_INPUT_MISMATCH")
-    return {**raw, "base": case["base"], "candidate": case["candidate"]}
 
 
 def _append_record(out: Path, record: dict[str, Any], protected: tuple[Path, ...]) -> None:
@@ -245,6 +223,9 @@ def _parser() -> argparse.ArgumentParser:
         r.add_argument("--" + name.replace("_", "-"), type=Path, required=True)
     r.add_argument("--version", required=True)
     r.add_argument("--repeat", type=int, default=2)
+    r.add_argument("--repo", type=Path)
+    r.add_argument("--state-config", type=Path)
+    r.add_argument("--timeout", type=int, default=1800)
     for name in (
         "lineage",
         "model-family",
@@ -275,7 +256,7 @@ def _case_record(
             raise CasebookError("INVALID_KIND")
         rec, _ = read_origin(args.notary_db, case["task_id"], case["attempt_id"])
         confirmation = _confirmation(args.casebook, case)
-        raw = _bound_inputs(case, inputs, rec.request)
+        raw = _bound_inputs(case, inputs, rec.request, rec.binding)
         result = _case_result(
             case,
             raw,
@@ -314,6 +295,7 @@ def _case_record(
 
 
 def _replay(args: argparse.Namespace) -> int:
+    global _ACTIVE_RUNNER
     if args.repeat < 1:
         raise CasebookError("REPLAY_INPUT_INVALID")
     run_id = _digest(f"{datetime.now(UTC).isoformat()}:{args.version}".encode())
@@ -337,14 +319,28 @@ def _replay(args: argparse.Namespace) -> int:
         for state in ("unconfirmed", "rejected", "origin_changed")
     }
     counts: dict[str, dict[str, int]] = {}
-    for case in eligible:
-        result = _case_record(case, inputs, input_digest, tree, args, head, replayer, run_id)
-        _append_record(args.out, result, tuple(protected))
-        bucket = counts.setdefault(
-            case["kind"], {"same_mistake": 0, "corrected": 0, "unreplayable": 0}
-        )
-        key = "unreplayable" if result["outcome"] == "UNREPLAYABLE" else result["outcome"]
-        bucket[key] += 1
+    runner = None
+    if RUNNER is _DEFAULT_RUNNER and args.repo is not None:
+        try:
+            runner = RealRunner(
+                args.cairnwork_clone, args.repo, args.version, args.timeout, args.state_config
+            )
+        except Exception:  # noqa: BLE001 - environment setup is an explicit unreplayable result
+            runner = None
+        _ACTIVE_RUNNER = runner or _setup_failed
+    try:
+        for case in eligible:
+            result = _case_record(case, inputs, input_digest, tree, args, head, replayer, run_id)
+            _append_record(args.out, result, tuple(protected))
+            bucket = counts.setdefault(
+                case["kind"], {"same_mistake": 0, "corrected": 0, "unreplayable": 0}
+            )
+            key = "unreplayable" if result["outcome"] == "UNREPLAYABLE" else result["outcome"]
+            bucket[key] += 1
+    finally:
+        if runner is not None:
+            runner.close()
+        _ACTIVE_RUNNER = None
     bad = sum(v["unreplayable"] for v in counts.values())
     summary = {
         "type": "replay_summary",
