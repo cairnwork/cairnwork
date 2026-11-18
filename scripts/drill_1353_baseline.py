@@ -53,9 +53,10 @@ def main():
     parser.add_argument("--out", default="docs/drills/")
     args = parser.parse_args()
     bootstrap_tests()
-    core = importlib.import_module("_w1353_probe")
-    extra = importlib.import_module("_w1353_extra")
-    rows = sorted(core.core_rows() + extra.extra_rows(), key=lambda r: (r["class_id"], r["probe"]))
+    launch = importlib.import_module("pra1353_consume").launch
+    PINS = importlib.import_module("test_1039_1353_witnesses").PINS
+
+    rows = sorted(launch(PINS)["rows"], key=lambda r: (r["class_id"], r["probe"]))
     data = {
         "generated_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
         "platform": sys.platform,

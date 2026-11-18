@@ -14,6 +14,12 @@ FIXED_PATHS = {
     "tests/_w1353_allow_pins.py",
     "tests/test_1039_1353_witnesses.py",
     "tests/test_1039_1353_pin_completeness.py",
+    "tests/pra1353_gate.py",
+    "tests/pra1353_seal.py",
+    ".github/workflows/ci.yml",
+    ".github/workflows/pin-guard-trusted.yml",
+    "scripts/ci/pin_guard.py",
+    "scripts/ci/pin_guard_status.py",
 }
 APPROVAL = re.compile(r"^PIN-APPROVE ([0-9a-fA-F]{40})$")
 

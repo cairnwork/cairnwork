@@ -6,7 +6,7 @@ import base64
 import json
 import sys
 
-from _w1353_probe import row
+from pra1353_probe import row
 
 
 def _c8_policy_cases(parent, state, p, check):
