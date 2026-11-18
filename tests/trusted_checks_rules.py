@@ -35,10 +35,32 @@ def _is_subject(text: str) -> bool:
     return any(marker.lower() in lowered for marker in SUBJECT_MARKERS)
 
 
+def _has_unclosed_quoted_scalar(line: str) -> bool:
+    quoted = re.search(r":\s*(['\"])(.*)$", line)
+    if not quoted:
+        return False
+    quote, tail = quoted.group(1), quoted.group(2)
+    count = tail.count(quote) if quote == '"' else re.sub(r"''", "", tail).count("'")
+    return count % 2 == 0
+
+
+def _indentation_problem(
+    name: str, number: int, indent: int, previous_indent: int | None, opens: bool
+) -> str | None:
+    if indent % 2:
+        return f"{name}:{number}: strict YAML syntax requires two-space indentation"
+    if previous_indent is not None and indent > previous_indent:
+        if indent != previous_indent + 2 or not opens:
+            return f"{name}:{number}: strict YAML syntax rejects this indentation"
+    return None
+
+
 def strict_syntax_problems(name: str, text: str) -> list[str]:
     """Reject YAML forms outside the deliberately small trusted-workflow subset."""
     found: list[str] = []
     run_indent: int | None = None
+    previous_indent: int | None = None
+    previous_opens = False
     mapping = re.compile(r"^( *)(?:- )?([A-Za-z0-9_-]+):( .*)?$")
     sequence = re.compile(r"^( *)- ([^\s#&*!|>'\"%@`{}\[\],?:][^#]*)$")
     for number, line in enumerate(text.splitlines(), 1):
@@ -51,6 +73,11 @@ def strict_syntax_problems(name: str, text: str) -> list[str]:
         if run_indent is not None and indent > run_indent:
             continue
         run_indent = None
+        indentation_problem = _indentation_problem(
+            name, number, indent, previous_indent, previous_opens
+        )
+        if indentation_problem:
+            found.append(indentation_problem)
         match = mapping.fullmatch(line)
         item = sequence.fullmatch(line)
         if not match and not item:
@@ -84,7 +111,7 @@ def strict_syntax_problems(name: str, text: str) -> list[str]:
             found.append(f"{name}:{number}: strict YAML syntax forbids anchors, aliases, and tags")
         if value.startswith(("|", ">")):
             if key == "run" and value in {"|", ">"}:
-                run_indent = indent
+                run_indent = indent + (2 if line[indent:].startswith("- ") else 0)
             else:
                 found.append(
                     f"{name}:{number}: strict YAML syntax allows block scalars only for run"
@@ -93,6 +120,14 @@ def strict_syntax_problems(name: str, text: str) -> list[str]:
             r" *-? *uses: +[^#\s]+@[0-9a-fA-F]{40} +# v[^\s]+", line
         ):
             found.append(f"{name}:{number}: strict YAML syntax forbids inline comments")
+        if _has_unclosed_quoted_scalar(line):
+            found.append(f"{name}:{number}: strict YAML syntax forbids multi-line quoted scalars")
+        previous_indent = indent
+        previous_opens = bool(
+            (match and not match.group(3))
+            or (item and re.match(r"[A-Za-z0-9_-]+:", item.group(2)))
+            or (match and line[indent:].startswith("- "))
+        )
     return found
 
 
@@ -176,9 +211,43 @@ def _is_token_reference(text: str) -> bool:
     return "create-github-app-token" in text.lower() or APP_TOKEN_SHA in text.lower()
 
 
+def _environment_problems(name: str, text: str) -> list[str]:
+    found: list[str] = []
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if re.search(r"\b(?:secrets|vars)\s*\[", line, re.I):
+            found.append(f"{name}:{index + 1}: indexed secrets or vars references are forbidden")
+        match = re.match(r"^( *)environment\s*:\s*(.*?)\s*$", line)
+        if not match:
+            continue
+        indent, value = len(match.group(1)), match.group(2)
+        if value:
+            if not re.fullmatch(r"[A-Za-z0-9_-]+", value):
+                found.append(f"{name}:{index + 1}: environment value must be a plain word")
+            if re.search(r"\bformat\s*\(", value, re.I):
+                found.append(f"{name}:{index + 1}: format() in environment value is forbidden")
+            continue
+        for child_index in range(index + 1, len(lines)):
+            child = lines[child_index]
+            child_indent = len(child) - len(child.lstrip(" "))
+            if child.strip() and child_indent <= indent:
+                break
+            child_match = re.match(r"^ +name\s*:\s*(.*?)\s*$", child)
+            if child_match and child_indent == indent + 2:
+                child_value = child_match.group(1)
+                if not re.fullmatch(r"[A-Za-z0-9_-]+", child_value):
+                    found.append(f"{name}:{child_index + 1}: environment name must be a plain word")
+                if re.search(r"\bformat\s*\(", child_value, re.I):
+                    found.append(
+                        f"{name}:{child_index + 1}: format() in environment value is forbidden"
+                    )
+    return found
+
+
 def problems(name: str, text: str) -> list[str]:
     """Every rule violation in one workflow file, as short messages."""
     found = strict_syntax_problems(name, text) if _is_subject(text) else []
+    found.extend(_environment_problems(name, text))
     mentions = ENV_NAME in text or "TRUSTED_CHECKS_" in text or _is_token_reference(text)
     if not mentions:
         return found

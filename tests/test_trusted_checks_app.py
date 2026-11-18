@@ -16,6 +16,7 @@ from tests.trusted_checks_rules import (
     EXPECTED,
     MAIN_ONLY_TRIGGERS,
     WORKFLOWS,
+    _has_unclosed_quoted_scalar,
     app_token_permissions,
     jobs,
     problems,
@@ -94,9 +95,44 @@ def test_checker_accepts_the_reference_shape() -> None:
     assert problems("good.yml", GOOD) == []
 
 
+def test_non_subject_workflow_rejects_computed_environment_and_indexed_secret() -> None:
+    attack = """\
+name: unrelated
+on: push
+jobs:
+  build:
+    environment: ${{ format('trusted{0}checks', '-') }}
+    steps:
+      - run: echo ${{ secrets[format('TRUSTED_{0}', 'CHECKS_PRIVATE_KEY')] }}
+"""
+    assert problems("unrelated.yml", attack)
+
+
 @pytest.mark.parametrize(
     ("bad", "needle"),
     [
+        (
+            GOOD.replace("  pull_request_target:", "    pull_request_target:"),
+            "indentation",
+        ),
+        (
+            GOOD.replace(
+                "    environment: trusted-checks",
+                "    environment: ${{ format('trusted{0}checks', '-') }}",
+            ).replace(
+                "secrets.TRUSTED_CHECKS_PRIVATE_KEY",
+                "secrets[format('TRUSTED_{0}', 'CHECKS_PRIVATE_KEY')]",
+            ),
+            "plain word",
+        ),
+        (GOOD + '    name: "x\n  publish:\n    runs-on: y\n', "multi-line quoted"),
+        (
+            GOOD.replace(
+                "    steps:\n",
+                "    steps:\n      - run: |\n          echo safe\n        env: {A: b}\n",
+            ),
+            "flow values",
+        ),
         (GOOD.replace("pull_request_target", "pull_request"), "triggers"),
         (GOOD.replace("  pull_request_target:", "  push:\n  pull_request_target:"), "triggers"),
         (GOOD.replace("on:\n  pull_request_target:", "on: [pull_request]\nx:"), "triggers"),
@@ -240,3 +276,18 @@ def test_checker_accepts_the_reference_shape() -> None:
 def test_checker_flags_each_boundary_break(bad: str, needle: str) -> None:
     found = problems("bad.yml", bad)
     assert any(needle in item for item in found), found
+
+
+@pytest.mark.parametrize(
+    ("line", "unclosed"),
+    [
+        ('    name: "x', True),
+        ('    name: "x"', False),
+        ("    name: 'x", True),
+        ("    name: 'abc'", False),
+        ("    name: 'it''s'", False),
+        ("    name: 'it''s", True),
+    ],
+)
+def test_quoted_scalar_must_close_on_its_line(line: str, unclosed: bool) -> None:
+    assert _has_unclosed_quoted_scalar(line) is unclosed
