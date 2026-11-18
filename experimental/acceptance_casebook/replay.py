@@ -342,7 +342,7 @@ def _replay(args: argparse.Namespace) -> int:
         "eligible": len(eligible),
         "excluded": excluded,
         "counts": counts,
-        "complete": bad == 0,
+        "complete": bool(eligible) and bad == 0,
     }
     _append_record(args.out, summary)
     if not eligible:
