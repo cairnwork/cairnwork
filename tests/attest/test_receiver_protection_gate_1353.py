@@ -106,6 +106,36 @@ def test_low_entropy_blackbox_is_refused_only_when_opted_in(tmp_path):
     assert check(w, policy=plain).ok
 
 
+def test_unrequired_low_entropy_blackbox_is_not_refused(tmp_path):
+    w = _strict_world(
+        tmp_path / "world",
+        unrequired=("blackbox:extra",),
+        artifacts={"blackbox:extra": ("blackbox#extra;low-entropy", "sha256:" + "a" * 64)},
+    )
+    assert check(w, policy=_gate_policy(w)).ok
+
+
+def test_low_entropy_detail_lists_at_most_five_required_ids(tmp_path):
+    ids = tuple(f"blackbox:low-{index}" for index in range(7))
+    artifacts = {
+        protection.GATE: GATE_ARTIFACT,
+        **{
+            verifier_id: (f"blackbox#{verifier_id[9:]};low-entropy", "sha256:" + "a" * 64)
+            for verifier_id in ids
+        },
+    }
+    w = _strict_world(
+        tmp_path / "world",
+        required=("pytest-0", *ids, protection.GATE),
+        artifacts=artifacts,
+    )
+    out = check(w, policy=_gate_policy(w))
+    assert out.code == "BLACKBOX_LOW_ENTROPY"
+    assert "7 low-entropy checks" in out.detail
+    assert all(verifier_id in out.detail for verifier_id in ids[:5])
+    assert ids[5] not in out.detail and ids[6] not in out.detail
+
+
 @pytest.mark.parametrize(
     "extra",
     [
