@@ -100,37 +100,54 @@ def test_variant_2_forged_child_module_path_is_rejected():
         consume._validate_module_origins(fake, {}, {}, ROOT / "sealed", [], [])
 
 
-def test_variant_3_stdlib_precedes_sealed_source_in_child_path(tmp_path: Path):
-    source = (ROOT / "tests/pra1353_probe.py").read_text()
-    assert "sys.path[:]=roots" in source
-    assert "-S" in source
-    assert "PRA1353_IMPORT_ROOTS" in source
+def _child_roots(shadow: Path, *, stdlib_first: bool) -> str:
+    paths = sysconfig.get_paths()
+    stdlib = [paths["stdlib"], paths["platstdlib"], str(Path(paths["platstdlib"]) / "lib-dynload")]
+    roots = [*stdlib, str(shadow), str(ROOT / "tests"), paths["purelib"], paths["platlib"]]
+    driver = (
+        "import json, os, sys\n"
+        f"sys.path.insert(0, {str(ROOT / 'tests')!r})\n"
+        "import pra1353_runner\n"
+        "try:\n    pra1353_runner._bootstrap(json.loads(sys.argv[1]))\n"
+        "except Exception:\n    pass\n"
+        "print(os.environ['PRA1353_IMPORT_ROOTS'])\n"
+    )
+    if not stdlib_first:
+        return json.dumps([str(shadow), *roots])
+    done = subprocess.run(
+        [sys.executable, "-I", "-S", "-B", "-c", driver, json.dumps(roots)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return done.stdout.strip().splitlines()[-1]
+
+
+@pytest.mark.parametrize("stdlib_first", [True, False])
+def test_variant_3_real_verify_child_loads_stdlib_before_sealed_source(
+    stdlib_first: bool, tmp_path: Path
+):
+    import pra1353_probe
+
     shadow = tmp_path / "src"
-    shadow.mkdir()
+    (shadow / "cairnwork").mkdir(parents=True)
+    (shadow / "cairnwork/__init__.py").write_text("")
+    (shadow / "cairnwork/verify_cli.py").write_text("import csv\n")
     marker = tmp_path / "shadow-loaded"
     (shadow / "csv.py").write_text(
         f"from pathlib import Path; Path({str(marker)!r}).write_text('shadow')\n"
     )
-    paths = sysconfig.get_paths()
-    stdlib = [paths["stdlib"], paths["platstdlib"], str(Path(paths["platstdlib"]) / "lib-dynload")]
-    code = "import sys; sys.path[:]=__import__('json').loads(sys.argv[1]); import csv"
-    old_order = subprocess.run(
-        [sys.executable, "-I", "-S", "-B", "-c", code, json.dumps([str(shadow), *stdlib])],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert old_order.returncode == 0
-    assert marker.read_text() == "shadow"
-    marker.unlink()
-    safe_order = subprocess.run(
-        [sys.executable, "-I", "-S", "-B", "-c", code, json.dumps([*stdlib, str(shadow)])],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert safe_order.returncode == 0
-    assert not marker.exists()
+    report = tmp_path / "child.json"
+    roots = _child_roots(shadow, stdlib_first=stdlib_first)
+    launch = [sys.executable, "-I", "-S", "-B", "-c", pra1353_probe._LAUNCH, roots, str(report)]
+    done = subprocess.run(launch, capture_output=True, text=True, cwd=tmp_path, check=False)
+    assert done.returncode == 0, done.stderr
+    modules = {item["name"]: item["file"] for item in read_module_report(report)["modules"]}
+    if stdlib_first:
+        assert not marker.exists()
+        assert Path(modules["csv"]).parent == Path(sysconfig.get_paths()["stdlib"])
+    else:
+        assert marker.exists()
 
 
 @pytest.mark.parametrize("target", [b"../../outside.py", b"/tmp/outside.py"])
@@ -279,7 +296,7 @@ def test_gate_rejects_sitecustomize_before_it_can_write_marker(tmp_path: Path):
     assert not marker.exists()
 
 
-def test_gate_git_env_disables_repo_fsmonitor():
+def _load_gate():
     import importlib.util
 
     spec = importlib.util.spec_from_file_location(
@@ -288,6 +305,32 @@ def test_gate_git_env_disables_repo_fsmonitor():
     assert spec is not None and spec.loader is not None
     gate = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(gate)
+    return gate
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        "tests/test_1039_1353_witneßes.py",
+        "tests/TEST_1039_1353_witnesses.py",
+        "tests/PRA1353_gate.py",
+        "tests/PRA1353_SEAL.py",
+        "tests/pra1353_se\u0061\u0301l.py",
+    ],
+)
+def test_gate_rejects_pin_paths_that_collide_after_normalisation(extra: str):
+    pins = {
+        "tests/test_1039_1353_witnesses.py": "0" * 64,
+        "tests/pra1353_seal.py": "1" * 64,
+        "tests/pra1353_se\u00e1l.py": "3" * 64,
+        extra: "2" * 64,
+    }
+    with pytest.raises(ValueError, match="colliding pin paths"):
+        _load_gate()._validate_pins(pins)
+
+
+def test_gate_git_env_disables_repo_fsmonitor():
+    gate = _load_gate()
     assert gate._GIT_ENV["GIT_CONFIG_COUNT"] == "1"
     assert gate._GIT_ENV["GIT_CONFIG_KEY_0"] == "core.fsmonitor"
     assert gate._GIT_ENV["GIT_CONFIG_VALUE_0"] == "false"

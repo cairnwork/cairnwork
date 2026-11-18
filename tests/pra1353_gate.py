@@ -105,6 +105,12 @@ def _validate_pins(value: dict[object, object]) -> None:
             or any(char not in "0123456789abcdef" for char in digest)
         ):
             raise ValueError("invalid pin digest")
+    seen: set[str] = set()
+    for name in set(value) | {_WITNESS, "tests/pra1353_gate.py"}:
+        folded = unicodedata.normalize("NFC", unicodedata.normalize("NFC", str(name)).casefold())
+        if folded in seen:
+            raise ValueError("colliding pin paths")
+        seen.add(folded)
 
 
 def _seal(repo: Path, root: Path, pins: dict[str, str]) -> Path:
