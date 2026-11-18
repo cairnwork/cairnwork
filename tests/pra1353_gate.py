@@ -270,8 +270,14 @@ def _run_sealed(sealed: Path, repo: Path) -> int:
 
 
 def sysconfig_path(name: str) -> str:
+    """Return this interpreter's path; under -S, 3.11 leaves sys.prefix at the base install."""
     import sysconfig
 
+    executable = Path(sys.executable)
+    for prefix in (executable.parent, executable.parent.parent):
+        if name in {"purelib", "platlib"} and (prefix / "pyvenv.cfg").is_file():
+            base = {"base": str(prefix), "platbase": str(prefix)}
+            return sysconfig.get_paths(scheme="venv", vars=base)[name]
     return sysconfig.get_paths()[name]
 
 

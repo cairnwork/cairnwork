@@ -11,12 +11,11 @@ import json
 import os
 import subprocess
 import sys
-import sysconfig
 import tempfile
 from pathlib import Path
 from typing import Any
 
-from pra1353_seal import tracked_py_blobs
+from pra1353_seal import interpreter_paths, tracked_py_blobs
 
 _NO_SANDBOX_BASE = "UNCOMPARABLE: BASE_ENV_FAILED: unchanged base: base-probe-failed (no-sandbox: no usable sandbox backend, so nothing ran)"
 _ACCOUNT_GAP = (
@@ -107,7 +106,7 @@ def launch(
             raise ValueError(f"pin changed while sealing: {_neutralize(name)}")
     source_bytes = _tracked_source_bytes(source_repo or ROOT)
     source_pins = {name: hashlib.sha256(data).hexdigest() for name, data in source_bytes.items()}
-    paths = sysconfig.get_paths()
+    paths = interpreter_paths()
     with tempfile.TemporaryDirectory(prefix="cw1353-consumer-") as tmp:
         temp_root = Path(tmp).resolve()
         sealed = temp_root / "sealed"

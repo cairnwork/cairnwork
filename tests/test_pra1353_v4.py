@@ -346,6 +346,24 @@ def test_gate_rejects_pin_paths_that_collide_after_normalisation(extra: str):
         _load_gate()._validate_pins(pins)
 
 
+@pytest.mark.parametrize("name", ["purelib", "platlib"])
+def test_no_site_gate_and_consumer_find_the_venv_site_packages(name: str):
+    expected = sysconfig.get_paths()[name]
+    gate = str(ROOT / "tests/pra1353_gate.py")
+    code = (
+        "import importlib.util, sys\n"
+        f"spec = importlib.util.spec_from_file_location('g', {gate!r})\n"
+        "g = importlib.util.module_from_spec(spec); spec.loader.exec_module(g)\n"
+        f"sys.path.insert(0, {str(ROOT / 'tests')!r})\n"
+        "from pra1353_seal import interpreter_paths\n"
+        f"print(g.sysconfig_path({name!r})); print(interpreter_paths()[{name!r}])\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-I", "-S", "-B", "-c", code], capture_output=True, text=True, check=True
+    )
+    assert done.stdout.split() == [expected, expected]
+
+
 def test_gate_git_env_disables_repo_fsmonitor():
     gate = _load_gate()
     assert gate._GIT_ENV["GIT_CONFIG_COUNT"] == "1"

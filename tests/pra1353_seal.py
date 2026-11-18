@@ -8,7 +8,7 @@ import os
 import re
 import subprocess
 import unicodedata
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 _PACKAGES = {
@@ -20,6 +20,21 @@ _PACKAGES = {
 }
 _CONTROL = re.compile(rb"[\x00-\x1f\x7f]")
 _OID = re.compile(rb"[0-9a-f]{40}")
+
+
+def interpreter_paths() -> dict[str, str]:
+    """sysconfig paths with the venv site dirs, also under -S (3.11 sets the venv prefix in site)."""
+    import sys
+    import sysconfig
+
+    paths = sysconfig.get_paths()
+    executable = Path(sys.executable)
+    for prefix in (executable.parent, executable.parent.parent):
+        if (prefix / "pyvenv.cfg").is_file():
+            base = {"base": str(prefix), "platbase": str(prefix)}
+            venv = sysconfig.get_paths(scheme="venv", vars=base)
+            return {**paths, "purelib": venv["purelib"], "platlib": venv["platlib"]}
+    return paths
 
 
 def git_env() -> dict[str, str]:
