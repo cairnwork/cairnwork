@@ -19,7 +19,9 @@ ENV_NAME = "trusted-checks"
 # Triggers whose GITHUB_REF is the default branch (pull_request_target: base branch, which the
 # workflows restrict to main). pull_request, push, workflow_dispatch, schedule etc. are excluded.
 MAIN_ONLY_TRIGGERS = {"pull_request_target", "issue_comment", "workflow_run"}
-APP_TOKEN_ACTION = re.compile(r"uses:\s*actions/create-github-app-token@([0-9a-f]{40})\s")
+APP_TOKEN_ACTION = re.compile(
+    r"uses:\s*actions/create-github-app-token@([0-9a-f]{40})\s", re.IGNORECASE
+)
 # The App token may carry exactly this and nothing else (non-empty: an empty set inherits all).
 ALLOWED_APP_PERMISSIONS = {("permission-checks", "write")}
 EXPECTED = {
@@ -82,7 +84,7 @@ def app_token_permissions(job: str) -> list[set[tuple[str, str]]]:
     lines = job.splitlines()
     result: list[set[tuple[str, str]]] = []
     for index, line in enumerate(lines):
-        if "create-github-app-token" not in line or line.lstrip().startswith("#"):
+        if "create-github-app-token" not in line.lower() or line.lstrip().startswith("#"):
             continue
         dash = line.find("- ")
         indent = dash if dash >= 0 and line[:dash].strip() == "" else None
@@ -112,8 +114,13 @@ def problems(name: str, text: str) -> list[str]:
             continue
         if re.search(r"^\s*(ref|repository):", job, re.M):
             found.append(f"{name}:{job_name}: environment job checks out PR content")
-        if "create-github-app-token" in job and not APP_TOKEN_ACTION.search(job):
+        if "create-github-app-token" in job.lower() and not APP_TOKEN_ACTION.search(job):
             found.append(f"{name}:{job_name}: create-github-app-token is not pinned to a SHA")
+        # Old rule, kept: every permission-* anywhere in the job must be exactly the allow-list.
+        job_wide = set(re.findall(r"^\s*(permission-[a-z-]+):\s*(\S+)", job, re.M | re.I))
+        if job_wide and job_wide != ALLOWED_APP_PERMISSIONS:
+            found.append(f"{name}:{job_name}: job-wide App token permissions {sorted(job_wide)}")
+        # New rule, added: each token step on its own is non-empty and exactly the allow-list.
         for perms in app_token_permissions(job):
             if perms != ALLOWED_APP_PERMISSIONS:
                 found.append(f"{name}:{job_name}: App token permissions {sorted(perms)}")
@@ -220,6 +227,32 @@ def test_checker_accepts_the_reference_shape() -> None:
             GOOD.replace(
                 "permission-checks: write",
                 "permission-checks: write\n          permission-contents: write",
+            ),
+            "permissions",
+        ),
+        (
+            GOOD
+            + "      - uses: Actions/Create-GitHub-App-Token@64ab729a6294000f5aa4a4bc0b73d1f32bc4"
+            "5510\n        with:\n          private-key: x\n",
+            "permissions",
+        ),
+        (
+            GOOD
+            + "      - uses: Actions/Create-GitHub-App-Token@64ab729a6294000f5aa4a4bc0b73d1f32bc4"
+            "5510\n        with:\n          permission-checks: write\n"
+            "          permission-contents: write\n",
+            "permissions",
+        ),
+        (
+            GOOD.replace(
+                "actions/create-github-app-token@64ab", "Actions/Create-GitHub-App-Token@v3 #"
+            ),
+            "not pinned",
+        ),
+        (
+            GOOD.replace(
+                "permission-checks: write",
+                "permission-checks: write\n          Permission-Contents: write",
             ),
             "permissions",
         ),
