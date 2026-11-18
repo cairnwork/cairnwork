@@ -141,7 +141,8 @@ def test_runner_run_copies_template_privately_and_never_returns_it(tmp_path: Pat
     body = (
         "#!/bin/sh\n"
         "for a; do case $a in --state=*) S=${a#--state=};; esac; done\n"
-        f"(stat -f %Lp {state}/config.json || stat -c %a {state}/config.json) > {seen}\n"
+        f"(stat -c %a {state}/config.json 2>/dev/null"
+        f" || stat -f %Lp {state}/config.json) > {seen}\n"
         f"cat {state}/config.json >> {seen}\n"
         f"printf '%s' '{verdict}'\n"
     )
@@ -203,3 +204,4 @@ def test_only_a_checked_core_verdict_maps_to_a_verdict(monkeypatch, verdict, cod
     monkeypatch.setattr(replay, "RUNNER", lambda *_: CoreVerdict(verdict, code, "x"))
     got, why, _, _ = replay._run_one({"kind": "accepted_bad"}, {}, 0)
     assert (got, why) == (mapped, reason)
+
