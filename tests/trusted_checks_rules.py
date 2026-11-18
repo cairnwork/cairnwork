@@ -211,12 +211,21 @@ def _is_token_reference(text: str) -> bool:
     return "create-github-app-token" in text.lower() or APP_TOKEN_SHA in text.lower()
 
 
+def _whole_secrets_reference(line: str) -> bool:
+    """Outside comment lines, `secrets` may only appear as secrets.NAME."""
+    if re.match(r"^\s*#", line):
+        return False
+    return bool(re.search(r"\bsecrets\b(?!\s*\.\s*[A-Za-z_])", line, re.I))
+
+
 def _environment_problems(name: str, text: str) -> list[str]:
     found: list[str] = []
     lines = text.splitlines()
     for index, line in enumerate(lines):
         if re.search(r"\b(?:secrets|vars)\s*\[", line, re.I):
             found.append(f"{name}:{index + 1}: indexed secrets or vars references are forbidden")
+        if _whole_secrets_reference(line):
+            found.append(f"{name}:{index + 1}: whole secrets object references are forbidden")
         match = re.match(r"^( *)environment\s*:\s*(.*?)\s*$", line)
         if not match:
             continue
@@ -233,7 +242,7 @@ def _environment_problems(name: str, text: str) -> list[str]:
             if child.strip() and child_indent <= indent:
                 break
             child_match = re.match(r"^ +name\s*:\s*(.*?)\s*$", child)
-            if child_match and child_indent == indent + 2:
+            if child_match:
                 child_value = child_match.group(1)
                 if not re.fullmatch(r"[A-Za-z0-9_-]+", child_value):
                     found.append(f"{name}:{child_index + 1}: environment name must be a plain word")
@@ -248,7 +257,8 @@ def problems(name: str, text: str) -> list[str]:
     """Every rule violation in one workflow file, as short messages."""
     found = strict_syntax_problems(name, text) if _is_subject(text) else []
     found.extend(_environment_problems(name, text))
-    mentions = ENV_NAME in text or "TRUSTED_CHECKS_" in text or _is_token_reference(text)
+    lowered = text.lower()
+    mentions = ENV_NAME in lowered or "trusted_checks_" in lowered or _is_token_reference(text)
     if not mentions:
         return found
     extra = triggers(text) - MAIN_ONLY_TRIGGERS
