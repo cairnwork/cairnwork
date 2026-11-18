@@ -245,8 +245,8 @@ def check_base_install(stdlib: str, platstdlib: str, *trees: Path) -> None:
             for parent in (path, *path.parents):
                 try:
                     stat = os.stat(parent)
-                except OSError:
-                    continue
+                except OSError as exc:
+                    raise ValueError("base install path cannot be checked") from exc
                 if (stat.st_dev, stat.st_ino) in roots:
                     raise ValueError("base install lies inside the checked tree")
 

@@ -164,3 +164,25 @@ def test_tracked_importable_src_code_fails_before_runner(
         consume.launch(PINS, run=never_run)
     assert calls == []
     assert bad.exists()
+
+
+@pytest.mark.parametrize("module", ["pra1353_gate", "pra1353_seal"])
+def test_base_install_that_cannot_be_checked_is_refused(module, monkeypatch, tmp_path):
+    import importlib
+    import os
+    import sys
+
+    import pra1353_consume as consume
+
+    check = importlib.import_module(module).check_base_install
+    paths = consume.interpreter_paths()
+    blind, real_stat = Path(os.path.realpath(sys.base_prefix)).parent, os.stat
+
+    def stat(path, *args, **kwargs):
+        if Path(path) == blind:
+            raise PermissionError(13, "denied", str(path))
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", stat)
+    with pytest.raises(ValueError, match="cannot be checked"):
+        check(paths["stdlib"], paths["platstdlib"], tmp_path)
