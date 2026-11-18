@@ -304,6 +304,14 @@ that the checks really ran as blackbox runs remains the signer's claim, like eve
 `protection.level(required_verifier_ids, macos=False)` over the signed request, the coverage
 without a host grade, and nothing in the receipt ties those ids to a declaration. Cairnwork's own notary, reading a record whose binding states no usable grade, takes the lower grade instead (`protection.level(..., macos=True)` on any reading host, #709): the producing host is unknown, so it never words a record above what that host may have earned. That level only words the PR body and the done comment; strict mode and the attest receiver use their own levels.
 
+The opt-in v0.2 receiver key `require_protection_gate` checks that the signed Core request included
+the strict protection gate, that its observation matches the binding's claimed level and policy
+minimum, and that required blackbox observations are not marked low-entropy. It does not verify
+the answers: entropy, the host grade (`_macos`), runner/profile hashes and account remain the
+signer's claims. Two known C10 residual cases remain: a candidate that detects the runner module
+name in `sys.modules`, or detects that `pytest` is absent from `sys.modules`, can answer differently
+in the runner.
+
 **Strict mode** (off by default): `cairnwork-verify run --require-protection` asks for at least
 `"partial_macos"`, so a protected run passes on either host (without `--blackbox` it is refused
 before anything runs, error `UNPROTECTED`), and the Python API takes any protected level as the
