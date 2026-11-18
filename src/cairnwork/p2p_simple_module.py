@@ -3,22 +3,80 @@
 from __future__ import annotations
 
 import ast
+import builtins
 
 
 def _simple_test_module(tree: ast.Module) -> bool:
     """Whether module structure and import-time expressions meet the inherited-delete allowlist."""
-    return all(_module_stmt(stmt, index) for index, stmt in enumerate(tree.body))
+    classes: set[str] = set()
+    if not _trusted_bindings(tree):
+        return False
+    for index, stmt in enumerate(tree.body):
+        if not _module_stmt(stmt, index, classes):
+            return False
+        if isinstance(stmt, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            classes.add(stmt.name)
+    return True
 
 
-def _module_stmt(stmt: ast.stmt, index: int) -> bool:
+def _trusted_bindings(tree: ast.Module) -> bool:
+    for stmt in tree.body:
+        if isinstance(stmt, ast.Import):
+            if len(stmt.names) != 1 or stmt.names[0].name != "pytest" or stmt.names[0].asname:
+                return False
+        elif isinstance(stmt, ast.ImportFrom):
+            if stmt.level or stmt.module != "__future__" or not stmt.names:
+                return False
+        elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            # A module ``__getattr__``/``__dir__`` would answer lookups on this module.
+            if stmt.name in {
+                "pytest",
+                "staticmethod",
+                "classmethod",
+                "object",
+                "__getattr__",
+                "__dir__",
+            }:
+                return False
+        elif isinstance(stmt, ast.Assign) and any(_binds_trusted(t) for t in stmt.targets):
+            return False
+        elif isinstance(stmt, ast.AnnAssign) and _binds_trusted(stmt.target):
+            return False
+        if isinstance(stmt, ast.ClassDef):
+            for item in stmt.body:
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    if item.name in {"pytest", "staticmethod", "classmethod", "object"}:
+                        return False
+                elif isinstance(item, ast.Assign) and any(_binds_trusted(t) for t in item.targets):
+                    return False
+                elif isinstance(item, ast.AnnAssign) and _binds_trusted(item.target):
+                    return False
+    return True
+
+
+def _binds_trusted(target: ast.expr) -> bool:
+    return isinstance(target, ast.Name) and target.id in {
+        "pytest",
+        "staticmethod",
+        "classmethod",
+        "object",
+    }
+
+
+def _module_stmt(stmt: ast.stmt, index: int, classes: set[str]) -> bool:
     if isinstance(stmt, (ast.Import, ast.ImportFrom)):
-        return True
+        return isinstance(stmt, ast.Import) or (
+            isinstance(stmt, ast.ImportFrom)
+            and not stmt.level
+            and stmt.module == "__future__"
+            and bool(stmt.names)
+        )
     if _docstring(stmt, index):
         return True
     if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
-        return _function(stmt)
+        return _function(stmt, classes)
     if isinstance(stmt, ast.ClassDef):
-        return _class(stmt)
+        return _class(stmt, classes)
     if isinstance(stmt, ast.Assign):
         if len(stmt.targets) != 1 or not isinstance(stmt.targets[0], ast.Name):
             return False
@@ -29,25 +87,28 @@ def _module_stmt(stmt: ast.stmt, index: int) -> bool:
         return (
             isinstance(stmt.target, ast.Name)
             and stmt.value is not None
-            and _simple_expr(stmt.annotation)
+            and _simple_expr(stmt.annotation, set())
             and _literal_expr(stmt.value)
         )
     return False
 
 
-def _class(stmt: ast.ClassDef) -> bool:
-    if stmt.keywords or not all(_attribute_path(base) for base in stmt.bases):
+def _class(stmt: ast.ClassDef, classes: set[str]) -> bool:
+    if stmt.keywords or not all(
+        isinstance(base, ast.Name) and (base.id == "object" or base.id in classes)
+        for base in stmt.bases
+    ):
         return False
     if not all(_decorator(item) for item in stmt.decorator_list):
         return False
-    return all(_class_stmt(item, index) for index, item in enumerate(stmt.body))
+    return all(_class_stmt(item, index, classes) for index, item in enumerate(stmt.body))
 
 
-def _class_stmt(stmt: ast.stmt, index: int) -> bool:
+def _class_stmt(stmt: ast.stmt, index: int, classes: set[str]) -> bool:
     if _docstring(stmt, index):
         return True
     if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
-        return _function(stmt)
+        return _function(stmt, classes)
     if isinstance(stmt, ast.Assign):
         return (
             len(stmt.targets) == 1
@@ -58,14 +119,14 @@ def _class_stmt(stmt: ast.stmt, index: int) -> bool:
         return (
             isinstance(stmt.target, ast.Name)
             and stmt.value is not None
-            and _simple_expr(stmt.annotation)
+            and _simple_expr(stmt.annotation, classes)
             and _literal_expr(stmt.value)
         )
     # `pass` is the conventional empty-class body used by inherited test subclasses.
     return isinstance(stmt, ast.Pass)
 
 
-def _function(stmt: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+def _function(stmt: ast.FunctionDef | ast.AsyncFunctionDef, classes: set[str]) -> bool:
     if not all(_decorator(item) for item in stmt.decorator_list):
         return False
     args = stmt.args
@@ -74,7 +135,7 @@ def _function(stmt: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     annotations.extend(arg.annotation for arg in (args.vararg, args.kwarg) if arg is not None)
     if stmt.returns is not None:
         annotations.append(stmt.returns)
-    return all(_simple_expr(item) for item in defaults + [a for a in annotations if a])
+    return all(_simple_expr(item, classes) for item in defaults + [a for a in annotations if a])
 
 
 def _decorator(node: ast.expr) -> bool:
@@ -96,16 +157,17 @@ def _decorator(node: ast.expr) -> bool:
     )
 
 
-def _simple_expr(node: ast.expr) -> bool:
+def _simple_expr(node: ast.expr, classes: set[str]) -> bool:
     if isinstance(node, (ast.Name, ast.Constant)):
-        return True
+        return not isinstance(node, ast.Name) or node.id in builtins.__dict__ or node.id in classes
     if isinstance(node, ast.Attribute):
-        return _attribute_path(node) is not None
+        path = _attribute_path(node)
+        return path is not None and path[0] == "pytest"
     if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
-        return all(_simple_expr(item) for item in node.elts)
+        return all(_simple_expr(item, classes) for item in node.elts)
     if isinstance(node, ast.Dict):
-        return all(key is None or _simple_expr(key) for key in node.keys) and all(
-            _simple_expr(value) for value in node.values
+        return all(key is None or _simple_expr(key, classes) for key in node.keys) and all(
+            _simple_expr(value, classes) for value in node.values
         )
     return False
 

@@ -30,9 +30,9 @@ def _assembled(shape, payload=LAMBDA_PAYLOAD):
     return payload + HONEST + "class Helper: pass\n" + shape + "\n"
 
 
-def _side(tmp_path, test, *, real_fact):
+def _side(tmp_path, test, *, real_fact, extra=()):
     base_ids = set(collect(tmp_path / "base", BASE)["collected"])
-    record = collect(tmp_path / "test", test)
+    record = collect(tmp_path / "test", test, extra=extra)
     exposed = tuple(record["uncollected_exposed"]) if real_fact else ()
     return classify(
         base_ids,

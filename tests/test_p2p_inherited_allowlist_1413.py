@@ -91,7 +91,6 @@ def _payload(test):
 
 PASSING_MODULES = {
     "honest": HONEST,
-    "imports": "import os\nfrom pathlib import Path\n" + HONEST,
     "pytestmark": "import pytest\npytestmark = pytest.mark.slow\n" + HONEST,
     "parametrize": "import pytest\nclass TestA:\n"
     "    @pytest.mark.parametrize('a', [1, 2])\n"
@@ -105,10 +104,50 @@ PASSING_MODULES = {
     "constants": "N = 3\n" + HONEST.replace("class TestA:", "class TestA:\n    SIZE = 4"),
     "docstrings": '"""module docs"""\n'
     + HONEST.replace("class TestA:", 'class TestA:\n    """class docs"""'),
-    "annotation": "from pathlib import Path\nclass TestA:\n"
+    "builtin_annotation": "class TestA:\n"
+    "    def test_keep(self, tmp_path: int):\n        assert tmp_path\n"
+    "class TestB(TestA):\n    pass\n",
+    "same_file_annotation": "class Local:\n    pass\nclass TestA:\n"
+    "    def test_keep(self, value: Local):\n        assert value\n"
+    "class TestB(TestA):\n    pass\n",
+}
+
+
+BLOCKED_IMPORT_SHAPES = {
+    "import_os": "import os\n" + HONEST,
+    "from_os": "from os import path\n" + HONEST,
+    "star": "from helpers import *\n" + HONEST,
+    "pytest_alias": "import pytest as pt\n" + HONEST,
+    "pytest_from": "from pytest import mark\n" + HONEST,
+    "pytest_rebound": "import pytest\npytest = 1\n" + HONEST,
+    "staticmethod_rebound": "def staticmethod(f):\n    return f\n" + HONEST,
+    "object_rebound": "class object: pass\n" + HONEST,
+    "dotted_user_decorator": "import helpers\nclass TestA:\n"
+    "    @helpers.attach\n    def test_keep(self):\n        pass\n"
+    "class TestB(TestA):\n    pass\n",
+    "imported_base": "import unittest\nclass TestA(unittest.TestCase):\n"
+    "    def test_keep(self):\n        pass\nclass TestB(TestA):\n    pass\n",
+    "unknown_base": "class TestA(Missing):\n    pass\nclass TestB(TestA):\n    pass\n",
+    "imported_annotation": "from pathlib import Path\nclass TestA:\n"
     "    def test_keep(self, tmp_path: Path):\n        assert tmp_path\n"
     "class TestB(TestA):\n    pass\n",
 }
+
+
+@pytest.mark.parametrize("source", BLOCKED_IMPORT_SHAPES.values(), ids=BLOCKED_IMPORT_SHAPES.keys())
+def test_untrusted_imports_and_names_keep_inherited_id_dropped(tmp_path, source):
+    name = next(key for key, value in BLOCKED_IMPORT_SHAPES.items() if value == source)
+    if name == "unknown_base":
+        result = classify_payload(_payload(source))
+        assert NODE in result["dropped"] and NODE not in result["removed"]
+        return
+    extra = (
+        (("helpers.py", "def attach(cls):\n    return cls\n"),)
+        if name in {"star", "dotted_user_decorator"}
+        else ()
+    )
+    side = _side(tmp_path, source, real_fact=True, extra=extra)
+    assert NODE in side.dropped and NODE not in side.removed
 
 
 @pytest.mark.parametrize("source", PASSING_MODULES.values(), ids=PASSING_MODULES.keys())
@@ -133,9 +172,6 @@ def test_honest_inherited_deletion_with_real_collect_only_record(tmp_path):
         "import pytest\nclass TestA:\n"
         "    @pytest.fixture\n    def fixture(self):\n        return 1\n"
         "    @staticmethod\n    def helper():\n        return 1\n"
-        "class TestB(TestA):\n    pass\n",
-        "from pathlib import Path\nclass TestA:\n"
-        "    def test_keep(self, tmp_path: Path):\n        assert tmp_path\n"
         "class TestB(TestA):\n    pass\n",
     ],
 )
@@ -179,3 +215,39 @@ def test_changed_python_files_count_every_python_path(tmp_path):
     assert _changed_test_python_files(task) == ["conftest.py", "tests/test_a.py"]
     bad = SimpleNamespace(repo=tmp_path, base_commit=base, test_commit="0" * 40)
     assert _changed_test_python_files(bad) is None
+
+
+EVIL_AS_PYTEST = (
+    "import evil as pytest\nclass TestA:\n    def test_keep(self):\n        pass\n"
+    "@pytest.mark.attach\nclass TestB(TestA):\n    pass\n"
+)
+EVIL_HELPER = (
+    "class _Mark:\n    def attach(self, cls):\n"
+    "        def test_x(self):\n            assert 1\n"
+    "        cls.test_x = test_x\n        cls.test_x(None)\n        del cls.test_x\n"
+    "        return cls\nmark = _Mark()\n"
+)
+
+
+def test_unchanged_helper_imported_as_pytest_keeps_id_dropped(tmp_path):
+    """The cross-model probe: an unchanged module bound to the name pytest runs the old body."""
+    side = _side(tmp_path, EVIL_AS_PYTEST, real_fact=True, extra=(("evil.py", EVIL_HELPER),))
+    assert NODE in side.dropped and NODE not in side.removed
+
+
+AST_ONLY_BLOCKED = {
+    "pytest_submodule": "import pytest.mark\n" + HONEST,
+    "pytest_from_star": "from pytest import *\n" + HONEST,
+    "module_getattr": "def __getattr__(name):\n    return None\n" + HONEST,
+    "module_dir": "def __dir__():\n    return []\n" + HONEST,
+    "globals_store": HONEST + "globals()['TestC'] = TestA\n",
+    "globals_value": "G = globals()\n" + HONEST,
+    "exec_stmt": HONEST + "exec('x = 1')\n",
+    "exec_value": "X = exec('x = 1')\n" + HONEST,
+}
+
+
+@pytest.mark.parametrize("name", sorted(AST_ONLY_BLOCKED))
+def test_pytest_submodules_module_getattr_and_exec_keep_id_dropped(name):
+    result = classify_payload(_payload(AST_ONLY_BLOCKED[name]))
+    assert NODE in result["dropped"] and NODE not in result["removed"]
