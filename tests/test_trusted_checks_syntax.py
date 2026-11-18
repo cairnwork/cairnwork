@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from tests.test_trusted_checks_app import GOOD
 from tests.trusted_checks_rules import problems
 from tests.trusted_checks_syntax import _has_unclosed_quoted_scalar
 
@@ -50,3 +51,49 @@ jobs:
 )
 def test_checker_flags_deep_env_names_whole_secrets_and_case(text: str, needle: str) -> None:
     assert any(needle in problem for problem in problems("evil.yml", text))
+
+
+REUSABLE_CALL = """on:
+  pull_request_target:
+    branches: [main]
+jobs:
+  call:
+    uses: someone/repo/.github/workflows/x.yml@0123456789abcdef0123456789abcdef01234567
+"""
+WITH = "        with:\n          private-key"
+
+
+@pytest.mark.parametrize(
+    ("text", "needle"),
+    [
+        (REUSABLE_CALL, "unreviewed remote reusable workflow"),
+        (
+            REUSABLE_CALL.replace("someone/repo", "James3014/Nexus-new").replace(
+                "x.yml", "sibling-merge-checks.yml"
+            ),
+            "unreviewed remote reusable workflow",
+        ),
+        (
+            REUSABLE_CALL.replace("someone/repo/.github", "./.github/../.github"),
+            "unreviewed remote reusable workflow",
+        ),
+        (
+            GOOD.replace(WITH, "        env:\n          private-key"),
+            "outside the token private-key",
+        ),
+        (
+            GOOD.replace(WITH, "        env:\n          with:\n            private-key"),
+            "outside the token private-key",
+        ),
+    ],
+)
+def test_checker_flags_reusable_calls_and_key_outside_with(text: str, needle: str) -> None:
+    assert any(needle in message for message in problems("bad.yml", text))
+
+
+def test_local_reusable_workflow_call_is_allowed() -> None:
+    local = REUSABLE_CALL.replace(
+        "someone/repo/.github/workflows/x.yml@0123456789abcdef0123456789abcdef01234567",
+        "./.github/workflows/ci.yml",
+    )
+    assert problems("ok.yml", local) == []

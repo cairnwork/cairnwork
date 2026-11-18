@@ -161,6 +161,40 @@ def _environment_problems(name: str, text: str) -> list[str]:
     return found
 
 
+# A remote reusable workflow runs in this repository's context and may bind its own job to the
+# trusted environment, which this checker cannot see. Each one is pinned here to a commit whose
+# workflow was reviewed not to use the environment; bumping the pin needs a PR that edits this set.
+REUSABLE_WORKFLOWS = frozenset(
+    {
+        "James3014/Nexus-new/.github/workflows/sibling-merge-checks.yml"
+        "@c72f214c9b4865fbc1ed88a371ccf4c40562d41b",
+    }
+)
+
+
+def _reusable_workflow_problems(name: str, text: str) -> list[str]:
+    found: list[str] = []
+    for index, line in enumerate(text.splitlines()):
+        call = re.match(r"^ {4}uses\s*:\s*(\S+)\s*$", _commentless(line), re.I)
+        if not call:
+            continue
+        target = call.group(1)
+        local = re.fullmatch(r"\./\.github/workflows/[A-Za-z0-9_-]+\.ya?ml", target)
+        if not local and target not in REUSABLE_WORKFLOWS:
+            found.append(f"{name}:{index + 1}: job calls an unreviewed remote reusable workflow")
+    return found
+
+
+def _parent_index(lines: list[str], index: int) -> int | None:
+    indent = len(lines[index]) - len(lines[index].lstrip())
+    for pos in range(index - 1, -1, -1):
+        text = lines[pos]
+        if text.strip() and not text.lstrip().startswith("#"):
+            if len(text) - len(text.lstrip()) < indent:
+                return pos
+    return None
+
+
 def _trusted_job_problems(name: str, job_name: str, job: str) -> list[str]:
     found: list[str] = []
     lines = job.splitlines()
@@ -191,7 +225,14 @@ def _trusted_job_problems(name: str, job_name: str, job: str) -> list[str]:
             line,
             re.I,
         )
-        if not token_step or not allowed_key:
+        parent = _parent_index(lines, index)
+        under_with = (
+            parent is not None
+            and _commentless(lines[parent]).strip().lower() == "with:"
+            and step_start is not None
+            and _parent_index(lines, parent) == step_start
+        )
+        if not token_step or not allowed_key or not under_with:
             found.append(
                 f"{name}:{job_name}: TRUSTED_CHECKS_PRIVATE_KEY outside the token private-key input"
             )
@@ -222,6 +263,7 @@ def problems(name: str, text: str) -> list[str]:
     subject = _is_subject(text)
     found = strict_syntax_problems(name, text, subject=subject)
     found.extend(_environment_problems(name, text))
+    found.extend(_reusable_workflow_problems(name, text))
     lowered = text.lower()
     mentions = (
         ENV_NAME in lowered
