@@ -248,7 +248,14 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--test-commit", default="")
     run.add_argument("--import-path", action="append", default=[])
     run.add_argument("--blackbox", default=None)  # "" is a path that cannot be opened, not "none"
-    run.add_argument("--require-protection", action="store_true")  # strict mode (#303)
+    run.add_argument(
+        "--require-protection",
+        action="store_true",
+        help=(
+            "strict mode: require protection to verify; needs --blackbox "
+            "(known limits: docs/SECURITY.md)"
+        ),
+    )  # strict mode (#303)
     return parser
 
 

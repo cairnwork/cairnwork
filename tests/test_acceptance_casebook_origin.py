@@ -27,8 +27,8 @@ def _notarize(db: Path, repo: Path, attempt: str, core: Any, files: dict[str, st
     notary = Notary(db, core_verify=core, core_identity=CORE_IDENTITY)
     base = git(repo, "rev-parse", "HEAD")
     cand = commit_change(repo, files)
-    spec = AcceptanceSpec("task-1", "sha256:" + "c" * 64, ("pytest",), tuple(files), False)
-    obs = (VerifierObservation("pytest", "artifact-1", "sha256:" + "e" * 64, True),)
+    spec = AcceptanceSpec("task-1", "sha256:" + "c" * 64, ("pytest-0",), tuple(files), False)
+    obs = (VerifierObservation("pytest-0", "artifact-1", "sha256:" + "e" * 64, True),)
     notary.notarize("task-1", attempt, spec, repo, base, cand, obs)
     git(repo, "reset", "-q", "--hard", base)
     return cand
