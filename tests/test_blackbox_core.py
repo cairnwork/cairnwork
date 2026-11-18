@@ -161,6 +161,7 @@ def test_the_check_runs_on_the_bindings_head_not_the_tree_that_ran(monkeypatch, 
         import_paths=(),
         test_commit=None,
         allowed_files=(),
+        require_protection="",
     )
     for binding in (None, {"head": "head"}):
         result = SimpleNamespace(candidate_commit=judged, task_id="t", attempt_id="a", logs=[])

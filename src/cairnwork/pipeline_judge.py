@@ -256,10 +256,10 @@ def judge_candidate(
     checks, subject, bb_logs = (), binding["head"] if binding else judged, []
     declared = task.blackbox.checks if task.blackbox is not None else ()
     if task.blackbox is not None:  # #303: each check is one more observation Core requires;
-        # it runs the candidate alone, without deferred tests that could hold the answers, and
-        # before any other run of the candidate in this verify (#311: nothing the candidate saw in
-        # a pytest phase of this verify can be waiting for it there)
-        checks, log = judge_blackbox(task.blackbox, ctx, subject, f"{result.attempt_id}-v")
+        # it runs the candidate alone and first in this verify, so no deferred test or pytest phase
+        # can hold the answers (#311); strict mode runs a declaration at most once (#1353)
+        bb_run, strict = f"{result.attempt_id}-v", bool(task.require_protection)
+        checks, log = judge_blackbox(task.blackbox, ctx, subject, bb_run, strict=strict)
         bb_logs = [str(log)] if log else []
     # #803: no candidate code ran as the account before this run unless a blackbox run (verify
     # only, which judges any account error the same) came first: then a refusal is a plain error
