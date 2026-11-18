@@ -21,15 +21,19 @@ PINS = {
     "tests/attest/binding_helpers.py": "cd2959a72a449228fc27bd0b1eb082493ee00616a7afcc1fe27b7309e22e61c5",
     "tests/attest/test_verify.py": "156795f6ee20d46c692b4a27e15ab36525b7ab7fce945722b39a3067c68a9b83",
     "tests/conftest.py": "a6f527a6ae989b47ef7cd10b270206d7e8c0e391064eac8eef03f9f3693219fd",
-    "tests/pra1353_c10.py": "9b0a046af21c817ece0100bdd039945b4e5a1549cfb3e5b3c4e5a8ebedf503c3",
-    "tests/pra1353_consume.py": "1ec1fc35b17ce3e68b0588bbe4cd5725788343ac51446e5c4eed7a4e32b0a385",
+    "tests/pra1353_c10.py": "d8afb48a82564c10b786eb5b257559309bfc60649934d5ad429ac71245012fce",
+    "tests/pra1353_consume.py": "767c76ea3200b081dc2e47247e7ffb0d8fc76c2d91e23c3cf4c3184e765dfad7",
     "tests/pra1353_derive.py": "3e301ec245fba896b12798554ccb8391f2facaf6409567772882aad7592d534e",
     "tests/pra1353_extra.py": "1ef6960689f633fe9dfa411572091f2bd99e1e0f2435798a9ebe37def50c6d52",
-    "tests/pra1353_probe.py": "bd8b2d2f1abf5c65115e99d0f85f2008a1bd9bbe02912819770688b8e14d257b",
+    "tests/pra1353_probe.py": "7a07c4262671f87822622235bda5853a153bb92c146274d5c222b77862bb402f",
     "tests/pra1353_receipt.py": "d3121468ba6b46d12c466c1d79bd5bb49e832262a9fe36b49a36ff332bb054ae",
     "tests/pra1353_recipes.py": "87b8cf6e1d3c3618bc797ea9511b347e8d413dd752197ab5b368663efa2440b6",
-    "tests/pra1353_runner.py": "4e8bceb0bfc890307ff110d25b515c4b421a3bd0256100058675491610c21ac0",
+    "tests/pra1353_runner.py": "e5c27294f78a4ad3a934cca4c502b1669291fcc9330340ca110574c05bfc1ba9",
+    "tests/pra1353_gate.py": "67897afcf65a7d023fbfbdbb39b209ae5e20e695fd2ca75b17d37d4914f27e86",
+    "tests/pra1353_seal.py": "c55ecda09c33c44d58633734679538dc1ea0bd96a5c3657cd6b23488d9a3a5e3",
     "tests/xdist_groups.py": "08f332bef3401fd38390db53a60a158ebb78686d1ec33a7af1c9d4337692e673",
+    "tests/test_1039_1353_recipes.py": "a11e647deef2d050dc75506595d9a889a08b70e84287153da420f56aa9f4a4d5",
+    "tests/test_1039_1353_static.py": "0fc8b3428e5d312a396c4c74c4365933ea15577a0f762bee759d2342b82cf76d",
 }
 
 _ACCOUNT_GAP = consume._ACCOUNT_GAP
@@ -37,7 +41,11 @@ _ACCOUNT_GAP = consume._ACCOUNT_GAP
 
 @pytest.fixture(scope="session")
 def broker_report():
-    return consume.launch(PINS)
+    import os
+
+    return consume.launch(
+        PINS, source_repo=Path(os.environ.get("PRA1353_SOURCE_REPO", consume.ROOT))
+    )
 
 
 @pytest.fixture

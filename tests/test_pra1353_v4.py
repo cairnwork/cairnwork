@@ -1,0 +1,294 @@
+"""Regression probes for the sealed #1353 witness gate."""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import sysconfig
+from pathlib import Path
+
+import pra1353_consume as consume
+import pytest
+from pra1353_seal import read_module_report, tracked_py_blobs
+from test_1039_1353_witnesses import PINS
+
+ROOT = Path(__file__).resolve().parents[1]
+GIT_ENV = {
+    **os.environ,
+    "GIT_CONFIG_GLOBAL": os.devnull,
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_NO_REPLACE_OBJECTS": "1",
+}
+
+
+def _repo(root: Path, entries: dict[str, tuple[str, bytes]]) -> Path:
+    root.mkdir()
+    subprocess.run(["git", "init", "-q", str(root)], check=True, env=GIT_ENV)
+    subprocess.run(
+        ["git", "-C", str(root), "config", "user.email", "test@example.invalid"], check=True
+    )
+    subprocess.run(["git", "-C", str(root), "config", "user.name", "test"], check=True)
+    subprocess.run(
+        ["git", "-C", str(root), "config", "core.precomposeunicode", "false"], check=True
+    )
+    for name, (mode, data) in entries.items():
+        oid = (
+            subprocess.run(
+                ["git", "-C", str(root), "hash-object", "-w", "--stdin"],
+                input=data,
+                check=True,
+                capture_output=True,
+                env=GIT_ENV,
+            )
+            .stdout.strip()
+            .decode()
+        )
+        subprocess.run(
+            ["git", "-C", str(root), "update-index", "--add", "--cacheinfo", mode, oid, name],
+            check=True,
+            env=GIT_ENV,
+        )
+    return root
+
+
+def _base() -> dict[str, tuple[str, bytes]]:
+    return {
+        "src/cairnwork/__init__.py": ("100644", b"VALUE = 1\n"),
+        "src/cairnwork/module.py": ("100644", b"VALUE = 2\n"),
+    }
+
+
+def test_variant_1_sitecustomize_and_non_product_module_are_rejected(tmp_path: Path):
+    repo = _repo(tmp_path / "repo", {**_base(), "src/sitecustomize.py": ("100644", b"pass\n")})
+    with pytest.raises(ValueError, match="invalid source path"):
+        tracked_py_blobs(repo, prefix="src/")
+
+
+def test_variant_2_missing_child_module_report_fails_closed():
+    with pytest.raises(ValueError, match="child module-origin reports missing"):
+        consume._validate_child_reports([], {}, {}, ROOT, [], [])
+
+
+def test_variant_2_os_exit_without_finally_report_fails_closed(tmp_path: Path):
+    report = tmp_path / "child.json"
+    code = (
+        "import os\n"
+        "try:\n    os._exit(0)\n"
+        f"finally:\n    open({str(report)!r}, 'w').write('should not happen')\n"
+    )
+    subprocess.run([sys.executable, "-I", "-S", "-B", "-c", code], check=True)
+    assert not report.exists()
+    with pytest.raises(ValueError, match="missing or unreadable"):
+        read_module_report(report)
+
+
+def test_variant_2_forged_child_module_path_is_rejected():
+    fake = [
+        {
+            "name": "rogue",
+            "file": "/tmp/rogue.py",
+            "origin": "/tmp/rogue.py",
+            "loader": "SourceFileLoader",
+        }
+    ]
+    with pytest.raises(ValueError, match="outside allowed roots"):
+        consume._validate_module_origins(fake, {}, {}, ROOT / "sealed", [], [])
+
+
+def test_variant_3_stdlib_precedes_sealed_source_in_child_path(tmp_path: Path):
+    source = (ROOT / "tests/pra1353_probe.py").read_text()
+    assert "sys.path[:]=roots" in source
+    assert "-S" in source
+    assert "PRA1353_IMPORT_ROOTS" in source
+    shadow = tmp_path / "src"
+    shadow.mkdir()
+    marker = tmp_path / "shadow-loaded"
+    (shadow / "csv.py").write_text(
+        f"from pathlib import Path; Path({str(marker)!r}).write_text('shadow')\n"
+    )
+    paths = sysconfig.get_paths()
+    stdlib = [paths["stdlib"], paths["platstdlib"], str(Path(paths["platstdlib"]) / "lib-dynload")]
+    code = "import sys; sys.path[:]=__import__('json').loads(sys.argv[1]); import csv"
+    old_order = subprocess.run(
+        [sys.executable, "-I", "-S", "-B", "-c", code, json.dumps([str(shadow), *stdlib])],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert old_order.returncode == 0
+    assert marker.read_text() == "shadow"
+    marker.unlink()
+    safe_order = subprocess.run(
+        [sys.executable, "-I", "-S", "-B", "-c", code, json.dumps([*stdlib, str(shadow)])],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert safe_order.returncode == 0
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize("target", [b"../../outside.py", b"/tmp/outside.py"])
+def test_variant_4_tracked_symlink_source_is_rejected(target: bytes, tmp_path: Path):
+    repo = _repo(tmp_path / "repo", {**_base(), "src/cairnwork/link.py": ("120000", target)})
+    with pytest.raises(ValueError, match="invalid tracked source entry"):
+        tracked_py_blobs(repo, prefix="src/")
+
+
+@pytest.mark.parametrize(
+    "names",
+    [
+        ("src/cairnwork/zz_case.py", "src/cairnwork/ZZ_case.py"),
+        ("src/cairnwork/ß.py", "src/cairnwork/ss.py"),
+        ("src/cairnwork/é.py", "src/cairnwork/é.py"),
+    ],
+)
+def test_variant_5_casefold_or_unicode_path_collisions_fail(names: tuple[str, str], tmp_path: Path):
+    entries = {**_base(), **{name: ("100644", b"VALUE=3\n") for name in names}}
+    repo = _repo(tmp_path / "repo", entries)
+    with pytest.raises(ValueError, match="colliding tracked source paths"):
+        tracked_py_blobs(repo, prefix="src/")
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "src/runpy.py",
+        "src/product/evil.py",
+        "src/cairnwork_newns/module.py",
+        "src/cairnwork/no_init/module.py",
+    ],
+)
+def test_variant_6_only_regular_product_packages_are_sealed(name: str, tmp_path: Path):
+    repo = _repo(tmp_path / "repo", {**_base(), name: ("100644", b"VALUE=4\n")})
+    with pytest.raises(ValueError):
+        tracked_py_blobs(repo, prefix="src/")
+
+
+def test_variant_7_ci_gate_command_is_isolated_from_repo_pytest_code():
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+    match = re.search(r"run: (uv run --no-sync python -I -S -B tests/pra1353_gate\.py)", workflow)
+    assert match is not None
+    command = match.group(1)
+    assert command.endswith("tests/pra1353_gate.py")
+    gate = (ROOT / "tests/pra1353_gate.py").read_text()
+    assert "-c','/dev/null" in gate
+    assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD" in gate
+    assert "cwd=sealed" in gate
+
+
+def test_root_conftest_and_ini_are_not_copied_into_gate_tree():
+    source = (ROOT / "tests/pra1353_gate.py").read_text()
+    assert "'--noconftest'" in source
+    assert "--rootdir=" in source
+    assert "confcutdir=" in source
+
+
+def test_sitecustomize_in_checkout_is_not_part_of_child_sys_path():
+    source_paths = tracked_py_blobs(ROOT, prefix="src/")
+    assert "src/sitecustomize.py" not in source_paths
+
+
+def test_cwd_module_does_not_enter_explicit_child_import_roots():
+    source = (ROOT / "tests/pra1353_runner.py").read_text()
+    assert "sys.path[:] = [stdlib, platstdlib, dynload, src, tests, purelib, platlib]" in source
+    assert 'os.environ["PRA1353_IMPORT_ROOTS"]' in source
+
+
+def _gate_repo(root: Path, stub: bool = True) -> None:
+    shutil.copytree(
+        ROOT / "src", root / "src", ignore=shutil.ignore_patterns("__pycache__", "*.pyc")
+    )
+    (root / "tests").mkdir()
+    for name in PINS:
+        target = root / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / name, target)
+    gate_data = (ROOT / "tests/pra1353_gate.py").read_bytes()
+    (root / "tests/pra1353_gate.py").write_bytes(gate_data)
+    if stub:
+        pins = {
+            name: digest
+            for name, digest in PINS.items()
+            if name != "tests/test_1039_1353_witnesses.py"
+        }
+        witness = "PINS = " + repr(pins) + "\ndef test_stub_witness():\n    assert True\n"
+        (root / "tests/test_1039_1353_witnesses.py").write_text(witness)
+    subprocess.run(["git", "init", "-q", str(root)], check=True, env=GIT_ENV)
+    subprocess.run(["git", "-C", str(root), "add", "-A"], check=True, env=GIT_ENV)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "-c",
+            "user.name=gate-test",
+            "-c",
+            "user.email=gate@test.invalid",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
+        check=True,
+        env=GIT_ENV,
+    )
+
+
+def _run_gate(root: Path) -> subprocess.CompletedProcess[str]:
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+    match = re.search(r"run: (uv run --no-sync python -I -S -B tests/pra1353_gate\.py)", workflow)
+    assert match is not None
+    command = shlex.split(match.group(1))
+    args = [sys.executable, *command[4:]]
+    return subprocess.run(args, cwd=root, capture_output=True, text=True, timeout=300, check=False)
+
+
+def test_gate_ignores_root_pytest_hooks_and_unpinned_cwd_modules(tmp_path: Path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    _gate_repo(root)
+    marker = root / "marker"
+    code = f"from pathlib import Path; Path({str(marker)!r}).write_text('ran')\n"
+    (root / "conftest.py").write_text(code)
+    (root / "pytest.ini").write_text("[pytest]\naddopts = -p evil\n")
+    (root / "setup.cfg").write_text("[tool:pytest]\naddopts = -p evil\n")
+    (root / "json.py").write_text(code)
+    unpinned = root / "tests/test_zz_unpinned.py"
+    unpinned.write_text(code)
+    subprocess.run(["git", "-C", str(root), "add", "-A"], check=True, env=GIT_ENV)
+    result = _run_gate(root)
+    assert result.returncode == 0, result.stderr
+    assert not marker.exists()
+
+
+def test_gate_rejects_sitecustomize_before_it_can_write_marker(tmp_path: Path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    _gate_repo(root)
+    marker = root / "site-marker"
+    path = root / "src/sitecustomize.py"
+    path.write_text(f"from pathlib import Path; Path({str(marker)!r}).write_text('ran')\n")
+    subprocess.run(["git", "-C", str(root), "add", "-A"], check=True, env=GIT_ENV)
+    result = _run_gate(root)
+    assert result.returncode != 0
+    assert not marker.exists()
+
+
+def test_gate_git_env_disables_repo_fsmonitor():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "pra1353_gate_probe", ROOT / "tests/pra1353_gate.py"
+    )
+    assert spec is not None and spec.loader is not None
+    gate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gate)
+    assert gate._GIT_ENV["GIT_CONFIG_COUNT"] == "1"
+    assert gate._GIT_ENV["GIT_CONFIG_KEY_0"] == "core.fsmonitor"
+    assert gate._GIT_ENV["GIT_CONFIG_VALUE_0"] == "false"
+    assert gate._GIT_ENV["GIT_NO_REPLACE_OBJECTS"] == "1"

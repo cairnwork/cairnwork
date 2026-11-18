@@ -23,7 +23,8 @@ from test_1039_1353_witnesses import PINS
 
 
 def _report(seqs: Iterable[int] = range(56)):
-    return {"rows": [{"seq": seq} for seq in seqs], "modules": []}
+    rows = [{"seq": seq} for seq in seqs]
+    return {"rows": rows, "modules": [], "child_reports": [{"modules": []}]}
 
 
 def _runner(report=None, *, code=0, stdout=None, error=""):
@@ -351,19 +352,18 @@ def test_module_origin_nonexistent_path_fails_with_neutralized_value_error(tmp_p
 
 
 def test_tracked_source_listing_disables_repo_fsmonitor(monkeypatch):
-    observed = {}
+    seen = {}
 
     def fake_run(args, **kwargs):
-        observed["args"] = args
-        observed["env"] = kwargs["env"]
+        seen.update(args=args, env=kwargs["env"])
         return subprocess.CompletedProcess(args, 0, b"", b"")
 
     monkeypatch.setattr(consume.subprocess, "run", fake_run)
-    assert consume._tracked_source_bytes() == {}
-    assert observed["args"][3:6] == ["-c", "core.fsmonitor=false", "ls-files"]
-    assert observed["env"]["GIT_CONFIG_COUNT"] == "1"
-    assert observed["env"]["GIT_CONFIG_KEY_0"] == "core.fsmonitor"
-    assert observed["env"]["GIT_CONFIG_VALUE_0"] == "false"
+    assert consume._tracked_source_bytes(consume.ROOT) == {}
+    assert seen["args"][1:3] == ["-c", "core.fsmonitor=false"] and "ls-files" in seen["args"][3:]
+    env = seen["env"]
+    assert env["GIT_NO_REPLACE_OBJECTS"] == "1" and env["GIT_CONFIG_COUNT"] == "1"
+    assert env["GIT_CONFIG_KEY_0"] == "core.fsmonitor" and env["GIT_CONFIG_VALUE_0"] == "false"
 
 
 @pytest.mark.parametrize(

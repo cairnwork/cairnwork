@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import _imp
 import hashlib
-import importlib.machinery
 import json
 import os
 import subprocess
@@ -16,6 +15,8 @@ import sysconfig
 import tempfile
 from pathlib import Path
 from typing import Any
+
+from pra1353_seal import tracked_py_blobs
 
 _NO_SANDBOX_BASE = "UNCOMPARABLE: BASE_ENV_FAILED: unchanged base: base-probe-failed (no-sandbox: no usable sandbox backend, so nothing ran)"
 _ACCOUNT_GAP = (
@@ -54,7 +55,6 @@ _THIRD_PARTY_TOP_LEVELS = {
     "pygments",
     "pytest",
 }
-_IMPORTABLE_SOURCE_SUFFIXES = set(importlib.machinery.all_suffixes()) | {".dylib"}
 
 
 def check_pins(pins: dict[str, str]) -> None:
@@ -97,6 +97,7 @@ def launch(
     runner: Path | None = None,
     run=subprocess.run,
     interpreter: str | Path = sys.executable,
+    source_repo: Path | None = None,
 ):
     runner = runner or ROOT / "tests" / "pra1353_runner.py"
     check_pins(pins)
@@ -104,7 +105,7 @@ def launch(
     for name, data in pin_bytes.items():
         if hashlib.sha256(data).hexdigest() != pins[name]:
             raise ValueError(f"pin changed while sealing: {_neutralize(name)}")
-    source_bytes = _tracked_source_bytes()
+    source_bytes = _tracked_source_bytes(source_repo or ROOT)
     source_pins = {name: hashlib.sha256(data).hexdigest() for name, data in source_bytes.items()}
     paths = sysconfig.get_paths()
     with tempfile.TemporaryDirectory(prefix="cw1353-consumer-") as tmp:
@@ -135,7 +136,10 @@ def launch(
             "LANG": "C.UTF-8",
             "GIT_CONFIG_GLOBAL": os.devnull,
             "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_NO_REPLACE_OBJECTS": "1",
+            "PRA1353_CHILD_REPORT_DIR": str(temp_root / "child-reports"),
         }
+        (temp_root / "child-reports").mkdir()
         try:
             completed = run(
                 [
@@ -157,38 +161,17 @@ def launch(
             _validate_module_origins(
                 report.get("modules"), pins, source_pins, sealed, roots, imports
             )
+            _validate_child_reports(
+                report.get("child_reports"), pins, source_pins, sealed, roots, imports
+            )
             _reject_sealed_bytecode(sealed)
         finally:
             _restore_permissions(sealed)
     return report
 
 
-def _tracked_source_bytes() -> dict[str, bytes]:
-    done = subprocess.run(
-        ["git", "-C", str(ROOT), "-c", "core.fsmonitor=false", "ls-files", "-z", "src/"],
-        check=True,
-        capture_output=True,
-        timeout=10,
-        env={
-            "PATH": "/usr/bin:/bin",
-            "GIT_CONFIG_GLOBAL": os.devnull,
-            "GIT_CONFIG_NOSYSTEM": "1",
-            "GIT_CONFIG_COUNT": "1",
-            "GIT_CONFIG_KEY_0": "core.fsmonitor",
-            "GIT_CONFIG_VALUE_0": "false",
-        },
-    )
-    names = [part.decode() for part in done.stdout.split(b"\0") if part]
-    source_names = []
-    for name in names:
-        path = Path(name)
-        if "__pycache__" in path.parts or (
-            path.suffix in _IMPORTABLE_SOURCE_SUFFIXES and path.suffix != ".py"
-        ):
-            raise ValueError(f"tracked importable code under src: {_neutralize(name)}")
-        if path.suffix == ".py":
-            source_names.append(name)
-    return {name: (ROOT / name).read_bytes() for name in source_names}
+def _tracked_source_bytes(repo: Path = ROOT) -> dict[str, bytes]:
+    return tracked_py_blobs(repo, prefix="src/")
 
 
 def _reject_sealed_bytecode(sealed: Path) -> None:
@@ -278,6 +261,10 @@ def _validate_module_origins(
             origin = item.get("origin")
             if isinstance(origin, str) and _is_interpreter_module(name, origin, loader):
                 continue
+            if name == "__main__" and origin is None and loader == "NoneType":
+                continue
+            if name == "_cairnwork_blackbox_runner" and origin is None and loader == "NoneType":
+                continue
             # cryptography's in-memory OpenSSL bridge is paired with its audited CFFI backend.
             if name == "_openssl" and origin is None and loader == "NoneType":
                 continue
@@ -327,6 +314,22 @@ def _validate_module_origins(
         raise ValueError("retired witness module was imported")
     if "_openssl" in seen_names and "_cffi_backend" not in seen_names:
         raise ValueError("in-memory OpenSSL bridge lacks its CFFI backend")
+
+
+def _validate_child_reports(
+    reports: Any,
+    pins: dict[str, str],
+    source_pins: dict[str, str],
+    sealed: Path,
+    roots: list[Path],
+    imports: list[Path],
+) -> None:
+    if not isinstance(reports, list) or not reports:
+        raise ValueError("child module-origin reports missing")
+    for child in reports:
+        if not isinstance(child, dict):
+            raise ValueError("invalid child module-origin report")
+        _validate_module_origins(child.get("modules"), pins, source_pins, sealed, roots, imports)
 
 
 def _validate_sealed_module(name, path, origin, loader, expected_hashes, sealed):

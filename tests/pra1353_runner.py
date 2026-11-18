@@ -7,12 +7,14 @@ import json
 import os
 import sys
 import types
+from pathlib import Path
 from typing import Any
 
 
 def _bootstrap(import_roots):
     os.environ["GIT_CONFIG_GLOBAL"] = os.devnull
     os.environ["GIT_CONFIG_NOSYSTEM"] = "1"
+    os.environ["GIT_NO_REPLACE_OBJECTS"] = "1"
     os.environ["GIT_CONFIG_COUNT"] = "2"
     os.environ["GIT_CONFIG_KEY_0"] = "core.fsmonitor"
     os.environ["GIT_CONFIG_VALUE_0"] = "false"
@@ -20,6 +22,7 @@ def _bootstrap(import_roots):
     os.environ["GIT_CONFIG_VALUE_1"] = "/dev/null"
     stdlib, platstdlib, dynload, src, tests, purelib, platlib = import_roots
     sys.path[:] = [stdlib, platstdlib, dynload, src, tests, purelib, platlib]
+    os.environ["PRA1353_IMPORT_ROOTS"] = json.dumps(sys.path)
     package_spec = importlib.util.spec_from_file_location(
         "tests", os.path.join(tests, "__init__.py"), submodule_search_locations=[tests]
     )
@@ -54,7 +57,16 @@ def _bootstrap(import_roots):
         for name, module in sorted(sys.modules.items())
         if isinstance(module, types.ModuleType) and type(module).__name__ != "Lib"
     ]
-    return {"rows": rebuilt, "modules": modules}
+    child_dir = Path(os.environ["PRA1353_CHILD_REPORT_DIR"])
+    child_reports = []
+    for report_path in sorted(child_dir.glob("*.json")):
+        try:
+            child_reports.append(json.loads(report_path.read_text()))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError("child module-origin report unreadable") from exc
+    if not child_reports:
+        raise RuntimeError("child module-origin report missing")
+    return {"rows": rebuilt, "modules": modules, "child_reports": child_reports}
 
 
 def _loader_name(loader):

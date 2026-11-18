@@ -44,7 +44,7 @@ def isolated_repo(monkeypatch, tmp_path):
     monkeypatch.setattr(
         consume,
         "_tracked_source_bytes",
-        lambda: {name: path.read_bytes() for name, path in source_files.items()},
+        lambda repo=None: {name: path.read_bytes() for name, path in source_files.items()},
     )
 
 

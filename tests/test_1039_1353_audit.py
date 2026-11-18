@@ -160,7 +160,7 @@ def test_tracked_importable_src_code_fails_before_runner(
         calls.append(args)
         raise AssertionError("runner started despite tracked importable code")
 
-    with pytest.raises(ValueError, match="tracked importable code under src"):
+    with pytest.raises(ValueError, match="tracked source path must end in .py"):
         consume.launch(PINS, run=never_run)
     assert calls == []
     assert bad.exists()
