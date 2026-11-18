@@ -9,13 +9,14 @@ OUTCOMES = {
     "success": ("success", "No unapproved guarded pin changes"),
     "unapproved": ("failure", "Guarded pin changes need approval"),
     "error": ("error", "Pin guard could not run or failed closed"),
+    "bytecode": ("failure", "Tracked Python bytecode is not allowed"),
 }
 
 
 def decide(job_result: str, gate_rc: str) -> str:
     if job_result != "success":
         return "error"
-    return {"0": "success", "1": "unapproved", "2": "error"}.get(gate_rc, "error")
+    return {"0": "success", "1": "unapproved", "2": "error", "3": "bytecode"}.get(gate_rc, "error")
 
 
 def main() -> int:
