@@ -314,12 +314,16 @@ in the runner.
 
 **Strict mode** (off by default): `cairnwork-verify run --require-protection` asks for at least
 `"partial_macos"`, so a protected run passes on either host (without `--blackbox` it is refused
-before anything runs, error `UNPROTECTED`), and the Python API takes any protected level as the
+before anything runs, error `UNPROTECTED`; so is a declaration whose check fails the entropy rule,
+errors `BLACKBOX_LOW_ENTROPY` / `BLACKBOX_TOO_FEW_CASES`), and the Python API takes any protected level as the
 minimum (`require_protection="partial"` for the Linux grade). Core is then asked for one more
 observation, `protection`, which passes only when the level is met, so an unprotected run is not
 VERIFIED (`protection: VERIFICATION_INCOMPLETE: UNPROTECTED [...]` in the reason). A receiver asks
 for the same with its policy's `protection` key (`UNPROTECTED`). Verifier ids `blackbox:*` and
-`protection` are reserved for this.
+`protection` are reserved for this. The entropy refusal is made by `cairnwork-verify` only; the
+Python API `verify_candidate(require_protection=...)` does not run it. It is broader than the
+receiver's `;low-entropy` mark: answers such as `0`, `1`, `-1`, `""` and `[]` also count as
+guessable.
 
 ### The dedicated verifier account (Linux P4, Issue #84)
 

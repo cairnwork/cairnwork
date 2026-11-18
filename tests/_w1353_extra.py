@@ -150,7 +150,8 @@ def _c7(state, decl):
         st.chmod(0o700)
         (st / "config.json").write_text('{"verifier_account":false}')
         (st / "ACCEPTING").touch()
-        d = declaration(p / "decl.json")
+        # strict mode refuses one-case declarations (#1353 S4-2)
+        d = declaration(p / "decl.json", second=True)
         cases = (
             (
                 "b-one-tampered-pytest",
