@@ -9,7 +9,7 @@ test-linux-verifier-account job runs it.
 import json
 
 import pytest
-from verify_helpers import CANDIDATES, base_of, candidate, declaration, verify
+from verify_helpers import CANDIDATES, CASES, base_of, candidate, declaration, verify
 
 from cairnwork import protection
 
@@ -23,11 +23,14 @@ def account_state(state):
 
 
 def test_a_protected_fix_passes_strict_mode(account_state, helper_project, tmp_path):
-    declared = str(declaration(tmp_path))
     base = base_of(helper_project)
-    args = ("--import-path", "src", "--blackbox", declared, "--require-protection")
     out = {}
     for name in ("correct", "wrong"):
+        # strict mode spends a declaration once (#1353 P2), so the owner declares anew for each run
+        (tmp_path / name).mkdir()
+        cases = [{**case, "id": f"{case['id']}-{name}"} for case in CASES]
+        declared = str(declaration(tmp_path / name, cases=cases))
+        args = ("--import-path", "src", "--blackbox", declared, "--require-protection")
         sha = candidate(helper_project, base, {"src/calc.py": CANDIDATES[name]})
         out[name] = verify(account_state, helper_project, base, sha, *args)[1]
     assert out["correct"]["status"] == "VERIFIED", out["correct"]["reason"]

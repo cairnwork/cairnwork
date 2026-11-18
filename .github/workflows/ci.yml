@@ -35,7 +35,9 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run lint-imports
       - run: uv run python scripts/check_size.py
-      - run: uv run pytest -q
+      - name: Sealed #1353 witness gate
+        run: uv run --no-sync python -I -S -B tests/pra1353_gate.py
+      - run: uv run pytest -q --ignore=tests/test_1039_1353_witnesses.py
       - run: git diff --check
 
   # The exact-base Pyright gate runs from the default branch (pyright-trusted.yml, Issue #66):
@@ -63,11 +65,13 @@ jobs:
         run: |
           sudo zsh scripts/setup_verifier_user.sh "$USER"
           zsh scripts/setup_verifier_python.sh
+      - name: Sealed #1353 witness gate
+        run: uv run --no-sync python -I -S -B tests/pra1353_gate.py
       # #406 step 4: everything except the shared verifier account runs in parallel; files that
       # share state are pinned to one worker by their xdist_group mark (tests/xdist_groups.py).
-      - run: uv run pytest -q -n auto --dist loadgroup -m "not verifier_account"
+      - run: uv run pytest -q -n auto --dist loadgroup -m "not verifier_account" --ignore=tests/test_1039_1353_witnesses.py
       # The verifier account is one shared account: its tests stay serial.
-      - run: uv run pytest -q -m verifier_account
+      - run: uv run pytest -q -m verifier_account --ignore=tests/test_1039_1353_witnesses.py
 
   # Linux bwrap backend, witnessed on real bwrap. On a GitHub ubuntu-24.04 runner an AppArmor
   # rule restricts capability-bearing user namespaces by default, so the job asserts available()

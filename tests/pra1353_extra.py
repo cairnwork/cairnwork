@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 from functools import cache
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
-from _w1353_probe import blackbox_classification, declaration, repo, row, verify
+from pra1353_probe import blackbox_classification, declaration, repo, row, verify
 
 
 def _c6():
@@ -174,7 +175,7 @@ def _c7(state, decl):
                     "C7",
                     name,
                     "verify_cli run --require-protection",
-                    status,
+                    result,
                     "NOT_RUN",
                     blackbox_classification(status, result.get("reason", "")),
                     result.get("reason", ""),
@@ -193,15 +194,17 @@ def extra_rows():
         (st / "config.json").write_text('{"verifier_account":false}')
         (st / "ACCEPTING").touch()
         d = declaration(parent / "decl.json")
-        path = Path(__file__).with_name("_w1353_c10.py")
-        spec = importlib.util.spec_from_file_location("_w1353_c10", path)
+        path = Path(__file__).with_name("pra1353_c10.py")
+        spec = importlib.util.spec_from_file_location("pra1353_c10", path)
         assert spec is not None and spec.loader is not None
         module = importlib.util.module_from_spec(spec)
+        sys.modules["pra1353_c10"] = module
         spec.loader.exec_module(module)
         receipt_spec = importlib.util.spec_from_file_location(
-            "_w1353_receipt", Path(__file__).with_name("_w1353_receipt.py")
+            "pra1353_receipt", Path(__file__).with_name("pra1353_receipt.py")
         )
         assert receipt_spec is not None and receipt_spec.loader is not None
         receipt = importlib.util.module_from_spec(receipt_spec)
+        sys.modules["pra1353_receipt"] = receipt
         receipt_spec.loader.exec_module(receipt)
         return _c6() + _c7(st, d) + _c9(d) + module.c10_rows() + receipt.c8_rows(parent)

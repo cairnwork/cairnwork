@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -82,7 +83,12 @@ def _out(args: argparse.Namespace, payload: dict[str, object], text: str) -> Non
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    command_line = list(sys.argv[1:] if argv is None else argv)
+    if command_line and command_line[0] in ("replay", "replay-report"):
+        from experimental.acceptance_casebook.replay import main as replay_main
+
+        return replay_main(command_line)
+    args = _parser().parse_args(command_line)
     try:
         if args.command == "list":
             if args.eligible and args.notary_db is None:

@@ -1,14 +1,19 @@
 """Shared production-route probe builders for the #1353 baseline."""
 
+# ruff: noqa: E501
+
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
 from functools import cache
 from pathlib import Path
 from tempfile import TemporaryDirectory
+
+from pra1353_seal import read_module_report
 
 _NO_SANDBOX_BASE = (
     "UNCOMPARABLE: BASE_ENV_FAILED: unchanged base: base-probe-failed "
@@ -25,12 +30,6 @@ def sandbox_available():
     return sys.platform == "darwin" and select() is not None
 
 
-def c2_unavailable(rows):
-    return [
-        r["observed"] for r in rows if r["class_id"] == "C2" and r["probe"].startswith("verify-cli")
-    ]
-
-
 def _scrub(value):
     return (
         re.sub(r"/(?:private/)?(?:var/folders|tmp)/[^\s:]+", "<temporary-path>", value)
@@ -44,7 +43,7 @@ def row(cid, probe, route, raw, expected, classification, reason=""):
         observed = str(raw.get("status", raw.get("error", raw.get("code", raw))))
         saved = {
             key: raw[key]
-            for key in ("status", "error", "verified", "reason", "code", "detail")
+            for key in ("status", "error", "verified", "reason", "code", "detail", "outside")
             if key in raw
         }
     elif hasattr(raw, "status"):
@@ -90,12 +89,19 @@ def repo(root: Path, source: str, test_source: str, *, files=None):
 
     def git(*args):
         return subprocess.run(
-            ["git", "-C", str(root), *args], check=True, capture_output=True, text=True, timeout=10
+            ["git", "-C", str(root), *args],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"},
         ).stdout.strip()
 
     git("init", "-q", "-b", "main", "--template=")
     git("config", "user.email", "probe@example.invalid")
     git("config", "user.name", "probe")
+    git("config", "core.fsmonitor", "false")
+    git("config", "core.hooksPath", "/dev/null")
     (root / "src").mkdir()
     (root / "tests").mkdir()
     (root / "src/calc.py").write_text("def add(a, b):\n    return a + b\n")
@@ -116,29 +122,31 @@ def repo(root: Path, source: str, test_source: str, *, files=None):
     return base, git("rev-parse", "HEAD")
 
 
-def _cairnwork_src():
-    import cairnwork
-
-    return str(Path(cairnwork.__file__).resolve().parent.parent)
-
-
-# -I drops PYTHONPATH, the only way Core's verifier exposes the checkout under test (the verifier
-# venv has no cairnwork installed); put that same package first, isolation otherwise kept.
-# -I also drops PYTHONDONTWRITEBYTECODE, so -B: no __pycache__ written into the checkout under test.
+# The sealed import roots are passed to the no-site child; the candidate remains isolated.
 _LAUNCH = (
-    "import runpy, sys; sys.path.insert(0, sys.argv.pop(1)); "
-    "runpy.run_module('cairnwork.verify_cli', run_name='__main__', alter_sys=True)"
+    "import json,sys,types; roots=json.loads(sys.argv.pop(1)); report=sys.argv.pop(1); "
+    "sys.path[:]=roots\n"
+    "try:\n import runpy; runpy.run_module('cairnwork.verify_cli', run_name='__main__', alter_sys=True)"
+    "\nfinally:\n "
+    "modules=[{'name':n,'file':getattr(m,'__file__',None),'origin':getattr(getattr(m,'__spec__',None),'origin',None),'loader':(lambda x:x.__name__ if isinstance(x,type) else type(x).__name__)(getattr(getattr(m,'__spec__',None),'loader',None))} for n,m in sorted(sys.modules.items()) if isinstance(m,types.ModuleType)]; "
+    "open(report,'w').write(json.dumps({'modules':modules},sort_keys=True))"
 )
 
 
 def verify(root, state, base, cand, declaration=None, strict=False):
+    report_dir = os.environ["PRA1353_CHILD_REPORT_DIR"]
+    report = str(
+        Path(report_dir) / f"verify-{os.getpid()}-{len(list(Path(report_dir).iterdir()))}.json"
+    )
     args = [
         sys.executable,
         "-I",
+        "-S",
         "-B",
         "-c",
         _LAUNCH,
-        _cairnwork_src(),
+        os.environ["PRA1353_IMPORT_ROOTS"],
+        report,
         "--state",
         str(state),
         "run",
@@ -161,8 +169,18 @@ def verify(root, state, base, cand, declaration=None, strict=False):
         args.append("--require-protection")
     try:
         done = subprocess.run(args, capture_output=True, text=True, timeout=120, check=False)
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
+        if not Path(report).is_file():
+            raise RuntimeError("timed out verify child has no module-origin report") from exc
+        try:
+            read_module_report(Path(report))
+        except ValueError as report_error:
+            raise RuntimeError(str(report_error)) from exc
         return {"status": "TIMEOUT", "reason": "verify_cli exceeded 120 seconds"}
+    try:
+        read_module_report(Path(report))
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
     try:
         return json.loads(done.stdout)
     except json.JSONDecodeError:
@@ -285,7 +303,7 @@ def _pass_mutant(parent, state, cid, n, src, evasion, bad_test):
         label,
         name,
         "verify_cli run",
-        status,
+        dict(result, status=status),
         "FAILED",
         verification_classification(status, "HONEST_VERIFIED", "HONEST_FAILED"),
         result.get("reason", ""),
@@ -321,7 +339,7 @@ def _c1_c4(parent, state, decl):
                     cid,
                     f"blackbox-{n}",
                     "verify_cli run --blackbox",
-                    status,
+                    result,
                     "NOT_RUN",
                     blackbox_classification(status, reason),
                     reason,

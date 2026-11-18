@@ -26,6 +26,7 @@ from cairnwork import gitcmd, pytest_config
 from cairnwork.account_checkout import checkout_differences, make_account_checkout
 from cairnwork.account_checkout import remove_checkout as _remove_checkout
 from cairnwork.blackbox import MAX_BYTES, Declaration
+from cairnwork.blackbox_once import consume, declaration_key
 from cairnwork.blackbox_runner import (
     _RUNNER_SOURCE,
     HASH_SEED,
@@ -67,25 +68,30 @@ def run_blackbox(
     run_id: str,
     *,
     timeout: int = DEFAULT_TIMEOUT_SECONDS,
+    strict: bool = False,
 ) -> BlackboxRun:
     """All of the declaration's checks in one run; errors creating the checkout propagate."""
     paths = pytest_config.verifier_settings(ctx.repo, ctx.base_commit, ctx.import_paths).pythonpath
     if paths:
         require_plain_dirs(ctx.repo, commit, paths)
+    claim_root = Path(ctx.run_root).parent / "blackbox-exposed" if strict else None
     args = (declaration, commit, run_id, timeout, paths)
     account = ctx.account
     if account is None:
-        return _run(*args, replace(ctx, run_root=Path(ctx.run_root)), ctx.python or sys.executable)
+        ctx = replace(ctx, run_root=Path(ctx.run_root))
+        return _run(*args, ctx, ctx.python or sys.executable, claim_root)
     with account.exclusive(lock_wait_seconds(1, timeout)):
         python = ctx.python or account.python
         if not account.available(python):
             raise VerifierAccountError(f"account {account.user} is not usable")
         account.require_idle()
         account.scrub_stale_runs()  # a killed run's private/run, before this run creates one
-        return _run(*args, replace(ctx, run_root=account.run_root), python)
+        return _run(*args, replace(ctx, run_root=account.run_root), python, claim_root)
 
 
-def _run(declaration, commit, run_id, timeout, paths, ctx: VerifyContext, python: str):
+def _run(
+    declaration, commit, run_id, timeout, paths, ctx: VerifyContext, python: str, claim_root=None
+):
     """Under an account ctx.run_root is the account's; python is the interpreter the run uses
     (ctx.python, else the account's, else sys.executable): read it here, not from ctx."""
     account = ctx.account
@@ -100,18 +106,30 @@ def _run(declaration, commit, run_id, timeout, paths, ctx: VerifyContext, python
             else:  # the account's own copy, as for a verifier (#240)
                 os.chmod(work, 0o3770)
                 checkout = make_account_checkout(account, python, ctx.repo, commit, work, clone_id)
-            return _run_in(declaration, ctx, python, commit, checkout, timeout, paths)
+            return _run_in(declaration, ctx, python, commit, checkout, timeout, paths, claim_root)
 
 
-def _run_in(declaration, ctx: VerifyContext, python: str, commit, checkout, timeout, paths):
+def _run_in(
+    declaration, ctx: VerifyContext, python: str, commit, checkout, timeout, paths, claim_root=None
+):
     private = Path(tempfile.mkdtemp(prefix=f"{checkout.name}.", dir=checkout.parent.parent))
     # after _read: the whole private/run goes, then private is owner-only (0700)
     with unless_interrupted(partial(close_private, private, ctx.account)):
-        return _run_in_open(declaration, ctx, python, commit, checkout, timeout, paths, private)
+        return _run_in_open(
+            declaration, ctx, python, commit, checkout, timeout, paths, private, claim_root
+        )
 
 
 def _run_in_open(
-    declaration, ctx: VerifyContext, python: str, commit, checkout, timeout, paths, private
+    declaration,
+    ctx: VerifyContext,
+    python: str,
+    commit,
+    checkout,
+    timeout,
+    paths,
+    private,
+    claim_root=None,
 ):
     account, attempt_id = ctx.account, ctx.attempt_id
     log_path, ini, profile_path = private / "blackbox.log", private / "unused.ini", private / "p.sb"
@@ -137,6 +155,8 @@ def _run_in_open(
         )
         _write_new(profile_path, profile.text.encode())
         argv = [python, "-P", "-m", MODULE]
+        if claim_root is not None:  # strict: the declaration reaches a candidate once (#1353 P2)
+            consume(claim_root, declaration_key(declaration))
         returncode, timed_out, survivors = _execute(
             argv, profile_path, checkout, env, timeout, log_path, account, backend
         )
