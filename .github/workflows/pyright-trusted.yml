@@ -80,6 +80,9 @@ jobs:
           PYRIGHT_GATE_RC: ${{ needs.analyze.outputs.gate_rc }}
         run: python3 scripts/ci/pyright_trusted_status.py
       - name: Post commit status on the PR head
+        # Legacy path; an admin sets TRUSTED_CHECKS_LEGACY_STATUS=off when the ruleset is bound to
+        # the App (Issue #1444), and back on to roll back.
+        if: vars.TRUSTED_CHECKS_LEGACY_STATUS != 'off'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}

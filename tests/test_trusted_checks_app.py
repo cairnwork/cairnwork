@@ -126,6 +126,8 @@ def test_trusted_workflow_posts_same_name_check_run_from_publish_only(name: str)
     # The old commit status stays until the ruleset is switched; then a separate PR drops it.
     assert f'-f context="{context}"' in publish
     assert f'-f name="{context}"' in publish
+    # Only an admin-set repository variable turns the legacy status off (switch and rollback).
+    assert publish.count("if: vars.TRUSTED_CHECKS_LEGACY_STATUS != 'off'") == 1
     # Fail closed: only an exact success state maps to a success conclusion.
     assert "conclusion=failure" in publish
     assert 'if [ "$STATE" = "success" ]; then conclusion=success; fi' in publish
