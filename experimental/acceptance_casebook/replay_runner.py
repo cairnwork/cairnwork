@@ -8,6 +8,7 @@ import shutil
 import signal
 import stat
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,11 +32,16 @@ class CoreVerdict:
 
 
 def isolated_env() -> dict[str, str]:
-    """The one environment for the import check and the verifier run: no PYTHON* leaks in."""
-    env = {k: v for k, v in os.environ.items() if not k.startswith("PYTHON")}
+    """Use a scrubbed environment, retaining only uv's operator-populated cache location."""
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith("PYTHON") and (not k.startswith("UV_") or k == "UV_CACHE_DIR")
+    }
     env.pop("VIRTUAL_ENV", None)
     env.pop("__PYVENV_LAUNCHER__", None)
     env["PYTHONNOUSERSITE"] = "1"
+    env["UV_NO_CONFIG"] = "1"
     return env
 
 
@@ -56,18 +62,21 @@ class RealRunner:
                     ["git", "-C", str(clone), "archive", version],
                     check=True,
                     stdout=archive,
+                    stderr=subprocess.PIPE,
                     timeout=timeout,
                 )
             subprocess.run(
                 ["tar", "-xf", str(self.root / "archive.tar"), "-C", str(self.copy)],
                 check=True,
+                capture_output=True,
                 timeout=timeout,
             )
             subprocess.run(
-                ["uv", "venv", "--offline", str(self.venv)],
+                ["uv", "venv", "--offline", "--python", sys.executable, str(self.venv)],
                 check=True,
                 capture_output=True,
                 timeout=timeout,
+                env=isolated_env(),
             )
             pip = self.venv / "bin" / "python"
             # Install from the archived uv.lock (cached wheels), not by re-resolving: a CI cache
@@ -91,9 +100,9 @@ class RealRunner:
                 env=isolated_env(),
             )
             assert_copy_import(check.stdout.strip(), self.copy)
-        except Exception:
+        except Exception as exc:
             self.close()
-            raise
+            raise RunnerFailure("VERSION_ENV") from exc
 
     def close(self) -> None:
         shutil.rmtree(self.root, ignore_errors=True)
