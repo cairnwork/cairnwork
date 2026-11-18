@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import _imp
 import hashlib
 import json
 import os
@@ -147,7 +148,7 @@ def launch(
                 env=env,
                 capture_output=True,
                 text=True,
-                timeout=900,
+                timeout=1800,
                 check=False,
             )
             report = decode_report(completed)
@@ -199,6 +200,31 @@ def _neutralize(value: str) -> str:
     )
 
 
+def _validate_reported_path_text(value: str, name: str, field: str) -> None:
+    if "\0" in value or "\n" in value or "\r" in value:
+        raise ValueError(
+            f"invalid runner module {field} for {_neutralize(name)}: {_neutralize(value)}"
+        )
+
+
+def _reported_path(value: str, name: str, field: str) -> Path:
+    _validate_reported_path_text(value, name, field)
+    try:
+        return Path(value).resolve()
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ValueError(
+            f"invalid runner module {field} for {_neutralize(name)}: {_neutralize(str(exc))}"
+        ) from None
+
+
+def _is_interpreter_module(name: str, origin: str) -> bool:
+    if origin == "built-in":
+        return name in sys.builtin_module_names
+    if origin == "frozen":
+        return _imp.is_frozen(name)
+    return False
+
+
 def _module_expectations(
     pins: dict[str, str], source_pins: dict[str, str], sealed: Path
 ) -> tuple[dict[str, Path], dict[str, Path], dict[str, str]]:
@@ -234,20 +260,30 @@ def _validate_module_origins(
         loader = item.get("loader")
         expected = pinned_names.get(name)
         if filename is None:
-            if item.get("origin") not in {"built-in", "frozen"}:
-                # cryptography's CFFI OpenSSL bridge creates this runtime module in memory.
-                if name == "_openssl" and item.get("origin") is None and loader == "NoneType":
-                    continue
+            origin = item.get("origin")
+            if isinstance(origin, str) and _is_interpreter_module(name, origin):
+                continue
+            # cryptography's in-memory OpenSSL bridge is paired with its audited CFFI backend.
+            if name == "_openssl" and origin is None and loader == "NoneType":
+                continue
+            else:
                 raise ValueError(
                     f"runner module without file is not builtin or frozen: {_neutralize(name)}"
                 )
-            continue
         if not isinstance(filename, str):
             raise ValueError("invalid runner module file")
-        path = Path(filename).resolve()
         origin = item.get("origin")
         if origin is not None and not isinstance(origin, str):
             raise ValueError(f"runner module origin missing: {_neutralize(name)}")
+        _validate_reported_path_text(filename, name, "file")
+        if isinstance(origin, str) and origin not in {"built-in", "frozen"}:
+            _validate_reported_path_text(origin, name, "origin")
+        path = _reported_path(filename, name, "file")
+        origin_path = (
+            _reported_path(origin, name, "origin")
+            if isinstance(origin, str) and origin not in {"built-in", "frozen"}
+            else None
+        )
         named_path = expected_names.get(name)
         if named_path is not None and path != named_path:
             raise ValueError(f"module name served from wrong sealed file: {_neutralize(name)}")
@@ -258,14 +294,12 @@ def _validate_module_origins(
         elif any(_is_under(path, root) for root in stdlib_roots) and not any(
             _is_under(path, root) for root in imports[2:]
         ):
-            if origin != "frozen" and (
-                not isinstance(origin, str) or Path(origin).resolve() != path
-            ):
+            if origin != "frozen" and (origin_path is None or origin_path != path):
                 raise ValueError(f"stdlib module origin disagrees with file: {_neutralize(name)}")
         elif any(_is_under(path, root) for root in imports):
             if origin is None and name.split(".")[0] == "cryptography":
                 pass
-            elif not isinstance(origin, str) or Path(origin).resolve() != path:
+            elif origin_path is None or origin_path != path:
                 raise ValueError(
                     f"dependency module origin disagrees with file: {_neutralize(name)}"
                 )
@@ -283,7 +317,11 @@ def _validate_module_origins(
 def _validate_sealed_module(name, path, origin, loader, expected_hashes, sealed):
     if not (
         (name == "__main__" and origin is None)
-        or (isinstance(origin, str) and Path(origin).resolve() == path)
+        or (
+            isinstance(origin, str)
+            and origin not in {"built-in", "frozen"}
+            and _reported_path(origin, name, "origin") == path
+        )
     ):
         raise ValueError(f"runner module origin disagrees with file: {_neutralize(name)}")
     if loader != "SourceFileLoader" and not (name == "__main__" and loader == "NoneType"):

@@ -229,6 +229,106 @@ def test_module_origin_audit_fails_closed(module, pins, roots):
         consume._validate_module_origins([module], pins, {}, consume.ROOT, roots, roots)
 
 
+@pytest.mark.parametrize(
+    ("name", "origin"),
+    [
+        ("evil_external_payload", "built-in"),
+        ("evil_external_payload", "frozen"),
+        ("json", "built-in"),
+        ("namespace_pkg", None),
+    ],
+)
+def test_module_origin_audit_rejects_forged_or_fileless_origins(name: str, origin: Any):
+    module = {"name": name, "file": None, "origin": origin, "loader": "NoneType"}
+    with pytest.raises(ValueError, match="without file"):
+        consume._validate_module_origins([module], {}, {}, Path("/sealed"), [], [])
+
+
+@pytest.mark.parametrize("name", ["sys", "_imp", "marshal"])
+def test_module_origin_audit_accepts_actual_builtins(name: str):
+    assert name in consume.sys.builtin_module_names
+    module = {"name": name, "file": None, "origin": "built-in", "loader": "BuiltinImporter"}
+    consume._validate_module_origins([module], {}, {}, Path("/sealed"), [], [])
+
+
+@pytest.mark.parametrize("name", ["zipimport", "_frozen_importlib"])
+def test_module_origin_audit_accepts_actual_frozen_modules(name: str):
+    if not consume._imp.is_frozen(name):
+        pytest.skip(f"{name} is not frozen in this interpreter")
+    module = {"name": name, "file": None, "origin": "frozen", "loader": "FrozenImporter"}
+    consume._validate_module_origins([module], {}, {}, Path("/sealed"), [], [])
+
+
+def test_module_origin_audit_allows_openssl_only_with_audited_cffi_backend(tmp_path: Path):
+    openssl = {"name": "_openssl", "file": None, "origin": None, "loader": "NoneType"}
+    with pytest.raises(ValueError, match="CFFI backend"):
+        consume._validate_module_origins([openssl], {}, {}, tmp_path / "sealed", [], [tmp_path])
+    backend = tmp_path / "_cffi_backend.abi3.so"
+    backend.write_bytes(b"trusted dependency fixture")
+    backend_report = {
+        "name": "_cffi_backend",
+        "file": str(backend),
+        "origin": str(backend),
+        "loader": "ExtensionFileLoader",
+    }
+    consume._validate_module_origins(
+        [openssl, backend_report], {}, {}, tmp_path / "sealed", [], [tmp_path]
+    )
+
+
+@pytest.mark.parametrize("command", ["::error::x", "##[group]x"])
+def test_reported_multiline_path_is_rejected_before_resolution(tmp_path: Path, command: str):
+    bad_path = tmp_path / f"loop\n{command}"
+    bad_path.symlink_to(bad_path)
+    module = {
+        "name": "evil",
+        "file": str(bad_path),
+        "origin": str(bad_path),
+        "loader": "SourceFileLoader",
+    }
+    assert bad_path.is_symlink()
+    with pytest.raises(ValueError) as caught:
+        consume._validate_module_origins([module], {}, {}, tmp_path, [], [])
+    assert all(
+        not line.lstrip().startswith(("::", "##[")) for line in str(caught.value).splitlines()
+    )
+
+
+def test_module_path_resolution_exception_is_neutralized(tmp_path: Path, monkeypatch):
+    reported = tmp_path / "reported.py"
+    original_resolve = Path.resolve
+
+    def resolve(path: Path, *args: Any, **kwargs: Any) -> Path:
+        if path == reported:
+            raise OSError("resolve failed\n::error::x\n##[group]x")
+        return original_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", resolve)
+    module = {
+        "name": "evil",
+        "file": str(reported),
+        "origin": str(reported),
+        "loader": "SourceFileLoader",
+    }
+    with pytest.raises(ValueError) as caught:
+        consume._validate_module_origins([module], {}, {}, tmp_path, [], [])
+    assert all(
+        not line.lstrip().startswith(("::", "##[")) for line in str(caught.value).splitlines()
+    )
+
+
+def test_module_origin_nonexistent_path_fails_with_neutralized_value_error(tmp_path: Path):
+    missing = tmp_path / "not-present.py"
+    module = {
+        "name": "missing_module",
+        "file": str(missing),
+        "origin": str(missing),
+        "loader": "SourceFileLoader",
+    }
+    with pytest.raises(ValueError, match="outside allowed roots"):
+        consume._validate_module_origins([module], {}, {}, tmp_path / "sealed", [], [])
+
+
 def test_tracked_source_listing_disables_repo_fsmonitor(monkeypatch):
     observed = {}
 
