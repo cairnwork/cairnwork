@@ -5,9 +5,11 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import sqlite3
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 from conftest import git
@@ -305,6 +307,56 @@ def test_accepted_record_is_not_retained(
     assert _run(_retain_args(lg, into, record="a1", candidate=lg["cand"])) == 2
     assert "CASE_ORIGIN_MISMATCH" in capsys.readouterr().out
     assert not (into / "cases").exists()
+
+
+def test_changed_source_row_after_validation_is_not_retained(
+    lg: dict[str, str],
+    repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from experimental.acceptance_casebook import retain
+
+    lg = _paths(lg, repo)
+    original_record = retain._record
+
+    def change_source_after_validation(
+        db: Path, record_id: str, base: str, candidate: str
+    ) -> tuple[str, dict[str, Any]]:
+        result = original_record(db, record_id, base, candidate)
+        with sqlite3.connect(lg["db"]) as conn:
+            triggers = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'trigger'",
+            ).fetchall()
+            for (name,) in triggers:
+                conn.execute(f'DROP TRIGGER "{name}"')
+            conn.execute(
+                "UPDATE core_verifications SET response_json = response_json || ' ' "
+                "WHERE attempt_id = ?",
+                (record_id,),
+            )
+        return result
+
+    monkeypatch.setattr(retain, "_record", change_source_after_validation)
+    into = tmp_path / "changed-source"
+    capsys.readouterr()
+    assert _run(_retain_args(lg, into)) == 2
+    assert "NOTARY_COPY_FAILED" in capsys.readouterr().out
+    cases = into / "cases"
+    assert not cases.exists() or not list(cases.iterdir())
+
+
+def test_retain_text_output_escapes_newline_in_path(
+    lg: dict[str, str], repo: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    lg = _paths(lg, repo)
+    into = tmp_path / "casebook\n::warning::injected"
+    into.mkdir()
+    capsys.readouterr()
+    assert _run(_retain_args(lg, into)) == 0
+    captured = capsys.readouterr()
+    assert not any(line.startswith("::") for line in (captured.out + captured.err).splitlines())
 
 
 def test_unknown_acceptance_version_is_not_retained(
