@@ -65,6 +65,8 @@ def test_ac4e_report_rejects_tampering_and_incomplete_run(tmp_path: Path):
         ({"exit_code": True, "verdict": "REFUSED"}, "UNREPLAYABLE"),
         ({"exit_code": 0, "verdict": "VERIFIED"}, "accepted"),
         ({"exit_code": 0, "verdict": "FAILED"}, "refused"),
+        ({"exit_code": 1, "verdict": "FAILED"}, "UNREPLAYABLE"),
+        ({"exit_code": 1, "verdict": "VERIFIED"}, "UNREPLAYABLE"),
     ],
 )
 def test_only_an_integer_exit_code_maps_to_a_verdict(monkeypatch, value, expected):
