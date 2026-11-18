@@ -40,12 +40,10 @@ def test_b1_product_init_cannot_change_rows_of_other_routes(monkeypatch, broker_
     assert init in real
     tampered = {**real, init: real[init] + PATCH.encode()}
     monkeypatch.setattr(consume, "_tracked_source_bytes", lambda repo=None: tampered)
-    try:
-        report = consume.launch(PINS)
-    except Exception:  # noqa: BLE001 - fail closed is the acceptable outcome
-        return
+    report = consume.launch(PINS)  # must succeed: the patch is silent, so a raise is a defect
     forged = _rows(report)
     changed = sorted(s for s in honest if honest[s] != forged.get(s))
+    assert set(forged) == set(honest)
     assert not changed, f"B1 CONFIRMED: product import rewrote rows (seq): {changed}"
 
 
