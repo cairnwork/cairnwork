@@ -123,29 +123,44 @@ def _child_roots(shadow: Path, *, stdlib_first: bool) -> str:
     return done.stdout.strip().splitlines()[-1]
 
 
+_STUB_RUNNER = (
+    "import csv\n"
+    "MODULE = 'pra1353_stub_runner'\n"
+    "_RUNNER_SOURCE = 'def _call(f, a):\\n    return f(*a[\\'args\\'])\\n'\n"
+)
+
+
+@pytest.mark.parametrize("child", ["verify", "c10"])
 @pytest.mark.parametrize("stdlib_first", [True, False])
-def test_variant_3_real_verify_child_loads_stdlib_before_sealed_source(
-    stdlib_first: bool, tmp_path: Path
+def test_variant_3_real_children_load_stdlib_before_sealed_source(
+    child: str, stdlib_first: bool, tmp_path: Path
 ):
+    import pra1353_c10
     import pra1353_probe
 
     shadow = tmp_path / "src"
     (shadow / "cairnwork").mkdir(parents=True)
     (shadow / "cairnwork/__init__.py").write_text("")
     (shadow / "cairnwork/verify_cli.py").write_text("import csv\n")
+    (shadow / "cairnwork/blackbox_runner.py").write_text(_STUB_RUNNER)
     marker = tmp_path / "shadow-loaded"
     (shadow / "csv.py").write_text(
         f"from pathlib import Path; Path({str(marker)!r}).write_text('shadow')\n"
     )
     report = tmp_path / "child.json"
     roots = _child_roots(shadow, stdlib_first=stdlib_first)
-    launch = [sys.executable, "-I", "-S", "-B", "-c", pra1353_probe._LAUNCH, roots, str(report)]
+    paths = sysconfig.get_paths()
+    if stdlib_first:
+        assert json.loads(roots).index(str(shadow)) == 3
+        assert json.loads(roots)[0] == paths["stdlib"]
+    source = pra1353_probe._LAUNCH if child == "verify" else pra1353_c10._child_source()
+    launch = [sys.executable, "-I", "-S", "-B", "-c", source, roots, str(report), "2"]
     done = subprocess.run(launch, capture_output=True, text=True, cwd=tmp_path, check=False)
     assert done.returncode == 0, done.stderr
     modules = {item["name"]: item["file"] for item in read_module_report(report)["modules"]}
     if stdlib_first:
         assert not marker.exists()
-        assert Path(modules["csv"]).parent == Path(sysconfig.get_paths()["stdlib"])
+        assert Path(modules["csv"]).parent == Path(paths["stdlib"])
     else:
         assert marker.exists()
 
