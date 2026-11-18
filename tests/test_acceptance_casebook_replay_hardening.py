@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -91,11 +92,18 @@ def test_sync_and_verifier_receive_scrubbed_uv_env(tmp_path: Path, monkeypatch):
 
 
 def test_tar_stderr_is_suppressed_and_failure_is_generic(tmp_path: Path, monkeypatch, capfd):
+    calls: list[tuple[list[str], dict[str, Any]]] = []
+
     def run(argv: list[str], **kwargs: Any):
+        calls.append((argv, kwargs))
+        captured = kwargs.get("capture_output") is True
+        if not captured and kwargs.get("stderr") is None:
+            os.write(2, b"::error::injected\n")
+        if not captured and kwargs.get("stdout") is None:
+            os.write(1, b"::error::injected\n")
         if argv[0] == "git":
             kwargs["stdout"].write(b"")
         if argv[0] == "tar":
-            assert kwargs.get("capture_output") is True
             raise subprocess.CalledProcessError(2, argv, stderr=b"::error::untrusted tar output")
         return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
@@ -103,5 +111,9 @@ def test_tar_stderr_is_suppressed_and_failure_is_generic(tmp_path: Path, monkeyp
     monkeypatch.setattr(runner_module.tempfile, "mkdtemp", lambda **_: str(tmp_path))
     with pytest.raises(runner_module.RunnerFailure, match="VERSION_ENV"):
         RealRunner(tmp_path, tmp_path, "v", 5)
+    git_archive = next(call for call in calls if call[0][:3] == ["git", "-C", str(tmp_path)])
+    tar = next(call for call in calls if call[0][0] == "tar")
+    assert git_archive[1].get("stderr") is subprocess.PIPE
+    assert tar[1].get("capture_output") is True
     captured = capfd.readouterr()
     assert "::error::" not in captured.out + captured.err
