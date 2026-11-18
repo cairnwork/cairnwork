@@ -1,5 +1,12 @@
 # Acceptance casebook (experimental, default off)
 
+## Replay (#751 step 3a)
+
+`python -m experimental.acceptance_casebook replay` uses the injected runner after checking the
+frozen version registry and original request inputs. Results append to a separate chained `--out`
+file; `replay-report --out R` checks its chain and detects an incomplete final run. The real archive
+and isolated-venv runner is step 3b.
+
 Owner and expiry: see OWNER and EXPIRES. Step 1a: `add` and `list`.
 
 This is an experimental record of acceptance mistakes, not a measure of false completion or

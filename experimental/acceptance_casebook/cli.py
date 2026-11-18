@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +23,9 @@ from experimental.acceptance_casebook.store import (
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="acceptance_casebook", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("add", "list", "confirm", "repair"):
+    for name in ("add", "list", "confirm", "repair", "replay", "replay-report"):
+        if name in ("replay", "replay-report"):
+            continue
         p = sub.add_parser(name)
         p.add_argument("--casebook", type=Path, required=True)
         p.add_argument("--json", action="store_true")
@@ -82,7 +85,12 @@ def _out(args: argparse.Namespace, payload: dict[str, object], text: str) -> Non
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    command_line = list(sys.argv[1:] if argv is None else argv)
+    if command_line and command_line[0] in ("replay", "replay-report"):
+        from experimental.acceptance_casebook.replay import main as replay_main
+
+        return replay_main(command_line)
+    args = _parser().parse_args(command_line)
     try:
         if args.command == "list":
             if args.eligible and args.notary_db is None:
