@@ -313,6 +313,11 @@ def test_a2_package_shadow_cannot_change_real_runner_rows():
         assert len(report["rows"]) == 56
         assert all(row["observed"] != "FORGED" for row in report["rows"])
         modules = {item["name"]: item for item in report["modules"]}
+        # The receipt witness runs in a launcher child, not in the runner process.
+        for child in report["child_reports"]:
+            for item in child["modules"]:
+                if item["name"] == "pra1353_receipt":
+                    modules["pra1353_receipt"] = item
         assert all(
             name in modules
             and Path(modules[name]["file"]).as_posix().endswith(relative)

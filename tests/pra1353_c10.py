@@ -10,44 +10,18 @@ import subprocess
 import sys
 from pathlib import Path
 
+from pra1353_launch import judge
 from pra1353_seal import read_module_report
 
 
-def _record(n, raw, outside, blackbox, blackbox_judge, BlackboxRun):
-    import json
-    from pathlib import Path
-
+def _record(n, raw, outside):
     from pra1353_probe import row
 
-    run = BlackboxRun(
-        json.dumps({"checks": {"add": {"file": "/co/calc.py", "cases": {"one": raw}}}}).encode(),
-        0,
-        False,
-        0,
-        (),
-        (),
-        Path("/tmp/run"),
-        "/co",
-        "p",
-        True,
-    )
-    spec = blackbox.parse(
-        json.dumps(
-            {
-                "salt": "ab" * 32,
-                "checks": [
-                    {
-                        "id": "add",
-                        "module": "calc",
-                        "function": "add",
-                        "cases": [{"id": "one", "args": [2, 3], "expected": 5}],
-                    }
-                ],
-            }
-        ).encode()
-    )
-    (verdict,) = blackbox_judge.judge_run(spec, "c" * 40, run)
-    raw_return = _raw_return(verdict, outside)
+    run = json.dumps({"checks": {"add": {"file": "/co/calc.py", "cases": {"one": raw}}}})
+    case = {"id": "one", "args": [2, 3], "expected": 5}
+    check = {"id": "add", "module": "calc", "function": "add", "cases": [case]}
+    reason = judge(json.dumps({"salt": "ab" * 32, "checks": [check]}), run)
+    raw_return = _raw_return(reason, outside)
     return row(
         "C10",
         f"runner-sniff-{n}",
@@ -61,14 +35,11 @@ def _record(n, raw, outside, blackbox, blackbox_judge, BlackboxRun):
     )
 
 
-def _raw_return(verdict, outside):
-    return {"status": verdict.reason, "detail": "", "outside": outside}
+def _raw_return(reason, outside):
+    return {"status": reason, "detail": "", "outside": outside}
 
 
 def c10_rows():
-    from cairnwork import blackbox, blackbox_judge
-    from cairnwork.blackbox_exec import BlackboxRun
-
     rows = []
     source = _child_source()
     for n in range(1, 4):
@@ -96,9 +67,7 @@ def c10_rows():
         except ValueError as exc:
             raise RuntimeError(str(exc)) from exc
         result = json.loads(done.stdout)
-        rows.append(
-            _record(n, result["raw"], result["outside"], blackbox, blackbox_judge, BlackboxRun)
-        )
+        rows.append(_record(n, result["raw"], result["outside"]))
     return rows
 
 

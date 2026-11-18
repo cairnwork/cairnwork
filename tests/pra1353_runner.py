@@ -36,8 +36,6 @@ def _bootstrap(import_roots):
     from pra1353_probe import core_rows
     from pra1353_recipes import FIELDS, REASONS, RECIPES, ROUTES
 
-    import cairnwork  # noqa: F401
-
     rows = core_rows() + extra_rows()
     recipes: list[dict[str, Any]] = [dict(zip(FIELDS, values, strict=True)) for values in RECIPES]
     for recipe in recipes:
