@@ -153,8 +153,10 @@ def test_variant_3_real_children_load_stdlib_before_sealed_source(
     if stdlib_first:
         assert json.loads(roots).index(str(shadow)) == 3
         assert json.loads(roots)[0] == paths["stdlib"]
-    source = pra1353_probe._LAUNCH if child == "verify" else pra1353_c10._child_source()
-    launch = [sys.executable, "-I", "-S", "-B", "-c", source, roots, str(report), "2"]
+    launch = [sys.executable, "-I", "-S", "-B", "-c", pra1353_probe._LAUNCH, roots, str(report)]
+    if child == "c10":
+        launch[5:6] = [pra1353_c10._child_source()]
+        launch.append("2")
     done = subprocess.run(launch, capture_output=True, text=True, cwd=tmp_path, check=False)
     assert done.returncode == 0, done.stderr
     modules = {item["name"]: item["file"] for item in read_module_report(report)["modules"]}
