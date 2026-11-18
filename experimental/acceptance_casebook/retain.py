@@ -107,7 +107,13 @@ def _create_bundle(repo: Path, dest: Path, base: str, candidate: str) -> None:
             raise CasebookError("BUNDLE_INVALID")
 
 
-def _copy_notary(source: Path, destination: Path, task_id: str, record_id: str) -> None:
+def _copy_notary(
+    source: Path,
+    destination: Path,
+    task_id: str,
+    record_id: str,
+    validated_origin: dict[str, Any],
+) -> None:
     uri = f"file:{quote(str(source.resolve()))}?mode=ro"
     try:
         src = sqlite3.connect(uri, uri=True)
@@ -121,7 +127,12 @@ def _copy_notary(source: Path, destination: Path, task_id: str, record_id: str) 
         copied, copied_origin = read_origin(destination, task_id, record_id)
     except (sqlite3.Error, OriginError) as exc:
         raise CasebookError("NOTARY_COPY_FAILED") from exc
-    if origin["row_sha256"] != copied_origin["row_sha256"] or original != copied:
+    if (
+        origin["row_sha256"] != copied_origin["row_sha256"]
+        or copied_origin["row_sha256"] != validated_origin["row_sha256"]
+        or not copied_origin["refused"]
+        or original != copied
+    ):
         raise CasebookError("NOTARY_COPY_FAILED")
 
 
@@ -187,7 +198,7 @@ def retain(
     try:
         cases.mkdir(parents=True, exist_ok=True)
         temporary = Path(tempfile.mkdtemp(prefix=".retain-", dir=cases))
-        _copy_notary(notary_db, temporary / "notary.sqlite", task_id, record_id)
+        _copy_notary(notary_db, temporary / "notary.sqlite", task_id, record_id, origin)
         _create_bundle(repo, temporary / "candidate.bundle", base, candidate)
         (temporary / "version.json").write_text(
             json.dumps(

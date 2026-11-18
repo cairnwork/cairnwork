@@ -131,7 +131,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.into,
                 _adder(args),
             )
-            _out(args, {"result": "RETAINED", "case": result}, f"RETAINED: {result}")
+            _out(args, {"result": "RETAINED", "case": result}, f"RETAINED: {json.dumps(result)}")
             return 0
         case = {
             "candidate": args.candidate,
