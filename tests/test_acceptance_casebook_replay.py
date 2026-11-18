@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import subprocess
 from pathlib import Path
@@ -54,13 +55,23 @@ def _reject(lg: dict[str, str], digest: str) -> None:
     )
 
 
+_IDENT = {
+    "GIT_AUTHOR_NAME": "fixture",
+    "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+    "GIT_COMMITTER_NAME": "fixture",
+    "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
+}
+
+
 def _args(tmp_path: Path, lg: dict[str, str], cases: list[dict[str, Any]]) -> list[str]:
     clone = tmp_path / "clone"
     clone.mkdir(parents=True, exist_ok=True)
     subprocess.run(["git", "init", "-q", str(clone)], check=True)
     tree = subprocess.check_output(["git", "-C", str(clone), "write-tree"], text=True).strip()
     commit = subprocess.check_output(
-        ["git", "-C", str(clone), "commit-tree", tree, "-m", "fixture"], text=True
+        ["git", "-C", str(clone), "commit-tree", tree, "-m", "fixture"],
+        text=True,
+        env={**os.environ, **_IDENT},  # CI runners have no git identity
     ).strip()
     registry = tmp_path / "versions.json"
     registry.write_text(

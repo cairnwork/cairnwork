@@ -8,7 +8,8 @@ from pathlib import Path
 import pytest
 from test_acceptance_casebook_replay import _args, _book, _confirmed
 
-from experimental.acceptance_casebook import replay
+from experimental.acceptance_casebook import replay, replay_out
+from experimental.acceptance_casebook.store import CasebookError
 
 pytest_plugins = ["test_acceptance_casebook_origin"]
 
@@ -142,6 +143,10 @@ def test_request_binding_must_be_list(monkeypatch, tmp_path, lg, capsys):
         request["acceptance_contract"]["allowed_paths"] = "abc"
         return replace(rec, request=request), origin
 
+    inp = Path(args[args.index("--inputs") + 1])
+    data = json.loads(inp.read_text())
+    data[case["line_sha256"]]["allowed_file"] = ["a", "b", "c"]  # sorted("abc") would match
+    inp.write_text(json.dumps(data))
     monkeypatch.setattr(replay, "read_origin", malformed)
     monkeypatch.setattr(replay, "RUNNER", lambda *_: "accepted")
     assert replay.main(args) == 3
@@ -200,3 +205,47 @@ def test_unknown_kind_is_not_run(monkeypatch, tmp_path, lg, capsys):
     assert replay.main(args) == 3 and not calls
     row = json.loads(Path(args[args.index("--out") + 1]).read_text().splitlines()[0])
     assert row["outcome"] == "UNREPLAYABLE" and row["reason"] == "INVALID_KIND"
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "out_hard",
+        "out_symlink_unprotected",
+        "stale_head_tmp",
+        "lock_symlink",
+        "folded",
+    ],
+)
+def test_writer_checks_each_opened_file(tmp_path, target):
+    """Calls the writer directly, so the pre-runner path check cannot stand in for it."""
+    book = tmp_path / "book.jsonl"
+    book.write_bytes(b"")  # an empty chain reads cleanly, so only the fd check can refuse
+    other = tmp_path / "other.txt"
+    other.write_bytes(b"")
+    protected = (book, tmp_path / "notary.db-wal")
+    out = tmp_path / "out.jsonl"
+    if target == "out_hard":
+        out.hardlink_to(book)
+    elif target == "out_symlink_unprotected":
+        out.symlink_to(other)
+    elif target == "stale_head_tmp":
+        out.with_name(out.name + ".head.tmp").write_bytes(b"")
+    elif target == "lock_symlink":
+        out.with_name(out.name + ".lock").symlink_to(book)
+    else:
+        out = tmp_path / "NOTARY.DB-WAL"
+    with pytest.raises(CasebookError) as refused:
+        replay_out.append(out, {"type": "replay_summary"}, protected)
+    assert refused.value.code == "REPLAY_OUTPUT_REFUSED"
+    assert book.read_bytes() == b"" and other.read_bytes() == b""
+    if target == "folded":  # refused by name before any file is created (APFS folds case)
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["book.jsonl", "other.txt"]
+
+
+def test_writer_appends_a_readable_chain(tmp_path):
+    out = tmp_path / "out.jsonl"
+    replay_out.append(out, {"n": 1}, (tmp_path / "book.jsonl",))
+    replay_out.append(out, {"n": 2}, (tmp_path / "book.jsonl",))
+    entries, _ = replay._read_chain(out)
+    assert [entry["n"] for entry, _ in entries] == [1, 2]
