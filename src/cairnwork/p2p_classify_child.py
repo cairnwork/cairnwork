@@ -19,11 +19,19 @@ from cairnwork.p2p_bindings import (
     walk_without_nested_classes,
 )
 from cairnwork.p2p_function import _function
+from cairnwork.p2p_simple_module import _simple_test_module
 
 
 def classify_payload(data: dict) -> dict:
     base_ids, test_ids, edited = map(set, (data["base_ids"], data["test_ids"], data["edited"]))
     exposed = data.get("exposed")
+    changed_python = data.get("changed_python_files")
+    if (
+        not isinstance(changed_python, list)
+        or not all(isinstance(item, str) for item in changed_python)
+        or len(set(changed_python)) != len(changed_python)
+    ):
+        changed_python = None
     if (
         not isinstance(exposed, list)
         or not all(isinstance(item, str) and _valid_exposed_id(item) for item in exposed)
@@ -56,7 +64,8 @@ def classify_payload(data: dict) -> dict:
                     and not _scope_mentions(test_tree, [origin], name, texts[path])
                     and not _scope_mentions(test_tree, owners, name, texts[path])
                     and not _kept_uncollected(test_tree, name, path, test_ids)
-                    and not _runs_local_code_at_import(test_tree)
+                    and _simple_test_module(test_tree)
+                    and changed_python == [path]
                     and f"{path}::{origin}::{name}" not in test_ids
                     and not any(
                         _file(func) == path and func.rpartition("::")[2] == name
@@ -110,42 +119,6 @@ def _kept_uncollected(tree, name, path, test_ids) -> bool:
         return bool(hidden_bindings(tree, name, got))
     except RecursionError:
         return True
-
-
-def _runs_local_code_at_import(tree: ast.Module) -> bool:
-    """Code run at import uses a function or class this file defines (a renamed body may run).
-
-    Function bodies do not run at import; decorators, defaults, annotations, class bases,
-    class bodies and every other module statement do. An inherited deletion is not excused
-    when any of them loads a module-level function or calls a module-level class.
-    """
-    funcs = {n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
-    classes = {n.name for n in tree.body if isinstance(n, ast.ClassDef)}
-    for part in _import_time_parts(tree.body):
-        for node in ast.walk(part):
-            if isinstance(node, ast.Name) and node.id in funcs:
-                return True
-            if isinstance(node, ast.Call):
-                root = node.func
-                while isinstance(root, ast.Attribute):
-                    root = root.value
-                if isinstance(root, ast.Name) and root.id in classes:
-                    return True
-    return False
-
-
-def _import_time_parts(body: list[ast.stmt]):
-    for stmt in body:
-        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            yield from stmt.decorator_list
-            yield stmt.args
-            if stmt.returns is not None:
-                yield stmt.returns
-        elif isinstance(stmt, ast.ClassDef):
-            yield from (*stmt.decorator_list, *stmt.bases, *stmt.keywords)
-            yield from _import_time_parts(stmt.body)
-        else:
-            yield stmt
 
 
 def _tree(text: str) -> ast.Module | None:

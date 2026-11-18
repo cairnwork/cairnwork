@@ -106,6 +106,7 @@ def collected_side(task, files, outcomes, test_files, ctx, budget, attempt_id) -
         lambda p: _source(task, task.test_commit, p) if p in there else "",
         lambda p: _source(task, task.base_commit, p),
         exposed=exposed,
+        changed_python_files=_changed_test_python_files(task),
     )
     if side.dropped:
         detail = _named(sorted(side.dropped))
@@ -126,7 +127,9 @@ def collected_side(task, files, outcomes, test_files, ctx, budget, attempt_id) -
     )
 
 
-def classify(base_ids, test_ids, edited, source, base_source, *, exposed=None) -> CollectedSide:
+def classify(
+    base_ids, test_ids, edited, source, base_source, *, exposed=None, changed_python_files=None
+) -> CollectedSide:
     """Classify missing ids in a bounded subprocess; source callables are read in the parent."""
     base_ids, test_ids, edited = frozenset(base_ids), frozenset(test_ids), frozenset(edited)
     collected_funcs = {_function(nodeid) for nodeid in test_ids}
@@ -140,7 +143,9 @@ def classify(base_ids, test_ids, edited, source, base_source, *, exposed=None) -
         "base": {path: base_source(path) for path in sorted(needed)},
     }
     runtime_names = _edited_exposure(exposed, edited)
-    removed, dropped = _run_classification(base_ids, test_ids, edited, sources, runtime_names)
+    removed, dropped = _run_classification(
+        base_ids, test_ids, edited, sources, runtime_names, changed_python_files
+    )
     return CollectedSide(base_ids, test_ids, removed, dropped)
 
 
@@ -155,7 +160,27 @@ def _edited_exposure(exposed, edited):
     return sorted(entry for entry in exposed if _file(entry) in edited)
 
 
-def _run_classification(base_ids, test_ids, edited, sources, exposed=None):
+def _changed_test_python_files(task) -> list[str] | None:
+    """Every Python path the test commit changed (any conftest or helper counts), or no fact."""
+    try:
+        changed = run_git(
+            task.repo,
+            "diff",
+            "--name-only",
+            "-z",
+            "--no-renames",
+            task.base_commit,
+            task.test_commit,
+            "--",
+        ).split("\0")
+    except GitCommandError:
+        return None
+    return sorted(path for path in changed if path.endswith(".py"))
+
+
+def _run_classification(
+    base_ids, test_ids, edited, sources, exposed=None, changed_python_files=None
+):
     payload = json.dumps(
         {
             "base_ids": sorted(base_ids),
@@ -163,6 +188,7 @@ def _run_classification(base_ids, test_ids, edited, sources, exposed=None):
             "edited": sorted(edited),
             "sources": sources,
             "exposed": exposed,
+            "changed_python_files": changed_python_files,
         }
     ).encode()
     output, timed_out, returncode = _run_child(_classify_argv(), payload)
