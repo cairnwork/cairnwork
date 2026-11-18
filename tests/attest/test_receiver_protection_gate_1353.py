@@ -37,7 +37,7 @@ def _strict_world(tmp_path: Path, **overrides: Any) -> dict[str, Any]:
         state,
         p,
         protection="partial",
-        required=STRICT_IDS,
+        required=overrides.pop("required", STRICT_IDS),
         blackbox_commitment=COMMITMENT,
         artifacts=artifacts,
         **overrides,
@@ -64,6 +64,11 @@ def test_opt_in_gate_requires_a_strict_signed_request(tmp_path):
         loose,
         policy=policy(loose["state"], loose["tmp"], loose["tests"], protection="partial_macos"),
     ).ok
+
+
+def test_gate_must_be_required_exactly_once(tmp_path):
+    w = _strict_world(tmp_path, required=(*STRICT_IDS, protection.GATE))
+    assert check(w, policy=_gate_policy(w)).code == "PROTECTION_GATE_MISSING"
 
 
 @pytest.mark.parametrize(

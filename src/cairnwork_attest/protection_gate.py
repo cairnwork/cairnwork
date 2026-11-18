@@ -84,5 +84,8 @@ def gate_problem(
         else []
     )
     if low_entropy:
-        return _fail("BLACKBOX_LOW_ENTROPY", f"low-entropy checks: {low_entropy!r}")
+        return _fail(
+            "BLACKBOX_LOW_ENTROPY",
+            f"{len(low_entropy)} low-entropy checks: {low_entropy[:5]!r}",
+        )
     return None
