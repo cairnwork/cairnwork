@@ -205,3 +205,43 @@ def test_only_a_checked_core_verdict_maps_to_a_verdict(monkeypatch, verdict, cod
     got, why, _, _ = replay._run_one({"kind": "accepted_bad"}, {}, 0)
     assert (got, why) == (mapped, reason)
 
+
+def test_runner_installs_from_the_archived_lock_not_by_offline_resolution(
+    tmp_path: Path, monkeypatch
+):
+    """CI fills the uv cache with `uv sync --locked`: locked wheels, no registry index pages.
+
+    An offline `uv pip install -e` re-resolves dependencies ("cryptography was not found in the
+    cache"), so the runner must install from the archived uv.lock into the per-run venv instead.
+    """
+    import subprocess
+
+    import experimental.acceptance_casebook.replay_runner as runner_module
+
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path / "shadow"))
+    monkeypatch.setenv("VIRTUAL_ENV", str(tmp_path / "outer"))
+    calls: list[tuple[list[str], dict[str, Any]]] = []
+
+    def run(argv, **kwargs):
+        calls.append((list(argv), kwargs))
+        if argv[0] == "tar":
+            Path(argv[-1], "marker").write_text("x")
+        out = ""
+        if "-I" in argv:
+            out = "unused"
+        return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+
+    monkeypatch.setattr(runner_module.subprocess, "run", run)
+    monkeypatch.setattr(runner_module, "assert_copy_import", lambda *_: None)
+    runner = RealRunner(tmp_path, tmp_path, "a" * 40, 5)
+    try:
+        flat = [" ".join(argv) for argv, _ in calls]
+        assert not [c for c in flat if c.startswith("uv pip")]
+        (sync,) = [(a, k) for a, k in calls if a[:2] == ["uv", "sync"]]
+        assert {"--offline", "--locked"} <= set(sync[0])
+        assert sync[0][sync[0].index("--project") + 1] == str(runner.copy)
+        env = sync[1]["env"]
+        assert env["UV_PROJECT_ENVIRONMENT"] == str(runner.venv)
+        assert "PYTHONPATH" not in env and "VIRTUAL_ENV" not in env
+    finally:
+        runner.close()

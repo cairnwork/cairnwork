@@ -70,20 +70,17 @@ class RealRunner:
                 timeout=timeout,
             )
             pip = self.venv / "bin" / "python"
+            # Install from the archived uv.lock (cached wheels), not by re-resolving: a CI cache
+            # filled by `uv sync` holds the locked wheels but not the registry index metadata an
+            # offline `uv pip install -e` resolver needs (cryptography "not found in the cache").
+            sync_env = isolated_env()
+            sync_env["UV_PROJECT_ENVIRONMENT"] = str(self.venv)
             subprocess.run(
-                [
-                    "uv",
-                    "pip",
-                    "install",
-                    "--offline",
-                    "--python",
-                    str(pip),
-                    "-e",
-                    str(self.copy),
-                ],
+                ["uv", "sync", "--offline", "--locked", "--no-dev", "--project", str(self.copy)],
                 check=True,
                 capture_output=True,
                 timeout=timeout,
+                env=sync_env,
             )
             check = subprocess.run(
                 [str(pip), "-I", "-c", "import cairnwork; print(cairnwork.__file__)"],
