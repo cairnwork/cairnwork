@@ -355,10 +355,21 @@ def test_existing_trusted_dir_without_table_only_guards_fixed_paths(tmp_path: Pa
     assert invoke(repo, trusted, unrelated, head)[0] == 1
 
 
-@pytest.mark.parametrize("path", ["tests/pra1353_gate.py", "tests/pra1353_seal.py"])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "tests/pra1353_gate.py",
+        "tests/pra1353_seal.py",
+        ".github/workflows/ci.yml",
+        ".github/workflows/pin-guard-trusted.yml",
+        "scripts/ci/pin_guard.py",
+        "scripts/ci/pin_guard_status.py",
+    ],
+)
 def test_1432_gate_edit_without_pin_table_change_is_unapproved(tmp_path: Path, path: str) -> None:
     repo, trusted, base = setup_repo(tmp_path, with_table=False)
     trusted.mkdir()
+    (repo / path).parent.mkdir(parents=True, exist_ok=True)
     (repo / path).write_text("def main() -> int:\n    return run_witness()\n")
     base = commit(repo, "gate")
     (repo / path).write_text("def main() -> int:\n    return 0\n")
