@@ -47,20 +47,6 @@ INHERITED = {
         [f"t.py::{c}::test_keep" for c in ("TestA", "TestB", "TestC")],
         {f"t.py::{c}::test_x" for c in ("TestA", "TestB", "TestC")},
     ),
-    "T6": (
-        "class Base:\n" + X + KEEP + "class TestB(Base):\n    pass\nclass TestC(Base):\n    pass\n",
-        "class Base:\n" + KEEP + "class TestB(Base):\n    pass\nclass TestC(Base):\n    pass\n",
-        [f"t.py::{c}::{n}" for c in ("TestB", "TestC") for n in ("test_x", "test_keep")],
-        [f"t.py::{c}::test_keep" for c in ("TestB", "TestC")],
-        {f"t.py::{c}::test_x" for c in ("TestB", "TestC")},
-    ),
-    "T7": (
-        "class Base:\n" + X + KEEP + "class TestB(Base):\n    pass\n",
-        "class Base:\n" + KEEP + "class TestB(Base):\n    pass\n",
-        ["t.py::TestB::test_x", "t.py::TestB::test_keep"],
-        ["t.py::TestB::test_keep"],
-        {"t.py::TestB::test_x"},
-    ),
 }
 
 
@@ -68,6 +54,33 @@ INHERITED = {
 def test_inherited_deletion_is_removed(case):
     base, test, base_ids, test_ids, expected = INHERITED[case]
     assert _split(base, test, base_ids, test_ids) == (expected, set())
+
+
+@pytest.mark.parametrize(
+    "base,test,base_ids,test_ids,expected",
+    [
+        (
+            "class Base:\n" + X + KEEP + "class TestB(Base):\n    pass\n"
+            "class TestC(Base):\n    pass\n",
+            "class Base:\n" + KEEP + "class TestB(Base):\n    pass\nclass TestC(Base):\n    pass\n",
+            [f"t.py::{c}::{n}" for c in ("TestB", "TestC") for n in ("test_x", "test_keep")],
+            [f"t.py::{c}::test_keep" for c in ("TestB", "TestC")],
+            {f"t.py::{c}::test_x" for c in ("TestB", "TestC")},
+        ),
+        (
+            "class Base:\n" + X + KEEP + "class TestB(Base):\n    pass\n",
+            "class Base:\n" + KEEP + "class TestB(Base):\n    pass\n",
+            ["t.py::TestB::test_x", "t.py::TestB::test_keep"],
+            ["t.py::TestB::test_keep"],
+            {"t.py::TestB::test_x"},
+        ),
+    ],
+    ids=["T6-non-test-base", "T7-non-test-base"],
+)
+def test_non_test_base_is_conservatively_dropped(base, test, base_ids, test_ids, expected):
+    removed, dropped = _split(base, test, base_ids, test_ids)
+    assert removed == set()
+    assert dropped == expected
 
 
 # These ids are pytest --collect-only results from the #1296 counterexamples.
@@ -348,5 +361,7 @@ def test_two_detached_subclasses_with_a_shadowed_origin_stay_dropped():
     ],
     ids=["P2-mixin", "P4-deleted-and-detached"],
 )
-def test_deleted_origin_without_a_kept_copy_is_removed(base, test):
-    assert _split(base, test, B_IDS, T_IDS) == ({"t.py::TestB::test_x"}, set())
+def test_deleted_origin_without_a_kept_copy_requires_test_class_base(base, test):
+    removed, dropped = _split(base, test, B_IDS, T_IDS)
+    assert removed == set()
+    assert dropped == {"t.py::TestB::test_x"}

@@ -91,19 +91,22 @@ def _payload(test):
 
 PASSING_MODULES = {
     "honest": HONEST,
-    "pytestmark": "import pytest\npytestmark = pytest.mark.slow\n" + HONEST,
     "parametrize": "import pytest\nclass TestA:\n"
     "    @pytest.mark.parametrize('a', [1, 2])\n"
     "    def test_keep(self, a):\n        assert a\n"
     "class TestB(TestA):\n    pass\n",
+    "constants": "N = 3\n" + HONEST.replace("class TestA:", "class TestA:\n    SIZE = 4"),
+    "docstrings": '"""module docs"""\n'
+    + HONEST.replace("class TestA:", 'class TestA:\n    """class docs"""'),
+}
+
+BLOCKED_GRAMMAR_MODULES = {
+    "pytestmark": "import pytest\npytestmark = pytest.mark.slow\n" + HONEST,
     "fixture_staticmethod": "import pytest\nclass TestA:\n"
     "    @pytest.fixture\n    def fixture(self):\n        return 1\n"
     "    @staticmethod\n    def helper():\n        return 1\n"
     "class TestB(TestA):\n    pass\n",
     "helper": "def helper():\n    return 1\n" + HONEST,
-    "constants": "N = 3\n" + HONEST.replace("class TestA:", "class TestA:\n    SIZE = 4"),
-    "docstrings": '"""module docs"""\n'
-    + HONEST.replace("class TestA:", 'class TestA:\n    """class docs"""'),
     "builtin_annotation": "class TestA:\n"
     "    def test_keep(self, tmp_path: int):\n        assert tmp_path\n"
     "class TestB(TestA):\n    pass\n",
@@ -156,6 +159,14 @@ def test_simple_inherited_deletion_remains_removed(source):
     assert NODE in result["removed"]
 
 
+@pytest.mark.parametrize(
+    "source", BLOCKED_GRAMMAR_MODULES.values(), ids=BLOCKED_GRAMMAR_MODULES.keys()
+)
+def test_closed_grammar_false_red_shapes_stay_dropped(source):
+    result = classify_payload(_payload(source))
+    assert NODE in result["dropped"] and NODE not in result["removed"]
+
+
 def test_honest_inherited_deletion_with_real_collect_only_record(tmp_path):
     side = _side(tmp_path, HONEST, real_fact=True)
     assert NODE in side.removed
@@ -164,14 +175,9 @@ def test_honest_inherited_deletion_with_real_collect_only_record(tmp_path):
 @pytest.mark.parametrize(
     "source",
     [
-        "import pytest\npytestmark = pytest.mark.slow\n" + HONEST,
         "import pytest\nclass TestA:\n"
         "    @pytest.mark.parametrize('a', [1, 2])\n"
         "    def test_keep(self, a):\n        assert a\n"
-        "class TestB(TestA):\n    pass\n",
-        "import pytest\nclass TestA:\n"
-        "    @pytest.fixture\n    def fixture(self):\n        return 1\n"
-        "    @staticmethod\n    def helper():\n        return 1\n"
         "class TestB(TestA):\n    pass\n",
     ],
 )

@@ -136,7 +136,9 @@ def test_inherited_honest_deletion_passes(base, test):
         "exposed": [],
         "sources": {"base": {"t.py": base}, "test": {"t.py": test}},
     }
-    assert set(classify_payload(payload)["removed"]) == set(payload["base_ids"])
+    # T7: a non-Test* base is outside the closed grammar (known conservative false red)
+    expected = set(payload["base_ids"]) if "class TestA" in base else set()
+    assert set(classify_payload(payload)["removed"]) == expected
 
 
 @pytest.mark.parametrize(
@@ -155,7 +157,7 @@ def test_inherited_honest_deletion_passes(base, test):
             "class Box: pass\nclass TestA:\n    def test_keep(self, monkeypatch):\n"
             "        monkeypatch.setattr(Box, 'value', 1, raising=False)\n"
             "class TestB(TestA): pass\n",
-            "removed",
+            "dropped",
         ),
     ],
     ids=["re-compile", "dict-read", "monkeypatch-setattr"],
@@ -170,7 +172,7 @@ def test_honest_runtime_patterns_do_not_block_deletion(source, expected):
         "exposed": [],
         "sources": {"base": {"t.py": base}, "test": {"t.py": source}},
     }
-    # the allowlist drops a module-level call (known conservative false red)
+    # the closed grammar drops a module-level call or helper class (known conservative false red)
     side = classify_payload(payload)
     assert set(side["removed"]) == (
         {"t.py::TestA::test_x", "t.py::TestB::test_x"}
@@ -261,6 +263,6 @@ def test_local_code_run_at_import_keeps_inherited_id_dropped(prefix):
     ids=["nothing", "helper-only-used-in-bodies", "imported-call", "class-reference"],
 )
 def test_no_local_code_at_import_still_removes_inherited_id(prefix):
-    # the allowlist drops a module-level call or non-literal value (known conservative false red)
-    verdict = "dropped" if "(" in prefix.split("def ")[0] or "Helper." in prefix else "removed"
+    # the closed grammar drops any helper def, call or class (known conservative false red)
+    verdict = "dropped" if prefix else "removed"
     assert "t.py::TestB::test_x" in _inherited_deletion(prefix + KEPT_SRC, [])[verdict]
