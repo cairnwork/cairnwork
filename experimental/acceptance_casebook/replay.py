@@ -93,6 +93,8 @@ def _run_one(
     if not isinstance(value, dict):
         return "UNREPLAYABLE", "UNREADABLE_OUTPUT", 1, None
     code, verdict = value.get("exit_code"), value.get("verdict")
+    if type(code) is not int:  # bool, float, str or None is never a real exit code
+        return "UNREPLAYABLE", "NO_VERDICT", 1, None
     if verdict == "VERIFIED" and code == 0:
         mapped = "accepted"
     elif verdict == "FAILED" and code == 0:

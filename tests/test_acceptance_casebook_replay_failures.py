@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
 from test_acceptance_casebook_replay import _args, _confirmed
 
 from experimental.acceptance_casebook import replay
@@ -49,3 +50,28 @@ def test_ac4e_report_rejects_tampering_and_incomplete_run(tmp_path: Path):
     assert replay.report(path) == "INCOMPLETE_RUN"
     path.write_text(path.read_text().replace("result", "edited"))
     assert replay.report(path) == "REPLAY_NOT_APPEND_ONLY"
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ({"exit_code": False, "verdict": "VERIFIED"}, "UNREPLAYABLE"),
+        ({"exit_code": False, "verdict": "FAILED"}, "UNREPLAYABLE"),
+        ({"exit_code": 0.0, "verdict": "VERIFIED"}, "UNREPLAYABLE"),
+        ({"exit_code": "0", "verdict": "VERIFIED"}, "UNREPLAYABLE"),
+        ({"exit_code": None, "verdict": "FAILED"}, "UNREPLAYABLE"),
+        ({"exit_code": "x", "verdict": "REFUSED"}, "UNREPLAYABLE"),
+        ({"exit_code": True, "verdict": "REFUSED"}, "UNREPLAYABLE"),
+        ({"exit_code": 0, "verdict": "VERIFIED"}, "accepted"),
+        ({"exit_code": 0, "verdict": "FAILED"}, "refused"),
+    ],
+)
+def test_only_an_integer_exit_code_maps_to_a_verdict(monkeypatch, value, expected):
+    from experimental.acceptance_casebook import replay
+
+    monkeypatch.setattr(replay, "RUNNER", lambda *_: value)
+    mapped, reason, code, _ = replay._run_one({"kind": "accepted_bad"}, {}, 0)
+    assert mapped == expected
+    assert type(code) is int
+    if expected == "UNREPLAYABLE":
+        assert reason
