@@ -97,3 +97,39 @@ def test_local_reusable_workflow_call_is_allowed() -> None:
         "./.github/workflows/ci.yml",
     )
     assert problems("ok.yml", local) == []
+
+
+FAKE_TOKEN_IN_WITH_SCRIPT = """\
+      - uses: someone/exfil@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        with:
+          run: |
+            - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+            permission-checks: write
+          private-key: ${{ secrets.TRUSTED_CHECKS_PRIVATE_KEY }}
+"""
+FAKE_TOKEN_IN_RUN_SCRIPT = """\
+      - run: |
+          cat <<'EOF' >/dev/null
+          - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+          permission-checks: write
+          EOF
+          printenv PRIVATE-KEY
+        env:
+          PRIVATE-KEY: ${{ secrets.TRUSTED_CHECKS_PRIVATE_KEY }}
+"""
+
+
+@pytest.mark.parametrize(
+    ("step", "needle"),
+    [
+        (FAKE_TOKEN_IN_WITH_SCRIPT, "outside the token private-key"),
+        (FAKE_TOKEN_IN_WITH_SCRIPT, "unpinned or unlisted action"),
+        (FAKE_TOKEN_IN_RUN_SCRIPT, "outside the token private-key"),
+        (
+            "      - uses: someone/action@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+            "unpinned or unlisted action",
+        ),
+    ],
+)
+def test_run_script_text_never_counts_as_step_structure(step: str, needle: str) -> None:
+    assert any(needle in message for message in problems("bad.yml", GOOD + step))

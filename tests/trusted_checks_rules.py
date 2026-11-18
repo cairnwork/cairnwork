@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from tests.trusted_checks_syntax import _commentless, strict_syntax_problems
+from tests.trusted_checks_syntax import _commentless, strict_syntax_problems, structural_text
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
@@ -195,11 +195,13 @@ def _parent_index(lines: list[str], index: int) -> int | None:
     return None
 
 
-def _trusted_job_problems(name: str, job_name: str, job: str) -> list[str]:
+def _trusted_job_problems(name: str, job_name: str, job: str, shape: str) -> list[str]:
+    """Key and action rules for one trusted job; ``shape`` is its structural view."""
     found: list[str] = []
-    lines = job.splitlines()
+    lines = shape.splitlines()
+    raw_lines = job.splitlines()
     for index, line in enumerate(lines):
-        if "TRUSTED_CHECKS_PRIVATE_KEY" not in line.upper():
+        if "TRUSTED_CHECKS_PRIVATE_KEY" not in raw_lines[index].upper():
             continue
         step_start = next(
             (pos for pos in range(index, -1, -1) if re.match(r"^\s*-\s", lines[pos])),
@@ -232,18 +234,19 @@ def _trusted_job_problems(name: str, job_name: str, job: str) -> list[str]:
             and step_start is not None
             and _parent_index(lines, parent) == step_start
         )
-        if not token_step or not allowed_key or not under_with:
+        in_script = line != raw_lines[index]
+        if in_script or not token_step or not allowed_key or not under_with:
             found.append(
                 f"{name}:{job_name}: TRUSTED_CHECKS_PRIVATE_KEY outside the token private-key input"
             )
     for line in lines:
         use = re.match(r"^\s*(?:-\s*)?uses:\s*(\S+)\s*$", _commentless(line), re.I)
         if use and not re.fullmatch(
-            r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*@[0-9a-fA-F]{40}",
+            r"actions/(?:checkout|create-github-app-token)@[0-9a-fA-F]{40}",
             use.group(1),
         ):
             found.append(
-                f"{name}:{job_name}: trusted environment job uses an unpinned or local action"
+                f"{name}:{job_name}: trusted environment job uses an unpinned or unlisted action"
             )
     return found
 
@@ -282,16 +285,21 @@ def problems(name: str, text: str) -> list[str]:
         found.append(f"{name}: references {ENV_NAME} but has triggers {sorted(extra)}")
     if re.search(r"&[A-Za-z0-9_-]+|\*[A-Za-z0-9_-]+|(?:^|\s)<<\s*:", text):
         found.append(f"{name}: YAML anchors or aliases may hide trusted token configuration")
+    shapes = jobs(structural_text(text))
     for job_name, job in jobs(text).items():
         in_env = uses_trusted_env(job)
         if "TRUSTED_CHECKS_" in job and not in_env:
             found.append(f"{name}:{job_name}: uses TRUSTED_CHECKS_* outside the environment")
         if not in_env:
             continue
-        found.extend(_trusted_job_problems(name, job_name, job))
+        shape = shapes.get(job_name)
+        if shape is None or len(shape.splitlines()) != len(job.splitlines()):
+            found.append(f"{name}:{job_name}: job structure is ambiguous around run blocks")
+            continue
+        found.extend(_trusted_job_problems(name, job_name, job, shape))
         if re.search(r"^\s*(ref|repository):", job, re.M):
             found.append(f"{name}:{job_name}: environment job checks out PR content")
-        if _is_token_reference(job) and not APP_TOKEN_ACTION.search(job):
+        if _is_token_reference(job) and not APP_TOKEN_ACTION.search(shape):
             found.append(f"{name}:{job_name}: create-github-app-token is not pinned to a SHA")
         if _is_token_reference(job) and re.search(
             r"(?:^|\n)\s*(?:['\"]?INPUT_[A-Za-z0-9_-]+['\"]?)\s*:", job
@@ -312,7 +320,7 @@ def problems(name: str, text: str) -> list[str]:
         if job_wide and job_wide != ALLOWED_APP_PERMISSIONS:
             found.append(f"{name}:{job_name}: job-wide App token permissions {sorted(job_wide)}")
         # New rule, added: each token step on its own is non-empty and exactly the allow-list.
-        for perms in app_token_permissions(job):
+        for perms in app_token_permissions(shape):
             if perms != ALLOWED_APP_PERMISSIONS:
                 found.append(f"{name}:{job_name}: App token permissions {sorted(perms)}")
     return found

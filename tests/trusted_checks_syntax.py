@@ -78,8 +78,14 @@ def _value_problems(
     return found, run_indent
 
 
-def strict_syntax_problems(name: str, text: str, *, subject: bool = True) -> list[str]:
-    """Reject YAML forms outside the deliberately small trusted-workflow subset."""
+def strict_syntax_problems(
+    name: str, text: str, *, subject: bool = True, content: set[int] | None = None
+) -> list[str]:
+    """Reject YAML forms outside the deliberately small trusted-workflow subset.
+
+    When ``content`` is given, the zero-based numbers of run block-scalar content lines are
+    added to it: those lines are opaque text, not workflow structure.
+    """
     found: list[str] = []
     run_indent: int | None = None
     previous_indent: int | None = None
@@ -99,6 +105,8 @@ def strict_syntax_problems(name: str, text: str, *, subject: bool = True) -> lis
         first_structural = False
         indent = len(line) - len(line.lstrip(" "))
         if run_indent is not None and indent > run_indent:
+            if content is not None:
+                content.add(number - 1)
             continue
         run_indent = None
         if re.search(r"\s+#", line):
@@ -145,3 +153,17 @@ def strict_syntax_problems(name: str, text: str, *, subject: bool = True) -> lis
             or (match and line[indent:].startswith("- "))
         )
     return found
+
+
+def structural_text(text: str) -> str:
+    """The text line for line, with run block-scalar content replaced by comment placeholders.
+
+    Rules that read step structure use this view, so text inside a run script can never pose as
+    a step, a uses line, or an input.
+    """
+    content: set[int] = set()
+    strict_syntax_problems("", text, content=content)
+    return "\n".join(
+        " " * (len(line) - len(line.lstrip(" "))) + "#" if index in content else line
+        for index, line in enumerate(text.splitlines())
+    )
