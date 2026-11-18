@@ -20,6 +20,8 @@ ENV_NAME = "trusted-checks"
 # workflows restrict to main). pull_request, push, workflow_dispatch, schedule etc. are excluded.
 MAIN_ONLY_TRIGGERS = {"pull_request_target", "issue_comment", "workflow_run"}
 APP_TOKEN_ACTION = re.compile(r"uses:\s*actions/create-github-app-token@([0-9a-f]{40})\s")
+# The App token may carry exactly this and nothing else (non-empty: an empty set inherits all).
+ALLOWED_APP_PERMISSIONS = {("permission-checks", "write")}
 EXPECTED = {
     "pyright-trusted.yml": "pyright (trusted)",
     "pin-guard-trusted.yml": "pin guard (trusted)",
@@ -75,6 +77,24 @@ def uses_trusted_env(job: str) -> bool:
     return bool(re.search(rf"^\s*environment:\s*(name:\s*)?['\"]?{ENV_NAME}['\"]?\s*$", job, re.M))
 
 
+def app_token_permissions(job: str) -> list[set[tuple[str, str]]]:
+    """The permission-* inputs of every create-github-app-token step, one set per step."""
+    lines = job.splitlines()
+    result: list[set[tuple[str, str]]] = []
+    for index, line in enumerate(lines):
+        if "create-github-app-token" not in line or line.lstrip().startswith("#"):
+            continue
+        dash = line.find("- ")
+        indent = dash if dash >= 0 and line[:dash].strip() == "" else None
+        body = [line]
+        for follow in lines[index + 1 :]:
+            if indent is not None and re.match(rf"^ {{{indent}}}- ", follow):
+                break
+            body.append(follow)
+        result.append(set(re.findall(r"^\s*(permission-[a-z-]+):\s*(\S+)", "\n".join(body), re.M)))
+    return result
+
+
 def problems(name: str, text: str) -> list[str]:
     """Every rule violation in one workflow file, as short messages."""
     found: list[str] = []
@@ -94,9 +114,9 @@ def problems(name: str, text: str) -> list[str]:
             found.append(f"{name}:{job_name}: environment job checks out PR content")
         if "create-github-app-token" in job and not APP_TOKEN_ACTION.search(job):
             found.append(f"{name}:{job_name}: create-github-app-token is not pinned to a SHA")
-        perms = set(re.findall(r"^\s*(permission-[a-z-]+):\s*(\S+)", job, re.M))
-        if perms and perms != {("permission-checks", "write")}:
-            found.append(f"{name}:{job_name}: App token permissions {sorted(perms)}")
+        for perms in app_token_permissions(job):
+            if perms != ALLOWED_APP_PERMISSIONS:
+                found.append(f"{name}:{job_name}: App token permissions {sorted(perms)}")
     return found
 
 
@@ -121,6 +141,8 @@ def test_trusted_workflow_posts_same_name_check_run_from_publish_only(name: str)
     assert APP_TOKEN_ACTION.search(publish)
     assert "client-id: ${{ vars.TRUSTED_CHECKS_CLIENT_ID }}" in publish
     assert "private-key: ${{ secrets.TRUSTED_CHECKS_PRIVATE_KEY }}" in publish
+    # Without explicit permission-* inputs the token action inherits every installed permission.
+    assert app_token_permissions(publish) == [{("permission-checks", "write")}]
     assert "GH_TOKEN: ${{ steps.app-token.outputs.token }}" in publish
     context = EXPECTED[name]
     # The old commit status stays until the ruleset is switched; then a separate PR drops it.
@@ -185,6 +207,15 @@ def test_checker_accepts_the_reference_shape() -> None:
             "checks out PR content",
         ),
         (GOOD.replace("@64ab729a6294000f5aa4a4bc0b73d1f32bc45510", "@v3"), "not pinned"),
+        (GOOD.replace("          permission-checks: write\n", ""), "permissions"),
+        (GOOD.replace("permission-checks: write", "permission-statuses: write"), "permissions"),
+        (GOOD.replace("permission-checks: write", "permission-checks: read"), "permissions"),
+        (
+            GOOD
+            + "      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc4"
+            "5510\n        with:\n          private-key: x\n",
+            "permissions",
+        ),
         (
             GOOD.replace(
                 "permission-checks: write",
