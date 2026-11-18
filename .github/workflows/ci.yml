@@ -36,8 +36,17 @@ jobs:
       - name: Trusted #1353 gate venv from the base lock
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+          BASE_REF: ${{ github.base_ref }}
+          EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
+          # A PR picks its own base branch and this workflow does not rerun when the base changes,
+          # so only main's lock is trusted. The private, empty uv cache keeps a cache that an
+          # earlier run's PR code could have written out of the trusted venv.
+          case "$EVENT:$BASE_REF:$GITHUB_REF" in
+            pull_request:main:* | push::refs/heads/main) ;;
+            *) echo "the #1353 gate trusts only main's lock"; exit 1 ;;
+          esac
           [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "base sha is not 40-hex"; exit 1; }
           git fetch --no-tags --depth=1 origin -- "$BASE_SHA"
           trusted="$RUNNER_TEMP/pra1353-trusted"
@@ -45,7 +54,7 @@ jobs:
           git cat-file blob "${BASE_SHA}:uv.lock" > "$trusted/uv.lock"
           git cat-file blob "${BASE_SHA}:pyproject.toml" > "$trusted/pyproject.toml"
           cd "$trusted"
-          UV_PROJECT_ENVIRONMENT="$trusted/.venv" uv sync --locked --no-install-project
+          UV_PROJECT_ENVIRONMENT="$trusted/.venv" uv sync --no-cache --locked --no-install-project
       - name: Sealed #1353 witness gate
         run: |
           set -euo pipefail
@@ -85,8 +94,17 @@ jobs:
       - name: Trusted #1353 gate venv from the base lock
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+          BASE_REF: ${{ github.base_ref }}
+          EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
+          # A PR picks its own base branch and this workflow does not rerun when the base changes,
+          # so only main's lock is trusted. The private, empty uv cache keeps a cache that an
+          # earlier run's PR code could have written out of the trusted venv.
+          case "$EVENT:$BASE_REF:$GITHUB_REF" in
+            pull_request:main:* | push::refs/heads/main) ;;
+            *) echo "the #1353 gate trusts only main's lock"; exit 1 ;;
+          esac
           [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "base sha is not 40-hex"; exit 1; }
           git fetch --no-tags --depth=1 origin -- "$BASE_SHA"
           trusted="$RUNNER_TEMP/pra1353-trusted"
@@ -94,7 +112,7 @@ jobs:
           git cat-file blob "${BASE_SHA}:uv.lock" > "$trusted/uv.lock"
           git cat-file blob "${BASE_SHA}:pyproject.toml" > "$trusted/pyproject.toml"
           cd "$trusted"
-          UV_PROJECT_ENVIRONMENT="$trusted/.venv" uv sync --locked --no-install-project
+          UV_PROJECT_ENVIRONMENT="$trusted/.venv" uv sync --no-cache --locked --no-install-project
       - name: Sealed #1353 witness gate
         run: |
           set -euo pipefail

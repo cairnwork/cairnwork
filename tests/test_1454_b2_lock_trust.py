@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -159,8 +160,10 @@ def test_ci_runs_the_gate_from_the_trusted_venv_before_any_pr_code(job: str):
         "github.event.pull_request.base.sha || github.sha",
         '[[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]',
         'origin -- "$BASE_SHA"',
-        "uv sync --locked --no-install-project",
+        "uv sync --no-cache --locked --no-install-project",
         'cd "$trusted"',
+        "BASE_REF: ${{ github.base_ref }}",
+        "EVENT: ${{ github.event_name }}",
     ):
         assert needle in build[0], needle
     for earlier in steps[: gate[0]]:
@@ -230,3 +233,26 @@ def test_ci_mode_without_a_base_lock_fails_closed(tmp_path: Path):
     )
     assert result.returncode != 0
     assert "UNTRUSTED_DEPENDENCY" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("event", "base_ref", "ref", "rc"),
+    [
+        ("pull_request", "main", "refs/pull/1/merge", 0),
+        ("push", "", "refs/heads/main", 0),
+        ("pull_request", "attacker-branch", "refs/pull/1/merge", 1),
+        ("pull_request", "", "refs/pull/1/merge", 1),
+        ("push", "", "refs/heads/other", 1),
+        ("workflow_dispatch", "main", "refs/heads/main", 1),
+    ],
+)
+def test_trusted_venv_step_refuses_a_base_other_than_main(event, base_ref, ref, rc):
+    steps = _job((ROOT / ".github/workflows/ci.yml").read_text(), "test")
+    build = next(s for s in steps if "pra1353-trusted" in s and "uv sync" in s)
+    script = textwrap.dedent(build.split("run: |\n", 1)[1])
+    guard = script.split('[[ "$BASE_SHA"', 1)[0]
+    env = {"EVENT": event, "BASE_REF": base_ref, "GITHUB_REF": ref, "PATH": "/usr/bin:/bin"}
+    done = subprocess.run(
+        ["bash", "-c", guard], env=env, capture_output=True, text=True, timeout=30
+    )
+    assert done.returncode == rc, done.stdout + done.stderr
