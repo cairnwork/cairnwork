@@ -29,7 +29,7 @@ PINS = {
     "tests/pra1353_receipt.py": "d3121468ba6b46d12c466c1d79bd5bb49e832262a9fe36b49a36ff332bb054ae",
     "tests/pra1353_recipes.py": "87b8cf6e1d3c3618bc797ea9511b347e8d413dd752197ab5b368663efa2440b6",
     "tests/pra1353_runner.py": "e5c27294f78a4ad3a934cca4c502b1669291fcc9330340ca110574c05bfc1ba9",
-    "tests/pra1353_gate.py": "ce20dfb5ec2693ad5a7e74c303958ade96d5b4bd912f29e5cec65fca80e093ff",
+    "tests/pra1353_gate.py": "be29a9d4899545b03d962bc27af71596f8cbcb641739d3d7d869c7d1696f9937",
     "tests/pra1353_seal.py": "7c8edc4059b03147272532e859c39b267bdde8a3376670ac2f944169d9405bab",
     "tests/xdist_groups.py": "08f332bef3401fd38390db53a60a158ebb78686d1ec33a7af1c9d4337692e673",
     "tests/test_1039_1353_recipes.py": "a11e647deef2d050dc75506595d9a889a08b70e84287153da420f56aa9f4a4d5",

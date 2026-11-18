@@ -172,6 +172,8 @@ def test_variant_4_tracked_symlink_source_is_rejected(target: bytes, tmp_path: P
     repo = _repo(tmp_path / "repo", {**_base(), "src/cairnwork/link.py": ("120000", target)})
     with pytest.raises(ValueError, match="invalid tracked source entry"):
         tracked_py_blobs(repo, prefix="src/")
+    with pytest.raises(ValueError, match="unapproved source mode"):
+        _load_gate()._source_blobs(repo)
 
 
 @pytest.mark.parametrize(

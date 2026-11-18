@@ -249,7 +249,7 @@ def _run_sealed(sealed: Path, repo: Path) -> int:
         str(purelib),
         str(platlib),
     ]
-    code = "import sys; sys.path[:]=__import__('json').loads(__import__('os').environ['PRA1353_PATHS']); import pytest; raise SystemExit(pytest.main(['-c','/dev/null','--rootdir='+__import__('os').environ['PRA1353_SEALED'],'-o','confcutdir='+__import__('os').environ['PRA1353_SEALED']+'/tests','-p','no:cacheprovider','--noconftest',__import__('os').environ['PRA1353_WITNESS']]))"
+    code = "import sys; sys.path[:]=__import__('json').loads(__import__('os').environ['PRA1353_PATHS']); import pytest; raise SystemExit(pytest.main(['-c','/dev/null','--rootdir='+__import__('os').environ['PRA1353_SEALED'],'--confcutdir='+__import__('os').environ['PRA1353_SEALED']+'/tests','-p','no:cacheprovider','--noconftest',__import__('os').environ['PRA1353_WITNESS']]))"
     env = {
         "PATH": "/usr/bin:/bin",
         "HOME": str(sealed.parent),

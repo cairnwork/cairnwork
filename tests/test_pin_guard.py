@@ -277,6 +277,8 @@ def test_edited_or_timestamp_missing_approval_is_ignored(tmp_path: Path, missing
         "tests/_w1353_allow_pins.py",
         "tests/test_1039_1353_witnesses.py",
         "tests/test_1039_1353_pin_completeness.py",
+        "tests/pra1353_gate.py",
+        "tests/pra1353_seal.py",
     ],
 )
 def test_pure_rename_is_guarded_as_old_path(tmp_path: Path, path: str) -> None:
@@ -351,3 +353,14 @@ def test_existing_trusted_dir_without_table_only_guards_fixed_paths(tmp_path: Pa
     (repo / "tests/test_1039_1353_witnesses.py").write_text("changed\n")
     head = commit(repo, "fixed path edit")
     assert invoke(repo, trusted, unrelated, head)[0] == 1
+
+
+@pytest.mark.parametrize("path", ["tests/pra1353_gate.py", "tests/pra1353_seal.py"])
+def test_1432_gate_edit_without_pin_table_change_is_unapproved(tmp_path: Path, path: str) -> None:
+    repo, trusted, base = setup_repo(tmp_path, with_table=False)
+    trusted.mkdir()
+    (repo / path).write_text("def main() -> int:\n    return run_witness()\n")
+    base = commit(repo, "gate")
+    (repo / path).write_text("def main() -> int:\n    return 0\n")
+    head = commit(repo, "gate returns early")
+    assert invoke(repo, trusted, base, head) == (1, f"PIN_GUARD PIN_CHANGE_UNAPPROVED {path}")
