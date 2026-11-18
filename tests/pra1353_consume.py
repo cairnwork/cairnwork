@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import _imp
 import hashlib
+import importlib.machinery
 import json
 import os
 import subprocess
@@ -53,6 +54,7 @@ _THIRD_PARTY_TOP_LEVELS = {
     "pygments",
     "pytest",
 }
+_IMPORTABLE_SOURCE_SUFFIXES = set(importlib.machinery.all_suffixes()) | {".dylib"}
 
 
 def check_pins(pins: dict[str, str]) -> None:
@@ -155,8 +157,7 @@ def launch(
             _validate_module_origins(
                 report.get("modules"), pins, source_pins, sealed, roots, imports
             )
-            if any(sealed.rglob("*.pyc")):
-                raise ValueError("sealed runner wrote bytecode")
+            _reject_sealed_bytecode(sealed)
         finally:
             _restore_permissions(sealed)
     return report
@@ -178,7 +179,21 @@ def _tracked_source_bytes() -> dict[str, bytes]:
         },
     )
     names = [part.decode() for part in done.stdout.split(b"\0") if part]
-    return {name: (ROOT / name).read_bytes() for name in names}
+    source_names = []
+    for name in names:
+        path = Path(name)
+        if "__pycache__" in path.parts or (
+            path.suffix in _IMPORTABLE_SOURCE_SUFFIXES and path.suffix != ".py"
+        ):
+            raise ValueError(f"tracked importable code under src: {_neutralize(name)}")
+        if path.suffix == ".py":
+            source_names.append(name)
+    return {name: (ROOT / name).read_bytes() for name in source_names}
+
+
+def _reject_sealed_bytecode(sealed: Path) -> None:
+    if any(sealed.rglob("*.pyc")):
+        raise ValueError("sealed runner wrote bytecode")
 
 
 def _make_read_only(root: Path) -> None:
@@ -217,11 +232,11 @@ def _reported_path(value: str, name: str, field: str) -> Path:
         ) from None
 
 
-def _is_interpreter_module(name: str, origin: str) -> bool:
+def _is_interpreter_module(name: str, origin: str, loader: object) -> bool:
     if origin == "built-in":
-        return name in sys.builtin_module_names
+        return loader == "BuiltinImporter" and name in sys.builtin_module_names
     if origin == "frozen":
-        return _imp.is_frozen(name)
+        return loader == "FrozenImporter" and _imp.is_frozen(name)
     return False
 
 
@@ -261,7 +276,7 @@ def _validate_module_origins(
         expected = pinned_names.get(name)
         if filename is None:
             origin = item.get("origin")
-            if isinstance(origin, str) and _is_interpreter_module(name, origin):
+            if isinstance(origin, str) and _is_interpreter_module(name, origin, loader):
                 continue
             # cryptography's in-memory OpenSSL bridge is paired with its audited CFFI backend.
             if name == "_openssl" and origin is None and loader == "NoneType":

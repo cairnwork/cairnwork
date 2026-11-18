@@ -22,13 +22,13 @@ PINS = {
     "tests/attest/test_verify.py": "156795f6ee20d46c692b4a27e15ab36525b7ab7fce945722b39a3067c68a9b83",
     "tests/conftest.py": "a6f527a6ae989b47ef7cd10b270206d7e8c0e391064eac8eef03f9f3693219fd",
     "tests/pra1353_c10.py": "9b0a046af21c817ece0100bdd039945b4e5a1549cfb3e5b3c4e5a8ebedf503c3",
-    "tests/pra1353_consume.py": "81d486845db9a768ebdc5bfe579e4d036e863bb3d25389c15b6d82d87e20d95a",
+    "tests/pra1353_consume.py": "1ec1fc35b17ce3e68b0588bbe4cd5725788343ac51446e5c4eed7a4e32b0a385",
     "tests/pra1353_derive.py": "3e301ec245fba896b12798554ccb8391f2facaf6409567772882aad7592d534e",
     "tests/pra1353_extra.py": "1ef6960689f633fe9dfa411572091f2bd99e1e0f2435798a9ebe37def50c6d52",
     "tests/pra1353_probe.py": "bd8b2d2f1abf5c65115e99d0f85f2008a1bd9bbe02912819770688b8e14d257b",
     "tests/pra1353_receipt.py": "d3121468ba6b46d12c466c1d79bd5bb49e832262a9fe36b49a36ff332bb054ae",
     "tests/pra1353_recipes.py": "87b8cf6e1d3c3618bc797ea9511b347e8d413dd752197ab5b368663efa2440b6",
-    "tests/pra1353_runner.py": "19b79e3f2ff17e3db5e3004e7ebf620ccb82d0b348c8408697bbd3a8dc124ed5",
+    "tests/pra1353_runner.py": "4e8bceb0bfc890307ff110d25b515c4b421a3bd0256100058675491610c21ac0",
     "tests/xdist_groups.py": "08f332bef3401fd38390db53a60a158ebb78686d1ec33a7af1c9d4337692e673",
 }
 

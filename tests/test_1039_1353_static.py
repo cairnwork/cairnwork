@@ -20,7 +20,7 @@ def _literal_observations(source):
             targets = node.targets
         elif isinstance(node, (ast.AnnAssign, ast.NamedExpr, ast.AugAssign)):
             targets = [node.target]
-        elif isinstance(node, ast.ImportFrom) and node.module == "_w1353_probe":
+        elif isinstance(node, ast.ImportFrom) and node.module in {"pra1353_probe", "_w1353_probe"}:
             row_names.update(
                 alias.asname or alias.name for alias in node.names if alias.name == "row"
             )
@@ -94,6 +94,7 @@ def _literal_observations(source):
         'row("C9", "t", "r", f"{\'PASS\'}", "x", "y")',
         'probe.row("C9", "t", "r", "PASS", "x", "y")',
         'from _w1353_probe import row as rec\nrec("C9", "t", "r", "PASS", "x", "y")',
+        'from pra1353_probe import row as emit\nemit("C9", "t", "r", {"status": "PASS"}, "x", "y")',
         'observed = "VER" + "IFIED"',
         'row("C9", "timeout", "...", "blackbox:add: VERIFICATION_INCOMPLETE: TIMEOUT", "x", "y")',
         'observed = "PASS"',

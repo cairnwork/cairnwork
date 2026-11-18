@@ -58,7 +58,13 @@ def test_runner_nonzero_exit_fails_consumer():
         consume.launch(PINS, run=_runner(code=2, error="boom"))
 
 
-@pytest.mark.parametrize("stdout", ["noise\n{}", "{}\nnoise"])
+@pytest.mark.parametrize(
+    "stdout",
+    [
+        "noise\n" + json.dumps(_report()),
+        json.dumps(_report()) + "\nnoise",
+    ],
+)
 def test_multi_line_stdout_fails_closed(stdout):
     with pytest.raises(ValueError):
         consume.decode_report(subprocess.CompletedProcess([], 0, stdout, ""))
@@ -230,16 +236,24 @@ def test_module_origin_audit_fails_closed(module, pins, roots):
 
 
 @pytest.mark.parametrize(
-    ("name", "origin"),
+    ("name", "origin", "loader"),
     [
-        ("evil_external_payload", "built-in"),
-        ("evil_external_payload", "frozen"),
-        ("json", "built-in"),
-        ("namespace_pkg", None),
+        ("evil_external_payload", "built-in", "NoneType"),
+        ("evil_external_payload", "frozen", "NoneType"),
+        ("evil_external_payload", "built-in", "BuiltinImporter"),
+        ("json", "built-in", "BuiltinImporter"),
+        ("sys", "built-in", "NoneType"),
+        ("sys", "built-in", "FrozenImporter"),
+        ("sys", "frozen", "FrozenImporter"),
+        ("_frozen_importlib", "frozen", "NoneType"),
+        ("_frozen_importlib", "frozen", "BuiltinImporter"),
+        ("namespace_pkg", None, "NoneType"),
     ],
 )
-def test_module_origin_audit_rejects_forged_or_fileless_origins(name: str, origin: Any):
-    module = {"name": name, "file": None, "origin": origin, "loader": "NoneType"}
+def test_module_origin_audit_rejects_forged_or_fileless_origins(
+    name: str, origin: Any, loader: str
+):
+    module = {"name": name, "file": None, "origin": origin, "loader": loader}
     with pytest.raises(ValueError, match="without file"):
         consume._validate_module_origins([module], {}, {}, Path("/sealed"), [], [])
 
@@ -251,10 +265,17 @@ def test_module_origin_audit_accepts_actual_builtins(name: str):
     consume._validate_module_origins([module], {}, {}, Path("/sealed"), [], [])
 
 
-@pytest.mark.parametrize("name", ["zipimport", "_frozen_importlib"])
-def test_module_origin_audit_accepts_actual_frozen_modules(name: str):
-    if not consume._imp.is_frozen(name):
-        pytest.skip(f"{name} is not frozen in this interpreter")
+def test_module_origin_audit_accepts_actual_frozen_module():
+    name = next(
+        (
+            module_name
+            for module_name, module in consume.sys.modules.items()
+            if consume._imp.is_frozen(module_name)
+            and getattr(getattr(module, "__spec__", None), "origin", None) == "frozen"
+        ),
+        None,
+    )
+    assert name is not None
     module = {"name": name, "file": None, "origin": "frozen", "loader": "FrozenImporter"}
     consume._validate_module_origins([module], {}, {}, Path("/sealed"), [], [])
 

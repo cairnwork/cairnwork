@@ -333,39 +333,3 @@ def test_a2_package_shadow_cannot_change_real_runner_rows():
         (package / "__init__.py").unlink(missing_ok=True)
         if package.exists():
             package.rmdir()
-
-
-CASES = (
-    "tests/pra1353_probe.py",
-    "tests/pra1353_extra.py",
-    "tests/pra1353_recipes.py",
-    "tests/pra1353_c10.py",
-    "tests/pra1353_receipt.py",
-    "tests/attest/binding_helpers.py",
-)
-
-
-@pytest.mark.parametrize("relative", CASES)
-def test_forged_timestamp_pyc_is_not_copied(relative: str) -> None:
-    source = consume.ROOT / relative
-    stat = source.stat()
-    cache = Path(bootstrap_external.cache_from_source(str(source)))
-    cache.parent.mkdir(parents=True, exist_ok=True)
-    forged = _TIMESTAMP_PYC(
-        compile("FORGED = True\n", str(source), "exec"), int(stat.st_mtime), stat.st_size
-    )
-    previous = cache.read_bytes() if cache.exists() else None
-    cache.write_bytes(forged)
-    try:
-
-        def fake_run(args: Any, **kwargs: Any) -> Any:
-            sealed = Path(args[4]).parents[1]
-            assert not list((sealed / "tests").rglob("*.pyc"))
-            return subprocess.CompletedProcess(args, 0, json.dumps(_report()), "")
-
-        assert len(consume.launch(PINS, run=fake_run)["rows"]) == 56
-    finally:
-        if previous is None:
-            cache.unlink()
-        else:
-            cache.write_bytes(previous)

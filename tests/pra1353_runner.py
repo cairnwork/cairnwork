@@ -49,12 +49,17 @@ def _bootstrap(import_roots):
             "name": name,
             "file": getattr(module, "__file__", None),
             "origin": getattr(getattr(module, "__spec__", None), "origin", None),
-            "loader": type(getattr(getattr(module, "__spec__", None), "loader", None)).__name__,
+            "loader": _loader_name(getattr(getattr(module, "__spec__", None), "loader", None)),
         }
         for name, module in sorted(sys.modules.items())
         if isinstance(module, types.ModuleType) and type(module).__name__ != "Lib"
     ]
     return {"rows": rebuilt, "modules": modules}
+
+
+def _loader_name(loader):
+    # Builtin and frozen specs carry the importer class itself, not an instance.
+    return loader.__name__ if isinstance(loader, type) else type(loader).__name__
 
 
 def main():
