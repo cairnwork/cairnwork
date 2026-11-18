@@ -18,13 +18,20 @@ import pytest
 
 FORBIDDEN = frozenset({"sys", "os", "builtins", "modules", "subprocess", "importlib"})
 REFLECTIVE_CALLS = frozenset({"getattr", "setattr", "delattr", "hasattr"})
-WITNESSES = ("pra1353_probe.py", "pra1353_extra.py", "pra1353_c10.py", "pra1353_receipt.py")
+WITNESSES = (
+    "pra1353_probe.py",
+    "pra1353_extra.py",
+    "pra1353_c10.py",
+    "pra1353_receipt.py",
+    "pra1353_launch.py",
+)
 # Every reviewed use, keyed by file, enclosing function and source text. A new use, or a
 # known one moved to another function, changes the count and fails the real-file test.
 KNOWN = Counter(
     {
-        ("pra1353_extra.py", "_c7", "verify_cli._run"): 1,
-        ("pra1353_extra.py", "extra_rows", "sys.modules"): 2,
+        ("pra1353_extra.py", "extra_rows", "sys.modules"): 1,
+        ("pra1353_launch.py", "_c7_unprotected", "verify_cli._run"): 1,
+        ("pra1353_launch.py", "_c8_rows", "sys.modules"): 1,
         ("pra1353_receipt.py", "_c8_mutations", "from cairnwork_attest.record import _digest"): 1,
     }
 )
@@ -140,15 +147,16 @@ def test_ordinary_module_use_is_not_a_finding(snippet):
     ("name", "old", "new"),
     [
         (
-            "pra1353_extra.py",
-            "        raw_result = verify_cli._run(",
+            "pra1353_launch.py",
+            '        value = verify_cli._run(Intake(Path("/no-such-intake")), namespace)',
             '        verify_cli.sys.modules["pra1353_probe"] = None\n'
-            "        raw_result = verify_cli._run(",
+            '        value = verify_cli._run(Intake(Path("/no-such-intake")), namespace)',
         ),
         (
-            "pra1353_extra.py",
-            "def _c6():\n",
-            "def _c6():\n    verify_cli = None\n    verify_cli._run\n",
+            "pra1353_launch.py",
+            "def _c8_rows(args: dict[str, Any]) -> dict[str, Any]:\n",
+            "def _c8_rows(args: dict[str, Any]) -> dict[str, Any]:\n"
+            "    verify_cli = None\n    verify_cli._run\n",
         ),
         ("pra1353_probe.py", "def row(", "sys.modules.pop('x', None)\n\n\ndef row("),
     ],

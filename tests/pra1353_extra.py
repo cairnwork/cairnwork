@@ -8,71 +8,33 @@ import sys
 from functools import cache
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from types import SimpleNamespace
 
+from pra1353_launch import judge, launch_route
 from pra1353_probe import blackbox_classification, declaration, repo, row, verify
 
 
 def _c6():
-    from cairnwork import blackbox, blackbox_judge
-    from cairnwork.blackbox_exec import BlackboxRun
-
     rows = []
     for name, value in (("true", True), ("zero", 0), ("empty", "")):
-        raw = json.dumps(
-            {"checks": {"add": {"file": "/co/calc.py", "cases": {"one": {"ok": value}}}}}
-        ).encode()
-        run = BlackboxRun(raw, 0, False, 0, (), (), Path("/tmp/run"), "/co", "p", True)
-        spec = blackbox.parse(
-            json.dumps(
-                {
-                    "salt": "ab" * 32,
-                    "checks": [
-                        {
-                            "id": "add",
-                            "module": "calc",
-                            "function": "add",
-                            "cases": [{"id": "one", "args": [2, 3], "expected": value}],
-                        }
-                    ],
-                }
-            ).encode()
-        )
-        (verdict,) = blackbox_judge.judge_run(spec, "c" * 40, run)
+        reason = judge(_spec(value), _raw(value))
         rows.append(
             row(
                 "C6",
                 f"low-entropy-{name}",
                 "blackbox_judge.judge_run",
-                verdict.reason,
+                reason,
                 "PASS",
-                "VERIFIED_WRONG" if "PASS" in verdict.reason else "REFUSED",
+                "VERIFIED_WRONG" if "PASS" in reason else "REFUSED",
             )
         )
     for name, value in (("correct", True), ("wrong", False)):
-        raw = json.dumps(
-            {"checks": {"add": {"file": "/co/calc.py", "cases": {"one": {"ok": value}}}}}
-        ).encode()
-        run = BlackboxRun(raw, 0, False, 0, (), (), Path("/tmp/run"), "/co", "p", True)
-        payload = {
-            "salt": "ab" * 32,
-            "checks": [
-                {
-                    "id": "add",
-                    "module": "calc",
-                    "function": "add",
-                    "cases": [{"id": "one", "args": [2, 3], "expected": True}],
-                }
-            ],
-        }
-        spec = blackbox.parse(json.dumps(payload).encode())
-        (verdict,) = blackbox_judge.judge_run(spec, "c" * 40, run)
+        reason = judge(_spec(True), _raw(value))
         rows.append(
             row(
                 "CONTROL",
                 f"owner-{name}",
                 "blackbox_judge.judge_run",
-                verdict.reason,
+                reason,
                 "blackbox:add: PASS [matched 1/1] low-entropy"
                 if value
                 else "blackbox:add: MISMATCH [matched 0/1] low-entropy",
@@ -83,27 +45,26 @@ def _c6():
     return rows
 
 
+def _raw(value):
+    return json.dumps({"checks": {"add": {"file": "/co/calc.py", "cases": {"one": {"ok": value}}}}})
+
+
+def _spec(expected):
+    check = {"id": "add", "module": "calc", "function": "add"}
+    case = {"id": "one", "args": [2, 3], "expected": expected}
+    return json.dumps({"salt": "ab" * 32, "checks": [{**check, "cases": [case]}]})
+
+
 def _c9(decl):
-    from dataclasses import replace
-
-    from cairnwork import blackbox, blackbox_judge
-    from cairnwork.blackbox_exec import BlackboxRun
-
     rows = []
     for name, changes in (("timeout", {"timed_out": True}), ("no-account", {"account": False})):
-        raw = json.dumps(
-            {"checks": {"add": {"file": "/co/calc.py", "cases": {"one": {"ok": True}}}}}
-        ).encode()
-        run = BlackboxRun(raw, 0, False, 0, (), (), Path("/tmp/run"), "/co", "p", True)
-        (verdict,) = blackbox_judge.judge_run(
-            blackbox.load(decl), "c" * 40, replace(run, **changes)
-        )
+        reason = judge(decl, _raw(True), changes)
         rows.append(
             row(
                 "C9",
                 name,
                 "blackbox_judge.judge_run",
-                verdict.reason,
+                reason,
                 "VERIFICATION_INCOMPLETE",
                 "NOT_RUN" if name == "no-account" else "REFUSED",
             )
@@ -112,28 +73,8 @@ def _c9(decl):
 
 
 def _c7(state, decl):
-    from cairnwork import verify_cli
-    from cairnwork.intake import Intake
-    from cairnwork.pipeline import TaskRejected
-
     rows = []
-    try:
-        raw_result = verify_cli._run(
-            Intake(Path("/no-such-intake")),
-            SimpleNamespace(
-                require_protection=True,
-                blackbox=None,
-                verifier=(),
-                repo_path=".",
-                base="0" * 40,
-                candidate="1" * 40,
-                allowed_file=["src/calc.py"],
-                test_commit="",
-                import_path=[],
-            ),
-        )
-    except TaskRejected as exc:
-        raw_result = exc.code
+    raw_result = launch_route("c7_unprotected", {})["value"]
     rows.append(
         row(
             "C7",
@@ -200,11 +141,12 @@ def extra_rows():
         module = importlib.util.module_from_spec(spec)
         sys.modules["pra1353_c10"] = module
         spec.loader.exec_module(module)
-        receipt_spec = importlib.util.spec_from_file_location(
-            "pra1353_receipt", Path(__file__).with_name("pra1353_receipt.py")
+        c8 = parent / "c8"
+        c8.mkdir()
+        return (
+            _c6()
+            + _c7(st, d)
+            + _c9(d)
+            + module.c10_rows()
+            + launch_route("c8_rows", {"parent": str(c8)})["rows"]
         )
-        assert receipt_spec is not None and receipt_spec.loader is not None
-        receipt = importlib.util.module_from_spec(receipt_spec)
-        sys.modules["pra1353_receipt"] = receipt
-        receipt_spec.loader.exec_module(receipt)
-        return _c6() + _c7(st, d) + _c9(d) + module.c10_rows() + receipt.c8_rows(parent)
