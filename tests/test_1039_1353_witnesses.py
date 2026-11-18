@@ -316,3 +316,5 @@ def test_class_results_are_pinned(extra_rows):
     }
     assert "outside-runner return=-1" in c10["runner-sniff-1"]["reason"]
     assert "python -P -m _cairnwork_blackbox_runner" in c10["runner-sniff-1"]["reason"]
+
+# probe for #1444 forged-status test (PR never merged)
