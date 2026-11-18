@@ -22,7 +22,7 @@ PINS = {
     "tests/attest/test_verify.py": "156795f6ee20d46c692b4a27e15ab36525b7ab7fce945722b39a3067c68a9b83",
     "tests/conftest.py": "a6f527a6ae989b47ef7cd10b270206d7e8c0e391064eac8eef03f9f3693219fd",
     "tests/pra1353_c10.py": "d8afb48a82564c10b786eb5b257559309bfc60649934d5ad429ac71245012fce",
-    "tests/pra1353_consume.py": "2f9267d60676882868a81d7f3d27d858ce084f97380d50e92b64baf0aefb1d1f",
+    "tests/pra1353_consume.py": "71864d90258a6a2ace6a08c5ae86e89793a90c43045ee561e4af95176491c353",
     "tests/pra1353_derive.py": "3e301ec245fba896b12798554ccb8391f2facaf6409567772882aad7592d534e",
     "tests/pra1353_extra.py": "6a0e21d89ca29a4b2da3de8102213a53838a970dbb7197f29675c252456deca8",
     "tests/pra1353_probe.py": "fb2a1e14cffed0c6babe365e4d67ca7f26257eb95c443fcbcd0f7c7f0dbbd974",

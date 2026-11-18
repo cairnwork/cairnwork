@@ -76,18 +76,18 @@ def decode_report(completed: Any) -> dict[str, Any]:
         report = json.loads(lines[0])
     except json.JSONDecodeError as exc:
         raise ValueError("runner output was not JSON") from exc
-    validate_rows(report.get("rows"))
+    validate_rows(report.get("rows") if isinstance(report, dict) else None)
     return report
 
 
 def validate_rows(rows: Any) -> None:
     if not isinstance(rows, list) or len(rows) != 56:
         raise ValueError("runner row count mismatch")
-    seqs = [row.get("seq") for row in rows if isinstance(row, dict)]
-    if len(seqs) != len(rows) or len(seqs) != 56 or set(seqs) != SEQUENCES:
+    # Exact int: True == 1 and 1.0 == 1 would otherwise pass the set comparison below.
+    if not all(isinstance(row, dict) and type(row.get("seq")) is int for row in rows):
+        raise ValueError("runner row is not an object with an integer seq")
+    if {row["seq"] for row in rows} != SEQUENCES:
         raise ValueError("runner sequence set mismatch")
-    if len(set(seqs)) != 56:
-        raise ValueError("runner duplicate sequence")
 
 
 def launch(
