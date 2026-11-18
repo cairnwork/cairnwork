@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import os
@@ -18,9 +19,9 @@ from experimental.acceptance_casebook.identity import (
     resolve_actor,
 )
 from experimental.acceptance_casebook.origin import read_origin
+from experimental.acceptance_casebook.replay_out import append as _append_output
 from experimental.acceptance_casebook.store import (
     CasebookError,
-    _append,
     _read_chain,
     list_cases,
     locked,
@@ -42,11 +43,13 @@ def _digest(data: bytes) -> str:
 
 def _same_path(left: Path, right: Path) -> bool:
     try:
+        if left.parent.samefile(right.parent) and left.name.casefold() == right.name.casefold():
+            return True
         return left.resolve() == right.resolve() or (
             left.exists() and right.exists() and os.path.samefile(left, right)
         )
     except OSError:
-        return False
+        return True
 
 
 def _json(path: Path) -> Any:
@@ -146,17 +149,16 @@ def _bound_inputs(case: dict[str, Any], inputs: Any, request: dict[str, Any]) ->
     for key, supplied in bindings.items():
         if not isinstance(supplied, list) or not all(isinstance(v, str) for v in supplied):
             raise CasebookError("REPLAY_INPUT_MISMATCH")
-        if expected[key] is None or sorted(supplied) != sorted(expected[key]):
+        bound = expected[key]
+        if not isinstance(bound, list) or not all(isinstance(v, str) for v in bound):
+            raise CasebookError("REPLAY_INPUT_MISMATCH")
+        if sorted(supplied) != sorted(bound):
             raise CasebookError("REPLAY_INPUT_MISMATCH")
     return {**raw, "base": case["base"], "candidate": case["candidate"]}
 
 
-def _append_record(out: Path, record: dict[str, Any]) -> None:
-    def action() -> None:
-        entries, prev = _read_chain(out)
-        _append(out, record, prev)
-
-    locked(out, action)
+def _append_record(out: Path, record: dict[str, Any], protected: tuple[Path, ...]) -> None:
+    _append_output(out, record, protected)  # every opened file is checked on its own fd
 
 
 def _case_result(
@@ -176,7 +178,7 @@ def _case_result(
     mapped, reasons, codes, hashes = [], [], [], []
     for index in range(repeat):
         result, reason, code, output = _run_one(
-            case,
+            copy.deepcopy(case),
             {**raw, "request": request},
             index,
         )
@@ -269,6 +271,8 @@ def _case_record(
     run_id: str,
 ) -> dict[str, Any]:
     try:
+        if case["kind"] not in ("accepted_bad", "refused_good"):
+            raise CasebookError("INVALID_KIND")
         rec, _ = read_origin(args.notary_db, case["task_id"], case["attempt_id"])
         confirmation = _confirmation(args.casebook, case)
         raw = _bound_inputs(case, inputs, rec.request)
@@ -306,8 +310,6 @@ def _case_record(
             "argv": {},
             "replayer": replayer,
         }
-    if case["kind"] not in ("accepted_bad", "refused_good"):
-        result["outcome"], result["reason"] = "UNREPLAYABLE", "INVALID_KIND"
     return result
 
 
@@ -324,7 +326,7 @@ def _replay(args: argparse.Namespace) -> int:
     db = args.notary_db
     protected = [book.with_name(book.name + s) for s in ("", ".head", ".lock")]
     protected += [db.with_name(db.name + s) for s in ("", "-wal", "-shm", "-journal")]
-    outputs = [args.out.with_name(args.out.name + s) for s in ("", ".head", ".lock")]
+    outputs = [args.out.with_name(args.out.name + s) for s in ("", ".head", ".head.tmp", ".lock")]
     if any(_same_path(output, path) for output in outputs for path in protected):
         raise CasebookError("REPLAY_OUTPUT_REFUSED")
 
@@ -337,7 +339,7 @@ def _replay(args: argparse.Namespace) -> int:
     counts: dict[str, dict[str, int]] = {}
     for case in eligible:
         result = _case_record(case, inputs, input_digest, tree, args, head, replayer, run_id)
-        _append_record(args.out, result)
+        _append_record(args.out, result, tuple(protected))
         bucket = counts.setdefault(
             case["kind"], {"same_mistake": 0, "corrected": 0, "unreplayable": 0}
         )
@@ -353,7 +355,7 @@ def _replay(args: argparse.Namespace) -> int:
         "counts": counts,
         "complete": bool(eligible) and bad == 0,
     }
-    _append_record(args.out, summary)
+    _append_record(args.out, summary, tuple(protected))
     if not eligible:
         print("NO_ELIGIBLE_CASES")
     return 3 if not eligible or bad else 0
