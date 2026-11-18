@@ -235,9 +235,18 @@ def _restore_permissions(path: Path) -> None:
     path.chmod(0o755)
 
 
+def check_base_install(stdlib: str, platstdlib: str, *trees: Path) -> None:
+    """Fail closed when the base install a venv's pyvenv.cfg names lies inside a checked tree."""
+    names = [sys.base_prefix, sys.base_exec_prefix, stdlib, platstdlib, f"{platstdlib}/lib-dynload"]
+    for path in (Path(os.path.realpath(name)) for name in names):
+        if any(path.is_relative_to(os.path.realpath(tree)) for tree in trees):
+            raise ValueError("base install lies inside the checked tree")
+
+
 def _run_sealed(sealed: Path, repo: Path) -> int:
     stdlib = Path(sysconfig_path("stdlib"))
     platstdlib = Path(sysconfig_path("platstdlib"))
+    check_base_install(str(stdlib), str(platstdlib), repo, sealed)
     purelib = Path(sysconfig_path("purelib"))
     platlib = Path(sysconfig_path("platlib"))
     roots = [
@@ -288,6 +297,7 @@ def main() -> int:
     repo = Path.cwd().resolve()
     if len(sys.argv) != 1:
         raise ValueError("unexpected gate arguments")
+    check_base_install(sysconfig_path("stdlib"), sysconfig_path("platstdlib"), repo)
     pins = _pins(repo)
     with tempfile.TemporaryDirectory(prefix="cw1353-gate-") as directory:
         root = Path(directory).resolve()

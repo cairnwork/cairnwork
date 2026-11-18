@@ -18,19 +18,19 @@ from test_1039_1353_recipes import _matches
 from test_1039_1353_static import _literal_observations
 
 PINS = {
-    "tests/attest/binding_helpers.py": "cd2959a72a449228fc27bd0b1eb082493ee00616a7afcc1fe27b7309e22e61c5",
+    "tests/attest/binding_helpers.py": "0b3eeb204048e1c5d41ef700338e6f71fb0eee74207f24978f953408c539d98e",
     "tests/attest/test_verify.py": "156795f6ee20d46c692b4a27e15ab36525b7ab7fce945722b39a3067c68a9b83",
     "tests/conftest.py": "a6f527a6ae989b47ef7cd10b270206d7e8c0e391064eac8eef03f9f3693219fd",
     "tests/pra1353_c10.py": "d8afb48a82564c10b786eb5b257559309bfc60649934d5ad429ac71245012fce",
-    "tests/pra1353_consume.py": "04b2df6f3abf5b000532778333e4de2aa0c99545f5f598eb392df319962da67e",
+    "tests/pra1353_consume.py": "9b702b47308d6280eee9df2ebd9fe18e78676212a37de7adba2e3dfa7e468e57",
     "tests/pra1353_derive.py": "3e301ec245fba896b12798554ccb8391f2facaf6409567772882aad7592d534e",
     "tests/pra1353_extra.py": "1ef6960689f633fe9dfa411572091f2bd99e1e0f2435798a9ebe37def50c6d52",
     "tests/pra1353_probe.py": "7a07c4262671f87822622235bda5853a153bb92c146274d5c222b77862bb402f",
     "tests/pra1353_receipt.py": "d3121468ba6b46d12c466c1d79bd5bb49e832262a9fe36b49a36ff332bb054ae",
     "tests/pra1353_recipes.py": "87b8cf6e1d3c3618bc797ea9511b347e8d413dd752197ab5b368663efa2440b6",
     "tests/pra1353_runner.py": "e5c27294f78a4ad3a934cca4c502b1669291fcc9330340ca110574c05bfc1ba9",
-    "tests/pra1353_gate.py": "8330bcf3f142874164c15b9d1cb0040ab45b18ae1c1fd0600d98b81b3a20693a",
-    "tests/pra1353_seal.py": "a903d5d5884127e0af0786532bae19dd5fba6186e1d3c364d6e9132a8407dcc5",
+    "tests/pra1353_gate.py": "222e0a844fce888f6da9cf7814db9b7ea5676a90fe930b585be2d961d18de47c",
+    "tests/pra1353_seal.py": "b9ac99f1e1e1b6e80ba33936ce04b73c42d778b22a0e5b7bfa9e7bc911769279",
     "tests/xdist_groups.py": "08f332bef3401fd38390db53a60a158ebb78686d1ec33a7af1c9d4337692e673",
     "tests/test_1039_1353_recipes.py": "a11e647deef2d050dc75506595d9a889a08b70e84287153da420f56aa9f4a4d5",
     "tests/test_1039_1353_static.py": "0fc8b3428e5d312a396c4c74c4365933ea15577a0f762bee759d2342b82cf76d",

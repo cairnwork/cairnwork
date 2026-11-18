@@ -40,6 +40,16 @@ def interpreter_paths() -> dict[str, str]:
     return paths
 
 
+def check_base_install(stdlib: str, platstdlib: str, *trees: Path) -> None:
+    """Fail closed when the base install a venv's pyvenv.cfg names lies inside a checked tree."""
+    import sys
+
+    names = [sys.base_prefix, sys.base_exec_prefix, stdlib, platstdlib, f"{platstdlib}/lib-dynload"]
+    for path in (Path(os.path.realpath(name)) for name in names):
+        if any(path.is_relative_to(os.path.realpath(tree)) for tree in trees):
+            raise ValueError("base install lies inside the checked tree")
+
+
 def git_env() -> dict[str, str]:
     return {
         "PATH": "/usr/bin:/bin",

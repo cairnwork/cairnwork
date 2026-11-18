@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import importlib
 import importlib._bootstrap_external as bootstrap_external
 import json
 import py_compile
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -333,3 +335,26 @@ def test_a2_package_shadow_cannot_change_real_runner_rows():
         (package / "__init__.py").unlink(missing_ok=True)
         if package.exists():
             package.rmdir()
+
+
+@pytest.mark.parametrize("module", ["pra1353_gate", "pra1353_seal"])
+@pytest.mark.parametrize("attr", ["base_prefix", "base_exec_prefix"])
+def test_base_install_inside_the_checkout_is_refused(module, attr, monkeypatch, tmp_path: Path):
+    # A PR-controlled pyvenv.cfg `home` can move the base install into the tree; -I -S reads it.
+    check = importlib.import_module(module).check_base_install
+    paths = consume.interpreter_paths()
+    check(paths["stdlib"], paths["platstdlib"], tmp_path)
+    monkeypatch.setattr(sys, attr, str(tmp_path / "planted"))
+    with pytest.raises(ValueError, match="base install lies inside"):
+        check(paths["stdlib"], paths["platstdlib"], tmp_path)
+
+
+def test_consumer_refuses_a_stdlib_inside_the_checkout(monkeypatch):
+    paths = {**consume.interpreter_paths(), "platstdlib": str(consume.ROOT / "Lib")}
+    monkeypatch.setattr(consume, "interpreter_paths", lambda: paths)
+
+    def no_run(*args: Any, **kwargs: Any):
+        raise AssertionError("launched a child with a stdlib inside the checkout")
+
+    with pytest.raises(ValueError, match="base install lies inside"):
+        consume.launch(PINS, run=no_run)
