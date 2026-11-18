@@ -23,11 +23,14 @@ _OID = re.compile(rb"[0-9a-f]{40}")
 
 
 def interpreter_paths() -> dict[str, str]:
-    """sysconfig paths with the venv site dirs, also under -S (3.11 sets the prefix in site)."""
+    """sysconfig paths with the venv site dirs, also under -S (3.11 sets the prefix in site).
+
+    The stdlib dirs come from the base install: inside a venv, platstdlib would be the venv.
+    """
     import sys
     import sysconfig
 
-    paths = sysconfig.get_paths()
+    paths = sysconfig.get_paths(vars={"base": sys.base_prefix, "platbase": sys.base_exec_prefix})
     executable = Path(sys.executable)
     for prefix in (executable.parent, executable.parent.parent):
         if (prefix / "pyvenv.cfg").is_file():

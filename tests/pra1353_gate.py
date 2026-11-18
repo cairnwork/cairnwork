@@ -278,7 +278,8 @@ def sysconfig_path(name: str) -> str:
         if name in {"purelib", "platlib"} and (prefix / "pyvenv.cfg").is_file():
             base = {"base": str(prefix), "platbase": str(prefix)}
             return sysconfig.get_paths(scheme="venv", vars=base)[name]
-    return sysconfig.get_paths()[name]
+    base = {"base": sys.base_prefix, "platbase": sys.base_exec_prefix}
+    return sysconfig.get_paths(vars=base)[name]
 
 
 def main() -> int:

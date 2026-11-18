@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pra1353_consume as consume
 import pytest
-from pra1353_seal import read_module_report, tracked_py_blobs
+from pra1353_seal import interpreter_paths, read_module_report, tracked_py_blobs
 from test_1039_1353_witnesses import PINS
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -101,7 +101,7 @@ def test_variant_2_forged_child_module_path_is_rejected():
 
 
 def _child_roots(shadow: Path, *, stdlib_first: bool) -> str:
-    paths = sysconfig.get_paths()
+    paths = interpreter_paths()
     stdlib = [paths["stdlib"], paths["platstdlib"], str(Path(paths["platstdlib"]) / "lib-dynload")]
     roots = [*stdlib, str(shadow), str(ROOT / "tests"), paths["purelib"], paths["platlib"]]
     driver = (
@@ -149,7 +149,7 @@ def test_variant_3_real_children_load_stdlib_before_sealed_source(
     )
     report = tmp_path / "child.json"
     roots = _child_roots(shadow, stdlib_first=stdlib_first)
-    paths = sysconfig.get_paths()
+    paths = interpreter_paths()
     if stdlib_first:
         assert json.loads(roots).index(str(shadow)) == 3
         assert json.loads(roots)[0] == paths["stdlib"]
@@ -348,9 +348,12 @@ def test_gate_rejects_pin_paths_that_collide_after_normalisation(extra: str):
         _load_gate()._validate_pins(pins)
 
 
-@pytest.mark.parametrize("name", ["purelib", "platlib"])
+@pytest.mark.parametrize("name", ["purelib", "platlib", "stdlib", "platstdlib"])
 def test_no_site_gate_and_consumer_find_the_venv_site_packages(name: str):
-    expected = sysconfig.get_paths()[name]
+    # Site dirs are the venv's; stdlib dirs the base install's (lib-dynload lives there).
+    site = name in {"purelib", "platlib"}
+    expected = Path(sysconfig.get_paths()[name] if site else interpreter_paths()[name]).resolve()
+    assert (Path(interpreter_paths()["platstdlib"]) / "lib-dynload").is_dir()
     gate = str(ROOT / "tests/pra1353_gate.py")
     code = (
         "import importlib.util, sys\n"
@@ -363,7 +366,7 @@ def test_no_site_gate_and_consumer_find_the_venv_site_packages(name: str):
     done = subprocess.run(
         [sys.executable, "-I", "-S", "-B", "-c", code], capture_output=True, text=True, check=True
     )
-    assert done.stdout.split() == [expected, expected]
+    assert [Path(line).resolve() for line in done.stdout.split()] == [expected, expected]
 
 
 def test_gate_git_env_disables_repo_fsmonitor():
