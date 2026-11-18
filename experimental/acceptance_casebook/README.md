@@ -9,6 +9,10 @@ and isolated-venv runner is step 3b.
 
 Owner and expiry: see OWNER and EXPIRES. Step 1a: `add` and `list`.
 
+## Retain (#751 step 3c)
+
+Before cleaning a refused run, use `python -m experimental.acceptance_casebook retain --notary-db DB --record ATTEMPT --repo R --base B --candidate C --version V --cairnwork-clone CLONE --into DIR`. `ATTEMPT` identifies the unique notary attempt; `V` is resolved to a tree in `CLONE`. The atomic case directory contains a read-only copied notary row, a bundle with the base and candidate commits, and a manifest. Use its `notary.sqlite` with `add`; `git clone --no-local -- <bundle>` accepts the bundle path directly, so a replay runner that clones the retained bundle can use it as `--repo`. Retention is opt-in and the operator must run it before deleting the run directory. `retain` starts `git` by name from the operator's `PATH` with the operator's environment (including any `GIT_*` variables), and copies only commits reachable in `R`; like the replay toolchain, that `git` and its environment are trusted, so run it only from the operator's own shell. A case directory that already exists is `ALREADY_RETAINED` and is never overwritten.
+
 This is an experimental record of acceptance mistakes, not a measure of false completion or
 false green: a recorded case is not a confirmed one (independent confirmation is #772), and a
 confirmed case is not evidence that an acceptance change helped (replay is #751 step 3).
