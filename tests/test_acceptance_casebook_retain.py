@@ -61,8 +61,10 @@ def _assert_bundle(lg: dict[str, str], case_dir: Path, tmp_path: Path) -> None:
         "version.json",
         "MANIFEST.json",
     }
+    verify_repo = tmp_path / "bundle-verify-repo"  # bundle verify needs a repository; use our own
+    subprocess.run(["git", "init", "--quiet", str(verify_repo)], check=True, capture_output=True)
     subprocess.run(
-        ["git", "-C", str(tmp_path), "bundle", "verify", str(case_dir / "candidate.bundle")],
+        ["git", "-C", str(verify_repo), "bundle", "verify", str(case_dir / "candidate.bundle")],
         check=True,
         capture_output=True,
         text=True,
