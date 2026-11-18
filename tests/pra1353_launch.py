@@ -147,4 +147,20 @@ def _c8_rows(args: dict[str, Any]) -> dict[str, Any]:
     return {"rows": c8_rows(Path(args["parent"]))}
 
 
-_ROUTES = {"judge": _judge, "c7_unprotected": _c7_unprotected, "c8_rows": _c8_rows}
+def _c10_control(args: dict[str, Any]) -> dict[str, Any]:
+    """C10 outside-runner control: never imports cairnwork, so product code cannot forge it."""
+    module = "_cairnwork_blackbox_runner"  # same literal as pra1353_consume
+    n = int(args["n"])
+    condition = f"{module!r} in sys.modules" if n != 2 else "'pytest' not in sys.modules"
+    ns: dict[str, Any] = {}
+    exec("import sys\ndef add(a,b):\n if " + condition + ": return a+b\n return a-b\n", ns)
+    names = [name for name in sys.modules if name.split(".")[0].startswith("cairnwork")]
+    return {"outside": ns["add"](2, 3), "cairnwork_modules": names}
+
+
+_ROUTES = {
+    "judge": _judge,
+    "c7_unprotected": _c7_unprotected,
+    "c8_rows": _c8_rows,
+    "c10_control": _c10_control,
+}

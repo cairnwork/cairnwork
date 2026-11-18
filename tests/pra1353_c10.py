@@ -10,7 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from pra1353_launch import judge
+from pra1353_launch import judge, launch_route
 from pra1353_seal import read_module_report
 
 
@@ -67,8 +67,16 @@ def c10_rows():
         except ValueError as exc:
             raise RuntimeError(str(exc)) from exc
         result = json.loads(done.stdout)
-        rows.append(_record(n, result["raw"], result["outside"]))
+        rows.append(_record(n, result["raw"], _control(n)))
     return rows
+
+
+def _control(n):
+    """The outside-runner value, computed in a child that never imports cairnwork*."""
+    result = launch_route("c10_control", {"n": n})
+    if result.get("cairnwork_modules"):
+        raise RuntimeError("c10 control child imported product code")
+    return result["outside"]
 
 
 def _child_source():
@@ -82,12 +90,12 @@ def run():
  condition=(f"{MODULE!r} in sys.modules" if n != 2 else "'pytest' not in sys.modules")
  ns={}; exec("import sys\\ndef add(a,b):\\n if "+condition+": return a+b\\n return a-b\\n",ns)
  if n == 1:
-  sys.modules.pop(MODULE,None); outside=ns["add"](2,3); raw={"ok":outside}
+  sys.modules.pop(MODULE,None); raw={"ok":ns["add"](2,3)}
  else:
   if n == 3: sys.modules.pop(MODULE,None)
   raw=runner._call(ns["add"],{"args":[2,3],"kwargs":{}})
-  sys.modules.pop(MODULE,None); outside=ns["add"](2,3)
- print(json.dumps({"raw":raw,"outside":outside}))
+  sys.modules.pop(MODULE,None)
+ print(json.dumps({"raw":raw}))
 try:
  run()
 finally:
