@@ -30,6 +30,78 @@ EXPECTED = {
     "pyright-trusted.yml": "pyright (trusted)",
     "pin-guard-trusted.yml": "pin guard (trusted)",
 }
+SUBJECT_MARKERS = (
+    ENV_NAME,
+    "trusted_checks_",
+    "create-github-app-token",
+    APP_TOKEN_SHA,
+)
+
+
+def _is_subject(text: str) -> bool:
+    lowered = text.lower()
+    return any(marker.lower() in lowered for marker in SUBJECT_MARKERS)
+
+
+def strict_syntax_problems(name: str, text: str) -> list[str]:
+    """Reject YAML forms outside the deliberately small trusted-workflow subset."""
+    found: list[str] = []
+    run_indent: int | None = None
+    mapping = re.compile(r"^( *)(?:- )?([A-Za-z0-9_-]+):( .*)?$")
+    sequence = re.compile(r"^( *)- ([^\s#&*!|>'\"%@`{}\[\],?:][^#]*)$")
+    for number, line in enumerate(text.splitlines(), 1):
+        lowered = line.lower()
+        if "input_" in lowered:
+            found.append(f"{name}:{number}: strict YAML syntax forbids INPUT_")
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if run_indent is not None and indent > run_indent:
+            continue
+        run_indent = None
+        match = mapping.fullmatch(line)
+        item = sequence.fullmatch(line)
+        if not match and not item:
+            found.append(f"{name}:{number}: strict YAML syntax rejects this line")
+            continue
+        if re.match(r"^ *(?:- )?[?:]", line):
+            found.append(f"{name}:{number}: strict YAML syntax rejects explicit keys")
+        if "\\" in line:
+            found.append(f"{name}:{number}: strict YAML syntax forbids backslashes")
+        if "<<" in line:
+            found.append(f"{name}:{number}: strict YAML syntax forbids merge keys")
+        key = match.group(2).lower() if match else ""
+        value = (
+            match.group(3).strip()
+            if match and match.group(3)
+            else item.group(2).strip()
+            if item
+            else ""
+        )
+        # Only three inert flow forms: an empty permissions map, and flat lists of plain
+        # lowercase words under branches/types (e.g. `types: [opened, synchronize]`).
+        flow_ok = (key == "permissions" and value == "{}") or (
+            key in {"branches", "types"}
+            and re.fullmatch(r"\[ ?[a-z_]+(?:, ?[a-z_]+)* ?\]", value) is not None
+        )
+        if value.startswith(("{", "[")) and not flow_ok:
+            found.append(f"{name}:{number}: strict YAML syntax forbids flow values")
+        if value.startswith(("&", "*", "!")) or re.search(
+            r"(?<![A-Za-z0-9_-])[&*!][A-Za-z0-9_-]+", line
+        ):
+            found.append(f"{name}:{number}: strict YAML syntax forbids anchors, aliases, and tags")
+        if value.startswith(("|", ">")):
+            if key == "run" and value in {"|", ">"}:
+                run_indent = indent
+            else:
+                found.append(
+                    f"{name}:{number}: strict YAML syntax allows block scalars only for run"
+                )
+        if " #" in line and not re.fullmatch(
+            r" *-? *uses: +[^#\s]+@[0-9a-fA-F]{40} +# v[^\s]+", line
+        ):
+            found.append(f"{name}:{number}: strict YAML syntax forbids inline comments")
+    return found
 
 
 def _top_level_block(text: str, key: str) -> list[str]:
@@ -78,7 +150,7 @@ def jobs(text: str) -> dict[str, str]:
 
 
 def uses_trusted_env(job: str) -> bool:
-    return bool(re.search(rf"^\s*environment:\s*(name:\s*)?['\"]?{ENV_NAME}['\"]?\s*$", job, re.M))
+    return ENV_NAME in job.lower()
 
 
 def app_token_permissions(job: str) -> list[set[tuple[str, str]]]:
@@ -114,7 +186,7 @@ def _is_token_reference(text: str) -> bool:
 
 def problems(name: str, text: str) -> list[str]:
     """Every rule violation in one workflow file, as short messages."""
-    found: list[str] = []
+    found = strict_syntax_problems(name, text) if _is_subject(text) else []
     mentions = ENV_NAME in text or "TRUSTED_CHECKS_" in text or _is_token_reference(text)
     if not mentions:
         return found
@@ -336,6 +408,38 @@ def test_checker_accepts_the_reference_shape() -> None:
                 "  analyze:\n    env:\n      K: ${{ secrets.TRUSTED_CHECKS_PRIVATE_KEY }}\n",
             ),
             "outside the environment",
+        ),
+        (
+            GOOD.replace(
+                "          permission-checks: write",
+                '          "permission\\x2Dcontents": write',
+            ),
+            "strict YAML syntax",
+        ),
+        (
+            GOOD.replace(
+                "    environment: trusted-checks\n",
+                "    environment: trusted-checks\n    env: {INPUT_PERMISSION-CONTENTS: write}\n",
+            ),
+            "strict YAML syntax",
+        ),
+        (
+            GOOD.replace("jobs:\n", "env:\n  INPUT_PERMISSION-CONTENTS: write\njobs:\n"),
+            "strict YAML syntax",
+        ),
+        (
+            GOOD.replace(
+                "          permission-checks: write",
+                "          ? permission-contents\n          : write",
+            ),
+            "strict YAML syntax",
+        ),
+        (
+            GOOD.replace(
+                "    environment: trusted-checks\n",
+                "    environment: trusted-checks # comment\n",
+            ),
+            "strict YAML syntax",
         ),
     ],
 )
