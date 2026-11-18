@@ -7,6 +7,7 @@ import json
 import re
 import sys
 
+from cairnwork.collect_reader import _valid_exposed_id
 from cairnwork.p2p_bindings import (
     binds_in_scope,
     hidden_bindings,
@@ -22,6 +23,11 @@ from cairnwork.p2p_function import _function
 
 def classify_payload(data: dict) -> dict:
     base_ids, test_ids, edited = map(set, (data["base_ids"], data["test_ids"], data["edited"]))
+    exposed = data.get("exposed")
+    if not isinstance(exposed, list) or not all(
+        isinstance(item, str) and _valid_exposed_id(item) for item in exposed
+    ):
+        exposed = None
     texts, bases, test_trees, removed, dropped = {}, {}, {}, set(), set()
     collected_funcs = {_function(n) for n in test_ids}
     for nodeid in base_ids - test_ids:
@@ -39,6 +45,12 @@ def classify_payload(data: dict) -> dict:
                 and not _scope_mentions(test_trees[path], owners, name, texts[path])
                 and not _hidden(test_trees[path], bases[path], name, path, test_ids, base_ids)
             )
+            # #1413
+            if gone and (
+                exposed is None
+                or any(_file(item) == path and item.rpartition("::")[2] == name for item in exposed)
+            ):
+                gone = False
         (removed if gone else dropped).add(nodeid)
     return {"removed": sorted(removed), "dropped": sorted(dropped)}
 

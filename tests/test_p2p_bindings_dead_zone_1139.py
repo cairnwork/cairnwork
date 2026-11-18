@@ -85,7 +85,7 @@ LIVE = {
 
 def _verdict(base_b: str, cand_b: str, cand_a: str = EMPTY_A, pre: str = PRE):
     base, cand = pre + TEST_A + base_b, pre + cand_a + cand_b
-    got = classify({A_ID, B_ID}, {B_ID}, {"t.py"}, lambda p: cand, lambda p: base)
+    got = classify({A_ID, B_ID}, {B_ID}, {"t.py"}, lambda p: cand, lambda p: base, exposed=())
     return "dropped" if A_ID in got.dropped else "removed" if A_ID in got.removed else "?"
 
 

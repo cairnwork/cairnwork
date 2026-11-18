@@ -102,7 +102,9 @@ def test_an_unreadable_collect_run_is_uncomparable(monkeypatch, tmp_path):
     monkeypatch.setattr(
         p2p_collect, "run_verifiers", lambda *a, **k: [SimpleNamespace(log_path=str(log))]
     )
-    monkeypatch.setattr(p2p_collect, "read_collected", lambda run: Collected(unusable="no junit"))
+    monkeypatch.setattr(
+        p2p_collect, "read_collected", lambda run: Collected(unusable="no junit", exposed=())
+    )
     with pytest.raises(BaseUncomparable) as caught:
         collected_side(task, ("tests/test_calc.py",), {"tests/test_calc.py::test_sub": "passed"},
                        ("tests/test_calc.py",), None, 30, "a")  # fmt: skip
@@ -117,7 +119,7 @@ def test_a_base_test_in_a_file_that_failed_to_collect_is_refused_not_removed(mon
     # the P2P side on its own: unknown ids are never read as removed
     task: Any = SimpleNamespace(repo=Path("/r"), base_commit="b" * 40, test_commit="c" * 40)
     files: Any = {kind: ("tests/test_calc.py",)}
-    got = Collected(ids=(), **files)
+    got = Collected(ids=(), exposed=(), **files)
     monkeypatch.setattr(p2p_collect, "_present", lambda task, files: files)
     monkeypatch.setattr(p2p_collect, "_collect", lambda *a: got)
     with pytest.raises(TestCommitRejected) as caught:
@@ -161,14 +163,14 @@ def test_classify_removes_only_a_base_defined_test_whose_name_is_gone(
     edited, source, base, removed, dropped
 ):
     side = classify({"t.py::test_a", "t.py::test_b"}, {"t.py::test_b"}, edited,
-                    lambda p: source, lambda p: base)  # fmt: skip
+                    lambda p: source, lambda p: base, exposed=())  # fmt: skip
     assert side.removed == removed and side.dropped == dropped
 
 
 def test_classify_matches_the_class_of_a_class_test():
     base = "class A:\n    def test_x(self): pass\nclass B:\n    pass\n"
     ids = {"t.py::A::test_x", "t.py::B::test_x"}
-    side = classify(ids, set(), {"t.py"}, lambda p: "", lambda p: base)
+    side = classify(ids, set(), {"t.py"}, lambda p: "", lambda p: base, exposed=())
     assert side.removed == {"t.py::A::test_x"} and side.dropped == {"t.py::B::test_x"}
 
 
@@ -182,7 +184,7 @@ def test_classify_matches_the_class_of_a_class_test():
     ],
 )
 def test_classify_drops_a_test_the_last_class_of_that_name_does_not_define(base):
-    side = classify({"t.py::A::test_a"}, set(), {"t.py"}, lambda p: "", lambda p: base)
+    side = classify({"t.py::A::test_a"}, set(), {"t.py"}, lambda p: "", lambda p: base, exposed=())
     assert side.removed == set() and side.dropped == {"t.py::A::test_a"}
 
 
@@ -191,7 +193,9 @@ def test_classify_removes_class_test_when_another_class_keeps_same_name():
     base = "class A:\n    def test_x(self): pass\nclass B:\n    def test_x(self): pass\n"
     source = "class A:\n    pass\nclass B:\n    def test_x(self): pass\n"
     ids = {"t.py::A::test_x", "t.py::B::test_x"}
-    side = classify(ids, {"t.py::B::test_x"}, {"t.py"}, lambda p: source, lambda p: base)
+    side = classify(
+        ids, {"t.py::B::test_x"}, {"t.py"}, lambda p: source, lambda p: base, exposed=()
+    )
     assert side.removed == {"t.py::A::test_x"} and side.dropped == set()
 
 
@@ -200,7 +204,9 @@ def test_classify_removes_module_test_when_class_keeps_same_name():
     base = "def test_x(): pass\nclass B:\n    def test_x(self): pass\n"
     source = "class B:\n    def test_x(self): pass\n"
     ids = {"t.py::test_x", "t.py::B::test_x"}
-    side = classify(ids, {"t.py::B::test_x"}, {"t.py"}, lambda p: source, lambda p: base)
+    side = classify(
+        ids, {"t.py::B::test_x"}, {"t.py"}, lambda p: source, lambda p: base, exposed=()
+    )
     assert side.removed == {"t.py::test_x"} and side.dropped == set()
 
 
@@ -213,13 +219,13 @@ elif second:
 else:
     def test_x(): pass
 """
-    side = classify({"t.py::test_x"}, set(), {"t.py"}, lambda p: "", lambda p: base)
+    side = classify({"t.py::test_x"}, set(), {"t.py"}, lambda p: "", lambda p: base, exposed=())
     assert side.removed == {"t.py::test_x"} and side.dropped == set()
 
 
 def test_classify_removes_module_test_from_constant_true_branch():
     base = "if True:\n    def test_x(): pass\nelse:\n    test_x = 1\n"
-    side = classify({"t.py::test_x"}, set(), {"t.py"}, lambda p: "", lambda p: base)
+    side = classify({"t.py::test_x"}, set(), {"t.py"}, lambda p: "", lambda p: base, exposed=())
     assert side.removed == {"t.py::test_x"} and side.dropped == set()
 
 
@@ -228,7 +234,9 @@ def test_classify_drops_parameterized_case_when_function_still_collected():
     base = "def test_p(x): pass\n"
     source = "def test_p(x): pass\n"
     ids = {"t.py::test_p[1]", "t.py::test_p[2]"}
-    side = classify(ids, {"t.py::test_p[2]"}, {"t.py"}, lambda p: source, lambda p: base)
+    side = classify(
+        ids, {"t.py::test_p[2]"}, {"t.py"}, lambda p: source, lambda p: base, exposed=()
+    )
     assert side.removed == set() and side.dropped == {"t.py::test_p[1]"}
 
 
@@ -237,7 +245,9 @@ def test_classify_removes_parameterized_method_even_if_other_class_defines_name(
     base = "class A:\n    def test_p(self, x): pass\nclass B:\n    def test_p(self, x): pass\n"
     source = "class A:\n    pass\nclass B:\n    def test_p(self, x): pass\n"
     ids = {"t.py::A::test_p[1]", "t.py::B::test_p[1]"}
-    side = classify(ids, {"t.py::B::test_p[1]"}, {"t.py"}, lambda p: source, lambda p: base)
+    side = classify(
+        ids, {"t.py::B::test_p[1]"}, {"t.py"}, lambda p: source, lambda p: base, exposed=()
+    )
     assert side.removed == {"t.py::A::test_p[1]"} and side.dropped == set()
 
 
@@ -245,7 +255,9 @@ def test_classify_drops_when_owning_class_inherits_base():
     # #842 / #1072 (a): class A(Base) where Base defines test_x must be dropped, not removed
     base = "class A:\n    def test_x(self): pass\n"
     source = "class Base:\n    def test_x(self): pass\n\nclass A(Base):\n    __test__ = False\n"
-    side = classify({"t.py::A::test_x"}, set(), {"t.py"}, lambda p: source, lambda p: base)
+    side = classify(
+        {"t.py::A::test_x"}, set(), {"t.py"}, lambda p: source, lambda p: base, exposed=()
+    )
     assert side.removed == set() and side.dropped == {"t.py::A::test_x"}
 
 
@@ -253,7 +265,9 @@ def test_classify_drops_when_owning_class_has_decorator():
     # #842 / #1072 (b): class A with a decorator and no test_x body must be dropped, not removed
     base = "class A:\n    def test_x(self): pass\n"
     source = "@other_deco\nclass A:\n    pass\n"
-    side = classify({"t.py::A::test_x"}, set(), {"t.py"}, lambda p: source, lambda p: base)
+    side = classify(
+        {"t.py::A::test_x"}, set(), {"t.py"}, lambda p: source, lambda p: base, exposed=()
+    )
     assert side.removed == set() and side.dropped == {"t.py::A::test_x"}
 
 
@@ -261,7 +275,7 @@ def test_classify_drops_when_module_level_import_alias_binds_name():
     # #842 / #1072 (c): module-level `from helpers import test_x` not collected must be dropped
     base = "def test_x(): pass\n"
     source = "from helpers import test_x\n"
-    side = classify({"t.py::test_x"}, set(), {"t.py"}, lambda p: source, lambda p: base)
+    side = classify({"t.py::test_x"}, set(), {"t.py"}, lambda p: source, lambda p: base, exposed=())
     assert side.removed == set() and side.dropped == {"t.py::test_x"}
 
 
@@ -269,7 +283,7 @@ def test_classify_drops_when_name_appears_in_setattr_string_constant():
     # #842 / #1072 (d): setattr(A, "test_x", f) at class/module scope must be dropped
     base = "def test_x(): pass\n"
     source = "setattr(A, 'test_x', f)\n"
-    side = classify({"t.py::test_x"}, set(), {"t.py"}, lambda p: source, lambda p: base)
+    side = classify({"t.py::test_x"}, set(), {"t.py"}, lambda p: source, lambda p: base, exposed=())
     assert side.removed == set() and side.dropped == {"t.py::test_x"}
 
 
@@ -277,7 +291,9 @@ def test_classify_drops_when_owning_class_inherits_object():
     # #842 / #1072: object is a neutral base, so the absent method is provably removed
     base = "class A:\n    def test_x(self): pass\n"
     source = "class A(object):\n    pass\n"
-    side = classify({"t.py::A::test_x"}, set(), {"t.py"}, lambda p: source, lambda p: base)
+    side = classify(
+        {"t.py::A::test_x"}, set(), {"t.py"}, lambda p: source, lambda p: base, exposed=()
+    )
     assert side.removed == {"t.py::A::test_x"} and side.dropped == set()
 
 
@@ -285,13 +301,17 @@ def test_classify_drops_when_module_level_setattr_rebinds_class_method():
     # #1072 r2: a module-level setattr onto the owning class keeps the class-owned id dropped
     base = "class A:\n    def test_x(self): pass\n"
     source = "class A:\n    pass\n\nsetattr(A, 'test_x', f)\n"
-    side = classify({"t.py::A::test_x"}, set(), {"t.py"}, lambda p: source, lambda p: base)
+    side = classify(
+        {"t.py::A::test_x"}, set(), {"t.py"}, lambda p: source, lambda p: base, exposed=()
+    )
     assert side.removed == set() and side.dropped == {"t.py::A::test_x"}
 
 
 def _classify_a(source):
     base = "class A:\n    def test_x(self): pass\n"
-    side = classify({"t.py::A::test_x"}, set(), {"t.py"}, lambda p: source, lambda p: base)
+    side = classify(
+        {"t.py::A::test_x"}, set(), {"t.py"}, lambda p: source, lambda p: base, exposed=()
+    )
     return side.removed, side.dropped
 
 
