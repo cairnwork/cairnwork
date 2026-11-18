@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 from cairnwork.blackbox import Declaration
 from cairnwork.blackbox_exec import run_blackbox
@@ -42,7 +43,7 @@ def run_protected(
     if not store.consume(commitment, commit):
         return ProtectedResult("REFUSED", "DECLARATION_REUSED", ())
     try:
-        kwargs = {"timeout": timeout} if timeout is not None else {}
+        kwargs: dict[str, Any] = {"timeout": timeout} if timeout is not None else {}
         run = run_blackbox(declaration, ctx, commit, run_id, **kwargs)
     except Exception as exc:  # noqa: BLE001 - consumed attempt remains used on all run failures
         return ProtectedResult("INCOMPLETE", f"RUN_ERROR:{type(exc).__name__}", ())

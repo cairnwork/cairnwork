@@ -75,20 +75,23 @@ def run_blackbox(
     if paths:
         require_plain_dirs(ctx.repo, commit, paths)
     claim_root = Path(ctx.run_root).parent / "blackbox-exposed" if strict else None
-    args = (declaration, commit, run_id, timeout, paths, claim_root)
+    args = (declaration, commit, run_id, timeout, paths)
     account = ctx.account
     if account is None:
-        return _run(*args, replace(ctx, run_root=Path(ctx.run_root)), ctx.python or sys.executable)
+        ctx = replace(ctx, run_root=Path(ctx.run_root))
+        return _run(*args, ctx, ctx.python or sys.executable, claim_root)
     with account.exclusive(lock_wait_seconds(1, timeout)):
         python = ctx.python or account.python
         if not account.available(python):
             raise VerifierAccountError(f"account {account.user} is not usable")
         account.require_idle()
         account.scrub_stale_runs()  # a killed run's private/run, before this run creates one
-        return _run(*args, replace(ctx, run_root=account.run_root), python)
+        return _run(*args, replace(ctx, run_root=account.run_root), python, claim_root)
 
 
-def _run(declaration, commit, run_id, timeout, paths, claim_root, ctx, python):
+def _run(
+    declaration, commit, run_id, timeout, paths, ctx: VerifyContext, python: str, claim_root=None
+):
     """Under an account ctx.run_root is the account's; python is the interpreter the run uses
     (ctx.python, else the account's, else sys.executable): read it here, not from ctx."""
     account = ctx.account
@@ -106,7 +109,9 @@ def _run(declaration, commit, run_id, timeout, paths, claim_root, ctx, python):
             return _run_in(declaration, ctx, python, commit, checkout, timeout, paths, claim_root)
 
 
-def _run_in(declaration, ctx, python: str, commit, checkout, timeout, paths, claim_root):
+def _run_in(
+    declaration, ctx: VerifyContext, python: str, commit, checkout, timeout, paths, claim_root=None
+):
     private = Path(tempfile.mkdtemp(prefix=f"{checkout.name}.", dir=checkout.parent.parent))
     # after _read: the whole private/run goes, then private is owner-only (0700)
     with unless_interrupted(partial(close_private, private, ctx.account)):
@@ -124,7 +129,7 @@ def _run_in_open(
     timeout,
     paths,
     private,
-    claim_root,
+    claim_root=None,
 ):
     account, attempt_id = ctx.account, ctx.attempt_id
     log_path, ini, profile_path = private / "blackbox.log", private / "unused.ini", private / "p.sb"
