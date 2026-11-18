@@ -86,7 +86,6 @@ def validate_rows(rows: Any) -> None:
     # Exact int: True == 1 and 1.0 == 1 would otherwise pass the set comparison below.
     if not all(isinstance(row, dict) and type(row.get("seq")) is int for row in rows):
         raise ValueError("runner row is not an object with an integer seq")
-    # 56 rows whose seq set is exactly range(56) cannot hold a duplicate.
     if {row["seq"] for row in rows} != SEQUENCES:
         raise ValueError("runner sequence set mismatch")
 
