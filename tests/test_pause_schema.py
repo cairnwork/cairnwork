@@ -83,7 +83,9 @@ def marker_problems(directory: Path) -> list[str]:
     if not owner.is_file() or not owner.read_text().strip():
         problems.append("OWNER missing or empty")
     try:
-        datetime.date.fromisoformat(expires.read_text().strip())
+        text = expires.read_text().strip()
+        if text != "retained":  # owner-retained capability, see OWNER_RETAINED (#476)
+            datetime.date.fromisoformat(text)
     except (OSError, ValueError):
         problems.append("EXPIRES missing or not an ISO date")
     return problems
@@ -92,11 +94,11 @@ def marker_problems(directory: Path) -> list[str]:
 def test_pause_has_owner_and_expires():
     assert marker_problems(PAUSE_DIR) == []
     assert (PAUSE_DIR / "OWNER").read_text().strip() == "mini-layer1-0c79"
-    assert (PAUSE_DIR / "EXPIRES").read_text().strip() == "2026-11-20"
+    assert (PAUSE_DIR / "EXPIRES").read_text().strip() == "retained"
 
 
 @pytest.mark.parametrize(
-    ("name", "text"), [("OWNER", None), ("EXPIRES", None), ("EXPIRES", "soon")]
+    ("name", "text"), [("OWNER", None), ("EXPIRES", None), ("EXPIRES", "soon"), ("OWNER", "")]
 )
 def test_a_missing_or_bad_marker_file_fails(tmp_path, name, text):
     copy = tmp_path / "pause"
