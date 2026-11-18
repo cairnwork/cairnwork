@@ -100,8 +100,8 @@ def _create_bundle(repo: Path, dest: Path, base: str, candidate: str) -> None:
             "refs/heads/casebook-base",
             "refs/heads/casebook-candidate",
         )
-        _git("bundle", "verify", "--", str(dest))
-        heads = _git("bundle", "list-heads", "--", str(dest)).splitlines()
+        _git("-C", str(clone), "bundle", "verify", "--", str(dest))
+        heads = _git("-C", str(clone), "bundle", "list-heads", "--", str(dest)).splitlines()
         found = {line.split()[0] for line in heads if line.split()}
         if not {base, candidate} <= found:
             raise CasebookError("BUNDLE_INVALID")
@@ -135,10 +135,22 @@ def _rename_exclusive(source: Path, destination: Path) -> None:
     at_fdcwd = -100
     if platform.system() == "Darwin":
         rename = libc.renameatx_np
-        result = rename(at_fdcwd, os.fsencode(source), at_fdcwd, os.fsencode(destination), 4)
+        result = rename(
+            at_fdcwd,
+            os.fsencode(os.path.abspath(source)),
+            at_fdcwd,
+            os.fsencode(os.path.abspath(destination)),
+            4,
+        )
     elif platform.system() == "Linux":
         rename = libc.renameat2
-        result = rename(at_fdcwd, os.fsencode(source), at_fdcwd, os.fsencode(destination), 1)
+        result = rename(
+            at_fdcwd,
+            os.fsencode(os.path.abspath(source)),
+            at_fdcwd,
+            os.fsencode(os.path.abspath(destination)),
+            1,
+        )
     else:
         raise CasebookError("ATOMIC_RENAME_UNAVAILABLE")
     if result:
@@ -162,6 +174,7 @@ def retain(
     paths = (notary_db, repo, cairnwork_clone, into)
     if any(str(path).startswith("-") for path in paths):
         raise CasebookError("CASE_INVALID", "paths must not begin with '-' ")
+    notary_db, repo, cairnwork_clone, into = (Path(os.path.abspath(path)) for path in paths)
     tree = _validate_shas(repo, cairnwork_clone, base, candidate, version)
     task_id, origin = _record(notary_db, record_id, base, candidate)
     cases = into / "cases"
@@ -169,17 +182,11 @@ def retain(
     if case.exists():
         raise CasebookError("ALREADY_RETAINED")
     created_cases = not cases.exists()
-    cases.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    retained = False
     try:
+        cases.mkdir(parents=True, exist_ok=True)
         temporary = Path(tempfile.mkdtemp(prefix=".retain-", dir=cases))
-    except OSError as exc:
-        if created_cases:
-            try:
-                cases.rmdir()
-            except OSError:
-                pass
-        raise CasebookError("RETAIN_WRITE_FAILED") from exc
-    try:
         _copy_notary(notary_db, temporary / "notary.sqlite", task_id, record_id)
         _create_bundle(repo, temporary / "candidate.bundle", base, candidate)
         (temporary / "version.json").write_text(
@@ -198,20 +205,18 @@ def retain(
             json.dumps(_manifest(temporary), sort_keys=True) + "\n"
         )
         _rename_exclusive(temporary, case)
+        retained = True
     except CasebookError:
-        shutil.rmtree(temporary, ignore_errors=True)
-        try:
-            if created_cases:
-                cases.rmdir()
-        except OSError:
-            pass
         raise
     except (OSError, sqlite3.Error) as exc:
-        shutil.rmtree(temporary, ignore_errors=True)
-        try:
-            if created_cases:
-                cases.rmdir()
-        except OSError:
-            pass
         raise CasebookError("RETAIN_WRITE_FAILED") from exc
+    finally:
+        if not retained:
+            if temporary is not None:
+                shutil.rmtree(temporary, ignore_errors=True)
+            if created_cases:
+                try:
+                    cases.rmdir()
+                except OSError:
+                    pass
     return str(case)
