@@ -138,7 +138,7 @@ def build_r0(values: dict[str, Any], info: dict) -> dict:
     except Exception:  # noqa: BLE001 - unrecordable stage details must not drop R0.
         if values["reason"] not in {str(r) for r in FALLBACK_REASONS}:
             values["reason"] = str(Reason.PAUSE_NO_CUT)
-        return build(**{**values, **dict.fromkeys(info)})
+        return build(**{**values, "episode_id": None, **dict.fromkeys(info)})
 
 
 def append(path: Path, rec: dict) -> None:

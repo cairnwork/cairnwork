@@ -25,7 +25,7 @@ def _body(text: str) -> str:
 def _verdict(base_tail: str, candidate_tail: str = LIVE_REDEF) -> str:
     base = PRE + TEST_A + TEST_B + base_tail
     candidate = PRE + EMPTY_A + TEST_B + candidate_tail
-    got = classify({A_ID, B_ID}, {B_ID}, {"t.py"}, lambda p: candidate, lambda p: base)
+    got = classify({A_ID, B_ID}, {B_ID}, {"t.py"}, lambda p: candidate, lambda p: base, exposed=())
     return "dropped" if A_ID in got.dropped else "removed" if A_ID in got.removed else "?"
 
 
