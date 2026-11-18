@@ -35,7 +35,8 @@ def test_failure3_no_eligible_cases(monkeypatch, tmp_path, lg):
     args = _args(tmp_path, lg, [])
     monkeypatch.setattr(replay, "RUNNER", lambda *_: "accepted")
     assert replay.main(args) == 3
-    assert json.loads((tmp_path / "replay.jsonl").read_text().splitlines()[-1])["eligible"] == 0
+    summary = json.loads((tmp_path / "replay.jsonl").read_text().splitlines()[-1])
+    assert summary["eligible"] == 0 and summary["complete"] is False
 
 
 def test_ac4e_report_rejects_tampering_and_incomplete_run(tmp_path: Path):
