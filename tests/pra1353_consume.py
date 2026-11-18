@@ -124,8 +124,8 @@ def launch(
         cwd = temp_root / "empty"
         cwd.mkdir()
         stdlib_roots = [Path(paths["stdlib"]), Path(paths["platstdlib"])]
+        # Fixed shape for the runner's seven-root check, even where stdlib == platstdlib (macOS).
         roots = [*stdlib_roots, Path(paths["platstdlib"]) / "lib-dynload"]
-        roots = list(dict.fromkeys(roots))
         imports = [sealed / "src", sealed / "tests", Path(paths["purelib"]), Path(paths["platlib"])]
         env = {
             "PATH": "/usr/bin:/bin",

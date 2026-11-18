@@ -372,3 +372,18 @@ def test_gate_git_env_disables_repo_fsmonitor():
     assert gate._GIT_ENV["GIT_CONFIG_KEY_0"] == "core.fsmonitor"
     assert gate._GIT_ENV["GIT_CONFIG_VALUE_0"] == "false"
     assert gate._GIT_ENV["GIT_NO_REPLACE_OBJECTS"] == "1"
+
+
+def test_consumer_passes_seven_roots_when_stdlib_equals_platstdlib(monkeypatch, tmp_path: Path):
+    paths = dict(consume.interpreter_paths())
+    paths["platstdlib"] = paths["stdlib"]
+    monkeypatch.setattr(consume, "interpreter_paths", lambda: paths)
+    seen: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        seen.append(argv)
+        raise RuntimeError("stop after argv")
+
+    with pytest.raises(RuntimeError, match="stop after argv"):
+        consume.launch(PINS, run=fake_run)
+    assert len(seen[0][5:]) == 7
