@@ -6,6 +6,7 @@ import hashlib
 import json
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -61,7 +62,7 @@ def _assert_bundle(lg: dict[str, str], case_dir: Path, tmp_path: Path) -> None:
         "MANIFEST.json",
     }
     subprocess.run(
-        ["git", "bundle", "verify", str(case_dir / "candidate.bundle")],
+        ["git", "-C", str(tmp_path), "bundle", "verify", str(case_dir / "candidate.bundle")],
         check=True,
         capture_output=True,
         text=True,
@@ -222,6 +223,97 @@ def test_ac6d_second_retain_refuses_and_preserves_existing_bytes(
     race_case = raced / "cases" / case_dir.name
     assert (race_case / "owner-marker").read_text() == "preserve"
     assert not list((raced / "cases").glob(".retain-*"))
+
+
+def test_relative_into_works_from_unrelated_cwd(
+    lg: dict[str, str],
+    repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    lg = _paths(lg, repo)
+    monkeypatch.chdir(tmp_path)
+    capsys.readouterr()
+    assert _run(_retain_args(lg, Path("relative-casebook"))) == 0
+    assert "RETAINED" in capsys.readouterr().out
+    case_dir = (
+        tmp_path
+        / "relative-casebook"
+        / "cases"
+        / read_origin(Path(lg["db"]), "task-1", "a2")[1]["row_sha256"]
+    )
+    assert case_dir.is_dir()
+
+
+def test_bundle_verification_works_outside_any_git_repo(
+    lg: dict[str, str],
+    repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    lg = _paths(lg, repo)
+    with tempfile.TemporaryDirectory(dir="/tmp") as plain:
+        cwd = Path(plain)
+        monkeypatch.chdir(cwd)
+        probe = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True)
+        assert probe.returncode != 0
+        into = tmp_path / "casebook"
+        capsys.readouterr()
+        assert _run(_retain_args(lg, into)) == 0
+        assert "RETAINED" in capsys.readouterr().out
+        case_dir = into / "cases" / read_origin(Path(lg["db"]), "task-1", "a2")[1]["row_sha256"]
+        _assert_bundle(lg, case_dir, tmp_path)
+
+
+def test_racing_empty_case_directory_is_preserved_and_temp_is_removed(
+    lg: dict[str, str],
+    repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from experimental.acceptance_casebook import retain
+
+    lg = _paths(lg, repo)
+    real_rename = retain._rename_exclusive
+
+    def race_empty(source: Path, destination: Path) -> None:
+        destination.mkdir()
+        real_rename(source, destination)
+
+    monkeypatch.setattr(retain, "_rename_exclusive", race_empty)
+    into = tmp_path / "empty-race"
+    capsys.readouterr()
+    assert _run(_retain_args(lg, into)) == 2
+    assert "ALREADY_RETAINED" in capsys.readouterr().out
+    cases = into / "cases"
+    case_dir = cases / read_origin(Path(lg["db"]), "task-1", "a2")[1]["row_sha256"]
+    assert list(case_dir.iterdir()) == []
+    assert not list(cases.glob(".retain-*"))
+
+
+def test_accepted_record_is_not_retained(
+    lg: dict[str, str], repo: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    lg = _paths(lg, repo)
+    into = tmp_path / "accepted-casebook"
+    capsys.readouterr()
+    assert _run(_retain_args(lg, into, record="a1", candidate=lg["cand"])) == 2
+    assert "CASE_ORIGIN_MISMATCH" in capsys.readouterr().out
+    assert not (into / "cases").exists()
+
+
+def test_unknown_acceptance_version_is_not_retained(
+    lg: dict[str, str], repo: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    lg = _paths(lg, repo)
+    into = tmp_path / "unknown-version-casebook"
+    capsys.readouterr()
+    assert _run(_retain_args(lg, into, version="f" * 40)) == 2
+    assert "UNKNOWN_ACCEPTANCE_VERSION" in capsys.readouterr().out
+    assert not (into / "cases").exists()
 
 
 @pytest.mark.parametrize("option", ["base", "repo"])
