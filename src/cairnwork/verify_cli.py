@@ -18,8 +18,9 @@ caller that switches on REFUSED must handle it); 3 usage error; 1 internal error
 says what a verdict rests on (protection.py): ``partial`` when declared blackbox checks are among
 the required observations (``partial_macos`` on macOS, #316), ``same_process_only`` when there are
 none ("" when Core was never asked). With ``--require-protection`` an unprotected run is not
-VERIFIED (either grade passes), and without ``--blackbox`` it is refused before anything runs
-(error UNPROTECTED).
+VERIFIED (either grade passes). It is refused before anything runs without ``--blackbox`` (error
+UNPROTECTED) or when a declared check fails the entropy rule (blackbox_entropy.py; error
+BLACKBOX_LOW_ENTROPY or BLACKBOX_TOO_FEW_CASES).
 
 Exit codes for ``migrate-notary``: 0 migrated, or already current (``"migrated": false``); 2
 refused: NOTARY_SCHEMA_MISMATCH (unknown version, or no notary), NOTARY_MISSING (none, or empty),
@@ -38,7 +39,7 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 import cairnwork_sandbox
-from cairnwork import blackbox, protection, runlock
+from cairnwork import blackbox, blackbox_entropy, protection, runlock
 from cairnwork.blackbox_exec import account_can_read
 from cairnwork.deferred_tests import TestCommitRejected
 from cairnwork.intake import Intake, IntakeRefused
@@ -198,6 +199,16 @@ def _run(intake: Intake, args) -> dict[str, Any]:
         raise TaskRejected(exc.code, str(exc)) from exc
     if args.require_protection and path is None:  # strict mode could never be met: burn nothing
         raise TaskRejected(protection.UNPROTECTED_CODE, "--require-protection needs --blackbox")
+    if args.require_protection and declared is not None:
+        problem = next(iter(blackbox_entropy.declaration_problems(declared)), None)
+        if problem is not None:
+            check_id = problem.partition(":")[2] or "NO_CHECKS"
+            code = (
+                "BLACKBOX_LOW_ENTROPY"
+                if problem.startswith("LOW_ENTROPY:")
+                else "BLACKBOX_TOO_FEW_CASES"
+            )
+            raise TaskRejected(code, f"blackbox check {check_id[:80]!r} fails entropy rule")
     account = intake.verifier_account() if path is not None else None
     if path is not None and account is not None and account_can_read(account, path):
         raise TaskRejected(
