@@ -5,9 +5,12 @@ The P2P base probe (p2p.py) records the node ids pytest ran on the base for the 
 guard (collect_reader.py), on the test commit (``test_ids``). A base id missing there is:
 
 * ``removed`` when the test commit edited its file (a deferred test file), the base file defines
-  the test there (a ``def`` of that name in the node id's class, or at module level), and the
-  name no longer appears in that file's source on the test commit: the author removed it, so
-  its base outcome says nothing about the candidate and it is not required;
+  the test there (a ``def`` of that name in the node id's class, at module level, or inherited
+  from one unambiguous same-file ancestor), and the name no longer appears in that file's source
+  on the test commit: the author removed it, so its base outcome says nothing about the candidate
+  and it is not required. Inherited ids qualify only when the origin and subclass scopes no longer
+  mention the name, no uncollected binding remains, the origin id is also gone, no same-name test
+  remains collected in the file, and runtime collect-only reports no matching exposure;
 * ``dropped`` otherwise. The test commit made pytest stop collecting a base test without
   removing it (a changed base class, decorator, condition, or a test the base file inherits or
   builds dynamically, whose name was never in that file): the test commit is refused
@@ -103,6 +106,7 @@ def collected_side(task, files, outcomes, test_files, ctx, budget, attempt_id) -
         lambda p: _source(task, task.test_commit, p) if p in there else "",
         lambda p: _source(task, task.base_commit, p),
         exposed=exposed,
+        changed_test_files=_changed_test_files(task),
     )
     if side.dropped:
         detail = _named(sorted(side.dropped))
@@ -123,7 +127,9 @@ def collected_side(task, files, outcomes, test_files, ctx, budget, attempt_id) -
     )
 
 
-def classify(base_ids, test_ids, edited, source, base_source, *, exposed=None) -> CollectedSide:
+def classify(
+    base_ids, test_ids, edited, source, base_source, *, exposed=None, changed_test_files=None
+) -> CollectedSide:
     """Classify missing ids in a bounded subprocess; source callables are read in the parent."""
     base_ids, test_ids, edited = frozenset(base_ids), frozenset(test_ids), frozenset(edited)
     collected_funcs = {_function(nodeid) for nodeid in test_ids}
@@ -137,20 +143,42 @@ def classify(base_ids, test_ids, edited, source, base_source, *, exposed=None) -
         "base": {path: base_source(path) for path in sorted(needed)},
     }
     runtime_names = _edited_exposure(exposed, edited)
-    removed, dropped = _run_classification(base_ids, test_ids, edited, sources, runtime_names)
+    removed, dropped = _run_classification(
+        base_ids, test_ids, edited, sources, runtime_names, changed_test_files
+    )
     return CollectedSide(base_ids, test_ids, removed, dropped)
 
 
 def _edited_exposure(exposed, edited):
     """Entries of a well-formed collect-only fact in edited files; anything else is no fact."""
-    if not isinstance(exposed, (tuple, list)) or not all(
-        isinstance(entry, str) and _valid_exposed_id(entry) for entry in exposed
+    if (
+        not isinstance(exposed, (tuple, list))
+        or not all(isinstance(entry, str) and _valid_exposed_id(entry) for entry in exposed)
+        or len(set(exposed)) != len(exposed)
     ):
         return None
     return sorted(entry for entry in exposed if _file(entry) in edited)
 
 
-def _run_classification(base_ids, test_ids, edited, sources, exposed=None):
+def _changed_test_files(task) -> list[str] | None:
+    """Every path the test commit changed, or no fact if the diff cannot be read."""
+    try:
+        changed = run_git(
+            task.repo,
+            "diff",
+            "--name-only",
+            "-z",
+            "--no-renames",
+            task.base_commit,
+            task.test_commit,
+            "--",
+        ).split("\0")
+    except GitCommandError:
+        return None
+    return sorted(path for path in changed if path)
+
+
+def _run_classification(base_ids, test_ids, edited, sources, exposed=None, changed_test_files=None):
     payload = json.dumps(
         {
             "base_ids": sorted(base_ids),
@@ -158,6 +186,7 @@ def _run_classification(base_ids, test_ids, edited, sources, exposed=None):
             "edited": sorted(edited),
             "sources": sources,
             "exposed": exposed,
+            "changed_test_files": changed_test_files,
         }
     ).encode()
     output, timed_out, returncode = _run_child(_classify_argv(), payload)
