@@ -115,18 +115,23 @@ def _changed(head: Path, base_sha: str, head_sha: str) -> set[str]:
 
 
 def _bytecode(head: Path, head_sha: str) -> list[str]:
-    """Tracked bytecode in the head tree; Python may run it instead of the reviewed .py (#1465)."""
+    """Tracked bytecode in the head tree; Python may run it instead of the reviewed .py (#1465).
+
+    A gitlink (submodule) is refused too: ls-tree -r does not list the files inside it.
+    """
     listing = subprocess.run(
-        ["git", "-C", str(head), "ls-tree", "-r", "-z", "--name-only", "--full-tree"]
+        ["git", "-C", str(head), "ls-tree", "-r", "-z", "--full-tree"]
         + ["--end-of-options", head_sha],
         check=True,
         capture_output=True,
     ).stdout
     hits = []
-    for raw in listing.split(b"\0"):
+    for entry in filter(None, listing.split(b"\0")):
+        meta, raw = entry.split(b"\t", 1)  # "<mode> <type> <object>\t<path>"; else rc 2
         name = raw.decode("utf-8", "surrogateescape")
         parts = name.casefold().split("/")
-        if raw and ("__pycache__" in parts or parts[-1].endswith(BYTECODE_SUFFIXES)):
+        gitlink = meta.split(b" ")[1] == b"commit"
+        if gitlink or "__pycache__" in parts or parts[-1].endswith(BYTECODE_SUFFIXES):
             hits.append(name)
     return sorted(hits)
 

@@ -96,6 +96,15 @@ def test_bytecode_already_on_base_is_still_refused(tmp_path: Path) -> None:
     assert (code, out) == (3, 'PIN_GUARD BYTECODE_TRACKED "pkg/other.pyc"\n')
 
 
+def test_gitlink_is_refused(tmp_path: Path) -> None:
+    # ls-tree -r does not descend into a submodule, so bytecode inside one would be hidden.
+    repo, trusted, base = setup(tmp_path)
+    git(repo, "update-index", "--add", "--cacheinfo", f"160000,{base},vendor/lib")
+    git(repo, "-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "-qm", "gitlink")
+    head = git(repo, "rev-parse", "HEAD")
+    assert invoke(repo, trusted, base, head) == (3, 'PIN_GUARD BYTECODE_TRACKED "vendor/lib"\n')
+
+
 def test_bytecode_name_with_newline_prints_one_line(tmp_path: Path) -> None:
     repo, trusted, base = setup(tmp_path)
     head = add(repo, "pkg/x\n::error::forged.pyc")
