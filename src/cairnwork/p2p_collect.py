@@ -146,8 +146,10 @@ def classify(base_ids, test_ids, edited, source, base_source, *, exposed=None) -
 
 def _edited_exposure(exposed, edited):
     """Entries of a well-formed collect-only fact in edited files; anything else is no fact."""
-    if not isinstance(exposed, (tuple, list)) or not all(
-        isinstance(entry, str) and _valid_exposed_id(entry) for entry in exposed
+    if (
+        not isinstance(exposed, (tuple, list))
+        or not all(isinstance(entry, str) and _valid_exposed_id(entry) for entry in exposed)
+        or len(set(exposed)) != len(exposed)
     ):
         return None
     return sorted(entry for entry in exposed if _file(entry) in edited)

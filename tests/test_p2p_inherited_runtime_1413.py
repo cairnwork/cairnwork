@@ -21,10 +21,12 @@ NODE = f"{TARGET}::TestB::test_x"
 INHERITED_MISSED_BY_AST = {"concat", "exec_concat", "fstring", "loop", "metaclass", "type_concat"}
 
 
-def _assembled(shape):
-    return (
-        "def _x(self):\n    assert True\nf = _x\n" + HONEST + "class Helper: pass\n" + shape + "\n"
-    )
+LAMBDA_PAYLOAD = "_x = lambda self: None\nf = _x\n"
+DEF_PAYLOAD = "def _x(self):\n    assert True\nf = _x\n"
+
+
+def _assembled(shape, payload=LAMBDA_PAYLOAD):
+    return payload + HONEST + "class Helper: pass\n" + shape + "\n"
 
 
 def _side(tmp_path, test, *, real_fact):
@@ -51,6 +53,13 @@ def test_inherited_runtime_reattachment_stays_dropped(tmp_path, shape):
 def test_real_runtime_fact_catches_shapes_ast_alone_misses(tmp_path, shape):
     side = _side(tmp_path, _assembled(ASSEMBLERS[shape]), real_fact=False)
     assert (NODE in side.removed) == (shape in INHERITED_MISSED_BY_AST)
+
+
+@pytest.mark.parametrize("shape", sorted(INHERITED_MISSED_BY_AST))
+def test_ast_catches_def_payload_run_at_import(tmp_path, shape):
+    """#1413 Codex round 2: a module-level def loaded at import is not excused by AST."""
+    side = _side(tmp_path, _assembled(ASSEMBLERS[shape], DEF_PAYLOAD), real_fact=False)
+    assert NODE in side.dropped
 
 
 def test_real_honest_inherited_deletion_is_removed(tmp_path):
@@ -164,3 +173,68 @@ def test_plain_move_keeps_direct_id_removed_and_inherited_id_dropped():
     side = classify_payload(payload)
     assert side["removed"] == ["t.py::TestA::test_x"]
     assert side["dropped"] == ["t.py::TestB::test_x"]
+
+
+KEPT_SRC = "class TestA:\n    def test_keep(self): pass\nclass TestB(TestA): pass\n"
+
+
+def _inherited_deletion(test_src, exposed):
+    payload = {
+        "base_ids": ["t.py::TestA::test_x", "t.py::TestB::test_x"],
+        "test_ids": ["t.py::TestA::test_keep", "t.py::TestB::test_keep"],
+        "edited": ["t.py"],
+        "exposed": exposed,
+        "sources": {
+            "base": {
+                "t.py": "class TestA:\n    def test_x(self): pass\n    def test_keep(self): pass\n"
+                "class TestB(TestA): pass\n"
+            },
+            "test": {"t.py": test_src},
+        },
+    }
+    return classify_payload(payload)
+
+
+@pytest.mark.parametrize(
+    "exposed, verdict",
+    [
+        (["t.py::Helper::test_other", "t.py::Helper::test_other"], "dropped"),
+        (["u.py::Helper::test_other", "u.py::Helper::test_other"], "dropped"),
+        (["t.py::Helper::test_other"], "removed"),
+        ([], "removed"),
+    ],
+    ids=["duplicate-same-file", "duplicate-other-file", "single", "empty"],
+)
+def test_duplicate_runtime_fact_is_no_fact(exposed, verdict):
+    """Codex round 2 at 3a14ecc8: the collector never repeats an id, so a repeat is no fact."""
+    assert "t.py::TestB::test_x" in _inherited_deletion(KEPT_SRC, exposed)[verdict]
+
+
+IMPORT_TIME_RUNS = {
+    "module-call": "def _run_test_body():\n    assert True\n_run_test_body()\n",
+    "alias-call": "def _body():\n    assert True\nrun = _body\nrun()\n",
+    "class-instance": "class Body:\n    def __init__(self):\n        assert True\nBody()\n",
+    "default-arg": "def _body():\n    return 1\ndef helper(x=_body()):\n    pass\n",
+    "decorator": "def _body(f):\n    return f\n@_body\ndef helper():\n    pass\n",
+    "class-body": "def _body():\n    assert True\nclass Runner:\n    value = _body()\n",
+}
+
+
+@pytest.mark.parametrize("prefix", IMPORT_TIME_RUNS.values(), ids=IMPORT_TIME_RUNS.keys())
+def test_local_code_run_at_import_keeps_inherited_id_dropped(prefix):
+    """Codex round 2 at 3a14ecc8: a renamed test body called at module scope still runs."""
+    assert "t.py::TestB::test_x" in _inherited_deletion(prefix + KEPT_SRC, [])["dropped"]
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        "",
+        "def _helper():\n    return 1\ndef _uses():\n    return _helper()\n",
+        "import re\nPATTERN = re.compile('x')\n",
+        "class Helper:\n    pass\nNAME = Helper.__name__\n",
+    ],
+    ids=["nothing", "helper-only-used-in-bodies", "imported-call", "class-reference"],
+)
+def test_no_local_code_at_import_still_removes_inherited_id(prefix):
+    assert "t.py::TestB::test_x" in _inherited_deletion(prefix + KEPT_SRC, [])["removed"]
