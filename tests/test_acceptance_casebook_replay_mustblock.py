@@ -75,6 +75,7 @@ def test_bad_runner_family_isolated_and_summarized(monkeypatch, tmp_path, lg, ca
         lambda row: row.update(state="/real/operator/state"),
         lambda row: row.update(timeout=3),
         lambda row: row.update(base="deadbeef"),
+        lambda row: row.update(repo_path="/operator/repository"),
         lambda row: row.pop("allowed_file"),
     ],
 )
@@ -126,7 +127,23 @@ def test_ac4b_versions_refuse_before_running(monkeypatch, tmp_path, lg, capsys, 
     assert not out.exists() or out.read_bytes() == b""
 
 
-@pytest.mark.parametrize("target", ["book", "head", "db", "symlink"])
+@pytest.mark.parametrize(
+    "target",
+    [
+        "book",
+        "head",
+        "db",
+        "symlink",
+        "hard_book",
+        "head_hard_book",
+        "hard_db",
+        "head_symlink",
+        "lock_hard_book",
+        "wal",
+        "shm",
+        "journal",
+    ],
+)
 def test_out_cannot_overwrite_inputs(monkeypatch, tmp_path, lg, capsys, target):
     case = _confirmed(lg, capsys, "a1", "accepted_bad")
     args = _args(tmp_path, lg, [case])
@@ -134,15 +151,83 @@ def test_out_cannot_overwrite_inputs(monkeypatch, tmp_path, lg, capsys, target):
     out = {"book": book, "head": book.with_name(book.name + ".head"), "db": Path(lg["db"])}.get(
         target
     )
+    book_head = book.with_name(book.name + ".head")
     if target == "symlink":
         out = tmp_path / "book-link"
         out.symlink_to(book)
+    elif target == "hard_book":
+        out = tmp_path / "book-hardlink"
+        out.hardlink_to(book)
+    elif target == "head_hard_book":
+        out = tmp_path / "fresh-output"
+        out.with_name(out.name + ".head").hardlink_to(book_head)
+    elif target == "hard_db":
+        out = tmp_path / "db-hardlink"
+        out.hardlink_to(Path(lg["db"]))
+    elif target == "head_symlink":
+        out = tmp_path / "fresh-output"
+        out.with_name(out.name + ".head").symlink_to(book_head)
+    elif target == "lock_hard_book":
+        book_lock = book.with_name(book.name + ".lock")
+        book_lock.touch()
+        out = tmp_path / "fresh-lock-output"
+        out.with_name(out.name + ".lock").hardlink_to(book_lock)
+    elif target in ("wal", "shm", "journal"):
+        sidecar = Path(lg["db"]).with_name(Path(lg["db"]).name + "-" + target)
+        sidecar.touch(exist_ok=True)
+        out = tmp_path / f"db-{target}-hardlink"
+        out.hardlink_to(sidecar)
     idx = args.index("--out") + 1
     args[idx] = str(out)
-    before = (book.read_bytes(), book.stat().st_mtime_ns)
-    monkeypatch.setattr(replay, "RUNNER", lambda *_: "accepted")
+    before = (
+        book.read_bytes(),
+        book.stat().st_mtime_ns,
+        book_head.read_bytes(),
+        book_head.stat().st_mtime_ns,
+    )
+    calls = []
+    monkeypatch.setattr(replay, "RUNNER", lambda *a: calls.append(a) or "accepted")
     assert replay.main(args) == 2
-    assert before == (book.read_bytes(), book.stat().st_mtime_ns)
+    assert capsys.readouterr().out.strip() == "REPLAY_OUTPUT_REFUSED"
+    assert not calls
+    assert before == (
+        book.read_bytes(),
+        book.stat().st_mtime_ns,
+        book_head.read_bytes(),
+        book_head.stat().st_mtime_ns,
+    )
+
+
+def test_case_recorded_commits_are_passed_to_runner(monkeypatch, tmp_path, lg, capsys):
+    case = _confirmed(lg, capsys, "a1", "accepted_bad")
+    args = _args(tmp_path, lg, [case])
+    received = []
+    monkeypatch.setattr(
+        replay, "RUNNER", lambda payload, _: received.append(payload.copy()) or "accepted"
+    )
+    assert replay.main(args) == 0
+    assert len(received) == 2
+    assert all(row["candidate"] == case["candidate"] for row in received)
+    assert all(row["base"] == case["base"] for row in received)
+
+
+@pytest.mark.parametrize("key", ["candidate", "base"])
+@pytest.mark.parametrize("value", ["A" * 40, "a" * 39, "--upload-pack=x", 7])
+def test_invalid_recorded_candidate_is_rejected_before_runner(
+    monkeypatch, tmp_path, lg, capsys, key, value
+):
+    case = _confirmed(lg, capsys, "a1", "accepted_bad")
+    args = _args(tmp_path, lg, [case])  # a valid inputs row: only the recorded commit is bad
+    case[key] = value
+    monkeypatch.setattr(replay, "list_cases", lambda *_: [case])
+    monkeypatch.setattr(replay, "_confirmation", lambda *_: "f" * 64)
+    calls = []
+    monkeypatch.setattr(replay, "RUNNER", lambda *_: calls.append(True) or "accepted")
+    assert replay.main(args) == 3
+    result = json.loads(Path(args[args.index("--out") + 1]).read_text().splitlines()[0])
+    assert result["outcome"] == "UNREPLAYABLE"
+    assert result["reason"] == "REPLAY_INPUT_MISMATCH"
+    assert not calls
 
 
 def test_confirmation_is_the_counted_chain_line_after_a_non_counting_one(

@@ -84,7 +84,6 @@ def _args(tmp_path: Path, lg: dict[str, str], cases: list[dict[str, Any]]) -> li
         contract = rec.request["acceptance_contract"]
         plan = rec.request["verification_plan"]
         original_inputs[case["line_sha256"]] = {
-            "repo_path": lg["dir"],
             "allowed_file": contract["allowed_paths"],
             "verifier": plan["required_verifier_ids"],
         }

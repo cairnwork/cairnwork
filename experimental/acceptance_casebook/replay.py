@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import subprocess
 from datetime import UTC, datetime
@@ -37,6 +38,15 @@ _ZERO = "0" * 64
 
 def _digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def _same_path(left: Path, right: Path) -> bool:
+    try:
+        return left.resolve() == right.resolve() or (
+            left.exists() and right.exists() and os.path.samefile(left, right)
+        )
+    except OSError:
+        return False
 
 
 def _json(path: Path) -> Any:
@@ -114,8 +124,12 @@ def _bound_inputs(case: dict[str, Any], inputs: Any, request: dict[str, Any]) ->
     raw = inputs.get(case["line_sha256"]) if isinstance(inputs, dict) else None
     if not isinstance(raw, dict):
         raise CasebookError("REPLAY_INPUT_MISMATCH")
-    if set(raw) - {"repo_path", "allowed_file", "verifier"}:
+    if set(raw) != {"allowed_file", "verifier"}:
         raise CasebookError("REPLAY_INPUT_MISMATCH")
+    for key in ("base", "candidate"):
+        value = case.get(key)
+        if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{40}", value) is None:
+            raise CasebookError("REPLAY_INPUT_MISMATCH")
     contract = request.get("acceptance_contract", {})
     plan = request.get("verification_plan", {})
     bindings = {
@@ -134,9 +148,7 @@ def _bound_inputs(case: dict[str, Any], inputs: Any, request: dict[str, Any]) ->
             raise CasebookError("REPLAY_INPUT_MISMATCH")
         if expected[key] is None or sorted(supplied) != sorted(expected[key]):
             raise CasebookError("REPLAY_INPUT_MISMATCH")
-    if not isinstance(raw.get("repo_path"), str):
-        raise CasebookError("REPLAY_INPUT_MISMATCH")
-    return raw
+    return {**raw, "base": case["base"], "candidate": case["candidate"]}
 
 
 def _append_record(out: Path, record: dict[str, Any]) -> None:
@@ -165,7 +177,7 @@ def _case_result(
     for index in range(repeat):
         result, reason, code, output = _run_one(
             case,
-            {**raw, "base": case["base"], "candidate": case["candidate"], "request": request},
+            {**raw, "request": request},
             index,
         )
         mapped.append(result)
@@ -309,14 +321,11 @@ def _replay(args: argparse.Namespace) -> int:
     inputs = json.loads(inputs_bytes)
     input_digest = _digest(inputs_bytes)
     book = args.casebook
-    protected = [
-        book,
-        book.with_name(book.name + ".head"),
-        book.with_name(book.name + ".lock"),
-        args.notary_db,
-    ]
-    out_resolved = args.out.resolve()
-    if any(out_resolved == path.resolve() for path in protected):
+    db = args.notary_db
+    protected = [book.with_name(book.name + s) for s in ("", ".head", ".lock")]
+    protected += [db.with_name(db.name + s) for s in ("", "-wal", "-shm", "-journal")]
+    outputs = [args.out.with_name(args.out.name + s) for s in ("", ".head", ".lock")]
+    if any(_same_path(output, path) for output in outputs for path in protected):
         raise CasebookError("REPLAY_OUTPUT_REFUSED")
 
     head, all_cases = locked(book, lambda: (_read_chain(book)[1], list_cases(book, args.notary_db)))
