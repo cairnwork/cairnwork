@@ -41,7 +41,7 @@ def _side(tmp_path, test, *, real_fact, extra=()):
         lambda _: test,
         lambda _: BASE,
         exposed=exposed,
-        changed_python_files=[TARGET],
+        changed_test_files=[TARGET],
     )
 
 
@@ -98,7 +98,7 @@ def test_missing_or_invalid_runtime_fact_keeps_inherited_id_dropped(
         "base_ids": base_ids,
         "test_ids": test_ids,
         "edited": ["t.py"],
-        "changed_python_files": ["t.py"],
+        "changed_test_files": ["t.py"],
         "sources": {"base": {"t.py": base}, "test": {"t.py": test}},
     }
     if payload_exposed == "malformed":
@@ -132,7 +132,7 @@ def test_inherited_honest_deletion_passes(base, test):
         "base_ids": [base_node, test_node] if base_node != test_node else [base_node],
         "test_ids": [],
         "edited": ["t.py"],
-        "changed_python_files": ["t.py"],
+        "changed_test_files": ["t.py"],
         "exposed": [],
         "sources": {"base": {"t.py": base}, "test": {"t.py": test}},
     }
@@ -140,29 +140,44 @@ def test_inherited_honest_deletion_passes(base, test):
 
 
 @pytest.mark.parametrize(
-    "source",
+    "source,expected",
     [
-        "import re\nPATTERN = re.compile('x')\nclass TestA: pass\nclass TestB(TestA): pass\n",
-        "class Box: pass\nNAMES = list(Box.__dict__)\n"
-        "class TestA: pass\nclass TestB(TestA): pass\n",
-        "class Box: pass\nclass TestA:\n    def test_keep(self, monkeypatch):\n"
-        "        monkeypatch.setattr(Box, 'value', 1, raising=False)\nclass TestB(TestA): pass\n",
+        (
+            "import re\nPATTERN = re.compile('x')\nclass TestA: pass\nclass TestB(TestA): pass\n",
+            "dropped",
+        ),
+        (
+            "class Box: pass\nNAMES = list(Box.__dict__)\n"
+            "class TestA: pass\nclass TestB(TestA): pass\n",
+            "dropped",
+        ),
+        (
+            "class Box: pass\nclass TestA:\n    def test_keep(self, monkeypatch):\n"
+            "        monkeypatch.setattr(Box, 'value', 1, raising=False)\n"
+            "class TestB(TestA): pass\n",
+            "removed",
+        ),
     ],
     ids=["re-compile", "dict-read", "monkeypatch-setattr"],
 )
-def test_honest_runtime_patterns_do_not_block_deletion(source):
+def test_honest_runtime_patterns_do_not_block_deletion(source, expected):
     base = "class TestA:\n    def test_x(self): pass\nclass TestB(TestA): pass\n"
     payload = {
         "base_ids": ["t.py::TestA::test_x", "t.py::TestB::test_x"],
         "test_ids": [],
         "edited": ["t.py"],
-        "changed_python_files": ["t.py"],
+        "changed_test_files": ["t.py"],
         "exposed": [],
         "sources": {"base": {"t.py": base}, "test": {"t.py": source}},
     }
     # the allowlist drops a module-level call (known conservative false red)
-    verdict = "dropped" if "(" in source.split("class TestA")[0] else "removed"
-    assert set(classify_payload(payload)[verdict]) >= {"t.py::TestB::test_x"}
+    side = classify_payload(payload)
+    assert set(side["removed"]) == (
+        {"t.py::TestA::test_x", "t.py::TestB::test_x"}
+        if expected == "removed"
+        else {"t.py::TestA::test_x"}
+    )
+    assert set(side["dropped"]) == (set() if expected == "removed" else {"t.py::TestB::test_x"})
 
 
 def test_plain_move_keeps_direct_id_removed_and_inherited_id_dropped():
@@ -174,7 +189,7 @@ def test_plain_move_keeps_direct_id_removed_and_inherited_id_dropped():
         "base_ids": ["t.py::TestA::test_x", "t.py::TestB::test_x"],
         "test_ids": ["t.py::TestC::test_x"],
         "edited": ["t.py"],
-        "changed_python_files": ["t.py"],
+        "changed_test_files": ["t.py"],
         "exposed": [],
         "sources": {"base": {"t.py": base}, "test": {"t.py": test}},
     }
@@ -191,7 +206,7 @@ def _inherited_deletion(test_src, exposed):
         "base_ids": ["t.py::TestA::test_x", "t.py::TestB::test_x"],
         "test_ids": ["t.py::TestA::test_keep", "t.py::TestB::test_keep"],
         "edited": ["t.py"],
-        "changed_python_files": ["t.py"],
+        "changed_test_files": ["t.py"],
         "exposed": exposed,
         "sources": {
             "base": {

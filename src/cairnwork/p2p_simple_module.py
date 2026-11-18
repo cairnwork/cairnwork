@@ -4,6 +4,17 @@ from __future__ import annotations
 
 import ast
 import builtins
+import io
+import tokenize
+
+
+def _utf8_source(text: str) -> bool:
+    """Whether Python's source-encoding declaration resolves to UTF-8."""
+    try:
+        encoding, _ = tokenize.detect_encoding(io.BytesIO(text.encode("utf-8")).readline)
+        return encoding in {"utf-8", "utf-8-sig"}
+    except (SyntaxError, LookupError, UnicodeError, ValueError):
+        return False
 
 
 def _simple_test_module(tree: ast.Module) -> bool:

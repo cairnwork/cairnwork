@@ -19,19 +19,19 @@ from cairnwork.p2p_bindings import (
     walk_without_nested_classes,
 )
 from cairnwork.p2p_function import _function
-from cairnwork.p2p_simple_module import _simple_test_module
+from cairnwork.p2p_simple_module import _simple_test_module, _utf8_source
 
 
 def classify_payload(data: dict) -> dict:
     base_ids, test_ids, edited = map(set, (data["base_ids"], data["test_ids"], data["edited"]))
     exposed = data.get("exposed")
-    changed_python = data.get("changed_python_files")
+    changed = data.get("changed_test_files")
     if (
-        not isinstance(changed_python, list)
-        or not all(isinstance(item, str) for item in changed_python)
-        or len(set(changed_python)) != len(changed_python)
+        not isinstance(changed, list)
+        or not all(isinstance(item, str) for item in changed)
+        or len(set(changed)) != len(changed)
     ):
-        changed_python = None
+        changed = None
     if (
         not isinstance(exposed, list)
         or not all(isinstance(item, str) and _valid_exposed_id(item) for item in exposed)
@@ -65,7 +65,8 @@ def classify_payload(data: dict) -> dict:
                     and not _scope_mentions(test_tree, owners, name, texts[path])
                     and not _kept_uncollected(test_tree, name, path, test_ids)
                     and _simple_test_module(test_tree)
-                    and changed_python == [path]
+                    and _utf8_source(texts[path])
+                    and changed == [path]
                     and f"{path}::{origin}::{name}" not in test_ids
                     and not any(
                         _file(func) == path and func.rpartition("::")[2] == name

@@ -26,7 +26,7 @@ def _split(base: str, test: str, base_ids, test_ids):
         lambda p: test,
         lambda p: base,
         exposed=(),
-        changed_python_files=["t.py"],
+        changed_test_files=["t.py"],
     )
     return side.removed, side.dropped
 

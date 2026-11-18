@@ -64,14 +64,14 @@ def test_dynamic_inherited_reattachment_is_refused_end_to_end(repo, tmp_path, sh
 
 
 @pytest.mark.parametrize("path", ["tests/conftest.py", "tests/helper.py"])
-def test_other_changed_python_file_keeps_inherited_id_dropped(path):
-    payload = _payload(HONEST) | {"changed_python_files": [TARGET, path]}
+def test_other_changed_file_keeps_inherited_id_dropped(path):
+    payload = _payload(HONEST) | {"changed_test_files": [TARGET, path]}
     assert NODE in classify_payload(payload)["dropped"]
 
 
-def test_missing_changed_python_file_fact_keeps_inherited_id_dropped():
+def test_missing_changed_file_fact_keeps_inherited_id_dropped():
     payload = _payload(HONEST)
-    payload.pop("changed_python_files")
+    payload.pop("changed_test_files")
     assert NODE in classify_payload(payload)["dropped"]
 
 
@@ -80,7 +80,7 @@ def _payload(test):
         "base_ids": [f"{TARGET}::TestA::test_x", NODE],
         "test_ids": [],
         "edited": [TARGET],
-        "changed_python_files": [TARGET],
+        "changed_test_files": [TARGET],
         "exposed": [],
         "sources": {
             "base": {TARGET: BASE},
@@ -186,12 +186,12 @@ def test_import_time_shapes_are_blocked_by_allowlist():
         assert node in _inherited_deletion(source + HONEST, [])["dropped"]
 
 
-def test_changed_python_files_count_every_python_path(tmp_path):
-    """A root conftest.py outside the test roots still counts; a bad commit is no fact."""
+def test_changed_test_files_count_every_path(tmp_path):
+    """Every changed path, including non-Python files, counts; a bad commit is no fact."""
     import subprocess
     from types import SimpleNamespace
 
-    from cairnwork.p2p_collect import _changed_test_python_files
+    from cairnwork.p2p_collect import _changed_test_files
 
     def git(*args):
         cmd = ["git", "-c", "commit.gpgsign=false", "-C", str(tmp_path), *args]
@@ -208,13 +208,21 @@ def test_changed_python_files_count_every_python_path(tmp_path):
     (tmp_path / "tests" / "test_a.py").write_text("x = 2\n")
     (tmp_path / "conftest.py").write_text("y = 1\n")
     (tmp_path / "README.md").write_text("r\n")
+    (tmp_path / "pytest.ini").write_text("[pytest]\n")
+    (tmp_path / "tests" / "evil.pyc").write_bytes(b"compiled")
     git("add", "-A")
     git("commit", "-qm", "test")
     head = git("rev-parse", "HEAD")
     task = SimpleNamespace(repo=tmp_path, base_commit=base, test_commit=head)
-    assert _changed_test_python_files(task) == ["conftest.py", "tests/test_a.py"]
+    assert _changed_test_files(task) == [
+        "README.md",
+        "conftest.py",
+        "pytest.ini",
+        "tests/evil.pyc",
+        "tests/test_a.py",
+    ]
     bad = SimpleNamespace(repo=tmp_path, base_commit=base, test_commit="0" * 40)
-    assert _changed_test_python_files(bad) is None
+    assert _changed_test_files(bad) is None
 
 
 EVIL_AS_PYTEST = (
