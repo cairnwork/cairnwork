@@ -161,6 +161,14 @@ def _environment_problems(name: str, text: str) -> list[str]:
     return found
 
 
+# The only actions a trusted environment job may run, by exact commit. A name-only match with any
+# 40-hex SHA is not enough: GitHub resolves commits from the whole fork network.
+TRUSTED_JOB_ACTIONS = (
+    r"actions/checkout@11d5960a326750d5838078e36cf38b85af677262"
+    r"|actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510"
+)
+
+
 # A remote reusable workflow runs in this repository's context and may bind its own job to the
 # trusted environment, which this checker cannot see. Each one is pinned here to a commit whose
 # workflow was reviewed not to use the environment; bumping the pin needs a PR that edits this set.
@@ -242,7 +250,7 @@ def _trusted_job_problems(name: str, job_name: str, job: str, shape: str) -> lis
     for line in lines:
         use = re.match(r"^\s*(?:-\s*)?uses:\s*(\S+)\s*$", _commentless(line), re.I)
         if use and not re.fullmatch(
-            r"actions/(?:checkout|create-github-app-token)@[0-9a-fA-F]{40}",
+            TRUSTED_JOB_ACTIONS,
             use.group(1),
         ):
             found.append(

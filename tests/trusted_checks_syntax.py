@@ -87,6 +87,10 @@ def strict_syntax_problems(
     added to it: those lines are opaque text, not workflow structure.
     """
     found: list[str] = []
+    # Python splitlines() also breaks at these characters and YAML does not, so a single YAML
+    # line could pose as several workflow lines; only LF line ends are accepted.
+    if re.search("[\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029]", text):
+        found.append(f"{name}: strict YAML syntax allows only LF line ends")
     run_indent: int | None = None
     previous_indent: int | None = None
     previous_opens = False

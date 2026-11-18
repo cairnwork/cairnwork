@@ -133,3 +133,16 @@ FAKE_TOKEN_IN_RUN_SCRIPT = """\
 )
 def test_run_script_text_never_counts_as_step_structure(step: str, needle: str) -> None:
     assert any(needle in message for message in problems("bad.yml", GOOD + step))
+
+
+@pytest.mark.parametrize(
+    "separator", ["\r", "\x0b", "\x0c", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"]
+)
+def test_only_lf_line_ends_are_accepted(separator: str) -> None:
+    text = GOOD.replace("    steps:\n", "    steps:" + separator + "\n", 1)
+    assert any("only LF line ends" in message for message in problems("bad.yml", text))
+
+
+def test_trusted_job_actions_are_pinned_to_exact_commits() -> None:
+    other_sha = GOOD.replace("64ab729a6294000f5aa4a4bc0b73d1f32bc45510", "b" * 40)
+    assert any("unpinned or unlisted action" in m for m in problems("bad.yml", other_sha))
