@@ -12,6 +12,7 @@ from typing import Any
 from experimental.acceptance_casebook.confirm import check_record, confirm_case
 from experimental.acceptance_casebook.identity import IdentityError, resolve_actor
 from experimental.acceptance_casebook.repair import repair
+from experimental.acceptance_casebook.retain import retain
 from experimental.acceptance_casebook.store import (
     CasebookError,
     add_case,
@@ -23,10 +24,11 @@ from experimental.acceptance_casebook.store import (
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="acceptance_casebook", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("add", "list", "confirm", "repair"):
+    for name in ("add", "list", "confirm", "repair", "retain"):
         p = sub.add_parser(name)
-        p.add_argument("--casebook", type=Path, required=True)
-        p.add_argument("--json", action="store_true")
+        if name != "retain":
+            p.add_argument("--casebook", type=Path, required=True)
+            p.add_argument("--json", action="store_true")
     lst = sub.choices["list"]
     lst.add_argument("--notary-db", type=Path, help="re-check each case's original evidence")
     lst.add_argument("--eligible", action="store_true", help="only confirmed, re-checked cases")
@@ -40,12 +42,18 @@ def _parser() -> argparse.ArgumentParser:
     add.add_argument("--kind", required=True)
     add.add_argument("--found-by", required=True)
     add.add_argument("--evidence-file", required=True, help="JSON: candidate, task_id, ...")
+    retain_parser = sub.choices["retain"]
+    retain_parser.add_argument("--json", action="store_true")
+    for option in ("notary-db", "repo", "cairnwork-clone", "into"):
+        retain_parser.add_argument(f"--{option}", type=Path, required=True)
+    for option in ("record", "base", "candidate", "version"):
+        retain_parser.add_argument(f"--{option}", required=True)
     conf = sub.choices["confirm"]
     conf.add_argument("--case", required=True, help="the case's line_sha256 from list")
     conf.add_argument("--conclusion", choices=("confirmed", "rejected"), required=True)
     conf.add_argument("--check-method", required=True)
     conf.add_argument("--check-evidence-file", required=True)
-    for p in (add, conf):  # identity: see identity.py; the session id is never a flag
+    for p in (add, conf, retain_parser):  # identity: see identity.py; session id is never a flag
         for flag in IDENTITY_FLAGS:
             p.add_argument(f"--{flag}")
     return parser
@@ -110,6 +118,20 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "confirm":
             digest = _confirm(args)
             _out(args, {"result": "CONFIRMATION_ADDED", "line_sha256": digest}, digest)
+            return 0
+        if args.command == "retain":
+            result = retain(
+                args.notary_db,
+                args.record,
+                args.repo,
+                args.base,
+                args.candidate,
+                args.version,
+                args.cairnwork_clone,
+                args.into,
+                _adder(args),
+            )
+            _out(args, {"result": "RETAINED", "case": result}, f"RETAINED: {json.dumps(result)}")
             return 0
         case = {
             "candidate": args.candidate,
