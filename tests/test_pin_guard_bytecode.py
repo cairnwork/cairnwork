@@ -127,3 +127,13 @@ def test_unreadable_head_fails_closed(tmp_path: Path) -> None:
     repo, trusted, base = setup(tmp_path)
     missing = "f" * 40
     assert invoke(repo, trusted, base, missing) == (2, "PIN_GUARD PIN_GUARD_INCOMPLETE\n")
+
+
+def test_listing_error_raises_instead_of_empty(tmp_path: Path) -> None:
+    # Later checks also fail on this head, so test the listing itself: an error must never
+    # read as "no bytecode".
+    from scripts.ci.pin_guard import _bytecode  # pyright: ignore[reportPrivateUsage]
+
+    repo, _, _ = setup(tmp_path)
+    with pytest.raises(subprocess.CalledProcessError):
+        _bytecode(repo, "f" * 40)
