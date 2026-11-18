@@ -212,14 +212,14 @@ def test_runner_verdict_requires_core_verdict(
         assert caught.value.reason == reason
     else:
         result = runner.run(CASE, NO_ARGS)
-        assert result["verdict"] == expected and result["exit_code"] == code
+        assert result.verdict == expected and result.exit_code == code
 
 
 @pytest.mark.parametrize(
     "value,mapped,reason",
     [
-        ({"exit_code": 0, "verdict": "accepted"}, "accepted", ""),
-        ({"exit_code": 2, "verdict": "refused"}, "refused", ""),
+        ({"exit_code": 0, "verdict": "accepted"}, "UNREPLAYABLE", "UNREADABLE_OUTPUT"),
+        ({"exit_code": 2, "verdict": "refused"}, "UNREPLAYABLE", "UNREADABLE_OUTPUT"),
         ({"exit_code": 2, "verdict": "accepted"}, "UNREPLAYABLE", "UNREADABLE_OUTPUT"),
         ({"exit_code": 1, "verdict": "refused"}, "UNREPLAYABLE", "UNREADABLE_OUTPUT"),
         ({"exit_code": 0, "verdict": "refused"}, "UNREPLAYABLE", "UNREADABLE_OUTPUT"),
@@ -231,7 +231,7 @@ def test_run_one_maps_real_runner_verdicts_by_exit_code(monkeypatch, value, mapp
     got, why, code, _ = replay._run_one({"kind": "accepted_bad"}, {}, 0)
     assert (got, why) == (mapped, reason)
     if mapped != "UNREPLAYABLE":
-        assert code == value["exit_code"]
+        assert code == value["exit_code"]  # type: ignore[index]
 
 
 @pytest.mark.parametrize("why", ["COMMIT_MISSING", "PRE_CORE_REFUSED", "VERSION_ENV", "TIMEOUT"])

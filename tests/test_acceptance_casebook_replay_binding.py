@@ -161,7 +161,7 @@ def test_runner_run_copies_template_privately_and_never_returns_it(tmp_path: Pat
     )
     assert seen.read_text().splitlines()[0] == "600"
     assert marker in seen.read_text()
-    assert result["output"] == verdict and marker not in json.dumps(result)
+    assert result.output == verdict and marker not in json.dumps(result.output)
     assert not [p for p in tmp_path.glob("case-*")]
     monkeypatch.setattr(replay, "_ACTIVE_RUNNER", runner)
     record = replay._case_result(
@@ -179,3 +179,24 @@ def test_runner_run_copies_template_privately_and_never_returns_it(tmp_path: Pat
     )
     assert marker not in json.dumps(record)
     assert record["verify_output_sha256"] == [replay._digest(verdict.encode())]
+
+
+@pytest.mark.parametrize(
+    "verdict,code,mapped,reason",
+    [
+        ("accepted", 0, "accepted", ""),
+        ("refused", 2, "refused", ""),
+        ("accepted", 2, "UNREPLAYABLE", "UNREADABLE_OUTPUT"),
+        ("refused", 0, "UNREPLAYABLE", "UNREADABLE_OUTPUT"),
+        ("FAILED", 0, "UNREPLAYABLE", "UNREADABLE_OUTPUT"),
+        ("VERIFIED", 0, "UNREPLAYABLE", "UNREADABLE_OUTPUT"),
+        ("accepted", True, "UNREPLAYABLE", "UNREADABLE_OUTPUT"),
+        ("accepted", False, "UNREPLAYABLE", "UNREADABLE_OUTPUT"),
+    ],
+)
+def test_only_a_checked_core_verdict_maps_to_a_verdict(monkeypatch, verdict, code, mapped, reason):
+    from experimental.acceptance_casebook.replay_runner import CoreVerdict
+
+    monkeypatch.setattr(replay, "RUNNER", lambda *_: CoreVerdict(verdict, code, "x"))
+    got, why, _, _ = replay._run_one({"kind": "accepted_bad"}, {}, 0)
+    assert (got, why) == (mapped, reason)
