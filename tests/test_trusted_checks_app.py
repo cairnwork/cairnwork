@@ -20,8 +20,10 @@ ENV_NAME = "trusted-checks"
 # workflows restrict to main). pull_request, push, workflow_dispatch, schedule etc. are excluded.
 MAIN_ONLY_TRIGGERS = {"pull_request_target", "issue_comment", "workflow_run"}
 APP_TOKEN_ACTION = re.compile(
-    r"uses:\s*actions/create-github-app-token@([0-9a-f]{40})\s", re.IGNORECASE
+    r"['\"]?uses['\"]?:\s*['\"]?actions/create-github-app-token@([0-9a-f]{40})",
+    re.IGNORECASE,
 )
+APP_TOKEN_SHA = "64ab729a6294000f5aa4a4bc0b73d1f32bc45510"
 # The App token may carry exactly this and nothing else (non-empty: an empty set inherits all).
 ALLOWED_APP_PERMISSIONS = {("permission-checks", "write")}
 EXPECTED = {
@@ -84,7 +86,7 @@ def app_token_permissions(job: str) -> list[set[tuple[str, str]]]:
     lines = job.splitlines()
     result: list[set[tuple[str, str]]] = []
     for index, line in enumerate(lines):
-        if "create-github-app-token" not in line.lower() or line.lstrip().startswith("#"):
+        if not _is_token_reference(line) or line.lstrip().startswith("#"):
             continue
         dash = line.find("- ")
         indent = dash if dash >= 0 and line[:dash].strip() == "" else None
@@ -93,19 +95,34 @@ def app_token_permissions(job: str) -> list[set[tuple[str, str]]]:
             if indent is not None and re.match(rf"^ {{{indent}}}- ", follow):
                 break
             body.append(follow)
-        result.append(set(re.findall(r"^\s*(permission-[a-z-]+):\s*(\S+)", "\n".join(body), re.M)))
+        step = "\n".join(body)
+        result.append(
+            set(
+                re.findall(
+                    r"['\"]?(permission-[a-z-]+)['\"]?\s*:\s*['\"]?([^,}\s'\"]+)",
+                    step,
+                    re.I,
+                )
+            )
+        )
     return result
+
+
+def _is_token_reference(text: str) -> bool:
+    return "create-github-app-token" in text.lower() or APP_TOKEN_SHA in text.lower()
 
 
 def problems(name: str, text: str) -> list[str]:
     """Every rule violation in one workflow file, as short messages."""
     found: list[str] = []
-    mentions = ENV_NAME in text or "TRUSTED_CHECKS_" in text
+    mentions = ENV_NAME in text or "TRUSTED_CHECKS_" in text or _is_token_reference(text)
     if not mentions:
         return found
     extra = triggers(text) - MAIN_ONLY_TRIGGERS
     if extra:
         found.append(f"{name}: references {ENV_NAME} but has triggers {sorted(extra)}")
+    if re.search(r"&[A-Za-z0-9_-]+|\*[A-Za-z0-9_-]+|(?:^|\s)<<\s*:", text):
+        found.append(f"{name}: YAML anchors or aliases may hide trusted token configuration")
     for job_name, job in jobs(text).items():
         in_env = uses_trusted_env(job)
         if "TRUSTED_CHECKS_" in job and not in_env:
@@ -114,8 +131,22 @@ def problems(name: str, text: str) -> list[str]:
             continue
         if re.search(r"^\s*(ref|repository):", job, re.M):
             found.append(f"{name}:{job_name}: environment job checks out PR content")
-        if "create-github-app-token" in job.lower() and not APP_TOKEN_ACTION.search(job):
+        if _is_token_reference(job) and not APP_TOKEN_ACTION.search(job):
             found.append(f"{name}:{job_name}: create-github-app-token is not pinned to a SHA")
+        if _is_token_reference(job) and re.search(
+            r"(?:^|\n)\s*(?:['\"]?INPUT_[A-Za-z0-9_-]+['\"]?)\s*:", job
+        ):
+            found.append(f"{name}:{job_name}: token step uses INPUT_* environment keys")
+        if _is_token_reference(job) and re.search(
+            r"['\"](?:uses|permission-[a-z-]+)['\"]\s*:", job, re.I
+        ):
+            found.append(
+                f"{name}:{job_name}: quoted permissions or uses key in token configuration"
+            )
+        if _is_token_reference(job) and re.search(
+            r"&[A-Za-z0-9_-]+|\*[A-Za-z0-9_-]+|(?:^|\s)<<\s*:", job
+        ):
+            found.append(f"{name}:{job_name}: token configuration uses YAML anchors or aliases")
         # Old rule, kept: every permission-* anywhere in the job must be exactly the allow-list.
         job_wide = set(re.findall(r"^\s*(permission-[a-z-]+):\s*(\S+)", job, re.M | re.I))
         if job_wide and job_wide != ALLOWED_APP_PERMISSIONS:
@@ -255,6 +286,49 @@ def test_checker_accepts_the_reference_shape() -> None:
                 "permission-checks: write\n          Permission-Contents: write",
             ),
             "permissions",
+        ),
+        (
+            GOOD.replace(
+                "        with:\n          private-key:",
+                "        with: {permission-checks: write, permission-contents: write}\n"
+                "        # private-key below remains present\n          private-key:",
+            ),
+            "permissions",
+        ),
+        (
+            GOOD.replace(
+                "          permission-checks: write",
+                '          "permission-contents": write',
+            ),
+            "permissions",
+        ),
+        (
+            GOOD.replace(
+                "      - uses: actions/create-github-app-token@",
+                '      - "uses": "actions/create-github-app-token@',
+            ).replace(" # v3", '" # v3'),
+            "quoted permissions or uses key",
+        ),
+        (
+            GOOD.replace(
+                "        with:\n          private-key:", "        with: &w\n          private-key:"
+            ),
+            "anchors or aliases",
+        ),
+        (
+            GOOD.replace(
+                "          permission-checks: write",
+                "          permission-checks: write\n        env:\n"
+                "          INPUT_PERMISSION_CONTENTS: write",
+            ),
+            "INPUT_*",
+        ),
+        (
+            GOOD.replace(
+                "actions/create-github-app-token@",
+                "example/other-action@",
+            ),
+            "not pinned to a SHA",
         ),
         (
             GOOD.replace(
