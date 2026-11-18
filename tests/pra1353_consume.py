@@ -99,6 +99,8 @@ def launch(
     source_repo: Path | None = None,
 ):
     runner = runner or ROOT / "tests" / "pra1353_runner.py"
+    paths = interpreter_paths()
+    check_base_install(paths["stdlib"], paths["platstdlib"], ROOT, source_repo or ROOT)
     check_pins(pins)
     pin_bytes = {name: (ROOT / name).read_bytes() for name in pins}
     for name, data in pin_bytes.items():
@@ -106,8 +108,6 @@ def launch(
             raise ValueError(f"pin changed while sealing: {_neutralize(name)}")
     source_bytes = _tracked_source_bytes(source_repo or ROOT)
     source_pins = {name: hashlib.sha256(data).hexdigest() for name, data in source_bytes.items()}
-    paths = interpreter_paths()
-    check_base_install(paths["stdlib"], paths["platstdlib"], ROOT, source_repo or ROOT)
     with tempfile.TemporaryDirectory(prefix="cw1353-consumer-") as tmp:
         temp_root = Path(tmp).resolve()
         sealed = temp_root / "sealed"

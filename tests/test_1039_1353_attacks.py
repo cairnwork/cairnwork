@@ -358,3 +358,36 @@ def test_consumer_refuses_a_stdlib_inside_the_checkout(monkeypatch):
 
     with pytest.raises(ValueError, match="base install lies inside"):
         consume.launch(PINS, run=no_run)
+
+
+@pytest.mark.parametrize("module", ["pra1353_gate", "pra1353_seal"])
+def test_base_install_under_another_spelling_of_the_tree_is_refused(module, monkeypatch, tmp_path):
+    check = importlib.import_module(module).check_base_install
+    paths = consume.interpreter_paths()
+    repo, outside = tmp_path / "repo", tmp_path / "outside"
+    (repo / "base").mkdir(parents=True)
+    outside.mkdir()
+    (outside / "link").symlink_to(repo / "base")
+    monkeypatch.setattr(sys, "base_prefix", str(outside / "link"))
+    with pytest.raises(ValueError, match="base install lies inside"):
+        check(paths["stdlib"], paths["platstdlib"], repo)
+    folded = Path(str(repo).swapcase())
+    if not folded.exists():
+        pytest.skip("case-sensitive filesystem (Linux): no second spelling of the tree root")
+    monkeypatch.setattr(sys, "base_prefix", str(repo / "base"))
+    with pytest.raises(ValueError, match="base install lies inside"):
+        check(paths["stdlib"], paths["platstdlib"], folded)
+
+
+def test_consumer_checks_the_base_install_before_reading_any_pin(monkeypatch):
+    reads: list[str] = []
+    monkeypatch.setattr(Path, "read_bytes", lambda self: reads.append(str(self)) or b"")
+    monkeypatch.setattr(consume, "check_pins", lambda pins: reads.append("check_pins"))
+
+    def refuse(*args: Any) -> None:
+        raise ValueError("base install lies inside the checked tree")
+
+    monkeypatch.setattr(consume, "check_base_install", refuse)
+    with pytest.raises(ValueError, match="base install lies inside"):
+        consume.launch(PINS, run=subprocess.run)
+    assert reads == []

@@ -237,10 +237,18 @@ def _restore_permissions(path: Path) -> None:
 
 def check_base_install(stdlib: str, platstdlib: str, *trees: Path) -> None:
     """Fail closed when the base install a venv's pyvenv.cfg names lies inside a checked tree."""
+    roots = {(stat.st_dev, stat.st_ino) for stat in map(os.stat, trees)}
     names = [sys.base_prefix, sys.base_exec_prefix, stdlib, platstdlib, f"{platstdlib}/lib-dynload"]
-    for path in (Path(os.path.realpath(name)) for name in names):
-        if any(path.is_relative_to(os.path.realpath(tree)) for tree in trees):
-            raise ValueError("base install lies inside the checked tree")
+    for name in names:
+        # File identity, not strings: catches case-folded and symlinked spellings of a tree root.
+        for path in {Path(os.path.abspath(name)), Path(os.path.realpath(name))}:
+            for parent in (path, *path.parents):
+                try:
+                    stat = os.stat(parent)
+                except OSError:
+                    continue
+                if (stat.st_dev, stat.st_ino) in roots:
+                    raise ValueError("base install lies inside the checked tree")
 
 
 def _run_sealed(sealed: Path, repo: Path) -> int:
