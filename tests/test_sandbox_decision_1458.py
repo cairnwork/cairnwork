@@ -97,8 +97,16 @@ def test_availability_fails_closed_for_probe_errors(monkeypatch, error):
 
 def test_availability_accepts_successful_allow_and_denial(monkeypatch):
     codes = iter((0, 1))
-    _patch_macos(
-        monkeypatch,
-        lambda *_args, **_kwargs: SimpleNamespace(returncode=next(codes)),
-    )
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return SimpleNamespace(returncode=next(codes))
+
+    _patch_macos(monkeypatch, run)
     assert consume.sandbox_available() is True
+    assert [c[0] for c in calls] == [
+        ["/usr/bin/sandbox-exec", "-p", f"(version 1) ({rule} default)", "/usr/bin/true"]
+        for rule in ("allow", "deny")
+    ]
+    assert all(c[1]["env"] == {} for c in calls)  # PR-controlled env must not reach the probe
