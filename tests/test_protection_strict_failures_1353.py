@@ -226,7 +226,9 @@ def test_core_exception_fails_strict_cli_after_consuming_declaration(
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("Core unavailable")),
     )
     code = verify_cli.main(argv)
-    result = json.loads(capsys.readouterr().out)
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
+    assert "VERIFIED" not in captured.out + captured.err
     assert code != 0
     assert result["error"] == "INTERNAL"
     assert record.is_file()
