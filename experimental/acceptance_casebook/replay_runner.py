@@ -30,6 +30,15 @@ class CoreVerdict:
     output: str
 
 
+def isolated_env() -> dict[str, str]:
+    """The one environment for the import check and the verifier run: no PYTHON* leaks in."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("PYTHON")}
+    env.pop("VIRTUAL_ENV", None)
+    env.pop("__PYVENV_LAUNCHER__", None)
+    env["PYTHONNOUSERSITE"] = "1"
+    return env
+
+
 class RealRunner:
     """One archive and venv per replay invocation; per-case state and repository copies."""
 
@@ -82,6 +91,7 @@ class RealRunner:
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                env=isolated_env(),
             )
             assert_copy_import(check.stdout.strip(), self.copy)
         except Exception:
@@ -175,7 +185,7 @@ class RealRunner:
         """Copy a config template through no-follow descriptors into private case state."""
         source_fd = destination_fd = None
         try:
-            source_fd = os.open(template, os.O_RDONLY | os.O_NOFOLLOW)
+            source_fd = os.open(template, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
             if not stat.S_ISREG(os.fstat(source_fd).st_mode):
                 raise CasebookError("REPLAY_INPUT_INVALID")
             destination_fd = os.open(
@@ -200,8 +210,11 @@ class RealRunner:
 def build_argv(
     venv: Path, state: Path, repo: Path, case: dict[str, Any], args: dict[str, Any]
 ) -> list[str]:
-    argv = [
-        str(venv / "bin" / "cairnwork-verify"),
+    argv = [  # pyproject: cairnwork-verify = cairnwork.verify_cli:main, which has a __main__ guard
+        str(venv / "bin" / "python"),
+        "-I",
+        "-m",
+        "cairnwork.verify_cli",
         f"--state={state}",
         "run",
         f"--repo-path={repo}",
@@ -227,6 +240,7 @@ def run_verifier(argv: list[str], timeout: int) -> subprocess.CompletedProcess[s
         stderr=subprocess.PIPE,
         text=True,
         start_new_session=True,
+        env=isolated_env(),
     )
     try:
         stdout, stderr = process.communicate(timeout=timeout)
