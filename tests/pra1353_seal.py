@@ -191,3 +191,123 @@ def _read_blobs(
         result[raw_name.decode("utf-8")] = data
         offset = body_end + 1
     return result
+
+
+# --- #1454 B2: the judging child trusts only distributions the base uv.lock names ---------------
+# uv seeds these two into every venv; neither is in a RECORD. Under -S the .pth is never read.
+_UV_SEEDED = {"_virtualenv.py", "_virtualenv.pth"}
+
+
+class UntrustedDependency(ValueError):
+    """The venv the gate would import pytest from does not match the base uv.lock."""
+
+
+def _norm(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def lock_packages(lock: bytes) -> tuple[dict[str, set[str]], set[str], set[str]]:
+    """Return (versions by name, editable root names, names required without a marker)."""
+    import tomllib
+
+    try:
+        packages = tomllib.loads(lock.decode("utf-8"))["package"]
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError, KeyError, TypeError) as exc:
+        raise UntrustedDependency("base uv.lock is unreadable") from exc
+    versions: dict[str, set[str]] = {}
+    edges: dict[str, list[str]] = {}
+    roots: set[str] = set()
+    for package in packages:
+        name = _norm(str(package["name"]))
+        versions.setdefault(name, set()).add(str(package.get("version", "")))
+        deps = list(package.get("dependencies", []))
+        source = package.get("source", {})
+        if "editable" in source or "virtual" in source:
+            roots.add(name)
+            for group in package.get("dev-dependencies", {}).values():
+                deps.extend(group)
+        # A dependency edge with a marker (platform, Python version) may be absent: not required.
+        edges.setdefault(name, []).extend(_norm(d["name"]) for d in deps if "marker" not in d)
+    required: set[str] = set()
+    pending = [dep for root in roots for dep in edges.get(root, [])]
+    while pending:
+        name = pending.pop()
+        if name not in required:
+            required.add(name)
+            pending.extend(edges.get(name, []))
+    return versions, roots, required
+
+
+def _record_digest(path: Path) -> str:
+    import base64
+
+    digest = hashlib.sha256(path.read_bytes()).digest()
+    return "sha256=" + base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+
+
+def _read_dist(site: Path, info: Path, owned: set[Path]) -> tuple[str, str]:
+    """Verify one dist-info's RECORD against the files on disk; return its (name, version)."""
+    import csv
+    import email.parser
+
+    try:
+        meta = email.parser.HeaderParser().parsestr((info / "METADATA").read_text("utf-8"))
+        rows = list(csv.reader((info / "RECORD").read_text("utf-8").splitlines()))
+    except (OSError, UnicodeDecodeError, csv.Error) as exc:
+        raise UntrustedDependency(f"unreadable dist metadata: {info.name}") from exc
+    name, version = _norm(meta.get("Name", "")), str(meta.get("Version", ""))
+    if _norm(info.name[: -len(".dist-info")]) != _norm(f"{name}-{version}"):
+        raise UntrustedDependency(f"dist-info name does not match its METADATA: {info.name}")
+    for row in rows:
+        if len(row) != 3:
+            raise UntrustedDependency(f"malformed RECORD row in {info.name}")
+        target = Path(os.path.normpath(site / row[0]))
+        if site not in target.parents:
+            continue  # console scripts under bin/: never on the judging child's sys.path
+        owned.add(target)
+        if not row[1]:
+            if target != info / "RECORD":
+                raise UntrustedDependency(f"RECORD entry without a hash: {row[0]}")
+            continue
+        if not target.is_file() or _record_digest(target) != row[1]:
+            raise UntrustedDependency(f"RECORD hash mismatch: {row[0]}")
+    return name, version
+
+
+def _site_dists(site: Path) -> dict[str, str]:
+    owned: set[Path] = set()
+    found: dict[str, str] = {}
+    for info in sorted(site.glob("*.dist-info")):
+        name, version = _read_dist(site, info, owned)
+        if name in found:
+            raise UntrustedDependency(f"distribution installed twice: {name}")
+        found[name] = version
+    for directory, dirs, files in os.walk(site):
+        here = Path(directory)
+        # Pycache is inert: the judging child reads bytecode only under its own fresh prefix.
+        dirs[:] = [d for d in dirs if d != "__pycache__"]
+        for entry in [*dirs, *files]:
+            path = here / entry
+            if path.is_symlink():
+                raise UntrustedDependency(f"symlink in site-packages: {path.relative_to(site)}")
+            if entry in files and path not in owned and not (here == site and entry in _UV_SEEDED):
+                raise UntrustedDependency(f"file owned by no RECORD: {path.relative_to(site)}")
+    return found
+
+
+def verify_site(lock: bytes, sites: list[str]) -> None:
+    """Fail closed unless every installed dist matches the base uv.lock, byte for byte."""
+    versions, roots, required = lock_packages(lock)
+    installed: dict[str, str] = {}
+    for site in dict.fromkeys(os.path.realpath(path) for path in sites):
+        for name, version in _site_dists(Path(site)).items():
+            if installed.setdefault(name, version) != version:
+                raise UntrustedDependency(f"distribution installed twice: {name}")
+    for name, version in sorted(installed.items()):
+        if name not in versions:
+            raise UntrustedDependency(f"distribution not in the base uv.lock: {name}")
+        if version not in versions[name]:
+            raise UntrustedDependency(f"version drift from the base uv.lock: {name} {version}")
+    missing = sorted(required - set(installed) - roots)
+    if missing:
+        raise UntrustedDependency("base uv.lock packages missing: " + ", ".join(missing))

@@ -30,13 +30,32 @@ jobs:
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           python-version: ${{ matrix.python-version }}
+      # #1454 B2: the gate runs before any PR-controlled code (the PR's uv sync and its build hook,
+      # scripts/*), from a venv synced from the BASE sha's uv.lock and pyproject.toml without the
+      # project, in a directory outside the checkout. The gate checks that venv against that lock.
+      - name: Trusted #1353 gate venv from the base lock
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "base sha is not 40-hex"; exit 1; }
+          git fetch --no-tags --depth=1 origin -- "$BASE_SHA"
+          trusted="$RUNNER_TEMP/pra1353-trusted"
+          mkdir -p "$trusted"
+          git cat-file blob "${BASE_SHA}:uv.lock" > "$trusted/uv.lock"
+          git cat-file blob "${BASE_SHA}:pyproject.toml" > "$trusted/pyproject.toml"
+          cd "$trusted"
+          UV_PROJECT_ENVIRONMENT="$trusted/.venv" uv sync --locked --no-install-project
+      - name: Sealed #1353 witness gate
+        run: |
+          set -euo pipefail
+          PRA1353_BASE_LOCK="$RUNNER_TEMP/pra1353-trusted/uv.lock" \
+            "$RUNNER_TEMP/pra1353-trusted/.venv/bin/python" -I -S -B tests/pra1353_gate.py
       - run: uv sync --locked
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run lint-imports
       - run: uv run python scripts/check_size.py
-      - name: Sealed #1353 witness gate
-        run: uv run --no-sync python -I -S -B tests/pra1353_gate.py
       - run: uv run pytest -q --ignore=tests/test_1039_1353_witnesses.py
       - run: git diff --check
 
@@ -60,13 +79,32 @@ jobs:
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           python-version: "3.13"
+      # #1454 B2: the gate runs before any PR-controlled code (the PR's uv sync and its build hook,
+      # scripts/*), from a venv synced from the BASE sha's uv.lock and pyproject.toml without the
+      # project, in a directory outside the checkout. The gate checks that venv against that lock.
+      - name: Trusted #1353 gate venv from the base lock
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "base sha is not 40-hex"; exit 1; }
+          git fetch --no-tags --depth=1 origin -- "$BASE_SHA"
+          trusted="$RUNNER_TEMP/pra1353-trusted"
+          mkdir -p "$trusted"
+          git cat-file blob "${BASE_SHA}:uv.lock" > "$trusted/uv.lock"
+          git cat-file blob "${BASE_SHA}:pyproject.toml" > "$trusted/pyproject.toml"
+          cd "$trusted"
+          UV_PROJECT_ENVIRONMENT="$trusted/.venv" uv sync --locked --no-install-project
+      - name: Sealed #1353 witness gate
+        run: |
+          set -euo pipefail
+          PRA1353_BASE_LOCK="$RUNNER_TEMP/pra1353-trusted/uv.lock" \
+            "$RUNNER_TEMP/pra1353-trusted/.venv/bin/python" -I -S -B tests/pra1353_gate.py
       - run: uv sync --locked
       - name: Create the verifier account (Issue #9)
         run: |
           sudo zsh scripts/setup_verifier_user.sh "$USER"
           zsh scripts/setup_verifier_python.sh
-      - name: Sealed #1353 witness gate
-        run: uv run --no-sync python -I -S -B tests/pra1353_gate.py
       # #406 step 4: everything except the shared verifier account runs in parallel; files that
       # share state are pinned to one worker by their xdist_group mark (tests/xdist_groups.py).
       - run: uv run pytest -q -n auto --dist loadgroup -m "not verifier_account" --ignore=tests/test_1039_1353_witnesses.py
