@@ -187,7 +187,8 @@ def verify(root, state, base, cand, declaration=None, strict=False):
         return {"status": "FAILED", "reason": done.stderr[-400:]}
 
 
-def declaration(path, expected=5):
+def declaration(path, expected=5, *, second=False):
+    extra = [{"id": "two", "args": [4, 7], "expected": 11}] if second else []
     path.write_text(
         json.dumps(
             {
@@ -197,7 +198,7 @@ def declaration(path, expected=5):
                         "id": "add",
                         "module": "calc",
                         "function": "add",
-                        "cases": [{"id": "one", "args": [2, 3], "expected": expected}],
+                        "cases": [{"id": "one", "args": [2, 3], "expected": expected}, *extra],
                     }
                 ],
             }
