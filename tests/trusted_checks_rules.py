@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from tests.trusted_checks_syntax import _commentless, strict_syntax_problems
+
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 ENV_NAME = "trusted-checks"
@@ -33,102 +35,6 @@ SUBJECT_MARKERS = (
 def _is_subject(text: str) -> bool:
     lowered = text.lower()
     return any(marker.lower() in lowered for marker in SUBJECT_MARKERS)
-
-
-def _has_unclosed_quoted_scalar(line: str) -> bool:
-    quoted = re.search(r":\s*(['\"])(.*)$", line)
-    if not quoted:
-        return False
-    quote, tail = quoted.group(1), quoted.group(2)
-    count = tail.count(quote) if quote == '"' else re.sub(r"''", "", tail).count("'")
-    return count % 2 == 0
-
-
-def _indentation_problem(
-    name: str, number: int, indent: int, previous_indent: int | None, opens: bool
-) -> str | None:
-    if indent % 2:
-        return f"{name}:{number}: strict YAML syntax requires two-space indentation"
-    if previous_indent is not None and indent > previous_indent:
-        if indent != previous_indent + 2 or not opens:
-            return f"{name}:{number}: strict YAML syntax rejects this indentation"
-    return None
-
-
-def strict_syntax_problems(name: str, text: str) -> list[str]:
-    """Reject YAML forms outside the deliberately small trusted-workflow subset."""
-    found: list[str] = []
-    run_indent: int | None = None
-    previous_indent: int | None = None
-    previous_opens = False
-    mapping = re.compile(r"^( *)(?:- )?([A-Za-z0-9_-]+):( .*)?$")
-    sequence = re.compile(r"^( *)- ([^\s#&*!|>'\"%@`{}\[\],?:][^#]*)$")
-    for number, line in enumerate(text.splitlines(), 1):
-        lowered = line.lower()
-        if "input_" in lowered:
-            found.append(f"{name}:{number}: strict YAML syntax forbids INPUT_")
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        indent = len(line) - len(line.lstrip(" "))
-        if run_indent is not None and indent > run_indent:
-            continue
-        run_indent = None
-        indentation_problem = _indentation_problem(
-            name, number, indent, previous_indent, previous_opens
-        )
-        if indentation_problem:
-            found.append(indentation_problem)
-        match = mapping.fullmatch(line)
-        item = sequence.fullmatch(line)
-        if not match and not item:
-            found.append(f"{name}:{number}: strict YAML syntax rejects this line")
-            continue
-        if re.match(r"^ *(?:- )?[?:]", line):
-            found.append(f"{name}:{number}: strict YAML syntax rejects explicit keys")
-        if "\\" in line:
-            found.append(f"{name}:{number}: strict YAML syntax forbids backslashes")
-        if "<<" in line:
-            found.append(f"{name}:{number}: strict YAML syntax forbids merge keys")
-        key = match.group(2).lower() if match else ""
-        value = (
-            match.group(3).strip()
-            if match and match.group(3)
-            else item.group(2).strip()
-            if item
-            else ""
-        )
-        # Only three inert flow forms: an empty permissions map, and flat lists of plain
-        # lowercase words under branches/types (e.g. `types: [opened, synchronize]`).
-        flow_ok = (key == "permissions" and value == "{}") or (
-            key in {"branches", "types"}
-            and re.fullmatch(r"\[ ?[a-z_]+(?:, ?[a-z_]+)* ?\]", value) is not None
-        )
-        if value.startswith(("{", "[")) and not flow_ok:
-            found.append(f"{name}:{number}: strict YAML syntax forbids flow values")
-        if value.startswith(("&", "*", "!")) or re.search(
-            r"(?<![A-Za-z0-9_-])[&*!][A-Za-z0-9_-]+", line
-        ):
-            found.append(f"{name}:{number}: strict YAML syntax forbids anchors, aliases, and tags")
-        if value.startswith(("|", ">")):
-            if key == "run" and value in {"|", ">"}:
-                run_indent = indent + (2 if line[indent:].startswith("- ") else 0)
-            else:
-                found.append(
-                    f"{name}:{number}: strict YAML syntax allows block scalars only for run"
-                )
-        if " #" in line and not re.fullmatch(
-            r" *-? *uses: +[^#\s]+@[0-9a-fA-F]{40} +# v[^\s]+", line
-        ):
-            found.append(f"{name}:{number}: strict YAML syntax forbids inline comments")
-        if _has_unclosed_quoted_scalar(line):
-            found.append(f"{name}:{number}: strict YAML syntax forbids multi-line quoted scalars")
-        previous_indent = indent
-        previous_opens = bool(
-            (match and not match.group(3))
-            or (item and re.match(r"[A-Za-z0-9_-]+:", item.group(2)))
-            or (match and line[indent:].startswith("- "))
-        )
-    return found
 
 
 def _top_level_block(text: str, key: str) -> list[str]:
@@ -184,7 +90,8 @@ def app_token_permissions(job: str) -> list[set[tuple[str, str]]]:
     """The permission-* inputs of every create-github-app-token step, one set per step."""
     lines = job.splitlines()
     result: list[set[tuple[str, str]]] = []
-    for index, line in enumerate(lines):
+    for index, raw_line in enumerate(lines):
+        line = _commentless(raw_line)
         if not _is_token_reference(line) or line.lstrip().startswith("#"):
             continue
         dash = line.find("- ")
@@ -221,10 +128,11 @@ def _whole_secrets_reference(line: str) -> bool:
 def _environment_problems(name: str, text: str) -> list[str]:
     found: list[str] = []
     lines = text.splitlines()
-    for index, line in enumerate(lines):
-        if re.search(r"\b(?:secrets|vars)\s*\[", line, re.I):
+    for index, raw_line in enumerate(lines):
+        line = _commentless(raw_line)
+        if re.search(r"\b(?:secrets|vars)\s*\[", raw_line, re.I):
             found.append(f"{name}:{index + 1}: indexed secrets or vars references are forbidden")
-        if _whole_secrets_reference(line):
+        if _whole_secrets_reference(raw_line):
             found.append(f"{name}:{index + 1}: whole secrets object references are forbidden")
         match = re.match(r"^( *)environment\s*:\s*(.*?)\s*$", line)
         if not match:
@@ -237,7 +145,7 @@ def _environment_problems(name: str, text: str) -> list[str]:
                 found.append(f"{name}:{index + 1}: format() in environment value is forbidden")
             continue
         for child_index in range(index + 1, len(lines)):
-            child = lines[child_index]
+            child = _commentless(lines[child_index])
             child_indent = len(child) - len(child.lstrip(" "))
             if child.strip() and child_indent <= indent:
                 break
@@ -253,14 +161,80 @@ def _environment_problems(name: str, text: str) -> list[str]:
     return found
 
 
+def _trusted_job_problems(name: str, job_name: str, job: str) -> list[str]:
+    found: list[str] = []
+    lines = job.splitlines()
+    for index, line in enumerate(lines):
+        if "TRUSTED_CHECKS_PRIVATE_KEY" not in line.upper():
+            continue
+        step_start = next(
+            (pos for pos in range(index, -1, -1) if re.match(r"^\s*-\s", lines[pos])),
+            None,
+        )
+        uses_line = next(
+            (
+                _commentless(lines[pos])
+                for pos in range(step_start or 0, index + 1)
+                if re.match(r"^\s*(?:-\s*)?uses\s*:", lines[pos], re.I)
+            ),
+            "",
+        )
+        token_step = bool(
+            re.match(
+                r"^\s*(?:-\s*)?uses:\s*actions/create-github-app-token@[0-9a-fA-F]{40}\s*$",
+                uses_line,
+                re.I,
+            )
+        )
+        allowed_key = re.match(
+            r"^\s*private-key:\s*\$\{\{\s*secrets\.TRUSTED_CHECKS_PRIVATE_KEY\s*}}\s*$",
+            line,
+            re.I,
+        )
+        if not token_step or not allowed_key:
+            found.append(
+                f"{name}:{job_name}: TRUSTED_CHECKS_PRIVATE_KEY outside the token private-key input"
+            )
+    for line in lines:
+        use = re.match(r"^\s*(?:-\s*)?uses:\s*(\S+)\s*$", _commentless(line), re.I)
+        if use and not re.fullmatch(
+            r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*@[0-9a-fA-F]{40}",
+            use.group(1),
+        ):
+            found.append(
+                f"{name}:{job_name}: trusted environment job uses an unpinned or local action"
+            )
+    return found
+
+
+def _key_appears_outside_trusted_job(text: str) -> bool:
+    all_keys = len(re.findall(r"TRUSTED_CHECKS_PRIVATE_KEY", text, re.I))
+    job_keys = sum(
+        len(re.findall(r"TRUSTED_CHECKS_PRIVATE_KEY", body, re.I))
+        for body in jobs(text).values()
+        if uses_trusted_env(body)
+    )
+    return all_keys > job_keys
+
+
 def problems(name: str, text: str) -> list[str]:
     """Every rule violation in one workflow file, as short messages."""
-    found = strict_syntax_problems(name, text) if _is_subject(text) else []
+    subject = _is_subject(text)
+    found = strict_syntax_problems(name, text, subject=subject)
     found.extend(_environment_problems(name, text))
     lowered = text.lower()
-    mentions = ENV_NAME in lowered or "trusted_checks_" in lowered or _is_token_reference(text)
+    mentions = (
+        ENV_NAME in lowered
+        or "trusted_checks_" in lowered
+        or _is_token_reference(text)
+        or bool(re.search(r"TRUSTED_CHECKS_PRIVATE_KEY", text, re.I))
+    )
     if not mentions:
         return found
+    if _key_appears_outside_trusted_job(text):
+        found.append(
+            f"{name}: TRUSTED_CHECKS_PRIVATE_KEY appears outside a trusted environment job"
+        )
     extra = triggers(text) - MAIN_ONLY_TRIGGERS
     if extra:
         found.append(f"{name}: references {ENV_NAME} but has triggers {sorted(extra)}")
@@ -272,6 +246,7 @@ def problems(name: str, text: str) -> list[str]:
             found.append(f"{name}:{job_name}: uses TRUSTED_CHECKS_* outside the environment")
         if not in_env:
             continue
+        found.extend(_trusted_job_problems(name, job_name, job))
         if re.search(r"^\s*(ref|repository):", job, re.M):
             found.append(f"{name}:{job_name}: environment job checks out PR content")
         if _is_token_reference(job) and not APP_TOKEN_ACTION.search(job):

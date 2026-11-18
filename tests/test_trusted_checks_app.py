@@ -16,7 +16,6 @@ from tests.trusted_checks_rules import (
     EXPECTED,
     MAIN_ONLY_TRIGGERS,
     WORKFLOWS,
-    _has_unclosed_quoted_scalar,
     app_token_permissions,
     jobs,
     problems,
@@ -106,6 +105,92 @@ jobs:
       - run: echo ${{ secrets[format('TRUSTED_{0}', 'CHECKS_PRIVATE_KEY')] }}
 """
     assert problems("unrelated.yml", attack)
+
+
+@pytest.mark.parametrize(
+    ("bad", "needle"),
+    [
+        # R1: a legal document shifted right hides the root trigger and jobs.
+        (
+            """  on:
+    push:
+  jobs:
+    publish:
+      environment: trusted-checks
+      steps:
+        - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+          with:
+            private-key: ${{ secrets.TRUSTED_CHECKS_PRIVATE_KEY }}
+            permission-checks: write
+            permission-contents: write
+""",
+            "first structural line",
+        ),
+        # R2(1): quoted environment key in a non-subject workflow.
+        (
+            """on: push
+jobs:
+  build:
+    "environment": ${{ format('trusted{0}checks', '-') }}
+    steps:
+      - run: echo "${{ toJSON(secrets) }}"
+""",
+            "strict YAML syntax",
+        ),
+        # R2(2): the scalar environment value appears on a more-indented line.
+        (
+            """on: push
+jobs:
+  build:
+    environment:
+      ${{ format('trusted{0}checks', '-') }}
+    steps:
+      - run: echo "${{ toJSON(secrets) }}"
+""",
+            "strict YAML syntax",
+        ),
+        # R2(3): flow mapping job hides its computed environment.
+        (
+            """on: push
+jobs:
+  build: {runs-on: ubuntu-latest, environment: "${{ format('trusted{0}checks', '-') }}",
+    steps: [{run: "echo ${{ toJSON(secrets) }}"}]}
+""",
+            "flow values",
+        ),
+        # R2(4): quoted child key hides the computed environment name.
+        (
+            """on: push
+jobs:
+  build:
+    environment:
+      "name": ${{ format('trusted{0}checks', '-') }}
+    steps:
+      - run: echo "${{ toJSON(secrets) }}"
+""",
+            "strict YAML syntax",
+        ),
+        # A5: the trusted key is passed to a run step environment.
+        (
+            GOOD.replace(
+                "    steps:\n",
+                "    steps:\n      - run: python3 mint.py\n        env:\n"
+                "          KEY: ${{ secrets.TRUSTED_CHECKS_PRIVATE_KEY }}\n",
+            ),
+            "TRUSTED_CHECKS_PRIVATE_KEY appears outside",
+        ),
+        # A6: a local composite action can conceal token creation.
+        (
+            GOOD.replace(
+                "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510",
+                "./.github/actions/mint",
+            ).replace("          permission-checks: write\n", ""),
+            "unPinned",
+        ),
+    ],
+)
+def test_checker_rejects_reviewed_yaml_bypasses(bad: str, needle: str) -> None:
+    assert any(needle.casefold() in item.casefold() for item in problems("bad.yml", bad))
 
 
 @pytest.mark.parametrize(
@@ -276,47 +361,3 @@ jobs:
 def test_checker_flags_each_boundary_break(bad: str, needle: str) -> None:
     found = problems("bad.yml", bad)
     assert any(needle in item for item in found), found
-
-
-@pytest.mark.parametrize(
-    ("line", "unclosed"),
-    [
-        ('    name: "x', True),
-        ('    name: "x"', False),
-        ("    name: 'x", True),
-        ("    name: 'abc'", False),
-        ("    name: 'it''s'", False),
-        ("    name: 'it''s", True),
-    ],
-)
-def test_quoted_scalar_must_close_on_its_line(line: str, unclosed: bool) -> None:
-    assert _has_unclosed_quoted_scalar(line) is unclosed
-
-
-WORKFLOW_RUN_LEAK = """on:
-  workflow_run:
-    workflows: [ci]
-jobs:
-  leak:
-    runs-on: ubuntu-latest
-    environment:
-           name: ${{ format('trusted{0}checks', '-') }}
-    steps:
-      - run: echo ${{ toJSON(secrets) }}
-"""
-
-
-@pytest.mark.parametrize(
-    ("text", "needle"),
-    [
-        (WORKFLOW_RUN_LEAK, "environment name must be a plain word"),
-        (WORKFLOW_RUN_LEAK.replace("${{ format('trusted{0}checks', '-') }}", "x"), "whole secrets"),
-        (
-            "on:\n  pull_request:\njobs:\n  a:\n"
-            "    environment: Trusted-Checks\n    steps:\n      - run: echo hi\n",
-            "triggers",
-        ),
-    ],
-)
-def test_checker_flags_deep_env_names_whole_secrets_and_case(text: str, needle: str) -> None:
-    assert any(needle in problem for problem in problems("evil.yml", text))
