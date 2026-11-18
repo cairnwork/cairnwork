@@ -1,4 +1,4 @@
-"""Report changes to the trusted #1353 pin table and pinned helpers."""
+"""Report changes to the trusted #1353 pin table and pinned helpers, and refuse tracked bytecode."""
 
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ FIXED_PATHS = {
     "scripts/ci/pin_guard_status.py",
 }
 APPROVAL = re.compile(r"^PIN-APPROVE ([0-9a-fA-F]{40})$")
+BYTECODE_SUFFIXES = (".pyc", ".pyo")
 
 
 def _literal(node: ast.expr) -> object:
@@ -113,6 +114,23 @@ def _changed(head: Path, base_sha: str, head_sha: str) -> set[str]:
     return {line for line in result.stdout.splitlines() if line}
 
 
+def _bytecode(head: Path, head_sha: str) -> list[str]:
+    """Tracked bytecode in the head tree; Python may run it instead of the reviewed .py (#1465)."""
+    listing = subprocess.run(
+        ["git", "-C", str(head), "ls-tree", "-r", "-z", "--name-only", "--full-tree"]
+        + ["--end-of-options", head_sha],
+        check=True,
+        capture_output=True,
+    ).stdout
+    hits = []
+    for raw in listing.split(b"\0"):
+        name = raw.decode("utf-8", "surrogateescape")
+        parts = name.casefold().split("/")
+        if raw and ("__pycache__" in parts or parts[-1].endswith(BYTECODE_SUFFIXES)):
+            hits.append(name)
+    return sorted(hits)
+
+
 def _approval(comments: Path | None, approvers: set[str], head_sha: str) -> str:
     if comments is None:
         return "PIN_CHANGE_UNAPPROVED"
@@ -150,6 +168,9 @@ def evaluate(args: argparse.Namespace) -> tuple[int, str, list[str]]:
     trusted = Path(args.trusted)
     if not trusted.is_dir():
         raise ValueError("trusted tree is not a directory")
+    bytecode = _bytecode(Path(args.head), args.head_sha)
+    if bytecode:  # no approval can allow it; json.dumps keeps each name on one log line
+        return 3, "BYTECODE_TRACKED", [json.dumps(name) for name in bytecode]
     pin_file = trusted / "tests/_w1353_allow_pins.py"
     guarded = set(FIXED_PATHS)
     if pin_file.exists():
