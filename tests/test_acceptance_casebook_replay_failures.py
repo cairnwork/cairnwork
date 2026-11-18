@@ -75,3 +75,5 @@ def test_only_an_integer_exit_code_maps_to_a_verdict(monkeypatch, value, expecte
     assert type(code) is int
     if expected == "UNREPLAYABLE":
         assert reason
+        if type(value.get("exit_code")) is not int:
+            assert reason == "UNREADABLE_OUTPUT"

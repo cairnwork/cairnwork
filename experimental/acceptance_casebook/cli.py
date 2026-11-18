@@ -23,9 +23,7 @@ from experimental.acceptance_casebook.store import (
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="acceptance_casebook", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("add", "list", "confirm", "repair", "replay", "replay-report"):
-        if name in ("replay", "replay-report"):
-            continue
+    for name in ("add", "list", "confirm", "repair"):
         p = sub.add_parser(name)
         p.add_argument("--casebook", type=Path, required=True)
         p.add_argument("--json", action="store_true")

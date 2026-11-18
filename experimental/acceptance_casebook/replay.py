@@ -11,13 +11,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from experimental.acceptance_casebook.identity import IdentityError, resolve_actor
+from experimental.acceptance_casebook.identity import (
+    IdentityError,
+    confirmation_problem,
+    resolve_actor,
+)
 from experimental.acceptance_casebook.origin import read_origin
 from experimental.acceptance_casebook.store import (
     CasebookError,
     _append,
     _read_chain,
-    eligible_cases,
     list_cases,
     locked,
 )
@@ -72,10 +75,10 @@ def _version(version: str, registry: Any, clone: Path) -> str:
 
 def _confirmation(casebook: Path, case: dict[str, Any]) -> str:
     entries, _ = _read_chain(casebook)
-    for entry, _digest_value in entries:
+    for entry, digest_value in entries:
         if entry.get("type") == "confirmation" and entry.get("case") == case["line_sha256"]:
-            if entry.get("conclusion") == "confirmed":
-                return _digest(json.dumps(entry, sort_keys=True).encode())
+            if entry.get("conclusion") == "confirmed" and confirmation_problem(case, entry) is None:
+                return digest_value
     raise CasebookError("CONFIRMATION_MISSING")
 
 
@@ -84,7 +87,7 @@ def _run_one(
 ) -> tuple[str, str, int, str | None]:
     try:
         value = RUNNER(case, args)
-    except TimeoutError:
+    except (TimeoutError, subprocess.TimeoutExpired):
         return "UNREPLAYABLE", "TIMEOUT", 124, None
     except Exception:  # noqa: BLE001 - injected runner failures must become UNREPLAYABLE
         return "UNREPLAYABLE", "RUNNER_ERROR", 1, None
@@ -94,7 +97,7 @@ def _run_one(
         return "UNREPLAYABLE", "UNREADABLE_OUTPUT", 1, None
     code, verdict = value.get("exit_code"), value.get("verdict")
     if type(code) is not int:  # bool, float, str or None is never a real exit code
-        return "UNREPLAYABLE", "NO_VERDICT", 1, None
+        return "UNREPLAYABLE", "UNREADABLE_OUTPUT", 1, None
     if verdict == "VERIFIED" and code == 0:
         mapped = "accepted"
     elif verdict == "FAILED" and code == 0:
@@ -102,7 +105,7 @@ def _run_one(
     elif verdict == "REFUSED":
         return "UNREPLAYABLE", "PRE_CORE_REFUSED", int(code or 1), None
     else:
-        return "UNREPLAYABLE", "NO_VERDICT", int(code or 1), None
+        return "UNREPLAYABLE", "UNREADABLE_OUTPUT", int(code or 1), None
     output = str(value.get("output", verdict))
     return mapped, "", int(code), output
 
@@ -111,11 +114,13 @@ def _bound_inputs(case: dict[str, Any], inputs: Any, request: dict[str, Any]) ->
     raw = inputs.get(case["line_sha256"]) if isinstance(inputs, dict) else None
     if not isinstance(raw, dict):
         raise CasebookError("REPLAY_INPUT_MISMATCH")
+    if set(raw) - {"repo_path", "allowed_file", "verifier"}:
+        raise CasebookError("REPLAY_INPUT_MISMATCH")
     contract = request.get("acceptance_contract", {})
     plan = request.get("verification_plan", {})
     bindings = {
-        "allowed_paths": raw.get("allowed_files", raw.get("allowed_file")),
-        "required_verifier_ids": raw.get("verifiers", raw.get("verifier")),
+        "allowed_paths": raw.get("allowed_file"),
+        "required_verifier_ids": raw.get("verifier"),
     }
     expected = {
         "allowed_paths": contract.get("allowed_paths", request.get("allowed_paths")),
@@ -125,10 +130,12 @@ def _bound_inputs(case: dict[str, Any], inputs: Any, request: dict[str, Any]) ->
         ),
     }
     for key, supplied in bindings.items():
-        if expected[key] is not None and (
-            supplied is None or sorted(supplied) != sorted(expected[key])
-        ):
+        if not isinstance(supplied, list) or not all(isinstance(v, str) for v in supplied):
             raise CasebookError("REPLAY_INPUT_MISMATCH")
+        if expected[key] is None or sorted(supplied) != sorted(expected[key]):
+            raise CasebookError("REPLAY_INPUT_MISMATCH")
+    if not isinstance(raw.get("repo_path"), str):
+        raise CasebookError("REPLAY_INPUT_MISMATCH")
     return raw
 
 
@@ -144,12 +151,11 @@ def _case_result(
     case: dict[str, Any],
     raw: dict[str, Any],
     request: dict[str, Any],
-    inputs_path: Path,
+    input_digest: str,
     version: str,
     tree: str,
     head: str,
-    db: Path,
-    casebook: Path,
+    confirmation: str,
     replayer: dict[str, Any],
     repeat: int,
     run_id: str,
@@ -178,7 +184,6 @@ def _case_result(
             ("refused_good", "refused"),
         )
         outcome, reason = ("same_mistake" if same else "corrected"), None
-    confirmation = _confirmation(casebook, case)
     return {
         "type": "replay_result",
         "run": run_id,
@@ -189,7 +194,7 @@ def _case_result(
         "version_tree": tree,
         "casebook_head": head,
         "origin_row_sha256": case["origin"]["row_sha256"],
-        "inputs_sha256": _digest(inputs_path.read_bytes()),
+        "inputs_sha256": input_digest,
         "argv": raw,
         "exit_codes": codes,
         "verify_output_sha256": hashes,
@@ -241,58 +246,88 @@ def _parser() -> argparse.ArgumentParser:
     return p
 
 
+def _case_record(
+    case: dict[str, Any],
+    inputs: Any,
+    input_digest: str,
+    tree: str,
+    args: argparse.Namespace,
+    head: str,
+    replayer: dict[str, Any],
+    run_id: str,
+) -> dict[str, Any]:
+    try:
+        rec, _ = read_origin(args.notary_db, case["task_id"], case["attempt_id"])
+        confirmation = _confirmation(args.casebook, case)
+        raw = _bound_inputs(case, inputs, rec.request)
+        result = _case_result(
+            case,
+            raw,
+            rec.request,
+            input_digest,
+            args.version,
+            tree,
+            head,
+            confirmation,
+            replayer,
+            args.repeat,
+            run_id,
+        )
+        result["confirmation"] = confirmation
+    except Exception as exc:  # noqa: BLE001 - one case failure must not abort the run
+        code = exc.code if isinstance(exc, CasebookError) else "UNREPLAYABLE_CASE"
+        result = {
+            "type": "replay_result",
+            "run": run_id,
+            "case": case["line_sha256"],
+            "kind": case["kind"],
+            "outcome": "UNREPLAYABLE",
+            "reason": code,
+            "mapped": [],
+            "exit_codes": [],
+            "verify_output_sha256": [],
+            "version": args.version,
+            "version_tree": tree,
+            "casebook_head": head,
+            "origin_row_sha256": case["origin"]["row_sha256"],
+            "inputs_sha256": input_digest,
+            "argv": {},
+            "replayer": replayer,
+        }
+    if case["kind"] not in ("accepted_bad", "refused_good"):
+        result["outcome"], result["reason"] = "UNREPLAYABLE", "INVALID_KIND"
+    return result
+
+
 def _replay(args: argparse.Namespace) -> int:
     if args.repeat < 1:
         raise CasebookError("REPLAY_INPUT_INVALID")
     run_id = _digest(f"{datetime.now(UTC).isoformat()}:{args.version}".encode())
     tree = _version(args.version, _json(args.versions), args.cairnwork_clone)
     replayer = _identity(args)
-    inputs, book = _json(args.inputs), args.casebook
-    entries, head = _read_chain(book)
-    all_cases = list_cases(book, args.notary_db)
-    eligible = eligible_cases(book, args.notary_db)
+    inputs_bytes = args.inputs.read_bytes()
+    inputs = json.loads(inputs_bytes)
+    input_digest = _digest(inputs_bytes)
+    book = args.casebook
+    protected = [
+        book,
+        book.with_name(book.name + ".head"),
+        book.with_name(book.name + ".lock"),
+        args.notary_db,
+    ]
+    out_resolved = args.out.resolve()
+    if any(out_resolved == path.resolve() for path in protected):
+        raise CasebookError("REPLAY_OUTPUT_REFUSED")
+
+    head, all_cases = locked(book, lambda: (_read_chain(book)[1], list_cases(book, args.notary_db)))
+    eligible = [case for case in all_cases if case["state"] == "confirmed"]
     excluded = {
         state: sum(c["state"] == state for c in all_cases)
         for state in ("unconfirmed", "rejected", "origin_changed")
     }
     counts: dict[str, dict[str, int]] = {}
     for case in eligible:
-        rec, _ = read_origin(args.notary_db, case["task_id"], case["attempt_id"])
-        try:
-            raw = _bound_inputs(case, inputs, rec.request)
-            result = _case_result(
-                case,
-                raw,
-                rec.request,
-                args.inputs,
-                args.version,
-                tree,
-                head,
-                args.notary_db,
-                book,
-                replayer,
-                args.repeat,
-                run_id,
-            )
-        except CasebookError as exc:
-            result = {
-                "type": "replay_result",
-                "run": run_id,
-                "case": case["line_sha256"],
-                "kind": case["kind"],
-                "outcome": "UNREPLAYABLE",
-                "reason": exc.code,
-                "mapped": [],
-                "exit_codes": [],
-                "verify_output_sha256": [],
-                "version": args.version,
-                "version_tree": tree,
-                "casebook_head": head,
-                "origin_row_sha256": case["origin"]["row_sha256"],
-                "inputs_sha256": _digest(args.inputs.read_bytes()),
-                "argv": {},
-                "replayer": replayer,
-            }
+        result = _case_record(case, inputs, input_digest, tree, args, head, replayer, run_id)
         _append_record(args.out, result)
         bucket = counts.setdefault(
             case["kind"], {"same_mistake": 0, "corrected": 0, "unreplayable": 0}
@@ -344,4 +379,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     except IdentityError as exc:
         print(exc.code)
+        return 2
+    except Exception:  # noqa: BLE001 - never print an untrusted exception message
+        print("REPLAY_ERROR")
         return 2
