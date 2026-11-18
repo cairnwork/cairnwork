@@ -130,22 +130,25 @@ def test_runner_run_copies_template_privately_and_never_returns_it(tmp_path: Pat
     template = tmp_path / "template.json"
     template.write_text(json.dumps({"core_token_file": marker}))
     seen = tmp_path / "seen.txt"
-    state = '"${1#--state=}"'
+    state = '"$S"'
     verdict = '{"status":"VERIFIED","verified":true,"core_status":"VERIFIED"}'
-    script = tmp_path / "venv" / "bin" / "cairnwork-verify"
     runner = RealRunner.__new__(RealRunner)
     runner.root, runner.repo, runner.timeout = tmp_path, tmp_path / "repo", 5
     runner.state_config = template
     runner.repo.mkdir()
     (tmp_path / "venv" / "bin").mkdir(parents=True)
     runner.venv = tmp_path / "venv"
-    script.write_text(
+    body = (
         "#!/bin/sh\n"
+        "for a; do case $a in --state=*) S=${a#--state=};; esac; done\n"
         f"(stat -f %Lp {state}/config.json || stat -c %a {state}/config.json) > {seen}\n"
         f"cat {state}/config.json >> {seen}\n"
         f"printf '%s' '{verdict}'\n"
     )
-    script.chmod(0o755)
+    for name in ("cairnwork-verify", "python"):
+        script = tmp_path / "venv" / "bin" / name
+        script.write_text(body)
+        script.chmod(0o755)
     original = subprocess.run
 
     def run(argv, **kwargs):

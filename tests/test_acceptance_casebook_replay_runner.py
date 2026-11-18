@@ -120,7 +120,11 @@ def test_real_runner_cli_uses_single_equals_arguments(tmp_path):
     assert "--allowed-file=--state=/x" in argv and "--allowed-file=a b" in argv
     assert "--verifier=pytest -q" in argv and "--import-path=src" in argv
     assert "--blackbox=decl.json" in argv and "--require-protection" in argv
-    assert "--test-commit=" in argv and argv[0].endswith("bin/cairnwork-verify")
+    assert "--test-commit=" in argv and argv[:3] == [
+        str(tmp_path / "venv" / "bin" / "python"),
+        "-I",
+        "-m",
+    ]
     bare = [i for i in argv if i.startswith("--") and "=" not in i]
     assert bare == ["--require-protection"]
 
@@ -143,9 +147,10 @@ def _fake_runner(tmp_path: Path, script_body: str, timeout: int = 2) -> RealRunn
     runner.repo.mkdir()
     runner.venv = tmp_path / "venv"
     (runner.venv / "bin").mkdir(parents=True)
-    script = runner.venv / "bin" / "cairnwork-verify"
-    script.write_text("#!/bin/sh\n" + script_body)
-    script.chmod(0o755)
+    for name in ("cairnwork-verify", "python"):  # the console script and the isolated interpreter
+        script = runner.venv / "bin" / name
+        script.write_text("#!/bin/sh\n" + script_body)
+        script.chmod(0o755)
     return runner
 
 
@@ -379,7 +384,7 @@ def test_a_constructor_error_is_version_env_for_every_case(monkeypatch, tmp_path
 
 def test_the_per_case_state_directory_is_mode_0700(tmp_path, monkeypatch):
     seen = tmp_path / "mode.txt"
-    state = '"${1#--state=}"'
+    state = '"${4#--state=}"'  # argv: python -I -m cairnwork.verify_cli --state=...
     body = f"stat -f %Lp {state} > {seen} 2>/dev/null || stat -c %a {state} > {seen}\nexit 1\n"
     runner = _fake_runner(tmp_path, body)
     _stub_git(monkeypatch)
