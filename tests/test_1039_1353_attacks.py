@@ -321,7 +321,7 @@ def test_a2_package_shadow_cannot_change_real_runner_rows():
                 ("pra1353_receipt", "tests/pra1353_receipt.py"),
             )
         )
-        paths = consume.sysconfig.get_paths()
+        paths = consume.interpreter_paths()
         dependencies = [Path(paths["purelib"]), Path(paths["platlib"])]
         assert all(
             not consume._is_under(Path(item["file"]), consume.ROOT)

@@ -23,7 +23,7 @@ _OID = re.compile(rb"[0-9a-f]{40}")
 
 
 def interpreter_paths() -> dict[str, str]:
-    """sysconfig paths with the venv site dirs, also under -S (3.11 sets the venv prefix in site)."""
+    """sysconfig paths with the venv site dirs, also under -S (3.11 sets the prefix in site)."""
     import sys
     import sysconfig
 

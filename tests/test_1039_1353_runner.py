@@ -159,7 +159,7 @@ def test_site_pth_cannot_preload_a_pinned_runner_helper(tmp_path, monkeypatch):
         interpreter = env_dir / "Scripts" / "python.exe"
     site_dirs = list((env_dir / "lib").glob("python*/site-packages"))
     site_dir = site_dirs[0]
-    (site_dir / "bridge.pth").write_text(consume.sysconfig.get_paths()["purelib"] + "\n")
+    (site_dir / "bridge.pth").write_text(consume.interpreter_paths()["purelib"] + "\n")
     (site_dir / "pra1353_probe.py").write_text(
         "def core_rows(): return [{'seq': -1, 'observed': 'FORGED'}]\n"
     )
