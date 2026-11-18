@@ -21,7 +21,7 @@ from experimental.acceptance_casebook.identity import (
 from experimental.acceptance_casebook.origin import read_origin
 from experimental.acceptance_casebook.replay_inputs import bound_inputs as _bound_inputs
 from experimental.acceptance_casebook.replay_out import append as _append_output
-from experimental.acceptance_casebook.replay_runner import RealRunner, RunnerFailure
+from experimental.acceptance_casebook.replay_runner import CoreVerdict, RealRunner, RunnerFailure
 from experimental.acceptance_casebook.store import (
     CasebookError,
     _read_chain,
@@ -116,6 +116,11 @@ def _run_one(
         return "UNREPLAYABLE", exc.reason, 1, None
     except Exception:  # noqa: BLE001 - injected runner failures must become UNREPLAYABLE
         return "UNREPLAYABLE", "RUNNER_ERROR", 1, None
+    if isinstance(value, CoreVerdict):  # only RealRunner checks the Core verdict itself
+        code = value.exit_code
+        if type(code) is int and (value.verdict, code) in (("accepted", 0), ("refused", 2)):
+            return value.verdict, "", code, value.output
+        return "UNREPLAYABLE", "UNREADABLE_OUTPUT", 1, None
     if isinstance(value, str) and value in ("accepted", "refused"):
         return value, "", 0, value
     if not isinstance(value, dict):
@@ -123,10 +128,10 @@ def _run_one(
     code, verdict = value.get("exit_code"), value.get("verdict")
     if type(code) is not int:  # bool, float, str or None is never a real exit code
         return "UNREPLAYABLE", "UNREADABLE_OUTPUT", 1, None
-    if (verdict == "VERIFIED" or verdict == "accepted") and code == 0:
+    if verdict == "VERIFIED" and code == 0:
         mapped = "accepted"
-    elif (verdict == "FAILED" and code == 0) or (verdict == "refused" and code == 2):
-        mapped = "refused"  # "refused" with exit 2 is the real runner's checked verdict
+    elif verdict == "FAILED" and code == 0:
+        mapped = "refused"
     elif verdict == "REFUSED":
         return "UNREPLAYABLE", "PRE_CORE_REFUSED", int(code or 1), None
     else:

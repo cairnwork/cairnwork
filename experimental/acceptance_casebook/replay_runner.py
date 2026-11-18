@@ -9,6 +9,7 @@ import signal
 import stat
 import subprocess
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,15 @@ from experimental.acceptance_casebook.store import CasebookError
 class RunnerFailure(Exception):
     def __init__(self, reason: str):
         self.reason = reason
+
+
+@dataclass(frozen=True)
+class CoreVerdict:
+    """A Core verdict that RealRunner itself checked; no other runner value maps to one."""
+
+    verdict: str
+    exit_code: int
+    output: str
 
 
 class RealRunner:
@@ -81,10 +91,10 @@ class RealRunner:
     def close(self) -> None:
         shutil.rmtree(self.root, ignore_errors=True)
 
-    def __call__(self, case: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
+    def __call__(self, case: dict[str, Any], args: dict[str, Any]) -> CoreVerdict:
         return self.run(case, args)
 
-    def run(self, case: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
+    def run(self, case: dict[str, Any], args: dict[str, Any]) -> CoreVerdict:
         case_tmp = Path(tempfile.mkdtemp(prefix="case-", dir=self.root))
         working = case_tmp / "repo"
         state = case_tmp / "state"
@@ -156,7 +166,7 @@ class RealRunner:
                 verdict = "refused"
             else:
                 raise RunnerFailure("NO_CORE_VERDICT")
-            return {"exit_code": result.returncode, "verdict": verdict, "output": result.stdout}
+            return CoreVerdict(verdict, result.returncode, result.stdout)
         finally:
             shutil.rmtree(case_tmp, ignore_errors=True)
 
