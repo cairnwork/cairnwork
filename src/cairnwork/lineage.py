@@ -8,6 +8,7 @@ refused before anything is dispatched or pushed.
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 from cairnwork.gitcmd import GitCommandError, run_git
@@ -118,6 +119,7 @@ def verify_single_branch(clone: Path) -> None:
     if extra:
         raise RuntimeError(f"{code}: mirror holds a branch beyond main ({extra[0]}); {advice}")
     _refuse_foreign_history(clone, code, advice)
+    _refuse_foreign_head(clone, code, advice)
 
 
 # Refs Cairnwork writes itself, each matched by exact shape (#1266); a nested or lookalike name
@@ -160,3 +162,36 @@ def _refuse_foreign_history(clone: Path, code: str, advice: str) -> None:
                 tip = ""
         if not tip or not _in_main_history(clone, tip):
             raise RuntimeError(f"{code}: mirror holds {ref}, not in main's history; {advice}")
+
+
+def _refuse_foreign_head(clone: Path, code: str, advice: str) -> None:
+    """HEAD names main and main resolves to a commit, or (detached) HEAD is a commit in main's
+    history: a HEAD on another branch, or on an unborn main, is a mirror state the refs checks
+    above do not see (#1391). Only ``symbolic-ref -q`` exit 1 means detached; any other git
+    failure propagates. A shallow mirror is judged like any other: a HEAD whose ancestry
+    ``merge-base`` cannot read is refused (fail closed)."""
+    detached = False
+    try:
+        target = run_git(clone, "symbolic-ref", "-q", "HEAD").strip()
+    except GitCommandError as exc:
+        cause = exc.__cause__
+        if not (isinstance(cause, subprocess.CalledProcessError) and cause.returncode == 1):
+            raise
+        detached, target = True, "HEAD"
+    if not detached and target != "refs/heads/main":
+        raise RuntimeError(f"{code}: mirror HEAD points at {target}, not refs/heads/main; {advice}")
+    try:
+        tip = run_git(
+            clone,
+            "--no-replace-objects",
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            f"{target}^{{commit}}",
+        ).strip()
+    except GitCommandError:
+        tip = ""
+    if not tip:
+        raise RuntimeError(f"{code}: mirror HEAD ({target}) names no commit; {advice}")
+    if detached and not _in_main_history(clone, tip):
+        raise RuntimeError(f"{code}: mirror HEAD is not in main's history; {advice}")
