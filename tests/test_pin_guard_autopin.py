@@ -158,3 +158,13 @@ def test_reject_edit_or_mixed_family_line_blocks(tmp_path: Path) -> None:
 def test_unguarded_change_is_unaffected(tmp_path: Path) -> None:
     repo, trusted, base, head = setup(tmp_path, ("src/other.py",))
     assert run(tmp_path, trusted, repo, base, head, []) == (0, "PIN_GUARD PIN_GUARD_OK")
+
+
+def test_one_comment_counts_one_family_and_fences_do_not_count(tmp_path: Path) -> None:
+    repo, trusted, base, head = setup(tmp_path)
+    combined = record("claude", head)
+    combined["body"] += "".join(LINES[f].format(v="ACCEPT", sha=head) + "\n" for f in LINES)
+    assert run(tmp_path, trusted, repo, base, head, [combined])[0] == 1
+    fenced = all_three(head)
+    fenced[1]["body"] = "```\n" + fenced[1]["body"] + "```\n"
+    assert run(tmp_path, trusted, repo, base, head, fenced)[0] == 1

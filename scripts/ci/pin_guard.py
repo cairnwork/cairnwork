@@ -211,7 +211,16 @@ def _three_family_accept(
     head = head_sha.lower()
     accepted: set[str] = set()
     for login, body, edited in _read_comments(comments):
+        trusted = (
+            not edited
+            and isinstance(login, str)
+            and login.lower() in reviewers
+            and _identity(login) != _identity(author)
+        )
+        fenced = counted = False
         for line in body.splitlines():
+            if line.lstrip().startswith(("```", "~~~")):
+                fenced = not fenced
             match = RECORD.fullmatch(line)
             if not match or match.group("sha") != head:
                 continue
@@ -219,13 +228,10 @@ def _three_family_accept(
                 return False
             text = f"{match.group('label')} {match.group('who')}"
             named = {family for family, pattern in FAMILIES.items() if pattern.search(text)}
-            trusted = (
-                isinstance(login, str)
-                and login.lower() in reviewers
-                and _identity(login) != _identity(author)
-            )
-            if len(named) == 1 and trusted and not edited:
+            # One verdict per comment, outside code fences: a quoted record is not a record.
+            if len(named) == 1 and trusted and not fenced and not counted:
                 accepted |= named
+            counted = True
     return accepted == set(FAMILIES)
 
 
