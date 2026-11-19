@@ -38,6 +38,7 @@ from experimental.local_relay.config import (
 from experimental.local_relay.relay import run_relay
 from experimental.local_worker import corpus_io
 from experimental.local_worker.endpoint import EndpointUnreachable
+from experimental.local_worker.run_root_cleanup import INSTALLED_RUNS
 from experimental.pause.core_judge import CoreJudge
 from experimental.pause.flow import RunResult
 
@@ -204,9 +205,11 @@ def _validate_task(data: dict[str, Any], root: Path) -> dict[str, Any]:
 def _run_localworker(args, task, source, context, endpoint, canary):
     if canary is None:
         raise ValueError("--canary-report is required for the real local worker")
-    run_root = Path(args.state).resolve() / "local-relay-runs" / uuid.uuid4().hex
+    runs = _local_runs(args)
+    run_root = runs / uuid.uuid4().hex
     checkout = run_root / "checkout"
-    run_root.mkdir(parents=True, mode=0o700)
+    run_root.mkdir(mode=0o750)
+    os.chmod(run_root, 0o750)
     _git(source, "clone", "--no-hardlinks", str(task["repo"]), str(checkout))
     _git(checkout, "checkout", "--detach", task["base_commit"])
     base = _git(checkout, "rev-parse", "HEAD")
@@ -250,6 +253,8 @@ def _run_localworker(args, task, source, context, endpoint, canary):
             str(context),
             "--canary-report",
             str(local_report),
+            "--runs",
+            str(runs),
             *[value for path in task["allowed_files"] for value in ("--write-path", path)],
             "--endpoint",
             endpoint,
@@ -277,6 +282,13 @@ def _run_localworker(args, task, source, context, endpoint, canary):
         record=record,
         base_sha=base,
     )
+
+
+def _local_runs(args: Any) -> Path:
+    runs = Path(getattr(args, "runs", INSTALLED_RUNS)).expanduser().resolve()
+    if not runs.is_dir():
+        raise ValueError(f"local worker runs directory does not exist: {runs}")
+    return runs
 
 
 def _episode_record(output: str, episode_file: Path) -> dict[str, Any] | None:

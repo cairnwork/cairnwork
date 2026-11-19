@@ -193,6 +193,23 @@ def test_missing_canary_fails_before_running_local_worker(monkeypatch, tmp_path)
         )
 
 
+def test_missing_runs_directory_is_refused_without_creating_it(tmp_path):
+    missing = tmp_path / "not-installed-runs"
+    task = {"task_id": "t", "prompt": "p", "verifiers": [], "repo": tmp_path}
+    canary = tmp_path / "canary.json"
+    canary.write_text("report", encoding="utf-8")
+    with pytest.raises(ValueError, match="runs directory does not exist"):
+        runtime._run_localworker(
+            type("Args", (), {"runs": missing})(),
+            task,
+            tmp_path,
+            32768,
+            DEFAULT_LOCAL_ENDPOINT,
+            canary,
+        )
+    assert not missing.exists()
+
+
 def test_local_episode_requires_completed_marker_and_record(tmp_path):
     row = {"verification": {"exit_reason": "COMPLETED"}, "spec_feedback": {"needs_spec": False}}
     episode = tmp_path / "episodes.jsonl"
@@ -227,7 +244,9 @@ def _local_run_fakes(monkeypatch, tmp_path, marker):
         return type("Result", (), {"returncode": 0, "stdout": marker, "stderr": ""})()
 
     monkeypatch.setattr(runtime.subprocess, "run", launch)
-    args = type("Args", (), {"state": str(tmp_path / "state")})()
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    args = type("Args", (), {"state": str(tmp_path / "state"), "runs": runs})()
     task = {
         "task_id": "task-1",
         "prompt": "fix",
@@ -249,6 +268,11 @@ def test_localworker_uses_context_endpoint_and_write_scope(monkeypatch, tmp_path
     assert result.code == 0
     assert argv[argv.index("--context-cap") + 1] == "65536"
     assert argv[argv.index("--endpoint") + 1] == DEFAULT_LOCAL_ENDPOINT
+    assert argv[argv.index("--runs") + 1] == str((tmp_path / "runs").resolve())
+    run_root = Path(argv[argv.index("--checkout") + 1]).parent
+    assert run_root.parent == (tmp_path / "runs").resolve()
+    assert len(run_root.name) == 32 and all(char in "0123456789abcdef" for char in run_root.name)
+    assert run_root.stat().st_mode & 0o777 == 0o750
     assert argv.count("--write-path") == 2
     assert argv[argv.index("--write-path") + 1] == "src/a.py"
 

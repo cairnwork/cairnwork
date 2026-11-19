@@ -23,7 +23,7 @@ from experimental.local_relay.config import (
     RelayConfig,
 )
 from experimental.local_relay.ledger import JsonlLedger
-from experimental.local_relay.relay import Acceptance, Attempt, run_relay
+from experimental.local_relay.relay import Acceptance, Attempt, LocalAttemptFailed, run_relay
 from experimental.local_worker.endpoint import EndpointUnreachable
 from experimental.pause.client import TransportResult
 from experimental.pause.core_judge import CoreJudge
@@ -57,6 +57,15 @@ class Rows:
 
     def append(self, row):
         self.rows.append(row)
+
+
+class AcceptingTransport:
+    def __init__(self):
+        self.calls = []
+
+    def send(self, model, effort, messages, timeout):
+        self.calls.append((model, effort, messages, timeout))
+        return TransportResult(200, {"text": "ACCEPT", "usage": {}})
 
 
 def _fixture_run(tmp_path: Path) -> RunResult:
@@ -183,8 +192,50 @@ def test_w3_worker_receives_exact_context_and_loopback_endpoint(tmp_path):
 
 def test_w3_worker_rejects_incomplete_episode():
     local = LocalWorkerAdapter(lambda _cap, _endpoint: RunResult(1, "failed", Path("."), Path(".")))
-    with pytest.raises(RuntimeError, match="did not produce"):
+    with pytest.raises(LocalAttemptFailed, match="did not produce"):
         local(32768)
+
+
+def test_incomplete_local_episodes_retry_then_fallback_with_both_checks(monkeypatch):
+    monkeypatch.setenv("CAIRNWORK_LOCAL_RELAY", "1")
+    calls = []
+    local = LocalWorkerAdapter(
+        lambda cap, _endpoint: calls.append(cap) or RunResult(1, "failed", Path("."), Path("."))
+    )
+    checks = []
+    transport = AcceptingTransport()
+    gate = CostGate(transport)
+    rows = Rows()
+    outcome = run_relay(
+        "task",
+        local,
+        lambda candidate: checks.append(("acceptance", candidate)) or Acceptance(True, "VERIFIED"),
+        gate,
+        lambda _task: Attempt("agy-candidate", "agy"),
+        rows,
+        RelayConfig(enabled=True),
+    )
+    assert outcome.route == "FALLBACK"
+    assert calls == [32768, 65536]
+    assert len(checks) == 1 and checks[0][0] == "acceptance"
+    local_rows = [row for row in rows.rows if row["stage"] in {"local", "retry"}]
+    assert [row["usd"] for row in local_rows] == [0.0, 0.0]
+    assert len(transport.calls) == 1
+
+
+def test_local_worker_programming_error_is_not_treated_as_attempt_failure(monkeypatch):
+    monkeypatch.setenv("CAIRNWORK_LOCAL_RELAY", "1")
+    local = LocalWorkerAdapter(lambda _cap, _endpoint: (_ for _ in ()).throw(TypeError("bug")))
+    with pytest.raises(TypeError, match="bug"):
+        run_relay(
+            "task",
+            local,
+            lambda _: Acceptance(True, "ok"),
+            CostGate(AcceptingTransport()),
+            lambda _task: pytest.fail("programming error must not fall back"),
+            Rows(),
+            RelayConfig(enabled=True),
+        )
 
 
 def test_w4_fallback_is_existing_agy_worker_and_route_is_fallback(monkeypatch):

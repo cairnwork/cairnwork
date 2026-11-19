@@ -6,7 +6,9 @@
 
 `--dry-route` 只印路徑設定與旗標狀態，不建立 runtime、不連服務，也不建立 ledger。它顯示 local context `32768 → 65536`、gate transport、Agy fallback 和 ledger 路徑。
 
-`--fixture DIR` 可略過 GitHub，從 repo 根目錄的 `cairnwork-local-relay.json` 讀一題，需包含 `task_id`、`prompt`、`allowed_files`（repo 相對路徑陣列）、`verifiers`（每項為受限 pytest argv 陣列），可選 `title`。Fixture 使用該 repo 的目前 `HEAD` 當 base，透過相同的 local worker、CoreJudge、Haiku gate 與 Agy fallback；傳入的 `--state` 仍須是已初始化且處於 accepting 狀態的 Cairnwork state，CoreJudge 會使用該 state 的 verifier 設定。Fixture 不會建立 Cairnwork intake ownership binding，也不會驗證 Issue 的 queue trust、遠端 base 或 publish/settle 流程。因此 fixture 冒煙只驗 relay runtime 路徑，不等於完整 Issue intake 演練。
+`--fixture DIR` 可略過 GitHub，從 repo 根目錄的 `cairnwork-local-relay.json` 讀一題，需包含 `task_id`、`prompt`、`allowed_files`（repo 相對路徑陣列）、`verifiers`（每項必須是 argv 陣列，例如 `["python3", "-m", "pytest", "tests/test_example.py"]`；不可寫成單一字串或裸 `pytest`），可選 `title`。Fixture 使用該 repo 的目前 `HEAD` 當 base，透過相同的 local worker、CoreJudge、Haiku gate 與 Agy fallback；傳入的 `--state` 仍須是已初始化且處於 accepting 狀態的 Cairnwork state，CoreJudge 會使用該 state 的 verifier 設定。Fixture 不會建立 Cairnwork intake ownership binding，也不會驗證 Issue 的 queue trust、遠端 base 或 publish/settle 流程。因此 fixture 冒煙只驗 relay runtime 路徑，不等於完整 Issue intake 演練。
+
+Run root 預設建立在 local_worker 的 `INSTALLED_RUNS`（`/Users/Shared/cairnwork-worker/local-runs`），必須是該 canonical runs 目錄的直接子目錄、名稱為 32 位小寫 hex，root 為 0750，並由安裝設定提供 `_cairnwork_wrun` 群組及 setgid 繼承。`--runs DIR` 可覆寫 runs 目錄（例如隔離測試用的暫存目錄）；指定目錄仍須符合 local-worker-tool 的 canonical 路徑與權限契約。Relay 將同一個 `--runs DIR` 傳給 local_worker CLI；CLI 的 status 查詢仍以該 episode root 作為 local-worker-tool 的位置參數，wrapper 依自身固定的 runs 安裝路徑驗證它。
 
 ## 行為與已知限制
 - 啟用條件：`CAIRNWORK_LOCAL_RELAY=1` 一定要設；`RelayConfig(enabled=True)` 單獨不能啟用。

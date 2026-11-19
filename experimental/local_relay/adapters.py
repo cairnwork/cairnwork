@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from experimental.local_relay.config import DEFAULT_LOCAL_ENDPOINT
-from experimental.local_relay.relay import Acceptance, Attempt
+from experimental.local_relay.relay import Acceptance, Attempt, LocalAttemptFailed
 from experimental.local_worker.endpoint import EndpointUnreachable
 from experimental.pause.client import CommandTransport, HaikuGate
 from experimental.pause.flow import RunResult
@@ -48,7 +48,7 @@ class LocalWorkerAdapter:
         if isinstance(result, RunResult) and result.code == EndpointUnreachable.exit_code:
             raise EndpointUnreachable("local worker endpoint is unreachable")
         if not isinstance(result, RunResult) or result.code != 0 or result.checkout is None:
-            raise RuntimeError("local worker did not produce a completed episode")
+            raise LocalAttemptFailed("local worker did not produce a completed episode")
         input_tokens, output_tokens = self.token_usage(result)
         return Attempt(result, self.model_id, input_tokens, output_tokens, 0.0)
 

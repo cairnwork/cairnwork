@@ -13,6 +13,7 @@ from typing import Any
 from experimental.local_relay.config import DEFAULT_LEDGER_PATH, FLAG
 from experimental.local_relay.ledger import JsonlLedger
 from experimental.local_relay.runtime import build_run_once, dry_route
+from experimental.local_worker.run_root_cleanup import INSTALLED_RUNS
 
 
 def parser() -> argparse.ArgumentParser:
@@ -22,6 +23,7 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--clone", required=True)
     ap.add_argument("--gh", default=str(Path.home() / ".config/nexus-agent-bot/bin/nexus-agent-gh"))
     ap.add_argument("--ledger", default=DEFAULT_LEDGER_PATH)
+    ap.add_argument("--runs", type=Path, default=INSTALLED_RUNS)
     ap.add_argument("--fixture", type=Path, help="run one task described by fixture repo JSON")
     ap.add_argument("--canary-report", type=Path)
     ap.add_argument("--dry-route", action="store_true")

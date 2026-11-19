@@ -89,7 +89,7 @@ def run_relay(
 def _local_attempt(task_id, worker, acceptance, context, ledger, stage):
     try:
         attempt = worker(context)
-    except (EndpointContextLimit, EndpointTimeout, EndpointUnreachable):
+    except (EndpointContextLimit, EndpointTimeout, EndpointUnreachable, LocalAttemptFailed):
         _append(ledger, _row(task_id, stage, "local", 0, 0, 0.0))
         return None
     _append(
@@ -97,6 +97,10 @@ def _local_attempt(task_id, worker, acceptance, context, ledger, stage):
         _row(task_id, stage, attempt.model_id, attempt.input_tokens, attempt.output_tokens, 0.0),
     )
     return attempt
+
+
+class LocalAttemptFailed(RuntimeError):
+    """A local episode ended without a completed candidate; retry or fall back safely."""
 
 
 def _check_stage(task_id, attempt, acceptance, gate, ledger, config, stage):
