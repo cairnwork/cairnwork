@@ -140,7 +140,8 @@ def main():
     fd = os.open(spec["out"], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "wb") as handle:
         handle.write(data)
-    os.chmod(spec["out"], 0o644)  # the owner reads it (a different user under the account)
+        handle.flush()
+        os.fchmod(handle.fileno(), 0o644)  # the owner reads it (a different user under the account)
 
 
 if __name__ == "__main__":
@@ -156,7 +157,9 @@ def install_runner(directory: Path, spec: bytes) -> None:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
         with os.fdopen(fd, "wb") as handle:
             handle.write(data)
-        # Readable by other, not only the group: written after _prepare_run's chmod stripped the
-        # guard's setgid, a file takes the owner's primary group on Linux, not cairnwork
-        # (VerifierAccount.grant_read). Neither file holds an answer; the guard stays owner-written.
-        os.chmod(path, 0o644)
+            handle.flush()
+            # Readable by other, not only the group: written after _prepare_run's chmod stripped
+            # the guard's setgid, a file takes the owner's primary group on Linux, not cairnwork
+            # (VerifierAccount.grant_read). Neither file holds an answer; the guard stays
+            # owner-written.
+            os.fchmod(handle.fileno(), 0o644)
