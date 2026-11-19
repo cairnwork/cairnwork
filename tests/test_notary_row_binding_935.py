@@ -318,3 +318,31 @@ def test_memory_error_while_judging_is_unreadable(tmp_path: Path, repo: Path, mo
     got = notary.row_binding("task-1", "a1")
     assert got is not None and got.identity_problem == nb.IDENTITY_UNREADABLE
     assert got.expected_identity_sha256 is None
+
+
+def test_oversized_binding_json_is_unreadable(tmp_path: Path, repo: Path) -> None:
+    import cairnwork.notary_binding as nb
+
+    notary, db = _row(tmp_path, repo, fake_core_verify)
+    _sql(
+        db,
+        "UPDATE core_verifications SET binding_json = ?",
+        '{"pad": "' + "x" * (nb.MAX_STORED_JSON_BYTES + 1) + '"}',
+    )
+    got = notary.row_binding("task-1", "a1")
+    assert got is not None and got.identity_problem == nb.IDENTITY_UNREADABLE
+    assert got.columns_match is False
+
+
+def test_memory_error_anywhere_in_the_read_is_unreadable(tmp_path: Path, repo: Path, monkeypatch):
+    import cairnwork.notary_binding as nb
+
+    notary, _ = _row(tmp_path, repo, fake_core_verify)
+
+    def boom(*_a, **_k):
+        raise MemoryError
+
+    monkeypatch.setattr(nb.sqlite3, "connect", boom)  # the read itself runs out of memory
+    got = notary.row_binding("task-1", "a1")
+    assert got is not None and got.identity_problem == nb.IDENTITY_UNREADABLE
+    assert got.columns_match is False and got.expected_identity_sha256 is None

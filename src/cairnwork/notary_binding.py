@@ -41,6 +41,13 @@ class RowBindingUnavailable(Exception):
 
 def row_binding(notary: Any, task_id: str, attempt_id: str) -> RowBinding | None:
     """Binding facts regardless of status; None means absent, read failures raise."""
+    try:
+        return _row_binding(notary, task_id, attempt_id)
+    except MemoryError:  # anywhere (connect, execute, fetch, close, parse, judge): unreadable
+        return RowBinding(None, IDENTITY_UNREADABLE, False)
+
+
+def _row_binding(notary: Any, task_id: str, attempt_id: str) -> RowBinding | None:
     conn = None
     try:
         # Do not use Notary._connect(): it opens a writable connection and sets write pragmas.
