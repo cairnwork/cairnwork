@@ -1,5 +1,6 @@
 import json
 from dataclasses import dataclass
+from typing import Any
 
 import pytest
 
@@ -56,7 +57,7 @@ class Counter:
         self.values = iter(values)
         self.calls = []
 
-    def __call__(self, *args):
+    def __call__(self, *args: Any) -> Any:
         self.calls.append(args)
         value = next(self.values)
         if isinstance(value, Exception):
@@ -261,7 +262,7 @@ def test_ac6_ledger_failure_stops_before_any_gate_or_fallback_call():
     )
     gate, ledger = FakeGate(["ACCEPT"]), FakeLedger(fail_at=0)
     result = run_relay("t", worker, acceptance, gate, fallback, ledger, enabled())
-    assert result.route == "LEDGER_ERROR" and result.reason.startswith("disk full")
+    assert result.route == "LEDGER_ERROR" and (result.reason or "").startswith("disk full")
     assert worker.calls == [(8192,)] and acceptance.calls == []
     assert gate.calls == fallback.calls == ledger.rows == []
 
