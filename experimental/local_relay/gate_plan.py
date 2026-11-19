@@ -15,6 +15,7 @@ import re
 import stat
 import subprocess
 import tempfile
+import threading
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -29,6 +30,7 @@ MAX_PLAN_CHARS = 30000
 MAX_DIFF_BYTES = 60000
 MAX_NEW_FILE_BYTES = 8000
 MAX_LISTING_BYTES = 20000
+GIT_TIMEOUT = 60.0  # wall clock for any one git call (a worker repo must not stall the relay)
 _GIT = (
     "git",
     "-c",
@@ -102,12 +104,25 @@ def _git(checkout: Path, *args: str, limit: int, env: dict[str, str]) -> bytes:
         env=env,
     )
     assert proc.stdout is not None
-    data = proc.stdout.read(limit + 1)
-    over = len(data) > limit
-    if over:
+    timed_out = threading.Event()
+
+    def expire() -> None:
+        timed_out.set()
         proc.kill()
-    proc.stdout.close()
-    code = proc.wait()
+
+    timer = threading.Timer(GIT_TIMEOUT, expire)
+    timer.start()
+    try:
+        data = proc.stdout.read(limit + 1)
+        over = len(data) > limit
+        if over:
+            proc.kill()
+        proc.stdout.close()
+        code = proc.wait()
+    finally:
+        timer.cancel()
+    if timed_out.is_set():
+        raise RuntimeError(f"git {args[0]} timed out after {GIT_TIMEOUT:g}s")
     if over:
         raise PlanIncomplete(f"git {args[0]} output exceeds {limit} bytes")
     if code:

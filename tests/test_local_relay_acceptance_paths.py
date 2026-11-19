@@ -183,3 +183,17 @@ def test_the_cost_attributes_exist_on_the_exception():
     with pytest.raises(LocalAttemptFailed) as caught:
         fallback("task")
     assert caught.value.usd == 0.5  # attached for the relay to record
+
+
+def test_a_stalled_git_is_killed_by_the_wall_clock(monkeypatch, tmp_path):
+    import sys
+    import time
+
+    from experimental.local_relay import gate_plan
+
+    monkeypatch.setattr(gate_plan, "GIT_TIMEOUT", 0.3)
+    monkeypatch.setattr(gate_plan, "_GIT", (sys.executable, "-c", "import time; time.sleep(30)"))
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match="timed out"):
+        gate_plan._git(tmp_path, "diff", limit=100, env=dict(os.environ))
+    assert time.monotonic() - started < 10
