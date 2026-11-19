@@ -132,3 +132,30 @@ def test_a_folded_bearer_or_flag_does_not_eat_a_later_colon_form_name(line):
 )
 def test_prose_with_full_width_colons_is_not_newly_masked(line):
     assert "<redacted>" not in mask_secrets(line)
+
+
+FILLERS = ["ㅤ", "ᅟ", "ᅠ", "ﾠ", "⠀", "᠋", "឴", "‎", "\U000e0100"]
+
+
+@pytest.mark.parametrize("fill", FILLERS)
+@pytest.mark.parametrize(
+    "shape",
+    [
+        "tok{f}en={v}",
+        "--tok{f}en {v}",
+        "--tok{f}en={v}",
+        '{{"tok{f}en": "{v}"}}',
+        "Bear{f}er {v}",
+        "token{f}: {v}",
+        "Authorization:{f} {v}",
+    ],
+)
+def test_invisible_filler_characters_do_not_hide_a_secret_name(fill, shape):
+    """Not only the listed marks: any filler (Hangul fillers, Braille blank, Default_Ignorable
+    Mn/Lo/So) inside or after a name is skipped, chosen by category as textclean does (#1329)."""
+    assert SV not in mask_secrets(shape.format(f=fill, v=SV))
+
+
+@pytest.mark.parametrize("fill", FILLERS)
+def test_a_filler_between_words_in_prose_is_not_masked(fill):
+    assert "<redacted>" not in mask_secrets(f"the{fill} token count is 12")

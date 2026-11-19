@@ -7,7 +7,7 @@ import unicodedata
 from collections.abc import Iterator
 from pathlib import Path
 
-from cairnwork.textclean import replace_hidden
+from cairnwork.textclean import is_hidden, replace_hidden
 
 _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")  # terminal colour and cursor codes, dropped whole
 _URL_USERINFO = re.compile(r"(?<=://)[^ \t\n]*@")  # credentials in a URL, as gitcmd.stderr_tail
@@ -51,8 +51,16 @@ _LOW_RE = re.compile(f"[{_LOW}]")
 # counts only when it holds a marker (as '?' started one there before #744; my-token stays shown)
 _NAME = re.compile(rf"(?<![\w{_HID}{_LOW}])([\w{_HID}{_LOW}]+)[=⁼₌⩵⩶﹦＝]")
 _VALUE = re.compile(r"[^&\s]+")
-_MARKS = frozenset({"Mn", "Me"})  # combining marks, dropped from the matching view (#1329)
-_IGNORABLE = "\u034f" + "".join(map(chr, range(0xFE00, 0xFE10)))  # CGJ, variation selectors
+# Default_Ignorable code points outside C*, Mn, Me (Hangul fillers, Braille blank)
+_FILLERS = frozenset("\u115f\u1160\u3164\uffa0\u2800")
+
+
+def _invisible(ch: str) -> bool:
+    """Dropped from the matching view (#1329): by category, as textclean does (C*, Zl, Zp), plus
+    combining marks Mn/Me (CGJ, variation selectors, Mongolian selectors are Mn) and the fillers."""
+    return is_hidden(ch) or unicodedata.category(ch) in ("Mn", "Me") or ch in _FILLERS
+
+
 TAIL_CHARS = 2048
 # any character fits in 4 bytes; twice that, so the window holds more than the tail. A window that
 # does not start the file drops its first, partial line: a character or URL cut there never reaches
@@ -147,14 +155,14 @@ def _redact_forms(text: str) -> str:
 
 def _view_index(text: str) -> tuple[str, list[int]]:
     """The NFKC view used for matching, and each view character's index in ``text`` (empty for
-    pure ASCII, where the two agree). Combining marks and variation selectors are left out of the
+    pure ASCII, where the two agree). Invisible characters (see ``_invisible``) are left out of the
     view, so a mark inside or after a name no longer hides it."""
-    if text.isascii():
+    if text.isascii() and _HID not in text:  # hidden characters were already turned into _HID
         return text, []
     out: list[str] = []
     idx: list[int] = []
     for i, ch in enumerate(text):
-        if unicodedata.category(ch) in _MARKS or ch in _IGNORABLE:
+        if _invisible(ch):
             continue
         norm = unicodedata.normalize("NFKC", ch)
         out.append(norm)
