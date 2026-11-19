@@ -64,6 +64,11 @@ class Counter:
         return value
 
 
+@pytest.fixture(autouse=True)
+def _flag_on(monkeypatch):
+    monkeypatch.setenv("CAIRNWORK_LOCAL_RELAY", "1")
+
+
 def enabled(**kwargs):
     return RelayConfig(enabled=True, **kwargs)
 
@@ -281,3 +286,42 @@ def test_gate_exception_fails_closed_without_retry_or_fallback():
     assert result.route == "FAILED" and result.reason == "gate offline"
     assert len(worker.calls) == len(acceptance.calls) == gate.calls == 1
     assert fallback.calls == []
+
+
+@pytest.mark.parametrize("flag", [None, "true", "0", ""])
+def test_config_enabled_true_cannot_bypass_the_environment_flag(monkeypatch, flag):
+    if flag is None:
+        monkeypatch.delenv("CAIRNWORK_LOCAL_RELAY", raising=False)
+    else:
+        monkeypatch.setenv("CAIRNWORK_LOCAL_RELAY", flag)
+    worker, acceptance, fallback = (
+        Counter([attempt("x")]),
+        Counter([Acceptance(True, "ok")]),
+        Counter([attempt("f")]),
+    )
+    gate, ledger = FakeGate(["ACCEPT"]), FakeLedger()
+    result = run_relay("t", worker, acceptance, gate, fallback, ledger, enabled())
+    assert result.route == "DISABLED" and result.reason == "RELAY_DISABLED"
+    assert (worker.calls, acceptance.calls, gate.calls, fallback.calls, ledger.rows) == (
+        [],
+        [],
+        [],
+        [],
+        [],
+    )
+
+
+def test_gate_accept_never_flips_an_acceptance_failure_at_any_stage():
+    worker = Counter([attempt("one"), attempt("two")])
+    acceptance = Counter(
+        [Acceptance(False, "f1"), Acceptance(False, "f2"), Acceptance(False, "f3")]
+    )
+    gate, fallback, ledger = (
+        FakeGate(["ACCEPT", "ACCEPT", "ACCEPT"]),
+        Counter([attempt("cloud", "haiku", 0.1)]),
+        FakeLedger(),
+    )
+    result = run_relay("t", worker, acceptance, gate, fallback, ledger, enabled())
+    assert result.route == "FAILED" and result.acceptance_passed is False
+    assert result.acceptance_raw == "f3" and len(gate.calls) == 3
+    assert worker.calls == [(8192,), (65536,)] and len(fallback.calls) == 1

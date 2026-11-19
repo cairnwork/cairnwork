@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
-from experimental.local_relay.config import RelayConfig
+from experimental.local_relay.config import FLAG, RelayConfig
 from experimental.local_relay.ledger import Ledger
 from experimental.local_worker.endpoint import (
     EndpointContextLimit,
@@ -64,7 +65,8 @@ def run_relay(
 ) -> RelayResult:
     """Route a task; every stage succeeds only when acceptance and gate both pass."""
     config = config or RelayConfig.from_env()
-    if not config.enabled:
+    # The environment flag is always required; a config object cannot bypass it.
+    if not (config.enabled and os.environ.get(FLAG) == "1"):
         return RelayResult("DISABLED", reason="RELAY_DISABLED")
     try:
         for stage, context in (
