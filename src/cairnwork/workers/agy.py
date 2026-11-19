@@ -36,6 +36,8 @@ from cairnwork import proc_start, provenance
 from cairnwork.confined import ATTEMPT_ENV, Sweep, confirm_gone, copy_capped, sweep_marked
 from cairnwork.unswept import WorkerMayLive
 from cairnwork.workers import agy_dispatch, agy_receipts
+from cairnwork.workers.agy_streams import close_streams, fail_cleanup
+from cairnwork.workers.agy_streams import feed as _feed
 
 ENV_KEEP = (
     "HOME",
@@ -207,23 +209,13 @@ class AgyWorker:
                 threading.Thread(target=_feed, args=(process, prompt), daemon=True).start()
             copier = threading.Thread(target=copy_capped, args=(process.stdout, log), daemon=True)
             copier.start()
-        except BaseException as start_error:
+        except BaseException as start_error:  # noqa: BLE001 - cleanup keeps it
             try:
                 held, _, _ = _stop(process, None, workdir.name, reader, mark, dirs)
-            except BaseException as stop_error:
-                if not isinstance(stop_error, Exception):
-                    raise  # an interrupt during cleanup goes out as it is
-                start_error.add_note(f"process cleanup failed: {stop_error!r}")
-                if process.poll() is not None:
-                    try:
-                        _close_streams(process, log)
-                    except BaseException as close_error:  # noqa: BLE001 - preserve start failure
-                        if not isinstance(close_error, Exception):
-                            raise  # an interrupt is never swallowed
-                        start_error.add_note(f"stream cleanup failed: {close_error!r}")
-                raise start_error from stop_error
+            except BaseException as stop_error:  # noqa: BLE001 - cleanup keeps start_error
+                fail_cleanup(start_error, stop_error, process, log, (reader,))
             if not held:
-                _close_streams(process, log)
+                close_streams(process, log)
             raise
         self._await(process, copier, reader, (workdir.name, mark, dirs), log, log_path)
         return self.provenance(reader)
@@ -262,21 +254,9 @@ class AgyWorker:
             try:
                 held, swept, by_cwd = _stop(process, copier, name, reader, mark, dirs)
                 if not held:  # else the copier still reads: leave both open rather than hang
-                    _close_streams(process, log)
-            except BaseException as cleanup_error:  # the error in flight stays as __context__
-                if not isinstance(cleanup_error, Exception):
-                    raise  # an interrupt during cleanup goes out as it is
-                if process.poll() is not None:
-                    try:
-                        _close_streams(process, log)
-                    except BaseException as close_error:  # noqa: BLE001 - keep cleanup_error
-                        if not isinstance(close_error, Exception):
-                            raise  # an interrupt is never swallowed
-                        cleanup_error.add_note(f"stream cleanup failed: {close_error!r}")
-                if active is not None:
-                    active.add_note(f"process cleanup failed: {cleanup_error!r}")
-                    raise active from cleanup_error
-                raise
+                    close_streams(process, log)
+            except BaseException as cleanup_error:  # noqa: BLE001 - the in-flight error leaves
+                fail_cleanup(active or cleanup_error, cleanup_error, process, log, (copier, reader))
         completion, why = None, "HELD" * held or "CWD" * bool(by_cwd)  # cwd: as a holder (#537)
         try:
             if dispatch is not None and dispatch.run_as_user is not None:
@@ -374,33 +354,6 @@ def _settle_worker_run(dispatch, reader, process, held, timed_out, log_path) -> 
     if found and not ended:
         raise agy_dispatch.AgyWorkerAccountFailed(f"{'; '.join(found + unswept)}; log {log_path}")
     return completion
-
-
-def _feed(process, prompt: str) -> None:
-    try:
-        process.stdin.write(prompt.encode())
-    except OSError:
-        pass  # the dispatcher exited without reading it; its exit code says what happened
-    finally:
-        try:
-            process.stdin.close()
-        except OSError:
-            pass
-
-
-def _close_streams(process, log) -> None:
-    first_error = None
-    for stream in (process.stdin, process.stdout, process.stderr, log):
-        if stream is not None:
-            try:
-                stream.close()
-            except BaseException as exc:  # noqa: BLE001 - attempt every stream close
-                if first_error is None or (
-                    not isinstance(exc, Exception) and isinstance(first_error, Exception)
-                ):  # an interrupt (KeyboardInterrupt, SystemExit) outranks an ordinary error
-                    first_error = exc
-    if first_error is not None:
-        raise first_error
 
 
 def _stop(

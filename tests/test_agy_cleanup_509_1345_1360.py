@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from cairnwork.workers import agy as agy_module
+from cairnwork.workers import agy_streams
 from cairnwork.workers.agy import AgyWorker
 from cairnwork.workers.agy_dispatch import Dispatch
 
@@ -85,7 +86,7 @@ def test_close_streams_attempts_all_and_reraises_first_error():
     )
 
     with pytest.raises(OSError, match="first") as caught:
-        agy_module._close_streams(process, Stream("log"))
+        agy_streams.close_streams(process, Stream("log"))
 
     assert caught.value is first
     assert calls == ["stdin", "stdout", "stderr", "log"]
@@ -104,7 +105,7 @@ def test_close_streams_interrupt_outranks_ordinary_error():
         stdin=Stream(OSError("io")), stdout=Stream(KeyboardInterrupt()), stderr=Stream()
     )
     with pytest.raises(KeyboardInterrupt):
-        agy_module._close_streams(process, Stream())
+        agy_streams.close_streams(process, Stream())
 
 
 def test_await_keeps_ask_to_stop_error_when_stop_also_raises(monkeypatch):
@@ -197,7 +198,7 @@ def test_start_failure_interrupt_in_stream_close_propagates(tmp_path, monkeypatc
 
     monkeypatch.setattr(threading.Thread, "start", fail_start)
     monkeypatch.setattr(agy_module, "_stop", fail_stop)
-    monkeypatch.setattr(agy_module, "_close_streams", interrupt)
+    monkeypatch.setattr(agy_streams, "close_streams", interrupt)
     task = SimpleNamespace(title="t", instructions="i", allowed_files=("a.py",))
 
     with pytest.raises(KeyboardInterrupt):
