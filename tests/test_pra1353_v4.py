@@ -208,7 +208,7 @@ def test_variant_6_only_regular_product_packages_are_sealed(name: str, tmp_path:
 
 def test_variant_7_ci_gate_command_is_isolated_from_repo_pytest_code():
     workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-    match = re.search(r"run: (uv run --no-sync python -I -S -B tests/pra1353_gate\.py)", workflow)
+    match = re.search(r'/\.venv/bin/python" (-I -S -B tests/pra1353_gate\.py)', workflow)
     assert match is not None
     command = match.group(1)
     assert command.endswith("tests/pra1353_gate.py")
@@ -277,11 +277,14 @@ def _gate_repo(root: Path, stub: bool = True) -> None:
 
 def _run_gate(root: Path) -> subprocess.CompletedProcess[str]:
     workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-    match = re.search(r"run: (uv run --no-sync python -I -S -B tests/pra1353_gate\.py)", workflow)
+    match = re.search(r'/\.venv/bin/python" (-I -S -B tests/pra1353_gate\.py)', workflow)
     assert match is not None
-    command = shlex.split(match.group(1))
-    args = [sys.executable, *command[4:]]
-    return subprocess.run(args, cwd=root, capture_output=True, text=True, timeout=300, check=False)
+    args = [sys.executable, *shlex.split(match.group(1))]
+    # #1454 B2: the gate checks this venv against a uv.lock; here that is the checkout's own.
+    env = {**os.environ, "PRA1353_BASE_LOCK": str(ROOT / "uv.lock")}
+    return subprocess.run(
+        args, cwd=root, env=env, capture_output=True, text=True, timeout=300, check=False
+    )
 
 
 def test_gate_ignores_root_pytest_hooks_and_unpinned_cwd_modules(tmp_path: Path):
