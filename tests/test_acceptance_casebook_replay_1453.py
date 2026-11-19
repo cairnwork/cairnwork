@@ -162,3 +162,35 @@ def test_digest_is_cleared_when_a_case_fails_before_the_copy(tmp_path):
         runner.run({}, {})
     assert runner.state_config_sha256 is None
     assert replay_config.metadata(config, runner)["state_config_sha256"] is None
+
+
+def test_copied_digest_reaches_the_record_and_differs_per_config(monkeypatch, tmp_path, lg, capsys):
+    """A runner that copied the config reports its digest; the record carries exactly that."""
+
+    class CopyingRunner:
+        def __init__(self, _clone, _repo, _version, _timeout, state_config):
+            self.state_config = state_config
+            self.state_config_sha256: str | None = None
+
+        def __call__(self, case, args):
+            self.state_config_sha256 = hashlib.sha256(self.state_config.read_bytes()).hexdigest()
+            return "accepted"
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(replay, "RealRunner", CopyingRunner)
+    case = _confirmed(lg, capsys, "a1", "accepted_bad")
+    args = _args(tmp_path, lg, [case]) + ["--repo", str(tmp_path), "--state-config", ""]
+    digests = []
+    for name, body in (("one", {"core_url": "A"}), ("two", {"core_url": "B"})):
+        config = tmp_path / f"{name}.json"
+        config.write_text(json.dumps(body))
+        args[args.index("--state-config") + 1] = str(config)
+        args[args.index("--out") + 1] = str(tmp_path / f"{name}.jsonl")
+        assert replay.main(args) == 0
+        record = _records(tmp_path / f"{name}.jsonl")[0]
+        assert record["state_config"] == "given"
+        assert record["state_config_sha256"] == hashlib.sha256(config.read_bytes()).hexdigest()
+        digests.append(record["state_config_sha256"])
+    assert digests[0] != digests[1]
