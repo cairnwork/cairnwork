@@ -94,3 +94,41 @@ def test_commit_argument_must_be_a_full_hex_id(tmp_path, commit):
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
     with pytest.raises(GitCommandError):
         tree_differences(repo, commit, tmp_path)
+
+
+def _repo_with_commit(tmp_path):
+    repo, clone = tmp_path / "repo", tmp_path / "clone"
+    repo.mkdir()
+    clone.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    (repo / "f").write_text("x")
+    (clone / "f").write_text("x")
+    _git(repo, "add", "f")
+    _git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "x")
+    return repo, clone, _git(repo, "rev-parse", "HEAD")
+
+
+def test_full_hex_id_still_compares_normally(tmp_path):
+    repo, clone, full = _repo_with_commit(tmp_path)
+    assert tree_differences(repo, full, clone) == []
+    (clone / "f").write_text("y")
+    assert tree_differences(repo, full, clone) == ["changed f"]
+
+
+@pytest.mark.parametrize("form", ["HEAD", "upper", "abbrev", "branch"])
+def test_a_commit_git_would_resolve_is_refused_by_form(tmp_path, form):
+    repo, clone, full = _repo_with_commit(tmp_path)
+    arg = {
+        "HEAD": "HEAD",
+        "upper": full.upper(),
+        "abbrev": full[:12],
+        "branch": _git(repo, "branch", "--show-current"),
+    }[form]
+    resolved = (
+        _git(repo, "rev-parse", "--verify", "-q", arg + "^{commit}") if form != "upper" else ""
+    )
+    assert (
+        form == "upper" or resolved == full
+    )  # git itself resolves it, so only the form check refuses
+    with pytest.raises(GitCommandError, match="full lowercase hex"):
+        tree_differences(repo, arg, clone)
