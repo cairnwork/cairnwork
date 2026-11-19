@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -54,6 +55,7 @@ class RealRunner:
         self.root = Path(tempfile.mkdtemp(prefix="cairnwork-replay-"))
         self.repo, self.version, self.timeout = repo.resolve(), version, timeout
         self.state_config = state_config
+        self.state_config_sha256: str | None = None
         self.copy, self.venv = self.root / "copy", self.root / "venv"
         try:
             self.copy.mkdir()
@@ -154,7 +156,7 @@ class RealRunner:
             state_config = getattr(self, "state_config", None)
             if state_config is not None:
                 try:
-                    self._copy_state_config(state_config, state)
+                    self.state_config_sha256 = self._copy_state_config(state_config, state)
                 except CasebookError as exc:
                     raise RunnerFailure(exc.code) from exc
             (state / "ACCEPTING").touch(mode=0o600)
@@ -187,7 +189,7 @@ class RealRunner:
             shutil.rmtree(case_tmp, ignore_errors=True)
 
     @staticmethod
-    def _copy_state_config(template: Path, state: Path) -> None:
+    def _copy_state_config(template: Path, state: Path) -> str:
         """Copy a config template through no-follow descriptors into private case state."""
         source_fd = destination_fd = None
         try:
@@ -197,11 +199,15 @@ class RealRunner:
             destination_fd = os.open(
                 state / "config.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
             )
+            digest = hashlib.sha256()
             with os.fdopen(source_fd, "rb") as source, os.fdopen(destination_fd, "wb") as dest:
                 source_fd = destination_fd = None
-                shutil.copyfileobj(source, dest)
+                while chunk := source.read(1024 * 1024):
+                    digest.update(chunk)
+                    dest.write(chunk)
                 dest.flush()
                 os.fchmod(dest.fileno(), 0o600)
+            return digest.hexdigest()
         except CasebookError:
             raise
         except OSError as exc:
