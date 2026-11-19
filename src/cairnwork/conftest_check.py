@@ -17,8 +17,8 @@ runs first, at the producer and (full mode) at the receiver:
   at the producer, in the pipeline judge and at a full receiver (#952). An unchanged file that
   does not parse (a Python 2 sample) is not refused for that: its dotted names count as imports.
   An archive the test commit changes is refused when a conftest or the root pytest configuration
-  names its file, or a conftest changes ``sys.path`` and names an archive suffix or the archive's
-  directory (archive_reach.py, #967; the rest is a documented residual).
+  names its file, or a conftest changes ``sys.path`` in any detected way (archive_reach.py, #967;
+  the rest is a documented residual).
 * no new name the base binds or its tests request (conftest_names.py, #916); an annotation is
   names, attributes, literals, subscripts and ``|`` only (#916: an operator calls a dunder).
 

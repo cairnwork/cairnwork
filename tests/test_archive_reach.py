@@ -1,5 +1,5 @@
-"""#967: a changed archive a conftest can put on sys.path by a run-time-built path is refused;
-an archive that is only test data is not."""
+"""#967: when the test commit changes an archive, a conftest that changes sys.path in any detected
+way is refused (the path text is not judged); one that does not change it is not."""
 
 from __future__ import annotations
 
@@ -8,8 +8,10 @@ from conftest import commit_change, git
 from conftest_scenarios import project as _project  # noqa: F401  (the fixture, re-exposed)
 
 import cairnwork.deferred_tests as dt
+from cairnwork.archive_reach import archive_path_reason
 from cairnwork.conftest_check import check_conftests
 
+REASON = "changes sys.path"
 RUNTIME = "import sys, glob\nfor z in glob.glob('tests/data/*.zip'):\n    sys.path.insert(0, z)\n"
 WHL = (
     "import sys, os\nfor f in os.listdir(D):\n    if f.endswith('.whl'):\n"
@@ -23,9 +25,50 @@ _HEADS = [
     "from sys import path\npath.append({})",
     "import sys\np = sys.path\np.insert(0, {})",
 ]
-_LITS = [("'*.zip'", "t/v.zip"), ("'*.whl'", "t/v.whl"), ("'t'", "t/v.zip")]
-ALIAS_ROWS = [(h.format(lit) + "\n", a, True) for h in _HEADS for lit, a in _LITS]
-ALIAS_ROWS += [(h.format("'src'") + "\nZ = '.egg'\n", "t/v.egg", False) for h in _HEADS]
+ALIAS_ROWS = [
+    (h.format(lit) + "\n", a)
+    for h in _HEADS
+    for lit, a in [
+        ("'*.zip'", "t/v.zip"),
+        ("'*.whl'", "t/v.whl"),
+        ("'t'", "t/v.zip"),
+        ("'src'", "t/v.egg"),
+    ]
+]
+
+# a conftest that changes sys.path: each is refused whatever the path expression is
+E2E_REFUSED = [
+    *ALIAS_ROWS,
+    (RUNTIME, "tests/data/vendor.zip"),
+    ("import sys\nsys.path += ['tests/libs']\n", "tests/libs/v.egg"),
+    ("import site\nsite.addsitedir('libs')\n", "libs/v.pyz"),
+    ("import sys, glob\nsys.path[0:0] = glob.glob('*.zip')\n", "t/other.zip"),
+    ("import sys\nsys.path[0:0] = ['x']\nS = '*.zip'\n", "t/other.zip"),
+    (WHL, "tests/data/vendor.whl"),
+    (LISTDIR.format("os.path.join('src', 'data')"), "src/data/v.zip"),
+    (LISTDIR.format("'Tests/Data'"), "tests/data/v.zip"),
+    (OTHER.format("./vendor/other.zip"), "tests/data/s.zip"),
+    (OTHER.format(".cache"), "tests/data/s.zip"),
+    ("path = []\nimport sys\nsys.path.insert(0, '*.zip')\n", "tests/data/s.zip"),
+    ("def f(mp):\n    mp.syspath_prepend('src')\n", "tests/data/s.zip"),
+    (ALIAS.format("import sys as s", "s.path.insert(0, z)"), "t/v.zip"),
+    (ALIAS.format("from sys import *", "path.insert(0, z)"), "t/v.zip"),
+    (ALIAS.format("import sys as s\np = s.path\nq = p", "q.insert(0, z)"), "t/v.zip"),
+    (ALIAS.format("import sys", "sys.path.__iadd__([z])"), "t/v.zip"),
+    (
+        ALIAS.format("", "request.config.pluginmanager and None\n    zipimport.zipimporter(z)"),
+        "t/v.zip",
+    ),
+    (ALIAS.format("from site import addsitedir", "addsitedir(z)"), "t/v.zip"),
+]
+# no sys.path change: not refused, even with a changed archive
+E2E_PASSED = [
+    # the changed file is not an archive: nothing to reach, whatever the conftest does
+    ("import sys\nsys.path.insert(0, 'src')\n", "tests/data/s.txt"),
+    ("import glob\nZ = glob.glob('tests/data/*.zip')\n", "tests/data/sample.zip"),
+    ("import sys\nprint(sys.path)\nD = 'fixtures'\n", "tests/data/s.zip"),
+    ("import sys\nsaved = sys.path[:]\nX = '.egg'\n", "t/v.egg"),
+]
 
 
 def _commit(project, files):
@@ -36,183 +79,124 @@ def _commit(project, files):
     return base, commit
 
 
-@pytest.mark.parametrize(
-    ("conftest", "archive", "refused"),
-    [
-        *ALIAS_ROWS,
-        (RUNTIME, "tests/data/vendor.zip", True),
-        (RUNTIME, "tests/data/odd.whl", True),
-        ("import sys\nsys.path += ['tests/libs']\n", "tests/libs/v.egg", True),
-        ("import site\nsite.addsitedir('libs')\n", "libs/v.pyz", True),
-        ("import sys, glob\nsys.path[0:0] = glob.glob('*.zip')\n", "t/other.zip", True),
-        ("import sys\nsys.path[0:0] = ['x']\nS = '*.zip'\n", "t/other.zip", False),
-        # a suffix test, a listing of a named directory, glob case, run-time joined names
-        (WHL, "tests/data/vendor.whl", True),
-        (WHL.replace("endswith('.whl')", "endswith('.WHL')"), "tests/data/vendor.whl", True),
-        (LISTDIR.format("os.path.join('src', 'data')"), "src/data/v.zip", True),
-        (LISTDIR.format("'tests/data/'"), "tests/data/v.zip", True),
-        (LISTDIR.format("'/tests/data'"), "tests/data/v.zip", True),
-        (LISTDIR.format("'./tests/data'"), "tests/data/v.zip", True),
-        (LISTDIR.format("'Tests/Data'"), "tests/data/v.zip", True),
-        (RUNTIME.replace("*.zip", "*.ZIP"), "tests/data/v.zip", True),
-        (RUNTIME.replace("'tests/data/*.zip'", "b'*.zip'"), "t/v.zip", True),
-        # the sys.path forms: alias, from-import, alias of the list, pytest, dunder, zipimporter
-        (ALIAS.format("import sys as s", "s.path.insert(0, z)"), "t/v.zip", True),
-        (ALIAS.format("from sys import path", "path.append(z)"), "t/v.zip", True),
-        (ALIAS.format("from sys import path as q", "q.extend([z])"), "t/v.zip", True),
-        (ALIAS.format("from sys import *", "path.insert(0, z)"), "t/v.zip", True),
-        (ALIAS.format("import sys\np = sys.path", "p.insert(0, z)"), "t/v.zip", True),
-        (ALIAS.format("import sys as s\np = s.path\nq = p", "q.insert(0, z)"), "t/v.zip", True),
-        (ALIAS.format("import sys as s", "s.path += [z]"), "t/v.zip", True),
-        (ALIAS.format("from sys import path", "path += [z]"), "t/v.zip", True),
-        (ALIAS.format("import sys", "sys.path.__iadd__([z])"), "t/v.zip", True),
-        (ALIAS.format("", "monkeypatch.syspath_prepend(z)"), "t/v.zip", True),
-        (
-            ALIAS.format("", "request.config.pluginmanager and None\n    zipimport.zipimporter(z)"),
-            "t/v.zip",
-            True,
-        ),
-        (ALIAS.format("from site import addsitedir", "addsitedir(z)"), "t/v.zip", True),
-        # another named archive, or a dot-led path, is not a pattern
-        (OTHER.format("./vendor/other.zip"), "tests/data/s.zip", False),
-        (OTHER.format("../wheels/other.whl"), "tests/data/s.whl", False),
-        (OTHER.format(".cache"), "tests/data/s.zip", False),
-        (OTHER.format("./x.pyz"), "tests/data/s.zip", False),
-        ("path = []\npath.insert(0, '*.zip')\n", "tests/data/s.zip", False),
-        ("import sys as s\ns.path.insert(0, 'src')\n", "tests/data/s.zip", False),
-        ("from sys import path\npath.insert(0, 'src')\n", "tests/data/s.zip", False),
-        ("import sys\np = sys.path\np.insert(0, 'src')\n", "tests/data/s.zip", False),
-        ("def f(mp):\n    mp.syspath_prepend('src')\n", "tests/data/s.zip", False),
-        # test data only: no sys.path change, no pattern or directory named, or another file
-        ("import glob\nZ = glob.glob('tests/data/*.zip')\n", "tests/data/sample.zip", False),
-        ("import sys\nsys.path.insert(0, 'src')\n", "tests/data/sample.zip", False),
-        ("import sys\nsys.path.insert(0, 'src')\nD = 'fixtures'\n", "tests/data/s.zip", False),
-        ("import sys\nsys.path.insert(0, 'tests/other.zip')\n", "tests/data/s.zip", False),
-        ("import sys\nsys.path.insert(0, 'src')\n", "tests/data/s.txt", False),
-        ("import sys\nsys.path.insert(0, 'x')\nD = 'data'\n", "tests/data/s.txt", False),
-    ],
-)
-def test_changed_archive_reached_by_a_runtime_sys_path_is_refused(
-    project, conftest, archive, refused
+@pytest.mark.parametrize(("conftest", "archive"), E2E_REFUSED)
+def test_a_conftest_that_changes_sys_path_is_refused_when_an_archive_changes(
+    project, conftest, archive
 ):
     commit_change(project, {"tests/conftest.py": conftest})
     base, commit = _commit(project, {archive: "PK"})
-    if not refused:
-        check_conftests(project, base, commit, [archive])
-        return
     with pytest.raises(dt.TestCommitRejected) as err:
         check_conftests(project, base, commit, [archive])
     assert err.value.code == "TEST_COMMIT_CONFTEST_STATIC", err.value
     assert "#967" in str(err.value)
+    assert REASON in str(err.value)
+
+
+@pytest.mark.parametrize(("conftest", "archive"), E2E_PASSED)
+def test_a_conftest_that_does_not_change_sys_path_is_not_refused(project, conftest, archive):
+    commit_change(project, {"tests/conftest.py": conftest})
+    base, commit = _commit(project, {archive: "PK"})
+    check_conftests(project, base, commit, [archive])
 
 
 G = "import sys, os, glob\nfrom pathlib import Path\n"
-FIXTURE = "Z = glob.glob('tests/data/*.zip')\nW = [f for f in os.listdir('tests/data')]\n"
-PRECISE = [
-    # the module under another name, then every path form
-    (G + "s = sys\ns.path.insert(0, glob.glob('*.zip')[0])", "t/v.zip", True),
-    (G + "s = sys\nt = s\nt.path.insert(0, glob.glob('*.zip')[0])", "t/v.zip", True),
-    (G + "import sys as s\nu = s\nu.path += glob.glob('*.whl')", "t/v.whl", True),
-    (G + "s = sys\ns.path[0:0] = glob.glob('*.zip')", "t/v.zip", True),
-    (G + "s = sys\ns.path.extend(glob.glob('*.zip'))", "t/v.zip", True),
-    (G + "__import__('sys').path.insert(0, glob.glob('*.zip')[0])", "t/v.zip", True),
-    (G + "s = __import__('sys')\ns.path.append(glob.glob('*.zip')[0])", "t/v.zip", True),
-    (
-        G + "import importlib\ns = importlib.import_module('sys')\ns.path.append('*.zip')",
-        "t/v",
-        True,
-    ),
-    # a literal path: the archive's directory, a suffix, a glob of any kind
-    (G + "sys.path.insert(0, 'tests/data/')", "tests/data/v.zip", True),
-    (G + "sys.path.insert(0, '/tests/data')", "tests/data/v.zip", True),
-    (G + "sys.path.insert(0, './tests/data')", "tests/data/v.zip", True),
-    (G + "sys.path.insert(0, 'Tests/Data')", "tests/data/v.zip", True),
-    (G + "sys.path.insert(0, os.path.join('src', 'data'))", "src/data/v.zip", True),
-    (G + "sys.path.insert(0, 'tests/data/*')", "tests/data/v.zip", True),
-    (G + "sys.path.insert(0, 'vendor' + '.whl')", "t/v.whl", True),
-    (G + "sys.path.insert(0, '.WHL')", "t/v.whl", True),
-    (G + "sys.path.insert(0, glob.glob('tests/data/*.ZIP')[0])", "tests/data/v.zip", True),
-    (G + "sys.path.insert(0, glob.glob(b'tests/data/*')[0])", "tests/data/v.zip", True),
-    # a path built at run time cannot be judged: refused
-    (G + "sys.path.insert(0, ROOT)", "t/v.zip", True),
-    (G + "sys.path.extend(os.listdir('src'))", "t/v.zip", True),
-    (G + "sys.path.extend(Path('src').iterdir())", "t/v.zip", True),
-    (G + "sys.path.insert(0, str(Path(HERE) / 'src'))", "t/v.zip", True),
-    # a conftest that only reads sys.path, or names a data directory, is not a path change
-    (G + "saved = sys.path[:]\nX = {'data': 1}", "tests/data/s.zip", False),
-    (G + "p = sys.path\nK = 'data'", "tests/data/s.zip", False),
-    (G + "root = sys.path[0]\nD = os.path.join(root, 'data')", "tests/data/s.zip", False),
-    (G + "p: list = sys.path\nK = 'data'", "tests/data/s.zip", False),
-    (G + "saved = sys.path[:]\nsaved.insert(0, 'data')", "tests/data/s.zip", False),
-    # the aliases: assignment of the module, annotated alias, imported function under a new name
-    (G + "s = sys\nfor f in glob.glob('*.zip'):\n    s.path.insert(0, f)", "t/v.zip", True),
-    (G + "p: list = sys.path\nfor f in glob.glob('*.zip'):\n    p.insert(0, f)", "t/v.zip", True),
-    (
-        G + "from site import addsitedir as ad\nfor f in glob.glob('*.zip'):\n    ad(f)",
-        "t/v.zip",
-        True,
-    ),
-    (
-        G + "from zipimport import zipimporter as Zi\nfor f in glob.glob('*.zip'):\n    Zi(f)",
-        "t/v.zip",
-        True,
-    ),
-    (G + "from zipimport import zipimporter as Zi\nZi('src')\nX = 'data'", "t/v.zip", False),
-    # test data only: the path put on sys.path is a literal that cannot reach the archive
-    (G + "sys.path.insert(0, 'src')\n" + FIXTURE, "tests/data/sample.zip", False),
-    (G + "s = sys\ns.path.insert(0, 'src')\n" + FIXTURE, "tests/data/sample.zip", False),
-    (G + "from sys import path\npath.append('src')\n" + FIXTURE, "tests/data/s.zip", False),
-    (G + "sys.path = sys.path + ['src']\n" + FIXTURE, "tests/data/s.zip", False),
-    (G + "sys.path.insert(0, str(Path(__file__).parent / 'src'))", "tests/data/s.zip", False),
-    (G + "sys.path.insert(0, os.path.dirname(__file__))", "tests/data/s.zip", False),
-    (G + "sys.path.insert(0, './vendor/other.zip')", "tests/data/s.zip", False),
-    (G + "sys.path.insert(0, 'src')\nX = '.egg'", "t/v.egg", False),
-    # keyword arguments, bytes literals, a lone glob character, a bare-name rebind
-    (G + "import site\nsite.addsitedir(sitedir=glob.glob('*.zip')[0])", "t/v.zip", True),
-    (
-        G + "from zipimport import zipimporter\nzipimporter(path=glob.glob('*.zip')[0])",
-        "t/v.zip",
-        True,
-    ),
-    (
-        "def f(monkeypatch):\n    monkeypatch.syspath_prepend(path=ROOT)",
-        "t/v.zip",
-        True,
-    ),
-    (G + "sys.path.insert(0, b'tests/data')", "tests/data/v.zip", True),
-    (G + "sys.path.insert(0, b'.whl')", "t/v.whl", True),
-    (G + "sys.path.insert(0, 'tests/data/[ab]')", "tests/data/v.zip", True),
-    (G + "sys.path.insert(0, 'tests/data/v?')", "tests/data/v.zip", True),
-    (G + "p = sys.path\np = ['data']", "tests/data/s.zip", False),
-    (G + "p: list = sys.path\np: list = ['data']", "tests/data/s.zip", False),
-    # the remaining mutants: keyword in a path builder, __setitem__, alias chains in any order,
-    # other pure builders, no-op annotations, a call with no arguments
-    (G + "sys.path.insert(0, str(object=ROOT))", "t/v.zip", True),
-    (G + "sys.path.__setitem__(0, glob.glob('*.zip')[0])", "t/v.zip", True),
-    (G + "v = u\nu = t\nt = s\ns = sys\nv.path.insert(0, glob.glob('*.zip')[0])", "t/v.zip", True),
-    (G + "sys.path.extend(os.walk.__call__('src'))", "t/v.zip", True),
-    (G + "sys.path.insert(0, '')", "./v.zip", False),
-    (G + "x = dict()\nsys.path.insert(0, 'src')", "t/v.zip", False),
-    (G + "sys.path: list", "t/v.zip", False),
-    (G + "sys.path.extend(sys.path.copy())", "t/v.zip", False),
-    (G + "sys.path.insert(0, str(Path.cwd()))", "t/v.zip", False),
-    (G + "sys.path.insert(0, str(Path('src').joinpath('lib')))", "t/v.zip", False),
-    (
-        G + "from os.path import join, normpath, dirname\nsys.path.insert(0, join('a', 'b'))",
-        "t/v.zip",
-        False,
-    ),
-    (G + "from os.path import normpath\nsys.path.insert(0, normpath('src'))", "t/v.zip", False),
-    (G + "from os.path import dirname\nsys.path.insert(0, dirname(__file__))", "t/v.zip", False),
-    (G + "sys.path.extend([*('src', 'lib')])", "t/v.zip", False),
-    (G + "sys.path = sys.path[1:] + ['src']", "t/v.zip", False),
-    (G + "sys.path.extend({'src'})", "t/v.zip", False),
-    (G + "sys.path.extend(('src',))", "t/v.zip", False),
+ARC = ["vendor/changed.zip"]
+CHANGES = [
+    # the three bypasses a judgment by text let through (Codex review)
+    G + 'sys.path.insert(0, "alias")',
+    G + 'sys.path.insert(0, sys.path[0] + "/vendor")',
+    G + 'sys.path.insert(0, str(Path.cwd() / "vendor"))',
+    # a literal path, a suffix, a glob, the archive's directory, any case, bytes
+    G + "sys.path.insert(0, 'src')",
+    G + "sys.path.insert(0, 'tests/data/')",
+    G + "sys.path.insert(0, '/tests/data')",
+    G + "sys.path.insert(0, 'Tests/Data')",
+    G + "sys.path.insert(0, os.path.join('src', 'data'))",
+    G + "sys.path.insert(0, 'tests/data/*')",
+    G + "sys.path.insert(0, 'vendor' + '.whl')",
+    G + "sys.path.insert(0, '.WHL')",
+    G + "sys.path.insert(0, b'tests/data')",
+    G + "sys.path.insert(0, 'tests/data/[ab]')",
+    G + "sys.path.insert(0, './vendor/other.zip')",
+    G + "sys.path.insert(0, str(Path(__file__).parent / 'src'))",
+    G + "sys.path.insert(0, os.path.dirname(__file__))",
+    G + "sys.path.insert(0, '')",
+    G + "sys.path.insert(0, str(Path.cwd()))",
+    G + "sys.path.insert(0, str(Path('src').joinpath('lib')))",
+    G + "sys.path.extend([*('src', 'lib')])",
+    G + "sys.path.extend({'src'})",
+    G + "sys.path.extend(sys.path.copy())",
+    G + "sys.path = sys.path + ['src']",
+    G + "sys.path = sys.path[1:] + ['src']",
+    # run-time built paths
+    G + "sys.path.insert(0, ROOT)",
+    G + "sys.path.extend(os.listdir('src'))",
+    G + "sys.path.extend(Path('src').iterdir())",
+    G + "sys.path.insert(0, str(Path(HERE) / 'src'))",
+    G + "sys.path.insert(0, glob.glob('*.zip')[0])",
+    G + "sys.path.insert(0, str(object=ROOT))",
+    G + "sys.path.extend(os.walk.__call__('src'))",
+    # the module and the list under other names, any form of change
+    G + "s = sys\ns.path.insert(0, 'src')",
+    G + "s = sys\nt = s\nt.path.insert(0, 'src')",
+    G + "v = u\nu = t\nt = s\ns = sys\nv.path.insert(0, 'src')",
+    G + "import sys as s\nu = s\nu.path += ['src']",
+    G + "s = sys\ns.path[0:0] = ['src']",
+    G + "s = sys\ns.path.extend(['src'])",
+    G + "sys.path.__setitem__(0, 'src')",
+    G + "sys.path.extend()",
+    G + "from sys import path\npath.append('src')",
+    G + "from sys import path\npath += ['src']",
+    G + "p: list = sys.path\np.insert(0, 'src')",
+    G + "p = sys.path\np.insert(0, 'src')",
+    G + "sys.path: list = ['src']",
+    G + "__import__('sys').path.insert(0, 'src')",
+    G + "s = __import__('sys')\ns.path.append('src')",
+    G + "import importlib\ns = importlib.import_module('sys')\ns.path.append('src')",
+    # site, pytest and zipimport, also under another name or by keyword
+    G + "import site\nsite.addsitedir('src')",
+    G + "import site\nsite.addsitedir(sitedir='src')",
+    G + "from site import addsitedir as ad\nad('src')",
+    G + "from zipimport import zipimporter as Zi\nZi('src')",
+    G + "from zipimport import zipimporter\nzipimporter(path='src')",
+    "def f(monkeypatch):\n    monkeypatch.syspath_prepend(path=ROOT)",
+    "def f(mp):\n    mp.syspath_prepend('src')",
+]
+UNCHANGED = [
+    "",
+    "import sys\nsaved = sys.path[:]\nX = {'data': 1}",
+    "import sys\np = sys.path[:]\nK = 'data'",
+    "import sys\nx = sys.path[0]\nD = x + '/data'",
+    "import sys\nroot = sys.path[0]\nD = root",
+    "import sys\np: list = sys.path\nK = 'data'",
+    "import sys\np = sys.path\nK = 'data'",
+    "import sys\nprint(sys.path)",
+    "import sys\nsaved = sys.path[:]\nsaved.insert(0, 'data')",
+    "import sys\np = sys.path\np = ['data']",
+    "import sys\np: list = sys.path\np: list = ['data']",
+    "import sys\nsys.path: list",
+    "import glob\nZ = glob.glob('tests/data/*.zip')\nS = '.egg'",
+    "path = []\npath.insert(0, '*.zip')\n",
+    "x = dict()\nX = 'data'",
 ]
 
 
-@pytest.mark.parametrize(("source", "archive", "refused"), PRECISE)
-def test_only_a_path_that_may_reach_the_archive_is_refused(source, archive, refused):
-    from cairnwork.archive_reach import archive_path_reason
+@pytest.mark.parametrize("source", CHANGES)
+def test_every_sys_path_change_is_refused_whatever_the_path(source):
+    assert archive_path_reason(source, ARC) == REASON
 
-    assert bool(archive_path_reason(source, [archive])) is refused
+
+@pytest.mark.parametrize("source", UNCHANGED)
+def test_no_sys_path_change_is_not_refused(source):
+    assert archive_path_reason(source, ARC) == ""
+
+
+@pytest.mark.parametrize("source", CHANGES[:8])
+def test_no_changed_archive_means_no_refusal(source):
+    assert archive_path_reason(source, []) == ""
+    assert archive_path_reason(source, ["", ""]) == ""
+
+
+@pytest.mark.parametrize("source", ["def (:\n", "sys.path.insert(0, \x00)", "(" * 200000])
+def test_an_unparsable_source_is_not_judged_here(source):
+    assert archive_path_reason(source, ARC) == ""
