@@ -38,8 +38,8 @@ _ENCODED = re.compile(rf"(?i)((?<!\w)[\w-]{{0,64}}(?:{_KEYS})%3d)[^&\s]+")
 # the pattern for the value that follows each form's name (group 1), read on the original text
 _FORMS = (
     (_HEADER, re.compile(r"[^\n]+")),
+    (_COLON, re.compile(r"[^\n]+")),  # before Bearer: 'Bearer token: x' keeps its name for this
     (_BEARER, re.compile(r"\S+")),
-    (_COLON, re.compile(r"[^\n]+")),
     (_FLAG, re.compile(r"(?!-)\S+")),
     (_ENCODED, re.compile(r"[^&\s]+")),
 )
@@ -70,9 +70,9 @@ def probe_log_tail(path: str | Path | None) -> str:
     encoded fields and full-width names in ``name=value`` form.
 
     Not masked: credentials split by a raw control byte (it becomes '?'), a quoted value with a
-    space in it after ``=``, other dashed names (``my-token=``), full-width or hidden-character
-    names in colon form, a value after ``%3A``, a value starting with '-' after ``--flag``, spaces
-    around '=', ``Authorization=`` with a non-Bearer value, a value on the next line,
+    space in it after ``=``, other dashed names (``my-token=``), names with a zero-width
+    character in colon form, a value after ``%3A``, a value starting with '-' after ``--flag``,
+    spaces around '=', ``Authorization=`` with a non-Bearer value, a value on the next line,
     ``api-key :``, scp-style ``user:pass@host:`` and bare high-entropy strings.
     """
     if not path:
@@ -117,9 +117,10 @@ def mask_secrets(text: str) -> str:
     text = _mask_userinfo(
         replace_hidden(_ANSI.sub("", text).replace("\r\n", "\n"), _HID, keep="\n\t")
     )
-    for rx, value_rx in _FORMS:
-        text = rx.sub(r"\1<redacted>", text)  # as written
-        text = _redact(rx, value_rx, text)  # and as NFKC folds it (#1329): the union is masked
+    for rx, _ in _FORMS:  # every form as written first (as before #1329) ...
+        text = rx.sub(r"\1<redacted>", text)
+    for rx, value_rx in _FORMS:  # ... then as NFKC folds it, so the union is masked (#1329)
+        text = _redact(rx, value_rx, text)
     return _mask_fields(text).replace(_HID, "?")
 
 

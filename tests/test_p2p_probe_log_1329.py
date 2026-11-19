@@ -107,3 +107,28 @@ def test_original_form_is_still_masked_when_the_view_would_not_match():
 def test_a_value_that_is_only_a_combining_mark_is_still_masked(line):
     """The as-written pass masks what it always did; the view (which drops marks) adds to it."""
     assert "<redacted>" in mask_secrets(line)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "\uff22\uff45\uff41\uff52\uff45\uff52 token: SV",  # full-width Bearer, then a name
+        "\uff22\uff25\uff21\uff32\uff25\uff32 password: SV",
+        "Bearer token: SV",
+        "bearer\u3000secret: SV",
+        "Bearer\u00b4token: SV",
+        "Bearer\u00a8--token SV",
+        "x Bearer\u02dcapi_key: SV",
+    ],
+)
+def test_a_folded_bearer_or_flag_does_not_eat_a_later_colon_form_name(line):
+    """Every form is first masked as written, so a value the view finds cannot swallow the name
+    of the next field before its own turn (the review's counterexamples, all masked on main)."""
+    assert "SV" not in mask_secrets(line.replace("SV", SV))
+
+
+@pytest.mark.parametrize(
+    "line", ["注意：password 欄位必填（見文件）。", "第一步：安裝；第二步：執行", "token數量：12"]
+)
+def test_prose_with_full_width_colons_is_not_newly_masked(line):
+    assert "<redacted>" not in mask_secrets(line)
