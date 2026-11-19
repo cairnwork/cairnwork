@@ -122,3 +122,108 @@ def test_start_failure_stop_interrupt_propagates(tmp_path, monkeypatch):
     task = SimpleNamespace(title="t", instructions="i", allowed_files=("a.py",))
     with pytest.raises(KeyboardInterrupt):
         AgyWorker(agy=str(binary)).run(workdir, task)
+
+
+def _run_start_failure(tmp_path, monkeypatch, *, dispatch, fail_target, kill_in_stop):
+    """AgyWorker.run with a failing thread start and a failing _stop; returns what happened."""
+    import os
+    import sys
+
+    binary = tmp_path / "agy"
+    binary.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(8)\n")
+    binary.chmod(0o755)
+    workdir = tmp_path / "attempt-reader"
+    workdir.mkdir()
+    opened, procs = [], []
+    real_fdopen, real_popen = os.fdopen, agy_module.subprocess.Popen
+    real_start = threading.Thread.start
+
+    def capture_fdopen(*args, **kwargs):
+        opened.append(real_fdopen(*args, **kwargs))
+        return opened[-1]
+
+    def capture_popen(*args, **kwargs):
+        procs.append(real_popen(*args, **kwargs))
+        return procs[-1]
+
+    def maybe_fail(self):
+        if getattr(self, "_target", None) is fail_target():
+            raise RuntimeError("start failed")
+        return real_start(self)
+
+    def stop_fails(process, *_args):
+        if kill_in_stop:
+            process.kill()
+            process.wait()
+        raise OSError("stop failed")
+
+    monkeypatch.setattr(agy_module.os, "fdopen", capture_fdopen)
+    monkeypatch.setattr(agy_module.subprocess, "Popen", capture_popen)
+    monkeypatch.setattr(threading.Thread, "start", maybe_fail)
+    monkeypatch.setattr(agy_module, "_stop", stop_fails)
+    task = SimpleNamespace(title="t", instructions="i", allowed_files=("a.py",))
+    outcome = []
+
+    def go():
+        try:
+            AgyWorker(agy=str(binary), dispatch=dispatch).run(workdir, task)
+        except BaseException as exc:  # noqa: BLE001 - what run() raised is the result
+            outcome.append(exc)
+
+    runner = threading.Thread(target=go, daemon=True)
+    runner.start()
+    runner.join(timeout=3)  # a close under a live reader would hang here
+    hung = runner.is_alive()
+    for proc in procs:
+        proc.kill()
+    return outcome, opened, procs, hung
+
+
+def test_dispatcher_start_failure_with_live_status_reader_does_not_close_or_hang(
+    tmp_path, monkeypatch
+):
+    outcome, opened, procs, hung = _run_start_failure(
+        tmp_path,
+        monkeypatch,
+        dispatch=Dispatch(path=str(tmp_path / "agy")),
+        fail_target=lambda: agy_module._feed,
+        kill_in_stop=False,  # the dispatcher still holds stderr: the StatusReader is reading
+    )
+    assert not hung
+    assert isinstance(outcome[0], RuntimeError) and "start failed" in str(outcome[0])
+    assert not procs[0].stderr.closed and not opened[0].closed
+
+
+def test_start_failure_with_no_reader_alive_still_closes_streams(tmp_path, monkeypatch):
+    outcome, opened, procs, hung = _run_start_failure(
+        tmp_path,
+        monkeypatch,
+        dispatch=None,
+        fail_target=lambda: agy_module.copy_capped,
+        kill_in_stop=True,  # nothing reads any more: the streams must be closed
+    )
+    assert not hung
+    assert isinstance(outcome[0], RuntimeError)
+    assert procs[0].stdout.closed and opened[0].closed
+
+
+@pytest.mark.parametrize("reader_alive", [True, False])
+def test_await_with_only_the_reader_alive(monkeypatch, reader_alive):
+    thread, stop = _reader()
+    if not reader_alive:
+        stop.set()
+        thread.join()
+
+    def stop_fails(*_args):
+        raise OSError("stop failed")
+
+    monkeypatch.setattr(agy_module, "_stop", stop_fails)
+    calls = []
+    process = _await_process(lambda **_k: 0)
+    process.stderr = _Stream("e", calls)
+    try:
+        with pytest.raises(OSError, match="stop failed"):
+            AgyWorker(timeout_seconds=1)._await(process, None, thread, ("a", "m", ()), None, "log")
+    finally:
+        stop.set()
+    assert calls == ([] if reader_alive else ["e"])
