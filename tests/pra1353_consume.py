@@ -119,8 +119,7 @@ def launch(
         cwd = temp_root / "empty"
         cwd.mkdir()
         stdlib_roots = [Path(paths["stdlib"]), Path(paths["platstdlib"])]
-        # Fixed shape for the runner's seven-root check, even where stdlib == platstdlib (macOS).
-        roots = [*stdlib_roots, Path(paths["platstdlib"]) / "lib-dynload"]
+        roots = [*stdlib_roots, Path(paths["platstdlib"]) / "lib-dynload"]  # fixed 7-root shape
         imports = [sealed / "tests", sealed / "src", Path(paths["purelib"]), Path(paths["platlib"])]
         env = {
             "PATH": "/usr/bin:/bin",
@@ -132,6 +131,7 @@ def launch(
             "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_NO_REPLACE_OBJECTS": "1",
             "PRA1353_CHILD_REPORT_DIR": str(temp_root / "child-reports"),
+            "CAIRNWORK_REQUIRE_SANDBOX": os.environ.get("CAIRNWORK_REQUIRE_SANDBOX", "0"),  # #1488
         }
         (temp_root / "child-reports").mkdir()
         try:

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -24,7 +25,7 @@ PINS = {
     "tests/attest/test_verify.py": "156795f6ee20d46c692b4a27e15ab36525b7ab7fce945722b39a3067c68a9b83",
     "tests/conftest.py": "a6f527a6ae989b47ef7cd10b270206d7e8c0e391064eac8eef03f9f3693219fd",
     "tests/pra1353_c10.py": "80975b94fec7d2dae6cd70d403bbe331805a182cd7c510b1fa4df3ff1a105ef0",
-    "tests/pra1353_consume.py": "9ffba59eb9348759b880a276888a38580a9c224899c714b962d0b363e79d045c",
+    "tests/pra1353_consume.py": "9f9524d859eb75ec7df7127319d45235fe681d2dededd064d4ee2c50d1e81750",
     "tests/pra1353_derive.py": "3e301ec245fba896b12798554ccb8391f2facaf6409567772882aad7592d534e",
     "tests/pra1353_extra.py": "f28c9d6acc84fa89649230b299499ca764e2e22d9aae88553813209f6fa853b5",
     "tests/pra1353_launch.py": "7e70f8b170af81aefad5a4b9b92604abf4ca7a520d50a08759964d4ef5dd6d25",
@@ -81,6 +82,17 @@ def fake_runner_reports_witnesses(monkeypatch):
     monkeypatch.setattr(consume, "launch", launch)
 
 
+def _sandbox_expected() -> bool:
+    """#1488: True where the real sandbox runs (Linux, or a working Seatbelt). On macOS under
+    CAIRNWORK_REQUIRE_SANDBOX=1 a failed Seatbelt probe fails the gate instead of taking the weaker
+    UNCOMPARABLE branch."""
+    if sys.platform == "linux" or consume.sandbox_available():
+        return True
+    if os.environ.get("CAIRNWORK_REQUIRE_SANDBOX") == "1":
+        pytest.fail("CAIRNWORK_REQUIRE_SANDBOX=1 but the Seatbelt probe failed: not UNCOMPARABLE")
+    return False
+
+
 @pytest.fixture(scope="session")
 def broker_report():
     import os
@@ -128,16 +140,14 @@ def test_c1_c4_evasions_are_runnable_and_live(core_rows):
     baseline = next(
         r["observed"] for r in got if r["class_id"] == "C2" and r["probe"] == "verify-cli-1"
     )
-    if sys.platform == "linux" or consume.sandbox_available():
+    if _sandbox_expected():
         # Linux runs the normal verifier without blackbox; the C2 pytest mutation passes.
         assert baseline.startswith("VERIFIED")
         assert all(r["observed"] == "VERIFIED" for r in got if r["class_id"] == "C2")
     else:
         assert baseline == "UNCOMPARABLE"
     mutant = next(r["observed"] for r in rows if r["class_id"] == "C2_MUTANT")
-    assert mutant == (
-        "FAILED" if sys.platform == "linux" or consume.sandbox_available() else "UNCOMPARABLE"
-    )
+    assert mutant == ("FAILED" if _sandbox_expected() else "UNCOMPARABLE")
     c3_rows = [r for r in rows if r["class_id"] == "C3"]
     c3 = [r["observed"] for r in c3_rows]
     c3_mutants = [r["observed"] for r in rows if r["class_id"] == "C3_MUTANT"]
@@ -148,7 +158,7 @@ def test_c1_c4_evasions_are_runnable_and_live(core_rows):
         r["observed"] for r in rows if r["class_id"] == "C4" and r["probe"].startswith("verify-cli")
     ]
     other_mutants = [r["observed"] for r in rows if r["class_id"] in {"C1_MUTANT", "C4_MUTANT"}]
-    if sys.platform == "linux" or consume.sandbox_available():
+    if _sandbox_expected():
         assert mutant != baseline
         # Linux: derived from src/cairnwork/reasons.py:112, not yet observed on CI
         assert c3 == ["FAILED"] * 4 and c3_mutants == ["FAILED", "FAILED"]
@@ -290,7 +300,7 @@ def test_candidate_routes_match_pinned_main_outputs(core_rows):
     ]
     c2_blackbox = [r for r in rows if r["class_id"] == "C2" and r["probe"].startswith("blackbox-")]
     assert len(c2_blackbox) == 2
-    if sys.platform == "linux" or consume.sandbox_available():
+    if _sandbox_expected():
         assert all(r["classification"] == "NOT_RUN" for r in c2_blackbox)
     else:
         # Darwin without a usable Seatbelt (observed under Core's verifier, itself sandboxed): the
@@ -301,7 +311,7 @@ def test_candidate_routes_match_pinned_main_outputs(core_rows):
         assert all(consume._NO_SANDBOX_BASE in r["reason"] for r in c2_blackbox)
     # Linux: C2 is observed on CI as VERIFIED.
     expected = ["VERIFIED", "VERIFIED"]
-    if not (sys.platform == "linux" or consume.sandbox_available()):
+    if not _sandbox_expected():
         expected = ["UNCOMPARABLE", "UNCOMPARABLE"]
     assert c2 == expected
     # Linux: derived from src/cairnwork/verify_candidate.py:130-140, not yet observed on CI
@@ -325,7 +335,7 @@ def test_class_results_are_pinned(extra_rows):
     }
     assert len([r for r in rows if r["class_id"] == "C7"]) == 3
     c7_b = next(r for r in rows if r["probe"] == "b-one-tampered-pytest")
-    if sys.platform == "linux" or consume.sandbox_available():
+    if _sandbox_expected():
         assert c7_b["classification"] == "NOT_RUN"
     else:  # as C2 above: observed under Core's verifier
         assert (c7_b["observed"], c7_b["classification"]) == ("UNCOMPARABLE", "REFUSED")
