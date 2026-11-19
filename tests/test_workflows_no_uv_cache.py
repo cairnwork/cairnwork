@@ -49,8 +49,23 @@ def setup_uv_steps(text: str) -> list[str]:
     return [s for s in holders if not any(o != s and o in s and _USES.search(o) for o in holders)]
 
 
+def with_block(step: str) -> str:
+    """Return the lines under the step's ``with:`` key (deeper than it), or ""."""
+    lines = step.split("\n")
+    for i, line in enumerate(lines):
+        if re.match(r"^\s*(?:-\s+)?with:\s*$", line):
+            base = _indent(line)
+            body: list[str] = []
+            for nxt in lines[i + 1 :]:
+                if nxt.strip() and _indent(nxt) <= base:
+                    break
+                body.append(nxt)
+            return "\n".join(body)
+    return ""
+
+
 def cache_is_off(step: str) -> bool:
-    return _OFF.search(step) is not None
+    return _OFF.search(with_block(step)) is not None
 
 
 @pytest.mark.parametrize("path", WORKFLOWS, ids=lambda p: p.name)
@@ -81,7 +96,9 @@ def _all_off(text: str) -> bool:
         BAD.replace("python-version: '3.13'", "enable-cache: true") + NEXT,
         BAD + GOOD,
         GOOD + BAD,
-        BAD + "      - run: x\n        env:\n          enable-cache: false\n",
+        BAD + "        env:\n          enable-cache: false\n",
+        "      - uses: astral-sh/setup-uv@abc # v6\n        env:\n          enable-cache: false\n"
+        "        with:\n          python-version: '3.13'\n",
         BAD.replace("uses: astral-sh/setup-uv@abc", 'uses: "astral-sh/setup-uv@abc"') + GOOD,
         BAD.replace("uses: astral-sh/setup-uv@abc", "uses: 'astral-sh/setup-uv@abc'") + GOOD,
         "      - name: Install uv\n        uses: astral-sh/setup-uv@abc\n        with:\n"
@@ -93,7 +110,8 @@ def _all_off(text: str) -> bool:
         "cache-on",
         "bad-then-good",
         "good-then-bad",
-        "false-in-a-later-step",
+        "false-under-env-after-with",
+        "false-under-env-before-with",
         "double-quoted-uses",
         "single-quoted-uses",
         "named-step-then-good",
