@@ -34,23 +34,38 @@ Request = Callable[[str, str, "dict | None"], dict]
 def parse_verdict(text: str) -> str | None:
     """Normalize a judge reply to ``ACCEPT\\n<reason>`` / ``REJECT\\n<reason>`` (or None).
 
-    Accepts the frozen JSON line (``{"verdict": ..., "reason": ...}``, possibly inside a code
-    fence or after thinking prose) and, failing that, the first standalone ACCEPT/REJECT line.
-    Anything else stays unparsed, so PAUSE reports BAD_OUTPUT rather than guessing.
+    Fail-closed on ambiguity: the candidate text is attacker-influenced and can make the model
+    echo an earlier verdict, so a reply passes only when it holds exactly ONE verdict and that
+    verdict is its final element. Accepted: the frozen JSON line (``{"verdict": ..., "reason":
+    ...}``) as the last thing in the reply (a closing code fence is fine; prose before it is
+    fine), or, with no JSON at all, a single standalone ACCEPT/REJECT line that is the first or
+    last non-empty line. Several verdicts, conflicting verdicts, trailing prose after the JSON or
+    anything else stay unparsed, so PAUSE reports BAD_OUTPUT rather than guessing.
     """
+    body = text.strip()
+    if body.endswith("```"):
+        body = body[:-3].rstrip()
     decoder = json.JSONDecoder()
-    for index, char in enumerate(text):
-        if char != "{":
-            continue
+    found: list[tuple[int, int, dict]] = []
+    index = 0
+    while (index := body.find("{", index)) != -1:
         try:
-            value, _end = decoder.raw_decode(text[index:])
+            value, end = decoder.raw_decode(body[index:])
         except ValueError:
+            index += 1
             continue
         if isinstance(value, dict) and value.get("verdict") in _VERDICTS:
-            return f"{_VERDICTS[value['verdict']]}\n{str(value.get('reason', ''))[:300]}"
-    for line in text.splitlines():
-        if line.strip() in ("ACCEPT", "REJECT"):
-            return line.strip()
+            found.append((index, index + end, value))
+        index += max(end, 1)
+    if found:
+        ((_start, end, value),) = found[:1] if len(found) == 1 else [(0, 0, {})]
+        if len(found) != 1 or body[end:].strip():
+            return None
+        return f"{_VERDICTS[value['verdict']]}\n{str(value.get('reason', ''))[:300]}"
+    lines = [line.strip() for line in body.splitlines() if line.strip()]
+    marks = [i for i, line in enumerate(lines) if line in ("ACCEPT", "REJECT")]
+    if len(marks) == 1 and marks[0] in (0, len(lines) - 1):
+        return lines[marks[0]]
     return None
 
 
