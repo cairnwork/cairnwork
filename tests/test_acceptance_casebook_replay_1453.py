@@ -16,7 +16,7 @@ from test_acceptance_casebook_replay_runner_e2e import (
     core_http_server,
 )
 
-from experimental.acceptance_casebook import replay
+from experimental.acceptance_casebook import replay, replay_config
 from experimental.acceptance_casebook.replay_runner import RealRunner
 
 pytest_plugins = ["test_acceptance_casebook_origin"]
@@ -54,11 +54,9 @@ def test_replay_records_state_config_presence_and_digest(monkeypatch, tmp_path, 
 
     assert without_config["state_config"] == "none"
     assert with_first["state_config"] == with_second["state_config"] == "given"
-    first_digest = hashlib.sha256(first_config.read_bytes()).hexdigest()
-    second_digest = hashlib.sha256(second_config.read_bytes()).hexdigest()
-    assert with_first["state_config_sha256"] == first_digest
-    assert with_second["state_config_sha256"] == second_digest
-    assert with_first["state_config_sha256"] != with_second["state_config_sha256"]
+    # an injected runner copies nothing, so no digest may be claimed for it
+    assert with_first["state_config_sha256"] is None
+    assert with_second["state_config_sha256"] is None
     assert without_config["state_config_sha256"] is None
     assert secret not in json.dumps(with_first)
 
@@ -150,3 +148,17 @@ def test_real_verify_unreachable_core_is_no_verdict_not_refused(tmp_path, capsys
     assert record["outcome"] == "UNREPLAYABLE"
     assert record["reason"] == "NO_CORE_VERDICT"
     assert record["mapped"] == ["UNREPLAYABLE"]
+
+
+def test_digest_is_cleared_when_a_case_fails_before_the_copy(tmp_path):
+    config = tmp_path / "config.json"
+    config.write_text("{}")
+    runner = object.__new__(RealRunner)
+    runner.root = tmp_path
+    runner.repo, runner.version, runner.timeout = tmp_path / "no-such-repo", "v", 30
+    runner.state_config = config
+    runner.state_config_sha256 = "stale-digest-from-an-earlier-case"
+    with pytest.raises(Exception):  # noqa: B017 - the clone of a missing repo fails first
+        runner.run({}, {})
+    assert runner.state_config_sha256 is None
+    assert replay_config.metadata(config, runner)["state_config_sha256"] is None

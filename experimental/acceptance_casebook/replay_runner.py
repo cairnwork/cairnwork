@@ -113,6 +113,7 @@ class RealRunner:
         return self.run(case, args)
 
     def run(self, case: dict[str, Any], args: dict[str, Any]) -> CoreVerdict:
+        self.state_config_sha256 = None  # only a copy made for THIS case may be reported
         case_tmp = Path(tempfile.mkdtemp(prefix="case-", dir=self.root))
         working = case_tmp / "repo"
         state = case_tmp / "state"
