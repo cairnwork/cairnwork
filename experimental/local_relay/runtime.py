@@ -33,6 +33,13 @@ from experimental.local_relay.config import (
 )
 from experimental.local_relay.diagnostics import append_debug, redact
 from experimental.local_relay.gate_plan import build_gate_plan
+from experimental.local_relay.hidden_tests import (
+    HiddenVerify,
+    load_hidden,
+    require_hidden_targets,
+    visible_targets,
+    with_python,
+)
 from experimental.local_relay.process import spawn_worker as _spawn_worker
 from experimental.local_relay.proxy_gate import ProxyGate
 from experimental.local_relay.relay import run_relay
@@ -86,7 +93,15 @@ def build_run_once(args: Any) -> Callable[[Any, Any], dict[str, Any]]:
     canary = Path(args.canary_report).expanduser().resolve() if args.canary_report else None
     intake = Intake(state)
     config = intake.config()
-    judge = CoreJudge(state, task["verifiers"], config["import_paths"])
+    hidden = task.get("hidden")
+    judge = CoreJudge(
+        state,
+        task["verifiers"],
+        config["import_paths"],
+        **({"verify": HiddenVerify(task["repo"], hidden)} if hidden else {}),
+    )
+    if hidden:
+        judge.intake = with_python(judge.intake, hidden.python)
     acceptance = CoreAcceptance(judge, task["allowed_files"], task["repo"])
     gate = ProxyGate(
         str(parse_loopback_url(getattr(args, "haiku_proxy_url", DEFAULT_HAIKU_PROXY_URL)))
@@ -195,12 +210,11 @@ def _validate_task(data: dict[str, Any], root: Path) -> dict[str, Any]:
     if not verifiers:
         raise ValueError("fixture must include at least one verifier")
     base = _git(root, "rev-parse", "HEAD")
-    check_task_paths(
-        root,
-        base,
-        tuple(data["allowed_files"]),
-        tuple(target for _name, command in verifiers for target in command[4:]),
-    )
+    hidden = load_hidden(data, root)
+    targets = tuple(target for _name, command in verifiers for target in command[4:])
+    if hidden:
+        require_hidden_targets(targets, hidden)
+    check_task_paths(root, base, tuple(data["allowed_files"]), visible_targets(targets, hidden))
     return {
         "task_id": str(data["task_id"]),
         "prompt": str(data["prompt"]),
@@ -209,6 +223,7 @@ def _validate_task(data: dict[str, Any], root: Path) -> dict[str, Any]:
         "verifiers": verifiers,
         "base_commit": base,
         "repo": root,
+        "hidden": hidden,
     }
 
 

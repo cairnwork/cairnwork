@@ -7,6 +7,8 @@ import shutil
 import sys
 from pathlib import Path
 
+from experimental.local_relay.hidden_tests import visible_targets
+
 
 def write_task_file(run_root: Path, task: dict) -> Path:
     task_path = run_root / "task.json"
@@ -16,9 +18,12 @@ def write_task_file(run_root: Path, task: dict) -> Path:
                 "task_id": task["task_id"],
                 "repo": "local-relay",
                 "prompt": task["prompt"],
-                "public_tests": [
-                    target for _name, command in task["verifiers"] for target in command[4:]
-                ],
+                "public_tests": list(
+                    visible_targets(
+                        tuple(t for _name, command in task["verifiers"] for t in command[4:]),
+                        task.get("hidden"),
+                    )
+                ),
             }
         ),
         encoding="utf-8",
