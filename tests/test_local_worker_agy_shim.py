@@ -299,3 +299,28 @@ def test_stub_agy_shim_runs_through_pipeline_and_commits_provenance(repo, tmp_pa
     message = git(repo, "show", "-s", "--format=%B", result.candidate_commit)
     assert "Worker: agy" in message
     assert "Requested-Model: served-model" in message
+
+
+def test_worker_cli_is_not_shadowed_by_attempt_directory(tmp_path):  # #1452
+    """The attempt directory is the cwd; with -m it would come first on sys.path and an
+    experimental/ package placed there would replace the CLI that decides completion."""
+    import subprocess
+
+    cwd = tmp_path / "attempt-1"
+    shadow = cwd / "experimental" / "local_worker"
+    shadow.mkdir(parents=True)
+    (cwd / "experimental" / "__init__.py").write_text("")
+    (shadow / "__init__.py").write_text("")
+    (shadow / "cli.py").write_text("")
+    cli = agy_shim._cli_args(tmp_path / "t.json", tmp_path, "m", 600, [])
+    prefix = cli[: cli.index("-m")]
+    probe = "import experimental.local_worker.cli as c; print(c.__file__)"
+    out = subprocess.run(  # noqa: S603 - fixed argv
+        [*prefix, "-c", probe],
+        cwd=cwd,
+        env=agy_shim._child_environment(cwd),
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert Path(out).resolve().is_relative_to(agy_shim.REPO_ROOT)

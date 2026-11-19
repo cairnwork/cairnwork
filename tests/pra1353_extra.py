@@ -126,6 +126,17 @@ def _c7(state, decl):
 
 
 @cache
+def load_c10():
+    path = Path(__file__).with_name("pra1353_c10.py")
+    spec = importlib.util.spec_from_file_location("pra1353_c10", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["pra1353_c10"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+@cache
 def extra_rows():
     with TemporaryDirectory(prefix="cw1353-extra-") as td:
         parent = Path(td).resolve()
@@ -135,12 +146,7 @@ def extra_rows():
         (st / "config.json").write_text('{"verifier_account":false}')
         (st / "ACCEPTING").touch()
         d = declaration(parent / "decl.json")
-        path = Path(__file__).with_name("pra1353_c10.py")
-        spec = importlib.util.spec_from_file_location("pra1353_c10", path)
-        assert spec is not None and spec.loader is not None
-        module = importlib.util.module_from_spec(spec)
-        sys.modules["pra1353_c10"] = module
-        spec.loader.exec_module(module)
+        module = load_c10()
         c8 = parent / "c8"
         c8.mkdir()
         return (

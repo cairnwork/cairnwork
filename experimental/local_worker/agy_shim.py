@@ -219,6 +219,7 @@ def _cli_args(
 ) -> list[str]:
     cli = [
         sys.executable,
+        "-P",  # the attempt directory is the cwd: never put it ahead of REPO_ROOT (#1452)
         "-m",
         "experimental.local_worker.cli",
         "run",
