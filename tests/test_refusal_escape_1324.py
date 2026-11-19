@@ -38,7 +38,7 @@ def test_bad_import_path_text_matches_main(monkeypatch):
     assert str(info.value) == f"BAD_IMPORT_PATH: {HOSTILE}"
 
 
-def test_bad_config_text_matches_main(tmp_path, monkeypatch):
+def test_bad_config_exception_text_is_escaped_once(tmp_path, monkeypatch):
     state = tmp_path / "state"
     state.mkdir(mode=0o700)
     (state / "config.json").write_text("{}")
@@ -46,4 +46,6 @@ def test_bad_config_text_matches_main(tmp_path, monkeypatch):
     with pytest.raises(IntakeRefused) as info:
         Intake(state).config()
     assert info.value.code == "BAD_CONFIG"
-    assert info.value.detail.endswith(f"is not valid JSON: {HOSTILE}")
+    assert info.value.detail.endswith("is not valid JSON: '\\x0a::error::x\\u202e'")
+    _assert_escaped(info.value.detail)
+    assert "\n" not in str(info.value)

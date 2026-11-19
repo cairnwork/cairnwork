@@ -62,6 +62,7 @@ from cairnwork.ownership import (
 from cairnwork.p2p_selection import check_p2p_config
 from cairnwork.pipeline import TaskSpec, check_task
 from cairnwork.taskpaths import check_submitted_paths
+from cairnwork.textclean import shown
 from cairnwork.verifier_account import VerifierAccount
 from cairnwork.workers.agy_dispatch import valid_run_as_user
 from cairnwork_protocol.http import CoreHttpError, check_core_url, http_core_verify
@@ -100,7 +101,7 @@ class Intake:
         try:
             loaded = json.loads(path.read_text()) if path.exists() else {}
         except (ValueError, RecursionError) as exc:  # truncated, not UTF-8, too deep (#234, #909)
-            raise IntakeRefused("BAD_CONFIG", f"{path} is not valid JSON: {exc}") from exc
+            raise IntakeRefused("BAD_CONFIG", f"{path} is not valid JSON: {shown(exc)}") from exc
         if not isinstance(loaded, dict) or set(loaded) - set(DEFAULT_CONFIG):
             raise IntakeRefused("BAD_CONFIG", f"{path} keys must be among {sorted(DEFAULT_CONFIG)}")
         for key in (
