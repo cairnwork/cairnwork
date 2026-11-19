@@ -2,7 +2,7 @@
 
 A hand-listed range misses zero-width and direction characters (U+200B, U+061C, U+FEFF ...), so
 the test is the Unicode category: C* (control, format, surrogate, private use, unassigned) and
-the line and paragraph separators Zl, Zp. Same rule as experimental/blind_warn (#726).
+the line and paragraph separators Zl, Zp. Same rule as the removed experimental blind_warn (#726).
 """
 
 from __future__ import annotations
