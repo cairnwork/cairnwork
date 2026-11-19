@@ -80,14 +80,19 @@ _BLOCK = '''
 _CW_DATA_PATHS = ()
 
 _CW_DATA_BODY = """
-def hook(event, args, _t=None, _str=None, _bytes=None, _list=None, _tuple=None, _code=None,
+def hook(event, args, _t=None, _str=None, _bytes=None, _list=None, _tuple=None,
+         _code=None,
          _none=None, _refuse=None, _stop=None, _type_error=None, _func=None, _name=None,
          _declared=None, _lens=None, _latch=None, _whole=None):
     if event == "exec" or event == "function.__new__":
         code = args[0]
         if _t(code) is not _code:
             return
-        names = [code.co_filename]
+        filename = code.co_filename
+        if _t(filename) is not _str:
+            _latch.append("<non-exact code filename>")
+            raise _refuse("cairnwork: a non-exact code filename is refused")
+        names = [filename]
     elif event == "subprocess.Popen" or event == "os.exec" or event == "os.posix_spawn":
         names, argv = [args[0]], args[1]
         kind = _t(argv)
@@ -102,8 +107,10 @@ def hook(event, args, _t=None, _str=None, _bytes=None, _list=None, _tuple=None, 
         return
     elif event == "object.__setattr__" or event == "object.__delattr__":
         target = args[0]
-        if _t(target) is _func and target.__code__.co_filename == _name:
-            raise _stop("cairnwork: the data-exec hook is fixed")
+        if _t(target) is _func:
+            filename = target.__code__.co_filename
+            if _t(filename) is _str and _str.__eq__(filename, _name):
+                raise _stop("cairnwork: the data-exec hook is fixed")
         return
     else:
         return

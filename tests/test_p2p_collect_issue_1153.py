@@ -8,7 +8,7 @@ from cairnwork.p2p_collect import classify
 
 
 def _classify_single(base: str, test_id: str = "t.py::test_a"):
-    return classify({test_id}, set(), {"t.py"}, lambda p: "x = 1\n", lambda p: base)
+    return classify({test_id}, set(), {"t.py"}, lambda p: "x = 1\n", lambda p: base, exposed=())
 
 
 # --- Allowed (fail on base, pass on head) ---
@@ -128,6 +128,7 @@ def test_pinned_1127_hidden_class_is_dropped_not_removed():
         {"t.py"},
         lambda p: test,
         lambda p: base,
+        exposed=(),
     )
     assert "t.py::TestA::test_x" in side.dropped and "t.py::TestA::test_x" not in side.removed
 

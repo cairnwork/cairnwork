@@ -27,6 +27,7 @@ def test_normal_classification_preserves_removed_and_dropped_sets():
         {"t.py"},
         lambda _: "def test_kept(): pass\nif False:\n    def test_hidden(): pass\n",
         lambda _: "def test_gone(): pass\ndef test_kept(): pass\ndef test_hidden(): pass\n",
+        exposed=(),
     )
     assert side.removed == {"t.py::test_gone"}
     assert side.dropped == {"t.py::test_hidden"}
@@ -38,7 +39,7 @@ def test_slow_child_is_killed_and_refused(monkeypatch, tmp_path):
     monkeypatch.setattr(p2p_collect, "_classify_argv", lambda: _stub(code, str(pid_file)))
     monkeypatch.setattr(p2p_collect, "CLASSIFY_TIMEOUT_SECONDS", 0.1)
     with pytest.raises(Rejected) as caught:
-        p2p_collect.classify({"t.py::test_a"}, set(), set(), lambda _: "", lambda _: "")
+        p2p_collect.classify({"t.py::test_a"}, set(), set(), lambda _: "", lambda _: "", exposed=())
     assert caught.value.code == "TEST_COMMIT_ANALYSIS_LIMIT"
     assert "time" in str(caught.value)
     child_pid = int(pid_file.read_text())
@@ -50,7 +51,9 @@ def test_same_child_finishes_within_limit(monkeypatch):
     code = 'import time; time.sleep(.02); print(\'{"removed":[],"dropped":["t.py::test_a"]}\')'
     monkeypatch.setattr(p2p_collect, "_classify_argv", lambda: _stub(code))
     monkeypatch.setattr(p2p_collect, "CLASSIFY_TIMEOUT_SECONDS", 1)
-    side = p2p_collect.classify({"t.py::test_a"}, set(), set(), lambda _: "", lambda _: "")
+    side = p2p_collect.classify(
+        {"t.py::test_a"}, set(), set(), lambda _: "", lambda _: "", exposed=()
+    )
     assert side.removed == set() and side.dropped == {"t.py::test_a"}
 
 
@@ -58,7 +61,7 @@ def test_child_cannot_return_ids_outside_the_base(monkeypatch):
     code = 'print(\'{"removed":["t.py::extra"],"dropped":[]}\')'
     monkeypatch.setattr(p2p_collect, "_classify_argv", lambda: _stub(code))
     with pytest.raises(Rejected) as caught:
-        p2p_collect.classify({"t.py::test_a"}, set(), set(), lambda _: "", lambda _: "")
+        p2p_collect.classify({"t.py::test_a"}, set(), set(), lambda _: "", lambda _: "", exposed=())
     assert caught.value.code == "TEST_COMMIT_ANALYSIS_LIMIT"
 
 
@@ -118,7 +121,9 @@ def test_child_failure_modes_are_analysis_limit(monkeypatch, code):
     monkeypatch.setattr(p2p_collect, "_classify_argv", lambda: _stub(code))
     monkeypatch.setattr(p2p_collect, "CLASSIFY_TIMEOUT_SECONDS", 20)
     with pytest.raises(Rejected) as caught:
-        p2p_collect.classify({"t.py::a", "t.py::b"}, set(), set(), lambda _: "", lambda _: "")
+        p2p_collect.classify(
+            {"t.py::a", "t.py::b"}, set(), set(), lambda _: "", lambda _: "", exposed=()
+        )
     assert caught.value.code == "TEST_COMMIT_ANALYSIS_LIMIT"
 
 
@@ -133,7 +138,7 @@ def test_timeout_kills_child_group_promptly(monkeypatch, tmp_path):
     monkeypatch.setattr(p2p_collect, "CLASSIFY_TIMEOUT_SECONDS", 1.5)
     started = time.monotonic()
     with pytest.raises(Rejected) as caught:
-        p2p_collect.classify({"t.py::a"}, set(), set(), lambda _: "", lambda _: "")
+        p2p_collect.classify({"t.py::a"}, set(), set(), lambda _: "", lambda _: "", exposed=())
     assert caught.value.code == "TEST_COMMIT_ANALYSIS_LIMIT"
     assert time.monotonic() - started < 4
     grandchild = int(pid_file.read_text())
@@ -179,6 +184,7 @@ def test_real_child_runs_isolated(monkeypatch, tmp_path, case):
         {"t.py"},
         lambda _: "if False:\n    def test_hidden(): pass\n",
         lambda _: _GONE,
+        exposed=(),
     )
     assert (side.removed, side.dropped) == (removed, dropped)
     seen = json.loads(probe.read_text())

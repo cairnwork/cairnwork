@@ -66,10 +66,133 @@ TAKEN = {  # name: (new fixture, base files)
         "dep2", {ABOVE: "from helpers import guard\n", "tests/helpers.py": "import pytest\n\n\n"
                  "@pytest.fixture\n@pytest.mark.usefixtures('dep2')\n"
                  "def guard():\n    return 1\n"}),
+    "pytest_plugins bound by tuple unpacking (#1010)": (
+        "dep", {ABOVE: "pytest_plugins, _other = ['helpers'], 1\n", "tests/helpers.py": GUARD}),
+    "pytest_plugins bound by unpacking unreadable: every base file (#1010)": (
+        "dep", {ABOVE: "pytest_plugins, *rest = ['helpers'], 'far.fix'\n",
+                "tests/far/fix.py": GUARD}),
+    "pytest_plugins bound by subscript assignment (#1010)": (
+        "dep", {ABOVE: "pytest_plugins = ['x']\npytest_plugins[0] = 'helpers'\n",
+                "tests/x.py": "X = 1\n", "tests/helpers.py": GUARD}),
+    "pytest_plugins bound by slice assignment (#1010)": (
+        "dep", {ABOVE: "pytest_plugins = []\npytest_plugins[:] = ['helpers']\n",
+                "tests/helpers.py": GUARD}),
+    "pytest_plugins mutated by subscript += unreadable: every base file (#1010)": (
+        "dep", {ABOVE: "pytest_plugins = ['x']\npytest_plugins[0] += 'y'\n",
+                "tests/x.py": "X = 1\n", "tests/far/fix.py": GUARD}),
+    "pytest_plugins bound by for target (#1010)": (
+        "dep", {ABOVE: "for pytest_plugins in (['helpers'],):\n    pass\n",
+                "tests/helpers.py": GUARD}),
+    "pytest_plugins bound by async for target (#1010)": (
+        "dep", {ABOVE: "async def _f():\n    async for pytest_plugins in (['helpers'],):\n"
+                       "        pass\n", "tests/helpers.py": GUARD}),
+    "pytest_plugins by for target it cannot read: every base file (#1010)": (
+        "dep", {ABOVE: "NAMES = [['far.fix']]\nfor pytest_plugins in NAMES:\n    pass\n",
+                "tests/far/fix.py": GUARD}),
+    "pytest_plugins bound by with nullcontext (#1010)": (
+        "dep", {ABOVE: "from contextlib import nullcontext\n"
+                       "with nullcontext(['helpers']) as pytest_plugins:\n    pass\n",
+                "tests/helpers.py": GUARD}),
+    "pytest_plugins by with target it cannot read: every base file (#1010)": (
+        "dep", {ABOVE: "with open('p') as pytest_plugins:\n    pass\n",
+                "tests/far/fix.py": GUARD}),
+    "pytest_plugins by unverified with target with literal arg: every base file (#1010)": (
+        "dep", {ABOVE: "with ctx(['helpers']) as pytest_plugins:\n    pass\n",
+                "tests/helpers.py": "", "tests/far/fix.py": GUARD}),
+    "pytest_plugins bound by match capture (#1010)": (
+        "dep", {ABOVE: "match ['helpers']:\n    case pytest_plugins:\n        pass\n",
+                "tests/helpers.py": GUARD}),
+    "pytest_plugins bound by match sequence pattern (#1010)": (
+        "dep", {ABOVE: "match ('a', ['helpers']):\n    case [_, pytest_plugins]:\n        pass\n",
+                "tests/helpers.py": GUARD}),
+    "pytest_plugins bound by match as pattern (#1010)": (
+        "dep", {ABOVE: "match x:\n    case ['helpers'] as pytest_plugins:\n        pass\n",
+                "tests/helpers.py": GUARD}),
+    "pytest_plugins by match star pattern fail-closed: every base file (#1010)": (
+        "dep", {ABOVE: "match ['a']:\n    case [*pytest_plugins]:\n        pass\n",
+                "tests/far/fix.py": GUARD}),
+    "pytest_plugins by match mapping rest fail-closed: every base file (#1010)": (
+        "dep", {ABOVE: "match {'a': 'x'}:\n    case {**pytest_plugins}:\n        pass\n",
+                "tests/far/fix.py": GUARD}),
+    "pytest_plugins by unreadable match subject: every base file (#1010)": (
+        "dep", {ABOVE: "match get_plugins():\n    case pytest_plugins:\n        pass\n",
+                "tests/far/fix.py": GUARD}),
+    "pytest_plugins slice mentions pytest_plugins fail-closed: every base file (#1010)": (
+        "dep", {ABOVE: "pytest_plugins = ['x']\npytest_plugins[pytest_plugins[0]] = 'helpers'\n",
+                "tests/helpers.py": "X = 1\n", "tests/far/fix.py": GUARD}),
+    "pytest_plugins by empty for iter fail-closed: every base file (#1010)": (
+        "dep", {ABOVE: "for pytest_plugins in ():\n    pass\n", "tests/far/fix.py": GUARD}),
+    "pytest_plugins with unimported nullcontext fail-closed: every base file (#1010)": (
+        "dep", {ABOVE: "with nullcontext(['helpers']) as pytest_plugins:\n    pass\n",
+                "tests/far/fix.py": GUARD}),
+    "pytest_plugins with def-shadowed nullcontext fail-closed: every base file (#1010)": (
+        "dep", {ABOVE: "from contextlib import nullcontext\n"
+                       "def nullcontext(x):\n    return ['far.fix']\n"
+                       "with nullcontext(['helpers']) as pytest_plugins:\n    pass\n",
+                "tests/far/fix.py": GUARD}),
+    "pytest_plugins with assigned nullcontext fail-closed: every base file (#1010)": (
+        "dep", {ABOVE: "from contextlib import nullcontext\n"
+                       "nullcontext = lambda x: ['far.fix']\n"
+                       "with nullcontext(['helpers']) as pytest_plugins:\n    pass\n",
+                "tests/far/fix.py": GUARD}),
+    "pytest_plugins with mutated contextlib.nullcontext fail-closed: every base file (#1010)": (
+        "dep", {ABOVE: "import contextlib\n"
+                       "contextlib.nullcontext = lambda x: ['far.fix']\n"
+                       "with contextlib.nullcontext(['helpers']) as pytest_plugins:\n    pass\n",
+                "tests/far/fix.py": GUARD}),
+    "pytest_plugins with local contextlib module fail-closed: every base file (#1010)": (
+        "dep", {ABOVE: "from contextlib import nullcontext\n"
+                       "with nullcontext(['helpers']) as pytest_plugins:\n    pass\n",
+                "tests/contextlib.py": "X = 1\n", "tests/far/fix.py": GUARD}),
+    "pytest_plugins with nullcontext and setattr fail-closed: every base file (#1010)": (
+        "dep", {ABOVE: "from contextlib import nullcontext\nsetattr(object, 'x', 1)\n"
+                       "with nullcontext(['helpers']) as pytest_plugins:\n    pass\n",
+                "tests/far/fix.py": GUARD}),
+    "pytest_plugins subscript with call fail-closed: every base file (#1010)": (
+        "dep", {ABOVE: "pytest_plugins = ['x']\npytest_plugins[side_effect()] = 'helpers'\n",
+                "tests/x.py": "X = 1\n", "tests/far/fix.py": GUARD}),
 }  # fmt: skip
 FREE = {  # name: (new fixture, base files)
     "pytest_plugins.append reads only the module it names": (
         "dep", {ABOVE: "pytest_plugins = []\npytest_plugins.append('helpers')\n",
+                "tests/helpers.py": "X = 1\n", "tests/far/fix.py": GUARD}),
+    "pytest_plugins tuple unpacking reads only the module it names (#1010)": (
+        "dep", {ABOVE: "pytest_plugins, _other = ['helpers'], 1\n",
+                "tests/helpers.py": "X = 1\n", "tests/far/fix.py": GUARD}),
+    "pytest_plugins slice assignment reads only the module it names (#1010)": (
+        "dep", {ABOVE: "pytest_plugins = []\npytest_plugins[:] = ['helpers']\n",
+                "tests/helpers.py": "X = 1\n", "tests/far/fix.py": GUARD}),
+    "pytest_plugins for target reads only the module it names (#1010)": (
+        "dep", {ABOVE: "for pytest_plugins in (['helpers'],):\n    pass\n",
+                "tests/helpers.py": "X = 1\n", "tests/far/fix.py": GUARD}),
+    "pytest_plugins with nullcontext reads only the module it names (#1010)": (
+        "dep", {ABOVE: "from contextlib import nullcontext\n"
+                       "with nullcontext(['helpers']) as pytest_plugins:\n    pass\n",
+                "tests/helpers.py": "X = 1\n", "tests/far/fix.py": GUARD}),
+    "pytest_plugins with contextlib.nullcontext reads only the module it names (#1010)": (
+        "dep", {ABOVE: "import contextlib\n"
+                       "with contextlib.nullcontext(['helpers']) as pytest_plugins:\n    pass\n",
+                "tests/helpers.py": "X = 1\n", "tests/far/fix.py": GUARD}),
+    "pytest_plugins with aliased nullcontext reads only the module it names (#1010)": (
+        "dep", {ABOVE: "from contextlib import nullcontext as nc\n"
+                       "with nc(['helpers']) as pytest_plugins:\n    pass\n",
+                "tests/helpers.py": "X = 1\n", "tests/far/fix.py": GUARD}),
+    "pytest_plugins match capture reads only the module it names (#1010)": (
+        "dep", {ABOVE: "match ['helpers']:\n    case pytest_plugins:\n        pass\n",
+                "tests/helpers.py": "X = 1\n", "tests/far/fix.py": GUARD}),
+    "pytest_plugins match sequence pattern reads only the module it names (#1010)": (
+        "dep", {ABOVE: "match ('a', ['helpers']):\n    case [_, pytest_plugins]:\n        pass\n",
+                "tests/helpers.py": "X = 1\n", "tests/far/fix.py": GUARD}),
+    "pytest_plugins match as pattern reads only the module it names (#1010)": (
+        "dep", {ABOVE: "match x:\n    case ['helpers'] as pytest_plugins:\n        pass\n",
+                "tests/helpers.py": "X = 1\n", "tests/far/fix.py": GUARD}),
+    "pytest_plugins match as value pattern reads only the module it names (#1010)": (
+        "dep", {ABOVE: "match x:\n    case 'helpers' as pytest_plugins:\n        pass\n",
+                "tests/helpers.py": "X = 1\n", "tests/far/fix.py": GUARD}),
+    "pytest_plugins match or pattern reads only the module it names (#1010)": (
+        "dep", {ABOVE: "match [1, ['helpers']]:\n"
+                       "    case [1, pytest_plugins] | [2, pytest_plugins]:\n"
+                       "        pass\n",
                 "tests/helpers.py": "X = 1\n", "tests/far/fix.py": GUARD}),
     "a plain helper function a conftest imports (r2: only fixtures count)": (
         "path", {ABOVE: "from helpers import make\n",
@@ -116,3 +239,71 @@ def test_what_a_test_module_imports_is_not_read(repo, monkeypatch):
             "def test_h():\n    assert x\n", "tests/a.py": "x = 1\n", "tests/b.py": "y = 1\n",
             "tests/c.py": "z = 1\n"}  # fmt: skip
     _check(repo, {CONFTEST: FIXTURE.format("free")}, path=CONFTEST, base_files=base)
+
+
+@pytest.mark.parametrize(
+    ("code", "reads_all"),
+    [
+        (
+            "from contextlib import nullcontext\nfrom helpers import *\n"
+            "with nullcontext(['helpers']) as pytest_plugins:\n    pass\n",
+            True,
+        ),
+        (
+            "from contextlib import nullcontext\nfrom helpers import nullcontext\n"
+            "with nullcontext(['helpers']) as pytest_plugins:\n    pass\n",
+            True,
+        ),
+        (
+            "import contextlib\nimport helpers as contextlib\n"
+            "with contextlib.nullcontext(['helpers']) as pytest_plugins:\n    pass\n",
+            True,
+        ),
+        (
+            "from contextlib import nullcontext\ndef _g():\n    global nullcontext\n"
+            "    from helpers import nullcontext\n_g()\n"
+            "with nullcontext(['helpers']) as pytest_plugins:\n    pass\n",
+            True,
+        ),
+        (
+            "from helpers import nullcontext\n"
+            "with nullcontext(['helpers']) as pytest_plugins:\n    pass\n",
+            True,
+        ),
+        (
+            "X = []\nmatch [*X, ['helpers'], ['other']]:\n"
+            "    case [_a, pytest_plugins, *_r]:\n        pass\n",
+            True,
+        ),
+        (
+            "from contextlib import nullcontext\n"
+            "with nullcontext(['helpers']) as pytest_plugins:\n    pass\n",
+            False,
+        ),
+        (
+            "import contextlib as c\n"
+            "with c.nullcontext(['helpers']) as pytest_plugins:\n    pass\n",
+            False,
+        ),
+        (
+            "import os\nwith open(os.devnull) as _fh:\n    pass\npytest_plugins = ['helpers']\n",
+            False,
+        ),
+        (
+            "match [['other'], ['helpers']]:\n    case [_a, pytest_plugins]:\n        pass\n",
+            False,
+        ),
+    ],
+)
+def test_shadowed_nullcontext_or_starred_match_reads_every_base_file(repo, code, reads_all):
+    files = {
+        ABOVE: PATH + code,
+        "tests/helpers.py": "X = 1\n",
+        "tests/other.py": "X = 1\n",
+        "tests/far/fix.py": GUARD,
+    }
+    if reads_all:
+        with pytest.raises(dt.TestCommitRejected, match=r"base test requests \(dep\)"):
+            _check(repo, {CONFTEST: FIXTURE.format("dep")}, path=CONFTEST, base_files=files)
+    else:
+        _check(repo, {CONFTEST: FIXTURE.format("dep")}, path=CONFTEST, base_files=files)

@@ -1,6 +1,17 @@
 # Acceptance casebook (experimental, default off)
 
+## Replay (#751 step 3a)
+
+`python -m experimental.acceptance_casebook replay` uses the injected runner after checking the
+frozen version registry and original request inputs. Results append to a separate chained `--out`
+file; `replay-report --out R` checks its chain and detects an incomplete final run. The real archive
+and isolated-venv runner is step 3b.
+
 Owner and expiry: see OWNER and EXPIRES. Step 1a: `add` and `list`.
+
+## Retain (#751 step 3c)
+
+Before cleaning a refused run, use `python -m experimental.acceptance_casebook retain --notary-db DB --record ATTEMPT --repo R --base B --candidate C --version V --cairnwork-clone CLONE --into DIR`. `ATTEMPT` identifies the unique notary attempt; `V` is resolved to a tree in `CLONE`. The atomic case directory contains a copy of the notary database, a bundle with the base and candidate commits, and a manifest. Only the named record's row is validated, in the source and again in the copy, and its digest names the case; every casebook reader (`add`, `list`, `replay`) reads only that row by task and attempt. Other rows are copied as found and are not validated. Use its `notary.sqlite` with `add`; `git clone --no-local -- <bundle>` accepts the bundle path directly, so a replay runner that clones the retained bundle can use it as `--repo`. Retention is opt-in and the operator must run it before deleting the run directory. `retain` starts `git` by name from the operator's `PATH` with the operator's environment (including any `GIT_*` variables), and copies only commits reachable in `R`; like the replay toolchain, that `git` and its environment are trusted, so run it only from the operator's own shell. A case directory that already exists is `ALREADY_RETAINED` and is never overwritten.
 
 This is an experimental record of acceptance mistakes, not a measure of false completion or
 false green: a recorded case is not a confirmed one (independent confirmation is #772), and a
@@ -73,3 +84,5 @@ experimental.acceptance_casebook repair --casebook F` adopts the last line only 
 state and appends a `"type": "repair"` line naming the stale and the adopted head; any other
 damage (an edited line, a partial last line, a head further behind) stays refused. Known limit,
 pinned by a test: rewriting the file and `F.head` together is not detected.
+
+Known limits: the caller supplies the registry, which is the trust root for the archived version and therefore for the `pyproject.toml` and `uv.lock` that determine what gets installed. The runner reads the operator's uv cache offline for locked wheels; a poisoned cache is out of scope and trusted like the registry. The runner starts `git`, `tar` and `uv` by name from the operator's `PATH`; `PYTHON*`, `UV_*` (except `UV_CACHE_DIR`) and the virtualenv markers are scrubbed only for the `uv` and verifier calls, while `git` and `tar` receive the operator's full environment. That toolchain and its environment are trusted like the registry, so run replay only from the operator's own shell, with a `PATH` whose first `git`, `tar` and `uv` are the operator's own and no tool-option variables set. Replay binds the supplied verifier command count to the notary request's exact `pytest-0` through `pytest-(n-1)` id set; any additional P2P or blackbox id is rejected until its binding is checked. The notary request and case do not record verifier commands. A deferred-test binding may record argv tokens, which replay compares to the supplied commands; where no binding records them, command text is operator-supplied and unbound to the original run. A remote Core replay needs `--state-config` to supply the operator's connection settings. Without it, replay supplies no remote Core config; Cairnwork can still use its installed local Core default, and may return `NO_CORE_VERDICT` or refuse before Core if Core is unavailable. A `FAILED` verifier result with no Core verdict maps to `NO_CORE_VERDICT`; explicit pre-Core `REFUSED` and `UNCOMPARABLE` results map to `PRE_CORE_REFUSED` and `PRE_CORE_UNCOMPARABLE`. Only a Core `FAILED` verdict maps to `refused`. Cases with a test commit, import paths, a blackbox or strict protection remain `UNREPLAYABLE` input mismatches until their binding is checked. The injected-runner test seam (bare strings, and dicts with `VERIFIED`/`FAILED` at exit 0, kept from main) is reachable only by monkeypatching `replay.RUNNER`, never from the CLI; real runs map only `RealRunner`'s `CoreVerdict`.

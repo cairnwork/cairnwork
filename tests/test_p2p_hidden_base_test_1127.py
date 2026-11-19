@@ -19,7 +19,15 @@ BASE_A = "class TestA:\n    def test_x(self):\n        assert True\n" + KEEP
 
 
 def _split(base: str, test: str, base_ids, test_ids):
-    side = classify(set(base_ids), set(test_ids), {"t.py"}, lambda p: test, lambda p: base)
+    side = classify(
+        set(base_ids),
+        set(test_ids),
+        {"t.py"},
+        lambda p: test,
+        lambda p: base,
+        exposed=(),
+        changed_test_files=["t.py"],
+    )
     return side.removed, side.dropped
 
 
@@ -99,21 +107,6 @@ def test_hidden_base_test_is_dropped(case):
 # --- #1128 false refusals (P2, not this fix): an honest deletion is refused as
 # TEST_COMMIT_DROPS_BASE_TESTS. Kept strict xfail so #1127 is seen not to change them.
 REFUSED = {
-    # deleting a parent test also removes it from a same-file subclass (pre-existing)
-    "inherited-by-same-file-subclass": (
-        "class TestA:\n    def test_x(self):\n        assert True\n"
-        + KEEP
-        + "class TestB(TestA):\n    pass\n",
-        "class TestA:\n" + KEEP + "class TestB(TestA):\n    pass\n",
-        [
-            "t.py::TestA::test_x",
-            "t.py::TestA::test_keep",
-            "t.py::TestB::test_x",
-            "t.py::TestB::test_keep",
-        ],
-        ["t.py::TestA::test_keep", "t.py::TestB::test_keep"],
-        {"t.py::TestA::test_x", "t.py::TestB::test_x"},
-    ),
     # #842 item 2: one parametrized case deleted, the function kept (not addressed by #1072)
     "parametrized-case-deleted": (
         "import pytest\n@pytest.mark.parametrize('n', [1, 2])\ndef test_x(n):\n    assert n\n",
@@ -123,6 +116,22 @@ REFUSED = {
         {"t.py::test_x[2]"},
     ),
 }
+
+
+def test_inherited_by_same_file_subclass_is_removed_1128():
+    base = "class TestA:\n    def test_x(self):\n        assert True\n" + KEEP
+    base += "class TestB(TestA):\n    pass\n"
+    test = "class TestA:\n" + KEEP + "class TestB(TestA):\n    pass\n"
+    ids = [
+        "t.py::TestA::test_x",
+        "t.py::TestA::test_keep",
+        "t.py::TestB::test_x",
+        "t.py::TestB::test_keep",
+    ]
+    assert _split(base, test, ids, ["t.py::TestA::test_keep", "t.py::TestB::test_keep"]) == (
+        {"t.py::TestA::test_x", "t.py::TestB::test_x"},
+        set(),
+    )
 
 
 ANNOTATION_ONLY = (
@@ -139,7 +148,7 @@ def test_annotation_only_is_not_a_rebinding_1128():  # item 3, fixed
     assert _split(base, test, base_ids, test_ids) == (gone, set())
 
 
-@pytest.mark.xfail(strict=True, reason="#1128: honest deletion refused")
+@pytest.mark.xfail(strict=True, reason="#842/#1072: deleted parametrized case stays refused")
 @pytest.mark.parametrize("case", sorted(REFUSED))
 def test_honest_deletion_is_removed_1128(case):
     base, test, base_ids, test_ids, gone = REFUSED[case]

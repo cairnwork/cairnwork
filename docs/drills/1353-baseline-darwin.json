@@ -1,0 +1,796 @@
+{
+  "generated_at": "2026-11-16T08:40:15+00:00",
+  "platform": "darwin",
+  "probes": [
+    {
+      "class_id": "C1",
+      "classification": "REFUSED",
+      "expected_on_main": "NOT_RUN",
+      "matches_spec": false,
+      "observed": "REFUSED",
+      "platform": "darwin",
+      "probe": "blackbox-1",
+      "raw_return": "REFUSED",
+      "reason": "VERIFIER_TAMPER_API: 'src/calc.py:2 [pytest_public_patch]'",
+      "route": "verify_cli run --blackbox"
+    },
+    {
+      "class_id": "C1",
+      "classification": "REFUSED",
+      "expected_on_main": "NOT_RUN",
+      "matches_spec": false,
+      "observed": "REFUSED",
+      "platform": "darwin",
+      "probe": "blackbox-2",
+      "raw_return": "REFUSED",
+      "reason": "VERIFIER_TAMPER_API: 'src/calc.py:2 [pytest_public_patch]'",
+      "route": "verify_cli run --blackbox"
+    },
+    {
+      "class_id": "C1",
+      "classification": "REFUSED",
+      "expected_on_main": "NOT_RUN",
+      "matches_spec": false,
+      "observed": "REFUSED",
+      "platform": "darwin",
+      "probe": "blackbox-3",
+      "raw_return": "REFUSED",
+      "reason": "CANDIDATE_SYS_PATH_MUTATION: 'src/calc.py': edits the import machinery in-process (sys.modules, finders, importlib, __import__, runpy or pytest_plugins)",
+      "route": "verify_cli run --blackbox"
+    },
+    {
+      "class_id": "C1",
+      "classification": "REFUSED",
+      "expected_on_main": "VERIFIED",
+      "matches_spec": false,
+      "observed": "REFUSED",
+      "platform": "darwin",
+      "probe": "verify-cli-1",
+      "raw_return": {
+        "reason": "VERIFIER_TAMPER_API: 'src/calc.py:2 [pytest_public_patch]'",
+        "status": "REFUSED",
+        "verified": false
+      },
+      "reason": "VERIFIER_TAMPER_API: 'src/calc.py:2 [pytest_public_patch]'",
+      "route": "verify_cli run"
+    },
+    {
+      "class_id": "C1",
+      "classification": "REFUSED",
+      "expected_on_main": "VERIFIED",
+      "matches_spec": false,
+      "observed": "REFUSED",
+      "platform": "darwin",
+      "probe": "verify-cli-2",
+      "raw_return": {
+        "reason": "VERIFIER_TAMPER_API: 'src/calc.py:2 [pytest_public_patch]'",
+        "status": "REFUSED",
+        "verified": false
+      },
+      "reason": "VERIFIER_TAMPER_API: 'src/calc.py:2 [pytest_public_patch]'",
+      "route": "verify_cli run"
+    },
+    {
+      "class_id": "C1",
+      "classification": "REFUSED",
+      "expected_on_main": "VERIFIED",
+      "matches_spec": false,
+      "observed": "REFUSED",
+      "platform": "darwin",
+      "probe": "verify-cli-3",
+      "raw_return": {
+        "reason": "CANDIDATE_SYS_PATH_MUTATION: 'src/calc.py': edits the import machinery in-process (sys.modules, finders, importlib, __import__, runpy or pytest_plugins)",
+        "status": "REFUSED",
+        "verified": false
+      },
+      "reason": "CANDIDATE_SYS_PATH_MUTATION: 'src/calc.py': edits the import machinery in-process (sys.modules, finders, importlib, __import__, runpy or pytest_plugins)",
+      "route": "verify_cli run"
+    },
+    {
+      "class_id": "C10",
+      "classification": "KNOWN_RESIDUAL",
+      "expected_on_main": "blackbox:add: PASS [matched 1/1]",
+      "matches_spec": false,
+      "observed": "blackbox:add: MISMATCH [matched 0/1]",
+      "platform": "darwin",
+      "probe": "runner-sniff-1",
+      "raw_return": "blackbox:add: MISMATCH [matched 0/1]",
+      "reason": "outside-runner return=-1; production runs python -P -m _cairnwork_blackbox_runner (src/cairnwork/blackbox_exec.py:139), so the name is absent from sys.modules",
+      "route": "python -P -m _cairnwork_blackbox_runner\u2192blackbox_judge.judge_run"
+    },
+    {
+      "class_id": "C10",
+      "classification": "KNOWN_RESIDUAL",
+      "expected_on_main": "blackbox:add: PASS [matched 1/1]",
+      "matches_spec": true,
+      "observed": "blackbox:add: PASS [matched 1/1]",
+      "platform": "darwin",
+      "probe": "runner-sniff-2",
+      "raw_return": "blackbox:add: PASS [matched 1/1]",
+      "reason": "outside-runner return=5; production runs python -P -m _cairnwork_blackbox_runner (src/cairnwork/blackbox_exec.py:139), so the name is absent from sys.modules",
+      "route": "python -P -m _cairnwork_blackbox_runner\u2192blackbox_judge.judge_run"
+    },
+    {
+      "class_id": "C10",
+      "classification": "KNOWN_RESIDUAL",
+      "expected_on_main": "blackbox:add: PASS [matched 1/1]",
+      "matches_spec": false,
+      "observed": "blackbox:add: MISMATCH [matched 0/1]",
+      "platform": "darwin",
+      "probe": "runner-sniff-3",
+      "raw_return": "blackbox:add: MISMATCH [matched 0/1]",
+      "reason": "outside-runner return=-1; production runs python -P -m _cairnwork_blackbox_runner (src/cairnwork/blackbox_exec.py:139), so the name is absent from sys.modules",
+      "route": "python -P -m _cairnwork_blackbox_runner\u2192blackbox_judge.judge_run"
+    },
+    {
+      "class_id": "C1_MUTANT",
+      "classification": "HONEST_FAILED",
+      "expected_on_main": "FAILED",
+      "matches_spec": true,
+      "observed": "FAILED",
+      "platform": "darwin",
+      "probe": "evasion-replaced-by-pass",
+      "raw_return": "FAILED",
+      "reason": "CORE_FAILED_VERIFICATION [pytest-0: pytest exit code 1]",
+      "route": "verify_cli run"
+    },
+    {
+      "class_id": "C2",
+      "classification": "NOT_RUN",
+      "expected_on_main": "NOT_RUN",
+      "matches_spec": true,
+      "observed": "FAILED",
+      "platform": "darwin",
+      "probe": "blackbox-1",
+      "raw_return": "FAILED",
+      "reason": "CORE_FAILED_VERIFICATION [blackbox:add: VERIFICATION_INCOMPLETE: BLACKBOX_NEEDS_VERIFIER_ACCOUNT [matched 1/1]]",
+      "route": "verify_cli run --blackbox"
+    },
+    {
+      "class_id": "C2",
+      "classification": "NOT_RUN",
+      "expected_on_main": "NOT_RUN",
+      "matches_spec": true,
+      "observed": "FAILED",
+      "platform": "darwin",
+      "probe": "blackbox-2",
+      "raw_return": "FAILED",
+      "reason": "CORE_FAILED_VERIFICATION [blackbox:add: VERIFICATION_INCOMPLETE: BLACKBOX_NEEDS_VERIFIER_ACCOUNT [matched 1/1]]",
+      "route": "verify_cli run --blackbox"
+    },
+    {
+      "class_id": "C2",
+      "classification": "VERIFIED_WRONG",
+      "expected_on_main": "VERIFIED",
+      "matches_spec": true,
+      "observed": "VERIFIED",
+      "platform": "darwin",
+      "probe": "verify-cli-1",
+      "raw_return": {
+        "reason": "CORE_VERIFIED",
+        "status": "VERIFIED",
+        "verified": true
+      },
+      "reason": "CORE_VERIFIED",
+      "route": "verify_cli run"
+    },
+    {
+      "class_id": "C2",
+      "classification": "VERIFIED_WRONG",
+      "expected_on_main": "VERIFIED",
+      "matches_spec": true,
+      "observed": "VERIFIED",
+      "platform": "darwin",
+      "probe": "verify-cli-2",
+      "raw_return": {
+        "reason": "CORE_VERIFIED",
+        "status": "VERIFIED",
+        "verified": true
+      },
+      "reason": "CORE_VERIFIED",
+      "route": "verify_cli run"
+    },
+    {
+      "class_id": "C2_MUTANT",
+      "classification": "HONEST_FAILED",
+      "expected_on_main": "FAILED",
+      "matches_spec": true,
+      "observed": "FAILED",
+      "platform": "darwin",
+      "probe": "evasion-replaced-by-pass",
+      "raw_return": "FAILED",
+      "reason": "CORE_FAILED_VERIFICATION [pytest-0: pytest exit code 1]",
+      "route": "verify_cli run"
+    },
+    {
+      "class_id": "C3",
+      "classification": "REFUSED",
+      "expected_on_main": "NOT_RUN",
+      "matches_spec": false,
+      "observed": "FAILED",
+      "platform": "darwin",
+      "probe": "blackbox-1",
+      "raw_return": "FAILED",
+      "reason": "CORE_FAILED_VERIFICATION [pytest-0: checkout changed (1: changed tests/test_calc.py)] [blackbox:add: VERIFICATION_INCOMPLETE: CHECKOUT_CHANGED]",
+      "route": "verify_cli run --blackbox"
+    },
+    {
+      "class_id": "C3",
+      "classification": "REFUSED",
+      "expected_on_main": "NOT_RUN",
+      "matches_spec": false,
+      "observed": "FAILED",
+      "platform": "darwin",
+      "probe": "blackbox-2",
+      "raw_return": "FAILED",
+      "reason": "CORE_FAILED_VERIFICATION [pytest-0: checkout changed (1: changed tests/test_calc.py)] [blackbox:add: VERIFICATION_INCOMPLETE: CHECKOUT_CHANGED]",
+      "route": "verify_cli run --blackbox"
+    },
+    {
+      "class_id": "C3",
+      "classification": "REFUSED",
+      "expected_on_main": "VERIFIED",
+      "matches_spec": false,
+      "observed": "FAILED",
+      "platform": "darwin",
+      "probe": "verify-cli-1",
+      "raw_return": {
+        "reason": "CORE_FAILED_VERIFICATION [pytest-0: checkout changed (1: changed tests/test_calc.py)]",
+        "status": "FAILED",
+        "verified": false
+      },
+      "reason": "CORE_FAILED_VERIFICATION [pytest-0: checkout changed (1: changed tests/test_calc.py)]",
+      "route": "verify_cli run"
+    },
+    {
+      "class_id": "C3",
+      "classification": "REFUSED",
+      "expected_on_main": "VERIFIED",
+      "matches_spec": false,
+      "observed": "FAILED",
+      "platform": "darwin",
+      "probe": "verify-cli-2",
+      "raw_return": {
+        "reason": "CORE_FAILED_VERIFICATION [pytest-0: checkout changed (1: changed tests/test_calc.py)]",
+        "status": "FAILED",
+        "verified": false
+      },
+      "reason": "CORE_FAILED_VERIFICATION [pytest-0: checkout changed (1: changed tests/test_calc.py)]",
+      "route": "verify_cli run"
+    },
+    {
+      "class_id": "C3_MUTANT",
+      "classification": "HONEST_FAILED",
+      "expected_on_main": "FAILED",
+      "matches_spec": true,
+      "observed": "FAILED",
+      "platform": "darwin",
+      "probe": "evasion-1-replaced-by-pass",
+      "raw_return": "FAILED",
+      "reason": "CORE_FAILED_VERIFICATION [pytest-0: pytest exit code 1]",
+      "route": "verify_cli run"
+    },
+    {
+      "class_id": "C3_MUTANT",
+      "classification": "HONEST_FAILED",
+      "expected_on_main": "FAILED",
+      "matches_spec": true,
+      "observed": "FAILED",
+      "platform": "darwin",
+      "probe": "evasion-2-replaced-by-pass",
+      "raw_return": "FAILED",
+      "reason": "CORE_FAILED_VERIFICATION [pytest-0: pytest exit code 1]",
+      "route": "verify_cli run"
+    },
+    {
+      "class_id": "C4",
+      "classification": "REFUSED",
+      "expected_on_main": "NOT_RUN",
+      "matches_spec": false,
+      "observed": "REFUSED",
+      "platform": "darwin",
+      "probe": "blackbox-1",
+      "raw_return": "REFUSED",
+      "reason": "CANDIDATE_SYS_PATH_MUTATION: 'src/calc.py': edits the import machinery in-process (sys.modules, finders, importlib, __import__, runpy or pytest_plugins)",
+      "route": "verify_cli run --blackbox"
+    },
+    {
+      "class_id": "C4",
+      "classification": "REFUSED",
+      "expected_on_main": "NOT_RUN",
+      "matches_spec": false,
+      "observed": "REFUSED",
+      "platform": "darwin",
+      "probe": "blackbox-2",
+      "raw_return": "REFUSED",
+      "reason": "CANDIDATE_SYS_PATH_MUTATION: 'src/calc.py': edits the import machinery in-process (sys.modules, finders, importlib, __import__, runpy or pytest_plugins)",
+      "route": "verify_cli run --blackbox"
+    },
+    {
+      "class_id": "C4",
+      "classification": "REFUSED",
+      "expected_on_main": "VERIFIED",
+      "matches_spec": false,
+      "observed": "REFUSED",
+      "platform": "darwin",
+      "probe": "verify-cli-1",
+      "raw_return": {
+        "reason": "CANDIDATE_SYS_PATH_MUTATION: 'src/calc.py': edits the import machinery in-process (sys.modules, finders, importlib, __import__, runpy or pytest_plugins)",
+        "status": "REFUSED",
+        "verified": false
+      },
+      "reason": "CANDIDATE_SYS_PATH_MUTATION: 'src/calc.py': edits the import machinery in-process (sys.modules, finders, importlib, __import__, runpy or pytest_plugins)",
+      "route": "verify_cli run"
+    },
+    {
+      "class_id": "C4",
+      "classification": "REFUSED",
+      "expected_on_main": "VERIFIED",
+      "matches_spec": false,
+      "observed": "REFUSED",
+      "platform": "darwin",
+      "probe": "verify-cli-2",
+      "raw_return": {
+        "reason": "CANDIDATE_SYS_PATH_MUTATION: 'src/calc.py': edits the import machinery in-process (sys.modules, finders, importlib, __import__, runpy or pytest_plugins)",
+        "status": "REFUSED",
+        "verified": false
+      },
+      "reason": "CANDIDATE_SYS_PATH_MUTATION: 'src/calc.py': edits the import machinery in-process (sys.modules, finders, importlib, __import__, runpy or pytest_plugins)",
+      "route": "verify_cli run"
+    },
+    {
+      "class_id": "C4_MUTANT",
+      "classification": "HONEST_FAILED",
+      "expected_on_main": "FAILED",
+      "matches_spec": true,
+      "observed": "FAILED",
+      "platform": "darwin",
+      "probe": "evasion-replaced-by-pass",
+      "raw_return": "FAILED",
+      "reason": "CORE_FAILED_VERIFICATION [pytest-0: pytest exit code 1]",
+      "route": "verify_cli run"
+    },
+    {
+      "class_id": "C5",
+      "classification": "VERIFIED_WRONG",
+      "expected_on_main": "VERIFIED",
+      "matches_spec": true,
+      "observed": "VERIFIED",
+      "platform": "darwin",
+      "probe": "liar-int-1",
+      "raw_return": {
+        "reason": "CORE_VERIFIED",
+        "status": "VERIFIED",
+        "verified": true
+      },
+      "reason": "CORE_VERIFIED",
+      "route": "verify_cli run"
+    },
+    {
+      "class_id": "C5",
+      "classification": "VERIFIED_WRONG",
+      "expected_on_main": "VERIFIED",
+      "matches_spec": true,
+      "observed": "VERIFIED",
+      "platform": "darwin",
+      "probe": "liar-int-2",
+      "raw_return": {
+        "reason": "CORE_VERIFIED",
+        "status": "VERIFIED",
+        "verified": true
+      },
+      "reason": "CORE_VERIFIED",
+      "route": "verify_cli run"
+    },
+    {
+      "class_id": "C6",
+      "classification": "VERIFIED_WRONG",
+      "expected_on_main": "PASS",
+      "matches_spec": true,
+      "observed": "blackbox:add: PASS [matched 1/1]",
+      "platform": "darwin",
+      "probe": "low-entropy-empty",
+      "raw_return": "blackbox:add: PASS [matched 1/1]",
+      "reason": "",
+      "route": "blackbox_judge.judge_run"
+    },
+    {
+      "class_id": "C6",
+      "classification": "VERIFIED_WRONG",
+      "expected_on_main": "PASS",
+      "matches_spec": true,
+      "observed": "blackbox:add: PASS [matched 1/1] low-entropy",
+      "platform": "darwin",
+      "probe": "low-entropy-true",
+      "raw_return": "blackbox:add: PASS [matched 1/1] low-entropy",
+      "reason": "",
+      "route": "blackbox_judge.judge_run"
+    },
+    {
+      "class_id": "C6",
+      "classification": "VERIFIED_WRONG",
+      "expected_on_main": "PASS",
+      "matches_spec": true,
+      "observed": "blackbox:add: PASS [matched 1/1]",
+      "platform": "darwin",
+      "probe": "low-entropy-zero",
+      "raw_return": "blackbox:add: PASS [matched 1/1]",
+      "reason": "",
+      "route": "blackbox_judge.judge_run"
+    },
+    {
+      "class_id": "C7",
+      "classification": "REFUSED",
+      "expected_on_main": "UNPROTECTED",
+      "matches_spec": true,
+      "observed": "UNPROTECTED",
+      "platform": "darwin",
+      "probe": "a-no-blackbox",
+      "raw_return": "UNPROTECTED",
+      "reason": "",
+      "route": "verify_cli._run --require-protection"
+    },
+    {
+      "class_id": "C7",
+      "classification": "NOT_RUN",
+      "expected_on_main": "NOT_RUN",
+      "matches_spec": true,
+      "observed": "FAILED",
+      "platform": "darwin",
+      "probe": "b-one-tampered-pytest",
+      "raw_return": "FAILED",
+      "reason": "CORE_FAILED_VERIFICATION [blackbox:add: VERIFICATION_INCOMPLETE: BLACKBOX_NEEDS_VERIFIER_ACCOUNT [matched 1/1]] [protection: PASS [partial_macos]]",
+      "route": "verify_cli run --require-protection"
+    },
+    {
+      "class_id": "C7",
+      "classification": "REFUSED",
+      "expected_on_main": "REJECTED",
+      "matches_spec": true,
+      "observed": "UNPROTECTED",
+      "platform": "darwin",
+      "probe": "c-receiver-requires-blackbox",
+      "raw_return": {
+        "code": "UNPROTECTED",
+        "detail": "the receipt records protection 'partial_macos'"
+      },
+      "reason": "",
+      "route": "verify_bundle(policy)"
+    },
+    {
+      "class_id": "C8",
+      "classification": "REFUSED",
+      "expected_on_main": "BASE_MISMATCH",
+      "matches_spec": true,
+      "observed": "BASE_MISMATCH",
+      "platform": "darwin",
+      "probe": "base",
+      "raw_return": {
+        "code": "BASE_MISMATCH",
+        "detail": "base 98f4725242ae5ab49b1c470cf5ec2b8dd75c3cfb != expected_base 1111111111111111111111111111111111111111"
+      },
+      "reason": "",
+      "route": "verify_bundle"
+    },
+    {
+      "class_id": "C8",
+      "classification": "REFUSED",
+      "expected_on_main": "BLACKBOX_CHECKS_MISSING",
+      "matches_spec": true,
+      "observed": "BLACKBOX_CHECKS_MISSING",
+      "platform": "darwin",
+      "probe": "blackbox_checks",
+      "raw_return": {
+        "code": "BLACKBOX_CHECKS_MISSING",
+        "detail": "Core required ['blackbox:other'], the policy ['blackbox:add']; not PASS: []"
+      },
+      "reason": "",
+      "route": "verify_bundle"
+    },
+    {
+      "class_id": "C8",
+      "classification": "REFUSED",
+      "expected_on_main": "BLACKBOX_COMMITMENT_MISMATCH",
+      "matches_spec": true,
+      "observed": "BLACKBOX_COMMITMENT_MISMATCH",
+      "platform": "darwin",
+      "probe": "blackbox_commitment",
+      "raw_return": {
+        "code": "BLACKBOX_COMMITMENT_MISMATCH",
+        "detail": "the receipt records blackbox_commitment 'sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'"
+      },
+      "reason": "",
+      "route": "verify_bundle"
+    },
+    {
+      "class_id": "C8",
+      "classification": "REFUSED",
+      "expected_on_main": "TREE_MISMATCH",
+      "matches_spec": true,
+      "observed": "TREE_MISMATCH",
+      "platform": "darwin",
+      "probe": "executed_tree",
+      "raw_return": {
+        "code": "TREE_MISMATCH",
+        "detail": "head + tests give 10ed2feb4b2c6e5b8043dbf48d247a80e0cebaff, not eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      },
+      "reason": "",
+      "route": "verify_bundle"
+    },
+    {
+      "class_id": "C8",
+      "classification": "REFUSED",
+      "expected_on_main": "HEAD_MISMATCH",
+      "matches_spec": true,
+      "observed": "HEAD_MISMATCH",
+      "platform": "darwin",
+      "probe": "head",
+      "raw_return": {
+        "code": "HEAD_MISMATCH",
+        "detail": "subject da1f82942522ede8ed3f6ac278817a8156b418c4, binding head da1f82942522ede8ed3f6ac278817a8156b418c4, expected '559cb8f2819a077152477d8678f45a1dd7b30397'"
+      },
+      "reason": "",
+      "route": "verify_bundle"
+    },
+    {
+      "class_id": "C8",
+      "classification": "REFUSED",
+      "expected_on_main": "TEST_SOURCE_MISMATCH",
+      "matches_spec": true,
+      "observed": "TEST_SOURCE_MISMATCH",
+      "platform": "darwin",
+      "probe": "test_commit",
+      "raw_return": {
+        "code": "TEST_SOURCE_MISMATCH",
+        "detail": "hidden_test_commit is not the binding's"
+      },
+      "reason": "",
+      "route": "verify_bundle"
+    },
+    {
+      "class_id": "C8",
+      "classification": "REFUSED",
+      "expected_on_main": "TEST_SOURCE_MISMATCH",
+      "matches_spec": true,
+      "observed": "TEST_SOURCE_MISMATCH",
+      "platform": "darwin",
+      "probe": "v0.1-under-protected-policy",
+      "raw_return": {
+        "code": "TEST_SOURCE_MISMATCH",
+        "detail": "the policy pins a test commit; this receipt has none"
+      },
+      "reason": "",
+      "route": "verify_bundle"
+    },
+    {
+      "class_id": "C8",
+      "classification": "HONEST_VERIFIED",
+      "expected_on_main": "OK",
+      "matches_spec": true,
+      "observed": "OK",
+      "platform": "darwin",
+      "probe": "valid",
+      "raw_return": {
+        "code": "OK",
+        "detail": ""
+      },
+      "reason": "",
+      "route": "verify_bundle"
+    },
+    {
+      "class_id": "C9",
+      "classification": "NOT_RUN",
+      "expected_on_main": "VERIFICATION_INCOMPLETE",
+      "matches_spec": true,
+      "observed": "blackbox:add: VERIFICATION_INCOMPLETE: BLACKBOX_NEEDS_VERIFIER_ACCOUNT [matched 0/1]",
+      "platform": "darwin",
+      "probe": "no-account",
+      "raw_return": "blackbox:add: VERIFICATION_INCOMPLETE: BLACKBOX_NEEDS_VERIFIER_ACCOUNT [matched 0/1]",
+      "reason": "",
+      "route": "blackbox_judge.judge_run"
+    },
+    {
+      "class_id": "C9",
+      "classification": "REFUSED",
+      "expected_on_main": "VERIFICATION_INCOMPLETE",
+      "matches_spec": true,
+      "observed": "blackbox:add: VERIFICATION_INCOMPLETE: TIMEOUT",
+      "platform": "darwin",
+      "probe": "timeout",
+      "raw_return": "blackbox:add: VERIFICATION_INCOMPLETE: TIMEOUT",
+      "reason": "",
+      "route": "blackbox_judge.judge_run"
+    },
+    {
+      "class_id": "CONTROL",
+      "classification": "HONEST_VERIFIED",
+      "expected_on_main": "blackbox:add: PASS [matched 1/1] low-entropy",
+      "matches_spec": true,
+      "observed": "blackbox:add: PASS [matched 1/1] low-entropy",
+      "platform": "darwin",
+      "probe": "owner-correct",
+      "raw_return": "blackbox:add: PASS [matched 1/1] low-entropy",
+      "reason": "owner mode: direct judge only; matched count is observable",
+      "route": "blackbox_judge.judge_run"
+    },
+    {
+      "class_id": "CONTROL",
+      "classification": "HONEST_FAILED",
+      "expected_on_main": "blackbox:add: MISMATCH [matched 0/1] low-entropy",
+      "matches_spec": true,
+      "observed": "blackbox:add: MISMATCH [matched 0/1] low-entropy",
+      "platform": "darwin",
+      "probe": "owner-wrong",
+      "raw_return": "blackbox:add: MISMATCH [matched 0/1] low-entropy",
+      "reason": "owner mode: direct judge only; matched count is observable",
+      "route": "blackbox_judge.judge_run"
+    },
+    {
+      "class_id": "HONEST",
+      "classification": "HONEST_VERIFIED",
+      "expected_on_main": "VERIFIED",
+      "matches_spec": true,
+      "observed": "VERIFIED",
+      "platform": "darwin",
+      "probe": "correct-01",
+      "raw_return": {
+        "reason": "CORE_VERIFIED",
+        "status": "VERIFIED",
+        "verified": true
+      },
+      "reason": "CORE_VERIFIED",
+      "route": "verify_cli run"
+    },
+    {
+      "class_id": "HONEST",
+      "classification": "HONEST_VERIFIED",
+      "expected_on_main": "VERIFIED",
+      "matches_spec": true,
+      "observed": "VERIFIED",
+      "platform": "darwin",
+      "probe": "correct-02",
+      "raw_return": {
+        "reason": "CORE_VERIFIED",
+        "status": "VERIFIED",
+        "verified": true
+      },
+      "reason": "CORE_VERIFIED",
+      "route": "verify_cli run"
+    },
+    {
+      "class_id": "HONEST",
+      "classification": "HONEST_VERIFIED",
+      "expected_on_main": "VERIFIED",
+      "matches_spec": true,
+      "observed": "VERIFIED",
+      "platform": "darwin",
+      "probe": "correct-03",
+      "raw_return": {
+        "reason": "CORE_VERIFIED",
+        "status": "VERIFIED",
+        "verified": true
+      },
+      "reason": "CORE_VERIFIED",
+      "route": "verify_cli run"
+    },
+    {
+      "class_id": "HONEST",
+      "classification": "HONEST_VERIFIED",
+      "expected_on_main": "VERIFIED",
+      "matches_spec": true,
+      "observed": "VERIFIED",
+      "platform": "darwin",
+      "probe": "correct-04",
+      "raw_return": {
+        "reason": "CORE_VERIFIED",
+        "status": "VERIFIED",
+        "verified": true
+      },
+      "reason": "CORE_VERIFIED",
+      "route": "verify_cli run"
+    },
+    {
+      "class_id": "HONEST",
+      "classification": "HONEST_VERIFIED",
+      "expected_on_main": "VERIFIED",
+      "matches_spec": true,
+      "observed": "VERIFIED",
+      "platform": "darwin",
+      "probe": "correct-05",
+      "raw_return": {
+        "reason": "CORE_VERIFIED",
+        "status": "VERIFIED",
+        "verified": true
+      },
+      "reason": "CORE_VERIFIED",
+      "route": "verify_cli run"
+    },
+    {
+      "class_id": "HONEST",
+      "classification": "HONEST_VERIFIED",
+      "expected_on_main": "VERIFIED",
+      "matches_spec": true,
+      "observed": "VERIFIED",
+      "platform": "darwin",
+      "probe": "correct-06",
+      "raw_return": {
+        "reason": "CORE_VERIFIED",
+        "status": "VERIFIED",
+        "verified": true
+      },
+      "reason": "CORE_VERIFIED",
+      "route": "verify_cli run"
+    },
+    {
+      "class_id": "HONEST",
+      "classification": "HONEST_VERIFIED",
+      "expected_on_main": "VERIFIED",
+      "matches_spec": true,
+      "observed": "VERIFIED",
+      "platform": "darwin",
+      "probe": "correct-07",
+      "raw_return": {
+        "reason": "CORE_VERIFIED",
+        "status": "VERIFIED",
+        "verified": true
+      },
+      "reason": "CORE_VERIFIED",
+      "route": "verify_cli run"
+    },
+    {
+      "class_id": "HONEST",
+      "classification": "HONEST_VERIFIED",
+      "expected_on_main": "VERIFIED",
+      "matches_spec": true,
+      "observed": "VERIFIED",
+      "platform": "darwin",
+      "probe": "correct-08",
+      "raw_return": {
+        "reason": "CORE_VERIFIED",
+        "status": "VERIFIED",
+        "verified": true
+      },
+      "reason": "CORE_VERIFIED",
+      "route": "verify_cli run"
+    },
+    {
+      "class_id": "HONEST",
+      "classification": "HONEST_VERIFIED",
+      "expected_on_main": "VERIFIED",
+      "matches_spec": true,
+      "observed": "VERIFIED",
+      "platform": "darwin",
+      "probe": "correct-09",
+      "raw_return": {
+        "reason": "CORE_VERIFIED",
+        "status": "VERIFIED",
+        "verified": true
+      },
+      "reason": "CORE_VERIFIED",
+      "route": "verify_cli run"
+    },
+    {
+      "class_id": "HONEST",
+      "classification": "HONEST_VERIFIED",
+      "expected_on_main": "VERIFIED",
+      "matches_spec": true,
+      "observed": "VERIFIED",
+      "platform": "darwin",
+      "probe": "correct-10",
+      "raw_return": {
+        "reason": "CORE_VERIFIED",
+        "status": "VERIFIED",
+        "verified": true
+      },
+      "reason": "CORE_VERIFIED",
+      "route": "verify_cli run"
+    }
+  ],
+  "totals": {
+    "NOT_RUN": 4,
+    "N_honest": 10,
+    "N_tamper": 35,
+    "VERIFIED-wrong": 7,
+    "spec_mismatch_count": 16
+  }
+}

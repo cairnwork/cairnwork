@@ -6,7 +6,7 @@ from cairnwork.p2p_collect import classify
 
 
 def _classify_single(base: str, test_id: str = "t.py::test_a"):
-    return classify({test_id}, set(), {"t.py"}, lambda p: "\n", lambda p: base)
+    return classify({test_id}, set(), {"t.py"}, lambda p: "\n", lambda p: base, exposed=())
 
 
 # --- Mutant 104 (Lambda walk) ---
@@ -175,5 +175,6 @@ def test_mutant_174_parameter_annotation_walrus_shadowing_is_dropped():
         {"t.py"},
         lambda p: test,
         lambda p: base,
+        exposed=(),
     )
     assert side.dropped == {"t.py::TestA::test_a"} and side.removed == set()

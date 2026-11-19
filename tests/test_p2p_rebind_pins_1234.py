@@ -13,7 +13,7 @@ def _module_case(rebind: str):
     helper = "def helper():\n    assert 0\n"
     base = helper + "def test_a():\n    helper()\n" + rebind
     test = helper
-    side = classify({TEST_ID}, set(), {"t.py"}, lambda p: test, lambda p: base)
+    side = classify({TEST_ID}, set(), {"t.py"}, lambda p: test, lambda p: base, exposed=())
     return side
 
 
@@ -66,7 +66,7 @@ CLASS_SHAPES = {
 def test_nested_class_rebinding_shapes_are_dropped(shape):
     test, nodeid = CLASS_SHAPES[shape]
     base = "def helper():\n    assert 0\nclass TestX:\n    def test_a(self):\n        helper()\n"
-    side = classify({nodeid}, set(), {"t.py"}, lambda p: test, lambda p: base)
+    side = classify({nodeid}, set(), {"t.py"}, lambda p: test, lambda p: base, exposed=())
     assert side.dropped == {nodeid}
     assert side.removed == set()
 
@@ -88,6 +88,7 @@ def test_same_name_extra_copy_is_not_excused():
         {"t.py"},
         lambda p: test,
         lambda p: base,
+        exposed=(),
     )
     assert side.dropped == {"t.py::TestX::test_a"}
     assert side.removed == set()
@@ -107,7 +108,7 @@ def test_ambiguous_testcase_alias_does_not_excuse_inherited_test():
         "class TestX(TestCase):\n    def test_b(self):\n        pass\n"
     )
     ids = {"t.py::TestX::test_a", "t.py::TestX::test_b"}
-    side = classify(ids, set(), {"t.py"}, lambda p: test, lambda p: base)
+    side = classify(ids, set(), {"t.py"}, lambda p: test, lambda p: base, exposed=())
     assert side.dropped == ids
     assert side.removed == set()
 

@@ -10,6 +10,19 @@ from xdist_groups import XDIST_GROUP_OF
 pytest_plugins = ["verify_helpers"]
 
 
+def real_info(exc):
+    """A real pytest ExceptionInfo for ``exc`` (#1308: the guards read nothing else)."""
+    from _pytest._code.code import ExceptionInfo
+
+    getter = vars(BaseException)["__traceback__"].__get__  # no code of a test's error runs
+    tb = (
+        getter(exc)
+        if isinstance(type(exc), type) and issubclass(type(exc), BaseException)
+        else None
+    )
+    return ExceptionInfo.from_exc_info((type(exc), exc, tb), exprinfo="")  # type: ignore[arg-type]
+
+
 # Fewer files per test git repo (#417): the tests' own git init/clone (subprocesses included)
 # copy no template directory (hook samples, info/exclude, description) and keep no reflogs.
 # Code under test must see the production git environment. Git calls that inherit it:
@@ -221,3 +234,31 @@ def _no_origin_in_test_repos(request, monkeypatch):
     from cairnwork import intake
 
     monkeypatch.setitem(intake.DEFAULT_CONFIG, "require_base_on_main", False)
+
+
+@pytest.fixture(autouse=True)
+def _configure_task_origin_from_test_fixture(monkeypatch):
+    """Pass the test-created origin as verifier-owned TaskSpec config when available.
+
+    A few legacy tests create deferred commits in the `make_test_commit` helper and then
+    construct TaskSpec directly. The helper's local origin stands in for verifier config;
+    production code still never reads the supplied repo's remote configuration.
+    """
+    from cairnwork.pipeline import TaskSpec
+
+    original = TaskSpec.__init__
+
+    def init(task, *args, **kwargs):
+        if kwargs.get("test_commit") and not kwargs.get("origin_url"):
+            repo = kwargs.get("repo") or (args[4] if len(args) > 4 else None)
+            if repo is not None:
+                try:
+                    origin = git(repo, "remote", "get-url", "origin")
+                except subprocess.CalledProcessError:
+                    pass
+                else:
+                    if origin.startswith(("/", "file://")):
+                        kwargs["origin_url"] = origin
+        original(task, *args, **kwargs)
+
+    monkeypatch.setattr(TaskSpec, "__init__", init)

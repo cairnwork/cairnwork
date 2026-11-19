@@ -70,7 +70,12 @@ def test_the_digest_sees_every_kind_of_change(name, checkout):
     before = guard.digest()
     assert guard.digest() == before
     CHANGES[name](checkout)
-    assert guard.digest() != before
+    try:
+        after = guard.digest()
+    except GuardUnavailable:  # a symlink out of the checkout is refused outright (fail closed)
+        assert name == "dir_to_symlink"
+        return
+    assert after != before
 
 
 def test_one_controller_per_event_log_in_a_private_directory(checkout, tmp_path):
@@ -92,9 +97,10 @@ def test_one_controller_per_event_log_in_a_private_directory(checkout, tmp_path)
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root reads a mode 000 directory")
 def test_the_digest_fails_closed_when_it_cannot_see_the_checkout(checkout, tmp_path):
-    for limits in ({"max_files": 3}, {"max_bytes": 10}):
-        with pytest.raises(GuardUnavailable):
-            TreeGuard(checkout, **limits).digest()
+    with pytest.raises(GuardUnavailable):
+        TreeGuard(checkout, max_files=3).digest()
+    with pytest.raises(GuardUnavailable):
+        TreeGuard(checkout, max_bytes=10).digest()
     with pytest.raises(GuardUnavailable):
         TreeGuard(tmp_path / "missing").digest()
     os.symlink(checkout, tmp_path / "via-link")

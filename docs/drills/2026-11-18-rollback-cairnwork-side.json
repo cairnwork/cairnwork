@@ -1,0 +1,167 @@
+{
+  "date": "2026-11-18",
+  "deployed_sha": "763ccd0e",
+  "first_run": "first run without verifier_python: the verifier fell back to the deploy venv, which has no pytest (No module named pytest); A ended FAILED (task-57b995865f4c4fa4b44192bf65c8db20, candidate c6f93548), all route steps still passed; drill-setup gap, not a product change; re-run with verifier_python is this record",
+  "how": "scripts/drill_rollback.py at the deployed SHA, run with the deployed venv's python (deploy/current/.venv/bin/python), so every cairnwork-route call ran the deployed code",
+  "main_sha": "763ccd0e",
+  "model": "stub-no-model",
+  "passed": true,
+  "route_tests": {
+    "command": "CAIRNWORK_REQUIRE_SANDBOX=1 nice -n 19 uv run pytest -q tests/test_route.py tests/test_route_exit_codes.py",
+    "duration_s": "76.01",
+    "failed": 0,
+    "passed": 16
+  },
+  "scope": "Cairnwork side only; Gateway switch, forwarding and deployer gate not exercised",
+  "steps": [
+    {
+      "exit": 0,
+      "expected": "exit 0, would_accept false, state dir still empty",
+      "ok": true,
+      "output": {
+        "would_accept": false
+      },
+      "state_files_after": [],
+      "step": "1 shadow check"
+    },
+    {
+      "exit": 0,
+      "expected": "exit 0, accepting true",
+      "ok": true,
+      "output": {
+        "accepting": true
+      },
+      "step": "2a accept"
+    },
+    {
+      "exit": 0,
+      "expected": "exit 0, duplicate false",
+      "ok": true,
+      "output": {
+        "duplicate": false,
+        "status": "BOUND",
+        "task_id": "task-3f2f41e20b2b442597e0651a8afe13ee"
+      },
+      "step": "2b submit A"
+    },
+    {
+      "expected": "status DISPATCHED before drain",
+      "ok": true,
+      "status": {
+        "attempt_id": "abaa09cc0ed0290dd",
+        "candidate_commit": "",
+        "core_verified": false,
+        "detail": "/Users/james/workspace/.scratch/oneshot/l1-pause-dispatch/deploy-520/rb2-euvG/state/runs",
+        "idempotency_key": "rollback-a",
+        "owner": "cairnwork",
+        "phase": "DISPATCHED",
+        "status": "DISPATCHED",
+        "task_id": "task-3f2f41e20b2b442597e0651a8afe13ee",
+        "uncomparable": "",
+        "unswept": null
+      },
+      "step": "2c A dispatched"
+    },
+    {
+      "exit": 0,
+      "expected": "exit 0, accepting false",
+      "ok": true,
+      "output": {
+        "accepting": false
+      },
+      "step": "2d drain while A runs"
+    },
+    {
+      "exit": 2,
+      "expected": "exit 2, NOT_ACCEPTING",
+      "ok": true,
+      "output": {
+        "detail": "Cairnwork takes no new tasks",
+        "error": "NOT_ACCEPTING"
+      },
+      "step": "3a new key after drain"
+    },
+    {
+      "exit": 0,
+      "expected": "exit 0, same task id, duplicate true",
+      "ok": true,
+      "output": {
+        "duplicate": true,
+        "status": "DISPATCHED",
+        "task_id": "task-3f2f41e20b2b442597e0651a8afe13ee"
+      },
+      "step": "3b resend of A after drain"
+    },
+    {
+      "exit": 0,
+      "expected": "exit 0, count >= 1, A listed, accepting false",
+      "ok": true,
+      "output": {
+        "accepting": false,
+        "count": 1,
+        "foreign_task_ids": [],
+        "task_ids": [
+          "task-3f2f41e20b2b442597e0651a8afe13ee"
+        ]
+      },
+      "step": "3c in-flight while A runs"
+    },
+    {
+      "attempt_when_dispatched": "abaa09cc0ed0290dd",
+      "expected": "COMPLETED, or FAILED with a reason; same attempt as when drained",
+      "ok": true,
+      "status": {
+        "attempt_id": "abaa09cc0ed0290dd",
+        "candidate_commit": "0a8197c1e020a328c1d4d26a14b3bcb1a28bc754",
+        "core_verified": true,
+        "detail": "COMPLETED",
+        "idempotency_key": "rollback-a",
+        "owner": "cairnwork",
+        "phase": "FINISHED",
+        "status": "COMPLETED",
+        "task_id": "task-3f2f41e20b2b442597e0651a8afe13ee",
+        "uncomparable": "",
+        "unswept": null
+      },
+      "step": "4a A finishes in Cairnwork"
+    },
+    {
+      "exit": 0,
+      "expected": "exit 0, count 0",
+      "ok": true,
+      "output": {
+        "accepting": false,
+        "count": 0,
+        "foreign_task_ids": [],
+        "task_ids": []
+      },
+      "step": "4b in-flight after A"
+    },
+    {
+      "exit": 0,
+      "expected": "exit 0, no decisions",
+      "ok": true,
+      "output": {
+        "decisions": [],
+        "leftover_run_dirs": 0,
+        "sweep_unavailable": false
+      },
+      "step": "4c recover"
+    },
+    {
+      "exit": 0,
+      "expected": "exit 0, same task id, duplicate true (no re-run)",
+      "ok": true,
+      "output": {
+        "duplicate": true,
+        "status": "COMPLETED",
+        "task_id": "task-3f2f41e20b2b442597e0651a8afe13ee"
+      },
+      "step": "4d resend after finish"
+    }
+  ],
+  "verifier_account_used": false,
+  "verifier_mode_note": "local verifier (drill_normal.ACCOUNT forced to None): the cairnwork-verifier account was in use by a PAUSE formal slot; layer1 decided not to interleave",
+  "verifier_python": "a checkout venv with pytest at the deployed SHA, set in the drill state's config.json (production states set verifier_python to the target repo venv)",
+  "worker": "fixed stub named agy first on PATH (drill-local, not the real agy, no model): sleeps 12 s, writes the known one-line fix"
+}

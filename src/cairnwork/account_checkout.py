@@ -56,6 +56,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from cairnwork.textclean import shown
 from cairnwork.treecompare import tree_differences
 from cairnwork.verifier_account import VerifierAccountError
 from cairnwork.verifier_exec import _same_directory
@@ -262,7 +263,9 @@ def _check_copy(target: Path, account, repo: Path, commit: str) -> None:
         raise WorkspaceError(f"{target} is not a directory owned by {account.user}")
     differences = tree_differences(repo, commit, target)
     if differences:
-        raise WorkspaceError(f"account copy differs from {commit}: {', '.join(differences[:5])}")
+        raise WorkspaceError(
+            f"account copy differs from {shown(commit)}: {', '.join(map(shown, differences[:5]))}"
+        )
 
 
 def checkout_differences(repo: Path, commit: str, checkout: Path, before, account, python: str):

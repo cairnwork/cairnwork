@@ -134,8 +134,10 @@ def hook(event, args, _t=None, _str=None, _bytes=None, _ba=None, _mv=None, _int=
         raise _stop("cairnwork: code is never unmarshalled in a verifier run")
     elif event == "object.__setattr__" or event == "object.__delattr__":
         target = args[0]
-        if _t(target) is _func and target.__code__.co_filename == _name:
-            raise _stop("cairnwork: the bytecode hook is fixed")
+        if _t(target) is _func:
+            filename = target.__code__.co_filename
+            if _t(filename) is _str and _str.__eq__(filename, _name):
+                raise _stop("cairnwork: the bytecode hook is fixed")
     elif (
         event == "gc.get_referrers"
         or event == "gc.get_referents"

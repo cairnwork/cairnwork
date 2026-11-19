@@ -19,8 +19,8 @@ Resolution over-approximates pytest on purpose (refusing too much is the safe si
 * ``importlib.import_module("...")`` and ``__import__("...")`` with a literal name count as
   imports (a leading dot also relative to the file, a literal ``fromlist`` as submodules), and so
   do the string literals put in ``pytest_plugins`` (assignment, slice assignment, ``+=``, ``+``,
-  a method call on the list, starred, comma-separated, #1010); every import counts, at any depth
-  (a fixture body's too);
+  a method call on the list, starred, comma-separated, loop/with/match targets, #1010); every
+  import counts, at any depth (a fixture body's too);
 * the ``__init__.py`` of the conftest's directory and of each directory above it count too:
   pytest may import the conftest as a module of that package (r2, cw#948 cross-model review);
 * a star import (``from pkg import *`` or ``from .pkg import *``) reaches every module file
@@ -48,11 +48,12 @@ module some conftest imports (``tests/data/sample/calc.py`` when a conftest impo
 from __future__ import annotations
 
 import ast
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from posixpath import dirname, join
 
 MAX_FILES = 500  # unchanged modules followed per conftest before the walk refuses
 MODULE_SUFFIXES = (".py", ".pyc", ".so", ".pyd")  # files an import statement can load (r6)
+_DYNAMIC = frozenset({"setattr", "delattr", "exec", "eval", "globals", "locals", "vars"})
 
 
 def reached_change(
@@ -78,7 +79,8 @@ def reached_change(
     by_name = _names(files)
     while queue:
         here, parsed = queue.pop(0)
-        targets = _targets(here, parsed, files, by_name)
+        if (targets := _targets(here, parsed, files, by_name)) is None:
+            return "has an unreadable pytest_plugins with-binding"
         for target in sorted(targets):
             if target in changed:
                 return target
@@ -108,10 +110,12 @@ def _names(files: frozenset[str]) -> dict[str, set[str]]:
     return out
 
 
-def _targets(here: str, tree: ast.Module, files: frozenset[str], by_name) -> set[str]:
+def _targets(here: str, tree: ast.Module, files: frozenset[str], by_name) -> set[str] | None:
     """The files of the tree that one import in ``tree`` (the file ``here``) may load."""
     found: set[str] = set()
-    for level, names in _imports(tree):
+    for level, names in _imports(tree, stdlib="contextlib" not in by_name):
+        if level < 0:
+            return None
         for name in names:
             star = name == "*" or name.endswith(".*")
             if star:
@@ -154,7 +158,7 @@ def _targets(here: str, tree: ast.Module, files: frozenset[str], by_name) -> set
 _STORES = (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.NamedExpr)  # := too (#1027)
 
 
-def _imports(tree: ast.Module) -> Iterator[tuple[int, Iterable[str]]]:
+def _imports(tree: ast.Module, *, stdlib: bool = True) -> Iterator[tuple[int, Iterable[str]]]:
     """(level, dotted names it may load) per import in ``tree``, at any depth."""
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -170,14 +174,14 @@ def _imports(tree: ast.Module) -> Iterator[tuple[int, Iterable[str]]]:
             yield 0, [n.lstrip(".") for n in names]
             if dots:
                 yield dots, [n.lstrip(".") for n in names]
-        elif isinstance(node, _STORES) and _plugins(node):
-            yield 0, _strings([node.value])
-        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-            if isinstance(node.func.value, ast.Name) and node.func.value.id == "pytest_plugins":
-                yield 0, _strings(node.args)  # list methods take no keywords
+        elif values := _plugin_values(node, tree if stdlib else None):
+            if isinstance(node, ast.With | ast.AsyncWith) and None in values:
+                yield -1, ()
+            else:
+                yield 0, _strings(values)
 
 
-def _strings(values: list) -> list[str]:
+def _strings(values: Sequence[ast.AST | None]) -> list[str]:
     """What a pytest_plugins value or call may name (#1010): each comma-separated part of every
     string literal in it, as pytest splits them, and of literals joined by ``+`` (#1018 r1)."""
     names: list[str] = []
@@ -231,12 +235,124 @@ def _items(node: ast.expr | None) -> list[ast.expr]:
     return [node] if node is not None else []
 
 
+def _nullcontext_imports(tree: ast.Module, name: str, from_import: bool) -> set[int]:
+    stmt = ast.ImportFrom if from_import else ast.Import
+    target = "nullcontext" if from_import else "contextlib"
+    return {
+        id(a)
+        for s in tree.body
+        if isinstance(s, stmt)
+        and (not isinstance(s, ast.ImportFrom) or (s.level == 0 and s.module == "contextlib"))
+        for a in s.names
+        if a.name == target and (a.asname or a.name) == name
+    }
+
+
+def _with_expr(expr: ast.expr, tree: ast.Module | None) -> ast.expr | None:
+    if tree is None or not isinstance(expr, ast.Call):
+        return None
+    if len(expr.args) != 1 or expr.keywords or isinstance(expr.args[0], ast.Starred):
+        return None
+    fn = expr.func
+    if isinstance(fn, ast.Name):
+        name, from_import = fn.id, True
+    elif (
+        isinstance(fn, ast.Attribute)
+        and fn.attr == "nullcontext"
+        and isinstance(fn.value, ast.Name)
+    ):
+        name, from_import = fn.value.id, False
+    else:
+        return None
+    if not (good := _nullcontext_imports(tree, name, from_import)):
+        return None
+    for n in ast.walk(tree):
+        if isinstance(n, ast.alias):
+            if n.name == "*" or (id(n) not in good and (n.asname or n.name.split(".")[0]) == name):
+                return None
+        elif (
+            (
+                isinstance(n, ast.Name)
+                and (n.id in _DYNAMIC or (not isinstance(n.ctx, ast.Load) and n.id == name))
+            )
+            or (isinstance(n, ast.Attribute) and not isinstance(n.ctx, ast.Load))
+            or (isinstance(n, ast.MatchMapping) and n.rest == name)
+            or (isinstance(n, ast.arg) and n.arg == name)
+            or getattr(n, "name", None) == name
+        ):
+            return None
+    return expr.args[0]
+
+
+def _plain_index(node: ast.AST) -> bool:
+    if isinstance(node, ast.Slice):
+        return all(_plain_index(x) for x in (node.lower, node.upper, node.step) if x is not None)
+    return isinstance(node, ast.Constant) and type(node.value) is int
+
+
+def _paired_values(target: ast.AST, value: ast.expr | None) -> list[ast.expr | None]:
+    if not _mentions(target):
+        return []
+    if isinstance(target, ast.Name) or (
+        isinstance(target, ast.Subscript)
+        and isinstance(target.value, ast.Name)
+        and target.value.id == "pytest_plugins"
+        and _plain_index(target.slice)
+    ):
+        return [value]
+    if isinstance(target, ast.Tuple | ast.List) and isinstance(value, ast.Tuple | ast.List):
+        plain = not any(isinstance(e, ast.Starred) for e in (*target.elts, *value.elts))
+        if plain and len(target.elts) == len(value.elts):
+            pairs = zip(target.elts, value.elts, strict=True)
+            return [v for sub, val in pairs for v in _paired_values(sub, val)]
+    return [None]
+
+
+def _plugin_values(node: ast.AST, tree: ast.Module | None = None) -> Sequence[ast.AST | None]:
+    """Expressions/patterns a node may feed into ``pytest_plugins`` (#1010)."""
+    if isinstance(node, _STORES) and _plugins(node):
+        return [node.value]
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+        if isinstance(node.func.value, ast.Name) and node.func.value.id == "pytest_plugins":
+            return [*node.args]  # list methods take no keywords
+    if isinstance(node, ast.For | ast.AsyncFor) and _mentions(node.target):
+        return [node.iter]
+    if isinstance(node, ast.With | ast.AsyncWith):
+        return [
+            _with_expr(i.context_expr, tree)
+            for i in node.items
+            if i.optional_vars is not None and _mentions(i.optional_vars)
+        ]
+    if isinstance(node, ast.Match):
+        pats = [
+            p
+            for c in node.cases
+            for p in ast.walk(c.pattern)
+            if _pattern_bound(p) == "pytest_plugins"
+        ]
+        if pats:  # Never walk MatchMapping keys: case {"y": pytest_plugins} binds d["y"], not "y".
+            return [
+                node.subject,
+                *(p.pattern for p in pats if isinstance(p, ast.MatchAs) and p.pattern is not None),
+            ]
+    return ()
+
+
+def _mentions(node: ast.AST) -> bool:
+    return any(isinstance(n, ast.Name) and n.id == "pytest_plugins" for n in ast.walk(node))
+
+
+def _pattern_bound(node: ast.AST) -> str | None:
+    if isinstance(node, ast.MatchAs | ast.MatchStar):
+        return node.name
+    return node.rest if isinstance(node, ast.MatchMapping) else None
+
+
 def _plugins(node: ast.Assign | ast.AnnAssign | ast.AugAssign | ast.NamedExpr) -> bool:
     """The statement binds ``pytest_plugins``: as a name, an item or slice, or one target of an
     unpacking (#1010)."""
     targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-    return any(isinstance(n, ast.Name) and n.id == "pytest_plugins"
-               for t in targets for n in ast.walk(t))  # fmt: skip
+    return any(_mentions(t) for t in targets)
 
 
 def _inits(conftest: str) -> set[str]:

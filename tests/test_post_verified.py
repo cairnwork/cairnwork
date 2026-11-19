@@ -7,7 +7,7 @@ import stat
 import subprocess
 
 import pytest
-from conftest import commit_change
+from conftest import commit_change, git
 from issue_helpers import _completed
 from test_issue_runner import (
     FakeGitHub,
@@ -173,6 +173,9 @@ def test_the_runner_exit_code_ignores_the_hook(rig, monkeypatch, tmp_path, capsy
     github = FakeGitHub([issue()])
     taken = runner.take(rig["intake"], github, rig["clone"])[0]
     commit = commit_change(rig["clone"], {"src/calc.py": "x = 2\n"})
+    # #1266: the candidate lives on its own ref, not on the mirror's main (main ahead is refused)
+    git(rig["clone"], "update-ref", "refs/cairnwork/attempts/att-1", commit)
+    git(rig["clone"], "reset", "-q", "--hard", "origin/main")
     monkeypatch.setattr(Intake, "status", _completed(rig, taken, commit))
     monkeypatch.setattr(runner, "_git", _git_without_credentials)
     monkeypatch.setattr(runner, "GitHub", lambda gh, repo: github)

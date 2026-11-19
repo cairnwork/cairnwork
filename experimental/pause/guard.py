@@ -46,8 +46,19 @@ def outside(path: Path | str, checkout: Path | str) -> bool:
 class TreeGuard:
     """The CheckoutGuard of AC8 over a real checkout; see the module docstring."""
 
-    def __init__(self, root: Path, *, max_files: int = MAX_FILES, max_bytes: int = MAX_BYTES):
+    def __init__(
+        self,
+        root: Path,
+        *,
+        max_files: int = MAX_FILES,
+        max_bytes: int = MAX_BYTES,
+        exclude_git: bool = False,
+        exclude_paths: frozenset[str] = frozenset(),
+        bind_times: bool = False,
+    ):
         self.root, self.max_files, self.max_bytes = Path(root), max_files, max_bytes
+        self.exclude_git, self.exclude_paths = exclude_git, exclude_paths
+        self.bind_times = bind_times
 
     def digest(self) -> str:
         try:
@@ -58,7 +69,7 @@ class TreeGuard:
         try:
             st = os.fstat(root_fd)
             meta = guard_meta.read(os.fsencode(self.root), st)
-            self._add(h, ".", "d", stat.S_IMODE(st.st_mode), b"", meta)
+            self._add(h, ".", "d", stat.S_IMODE(st.st_mode), b"", meta, self._times(st))
             self._walk(h, root_fd, "", [1, meta.size()])
         except (OSError, RecursionError) as e:
             raise GuardUnavailable(f"checkout walk: {e}") from e
@@ -66,12 +77,39 @@ class TreeGuard:
             os.close(root_fd)
         return h.hexdigest()
 
-    @staticmethod
-    def _add(h, rel: str, kind: str, mode: int, ref: bytes, meta: guard_meta.Meta) -> None:
-        h.update(b"%s\0%s\0%o\0%s\0%s\0" % (os.fsencode(rel), kind.encode(), mode, ref, meta.key()))
+    def digest_pair(self, *, exclude_git: bool, exclude_paths: frozenset[str]) -> tuple[str, str]:
+        """Hash the full tree and a filtered view from one filesystem walk."""
+        try:
+            root_fd = os.open(self.root, _DIR)
+        except OSError as e:
+            raise GuardUnavailable(f"checkout root: {e.strerror}") from e
+        full, filtered = hashlib.sha256(), hashlib.sha256()
+        try:
+            st = os.fstat(root_fd)
+            meta = guard_meta.read(os.fsencode(self.root), st)
+            times = self._times(st)
+            self._add(full, ".", "d", stat.S_IMODE(st.st_mode), b"", meta, times)
+            self._add(filtered, ".", "d", stat.S_IMODE(st.st_mode), b"", meta, times)
+            self._walk_pair(
+                full, filtered, root_fd, "", [1, meta.size()], exclude_git, exclude_paths
+            )
+        except (OSError, RecursionError) as e:
+            raise GuardUnavailable(f"checkout walk: {e}") from e
+        finally:
+            os.close(root_fd)
+        return full.hexdigest(), filtered.hexdigest()
 
-    def _walk(self, h, fd: int, prefix: str, count: list[int]) -> None:
-        """Entries in sorted order, depth first; ``count`` is [entries, bytes] so far."""
+    def _walk_pair(
+        self,
+        full,
+        filtered,
+        fd: int,
+        prefix: str,
+        count: list[int],
+        exclude_git: bool,
+        exclude_paths: frozenset[str],
+    ) -> None:
+        """Update two digests from the same entry metadata and file reads."""
         with os.scandir(fd) as it:
             names = sorted(e.name for e in it)
         for name in names:
@@ -85,21 +123,107 @@ class TreeGuard:
                     f"the checkout exceeds {self.max_files} entries or {self.max_bytes} bytes"
                 )
             mode = stat.S_IMODE(st.st_mode)
+            excluded_path = any(rel == path or rel.startswith(path + "/") for path in exclude_paths)
+            excluded = (exclude_git and (rel == ".git" or rel.startswith(".git/"))) or excluded_path
             if stat.S_ISDIR(st.st_mode):
-                self._add(h, rel, "d", mode, b"", meta)
+                if excluded_path and rel not in exclude_paths:
+                    raise ValueError(f"excluded directory contains an unlisted directory: {rel}")
+                times = self._times(st)
+                self._add(full, rel, "d", mode, b"", meta, times)
+                if not excluded:
+                    self._add(filtered, rel, "d", mode, b"", meta, times)
+                sub = os.open(name, _DIR, dir_fd=fd)
+                try:
+                    self._walk_pair(
+                        full,
+                        filtered,
+                        sub,
+                        rel + "/",
+                        count,
+                        exclude_git,
+                        exclude_paths,
+                    )
+                finally:
+                    os.close(sub)
+            elif stat.S_ISLNK(st.st_mode):
+                if excluded_path:
+                    raise ValueError(f"excluded directory contains an entry: {rel}")
+                if self._leaves(rel):
+                    raise GuardUnavailable(f"{rel!r} points outside the checkout")
+                target = os.fsencode(os.readlink(name, dir_fd=fd))
+                times = self._times(st)
+                self._add(full, rel, "l", 0, target, meta, times)
+                if not excluded:
+                    self._add(filtered, rel, "l", 0, target, meta, times)
+            elif stat.S_ISREG(st.st_mode):
+                if excluded_path:
+                    raise ValueError(f"excluded directory contains an entry: {rel}")
+                if st.st_nlink != 1:
+                    raise GuardUnavailable(f"{rel!r} has {st.st_nlink} hard links")
+                content = self._content(fd, name, st)
+                times = self._times(st)
+                self._add(full, rel, "f", mode, content, meta, times)
+                if not excluded:
+                    self._add(filtered, rel, "f", mode, content, meta, times)
+            else:
+                if excluded_path:
+                    raise ValueError(f"excluded directory contains an entry: {rel}")
+                raise GuardUnavailable(f"{rel!r} is not a file, directory or symlink")
+
+    @staticmethod
+    def _add(
+        h, rel: str, kind: str, mode: int, ref: bytes, meta: guard_meta.Meta, times: bytes = b""
+    ) -> None:
+        h.update(b"%s\0%s\0%o\0%s\0%s\0" % (os.fsencode(rel), kind.encode(), mode, ref, meta.key()))
+        if times:
+            h.update(times + b"\0")
+
+    def _leaves(self, rel: str) -> bool:
+        """True when a symlink target is not inside the checkout (an ancestor counts as outside)."""
+        top = os.path.realpath(self.root)
+        return os.path.commonpath([os.path.realpath(self.root / rel), top]) != top
+
+    def _times(self, st: os.stat_result) -> bytes:
+        return b"%d:%d" % (st.st_mtime_ns, st.st_ctime_ns) if self.bind_times else b""
+
+    def _walk(self, h, fd: int, prefix: str, count: list[int]) -> None:
+        """Entries in sorted order, depth first; ``count`` is [entries, bytes] so far."""
+        with os.scandir(fd) as it:
+            names = sorted(e.name for e in it)
+        for name in names:
+            rel = prefix + name
+            if self.exclude_git and not prefix and name == ".git":
+                continue
+            if any(rel == path or rel.startswith(path + "/") for path in self.exclude_paths):
+                continue
+            st = os.stat(name, dir_fd=fd, follow_symlinks=False)
+            meta = guard_meta.read(os.fsencode(self.root / rel), st)
+            count[0] += 1
+            count[1] += meta.size() + (st.st_size if stat.S_ISREG(st.st_mode) else 0)
+            if count[0] > self.max_files or count[1] > self.max_bytes:
+                raise GuardUnavailable(
+                    f"the checkout exceeds {self.max_files} entries or {self.max_bytes} bytes"
+                )
+            mode = stat.S_IMODE(st.st_mode)
+            if stat.S_ISDIR(st.st_mode):
+                self._add(h, rel, "d", mode, b"", meta, self._times(st))
                 sub = os.open(name, _DIR, dir_fd=fd)
                 try:
                     self._walk(h, sub, rel + "/", count)
                 finally:
                     os.close(sub)
             elif stat.S_ISLNK(st.st_mode):
-                self._add(h, rel, "l", 0, os.fsencode(os.readlink(name, dir_fd=fd)), meta)
+                if self._leaves(rel):
+                    raise GuardUnavailable(f"{rel!r} points outside the checkout")
+                self._add(
+                    h, rel, "l", 0, os.fsencode(os.readlink(name, dir_fd=fd)), meta, self._times(st)
+                )
             elif stat.S_ISREG(st.st_mode):
                 if st.st_nlink != 1:  # a second name, maybe outside the checkout's write deny
                     raise GuardUnavailable(f"{rel!r} has {st.st_nlink} hard links")
-                self._add(h, rel, "f", mode, self._content(fd, name, st), meta)
+                self._add(h, rel, "f", mode, self._content(fd, name, st), meta, self._times(st))
             else:
-                self._add(h, rel, "o", mode, b"", meta)
+                raise GuardUnavailable(f"{rel!r} is not a file, directory or symlink")
 
     @staticmethod
     def _content(fd: int, name: str, st: os.stat_result) -> bytes:

@@ -57,3 +57,19 @@ def seal_private(private: Path, root: Path) -> None:
         os.fchmod(fd, 0o700)
     finally:
         os.close(fd)
+
+
+def root_problem(root: Path) -> str | None:
+    """Why a run root is unsafe, or None (#437 E): ``rmtree(root/private/run)`` follows a swapped
+    ``private`` link, so the root must be this user's and not writable by group or others."""
+    try:
+        info = os.lstat(root)
+    except OSError as exc:
+        return f"cannot be examined: {exc}"
+    if info.st_uid != os.getuid():
+        return f"is not owned by this user (owner uid {info.st_uid})"
+    if info.st_mode & 0o022:
+        return (
+            f"is writable by group or others (mode {stat.S_IMODE(info.st_mode):o}; chmod g-w,o-w)"
+        )
+    return None

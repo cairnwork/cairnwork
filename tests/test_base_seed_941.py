@@ -32,6 +32,7 @@ def _probe(project, tmp_path, code, seed):
             test_commit=test_commit,
             test_roots=("tests",),
             test_store=None,
+            origin_url=git(project, "remote", "get-url", "origin"),
         ),
     )()
     spec = parse_verifier("v", ["python3", "-m", "pytest", "-q", "tests/test_ordered.py"])
@@ -241,7 +242,7 @@ def test_invalid_replay_seed_is_uncomparable(project, tmp_path, monkeypatch, see
 )
 def test_initial_refusal_does_not_start_second_run(monkeypatch, tmp_path, kind, code):
     monkeypatch.setattr(pipeline_judge, "check_roots_on_base", lambda *a: None)
-    monkeypatch.setattr(pipeline_judge, "ensure_test_commit", lambda *a: None)
+    monkeypatch.setattr(pipeline_judge, "ensure_test_commit", lambda *a, **kw: None)
     monkeypatch.setattr(pipeline_judge, "test_paths", lambda *a: (("tests/test_x.py",), ()))
     monkeypatch.setattr(
         pipeline_judge, "new_tests", lambda *a: frozenset({"tests/test_x.py::test_x"})
@@ -265,6 +266,7 @@ def test_initial_refusal_does_not_start_second_run(monkeypatch, tmp_path, kind, 
             test_commit="tests",
             test_roots=("tests",),
             test_store=None,
+            origin_url="file:///verifier-owned-origin",
         ),
     )()
     spec = VerifierSpec("v", ("tests/test_x.py",))

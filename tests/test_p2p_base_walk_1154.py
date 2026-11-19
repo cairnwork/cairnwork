@@ -17,6 +17,7 @@ def _split(base: str, test: str):
         {"t.py"},
         lambda path: test,
         lambda path: base,
+        exposed=(),
     )
 
 

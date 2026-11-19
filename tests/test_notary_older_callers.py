@@ -3,8 +3,8 @@
 
 import json
 import subprocess
-import sys
 
+from _child_python import run_module
 from conftest import git
 from test_issue_runner import FakeGitHub, issue, setup  # noqa: F401
 from test_notary_migrate import digest, old_notary
@@ -15,7 +15,7 @@ from cairnwork.intake import Intake
 
 def route(state, *args, stdin=None):
     done = subprocess.run(
-        [sys.executable, "-I", "-m", "cairnwork.route", "--state", str(state), *args],
+        run_module("cairnwork.route") + ["--state", str(state), *args],
         input=json.dumps(stdin) if stdin is not None else "",
         capture_output=True, text=True, timeout=120, check=False,
     )  # fmt: skip

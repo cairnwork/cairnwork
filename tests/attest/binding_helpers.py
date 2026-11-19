@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import subprocess
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -94,6 +95,7 @@ def notarize_bound(
     blackbox_commitment: str = "", protection: str = "",
     required: tuple[str, ...] = ("pytest-0",), failing: tuple[str, ...] = (),
     unrequired: tuple[str, ...] = (), deleted: tuple[str, ...] = (),
+    artifacts: Mapping[str, tuple[str, str]] | None = None,
 ) -> dict[str, Any]:  # fmt: skip
     """Notarize one external-candidate run; head is what the binding claims, overlay_head what
     the tests were laid over (they differ only in negative controls). ``failing`` observations
@@ -122,8 +124,11 @@ def notarize_bound(
     spec = AcceptanceSpec(
         task, binding_hash(binding), required, ("src/a.py", *paths, *deleted), bool(deleted)
     )
+    artifacts = artifacts or {}
     obs = tuple(
-        VerifierObservation(v, "artifact-1", "sha256:" + "e" * 64, v not in failing)
+        VerifierObservation(
+            v, *(artifacts.get(v, ("artifact-1", "sha256:" + "e" * 64))), v not in failing
+        )
         for v in (*required, *unrequired)
     )
     state.mkdir(parents=True, exist_ok=True)

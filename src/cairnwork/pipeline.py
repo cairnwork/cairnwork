@@ -68,8 +68,6 @@ class TaskRejected(Exception):
 
 @dataclass(frozen=True)
 class TaskSpec:
-    """One task. P2P is off by default here (a library/drill path, #174); Intake sets it."""
-
     idempotency_key: str
     card_hash: str
     title: str
@@ -83,6 +81,7 @@ class TaskSpec:
     test_roots: tuple[str, ...] = ("tests",)  # state config: where verifiers and tests live
     import_paths: tuple[str, ...] = ()  # state config: dirs prepended to the import path (#82)
     test_store: DeferredStore | None = None  # private bundle store for test_commit (#119)
+    origin_url: str | None = None  # verifier-owned source for deferred test fetches
     p2p_mode: str = DIRECT_MODE  # state config p2p_selection (p2p.py); only with a test_commit
     p2p_budget: int = DEFAULT_BUDGET_SECONDS  # state config p2p_time_budget_seconds
     before_attempt: Callable[[], str] | None = None  # refusal code or ""; asked per attempt
@@ -93,7 +92,8 @@ class TaskSpec:
         # #292: import_paths change what the verifiers import; #303: the declaration's commitment;
         # #322: strict mode, so a strict resend is not answered with a non-strict run
         extra = nonempty_fields(
-            test_commit=self.test_commit, import_paths=list(self.import_paths),
+            test_commit=self.test_commit, origin_url=self.origin_url,
+            import_paths=list(self.import_paths),
             blackbox_commitment=self.blackbox.commitment() if self.blackbox else "",
             require_protection=self.require_protection,
         )  # fmt: skip
