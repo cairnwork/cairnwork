@@ -153,70 +153,85 @@ def test_a_middle_component_swapped_for_a_symlink_changes_no_mode_outside(tmp_pa
     assert stat.S_IMODE((outside / "closed").stat().st_mode) == 0
 
 
-def swap_last_for_link(top: Path, mid: Path, outside: Path, monkeypatch, raise_on: str):
-    """The last component is replaced by a symlink to outside/closed: ``raise_on`` "stat" does it
-    just before the identity check, "chmod" just before the chmod (after the check). Returns the
-    chmod calls made as (name, follow_symlinks)."""
-    real_stat, real_chmod, swapped, chmods = os.stat, os.chmod, [], []
+LINUX = hasattr(os, "O_PATH")  # chmod through the checked handle; macOS chmods the name
 
-    def swap():
+
+def swap_closed(mid: Path, put, monkeypatch, at: str) -> tuple[list[int], list[str]]:
+    """``mid/closed`` is moved aside and ``put(mid / "closed")`` takes its place: ``at`` "check"
+    just before the identity check (the first stat or open of the name by handle), "chmod" just
+    before the chmod (after the check). Returns (swapped, the paths chmodded)."""
+    real_stat, real_open, real_chmod = os.stat, os.open, os.chmod
+    swapped: list[int] = []
+    chmods: list[str] = []
+
+    def swap() -> None:
         if not swapped:
             swapped.append(1)
             (mid / "closed").rename(mid / "closed.real")
-            (mid / "closed").symlink_to(outside / "closed")
+            put(mid / "closed")
 
-    def stat_after_swap(path, *args, **kwargs):
-        if raise_on == "stat" and path == "closed" and kwargs.get("dir_fd") is not None:
-            swap()
-        return real_stat(path, *args, **kwargs)
+    def by_handle(real):
+        def call(path, *args, **kwargs):
+            if at == "check" and path == "closed" and kwargs.get("dir_fd") is not None:
+                swap()
+            return real(path, *args, **kwargs)
+
+        return call
 
     def chmod_recorded(path, mode, *args, **kwargs):
-        chmods.append((path, kwargs.get("follow_symlinks", True)))
-        if raise_on == "chmod":
+        chmods.append(str(path))
+        if at == "chmod":
             swap()
         return real_chmod(path, mode, *args, **kwargs)
 
-    monkeypatch.setattr(os, "stat", stat_after_swap)
+    monkeypatch.setattr(os, "stat", by_handle(real_stat))
+    monkeypatch.setattr(os, "open", by_handle(real_open))
     monkeypatch.setattr(os, "chmod", chmod_recorded)
-    return chmods
+    return swapped, chmods
 
 
 def test_a_last_component_swapped_for_a_symlink_is_refused_before_any_chmod(tmp_path, monkeypatch):
     top, mid, outside = closed_tree(tmp_path)
-    chmods = swap_last_for_link(top, mid, outside, monkeypatch, "stat")
+    swapped, chmods = swap_closed(
+        mid, lambda at: at.symlink_to(outside / "closed"), monkeypatch, "check"
+    )
     with pytest.raises(OSError):
         bytecode_walk.opened(str(mid / "closed"))
-    assert (mid / "closed").is_symlink()  # the swap really happened
-    assert chmods == []  # the identity check stops it; nothing was chmodded, not even the link
+    assert swapped and (mid / "closed").is_symlink()  # the swap really happened
+    assert chmods == []  # nothing was chmodded, not even the link
     assert stat.S_IMODE((outside / "closed").stat().st_mode) == 0
 
 
-def test_a_swap_after_the_identity_check_chmods_without_following_the_link(tmp_path, monkeypatch):
+def test_a_symlink_swapped_in_after_the_check_changes_no_mode_outside(tmp_path, monkeypatch):
     top, mid, outside = closed_tree(tmp_path)
-    chmods = swap_last_for_link(top, mid, outside, monkeypatch, "chmod")
-    try:
+    swapped, chmods = swap_closed(
+        mid, lambda at: at.symlink_to(outside / "closed"), monkeypatch, "chmod"
+    )
+    with pytest.raises(OSError):  # the swapped-in link is not a directory the listing may use
         bytecode_walk.opened(str(mid / "closed"))
-    except OSError:
-        pass  # the swapped-in link is not a directory the listing may use
-    assert (mid / "closed").is_symlink()  # the swap really happened
-    assert chmods and all(call == ("closed", False) for call in chmods)  # by name, nofollow
+    assert swapped and (mid / "closed").is_symlink()
     assert stat.S_IMODE((outside / "closed").stat().st_mode) == 0
+    # The chmod went through the checked handle (Linux) or by name without following (macOS).
+    assert len(chmods) == 1 and (
+        chmods[0].startswith("/proc/self/fd/") if LINUX else chmods[0] == "closed"
+    )
 
 
-@pytest.mark.parametrize("raised", [ValueError, NotImplementedError])
-def test_a_chmod_the_platform_refuses_is_an_error_row_not_a_crash(tmp_path, monkeypatch, raised):
+def test_a_real_directory_swapped_in_after_the_check_is_refused(tmp_path, monkeypatch):
+    """Codex review of #1327: a different real directory renamed in between the identity check and
+    the chmod. Linux chmods the checked inode, so the newcomer keeps its mode; macOS cannot open a
+    closed directory, chmods by name, and refuses the listing when the name is no longer it."""
     top, mid, _ = closed_tree(tmp_path)
-    calls = []
-
-    def refuse(path, mode, *args, **kwargs):
-        calls.append(path)
-        raise raised("chmod: cannot use dir_fd and follow_symlinks together")
-
-    monkeypatch.setattr(os, "chmod", refuse)
-    with pytest.raises(OSError):  # the caller (list_roots) turns it into an error row
+    (mid / "newcomer").mkdir(mode=0)
+    swapped, chmods = swap_closed(mid, (mid / "newcomer").rename, monkeypatch, "chmod")
+    with pytest.raises(OSError):
         bytecode_walk.opened(str(mid / "closed"))
-    assert calls == ["closed"]  # tried once, by name; no path chmod follows
-    assert stat.S_IMODE((mid / "closed").stat().st_mode) == 0
+    assert swapped and not (mid / "newcomer").exists() and (mid / "closed").is_dir()
+    assert len(chmods) == 1
+    if LINUX:
+        assert stat.S_IMODE((mid / "closed").stat().st_mode) == 0  # the newcomer is untouched
+        assert stat.S_IMODE((mid / "closed.real").stat().st_mode) == 0o700  # the checked one
+    (mid / "closed").chmod(0o700)  # let tmp_path cleanup in
 
 
 @pytest.mark.parametrize("ancestor", [0o311, 0o111, 0o755])

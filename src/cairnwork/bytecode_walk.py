@@ -50,7 +50,8 @@ from collections import deque
 
 MAX_PATH = 4096  # Linux PATH_MAX (macOS: 1024): no longer path can be opened
 NOFOLLOW = {"follow_symlinks": False} if os.chmod in os.supports_follow_symlinks else {}
-SEARCH = getattr(os, "O_SEARCH", 0) or getattr(os, "O_PATH", 0)  # needs only x on a directory
+HANDLE = getattr(os, "O_PATH", 0)  # Linux: a directory handle that needs nothing of the directory
+SEARCH = getattr(os, "O_SEARCH", 0) or HANDLE  # needs only x on a directory
 MAGIC = importlib.util.MAGIC_NUMBER
 
 
@@ -83,22 +84,25 @@ def bytecode(name, fd):
 
 
 def open_mode(path, want, info):
-    """Set ``path``'s mode via its parent's search-only handle (ancestors resolve as a path does,
-    the inode must still be ``info``'s), else by path as before. A refusal is an OSError."""
+    """Chmod directory ``path`` (``info``'s inode; else OSError) from its parent's handle: on Linux
+    the checked O_PATH handle's inode, elsewhere the name, unfollowed, checked before and after."""
     head, name = os.path.split(path)
     if not SEARCH:
-        os.chmod(path, want, **NOFOLLOW)
-        return
-    parent = os.open(head or ".", SEARCH | os.O_DIRECTORY)  # needs x on the ancestors, not r
+        return os.chmod(path, want, **NOFOLLOW)
+
+    def stale():  # what the chmod reaches is not, or no longer, ``info``'s directory
+        return ident(os.stat(name, **here)) != ident(info)
+
+    fds = [os.open(head or ".", SEARCH | os.O_DIRECTORY)]  # needs x on the ancestors, not r
     try:
-        if ident(os.stat(name, dir_fd=parent, follow_symlinks=False)) != ident(info):
+        here = {"dir_fd": fds[0], "follow_symlinks": False}
+        if HANDLE:  # macOS has none and cannot open a closed directory
+            fds.append(os.open(name, HANDLE | os.O_NOFOLLOW | os.O_DIRECTORY, dir_fd=fds[0]))
+            name, here = f"/proc/self/fd/{fds[1]}", {}
+        if stale() or os.chmod(name, want, **here) or stale():
             raise OSError(errno.ESTALE, "replaced while listed")
-        try:
-            os.chmod(name, want, dir_fd=parent, follow_symlinks=False)
-        except (ValueError, NotImplementedError) as exc:  # dir_fd without nofollow (Linux)
-            raise OSError(errno.ENOSYS, f"no chmod by handle: {exc}") from exc
     finally:
-        os.close(parent)
+        list(map(os.close, fds))
 
 
 def opened(path):
