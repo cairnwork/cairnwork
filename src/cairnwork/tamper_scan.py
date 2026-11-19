@@ -25,7 +25,6 @@ identifiers in NFKC form, so each piece is also matched with them in that form (
 source encoding other than UTF-8 declared on line 1 or 2 is refused (``source_encoding``), as is an
 over-long added line, unread (``long_line``), and a patch past its scan budget (``scan_budget``,
 tamper_scan_budget.py); each fails closed with a dedicated reason.
-
 To keep honest code out of the net (#221): a line that starts with ``#`` and holds no code for
 Python (only a comment or plain string text) is skipped; the ``sys.modules`` write rule applies in
 full only to test code (``conftest.py``, ``test_*.py``, ``*_test.py`` and files under a
@@ -72,6 +71,7 @@ from cairnwork.tamper_scan_pytest import (
     PYTEST_PUBLIC_PATCH,
 )
 from cairnwork.tamper_scan_tokens import added_file, file_views, views_trusted
+from cairnwork.textclean import shown
 
 CODE = "VERIFIER_TAMPER_API"
 
@@ -263,7 +263,7 @@ class Finding:
 
     def __str__(self) -> str:
         where = f"{self.path}:{self.line}" if self.line else self.path  # no line: a whole file
-        return f"{where} [{self.rule}]"
+        return shown(f"{where} [{self.rule}]")  # #1352
 
 
 def scan_added_lines(
