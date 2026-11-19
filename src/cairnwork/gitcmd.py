@@ -283,6 +283,7 @@ def _child_env() -> dict[str, str]:
     }
     env["GIT_TERMINAL_PROMPT"] = "0"
     env["GIT_ALLOW_PROTOCOL"] = ALLOWED_PROTOCOLS
+    env["GIT_NO_LAZY_FETCH"] = "1"  # #489: no lazy fetch in a partial clone
     return env
 
 
