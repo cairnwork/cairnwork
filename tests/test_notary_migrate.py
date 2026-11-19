@@ -4,9 +4,9 @@ import hashlib
 import json
 import sqlite3
 import subprocess
-import sys
 
 import pytest
+from _child_python import run_module
 from test_deferred_tests import CHECK, REGRESSION, make_test_commit
 from test_notary import notarize
 from verify_helpers import FIX, candidate, cli, make_mirror, verify
@@ -219,7 +219,7 @@ def test_the_refusal_leaves_an_empty_notary_file_unwritten(tmp_path):
 def test_route_reports_an_older_notary_as_refused(state):
     old_notary(state / "notary.sqlite", 2)
     done = subprocess.run(
-        [sys.executable, "-I", "-m", "cairnwork.route", "--state", str(state), "recover"],
+        run_module("cairnwork.route") + ["--state", str(state), "recover"],
         capture_output=True, text=True, timeout=120, check=False,
     )  # fmt: skip
     assert done.returncode == 2 and json.loads(done.stdout)["error"] == "NOTARY_SCHEMA_OLDER"

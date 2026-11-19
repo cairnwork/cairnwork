@@ -41,7 +41,7 @@ from cairnwork.deferred_tests import (
     test_paths,
     untargeted,
 )
-from cairnwork.node_ids import show, unmatched_note
+from cairnwork.node_ids import show, unmatched_note, without_case
 from cairnwork.p2p import P2PPlan, run_plan
 from cairnwork.p2p_nodes import clean
 from cairnwork.pytest_config import PytestConfigError, gate_import_paths, test_file_rule
@@ -112,7 +112,7 @@ def tests_with_teeth(
     (DEFERRED_TESTS_NOT_RUN, #660), and BaseUncomparable when the base cannot tell (#234).
     Callers judging a candidate pass it, so its paths meet the fetched tests (#386)."""
     check_roots_on_base(task.repo, task.base_commit, task.test_roots)  # before any base run
-    ensure_test_commit(task.repo, task.test_commit, task.test_store)
+    ensure_test_commit(task.repo, task.test_commit, task.test_store, origin_url=task.origin_url)
     if candidate is not None:
         _sealing_with_tests(task, ctx, candidate)
     paths, deleted = test_paths(task.repo, task.base_commit, task.test_commit, task.test_roots)
@@ -194,12 +194,12 @@ def _check_seed_replay(ctx, result, runs, targets, base, test_commit, is_test) -
 
 def _failed_targets(runs, targets: frozenset[str]) -> frozenset[str]:
     """Failed full node IDs whose unparameterized target is in the deferred test set."""
-    target_prefixes = {target.split("[", 1)[0] for target in targets}
+    target_prefixes = {without_case(target) for target in targets}
     return frozenset(
         node
         for run in runs
         for node, outcome in run.outcomes.items()
-        if outcome == "failed" and node.split("[", 1)[0] in target_prefixes
+        if outcome == "failed" and without_case(node) in target_prefixes
     )
 
 
@@ -256,10 +256,10 @@ def judge_candidate(
     checks, subject, bb_logs = (), binding["head"] if binding else judged, []
     declared = task.blackbox.checks if task.blackbox is not None else ()
     if task.blackbox is not None:  # #303: each check is one more observation Core requires;
-        # it runs the candidate alone, without deferred tests that could hold the answers, and
-        # before any other run of the candidate in this verify (#311: nothing the candidate saw in
-        # a pytest phase of this verify can be waiting for it there)
-        checks, log = judge_blackbox(task.blackbox, ctx, subject, f"{result.attempt_id}-v")
+        # it runs the candidate alone and first in this verify, so no deferred test or pytest phase
+        # can hold the answers (#311); strict mode runs a declaration at most once (#1353)
+        bb_run, strict = f"{result.attempt_id}-v", bool(task.require_protection)
+        checks, log = judge_blackbox(task.blackbox, ctx, subject, bb_run, strict=strict)
         bb_logs = [str(log)] if log else []
     # #803: no candidate code ran as the account before this run unless a blackbox run (verify
     # only, which judges any account error the same) came first: then a refusal is a plain error

@@ -3,22 +3,95 @@ applies to its own worker's output, without a worker and without a ledger record
 
 import json
 import subprocess
-import sys
-from typing import Any
+from typing import Any, cast
 
 import pytest
+from _child_python import run_module
 from conftest import commit_change, git
 from core_http_server import core_http_server
 from test_deferred_tests import CHECK, REGRESSION, make_test_commit
 from verify_helpers import FIX, base_of, candidate, has_object, verify
 
 from cairnwork import p2p_selection
+from cairnwork import verify_candidate as verify_module
+from cairnwork.gitcmd import GitCommandError
 from cairnwork.intake import Intake
 from cairnwork.ownership import OwnershipLedger
 from cairnwork.pipeline import TaskRejected
+from cairnwork.textclean import shown
 from cairnwork.verify_candidate import verify_candidate
 
 sandbox = pytest.mark.sandbox
+HIDDEN = ["a\u202eb", "a\nb", "a\x1b[31mb"]
+
+
+def _raise_git_error(detail):
+    def raise_error(*_args, **_kwargs):
+        raise GitCommandError(detail)
+
+    return raise_error
+
+
+@pytest.mark.parametrize("text", HIDDEN)
+def test_scratch_git_error_shows_exception_safely(monkeypatch, tmp_path, text):
+    monkeypatch.setattr(verify_module, "run_git", _raise_git_error(text))
+    with pytest.raises(verify_module.WorkspaceError) as info:
+        with verify_module._scratch(
+            verify_module.Intake(tmp_path),
+            tmp_path,
+            tmp_path,
+            cast(Any, type("Task", (), {"base_commit": "b" * 40})()),
+            "c" * 40,
+            "scratch",
+        ):
+            pass
+    message = str(info.value)
+    assert "\\u202e" in message or "\\x0a" in message or "\\x1b" in message
+    assert "\n" not in message and "\x1b" not in message and "\u202e" not in message
+
+
+@pytest.mark.parametrize("text", HIDDEN)
+def test_check_parent_git_error_shows_candidate_repo_and_exception(monkeypatch, tmp_path, text):
+    monkeypatch.setattr(verify_module, "run_git", _raise_git_error(text))
+    with pytest.raises(verify_module.WorkspaceError) as info:
+        verify_module._check_parent(tmp_path, "b" * 40, "safe-candidate")
+    message = str(info.value)
+    assert "\\u202e" in message or "\\x0a" in message or "\\x1b" in message or "\\\\n" in message
+    assert "\n" not in message and "\x1b" not in message and "\u202e" not in message
+
+
+@pytest.mark.parametrize("text", HIDDEN)
+def test_check_parent_rejection_shows_candidate_and_parent_list(monkeypatch, tmp_path, text):
+    monkeypatch.setattr(
+        verify_module, "run_git", lambda *_args, **_kwargs: f"safe-candidate {text}\n"
+    )
+    with pytest.raises(verify_module.CandidateRejected) as info:
+        verify_module._check_parent(tmp_path, "b" * 40, "safe-candidate")
+    parents = f"safe-candidate {text}\n".split()[1:]
+    expected = (
+        f"NOT_ONE_COMMIT_ON_BASE: parents of 'safe-candidate' are {', '.join(map(shown, parents))}"
+    )
+    assert str(info.value) == expected  # one escape per parent, not a list repr
+
+
+@pytest.mark.parametrize("text", HIDDEN)
+def test_check_parent_error_shows_repo_path(monkeypatch, tmp_path, text):
+    monkeypatch.setattr(verify_module, "run_git", _raise_git_error("safe error"))
+    with pytest.raises(verify_module.WorkspaceError) as info:
+        verify_module._check_parent(tmp_path / text, "b" * 40, "safe-candidate")
+    message = str(info.value)
+    assert "\\u202e" in message or "\\x0a" in message or "\\x1b" in message
+    assert "\n" not in message and "\x1b" not in message and "\u202e" not in message
+
+
+@pytest.mark.parametrize("text", HIDDEN)
+def test_check_parent_error_shows_candidate(monkeypatch, tmp_path, text):
+    monkeypatch.setattr(verify_module, "run_git", _raise_git_error("safe error"))
+    with pytest.raises(verify_module.WorkspaceError) as info:
+        verify_module._check_parent(tmp_path, "b" * 40, text)
+    message = str(info.value)
+    assert "\\u202e" in message or "\\x0a" in message or "\\x1b" in message
+    assert "\n" not in message and "\x1b" not in message and "\u202e" not in message
 
 
 def no_ledger_trace(state):
@@ -37,7 +110,7 @@ def test_a_correct_candidate_is_verified_and_leaves_no_task_behind(project, stat
     assert out["core_status"] == "VERIFIED" and out["reason"] == "CORE_VERIFIED"
     no_ledger_trace(state)
     route = subprocess.run(
-        [sys.executable, "-I", "-m", "cairnwork.route", "--state", str(state), "in-flight"],
+        run_module("cairnwork.route") + ["--state", str(state), "in-flight"],
         capture_output=True, text=True, check=True,
     )  # fmt: skip
     assert json.loads(route.stdout)["count"] == 0
@@ -89,7 +162,7 @@ def test_malformed_input_is_a_usage_error_or_a_refusal(project, state):
     code, out = verify(state, project, base, cand, allowed=("tests/test_calc.py",))
     assert code == 2 and out["error"] == "PROTECTED_VERIFIER_INPUT"
     done = subprocess.run(
-        [sys.executable, "-I", "-m", "cairnwork.verify_cli", "--state", str(state), "run"],
+        run_module("cairnwork.verify_cli") + ["--state", str(state), "run"],
         capture_output=True, text=True, check=False,
     )  # fmt: skip
     assert done.returncode == 3 and json.loads(done.stdout)["error"] == "USAGE"
@@ -208,3 +281,54 @@ def test_a_task_naming_a_reserved_p2p_verifier_id_is_refused(state, project, mod
             allowed_files=("src/calc.py",), verifiers=(("pytest", argv), (vid, argv)),
         )  # fmt: skip
     assert got.value.code == "BAD_VERIFIER" and vid in str(got.value)
+
+
+@pytest.mark.parametrize("text", HIDDEN)
+def test_check_parent_rejection_shows_hidden_candidate_name(monkeypatch, tmp_path, text):
+    monkeypatch.setattr(verify_module, "run_git", lambda *_args, **_kwargs: "x y\n")
+    with pytest.raises(verify_module.CandidateRejected) as info:
+        verify_module._check_parent(tmp_path, "b" * 40, text)
+    message = str(info.value)
+    assert "\n" not in message and "\x1b" not in message and "\u202e" not in message
+
+
+@pytest.mark.parametrize(
+    "bad", ["HEAD", "main", "--output=x", "abc1234", "a" * 39 + " ", "a" * 40 + "\n"]
+)
+def test_import_paths_with_a_non_hex_base_is_bad_base_and_never_reaches_git(
+    state, project, monkeypatch, bad
+):
+    import cairnwork.import_path_tree as tree
+
+    def boom(*args, **kwargs):
+        raise AssertionError("git called before the base was validated")
+
+    monkeypatch.setattr(tree, "run_git", boom)
+    with pytest.raises(TaskRejected) as got:
+        verify_candidate(
+            Intake(state), repo=project, base=bad, candidate="1" * 40,
+            allowed_files=("src/calc.py",), verifiers=(("pytest", ("python3", "-m", "pytest")),),
+            import_paths=("src",),
+        )  # fmt: skip
+    assert got.value.code == "BAD_BASE"
+
+
+def test_import_paths_with_a_real_base_still_reaches_the_tree_check(state, project):
+    with pytest.raises(TaskRejected) as got:
+        verify_candidate(
+            Intake(state), repo=project, base=base_of(project), candidate="1" * 40,
+            allowed_files=("src/calc.py",), verifiers=(("pytest", ("python3", "-m", "pytest")),),
+            import_paths=("tests",),
+        )  # fmt: skip
+    assert got.value.code == "BAD_IMPORT_PATH"
+
+
+@pytest.mark.parametrize("bad", [None, 123, b"a" * 40])
+def test_import_paths_with_a_non_string_base_is_bad_base(state, project, bad):
+    with pytest.raises(TaskRejected) as got:
+        verify_candidate(
+            Intake(state), repo=project, base=bad, candidate="1" * 40,
+            allowed_files=("src/calc.py",), verifiers=(("pytest", ("python3", "-m", "pytest")),),
+            import_paths=("src",),
+        )  # fmt: skip
+    assert got.value.code == "BAD_BASE"

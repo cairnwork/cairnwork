@@ -16,6 +16,9 @@ class FakeAccount:
     def require_idle(self):
         self.idle_calls += 1
 
+    def scrub_stale_runs(self):
+        pass
+
 
 def _batch(tmp_path, account=None):
     ctx: Any = SimpleNamespace(
@@ -92,3 +95,42 @@ def test_blackbox_leftover_work_directory_is_workspace_error(tmp_path):
     (tmp_path / "run-vbb.work").mkdir()
     with pytest.raises(WorkspaceError, match="leftover work directory"):
         blackbox_exec._run(None, "c", "run", 1, (), ctx, "/usr/bin/python3")
+
+
+class _ScrubAccount(FakeAccount):
+    """Refuses at the Nth scrub, as a real account does when a closed run's run/ is still there."""
+
+    def __init__(self, run_root, refuse_at):
+        super().__init__(run_root)
+        self.scrub_calls = 0
+        self.refuse_at = refuse_at
+
+    def scrub_stale_runs(self):
+        self.scrub_calls += 1
+        if self.scrub_calls == self.refuse_at:
+            from cairnwork.verifier_account import VerifierAccountError
+
+            raise VerifierAccountError("private/run left behind")
+
+
+def test_account_leftover_run_after_a_spec_stops_the_remaining_specs(tmp_path, monkeypatch):
+    """#437 D: v0's run/ still there after close_private: v1 and v2 never start."""
+    from cairnwork.verifier_account import VerifierAccountError
+
+    _stub_run(monkeypatch)
+    account = _ScrubAccount(tmp_path, refuse_at=1)
+    started = []
+    monkeypatch.setattr(
+        verifiers, "_run_one", lambda batch, spec, checkout: started.append(spec.verifier_id)
+    )
+    with pytest.raises(VerifierAccountError, match="left behind"):
+        verifiers._run_all(_batch(tmp_path, account), _specs(3), "run")
+    assert started == ["v0"]
+    assert account.idle_calls == 1  # idle first, then the scrub, then nothing else
+
+
+def test_account_scrub_runs_between_specs_only(tmp_path, monkeypatch):
+    _stub_run(monkeypatch)
+    account = _ScrubAccount(tmp_path, refuse_at=0)
+    verifiers._run_all(_batch(tmp_path, account), _specs(3), "run")
+    assert account.scrub_calls == 2  # before v1 and v2, not before v0 (the prelude did that)

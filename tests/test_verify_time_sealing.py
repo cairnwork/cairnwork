@@ -10,7 +10,7 @@ and the verify path (verify_cli run --test-commit), which share the check in tes
 import json
 
 import pytest
-from conftest import commit_change
+from conftest import commit_change, git
 from test_deferred_tests import make_test_commit
 from test_pipeline import EditWorker
 from verify_helpers import candidate, verify
@@ -50,7 +50,8 @@ def _run(repo, tmp_path, test, edit, key):
     state = tmp_path / key
     state.mkdir()
     task = TaskSpec(key, "card-" + key, "fix half", "half() is wrong", repo, base, ALLOWED, VERIFY,
-                    test_commit=tests, test_roots=("pkg/tests",))  # fmt: skip
+                    test_commit=tests, test_roots=("pkg/tests",),
+                    origin_url=git(repo, "remote", "get-url", "origin"))  # fmt: skip
     result = run_task(
         task,
         ledger=OwnershipLedger(state / "own.sqlite"),

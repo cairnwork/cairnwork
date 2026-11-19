@@ -28,6 +28,7 @@ ENV_SOURCE = (
     + """\
 import re
 import subprocess
+from _pytest._code.code import ExceptionInfo
 
 _ENV_TEXT = re.compile(
     rb"not found|permission denied|operation not permitted|cannot allocate memory", re.I
@@ -55,12 +56,20 @@ def _env_exc(info, root, _denied=_denied_inside, _type=type, _base=BaseException
     # failed from the environment. Read through type() and the built-in descriptors, so a test's
     # exception class (properties, __eq__) runs no code here; an AssertionError is not walked;
     # a cycle ends the walk; an unreadable chain or one past the bound is an environment failure
-    # (fail closed).
+    # (fail closed). #1308: only an exact ExceptionInfo is read (its _excinfo tuple, never
+    # .value); None is no exception, any other object is unreadable (fail closed).
     try:
-        exc = top = getattr(info, "value", None)
+        if info is None:
+            return False
+        if _type(info) is not ExceptionInfo:
+            return True
+        fields = info._excinfo
+        if _type(fields) is not tuple or len(fields) != 3:
+            return True
+        exc = top = fields[1]
         if not _sub(_type(exc), _base):
             return False
-        if isinstance(exc, OSError):
+        if _sub(_type(exc), OSError):  # the real class, not exc.__class__
             return True
         if _sub(_type(exc), AssertionError):
             return _denied(exc)
@@ -83,7 +92,8 @@ def _env_exc(info, root, _denied=_denied_inside, _type=type, _base=BaseException
 
 
 def is_env_failure(info: Any, root: Any) -> bool:
-    """The plugin's ``_env_exc`` for a pytest ExceptionInfo (anything with ``.value``)."""
+    """The plugin's ``_env_exc`` for an exact pytest ExceptionInfo (#1308: any other object is
+    refused as unreadable, so True)."""
     namespace: dict[str, Any] = {"errno": errno, "os": os, "socket": socket, "sys": sys}
     exec(ENV_SOURCE, namespace)
     return bool(namespace["_env_exc"](info, root))

@@ -1,0 +1,151 @@
+# Runs from the default branch. The PR head is checked out as data only and is never imported
+# or executed. The script, pin table and approver list come only from the trusted tree. The
+# publish job has statuses:write and never touches PR content. This is report-only, not a
+# required check, until the owner adds it. A same-repository PR can add its own workflow posting
+# a fake status. Edited approval comments are ignored.
+name: pin-guard-trusted
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited]
+    branches: [main]
+  issue_comment:
+    types: [created, edited, deleted]
+
+concurrency:
+  group: pin-guard-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  analyze:
+    if: github.event_name != 'issue_comment' || github.event.issue.pull_request
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    outputs:
+      gate_rc: ${{ steps.gate.outputs.gate_rc }}
+      head_sha: ${{ steps.refs.outputs.head_sha }}
+      head_repo: ${{ steps.refs.outputs.head_repo }}
+    steps:
+      - name: Trusted tree (default branch)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: trusted
+          persist-credentials: false
+      - name: Resolve pull request refs
+        id: refs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          if [ "$EVENT_NAME" = "issue_comment" ]; then
+            pr=$(gh api "repos/${REPO}/pulls/${EVENT_NUMBER}")
+            base_sha=$(printf '%s' "$pr" | jq -r .base.sha)
+            head_sha=$(printf '%s' "$pr" | jq -r .head.sha)
+            head_repo=$(printf '%s' "$pr" | jq -r .head.repo.full_name)
+          else
+            base_sha="$EVENT_BASE_SHA"
+            head_sha="$EVENT_HEAD_SHA"
+            head_repo="$EVENT_HEAD_REPO"
+          fi
+          echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+          echo "head_repo=$head_repo" >> "$GITHUB_OUTPUT"
+      - name: PR head (data only)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ steps.refs.outputs.head_sha }}
+          repository: ${{ steps.refs.outputs.head_repo }}
+          path: head
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Read approval comments
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: gh api --paginate "repos/${REPO}/issues/${EVENT_NUMBER}/comments" | jq -s 'add' > "$RUNNER_TEMP/comments.json"
+      - name: Run trusted pin guard
+        id: gate
+        env:
+          BASE_SHA: ${{ steps.refs.outputs.base_sha }}
+          BASE_REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          HEAD_SHA: ${{ steps.refs.outputs.head_sha }}
+          COMMENTS: ${{ runner.temp }}/comments.json
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          rc=0
+          if ! git -C head cat-file -e "${BASE_SHA}^{commit}"; then
+            git -C head fetch -q --no-tags "$BASE_REPO_URL" "$BASE_SHA" || true
+          fi
+          python3 -I trusted/scripts/ci/pin_guard.py --trusted trusted --head head \
+            --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA" --comments "$COMMENTS" || rc=$?
+          echo "gate_rc=$rc" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: analyze
+    if: always() && (github.event_name != 'issue_comment' || github.event.issue.pull_request) && needs.analyze.result != 'cancelled' && needs.analyze.outputs.head_sha != ''
+    runs-on: ubuntu-latest
+    # Issue #1444: the App key lives only in this environment, whose branch policy allows main
+    # only; pull_request_target and issue_comment both run with GITHUB_REF on main.
+    environment: trusted-checks
+    permissions:
+      contents: read
+      statuses: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Map fixed status
+        id: verdict
+        env:
+          PIN_GUARD_JOB_RESULT: ${{ needs.analyze.result }}
+          PIN_GUARD_RC: ${{ needs.analyze.outputs.gate_rc }}
+        run: python3 scripts/ci/pin_guard_status.py
+      - name: Post commit status on the PR head
+        # Legacy path; an admin sets TRUSTED_CHECKS_LEGACY_STATUS=off when the ruleset is bound to
+        # the App (Issue #1444), and back on to roll back.
+        if: vars.TRUSTED_CHECKS_LEGACY_STATUS != 'off'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ needs.analyze.outputs.head_sha }}
+          STATE: ${{ steps.verdict.outputs.state }}
+          DESCRIPTION: ${{ steps.verdict.outputs.description }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh api "repos/${REPO}/statuses/${HEAD_SHA}" \
+            -f state="$STATE" -f context="pin guard (trusted)" \
+            -f description="$DESCRIPTION" -f target_url="$RUN_URL"
+      - name: App token (checks:write only)
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.TRUSTED_CHECKS_CLIENT_ID }}
+          private-key: ${{ secrets.TRUSTED_CHECKS_PRIVATE_KEY }}
+          permission-checks: write
+      - name: Post check run on the PR head as the App
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ needs.analyze.outputs.head_sha }}
+          STATE: ${{ steps.verdict.outputs.state }}
+          DESCRIPTION: ${{ steps.verdict.outputs.description }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          printf '%s' "$HEAD_SHA" | grep -Eqx '[0-9a-f]{40}' || { echo "bad head sha"; exit 1; }
+          conclusion=failure
+          if [ "$STATE" = "success" ]; then conclusion=success; fi
+          gh api "repos/${REPO}/check-runs" \
+            -f name="pin guard (trusted)" -f head_sha="$HEAD_SHA" \
+            -f status=completed -f conclusion="$conclusion" -f details_url="$RUN_URL" \
+            -f "output[title]=$DESCRIPTION" -f "output[summary]=$DESCRIPTION"

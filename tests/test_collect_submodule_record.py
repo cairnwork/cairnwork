@@ -230,6 +230,8 @@ def test_a_base_exception_while_reading_the_traceback_records_nothing(tmp_path):
     done, verdict = _run(tmp_path, {**PKG, NODE: body})
     _unchanged(done, verdict)
     assert verdict.submodule_errors == ()
-    calm = body.replace("raise SystemExit(5)", "pass")  # the catch is what held
+    # #1008: a str-subclass file name is refused by the exact-type check, so even the harmless
+    # variant records nothing (its startswith never runs); a real file name is an exact str.
+    calm = body.replace("raise SystemExit(5)", "pass")
     done, verdict = _run(tmp_path / "again", {**PKG, NODE: calm})
-    assert verdict.submodule_errors == WANT
+    assert verdict.submodule_errors == ()

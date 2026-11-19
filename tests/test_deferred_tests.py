@@ -59,9 +59,14 @@ def make_test_commit(project, files, delete=()):
     return base, test_commit
 
 
+def _origin(project):
+    return git(project, "remote", "get-url", "origin").strip()
+
+
 def run(project, tmp_path, base, test_commit, worker, verifiers=CHECK, key="k1", **task_kw):
     state = tmp_path / "state"
     state.mkdir(exist_ok=True)
+    task_kw.setdefault("origin_url", _origin(project))
     task = TaskSpec(key, "card-" + key, "fix add", "add() is off by one", project, base,
                     ("src/calc.py",), verifiers, test_commit=test_commit, **task_kw)  # fmt: skip
     return run_task(
@@ -140,7 +145,7 @@ def test_deleting_an_untargetable_python_file_is_allowed(project):
     base, test_commit = make_test_commit(
         project, {"tests/test_regression.py": REGRESSION}, delete=("tests/legacy/old.helpers.py",)
     )
-    dt.ensure_test_commit(project, test_commit)
+    dt.ensure_test_commit(project, test_commit, origin_url=_origin(project))
     paths, deleted = dt.test_paths(project, base, test_commit)
     assert paths == ("tests/test_regression.py",)
     assert deleted == ("tests/legacy/old.helpers.py",)
@@ -150,7 +155,7 @@ def test_adding_an_untargetable_python_file_is_refused(project):
     base, test_commit = make_test_commit(
         project, {"tests/legacy/old.helpers.py": "def helper():\n    pass\n"}
     )
-    dt.ensure_test_commit(project, test_commit)
+    dt.ensure_test_commit(project, test_commit, origin_url=_origin(project))
     with pytest.raises(dt.TestCommitRejected, match="no verifier target can name") as err:
         dt.test_paths(project, base, test_commit)
     assert err.value.code == "TEST_COMMIT_SCOPE"
@@ -336,7 +341,7 @@ def test_ast_recursion_error_is_a_test_commit_refusal(project, monkeypatch, exc)
     base, test_commit = make_test_commit(
         project, {"tests/test_regression.py": "def test_x(): pass\n"}
     )
-    dt.ensure_test_commit(project, test_commit)
+    dt.ensure_test_commit(project, test_commit, origin_url=_origin(project))
     blob = git(project, "rev-parse", f"{test_commit}:tests/test_regression.py")
 
     def deep(source):

@@ -8,7 +8,7 @@ from test_deferred_store import store as store  # noqa: F401 - fixture
 from test_deferred_tests import REGRESSION
 from test_deferred_tests import project as project  # noqa: F401 - fixture
 
-from cairnwork import deferred_store
+from cairnwork import deferred_store, gitcmd
 from cairnwork.deferred_tests import TestCommitRejected
 from cairnwork.gitcmd import GitCommandError
 
@@ -81,15 +81,15 @@ def test_git_launch_failure_remains_oserror(project, store, tmp_path, monkeypatc
 
 def test_host_mirror_timeout_remains_oserror(project, store, tmp_path, monkeypatch):
     _base, _sha, bundle = make_bundle(project, {"tests/test_regression.py": REGRESSION}, tmp_path)
-    real_run_git = deferred_store.run_git
+    real_run_git = gitcmd.run_git
 
     def fake_run_git(repo, *args, **kwargs):
-        if repo == project and args and args[0] == "cat-file" and "-e" in args:
-            cause = subprocess.TimeoutExpired(cmd=["git", "cat-file"], timeout=60)
-            raise GitCommandError("git cat-file failed: timeout") from cause
+        if repo == project and args and args[0] == "rev-parse" and "--verify" in args:
+            cause = subprocess.TimeoutExpired(cmd=["git", "rev-parse"], timeout=60)
+            raise GitCommandError("git rev-parse failed: timeout") from cause
         return real_run_git(repo, *args, **kwargs)
 
-    monkeypatch.setattr(deferred_store, "run_git", fake_run_git)
+    monkeypatch.setattr(gitcmd, "run_git", fake_run_git)
     with pytest.raises(OSError) as err:
         store.import_bundle(project, bundle, used_dir(store))
     assert not isinstance(err.value, TestCommitRejected)

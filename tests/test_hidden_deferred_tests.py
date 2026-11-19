@@ -10,7 +10,7 @@ tests. An unchanged hidden test on the base, a ``test*`` defined inside a functi
 import ast
 
 import pytest
-from conftest import commit_change
+from conftest import commit_change, git
 from test_deferred_tests import REGRESSION, make_test_commit
 from verify_helpers import FIX, candidate, verify
 
@@ -55,7 +55,7 @@ NOT_HIDDEN = (  # a literal value, a framework's TestCase base, a module: none h
 
 def _new_tests(project, files):
     base, test_commit = make_test_commit(project, files)
-    ensure_test_commit(project, test_commit)
+    ensure_test_commit(project, test_commit, origin_url=git(project, "remote", "get-url", "origin"))
     return new_tests(project, base, test_commit, tuple(files))
 
 

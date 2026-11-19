@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from conftest import git
 from test_deferred_tests import make_test_commit
 from test_uncomparable_paths import _run, run_cli
 from verify_helpers import FIX, candidate, verify
@@ -165,8 +166,10 @@ def test_the_continue_flag_is_set_on_base_specs_and_never_on_collect_only(projec
 
     monkeypatch.setattr(pipeline_judge, "run_verifiers", fake)
     base, commit = make_test_commit(project, {FILE: AT_MODULE})
+    origin = git(project, "remote", "get-url", "origin")
     task = type("T", (), dict(repo=project, base_commit=base, test_commit=commit,
-                              test_roots=("tests",), test_store=None))()  # fmt: skip
+                              test_roots=("tests",), test_store=None,
+                              origin_url=origin))()  # fmt: skip
     specs = (VerifierSpec("a", (FILE,)), VerifierSpec("c", (FILE,), collect_only=True))
     ctx = VerifyContext(project, project, attempt_id="x", hash_seed="1")
     result = type("R", (), dict(attempt_id="x", logs=[]))()

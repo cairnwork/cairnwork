@@ -52,7 +52,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from cairnwork.run_tree import _private_name, _real_dir, run_tree_ok, seal_private
+from cairnwork.run_tree import _private_name, _real_dir, root_problem, run_tree_ok, seal_private
 
 
 def _shown(path: Path) -> str:
@@ -239,8 +239,14 @@ def _recovery_steps(user: str, python: str, run: Path, private: Path) -> str:
     return "; ".join(steps)
 
 
-def _hint(user: str, python: str, path: Path) -> str:
-    """Recovery while ``private`` is still group-traversable (0750). Not for the run root itself."""
+def _hint(user: str, python: str, path: Path, root: Path | None = None) -> str:
+    """Recovery while ``private`` is 0750. A ``run`` directly in the run root is no private/run."""
+    if root is not None and path.parent == root and path.name == "run":
+        return (
+            f"{_shown(path)} sits directly in the run root. Check it without following links: "
+            f"ls -ld {shlex.quote(str(path))}. If a symlink, unlink that symlink only; "
+            f"never chmod the root."
+        )
     private = path.parent if path.name == "run" else path
     run = private / "run"
     q_run, q_priv = shlex.quote(str(run)), shlex.quote(str(private))
@@ -356,7 +362,7 @@ def _seal(private: Path, root: Path, stuck: list[Path]) -> None:
 def _refuse(account, stuck: list[Path]) -> str:
     shown = ", ".join(_shown(path) for path in stuck[:8])
     extra = f" (+{len(stuck) - 8} more)" if len(stuck) > 8 else ""
-    return f"{shown}{extra}. {_hint(account.user, account.python, stuck[0])}"
+    return f"{shown}{extra}. {_hint(account.user, account.python, stuck[0], account.run_root)}"
 
 
 def stale_run_error(account) -> str | None:
@@ -383,6 +389,8 @@ def stale_run_error(account) -> str | None:
             f"following links: ls -ld {shown}. If it is a symlink, unlink it only and do not "
             f"remove its target."
         )
+    if (problem := root_problem(root)) is not None:
+        return f"{_shown(root)} {problem}. The owner must fix it: ls -ld {shlex.quote(str(root))}"
     stuck: list[Path] = []
     for name in names:
         if name.endswith(".work"):

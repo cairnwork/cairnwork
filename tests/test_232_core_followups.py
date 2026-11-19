@@ -6,7 +6,7 @@ import subprocess
 
 import pytest
 from test_deferred_tests import CHECK, REGRESSION, make_test_commit
-from verify_helpers import FIX, candidate
+from verify_helpers import FIX, candidate, configure_origin
 
 from cairnwork.diffcheck import _known_kind, diff_check_detail
 from cairnwork.intake import Intake
@@ -22,6 +22,7 @@ def test_verify_candidate_bound_head_verdict(
 ) -> None:
     # #232: verify_candidate queries notary verdict with binding["head"] instead of judged commit
     base, test_commit = make_test_commit(project, {"tests/test_regression.py": REGRESSION})
+    configure_origin(state, project)
     cand = candidate(project, base, {"src/calc.py": FIX})
     verifier = tuple(CHECK[0][1])
 

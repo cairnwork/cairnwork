@@ -89,3 +89,106 @@ def test_nested_nonmatching_includeif_with_missing_target_passes(mirror, tmp_pat
     mid.write_text(f'[includeIf "gitdir:/nonexistent/"]\n\tpath = {tmp_path / "gone.cfg"}\n')
     _g(mirror, "config", "include.path", str(mid))
     assert _include_problem(mirror) is None
+
+
+@pytest.mark.parametrize("prefix", ["gitdir:", "gitdir/i:"])
+def test_top_level_relative_gitdir_includeif_with_missing_target_is_refused(
+    tmp_path, monkeypatch, prefix
+):
+    home = tmp_path / "home"
+    repo = home / "repo"
+    repo.mkdir(parents=True)
+    _g(repo, "init")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    (home / ".gitconfig").write_text(f'[includeIf "{prefix}./"]\n\tpath = gone.cfg\n')
+    assert _include_problem(repo) is not None
+
+
+@pytest.mark.parametrize("prefix", ["gitdir:", "gitdir/i:"])
+def test_nested_relative_gitdir_includeif_with_missing_target_is_refused(mirror, prefix):
+    mid = mirror.parent / "mid.cfg"
+    mid.write_text(f'[includeIf "{prefix}./{mirror.name}/"]\n\tpath = gone.cfg\n')
+    _g(mirror, "config", "include.path", str(mid))
+    assert _include_problem(mirror) is not None
+
+
+def test_nested_relative_gitdir_nonmatching_includeif_passes(mirror):
+    mid = mirror.parent / "mid.cfg"
+    mid.write_text('[includeIf "gitdir:./nonexistent/"]\n\tpath = gone.cfg\n')
+    _g(mirror, "config", "include.path", str(mid))
+    assert _include_problem(mirror) is None
+
+
+def _setup_case(tmp_path, monkeypatch, kind):
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    missing = tmp_path / "missing.cfg"
+    if kind in ("sym_cfg_match", "sym_cfg_i_match", "sym_cfg_nomatch"):
+        home, dotfiles = tmp_path / "home", tmp_path / "dotfiles"
+        home.mkdir()
+        dotfiles.mkdir()
+        cond = "gitdir/i:./WORK/" if kind == "sym_cfg_i_match" else "gitdir:./work/"
+        (dotfiles / "gitconfig").write_text(f'[includeIf "{cond}"]\n\tpath = {missing}\n')
+        (home / ".gitconfig").symlink_to(dotfiles / "gitconfig")
+        repo = (home if kind == "sym_cfg_nomatch" else dotfiles) / "work"
+    elif kind in ("sym_mid_match", "sym_mid_nomatch"):
+        home, cfgs, real = tmp_path / "home", tmp_path / "cfgs", tmp_path / "real"
+        home.mkdir()
+        cfgs.mkdir()
+        real.mkdir()
+        (real / "mid.cfg").write_text(f'[includeIf "gitdir:./r/"]\n\tpath = {missing}\n')
+        (cfgs / "mid.cfg").symlink_to(real / "mid.cfg")
+        (home / ".gitconfig").write_text(f"[include]\n\tpath = {cfgs / 'mid.cfg'}\n")
+        repo = (cfgs if kind == "sym_mid_nomatch" else real) / "r"
+    elif kind == "glob_home_match":
+        home = tmp_path / "h*[x]?"
+        home.mkdir()
+        (home / ".gitconfig").write_text(f'[includeIf "gitdir:./repo/"]\n\tpath = {missing}\n')
+        repo = home / "repo"
+    elif kind == "dir_symlink_home":
+        home, homelink = tmp_path / "home", tmp_path / "homelink"
+        home.mkdir()
+        homelink.symlink_to(home)
+        (home / ".gitconfig").write_text(f'[includeIf "gitdir:./repo/"]\n\tpath = {missing}\n')
+        monkeypatch.setenv("HOME", str(homelink))
+        repo = home / "repo"
+        repo.mkdir(parents=True)
+        _g(repo, "init")
+        return repo
+    elif kind == "glob_home_escape_nomatch":
+        t = tmp_path / "T"
+        home = t / "h*"
+        home.mkdir(parents=True)
+        (home / ".gitconfig").write_text(f'[includeIf "gitdir:./repo/"]\n\tpath = {missing}\n')
+        repo = t / "hzz" / "repo"
+    else:  # case_sensitive_nomatch
+        home = tmp_path / "home"
+        home.mkdir()
+        (home / ".gitconfig").write_text(f'[includeIf "gitdir:./REPO/"]\n\tpath = {missing}\n')
+        repo = home / "repo"
+    monkeypatch.setenv("HOME", str(home))
+    repo.mkdir(parents=True)
+    _g(repo, "init")
+    return repo
+
+
+@pytest.mark.parametrize(
+    ("kind", "refuse"),
+    [
+        ("sym_cfg_match", True),
+        ("sym_cfg_i_match", True),
+        ("sym_mid_match", True),
+        ("glob_home_match", True),
+        ("dir_symlink_home", True),
+        ("sym_cfg_nomatch", False),
+        ("sym_mid_nomatch", False),
+        ("glob_home_escape_nomatch", False),
+        ("case_sensitive_nomatch", False),
+    ],
+)
+def test_relative_gitdir_symlink_and_glob_counterexamples_1288(tmp_path, monkeypatch, kind, refuse):
+    repo = _setup_case(tmp_path, monkeypatch, kind)
+    got = _include_problem(repo)
+    assert (got is not None) is refuse

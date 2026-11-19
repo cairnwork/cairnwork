@@ -1,0 +1,157 @@
+{
+  "date": "2026-11-17",
+  "main_sha": "89116e46",
+  "model": null,
+  "passed": true,
+  "scope": "Cairnwork side only; Gateway switch, forwarding and deployer gate not exercised",
+  "steps": [
+    {
+      "exit": 0,
+      "expected": "exit 0, would_accept false, state dir still empty",
+      "ok": true,
+      "output": {
+        "would_accept": false
+      },
+      "state_files_after": [],
+      "step": "1 shadow check"
+    },
+    {
+      "exit": 0,
+      "expected": "exit 0, accepting true",
+      "ok": true,
+      "output": {
+        "accepting": true
+      },
+      "step": "2a accept"
+    },
+    {
+      "exit": 0,
+      "expected": "exit 0, duplicate false",
+      "ok": true,
+      "output": {
+        "duplicate": false,
+        "status": "BOUND",
+        "task_id": "task-7ffcc839372f4542bf813f7f4541fcb2"
+      },
+      "step": "2b submit A"
+    },
+    {
+      "expected": "status DISPATCHED before drain",
+      "ok": true,
+      "status": {
+        "attempt_id": "a3612c84bcf783b78",
+        "candidate_commit": "",
+        "core_verified": false,
+        "detail": "<drill dir>/state/runs",
+        "idempotency_key": "rollback-a",
+        "owner": "cairnwork",
+        "phase": "DISPATCHED",
+        "status": "DISPATCHED",
+        "task_id": "task-7ffcc839372f4542bf813f7f4541fcb2",
+        "uncomparable": "",
+        "unswept": null
+      },
+      "step": "2c A dispatched"
+    },
+    {
+      "exit": 0,
+      "expected": "exit 0, accepting false",
+      "ok": true,
+      "output": {
+        "accepting": false
+      },
+      "step": "2d drain while A runs"
+    },
+    {
+      "exit": 2,
+      "expected": "exit 2, NOT_ACCEPTING",
+      "ok": true,
+      "output": {
+        "detail": "Cairnwork takes no new tasks",
+        "error": "NOT_ACCEPTING"
+      },
+      "step": "3a new key after drain"
+    },
+    {
+      "exit": 0,
+      "expected": "exit 0, same task id, duplicate true",
+      "ok": true,
+      "output": {
+        "duplicate": true,
+        "status": "DISPATCHED",
+        "task_id": "task-7ffcc839372f4542bf813f7f4541fcb2"
+      },
+      "step": "3b resend of A after drain"
+    },
+    {
+      "exit": 0,
+      "expected": "exit 0, count >= 1, A listed, accepting false",
+      "ok": true,
+      "output": {
+        "accepting": false,
+        "count": 1,
+        "foreign_task_ids": [],
+        "task_ids": [
+          "task-7ffcc839372f4542bf813f7f4541fcb2"
+        ]
+      },
+      "step": "3c in-flight while A runs"
+    },
+    {
+      "attempt_when_dispatched": "a3612c84bcf783b78",
+      "expected": "COMPLETED, or FAILED with a reason; same attempt as when drained",
+      "ok": true,
+      "status": {
+        "attempt_id": "a3612c84bcf783b78",
+        "candidate_commit": "019653da04d999a4f2e5b48a0c84216ee13e7fea",
+        "core_verified": true,
+        "detail": "COMPLETED",
+        "idempotency_key": "rollback-a",
+        "owner": "cairnwork",
+        "phase": "FINISHED",
+        "status": "COMPLETED",
+        "task_id": "task-7ffcc839372f4542bf813f7f4541fcb2",
+        "uncomparable": "",
+        "unswept": null
+      },
+      "step": "4a A finishes in Cairnwork"
+    },
+    {
+      "exit": 0,
+      "expected": "exit 0, count 0",
+      "ok": true,
+      "output": {
+        "accepting": false,
+        "count": 0,
+        "foreign_task_ids": [],
+        "task_ids": []
+      },
+      "step": "4b in-flight after A"
+    },
+    {
+      "exit": 0,
+      "expected": "exit 0, no decisions",
+      "ok": true,
+      "output": {
+        "decisions": [],
+        "leftover_run_dirs": 0,
+        "sweep_unavailable": false
+      },
+      "step": "4c recover"
+    },
+    {
+      "exit": 0,
+      "expected": "exit 0, same task id, duplicate true (no re-run)",
+      "ok": true,
+      "output": {
+        "duplicate": true,
+        "status": "COMPLETED",
+        "task_id": "task-7ffcc839372f4542bf813f7f4541fcb2"
+      },
+      "step": "4d resend after finish"
+    }
+  ],
+  "verifier_account_used": false,
+  "verifier_mode_note": "local verifier (drill_normal.ACCOUNT forced to None): the cairnwork-verifier account slot is not yet approved by lab; this rollback did not use the account",
+  "worker": "fixed stub named agy on PATH (drill-local, not the real agy, no model); log line shows the stub ran: '<drill dir>/bin/agy: line 3' (its env-based log line failed, the fix still ran after 12 s)"
+}

@@ -9,9 +9,9 @@ check refuse it before binding, not p2p.py after the worker has run."""
 
 import json
 import subprocess
-import sys
 
 import pytest
+from _child_python import run_module
 from test_intake import FakePopen, payload
 from test_intake import intake as intake  # noqa: F401 - fixture
 from test_intake import repo as repo  # noqa: F401 - fixture
@@ -82,7 +82,7 @@ def test_shadow_check_refuses_bad_ids_as_submit_does(tmp_path, repo):  # noqa: F
     (state / "config.json").write_text(json.dumps({"verifier_account": False}))
     for ids in BAD_IDS.values():
         done = subprocess.run(
-            [sys.executable, "-I", "-m", "cairnwork.route", "--state", str(state), "check"],
+            run_module("cairnwork.route") + ["--state", str(state), "check"],
             input=json.dumps(_with_ids(repo, ids)), capture_output=True, text=True,
             timeout=120, check=False,
         )  # fmt: skip
@@ -104,7 +104,7 @@ def test_shadow_check_refuses_a_p2p_verifier_id_as_submit_does(tmp_path, repo): 
     (state / "config.json").write_text(json.dumps({"verifier_account": False}))
     for verifier_id in P2P_IDS:
         done = subprocess.run(
-            [sys.executable, "-I", "-m", "cairnwork.route", "--state", str(state), "check"],
+            run_module("cairnwork.route") + ["--state", str(state), "check"],
             input=json.dumps(_with_ids(repo, [verifier_id])), capture_output=True, text=True,
             timeout=120, check=False,
         )  # fmt: skip

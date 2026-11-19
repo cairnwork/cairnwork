@@ -23,6 +23,8 @@ def _intervened(**over):
         gate_model_id="gate-model",
         gate_effort="low",
         gate_verdict="ACCEPT",
+        core_verdict="VERIFIED",
+        core_tree_sha256="d" * 64,
         intervened=True,
         event_seq=7,
     )

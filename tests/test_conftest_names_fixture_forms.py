@@ -123,7 +123,7 @@ def test_bound_reads_every_block_that_runs_at_module_level():
         "with m:\n    e = 3\nfor i in x:\n    f = 4\nelse:\n    g = 5\nwhile t:\n    h = 6\n"
         "match v:\n    case 1:\n        j = 7\ndef k():\n    inner = 8\nclass L:\n    attr = 9\n"
     )
-    assert bound(tree) == {"a", "b", "c", "d", "e", "f", "g", "h", "j", "k", "L"}
+    assert bound(tree) == {"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "L"}
 
 
 def test_what_a_fixture_call_registers_is_read():

@@ -18,6 +18,7 @@ ERROR_CATEGORIES += ("TOOL_ERROR", "INVALID_CALL", "PROTOCOL_ERROR", "REPEATED",
 ERROR_CATEGORIES += ("CPU_LIMIT",)  # a search grep stopped at its CPU-time limit
 ABORT_CAUSES = ("endpoint_error", "worker_isolation", "status_unavailable", "protocol_error")
 ABORT_CAUSES += ("internal_error", "interrupted")
+ABORT_CAUSES += ("endpoint_unreachable",)
 # context_cap_bytes_estimate is no longer emitted (review of PR 251, 6: the context-window guard
 # alone decides without usage); it stays in the vocabulary so v1 lines still validate.
 LIMITS_HIT = ("max_steps", "max_wall_seconds", "context_cap", "context_cap_bytes_estimate")

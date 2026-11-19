@@ -14,6 +14,7 @@ from test_p2p import FIX_BREAKS_NEG, SIBLING, run
 from test_p2p_base_complete import ADD, bare, project  # noqa: F401 - the fixtures
 
 from cairnwork import p2p
+from cairnwork.verify_context import VerifyContext
 
 INI = "[pytest]\npythonpath = src\n"
 FAR = {"tests/test_sibling.py": ADD, "tests/.cache/test_far.py": SIBLING}
@@ -86,12 +87,14 @@ def test_the_env_check_still_reads_the_nameable_tests(far):
     )
 
 
-def _add_index_only(repo, path: bytes, text: str = "def test_z():\n    pass\n"):
+def _add_index_only(
+    repo, path: bytes, text: str = "def test_z():\n    pass\n", mode: bytes = b"100644"
+):
     """Commit a path git tracks but this checkout never writes (APFS cannot hold Tests/ beside
     tests/, nor a non-UTF-8 name)."""
     blob = subprocess.run(["git", "-C", str(repo), "hash-object", "-w", "--stdin"],
                           input=text.encode(), capture_output=True, check=True)  # fmt: skip
-    info = b"100644 " + blob.stdout.strip() + b"\t" + path + b"\0"
+    info = mode + b" " + blob.stdout.strip() + b"\t" + path + b"\0"
     subprocess.run(["git", "-C", str(repo), "update-index", "--add", "-z", "--index-info"],
                    input=info, check=True)  # fmt: skip
     git(repo, "commit", "-q", "-m", "index only")
@@ -156,3 +159,120 @@ def test_a_symlink_outside_or_deleted_is_no_reason_to_refuse_1000(bare, where): 
     git(bare, "add", "-A")
     git(bare, "commit", "-q", "-m", "link")
     assert p2p._base_tests(_base(bare), exclude) == ("tests/test_calc.py", "tests/test_sibling.py")
+
+
+@pytest.mark.parametrize(
+    ("move_tests", "link", "target", "roots", "index_only"),
+    [
+        (True, "tests", "real_tests", ("tests",), False),
+        (True, "tests", "real_tests", ("Tests",), False),
+        (True, "Tests", "real_tests", ("tests",), True),
+        (False, "pkg", ".", ("pkg/tests",), False),
+        (False, "a/b", "../..", ("a/b/tests",), False),
+        (False, "pkg", ".", ("Pkg/Tests",), False),
+        (False, "Pkg", ".", ("pkg/tests",), True),
+    ],
+    ids=[
+        "at_root",
+        "at_root_configured_case",
+        "at_root_tracked_case",
+        "above_nested_root",
+        "above_deep_root",
+        "above_nested_configured_case",
+        "above_nested_tracked_case",
+    ],
+)
+def test_a_symlink_at_or_above_a_root_is_untargetable_1289(
+    bare,  # noqa: F811
+    move_tests,
+    link,
+    target,
+    roots,
+    index_only,
+):
+    """#1289: a symlink at or above a test root makes static base listing empty while pytest
+    follows it; built on ``bare`` so the link is the only reason to refuse."""
+    if move_tests:
+        git(bare, "mv", "tests", "real_tests")
+        git(bare, "commit", "-q", "-m", "move tests")
+    if index_only:
+        _add_index_only(bare, link.encode(), target, mode=b"120000")
+    else:
+        path = bare / link
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.symlink_to(target)
+        git(bare, "add", "-A")
+        git(bare, "commit", "-q", "-m", "link")
+    task = SimpleNamespace(**{**vars(_base(bare)), "test_roots": roots})
+    with pytest.raises(p2p.BaseUncomparable) as info:
+        p2p._base_tests(task, frozenset())
+    assert info.value.comparison.code == "P2P_BASE_UNTARGETABLE"
+    assert isinstance(p2p._base_tests(task, frozenset(), strict=False), tuple)
+
+
+def test_a_symlink_at_root_stops_plan_p2p_with_untargetable_1289(bare, tmp_path):  # noqa: F811
+    """#1289: without rejecting the root link, plan_p2p saw 0 files and skipped P2P silently."""
+    git(bare, "mv", "tests", "real_tests")
+    git(bare, "commit", "-q", "-m", "move tests")
+    (bare / "tests").symlink_to("real_tests")
+    git(bare, "add", "-A")
+    git(bare, "commit", "-q", "-m", "link root")
+    task = SimpleNamespace(**vars(_base(bare)), allowed_files=("src/calc.py",), import_paths=())
+    result = SimpleNamespace(attempt_id="att", logs=[])
+    ctx = VerifyContext.of(task, tmp_path / "run", "att")
+    with pytest.raises(p2p.BaseUncomparable) as info:
+        p2p.plan_p2p(task, (), (), "whole-suite", 30, result, ctx)
+    assert info.value.comparison.code == "P2P_BASE_UNTARGETABLE"
+
+
+@pytest.mark.parametrize(
+    ("where", "roots", "nested_test", "exclude", "expected"),
+    [
+        (
+            "top_link",
+            ("tests",),
+            False,
+            frozenset(),
+            ("tests/test_calc.py", "tests/test_sibling.py"),
+        ),
+        ("test", ("tests",), False, frozenset(), ("tests/test_calc.py", "tests/test_sibling.py")),
+        ("tests2", ("tests",), False, frozenset(), ("tests/test_calc.py", "tests/test_sibling.py")),
+        ("pkg2", ("pkg/tests",), True, frozenset(), ("pkg/tests/test_calc.py",)),
+        ("pkg/other", ("pkg/tests",), True, frozenset(), ("pkg/tests/test_calc.py",)),
+        ("excluded_root", ("tests",), False, frozenset({"tests"}), ()),
+        ("excluded_parent", ("pkg/tests",), False, frozenset({"pkg"}), ()),
+    ],
+    ids=[
+        "unrelated_top_level",
+        "shorter_prefix_no_slash",
+        "longer_prefix_no_slash",
+        "unrelated_near_nested",
+        "sibling_under_parent",
+        "excluded_root",
+        "excluded_parent",
+    ],
+)
+def test_an_unrelated_or_excluded_root_symlink_is_allowed_1289(
+    bare,  # noqa: F811
+    where,
+    roots,
+    nested_test,
+    exclude,
+    expected,
+):
+    if where == "excluded_root":
+        git(bare, "mv", "tests", "real_tests")
+        git(bare, "commit", "-q", "-m", "move tests")
+        (bare / "tests").symlink_to("real_tests")
+    elif where == "excluded_parent":
+        (bare / "pkg").symlink_to(".")
+    else:
+        if nested_test:
+            commit_change(bare, {"pkg/tests/test_calc.py": ADD})
+        path = bare / where
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.symlink_to("../elsewhere" if "/" in where else "elsewhere")
+    git(bare, "add", "-A")
+    git(bare, "commit", "-q", "-m", "link")
+    task = SimpleNamespace(**{**vars(_base(bare)), "test_roots": roots})
+    assert p2p._base_tests(task, exclude) == expected

@@ -20,6 +20,7 @@ from dataclasses import dataclass
 
 from cairnwork.blackbox import INCOMPLETE, Case, Check, Declaration
 from cairnwork.blackbox_exec import RUNNER_SHA256, BlackboxRun, run_blackbox
+from cairnwork.blackbox_once import AlreadyExposed
 from cairnwork.blackbox_values import BadOutput, error_of, judge
 from cairnwork.core_request import VerifierObservation
 from cairnwork.verifier_exec import _file_sha256, _record_digest
@@ -31,26 +32,35 @@ class CheckVerdict:
     reason: str  # one line: "blackbox:<id>: PASS|MISMATCH|VERIFICATION_INCOMPLETE: <code> [...]"
 
 
-def judge_blackbox(declaration: Declaration, ctx, commit: str, run_id: str, **kwargs):
+def judge_blackbox(
+    declaration: Declaration, ctx, commit: str, run_id: str, strict: bool = False, **kwargs
+):
     """Run the declaration's checks on commit and judge them; never raises for a run that could not
-    be made (that is VERIFICATION_INCOMPLETE). Returns (verdicts, log path or None)."""
+    be made (that is VERIFICATION_INCOMPLETE). Returns (verdicts, log path or None). strict
+    (#1353): the declaration is used once per state, and reasons carry no match counts."""
+    options = {"strict": True} if strict else {}
     try:
-        run = run_blackbox(declaration, ctx, commit, run_id, **kwargs)
+        run = run_blackbox(declaration, ctx, commit, run_id, **options, **kwargs)
+    except AlreadyExposed:
+        return _all_incomplete(declaration, commit, "DECLARATION_ALREADY_EXPOSED", strict), None
     except Exception as exc:  # noqa: BLE001 - declared but not run: incomplete, never a pass
-        return _all_incomplete(declaration, commit, f"RUN_ERROR:{type(exc).__name__}"), None
+        return _all_incomplete(declaration, commit, f"RUN_ERROR:{type(exc).__name__}", strict), None
     try:  # the output is the candidate's: whatever it makes the judging do, each check still fails
-        return tuple(judge_run(declaration, commit, run)), run.log_path
+        verdicts = judge_run(declaration, commit, run, **options)
+        return tuple(verdicts), run.log_path
     except Exception as exc:  # noqa: BLE001
         failed = f"JUDGE_ERROR:{type(exc).__name__}"
-        return _all_incomplete(declaration, commit, failed), run.log_path
+        return _all_incomplete(declaration, commit, failed, strict), run.log_path
 
 
-def _all_incomplete(declaration: Declaration, commit: str, failed: str) -> tuple[CheckVerdict, ...]:
+def _all_incomplete(
+    declaration: Declaration, commit: str, failed: str, strict: bool = False
+) -> tuple[CheckVerdict, ...]:
     checks = declaration.checks
-    return tuple(_verdict(check, commit, declaration, None, failed, {}) for check in checks)
+    return tuple(_verdict(check, commit, declaration, None, failed, {}, strict) for check in checks)
 
 
-def judge_run(declaration: Declaration, commit: str, run: BlackboxRun):
+def judge_run(declaration: Declaration, commit: str, run: BlackboxRun, strict: bool = False):
     problem = _run_problem(run)
     report = {} if problem else _report(run.report)
     if report is None:
@@ -58,7 +68,7 @@ def judge_run(declaration: Declaration, commit: str, run: BlackboxRun):
     for check in declaration.checks:
         outcomes: dict[str, str] = {}
         failed = problem or _check_problem(check, report, run, outcomes)
-        yield _verdict(check, commit, declaration, run, failed, outcomes)
+        yield _verdict(check, commit, declaration, run, failed, outcomes, strict)
 
 
 def _run_problem(run: BlackboxRun) -> str:
@@ -123,7 +133,7 @@ def _calls(case: Case, got) -> str:
     return "match" if all(result == "match" for result in results) else "mismatch"
 
 
-def _verdict(check, commit, declaration, run, failed, outcomes) -> CheckVerdict:
+def _verdict(check, commit, declaration, run, failed, outcomes, strict=False) -> CheckVerdict:
     matched = sum(1 for value in outcomes.values() if value == "match")
     if failed:
         status = f"{INCOMPLETE}: {failed}"
@@ -132,7 +142,7 @@ def _verdict(check, commit, declaration, run, failed, outcomes) -> CheckVerdict:
     else:
         status = "PASS" if matched == len(check.cases) else "MISMATCH"
     low = ";low-entropy" if check.low_entropy else ""
-    detail = f" [matched {matched}/{len(check.cases)}]" if outcomes else ""
+    detail = f" [matched {matched}/{len(check.cases)}]" if outcomes and not strict else ""
     detail += " low-entropy" if low else ""
     digest = _record_digest(
         candidate_commit=commit, verifier_id=check.verifier_id,

@@ -52,8 +52,8 @@ def setup_cli_fixture(
     notary = Notary(db_path, core_verify=fake_core_verify, core_identity=CORE_IDENTITY)
     base_commit = git(repo, "rev-parse", "HEAD")
     candidate_commit = commit_change(repo, {"src/a.py": "x = 2\n"})
-    spec = AcceptanceSpec(task_id, "sha256:" + "c" * 64, ("pytest",), ("src/a.py",), False)
-    obs = (VerifierObservation("pytest", "artifact-1", "sha256:" + "e" * 64, True),)
+    spec = AcceptanceSpec(task_id, "sha256:" + "c" * 64, ("pytest-0",), ("src/a.py",), False)
+    obs = (VerifierObservation("pytest-0", "artifact-1", "sha256:" + "e" * 64, True),)
     notary.notarize(task_id, attempt_id, spec, repo, base_commit, candidate_commit, obs)
     return candidate_commit
 

@@ -6,6 +6,7 @@ replaced by a plain failure, so the re-run (-r) is the one that sleeps. With 'n'
 the run finishes normally.
 """
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -20,6 +21,12 @@ from cairnwork.verifiers import VerifierRun
 from cairnwork.workers import WorkerDefaults
 
 repo, state, base, tests, step = Path(sys.argv[1]), Path(sys.argv[2]), *sys.argv[3:6]
+origin_url = subprocess.run(
+    ["git", "-C", str(repo), "remote", "get-url", "origin"],
+    capture_output=True,
+    text=True,
+    check=True,
+).stdout.strip()
 account = VerifierAccount() if len(sys.argv) > 6 else None
 real = p2p._run_once
 
@@ -46,7 +53,8 @@ class Worker(WorkerDefaults):
 
 task = TaskSpec("k1", "card", "fix add", "add() is off by one", repo, base, ("src/calc.py",),
                 (("pytest", ("python3", "-m", "pytest", "-q", "tests/test_regression.py")),),
-                test_commit=tests, p2p_mode="whole-suite", p2p_budget=300)  # fmt: skip
+                test_commit=tests, origin_url=origin_url,
+                p2p_mode="whole-suite", p2p_budget=300)  # fmt: skip
 run_task(
     task,
     ledger=OwnershipLedger(state / "own.sqlite"),
