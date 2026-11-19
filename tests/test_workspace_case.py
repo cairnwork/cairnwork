@@ -42,7 +42,7 @@ def test_case_colliding_files_are_named(repo, tmp_path):
     with pytest.raises(WorkspaceError) as info:
         create_attempt_clone(repo, base, tmp_path / "attempts", "a1")
     message = str(info.value)
-    assert f"is not a clean checkout of {base}: base tree has case-colliding paths" in message
+    assert f"is not a clean checkout of {base}: tree of {base} has case-colliding paths" in message
     assert "; differences: 'missing " in message  # every difference is still listed
     assert "on a case-insensitive filesystem" in message
     assert "('docs/X.html', 'docs/x.html')" in message
@@ -78,7 +78,7 @@ def test_a_difference_under_a_colliding_directory_is_still_listed(repo, tmp_path
     with pytest.raises(WorkspaceError) as info:
         create_attempt_clone(repo, base, tmp_path / "attempts", "a1")
     message = str(info.value)
-    assert f"is not a clean checkout of {base}: base tree has case-colliding paths" in message
+    assert f"is not a clean checkout of {base}: tree of {base} has case-colliding paths" in message
     assert "'extra directory DOCS/sub'" in message
     assert "'extra ::warning::left.txt'" in message
 

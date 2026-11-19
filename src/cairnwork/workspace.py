@@ -132,7 +132,7 @@ def _refuse_case_collisions(repo: Path, base_commit: str, clone: Path, differenc
     groups = _case_collisions(filter(None, names.split("\0")))
     if not groups or not _folds_case(clone):
         return
-    detail = _collision_detail(groups, differences)
+    detail = _collision_detail(groups, differences, base_commit)
     raise WorkspaceError(f"{clone} is not a clean checkout of {base_commit}: {detail}")
 
 
@@ -147,14 +147,14 @@ def _case_collisions(names) -> list[list[str]]:
     return sorted(sorted(group) for group in folded.values() if len(group) > 1)
 
 
-def _collision_detail(groups: list[list[str]], differences) -> str:
+def _collision_detail(groups: list[list[str]], differences, commit: str = "base") -> str:
     """The collision groups (first three) and every difference found (first five)."""
     shown = ", ".join(f"({', '.join(map(repr, group))})" for group in groups[:3])
     more = f" and {len(groups) - 3} more" if len(groups) > 3 else ""
     listed = ", ".join(map(repr, differences[:5]))
     rest = f" and {len(differences) - 5} more" if len(differences) > 5 else ""
     return (
-        f"base tree has case-colliding paths {shown}{more} on a case-insensitive filesystem;"
+        f"tree of {commit} has case-colliding paths {shown}{more} on a case-insensitive filesystem;"
         f" differences: {listed}{rest}"
     )
 
@@ -291,7 +291,7 @@ def check_candidate_commit(
         detail = diff_check_detail("whitespace errors in the change", exc.__cause__, change.paths)
         raise CandidateRejected("DIFF_CHECK_FAILED", shown(detail)) from exc
     try:
-        differences = tree_differences(repo, head, attempt.path)
+        differences = tree_differences(repo, head, attempt.path) if attempt.path else []  # #488
     except GitCommandError as exc:
         raise CandidateRejected("UNREADABLE_CHANGE", shown(exc)) from exc
     if differences:

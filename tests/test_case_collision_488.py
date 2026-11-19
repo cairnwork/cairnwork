@@ -1,0 +1,197 @@
+"""#488: a test commit that adds a path differing only in case from a base path, or from another
+added path, is refused with TEST_COMMIT_SCOPE (the commit is still consumed). A candidate's case
+collision is not blamed on the base, and the cheap candidate checks run before the clone. Commits
+are built from git objects only, so the tests mean the same on case-sensitive and case-insensitive
+filesystems."""
+
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+from conftest import git
+
+import cairnwork.verify_candidate as verify_candidate
+import cairnwork.workspace as workspace
+from cairnwork.deferred_tests import TestCommitRejected
+from cairnwork.deferred_tests import test_paths as paths_of
+from cairnwork.workspace import (
+    CandidateRejected,
+    WorkspaceError,
+    _collision_detail,
+    create_attempt_clone,
+)
+
+
+def _commit(repo, parent, *names):
+    """A commit on parent that adds names (one blob), built in a scratch index only."""
+    git(repo, "config", "core.ignorecase", "false")
+    git(repo, "read-tree", parent)
+    blob = git(repo, "rev-parse", "HEAD:src/a.py")
+    for name in names:
+        git(repo, "update-index", "--add", "--cacheinfo", f"100644,{blob},{name}")
+    tree = git(repo, "write-tree")
+    git(repo, "read-tree", "HEAD")
+    return git(repo, "commit-tree", tree, "-p", parent, "-m", "c")
+
+
+@pytest.fixture
+def base(repo):
+    return _commit(repo, "HEAD", "tests/test_parse.py")
+
+
+def test_a_test_commit_adding_a_case_variant_is_refused(repo, base):
+    tc = _commit(repo, base, "tests/test_Parse.py")
+    with pytest.raises(TestCommitRejected) as err:
+        paths_of(repo, base, tc)
+    assert err.value.code == "TEST_COMMIT_SCOPE"
+    assert "test commit adds 'tests/test_Parse.py'" in str(err.value)
+    assert "'tests/test_parse.py' in the base tree" in str(err.value)
+
+
+def test_a_test_commit_adding_a_case_variant_directory_is_refused(repo, base):
+    base = _commit(repo, base, "tests/sub/test_a.py")
+    tc = _commit(repo, base, "tests/Sub/test_x.py")
+    with pytest.raises(TestCommitRejected) as err:
+        paths_of(repo, base, tc)
+    assert err.value.code == "TEST_COMMIT_SCOPE" and "'tests/sub'" in str(err.value)
+
+
+def test_a_non_colliding_new_test_file_passes(repo, base):
+    tc = _commit(repo, base, "tests/test_other.py")
+    assert paths_of(repo, base, tc) == (("tests/test_other.py",), ())
+
+
+def test_modifying_the_existing_spelling_passes(repo, base):
+    git(repo, "config", "core.ignorecase", "false")
+    git(repo, "read-tree", base)
+    other = git(repo, "rev-parse", "HEAD:src/b.py")
+    git(repo, "update-index", "--cacheinfo", f"100644,{other},tests/test_parse.py")
+    tree = git(repo, "write-tree")
+    git(repo, "read-tree", "HEAD")
+    tc = git(repo, "commit-tree", tree, "-p", base, "-m", "m")
+    assert paths_of(repo, base, tc) == (("tests/test_parse.py",), ())
+
+
+def test_a_base_that_already_collides_keeps_working_for_other_additions(repo):
+    base = _commit(repo, "HEAD", "tests/test_a.py", "tests/test_A.py")
+    tc = _commit(repo, base, "tests/test_new.py")
+    assert paths_of(repo, base, tc) == (("tests/test_new.py",), ())
+
+
+def test_the_detail_names_the_commit_not_the_base():
+    detail = _collision_detail([["a.txt", "A.txt"]], ["missing a.txt"], "abc123")
+    assert detail.startswith("tree of abc123 has case-colliding paths")
+    assert "base tree" not in detail
+    assert _collision_detail([["a", "A"]], []).startswith("tree of base has")
+
+
+def test_a_colliding_candidate_is_not_blamed_on_the_base(repo, tmp_path, monkeypatch):
+    base = git(repo, "rev-parse", "HEAD")
+    cand = _commit(repo, base, "src/X.py", "src/x.py")
+    monkeypatch.setattr(workspace, "_folds_case", lambda clone: True)
+    real = workspace.tree_differences
+    monkeypatch.setattr(workspace, "tree_differences", lambda *a: [*real(*a), "missing src/x.py"])
+    with pytest.raises(WorkspaceError) as info:
+        create_attempt_clone(repo, cand, tmp_path / "attempts", "a1")
+    assert f"tree of {cand} has case-colliding paths" in str(info.value)
+    assert "base tree" not in str(info.value)
+
+
+def test_the_candidate_is_checked_before_the_clone(repo, tmp_path, monkeypatch):
+    base = git(repo, "rev-parse", "HEAD")
+    cand = _commit(repo, base, "src/c.py")  # not in allowed_files
+    cloned = []
+    monkeypatch.setattr(verify_candidate, "create_attempt_clone", lambda *a, **k: cloned.append(a))
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    task: Any = SimpleNamespace(
+        repo=repo, base_commit=base, test_roots=("tests",), allowed_files=("src/a.py",)
+    )
+    result: Any = SimpleNamespace(attempt_id="a1", logs=[])
+    ctx: Any = SimpleNamespace(run_root=runs, python=None, account=None)
+    with pytest.raises(CandidateRejected) as err:
+        verify_candidate._judge_in(None, task, (), cand, None, result, ctx, source=repo)
+    assert err.value.code == "OUT_OF_SCOPE" and cloned == []
+
+
+@pytest.mark.parametrize(
+    "names",
+    [
+        ("tests/test_n.py", "tests/test_N.py"),
+        ("tests/Sub/a.py", "tests/sub/b.py"),
+        ("tests/test_regression.py", "tests/test_Regression.py"),
+    ],
+)
+def test_two_added_paths_differing_only_in_case_are_refused(repo, base, names):
+    tc = _commit(repo, base, *names)
+    with pytest.raises(TestCommitRejected) as err:
+        paths_of(repo, base, tc)
+    assert err.value.code == "TEST_COMMIT_SCOPE"
+    assert "differ only in case" in str(err.value)
+
+
+def test_a_base_file_and_an_added_directory_of_another_case_are_refused(repo):
+    base = _commit(repo, "HEAD", "tests/data")
+    tc = _commit(repo, base, "tests/Data/x.py")
+    with pytest.raises(TestCommitRejected) as err:
+        paths_of(repo, base, tc)
+    assert err.value.code == "TEST_COMMIT_SCOPE"
+
+
+@pytest.mark.parametrize(
+    "names", [("tests/test_other.py",), ("tests/test_other.py", "tests/b/test_c.py")]
+)
+def test_unrelated_added_paths_still_pass(repo, base, names):
+    tc = _commit(repo, base, *names)
+    assert paths_of(repo, base, tc) == (tuple(sorted(names)), ())
+
+
+def _swap(repo, parent, remove, add):
+    """A commit on parent that removes some paths and adds others."""
+    git(repo, "read-tree", parent)
+    for name in remove:
+        git(repo, "update-index", "--force-remove", name)
+    blob = git(repo, "rev-parse", "HEAD:src/a.py")
+    for name in add:
+        git(repo, "update-index", "--add", "--cacheinfo", f"100644,{blob},{name}")
+    tree = git(repo, "write-tree")
+    git(repo, "read-tree", "HEAD")
+    return git(repo, "commit-tree", tree, "-p", parent, "-m", "c")
+
+
+def test_adding_beside_a_same_case_sibling_directory_passes(repo):
+    base = _commit(repo, "HEAD", "tests/sub/test_a.py")
+    tc = _commit(repo, base, "tests/sub/test_y.py")
+    assert paths_of(repo, base, tc) == (("tests/sub/test_y.py",), ())
+
+
+@pytest.mark.parametrize(
+    ("have", "remove", "add"),
+    [
+        (("tests/test_x.py",), ("tests/test_x.py",), ("tests/test_X.py",)),
+        (("tests/sub/test_a.py",), ("tests/sub/test_a.py",), ("tests/Sub/test_b.py",)),
+    ],
+)
+def test_a_pure_case_rename_passes(repo, have, remove, add):
+    base = _commit(repo, "HEAD", *have)
+    tc = _swap(repo, base, remove, add)
+    assert paths_of(repo, base, tc) == (add, remove)
+
+
+@pytest.mark.parametrize(
+    ("have", "remove", "add"),
+    [
+        (("tests/test_x.py", "tests/test_y.py"), ("tests/test_y.py",), ("tests/test_X.py",)),
+        (
+            ("tests/sub/test_a.py", "tests/sub/test_c.py"),
+            ("tests/sub/test_a.py",),
+            ("tests/Sub/test_b.py",),
+        ),
+    ],
+)
+def test_a_case_variant_of_a_path_that_stays_is_refused(repo, have, remove, add):
+    base = _commit(repo, "HEAD", *have)
+    tc = _swap(repo, base, remove, add)
+    with pytest.raises(TestCommitRejected) as err:
+        paths_of(repo, base, tc)
+    assert err.value.code == "TEST_COMMIT_SCOPE"
