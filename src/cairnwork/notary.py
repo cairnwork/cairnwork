@@ -291,7 +291,10 @@ class Notary:
         return self._read(task_id, attempt_id, expected_candidate)
 
     def row_binding(self, task_id: str, attempt_id: str) -> RowBinding | None:
-        """Identity and column binding of a row whatever its status (#935); None if absent."""
+        """Binding facts for any row (#935); None means absent, read failures raise and are unbound.
+
+        Callers treat read failures as unbound.
+        """
         return row_binding(self, task_id, attempt_id)
 
     def bound_to(self, task_id: str, attempt_id: str, change: GitChangeSet) -> bool:
