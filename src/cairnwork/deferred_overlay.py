@@ -19,8 +19,8 @@ OVERLAY_RULE = "overlay-v1"  # how the tests are laid over a candidate (#229); b
 
 class TestCommitRejected(Exception):
     def __init__(self, code: str, detail: str = "") -> None:
-        super().__init__(f"{code}: {detail}" if detail else code)
         self.code = code
+        super().__init__(f"{code}: {detail}" if detail else code)
 
 
 class TestFiles(tuple):  # noqa: SLOT001  (a tuple of the added or changed paths, as before)

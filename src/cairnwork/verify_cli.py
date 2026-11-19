@@ -47,6 +47,7 @@ from cairnwork.notary import NotarySchemaMismatch
 from cairnwork.notary_migrate import NotaryMissing, migrate_notary
 from cairnwork.pipeline import TaskRejected
 from cairnwork.runlock import RunLockBusy
+from cairnwork.textclean import shown
 from cairnwork.verifier_select import SelectedIntake, select_account
 from cairnwork.verify_candidate import cleanup, tests_consumed, verify_candidate
 
@@ -100,7 +101,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return _emit({"error": "INTERRUPTED", "detail": detail, "tests_consumed": used}, 130)
     except Exception as exc:  # noqa: BLE001 - reported as unknown, never as success
-        detail = f"{type(exc).__name__}: {exc}"
+        detail = f"{type(exc).__name__}: {shown(exc)}"
         if args.command == "migrate-notary":  # no tests involved
             return _emit({"error": "INTERNAL", "detail": detail}, 1)
         used = tests_consumed(intake, getattr(args, "test_commit", ""))  # a retry needs new tests?
