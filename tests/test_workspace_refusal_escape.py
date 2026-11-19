@@ -41,3 +41,6 @@ def test_tamper_refusal_keeps_newline_filename_on_one_line(repo, tmp_path, monke
 
     assert "\\x0a" in str(info.value)
     assert len(str(info.value).splitlines()) == 1
+    assert str(info.value).endswith(
+        "'src/a\\x0ab.py:2 [sys_modules_write]'"
+    )  # byte-identical (#1352)

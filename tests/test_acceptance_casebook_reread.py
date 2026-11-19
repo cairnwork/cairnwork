@@ -8,7 +8,14 @@ import json
 from pathlib import Path
 
 import pytest
-from test_acceptance_casebook_origin import _add, _book, _list, _no_harness_session, lg  # noqa: F401
+from test_acceptance_casebook_origin import (  # noqa: F401
+    _add,
+    _book,
+    _confirm,
+    _list,
+    _no_harness_session,
+    lg,
+)
 
 from experimental.acceptance_casebook.repair import repair
 from experimental.acceptance_casebook.store import _append, _read_lines, eligible_cases
@@ -38,10 +45,15 @@ def _forge(lg: dict[str, str], change: dict[str, str], via_repair: bool) -> None
 def test_forged_case_line_is_never_eligible(lg, capsys, name, via_repair) -> None:  # noqa: F811
     assert _add(lg, lg["cand"], "a1", "accepted_bad") == 0
     _forge(lg, BAD[name], via_repair)
-    states = [c["state"] for c in _list(lg, capsys, "--notary-db", lg["db"])]
-    assert states[0] != "origin_changed" and states[1] == "origin_changed"
+    cases = _list(lg, capsys, "--notary-db", lg["db"])
+    assert cases[0]["state"] != "origin_changed" and cases[1]["state"] == "origin_changed"
+    _confirm(lg, cases[1]["line_sha256"])  # #1346: the forged row is confirmed, so only the
+    # on-read origin re-check (store.py) keeps it out; this file alone then kills the mutant that
+    # skips that re-check for confirmed cases
+    confirmed = [c["state"] for c in _list(lg, capsys, "--notary-db", lg["db"])]
+    assert confirmed[1] == "origin_changed"
     eligible = eligible_cases(_book(lg), Path(lg["db"]))
-    assert eligible == []  # the forged line (and the unconfirmed honest one) never count
+    assert eligible == []  # the confirmed forged line (and the unconfirmed honest one) never count
 
 
 @pytest.mark.parametrize("via_repair", [False, True])

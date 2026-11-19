@@ -16,10 +16,12 @@ import threading
 def run_child(argv, payload, *, timeout, output_cap):
     """Run ``argv`` with ``payload`` on stdin; return ``(stdout, timed_out, returncode)``.
 
-    On a timeout, output over ``output_cap``, a thread that cannot start, a spawn failure or a
-    reader/writer that does not finish, the result is ``(b"", timed_out, 1)``: the caller refuses
-    and never reads a partial result as success. The whole process group is killed and reaped on
-    every exit path."""
+    Output over ``output_cap``, a thread that cannot start, a spawn failure or a reader/writer
+    that does not finish gives ``(b"", timed_out, 1)``: the caller refuses and never reads a
+    partial result as success. A timeout alone (the cap not hit) returns the output read so far,
+    ``True`` and the kill's return code (-9), so a caller must check ``timed_out`` first. Any
+    other exit returns the child's own return code as is. The whole process group is killed and
+    reaped on every exit path."""
     output: list[bytes] = []
     size = 0
     process = None

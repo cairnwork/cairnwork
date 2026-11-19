@@ -293,7 +293,7 @@ def test_ac8_the_finding_names_the_file_without_a_line_number(repo):
     base = git(repo, "rev-parse", "HEAD")
     head = commit_change(repo, {LIB: HOOK_BASE + "Y = 1\n"})
     assert [str(f) for f in scan_patch(repo, base, head, python=sys.executable)] == [
-        f"{LIB} [hook_file_touched]"
+        f"'{LIB} [hook_file_touched]'"
     ]
 
 
