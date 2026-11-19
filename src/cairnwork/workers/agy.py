@@ -211,11 +211,15 @@ class AgyWorker:
             try:
                 held, _, _ = _stop(process, None, workdir.name, reader, mark, dirs)
             except BaseException as stop_error:
+                if not isinstance(stop_error, Exception):
+                    raise  # an interrupt during cleanup goes out as it is
                 start_error.add_note(f"process cleanup failed: {stop_error!r}")
                 if process.poll() is not None:
                     try:
                         _close_streams(process, log)
                     except BaseException as close_error:  # noqa: BLE001 - preserve start failure
+                        if not isinstance(close_error, Exception):
+                            raise  # an interrupt is never swallowed
                         start_error.add_note(f"stream cleanup failed: {close_error!r}")
                 raise start_error from stop_error
             if not held:
@@ -260,10 +264,14 @@ class AgyWorker:
                 if not held:  # else the copier still reads: leave both open rather than hang
                     _close_streams(process, log)
             except BaseException as cleanup_error:  # the error in flight stays as __context__
+                if not isinstance(cleanup_error, Exception):
+                    raise  # an interrupt during cleanup goes out as it is
                 if process.poll() is not None:
                     try:
                         _close_streams(process, log)
                     except BaseException as close_error:  # noqa: BLE001 - keep cleanup_error
+                        if not isinstance(close_error, Exception):
+                            raise  # an interrupt is never swallowed
                         cleanup_error.add_note(f"stream cleanup failed: {close_error!r}")
                 if active is not None:
                     active.add_note(f"process cleanup failed: {cleanup_error!r}")

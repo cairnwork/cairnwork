@@ -133,8 +133,9 @@ def test_await_keeps_ask_to_stop_error_when_stop_also_raises(monkeypatch):
     assert isinstance(caught.value.__cause__, RuntimeError)
 
 
-def test_negative_pool_wait_never_shortens_the_limit(monkeypatch):
-    worker = AgyWorker(timeout_seconds=100, dispatch=Dispatch(path="d", pool_wait_seconds=-50))
+@pytest.mark.parametrize("negative", [-50, -1000])
+def test_negative_pool_wait_never_shortens_the_limit(monkeypatch, negative):
+    worker = AgyWorker(timeout_seconds=100, dispatch=Dispatch(path="d", pool_wait_seconds=negative))
     stream = SimpleNamespace(close=lambda: None)
     seen = {}
     process = SimpleNamespace(
@@ -144,4 +145,60 @@ def test_negative_pool_wait_never_shortens_the_limit(monkeypatch):
     monkeypatch.setattr(agy_module, "_stop", lambda *_a: (False, SimpleNamespace(gone=True), 0))
     monkeypatch.setattr(AgyWorker, "_fence", lambda *_a: None)
     worker._await(process, None, None, ("attempt", "mark", ()), None, "log")
-    assert seen == {"timeout": 160}
+    assert seen == {"timeout": 160}  # exactly timeout + 60, whatever the negative value
+
+
+class _Interrupting:
+    def close(self):
+        raise KeyboardInterrupt
+
+
+def test_await_interrupt_in_stream_close_propagates(monkeypatch):
+    worker = AgyWorker(timeout_seconds=100, dispatch=Dispatch(path="dispatcher"))
+    stream = SimpleNamespace(close=lambda: None)
+
+    def wait(**_kwargs):
+        raise subprocess.TimeoutExpired("agy", 1)
+
+    process = SimpleNamespace(
+        returncode=0, stdin=_Interrupting(), stdout=stream, stderr=stream, wait=wait,
+        poll=lambda: 0,
+    )  # fmt: skip
+
+    def ask_fail(_process):
+        raise ValueError("ask_to_stop failed")
+
+    def stop_fail(*_args):
+        raise RuntimeError("stop failed")
+
+    monkeypatch.setattr(agy_module.agy_dispatch, "ask_to_stop", ask_fail)
+    monkeypatch.setattr(agy_module, "_stop", stop_fail)
+    with pytest.raises(KeyboardInterrupt):
+        worker._await(process, None, None, ("attempt", "mark", ()), None, "log")
+
+
+def test_start_failure_interrupt_in_stream_close_propagates(tmp_path, monkeypatch):
+    binary = tmp_path / "agy"
+    binary.write_text(f"#!{__import__('sys').executable}\npass\n")
+    binary.chmod(0o755)
+    workdir = tmp_path / "attempt-interrupt"
+    workdir.mkdir()
+
+    def fail_start(_self):
+        raise RuntimeError("original start error")
+
+    def fail_stop(process, *_args):
+        process.kill()
+        process.wait()
+        raise OSError("cleanup failed")
+
+    def interrupt(*_args):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(threading.Thread, "start", fail_start)
+    monkeypatch.setattr(agy_module, "_stop", fail_stop)
+    monkeypatch.setattr(agy_module, "_close_streams", interrupt)
+    task = SimpleNamespace(title="t", instructions="i", allowed_files=("a.py",))
+
+    with pytest.raises(KeyboardInterrupt):
+        AgyWorker(agy=str(binary)).run(workdir, task)
