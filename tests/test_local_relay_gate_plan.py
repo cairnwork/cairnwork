@@ -30,10 +30,17 @@ def _repo(tmp_path):
     base = subprocess.run(
         ["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, env=env
     ).stdout.strip()
+    source = tmp_path / "source"  # the trusted copy the gate takes "base" from
+    subprocess.run(
+        ["git", "clone", "-q", "--no-hardlinks", str(repo), str(source)],
+        check=True,
+        env=env,
+    )
+    TASK["repo"] = str(source)
     return repo, base
 
 
-TASK = {"prompt": "Fix last_n", "allowed_files": ["pkg/stats.py"]}
+TASK: dict = {"prompt": "Fix last_n", "allowed_files": ["pkg/stats.py"]}
 
 
 def test_plan_has_the_task_the_relative_diff_and_new_files_but_no_host_paths(tmp_path):
@@ -268,3 +275,55 @@ def test_a_removed_tracked_file_and_a_redirected_worktree_setting_are_still_visi
         handle.write(f"[core]\n\tworktree = {elsewhere}\n")
     plan = build_gate_plan(TASK, RunResult(0, "", repo.parent, repo, base_sha=base))
     assert "-def last_n(items, n):" in plan  # the deletion is seen; core.worktree is ignored
+
+
+@pytest.mark.parametrize("name", ["clean", "smudge", "process"])
+def test_worker_defined_filter_drivers_are_never_executed(tmp_path, name):
+    repo, base = _repo(tmp_path)
+    marker = tmp_path / "executed"
+    hook = tmp_path / "filter.sh"
+    hook.write_text(f"#!/bin/sh\ntouch {marker}\ncat\n")
+    hook.chmod(0o755)
+    with (repo / ".git" / "config").open("a") as handle:
+        handle.write(f'[filter "evil"]\n\t{name} = {hook}\n')
+    (repo / ".gitattributes").write_text("*.py filter=evil\n")
+    (repo / "pkg" / "stats.py").write_text("def last_n(items, n):\n    return items[-n:]\n")
+    plan = build_gate_plan(TASK, RunResult(0, "", repo.parent, repo, base_sha=base))
+    assert "+    return items[-n:]" in plan and not marker.exists()
+
+
+def test_a_tampered_base_object_in_the_worker_repo_cannot_change_what_base_means(tmp_path):
+    import zlib
+
+    repo, base = _repo(tmp_path)
+    blob = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", f"{base}:pkg/stats.py"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    evil = b"def last_n(items, n):\n    return items[-n:]\n"
+    loose = repo / ".git" / "objects" / blob[:2] / blob[2:]
+    loose.chmod(0o644)
+    loose.write_bytes(zlib.compress(b"blob %d\0" % len(evil) + evil))  # worker rewrites "base"
+    (repo / "pkg" / "stats.py").write_bytes(evil)
+    plan = build_gate_plan(TASK, RunResult(0, "", repo.parent, repo, base_sha=base))
+    assert "-    return items[n:]" in plan and "+    return items[-n:]" in plan
+
+
+def test_case_and_unicode_settings_from_the_worker_config_do_not_matter(tmp_path):
+    repo, base = _repo(tmp_path)
+    with (repo / ".git" / "config").open("a") as handle:
+        handle.write("[core]\n\tignorecase = true\n\tprecomposeunicode = true\n")
+    (repo / "pkg" / "Extra.py").write_text("SHADOW = 1\n")
+    plan = build_gate_plan(TASK, RunResult(0, "", repo.parent, repo, base_sha=base))
+    assert "New file pkg/Extra.py" in plan and "SHADOW = 1" in plan
+
+
+def test_plan_requires_the_trusted_source_repository(tmp_path):
+    repo, base = _repo(tmp_path)
+    with pytest.raises(ValueError):
+        build_gate_plan(
+            {"prompt": "p", "allowed_files": []},
+            RunResult(0, "", repo.parent, repo, base_sha=base),
+        )
