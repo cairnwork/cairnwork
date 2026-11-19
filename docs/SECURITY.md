@@ -169,8 +169,10 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
       mode refuses a link target it cannot stat; a credential subdirectory that is renamed, swapped
       for a link or retyped during the link scan restarts the scan (up to 3 passes; the scan is
       depth first, opens each child by descriptor without following a link and checks it by device
-      and inode, #1314/#1354); one that disappears or moved out of the tree, or a mount point
-      below the directory, refuses the run (fail closed, not skipped). Outside
+      and inode, #1314/#1354); one that disappears or moved out of the tree, or a subdirectory on
+      another device (a mount point), refuses the run (fail closed, not skipped). Residual: a
+      same-device bind mount is not recognised, and a link added after its directory was listed is
+      not covered (a one-pass scan cannot see it, as on main). Outside
       directories a link points to are scanned too, with at most 64 scan roots in all (#427; more
       refuse the run). Residual: two-hop masking is not yet confirmed on real bwrap.
     - **Socket trees**: `/tmp/.X11-unix` (an X server lets a process inject input and run commands
