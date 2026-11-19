@@ -113,7 +113,7 @@ def _validate_pins(value: dict[object, object]) -> None:
         seen.add(folded)
 
 
-def _seal(repo: Path, root: Path, pins: dict[str, str]) -> Path:
+def _seal(repo: Path, root: Path, pins: dict[str, str], source: Path) -> Path:
     sealed = root / "sealed"
     for directory in (sealed / "tests", sealed / "src", sealed / "pinned"):
         directory.mkdir(parents=True)
@@ -130,8 +130,7 @@ def _seal(repo: Path, root: Path, pins: dict[str, str]) -> Path:
             target = sealed / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
-    source = _source_blobs(repo)
-    for name, data in source.items():
+    for name, data in _source_blobs(source).items():
         target = sealed / name
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
@@ -251,10 +250,10 @@ def check_base_install(stdlib: str, platstdlib: str, *trees: Path) -> None:
                     raise ValueError("base install lies inside the checked tree")
 
 
-def _run_sealed(sealed: Path, repo: Path) -> int:
+def _run_sealed(sealed: Path, repo: Path, *main: Path) -> int:
     stdlib = Path(sysconfig_path("stdlib"))
     platstdlib = Path(sysconfig_path("platstdlib"))
-    check_base_install(str(stdlib), str(platstdlib), repo, sealed)
+    check_base_install(str(stdlib), str(platstdlib), repo, sealed, *main)
     purelib = Path(sysconfig_path("purelib"))
     platlib = Path(sysconfig_path("platlib"))
     try:
@@ -333,13 +332,30 @@ def sysconfig_path(name: str) -> str:
     return sysconfig.get_paths(vars=base)[name]
 
 
-def main() -> int:
-    if len(sys.argv) == 3 and sys.argv[1] == "--sealed":
-        return _run_sealed(Path.cwd(), Path(sys.argv[2]))
-    repo = Path.cwd().resolve()
-    if len(sys.argv) != 1:
+def _source_tree(repo: Path) -> Path:
+    """`--source <dir>`: the PR tree whose src/ is judged; gate, pins and witness stay in repo."""
+    if len(sys.argv) == 1:
+        return repo
+    if len(sys.argv) != 3 or sys.argv[1] != "--source" or not Path(sys.argv[2]).is_dir():
         raise ValueError("unexpected gate arguments")
-    check_base_install(sysconfig_path("stdlib"), sysconfig_path("platstdlib"), repo)
+    source = Path(sys.argv[2]).resolve()
+    if any(
+        os.path.samefile(a, p) for a, b in ((repo, source), (source, repo)) for p in (b, *b.parents)
+    ):
+        raise ValueError("--source must not overlap the working directory")
+    git = ["git", "-c", "core.fsmonitor=false", "-C", str(source), "rev-parse", "--show-toplevel"]
+    top = subprocess.run(git, check=False, capture_output=True, env=_GIT_ENV, timeout=10)
+    if top.returncode or not os.path.samefile(top.stdout.decode().strip(), source):
+        raise ValueError("--source must be the root of a Git checkout")
+    return source
+
+
+def main() -> int:
+    if len(sys.argv) in {3, 4} and sys.argv[1] == "--sealed":
+        return _run_sealed(Path.cwd(), *map(Path, sys.argv[2:]))
+    repo = Path.cwd().resolve()
+    source = _source_tree(repo)
+    check_base_install(sysconfig_path("stdlib"), sysconfig_path("platstdlib"), repo, source)
     pins = _pins(repo)
     if "tests/pra1353_seal.py" not in pins:
         raise ValueError("the lock checker tests/pra1353_seal.py must be pinned")
@@ -348,7 +364,7 @@ def main() -> int:
         root = Path(directory).resolve()
         (root / "base-uv.lock").write_bytes(lock)
         (root / "base-uv.lock").chmod(0o444)
-        sealed = _seal(repo, root, pins)
+        sealed = _seal(repo, root, pins, source)
         try:
             return subprocess.run(
                 [
@@ -358,7 +374,8 @@ def main() -> int:
                     "-B",
                     str(sealed / "tests/pra1353_gate.py"),
                     "--sealed",
-                    str(repo),
+                    str(source),
+                    *([str(repo)] if source != repo else []),
                 ],
                 cwd=sealed,
                 env={
