@@ -396,5 +396,5 @@ def _mirror_base(mirror: Path, source: Path, base: str) -> None:
         )  # fmt: skip
     except GitCommandError as exc:
         if not isinstance(exc.__cause__, subprocess.CalledProcessError):
-            raise OSError(f"Cairnwork could not run git: {exc}") from exc
+            raise OSError(f"Cairnwork could not run git: {shown(exc)}") from exc
         raise IntakeRefused("BAD_REQUEST", f"cannot fetch {base} from {source}") from exc

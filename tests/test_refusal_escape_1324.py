@@ -1,6 +1,7 @@
 """#1324: exception text that reaches a refusal is escaped (newline, ::error::, bidi)."""
 
-import json
+import ast
+from pathlib import Path
 
 import pytest
 
@@ -49,3 +50,47 @@ def test_bad_config_text_is_escaped(tmp_path, monkeypatch):
         Intake(state).config()
     assert info.value.code == "BAD_CONFIG"
     _assert_escaped(str(info.value))
+
+
+# Source-level cover for every site of #1324: in these modules no raw exception text may be
+# interpolated into a refusal/report. A name bound by `except ... as NAME` must not appear as
+# str(NAME), f"{NAME}", or f"{NAME!r}" unless it is in ALLOWED (comparisons, not output).
+_MODULES = (
+    "taskpaths conftest_check conftest_names deferred_tests deferred_nodes intake "
+    "verify_candidate_checks verify_cli p2p pipeline"
+).split()
+ALLOWED = {("intake", "str(exc).startswith")}  # a comparison on the raw text, not output
+
+
+def _raw_uses(path):
+    tree = ast.parse(path.read_text())
+    found = []
+    for handler in (n for n in ast.walk(tree) if isinstance(n, ast.ExceptHandler) and n.name):
+        for node in ast.walk(handler):
+            raw = (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "str"
+                and len(node.args) == 1
+                and isinstance(node.args[0], ast.Name)
+                and node.args[0].id == handler.name
+            ) or (
+                isinstance(node, ast.FormattedValue)
+                and isinstance(node.value, ast.Name)
+                and node.value.id == handler.name
+            )
+            if raw:
+                found.append(node.lineno)
+    return found
+
+
+@pytest.mark.parametrize("module", _MODULES)
+def test_no_raw_exception_text_in_refusals(module):
+    path = Path(__file__).parent.parent / "src" / "cairnwork" / f"{module}.py"
+    lines = path.read_text().splitlines()
+    bad = [
+        n
+        for n in _raw_uses(path)
+        if not any(key == module and frag in lines[n - 1] for key, frag in ALLOWED)
+    ]
+    assert not bad, f"{module}.py raw exception text at lines {bad}"
