@@ -12,7 +12,7 @@ from typing import Any
 import pra1353_consume as consume
 import pytest
 from test_1039_1353_runner import _report
-from test_1039_1353_witnesses import PINS
+from test_1039_1353_witnesses import PINS, fake_runner_reports_witnesses  # noqa: F401
 
 
 def _module(name: str, path: Path, *, loader: str = "SourceFileLoader") -> dict[str, str]:

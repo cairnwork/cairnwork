@@ -20,8 +20,8 @@ def _bootstrap(import_roots):
     os.environ["GIT_CONFIG_VALUE_0"] = "false"
     os.environ["GIT_CONFIG_KEY_1"] = "core.hooksPath"
     os.environ["GIT_CONFIG_VALUE_1"] = "/dev/null"
-    stdlib, platstdlib, dynload, src, tests, purelib, platlib = import_roots
-    sys.path[:] = [stdlib, platstdlib, dynload, src, tests, purelib, platlib]
+    stdlib, platstdlib, dynload, tests, src, purelib, platlib = import_roots
+    sys.path[:] = [stdlib, platstdlib, dynload, tests, src, purelib, platlib]
     os.environ["PRA1353_IMPORT_ROOTS"] = json.dumps(sys.path)
     package_spec = importlib.util.spec_from_file_location(
         "tests", os.path.join(tests, "__init__.py"), submodule_search_locations=[tests]
@@ -32,10 +32,12 @@ def _bootstrap(import_roots):
     sys.modules["tests"] = package
     package_spec.loader.exec_module(package)
     from pra1353_derive import derive
-    from pra1353_extra import extra_rows
+    from pra1353_extra import extra_rows, load_c10
     from pra1353_probe import core_rows
     from pra1353_recipes import FIELDS, REASONS, RECIPES, ROUTES
 
+    # Load every sealed witness before any product child can touch the sealed tree.
+    load_c10()
     rows = core_rows() + extra_rows()
     recipes: list[dict[str, Any]] = [dict(zip(FIELDS, values, strict=True)) for values in RECIPES]
     for recipe in recipes:

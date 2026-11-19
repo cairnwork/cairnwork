@@ -232,7 +232,7 @@ def test_sitecustomize_in_checkout_is_not_part_of_child_sys_path():
 
 def test_cwd_module_does_not_enter_explicit_child_import_roots():
     source = (ROOT / "tests/pra1353_runner.py").read_text()
-    assert "sys.path[:] = [stdlib, platstdlib, dynload, src, tests, purelib, platlib]" in source
+    assert "sys.path[:] = [stdlib, platstdlib, dynload, tests, src, purelib, platlib]" in source
     assert 'os.environ["PRA1353_IMPORT_ROOTS"]' in source
 
 

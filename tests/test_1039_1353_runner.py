@@ -19,7 +19,7 @@ from typing import Any
 import pra1353_consume as consume
 import pytest
 from pra1353_runner import _match_recipe
-from test_1039_1353_witnesses import PINS
+from test_1039_1353_witnesses import PINS, fake_runner_reports_witnesses  # noqa: F401
 
 
 def _report(seqs: Iterable[int] = range(56)):
