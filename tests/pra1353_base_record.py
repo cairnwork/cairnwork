@@ -36,34 +36,64 @@ def _roots() -> list[str]:
     return sorted(os.path.realpath(p) for p in found if os.path.isdir(p))
 
 
-def _entry(outer, root: str, path: str) -> None:
-    """Feed one entry: relative path, type, mode bits, and content (a symlink: its target text)."""
+def _file_digest(path: str) -> bytes:
+    with open(path, "rb") as handle:
+        return hashlib.sha256(handle.read()).digest()
+
+
+def _link_target(path: str, roots: list[str]) -> bytes:
+    """What a symlink stands for, beyond its text: the content of a regular file it points at
+    (a venv's bin/python usually points at the base install, outside the trees), the real path
+    of a directory outside the trees (inside them the walk covers it), a marker if dangling."""
+    try:
+        info = os.stat(path)
+    except FileNotFoundError:
+        return b"dangling"
+    real = os.path.realpath(path)
+    if stat.S_ISREG(info.st_mode):
+        return b"file" + _file_digest(real)
+    if stat.S_ISDIR(info.st_mode):
+        inside = any(real == r or real.startswith(r + os.sep) for r in roots)
+        return b"dir-inside" if inside else b"dir-outside" + real.encode()
+    raise OSError(f"symlink to something that is not a file or directory: {path}")
+
+
+def _entry(outer, roots: list[str], root: str, path: str) -> None:
+    """Feed one entry: relative path, type, mode bits, and content (a symlink: its target text
+    and what it points at)."""
     info = os.lstat(path)
     rel = f"{root}\0{os.path.relpath(path, root)}".encode()
     if stat.S_ISLNK(info.st_mode):
-        body, kind = os.readlink(path).encode(), b"L"  # a symlink to a directory counts here
+        body, kind = os.readlink(path).encode() + b"\0" + _link_target(path, roots), b"L"
     elif stat.S_ISDIR(info.st_mode):
         body, kind = b"", b"D"
     elif stat.S_ISREG(info.st_mode):
-        with open(path, "rb") as handle:
-            body, kind = hashlib.sha256(handle.read()).digest(), b"F"
+        body, kind = _file_digest(path), b"F"
     else:
         raise OSError(f"not a regular file, directory or symlink: {path}")
     mode = stat.S_IMODE(info.st_mode).to_bytes(2, "big")
     outer.update(len(rel).to_bytes(4, "big") + rel + kind + mode + body)
 
 
+def _raise(error: OSError) -> None:
+    raise error  # os.walk skips an unreadable directory silently unless told otherwise
+
+
 def tree_digest(roots: list[str]) -> tuple[str, int]:
-    """SHA-256 over every entry under the roots: files, symlinks (also those that point at a
-    directory, which ``os.walk`` lists among the directories but does not enter) and the
-    directories themselves, each with its mode bits. Anything else is an error, so a swapped-in
-    device or socket cannot hide. Returns (digest, number of entries)."""
+    """SHA-256 over every entry under the roots and the roots themselves: files, symlinks (those
+    that point at a directory too, which ``os.walk`` lists among the directories but does not
+    enter) and directories, each with its mode bits. A symlink also contributes what it points at
+    (see ``_link_target``). An unreadable directory, or anything that is not a file, directory or
+    symlink, is an error, so nothing can hide. Returns (digest, number of entries)."""
     outer, count = hashlib.sha256(), 0
-    for root in sorted(set(roots)):
-        for here, dirs, names in os.walk(root, followlinks=False):
+    chosen = sorted(set(roots))
+    for root in chosen:
+        _entry(outer, chosen, root, root)
+        count += 1
+        for here, dirs, names in os.walk(root, followlinks=False, onerror=_raise):
             dirs[:] = sorted(d for d in dirs if d not in SKIPPED_DIRS)
             for name in sorted([*names, *dirs]):
-                _entry(outer, root, os.path.join(here, name))
+                _entry(outer, chosen, root, os.path.join(here, name))
                 count += 1
     return outer.hexdigest(), count
 

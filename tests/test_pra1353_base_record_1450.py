@@ -167,3 +167,47 @@ def test_a_symlink_to_a_directory_is_part_of_the_digest(tmp_path):
     (root / "empty").rmdir()
     (root / "empty").symlink_to(tmp_path, target_is_directory=True)  # empty dir -> link
     assert len({before, retargeted, _digest(root)}) == 3
+
+
+def test_the_root_directory_itself_is_part_of_the_digest(tmp_path):
+    root = _fake_install(tmp_path)
+    before = _digest(root)
+    root.chmod(0o700)
+    assert _digest(root) != before
+
+
+def test_a_symlink_to_a_file_outside_the_tree_counts_with_that_files_content(tmp_path):
+    """A venv's bin/python points at the base install, which is outside the checked tree."""
+    root = _fake_install(tmp_path)
+    outside = tmp_path / "outside-python"
+    outside.write_text("v1")
+    (root / "python").symlink_to(outside)
+    before = _digest(root)
+    outside.write_text("v2")
+    assert _digest(root) != before
+
+
+def test_a_dangling_symlink_is_stable_and_a_retargeted_outside_dir_changes_the_digest(tmp_path):
+    root = _fake_install(tmp_path)
+    (root / "dangling").symlink_to(tmp_path / "nowhere")
+    first = _digest(root)
+    assert _digest(root) == first
+    (root / "dangling").unlink()
+    (tmp_path / "dir-a").mkdir()
+    (tmp_path / "dir-b").mkdir()
+    (root / "outlink").symlink_to(tmp_path / "dir-a", target_is_directory=True)
+    a = _digest(root)
+    (root / "outlink").unlink()
+    (root / "outlink").symlink_to(tmp_path / "dir-b", target_is_directory=True)
+    assert _digest(root) != a
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads everything")
+def test_an_unreadable_subdirectory_fails_instead_of_being_skipped(tmp_path):
+    root = _fake_install(tmp_path)
+    (root / "pkg").chmod(0o000)
+    try:
+        with pytest.raises(OSError, match="Permission"):
+            _digest(root)
+    finally:
+        (root / "pkg").chmod(0o755)
