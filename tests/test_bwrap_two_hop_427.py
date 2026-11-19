@@ -56,9 +56,10 @@ def test_link_cycles_between_outside_directories_terminate(tmp_path):
 
 def test_links_inside_the_scanned_directory_add_no_mask(tmp_path):
     home, _, _ = _layout(tmp_path)
+    base = _policy(home).text.count("/dev/null")
     (home / ".aws" / "d").mkdir()
     (home / ".aws" / "d" / "in").symlink_to(home / ".aws")
-    assert not _policy(home).text.count("/dev/null")
+    assert _policy(home).text.count("/dev/null") == base
 
 
 def test_too_many_scan_roots_are_refused(tmp_path):
