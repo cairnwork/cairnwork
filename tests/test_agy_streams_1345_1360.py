@@ -176,6 +176,7 @@ def _run_start_failure(tmp_path, monkeypatch, *, dispatch, fail_target, kill_in_
     hung = runner.is_alive()
     for proc in procs:
         proc.kill()
+        proc.wait(timeout=10)  # gone for good: a dying process must not reach a later sweep
     return outcome, opened, procs, hung
 
 
