@@ -41,6 +41,7 @@ from cairnwork.collect_reader import _valid_exposed_id, read_collected
 from cairnwork.conftest_check import conftest_of
 from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRejected
 from cairnwork.gitcmd import GitCommandError, run_git
+from cairnwork.node_file import file_part
 from cairnwork.node_ids import show, unmatched_note
 from cairnwork.p2p_function import _function
 from cairnwork.p2p_nodes import changed_tests, module_changed
@@ -305,7 +306,7 @@ def _source(task, commit: str, path: str) -> str:
 
 
 def _file(nodeid: str) -> str:
-    return nodeid.partition("::")[0]
+    return file_part(nodeid)
 
 
 def _digest(ids) -> str:

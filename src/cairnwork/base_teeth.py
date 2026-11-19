@@ -9,6 +9,7 @@ UNCOMPARABLE rather than TEETH; no failure at all is NO_TEETH. Raw node ids are 
 
 from __future__ import annotations
 
+from cairnwork.node_file import file_part
 from cairnwork.p2p_function import _without_case
 from cairnwork.reasons import _names
 
@@ -36,8 +37,8 @@ def base_teeth(runs, targets) -> tuple[str, str, str]:
         return ("UNCOMPARABLE", "PLUGIN_NOT_INSTALLED", detail + _PLUGIN_HINT)
     if setup or plugin:
         setup += plugin
-        files = {target.split("::", 1)[0] for target in targets}
-        hint = _SETUP_HINT if any(n.split("::", 1)[0] in files for n in setup) else ""
+        files = {file_part(target) for target in targets}
+        hint = _SETUP_HINT if any(file_part(n) in files for n in setup) else ""
         detail = f"fixture setup failed for {_names(setup)}{hint}"
         return ("UNCOMPARABLE", "BASE_SETUP_ERROR", detail)
     if env:

@@ -21,6 +21,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from cairnwork.deferred_tests import _test_functions, _tree
+from cairnwork.node_file import file_part
 from cairnwork.node_ids import mask_paths, unmatched_note, without_case
 from cairnwork.verifiers import VerifierRun
 
@@ -91,7 +92,7 @@ def passing_targets(
         if _function(nodeid) in changed:
             left += outcome == "passed"
             continue
-        funcs = by_file.setdefault(nodeid.split("::", 1)[0], {})
+        funcs = by_file.setdefault(file_part(nodeid), {})
         funcs[_function(nodeid)] = funcs.get(_function(nodeid), True) and outcome == "passed"
     targets: list[str] = []
     for path, funcs in by_file.items():
@@ -100,7 +101,7 @@ def passing_targets(
         else:
             targets.extend(f for f, ok in funcs.items() if ok)
     covered = set(targets)
-    nodes = tuple(n for n in outcomes if _function(n) in covered or n.split("::", 1)[0] in covered)
+    nodes = tuple(n for n in outcomes if _function(n) in covered or file_part(n) in covered)
     return tuple(targets), nodes, left
 
 

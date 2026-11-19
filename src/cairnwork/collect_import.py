@@ -14,6 +14,7 @@ from dataclasses import replace
 from fnmatch import fnmatchcase
 from typing import TypedDict
 
+from cairnwork.node_file import file_part
 from cairnwork.skip_hint import is_module
 
 MAX_ENTRIES = 100
@@ -137,13 +138,13 @@ def as_failed(run, targets, is_test):
         checks.setdefault(node, []).append(_in_repo(origin, is_test, _NOT_REPO))
     for node, module, origin in run.submodule_errors:
         checks.setdefault(node, []).append(_new_submodule(module, origin, is_test))
-    files = {target.partition("::")[0] for target in targets}
+    files = {file_part(target) for target in targets}
     if not run.collect_errors:
         return run
     for node in run.collect_errors:
         if node not in files or not checks.get(node) or not all(checks[node]):
             return run
-    marked = [t for t in targets if t.partition("::")[0] in set(run.collect_errors)]
+    marked = [t for t in targets if file_part(t) in set(run.collect_errors)]
     outcomes = {**run.outcomes, **dict.fromkeys(marked, "failed")}
     collected = (*run.collected, *(t for t in marked if t not in run.collected))
     return replace(run, collect_errors=(), outcomes=outcomes, collected=collected)

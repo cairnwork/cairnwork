@@ -8,6 +8,7 @@ import re
 import sys
 
 from cairnwork.collect_reader import _valid_exposed_id
+from cairnwork.node_file import file_part, name_part
 from cairnwork.p2p_bindings import (
     binds_in_scope,
     hidden_bindings,
@@ -48,7 +49,7 @@ def classify_payload(data: dict) -> dict:
                 texts[path] = data["sources"]["test"][path]
                 bases[path] = _tree(data["sources"]["base"][path])
                 test_trees[path] = _tree(texts[path])
-            *owners, name = _function(nodeid).split("::")[1:]
+            *owners, name = name_part(_function(nodeid)).split("::")
             test_tree = test_trees[path]
             if _defines(bases[path], owners, name):
                 gone = (
@@ -84,7 +85,7 @@ def main() -> None:
 
 
 def _file(nodeid: str) -> str:
-    return nodeid.partition("::")[0]
+    return file_part(nodeid)
 
 
 def _hidden(tree, base, name, path, test_ids, base_ids) -> bool:
@@ -95,7 +96,7 @@ def _hidden(tree, base, name, path, test_ids, base_ids) -> bool:
     count; each copy counts once, so a second copy of an excused one is hidden."""
 
     def got(ids):
-        return {_function(n).partition("::")[2] for n in ids if _file(n) == path}
+        return {name_part(_function(n)) for n in ids if _file(n) == path}
 
     try:
         kept = hidden_bindings(tree, name, got(test_ids))
@@ -115,7 +116,7 @@ def _runtime_exposes(exposed, path, name) -> bool:
 
 def _kept_uncollected(tree, name, path, test_ids) -> bool:
     """An inherited deletion excuses no binding left uncollected in the source file."""
-    got = {_function(n).partition("::")[2] for n in test_ids if _file(n) == path}
+    got = {name_part(_function(n)) for n in test_ids if _file(n) == path}
     try:
         return bool(hidden_bindings(tree, name, got))
     except RecursionError:

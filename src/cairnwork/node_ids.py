@@ -8,6 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from cairnwork.node_file import file_part, locate, name_part  # noqa: F401  (re-exported)
 from cairnwork.verdict_record import Verdict
 
 PLACEHOLDER = "<cw-checkout>"
@@ -25,39 +26,6 @@ def _ids(verdict: Verdict) -> set[str]:
     found = {node for field in _MAP_FIELDS for node in getattr(verdict, field)}
     found.update(node for field in _TUPLE_FIELDS for node in getattr(verdict, field))
     return found
-
-
-_NAME = re.compile(r"[^\W\d]\w*(::[^\W\d]\w*)*(\[.*\])?", re.DOTALL)
-
-
-def locate(nodeid: str) -> tuple[str, str] | None:
-    """(file path, name part) of a node id, or None when it has no ``::`` at all.
-
-    The file boundary is the first ``.py::`` after which the rest reads as ``Name(::Name)*``
-    with an optional case id (so a ``.py::`` inside a directory or a case id never matches);
-    failing that, the first ``.py`` followed by ``::`` whose prefix has no open ``[``
-    (``dir.pyx/`` is not one; a ``.py::`` inside a case id or a ``[`` directory is skipped; a
-    stray ``]`` in a directory name is ignored). Without such a boundary the first ``::``
-    splits file from name. Name parts never contain ``[``, so the case id starts at the
-    first ``[`` after the boundary."""
-    for match in re.finditer(r"\.py(?=::)", nodeid):
-        if _NAME.fullmatch(nodeid[match.end() + 2 :]):
-            return nodeid[: match.end()], nodeid[match.end() + 2 :]
-    for match in re.finditer(r"\.py(?=::)", nodeid):
-        depth = 0
-        for char in nodeid[: match.start()]:
-            depth += (char == "[") - (char == "]" and depth > 0)
-        if depth == 0:
-            return nodeid[: match.end()], nodeid[match.end() + 2 :]
-    path, separator, name = nodeid.partition("::")
-    return (path, name) if separator else None
-
-
-def file_part(nodeid: str) -> str:
-    """The file path of a node id (the whole id when it has no ``::``), cut at the file boundary
-    ``locate`` finds, not at the first ``::``: a path may itself hold ``::`` (#1272)."""
-    located = locate(nodeid)
-    return nodeid if located is None else located[0]
 
 
 def without_case(nodeid: str, *, all_parts: bool = False) -> str:
