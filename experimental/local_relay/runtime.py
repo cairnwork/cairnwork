@@ -35,7 +35,7 @@ from experimental.local_relay.config import (
 )
 from experimental.local_relay.diagnostics import append_debug, redact
 from experimental.local_relay.relay import run_relay
-from experimental.local_relay.worker_setup import prepare_worker_layout
+from experimental.local_relay.worker_setup import prepare_worker_layout, restore_judge_modes
 from experimental.local_worker import corpus_io
 from experimental.local_worker.endpoint import parse_loopback_url
 from experimental.local_worker.run_root_cleanup import INSTALLED_RUNS
@@ -288,6 +288,7 @@ def _run_localworker(args, task, source, context, endpoint, canary, model=LOCAL_
     if isinstance(record, dict) and not completed:
         record = {**record, "_local_relay_diagnostics": details}
     append_debug(debug_path, {"event": "worker-finish", **details})
+    restore_judge_modes(checkout, base)
     return RunResult(
         result.returncode,
         result.stdout + ("" if completed else redact(result.stderr)),

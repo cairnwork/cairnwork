@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 from pathlib import Path
 
@@ -14,6 +15,8 @@ from experimental.local_relay.config import DEFAULT_LOCAL_ENDPOINT
 from experimental.local_relay.diagnostics import MAX_STDERR_CHARS, append_debug, episode_failure
 from experimental.local_relay.relay import LocalAttemptFailed
 from experimental.pause.flow import RunResult
+
+_RESTORE_CALLS: list = []
 
 
 def _local_run_fakes(monkeypatch, tmp_path, marker, stderr=""):
@@ -28,6 +31,7 @@ def _local_run_fakes(monkeypatch, tmp_path, marker, stderr=""):
 
     monkeypatch.setattr(runtime, "_prepare", prepare)
     monkeypatch.setattr(runtime, "prepare_worker_layout", lambda *_args: None)
+    monkeypatch.setattr(runtime, "restore_judge_modes", lambda *args: _RESTORE_CALLS.append(args))
 
     def launch(argv, **_kwargs):
         captured["argv"] = argv
@@ -255,3 +259,73 @@ def test_worker_layout_regroups_checkout_scratch_and_venv_to_the_runs_gid(monkey
         root / "venv" / "bin" / "python",
     ):
         assert path.stat().st_gid == gid, path
+
+
+def _git_checkout(tmp_path):
+    import subprocess
+
+    repo = tmp_path / "co"
+    (repo / "pkg").mkdir(parents=True)
+    (repo / "pkg" / "a.py").write_text("x = 1\n", encoding="utf-8")
+    (repo / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    (repo / "run.sh").chmod(0o755)
+    env = {"GIT_CONFIG_GLOBAL": "/dev/null", "PATH": os.environ["PATH"], "HOME": str(tmp_path)}
+    for argv in (
+        ["init", "-q"],
+        ["add", "-A"],
+        ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "base"],
+    ):
+        subprocess.run(["git", "-C", str(repo), *argv], check=True, env=env)
+    base = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, env=env
+    ).stdout.strip()
+    return repo, base
+
+
+def test_restore_judge_modes_returns_core_shape_and_runs_no_repo_controlled_code(tmp_path):
+    from experimental.local_relay import worker_setup
+
+    repo, base = _git_checkout(tmp_path)
+    marker = tmp_path / "executed"
+    hook = tmp_path / "fsmon.sh"
+    hook.write_text(f"#!/bin/sh\ntouch {marker}\n", encoding="utf-8")
+    hook.chmod(0o755)
+    with (repo / ".git" / "config").open("a", encoding="utf-8") as handle:
+        handle.write(f"[core]\n\tfsmonitor = {hook}\n")
+    worker_setup._set_checkout_modes(repo, os.getegid())
+    (repo / "run.sh").chmod(0o660)  # worker mode must not be trusted as the executable bit
+    os.chmod(repo / "pkg" / "a.py", 0o770)  # a file the worker tried to make executable
+    (repo / "pkg" / "new.py").write_text("y = 2\n", encoding="utf-8")
+    os.symlink("a.py", repo / "pkg" / "link.py")
+
+    worker_setup.restore_judge_modes(repo, base)
+
+    assert stat.S_IMODE(repo.stat().st_mode) == 0o755
+    assert stat.S_IMODE((repo / "pkg").stat().st_mode) == 0o755
+    assert stat.S_IMODE((repo / "run.sh").stat().st_mode) == 0o755  # executable in base
+    assert stat.S_IMODE((repo / "pkg" / "a.py").stat().st_mode) == 0o644  # not executable in base
+    assert stat.S_IMODE((repo / "pkg" / "new.py").stat().st_mode) == 0o644
+    assert (repo / "pkg" / "a.py").stat().st_gid == os.getegid()
+    assert (repo / "pkg" / "link.py").is_symlink()
+    assert not marker.exists()
+
+
+def test_restore_judge_modes_fails_closed_when_an_entry_cannot_be_reowned(monkeypatch, tmp_path):
+    from experimental.local_relay import worker_setup
+
+    repo, base = _git_checkout(tmp_path)
+
+    def refuse(*_args, **_kwargs):
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(worker_setup.os, "fchown", refuse)
+    with pytest.raises(RuntimeError, match="cannot restore judge modes"):
+        worker_setup.restore_judge_modes(repo, base)
+
+
+def test_worker_checkout_modes_are_restored_for_core_after_the_worker_exits(monkeypatch, tmp_path):
+    _RESTORE_CALLS.clear()
+    _local_run_fakes(monkeypatch, tmp_path, "EPISODE COMPLETE")
+    assert len(_RESTORE_CALLS) == 1
+    checkout, base = _RESTORE_CALLS[0]
+    assert checkout.name == "checkout" and base == "a" * 40

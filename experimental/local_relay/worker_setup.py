@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 
 from experimental.local_worker.canary import INSTALLED_PYROOT
+from experimental.pause.git_env import hardened_git_env
 
 
 def prepare_worker_layout(run_root: Path, checkout: Path) -> None:
@@ -78,5 +79,59 @@ def _set_file_mode(name: str, root_fd: int, gid: int) -> None:
         if stat.S_ISREG(os.fstat(fd).st_mode):
             os.fchown(fd, -1, gid)
             os.fchmod(fd, 0o660)
+    finally:
+        os.close(fd)
+
+
+_GIT_SAFE = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false")
+
+
+def restore_judge_modes(checkout: Path, base_sha: str) -> None:
+    """Undo the worker-group modes once the worker has exited, before Core judges the checkout.
+
+    Core requires directories 0755 and files 0644/0755 (0755 only where the base commit has the
+    executable bit), and its tree digest binds the group to the relay process's own gid. The
+    executable set comes from the base commit's tree (not the worker-writable index) and git runs
+    with hooks and fsmonitor off. An entry the relay cannot re-own (for example a file the worker
+    created under its own uid) fails closed with an explicit error, never a silent success.
+    """
+    gid = os.getegid()
+    listing = subprocess.run(
+        ["git", *_GIT_SAFE, "-C", str(checkout), "ls-tree", "-r", "-z", base_sha],
+        capture_output=True,
+        check=True,
+        env=hardened_git_env(),
+    ).stdout
+    executable = {
+        entry.split(b"\t", 1)[1] for entry in listing.split(b"\0") if entry.startswith(b"100755 ")
+    }
+    try:
+        for root, directories, files, root_fd in os.fwalk(checkout, follow_symlinks=False):
+            if Path(root) == checkout:
+                directories[:] = [name for name in directories if name != ".git"]
+            os.fchown(root_fd, -1, gid)
+            os.fchmod(root_fd, 0o755)
+            for name in files:
+                _restore_file(name, root_fd, gid, Path(root) / name, checkout, executable)
+    except PermissionError as exc:
+        raise RuntimeError(
+            f"cannot restore judge modes (entry not owned by the relay): {exc}"
+        ) from exc
+
+
+def _restore_file(
+    name: str, root_fd: int, gid: int, path: Path, checkout: Path, executable: set[bytes]
+) -> None:
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=root_fd)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            return
+        raise
+    try:
+        if stat.S_ISREG(os.fstat(fd).st_mode):
+            os.fchown(fd, -1, gid)
+            rel = os.fsencode(path.relative_to(checkout).as_posix())
+            os.fchmod(fd, 0o755 if rel in executable else 0o644)
     finally:
         os.close(fd)
