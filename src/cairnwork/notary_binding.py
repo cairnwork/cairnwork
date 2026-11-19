@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import sys
 from dataclasses import dataclass
 from typing import Any
 
@@ -68,16 +69,18 @@ def _row_binding(notary: Any, task_id: str, attempt_id: str) -> RowBinding | Non
         raise RowBindingUnavailable("cannot read notary row") from exc
     finally:
         if conn is not None:
+            in_flight = sys.exc_info()[0] is not None  # an error is already on its way out
             try:
                 conn.close()
-            except sqlite3.Error as exc:
-                raise RowBindingUnavailable("cannot close notary read snapshot") from exc
-            except MemoryError:  # still release the descriptor, then let the outer level map it
-                try:
+            except (sqlite3.Error, MemoryError) as exc:
+                if not in_flight and isinstance(exc, sqlite3.Error):
+                    raise RowBindingUnavailable("cannot close notary read snapshot") from exc
+                try:  # release once more; the error already in flight (or this one) wins
                     conn.close()
                 except (MemoryError, sqlite3.Error):
                     pass
-                raise
+                if not in_flight:
+                    raise
     if row is None:
         return None
     base, candidate, request_json, response_json, expected, binding_json = row
