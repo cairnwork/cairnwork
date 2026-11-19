@@ -70,3 +70,8 @@ def _links(node: ast.stmt) -> list[tuple[set[str], ast.AST]]:
         pairs = [(i.optional_vars, i.context_expr) for i in node.items if i.optional_vars]
     pairs += [(n.target, n.value) for n in ast.walk(node) if isinstance(n, ast.NamedExpr)]
     return [({n.id for n in ast.walk(t) if isinstance(n, ast.Name)}, v) for t, v in pairs if v]
+
+
+def _params(node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+    a = node.args
+    return {x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs, a.vararg, a.kwarg) if x}

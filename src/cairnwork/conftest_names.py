@@ -18,8 +18,7 @@ base file that does not parse counts every identifier in it (``_parse``). What t
 these conftests import (``from M import n``, ``pytest_plugins``) request counts too, followed
 through re-exports (``_imported``, #982 item 4). Not seen: a name a third-party plugin's fixture
 requests internally, the ini ``usefixtures`` option, a module a test module imports (except a
-helper it binds under a test name, #987), and a module imported by name at run time
-(``importlib``).
+helper bound under a test name, #987), and a module imported by name at run time (``importlib``).
 """
 
 from __future__ import annotations
@@ -30,7 +29,7 @@ from pathlib import Path
 from posixpath import dirname, join
 
 from cairnwork.conftest_reach import _mentions, _paired_values, _pattern_bound, _with_expr
-from cairnwork.conftest_test_imports import _test_named_imports
+from cairnwork.conftest_test_imports import _params, _test_named_imports
 from cairnwork.deferred_overlay import TestCommitRejected
 from cairnwork.fixture_forms import (
     CODE,
@@ -179,11 +178,9 @@ def _test_bound_helpers(
     trees: dict[str, ast.Module],
     directory: str,
 ) -> set[str]:
-    """#987: a test module under ``directory`` that imports ``f`` (``from M import f``) and binds
-    it under a test name (``test_x = f``, or ``from M import f as test_x``) makes pytest collect
-    ``f`` with its own parameters. Those count, from a base file outside ``directory`` too. Only
-    this form: other imported functions are not read (#982). Every base file matching ``M`` is
-    read; if ``f`` is no top-level def there, every parameter in it counts (fail closed)."""
+    """#987: a test module under ``directory`` that binds an imported ``f`` under a test name
+    makes pytest collect ``f`` with its own parameters; they count, only for this form (#982).
+    Every base file matching ``M`` is read; no top-level ``f`` there counts every parameter."""
     wanted: dict[str, set[str]] = {}  # module file -> function names
     for file, tree in trees.items():
         if file.rsplit("/", 1)[-1] == "conftest.py" or not _under(file, directory):
@@ -205,16 +202,9 @@ def _test_bound_helpers(
             elif orig in defs:
                 names |= _params(defs[orig])
             else:  # a re-export: every parameter in the module and in what it imports
-                if closure is None:
-                    more = _imported(repo, listing, {file: tree}, index)
-                    closure = [tree, *more.values()]
+                closure = closure or [tree, *_imported(repo, listing, {file: tree}, index).values()]
                 names |= set().union(*(requested(t) for t in closure))
     return names
-
-
-def _params(node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
-    a = node.args
-    return {x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs, a.vararg, a.kwarg) if x}
 
 
 def _listing(repo: Path, base: str) -> dict[str, str]:
