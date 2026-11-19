@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -110,3 +113,87 @@ def test_fork_head_without_base_commit_is_fetched(tmp_path: Path) -> None:
     assert f"merge base: {c1}" in done.stdout  # fetched, merge base found
     assert "cannot fetch" not in done.stdout
     assert done.returncode == 3  # fake pyright crashes afterwards
+
+
+def _setup_trusted_run(tmp_path: Path) -> tuple[Path, Path, Path, str, Path, Path]:
+    base = tmp_path / "base"
+    base.mkdir()
+    _git(base, "init", "-q", "-b", "main")
+    (base / "m.py").write_text("x = 1\n", encoding="utf-8")
+    _git(base, "add", "m.py")
+    _git(base, "commit", "-qm", "base")
+    c1 = _git(base, "rev-parse", "HEAD")
+
+    head = tmp_path / "head"
+    subprocess.run(["git", "clone", "-q", str(base), str(head)], check=True)
+    trusted = tmp_path / "trusted"
+    (trusted / "scripts").mkdir(parents=True)
+    shutil.copy2(ROOT / "scripts" / "pyright_gate.py", trusted / "scripts" / "pyright_gate.py")
+    (trusted / "pyrightconfig.json").write_text('{"typeCheckingMode": "strict"}', encoding="utf-8")
+    (trusted / ".venv" / "bin").mkdir(parents=True)
+    os.symlink(sys.executable, trusted / ".venv" / "bin" / "python")
+
+    seen = tmp_path / "seen.txt"
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    (fake / "uv").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (fake / "uv").chmod(0o755)
+    uvx_body = (
+        "#!/bin/sh\n"
+        'proj=""\n'
+        "while [ $# -gt 0 ]; do\n"
+        '  if [ "$1" = "--project" ]; then proj="$2"; shift 2; else shift; fi\n'
+        "done\n"
+        'printf \'%s\\t%s\\n\' "$proj" "$(cat "$proj/pyrightconfig.json" 2>/dev/null)"'
+        ' >> "$SEEN_FILE"\n'
+        'printf \'{"generalDiagnostics": [], "summary": {"filesAnalyzed": 1}}\\n\'\n'
+    )
+    (fake / "uvx").write_text(uvx_body, encoding="utf-8")
+    (fake / "uvx").chmod(0o755)
+    return trusted, head, fake, c1, seen, tmp_path / "work"
+
+
+def test_trusted_script_enforces_trusted_config_and_rejects_suppressions(
+    tmp_path: Path,
+) -> None:
+    trusted, head, fake, base_sha, seen, work = _setup_trusted_run(tmp_path)
+    env = {**os.environ, "PATH": f"{fake}:{os.environ['PATH']}", "SEEN_FILE": str(seen)}
+
+    (head / "m.py").write_text("# type: ignore\nx = 1\n", encoding="utf-8")
+    _git(head, "commit", "-qam", "add file ignore")
+    done_ignore = subprocess.run(
+        [str(SCRIPT), str(trusted), str(head), base_sha, str(work / "w1")],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert done_ignore.returncode == 2
+    assert status.decide("success", str(done_ignore.returncode)) == "error"
+    assert not seen.exists()
+
+    (head / "m.py").write_text("x = 2\n", encoding="utf-8")
+    (head / "m.pyi").write_text("x: int\n", encoding="utf-8")
+    _git(head, "add", "m.py", "m.pyi")
+    _git(head, "commit", "-qm", "add stub")
+    done_stub = subprocess.run(
+        [str(SCRIPT), str(trusted), str(head), base_sha, str(work / "w2")],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert done_stub.returncode == 2
+    assert not seen.exists()
+
+    _git(head, "rm", "-q", "m.pyi")
+    _git(head, "commit", "-qm", "clean change")
+    done_clean = subprocess.run(
+        [str(SCRIPT), str(trusted), str(head), base_sha, str(work / "w3")],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert done_clean.returncode == 0
+    assert status.decide("success", str(done_clean.returncode)) == "success"
+    records = [line.split("\t") for line in seen.read_text(encoding="utf-8").splitlines()]
+    assert len(records) == 2
+    assert all(json.loads(cfg) == {"typeCheckingMode": "strict"} for _, cfg in records)

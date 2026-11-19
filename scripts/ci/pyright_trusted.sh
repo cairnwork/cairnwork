@@ -31,6 +31,10 @@ git -C "$head" worktree add --detach "$work/base" "$mb" >/dev/null || exit 3
 (cd "$trusted" && uv sync --locked) || { echo "uv sync of trusted tree failed"; exit 3; }
 py="$trusted/.venv/bin/python"
 
+if [ -x "$py" ]; then
+  "$py" "$trusted/scripts/pyright_gate.py" --prepare-trees "$trusted" "$work/base" "$head" || exit $?
+fi
+
 run_pyright() { # dir out.json
   local rc=0
   (cd "$trusted" && uvx --from pyright==1.1.414 pyright --project "$1" --pythonpath "$py" \

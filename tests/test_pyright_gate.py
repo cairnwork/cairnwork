@@ -159,3 +159,115 @@ def test_missing_generaldiagnostics_fails_closed(tmp_path: Path) -> None:
     bad = tmp_path / "nodiag.json"
     bad.write_text(json.dumps({"summary": {"filesAnalyzed": 3}}), encoding="utf-8")
     assert _run(base, bad, head, _report(head, [])) == 2
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "# type: ignore\nx: int = 'a'\n",
+        "# type: ignore[assignment]\nx: int = 'a'\n",
+        "# header # type: ignore\nx: int = 'a'\n",
+        "\ufeff# type: ignore\nx: int = 'a'\n",
+        '"""docstring"""\n# type: ignore\nx: int = \'a\'\n',
+        "import os\r# type: ignore\rx: int = 'a'\n",
+    ],
+)
+def test_file_level_type_ignore_fails_closed(tmp_path: Path, source: str) -> None:
+    base = _tree(tmp_path / "base", "x: int = 'a'\n")
+    head = _tree(tmp_path / "head", source)
+    assert _run(base, _report(base, []), head, _report(head, [])) == 2
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "# pyright: basic\nx: int = 'a'\n",
+        "# pyright: reportGeneralTypeIssues=false\nx: int = 'a'\n",
+        "# pyright: ignore\nx: int = 'a'\n",
+        "x: int = 1  # pyright: reportGeneralTypeIssues=false\n",
+    ],
+)
+def test_file_level_pyright_directive_fails_closed(tmp_path: Path, source: str) -> None:
+    base = _tree(tmp_path / "base", "x: int = 'a'\n")
+    head = _tree(tmp_path / "head", source)
+    assert _run(base, _report(base, []), head, _report(head, [])) == 2
+
+
+def test_editing_file_with_existing_file_level_ignore_fails_closed(tmp_path: Path) -> None:
+    base = _tree(tmp_path / "base", "y = 1\n")
+    head = _tree(tmp_path / "head", "y = 2\n")
+    suppressed = "# pyright: reportArgumentType=false\nx = 1\n"
+    (base / "a.py").write_text(suppressed, encoding="utf-8")
+    (head / "a.py").write_text(suppressed, encoding="utf-8")
+    assert _run(base, _report(base, []), head, _report(head, [])) == 0
+    (head / "a.py").write_text("# pyright: reportArgumentType=false\nx = 2\n", encoding="utf-8")
+    assert _run(base, _report(base, []), head, _report(head, [])) == 2
+
+
+def test_inline_ignore_and_string_literal_are_allowed(tmp_path: Path) -> None:
+    base = _tree(tmp_path / "base", "x = 1\n")
+    head = _tree(
+        tmp_path / "head",
+        "x: int = 1  # type: ignore[assignment]\n"
+        "y: int = 2  # pyright: ignore[reportAssignmentType]\n"
+        "s = '# type: ignore'\n",
+    )
+    assert _run(base, _report(base, []), head, _report(head, [])) == 0
+
+
+@pytest.mark.parametrize(
+    "rel",
+    ["m.pyi", "sub/m.pyi", "typings/m.pyi", "typings/m.py", "pkg-stubs/m.pyi"],
+)
+def test_stub_addition_fails_closed(tmp_path: Path, rel: str) -> None:
+    base = _tree(tmp_path / "base", "x = 1\n")
+    head = _tree(tmp_path / "head", "x = 1\n")
+    target = head / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("x: int\n", encoding="utf-8")
+    assert _run(base, _report(base, []), head, _report(head, [])) == 2
+
+
+def test_stub_modification_or_deletion_fails_closed(tmp_path: Path) -> None:
+    base = _tree(tmp_path / "base", "x = 1\n")
+    head = _tree(tmp_path / "head", "x = 1\n")
+    (base / "m.pyi").write_text("x: int\n", encoding="utf-8")
+    (head / "m.pyi").write_text("x: int\n", encoding="utf-8")
+    assert _run(base, _report(base, []), head, _report(head, [])) == 0
+    (head / "m.pyi").write_text("x: str\n", encoding="utf-8")
+    assert _run(base, _report(base, []), head, _report(head, [])) == 2
+    (head / "m.pyi").unlink()
+    assert _run(base, _report(base, []), head, _report(head, [])) == 2
+
+
+def test_nested_pyrightconfig_or_invalid_pyproject_fails_closed(tmp_path: Path) -> None:
+    base = _tree(tmp_path / "base", "x = 1\n")
+    head = _tree(tmp_path / "head", "x = 1\n")
+    (head / "sub").mkdir()
+    (head / "sub" / "pyrightconfig.json").write_text("{}", encoding="utf-8")
+    assert _run(base, _report(base, []), head, _report(head, [])) == 2
+    (head / "sub" / "pyrightconfig.json").unlink()
+    (head / "pyproject.toml").write_text("[tool.pyright\n", encoding="utf-8")
+    assert _run(base, _report(base, []), head, _report(head, [])) == 2
+
+
+def test_prepare_trees_materializes_trusted_config(tmp_path: Path) -> None:
+    trusted = _tree(tmp_path / "trusted", "x = 1\n")
+    (trusted / "pyrightconfig.json").write_text('{"typeCheckingMode": "strict"}', encoding="utf-8")
+    base = _tree(tmp_path / "base", "x = 1\n")
+    head = _tree(tmp_path / "head", "x = 1\n")
+    off = '[tool.pyright]\ntypeCheckingMode = "off"\n'
+    (base / "pyproject.toml").write_text(off, encoding="utf-8")
+    (head / "pyproject.toml").write_text(off, encoding="utf-8")
+    assert gate.main(["--prepare-trees", str(trusted), str(base), str(head)]) == 0
+    assert json.loads((base / "pyrightconfig.json").read_text(encoding="utf-8")) == {
+        "typeCheckingMode": "strict"
+    }
+    assert json.loads((head / "pyrightconfig.json").read_text(encoding="utf-8")) == {
+        "typeCheckingMode": "strict"
+    }
+    (head / "m.py").write_text("# type: ignore\nx = 1\n", encoding="utf-8")
+    assert gate.main(["--prepare-trees", str(trusted), str(base), str(head)]) == 2
+    (head / "m.py").write_text("x = 1\n", encoding="utf-8")
+    (head / "m.pyi").write_text("x: int\n", encoding="utf-8")
+    assert gate.main(["--prepare-trees", str(trusted), str(base), str(head)]) == 2
