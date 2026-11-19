@@ -20,6 +20,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from cairnwork.gitversion import GitVersionError, git_version
 from cairnwork.textclean import replace_hidden
 
 GIT_TIMEOUT_SECONDS = 60
@@ -276,6 +277,10 @@ ALLOWED_PROTOCOLS = "file:https:ssh"
 def _child_env() -> dict[str, str]:
     """Base environment for git: no inherited GIT_*, no askpass, terminal prompts off, and
     only the file, https and ssh transports."""
+    try:
+        git_version()
+    except GitVersionError as exc:
+        raise GitCommandError(str(exc)) from exc
     env = {
         k: v
         for k, v in os.environ.items()
