@@ -43,6 +43,8 @@ _LOW_RE = re.compile(f"[{_LOW}]")
 # counts only when it holds a marker (as '?' started one there before #744; my-token stays shown)
 _NAME = re.compile(rf"(?<![\w{_HID}{_LOW}])([\w{_HID}{_LOW}]+)[=⁼₌⩵⩶﹦＝]")
 _VALUE = re.compile(r"[^&\s]+")
+_MARKS = frozenset({"Mn", "Me"})  # combining marks, dropped from the matching view (#1329)
+_IGNORABLE = "\u034f" + "".join(map(chr, range(0xFE00, 0xFE10)))  # CGJ, variation selectors
 TAIL_CHARS = 2048
 # any character fits in 4 bytes; twice that, so the window holds more than the tail. A window that
 # does not start the file drops its first, partial line: a character or URL cut there never reaches
@@ -108,8 +110,42 @@ def mask_secrets(text: str) -> str:
         replace_hidden(_ANSI.sub("", text).replace("\r\n", "\n"), _HID, keep="\n\t")
     )
     for rx in (_HEADER, _BEARER, _COLON, _FLAG, _ENCODED):
-        text = rx.sub(r"\1<redacted>", text)
+        text = _redact(rx, text)
     return _mask_fields(text).replace(_HID, "?")
+
+
+def _redact(rx: re.Pattern[str], text: str) -> str:
+    """``rx.sub(r"\\1<redacted>", text)``, but matched on the NFKC view of ``text`` without marks
+    (#1329): the value that follows group 1 is masked in the original, whose other characters stay
+    as they were."""
+    view, idx = _view_index(text)
+    out, pos = [], 0
+    for m in rx.finditer(view):
+        if m.end() == m.end(1):  # nothing after the name: no value to mask
+            continue
+        start = idx[m.end(1)] if idx else m.end(1)
+        end = (idx[m.end() - 1] if idx else m.end() - 1) + 1
+        if start >= pos:
+            out += [text[pos:start], "<redacted>"]
+            pos = end
+    return "".join([*out, text[pos:]])
+
+
+def _view_index(text: str) -> tuple[str, list[int]]:
+    """The NFKC view used for matching, and each view character's index in ``text`` (empty for
+    pure ASCII, where the two agree). Combining marks and variation selectors are left out of the
+    view, so a mark inside or after a name no longer hides it."""
+    if text.isascii():
+        return text, []
+    out: list[str] = []
+    idx: list[int] = []
+    for i, ch in enumerate(text):
+        if unicodedata.category(ch) in _MARKS or ch in _IGNORABLE:
+            continue
+        norm = unicodedata.normalize("NFKC", ch)
+        out.append(norm)
+        idx.extend([i] * len(norm))
+    return "".join(out), idx
 
 
 def _is_key(name: str) -> bool:
@@ -150,16 +186,9 @@ def _is_secret_name(
 
 
 def _nfkc_index(text: str) -> tuple[str, list[int]]:
-    """Per-character NFKC text and the original index of each normalized character (#1313)."""
-    if text.isascii():
-        return text, []
-    out: list[str] = []
-    idx: list[int] = []
-    for i, ch in enumerate(text):
-        norm = unicodedata.normalize("NFKC", ch)
-        out.append(norm)
-        idx.extend([i] * len(norm))
-    return "".join(out), idx
+    """Per-character NFKC text and the original index of each normalized character (#1313);
+    marks are left out as in ``_view_index`` (#1329)."""
+    return _view_index(text)
 
 
 def _field_matches(source: str, idx: list[int] | None, text: str) -> Iterator[tuple[int, int]]:
