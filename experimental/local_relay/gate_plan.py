@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import stat
 import subprocess
+import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -33,6 +34,16 @@ _GIT = (
     "core.attributesFile=/dev/null",
     "-c",
     "diff.external=",
+    "-c",
+    "diff.ignoreSubmodules=none",
+    "-c",
+    "core.fileMode=true",
+    "-c",
+    "core.symlinks=true",
+    "-c",
+    "core.autocrlf=false",
+    "-c",
+    "core.sparseCheckout=false",
 )
 
 
@@ -40,10 +51,21 @@ class PlanIncomplete(Exception):
     """The change cannot be shown to the gate in full; the stage must not be approved."""
 
 
-def _git(checkout: Path, *args: str, limit: int) -> bytes:
-    """Run git and read at most ``limit`` bytes; more output means an incomplete plan."""
+def _env(checkout: Path, index: Path) -> dict[str, str]:
+    """Git environment that trusts neither the worker's index nor its worktree settings."""
     env = hardened_git_env()
-    env["GIT_ATTR_NOSYSTEM"] = "1"
+    env.update(
+        GIT_ATTR_NOSYSTEM="1",
+        GIT_DIR=str(checkout / ".git"),
+        GIT_WORK_TREE=str(checkout),  # explicit: a worker-written core.worktree cannot redirect
+        GIT_INDEX_FILE=str(index),  # a scratch index: no assume-unchanged / skip-worktree bits
+    )
+    return env
+
+
+def _git(checkout: Path, *args: str, limit: int, env: dict[str, str] | None = None) -> bytes:
+    """Run git and read at most ``limit`` bytes; more output means an incomplete plan."""
+    env = env if env is not None else _env(checkout, checkout / ".git" / "index")
     proc = subprocess.Popen(
         [*_GIT, "-C", str(checkout), *args],
         stdout=subprocess.PIPE,
@@ -105,17 +127,22 @@ def build_gate_plan(task: dict[str, Any], candidate: Any) -> str:
     if checkout is None or not isinstance(base, str):
         raise ValueError("gate review needs the candidate checkout and its base commit")
     checkout = Path(checkout)
-    diff = _git(
-        checkout,
-        "diff",
-        "--no-color",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--text",  # attributes (-diff, binary) must not turn content into a placeholder
-        "--no-renames",
-        base,
-        limit=MAX_DIFF_BYTES,
-    ).decode("utf-8", "replace")
+    with tempfile.TemporaryDirectory(prefix="relay-index-") as scratch:
+        env = _env(checkout, Path(scratch) / "index")
+        _git(checkout, "read-tree", base, limit=MAX_LISTING_BYTES, env=env)  # index := base tree
+        diff = _git(
+            checkout,
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--text",  # attributes (-diff, binary) must not turn content into a placeholder
+            "--no-renames",
+            "--ignore-submodules=none",
+            limit=MAX_DIFF_BYTES,
+            env=env,
+        ).decode("utf-8", "replace")
+        listing = _git(checkout, "ls-files", "--others", "-z", limit=MAX_LISTING_BYTES, env=env)
     if any(line.startswith("Binary files ") for line in diff.splitlines()):
         raise PlanIncomplete("the diff hides content behind a binary placeholder")
     parts = [
@@ -123,7 +150,6 @@ def build_gate_plan(task: dict[str, Any], candidate: Any) -> str:
         "Allowed files: " + ", ".join(task.get("allowed_files", [])),
         "Change (git diff against the base commit):\n" + (diff or "(no tracked changes)"),
     ]
-    listing = _git(checkout, "ls-files", "--others", "-z", limit=MAX_LISTING_BYTES)
     root_fd = os.open(checkout, os.O_RDONLY | os.O_DIRECTORY)
     try:
         device = os.fstat(root_fd).st_dev

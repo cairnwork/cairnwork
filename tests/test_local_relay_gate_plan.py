@@ -238,3 +238,33 @@ def test_a_binary_placeholder_in_the_diff_is_refused(monkeypatch, tmp_path):
     monkeypatch.setattr(gate_plan, "_git", lambda *_a, **_k: b"Binary files a/x and b/x differ\n")
     with pytest.raises(PlanIncomplete):
         build_gate_plan(TASK, RunResult(0, "", repo.parent, repo, base_sha=base))
+
+
+def _update_index(repo, *args):
+    import os
+
+    subprocess.run(
+        ["git", "-C", str(repo), "update-index", *args],
+        check=True,
+        env={**os.environ, **ENV},
+    )
+
+
+@pytest.mark.parametrize("flag", ["--assume-unchanged", "--skip-worktree"])
+def test_index_bits_set_by_the_worker_cannot_hide_a_modified_file(tmp_path, flag):
+    repo, base = _repo(tmp_path)
+    _update_index(repo, flag, "pkg/stats.py")
+    (repo / "pkg" / "stats.py").write_text("def last_n(items, n):\n    return items[-n:]\n")
+    plan = build_gate_plan(TASK, RunResult(0, "", repo.parent, repo, base_sha=base))
+    assert "+    return items[-n:]" in plan
+
+
+def test_a_removed_tracked_file_and_a_redirected_worktree_setting_are_still_visible(tmp_path):
+    repo, base = _repo(tmp_path)
+    (repo / "pkg" / "stats.py").unlink()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    with (repo / ".git" / "config").open("a") as handle:
+        handle.write(f"[core]\n\tworktree = {elsewhere}\n")
+    plan = build_gate_plan(TASK, RunResult(0, "", repo.parent, repo, base_sha=base))
+    assert "-def last_n(items, n):" in plan  # the deletion is seen; core.worktree is ignored
