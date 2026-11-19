@@ -1,15 +1,26 @@
-"""What the Haiku gate reviews: the task statement plus the change itself, with relative paths."""
+"""What the Haiku gate reviews: the task statement plus the change itself, with relative paths.
+
+Everything read here is worker-controlled (the checkout and its ``.git``), so: git runs with hooks,
+fsmonitor, external diff, textconv and attribute files off; files are opened with O_NOFOLLOW and
+read with a hard byte cap (a symlink is shown as its target text, never followed); and a plan that
+cannot show the whole change raises ``PlanIncomplete`` instead of being silently cut, so an
+unseen part of the change can never be approved.
+"""
 
 from __future__ import annotations
 
+import os
+import stat
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from experimental.pause.git_env import hardened_git_env
 
 MAX_PLAN_CHARS = 30000
-MAX_NEW_FILE_CHARS = 8000
+MAX_DIFF_BYTES = 60000
+MAX_NEW_FILE_BYTES = 8000
+MAX_LISTING_BYTES = 20000
 _GIT = (
     "git",
     "-c",
@@ -18,47 +29,108 @@ _GIT = (
     "core.fsmonitor=false",
     "-c",
     "core.quotepath=off",
+    "-c",
+    "core.attributesFile=/dev/null",
+    "-c",
+    "diff.external=",
 )
 
 
-def _git(checkout: Path, *args: str) -> bytes:
-    run = subprocess.run(
+class PlanIncomplete(Exception):
+    """The change cannot be shown to the gate in full; the stage must not be approved."""
+
+
+def _git(checkout: Path, *args: str, limit: int) -> bytes:
+    """Run git and read at most ``limit`` bytes; more output means an incomplete plan."""
+    env = hardened_git_env()
+    env["GIT_ATTR_NOSYSTEM"] = "1"
+    proc = subprocess.Popen(
         [*_GIT, "-C", str(checkout), *args],
-        capture_output=True,
-        check=False,
-        env=hardened_git_env(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        env=env,
     )
-    if run.returncode:
+    assert proc.stdout is not None
+    data = proc.stdout.read(limit + 1)
+    over = len(data) > limit
+    if over:
+        proc.kill()
+    proc.stdout.close()
+    code = proc.wait()
+    if over:
+        raise PlanIncomplete(f"git {args[0]} output exceeds {limit} bytes")
+    if code:
         raise RuntimeError("cannot read the candidate change for the gate")
-    return run.stdout
+    return data
+
+
+def _read_new_file(root_fd: int, device: int, rel: str) -> str:
+    """Contents of one untracked file, or the link target for a symlink; never follows links."""
+    path = PurePosixPath(rel)
+    if path.is_absolute() or ".." in path.parts:
+        raise PlanIncomplete(f"unsafe path: {rel}")
+    fd = os.open(".", os.O_RDONLY | os.O_DIRECTORY, dir_fd=root_fd)
+    try:
+        for part in path.parts[:-1]:
+            nxt = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = nxt
+        name = path.parts[-1]
+        info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+        if stat.S_ISLNK(info.st_mode):
+            return "(symlink to " + os.readlink(name, dir_fd=fd) + ")"
+        if not stat.S_ISREG(info.st_mode) or info.st_dev != device or info.st_nlink != 1:
+            raise PlanIncomplete(f"cannot show non-regular or linked file: {rel}")
+        file_fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+        try:
+            data = os.read(file_fd, MAX_NEW_FILE_BYTES + 1)
+        finally:
+            os.close(file_fd)
+    except OSError as exc:
+        raise PlanIncomplete(f"cannot read new file {rel}: {exc.strerror}") from exc
+    finally:
+        os.close(fd)
+    if len(data) > MAX_NEW_FILE_BYTES:
+        raise PlanIncomplete(f"new file {rel} exceeds {MAX_NEW_FILE_BYTES} bytes")
+    return data.decode("utf-8", "replace")
 
 
 def build_gate_plan(task: dict[str, Any], candidate: Any) -> str:
-    """Task prompt + ``git diff base`` + new untracked files; paths are repo-relative.
+    """Task prompt + ``git diff base`` + every untracked file; paths are repo-relative.
 
-    Never the candidate's repr: that carries host paths (the secret scanner rightly blocks them)
-    and says nothing about what actually changed.
+    Untracked files are enumerated exactly as acceptance does (no ignore rules).
     """
     checkout = getattr(candidate, "checkout", None)
     base = getattr(candidate, "base_sha", None)
     if checkout is None or not isinstance(base, str):
         raise ValueError("gate review needs the candidate checkout and its base commit")
     checkout = Path(checkout)
-    diff = _git(checkout, "diff", "--no-color", "--no-ext-diff", "--no-renames", base).decode(
-        "utf-8", "replace"
-    )
+    diff = _git(
+        checkout,
+        "diff",
+        "--no-color",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-renames",
+        base,
+        limit=MAX_DIFF_BYTES,
+    ).decode("utf-8", "replace")
     parts = [
         "Task:\n" + str(task.get("prompt", "")).strip(),
         "Allowed files: " + ", ".join(task.get("allowed_files", [])),
         "Change (git diff against the base commit):\n" + (diff or "(no tracked changes)"),
     ]
-    for raw in _git(checkout, "ls-files", "--others", "--exclude-standard", "-z").split(b"\0"):
-        if not raw:
-            continue
-        rel = raw.decode("utf-8", "replace")
-        text = (checkout / rel).read_bytes()[:MAX_NEW_FILE_CHARS].decode("utf-8", "replace")
-        parts.append(f"New file {rel}:\n{text}")
+    listing = _git(checkout, "ls-files", "--others", "-z", limit=MAX_LISTING_BYTES)
+    root_fd = os.open(checkout, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        device = os.fstat(root_fd).st_dev
+        for raw in listing.split(b"\0"):
+            if raw:
+                rel = raw.decode("utf-8", "replace")
+                parts.append(f"New file {rel}:\n{_read_new_file(root_fd, device, rel)}")
+    finally:
+        os.close(root_fd)
     plan = "\n\n".join(parts)
     if len(plan) > MAX_PLAN_CHARS:
-        plan = plan[:MAX_PLAN_CHARS] + "\n[truncated]"
+        raise PlanIncomplete(f"plan exceeds {MAX_PLAN_CHARS} characters")
     return plan + "\n\nReply on the first line with exactly ACCEPT or REJECT, then a short reason."

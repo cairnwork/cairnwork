@@ -5,7 +5,7 @@ import subprocess
 import pytest
 
 from experimental.local_relay.config import RelayConfig
-from experimental.local_relay.gate_plan import MAX_PLAN_CHARS, build_gate_plan
+from experimental.local_relay.gate_plan import build_gate_plan
 from experimental.local_relay.relay import Acceptance, Attempt, run_relay
 from experimental.pause.flow import RunResult
 from experimental.pause.interfaces import GateReply
@@ -59,11 +59,111 @@ def test_plan_needs_a_checkout_and_a_base_commit(tmp_path):
         build_gate_plan(TASK, RunResult(0, "", tmp_path, tmp_path, base_sha=None))
 
 
-def test_plan_is_bounded(tmp_path):
+def test_an_oversized_or_unshowable_change_raises_instead_of_being_cut(tmp_path):
+    from experimental.local_relay.gate_plan import PlanIncomplete
+
     repo, base = _repo(tmp_path)
-    (repo / "pkg" / "stats.py").write_text("x = 1\n" * 20000)
+    result = RunResult(0, "", repo.parent, repo, base_sha=base)
+    (repo / "pkg" / "stats.py").write_text("x = 1\n" * 20000)  # diff over the byte cap
+    with pytest.raises(PlanIncomplete):
+        build_gate_plan(TASK, result)
+    (repo / "pkg" / "stats.py").write_text("def last_n(items, n):\n    return items[n:]\n")
+    (repo / "pkg" / "big.py").write_text("y = 2\n" * 4000)  # new file over the per-file cap
+    with pytest.raises(PlanIncomplete):
+        build_gate_plan(TASK, result)
+
+
+def test_new_symlinks_show_the_target_text_and_never_leak_the_pointed_to_file(tmp_path):
+    repo, base = _repo(tmp_path)
+    secret = tmp_path / "host-secret.txt"
+    secret.write_text("TOP-SECRET-HOST-DATA\n")
+    (repo / "pkg" / "leak.py").symlink_to(secret)
     plan = build_gate_plan(TASK, RunResult(0, "", repo.parent, repo, base_sha=base))
-    assert len(plan) < MAX_PLAN_CHARS + 200 and "[truncated]" in plan
+    assert "TOP-SECRET-HOST-DATA" not in plan
+    assert "New file pkg/leak.py:\n(symlink to " in plan
+
+
+def test_hard_linked_new_files_are_refused(tmp_path):
+    import os
+
+    from experimental.local_relay.gate_plan import PlanIncomplete
+
+    repo, base = _repo(tmp_path)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("planted\n")
+    os.link(outside, repo / "pkg" / "hard.py")
+    with pytest.raises(PlanIncomplete):
+        build_gate_plan(TASK, RunResult(0, "", repo.parent, repo, base_sha=base))
+
+
+def test_untracked_files_are_listed_like_acceptance_even_when_gitignored(tmp_path):
+    repo, base = _repo(tmp_path)
+    (repo / ".git" / "info").mkdir(exist_ok=True)
+    (repo / ".git" / "info" / "exclude").write_text("hidden.py\n")
+    (repo / "hidden.py").write_text("SNEAKY = 1\n")
+    plan = build_gate_plan(TASK, RunResult(0, "", repo.parent, repo, base_sha=base))
+    assert "New file hidden.py" in plan and "SNEAKY = 1" in plan
+
+
+def test_worker_controlled_textconv_and_attributes_are_never_executed(tmp_path):
+    repo, base = _repo(tmp_path)
+    marker = tmp_path / "executed"
+    hook = tmp_path / "textconv.sh"
+    hook.write_text(f'#!/bin/sh\ntouch {marker}\ncat "$1"\n')
+    hook.chmod(0o755)
+    with (repo / ".git" / "config").open("a") as handle:
+        handle.write(f'[diff "evil"]\n\ttextconv = {hook}\n')
+    (repo / ".gitattributes").write_text("*.py diff=evil\n")
+    (repo / "pkg" / "stats.py").write_text("def last_n(items, n):\n    return items[-n:]\n")
+    plan = build_gate_plan(TASK, RunResult(0, "", repo.parent, repo, base_sha=base))
+    assert "+    return items[-n:]" in plan and not marker.exists()
+
+
+def test_unsafe_relative_paths_are_refused(tmp_path):
+    import os
+
+    from experimental.local_relay.gate_plan import PlanIncomplete, _read_new_file
+
+    root_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for bad in ("../escape.py", "/etc/passwd"):
+            with pytest.raises(PlanIncomplete):
+                _read_new_file(root_fd, os.fstat(root_fd).st_dev, bad)
+    finally:
+        os.close(root_fd)
+
+
+def test_relay_rejects_the_stage_instead_of_approving_an_incomplete_plan(monkeypatch):
+    from experimental.local_relay.gate_plan import PlanIncomplete
+
+    monkeypatch.setenv("CAIRNWORK_LOCAL_RELAY", "1")
+    calls = []
+
+    class Gate:
+        def review(self, request):
+            calls.append(request)
+            return GateReply("ACCEPT", "m", "e", None)
+
+    class Rows:
+        def append(self, row):
+            pass
+
+    def incomplete(_cand):
+        raise PlanIncomplete("plan exceeds 30000 characters")
+
+    result = run_relay(
+        "t",
+        lambda _ctx: Attempt(object(), "local", 1, 1, 0.0),
+        lambda _cand: Acceptance(True, "ok"),
+        Gate(),
+        lambda _t: Attempt(object(), "cloud", 1, 1, 0.1),
+        Rows(),
+        RelayConfig(enabled=True, plan_for=incomplete),
+    )
+    assert calls == [] and result.route == "FAILED"  # every stage rejected, none approved
+    assert [s["gate_reason"][:15] for s in result.stages if "gate_reason" in s] == [
+        "PLAN_INCOMPLETE"
+    ] * 3
 
 
 def test_relay_hands_the_gate_the_built_plan_not_the_candidate_repr(monkeypatch):

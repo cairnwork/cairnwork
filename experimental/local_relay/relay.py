@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
 from experimental.local_relay.config import FLAG, RelayConfig
+from experimental.local_relay.gate_plan import PlanIncomplete
 from experimental.local_relay.ledger import Ledger
 from experimental.local_worker.endpoint import (
     EndpointContextLimit,
@@ -126,6 +127,15 @@ def _check_stage(task_id, attempt, acceptance, gate, ledger, config, stage, trai
         mark_stage(stage)  # lets a metered gate label its spend per stage
     try:
         plan = config.plan_for(attempt.candidate) if config.plan_for else str(attempt.candidate)
+    except PlanIncomplete as exc:  # part of the change cannot be shown: never approve it
+        trail.append(_stage(stage, result, None, f"PLAN_INCOMPLETE: {exc}"))
+        return RelayResult(
+            "REJECTED", attempt.candidate, result.passed, result.raw, None, "PLAN_INCOMPLETE"
+        )
+    except Exception as exc:  # noqa: BLE001 - plan failures fail closed like gate failures.
+        trail.append(_stage(stage, result, None, f"plan failed: {exc}"))
+        return RelayResult("FAILED", attempt.candidate, result.passed, result.raw, reason=str(exc))
+    try:
         reply = gate.review(GateRequest(task_id, "", plan, settings))
     except Exception as exc:  # noqa: BLE001 - injected gate failures must fail closed.
         trail.append(_stage(stage, result, None, f"gate raised: {exc}"))
