@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -99,3 +100,24 @@ def test_c10_control_rejects_a_child_that_imported_product_code(monkeypatch):
     )
     with pytest.raises(RuntimeError, match="imported product code"):
         c10._control(1)
+
+
+def _outsides(src, monkeypatch, tmp_path):
+    reports = tmp_path / "reports"
+    reports.mkdir(exist_ok=True)
+    monkeypatch.setenv("PRA1353_CHILD_REPORT_DIR", str(reports))
+    stdlib = [p for p in sys.path if p and "site-packages" not in p and "/lib/python3" in p]
+    roots = [*stdlib, str(src), str(TESTS), str(SITE)]
+    monkeypatch.setenv("PRA1353_IMPORT_ROOTS", json.dumps(roots))
+    return [row["raw_return"]["outside"] for row in c10.c10_rows()]
+
+
+def test_c10_rows_end_to_end_ignore_a_forging_product_init(monkeypatch, tmp_path):
+    """Must block, through c10_rows: a src-only forgery of `outside` must not move the rows."""
+    root = TESTS.parent
+    forged = tmp_path / "src"
+    shutil.copytree(root / "src", forged, ignore=shutil.ignore_patterns("__pycache__"))
+    init = forged / "cairnwork" / "__init__.py"
+    init.write_text(init.read_text() + "\n" + FORGE)
+    assert _outsides(root / "src", monkeypatch, tmp_path) == [-1, 5, -1]
+    assert _outsides(forged, monkeypatch, tmp_path) == [-1, 5, -1]
