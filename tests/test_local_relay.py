@@ -110,7 +110,7 @@ def test_ac2_local_acceptance_and_gate_accept_routes_local_first_and_accounts_ga
     ledger, gate = FakeLedger(), FakeGate(["ACCEPT"])
     result = run_relay("t", worker, acceptance, gate, fallback, ledger, enabled())
     assert result.route == "LOCAL_FIRST" and result.acceptance_raw == "raw pass"
-    assert worker.calls == [(8192,)] and len(acceptance.calls) == len(gate.calls) == 1
+    assert worker.calls == [(32768,)] and len(acceptance.calls) == len(gate.calls) == 1
     assert fallback.calls == []
     assert [(r["stage"], r["usd"]) for r in ledger.rows] == [("local", 0.0), ("local", 0.02)]
 
@@ -124,7 +124,7 @@ def test_ac2_acceptance_pass_with_gate_reject_enters_retry():
         FakeLedger(),
     )
     result = run_relay("t", worker, acceptance, gate, fallback, ledger, enabled())
-    assert result.route == "LOCAL_RETRY" and worker.calls == [(8192,), (65536,)]
+    assert result.route == "LOCAL_RETRY" and worker.calls == [(32768,), (65536,)]
     assert len(gate.calls) == len(acceptance.calls) == 2 and fallback.calls == []
     assert [r["stage"] for r in ledger.rows] == ["local", "local", "retry", "retry"]
 
@@ -139,7 +139,7 @@ def test_ac3_acceptance_failure_then_retry_success_is_exactly_two_attempts():
     )
     result = run_relay("t", worker, acceptance, gate, fallback, ledger, enabled())
     assert result.route == "LOCAL_RETRY" and result.acceptance_raw == "original pass"
-    assert worker.calls == [(8192,), (65536,)] and len(gate.calls) == 2 and fallback.calls == []
+    assert worker.calls == [(32768,), (65536,)] and len(gate.calls) == 2 and fallback.calls == []
 
 
 def test_ac3_context_limit_counts_failed_local_call_then_retries_once():
@@ -151,7 +151,7 @@ def test_ac3_context_limit_counts_failed_local_call_then_retries_once():
         FakeLedger(),
     )
     result = run_relay("t", worker, acceptance, gate, fallback, ledger, enabled())
-    assert result.route == "LOCAL_RETRY" and worker.calls == [(8192,), (65536,)]
+    assert result.route == "LOCAL_RETRY" and worker.calls == [(32768,), (65536,)]
     assert len(acceptance.calls) == len(gate.calls) == 1 and fallback.calls == []
     assert [r["stage"] for r in ledger.rows] == ["local", "retry", "retry"]
 
@@ -171,7 +171,7 @@ def test_ac3_second_local_failure_falls_back_without_third_worker_call():
         FakeLedger(),
     )
     result = run_relay("t", worker, acceptance, gate, fallback, ledger, enabled())
-    assert result.route == "FALLBACK" and worker.calls == [(8192,), (65536,)]
+    assert result.route == "FALLBACK" and worker.calls == [(32768,), (65536,)]
     assert len(acceptance.calls) == len(gate.calls) == 3 and len(fallback.calls) == 1
     assert [r["stage"] for r in ledger.rows].count("fallback") == 2
 
@@ -188,7 +188,7 @@ def test_ac4_rejected_fallback_is_failed_and_is_not_retried():
     )
     result = run_relay("t", worker, acceptance, gate, fallback, ledger, enabled())
     assert result.route == "FAILED" and result.acceptance_passed is True
-    assert worker.calls == [(8192,), (65536,)] and len(fallback.calls) == 1
+    assert worker.calls == [(32768,), (65536,)] and len(fallback.calls) == 1
     assert len(gate.calls) == len(acceptance.calls) == 3
 
 
@@ -202,7 +202,7 @@ def test_ac5_acceptance_failure_with_gate_accept_still_retries():
     )
     result = run_relay("t", worker, acceptance, gate, fallback, ledger, enabled())
     assert result.route == "LOCAL_RETRY" and result.acceptance_raw == "verbatim pass"
-    assert worker.calls == [(8192,), (65536,)] and len(gate.calls) == 2 and fallback.calls == []
+    assert worker.calls == [(32768,), (65536,)] and len(gate.calls) == 2 and fallback.calls == []
 
 
 def test_ac5_unknown_gate_verdict_is_failure_with_reason_code():
@@ -215,7 +215,7 @@ def test_ac5_unknown_gate_verdict_is_failure_with_reason_code():
     )
     result = run_relay("t", worker, acceptance, gate, fallback, ledger, enabled())
     assert result.route == "LOCAL_RETRY" and result.gate_verdict == "ACCEPT"
-    assert worker.calls == [(8192,), (65536,)] and len(gate.calls) == 2 and fallback.calls == []
+    assert worker.calls == [(32768,), (65536,)] and len(gate.calls) == 2 and fallback.calls == []
     assert len(ledger.rows) == 4
 
 
@@ -263,7 +263,7 @@ def test_ac6_ledger_failure_stops_before_any_gate_or_fallback_call():
     gate, ledger = FakeGate(["ACCEPT"]), FakeLedger(fail_at=0)
     result = run_relay("t", worker, acceptance, gate, fallback, ledger, enabled())
     assert result.route == "LEDGER_ERROR" and (result.reason or "").startswith("disk full")
-    assert worker.calls == [(8192,)] and acceptance.calls == []
+    assert worker.calls == [(32768,)] and acceptance.calls == []
     assert gate.calls == fallback.calls == ledger.rows == []
 
 
@@ -325,4 +325,4 @@ def test_gate_accept_never_flips_an_acceptance_failure_at_any_stage():
     result = run_relay("t", worker, acceptance, gate, fallback, ledger, enabled())
     assert result.route == "FAILED" and result.acceptance_passed is False
     assert result.acceptance_raw == "f3" and len(gate.calls) == 3
-    assert worker.calls == [(8192,), (65536,)] and len(fallback.calls) == 1
+    assert worker.calls == [(32768,), (65536,)] and len(fallback.calls) == 1
