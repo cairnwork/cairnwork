@@ -79,7 +79,8 @@ def envelope(request: dict, tag: str, runner: str, timeout: float) -> dict:
     result = parse_result(run.stdout)
     if run.returncode != 0 or result is None or result.get("is_error"):
         return {"status": -1}
-    usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
+    raw_usage = result.get("usage")
+    usage: dict = raw_usage if isinstance(raw_usage, dict) else {}
     return {
         "status": 200,
         "body": {
