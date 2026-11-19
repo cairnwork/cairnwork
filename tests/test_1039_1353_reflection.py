@@ -32,6 +32,9 @@ KNOWN = Counter(
         ("pra1353_extra.py", "load_c10", "sys.modules"): 1,
         ("pra1353_launch.py", "_c7_unprotected", "verify_cli._run"): 1,
         ("pra1353_launch.py", "_c8_rows", "sys.modules"): 1,
+        # #1463: read-only listing of loaded module names, to prove the C10 control child never
+        # imported cairnwork*; it neither assigns nor deletes any entry.
+        ("pra1353_launch.py", "_c10_control", "sys.modules"): 1,
         ("pra1353_receipt.py", "_c8_mutations", "from cairnwork_attest.record import _digest"): 1,
     }
 )
