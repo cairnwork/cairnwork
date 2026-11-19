@@ -21,7 +21,7 @@ permissions: {}
 jobs:
   analyze:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
@@ -60,25 +60,39 @@ jobs:
           [ "$GITHUB_REF" = "refs/heads/main" ] || { echo "the gate trusts only main's lock"; exit 1; }
           uv_bin="$(command -v uv)"
           root=/srv/pra1353
-          sudo -n install -d -m 0755 "$root" "$root/lock"
-          sudo -n useradd --system --no-create-home --home-dir "$root/home" \
+          sudo -n install -d -m 0755 -o root "$root" "$root/lock"
+          sudo -n useradd --system --no-create-home --home-dir /nonexistent \
             --shell /usr/sbin/nologin pra1353gate
           # The gate account must not be able to use sudo.
           if sudo -n -u pra1353gate sudo -n true 2>/dev/null; then echo "gate user has sudo"; exit 1; fi
-          sudo -n install -d -m 0700 -o pra1353gate "$root/home" "$root/tmp"
+          # Its only writable place is its own temporary directory.
+          sudo -n install -d -m 0700 -o pra1353gate "$root/tmp"
+          # The runner's home, temp, workspace and file-command paths must be closed to it.
+          chmod 700 "$HOME"
+          for path in "$HOME" "$RUNNER_TEMP" "$RUNNER_TEMP/_runner_file_commands" \
+            "$GITHUB_WORKSPACE" "$(dirname "$GITHUB_OUTPUT")"; do
+            if sudo -n -u pra1353gate sh -c 'test -r "$1" || test -w "$1" || test -x "$1"' _ "$path"; then
+              echo "gate account can reach a runner path"; exit 1
+            fi
+          done
           sudo -n cp trusted/uv.lock trusted/pyproject.toml "$root/lock/"
+          # Root-owned copies of the trusted tree and the PR head. git only reads a repository
+          # owned by the reading account, so the account owns both copies and they are made
+          # immutable: it can read them and cannot change, replace or delete anything in them.
           sudo -n cp -a trusted "$root/trusted"
           sudo -n cp -a head "$root/head"
           sudo -n chown -R pra1353gate "$root/trusted" "$root/head"
-          # The venv, its Python and the lock are root-owned and read-only for the gate account.
+          sudo -n chattr -R +i "$root/trusted" "$root/head"
+          # The venv, its Python, the lock and the base record stay root-owned and read-only.
           cd "$root/lock"
           sudo -n env UV_NO_CONFIG=1 UV_PYTHON_INSTALL_DIR="$root/python" \
             UV_PROJECT_ENVIRONMENT="$root/venv" \
             "$uv_bin" sync --python 3.13 --managed-python --no-cache --locked --no-install-project
           sudo -n "$root/venv/bin/python" -I -S -B "$root/trusted/tests/pra1353_base_record.py" \
             record "$root/base-python.json"
+          sudo -n chmod -R go-w,a+rX "$root/venv" "$root/python" "$root/lock" "$root/base-python.json"
       - name: Sealed #1353 witness gate on the PR source (separate account)
-        timeout-minutes: 15
+        timeout-minutes: 18
         run: |
           set -uo pipefail
           # The gate runs PR-controlled code: stop workflow commands (::, ##[) in its output.
@@ -89,7 +103,7 @@ jobs:
           cd "$root/trusted"
           # Clean env: no runner token, cache or file-command variables reach the gate.
           run_gate() {
-            sudo -n -u pra1353gate env -i PATH=/usr/bin:/bin HOME="$root/home" TMPDIR="$root/tmp" \
+            sudo -n -u pra1353gate env -i PATH=/usr/bin:/bin HOME="$root/tmp" TMPDIR="$root/tmp" \
               LANG=C.UTF-8 PRA1353_BASE_LOCK="$root/lock/uv.lock" "$@"
           }
           rc=0
@@ -97,8 +111,23 @@ jobs:
           if [ "$rc" -eq 0 ]; then
             run_gate timeout -k 10 840 "$py" -I -S -B tests/pra1353_gate.py --source "$root/head" || rc=$?
           fi
-          # Nothing the gate account started may outlive it before the result is written.
-          sudo -n pkill -KILL -u pra1353gate || true
+          # Every process of the gate account must be gone before the result is written. If that
+          # cannot be shown within the deadline, the step fails and no result is written.
+          stopped=0
+          deadline=$((SECONDS + 20))
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            kill_rc=0
+            sudo -n pkill -KILL -u pra1353gate || kill_rc=$?
+            if [ "$kill_rc" -gt 1 ]; then echo "pkill failed"; echo "::$token::"; exit 1; fi
+            alive_rc=0
+            sudo -n pgrep -u pra1353gate > /dev/null || alive_rc=$?
+            if [ "$alive_rc" -eq 1 ]; then stopped=1; break; fi
+            if [ "$alive_rc" -gt 1 ]; then echo "pgrep failed"; echo "::$token::"; exit 1; fi
+            sleep 0.5
+          done
+          if [ "$stopped" -ne 1 ]; then
+            echo "gate account processes are still running"; echo "::$token::"; exit 1
+          fi
           mkdir -p "$RUNNER_TEMP/gate_rc"
           printf '%s' "$rc" > "$RUNNER_TEMP/gate_rc/gate_rc"
           echo "::$token::"

@@ -24,6 +24,7 @@ FIXED_PATHS = {
     "scripts/ci/pra1353_trusted_status.py",
     "tests/test_pra1353_trusted_workflow.py",
     "tests/test_pra1353_trusted_isolation.py",
+    "tests/test_pra1353_trusted_hardening.py",
 }
 APPROVAL = re.compile(r"^PIN-APPROVE ([0-9a-fA-F]{40})$")
 BYTECODE_SUFFIXES = (".pyc", ".pyo")

@@ -22,7 +22,7 @@ def check(text: str) -> None:
     gate = [s for s in analyze["steps"] if "pra1353_gate.py" in str(s.get("run", ""))]
     assert len(gate) == 1
     step = gate[0]
-    assert 0 < int(step["timeout-minutes"]) < int(analyze["timeout-minutes"])
+    assert 0 < int(step["timeout-minutes"]) <= 20
     run = str(step["run"])
     assert re.search(r"sudo -n -u \w+ env -i ", run)
     # PR code is started only through the helper that goes through sudo -u and env -i.
@@ -68,10 +68,10 @@ MUTATIONS: list[tuple[str, str]] = [
     ("LANG=C.UTF-8 PRA1353_BASE_LOCK", "GITHUB_TOKEN=x LANG=C.UTF-8 PRA1353_BASE_LOCK"),
     ("LANG=C.UTF-8 PRA1353_BASE_LOCK", "GH_TOKEN=x LANG=C.UTF-8 PRA1353_BASE_LOCK"),
     ("LANG=C.UTF-8 PRA1353_BASE_LOCK", "GITHUB_OUTPUT=x LANG=C.UTF-8 PRA1353_BASE_LOCK"),
-    ("    timeout-minutes: 20\n", ""),
+    ("    timeout-minutes: 30\n", ""),
     ("    timeout-minutes: 5\n", ""),
-    ("        timeout-minutes: 15\n", ""),
-    ("        timeout-minutes: 15\n", "        timeout-minutes: 25\n"),
+    ("        timeout-minutes: 18\n", ""),
+    ("        timeout-minutes: 18\n", "        timeout-minutes: 25\n"),
     ("enable-cache: false", "enable-cache: true"),
     (
         "      - name: Save the gate result",

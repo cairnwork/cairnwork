@@ -109,7 +109,7 @@ def test_single_execution_point_and_no_expression_injection() -> None:
     touching = []
     for step in _steps(analyze):
         for line in str(step.get("run", "")).splitlines():
-            if line.strip().startswith(("sudo -n cp", "sudo -n chown")):
+            if line.strip().startswith(("sudo -n cp", "sudo -n chown", "sudo -n chattr")):
                 continue  # copying and ownership of the data tree, nothing is executed
             if re.search(r"(?<![\w.$])head(?![\w.])|/head(?![\w.])", line):
                 touching.append(line.strip())
