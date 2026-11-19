@@ -71,6 +71,10 @@ MUST_PASS = {
     "attempt-max-length-id": lambda c, side: git(
         c, "update-ref", "refs/cairnwork/attempts/" + "a" * 64, side
     ),
+    "tag-of-tag-on-main": lambda c, side: (
+        git(c, "tag", "-a", "-m", "m", "inner", "origin/main"),
+        git(c, "tag", "-a", "-m", "m", "outer", "inner"),
+    ),
     "main-behind-origin-main": lambda c, side: _advance_origin(c),
     "head-detached-on-main-history": lambda c, side: git(
         c, "update-ref", "--no-deref", "HEAD", "origin/main"
@@ -82,6 +86,10 @@ MUST_PASS = {
 MUST_BLOCK = {
     "tag-on-side-commit": lambda c, side: git(c, "update-ref", "refs/tags/secret", side),
     "annotated-tag-on-side": lambda c, side: git(c, "tag", "-a", "-m", "m", "secret", side),
+    "tag-of-tag-on-side": lambda c, side: (
+        git(c, "tag", "-a", "-m", "m", "inner", side),
+        git(c, "tag", "-a", "-m", "m", "outer", "inner"),
+    ),
     "tag-on-tree": lambda c, side: git(c, "update-ref", "refs/tags/tree", "origin/main^{tree}"),
     "notes": lambda c, side: git(c, "update-ref", "refs/notes/commits", side),
     "stash": lambda c, side: git(c, "update-ref", "refs/stash", side),
@@ -195,3 +203,26 @@ def test_require_on_main_refuses_a_grafts_file(setup):
     _grafts(clone, f"{git(clone, 'rev-parse', 'origin/main')} {side}\n")
     with pytest.raises(RuntimeError, match="LINEAGE_GRAFTS_REFUSED"):
         lineage.require_on_main(clone, side, fetch=False)
+
+
+def test_many_tags_are_judged_in_a_constant_number_of_git_calls(setup, monkeypatch):
+    """#1391: one for-each-ref and one rev-list judge every ref; it was a process per ref."""
+    clone = setup["clone"]
+    head = git(clone, "rev-parse", "origin/main")
+    git(clone, "pack-refs", "--all")
+    packed = clone / ".git" / "packed-refs"
+    extra = "".join(f"{head} refs/tags/t{i}\n" for i in range(300))
+    packed.write_text(
+        "# pack-refs with: peeled fully-peeled \n"
+        + "".join(
+            line
+            for line in packed.read_text().splitlines(keepends=True)
+            if not line.startswith("#")
+        )
+        + extra
+    )
+    calls = []
+    real = lineage.run_git
+    monkeypatch.setattr(lineage, "run_git", lambda *a, **k: calls.append(a) or real(*a, **k))
+    lineage.verify_single_branch(clone)
+    assert len(calls) < 15, len(calls)
