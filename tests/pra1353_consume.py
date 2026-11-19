@@ -36,9 +36,7 @@ _PRODUCT_TOP_LEVELS = {
     "cairnwork_quickstart",
     "cairnwork_sandbox",
 }
-# Third-party contents are trusted as part of the installed interpreter environment; their
-# origins are allow-listed below, but their individual bytes are not pinned. nexus-certify loads
-# ``product``; pytest loads ``py`` in the pinned test-helper dependency closure.
+# Third-party contents are trusted as part of the installed interpreter environment; their origins are allow-listed below, but their individual bytes are not pinned. nexus-certify loads ``product``; pytest loads ``py`` in the pinned test-helper dependency closure.
 _THIRD_PARTY_TOP_LEVELS = {
     "cryptography",
     "_cffi_backend",
@@ -383,9 +381,11 @@ def _module_name(relative):
 
 
 def sandbox_available():
-    from cairnwork_sandbox import select
-
-    return sys.platform == "darwin" and select() is not None
+    """#1458: probe Seatbelt here, as seatbelt.available() does; never import the PR's sandbox code."""
+    try:  # Seatbelt is usable only if "allow default" runs /usr/bin/true and "deny default" refuses it
+        return sys.platform == "darwin" and [subprocess.run(["/usr/bin/sandbox-exec", "-p", f"(version 1) ({rule} default)", "/usr/bin/true"], capture_output=True, timeout=10, env={}).returncode == 0 for rule in ("allow", "deny")] == [True, False]  # fmt: skip
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 def c2_unavailable(rows):
