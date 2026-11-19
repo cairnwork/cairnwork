@@ -38,7 +38,7 @@ _ENCODED = re.compile(rf"(?i)((?<!\w)[\w-]{{0,64}}(?:{_KEYS})%3d)[^&\s]+")
 # the pattern for the value that follows each form's name (group 1), read on the original text
 _FORMS = (
     (_HEADER, re.compile(r"[^\n]+")),
-    (_COLON, re.compile(r"[^\n]+")),  # before Bearer: 'Bearer token: x' keeps its name for this
+    (_COLON, re.compile(r"[^\n]+")),
     (_BEARER, re.compile(r"\S+")),
     (_FLAG, re.compile(r"(?!-)\S+")),
     (_ENCODED, re.compile(r"[^&\s]+")),
@@ -117,27 +117,31 @@ def mask_secrets(text: str) -> str:
     text = _mask_userinfo(
         replace_hidden(_ANSI.sub("", text).replace("\r\n", "\n"), _HID, keep="\n\t")
     )
-    for rx, _ in _FORMS:  # every form as written first (as before #1329) ...
-        text = rx.sub(r"\1<redacted>", text)
-    for rx, value_rx in _FORMS:  # ... then as NFKC folds it, so the union is masked (#1329)
-        text = _redact(rx, value_rx, text)
+    text = _redact_forms(text)
     return _mask_fields(text).replace(_HID, "?")
 
 
-def _redact(rx: re.Pattern[str], value_rx: re.Pattern[str], text: str) -> str:
-    """Mask what ``rx`` finds on the NFKC view of ``text`` without marks (#1329). The view only
-    locates the name and separator (group 1); the value is read from the original characters with
-    ``value_rx``, so normalization can neither shorten nor split it. Other characters stay."""
+def _redact_forms(text: str) -> str:
+    """Mask the value of every form, found on the text as written and on its NFKC view without
+    marks (#1329). All spans are collected on the same untouched text and merged before anything
+    is replaced, so no form can hide another's name by masking first (``Bearer token: x``)."""
     view, idx = _view_index(text)
+    spans: list[tuple[int, int]] = []
+    for rx, value_rx in _FORMS:
+        spans += [(m.end(1), m.end()) for m in rx.finditer(text) if m.end() > m.end(1)]
+        for m in rx.finditer(view):  # the view only locates the name; the value is read from text
+            if m.end() == m.end(1):
+                continue
+            start = idx[m.end(1)] if idx else m.end(1)
+            value = value_rx.match(text, start)
+            if value is not None:
+                spans.append((start, value.end()))
     out, pos = [], 0
-    for m in rx.finditer(view):
-        if m.end() == m.end(1):  # nothing after the name: no value to mask
+    for start, end in sorted(spans):
+        if end <= pos:
             continue
-        start = idx[m.end(1)] if idx else m.end(1)
-        value = value_rx.match(text, start)
-        if value is not None and start >= pos:
-            out += [text[pos:start], "<redacted>"]
-            pos = value.end()
+        out += [text[pos : max(start, pos)], "<redacted>"]
+        pos = end
     return "".join([*out, text[pos:]])
 
 
