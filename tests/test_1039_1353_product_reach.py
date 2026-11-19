@@ -56,4 +56,9 @@ def test_b1_runner_process_never_loads_product_modules(broker_report):  # noqa: 
         if any(item["name"] == "pra1353_launch" for item in child["modules"])
     ]
     assert launcher_children
-    assert all("cairnwork" in names for names in launcher_children)
+    # cw#1463: the three C10 control children (n=1..3) deliberately never import product code.
+    controls = [names for names in launcher_children if "cairnwork" not in names]
+    assert len(controls) == 3
+    assert all(
+        not {n for n in names if n.split(".")[0].startswith("cairnwork")} for names in controls
+    )
