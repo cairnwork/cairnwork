@@ -35,6 +35,7 @@ from cairnwork_sandbox.bwrap_reach import account_may_traverse
 
 SCAN_LIMIT = 50_000
 SCAN_DEPTH = 3
+SCAN_BASES = 64  # scan roots in all: the credential directories and outside link targets
 SYSTEM_PREFIXES = ("/usr/", "/nix/store/", "/gnu/store/", "/snap/")
 ETC = "/etc/"
 DANGLING_NOTE = "dangling credential links skipped, outside every read and write root: "
@@ -61,10 +62,15 @@ def inner_link_masks(
     dirs, files = _hidden(masked)
     flags: list[str] = []
     skipped = deep = 0
-    for cred_dir in cred_dirs:
-        if not os.path.isdir(cred_dir):
+    pending = [os.path.realpath(path) for path in cred_dirs if os.path.isdir(path)]
+    visited: set[str] = set()
+    while pending:
+        base = pending.pop()
+        if base in visited:
             continue
-        base = os.path.realpath(cred_dir)
+        visited.add(base)
+        if len(visited) > SCAN_BASES:
+            raise SandboxError(f"credential links lead to more than {SCAN_BASES} scan roots")
         links, unscanned = _links_in(base)
         deep += unscanned
         for link in links:
@@ -88,6 +94,8 @@ def inner_link_masks(
             added = mask(link)
             (dirs if added[0] == "--tmpfs" else files).add(added[-1])
             flags += added
+            if added[0] == "--tmpfs":
+                pending.append(real)  # scan a masked outside directory too (#427)
     notes = [f"{DANGLING_NOTE}{skipped}"] if skipped else []
     return flags, tuple(notes + ([f"{DEPTH_NOTE}{deep}"] if deep else []))
 
