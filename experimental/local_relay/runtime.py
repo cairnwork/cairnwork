@@ -33,9 +33,11 @@ from experimental.local_relay.config import (
     RETRY_CONTEXT_TOKENS,
     RelayConfig,
 )
+from experimental.local_relay.diagnostics import append_debug, redact
 from experimental.local_relay.relay import run_relay
+from experimental.local_relay.worker_setup import prepare_worker_layout
 from experimental.local_worker import corpus_io
-from experimental.local_worker.endpoint import EndpointUnreachable, parse_loopback_url
+from experimental.local_worker.endpoint import parse_loopback_url
 from experimental.local_worker.run_root_cleanup import INSTALLED_RUNS
 from experimental.pause.core_judge import CoreJudge
 from experimental.pause.flow import RunResult
@@ -117,6 +119,7 @@ def build_run_once(args: Any) -> Callable[[Any, Any], dict[str, Any]]:
             "acceptance_raw": outcome.acceptance_raw,
             "gate_verdict": outcome.gate_verdict,
             "reason": outcome.reason,
+            "failure": outcome.reason if outcome.route in {"FAILED", "LEDGER_ERROR"} else None,
         }
 
     return run_once
@@ -208,6 +211,7 @@ def _run_localworker(args, task, source, context, endpoint, canary, model=LOCAL_
     run_root.mkdir(mode=0o750)
     os.chmod(run_root, 0o750)
     _prepare(task["repo"], checkout, task["base_commit"])
+    prepare_worker_layout(run_root, checkout)
     base = _git(checkout, "rev-parse", "HEAD")
     task_path = run_root / "task.json"
     task_path.write_text(
@@ -231,52 +235,78 @@ def _run_localworker(args, task, source, context, endpoint, canary, model=LOCAL_
     local_report = out / "canary.json"
     shutil.copyfile(report, local_report)
     shutil.copyfile(Path(str(report) + ".sha256"), Path(str(local_report) + ".sha256"))
+    argv = [
+        sys.executable,
+        "-m",
+        "experimental.local_worker.cli",
+        "run",
+        "--task",
+        str(task_path),
+        "--checkout",
+        str(checkout),
+        "--out",
+        str(out),
+        "--model",
+        model,
+        "--context-cap",
+        str(context),
+        "--canary-report",
+        str(local_report),
+        "--runs",
+        str(runs),
+        *[value for path in task["allowed_files"] for value in ("--write-path", path)],
+        "--endpoint",
+        endpoint,
+    ]
+    cwd = Path(task["repo"]).resolve()
+    debug_path = _debug_path(args, task["task_id"])
+    append_debug(
+        debug_path,
+        {
+            "event": "worker-start",
+            "argv": argv,
+            "cwd": str(cwd),
+            "run_root": str(run_root),
+            "checkout": str(checkout),
+            "run_root_stat": _path_identity(run_root),
+            "checkout_stat": _path_identity(checkout),
+        },
+    )
     result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "experimental.local_worker.cli",
-            "run",
-            "--task",
-            str(task_path),
-            "--checkout",
-            str(checkout),
-            "--out",
-            str(out),
-            "--model",
-            model,
-            "--context-cap",
-            str(context),
-            "--canary-report",
-            str(local_report),
-            "--runs",
-            str(runs),
-            *[value for path in task["allowed_files"] for value in ("--write-path", path)],
-            "--endpoint",
-            endpoint,
-        ],
+        argv,
+        cwd=cwd,
         capture_output=True,
         text=True,
         check=False,
     )
-    if result.returncode == EndpointUnreachable.exit_code:
-        raise EndpointUnreachable("local worker endpoint is unreachable")
     record = _episode_record(
         result.stdout, corpus_io.episodes_path(out, "cairnwork", model, "pilot")
     )
-    complete = (
-        result.returncode == 0
-        and isinstance(record, dict)
-        and record.get("verification", {}).get("exit_reason") == "COMPLETED"
-        and not record.get("spec_feedback", {}).get("needs_spec", True)
-    )
+    details = _worker_diagnostics(result.returncode, result.stdout, result.stderr, record)
+    completed = _episode_completed(result.returncode, record)
+    if isinstance(record, dict) and not completed:
+        record = {**record, "_local_relay_diagnostics": details}
+    append_debug(debug_path, {"event": "worker-finish", **details})
     return RunResult(
-        0 if complete else 1,
-        result.stdout + result.stderr,
+        result.returncode,
+        result.stdout + ("" if completed else redact(result.stderr)),
         run_root,
         checkout,
         record=record,
         base_sha=base,
+    )
+
+
+def _episode_completed(returncode: int, record: Any) -> bool:
+    if returncode != 0 or not isinstance(record, dict):
+        return False
+    verification = record.get("verification")
+    feedback = record.get("spec_feedback")
+    return (
+        isinstance(verification, dict)
+        and verification.get("exit_reason") == "COMPLETED"
+        and isinstance(feedback, dict)
+        and feedback.get("needs_spec") is False
     )
 
 
@@ -288,7 +318,7 @@ def _local_runs(args: Any) -> Path:
 
 
 def _episode_record(output: str, episode_file: Path) -> dict[str, Any] | None:
-    if not any(line.startswith("LOCAL_WORKER_EPISODE COMPLETED ") for line in output.splitlines()):
+    if not any(line.startswith("LOCAL_WORKER_EPISODE ") for line in output.splitlines()):
         return None
     try:
         rows = episode_file.read_text(encoding="utf-8").splitlines()
@@ -296,6 +326,53 @@ def _episode_record(output: str, episode_file: Path) -> dict[str, Any] | None:
     except (OSError, ValueError, IndexError):
         return None
     return record if isinstance(record, dict) else None
+
+
+def _worker_diagnostics(returncode: int, stdout: str, stderr: str, record) -> dict[str, Any]:
+    verification = record.get("verification", {}) if isinstance(record, dict) else {}
+    termination = record.get("termination", {}) if isinstance(record, dict) else {}
+    marker = next(
+        (line for line in stdout.splitlines() if line.startswith("LOCAL_WORKER_EPISODE ")), ""
+    )
+    refused = next(
+        (line for line in stderr.splitlines() if line.startswith("LOCAL_WORKER_EPISODE_REFUSED ")),
+        "",
+    )
+    status = verification.get("exit_reason") if isinstance(verification, dict) else None
+    if status is None:
+        status = (
+            "REFUSED"
+            if refused
+            else marker.split()[1]
+            if len(marker.split()) > 1
+            else "NO_EPISODE_RECORD"
+        )
+    stop = (
+        (termination.get("abort_cause") or termination.get("limit_hit"))
+        if isinstance(termination, dict)
+        else None
+    )
+    if stop is None and refused:
+        stop = refused.removeprefix("LOCAL_WORKER_EPISODE_REFUSED ")
+    return {
+        "process_exit_code": returncode,
+        "episode_status": status,
+        "stop_reason": stop,
+        "stderr": redact(stderr),
+    }
+
+
+def _debug_path(args: Any, task_id: str) -> Path | None:
+    ledger = getattr(args, "ledger", None)
+    if not ledger:
+        return None
+    safe_id = "".join(char if char.isalnum() or char in "_.-" else "_" for char in task_id)
+    return Path(ledger).expanduser().resolve().parent / f"relay-debug-{safe_id}.log"
+
+
+def _path_identity(path: Path) -> dict[str, Any]:
+    info = path.stat()
+    return {"uid": info.st_uid, "gid": info.st_gid, "mode": f"{info.st_mode & 0o7777:04o}"}
 
 
 def _git(repo: Path, *args: str) -> str:

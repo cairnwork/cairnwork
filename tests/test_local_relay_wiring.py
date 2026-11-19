@@ -79,7 +79,17 @@ def _fixture_run(tmp_path: Path) -> RunResult:
     subprocess.run(["git", "-C", str(repo), "commit", "-qm", "base"], check=True)
     base = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
     (repo / "candidate.txt").write_text("after\n", encoding="utf-8")
-    return RunResult(0, "done", tmp_path, repo, base_sha=base, record={})
+    return RunResult(
+        0,
+        "done",
+        tmp_path,
+        repo,
+        base_sha=base,
+        record={
+            "verification": {"exit_reason": "COMPLETED"},
+            "spec_feedback": {"needs_spec": False},
+        },
+    )
 
 
 def test_w1_flag_off_refuses_before_runtime_or_endpoint(monkeypatch, capsys, tmp_path):
@@ -190,7 +200,20 @@ def test_w3_worker_receives_exact_context_and_loopback_endpoint(tmp_path):
 
 def test_w3_worker_rejects_incomplete_episode():
     local = LocalWorkerAdapter(lambda _cap, _endpoint: RunResult(1, "failed", Path("."), Path(".")))
-    with pytest.raises(LocalAttemptFailed, match="did not produce"):
+    with pytest.raises(LocalAttemptFailed, match="process_exit=1"):
+        local(32768)
+
+
+def test_w3_worker_rejects_success_exit_without_completed_episode_record():
+    result = RunResult(
+        0,
+        "",
+        Path("."),
+        Path("."),
+        record={"verification": {"exit_reason": "CONTEXT_LIMIT"}},
+    )
+    local = LocalWorkerAdapter(lambda _cap, _endpoint: result)
+    with pytest.raises(LocalAttemptFailed, match="episode_status=CONTEXT_LIMIT"):
         local(32768)
 
 
@@ -214,10 +237,13 @@ def test_incomplete_local_episodes_retry_then_fallback_with_both_checks(monkeypa
         RelayConfig(enabled=True),
     )
     assert outcome.route == "FALLBACK"
+    assert outcome.reason is not None and "local: local worker" in outcome.reason
+    assert "retry: local worker" in outcome.reason
     assert calls == [32768, 65536]
     assert len(checks) == 1 and checks[0][0] == "acceptance"
     local_rows = [row for row in rows.rows if row["stage"] in {"local", "retry"}]
     assert [row["usd"] for row in local_rows] == [0.0, 0.0]
+    assert all("failure" in row and "process_exit=1" in row["failure"] for row in local_rows)
     assert len(transport.calls) == 1
 
 

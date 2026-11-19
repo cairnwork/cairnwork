@@ -69,11 +69,14 @@ def run_relay(
     if not (config.enabled and os.environ.get(FLAG) == "1"):
         return RelayResult("DISABLED", reason="RELAY_DISABLED")
     try:
+        failures = []
         for stage, context in (
             ("local", config.default_context_tokens),
             ("retry", config.retry_context_tokens),
         ):
-            attempt = _local_attempt(task_id, worker, acceptance, context, ledger, stage)
+            attempt, failure = _local_attempt(task_id, worker, context, ledger, stage)
+            if failure:
+                failures.append(f"{stage}: {failure}")
             if attempt is None:
                 continue
             checked = _check_stage(task_id, attempt, acceptance, gate, ledger, config, stage)
@@ -81,22 +84,23 @@ def run_relay(
                 return checked
             if checked.route == "ACCEPTED":
                 return replace(checked, route="LOCAL_FIRST" if stage == "local" else "LOCAL_RETRY")
-        return _fallback_stage(task_id, fallback, acceptance, gate, ledger, config)
+        return _fallback_stage(task_id, fallback, acceptance, gate, ledger, config, failures)
     except LedgerError as exc:
         return RelayResult("LEDGER_ERROR", reason=str(exc))
 
 
-def _local_attempt(task_id, worker, acceptance, context, ledger, stage):
+def _local_attempt(task_id, worker, context, ledger, stage):
     try:
         attempt = worker(context)
-    except (EndpointContextLimit, EndpointTimeout, EndpointUnreachable, LocalAttemptFailed):
-        _append(ledger, _row(task_id, stage, "local", 0, 0, 0.0))
-        return None
+    except (EndpointContextLimit, EndpointTimeout, EndpointUnreachable, LocalAttemptFailed) as exc:
+        failure = str(exc)
+        _append(ledger, _row(task_id, stage, "local", 0, 0, 0.0, failure))
+        return None, failure
     _append(
         ledger,
         _row(task_id, stage, attempt.model_id, attempt.input_tokens, attempt.output_tokens, 0.0),
     )
-    return attempt
+    return attempt, None
 
 
 class LocalAttemptFailed(RuntimeError):
@@ -129,11 +133,13 @@ def _check_stage(task_id, attempt, acceptance, gate, ledger, config, stage):
     )
 
 
-def _fallback_stage(task_id, fallback, acceptance, gate, ledger, config):
+def _fallback_stage(task_id, fallback, acceptance, gate, ledger, config, failures=()):
     try:
         attempt = fallback(task_id)
     except LocalAttemptFailed as exc:
-        return RelayResult("FAILED", reason=str(exc))
+        failure = str(exc)
+        _append(ledger, _row(task_id, "fallback", "claude-haiku-5-5", 0, 0, 0.0, failure))
+        return RelayResult("FAILED", reason="; ".join([*failures, f"fallback: {failure}"]))
     _append(
         ledger,
         _row(
@@ -146,9 +152,13 @@ def _fallback_stage(task_id, fallback, acceptance, gate, ledger, config):
         ),
     )
     checked = _check_stage(task_id, attempt, acceptance, gate, ledger, config, "fallback")
+    reasons = [*failures]
+    if checked.reason:
+        reasons.append(f"fallback review: {checked.reason}")
+    reason = "; ".join(reasons) or None
     if checked.route != "ACCEPTED":
-        return replace(checked, route="FAILED")
-    return replace(checked, route="FALLBACK")
+        return replace(checked, route="FAILED", reason=reason)
+    return replace(checked, route="FALLBACK", reason=reason)
 
 
 def _verdict_reason(reply: GateReply) -> str | None:
@@ -163,8 +173,8 @@ def _cost(reply: GateReply) -> float:
     return float(getattr(reply, "usd", 0.0))
 
 
-def _row(task_id, stage, model_id, input_tokens, output_tokens, usd):
-    return {
+def _row(task_id, stage, model_id, input_tokens, output_tokens, usd, failure=None):
+    row = {
         "task_id": task_id,
         "stage": stage,
         "model_id": model_id,
@@ -172,6 +182,9 @@ def _row(task_id, stage, model_id, input_tokens, output_tokens, usd):
         "output_tokens": output_tokens,
         "usd": usd,
     }
+    if failure is not None:
+        row["failure"] = failure
+    return row
 
 
 def _append(ledger, row):

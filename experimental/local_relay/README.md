@@ -22,6 +22,20 @@ Run root 預設建立在 local_worker 的 `INSTALLED_RUNS`（`/Users/Shared/cair
 
 Relay 以 PAUSE `WorkerRunner` 共用的 `_prepare` 建 checkout：no-hardlinks clone、detached base checkout、hardened git 設定、依來源 checkout 複製檔案模式與群組，並核對乾淨狀態和 base SHA。tmp_path 測試確認 mode、group 和 `git status --porcelain`；測試不使用 sudo，無法重現安裝環境中 worker uid 的真實屬主與 sudo 拒讀行為。
 
+## 與 canary 的差異
+
+| 項目 | `canary.py --mode worker` | Relay worker episode | 結果／處理 |
+|---|---|---|---|
+| `--runs` | 預設 `INSTALLED_RUNS`，或解析傳入的 `--runs`；run root 是其直接子目錄。 | `_local_runs` 同樣解析傳入路徑，run root 是其直接子目錄。 | 兩邊遵守相同 canonical runs 路徑與 32 位 hex 子目錄契約。 |
+| wrapper 與身份 | `WorkerTools(mode="worker")` 使用安裝的 `local-worker-tool`，工具呼叫以 `sudo -n -u _cairnwork_worker` 執行；canary 另確認 worker identity。 | `local_worker.cli run` 建立相同的 worker-mode `WorkerTools`，用相同安裝 wrapper 與 sudo argv。 | 呼叫路徑相同；非 M4 環境不能證明實際 sudo 帳號及其檔案存取結果。 |
+| run root 目錄 | root `0750`；`checkout/`、`tmp/`、`q/` 為 `0770`；canary 還建立 `venv/` 並安裝 pytest。 | 原 runtime 只建立 checkout 與 episodes，缺少 wrapper 強制要求的 `tmp/`、`q/`，也沒有 pytest venv。 | **確定根因**：第一次 `status`/`tracked` wrapper 呼叫在模型 turn 前拒絕缺少 `tmp`/`q`；補建兩目錄與 canary 同款 venv。 |
+| checkout 權限 | fixture 目錄 `0770`、檔案 `0660`，工具以 worker group 測讀寫。 | PAUSE `_prepare` clone 後保留來源 mode；原 runtime 未調整 worker group 可寫模式。 | 依 canary 方式以不跟隨 symlink 的 descriptor walk 設目錄 `0770`、一般檔案 `0660`；實際 gid 仍須實機確認，debug log 記錄 uid/gid/mode。 |
+| Python、cwd、env | canary 用 `--pyroot` 下的 CPython 3.13 建 venv；其工具子程序明確 `cwd="/"`、繼承呼叫端 env，worker wrapper/sudo 隨後套用自身環境邊界。 | CLI 用當前 `sys.executable` 啟動，明確 `cwd=task repo`；工具 wrapper 仍走相同 worker-mode 路徑。 | CLI cwd 是 Python module 載入所需；新建的 pytest venv 使用 canary 相同 CPython 3.13 選擇與 `uv venv`/`uv pip install pytest`。 |
+| endpoint、model、context | Canary 只跑 isolation/probe 和 pytest，不送 agent chat 請求，也沒有 `--endpoint`、`--model` 或 context cap，因此沒有可重用的 endpoint 物件。 | Relay 使用 `http://127.0.0.1:18101/v1`、local `qwen3.5-9b`、首輪 32768／retry 65536；Haiku fallback 使用 proxy `/v1` URL、`claude-haiku-5-5`、65536；worker CLI 由 endpoint 字串建立自己的 `LoopbackEndpoint`。 | URL 形式符合 `LoopbackEndpoint` 的 `/v1` API；canary 無法證明服務端提供指定 model 或 agent prompt 可完成。 |
+| task、prompt、tool/precheck | Canary task 是權限探針：合成檔案與 probe pytest；沒有修補任務 prompt。 | Relay 寫入 fixture/Issue prompt、允許路徑及公開測試，再用 `--write-path` 綁定 write scope；worker CLI 預設 tool schema/settings。`run_episode` 會呼叫 `AgentLoop.run`；該 run 先做 `status` 和 `tracked` 基線觀察，之後才開始 chat turn。`PrecheckMixin` 只在 agent 回報 `finish`/`DONE` 時執行。 | 原 run root 缺少 `tmp`/`q` 使前置基線工具拒絕，因此 agent loop 未開始且 token 為 0；這與 canary 通過並不矛盾，canary 沒有走這個 episode 啟動序列。 |
+
+缺目錄造成前置拒絕是由 wrapper 的 `require_run_root`、AgentLoop 的基線觀察順序及舊 runtime 建置清單直接確認；本機沒有使用真 sudo、worker uid 或 `/Users/Shared` 重現。checkout gid 是否正確、以及安裝的 Python/pytest venv 是否能由 worker 執行，仍要在安裝環境確認；拒絕原因現在會留在 episode failure、ledger、CLI 與 0600 debug log。
+
 ## 行為與已知限制
 
 - 啟用條件：`CAIRNWORK_LOCAL_RELAY=1`；`RelayConfig(enabled=True)` 單獨不能啟用。

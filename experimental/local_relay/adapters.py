@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from experimental.local_relay.config import DEFAULT_LOCAL_ENDPOINT
+from experimental.local_relay.diagnostics import episode_failure
 from experimental.local_relay.relay import Acceptance, Attempt, LocalAttemptFailed
 from experimental.local_worker.endpoint import (
     EndpointContextLimit,
@@ -59,9 +60,18 @@ class LocalWorkerAdapter:
         """Run this adapter's loop against another configured endpoint."""
         result = self.run_episode(context_tokens, endpoint)
         if isinstance(result, RunResult) and result.code == EndpointUnreachable.exit_code:
-            raise EndpointUnreachable("local worker endpoint is unreachable")
-        if not isinstance(result, RunResult) or result.code != 0 or result.checkout is None:
-            raise LocalAttemptFailed("local worker did not produce a completed episode")
+            raise EndpointUnreachable(
+                f"local worker endpoint is unreachable; {episode_failure(result)}"
+            )
+        if (
+            not isinstance(result, RunResult)
+            or result.code != 0
+            or result.checkout is None
+            or not _completed_record(result.record)
+        ):
+            if isinstance(result, RunResult):
+                raise LocalAttemptFailed(episode_failure(result))
+            raise LocalAttemptFailed("local worker returned no RunResult")
         return result
 
 
@@ -203,8 +213,15 @@ class HaikuProxyFallback:
                 raise LocalAttemptFailed(f"Haiku local-worker failed: {exc}") from exc
         finally:
             _proxy_call(self.request, "POST", f"{self.label_url}/label", {"label": "idle"})
-        if not isinstance(result, RunResult) or result.code != 0 or result.checkout is None:
-            raise LocalAttemptFailed("Haiku local-worker episode did not complete")
+        if (
+            not isinstance(result, RunResult)
+            or result.code != 0
+            or result.checkout is None
+            or not _completed_record(result.record)
+        ):
+            if isinstance(result, RunResult):
+                raise LocalAttemptFailed(episode_failure(result))
+            raise LocalAttemptFailed("Haiku local-worker returned no RunResult")
         stats = _proxy_call(self.request, "GET", f"{self.label_url}/stats?label={task_id}", None)
         if stats.get("budget_stop") is True:
             raise LocalAttemptFailed("Haiku proxy stopped at its budget")
@@ -282,4 +299,15 @@ def _usage_from_record(result: RunResult) -> tuple[int, int]:
     return (
         _int_field(record, "input_tokens", "input_tokens"),
         _int_field(record, "output_tokens", "output_tokens"),
+    )
+
+
+def _completed_record(record: Any) -> bool:
+    verification = record.get("verification", {}) if isinstance(record, dict) else {}
+    feedback = record.get("spec_feedback", {}) if isinstance(record, dict) else {}
+    return (
+        isinstance(verification, dict)
+        and verification.get("exit_reason") == "COMPLETED"
+        and isinstance(feedback, dict)
+        and feedback.get("needs_spec") is not True
     )

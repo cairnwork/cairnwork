@@ -30,7 +30,16 @@ class Gate:
 
 def _result(_context=65536, _endpoint="http://127.0.0.1:18301/v1"):
     path = Path(__file__).resolve().parent
-    return RunResult(0, "complete", path, path)
+    return RunResult(
+        0,
+        "complete",
+        path,
+        path,
+        record={
+            "verification": {"exit_reason": "COMPLETED"},
+            "spec_feedback": {"needs_spec": False},
+        },
+    )
 
 
 def _relay(fallback, rows):
@@ -138,5 +147,5 @@ def test_incomplete_proxy_episode_is_explicit_fallback_failure():
         ),
         lambda *_: {},
     )
-    with pytest.raises(LocalAttemptFailed, match="did not complete"):
+    with pytest.raises(LocalAttemptFailed, match="process_exit=1"):
         fallback("task-label")

@@ -6,7 +6,7 @@ import pytest
 
 from experimental.local_relay.config import RelayConfig
 from experimental.local_relay.ledger import JsonlLedger
-from experimental.local_relay.relay import Acceptance, Attempt, run_relay
+from experimental.local_relay.relay import Acceptance, Attempt, LocalAttemptFailed, run_relay
 from experimental.local_worker.endpoint import EndpointContextLimit
 from experimental.pause.interfaces import GateReply
 
@@ -154,6 +154,36 @@ def test_ac3_context_limit_counts_failed_local_call_then_retries_once():
     assert result.route == "LOCAL_RETRY" and worker.calls == [(32768,), (65536,)]
     assert len(acceptance.calls) == len(gate.calls) == 1 and fallback.calls == []
     assert [r["stage"] for r in ledger.rows] == ["local", "retry", "retry"]
+
+
+def test_local_retry_and_fallback_failures_preserve_reasons_in_ledger_and_result():
+    worker = Counter(
+        [
+            LocalAttemptFailed("wrapper refused: missing tmp"),
+            LocalAttemptFailed("process_exit=0; episode_status=CONTEXT_LIMIT"),
+        ]
+    )
+    ledger = FakeLedger()
+    result = run_relay(
+        "task",
+        worker,
+        lambda _: pytest.fail("incomplete episodes cannot reach acceptance"),
+        FakeGate([]),
+        lambda _task: (_ for _ in ()).throw(LocalAttemptFailed("proxy episode refused")),
+        ledger,
+        enabled(),
+    )
+    assert result.route == "FAILED"
+    assert result.reason is not None
+    assert "local: wrapper refused: missing tmp" in result.reason
+    assert "retry: process_exit=0; episode_status=CONTEXT_LIMIT" in result.reason
+    assert "fallback: proxy episode refused" in result.reason
+    assert [row["failure"] for row in ledger.rows] == [
+        "wrapper refused: missing tmp",
+        "process_exit=0; episode_status=CONTEXT_LIMIT",
+        "proxy episode refused",
+    ]
+    assert all(row["input_tokens"] == row["output_tokens"] == 0 for row in ledger.rows)
 
 
 def test_ac3_second_local_failure_falls_back_without_third_worker_call():

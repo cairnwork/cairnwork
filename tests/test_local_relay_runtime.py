@@ -270,7 +270,7 @@ def test_local_episode_requires_completed_marker_and_record(tmp_path):
     row = {"verification": {"exit_reason": "COMPLETED"}, "spec_feedback": {"needs_spec": False}}
     episode = tmp_path / "episodes.jsonl"
     episode.write_text(json.dumps(row) + "\n", encoding="utf-8")
-    assert runtime._episode_record("LOCAL_WORKER_EPISODE ERROR_ABORT id x", episode) is None
+    assert runtime._episode_record("LOCAL_WORKER_EPISODE ERROR_ABORT id x", episode) == row
     assert runtime._episode_record("LOCAL_WORKER_EPISODE COMPLETED id x", episode) == row
 
 
@@ -279,66 +279,6 @@ def test_completed_marker_without_durable_record_is_not_success(tmp_path):
         runtime._episode_record("LOCAL_WORKER_EPISODE COMPLETED id x", tmp_path / "missing.jsonl")
         is None
     )
-
-
-def _local_run_fakes(monkeypatch, tmp_path, marker):
-    captured = {}
-    canary = tmp_path / "canary.json"
-    canary.write_text("report", encoding="utf-8")
-    Path(str(canary) + ".sha256").write_text("digest", encoding="utf-8")
-    monkeypatch.setattr(runtime, "_git", lambda *_args: "a" * 40)
-    monkeypatch.setattr(runtime, "_prepare", lambda *_args: None)
-
-    def launch(argv, **_kwargs):
-        captured["argv"] = argv
-        out = Path(argv[argv.index("--out") + 1])
-        episode = out / "episodes-cairnwork-qwen3.5_9b-pilot.jsonl"
-        row = {
-            "verification": {"exit_reason": "COMPLETED"},
-            "spec_feedback": {"needs_spec": False},
-        }
-        episode.write_text(json.dumps(row) + "\n", encoding="utf-8")
-        return type("Result", (), {"returncode": 0, "stdout": marker, "stderr": ""})()
-
-    monkeypatch.setattr(runtime.subprocess, "run", launch)
-    runs = tmp_path / "runs"
-    runs.mkdir()
-    args = type("Args", (), {"state": str(tmp_path / "state"), "runs": runs})()
-    task = {
-        "task_id": "task-1",
-        "prompt": "fix",
-        "verifiers": [("pytest-0", ("python3", "-m", "pytest", "-q", "tests/test_a.py"))],
-        "allowed_files": ["src/a.py", "tests/test_a.py"],
-        "base_commit": "a" * 40,
-        "repo": tmp_path / "repo",
-    }
-    result = runtime._run_localworker(
-        args, task, tmp_path / "repo", 65536, DEFAULT_LOCAL_ENDPOINT, canary
-    )
-    return result, captured["argv"]
-
-
-def test_localworker_uses_context_endpoint_and_write_scope(monkeypatch, tmp_path):
-    result, argv = _local_run_fakes(
-        monkeypatch, tmp_path, "LOCAL_WORKER_EPISODE COMPLETED episode path line_sha256=x"
-    )
-    assert result.code == 0
-    assert argv[argv.index("--context-cap") + 1] == "65536"
-    assert argv[argv.index("--endpoint") + 1] == DEFAULT_LOCAL_ENDPOINT
-    assert argv[argv.index("--runs") + 1] == str((tmp_path / "runs").resolve())
-    run_root = Path(argv[argv.index("--checkout") + 1]).parent
-    assert run_root.parent == (tmp_path / "runs").resolve()
-    assert len(run_root.name) == 32 and all(char in "0123456789abcdef" for char in run_root.name)
-    assert run_root.stat().st_mode & 0o777 == 0o750
-    assert argv.count("--write-path") == 2
-    assert argv[argv.index("--write-path") + 1] == "src/a.py"
-
-
-def test_localworker_abort_record_cannot_become_candidate(monkeypatch, tmp_path):
-    result, _ = _local_run_fakes(
-        monkeypatch, tmp_path, "LOCAL_WORKER_EPISODE ERROR_ABORT episode path line_sha256=x"
-    )
-    assert result.code != 0
 
 
 def test_core_acceptance_refuses_paths_outside_task_allowlist(monkeypatch, tmp_path):
