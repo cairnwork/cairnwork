@@ -14,7 +14,6 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-import sys
 from dataclasses import dataclass
 from typing import Any
 
@@ -50,6 +49,7 @@ def row_binding(notary: Any, task_id: str, attempt_id: str) -> RowBinding | None
 
 def _row_binding(notary: Any, task_id: str, attempt_id: str) -> RowBinding | None:
     conn = None
+    failed = False  # this read's own error (not one a caller is handling around us)
     try:
         # Do not use Notary._connect(): it opens a writable connection and sets write pragmas.
         uri = notary._path.resolve().as_uri() + "?mode=ro"
@@ -66,21 +66,23 @@ def _row_binding(notary: Any, task_id: str, attempt_id: str) -> RowBinding | Non
             {"cap": MAX_STORED_JSON_BYTES, "task": task_id, "attempt": attempt_id},
         ).fetchone()
     except sqlite3.Error as exc:
+        failed = True
         raise RowBindingUnavailable("cannot read notary row") from exc
+    except BaseException:
+        failed = True
+        raise
     finally:
         if conn is not None:
-            in_flight = sys.exc_info()[0] is not None  # an error is already on its way out
             try:
                 conn.close()
             except (sqlite3.Error, MemoryError) as exc:
-                if not in_flight and isinstance(exc, sqlite3.Error):
-                    raise RowBindingUnavailable("cannot close notary read snapshot") from exc
-                try:  # release once more; the error already in flight (or this one) wins
+                try:  # release once more; a second failure leaves the first as the reason
                     conn.close()
                 except (MemoryError, sqlite3.Error):
-                    pass
-                if not in_flight:
-                    raise
+                    if not failed:  # an error already on its way out (failed) is never replaced
+                        if isinstance(exc, sqlite3.Error):
+                            raise RowBindingUnavailable("cannot close notary snapshot") from exc
+                        raise
     if row is None:
         return None
     base, candidate, request_json, response_json, expected, binding_json = row

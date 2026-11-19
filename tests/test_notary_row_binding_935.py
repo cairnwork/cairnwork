@@ -389,3 +389,58 @@ def test_close_error_after_a_memory_error_does_not_replace_it(
     monkeypatch.setattr(nb.sqlite3, "connect", lambda *_a, **_k: Conn())
     got = notary.row_binding("task-1", "a1")  # MemoryError wins: unreadable, not Unavailable
     assert got is not None and got.identity_problem == nb.IDENTITY_UNREADABLE
+
+
+class _RealConnWithBadClose:
+    """A real read-only connection whose close() fails ``failures`` times, then works."""
+
+    def __init__(self, real, failures: int, error: Exception) -> None:
+        self.real, self.failures, self.error, self.closes = real, failures, error, 0
+
+    def execute(self, *a, **k):
+        return self.real.execute(*a, **k)
+
+    def close(self) -> None:
+        self.closes += 1
+        if self.closes <= self.failures:
+            raise self.error
+        self.real.close()
+
+
+def _patch_connect(monkeypatch, failures: int, error: Exception) -> list:
+    import cairnwork.notary_binding as nb
+
+    made: list = []
+    real_connect = nb.sqlite3.connect
+
+    def connect(*a, **k):
+        conn = _RealConnWithBadClose(real_connect(*a, **k), failures, error)
+        made.append(conn)
+        return conn
+
+    monkeypatch.setattr(nb.sqlite3, "connect", connect)
+    return made
+
+
+def test_close_error_is_reported_even_inside_a_callers_except_block(
+    tmp_path: Path, repo: Path, monkeypatch
+) -> None:
+    import cairnwork.notary_binding as nb
+
+    notary, _ = _row(tmp_path, repo, fake_core_verify)
+    _patch_connect(monkeypatch, 5, sqlite3.OperationalError("cannot close"))
+    try:
+        raise ValueError("the caller is handling this")
+    except ValueError:
+        with pytest.raises(nb.RowBindingUnavailable):  # not swallowed into a None / success
+            notary.row_binding("task-1", "a1")
+
+
+def test_first_close_error_second_succeeds_returns_the_binding(
+    tmp_path: Path, repo: Path, monkeypatch
+) -> None:
+    notary, _ = _row(tmp_path, repo, fake_core_verify)
+    made = _patch_connect(monkeypatch, 1, sqlite3.OperationalError("cannot close"))
+    got = notary.row_binding("task-1", "a1")
+    assert got is not None and got.identity_problem == "" and got.columns_match is True
+    assert made[0].closes == 2
