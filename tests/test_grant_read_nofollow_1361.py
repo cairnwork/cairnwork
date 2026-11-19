@@ -280,3 +280,99 @@ def test_copy_helper_uses_nofollow_fd_and_preserves_tree(tmp_path: Path) -> None
     assert stat.S_IMODE((dst / "sub").stat().st_mode) == 0o750
     assert stat.S_IMODE((dst / "sub" / "f.txt").stat().st_mode) == 0o640
     assert (dst / "lnk").is_symlink() and os.readlink(dst / "lnk") == "sub/f.txt"
+
+
+def _swap_after_second_lstat(monkeypatch: pytest.MonkeyPatch, target: str, swap) -> list[int]:
+    """Run ``swap`` right after the fallback branch's pre-check lstat of ``target`` returns.
+
+    The listing loop does the first lstat; ``_chmod_unreadable`` does the second.
+    The swap lands between that pre-check and the chmod (the window finding 1 names).
+    """
+    real_stat = os.stat
+    seen: list[int] = []
+    swapped: list[int] = []
+
+    def stat_then_swap(path, *args, **kwargs):
+        result = real_stat(path, *args, **kwargs)
+        if (
+            Path(str(path)).name == target
+            and kwargs.get("dir_fd") is not None
+            and kwargs.get("follow_symlinks") is False
+        ):
+            seen.append(1)
+            if len(seen) == 2 and not swapped:
+                swapped.append(1)
+                swap()
+        return result
+
+    monkeypatch.setattr(os, "stat", stat_then_swap)
+    return swapped
+
+
+@pytest.mark.skipif(hasattr(os, "O_PATH"), reason="Linux uses the O_PATH branch")
+def test_grant_read_fallback_refuses_mode_zero_file_swapped_before_chmod(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    target = outside / "s"
+    target.write_text("x\n", encoding="utf-8")
+    target.chmod(0o600)
+    root = tmp_path / "checkout"
+    root.mkdir()
+    victim = root / "f"
+    victim.write_text("x\n", encoding="utf-8")
+    victim.chmod(0)
+
+    def swap() -> None:
+        victim.rename(root / "f.real")
+        victim.symlink_to(target)
+
+    swapped = _swap_after_second_lstat(monkeypatch, "f", swap)
+    try:
+        with pytest.raises(OSError):
+            VerifierAccount.grant_read(root)
+        assert swapped
+        assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    finally:
+        monkeypatch.undo()
+        if (root / "f.real").exists():
+            (root / "f.real").chmod(0o600)
+
+
+@pytest.mark.skipif(hasattr(os, "O_PATH"), reason="Linux uses the O_PATH branch")
+def test_grant_read_fallback_refuses_mode_zero_dir_swapped_before_chmod(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir(mode=0o700)
+    root = tmp_path / "checkout"
+    closed = root / "closed"
+    closed.mkdir(parents=True)
+    closed.chmod(0)
+
+    def swap() -> None:
+        closed.rename(root / "closed.real")
+        closed.symlink_to(outside)
+
+    swapped = _swap_after_second_lstat(monkeypatch, "closed", swap)
+    try:
+        with pytest.raises(OSError):
+            VerifierAccount.grant_read(root)
+        assert swapped
+        assert stat.S_IMODE(outside.stat().st_mode) == 0o700
+    finally:
+        monkeypatch.undo()
+        if (root / "closed.real").exists():
+            (root / "closed.real").chmod(0o700)
+
+
+def test_grant_read_in_tree_symlink_widens_only_the_link(tmp_path: Path) -> None:
+    outside = tmp_path / "outside.txt"
+    outside.write_text("x\n", encoding="utf-8")
+    outside.chmod(0o600)
+    root = tmp_path / "checkout"
+    root.mkdir()
+    (root / "link").symlink_to(outside)
+    VerifierAccount.grant_read(root)
+    assert stat.S_IMODE(outside.stat().st_mode) == 0o600
