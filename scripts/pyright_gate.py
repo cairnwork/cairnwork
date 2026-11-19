@@ -30,6 +30,7 @@ from pathlib import Path
 
 Key = tuple[str, str, str, str]
 _SKIP_DIRS = {".git", ".venv"}
+_MAX_FILE_BYTES = 8 * 1024 * 1024
 _IGNORE_COMMENT = re.compile(r"#[\t ]*(?:type|pyright)[\t ]*:[\t ]*ignore(?=$|[\s\[#])", re.I)
 _PYRIGHT_DIRECTIVE = re.compile(r"#[\t ]*pyright[\t ]*:(?![\t ]*ignore(?=$|[\s\[#]))([^\n]*)", re.I)
 
@@ -64,14 +65,30 @@ def load(report: Path, root: Path) -> Counter[Key]:
     return found
 
 
+def _read_bytes(path: Path, rel: str) -> bytes:
+    if path.is_symlink() or not path.is_file():
+        raise GateError(f"unreadable path {rel}")
+    try:
+        if path.stat().st_size > _MAX_FILE_BYTES:
+            raise GateError(f"file too large: {rel}")
+        with path.open("rb") as handle:
+            data = handle.read(_MAX_FILE_BYTES + 1)
+    except OSError as exc:
+        raise GateError(f"cannot read {rel}: {exc!r}") from exc
+    if len(data) > _MAX_FILE_BYTES:
+        raise GateError(f"file too large: {rel}")
+    return data
+
+
 def _pyproject_pyright(pyproj: Path) -> object:
     if pyproj.is_symlink() or (pyproj.exists() and not pyproj.is_file()):
         raise GateError(f"{pyproj.name} must be a regular file")
     if not pyproj.exists():
         return None
     try:
-        table = tomllib.loads(pyproj.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        text = _read_bytes(pyproj, pyproj.name).decode("utf-8")
+        table = tomllib.loads(text)
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
         raise GateError(f"cannot read {pyproj.name}: {exc!r}") from exc
     if not isinstance(table, dict):
         raise GateError(f"invalid {pyproj.name}")
@@ -86,8 +103,8 @@ def _config(root: Path) -> tuple[str | None, object]:
     if cfg.is_symlink() or (cfg.exists() and not cfg.is_file()):
         raise GateError("pyrightconfig.json must be a regular file")
     try:
-        text = cfg.read_text(encoding="utf-8") if cfg.is_file() else None
-    except (OSError, UnicodeDecodeError) as exc:
+        text = _read_bytes(cfg, cfg.name).decode("utf-8") if cfg.is_file() else None
+    except UnicodeDecodeError as exc:
         raise GateError(f"cannot read pyrightconfig.json: {exc!r}") from exc
     return text, _pyproject_pyright(root / "pyproject.toml")
 
@@ -132,13 +149,19 @@ def _file_level_ignores(text: str, rel: str) -> Counter[str]:
 
 def _is_stub(rel: str, suffix: str) -> bool:
     parts = Path(rel).parts
-    return suffix == ".pyi" or "typings" in parts or any(p.endswith("-stubs") for p in parts)
+    return suffix == ".pyi" or any(
+        p.lower() == "typings" or p.lower().endswith("-stubs") for p in parts
+    )
+
+
+def _walk_error(exc: OSError) -> None:
+    raise GateError(f"cannot walk tree: {exc!r}") from exc
 
 
 def _scan_tree(root: Path) -> tuple[dict[str, bytes], dict[str, bytes]]:
     stubs: dict[str, bytes] = {}
     py_files: dict[str, bytes] = {}
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+    for dirpath, dirnames, filenames in os.walk(root, onerror=_walk_error, followlinks=False):
         kept: list[str] = []
         for d in sorted(dirnames):
             if d in _SKIP_DIRS:
@@ -158,13 +181,9 @@ def _scan_tree(root: Path) -> tuple[dict[str, bytes], dict[str, bytes]]:
                 if _pyproject_pyright(path) is not None:
                     raise GateError(f"nested [tool.pyright] at {rel}")
             if _is_stub(rel, path.suffix.lower()):
-                if path.is_symlink() or not path.is_file():
-                    raise GateError(f"unreadable stub path {rel}")
-                stubs[rel] = path.read_bytes()
+                stubs[rel] = _read_bytes(path, rel)
             elif path.suffix == ".py":
-                if path.is_symlink() or not path.is_file():
-                    raise GateError(f"unreadable python file {rel}")
-                py_files[rel] = path.read_bytes()
+                py_files[rel] = _read_bytes(path, rel)
     return stubs, py_files
 
 

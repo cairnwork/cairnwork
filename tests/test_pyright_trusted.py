@@ -197,3 +197,18 @@ def test_trusted_script_enforces_trusted_config_and_rejects_suppressions(
     records = [line.split("\t") for line in seen.read_text(encoding="utf-8").splitlines()]
     assert len(records) == 2
     assert all(json.loads(cfg) == {"typeCheckingMode": "strict"} for _, cfg in records)
+
+
+def test_trusted_script_fails_closed_when_trusted_python_missing(tmp_path: Path) -> None:
+    trusted, head, fake, base_sha, seen, work = _setup_trusted_run(tmp_path)
+    (trusted / ".venv" / "bin" / "python").unlink()
+    env = {**os.environ, "PATH": f"{fake}:{os.environ['PATH']}", "SEEN_FILE": str(seen)}
+    done = subprocess.run(
+        [str(SCRIPT), str(trusted), str(head), base_sha, str(work)],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert done.returncode == 3
+    assert "trusted python missing" in done.stdout
+    assert not seen.exists()

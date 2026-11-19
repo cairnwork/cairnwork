@@ -271,3 +271,32 @@ def test_prepare_trees_materializes_trusted_config(tmp_path: Path) -> None:
     (head / "m.py").write_text("x = 1\n", encoding="utf-8")
     (head / "m.pyi").write_text("x: int\n", encoding="utf-8")
     assert gate.main(["--prepare-trees", str(trusted), str(base), str(head)]) == 2
+
+
+def test_walk_error_and_oversized_file_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base = _tree(tmp_path / "base", "x = 1\n")
+    head = _tree(tmp_path / "head", "x = 1\n")
+    locked = head / "locked"
+    locked.mkdir()
+    (locked / "sub.py").write_text("x = 1\n", encoding="utf-8")
+    locked.chmod(0)
+    try:
+        assert _run(base, _report(base, []), head, _report(head, [])) == 2
+    finally:
+        locked.chmod(0o700)
+
+    monkeypatch.setattr(gate, "_MAX_FILE_BYTES", 16)
+    (head / "big.py").write_text("x = 1\n" * 10, encoding="utf-8")
+    assert _run(base, _report(base, []), head, _report(head, [])) == 2
+
+
+@pytest.mark.parametrize("rel", ["Typings/m.pyi", "pkg-STUBS/m.pyi", "Typings/m.py"])
+def test_case_variant_stub_dirs_fail_closed(tmp_path: Path, rel: str) -> None:
+    base = _tree(tmp_path / "base", "x = 1\n")
+    head = _tree(tmp_path / "head", "x = 1\n")
+    target = head / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("x: int\n", encoding="utf-8")
+    assert _run(base, _report(base, []), head, _report(head, [])) == 2
