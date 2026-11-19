@@ -79,13 +79,8 @@ class ProbeResult:
 
 
 def _head(repo: Path) -> str:
-    out = subprocess.run(  # noqa: S603 - fixed argv
-        ["git", "-C", str(repo), "rev-parse", "HEAD"],
-        capture_output=True,
-        text=True,
-        check=True,
-        env=_git_env(),
-    )
+    out = _run_git(repo, "rev-parse", "HEAD")
+    out.check_returncode()
     return out.stdout.strip()
 
 
@@ -247,13 +242,7 @@ def _mirror_multi_branch_reason(repo: Path) -> str | None:
     A git failure is a reason too (Issue #1106): only exit 1 (key unset) means not applicable."""
     unsure = "refusing to treat the repo as single-branch"
     try:
-        got = subprocess.run(  # noqa: S603, S607 - fixed argv, no shell
-            ["git", "-C", str(repo), "config", "--get-all", "remote.origin.fetch"],
-            capture_output=True,
-            text=True,
-            check=False,
-            env=_git_env(),
-        )
+        got = _run_git(repo, "config", "--get-all", "remote.origin.fetch")
     except OSError as err:
         return f"could not read remote.origin.fetch ({err}); {unsure}"
     if got.returncode not in (0, 1):
