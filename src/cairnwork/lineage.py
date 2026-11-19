@@ -118,6 +118,7 @@ def verify_single_branch(clone: Path) -> None:
     if extra:
         raise RuntimeError(f"{code}: mirror holds a branch beyond main ({extra[0]}); {advice}")
     _refuse_foreign_history(clone, code, advice)
+    _refuse_foreign_head(clone, code, advice)
 
 
 # Refs Cairnwork writes itself, each matched by exact shape (#1266); a nested or lookalike name
@@ -160,3 +161,17 @@ def _refuse_foreign_history(clone: Path, code: str, advice: str) -> None:
                 tip = ""
         if not tip or not _in_main_history(clone, tip):
             raise RuntimeError(f"{code}: mirror holds {ref}, not in main's history; {advice}")
+
+
+def _refuse_foreign_head(clone: Path, code: str, advice: str) -> None:
+    """HEAD names main, or (detached) a commit in main's history: a HEAD on another branch, even
+    one with no commit yet, is a mirror state the refs checks above do not see (#1391)."""
+    try:
+        target = run_git(clone, "symbolic-ref", "-q", "HEAD").strip()
+    except GitCommandError:  # exit 1: detached
+        tip = run_git(clone, "--no-replace-objects", "rev-parse", "--verify", "HEAD").strip()
+        if not _in_main_history(clone, tip):
+            raise RuntimeError(f"{code}: mirror HEAD is not in main's history; {advice}") from None
+        return
+    if target != "refs/heads/main":
+        raise RuntimeError(f"{code}: mirror HEAD points at {target}, not refs/heads/main; {advice}")

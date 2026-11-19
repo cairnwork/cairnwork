@@ -42,6 +42,22 @@ def _origin_head_to(clone, side):
     git(clone, "update-ref", "--no-deref", "refs/remotes/origin/HEAD", side)
 
 
+def _pack_only(clone, ref, target):
+    """Plant ``ref`` as a line in packed-refs only (no loose file) (#1390)."""
+    packed = clone / ".git" / "packed-refs"
+    old = (
+        packed.read_text() if packed.exists() else "# pack-refs with: peeled fully-peeled sorted \n"
+    )
+    packed.write_text(old + f"{target} {ref}\n")
+    assert not (clone / ".git" / ref).exists()
+
+
+def _update_ref_then_pack(clone, ref, target):
+    git(clone, "update-ref", ref, target)
+    git(clone, "pack-refs", "--all")
+    assert not (clone / ".git" / ref).exists()
+
+
 MUST_PASS = {
     "tag-on-main": lambda c, side: git(c, "update-ref", "refs/tags/v1", "origin/main"),
     "annotated-tag-on-main": lambda c, side: git(c, "tag", "-a", "-m", "m", "v1", "origin/main"),
@@ -56,6 +72,9 @@ MUST_PASS = {
         c, "update-ref", "refs/cairnwork/attempts/" + "a" * 64, side
     ),
     "main-behind-origin-main": lambda c, side: _advance_origin(c),
+    "head-detached-on-main-history": lambda c, side: git(
+        c, "update-ref", "--no-deref", "HEAD", "origin/main"
+    ),
     "origin-head-at-origin-main": lambda c, side: git(
         c, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"
     ),
@@ -70,6 +89,17 @@ MUST_BLOCK = {
     "replace-off-main": lambda c, side: git(c, "update-ref", "refs/replace/" + SHA40, side),
     "replace-onto-main": lambda c, side: git(
         c, "update-ref", "refs/replace/" + git(c, "rev-parse", "HEAD"), git(c, "rev-parse", "HEAD")
+    ),
+    "replace-off-main-packed-only": lambda c, side: _pack_only(c, "refs/replace/" + SHA40, side),
+    "replace-onto-main-packed-only": lambda c, side: _pack_only(
+        c, "refs/replace/" + git(c, "rev-parse", "HEAD"), git(c, "rev-parse", "HEAD")
+    ),
+    "replace-update-ref-then-pack-refs": lambda c, side: _update_ref_then_pack(
+        c, "refs/replace/" + SHA40, side
+    ),
+    "head-on-another-branch": lambda c, side: git(c, "symbolic-ref", "HEAD", "refs/heads/other"),
+    "head-detached-on-side-commit": lambda c, side: git(
+        c, "update-ref", "--no-deref", "HEAD", side
     ),
     "cairnwork-test-ref": lambda c, side: git(c, "update-ref", "refs/cairnwork/test", side),
     "attempt-lookalike": lambda c, side: git(c, "update-ref", "refs/cairnwork/attemptsX/a", side),
