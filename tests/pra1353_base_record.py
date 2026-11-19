@@ -23,7 +23,7 @@ import sys
 import sysconfig
 from pathlib import Path
 
-SKIPPED_DIRS = frozenset({"__pycache__", "site-packages"})  # not the interpreter's own code
+ROOT_SKIPPED = frozenset({"site-packages"})  # only directly under a root; the gate runs -I -S
 
 RECORD_KEYS = frozenset({"version", "base_prefix", "base_exec_prefix", "roots", "digest", "files"})
 
@@ -82,7 +82,8 @@ def _raise(error: OSError) -> None:
 
 
 def tree_digest(roots: list[str]) -> tuple[str, int]:
-    """SHA-256 over every entry under the roots and the roots themselves: files, symlinks (those
+    """SHA-256 over every entry under the roots and the roots themselves, bytecode caches
+    included: files, symlinks (those
     that point at a directory too, which ``os.walk`` lists among the directories but does not
     enter) and directories, each with its mode bits. A symlink also contributes what it points at
     (see ``_link_target``). An unreadable directory, or anything that is not a file, directory or
@@ -93,7 +94,9 @@ def tree_digest(roots: list[str]) -> tuple[str, int]:
         _entry(outer, chosen, root, root)
         count += 1
         for here, dirs, names in os.walk(root, followlinks=False, onerror=_raise):
-            dirs[:] = sorted(d for d in dirs if d not in SKIPPED_DIRS)
+            # __pycache__ is hashed (a swapped unchecked-hash .pyc would run without its .py
+            # changing); only a root's own site-packages is left out, never a nested one
+            dirs[:] = sorted(d for d in dirs if not (here == root and d in ROOT_SKIPPED))
             for name in sorted([*names, *dirs]):
                 _entry(outer, chosen, root, os.path.join(here, name))
                 count += 1

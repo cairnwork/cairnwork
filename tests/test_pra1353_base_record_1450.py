@@ -41,12 +41,32 @@ def _digest(root: Path) -> str:
     return rec.tree_digest([str(root)])[0]
 
 
-def test_digest_is_stable_and_ignores_caches_and_site_packages(tmp_path):
+def test_digest_ignores_only_a_roots_own_site_packages(tmp_path):
     root = _fake_install(tmp_path)
     before = _digest(root)
-    (root / "__pycache__" / "new.pyc").write_bytes(b"more")
-    (root / "site-packages" / "later.py").write_text("also ignored\n")
+    (root / "site-packages" / "later.py").write_text("not read by the -I -S gate\n")
     assert _digest(root) == before
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        lambda r: (r / "__pycache__" / "os.pyc").write_bytes(b"unchecked-hash pyc swapped in"),
+        lambda r: (r / "__pycache__" / "new.pyc").write_bytes(b"added"),
+        lambda r: (r / "pkg" / "site-packages").mkdir(),
+        lambda r: (
+            (r / "pkg" / "site-packages").mkdir(),
+            (r / "pkg" / "site-packages" / "evil.py").write_text("x"),
+        ),
+    ],
+    ids=["pyc-swapped", "pyc-added", "nested-site-packages-dir", "nested-site-packages-file"],
+)
+def test_bytecode_caches_and_nested_site_packages_are_hashed(tmp_path, tamper):
+    """A .pyc with an unchecked hash runs without its .py changing, so caches count."""
+    root = _fake_install(tmp_path)
+    before = _digest(root)
+    tamper(root)
+    assert _digest(root) != before
 
 
 @pytest.mark.parametrize(
@@ -214,3 +234,39 @@ def test_an_unreadable_subdirectory_fails_instead_of_being_skipped(tmp_path):
             _digest(root)
     finally:
         (root / "pkg").chmod(0o755)
+
+
+def _gate_script() -> str:
+    text = (ROOT / ".github/workflows/ci.yml").read_text()
+    block = text.split("- name: Sealed #1353 witness gate\n", 1)[1].split("\n      - ", 1)[0]
+    run = block.split("run: |\n", 1)[1]
+    return "\n".join(line[10:] for line in run.splitlines())
+
+
+@pytest.mark.parametrize("verify_rc, gate_rc", [(0, 0), (0, 3), (1, 0), (2, 0)])
+def test_ci_gate_step_skips_the_gate_when_verify_fails(tmp_path, verify_rc, gate_rc):
+    """Run the real step text with stub interpreters: verify first, the gate only if it passed."""
+    bin_dir = tmp_path / "pra1353-trusted" / ".venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    log = tmp_path / "calls.log"
+    stub = bin_dir / "python"
+    stub.write_text(
+        "#!/bin/bash\n"
+        'case "$*" in\n'
+        f"  *base_record.py*verify*) echo VERIFY >> {log}; exit {verify_rc} ;;\n"
+        f"  *pra1353_gate.py*) echo GATE >> {log}; exit {gate_rc} ;;\n"
+        "esac\n"
+    )
+    stub.chmod(0o755)
+    done = subprocess.run(  # noqa: S603 - the CI step text with stubbed interpreters
+        ["bash", "-c", _gate_script()],
+        env={"PATH": "/usr/bin:/bin", "RUNNER_TEMP": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    calls = log.read_text().split()
+    assert calls[0] == "VERIFY"
+    assert (calls[1:] == ["GATE"]) == (verify_rc == 0)
+    expected = verify_rc or gate_rc
+    assert (done.returncode != 0) == (expected != 0)
