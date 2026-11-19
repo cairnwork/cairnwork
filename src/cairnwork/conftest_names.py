@@ -29,7 +29,7 @@ from pathlib import Path
 from posixpath import dirname, join
 
 from cairnwork.conftest_reach import _mentions, _paired_values, _pattern_bound, _with_expr
-from cairnwork.conftest_test_imports import _params, _test_named_imports
+from cairnwork.conftest_test_imports import _params, _targets, _test_named_imports
 from cairnwork.deferred_overlay import TestCommitRejected
 from cairnwork.fixture_forms import (
     CODE,
@@ -186,7 +186,7 @@ def _test_bound_helpers(
         if file.rsplit("/", 1)[-1] == "conftest.py" or not _under(file, directory):
             continue
         for module, orig in _test_named_imports(file, tree):
-            for target in index.get(module, ()):
+            for target in _targets(module, orig, index):
                 wanted.setdefault(target, set()).add(orig)
     files = sorted(wanted)
     names: set[str] = set()

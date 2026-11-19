@@ -43,6 +43,7 @@ TAKEN = {  # name: test module text
         "from helpers import verify_token\n\nfor test_login in (verify_token,):\n    pass\n"
     ),
     "attribute binding": "import helpers\n\ntest_login = helpers.verify_token\n",
+    "dotted module attribute": "import tests.helpers\n\ntest_login = tests.helpers.verify_token\n",
     "attribute through an import alias": "import helpers as h\n\ntest_login = h.verify_token\n",
     "attribute of a from-imported module": (
         "from tests import helpers\n\ntest_login = helpers.verify_token\n"
@@ -75,6 +76,9 @@ FREE = {  # name: test module text
     "non-test name bound in an if block": (
         "import sys\nfrom helpers import verify_token\n\n"
         "if sys.platform:\n    checker = verify_token\n"
+    ),
+    "a standard library helper bound under a test name": (
+        "from os.path import join\n\ntest_join = join\n"
     ),
     "a test name bound to another name": (
         "from helpers import verify_token\n\nother = 1\ntest_login = other\n"
@@ -172,3 +176,18 @@ def test_a_relative_import_resolves_at_its_own_level(repo):
     }
     with pytest.raises(dt.TestCommitRejected, match=r"base test requests \(dep\)"):
         _check(repo, {conftest: FIXTURE.format("dep")}, path=conftest, base_files=base)
+
+
+UNRESOLVED = {  # name: test module text; the bound helper's source is not in the base
+    "from-import": "from vendorlib import verify_token\n\ntest_login = verify_token\n",
+    "dotted attribute": "import vendorlib.auth\n\ntest_login = vendorlib.auth.verify_token\n",
+    "star import": "from vendorlib import *\n",
+    "attribute of a base function": "import helpers\n\ntest_login = helpers.verify_token.inner\n",
+}
+
+
+@pytest.mark.parametrize("name", list(UNRESOLVED))
+def test_a_bound_helper_whose_source_is_not_in_the_base_is_refused(repo, name):
+    base = {MODULE: UNRESOLVED[name], "tests/helpers.py": HELPER}
+    with pytest.raises(dt.TestCommitRejected, match=r"which is not in the base"):
+        _check(repo, {CONFTEST: FIXTURE.format("other")}, path=CONFTEST, base_files=base)

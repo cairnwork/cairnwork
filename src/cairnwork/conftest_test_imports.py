@@ -4,9 +4,11 @@ conftest_names._test_bound_helpers)."""
 from __future__ import annotations
 
 import ast
+import sys
 from posixpath import dirname
 
-from cairnwork.fixture_forms import module_level
+from cairnwork.deferred_overlay import TestCommitRejected
+from cairnwork.fixture_forms import CODE, module_level
 
 _Pair = tuple[str, str]  # (module, name); name "" is the module itself, "*" a star import
 
@@ -48,13 +50,36 @@ def _test_named_imports(file: str, tree: ast.Module) -> list[_Pair]:
 
 
 def _read(value: ast.AST, src: dict[str, set[_Pair]]) -> set[_Pair]:
+    """Every name read in ``value``; ``a.b.c`` of a module ``a`` is (``a.b``, ``c``)."""
     out: set[_Pair] = set()
+    inner = {id(n.value) for n in ast.walk(value) if isinstance(n, ast.Attribute)}
     for n in ast.walk(value):
         if isinstance(n, ast.Name):
             out |= src.get(n.id, set())
-        elif isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name):
-            out |= {(m, n.attr) for m, o in src.get(n.value.id, ()) if not o}
+        elif isinstance(n, ast.Attribute) and id(n) not in inner:
+            parts, root = [], n
+            while isinstance(root, ast.Attribute):
+                parts.insert(0, root.attr)
+                root = root.value
+            if isinstance(root, ast.Name):
+                path = ".".join(parts[:-1])
+                out |= {
+                    (f"{m}.{path}".strip("."), parts[-1]) for m, o in src.get(root.id, ()) if not o
+                }
     return out
+
+
+def _targets(module: str, name: str, index: dict[str, set[str]]) -> set[str]:
+    """Base files of ``module``. One in no base file and not a submodule ``module.name`` has
+    parameters that cannot be read: refused, except the standard library and pytest."""
+    if module in index or f"{module}.{name}" in index:
+        return index.get(module, set())
+    top = module.split(".")[0]
+    if top in sys.stdlib_module_names or top in {"pytest", "_pytest"}:
+        return set()
+    raise TestCommitRejected(
+        CODE, f"a base test name is bound to {module!r}.{name!r}, which is not in the base"
+    )
 
 
 def _links(node: ast.stmt) -> list[tuple[set[str], ast.AST]]:
