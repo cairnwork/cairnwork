@@ -30,6 +30,7 @@ _PATH_FIRST_OPENERS = frozenset(
 _MODULES = frozenset(
     {"os", "io", "builtins", "gzip", "bz2", "lzma", "codecs", "tarfile", "shelve", "dbm", "zipfile"}
 )
+_COPY_MODULES = frozenset({"shutil", "tempfile"})
 _DIRECT_WRITERS = frozenset({"NamedTemporaryFile", "FileIO", "copyfileobj"})
 _MODE_TEXT = re.compile(r"[rwaxbtU+]{1,6}")
 _UNBOUND_OPEN = "\0unbound_builtin_open"
@@ -217,11 +218,9 @@ def _imported_openers(tree: ast.Module) -> frozenset[str]:
         for alias in node.names
         if alias.name == "open"
     }
-    other_openers = _imported_names(tree, names, (_MODULES | {"shelve", "dbm"}) - {"os"})
-    exclusive_os_openers = os_open_aliases - other_openers
     return (
         imported
-        | {_OS_OPEN_PREFIX + name for name in exclusive_os_openers}
+        | {_OS_OPEN_PREFIX + name for name in os_open_aliases}
         | ({_UNBOUND_OPEN} if not _module_binds_name(tree, "open") else set())
     )
 
@@ -231,13 +230,17 @@ def _module_aliases(tree: ast.Module) -> dict[str, str]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.name in _MODULES:
-                    bindings.setdefault(alias.asname or alias.name, []).append(
-                        (node, alias, alias.name)
-                    )
+                root = alias.name if alias.asname else alias.name.split(".")[0]
+                if root in _MODULES | _COPY_MODULES:
+                    bindings.setdefault(alias.asname or root, []).append((node, alias, root))
     aliases: dict[str, str] = {}
     for name, imports in bindings.items():
-        if len(imports) == 1 and _has_only_import_binding(tree, name, *imports[0][:2]):
+        single = len(imports) == 1 and _has_only_import_binding(tree, name, *imports[0][:2])
+        if imports[0][2] in _COPY_MODULES:
+            if single:  # only for naming a writer module; calls on it are not judged by it
+                aliases[name] = imports[0][2]
+            continue
+        if single:
             node, alias, module = imports[0]
             aliases[name] = (
                 _LEGACY_MODULE_ALIAS + module
@@ -284,6 +287,83 @@ def _has_only_import_binding(
     )
 
 
+_WRITER_REFS = _WRITE_ATTRS | {
+    "open",
+    "FileIO",
+    "NamedTemporaryFile",
+    "write",
+    "writelines",
+    "writestr",
+}
+# Used as a value, ``io.open`` and ``os.write`` are readers or pipe writers: not refused.
+_WRITER_VALUES = _WRITE_ATTRS | {"FileIO", "NamedTemporaryFile", "copyfileobj"}
+
+
+def _names_module(name: str, modules: dict[str, str]) -> bool:
+    """``name`` is bound once, by an import. A name rebound anywhere (assignment, loop or with
+    target, def, class, another import) is ambiguous and is not taken for the module."""
+    return modules.get(name, _AMBIGUOUS_MODULE) != _AMBIGUOUS_MODULE
+
+
+def _is_writer_reference(
+    node: ast.AST | None, modules: dict[str, str], names: frozenset[str]
+) -> bool:
+    """A file writer used as a value rather than called: an attribute of an imported writer
+    module (``shutil.copy``), or a name that is, or is imported as, a writer or opener. A tuple
+    or list holding one counts (``(w,) = (shutil.copy,)``). ``buf.write`` is not."""
+    if isinstance(node, (ast.Tuple, ast.List)):
+        return any(_is_writer_reference(item, modules, names) for item in node.elts)
+    if isinstance(node, ast.Attribute):
+        return (
+            node.attr in _WRITER_VALUES
+            and isinstance(node.value, ast.Name)
+            and _names_module(node.value.id, modules)
+        )
+    return isinstance(node, ast.Name) and node.id in names
+
+
+def _patches_module_writer(target: ast.AST, modules: dict[str, str]) -> bool:
+    """``gzip.open = helper``: a writer attribute of a module replaced. An attribute of an
+    ordinary object (``handler.write = f``) is not."""
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return any(_patches_module_writer(item, modules) for item in target.elts)
+    return (
+        isinstance(target, ast.Attribute)
+        and target.attr in _WRITER_REFS
+        and isinstance(target.value, ast.Name)
+        and _names_module(target.value.id, modules)
+    )
+
+
+def _is_writer_assign(node: ast.AST, modules: dict[str, str], names: frozenset[str]) -> bool:
+    """``w = shutil.copy`` or ``gzip.open = helper``: a writer rebound where the call detector
+    cannot follow it. Refused conservatively (only ever adds a refusal)."""
+    if isinstance(node, ast.Assign):
+        targets, value = node.targets, node.value
+    elif isinstance(node, (ast.AnnAssign, ast.NamedExpr)):
+        targets, value = [node.target], node.value
+    else:
+        return False
+    return _is_writer_reference(value, modules, names) or any(
+        _patches_module_writer(t, modules) for t in targets
+    )
+
+
+def _writer_names(
+    openers: frozenset[str], writers: frozenset[str], fileios: frozenset[str]
+) -> frozenset[str]:
+    """Names that are file writers or openers: imported ones, and the builtin ``open``."""
+    names = set(_DIRECT_WRITERS | writers | fileios)
+    for name in openers:
+        if name == _UNBOUND_OPEN:
+            names.add("open")
+        elif name.startswith(_OS_OPEN_PREFIX):
+            names.add(name.removeprefix(_OS_OPEN_PREFIX))
+        elif not name.startswith("\0"):
+            names.add(name)
+    return frozenset(names)
+
+
 def _is_write_statement(
     node: ast.AST,
     openers: frozenset[str],
@@ -292,8 +372,12 @@ def _is_write_statement(
     fileios: frozenset[str],
     flag_openers: frozenset[str],
 ) -> bool:
+    names = _writer_names(openers, writers, fileios)
     return any(
-        isinstance(part, ast.Call)
-        and _is_write_call(part, openers, writers, modules, fileios, flag_openers)
+        _is_writer_assign(part, modules, names)
+        or (
+            isinstance(part, ast.Call)
+            and _is_write_call(part, openers, writers, modules, fileios, flag_openers)
+        )
         for part in ast.walk(node)
     )

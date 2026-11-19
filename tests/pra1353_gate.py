@@ -257,6 +257,13 @@ def _run_sealed(sealed: Path, repo: Path) -> int:
     check_base_install(str(stdlib), str(platstdlib), repo, sealed)
     purelib = Path(sysconfig_path("purelib"))
     platlib = Path(sysconfig_path("platlib"))
+    try:
+        _verify_dependencies(sealed, [str(purelib), str(platlib)])
+    except (OSError, ValueError) as exc:
+        print(f"UNTRUSTED_DEPENDENCY: {exc}", file=sys.stderr)
+        return 3
+    pycache = sealed.parent / "pycache"
+    pycache.mkdir(exist_ok=True)
     roots = [
         str(stdlib),
         str(platstdlib),
@@ -266,7 +273,7 @@ def _run_sealed(sealed: Path, repo: Path) -> int:
         str(purelib),
         str(platlib),
     ]
-    code = "import sys; sys.path[:]=__import__('json').loads(__import__('os').environ['PRA1353_PATHS']); import pytest; raise SystemExit(pytest.main(['-c','/dev/null','--rootdir='+__import__('os').environ['PRA1353_SEALED'],'--confcutdir='+__import__('os').environ['PRA1353_SEALED']+'/tests','-p','no:cacheprovider','--noconftest',__import__('os').environ['PRA1353_WITNESS']]))"
+    code = "import sys; sys.pycache_prefix=__import__('os').environ['PRA1353_PYCACHE']; sys.path[:]=__import__('json').loads(__import__('os').environ['PRA1353_PATHS']); import pytest; raise SystemExit(pytest.main(['-c','/dev/null','--rootdir='+__import__('os').environ['PRA1353_SEALED'],'--confcutdir='+__import__('os').environ['PRA1353_SEALED']+'/tests','-p','no:cacheprovider','--noconftest',__import__('os').environ['PRA1353_WITNESS']]))"
     env = {
         "PATH": "/usr/bin:/bin",
         "HOME": str(sealed.parent),
@@ -277,6 +284,7 @@ def _run_sealed(sealed: Path, repo: Path) -> int:
         "PRA1353_SEALED": str(sealed),
         "PRA1353_WITNESS": str(sealed / _WITNESS),
         "PRA1353_SOURCE_REPO": str(repo),
+        "PRA1353_PYCACHE": str(pycache),
     }
     return subprocess.run(
         [sys.executable, "-I", "-S", "-B", "-c", code],
@@ -284,6 +292,32 @@ def _run_sealed(sealed: Path, repo: Path) -> int:
         env=env,
         check=False,
     ).returncode
+
+
+def _verify_dependencies(sealed: Path, sites: list[str]) -> None:
+    """#1454 B2: refuse a venv whose dists differ from the base uv.lock before importing pytest."""
+    import importlib.util
+
+    lock = os.environ.get("PRA1353_BASE_LOCK_SEALED")
+    module = sealed / "tests/pra1353_seal.py"
+    if not lock or not module.is_file():
+        raise ValueError("base uv.lock or the pinned lock checker is missing")
+    spec = importlib.util.spec_from_file_location("pra1353_seal_lock", module)
+    if spec is None or spec.loader is None:
+        raise ValueError("pinned lock checker cannot be loaded")
+    checker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(checker)
+    checker.verify_site(Path(lock).read_bytes(), sites)
+
+
+def _base_lock(repo: Path) -> bytes:
+    """CI names the base-sha uv.lock; a local run checks against the checkout's indexed uv.lock."""
+    named = os.environ.get("PRA1353_BASE_LOCK")
+    if named:
+        return Path(named).read_bytes()
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        raise ValueError("UNTRUSTED_DEPENDENCY: PRA1353_BASE_LOCK is required in CI")
+    return _git_blob(repo, b"uv.lock")
 
 
 def sysconfig_path(name: str) -> str:
@@ -307,8 +341,13 @@ def main() -> int:
         raise ValueError("unexpected gate arguments")
     check_base_install(sysconfig_path("stdlib"), sysconfig_path("platstdlib"), repo)
     pins = _pins(repo)
+    if "tests/pra1353_seal.py" not in pins:
+        raise ValueError("the lock checker tests/pra1353_seal.py must be pinned")
+    lock = _base_lock(repo)
     with tempfile.TemporaryDirectory(prefix="cw1353-gate-") as directory:
         root = Path(directory).resolve()
+        (root / "base-uv.lock").write_bytes(lock)
+        (root / "base-uv.lock").chmod(0o444)
         sealed = _seal(repo, root, pins)
         try:
             return subprocess.run(
@@ -327,6 +366,7 @@ def main() -> int:
                     "HOME": str(root),
                     "TMPDIR": str(root),
                     "LANG": "C.UTF-8",
+                    "PRA1353_BASE_LOCK_SEALED": str(root / "base-uv.lock"),
                     **_GIT_ENV,
                 },
                 check=False,

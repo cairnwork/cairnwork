@@ -115,3 +115,139 @@ def test_helper_runs_under_a_real_older_python(tmp_path, planted):
     found = redirected_bytecode(checkout, (checkout.parent, run_dir), python=str(OLD[-1]))
     assert not any("bytecode scan failed" in item for item in found)
     assert bool(found) is planted
+
+
+def closed_tree(tmp_path: Path) -> tuple[Path, Path, Path]:
+    top, outside = tmp_path / "top", tmp_path / "outside"
+    (top / "mid" / "closed").mkdir(parents=True)
+    (outside / "closed").mkdir(parents=True)
+    (top / "mid" / "closed" / "f").write_text("x")
+    (top / "mid" / "closed").chmod(0)
+    (outside / "closed").chmod(0)
+    return top, top / "mid", outside
+
+
+def test_a_closed_directory_is_opened_through_handles(tmp_path):
+    top, _, _ = closed_tree(tmp_path)
+    here, found = bytecode_walk.opened(str(top / "mid" / "closed"))
+    assert here == bytecode_walk.ident(os.stat(top / "mid" / "closed"))
+    assert [name for name, *_ in found] == ["f"]
+    assert stat.S_IMODE((top / "mid" / "closed").stat().st_mode) == 0o700
+
+
+def test_a_middle_component_swapped_for_a_symlink_changes_no_mode_outside(tmp_path, monkeypatch):
+    top, mid, outside = closed_tree(tmp_path)
+    real_lstat, swapped = os.lstat, []
+
+    def lstat_then_swap(path, *args, **kwargs):
+        info = real_lstat(path, *args, **kwargs)
+        if not swapped:  # the run's live process replaces ``mid`` after the check
+            swapped.append(1)
+            mid.rename(top / "mid.real")
+            mid.symlink_to(outside)
+        return info
+
+    monkeypatch.setattr(bytecode_walk.os, "lstat", lstat_then_swap)
+    with pytest.raises(OSError):
+        bytecode_walk.opened(str(mid / "closed"))
+    assert stat.S_IMODE((outside / "closed").stat().st_mode) == 0
+
+
+LINUX = hasattr(os, "O_PATH")  # chmod through the checked handle; macOS chmods the name
+
+
+def swap_closed(mid: Path, put, monkeypatch, at: str) -> tuple[list[int], list[str]]:
+    """``mid/closed`` is moved aside and ``put(mid / "closed")`` takes its place: ``at`` "check"
+    just before the identity check (the first stat or open of the name by handle), "chmod" just
+    before the chmod (after the check). Returns (swapped, the paths chmodded)."""
+    real_stat, real_open, real_chmod = os.stat, os.open, os.chmod
+    swapped: list[int] = []
+    chmods: list[str] = []
+
+    def swap() -> None:
+        if not swapped:
+            swapped.append(1)
+            (mid / "closed").rename(mid / "closed.real")
+            put(mid / "closed")
+
+    def by_handle(real):
+        def call(path, *args, **kwargs):
+            if at == "check" and path == "closed" and kwargs.get("dir_fd") is not None:
+                swap()
+            return real(path, *args, **kwargs)
+
+        return call
+
+    def chmod_recorded(path, mode, *args, **kwargs):
+        chmods.append(str(path))
+        if at == "chmod":
+            swap()
+        return real_chmod(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", by_handle(real_stat))
+    monkeypatch.setattr(os, "open", by_handle(real_open))
+    monkeypatch.setattr(os, "chmod", chmod_recorded)
+    return swapped, chmods
+
+
+def test_a_last_component_swapped_for_a_symlink_is_refused_before_any_chmod(tmp_path, monkeypatch):
+    top, mid, outside = closed_tree(tmp_path)
+    swapped, chmods = swap_closed(
+        mid, lambda at: at.symlink_to(outside / "closed"), monkeypatch, "check"
+    )
+    with pytest.raises(OSError):
+        bytecode_walk.opened(str(mid / "closed"))
+    assert swapped and (mid / "closed").is_symlink()  # the swap really happened
+    assert chmods == []  # nothing was chmodded, not even the link
+    assert stat.S_IMODE((outside / "closed").stat().st_mode) == 0
+
+
+def test_a_symlink_swapped_in_after_the_check_changes_no_mode_outside(tmp_path, monkeypatch):
+    top, mid, outside = closed_tree(tmp_path)
+    swapped, chmods = swap_closed(
+        mid, lambda at: at.symlink_to(outside / "closed"), monkeypatch, "chmod"
+    )
+    with pytest.raises(OSError):  # the swapped-in link is not a directory the listing may use
+        bytecode_walk.opened(str(mid / "closed"))
+    assert swapped and (mid / "closed").is_symlink()
+    assert stat.S_IMODE((outside / "closed").stat().st_mode) == 0
+    # The chmod went through the checked handle (Linux) or by name without following (macOS).
+    assert len(chmods) == 1 and (
+        chmods[0].startswith("/proc/self/fd/") if LINUX else chmods[0] == "closed"
+    )
+
+
+def test_a_real_directory_swapped_in_after_the_check_is_refused(tmp_path, monkeypatch):
+    """Codex review of #1327: a different real directory renamed in between the identity check and
+    the chmod. Linux chmods the checked inode, so the newcomer keeps its mode; macOS cannot open a
+    closed directory, chmods by name, and refuses the listing when the name is no longer it."""
+    top, mid, _ = closed_tree(tmp_path)
+    (mid / "newcomer").mkdir(mode=0)
+    swapped, chmods = swap_closed(mid, (mid / "newcomer").rename, monkeypatch, "chmod")
+    with pytest.raises(OSError):
+        bytecode_walk.opened(str(mid / "closed"))
+    assert swapped and not (mid / "newcomer").exists() and (mid / "closed").is_dir()
+    assert len(chmods) == 1
+    if LINUX:
+        assert stat.S_IMODE((mid / "closed").stat().st_mode) == 0  # the newcomer is untouched
+        assert stat.S_IMODE((mid / "closed.real").stat().st_mode) == 0o700  # the checked one
+    (mid / "closed").chmod(0o700)  # let tmp_path cleanup in
+
+
+@pytest.mark.parametrize("ancestor", [0o311, 0o111, 0o755])
+@pytest.mark.parametrize("closed", [0o700, 0o000, 0o500])
+def test_any_mode_that_a_path_lookup_can_use_works_as_on_main(tmp_path, ancestor, closed):
+    """main chmods and opens by path, which needs only x on the ancestors; so must this. Checked
+    on main: every combination lists ``f`` and leaves the directory at 0o700."""
+    top, mid, _ = closed_tree(tmp_path)
+    (mid / "closed").chmod(closed)
+    for directory in (mid, top):
+        directory.chmod(ancestor)
+    try:
+        here, found = bytecode_walk.opened(str(mid / "closed"))
+    finally:
+        top.chmod(0o755)
+        mid.chmod(0o755)
+    assert [name for name, *_ in found] == ["f"]
+    assert here == bytecode_walk.ident(os.stat(mid / "closed"))
+    assert stat.S_IMODE((mid / "closed").stat().st_mode) == 0o700
