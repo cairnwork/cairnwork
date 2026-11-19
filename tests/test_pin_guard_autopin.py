@@ -218,3 +218,26 @@ def test_malformed_reviewer_allowlist_fails_closed(tmp_path: Path, allowlist: st
         2,
         "PIN_GUARD PIN_GUARD_INCOMPLETE",
     )
+
+
+@pytest.mark.parametrize(
+    "old,new",
+    [
+        (".github/CODEOWNERS", "CODEOWNERS.old"),
+        ("scripts/ci/pin_guard.py", "scripts/ci/Pin_Guard.py"),
+    ],
+)
+def test_rename_out_of_or_case_only_in_self_guard_is_seen(
+    tmp_path: Path, old: str, new: str
+) -> None:
+    repo, trusted, _, _ = setup(tmp_path, ())
+    (repo / old).parent.mkdir(parents=True, exist_ok=True)
+    (repo / old).write_text("owners\n")
+    base = commit(repo, "base with self-guard file")
+    git(repo, "mv", "-f", old, new)  # --no-renames lists the old path as deleted
+    (repo / GUARDED).parent.mkdir(parents=True, exist_ok=True)
+    (repo / GUARDED).write_text("changed\n")
+    head = commit(repo, "rename plus guarded change")
+    assert old in git(repo, "diff", "--name-only", "--no-renames", base, head).splitlines()
+    code, line = run(tmp_path, trusted, repo, base, head, all_three(head))
+    assert code == 1 and line.startswith("PIN_GUARD PIN_CHANGE_UNAPPROVED ")
