@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import functools
 import json
+import uuid
 from collections.abc import Callable, Sequence
 from urllib.parse import quote
 
@@ -132,7 +133,8 @@ class ProxyGate:
         self.stage = stage
 
     def review(self, request: GateRequest) -> MeteredGateReply:
-        label = f"{request.task_id}-gate-{self.stage}"
+        # fresh nonce per review: the proxy's per-label totals accumulate across runs
+        label = f"{request.task_id}-gate-{self.stage}-{uuid.uuid4().hex[:12]}"
         refused = MeteredGateReply(
             None, HAIKU_MODEL, request.settings.effort, Reason.PAUSE_GATE_REFUSED
         )

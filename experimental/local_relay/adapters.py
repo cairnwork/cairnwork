@@ -5,10 +5,11 @@ from __future__ import annotations
 import http.client
 import json
 import subprocess
+import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from experimental.local_relay.config import DEFAULT_LOCAL_ENDPOINT
 from experimental.local_relay.diagnostics import episode_failure
@@ -215,7 +216,10 @@ class HaikuProxyFallback:
         self.request = request or _proxy_request
 
     def __call__(self, task_id: str, /) -> Attempt:
-        _proxy_call(self.request, "POST", f"{self.label_url}/label", {"label": task_id})
+        # The proxy's per-label totals are cumulative for the whole process: a fresh nonce per
+        # run keeps earlier (or aborted) runs of the same task out of this run's cost.
+        label = f"{task_id}-fallback-{uuid.uuid4().hex[:12]}"
+        _proxy_call(self.request, "POST", f"{self.label_url}/label", {"label": label})
         try:
             try:
                 result = self.run_attempt(65536, self.endpoint_url)
@@ -232,7 +236,9 @@ class HaikuProxyFallback:
             if isinstance(result, RunResult):
                 raise LocalAttemptFailed(episode_failure(result))
             raise LocalAttemptFailed("Haiku local-worker returned no RunResult")
-        stats = _proxy_call(self.request, "GET", f"{self.label_url}/stats?label={task_id}", None)
+        stats = _proxy_call(
+            self.request, "GET", f"{self.label_url}/stats?label={quote(label)}", None
+        )
         if _flag_set(stats.get("budget_stop")):
             raise LocalAttemptFailed("Haiku proxy stopped at its budget")
         if _flag_set(stats.get("model_mismatch")):

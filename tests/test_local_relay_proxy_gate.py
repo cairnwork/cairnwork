@@ -1,5 +1,7 @@
 """The Haiku gate is a text-only loopback chat completion with real per-review cost."""
 
+import re
+
 import pytest
 
 from experimental.local_relay.proxy_gate import HAIKU_MODEL, ProxyGate
@@ -56,14 +58,18 @@ def test_review_is_a_plain_chat_without_tools_and_reports_real_cost():
     assert set(chat) == {"model", "messages", "max_tokens"} and chat["model"] == HAIKU_MODEL
     assert chat["max_tokens"] == 2048
     assert "tools" not in chat and "tool_choice" not in chat
-    steps = [(m, u.split("/ab/")[-1] if "/ab/" in u else "chat") for m, u, _ in proxy.calls]
+    steps = [
+        (m, u.split("/ab/")[-1].split("?")[0] if "/ab/" in u else "chat") for m, u, _ in proxy.calls
+    ]
     assert steps == [
         ("POST", "label"),
         ("POST", "chat"),
         ("POST", "label"),
-        ("GET", "stats?label=task-1-gate-retry"),
+        ("GET", "stats"),
     ]
-    assert proxy.calls[0][2] == {"label": "task-1-gate-retry"}
+    label = proxy.calls[0][2]["label"]
+    assert re.fullmatch(r"task-1-gate-retry-[0-9a-f]{12}", label)
+    assert proxy.calls[3][1].endswith("/stats?label=" + label)  # stats read for that same label
     assert proxy.calls[2][2] == {"label": "idle"}
 
 
@@ -189,3 +195,16 @@ def test_an_ambiguous_reply_never_reaches_pause_as_raw_text(raw):
     reply = ProxyGate(URL, FakeProxy(chat=chat)).review(_request())
     assert reply.verdict is None and reply.reason is Reason.PAUSE_GATE_BAD_OUTPUT
     assert reply.text == raw  # kept for diagnosis only
+
+
+def test_every_review_gets_a_fresh_label_so_reused_proxy_totals_never_leak_in():
+    proxy = FakeProxy()
+    gate = ProxyGate(URL, proxy)
+    gate.review(_request())
+    gate.review(_request())
+    labels = [
+        b["label"] for m, u, b in proxy.calls if u.endswith("/ab/label") and b["label"] != "idle"
+    ]
+    assert len(labels) == 2 and labels[0] != labels[1]
+    stats_labels = [u.split("label=")[1] for _m, u, _b in proxy.calls if "/ab/stats" in u]
+    assert stats_labels == labels

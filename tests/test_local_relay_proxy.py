@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -83,9 +84,11 @@ def test_proxy_fallback_records_label_stats_and_cost(monkeypatch):
     rows = Rows()
     outcome = _relay(fallback, rows)
     assert outcome.route == "FALLBACK", outcome
-    assert observed[0] == ("POST", "http://127.0.0.1:18301/ab/label", {"label": "task-label"})
+    label = observed[0][2]["label"]
+    assert re.fullmatch(r"task-label-fallback-[0-9a-f]{12}", label)
+    assert observed[0][:2] == ("POST", "http://127.0.0.1:18301/ab/label")
     assert observed[-2] == ("POST", "http://127.0.0.1:18301/ab/label", {"label": "idle"})
-    assert observed[-1][1].endswith("/ab/stats?label=task-label")
+    assert observed[-1][1].endswith("/ab/stats?label=" + label)
     row = next(row for row in rows.rows if row["stage"] == "fallback")
     assert (row["model_id"], row["usd"], row["input_tokens"], row["output_tokens"]) == (
         "claude-haiku-5-5",
