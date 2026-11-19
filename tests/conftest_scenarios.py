@@ -53,7 +53,7 @@ BOTH = (
     ),
 )  # a test commit that edits a base file names it
 SLOW_NEW = (
-    "def test_a():\n    assert True\n\n\ndef test_new():\n    import time\n    time.sleep(15)\n"
+    "def test_a():\n    assert True\n\n\ndef test_new():\n    import time\n    time.sleep(60)\n"
 )
 MODULE_LEVEL = (  # a module-level change in a base file: all its base tests are the author's
     "import os\nos.environ['W3B_FLAG'] = '1'\n\n\ndef test_env():\n"
@@ -241,7 +241,7 @@ SCENARIOS = {  # name: (kwargs of conftest_run, expected status, a code the reas
     "a run with the test commit over the time budget": (
         {
             "base_files": SIDEFX,
-            "budget": 10,
+            "budget": 25,
             "regression": PLAIN,
             "verifiers": BOTH,
             "extra_files": {"tests/other/test_a.py": SLOW_NEW},
