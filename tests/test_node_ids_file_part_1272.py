@@ -1,44 +1,88 @@
-"""#1272: the file part of a node id is cut at the file boundary (``node_ids.locate``), not at the
-first ``::``, so a test file path holding ``::`` survives (taskpaths, deferred_tests)."""
+"""#1369: one case-id parser for every consumer; #1272: the file part of a node id is cut at the
+file boundary (``node_ids.locate``), not at the first ``::``, so a path holding ``::`` survives."""
 
 from types import SimpleNamespace
 
 import pytest
 from conftest import git
 
-from cairnwork import node_ids
-from cairnwork.deferred_tests import base_comparison, untargeted
+from cairnwork import node_ids, p2p_function
+from cairnwork.deferred_tests import base_comparison, not_run, untargeted
 from cairnwork.pipeline import TaskRejected
-from cairnwork.reasons import COLLECT_HINT
 from cairnwork.taskpaths import check_task_paths
 
 ODD = "a::b/test_t.py"
+CASE_IDS = [
+    "t.py::C[a]::test_y[c]",
+    "tests/t.py::C[a::b]::test_y[c::d]",
+    "t.py::a[b]]",
+    "t.py::test_x::",
+    "t.py::::test_x",
+    "t.py::",
+    "t.py::test_x[",
+    "t.py::test_x[1",
+    "t.py::tést_ü[ä]::b]",
+    "a::b::t.py::test_x[1]",
+    "::t.py::test_x[1]",
+    "t.py::test_x[a]::b]",
+    "t.py::test_p[a]::b[c]]",
+    "t.py::test_p[]::t]",
+    "t.py::TestT::test_m[k]::j]",
+    "dir[1]/t.py::test_f[a]::b]",
+    f"{ODD}::test_g[p]",
+    "t.py::test_plain",
+    "t.py",
+    "test_bare",
+]
 
 
-@pytest.mark.parametrize(
-    ("nodeid", "file"),
-    [
-        (f"{ODD}::test_y[1]", ODD),
-        ("tests/t.py::TestC::test_y", "tests/t.py"),
-        ("tests/t.py", "tests/t.py"),
-        ("dir[1]/t.py::test_f[a]::b]", "dir[1]/t.py"),
-        ("a::b::t.py::test_x[1]", "a::b::t.py"),  # several :: in the path
-        ("t.py::test_x::", "t.py"),  # trailing ::
-        ("t.py::::test_x", "t.py"),  # empty segment
-        ("t.py::", "t.py"),  # no name at all
-        ("::t.py::test_x[1]", "::t.py"),  # empty first path segment
-        ("t.py::test_x[1", "t.py"),  # unclosed case
-        ("t.py::tést_ü[ä]", "t.py"),  # non-ASCII identifier
-        ("test_bare", "test_bare"),  # no :: at all: the whole id
-    ],
-)
-def test_file_part_of_a_node_id(nodeid, file):
-    assert node_ids.file_part(nodeid) == file
+AMBIGUOUS = {  # Name[x]::Name[y]: a parametrized class or one case id holding "]::" (see docstring)
+    "t.py::C[a]::test_y[c]",
+    "tests/t.py::C[a::b]::test_y[c::d]",
+    "t.py::test_p[a]::b[c]]",
+}
+
+
+@pytest.mark.parametrize("nodeid", [n for n in CASE_IDS if n not in AMBIGUOUS])
+def test_p2p_function_agrees_with_node_ids(nodeid):
+    for all_parts in (False, True):
+        assert p2p_function._without_case(nodeid, all_parts=all_parts) == node_ids.without_case(
+            nodeid, all_parts=all_parts
+        )
+
+
+def test_the_two_entry_points_differ_only_on_the_ambiguous_shape():
+    # #1276 pins the per-part reading (a parametrized class keeps its method), #1309 pins the
+    # first-"[" cut (test_f[e]::f[g] -> test_f); one text cannot satisfy both, so both are named
+    nodeid = "t.py::C[a]::test_y[c]"
+    assert node_ids.without_case(nodeid) == "t.py::C"
+    assert p2p_function._without_case(nodeid) == "t.py::C[a]::test_y"
+    assert node_ids.without_case_by_part(nodeid, all_parts=True) == "t.py::C::test_y"
+    assert node_ids.without_case("t.py::test_f[e]::f[g]") == "t.py::test_f"
+
+
+def test_a_run_target_whose_case_id_holds_a_close_bracket_and_colons_is_not_reported_not_run():
+    run = SimpleNamespace(outcomes={"t.py::test_x[a]::b]": "passed"})
+    assert not_run([run], {"t.py::test_x"}) == []
+
+
+def test_untargeted_keeps_a_target_whose_case_id_holds_a_close_bracket():
+    nodes = {"t.py::test_p[]::t]", "t.py::TestT::test_m[k]::j]"}
+    assert untargeted(("t.py",), nodes, ("t.py::test_p", "t.py::TestT::test_m")) == ()
+    # the ambiguous shape stays finer (as before): a target not named exactly is not covered
+    assert untargeted(("t.py",), {"t.py::test_p[a]::b[c]]"}, ("t.py::test_p",)) == ("t.py",)
 
 
 def test_untargeted_finds_the_file_of_a_path_with_double_colons():
     assert untargeted((ODD,), {f"{ODD}::test_y"}, (f"{ODD}::test_y",)) == ()
     assert untargeted((ODD,), {f"{ODD}::test_y"}, (f"{ODD}::test_other",)) == (ODD,)
+
+
+def test_file_part_of_a_node_id():
+    assert node_ids.file_part(f"{ODD}::test_y[1]") == ODD
+    assert node_ids.file_part("tests/t.py::TestC::test_y") == "tests/t.py"
+    assert node_ids.file_part("tests/t.py") == "tests/t.py"
+    assert node_ids.file_part("dir[1]/t.py::test_f[a]::b]") == "dir[1]/t.py"
 
 
 def test_a_verifier_target_in_a_path_with_double_colons_is_found_on_the_base(repo):
@@ -58,5 +102,18 @@ def test_the_collect_hint_names_a_collection_error_in_a_path_with_double_colons(
         report_too_big=False, recorded=True, collect_errors=(ODD,), mutated=(),
         teardown_errors=(), fail_kind={}, survivors=0, forged=(), log_too_big=False,
     )  # fmt: skip
+    from cairnwork.reasons import COLLECT_HINT
+
     got = base_comparison([run], frozenset({f"{ODD}::test_y"}))
     assert COLLECT_HINT in got.detail
+
+
+def test_two_class_parameters_with_a_stray_bracket_stay_two_keys():
+    # Codex R4: the fallback must not merge targets the old parser told apart
+    one, two = "t.py::C[a]::test_y[c]]", "t.py::C[b]::test_y[d]]"
+    assert p2p_function._without_case(one) == "t.py::C[a]::test_y"
+    assert p2p_function._without_case(two) == "t.py::C[b]::test_y"
+    assert p2p_function._without_case(one) != p2p_function._without_case(two)
+    run = SimpleNamespace(outcomes={one: "passed"})
+    assert not_run([run], {"t.py::C[a]::test_y"}) == []
+    assert not_run([run], {"t.py::C[b]::test_y"}) == ["t.py::C[b]::test_y"]
