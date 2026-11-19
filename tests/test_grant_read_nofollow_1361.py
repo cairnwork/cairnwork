@@ -383,3 +383,31 @@ def test_grant_read_in_tree_symlink_widens_only_the_link(tmp_path: Path) -> None
     (root / "link").symlink_to(outside)
     VerifierAccount.grant_read(root)
     assert stat.S_IMODE(outside.stat().st_mode) == 0o600
+
+
+def test_grant_read_refuses_directory_replaced_before_descent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "checkout"
+    (root / "d").mkdir(parents=True)
+    victim = tmp_path / "other.txt"
+    victim.write_text("x\n", encoding="utf-8")
+    victim.chmod(0o600)
+    real_open = os.open
+    opens: list[int] = []
+
+    def open_then_replace(path, *args, **kwargs):
+        if Path(str(path)).name == "d" and kwargs.get("dir_fd") is not None:
+            opens.append(1)
+            if len(opens) == 2:  # the descent reopen, after the listing pass opened it once
+                (root / "d").rename(root / "d.real")
+                (root / "d").mkdir()
+                (root / "d" / "f").write_text("x\n", encoding="utf-8")
+                (root / "d" / "f").chmod(0o600)
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", open_then_replace)
+    with pytest.raises(OSError):
+        VerifierAccount.grant_read(root)
+    assert len(opens) >= 2
+    assert stat.S_IMODE((root / "d" / "f").stat().st_mode) == 0o600

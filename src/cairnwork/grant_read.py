@@ -21,13 +21,19 @@ def _matches_kind(mode: int, *, is_dir: bool) -> bool:
     return stat.S_ISDIR(mode) if is_dir else stat.S_ISREG(mode)
 
 
-def _open_dir(root_fd: int, parts: tuple[str, ...]) -> int:
+_Parts = tuple[tuple[str, tuple[int, int]], ...]
+
+
+def _open_dir(root_fd: int, parts: _Parts) -> int:
+    """Reopen the directory at ``parts``; every level must still be the inode that was listed."""
     fd = os.dup(root_fd)
     try:
-        for name in parts:
+        for name, ident in parts:
             inner = os.open(name, _DIR_FLAGS, dir_fd=fd)
             os.close(fd)
             fd = inner
+            if _ident(os.fstat(fd)) != ident:
+                raise OSError(errno.ESTALE, "replaced while granting read", name)
     except BaseException:
         os.close(fd)
         raise
@@ -44,7 +50,8 @@ def _chmod_unreadable(
             got = os.fstat(handle)
             if not _matches_kind(got.st_mode, is_dir=is_dir) or _ident(got) != _ident(info):
                 raise OSError(errno.ESTALE, "replaced while granting read", name)
-            os.chmod(f"/proc/self/fd/{handle}", stat.S_IMODE(got.st_mode) | bits)
+            owner = 0o500 if is_dir else 0o400
+            os.chmod(f"/proc/self/fd/{handle}", stat.S_IMODE(got.st_mode) | bits | owner)
         finally:
             os.close(handle)
         return
@@ -93,7 +100,7 @@ def grant_read(root: Path) -> None:
     root_fd = os.open(root, _DIR_FLAGS)
     try:
         os.fchmod(root_fd, stat.S_IMODE(os.fstat(root_fd).st_mode) | 0o055)
-        stack: list[tuple[str, ...]] = [()]
+        stack: list[_Parts] = [()]
         while stack:
             parts = stack.pop()
             dir_fd = _open_dir(root_fd, parts)
@@ -104,7 +111,7 @@ def grant_read(root: Path) -> None:
                         _chmod_symlink(dir_fd, name, info)
                     elif stat.S_ISDIR(info.st_mode):
                         if _chmod_entry(dir_fd, name, info, 0o055, is_dir=True):
-                            stack.append((*parts, name))
+                            stack.append((*parts, (name, _ident(info))))
                     elif stat.S_ISREG(info.st_mode):
                         _chmod_entry(dir_fd, name, info, 0o044, is_dir=False)
             finally:
