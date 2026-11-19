@@ -8,7 +8,9 @@ fixed strings, so no PR-controlled text reaches the status. Nothing here reads P
 from __future__ import annotations
 
 import argparse
+import os
 import re
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -34,13 +36,24 @@ def decide(raw: object) -> tuple[str, str, bool]:
 
 
 def read_rc(path: Path) -> str | None:
-    """Read at most MAX_BYTES + 1 bytes of the saved value; None when missing or unreadable."""
+    """Read at most MAX_BYTES + 1 bytes of the saved value.
+
+    None when missing, unreadable, a symbolic link or not a regular file: the value must be the
+    file the analysis job wrote, never something a link points at.
+    """
     try:
-        with path.open("rb") as handle:
-            data = handle.read(MAX_BYTES + 1)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        data = os.read(fd, MAX_BYTES + 1)
         return data.decode("ascii") if len(data) <= MAX_BYTES else None
     except (OSError, UnicodeDecodeError):
         return None
+    finally:
+        os.close(fd)
 
 
 def post(repo: str, sha: str, state: str, description: str, url: str) -> int:
