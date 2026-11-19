@@ -11,7 +11,7 @@ from experimental.local_relay.gate_plan import PlanIncomplete, build_gate_plan, 
 from experimental.local_relay.relay import Acceptance, LocalAttemptFailed, run_relay
 from experimental.local_worker.endpoint import EndpointUnreachable
 from experimental.pause.flow import RunResult
-from experimental.pause.interfaces import GateReply
+from experimental.pause.interfaces import CallSettings, GateReply, GateRequest
 
 ENV = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "HOME": "/nonexistent"}
 TASK = {"prompt": "fix", "allowed_files": ["inside.py"]}
@@ -259,24 +259,6 @@ def test_non_finite_costs_are_never_recorded_as_spend(monkeypatch, bad):
         return {}
 
     reply = ProxyGate("http://127.0.0.1:18301/v1", request).review(
-        type(
-            "Req",
-            (),
-            {
-                "task_id": "t",
-                "plan": "p",
-                "settings": type(
-                    "S",
-                    (),
-                    {
-                        "effort": "medium",
-                        "model_id": "h",
-                        "timeout_seconds": 5.0,
-                        "max_attempts": 1,
-                    },
-                )(),
-                "checkpoint_sha256": "",
-            },
-        )()
+        GateRequest("t", "", "p", CallSettings("haiku", "medium", 5.0, 1))
     )
     assert reply.verdict is None and reply.usd == 0.0

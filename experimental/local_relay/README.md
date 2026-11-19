@@ -46,3 +46,4 @@ Relay 以 PAUSE `WorkerRunner` 共用的 `_prepare` 建 checkout：no-hardlinks 
 ## 跟實驗的差異
 
 Fallback 與實驗 G1 H 臂同一路徑，差異只在是否經過 acceptance＋gate 的 relay 流程。
+- 殘餘（已知）：gate 的已追蹤檔檢查在 `git diff` 前後各做一次（inode、link 數、裝置、大小、mtime 必須一致），但若有逃過 process group 終止的 worker 後代在兩次檢查之外的瞬間交換檔案，仍有極小的 TOCTOU 窗口；Core 自己的 tree digest 前後比對是另一道防線。
