@@ -21,7 +21,10 @@ from cairnwork_attest.verify_binding import verify_bound
 from cairnwork_attest.verify_response import VerifyResult, _check_response_verified, _fail
 from cairnwork_protocol import change_manifest_hash
 
-__all__ = ["VerifyResult", "verify_bundle"]
+__all__ = ["KEY_CODES", "VerifyResult", "verify_bundle"]
+
+# --public-key could not be used: a usage-class failure (exit 2), never SIGNATURE_INVALID (#458).
+KEY_CODES = frozenset({"KEY_UNREADABLE", "KEY_MALFORMED", "KEY_WRONG_TYPE"})
 
 _OID = re.compile(r"^[0-9a-f]{40}$")
 
@@ -43,8 +46,10 @@ def _verify_envelope_and_payload(
         pubkey = public_key
         if pubkey is None:  # not loaded by the caller: read the file once, here
             pubkey = load_public_key_pem(Path(public_key_pem).read_bytes())
-    except (KeyFileError, OSError) as exc:
-        return None, _fail("SIGNATURE_INVALID", f"cannot load public key: {exc}"), ""
+    except KeyFileError as exc:  # #458: an operator's key mistake is not a forged bundle
+        return None, _fail(exc.code, f"cannot load public key: {exc}"), ""
+    except OSError as exc:
+        return None, _fail("KEY_UNREADABLE", f"cannot load public key: {exc}"), ""
 
     verif = verify_envelope(envelope, pubkey)
     if not verif.ok or verif.payload is None:
