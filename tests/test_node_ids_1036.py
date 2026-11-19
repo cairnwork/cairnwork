@@ -29,7 +29,7 @@ def test_shared_node_id_parser_preserves_file_path_and_strips_case(nodeid, expec
 def test_case_ids_containing_double_colon_are_stripped_in_every_part():
     nodeid = "tests/t.py::C[a::b]::test_y[c::d]"
     assert without_case(nodeid) == "tests/t.py::C"  # shared helper: cut at the first [
-    assert function_from_p2p(nodeid) == "tests/t.py::C"  # one parser for all consumers (#1369)
+    assert function_from_p2p(nodeid) == "tests/t.py::C::test_y"
     assert function_from_nodes(nodeid) == "tests/t.py::C"
 
 
