@@ -24,6 +24,7 @@ import sysconfig
 from pathlib import Path
 
 SKIPPED_DIRS = frozenset({"__pycache__", "site-packages"})  # not the interpreter's own code
+
 RECORD_KEYS = frozenset({"version", "base_prefix", "base_exec_prefix", "roots", "digest", "files"})
 
 
@@ -35,27 +36,34 @@ def _roots() -> list[str]:
     return sorted(os.path.realpath(p) for p in found if os.path.isdir(p))
 
 
+def _entry(outer, root: str, path: str) -> None:
+    """Feed one entry: relative path, type, mode bits, and content (a symlink: its target text)."""
+    info = os.lstat(path)
+    rel = f"{root}\0{os.path.relpath(path, root)}".encode()
+    if stat.S_ISLNK(info.st_mode):
+        body, kind = os.readlink(path).encode(), b"L"  # a symlink to a directory counts here
+    elif stat.S_ISDIR(info.st_mode):
+        body, kind = b"", b"D"
+    elif stat.S_ISREG(info.st_mode):
+        with open(path, "rb") as handle:
+            body, kind = hashlib.sha256(handle.read()).digest(), b"F"
+    else:
+        raise OSError(f"not a regular file, directory or symlink: {path}")
+    mode = stat.S_IMODE(info.st_mode).to_bytes(2, "big")
+    outer.update(len(rel).to_bytes(4, "big") + rel + kind + mode + body)
+
+
 def tree_digest(roots: list[str]) -> tuple[str, int]:
-    """SHA-256 over every file under the roots: relative path, type, mode bits and content (a
-    symlink: its target text). Anything but a regular file, a symlink or a directory is an error,
-    so a swapped-in device or socket cannot hide. Returns (digest, number of files)."""
+    """SHA-256 over every entry under the roots: files, symlinks (also those that point at a
+    directory, which ``os.walk`` lists among the directories but does not enter) and the
+    directories themselves, each with its mode bits. Anything else is an error, so a swapped-in
+    device or socket cannot hide. Returns (digest, number of entries)."""
     outer, count = hashlib.sha256(), 0
     for root in sorted(set(roots)):
         for here, dirs, names in os.walk(root, followlinks=False):
             dirs[:] = sorted(d for d in dirs if d not in SKIPPED_DIRS)
-            for name in sorted(names):
-                path = os.path.join(here, name)
-                info = os.lstat(path)
-                rel = f"{root}\0{os.path.relpath(path, root)}".encode()
-                if stat.S_ISLNK(info.st_mode):
-                    body, kind = os.readlink(path).encode(), b"L"
-                elif stat.S_ISREG(info.st_mode):
-                    with open(path, "rb") as handle:
-                        body, kind = hashlib.sha256(handle.read()).digest(), b"F"
-                else:
-                    raise OSError(f"not a regular file or symlink: {path}")
-                mode = stat.S_IMODE(info.st_mode).to_bytes(2, "big")
-                outer.update(len(rel).to_bytes(4, "big") + rel + kind + mode + body)
+            for name in sorted([*names, *dirs]):
+                _entry(outer, root, os.path.join(here, name))
                 count += 1
     return outer.hexdigest(), count
 

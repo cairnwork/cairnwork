@@ -27,6 +27,16 @@ def _fake_install(tmp_path: Path) -> Path:
     return root
 
 
+def _swap_dir_for_symlink(root: Path, *, target_inside: bool = False) -> None:
+    """Replace ``pkg`` (same names inside) by a symlink to a copy; the walk does not enter it."""
+    import shutil
+
+    copy = (root / "pkg_copy") if target_inside else (root.parent / "elsewhere")
+    shutil.copytree(root / "pkg", copy)
+    shutil.rmtree(root / "pkg")
+    (root / "pkg").symlink_to(copy, target_is_directory=True)
+
+
 def _digest(root: Path) -> str:
     return rec.tree_digest([str(root)])[0]
 
@@ -48,8 +58,23 @@ def test_digest_is_stable_and_ignores_caches_and_site_packages(tmp_path):
         lambda r: ((r / "link.py").unlink(), (r / "link.py").symlink_to("pkg/mod.py")),
         lambda r: (r / "os.py").chmod(0o755),
         lambda r: (r / "pkg" / "mod.py").rename(r / "pkg" / "other.py"),
+        lambda r: (r / "pkg").chmod(0o700),  # a directory's mode
+        lambda r: (r / "newdir").mkdir(),  # an empty directory added
+        lambda r: _swap_dir_for_symlink(r),  # a directory replaced by a symlink to another
+        lambda r: _swap_dir_for_symlink(r, target_inside=True),
     ],
-    ids=["edit", "add", "delete", "retarget-link", "mode", "rename"],
+    ids=[
+        "edit",
+        "add",
+        "delete",
+        "retarget-link",
+        "mode",
+        "rename",
+        "dir-mode",
+        "empty-dir",
+        "dir-to-symlink",
+        "dir-to-symlink-inside",
+    ],  # fmt: skip
 )
 def test_any_change_to_the_install_changes_the_digest(tmp_path, tamper):
     root = _fake_install(tmp_path)
@@ -127,3 +152,18 @@ def test_ci_records_in_the_trusted_venv_step_and_verifies_in_the_gate_step(job):
         and "$RUNNER_TEMP/base-python.json" in steps[verify:gate]
     )
     assert steps[verify - 160 : verify].count("pra1353-trusted/.venv/bin/python") == 1
+
+
+def test_a_symlink_to_a_directory_is_part_of_the_digest(tmp_path):
+    """os.walk lists such a link among the directories without entering it: retargeting it, or
+    swapping an empty directory for one, must still change the digest."""
+    root = _fake_install(tmp_path)
+    (root / "empty").mkdir()
+    (root / "alias").symlink_to(root / "pkg", target_is_directory=True)
+    before = _digest(root)
+    (root / "alias").unlink()
+    (root / "alias").symlink_to(tmp_path, target_is_directory=True)  # retargeted
+    retargeted = _digest(root)
+    (root / "empty").rmdir()
+    (root / "empty").symlink_to(tmp_path, target_is_directory=True)  # empty dir -> link
+    assert len({before, retargeted, _digest(root)}) == 3
