@@ -41,7 +41,6 @@ from cairnwork.p2p_function import _without_case as _nodeid_without_case
 from cairnwork.provenance import trailers
 from cairnwork.reasons import COLLECT_HINT, _names, skip_hint
 from cairnwork.test_commit_paths import case_variant_clash, out_of_scope  # noqa: F401
-from cairnwork.textclean import shown
 from cairnwork.workspace import ATTEMPT_REF_PREFIX
 from cairnwork_protocol.ids import MAX_ID_BYTES
 
@@ -105,7 +104,7 @@ def check_roots_on_base(repo: Path, base: str, roots: tuple[str, ...]) -> None:
                 where = ["--", "/".join(found_parts) + "/"] if i else []
                 raw = run_git(repo, "ls-tree", "-z", base, *where)
             except GitCommandError as exc:
-                raise TestCommitRejected("TEST_ROOT_UNREADABLE", shown(exc)) from exc
+                raise TestCommitRejected("TEST_ROOT_UNREADABLE", str(exc)) from exc
             found = [
                 e
                 for e in raw.split("\0")
@@ -134,7 +133,7 @@ def test_paths(
             "--ignore-submodules=none", base, test_commit,
         )  # fmt: skip
     except GitCommandError as exc:
-        raise TestCommitRejected("TEST_COMMIT_UNREADABLE", shown(exc)) from exc
+        raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
     if parents[1:] != [base]:
         raise TestCommitRejected("TEST_COMMIT_NOT_ON_BASE", "its only parent must be the base")
     fields = raw.split("\0")
@@ -255,14 +254,14 @@ def _tree(repo: Path, blob: str, *, present: bool = False) -> ast.Module | None:
         source = run_git(repo, "show", blob)
     except GitCommandError as exc:
         if present:
-            raise TestCommitRejected("TEST_COMMIT_UNREADABLE", shown(exc)) from exc
+            raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
         rev, path = blob.split(":", 1)
         try:
             exists = run_git(repo, "ls-tree", "--name-only", rev, "--", path)
         except GitCommandError as check_exc:
-            raise TestCommitRejected("TEST_COMMIT_UNREADABLE", shown(check_exc)) from check_exc
+            raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(check_exc)) from check_exc
         if exists:
-            raise TestCommitRejected("TEST_COMMIT_UNREADABLE", shown(exc)) from exc
+            raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
         return None  # a new file
     try:
         return ast.parse(source)
@@ -380,7 +379,7 @@ def lay_tests_over(
         head = head.strip()
         run_git(repo, "update-ref", f"{ATTEMPT_REF_PREFIX}{attempt_id}-tested", head)
     except (GitCommandError, ValueError) as exc:
-        raise TestCommitRejected("TEST_OVERLAY_FAILED", shown(exc)) from exc
+        raise TestCommitRejected("TEST_OVERLAY_FAILED", str(exc)) from exc
     finally:
         index.unlink(missing_ok=True)
     return head

@@ -80,22 +80,18 @@ def main(argv: list[str] | None = None) -> int:
     except IntakeRefused as exc:
         return _emit({"error": exc.code, "detail": exc.detail}, 2)
     except (TaskRejected, blackbox.BlackboxRejected) as exc:
-        if isinstance(exc, TaskRejected):
-            detail = str(exc) if exc.detail_is_shown else exc.safe_reason
-        else:
-            detail = shown(exc)
         return _emit(
             {
                 "status": "REFUSED",
                 "verified": False,
                 "reason": exc.code,
                 "error": exc.code,
-                "detail": detail,
+                "detail": str(exc),
             },
             2,
         )
     except (NotarySchemaMismatch, NotaryMissing) as exc:  # NOTARY_SCHEMA_OLDER: migrate-notary
-        return _emit({"error": exc.code, "detail": shown(exc)}, 2)
+        return _emit({"error": exc.code, "detail": str(exc)}, 2)
     except KeyboardInterrupt:  # #783: say what the interruption cost; the signal still ends the run
         used = tests_consumed(intake, getattr(args, "test_commit", ""))
         detail = "interrupted" + (
@@ -137,7 +133,7 @@ def _migrate(intake: Intake) -> dict[str, Any]:
         with runlock.held(intake.state / "ownership.sqlite", exclusive=True):
             return migrate_notary(intake.state / "notary.sqlite")
     except RunLockBusy as exc:  # only here: a busy run lock elsewhere keeps its meaning
-        raise IntakeRefused(exc.code, shown(exc)) from exc
+        raise IntakeRefused(exc.code, str(exc)) from exc
 
 
 def _import_tests(intake: Intake, args) -> int:
@@ -148,8 +144,7 @@ def _import_tests(intake: Intake, args) -> int:
             repo, Path(args.bundle).resolve(), intake.state / "verify-used-tests"
         )
     except TestCommitRejected as exc:
-        detail = str(exc) if exc.detail_is_shown else exc.safe_reason
-        return _emit({"error": exc.code, "detail": detail}, 2)
+        return _emit({"error": exc.code, "detail": str(exc)}, 2)
     return _emit({"imported": sha}, 0)
 
 
@@ -197,12 +192,12 @@ def _run(intake: Intake, args) -> dict[str, Any]:
             (f"pytest-{i}", tuple(shlex.split(command))) for i, command in enumerate(args.verifier)
         )
     except ValueError as exc:
-        raise TaskRejected("BAD_VERIFIER", shown(exc)) from exc
+        raise TaskRejected("BAD_VERIFIER", str(exc)) from exc
     path = Path(args.blackbox) if args.blackbox is not None else None
     try:  # read by the owner's process only; never passed on to the run
         declared = blackbox.load(path) if path is not None else None
     except blackbox.BlackboxRejected as exc:
-        raise TaskRejected(exc.code, shown(exc)) from exc
+        raise TaskRejected(exc.code, str(exc)) from exc
     if args.require_protection and path is None:  # strict mode could never be met: burn nothing
         raise TaskRejected(protection.UNPROTECTED_CODE, "--require-protection needs --blackbox")
     if args.require_protection and declared is not None:

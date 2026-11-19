@@ -42,7 +42,6 @@ from cairnwork.conftest_reach import reached_change
 from cairnwork.deferred_overlay import TestCommitRejected
 from cairnwork.gitcmd import GitCommandError, run_git, run_git_bytes
 from cairnwork.module_plugins import check_test_module_plugins
-from cairnwork.textclean import shown
 
 CONFTEST = "conftest.py"
 CODE = "TEST_COMMIT_CONFTEST_STATIC"
@@ -122,7 +121,7 @@ def _check_archives(repo: Path, commit: str, paths: tuple[str, ...], files: froz
         try:
             raw = run_git_bytes(repo, "cat-file", "blob", f"{commit}:{path}")
         except GitCommandError as exc:
-            raise TestCommitRejected("TEST_COMMIT_UNREADABLE", shown(exc)) from exc
+            raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
         text = raw.decode("utf-8", "surrogateescape")
         if hit := sorted(n for n in names if n in text):
             _refuse(path, None, f"names the archive {hit[0]}, which the test commit changes")
@@ -134,7 +133,7 @@ def _tree_files(repo: Path, commit: str) -> frozenset[str]:
     try:
         listing = run_git_bytes(repo, "ls-tree", "-r", "-z", "--name-only", commit)
     except GitCommandError as exc:
-        raise TestCommitRejected("TEST_COMMIT_UNREADABLE", shown(exc)) from exc
+        raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
     return frozenset(listing.decode("utf-8", "surrogateescape").split("\0"))
 
 
@@ -146,7 +145,7 @@ def _read(repo: Path, commit: str, path: str) -> ast.Module:
     try:
         text = run_git_bytes(repo, "cat-file", "blob", f"{commit}:{path}")
     except GitCommandError as exc:
-        raise TestCommitRejected("TEST_COMMIT_UNREADABLE", shown(exc)) from exc
+        raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
     try:
         return ast.parse(text)
     except (SyntaxError, ValueError, UnicodeError, MemoryError, RecursionError):
@@ -164,7 +163,7 @@ def _parse(repo: Path, blob: str, path: str, *, present: bool) -> ast.Module:
         source = run_git(repo, "show", blob)
     except GitCommandError as exc:
         if present:
-            raise TestCommitRejected("TEST_COMMIT_UNREADABLE", shown(exc)) from exc
+            raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
         return _empty_for_absent_base(repo, blob, path, exc)
     except UnicodeDecodeError as exc:
         if not present:
@@ -185,7 +184,7 @@ def _empty_for_absent_base(
     """
     base, separator, _ = blob.partition(":")
     if not separator or path in _tree_files(repo, base):
-        raise TestCommitRejected("TEST_COMMIT_UNREADABLE", shown(error)) from error
+        raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(error)) from error
     return ast.Module(body=[], type_ignores=[])
 
 

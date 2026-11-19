@@ -1,4 +1,5 @@
 """Run existing (pass-to-pass) tests over a candidate next to the task's own verifiers (#117).
+
 After the worker is done, for a task with deferred tests: select existing test files by the
 state's ``p2p_selection`` mode (p2p_selection.py), run them on the BASE to find the tests that
 pass there, then run exactly those on the judged commit as one more verifier (``p2p-<mode>``)
@@ -11,11 +12,19 @@ Failure paths, none of which can end VERIFIED:
   left bytecode it may not supply (``base-probe-forged``, #481), so its outcomes prove nothing.
   UNCOMPARABLE (``P2P_BASE_PROBE_UNUSABLE``) in any mode, without trying a narrower one (weaker
   evidence than the configured one); a false FAILED becomes "no evidence", never VERIFIED;
-* A timeout, unusable report/log, teardown error or exit without a recorded failing test in
-  ``whole-suite`` degrades once to ``module-dir`` and records it. If that probe is unusable or
-  finds no base-passing tests, the task is UNCOMPARABLE (never VERIFIED); a successful probe with
-  no passing test records ``targets: 0``. Empty module-dir selection on a nonempty base falls
-  back to the whole base within the cap and budget, else UNCOMPARABLE ``P2P_NO_TARGETS`` (#793);
+* base probe times out, cannot report, or its report or log exceeds the size cap (a suite too
+  large for one run, #184: ``base-probe-report-over-cap``, #481: ``base-probe-log-over-cap``), or
+  a test's teardown failed there
+  (#478: ``base-probe-teardown-error``; a shared fixture's error lands on whichever test runs
+  last, so no test of that run can be trusted as a target), or it exits 1 with no failed test in
+  the guard's record, in ``whole-suite``: degrade to
+  ``module-dir`` once and say so in the record; when ``module-dir`` itself cannot be probed, or
+  would run the same files again, or selects no test file at all, or none of its tests passes on
+  the base, the task is UNCOMPARABLE (``P2P_BASE_PROBE_UNUSABLE``, #234: no evidence, never
+  verified; a degraded probe never turns into "nothing to run"). A probe that worked but found no
+  base-passing test is recorded (``targets: 0``, ``reason: none-pass``). A ``module-dir`` that
+  selects nothing from a base with test files runs all of them (``fallback``) within the cap and
+  budget, else UNCOMPARABLE ``P2P_NO_TARGETS`` (#793);
 * targets keep the order the probe ran them in (#287): a test that passes on the base only after
   the tests before it (shared module state) is not judged in another order;
 * a test file the test commit changes stays selected: its unchanged tests are bound like any other
@@ -53,7 +62,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import cairnwork_sandbox
-from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRejected, deleted_of
+from cairnwork.deferred_tests import BaseUncomparable, Comparison, deleted_of
 from cairnwork.gitcmd import GitCommandError
 from cairnwork.issue_task import test_target
 from cairnwork.p2p_collect import OVER_BUDGET, collected_side, no_targets, under_roots, whole_base
@@ -62,15 +71,11 @@ from cairnwork.p2p_links import base_tree
 from cairnwork.p2p_nodes import clean as _clean
 from cairnwork.p2p_nodes import passing_targets, require_nodes
 from cairnwork.p2p_probe_log import probe_log_tail
+from cairnwork.p2p_rejection import P2PRejected
 from cairnwork.p2p_selection import DEFAULT_BUDGET_SECONDS, cap_note, name_rule, select_p2p_targets
 from cairnwork.pytest_config import PytestConfigError, test_file_rule
-from cairnwork.textclean import shown
 from cairnwork.verifiers import VerifierRun, VerifierSpec, run_verifiers
 from cairnwork.verify_context import VerifyContext
-
-
-class P2PRejected(TestCommitRejected):
-    """The P2P step could not run safely: the task is REFUSED, never verified."""
 
 
 @dataclass(frozen=True)
@@ -94,7 +99,7 @@ def _base_tests(task, exclude: frozenset[str], strict=True) -> tuple[str, ...]:
         paths = [p for p in under_roots(raw, task.test_roots) if p not in exclude and is_test(p)]
         odd = [p for p in paths if not target.fullmatch(p)] + links  # #930, #997: no exemption
     except (GitCommandError, PytestConfigError) as exc:
-        raise P2PRejected("P2P_BASE_UNREADABLE", shown(exc)) from exc
+        raise P2PRejected("P2P_BASE_UNREADABLE", str(exc)) from exc
     if odd and strict:  # #930: never dropped silently (fail closed); #956: env check only
         detail = f"{len(odd)} base test file(s) no target can name, e.g. {_clean(odd[0])}"
         raise BaseUncomparable(Comparison("UNCOMPARABLE", "P2P_BASE_UNTARGETABLE", detail))
@@ -141,7 +146,8 @@ def _probe(task, files, result, ctx: VerifyContext, budget, tag="p"):
 
 
 def plan_p2p(task, specs, test_files, mode, budget, result, ctx: VerifyContext) -> P2PPlan:
-    """Select and probe; unchanged tests in deferred base files are P2P tests."""
+    """Select and probe; see the module docstring. In a base test file among ``test_files`` (the
+    deferred tests), only the tests the test commit does not change are P2P tests."""
     rule: dict = {"configured": mode, "applied": mode, "budget_seconds": budget, "degraded": ""}
     forced = conftest_files(task, test_files, mode, _base_tests)  # #798
     if mode == "off":
@@ -265,8 +271,7 @@ def base_env_check(task, result, ctx: VerifyContext, *, without_tests=False, key
     try:
         existing = _base_tests(task, frozenset(), strict=not without_tests)  # #956
     except P2PRejected as exc:
-        detail = str(exc) if exc.detail_is_shown else exc.safe_reason
-        raise _env_failed(detail) from exc
+        raise _env_failed(str(exc)) from exc
     rule = name_rule(task.repo, task.base_commit)
     files = select_p2p_targets(task.allowed_files, existing, task.test_roots, "module-dir", rule)
     if not files:  # nothing to probe now; the steps after the worker decide, as before

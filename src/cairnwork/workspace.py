@@ -1,20 +1,31 @@
 """Isolated attempt clones and candidate checks (preserved behaviors #11-#13, #19).
 
-Each attempt is an isolated ``git clone --no-local`` at the base, with private
-objects/refs/index and no origin or templates (#417). Keep Cairnwork's repo
-unwritable from the worker; git cannot enforce host permissions. ``collect_candidate``
-rejects changes to ``refs/replace/`` or another attempt's refs; ordinary branches are allowed.
+Each attempt is a separate ``git clone --no-local`` with its own ``.git``
+(objects, config, refs, index; no template files such as hook samples, #417),
+detached at the task's base commit, with its ``origin`` remote removed so git
+gives the worker no handle on Cairnwork's repository. Cairnwork's repository path must still not be
+writable from the worker's sandbox: git cannot stop a process that already
+has write access, and branch and tag protection relies on that. As a check on
+the refs that matter for verification, ``collect_candidate`` refuses a
+candidate when ``refs/replace/`` or another attempt's ``refs/cairnwork/`` ref
+changed during the attempt; ordinary branch updates by Cairnwork are allowed.
+
+The worker process must have exited before ``collect_candidate`` runs, and the
+clone must not change afterwards: the checks describe the clone at that moment.
 
 After the worker stops, ``collect_candidate`` fetches the clone's HEAD into
 ``refs/cairnwork/attempts/<attempt_id>`` and decides from Cairnwork's own
 repository whether it is acceptable:
 
-- one new commit on the base (#19);
-- changes stay in allowed_files, respect deletion policy, and add no symlinks or submodules (#12);
-- ``git diff --check`` is clean (#13);
-- clone files match the candidate tree (treecompare.py), so leftover state cannot hide.
+- exactly one new commit whose only parent is the base (#19);
+- every changed path is in allowed_files, deletions only when allowed, and no
+  symlinks or submodules are added or changed (#12);
+- ``git diff --check`` finds no whitespace errors (#13);
+- the clone's files are exactly the candidate's tree, compared in Python
+  (see treecompare.py), so no git state in the clone can hide a leftover.
 
-After worker start, only fetch touches the clone; any other state is a typed CandidateRejected.
+The only git command that touches the clone after the worker starts is that
+fetch (git runs upload-pack in it). Any other state is a typed CandidateRejected.
 """
 
 from __future__ import annotations
@@ -32,9 +43,10 @@ from cairnwork.changeset import ChangeSetError, read_change_set
 from cairnwork.diffcheck import diff_check_detail
 from cairnwork.gitcmd import CLONE_ISOLATED, OID, GitCommandError, run_git, run_git_bytes
 from cairnwork.protected_paths import is_protected, protected_note
+from cairnwork.refusal_types import CandidateRejected
 from cairnwork.tamper_scan import CODE as TAMPER_CODE
 from cairnwork.tamper_scan import scan_patch
-from cairnwork.textclean import is_shown, shown, shown_once
+from cairnwork.textclean import shown
 from cairnwork.treecompare import tree_differences
 
 FORBIDDEN_MODES = frozenset({"120000", "160000"})  # symlink, submodule
@@ -47,18 +59,6 @@ class WorkspaceError(Exception):
 
     def __init__(self, detail: str) -> None:
         super().__init__(f"{self.code}: {detail}")
-
-
-class CandidateRejected(Exception):
-    def __init__(self, code: str, detail: str) -> None:
-        self.code = code
-        self.detail = detail
-        self.detail_is_shown = is_shown(detail)
-        super().__init__(f"{code}: {detail}")
-
-    @property
-    def safe_reason(self) -> str:
-        return f"{self.code}: {shown_once(self.detail)}"
 
 
 @dataclass(frozen=True)

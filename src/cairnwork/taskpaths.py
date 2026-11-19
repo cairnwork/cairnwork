@@ -35,7 +35,7 @@ def check_task_paths(
         raw = run_git(repo, "ls-tree", "-r", "-t", "-z", base_commit, "--", *sorted(wanted))
     except GitCommandError as exc:  # git ran and refused (no such base) vs git did not run (#483)
         if isinstance(exc.__cause__, subprocess.CalledProcessError):
-            raise TaskRejected("TASK_PATH_UNREADABLE", shown(exc)) from exc
+            raise TaskRejected("TASK_PATH_UNREADABLE", str(exc)) from exc
         raise RuntimeError(f"git could not inspect base tree: {shown(exc)}") from exc
     modes = {e.split("\t", 1)[1]: e.split()[0] for e in raw.split("\0") if e}
     for path in allowed_files:
