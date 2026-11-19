@@ -5,7 +5,6 @@ from __future__ import annotations
 import http.client
 import json
 import subprocess
-import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -169,14 +168,11 @@ class CostGate:
     ) -> None:
         if transport is not None and command is not None:
             raise ValueError("provide either transport or command")
-        command = command or (
-            sys.executable,
-            "-m",
-            "experimental.local_relay.gate_shim",
-            "--tag",
-            "cw-local-relay",
-        )
-        self.transport = _UsageTransport(transport or CommandTransport(command))
+        if transport is None and command is None:
+            raise ValueError(
+                "CostGate needs a transport or a JSON command (use ProxyGate for Haiku)"
+            )
+        self.transport = _UsageTransport(transport or CommandTransport(command or ()))
         self.gate = HaikuGate(self.transport, scanner=scanner)
         self.input_rate = input_usd_per_million
         self.output_rate = output_usd_per_million
@@ -276,10 +272,10 @@ def _flag_set(value) -> bool:
     return _is_flag(value) and bool(value)
 
 
-def _proxy_request(method: str, url: str, body: dict | None) -> dict:
+def _proxy_request(method: str, url: str, body: dict | None, timeout: float = 30) -> dict:
     parts = urlsplit(url)
     target = parse_loopback_url(f"{parts.scheme}://{parts.netloc}{parts.path}")
-    connection = http.client.HTTPConnection(target.host, target.port, timeout=30)
+    connection = http.client.HTTPConnection(target.host, target.port, timeout=timeout)
     try:
         payload = None if body is None else json.dumps(body).encode("utf-8")
         path = target.base_path + ("?" + parts.query if parts.query else "")

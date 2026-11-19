@@ -121,6 +121,9 @@ class LocalAttemptFailed(RuntimeError):
 def _check_stage(task_id, attempt, acceptance, gate, ledger, config, stage, trail):
     result = acceptance(attempt.candidate)
     settings = CallSettings(config.gate_model_id, config.gate_effort, config.timeout_seconds, 1)
+    mark_stage = getattr(gate, "set_stage", None)
+    if callable(mark_stage):
+        mark_stage(stage)  # lets a metered gate label its spend per stage
     try:
         reply = gate.review(GateRequest(task_id, "", str(attempt.candidate), settings))
     except Exception as exc:  # noqa: BLE001 - injected gate failures must fail closed.

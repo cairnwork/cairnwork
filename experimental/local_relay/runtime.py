@@ -20,7 +20,6 @@ from cairnwork.issue_task import _check_path, parse_task_block, pytest_argv
 from cairnwork.taskpaths import check_task_paths
 from experimental.local_relay.adapters import (
     CoreAcceptance,
-    CostGate,
     HaikuProxyFallback,
     LocalWorkerAdapter,
 )
@@ -35,6 +34,7 @@ from experimental.local_relay.config import (
 )
 from experimental.local_relay.diagnostics import append_debug, redact
 from experimental.local_relay.process import spawn_worker as _spawn_worker
+from experimental.local_relay.proxy_gate import ProxyGate
 from experimental.local_relay.relay import run_relay
 from experimental.local_relay.worker_setup import (
     executable_paths,
@@ -60,14 +60,12 @@ def dry_route(args: Any) -> dict[str, Any]:
         "endpoint": DEFAULT_LOCAL_ENDPOINT,
         "model": LOCAL_MODEL,
         "context_tokens": f"{DEFAULT_CONTEXT_TOKENS} -> {RETRY_CONTEXT_TOKENS}",
-        "gate_transport": [
-            sys.executable,
-            "-m",
-            "experimental.local_relay.gate_shim",
-            "--tag",
-            "cw-local-relay",
-        ],
-        "gate_runner": str(Path.home() / ".local/bin/claude-api-run"),
+        "gate": {
+            "endpoint": proxy_url,
+            "model": HAIKU_MODEL,
+            "tools": False,
+            "label": "<task>-gate-<stage>",
+        },
         "fallback": {"endpoint": proxy_url, "model": HAIKU_MODEL, "context_tokens": 65536},
         "ledger": str(Path(args.ledger).expanduser()) if args.ledger else DEFAULT_LEDGER_PATH,
         "enabled": os.environ.get("CAIRNWORK_LOCAL_RELAY") == "1",
@@ -89,7 +87,9 @@ def build_run_once(args: Any) -> Callable[[Any, Any], dict[str, Any]]:
     config = intake.config()
     judge = CoreJudge(state, task["verifiers"], config["import_paths"])
     acceptance = CoreAcceptance(judge, task["allowed_files"])
-    gate = CostGate()
+    gate = ProxyGate(
+        str(parse_loopback_url(getattr(args, "haiku_proxy_url", DEFAULT_HAIKU_PROXY_URL)))
+    )
     fallback_url = str(
         parse_loopback_url(getattr(args, "haiku_proxy_url", DEFAULT_HAIKU_PROXY_URL))
     )

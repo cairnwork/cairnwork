@@ -12,7 +12,7 @@ import pytest
 
 from cairnwork.issue_task import IssueRefused
 from experimental.local_relay import cli, runtime
-from experimental.local_relay.adapters import CoreAcceptance, CostGate
+from experimental.local_relay.adapters import CoreAcceptance
 from experimental.local_relay.config import (
     DEFAULT_HAIKU_PROXY_URL,
     DEFAULT_LOCAL_ENDPOINT,
@@ -44,7 +44,7 @@ def test_dry_route_prints_real_configuration_without_building_runtime(
     assert code == 0
     assert result["endpoint"] == DEFAULT_LOCAL_ENDPOINT
     assert result["context_tokens"] == "32768 -> 65536"
-    assert result["gate_transport"][-2:] == ["--tag", "cw-local-relay"]
+    assert result["gate"]["tools"] is False and result["gate"]["model"] == "claude-haiku-5-5"
     assert result["fallback"] == {
         "endpoint": DEFAULT_HAIKU_PROXY_URL,
         "model": HAIKU_MODEL,
@@ -107,8 +107,7 @@ def _patch_runtime_assembly(monkeypatch, captured):
     monkeypatch.setattr(runtime, "CoreJudge", FakeJudge)
     monkeypatch.setattr(runtime, "LocalWorkerAdapter", FakeLocalWorker)
     monkeypatch.setattr(
-        "experimental.local_relay.adapters.CommandTransport",
-        lambda command: captured.setdefault("command", tuple(command)),
+        runtime, "ProxyGate", lambda url: captured.setdefault("gate_url", url) or object()
     )
     monkeypatch.setattr(runtime, "HaikuProxyFallback", FakeFallback)
     monkeypatch.setattr(runtime, "check_task_paths", lambda *_args: None)
@@ -158,7 +157,7 @@ def test_build_uses_tagged_transport_and_same_state_verifier(monkeypatch, tmp_pa
     assert captured["judge"][1] == [
         ("pytest-0", ("python3", "-m", "pytest", "-q", "tests/test_a.py"))
     ]
-    assert captured["command"][-2:] == ("--tag", "cw-local-relay")
+    assert captured["gate_url"] == "http://127.0.0.1:18399/v1"  # same Haiku proxy, no tools
     assert captured["local"][1]["model_id"] == "qwen3.5-9b"
     assert captured["fallback"][0] == "http://127.0.0.1:18399/v1"
     captured["fallback"][1](65536, "http://127.0.0.1:18399/v1")
@@ -294,14 +293,3 @@ def test_core_acceptance_refuses_paths_outside_task_allowlist(monkeypatch, tmp_p
     verdict = acceptance(RunResult(0, "", tmp_path, tmp_path, base_sha="a" * 40))
     assert verdict.passed is False
     assert json.loads(verdict.raw)["unexpected_paths"] == ["outside.py"]
-
-
-def test_gate_transport_default_command_has_relay_tag(monkeypatch, tmp_path):
-    commands = []
-    monkeypatch.setattr(
-        "experimental.local_relay.adapters.CommandTransport",
-        lambda command: commands.append(tuple(command)),
-    )
-    CostGate()
-    assert commands[0][-2:] == ("--tag", "cw-local-relay")
-    assert commands[0][1:3] == ("-m", "experimental.local_relay.gate_shim")
