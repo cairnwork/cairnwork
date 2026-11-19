@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 
 # Leak guard, recall first: a name (assignment or --flag) whose lower-cased form, with - and _
 # removed, ends in a credential word is a secret name, glued prefixes included (masterkey,
@@ -54,7 +55,9 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 def scan(text: str, names: tuple[str, ...] = ()) -> list[str]:
     """Return matched categories only; never include the matched text. ``names`` are configured
     account or host names (AC4): a whole-word, case-insensitive hit is ``account_name``."""
-    normalized = re.sub(r"[\u00ad\u200b-\u200d\u2060\u2061-\u2064\ufeff]", "", text)
+    zero_width = r"[\u00ad\u200b-\u200d\u2060\u2061-\u2064\ufeff]"
+    stripped = re.sub(zero_width, "", text)  # NFKC folds look-alike names and separators (#1362)
+    normalized = re.sub(zero_width, "", unicodedata.normalize("NFKC", stripped))
     joined = re.sub(r"(=>|:=|[=:])[ \t]*(?:\r\n|\n)+[ \t]*", r"\1", normalized)
     compact = re.sub(r"\s+", "", normalized)
     wrapped = re.sub(r"\r?\n", "", normalized)
