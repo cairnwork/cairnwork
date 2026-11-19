@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 
 from cairnwork.gitcmd import GitCommandError, run_git
+from cairnwork.node_ids import file_part
 from cairnwork.pipeline import TaskRejected, TaskSpec
 from cairnwork.verifier_spec import VerifierSpec
 
@@ -28,7 +29,7 @@ def check_task_paths(
     """Every parent of an allowed file is a real directory on the base (a task may not
     create a directory: fail closed, #149), the file itself is a regular file or absent,
     and a verifier target is on the base or an allowed file."""
-    targets = {t.split("::", 1)[0]: t for t in verifier_targets}
+    targets = {file_part(t): t for t in verifier_targets}
     wanted = {p for path in (*allowed_files, *targets) for p in _prefixes(path)}
     try:
         raw = run_git(repo, "ls-tree", "-r", "-t", "-z", base_commit, "--", *sorted(wanted))

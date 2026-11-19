@@ -37,6 +37,7 @@ from cairnwork.deferred_overlay import (  # noqa: F401  (re-exported: the one pl
 )
 from cairnwork.gitcmd import OID, GitCommandError, commit_present, run_git
 from cairnwork.issue_task import test_target
+from cairnwork.node_ids import file_part
 from cairnwork.p2p_function import _without_case as _nodeid_without_case
 from cairnwork.provenance import trailers
 from cairnwork.reasons import COLLECT_HINT, _names, skip_hint
@@ -225,7 +226,7 @@ def untargeted(
     named, missing = frozenset(map(_without_case, targets)), []  # a case names its test
     nodes = list(map(_without_case, nodes))  # the same on both sides (the receiver too)
     for path in (path for path in paths if path.endswith(".py") and path not in named):
-        mine = [node for node in nodes if node.split("::", 1)[0] == path]
+        mine = [node for node in nodes if file_part(node) == path]
         if not mine or not all(_named(node, named) for node in mine):
             missing.append(path)
     return tuple(missing)
@@ -337,7 +338,7 @@ def base_comparison(runs, targets: frozenset[str]) -> Comparison:
     Teeth: one of them failed in the guard's record."""
     problems = [(run, code) for run in runs if (code := _base_problem(run))]
     if problems:
-        files = {target.split("::", 1)[0] for target in targets}
+        files = {file_part(target) for target in targets}
         detail = "; ".join(
             f"{run.spec.verifier_id}: {code} (exit {run.returncode})"
             + (f", collection errors {_names(run.collect_errors)}" if run.collect_errors else "")
