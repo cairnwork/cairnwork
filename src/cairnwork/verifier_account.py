@@ -39,6 +39,7 @@ from pathlib import Path
 
 from cairnwork import confined, lock_queue, verifier_escape
 from cairnwork.account_proc import run_bounded
+from cairnwork.grant_read import grant_read as _grant_read
 from cairnwork_sandbox import Backend, platform_backend
 
 SUDO = "/usr/bin/sudo"
@@ -348,15 +349,9 @@ class VerifierAccount:
         Symlinks are opened too, without following them (Issue #279): on macOS another user's
         ``readlink`` needs the link's own mode readable, yet git makes links 0700 under umask 077.
         Where ``os.chmod`` supports ``follow_symlinks=False`` only the link's mode is widened;
-        Linux does not check link modes, so links are skipped there."""
-        for top, dirs, files in os.walk(root):
-            for name, bits in [(d, 0o055) for d in dirs] + [(f, 0o044) for f in files]:
-                path = os.path.join(top, name)
-                if not os.path.islink(path):
-                    os.chmod(path, os.stat(path).st_mode | bits)
-                elif os.chmod in os.supports_follow_symlinks:
-                    os.chmod(path, os.lstat(path).st_mode | bits, follow_symlinks=False)
-        os.chmod(root, os.stat(root).st_mode | 0o055)
+        Linux does not check link modes, so links are skipped there. Walks via ``O_NOFOLLOW``
+        handles and ``fchmod`` (Issue #1361) so a symlink swapped in mid-walk is refused."""
+        _grant_read(root)
 
     @contextmanager
     def exclusive(self, timeout: float | None = None) -> Iterator[None]:

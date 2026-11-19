@@ -97,8 +97,12 @@ def copy(source, target):
     while stack:
         src, dst, done = stack.pop()
         if done is not None:  # after its contents: the directory's own mode and times
-            os.chmod(dst, stat.S_IMODE(done.st_mode))
-            os.utime(dst, ns=(done.st_atime_ns, done.st_mtime_ns))
+            dfd = os.open(dst, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                os.fchmod(dfd, stat.S_IMODE(done.st_mode))
+                os.utime(dfd, ns=(done.st_atime_ns, done.st_mtime_ns))
+            finally:
+                os.close(dfd)
             continue
         os.mkdir(dst, 0o700)
         stack.append((src, dst, os.lstat(src)))
