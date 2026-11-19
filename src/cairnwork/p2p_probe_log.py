@@ -55,10 +55,18 @@ _VALUE = re.compile(r"[^&\s]+")
 _FILLERS = frozenset("\u115f\u1160\u3164\uffa0\u2800")
 
 
-def _invisible(ch: str) -> bool:
-    """Dropped from the matching view (#1329): by category, as textclean does (C*, Zl, Zp), plus
-    combining marks Mn/Me (CGJ, variation selectors, Mongolian selectors are Mn) and the fillers."""
-    return is_hidden(ch) or unicodedata.category(ch) in ("Mn", "Me") or ch in _FILLERS
+def _mark(ch: str) -> bool:
+    return unicodedata.category(ch) in ("Mn", "Me")  # CGJ, variation selectors are Mn
+
+
+def _dropper(keep: str):
+    """What a matching view leaves out (#1329), by category as textclean does (C*, Zl, Zp), plus
+    the marks and fillers; the characters in ``keep`` stay (they separate words and mark names)."""
+    return lambda ch: (is_hidden(ch) and ch not in keep) or _mark(ch) or ch in _FILLERS
+
+
+_FORM_VIEWS = (_mark, _dropper("\n\t"))  # as before this change, and the category view
+_FIELD_VIEWS = (_mark, _dropper("\n\t" + _HID))
 
 
 TAIL_CHARS = 2048
@@ -133,17 +141,18 @@ def _redact_forms(text: str) -> str:
     """Mask the value of every form, found on the text as written and on its NFKC view without
     marks (#1329). All spans are collected on the same untouched text and merged before anything
     is replaced, so no form can hide another's name by masking first (``Bearer token: x``)."""
-    view, idx = _view_index(text)
+    views = [_view_index(text, drop) for drop in _FORM_VIEWS]
     spans: list[tuple[int, int]] = []
     for rx, value_rx in _FORMS:
         spans += [(m.end(1), m.end()) for m in rx.finditer(text) if m.end() > m.end(1)]
-        for m in rx.finditer(view):  # the view only locates the name; the value is read from text
-            if m.end() == m.end(1):
-                continue
-            start = idx[m.end(1)] if idx else m.end(1)
-            value = value_rx.match(text, start)
-            if value is not None:
-                spans.append((start, value.end()))
+        for view, idx in views:  # a view only locates the name; the value is read from text
+            for m in rx.finditer(view):
+                if m.end() == m.end(1):
+                    continue
+                start = idx[m.end(1)] if idx else m.end(1)
+                value = value_rx.match(text, start)
+                if value is not None:
+                    spans.append((start, value.end()))
     out, pos = [], 0
     for start, end in sorted(spans):
         if end <= pos:
@@ -153,16 +162,16 @@ def _redact_forms(text: str) -> str:
     return "".join([*out, text[pos:]])
 
 
-def _view_index(text: str) -> tuple[str, list[int]]:
-    """The NFKC view used for matching, and each view character's index in ``text`` (empty for
-    pure ASCII, where the two agree). Invisible characters (see ``_invisible``) are left out of the
-    view, so a mark inside or after a name no longer hides it."""
-    if text.isascii() and _HID not in text:  # hidden characters were already turned into _HID
+def _view_index(text: str, drop) -> tuple[str, list[int]]:
+    """The NFKC view used for matching, and each view character's index in ``text`` (empty when
+    the view is the text itself). Characters for which ``drop`` is true are left out, so a mark or
+    filler inside or after a name no longer hides it."""
+    if text.isascii() and (drop is _mark or _HID not in text):  # ASCII: only _HID could go
         return text, []
     out: list[str] = []
     idx: list[int] = []
     for i, ch in enumerate(text):
-        if _invisible(ch):
+        if drop(ch):
             continue
         norm = unicodedata.normalize("NFKC", ch)
         out.append(norm)
@@ -207,12 +216,6 @@ def _is_secret_name(
     return any(_is_key(n) for n in names)
 
 
-def _nfkc_index(text: str) -> tuple[str, list[int]]:
-    """Per-character NFKC text and the original index of each normalized character (#1313);
-    marks are left out as in ``_view_index`` (#1329)."""
-    return _view_index(text)
-
-
 def _field_matches(source: str, idx: list[int] | None, text: str) -> Iterator[tuple[int, int]]:
     for m in _NAME.finditer(source):
         orig_start = idx[m.start()] if idx else m.start()
@@ -229,8 +232,9 @@ def _mask_fields(text: str) -> str:
     dropped, or by its last piece after one; case is ignored (as before #744, plus case folding)."""
     matches = list(_field_matches(text, None, text))
     if not text.isascii():
-        norm, idx = _nfkc_index(text)
-        matches.extend(_field_matches(norm, idx, text))
+        for drop in _FIELD_VIEWS:
+            norm, idx = _view_index(text, drop)
+            matches.extend(_field_matches(norm, idx, text))
         matches.sort()
     out, pos = [], 0
     for orig_start, orig_end in matches:

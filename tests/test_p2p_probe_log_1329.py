@@ -169,3 +169,20 @@ def test_a_name_split_by_a_joiner_is_masked_on_purpose(line):
     so a secret name split by one is masked. The cost is that prose may be masked a little too
     much, never too little. Do not 'fix' this without a new decision."""
     assert "roadmap" not in mask_secrets(line)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "ok\nx-api-key️: {v}",
+        "ok\tx-api-key️: {v}",
+        "ok\nBearer️ {v}",
+        "a\tb --token️ {v}",
+        "x​-api-key️: {v}",
+        "k\ń--token {v}",
+    ],
+)
+def test_the_view_never_masks_less_than_the_text_as_written(line):
+    """Review of eaf3e472: dropping newlines, tabs or the hidden-character placeholder from the
+    view glued words together and un-masked values that earlier heads masked."""
+    assert SV not in mask_secrets(line.format(v=SV))
