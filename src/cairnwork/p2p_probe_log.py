@@ -35,6 +35,14 @@ _FLAG = re.compile(rf"(?i)((?<![\w-])--[\w-]{{0,64}}{_FLAG_WORDS}[ \t]+)(?!-)\S+
 _FLAG_HEAD = re.compile(r"(?<![\w-])--([\w-]{0,64})$")  # the flag name up to a name's start
 # a URL-encoded 'name%3Dvalue' (#402)
 _ENCODED = re.compile(rf"(?i)((?<!\w)[\w-]{{0,64}}(?:{_KEYS})%3d)[^&\s]+")
+# the pattern for the value that follows each form's name (group 1), read on the original text
+_FORMS = (
+    (_HEADER, re.compile(r"[^\n]+")),
+    (_BEARER, re.compile(r"\S+")),
+    (_COLON, re.compile(r"[^\n]+")),
+    (_FLAG, re.compile(r"(?!-)\S+")),
+    (_ENCODED, re.compile(r"[^&\s]+")),
+)
 _HID = "\x00"  # stands for a hidden character until the field pass has read the name (#744)
 _LOW = "\ufe33\ufe34\ufe4d-\ufe4f\uff3f"  # non-ASCII low-line look-alikes that fold to '_' (#1313)
 _LOW_RE = re.compile(f"[{_LOW}]")
@@ -109,25 +117,26 @@ def mask_secrets(text: str) -> str:
     text = _mask_userinfo(
         replace_hidden(_ANSI.sub("", text).replace("\r\n", "\n"), _HID, keep="\n\t")
     )
-    for rx in (_HEADER, _BEARER, _COLON, _FLAG, _ENCODED):
-        text = _redact(rx, text)
+    for rx, value_rx in _FORMS:
+        text = rx.sub(r"\1<redacted>", text)  # as written
+        text = _redact(rx, value_rx, text)  # and as NFKC folds it (#1329): the union is masked
     return _mask_fields(text).replace(_HID, "?")
 
 
-def _redact(rx: re.Pattern[str], text: str) -> str:
-    """``rx.sub(r"\\1<redacted>", text)``, but matched on the NFKC view of ``text`` without marks
-    (#1329): the value that follows group 1 is masked in the original, whose other characters stay
-    as they were."""
+def _redact(rx: re.Pattern[str], value_rx: re.Pattern[str], text: str) -> str:
+    """Mask what ``rx`` finds on the NFKC view of ``text`` without marks (#1329). The view only
+    locates the name and separator (group 1); the value is read from the original characters with
+    ``value_rx``, so normalization can neither shorten nor split it. Other characters stay."""
     view, idx = _view_index(text)
     out, pos = [], 0
     for m in rx.finditer(view):
         if m.end() == m.end(1):  # nothing after the name: no value to mask
             continue
         start = idx[m.end(1)] if idx else m.end(1)
-        end = (idx[m.end() - 1] if idx else m.end() - 1) + 1
-        if start >= pos:
+        value = value_rx.match(text, start)
+        if value is not None and start >= pos:
             out += [text[pos:start], "<redacted>"]
-            pos = end
+            pos = value.end()
     return "".join([*out, text[pos:]])
 
 

@@ -66,3 +66,28 @@ def test_scanning_stays_linear_on_large_input(mark):
     out = mask_secrets(text)
     assert time.monotonic() - started < 5
     assert SV not in out
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "access_tok\u034fen%3DSV12345\uff06tail-secret",  # a full-width & is no '&' in the value
+        "token\u034f: SV12345\u2002tail-secret",  # the colon form runs to the end of the line
+    ],
+)
+def test_the_value_is_read_from_the_original_not_the_folded_text(line):
+    out = mask_secrets(line)
+    assert "SV12345" not in out
+    assert "tail-secret" not in out
+
+
+@pytest.mark.parametrize("space", ["\u00a0", "\u3000", "\u2002"])
+def test_a_space_like_character_ends_a_word_value_as_a_space_does(space):
+    out = mask_secrets(f"--api\u034fkey SV12345{space}next Bearer SV67890{space}more")
+    assert "SV12345" not in out and "SV67890" not in out
+
+
+def test_original_form_is_still_masked_when_the_view_would_not_match():
+    # a name that only matches as written, next to marks elsewhere in the line
+    out = mask_secrets(f"café token: {SV}")
+    assert SV not in out
