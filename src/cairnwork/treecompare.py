@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import stat
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +20,7 @@ from pathlib import Path
 from cairnwork.gitcmd import GitCommandError, run_git
 
 CHUNK = 1 << 20
+_OID = re.compile(r"[0-9a-f]{40}([0-9a-f]{24})?")
 
 
 @dataclass(frozen=True)
@@ -40,6 +42,8 @@ def tree_entries(repo: Path, commit: str) -> dict[str, TreeEntry]:
 
 def tree_differences(repo: Path, commit: str, directory: Path) -> list[str]:
     """Paths where directory differs from commit's tree (the top-level .git is ignored)."""
+    if not _OID.fullmatch(commit):  # only a full object id: no revision syntax, no odd bytes
+        raise GitCommandError("commit must be a full lowercase hex object id")
     try:
         expected = tree_entries(repo, commit)
     except GitCommandError as exc:

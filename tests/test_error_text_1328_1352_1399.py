@@ -84,3 +84,13 @@ def test_timeout_returns_partial_output_and_kill_code():
         b"", timeout=1, output_cap=1000,
     )  # fmt: skip
     assert timed_out is True and code == -9 and out == b"p\n"
+
+
+@pytest.mark.parametrize(
+    "commit", ["HEAD", "abc123", "A" * 40, "0" * 39, "0" * 40 + "\xff", "0" * 41]
+)
+def test_commit_argument_must_be_a_full_hex_id(tmp_path, commit):
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    with pytest.raises(GitCommandError):
+        tree_differences(repo, commit, tmp_path)
