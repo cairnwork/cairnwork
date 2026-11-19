@@ -216,3 +216,42 @@ def test_redaction_covers_quoted_bearer_and_common_token_prefixes():
         assert "SECRET" not in redact(sample) and "ABCDEFGHIJKLMNOP" not in redact(sample)
         assert "abcSIGNATURE" not in redact(sample)
     assert redact("plain failure text") == "plain failure text"
+
+
+def test_worker_layout_regroups_checkout_scratch_and_venv_to_the_runs_gid(monkeypatch, tmp_path):
+    import os
+
+    from experimental.local_relay import worker_setup
+
+    others = [g for g in os.getgroups() if g != os.getgid()]
+    gid = others[0] if others else os.getgid()
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    os.chown(runs, -1, gid)
+    root = runs / ("a" * 32)
+    root.mkdir(mode=0o750)
+    checkout = root / "checkout"
+    (checkout / ".git" / "hooks").mkdir(parents=True)
+    (checkout / "tracked.py").write_text("pass\n", encoding="utf-8")
+    monkeypatch.setattr(worker_setup, "_worker_python", lambda: "/tool/python3.13")
+
+    def fake_run(argv, **_kwargs):
+        if argv[1] == "venv":
+            (root / "venv" / "bin").mkdir(parents=True)
+            (root / "venv" / "bin" / "python").write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(worker_setup.subprocess, "run", fake_run)
+
+    worker_setup.prepare_worker_layout(root, checkout)
+
+    for path in (
+        root / "tmp",
+        root / "q",
+        checkout,
+        checkout / ".git",
+        checkout / ".git" / "hooks",
+        checkout / "tracked.py",
+        root / "venv",
+        root / "venv" / "bin" / "python",
+    ):
+        assert path.stat().st_gid == gid, path
