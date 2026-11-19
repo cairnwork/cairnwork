@@ -45,6 +45,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from cairnwork.gitcmd import _child_env as _git_env
 from cairnwork.verifiers import parse_verifier, run_verifiers
 from cairnwork.verify_context import VerifyContext
 from cairnwork.workspace import create_attempt_clone, remove_attempt_clone
@@ -79,7 +80,11 @@ class ProbeResult:
 
 def _head(repo: Path) -> str:
     out = subprocess.run(  # noqa: S603 - fixed argv
-        ["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+        env=_git_env(),
     )
     return out.stdout.strip()
 
@@ -132,6 +137,7 @@ def _run_git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
         check=False,
+        env=_git_env(),
     )
 
 
@@ -187,7 +193,7 @@ def _include_problem(repo: Path, cfg: Path | None = None, scratch=None, chain=()
 def _config_files(repo: Path) -> list[Path]:
     """The global config files git reads, resolved the way git does (an unreadable system config
     makes git itself fail, which the exit-code check refuses)."""
-    env = os.environ
+    env = _git_env()  # what real Cairnwork git sees: no inherited GIT_* (#1370)
     if "GIT_CONFIG_GLOBAL" in env:  # then git reads no ~/.gitconfig and no XDG config
         files = [Path(env["GIT_CONFIG_GLOBAL"])]
     else:
@@ -246,6 +252,7 @@ def _mirror_multi_branch_reason(repo: Path) -> str | None:
             capture_output=True,
             text=True,
             check=False,
+            env=_git_env(),
         )
     except OSError as err:
         return f"could not read remote.origin.fetch ({err}); {unsure}"
@@ -282,6 +289,7 @@ def _mirror_multi_branch_reason(repo: Path) -> str | None:
             capture_output=True,
             text=True,
             check=False,
+            env=_git_env(),
         )
     except OSError as err:
         return f"could not list refs ({err}); {unsure}"
