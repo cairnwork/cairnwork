@@ -60,7 +60,6 @@ def test_digest_is_stable_and_ignores_caches_and_site_packages(tmp_path):
         lambda r: (r / "pkg" / "mod.py").rename(r / "pkg" / "other.py"),
         lambda r: (r / "pkg").chmod(0o700),  # a directory's mode
         lambda r: (r / "newdir").mkdir(),  # an empty directory added
-        lambda r: _swap_dir_for_symlink(r),  # a directory replaced by a symlink to another
         lambda r: _swap_dir_for_symlink(r, target_inside=True),
     ],
     ids=[
@@ -72,7 +71,6 @@ def test_digest_is_stable_and_ignores_caches_and_site_packages(tmp_path):
         "rename",
         "dir-mode",
         "empty-dir",
-        "dir-to-symlink",
         "dir-to-symlink-inside",
     ],  # fmt: skip
 )
@@ -154,18 +152,19 @@ def test_ci_records_in_the_trusted_venv_step_and_verifies_in_the_gate_step(job):
     assert steps[verify - 160 : verify].count("pra1353-trusted/.venv/bin/python") == 1
 
 
-def test_a_symlink_to_a_directory_is_part_of_the_digest(tmp_path):
+def test_a_symlink_to_a_directory_inside_the_trees_is_part_of_the_digest(tmp_path):
     """os.walk lists such a link among the directories without entering it: retargeting it, or
     swapping an empty directory for one, must still change the digest."""
     root = _fake_install(tmp_path)
+    (root / "other").mkdir()
     (root / "empty").mkdir()
     (root / "alias").symlink_to(root / "pkg", target_is_directory=True)
     before = _digest(root)
     (root / "alias").unlink()
-    (root / "alias").symlink_to(tmp_path, target_is_directory=True)  # retargeted
+    (root / "alias").symlink_to(root / "other", target_is_directory=True)  # retargeted
     retargeted = _digest(root)
     (root / "empty").rmdir()
-    (root / "empty").symlink_to(tmp_path, target_is_directory=True)  # empty dir -> link
+    (root / "empty").symlink_to(root / "pkg", target_is_directory=True)  # empty dir -> link
     assert len({before, retargeted, _digest(root)}) == 3
 
 
@@ -187,19 +186,23 @@ def test_a_symlink_to_a_file_outside_the_tree_counts_with_that_files_content(tmp
     assert _digest(root) != before
 
 
-def test_a_dangling_symlink_is_stable_and_a_retargeted_outside_dir_changes_the_digest(tmp_path):
+def test_a_dangling_symlink_is_stable(tmp_path):
     root = _fake_install(tmp_path)
     (root / "dangling").symlink_to(tmp_path / "nowhere")
     first = _digest(root)
     assert _digest(root) == first
     (root / "dangling").unlink()
+    (root / "dangling").symlink_to(tmp_path / "elsewhere")
+    assert _digest(root) != first
+
+
+def test_a_symlink_to_a_directory_outside_the_trees_fails_closed(tmp_path):
+    """Its content would go unseen, so recording (and verifying) refuses it."""
+    root = _fake_install(tmp_path)
     (tmp_path / "dir-a").mkdir()
-    (tmp_path / "dir-b").mkdir()
     (root / "outlink").symlink_to(tmp_path / "dir-a", target_is_directory=True)
-    a = _digest(root)
-    (root / "outlink").unlink()
-    (root / "outlink").symlink_to(tmp_path / "dir-b", target_is_directory=True)
-    assert _digest(root) != a
+    with pytest.raises(OSError, match="outside the trees"):
+        _digest(root)
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root reads everything")

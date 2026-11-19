@@ -44,7 +44,8 @@ def _file_digest(path: str) -> bytes:
 def _link_target(path: str, roots: list[str]) -> bytes:
     """What a symlink stands for, beyond its text: the content of a regular file it points at
     (a venv's bin/python usually points at the base install, outside the trees), the real path
-    of a directory outside the trees (inside them the walk covers it), a marker if dangling."""
+    of a directory inside the trees (the walk covers it; one outside them is an error, as its
+    content would go unseen), a marker if dangling."""
     try:
         info = os.stat(path)
     except FileNotFoundError:
@@ -53,8 +54,9 @@ def _link_target(path: str, roots: list[str]) -> bytes:
     if stat.S_ISREG(info.st_mode):
         return b"file" + _file_digest(real)
     if stat.S_ISDIR(info.st_mode):
-        inside = any(real == r or real.startswith(r + os.sep) for r in roots)
-        return b"dir-inside" if inside else b"dir-outside" + real.encode()
+        if not any(real == r or real.startswith(r + os.sep) for r in roots):
+            raise OSError(f"symlink to a directory outside the trees: {path}")  # fail closed
+        return b"dir-inside"
     raise OSError(f"symlink to something that is not a file or directory: {path}")
 
 
