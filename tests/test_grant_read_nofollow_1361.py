@@ -180,14 +180,21 @@ def test_grant_read_widens_mode_zero_entries_safely(tmp_path: Path) -> None:
     root = tmp_path / "checkout"
     closed = root / "closed"
     closed.mkdir(parents=True)
+    inner = closed / "inner.txt"
+    inner.write_text("x\n", encoding="utf-8")
+    inner.chmod(0o600)
     secret = root / "secret.txt"
     secret.write_text("x\n", encoding="utf-8")
     secret.chmod(0)
     closed.chmod(0)
     try:
         VerifierAccount.grant_read(root)
-        assert stat.S_IMODE(secret.stat().st_mode) == 0o044
-        assert stat.S_IMODE(closed.stat().st_mode) == 0o055
+        # owner bits are added too: group/other bits alone do not help the owning process
+        assert stat.S_IMODE(secret.stat().st_mode) == 0o444
+        assert stat.S_IMODE(closed.stat().st_mode) == 0o555
+        # and the walk went on inside the formerly closed directory
+        assert stat.S_IMODE(inner.stat().st_mode) == 0o644
+        assert inner.read_text(encoding="utf-8") == "x\n"
     finally:
         closed.chmod(0o700)
         secret.chmod(0o600)

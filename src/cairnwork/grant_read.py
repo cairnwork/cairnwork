@@ -53,7 +53,8 @@ def _chmod_unreadable(
     cur = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
     if not _matches_kind(cur.st_mode, is_dir=is_dir) or _ident(cur) != _ident(info):
         raise OSError(errno.ESTALE, "replaced while granting read", name)
-    os.chmod(name, stat.S_IMODE(cur.st_mode) | bits, dir_fd=dir_fd, follow_symlinks=False)
+    owner = 0o500 if is_dir else 0o400
+    os.chmod(name, stat.S_IMODE(cur.st_mode) | bits | owner, dir_fd=dir_fd, follow_symlinks=False)
     after = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
     if not _matches_kind(after.st_mode, is_dir=is_dir) or _ident(after) != _ident(info):
         raise OSError(errno.ESTALE, "replaced while granting read", name)
@@ -64,7 +65,7 @@ def _chmod_entry(dir_fd: int, name: str, info: os.stat_result, bits: int, *, is_
         fd = os.open(name, _DIR_FLAGS if is_dir else _REG_FLAGS, dir_fd=dir_fd)
     except PermissionError:
         _chmod_unreadable(dir_fd, name, info, bits, is_dir=is_dir)
-        return False
+        return is_dir  # widened (owner bits too), so descend and open its contents next
     try:
         got = os.fstat(fd)
         if not _matches_kind(got.st_mode, is_dir=is_dir) or _ident(got) != _ident(info):
