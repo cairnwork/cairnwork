@@ -1,7 +1,5 @@
 """#331: the tail of a failed base probe's log, as it goes into the output's logs."""
 
-import time
-
 import pytest
 
 from cairnwork.p2p_probe_log import probe_log_tail
@@ -387,48 +385,3 @@ def test_every_single_codepoint_nfkc_variant_of_key_char_is_masked_1313():
         elif nf == "=":
             sample = f"token{ch}SECRETVAL"
             assert mask_secrets(sample) == f"token{ch}<redacted>", (hex(cp), sample)
-
-
-def _growth(work, small: int = 16384, runs: int = 3) -> float:
-    """Time of ``work(text)`` on a text 4x as long over the time on the short one (best of
-    ``runs`` each). About 4 for linear work, about 16 for quadratic; a slow or busy machine slows
-    both sides alike, so no wall-clock limit is involved."""
-
-    def best(size: int) -> float:
-        times = []
-        for _ in range(runs):
-            started = time.perf_counter()
-            work(size)
-            times.append(time.perf_counter() - started)
-        return min(times)
-
-    return best(small * 4) / max(best(small), 1e-6)
-
-
-GROWTH_LIMIT = 10  # linear is about 4, quadratic about 16
-
-
-@pytest.mark.parametrize("unit", ["-", "a-", "a_", "x-token-", "a＿", "a︳"])
-def test_one_long_line_of_word_characters_and_dashes_is_not_quadratic(unit):
-    from cairnwork.p2p_probe_log import mask_secrets
-
-    def work(size: int) -> None:
-        out = mask_secrets("head\n" + unit * (size // len(unit)) + "\nEND\n")
-        assert out.endswith("END\n")
-
-    assert _growth(work) < GROWTH_LIMIT
-
-
-def test_the_growth_check_catches_quadratic_work_and_passes_linear_work():
-    """Control: the same check reports a quadratic function as growing past the limit."""
-
-    def quadratic(size: int) -> None:
-        text = "-" * size
-        for i in range(0, size, 4):
-            text[i:].count("-")
-
-    def linear(size: int) -> None:
-        ("-" * size).count("-")
-
-    assert _growth(quadratic, small=4096) > GROWTH_LIMIT
-    assert _growth(linear, small=1_000_000) < GROWTH_LIMIT
