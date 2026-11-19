@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import json
 from collections.abc import Callable, Sequence
 from urllib.parse import quote
 
@@ -21,8 +22,36 @@ from experimental.pause.schema import Reason
 
 HAIKU_MODEL = "claude-haiku-5-5"
 CHAT_TIMEOUT = 180.0
+GATE_MAX_TOKENS = (
+    2048  # thinking is on in the proxy (its effort/thinking are frozen); cap the total
+)
+# judge_v1.1 verdicts: only 可直接合併 passes; 需修改 and 不可用 are rejections.
+_VERDICTS = {"可直接合併": "ACCEPT", "需修改": "REJECT", "不可用": "REJECT"}
 
 Request = Callable[[str, str, "dict | None"], dict]
+
+
+def parse_verdict(text: str) -> str | None:
+    """Normalize a judge reply to ``ACCEPT\\n<reason>`` / ``REJECT\\n<reason>`` (or None).
+
+    Accepts the frozen JSON line (``{"verdict": ..., "reason": ...}``, possibly inside a code
+    fence or after thinking prose) and, failing that, the first standalone ACCEPT/REJECT line.
+    Anything else stays unparsed, so PAUSE reports BAD_OUTPUT rather than guessing.
+    """
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(text):
+        if char != "{":
+            continue
+        try:
+            value, _end = decoder.raw_decode(text[index:])
+        except ValueError:
+            continue
+        if isinstance(value, dict) and value.get("verdict") in _VERDICTS:
+            return f"{_VERDICTS[value['verdict']]}\n{str(value.get('reason', ''))[:300]}"
+    for line in text.splitlines():
+        if line.strip() in ("ACCEPT", "REJECT"):
+            return line.strip()
+    return None
 
 
 class _ChatTransport:
@@ -30,11 +59,17 @@ class _ChatTransport:
 
     def __init__(self, chat_url: str, request: Request) -> None:
         self.chat_url, self.request = chat_url, request
+        self.last_text = ""
 
     def send(
         self, model: str, effort: str, messages: Sequence[dict], timeout: float
     ) -> TransportResult:
-        body = {"model": HAIKU_MODEL, "messages": [dict(m) for m in messages]}
+        body = {
+            "model": HAIKU_MODEL,
+            "messages": [dict(m) for m in messages],
+            "max_tokens": GATE_MAX_TOKENS,
+        }
+        self.last_text = ""
         try:
             reply = self.request("POST", self.chat_url, body)
         except Exception:  # noqa: BLE001 - any proxy failure is a refusal, never a success
@@ -44,9 +79,10 @@ class _ChatTransport:
         if not isinstance(message, dict) or message.get("tool_calls"):
             return TransportResult(status=200, body=None)
         content = message.get("content")
-        return TransportResult(
-            status=200, body={"text": content} if isinstance(content, str) else None
-        )
+        if not isinstance(content, str):
+            return TransportResult(status=200, body=None)
+        self.last_text = content
+        return TransportResult(status=200, body={"text": parse_verdict(content) or content})
 
 
 class ProxyGate:
@@ -60,9 +96,8 @@ class ProxyGate:
         )
         self.request: Request = request or functools.partial(_proxy_request, timeout=CHAT_TIMEOUT)
         self.stage = "gate"
-        self._gate = HaikuGate(
-            _ChatTransport(f"{self.endpoint_url}/chat/completions", self.request), scanner
-        )
+        self._chat = _ChatTransport(f"{self.endpoint_url}/chat/completions", self.request)
+        self._gate = HaikuGate(self._chat, scanner)
 
     def set_stage(self, stage: str) -> None:
         self.stage = stage
@@ -76,6 +111,7 @@ class ProxyGate:
             self.request("POST", f"{self.label_url}/label", {"label": label})
         except Exception:  # noqa: BLE001 - an unlabelled review would be unattributed spend
             return refused
+        self._chat.last_text = ""
         try:
             reply = self._gate.review(request)
         finally:
@@ -97,6 +133,7 @@ class ProxyGate:
             input_tokens,
             output_tokens,
             usd,
+            self._chat.last_text,
         )
 
     @staticmethod

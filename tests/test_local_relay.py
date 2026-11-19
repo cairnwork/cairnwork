@@ -264,7 +264,14 @@ def test_ac6_jsonl_ledger_appends_complete_cloud_and_zero_cost_local_rows(tmp_pa
     assert result.route == "LOCAL_FIRST" and len(rows) == 2
     base_keys = {"task_id", "stage", "model_id", "input_tokens", "output_tokens", "usd"}
     assert set(rows[0]) == base_keys  # local rows carry only the base fields
-    gate_extra = {"acceptance_passed", "acceptance", "gate_verdict", "gate_reason", "gate_called"}
+    gate_extra = {
+        "acceptance_passed",
+        "acceptance",
+        "gate_verdict",
+        "gate_reason",
+        "gate_called",
+        "gate_text",
+    }
     assert set(rows[1]) == base_keys | gate_extra  # gate rows carry the per-stage evidence
     assert rows[1]["gate_verdict"] == "ACCEPT" and rows[1]["acceptance_passed"] is True
     assert rows[0] == {

@@ -29,6 +29,7 @@ class MeteredGateReply(GateReply):
     input_tokens: int = 0
     output_tokens: int = 0
     usd: float = 0.0
+    text: str = ""  # the gate's raw answer (redacted and cut before it is stored)
 
 
 class LocalWorkerAdapter:

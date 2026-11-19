@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
 from experimental.local_relay.config import FLAG, RelayConfig
+from experimental.local_relay.diagnostics import redact
 from experimental.local_relay.gate_plan import PlanIncomplete
 from experimental.local_relay.ledger import Ledger
 from experimental.local_worker.endpoint import (
@@ -213,6 +214,7 @@ def _stage(stage, result, reply, reason):
         "gate_verdict": getattr(reply, "verdict", None),
         "gate_reason": reason,
         "gate_called": True,
+        "gate_text": redact(str(getattr(reply, "text", "") or ""))[:300],
     }
 
 

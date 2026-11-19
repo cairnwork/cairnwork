@@ -53,7 +53,11 @@ def test_plan_has_the_task_the_relative_diff_and_new_files_but_no_host_paths(tmp
     assert "-    return items[n:]" in plan and "+    return items[-n:]" in plan
     assert "New file pkg/extra.py" in plan and "VALUE = 1" in plan
     assert str(tmp_path) not in plan and "/Users/" not in plan and "RunResult" not in plan
-    assert plan.rstrip().endswith("then a short reason.")
+    assert plan.startswith("你是一位嚴格的程式碼審查者")
+    assert "【Issue】\nFix last_n" in plan and "【修正（unified diff）】" in plan
+    assert (
+        plan.index("【Issue】") < plan.index("【修正（unified diff）】") < plan.index("+    return")
+    )
 
 
 def test_plan_needs_a_checkout_and_a_base_commit(tmp_path):
@@ -327,3 +331,16 @@ def test_plan_requires_the_trusted_source_repository(tmp_path):
             {"prompt": "p", "allowed_files": []},
             RunResult(0, "", repo.parent, repo, base_sha=base),
         )
+
+
+def test_the_judge_header_is_the_frozen_experiment_prompt_byte_for_byte():
+    import hashlib
+
+    from experimental.local_relay.gate_plan import JUDGE_HEADER, JUDGE_HEADER_SHA256
+
+    raw = JUDGE_HEADER.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == JUDGE_HEADER_SHA256
+    text = raw.decode("utf-8")
+    for verdict in ("可直接合併", "需修改", "不可用"):
+        assert verdict in text
+    assert text.endswith('"}\n\n')  # the plan appends 【Issue】 right after this blank line

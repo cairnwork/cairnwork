@@ -47,7 +47,8 @@ def test_review_is_a_plain_chat_without_tools_and_reports_real_cost():
     assert (reply.verdict, reply.reason) == ("ACCEPT", None)
     assert (reply.input_tokens, reply.output_tokens, reply.usd) == (812, 61, 0.0049)
     chat = next(b for m, u, b in proxy.calls if u.endswith("/chat/completions"))
-    assert set(chat) == {"model", "messages"} and chat["model"] == HAIKU_MODEL
+    assert set(chat) == {"model", "messages", "max_tokens"} and chat["model"] == HAIKU_MODEL
+    assert chat["max_tokens"] == 2048
     assert "tools" not in chat and "tool_choice" not in chat
     steps = [(m, u.split("/ab/")[-1] if "/ab/" in u else "chat") for m, u, _ in proxy.calls]
     assert steps == [
@@ -121,3 +122,39 @@ def test_blocked_request_keeps_its_original_reason_when_no_spend_was_metered():
 def test_a_verdict_with_unknown_cost_is_still_refused():
     reply = ProxyGate(URL, FakeProxy(stats={**STATS, "requests": 0})).review(_request())
     assert reply.verdict is None and reply.reason is Reason.PAUSE_GATE_REFUSED
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ('{"verdict": "可直接合併", "reason": "ok"}', "ACCEPT\nok"),
+        ('{"verdict": "需修改", "reason": "漏了一項"}', "REJECT\n漏了一項"),
+        ('{"verdict": "不可用", "reason": "x"}', "REJECT\nx"),
+        ('thinking...\n```json\n{"verdict": "可直接合併", "reason": "r"}\n```', "ACCEPT\nr"),
+        ("ramble\nACCEPT\nmore", "ACCEPT"),
+        ("ramble\nREJECT", "REJECT"),
+        ("I think ACCEPT is right", None),
+        ('{"verdict": "maybe", "reason": "x"}', None),
+        ("", None),
+    ],
+)
+def test_judge_reply_parsing_is_tolerant_but_never_guesses(text, expected):
+    from experimental.local_relay.proxy_gate import parse_verdict
+
+    assert parse_verdict(text) == expected
+
+
+def test_a_json_verdict_reply_gates_through_pause_and_keeps_the_raw_text():
+    chat = {
+        "choices": [{"message": {"content": '{"verdict": "可直接合併", "reason": "沒有缺陷"}'}}]
+    }
+    reply = ProxyGate(URL, FakeProxy(chat=chat)).review(_request())
+    assert reply.verdict == "ACCEPT" and reply.reason is None
+    assert "可直接合併" in reply.text
+
+
+def test_an_unparseable_reply_is_bad_output_and_its_text_is_kept_for_diagnosis():
+    chat = {"choices": [{"message": {"content": "hmm, hard to say"}}]}
+    reply = ProxyGate(URL, FakeProxy(chat=chat)).review(_request())
+    assert reply.verdict is None and reply.reason is Reason.PAUSE_GATE_BAD_OUTPUT
+    assert reply.text == "hmm, hard to say"

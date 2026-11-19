@@ -18,6 +18,10 @@ from typing import Any
 
 from experimental.pause.git_env import hardened_git_env
 
+JUDGE_HEADER = Path(__file__).with_name("judge_v1_1_header.txt")
+# The G1-G3 experiments' frozen judge_v1.1 prompt header, byte for byte (verdicts 可直接合併 /
+# 需修改 / 不可用); the relay's gate must ask the same question the experiments measured.
+JUDGE_HEADER_SHA256 = "8cb36edb5f3f5ff9d5a86b329187482c075f40a526474d09cb6fb6afad87cc56"
 MAX_PLAN_CHARS = 30000
 MAX_DIFF_BYTES = 60000
 MAX_NEW_FILE_BYTES = 8000
@@ -173,21 +177,20 @@ def build_gate_plan(task: dict[str, Any], candidate: Any) -> str:
         listing = _git(checkout, "ls-files", "--others", "-z", limit=MAX_LISTING_BYTES, env=env)
     if any(line.startswith("Binary files ") for line in diff.splitlines()):
         raise PlanIncomplete("the diff hides content behind a binary placeholder")
-    parts = [
-        "Task:\n" + str(task.get("prompt", "")).strip(),
-        "Allowed files: " + ", ".join(task.get("allowed_files", [])),
-        "Change (git diff against the base commit):\n" + (diff or "(no tracked changes)"),
-    ]
+    issue = str(task.get("prompt", "")).strip()
+    issue += "\n\nAllowed files: " + ", ".join(task.get("allowed_files", []))
+    parts = [diff or "(no tracked changes)"]
     root_fd = os.open(checkout, os.O_RDONLY | os.O_DIRECTORY)
     try:
         device = os.fstat(root_fd).st_dev
         for raw in listing.split(b"\0"):
             if raw:
                 rel = raw.decode("utf-8", "replace")
-                parts.append(f"New file {rel}:\n{_read_new_file(root_fd, device, rel)}")
+                parts.append(f"New file {rel}:\n{_read_new_file(root_fd, device, rel)}")  # as text
     finally:
         os.close(root_fd)
-    plan = "\n\n".join(parts)
+    header = JUDGE_HEADER.read_text(encoding="utf-8")
+    plan = f"{header}【Issue】\n{issue}\n\n【修正（unified diff）】\n" + "\n\n".join(parts) + "\n"
     if len(plan) > MAX_PLAN_CHARS:
         raise PlanIncomplete(f"plan exceeds {MAX_PLAN_CHARS} characters")
-    return plan + "\n\nReply on the first line with exactly ACCEPT or REJECT, then a short reason."
+    return plan
