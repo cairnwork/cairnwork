@@ -29,7 +29,10 @@ def test_shared_node_id_parser_preserves_file_path_and_strips_case(nodeid, expec
 def test_case_ids_containing_double_colon_are_stripped_in_every_part():
     nodeid = "tests/t.py::C[a::b]::test_y[c::d]"
     assert without_case(nodeid) == "tests/t.py::C"  # shared helper: cut at the first [
-    assert function_from_p2p(nodeid) == "tests/t.py::C::test_y"
+    # layer1 ruling 11/19 (cw#1499, option A): one parser, cut at the first "[" of the name. pytest
+    # does not emit class-parametrized ids of this shape (a class parameter lands on the last
+    # segment, test_y[a-c]), so the coarser key is not a real input; it was ...::C::test_y
+    assert function_from_p2p(nodeid) == "tests/t.py::C"
     assert function_from_nodes(nodeid) == "tests/t.py::C"
 
 

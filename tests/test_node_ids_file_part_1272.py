@@ -13,6 +13,17 @@ from cairnwork.taskpaths import check_task_paths
 
 ODD = "a::b/test_t.py"
 CASE_IDS = [
+    "t.py::C[a]::test_y[c]",
+    "tests/t.py::C[a::b]::test_y[c::d]",
+    "t.py::a[b]]",
+    "t.py::test_x::",
+    "t.py::::test_x",
+    "t.py::",
+    "t.py::test_x[",
+    "t.py::test_x[1",
+    "t.py::tést_ü[ä]::b]",
+    "a::b::t.py::test_x[1]",
+    "::t.py::test_x[1]",
     "t.py::test_x[a]::b]",
     "t.py::test_p[a]::b[c]]",
     "t.py::test_p[]::t]",
@@ -26,7 +37,7 @@ CASE_IDS = [
 
 
 @pytest.mark.parametrize("nodeid", CASE_IDS)
-def test_p2p_function_agrees_with_node_ids_on_ids_without_a_parametrized_class(nodeid):
+def test_p2p_function_agrees_with_node_ids(nodeid):
     want = node_ids.without_case(nodeid)
     assert p2p_function._without_case(nodeid) == want
     assert p2p_function._without_case(nodeid, all_parts=True) == want
@@ -75,28 +86,3 @@ def test_the_collect_hint_names_a_collection_error_in_a_path_with_double_colons(
 
     got = base_comparison([run], frozenset({f"{ODD}::test_y"}))
     assert COLLECT_HINT in got.detail
-
-
-def test_a_parametrized_class_keeps_its_method_name():
-    # the old expectation of test_node_ids_1036 stays: only node_ids.without_case cuts at the
-    # first "[", so dropping the method of a parametrized class is not a feature of p2p_function
-    nodeid = "tests/t.py::C[a::b]::test_y[c::d]"
-    assert p2p_function._without_case(nodeid) == "tests/t.py::C[a::b]::test_y"
-    assert p2p_function._function(nodeid) == "tests/t.py::C::test_y"
-    assert p2p_function._without_case("t.py::C[a]::test_z") == "t.py::C[a]::test_z"  # no case
-
-
-@pytest.mark.parametrize(
-    ("nodeid", "without", "file"),
-    [
-        ("a::b::t.py::test_x[1]", "a::b::t.py::test_x", "a::b::t.py"),  # several :: in the path
-        ("t.py::test_x::", "t.py::test_x::", "t.py"),  # trailing :: is not a name: left whole
-        ("t.py::::test_x", "t.py::::test_x", "t.py"),  # empty segment: left whole
-        ("t.py::", "t.py::", "t.py"),  # no name at all
-        ("::t.py::test_x[1]", "::t.py::test_x", "::t.py"),  # empty first path segment
-        ("t.py::test_x[1", "t.py::test_x", "t.py"),  # unclosed case
-    ],
-)
-def test_boundary_inputs_are_stable(nodeid, without, file):
-    assert p2p_function._without_case(nodeid) == without
-    assert node_ids.file_part(nodeid) == file
