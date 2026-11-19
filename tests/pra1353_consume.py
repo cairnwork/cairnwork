@@ -127,7 +127,8 @@ def launch(
         stdlib_roots = [Path(paths["stdlib"]), Path(paths["platstdlib"])]
         # Fixed shape for the runner's seven-root check, even where stdlib == platstdlib (macOS).
         roots = [*stdlib_roots, Path(paths["platstdlib"]) / "lib-dynload"]
-        imports = [sealed / "src", sealed / "tests", Path(paths["purelib"]), Path(paths["platlib"])]
+        # Sealed tests come before src, so a tracked src/*.py cannot shadow a pinned witness name.
+        imports = [sealed / "tests", sealed / "src", Path(paths["purelib"]), Path(paths["platlib"])]
         env = {
             "PATH": "/usr/bin:/bin",
             "HOME": str(temp_root),
@@ -161,6 +162,7 @@ def launch(
             _validate_module_origins(
                 report.get("modules"), pins, source_pins, sealed, roots, imports
             )
+            _require_runner_witnesses(report.get("modules"), sealed)
             _validate_child_reports(
                 report.get("child_reports"), pins, source_pins, sealed, roots, imports
             )
@@ -171,7 +173,32 @@ def launch(
 
 
 def _tracked_source_bytes(repo: Path = ROOT) -> dict[str, bytes]:
-    return tracked_py_blobs(repo, prefix="src/")
+    blobs = tracked_py_blobs(repo, prefix="src/")
+    for name in blobs:
+        top_level = name.split("/")[1]
+        if top_level not in _PRODUCT_TOP_LEVELS:
+            raise ValueError(f"tracked src path is not a product package: {_neutralize(name)}")
+    return blobs
+
+
+_RUNNER_WITNESSES = (
+    "pra1353_c10",
+    "pra1353_derive",
+    "pra1353_extra",
+    "pra1353_launch",
+    "pra1353_probe",
+    "pra1353_recipes",
+)
+
+
+def _require_runner_witnesses(modules: Any, sealed: Path) -> None:
+    """Every witness the runner must load is reported, and was served from the sealed tests."""
+    served = {item.get("name"): item.get("file") for item in modules if isinstance(item, dict)}
+    for name in _RUNNER_WITNESSES:
+        expected = (sealed / "tests" / f"{name}.py").resolve()
+        file = served.get(name)
+        if not isinstance(file, str) or Path(file).resolve() != expected:
+            raise ValueError(f"runner witness not loaded from sealed tests: {name}")
 
 
 def _reject_sealed_bytecode(sealed: Path) -> None:

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import subprocess
 import sys
 import tempfile
@@ -22,14 +23,14 @@ PINS = {
     "tests/attest/test_verify.py": "156795f6ee20d46c692b4a27e15ab36525b7ab7fce945722b39a3067c68a9b83",
     "tests/conftest.py": "a6f527a6ae989b47ef7cd10b270206d7e8c0e391064eac8eef03f9f3693219fd",
     "tests/pra1353_c10.py": "e06afe85538ba55c9c6a22f76a13033aff8840ff32d1150c28283ada3d47a056",
-    "tests/pra1353_consume.py": "71864d90258a6a2ace6a08c5ae86e89793a90c43045ee561e4af95176491c353",
+    "tests/pra1353_consume.py": "7f29d4cc9643e512fd0cfc742882d2d46c1f65e621cde803664f4b3c3448a266",
     "tests/pra1353_derive.py": "3e301ec245fba896b12798554ccb8391f2facaf6409567772882aad7592d534e",
-    "tests/pra1353_extra.py": "bed263b4e81576995ef15e37f2f1b694a8f596e8349a4bc840c2b40336cf4675",
+    "tests/pra1353_extra.py": "f28c9d6acc84fa89649230b299499ca764e2e22d9aae88553813209f6fa853b5",
     "tests/pra1353_launch.py": "42c3e13e06ac2bb402575c451480bbfca72262a6a9ece6d4889945c737d65048",
     "tests/pra1353_probe.py": "fb2a1e14cffed0c6babe365e4d67ca7f26257eb95c443fcbcd0f7c7f0dbbd974",
     "tests/pra1353_receipt.py": "d3121468ba6b46d12c466c1d79bd5bb49e832262a9fe36b49a36ff332bb054ae",
     "tests/pra1353_recipes.py": "87b8cf6e1d3c3618bc797ea9511b347e8d413dd752197ab5b368663efa2440b6",
-    "tests/pra1353_runner.py": "8b6ad5cd5399c0b9222378ab7dc0e9a8ee75e38aba2c261b642039f0f60d0262",
+    "tests/pra1353_runner.py": "e009c2b30f7cadd05ec5b990aaabded8c5bb9e8733f524e39011c4d2d02bc385",
     "tests/pra1353_gate.py": "6ba80619b8ba23846368eb921d130936e3fe8b2ad5e8d72a74ac610de78cdc72",
     "tests/pra1353_seal.py": "a0142da6d0499aa0263f1f1a7bba5f57e24840420a8fe51f15295e0f5e180c4e",
     "tests/xdist_groups.py": "08f332bef3401fd38390db53a60a158ebb78686d1ec33a7af1c9d4337692e673",
@@ -38,6 +39,45 @@ PINS = {
 }
 
 _ACCOUNT_GAP = consume._ACCOUNT_GAP
+
+
+def _with_runner_witnesses(run):
+    """A fake runner's report names the witnesses a real runner always loads (cw#1468)."""
+
+    def call(args, **kwargs):
+        done = run(args, **kwargs)
+        try:
+            report = json.loads(done.stdout)
+        except (TypeError, ValueError):
+            return done
+        if done.returncode != 0 or not isinstance(report, dict):
+            return done
+        modules = report.get("modules")
+        if not isinstance(modules, list):
+            return done
+        sealed = Path(args[4]).parents[1]
+        seen = {m.get("name") for m in modules if isinstance(m, dict)}
+        for name in consume._RUNNER_WITNESSES:
+            if name not in seen:
+                file = str(sealed / "tests" / f"{name}.py")
+                modules.append(
+                    {"name": name, "file": file, "origin": file, "loader": "SourceFileLoader"}
+                )
+        return subprocess.CompletedProcess(args, 0, json.dumps(report), done.stderr)
+
+    return call
+
+
+@pytest.fixture
+def fake_runner_reports_witnesses(monkeypatch):
+    real = consume.launch
+
+    def launch(pins, *, run=subprocess.run, **kwargs):
+        if run is not subprocess.run:
+            run = _with_runner_witnesses(run)
+        return real(pins, run=run, **kwargs)
+
+    monkeypatch.setattr(consume, "launch", launch)
 
 
 @pytest.fixture(scope="session")
