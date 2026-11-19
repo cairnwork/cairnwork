@@ -166,8 +166,11 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
       policy path whitelist `^/[A-Za-z0-9 _./+@~-]*$`. Seatbelt keeps the strict whitelist for
       every path, so non-ASCII, colon and parenthesis paths still refuse the run there. Both
       backends: a root-owned 0700 subdirectory in a credential directory refuses the run; owner
-      mode refuses a link target it cannot stat; a credential subdirectory that disappears or is
-      renamed during the link scan still refuses the run (fail closed, not skipped). Outside
+      mode refuses a link target it cannot stat; a credential subdirectory that is renamed, swapped
+      for a link or retyped during the link scan restarts the scan (up to 3 passes; the scan is
+      depth first, opens each child by descriptor without following a link and checks it by device
+      and inode, #1314/#1354); one that disappears or moved out of the tree, or a mount point
+      below the directory, refuses the run (fail closed, not skipped). Outside
       directories a link points to are scanned too, with at most 64 scan roots in all (#427; more
       refuse the run). Residual: two-hop masking is not yet confirmed on real bwrap.
     - **Socket trees**: `/tmp/.X11-unix` (an X server lets a process inject input and run commands

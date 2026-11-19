@@ -1,6 +1,4 @@
-"""#423: a credential-link target with non-ASCII letters, parentheses or a colon is no longer a
-false refusal; every line-forging character stays refused. A directory vanishing or renamed
-mid-scan still refuses."""
+"""#423 path-character checks and #1314/#1354 changing-tree scan behavior."""
 
 import os
 import shutil
@@ -66,16 +64,19 @@ def _outside(tmp_path, name):
     return target
 
 
-def _hook_scandir(monkeypatch, victim, action):
-    """Run ``action`` right before ``victim`` is opened for scanning (a race at that moment)."""
-    real = os.scandir
+def _hook_open(monkeypatch, victim, action):
+    """Run ``action`` before a child directory is opened."""
+    real = os.open
+    fired = False
 
-    def scandir(path):
-        if str(path).endswith(victim):
-            action(str(path))
-        return real(path)
+    def open_(path, flags, *args, **kwargs):
+        nonlocal fired
+        if not fired and (str(path).endswith(victim) or str(path) == Path(victim).name):
+            fired = True
+            action()
+        return real(path, flags, *args, **kwargs)
 
-    monkeypatch.setattr(bwrap_inner.os, "scandir", scandir)
+    monkeypatch.setattr(bwrap_inner.os, "open", open_)
 
 
 def _home(tmp_path, depth):
@@ -105,20 +106,27 @@ def _rename_to_file(path):
     ],
     ids=["renamed", "renamed-and-replaced-by-file", "renamed-above-depth-2"],
 )
-def test_renamed_credential_subtree_still_refuses(tmp_path, monkeypatch, depth, action, victim):
+def test_renamed_credential_subtree_never_leaves_target_unmasked(
+    tmp_path, monkeypatch, depth, action, victim
+):
     home = _home(tmp_path, depth)
+    target = home / ".aws" / "a"
     if depth == 2:
-        # the rename happens when "a/a" is about to be scanned: "a" is moved away first
-        victim = "/a/a"
-        action = lambda p: os.rename(p[: -len("/a")], p[: -len("/a")] + "2")  # noqa: E731
-    _hook_scandir(monkeypatch, victim, action)
-    with pytest.raises(SandboxError):
-        bwrap.BACKEND.policy((), (), home=home)
+        # The nested child open is hooked by name; rename its parent before it can be opened.
+        _hook_open(monkeypatch, "/a/a", lambda: target.rename(home / ".aws" / "a2"))
+    else:
+        _hook_open(monkeypatch, victim, lambda: action(str(target)))
+    try:
+        text = bwrap.BACKEND.policy((), (), home=home).text
+        assert os.path.realpath(tmp_path / "outside" / "secret") in text
+    except SandboxError:
+        pass
 
 
 def test_a_credential_subdirectory_vanishing_during_the_scan_refuses(tmp_path, monkeypatch):
     home = _home(tmp_path, 1)
-    _hook_scandir(monkeypatch, "/a", lambda p: shutil.rmtree(p))
+    target = home / ".aws" / "a"
+    _hook_open(monkeypatch, "/a", lambda: shutil.rmtree(target))
     with pytest.raises(SandboxError):
         bwrap.BACKEND.policy((), (), home=home)
 
@@ -126,32 +134,38 @@ def test_a_credential_subdirectory_vanishing_during_the_scan_refuses(tmp_path, m
 @pytest.mark.parametrize(
     "err", [FileNotFoundError(2, "x"), NotADirectoryError(20, "x"), PermissionError(13, "x")]
 )
-def test_links_in_refuses_when_a_subdirectory_cannot_be_opened(tmp_path, monkeypatch, err):
+def test_links_in_retries_changed_subdirectory_but_refuses_other_open_errors(
+    tmp_path, monkeypatch, err
+):
     base = tmp_path / "cred"
     (base / "sub").mkdir(parents=True)
-    orig = os.scandir
+    orig = os.open
 
-    def scandir(path):
-        if str(path).endswith("/sub"):
+    def open_(path, flags, *args, **kwargs):
+        if str(path) == "sub":
             raise err
-        return orig(path)
+        return orig(path, flags, *args, **kwargs)
 
-    monkeypatch.setattr(bwrap_inner.os, "scandir", scandir)
-    with pytest.raises(SandboxError):
-        bwrap_inner._links_in(str(base))
+    monkeypatch.setattr(bwrap_inner.os, "open", open_)
+    if isinstance(err, (FileNotFoundError, NotADirectoryError)):
+        with pytest.raises(SandboxError, match="changing"):
+            bwrap_inner._links_in(str(base))
+    else:
+        with pytest.raises(SandboxError, match="cannot scan"):
+            bwrap_inner._links_in(str(base))
 
 
 @pytest.mark.parametrize("err", [FileNotFoundError(2, "x"), PermissionError(13, "x")])
 def test_a_missing_credential_directory_scan_stays_refused(tmp_path, monkeypatch, err):
     base = tmp_path / "cred"
     base.mkdir()
-    orig = os.scandir
+    orig = os.open
 
-    def scandir(path):
+    def open_(path, flags, *args, **kwargs):
         if str(path) == str(base):
             raise err
-        return orig(path)
+        return orig(path, flags, *args, **kwargs)
 
-    monkeypatch.setattr(bwrap_inner.os, "scandir", scandir)
+    monkeypatch.setattr(bwrap_inner.os, "open", open_)
     with pytest.raises(SandboxError):
         bwrap_inner._links_in(str(base))

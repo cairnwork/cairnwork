@@ -27,6 +27,7 @@ directory and refuses, as it does when a directory cannot be read (fail closed).
 
 from __future__ import annotations
 
+import errno
 import os
 from collections.abc import Callable
 
@@ -35,7 +36,10 @@ from cairnwork_sandbox.bwrap_reach import account_may_traverse
 
 SCAN_LIMIT = 50_000
 SCAN_DEPTH = 3
+SCAN_ATTEMPTS = 3
 SCAN_BASES = 64  # scan roots in all: the credential directories and outside link targets
+_CHILD = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+_CHANGED = (errno.ENOENT, errno.ENOTDIR, errno.ELOOP)
 SYSTEM_PREFIXES = ("/usr/", "/nix/store/", "/gnu/store/", "/snap/")
 ETC = "/etc/"
 DANGLING_NOTE = "dangling credential links skipped, outside every read and write root: "
@@ -134,34 +138,79 @@ def _covered(real: str, dirs: set[str]) -> bool:
         current = parent
 
 
-def _links_in(base: str) -> tuple[list[str], int]:
+def _links_in(base: str, attempts: int = SCAN_ATTEMPTS) -> tuple[list[str], int]:
     """Every symlink up to ``SCAN_DEPTH`` levels below ``base``, without following links, and the
-    number of directories at that depth left unscanned. Refused past ``SCAN_LIMIT`` entries or
-    when a directory cannot be scanned."""
-    links: list[str] = []
-    seen = unscanned = 0
-    stack = [(base, 0)]
-    while stack:
-        current, depth = stack.pop()
+    number of directories at that depth left unscanned; refused past ``SCAN_LIMIT`` entries or when
+    a directory cannot be scanned. Depth first, each child opened by fd without following a link
+    (#1314). A directory is (inode, device) from its listing and the opened fd must match; a listed
+    directory must still be the one its path names; else scan again, up to ``attempts`` passes
+    (#1354). A directory seen earlier but missing from the last pass (moved out) refuses."""
+    seen_ids: set[tuple[int, int]] = set()
+    for _ in range(attempts):
+        ids: set[tuple[int, int]] = set()
         try:
-            with os.scandir(current) as found:
-                entries = [(e.path, e.is_symlink(), e.is_dir(follow_symlinks=False)) for e in found]
+            links, unscanned = _pass(base, ids)
+            if seen_ids - ids:
+                raise _Changed(errno.ENOENT, "directory swapped during the scan")
+            return links, unscanned
         except OSError as err:
+            last = err
+            if err.errno not in _CHANGED:
+                break
+        seen_ids |= ids
+    changing = "; the tree kept changing" if last.errno in _CHANGED else ""
+    raise SandboxError(
+        f"credential directory {base!r}: cannot scan it for links ({last.strerror}{changing});"
+        " a link left unscanned could leave its target readable"
+    ) from last
+
+
+def _pass(base: str, ids: set[tuple[int, int]]) -> tuple[list[str], int]:
+    """One pass of ``_links_in``; the identity of each directory listed goes to ``ids``."""
+    links: list[str] = []
+    count = [0, 0]  # entries seen, directories left unscanned
+
+    def walk(path: str, depth: int, fd: int) -> None:
+        st = os.fstat(fd)
+        with os.scandir(fd) as found:
+            entries = [
+                (e.name, e.is_symlink(), e.inode() if e.is_dir(follow_symlinks=False) else 0)
+                for e in found
+            ]
+        if not os.path.samestat(st, os.lstat(path)):
+            raise _Changed(errno.ENOENT, "directory swapped during the scan")
+        ids.update((ino, st.st_dev) for _, _, ino in entries if ino)
+        count[0] += len(entries)
+        if count[0] > SCAN_LIMIT:
             raise SandboxError(
-                f"credential directory {base!r}: cannot scan {current!r} for links"
-                f" ({err.strerror}); a link left unscanned could leave its target readable"
-            ) from err
-        seen += len(entries)
-        if seen > SCAN_LIMIT:
-            raise SandboxError(
-                f"credential directory {base!r} has more than {SCAN_LIMIT} entries within depth"
-                f" {SCAN_DEPTH} to scan for links; move bulk data out of it"
+                f"credential directory {base!r} has more than {SCAN_LIMIT} entries within"
+                f" depth {SCAN_DEPTH} to scan for links; move bulk data out of it"
             )
-        for path, is_link, is_dir in entries:
+        for name, is_link, ino in entries:
             if is_link:
-                links.append(path)
-            elif is_dir and depth + 1 < SCAN_DEPTH:
-                stack.append((path, depth + 1))
-            elif is_dir:
-                unscanned += 1
-    return links, unscanned
+                links.append(os.path.join(path, name))
+            elif ino and depth + 1 < SCAN_DEPTH:
+                child = os.open(name, _CHILD, dir_fd=fd)
+                try:
+                    got = os.fstat(child)
+                    if got.st_dev != st.st_dev:
+                        raise SandboxError(f"{path}/{name} in {base!r} is a mount point")
+                    if got.st_ino != ino:  # not the directory the listing named
+                        raise _Changed(errno.ENOENT, "directory swapped during the scan")
+                    walk(os.path.join(path, name), depth + 1, child)
+                finally:
+                    os.close(child)
+            elif ino:
+                count[1] += 1
+
+    root = os.open(base, _CHILD)
+    try:
+        ids.add(os.fstat(root)[1:3])
+        walk(base, 0, root)
+    finally:
+        os.close(root)
+    return links, count[1]
+
+
+class _Changed(OSError):
+    """A scanned directory was renamed, removed or retyped while it was being scanned."""
