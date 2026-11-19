@@ -9,7 +9,9 @@ unseen part of the change can never be approved.
 
 from __future__ import annotations
 
+import contextlib
 import os
+import re
 import stat
 import subprocess
 import tempfile
@@ -22,6 +24,7 @@ JUDGE_HEADER = Path(__file__).with_name("judge_v1_1_header.txt")
 # The G1-G3 experiments' frozen judge_v1.1 prompt header, byte for byte (verdicts 可直接合併 /
 # 需修改 / 不可用); the relay's gate must ask the same question the experiments measured.
 JUDGE_HEADER_SHA256 = "8cb36edb5f3f5ff9d5a86b329187482c075f40a526474d09cb6fb6afad87cc56"
+_SHA = re.compile(r"[0-9a-f]{40}\Z")
 MAX_PLAN_CHARS = 30000
 MAX_DIFF_BYTES = 60000
 MAX_NEW_FILE_BYTES = 8000
@@ -112,10 +115,51 @@ def _git(checkout: Path, *args: str, limit: int, env: dict[str, str]) -> bytes:
     return data
 
 
-def _read_new_file(root_fd: int, device: int, rel: str) -> str:
-    """Contents of one untracked file, or the link target for a symlink; never follows links."""
+@contextlib.contextmanager
+def _scratch_index(source: Path, checkout: Path, base: str):
+    """A scratch GIT_DIR whose index is the base tree: the worker's ``.git`` is never read."""
+    if not _SHA.fullmatch(base):
+        raise ValueError("base commit must be 40 lowercase hex characters")
+    objects = _trusted_objects(Path(source))
+    with tempfile.TemporaryDirectory(prefix="relay-gate-git-") as tmp:
+        scratch = Path(tmp)
+        env = _env(scratch, checkout, objects)
+        _git(checkout, "init", "-q", "--template=", str(scratch / "gitdir"), limit=4096, env=env)
+        _git(checkout, "read-tree", base, limit=MAX_LISTING_BYTES, env=env)  # index := base tree
+        yield env
+
+
+def _names(raw: bytes) -> list[str]:
+    return [item.decode("utf-8", "surrogateescape") for item in raw.split(b"\0") if item]
+
+
+def _tracked_names(checkout: Path, env: dict[str, str]) -> list[str]:
+    return _names(
+        _git(
+            checkout,
+            "diff",
+            "--name-only",
+            "-z",
+            "--no-renames",
+            "--ignore-submodules=none",
+            limit=MAX_LISTING_BYTES,
+            env=env,
+        )
+    )
+
+
+def changed_paths(source: Path, checkout: Path, base: str) -> set[str]:
+    """Every tracked change and every untracked file, read without trusting the worker's repo."""
+    with _scratch_index(source, checkout, base) as env:
+        tracked = _tracked_names(checkout, env)
+        others = _git(checkout, "ls-files", "--others", "-z", limit=MAX_LISTING_BYTES, env=env)
+    return set(tracked) | set(_names(others))
+
+
+def _parent_fd(root_fd: int, rel: str) -> tuple[int, str]:
+    """Open the parent directory of ``rel`` below ``root_fd`` without following any link."""
     path = PurePosixPath(rel)
-    if path.is_absolute() or ".." in path.parts:
+    if path.is_absolute() or ".." in path.parts or not path.parts:
         raise PlanIncomplete(f"unsafe path: {rel}")
     fd = os.open(".", os.O_RDONLY | os.O_DIRECTORY, dir_fd=root_fd)
     try:
@@ -123,7 +167,34 @@ def _read_new_file(root_fd: int, device: int, rel: str) -> str:
             nxt = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
             os.close(fd)
             fd = nxt
-        name = path.parts[-1]
+    except OSError as exc:
+        os.close(fd)
+        raise PlanIncomplete(f"cannot reach {rel}: {exc.strerror}") from exc
+    return fd, path.parts[-1]
+
+
+def _check_tracked(root_fd: int, device: int, rel: str) -> None:
+    """A changed tracked path must be a plain file (nlink 1, same device), a link or gone."""
+    fd, name = _parent_fd(root_fd, rel)
+    try:
+        try:
+            info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return  # deleted: git diff shows the removal
+        except OSError as exc:
+            raise PlanIncomplete(f"cannot inspect {rel}: {exc.strerror}") from exc
+    finally:
+        os.close(fd)
+    if stat.S_ISLNK(info.st_mode):
+        return  # git diff shows the link target text, never the pointed-to content
+    if not stat.S_ISREG(info.st_mode) or info.st_dev != device or info.st_nlink != 1:
+        raise PlanIncomplete(f"changed file is not a plain single-link file: {rel}")
+
+
+def _read_new_file(root_fd: int, device: int, rel: str) -> str:
+    """Contents of one untracked file, or the link target for a symlink; never follows links."""
+    fd, name = _parent_fd(root_fd, rel)
+    try:
         info = os.stat(name, dir_fd=fd, follow_symlinks=False)
         if stat.S_ISLNK(info.st_mode):
             return "(symlink to " + os.readlink(name, dir_fd=fd) + ")"
@@ -156,12 +227,8 @@ def build_gate_plan(task: dict[str, Any], candidate: Any) -> str:
     source = task.get("repo")
     if not source:
         raise ValueError("gate review needs the trusted source repository")
-    objects = _trusted_objects(Path(source))
-    with tempfile.TemporaryDirectory(prefix="relay-gate-git-") as tmp:
-        scratch = Path(tmp)
-        env = _env(scratch, checkout, objects)
-        _git(checkout, "init", "-q", "--template=", str(scratch / "gitdir"), limit=4096, env=env)
-        _git(checkout, "read-tree", base, limit=MAX_LISTING_BYTES, env=env)  # index := base tree
+    with _scratch_index(Path(source), checkout, base) as env:
+        tracked = _tracked_names(checkout, env)
         diff = _git(
             checkout,
             "diff",
@@ -183,10 +250,10 @@ def build_gate_plan(task: dict[str, Any], candidate: Any) -> str:
     root_fd = os.open(checkout, os.O_RDONLY | os.O_DIRECTORY)
     try:
         device = os.fstat(root_fd).st_dev
-        for raw in listing.split(b"\0"):
-            if raw:
-                rel = raw.decode("utf-8", "replace")
-                parts.append(f"New file {rel}:\n{_read_new_file(root_fd, device, rel)}")  # as text
+        for rel in tracked:  # nothing but plain files may feed the diff that goes to the cloud
+            _check_tracked(root_fd, device, rel)
+        for rel in _names(listing):
+            parts.append(f"New file {rel}:\n{_read_new_file(root_fd, device, rel)}")  # as text
     finally:
         os.close(root_fd)
     header = JUDGE_HEADER.read_text(encoding="utf-8")

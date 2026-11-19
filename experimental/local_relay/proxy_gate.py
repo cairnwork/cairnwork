@@ -56,7 +56,15 @@ def parse_verdict(text: str) -> str | None:
     body = text.strip()
     if body.endswith("```"):
         body = body[:-3].rstrip()
-    decoder = json.JSONDecoder()
+    duplicate_key = False
+
+    def reject_duplicates(pairs):
+        nonlocal duplicate_key
+        keys = [key for key, _value in pairs]
+        duplicate_key = duplicate_key or len(keys) != len(set(keys))
+        return dict(pairs)
+
+    decoder = json.JSONDecoder(object_pairs_hook=reject_duplicates)
     objects: list[tuple[int, dict]] = []
     total = index = 0
     while (index := body.find("{", index)) != -1:
@@ -71,7 +79,7 @@ def parse_verdict(text: str) -> str | None:
         index += max(end, 1)
     lines = [line.strip() for line in body.splitlines() if line.strip()]
     marks = [i for i, line in enumerate(lines) if line in ("ACCEPT", "REJECT")]
-    if total + len(marks) != 1:
+    if duplicate_key or total + len(marks) != 1:  # a repeated key reads differently per parser
         return None
     if marks:
         return lines[-1] if marks[0] == len(lines) - 1 else None

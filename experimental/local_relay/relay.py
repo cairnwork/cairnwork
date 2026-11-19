@@ -117,7 +117,15 @@ def _local_attempt(task_id, worker, context, ledger, stage):
 
 
 class LocalAttemptFailed(RuntimeError):
-    """A local episode ended without a completed candidate; retry or fall back safely."""
+    """A local episode ended without a completed candidate; retry or fall back safely.
+
+    ``usd``/``input_tokens``/``output_tokens`` are what a metered (cloud) attempt spent before it
+    failed; None means unknown, which the ledger records as unknown, never as zero.
+    """
+
+    usd: float | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
 
 
 def _check_stage(task_id, attempt, acceptance, gate, ledger, config, stage, trail):
@@ -169,8 +177,20 @@ def _fallback_stage(task_id, fallback, acceptance, gate, ledger, config, failure
         attempt = fallback(task_id)
     except LocalAttemptFailed as exc:
         failure = str(exc)
-        _append(ledger, _row(task_id, "fallback", "claude-haiku-5-5", 0, 0, 0.0, failure))
-        trail.append({"stage": "fallback", "worker_failure": failure})
+        _append(
+            ledger,
+            _row(
+                task_id,
+                "fallback",
+                "claude-haiku-5-5",
+                exc.input_tokens or 0,
+                exc.output_tokens or 0,
+                exc.usd,  # None = the proxy may have spent money we could not read
+                failure,
+                extra={"usd_known": exc.usd is not None},
+            ),
+        )
+        trail.append({"stage": "fallback", "worker_failure": failure, "usd": exc.usd})
         return RelayResult("FAILED", reason="; ".join([*failures, f"fallback: {failure}"]))
     _append(
         ledger,

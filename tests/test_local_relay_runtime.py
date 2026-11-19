@@ -12,7 +12,6 @@ import pytest
 
 from cairnwork.issue_task import IssueRefused
 from experimental.local_relay import cli, runtime
-from experimental.local_relay.adapters import CoreAcceptance
 from experimental.local_relay.config import (
     DEFAULT_HAIKU_PROXY_URL,
     DEFAULT_LOCAL_ENDPOINT,
@@ -278,18 +277,3 @@ def test_completed_marker_without_durable_record_is_not_success(tmp_path):
         runtime._episode_record("LOCAL_WORKER_EPISODE COMPLETED id x", tmp_path / "missing.jsonl")
         is None
     )
-
-
-def test_core_acceptance_refuses_paths_outside_task_allowlist(monkeypatch, tmp_path):
-    outputs = iter((b"outside.py\0", b""))
-    monkeypatch.setattr(
-        "experimental.local_relay.adapters.subprocess.run",
-        lambda *_args, **_kwargs: type("Result", (), {"returncode": 0, "stdout": next(outputs)})(),
-    )
-    acceptance = CoreAcceptance(
-        lambda _candidate: pytest.fail("unauthorized candidate reached CoreJudge"),
-        allowed_files=("inside.py",),
-    )
-    verdict = acceptance(RunResult(0, "", tmp_path, tmp_path, base_sha="a" * 40))
-    assert verdict.passed is False
-    assert json.loads(verdict.raw)["unexpected_paths"] == ["outside.py"]

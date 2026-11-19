@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import http.client
 import json
-import subprocess
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlsplit
 
 from experimental.local_relay.config import DEFAULT_LOCAL_ENDPOINT
 from experimental.local_relay.diagnostics import episode_failure
+from experimental.local_relay.gate_plan import PlanIncomplete, changed_paths
 from experimental.local_relay.relay import Acceptance, Attempt, LocalAttemptFailed
 from experimental.local_worker.endpoint import (
     EndpointContextLimit,
@@ -80,16 +81,22 @@ class CoreAcceptance:
     """Turn the PAUSE CoreJudge verdict into the relay acceptance record."""
 
     def __init__(
-        self, judge: Callable[[RunResult], Any], allowed_files: Sequence[str] | None = None
+        self,
+        judge: Callable[[RunResult], Any],
+        allowed_files: Sequence[str] | None = None,
+        source: Path | str | None = None,
     ) -> None:
+        if allowed_files is not None and source is None:
+            raise ValueError("an allowlist check needs the trusted source repository")
         self.judge = judge
         self.allowed_files = None if allowed_files is None else frozenset(allowed_files)
+        self.source = None if source is None else Path(source)
 
     def __call__(self, candidate: Any, /) -> Acceptance:
         if not isinstance(candidate, RunResult):
             raise TypeError("Core acceptance requires a local-worker RunResult")
         if self.allowed_files is not None:
-            changed = _changed_paths(candidate)
+            changed = _changed_paths(candidate, self.source)
             unexpected = sorted(changed - self.allowed_files)
             if unexpected:
                 return Acceptance(
@@ -105,31 +112,15 @@ class CoreAcceptance:
         return Acceptance(verdict.status == "VERIFIED", raw)
 
 
-def _changed_paths(result: RunResult) -> set[str]:
-    if result.checkout is None or not isinstance(result.base_sha, str):
-        raise ValueError("Core acceptance requires checkout and base commit")
-    commands = (
-        [
-            "git",
-            "-C",
-            str(result.checkout),
-            "diff",
-            "--name-only",
-            "-z",
-            "--no-renames",
-            result.base_sha,
-        ],
-        ["git", "-C", str(result.checkout), "ls-files", "--others", "-z"],
-    )
-    changed: set[str] = set()
-    for command in commands:
-        output = subprocess.run(command, capture_output=True, check=False)
-        if output.returncode:
-            raise RuntimeError("cannot compare candidate paths with its base")
-        changed.update(
-            path.decode("utf-8", "surrogateescape") for path in output.stdout.split(b"\0") if path
-        )
-    return changed
+def _changed_paths(result: RunResult, source: Path | None) -> set[str]:
+    """Candidate changes read through a scratch GIT_DIR/index (the worker's ``.git`` is never
+    trusted: its config can run programs and its index can hide modified files)."""
+    if result.checkout is None or not isinstance(result.base_sha, str) or source is None:
+        raise ValueError("Core acceptance requires checkout, base commit and the source repo")
+    try:
+        return changed_paths(source, Path(result.checkout), result.base_sha)
+    except PlanIncomplete as exc:
+        raise RuntimeError(f"cannot compare candidate paths with its base: {exc}") from exc
 
 
 class _UsageTransport:
@@ -219,6 +210,34 @@ class HaikuProxyFallback:
         # The proxy's per-label totals are cumulative for the whole process: a fresh nonce per
         # run keeps earlier (or aborted) runs of the same task out of this run's cost.
         label = f"{task_id}-fallback-{uuid.uuid4().hex[:12]}"
+        try:
+            return self._attempt(label)
+        except LocalAttemptFailed as exc:
+            self._attach_spend(exc, label)
+            raise
+
+    def _attach_spend(self, exc: LocalAttemptFailed, label: str) -> None:
+        """A failed run may still have spent money: keep what the proxy metered for this label,
+        or mark the spend unknown (None); it is never silently recorded as zero."""
+        exc.usd = exc.input_tokens = exc.output_tokens = None
+        try:
+            stats = self.request("GET", f"{self.label_url}/stats?label={quote(label)}", None)
+        except Exception:  # noqa: BLE001 - unreachable proxy: the spend stays unknown
+            return
+        usd, tokens_in, tokens_out = (
+            stats.get("cost_usd"),
+            stats.get("input_tokens"),
+            stats.get("output_tokens"),
+        )
+        if (
+            isinstance(usd, (int, float))
+            and not isinstance(usd, bool)
+            and usd >= 0
+            and all(type(t) is int and t >= 0 for t in (tokens_in, tokens_out))
+        ):
+            exc.usd, exc.input_tokens, exc.output_tokens = float(usd), tokens_in, tokens_out
+
+    def _attempt(self, label: str) -> Attempt:
         _proxy_call(self.request, "POST", f"{self.label_url}/label", {"label": label})
         try:
             try:

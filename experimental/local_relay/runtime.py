@@ -5,9 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
-import shutil
 import subprocess
-import sys
 import uuid
 from collections.abc import Callable
 from dataclasses import replace
@@ -38,6 +36,7 @@ from experimental.local_relay.gate_plan import build_gate_plan
 from experimental.local_relay.process import spawn_worker as _spawn_worker
 from experimental.local_relay.proxy_gate import ProxyGate
 from experimental.local_relay.relay import run_relay
+from experimental.local_relay.worker_launch import stage_canary, worker_argv, write_task_file
 from experimental.local_relay.worker_setup import (
     executable_paths,
     prepare_worker_layout,
@@ -88,7 +87,7 @@ def build_run_once(args: Any) -> Callable[[Any, Any], dict[str, Any]]:
     intake = Intake(state)
     config = intake.config()
     judge = CoreJudge(state, task["verifiers"], config["import_paths"])
-    acceptance = CoreAcceptance(judge, task["allowed_files"])
+    acceptance = CoreAcceptance(judge, task["allowed_files"], task["repo"])
     gate = ProxyGate(
         str(parse_loopback_url(getattr(args, "haiku_proxy_url", DEFAULT_HAIKU_PROXY_URL)))
     )
@@ -225,51 +224,13 @@ def _run_localworker(args, task, source, context, endpoint, canary, model=LOCAL_
     prepare_worker_layout(run_root, checkout)
     base = _git(checkout, "rev-parse", "HEAD")
     executable = executable_paths(Path(task["repo"]), base)
-    task_path = run_root / "task.json"
-    task_path.write_text(
-        json.dumps(
-            {
-                "task_id": task["task_id"],
-                "repo": "local-relay",
-                "prompt": task["prompt"],
-                "public_tests": [
-                    target for _name, command in task["verifiers"] for target in command[4:]
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
+    task_path = write_task_file(run_root, task)
     out = run_root / "episodes"
     out.mkdir(mode=0o700)
-    report = canary
-    if not report.is_file():
-        raise ValueError(f"canary report does not exist: {report}")
-    local_report = out / "canary.json"
-    shutil.copyfile(report, local_report)
-    shutil.copyfile(Path(str(report) + ".sha256"), Path(str(local_report) + ".sha256"))
-    argv = [
-        sys.executable,
-        "-m",
-        "experimental.local_worker.cli",
-        "run",
-        "--task",
-        str(task_path),
-        "--checkout",
-        str(checkout),
-        "--out",
-        str(out),
-        "--model",
-        model,
-        "--context-cap",
-        str(context),
-        "--canary-report",
-        str(local_report),
-        "--runs",
-        str(runs),
-        *[value for path in task["allowed_files"] for value in ("--write-path", path)],
-        "--endpoint",
-        endpoint,
-    ]
+    local_report = stage_canary(canary, out)
+    argv = worker_argv(
+        task, (task_path, checkout, out, local_report, runs), model, context, endpoint
+    )
     # Never run from the task repo: `-m` would put it first on sys.path (module shadowing).
     cwd = Path(__file__).resolve().parents[2]
     debug_path = _debug_path(args, task["task_id"])
