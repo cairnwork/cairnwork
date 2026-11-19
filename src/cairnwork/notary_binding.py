@@ -103,5 +103,5 @@ def _identity_digest(value: Any) -> str | None:
 def _safe_identity_digest(value: Any) -> str | None:
     try:
         return _identity_digest(value)
-    except (TypeError, UnicodeError):
+    except (TypeError, UnicodeError, MemoryError):
         return None
