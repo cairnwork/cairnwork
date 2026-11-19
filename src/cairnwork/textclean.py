@@ -7,6 +7,7 @@ the line and paragraph separators Zl, Zp. Same rule as experimental/blind_warn (
 
 from __future__ import annotations
 
+import ast
 import unicodedata
 from collections.abc import Callable
 
@@ -44,3 +45,19 @@ def shown(text: object) -> str:
         else:
             escaped.append(char)
     return "'" + "".join(escaped) + "'"
+
+
+def is_shown(text: object) -> bool:
+    """Whether ``text`` is exactly one canonical result of :func:`shown`."""
+    text = str(text)
+    try:
+        value = ast.literal_eval(text)
+    except (SyntaxError, ValueError, TypeError, RecursionError):
+        return False
+    return type(value) is str and shown(value) == text
+
+
+def shown_once(text: object) -> str:
+    """Keep a canonical shown token intact, otherwise escape the text exactly once."""
+    value = str(text)
+    return value if is_shown(value) else shown(value)

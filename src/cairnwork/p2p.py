@@ -11,19 +11,11 @@ Failure paths, none of which can end VERIFIED:
   left bytecode it may not supply (``base-probe-forged``, #481), so its outcomes prove nothing.
   UNCOMPARABLE (``P2P_BASE_PROBE_UNUSABLE``) in any mode, without trying a narrower one (weaker
   evidence than the configured one); a false FAILED becomes "no evidence", never VERIFIED;
-* base probe times out, cannot report, or its report or log exceeds the size cap (a suite too
-  large for one run, #184: ``base-probe-report-over-cap``, #481: ``base-probe-log-over-cap``), or
-  a test's teardown failed there
-  (#478: ``base-probe-teardown-error``; a shared fixture's error lands on whichever test runs
-  last, so no test of that run can be trusted as a target), or it exits 1 with no failed test in
-  the guard's record, in ``whole-suite``: degrade to
-  ``module-dir`` once and say so in the record; when ``module-dir`` itself cannot be probed, or
-  would run the same files again, or selects no test file at all, or none of its tests passes on
-  the base, the task is UNCOMPARABLE (``P2P_BASE_PROBE_UNUSABLE``, #234: no evidence, never
-  verified; a degraded probe never turns into "nothing to run"). A probe that worked but found no
-  base-passing test is recorded (``targets: 0``, ``reason: none-pass``). A ``module-dir`` that
-  selects nothing from a base with test files runs all of them (``fallback``) within the cap and
-  budget, else UNCOMPARABLE ``P2P_NO_TARGETS`` (#793);
+* A timeout, unusable report/log, teardown error or exit without a recorded failing test in
+  ``whole-suite`` degrades once to ``module-dir`` and records it. If that probe is unusable or
+  finds no base-passing tests, the task is UNCOMPARABLE (never VERIFIED); a successful probe with
+  no passing test records ``targets: 0``. Empty module-dir selection on a nonempty base falls
+  back to the whole base within the cap and budget, else UNCOMPARABLE ``P2P_NO_TARGETS`` (#793);
 * targets keep the order the probe ran them in (#287): a test that passes on the base only after
   the tests before it (shared module state) is not judged in another order;
 * a test file the test commit changes stays selected: its unchanged tests are bound like any other
@@ -149,8 +141,7 @@ def _probe(task, files, result, ctx: VerifyContext, budget, tag="p"):
 
 
 def plan_p2p(task, specs, test_files, mode, budget, result, ctx: VerifyContext) -> P2PPlan:
-    """Select and probe; see the module docstring. In a base test file among ``test_files`` (the
-    deferred tests), only the tests the test commit does not change are P2P tests."""
+    """Select and probe; unchanged tests in deferred base files are P2P tests."""
     rule: dict = {"configured": mode, "applied": mode, "budget_seconds": budget, "degraded": ""}
     forced = conftest_files(task, test_files, mode, _base_tests)  # #798
     if mode == "off":
@@ -274,7 +265,8 @@ def base_env_check(task, result, ctx: VerifyContext, *, without_tests=False, key
     try:
         existing = _base_tests(task, frozenset(), strict=not without_tests)  # #956
     except P2PRejected as exc:
-        raise _env_failed(shown(exc)) from exc
+        detail = str(exc) if exc.detail_is_shown else exc.safe_reason
+        raise _env_failed(detail) from exc
     rule = name_rule(task.repo, task.base_commit)
     files = select_p2p_targets(task.allowed_files, existing, task.test_roots, "module-dir", rule)
     if not files:  # nothing to probe now; the steps after the worker decide, as before

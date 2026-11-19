@@ -200,12 +200,11 @@ class Intake:
             (self.state / name).mkdir(mode=0o700, exist_ok=True)
 
     def check_state(self) -> None:
-        """BAD_STATE unless the state is a directory we own with mode 0700 and, once a task is
-        bound, a plain requests/ (check_requests, #466) (no side effects)."""
+        """BAD_STATE unless state is owned/mode 0700 and bound requests/ is plain."""
         try:
             info = self.state.lstat()
         except (NotADirectoryError, PermissionError) as exc:  # a bad parent (#367)
-            raise IntakeRefused("BAD_STATE", f"{self.state}: {exc.strerror}") from exc
+            raise IntakeRefused("BAD_STATE", f"{self.state}: {shown(exc)}") from exc
         if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
             raise IntakeRefused("BAD_STATE", f"{self.state} is not a directory owned by us")
         if info.st_mode & 0o777 != 0o700:  # 0600 or 0500 cannot hold a run (#367)

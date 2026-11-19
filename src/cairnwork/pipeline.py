@@ -1,13 +1,7 @@
-"""One governed task, end to end: bind → isolated attempt → candidate → verify → Core.
-``run_task`` is the bare core's main path. It owns no policy beyond the preserved behaviors: every
-step that fails leaves the task FAILED (or not COMPLETED) with a reason, and only a Core verdict
-that is verified for the exact candidate commit makes it COMPLETED.
-
-Any exception after binding is recorded as FAILED with an ``INFRA_ERROR`` reason; a crash of this
-process leaves the task DISPATCHED until restart recovery. A FAILED task keeps its card: to retry,
-SUPERSEDE it (``takeover.supersede``), then submit anew; the takeover is refused while the old
-attempt's processes are not shown gone (#244): a worker raising ``unswept.WorkerMayLive`` has its
-attempt marked in the FAILED move. A ``Worker`` edits its clone and must exit before ``run`` ends.
+"""Governed task path: bind → isolated attempt → candidate → verify → Core.
+Only Core VERIFIED for the exact candidate completes. Post-bind exceptions are FAILED with
+``INFRA_ERROR``; crashes remain DISPATCHED for recovery. Retry requires SUPERSEDE, and a live
+worker blocks takeover (#244). Workers edit their clone and exit before ``run`` returns.
 """
 
 from __future__ import annotations
@@ -40,7 +34,7 @@ from cairnwork.pipeline_judge import judge_for, tests_unused, tests_with_teeth
 from cairnwork.protected_paths import path_refusal
 from cairnwork.pytest_config import PytestConfigError, gate_import_paths
 from cairnwork.snapshot import snapshot_candidate
-from cairnwork.textclean import shown
+from cairnwork.textclean import is_shown, shown, shown_once
 from cairnwork.unswept import WorkerMayLive
 from cairnwork.verifier_account import VerifierAccount
 from cairnwork.verifiers import (
@@ -63,7 +57,13 @@ from cairnwork_protocol.ids import ID_RULE, core_ids
 class TaskRejected(Exception):
     def __init__(self, code: str, detail: str) -> None:
         self.code = code
+        self.detail = detail
+        self.detail_is_shown = is_shown(detail)
         super().__init__(f"{code}: {detail}")
+
+    @property
+    def safe_reason(self) -> str:
+        return f"{self.code}: {shown_once(self.detail)}"
 
 
 @dataclass(frozen=True)
@@ -109,12 +109,10 @@ class TaskSpec:
 
 
 class Worker(Protocol):
-    """Edits the clone at workdir and returns when done.
+    """Edits and exits; tagged child processes can be stopped on recovery (#244).
 
-    A worker that starts processes gives each CAIRNWORK_ATTEMPT=<workdir.name> (ATTEMPT_ENV)
-    so restart recovery can stop them. ``run_as``: their account, "" the owner's (#244).
-    ``isolated``: another uid, so UNCOMPARABLE may be reported (else ``not_isolated_because``).
-    workers.WorkerDefaults has the defaults. ``run`` may return provenance (provenance.make)."""
+    ``run_as`` identifies the account; ``isolated`` controls UNCOMPARABLE reporting. Defaults are
+    in workers.WorkerDefaults; ``run`` may return provenance (provenance.make)."""
 
     @property
     def run_as(self) -> str: ...
@@ -198,8 +196,7 @@ def check_task(task: TaskSpec, *, verifier_python: str | None = None) -> tuple[V
 
 
 def _require_no_blackbox(task: TaskSpec) -> None:
-    """A blackbox declaration is for verify only (verify_candidate): a worker run never
-    carries one, so its expected values never reach the worker."""
+    """A blackbox declaration is verify-only and never reaches workers."""
     if task.blackbox is not None:
         raise TaskRejected("BAD_BLACKBOX", "a blackbox declaration is for verify only")
 
@@ -328,7 +325,7 @@ def _attempt(task, specs, digest, notary, worker, result, steps, ctx: VerifyCont
         tests_unused(task, claim=False)  # single use, shared with verify runs
         check_roots_on_base(task.repo, task.base_commit, task.test_roots)
     except TestCommitRejected as exc:
-        result.reason = shown(exc)
+        result.reason = str(exc) if exc.detail_is_shown else exc.safe_reason
         return
     try:  # before the worker: no worker quota spent, no test exposed (#234)
         precheck(ctx.account, ctx.python)
@@ -358,7 +355,7 @@ def _attempt(task, specs, digest, notary, worker, result, steps, ctx: VerifyCont
                 provenance=provenance,
             )
         except CandidateRejected as exc:
-            result.reason = shown(exc)
+            result.reason = str(exc) if exc.detail_is_shown else exc.safe_reason
             return
         judged, test_files, plan = candidate.candidate_commit, (), None
         if task.test_commit:  # only now: the worker is done (deferred_tests.py, p2p.py)
@@ -380,7 +377,7 @@ def _attempt(task, specs, digest, notary, worker, result, steps, ctx: VerifyCont
                     )
                     plan = p2p_for(task, specs, test_files, result, ctx)
             except TestCommitRejected as exc:
-                result.reason = shown(exc)
+                result.reason = str(exc) if exc.detail_is_shown else exc.safe_reason
                 return
             except BaseUncomparable as exc:  # FAILED either way; only the reason says which
                 isolated = worker.isolated  # another uid (agy_run_as_user)

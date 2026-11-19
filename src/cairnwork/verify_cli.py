@@ -80,13 +80,17 @@ def main(argv: list[str] | None = None) -> int:
     except IntakeRefused as exc:
         return _emit({"error": exc.code, "detail": exc.detail}, 2)
     except (TaskRejected, blackbox.BlackboxRejected) as exc:
+        if isinstance(exc, TaskRejected):
+            detail = str(exc) if exc.detail_is_shown else exc.safe_reason
+        else:
+            detail = shown(exc)
         return _emit(
             {
                 "status": "REFUSED",
                 "verified": False,
                 "reason": exc.code,
                 "error": exc.code,
-                "detail": shown(exc),
+                "detail": detail,
             },
             2,
         )
@@ -144,7 +148,8 @@ def _import_tests(intake: Intake, args) -> int:
             repo, Path(args.bundle).resolve(), intake.state / "verify-used-tests"
         )
     except TestCommitRejected as exc:
-        return _emit({"error": exc.code, "detail": shown(exc)}, 2)
+        detail = str(exc) if exc.detail_is_shown else exc.safe_reason
+        return _emit({"error": exc.code, "detail": detail}, 2)
     return _emit({"imported": sha}, 0)
 
 
