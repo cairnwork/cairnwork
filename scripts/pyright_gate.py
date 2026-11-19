@@ -31,8 +31,8 @@ from pathlib import Path
 Key = tuple[str, str, str, str]
 _SKIP_DIRS = {".git", ".venv"}
 _MAX_FILE_BYTES = 8 * 1024 * 1024
-_IGNORE_COMMENT = re.compile(r"#[\t ]*(?:type|pyright)[\t ]*:[\t ]*ignore(?=$|[\s\[#])", re.I)
-_PYRIGHT_DIRECTIVE = re.compile(r"#[\t ]*pyright[\t ]*:(?![\t ]*ignore(?=$|[\s\[#]))([^\n]*)", re.I)
+_IGNORE_COMMENT = re.compile(r"#\s*(?:type|pyright)\s*:\s*ignore(?=$|[\s\[#])", re.I)
+_PYRIGHT_DIRECTIVE = re.compile(r"#\s*pyright\s*:(?!\s*ignore(?=$|[\s\[#]))([^\n]*)", re.I)
 
 
 class GateError(Exception):

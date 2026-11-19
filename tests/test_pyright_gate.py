@@ -193,6 +193,23 @@ def test_file_level_pyright_directive_fails_closed(tmp_path: Path, source: str) 
     assert _run(base, _report(base, []), head, _report(head, [])) == 2
 
 
+@pytest.mark.parametrize("space", ["\u00a0", "\u2003", "\u3000", "\f"])
+@pytest.mark.parametrize(
+    "template",
+    [
+        "#{sp}pyright:{sp}reportAssignmentType=false\nx: int = 'a'\n",
+        "x: int = 1  #{sp}pyright{sp}:{sp}basic\n",
+        "#{sp}type{sp}:{sp}ignore\nx: int = 'a'\n",
+    ],
+)
+def test_non_ascii_whitespace_directive_variants_fail_closed(
+    tmp_path: Path, template: str, space: str
+) -> None:
+    base = _tree(tmp_path / "base", "x: int = 'a'\n")
+    head = _tree(tmp_path / "head", template.format(sp=space))
+    assert _run(base, _report(base, []), head, _report(head, [])) == 2
+
+
 def test_editing_file_with_existing_file_level_ignore_fails_closed(tmp_path: Path) -> None:
     base = _tree(tmp_path / "base", "y = 1\n")
     head = _tree(tmp_path / "head", "y = 2\n")
