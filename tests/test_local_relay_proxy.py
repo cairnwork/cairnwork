@@ -149,3 +149,12 @@ def test_incomplete_proxy_episode_is_explicit_fallback_failure():
     )
     with pytest.raises(LocalAttemptFailed, match="process_exit=1"):
         fallback("task-label")
+
+
+def test_proxy_stats_accept_bool_or_int_flags_and_reject_nonzero_or_bad_types():
+    from experimental.local_relay.adapters import _flag_set, _is_flag
+
+    assert _is_flag(False) and _is_flag(True) and _is_flag(0) and _is_flag(2)
+    assert not _flag_set(False) and not _flag_set(0)
+    assert _flag_set(True) and _flag_set(1) and _flag_set(3)
+    assert not _is_flag("0") and not _is_flag(None) and not _is_flag(-1) and not _is_flag(0.0)

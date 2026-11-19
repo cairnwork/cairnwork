@@ -5,9 +5,9 @@ from __future__ import annotations
 import http.client
 import json
 import subprocess
+import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -137,12 +137,21 @@ class _UsageTransport:
     def __init__(self, transport) -> None:
         self.transport = transport
         self.input_tokens = self.output_tokens = 0
+        self.reported_usd: float | None = None
 
     def send(self, model, effort, messages, timeout):
         result = self.transport.send(model, effort, messages, timeout)
         usage = result.body.get("usage", {}) if result.body else {}
         self.input_tokens = _int_field(usage, "input_tokens", "input_tokens")
         self.output_tokens = _int_field(usage, "output_tokens", "output_tokens")
+        reported = result.body.get("cost_usd") if result.body else None
+        self.reported_usd = (
+            float(reported)
+            if isinstance(reported, (int, float))
+            and not isinstance(reported, bool)
+            and reported >= 0
+            else None
+        )
         return result
 
 
@@ -161,7 +170,9 @@ class CostGate:
         if transport is not None and command is not None:
             raise ValueError("provide either transport or command")
         command = command or (
-            str(Path.home() / ".local/bin/claude-api-run"),
+            sys.executable,
+            "-m",
+            "experimental.local_relay.gate_shim",
             "--tag",
             "cw-local-relay",
         )
@@ -173,7 +184,9 @@ class CostGate:
     def review(self, request: GateRequest) -> MeteredGateReply:
         reply = self.gate.review(request)
         input_tokens, output_tokens = self.transport.input_tokens, self.transport.output_tokens
-        usd = (input_tokens * self.input_rate + output_tokens * self.output_rate) / 1_000_000
+        usd = self.transport.reported_usd
+        if usd is None:  # no cost from the wrapper: fall back to the configured token rates
+            usd = (input_tokens * self.input_rate + output_tokens * self.output_rate) / 1_000_000
         return MeteredGateReply(
             reply.verdict,
             reply.model_id,
@@ -223,9 +236,9 @@ class HaikuProxyFallback:
                 raise LocalAttemptFailed(episode_failure(result))
             raise LocalAttemptFailed("Haiku local-worker returned no RunResult")
         stats = _proxy_call(self.request, "GET", f"{self.label_url}/stats?label={task_id}", None)
-        if stats.get("budget_stop") is True:
+        if _flag_set(stats.get("budget_stop")):
             raise LocalAttemptFailed("Haiku proxy stopped at its budget")
-        if stats.get("model_mismatch") is True:
+        if _flag_set(stats.get("model_mismatch")):
             raise LocalAttemptFailed("Haiku proxy reported a model mismatch")
         usd = stats.get("cost_usd")
         input_tokens, output_tokens = stats.get("input_tokens"), stats.get("output_tokens")
@@ -239,10 +252,10 @@ class HaikuProxyFallback:
             or usd <= 0
             or input_tokens < 0
             or output_tokens < 0
-            or type(stats.get("budget_stop")) is not bool
-            or type(stats.get("model_mismatch")) is not bool
-            or stats["budget_stop"]
-            or stats["model_mismatch"]
+            or not _is_flag(stats.get("budget_stop"))
+            or not _is_flag(stats.get("model_mismatch"))
+            or _flag_set(stats["budget_stop"])
+            or _flag_set(stats["model_mismatch"])
             or type(stats.get("requests")) is not int
             or stats["requests"] <= 0
             or type(stats.get("ok")) is not int
@@ -252,6 +265,15 @@ class HaikuProxyFallback:
         ):
             raise LocalAttemptFailed("Haiku proxy returned invalid or unknown cost stats")
         return Attempt(result, "claude-haiku-5-5", input_tokens, output_tokens, float(usd))
+
+
+def _is_flag(value) -> bool:
+    """The proxy reports budget_stop as a bool and model_mismatch as a count."""
+    return isinstance(value, (bool, int)) and (isinstance(value, bool) or value >= 0)
+
+
+def _flag_set(value) -> bool:
+    return _is_flag(value) and bool(value)
 
 
 def _proxy_request(method: str, url: str, body: dict | None) -> dict:

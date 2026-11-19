@@ -40,6 +40,7 @@ class RelayResult:
     acceptance_raw: str | None = None
     gate_verdict: str | None = None
     reason: str | None = None
+    stages: tuple = ()  # per-stage evidence: worker failures, acceptance and gate outcomes
 
 
 class Worker(Protocol):
@@ -68,7 +69,18 @@ def run_relay(
     # The environment flag is always required; a config object cannot bypass it.
     if not (config.enabled and os.environ.get(FLAG) == "1"):
         return RelayResult("DISABLED", reason="RELAY_DISABLED")
+    trail: list[dict] = []
     try:
+        return replace(
+            _route(task_id, worker, acceptance, gate, fallback, ledger, config, trail),
+            stages=tuple(trail),
+        )
+    except LedgerError as exc:
+        return RelayResult("LEDGER_ERROR", reason=str(exc), stages=tuple(trail))
+
+
+def _route(task_id, worker, acceptance, gate, fallback, ledger, config, trail):
+    if True:
         failures = []
         for stage, context in (
             ("local", config.default_context_tokens),
@@ -77,16 +89,15 @@ def run_relay(
             attempt, failure = _local_attempt(task_id, worker, context, ledger, stage)
             if failure:
                 failures.append(f"{stage}: {failure}")
+                trail.append({"stage": stage, "worker_failure": failure})
             if attempt is None:
                 continue
-            checked = _check_stage(task_id, attempt, acceptance, gate, ledger, config, stage)
+            checked = _check_stage(task_id, attempt, acceptance, gate, ledger, config, stage, trail)
             if checked.route == "FAILED":
                 return checked
             if checked.route == "ACCEPTED":
                 return replace(checked, route="LOCAL_FIRST" if stage == "local" else "LOCAL_RETRY")
-        return _fallback_stage(task_id, fallback, acceptance, gate, ledger, config, failures)
-    except LedgerError as exc:
-        return RelayResult("LEDGER_ERROR", reason=str(exc))
+        return _fallback_stage(task_id, fallback, acceptance, gate, ledger, config, failures, trail)
 
 
 def _local_attempt(task_id, worker, context, ledger, stage):
@@ -107,13 +118,17 @@ class LocalAttemptFailed(RuntimeError):
     """A local episode ended without a completed candidate; retry or fall back safely."""
 
 
-def _check_stage(task_id, attempt, acceptance, gate, ledger, config, stage):
+def _check_stage(task_id, attempt, acceptance, gate, ledger, config, stage, trail):
     result = acceptance(attempt.candidate)
     settings = CallSettings(config.gate_model_id, config.gate_effort, config.timeout_seconds, 1)
     try:
         reply = gate.review(GateRequest(task_id, "", str(attempt.candidate), settings))
     except Exception as exc:  # noqa: BLE001 - injected gate failures must fail closed.
+        trail.append(_stage(stage, result, None, f"gate raised: {exc}"))
         return RelayResult("FAILED", attempt.candidate, result.passed, result.raw, reason=str(exc))
+    reason = _verdict_reason(reply)
+    entry = _stage(stage, result, reply, reason)
+    trail.append(entry)
     _append(
         ledger,
         _row(
@@ -123,9 +138,9 @@ def _check_stage(task_id, attempt, acceptance, gate, ledger, config, stage):
             getattr(reply, "input_tokens", 0),
             getattr(reply, "output_tokens", 0),
             _cost(reply),
+            extra={k: v for k, v in entry.items() if k != "stage"},
         ),
     )
-    reason = _verdict_reason(reply)
     if result.passed and reply.verdict == "ACCEPT" and reply.reason is None:
         return RelayResult("ACCEPTED", attempt.candidate, result.passed, result.raw, reply.verdict)
     return RelayResult(
@@ -133,12 +148,14 @@ def _check_stage(task_id, attempt, acceptance, gate, ledger, config, stage):
     )
 
 
-def _fallback_stage(task_id, fallback, acceptance, gate, ledger, config, failures=()):
+def _fallback_stage(task_id, fallback, acceptance, gate, ledger, config, failures=(), trail=None):
+    trail = [] if trail is None else trail
     try:
         attempt = fallback(task_id)
     except LocalAttemptFailed as exc:
         failure = str(exc)
         _append(ledger, _row(task_id, "fallback", "claude-haiku-5-5", 0, 0, 0.0, failure))
+        trail.append({"stage": "fallback", "worker_failure": failure})
         return RelayResult("FAILED", reason="; ".join([*failures, f"fallback: {failure}"]))
     _append(
         ledger,
@@ -151,7 +168,7 @@ def _fallback_stage(task_id, fallback, acceptance, gate, ledger, config, failure
             attempt.usd,
         ),
     )
-    checked = _check_stage(task_id, attempt, acceptance, gate, ledger, config, "fallback")
+    checked = _check_stage(task_id, attempt, acceptance, gate, ledger, config, "fallback", trail)
     reasons = [*failures]
     if checked.reason:
         reasons.append(f"fallback review: {checked.reason}")
@@ -173,7 +190,19 @@ def _cost(reply: GateReply) -> float:
     return float(getattr(reply, "usd", 0.0))
 
 
-def _row(task_id, stage, model_id, input_tokens, output_tokens, usd, failure=None):
+def _stage(stage, result, reply, reason):
+    """One stage's evidence: Core acceptance and the gate's verdict (or why it gave none)."""
+    return {
+        "stage": stage,
+        "acceptance_passed": result.passed,
+        "acceptance": str(result.raw)[:500],
+        "gate_verdict": getattr(reply, "verdict", None),
+        "gate_reason": reason,
+        "gate_called": True,
+    }
+
+
+def _row(task_id, stage, model_id, input_tokens, output_tokens, usd, failure=None, extra=None):
     row = {
         "task_id": task_id,
         "stage": stage,
@@ -184,6 +213,8 @@ def _row(task_id, stage, model_id, input_tokens, output_tokens, usd, failure=Non
     }
     if failure is not None:
         row["failure"] = failure
+    if extra:
+        row.update(extra)
     return row
 
 

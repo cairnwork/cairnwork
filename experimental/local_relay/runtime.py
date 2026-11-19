@@ -61,10 +61,13 @@ def dry_route(args: Any) -> dict[str, Any]:
         "model": LOCAL_MODEL,
         "context_tokens": f"{DEFAULT_CONTEXT_TOKENS} -> {RETRY_CONTEXT_TOKENS}",
         "gate_transport": [
-            str(Path.home() / ".local/bin/claude-api-run"),
+            sys.executable,
+            "-m",
+            "experimental.local_relay.gate_shim",
             "--tag",
             "cw-local-relay",
         ],
+        "gate_runner": str(Path.home() / ".local/bin/claude-api-run"),
         "fallback": {"endpoint": proxy_url, "model": HAIKU_MODEL, "context_tokens": 65536},
         "ledger": str(Path(args.ledger).expanduser()) if args.ledger else DEFAULT_LEDGER_PATH,
         "enabled": os.environ.get("CAIRNWORK_LOCAL_RELAY") == "1",
@@ -125,6 +128,7 @@ def build_run_once(args: Any) -> Callable[[Any, Any], dict[str, Any]]:
             "gate_verdict": outcome.gate_verdict,
             "reason": outcome.reason,
             "failure": outcome.reason if outcome.route in {"FAILED", "LEDGER_ERROR"} else None,
+            "stages": list(outcome.stages),
         }
 
     return run_once

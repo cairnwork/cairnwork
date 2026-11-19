@@ -304,4 +304,4 @@ def test_gate_transport_default_command_has_relay_tag(monkeypatch, tmp_path):
     )
     CostGate()
     assert commands[0][-2:] == ("--tag", "cw-local-relay")
-    assert str(Path.home() / ".local/bin/claude-api-run") in commands[0][0]
+    assert commands[0][1:3] == ("-m", "experimental.local_relay.gate_shim")

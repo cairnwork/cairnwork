@@ -12,7 +12,7 @@ python3 haiku_proxy.py --port <PORT> --logdir <DIR> --tag cw-local-relay
 
 Proxy 提供 `GET /v1/models`、`POST /v1/chat/completions`、`POST /apply-template`、`POST /tokenize`，以及上述 `/ab/label` 和 `/ab/stats` 成本標記端點。
 
-`python -m experimental.local_relay.cli --state DIR --repo OWNER/NAME --clone PATH --canary-report PATH run-once` 使用本機 `qwen3.5-9b` 與 `http://127.0.0.1:18101/v1`，Core acceptance 使用 PAUSE `CoreJudge` 與相同 state 的 verifier 設定，Haiku gate 使用 `~/.local/bin/claude-api-run --tag cw-local-relay`。啟用前必須提供有效的 worker canary report；報告和 `.sha256` sidecar 會複製到該次 episode 輸出目錄供 local_worker 核對。
+`python -m experimental.local_relay.cli --state DIR --repo OWNER/NAME --clone PATH --canary-report PATH run-once` 使用本機 `qwen3.5-9b` 與 `http://127.0.0.1:18101/v1`，Core acceptance 使用 PAUSE `CoreJudge` 與相同 state 的 verifier 設定，Haiku gate 經 `experimental/local_relay/gate_shim.py`（把 PAUSE CommandTransport 的 JSON 協定轉成 `~/.local/bin/claude-api-run --tag cw-local-relay -- claude -p --model haiku --output-format json`；wrapper 本身不是 JSON transport，直接當 transport 會回 usage／exit 2）。啟用前必須提供有效的 worker canary report；報告和 `.sha256` sidecar 會複製到該次 episode 輸出目錄供 local_worker 核對。
 
 `--dry-route` 只印設定和旗標，不組裝 runtime、不連網，也不建立 ledger。它列出本機與 fallback endpoint、模型和脈絡上限。
 

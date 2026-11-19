@@ -262,10 +262,11 @@ def test_ac6_jsonl_ledger_appends_complete_cloud_and_zero_cost_local_rows(tmp_pa
     )
     rows = [json.loads(line) for line in path.read_text().splitlines()]
     assert result.route == "LOCAL_FIRST" and len(rows) == 2
-    assert all(
-        set(row) == {"task_id", "stage", "model_id", "input_tokens", "output_tokens", "usd"}
-        for row in rows
-    )
+    base_keys = {"task_id", "stage", "model_id", "input_tokens", "output_tokens", "usd"}
+    assert set(rows[0]) == base_keys  # local rows carry only the base fields
+    gate_extra = {"acceptance_passed", "acceptance", "gate_verdict", "gate_reason", "gate_called"}
+    assert set(rows[1]) == base_keys | gate_extra  # gate rows carry the per-stage evidence
+    assert rows[1]["gate_verdict"] == "ACCEPT" and rows[1]["acceptance_passed"] is True
     assert rows[0] == {
         "task_id": "task-1",
         "stage": "local",
@@ -274,7 +275,7 @@ def test_ac6_jsonl_ledger_appends_complete_cloud_and_zero_cost_local_rows(tmp_pa
         "output_tokens": 7,
         "usd": 0.0,
     }
-    assert rows[1] == {
+    assert {k: rows[1][k] for k in base_keys} == {
         "task_id": "task-1",
         "stage": "local",
         "model_id": "gate-model",
@@ -356,3 +357,32 @@ def test_gate_accept_never_flips_an_acceptance_failure_at_any_stage():
     assert result.route == "FAILED" and result.acceptance_passed is False
     assert result.acceptance_raw == "f3" and len(gate.calls) == 3
     assert worker.calls == [(32768,), (65536,)] and len(fallback.calls) == 1
+
+
+def test_every_stage_records_acceptance_and_gate_evidence_in_the_result():
+    worker = Counter([attempt("one"), attempt("two")])
+    acceptance = Counter(
+        [Acceptance(False, "fail one"), Acceptance(False, "fail two"), Acceptance(True, "cloud ok")]
+    )
+    gate = FakeGate(["REJECT", "ACCEPT", "ACCEPT"])
+    fallback = Counter([attempt("cloud", "haiku", 0.1)])
+    result = run_relay("t", worker, acceptance, gate, fallback, FakeLedger(), enabled())
+    assert result.route == "FALLBACK"
+    assert [(s["stage"], s["acceptance_passed"], s["gate_verdict"]) for s in result.stages] == [
+        ("local", False, "REJECT"),
+        ("retry", False, "ACCEPT"),
+        ("fallback", True, "ACCEPT"),
+    ]
+    assert result.stages[0]["gate_reason"] == "GATE_REJECTED"
+    assert all(s["gate_called"] is True for s in result.stages)
+
+
+def test_worker_failures_appear_in_the_stage_trail_without_a_gate_entry():
+    worker = Counter([EndpointContextLimit("too long"), EndpointContextLimit("too long")])
+    acceptance = Counter([Acceptance(True, "ok")])
+    gate = FakeGate(["ACCEPT"])
+    fallback = Counter([attempt("cloud", "haiku", 0.1)])
+    result = run_relay("t", worker, acceptance, gate, fallback, FakeLedger(), enabled())
+    kinds = [("worker_failure" in s, s["stage"]) for s in result.stages]
+    assert kinds[:2] == [(True, "local"), (True, "retry")]
+    assert result.stages[2]["stage"] == "fallback" and result.stages[2]["gate_verdict"] == "ACCEPT"
