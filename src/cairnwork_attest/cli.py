@@ -34,7 +34,7 @@ from cairnwork_attest.statement import (
     default_producer,
     run_test_source,
 )
-from cairnwork_attest.verify import verify_bundle
+from cairnwork_attest.verify import KEY_CODES, verify_bundle
 from cairnwork_attest.verify_binding import PolicyError, load_policy
 from cairnwork_protocol import canonical_json
 
@@ -219,7 +219,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
             test_source=facts["test_source"],
             assurance=result.assurance if result.ok else None,
         )
-        return 0 if result.ok else 1
+        return 0 if result.ok else _fail_rc(result.code)
 
     if result.ok and result.statement is not None:
         cand = result.statement["subject"][0]["digest"]["gitCommit"]
@@ -230,7 +230,12 @@ def _cmd_verify(args: argparse.Namespace) -> int:
 
     detail = f": {result.detail}" if result.detail else ""
     print(_printable(f"{result.code}{detail}"))
-    return 1
+    return _fail_rc(result.code)
+
+
+def _fail_rc(code: str) -> int:
+    """A --public-key that cannot be used is a usage-class failure (#458), like check-run."""
+    return 2 if code in KEY_CODES else 1
 
 
 def _escape(ch: str) -> str:
