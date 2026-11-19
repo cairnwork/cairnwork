@@ -21,8 +21,6 @@ import pytest
 from pra1353_runner import _match_recipe
 from test_1039_1353_witnesses import PINS, fake_runner_reports_witnesses  # noqa: F401
 
-pytestmark = pytest.mark.usefixtures("fake_runner_reports_witnesses")
-
 
 def _report(seqs: Iterable[int] = range(56)):
     rows = [{"seq": seq} for seq in seqs]

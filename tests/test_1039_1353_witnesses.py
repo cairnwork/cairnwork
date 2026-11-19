@@ -13,6 +13,7 @@ import tempfile
 from pathlib import Path
 
 import pra1353_consume as consume
+import pra1353_seal as seal
 import pytest
 from pra1353_probe import evasion_sources
 from test_1039_1353_recipes import _matches
@@ -23,7 +24,7 @@ PINS = {
     "tests/attest/test_verify.py": "156795f6ee20d46c692b4a27e15ab36525b7ab7fce945722b39a3067c68a9b83",
     "tests/conftest.py": "a6f527a6ae989b47ef7cd10b270206d7e8c0e391064eac8eef03f9f3693219fd",
     "tests/pra1353_c10.py": "e06afe85538ba55c9c6a22f76a13033aff8840ff32d1150c28283ada3d47a056",
-    "tests/pra1353_consume.py": "7f29d4cc9643e512fd0cfc742882d2d46c1f65e621cde803664f4b3c3448a266",
+    "tests/pra1353_consume.py": "998701ddda86784e82a6f0545685846a0d7d8e6b629500b09648768de5f67ae7",
     "tests/pra1353_derive.py": "3e301ec245fba896b12798554ccb8391f2facaf6409567772882aad7592d534e",
     "tests/pra1353_extra.py": "f28c9d6acc84fa89649230b299499ca764e2e22d9aae88553813209f6fa853b5",
     "tests/pra1353_launch.py": "42c3e13e06ac2bb402575c451480bbfca72262a6a9ece6d4889945c737d65048",
@@ -32,7 +33,7 @@ PINS = {
     "tests/pra1353_recipes.py": "87b8cf6e1d3c3618bc797ea9511b347e8d413dd752197ab5b368663efa2440b6",
     "tests/pra1353_runner.py": "e009c2b30f7cadd05ec5b990aaabded8c5bb9e8733f524e39011c4d2d02bc385",
     "tests/pra1353_gate.py": "6ba80619b8ba23846368eb921d130936e3fe8b2ad5e8d72a74ac610de78cdc72",
-    "tests/pra1353_seal.py": "a0142da6d0499aa0263f1f1a7bba5f57e24840420a8fe51f15295e0f5e180c4e",
+    "tests/pra1353_seal.py": "c869228998fafd8fa4632ca830a78515675c4c8e9a1cab11b925062f708ddc14",
     "tests/xdist_groups.py": "08f332bef3401fd38390db53a60a158ebb78686d1ec33a7af1c9d4337692e673",
     "tests/test_1039_1353_recipes.py": "a11e647deef2d050dc75506595d9a889a08b70e84287153da420f56aa9f4a4d5",
     "tests/test_1039_1353_static.py": "0fc8b3428e5d312a396c4c74c4365933ea15577a0f762bee759d2342b82cf76d",
@@ -57,7 +58,7 @@ def _with_runner_witnesses(run):
             return done
         sealed = Path(args[4]).parents[1]
         seen = {m.get("name") for m in modules if isinstance(m, dict)}
-        for name in consume._RUNNER_WITNESSES:
+        for name in seal.RUNNER_WITNESSES:
             if name not in seen:
                 file = str(sealed / "tests" / f"{name}.py")
                 modules.append(
@@ -68,7 +69,7 @@ def _with_runner_witnesses(run):
     return call
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def fake_runner_reports_witnesses(monkeypatch):
     real = consume.launch
 

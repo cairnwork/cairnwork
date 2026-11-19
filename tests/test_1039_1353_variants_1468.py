@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pra1353_consume as consume
+import pra1353_seal as seal
 import pytest
 from test_1039_1353_product_reach import PATCH
 from test_1039_1353_witnesses import PINS, broker_report  # noqa: F401
@@ -84,17 +85,17 @@ def test_tracked_src_top_level_module_is_refused(tmp_path: Path) -> None:
         consume._tracked_source_bytes(tmp_path)
 
 
-@pytest.mark.parametrize("missing", consume._RUNNER_WITNESSES)
+@pytest.mark.parametrize("missing", seal.RUNNER_WITNESSES)
 def test_every_runner_witness_must_be_reported_from_sealed_tests(tmp_path: Path, missing) -> None:
     modules = [
         {"name": n, "file": str(tmp_path / "tests" / f"{n}.py")}
-        for n in consume._RUNNER_WITNESSES
+        for n in seal.RUNNER_WITNESSES
         if n != missing
     ]
     with pytest.raises(ValueError, match=missing):
-        consume._require_runner_witnesses(modules, tmp_path)
+        seal.require_witnesses(modules, tmp_path)
     modules.append({"name": missing, "file": str(tmp_path / "src" / f"{missing}.py")})
     with pytest.raises(ValueError, match=missing):
-        consume._require_runner_witnesses(modules, tmp_path)
+        seal.require_witnesses(modules, tmp_path)
     modules[-1]["file"] = str(tmp_path / "tests" / f"{missing}.py")
-    consume._require_runner_witnesses(modules, tmp_path)
+    seal.require_witnesses(modules, tmp_path)

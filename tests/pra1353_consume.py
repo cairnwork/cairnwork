@@ -15,7 +15,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from pra1353_seal import check_base_install, interpreter_paths, tracked_py_blobs
+from pra1353_seal import check_base_install, interpreter_paths, require_witnesses, tracked_py_blobs
 
 _NO_SANDBOX_BASE = "UNCOMPARABLE: BASE_ENV_FAILED: unchanged base: base-probe-failed (no-sandbox: no usable sandbox backend, so nothing ran)"
 _ACCOUNT_GAP = (
@@ -113,11 +113,7 @@ def launch(
         sealed = temp_root / "sealed"
         (sealed / "tests").mkdir(parents=True)
         (sealed / "src").mkdir()
-        for name, data in {**pin_bytes, **source_bytes}.items():
-            target = sealed / name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(data)
-        for name, data in _SEALED_PACKAGE_FILES.items():
+        for name, data in {**pin_bytes, **source_bytes, **_SEALED_PACKAGE_FILES}.items():
             target = sealed / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
@@ -127,7 +123,6 @@ def launch(
         stdlib_roots = [Path(paths["stdlib"]), Path(paths["platstdlib"])]
         # Fixed shape for the runner's seven-root check, even where stdlib == platstdlib (macOS).
         roots = [*stdlib_roots, Path(paths["platstdlib"]) / "lib-dynload"]
-        # Sealed tests come before src, so a tracked src/*.py cannot shadow a pinned witness name.
         imports = [sealed / "tests", sealed / "src", Path(paths["purelib"]), Path(paths["platlib"])]
         env = {
             "PATH": "/usr/bin:/bin",
@@ -162,7 +157,7 @@ def launch(
             _validate_module_origins(
                 report.get("modules"), pins, source_pins, sealed, roots, imports
             )
-            _require_runner_witnesses(report.get("modules"), sealed)
+            require_witnesses(report.get("modules"), sealed)
             _validate_child_reports(
                 report.get("child_reports"), pins, source_pins, sealed, roots, imports
             )
@@ -174,31 +169,9 @@ def launch(
 
 def _tracked_source_bytes(repo: Path = ROOT) -> dict[str, bytes]:
     blobs = tracked_py_blobs(repo, prefix="src/")
-    for name in blobs:
-        top_level = name.split("/")[1]
-        if top_level not in _PRODUCT_TOP_LEVELS:
-            raise ValueError(f"tracked src path is not a product package: {_neutralize(name)}")
+    if any(name.split("/")[1] not in _PRODUCT_TOP_LEVELS for name in blobs):
+        raise ValueError("tracked src path is not a product package")
     return blobs
-
-
-_RUNNER_WITNESSES = (
-    "pra1353_c10",
-    "pra1353_derive",
-    "pra1353_extra",
-    "pra1353_launch",
-    "pra1353_probe",
-    "pra1353_recipes",
-)
-
-
-def _require_runner_witnesses(modules: Any, sealed: Path) -> None:
-    """Every witness the runner must load is reported, and was served from the sealed tests."""
-    served = {item.get("name"): item.get("file") for item in modules if isinstance(item, dict)}
-    for name in _RUNNER_WITNESSES:
-        expected = (sealed / "tests" / f"{name}.py").resolve()
-        file = served.get(name)
-        if not isinstance(file, str) or Path(file).resolve() != expected:
-            raise ValueError(f"runner witness not loaded from sealed tests: {name}")
 
 
 def _reject_sealed_bytecode(sealed: Path) -> None:

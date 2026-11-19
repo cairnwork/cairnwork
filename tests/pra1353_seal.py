@@ -191,3 +191,23 @@ def _read_blobs(
         result[raw_name.decode("utf-8")] = data
         offset = body_end + 1
     return result
+
+
+RUNNER_WITNESSES = (
+    "pra1353_c10",
+    "pra1353_derive",
+    "pra1353_extra",
+    "pra1353_launch",
+    "pra1353_probe",
+    "pra1353_recipes",
+)
+
+
+def require_witnesses(modules: Any, sealed: Path) -> None:
+    """Every witness the runner must load is reported, and was served from the sealed tests."""
+    served = {item.get("name"): item.get("file") for item in modules if isinstance(item, dict)}
+    for name in RUNNER_WITNESSES:
+        expected = (sealed / "tests" / f"{name}.py").resolve()
+        file = served.get(name)
+        if not isinstance(file, str) or Path(file).resolve() != expected:
+            raise ValueError(f"runner witness not loaded from sealed tests: {name}")

@@ -17,8 +17,6 @@ import pytest
 from test_1039_1353_runner import _report, _runner
 from test_1039_1353_witnesses import PINS, fake_runner_reports_witnesses  # noqa: F401
 
-pytestmark = pytest.mark.usefixtures("fake_runner_reports_witnesses")
-
 _TIMESTAMP_PYC: Any = vars(bootstrap_external)["_code_to_timestamp_pyc"]
 
 
