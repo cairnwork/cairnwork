@@ -107,3 +107,17 @@ def test_secret_in_the_candidate_is_blocked_before_any_chat_request():
     reply = ProxyGate(URL, proxy).review(_request(plan="key sk-ant-api03-" + "A" * 40))
     assert reply.reason is Reason.PAUSE_SECRET_BLOCKED
     assert not any(u.endswith("/chat/completions") for _m, u, _b in proxy.calls)
+
+
+def test_blocked_request_keeps_its_original_reason_when_no_spend_was_metered():
+    unmetered = {**STATS, "requests": 0, "cost_usd": 0, "input_tokens": 0, "output_tokens": 0}
+    proxy = FakeProxy(stats=unmetered)
+    reply = ProxyGate(URL, proxy).review(_request(plan="path /Users/someone/repo/file.py"))
+    assert reply.reason is Reason.PAUSE_SECRET_BLOCKED  # not overwritten by "refused"
+    assert reply.verdict is None and reply.usd == 0.0
+    assert not any(u.endswith("/chat/completions") for _m, u, _b in proxy.calls)
+
+
+def test_a_verdict_with_unknown_cost_is_still_refused():
+    reply = ProxyGate(URL, FakeProxy(stats={**STATS, "requests": 0})).review(_request())
+    assert reply.verdict is None and reply.reason is Reason.PAUSE_GATE_REFUSED

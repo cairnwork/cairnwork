@@ -84,10 +84,10 @@ class ProxyGate:
         try:
             stats = self.request("GET", f"{self.label_url}/stats?label={quote(label)}", None)
         except Exception:  # noqa: BLE001 - unknown cost is never recorded as zero
-            return refused
+            return self._unmetered(reply, refused)
         cost = _valid_cost(stats)
         if cost is None:
-            return refused
+            return self._unmetered(reply, refused)
         usd, input_tokens, output_tokens = cost
         return MeteredGateReply(
             reply.verdict,
@@ -98,6 +98,15 @@ class ProxyGate:
             output_tokens,
             usd,
         )
+
+    @staticmethod
+    def _unmetered(reply, refused: MeteredGateReply) -> MeteredGateReply:
+        """No usable cost: keep the gate's own reason when it never produced a verdict (for
+        example PAUSE_SECRET_BLOCKED sends nothing, so there is no spend to meter); a verdict
+        with unknown cost is refused rather than trusted."""
+        if reply.reason is not None:
+            return MeteredGateReply(None, HAIKU_MODEL, reply.effort, reply.reason)
+        return refused
 
 
 def _valid_cost(stats: dict) -> tuple[float, int, int] | None:

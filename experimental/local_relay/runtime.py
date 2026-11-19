@@ -10,6 +10,7 @@ import subprocess
 import sys
 import uuid
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,7 @@ from experimental.local_relay.config import (
     RelayConfig,
 )
 from experimental.local_relay.diagnostics import append_debug, redact
+from experimental.local_relay.gate_plan import build_gate_plan
 from experimental.local_relay.process import spawn_worker as _spawn_worker
 from experimental.local_relay.proxy_gate import ProxyGate
 from experimental.local_relay.relay import run_relay
@@ -118,7 +120,7 @@ def build_run_once(args: Any) -> Callable[[Any, Any], dict[str, Any]]:
             gate,
             fallback,
             ledger,
-            RelayConfig.from_env(),
+            replace(RelayConfig.from_env(), plan_for=lambda cand: build_gate_plan(task, cand)),
         )
         return {
             "route": outcome.route,

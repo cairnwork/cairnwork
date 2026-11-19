@@ -125,7 +125,8 @@ def _check_stage(task_id, attempt, acceptance, gate, ledger, config, stage, trai
     if callable(mark_stage):
         mark_stage(stage)  # lets a metered gate label its spend per stage
     try:
-        reply = gate.review(GateRequest(task_id, "", str(attempt.candidate), settings))
+        plan = config.plan_for(attempt.candidate) if config.plan_for else str(attempt.candidate)
+        reply = gate.review(GateRequest(task_id, "", plan, settings))
     except Exception as exc:  # noqa: BLE001 - injected gate failures must fail closed.
         trail.append(_stage(stage, result, None, f"gate raised: {exc}"))
         return RelayResult("FAILED", attempt.candidate, result.passed, result.raw, reason=str(exc))
