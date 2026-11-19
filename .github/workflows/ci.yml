@@ -58,8 +58,14 @@ jobs:
       - name: Sealed #1353 witness gate
         run: |
           set -euo pipefail
+          # The gate runs PR-controlled code: stop workflow commands (::, ##[) in its output.
+          token="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+          echo "::stop-commands::$token"
+          rc=0
           PRA1353_BASE_LOCK="$RUNNER_TEMP/pra1353-trusted/uv.lock" \
-            "$RUNNER_TEMP/pra1353-trusted/.venv/bin/python" -I -S -B tests/pra1353_gate.py
+            "$RUNNER_TEMP/pra1353-trusted/.venv/bin/python" -I -S -B tests/pra1353_gate.py || rc=$?
+          echo "::$token::"
+          exit "$rc"
       - run: uv sync --locked
       - run: uv run ruff check .
       - run: uv run ruff format --check .
@@ -116,8 +122,14 @@ jobs:
       - name: Sealed #1353 witness gate
         run: |
           set -euo pipefail
+          # The gate runs PR-controlled code: stop workflow commands (::, ##[) in its output.
+          token="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+          echo "::stop-commands::$token"
+          rc=0
           PRA1353_BASE_LOCK="$RUNNER_TEMP/pra1353-trusted/uv.lock" \
-            "$RUNNER_TEMP/pra1353-trusted/.venv/bin/python" -I -S -B tests/pra1353_gate.py
+            "$RUNNER_TEMP/pra1353-trusted/.venv/bin/python" -I -S -B tests/pra1353_gate.py || rc=$?
+          echo "::$token::"
+          exit "$rc"
       - run: uv sync --locked
       - name: Create the verifier account (Issue #9)
         run: |
