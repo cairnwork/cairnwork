@@ -268,9 +268,18 @@ def _cfg(path, mode=None):
 
 
 @needs_user
-def test_unreadable_git_config_global_file_is_refused(mirror, tmp_path, monkeypatch):
-    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(_cfg(tmp_path / "g" / "cfg", 0)))
+def test_unreadable_home_gitconfig_is_refused_whatever_the_caller_git_config_global(
+    mirror, home, tmp_path, monkeypatch
+):
+    _cfg(home / ".gitconfig", 0)  # real git strips GIT_CONFIG_GLOBAL, so it reads this one (#1370)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(_cfg(tmp_path / "g" / "cfg")))
     assert _mirror_multi_branch_reason(mirror) is not None
+
+
+@needs_user
+def test_unreadable_caller_git_config_global_is_ignored(mirror, tmp_path, monkeypatch):
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(_cfg(tmp_path / "g" / "cfg", 0)))
+    assert _mirror_multi_branch_reason(mirror) is None  # git runs with GIT_* stripped (#1370)
 
 
 @needs_user
@@ -283,17 +292,10 @@ def test_unsearchable_parent_of_an_existing_global_config_is_refused(mirror, hom
 
 
 @needs_user
-def test_unreadable_system_config_is_refused(mirror, tmp_path, monkeypatch):
+def test_unreadable_caller_system_config_is_ignored(mirror, tmp_path, monkeypatch):
     monkeypatch.delenv("GIT_CONFIG_NOSYSTEM")
     monkeypatch.setenv("GIT_CONFIG_SYSTEM", str(_cfg(tmp_path / "s" / "cfg", 0)))
-    assert _mirror_multi_branch_reason(mirror) is not None
-
-
-@needs_user
-def test_global_config_git_does_not_read_is_not_refused(mirror, home, tmp_path, monkeypatch):
-    _cfg(home / ".gitconfig", 0)  # ignored by git once GIT_CONFIG_GLOBAL is set
-    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(_cfg(tmp_path / "ok" / "cfg")))
-    assert _mirror_multi_branch_reason(mirror) is None
+    assert _mirror_multi_branch_reason(mirror) is None  # GIT_CONFIG_SYSTEM is stripped (#1370)
 
 
 def test_missing_git_config_global_file_passes(mirror, tmp_path, monkeypatch):
@@ -309,9 +311,9 @@ def _env_include(monkeypatch, value):
     monkeypatch.setenv(f"GIT_CONFIG_VALUE_{n}", value)
 
 
-def test_missing_include_given_on_the_command_line_is_refused(mirror, tmp_path, monkeypatch):
+def test_missing_include_given_on_the_command_line_is_ignored(mirror, tmp_path, monkeypatch):
     _env_include(monkeypatch, str(tmp_path / "absent.cfg"))
-    assert _mirror_multi_branch_reason(mirror) is not None
+    assert _mirror_multi_branch_reason(mirror) is None  # GIT_CONFIG_COUNT is stripped (#1370)
 
 
 def test_present_include_given_on_the_command_line_passes(mirror, tmp_path, monkeypatch):
