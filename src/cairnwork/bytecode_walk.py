@@ -50,6 +50,8 @@ from collections import deque
 
 MAX_PATH = 4096  # Linux PATH_MAX (macOS: 1024): no longer path can be opened
 NOFOLLOW = {"follow_symlinks": False} if os.chmod in os.supports_follow_symlinks else {}
+HANDLE = getattr(os, "O_PATH", 0)  # Linux: a directory handle that needs nothing of the directory
+SEARCH = getattr(os, "O_SEARCH", 0) or HANDLE  # needs only x on a directory
 MAGIC = importlib.util.MAGIC_NUMBER
 
 
@@ -81,6 +83,28 @@ def bytecode(name, fd):
         os.close(handle)
 
 
+def open_mode(path, want, info):
+    """Chmod directory ``path`` (``info``'s inode; else OSError) from its parent's handle: on Linux
+    the checked O_PATH handle's inode, elsewhere the name, unfollowed, checked before and after."""
+    head, name = os.path.split(path)
+    if not SEARCH:
+        return os.chmod(path, want, **NOFOLLOW)
+
+    def stale():  # what the chmod reaches is not, or no longer, ``info``'s directory
+        return ident(os.stat(name, **here)) != ident(info)
+
+    fds = [os.open(head or ".", SEARCH | os.O_DIRECTORY)]  # needs x on the ancestors, not r
+    try:
+        here = {"dir_fd": fds[0], "follow_symlinks": False}
+        if HANDLE:  # macOS has none and cannot open a closed directory
+            fds.append(os.open(name, HANDLE | os.O_NOFOLLOW | os.O_DIRECTORY, dir_fd=fds[0]))
+            name, here = f"/proc/self/fd/{fds[1]}", {}
+        if stale() or os.chmod(name, want, **here) or stale():
+            raise OSError(errno.ESTALE, "replaced while listed")
+    finally:
+        list(map(os.close, fds))
+
+
 def opened(path):
     """The identity of directory ``path`` (never a symlink), opened first if closed to its owner,
     and its entries as (name, kind, identity or None, error or None), kind "dir" (identity set),
@@ -93,7 +117,7 @@ def opened(path):
     if not stat.S_ISDIR(info.st_mode):
         raise NotADirectoryError(errno.ENOTDIR, "not a directory")
     if info.st_mode & 0o700 != 0o700:
-        os.chmod(path, stat.S_IMODE(info.st_mode) | 0o700, **NOFOLLOW)
+        open_mode(path, stat.S_IMODE(info.st_mode) | 0o700, info)
     fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         if ident(os.fstat(fd)) != ident(info):

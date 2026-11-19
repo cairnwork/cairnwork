@@ -21,7 +21,7 @@ from __future__ import annotations
 import ast
 from collections.abc import Iterable
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from cairnwork import deferred_attached, gitprobe, survivor_argv
 from cairnwork.base_teeth import base_teeth
@@ -40,26 +40,12 @@ from cairnwork.issue_task import test_target
 from cairnwork.p2p_function import _without_case as _nodeid_without_case
 from cairnwork.provenance import trailers
 from cairnwork.reasons import COLLECT_HINT, _names, skip_hint
+from cairnwork.test_commit_paths import case_variant_clash, out_of_scope  # noqa: F401
 from cairnwork.workspace import ATTEMPT_REF_PREFIX
 from cairnwork_protocol.ids import MAX_ID_BYTES
 
 _IDENTITY = ("-c", "user.name=Cairnwork", "-c", "user.email=cairnwork@localhost")
 _EMPTY = ast.Module(body=[], type_ignores=[])  # a file that is not there (new, or deleted)
-# pytest reads these on its own; a test commit carries tests, not configuration.
-# Protected verifier inputs; __init__.py stays allowed for test imports.
-_SITE_NAMES = frozenset({"sitecustomize", "usercustomize"})  # also refused as package names
-_NOT_TEST_FILES = frozenset({"conftest.py", "pytest.ini", "setup.cfg", "tox.ini",
-                             "pyproject.toml", "pytest.toml", ".pytest.toml", ".pytest.ini",
-                             "setup.py", "sitecustomize.py", "usercustomize.py"})  # fmt: skip
-
-
-def out_of_scope(path: str, status: str) -> bool:  # #798: conftest.py only added/modified
-    posix, name = PurePosixPath(path), PurePosixPath(path).name.casefold()
-    return (
-        (name in _NOT_TEST_FILES and (posix.name != "conftest.py" or status not in ("A", "M")))
-        or name.endswith(".pth")
-        or any(part.casefold() in _SITE_NAMES for part in posix.parts)
-    )
 
 
 def never_seen(repo: Path, test_commit: str) -> None:
@@ -172,6 +158,9 @@ def test_paths(
         (deleted if status == "D" else paths).append(path)
     if not paths:
         raise TestCommitRejected("TEST_COMMIT_EMPTY")
+    # #488: right code and message; the test commit is still consumed
+    if clash := case_variant_clash(repo, base, paths, deleted):
+        raise TestCommitRejected("TEST_COMMIT_SCOPE", clash)
     if len(deleted) > MAX_DELETED_TEST_PATHS:  # the receipt's binding refuses more (#870)
         raise TestCommitRejected(
             "TEST_COMMIT_SCOPE",

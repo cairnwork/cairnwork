@@ -29,7 +29,7 @@ WITNESSES = (
 # known one moved to another function, changes the count and fails the real-file test.
 KNOWN = Counter(
     {
-        ("pra1353_extra.py", "extra_rows", "sys.modules"): 1,
+        ("pra1353_extra.py", "load_c10", "sys.modules"): 1,
         ("pra1353_launch.py", "_c7_unprotected", "verify_cli._run"): 1,
         ("pra1353_launch.py", "_c8_rows", "sys.modules"): 1,
         ("pra1353_receipt.py", "_c8_mutations", "from cairnwork_attest.record import _digest"): 1,

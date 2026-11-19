@@ -15,7 +15,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from pra1353_seal import check_base_install, interpreter_paths, tracked_py_blobs
+from pra1353_seal import check_base_install, interpreter_paths, require_witnesses, tracked_py_blobs
 
 _NO_SANDBOX_BASE = "UNCOMPARABLE: BASE_ENV_FAILED: unchanged base: base-probe-failed (no-sandbox: no usable sandbox backend, so nothing ran)"
 _ACCOUNT_GAP = (
@@ -111,11 +111,7 @@ def launch(
         sealed = temp_root / "sealed"
         (sealed / "tests").mkdir(parents=True)
         (sealed / "src").mkdir()
-        for name, data in {**pin_bytes, **source_bytes}.items():
-            target = sealed / name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(data)
-        for name, data in _SEALED_PACKAGE_FILES.items():
+        for name, data in {**pin_bytes, **source_bytes, **_SEALED_PACKAGE_FILES}.items():
             target = sealed / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
@@ -125,7 +121,7 @@ def launch(
         stdlib_roots = [Path(paths["stdlib"]), Path(paths["platstdlib"])]
         # Fixed shape for the runner's seven-root check, even where stdlib == platstdlib (macOS).
         roots = [*stdlib_roots, Path(paths["platstdlib"]) / "lib-dynload"]
-        imports = [sealed / "src", sealed / "tests", Path(paths["purelib"]), Path(paths["platlib"])]
+        imports = [sealed / "tests", sealed / "src", Path(paths["purelib"]), Path(paths["platlib"])]
         env = {
             "PATH": "/usr/bin:/bin",
             "HOME": str(temp_root),
@@ -159,6 +155,7 @@ def launch(
             _validate_module_origins(
                 report.get("modules"), pins, source_pins, sealed, roots, imports
             )
+            require_witnesses(report.get("modules"), sealed)
             _validate_child_reports(
                 report.get("child_reports"), pins, source_pins, sealed, roots, imports
             )
@@ -169,7 +166,10 @@ def launch(
 
 
 def _tracked_source_bytes(repo: Path = ROOT) -> dict[str, bytes]:
-    return tracked_py_blobs(repo, prefix="src/")
+    blobs = tracked_py_blobs(repo, prefix="src/")
+    if any(name.split("/")[1] not in _PRODUCT_TOP_LEVELS for name in blobs):
+        raise ValueError("tracked src path is not a product package")
+    return blobs
 
 
 def _reject_sealed_bytecode(sealed: Path) -> None:
