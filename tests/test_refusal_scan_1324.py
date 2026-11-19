@@ -184,7 +184,8 @@ class _ExceptionTextScan(ast.NodeVisitor):
         self.sites = []
         self.violations = []
 
-    def visit_ExceptHandler(self, handler):
+    def visit_ExceptHandler(self, node):
+        handler = node
         if handler.name:
             names = {handler.name}
             already_shown = isinstance(handler.type, ast.Name) and handler.type.id in _ALREADY_SHOWN
@@ -225,13 +226,14 @@ class _ExceptionTextScan(ast.NodeVisitor):
                     self.violations.append((key, getattr(node, "lineno", 0)))
         self.generic_visit(handler)
 
-    def visit_FunctionDef(self, node):
+    def visit_FunctionDef(self, node: ast.FunctionDef | ast.AsyncFunctionDef):
         self.functions.append(node.name)
         self._check_exception_parameters(node)
         self.generic_visit(node)
         self.functions.pop()
 
-    visit_AsyncFunctionDef = visit_FunctionDef
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef):
+        self.visit_FunctionDef(node)
 
     def _check_exception_parameters(self, function):
         args = (*function.args.posonlyargs, *function.args.args, *function.args.kwonlyargs)
