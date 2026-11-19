@@ -91,3 +91,19 @@ def test_original_form_is_still_masked_when_the_view_would_not_match():
     # a name that only matches as written, next to marks elsewhere in the line
     out = mask_secrets(f"café token: {SV}")
     assert SV not in out
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "token: ́",
+        "token=́",
+        "--token ́",
+        "Bearer ́",
+        "access_token%3D́",
+        "Authorization: ́",
+    ],
+)
+def test_a_value_that_is_only_a_combining_mark_is_still_masked(line):
+    """The as-written pass masks what it always did; the view (which drops marks) adds to it."""
+    assert "<redacted>" in mask_secrets(line)
