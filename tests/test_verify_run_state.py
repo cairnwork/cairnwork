@@ -117,9 +117,12 @@ def test_a_cleanup_failure_does_not_overwrite_the_real_reason(project, state, mo
 
     monkeypatch.setattr(module, "remove_attempt_clone", broken)
     base = base_of(project)
-    cand = candidate(project, base, {"src/calc.py": FIX, "src/other.py": "x = 1\n"})
+    # #488: an out-of-scope or case-clashing candidate is refused before any clone exists, so the
+    # refusal must come after the clone: a candidate that does not fix the failing test.
+    cand = candidate(project, base, {"src/calc.py": "VALUE = 0\n"})
     out = in_process(project, state, base, cand)
-    assert out["status"] == "REFUSED" and out["reason"].startswith("OUT_OF_SCOPE")
+    assert out["status"] == "FAILED" and out["verified"] is False
+    assert out["reason"] == "CORE_FAILED_VERIFICATION [v: pytest exit code 2]"  # the real reason
     assert any("cleanup failed" in line for line in out["logs"])
 
 

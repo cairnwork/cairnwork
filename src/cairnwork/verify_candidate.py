@@ -39,7 +39,6 @@ from cairnwork.deferred_tests import (
     OVERLAY_RULE,
     BaseUncomparable,
     TestCommitRejected,
-    check_roots_on_base,
     lay_tests_over,
     never_seen,
 )
@@ -58,6 +57,7 @@ from cairnwork.pipeline_judge import judge_candidate
 from cairnwork.recovery import _remove_leftovers
 from cairnwork.textclean import shown
 from cairnwork.verify_candidate_checks import (
+    check_before_clone,
     check_task_for_verify,
     require_core_ids,
     validate_import_paths,
@@ -285,7 +285,7 @@ def _base_env(task, result, ctx, source) -> BaseUncomparable | None:
 
 def _judge_in(intake, task, specs, candidate, notary, result, ctx, *, source) -> dict | None:
     run_root = ctx.run_root
-    check_roots_on_base(task.repo, task.base_commit, task.test_roots)
+    check_before_clone(task, candidate, verifier_interpreter(ctx))  # base roots, then #488
     clone = create_attempt_clone(task.repo, candidate, run_root, result.attempt_id)
     with unless_interrupted(partial(_remove_clone, run_root, result)):
         attempt = Attempt(clone.attempt_id, task.base_commit, clone.path, clone.refs_before)

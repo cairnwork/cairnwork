@@ -1,8 +1,12 @@
 """Small pre-burn checks for the external candidate verification entry point."""
 
+from typing import Any
+
+from cairnwork.deferred_tests import check_roots_on_base
 from cairnwork.import_path_tree import ImportPathError, require_plain_dirs
 from cairnwork.issue_task import check_verify_import_paths
 from cairnwork.pipeline import TaskRejected, check_task
+from cairnwork.workspace import Attempt, check_candidate_commit
 from cairnwork_protocol.ids import ID_RULE, core_ids
 
 
@@ -28,3 +32,10 @@ def validate_import_paths(repo, base, import_paths, test_roots):
             require_plain_dirs(repo, base, import_paths)
     except (ValueError, ImportPathError) as exc:
         raise TaskRejected("BAD_IMPORT_PATH", str(exc)) from exc
+
+
+def check_before_clone(task, candidate, python):
+    """The cheap refusals that need no clone: roots on base, then the candidate commit (#488)."""
+    check_roots_on_base(task.repo, task.base_commit, task.test_roots)
+    no_clone: Any = Attempt("", task.base_commit, None, ())  # type: ignore[arg-type]
+    check_candidate_commit(task.repo, no_clone, candidate, task.allowed_files, python=python)
