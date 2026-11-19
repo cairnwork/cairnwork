@@ -1,7 +1,8 @@
-"""``commit_candidate`` (conftest, #1394): the candidate sits on an attempts ref, ``main`` and the
-work tree stay on the base, so the mirror passes ``lineage.verify_single_branch`` (#1266)."""
+"""``commit_candidate`` (tests/candidate_helpers.py, #1394): the candidate sits on an attempts
+ref, ``main`` and the work tree stay on the base (the mirror passes ``verify_single_branch``)."""
 
-from conftest import commit_candidate, git
+from candidate_helpers import commit_candidate
+from conftest import git
 
 
 def test_candidate_is_on_its_attempt_ref_and_main_is_unchanged(repo):

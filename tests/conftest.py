@@ -33,7 +33,7 @@ def real_info(exc):
 #   test_on_verified.py, test_check_run_gh.py) use the production_git_env fixture below.
 # - experimental/local_worker's git queries run under ``env -i``.
 # - scripts/measure_p2p.py (clone, commit, push) and the scripts/drill_*.py demos (init, commit)
-#   are not run by any test; scripts/env_smoke.py runs git under gitcmd._child_env (#1370).
+#   are not run by any test; scripts/env_smoke.py (run by test_env_smoke) only reads refs/config.
 # No other src code runs git with the inherited environment.
 # A commit may start git's auto maintenance detached; its lock files under .git/objects then
 # appear and vanish while a test walks that directory (#565, #578): the tests' git runs none.
@@ -125,20 +125,6 @@ def commit_change(repo, files=None, delete=(), rename=None, message="candidate")
     git(repo, "add", "-A")
     git(repo, "commit", "-q", "-m", message)
     return git(repo, "rev-parse", "HEAD")
-
-
-def commit_candidate(repo, files=None, attempt="att-1", **kwargs):
-    """Commit a candidate to ``refs/cairnwork/attempts/<attempt>`` and leave the clone's
-    ``main`` (and the work tree) where they were (#1394). A candidate committed on ``main`` makes
-    the mirror's local ``main`` ahead of ``origin/main``, which ``lineage.verify_single_branch``
-    refuses (#1266). Returns the commit id; takes the arguments of ``commit_change``."""
-    head = git(repo, "symbolic-ref", "-q", "HEAD")
-    before = git(repo, "rev-parse", "HEAD")
-    commit = commit_change(repo, files, **kwargs)
-    git(repo, "update-ref", f"refs/cairnwork/attempts/{attempt}", commit)
-    git(repo, "update-ref", head, before)
-    git(repo, "reset", "-q", "--hard", before)
-    return commit
 
 
 # How long collection waits for another run's account lock before it skips the account tests.
