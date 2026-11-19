@@ -61,6 +61,7 @@ def scan(text: str, names: tuple[str, ...] = ()) -> list[str]:
     legacy = re.sub(_ZERO_WIDTH, "", unicodedata.normalize("NFKC", re.sub(_ZERO_WIDTH, "", text)))
     joined = re.sub(r"(=>|:=|[=:])[ \t]*(?:\r\n|\n)+[ \t]*", r"\1", normalized)
     cleaned_joined = re.sub(r"(=>|:=|[=:])[ \t]*(?:\r\n|\n)+[ \t]*", r"\1", cleaned)
+    spaced = _drop_invisible(text, " ")  # an invisible character as the separator: --key<ZWSP>value
     legacy_joined = re.sub(r"(=>|:=|[=:])[ \t]*(?:\r\n|\n)+[ \t]*", r"\1", legacy)
     compact = re.sub(r"\s+", "", normalized)
     wrapped = re.sub(r"\r?\n", "", normalized)
@@ -74,7 +75,7 @@ def scan(text: str, names: tuple[str, ...] = ()) -> list[str]:
     for pattern, category in ((_ASSIGNMENT, "assigned_secret"), (_FLAG, "flag_secret")):
         # cleaned: NFKC can shorten a value below the floor, so the value is also judged as written
         for candidate in dict.fromkeys(
-            (text, joined, cleaned, cleaned_joined, legacy, legacy_joined)
+            (text, joined, cleaned, cleaned_joined, legacy, legacy_joined, spaced)
         ):
             for match in pattern.finditer(candidate):
                 word = _secret_word(match.group("name"))
@@ -104,10 +105,11 @@ _ASCII_CONTROL = re.compile(r"[\x00-\x08\x0e-\x1f\x7f]")
 _FILLERS = frozenset("\u115f\u1160\u3164\uffa0\u2800")  # Default_Ignorable, not in C*/Mn/Me
 
 
-def _drop_invisible(text: str) -> str:
+def _drop_invisible(text: str, repl: str = "") -> str:
     """``text`` without invisible characters, chosen by Unicode category as textclean does: C*
     (control, format, private use, unassigned) except whitespace, the combining marks Mn/Me, and
-    the fillers outside those categories (Hangul fillers, Braille blank)."""
+    the fillers outside those categories (Hangul fillers, Braille blank). ``repl`` stands in for
+    each one (a space: an invisible character may itself be the separator)."""
 
     if text.isascii() and not _ASCII_CONTROL.search(text):
         return text  # nothing to drop; skips a per-character pass over a large input
@@ -116,7 +118,7 @@ def _drop_invisible(text: str) -> str:
         cat = unicodedata.category(ch)
         return (cat[0] == "C" and not ch.isspace()) or cat in ("Mn", "Me") or ch in _FILLERS
 
-    return "".join(ch for ch in text if not invisible(ch))
+    return "".join(repl if invisible(ch) else ch for ch in text)
 
 
 def _forms(word: str) -> tuple[str, ...]:

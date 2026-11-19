@@ -48,3 +48,8 @@ def test_ordinary_text_is_not_newly_flagged(text):
 def test_a_value_made_only_of_an_invisible_character_is_still_flagged(text):
     """What the earlier view flagged stays flagged (a value must not vanish with the dropping)."""
     assert scan(text)
+
+
+@pytest.mark.parametrize("c", ["​", "‎", "ㅤ", "️"])
+def test_an_invisible_character_can_be_the_separator_of_a_flag(c):
+    assert "flag_secret" in scan(f"--api-key{c}{KEY}")
