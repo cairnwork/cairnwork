@@ -1,7 +1,5 @@
 """#173: the hidden-test run directories do not survive a crash, and a failed cleanup is loud.
-
-Real processes: a run is SIGKILLed during the P2P step (-q candidate run, -r re-run), then
-recovery runs. A removal that fails is reported (LEFTOVER_RUN_DIRS), never counted as clean.
+Real processes are SIGKILLed during P2P; failed cleanup is reported, never counted as clean.
 """
 
 import json
@@ -15,6 +13,7 @@ import time
 from pathlib import Path
 
 import pytest
+from _child_python import child_env, run_module
 from conftest import commit_change
 from run_root_scope import own_attempt
 from test_deferred_tests import REGRESSION, make_test_commit
@@ -76,6 +75,7 @@ def _driver(p2p_project, state, step, *account):
             [sys.executable, str(DRIVER), str(repo), str(state), base, tests, step, *account],
             stdout=subprocess.DEVNULL,
             stderr=err,
+            env=child_env(),
         )
 
 
@@ -349,7 +349,7 @@ def test_only_the_state_run_root_is_cleaned_another_is_reported(crash_project, t
 
 def _route_recover(state):
     done = subprocess.run(
-        [sys.executable, "-I", "-m", "cairnwork.route", "--state", str(state), "recover"],
+        run_module("cairnwork.route") + ["--state", str(state), "recover"],
         capture_output=True, text=True, timeout=120, check=False,
     )  # fmt: skip
     return done.returncode, json.loads(done.stdout)

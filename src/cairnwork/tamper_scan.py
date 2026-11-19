@@ -55,6 +55,7 @@ from cairnwork.tamper_scan_diff import (
     foreign_coding,
 )
 from cairnwork.tamper_scan_diff import nfkc_names as nfkc_names
+from cairnwork.tamper_scan_exception import EXCEPTION_ATTRIBUTE_HOOK
 from cairnwork.tamper_scan_plugin import (
     CODE_FORGE,
     DYNAMIC_LOADER,
@@ -156,6 +157,7 @@ RULES: tuple[Rule, ...] = (
     _rule("code_object_forge", CODE_FORGE),
     _rule("dynamic_loader", DYNAMIC_LOADER),
     _rule("guard_module", r"_cairnwork_report_guard"),
+    _rule("exception_attribute_hook", EXCEPTION_ATTRIBUTE_HOOK),
     _rule("fd_listing", r"/proc/(?:self|thread-self|\d+)/fd\b|/dev/fd\b"),
     # Setting sys.pycache_prefix at run time points imports and pytest's assertion rewriter at
     # planted bytecode for a protected test (#276). Any mention in any file, so an alias or

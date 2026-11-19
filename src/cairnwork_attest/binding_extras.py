@@ -30,7 +30,7 @@ from cairnwork.deferred_data import (
 from cairnwork.deferred_overlay import MAX_DELETED_TEST_PATHS, TestCommitRejected
 from cairnwork.gitcmd import GitCommandError, run_git_bytes
 from cairnwork.pytest_config import PytestConfigError, test_file_rule
-from cairnwork_attest import receipt_scope
+from cairnwork_attest import protection_gate, receipt_scope
 from cairnwork_attest.verify_response import VerifyResult, _fail
 
 MAX_IMPORT_PATHS = 8  # issue_task.check_import_paths: 0-8 (pinned by test_binding_import_paths)
@@ -124,7 +124,7 @@ EXTRAS = (
 )
 KEYS = frozenset(extra.key for extra in EXTRAS)
 POLICY_ONLY = frozenset(
-    {"allow_conftest", "allow_data_paths"}
+    {"allow_conftest", "allow_data_paths", protection_gate.KEY}
 )  # #798: a receiver policy key, never a binding key
 
 
@@ -245,6 +245,9 @@ def policy_problem(policy: Mapping[str, Any]) -> str:
     for extra in EXTRAS:
         if extra.key in policy and not extra.shape(policy[extra.key]):
             return f"policy {extra.key} has the wrong shape"
+    problem = protection_gate.policy_problem(policy)
+    if problem:
+        return problem
     if "blackbox_checks" in policy and not (  # #312: only ever checked with a non-empty pin
         _check_ids(policy["blackbox_checks"]) and policy.get("blackbox_commitment")
     ):
@@ -270,7 +273,8 @@ def pin_problem(ctx: Any) -> VerifyResult | None:
     the producer's word), and a level above ``same_process_only`` needs a blackbox commitment in
     the binding (PROTECTION_UNCOMMITTED): the ``blackbox:*`` ids then stand for a declaration the
     receiver can pin, never for the signer's naming alone; required ids that are not a list of
-    strings bear no label out. Last, under any policy or none, no observation of an id Core did
+    strings bear no label out. The optional strict-gate policy checks the signed gate observation
+    and rejects low-entropy checks. Last, under any policy or none, no observation of an id Core did
     not require may be other than PASS (#413)."""
     policy, binding = ctx.policy, ctx.binding
     ids = required_ids(ctx.request)
@@ -287,6 +291,9 @@ def pin_problem(ctx: Any) -> VerifyResult | None:
             recorded = binding.get(extra.key, extra.empty)
             if not extra.satisfies(policy[extra.key], recorded):
                 return _fail(extra.mismatch, f"the receipt records {extra.key} {recorded!r}")
+    problem = protection_gate.gate_problem(policy, binding, ids or [], ctx.request)
+    if problem is not None:
+        return problem
     if policy is not None and policy.get("blackbox_commitment"):
         problem = _checks_problem(policy, ids or [], ctx.request)  # a list: label check passed
         if problem is not None:  # a failed VerifyResult is falsy: never `problem or ...`

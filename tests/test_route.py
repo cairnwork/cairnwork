@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 import pytest
+from _child_python import run_module
 from conftest import commit_change, git
 
 from cairnwork.ownership import OwnershipLedger
@@ -68,7 +69,7 @@ def state(tmp_path):
 
 def route(state, *args, stdin=None, cwd=None):
     done = subprocess.run(
-        [sys.executable, "-I", "-m", "cairnwork.route", "--state", str(state), *args],
+        run_module("cairnwork.route") + ["--state", str(state), *args],
         input=json.dumps(stdin) if stdin is not None else "",
         capture_output=True,
         text=True,

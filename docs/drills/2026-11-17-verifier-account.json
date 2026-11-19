@@ -1,0 +1,46 @@
+{
+  "base_commit": "b8fe4c359fe5b42c9cf4e6474e64efb0a3c3398b",
+  "cases": {
+    "bad": {
+      "attempt_id": "adc95b46e5a0f99b6",
+      "candidate": "known-bad: still adds 1",
+      "commit": "039749ae8905b57a9ea842cb557379cfb3cfc871",
+      "exit": 2,
+      "reason": "CORE_FAILED_VERIFICATION [pytest-0: pytest exit code 1]",
+      "status": "FAILED",
+      "task_id": "verify-54fa388a8a5e639e",
+      "verifier_mode": "account"
+    },
+    "good": {
+      "attempt_id": "a660f480b6cc5d3d0",
+      "candidate": "correct fix",
+      "commit": "37c7db7ba94913035e03f18e6977a88573ef5bd7",
+      "exit": "not captured (shell aborted after this run; printed VERIFIED)",
+      "reason": "CORE_VERIFIED",
+      "status": "VERIFIED",
+      "task_id": "verify-e90eccf606336f40",
+      "verifier_mode": "account"
+    },
+    "good2": {
+      "attempt_id": "aac24ea0d3b7ff972",
+      "candidate": "correct fix (repeat)",
+      "commit": "37c7db7ba94913035e03f18e6977a88573ef5bd7",
+      "exit": 0,
+      "reason": "CORE_VERIFIED",
+      "status": "VERIFIED",
+      "task_id": "verify-2469d73665ecca11",
+      "verifier_mode": "account"
+    }
+  },
+  "command": "cairnwork-verify --state <dir>/state run --repo-path <dir>/project --base <base> --candidate <sha> --allowed-file src/stats.py --verifier 'python3 -m pytest -q tests/test_stats.py'",
+  "date": "2026-11-17",
+  "drill": "verifier-account",
+  "host": "mini (lab slot approved 14:55\u201315:10 by lab; run 14:56\u201314:59)",
+  "main_sha": "89116e46",
+  "note": "same three-candidate pattern as 2026-11-01; project from drill_normal.make_project; the first run's exit code was not captured",
+  "ps_after": 0,
+  "result": "PASS",
+  "state": "cairnwork init --verifier-account",
+  "verifier_account": "cairnwork-verifier",
+  "worker": "none: candidates are commits made by hand on the base"
+}

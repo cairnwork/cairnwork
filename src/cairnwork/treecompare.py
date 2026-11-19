@@ -67,7 +67,7 @@ def _compare(top, expected, expected_dirs, seen, differences) -> None:
             if full.is_symlink():
                 dirnames.remove(name)
                 seen.add(rel)
-                if not _same(entry, "120000", os.readlink(full).encode()):
+                if not _same(entry, "120000", os.fsencode(os.readlink(full))):
                     differences.append(f"changed {rel}")
             elif entry is not None and entry.mode == "160000":
                 dirnames.remove(name)
@@ -88,7 +88,7 @@ def _file_matches(path: Path, entry: TreeEntry | None) -> bool:
         return False
     info = path.lstat()
     if stat.S_ISLNK(info.st_mode):
-        return _same(entry, "120000", os.readlink(path).encode())
+        return _same(entry, "120000", os.fsencode(os.readlink(path)))
     if not stat.S_ISREG(info.st_mode):
         return False
     mode = "100755" if info.st_mode & stat.S_IXUSR else "100644"

@@ -6,13 +6,14 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+from conftest import real_info
 
 from cairnwork.base_teeth import base_teeth
 from cairnwork.env_failure import ENV_SOURCE, is_env_failure
 
 
 def info(exc):
-    return SimpleNamespace(value=exc)
+    return real_info(exc)
 
 
 def chained(outer, inner, *, how="cause"):

@@ -1,0 +1,4 @@
+# One GitHub login per line; blank lines and lines beginning with # are ignored.
+# Owner decision 2026-11-18 (#1419 O1): only the owner's personal login may approve a pin change.
+# The agent bot login must never be listed.
+James3014

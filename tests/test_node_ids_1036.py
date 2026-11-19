@@ -5,8 +5,32 @@ import pytest
 
 from cairnwork import p2p_conftest
 from cairnwork.deferred_overlay import TestCommitRejected as _TestCommitRejected
-from cairnwork.node_ids import mask_paths, normalise_run_ids, show, unmatched_note
+from cairnwork.node_ids import mask_paths, normalise_run_ids, show, unmatched_note, without_case
+from cairnwork.p2p_function import _function as function_from_p2p
+from cairnwork.p2p_nodes import _function as function_from_nodes
 from cairnwork.verdict_record import Verdict
+
+
+@pytest.mark.parametrize(
+    ("nodeid", "expected"),
+    [
+        ("dir[1]/test_a.py::test_x[case]", "dir[1]/test_a.py::test_x"),
+        ("a::b/test_c.py::test_d", "a::b/test_c.py::test_d"),
+        ("tests/test_x.py::TestClass::test_x[case]", "tests/test_x.py::TestClass::test_x"),
+        ("tests/t.py::test_y[x::y]", "tests/t.py::test_y"),
+    ],
+)
+def test_shared_node_id_parser_preserves_file_path_and_strips_case(nodeid, expected):
+    assert without_case(nodeid) == expected
+    assert function_from_p2p(nodeid) == expected
+    assert function_from_nodes(nodeid) == expected
+
+
+def test_case_ids_containing_double_colon_are_stripped_in_every_part():
+    nodeid = "tests/t.py::C[a::b]::test_y[c::d]"
+    assert without_case(nodeid) == "tests/t.py::C"  # shared helper: cut at the first [
+    assert function_from_p2p(nodeid) == "tests/t.py::C::test_y"
+    assert function_from_nodes(nodeid) == "tests/t.py::C"
 
 
 def test_raw_and_realpath_checkout_spellings_normalise_only_parameter_segment(tmp_path):
@@ -138,3 +162,27 @@ def test_show_masks_paths_controls_and_bounds_text():
         "bad <path> and <path>"
     )
     assert show("test_cx[/x/y/z-1]").endswith("]")
+
+
+@pytest.mark.parametrize(
+    ("nodeid", "expected"),
+    [
+        ("dir.pyx/tests/t.py::test_x[param]", "dir.pyx/tests/t.py::test_x"),
+        ("a.pyc/t.py::C::test_x[p]", "a.pyc/t.py::C::test_x"),
+        ("dir.py/t.py::test_x[a.py::b]", "dir.py/t.py::test_x"),
+        ("tests/doc.txt::test_x[foo.py::bar]", "tests/doc.txt::test_x"),
+    ],
+)
+def test_py_inside_directory_name_is_not_the_file_boundary_1269(nodeid, expected):
+    assert without_case(nodeid) == expected
+
+
+@pytest.mark.parametrize("all_parts", [False, True])
+def test_bare_names_lose_case_and_bare_file_paths_stay_whole_1269(all_parts):
+    assert without_case("test_func[case]", all_parts=all_parts) == "test_func"
+    assert without_case("tests/dir[1]/test_x.py", all_parts=all_parts) == "tests/dir[1]/test_x.py"
+
+
+def test_unmatched_note_bare_names_and_unparameterised_variants_1269():
+    assert "per-run" in unmatched_note({"test_x[a]"}, {"test_x[b]"})
+    assert unmatched_note({"t.py::test_x[a]"}, {"t.py::test_x[a]"}) == ""

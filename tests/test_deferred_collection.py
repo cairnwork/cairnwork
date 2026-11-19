@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import commit_change
+from conftest import commit_change, git
 from test_deferred_tests import REGRESSION, SeeingWorker, make_test_commit, run
 from verify_helpers import FIX, candidate, verify
 
@@ -44,7 +44,7 @@ def _argv(*targets: str) -> tuple[tuple[str, tuple[str, ...]]]:
 
 def _new_tests(project, files):
     base, test_commit = make_test_commit(project, files)
-    ensure_test_commit(project, test_commit)
+    ensure_test_commit(project, test_commit, origin_url=git(project, "remote", "get-url", "origin"))
     return new_tests(project, base, test_commit, tuple(files))
 
 

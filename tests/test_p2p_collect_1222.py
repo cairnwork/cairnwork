@@ -18,7 +18,7 @@ from cairnwork.p2p_collect import _function, classify
 )
 def test_bracket_in_directory_still_classifies_removed_test(nodeid, base, test, expected):
     path = nodeid.partition("::")[0]
-    side = classify({nodeid}, set(), {path}, lambda _: test, lambda _: base)
+    side = classify({nodeid}, set(), {path}, lambda _: test, lambda _: base, exposed=())
     assert getattr(side, expected) == {nodeid}
 
 
@@ -57,6 +57,7 @@ def test_removed_method_in_parametrized_class_is_removed_not_dropped():
         {"tests/t.py"},
         lambda _: "class TestResource:\n    pass\n",
         lambda _: "class TestResource:\n    def test_get(self): pass\n",
+        exposed=(),
     )
     assert side.removed == {nodeid}
     assert side.dropped == set()
@@ -73,6 +74,7 @@ def test_methods_of_parametrized_class_do_not_collide():
         lambda _: (
             "class TestResource:\n    def test_get(self): pass\n    def test_delete(self): pass\n"
         ),
+        exposed=(),
     )
     assert side.removed == {first}
     assert side.dropped == set()
@@ -80,7 +82,9 @@ def test_methods_of_parametrized_class_do_not_collide():
 
 @pytest.mark.parametrize("nodeid", ["t.py"])
 def test_malformed_node_id_is_dropped_without_raising(nodeid):
-    side = classify({nodeid}, set(), {nodeid}, lambda _: "", lambda _: "def test_y(): pass\n")
+    side = classify(
+        {nodeid}, set(), {nodeid}, lambda _: "", lambda _: "def test_y(): pass\n", exposed=()
+    )
     assert side.removed == set()
     assert side.dropped == {nodeid}
 
@@ -137,7 +141,7 @@ def test_collected_side_keeps_present_literal_path_and_detects_deleted_control(
     ).stdout.strip()
 
     def collect(task, files, *_args):
-        return Collected(ids=tuple(f"{path}::test_case" for path in files))
+        return Collected(ids=tuple(f"{path}::test_case" for path in files), exposed=())
 
     monkeypatch.setattr(p2p_collect, "_collect", collect)
     monkeypatch.setattr(p2p_collect, "changed_tests", lambda *args: set())

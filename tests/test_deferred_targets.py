@@ -4,6 +4,7 @@ file to be a verifier target, whole or through each of its new or changed tests,
 run on the base."""
 
 import pytest
+from conftest import git
 from test_deferred_tests import REGRESSION, SeeingWorker, make_test_commit, run
 from verify_helpers import FIX, candidate, verify
 
@@ -39,7 +40,7 @@ def test_a_file_is_covered_whole_or_by_each_of_its_changed_tests():
 
 def _paths(project, files):
     base, test_commit = make_test_commit(project, files)
-    ensure_test_commit(project, test_commit)
+    ensure_test_commit(project, test_commit, origin_url=git(project, "remote", "get-url", "origin"))
     return paths_of_commit(project, base, test_commit)[0]
 
 

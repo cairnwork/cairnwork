@@ -159,12 +159,16 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
       the policy is refused rather than leave a link unscanned.
       Residual: deeper levels are not scanned (counted in the policy notes), so a link below
       them leaves its target readable. Each real target is masked once.
-      Known over-refusals (fail closed, #423): non-ASCII, colon and parenthesis paths fail the
-      policy path whitelist `^/[A-Za-z0-9 _./+@~-]*$` on both backends; a root-owned 0700
-      subdirectory in a credential directory refuses the run; owner mode refuses a link target
-      it cannot stat; a credential subdirectory that disappears or is renamed during the link scan
-      refuses the run (skipping it would leave a renamed subtree's links unscanned, so it stays
-      closed). Residual (#427): a link to an outside directory is masked with a tmpfs, but
+      Known over-refusals (fail closed, #423), by backend. bwrap: a link target in a credential
+      directory may also contain parentheses, a colon and non-ASCII letters, marks and digits;
+      control, format, separator (Z), private-use and surrogate characters, quotes, backslash and
+      newlines are still refused, and the credential path itself and the run roots keep the strict
+      policy path whitelist `^/[A-Za-z0-9 _./+@~-]*$`. Seatbelt keeps the strict whitelist for
+      every path, so non-ASCII, colon and parenthesis paths still refuse the run there. Both
+      backends: a root-owned 0700 subdirectory in a credential directory refuses the run; owner
+      mode refuses a link target it cannot stat; a credential subdirectory that disappears or is
+      renamed during the link scan still refuses the run (fail closed, not skipped).
+      Residual (#427): a link to an outside directory is masked with a tmpfs, but
       that directory is not itself scanned, so a link inside it leaves its own target readable
       (second hop); this is not yet confirmed on real bwrap.
     - **Socket trees**: `/tmp/.X11-unix` (an X server lets a process inject input and run commands
@@ -300,14 +304,26 @@ that the checks really ran as blackbox runs remains the signer's claim, like eve
 `protection.level(required_verifier_ids, macos=False)` over the signed request, the coverage
 without a host grade, and nothing in the receipt ties those ids to a declaration. Cairnwork's own notary, reading a record whose binding states no usable grade, takes the lower grade instead (`protection.level(..., macos=True)` on any reading host, #709): the producing host is unknown, so it never words a record above what that host may have earned. That level only words the PR body and the done comment; strict mode and the attest receiver use their own levels.
 
+The opt-in v0.2 receiver key `require_protection_gate` checks that the signed Core request included
+the strict protection gate, that its observation matches the binding's claimed level and policy
+minimum, and that required blackbox observations are not marked low-entropy. It does not verify
+the answers: entropy, the host grade (`_macos`), runner/profile hashes and account remain the
+signer's claims. Two known C10 residual cases remain: a candidate that detects the runner module
+name in `sys.modules`, or detects that `pytest` is absent from `sys.modules`, can answer differently
+in the runner.
+
 **Strict mode** (off by default): `cairnwork-verify run --require-protection` asks for at least
 `"partial_macos"`, so a protected run passes on either host (without `--blackbox` it is refused
-before anything runs, error `UNPROTECTED`), and the Python API takes any protected level as the
+before anything runs, error `UNPROTECTED`; so is a declaration whose check fails the entropy rule,
+errors `BLACKBOX_LOW_ENTROPY` / `BLACKBOX_TOO_FEW_CASES`), and the Python API takes any protected level as the
 minimum (`require_protection="partial"` for the Linux grade). Core is then asked for one more
 observation, `protection`, which passes only when the level is met, so an unprotected run is not
 VERIFIED (`protection: VERIFICATION_INCOMPLETE: UNPROTECTED [...]` in the reason). A receiver asks
 for the same with its policy's `protection` key (`UNPROTECTED`). Verifier ids `blackbox:*` and
-`protection` are reserved for this.
+`protection` are reserved for this. The entropy refusal is made by `cairnwork-verify` only; the
+Python API `verify_candidate(require_protection=...)` does not run it. It is broader than the
+receiver's `;low-entropy` mark: answers such as `0`, `1`, `-1`, `""` and `[]` also count as
+guessable.
 
 ### The dedicated verifier account (Linux P4, Issue #84)
 

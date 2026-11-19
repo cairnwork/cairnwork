@@ -63,6 +63,9 @@ jobs:
     needs: analyze
     if: always()
     runs-on: ubuntu-latest
+    # Issue #1444: the App key lives only in this environment, whose branch policy allows main
+    # only; pull_request_target runs with GITHUB_REF = the base branch (main).
+    environment: trusted-checks
     permissions:
       contents: read
       statuses: write
@@ -77,6 +80,9 @@ jobs:
           PYRIGHT_GATE_RC: ${{ needs.analyze.outputs.gate_rc }}
         run: python3 scripts/ci/pyright_trusted_status.py
       - name: Post commit status on the PR head
+        # Legacy path; an admin sets TRUSTED_CHECKS_LEGACY_STATUS=off when the ruleset is bound to
+        # the App (Issue #1444), and back on to roll back.
+        if: vars.TRUSTED_CHECKS_LEGACY_STATUS != 'off'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -88,3 +94,26 @@ jobs:
           gh api "repos/${REPO}/statuses/${HEAD_SHA}" \
             -f state="$STATE" -f context="pyright (trusted)" \
             -f description="$DESCRIPTION" -f target_url="$RUN_URL"
+      - name: App token (checks:write only)
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.TRUSTED_CHECKS_CLIENT_ID }}
+          private-key: ${{ secrets.TRUSTED_CHECKS_PRIVATE_KEY }}
+          permission-checks: write
+      - name: Post check run on the PR head as the App
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          STATE: ${{ steps.verdict.outputs.state }}
+          DESCRIPTION: ${{ steps.verdict.outputs.description }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          printf '%s' "$HEAD_SHA" | grep -Eqx '[0-9a-f]{40}' || { echo "bad head sha"; exit 1; }
+          conclusion=failure
+          if [ "$STATE" = "success" ]; then conclusion=success; fi
+          gh api "repos/${REPO}/check-runs" \
+            -f name="pyright (trusted)" -f head_sha="$HEAD_SHA" \
+            -f status=completed -f conclusion="$conclusion" -f details_url="$RUN_URL" \
+            -f "output[title]=$DESCRIPTION" -f "output[summary]=$DESCRIPTION"

@@ -36,10 +36,12 @@ _FLAG_HEAD = re.compile(r"(?<![\w-])--([\w-]{0,64})$")  # the flag name up to a 
 # a URL-encoded 'name%3Dvalue' (#402)
 _ENCODED = re.compile(rf"(?i)((?<!\w)[\w-]{{0,64}}(?:{_KEYS})%3d)[^&\s]+")
 _HID = "\x00"  # stands for a hidden character until the field pass has read the name (#744)
+_LOW = "\ufe33\ufe34\ufe4d-\ufe4f\uff3f"  # non-ASCII low-line look-alikes that fold to '_' (#1313)
+_LOW_RE = re.compile(f"[{_LOW}]")
 # a name: a run of word characters and markers, not after a word character or a marker; only the
 # name is consumed, so a secret field inside another field's value is still found. After '-' a name
 # counts only when it holds a marker (as '?' started one there before #744; my-token stays shown)
-_NAME = re.compile(rf"(?<![\w{_HID}])([\w{_HID}\uFF3F]+)=")
+_NAME = re.compile(rf"(?<![\w{_HID}{_LOW}])([\w{_HID}{_LOW}]+)[=⁼₌⩵⩶﹦＝]")
 _VALUE = re.compile(r"[^&\s]+")
 TAIL_CHARS = 2048
 # any character fits in 4 bytes; twice that, so the window holds more than the tail. A window that
@@ -111,8 +113,8 @@ def mask_secrets(text: str) -> str:
 
 
 def _is_key(name: str) -> bool:
-    """A secret word, or a name ending in one after '_' (GITHUB_TOKEN); full-width letters fold."""
-    name = name.replace("＿", "_")
+    """A secret word, or a name ending in one after '_' (GITHUB_TOKEN); NFKC + case folded."""
+    name = unicodedata.normalize("NFKC", name)
 
     def _candidates(n: str) -> Iterator[str]:
         yield n
@@ -124,37 +126,67 @@ def _is_key(name: str) -> bool:
                 break
             yield n[pos + 1 :]
 
-    for n in (name, name.casefold(), unicodedata.normalize("NFKC", name).casefold()):
+    for n in (name, name.casefold()):
         if any(_KEY.fullmatch(x) for x in _candidates(n)):
             return True
     return False
 
 
-def _is_secret_name(text: str, start: int, name: str, names: tuple[str, str]) -> bool:
-    if start > 0 and text[start - 1] == "-" and _HID not in name:
-        flag = _FLAG_HEAD.search(text, max(0, start - 70), start)
+def _is_secret_name(
+    norm: str, start: int, name: str, raw_name: str, names: tuple[str, str]
+) -> bool:
+    if start > 0 and norm[start - 1] == "-" and _HID not in name:
+        flag = _FLAG_HEAD.search(norm, max(0, start - 70), start)
         if flag is not None:  # a flag: --token=, --github-token=, --aws-secret-access-key=
             full = (flag.group(1) + name).replace("-", "_")
             return any(_is_key(n) for n in (*names, full))
         # a dashed name counts only as a whole known one: client-secret, api-key, x-auth-token
-        word = re.search(r"\w{1,64}$", text[max(0, start - 65) : start - 1])
+        word = re.search(r"\w{1,64}$", norm[max(0, start - 65) : start - 1])
         dashed = word is not None and bool(_KEY.fullmatch(f"{word.group()}_{name}".casefold()))
-        full_width_suffix = "\uff3f" in name and _is_key(name.rsplit("\uff3f", 1)[-1])
-        return dashed or full_width_suffix
+        low_parts = _LOW_RE.split(raw_name, 1)
+        low_suffix = len(low_parts) > 1 and _is_key(low_parts[1])
+        return dashed or low_suffix
     return any(_is_key(n) for n in names)
+
+
+def _nfkc_index(text: str) -> tuple[str, list[int]]:
+    """Per-character NFKC text and the original index of each normalized character (#1313)."""
+    if text.isascii():
+        return text, []
+    out: list[str] = []
+    idx: list[int] = []
+    for i, ch in enumerate(text):
+        norm = unicodedata.normalize("NFKC", ch)
+        out.append(norm)
+        idx.extend([i] * len(norm))
+    return "".join(out), idx
+
+
+def _field_matches(source: str, idx: list[int] | None, text: str) -> Iterator[tuple[int, int]]:
+    for m in _NAME.finditer(source):
+        orig_start = idx[m.start()] if idx else m.start()
+        orig_end = (idx[m.end() - 1] if idx else m.end() - 1) + 1
+        name = m.group(1)
+        raw_name = text[orig_start : orig_end - 1]
+        names = (name.replace(_HID, ""), name.rsplit(_HID, 1)[-1])
+        if _is_secret_name(source, m.start(), name, raw_name, names):
+            yield orig_start, orig_end
 
 
 def _mask_fields(text: str) -> str:
     """Mask the value of every secret-named field. A name counts with its hidden characters
     dropped, or by its last piece after one; case is ignored (as before #744, plus case folding)."""
+    matches = list(_field_matches(text, None, text))
+    if not text.isascii():
+        norm, idx = _nfkc_index(text)
+        matches.extend(_field_matches(norm, idx, text))
+        matches.sort()
     out, pos = [], 0
-    for m in _NAME.finditer(text):
-        name = m.group(1)
-        names = (name.replace(_HID, ""), name.rsplit(_HID, 1)[-1])
-        if m.start() < pos or not _is_secret_name(text, m.start(), name, names):
+    for orig_start, orig_end in matches:
+        if orig_start < pos:
             continue
-        value = _VALUE.match(text, m.end())
+        value = _VALUE.match(text, orig_end)
         if value is not None:
-            out += [text[pos : m.end()], "<redacted>"]
+            out += [text[pos:orig_end], "<redacted>"]
             pos = value.end()
     return "".join([*out, text[pos:]])

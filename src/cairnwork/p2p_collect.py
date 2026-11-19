@@ -5,9 +5,12 @@ The P2P base probe (p2p.py) records the node ids pytest ran on the base for the 
 guard (collect_reader.py), on the test commit (``test_ids``). A base id missing there is:
 
 * ``removed`` when the test commit edited its file (a deferred test file), the base file defines
-  the test there (a ``def`` of that name in the node id's class, or at module level), and the
-  name no longer appears in that file's source on the test commit: the author removed it, so
-  its base outcome says nothing about the candidate and it is not required;
+  the test there (a ``def`` of that name in the node id's class, at module level, or inherited
+  from one unambiguous same-file ancestor), and the name no longer appears in that file's source
+  on the test commit: the author removed it, so its base outcome says nothing about the candidate
+  and it is not required. Inherited ids qualify only when the origin and subclass scopes no longer
+  mention the name, no uncollected binding remains, the origin id is also gone, no same-name test
+  remains collected in the file, and runtime collect-only reports no matching exposure;
 * ``dropped`` otherwise. The test commit made pytest stop collecting a base test without
   removing it (a changed base class, decorator, condition, or a test the base file inherits or
   builds dynamically, whose name was never in that file): the test commit is refused
@@ -27,17 +30,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import shutil
-import signal
-import subprocess
 import sys
-import threading
 from dataclasses import dataclass
 from pathlib import Path
 
 from cairnwork import p2p_classify_child as _classify_child
-from cairnwork.collect_reader import read_collected
+from cairnwork.child_run import run_child
+from cairnwork.collect_reader import _valid_exposed_id, read_collected
 from cairnwork.conftest_check import conftest_of
 from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRejected
 from cairnwork.gitcmd import GitCommandError, run_git
@@ -94,6 +94,9 @@ def collected_side(task, files, outcomes, test_files, ctx, budget, attempt_id) -
         if unknown:
             raise TestCommitRejected("TEST_COMMIT_COLLECT_ERROR", _named(unknown))
         test_ids = frozenset(got.ids)
+        exposed = got.exposed
+    else:
+        exposed = ()
     edited = frozenset(test_files) & frozenset(files)
     there = frozenset(present)
     side = classify(
@@ -102,6 +105,8 @@ def collected_side(task, files, outcomes, test_files, ctx, budget, attempt_id) -
         edited,
         lambda p: _source(task, task.test_commit, p) if p in there else "",
         lambda p: _source(task, task.base_commit, p),
+        exposed=exposed,
+        changed_test_files=_changed_test_files(task),
     )
     if side.dropped:
         detail = _named(sorted(side.dropped))
@@ -122,7 +127,9 @@ def collected_side(task, files, outcomes, test_files, ctx, budget, attempt_id) -
     )
 
 
-def classify(base_ids, test_ids, edited, source, base_source) -> CollectedSide:
+def classify(
+    base_ids, test_ids, edited, source, base_source, *, exposed=None, changed_test_files=None
+) -> CollectedSide:
     """Classify missing ids in a bounded subprocess; source callables are read in the parent."""
     base_ids, test_ids, edited = frozenset(base_ids), frozenset(test_ids), frozenset(edited)
     collected_funcs = {_function(nodeid) for nodeid in test_ids}
@@ -135,17 +142,51 @@ def classify(base_ids, test_ids, edited, source, base_source) -> CollectedSide:
         "test": {path: source(path) for path in sorted(needed)},
         "base": {path: base_source(path) for path in sorted(needed)},
     }
-    removed, dropped = _run_classification(base_ids, test_ids, edited, sources)
+    runtime_names = _edited_exposure(exposed, edited)
+    removed, dropped = _run_classification(
+        base_ids, test_ids, edited, sources, runtime_names, changed_test_files
+    )
     return CollectedSide(base_ids, test_ids, removed, dropped)
 
 
-def _run_classification(base_ids, test_ids, edited, sources):
+def _edited_exposure(exposed, edited):
+    """Entries of a well-formed collect-only fact in edited files; anything else is no fact."""
+    if (
+        not isinstance(exposed, (tuple, list))
+        or not all(isinstance(entry, str) and _valid_exposed_id(entry) for entry in exposed)
+        or len(set(exposed)) != len(exposed)
+    ):
+        return None
+    return sorted(entry for entry in exposed if _file(entry) in edited)
+
+
+def _changed_test_files(task) -> list[str] | None:
+    """Every path the test commit changed, or no fact if the diff cannot be read."""
+    try:
+        changed = run_git(
+            task.repo,
+            "diff",
+            "--name-only",
+            "-z",
+            "--no-renames",
+            task.base_commit,
+            task.test_commit,
+            "--",
+        ).split("\0")
+    except GitCommandError:
+        return None
+    return sorted(path for path in changed if path)
+
+
+def _run_classification(base_ids, test_ids, edited, sources, exposed=None, changed_test_files=None):
     payload = json.dumps(
         {
             "base_ids": sorted(base_ids),
             "test_ids": sorted(test_ids),
             "edited": sorted(edited),
             "sources": sources,
+            "exposed": exposed,
+            "changed_test_files": changed_test_files,
         }
     ).encode()
     output, timed_out, returncode = _run_child(_classify_argv(), payload)
@@ -195,67 +236,10 @@ def _classify_argv():
 
 
 def _run_child(argv, payload):
-    output: list[bytes] = []
-    size = 0
-    process = None
-    try:
-        process = subprocess.Popen(
-            argv,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            env={},
-            start_new_session=True,
-        )
-        stdout = process.stdout
-        assert stdout is not None
-
-        def drain():
-            nonlocal size
-            while chunk := stdout.read(8192):
-                if size < CLASSIFY_OUTPUT_CAP:
-                    kept = chunk[: CLASSIFY_OUTPUT_CAP - size]
-                    output.append(kept)
-                    size += len(kept)
-
-        reader = threading.Thread(target=drain, daemon=True)
-        writer = threading.Thread(target=_write_input, args=(process.stdin, payload), daemon=True)
-        reader.start()
-        writer.start()
-        try:
-            process.wait(timeout=CLASSIFY_TIMEOUT_SECONDS)
-            timed_out = False
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            _kill_child_group(process.pid)
-            process.wait()
-        _kill_child_group(process.pid)
-        writer.join(timeout=1)
-        reader.join(timeout=1)
-        if reader.is_alive() or writer.is_alive() or size >= CLASSIFY_OUTPUT_CAP:
-            return b"", timed_out, 1
-        return b"".join(output), timed_out, process.returncode
-    except (OSError, RuntimeError):  # RuntimeError: a thread that cannot start
-        return b"", False, 1
-    finally:
-        if process is not None:  # every exit path: kill the whole group, reap the child
-            _kill_child_group(process.pid)
-            process.wait()
-
-
-def _write_input(stream, payload):
-    try:
-        stream.write(payload)
-        stream.close()
-    except (BrokenPipeError, OSError):
-        pass
-
-
-def _kill_child_group(group):
-    try:
-        os.killpg(group, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
-        pass
+    """The classifier child under this module's own limits (read at call time)."""
+    return run_child(
+        argv, payload, timeout=CLASSIFY_TIMEOUT_SECONDS, output_cap=CLASSIFY_OUTPUT_CAP
+    )
 
 
 def _analysis_failure(detail):

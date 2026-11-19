@@ -15,7 +15,7 @@ import or while a class is built. pytest collects from ``__dict__`` only (``_pyt
 so a module-level ``__getattr__`` or ``__dir__`` adds no test (Codex r1 on #1003, disputed)."""
 
 import pytest
-from conftest import commit_change
+from conftest import commit_change, git
 from test_deferred_tests import REGRESSION, make_test_commit
 from verify_helpers import FIX, candidate, verify
 
@@ -215,7 +215,7 @@ ATTACHED = {
 
 def _new_tests(project, files):
     base, test_commit = make_test_commit(project, files)
-    ensure_test_commit(project, test_commit)
+    ensure_test_commit(project, test_commit, origin_url=git(project, "remote", "get-url", "origin"))
     return new_tests(project, base, test_commit, tuple(files))
 
 

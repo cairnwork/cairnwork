@@ -30,7 +30,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from cairnwork import candidate_env, protection, runlock, verify_scope
+from cairnwork import candidate_env, protection, replay_set, runlock, verify_scope
 from cairnwork.account_check import base_stage, precheck
 from cairnwork.blackbox import Declaration
 from cairnwork.confined import ATTEMPT_ENV, sweep_marked
@@ -56,6 +56,7 @@ from cairnwork.pipeline import (
 )
 from cairnwork.pipeline_judge import judge_candidate
 from cairnwork.recovery import _remove_leftovers
+from cairnwork.textclean import shown
 from cairnwork.verify_candidate_checks import (
     check_task_for_verify,
     require_core_ids,
@@ -86,15 +87,12 @@ def verify_candidate(
     blackbox: Declaration | None = None, require_protection: str = "",  # #303 (protection.py)
 ) -> dict[str, Any]:  # fmt: skip
     """``verified`` is true only for a Core verdict bound to what was judged: the candidate, or
-    with deferred tests the tree that ran (candidate plus tests) and its ``binding`` (#229), headed
-    by the candidate. ``status`` is VERIFIED, FAILED, REFUSED or UNCOMPARABLE (#234: the base
-    could not be compared; ``uncomparable`` says why, Core is never asked). The account precheck
-    precedes burn; ``tests_consumed`` says whether the tests are now used up.
+    with deferred tests the tree that ran and its ``binding`` (#229). ``status`` is VERIFIED,
+    FAILED, REFUSED or UNCOMPARABLE (#234: the base could not be compared; ``uncomparable`` says
+    why, Core is never asked). The account precheck precedes burn; ``tests_consumed``: used up.
     Raises TaskRejected for malformed input and IntakeRefused when drained or mirror unusable.
-    ``import_paths`` (#283, as the Issue pipeline's) are
-    directories prepended to the verifiers' import path for a src-layout repo; BAD_IMPORT_PATH
-    when one is malformed or is, or is inside, a test root. The state config's are not read.
-
+    ``import_paths`` (#283) are directories prepended to the verifiers' import path for a
+    src-layout repo; BAD_IMPORT_PATH when malformed or inside a test root. Config's are not read.
     Environment failures before the test commit is burned are explicit refusals. The shadow rules
     see only the listed files the candidate changed (#866)."""
     if not isinstance(base, str) or not OID.fullmatch(base):
@@ -107,6 +105,7 @@ def verify_candidate(
         verifiers, test_commit=test_commit, p2p_budget=intake.config()["p2p_time_budget_seconds"],
         blackbox=blackbox, require_protection=require_protection, test_store=intake.test_store(),
         p2p_mode=intake.config()["p2p_selection"], test_roots=test_roots, import_paths=import_paths,
+        origin_url=intake.config().get("origin_url") or None,
     )  # fmt: skip
     account, python = intake.verifier_account(), intake.config()["verifier_python"]
     specs = check_task_for_verify(
@@ -134,6 +133,8 @@ def verify_candidate(
                 result.reason, status = f"UNCOMPARABLE: {exc}", "UNCOMPARABLE"
                 found, rule = exc.comparison, candidate_env.uncomparable_rule(exc.comparison.code)
                 uncomparable = {"code": found.code, "detail": found.detail, "rule": rule}
+            except OSError as exc:
+                result.reason, status = f"INFRA_ERROR: {type(exc).__name__}: {exc}", "FAILED"
     judged = result.candidate_commit or candidate
     subject = binding["head"] if binding else judged  # a bound row names the head (#229)
     verdict = notary.verdict(result.task_id, result.attempt_id, expected_candidate=subject)
@@ -154,7 +155,7 @@ def verify_candidate(
         "protection": result.protection,  # protection.py; "" when Core was never asked
         "tests_consumed": tests_consumed(intake, test_commit),
         "verifier_mode": "account" if account is not None else "sandbox_only",
-    } | {"failure_evidence": result.failure_evidence}  # record-only, never judged (#1105)
+    } | replay_set.record_only(result, status, task, candidate)  # never judged (#1105)
 
 
 def _status_fields(verified: bool, status: str, level: str) -> dict[str, str]:
@@ -202,7 +203,7 @@ def _scratch(intake: Intake, source: Path, repo: Path, task: TaskSpec, candidate
         run_git(path, "fetch", "--quiet", "--no-tags", str(repo), task.base_commit, candidate)
     except GitCommandError as exc:
         shutil.rmtree(path, ignore_errors=True)
-        raise WorkspaceError(f"cannot prepare a scratch clone: {exc}") from exc
+        raise WorkspaceError(f"cannot prepare a scratch clone: {shown(exc)}") from exc
     try:
         yield path
     finally:
@@ -211,15 +212,19 @@ def _scratch(intake: Intake, source: Path, repo: Path, task: TaskSpec, candidate
 
 def _check_parent(repo: Path, base: str, candidate: str) -> None:
     """In the caller's repository, read-only and before anything is fetched anywhere: the
-    candidate must be one commit directly on the base. A candidate built on top of a hidden
-    test commit is refused here, so it can never bring that commit into a store Cairnwork
-    checks (and so cannot make the commit look already seen)."""
+    candidate must be one commit directly on the base. A candidate built on a hidden test
+    commit is refused here, so it never brings that commit into a store Cairnwork checks."""
     try:
         parents = run_git(repo, "rev-list", "--parents", "-n", "1", candidate).split()[1:]
     except GitCommandError as exc:
-        raise WorkspaceError(f"cannot read {candidate} in {repo}: {exc}") from exc
+        raise WorkspaceError(
+            f"cannot read {shown(candidate)} in {shown(repo)}: {shown(exc)}"
+        ) from exc
     if parents != [base]:
-        raise CandidateRejected("NOT_ONE_COMMIT_ON_BASE", f"parents of {candidate} are {parents}")
+        found = ", ".join(map(shown, parents))
+        raise CandidateRejected(
+            "NOT_ONE_COMMIT_ON_BASE", f"parents of {shown(candidate)} are {found}"
+        )
 
 
 def _absolute(url: str, source: Path) -> str:

@@ -1,5 +1,19 @@
 # 演練紀錄
 
+## Issue #1353 Stage 2：Baseline & True Negative Witnesses
+
+此基準呼叫目前驗證器的入口，記錄 C1–C10 的原始結果，不修正驗證器。執行：
+
+```sh
+python scripts/drill_1353_baseline.py
+```
+
+腳本只寫入 `docs/drills/`；`--out` 可指定該目錄內的子目錄。每筆 probe 記錄 `class_id`、`probe`、實際呼叫的 `route`、原始 `observed`、`expected_on_main`、`matches_spec`、`classification`、`platform` 和 `reason`。`NOT_RUN` 只用於程式回報的未執行結果，並附原始原因。總計包含 `N_tamper`、`N_honest`、`NOT_RUN`、`VERIFIED-wrong` 及 `spec_mismatch_count`；spec 不相符會列入 JSON，不會改寫成預期值。只有 macOS 實測結果不得外推成 Linux bwrap 結果。
+
+`partial_macos` 表示至少一個 blackbox 檢查通過，但驗證仍包含可由候選同程序影響的 pytest 權威；它不是全黑箱保護。`VERIFIED-wrong` 是攻擊/錯誤探針中仍被判為 VERIFIED 的數量。C10 是同程序 runner 可被候選辨識並分歧回傳的已知結構殘餘，不宣稱此路徑能防住它。
+
+blackbox 路徑的候選樹與一般 verify 相同（宣告 `module: calc`，checkout 以 `import_paths=("src",)` 讓 runner 找得到 `src/calc.py`）。釘住的預期隨沙盒是否可用（與測試 skip 標記同一個探針 `cairnwork_sandbox.select()`）而變：可用時釘此機器實測（擁有者模式沒有驗證帳號，永遠不能 PASS：正確候選為 `BLACKBOX_NEEDS_VERIFIER_ACCOUNT [matched 1/1]`、錯誤候選 `[matched 0/1]`；此路徑固定走擁有者模式），不可用時釘 `NO_SANDBOX`。`CONTROL` 列是走同一路徑的正確／錯誤對照，證明 fixture 本身能 import。Linux bwrap 專屬項目在 macOS 維持 NOT_RUN。
+
 議會 H 條：裸骨幹必須通過正常、失敗、重啟、回退四種演練，才可以搬入任何實驗能力。這裡只寫實際跑出來的結果。
 
 ## 現況：worker 停用（2026-10-30 起）
@@ -7,7 +21,7 @@
 - 核心唯一的 worker 是 Agy 帳號池，2026-10-30 起停用。目前實際使用的只有 `cairnwork-verify` 這條驗收路徑。
 - 因此 `cairnwork run`、Issue intake、route 的 worker 階段暫時無法跑完。
 - 另由誰來當 worker，另行決定。
-- 現行部署版本是 `1662f01`（2026-10-31 部署）。
+- 現行部署版本是 `763ccd0`（`763ccd0e0dfb9592ff1a24f60b708f837e43d912`，2026-11-17 21:42 部署，Mac mini `~/.local/share/cairnwork/deploy/current`）。前一版是 2026-11-03 起的 `bce3495`，先前這裡寫的 `1662f01` 已過期。回退＝把 `current` 切回 `deploy/bce34955…`（兩版的 notary schema 都是 3，不需遷移）。
 - 2026-11-01 在 main `c513c4e`（`c513c4ed3bf2411776872f02fffebc2089dc67a1`）上重跑了不需要 worker 的部分：驗證帳號、重啟與失敗的自動測試、route 的 Cairnwork 端與回退。全部照預期，見下方「2026-11-01 重跑」。這是 main，不是部署版本，所以不代表 `1662f01` 的行為。
 - 凡是用到真 agent worker 的演練，標「未重跑：worker 停用（10/30 起）」，那部分仍是 2026-10-20 在更早版本上的舊紀錄。
 
@@ -18,6 +32,26 @@
 | 重啟 | 自動測試：**通過**（2026-11-01，`c513c4e`，26 passed）。用真的 kill -9 殺測試自己生的子程序，涵蓋 DISPATCHED、WORKER_STARTED、CANDIDATE、TEST_SOURCE、VERIFYING、NOTARIZING、FINISHED 七個時間點，以及孤兒程序、鎖衝突、重複執行恢復。真 agent 的部分**未重跑：worker 停用（10/30 起）**，仍是 2026-10-20 的舊紀錄 | `docs/drills/2026-11-01-restart.json`、`docs/drills/2026-10-20-restart.json` |
 | 驗證帳號 | **通過**（2026-11-01，`c513c4e`）：`cairnwork-verify` 以 `cairnwork-verifier` 帳號執行，正確候選 VERIFIED 兩次、已知錯誤的候選 FAILED_VERIFICATION 一次；執行中的 checkout 檔案與 pytest 程序都屬於 `cairnwork-verifier`，結束後帳號程序數為 0 | `docs/drills/2026-11-01-verifier-account.json` |
 | 回退 | **未驗收（跨系統）**。Cairnwork 端在 2026-11-01、`c513c4e` 重跑通過：worker 換成固定腳本（不呼叫 agy 或模型），drain 後新任務被拒（`NOT_ACCEPTING`）、重送拿回同一個任務，任務在 Cairnwork 內完成且沒有重跑；route 自動測試 15 passed。Gateway 轉送自 2026-10-21 起依維護者決定停車（`docs/GATEWAY_ROUTE.md`），`off` 只在環境變數層確認，沒有一筆線上任務回到 SelfHosted 完成，所以跨系統回退沒有驗收證據。用真 agy 的 `scripts/drill_rollback.py` **未重跑：worker 停用（10/30 起）**。重開 route 前要照 #39 在當前版本重做三個見證 | `docs/drills/2026-11-01-rollback-cairnwork-side.json`、`docs/drills/2026-10-20-route.json`、`docs/drills/2026-10-20-rollback-cairnwork-side.json`（都只有 Cairnwork 端） |
+
+## 2026-11-18 部署版重跑（deploy `763ccd0`，不經真 worker；Refs #520）
+
+2026-11-17 21:42 把正式部署從 `bce3495` 換到 main `763ccd0`（`git archive` 加 `uv sync --frozen --no-dev --no-editable`，切換前 890 個 state 的 `in-flight` 都是 0，切換後 verify、attest、issues、route 四支執行檔自檢 OK）。以下在這個部署版上重跑。
+
+| 演練 | 結果 | 說明 | 紀錄 |
+|---|---|---|---|
+| 驗證帳號 | **沿用 2026-11-17 紀錄** | `cairnwork-verifier` 帳號當時被 PAUSE 正式槽占用，layer1 決定不插隊。`89116e46..763ccd0` 只改了 `experimental/`、`tests/`、`docs/`，`src/`、`pyproject.toml`、`uv.lock` 完全相同，所以 11/17 在 `89116e46` 的帳號模式結果（正確 VERIFIED、已知錯誤 FAILED、正確再 VERIFIED）適用於部署版。 | `docs/drills/2026-11-17-verifier-account.json` |
+| 重啟 | **PASS**（自動測試） | `tests/test_recovery.py` 26 passed、0 failed、0 skipped。部署 venv 不含 pytest，所以在同一個 SHA 的 checkout 跑。真 agent 部分未重跑：worker 停用（10/30 起）。 | `docs/drills/2026-11-18-restart.json` |
+| 失敗 | **PASS**（自動測試） | `tests/test_pipeline.py` 30 passed、0 failed、0 skipped。 | `docs/drills/2026-11-18-failure.json` |
+| route 的 Cairnwork 端與回退 | **PASS**（Cairnwork 端） | `scripts/drill_rollback.py` 用部署 venv 的 python 執行，所以每個 `cairnwork-route` 呼叫都跑部署版程式。worker 是 PATH 上的固定腳本（不是真 agy，無模型）；驗證用本機模式，未用驗證帳號。A 為 COMPLETED、Core VERIFIED（task `task-3f2f41e20b2b442597e0651a8afe13ee`、attempt `abaa09cc0ed0290dd`）。第一次執行沒設 `verifier_python`，verifier 落到沒有 pytest 的部署 venv，A 判 FAILED（route 各步仍照預期）；這是演練設定缺口，補上 `verifier_python` 後重跑即為本筆。route 自動測試 16 passed。跨系統回退仍未驗收（Gateway 轉送停車）。 | `docs/drills/2026-11-18-rollback-cairnwork-side.json` |
+
+## 2026-11-17 重跑（main `89116e46`，不經真 worker；Refs #520）
+
+| 演練 | 結果 | 說明 | 紀錄 |
+|---|---|---|---|
+| 驗證帳號 | **PASS**（2026-11-17，mini，lab 核准時段） | 三個候選經 `cairnwork-verify` 帳號模式判定：正確修正 VERIFIED（task `verify-e90eccf606336f40`）、已知錯誤 FAILED（exit 2）、正確修正重跑 VERIFIED（exit 0）；結束後帳號程序 0。第一次執行的 exit code 未擷取。 | `docs/drills/2026-11-17-verifier-account.json` |
+| 重啟 | **PASS**（自動測試） | `tests/test_recovery.py` 26 passed、0 failed、0 skipped（95.7 秒）。真 agent 部分未重跑：worker 停用（10/30 起）。 | `docs/drills/2026-11-17-restart.json` |
+| 失敗 | **PASS**（自動測試） | `tests/test_pipeline.py` 30 passed、0 failed、0 skipped（66.8 秒）。 | `docs/drills/2026-11-17-failure.json` |
+| route 的 Cairnwork 端與回退 | **PASS**（Cairnwork 端，本機驗證） | 與 11/01 相同步驟（影子 `check`、`accept`、交件 A、A 在 DISPATCHED 時 `drain`、新冪等鍵回 `NOT_ACCEPTING`、重送拿回同一任務、`recover` 無決定、完成後重送為 `duplicate`）。worker 用**固定腳本**（PATH 上的 stub，不是真 agy，無模型）；驗證改用本機模式，**未用驗證帳號**。跨系統回退仍未驗收（Gateway 轉送停車）。 | `docs/drills/2026-11-17-rollback-cairnwork-side.json` |
 
 ## 2026-11-01 重跑（main `c513c4e`，不經 worker）
 
@@ -141,3 +175,7 @@
 產生的 verifier ini 只有 base 的 `pytest.ini` 裡允許的鍵（`testpaths`、`python_*`、`norecursedirs`、`asyncio_mode`、`filterwarnings`），`addopts` 被丟掉，只保留其中的 `--import-mode=importlib`（Nexus-new 的 addopts 裡沒有 `-W` 或 strict 選項）；plugin 以 `-p` 明確載入 pytest-asyncio、pytest-timeout、anyio。實際執行的 pytest 參數記在 JSON 的 `pytest_argv`。證據：`docs/drills/2026-10-20-nexus-new-verifier.json`。
 
 這只證明「一個 Nexus-new 測試檔可以在 Cairnwork 的 verifier 裡正確地過與不過」。候選版本是演練腳本自己做的 commit，不是 agent 交出的修改，也沒有經過 Core 公證；還沒有跑過真正的 Nexus-new Issue。只讀 repo 根目錄的設定檔；需要網路、外部服務或 HOME 裡快取的測試，在 sandbox 裡仍然會失敗。
+
+## Issue #1353 Stage 2 baseline drill
+
+Run `.venv/bin/python scripts/drill_1353_baseline.py` to measure the pinned main behavior for C1–C10 and ten correct controls. The generated `docs/drills/1353-baseline-<platform>.json` stores each production route, its raw return value, the derived observed status, the spec expectation, and whether they match. `NOT_RUN` records a missing verifier-account gap; `HARNESS_TIMEOUT` records the measurement harness timing out and is not counted as a verifier refusal. Neither is substituted for a guessed verdict. `VERIFIED-wrong` counts tamper probes whose measured result is VERIFIED. Owner-mode blackbox runs are not comparable to verifier-account PASS because this host has no dedicated account. C10 remains a documented same-interpreter known residual.

@@ -52,7 +52,7 @@ def crash(project, state, fault, fix=GOOD, test_commit=""):
     env = {**os.environ, "CAIRNWORK_FAULT_AFTER": fault, "CRASH_TEST_COMMIT": test_commit}
     done = subprocess.run(
         [sys.executable, str(DRIVER), str(project), str(state), fix],
-        env=env,
+        env={**env, "PYTHONPATH": os.pathsep.join(p for p in sys.path if p)},
         capture_output=True,
         text=True,
         timeout=300,
@@ -162,6 +162,7 @@ def test_recovery_leaves_another_owners_dispatched_task_untouched(tmp_path):
 def test_recovery_refuses_while_a_run_holds_the_lock(project, tmp_path):
     proc = subprocess.Popen(
         [sys.executable, str(DRIVER), str(project), str(tmp_path), GOOD, "orphan"],
+        env={**os.environ, "PYTHONPATH": os.pathsep.join(p for p in sys.path if p)},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -180,6 +181,7 @@ def test_recovery_refuses_while_a_run_holds_the_lock(project, tmp_path):
 def test_sigkill_mid_worker_kills_the_orphan_and_fails_the_task(project, tmp_path):
     proc = subprocess.Popen(
         [sys.executable, str(DRIVER), str(project), str(tmp_path), GOOD, "orphan"],
+        env={**os.environ, "PYTHONPATH": os.pathsep.join(p for p in sys.path if p)},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -262,6 +264,7 @@ def test_run_that_decided_failed_stays_failed_even_if_core_verified(project, tmp
 def test_recovery_with_another_run_root_still_waits_for_the_live_run(project, tmp_path):
     proc = subprocess.Popen(
         [sys.executable, str(DRIVER), str(project), str(tmp_path), GOOD, "orphan"],
+        env={**os.environ, "PYTHONPATH": os.pathsep.join(p for p in sys.path if p)},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -306,6 +309,7 @@ def test_sigkill_during_verification_kills_the_verifier_and_cleans_up(repo, tmp_
     )
     proc = subprocess.Popen(
         [sys.executable, str(DRIVER), str(repo), str(tmp_path), GOOD],
+        env={**os.environ, "PYTHONPATH": os.pathsep.join(p for p in sys.path if p)},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )

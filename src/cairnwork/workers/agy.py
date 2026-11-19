@@ -170,17 +170,9 @@ class AgyWorker:
             )
         else:
             argv = [
-                binary,
-                "-p",
-                prompt,
-                "--model",
-                self.model,
-                "--mode",
-                "accept-edits",
-                "--sandbox",
-                "--print-timeout",
-                f"{self.timeout_seconds}s",
-            ]
+                binary, "-p", prompt, "--model", self.model, "--mode", "accept-edits",
+                "--sandbox", "--print-timeout", f"{self.timeout_seconds}s",
+            ]  # fmt: skip
         env = _kept_env() if dispatch is None else _run_env()
         env[ATTEMPT_ENV] = workdir.name
         log_path = workdir.parent / f"{workdir.name}.agy.log"
@@ -208,13 +200,16 @@ class AgyWorker:
         reader = None
         try:  # an exception before _await owns the process must not leave agy's group running
             if dispatch is not None:
-                reader = agy_dispatch.StatusReader(process.stderr)
-                reader.start()
+                started = agy_dispatch.StatusReader(process.stderr)
+                started.start()
+                reader = started
                 threading.Thread(target=_feed, args=(process, prompt), daemon=True).start()
             copier = threading.Thread(target=copy_capped, args=(process.stdout, log), daemon=True)
             copier.start()
         except BaseException:
-            _stop(process, None, workdir.name, reader, mark, dirs)
+            held, _, _ = _stop(process, None, workdir.name, reader, mark, dirs)
+            if not held:
+                _close_streams(process, log)
             raise
         self._await(process, copier, reader, (workdir.name, mark, dirs), log, log_path)
         return self.provenance(reader)
@@ -250,10 +245,7 @@ class AgyWorker:
             name, mark, dirs = attempt
             held, swept, by_cwd = _stop(process, copier, name, reader, mark, dirs)
             if not held:  # else the copier still reads: leave both open rather than hang
-                process.stdout.close()
-                if process.stderr is not None:
-                    process.stderr.close()
-                log.close()
+                _close_streams(process, log)
         completion, why = None, "HELD" * held or "CWD" * bool(by_cwd)  # cwd: as a holder (#537)
         try:
             if dispatch is not None and dispatch.run_as_user is not None:
@@ -363,6 +355,12 @@ def _feed(process, prompt: str) -> None:
             process.stdin.close()
         except OSError:
             pass
+
+
+def _close_streams(process, log) -> None:
+    for stream in (process.stdin, process.stdout, process.stderr, log):
+        if stream is not None:
+            stream.close()
 
 
 def _stop(

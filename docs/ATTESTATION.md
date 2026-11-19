@@ -318,7 +318,7 @@ from the receipt:
 {"rule": "overlay-v1", "test_commit": "<40-hex>", "core_identity": {...}, "key_id": "<64-hex>"}
 ```
 
-These four keys are required (strict JSON). Six keys are optional: `require_full` (a JSON
+These four keys are required (strict JSON). Seven keys are optional: `require_full` (a JSON
 boolean, default `false`), `test_roots` (a non-empty list of root prefixes such as `"tests/"`:
 each ends with `/`, does not start with `/`, and has no empty, `.` or `..` part) and
 `import_paths` (a list, possibly empty, of the import paths the receiver expects the verifiers
@@ -331,9 +331,16 @@ dropped checks, and the verifier cannot tell without the declaration, #373) and 
 level the receiver accepts, one of `"same_process_only"`, `"partial_macos"`, `"partial"`, `"blackbox_macos"`, `"blackbox"`
 (a pin without `_macos` accepts only the Linux grade). A receipt whose level is lower fails
 with `UNPROTECTED`; a receipt without the key counts as `"same_process_only"`. Any other key is
-malformed. An unreadable or malformed policy is a usage error (exit
-2). `key_id` must be the key id of `--public-key`, `core_identity` is pinned like
-`--core-identity` (both apply when both are given), and the receipt's test commit and rule must
+malformed. `require_protection_gate: true` additionally requires a protected `protection` pin
+(one of the protected levels above): it checks that Core required exactly one strict `protection`
+gate (`PROTECTION_GATE_MISSING`), that its PASS observation matches the recorded level and meets
+the pinned level (`PROTECTION_GATE_MISMATCH`), and that required blackbox observations are not
+marked `;low-entropy` (`BLACKBOX_LOW_ENTROPY`). The current producer's `--require-protection`
+minimum is fixed at `partial_macos`, and a gate minimum must meet the pinned level, so with
+today's CLI producer only a `partial_macos` pin can pass this gate (`partial`, `blackbox_macos` and
+`blackbox` cannot) until the producer supports a configurable minimum. An unreadable or malformed
+policy is a usage error (exit 2). `key_id` must be the key id of `--public-key`, `core_identity` is
+pinned like `--core-identity` (both apply when both are given), and the receipt's test commit and rule must
 equal the policy's. A policy can also be given in full mode. A v0.1 receipt under a policy fails
 with `TEST_SOURCE_MISMATCH` (it binds no tests). A caller of the Python API that passes a policy
 dict of the wrong shape gets `POLICY_MALFORMED`.

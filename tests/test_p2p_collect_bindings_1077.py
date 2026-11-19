@@ -32,6 +32,8 @@ from cairnwork.p2p_collect import classify
 def test_ambiguous_base_evidence_stays_dropped(base: str) -> None:
     test_id = "t.py::A::test_x"
     base_file = "class A:\n    def test_x(self): pass\n"
-    side = classify({test_id}, set(), {"t.py"}, lambda path: base, lambda path: base_file)
+    side = classify(
+        {test_id}, set(), {"t.py"}, lambda path: base, lambda path: base_file, exposed=()
+    )
     assert side.removed == set()
     assert side.dropped == {test_id}

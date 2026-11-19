@@ -135,19 +135,23 @@ def _run_git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _include_applies(repo: Path, key: str, scratch: Path) -> bool:
+def _include_applies(repo: Path, key: str, scratch: Path, origin: str = "") -> bool:
     """Whether an includeIf condition holds, asked of git itself. Unsure counts as holding."""
     if not key.startswith("includeif.") or key.startswith("includeif.hasconfig:"):
         return True  # hasconfig: depends on the real config; fail closed
-    cond = key[len("includeif.") : -len(".path")].replace("\\", "\\\\").replace('"', '\\"')
+    cond = key[len("includeif.") : -len(".path")]
+    if m := re.match(r"^(gitdir(?:/i)?):\./(.*)$", cond, re.DOTALL):
+        if not origin.startswith("file:"):
+            return True
+        base = re.sub(r"([\\*?\[])", r"\\\1", (repo / origin[5:]).resolve().parent.as_posix())
+        cond = f"{m.group(1)}:{base}/{m.group(2)}"
+    cond = cond.replace("\\", "\\\\").replace('"', '\\"')
     (scratch / "marker.cfg").write_text("[cairn]\n\tm = 1\n")
     (scratch / "cond.cfg").write_text(f'[includeIf "{cond}"]\n\tpath = {scratch / "marker.cfg"}\n')
     got = _run_git(
         repo, "config", "--file", str(scratch / "cond.cfg"), "--includes", "--get", "cairn.m"
     )
-    if got.returncode == 1 and not got.stderr.strip():
-        return False
-    return True
+    return not (got.returncode == 1 and not got.stderr.strip())
 
 
 def _include_problem(repo: Path, cfg: Path | None = None, scratch=None, chain=()) -> str | None:
@@ -169,7 +173,7 @@ def _include_problem(repo: Path, cfg: Path | None = None, scratch=None, chain=()
             if not origin.startswith("file:"):
                 continue  # git itself refuses a relative include given on the command line
             target = (repo / origin.removeprefix("file:")).parent / target
-        if not _include_applies(repo, key, scratch):
+        if not _include_applies(repo, key, scratch, origin):
             continue  # git does not read it
         if not os.access(target, os.R_OK) or not target.is_file():
             return f"config include {value!r} is missing or unreadable"
@@ -387,13 +391,8 @@ def main(argv: list[str]) -> int:
         return 1
     # Distinct code: a repo we could not probe at all (not green bare, or bare timed out) is not
     # the same signal as a coupling, but still not a clean onboarding.
-    if any(
-        r.verdict
-        in ("SKIPPED_TESTS", "REPO_TESTS_NOT_GREEN", "SKIP_BARE_TIMEOUT", "MIRROR_MULTI_BRANCH")
-        for r in results
-    ):
-        return 2
-    return 0
+    bad = ("SKIPPED_TESTS", "REPO_TESTS_NOT_GREEN", "SKIP_BARE_TIMEOUT", "MIRROR_MULTI_BRANCH")
+    return 2 if any(r.verdict in bad for r in results) else 0
 
 
 if __name__ == "__main__":
