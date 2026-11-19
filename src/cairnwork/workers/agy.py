@@ -27,6 +27,7 @@ import pwd
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,6 +36,8 @@ from cairnwork import proc_start, provenance
 from cairnwork.confined import ATTEMPT_ENV, Sweep, confirm_gone, copy_capped, sweep_marked
 from cairnwork.unswept import WorkerMayLive
 from cairnwork.workers import agy_dispatch, agy_receipts
+from cairnwork.workers.agy_streams import close_streams, fail_cleanup
+from cairnwork.workers.agy_streams import feed as _feed
 
 ENV_KEEP = (
     "HOME",
@@ -206,10 +209,13 @@ class AgyWorker:
                 threading.Thread(target=_feed, args=(process, prompt), daemon=True).start()
             copier = threading.Thread(target=copy_capped, args=(process.stdout, log), daemon=True)
             copier.start()
-        except BaseException:
-            held, _, _ = _stop(process, None, workdir.name, reader, mark, dirs)
+        except BaseException as start_error:  # noqa: BLE001 - cleanup keeps it
+            try:
+                held, _, _ = _stop(process, None, workdir.name, reader, mark, dirs)
+            except BaseException as stop_error:  # noqa: BLE001 - cleanup keeps start_error
+                fail_cleanup(start_error, stop_error, process, log, (reader,))
             if not held:
-                _close_streams(process, log)
+                close_streams(process, log)
             raise
         self._await(process, copier, reader, (workdir.name, mark, dirs), log, log_path)
         return self.provenance(reader)
@@ -236,16 +242,21 @@ class AgyWorker:
         dispatch = self.dispatch
         timed_out = None
         try:
-            process.wait(timeout=self.timeout_seconds + 60)
+            pool_wait = max(0, dispatch.pool_wait_seconds) if dispatch is not None else 0
+            process.wait(timeout=self.timeout_seconds + 60 + pool_wait)
         except subprocess.TimeoutExpired as exc:
             timed_out = exc
             if dispatch is not None:
                 agy_dispatch.ask_to_stop(process)  # lets it release its lease and sweep itself
         finally:
             name, mark, dirs = attempt
-            held, swept, by_cwd = _stop(process, copier, name, reader, mark, dirs)
-            if not held:  # else the copier still reads: leave both open rather than hang
-                _close_streams(process, log)
+            active = sys.exception()  # e.g. ask_to_stop failing: it must stay the error raised
+            try:
+                held, swept, by_cwd = _stop(process, copier, name, reader, mark, dirs)
+                if not held:  # else the copier still reads: leave both open rather than hang
+                    close_streams(process, log)
+            except BaseException as cleanup_error:  # noqa: BLE001 - the in-flight error leaves
+                fail_cleanup(active or cleanup_error, cleanup_error, process, log, (copier, reader))
         completion, why = None, "HELD" * held or "CWD" * bool(by_cwd)  # cwd: as a holder (#537)
         try:
             if dispatch is not None and dispatch.run_as_user is not None:
@@ -343,24 +354,6 @@ def _settle_worker_run(dispatch, reader, process, held, timed_out, log_path) -> 
     if found and not ended:
         raise agy_dispatch.AgyWorkerAccountFailed(f"{'; '.join(found + unswept)}; log {log_path}")
     return completion
-
-
-def _feed(process, prompt: str) -> None:
-    try:
-        process.stdin.write(prompt.encode())
-    except OSError:
-        pass  # the dispatcher exited without reading it; its exit code says what happened
-    finally:
-        try:
-            process.stdin.close()
-        except OSError:
-            pass
-
-
-def _close_streams(process, log) -> None:
-    for stream in (process.stdin, process.stdout, process.stderr, log):
-        if stream is not None:
-            stream.close()
 
 
 def _stop(
