@@ -31,41 +31,53 @@ _VERDICTS = {"可直接合併": "ACCEPT", "需修改": "REJECT", "不可用": "R
 Request = Callable[[str, str, "dict | None"], dict]
 
 
+def _count_verdicts(value: object) -> int:
+    """Verdict-keyed objects at any depth inside one decoded JSON value."""
+    if isinstance(value, dict):
+        own = isinstance(value.get("verdict"), str) and value["verdict"] in _VERDICTS
+        return int(own) + sum(_count_verdicts(item) for item in value.values())
+    if isinstance(value, list):
+        return sum(_count_verdicts(item) for item in value)
+    return 0
+
+
 def parse_verdict(text: str) -> str | None:
     """Normalize a judge reply to ``ACCEPT\\n<reason>`` / ``REJECT\\n<reason>`` (or None).
 
-    Fail-closed on ambiguity: the candidate text is attacker-influenced and can make the model
-    echo an earlier verdict, so a reply passes only when it holds exactly ONE verdict and that
-    verdict is its final element. Accepted: the frozen JSON line (``{"verdict": ..., "reason":
-    ...}``) as the last thing in the reply (a closing code fence is fine; prose before it is
-    fine), or, with no JSON at all, a single standalone ACCEPT/REJECT line that is the first or
-    last non-empty line. Several verdicts, conflicting verdicts, trailing prose after the JSON or
-    anything else stay unparsed, so PAUSE reports BAD_OUTPUT rather than guessing.
+    Fail-closed on any ambiguity: the candidate text is attacker-influenced and can make the model
+    echo an earlier verdict. Every verdict in every form is counted (verdict-keyed JSON objects at
+    any depth plus standalone ACCEPT/REJECT lines) and the reply passes only when the total is
+    exactly one AND that verdict is the final element: the frozen JSON line
+    (``{"verdict": ..., "reason": ...}``, top-level, a closing code fence and earlier prose are
+    fine) or a standalone ACCEPT/REJECT line that is the last non-empty line. Nothing else is
+    parsed, so PAUSE reports BAD_OUTPUT and the stage is not approved.
     """
     body = text.strip()
     if body.endswith("```"):
         body = body[:-3].rstrip()
     decoder = json.JSONDecoder()
-    found: list[tuple[int, int, dict]] = []
-    index = 0
+    objects: list[tuple[int, dict]] = []
+    total = index = 0
     while (index := body.find("{", index)) != -1:
         try:
             value, end = decoder.raw_decode(body[index:])
         except ValueError:
             index += 1
             continue
-        if isinstance(value, dict) and value.get("verdict") in _VERDICTS:
-            found.append((index, index + end, value))
+        total += _count_verdicts(value)
+        if isinstance(value, dict):
+            objects.append((index + end, value))
         index += max(end, 1)
-    if found:
-        ((_start, end, value),) = found[:1] if len(found) == 1 else [(0, 0, {})]
-        if len(found) != 1 or body[end:].strip():
-            return None
-        return f"{_VERDICTS[value['verdict']]}\n{str(value.get('reason', ''))[:300]}"
     lines = [line.strip() for line in body.splitlines() if line.strip()]
     marks = [i for i, line in enumerate(lines) if line in ("ACCEPT", "REJECT")]
-    if len(marks) == 1 and marks[0] in (0, len(lines) - 1):
-        return lines[marks[0]]
+    if total + len(marks) != 1:
+        return None
+    if marks:
+        return lines[-1] if marks[0] == len(lines) - 1 else None
+    for end, value in objects:
+        verdict = value.get("verdict")
+        if isinstance(verdict, str) and verdict in _VERDICTS and not body[end:].strip():
+            return f"{_VERDICTS[verdict]}\n{str(value.get('reason', ''))[:300]}"
     return None
 
 
@@ -97,7 +109,9 @@ class _ChatTransport:
         if not isinstance(content, str):
             return TransportResult(status=200, body=None)
         self.last_text = content
-        return TransportResult(status=200, body={"text": parse_verdict(content) or content})
+        # An unparseable or ambiguous reply is passed on as empty text (BAD_OUTPUT), never as the
+        # raw reply: PAUSE would accept any text whose first line happens to be ACCEPT.
+        return TransportResult(status=200, body={"text": parse_verdict(content) or ""})
 
 
 class ProxyGate:

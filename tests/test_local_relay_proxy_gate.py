@@ -20,7 +20,13 @@ STATS = {
 
 
 class FakeProxy:
-    def __init__(self, verdict="ACCEPT\nreason", stats=None, chat=None, fail_on=None):
+    def __init__(
+        self,
+        verdict='{"verdict": "可直接合併", "reason": "沒有缺陷"}',
+        stats=None,
+        chat=None,
+        fail_on=None,
+    ):
         self.calls = []
         self.verdict, self.stats, self.chat, self.fail_on = verdict, stats or STATS, chat, fail_on
 
@@ -62,7 +68,9 @@ def test_review_is_a_plain_chat_without_tools_and_reports_real_cost():
 
 
 def test_reject_verdict_is_passed_through_with_its_cost():
-    reply = ProxyGate(URL, FakeProxy(verdict="REJECT\nbad")).review(_request())
+    reply = ProxyGate(URL, FakeProxy(verdict='{"verdict": "需修改", "reason": "漏了一項"}')).review(
+        _request()
+    )
     assert reply.verdict == "REJECT" and reply.usd == 0.0049
 
 
@@ -132,15 +140,20 @@ def test_a_verdict_with_unknown_cost_is_still_refused():
         ('{"verdict": "不可用", "reason": "x"}', "REJECT\nx"),
         ('thinking...\n```json\n{"verdict": "可直接合併", "reason": "r"}\n```', "ACCEPT\nr"),
         ("ramble\nACCEPT", "ACCEPT"),
-        ("ACCEPT\nbecause it is fine", "ACCEPT"),
+        ("ACCEPT\nbecause it is fine", None),
+        ("ACCEPT\nREJECT", None),
         ("ramble\nREJECT", "REJECT"),
         ("ramble\nACCEPT\nmore", None),
-        ("ACCEPT\nREJECT", None),
         ('{"verdict": "可直接合併", "reason": "a"}\n{"verdict": "需修改", "reason": "b"}', None),
         ('{"verdict": "需修改", "reason": "b"}\n{"verdict": "可直接合併", "reason": "a"}', None),
         ('{"verdict": "可直接合併", "reason": "a"}\nbut actually it is wrong', None),
         ('{"verdict": "可直接合併", "reason": "a"} {"verdict": "可直接合併", "reason": "a"}', None),
         ('not a verdict {"verdict": "ok"} text\n{"verdict": "需修改", "reason": "r"}', "REJECT\nr"),
+        ('{"result": {"verdict": "可直接合併", "reason": "nested"}}', None),
+        ('{"verdict": "可直接合併", "reason": "a"}\nACCEPT', None),
+        ('REJECT\n{"verdict": "可直接合併", "reason": "a"}', None),
+        ('{"verdict": "可直接合併", "reason": {"verdict": "需修改"}}', None),
+        ('[{"verdict": "可直接合併", "reason": "a"}]', None),
         ("I think ACCEPT is right", None),
         ('{"verdict": "maybe", "reason": "x"}', None),
         ("", None),
@@ -166,3 +179,13 @@ def test_an_unparseable_reply_is_bad_output_and_its_text_is_kept_for_diagnosis()
     reply = ProxyGate(URL, FakeProxy(chat=chat)).review(_request())
     assert reply.verdict is None and reply.reason is Reason.PAUSE_GATE_BAD_OUTPUT
     assert reply.text == "hmm, hard to say"
+
+
+@pytest.mark.parametrize(
+    "raw", ["ACCEPT\nREJECT", "ACCEPT\nbecause it is fine", "ACCEPT first, then more"]
+)
+def test_an_ambiguous_reply_never_reaches_pause_as_raw_text(raw):
+    chat = {"choices": [{"message": {"content": raw}}]}
+    reply = ProxyGate(URL, FakeProxy(chat=chat)).review(_request())
+    assert reply.verdict is None and reply.reason is Reason.PAUSE_GATE_BAD_OUTPUT
+    assert reply.text == raw  # kept for diagnosis only
