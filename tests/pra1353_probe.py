@@ -24,12 +24,6 @@ _ACCOUNT_GAP = (
 )
 
 
-def sandbox_available():
-    from cairnwork_sandbox import select
-
-    return sys.platform == "darwin" and select() is not None
-
-
 def _scrub(value):
     return (
         re.sub(r"/(?:private/)?(?:var/folders|tmp)/[^\s:]+", "<temporary-path>", value)
