@@ -36,11 +36,28 @@ CASE_IDS = [
 ]
 
 
-@pytest.mark.parametrize("nodeid", CASE_IDS)
+AMBIGUOUS = {  # Name[x]::Name[y]: a parametrized class or one case id holding "]::" (see docstring)
+    "t.py::C[a]::test_y[c]",
+    "tests/t.py::C[a::b]::test_y[c::d]",
+}
+
+
+@pytest.mark.parametrize("nodeid", [n for n in CASE_IDS if n not in AMBIGUOUS])
 def test_p2p_function_agrees_with_node_ids(nodeid):
-    want = node_ids.without_case(nodeid)
-    assert p2p_function._without_case(nodeid) == want
-    assert p2p_function._without_case(nodeid, all_parts=True) == want
+    for all_parts in (False, True):
+        assert p2p_function._without_case(nodeid, all_parts=all_parts) == node_ids.without_case(
+            nodeid, all_parts=all_parts
+        )
+
+
+def test_the_two_entry_points_differ_only_on_the_ambiguous_shape():
+    # #1276 pins the per-part reading (a parametrized class keeps its method), #1309 pins the
+    # first-"[" cut (test_f[e]::f[g] -> test_f); one text cannot satisfy both, so both are named
+    nodeid = "t.py::C[a]::test_y[c]"
+    assert node_ids.without_case(nodeid) == "t.py::C"
+    assert p2p_function._without_case(nodeid) == "t.py::C[a]::test_y"
+    assert node_ids.without_case_by_part(nodeid, all_parts=True) == "t.py::C::test_y"
+    assert node_ids.without_case("t.py::test_f[e]::f[g]") == "t.py::test_f"
 
 
 def test_a_run_target_whose_case_id_holds_a_close_bracket_and_colons_is_not_reported_not_run():

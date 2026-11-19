@@ -72,6 +72,68 @@ def without_case(nodeid: str, *, all_parts: bool = False) -> str:
     return path + "::" + name.split("[", 1)[0]
 
 
+_IDENT = re.compile(r"[^\W\d]\w*")
+
+
+def _split(name: str) -> list[str]:
+    """The ``::`` parts of a name, a ``::`` inside brackets not splitting."""
+    parts, start, depth = [], 0, 0
+    for index, char in enumerate(name):
+        if char == "[":
+            depth += 1
+        elif char == "]":
+            depth = max(0, depth - 1)
+        elif name.startswith("::", index) and depth == 0 and (index == 0 or name[index - 1] != ":"):
+            parts.append(name[start:index])
+            start = index + 2
+    return [*parts, name[start:]]
+
+
+def _well_formed(part: str) -> bool:
+    """``Name`` or ``Name[case]``, the case's ``[`` closing exactly at the end of the part (a
+    stray ``]`` before the end, as in ``b]`` or ``b[c]]``, is a ``]`` of an earlier case id)."""
+    match = _IDENT.match(part)
+    if match is None:
+        return False
+    rest = part[match.end() :]
+    if not rest:
+        return True
+    if not (rest.startswith("[") and rest.endswith("]")):
+        return False
+    depth = 0
+    for index, char in enumerate(rest):
+        depth += (char == "[") - (char == "]")
+        if depth == 0 and index != len(rest) - 1:
+            return False
+    return depth == 0
+
+
+def without_case_by_part(nodeid: str, *, all_parts: bool = False) -> str:
+    """Remove case ids part by part: the last part's (every part's with ``all_parts``), so a
+    parametrized class keeps its method (``C[a]::test_y[c]`` -> ``C[a]::test_y``, #1276). When the
+    name does not split into well-formed ``Name[case]`` parts, because a case id holds ``]`` and
+    ``::`` (``test_x[a]::b]``), ``without_case`` decides (#1369).
+
+    ``without_case`` and this differ only on a name of well-formed parts with a ``[`` before
+    the last one (``Name[x]::Name[y]``): pytest emits that shape both for a parametrized class
+    and for one case id holding ``]::``, and no reading of the text tells them apart. Callers
+    pinned to ``without_case`` (#1309) keep its first-``[`` cut; the P2P and deferred-test
+    consumers (#1276) use this."""
+    located = locate(nodeid)
+    if located is None:
+        return nodeid  # a bare name or file path is returned whole
+    path, name = located
+    parts = _split(name)
+    if not all(map(_well_formed, parts)):
+        return without_case(nodeid)
+    last = len(parts) - 1
+    kept = [
+        part.split("[", 1)[0] if all_parts or index == last else part
+        for index, part in enumerate(parts)
+    ]
+    return "::".join([path, *kept])
+
+
 def _params(nodeid: str) -> str:
     start = _case_start(nodeid)
     return nodeid[start + 1 :] if start >= 0 else ""
