@@ -258,7 +258,8 @@ def _run_localworker(args, task, source, context, endpoint, canary, model=LOCAL_
         "--endpoint",
         endpoint,
     ]
-    cwd = Path(task["repo"]).resolve()
+    # Never run from the task repo: `-m` would put it first on sys.path (module shadowing).
+    cwd = Path(__file__).resolve().parents[2]
     debug_path = _debug_path(args, task["task_id"])
     append_debug(
         debug_path,

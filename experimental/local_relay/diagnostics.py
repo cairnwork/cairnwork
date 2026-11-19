@@ -12,9 +12,16 @@ from typing import Any
 MAX_STDERR_CHARS = 2000
 _SECRET_FLAG = re.compile(r"(?i)^--?(?:api[-_]?key|token|password|secret|authorization)$")
 _SECRET_PATTERNS = (
-    re.compile(r"(?i)(authorization\s*:\s*bearer\s+)[^\s,;]+"),
-    re.compile(r"(?i)(\b(?:api[_-]?key|token|password|secret|private[_-]?key)\s*[=:]\s*)[^\s,;]+"),
-    re.compile(r"\b(?:sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9_]{8,})\b"),
+    re.compile(r"(?i)(\bbearer\s+)[^\s,;\"']+"),
+    re.compile(
+        r"(?i)([\"']?\b(?:api[_-]?key|access[_-]?key|token|password|passwd|secret|"
+        r"private[_-]?key|authorization)[\"']?\s*[=:]\s*[\"']?)[^\s,;\"']+"
+    ),
+    re.compile(
+        r"\b(?:sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9_]{8,}|github_pat_[A-Za-z0-9_]{8,}"
+        r"|xox[abprs]-[A-Za-z0-9-]{8,}|AKIA[0-9A-Z]{12,}|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"
+        r"\.[A-Za-z0-9_-]+)\b"
+    ),
 )
 
 

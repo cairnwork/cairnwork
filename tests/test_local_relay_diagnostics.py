@@ -112,7 +112,8 @@ def test_debug_log_records_invocation_paths_and_is_private(monkeypatch, tmp_path
     assert debug.exists() and stat.S_IMODE(debug.stat().st_mode) == 0o600
     records = [json.loads(line) for line in debug.read_text().splitlines()]
     started = next(row for row in records if row["event"] == "worker-start")
-    assert started["cwd"] == str((tmp_path / "repo").resolve())
+    assert started["cwd"] != str((tmp_path / "repo").resolve())
+    assert (Path(started["cwd"]) / "experimental" / "local_relay").is_dir()
     assert started["run_root"].endswith("/checkout") is False
     assert started["checkout"].endswith("/checkout")
     assert "--context-cap" in started["argv"] and "--endpoint" in started["argv"]
@@ -196,3 +197,22 @@ def test_worker_layout_refuses_missing_worker_python(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError, match="worker Python missing"):
         worker_setup.prepare_worker_layout(root, checkout)
     assert not (root / "venv").exists()
+
+
+def test_redaction_covers_quoted_bearer_and_common_token_prefixes():
+    from experimental.local_relay.diagnostics import redact
+
+    samples = [
+        'api_key="abc123SECRETvalue"',
+        "{'token': 'abc123SECRETvalue'}",
+        "Authorization: Bearer abc123SECRETvalue",
+        "bearer abc123SECRETvalue",
+        "github_pat_abc123SECRETvalue",
+        "xoxb-abc123SECRETvalue",
+        "AKIAABCDEFGHIJKLMNOP",
+        "eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.abcSIGNATURE",
+    ]
+    for sample in samples:
+        assert "SECRET" not in redact(sample) and "ABCDEFGHIJKLMNOP" not in redact(sample)
+        assert "abcSIGNATURE" not in redact(sample)
+    assert redact("plain failure text") == "plain failure text"
