@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -33,7 +34,7 @@ def _local_run_fakes(monkeypatch, tmp_path, marker, stderr=""):
     monkeypatch.setattr(runtime, "prepare_worker_layout", lambda *_args: None)
     monkeypatch.setattr(runtime, "restore_judge_modes", lambda *args: _RESTORE_CALLS.append(args))
 
-    def launch(argv, **_kwargs):
+    def launch(argv, _cwd=None, **_kwargs):
         captured["argv"] = argv
         out = Path(argv[argv.index("--out") + 1])
         episode = out / "episodes-cairnwork-qwen3.5_9b-pilot.jsonl"
@@ -44,7 +45,8 @@ def _local_run_fakes(monkeypatch, tmp_path, marker, stderr=""):
         episode.write_text(json.dumps(row) + "\n", encoding="utf-8")
         return type("Result", (), {"returncode": 0, "stdout": marker, "stderr": stderr})()
 
-    monkeypatch.setattr(runtime.subprocess, "run", launch)
+    monkeypatch.setattr(runtime, "_spawn_worker", launch)
+    monkeypatch.setattr(runtime, "executable_paths", lambda *_a: frozenset())
     runs = tmp_path / "runs"
     runs.mkdir()
     args = type(
@@ -298,7 +300,7 @@ def test_restore_judge_modes_returns_core_shape_and_runs_no_repo_controlled_code
     (repo / "pkg" / "new.py").write_text("y = 2\n", encoding="utf-8")
     os.symlink("a.py", repo / "pkg" / "link.py")
 
-    worker_setup.restore_judge_modes(repo, base)
+    worker_setup.restore_judge_modes(repo, worker_setup.executable_paths(repo, base))
 
     assert stat.S_IMODE(repo.stat().st_mode) == 0o755
     assert stat.S_IMODE((repo / "pkg").stat().st_mode) == 0o755
@@ -320,12 +322,72 @@ def test_restore_judge_modes_fails_closed_when_an_entry_cannot_be_reowned(monkey
 
     monkeypatch.setattr(worker_setup.os, "fchown", refuse)
     with pytest.raises(RuntimeError, match="cannot restore judge modes"):
-        worker_setup.restore_judge_modes(repo, base)
+        worker_setup.restore_judge_modes(repo, frozenset())
 
 
 def test_worker_checkout_modes_are_restored_for_core_after_the_worker_exits(monkeypatch, tmp_path):
     _RESTORE_CALLS.clear()
     _local_run_fakes(monkeypatch, tmp_path, "EPISODE COMPLETE")
     assert len(_RESTORE_CALLS) == 1
-    checkout, base = _RESTORE_CALLS[0]
-    assert checkout.name == "checkout" and base == "a" * 40
+    checkout, executable = _RESTORE_CALLS[0]
+    assert checkout.name == "checkout" and executable == frozenset()
+
+
+def test_restore_strips_worker_group_write_from_git_dir_and_rejects_hard_links(tmp_path):
+    from experimental.local_relay import worker_setup
+
+    repo, base = _git_checkout(tmp_path)
+    worker_setup._set_checkout_modes(repo, os.getegid())
+    git_file = repo / ".git" / "HEAD"
+    assert stat.S_IMODE(git_file.stat().st_mode) == 0o660
+    worker_setup.restore_judge_modes(repo, worker_setup.executable_paths(repo, base))
+    assert stat.S_IMODE(git_file.stat().st_mode) == 0o644
+    assert stat.S_IMODE((repo / ".git").stat().st_mode) == 0o755
+    outside = tmp_path / "outside.txt"
+    outside.write_text("planted\n", encoding="utf-8")
+    os.link(outside, repo / "pkg" / "hard.py")
+    with pytest.raises(RuntimeError, match="hard link"):
+        worker_setup.restore_judge_modes(repo, frozenset())
+    assert stat.S_IMODE(outside.stat().st_mode) == 0o644  # untouched
+
+
+def test_prepare_refuses_hard_linked_checkout_files_before_the_worker_runs(tmp_path):
+    from experimental.local_relay import worker_setup
+
+    repo, _base = _git_checkout(tmp_path)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("planted\n", encoding="utf-8")
+    os.link(outside, repo / "pkg" / "hard.py")
+    with pytest.raises(RuntimeError, match="hard-linked"):
+        worker_setup._set_checkout_modes(repo, os.getegid())
+    assert stat.S_IMODE(outside.stat().st_mode) == 0o644
+
+
+def test_executable_set_comes_from_the_trusted_repo_not_the_checkout_index(tmp_path):
+    from experimental.local_relay import worker_setup
+
+    repo, base = _git_checkout(tmp_path)
+    assert worker_setup.executable_paths(repo, base) == frozenset({b"run.sh"})
+
+
+def test_worker_process_group_is_killed_after_the_episode(tmp_path):
+    import signal  # noqa: F401
+    import time
+
+    pid_file = tmp_path / "child.pid"
+    code = (
+        "import subprocess,sys\n"
+        "p=subprocess.Popen(['sleep','30'])\n"
+        f"open({str(pid_file)!r},'w').write(str(p.pid))\n"
+    )
+    result = runtime._spawn_worker([sys.executable, "-c", code], tmp_path)
+    assert result.returncode == 0
+    pid = int(pid_file.read_text())
+    for _ in range(50):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.05)
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)

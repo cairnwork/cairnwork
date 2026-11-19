@@ -76,7 +76,10 @@ def _set_file_mode(name: str, root_fd: int, gid: int) -> None:
             return
         raise
     try:
-        if stat.S_ISREG(os.fstat(fd).st_mode):
+        info = os.fstat(fd)
+        if stat.S_ISREG(info.st_mode):
+            if info.st_nlink != 1:
+                raise RuntimeError(f"refusing hard-linked checkout file: {name}")
             os.fchown(fd, -1, gid)
             os.fchmod(fd, 0o660)
     finally:
@@ -86,42 +89,50 @@ def _set_file_mode(name: str, root_fd: int, gid: int) -> None:
 _GIT_SAFE = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false")
 
 
-def restore_judge_modes(checkout: Path, base_sha: str) -> None:
-    """Undo the worker-group modes once the worker has exited, before Core judges the checkout.
-
-    Core requires directories 0755 and files 0644/0755 (0755 only where the base commit has the
-    executable bit), and its tree digest binds the group to the relay process's own gid. The
-    executable set comes from the base commit's tree (not the worker-writable index) and git runs
-    with hooks and fsmonitor off. An entry the relay cannot re-own (for example a file the worker
-    created under its own uid) fails closed with an explicit error, never a silent success.
-    """
-    gid = os.getegid()
+def executable_paths(repo: Path, base_sha: str) -> frozenset[bytes]:
+    """Executable-bit paths of the base commit, read from the TRUSTED source repo before the worker
+    runs (never from the worker-writable checkout), with hooks and fsmonitor off."""
     listing = subprocess.run(
-        ["git", *_GIT_SAFE, "-C", str(checkout), "ls-tree", "-r", "-z", base_sha],
+        ["git", *_GIT_SAFE, "-C", str(repo), "ls-tree", "-r", "-z", base_sha],
         capture_output=True,
         check=True,
         env=hardened_git_env(),
     ).stdout
-    executable = {
+    return frozenset(
         entry.split(b"\t", 1)[1] for entry in listing.split(b"\0") if entry.startswith(b"100755 ")
-    }
+    )
+
+
+def restore_judge_modes(checkout: Path, executable: frozenset[bytes]) -> None:
+    """Undo the worker-group modes once the worker has exited, before Core judges the checkout.
+
+    Core requires directories 0755 and files 0644/0755 (0755 only where the base commit has the
+    executable bit), and its tree digest binds the group to the relay process's own gid. The whole
+    tree, ``.git`` included, loses its worker-group write access. Fails closed, never silently: an
+    entry the relay cannot re-own (e.g. created under the worker's uid), a hard-linked file
+    (``st_nlink != 1``) or an entry on another device raises RuntimeError.
+    """
+    gid = os.getegid()
+    device = checkout.stat().st_dev
+    git_dir = checkout / ".git"
     try:
-        for root, directories, files, root_fd in os.fwalk(checkout, follow_symlinks=False):
-            if Path(root) == checkout:
-                directories[:] = [name for name in directories if name != ".git"]
+        for root, _directories, files, root_fd in os.fwalk(checkout, follow_symlinks=False):
+            if os.fstat(root_fd).st_dev != device:
+                raise RuntimeError(f"cannot restore judge modes (other device): {root}")
             os.fchown(root_fd, -1, gid)
             os.fchmod(root_fd, 0o755)
+            in_git = Path(root) == git_dir or git_dir in Path(root).parents
             for name in files:
-                _restore_file(name, root_fd, gid, Path(root) / name, checkout, executable)
+                _restore_file(
+                    name, root_fd, gid, device, Path(root) / name, checkout, executable, in_git
+                )
     except PermissionError as exc:
         raise RuntimeError(
             f"cannot restore judge modes (entry not owned by the relay): {exc}"
         ) from exc
 
 
-def _restore_file(
-    name: str, root_fd: int, gid: int, path: Path, checkout: Path, executable: set[bytes]
-) -> None:
+def _restore_file(name, root_fd, gid, device, path, checkout, executable, in_git) -> None:
     try:
         fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=root_fd)
     except OSError as exc:
@@ -129,8 +140,15 @@ def _restore_file(
             return
         raise
     try:
-        if stat.S_ISREG(os.fstat(fd).st_mode):
-            os.fchown(fd, -1, gid)
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            return
+        if info.st_nlink != 1 or info.st_dev != device:
+            raise RuntimeError(f"cannot restore judge modes (hard link or other device): {path}")
+        os.fchown(fd, -1, gid)
+        if in_git:
+            os.fchmod(fd, 0o755 if info.st_mode & 0o100 else 0o644)
+        else:
             rel = os.fsencode(path.relative_to(checkout).as_posix())
             os.fchmod(fd, 0o755 if rel in executable else 0o644)
     finally:
