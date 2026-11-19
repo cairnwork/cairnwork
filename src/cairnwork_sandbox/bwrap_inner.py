@@ -146,6 +146,7 @@ def _links_in(base: str, attempts: int = SCAN_ATTEMPTS) -> tuple[list[str], int]
     directory must still be the one its path names; else scan again, up to ``attempts`` passes
     (#1354). A directory seen earlier but missing from the last pass (moved out) refuses."""
     seen_ids: set[tuple[int, int]] = set()
+    last = OSError(errno.ENOENT, "no scan pass ran")
     for _ in range(attempts):
         ids: set[tuple[int, int]] = set()
         try:
