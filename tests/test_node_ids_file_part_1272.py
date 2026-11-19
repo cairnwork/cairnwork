@@ -39,6 +39,7 @@ CASE_IDS = [
 AMBIGUOUS = {  # Name[x]::Name[y]: a parametrized class or one case id holding "]::" (see docstring)
     "t.py::C[a]::test_y[c]",
     "tests/t.py::C[a::b]::test_y[c::d]",
+    "t.py::test_p[a]::b[c]]",
 }
 
 
@@ -66,8 +67,10 @@ def test_a_run_target_whose_case_id_holds_a_close_bracket_and_colons_is_not_repo
 
 
 def test_untargeted_keeps_a_target_whose_case_id_holds_a_close_bracket():
-    nodes = {"t.py::test_p[a]::b[c]]"}
-    assert untargeted(("t.py",), nodes, ("t.py::test_p",)) == ()
+    nodes = {"t.py::test_p[]::t]", "t.py::TestT::test_m[k]::j]"}
+    assert untargeted(("t.py",), nodes, ("t.py::test_p", "t.py::TestT::test_m")) == ()
+    # the ambiguous shape stays finer (as before): a target not named exactly is not covered
+    assert untargeted(("t.py",), {"t.py::test_p[a]::b[c]]"}, ("t.py::test_p",)) == ("t.py",)
 
 
 def test_untargeted_finds_the_file_of_a_path_with_double_colons():
@@ -103,3 +106,14 @@ def test_the_collect_hint_names_a_collection_error_in_a_path_with_double_colons(
 
     got = base_comparison([run], frozenset({f"{ODD}::test_y"}))
     assert COLLECT_HINT in got.detail
+
+
+def test_two_class_parameters_with_a_stray_bracket_stay_two_keys():
+    # Codex R4: the fallback must not merge targets the old parser told apart
+    one, two = "t.py::C[a]::test_y[c]]", "t.py::C[b]::test_y[d]]"
+    assert p2p_function._without_case(one) == "t.py::C[a]::test_y"
+    assert p2p_function._without_case(two) == "t.py::C[b]::test_y"
+    assert p2p_function._without_case(one) != p2p_function._without_case(two)
+    run = SimpleNamespace(outcomes={one: "passed"})
+    assert not_run([run], {"t.py::C[a]::test_y"}) == []
+    assert not_run([run], {"t.py::C[b]::test_y"}) == ["t.py::C[b]::test_y"]

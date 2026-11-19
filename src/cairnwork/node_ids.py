@@ -89,42 +89,35 @@ def _split(name: str) -> list[str]:
     return [*parts, name[start:]]
 
 
-def _well_formed(part: str) -> bool:
-    """``Name`` or ``Name[case]``, the case's ``[`` closing exactly at the end of the part (a
-    stray ``]`` before the end, as in ``b]`` or ``b[c]]``, is a ``]`` of an earlier case id)."""
+def _chain_part(part: str) -> bool:
+    """``Name`` or ``Name[...``: an identifier, then nothing or the opening of its case id."""
     match = _IDENT.match(part)
-    if match is None:
-        return False
-    rest = part[match.end() :]
-    if not rest:
-        return True
-    if not (rest.startswith("[") and rest.endswith("]")):
-        return False
-    depth = 0
-    for index, char in enumerate(rest):
-        depth += (char == "[") - (char == "]")
-        if depth == 0 and index != len(rest) - 1:
-            return False
-    return depth == 0
+    return match is not None and part[match.end() : match.end() + 1] in ("", "[")
 
 
 def without_case_by_part(nodeid: str, *, all_parts: bool = False) -> str:
     """Remove case ids part by part: the last part's (every part's with ``all_parts``), so a
-    parametrized class keeps its method (``C[a]::test_y[c]`` -> ``C[a]::test_y``, #1276). When the
-    name does not split into well-formed ``Name[case]`` parts, because a case id holds ``]`` and
-    ``::`` (``test_x[a]::b]``), ``without_case`` decides (#1369).
+    parametrized class keeps its method (``C[a]::test_y[c]`` -> ``C[a]::test_y``, #1276) and two
+    class parameters stay two keys (``C[a]::test_y[c]]`` and ``C[b]::test_y[d]]`` differ).
 
-    ``without_case`` and this differ only on a name of well-formed parts with a ``[`` before
-    the last one (``Name[x]::Name[y]``): pytest emits that shape both for a parametrized class
-    and for one case id holding ``]::``, and no reading of the text tells them apart. Callers
-    pinned to ``without_case`` (#1309) keep its first-``[`` cut; the P2P and deferred-test
-    consumers (#1276) use this."""
+    Only when a part of the name does not start with an identifier (``b]`` in ``test_x[a]::b]``:
+    the ``]`` closing a case id, then ``::`` inside it, #1369) is the whole name from its first
+    ``[`` the case, as ``without_case`` reads it. That fallback is coarser than the part-wise cut,
+    but only for names no class or function chain can produce, so it never merges two real
+    targets; a name that is a chain of identifiers is cut part-wise even when a case id holds a
+    stray ``]``.
+
+    ``without_case`` and this differ only on ``Name[x]::Name[y]``: pytest emits that shape both
+    for a parametrized class and for one case id holding ``]::``, and no reading of the text
+    tells them apart. Callers pinned to ``without_case`` (#1309) keep its first-``[`` cut; the
+    P2P and deferred-test consumers (#1276) use this, the finer reading, so the worst a wrong
+    guess costs is a target reported as not run, never one counted as run."""
     located = locate(nodeid)
     if located is None:
         return nodeid  # a bare name or file path is returned whole
     path, name = located
     parts = _split(name)
-    if not all(map(_well_formed, parts)):
+    if not all(_chain_part(part) for part in parts):
         return without_case(nodeid)
     last = len(parts) - 1
     kept = [
