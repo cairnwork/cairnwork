@@ -1,6 +1,6 @@
 """#423: a credential-link target with non-ASCII letters, parentheses or a colon is no longer a
-false refusal; every line-forging character stays refused. A directory renamed mid-scan
-restarts the scan (#1354): its link is found at the new place or the run is refused."""
+false refusal; every line-forging character stays refused. A directory vanishing or renamed
+mid-scan still refuses."""
 
 import os
 import shutil
@@ -105,26 +105,22 @@ def _rename_to_file(path):
     ],
     ids=["renamed", "renamed-and-replaced-by-file", "renamed-above-depth-2"],
 )
-def test_renamed_credential_subtree_never_leaves_target_unmasked(
-    tmp_path, monkeypatch, depth, action, victim
-):
+def test_renamed_credential_subtree_still_refuses(tmp_path, monkeypatch, depth, action, victim):
     home = _home(tmp_path, depth)
     if depth == 2:
         # the rename happens when "a/a" is about to be scanned: "a" is moved away first
         victim = "/a/a"
         action = lambda p: os.rename(p[: -len("/a")], p[: -len("/a")] + "2")  # noqa: E731
     _hook_scandir(monkeypatch, victim, action)
-    try:  # the scan restarts and finds the moved link (#1354), or refuses: never unmasked
-        text = bwrap.BACKEND.policy((), (), home=home).text
-        assert os.path.realpath(tmp_path / "outside" / "secret") in text
-    except SandboxError:
-        pass
+    with pytest.raises(SandboxError):
+        bwrap.BACKEND.policy((), (), home=home)
 
 
-def test_a_credential_subdirectory_vanishing_with_its_link_may_succeed(tmp_path, monkeypatch):
+def test_a_credential_subdirectory_vanishing_during_the_scan_refuses(tmp_path, monkeypatch):
     home = _home(tmp_path, 1)
     _hook_scandir(monkeypatch, "/a", lambda p: shutil.rmtree(p))
-    bwrap.BACKEND.policy((), (), home=home)  # the link is gone with it: nothing left to mask
+    with pytest.raises(SandboxError):
+        bwrap.BACKEND.policy((), (), home=home)
 
 
 @pytest.mark.parametrize(

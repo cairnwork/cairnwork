@@ -167,12 +167,9 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
       every path, so non-ASCII, colon and parenthesis paths still refuse the run there. Both
       backends: a root-owned 0700 subdirectory in a credential directory refuses the run; owner
       mode refuses a link target it cannot stat; a credential subdirectory that disappears or is
-      renamed during the link scan restarts the scan (up to 3 passes; the moved subtree is found
-      at its new place and its link targets are masked), and the run is refused when the tree
-      keeps changing. Outside directories a link points to are scanned too, with at most 64 scan
-      roots in all (#427; more refuse the run). Residual: a directory swapped between its listing
-      and the scan of its children (#1314) is not detected here; chains longer than the scan
-      roots allow are refused; two-hop masking is not yet confirmed on real bwrap.
+      renamed during the link scan still refuses the run (fail closed, not skipped). Outside
+      directories a link points to are scanned too, with at most 64 scan roots in all (#427; more
+      refuse the run). Residual: two-hop masking is not yet confirmed on real bwrap.
     - **Socket trees**: `/tmp/.X11-unix` (an X server lets a process inject input and run commands
       outside the sandbox), `/run/user` (the systemd user bus and session agents) and `/run/libvirt`
       (every libvirt daemon socket) are hidden by the private `/tmp` and `/run` (subject to the two

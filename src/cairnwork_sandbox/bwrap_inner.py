@@ -27,7 +27,6 @@ directory and refuses, as it does when a directory cannot be read (fail closed).
 
 from __future__ import annotations
 
-import errno
 import os
 from collections.abc import Callable
 
@@ -36,9 +35,7 @@ from cairnwork_sandbox.bwrap_reach import account_may_traverse
 
 SCAN_LIMIT = 50_000
 SCAN_DEPTH = 3
-SCAN_ATTEMPTS = 3
 SCAN_BASES = 64  # scan roots in all: the credential directories and outside link targets
-_CHANGED = (errno.ENOENT, errno.ENOTDIR, errno.ELOOP)
 SYSTEM_PREFIXES = ("/usr/", "/nix/store/", "/gnu/store/", "/snap/")
 ETC = "/etc/"
 DANGLING_NOTE = "dangling credential links skipped, outside every read and write root: "
@@ -137,11 +134,10 @@ def _covered(real: str, dirs: set[str]) -> bool:
         current = parent
 
 
-def _links_in(base: str, attempts: int = SCAN_ATTEMPTS) -> tuple[list[str], int]:
+def _links_in(base: str) -> tuple[list[str], int]:
     """Every symlink up to ``SCAN_DEPTH`` levels below ``base``, without following links, and the
     number of directories at that depth left unscanned. Refused past ``SCAN_LIMIT`` entries or
-    when a directory cannot be scanned. A subdirectory that vanished or changed type since its
-    parent was listed makes the scan start over, up to ``attempts`` passes (#1354)."""
+    when a directory cannot be scanned."""
     links: list[str] = []
     seen = unscanned = 0
     stack = [(base, 0)]
@@ -151,14 +147,9 @@ def _links_in(base: str, attempts: int = SCAN_ATTEMPTS) -> tuple[list[str], int]
             with os.scandir(current) as found:
                 entries = [(e.path, e.is_symlink(), e.is_dir(follow_symlinks=False)) for e in found]
         except OSError as err:
-            if depth and err.errno in _CHANGED and attempts > 1:
-                return _links_in(base, attempts - 1)
-            why = (
-                f"{err.strerror}; the tree kept changing" if err.errno in _CHANGED else err.strerror
-            )
             raise SandboxError(
                 f"credential directory {base!r}: cannot scan {current!r} for links"
-                f" ({why}); a link left unscanned could leave its target readable"
+                f" ({err.strerror}); a link left unscanned could leave its target readable"
             ) from err
         seen += len(entries)
         if seen > SCAN_LIMIT:
