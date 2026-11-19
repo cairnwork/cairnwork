@@ -206,8 +206,17 @@ class AgyWorker:
                 threading.Thread(target=_feed, args=(process, prompt), daemon=True).start()
             copier = threading.Thread(target=copy_capped, args=(process.stdout, log), daemon=True)
             copier.start()
-        except BaseException:
-            held, _, _ = _stop(process, None, workdir.name, reader, mark, dirs)
+        except BaseException as start_error:
+            try:
+                held, _, _ = _stop(process, None, workdir.name, reader, mark, dirs)
+            except BaseException as stop_error:
+                start_error.add_note(f"process cleanup failed: {stop_error!r}")
+                if process.poll() is not None:
+                    try:
+                        _close_streams(process, log)
+                    except BaseException as close_error:  # noqa: BLE001 - preserve start failure
+                        start_error.add_note(f"stream cleanup failed: {close_error!r}")
+                raise start_error from stop_error
             if not held:
                 _close_streams(process, log)
             raise
@@ -236,16 +245,25 @@ class AgyWorker:
         dispatch = self.dispatch
         timed_out = None
         try:
-            process.wait(timeout=self.timeout_seconds + 60)
+            pool_wait = dispatch.pool_wait_seconds if dispatch is not None else 0
+            process.wait(timeout=self.timeout_seconds + 60 + pool_wait)
         except subprocess.TimeoutExpired as exc:
             timed_out = exc
             if dispatch is not None:
                 agy_dispatch.ask_to_stop(process)  # lets it release its lease and sweep itself
         finally:
             name, mark, dirs = attempt
-            held, swept, by_cwd = _stop(process, copier, name, reader, mark, dirs)
-            if not held:  # else the copier still reads: leave both open rather than hang
-                _close_streams(process, log)
+            try:
+                held, swept, by_cwd = _stop(process, copier, name, reader, mark, dirs)
+                if not held:  # else the copier still reads: leave both open rather than hang
+                    _close_streams(process, log)
+            except BaseException as cleanup_error:  # the error in flight stays as __context__
+                if process.poll() is not None:
+                    try:
+                        _close_streams(process, log)
+                    except BaseException as close_error:  # noqa: BLE001 - keep cleanup_error
+                        cleanup_error.add_note(f"stream cleanup failed: {close_error!r}")
+                raise
         completion, why = None, "HELD" * held or "CWD" * bool(by_cwd)  # cwd: as a holder (#537)
         try:
             if dispatch is not None and dispatch.run_as_user is not None:
@@ -358,9 +376,16 @@ def _feed(process, prompt: str) -> None:
 
 
 def _close_streams(process, log) -> None:
+    first_error = None
     for stream in (process.stdin, process.stdout, process.stderr, log):
         if stream is not None:
-            stream.close()
+            try:
+                stream.close()
+            except BaseException as exc:  # noqa: BLE001 - attempt every stream close
+                if first_error is None:
+                    first_error = exc
+    if first_error is not None:
+        raise first_error
 
 
 def _stop(
