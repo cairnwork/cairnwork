@@ -7,7 +7,7 @@ import unicodedata
 from collections.abc import Iterator
 from pathlib import Path
 
-from cairnwork.textclean import replace_hidden
+from cairnwork.textclean import is_hidden, replace_hidden
 
 _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")  # terminal colour and cursor codes, dropped whole
 _URL_USERINFO = re.compile(r"(?<=://)[^ \t\n]*@")  # credentials in a URL, as gitcmd.stderr_tail
@@ -35,6 +35,14 @@ _FLAG = re.compile(rf"(?i)((?<![\w-])--[\w-]{{0,64}}{_FLAG_WORDS}[ \t]+)(?!-)\S+
 _FLAG_HEAD = re.compile(r"(?<![\w-])--([\w-]{0,64})$")  # the flag name up to a name's start
 # a URL-encoded 'name%3Dvalue' (#402)
 _ENCODED = re.compile(rf"(?i)((?<!\w)[\w-]{{0,64}}(?:{_KEYS})%3d)[^&\s]+")
+# the pattern for the value that follows each form's name (group 1), read on the original text
+_FORMS = (
+    (_HEADER, re.compile(r"[^\n]+")),
+    (_COLON, re.compile(r"[^\n]+")),
+    (_BEARER, re.compile(r"\S+")),
+    (_FLAG, re.compile(r"(?!-)\S+")),
+    (_ENCODED, re.compile(r"[^&\s]+")),
+)
 _HID = "\x00"  # stands for a hidden character until the field pass has read the name (#744)
 _LOW = "\ufe33\ufe34\ufe4d-\ufe4f\uff3f"  # non-ASCII low-line look-alikes that fold to '_' (#1313)
 _LOW_RE = re.compile(f"[{_LOW}]")
@@ -43,6 +51,24 @@ _LOW_RE = re.compile(f"[{_LOW}]")
 # counts only when it holds a marker (as '?' started one there before #744; my-token stays shown)
 _NAME = re.compile(rf"(?<![\w{_HID}{_LOW}])([\w{_HID}{_LOW}]+)[=⁼₌⩵⩶﹦＝]")
 _VALUE = re.compile(r"[^&\s]+")
+# Default_Ignorable code points outside C*, Mn, Me (Hangul fillers, Braille blank)
+_FILLERS = frozenset("\u115f\u1160\u3164\uffa0\u2800")
+
+
+def _mark(ch: str) -> bool:
+    return unicodedata.category(ch) in ("Mn", "Me")  # CGJ, variation selectors are Mn
+
+
+def _dropper(keep: str):
+    """What a matching view leaves out (#1329), by category as textclean does (C*, Zl, Zp), plus
+    the marks and fillers; the characters in ``keep`` stay (they separate words and mark names)."""
+    return lambda ch: (is_hidden(ch) and ch not in keep) or _mark(ch) or ch in _FILLERS
+
+
+_FORM_VIEWS = (_mark, _dropper("\n\t"))  # as before this change, and the category view
+_FIELD_VIEWS = (_mark, _dropper("\n\t" + _HID))
+
+
 TAIL_CHARS = 2048
 # any character fits in 4 bytes; twice that, so the window holds more than the tail. A window that
 # does not start the file drops its first, partial line: a character or URL cut there never reaches
@@ -60,9 +86,9 @@ def probe_log_tail(path: str | Path | None) -> str:
     encoded fields and full-width names in ``name=value`` form.
 
     Not masked: credentials split by a raw control byte (it becomes '?'), a quoted value with a
-    space in it after ``=``, other dashed names (``my-token=``), full-width or hidden-character
-    names in colon form, a value after ``%3A``, a value starting with '-' after ``--flag``, spaces
-    around '=', ``Authorization=`` with a non-Bearer value, a value on the next line,
+    space in it after ``=``, other dashed names (``my-token=``), names with a zero-width
+    character in colon form, a value after ``%3A``, a value starting with '-' after ``--flag``,
+    spaces around '=', ``Authorization=`` with a non-Bearer value, a value on the next line,
     ``api-key :``, scp-style ``user:pass@host:`` and bare high-entropy strings.
     """
     if not path:
@@ -107,9 +133,50 @@ def mask_secrets(text: str) -> str:
     text = _mask_userinfo(
         replace_hidden(_ANSI.sub("", text).replace("\r\n", "\n"), _HID, keep="\n\t")
     )
-    for rx in (_HEADER, _BEARER, _COLON, _FLAG, _ENCODED):
-        text = rx.sub(r"\1<redacted>", text)
+    text = _redact_forms(text)
     return _mask_fields(text).replace(_HID, "?")
+
+
+def _redact_forms(text: str) -> str:
+    """Mask the value of every form, found on the text as written and on its NFKC view without
+    marks (#1329). All spans are collected on the same untouched text and merged before anything
+    is replaced, so no form can hide another's name by masking first (``Bearer token: x``)."""
+    views = [_view_index(text, drop) for drop in _FORM_VIEWS]
+    spans: list[tuple[int, int]] = []
+    for rx, value_rx in _FORMS:
+        spans += [(m.end(1), m.end()) for m in rx.finditer(text) if m.end() > m.end(1)]
+        for view, idx in views:  # a view only locates the name; the value is read from text
+            for m in rx.finditer(view):
+                if m.end() == m.end(1):
+                    continue
+                start = idx[m.end(1)] if idx else m.end(1)
+                value = value_rx.match(text, start)
+                if value is not None:
+                    spans.append((start, value.end()))
+    out, pos = [], 0
+    for start, end in sorted(spans):
+        if end <= pos:
+            continue
+        out += [text[pos : max(start, pos)], "<redacted>"]
+        pos = end
+    return "".join([*out, text[pos:]])
+
+
+def _view_index(text: str, drop) -> tuple[str, list[int]]:
+    """The NFKC view used for matching, and each view character's index in ``text`` (empty when
+    the view is the text itself). Characters for which ``drop`` is true are left out, so a mark or
+    filler inside or after a name no longer hides it."""
+    if text.isascii() and (drop is _mark or _HID not in text):  # ASCII: only _HID could go
+        return text, []
+    out: list[str] = []
+    idx: list[int] = []
+    for i, ch in enumerate(text):
+        if drop(ch):
+            continue
+        norm = unicodedata.normalize("NFKC", ch)
+        out.append(norm)
+        idx.extend([i] * len(norm))
+    return "".join(out), idx
 
 
 def _is_key(name: str) -> bool:
@@ -149,19 +216,6 @@ def _is_secret_name(
     return any(_is_key(n) for n in names)
 
 
-def _nfkc_index(text: str) -> tuple[str, list[int]]:
-    """Per-character NFKC text and the original index of each normalized character (#1313)."""
-    if text.isascii():
-        return text, []
-    out: list[str] = []
-    idx: list[int] = []
-    for i, ch in enumerate(text):
-        norm = unicodedata.normalize("NFKC", ch)
-        out.append(norm)
-        idx.extend([i] * len(norm))
-    return "".join(out), idx
-
-
 def _field_matches(source: str, idx: list[int] | None, text: str) -> Iterator[tuple[int, int]]:
     for m in _NAME.finditer(source):
         orig_start = idx[m.start()] if idx else m.start()
@@ -178,8 +232,9 @@ def _mask_fields(text: str) -> str:
     dropped, or by its last piece after one; case is ignored (as before #744, plus case folding)."""
     matches = list(_field_matches(text, None, text))
     if not text.isascii():
-        norm, idx = _nfkc_index(text)
-        matches.extend(_field_matches(norm, idx, text))
+        for drop in _FIELD_VIEWS:
+            norm, idx = _view_index(text, drop)
+            matches.extend(_field_matches(norm, idx, text))
         matches.sort()
     out, pos = [], 0
     for orig_start, orig_end in matches:
