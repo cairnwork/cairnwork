@@ -98,6 +98,7 @@ MUST_BLOCK = {
         c, "refs/replace/" + SHA40, side
     ),
     "head-on-another-branch": lambda c, side: git(c, "symbolic-ref", "HEAD", "refs/heads/other"),
+    "head-on-unborn-main": lambda c, side: git(c, "update-ref", "-d", "refs/heads/main"),
     "head-detached-on-side-commit": lambda c, side: git(
         c, "update-ref", "--no-deref", "HEAD", side
     ),
