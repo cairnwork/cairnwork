@@ -61,12 +61,23 @@ def record(family: str, sha: str, login: str = "", verdict: str = "ACCEPT") -> d
 
 
 def run(
-    tmp_path: Path, trusted: Path, repo: Path, base: str, head: str, comments: list[dict], **kw: str
+    tmp_path: Path,
+    trusted: Path,
+    repo: Path,
+    base: str,
+    head: str,
+    comments: list[dict],
+    reviews: object = None,
+    **kw: str,
 ) -> tuple[int, str]:
     comment_file = tmp_path / "comments.json"
     comment_file.write_text(json.dumps(comments), encoding="utf-8")
+    reviews_file = tmp_path / "reviews.json"
+    reviews_file.write_text(json.dumps([] if reviews is None else reviews), encoding="utf-8")
     args = [sys.executable, "-I", str(SCRIPT), "--trusted", str(trusted), "--head", str(repo)]
     args += [f"--base-sha={base}", f"--head-sha={head}", "--comments", str(comment_file)]
+    if kw.get("no_reviews") != "1":
+        args += ["--reviews", str(reviews_file)]
     author = kw.get("author", AUTHOR)
     if author:
         args.append(f"--pr-author={author}")
@@ -186,6 +197,12 @@ def test_one_login_cannot_stand_for_three_families(tmp_path: Path) -> None:
         "**Independent Claude review** (Claude, separate agent): **REJECT at {H}**.",
         "Codex REJECT at {s}: two tests missing",
         "REQUEST_CHANGES",
+        "reject",
+        "rejected at {s}",
+        "request changes",
+        "Request_Changes",
+        "repair_required",
+        "REJECT see issue 1234567",
     ],
 )
 def test_any_negative_verdict_on_head_blocks(tmp_path: Path, line: str) -> None:
@@ -230,7 +247,7 @@ def test_malformed_reviewer_allowlist_fails_closed(tmp_path: Path, allowlist: st
 def test_rename_out_of_or_case_only_in_self_guard_is_seen(
     tmp_path: Path, old: str, new: str
 ) -> None:
-    repo, trusted, _, _ = setup(tmp_path, ())
+    repo, trusted, _, _ = setup(tmp_path, ("src/other.py",))  # setup must commit a real change
     (repo / old).parent.mkdir(parents=True, exist_ok=True)
     (repo / old).write_text("owners\n")
     base = commit(repo, "base with self-guard file")
@@ -241,3 +258,53 @@ def test_rename_out_of_or_case_only_in_self_guard_is_seen(
     assert old in git(repo, "diff", "--name-only", "--no-renames", base, head).splitlines()
     code, line = run(tmp_path, trusted, repo, base, head, all_three(head))
     assert code == 1 and line.startswith("PIN_GUARD PIN_CHANGE_UNAPPROVED ")
+
+
+def test_a_hex_token_of_another_head_does_not_block_but_a_digit_number_does(
+    tmp_path: Path,
+) -> None:
+    repo, trusted, base, head = setup(tmp_path)
+    digits = dict(record("claude", head, "x"), body="REJECT see issue 1234567\n")
+    assert run(tmp_path, trusted, repo, base, head, [*all_three(head), digits])[0] == 1
+    other = dict(record("claude", head, "x"), body="reject at deadbee1\n")
+    assert run(tmp_path, trusted, repo, base, head, [*all_three(head), other])[0] == 4
+
+
+@pytest.mark.parametrize("state", ["CHANGES_REQUESTED", "DISMISSED", "PENDING", "WEIRD", None])
+def test_a_review_state_other_than_approved_or_commented_blocks(
+    tmp_path: Path, state: str | None
+) -> None:
+    repo, trusted, base, head = setup(tmp_path)
+    review = {"user": {"login": "x"}, "body": "", **({"state": state} if state else {})}
+    assert run(tmp_path, trusted, repo, base, head, all_three(head), [review])[0] == 1
+
+
+def test_approved_and_commented_reviews_still_auto_approve(tmp_path: Path) -> None:
+    repo, trusted, base, head = setup(tmp_path)
+    reviews = [{"state": "APPROVED", "body": "ok"}, {"state": "COMMENTED", "body": "nit"}]
+    assert run(tmp_path, trusted, repo, base, head, all_three(head), reviews)[0] == 4
+
+
+def test_a_review_body_with_reject_and_no_sha_blocks(tmp_path: Path) -> None:
+    repo, trusted, base, head = setup(tmp_path)
+    reviews = [{"state": "COMMENTED", "body": "line\nREJECT"}]
+    assert run(tmp_path, trusted, repo, base, head, all_three(head), reviews)[0] == 1
+    old = [{"state": "COMMENTED", "body": f"REJECT at {base}"}]
+    assert run(tmp_path, trusted, repo, base, head, all_three(head), old)[0] == 4
+
+
+def test_a_review_never_counts_as_an_accept_record(tmp_path: Path) -> None:
+    repo, trusted, base, head = setup(tmp_path)
+    as_review = [dict(record("gemini", head), state="APPROVED")]
+    comments = all_three(head)[:2]
+    assert run(tmp_path, trusted, repo, base, head, comments, as_review)[0] == 1
+
+
+def test_missing_reviews_file_never_auto_approves_and_bad_shape_fails_closed(
+    tmp_path: Path,
+) -> None:
+    repo, trusted, base, head = setup(tmp_path)
+    code, _ = run(tmp_path, trusted, repo, base, head, all_three(head), no_reviews="1")
+    assert code == 1
+    bad = run(tmp_path, trusted, repo, base, head, all_three(head), {"state": "APPROVED"})
+    assert bad == (2, "PIN_GUARD PIN_GUARD_INCOMPLETE")

@@ -2,7 +2,8 @@
 
 A guarded change is approved by the owner's PIN-APPROVE, or automatically when Claude, Codex and
 Gemini each ACCEPT the exact head in a record posted by the reviewer login bound to that family
-(not the PR author), no comment carries a negative verdict on that head, and the PR touches no
+(not the PR author), no comment or PR review carries a negative verdict on that head, no PR
+review is CHANGES_REQUESTED or otherwise not APPROVED/COMMENTED, and the PR touches no
 self-guard path (the guard, its lists, workflows, owners).
 """
 
@@ -38,8 +39,11 @@ FAMILIES = {
     "gemini": re.compile(r"\bgemini\b", re.IGNORECASE),
 }
 NEGATIVE = re.compile(
-    r"\b(?:REJECT(?:ED)?|REQUEST_?CHANGES|REPAIR_?REQUIRED)\b|(?i:verdict)\s*:\s*(?i:reject)"
+    r"\b(?:REJECT(?:ED)?|REQUEST[_ ]?CHANGES|REPAIR[_ ]?REQUIRED)\b|\bverdict\s*:\s*reject",
+    re.IGNORECASE,
 )
+SHA_LETTER = re.compile(r"[a-fA-F]")
+OK_REVIEW_STATES = {"APPROVED", "COMMENTED"}
 HEX = re.compile(r"(?<![0-9a-fA-F])[0-9a-fA-F]{7,40}(?![0-9a-fA-F])")
 RECORD = re.compile(
     r"^\*\*(?P<label>[^*\n]{1,100})\*\* \((?P<who>[^()\n]{1,200})\): "
@@ -209,19 +213,43 @@ def _negative(line: str, head: str) -> bool:
     """A negative verdict word on a line naming this head (any case, 7+ hex) or no sha at all."""
     if not NEGATIVE.search(line):
         return False
-    shas = [sha.lower() for sha in HEX.findall(line)]
+    # An all-digit token (an issue number) is not a sha: "REJECT see issue 1234567" blocks.
+    shas = [sha.lower() for sha in HEX.findall(line) if SHA_LETTER.search(sha)]
     return not shas or any(head.startswith(sha) for sha in shas)
 
 
+def _reviews_clean(reviews: Path | None, head: str) -> bool:
+    """PR reviews veto only: any state but APPROVED/COMMENTED (or none), or a negative body, blocks.
+
+    No file means the reviews were not read, so no auto-approval. Not a list is an error (rc 2).
+    """
+    if reviews is None:
+        return False
+    data = json.loads(reviews.read_text(encoding="utf-8"))
+    if not isinstance(data, list):
+        raise ValueError("reviews must be a list")
+    for review in data:
+        if not isinstance(review, dict) or review.get("state") not in OK_REVIEW_STATES:
+            return False
+        body = review.get("body")
+        if isinstance(body, str) and any(_negative(line, head) for line in body.splitlines()):
+            return False
+    return True
+
+
 def _three_family_accept(
-    comments: Path | None, reviewers: dict[str, str], author: str | None, head_sha: str
+    comments: Path | None,
+    reviewers: dict[str, str],
+    author: str | None,
+    head_sha: str,
+    reviews: Path | None = None,
 ) -> bool:
     """Each family ACCEPTs head_sha in an unedited record by the login bound to that family,
     which is not the PR author. Any negative verdict on head_sha, or with no sha, in any
     comment by anyone (edited or not) blocks: an unclear REJECT falls back to the owner."""
-    if not author or not reviewers:
-        return False
     head = head_sha.lower()
+    if not _reviews_clean(reviews, head) or not author or not reviewers:
+        return False
     accepted: set[str] = set()
     for login, body, edited in _read_comments(comments):
         if any(_negative(line, head) for line in body.splitlines()):
@@ -297,8 +325,9 @@ def evaluate(args: argparse.Namespace) -> tuple[int, str, list[str]]:
     if outcome == "PIN_CHANGE_APPROVED":
         return 0, outcome, hits
     reviewers = _reviewers(trusted / "scripts/ci/pin_guard_reviewers.txt")
+    reviews = Path(args.reviews) if args.reviews else None
     if not _self_guard(changed) and _three_family_accept(
-        comments, reviewers, args.pr_author, args.head_sha
+        comments, reviewers, args.pr_author, args.head_sha, reviews
     ):
         return 4, "PIN_CHANGE_AUTO_APPROVED", hits
     return 1, outcome, hits
@@ -312,6 +341,7 @@ def main() -> int:
     parser.add_argument("--head-sha", required=True)
     parser.add_argument("--comments")
     parser.add_argument("--pr-author")
+    parser.add_argument("--reviews")
     args = parser.parse_args()
     try:
         if not re.fullmatch(r"[0-9a-fA-F]{40}", args.base_sha) or not re.fullmatch(
