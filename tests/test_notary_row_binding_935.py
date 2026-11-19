@@ -224,3 +224,44 @@ def _unconstrained_row(db: Path, column: str, value: Any) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+def test_oversized_stored_json_is_unreadable_not_parsed(
+    tmp_path: Path, repo: Path, monkeypatch
+) -> None:
+    import cairnwork.notary_binding as nb
+
+    notary, db = _row(tmp_path, repo, fake_core_verify)
+    parsed: list[int] = []
+    real = nb.json.loads
+    monkeypatch.setattr(
+        nb.json, "loads", lambda text, *a, **k: (parsed.append(len(text)), real(text, *a, **k))[1]
+    )
+    _sql(
+        db,
+        "UPDATE core_verifications SET response_json = ?",
+        '{"pad": "' + "x" * (nb.MAX_STORED_JSON_BYTES + 1) + '"}',
+    )
+    got = notary.row_binding("task-1", "a1")
+    assert got is not None and got.identity_problem == nb.IDENTITY_UNREADABLE
+    assert got.columns_match is False
+    assert all(n <= nb.MAX_STORED_JSON_BYTES for n in parsed), (
+        "an oversized value reached json.loads"
+    )
+
+
+def test_oversized_request_and_binding_are_unreadable(tmp_path: Path, repo: Path) -> None:
+    import cairnwork.notary_binding as nb
+
+    notary, db = _row(tmp_path, repo, fake_core_verify)
+    _sql(
+        db,
+        "UPDATE core_verifications SET request_json = ?",
+        '{"pad": "' + "x" * (nb.MAX_STORED_JSON_BYTES + 1) + '"}',
+    )
+    got = notary.row_binding("task-1", "a1")
+    assert (
+        got is not None
+        and got.identity_problem == nb.IDENTITY_UNREADABLE
+        and got.columns_match is False
+    )

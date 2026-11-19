@@ -30,6 +30,11 @@ class RowBinding:
     columns_match: bool  # task, attempt, commits and binding agree with the stored request
 
 
+# A stored request, response or binding larger than this is read as unreadable, not parsed: json
+# parsing a huge value could exhaust memory. (main's Notary.verify has no such cap: see #1515.)
+MAX_STORED_JSON_BYTES = 4 * 1024 * 1024
+
+
 class RowBindingUnavailable(Exception):
     """The notary row could not be read; consumers must treat it as unbound, never absent."""
 
@@ -42,10 +47,15 @@ def row_binding(notary: Any, task_id: str, attempt_id: str) -> RowBinding | None
         uri = notary._path.resolve().as_uri() + "?mode=ro"
         conn = sqlite3.connect(uri, uri=True, timeout=30, isolation_level=None)
         row = conn.execute(
-            "SELECT base_commit, candidate_commit, request_json, response_json,"
-            " expected_identity, binding_json FROM core_verifications"
-            " WHERE task_id = ? AND attempt_id = ?",
-            (task_id, attempt_id),
+            "SELECT base_commit, candidate_commit,"
+            " CASE WHEN length(CAST(request_json AS BLOB)) > :cap"
+            " THEN NULL ELSE request_json END,"
+            " CASE WHEN length(CAST(response_json AS BLOB)) > :cap"
+            " THEN NULL ELSE response_json END,"
+            " expected_identity,"
+            " CASE WHEN length(CAST(binding_json AS BLOB)) > :cap THEN '' ELSE binding_json END"
+            " FROM core_verifications WHERE task_id = :task AND attempt_id = :attempt",
+            {"cap": MAX_STORED_JSON_BYTES, "task": task_id, "attempt": attempt_id},
         ).fetchone()
     except sqlite3.Error as exc:
         raise RowBindingUnavailable("cannot read notary row") from exc
@@ -76,6 +86,7 @@ def row_binding(notary: Any, task_id: str, attempt_id: str) -> RowBinding | None
         RecursionError,
         UnicodeError,
         ImportError,
+        MemoryError,
     ):
         return RowBinding(_safe_identity_digest(expected), IDENTITY_UNREADABLE, False)
     return RowBinding(expected_digest, problem, columns_match)
