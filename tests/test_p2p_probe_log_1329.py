@@ -159,3 +159,13 @@ def test_invisible_filler_characters_do_not_hide_a_secret_name(fill, shape):
 @pytest.mark.parametrize("fill", FILLERS)
 def test_a_filler_between_words_in_prose_is_not_masked(fill):
     assert "<redacted>" not in mask_secrets(f"the{fill} token count is 12")
+
+
+@pytest.mark.parametrize(
+    "line", ["to\u200dken: roadmap", "pass\u200dword=roadmap", "to\u200b\u200dken: roadmap"]
+)
+def test_a_name_split_by_a_joiner_is_masked_on_purpose(line):
+    """Documented trade-off (layer1, #1204): the view drops joiners and other hidden characters,
+    so a secret name split by one is masked. The cost is that prose may be masked a little too
+    much, never too little. Do not 'fix' this without a new decision."""
+    assert "roadmap" not in mask_secrets(line)
