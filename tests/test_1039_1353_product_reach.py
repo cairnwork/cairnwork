@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import pra1353_consume as consume
+import pytest
 from test_1039_1353_witnesses import PINS, broker_report  # noqa: F401
+
+# One worker: broker_report is a ~190 s sealed run per worker, so two workers would run it twice.
+pytestmark = pytest.mark.xdist_group("pra1353_product_reach")
 
 # Each rebind fires only inside the runner process (it keys on the runner's own names), so a
 # run that still shares a process with product code changes rows, and a clean one does not.
