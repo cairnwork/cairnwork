@@ -19,7 +19,7 @@ GRACE_DAYS = 3
 
 # name -> (Issue, deadline). Expired and awaiting the owner's renew / promote / delete decision
 # (#1249 option 1). Remove the entry when the decision lands; past its deadline it is red as well.
-PENDING_DECISION = {"family_gate": ("#1249", datetime.date(2026, 11, 20))}
+PENDING_DECISION: dict[str, tuple[str, datetime.date]] = {}  # family_gate deleted (#1249)
 
 # name -> reason. The owner ordered the capability kept: no 14-day limit, still off by default
 # (#476). Its EXPIRES file must say ``retained`` (not a date) and its OWNER file must exist.
