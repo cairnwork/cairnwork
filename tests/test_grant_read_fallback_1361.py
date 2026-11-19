@@ -1,4 +1,4 @@
-"""Fallback-branch and descent races for ``grant_read`` (#1361, split from the nofollow test file)."""
+"""Fallback-branch and descent races for grant_read (#1361)."""
 
 from __future__ import annotations
 
