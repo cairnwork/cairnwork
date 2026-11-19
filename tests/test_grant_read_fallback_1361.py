@@ -133,3 +133,35 @@ def test_grant_read_refuses_directory_replaced_before_descent(
         VerifierAccount.grant_read(root)
     assert len(opens) >= 2
     assert stat.S_IMODE((root / "d" / "f").stat().st_mode) == 0o600
+
+
+@pytest.mark.skipif(not hasattr(os, "O_PATH"), reason="O_PATH branch is Linux-only")
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can open mode-000 entries directly")
+def test_grant_read_linux_o_path_branch_is_taken_for_mode_zero_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "checkout"
+    closed = root / "closed"
+    closed.mkdir(parents=True)
+    inner = closed / "inner.txt"
+    inner.write_text("x\n", encoding="utf-8")
+    inner.chmod(0o600)
+    closed.chmod(0)
+    real_chmod = os.chmod
+    via_proc: list[tuple[str, int]] = []
+
+    def spy_chmod(path, mode, *args, **kwargs):
+        if isinstance(path, str) and path.startswith("/proc/self/fd/"):
+            via_proc.append((path, mode))
+        return real_chmod(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(os, "chmod", spy_chmod)
+    try:
+        VerifierAccount.grant_read(root)
+        assert via_proc, "the O_PATH fallback was not used for the mode-000 directory"
+        assert via_proc[0][1] & 0o555 == 0o555  # owner and group/other read+traverse
+        assert stat.S_IMODE(closed.stat().st_mode) == 0o555
+        assert stat.S_IMODE(inner.stat().st_mode) == 0o644  # walked inside it
+    finally:
+        monkeypatch.undo()
+        closed.chmod(0o700)
