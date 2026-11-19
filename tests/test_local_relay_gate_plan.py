@@ -218,3 +218,23 @@ def test_a_failing_plan_builder_fails_closed(monkeypatch):
     )
     assert result.route == "FAILED" and "cannot read" in (result.reason or "")
     assert Reason.PAUSE_GATE_REFUSED is not None
+
+
+def test_attributes_cannot_hide_the_diff_behind_a_binary_placeholder(tmp_path):
+    repo, base = _repo(tmp_path)
+    (repo / ".git" / "info").mkdir(exist_ok=True)
+    (repo / ".git" / "info" / "attributes").write_text("*.py -diff\n")  # worker-writable
+    (repo / ".gitattributes").write_text("*.py binary\n")
+    (repo / "pkg" / "stats.py").write_text("def last_n(items, n):\n    return items[-n:]\n")
+    plan = build_gate_plan(TASK, RunResult(0, "", repo.parent, repo, base_sha=base))
+    assert "+    return items[-n:]" in plan and "Binary files" not in plan
+
+
+def test_a_binary_placeholder_in_the_diff_is_refused(monkeypatch, tmp_path):
+    from experimental.local_relay import gate_plan
+    from experimental.local_relay.gate_plan import PlanIncomplete
+
+    repo, base = _repo(tmp_path)
+    monkeypatch.setattr(gate_plan, "_git", lambda *_a, **_k: b"Binary files a/x and b/x differ\n")
+    with pytest.raises(PlanIncomplete):
+        build_gate_plan(TASK, RunResult(0, "", repo.parent, repo, base_sha=base))

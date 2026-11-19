@@ -111,10 +111,13 @@ def build_gate_plan(task: dict[str, Any], candidate: Any) -> str:
         "--no-color",
         "--no-ext-diff",
         "--no-textconv",
+        "--text",  # attributes (-diff, binary) must not turn content into a placeholder
         "--no-renames",
         base,
         limit=MAX_DIFF_BYTES,
     ).decode("utf-8", "replace")
+    if any(line.startswith("Binary files ") for line in diff.splitlines()):
+        raise PlanIncomplete("the diff hides content behind a binary placeholder")
     parts = [
         "Task:\n" + str(task.get("prompt", "")).strip(),
         "Allowed files: " + ", ".join(task.get("allowed_files", [])),
