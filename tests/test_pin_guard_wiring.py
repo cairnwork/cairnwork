@@ -18,6 +18,8 @@ def test_ac7_trusted_workflow_wiring_and_owner_only_approvers() -> None:
     assert '--pr-author "$PR_AUTHOR"' in workflow
     assert '--reviews "$REVIEWS"' in workflow
     assert "reviews.json" in workflow
+    assert '--review-comments "$REVIEW_COMMENTS"' in workflow
+    assert "review_comments.json" in workflow
     logins = [
         line.strip()
         for line in (ROOT / "scripts/ci/pin_guard_approvers.txt")

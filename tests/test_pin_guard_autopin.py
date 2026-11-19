@@ -68,6 +68,7 @@ def run(
     head: str,
     comments: list[dict],
     reviews: object = None,
+    inline: object = None,
     **kw: str,
 ) -> tuple[int, str]:
     comment_file = tmp_path / "comments.json"
@@ -76,6 +77,10 @@ def run(
     reviews_file.write_text(json.dumps([] if reviews is None else reviews), encoding="utf-8")
     args = [sys.executable, "-I", str(SCRIPT), "--trusted", str(trusted), "--head", str(repo)]
     args += [f"--base-sha={base}", f"--head-sha={head}", "--comments", str(comment_file)]
+    inline_file = tmp_path / "review_comments.json"
+    inline_file.write_text(json.dumps([] if inline is None else inline), encoding="utf-8")
+    if kw.get("no_inline") != "1":
+        args += ["--review-comments", str(inline_file)]
     if kw.get("no_reviews") != "1":
         args += ["--reviews", str(reviews_file)]
     author = kw.get("author", AUTHOR)
@@ -307,4 +312,23 @@ def test_missing_reviews_file_never_auto_approves_and_bad_shape_fails_closed(
     code, _ = run(tmp_path, trusted, repo, base, head, all_three(head), no_reviews="1")
     assert code == 1
     bad = run(tmp_path, trusted, repo, base, head, all_three(head), {"state": "APPROVED"})
+    assert bad == (2, "PIN_GUARD PIN_GUARD_INCOMPLETE")
+
+
+def test_inline_review_comments_veto_and_never_accept(tmp_path: Path) -> None:
+    repo, trusted, base, head = setup(tmp_path)
+    inline = [{"user": {"login": "x"}, "body": "REJECT", "created_at": "a", "updated_at": "b"}]
+    assert run(tmp_path, trusted, repo, base, head, all_three(head), None, inline)[0] == 1
+    old = [{"body": f"reject at {base}"}, {"body": 5}, "junk"]
+    assert run(tmp_path, trusted, repo, base, head, all_three(head), None, old)[0] == 4
+    as_inline = [record("gemini", head)]
+    assert run(tmp_path, trusted, repo, base, head, all_three(head)[:2], None, as_inline)[0] == 1
+
+
+def test_missing_inline_file_never_auto_approves_and_bad_shape_fails_closed(
+    tmp_path: Path,
+) -> None:
+    repo, trusted, base, head = setup(tmp_path)
+    assert run(tmp_path, trusted, repo, base, head, all_three(head), no_inline="1")[0] == 1
+    bad = run(tmp_path, trusted, repo, base, head, all_three(head), None, {"body": "x"})
     assert bad == (2, "PIN_GUARD PIN_GUARD_INCOMPLETE")

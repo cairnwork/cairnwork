@@ -81,6 +81,7 @@ jobs:
         run: |
           gh api --paginate "repos/${REPO}/issues/${EVENT_NUMBER}/comments" | jq -s 'add' > "$RUNNER_TEMP/comments.json"
           gh api --paginate "repos/${REPO}/pulls/${EVENT_NUMBER}/reviews" | jq -s 'add' > "$RUNNER_TEMP/reviews.json"
+          gh api --paginate "repos/${REPO}/pulls/${EVENT_NUMBER}/comments" | jq -s 'add' > "$RUNNER_TEMP/review_comments.json"
       - name: Run trusted pin guard
         id: gate
         env:
@@ -89,6 +90,7 @@ jobs:
           HEAD_SHA: ${{ steps.refs.outputs.head_sha }}
           COMMENTS: ${{ runner.temp }}/comments.json
           REVIEWS: ${{ runner.temp }}/reviews.json
+          REVIEW_COMMENTS: ${{ runner.temp }}/review_comments.json
           EVENT_NAME: ${{ github.event_name }}
           PR_AUTHOR: ${{ steps.refs.outputs.pr_author }}
         run: |
@@ -98,7 +100,8 @@ jobs:
           fi
           python3 -I trusted/scripts/ci/pin_guard.py --trusted trusted --head head \
             --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA" --comments "$COMMENTS" \
-            --reviews "$REVIEWS" --pr-author "$PR_AUTHOR" || rc=$?
+            --reviews "$REVIEWS" --review-comments "$REVIEW_COMMENTS" \
+            --pr-author "$PR_AUTHOR" || rc=$?
           echo "gate_rc=$rc" >> "$GITHUB_OUTPUT"
 
   publish:

@@ -237,18 +237,37 @@ def _reviews_clean(reviews: Path | None, head: str) -> bool:
     return True
 
 
+def _inline_clean(path: Path | None, head: str) -> bool:
+    """Inline PR review comments veto only (edited ones too) and never count as ACCEPT records.
+
+    No file means they were not read, so no auto-approval. Not a list is an error (rc 2).
+    """
+    if path is None:
+        return False
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, list):
+        raise ValueError("review comments must be a list")
+    for item in data:
+        body = item.get("body") if isinstance(item, dict) else None
+        if isinstance(body, str) and any(_negative(line, head) for line in body.splitlines()):
+            return False
+    return True
+
+
 def _three_family_accept(
     comments: Path | None,
     reviewers: dict[str, str],
     author: str | None,
     head_sha: str,
     reviews: Path | None = None,
+    inline: Path | None = None,
 ) -> bool:
     """Each family ACCEPTs head_sha in an unedited record by the login bound to that family,
     which is not the PR author. Any negative verdict on head_sha, or with no sha, in any
     comment by anyone (edited or not) blocks: an unclear REJECT falls back to the owner."""
     head = head_sha.lower()
-    if not _reviews_clean(reviews, head) or not author or not reviewers:
+    clean = _reviews_clean(reviews, head) & _inline_clean(inline, head)  # parse both: rc 2
+    if not clean or not author or not reviewers:
         return False
     accepted: set[str] = set()
     for login, body, edited in _read_comments(comments):
@@ -326,8 +345,9 @@ def evaluate(args: argparse.Namespace) -> tuple[int, str, list[str]]:
         return 0, outcome, hits
     reviewers = _reviewers(trusted / "scripts/ci/pin_guard_reviewers.txt")
     reviews = Path(args.reviews) if args.reviews else None
+    inline = Path(args.review_comments) if args.review_comments else None
     if not _self_guard(changed) and _three_family_accept(
-        comments, reviewers, args.pr_author, args.head_sha, reviews
+        comments, reviewers, args.pr_author, args.head_sha, reviews, inline
     ):
         return 4, "PIN_CHANGE_AUTO_APPROVED", hits
     return 1, outcome, hits
@@ -342,6 +362,7 @@ def main() -> int:
     parser.add_argument("--comments")
     parser.add_argument("--pr-author")
     parser.add_argument("--reviews")
+    parser.add_argument("--review-comments")
     args = parser.parse_args()
     try:
         if not re.fullmatch(r"[0-9a-fA-F]{40}", args.base_sha) or not re.fullmatch(
