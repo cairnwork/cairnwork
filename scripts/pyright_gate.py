@@ -31,8 +31,10 @@ from pathlib import Path
 Key = tuple[str, str, str, str]
 _SKIP_DIRS = {".git", ".venv"}
 _MAX_FILE_BYTES = 8 * 1024 * 1024
-_IGNORE_COMMENT = re.compile(r"#\s*(?:type|pyright)\s*:\s*ignore(?=$|[\s\[#])", re.I)
-_PYRIGHT_DIRECTIVE = re.compile(r"#\s*pyright\s*:(?!\s*ignore(?=$|[\s\[#]))([^\n]*)", re.I)
+_WS = r"[\s\ufeff]*"  # JS trim also treats U+FEFF as whitespace; Python \s does not
+_IGNORE_END = r"(?=$|[\s\ufeff\[#])"
+_IGNORE_COMMENT = re.compile(rf"#{_WS}(?:type|pyright){_WS}:{_WS}ignore{_IGNORE_END}", re.I)
+_PYRIGHT_DIRECTIVE = re.compile(rf"#{_WS}pyright{_WS}:(?!{_WS}ignore{_IGNORE_END})([^\n]*)", re.I)
 
 
 class GateError(Exception):
