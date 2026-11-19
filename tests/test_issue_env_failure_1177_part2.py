@@ -9,7 +9,7 @@ from conftest import git
 from test_issue_runner import BLOCK, FakeGitHub, issue, setup  # noqa: F401
 
 import cairnwork.deferred_store as deferred_store
-import cairnwork.intake as intake_module
+import cairnwork.intake_mirror as intake_mirror_module
 import cairnwork.issue_runner as runner
 from cairnwork.deferred_store import DeferredStore
 from cairnwork.gitcmd import GitCommandError
@@ -76,7 +76,7 @@ def test_mirror_base_environment_failure_stays_queued(setup, monkeypatch, failur
     def fail(*args, **kwargs):
         raise _git_error(failure)
 
-    monkeypatch.setattr(intake_module, "run_git", fail)
+    monkeypatch.setattr(intake_mirror_module, "run_git", fail)
     out = runner.take(setup["intake"], github, setup["clone"])[0]
     _assert_queued_error(out, github)
 
@@ -99,7 +99,7 @@ def test_mirror_base_actual_git_refusal_still_needs_fix(setup, monkeypatch):
     def refuse(*args, **kwargs):
         raise _git_error(subprocess.CalledProcessError(128, "git"))
 
-    monkeypatch.setattr(intake_module, "run_git", refuse)
+    monkeypatch.setattr(intake_mirror_module, "run_git", refuse)
     out = runner.take(setup["intake"], github, setup["clone"])[0]
     assert out["refused"].startswith("BAD_REQUEST")
     assert github.labels[7] == {runner.NEEDS_FIX}

@@ -1,5 +1,6 @@
 """Tests for cairnwork.gitcmd context-local process markers."""
 
+import os
 import subprocess
 import sys
 import threading
@@ -64,7 +65,7 @@ def test_verifiers_run_all_git_marking(project, tmp_path, monkeypatch):
 
     def fake_run(*args, **kwargs):
         cmd = args[0] if args else kwargs.get("args", [])
-        if cmd and cmd[0] == "git":
+        if cmd and os.path.basename(cmd[0]) == "git":
             recorded_attempts.append(kwargs.get("env", {}).get("CAIRNWORK_ATTEMPT"))
         return real_run(*args, **kwargs)
 
