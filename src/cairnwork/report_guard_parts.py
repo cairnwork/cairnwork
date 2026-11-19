@@ -4,7 +4,14 @@ not parent code: the plugin cannot import cairnwork."""
 
 PARTS_SOURCE = """\
 import sys
-from types import ModuleType
+import pytest
+from pathlib import PosixPath
+from types import CodeType, FrameType, ModuleType, TracebackType
+from _pytest.mark.structures import Mark
+from _pytest._code.code import ExceptionInfo
+from _pytest.config import Config
+from _pytest.reports import CollectReport, TestReport
+from _pytest.runner import CallInfo
 
 # #804: fixture -> module of the pytest_config.PLUGINS entry that provides it. A setup error that
 # says one of them is missing is recorded as "plugin:<module>"; the parent keeps it as "plugin"
@@ -20,13 +27,19 @@ _PLUGIN_FIXTURES = {
 }
 
 
-def _marker_items(session):
-    return {item.nodeid: any(item.get_closest_marker(name) for name in ("skip", "skipif"))
+def _marker_items(session, _type=type, _mark=Mark):
+    # #1368: a node's own marks, not get_closest_marker (pytest compares a mark's name with ==
+    # and we took bool() of the mark): only an exact Mark with an exact str name counts; any
+    # other mark leaves the skip "runtime", the side the parent does not take as evidence.
+    return {item.nodeid: any(_type(m) is _mark and _type(m.name) is str
+                             and m.name in ("skip", "skipif")
+                             for node in item.listchain() for m in node.own_markers)
             for item in session.items}
 
 
 def _record_skip(reporter, report):
-    if report.outcome != "skipped" or getattr(report, "wasxfail", None):
+    xfail = getattr(report, "wasxfail", None)  # #1368: only an exact str reason is an xfail
+    if report.outcome != "skipped" or type(xfail) is str and xfail:
         return
     shown = report.longrepr[2] if isinstance(report.longrepr, tuple) else str(report.longrepr)
     reason = shown.removeprefix("Skipped: ")
@@ -35,13 +48,58 @@ def _record_skip(reporter, report):
         reporter._skips[report.nodeid] = {"kind": kind, "reason": reason[:200]}
 
 
-def _innermost(exc):  # the file of the innermost frame that is not the import machinery
-    tb, last = exc.__traceback__, ""
-    while tb is not None:
-        file = tb.tb_frame.f_code.co_filename
+def _innermost(exc, _type=type, _tb=BaseException.__traceback__.__get__,
+               _next=TracebackType.tb_next.__get__, _frame=TracebackType.tb_frame.__get__,
+               _code=FrameType.f_code.__get__, _filename=CodeType.co_filename.__get__):
+    # Only exact ImportError instances reach the traceback; all links use builtin descriptors.
+    kind = _type(exc)
+    if kind is not ImportError and kind is not ModuleNotFoundError:
+        return ""
+    tb, last = _tb(exc), ""
+    for _ in range(256):
+        if _type(tb) is not TracebackType:
+            break
+        file = _filename(_code(_frame(tb)))
+        if _type(file) is not str:
+            return ""
         last = last if file.startswith("<frozen importlib") else file
-        tb = tb.tb_next
+        tb = _next(tb)
+    else:
+        if tb is not None:
+            return ""
     return last
+
+
+def _report_cause(call, report, _type=type, _base=BaseException, _sub=issubclass):
+    # Exact pytest objects keep the subsequent instance-field reads away from candidate hooks.
+    kind = _type(report)  # identity, never == or `in`: a metaclass __eq__ would run
+    if _type(call) is not CallInfo or (kind is not CollectReport and kind is not TestReport):
+        return None
+    when = report.when
+    if _type(when) is not str or when != "collect":
+        return None
+    info = call.excinfo
+    if _type(info) is not ExceptionInfo:
+        return None
+    fields = info._excinfo
+    if _type(fields) is not tuple or len(fields) != 3:
+        return None
+    outer = fields[1]
+    if not _sub(_type(outer), _base):
+        return None
+    return BaseException.__cause__.__get__(outer)
+
+
+def _node_paths(node, _type=type, _str=str):
+    # the module file and the root, only when pytest's own PosixPath objects: no __fspath__ or
+    # __str__ of a replaced attribute runs.
+    config = node.config
+    if _type(config) is not Config:  # rootpath is then pytest's own property
+        return None
+    path, root = node.path, config.rootpath
+    if _type(path) is not PosixPath or _type(root) is not PosixPath:
+        return None
+    return _str(path), _str(root)
 
 
 def _import_error(node, call, report, _real=os.path.realpath, _rel=os.path.relpath,
@@ -54,18 +112,23 @@ def _import_error(node, call, report, _real=os.path.realpath, _rel=os.path.relpa
     # at import (as _Reporter's helpers) so a test module cannot rebind them; any error records
     # nothing.
     try:
-        exc = call.excinfo.value.__cause__
-        if not (isinstance(node, pytest.Module) and report.when == "collect"
-                and type(exc) is ImportError):
+        exc = _report_cause(call, report)
+        if type(exc) is not ImportError:
             return None
-        args, name, path = exc.args, exc.name, exc.path
+        if type(node) is not pytest.Module:
+            return None
+        args = BaseException.args.__get__(exc)
+        name, path = ImportError.name.__get__(exc), ImportError.path.__get__(exc)
         if not (type(name) is str and type(path) is str and type(args) is tuple
                 and len(args) == 1 and type(args[0]) is str):
             return None
         text, last = args[0], _last(exc)
-        origin = _rel(_real(path), _real(node.config.rootpath))
+        paths = _node_paths(node)
+        if paths is None:
+            return None
+        origin = _rel(_real(path), _real(paths[1]))
         if ("cannot import name" in text and "partially initialized" not in text
-                and _real(last) == _real(_str(node.path))
+                and _real(last) == _real(paths[0])
                 and not origin.startswith("..") and not _abs(origin)):
             return {"node": node.nodeid, "module": name, "origin": origin}
     except BaseException:
@@ -83,7 +146,14 @@ def _denied_exc(info, explicit=False, _sub=issubclass, _type=type, _base=BaseExc
     # type() and the built-in descriptors, never the error's own attributes, so a test's OSError
     # subclass (properties, __eq__, __bool__) runs no code here. explicit (#1030 r1): follow only
     # __cause__ (raise ... from), never the implicit __context__ of an error raised while handling.
-    exc = getattr(info, "value", None)
+    # #1308: only an exact ExceptionInfo is read (its _excinfo tuple, never .value); any other
+    # object, a test's own with a .value, gives None.
+    if _type(info) is not ExceptionInfo:
+        return None
+    fields = info._excinfo
+    if _type(fields) is not tuple or len(fields) != 3:
+        return None
+    exc = fields[1]
     for _ in range(64):
         if not _sub(_type(exc), _base):
             return None
@@ -103,27 +173,48 @@ def _denied_path(info, _exc=_denied_exc, _file=OSError.filename.__get__):
     return path if type(path) is str else None
 
 
-def _checkout_rel(code, top, _real=os.path.realpath, _rel=os.path.relpath, _abs=os.path.isabs):
+def _checkout_rel(code, top, _real=os.path.realpath, _rel=os.path.relpath, _abs=os.path.isabs,
+                  _type=type):
     # #962 step 2a: the frame's file relative to the checkout top, or None when it is not an
-    # absolute file inside it (realpath only to find it).
-    if not _abs(code.co_filename) or code.co_filename.startswith("<"):
+    # absolute file inside it (realpath only to find it). #1368: a co_filename that is not an
+    # exact str (code.replace) raises before any use, so _denied_origin records nothing (doubt).
+    file = code.co_filename
+    if _type(file) is not str:
+        raise TypeError("co_filename")
+    if not _abs(file) or file.startswith("<"):
         return None
-    rel = _rel(_real(code.co_filename), top)
+    rel = _rel(_real(file), top)
     out = rel in (".", "..") or rel.startswith(("../", "..\\\\"))
     return None if out or _abs(rel) else rel
 
 
-def _checkout_frame(tb, top, _in=_checkout_rel):
+def _checkout_frame(tb, top, _in=_checkout_rel, _type=type):
     # (origin, line) of a traceback's innermost checkout frame; "" when that frame is a lambda or
-    # a comprehension (a <...> name), or none is in the checkout.
+    # a comprehension (a <...> name), or none is in the checkout. #1368: a co_name that is not an
+    # exact str raises, like _checkout_rel, so _denied_origin records nothing.
     origin, line = "", 0
     while tb is not None:
         code = tb.tb_frame.f_code
         if _in(code, top) is not None:
-            origin = "" if code.co_name.startswith("<") else _in(code, top)
+            name = code.co_name
+            if _type(name) is not str:
+                raise TypeError("co_name")
+            origin = "" if name.startswith("<") else _in(code, top)
             line = tb.tb_lineno or 0
         tb = tb.tb_next
     return origin, line
+
+
+def _fixture_plugin(table, longrepr, _type=type):
+    # #1368: lookup only exact strings; test objects never reach dict hashing or equality.
+    name = getattr(longrepr, "argname", None)
+    return table.get(name) if _type(name) is str else None
+
+
+def _exit_status(value, _type=type, _code=pytest.ExitCode, _int=int.__int__):
+    # #1368: only exact ints and pytest ExitCode values enter the record; anything else is
+    # None, which the parent refuses (exitstatus must be an exact int).
+    return _int(value) if _type(value) is int or _type(value) is _code else None
 
 
 def _denied_origin(info, root, _exc=_denied_exc, _real=os.path.realpath, _str=str,
@@ -150,7 +241,7 @@ def _denied_origin(info, root, _exc=_denied_exc, _real=os.path.realpath, _str=st
                 seen.add(id(tb.tb_frame))
             tb = tb.tb_next
         origin, line = _frame(_tb(exc), top)
-        outer = getattr(info, "value", None)
+        outer = info._excinfo[1]  # info is an exact ExceptionInfo: _exc returned its error
         for _ in range(64):
             if outer is exc:
                 break
@@ -175,21 +266,24 @@ def _submodule_error(node, call, report, _real=os.path.realpath, _rel=os.path.re
     # a module __getattr__ in repo code); no find_spec, no import; any error records nothing. A
     # dict lookup can still call a colliding key's __eq__ (test code): a hint, not evidence.
     try:
-        exc = call.excinfo.value.__cause__
-        if not (isinstance(node, pytest.Module) and report.when == "collect"
-                and type(exc) is ModuleNotFoundError):
+        exc = _report_cause(call, report)
+        if type(exc) is not ModuleNotFoundError:
             return None
-        args, name, path = exc.args, exc.name, exc.path
+        if type(node) is not pytest.Module:
+            return None
+        args = BaseException.args.__get__(exc)
+        name, path = ModuleNotFoundError.name.__get__(exc), ModuleNotFoundError.path.__get__(exc)
         if not (type(name) is str and "." in name and path is None and type(args) is tuple
                 and len(args) == 1 and type(args[0]) is str
                 and args[0] == "No module named '" + name + "'"):
             return None
         parent = _get(_mods, name.rpartition(".")[0])
         file = _get(_vars(parent), "__file__") if type(parent) is _mod else None
-        if not (type(file) is str and _base(file) == "__init__.py"
-                and _real(_last(exc)) == _real(_str(node.path))):
+        paths = _node_paths(node)
+        if not (type(file) is str and _base(file) == "__init__.py" and paths is not None
+                and _real(_last(exc)) == _real(paths[0])):
             return None
-        origin = _rel(_real(file), _real(node.config.rootpath))
+        origin = _rel(_real(file), _real(paths[1]))
         if not origin.startswith("..") and not _abs(origin):
             return {"node": node.nodeid, "module": name, "parent_origin": origin}
     except BaseException:

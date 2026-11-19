@@ -32,6 +32,7 @@ FIELDS = frozenset(
         "base_commit",
         "allowed_files",
         "verifiers",
+        "origin_url",
     }
 )
 
@@ -50,13 +51,19 @@ def task_from_payload(
     import_paths: tuple[str, ...] = (),
 ) -> TaskSpec:
     """A closed schema: unknown or missing fields are refused, never ignored."""
-    if not isinstance(payload, dict) or not FIELDS <= set(payload) <= FIELDS | {"test_commit"}:
+    optional = {"test_commit"}
+    if (
+        not isinstance(payload, dict)
+        or not (FIELDS - {"origin_url"}) <= set(payload) <= FIELDS | optional
+    ):
         got = sorted(payload) if isinstance(payload, dict) else type(payload).__name__
         raise IntakeRefused(
             "BAD_REQUEST", f"fields must be {sorted(FIELDS)} (+test_commit), got {got}"
         )
     if not isinstance(payload.get("test_commit", ""), str):
         raise IntakeRefused("BAD_REQUEST", "test_commit must be a string")
+    if not isinstance(payload.get("origin_url", ""), str):
+        raise IntakeRefused("BAD_REQUEST", "origin_url must be a string")
     texts = ("idempotency_key", "card_hash", "title", "instructions", "repo", "base_commit")
     if not all(isinstance(payload[name], str) for name in texts):
         raise IntakeRefused("BAD_REQUEST", "text fields must be strings")
@@ -84,6 +91,7 @@ def task_from_payload(
         test_roots=test_roots,
         import_paths=import_paths,
         test_store=test_store,
+        origin_url=payload.get("origin_url") or None,
     )
 
 

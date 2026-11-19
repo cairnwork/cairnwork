@@ -23,7 +23,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from cairnwork import deferred_attached, survivor_argv
+from cairnwork import deferred_attached, gitprobe, survivor_argv
 from cairnwork.base_teeth import base_teeth
 from cairnwork.deferred_nodes import hidden_tests, local_names, test_functions
 from cairnwork.deferred_overlay import (  # noqa: F401  (re-exported: the one place importers look)
@@ -35,7 +35,7 @@ from cairnwork.deferred_overlay import (  # noqa: F401  (re-exported: the one pl
     deleted_of,
     overlay_tree,
 )
-from cairnwork.gitcmd import OID, GitCommandError, run_git
+from cairnwork.gitcmd import OID, GitCommandError, commit_present, run_git
 from cairnwork.issue_task import test_target
 from cairnwork.p2p_function import _without_case as _nodeid_without_case
 from cairnwork.provenance import trailers
@@ -46,15 +46,11 @@ from cairnwork_protocol.ids import MAX_ID_BYTES
 _IDENTITY = ("-c", "user.name=Cairnwork", "-c", "user.email=cairnwork@localhost")
 _EMPTY = ast.Module(body=[], type_ignores=[])  # a file that is not there (new, or deleted)
 # pytest reads these on its own; a test commit carries tests, not configuration.
-# Same names the candidate may not touch (verifiers.protected_verifier_inputs). __init__.py
-# stays allowed: it runs only when the tests themselves import their package.
+# Protected verifier inputs; __init__.py stays allowed for test imports.
 _SITE_NAMES = frozenset({"sitecustomize", "usercustomize"})  # also refused as package names
-_NOT_TEST_FILES = frozenset(
-    {
-        "conftest.py", "pytest.ini", "setup.cfg", "tox.ini", "pyproject.toml", "pytest.toml",
-        ".pytest.toml", ".pytest.ini", "setup.py", "sitecustomize.py", "usercustomize.py",
-    }
-)  # fmt: skip
+_NOT_TEST_FILES = frozenset({"conftest.py", "pytest.ini", "setup.cfg", "tox.ini",
+                             "pyproject.toml", "pytest.toml", ".pytest.toml", ".pytest.ini",
+                             "setup.py", "sitecustomize.py", "usercustomize.py"})  # fmt: skip
 
 
 def out_of_scope(path: str, status: str) -> bool:  # #798: conftest.py only added/modified
@@ -80,7 +76,9 @@ def never_seen(repo: Path, test_commit: str) -> None:
     raise TestCommitRejected("TEST_COMMIT_ALREADY_EXPOSED", "push the tests as a new commit")
 
 
-def ensure_test_commit(repo: Path, test_commit: str, store=None) -> None:
+def ensure_test_commit(
+    repo: Path, test_commit: str, store=None, *, origin_url=None, allowed_protocols=("https", "ssh")
+) -> None:
     """Fetch the test commit into repo only now, after the worker is done: until then
     nothing on this machine holds the tests (the Issue runner reads its parent via the
     GitHub API, or from the private store). With a store (deferred_store.py, Issue #119)
@@ -88,7 +86,9 @@ def ensure_test_commit(repo: Path, test_commit: str, store=None) -> None:
     a ``required`` store refuses a commit that was not imported instead of falling back.
     It does so before looking at repo: a commit that is already there but never went
     through the store reached the machine by another route (a fetch from origin, a push)
-    and must not pass as "bundle" (#189); one the store holds is fetched from its bundle."""
+    and must not pass as "bundle" (#189); one the store holds is fetched from its bundle.
+    Without a required store, a locally present commit is accepted without a configured
+    verifier-owned origin; Git operations ignore replacement refs (#1312)."""
     if not OID.fullmatch(test_commit):
         raise TestCommitRejected("TEST_COMMIT_INVALID", "not a 40-hex commit id")
     if store is not None and store.required:  # provenance first, presence never suffices
@@ -96,19 +96,15 @@ def ensure_test_commit(repo: Path, test_commit: str, store=None) -> None:
             raise TestCommitRejected("TEST_COMMIT_NOT_IMPORTED", test_commit)
         store.fetch_into(repo, test_commit)
         return
-    try:
-        run_git(repo, "cat-file", "-e", f"{test_commit}^{{commit}}")
+    if commit_present(repo, test_commit):
         return
-    except GitCommandError:
-        pass
     if store is not None and store.has(test_commit):
         store.fetch_into(repo, test_commit)
         return
     try:
-        run_git(repo, "fetch", "--quiet", "--no-tags", "origin", test_commit)
-        run_git(repo, "cat-file", "-e", f"{test_commit}^{{commit}}")
-    except GitCommandError as exc:
-        raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
+        gitprobe.fetch_to_supplied(repo, origin_url, test_commit, protocols=allowed_protocols)
+    except gitprobe.TestCommitUnavailable as exc:
+        raise TestCommitRejected("TEST_COMMIT_UNREADABLE", "origin did not provide it") from exc
 
 
 def check_roots_on_base(repo: Path, base: str, roots: tuple[str, ...]) -> None:

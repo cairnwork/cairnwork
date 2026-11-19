@@ -4,6 +4,7 @@
         --allowed-file F [...] --verifier CMD [...] [--test-commit SHA] \\
         [--import-path DIR ...]    # src layout: DIR joins the verifiers' import path (#283)
         [--blackbox FILE]          # the owner's function-level checks and answers (#303)
+        [--verifier-account NAME]  # global option before `run`: cairnwork-verifier2 (default none)
         [--require-protection]     # strict mode: not VERIFIED unless protected (protection.py)
     cairnwork-verify --state DIR blackbox-commitment --blackbox FILE   # for a receiver's policy
     cairnwork-verify --state DIR import-tests --repo-path P --bundle FILE
@@ -17,8 +18,9 @@ caller that switches on REFUSED must handle it); 3 usage error; 1 internal error
 says what a verdict rests on (protection.py): ``partial`` when declared blackbox checks are among
 the required observations (``partial_macos`` on macOS, #316), ``same_process_only`` when there are
 none ("" when Core was never asked). With ``--require-protection`` an unprotected run is not
-VERIFIED (either grade passes), and without ``--blackbox`` it is refused before anything runs
-(error UNPROTECTED).
+VERIFIED (either grade passes). It is refused before anything runs without ``--blackbox`` (error
+UNPROTECTED) or when a declared check fails the entropy rule (blackbox_entropy.py; error
+BLACKBOX_LOW_ENTROPY or BLACKBOX_TOO_FEW_CASES).
 
 Exit codes for ``migrate-notary``: 0 migrated, or already current (``"migrated": false``); 2
 refused: NOTARY_SCHEMA_MISMATCH (unknown version, or no notary), NOTARY_MISSING (none, or empty),
@@ -37,7 +39,7 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 import cairnwork_sandbox
-from cairnwork import blackbox, protection, runlock
+from cairnwork import blackbox, blackbox_entropy, protection, runlock
 from cairnwork.blackbox_exec import account_can_read
 from cairnwork.deferred_tests import TestCommitRejected
 from cairnwork.intake import Intake, IntakeRefused
@@ -45,6 +47,7 @@ from cairnwork.notary import NotarySchemaMismatch
 from cairnwork.notary_migrate import NotaryMissing, migrate_notary
 from cairnwork.pipeline import TaskRejected
 from cairnwork.runlock import RunLockBusy
+from cairnwork.verifier_select import SelectedIntake, select_account
 from cairnwork.verify_candidate import cleanup, tests_consumed, verify_candidate
 
 
@@ -57,7 +60,10 @@ class _Parser(argparse.ArgumentParser):
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    intake = Intake(Path(args.state).resolve())
+    try:
+        intake = _intake(args)
+    except IntakeRefused as exc:  # a bad --verifier-account: nothing ran, no fallback account
+        return _emit({"error": exc.code, "detail": exc.detail}, 2)
     try:
         if args.command == "cleanup":
             return _emit(cleanup(intake), 0)
@@ -100,6 +106,19 @@ def main(argv: list[str] | None = None) -> int:
         used = tests_consumed(intake, getattr(args, "test_commit", ""))  # a retry needs new tests?
         return _emit({"error": "INTERNAL", "detail": detail, "tests_consumed": used}, 1)
     return _emit(result, 0 if result["verified"] is True else 2)  # UNCOMPARABLE is never 0
+
+
+def _intake(args) -> Intake:
+    state = Path(args.state).resolve()
+    if args.verifier_account is None:
+        return Intake(state)
+    intake = SelectedIntake(state, select_account(args.verifier_account))
+    if not intake.config()["verifier_account"]:  # never silently ignore an explicit account
+        raise IntakeRefused(
+            "VERIFIER_ACCOUNT_NOT_ENABLED",
+            "--verifier-account needs verifier_account: true in the state config.json",
+        )
+    return intake
 
 
 def _migrate(intake: Intake) -> dict[str, Any]:
@@ -180,6 +199,16 @@ def _run(intake: Intake, args) -> dict[str, Any]:
         raise TaskRejected(exc.code, str(exc)) from exc
     if args.require_protection and path is None:  # strict mode could never be met: burn nothing
         raise TaskRejected(protection.UNPROTECTED_CODE, "--require-protection needs --blackbox")
+    if args.require_protection and declared is not None:
+        problem = next(iter(blackbox_entropy.declaration_problems(declared)), None)
+        if problem is not None:
+            check_id = problem.partition(":")[2] or "NO_CHECKS"
+            code = (
+                "BLACKBOX_LOW_ENTROPY"
+                if problem.startswith("LOW_ENTROPY:")
+                else "BLACKBOX_TOO_FEW_CASES"
+            )
+            raise TaskRejected(code, f"blackbox check {check_id[:80]!r} fails entropy rule")
     account = intake.verifier_account() if path is not None else None
     if path is not None and account is not None and account_can_read(account, path):
         raise TaskRejected(
@@ -201,6 +230,7 @@ def _run(intake: Intake, args) -> dict[str, Any]:
 
 def _parser() -> argparse.ArgumentParser:
     parser = _Parser(prog="cairnwork-verify")
+    parser.add_argument("--verifier-account", default=None)
     parser.add_argument("--state", required=True)
     commands = parser.add_subparsers(dest="command", required=True, parser_class=_Parser)
     commands.add_parser("cleanup")
@@ -218,7 +248,14 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--test-commit", default="")
     run.add_argument("--import-path", action="append", default=[])
     run.add_argument("--blackbox", default=None)  # "" is a path that cannot be opened, not "none"
-    run.add_argument("--require-protection", action="store_true")  # strict mode (#303)
+    run.add_argument(
+        "--require-protection",
+        action="store_true",
+        help=(
+            "strict mode: require protection to verify; needs --blackbox "
+            "(known limits: docs/SECURITY.md)"
+        ),
+    )  # strict mode (#303)
     return parser
 
 

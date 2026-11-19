@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from _child_python import run_module
 from verify_helpers import cli
 
 import cairnwork.notary_migrate as notary_migrate
@@ -38,7 +39,7 @@ def sqlite_file(path, version=0, other_table=False):
 
 def route(state, *args, stdin=""):
     done = subprocess.run(
-        [sys.executable, "-I", "-m", "cairnwork.route", "--state", str(state), *args],
+        run_module("cairnwork.route") + ["--state", str(state), *args],
         input=stdin, capture_output=True, text=True, timeout=120, check=False,
     )  # fmt: skip
     return done.returncode, json.loads(done.stdout)

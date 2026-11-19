@@ -142,6 +142,10 @@ WORKAROUNDS = {
     "git_config": "git config --local core.hooksPath /x",
     "assume_unchanged": "git update-index --assume-unchanged -- src/a.py && echo y > src/a.py",
     "xattr": "xattr -w user.cw v src/a.py",
+    "chflags": "chflags uchg src/a.py",
+    "touch": "touch -m -t 200001010000 src/a.py",
+    "chmod_acl": "chmod +a 'everyone deny write' src/a.py",
+    "mkfifo": "mkfifo src/f.fifo",
 }
 
 

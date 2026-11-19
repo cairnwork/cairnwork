@@ -4,25 +4,38 @@ cairnwork. report_guard concatenates it where it was, so the installed plugin is
 
 DENIED_SOURCE = '''\
 def _denied_inside(exc, _codes=(errno.EACCES, errno.EPERM, errno.EROFS, errno.ENETUNREACH),
-                   _lookup=socket.gaierror):
+                   _lookup=socket.gaierror, _type=type, _sub=issubclass, _base=BaseException,
+                   _cause=BaseException.__cause__.__get__,
+                   _context=BaseException.__context__.__get__,
+                   _quiet=BaseException.__suppress_context__.__get__,
+                   _errno=OSError.errno.__get__, _members=BaseExceptionGroup.exceptions.__get__,
+                   _mro=type.__dict__["__mro__"].__get__, _kdict=type.__dict__["__dict__"].__get__):
     """#854: a denial-shaped OSError wrapped in a failure (group member, cause, unsuppressed
     context), or #932 a failed host-name lookup (a closed network); past the bound, yes (fail
     closed). Other wrapped OSErrors stay plain failures."""
     todo, seen = [exc], set()
     while todo:
-        if not isinstance(cur := todo.pop(), BaseException) or id(cur) in seen:
+        if not _sub(_type(cur := todo.pop()), _base) or id(cur) in seen:
             continue
         if len(seen) >= 64:  # the bound: a 65th distinct exception, not an empty cause slot
             return True
         seen.add(id(cur))
-        if cur is not exc and (isinstance(cur, _lookup) or isinstance(cur, OSError)
-                               and cur.errno in _codes):  # #932: a lookup's errno is EAI_*
+        error_no = _errno(cur) if _sub(_type(cur), OSError) else None
+        if _sub(_type(cur), OSError) and any(  # a class that replaces errno (a property): doubt
+                any(_type(key) is not str for key in _kdict(k))
+                or _type(_kdict(k).get("errno", 0)) is not int for k in _mro(_type(cur))
+                if k is not OSError):
             return True
-        members = getattr(cur, "exceptions", None)  # BaseExceptionGroup, or the backport's
-        todo.extend(members if isinstance(members, tuple) else ())
-        todo.append(cur.__cause__)
-        if not cur.__suppress_context__:
-            todo.append(cur.__context__)
+        if cur is not exc and (_sub(_type(cur), _lookup)
+                               or _type(error_no) is int and error_no in _codes):
+            # #932: a lookup's errno is EAI_*
+            return True
+        members = _members(cur) if _sub(_type(cur), BaseExceptionGroup) else ()
+        if _type(members) is tuple:
+            todo.extend(members)  # the 65th distinct exception popped is the bound
+        todo.append(_cause(cur))
+        if not _quiet(cur):
+            todo.append(_context(cur))
     return False
 
 

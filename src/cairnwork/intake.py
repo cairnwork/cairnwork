@@ -5,10 +5,10 @@ fixes here, through the ``cairnwork-route`` command (route.py). Everything lives
 in one state directory (owner-only):
 
     ACCEPTING          present: new tasks are taken; absent (the default): refused
-    config.json        {"model", "agy", "agy_dispatch", "agy_dispatch_*_seconds",
-                        "agy_run_as_user", "verifier_account", "verifier_python", "gh",
-                        "mirror", "core_url", "core_token_file", "core_identity", "test_roots",
-                        "import_paths", "post_verified_hook", "post_verified_hook_seconds"}
+    config.json        {"model", "agy", "agy_dispatch", "agy_dispatch_*_seconds", "verifier_python",
+                        "agy_run_as_user", "verifier_account", "gh", "mirror", "core_url",
+                        "core_token_file", "core_identity", "test_roots", "import_paths",
+                        "post_verified_hook", "post_verified_hook_seconds", "origin_url"}
     ownership.sqlite, notary.sqlite, journal.sqlite
     requests/<task_id>.json   the request as bound (its digest is checked again), stored first
     runs/              attempt clones, verifier logs, one runner log per task
@@ -40,7 +40,7 @@ from typing import Any
 from cairnwork import runlock, takeover
 from cairnwork.deferred_store import DeferredStore
 from cairnwork.gitcmd import GitCommandError, run_git
-from cairnwork.intake_config import DEFAULT_CONFIG, has_token, seconds_ok, stored_config
+from cairnwork.intake_config import DEFAULT_CONFIG, has_token, one_line, seconds_ok, stored_config
 from cairnwork.intake_request import (
     IntakeRefused,
     bind_stored,
@@ -114,9 +114,9 @@ class Intake:
             value = loaded.get(key)
             if value is not None and not (isinstance(value, str) and os.path.isabs(value)):
                 raise IntakeRefused("BAD_CONFIG", f"{key} must be an absolute path")
-        model = loaded.get("model", DEFAULT_CONFIG["model"])
-        if not isinstance(model, str) or not model or any(c in model for c in "\n\r\0"):
-            raise IntakeRefused("BAD_CONFIG", "model must be a one-line string")
+        for key in ("model", "origin_url"):  # origin_url: verifier-owned, optional
+            if not one_line(loaded.get(key, DEFAULT_CONFIG[key]), key == "origin_url"):
+                raise IntakeRefused("BAD_CONFIG", f"{key} must be a one-line string")
         for key in DEFAULT_CONFIG.keys() & loaded.keys():
             if (
                 key.startswith("agy_dispatch_") or key == "post_verified_hook_seconds"

@@ -26,6 +26,16 @@ CASES = {  # name: (base conftest addition, fix, expected status, code)
     "an assignment expression names the module, wrong fix (#1027)": (
         '(pytest_plugins := ["colorsys"])\n', BREAKS_BASE, "FAILED",
         "TEST_COMMIT_CONFTEST_STATIC"),
+    "a for loop target names the module, wrong fix (#1010)": (
+        'for pytest_plugins in (["colorsys"],):\n    pass\n', BREAKS_BASE, "FAILED",
+        "TEST_COMMIT_CONFTEST_STATIC"),
+    "a with target names the module, wrong fix (#1010)": (
+        'from contextlib import nullcontext\n'
+        'with nullcontext(["colorsys"]) as pytest_plugins:\n    pass\n',
+        BREAKS_BASE, "FAILED", "TEST_COMMIT_CONFTEST_STATIC"),
+    "a match capture names the module, wrong fix (#1010)": (
+        'match ["colorsys"]:\n    case pytest_plugins:\n        pass\n',
+        BREAKS_BASE, "FAILED", "TEST_COMMIT_CONFTEST_STATIC"),
     "a list built at run time, correct fix": (
         "PLUGINS = ()\npytest_plugins = [p for p in PLUGINS]\n", FIX, "COMPLETED", ""),
 }  # fmt: skip

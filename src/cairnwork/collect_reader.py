@@ -29,6 +29,7 @@ class Collected:
     error_files: tuple[str, ...] = ()  # target files whose collector failed: ids unknown
     skipped_files: tuple[str, ...] = ()  # target files skipped while collecting: ids unknown
     unusable: str = ""  # non-empty: why nothing can be read from the run
+    exposed: tuple[str, ...] | None = None
 
 
 def read_collected(run) -> Collected:
@@ -50,7 +51,34 @@ def read_collected(run) -> Collected:
     if not expected.get(run.returncode, False):
         return Collected(unusable=f"collect-rc-{run.returncode}")
     ids = tuple(sorted(n for n in set(run.collected) if _file(n) not in error_files))
-    return Collected(ids, tuple(sorted(error_files)), tuple(sorted(skipped_files)))
+    exposed = _exposed(
+        getattr(run, "uncollected_exposed", None), targets, error_files | skipped_files
+    )
+    return Collected(ids, tuple(sorted(error_files)), tuple(sorted(skipped_files)), exposed=exposed)
+
+
+def _exposed(raw, targets: frozenset[str], unknown: frozenset[str]) -> tuple[str, ...] | None:
+    if not isinstance(raw, tuple) or not all(isinstance(item, str) for item in raw):
+        return None
+    if len(raw) > 5000 or any(len(item) > 1024 for item in raw):
+        return None
+    if len(set(raw)) != len(raw):
+        return None
+    if any(not _valid_exposed_id(item) for item in raw):
+        return None
+    if any(_file(item) not in targets or _file(item) in unknown for item in raw):
+        return None
+    return tuple(sorted(raw))
+
+
+def _valid_exposed_id(item: str) -> bool:
+    parts = item.split("::")
+    return (
+        len(parts) >= 3
+        and all(parts)
+        and "[" not in parts[-1]
+        and all(32 <= ord(char) <= 126 and not char.isspace() for char in item)
+    )
 
 
 def _unclean(run) -> str:

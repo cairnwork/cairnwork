@@ -19,6 +19,7 @@ Cairnwork 是 AI 寫程式代理人交件時的驗收關卡。核心價值不是
 - 不主張取代人工程式碼審查。
 - 不主張是互動式 coding agent 或對話助理。
 - 不主張一般 pytest 測試能防住刻意作弊：候選碼與測試同程序時，可以改寫測試讀到的值。只有宣告的黑箱檢查（期望值放在候選碼從未執行過的程序）受保護；`protection` 欄位標明（`verdict` 欄位把它接在 VERIFIED 後面，例如 `VERIFIED same_process_only`）`blackbox`／`partial`／`same_process_only`（macOS 上受保護的兩級為 `blackbox_macos`／`partial_macos`，等級較低，#316）。`cairnwork-verify run --blackbox <宣告檔> --require-protection` 要求受保護才算 VERIFIED（`partial` 與 `partial_macos` 都算）；沒有 `--blackbox` 時直接拒絕（UNPROTECTED）。
+- 即使在嚴格模式，仍有兩種已知殘餘情況：候選碼若偵測到 runner 模組名稱在 `sys.modules`，或偵測到 `pytest` 不在 `sys.modules`，仍可能在黑箱 runner 回答不同結果。詳見 [docs/SECURITY.md](docs/SECURITY.md)。
 - 不主張驗證通過就沒有缺陷：Nexus-new#2813（修正 PR #2856）是 Core VERIFIED、但獨立審查仍抓到拒絕檢查可被繞過的實例。驗證是證據，不是證明。
 
 Nexus-new 是**參考**，不是搬家來源。決定與理由：knowledge `nexus/decisions/2026-10-19-cairnwork-owner-decision.md`；議會條文 A–I：`nexus/decisions/council-2026-10-19-cairnwork/CONSENSUS_R2.md`。
@@ -64,7 +65,7 @@ cairnwork demo        # 五分鐘示範：隔離 clone、範圍檢查、驗證�
 
 ## 目前狀態：worker 停用
 
-核心唯一的 worker 是 Agy 帳號池，2026-10-30 起停用。目前實際使用的只有 `cairnwork-verify` 這條驗收路徑；`cairnwork run`、Issue intake、route 的 worker 階段暫時無法跑完。另由誰來當 worker，另行決定。現行部署版本是 `1662f01`（2026-10-31 部署）。演練的現況見 [docs/DRILLS.md](docs/DRILLS.md)：用到真 agent worker 的演練標為「未重跑」，不需要 worker 的演練預計在現行 main 上重跑。
+核心唯一的 worker 是 Agy 帳號池，2026-10-30 起停用。目前實際使用的只有 `cairnwork-verify` 這條驗收路徑；`cairnwork run`、Issue intake、route 的 worker 階段暫時無法跑完。另由誰來當 worker，另行決定。現行部署版本是 `763ccd0`（2026-11-17 21:42 部署，前一版是 2026-11-03 起的 `bce3495`；先前這裡寫的 `1662f01` 已過期）。演練的現況見 [docs/DRILLS.md](docs/DRILLS.md)：用到真 agent worker 的演練標為「未重跑」，不需要 worker 的演練已在部署版 `763ccd0` 上重跑（2026-11-18）。
 
 ## 硬性限制（CI 強制）
 

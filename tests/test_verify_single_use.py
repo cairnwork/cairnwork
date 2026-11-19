@@ -60,6 +60,10 @@ def test_a_relative_origin_still_reaches_the_deferred_tests(project, state):
     base, test_commit = make_test_commit(project, {"tests/test_regression.py": REGRESSION})
     absolute = git(project, "remote", "get-url", "origin")
     git(project, "remote", "set-url", "origin", os.path.relpath(absolute, project))
+    config = json.loads(
+        (state / "config.json").read_text()
+    )  # the verifier's own origin is absolute
+    (state / "config.json").write_text(json.dumps({**config, "origin_url": absolute}))
     cand = candidate(project, base, {"src/calc.py": FIX})
     verifier = " ".join(CHECK[0][1])
     code, out = verify(state, project, base, cand, "--test-commit", test_commit, tests=(verifier,))

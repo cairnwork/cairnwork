@@ -12,6 +12,7 @@ deadline itself, so a server that drips headers or body cannot hold a request pa
 
 from __future__ import annotations
 
+import errno
 import http.client
 import ipaddress
 import json
@@ -32,6 +33,16 @@ _PATH = re.compile(r"(/[A-Za-z0-9._~-]+)*")
 
 class EndpointError(RuntimeError):
     """The endpoint answered badly or not at all: the episode aborts (ERROR_ABORT)."""
+
+    exit_code = 2  # the worker's exit when this escapes before an episode starts
+
+
+class EndpointUnreachable(EndpointError):
+    """The endpoint could not be connected to (refused / unreachable); the episode aborts
+    (ERROR_ABORT, abort_cause endpoint_unreachable). Exit 3 when it happens before an episode
+    starts (R1 start probe): pause maps exit 3 to PAUSE_LOCAL_UNREACHABLE (#1406)."""
+
+    exit_code = 3
 
 
 class EndpointTimeout(EndpointError):
@@ -147,8 +158,10 @@ class LoopbackEndpoint:
         conn = http.client.HTTPConnection(t.host, t.port, timeout=self._remaining(deadline))
         watchdog: threading.Timer | None = None
         fired = threading.Event()  # set by the watchdog before it shuts the socket down
+        connected = False  # only a failure before the connection is up is "unreachable"
         try:
             conn.connect()
+            connected = True
             sock = conn.sock
             if sock is None or not peer_is_loopback(sock.getpeername()):
                 raise EndpointError("connected peer is not a loopback address")
@@ -168,6 +181,19 @@ class LoopbackEndpoint:
         except (OSError, http.client.HTTPException) as exc:
             if fired.is_set() or self.clock() >= deadline:  # the watchdog shut the socket down
                 raise EndpointTimeout("endpoint passed the deadline") from None
+            if (
+                not connected
+                and isinstance(exc, OSError)
+                and exc.errno
+                in (
+                    errno.ECONNREFUSED,
+                    errno.ENETUNREACH,
+                    errno.EHOSTUNREACH,
+                )
+            ):
+                raise EndpointUnreachable(
+                    f"endpoint request failed: {type(exc).__name__}: {exc}"
+                ) from None
             raise EndpointError(f"endpoint request failed: {type(exc).__name__}: {exc}") from None
         finally:
             if watchdog is not None:

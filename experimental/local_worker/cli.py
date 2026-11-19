@@ -74,6 +74,7 @@ from experimental.local_worker.episode import (
     build_record,
     parent_prefix,
 )
+from experimental.local_worker.run_root_reclaim import add_cli_option, reclaim_for_episode
 from experimental.local_worker.tools import WorkerTools
 
 DEFAULT_OUT = Path.home() / ".local/state/cairnwork-88/episodes"
@@ -157,8 +158,7 @@ def transcript(eid: str, task: Task, messages: list, out: LoopOutcome, loop: Age
         "messages": messages,
         "turns": turns,
         "abort_detail": loop.abort_detail,
-        # SIGTERM/SIGINTs only counted (NB8): after the first, or once the loop had stopped. The
-        # count is as of this write; the line itself never carries it (no schema field).
+        # The late signal count is sampled here; it is not a corpus field (NB8).
         "late_signals": loop.late_signals,
         "write_scope": None if scope is None else list(scope),  # the entries, unredacted
     }
@@ -259,6 +259,7 @@ def _settings(a: argparse.Namespace, limits: Limits) -> Settings:
 
 def run_episode(a: argparse.Namespace, resume: bool) -> int:
     p = _prepare(a)
+    reclaim_for_episode(a.runs, a.reclaim_older_than_hours, p["run_root"])
     task: Task = p["task"]
     messages = initial_messages(task, a.search_tool)
     first_turn, offset, expected_base, parent_id = 0, 0.0, None, None
@@ -308,8 +309,6 @@ def run_episode(a: argparse.Namespace, resume: bool) -> int:
     }
     # None without --clean-run-root, or for a root not directly under --runs (then never touched)
     claim = run_root_cleanup.claim(p["run_root"], a.runs, eid) if a.clean_run_root else None
-    # The first SIGTERM/SIGINT interrupts the loop (recorded as interrupted); later ones, and any
-    # during the cleanup and the line write, are only counted (review of #239, NB8).
     previous = {s: signal.signal(s, loop.interrupt) for s in (signal.SIGTERM, signal.SIGINT)}
     written = False
     try:
@@ -379,6 +378,7 @@ def parser() -> argparse.ArgumentParser:
         sp.add_argument("--allow-untracked-glob", action="append", default=None, metavar="GLOB")
         sp.add_argument("--runs", type=Path, default=run_root_cleanup.INSTALLED_RUNS)
         sp.add_argument("--clean-run-root", action="store_true")
+        add_cli_option(sp)
         if name == "resume":
             sp.add_argument("--parent-transcript", type=Path, required=True)
             sp.add_argument("--cut-turn", type=int, default=None)
@@ -393,7 +393,7 @@ def main(argv: list[str] | None = None) -> int:
         return run_episode(a, resume=a.cmd == "resume")
     except (corpus_io.InputRefused, RefusedStart, EndpointError, ValueError) as exc:
         print(f"LOCAL_WORKER_EPISODE_REFUSED {type(exc).__name__}: {exc}", file=sys.stderr)
-        return 2
+        return getattr(exc, "exit_code", 2)
 
 
 if __name__ == "__main__":

@@ -19,6 +19,7 @@ from experimental.pause.schema import (
     RECEIPT_FIELDS,
     RECEIPT_SCHEMA,
     TRIGGER_REASONS,
+    Reason,
 )
 
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
@@ -51,6 +52,11 @@ def _problems(rec: dict) -> list[str]:
             out.append(f"{name} must be 64 lowercase hex digits")
     if rec["gate_verdict"] not in (None, *GATE_VERDICTS):
         out.append("gate_verdict")
+    if rec["core_verdict"] is not None and type(rec["core_verdict"]) is not str:
+        out.append("core_verdict must be a string or None")
+    tree = rec["core_tree_sha256"]
+    if tree is not None and not (isinstance(tree, str) and SHA256_RE.fullmatch(tree)):
+        out.append("core_tree_sha256 must be 64 lowercase hex digits")
     if rec["intervened"] is True:
         if rec["reason"] not in (None, *TRIGGER_REASONS):
             out.append("reason: an intervention carries no fallback code")
@@ -58,12 +64,29 @@ def _problems(rec: dict) -> list[str]:
             out.append("intervened needs a plan_sha256 the gate accepted")
         if rec["checkpoint_sha256"] is None:
             out.append("intervened needs a checkpoint_sha256")
+        if rec["core_verdict"] != "VERIFIED" or tree is None:
+            out.append("intervened needs a bound Core VERIFIED verdict")
     elif rec["intervened"] is False:
         if rec["reason"] not in FALLBACK_REASONS:
             out.append("reason: no intervention needs a fallback code")
+        if rec["core_verdict"] == "VERIFIED":
+            out.append("a VERIFIED Core verdict must intervene")
+        if rec["core_verdict"] is None and tree is not None:
+            out.append("core_tree_sha256 needs a recorded Core verdict")
+        if rec["core_verdict"] is not None and tree is None:
+            out.append("a recorded Core verdict needs its tree digest")
     else:
         out.append("intervened must be a bool")
     return out
+
+
+def encodable(text: str) -> bool:
+    """Whether ``sha256_text`` can hash ``text`` (UTF-8, so no lone surrogates)."""
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
 
 
 def build(*, task_id: str, intervened: bool, event_seq: int, **values: Any) -> dict:
@@ -108,6 +131,16 @@ def verify_log(rows: list[dict]) -> list[str]:
     return out
 
 
+def build_r0(values: dict[str, Any], info: dict) -> dict:
+    """R0's fallback receipt; stage details that cannot be recorded give way to R0-only data."""
+    try:
+        return build(**values, **info)
+    except Exception:  # noqa: BLE001 - unrecordable stage details must not drop R0.
+        if values["reason"] not in {str(r) for r in FALLBACK_REASONS}:
+            values["reason"] = str(Reason.PAUSE_NO_CUT)
+        return build(**{**values, "episode_id": None, **dict.fromkeys(info)})
+
+
 def append(path: Path, rec: dict) -> None:
     """Append one verified receipt whose event_seq follows the file's last one."""
     problems = verify(rec)
@@ -122,3 +155,16 @@ def append(path: Path, rec: dict) -> None:
             raise ValueError("event_seq does not follow the file's last receipt")
     with path.open("a") as f:
         f.write(json.dumps(rec, separators=(",", ":")) + "\n")
+
+
+def next_event_seq(path: Path) -> int:
+    """Return the next sequence after the last append-only receipt, or zero for a new log."""
+    if not path.exists():
+        return 0
+    text = path.read_text()
+    if text and not text.endswith("\n"):
+        raise ValueError("the receipts file does not end with a newline")
+    rows = [json.loads(line) for line in text.splitlines()]
+    if rows and verify_log(rows):
+        raise ValueError("the receipts file is invalid")
+    return rows[-1]["event_seq"] + 1 if rows else 0

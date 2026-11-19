@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
 import secrets
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -69,15 +71,26 @@ def _copy_checkout(cwd: Path, checkout: Path) -> bool:
 
 
 def _set_checkout_modes(checkout: Path) -> None:
-    """Make the clone writable by the worker group without following symlinks."""
-    for current, directories, files in os.walk(checkout, followlinks=False):
-        root = Path(current)
-        os.chmod(root, 0o770)
-        directories[:] = [name for name in directories if not (root / name).is_symlink()]
+    """Make the clone writable by the worker group without following symlinks: every chmod goes
+    through a descriptor (#1365), so an entry swapped for a symlink mid-walk is skipped."""
+    for _root, _directories, files, root_fd in os.fwalk(checkout, follow_symlinks=False):
+        os.fchmod(root_fd, 0o770)
         for name in files:
-            path = root / name
-            if not path.is_symlink() and path.is_file():
-                os.chmod(path, 0o660)
+            _set_file_mode(name, root_fd)
+
+
+def _set_file_mode(name: str, root_fd: int) -> None:
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=root_fd)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            return
+        raise
+    try:
+        if stat.S_ISREG(os.fstat(fd).st_mode):
+            os.fchmod(fd, 0o660)
+    finally:
+        os.close(fd)
 
 
 def _remaining_entries(root: Path) -> int:

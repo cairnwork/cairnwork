@@ -50,7 +50,8 @@ def test_collect_only_reads_ids_and_is_never_a_pass(repo, tmp_path):
             "tests/test_alias.py::Checks::test_alias",
             "tests/test_ok.py::test_one",
             "tests/test_ok.py::test_two",
-        )
+        ),
+        exposed=(),  # #1413: a real collect-only run records the (empty) runtime fact
     )
 
 
@@ -82,7 +83,7 @@ def test_a_collect_error_names_its_file_and_keeps_the_others(repo, tmp_path):
 def test_nothing_collected_is_the_empty_set(repo, tmp_path):
     run = collect(repo, tmp_path, {"tests/test_empty.py": EMPTY})
     assert run.returncode == 5
-    assert read_collected(run) == Collected()
+    assert read_collected(run) == Collected(exposed=())
 
 
 @pytest.mark.sandbox

@@ -27,10 +27,64 @@ def _ids(verdict: Verdict) -> set[str]:
     return found
 
 
+_NAME = re.compile(r"[^\W\d]\w*(::[^\W\d]\w*)*(\[.*\])?", re.DOTALL)
+
+
+def locate(nodeid: str) -> tuple[str, str] | None:
+    """(file path, name part) of a node id, or None when it has no ``::`` at all.
+
+    The file boundary is the first ``.py::`` after which the rest reads as ``Name(::Name)*``
+    with an optional case id (so a ``.py::`` inside a directory or a case id never matches);
+    failing that, the first ``.py`` followed by ``::`` whose prefix has no open ``[``
+    (``dir.pyx/`` is not one; a ``.py::`` inside a case id or a ``[`` directory is skipped; a
+    stray ``]`` in a directory name is ignored). Without such a boundary the first ``::``
+    splits file from name. Name parts never contain ``[``, so the case id starts at the
+    first ``[`` after the boundary."""
+    for match in re.finditer(r"\.py(?=::)", nodeid):
+        if _NAME.fullmatch(nodeid[match.end() + 2 :]):
+            return nodeid[: match.end()], nodeid[match.end() + 2 :]
+    for match in re.finditer(r"\.py(?=::)", nodeid):
+        depth = 0
+        for char in nodeid[: match.start()]:
+            depth += (char == "[") - (char == "]" and depth > 0)
+        if depth == 0:
+            return nodeid[: match.end()], nodeid[match.end() + 2 :]
+    path, separator, name = nodeid.partition("::")
+    return (path, name) if separator else None
+
+
+def without_case(nodeid: str, *, all_parts: bool = False) -> str:
+    """Remove the pytest case id (from the first ``[`` of the name) keeping bracketed paths.
+
+    ``all_parts`` is kept for callers; name parts never contain ``[`` so it changes nothing."""
+    located = locate(nodeid)
+    if located is None:
+        # no file boundary: a bare file path stays whole, a bare name loses its case id
+        return nodeid if nodeid.endswith(".py") else nodeid.split("[", 1)[0]
+    path, name = located
+    return path + "::" + name.split("[", 1)[0]
+
+
+def _params(nodeid: str) -> str:
+    start = _case_start(nodeid)
+    return nodeid[start + 1 :] if start >= 0 else ""
+
+
+def _case_start(nodeid: str) -> int:
+    """Index of the ``[`` that opens the case id, or -1."""
+    located = locate(nodeid)
+    if located is None:
+        return nodeid.find("[")
+    path, name = located
+    inside = name.find("[")
+    return -1 if inside < 0 else len(path) + 2 + inside
+
+
 def _normalise_id(nodeid: str, roots: tuple[str, ...]) -> str:
-    prefix, marker, params = nodeid.partition("[")
-    if not marker:
+    start = _case_start(nodeid)
+    if start < 0:
         return nodeid
+    prefix, marker, params = nodeid[:start], "[", nodeid[start + 1 :]
     patterns = [
         re.compile(rf"(?<![A-Za-z0-9._/-]){re.escape(root)}(?=$|/|[^A-Za-z0-9._/-])")
         for root in roots
@@ -70,16 +124,17 @@ def mask_paths(text: str) -> str:
 
 def unmatched_note(gone, present) -> str:
     """Explain missing parameter variants only when their test function still exists."""
-    functions = {node.split("[", 1)[0] for node in present}
+    functions = {without_case(node) for node in present}
     for node in gone:
-        function, marker, params = node.partition("[")
+        function = without_case(node)
+        params = _params(node)
         if (
-            marker
+            _case_start(node) >= 0
             and function in functions
             and any(
-                other.partition("[")[2] != params
+                _params(other) != params
                 for other in present
-                if other.startswith(function + "[")
+                if _case_start(other) >= 0 and without_case(other) == function
             )
         ):
             return PER_RUN_NOTE

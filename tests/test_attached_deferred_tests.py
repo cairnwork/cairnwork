@@ -15,7 +15,7 @@ import or while a class is built. pytest collects from ``__dict__`` only (``_pyt
 so a module-level ``__getattr__`` or ``__dir__`` adds no test (Codex r1 on #1003, disputed)."""
 
 import pytest
-from conftest import commit_change
+from conftest import commit_change, git
 from test_deferred_tests import REGRESSION, make_test_commit
 from verify_helpers import FIX, candidate, verify
 
@@ -215,7 +215,7 @@ ATTACHED = {
 
 def _new_tests(project, files):
     base, test_commit = make_test_commit(project, files)
-    ensure_test_commit(project, test_commit)
+    ensure_test_commit(project, test_commit, origin_url=git(project, "remote", "get-url", "origin"))
     return new_tests(project, base, test_commit, tuple(files))
 
 
@@ -276,6 +276,14 @@ def test_an_imported_class_decorator_is_the_known_limit(project):
     """Not read, as #968 (b): the decorator's module is not followed. Pinned so a change here is
     a decision, not an accident."""
     body = "from helpers import add_tests\n@add_tests\n" + CLS
+    commit_change(project, {F: "from calc import add\n" + body})
+    assert _new_tests(project, {F: REGRESSION + body}) == {f"{F}::test_regression"}
+
+
+def test_an_import_time_call_the_reader_cannot_classify_is_the_known_limit(project):
+    """#1007: a call to imported code at import is not followed and refuses nothing (measured
+    false-refusal cost too high to fail closed). Pinned so a change here is a decision."""
+    body = "import helpers\nhelpers.run()\n" + CLS
     commit_change(project, {F: "from calc import add\n" + body})
     assert _new_tests(project, {F: REGRESSION + body}) == {f"{F}::test_regression"}
 

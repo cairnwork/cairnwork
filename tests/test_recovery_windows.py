@@ -70,6 +70,7 @@ def test_a_survivor_of_an_unswept_crash_blocks_the_takeover_until_it_is_swept(
     real sweep has killed it (takeover.py)."""
     proc = subprocess.Popen(
         [sys.executable, str(DRIVER), str(project), str(tmp_path), GOOD, "survivor"],
+        env={**os.environ, "PYTHONPATH": os.pathsep.join(p for p in sys.path if p)},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )

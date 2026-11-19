@@ -1,0 +1,14 @@
+{
+  "command": "CAIRNWORK_REQUIRE_SANDBOX=1 nice -n 19 uv run pytest -q tests/test_recovery.py",
+  "date": "2026-11-17",
+  "drill": "restart",
+  "duration_s": "95.68",
+  "failed": 0,
+  "main_sha": "89116e46",
+  "passed": 26,
+  "result": "PASS",
+  "scope": "automated tests only; the real-agent part is NOT_RUN (worker paused since 10/30)",
+  "skipped": 0,
+  "verifier_account_used": false,
+  "worker": "none (test-internal fixed scripts)"
+}

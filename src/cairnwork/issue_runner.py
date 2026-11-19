@@ -107,6 +107,7 @@ def _take_one(intake, github, clone, base, issue) -> dict[str, Any]:
         "title": str(issue.get("title") or f"Issue #{number}")[:200],
         "instructions": _instructions(github.repo, number, issue, task.summary),
         "repo": str(clone),
+        "origin_url": f"https://github.com/{github.repo}.git",
         "base_commit": base,
         "allowed_files": list(task.allowed_files),
         "verifiers": [[f"pytest-{i}", list(v)] for i, v in enumerate(task.verifiers)],
