@@ -132,7 +132,7 @@ def _check_stage(task_id, attempt, acceptance, gate, ledger, config, stage):
 def _fallback_stage(task_id, fallback, acceptance, gate, ledger, config):
     try:
         attempt = fallback(task_id)
-    except Exception as exc:  # noqa: BLE001 - injected fallback failures are terminal.
+    except LocalAttemptFailed as exc:
         return RelayResult("FAILED", reason=str(exc))
     _append(
         ledger,

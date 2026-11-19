@@ -10,7 +10,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from experimental.local_relay.config import DEFAULT_LEDGER_PATH, FLAG
+from experimental.local_relay.config import DEFAULT_HAIKU_PROXY_URL, DEFAULT_LEDGER_PATH, FLAG
 from experimental.local_relay.ledger import JsonlLedger
 from experimental.local_relay.runtime import build_run_once, dry_route
 from experimental.local_worker.run_root_cleanup import INSTALLED_RUNS
@@ -23,6 +23,7 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--clone", required=True)
     ap.add_argument("--gh", default=str(Path.home() / ".config/nexus-agent-bot/bin/nexus-agent-gh"))
     ap.add_argument("--ledger", default=DEFAULT_LEDGER_PATH)
+    ap.add_argument("--haiku-proxy-url", default=DEFAULT_HAIKU_PROXY_URL)
     ap.add_argument("--runs", type=Path, default=INSTALLED_RUNS)
     ap.add_argument("--fixture", type=Path, help="run one task described by fixture repo JSON")
     ap.add_argument("--canary-report", type=Path)
@@ -38,7 +39,10 @@ def main(
 ) -> int:
     args = parser().parse_args(argv)
     if args.dry_route:
-        return _emit(dry_route(args), 0)
+        try:
+            return _emit(dry_route(args), 0)
+        except Exception as exc:  # noqa: BLE001 - unavailable fallback is a route failure
+            return _emit({"error": "RUN_FAILED", "detail": f"{type(exc).__name__}: {exc}"}, 1)
     if os.environ.get(FLAG) != "1":
         return _emit({"error": "RELAY_DISABLED", "detail": f"set {FLAG}=1 to enable"}, 2)
     try:

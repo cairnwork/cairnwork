@@ -9,8 +9,6 @@ from pathlib import Path
 import pytest
 
 from experimental.local_relay.adapters import (
-    AgyFallback,
-    AgyQuotaLedger,
     CoreAcceptance,
     CostGate,
     LocalWorkerAdapter,
@@ -167,7 +165,7 @@ def test_w2_core_nonverified_result_cannot_become_success(monkeypatch, tmp_path)
         LocalWorkerAdapter(lambda _cap, _endpoint: result),
         CoreAcceptance(judge),
         CostGate(FakeTransport()),
-        lambda _task: Attempt(result, "agy"),
+        lambda _task: Attempt(result, "claude-haiku-5-5", 100, 50, 0.01),
         rows,
         RelayConfig(enabled=True),
     )
@@ -211,7 +209,7 @@ def test_incomplete_local_episodes_retry_then_fallback_with_both_checks(monkeypa
         local,
         lambda candidate: checks.append(("acceptance", candidate)) or Acceptance(True, "VERIFIED"),
         gate,
-        lambda _task: Attempt("agy-candidate", "agy"),
+        lambda _task: Attempt("haiku-candidate", "claude-haiku-5-5", 100, 50, 0.01),
         rows,
         RelayConfig(enabled=True),
     )
@@ -236,54 +234,6 @@ def test_local_worker_programming_error_is_not_treated_as_attempt_failure(monkey
             Rows(),
             RelayConfig(enabled=True),
         )
-
-
-def test_w4_fallback_is_existing_agy_worker_and_route_is_fallback(monkeypatch):
-    monkeypatch.setenv("CAIRNWORK_LOCAL_RELAY", "1")
-    worker = object()
-    observed = []
-    fallback = AgyFallback(
-        worker,
-        lambda found, task: observed.append((found, task)) or "agy-result",
-        quota_units=lambda _result: 23,
-    )
-    gate = CostGate(FakeTransport())
-    rows = Rows()
-
-    def unavailable(_cap):
-        raise EndpointUnreachable("offline")
-
-    outcome = run_relay(
-        "task",
-        unavailable,
-        lambda _candidate: Acceptance(True, "VERIFIED"),
-        gate,
-        fallback,
-        AgyQuotaLedger(rows, fallback),
-        RelayConfig(enabled=True),
-    )
-    assert outcome.route == "FALLBACK" and observed == [(worker, "task")]
-    agy_row = next(row for row in rows.rows if row["model_id"] == "agy")
-    assert agy_row["usd"] == 0 and agy_row["quota_units"] == 23
-
-
-def test_w4_agy_fallback_exception_is_not_a_success(monkeypatch):
-    monkeypatch.setenv("CAIRNWORK_LOCAL_RELAY", "1")
-    fallback = AgyFallback(object(), lambda *_: (_ for _ in ()).throw(RuntimeError("agy failed")))
-
-    def unavailable(_cap):
-        raise EndpointUnreachable("offline")
-
-    outcome = run_relay(
-        "task",
-        unavailable,
-        lambda _: Acceptance(True, "ok"),
-        CostGate(FakeTransport()),
-        fallback,
-        Rows(),
-        RelayConfig(enabled=True),
-    )
-    assert outcome.route == "FAILED"
 
 
 def test_w5_gate_usage_cost_is_recorded(monkeypatch):
@@ -338,7 +288,7 @@ def test_w6_unreachable_local_endpoint_cannot_mask_rejected_fallback(monkeypatch
         unreachable,
         lambda _: Acceptance(False, "FAILED"),
         CostGate(FakeTransport()),
-        lambda _task: Attempt("agy-candidate", "agy"),
+        lambda _task: Attempt("haiku-candidate", "claude-haiku-5-5", 10, 5, 0.01),
         Rows(),
         RelayConfig(enabled=True),
     )

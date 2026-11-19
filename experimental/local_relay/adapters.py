@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from experimental.local_relay.config import DEFAULT_LOCAL_ENDPOINT
 from experimental.local_relay.relay import Acceptance, Attempt, LocalAttemptFailed
-from experimental.local_worker.endpoint import EndpointUnreachable
+from experimental.local_worker.endpoint import (
+    EndpointContextLimit,
+    EndpointTimeout,
+    EndpointUnreachable,
+    parse_loopback_url,
+)
 from experimental.pause.client import CommandTransport, HaikuGate
 from experimental.pause.flow import RunResult
 from experimental.pause.interfaces import GateReply, GateRequest
@@ -44,13 +51,18 @@ class LocalWorkerAdapter:
         self.endpoint_url = endpoint_url
 
     def __call__(self, context_tokens: int, /) -> Attempt:
-        result = self.run_episode(context_tokens, self.endpoint_url)
+        result = self.run_with_endpoint(context_tokens, self.endpoint_url)
+        input_tokens, output_tokens = self.token_usage(result)
+        return Attempt(result, self.model_id, input_tokens, output_tokens, 0.0)
+
+    def run_with_endpoint(self, context_tokens: int, endpoint: str) -> RunResult:
+        """Run this adapter's loop against another configured endpoint."""
+        result = self.run_episode(context_tokens, endpoint)
         if isinstance(result, RunResult) and result.code == EndpointUnreachable.exit_code:
             raise EndpointUnreachable("local worker endpoint is unreachable")
         if not isinstance(result, RunResult) or result.code != 0 or result.checkout is None:
             raise LocalAttemptFailed("local worker did not produce a completed episode")
-        input_tokens, output_tokens = self.token_usage(result)
-        return Attempt(result, self.model_id, input_tokens, output_tokens, 0.0)
+        return result
 
 
 class CoreAcceptance:
@@ -163,38 +175,95 @@ class CostGate:
         )
 
 
-class AgyFallback:
-    """Adapt a caller-owned formal AgyWorker invocation to the relay fallback contract."""
+class HaikuProxyFallback:
+    """Run the local-worker loop against a loopback Haiku proxy and record proxy cost."""
 
     def __init__(
         self,
-        agy_worker,
-        run_attempt: Callable[[Any, str], Any],
-        quota_units: Callable[[Any], int] | None = None,
+        endpoint_url: str,
+        run_attempt: Callable[[int, str], RunResult],
+        request: Callable[[str, str, dict | None], dict] | None = None,
     ) -> None:
-        self.agy_worker = agy_worker
+        target = parse_loopback_url(endpoint_url)
+        if not target.base_path.endswith("/v1"):
+            raise ValueError("Haiku proxy URL must end in /v1")
+        self.endpoint_url = str(target)
+        self.label_url = (
+            f"http://{target.host}:{target.port}{target.base_path.removesuffix('/v1')}/ab"
+        )
         self.run_attempt = run_attempt
-        self.quota_units = quota_units or (lambda _result: 0)
-        self.last_quota_units = 0
+        self.request = request or _proxy_request
 
     def __call__(self, task_id: str, /) -> Attempt:
-        result = self.run_attempt(self.agy_worker, task_id)
-        self.last_quota_units = self.quota_units(result)
-        candidate = getattr(result, "candidate", result)
-        return Attempt(candidate, "agy", usd=0.0)
+        _proxy_call(self.request, "POST", f"{self.label_url}/label", {"label": task_id})
+        try:
+            try:
+                result = self.run_attempt(65536, self.endpoint_url)
+            except (EndpointContextLimit, EndpointTimeout, EndpointUnreachable) as exc:
+                raise LocalAttemptFailed(f"Haiku local-worker failed: {exc}") from exc
+        finally:
+            _proxy_call(self.request, "POST", f"{self.label_url}/label", {"label": "idle"})
+        if not isinstance(result, RunResult) or result.code != 0 or result.checkout is None:
+            raise LocalAttemptFailed("Haiku local-worker episode did not complete")
+        stats = _proxy_call(self.request, "GET", f"{self.label_url}/stats?label={task_id}", None)
+        if stats.get("budget_stop") is True:
+            raise LocalAttemptFailed("Haiku proxy stopped at its budget")
+        if stats.get("model_mismatch") is True:
+            raise LocalAttemptFailed("Haiku proxy reported a model mismatch")
+        usd = stats.get("cost_usd")
+        input_tokens, output_tokens = stats.get("input_tokens"), stats.get("output_tokens")
+        if (
+            not isinstance(usd, (int, float))
+            or isinstance(usd, bool)
+            or not isinstance(input_tokens, int)
+            or isinstance(input_tokens, bool)
+            or not isinstance(output_tokens, int)
+            or isinstance(output_tokens, bool)
+            or usd <= 0
+            or input_tokens < 0
+            or output_tokens < 0
+            or type(stats.get("budget_stop")) is not bool
+            or type(stats.get("model_mismatch")) is not bool
+            or stats["budget_stop"]
+            or stats["model_mismatch"]
+            or type(stats.get("requests")) is not int
+            or stats["requests"] <= 0
+            or type(stats.get("ok")) is not int
+            or stats["ok"] <= 0
+            or type(stats.get("failed")) is not int
+            or stats["failed"] != 0
+        ):
+            raise LocalAttemptFailed("Haiku proxy returned invalid or unknown cost stats")
+        return Attempt(result, "claude-haiku-5-5", input_tokens, output_tokens, float(usd))
 
 
-class AgyQuotaLedger:
-    """Add the fallback worker's separate quota measure to its ledger row."""
+def _proxy_request(method: str, url: str, body: dict | None) -> dict:
+    parts = urlsplit(url)
+    target = parse_loopback_url(f"{parts.scheme}://{parts.netloc}{parts.path}")
+    connection = http.client.HTTPConnection(target.host, target.port, timeout=30)
+    try:
+        payload = None if body is None else json.dumps(body).encode("utf-8")
+        path = target.base_path + ("?" + parts.query if parts.query else "")
+        connection.request(method, path, body=payload, headers={"Content-Type": "application/json"})
+        response = connection.getresponse()
+        raw = response.read()
+        if response.status != 200:
+            raise RuntimeError(f"proxy returned HTTP {response.status}")
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            raise ValueError("proxy response must be a JSON object")
+        return data
+    finally:
+        connection.close()
 
-    def __init__(self, ledger, fallback: AgyFallback) -> None:
-        self.ledger = ledger
-        self.fallback = fallback
 
-    def append(self, row: dict[str, Any]) -> None:
-        if row.get("model_id") == "agy":
-            row = {**row, "quota_units": self.fallback.last_quota_units}
-        self.ledger.append(row)
+def _proxy_call(request, method: str, url: str, body: dict | None) -> dict:
+    try:
+        return request(method, url, body)
+    except LocalAttemptFailed:
+        raise
+    except (OSError, http.client.HTTPException, RuntimeError, ValueError) as exc:
+        raise LocalAttemptFailed(f"Haiku proxy {method} failed: {exc}") from exc
 
 
 def _int_field(value: dict, key: str, alternative: str) -> int:

@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -10,7 +13,11 @@ import pytest
 from cairnwork.issue_task import IssueRefused
 from experimental.local_relay import cli, runtime
 from experimental.local_relay.adapters import CoreAcceptance, CostGate
-from experimental.local_relay.config import DEFAULT_LOCAL_ENDPOINT
+from experimental.local_relay.config import (
+    DEFAULT_HAIKU_PROXY_URL,
+    DEFAULT_LOCAL_ENDPOINT,
+    HAIKU_MODEL,
+)
 from experimental.pause.flow import RunResult
 
 
@@ -38,7 +45,11 @@ def test_dry_route_prints_real_configuration_without_building_runtime(
     assert result["endpoint"] == DEFAULT_LOCAL_ENDPOINT
     assert result["context_tokens"] == "32768 -> 65536"
     assert result["gate_transport"][-2:] == ["--tag", "cw-local-relay"]
-    assert result["fallback"] == "AgyWorker"
+    assert result["fallback"] == {
+        "endpoint": DEFAULT_HAIKU_PROXY_URL,
+        "model": HAIKU_MODEL,
+        "context_tokens": 65536,
+    }
     assert result["ledger"] == str(tmp_path / "ledger.jsonl")
     assert result["enabled"] is False
     assert not (tmp_path / "ledger.jsonl").exists()
@@ -71,13 +82,6 @@ def _patch_runtime_assembly(monkeypatch, captured):
 
         def config(self):
             return {
-                "model": "gemini-test",
-                "agy": "agy-test",
-                "agy_dispatch": None,
-                "agy_run_as_user": None,
-                "agy_dispatch_pool_wait_seconds": 1,
-                "agy_dispatch_provider_stall_seconds": 2,
-                "agy_dispatch_stream_no_progress_seconds": 3,
                 "import_paths": [],
             }
 
@@ -92,13 +96,12 @@ def _patch_runtime_assembly(monkeypatch, captured):
         def __init__(self, run_episode, **kwargs):
             captured["local"] = (run_episode, kwargs)
 
-    class FakeAgy:
-        def __init__(self, **kwargs):
-            captured["agy"] = kwargs
+        def run_with_endpoint(self, context, endpoint):
+            return captured["local"][0](context, endpoint)
 
     class FakeFallback:
-        def __init__(self, worker, run_attempt, **kwargs):
-            captured["fallback"] = (worker, run_attempt, kwargs)
+        def __init__(self, endpoint, run_attempt, **kwargs):
+            captured["fallback"] = (endpoint, run_attempt, kwargs)
 
     monkeypatch.setattr(runtime, "Intake", FakeIntake)
     monkeypatch.setattr(runtime, "CoreJudge", FakeJudge)
@@ -107,8 +110,7 @@ def _patch_runtime_assembly(monkeypatch, captured):
         "experimental.local_relay.adapters.CommandTransport",
         lambda command: captured.setdefault("command", tuple(command)),
     )
-    monkeypatch.setattr(runtime, "AgyWorker", FakeAgy)
-    monkeypatch.setattr(runtime, "AgyFallback", FakeFallback)
+    monkeypatch.setattr(runtime, "HaikuProxyFallback", FakeFallback)
     monkeypatch.setattr(runtime, "check_task_paths", lambda *_args: None)
 
 
@@ -129,6 +131,14 @@ def test_build_uses_tagged_transport_and_same_state_verifier(monkeypatch, tmp_pa
         encoding="utf-8",
     )
     monkeypatch.setattr(runtime, "_git", lambda *_args: "a" * 40)
+    monkeypatch.setattr(
+        runtime,
+        "_run_localworker",
+        lambda *values: (
+            captured.__setitem__("episode", values),
+            RunResult(0, "ok", tmp_path, fixture),
+        )[1],
+    )
     args = type(
         "Args",
         (),
@@ -139,6 +149,7 @@ def test_build_uses_tagged_transport_and_same_state_verifier(monkeypatch, tmp_pa
             "canary_report": None,
             "gh": "gh",
             "repo": "owner/repo",
+            "haiku_proxy_url": "http://127.0.0.1:18399/v1",
         },
     )()
 
@@ -149,8 +160,53 @@ def test_build_uses_tagged_transport_and_same_state_verifier(monkeypatch, tmp_pa
     ]
     assert captured["command"][-2:] == ("--tag", "cw-local-relay")
     assert captured["local"][1]["model_id"] == "qwen3.5-9b"
-    assert captured["agy"]["model"] == "gemini-test"
-    assert captured["fallback"][0] is not None
+    assert captured["fallback"][0] == "http://127.0.0.1:18399/v1"
+    captured["fallback"][1](65536, "http://127.0.0.1:18399/v1")
+    assert captured["episode"][3:7] == (
+        65536,
+        "http://127.0.0.1:18399/v1",
+        None,
+        HAIKU_MODEL,
+    )
+
+
+def test_non_loopback_proxy_url_is_refused(tmp_path):
+    code = cli.main(
+        _args(tmp_path, "--dry-route", "--haiku-proxy-url", "http://example.com:18301/v1")
+    )
+    assert code != 0
+
+
+def test_local_checkout_uses_worker_runner_prepare_contract(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    subprocess.run(["git", "init", "-q", str(source)], check=True)
+    subprocess.run(["git", "-C", str(source), "config", "user.name", "Test"], check=True)
+    subprocess.run(
+        ["git", "-C", str(source), "config", "user.email", "test@example.invalid"], check=True
+    )
+    (source / "tracked.txt").write_text("clean\n", encoding="utf-8")
+    (source / "tracked.txt").chmod(0o640)
+    subprocess.run(["git", "-C", str(source), "add", "tracked.txt"], check=True)
+    subprocess.run(["git", "-C", str(source), "commit", "-qm", "base"], check=True)
+    base = subprocess.check_output(
+        ["git", "-C", str(source), "rev-parse", "HEAD"], text=True
+    ).strip()
+    root = tmp_path / "runs" / "run"
+    root.mkdir(parents=True, mode=0o750)
+    os.chmod(root, 0o750)
+    checkout = root / "checkout"
+
+    runtime._prepare(source, checkout, base)
+
+    status = subprocess.check_output(
+        ["git", "-C", str(checkout), "status", "--porcelain"], text=True
+    )
+    assert status == ""
+    assert stat.S_IMODE(checkout.stat().st_mode) == stat.S_IMODE(source.stat().st_mode)
+    assert stat.S_IMODE((checkout / "tracked.txt").stat().st_mode) == 0o640
+    assert checkout.stat().st_uid == source.stat().st_uid
+    assert checkout.stat().st_gid == source.stat().st_gid
 
 
 def test_invalid_fixture_is_rejected_without_services_or_home_writes(tmp_path):
@@ -231,6 +287,7 @@ def _local_run_fakes(monkeypatch, tmp_path, marker):
     canary.write_text("report", encoding="utf-8")
     Path(str(canary) + ".sha256").write_text("digest", encoding="utf-8")
     monkeypatch.setattr(runtime, "_git", lambda *_args: "a" * 40)
+    monkeypatch.setattr(runtime, "_prepare", lambda *_args: None)
 
     def launch(argv, **_kwargs):
         captured["argv"] = argv

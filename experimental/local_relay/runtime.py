@@ -11,7 +11,6 @@ import sys
 import uuid
 from collections.abc import Callable
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 from cairnwork.intake import Intake
@@ -19,28 +18,28 @@ from cairnwork.issue_github import GitHub
 from cairnwork.issue_runner import DEFAULT_GH, QUEUE, _instructions
 from cairnwork.issue_task import _check_path, parse_task_block, pytest_argv
 from cairnwork.taskpaths import check_task_paths
-from cairnwork.workers.agy import AgyWorker
-from cairnwork.workers.agy_dispatch import Dispatch
 from experimental.local_relay.adapters import (
-    AgyFallback,
-    AgyQuotaLedger,
     CoreAcceptance,
     CostGate,
+    HaikuProxyFallback,
     LocalWorkerAdapter,
 )
 from experimental.local_relay.config import (
     DEFAULT_CONTEXT_TOKENS,
+    DEFAULT_HAIKU_PROXY_URL,
     DEFAULT_LEDGER_PATH,
     DEFAULT_LOCAL_ENDPOINT,
+    HAIKU_MODEL,
     RETRY_CONTEXT_TOKENS,
     RelayConfig,
 )
 from experimental.local_relay.relay import run_relay
 from experimental.local_worker import corpus_io
-from experimental.local_worker.endpoint import EndpointUnreachable
+from experimental.local_worker.endpoint import EndpointUnreachable, parse_loopback_url
 from experimental.local_worker.run_root_cleanup import INSTALLED_RUNS
 from experimental.pause.core_judge import CoreJudge
 from experimental.pause.flow import RunResult
+from experimental.pause.runner import _prepare
 
 FIXTURE_TASK = "cairnwork-local-relay.json"
 LOCAL_MODEL = "qwen3.5-9b"
@@ -48,6 +47,7 @@ LOCAL_MODEL = "qwen3.5-9b"
 
 def dry_route(args: Any) -> dict[str, Any]:
     """Describe routing without creating clients, opening paths or contacting services."""
+    proxy_url = str(parse_loopback_url(getattr(args, "haiku_proxy_url", DEFAULT_HAIKU_PROXY_URL)))
     return {
         "route": "local-relay",
         "endpoint": DEFAULT_LOCAL_ENDPOINT,
@@ -58,7 +58,7 @@ def dry_route(args: Any) -> dict[str, Any]:
             "--tag",
             "cw-local-relay",
         ],
-        "fallback": "AgyWorker",
+        "fallback": {"endpoint": proxy_url, "model": HAIKU_MODEL, "context_tokens": 65536},
         "ledger": str(Path(args.ledger).expanduser()) if args.ledger else DEFAULT_LEDGER_PATH,
         "enabled": os.environ.get("CAIRNWORK_LOCAL_RELAY") == "1",
         "flags": {
@@ -77,30 +77,27 @@ def build_run_once(args: Any) -> Callable[[Any, Any], dict[str, Any]]:
     canary = Path(args.canary_report).expanduser().resolve() if args.canary_report else None
     intake = Intake(state)
     config = intake.config()
-    account = intake.verifier_account()
     judge = CoreJudge(state, task["verifiers"], config["import_paths"])
     acceptance = CoreAcceptance(judge, task["allowed_files"])
     gate = CostGate()
+    fallback_url = str(
+        parse_loopback_url(getattr(args, "haiku_proxy_url", DEFAULT_HAIKU_PROXY_URL))
+    )
     worker = LocalWorkerAdapter(
         lambda context, endpoint: _run_localworker(
-            args, task, task["repo"], context, endpoint, canary
+            args,
+            task,
+            task["repo"],
+            context,
+            endpoint,
+            canary,
+            HAIKU_MODEL if endpoint == fallback_url else LOCAL_MODEL,
         ),
         model_id=LOCAL_MODEL,
     )
-    agy = AgyWorker(
-        model=config["model"],
-        agy=config["agy"],
-        dispatch=_agy_dispatch(config),
-        verifier_user=getattr(account, "user", None),
-    )
-    fallback = AgyFallback(
-        agy,
-        lambda selected, _task_id: _run_agy(selected, task, task["repo"], state),
-        quota_units=lambda result: (
-            int(result.get("quota_units", 0))
-            if isinstance(result, dict) and type(result.get("quota_units", 0)) is int
-            else 0
-        ),
+    fallback = HaikuProxyFallback(
+        fallback_url,
+        lambda context, endpoint: worker.run_with_endpoint(context, endpoint),
     )
 
     def run_once(_args: Any, ledger: Any) -> dict[str, Any]:
@@ -110,7 +107,7 @@ def build_run_once(args: Any) -> Callable[[Any, Any], dict[str, Any]]:
             acceptance,
             gate,
             fallback,
-            AgyQuotaLedger(ledger, fallback),
+            ledger,
             RelayConfig.from_env(),
         )
         return {
@@ -202,7 +199,7 @@ def _validate_task(data: dict[str, Any], root: Path) -> dict[str, Any]:
     }
 
 
-def _run_localworker(args, task, source, context, endpoint, canary):
+def _run_localworker(args, task, source, context, endpoint, canary, model=LOCAL_MODEL):
     if canary is None:
         raise ValueError("--canary-report is required for the real local worker")
     runs = _local_runs(args)
@@ -210,8 +207,7 @@ def _run_localworker(args, task, source, context, endpoint, canary):
     checkout = run_root / "checkout"
     run_root.mkdir(mode=0o750)
     os.chmod(run_root, 0o750)
-    _git(source, "clone", "--no-hardlinks", str(task["repo"]), str(checkout))
-    _git(checkout, "checkout", "--detach", task["base_commit"])
+    _prepare(task["repo"], checkout, task["base_commit"])
     base = _git(checkout, "rev-parse", "HEAD")
     task_path = run_root / "task.json"
     task_path.write_text(
@@ -248,7 +244,7 @@ def _run_localworker(args, task, source, context, endpoint, canary):
             "--out",
             str(out),
             "--model",
-            LOCAL_MODEL,
+            model,
             "--context-cap",
             str(context),
             "--canary-report",
@@ -266,7 +262,7 @@ def _run_localworker(args, task, source, context, endpoint, canary):
     if result.returncode == EndpointUnreachable.exit_code:
         raise EndpointUnreachable("local worker endpoint is unreachable")
     record = _episode_record(
-        result.stdout, corpus_io.episodes_path(out, "cairnwork", LOCAL_MODEL, "pilot")
+        result.stdout, corpus_io.episodes_path(out, "cairnwork", model, "pilot")
     )
     complete = (
         result.returncode == 0
@@ -300,38 +296,6 @@ def _episode_record(output: str, episode_file: Path) -> dict[str, Any] | None:
     except (OSError, ValueError, IndexError):
         return None
     return record if isinstance(record, dict) else None
-
-
-def _run_agy(worker: AgyWorker, task: dict[str, Any], source: Path, state: Path) -> RunResult:
-    root = state / "local-relay-runs" / uuid.uuid4().hex
-    checkout = root / "checkout"
-    root.mkdir(parents=True, mode=0o700)
-    _git(source, "clone", "--no-hardlinks", str(task["repo"]), str(checkout))
-    _git(checkout, "checkout", "--detach", task["base_commit"])
-    base = _git(checkout, "rev-parse", "HEAD")
-    agy_task = SimpleNamespace(
-        title=task["title"],
-        instructions=task["prompt"],
-        allowed_files=tuple(task["allowed_files"]),
-        test_commit="",
-    )
-    details = worker.run(checkout, agy_task)
-    return RunResult(0, json.dumps(details), root, checkout, base_sha=base)
-
-
-def _agy_dispatch(config: dict[str, Any]) -> Dispatch | None:
-    path = config["agy_dispatch"]
-    return (
-        None
-        if path is None
-        else Dispatch(
-            path,
-            config["agy_dispatch_pool_wait_seconds"],
-            config["agy_dispatch_provider_stall_seconds"],
-            config["agy_dispatch_stream_no_progress_seconds"],
-            run_as_user=config["agy_run_as_user"],
-        )
-    )
 
 
 def _git(repo: Path, *args: str) -> str:
