@@ -186,6 +186,10 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
       sockets). The ones listed under `/run` and `/var/run` stay on the list although the private
       `/run` hides those paths: the name there may be a link to a socket outside `/run`
       (Rancher Desktop, Colima), and that real target is what gets masked.
+      On the dedicated-account path (`mask_home_credentials=False`) a socket whose real path the
+      account cannot enter by the `bwrap_reach` rule is not masked (#482): the account cannot
+      connect to it, and a bind there would fail the run with EPERM. If that rule is wrong for
+      the host, such a socket stays unmasked.
 
   Only paths that exist are masked. Write roots that are `/`, a system or temp directory, `$HOME`
   or an ancestor of `$HOME` are refused.

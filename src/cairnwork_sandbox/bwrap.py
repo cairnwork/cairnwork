@@ -199,7 +199,7 @@ def build_policy(
     ones that can leak and can be mounted without EPERM; a correctly ``0700`` home yields none,
     unless a link in it points out to a reachable target (#358). The narrow-check still uses the
     real home, and the private trees and the socket masks (which do not touch the owner's home)
-    are always applied.
+    are always applied; on the account path a socket the account cannot enter is skipped (#482).
     """
     real_home = _safe(home or Path.home())
     # read_roots are validated but never emitted: the whole root is already bound read-only, so
@@ -242,10 +242,12 @@ def build_policy(
     # Mask root-equivalent daemon sockets at the canonical path (realpath collapses duplicates;
     # /dev/null bound onto a symlink path makes bwrap create a mountpoint through it and fail).
     # Only an existing one: exists() follows the link, so an absent or dangling one adds no flag.
+    # Off the owner path an unreachable one is skipped: a bind there EPERMs the run (#482).
     masked_socks: set[str] = set()
     for sock in _DANGEROUS_SOCKETS:
         real = _safe(sock) if os.path.exists(sock) else None
-        if real and real not in masked_socks:
+        reach = mask_home_credentials or (real and account_may_traverse(os.path.dirname(real)))
+        if real and reach and real not in masked_socks:
             masked_socks.add(real)
             flags += ["--ro-bind", "/dev/null", real]
     flags += remount  # last: the private trees turn read-only once everything is mounted on them
