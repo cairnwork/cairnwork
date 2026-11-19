@@ -16,7 +16,7 @@ import stat
 from dataclasses import dataclass
 from pathlib import Path
 
-from cairnwork.gitcmd import run_git
+from cairnwork.gitcmd import GitCommandError, run_git
 
 CHUNK = 1 << 20
 
@@ -40,7 +40,10 @@ def tree_entries(repo: Path, commit: str) -> dict[str, TreeEntry]:
 
 def tree_differences(repo: Path, commit: str, directory: Path) -> list[str]:
     """Paths where directory differs from commit's tree (the top-level .git is ignored)."""
-    expected = tree_entries(repo, commit)
+    try:
+        expected = tree_entries(repo, commit)
+    except GitCommandError:  # e.g. a path git prints that is not UTF-8 (#1328): report, not raise
+        return ["unreadable commit tree"]
     expected_dirs = {str(Path(p).parent) for p in expected} | {"."}
     for path in list(expected_dirs):
         expected_dirs.update(str(parent) for parent in Path(path).parents)

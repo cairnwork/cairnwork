@@ -282,7 +282,9 @@ def check_candidate_commit(
     except GitCommandError as exc:
         raise CandidateRejected("UNREADABLE_CHANGE", shown(exc)) from exc
     if tamper:
-        raise CandidateRejected(TAMPER_CODE, ", ".join(shown(finding) for finding in tamper[:5]))
+        raise CandidateRejected(
+            TAMPER_CODE, ", ".join(map(str, tamper[:5]))
+        )  # Finding.__str__ is shown()
     try:
         run_git_bytes(
             repo, "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--check", base, head
