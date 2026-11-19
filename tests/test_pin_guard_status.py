@@ -14,6 +14,7 @@ from scripts.ci import pin_guard_status
         ("success", "1", "unapproved"),
         ("success", "2", "error"),
         ("success", "3", "bytecode"),
+        ("success", "4", "auto"),
         ("success", "", "error"),
         ("success", "7", "error"),
         ("failure", "0", "error"),
@@ -31,6 +32,7 @@ def test_decide(job: str, rc: str, expected: str) -> None:
         ("0", "success", "No unapproved guarded pin changes"),
         ("1", "failure", "Guarded pin changes need approval"),
         ("3", "failure", "Tracked Python bytecode is not allowed"),
+        ("4", "success", "Guarded change auto-approved by three-family review"),
     ],
 )
 def test_main_writes_github_output(

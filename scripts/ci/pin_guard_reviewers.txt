@@ -1,0 +1,4 @@
+# Logins whose review records can auto-approve a guarded change (see pin_guard.py). One per line;
+# blank lines and lines beginning with # are ignored. A login that also authors the PR never
+# counts. Empty on purpose: today every record and every PR is posted by the same agent bot, so
+# auto-approval stays off until the owner adds a reviewer identity the authoring agents cannot use.

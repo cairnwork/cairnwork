@@ -10,13 +10,16 @@ OUTCOMES = {
     "unapproved": ("failure", "Guarded pin changes need approval"),
     "error": ("error", "Pin guard could not run or failed closed"),
     "bytecode": ("failure", "Tracked Python bytecode is not allowed"),
+    "auto": ("success", "Guarded change auto-approved by three-family review"),
 }
 
 
 def decide(job_result: str, gate_rc: str) -> str:
     if job_result != "success":
         return "error"
-    return {"0": "success", "1": "unapproved", "2": "error", "3": "bytecode"}.get(gate_rc, "error")
+    return {"0": "success", "1": "unapproved", "2": "error", "3": "bytecode", "4": "auto"}.get(
+        gate_rc, "error"
+    )
 
 
 def main() -> int:

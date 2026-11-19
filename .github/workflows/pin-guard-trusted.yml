@@ -46,20 +46,25 @@ jobs:
           EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           EVENT_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          EVENT_AUTHOR: ${{ github.event.pull_request.user.login }}
         run: |
           if [ "$EVENT_NAME" = "issue_comment" ]; then
             pr=$(gh api "repos/${REPO}/pulls/${EVENT_NUMBER}")
             base_sha=$(printf '%s' "$pr" | jq -r .base.sha)
             head_sha=$(printf '%s' "$pr" | jq -r .head.sha)
             head_repo=$(printf '%s' "$pr" | jq -r .head.repo.full_name)
+            author=$(printf '%s' "$pr" | jq -r .user.login)
           else
             base_sha="$EVENT_BASE_SHA"
             head_sha="$EVENT_HEAD_SHA"
             head_repo="$EVENT_HEAD_REPO"
+            author="$EVENT_AUTHOR"
           fi
           echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
           echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
           echo "head_repo=$head_repo" >> "$GITHUB_OUTPUT"
+          printf '%s' "$author" | grep -Eqx '[A-Za-z0-9-]{1,39}(\[bot\])?' || author=""
+          echo "pr_author=$author" >> "$GITHUB_OUTPUT"
       - name: PR head (data only)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -82,13 +87,15 @@ jobs:
           HEAD_SHA: ${{ steps.refs.outputs.head_sha }}
           COMMENTS: ${{ runner.temp }}/comments.json
           EVENT_NAME: ${{ github.event_name }}
+          PR_AUTHOR: ${{ steps.refs.outputs.pr_author }}
         run: |
           rc=0
           if ! git -C head cat-file -e "${BASE_SHA}^{commit}"; then
             git -C head fetch -q --no-tags "$BASE_REPO_URL" "$BASE_SHA" || true
           fi
           python3 -I trusted/scripts/ci/pin_guard.py --trusted trusted --head head \
-            --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA" --comments "$COMMENTS" || rc=$?
+            --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA" --comments "$COMMENTS" \
+            --pr-author "$PR_AUTHOR" || rc=$?
           echo "gate_rc=$rc" >> "$GITHUB_OUTPUT"
 
   publish:

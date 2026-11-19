@@ -1,4 +1,9 @@
-"""Report changes to the trusted #1353 pin table and pinned helpers, and refuse tracked bytecode."""
+"""Report changes to the trusted #1353 pin table and pinned helpers, and refuse tracked bytecode.
+
+A guarded change is approved by the owner's PIN-APPROVE, or automatically when Claude, Codex and
+Gemini each ACCEPT the exact head in a record posted by an allowlisted reviewer login that is not
+the PR author, and the PR touches no self-guard path (the guard, its lists, workflows, owners).
+"""
 
 from __future__ import annotations
 
@@ -23,6 +28,18 @@ FIXED_PATHS = {
 }
 APPROVAL = re.compile(r"^PIN-APPROVE ([0-9a-fA-F]{40})$")
 BYTECODE_SUFFIXES = (".pyc", ".pyo")
+# Changing any of these can widen who or what this guard trusts: owner PIN-APPROVE only.
+SELF_GUARD_PREFIXES = (".github/", "scripts/ci/", "tests/test_pin_guard")
+SELF_GUARD_PATHS = {"codeowners", "docs/codeowners", "tests/_w1353_allow_pins.py"}
+FAMILIES = {
+    "claude": re.compile(r"\b(?:claude|opus|sonnet)\b", re.IGNORECASE),
+    "codex": re.compile(r"\b(?:codex|gpt)\b", re.IGNORECASE),
+    "gemini": re.compile(r"\bgemini\b", re.IGNORECASE),
+}
+RECORD = re.compile(
+    r"^\*\*(?P<label>[^*\n]{1,100})\*\* \((?P<who>[^()\n]{1,200})\): "
+    r"\*\*(?P<verdict>ACCEPT|REJECT) at (?P<sha>[0-9a-f]{40})\*\*\.?$"
+)
 
 
 def _literal(node: ast.expr) -> object:
@@ -136,13 +153,14 @@ def _bytecode(head: Path, head_sha: str) -> list[str]:
     return sorted(hits)
 
 
-def _approval(comments: Path | None, approvers: set[str], head_sha: str) -> str:
+def _read_comments(comments: Path | None) -> list[tuple[object, str, bool]]:
+    """(login, body, edited); an edited comment could have been rewritten after the fact."""
     if comments is None:
-        return "PIN_CHANGE_UNAPPROVED"
+        return []
     data = json.loads(comments.read_text(encoding="utf-8"))
     if not isinstance(data, list):
         raise ValueError("comments must be a list")
-    stale = denied = False
+    kept: list[tuple[object, str, bool]] = []
     for comment in data:
         user = comment.get("user") if isinstance(comment, dict) else None
         login = user.get("login") if isinstance(user, dict) else None
@@ -150,7 +168,15 @@ def _approval(comments: Path | None, approvers: set[str], head_sha: str) -> str:
         if not isinstance(body, str):
             continue
         created, updated = comment.get("created_at"), comment.get("updated_at")
-        if not isinstance(created, str) or not isinstance(updated, str) or created != updated:
+        edited = not isinstance(created, str) or not isinstance(updated, str) or created != updated
+        kept.append((login, body, edited))
+    return kept
+
+
+def _approval(comments: Path | None, approvers: set[str], head_sha: str) -> str:
+    stale = denied = False
+    for login, body, edited in _read_comments(comments):
+        if edited:
             continue
         for line in body.splitlines():
             match = APPROVAL.fullmatch(line)
@@ -169,6 +195,59 @@ def _approval(comments: Path | None, approvers: set[str], head_sha: str) -> str:
     return "PIN_CHANGE_UNAPPROVED"
 
 
+def _identity(login: str) -> str:
+    """One account seen as PR author ('app/x') or commenter ('x[bot]') compares equal."""
+    return login.strip().lower().removeprefix("app/").removesuffix("[bot]")
+
+
+def _three_family_accept(
+    comments: Path | None, reviewers: set[str], author: str | None, head_sha: str
+) -> bool:
+    """Each family ACCEPTs head_sha in an unedited record by an allowlisted login that is not
+    the PR author, and no record by anyone (edited or not) REJECTs head_sha. A record line
+    naming more than one family counts for none."""
+    if not author or not reviewers:
+        return False
+    head = head_sha.lower()
+    accepted: set[str] = set()
+    for login, body, edited in _read_comments(comments):
+        for line in body.splitlines():
+            match = RECORD.fullmatch(line)
+            if not match or match.group("sha") != head:
+                continue
+            if match.group("verdict") == "REJECT":
+                return False
+            text = f"{match.group('label')} {match.group('who')}"
+            named = {family for family, pattern in FAMILIES.items() if pattern.search(text)}
+            trusted = (
+                isinstance(login, str)
+                and login.lower() in reviewers
+                and _identity(login) != _identity(author)
+            )
+            if len(named) == 1 and trusted and not edited:
+                accepted |= named
+    return accepted == set(FAMILIES)
+
+
+def _self_guard(changed: set[str]) -> list[str]:
+    hits = []
+    for path in changed:
+        folded = path.casefold()
+        if folded in SELF_GUARD_PATHS or folded.startswith(SELF_GUARD_PREFIXES):
+            hits.append(path)
+    return sorted(hits)
+
+
+def _logins(path: Path) -> set[str]:
+    if not path.exists():
+        return set()
+    return {
+        line.strip().lower()
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+
+
 def evaluate(args: argparse.Namespace) -> tuple[int, str, list[str]]:
     trusted = Path(args.trusted)
     if not trusted.is_dir():
@@ -180,19 +259,21 @@ def evaluate(args: argparse.Namespace) -> tuple[int, str, list[str]]:
     guarded = set(FIXED_PATHS)
     if pin_file.exists():
         guarded.update(_pin_table(pin_file))
-    hits = sorted(guarded & _changed(Path(args.head), args.base_sha, args.head_sha))
+    changed = _changed(Path(args.head), args.base_sha, args.head_sha)
+    hits = sorted(guarded & changed)
     if not hits:
         return 0, "PIN_GUARD_OK", hits
-    approver_file = trusted / "scripts/ci/pin_guard_approvers.txt"
-    approvers = set()
-    if approver_file.exists():
-        approvers = {
-            line.strip().lower()
-            for line in approver_file.read_text(encoding="utf-8").splitlines()
-            if line.strip() and not line.lstrip().startswith("#")
-        }
-    outcome = _approval(Path(args.comments) if args.comments else None, approvers, args.head_sha)
-    return (0 if outcome == "PIN_CHANGE_APPROVED" else 1), outcome, hits
+    approvers = _logins(trusted / "scripts/ci/pin_guard_approvers.txt")
+    comments = Path(args.comments) if args.comments else None
+    outcome = _approval(comments, approvers, args.head_sha)
+    if outcome == "PIN_CHANGE_APPROVED":
+        return 0, outcome, hits
+    reviewers = _logins(trusted / "scripts/ci/pin_guard_reviewers.txt")
+    if not _self_guard(changed) and _three_family_accept(
+        comments, reviewers, args.pr_author, args.head_sha
+    ):
+        return 4, "PIN_CHANGE_AUTO_APPROVED", hits
+    return 1, outcome, hits
 
 
 def main() -> int:
@@ -202,6 +283,7 @@ def main() -> int:
     parser.add_argument("--base-sha", required=True)
     parser.add_argument("--head-sha", required=True)
     parser.add_argument("--comments")
+    parser.add_argument("--pr-author")
     args = parser.parse_args()
     try:
         if not re.fullmatch(r"[0-9a-fA-F]{40}", args.base_sha) or not re.fullmatch(
