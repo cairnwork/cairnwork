@@ -269,3 +269,11 @@ def test_trusted_venv_step_refuses_a_base_other_than_main(event, base_ref, ref, 
         ["bash", "-c", guard], env=env, capture_output=True, text=True, timeout=30
     )
     assert done.returncode == rc, done.stdout + done.stderr
+
+
+def test_verify_site_does_not_claim_a_byte_comparison():
+    """#1487: the check trusts each dist's own RECORD, and its docstring must say so."""
+    doc = " ".join((verify_site.__doc__ or "").split())
+    assert "byte for byte" not in doc
+    assert "RECORD" in doc
+    assert "wheel hashes" in doc

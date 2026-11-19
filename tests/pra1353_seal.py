@@ -296,7 +296,13 @@ def _site_dists(site: Path) -> dict[str, str]:
 
 
 def verify_site(lock: bytes, sites: list[str]) -> None:
-    """Fail closed unless every installed dist matches the base uv.lock, byte for byte."""
+    """Fail closed unless every installed dist is in the base uv.lock at a locked version.
+
+    Each dist is read from its own RECORD, so this checks that the RECORD is self-consistent and
+    that name and version match the lock. It does not compare file bytes with the lock's wheel
+    hashes or any digest kept outside the venv: a writer who changes a file and its RECORD
+    together passes. See #1487.
+    """
     versions, roots, required = lock_packages(lock)
     installed: dict[str, str] = {}
     for site in dict.fromkeys(os.path.realpath(path) for path in sites):
