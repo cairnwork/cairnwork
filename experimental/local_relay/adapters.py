@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import math
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -141,6 +142,7 @@ class _UsageTransport:
             float(reported)
             if isinstance(reported, (int, float))
             and not isinstance(reported, bool)
+            and math.isfinite(reported)
             and reported >= 0
             else None
         )
@@ -232,6 +234,7 @@ class HaikuProxyFallback:
         if (
             isinstance(usd, (int, float))
             and not isinstance(usd, bool)
+            and math.isfinite(usd)
             and usd >= 0
             and all(type(t) is int and t >= 0 for t in (tokens_in, tokens_out))
         ):
@@ -271,6 +274,7 @@ class HaikuProxyFallback:
             or isinstance(input_tokens, bool)
             or not isinstance(output_tokens, int)
             or isinstance(output_tokens, bool)
+            or not math.isfinite(usd)
             or usd <= 0
             or input_tokens < 0
             or output_tokens < 0

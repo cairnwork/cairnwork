@@ -188,22 +188,35 @@ def _parent_fd(root_fd: int, rel: str) -> tuple[int, str]:
     return fd, path.parts[-1]
 
 
-def _check_tracked(root_fd: int, device: int, rel: str) -> None:
-    """A changed tracked path must be a plain file (nlink 1, same device), a link or gone."""
+def _check_tracked(root_fd: int, device: int, rel: str) -> tuple | None:
+    """A changed tracked path must be a plain file (nlink 1, same device), a link or gone.
+
+    Returns an identity signature (None when deleted) so the same path can be compared before and
+    after git reads it.
+    """
     fd, name = _parent_fd(root_fd, rel)
     try:
         try:
             info = os.stat(name, dir_fd=fd, follow_symlinks=False)
         except FileNotFoundError:
-            return  # deleted: git diff shows the removal
+            return None  # deleted: git diff shows the removal
         except OSError as exc:
             raise PlanIncomplete(f"cannot inspect {rel}: {exc.strerror}") from exc
     finally:
         os.close(fd)
+    signature = (
+        info.st_dev,
+        info.st_ino,
+        info.st_nlink,
+        info.st_mode,
+        info.st_size,
+        info.st_mtime_ns,
+    )
     if stat.S_ISLNK(info.st_mode):
-        return  # git diff shows the link target text, never the pointed-to content
+        return signature  # git diff shows the link target text, never the pointed-to content
     if not stat.S_ISREG(info.st_mode) or info.st_dev != device or info.st_nlink != 1:
         raise PlanIncomplete(f"changed file is not a plain single-link file: {rel}")
+    return signature
 
 
 def _read_new_file(root_fd: int, device: int, rel: str) -> str:
@@ -242,31 +255,36 @@ def build_gate_plan(task: dict[str, Any], candidate: Any) -> str:
     source = task.get("repo")
     if not source:
         raise ValueError("gate review needs the trusted source repository")
-    with _scratch_index(Path(source), checkout, base) as env:
-        tracked = _tracked_names(checkout, env)
-        diff = _git(
-            checkout,
-            "diff",
-            "--no-color",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--text",  # attributes (-diff, binary) must not turn content into a placeholder
-            "--no-renames",
-            "--ignore-submodules=none",
-            limit=MAX_DIFF_BYTES,
-            env=env,
-        ).decode("utf-8", "replace")
-        listing = _git(checkout, "ls-files", "--others", "-z", limit=MAX_LISTING_BYTES, env=env)
-    if any(line.startswith("Binary files ") for line in diff.splitlines()):
-        raise PlanIncomplete("the diff hides content behind a binary placeholder")
-    issue = str(task.get("prompt", "")).strip()
-    issue += "\n\nAllowed files: " + ", ".join(task.get("allowed_files", []))
-    parts = [diff or "(no tracked changes)"]
     root_fd = os.open(checkout, os.O_RDONLY | os.O_DIRECTORY)
     try:
         device = os.fstat(root_fd).st_dev
-        for rel in tracked:  # nothing but plain files may feed the diff that goes to the cloud
-            _check_tracked(root_fd, device, rel)
+        with _scratch_index(Path(source), checkout, base) as env:
+            tracked = _tracked_names(checkout, env)
+            # nothing but plain files may feed the diff that goes to the cloud: check each changed
+            # path before git reads it and again afterwards (a leftover worker process must not be
+            # able to swap a file for a hard link just while git reads it)
+            before = {rel: _check_tracked(root_fd, device, rel) for rel in tracked}
+            diff = _git(
+                checkout,
+                "diff",
+                "--no-color",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--text",  # attributes (-diff, binary) must not turn content into a placeholder
+                "--no-renames",
+                "--ignore-submodules=none",
+                limit=MAX_DIFF_BYTES,
+                env=env,
+            ).decode("utf-8", "replace")
+            listing = _git(checkout, "ls-files", "--others", "-z", limit=MAX_LISTING_BYTES, env=env)
+            after = {rel: _check_tracked(root_fd, device, rel) for rel in tracked}
+        if before != after:
+            raise PlanIncomplete("tracked files changed while the gate plan was built")
+        if any(line.startswith("Binary files ") for line in diff.splitlines()):
+            raise PlanIncomplete("the diff hides content behind a binary placeholder")
+        issue = str(task.get("prompt", "")).strip()
+        issue += "\n\nAllowed files: " + ", ".join(task.get("allowed_files", []))
+        parts = [diff or "(no tracked changes)"]
         for rel in _names(listing):
             parts.append(f"New file {rel}:\n{_read_new_file(root_fd, device, rel)}")  # as text
     finally:

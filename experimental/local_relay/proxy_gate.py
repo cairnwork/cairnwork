@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import functools
 import json
+import math
 import uuid
 from collections.abc import Callable, Sequence
 from urllib.parse import quote
@@ -194,6 +195,7 @@ def _valid_cost(stats: dict) -> tuple[float, int, int] | None:
     if (
         not isinstance(usd, (int, float))
         or isinstance(usd, bool)
+        or not math.isfinite(usd)
         or usd <= 0
         or not all(type(t) is int and t >= 0 for t in (tokens_in, tokens_out))
         or not _is_flag(stats.get("budget_stop"))

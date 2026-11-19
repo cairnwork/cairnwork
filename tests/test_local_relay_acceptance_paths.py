@@ -197,3 +197,86 @@ def test_a_stalled_git_is_killed_by_the_wall_clock(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError, match="timed out"):
         gate_plan._git(tmp_path, "diff", limit=100, env=dict(os.environ))
     assert time.monotonic() - started < 10
+
+
+def test_a_tracked_file_swapped_while_git_reads_it_is_caught_by_the_second_check(
+    monkeypatch, tmp_path
+):
+    from experimental.local_relay import gate_plan
+
+    repo, source, base = _repo(tmp_path)
+    (repo / "inside.py").write_text("x = 2\n")
+    real_git = gate_plan._git
+
+    def swapping_git(checkout, *args, **kwargs):
+        data = real_git(checkout, *args, **kwargs)
+        if args and args[0] == "diff" and "--text" in args:  # a leftover worker process at work
+            content = (repo / "inside.py").read_bytes()
+            (repo / "inside.py").unlink()
+            (repo / "inside.py").write_bytes(content)  # same bytes, new inode
+        return data
+
+    monkeypatch.setattr(gate_plan, "_git", swapping_git)
+    with pytest.raises(PlanIncomplete, match="changed while"):
+        build_gate_plan(
+            {**TASK, "repo": str(source)}, RunResult(0, "", repo.parent, repo, base_sha=base)
+        )
+
+
+def test_an_untouched_tracked_change_passes_both_checks(tmp_path):
+    repo, source, base = _repo(tmp_path)
+    (repo / "inside.py").write_text("x = 2\n")
+    plan = build_gate_plan(
+        {**TASK, "repo": str(source)}, RunResult(0, "", repo.parent, repo, base_sha=base)
+    )
+    assert "+x = 2" in plan
+
+
+@pytest.mark.parametrize("bad", [float("inf"), float("-inf"), float("nan")])
+def test_non_finite_costs_are_never_recorded_as_spend(monkeypatch, bad):
+    from experimental.local_relay.proxy_gate import ProxyGate
+
+    rows = Rows()
+    stats = {"cost_usd": bad, "input_tokens": 5, "output_tokens": 2}
+    _run(_failing_fallback(stats), rows, monkeypatch)
+    row = next(r for r in rows.rows if r["stage"] == "fallback")
+    assert row["usd"] is None and row["usd_known"] is False
+
+    def request(method, url, body):
+        if "/ab/stats" in url:
+            return {
+                "requests": 1,
+                "cost_usd": bad,
+                "input_tokens": 5,
+                "output_tokens": 2,
+                "budget_stop": False,
+                "model_mismatch": 0,
+            }
+        if url.endswith("/chat/completions"):
+            return {
+                "choices": [{"message": {"content": '{"verdict": "可直接合併", "reason": "ok"}'}}]
+            }
+        return {}
+
+    reply = ProxyGate("http://127.0.0.1:18301/v1", request).review(
+        type(
+            "Req",
+            (),
+            {
+                "task_id": "t",
+                "plan": "p",
+                "settings": type(
+                    "S",
+                    (),
+                    {
+                        "effort": "medium",
+                        "model_id": "h",
+                        "timeout_seconds": 5.0,
+                        "max_attempts": 1,
+                    },
+                )(),
+                "checkpoint_sha256": "",
+            },
+        )()
+    )
+    assert reply.verdict is None and reply.usd == 0.0
