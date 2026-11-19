@@ -47,6 +47,7 @@ from cairnwork.notary import NotarySchemaMismatch
 from cairnwork.notary_migrate import NotaryMissing, migrate_notary
 from cairnwork.pipeline import TaskRejected
 from cairnwork.runlock import RunLockBusy
+from cairnwork.textclean import shown
 from cairnwork.verifier_select import SelectedIntake, select_account
 from cairnwork.verify_candidate import cleanup, tests_consumed, verify_candidate
 
@@ -85,12 +86,12 @@ def main(argv: list[str] | None = None) -> int:
                 "verified": False,
                 "reason": exc.code,
                 "error": exc.code,
-                "detail": str(exc),
+                "detail": shown(exc),
             },
             2,
         )
     except (NotarySchemaMismatch, NotaryMissing) as exc:  # NOTARY_SCHEMA_OLDER: migrate-notary
-        return _emit({"error": exc.code, "detail": str(exc)}, 2)
+        return _emit({"error": exc.code, "detail": shown(exc)}, 2)
     except KeyboardInterrupt:  # #783: say what the interruption cost; the signal still ends the run
         used = tests_consumed(intake, getattr(args, "test_commit", ""))
         detail = "interrupted" + (
@@ -100,7 +101,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return _emit({"error": "INTERRUPTED", "detail": detail, "tests_consumed": used}, 130)
     except Exception as exc:  # noqa: BLE001 - reported as unknown, never as success
-        detail = f"{type(exc).__name__}: {exc}"
+        detail = f"{type(exc).__name__}: {shown(exc)}"
         if args.command == "migrate-notary":  # no tests involved
             return _emit({"error": "INTERNAL", "detail": detail}, 1)
         used = tests_consumed(intake, getattr(args, "test_commit", ""))  # a retry needs new tests?
@@ -132,7 +133,7 @@ def _migrate(intake: Intake) -> dict[str, Any]:
         with runlock.held(intake.state / "ownership.sqlite", exclusive=True):
             return migrate_notary(intake.state / "notary.sqlite")
     except RunLockBusy as exc:  # only here: a busy run lock elsewhere keeps its meaning
-        raise IntakeRefused(exc.code, str(exc)) from exc
+        raise IntakeRefused(exc.code, shown(exc)) from exc
 
 
 def _import_tests(intake: Intake, args) -> int:
@@ -143,7 +144,7 @@ def _import_tests(intake: Intake, args) -> int:
             repo, Path(args.bundle).resolve(), intake.state / "verify-used-tests"
         )
     except TestCommitRejected as exc:
-        return _emit({"error": exc.code, "detail": str(exc)}, 2)
+        return _emit({"error": exc.code, "detail": shown(exc)}, 2)
     return _emit({"imported": sha}, 0)
 
 
@@ -191,12 +192,12 @@ def _run(intake: Intake, args) -> dict[str, Any]:
             (f"pytest-{i}", tuple(shlex.split(command))) for i, command in enumerate(args.verifier)
         )
     except ValueError as exc:
-        raise TaskRejected("BAD_VERIFIER", str(exc)) from exc
+        raise TaskRejected("BAD_VERIFIER", shown(exc)) from exc
     path = Path(args.blackbox) if args.blackbox is not None else None
     try:  # read by the owner's process only; never passed on to the run
         declared = blackbox.load(path) if path is not None else None
     except blackbox.BlackboxRejected as exc:
-        raise TaskRejected(exc.code, str(exc)) from exc
+        raise TaskRejected(exc.code, shown(exc)) from exc
     if args.require_protection and path is None:  # strict mode could never be met: burn nothing
         raise TaskRejected(protection.UNPROTECTED_CODE, "--require-protection needs --blackbox")
     if args.require_protection and declared is not None:

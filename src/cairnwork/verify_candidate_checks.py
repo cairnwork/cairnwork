@@ -6,6 +6,7 @@ from cairnwork.deferred_tests import check_roots_on_base
 from cairnwork.import_path_tree import ImportPathError, require_plain_dirs
 from cairnwork.issue_task import check_verify_import_paths
 from cairnwork.pipeline import TaskRejected, check_task
+from cairnwork.textclean import shown
 from cairnwork.workspace import Attempt, check_candidate_commit
 from cairnwork_protocol.ids import ID_RULE, core_ids
 
@@ -21,7 +22,7 @@ def check_task_for_verify(task, python):
     try:
         return check_task(task, verifier_python=python)
     except OSError as exc:
-        raise TaskRejected("VERIFIER_ENVIRONMENT_ERROR", str(exc)) from exc
+        raise TaskRejected("VERIFIER_ENVIRONMENT_ERROR", shown(exc)) from exc
 
 
 def validate_import_paths(repo, base, import_paths, test_roots):
@@ -31,7 +32,7 @@ def validate_import_paths(repo, base, import_paths, test_roots):
         if import_paths:
             require_plain_dirs(repo, base, import_paths)
     except (ValueError, ImportPathError) as exc:
-        raise TaskRejected("BAD_IMPORT_PATH", str(exc)) from exc
+        raise TaskRejected("BAD_IMPORT_PATH", shown(exc)) from exc
 
 
 def check_before_clone(task, candidate, python):

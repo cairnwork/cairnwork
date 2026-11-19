@@ -1,5 +1,4 @@
 """Run existing (pass-to-pass) tests over a candidate next to the task's own verifiers (#117).
-
 After the worker is done, for a task with deferred tests: select existing test files by the
 state's ``p2p_selection`` mode (p2p_selection.py), run them on the BASE to find the tests that
 pass there, then run exactly those on the judged commit as one more verifier (``p2p-<mode>``)
@@ -73,6 +72,7 @@ from cairnwork.p2p_nodes import passing_targets, require_nodes
 from cairnwork.p2p_probe_log import probe_log_tail
 from cairnwork.p2p_selection import DEFAULT_BUDGET_SECONDS, cap_note, name_rule, select_p2p_targets
 from cairnwork.pytest_config import PytestConfigError, test_file_rule
+from cairnwork.textclean import shown
 from cairnwork.verifiers import VerifierRun, VerifierSpec, run_verifiers
 from cairnwork.verify_context import VerifyContext
 
@@ -102,7 +102,7 @@ def _base_tests(task, exclude: frozenset[str], strict=True) -> tuple[str, ...]:
         paths = [p for p in under_roots(raw, task.test_roots) if p not in exclude and is_test(p)]
         odd = [p for p in paths if not target.fullmatch(p)] + links  # #930, #997: no exemption
     except (GitCommandError, PytestConfigError) as exc:
-        raise P2PRejected("P2P_BASE_UNREADABLE", str(exc)) from exc
+        raise P2PRejected("P2P_BASE_UNREADABLE", shown(exc)) from exc
     if odd and strict:  # #930: never dropped silently (fail closed); #956: env check only
         detail = f"{len(odd)} base test file(s) no target can name, e.g. {_clean(odd[0])}"
         raise BaseUncomparable(Comparison("UNCOMPARABLE", "P2P_BASE_UNTARGETABLE", detail))
@@ -274,7 +274,7 @@ def base_env_check(task, result, ctx: VerifyContext, *, without_tests=False, key
     try:
         existing = _base_tests(task, frozenset(), strict=not without_tests)  # #956
     except P2PRejected as exc:
-        raise _env_failed(str(exc)) from exc
+        raise _env_failed(shown(exc)) from exc
     rule = name_rule(task.repo, task.base_commit)
     files = select_p2p_targets(task.allowed_files, existing, task.test_roots, "module-dir", rule)
     if not files:  # nothing to probe now; the steps after the worker decide, as before

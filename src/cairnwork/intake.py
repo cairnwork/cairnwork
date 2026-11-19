@@ -1,5 +1,4 @@
 """Gateway-facing intake for one task type (council F): submit, status, cancel, drain.
-
 The old Gateway keeps its entry and authentication and forwards only small bug
 fixes here, through the ``cairnwork-route`` command (route.py). Everything lives
 in one state directory (owner-only):
@@ -62,6 +61,7 @@ from cairnwork.ownership import (
 from cairnwork.p2p_selection import check_p2p_config
 from cairnwork.pipeline import TaskSpec, check_task
 from cairnwork.taskpaths import check_submitted_paths
+from cairnwork.textclean import shown
 from cairnwork.verifier_account import VerifierAccount
 from cairnwork.workers.agy_dispatch import valid_run_as_user
 from cairnwork_protocol.http import CoreHttpError, check_core_url, http_core_verify
@@ -100,7 +100,7 @@ class Intake:
         try:
             loaded = json.loads(path.read_text()) if path.exists() else {}
         except (ValueError, RecursionError) as exc:  # truncated, not UTF-8, too deep (#234, #909)
-            raise IntakeRefused("BAD_CONFIG", f"{path} is not valid JSON: {exc}") from exc
+            raise IntakeRefused("BAD_CONFIG", f"{path} is not valid JSON: {shown(exc)}") from exc
         if not isinstance(loaded, dict) or set(loaded) - set(DEFAULT_CONFIG):
             raise IntakeRefused("BAD_CONFIG", f"{path} keys must be among {sorted(DEFAULT_CONFIG)}")
         for key in (
@@ -132,7 +132,7 @@ class Intake:
             try:
                 check_core_url(loaded["core_url"])
             except CoreHttpError as exc:
-                raise IntakeRefused("BAD_CONFIG", str(exc)) from exc
+                raise IntakeRefused("BAD_CONFIG", shown(exc)) from exc
             if not has_token(loaded.get("core_token_file")):
                 raise IntakeRefused("BAD_CONFIG", "core_url needs a readable, non-empty token file")
         if not isinstance(loaded.get("require_base_on_main", True), bool):
@@ -144,7 +144,7 @@ class Intake:
             check_import_paths(loaded.get("import_paths", []))
             check_p2p_config(loaded)
         except ValueError as exc:
-            raise IntakeRefused("BAD_CONFIG", str(exc)) from exc
+            raise IntakeRefused("BAD_CONFIG", shown(exc)) from exc
         return {**DEFAULT_CONFIG, **loaded}
 
     def remember_gh(self, gh: str) -> None:
@@ -260,10 +260,10 @@ class Intake:
                 if str(exc).startswith("LINEAGE_FETCH_FAILED"):
                     raise IntakeRefused(
                         "ORIGIN_FETCH_FAILED",
-                        f"{exc}; set require_base_on_main false in config.json "
+                        f"{shown(exc)}; set require_base_on_main false in config.json "
                         "if the repository has no origin",
                     ) from exc
-                raise IntakeRefused("BASE_NOT_ON_MAIN", str(exc)) from exc
+                raise IntakeRefused("BASE_NOT_ON_MAIN", shown(exc)) from exc
         fd = runlock.shared_fd(ledger.path)
         try:  # the request is on disk, whole and synced, before its task is bound (#466)
             bound = bind_stored(ledger, task, payload, self.state / "requests")
@@ -352,7 +352,7 @@ class Intake:
         try:
             record = ledger.set_status(task_id, "CANCELLED", expected_from="BOUND")
         except InvalidStatusTransition as exc:
-            raise IntakeRefused("NOT_CANCELLABLE", str(exc)) from exc
+            raise IntakeRefused("NOT_CANCELLABLE", shown(exc)) from exc
         return {"task_id": task_id, "status": record.status}
 
     def supersede(self, task_id: str) -> dict[str, Any]:
@@ -369,7 +369,7 @@ class Intake:
                 account=self.config()["agy_run_as_user"],
             )
         except InvalidStatusTransition as exc:
-            raise IntakeRefused("NOT_SUPERSEDABLE", str(exc)) from exc
+            raise IntakeRefused("NOT_SUPERSEDABLE", shown(exc)) from exc
         return {"task_id": task_id, "status": record.status}
 
     def in_flight(self) -> dict[str, Any]:

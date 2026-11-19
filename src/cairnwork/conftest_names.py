@@ -40,6 +40,7 @@ from cairnwork.fixture_forms import (
 )
 from cairnwork.gitcmd import GitCommandError, run_git, run_git_bytes
 from cairnwork.imported_callable_uses import assignment_callables, imported_callable_uses
+from cairnwork.textclean import shown
 
 MAX_FILES = 5000  # base Python files read under one conftest's directory
 _REQUESTS = frozenset({"usefixtures", "getfixturevalue"})
@@ -174,7 +175,7 @@ def _listing(repo: Path, base: str) -> dict[str, str]:
     try:
         rows = run_git(repo, "ls-tree", "-r", "-z", base).split("\0")
     except GitCommandError as exc:
-        raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
+        raise TestCommitRejected("TEST_COMMIT_UNREADABLE", shown(exc)) from exc
     listing: dict[str, str] = {}
     for row in filter(None, rows):
         meta, _, file = row.partition("\t")
@@ -318,7 +319,7 @@ def _read(repo: Path, oids: list[str]) -> list[bytes]:
             repo, "cat-file", "--batch", stdin="".join(f"{o}\n" for o in oids).encode()
         )
     except GitCommandError as exc:
-        raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
+        raise TestCommitRejected("TEST_COMMIT_UNREADABLE", shown(exc)) from exc
     blobs, at = [], 0
     for oid in oids:
         end = out.find(b"\n", at)

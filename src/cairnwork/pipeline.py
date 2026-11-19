@@ -1,5 +1,4 @@
 """One governed task, end to end: bind → isolated attempt → candidate → verify → Core.
-
 ``run_task`` is the bare core's main path. It owns no policy beyond the preserved behaviors: every
 step that fails leaves the task FAILED (or not COMPLETED) with a reason, and only a Core verdict
 that is verified for the exact candidate commit makes it COMPLETED.
@@ -41,6 +40,7 @@ from cairnwork.pipeline_judge import judge_for, tests_unused, tests_with_teeth
 from cairnwork.protected_paths import path_refusal
 from cairnwork.pytest_config import PytestConfigError, gate_import_paths
 from cairnwork.snapshot import snapshot_candidate
+from cairnwork.textclean import shown
 from cairnwork.unswept import WorkerMayLive
 from cairnwork.verifier_account import VerifierAccount
 from cairnwork.verifiers import (
@@ -173,7 +173,7 @@ def check_task(task: TaskSpec, *, verifier_python: str | None = None) -> tuple[V
             test_commit=task.test_commit,  # scanned when present (#382)
         )
     except PytestConfigError as exc:  # BAD_IMPORT_PATH or PYTEST_CONFIG_ERROR, before binding
-        raise TaskRejected(exc.code, str(exc)) from exc
+        raise TaskRejected(exc.code, shown(exc)) from exc
     if protected:
         raise TaskRejected("PROTECTED_VERIFIER_INPUT", ", ".join(protected))
     if blocked:
@@ -194,7 +194,7 @@ def check_task(task: TaskSpec, *, verifier_python: str | None = None) -> tuple[V
             parse_verifier(vid, list(argv), task.test_roots) for vid, argv in task.verifiers
         )
     except VerifierRejected as exc:
-        raise TaskRejected(exc.code, str(exc)) from exc
+        raise TaskRejected(exc.code, shown(exc)) from exc
 
 
 def _require_no_blackbox(task: TaskSpec) -> None:
@@ -291,7 +291,7 @@ def _execute(
         _attempt(task, specs, record.request_digest, notary, worker, result, steps, ctx)
     except Exception as exc:  # noqa: BLE001 - an infrastructure failure, never success
         result.verified, result.uncomparable = False, ""
-        result.reason = f"INFRA_ERROR: {type(exc).__name__}: {exc}"
+        result.reason = f"INFRA_ERROR: {type(exc).__name__}: {shown(exc)}"
     # Anything else (KeyboardInterrupt, SystemExit) leaves it DISPATCHED: recovery fences it (#244)
     result.status = "COMPLETED" if result.verified else "FAILED"
     steps.reach("FINISHED", result.status, "" if result.verified else result.uncomparable)
@@ -328,7 +328,7 @@ def _attempt(task, specs, digest, notary, worker, result, steps, ctx: VerifyCont
         tests_unused(task, claim=False)  # single use, shared with verify runs
         check_roots_on_base(task.repo, task.base_commit, task.test_roots)
     except TestCommitRejected as exc:
-        result.reason = str(exc)
+        result.reason = shown(exc)
         return
     try:  # before the worker: no worker quota spent, no test exposed (#234)
         precheck(ctx.account, ctx.python)
@@ -344,7 +344,7 @@ def _attempt(task, specs, digest, notary, worker, result, steps, ctx: VerifyCont
         try:
             provenance = worker.run(attempt.path, task)  # None from a worker with no record
         except Exception as exc:  # noqa: BLE001 - any worker failure is a failed attempt
-            result.reason = f"WORKER_FAILED: {type(exc).__name__}: {exc}"
+            result.reason = f"WORKER_FAILED: {type(exc).__name__}: {shown(exc)}"
             if isinstance(exc, WorkerMayLive):  # its processes may outlive the run (#244)
                 result.fence = exc.account
             return
@@ -358,7 +358,7 @@ def _attempt(task, specs, digest, notary, worker, result, steps, ctx: VerifyCont
                 provenance=provenance,
             )
         except CandidateRejected as exc:
-            result.reason = str(exc)
+            result.reason = shown(exc)
             return
         judged, test_files, plan = candidate.candidate_commit, (), None
         if task.test_commit:  # only now: the worker is done (deferred_tests.py, p2p.py)
@@ -380,7 +380,7 @@ def _attempt(task, specs, digest, notary, worker, result, steps, ctx: VerifyCont
                     )
                     plan = p2p_for(task, specs, test_files, result, ctx)
             except TestCommitRejected as exc:
-                result.reason = str(exc)
+                result.reason = shown(exc)
                 return
             except BaseUncomparable as exc:  # FAILED either way; only the reason says which
                 isolated = worker.isolated  # another uid (agy_run_as_user)
@@ -397,4 +397,4 @@ def _remove_clone(run_root, result) -> None:
     try:
         remove_attempt_clone(run_root, result.attempt_id)
     except WorkspaceError as exc:  # keep the attempt's own outcome; note the leftover
-        result.logs.append(f"cleanup failed: {exc}")
+        result.logs.append(f"cleanup failed: {shown(exc)}")

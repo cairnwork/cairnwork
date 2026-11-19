@@ -55,6 +55,7 @@ from pathlib import Path
 from cairnwork.deferred_aliases import class_aliases
 from cairnwork.deferred_overlay import TestCommitRejected
 from cairnwork.gitcmd import GitCommandError, run_git_bytes
+from cairnwork.textclean import shown
 
 _DEFS = (ast.FunctionDef, ast.AsyncFunctionDef)
 _SCOPES = (*_DEFS, ast.ClassDef)  # a ``global`` in either binds at module level
@@ -378,7 +379,7 @@ def local_names(repo: Path, commit: str) -> frozenset[str]:
     try:
         raw = run_git_bytes(repo, "ls-tree", "-r", "-z", "--name-only", commit, "--")
     except GitCommandError as exc:
-        raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
+        raise TestCommitRejected("TEST_COMMIT_UNREADABLE", shown(exc)) from exc
     names: set[str] = set()
     for path in raw.decode("utf-8", "surrogateescape").split("\0"):
         *dirs, name = path.split("/")
