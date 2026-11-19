@@ -6,6 +6,7 @@ import sys
 import pytest
 
 from cairnwork.child_run import run_child
+from cairnwork.gitcmd import GitCommandError
 from cairnwork.tamper_scan import Finding
 from cairnwork.treecompare import tree_differences
 
@@ -33,6 +34,13 @@ def test_non_utf8_path_in_commit_is_a_difference_not_an_exception(tmp_path):
     assert tree_differences(repo, _git(repo, "rev-parse", "HEAD"), clone) != []
 
 
+def test_missing_commit_still_raises(tmp_path):
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    with pytest.raises(GitCommandError):
+        tree_differences(repo, "0" * 40, tmp_path)
+
+
 @pytest.mark.parametrize(
     ("path", "shown_path"),
     [
@@ -40,6 +48,13 @@ def test_non_utf8_path_in_commit_is_a_difference_not_an_exception(tmp_path):
         ("a\nb.py", "a\\x0ab.py"),
         ("a‮b.py", "a\\u202eb.py"),
         ("::error::x\x1b[2K.py", "::error::x\\x1b[2K.py"),
+        ("a\rb", "a\\x0db"),
+        ("a\u2028b", "a\\u2028b"),
+        ("a\x00b", "a\\x00b"),
+        ("it's", "it\\'s"),
+        ("a\\b", "a\\\\b"),
+        ("bad\udcff", "bad\\udcff"),
+        ("x" * 5000, "x" * 5000),
     ],
 )
 def test_finding_text_escapes_hidden_characters(path, shown_path):
