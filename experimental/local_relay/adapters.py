@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,7 +13,6 @@ from experimental.local_relay.config import DEFAULT_LOCAL_ENDPOINT
 from experimental.local_relay.relay import Acceptance, Attempt
 from experimental.local_worker.endpoint import EndpointUnreachable
 from experimental.pause.client import CommandTransport, HaikuGate
-from experimental.pause.core_judge import CoreJudge
 from experimental.pause.flow import RunResult
 from experimental.pause.interfaces import GateReply, GateRequest
 
@@ -56,17 +56,57 @@ class LocalWorkerAdapter:
 class CoreAcceptance:
     """Turn the PAUSE CoreJudge verdict into the relay acceptance record."""
 
-    def __init__(self, judge: CoreJudge) -> None:
+    def __init__(
+        self, judge: Callable[[RunResult], Any], allowed_files: Sequence[str] | None = None
+    ) -> None:
         self.judge = judge
+        self.allowed_files = None if allowed_files is None else frozenset(allowed_files)
 
     def __call__(self, candidate: Any, /) -> Acceptance:
         if not isinstance(candidate, RunResult):
             raise TypeError("Core acceptance requires a local-worker RunResult")
+        if self.allowed_files is not None:
+            changed = _changed_paths(candidate)
+            unexpected = sorted(changed - self.allowed_files)
+            if unexpected:
+                return Acceptance(
+                    False,
+                    json.dumps(
+                        {"status": "REFUSED", "unexpected_paths": unexpected}, sort_keys=True
+                    ),
+                )
         verdict = self.judge(candidate)
         raw = json.dumps(
             {"status": verdict.status, "tree_sha256": verdict.tree_sha256}, sort_keys=True
         )
         return Acceptance(verdict.status == "VERIFIED", raw)
+
+
+def _changed_paths(result: RunResult) -> set[str]:
+    if result.checkout is None or not isinstance(result.base_sha, str):
+        raise ValueError("Core acceptance requires checkout and base commit")
+    commands = (
+        [
+            "git",
+            "-C",
+            str(result.checkout),
+            "diff",
+            "--name-only",
+            "-z",
+            "--no-renames",
+            result.base_sha,
+        ],
+        ["git", "-C", str(result.checkout), "ls-files", "--others", "-z"],
+    )
+    changed: set[str] = set()
+    for command in commands:
+        output = subprocess.run(command, capture_output=True, check=False)
+        if output.returncode:
+            raise RuntimeError("cannot compare candidate paths with its base")
+        changed.update(
+            path.decode("utf-8", "surrogateescape") for path in output.stdout.split(b"\0") if path
+        )
+    return changed
 
 
 class _UsageTransport:

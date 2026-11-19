@@ -87,10 +87,15 @@ def test_w1_flag_off_refuses_before_runtime_or_endpoint(monkeypatch, capsys, tmp
     assert calls == []
 
 
-def test_w1_flag_on_without_injected_runtime_is_not_success(monkeypatch):
+def test_w1_flag_on_uses_default_runtime_assembly(monkeypatch, tmp_path):
     monkeypatch.setenv("CAIRNWORK_LOCAL_RELAY", "1")
-    args = ["--state", ".", "--repo", "o/r", "--clone", ".", "run-once"]
-    assert main(args) == 3
+    calls = []
+    monkeypatch.setattr(
+        "experimental.local_relay.cli.build_run_once",
+        lambda _args: lambda *_: calls.append(1) or {"ok": True},
+    )
+    args = ["--state", str(tmp_path), "--repo", "o/r", "--clone", str(tmp_path), "run-once"]
+    assert main(args) == 0 and calls == [1]
 
 
 def test_cli_run_once_forwards_issue_runner_arguments_and_state_path(monkeypatch, tmp_path):

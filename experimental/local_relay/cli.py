@@ -1,4 +1,4 @@
-"""Opt-in local relay command. Runtime construction is injected at the process boundary."""
+"""Opt-in local relay command."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from typing import Any
 
 from experimental.local_relay.config import DEFAULT_LEDGER_PATH, FLAG
 from experimental.local_relay.ledger import JsonlLedger
+from experimental.local_relay.runtime import build_run_once, dry_route
 
 
 def parser() -> argparse.ArgumentParser:
@@ -21,6 +22,9 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--clone", required=True)
     ap.add_argument("--gh", default=str(Path.home() / ".config/nexus-agent-bot/bin/nexus-agent-gh"))
     ap.add_argument("--ledger", default=DEFAULT_LEDGER_PATH)
+    ap.add_argument("--fixture", type=Path, help="run one task described by fixture repo JSON")
+    ap.add_argument("--canary-report", type=Path)
+    ap.add_argument("--dry-route", action="store_true")
     ap.add_argument("command", choices=("run-once",))
     return ap
 
@@ -31,15 +35,13 @@ def main(
     run_once: Callable[[argparse.Namespace, JsonlLedger], dict[str, Any]] | None = None,
 ) -> int:
     args = parser().parse_args(argv)
+    if args.dry_route:
+        return _emit(dry_route(args), 0)
     if os.environ.get(FLAG) != "1":
         return _emit({"error": "RELAY_DISABLED", "detail": f"set {FLAG}=1 to enable"}, 2)
-    if run_once is None:
-        return _emit(
-            {"error": "RUNTIME_NOT_CONFIGURED", "detail": "relay dependencies must be injected"},
-            3,
-        )
     try:
-        result = run_once(args, JsonlLedger(Path(args.ledger).expanduser()))
+        ledger = JsonlLedger(Path(args.ledger).expanduser())
+        result = (run_once or build_run_once(args))(args, ledger)
     except Exception as exc:  # noqa: BLE001 - an unconfigured or failed runtime is never success
         return _emit({"error": "RUN_FAILED", "detail": f"{type(exc).__name__}: {exc}"}, 1)
     return _emit(result, 0)
