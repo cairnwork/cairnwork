@@ -277,3 +277,4 @@ def test_verify_site_does_not_claim_a_byte_comparison():
     assert "byte for byte" not in doc
     assert "RECORD" in doc
     assert "wheel hashes" in doc
+    assert "does not compare file bytes" in doc
