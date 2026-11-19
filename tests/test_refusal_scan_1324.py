@@ -3,6 +3,13 @@
 The scan checks only direct ``str(exc)``, f-string, ``%``, ``format``, ``repr`` and
 ``.args`` uses of exception variables. Transitive aliases and logger sinks are KNOWN LIMITATIONS;
 this guard deliberately does not chase them.
+
+Known exemptions (cairnwork#1516): the whole ``raise`` subtree of a code-prefixed typed refusal
+(``TaskRejected("CODE", ...)``, ``TestCommitRejected`` and similar) is exempt, because those
+messages stay byte-identical to main; a user-controlled path inside such a message can still
+carry hidden characters until it is escaped once at the raise site. The allowlist is keyed to
+(module, enclosing function, node kind), not to a line or its content, so any matching bare call
+inside an allowed function is also allowed.
 """
 
 import ast
