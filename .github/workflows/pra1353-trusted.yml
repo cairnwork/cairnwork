@@ -21,6 +21,7 @@ permissions: {}
 jobs:
   analyze:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
@@ -49,40 +50,55 @@ jobs:
           version: "0.9.2"
           python-version: "3.13"
           enable-cache: false
-      - name: Trusted venv from main's lock
+      - name: Trusted venv and gate user (no PR code runs here)
+        timeout-minutes: 10
         env:
           UV_NO_CONFIG: "1"
         run: |
           set -euo pipefail
-          # Only main's lock is trusted; the empty private cache keeps earlier runs out.
+          # Only main's lock is trusted; no uv cache is read or written.
           [ "$GITHUB_REF" = "refs/heads/main" ] || { echo "the gate trusts only main's lock"; exit 1; }
-          venvdir="$RUNNER_TEMP/pra1353-trusted"
-          mkdir -p "$venvdir"
-          cp trusted/uv.lock trusted/pyproject.toml "$venvdir/"
-          cd "$venvdir"
-          UV_PROJECT_ENVIRONMENT="$venvdir/.venv" uv sync --no-cache --locked --no-install-project
-          "$venvdir/.venv/bin/python" -I -S -B "$GITHUB_WORKSPACE/trusted/tests/pra1353_base_record.py" \
-            record "$RUNNER_TEMP/base-python.json"
-      - name: Sealed #1353 witness gate on the PR source
-        env:
-          UV_NO_CONFIG: "1"
+          uv_bin="$(command -v uv)"
+          root=/srv/pra1353
+          sudo -n install -d -m 0755 "$root" "$root/lock"
+          sudo -n useradd --system --no-create-home --home-dir "$root/home" \
+            --shell /usr/sbin/nologin pra1353gate
+          # The gate account must not be able to use sudo.
+          if sudo -n -u pra1353gate sudo -n true 2>/dev/null; then echo "gate user has sudo"; exit 1; fi
+          sudo -n install -d -m 0700 -o pra1353gate "$root/home" "$root/tmp"
+          sudo -n cp trusted/uv.lock trusted/pyproject.toml "$root/lock/"
+          sudo -n cp -a trusted "$root/trusted"
+          sudo -n cp -a head "$root/head"
+          sudo -n chown -R pra1353gate "$root/trusted" "$root/head"
+          # The venv, its Python and the lock are root-owned and read-only for the gate account.
+          cd "$root/lock"
+          sudo -n env UV_NO_CONFIG=1 UV_PYTHON_INSTALL_DIR="$root/python" \
+            UV_PROJECT_ENVIRONMENT="$root/venv" \
+            "$uv_bin" sync --python 3.13 --managed-python --no-cache --locked --no-install-project
+          sudo -n "$root/venv/bin/python" -I -S -B "$root/trusted/tests/pra1353_base_record.py" \
+            record "$root/base-python.json"
+      - name: Sealed #1353 witness gate on the PR source (separate account)
+        timeout-minutes: 15
         run: |
           set -uo pipefail
           # The gate runs PR-controlled code: stop workflow commands (::, ##[) in its output.
           token="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
           echo "::stop-commands::$token"
-          py="$RUNNER_TEMP/pra1353-trusted/.venv/bin/python"
+          root=/srv/pra1353
+          py="$root/venv/bin/python"
+          cd "$root/trusted"
+          # Clean env: no runner token, cache or file-command variables reach the gate.
+          run_gate() {
+            sudo -n -u pra1353gate env -i PATH=/usr/bin:/bin HOME="$root/home" TMPDIR="$root/tmp" \
+              LANG=C.UTF-8 PRA1353_BASE_LOCK="$root/lock/uv.lock" "$@"
+          }
           rc=0
-          cd trusted
-          "$py" -I -S -B tests/pra1353_base_record.py verify "$RUNNER_TEMP/base-python.json" || rc=$?
+          run_gate "$py" -I -S -B tests/pra1353_base_record.py verify "$root/base-python.json" || rc=$?
           if [ "$rc" -eq 0 ]; then
-            PRA1353_BASE_LOCK="$RUNNER_TEMP/pra1353-trusted/uv.lock" \
-              setsid "$py" -I -S -B tests/pra1353_gate.py --source "$GITHUB_WORKSPACE/head" &
-            pid=$!
-            wait "$pid" || rc=$?
-            # Nothing the gate started may outlive it before the result is written.
-            kill -KILL -- "-$pid" 2>/dev/null || true
+            run_gate timeout -k 10 840 "$py" -I -S -B tests/pra1353_gate.py --source "$root/head" || rc=$?
           fi
+          # Nothing the gate account started may outlive it before the result is written.
+          sudo -n pkill -KILL -u pra1353gate || true
           mkdir -p "$RUNNER_TEMP/gate_rc"
           printf '%s' "$rc" > "$RUNNER_TEMP/gate_rc/gate_rc"
           echo "::$token::"
@@ -99,6 +115,7 @@ jobs:
     needs: analyze
     if: always() && needs.analyze.result != 'cancelled'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
       statuses: write

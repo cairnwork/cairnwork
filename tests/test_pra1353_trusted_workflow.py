@@ -94,7 +94,7 @@ def test_checkouts_and_uv() -> None:
     assert re.search(r"@[0-9a-f]{40}\b", setup[0]["uses"])
     for needle in ("--no-cache", "--locked", "--no-install-project", "stop-commands"):
         assert needle in analyze
-    assert analyze.count('UV_NO_CONFIG: "1"') == 2
+    assert analyze.count('UV_NO_CONFIG: "1"') == 1 and "UV_NO_CONFIG=1" in analyze
     assert "refs/heads/main" in analyze
     for job in jobs.values():
         for step in _steps(job):
@@ -109,10 +109,12 @@ def test_single_execution_point_and_no_expression_injection() -> None:
     touching = []
     for step in _steps(analyze):
         for line in str(step.get("run", "")).splitlines():
-            if re.search(r"(?<![\w.$])head(?![\w.])|GITHUB_WORKSPACE/head", line):
+            if line.strip().startswith(("sudo -n cp", "sudo -n chown")):
+                continue  # copying and ownership of the data tree, nothing is executed
+            if re.search(r"(?<![\w.$])head(?![\w.])|/head(?![\w.])", line):
                 touching.append(line.strip())
     assert len(touching) == 1
-    assert touching[0].endswith('--source "$GITHUB_WORKSPACE/head" &')
+    assert touching[0].endswith('--source "$root/head" || rc=$?')
     assert violations(text) == []
 
 
