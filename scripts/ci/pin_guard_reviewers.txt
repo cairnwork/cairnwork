@@ -1,4 +1,5 @@
-# Logins whose review records can auto-approve a guarded change (see pin_guard.py). One per line;
-# blank lines and lines beginning with # are ignored. A login that also authors the PR never
-# counts. Empty on purpose: today every record and every PR is posted by the same agent bot, so
-# auto-approval stays off until the owner adds a reviewer identity the authoring agents cannot use.
+# '<login> <family>' per line, family one of claude, codex, gemini; each account once, so the
+# three families need three different accounts. Blank lines and lines beginning with # are
+# ignored; any other shape fails the guard closed. A login that also authors the PR never counts.
+# Empty on purpose: today every record and every PR is posted by the same agent bot, so
+# auto-approval stays off until the owner adds reviewer identities the authoring agents cannot use.

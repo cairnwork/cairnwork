@@ -1,8 +1,9 @@
 """Report changes to the trusted #1353 pin table and pinned helpers, and refuse tracked bytecode.
 
 A guarded change is approved by the owner's PIN-APPROVE, or automatically when Claude, Codex and
-Gemini each ACCEPT the exact head in a record posted by an allowlisted reviewer login that is not
-the PR author, and the PR touches no self-guard path (the guard, its lists, workflows, owners).
+Gemini each ACCEPT the exact head in a record posted by the reviewer login bound to that family
+(not the PR author), no comment carries a negative verdict on that head, and the PR touches no
+self-guard path (the guard, its lists, workflows, owners).
 """
 
 from __future__ import annotations
@@ -36,6 +37,10 @@ FAMILIES = {
     "codex": re.compile(r"\b(?:codex|gpt)\b", re.IGNORECASE),
     "gemini": re.compile(r"\bgemini\b", re.IGNORECASE),
 }
+NEGATIVE = re.compile(
+    r"\b(?:REJECT(?:ED)?|REQUEST_?CHANGES|REPAIR_?REQUIRED)\b|(?i:verdict)\s*:\s*(?i:reject)"
+)
+HEX = re.compile(r"(?<![0-9a-fA-F])[0-9a-fA-F]{7,40}(?![0-9a-fA-F])")
 RECORD = re.compile(
     r"^\*\*(?P<label>[^*\n]{1,100})\*\* \((?P<who>[^()\n]{1,200})\): "
     r"\*\*(?P<verdict>ACCEPT|REJECT) at (?P<sha>[0-9a-f]{40})\*\*\.?$"
@@ -200,38 +205,42 @@ def _identity(login: str) -> str:
     return login.strip().lower().removeprefix("app/").removesuffix("[bot]")
 
 
+def _negative(line: str, head: str) -> bool:
+    """A negative verdict word on a line naming this head (any case, 7+ hex) or no sha at all."""
+    if not NEGATIVE.search(line):
+        return False
+    shas = [sha.lower() for sha in HEX.findall(line)]
+    return not shas or any(head.startswith(sha) for sha in shas)
+
+
 def _three_family_accept(
-    comments: Path | None, reviewers: set[str], author: str | None, head_sha: str
+    comments: Path | None, reviewers: dict[str, str], author: str | None, head_sha: str
 ) -> bool:
-    """Each family ACCEPTs head_sha in an unedited record by an allowlisted login that is not
-    the PR author, and no record by anyone (edited or not) REJECTs head_sha. A record line
-    naming more than one family counts for none."""
+    """Each family ACCEPTs head_sha in an unedited record by the login bound to that family,
+    which is not the PR author. Any negative verdict on head_sha, or with no sha, in any
+    comment by anyone (edited or not) blocks: an unclear REJECT falls back to the owner."""
     if not author or not reviewers:
         return False
     head = head_sha.lower()
     accepted: set[str] = set()
     for login, body, edited in _read_comments(comments):
-        trusted = (
-            not edited
-            and isinstance(login, str)
-            and login.lower() in reviewers
-            and _identity(login) != _identity(author)
-        )
-        fenced = counted = False
+        if any(_negative(line, head) for line in body.splitlines()):
+            return False
+        family = reviewers.get(login.lower()) if isinstance(login, str) else None
+        if edited or family is None or _identity(str(login)) == _identity(author):
+            continue
+        fenced = False
         for line in body.splitlines():
             if line.lstrip().startswith(("```", "~~~")):
                 fenced = not fenced
             match = RECORD.fullmatch(line)
-            if not match or match.group("sha") != head:
+            if not match or fenced or match.group("sha") != head:
                 continue
-            if match.group("verdict") == "REJECT":
-                return False
+            # One verdict per comment, outside code fences, naming the login's own family.
             text = f"{match.group('label')} {match.group('who')}"
-            named = {family for family, pattern in FAMILIES.items() if pattern.search(text)}
-            # One verdict per comment, outside code fences: a quoted record is not a record.
-            if len(named) == 1 and trusted and not fenced and not counted:
-                accepted |= named
-            counted = True
+            if match.group("verdict") == "ACCEPT" and FAMILIES[family].search(text):
+                accepted.add(family)
+            break
     return accepted == set(FAMILIES)
 
 
@@ -254,6 +263,19 @@ def _logins(path: Path) -> set[str]:
     }
 
 
+def _reviewers(path: Path) -> dict[str, str]:
+    """'<login> <family>' per line; one family per account, each account once, else fail closed."""
+    bound: dict[str, str] = {}
+    seen: set[str] = set()
+    for entry in _logins(path):
+        parts = entry.split()
+        if len(parts) != 2 or parts[1] not in FAMILIES or _identity(parts[0]) in seen:
+            raise ValueError("invalid reviewer allowlist")
+        seen.add(_identity(parts[0]))
+        bound[parts[0]] = parts[1]
+    return bound
+
+
 def evaluate(args: argparse.Namespace) -> tuple[int, str, list[str]]:
     trusted = Path(args.trusted)
     if not trusted.is_dir():
@@ -274,7 +296,7 @@ def evaluate(args: argparse.Namespace) -> tuple[int, str, list[str]]:
     outcome = _approval(comments, approvers, args.head_sha)
     if outcome == "PIN_CHANGE_APPROVED":
         return 0, outcome, hits
-    reviewers = _logins(trusted / "scripts/ci/pin_guard_reviewers.txt")
+    reviewers = _reviewers(trusted / "scripts/ci/pin_guard_reviewers.txt")
     if not _self_guard(changed) and _three_family_accept(
         comments, reviewers, args.pr_author, args.head_sha
     ):

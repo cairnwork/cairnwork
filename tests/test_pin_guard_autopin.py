@@ -12,7 +12,8 @@ import pytest
 SCRIPT = Path(__file__).parents[1] / "scripts/ci/pin_guard.py"
 GUARDED = "tests/pra1353_seal.py"
 AUTHOR = "app/agent-author"
-REVIEWER = "reviewer-bot[bot]"
+REVIEWERS = {"claude": "claude-rv[bot]", "codex": "codex-rv[bot]", "gemini": "gemini-rv[bot]"}
+ALLOWLIST = "# list\n" + "".join(f"{login} {fam}\n" for fam, login in REVIEWERS.items())
 LINES = {
     "claude": "**Independent Claude review** (Claude Opus 5.5, separate agent): **{v} at {sha}**.",
     "codex": "**Cross-model review** (Codex gpt-6-luna high, separate agent): **{v} at {sha}**.",
@@ -46,13 +47,13 @@ def setup(tmp_path: Path, changed: tuple[str, ...] = (GUARDED,)) -> tuple[Path, 
     trusted = tmp_path / "trusted"
     (trusted / "scripts/ci").mkdir(parents=True)
     (trusted / "scripts/ci/pin_guard_approvers.txt").write_text("owner\n")
-    (trusted / "scripts/ci/pin_guard_reviewers.txt").write_text(f"# list\n{REVIEWER}\n")
+    (trusted / "scripts/ci/pin_guard_reviewers.txt").write_text(ALLOWLIST)
     return repo, trusted, base, head
 
 
-def record(family: str, sha: str, login: str = REVIEWER, verdict: str = "ACCEPT") -> dict:
+def record(family: str, sha: str, login: str = "", verdict: str = "ACCEPT") -> dict:
     return {
-        "user": {"login": login},
+        "user": {"login": login or REVIEWERS[family]},
         "body": f"## Review record\n{LINES[family].format(v=verdict, sha=sha)}\nfindings\n",
         "created_at": "2026-01-01T00:00:00Z",
         "updated_at": "2026-01-01T00:00:00Z",
@@ -73,7 +74,7 @@ def run(
     return result.returncode, result.stdout.strip()
 
 
-def all_three(sha: str, login: str = REVIEWER) -> list[dict]:
+def all_three(sha: str, login: str = "") -> list[dict]:
     return [record(family, sha, login) for family in LINES]
 
 
@@ -99,7 +100,7 @@ def test_records_at_another_head_do_not_count(tmp_path: Path) -> None:
     assert run(tmp_path, trusted, repo, base, head, all_three(head.upper()))[0] == 1
 
 
-@pytest.mark.parametrize("author", ["app/reviewer-bot", "reviewer-bot[bot]", "Reviewer-Bot[bot]"])
+@pytest.mark.parametrize("author", ["app/gemini-rv", "gemini-rv[bot]", "Codex-RV[bot]"])
 def test_records_posted_by_the_pr_author_do_not_count(tmp_path: Path, author: str) -> None:
     repo, trusted, base, head = setup(tmp_path)
     assert run(tmp_path, trusted, repo, base, head, all_three(head), author=author)[0] == 1
@@ -147,9 +148,8 @@ def test_reject_edit_or_mixed_family_line_blocks(tmp_path: Path) -> None:
     edited = all_three(head)
     edited[2]["updated_at"] = "2026-01-02T00:00:00Z"
     assert run(tmp_path, trusted, repo, base, head, edited)[0] == 1
-    mixed = all_three(head)[:2] + [record("gemini", head)]
-    mixed[2]["body"] = mixed[2]["body"].replace("(Gemini, separate", "(Gemini; Codex, separate")
-    assert run(tmp_path, trusted, repo, base, head, mixed)[0] == 1
+    wrong = all_three(head)[:2] + [record("codex", head, REVIEWERS["gemini"])]
+    assert run(tmp_path, trusted, repo, base, head, wrong)[0] == 1  # login bound to gemini
     loose = all_three(head)
     loose[0]["body"] = loose[0]["body"].replace("**.", "** after fixes.")
     assert run(tmp_path, trusted, repo, base, head, loose)[0] == 1
@@ -168,3 +168,53 @@ def test_one_comment_counts_one_family_and_fences_do_not_count(tmp_path: Path) -
     fenced = all_three(head)
     fenced[1]["body"] = "```\n" + fenced[1]["body"] + "```\n"
     assert run(tmp_path, trusted, repo, base, head, fenced)[0] == 1
+
+
+def test_one_login_cannot_stand_for_three_families(tmp_path: Path) -> None:
+    repo, trusted, base, head = setup(tmp_path)
+    for login in REVIEWERS.values():
+        assert run(tmp_path, trusted, repo, base, head, all_three(head, login))[0] == 1
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "**Independent Claude review** (Claude Opus 5.5, separate agent): **REJECT at {h}** "
+        "\u2014 main reason: test gap.",
+        "Verdict: REJECT at {h}",
+        "verdict: reject",
+        "**Independent Claude review** (Claude, separate agent): **REJECT at {H}**.",
+        "Codex REJECT at {s}: two tests missing",
+        "REQUEST_CHANGES",
+    ],
+)
+def test_any_negative_verdict_on_head_blocks(tmp_path: Path, line: str) -> None:
+    repo, trusted, base, head = setup(tmp_path)
+    body = line.format(h=head, H=head.upper(), s=head[:8])
+    reject = dict(record("claude", head, "someone"), body=f"review\n{body}\n")
+    assert run(tmp_path, trusted, repo, base, head, [*all_three(head), reject])[0] == 1
+
+
+def test_reject_on_an_older_head_and_gemini_substitute_header_still_pass(tmp_path: Path) -> None:
+    repo, trusted, base, head = setup(tmp_path)
+    old = dict(record("codex", base), body=f"**Cross-model review** (Codex): **REJECT at {base}**.")
+    gemini = dict(
+        record("gemini", head),
+        body="**Cross-model review (Gemini via agy-lane; Codex "
+        f"substitute)** (Gemini, separate agent): **ACCEPT at {head}**.",
+    )
+    comments = [old, *all_three(head)[:2], gemini]
+    assert run(tmp_path, trusted, repo, base, head, comments)[0] == 4
+
+
+@pytest.mark.parametrize(
+    "allowlist",
+    ["claude-rv[bot]\n", "a claude\nb opus\n", "a claude\nA codex\n", "a claude\napp/a codex\n"],
+)
+def test_malformed_reviewer_allowlist_fails_closed(tmp_path: Path, allowlist: str) -> None:
+    repo, trusted, base, head = setup(tmp_path)
+    (trusted / "scripts/ci/pin_guard_reviewers.txt").write_text(allowlist)
+    assert run(tmp_path, trusted, repo, base, head, all_three(head)) == (
+        2,
+        "PIN_GUARD PIN_GUARD_INCOMPLETE",
+    )
