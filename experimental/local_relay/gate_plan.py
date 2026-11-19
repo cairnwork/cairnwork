@@ -211,6 +211,7 @@ def _check_tracked(root_fd: int, device: int, rel: str) -> tuple | None:
         info.st_mode,
         info.st_size,
         info.st_mtime_ns,
+        info.st_ctime_ns,  # rename/link operations bump ctime even when the content is unchanged
     )
     if stat.S_ISLNK(info.st_mode):
         return signature  # git diff shows the link target text, never the pointed-to content
