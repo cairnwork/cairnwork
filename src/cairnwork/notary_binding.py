@@ -72,6 +72,12 @@ def _row_binding(notary: Any, task_id: str, attempt_id: str) -> RowBinding | Non
                 conn.close()
             except sqlite3.Error as exc:
                 raise RowBindingUnavailable("cannot close notary read snapshot") from exc
+            except MemoryError:  # still release the descriptor, then let the outer level map it
+                try:
+                    conn.close()
+                except (MemoryError, sqlite3.Error):
+                    pass
+                raise
     if row is None:
         return None
     base, candidate, request_json, response_json, expected, binding_json = row

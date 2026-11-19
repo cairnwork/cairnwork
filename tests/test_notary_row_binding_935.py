@@ -346,3 +346,27 @@ def test_memory_error_anywhere_in_the_read_is_unreadable(tmp_path: Path, repo: P
     got = notary.row_binding("task-1", "a1")
     assert got is not None and got.identity_problem == nb.IDENTITY_UNREADABLE
     assert got.columns_match is False and got.expected_identity_sha256 is None
+
+
+def test_memory_error_in_execute_and_close_still_releases_the_connection(
+    tmp_path: Path, repo: Path, monkeypatch
+) -> None:
+    import cairnwork.notary_binding as nb
+
+    notary, _ = _row(tmp_path, repo, fake_core_verify)
+    closes: list[int] = []
+
+    class Conn:
+        def execute(self, *_a, **_k):
+            raise MemoryError
+
+        def close(self) -> None:
+            closes.append(1)
+            if len(closes) == 1:
+                raise MemoryError  # the first close fails; a second try must release it
+
+    monkeypatch.setattr(nb.sqlite3, "connect", lambda *_a, **_k: Conn())
+    got = notary.row_binding("task-1", "a1")
+    assert got is not None and got.identity_problem == nb.IDENTITY_UNREADABLE
+    assert got.columns_match is False
+    assert len(closes) == 2, "close must be retried once after a MemoryError"
