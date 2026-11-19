@@ -71,7 +71,7 @@ ALLOWED = {
     " nodeid has no ::, and _without_params reassembles path::rest unchanged",
     "src/cairnwork/collect_reader.py": "split of the name part after file_part",
 }
-SPLIT = re.compile(r'(split|partition)\("::"')
+SPLIT = re.compile(r"""(split|partition)\(["']::["']""")
 
 
 def test_no_new_first_double_colon_split_in_src():

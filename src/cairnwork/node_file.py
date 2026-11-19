@@ -1,5 +1,10 @@
 """Where a pytest node id splits into file and name (#1272); imports nothing of Cairnwork, so any
-module (``verdict_record`` included) can use it."""
+module (``verdict_record`` included) can use it.
+
+Scope: ids pytest itself produced, and verifier targets that already passed the ``test_target``
+grammar. The boundary is not pytest's own "first ``::``"; it differs only when the file path itself
+holds ``::``, where pytest's id is ``a::b/t.py::test`` and the first-``::`` reading is the wrong one
+(#1499). An arbitrary string outside those two sources is not promised the same split."""
 
 from __future__ import annotations
 
