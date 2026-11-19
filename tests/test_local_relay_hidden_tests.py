@@ -39,8 +39,8 @@ def _repo(tmp_path: Path) -> tuple[Path, str]:
 
 def _hidden(tmp_path: Path) -> Path:
     hidden = tmp_path / "private"
-    (hidden / "tests").mkdir(parents=True)
-    (hidden / "tests" / "test_hidden.py").write_text("def test_h():\n    assert False\n")
+    hidden.mkdir(mode=0o700)
+    (hidden / "test_hidden.py").write_text("def test_h():\n    assert False\n")
     return hidden
 
 
@@ -124,10 +124,18 @@ def test_bad_hidden_config_is_refused(tmp_path, extra):
         load_hidden(extra, repo)
 
 
+def test_group_readable_hidden_dir_is_refused(tmp_path):
+    repo, _base = _repo(tmp_path)
+    hidden = _hidden(tmp_path)
+    hidden.chmod(0o750)
+    with pytest.raises(ValueError, match="group or others"):
+        load_hidden({"hidden_tests_dir": str(hidden)}, repo)
+
+
 def test_symlink_in_hidden_dir_is_refused(tmp_path):
     repo, _base = _repo(tmp_path)
     hidden = _hidden(tmp_path)
-    (hidden / "tests" / "link.py").symlink_to(repo / "src" / "calc.py")
+    (hidden / "link.py").symlink_to(repo / "src" / "calc.py")
     with pytest.raises(ValueError, match="symlink"):
         load_hidden({"hidden_tests_dir": str(hidden)}, repo)
 

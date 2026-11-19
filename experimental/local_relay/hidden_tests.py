@@ -24,6 +24,7 @@ from typing import Any
 from cairnwork.issue_task import _check_path
 from cairnwork.verify_candidate import verify_candidate
 
+TEST_ROOT = "tests"  # hidden files are committed under tests/, as the verifier targets name them
 MAX_FILES = 200
 MAX_FILE_BYTES = 1_000_000
 _GIT = ("git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false")
@@ -54,6 +55,8 @@ def load_hidden(data: dict[str, Any], root: Path) -> HiddenTests | None:
     info = directory.lstat() if directory.exists() or directory.is_symlink() else None
     if info is None or not stat.S_ISDIR(info.st_mode):
         raise ValueError("fixture hidden_tests_dir must be a real directory")
+    if info.st_mode & 0o077:
+        raise ValueError("fixture hidden_tests_dir must not be accessible to group or others")
     real, root_real = directory.resolve(), root.resolve()
     if real == root_real or root_real in real.parents or real in root_real.parents:
         raise ValueError("fixture hidden_tests_dir must be outside the fixture repository")
@@ -69,10 +72,10 @@ def _collect(directory: Path) -> tuple[str, ...]:
         for name in names:
             path = Path(base) / name
             rel = path.relative_to(directory).as_posix()
-            _check_path(rel)
+            _check_path(f"{TEST_ROOT}/{rel}")
             if path.stat().st_size > MAX_FILE_BYTES or not stat.S_ISREG(path.lstat().st_mode):
                 raise ValueError(f"hidden test {rel} is not a regular file under the size cap")
-            found.append(rel)
+            found.append(f"{TEST_ROOT}/{rel}")
     if not 0 < len(found) <= MAX_FILES:
         raise ValueError("hidden_tests_dir must contain 1 to 200 files")
     return tuple(sorted(found))
@@ -88,7 +91,7 @@ def visible_targets(targets: tuple[str, ...], hidden: HiddenTests | None) -> tup
 def require_hidden_targets(targets: tuple[str, ...], hidden: HiddenTests) -> None:
     for target in targets:
         path = target.split("::", 1)[0]
-        if path in hidden.files and not (hidden.directory / path).is_file():
+        if path in hidden.files and not (hidden.directory / path.removeprefix("tests/")).is_file():
             raise ValueError(f"hidden test target {path} is missing")
 
 
@@ -109,7 +112,7 @@ def build_bundle(root: Path, base: str, hidden: HiddenTests, out: Path) -> str:
     for rel in hidden.files:
         target = work / rel
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(hidden.directory / rel, target)
+        shutil.copyfile(hidden.directory / rel.removeprefix(f"{TEST_ROOT}/"), target)
     _git(work, "add", "-f", "-A")
     _git(work, *_ID, "commit", "-q", "--no-verify", "-m", f"hidden tests {uuid.uuid4().hex}")
     sha = _git(work, "rev-parse", "HEAD")
