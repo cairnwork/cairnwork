@@ -55,6 +55,10 @@ jobs:
           git cat-file blob "${BASE_SHA}:pyproject.toml" > "$trusted/pyproject.toml"
           cd "$trusted"
           UV_PROJECT_ENVIRONMENT="$trusted/.venv" uv sync --no-cache --locked --no-install-project
+          # #1450: the base Python install this venv stands on, recorded before any PR code runs
+          # (only the recorder itself, which the gate step's check below re-reads against it)
+          "$trusted/.venv/bin/python" -I -S -B "$GITHUB_WORKSPACE/tests/pra1353_base_record.py" \
+            record "$RUNNER_TEMP/base-python.json"
       - name: Sealed #1353 witness gate
         run: |
           set -euo pipefail
@@ -62,7 +66,9 @@ jobs:
           token="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
           echo "::stop-commands::$token"
           rc=0
-          PRA1353_BASE_LOCK="$RUNNER_TEMP/pra1353-trusted/uv.lock" \
+          "$RUNNER_TEMP/pra1353-trusted/.venv/bin/python" -I -S -B tests/pra1353_base_record.py \
+            verify "$RUNNER_TEMP/base-python.json" || rc=$?
+          [ "$rc" -eq 0 ] && PRA1353_BASE_LOCK="$RUNNER_TEMP/pra1353-trusted/uv.lock" \
             "$RUNNER_TEMP/pra1353-trusted/.venv/bin/python" -I -S -B tests/pra1353_gate.py || rc=$?
           echo "::$token::"
           exit "$rc"
@@ -119,6 +125,10 @@ jobs:
           git cat-file blob "${BASE_SHA}:pyproject.toml" > "$trusted/pyproject.toml"
           cd "$trusted"
           UV_PROJECT_ENVIRONMENT="$trusted/.venv" uv sync --no-cache --locked --no-install-project
+          # #1450: the base Python install this venv stands on, recorded before any PR code runs
+          # (only the recorder itself, which the gate step's check below re-reads against it)
+          "$trusted/.venv/bin/python" -I -S -B "$GITHUB_WORKSPACE/tests/pra1353_base_record.py" \
+            record "$RUNNER_TEMP/base-python.json"
       - name: Sealed #1353 witness gate
         run: |
           set -euo pipefail
@@ -126,7 +136,9 @@ jobs:
           token="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
           echo "::stop-commands::$token"
           rc=0
-          PRA1353_BASE_LOCK="$RUNNER_TEMP/pra1353-trusted/uv.lock" \
+          "$RUNNER_TEMP/pra1353-trusted/.venv/bin/python" -I -S -B tests/pra1353_base_record.py \
+            verify "$RUNNER_TEMP/base-python.json" || rc=$?
+          [ "$rc" -eq 0 ] && PRA1353_BASE_LOCK="$RUNNER_TEMP/pra1353-trusted/uv.lock" \
             "$RUNNER_TEMP/pra1353-trusted/.venv/bin/python" -I -S -B tests/pra1353_gate.py || rc=$?
           echo "::$token::"
           exit "$rc"
