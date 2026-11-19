@@ -3,6 +3,9 @@
 setup-uv v6 restores a main-scoped Actions cache by default on hosted runners; a job that then
 runs PR code must not start from a cache a PR could have written. Explicit ``false`` everywhere
 also keeps a later v5 -> v6 bump from switching the cache on.
+
+PyYAML is not a dependency, so steps are split by indentation: a step runs from its ``- `` line
+to the next line at the same or a shallower indent.
 """
 
 from __future__ import annotations
@@ -13,66 +16,103 @@ from pathlib import Path
 import pytest
 
 WORKFLOWS = sorted((Path(__file__).resolve().parent.parent / ".github" / "workflows").glob("*.yml"))
+_DASH = re.compile(r"^(\s*)-\s")
+_USES = re.compile(r"^\s*(?:-\s+)?uses:\s*[\"']?astral-sh/setup-uv@", re.M)
+_OFF = re.compile(r"^\s*(?:-\s+)?enable-cache:\s*[\"']?false[\"']?\s*(?:#.*)?$", re.M)
 
 
-def setup_uv_blocks(text: str) -> list[str]:
-    """Return the text of each setup-uv step up to the next step or dedent."""
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip())
+
+
+def steps(text: str) -> list[str]:
+    """Return the text of every list item (a ``- `` line and its deeper lines)."""
     lines = text.split("\n")
-    blocks: list[str] = []
+    found: list[str] = []
     for i, line in enumerate(lines):
-        if re.match(r"^\s*(?:-\s+)?uses:\s*astral-sh/setup-uv@", line):
-            indent = len(line) - len(line.lstrip())
-            body = [line]
-            for nxt in lines[i + 1 :]:
-                stripped = nxt.strip()
-                if (
-                    stripped
-                    and len(nxt) - len(nxt.lstrip())
-                    <= indent - (2 if line.lstrip().startswith("-") else 0)
-                    and (nxt.lstrip().startswith("- ") or len(nxt) - len(nxt.lstrip()) < indent)
-                ):
-                    break
-                body.append(nxt)
-            blocks.append("\n".join(body))
-    return blocks
+        match = _DASH.match(line)
+        if not match:
+            continue
+        base = len(match.group(1))
+        body = [line]
+        for nxt in lines[i + 1 :]:
+            if nxt.strip() and _indent(nxt) <= base:
+                break
+            body.append(nxt)
+        found.append("\n".join(body))
+    return found
 
 
-def cache_is_off(block: str) -> bool:
-    return re.search(r"^\s*enable-cache:\s*false\s*$", block, re.M) is not None
+def setup_uv_steps(text: str) -> list[str]:
+    """Return the innermost list item that holds each setup-uv ``uses:`` line."""
+    holders = [s for s in steps(text) if _USES.search(s)]
+    return [s for s in holders if not any(o != s and o in s and _USES.search(o) for o in holders)]
+
+
+def cache_is_off(step: str) -> bool:
+    return _OFF.search(step) is not None
 
 
 @pytest.mark.parametrize("path", WORKFLOWS, ids=lambda p: p.name)
 def test_every_setup_uv_step_disables_the_cache(path):
-    for block in setup_uv_blocks(path.read_text()):
-        assert cache_is_off(block), f"{path.name}: setup-uv without enable-cache: false\n{block}"
+    for step in setup_uv_steps(path.read_text()):
+        assert cache_is_off(step), f"{path.name}: setup-uv without enable-cache: false\n{step}"
 
 
 def test_the_workflows_do_use_setup_uv():
-    assert sum(len(setup_uv_blocks(p.read_text())) for p in WORKFLOWS) >= 8
+    assert sum(len(setup_uv_steps(p.read_text())) for p in WORKFLOWS) >= 9
 
 
-def _step(with_lines: str = "") -> str:
-    head = "      - uses: astral-sh/setup-uv@abc # v6\n"
-    return head + with_lines + "      - run: x\n"
+GOOD = "      - uses: astral-sh/setup-uv@abc # v6\n        with:\n          enable-cache: false\n"
+BAD = "      - uses: astral-sh/setup-uv@abc # v6\n        with:\n          python-version: '3.13'\n"
+NEXT = "      - run: x\n"
 
 
-_W = "        with:\n"
+def _all_off(text: str) -> bool:
+    found = setup_uv_steps(text)
+    return bool(found) and all(cache_is_off(s) for s in found)
 
 
 @pytest.mark.parametrize(
     "text",
     [
-        _step(_W + "          python-version: '3.13'\n"),
-        _step(),
-        _step(_W + "          enable-cache: true\n"),
+        BAD + NEXT,
+        "      - uses: astral-sh/setup-uv@abc # v5\n" + NEXT,
+        BAD.replace("python-version: '3.13'", "enable-cache: true") + NEXT,
+        BAD + GOOD,
+        GOOD + BAD,
+        BAD + "      - run: x\n        env:\n          enable-cache: false\n",
+        BAD.replace("uses: astral-sh/setup-uv@abc", 'uses: "astral-sh/setup-uv@abc"') + GOOD,
+        BAD.replace("uses: astral-sh/setup-uv@abc", "uses: 'astral-sh/setup-uv@abc'") + GOOD,
+        "      - name: Install uv\n        uses: astral-sh/setup-uv@abc\n        with:\n"
+        "          python-version: '3.13'\n" + GOOD,
     ],
-    ids=["no-key", "no-with", "cache-on"],
+    ids=[
+        "no-key",
+        "no-with",
+        "cache-on",
+        "bad-then-good",
+        "good-then-bad",
+        "false-in-a-later-step",
+        "double-quoted-uses",
+        "single-quoted-uses",
+        "named-step-then-good",
+    ],
 )
 def test_a_setup_uv_step_that_leaves_the_cache_on_is_found(text):
-    assert not all(cache_is_off(b) for b in setup_uv_blocks(text))
+    assert not _all_off(text)
 
 
-def test_a_step_that_disables_it_passes():
-    assert all(
-        cache_is_off(b) for b in setup_uv_blocks(_step(_W + "          enable-cache: false\n"))
-    )
+@pytest.mark.parametrize(
+    "text",
+    [
+        GOOD + NEXT,
+        GOOD.replace("false", '"false"') + NEXT,
+        "      - name: Install uv\n        uses: astral-sh/setup-uv@abc\n        with:\n"
+        "          enable-cache: false\n" + NEXT,
+        NEXT,
+    ],
+    ids=["plain", "quoted-false", "named-step", "no-setup-uv-at-all"],
+)
+def test_steps_that_disable_it_pass(text):
+    assert _all_off(text) or not setup_uv_steps(text)
