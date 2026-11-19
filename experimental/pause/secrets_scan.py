@@ -55,21 +55,27 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 def scan(text: str, names: tuple[str, ...] = ()) -> list[str]:
     """Return matched categories only; never include the matched text. ``names`` are configured
     account or host names (AC4): a whole-word, case-insensitive hit is ``account_name``."""
-    zero_width = r"[\u00ad\u200b-\u200d\u2060\u2061-\u2064\ufeff]"
-    stripped = re.sub(zero_width, "", text)  # NFKC folds look-alike names and separators (#1362)
-    normalized = re.sub(zero_width, "", unicodedata.normalize("NFKC", stripped))
+    cleaned = _drop_invisible(text)  # the text as written, minus invisible characters (#1204)
+    normalized = _drop_invisible(unicodedata.normalize("NFKC", cleaned))  # look-alikes (#1362)
+    # the earlier view, kept as is (a value made only of an invisible character still counts)
+    legacy = re.sub(_ZERO_WIDTH, "", unicodedata.normalize("NFKC", re.sub(_ZERO_WIDTH, "", text)))
     joined = re.sub(r"(=>|:=|[=:])[ \t]*(?:\r\n|\n)+[ \t]*", r"\1", normalized)
+    cleaned_joined = re.sub(r"(=>|:=|[=:])[ \t]*(?:\r\n|\n)+[ \t]*", r"\1", cleaned)
+    legacy_joined = re.sub(r"(=>|:=|[=:])[ \t]*(?:\r\n|\n)+[ \t]*", r"\1", legacy)
     compact = re.sub(r"\s+", "", normalized)
     wrapped = re.sub(r"\r?\n", "", normalized)
     hits = []
     for name, pattern in _PATTERNS:
-        variants = (text, normalized)
+        variants = tuple(dict.fromkeys((text, cleaned, normalized, legacy)))  # equal ones once
         if name in {"api_key", "bearer_token"}:
             variants += (compact, wrapped)
         if any(pattern.search(variant) for variant in variants):
             hits.append(name)
     for pattern, category in ((_ASSIGNMENT, "assigned_secret"), (_FLAG, "flag_secret")):
-        for candidate in (text, joined):
+        # cleaned: NFKC can shorten a value below the floor, so the value is also judged as written
+        for candidate in dict.fromkeys(
+            (text, joined, cleaned, cleaned_joined, legacy, legacy_joined)
+        ):
             for match in pattern.finditer(candidate):
                 word = _secret_word(match.group("name"))
                 value = match.group("value")
@@ -87,10 +93,30 @@ def scan(text: str, names: tuple[str, ...] = ()) -> list[str]:
             break
     for name in names:
         word = r"(?i)(?<![A-Za-z0-9])" + re.escape(name) + r"(?![A-Za-z0-9])"
-        if name and (re.search(word, text) or re.search(word, normalized)):
+        if name and any(re.search(word, v) for v in (text, cleaned, normalized, legacy)):
             hits.append("account_name")
             break
     return hits
+
+
+_ZERO_WIDTH = r"[\u00ad\u200b-\u200d\u2060\u2061-\u2064\ufeff]"  # the earlier hand list
+_ASCII_CONTROL = re.compile(r"[\x00-\x08\x0e-\x1f\x7f]")
+_FILLERS = frozenset("\u115f\u1160\u3164\uffa0\u2800")  # Default_Ignorable, not in C*/Mn/Me
+
+
+def _drop_invisible(text: str) -> str:
+    """``text`` without invisible characters, chosen by Unicode category as textclean does: C*
+    (control, format, private use, unassigned) except whitespace, the combining marks Mn/Me, and
+    the fillers outside those categories (Hangul fillers, Braille blank)."""
+
+    if text.isascii() and not _ASCII_CONTROL.search(text):
+        return text  # nothing to drop; skips a per-character pass over a large input
+
+    def invisible(ch: str) -> bool:
+        cat = unicodedata.category(ch)
+        return (cat[0] == "C" and not ch.isspace()) or cat in ("Mn", "Me") or ch in _FILLERS
+
+    return "".join(ch for ch in text if not invisible(ch))
 
 
 def _forms(word: str) -> tuple[str, ...]:
