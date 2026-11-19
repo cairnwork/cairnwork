@@ -7,8 +7,15 @@ from pathlib import Path
 import pra1353_consume as consume
 import pra1353_seal as seal
 import pytest
+from shared_broker_report import honest_report
 from test_1039_1353_product_reach import PATCH
-from test_1039_1353_witnesses import PINS, broker_report  # noqa: F401
+from test_1039_1353_witnesses import PINS
+
+
+@pytest.fixture(scope="session")
+def broker_report(tmp_path_factory):
+    return honest_report(tmp_path_factory)
+
 
 # V1: a tracked src/ top-level module with a pinned witness name, removing itself after use.
 SHADOW = b"""
@@ -62,12 +69,12 @@ def _changed(monkeypatch, honest_report, extra_files):
     return sorted(s for s in honest if honest[s] != forged.get(s))
 
 
-def test_v1_src_shadow_of_pinned_witness_cannot_change_rows(monkeypatch, broker_report):  # noqa: F811
+def test_v1_src_shadow_of_pinned_witness_cannot_change_rows(monkeypatch, broker_report):
     changed = _changed(monkeypatch, broker_report, lambda real: {"src/pra1353_derive.py": SHADOW})
     assert not changed, f"V1: src shadow rewrote rows {changed}"
 
 
-def test_v2_child_rewrite_of_lazily_loaded_witness_cannot_change_rows(monkeypatch, broker_report):  # noqa: F811
+def test_v2_child_rewrite_of_lazily_loaded_witness_cannot_change_rows(monkeypatch, broker_report):
     init = "src/cairnwork/__init__.py"
     changed = _changed(monkeypatch, broker_report, lambda real: {init: real[init] + CHILD.encode()})
     assert not changed, f"V2: child file write rewrote rows {changed}"
