@@ -9,7 +9,9 @@ import subprocess
 from pathlib import Path
 
 from cairnwork.gitcmd import GitCommandError, run_git
+from cairnwork.node_ids import file_part
 from cairnwork.pipeline import TaskRejected, TaskSpec
+from cairnwork.textclean import shown
 from cairnwork.verifier_spec import VerifierSpec
 
 _REGULAR = ("100644", "100755")
@@ -28,14 +30,14 @@ def check_task_paths(
     """Every parent of an allowed file is a real directory on the base (a task may not
     create a directory: fail closed, #149), the file itself is a regular file or absent,
     and a verifier target is on the base or an allowed file."""
-    targets = {t.split("::", 1)[0]: t for t in verifier_targets}
+    targets = {file_part(t): t for t in verifier_targets}
     wanted = {p for path in (*allowed_files, *targets) for p in _prefixes(path)}
     try:
         raw = run_git(repo, "ls-tree", "-r", "-t", "-z", base_commit, "--", *sorted(wanted))
     except GitCommandError as exc:  # git ran and refused (no such base) vs git did not run (#483)
         if isinstance(exc.__cause__, subprocess.CalledProcessError):
             raise TaskRejected("TASK_PATH_UNREADABLE", str(exc)) from exc
-        raise RuntimeError(f"git could not inspect base tree: {exc}") from exc
+        raise RuntimeError(f"git could not inspect base tree: {shown(exc)}") from exc
     modes = {e.split("\t", 1)[1]: e.split()[0] for e in raw.split("\0") if e}
     for path in allowed_files:
         for parent in _prefixes(path)[:-1]:

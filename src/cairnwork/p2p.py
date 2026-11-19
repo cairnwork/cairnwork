@@ -62,7 +62,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import cairnwork_sandbox
-from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRejected, deleted_of
+from cairnwork.deferred_tests import BaseUncomparable, Comparison, deleted_of
 from cairnwork.gitcmd import GitCommandError
 from cairnwork.issue_task import test_target
 from cairnwork.p2p_collect import OVER_BUDGET, collected_side, no_targets, under_roots, whole_base
@@ -71,14 +71,11 @@ from cairnwork.p2p_links import base_tree
 from cairnwork.p2p_nodes import clean as _clean
 from cairnwork.p2p_nodes import passing_targets, require_nodes
 from cairnwork.p2p_probe_log import probe_log_tail
+from cairnwork.p2p_rejection import P2PRejected
 from cairnwork.p2p_selection import DEFAULT_BUDGET_SECONDS, cap_note, name_rule, select_p2p_targets
 from cairnwork.pytest_config import PytestConfigError, test_file_rule
 from cairnwork.verifiers import VerifierRun, VerifierSpec, run_verifiers
 from cairnwork.verify_context import VerifyContext
-
-
-class P2PRejected(TestCommitRejected):
-    """The P2P step could not run safely: the task is REFUSED, never verified."""
 
 
 @dataclass(frozen=True)

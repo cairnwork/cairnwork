@@ -30,6 +30,7 @@ jobs:
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           python-version: ${{ matrix.python-version }}
+          enable-cache: false
       # #1454 B2: the gate runs before any PR-controlled code (the PR's uv sync and its build hook,
       # scripts/*), from a venv synced from the BASE sha's uv.lock and pyproject.toml without the
       # project, in a directory outside the checkout. The gate checks that venv against that lock.
@@ -100,6 +101,7 @@ jobs:
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           python-version: "3.13"
+          enable-cache: false
       # #1454 B2: the gate runs before any PR-controlled code (the PR's uv sync and its build hook,
       # scripts/*), from a venv synced from the BASE sha's uv.lock and pyproject.toml without the
       # project, in a directory outside the checkout. The gate checks that venv against that lock.
@@ -173,6 +175,7 @@ jobs:
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           python-version: "3.13"
+          enable-cache: false
       - run: uv sync --locked
       - name: Install bubblewrap
         run: |
@@ -209,6 +212,7 @@ jobs:
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           python-version: "3.13"
+          enable-cache: false
       - run: uv sync --locked
       - name: Install bubblewrap and zsh
         run: |
@@ -250,6 +254,7 @@ jobs:
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           python-version: "3.13"
+          enable-cache: false
       - name: Install bubblewrap
         run: |
           sudo apt-get update

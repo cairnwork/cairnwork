@@ -138,30 +138,71 @@ OWN_REF = re.compile(
 MAIN_REFS = frozenset({"refs/heads/main", "refs/remotes/origin/main", "refs/remotes/origin/HEAD"})
 
 
+_FIELDS = "%(refname)%09%(objecttype)%09%(objectname)%09%(*objecttype)%09%(*objectname)"
+
+
 def _refuse_foreign_history(clone: Path, code: str, advice: str) -> None:
     """Every other ref (tags, notes, stash, replace, ...) may name only a commit in origin/main's
-    history, so the mirror carries nothing beyond main."""
+    history, so the mirror carries nothing beyond main.
+
+    One ``for-each-ref`` lists every ref with its peeled object and one ``rev-list`` gives
+    origin/main's history, so the refs are judged in memory (#1391: a git process per ref cost
+    about 0.23 s each). A ref that is not a commit or a one-level tag of a commit (a tag of a tag,
+    a tree, a blob) is judged by the one-ref path below, which keeps its exact meaning."""
     refuse_grafts(clone)
-    for ref in run_git(clone, "for-each-ref", "--format=%(refname)").split():
+    history: set[str] | None = None
+    too_long = False
+    for line in run_git(clone, "for-each-ref", f"--format={_FIELDS}").splitlines():
+        ref, kind, name, peeled_kind, peeled = (line.split("\t") + ["", "", "", "", ""])[:5]
         if OWN_REF.fullmatch(ref):
             continue
         if ref.startswith(("refs/heads/", "refs/remotes/")) and ref not in MAIN_REFS:
             continue  # a stray branch is already refused by the name check above
-        tip = ""
-        if not ref.startswith("refs/replace/"):  # a replace ref rewrites history: always refused
-            try:  # origin/HEAD may be a symref; ^{commit} resolves it
-                tip = run_git(
-                    clone,
-                    "--no-replace-objects",
-                    "rev-parse",
-                    "--verify",
-                    "--quiet",
-                    f"{ref}^{{commit}}",
-                ).strip()
-            except GitCommandError:
-                tip = ""
-        if not tip or not _in_main_history(clone, tip):
+        if ref.startswith("refs/replace/"):  # a replace ref rewrites history: always refused
             raise RuntimeError(f"{code}: mirror holds {ref}, not in main's history; {advice}")
+        if kind == "commit":
+            tip = name
+        elif kind == "tag" and peeled_kind == "commit":
+            tip = peeled
+        else:
+            if not _one_ref_in_main(clone, ref):
+                raise RuntimeError(f"{code}: mirror holds {ref}, not in main's history; {advice}")
+            continue
+        if history is None and not too_long:
+            history = _main_history(clone)
+            too_long = history is None
+        if too_long:  # a very long history: no set in memory, one git call for this ref
+            judged = _in_main_history(clone, tip)
+        else:
+            judged = tip in (history or ())
+        if not judged:
+            raise RuntimeError(f"{code}: mirror holds {ref}, not in main's history; {advice}")
+
+
+HISTORY_CAP = 200_000  # commits held in memory (about 20 MB); a longer history is judged ref by ref
+
+
+def _main_history(clone: Path) -> set[str] | None:
+    """Every commit equal to or an ancestor of origin/main, from the real objects (no replace
+    refs); empty when origin/main does not resolve, as ``_in_main_history`` says no then. None
+    when the history is longer than ``HISTORY_CAP``: the caller then judges each ref alone."""
+    try:
+        listed = run_git(
+            clone, "--no-replace-objects", "rev-list", f"--max-count={HISTORY_CAP + 1}", ORIGIN_MAIN
+        ).split()
+    except GitCommandError:
+        return set()
+    return None if len(listed) > HISTORY_CAP else set(listed)
+
+
+def _one_ref_in_main(clone: Path, ref: str) -> bool:
+    try:  # origin/HEAD may be a symref; ^{commit} resolves it
+        tip = run_git(
+            clone, "--no-replace-objects", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"
+        ).strip()
+    except GitCommandError:
+        return False
+    return bool(tip) and _in_main_history(clone, tip)
 
 
 def _refuse_foreign_head(clone: Path, code: str, advice: str) -> None:
