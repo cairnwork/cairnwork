@@ -226,3 +226,16 @@ def test_many_tags_are_judged_in_a_constant_number_of_git_calls(setup, monkeypat
     monkeypatch.setattr(lineage, "run_git", lambda *a, **k: calls.append(a) or real(*a, **k))
     lineage.verify_single_branch(clone)
     assert len(calls) < 15, len(calls)
+
+
+def test_a_history_longer_than_the_cap_is_judged_ref_by_ref_with_the_same_answers(
+    setup, monkeypatch
+):
+    """#1391 review: the in-memory history is bounded; past the cap each ref gets its own call."""
+    clone = setup["clone"]
+    monkeypatch.setattr(lineage, "HISTORY_CAP", 0)  # any history is longer than the cap
+    git(clone, "update-ref", "refs/tags/ok", "origin/main")
+    lineage.verify_single_branch(clone)
+    git(clone, "update-ref", "refs/tags/secret", _side(clone))
+    with pytest.raises(RuntimeError, match="LINEAGE_MIRROR_NOT_SINGLE_BRANCH"):
+        lineage.verify_single_branch(clone)

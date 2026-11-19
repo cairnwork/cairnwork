@@ -151,6 +151,7 @@ def _refuse_foreign_history(clone: Path, code: str, advice: str) -> None:
     a tree, a blob) is judged by the one-ref path below, which keeps its exact meaning."""
     refuse_grafts(clone)
     history: set[str] | None = None
+    too_long = False
     for line in run_git(clone, "for-each-ref", f"--format={_FIELDS}").splitlines():
         ref, kind, name, peeled_kind, peeled = (line.split("\t") + ["", "", "", "", ""])[:5]
         if OWN_REF.fullmatch(ref):
@@ -167,19 +168,31 @@ def _refuse_foreign_history(clone: Path, code: str, advice: str) -> None:
             if not _one_ref_in_main(clone, ref):
                 raise RuntimeError(f"{code}: mirror holds {ref}, not in main's history; {advice}")
             continue
-        if history is None:
+        if history is None and not too_long:
             history = _main_history(clone)
-        if tip not in history:
+            too_long = history is None
+        if too_long:  # a very long history: no set in memory, one git call for this ref
+            judged = _in_main_history(clone, tip)
+        else:
+            judged = tip in (history or ())
+        if not judged:
             raise RuntimeError(f"{code}: mirror holds {ref}, not in main's history; {advice}")
 
 
-def _main_history(clone: Path) -> set[str]:
+HISTORY_CAP = 200_000  # commits held in memory (about 20 MB); a longer history is judged ref by ref
+
+
+def _main_history(clone: Path) -> set[str] | None:
     """Every commit equal to or an ancestor of origin/main, from the real objects (no replace
-    refs); empty when origin/main does not resolve, as ``_in_main_history`` says no then."""
+    refs); empty when origin/main does not resolve, as ``_in_main_history`` says no then. None
+    when the history is longer than ``HISTORY_CAP``: the caller then judges each ref alone."""
     try:
-        return set(run_git(clone, "--no-replace-objects", "rev-list", ORIGIN_MAIN).split())
+        listed = run_git(
+            clone, "--no-replace-objects", "rev-list", f"--max-count={HISTORY_CAP + 1}", ORIGIN_MAIN
+        ).split()
     except GitCommandError:
         return set()
+    return None if len(listed) > HISTORY_CAP else set(listed)
 
 
 def _one_ref_in_main(clone: Path, ref: str) -> bool:
