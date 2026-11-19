@@ -1,5 +1,6 @@
 """Regression tests for Agy wait bounds and cleanup failures."""
 
+import subprocess
 import threading
 from types import SimpleNamespace
 
@@ -88,3 +89,59 @@ def test_close_streams_attempts_all_and_reraises_first_error():
 
     assert caught.value is first
     assert calls == ["stdin", "stdout", "stderr", "log"]
+
+
+def test_close_streams_interrupt_outranks_ordinary_error():
+    class Stream:
+        def __init__(self, error=None):
+            self.error = error
+
+        def close(self):
+            if self.error:
+                raise self.error
+
+    process = SimpleNamespace(
+        stdin=Stream(OSError("io")), stdout=Stream(KeyboardInterrupt()), stderr=Stream()
+    )
+    with pytest.raises(KeyboardInterrupt):
+        agy_module._close_streams(process, Stream())
+
+
+def test_await_keeps_ask_to_stop_error_when_stop_also_raises(monkeypatch):
+    dispatch = Dispatch(path="dispatcher")
+    worker = AgyWorker(timeout_seconds=100, dispatch=dispatch)
+    stream = SimpleNamespace(close=lambda: None)
+
+    def wait(**_kwargs):
+        raise subprocess.TimeoutExpired("agy", 1)
+
+    process = SimpleNamespace(
+        returncode=0, stdin=stream, stdout=stream, stderr=stream, wait=wait, poll=lambda: 0
+    )
+
+    def ask_fail(_process):
+        raise ValueError("ask_to_stop failed")
+
+    def stop_fail(*_args):
+        raise RuntimeError("stop failed")
+
+    monkeypatch.setattr(agy_module.agy_dispatch, "ask_to_stop", ask_fail)
+    monkeypatch.setattr(agy_module, "_stop", stop_fail)
+
+    with pytest.raises(ValueError, match="ask_to_stop failed") as caught:
+        worker._await(process, None, None, ("attempt", "mark", ()), None, "log")
+    assert isinstance(caught.value.__cause__, RuntimeError)
+
+
+def test_negative_pool_wait_never_shortens_the_limit(monkeypatch):
+    worker = AgyWorker(timeout_seconds=100, dispatch=Dispatch(path="d", pool_wait_seconds=-50))
+    stream = SimpleNamespace(close=lambda: None)
+    seen = {}
+    process = SimpleNamespace(
+        returncode=0, stdin=stream, stdout=stream, stderr=stream,
+        wait=lambda **kw: seen.update(kw),
+    )  # fmt: skip
+    monkeypatch.setattr(agy_module, "_stop", lambda *_a: (False, SimpleNamespace(gone=True), 0))
+    monkeypatch.setattr(AgyWorker, "_fence", lambda *_a: None)
+    worker._await(process, None, None, ("attempt", "mark", ()), None, "log")
+    assert seen == {"timeout": 160}

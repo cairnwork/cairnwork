@@ -27,6 +27,7 @@ import pwd
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -245,7 +246,7 @@ class AgyWorker:
         dispatch = self.dispatch
         timed_out = None
         try:
-            pool_wait = dispatch.pool_wait_seconds if dispatch is not None else 0
+            pool_wait = max(0, dispatch.pool_wait_seconds) if dispatch is not None else 0
             process.wait(timeout=self.timeout_seconds + 60 + pool_wait)
         except subprocess.TimeoutExpired as exc:
             timed_out = exc
@@ -253,6 +254,7 @@ class AgyWorker:
                 agy_dispatch.ask_to_stop(process)  # lets it release its lease and sweep itself
         finally:
             name, mark, dirs = attempt
+            active = sys.exception()  # e.g. ask_to_stop failing: it must stay the error raised
             try:
                 held, swept, by_cwd = _stop(process, copier, name, reader, mark, dirs)
                 if not held:  # else the copier still reads: leave both open rather than hang
@@ -263,6 +265,9 @@ class AgyWorker:
                         _close_streams(process, log)
                     except BaseException as close_error:  # noqa: BLE001 - keep cleanup_error
                         cleanup_error.add_note(f"stream cleanup failed: {close_error!r}")
+                if active is not None:
+                    active.add_note(f"process cleanup failed: {cleanup_error!r}")
+                    raise active from cleanup_error
                 raise
         completion, why = None, "HELD" * held or "CWD" * bool(by_cwd)  # cwd: as a holder (#537)
         try:
@@ -382,7 +387,9 @@ def _close_streams(process, log) -> None:
             try:
                 stream.close()
             except BaseException as exc:  # noqa: BLE001 - attempt every stream close
-                if first_error is None:
+                if first_error is None or (
+                    not isinstance(exc, Exception) and isinstance(first_error, Exception)
+                ):  # an interrupt (KeyboardInterrupt, SystemExit) outranks an ordinary error
                     first_error = exc
     if first_error is not None:
         raise first_error
