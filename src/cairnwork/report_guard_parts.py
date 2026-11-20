@@ -40,6 +40,8 @@ def _marker_items(session, _type=type, _mark=Mark):
 
 def _record_skip(reporter, report, _type=type):
     # #1368 / #1374: longrepr and nodeid exact types; hostile doubles run no methods.
+    if _type(report) is not TestReport:  # #1374: a hostile double runs no __getattribute__
+        return
     xfail = getattr(report, "wasxfail", None)  # #1368: only an exact str reason is an xfail
     outcome = getattr(report, "outcome", None)  # #1374: only an exact str is compared
     if _type(outcome) is not str or outcome != "skipped" or _type(xfail) is str and xfail:

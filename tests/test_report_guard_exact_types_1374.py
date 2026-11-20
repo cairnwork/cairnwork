@@ -354,3 +354,18 @@ def test_record_skip_runs_no_method_of_a_hostile_outcome():
     reporter = types.SimpleNamespace(_skips={}, _item_marks={})
     plugin["_record_skip"](reporter, report)
     assert calls == [] and reporter._skips == {}
+
+
+def test_record_skip_reads_no_attribute_of_a_non_testreport_double():
+    plugin = _plugin(PARTS_SOURCE)
+    calls = []
+
+    class Hostile:
+        def __getattribute__(self, name):
+            calls.append(name)
+            return "skipped"
+
+    reporter = types.SimpleNamespace(_skips={}, _item_marks={})
+    plugin["_record_skip"](reporter, Hostile())
+    assert calls == []
+    assert reporter._skips == {}
