@@ -18,7 +18,7 @@ permissions:
 # Nothing re-runs it automatically; a cancelled run can be re-run by hand. PR heads are always
 # tested before they land, unaffected by this.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || 'main' }}
+  group: ci-${{ github.event.pull_request.number || (github.event_name == 'schedule' && 'nightly') || 'main' }}
   cancel-in-progress: true
 
 jobs:
