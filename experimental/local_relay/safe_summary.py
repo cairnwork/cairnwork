@@ -1,8 +1,8 @@
 """When the secret scan trips, the gate gets a summary that holds none of the original text.
 
 Experiment only (``RELAY_MASK_SECRET_LINES=1``). Nothing from the plan or the test output is
-copied: only integers, rule category names and file or test names that pass a strict character
-check and the scanner on their own. If even that summary trips the scanner, nothing is sent.
+copied: only integers and rule category names (no file or test names either). If even that
+summary trips the scanner, nothing is sent.
 """
 
 from __future__ import annotations
@@ -13,13 +13,9 @@ from experimental.pause.secrets_scan import Scanner
 
 _MARKER = re.compile(r"-{3,}\s*BEGIN\b")  # any PEM-looking header, well formed or not
 _CATEGORY = re.compile(r"[a-z0-9_]{1,40}")
-_NAME = re.compile(r"[A-Za-z0-9_./+-]{1,200}")
-_TEST = re.compile(r"[A-Za-z0-9_./:\[\]-]{1,200}")
 _DIFF_FILE = re.compile(r"^diff --git a/(\S+) b/", re.MULTILINE)
 _NEW_FILE = re.compile(r"^New file (\S+):$", re.MULTILINE)
 _COUNT = re.compile(r"\b(\d{1,6}) (passed|failed|errors?|skipped)\b")
-_TEST_LINE = re.compile(r"^(PASSED|FAILED|ERROR) (\S+)", re.MULTILINE)
-_MAX_NAMES = 50
 
 
 def scan_categories(text: str) -> list[str]:
@@ -36,13 +32,7 @@ def scan_categories(text: str) -> list[str]:
     return sorted(found)
 
 
-def _clean(names: list[str], shape: re.Pattern[str]) -> list[str]:
-    return [n for n in dict.fromkeys(names) if shape.fullmatch(n) and not scan_categories(n)][
-        :_MAX_NAMES
-    ]
-
-
-def _summary(categories: list[str], plan: str, raw: str, *, with_names: bool) -> str:
+def _summary(categories: list[str], plan: str, raw: str) -> str:
     files = list(dict.fromkeys([*_DIFF_FILE.findall(plan), *_NEW_FILE.findall(plan)]))
     added = sum(1 for ln in plan.splitlines() if ln.startswith("+") and not ln.startswith("+++"))
     removed = sum(1 for ln in plan.splitlines() if ln.startswith("-") and not ln.startswith("---"))
@@ -56,11 +46,6 @@ def _summary(categories: list[str], plan: str, raw: str, *, with_names: bool) ->
         f"diff lines: +{added} -{removed}",
         "test counts: " + (", ".join(f"{k}={v}" for k, v in sorted(counts.items())) or "-"),
     ]
-    if with_names:
-        lines.append("files: " + (", ".join(_clean(files, _NAME)) or "-"))
-        tests = [f"{k} {v}" for k, v in _TEST_LINE.findall(raw)]
-        shown = [t for t in tests if _TEST.fullmatch(t.split(" ", 1)[1])]
-        lines.append("tests: " + (", ".join(_clean(shown, re.compile(r"[A-Z]+ \S+"))) or "-"))
     return "\n".join(lines) + "\n"
 
 
@@ -69,8 +54,7 @@ def guard_plan(plan: str, raw: str) -> tuple[str | None, list[str]]:
     categories = scan_categories(plan)
     if not categories:
         return plan, []
-    for with_names in (True, False):
-        summary = _summary(categories, plan, raw, with_names=with_names)
-        if not scan_categories(summary):  # the residual scan: the summary itself must be clean
-            return summary, categories
-    return None, categories
+    summary = _summary(categories, plan, raw)
+    if scan_categories(summary):  # the residual scan: the summary itself must be clean
+        return None, categories
+    return summary, categories

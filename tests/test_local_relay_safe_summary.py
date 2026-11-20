@@ -32,7 +32,7 @@ class ScanningGate:
         return GateReply("ACCEPT", "haiku", "medium", None)
 
 
-def _run(tmp_path, monkeypatch, text, *, masking=False):
+def _run(tmp_path, monkeypatch, text, *, masking=False, accept_passes=False):
     monkeypatch.setenv("CAIRNWORK_LOCAL_RELAY", "1")
     monkeypatch.setenv("RELAY_MASK_SECRET_LINES", "1" if masking else "0")
     gate = ScanningGate()
@@ -51,6 +51,7 @@ def _run(tmp_path, monkeypatch, text, *, masking=False):
             enabled=True,
             plan_for=lambda _candidate: text,
             mask_secret_lines=masking,
+            masked_accept_passes=accept_passes,
         ),
     )
     rows = [json.loads(line) for line in ledger_path.read_text().splitlines()]
@@ -70,17 +71,26 @@ def test_flag_off_keeps_block_and_exact_text(tmp_path, monkeypatch):
     assert SECRET_LINE not in json.dumps(rows)
 
 
-def test_flag_on_sends_a_summary_with_no_original_line(tmp_path, monkeypatch):
+def test_flag_on_sends_a_summary_and_its_accept_is_masked_accept(tmp_path, monkeypatch):
     text = "before\n" + SECRET_LINE + "\nafter"
     result, gate, rows = _run(tmp_path, monkeypatch, text, masking=True)
-    assert result.route == "LOCAL_FIRST" and len(gate.calls) == 1
+    assert len(gate.calls) >= 1
     sent = gate.calls[0]
     assert _leaks(sent, text) == [] and SECRET not in sent
     assert "withheld" in sent and "api_key" in sent
     stage = result.stages[0]
     assert stage["plan_withheld"] is True and "api_key" in stage["scan_categories"]
+    assert stage["gate_reason"] == "MASKED_ACCEPT"  # fail closed: a summary ACCEPT is not ACCEPT
+    assert result.route != "LOCAL_FIRST"
     contents = json.dumps({"result": result.__dict__, "stages": result.stages, "rows": rows})
     assert SECRET not in contents and SECRET_LINE not in contents
+
+
+def test_accept_of_a_withheld_plan_passes_only_with_the_explicit_flag(tmp_path, monkeypatch):
+    text = "before\n" + SECRET_LINE + "\nafter"
+    result, _gate, _rows = _run(tmp_path, monkeypatch, text, masking=True, accept_passes=True)
+    assert result.route == "LOCAL_FIRST"
+    assert result.stages[0]["plan_withheld"] is True
 
 
 def test_flag_on_leaves_secret_free_text_unchanged(tmp_path, monkeypatch):
@@ -100,8 +110,9 @@ def test_summary_names_files_and_test_results_only():
     sent, categories = safe_summary.guard_plan(plan, raw)
     assert sent is not None and categories
     assert "files changed: 2" in sent and "diff lines: +2 -1" in sent
-    assert "src/app.py" in sent and "docs/new.md" in sent
-    assert "failed=1, passed=1" in sent and "FAILED tests/test_a.py::test_two" in sent
+    assert "failed=1, passed=1" in sent
+    for original in ("src/app.py", "docs/new.md", "test_a.py", "test_two", "test_one"):
+        assert original not in sent  # counts and categories only: no file or test names
     assert SECRET not in sent and "boom" not in sent and "intro" not in sent and "hello" not in sent
 
 
@@ -165,12 +176,13 @@ def test_a_hit_that_only_a_single_line_scan_sees_still_withholds(monkeypatch):
     assert categories == ["line_rule"] and sent is not None and "MARKER" not in sent
 
 
-def test_a_secret_in_a_file_or_test_name_is_left_out():
-    plan = f"diff --git a/{SECRET} b/{SECRET}\n+x\ndiff --git a/ok.py b/ok.py\n+y\n{SECRET_LINE}\n"
-    raw = f"FAILED tests/test_{SECRET}.py::t\nPASSED tests/test_ok.py::t\n"
+def test_file_and_test_names_never_appear_even_when_harmless():
+    plan = f"diff --git a/ok.py b/ok.py\n+y\n{SECRET_LINE}\n"
+    raw = f"FAILED tests/test_{SECRET}.py::t\nPASSED tests/test_ok.py::t\n1 failed, 1 passed\n"
     sent, _categories = safe_summary.guard_plan(plan, raw)
     assert sent is not None and SECRET not in sent
-    assert "ok.py" in sent and "tests/test_ok.py::t" in sent
+    for original in ("ok.py", "test_ok", "tests/"):
+        assert original not in sent
 
 
 def test_residual_scan_refuses_a_summary_that_still_matches(monkeypatch):
@@ -204,7 +216,8 @@ def test_unsendable_plan_is_rejected_without_calling_the_gate(tmp_path, monkeypa
 def test_masking_field_does_not_shift_positional_arguments():
     import dataclasses
 
-    assert dataclasses.fields(RelayConfig)[-1].name == "mask_secret_lines"
+    names = [f.name for f in dataclasses.fields(RelayConfig)]
+    assert names[-2:] == ["mask_secret_lines", "masked_accept_passes"]
 
 
 def test_masking_flag_is_read_from_the_environment(monkeypatch):
@@ -212,3 +225,6 @@ def test_masking_flag_is_read_from_the_environment(monkeypatch):
     assert RelayConfig.from_env().mask_secret_lines is True
     monkeypatch.delenv("RELAY_MASK_SECRET_LINES")
     assert RelayConfig.from_env().mask_secret_lines is False
+    assert RelayConfig.from_env().masked_accept_passes is False
+    monkeypatch.setenv("RELAY_MASKED_ACCEPT_PASSES", "1")
+    assert RelayConfig.from_env().masked_accept_passes is True
