@@ -47,3 +47,7 @@ Relay 以 PAUSE `WorkerRunner` 共用的 `_prepare` 建 checkout：no-hardlinks 
 
 Fallback 與實驗 G1 H 臂同一路徑，差異只在是否經過 acceptance＋gate 的 relay 流程。
 - 殘餘（已知）：gate 的已追蹤檔檢查在 `git diff` 前後各做一次（inode、link 數、裝置、大小、mtime 必須一致），但若有逃過 process group 終止的 worker 後代在兩次檢查之外的瞬間交換檔案，仍有極小的 TOCTOU 窗口；Core 自己的 tree digest 前後比對是另一道防線。
+
+## Secret-line masking (experiment only)
+
+`RELAY_MASK_SECRET_LINES=1` (default off; same behaviour as before when off) masks, just before a gate review, every line the PAUSE secret scanner matches. The original text is never sent or recorded; only the masked line count and the matched category names are kept. If the masked text still matches the scanner, the review fails closed (`PAUSE_SECRET_BLOCKED`) as before. Experiment-only, agreed by James on 2026-11-20; the PAUSE scan rules and production code are unchanged.
