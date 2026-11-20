@@ -238,7 +238,7 @@ def build_policy(
     # root) and, off the owner path, only those the account uid can both reach and read.
     masks, mask_notes = _credential_masks(real_home, mask_home_credentials, writes, reads)
     flags += masks
-    # Mask existing daemon sockets at the canonical path; off the owner path only reachable ones (#482).
+    # Mask existing daemon sockets at the canonical path; off the owner path only reachable (#482).
     masked_socks: set[str] = set()
     for sock in _DANGEROUS_SOCKETS:
         real = _safe(sock) if os.path.exists(sock) else None
