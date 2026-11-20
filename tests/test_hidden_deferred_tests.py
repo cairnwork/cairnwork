@@ -64,6 +64,12 @@ def test_a_changed_hidden_test_is_refused_beside_a_visible_one(project, shape):
     with pytest.raises(Rejected) as err:
         _new_tests(project, {F: REGRESSION + HIDDEN[shape]})
     assert err.value.code == "DEFERRED_TESTS_UNREADABLE" and F in str(err.value)
+    # #1564: the reason names the shapes and tells the author what to change
+    assert "if/try/with/loop block" in str(err.value) and "top-level def test_*" in str(err.value)
+
+
+def test_a_top_level_changed_test_is_not_refused(project):
+    assert _new_tests(project, {F: REGRESSION}) == {f"{F}::test_regression"}  # the asked-for shape
 
 
 def test_removing_a_class_skip_changes_each_of_its_tests(project):
