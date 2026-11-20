@@ -10,7 +10,17 @@ import stat
 from pathlib import Path
 from typing import Any
 
+from experimental.acceptance_casebook.replay_config import metadata as _state_config_metadata
 from experimental.acceptance_casebook.store import CasebookError, _head, _read_chain
+
+_state_config_path: Path | None = None
+_state_config_runner: Any = None
+
+
+def configure_state_config(path: Path | None, runner: Any = None) -> Any:
+    global _state_config_path, _state_config_runner
+    _state_config_path, _state_config_runner = path, runner
+    return runner
 
 
 def _protected(paths: tuple[Path, ...]) -> list[os.stat_result]:
@@ -91,6 +101,7 @@ def _write(
 
 
 def append(out: Path, record: dict[str, Any], protected: tuple[Path, ...]) -> None:
+    record = {**record, **_state_config_metadata(_state_config_path, _state_config_runner)}
     paths = _paths(out, protected)
     lock = _open(paths[3], os.O_WRONLY | os.O_CREAT, protected)
     try:
