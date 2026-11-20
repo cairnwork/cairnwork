@@ -136,7 +136,8 @@ class _ChatTransport:
         first: dict = choices[0] if isinstance(choices, list) and choices else {}
         first = first if isinstance(first, dict) else {}
         message = first.get("message")
-        usage = reply.get("usage") if isinstance(reply.get("usage"), dict) else {}
+        raw_usage = reply.get("usage")
+        usage: dict = raw_usage if isinstance(raw_usage, dict) else {}
         info = {
             "finish_reason": (first or {}).get("finish_reason")
             if isinstance(first, dict)
