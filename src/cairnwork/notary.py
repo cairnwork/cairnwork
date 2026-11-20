@@ -41,6 +41,7 @@ from cairnwork.changeset import GitChangeSet, read_change_set, read_tree_change_
 from cairnwork.core_request import AcceptanceSpec, VerifierObservation, build_core_request
 from cairnwork.deferred_tests import TestCommitRejected, overlay_tree
 from cairnwork.gitcmd import GitCommandError, run_git
+from cairnwork.notary_binding import RowBinding, row_binding
 from cairnwork.notary_errors import (  # noqa: F401  re-exported: callers import these from here
     AttemptRequestMismatch,
     NotaryError,
@@ -288,6 +289,13 @@ class Notary:
         if not isinstance(expected_candidate, str) or not _OID.fullmatch(expected_candidate):
             raise NotaryInputError("expected_candidate must be a 40-hex commit id")
         return self._read(task_id, attempt_id, expected_candidate)
+
+    def row_binding(self, task_id: str, attempt_id: str) -> RowBinding | None:
+        """Binding facts for any row (#935); None means absent, read failures raise and are unbound.
+
+        Callers treat read failures as unbound.
+        """
+        return row_binding(self, task_id, attempt_id)
 
     def bound_to(self, task_id: str, attempt_id: str, change: GitChangeSet) -> bool:
         """Attempt is VERIFIED and its stored request is this git change (#61); fails closed."""

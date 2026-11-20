@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from experimental.acceptance_casebook import replay_out as _replay_out
 from experimental.acceptance_casebook.identity import (
     IdentityError,
     confirmation_problem,
@@ -20,7 +21,6 @@ from experimental.acceptance_casebook.identity import (
 )
 from experimental.acceptance_casebook.origin import read_origin
 from experimental.acceptance_casebook.replay_inputs import bound_inputs as _bound_inputs
-from experimental.acceptance_casebook.replay_out import append as _append_output
 from experimental.acceptance_casebook.replay_runner import CoreVerdict, RealRunner, RunnerFailure
 from experimental.acceptance_casebook.store import (
     CasebookError,
@@ -141,7 +141,7 @@ def _run_one(
 
 
 def _append_record(out: Path, record: dict[str, Any], protected: tuple[Path, ...]) -> None:
-    _append_output(out, record, protected)  # every opened file is checked on its own fd
+    _replay_out.append(out, record, protected)  # every opened file is checked on its own fd
 
 
 def _case_result(
@@ -309,7 +309,7 @@ def _replay(args: argparse.Namespace) -> int:
     inputs_bytes = args.inputs.read_bytes()
     inputs = json.loads(inputs_bytes)
     input_digest = _digest(inputs_bytes)
-    book = args.casebook
+    book, state_config = args.casebook, args.state_config
     db = args.notary_db
     protected = [book.with_name(book.name + s) for s in ("", ".head", ".lock")]
     protected += [db.with_name(db.name + s) for s in ("", "-wal", "-shm", "-journal")]
@@ -324,7 +324,7 @@ def _replay(args: argparse.Namespace) -> int:
         for state in ("unconfirmed", "rejected", "origin_changed")
     }
     counts: dict[str, dict[str, int]] = {}
-    runner = None
+    runner = _replay_out.configure_state_config(state_config)
     if RUNNER is _DEFAULT_RUNNER and args.repo is not None:
         try:
             runner = RealRunner(
@@ -332,7 +332,7 @@ def _replay(args: argparse.Namespace) -> int:
             )
         except Exception:  # noqa: BLE001 - environment setup is an explicit unreplayable result
             runner = None
-        _ACTIVE_RUNNER = runner or _setup_failed
+        _ACTIVE_RUNNER = _replay_out.configure_state_config(state_config, runner) or _setup_failed
     try:
         for case in eligible:
             result = _case_record(case, inputs, input_digest, tree, args, head, replayer, run_id)
