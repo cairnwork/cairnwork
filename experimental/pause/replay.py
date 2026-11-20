@@ -14,6 +14,7 @@ class ReplayResult:
     task_id: str
     verdict: str | None
     reason: str | None
+    diagnostics: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -37,7 +38,12 @@ def replay(candidate_dir: str | Path, gate: Gate, settings: CallSettings) -> Rep
         )
         reply = gate.review(GateRequest(task.name, checkpoint, plan, settings))
         results.append(
-            ReplayResult(task.name, reply.verdict, reply.reason.value if reply.reason else None)
+            ReplayResult(
+                task.name,
+                reply.verdict,
+                reply.reason.value if reply.reason else None,
+                reply.diagnostics,
+            )
         )
         expected_path = task / "expected_verdict.txt"
         if expected_path.exists():

@@ -42,6 +42,7 @@ class PlanReply:
     model_id: str
     effort: str
     reason: Reason | None = None
+    diagnostics: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,7 @@ class GateReply:
     model_id: str
     effort: str
     reason: Reason | None = None
+    diagnostics: tuple[str, ...] = ()
 
 
 @runtime_checkable

@@ -194,9 +194,10 @@ class CostGate:
             reply.model_id,
             reply.effort,
             reply.reason,
-            input_tokens,
-            output_tokens,
-            usd,
+            diagnostics=reply.diagnostics,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            usd=usd,
         )
 
 
