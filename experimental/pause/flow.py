@@ -49,6 +49,9 @@ class RunResult:
 class CoreVerdict:
     status: str
     tree_sha256: str
+    reason: str | None = None
+    pytest_exit_code: int | None = None
+    pytest_output: str | None = None
 
 
 class Runner(Protocol):
@@ -77,18 +80,8 @@ def _cut(record: dict | None) -> tuple[int | None, str]:
 
 
 def _empty_info() -> dict[str, str | None]:
-    return dict.fromkeys(
-        (
-            "plan",
-            "planner_model_id",
-            "planner_effort",
-            "gate_model_id",
-            "gate_effort",
-            "gate_verdict",
-            "core_verdict",
-            "core_tree_sha256",
-        )
-    )
+    names = "plan planner_model_id planner_effort gate_model_id gate_effort gate_verdict"
+    return dict.fromkeys((*names.split(), "core_verdict", "core_tree_sha256"))
 
 
 def _load_parent(transcript: Path) -> dict | None:

@@ -23,6 +23,7 @@ _SECRET_PATTERNS = (
         r"\.[A-Za-z0-9_-]+)\b"
     ),
 )
+_ABSOLUTE_PATH = re.compile(r"(?<![\w])/(?:Users|private|var|tmp|home|root)/[^\s,;\"']+")
 
 
 def redact(value: str) -> str:
@@ -32,6 +33,7 @@ def redact(value: str) -> str:
         result = pattern.sub(
             lambda match: f"{match.group(1) if match.lastindex else ''}[REDACTED]", result
         )
+    result = _ABSOLUTE_PATH.sub("[PATH]", result)
     return result[:MAX_STDERR_CHARS]
 
 

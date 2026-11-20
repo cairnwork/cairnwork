@@ -12,6 +12,7 @@ from experimental.local_relay.config import RelayConfig
 from experimental.local_relay.gate_plan import PlanIncomplete, build_gate_plan, changed_paths
 from experimental.local_relay.relay import Acceptance, LocalAttemptFailed, run_relay
 from experimental.local_worker.endpoint import EndpointUnreachable
+from experimental.pause.core_judge import CoreJudge
 from experimental.pause.flow import RunResult
 from experimental.pause.interfaces import CallSettings, GateReply, GateRequest
 
@@ -283,3 +284,71 @@ def test_core_acceptance_includes_rejection_diagnostics_in_stage_output():
     assert output["pytest_output_tail"].splitlines() == [
         *(f"line {number}" for number in range(6, 46))
     ]
+
+
+def test_real_core_judge_verdict_carries_diagnostics_into_acceptance(tmp_path):
+    from experimental.local_relay.relay import _stage
+
+    repo, source, base = _repo(tmp_path)
+    (repo / "inside.py").write_text("x = 2\n")
+    result = RunResult(0, "", repo.parent, repo, base_sha=base)
+    judge = CoreJudge(
+        tmp_path / "state",
+        (),
+        verify=lambda *_a, **_kw: {
+            "status": "FAILED",
+            "reason": "pytest failed",
+            "pytest_exit_code": 1,
+            "pytest_output": "x" * 5000,
+        },
+    )
+    acceptance = CoreAcceptance(judge, ("inside.py",), source)(result)
+    stage = _stage("core", acceptance, GateReply(None, "test", "test"), "")
+    evidence = json.loads(acceptance.raw)
+    assert evidence["reason"] == "pytest failed"
+    assert evidence["status"] == "FAILED"
+    assert evidence["tree_sha256"]
+    assert len(evidence["pytest_output_tail"]) <= 600
+    assert '"status": "FAILED"' in stage["acceptance"]
+    assert '"tree_sha256": "' + evidence["tree_sha256"] in stage["acceptance"]
+
+
+@pytest.mark.parametrize("tail", ["\n".join("x" * 200 for _ in range(40)), "y" * 5000])
+def test_core_stage_preserves_verdict_fields_for_long_tails(tmp_path, tail):
+    class Verdict:
+        status = "FAILED"
+        tree_sha256 = "a" * 64
+        reason = "pytest failed"
+        pytest_exit_code = 1
+        pytest_output = tail
+
+    from experimental.local_relay.relay import _stage
+
+    acceptance = CoreAcceptance(lambda _c: Verdict())(RunResult(0, "", Path("."), Path(".")))
+    stage = _stage("core", acceptance, GateReply(None, "test", "test"), "")
+    assert '"status": "FAILED"' in stage["acceptance"]
+    assert '"tree_sha256": "' + "a" * 64 in stage["acceptance"]
+    assert len(json.loads(acceptance.raw)["pytest_output_tail"]) <= 600
+
+
+def test_core_acceptance_redacts_tail_and_rejects_invalid_exit_code():
+    class Verdict:
+        status = "FAILED"
+        tree_sha256 = "a" * 64
+        pytest_exit_code = True
+        pytest_output = "GITHUB_TOKEN=ghp_abcdefghijklmno /Users/james/private/file.py"
+
+    output = CoreAcceptance(lambda _c: Verdict())(RunResult(0, "", Path("."), Path(".")))
+    evidence = json.loads(output.raw)
+    assert "pytest_exit_code" not in evidence
+    assert "ghp_abcdefghijklmno" not in output.raw
+    assert "/Users/james/private/file.py" not in output.raw
+
+
+def test_core_acceptance_without_diagnostic_fields_keeps_legacy_output():
+    class Verdict:
+        status = "VERIFIED"
+        tree_sha256 = "a" * 64
+
+    output = CoreAcceptance(lambda _c: Verdict())(RunResult(0, "", Path("."), Path(".")))
+    assert output.raw == json.dumps({"status": "VERIFIED", "tree_sha256": "a" * 64}, sort_keys=True)
