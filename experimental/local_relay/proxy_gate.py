@@ -15,6 +15,7 @@ import math
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import replace
+from typing import Any, cast
 from urllib.parse import quote
 
 from experimental.local_relay.adapters import MeteredGateReply, _flag_set, _is_flag, _proxy_request
@@ -132,8 +133,9 @@ class _ChatTransport:
                 "error": note,
             }
         choices = reply.get("choices")
-        first = choices[0] if isinstance(choices, list) and choices else None
-        message = first.get("message") if isinstance(first, dict) else None
+        first: dict = choices[0] if isinstance(choices, list) and choices else {}
+        first = first if isinstance(first, dict) else {}
+        message = first.get("message")
         usage = reply.get("usage") if isinstance(reply.get("usage"), dict) else {}
         info = {
             "finish_reason": (first or {}).get("finish_reason")
@@ -171,7 +173,7 @@ class ProxyGate:
         self.stage = "gate"
         self._chat = _ChatTransport(f"{self.endpoint_url}/chat/completions", self.request)
         self._scanner = RecordingScanner(scanner)
-        self._gate = HaikuGate(self._chat, self._scanner)
+        self._gate = HaikuGate(self._chat, cast(Any, self._scanner))
 
     def set_stage(self, stage: str) -> None:
         self.stage = stage

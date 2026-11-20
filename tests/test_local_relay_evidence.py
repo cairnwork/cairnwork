@@ -1,3 +1,4 @@
+# pyright: reportOptionalSubscript=false, reportOptionalMemberAccess=false, reportOperatorIssue=false
 """Failure evidence: Core refusal reason, secret-scan hit categories, gate failure kind."""
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ def test_summary_keeps_reason_and_log_tail_redacted():
         "logs": [f"line{i}" for i in range(100)] + [f"Authorization: Bearer {'x' * 30}"],
         "uncomparable": None,
     }  # fmt: skip
-    summary = summarize_result(result)
+    summary, _tail = summarize_result(result)
     assert summary["status"] == "REFUSED" and "TEST_COMMIT_ALREADY_EXPOSED" in summary["reason"]
     assert secret not in json.dumps(summary) and "x" * 30 not in summary["logs_tail"]
     assert "line99" in summary["logs_tail"] and "line0\n" not in summary["logs_tail"]
@@ -82,7 +83,10 @@ def _gate(replies):
 
     def request(method, url, body):
         if "/stats" in url:
-            return {"cost_usd": 0.01, "input_tokens": 10, "output_tokens": 5}
+            return {
+                "cost_usd": 0.01, "input_tokens": 10, "output_tokens": 5,
+                "requests": 1, "budget_stop": False, "model_mismatch": 0,
+            }  # fmt: skip
         if url.endswith("/label"):
             return {}
         calls.append(body)
@@ -106,7 +110,7 @@ def _chat(text, finish="stop"):
 
 
 def test_gate_retries_once_for_an_unusable_reply_then_accepts():
-    gate, calls = _gate(iter([_chat(""), _chat("可直接合併")]))
+    gate, calls = _gate(iter([_chat(""), _chat('{"verdict": "可直接合併", "reason": "ok"}')]))
     reply = gate.review(_req())
     assert reply.verdict == "ACCEPT" and len(calls) == 2
     assert reply.detail["transport"]["attempts"] == 2
@@ -133,3 +137,14 @@ def test_secret_block_records_scan_categories_and_sends_nothing():
     reply = gate.review(_req("see /Users/someone/project and my_token = 'abcdefghijklmnop1234'"))
     assert reply.reason == Reason.PAUSE_SECRET_BLOCKED and calls == []
     assert "host_path" in reply.detail["scan"]["categories"]
+
+
+def test_hidden_test_logs_go_only_to_the_sink_not_the_ledger_summary():
+    sunk = []
+    rec = RecordingVerify(
+        lambda _i, **_k: {"status": "FAILED", "reason": "r", "logs": ["assert hidden_secret == 1"]},
+        log_sink=sunk.append,
+    )
+    rec(None)
+    assert "logs_tail" not in rec.last and "hidden_secret" not in json.dumps(rec.last)
+    assert sunk and "hidden_secret" in sunk[0]

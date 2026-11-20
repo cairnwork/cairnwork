@@ -97,7 +97,13 @@ def build_run_once(args: Any) -> Callable[[Any, Any], dict[str, Any]]:
     intake = Intake(state)
     config = intake.config()
     hidden = task.get("hidden")
-    recorder = RecordingVerify(HiddenVerify(task["repo"], hidden) if hidden else verify_candidate)
+    debug = _debug_path(args, task["task_id"])
+    recorder = RecordingVerify(
+        HiddenVerify(task["repo"], hidden) if hidden else verify_candidate,
+        (lambda tail: append_debug(debug, {"event": "core-log-tail", "tail": tail}))
+        if hidden
+        else None,
+    )
     judge = CoreJudge(state, task["verifiers"], config["import_paths"], verify=recorder)
     if hidden:
         judge.intake = with_python(judge.intake, hidden.python)

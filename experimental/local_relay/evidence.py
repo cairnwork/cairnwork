@@ -21,10 +21,10 @@ MAX_SCAN_LINES = 3000
 MAX_HIT_LINES = 8
 
 
-def summarize_result(result: Any) -> dict[str, Any] | None:
+def summarize_result(result: Any, keep_logs: bool = True) -> tuple[dict[str, Any] | None, str]:
     """The part of a ``verify_candidate`` result that explains a refusal or failure."""
     if not isinstance(result, dict):
-        return None
+        return None, ""
     logs = result.get("logs")
     lines = [str(item) for item in logs] if isinstance(logs, list) else []
     tail = redact("\n".join(lines[-MAX_LOG_LINES:]))[-MAX_LOG_CHARS:]
@@ -34,22 +34,29 @@ def summarize_result(result: Any) -> dict[str, Any] | None:
         "reason": redact(str(result.get("reason") or ""))[:MAX_REASON],
         "uncomparable": result.get("uncomparable"),
         "tests_consumed": result.get("tests_consumed"),
-        "logs_tail": tail,
+        "logs_tail": tail if keep_logs else None,
     }
-    return {k: v for k, v in summary.items() if v not in (None, "")}
+    return {k: v for k, v in summary.items() if v not in (None, "")}, tail
 
 
 class RecordingVerify:
     """Wrap a ``verify`` callable for CoreJudge and keep a summary of its last result."""
 
-    def __init__(self, inner: Callable[..., Any]) -> None:
+    def __init__(
+        self, inner: Callable[..., Any], log_sink: Callable[[str], None] | None = None
+    ) -> None:
+        """With ``log_sink`` (hidden tests in use) the verifier log tail goes only to the sink
+        (the 0600 debug log); it is left out of the summary that reaches the ledger."""
         self.inner = inner
+        self.log_sink = log_sink
         self.last: dict[str, Any] | None = None
 
     def __call__(self, intake: Any, **kwargs: Any) -> Any:
         self.last = None
         result = self.inner(intake, **kwargs)
-        self.last = summarize_result(result)
+        self.last, tail = summarize_result(result, keep_logs=self.log_sink is None)
+        if self.log_sink is not None and tail:
+            self.log_sink(tail)
         return result
 
 
