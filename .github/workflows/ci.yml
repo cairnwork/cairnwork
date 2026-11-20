@@ -88,7 +88,16 @@ jobs:
   # The verifier sandbox (macOS Seatbelt) is only proven on macOS. Nexus-new's
   # sandbox could not run pytest for weeks because nothing ran it for real, so
   # this job cannot skip: a missing sandbox-exec fails it.
-  test-macos:
+  # The macOS suite is two parallel shards balanced by measured file cost (scripts/ci_macos_shard.py,
+  # scripts/ci_macos_weights.json); the sealed #1353 gate runs on shard 1, the serial verifier-account
+  # tests on shard 2. The job below named test-macos stays the required check: it passes only when
+  # every shard passed.
+  test-macos-shard:
+    name: test-macos-shard (${{ matrix.shard }})
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["1", "2"]
     runs-on: macos-latest
     timeout-minutes: 120  # a hung job must not hold a runner for the 6 h GitHub default (#1499)
     env:
@@ -108,6 +117,7 @@ jobs:
       # scripts/*), from a venv synced from the BASE sha's uv.lock and pyproject.toml without the
       # project, in a directory outside the checkout. The gate checks that venv against that lock.
       - name: Trusted #1353 gate venv from the base lock
+        if: matrix.shard == '1'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
           BASE_REF: ${{ github.base_ref }}
@@ -134,6 +144,7 @@ jobs:
           "$trusted/.venv/bin/python" -I -S -B "$GITHUB_WORKSPACE/tests/pra1353_base_record.py" \
             record "$RUNNER_TEMP/base-python.json"
       - name: Sealed #1353 witness gate
+        if: matrix.shard == '1'
         run: |
           set -euo pipefail
           # The gate runs PR-controlled code: stop workflow commands (::, ##[) in its output.
@@ -153,9 +164,31 @@ jobs:
           zsh scripts/setup_verifier_python.sh
       # #406 step 4: everything except the shared verifier account runs in parallel; files that
       # share state are pinned to one worker by their xdist_group mark (tests/xdist_groups.py).
-      - run: uv run pytest -q -o faulthandler_timeout=1200 -n auto --dist loadgroup -m "not verifier_account" --ignore=tests/test_1039_1353_witnesses.py
-      # The verifier account is one shared account: its tests stay serial.
-      - run: uv run pytest -q -o faulthandler_timeout=1200 -m verifier_account --ignore=tests/test_1039_1353_witnesses.py
+      - name: Tests of this shard
+        run: |
+          set -euo pipefail
+          files=()
+          while IFS= read -r f; do files+=("$f"); done < <(uv run python scripts/ci_macos_shard.py "${{ matrix.shard }}")
+          # an empty list would make pytest run the whole tree (and the witness file)
+          [ "${#files[@]}" -gt 0 ] || { echo "no test files for shard ${{ matrix.shard }}"; exit 1; }
+          uv run pytest -q -o faulthandler_timeout=1200 -n auto --dist loadgroup -m "not verifier_account" "${files[@]}"
+      # The verifier account is one shared account: its tests stay serial, in shard 2 (the
+      # marker selects them across the whole tree, whichever shard their file belongs to).
+      - name: Verifier-account tests
+        if: matrix.shard == '2'
+        run: uv run pytest -q -o faulthandler_timeout=1200 -m verifier_account --ignore=tests/test_1039_1353_witnesses.py
+
+  # The required check keeps its name: green only when both shards are green.
+  test-macos:
+    needs: test-macos-shard
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: All macOS shards passed
+        env:
+          RESULT: ${{ needs.test-macos-shard.result }}
+        run: test "$RESULT" = success
 
   # Linux bwrap backend, witnessed on real bwrap. On a GitHub ubuntu-24.04 runner an AppArmor
   # rule restricts capability-bearing user namespaces by default, so the job asserts available()

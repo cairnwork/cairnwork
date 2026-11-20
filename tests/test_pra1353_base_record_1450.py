@@ -266,7 +266,7 @@ def _jobs(text: str) -> dict[str, str]:
     return {p.split(":", 1)[0].strip(): p for p in parts if p.strip()}
 
 
-@pytest.mark.parametrize("job", ["test", "test-macos"])
+@pytest.mark.parametrize("job", ["test", "test-macos-shard"])
 def test_ci_records_in_the_trusted_venv_step_and_verifies_in_the_gate_step(job):
     steps = _jobs((ROOT / ".github/workflows/ci.yml").read_text())[job]
     build = steps.find("- name: Trusted #1353 gate venv")
