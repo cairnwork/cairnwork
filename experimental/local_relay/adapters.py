@@ -13,6 +13,7 @@ from typing import Any
 from urllib.parse import quote, urlsplit
 
 from experimental.local_relay.config import DEFAULT_LOCAL_ENDPOINT
+from experimental.local_relay.debug_keep import keep_candidate
 from experimental.local_relay.diagnostics import episode_failure, redacted_tail
 from experimental.local_relay.gate_plan import PlanIncomplete, changed_paths
 from experimental.local_relay.relay import Acceptance, Attempt, LocalAttemptFailed
@@ -96,6 +97,7 @@ class CoreAcceptance:
     def __call__(self, candidate: Any, /) -> Acceptance:
         if not isinstance(candidate, RunResult):
             raise TypeError("Core acceptance requires a local-worker RunResult")
+        keep_candidate(candidate)
         if self.allowed_files is not None:
             changed = _changed_paths(candidate, self.source)
             unexpected = sorted(changed - self.allowed_files)
