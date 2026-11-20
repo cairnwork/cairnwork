@@ -192,16 +192,22 @@ def test_a_changed_archive_a_conftest_or_the_configuration_names_is_refused(
 
 
 LATIN1_CONFTEST = "# -*- coding: latin-1 -*-\n# caf\xe9\nimport helper\n".encode("latin-1")
+COMMENT_ONLY = "# -*- coding: latin-1 -*-\n# caf\xe9 helper\nimport os\n".encode("latin-1")
 
 
 @pytest.mark.parametrize(
-    ("changed", "refused"), [("tests/test_new.py", False), ("tests/helper.py", True)]
+    ("changed", "refused", "body"),
+    [
+        ("tests/test_new.py", False, LATIN1_CONFTEST),
+        ("tests/helper.py", True, LATIN1_CONFTEST),
+        ("tests/helper.py", False, COMMENT_ONLY),  # #972
+    ],
 )
-def test_an_unchanged_conftest_with_a_declared_encoding_is_parsed(project, changed, refused):
+def test_an_unchanged_conftest_with_a_declared_encoding_is_parsed(project, changed, refused, body):
     """#948 r7 (Claude r2 REV-D): a Latin-1 conftest with an encoding declaration, which Python
     loads, is parsed from its bytes; it refuses nothing for not being UTF-8."""
     (project / "examples").mkdir(exist_ok=True)
-    (project / "examples" / "conftest.py").write_bytes(LATIN1_CONFTEST)
+    (project / "examples" / "conftest.py").write_bytes(body)
     commit_change(project, {})
     base, commit = _commit(project, {changed: "x = 1\n"})
     if not refused:

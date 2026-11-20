@@ -270,7 +270,7 @@ def test_the_issue_runner_records_its_gh_in_the_state_config(tmp_path):
     assert intake.config()["gh"] == "/bin/sh" and intake.config()["model"] == "m"
 
 
-def test_a_config_without_test_roots_ends_the_task_refusing_not_stranded(monkeypatch, project):
+def test_the_attempt_gate_is_installed_without_test_roots(monkeypatch, project):
     import cairnwork.route as route
 
     seen = {}
