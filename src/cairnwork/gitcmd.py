@@ -20,6 +20,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from cairnwork.gitcmd_capped import capped
 from cairnwork.gitversion import GitVersionError, git_executable, require_no_lazy_fetch
 from cairnwork.textclean import replace_hidden
 
@@ -259,14 +260,15 @@ def commit_present(repo: Path, oid: str) -> bool:
 
 
 def run_git_bytes(
-    repo: Path, *args: str, timeout: float = GIT_TIMEOUT_SECONDS, stdin: bytes | None = None
-) -> bytes:
+    repo: Path, *args: str, timeout: float = GIT_TIMEOUT_SECONDS, stdin: bytes | None = None,
+    max_bytes: int | None = None,
+) -> bytes:  # fmt: skip
     """Like run_git, but stdout is raw bytes: no decoding and no newline translation.
 
     stdin, when given, is git's standard input (``cat-file --batch``).
     A failure's ``CalledProcessError`` (``__cause__``) then carries bytes in ``stdout``.
     """
-    return _exec(repo, args, None, False, timeout, text=False, stdin=stdin)
+    return _exec(repo, args, None, False, timeout, text=False, stdin=stdin, max_bytes=max_bytes)
 
 
 # GIT_ALLOW_PROTOCOL beats every protocol.*.allow setting, so git:// (core.gitProxy) and other
@@ -322,6 +324,7 @@ def _exec(
     text: bool,
     stdin: bytes | None = None,
     ok_codes: tuple[int, ...] = (0,),
+    max_bytes: int | None = None,
 ) -> Any:  # str when text, else bytes
     if not timeout or timeout <= 0:
         raise ValueError(f"timeout must be a positive number of seconds, got {timeout!r}")
@@ -338,7 +341,8 @@ def _exec(
         env["GIT_CONFIG_GLOBAL"] = os.devnull
         env["GIT_CONFIG_SYSTEM"] = os.devnull
     try:
-        done = subprocess.run(  # noqa: S603 - fixed git argv, no shell
+        run = subprocess.run if max_bytes is None else capped(max_bytes)
+        done = run(  # noqa: S603 - fixed git argv, no shell
             [
                 git_executable(),
                 *_SAFE_OPTIONS,

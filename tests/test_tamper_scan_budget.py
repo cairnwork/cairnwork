@@ -7,6 +7,7 @@ and many lines that add up within one patch. Past the budget the patch is refuse
 """
 
 import re
+import subprocess
 import sys
 import types
 
@@ -223,3 +224,69 @@ def test_a_large_honest_module_stays_inside_the_budget():
     assert len(data) > 1_000_000
     assert ScanBudget().tokenize(data)
     assert ScanBudget().tokenize(data.replace(b"\n", b"\r\n"))  # Windows line ends cost the same
+
+
+# --- bytes read from git (#766) ------------------------------------------------------------------
+def test_a_diff_bigger_than_the_git_read_cap_is_refused_before_the_scan(tmp_path, monkeypatch):
+    seen = []
+
+    def producer(repo, *args, max_bytes=None, **kwargs):
+        seen.append(max_bytes)
+        raise scan.GitOutputTooLarge("stand-in producer emitted more than the cap")
+
+    monkeypatch.setattr(scan, "run_git_bytes", producer)
+    found = scan_patch(tmp_path, "a" * 40, "b" * 40, python=sys.executable)
+    assert [(f.line, f.rule) for f in found] == [(0, SCAN_BUDGET)]
+    assert seen == [scan.MAX_GIT_READ]
+
+
+def test_run_git_bytes_stops_git_past_max_bytes(tmp_path):
+    from cairnwork.gitcmd import run_git_bytes
+    from cairnwork.gitcmd_capped import GitOutputTooLarge
+
+    git(tmp_path, "init", "-q")
+    blob = tmp_path / "big"
+    blob.write_bytes(b"x" * 300_000)
+    oid = git(tmp_path, "hash-object", "-w", "big")
+    assert len(run_git_bytes(tmp_path, "cat-file", "blob", oid, max_bytes=300_000)) == 300_000
+    with pytest.raises(GitOutputTooLarge):
+        run_git_bytes(tmp_path, "cat-file", "blob", oid, max_bytes=299_999)
+
+
+def test_every_git_read_of_a_patch_carries_the_cap(tmp_path, monkeypatch):
+    git(tmp_path, "init", "-q")
+    for key, value in (("user.email", "t@example.org"), ("user.name", "t")):
+        git(tmp_path, "config", key, value)
+    (tmp_path / "a.py").write_text("x = 1\n")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "commit", "-q", "-m", "base")
+    base, head = _commit_at(tmp_path, "a.py", "x = 2\n")
+    caps = {}
+    real = scan.run_git_bytes
+
+    def spy(repo, *args, **kwargs):
+        caps[next(a for a in args if a in ("diff", "cat-file"))] = kwargs.get("max_bytes")
+        return real(repo, *args, **kwargs)
+
+    monkeypatch.setattr(scan, "run_git_bytes", spy)
+    scan_patch(tmp_path, base, head, python=sys.executable)
+    assert caps == {"diff": scan.MAX_GIT_READ, "cat-file": scan.MAX_GIT_READ}
+
+
+def _commit_at(repo, name, text):
+    base = git(repo, "rev-parse", "HEAD")
+    (repo / name).write_text(text)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "candidate")
+    return base, git(repo, "rev-parse", "HEAD")
+
+
+def test_run_capped_stops_a_git_that_hangs_at_the_timeout():
+    import time
+
+    from cairnwork.gitcmd_capped import run_capped
+
+    started = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        run_capped(["sleep", "30"], max_bytes=10, input=None, timeout=0.3, env={})
+    assert time.monotonic() - started < 10
