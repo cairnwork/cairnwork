@@ -54,6 +54,12 @@ def test_no_ps_signature_stays_failed() -> None:
     [
         # Different denied file; a later mention of ps is not the denied filename.
         ("PermissionError: [Errno 13] Permission denied: '/tmp/data' while checking 'ps'", FAILED),
+        # A candidate's own file named ps (any other directory) is not the system ps binary.
+        ("PermissionError: [Errno 13] Permission denied: 'data/ps'", FAILED),
+        ("PermissionError: [Errno 13] Permission denied: '/home/u/proj/ps'", FAILED),
+        # Unpaired quotes do not count as the ps filename.
+        ("PermissionError: [Errno 1] Operation not permitted: 'ps\"", FAILED),
+        ("PermissionError: [Errno 1] Operation not permitted: '/usr/bin/ps'", UNCOMPARABLE),
         # The denied filename field names ps, so this is a genuine ps denial.
         ("PermissionError: [Errno 1] Operation not permitted: 'ps'", UNCOMPARABLE),
     ],
