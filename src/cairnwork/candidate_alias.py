@@ -178,7 +178,10 @@ def _collect_table_names(tree: ast.Module, sys_names: set[str]) -> set[str]:
 
 
 def _is_alias_hot(node: ast.AST, sys_names: set[str], table_names: set[str]) -> bool:
+    called = {id(p.func) for p in ast.walk(node) if isinstance(p, ast.Call)}
     for part in ast.walk(node):
+        if isinstance(part, ast.Attribute) and part.attr == "modules" and id(part) not in called:
+            return True  # any receiver: ``[sys][0].modules``, a parameter, a class attribute
         if (
             isinstance(part, ast.Attribute)
             and part.attr in TABLES
@@ -226,8 +229,36 @@ def alias_machinery_changed(old: bytes | None, new: bytes) -> bool:
     return any(k in new_hot for k in added) or any(k in old_hot for k in removed)
 
 
+_PATH_MUTATORS = frozenset({"insert", "append", "extend", "remove", "pop", "clear", "__setitem__"})
+
+
+def _edits_foreign_path(part: ast.AST) -> bool:
+    """``<expr>.path`` edited whatever ``<expr>`` is, except the ``os.path`` helpers."""
+    if isinstance(part, ast.Call) and isinstance(part.func, ast.Attribute):
+        target = part.func.value
+        return (
+            part.func.attr in _PATH_MUTATORS
+            and isinstance(target, ast.Attribute)
+            and target.attr == "path"
+            and not (isinstance(target.value, ast.Name) and target.value.id == "os")
+        )
+    targets = []
+    if isinstance(part, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
+        targets = part.targets if isinstance(part, ast.Assign) else [part.target]
+    return any(
+        isinstance(t, ast.Attribute) and t.attr == "path" and not _is_os_name(t.value)
+        for t in targets
+    )
+
+
+def _is_os_name(node: ast.AST) -> bool:
+    return isinstance(node, ast.Name) and node.id == "os"
+
+
 def _is_path_edit_statement(node: ast.AST, sys_names: set[str], text: str) -> bool:
     for part in ast.walk(node):
+        if _edits_foreign_path(part):
+            return True
         if (
             isinstance(part, ast.Attribute)
             and part.attr == "path"

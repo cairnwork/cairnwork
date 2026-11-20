@@ -59,7 +59,7 @@ _REACH_WORDS = tuple(
     word.encode()
     for word in (
         "sys.modules", "meta_path", "path_hooks", "path_importer_cache", "importlib", "runpy",
-        "pytest_plugins", "__import__",
+        "pytest_plugins", "__import__", "getmembers", "getattr_static",
     )
 )  # fmt: skip
 _MACHINERY_WORDS = _REACH_WORDS + tuple(
