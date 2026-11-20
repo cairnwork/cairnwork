@@ -146,3 +146,14 @@ def test_key_split_over_three_lines_never_reaches_the_gate():
     parts = [key[:15], key[15:30], key[30:]]
     masked, _count, _names = _mask_secret_lines("\n".join(parts) + "\n")
     assert masked is None or not any(part in masked for part in parts)
+
+
+def test_key_split_over_four_lines_or_with_blank_lines_never_reaches_the_gate():
+    from experimental.local_relay.relay import _mask_secret_lines
+
+    key = "sk-ant-api03-" + "Ab1" * 14
+    four = [key[:12], key[12:24], key[24:36], key[36:]]
+    blank = [key[:20], "", "  ", key[20:]]
+    for parts in (four, blank):
+        masked, _count, _names = _mask_secret_lines("\n".join(parts) + "\n")
+        assert masked is None or not any(p.strip() and p.strip() in masked for p in parts)

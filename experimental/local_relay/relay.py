@@ -222,34 +222,43 @@ def _line_ending(line: str) -> str:
     return ""
 
 
-_CONTINUATION_LINES = 2  # a key broken across lines: its rest follows the first hit
 _KEY_PIECE = re.compile(r"^[A-Za-z0-9_+/=-]{8,}$")
+
+
+def _key_runs(lines: list[str]) -> list[list[int]]:
+    """Maximal runs of key-shaped lines (blank lines may sit between them)."""
+    runs: list[list[int]] = []
+    current: list[int] = []
+    for i, line in enumerate(lines):
+        text = line.strip()
+        if _KEY_PIECE.match(text):
+            current.append(i)
+        elif text:
+            if current:
+                runs.append(current)
+            current = []
+    return runs + ([current] if current else [])
 
 
 def _mask_with(scanner: Scanner, text: str) -> tuple[str | None, int, list[str]]:
     lines = text.splitlines(keepends=True)
-    stripped = [line.strip() for line in lines]
     names: dict[int, list[str]] = {}
     in_pem = False
     for i, line in enumerate(lines):
         hits = scanner.scan(line)
-        pair = False
-        if not hits and i + 1 < len(lines) and not scanner.scan(stripped[i + 1]):
-            hits = scanner.scan(stripped[i] + stripped[i + 1])  # a key split at a line break
-            pair = bool(hits)
         if "-----BEGIN" in line and hits:
             in_pem = True  # the body lines carry the key itself: mask through the END line
         if hits:
             names.setdefault(i, []).extend(hits)
-            for j in range(i + 1, min(len(lines), i + 1 + _CONTINUATION_LINES)):
-                if (pair and j == i + 1) or _KEY_PIECE.match(stripped[j]):
-                    names.setdefault(j, []).extend(hits)
-                else:
-                    break
         elif in_pem:
             names.setdefault(i, []).append("pem_block")
         if in_pem and "-----END" in line:
             in_pem = False
+    for run in _key_runs(lines):  # a key broken over several lines: judge the run as one text
+        hits = scanner.scan("".join(lines[i].strip() for i in run))
+        if hits or any(i in names for i in run):
+            for i in run:
+                names.setdefault(i, []).extend(hits or names.get(i, []))
     out = [
         f"[line masked: {', '.join(sorted(set(names[i])))}]" + _line_ending(line)
         if i in names
