@@ -1,7 +1,9 @@
 """Candidate-path checks and failure-cost records never trust the worker's repository."""
 
+import json
 import os
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -262,3 +264,22 @@ def test_non_finite_costs_are_never_recorded_as_spend(monkeypatch, bad):
         GateRequest("t", "", "p", CallSettings("haiku", "medium", 5.0, 1))
     )
     assert reply.verdict is None and reply.usd == 0.0
+
+
+def test_core_acceptance_includes_rejection_diagnostics_in_stage_output():
+    class Verdict:
+        status = "FAILED"
+        tree_sha256 = "a" * 64
+        reason = "pytest failed"
+        pytest_exit_code = 1
+        pytest_output = "\n".join(f"line {number}" for number in range(1, 46))
+
+    verdict = CoreAcceptance(lambda _candidate: Verdict())(RunResult(0, "", Path("."), Path(".")))
+
+    output = json.loads(verdict.raw)
+    assert verdict.passed is False
+    assert output["reason"] == "pytest failed"
+    assert output["pytest_exit_code"] == 1
+    assert output["pytest_output_tail"].splitlines() == [
+        *(f"line {number}" for number in range(6, 46))
+    ]

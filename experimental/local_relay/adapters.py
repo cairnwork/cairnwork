@@ -107,9 +107,20 @@ class CoreAcceptance:
                     ),
                 )
         verdict = self.judge(candidate)
-        raw = json.dumps(
-            {"status": verdict.status, "tree_sha256": verdict.tree_sha256}, sort_keys=True
-        )
+        evidence: dict[str, Any] = {
+            "status": verdict.status,
+            "tree_sha256": verdict.tree_sha256,
+        }
+        reason = getattr(verdict, "reason", None)
+        if isinstance(reason, str):
+            evidence["reason"] = reason
+        pytest_exit_code = getattr(verdict, "pytest_exit_code", None)
+        if isinstance(pytest_exit_code, int):
+            evidence["pytest_exit_code"] = pytest_exit_code
+        pytest_output = getattr(verdict, "pytest_output", None)
+        if isinstance(pytest_output, str):
+            evidence["pytest_output_tail"] = "\n".join(pytest_output.splitlines()[-40:])
+        raw = json.dumps(evidence, sort_keys=True)
         return Acceptance(verdict.status == "VERIFIED", raw)
 
 
