@@ -235,14 +235,10 @@ def build_policy(
     for root in writes:
         flags += ["--bind", root, root]
     # Mask only credential paths that exist (a bind over an absent path fails on the read-only
-    # root, and an absent path leaks nothing) and, off the owner path, only those the account uid
-    # can both reach and read. The policy is rebuilt per run, so one created later is masked next.
+    # root) and, off the owner path, only those the account uid can both reach and read.
     masks, mask_notes = _credential_masks(real_home, mask_home_credentials, writes, reads)
     flags += masks
-    # Mask root-equivalent daemon sockets at the canonical path (realpath collapses duplicates;
-    # /dev/null bound onto a symlink path makes bwrap create a mountpoint through it and fail).
-    # Only an existing one: exists() follows the link, so an absent or dangling one adds no flag.
-    # Off the owner path an unreachable one is skipped: a bind there EPERMs the run (#482).
+    # Mask existing daemon sockets at the canonical path; off the owner path only reachable ones (#482).
     masked_socks: set[str] = set()
     for sock in _DANGEROUS_SOCKETS:
         real = _safe(sock) if os.path.exists(sock) else None
