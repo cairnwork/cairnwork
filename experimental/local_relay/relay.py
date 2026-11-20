@@ -10,13 +10,14 @@ from experimental.local_relay.config import FLAG, RelayConfig
 from experimental.local_relay.diagnostics import redact
 from experimental.local_relay.gate_plan import PlanIncomplete
 from experimental.local_relay.ledger import Ledger
+from experimental.local_relay.safe_summary import guard_plan
 from experimental.local_worker.endpoint import (
     EndpointContextLimit,
     EndpointTimeout,
     EndpointUnreachable,
 )
 from experimental.pause.interfaces import CallSettings, Gate, GateReply, GateRequest
-from experimental.pause.schema import GATE_VERDICTS
+from experimental.pause.schema import GATE_VERDICTS, Reason
 
 
 @dataclass(frozen=True)
@@ -144,13 +145,39 @@ def _check_stage(task_id, attempt, acceptance, gate, ledger, config, stage, trai
     except Exception as exc:  # noqa: BLE001 - plan failures fail closed like gate failures.
         trail.append(_stage(stage, result, None, f"plan failed: {exc}"))
         return RelayResult("FAILED", attempt.candidate, result.passed, result.raw, reason=str(exc))
+    withheld, categories = False, []
+    if config.mask_secret_lines:
+        sendable, categories = guard_plan(plan, result.raw)
+        withheld = bool(categories)
+        if sendable is None:
+            entry = _stage(stage, result, None, Reason.PAUSE_SECRET_BLOCKED)
+            entry.update(plan_withheld=True, scan_categories=categories, gate_called=False)
+            trail.append(entry)
+            extra = {"gate_reason": str(Reason.PAUSE_SECRET_BLOCKED), "scan_categories": categories}
+            _append(
+                ledger,
+                _row(task_id, stage, config.gate_model_id, 0, 0, 0.0, extra=extra),
+            )
+            return RelayResult(
+                "REJECTED",
+                attempt.candidate,
+                result.passed,
+                result.raw,
+                None,
+                Reason.PAUSE_SECRET_BLOCKED,
+            )
+        plan = sendable
     try:
         reply = gate.review(GateRequest(task_id, "", plan, settings))
     except Exception as exc:  # noqa: BLE001 - injected gate failures must fail closed.
         trail.append(_stage(stage, result, None, f"gate raised: {exc}"))
         return RelayResult("FAILED", attempt.candidate, result.passed, result.raw, reason=str(exc))
     reason = _verdict_reason(reply)
+    if withheld and reason is None:
+        reason = "MASKED_ACCEPT"  # the gate saw a summary, not the change: never counts as ACCEPT
     entry = _stage(stage, result, reply, reason)
+    if config.mask_secret_lines:
+        entry.update(plan_withheld=withheld, scan_categories=categories)
     trail.append(entry)
     _append(
         ledger,
@@ -164,7 +191,7 @@ def _check_stage(task_id, attempt, acceptance, gate, ledger, config, stage, trai
             extra={k: v for k, v in entry.items() if k != "stage"},
         ),
     )
-    if result.passed and reply.verdict == "ACCEPT" and reply.reason is None:
+    if result.passed and reply.verdict == "ACCEPT" and reason is None:
         return RelayResult("ACCEPTED", attempt.candidate, result.passed, result.raw, reply.verdict)
     return RelayResult(
         "REJECTED", attempt.candidate, result.passed, result.raw, reply.verdict, reason

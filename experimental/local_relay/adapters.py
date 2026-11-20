@@ -13,7 +13,7 @@ from typing import Any
 from urllib.parse import quote, urlsplit
 
 from experimental.local_relay.config import DEFAULT_LOCAL_ENDPOINT
-from experimental.local_relay.diagnostics import episode_failure
+from experimental.local_relay.diagnostics import episode_failure, redacted_tail
 from experimental.local_relay.gate_plan import PlanIncomplete, changed_paths
 from experimental.local_relay.relay import Acceptance, Attempt, LocalAttemptFailed
 from experimental.local_worker.endpoint import (
@@ -107,9 +107,20 @@ class CoreAcceptance:
                     ),
                 )
         verdict = self.judge(candidate)
-        raw = json.dumps(
-            {"status": verdict.status, "tree_sha256": verdict.tree_sha256}, sort_keys=True
-        )
+        evidence: dict[str, Any] = {
+            "status": verdict.status,
+            "tree_sha256": verdict.tree_sha256,
+        }
+        reason = getattr(verdict, "reason", None)
+        if type(reason) is str:
+            evidence["reason"] = reason
+        pytest_exit_code = getattr(verdict, "pytest_exit_code", None)
+        if type(pytest_exit_code) is int:
+            evidence["pytest_exit_code"] = pytest_exit_code
+        pytest_output = getattr(verdict, "pytest_output", None)
+        if type(pytest_output) is str:
+            evidence["pytest_output_tail"] = redacted_tail(pytest_output, 40, 600)
+        raw = json.dumps(evidence, sort_keys=False)
         return Acceptance(verdict.status == "VERIFIED", raw)
 
 
