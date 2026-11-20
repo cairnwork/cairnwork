@@ -63,7 +63,7 @@
 - 用其他方式綁定的 `test*`／`Test*` 名字；
 - 相對匯入的 `TestCase`，或頂層模組名稱和測試 commit 樹裡（整棵樹、任何深度）某個 `.py` 檔的檔名或某個目錄名相同的 `TestCase`。`Test*` 是 pytest 的類別名稱規則，這類 `TestCase` 可能帶有測試，也可能遮蔽 `unittest`（prepend 模式或 `pythonpath` 可能把任何目錄放到 `sys.path` 最前面）。這裡不重現 `sys.path`，只看名稱，也不讀那個檔裡有沒有測試。樹裡沒有同名路徑時，`unittest`、`django.test` 這類框架 `TestCase` 照常放行。誤拒的代價：repo 裡剛好有 `django/`、`unittest.py` 之類同名路徑時，新增這種匯入的測試 commit 會被拒（失敗關閉）。
 
-測試 commit 只要新增或改動這類測試就會被拒（`DEFERRED_TESTS_UNREADABLE`），即使同一個檔案裡另有看得見的新測試也一樣。
+測試 commit 只要新增或改動這類測試就會被拒（`DEFERRED_TESTS_UNREADABLE`），即使同一個檔案裡另有看得見的新測試也一樣。拒絕訊息點名這些形狀，並告訴作者把測試移到頂層的 `def test_*` 或頂層 `Test*` 類別（#1564）；錯誤碼不變，讀不到都是解析限制，沒有權限分支。
 
 為什麼接受：放行的話，target 只點名看得見的測試，區塊裡那個錯誤修正過不了的測試根本不會跑，錯的候選會得到 VERIFIED（#925 實測）。代價是真的要改版本檢查區塊裡測試的任務得不到 VERIFIED，要把測試移到頂層，或交給人處理。base 上沒動過的區塊測試不受影響。
 
