@@ -40,7 +40,9 @@ def stage_canary(canary: Path, out: Path) -> Path:
     return local_report
 
 
-def worker_argv(task, parts, model, context, endpoint) -> list[str]:
+def worker_argv(
+    task, parts, model, context, endpoint, max_steps: int = 200, max_wall_seconds: float = 960.0
+) -> list[str]:
     task_path, checkout, out, local_report, runs = parts
     return [
         sys.executable,
@@ -64,4 +66,8 @@ def worker_argv(task, parts, model, context, endpoint) -> list[str]:
         *[value for path in task["allowed_files"] for value in ("--write-path", path)],
         "--endpoint",
         endpoint,
+        "--max-steps",
+        str(max_steps),
+        "--max-wall-seconds",
+        str(max_wall_seconds),
     ]
