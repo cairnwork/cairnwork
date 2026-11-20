@@ -170,10 +170,11 @@ class ProxyGate:
             HAIKU_MODEL,
             reply.effort,
             reply.reason,
-            input_tokens,
-            output_tokens,
-            usd,
-            self._chat.last_text,
+            diagnostics=reply.diagnostics,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            usd=usd,
+            text=self._chat.last_text,
         )
 
     @staticmethod
@@ -182,7 +183,9 @@ class ProxyGate:
         example PAUSE_SECRET_BLOCKED sends nothing, so there is no spend to meter); a verdict
         with unknown cost is refused rather than trusted."""
         if reply.reason is not None:
-            return MeteredGateReply(None, HAIKU_MODEL, reply.effort, reply.reason)
+            return MeteredGateReply(
+                None, HAIKU_MODEL, reply.effort, reply.reason, diagnostics=reply.diagnostics
+            )
         return refused
 
 
