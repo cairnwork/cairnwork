@@ -203,6 +203,11 @@ def _parse_imports(raw: bytes, path: str) -> set[str]:
         elif isinstance(node, ast.ImportFrom):  # relative too: from . import helper
             names.update((node.module or "").split("."))  # a submodule can be redirected
             names.update(alias.name for alias in node.names if alias.name != "*")
+            if _is_test_file(path) and any(
+                alias.asname and alias.name in _IMPORT_ROUTES | _IMPORT_CALLS
+                for alias in node.names
+            ):
+                names.add("*")  # an import function bound to another name fails closed
         elif _is_test_file(path) and _indirect_import(node, called):
             names.add("*")  # an import reached by another route fails closed for every file
         elif isinstance(node, ast.Call) and _call_name(node.func) in _IMPORT_CALLS:

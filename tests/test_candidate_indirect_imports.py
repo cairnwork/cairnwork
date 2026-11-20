@@ -25,6 +25,9 @@ TESTS = {
     "list_wrapped": "import importlib\nmod = [importlib.import_module][0]('helperx')\n",
     "runpy": "import runpy\nmod = runpy.run_module('helperx')\n",
     "pkgutil": "import pkgutil\nmod = pkgutil.resolve_name('helperx')\n",
+    "renamed_import": "from importlib import import_module as load\nmod = load('helperx')\n",
+    "renamed_route": "from runpy import run_module as go\nmod = go('helperx')\n",
+    "renamed_resolver": "from pkgutil import resolve_name as pick\nmod = pick('helperx')\n",
 }
 
 
@@ -63,3 +66,24 @@ def test_plain_getattr_in_a_test_file_adds_no_star(repo):
     assert "*" not in _parse_imports(plain, "tests/test_h.py")
     assert "*" in _parse_imports(b"import runpy\nrunpy.run_module('a')\n", "tests/test_h.py")
     assert "*" not in _parse_imports(b"import runpy\nrunpy.run_module('a')\n", "src/a.py")
+
+
+def test_direct_from_import_with_constant_name_is_not_starred():
+    from cairnwork.candidate_shadow import _parse_imports
+
+    src = b"from importlib import import_module\nmod = import_module('helperx')\n"
+    assert "*" not in _parse_imports(src, "tests/test_h.py")
+
+
+EDITS = {
+    "from_sys_path": "from sys import path\nx = 1\npath.insert(0, 'vendor')\n",
+    "from_sys_path_alias": "from sys import path as p\nx = 1\np.append('vendor')\n",
+}
+
+
+@pytest.mark.parametrize("name", sorted(EDITS))
+def test_from_import_of_the_search_path_then_edit_is_refused(repo, name):
+    files = _with_test(repo, "import helperx\nmod = helperx\n")
+    files["src/a.py"] = EDITS[name]
+    with pytest.raises(CandidateRejected):
+        _check(repo, files)
