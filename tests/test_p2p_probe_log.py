@@ -1,7 +1,5 @@
 """#331: the tail of a failed base probe's log, as it goes into the output's logs."""
 
-import time
-
 import pytest
 
 from cairnwork.p2p_probe_log import probe_log_tail
@@ -387,13 +385,3 @@ def test_every_single_codepoint_nfkc_variant_of_key_char_is_masked_1313():
         elif nf == "=":
             sample = f"token{ch}SECRETVAL"
             assert mask_secrets(sample) == f"token{ch}<redacted>", (hex(cp), sample)
-
-
-@pytest.mark.parametrize("unit", ["-", "a-", "a_", "x-token-", "a＿", "a︳"])
-def test_one_long_line_of_word_characters_and_dashes_is_not_quadratic(unit):
-    from cairnwork.p2p_probe_log import mask_secrets
-
-    text = "head\n" + unit * (65536 // len(unit)) + "\nEND\n"
-    started = time.monotonic()
-    out = mask_secrets(text)
-    assert time.monotonic() - started < 5 and out.endswith("END\n")

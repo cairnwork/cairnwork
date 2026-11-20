@@ -3,7 +3,15 @@
 from __future__ import annotations
 
 import pra1353_consume as consume
-from test_1039_1353_witnesses import PINS, broker_report  # noqa: F401
+import pytest
+from shared_broker_report import honest_report
+from test_1039_1353_witnesses import PINS
+
+
+@pytest.fixture(scope="session")
+def broker_report(tmp_path_factory):
+    return honest_report(tmp_path_factory)
+
 
 # Each rebind fires only inside the runner process (it keys on the runner's own names), so a
 # run that still shares a process with product code changes rows, and a clean one does not.
@@ -33,7 +41,7 @@ def _rows(report):
     return {r["seq"]: r for r in report["rows"]}
 
 
-def test_b1_product_init_cannot_change_rows_of_other_routes(monkeypatch, broker_report):  # noqa: F811
+def test_b1_product_init_cannot_change_rows_of_other_routes(monkeypatch, broker_report):
     honest = _rows(broker_report)
     real = consume._tracked_source_bytes()
     init = "src/cairnwork/__init__.py"
@@ -47,7 +55,7 @@ def test_b1_product_init_cannot_change_rows_of_other_routes(monkeypatch, broker_
     assert not changed, f"B1 CONFIRMED: product import rewrote rows (seq): {changed}"
 
 
-def test_b1_runner_process_never_loads_product_modules(broker_report):  # noqa: F811
+def test_b1_runner_process_never_loads_product_modules(broker_report):
     runner = {item["name"] for item in broker_report["modules"]}
     assert not {n for n in runner if n.split(".")[0].startswith("cairnwork")}
     launcher_children = [
