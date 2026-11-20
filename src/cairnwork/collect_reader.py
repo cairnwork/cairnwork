@@ -22,6 +22,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from cairnwork.node_file import file_part, name_part
+
 
 @dataclass(frozen=True)
 class Collected:
@@ -72,7 +74,7 @@ def _exposed(raw, targets: frozenset[str], unknown: frozenset[str]) -> tuple[str
 
 
 def _valid_exposed_id(item: str) -> bool:
-    parts = item.split("::")
+    parts = [file_part(item), *name_part(item).split("::")] if "::" in item else [item]
     return (
         len(parts) >= 3
         and all(parts)
@@ -100,7 +102,7 @@ def _unclean(run) -> str:
 
 
 def _file(nodeid: str) -> str:
-    return nodeid.partition("::")[0]
+    return file_part(nodeid)
 
 
 def _files(nodes, targets: frozenset[str]) -> frozenset[str] | None:

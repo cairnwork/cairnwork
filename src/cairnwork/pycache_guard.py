@@ -49,6 +49,7 @@ import stat
 from pathlib import Path
 
 from cairnwork.issue_task import DEFAULT_TEST_ROOTS
+from cairnwork.node_file import file_part
 from cairnwork.verifier_spec import protected_verifier_inputs
 
 PYCACHE_DIR = "pycache"
@@ -117,7 +118,7 @@ def _variants(*paths: Path) -> tuple[str, ...]:
 def _target_dirs(targets: tuple[str, ...]) -> tuple[str, ...]:
     """The directories (lower case) of the run's pytest targets (``tests/test_a.py[::name]``)."""
     return tuple(
-        {d.lower() for t in targets if (d := os.path.dirname(t.split("::", 1)[0])) not in ("", ".")}
+        {d.lower() for t in targets if (d := os.path.dirname(file_part(t))) not in ("", ".")}
     )
 
 

@@ -32,6 +32,7 @@ from typing import Any
 from cairnwork import protection
 from cairnwork.deferred_tests import TestCommitRejected, new_tests, untargeted
 from cairnwork.issue_task import test_target
+from cairnwork.node_file import file_part
 from cairnwork_attest.binding_extras import conftest_problem, data_problem, required_ids
 from cairnwork_attest.verify_response import VerifyResult, _fail
 
@@ -79,7 +80,7 @@ def coverage_problem(ctx: Any) -> VerifyResult | None:
     if (problem := data_problem(ctx)) is not None:  # a failed result is falsy
         return problem
     folded = {path.casefold() for path in data}  # a case variant names the same file on macOS
-    if clash := sorted(t for t in named if t.split("::", 1)[0].casefold() in folded):
+    if clash := sorted(t for t in named if file_part(t).casefold() in folded):
         return _fail("DATA_PATHS_INVALID", f"a verifier names a data path: {clash}")
     try:
         nodes = (

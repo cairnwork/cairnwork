@@ -7,6 +7,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from posixpath import normpath
 
+from cairnwork.node_file import file_part
+
 
 @dataclass(frozen=True)
 class Verdict:
@@ -50,7 +52,7 @@ class Verdict:
         return tuple(dict.fromkeys([*missing, *self.collect_skipped]))
 
     def _owns(self, nodeid: str, target: str) -> bool:
-        return self.paths.get(nodeid) == target.partition("::")[0] and _within(nodeid, target)
+        return self.paths.get(nodeid) == file_part(target) and _within(nodeid, target)
 
 
 def _within(nodeid: str, target: str) -> bool:

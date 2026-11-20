@@ -9,6 +9,7 @@ from typing import Any
 
 from cairnwork.deferred_tests import BaseUncomparable, Comparison
 from cairnwork.gitcmd import GitCommandError, run_git
+from cairnwork.node_file import file_part
 from cairnwork.textclean import replace_hidden
 from cairnwork.verifiers import run_verifiers
 
@@ -142,7 +143,7 @@ def _clean_run(run: Any) -> bool:
 
 
 def _node_file(node: str) -> str:
-    path = node.partition("::")[0]
+    path = file_part(node)
     if "\\" in path or PurePosixPath(path).is_absolute() or ".." in path.split("/"):
         return ""
     return path if path.startswith("tests/") else ""
