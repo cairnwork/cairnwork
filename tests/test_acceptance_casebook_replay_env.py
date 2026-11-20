@@ -143,4 +143,5 @@ def test_a_shadow_cairnwork_on_pythonpath_cannot_forge_a_core_verdict(
     (line,) = Path(args[args.index("--out") + 1]).read_text().splitlines()[:1]
     record = json.loads(line)
     assert record["mapped"] != ["accepted"]
-    assert record["outcome"] == "UNREPLAYABLE" and record["reason"] == "NO_CORE_VERDICT"
+    # The real verifier ran (not the forged one) and Core's real FAILED_VERIFICATION is a refusal.
+    assert record["mapped"] == ["refused"] and record["outcome"] == "same_mistake"

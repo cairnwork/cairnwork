@@ -260,7 +260,7 @@ class CoreJudge:
     ) -> None:
         self.intake = Intake(Path(state_dir))
         self.verifiers = tuple((key, tuple(value)) for key, value in verifiers)
-        self.import_paths = tuple(Path(path) for path in import_paths)
+        self.import_paths = tuple(Path(path).as_posix() for path in import_paths)
         self.verify = verify
 
     def __call__(self, r1: RunResult) -> CoreVerdict:
@@ -312,7 +312,15 @@ class CoreJudge:
                 raise RuntimeError("Core judge changed R1 checkout")
             if not isinstance(result, dict) or type(result.get("status")) is not str:
                 raise ValueError("Core result must contain a string status")
-            return CoreVerdict(result["status"], source_tree)
+            return CoreVerdict(
+                result["status"],
+                source_tree,
+                result.get("reason") if type(result.get("reason")) is str else None,
+                result.get("pytest_exit_code")
+                if type(result.get("pytest_exit_code")) is int
+                else None,
+                result.get("pytest_output") if type(result.get("pytest_output")) is str else None,
+            )
 
     @staticmethod
     def _changed_paths(repo: Path, base: str, candidate: str) -> tuple[str, ...]:

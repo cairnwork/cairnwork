@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 from test_issue_runner import FakeGitHub, issue, setup  # noqa: F401
 
+import cairnwork.intake_request as intake_request
 import cairnwork.issue_runner as runner
 import cairnwork.issue_task as issue_task
 from cairnwork.intake import Intake
@@ -124,6 +125,34 @@ def test_a_request_file_that_cannot_be_opened_still_errors(setup, monkeypatch, c
     monkeypatch.setattr(os, "open", opener)
     out = runner.take(setup["intake"], github, setup["clone"])
     _still_queued(setup, github, task_id, out, type(OSError(code, "x")).__name__)
+
+
+def test_a_read_failing_after_open_still_errors(setup, monkeypatch):
+    """#475: EIO from the read itself (the open worked) is no RequestUnreadable: still queued."""
+    github, task_id = _legacy_failed(setup, "whole")
+    real = os.fdopen
+
+    class Broken:
+        def __init__(self, handle):
+            self.handle = handle
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self.handle.close()
+
+        def read(self):
+            raise OSError(errno.EIO, "Input/output error")
+
+    monkeypatch.setattr(os, "fdopen", lambda fd, *a, **k: Broken(real(fd, *a, **k)))
+    requests = setup["intake"].state / "requests"
+    with pytest.raises(OSError) as raised:
+        intake_request.read_request(requests, task_id)
+    assert raised.value.errno == errno.EIO
+    assert not isinstance(raised.value, intake_request.RequestUnreadable)
+    out = runner.take(setup["intake"], github, setup["clone"])
+    _still_queued(setup, github, task_id, out, "OSError")
 
 
 def _no_requests_dir(requests: Path, task_id: str) -> None:

@@ -17,7 +17,9 @@ from cairnwork_attest.record import AttestError, VerdictRecord, check_record_bin
 ROW_COLUMNS = ("task_id", "attempt_id", "base_commit", "candidate_commit", "request_hash",
                "request_json", "http_status", "status", "integrity", "response_json",
                "recorded_at", "binding_json")  # fmt: skip
-REFUSALS = ("FAILED",)  # Core's only refusal status; REFUSED/UNCOMPARABLE are set before Core
+# Core's real refusal row says FAILED_VERIFICATION (#751); FAILED is kept for older rows and
+# fixtures. REFUSED/UNCOMPARABLE are set before Core.
+REFUSALS = ("FAILED", "FAILED_VERIFICATION")
 EVIDENCE_KEYS = ("candidate", "task_id", "attempt_id", "kind", "ref")
 
 

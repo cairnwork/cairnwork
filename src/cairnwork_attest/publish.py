@@ -17,11 +17,13 @@ from pathlib import Path
 from cairnwork.gitcmd import (
     _SAFE_OPTIONS,
     ALLOWED_PROTOCOLS,
+    NETWORK_SUBCOMMANDS,
     GitCommandError,
     _safe_transport_args,
     config_hooks_off,
     ssh_batch_mode,
 )
+from cairnwork.gitversion import GitVersionError, git_executable, require_no_lazy_fetch
 from cairnwork_attest.bundle import BundleError, read_bundle
 from cairnwork_attest.record import AttestError, parse_strict_json
 
@@ -75,14 +77,19 @@ def _git(repo: Path, *args: str, input: bytes | None = None) -> subprocess.Compl
         and k not in ("SSH_ASKPASS", "SSH_ASKPASS_REQUIRE")  # no password prompt program (#759)
     }
     env.update({"GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C", "LANGUAGE": "C"})
+    env["GIT_NO_LAZY_FETCH"] = "1"  # a partial clone never fetches by itself (#1514, #489)
+    try:
+        require_no_lazy_fetch()  # fail closed on a git that would ignore the variable
+    except GitVersionError as exc:
+        return subprocess.CompletedProcess(["git", *args], 1, "", str(exc))
     env["GIT_ALLOW_PROTOCOL"] = ALLOWED_PROTOCOLS  # beats any protocol.*.allow (#759)
-    if args and args[0] in ("fetch", "push"):
+    if args and args[0] in NETWORK_SUBCOMMANDS:
         ssh_batch_mode(env, repo)
     try:
         hooks_off = config_hooks_off(repo, env)
     except GitCommandError as exc:  # a hook name -c cannot carry: git is not run
         return subprocess.CompletedProcess(["git", *args], 1, "", str(exc))
-    argv = ["git", *_SAFE_OPTIONS, *hooks_off, *_safe_transport_args(args)]
+    argv = [git_executable(), *_SAFE_OPTIONS, *hooks_off, *_safe_transport_args(args)]
     try:
         proc = subprocess.run(
             argv,
