@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: '17 19 * * *'
 
 permissions:
   contents: read
@@ -16,11 +18,12 @@ permissions:
 # Nothing re-runs it automatically; a cancelled run can be re-run by hand. PR heads are always
 # tested before they land, unaffected by this.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || 'main' }}
+  group: ci-${{ github.event.pull_request.number || (github.event_name == 'schedule' && 'nightly') || 'main' }}
   cancel-in-progress: true
 
 jobs:
   test:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 60  # a hung job must not hold a runner for the 6 h GitHub default (#1499)
     strategy:
@@ -94,6 +97,7 @@ jobs:
   # every shard passed.
   test-macos-shard:
     name: test-macos-shard (${{ matrix.shard }})
+    if: github.event_name != 'push'
     strategy:
       fail-fast: false
       matrix:
@@ -128,7 +132,7 @@ jobs:
           # so only main's lock is trusted. The private, empty uv cache keeps a cache that an
           # earlier run's PR code could have written out of the trusted venv.
           case "$EVENT:$BASE_REF:$GITHUB_REF" in
-            pull_request:main:* | push::refs/heads/main) ;;
+            pull_request:main:* | push::refs/heads/main | schedule::refs/heads/main) ;;
             *) echo "the #1353 gate trusts only main's lock"; exit 1 ;;
           esac
           [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "base sha is not 40-hex"; exit 1; }
@@ -181,7 +185,7 @@ jobs:
   # The required check keeps its name: green only when both shards are green.
   test-macos:
     needs: test-macos-shard
-    if: ${{ always() }}
+    if: ${{ always() && github.event_name != 'push' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -196,6 +200,7 @@ jobs:
   # (unguarded on purpose: a host that cannot nest namespaces reddens the leg rather than letting
   # the sandbox tests skip silently), then runs the sandbox witnesses under CAIRNWORK_REQUIRE_SANDBOX.
   test-linux-sandbox:
+    if: github.event_name != 'schedule'
     strategy:
       fail-fast: false
       matrix:
@@ -238,6 +243,7 @@ jobs:
   # Creates the account, then runs the account witnesses on real bwrap with the account
   # required — a missing or unusable account fails the job (it cannot silently skip).
   test-linux-verifier-account:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 30  # a hung job must not hold a runner for the 6 h GitHub default (#1499)
     env:
@@ -285,6 +291,7 @@ jobs:
   # AppArmor's default userns restriction is lifted here exactly as an end user loads an AppArmor
   # profile. Advisory, not a required check.
   demo-linux:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 30  # a hung job must not hold a runner for the 6 h GitHub default (#1499)
     steps:
