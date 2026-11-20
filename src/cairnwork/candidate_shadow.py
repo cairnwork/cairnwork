@@ -124,11 +124,12 @@ def _package_member(
 ) -> bool:
     """Whether a modified module is imported by its dotted package path, so a same-named file
     elsewhere cannot take its place (#1563): its own directory is a base package and no file
-    imports the bare name from another directory. A package ``__init__`` never qualifies."""
+    imports the bare name from another directory or through a dynamic or aliased import (the
+    "*" marker). A package ``__init__`` never qualifies."""
     dir_path = path.rpartition("/")[0]
     if path.rsplit("/", 1)[-1] == "__init__.py" or dir_path not in init_dirs:
         return False
-    return not (top_importers.get(module, set()) - {dir_path})
+    return not (top_importers.get(module, set()) - {dir_path}) and "*" not in top_importers
 
 
 def _already_importable(
@@ -255,12 +256,27 @@ def _parse_top_level_imports(raw: bytes, path: str) -> set[str]:
             names.add(node.module.split(".", 1)[0])
         elif isinstance(node, ast.Call) and _call_name(node.func) in _IMPORT_CALLS:
             named = (k.value for k in node.keywords if k.arg in {"name", "modname"})
-            for arg in (*node.args[:1], *named):  # import_module("foo") is a top-level import
-                if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-                    if not arg.value.startswith("."):
-                        names.add(arg.value.split(".", 1)[0])
+            args = (*node.args[:1], *named)
+            if not args or any(k.arg is None for k in node.keywords):
+                names.add("*")
+            for arg in args:  # import_module("foo") is a top-level import
+                if not (isinstance(arg, ast.Constant) and isinstance(arg.value, str)):
+                    names.add("*")  # an unresolvable name could be any module
+                elif not arg.value.startswith("."):
+                    names.add(arg.value.split(".", 1)[0])
+        elif _aliases_import_call(node):
+            names.add("*")  # an aliased import callable hides which name it imports
     names.discard("")
     return names
+
+
+def _aliases_import_call(node: ast.AST) -> bool:
+    """Whether a node binds or references an import callable other than by a direct call."""
+    if isinstance(node, ast.alias):
+        return node.name in _IMPORT_CALLS and node.asname is not None
+    if isinstance(node, ast.Assign):
+        return _call_name(node.value) in _IMPORT_CALLS
+    return False
 
 
 def _call_name(func: ast.expr) -> str:

@@ -102,3 +102,75 @@ def test_a_stdlib_named_package_module_is_still_a_shadow(repo):
     base = git(repo, "rev-parse", "HEAD")
     cand = commit_change(repo, {"pkg/json.py": "X = 2\n", "conftest.py": REDIR})
     _refused(repo, base, cand, "pkg/json.py")
+
+
+def _mod_a(repo, files, extra=None):
+    commit_change(repo, {**SIBLINGS, **files})
+    base = git(repo, "rev-parse", "HEAD")
+    return base, commit_change(
+        repo, {"pkg/a/core.py": "X = 2\n", **(extra or {"conftest.py": REDIR})}
+    )
+
+
+@pytest.mark.parametrize(
+    "test_src",
+    [
+        "from importlib import import_module as load\nload('core')\n",
+        "import importlib\nload = importlib.import_module\nload('core')\n",
+        "load = __import__\nload('core')\n",
+        "import importlib\nname = 'core'\nimportlib.import_module(name)\n",
+        "import importlib\nimportlib.import_module(*['co' + 're'])\n",
+    ],
+)
+def test_a_dynamic_or_aliased_import_keeps_the_duplicate_refusal(repo, test_src):
+    base, cand = _mod_a(repo, {"tests/test_d.py": test_src})
+    _refused(repo, base, cand, "pkg/a/core.py")
+
+
+def test_a_dynamic_import_in_a_non_test_file_keeps_the_duplicate_refusal(repo):
+    src = "from importlib import import_module as load\nload('core')\n"
+    base, cand = _mod_a(repo, {"pkg/loader.py": src})
+    _refused(repo, base, cand, "pkg/a/core.py")
+
+
+def test_a_package_init_with_a_twin_is_still_a_shadow(repo):
+    files = {
+        "pkg/a/sub/__init__.py": "",
+        "pkg/b/sub/__init__.py": "",
+        "tests/test_t.py": "from pkg.a import sub\n",
+    }
+    commit_change(repo, {**SIBLINGS, **files})
+    base = git(repo, "rev-parse", "HEAD")
+    cand = commit_change(repo, {"pkg/a/sub/__init__.py": "X = 2\n", "conftest.py": REDIR})
+    _refused(repo, base, cand, "pkg/a/sub/__init__.py")
+
+
+def test_a_module_in_a_directory_without_init_with_a_twin_is_still_a_shadow(repo):
+    files = {"loose/core.py": "X = 1\n", "tests/test_t.py": "from pkg.a import core\n"}
+    commit_change(repo, {**SIBLINGS, **files})
+    base = git(repo, "rev-parse", "HEAD")
+    cand = commit_change(repo, {"loose/core.py": "X = 2\n", "conftest.py": REDIR})
+    _refused(repo, base, cand, "loose/core.py")
+
+
+def test_a_bare_importer_in_another_directory_keeps_the_refusal(repo):
+    base, cand = _mod_a(repo, {"tools/use.py": "import core\n"})
+    _refused(repo, base, cand, "pkg/a/core.py")
+
+
+def test_a_module_in_an_importable_root_without_init_with_a_twin_is_still_a_shadow(repo):
+    files = {
+        "src/core.py": "X = 1\n",
+        "lib/core.py": "X = 1\n",
+        "tests/test_t.py": "from lib import core\n",
+    }
+    commit_change(repo, files)
+    base = git(repo, "rev-parse", "HEAD")
+    cand = commit_change(repo, {"src/core.py": "X = 2\n", "conftest.py": REDIR})
+    _refused(repo, base, cand, "src/core.py")
+
+
+def test_importers_in_its_own_and_another_directory_keep_the_refusal(repo):
+    files = {"pkg/a/use.py": "import core\n", "tools/use.py": "import core\n"}
+    base, cand = _mod_a(repo, files)
+    _refused(repo, base, cand, "pkg/a/core.py")
