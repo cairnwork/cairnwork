@@ -89,6 +89,8 @@ def test_bound_to_does_not_parse_oversized_second_read(repo, tmp_path, notarized
     import cairnwork.notary as notary_module
     from cairnwork.notary_binding import MAX_STORED_JSON_BYTES
 
+    good = notarized.verdict("task-1", "a1", expected_candidate=head_of(repo))
+    assert good is not None and good.verified
     real = notary_module.json.loads
     parsed: list[int] = []
     monkeypatch.setattr(
@@ -101,7 +103,10 @@ def test_bound_to_does_not_parse_oversized_second_read(repo, tmp_path, notarized
         "request_json",
         '{"pad":"' + "x" * MAX_STORED_JSON_BYTES + '"}',
     )
+    # The first read is stubbed to a VERIFIED verdict, so bound_to reaches its own second read.
+    monkeypatch.setattr(notarized, "_read", lambda *_a: replace(good))
     assert notarized.bound_to("task-1", "a1", _change(repo)) is False
+    assert parsed, "the second read must reach json.loads"
     assert all(size <= MAX_STORED_JSON_BYTES for size in parsed)
 
 
