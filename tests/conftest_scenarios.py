@@ -53,7 +53,7 @@ BOTH = (
     ),
 )  # a test commit that edits a base file names it
 SLOW_NEW = (
-    "def test_a():\n    assert True\n\n\ndef test_new():\n    import time\n    time.sleep(60)\n"
+    "def test_a():\n    assert True\n\n\ndef test_new():\n    import time\n    time.sleep(30)\n"
 )
 MODULE_LEVEL = (  # a module-level change in a base file: all its base tests are the author's
     "import os\nos.environ['W3B_FLAG'] = '1'\n\n\ndef test_env():\n"
