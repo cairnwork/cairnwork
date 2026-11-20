@@ -65,6 +65,46 @@ def test_bound_to_is_false_when_the_request_became_unreadable_after_the_read(
     assert notarized.bound_to("task-1", "a1", _change(repo)) is False
 
 
+@pytest.mark.parametrize("column", ["request_json", "response_json", "binding_json"])
+def test_oversized_stored_json_is_not_parsed_or_verified(
+    repo, tmp_path, notarized, monkeypatch, column
+):
+    import cairnwork.notary as notary_module
+    from cairnwork.notary_binding import MAX_STORED_JSON_BYTES
+
+    parsed: list[int] = []
+    real = notary_module.json.loads
+    monkeypatch.setattr(
+        notary_module.json,
+        "loads",
+        lambda value, *args, **kwargs: (parsed.append(len(value)), real(value, *args, **kwargs))[1],
+    )
+    _rewrite(tmp_path, column, '{"pad":"' + "x" * MAX_STORED_JSON_BYTES + '"}')
+    verdict = notarized.verdict("task-1", "a1", expected_candidate=head_of(repo))
+    assert verdict is not None and not verdict.verified
+    assert all(size <= MAX_STORED_JSON_BYTES for size in parsed)
+
+
+def test_bound_to_does_not_parse_oversized_second_read(repo, tmp_path, notarized, monkeypatch):
+    import cairnwork.notary as notary_module
+    from cairnwork.notary_binding import MAX_STORED_JSON_BYTES
+
+    real = notary_module.json.loads
+    parsed: list[int] = []
+    monkeypatch.setattr(
+        notary_module.json,
+        "loads",
+        lambda value, *args, **kwargs: (parsed.append(len(value)), real(value, *args, **kwargs))[1],
+    )
+    _rewrite(
+        tmp_path,
+        "request_json",
+        '{"pad":"' + "x" * MAX_STORED_JSON_BYTES + '"}',
+    )
+    assert notarized.bound_to("task-1", "a1", _change(repo)) is False
+    assert all(size <= MAX_STORED_JSON_BYTES for size in parsed)
+
+
 @pytest.mark.parametrize("value", ["[1]", "null", '"text"'], ids=["list", "null", "string"])
 def test_bound_to_is_false_for_a_stored_request_that_is_not_an_object(
     repo, tmp_path, notarized, monkeypatch, value
