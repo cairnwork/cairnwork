@@ -141,7 +141,7 @@ def test_makereport_reads_no_attributes_of_a_testreport_subclass():
             return "t.py::a"
 
         @property
-        def when(self):
+        def when(self):  # pyright: ignore[reportIncompatibleVariableOverride]
             calls.append("when")
             return "call"
 
