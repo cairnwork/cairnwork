@@ -1,8 +1,6 @@
 """#1374: report guard: remaining exact-type reads of test-controlled values (#1368 family).
 Every candidate-controlled value is read only when it is the exact builtin type; otherwise
 fails closed and none of its methods or properties run inside the guard."""
-# pyright: reportArgumentType=false, reportAttributeAccessIssue=false, reportOptionalMemberAccess=false
-# pyright: reportIncompatibleMethodOverride=false, reportAssignmentType=false
 # (hostile test doubles: they break the declared types on purpose)
 
 import types
@@ -56,7 +54,7 @@ def test_record_skip_calls_no_str_of_an_object_longrepr():
             return "Skipped: why"
 
     report = _skipped()
-    report.longrepr = LongreprObj()
+    report.longrepr = LongreprObj()  # pyright: ignore[reportAttributeAccessIssue]
     reporter = types.SimpleNamespace(_skips={}, _item_marks={})
     plugin["_record_skip"](reporter, report)
     assert calls == []
@@ -202,7 +200,7 @@ def test_fixture_plugin_reads_no_argname_from_a_non_fixture_lookup_error_repr():
 def test_fixture_plugin_keeps_exact_fixture_lookup_error_repr():
     plugin = _plugin(PARTS_SOURCE)
     table = {"anyio_backend": "anyio.pytest_plugin"}
-    repr_obj = FixtureLookupErrorRepr("arg", "cache", "filename", 1, "anyio_backend")
+    repr_obj = FixtureLookupErrorRepr("arg", "cache", "filename", 1, "anyio_backend")  # pyright: ignore[reportArgumentType]
     assert plugin["_fixture_plugin"](table, repr_obj) == "anyio.pytest_plugin"
 
 
@@ -350,7 +348,7 @@ def test_record_skip_runs_no_method_of_a_hostile_outcome():
     plugin = _plugin(PARTS_SOURCE)
     calls = []
     report = _skipped()
-    report.outcome = _Hostile(calls)
+    report.outcome = _Hostile(calls)  # pyright: ignore[reportAttributeAccessIssue]
     reporter = types.SimpleNamespace(_skips={}, _item_marks={})
     plugin["_record_skip"](reporter, report)
     assert calls == [] and reporter._skips == {}
