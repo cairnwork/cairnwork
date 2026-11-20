@@ -223,3 +223,29 @@ def test_a_large_honest_module_stays_inside_the_budget():
     assert len(data) > 1_000_000
     assert ScanBudget().tokenize(data)
     assert ScanBudget().tokenize(data.replace(b"\n", b"\r\n"))  # Windows line ends cost the same
+
+
+# --- bytes read from git (#766) ------------------------------------------------------------------
+def test_a_diff_bigger_than_the_git_read_cap_is_refused_before_the_scan(tmp_path, monkeypatch):
+    seen = []
+
+    def producer(repo, *args, max_bytes=None, **kwargs):
+        seen.append(max_bytes)
+        raise scan.GitOutputTooLarge("stand-in producer emitted more than the cap")
+
+    monkeypatch.setattr(scan, "run_git_bytes", producer)
+    found = scan_patch(tmp_path, "a" * 40, "b" * 40, python=sys.executable)
+    assert [(f.line, f.rule) for f in found] == [(0, SCAN_BUDGET)]
+    assert seen == [scan.MAX_GIT_READ]
+
+
+def test_run_git_bytes_stops_git_past_max_bytes(tmp_path):
+    from cairnwork.gitcmd import GitOutputTooLarge, run_git_bytes
+
+    git(tmp_path, "init", "-q")
+    blob = tmp_path / "big"
+    blob.write_bytes(b"x" * 300_000)
+    oid = git(tmp_path, "hash-object", "-w", "big")
+    assert len(run_git_bytes(tmp_path, "cat-file", "blob", oid, max_bytes=300_000)) == 300_000
+    with pytest.raises(GitOutputTooLarge):
+        run_git_bytes(tmp_path, "cat-file", "blob", oid, max_bytes=299_999)

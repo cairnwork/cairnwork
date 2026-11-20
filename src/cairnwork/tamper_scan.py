@@ -44,9 +44,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from cairnwork.gitcmd import OID, GitCommandError, run_git_bytes
+from cairnwork.gitcmd import OID, GitCommandError, GitOutputTooLarge, run_git_bytes
 from cairnwork.pytest_config import PytestConfigError, test_file_rule
-from cairnwork.tamper_scan_budget import SCAN_BUDGET, ScanBudget, Table
+from cairnwork.tamper_scan_budget import MAX_TOKENIZED, SCAN_BUDGET, ScanBudget, Table
 from cairnwork.tamper_scan_budget import canonical as _canonical
 from cairnwork.tamper_scan_diff import (
     MAX_LINE,
@@ -69,6 +69,10 @@ from cairnwork.tamper_scan_pytest import (
     PYTEST_HINT_IMPORT,
     PYTEST_HOOK_IMPL,
     PYTEST_PUBLIC_PATCH,
+)
+from cairnwork.tamper_scan_stub import (
+    _SENSITIVE_KEY,
+    _SYS_MODULES_STUB,
 )
 from cairnwork.tamper_scan_tokens import added_file, file_views, views_trusted
 from cairnwork.textclean import shown
@@ -93,27 +97,6 @@ def _rule(
 
 
 _COMMENT_ONLY = re.compile(r"^\s*#")
-# sys.modules entries a forgery would swap; a literal key naming any other module is a test stub.
-_SENSITIVE_MODULE = (
-    r"(?:_?pytest\w*|pluggy|py|_?cairnwork\w*|sys|os|builtins|importlib|gc|conftest|__main__)"
-)
-# Test code by module name: a test root package, a conftest or a test module, at any depth.
-_TEST_MODULE = r"(?:\w+\.)*(?:tests|test|testing|conftest|test_\w*|\w+_test)"
-_SENSITIVE_NAME = rf"(?:{_SENSITIVE_MODULE}|{_TEST_MODULE})(?:\.[\w.]*)?"
-_SENSITIVE_KEY = rf"(?:'{_SENSITIVE_NAME}'|\"{_SENSITIVE_NAME}\")"
-_STUB_NAME = (
-    rf"(?:'(?!{_SENSITIVE_MODULE}(?:\.|')|{_TEST_MODULE}(?:\.|'))[\w.]+'"
-    rf"|\"(?!{_SENSITIVE_MODULE}(?:\.|\")|{_TEST_MODULE}(?:\.|\"))[\w.]+\")"
-)
-_STUB_KEY = rf"\[\s*{_STUB_NAME}\s*\]"
-_STUB_RHS = r"(?:(?!\bmodules\b)[^;])*"  # no second sys.modules access chained on the line
-# One statement on the line: assign, delete, pop or setdefault one literal stub key.
-_SYS_MODULES_STUB = (
-    rf"^\s*(?:sys\s*\.\s*modules\s*{_STUB_KEY}\s*=(?!=){_STUB_RHS}"
-    rf"|del\s+sys\s*\.\s*modules\s*{_STUB_KEY}"
-    rf"|sys\s*\.\s*modules\s*\.\s*pop\s*\(\s*{_STUB_NAME}\s*(?:,\s*None\s*)?\)"
-    rf"|sys\s*\.\s*modules\s*\.\s*setdefault\s*\(\s*{_STUB_NAME}\s*,{_STUB_RHS}\))\s*(?:#.*)?$"
-)
 _TEST_DIRS = frozenset({"tests", "test", "testing"})
 
 
@@ -367,6 +350,9 @@ def _committed_coding(path: str, data: bytes | None, found: list[Finding]) -> li
     ]
 
 
+MAX_GIT_READ = MAX_TOKENIZED  # bytes read from git per diff or blob (#766)
+
+
 def scan_patch(
     repo: Path, base: str, head: str, *, python: str, notes: list[str] | None = None
 ) -> list[Finding]:
@@ -375,11 +361,15 @@ def scan_patch(
     Only ``.py`` files are read, as text whatever git attributes or size settings say. ``python`` is
     the verifier's interpreter (verifier_interpreter): file rules parse with it; ``notes``: records.
     """
-    raw = run_git_bytes(  # bytes: no newline translation, so a lone "\r" stays inside its line
-        repo, "-c", "diff.suppressBlankEmpty=false", "-c", "diff.interHunkContext=0",
-        "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames", "-U0", "--text",
-        "--full-index", "--src-prefix=a/", "--dst-prefix=b/", base, head, "--", "*.py",
-    )  # fmt: skip
+    try:  # git output past MAX_GIT_READ is refused before the budget can count it (#766)
+        raw = run_git_bytes(  # bytes: no newline translation, so a lone "\r" stays inside its line
+            repo, "-c", "diff.suppressBlankEmpty=false", "-c", "diff.interHunkContext=0",
+            "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames", "-U0", "--text",
+            "--full-index", "--src-prefix=a/", "--dst-prefix=b/", base, head, "--", "*.py",
+            max_bytes=MAX_GIT_READ,
+        )  # fmt: skip
+    except GitOutputTooLarge:
+        return [Finding("", 0, SCAN_BUDGET)]
     try:
         diff = raw.decode("utf-8")
     except UnicodeDecodeError as exc:  # as run_git: a change that is not UTF-8 is unreadable
@@ -394,7 +384,12 @@ def scan_patch(
         is_test = None
     for path, lines in files.items():
         if path.endswith(".py") and not budget.over:  # read whole, as committed (delete-only too)
-            data = run_git_bytes(repo, "cat-file", "blob", f"{head}:{path}")
+            try:
+                data = run_git_bytes(
+                    repo, "cat-file", "blob", f"{head}:{path}", max_bytes=MAX_GIT_READ
+                )
+            except GitOutputTooLarge:
+                return [*found, Finding(path, 0, SCAN_BUDGET)]
             found += scan_added_lines(path, lines, data, budget, trusted, is_test)
     more = [] if budget.over else file_rules(repo, base, head, budget, python, notes)  # over: done
     return found + [Finding(path, 0, rule) for path, rule in more]
