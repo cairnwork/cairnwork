@@ -46,6 +46,43 @@ def test_the_new_rules_are_realpaths_and_narrow():
     assert '(subpath "/private/var/db")' not in text and '(subpath "/private/etc")' not in text
 
 
+def _write_rule_text(text):
+    """The text of every top-level ``(... file-write* ...)`` rule of a profile, parens balanced."""
+    rules, depth, start = [], 0, None
+    for i, ch in enumerate(text):
+        if ch == "(":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0 and "file-write" in text[start : text.index("\n", start)]:
+                rules.append(text[start : i + 1])
+    return "\n".join(rules)
+
+
+def test_the_read_only_paths_are_in_no_write_rule(tmp_path):  # #827
+    work = tmp_path / "work"
+    work.mkdir()
+    text = seatbelt.build_profile((), (work,), home=Path("/nonexistent-home")).text
+    writes = _write_rule_text(text)
+    assert str(work) in writes  # the extractor sees the real write rule
+    for path in (seatbelt.TIMEZONE_DATA, "/private/etc/hosts"):
+        assert path in text  # readable ...
+        assert path not in writes  # ... and in no file-write* rule
+
+
+def test_the_write_rule_check_flags_a_added_write_rule():  # #827: the check has teeth
+    base = seatbelt.build_profile((), (), home=Path("/nonexistent-home")).text
+    for rule in (
+        '(allow file-write* (literal "/private/etc/hosts"))',
+        '(allow file-write*\n  (subpath "/private/var/db/timezone")\n)',
+    ):
+        writes = _write_rule_text(base + rule + "\n")
+        assert "/private/etc/hosts" in writes or "/private/var/db/timezone" in writes
+    assert "/private/etc/hosts" not in _write_rule_text(base)
+
+
 def _links_out_of(tree, roots):
     """Links under tree whose real target is under none of roots."""
     out = []
