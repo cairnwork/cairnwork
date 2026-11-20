@@ -383,3 +383,15 @@ def test_judge_verifies_add_delete_mode_mix_with_unchanged_tree(tmp_path: Path) 
     )
     assert verdict.status == "VERIFIED"
     assert verdict.tree_sha256 == before == TreeGuard(repo).digest()
+
+
+def test_import_paths_reach_verifier_as_posix_strings(tmp_path: Path) -> None:
+    """verify_candidate wants str import paths; a Path there is a BAD_IMPORT_PATH refusal."""
+    judge = CoreJudge(
+        tmp_path / "state",
+        (),
+        verify=lambda *_a, **_k: {"status": "VERIFIED"},
+        import_paths=("src", Path("lib/sub")),
+    )
+    assert judge.import_paths == ("src", "lib/sub")
+    assert all(type(path) is str for path in judge.import_paths)
