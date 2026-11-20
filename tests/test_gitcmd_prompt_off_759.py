@@ -233,3 +233,31 @@ def test_a_fetch_with_the_default_timeout_also_uses_noninteractive_ssh(
     with pytest.raises(gitcmd.GitCommandError):
         run_git(repo, "fetch", "origin", "main")
     assert "-o\nBatchMode=yes" in marker.read_text()
+
+
+@pytest.mark.parametrize("sub", ["ls-remote", "clone", "pull"])
+def test_every_network_subcommand_uses_noninteractive_ssh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sub: str
+) -> None:
+    """#759: ls-remote (gitprobe), clone and pull reach origin over ssh like fetch and push, so
+    they run ssh in BatchMode too, in gitcmd and in publish._git."""
+    from cairnwork_attest import publish
+
+    repo = _init_repo(tmp_path)
+    subprocess.run(
+        ["git", "-C", str(repo), "remote", "add", "origin", "ssh://example.invalid/x.git"],
+        check=True,
+    )
+    bindir, marker = _ssh_marker(tmp_path)
+    monkeypatch.setenv("PATH", f"{bindir}:{os.environ['PATH']}")
+    monkeypatch.delenv("GIT_SSH", raising=False)
+    monkeypatch.delenv("GIT_SSH_COMMAND", raising=False)
+    target = ["ssh://example.invalid/x.git"] if sub != "pull" else ["origin"]
+    if sub == "clone":
+        target = [*target, str(tmp_path / "c")]
+    with pytest.raises(gitcmd.GitCommandError):
+        run_git(repo, sub, *target, timeout=gitcmd.NETWORK_TIMEOUT_SECONDS)
+    assert "-o\nBatchMode=yes" in marker.read_text()
+    marker.write_text("")
+    publish._git(repo, sub, *target)
+    assert "-o\nBatchMode=yes" in marker.read_text()
