@@ -112,3 +112,51 @@ def test_column_rewrite_is_not_added_as_accepted(
     candidate = value if column == "candidate_commit" else lg["cand"]
     assert _add(lg, candidate, "a1", "accepted_bad") == 2
     assert not _book(lg).exists()
+
+
+def test_row_copied_to_another_attempt_is_not_added_as_accepted(
+    lg: dict[str, str], capsys: Any
+) -> None:
+    """A whole row copied under another attempt id (a row without a binding too) must not pass:
+    its stored request names the original attempt, so the notary's column check refuses it."""
+    with sqlite3.connect(lg["db"]) as conn:
+        conn.row_factory = sqlite3.Row
+        row = dict(
+            conn.execute(
+                "SELECT * FROM core_verifications WHERE task_id = ? AND attempt_id = ?",
+                ("task-1", "a1"),
+            ).fetchone()
+        )
+        row["attempt_id"] = "a9"
+        row.pop("seq")  # the autoincrement key: let the table number the copy
+        names = ", ".join(row)
+        marks = ", ".join("?" for _ in row)
+        conn.execute(
+            f"INSERT INTO core_verifications ({names}) VALUES ({marks})", tuple(row.values())
+        )
+    capsys.readouterr()
+    assert _add(lg, lg["cand"], "a9", "accepted_bad") == 2
+    assert not _book(lg).exists()
+
+
+def test_row_swapped_between_the_two_reads_is_refused(
+    lg: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The binding is judged on a second read; a row that differs from the first read is refused."""
+    from dataclasses import replace
+
+    import experimental.acceptance_casebook.origin as origin_mod
+
+    real = origin_mod.read_record
+    calls: list[int] = []
+
+    def swapped(db: Path, task: str, attempt: str):
+        rec = real(db, task, attempt)
+        calls.append(1)
+        return rec if len(calls) == 1 else replace(rec, recorded_at="2099-01-01T00:00:00Z")
+
+    monkeypatch.setattr(origin_mod, "read_record", swapped)
+    with pytest.raises(origin_mod.OriginError) as info:
+        origin_mod.read_origin(Path(lg["db"]), "task-1", "a1")
+    assert info.value.code == "CASE_RECORD_MISMATCH"
+    assert len(calls) == 2

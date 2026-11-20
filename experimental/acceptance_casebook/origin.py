@@ -90,6 +90,12 @@ def read_origin(notary_db: Path, task_id: str, attempt_id: str) -> tuple[Verdict
         raise OriginError("CASE_RECORD_MISMATCH", "ledger row cannot be read") from exc
     if binding is None:
         raise OriginError("CASE_RECORD_MISMATCH", "ledger row vanished")
+    try:  # the row the binding was judged on must be the row read above (no swap in between)
+        again = read_record(notary_db, task_id, attempt_id)
+    except AttestError as exc:
+        raise OriginError("CASE_RECORD_MISMATCH", f"ledger row: {exc.code}") from exc
+    if again != rec:
+        raise OriginError("CASE_RECORD_MISMATCH", "ledger row changed while it was read")
     return rec, origin_of(rec, binding)
 
 
