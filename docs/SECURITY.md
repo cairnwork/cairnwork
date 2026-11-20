@@ -245,6 +245,21 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
   under the target is refused too, #339, #341); with an account
   every sandboxed run lives under the account's own run root, never under the state.
 
+### The test commit is trusted input (#843)
+
+The deferred test commit is trusted input. Its code (tests, helpers, fixtures, an allowed
+`conftest.py`) runs in the verifier's process without the candidate tamper scan, with whatever
+authority that process has inside the verifier run's OS sandbox (see "Verifier sandbox
+backends"), so whoever controls the test commit controls the verdict. The threat model
+is the trusted author, not the worker. What keeps a worker from choosing or changing the test
+commit: the trusted actor gate on the Issue, single use, a parent that must be the base, and the
+real-directory and overlay checks. The private 0700 store and the canonical rebuild help only
+under the conditions listed in "hidden from the worker only when all three hold" (a separate
+worker account and `test_source: "bundle"`); under the default `"auto"` a commit the store does
+not hold is fetched from `origin`. A compromised author account is outside what the verifier
+defends. The static test-commit checks (conftest allowlist, module plugins, archives) are
+hygiene against accidents, not a boundary against a hostile author.
+
 ### What a VERIFIED rests on (#303)
 
 **Boundary.** Cairnwork guarantees tamper resistance only for acceptance observations that are

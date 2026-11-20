@@ -277,6 +277,9 @@ def run_git_bytes(
 # GIT_ALLOW_PROTOCOL beats every protocol.*.allow setting, so git:// (core.gitProxy) and other
 # <helper>:: remotes never run (#759). Set in _child_env and in cairnwork_attest.publish._git.
 ALLOWED_PROTOCOLS = "file:https:ssh"
+# Subcommands that may reach a remote, so ssh runs in BatchMode for them (#759). A credential
+# helper that opens its own dialog still runs there: operator configuration, kept on purpose.
+NETWORK_SUBCOMMANDS = ("fetch", "push", "pull", "clone", "ls-remote")
 
 
 def _child_env() -> dict[str, str]:
@@ -329,12 +332,12 @@ def _exec(
     if not timeout or timeout <= 0:
         raise ValueError(f"timeout must be a positive number of seconds, got {timeout!r}")
     env = _child_env()
-    if _subcommand(args) in ("fetch", "push"):  # any of them may reach origin over ssh; a
-        ssh_batch_mode(env, repo)  # local path or bundle never calls ssh, so this is harmless
     mark = _MARK.get()
-    if mark is not None:
+    if mark is not None:  # before ssh_batch_mode: its config read is a git call to mark too
         var, val = mark
         env[var] = val
+    if _subcommand(args) in NETWORK_SUBCOMMANDS:  # any of them may reach origin over ssh; a
+        ssh_batch_mode(env, repo)  # local path or bundle never calls ssh, so this is harmless
     if index_file is not None:
         env["GIT_INDEX_FILE"] = str(index_file)
     if isolate_config:
