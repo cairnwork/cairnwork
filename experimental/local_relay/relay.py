@@ -173,7 +173,7 @@ def _check_stage(task_id, attempt, acceptance, gate, ledger, config, stage, trai
         trail.append(_stage(stage, result, None, f"gate raised: {exc}"))
         return RelayResult("FAILED", attempt.candidate, result.passed, result.raw, reason=str(exc))
     reason = _verdict_reason(reply)
-    if withheld and reason is None and not config.masked_accept_passes:
+    if withheld and reason is None:
         reason = "MASKED_ACCEPT"  # the gate saw a summary, not the change: never counts as ACCEPT
     entry = _stage(stage, result, reply, reason)
     if config.mask_secret_lines:

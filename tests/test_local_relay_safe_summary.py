@@ -32,7 +32,7 @@ class ScanningGate:
         return GateReply("ACCEPT", "haiku", "medium", None)
 
 
-def _run(tmp_path, monkeypatch, text, *, masking=False, accept_passes=False):
+def _run(tmp_path, monkeypatch, text, *, masking=False):
     monkeypatch.setenv("CAIRNWORK_LOCAL_RELAY", "1")
     monkeypatch.setenv("RELAY_MASK_SECRET_LINES", "1" if masking else "0")
     gate = ScanningGate()
@@ -51,7 +51,6 @@ def _run(tmp_path, monkeypatch, text, *, masking=False, accept_passes=False):
             enabled=True,
             plan_for=lambda _candidate: text,
             mask_secret_lines=masking,
-            masked_accept_passes=accept_passes,
         ),
     )
     rows = [json.loads(line) for line in ledger_path.read_text().splitlines()]
@@ -84,13 +83,6 @@ def test_flag_on_sends_a_summary_and_its_accept_is_masked_accept(tmp_path, monke
     assert result.route != "LOCAL_FIRST"
     contents = json.dumps({"result": result.__dict__, "stages": result.stages, "rows": rows})
     assert SECRET not in contents and SECRET_LINE not in contents
-
-
-def test_accept_of_a_withheld_plan_passes_only_with_the_explicit_flag(tmp_path, monkeypatch):
-    text = "before\n" + SECRET_LINE + "\nafter"
-    result, _gate, _rows = _run(tmp_path, monkeypatch, text, masking=True, accept_passes=True)
-    assert result.route == "LOCAL_FIRST"
-    assert result.stages[0]["plan_withheld"] is True
 
 
 def test_flag_on_leaves_secret_free_text_unchanged(tmp_path, monkeypatch):
@@ -216,8 +208,7 @@ def test_unsendable_plan_is_rejected_without_calling_the_gate(tmp_path, monkeypa
 def test_masking_field_does_not_shift_positional_arguments():
     import dataclasses
 
-    names = [f.name for f in dataclasses.fields(RelayConfig)]
-    assert names[-2:] == ["mask_secret_lines", "masked_accept_passes"]
+    assert dataclasses.fields(RelayConfig)[-1].name == "mask_secret_lines"
 
 
 def test_masking_flag_is_read_from_the_environment(monkeypatch):
@@ -225,6 +216,3 @@ def test_masking_flag_is_read_from_the_environment(monkeypatch):
     assert RelayConfig.from_env().mask_secret_lines is True
     monkeypatch.delenv("RELAY_MASK_SECRET_LINES")
     assert RelayConfig.from_env().mask_secret_lines is False
-    assert RelayConfig.from_env().masked_accept_passes is False
-    monkeypatch.setenv("RELAY_MASKED_ACCEPT_PASSES", "1")
-    assert RelayConfig.from_env().masked_accept_passes is True
