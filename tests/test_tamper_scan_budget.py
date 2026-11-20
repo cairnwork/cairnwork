@@ -241,7 +241,8 @@ def test_a_diff_bigger_than_the_git_read_cap_is_refused_before_the_scan(tmp_path
 
 
 def test_run_git_bytes_stops_git_past_max_bytes(tmp_path):
-    from cairnwork.gitcmd import GitOutputTooLarge, run_git_bytes
+    from cairnwork.gitcmd import run_git_bytes
+    from cairnwork.gitcmd_capped import GitOutputTooLarge
 
     git(tmp_path, "init", "-q")
     blob = tmp_path / "big"

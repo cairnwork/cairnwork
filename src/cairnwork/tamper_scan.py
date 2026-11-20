@@ -44,7 +44,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from cairnwork.gitcmd import OID, GitCommandError, GitOutputTooLarge, run_git_bytes
+from cairnwork.gitcmd import OID, GitCommandError, run_git_bytes
+from cairnwork.gitcmd_capped import GitOutputTooLarge
 from cairnwork.pytest_config import PytestConfigError, test_file_rule
 from cairnwork.tamper_scan_budget import MAX_TOKENIZED, SCAN_BUDGET, ScanBudget, Table
 from cairnwork.tamper_scan_budget import canonical as _canonical

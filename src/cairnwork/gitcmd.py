@@ -17,12 +17,10 @@ import os
 import re
 import subprocess
 from contextlib import contextmanager
-from functools import partial
 from pathlib import Path
 from typing import Any
 
-from cairnwork.gitcmd_capped import GitOutputTooLarge as GitOutputTooLarge
-from cairnwork.gitcmd_capped import run_capped
+from cairnwork.gitcmd_capped import capped
 from cairnwork.gitversion import GitVersionError, git_executable, require_no_lazy_fetch
 from cairnwork.textclean import replace_hidden
 
@@ -269,7 +267,6 @@ def run_git_bytes(
 
     stdin, when given, is git's standard input (``cat-file --batch``).
     A failure's ``CalledProcessError`` (``__cause__``) then carries bytes in ``stdout``.
-    max_bytes bounds what is read (#766): past it git is killed, GitOutputTooLarge is raised.
     """
     return _exec(repo, args, None, False, timeout, text=False, stdin=stdin, max_bytes=max_bytes)
 
@@ -344,7 +341,7 @@ def _exec(
         env["GIT_CONFIG_GLOBAL"] = os.devnull
         env["GIT_CONFIG_SYSTEM"] = os.devnull
     try:
-        run = subprocess.run if max_bytes is None else partial(run_capped, max_bytes=max_bytes)
+        run = subprocess.run if max_bytes is None else capped(max_bytes)
         done = run(  # noqa: S603 - fixed git argv, no shell
             [
                 git_executable(),

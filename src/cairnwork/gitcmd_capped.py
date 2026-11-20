@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import subprocess
 import threading
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from functools import partial
 from typing import Any
 
 STDERR_READ_LIMIT = 1 << 16  # stderr kept for an error text; the rest is drained and dropped
@@ -78,3 +79,9 @@ def run_capped(  # noqa: PLR0913 - the keywords subprocess.run takes, as the cal
     if proc.returncode:
         raise subprocess.CalledProcessError(proc.returncode, argv, out, err)
     return subprocess.CompletedProcess(argv, 0, out, err)
+
+
+def capped(max_bytes: int) -> Callable[..., subprocess.CompletedProcess[bytes]]:
+    """``run_git_bytes(max_bytes=N)``: bounds what is read (#766); past it git is killed and
+    GitOutputTooLarge is raised."""
+    return partial(run_capped, max_bytes=max_bytes)
