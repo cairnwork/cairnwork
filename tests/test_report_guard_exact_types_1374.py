@@ -312,7 +312,7 @@ def _collect(report):
 def test_collectreport_reads_no_property_of_a_collectreport_subclass():
     calls = []
 
-    class Sub(CollectReport):
+    class Sub(CollectReport):  # pyright: ignore[reportGeneralTypeIssues]
         @property
         def failed(self):
             calls.append("failed")
