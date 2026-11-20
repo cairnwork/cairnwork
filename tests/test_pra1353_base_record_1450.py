@@ -5,7 +5,9 @@ import os
 import re
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
+from typing import cast
 
 import pra1353_base_record as rec
 import pytest
@@ -39,6 +41,116 @@ def _swap_dir_for_symlink(root: Path, *, target_inside: bool = False) -> None:
 
 def _digest(root: Path) -> str:
     return rec.tree_digest([str(root)])[0]
+
+
+def _fake_base_sys_path(monkeypatch, tmp_path: Path) -> tuple[Path, Path]:
+    base = tmp_path / "base"
+    base.mkdir()
+    zip_path = base / "lib" / f"python{sys.version_info.major}{sys.version_info.minor}.zip"
+    monkeypatch.setattr(sys, "base_prefix", str(base))
+    monkeypatch.setattr(sys, "base_exec_prefix", str(base))
+    monkeypatch.setattr(sys, "path", [str(zip_path)])
+    return base, zip_path
+
+
+def _write_zip_module(path: Path, contents: str = "ZIP_SENTINEL = 1\n") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("shutil.py", contents)
+
+
+def _snapshot_fake_install(monkeypatch, tmp_path: Path) -> tuple[Path, Path, dict]:
+    base, zip_path = _fake_base_sys_path(monkeypatch, tmp_path)
+    install = _fake_install(tmp_path)
+    return base, zip_path, rec.snapshot([str(install)])
+
+
+def test_verify_detects_a_sys_path_zip_created_after_record(monkeypatch, tmp_path):
+    _, zip_path, recorded = _snapshot_fake_install(monkeypatch, tmp_path)
+    _write_zip_module(zip_path)
+    current = rec.snapshot(cast(list[str], recorded["roots"]))
+    assert (
+        rec.compare(recorded, current)
+        == "path_extras differs from the recorded base Python install"
+    )
+
+
+def test_verify_detects_a_directory_planted_at_the_sys_path_zip_name(monkeypatch, tmp_path):
+    """A directory (with a module in it) at the zip's name imports as an ordinary path entry."""
+    _, zip_path, recorded = _snapshot_fake_install(monkeypatch, tmp_path)
+    zip_path.mkdir(parents=True)
+    (zip_path / "json.py").write_text("DIR_SENTINEL = 1\n")
+    current = rec.snapshot(cast(list[str], recorded["roots"]))
+    assert (
+        rec.compare(recorded, current)
+        == "path_extras differs from the recorded base Python install"
+    )
+
+
+def test_verify_detects_a_sys_path_zip_modified_after_record(monkeypatch, tmp_path):
+    _, zip_path = _fake_base_sys_path(monkeypatch, tmp_path)
+    _write_zip_module(zip_path, "ZIP_SENTINEL = 1\n")
+    install = _fake_install(tmp_path)
+    recorded = rec.snapshot([str(install)])
+    _write_zip_module(zip_path, "ZIP_SENTINEL = 2\n")
+    current = rec.snapshot(cast(list[str], recorded["roots"]))
+    assert (
+        rec.compare(recorded, current)
+        == "path_extras differs from the recorded base Python install"
+    )
+
+
+def test_verify_detects_a_sys_path_zip_removed_after_record(monkeypatch, tmp_path):
+    _, zip_path = _fake_base_sys_path(monkeypatch, tmp_path)
+    _write_zip_module(zip_path)
+    install = _fake_install(tmp_path)
+    recorded = rec.snapshot([str(install)])
+    zip_path.unlink()
+    current = rec.snapshot(cast(list[str], recorded["roots"]))
+    assert (
+        rec.compare(recorded, current)
+        == "path_extras differs from the recorded base Python install"
+    )
+
+
+def test_unchanged_sys_path_zip_matches_record(monkeypatch, tmp_path):
+    _, zip_path = _fake_base_sys_path(monkeypatch, tmp_path)
+    _write_zip_module(zip_path)
+    install = _fake_install(tmp_path)
+    recorded = rec.snapshot([str(install)])
+    current = rec.snapshot(cast(list[str], recorded["roots"]))
+    assert rec.compare(recorded, current) is None
+
+
+def test_sys_path_regular_file_mode_changes_record(monkeypatch, tmp_path):
+    _, zip_path = _fake_base_sys_path(monkeypatch, tmp_path)
+    _write_zip_module(zip_path)
+    install = _fake_install(tmp_path)
+    recorded = rec.snapshot([str(install)])
+    zip_path.chmod(0o755)
+    current = rec.snapshot(cast(list[str], recorded["roots"]))
+    assert (
+        rec.compare(recorded, current)
+        == "path_extras differs from the recorded base Python install"
+    )
+
+
+def test_sys_path_special_file_fails_closed(monkeypatch, tmp_path):
+    _, zip_path = _fake_base_sys_path(monkeypatch, tmp_path)
+    zip_path.parent.mkdir(parents=True)
+    os.mkfifo(zip_path)
+    install = _fake_install(tmp_path)
+    with pytest.raises(OSError, match="not a regular file"):
+        rec.snapshot([str(install)])
+
+
+def test_sys_path_outside_base_prefixes_is_not_recorded(monkeypatch, tmp_path):
+    _, outside = _fake_base_sys_path(monkeypatch, tmp_path)
+    outside_path = tmp_path / "cwd-like"
+    monkeypatch.setattr(sys, "path", [str(outside), str(outside_path)])
+    install = _fake_install(tmp_path)
+    current = rec.snapshot([str(install)])
+    assert current["path_extras"] == [[str(outside), "absent"]]
 
 
 def test_digest_ignores_only_a_roots_own_site_packages(tmp_path):
@@ -113,6 +225,8 @@ def test_compare_names_the_differing_field_and_rejects_bad_records(tmp_path):
     assert rec.compare(dict(current), current) is None
     assert "digest" in str(rec.compare({**current, "digest": "0" * 64}, current))
     assert "base_prefix" in str(rec.compare({**current, "base_prefix": "/elsewhere"}, current))
+    old_format = {key: value for key, value in current.items() if key != "path_extras"}
+    assert rec.compare(old_format, current) == "record is malformed"
     assert rec.compare({**current, "extra": 1}, current) == "record is malformed"
     assert rec.compare(["not", "a", "dict"], current) == "record is malformed"
 
@@ -196,7 +310,7 @@ def test_the_root_directory_itself_is_part_of_the_digest(tmp_path):
 
 
 def test_a_symlink_to_a_file_outside_the_tree_counts_with_that_files_content(tmp_path):
-    """A venv's bin/python points at the base install, which is outside the checked tree."""
+    """A symlink to a regular file includes the target's content in the tree digest."""
     root = _fake_install(tmp_path)
     outside = tmp_path / "outside-python"
     outside.write_text("v1")
