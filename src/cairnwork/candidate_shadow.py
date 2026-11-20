@@ -196,12 +196,15 @@ def _parse_imports(raw: bytes, path: str) -> set[str]:
     """Names one file imports; raises when it cannot be parsed (the caller treats that as None)."""
     tree = ast.parse(raw, filename=path)
     names: set[str] = set()
+    called = {id(n.func) for n in ast.walk(tree) if isinstance(n, ast.Call)}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             names.update(part for alias in node.names for part in alias.name.split("."))
         elif isinstance(node, ast.ImportFrom):  # relative too: from . import helper
             names.update((node.module or "").split("."))  # a submodule can be redirected
             names.update(alias.name for alias in node.names if alias.name != "*")
+        elif _is_test_file(path) and _indirect_import(node, called):
+            names.add("*")  # an import reached by another route fails closed for every file
         elif isinstance(node, ast.Call) and _call_name(node.func) in _IMPORT_CALLS:
             named = (k.value for k in node.keywords if k.arg in {"name", "modname"})
             args = (*node.args[:1], *named)
@@ -215,6 +218,23 @@ def _parse_imports(raw: bytes, path: str) -> set[str]:
                 names.add("*")  # a dynamic test import fails closed for every nested file
     names.discard("")
     return names
+
+
+_IMPORT_ROUTES = frozenset({"runpy", "pkgutil", "resolve_name", "run_module", "run_path"})
+
+
+def _indirect_import(node: ast.AST, called: set[int]) -> bool:
+    """A dynamic import not written as a direct ``import_module(...)`` call: the import function
+    taken as a value or by ``getattr``, or the runpy/pkgutil routes."""
+    name = node.id if isinstance(node, ast.Name) else getattr(node, "attr", None)
+    if isinstance(node, (ast.Name, ast.Attribute)) and name is not None:
+        return name in _IMPORT_ROUTES or (name in _IMPORT_CALLS and id(node) not in called)
+    if isinstance(node, ast.Call) and _call_name(node.func) == "getattr" and len(node.args) >= 2:
+        owner, attr = node.args[0], node.args[1]
+        if isinstance(attr, ast.Constant) and isinstance(attr.value, str):
+            return attr.value in _IMPORT_ROUTES | _IMPORT_CALLS
+        return isinstance(owner, ast.Name) and owner.id in {"importlib", "builtins"}
+    return False
 
 
 def _is_test_file(path: str) -> bool:
