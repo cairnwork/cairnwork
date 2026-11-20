@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import subprocess
 import threading
-import time
 from collections.abc import Sequence
 from typing import Any
 
@@ -44,13 +43,18 @@ def run_capped(  # noqa: PLR0913 - the keywords subprocess.run takes, as the cal
         except OSError:  # git stopped reading
             pass
 
-    started = time.monotonic()
+    expired = threading.Event()
+
+    def kill_on_timeout() -> None:
+        expired.set()
+        proc.kill()
+
     helpers = [threading.Thread(target=drain_stderr, daemon=True)]
     if input is not None:
         helpers.append(threading.Thread(target=feed, daemon=True))
     for thread in helpers:
         thread.start()
-    timer = threading.Timer(timeout, proc.kill)
+    timer = threading.Timer(timeout, kill_on_timeout)
     timer.start()
     try:
         while block := proc.stdout.read1(65536):  # type: ignore[attr-defined]
@@ -68,7 +72,7 @@ def run_capped(  # noqa: PLR0913 - the keywords subprocess.run takes, as the cal
         proc.wait()
         proc.stdout.close()
         proc.stderr.close()
-    if time.monotonic() - started >= timeout:
+    if expired.is_set():
         raise subprocess.TimeoutExpired(argv, timeout)
     out, err = b"".join(chunks), b"".join(errors)
     if proc.returncode:
