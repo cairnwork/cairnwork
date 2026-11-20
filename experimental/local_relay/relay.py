@@ -6,7 +6,7 @@ import os
 from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
-from experimental.local_relay.config import FLAG, RelayConfig
+from experimental.local_relay.config import ARM_HAIKU_DIRECT, FLAG, RelayConfig
 from experimental.local_relay.diagnostics import redact
 from experimental.local_relay.gate_plan import PlanIncomplete
 from experimental.local_relay.ledger import Ledger
@@ -83,6 +83,9 @@ def run_relay(
 
 
 def _route(task_id, worker, acceptance, gate, fallback, ledger, config, trail):
+    if config.arm == ARM_HAIKU_DIRECT:  # A0: no local stages; same acceptance, same gate
+        direct = _fallback_stage(task_id, fallback, acceptance, gate, ledger, config, (), trail)
+        return replace(direct, route="HAIKU_DIRECT") if direct.route == "FALLBACK" else direct
     if True:
         failures = []
         for stage, context in (

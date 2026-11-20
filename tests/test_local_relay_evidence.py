@@ -148,3 +148,62 @@ def test_hidden_test_logs_go_only_to_the_sink_not_the_ledger_summary():
     rec(None)
     assert "logs_tail" not in rec.last and "hidden_secret" not in json.dumps(rec.last)
     assert sunk and "hidden_secret" in sunk[0]
+
+
+def _arm_parts():
+    from experimental.local_relay.relay import Acceptance, Attempt
+
+    calls = []
+
+    class Gate:
+        def review(self, request):
+            from experimental.local_relay.adapters import MeteredGateReply
+
+            calls.append("gate")
+            return MeteredGateReply("ACCEPT", "claude-haiku-5-5", "medium", None)
+
+    def worker(_context):
+        calls.append("local")
+        raise AssertionError("local stage must not run")
+
+    def fallback(_task):
+        calls.append("fallback")
+        return Attempt("cand", "claude-haiku-5-5", 1, 1, 0.01)
+
+    rows = []
+
+    class Ledger:
+        def append(self, row):
+            rows.append(row)
+
+    return worker, (lambda _c: Acceptance(True, "{}")), Gate(), fallback, Ledger(), calls, rows
+
+
+def test_haiku_direct_arm_skips_local_stages_and_marks_route(monkeypatch):
+    from dataclasses import replace
+
+    from experimental.local_relay.config import RelayConfig
+    from experimental.local_relay.relay import run_relay
+
+    monkeypatch.setenv("CAIRNWORK_LOCAL_RELAY", "1")
+    worker, acceptance, gate, fallback, ledger, calls, rows = _arm_parts()
+    config = replace(RelayConfig(enabled=True), arm="haiku_direct")
+    result = run_relay("t" * 8, worker, acceptance, gate, fallback, ledger, config)
+    assert result.route == "HAIKU_DIRECT" and calls == ["fallback", "gate"]
+    assert rows and all(row.get("stage") != "local" for row in rows)
+
+
+def test_default_arm_is_off_and_typo_is_refused(monkeypatch):
+    from experimental.local_relay.config import RelayConfig
+
+    monkeypatch.delenv("CAIRNWORK_LOCAL_RELAY_ARM", raising=False)
+    assert RelayConfig.from_env().arm == ""
+    monkeypatch.setenv("CAIRNWORK_LOCAL_RELAY_ARM", "haiku-direct")
+    try:
+        RelayConfig.from_env()
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("a typo must be refused")
+    monkeypatch.setenv("CAIRNWORK_LOCAL_RELAY_ARM", "haiku_direct")
+    assert RelayConfig.from_env().arm == "haiku_direct"

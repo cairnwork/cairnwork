@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from typing import Any
 
 FLAG = "CAIRNWORK_LOCAL_RELAY"
+ARM_ENV = "CAIRNWORK_LOCAL_RELAY_ARM"
+ARM_HAIKU_DIRECT = "haiku_direct"  # experiment arm: skip the local stages
 DEFAULT_CONTEXT_TOKENS = 32768
 RETRY_CONTEXT_TOKENS = 65536
 DEFAULT_MAX_STEPS = 200  # experiment values for the local worker loop
@@ -30,7 +32,11 @@ class RelayConfig:
     timeout_seconds: float = 60.0
     # Builds what the gate reviews from a candidate; default is the candidate's string form.
     plan_for: Callable[[Any], str] | None = None
+    arm: str = ""  # "" = normal route; "haiku_direct" = Haiku worker only (A0 check)
 
     @classmethod
     def from_env(cls) -> RelayConfig:
-        return cls(enabled=os.environ.get(FLAG) == "1")
+        arm = os.environ.get(ARM_ENV, "")
+        if arm not in ("", ARM_HAIKU_DIRECT):  # a typo must not silently run the normal route
+            raise ValueError(f"{ARM_ENV} must be empty or {ARM_HAIKU_DIRECT}")
+        return cls(enabled=os.environ.get(FLAG) == "1", arm=arm)
