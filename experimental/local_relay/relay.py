@@ -23,6 +23,7 @@ from experimental.pause.schema import GATE_VERDICTS
 class Acceptance:
     passed: bool
     raw: str
+    detail: Any = None  # why Core refused (diagnostics only)
 
 
 @dataclass(frozen=True)
@@ -225,6 +226,17 @@ def _cost(reply: GateReply) -> float:
     return float(getattr(reply, "usd", 0.0))
 
 
+def _details(result, reply) -> dict:
+    """Optional failure evidence from the acceptance check and the gate (diagnostics only)."""
+    out = {}
+    if getattr(result, "detail", None) is not None:
+        out["acceptance_detail"] = result.detail
+    gate_detail = getattr(reply, "detail", None)
+    if gate_detail is not None:
+        out["gate_detail"] = gate_detail
+    return out
+
+
 def _stage(stage, result, reply, reason):
     """One stage's evidence: Core acceptance and the gate's verdict (or why it gave none)."""
     return {
@@ -235,6 +247,7 @@ def _stage(stage, result, reply, reason):
         "gate_reason": reason,
         "gate_called": True,
         "gate_text": redact(str(getattr(reply, "text", "") or ""))[:300],
+        **_details(result, reply),
     }
 
 

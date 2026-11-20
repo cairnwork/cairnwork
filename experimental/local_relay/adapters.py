@@ -33,6 +33,7 @@ class MeteredGateReply(GateReply):
     output_tokens: int = 0
     usd: float = 0.0
     text: str = ""  # the gate's raw answer (redacted and cut before it is stored)
+    detail: dict | None = None  # scan hits / transport failure kind (diagnostics only)
 
 
 class LocalWorkerAdapter:
@@ -86,12 +87,14 @@ class CoreAcceptance:
         judge: Callable[[RunResult], Any],
         allowed_files: Sequence[str] | None = None,
         source: Path | str | None = None,
+        detail: Callable[[], Any] | None = None,
     ) -> None:
         if allowed_files is not None and source is None:
             raise ValueError("an allowlist check needs the trusted source repository")
         self.judge = judge
         self.allowed_files = None if allowed_files is None else frozenset(allowed_files)
         self.source = None if source is None else Path(source)
+        self.detail = detail  # returns the last Core result summary (evidence.RecordingVerify)
 
     def __call__(self, candidate: Any, /) -> Acceptance:
         if not isinstance(candidate, RunResult):
@@ -110,7 +113,7 @@ class CoreAcceptance:
         raw = json.dumps(
             {"status": verdict.status, "tree_sha256": verdict.tree_sha256}, sort_keys=True
         )
-        return Acceptance(verdict.status == "VERIFIED", raw)
+        return Acceptance(verdict.status == "VERIFIED", raw, self.detail() if self.detail else None)
 
 
 def _changed_paths(result: RunResult, source: Path | None) -> set[str]:

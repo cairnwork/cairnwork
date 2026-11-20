@@ -13,9 +13,12 @@ import functools
 import json
 import math
 import uuid
+from dataclasses import replace
 from collections.abc import Callable, Sequence
 from urllib.parse import quote
 
+from experimental.local_relay.diagnostics import redact
+from experimental.local_relay.evidence import RecordingScanner
 from experimental.local_relay.adapters import MeteredGateReply, _flag_set, _is_flag, _proxy_request
 from experimental.local_worker.endpoint import parse_loopback_url
 from experimental.pause.client import HaikuGate, TransportResult
@@ -23,6 +26,7 @@ from experimental.pause.interfaces import GateRequest
 from experimental.pause.schema import Reason
 
 HAIKU_MODEL = "claude-haiku-5-5"
+GATE_ATTEMPTS = 2  # a reply with no usable verdict is asked for once more
 CHAT_TIMEOUT = 180.0
 GATE_MAX_TOKENS = (
     2048  # thinking is on in the proxy (its effort/thinking are frozen); cap the total
@@ -97,10 +101,22 @@ class _ChatTransport:
     def __init__(self, chat_url: str, request: Request) -> None:
         self.chat_url, self.request = chat_url, request
         self.last_text = ""
+        self.detail: dict = {}
 
     def send(
         self, model: str, effort: str, messages: Sequence[dict], timeout: float
     ) -> TransportResult:
+        result = TransportResult(status=200, body=None)
+        self.detail = {}
+        for attempt in range(1, GATE_ATTEMPTS + 1):
+            result, failure = self._once(messages)
+            self.detail = {"attempts": attempt, **failure}
+            if result.body is not None and result.body.get("text"):
+                self.detail.pop("failure", None)
+                break
+        return result
+
+    def _once(self, messages: Sequence[dict]) -> tuple[TransportResult, dict]:
         body = {
             "model": HAIKU_MODEL,
             "messages": [dict(m) for m in messages],
@@ -109,19 +125,33 @@ class _ChatTransport:
         self.last_text = ""
         try:
             reply = self.request("POST", self.chat_url, body)
-        except Exception:  # noqa: BLE001 - any proxy failure is a refusal, never a success
-            return TransportResult(status=-1, body=None)
+        except Exception as exc:  # noqa: BLE001 - any proxy failure is a refusal, never a success
+            note = redact(str(exc))[:160]
+            return TransportResult(status=-1, body=None), {
+                "failure": f"request_error:{type(exc).__name__}",
+                "error": note,
+            }
         choices = reply.get("choices")
-        message = choices[0].get("message") if isinstance(choices, list) and choices else None
-        if not isinstance(message, dict) or message.get("tool_calls"):
-            return TransportResult(status=200, body=None)
+        first = choices[0] if isinstance(choices, list) and choices else None
+        message = first.get("message") if isinstance(first, dict) else None
+        usage = reply.get("usage") if isinstance(reply.get("usage"), dict) else {}
+        info = {
+            "finish_reason": (first or {}).get("finish_reason") if isinstance(first, dict) else None,
+            "output_tokens": usage.get("completion_tokens", usage.get("output_tokens")),
+        }
+        if not isinstance(message, dict):
+            return TransportResult(status=200, body=None), {"failure": "no_message", **info}
+        if message.get("tool_calls"):
+            return TransportResult(status=200, body=None), {"failure": "tool_calls", **info}
         content = message.get("content")
         if not isinstance(content, str):
-            return TransportResult(status=200, body=None)
+            return TransportResult(status=200, body=None), {"failure": "non_text_content", **info}
         self.last_text = content
+        verdict = parse_verdict(content)
         # An unparseable or ambiguous reply is passed on as empty text (BAD_OUTPUT), never as the
         # raw reply: PAUSE would accept any text whose first line happens to be ACCEPT.
-        return TransportResult(status=200, body={"text": parse_verdict(content) or ""})
+        failure = {} if verdict else {"failure": "empty_reply" if not content.strip() else "no_verdict"}
+        return TransportResult(status=200, body={"text": verdict or ""}), {**failure, **info}
 
 
 class ProxyGate:
@@ -136,7 +166,8 @@ class ProxyGate:
         self.request: Request = request or functools.partial(_proxy_request, timeout=CHAT_TIMEOUT)
         self.stage = "gate"
         self._chat = _ChatTransport(f"{self.endpoint_url}/chat/completions", self.request)
-        self._gate = HaikuGate(self._chat, scanner)
+        self._scanner = RecordingScanner(scanner)
+        self._gate = HaikuGate(self._chat, self._scanner)
 
     def set_stage(self, stage: str) -> None:
         self.stage = stage
@@ -152,18 +183,25 @@ class ProxyGate:
         except Exception:  # noqa: BLE001 - an unlabelled review would be unattributed spend
             return refused
         self._chat.last_text = ""
+        self._chat.detail = {}
+        self._scanner.reset()
         try:
             reply = self._gate.review(request)
         finally:
             with contextlib.suppress(Exception):  # a failed reset shows up in the stats check
                 self.request("POST", f"{self.label_url}/label", {"label": "idle"})
+        detail = {
+            k: v
+            for k, v in {"scan": self._scanner.last, "transport": self._chat.detail}.items()
+            if v
+        } or None
         try:
             stats = self.request("GET", f"{self.label_url}/stats?label={quote(label)}", None)
         except Exception:  # noqa: BLE001 - unknown cost is never recorded as zero
-            return self._unmetered(reply, refused)
+            return self._unmetered(reply, refused, detail)
         cost = _valid_cost(stats)
         if cost is None:
-            return self._unmetered(reply, refused)
+            return self._unmetered(reply, refused, detail)
         usd, input_tokens, output_tokens = cost
         return MeteredGateReply(
             reply.verdict,
@@ -174,16 +212,19 @@ class ProxyGate:
             output_tokens,
             usd,
             self._chat.last_text,
+            detail,
         )
 
     @staticmethod
-    def _unmetered(reply, refused: MeteredGateReply) -> MeteredGateReply:
+    def _unmetered(reply, refused: MeteredGateReply, detail=None) -> MeteredGateReply:
         """No usable cost: keep the gate's own reason when it never produced a verdict (for
         example PAUSE_SECRET_BLOCKED sends nothing, so there is no spend to meter); a verdict
         with unknown cost is refused rather than trusted."""
         if reply.reason is not None:
-            return MeteredGateReply(None, HAIKU_MODEL, reply.effort, reply.reason)
-        return refused
+            return MeteredGateReply(
+                None, HAIKU_MODEL, reply.effort, reply.reason, detail=detail
+            )
+        return replace(refused, detail=detail)
 
 
 def _valid_cost(stats: dict) -> tuple[float, int, int] | None:
