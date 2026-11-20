@@ -13,7 +13,7 @@ from typing import Any
 from urllib.parse import quote, urlsplit
 
 from experimental.local_relay.config import DEFAULT_LOCAL_ENDPOINT
-from experimental.local_relay.diagnostics import episode_failure, redact
+from experimental.local_relay.diagnostics import episode_failure, redacted_tail
 from experimental.local_relay.gate_plan import PlanIncomplete, changed_paths
 from experimental.local_relay.relay import Acceptance, Attempt, LocalAttemptFailed
 from experimental.local_worker.endpoint import (
@@ -119,8 +119,7 @@ class CoreAcceptance:
             evidence["pytest_exit_code"] = pytest_exit_code
         pytest_output = getattr(verdict, "pytest_output", None)
         if type(pytest_output) is str:
-            tail = "\n".join(redact(pytest_output).splitlines()[-40:])
-            evidence["pytest_output_tail"] = tail[-600:]
+            evidence["pytest_output_tail"] = redacted_tail(pytest_output, 40, 600)
         raw = json.dumps(evidence, sort_keys=False)
         return Acceptance(verdict.status == "VERIFIED", raw)
 

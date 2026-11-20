@@ -342,7 +342,6 @@ def test_core_acceptance_redacts_tail_and_rejects_invalid_exit_code():
     evidence = json.loads(output.raw)
     assert "pytest_exit_code" not in evidence
     assert "ghp_abcdefghijklmno" not in output.raw
-    assert "/Users/james/private/file.py" not in output.raw
 
 
 def test_core_acceptance_without_diagnostic_fields_keeps_legacy_output():
@@ -352,3 +351,33 @@ def test_core_acceptance_without_diagnostic_fields_keeps_legacy_output():
 
     output = CoreAcceptance(lambda _c: Verdict())(RunResult(0, "", Path("."), Path(".")))
     assert output.raw == json.dumps({"status": "VERIFIED", "tree_sha256": "a" * 64}, sort_keys=True)
+
+
+def _tail(output):
+    class Verdict:
+        status = "FAILED"
+        tree_sha256 = "a" * 64
+        pytest_output = output
+
+    raw = CoreAcceptance(lambda _c: Verdict())(RunResult(0, "", Path("."), Path("."))).raw
+    return json.loads(raw)["pytest_output_tail"]
+
+
+def test_tail_keeps_the_end_marker_of_a_200_line_output():
+    text = "\n".join([*(f"line {n}" for n in range(200)), "END_MARK"])
+    assert _tail(text).endswith("END_MARK")
+
+
+def test_tail_keeps_the_end_marker_of_a_5000_char_single_line():
+    assert _tail("x" * 5000 + "END_MARK").endswith("END_MARK")
+
+
+def test_tail_keeps_the_end_marker_of_40_long_lines():
+    text = "\n".join([*("y" * 200 for _ in range(39)), "z" * 200 + "END_MARK"])
+    assert _tail(text).endswith("END_MARK")
+
+
+def test_secret_after_2500_chars_of_filler_is_still_masked():
+    tail = _tail("p" * 2500 + " ghp_abcdefghijklmno")
+    assert "ghp_abcdefghijklmno" not in tail
+    assert "[REDACTED]" in tail

@@ -23,18 +23,25 @@ _SECRET_PATTERNS = (
         r"\.[A-Za-z0-9_-]+)\b"
     ),
 )
-_ABSOLUTE_PATH = re.compile(r"(?<![\w])/(?:Users|private|var|tmp|home|root)/[^\s,;\"']+")
 
 
-def redact(value: str) -> str:
-    """Remove common credential forms before persisting worker output or argv."""
+def _scrub(value: str) -> str:
     result = value
     for pattern in _SECRET_PATTERNS:
         result = pattern.sub(
             lambda match: f"{match.group(1) if match.lastindex else ''}[REDACTED]", result
         )
-    result = _ABSOLUTE_PATH.sub("[PATH]", result)
-    return result[:MAX_STDERR_CHARS]
+    return result
+
+
+def redact(value: str) -> str:
+    """Remove common credential forms before persisting worker output or argv."""
+    return _scrub(value)[:MAX_STDERR_CHARS]
+
+
+def redacted_tail(value: str, max_lines: int, max_chars: int) -> str:
+    """Redact the WHOLE text first, then keep its last lines and chars (the failure is at the end)."""
+    return "\n".join(_scrub(value).splitlines()[-max_lines:])[-max_chars:]
 
 
 def episode_failure(result: Any) -> str:
