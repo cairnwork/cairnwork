@@ -12,6 +12,7 @@ import contextlib
 import functools
 import json
 import math
+import os
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import replace
@@ -32,6 +33,16 @@ CHAT_TIMEOUT = 180.0
 GATE_MAX_TOKENS = (
     2048  # thinking is on in the proxy (its effort/thinking are frozen); cap the total
 )
+GATE_MAX_TOKENS_ENV = "RELAY_GATE_MAX_TOKENS"  # experiment override; unset = GATE_MAX_TOKENS
+
+
+def gate_max_tokens() -> int:
+    raw = os.environ.get(GATE_MAX_TOKENS_ENV, "")
+    if raw.isascii() and raw.isdigit() and 256 <= int(raw) <= 65536:
+        return int(raw)
+    return GATE_MAX_TOKENS  # unset or malformed: the default, never a silent odd value
+
+
 # judge_v1.1 verdicts: only 可直接合併 passes; 需修改 and 不可用 are rejections.
 _VERDICTS = {"可直接合併": "ACCEPT", "需修改": "REJECT", "不可用": "REJECT"}
 
@@ -121,7 +132,7 @@ class _ChatTransport:
         body = {
             "model": HAIKU_MODEL,
             "messages": [dict(m) for m in messages],
-            "max_tokens": GATE_MAX_TOKENS,
+            "max_tokens": gate_max_tokens(),
         }
         self.last_text = ""
         try:
