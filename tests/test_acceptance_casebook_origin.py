@@ -131,7 +131,7 @@ def test_origin_changes_with_request_binding_or_core_identity(lg: dict[str, str]
     else:
         resp = {**rec.response, "core_identity": {"other": True}}
         changed = replace(rec, response_json=json.dumps(resp), response=resp)
-    assert origin_of(changed) != origin
+    assert origin_of(changed, None) != origin  # None: no notary binding, never accepted
 
 
 def test_replaced_ledger_same_ids_is_origin_changed(

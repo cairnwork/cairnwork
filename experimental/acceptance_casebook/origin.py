@@ -52,7 +52,7 @@ def _refused(rec: VerdictRecord, binding: RowBinding | None) -> bool:
             and rec.status in REFUSALS)  # fmt: skip
 
 
-def origin_of(rec: VerdictRecord, binding: RowBinding | None = None) -> dict[str, Any]:
+def origin_of(rec: VerdictRecord, binding: RowBinding | None) -> dict[str, Any]:
     response: dict[str, Any] = rec.response if isinstance(rec.response, dict) else {}
     hashes = response.get("hashes")
     contract = hashes.get("acceptance_contract_hash") if isinstance(hashes, dict) else None
