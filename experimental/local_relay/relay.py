@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import re
 from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
@@ -11,6 +10,7 @@ from experimental.local_relay.config import FLAG, RelayConfig
 from experimental.local_relay.diagnostics import redact
 from experimental.local_relay.gate_plan import PlanIncomplete
 from experimental.local_relay.ledger import Ledger
+from experimental.local_relay.safe_summary import guard_plan
 from experimental.local_worker.endpoint import (
     EndpointContextLimit,
     EndpointTimeout,
@@ -18,7 +18,6 @@ from experimental.local_worker.endpoint import (
 )
 from experimental.pause.interfaces import CallSettings, Gate, GateReply, GateRequest
 from experimental.pause.schema import GATE_VERDICTS, Reason
-from experimental.pause.secrets_scan import Scanner
 
 
 @dataclass(frozen=True)
@@ -146,29 +145,18 @@ def _check_stage(task_id, attempt, acceptance, gate, ledger, config, stage, trai
     except Exception as exc:  # noqa: BLE001 - plan failures fail closed like gate failures.
         trail.append(_stage(stage, result, None, f"plan failed: {exc}"))
         return RelayResult("FAILED", attempt.candidate, result.passed, result.raw, reason=str(exc))
-    masked_count, masked_categories = 0, []
+    withheld, categories = False, []
     if config.mask_secret_lines:
-        plan, masked_count, masked_categories = _mask_secret_lines(plan)
-        if plan is None:
+        sendable, categories = guard_plan(plan, result.raw)
+        withheld = bool(categories)
+        if sendable is None:
             entry = _stage(stage, result, None, Reason.PAUSE_SECRET_BLOCKED)
-            entry.update(masked_line_count=masked_count, masked_categories=masked_categories)
-            entry["gate_called"] = False
+            entry.update(plan_withheld=True, scan_categories=categories, gate_called=False)
             trail.append(entry)
+            extra = {"gate_reason": str(Reason.PAUSE_SECRET_BLOCKED), "scan_categories": categories}
             _append(
                 ledger,
-                _row(
-                    task_id,
-                    stage,
-                    config.gate_model_id,
-                    0,
-                    0,
-                    0.0,
-                    extra={
-                        "gate_reason": str(Reason.PAUSE_SECRET_BLOCKED),
-                        "masked_line_count": masked_count,
-                        "masked_categories": masked_categories,
-                    },
-                ),
+                _row(task_id, stage, config.gate_model_id, 0, 0, 0.0, extra=extra),
             )
             return RelayResult(
                 "REJECTED",
@@ -178,6 +166,7 @@ def _check_stage(task_id, attempt, acceptance, gate, ledger, config, stage, trai
                 None,
                 Reason.PAUSE_SECRET_BLOCKED,
             )
+        plan = sendable
     try:
         reply = gate.review(GateRequest(task_id, "", plan, settings))
     except Exception as exc:  # noqa: BLE001 - injected gate failures must fail closed.
@@ -186,7 +175,7 @@ def _check_stage(task_id, attempt, acceptance, gate, ledger, config, stage, trai
     reason = _verdict_reason(reply)
     entry = _stage(stage, result, reply, reason)
     if config.mask_secret_lines:
-        entry.update(masked_line_count=masked_count, masked_categories=masked_categories)
+        entry.update(plan_withheld=withheld, scan_categories=categories)
     trail.append(entry)
     _append(
         ledger,
@@ -205,69 +194,6 @@ def _check_stage(task_id, attempt, acceptance, gate, ledger, config, stage, trai
     return RelayResult(
         "REJECTED", attempt.candidate, result.passed, result.raw, reply.verdict, reason
     )
-
-
-def _mask_secret_lines(text: str) -> tuple[str | None, int, list[str]]:
-    """Mask scanner-matching lines (a PEM block whole); fail closed on any scanner trouble."""
-    try:
-        return _mask_with(Scanner(), text)
-    except Exception:  # noqa: BLE001 - never echo the error: it may hold the scanned text
-        return None, 0, ["scanner_error"]
-
-
-def _line_ending(line: str) -> str:
-    for ending in ("\r\n", "\n", "\r"):
-        if line.endswith(ending):
-            return ending
-    return ""
-
-
-_KEY_PIECE = re.compile(r"^[A-Za-z0-9_+/=-]{8,}$")
-
-
-def _key_runs(lines: list[str]) -> list[list[int]]:
-    """Maximal runs of key-shaped lines (blank lines may sit between them)."""
-    runs: list[list[int]] = []
-    current: list[int] = []
-    for i, line in enumerate(lines):
-        text = line.strip()
-        if _KEY_PIECE.match(text):
-            current.append(i)
-        elif text:
-            if current:
-                runs.append(current)
-            current = []
-    return runs + ([current] if current else [])
-
-
-def _mask_with(scanner: Scanner, text: str) -> tuple[str | None, int, list[str]]:
-    lines = text.splitlines(keepends=True)
-    names: dict[int, list[str]] = {}
-    in_pem = False
-    for i, line in enumerate(lines):
-        hits = scanner.scan(line)
-        if "-----BEGIN" in line and hits:
-            in_pem = True  # the body lines carry the key itself: mask through the END line
-        if hits:
-            names.setdefault(i, []).extend(hits)
-        elif in_pem:
-            names.setdefault(i, []).append("pem_block")
-        if in_pem and "-----END" in line:
-            in_pem = False
-    for run in _key_runs(lines):  # a key broken over several lines: judge the run as one text
-        hits = scanner.scan("".join(lines[i].strip() for i in run))
-        if hits or any(i in names for i in run):
-            for i in run:
-                names.setdefault(i, []).extend(hits or names.get(i, []))
-    out = [
-        f"[line masked: {', '.join(sorted(set(names[i])))}]" + _line_ending(line)
-        if i in names
-        else line
-        for i, line in enumerate(lines)
-    ]
-    value = "".join(out)
-    found = sorted({name for hit in names.values() for name in hit})
-    return (None if scanner.scan(value) else value), len(names), found
 
 
 def _fallback_stage(task_id, fallback, acceptance, gate, ledger, config, failures=(), trail=None):
