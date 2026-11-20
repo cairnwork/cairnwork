@@ -399,7 +399,8 @@ Checks run in this order and the first failure is reported:
     `conftest_paths`, which must be exactly the paths in `test_paths` whose basename is `conftest.py`
     (sorted). A confidential receiver refuses it (`CONFTEST_NOT_ALLOWED`) unless its policy sets
     `allow_conftest: true`; a full receiver re-runs the static allowlist (`CONFTEST_STATIC`; hygiene,
-    not the guard). That the base tests keep their outcomes with the test commit laid over the base
+    not the guard), and also refuses it when its policy sets `allow_conftest: false` explicitly (#927).
+    That the base tests keep their outcomes with the test commit laid over the base
     (the differential probe, `p2p_conftest.py`) is the signer's word: `assurance.conftest_probe` is
     `signer_claim` when `conftest_paths` is present.
     A test commit may declare `.py` files that are test data, not pytest targets (#850), in the

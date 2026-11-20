@@ -261,6 +261,11 @@ def _instructions(repo: str, number: int, issue: dict[str, Any], summary: str) -
     )
 
 
+# Nested entities peel one level per round; a real Issue needs 2 or 3. Past this: withheld.
+UNFENCE_ROUNDS = 32
+UNFENCE_WITHHELD = "(text withheld: encoded too deeply)"
+
+
 def _unfence(text: str, *, multiline: bool) -> str:
     """Make ``text`` unable to open or close the <issue> data fence: decode HTML entities,
     NFKC-normalise, drop invisible format characters (zero-width space and the like), turn
@@ -271,13 +276,14 @@ def _unfence(text: str, *, multiline: bool) -> str:
     keep = "\n\t" if multiline else ""
     if multiline:
         text = text.replace("\r\n", "\n")
-    while True:
+    for _ in range(UNFENCE_ROUNDS):
         folded = unicodedata.normalize("NFKC", html.unescape(text))
         visible = "".join(c for c in folded if unicodedata.category(c) != "Cf")  # zero-width
         cleaned = ISSUE_TAG.sub("", replace_hidden(visible, keep=keep))
         if cleaned == text:
             return cleaned
         text = cleaned
+    return UNFENCE_WITHHELD  # still changing after that many rounds: not an Issue text (#674)
 
 
 def _record_path(intake: Intake, repo: str, number: int) -> Path:

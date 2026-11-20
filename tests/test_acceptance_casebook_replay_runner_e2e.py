@@ -106,6 +106,7 @@ def test_ac4f_replays_through_real_runner_and_verify_cli(tmp_path, capsys, proje
     assert first["outcome"] == "same_mistake" and not first.get("reason")
     assert first["mapped"] == ["accepted"] and first["exit_codes"] == [0]
     assert first["verify_output_sha256"][0]
-    # A failing verifier is status FAILED but never reaches Core, so it is not a core verdict.
-    assert second["outcome"] == "UNREPLAYABLE" and second["reason"] == "NO_CORE_VERDICT"
-    assert code == 3
+    # A failing verifier reaches Core, whose real FAILED_VERIFICATION is a refusal (#751).
+    assert second["outcome"] == "same_mistake" and not second.get("reason")
+    assert second["mapped"] == ["refused"] and second["exit_codes"] == [2]
+    assert code == 0  # both replays reached a Core verdict

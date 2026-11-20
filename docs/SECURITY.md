@@ -186,6 +186,10 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
       sockets). The ones listed under `/run` and `/var/run` stay on the list although the private
       `/run` hides those paths: the name there may be a link to a socket outside `/run`
       (Rancher Desktop, Colima), and that real target is what gets masked.
+      On the dedicated-account path (`mask_home_credentials=False`) a socket whose real path the
+      account cannot enter by the `bwrap_reach` rule is not masked (#482): the account cannot
+      connect to it, and a bind there would fail the run with EPERM. If that rule is wrong for
+      the host, such a socket stays unmasked.
 
   Only paths that exist are masked. Write roots that are `/`, a system or temp directory, `$HOME`
   or an ancestor of `$HOME` are refused.
@@ -244,6 +248,21 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
   path reached through a symlink, relative or absolute, is masked at its real target, so a state
   under the target is refused too, #339, #341); with an account
   every sandboxed run lives under the account's own run root, never under the state.
+
+### The test commit is trusted input (#843)
+
+The deferred test commit is trusted input. Its code (tests, helpers, fixtures, an allowed
+`conftest.py`) runs in the verifier's process without the candidate tamper scan, with whatever
+authority that process has inside the verifier run's OS sandbox (see "Verifier sandbox
+backends"), so whoever controls the test commit controls the verdict. The threat model
+is the trusted author, not the worker. What keeps a worker from choosing or changing the test
+commit: the trusted actor gate on the Issue, single use, a parent that must be the base, and the
+real-directory and overlay checks. The private 0700 store and the canonical rebuild help only
+under the conditions listed in "hidden from the worker only when all three hold" (a separate
+worker account and `test_source: "bundle"`); under the default `"auto"` a commit the store does
+not hold is fetched from `origin`. A compromised author account is outside what the verifier
+defends. The static test-commit checks (conftest allowlist, module plugins, archives) are
+hygiene against accidents, not a boundary against a hostile author.
 
 ### What a VERIFIED rests on (#303)
 

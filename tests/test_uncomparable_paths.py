@@ -41,6 +41,7 @@ BASE_ROWS = [  # (base run, code): one per row of the mapping table
     pytest.param(TEETH | {"survivors": 1}, "BASE_SURVIVORS", id="survivors"),
     pytest.param(TEETH | {"forged": ("x.pyc",)}, "BASE_FORGED_BYTECODE", id="forged"),
     pytest.param(TEETH | {"log_too_big": True}, "BASE_LOG_OVER_CAP", id="log-over-cap"),
+    pytest.param(TEETH | {"mutated": ("x.txt",)}, "BASE_MUTATED", id="mutated"),  # #577
 ]
 ENV_OK = {"rc": 1, "outcomes": {"tests/test_calc.py::test_add": "failed"}}  # base env check
 PROBE_ROWS = [  # a failed P2P base probe (the base run itself has teeth)
@@ -58,7 +59,7 @@ def _run(spec, run_root, run_id, rc=1, outcomes=None, recorded=True, **flags):
     seen = VerifierObservation(spec.verifier_id, "x/verifier.log", "sha256:" + "0" * 64, False)
     outcomes = (outcomes or {}) if recorded else {}  # no record: the guard saw nothing
     return verifiers.VerifierRun(
-        spec, rc, flags.get("timed_out", False), (), log, seen, outcomes,
+        spec, rc, flags.get("timed_out", False), flags.get("mutated", ()), log, seen, outcomes,
         recorded=recorded, report_too_big=flags.get("report_too_big", False),
         collect_errors=flags.get("collect_errors", ()), survivors=flags.get("survivors", 0),
         forged=flags.get("forged", ()), log_too_big=flags.get("log_too_big", False),
