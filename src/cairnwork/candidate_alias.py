@@ -253,11 +253,14 @@ def _edits_foreign_path(part: ast.AST) -> bool:
         ):
             return True
         return any(_foreign_path(arg) for arg in (*part.args, *(k.value for k in part.keywords)))
+    value: ast.expr | None = None
     if isinstance(part, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
         targets = part.targets if isinstance(part, ast.Assign) else [part.target]
         value = getattr(part, "value", None)
         if _foreign_path(value):
             return True  # a stored alias of the search path
+    elif isinstance(part, ast.NamedExpr):
+        return _foreign_path(part.value)  # walrus alias of the search path
     elif isinstance(part, ast.Delete):
         targets = part.targets
     else:
@@ -265,8 +268,11 @@ def _edits_foreign_path(part: ast.AST) -> bool:
     for target in targets:
         if isinstance(target, ast.Subscript) and _foreign_path(target.value):
             return True  # element or slice assignment, augmented assignment, ``del``
-        if _foreign_path(target) and not isinstance(getattr(target, "value", None), ast.Name):
-            return True  # ``[sys][0].path = ...``; a plain-name receiver is judged by sys names
+        if _foreign_path(target):
+            plain = isinstance(getattr(target, "value", None), ast.Name)
+            constant = isinstance(value, ast.Constant) and isinstance(value.value, str)
+            if not plain or isinstance(part, ast.AugAssign) or not constant:
+                return True  # only ``request.path = "/x"`` style string assignments pass
     return False
 
 

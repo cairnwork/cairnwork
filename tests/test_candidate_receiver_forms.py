@@ -29,6 +29,9 @@ REFUSED = {
     "element_del": SHADOW + "def _g(s):\n    del s.path[0]\n_g(sys)\n",
     "stored_alias": SHADOW + "def _g(s):\n    p = s.path\n    p.insert(0, d)\n_g(sys)\n",
     "list_insert_alias": SHADOW + "def _g(s):\n    list.insert(s.path, 0, d)\n_g(sys)\n",
+    "name_attr_assign": SHADOW + "def _g(s):\n    s.path = [d]\n_g(sys)\n",
+    "name_attr_augassign": SHADOW + "def _g(s):\n    s.path += [d]\n_g(sys)\n",
+    "walrus_alias": SHADOW + "def _g(s):\n    (p := s.path).insert(0, d)\n_g(sys)\n",
     "attr_assign_nonname": SHADOW + "[sys][0].path = [d]\n",
 }
 
