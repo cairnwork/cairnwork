@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
@@ -221,23 +222,43 @@ def _line_ending(line: str) -> str:
     return ""
 
 
+_CONTINUATION_LINES = 2  # a key broken across lines: its rest follows the first hit
+_KEY_PIECE = re.compile(r"^[A-Za-z0-9_+/=-]{8,}$")
+
+
 def _mask_with(scanner: Scanner, text: str) -> tuple[str | None, int, list[str]]:
-    masked, categories, count, in_pem = [], set(), 0, False
-    for line in text.splitlines(keepends=True):
+    lines = text.splitlines(keepends=True)
+    stripped = [line.strip() for line in lines]
+    names: dict[int, list[str]] = {}
+    in_pem = False
+    for i, line in enumerate(lines):
         hits = scanner.scan(line)
+        pair = False
+        if not hits and i + 1 < len(lines) and not scanner.scan(stripped[i + 1]):
+            hits = scanner.scan(stripped[i] + stripped[i + 1])  # a key split at a line break
+            pair = bool(hits)
         if "-----BEGIN" in line and hits:
             in_pem = True  # the body lines carry the key itself: mask through the END line
-        if hits or in_pem:
-            count += 1
-            categories.update(hits or ["pem_block"])
-            names = ", ".join(sorted(set(hits or ["pem_block"])))
-            masked.append(f"[line masked: {names}]" + _line_ending(line))
-            if in_pem and "-----END" in line:
-                in_pem = False
-        else:
-            masked.append(line)
-    value = "".join(masked)
-    return (None if scanner.scan(value) else value), count, sorted(categories)
+        if hits:
+            names.setdefault(i, []).extend(hits)
+            for j in range(i + 1, min(len(lines), i + 1 + _CONTINUATION_LINES)):
+                if (pair and j == i + 1) or _KEY_PIECE.match(stripped[j]):
+                    names.setdefault(j, []).extend(hits)
+                else:
+                    break
+        elif in_pem:
+            names.setdefault(i, []).append("pem_block")
+        if in_pem and "-----END" in line:
+            in_pem = False
+    out = [
+        f"[line masked: {', '.join(sorted(set(names[i])))}]" + _line_ending(line)
+        if i in names
+        else line
+        for i, line in enumerate(lines)
+    ]
+    value = "".join(out)
+    found = sorted({name for hit in names.values() for name in hit})
+    return (None if scanner.scan(value) else value), len(names), found
 
 
 def _fallback_stage(task_id, fallback, acceptance, gate, ledger, config, failures=(), trail=None):

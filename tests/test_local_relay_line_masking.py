@@ -82,12 +82,11 @@ def test_masking_on_never_persists_original_secret(tmp_path, monkeypatch):
     assert stage["masked_categories"] == ["api_key", "assigned_secret"]
 
 
-def test_masking_on_fails_closed_when_residual_scan_matches(tmp_path, monkeypatch):
-    residual = "before\nGITHUB_TOKEN=\n" + "a" * 24
-    result, gate, _rows = _run(tmp_path, monkeypatch, residual, masking=True)
-    assert gate.calls == []
-    assert all(s["gate_reason"] == Reason.PAUSE_SECRET_BLOCKED for s in result.stages)
-    assert all(s["gate_called"] is False for s in result.stages)
+def test_masking_on_masks_a_value_split_from_its_assignment(tmp_path, monkeypatch):
+    split = "before\nGITHUB_TOKEN=\n" + "a" * 24
+    result, gate, _rows = _run(tmp_path, monkeypatch, split, masking=True)
+    assert all("a" * 24 not in plan for plan in gate.calls + gate.seen)
+    assert result.stages[0]["masked_line_count"] >= 1
 
 
 def test_masking_on_leaves_secret_free_text_unchanged(tmp_path, monkeypatch):
@@ -129,3 +128,21 @@ def test_masking_flag_is_read_from_the_environment(monkeypatch):
     assert RelayConfig.from_env().mask_secret_lines is True
     monkeypatch.delenv("RELAY_MASK_SECRET_LINES")
     assert RelayConfig.from_env().mask_secret_lines is False
+
+
+def test_key_split_over_two_lines_is_masked_in_both_halves():
+    from experimental.local_relay.relay import _mask_secret_lines
+
+    key = "sk-ant-api03-" + "Ab1" * 14
+    first, second = key[:20], key[20:]
+    masked, _count, _names = _mask_secret_lines(f"x\n{first}\n{second}\ny\n")
+    assert masked is None or (first not in masked and second not in masked)
+
+
+def test_key_split_over_three_lines_never_reaches_the_gate():
+    from experimental.local_relay.relay import _mask_secret_lines
+
+    key = "sk-ant-api03-" + "Ab1" * 14
+    parts = [key[:15], key[15:30], key[30:]]
+    masked, _count, _names = _mask_secret_lines("\n".join(parts) + "\n")
+    assert masked is None or not any(part in masked for part in parts)
