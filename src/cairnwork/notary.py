@@ -41,7 +41,7 @@ from cairnwork.changeset import GitChangeSet, read_change_set, read_tree_change_
 from cairnwork.core_request import AcceptanceSpec, VerifierObservation, build_core_request
 from cairnwork.deferred_tests import TestCommitRejected, overlay_tree
 from cairnwork.gitcmd import GitCommandError, run_git
-from cairnwork.notary_binding import RowBinding, row_binding
+from cairnwork.notary_binding import MAX_STORED_JSON_BYTES, RowBinding, row_binding
 from cairnwork.notary_errors import (  # noqa: F401  re-exported: callers import these from here
     AttemptRequestMismatch,
     NotaryError,
@@ -305,9 +305,14 @@ class Notary:
                 return False
             conn = self._connect()
             try:
-                sql = "SELECT request_json FROM core_verifications"
-                row = conn.execute(sql + " WHERE task_id = ? AND attempt_id = ?",
-                                   (task_id, attempt_id)).fetchone()  # fmt: skip
+                sql = (
+                    "SELECT CASE WHEN length(CAST(request_json AS BLOB)) > ?"
+                    " THEN '' ELSE request_json END FROM core_verifications"
+                )
+                row = conn.execute(
+                    sql + " WHERE task_id = ? AND attempt_id = ?",
+                    (MAX_STORED_JSON_BYTES, task_id, attempt_id),
+                ).fetchone()
             finally:
                 conn.close()
         except sqlite3.Error:
@@ -324,11 +329,16 @@ class Notary:
         conn = self._connect()
         try:
             row = conn.execute(
-                "SELECT base_commit, candidate_commit, request_hash, request_json, http_status,"
-                " status, integrity, response_json, expected_identity, binding_json"
+                "SELECT base_commit, candidate_commit, request_hash,"
+                " CASE WHEN length(CAST(request_json AS BLOB)) > :cap"
+                " THEN '' ELSE request_json END, http_status, status, integrity,"
+                " CASE WHEN length(CAST(response_json AS BLOB)) > :cap"
+                " THEN '' ELSE response_json END, expected_identity,"
+                " CASE WHEN length(CAST(binding_json AS BLOB)) > :cap"
+                " THEN '' ELSE binding_json END"
                 " FROM core_verifications"
-                " WHERE task_id = ? AND attempt_id = ?",
-                (task_id, attempt_id),
+                " WHERE task_id = :task_id AND attempt_id = :attempt_id",
+                {"cap": MAX_STORED_JSON_BYTES, "task_id": task_id, "attempt_id": attempt_id},
             ).fetchone()
         finally:
             conn.close()
