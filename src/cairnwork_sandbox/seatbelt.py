@@ -53,21 +53,9 @@ SYSTEM_READ_LITERALS = (
 XCODE_LICENSE_PLIST = "/Library/Preferences/com.apple.dt.Xcode.plist"
 DEVICE_WRITES = ("/dev/null", "/dev/tty", "/dev/dtracehelper")
 CREDENTIAL_HOME_PATHS = (
-    ".ssh",
-    ".aws",
-    ".gnupg",
-    ".netrc",
-    ".config",
-    ".docker",
-    ".kube",
-    "Library/Keychains",
-    "Library/Application Support",
-    ".claude",
-    ".codex",
-    ".gemini",
-    ".nexus",
-    ".local/state",
-)
+    ".ssh", ".aws", ".gnupg", ".netrc", ".config", ".docker", ".kube", "Library/Keychains",
+    "Library/Application Support", ".claude", ".codex", ".gemini", ".nexus", ".local/state",
+)  # fmt: skip
 
 
 # Seatbelt calls its policy a profile; the type is the backend-neutral Policy.
@@ -260,21 +248,9 @@ def build_profile(
 
 
 _TOO_BROAD = (
-    "/",
-    "/Users",
-    "/Users/Shared",
-    "/private",
-    "/private/var",
-    "/private/var/folders",
-    "/var",
-    "/var/folders",
-    "/private/tmp",
-    "/tmp",
-    "/opt",
-    "/opt/homebrew",
-    "/usr",
-    "/usr/local",
-)
+    "/", "/Users", "/Users/Shared", "/private", "/private/var", "/private/var/folders", "/var",
+    "/var/folders", "/private/tmp", "/tmp", "/opt", "/opt/homebrew", "/usr", "/usr/local",
+)  # fmt: skip
 
 
 def _require_narrow(root: str, real_home: str) -> None:
