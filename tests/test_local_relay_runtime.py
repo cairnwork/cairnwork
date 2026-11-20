@@ -88,7 +88,7 @@ def _patch_runtime_assembly(monkeypatch, captured):
             return None
 
     class FakeJudge:
-        def __init__(self, state, verifiers, import_paths):
+        def __init__(self, state, verifiers, import_paths, **_kw):
             captured["judge"] = (state, verifiers, import_paths)
 
     class FakeLocalWorker:

@@ -17,6 +17,7 @@ from cairnwork.issue_github import GitHub
 from cairnwork.issue_runner import DEFAULT_GH, QUEUE, _instructions
 from cairnwork.issue_task import _check_path, parse_task_block, pytest_argv
 from cairnwork.taskpaths import check_task_paths
+from cairnwork.verify_candidate import verify_candidate
 from experimental.local_relay.adapters import (
     CoreAcceptance,
     HaikuProxyFallback,
@@ -32,6 +33,7 @@ from experimental.local_relay.config import (
     RelayConfig,
 )
 from experimental.local_relay.diagnostics import append_debug, redact
+from experimental.local_relay.evidence import RecordingVerify
 from experimental.local_relay.gate_plan import build_gate_plan
 from experimental.local_relay.hidden_tests import (
     HiddenVerify,
@@ -95,15 +97,13 @@ def build_run_once(args: Any) -> Callable[[Any, Any], dict[str, Any]]:
     intake = Intake(state)
     config = intake.config()
     hidden = task.get("hidden")
-    judge = CoreJudge(
-        state,
-        task["verifiers"],
-        config["import_paths"],
-        **({"verify": HiddenVerify(task["repo"], hidden)} if hidden else {}),
-    )
+    recorder = RecordingVerify(HiddenVerify(task["repo"], hidden) if hidden else verify_candidate)
+    judge = CoreJudge(state, task["verifiers"], config["import_paths"], verify=recorder)
     if hidden:
         judge.intake = with_python(judge.intake, hidden.python)
-    acceptance = CoreAcceptance(judge, task["allowed_files"], task["repo"])
+    acceptance = CoreAcceptance(
+        judge, task["allowed_files"], task["repo"], detail=lambda: recorder.last
+    )
     gate = ProxyGate(
         str(parse_loopback_url(getattr(args, "haiku_proxy_url", DEFAULT_HAIKU_PROXY_URL)))
     )

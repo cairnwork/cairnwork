@@ -13,13 +13,13 @@ import functools
 import json
 import math
 import uuid
-from dataclasses import replace
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from urllib.parse import quote
 
+from experimental.local_relay.adapters import MeteredGateReply, _flag_set, _is_flag, _proxy_request
 from experimental.local_relay.diagnostics import redact
 from experimental.local_relay.evidence import RecordingScanner
-from experimental.local_relay.adapters import MeteredGateReply, _flag_set, _is_flag, _proxy_request
 from experimental.local_worker.endpoint import parse_loopback_url
 from experimental.pause.client import HaikuGate, TransportResult
 from experimental.pause.interfaces import GateRequest
@@ -136,7 +136,9 @@ class _ChatTransport:
         message = first.get("message") if isinstance(first, dict) else None
         usage = reply.get("usage") if isinstance(reply.get("usage"), dict) else {}
         info = {
-            "finish_reason": (first or {}).get("finish_reason") if isinstance(first, dict) else None,
+            "finish_reason": (first or {}).get("finish_reason")
+            if isinstance(first, dict)
+            else None,
             "output_tokens": usage.get("completion_tokens", usage.get("output_tokens")),
         }
         if not isinstance(message, dict):
@@ -150,7 +152,9 @@ class _ChatTransport:
         verdict = parse_verdict(content)
         # An unparseable or ambiguous reply is passed on as empty text (BAD_OUTPUT), never as the
         # raw reply: PAUSE would accept any text whose first line happens to be ACCEPT.
-        failure = {} if verdict else {"failure": "empty_reply" if not content.strip() else "no_verdict"}
+        failure = (
+            {} if verdict else {"failure": "empty_reply" if not content.strip() else "no_verdict"}
+        )
         return TransportResult(status=200, body={"text": verdict or ""}), {**failure, **info}
 
 
@@ -221,9 +225,7 @@ class ProxyGate:
         example PAUSE_SECRET_BLOCKED sends nothing, so there is no spend to meter); a verdict
         with unknown cost is refused rather than trusted."""
         if reply.reason is not None:
-            return MeteredGateReply(
-                None, HAIKU_MODEL, reply.effort, reply.reason, detail=detail
-            )
+            return MeteredGateReply(None, HAIKU_MODEL, reply.effort, reply.reason, detail=detail)
         return replace(refused, detail=detail)
 
 
