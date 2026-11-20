@@ -63,6 +63,27 @@ def test_permission_error_matches_only_denied_filename(signature: str, expected:
     assert compare(sandbox, CLEAN).verdict == expected
 
 
+@pytest.mark.parametrize(
+    "signature",
+    [
+        "PermissionError: [Errno 13] Permission denied: 'ps'",
+        "ps: Permission denied",
+        "PermissionError: [Errno 13] Permission denied: '/usr/bin/ps'",
+        "PermissionError: [Errno 1] Operation not permitted: '/usr/bin/ps'",
+        'PermissionError: [Errno 1] Operation not permitted: "ps"',
+    ],
+)
+def test_listing_permission_denials_match_ps_invocations(signature: str) -> None:
+    sandbox = f"FAILED tests/test_a.py::test_x - {signature}\n=== 1 failed in 1s ===\n"
+    assert compare(sandbox, CLEAN).verdict == UNCOMPARABLE
+
+
+def test_colon_in_denied_filename_does_not_hide_ps_denial() -> None:
+    signature = "PermissionError: [Errno 13] Permission denied: '/tmp/data:with-colon'"
+    sandbox = f"FAILED tests/test_a.py::test_x - {signature}\n=== 1 failed in 1s ===\n"
+    assert compare(sandbox, CLEAN).verdict == FAILED
+
+
 def test_ps_string_planted_in_text_does_not_hide_real_failure_outside() -> None:
     plain = "FAILED tests/test_a.py::test_x - nope\n=== 1 failed, 3 passed in 1s ===\n"
     assert compare(SANDBOX + "echo 'ps: Operation not permitted'", plain).verdict == FAILED
