@@ -54,6 +54,12 @@ def test_no_ps_signature_stays_failed() -> None:
     [
         # Different denied file; a later mention of ps is not the denied filename.
         ("PermissionError: [Errno 13] Permission denied: '/tmp/data' while checking 'ps'", FAILED),
+        # A candidate's own file named ps (any other directory) is not the system ps binary.
+        ("PermissionError: [Errno 13] Permission denied: 'data/ps'", FAILED),
+        ("PermissionError: [Errno 13] Permission denied: '/home/u/proj/ps'", FAILED),
+        # Unpaired quotes do not count as the ps filename.
+        ("PermissionError: [Errno 1] Operation not permitted: 'ps\"", FAILED),
+        ("PermissionError: [Errno 1] Operation not permitted: '/usr/bin/ps'", UNCOMPARABLE),
         # The denied filename field names ps, so this is a genuine ps denial.
         ("PermissionError: [Errno 1] Operation not permitted: 'ps'", UNCOMPARABLE),
     ],
@@ -61,6 +67,27 @@ def test_no_ps_signature_stays_failed() -> None:
 def test_permission_error_matches_only_denied_filename(signature: str, expected: str) -> None:
     sandbox = f"FAILED tests/test_a.py::test_x - {signature}\n=== 1 failed in 1s ===\n"
     assert compare(sandbox, CLEAN).verdict == expected
+
+
+@pytest.mark.parametrize(
+    "signature",
+    [
+        "PermissionError: [Errno 13] Permission denied: 'ps'",
+        "ps: Permission denied",
+        "PermissionError: [Errno 13] Permission denied: '/usr/bin/ps'",
+        "PermissionError: [Errno 1] Operation not permitted: '/usr/bin/ps'",
+        'PermissionError: [Errno 1] Operation not permitted: "ps"',
+    ],
+)
+def test_listing_permission_denials_match_ps_invocations(signature: str) -> None:
+    sandbox = f"FAILED tests/test_a.py::test_x - {signature}\n=== 1 failed in 1s ===\n"
+    assert compare(sandbox, CLEAN).verdict == UNCOMPARABLE
+
+
+def test_colon_in_denied_filename_does_not_hide_ps_denial() -> None:
+    signature = "PermissionError: [Errno 13] Permission denied: '/tmp/data:with-colon'"
+    sandbox = f"FAILED tests/test_a.py::test_x - {signature}\n=== 1 failed in 1s ===\n"
+    assert compare(sandbox, CLEAN).verdict == FAILED
 
 
 def test_ps_string_planted_in_text_does_not_hide_real_failure_outside() -> None:

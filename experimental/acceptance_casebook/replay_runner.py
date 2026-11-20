@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from experimental.acceptance_casebook.origin import REFUSALS
 from experimental.acceptance_casebook.store import CasebookError
 
 
@@ -181,7 +182,7 @@ class RealRunner:
                 and core == "VERIFIED"
             ):
                 verdict = "accepted"
-            elif result.returncode == 2 and payload.get("verified") is False and core == "FAILED":
+            elif result.returncode == 2 and payload.get("verified") is False and core in REFUSALS:
                 verdict = "refused"
             else:
                 raise RunnerFailure("NO_CORE_VERDICT")

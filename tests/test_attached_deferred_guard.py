@@ -34,6 +34,7 @@ def test_attribute_escape_is_refused_by_the_attached_guard(shape, before_kind):
     with pytest.raises(Rejected) as err:
         refuse_attached(F, ast.parse(after), ast.parse(before))
     assert err.value.code == "DEFERRED_TESTS_UNREADABLE"
+    assert "Define it as def test_… in a class body or at top level" in str(err.value)  # #1564
 
 
 def test_a_local_match_capture_is_not_an_attaching_store():
