@@ -56,7 +56,7 @@ def find_shadow_file(
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
                     parsed[oid] = _parse_imports(blobs[oid], path)
-                    parsed_top[oid] = _parse_top_level_imports(blobs[oid], path)
+                    parsed_top[oid] = _parse_top_level_imports(blobs[oid], path, path in changed)
             except (SyntaxError, ValueError, UnicodeError, MemoryError, RecursionError):
                 parsed[oid] = None
                 parsed_top[oid] = set()
@@ -245,9 +245,12 @@ def _is_test_file(path: str) -> bool:
     )
 
 
-def _parse_top_level_imports(raw: bytes, path: str) -> set[str]:
-    """Top-level module names one file imports as a top-level module (#1148)."""
+def _parse_top_level_imports(raw: bytes, path: str, changed: bool = False) -> set[str]:
+    """Top-level module names one file imports as a top-level module (#1148). A dynamic or
+    aliased import adds "*" only in a test file or a file the candidate changed (#1563): base
+    library code is trusted, so its own loaders do not void the package-member relief."""
     tree = ast.parse(raw, filename=path)
+    guard = changed or _is_test_file(path)
     names: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -257,14 +260,15 @@ def _parse_top_level_imports(raw: bytes, path: str) -> set[str]:
         elif isinstance(node, ast.Call) and _call_name(node.func) in _IMPORT_CALLS:
             named = (k.value for k in node.keywords if k.arg in {"name", "modname"})
             args = (*node.args[:1], *named)
-            if not args or any(k.arg is None for k in node.keywords):
+            if guard and (not args or any(k.arg is None for k in node.keywords)):
                 names.add("*")
             for arg in args:  # import_module("foo") is a top-level import
                 if not (isinstance(arg, ast.Constant) and isinstance(arg.value, str)):
-                    names.add("*")  # an unresolvable name could be any module
+                    if guard:
+                        names.add("*")  # an unresolvable name could be any module
                 elif not arg.value.startswith("."):
                     names.add(arg.value.split(".", 1)[0])
-        elif _aliases_import_call(node):
+        elif guard and _aliases_import_call(node):
             names.add("*")  # an aliased import callable hides which name it imports
     names.discard("")
     return names

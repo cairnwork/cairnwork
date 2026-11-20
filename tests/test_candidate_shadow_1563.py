@@ -127,9 +127,9 @@ def test_a_dynamic_or_aliased_import_keeps_the_duplicate_refusal(repo, test_src)
     _refused(repo, base, cand, "pkg/a/core.py")
 
 
-def test_a_dynamic_import_in_a_non_test_file_keeps_the_duplicate_refusal(repo):
+def test_a_dynamic_import_in_a_file_the_candidate_adds_keeps_the_duplicate_refusal(repo):
     src = "from importlib import import_module as load\nload('core')\n"
-    base, cand = _mod_a(repo, {"pkg/loader.py": src})
+    base, cand = _mod_a(repo, {}, {"conftest.py": REDIR, "pkg/loader.py": src})
     _refused(repo, base, cand, "pkg/a/core.py")
 
 
@@ -174,3 +174,11 @@ def test_importers_in_its_own_and_another_directory_keep_the_refusal(repo):
     files = {"pkg/a/use.py": "import core\n", "tools/use.py": "import core\n"}
     base, cand = _mod_a(repo, files)
     _refused(repo, base, cand, "pkg/a/core.py")
+
+
+def test_a_dynamic_import_in_unchanged_base_library_code_does_not_void_the_relief(repo):
+    src = "from importlib import import_module as load\n\n\ndef get(n):\n    return load(n)\n"
+    commit_change(repo, {**SIBLINGS, "pkg/loader.py": src})
+    base = git(repo, "rev-parse", "HEAD")
+    cand = commit_change(repo, {"pkg/a/core.py": "X = 2\n", "conftest.py": REDIR})
+    _scan(repo, base, cand)
