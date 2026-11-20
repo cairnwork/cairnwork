@@ -108,7 +108,7 @@ def _link_target(path: str, roots: list[str]) -> bytes:
     if stat.S_ISDIR(info.st_mode):
         if not any(real == r or real.startswith(r + os.sep) for r in roots):
             raise OSError(f"symlink to a directory outside the trees: {path}")  # fail closed
-        return b"dir-inside"
+        return b"dir-inside" + real.encode()  # the resolved target too: a hop may be retargeted
     raise OSError(f"symlink to something that is not a file or directory: {path}")
 
 

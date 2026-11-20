@@ -172,3 +172,33 @@ def test_a_symlink_outside_the_roots_into_them_is_recorded_and_retargeting_is_se
         rec.compare(recorded, current)
         == "path_extras differs from the recorded base Python install"
     )
+
+
+def test_retargeting_an_intermediate_link_of_a_sys_path_entry_is_seen(monkeypatch, tmp_path):
+    """E (outside the prefix) -> hop (outside) -> a directory in the roots: E's own link text never
+    changes when the hop is retargeted inside the same root, so the record must hold the resolved
+    target as well."""
+    prefix = tmp_path / "prefix"
+    prefix.mkdir()
+    install = _fake_install(prefix)
+    sub_a, sub_b = install / "sub_a", install / "sub_b"
+    sub_a.mkdir()
+    sub_b.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    hop = outside / "hop"
+    hop.symlink_to(sub_a)
+    entry = outside / "e"
+    entry.symlink_to(hop)
+    monkeypatch.setattr(sys, "base_prefix", str(prefix))
+    monkeypatch.setattr(sys, "base_exec_prefix", str(prefix))
+    monkeypatch.setattr(sys, "path", [str(entry)])
+    recorded = rec.snapshot([str(install)])
+    assert [path for path, _ in cast(list[list[str]], recorded["path_extras"])] == [str(entry)]
+    hop.unlink()
+    hop.symlink_to(sub_b)
+    current = rec.snapshot(cast(list[str], recorded["roots"]))
+    assert (
+        rec.compare(recorded, current)
+        == "path_extras differs from the recorded base Python install"
+    )
