@@ -196,9 +196,10 @@ def new_tests(repo: Path, base: str, test_commit: str, paths: tuple[str, ...]) -
         if hidden_tests(tree, local) != hidden_tests(old, local):  # #925
             raise TestCommitRejected(
                 "DEFERRED_TESTS_UNREADABLE",
-                f"{path}: a test inside a module-level if/try/with/loop block, a nested test class"
-                " or a rebound test name changed; Cairnwork cannot tell which tests it adds."
-                " Move it to a top-level def test_* or a top-level Test* class",
+                f"{path}: a test inside a module-level if/try/with/loop block, a nested test class,"
+                " a star import or a global declaration in a class, or a rebound test name changed;"
+                " Cairnwork cannot tell which tests it adds. Define it with a top-level"
+                " def test_* or in a top-level Test* class",
             )
         deferred_attached.refuse_attached(path, tree, old)  # #994
         for node_id, body in after.items():
