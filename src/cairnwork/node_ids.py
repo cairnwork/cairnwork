@@ -53,6 +53,13 @@ def locate(nodeid: str) -> tuple[str, str] | None:
     return (path, name) if separator else None
 
 
+def file_part(nodeid: str) -> str:
+    """The file path of a node id (the whole id when it has no ``::``), cut at the file boundary
+    ``locate`` finds, not at the first ``::``: a path may itself hold ``::`` (#1272)."""
+    located = locate(nodeid)
+    return nodeid if located is None else located[0]
+
+
 def without_case(nodeid: str, *, all_parts: bool = False) -> str:
     """Remove the pytest case id (from the first ``[`` of the name) keeping bracketed paths.
 
