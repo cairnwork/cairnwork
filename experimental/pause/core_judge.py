@@ -260,7 +260,7 @@ class CoreJudge:
     ) -> None:
         self.intake = Intake(Path(state_dir))
         self.verifiers = tuple((key, tuple(value)) for key, value in verifiers)
-        self.import_paths = tuple(Path(path) for path in import_paths)
+        self.import_paths = tuple(Path(path).as_posix() for path in import_paths)
         self.verify = verify
 
     def __call__(self, r1: RunResult) -> CoreVerdict:
