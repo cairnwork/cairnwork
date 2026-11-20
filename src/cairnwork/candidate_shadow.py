@@ -109,11 +109,26 @@ def _is_shadow(
             (module in imported or "*" in imported)
             and (
                 added
-                or counts[module] > 1
+                or (
+                    counts[module] > 1
+                    and not _package_member(path, module, init_dirs, top_importers)
+                )
                 or not _already_importable(path, module, init_dirs, importer_dirs, top_importers)
             )
         )
     )
+
+
+def _package_member(
+    path: str, module: str, init_dirs: set[str], top_importers: dict[str, set[str]]
+) -> bool:
+    """Whether a modified module is imported by its dotted package path, so a same-named file
+    elsewhere cannot take its place (#1563): its own directory is a base package and no file
+    imports the bare name from another directory. A package ``__init__`` never qualifies."""
+    dir_path = path.rpartition("/")[0]
+    if path.rsplit("/", 1)[-1] == "__init__.py" or dir_path not in init_dirs:
+        return False
+    return not (top_importers.get(module, set()) - {dir_path})
 
 
 def _already_importable(
