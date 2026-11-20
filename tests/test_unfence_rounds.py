@@ -31,3 +31,14 @@ def test_deeply_nested_entities_cost_a_bounded_number_of_rounds(monkeypatch):
     assert len(calls) <= issue_runner.UNFENCE_ROUNDS + 1
     assert "<issue" not in out.lower() and "&lt;issue" not in out.lower()
     assert len(out) <= 200  # what is left is withheld, not the 3000-level text
+
+
+# --- #1574: hard-coded cap, so a changed cap or withheld text turns this red ------------------
+
+
+def test_the_cap_is_exactly_32_rounds_and_the_withheld_text_is_fixed(monkeypatch):
+    # "&" nested n times needs n peeling rounds plus one round to see nothing changed.
+    assert issue_runner._unfence(_deep(31, "&"), multiline=True) == "&"  # 32 rounds: resolves
+    assert issue_runner._unfence(_deep(32, "&"), multiline=True) == (
+        "(text withheld: encoded too deeply)"  # 33 rounds: withheld
+    )
