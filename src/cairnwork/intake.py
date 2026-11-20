@@ -99,8 +99,9 @@ class Intake:
     def config(self) -> dict[str, Any]:
         path = self.state / "config.json"
         try:
-            loaded = json.loads(path.read_text()) if path.exists() else {}
-        except (ValueError, RecursionError) as exc:  # truncated, not UTF-8, too deep (#234, #909)
+            loaded = json.loads(path.read_text()) if os.path.lexists(path) else {}
+        # truncated, not UTF-8, too deep (#234, #909); dangling or looping symlink (#1381)
+        except (ValueError, RecursionError, OSError) as exc:
             raise IntakeRefused("BAD_CONFIG", f"{path} is not valid JSON: {shown(exc)}") from exc
         if not isinstance(loaded, dict) or set(loaded) - set(DEFAULT_CONFIG):
             raise IntakeRefused("BAD_CONFIG", f"{path} keys must be among {sorted(DEFAULT_CONFIG)}")
