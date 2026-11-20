@@ -232,27 +232,42 @@ def alias_machinery_changed(old: bytes | None, new: bytes) -> bool:
 _PATH_MUTATORS = frozenset({"insert", "append", "extend", "remove", "pop", "clear", "__setitem__"})
 
 
-def _edits_foreign_path(part: ast.AST) -> bool:
-    """``<expr>.path`` edited whatever ``<expr>`` is, except the ``os.path`` helpers."""
-    if isinstance(part, ast.Call) and isinstance(part.func, ast.Attribute):
-        target = part.func.value
-        return (
-            part.func.attr in _PATH_MUTATORS
-            and isinstance(target, ast.Attribute)
-            and target.attr == "path"
-            and not (isinstance(target.value, ast.Name) and target.value.id == "os")
-        )
-    targets = []
-    if isinstance(part, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
-        targets = part.targets if isinstance(part, ast.Assign) else [part.target]
-    return any(
-        isinstance(t, ast.Attribute) and t.attr == "path" and not _is_os_name(t.value)
-        for t in targets
-    )
+def _foreign_path(node: ast.AST | None) -> bool:
+    """``<expr>.path`` with a receiver other than a plain ``os``."""
+    return isinstance(node, ast.Attribute) and node.attr == "path" and not _is_os_name(node.value)
 
 
 def _is_os_name(node: ast.AST) -> bool:
     return isinstance(node, ast.Name) and node.id == "os"
+
+
+def _edits_foreign_path(part: ast.AST) -> bool:
+    """``<expr>.path`` edited, aliased or handed to a call whatever ``<expr>`` is (``os.path``
+    excepted): mutator calls, element or slice assignment, ``del``, a stored alias."""
+    if isinstance(part, ast.Call):
+        func = part.func
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr in _PATH_MUTATORS
+            and _foreign_path(func.value)
+        ):
+            return True
+        return any(_foreign_path(arg) for arg in (*part.args, *(k.value for k in part.keywords)))
+    if isinstance(part, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
+        targets = part.targets if isinstance(part, ast.Assign) else [part.target]
+        value = getattr(part, "value", None)
+        if _foreign_path(value):
+            return True  # a stored alias of the search path
+    elif isinstance(part, ast.Delete):
+        targets = part.targets
+    else:
+        return False
+    for target in targets:
+        if isinstance(target, ast.Subscript) and _foreign_path(target.value):
+            return True  # element or slice assignment, augmented assignment, ``del``
+        if _foreign_path(target) and not isinstance(getattr(target, "value", None), ast.Name):
+            return True  # ``[sys][0].path = ...``; a plain-name receiver is judged by sys names
+    return False
 
 
 def _is_path_edit_statement(node: ast.AST, sys_names: set[str], text: str) -> bool:

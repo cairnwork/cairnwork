@@ -24,6 +24,12 @@ REFUSED = {
     "members_dict": PRE + "import inspect\ndict(inspect.getmembers(sys))['modules']['calc'] = m\n",
     "list_path": SHADOW + "[sys][0].path.insert(0, d)\n",
     "def_param_path": SHADOW + "def _g(s):\n    s.path.insert(0, d)\n_g(sys)\n",
+    "element_assign": SHADOW + "def _g(s):\n    s.path[0:0] = [d]\n_g(sys)\n",
+    "element_set": SHADOW + "def _g(s):\n    s.path[0] = d\n_g(sys)\n",
+    "element_del": SHADOW + "def _g(s):\n    del s.path[0]\n_g(sys)\n",
+    "stored_alias": SHADOW + "def _g(s):\n    p = s.path\n    p.insert(0, d)\n_g(sys)\n",
+    "list_insert_alias": SHADOW + "def _g(s):\n    list.insert(s.path, 0, d)\n_g(sys)\n",
+    "attr_assign_nonname": SHADOW + "[sys][0].path = [d]\n",
 }
 
 
@@ -46,8 +52,9 @@ def test_indirect_receiver_is_refused(repo, name):
     [
         "import os\np = os.path.join('a', 'b')\n",
         "from pathlib import Path\nq = Path('a').parent\n",
+        SHADOW + "class _Req:\n    path = ''\nrequest = _Req()\nrequest.path = '/x'\n",
     ],
-    ids=["os_path", "pathlib"],
+    ids=["os_path", "pathlib", "request_path_with_write"],
 )
 def test_unrelated_attributes_are_not_refused(repo, source):
     _check(repo, source)
