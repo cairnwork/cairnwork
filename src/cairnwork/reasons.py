@@ -192,8 +192,11 @@ def skip_origins(run, base) -> str:
     vid = run.spec.verifier_id
     nodes = getattr(base, "base_nodes", {}).get(vid)
     skips = getattr(base, "base_skips", {}).get(vid)
-    skipped = sorted(n for n, result in run.outcomes.items() if result == "skipped")
-    if not nodes or skips is None or len(skips) >= 50 or not skipped:
+    own = getattr(run, "skips", None)  # this run's own skip record; an xfail is no skip there
+    if not nodes or skips is None or own is None or len(skips) >= 50 or len(own) >= 50:
+        return ""
+    skipped = sorted(n for n, result in run.outcomes.items() if result == "skipped" and n in own)
+    if not skipped:
         return ""
     if len(skipped) == len(run.outcomes) == len(nodes) and set(skipped) <= set(skips) <= set(nodes):
         return " (skip origin: always-skip)"

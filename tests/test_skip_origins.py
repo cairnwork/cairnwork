@@ -2,22 +2,26 @@
 candidate-skip, always-skip); the verdict and the reason prefix do not change."""
 
 from types import SimpleNamespace
+from typing import Any
 
 from cairnwork.core_request import VerifierObservation
 from cairnwork.reasons import explain, why_not_passed
 
 PREFIX = "pytest collected tests that did not pass"
-KW = dict(
+KW: dict[str, Any] = dict(
     ran_sandboxed=True, returncode=0, timed_out=False, mutated=(), survivors=0,
     log_too_big=False, tests_ran=False,
 )  # fmt: skip
 
 
-def _run(outcomes):
+def _run(outcomes, xfail=()):
     why = why_not_passed(**KW, outcomes=outcomes)
     obs = VerifierObservation("v1", "a", "h", False)
     spec = SimpleNamespace(verifier_id="v1")
-    return SimpleNamespace(spec=spec, observation=obs, why=why, notes=(), outcomes=outcomes)
+    skips = {n: ("marker", "") for n, r in outcomes.items() if r == "skipped" and n not in xfail}
+    return SimpleNamespace(
+        spec=spec, observation=obs, why=why, notes=(), outcomes=outcomes, skips=skips
+    )
 
 
 def _base(nodes, skips):
@@ -63,3 +67,9 @@ def test_a_run_with_a_skip_stays_failed_whatever_the_origin():
     assert not run.observation.passed and run.why.startswith(PREFIX)
     text = explain([run], _base(["t.py::a", "t.py::b"], ["t.py::a"]))
     assert text.startswith(f" [v1: {PREFIX} (1 skipped: ") and text.endswith(")]")
+
+
+def test_an_xfail_on_base_and_candidate_is_not_labelled_a_candidate_skip():
+    run = _run({"t.py::a": "skipped", "t.py::b": "skipped"}, xfail=("t.py::a",))
+    text = explain([run], _base(["t.py::a", "t.py::b"], ["t.py::b"]))
+    assert "base-skip 1: t.py??b" in text and "t.py??a" not in text.split("skip origin")[1]
