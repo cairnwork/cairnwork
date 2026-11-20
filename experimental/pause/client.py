@@ -86,20 +86,22 @@ class _Client:
         prefix = "PAUSE_PLANNER" if planner else "PAUSE_GATE"
         if categories:
             return None, model, effort, Reason.PAUSE_SECRET_BLOCKED, categories
-        for attempt in range(max(0, attempts)):
+        budget, bad_retry = max(0, attempts), False
+        while budget > 0:
+            budget -= 1
             result = self.transport.send(model, effort, messages, timeout)
             if result.quota_blocked:
                 return None, model, effort, Reason[f"{prefix}_QUOTA_EXHAUSTED"], ()
             if result.timed_out:
-                if attempt + 1 < attempts:
+                if budget > 0:
                     continue
                 return None, model, effort, Reason[f"{prefix}_TIMEOUT"], ()
             status = result.status if isinstance(result.status, int) else -1
             if 500 <= status <= 599:
-                if attempt + 1 < attempts:
+                if budget > 0:
                     continue
                 return None, model, effort, Reason[f"{prefix}_REFUSED"], ()
-            if status != 200:
+            if status != 200 and (planner or not 200 <= status < 300):
                 return None, model, effort, Reason[f"{prefix}_REFUSED"], ()
             body = result.body
             if body is not None and (body.get("stop_reason") == "refusal" or body.get("refusal")):
@@ -113,7 +115,12 @@ class _Client:
                 return text, model, effort, None, ()
             first = text.strip().splitlines()[0] if text.strip() else ""
             if first not in GATE_VERDICTS:
-                return None, model, effort, Reason.PAUSE_GATE_BAD_OUTPUT, ()
+                if not bad_retry:  # one extra try for an empty or non-verdict reply
+                    bad_retry, budget = True, budget + 1
+                    continue
+                return None, model, effort, Reason.PAUSE_GATE_BAD_OUTPUT, (f"HTTP {status}",)
+            if status != 200:
+                return None, model, effort, Reason.PAUSE_GATE_REFUSED, ()
             return first, model, effort, None, ()
         return None, model, effort, Reason[f"{prefix}_REFUSED"], ()
 
