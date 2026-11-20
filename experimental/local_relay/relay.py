@@ -16,7 +16,8 @@ from experimental.local_worker.endpoint import (
     EndpointUnreachable,
 )
 from experimental.pause.interfaces import CallSettings, Gate, GateReply, GateRequest
-from experimental.pause.schema import GATE_VERDICTS
+from experimental.pause.schema import GATE_VERDICTS, Reason
+from experimental.pause.secrets_scan import Scanner
 
 
 @dataclass(frozen=True)
@@ -148,6 +149,38 @@ def _check_stage(task_id, attempt, acceptance, gate, ledger, config, stage, trai
     except Exception as exc:  # noqa: BLE001 - plan failures fail closed like gate failures.
         trail.append(_stage(stage, result, None, f"plan failed: {exc}"))
         return RelayResult("FAILED", attempt.candidate, result.passed, result.raw, reason=str(exc))
+    masked_count, masked_categories = 0, []
+    if config.mask_secret_lines:
+        plan, masked_count, masked_categories = _mask_secret_lines(plan)
+        if plan is None:
+            entry = _stage(stage, result, None, Reason.PAUSE_SECRET_BLOCKED)
+            entry.update(masked_line_count=masked_count, masked_categories=masked_categories)
+            entry["gate_called"] = False
+            trail.append(entry)
+            _append(
+                ledger,
+                _row(
+                    task_id,
+                    stage,
+                    config.gate_model_id,
+                    0,
+                    0,
+                    0.0,
+                    extra={
+                        "gate_reason": str(Reason.PAUSE_SECRET_BLOCKED),
+                        "masked_line_count": masked_count,
+                        "masked_categories": masked_categories,
+                    },
+                ),
+            )
+            return RelayResult(
+                "REJECTED",
+                attempt.candidate,
+                result.passed,
+                result.raw,
+                None,
+                Reason.PAUSE_SECRET_BLOCKED,
+            )
     try:
         reply = gate.review(GateRequest(task_id, "", plan, settings))
     except Exception as exc:  # noqa: BLE001 - injected gate failures must fail closed.
@@ -155,6 +188,8 @@ def _check_stage(task_id, attempt, acceptance, gate, ledger, config, stage, trai
         return RelayResult("FAILED", attempt.candidate, result.passed, result.raw, reason=str(exc))
     reason = _verdict_reason(reply)
     entry = _stage(stage, result, reply, reason)
+    if config.mask_secret_lines:
+        entry.update(masked_line_count=masked_count, masked_categories=masked_categories)
     trail.append(entry)
     _append(
         ledger,
@@ -173,6 +208,33 @@ def _check_stage(task_id, attempt, acceptance, gate, ledger, config, stage, trai
     return RelayResult(
         "REJECTED", attempt.candidate, result.passed, result.raw, reply.verdict, reason
     )
+
+
+def _mask_secret_lines(text: str) -> tuple[str | None, int, list[str]]:
+    """Mask scanner-matching lines and fail closed if the whole result still matches."""
+    scanner = Scanner()
+    masked, categories = [], set()
+    count = 0
+    for line in text.splitlines(keepends=True):
+        ending = (
+            "\r\n"
+            if line.endswith("\r\n")
+            else "\n"
+            if line.endswith("\n")
+            else "\r"
+            if line.endswith("\r")
+            else ""
+        )
+        hits = scanner.scan(line)
+        if hits:
+            count += 1
+            categories.update(hits)
+            masked.append(f"[line masked: {', '.join(sorted(set(hits)))}]" + ending)
+        else:
+            masked.append(line)
+    value = "".join(masked)
+    names = sorted(categories)
+    return (None if scanner.scan(value) else value), count, names
 
 
 def _fallback_stage(task_id, fallback, acceptance, gate, ledger, config, failures=(), trail=None):

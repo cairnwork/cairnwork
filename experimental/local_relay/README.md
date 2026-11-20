@@ -56,3 +56,7 @@ targets may name files that exist only there. Each Core judgment builds a fresh 
 holding only those files on top of the base, imports it into the intake test store and calls
 `verify_candidate(test_commit=...)`; a test commit is single-use, so every stage builds its own.
 The worker checkout and the worker's task file never contain the hidden files.
+
+## Secret-line masking (experiment only)
+
+`RELAY_MASK_SECRET_LINES=1` (default off; same behaviour as before when off) masks, just before a gate review, every line the PAUSE secret scanner matches. The original text is never sent or recorded; only the masked line count and the matched category names are kept. If the masked text still matches the scanner, the review fails closed (`PAUSE_SECRET_BLOCKED`) as before. Experiment-only, agreed by James on 2026-11-20; the PAUSE scan rules and production code are unchanged.
