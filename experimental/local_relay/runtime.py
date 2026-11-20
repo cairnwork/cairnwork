@@ -33,9 +33,17 @@ from experimental.local_relay.config import (
 )
 from experimental.local_relay.diagnostics import append_debug, redact
 from experimental.local_relay.gate_plan import build_gate_plan
+from experimental.local_relay.hidden_tests import (
+    HiddenVerify,
+    load_hidden,
+    require_hidden_targets,
+    visible_targets,
+    with_python,
+)
 from experimental.local_relay.process import spawn_worker as _spawn_worker
 from experimental.local_relay.proxy_gate import ProxyGate
 from experimental.local_relay.relay import run_relay
+from experimental.local_relay.thinking_shim import thinking_off
 from experimental.local_relay.worker_launch import stage_canary, worker_argv, write_task_file
 from experimental.local_relay.worker_setup import (
     executable_paths,
@@ -86,7 +94,15 @@ def build_run_once(args: Any) -> Callable[[Any, Any], dict[str, Any]]:
     canary = Path(args.canary_report).expanduser().resolve() if args.canary_report else None
     intake = Intake(state)
     config = intake.config()
-    judge = CoreJudge(state, task["verifiers"], config["import_paths"])
+    hidden = task.get("hidden")
+    judge = CoreJudge(
+        state,
+        task["verifiers"],
+        config["import_paths"],
+        **({"verify": HiddenVerify(task["repo"], hidden)} if hidden else {}),
+    )
+    if hidden:
+        judge.intake = with_python(judge.intake, hidden.python)
     acceptance = CoreAcceptance(judge, task["allowed_files"], task["repo"])
     gate = ProxyGate(
         str(parse_loopback_url(getattr(args, "haiku_proxy_url", DEFAULT_HAIKU_PROXY_URL)))
@@ -94,18 +110,16 @@ def build_run_once(args: Any) -> Callable[[Any, Any], dict[str, Any]]:
     fallback_url = str(
         parse_loopback_url(getattr(args, "haiku_proxy_url", DEFAULT_HAIKU_PROXY_URL))
     )
-    worker = LocalWorkerAdapter(
-        lambda context, endpoint: _run_localworker(
-            args,
-            task,
-            task["repo"],
-            context,
-            endpoint,
-            canary,
-            HAIKU_MODEL if endpoint == fallback_url else LOCAL_MODEL,
-        ),
-        model_id=LOCAL_MODEL,
-    )
+
+    def launch(context, endpoint):
+        if endpoint == fallback_url:  # the Haiku proxy needs no thinking switch
+            return _run_localworker(
+                args, task, task["repo"], context, endpoint, canary, HAIKU_MODEL
+            )
+        with thinking_off(endpoint) as shim_url:  # 9B: thinking off, as in the experiment
+            return _run_localworker(args, task, task["repo"], context, shim_url, canary)
+
+    worker = LocalWorkerAdapter(launch, model_id=LOCAL_MODEL)
     fallback = HaikuProxyFallback(
         fallback_url,
         lambda context, endpoint: worker.run_with_endpoint(context, endpoint),
@@ -195,12 +209,11 @@ def _validate_task(data: dict[str, Any], root: Path) -> dict[str, Any]:
     if not verifiers:
         raise ValueError("fixture must include at least one verifier")
     base = _git(root, "rev-parse", "HEAD")
-    check_task_paths(
-        root,
-        base,
-        tuple(data["allowed_files"]),
-        tuple(target for _name, command in verifiers for target in command[4:]),
-    )
+    hidden = load_hidden(data, root)
+    targets = tuple(target for _name, command in verifiers for target in command[4:])
+    if hidden:
+        require_hidden_targets(targets, hidden)
+    check_task_paths(root, base, tuple(data["allowed_files"]), visible_targets(targets, hidden))
     return {
         "task_id": str(data["task_id"]),
         "prompt": str(data["prompt"]),
@@ -209,6 +222,7 @@ def _validate_task(data: dict[str, Any], root: Path) -> dict[str, Any]:
         "verifiers": verifiers,
         "base_commit": base,
         "repo": root,
+        "hidden": hidden,
     }
 
 
@@ -228,8 +242,15 @@ def _run_localworker(args, task, source, context, endpoint, canary, model=LOCAL_
     out = run_root / "episodes"
     out.mkdir(mode=0o700)
     local_report = stage_canary(canary, out)
+    limits = RelayConfig.from_env()
     argv = worker_argv(
-        task, (task_path, checkout, out, local_report, runs), model, context, endpoint
+        task,
+        (task_path, checkout, out, local_report, runs),
+        model,
+        context,
+        endpoint,
+        limits.max_steps,
+        limits.max_wall_seconds,
     )
     # Never run from the task repo: `-m` would put it first on sys.path (module shadowing).
     cwd = Path(__file__).resolve().parents[2]
