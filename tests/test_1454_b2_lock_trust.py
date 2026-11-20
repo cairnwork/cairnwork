@@ -146,7 +146,7 @@ def _job(workflow: str, job: str) -> list[str]:
     return re.split(r"\n(?=      - )", body)
 
 
-@pytest.mark.parametrize("job", ["test", "test-macos"])
+@pytest.mark.parametrize("job", ["test", "test-macos-shard"])
 def test_ci_stops_workflow_commands_while_the_gate_runs(job: str):
     """The gate runs PR-controlled code; its output must not become ::/##[ workflow commands."""
     steps = _job((ROOT / ".github/workflows/ci.yml").read_text(), job)
@@ -159,7 +159,7 @@ def test_ci_stops_workflow_commands_while_the_gate_runs(job: str):
     assert "$token" not in step[run : step.index("\n", run)].replace("|| rc=$?", "")
 
 
-@pytest.mark.parametrize("job", ["test", "test-macos"])
+@pytest.mark.parametrize("job", ["test", "test-macos-shard"])
 def test_ci_runs_the_gate_from_the_trusted_venv_before_any_pr_code(job: str):
     steps = _job((ROOT / ".github/workflows/ci.yml").read_text(), job)
     gate = [i for i, step in enumerate(steps) if "tests/pra1353_gate.py" in step]

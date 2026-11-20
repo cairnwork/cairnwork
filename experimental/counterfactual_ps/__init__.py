@@ -15,9 +15,10 @@ import re
 from dataclasses import dataclass
 
 PS_DENIAL = re.compile(
-    r"PermissionError: (?:\[Errno \d+\] [^:\n]*: )?'(?:/bin/)?ps'(?=\s|$)"
+    r"PermissionError: (?:\[Errno \d+\] [^:\n]*: )?"
+    r"(?:'(?:(?:/usr)?/bin/)?ps'|\"(?:(?:/usr)?/bin/)?ps\")(?=\s|$)"
     r"|/bin/ps: Operation not permitted"
-    r"|\bps: Operation not permitted"
+    r"|\bps: (?:Operation not permitted|Permission denied)"
 )
 _UNIT = re.compile(r"^(FAILED|SUBFAILED)(\([^)]*\))? (\S+)", re.M)
 _COUNT = re.compile(r"(\d+) (passed|failed|errors?|skipped|xfailed|xpassed|deselected|warnings?)")

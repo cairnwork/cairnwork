@@ -154,6 +154,15 @@ def test_planner_secrets_block_transport(secret):
     assert fake.calls == [] and reply.reason == schema.Reason.PAUSE_SECRET_BLOCKED
 
 
+def test_secret_block_records_only_matched_rule_category():
+    secret = "ghp_abcdefghijk12345"
+    fake = FakeTransport()
+    reply = HaikuPlanner(fake).plan(plan_request(({"content": secret},)))
+    assert reply.reason == schema.Reason.PAUSE_SECRET_BLOCKED
+    assert reply.diagnostics == ("api_key",)
+    assert secret not in repr(reply)
+
+
 @pytest.mark.parametrize(
     "messages",
     [
@@ -386,4 +395,5 @@ def test_gate_replay_end_to_end_blocks_configured_account_name(tmp_path, capsys)
     results = {r["task_id"]: r for r in json.loads(capsys.readouterr().out)["results"]}
     assert results["blocked"]["verdict"] is None
     assert results["blocked"]["reason"] == schema.Reason.PAUSE_SECRET_BLOCKED.value
+    assert results["blocked"]["diagnostics"] == ["account_name"]
     assert results["fine"]["verdict"] == "ACCEPT" and results["fine"]["reason"] is None

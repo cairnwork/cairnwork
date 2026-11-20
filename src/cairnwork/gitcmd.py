@@ -20,6 +20,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from cairnwork.gitcmd_capped import capped
 from cairnwork.gitversion import GitVersionError, git_executable, require_no_lazy_fetch
 from cairnwork.textclean import replace_hidden
 
@@ -259,19 +260,23 @@ def commit_present(repo: Path, oid: str) -> bool:
 
 
 def run_git_bytes(
-    repo: Path, *args: str, timeout: float = GIT_TIMEOUT_SECONDS, stdin: bytes | None = None
-) -> bytes:
+    repo: Path, *args: str, timeout: float = GIT_TIMEOUT_SECONDS, stdin: bytes | None = None,
+    max_bytes: int | None = None,
+) -> bytes:  # fmt: skip
     """Like run_git, but stdout is raw bytes: no decoding and no newline translation.
 
     stdin, when given, is git's standard input (``cat-file --batch``).
     A failure's ``CalledProcessError`` (``__cause__``) then carries bytes in ``stdout``.
     """
-    return _exec(repo, args, None, False, timeout, text=False, stdin=stdin)
+    return _exec(repo, args, None, False, timeout, text=False, stdin=stdin, max_bytes=max_bytes)
 
 
 # GIT_ALLOW_PROTOCOL beats every protocol.*.allow setting, so git:// (core.gitProxy) and other
 # <helper>:: remotes never run (#759). Set in _child_env and in cairnwork_attest.publish._git.
 ALLOWED_PROTOCOLS = "file:https:ssh"
+# Subcommands that may reach a remote, so ssh runs in BatchMode for them (#759). A credential
+# helper that opens its own dialog still runs there: operator configuration, kept on purpose.
+NETWORK_SUBCOMMANDS = ("fetch", "push", "pull", "clone", "ls-remote")
 
 
 def _child_env() -> dict[str, str]:
@@ -319,23 +324,25 @@ def _exec(
     text: bool,
     stdin: bytes | None = None,
     ok_codes: tuple[int, ...] = (0,),
+    max_bytes: int | None = None,
 ) -> Any:  # str when text, else bytes
     if not timeout or timeout <= 0:
         raise ValueError(f"timeout must be a positive number of seconds, got {timeout!r}")
     env = _child_env()
-    if _subcommand(args) in ("fetch", "push"):  # any of them may reach origin over ssh; a
-        ssh_batch_mode(env, repo)  # local path or bundle never calls ssh, so this is harmless
     mark = _MARK.get()
-    if mark is not None:
+    if mark is not None:  # before ssh_batch_mode: its config read is a git call to mark too
         var, val = mark
         env[var] = val
+    if _subcommand(args) in NETWORK_SUBCOMMANDS:  # any of them may reach origin over ssh; a
+        ssh_batch_mode(env, repo)  # local path or bundle never calls ssh, so this is harmless
     if index_file is not None:
         env["GIT_INDEX_FILE"] = str(index_file)
     if isolate_config:
         env["GIT_CONFIG_GLOBAL"] = os.devnull
         env["GIT_CONFIG_SYSTEM"] = os.devnull
     try:
-        done = subprocess.run(  # noqa: S603 - fixed git argv, no shell
+        run = subprocess.run if max_bytes is None else capped(max_bytes)
+        done = run(  # noqa: S603 - fixed git argv, no shell
             [
                 git_executable(),
                 *_SAFE_OPTIONS,
