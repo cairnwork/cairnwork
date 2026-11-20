@@ -206,8 +206,10 @@ _HANDOVER = _take()
     @pytest.hookimpl(wrapper=True, tryfirst=True)
     def pytest_runtest_makereport(self, item, call, _original=_original, _keep_worst=_keep_worst,
                                   _fixtures=_PLUGIN_FIXTURES, _env=_env_exc,
-                                  _origin=_denied_origin):
+                                  _origin=_denied_origin, _report=TestReport, _type=type):
         report = yield  # outermost: the report as every other hook left it
+        if _type(report) is not _report:
+            return report
         nodeid, _ = _original(self, item, report.nodeid)
         if report.when == "call":  # #570: one per sub-test, then the test's own
             _keep_worst(self, nodeid, report.outcome)
@@ -251,7 +253,8 @@ _HANDOVER = _take()
                    "teardown_errors": self._teardown_errors,
                    "collection_finished": self._finished, "skips": self._skips,
                    # pytest's own status: the parent requires it and the process's to agree
-                   "exitstatus": _exit_status(exitstatus), "testsfailed": session.testsfailed}
+                   "exitstatus": _exit_status(exitstatus),
+                   "testsfailed": _tests_failed(session.testsfailed)}
         if self._uncollected_exposed is not None:
             payload["uncollected_exposed"] = self._uncollected_exposed
         data = dumps(payload).encode()  # the optional fact never makes the record too big

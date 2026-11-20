@@ -10,6 +10,7 @@ from types import CodeType, FrameType, ModuleType, TracebackType
 from _pytest.mark.structures import Mark
 from _pytest._code.code import ExceptionInfo
 from _pytest.config import Config
+from _pytest.fixtures import FixtureLookupErrorRepr
 from _pytest.reports import CollectReport, TestReport
 from _pytest.runner import CallInfo
 
@@ -37,15 +38,22 @@ def _marker_items(session, _type=type, _mark=Mark):
             for item in session.items}
 
 
-def _record_skip(reporter, report):
+def _record_skip(reporter, report, _type=type):
+    # #1368 / #1374: longrepr and nodeid exact types; hostile doubles run no methods.
     xfail = getattr(report, "wasxfail", None)  # #1368: only an exact str reason is an xfail
-    if report.outcome != "skipped" or type(xfail) is str and xfail:
+    if getattr(report, "outcome", None) != "skipped" or _type(xfail) is str and xfail:
         return
-    shown = report.longrepr[2] if isinstance(report.longrepr, tuple) else str(report.longrepr)
+    longrepr = getattr(report, "longrepr", None)
+    shown = (
+        longrepr[2]
+        if _type(longrepr) is tuple and len(longrepr) == 3 and _type(longrepr[2]) is str
+        else (longrepr if _type(longrepr) is str else "")
+    )
     reason = shown.removeprefix("Skipped: ")
-    if len(reporter._skips) < 50:
-        kind = "marker" if reporter._item_marks.get(report.nodeid, False) else "runtime"
-        reporter._skips[report.nodeid] = {"kind": kind, "reason": reason[:200]}
+    nodeid = getattr(report, "nodeid", None)
+    if _type(nodeid) is str and len(reporter._skips) < 50:
+        kind = "marker" if reporter._item_marks.get(nodeid, False) else "runtime"
+        reporter._skips[nodeid] = {"kind": kind, "reason": reason[:200]}
 
 
 def _innermost(exc, _type=type, _tb=BaseException.__traceback__.__get__,
@@ -205,8 +213,11 @@ def _checkout_frame(tb, top, _in=_checkout_rel, _type=type):
     return origin, line
 
 
-def _fixture_plugin(table, longrepr, _type=type):
-    # #1368: lookup only exact strings; test objects never reach dict hashing or equality.
+def _fixture_plugin(table, longrepr, _type=type, _repr=FixtureLookupErrorRepr):
+    # #1368 / #1374: lookup only exact strings from an exact FixtureLookupErrorRepr;
+    # test objects never reach dict hashing or equality.
+    if _type(longrepr) is not _repr:
+        return None
     name = getattr(longrepr, "argname", None)
     return table.get(name) if _type(name) is str else None
 
@@ -215,6 +226,11 @@ def _exit_status(value, _type=type, _code=pytest.ExitCode, _int=int.__int__):
     # #1368: only exact ints and pytest ExitCode values enter the record; anything else is
     # None, which the parent refuses (exitstatus must be an exact int).
     return _int(value) if _type(value) is int or _type(value) is _code else None
+
+
+def _tests_failed(value, _type=type, _int=int.__int__):
+    # #1374: only exact ints enter the record; anything else is None (parent refuses).
+    return _int(value) if _type(value) is int else None
 
 
 def _denied_origin(info, root, _exc=_denied_exc, _real=os.path.realpath, _str=str,
@@ -303,7 +319,15 @@ def _source(item):
         return ""
 
 
-def _missing(report):  # #813: the module a skip at collection says it could not import
-    shown = report.longrepr[-1] if isinstance(report.longrepr, tuple) else ""
-    return str(shown).partition("could not import '")[2].partition("'")[0][:100]
+# #813: the module a skip at collection says it could not import
+def _missing(report, _type=type, _report=CollectReport):
+    if _type(report) is not _report:
+        return ""
+    longrepr = report.longrepr
+    shown = (
+        longrepr[-1]
+        if _type(longrepr) is tuple and longrepr and _type(longrepr[-1]) is str
+        else ""
+    )
+    return shown.partition("could not import '")[2].partition("'")[0][:100]
 """
