@@ -211,6 +211,6 @@ test commit 新增的非測試 `.py`（範例樹、lint fixture、故意不能 i
 2. **字串組出的模組名**：`importlib.import_module("tests.fixtures." + name)`、`__import__(f"fx_{kind}")`、`runpy.run_path(.../"gen.py")`，目標檔名沒有字面出現，執行時卻會跑並能改掉 `pytest`、`socket` 或被測程式。
 3. **同層 sys.path import、`exec(open(p).read())`、`-p`／`PYTHONPATH`／zip**：模組名不能不重放 pytest 的 import 模式就對回路徑，名稱比對不是過度比對（無害拒絕）就是漏比對（#967 殘餘）。
 
-宣告設計對這三者的答案（hook 接線後）：被宣告的檔若在執行期以自己的名字被載入，`DataExecRefused` 會讓該次執行失敗（base 跑變 `UNCOMPARABLE DATA_EXEC_REFUSED`，不算有牙齒）。殘餘（以別名執行檔案文字、C 層 eval）需要有意作弊的作者，屬 #843 的信任模型（test commit 作者本來就持有判定權），不是 worker 繞過。`Cairnwork-Data` 是作者宣告，exec hook 抓的是意外，不是惡意作者。
+宣告設計對這三者的答案（hook 接線後）：被宣告的檔若在執行期以自己的名字被載入，`DataExecRefused` 會讓該次執行失敗（base 跑變 `UNCOMPARABLE DATA_EXEC_REFUSED`，不算有牙齒）。殘餘（以別名執行檔案文字、C 層 eval）需要有意作弊的作者，屬 #843 的信任模型（test commit 是受信任的輸入，作者本來就持有判定權；全文見 `docs/SECURITY.md`「The test commit is trusted input」），不是 worker 繞過。`Cairnwork-Data` 是作者宣告，exec hook 抓的是意外，不是惡意作者。
 
 尚未做：producer 端接線。`module_plugins.py` 讀 `declared_data`（只用來擋改動模組的外掛），但 producer 還沒有用宣告來放寬 untargeted 規則（`deferred_tests.py` 242-245 行），也沒有把 `data_paths` 傳給 `_prepare_run`／`install_plugin`，所以用 trailer 的 test commit 接收端放行、producer 端仍回 `DEFERRED_TESTS_NOT_TARGETED`，exec hook 也不會在真實執行裡啟動。該接線會放寬 untargeted 拒絕，需先有獨立 spec 與跨家設計審查，另開 Design Issue（#1334）追蹤；在那之前本條目是現行行為與設計意圖的說明，不是已生效的防護。
