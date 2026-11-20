@@ -40,7 +40,7 @@ def redact(value: str) -> str:
 
 
 def redacted_tail(value: str, max_lines: int, max_chars: int) -> str:
-    """Redact the WHOLE text first, then keep its last lines and chars (the failure is at the end)."""
+    """Redact the WHOLE text first, then keep its last lines and chars (failures end the text)."""
     return "\n".join(_scrub(value).splitlines()[-max_lines:])[-max_chars:]
 
 
