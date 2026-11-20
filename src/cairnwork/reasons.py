@@ -187,7 +187,7 @@ def _missing_modules(run) -> str:
 def skip_origins(run, base) -> str:
     """#1565: where each skipped test of a failed run comes from, by the base run's record (text
     only, the verdict stays FAILED): ``base-skip`` (skipped on the base too), ``candidate-skip``
-    (the base ran it), ``always-skip`` (every collected test is skipped on the base and here).
+    (the base ran it), ``new-skip`` (no such node on the base), ``always-skip`` (all skipped).
     ``""`` without that base record or when the base's skip list hit its cap (then unknown)."""
     vid = run.spec.verifier_id
     nodes = getattr(base, "base_nodes", {}).get(vid)
@@ -203,6 +203,7 @@ def skip_origins(run, base) -> str:
     groups = {
         "base-skip": [n for n in skipped if n in skips],
         "candidate-skip": [n for n in skipped if n in nodes and n not in skips],
+        "new-skip": [n for n in skipped if n not in nodes],
     }
     shown = "; ".join(f"{kind} {_names(found)}" for kind, found in groups.items() if found)
     return f" (skip origin: {shown})" if shown else ""

@@ -73,3 +73,9 @@ def test_an_xfail_on_base_and_candidate_is_not_labelled_a_candidate_skip():
     run = _run({"t.py::a": "skipped", "t.py::b": "skipped"}, xfail=("t.py::a",))
     text = explain([run], _base(["t.py::a", "t.py::b"], ["t.py::b"]))
     assert "base-skip 1: t.py??b" in text and "t.py??a" not in text.split("skip origin")[1]
+
+
+def test_a_skipped_node_the_base_never_collected_is_a_new_skip():
+    run = _run({"t.py::a": "skipped", "t.py::new": "skipped", "t.py::b": "passed"})
+    text = explain([run], _base(["t.py::a", "t.py::b"], ["t.py::a"]))
+    assert "base-skip 1: t.py??a" in text and "new-skip 1: t.py??new" in text
