@@ -207,30 +207,37 @@ def _check_stage(task_id, attempt, acceptance, gate, ledger, config, stage, trai
 
 
 def _mask_secret_lines(text: str) -> tuple[str | None, int, list[str]]:
-    """Mask scanner-matching lines and fail closed if the whole result still matches."""
-    scanner = Scanner()
-    masked, categories = [], set()
-    count = 0
+    """Mask scanner-matching lines (a PEM block whole); fail closed on any scanner trouble."""
+    try:
+        return _mask_with(Scanner(), text)
+    except Exception:  # noqa: BLE001 - never echo the error: it may hold the scanned text
+        return None, 0, ["scanner_error"]
+
+
+def _line_ending(line: str) -> str:
+    for ending in ("\r\n", "\n", "\r"):
+        if line.endswith(ending):
+            return ending
+    return ""
+
+
+def _mask_with(scanner: Scanner, text: str) -> tuple[str | None, int, list[str]]:
+    masked, categories, count, in_pem = [], set(), 0, False
     for line in text.splitlines(keepends=True):
-        ending = (
-            "\r\n"
-            if line.endswith("\r\n")
-            else "\n"
-            if line.endswith("\n")
-            else "\r"
-            if line.endswith("\r")
-            else ""
-        )
         hits = scanner.scan(line)
-        if hits:
+        if "-----BEGIN" in line and hits:
+            in_pem = True  # the body lines carry the key itself: mask through the END line
+        if hits or in_pem:
             count += 1
-            categories.update(hits)
-            masked.append(f"[line masked: {', '.join(sorted(set(hits)))}]" + ending)
+            categories.update(hits or ["pem_block"])
+            names = ", ".join(sorted(set(hits or ["pem_block"])))
+            masked.append(f"[line masked: {names}]" + _line_ending(line))
+            if in_pem and "-----END" in line:
+                in_pem = False
         else:
             masked.append(line)
     value = "".join(masked)
-    names = sorted(categories)
-    return (None if scanner.scan(value) else value), count, names
+    return (None if scanner.scan(value) else value), count, sorted(categories)
 
 
 def _fallback_stage(task_id, fallback, acceptance, gate, ledger, config, failures=(), trail=None):

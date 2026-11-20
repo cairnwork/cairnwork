@@ -25,9 +25,9 @@ class RelayConfig:
     gate_model_id: str = "haiku"
     gate_effort: str = "medium"
     timeout_seconds: float = 60.0
-    mask_secret_lines: bool = False
     # Builds what the gate reviews from a candidate; default is the candidate's string form.
     plan_for: Callable[[Any], str] | None = None
+    mask_secret_lines: bool = False  # last: existing positional callers stay unchanged
 
     @classmethod
     def from_env(cls) -> RelayConfig:

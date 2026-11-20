@@ -94,3 +94,38 @@ def test_masking_on_leaves_secret_free_text_unchanged(tmp_path, monkeypatch):
     text = "ordinary review text\nsecond line"
     result, gate, _rows = _run(tmp_path, monkeypatch, text, masking=True)
     assert result.route == "LOCAL_FIRST" and gate.calls == [text]
+
+
+def test_pem_block_body_is_masked_with_its_header():
+    from experimental.local_relay.relay import _mask_secret_lines
+
+    body = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC"
+    text = f"before\n-----BEGIN PRIVATE KEY-----\n{body}\n-----END PRIVATE KEY-----\nafter\n"
+    masked, count, _names = _mask_secret_lines(text)
+    assert masked is not None
+    assert body not in masked
+    assert masked.startswith("before\n") and masked.endswith("after\n")
+    assert count >= 1
+
+
+def test_scanner_exception_fails_closed(monkeypatch):
+    from experimental.local_relay.relay import _mask_secret_lines
+
+    def boom(self, _text):
+        raise RuntimeError("scan failed " + SECRET)
+
+    monkeypatch.setattr(Scanner, "scan", boom)
+    assert _mask_secret_lines("anything\n") == (None, 0, ["scanner_error"])
+
+
+def test_masking_field_does_not_shift_positional_arguments():
+    import dataclasses
+
+    assert dataclasses.fields(RelayConfig)[-1].name == "mask_secret_lines"
+
+
+def test_masking_flag_is_read_from_the_environment(monkeypatch):
+    monkeypatch.setenv("RELAY_MASK_SECRET_LINES", "1")
+    assert RelayConfig.from_env().mask_secret_lines is True
+    monkeypatch.delenv("RELAY_MASK_SECRET_LINES")
+    assert RelayConfig.from_env().mask_secret_lines is False
