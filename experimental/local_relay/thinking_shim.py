@@ -47,7 +47,7 @@ def _handler(upstream: str, extra: dict[str, Any]) -> type[BaseHTTPRequestHandle
 
         def _forward(self, body: bytes | None) -> None:
             conn = http.client.HTTPConnection(
-                target.hostname, target.port, timeout=UPSTREAM_TIMEOUT
+                target.hostname or "127.0.0.1", target.port, timeout=UPSTREAM_TIMEOUT
             )
             try:
                 headers = {"Content-Type": "application/json"} if body is not None else {}
