@@ -184,13 +184,35 @@ def _missing_modules(run) -> str:
     return f"; collection could not import {_names(modules)}" if modules else ""
 
 
-def explain(runs) -> str:
+def skip_origins(run, base) -> str:
+    """#1565: where each skipped test of a failed run comes from, by the base run's record (text
+    only, the verdict stays FAILED): ``base-skip`` (skipped on the base too), ``candidate-skip``
+    (the base ran it), ``always-skip`` (every collected test is skipped on the base and here).
+    ``""`` without that base record or when the base's skip list hit its cap (then unknown)."""
+    vid = run.spec.verifier_id
+    nodes = getattr(base, "base_nodes", {}).get(vid)
+    skips = getattr(base, "base_skips", {}).get(vid)
+    skipped = sorted(n for n, result in run.outcomes.items() if result == "skipped")
+    if not nodes or skips is None or len(skips) >= 50 or not skipped:
+        return ""
+    if len(skipped) == len(run.outcomes) == len(nodes) and set(skipped) <= set(skips) <= set(nodes):
+        return " (skip origin: always-skip)"
+    groups = {
+        "base-skip": [n for n in skipped if n in skips],
+        "candidate-skip": [n for n in skipped if n in nodes and n not in skips],
+    }
+    shown = "; ".join(f"{kind} {_names(found)}" for kind, found in groups.items() if found)
+    return f" (skip origin: {shown})" if shown else ""
+
+
+def explain(runs, base=None) -> str:
     """``[v1: cause; v2: cause]`` for the runs that failed, then ``[notes v3: note, note]`` for the
     backend notes of the runs that passed (Issue #584); ``""`` when every run passed without
     notes. Notes never change the verdict: they only say what the host left open around a run."""
     failed = [
         f"{run.spec.verifier_id}: {run.why or 'no cause recorded'}"
         + _missing_modules(run)
+        + (skip_origins(run, base) if "collected tests that did not pass" in run.why else "")
         + "".join(f" ({note})" for note in run.notes)  # fixed strings from the backend
         for run in runs
         if not run.observation.passed
