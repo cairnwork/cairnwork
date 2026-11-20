@@ -9,6 +9,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from cairnwork.notary import Notary
+from cairnwork.notary_binding import RowBinding, RowBindingUnavailable
 from cairnwork.notary_verify import _is_verified, _status_and_integrity
 from cairnwork_attest.record import AttestError, VerdictRecord, check_record_bindings, read_record
 
@@ -29,19 +31,28 @@ def _sha(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
-def _accepted(rec: VerdictRecord) -> bool:
-    """The notary's own verified rule (status, integrity, HTTP, request hash, echoed hashes)."""
-    return _is_verified(rec.http_status, rec.status, rec.integrity, rec.response, rec.request,
-                        rec.request_hash)  # fmt: skip
+def _bound(binding: RowBinding | None) -> bool:
+    """The notary's own answers: the Core identity is acceptable and the columns agree (#935)."""
+    return binding is not None and binding.identity_problem == "" and binding.columns_match
 
 
-def _refused(rec: VerdictRecord) -> bool:
-    """A real Core refusal: HTTP 200, integrity VALID and Core's refusal status. read_origin has
-    already required these columns to equal the response's own verification."""
-    return rec.http_status == 200 and rec.integrity == "VALID" and rec.status in REFUSALS
+def _accepted(rec: VerdictRecord, binding: RowBinding | None) -> bool:
+    """The notary's own verified rule (status, integrity, HTTP, request hash, echoed hashes), and
+    the row's identity and column binding as the notary itself judges them."""
+    verified = _is_verified(rec.http_status, rec.status, rec.integrity, rec.response, rec.request,
+                            rec.request_hash)  # fmt: skip
+    return _bound(binding) and verified
 
 
-def origin_of(rec: VerdictRecord) -> dict[str, Any]:
+def _refused(rec: VerdictRecord, binding: RowBinding | None) -> bool:
+    """A real Core refusal: HTTP 200, integrity VALID and Core's refusal status, from a row whose
+    identity and columns the notary accepts (a FAILED row from another Core is not one).
+    read_origin has already required these columns to equal the response's own verification."""
+    return (_bound(binding) and rec.http_status == 200 and rec.integrity == "VALID"
+            and rec.status in REFUSALS)  # fmt: skip
+
+
+def origin_of(rec: VerdictRecord, binding: RowBinding | None) -> dict[str, Any]:
     response: dict[str, Any] = rec.response if isinstance(rec.response, dict) else {}
     hashes = response.get("hashes")
     contract = hashes.get("acceptance_contract_hash") if isinstance(hashes, dict) else None
@@ -52,12 +63,17 @@ def origin_of(rec: VerdictRecord) -> dict[str, Any]:
         "integrity": rec.integrity,
         "http_status": rec.http_status,
         "recorded_at": rec.recorded_at,
-        "accepted": _accepted(rec),
-        "refused": _refused(rec),
+        "accepted": _accepted(rec, binding),
+        "refused": _refused(rec, binding),
         "core_identity_sha256": _sha(response.get("core_identity")),
+        "expected_identity_sha256": None if binding is None else binding.expected_identity_sha256,
         "acceptance_contract_hash": contract,
         "binding_sha256": None if rec.binding is None else _sha(rec.binding),
     }
+
+
+def _no_core(request: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    raise OriginError("CASE_RECORD_MISMATCH", "reading an origin never calls Core")
 
 
 def read_origin(notary_db: Path, task_id: str, attempt_id: str) -> tuple[VerdictRecord, dict]:
@@ -68,7 +84,19 @@ def read_origin(notary_db: Path, task_id: str, attempt_id: str) -> tuple[Verdict
         raise OriginError("CASE_RECORD_MISMATCH", f"ledger row: {exc.code}") from exc
     if _status_and_integrity(rec.response) != (rec.status, rec.integrity):
         raise OriginError("CASE_RECORD_MISMATCH", "status/integrity columns differ from response")
-    return rec, origin_of(rec)
+    try:  # the notary's own identity and column checks, not a copy of them (never calls Core)
+        binding = Notary(notary_db, core_verify=_no_core).row_binding(task_id, attempt_id)
+    except RowBindingUnavailable as exc:
+        raise OriginError("CASE_RECORD_MISMATCH", "ledger row cannot be read") from exc
+    if binding is None:
+        raise OriginError("CASE_RECORD_MISMATCH", "ledger row vanished")
+    try:  # the row the binding was judged on must be the row read above (no swap in between)
+        again = read_record(notary_db, task_id, attempt_id)
+    except AttestError as exc:
+        raise OriginError("CASE_RECORD_MISMATCH", f"ledger row: {exc.code}") from exc
+    if again != rec:
+        raise OriginError("CASE_RECORD_MISMATCH", "ledger row changed while it was read")
+    return rec, origin_of(rec, binding)
 
 
 def check_kind(kind: str, origin: dict[str, Any]) -> None:
