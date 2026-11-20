@@ -41,7 +41,8 @@ def _marker_items(session, _type=type, _mark=Mark):
 def _record_skip(reporter, report, _type=type):
     # #1368 / #1374: longrepr and nodeid exact types; hostile doubles run no methods.
     xfail = getattr(report, "wasxfail", None)  # #1368: only an exact str reason is an xfail
-    if getattr(report, "outcome", None) != "skipped" or _type(xfail) is str and xfail:
+    outcome = getattr(report, "outcome", None)  # #1374: only an exact str is compared
+    if _type(outcome) is not str or outcome != "skipped" or _type(xfail) is str and xfail:
         return
     longrepr = getattr(report, "longrepr", None)
     shown = (
@@ -330,4 +331,15 @@ def _missing(report, _type=type, _report=CollectReport):
         else ""
     )
     return shown.partition("could not import '")[2].partition("'")[0][:100]
+
+
+def _collect(reporter, report, _type=type, _report=CollectReport):
+    # #1374: read only an exact CollectReport whose outcome and nodeid are exact str; anything
+    # else is a collection error (fail closed) and none of its methods or properties run
+    ok = _type(report) is _report and _type(report.outcome) is str and _type(report.nodeid) is str
+    if not ok or report.outcome == "failed":
+        reporter._collect_errors.append(report.nodeid if ok else "")
+    elif report.outcome == "skipped":  # a module or directory skipped whole while collecting
+        reporter._collect_skipped.append(report.nodeid)
+        reporter._skipped_deps.append(_missing(report))
 """

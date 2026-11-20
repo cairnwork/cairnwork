@@ -239,3 +239,118 @@ def test_missing_keeps_exact_collect_report():
     plugin = _plugin(PARTS_SOURCE)
     rep = CollectReport("t.py", "skipped", ("t.py", 1, "could not import 'foo'"), None)
     assert plugin["_missing"](rep) == "foo"
+
+
+# 5. round 2 (Codex adversarial): outcome / when / nodeid of an exact report, and collectreport
+
+
+class _Hostile:
+    def __init__(self, calls):
+        self.calls = calls
+
+    def __eq__(self, other):
+        self.calls.append("eq")
+        return True
+
+    def __ne__(self, other):
+        self.calls.append("ne")
+        return False
+
+    def __hash__(self):
+        self.calls.append("hash")
+        return 1
+
+
+def _makereport(field, value):
+    from cairnwork.report_guard import _PLUGIN_SOURCE
+
+    plugin = _plugin(_PLUGIN_SOURCE)
+    reporter = plugin["_Reporter"]("/path", None, "nonce")
+    item = types.SimpleNamespace(nodeid="t.py::a")
+    reporter._sources[id(item)] = (item, "t.py::a", "t.py")
+    rep = TestReport("t.py::a", ("t.py", 0, "a"), {}, "failed", None, "call")
+    setattr(rep, field, value)
+    gen = reporter.pytest_runtest_makereport(item, types.SimpleNamespace(excinfo=None))
+    next(gen)
+    try:
+        gen.send(rep)
+    except StopIteration:
+        pass
+    return reporter
+
+
+def test_makereport_runs_no_method_of_a_hostile_outcome_when_or_nodeid():
+    for field in ("outcome", "when", "nodeid"):
+        calls = []
+        reporter = _makereport(field, _Hostile(calls))
+        assert calls == [], field
+        assert reporter._outcomes == {} and reporter._renamed == [""], field  # fails closed
+
+
+def test_makereport_rejects_a_str_subclass_outcome():
+    calls = []
+
+    class Outcome(str):
+        def __eq__(self, other):
+            calls.append("eq")
+            return True
+
+        __hash__ = str.__hash__
+
+    reporter = _makereport("outcome", Outcome("failed"))
+    assert calls == [] and reporter._renamed == [""]
+
+
+def _collect(report):
+    from cairnwork.report_guard import _PLUGIN_SOURCE
+
+    reporter = _plugin(_PLUGIN_SOURCE)["_Reporter"]("/path", None, "nonce")
+    reporter.pytest_collectreport(report)
+    return reporter
+
+
+def test_collectreport_reads_no_property_of_a_collectreport_subclass():
+    calls = []
+
+    class Sub(CollectReport):
+        @property
+        def failed(self):
+            calls.append("failed")
+            return False
+
+        @property
+        def skipped(self):
+            calls.append("skipped")
+            return False
+
+    reporter = _collect(Sub("t.py", "passed", None, None))
+    assert calls == [] and reporter._collect_errors == [""]  # fail closed: a collection error
+
+
+def test_collectreport_runs_no_method_of_a_hostile_outcome_or_nodeid():
+    for field in ("outcome", "nodeid"):
+        calls = []
+        rep = CollectReport("t.py", "failed", None, None)
+        setattr(rep, field, _Hostile(calls))
+        reporter = _collect(rep)
+        assert calls == [] and reporter._collect_errors == [""], field
+
+
+def test_collectreport_keeps_exact_failed_and_skipped_reports():
+    failed = _collect(CollectReport("t.py", "failed", None, None))
+    assert failed._collect_errors == ["t.py"]
+    skipped = _collect(
+        CollectReport("u.py", "skipped", ("u.py", 1, "could not import 'foo'"), None)
+    )
+    assert skipped._collect_skipped == ["u.py"] and skipped._skipped_deps == ["foo"]
+    assert skipped._collect_errors == []
+
+
+def test_record_skip_runs_no_method_of_a_hostile_outcome():
+    plugin = _plugin(PARTS_SOURCE)
+    calls = []
+    report = _skipped()
+    report.outcome = _Hostile(calls)
+    reporter = types.SimpleNamespace(_skips={}, _item_marks={})
+    plugin["_record_skip"](reporter, report)
+    assert calls == [] and reporter._skips == {}
