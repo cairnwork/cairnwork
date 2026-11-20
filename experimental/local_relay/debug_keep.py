@@ -34,5 +34,5 @@ def keep_candidate(result: Any) -> None:
                 check=False,
             )
             (dest / "candidate.patch").write_bytes(patch.stdout)
-    except Exception as exc:  # debug aid must never change the flow
+    except Exception as exc:  # noqa: BLE001 - debug aid must never change the flow
         print(f"{ENV_VAR}: keep failed: {exc!r}", file=sys.stderr)
