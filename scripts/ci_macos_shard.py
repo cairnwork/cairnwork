@@ -36,6 +36,8 @@ def xdist_group_of(root: Path) -> dict[str, str]:
     spec = importlib.util.spec_from_file_location(
         "xdist_groups", root / "tests" / "xdist_groups.py"
     )
+    if spec is None or spec.loader is None:
+        raise ImportError("cannot load tests/xdist_groups.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return dict(module.XDIST_GROUP_OF)

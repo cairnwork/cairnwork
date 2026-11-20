@@ -7,11 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts" / "ci"))
-
-import ci_macos_shard as shards  # noqa: E402
-import pin_guard  # noqa: E402
+from scripts import ci_macos_shard as shards
+from scripts.ci import pin_guard
 
 ROOT = Path(__file__).resolve().parent.parent
 TABLE = json.loads(shards.WEIGHTS.read_text())
