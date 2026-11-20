@@ -75,6 +75,18 @@ def test_verify_detects_a_sys_path_zip_created_after_record(monkeypatch, tmp_pat
     )
 
 
+def test_verify_detects_a_directory_planted_at_the_sys_path_zip_name(monkeypatch, tmp_path):
+    """A directory (with a module in it) at the zip's name imports as an ordinary path entry."""
+    _, zip_path, recorded = _snapshot_fake_install(monkeypatch, tmp_path)
+    zip_path.mkdir(parents=True)
+    (zip_path / "json.py").write_text("DIR_SENTINEL = 1\n")
+    current = rec.snapshot(cast(list[str], recorded["roots"]))
+    assert (
+        rec.compare(recorded, current)
+        == "path_extras differs from the recorded base Python install"
+    )
+
+
 def test_verify_detects_a_sys_path_zip_modified_after_record(monkeypatch, tmp_path):
     _, zip_path = _fake_base_sys_path(monkeypatch, tmp_path)
     _write_zip_module(zip_path, "ZIP_SENTINEL = 1\n")
