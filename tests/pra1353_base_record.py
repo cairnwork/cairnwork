@@ -4,9 +4,10 @@ The gate (pra1353_gate.py) refuses a base install that lies inside the checked t
 inside the interpreter whose paths it checks, so it cannot attest that interpreter. This script
 adds the missing outside reference:
 
-* ``record OUT`` runs in ci.yml right after the interpreter is installed and before ``uv sync`` or
-  any other step that executes code from the pull request. It writes the base install paths and a
-  digest of its stdlib, platstdlib and lib-dynload trees to OUT (a path outside the checkout).
+* In ci.yml, ``record OUT`` runs right after ``uv sync`` of the trusted venv built from the base's
+  lock and before any step that executes code from the pull request. It writes the base install
+  paths and digests of its stdlib, platstdlib, lib-dynload and in-prefix sys.path entries to OUT
+  (outside the checkout).
 * ``verify OUT`` runs right before the gate. It recomputes both from the running interpreter and
   fails closed on any difference, a missing or malformed record, or an unreadable tree.
 
@@ -25,7 +26,9 @@ from pathlib import Path
 
 ROOT_SKIPPED = frozenset({"site-packages"})  # only directly under a root; the gate runs -I -S
 
-RECORD_KEYS = frozenset({"version", "base_prefix", "base_exec_prefix", "roots", "digest", "files"})
+RECORD_KEYS = frozenset(
+    {"version", "base_prefix", "base_exec_prefix", "roots", "digest", "files", "path_extras"}
+)
 
 
 def _roots() -> list[str]:
@@ -41,11 +44,49 @@ def _file_digest(path: str) -> bytes:
         return hashlib.sha256(handle.read()).digest()
 
 
+def _path_entries(roots: list[str]) -> list[str]:
+    """Return in-prefix sys.path entries outside the recorded roots."""
+    prefixes = (os.path.abspath(sys.base_prefix), os.path.abspath(sys.base_exec_prefix))
+    recorded = [os.path.abspath(root) for root in roots]
+    entries = set()
+    for entry in sys.path:
+        path = os.path.abspath(entry)
+        under_prefix = any(path == p or path.startswith(p + os.sep) for p in prefixes)
+        in_roots = any(path == r or path.startswith(r + os.sep) for r in recorded)
+        if under_prefix and not in_roots:
+            entries.add(path)
+    return sorted(entries)
+
+
+def _path_state(path: str, roots: list[str]) -> str:
+    """Return absent or a digest of a sys.path entry and its importable contents."""
+    if not os.path.lexists(path):
+        return "absent"
+    info = os.lstat(path)
+    mode = stat.S_IMODE(info.st_mode).to_bytes(2, "big")
+    if stat.S_ISREG(info.st_mode):
+        body = b"F" + mode + _file_digest(path)
+    elif stat.S_ISDIR(info.st_mode):
+        return tree_digest([path])[0]
+    elif stat.S_ISLNK(info.st_mode):
+        body = b"L" + mode + os.readlink(path).encode() + b"\0" + _link_target(path, roots)
+    else:
+        raise OSError(f"not a regular file, directory or symlink: {path}")
+    return hashlib.sha256(body).hexdigest()
+
+
+def _path_extras(roots: list[str]) -> list[list[str]]:
+    return [[path, _path_state(path, roots)] for path in _path_entries(roots)]
+
+
 def _link_target(path: str, roots: list[str]) -> bytes:
-    """What a symlink stands for, beyond its text: the content of a regular file it points at
-    (a venv's bin/python usually points at the base install, outside the trees), the real path
-    of a directory inside the trees (the walk covers it; one outside them is an error, as its
-    content would go unseen), a marker if dangling."""
+    """What a symlink stands for, beyond its text: the content of a regular file it points at,
+    the real path of a directory inside the trees (the walk covers it; one outside them is an
+    error, as its content would go unseen), a marker if dangling.
+
+    Coverage is limited to the listed trees and the sys.path entries under the base prefixes:
+    interpreter executables (a venv's bin/python) and libpython are NOT recorded (known boundary).
+    """
     try:
         info = os.stat(path)
     except FileNotFoundError:
@@ -113,6 +154,7 @@ def snapshot(roots: list[str] | None = None) -> dict[str, object]:
         "roots": chosen,
         "digest": digest,
         "files": files,
+        "path_extras": _path_extras(chosen),
     }
 
 
