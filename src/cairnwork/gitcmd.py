@@ -20,6 +20,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from cairnwork.gitversion import GitVersionError, git_executable, require_no_lazy_fetch
 from cairnwork.textclean import replace_hidden
 
 GIT_TIMEOUT_SECONDS = 60
@@ -118,7 +119,7 @@ def config_execution_off(repo: Path | str, env: dict[str, str]) -> tuple[str, ..
     """
     try:
         done = subprocess.run(  # noqa: S603 - fixed git argv, no shell
-            ["git", "-C", str(repo), "config", "--null", "--name-only", "--list"],
+            [git_executable(), "-C", str(repo), "config", "--null", "--name-only", "--list"],
             capture_output=True, timeout=GIT_TIMEOUT_SECONDS, env={**env, "LC_ALL": "C"},
         )  # fmt: skip
     except (OSError, subprocess.SubprocessError) as exc:
@@ -276,6 +277,10 @@ ALLOWED_PROTOCOLS = "file:https:ssh"
 def _child_env() -> dict[str, str]:
     """Base environment for git: no inherited GIT_*, no askpass, terminal prompts off, and
     only the file, https and ssh transports."""
+    try:
+        require_no_lazy_fetch()
+    except GitVersionError as exc:
+        raise GitCommandError(str(exc)) from exc
     env = {
         k: v
         for k, v in os.environ.items()
@@ -283,6 +288,7 @@ def _child_env() -> dict[str, str]:
     }
     env["GIT_TERMINAL_PROMPT"] = "0"
     env["GIT_ALLOW_PROTOCOL"] = ALLOWED_PROTOCOLS
+    env["GIT_NO_LAZY_FETCH"] = "1"  # #489: no lazy fetch in a partial clone
     return env
 
 
@@ -293,7 +299,7 @@ def ssh_batch_mode(env: dict[str, str], repo: Path) -> None:
     variables. When the setting cannot be read, BatchMode is set (it outranks the setting)."""
     try:
         configured = subprocess.run(  # noqa: S603, S607 - fixed argv, no shell
-            ["git", "-C", str(repo), "config", "--get", "core.sshCommand"],
+            [git_executable(), "-C", str(repo), "config", "--get", "core.sshCommand"],
             capture_output=True, env=env, timeout=GIT_TIMEOUT_SECONDS, check=False,
         )  # fmt: skip
         if configured.returncode == 0:
@@ -331,7 +337,7 @@ def _exec(
     try:
         done = subprocess.run(  # noqa: S603 - fixed git argv, no shell
             [
-                "git",
+                git_executable(),
                 *_SAFE_OPTIONS,
                 *config_hooks_off(repo, env),
                 "-C",
@@ -363,7 +369,7 @@ def hash_blob(repo: Path, data: bytes) -> str:
     try:
         done = subprocess.run(  # noqa: S603 - fixed git argv, no shell
             [
-                "git",
+                git_executable(),
                 *_SAFE_OPTIONS,
                 *config_hooks_off(repo, env),
                 "-C",

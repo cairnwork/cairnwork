@@ -43,6 +43,7 @@ from cairnwork.changeset import ChangeSetError, read_change_set
 from cairnwork.diffcheck import diff_check_detail
 from cairnwork.gitcmd import CLONE_ISOLATED, OID, GitCommandError, run_git, run_git_bytes
 from cairnwork.protected_paths import is_protected, protected_note
+from cairnwork.refusal_types import CandidateRejected
 from cairnwork.tamper_scan import CODE as TAMPER_CODE
 from cairnwork.tamper_scan import scan_patch
 from cairnwork.textclean import shown
@@ -58,12 +59,6 @@ class WorkspaceError(Exception):
 
     def __init__(self, detail: str) -> None:
         super().__init__(f"{self.code}: {detail}")
-
-
-class CandidateRejected(Exception):
-    def __init__(self, code: str, detail: str) -> None:
-        self.code = code
-        super().__init__(f"{code}: {detail}")
 
 
 @dataclass(frozen=True)

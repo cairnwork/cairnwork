@@ -40,7 +40,9 @@ from cairnwork.p2p_selection import DEFAULT_BUDGET_SECONDS, DIRECT_MODE
 from cairnwork.pipeline_judge import judge_for, tests_unused, tests_with_teeth
 from cairnwork.protected_paths import path_refusal
 from cairnwork.pytest_config import PytestConfigError, gate_import_paths
+from cairnwork.refusal_types import TaskRejected
 from cairnwork.snapshot import snapshot_candidate
+from cairnwork.textclean import shown
 from cairnwork.unswept import WorkerMayLive
 from cairnwork.verifier_account import VerifierAccount
 from cairnwork.verifiers import (
@@ -58,12 +60,6 @@ from cairnwork.workspace import (
     unless_interrupted,
 )
 from cairnwork_protocol.ids import ID_RULE, core_ids
-
-
-class TaskRejected(Exception):
-    def __init__(self, code: str, detail: str) -> None:
-        self.code = code
-        super().__init__(f"{code}: {detail}")
 
 
 @dataclass(frozen=True)
@@ -291,7 +287,7 @@ def _execute(
         _attempt(task, specs, record.request_digest, notary, worker, result, steps, ctx)
     except Exception as exc:  # noqa: BLE001 - an infrastructure failure, never success
         result.verified, result.uncomparable = False, ""
-        result.reason = f"INFRA_ERROR: {type(exc).__name__}: {exc}"
+        result.reason = f"INFRA_ERROR: {type(exc).__name__}: {shown(exc)}"
     # Anything else (KeyboardInterrupt, SystemExit) leaves it DISPATCHED: recovery fences it (#244)
     result.status = "COMPLETED" if result.verified else "FAILED"
     steps.reach("FINISHED", result.status, "" if result.verified else result.uncomparable)
@@ -344,7 +340,7 @@ def _attempt(task, specs, digest, notary, worker, result, steps, ctx: VerifyCont
         try:
             provenance = worker.run(attempt.path, task)  # None from a worker with no record
         except Exception as exc:  # noqa: BLE001 - any worker failure is a failed attempt
-            result.reason = f"WORKER_FAILED: {type(exc).__name__}: {exc}"
+            result.reason = f"WORKER_FAILED: {type(exc).__name__}: {shown(exc)}"
             if isinstance(exc, WorkerMayLive):  # its processes may outlive the run (#244)
                 result.fence = exc.account
             return
@@ -397,4 +393,4 @@ def _remove_clone(run_root, result) -> None:
     try:
         remove_attempt_clone(run_root, result.attempt_id)
     except WorkspaceError as exc:  # keep the attempt's own outcome; note the leftover
-        result.logs.append(f"cleanup failed: {exc}")
+        result.logs.append(f"cleanup failed: {shown(exc)}")

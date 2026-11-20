@@ -39,8 +39,8 @@ from typing import Any
 
 from cairnwork import runlock, takeover
 from cairnwork.deferred_store import DeferredStore
-from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.intake_config import DEFAULT_CONFIG, has_token, one_line, seconds_ok, stored_config
+from cairnwork.intake_mirror import mirror_base
 from cairnwork.intake_request import (
     IntakeRefused,
     bind_stored,
@@ -62,6 +62,7 @@ from cairnwork.ownership import (
 from cairnwork.p2p_selection import check_p2p_config
 from cairnwork.pipeline import TaskSpec, check_task
 from cairnwork.taskpaths import check_submitted_paths
+from cairnwork.textclean import shown
 from cairnwork.verifier_account import VerifierAccount
 from cairnwork.workers.agy_dispatch import valid_run_as_user
 from cairnwork_protocol.http import CoreHttpError, check_core_url, http_core_verify
@@ -100,7 +101,7 @@ class Intake:
         try:
             loaded = json.loads(path.read_text()) if path.exists() else {}
         except (ValueError, RecursionError) as exc:  # truncated, not UTF-8, too deep (#234, #909)
-            raise IntakeRefused("BAD_CONFIG", f"{path} is not valid JSON: {exc}") from exc
+            raise IntakeRefused("BAD_CONFIG", f"{path} is not valid JSON: {shown(exc)}") from exc
         if not isinstance(loaded, dict) or set(loaded) - set(DEFAULT_CONFIG):
             raise IntakeRefused("BAD_CONFIG", f"{path} keys must be among {sorted(DEFAULT_CONFIG)}")
         for key in (
@@ -252,7 +253,7 @@ class Intake:
         if known is None and not self.accepting():
             raise IntakeRefused("NOT_ACCEPTING", "Cairnwork takes no new tasks")
         if known is None and source.resolve() != task.repo.resolve():
-            _mirror_base(task.repo, source, task.base_commit)  # new work only, under the lock
+            mirror_base(task.repo, source, task.base_commit)  # new work only, under the lock
         if known is None and self.config()["require_base_on_main"]:
             try:  # fetches origin/main of the repository the task is bound to
                 require_on_main(task.repo, task.base_commit)
@@ -385,16 +386,3 @@ class Intake:
             "task_ids": [r.task_id for r in records],
             "foreign_task_ids": [r.task_id for r in foreign],  # reported, never counted
         }
-
-
-def _mirror_base(mirror: Path, source: Path, base: str) -> None:
-    """Fetch and pin base without FETCH_HEAD, locking parallel fetches out of gc."""
-    try:
-        run_git(
-            mirror, "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", str(source),
-            f"{base}:refs/cairnwork-bases/{base}",  # outside the guarded refs/cairnwork/
-        )  # fmt: skip
-    except GitCommandError as exc:
-        if not isinstance(exc.__cause__, subprocess.CalledProcessError):
-            raise OSError(f"Cairnwork could not run git: {exc}") from exc
-        raise IntakeRefused("BAD_REQUEST", f"cannot fetch {base} from {source}") from exc
