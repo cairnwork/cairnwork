@@ -9,7 +9,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def run_collection(project: Path, record_dir: Path | None) -> subprocess.CompletedProcess[str]:
+def run_collection(
+    project: Path, record_dir: Path | None, extra: tuple[str, ...] = ()
+) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["PYTHONPATH"] = os.pathsep.join([str(ROOT / "src"), env.get("PYTHONPATH", "")])
     if record_dir is None:
@@ -29,6 +31,7 @@ def run_collection(project: Path, record_dir: Path | None) -> subprocess.Complet
             "no:cacheprovider",
             "-p",
             "cairnwork.fixture_record",
+            *extra,
         ],
         cwd=project,
         env=env,
@@ -152,5 +155,94 @@ def test_collection_error_does_not_mark_record_complete(tmp_path: Path) -> None:
     record_dir.mkdir()
     result = run_collection(tmp_path, record_dir)
     assert result.returncode != 0
+    path = record_dir / "record.json"
+    assert not path.exists() or read_record(record_dir)["complete"] is False
+
+
+CUSTOM_ITEM = (
+    "import pytest\n\n\nclass Odd(pytest.Item):\n    def runtest(self): pass\n\n\n"
+    "def pytest_collect_file(file_path, parent):\n"
+    "    if file_path.name == 'odd.txt':\n        return Odd.from_parent(parent, name='odd')\n"
+)
+
+
+def _exit(tmp_path: Path, files: dict[str, str], with_record: bool) -> tuple[int, Path]:
+    project(tmp_path, files)
+    record_dir = tmp_path / "run"
+    record_dir.mkdir()
+    return run_collection(tmp_path, record_dir if with_record else None).returncode, record_dir
+
+
+def test_item_without_fixturenames_keeps_exit_and_record(tmp_path: Path) -> None:
+    files = {"conftest.py": CUSTOM_ITEM, "odd.txt": "x", "test_a.py": "def test_a(): pass\n"}
+    code, record_dir = _exit(tmp_path, files, True)
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    project(plain, files)
+    assert code == run_collection(plain, None).returncode == 0
+    record = read_record(record_dir)
+    assert record["complete"] is True
+    assert record["stages"]["finish"]["count"] == 2
+
+
+def test_tryfirst_removal_still_recorded(tmp_path: Path) -> None:
+    conftest = (
+        "import pytest\n\n\n@pytest.hookimpl(tryfirst=True)\n"
+        "def pytest_collection_modifyitems(items):\n    items[:] = []\n"
+    )
+    files = {"conftest.py": conftest, "test_a.py": "def test_a(monkeypatch): pass\n"}
+    _, record_dir = _exit(tmp_path, files, True)
+    assert "monkeypatch" in read_record(record_dir)["names"]
+
+
+def test_usage_error_record_not_complete(tmp_path: Path) -> None:
+    project(tmp_path, {"test_a.py": "def test_a(): pass\n"})
+    record_dir = tmp_path / "run"
+    record_dir.mkdir()
+    env_run = run_collection(tmp_path, record_dir)
+    assert env_run.returncode == 0
+    (record_dir / "record.json").unlink()
+    code = run_collection(tmp_path, record_dir, ("no_such_path",)).returncode
+    assert code != 0
+    path = record_dir / "record.json"
+    assert not path.exists() or read_record(record_dir)["complete"] is False
+
+
+def test_prewritten_record_is_replaced(tmp_path: Path) -> None:
+    conftest = (
+        "import json, os, pathlib\n\n\ndef pytest_configure(config):\n"
+        "    d = pathlib.Path(os.environ['CAIRNWORK_FIXTURE_RECORD_DIR'])\n"
+        "    (d / 'record.json').write_text(json.dumps({'complete': True, 'names': ['forged']}))\n"
+    )
+    files = {"conftest.py": conftest, "test_a.py": "def test_a(tmp_path): pass\n"}
+    _, record_dir = _exit(tmp_path, files, True)
+    record = read_record(record_dir)
+    assert "forged" not in record["names"]
+    assert "tmp_path" in record["names"]
+
+
+def test_directory_change_during_collection_is_not_followed(tmp_path: Path) -> None:
+    conftest = (
+        "import os, pathlib\n"
+        "here = pathlib.Path(__file__).parent / 'elsewhere'\n"
+        "os.environ['CAIRNWORK_FIXTURE_RECORD_DIR'] = str(here)\n"
+    )
+    files = {"conftest.py": conftest, "test_a.py": "def test_a(): pass\n"}
+    (tmp_path / "elsewhere").mkdir()
+    _, record_dir = _exit(tmp_path, files, True)
+    assert (record_dir / "record.json").exists()
+    assert not (tmp_path / "elsewhere" / "record.json").exists()
+
+
+def test_recorder_fault_voids_record_but_not_the_run(tmp_path: Path) -> None:
+    conftest = (
+        "import pytest\n\n\nclass Boom(pytest.Item):\n    def runtest(self): pass\n\n"
+        "    @property\n    def fixturenames(self):\n        raise RuntimeError('boom')\n\n\n"
+        "def pytest_collect_file(file_path, parent):\n"
+        "    if file_path.name == 'odd.txt':\n        return Boom.from_parent(parent, name='b')\n"
+    )
+    files = {"conftest.py": conftest, "odd.txt": "x", "test_a.py": "def test_a(): pass\n"}
+    code, record_dir = _exit(tmp_path, files, True)
+    assert code == 0
     path = record_dir / "record.json"
     assert not path.exists() or read_record(record_dir)["complete"] is False
