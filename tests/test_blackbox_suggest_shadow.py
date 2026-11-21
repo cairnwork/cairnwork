@@ -47,11 +47,6 @@ REFUSED = [
     pytest.param("import fractions\n", {"tests/deep/er/fractions.py": SIDE}, id="module_deeper"),
     pytest.param("import fractions\n", {"scripts/fractions.py": SIDE}, id="module_in_any_dir"),
     pytest.param(
-        "import fractions\n",
-        {"tests/sub/__init__.py": "", "tests/sub/fractions.py": SIDE, "tests/sub/test_y.py": ""},
-        id="module_in_a_test_package",
-    ),
-    pytest.param(
         "import fractions\n", {"tests/fractions/__init__.pyc": ""}, id="package_with_compiled_init"
     ),
     pytest.param("import fractions\n", {"tests/fractions.pyc": ""}, id="compiled_module"),
@@ -131,6 +126,8 @@ def test_helpers_with_other_names_keep_the_draft(tmp_path):
             "src/pkg/types.py": "X = 1\n",
             "tests/sub/__init__.py": "",
             "tests/sub/types.py": "X = 1\n",
+            "tests/sub/fractions.py": SIDE,
+            "tests/sub/test_y.py": "",
             "venv/pyvenv.cfg": "",
             "venv/lib/fractions.py": SIDE,
             ".git/fractions.py": SIDE,
