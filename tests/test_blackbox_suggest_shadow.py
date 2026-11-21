@@ -136,6 +136,8 @@ def test_helpers_with_other_names_keep_the_draft(tmp_path):
             "tests/sub/test_y.py": "",
             "venv/pyvenv.cfg": "",
             "venv/lib/fractions.py": SIDE,
+            "env/pyvenv.cfg": "",
+            "env/lib/fractions.py": SIDE,
             ".git/fractions.py": SIDE,
             ".hidden/fractions.py": SIDE,
             "build/fractions.py": SIDE,
