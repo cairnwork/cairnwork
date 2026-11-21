@@ -106,8 +106,9 @@ def _candidate_python(repo: Path, commit: str, paths: tuple[str, ...]) -> dict[s
     out: dict[str, bytes] = {}
     for path in paths:
         if path.endswith(".py"):
-            try:
-                out[path] = run_git_bytes(repo, "show", f"{commit}:{path}")
+            try:  # a symlink (mode 120000) cannot be scanned: NUL makes the strict parse fail
+                link = run_git(repo, "ls-tree", commit, "--", path).startswith("120000")
+                out[path] = b"\0" if link else run_git_bytes(repo, "show", f"{commit}:{path}")
             except GitCommandError:
                 continue
     return out

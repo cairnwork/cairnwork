@@ -25,9 +25,11 @@ def module_level(body: list[ast.stmt]) -> Iterator[ast.stmt]:
 _PATCH = frozenset({"setattr", "delattr", "__dict__", "__setattr__", "__delattr__"})
 _DYNAMIC = _PATCH | frozenset(
     "getattr vars globals locals exec eval compile __import__ importlib builtins "
-    "__getattr__ __getattribute__".split()
+    "__getattr__ __getattribute__ __builtins__".split()
 )
 _ALL = "*"
+# Names that can reach or rewrite any module: one anywhere in the tree voids every stdlib module.
+_WIDE = _PATCH | frozenset({"sys.modules", "vars", "globals", "locals", "__builtins__", "builtins"})
 # Positive allowlist: the only stdlib modules whose import cannot load or run another file or
 # execute text. Any other stdlib import (importlib, pydoc, runpy, timeit, os, unittest ...) in a
 # file makes that file fall back to main, and in any tree file voids every stdlib module.
@@ -184,10 +186,8 @@ def voided_modules(trees: dict[str, ast.Module]) -> set[str]:
                     result.add(top)
                 elif isinstance(n.value, ast.Attribute):
                     result.add(_ALL)
-        if tokens & (_PATCH | {"sys.modules"}):
-            result |= {t for t in names.values() if t in sys.stdlib_module_names}
-            if tokens - _PATCH - {"sys.modules"}:
-                result.add(_ALL)
+        if tokens & _WIDE:
+            result.add(_ALL)
         bare = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
         if tokens & {"exec-import", "str-module"} or bare & {
             "exec",

@@ -253,10 +253,7 @@ def test_voided_modules_unit():
     plain = ast.parse("import json\n")
     assert voided_modules({"a": patch, "b": plain}) == {"functools"}
     assert voided_modules({"b": plain}) == set()
-    assert voided_modules({"a": ast.parse("import json\nsetattr(json, 'x', 1)")}) == {"json"}
-    assert voided_modules({"a": ast.parse("import json\nsetattr(json, 'x', 1)\neval('1')")}) >= {
-        "*"
-    }
+    assert voided_modules({"a": ast.parse("import json\nsetattr(json, 'x', 1)")}) == {"*"}
     assert _counts(PASS[0], voided={"functools"})
     assert _counts(PASS[0], voided={"*"})
 

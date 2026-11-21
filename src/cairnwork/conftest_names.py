@@ -53,7 +53,7 @@ def taken_names(
     base requests or a conftest above binds): a new binding may take neither."""
     names: set[str] = set()
     directory = dirname(path)
-    listing = _listing(repo, base)
+    listing, links = _listing(repo, base)
     sources = _base_sources(repo, listing, directory)
     trees: dict[str, ast.Module] = {}
     parent_conftests: list[tuple[str, ast.Module]] = []
@@ -76,7 +76,7 @@ def taken_names(
     for conftest, tree in parent_conftests:
         names |= bound(tree, extra=resolved.get(conftest)) | requested(tree)
     called = imported_callable_uses(imported, index)
-    scan = _scan_trees(repo, listing, candidate or {})
+    scan = None if links else _scan_trees(repo, listing, candidate or {})
     voided = voided_modules({**scan, **all_trees}) if scan is not None else {"*"}
     for f, tree in imported.items():
         names |= _fixtures(
@@ -199,19 +199,22 @@ def _scan_trees(
     return trees
 
 
-def _listing(repo: Path, base: str) -> dict[str, str]:
-    """Every regular ``.py`` blob of the base: path to object id."""
+def _listing(repo: Path, base: str) -> tuple[dict[str, str], bool]:
+    """Every regular ``.py`` blob of the base (path to object id), and whether a symlink named
+    ``.py`` exists (#1004: it cannot be scanned, so the relaxation goes off)."""
     try:
         rows = run_git(repo, "ls-tree", "-r", "-z", base).split("\0")
     except GitCommandError as exc:
         raise TestCommitRejected("TEST_COMMIT_UNREADABLE", str(exc)) from exc
     listing: dict[str, str] = {}
+    links = False
     for row in filter(None, rows):
         meta, _, file = row.partition("\t")
         mode, kind, oid = meta.split()
+        links = links or (mode == "120000" and file.endswith(".py"))
         if kind == "blob" and mode in ("100644", "100755") and file.endswith(".py"):
             listing[file] = oid
-    return listing
+    return listing, links
 
 
 def _base_sources(repo: Path, listing: dict[str, str], directory: str) -> dict[str, bytes]:
