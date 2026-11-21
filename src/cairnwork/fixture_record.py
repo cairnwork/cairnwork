@@ -11,16 +11,34 @@ from typing import Any
 import pytest
 
 _DIR = os.environ.get("CAIRNWORK_FIXTURE_RECORD_DIR")  # read once: checkout code cannot move it
-_META = {
-    "recorder_version": 2,
-    "settings_digest": os.environ.get("CAIRNWORK_SETTINGS_DIGEST", ""),
-    "base_sha": os.environ.get("CAIRNWORK_BASE_SHA", ""),
-    "sys_path": list(sys.path),
-}
 _extra: dict[str, Any] = {}
 _stages: dict[str, dict[str, Any]] = {}
 _seen: set[str] = set()
 _count, _failed = [0], [False]
+_MISSING: Any = object()
+
+
+def _str_items(items: list[Any]) -> list[str]:
+    kept = [item for item in items if isinstance(item, str)]
+    if len(kept) != len(items):
+        _failed[0] = True  # non-string sys.path entry: keep only strings, void complete
+    return kept
+
+
+def _snapshot_sys_path() -> list[str]:
+    try:  # checkout code can make sys.path raise anything, even SystemExit
+        return _str_items(list(sys.path))
+    except BaseException:  # noqa: BLE001 - voids the record only
+        _failed[0] = True
+        return []
+
+
+_META = {
+    "recorder_version": 2,
+    "settings_digest": os.environ.get("CAIRNWORK_SETTINGS_DIGEST", ""),
+    "base_sha": os.environ.get("CAIRNWORK_BASE_SHA", ""),
+    "sys_path": _snapshot_sys_path(),
+}
 
 
 def _safe(hook: Any) -> Any:
@@ -80,8 +98,16 @@ def pytest_collection_modifyitems_last(items: list[Any]) -> None:
 
 def _plugin_modules(config: Any) -> list[dict[str, Any]]:
     try:  # checkout code: any raise, even SystemExit, voids the record only
-        mods = [p for p in config.pluginmanager.get_plugins() if getattr(p, "__name__", None)]
-        raw = [(m.__name__, getattr(m, "__file__", None)) for m in mods]
+        raw = []
+        for plugin in config.pluginmanager.get_plugins():
+            name = getattr(plugin, "__name__", _MISSING)
+            if name is _MISSING:
+                continue  # no __name__ at all: silently skipped, complete kept
+            if not isinstance(name, str):
+                _failed[0] = True  # wrong-typed name, even falsey: skip, void complete
+                continue
+            if name:
+                raw.append((name, getattr(plugin, "__file__", None)))
     except BaseException:  # noqa: BLE001 - must not escape into the pytest exit code
         _failed[0] = True
         return []
@@ -97,5 +123,5 @@ def _plugin_modules(config: Any) -> list[dict[str, Any]]:
 @_safe
 def pytest_collection_finish(session: Any) -> None:
     _extra["plugin_modules"] = _plugin_modules(session.config)
-    _extra["sys_path_finish"] = list(sys.path)
+    _extra["sys_path_finish"] = _snapshot_sys_path()
     _record("finish", session.items, complete=session.testsfailed == 0)
