@@ -253,27 +253,34 @@ def _edits_foreign_path(part: ast.AST) -> bool:
         ):
             return True
         return any(_foreign_path(arg) for arg in (*part.args, *(k.value for k in part.keywords)))
-    value: ast.expr | None = None
+    targets: list[ast.expr]
     if isinstance(part, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
         targets = part.targets if isinstance(part, ast.Assign) else [part.target]
-        value = getattr(part, "value", None)
-        if _foreign_path(value):
+        if _foreign_path(getattr(part, "value", None)):
             return True  # a stored alias of the search path
     elif isinstance(part, ast.NamedExpr):
         return _foreign_path(part.value)  # walrus alias of the search path
     elif isinstance(part, ast.Delete):
         targets = part.targets
+    elif isinstance(part, (ast.For, ast.AsyncFor, ast.comprehension)):
+        targets = [part.target]
+    elif isinstance(part, (ast.With, ast.AsyncWith)):
+        targets = [i.optional_vars for i in part.items if i.optional_vars is not None]
     else:
         return False
-    for target in targets:
-        if isinstance(target, ast.Subscript) and _foreign_path(target.value):
-            return True  # element or slice assignment, augmented assignment, ``del``
-        if _foreign_path(target):
-            plain = isinstance(getattr(target, "value", None), ast.Name)
-            constant = isinstance(value, ast.Constant) and isinstance(value.value, str)
-            if not plain or isinstance(part, ast.AugAssign) or not constant:
-                return True  # only ``request.path = "/x"`` style string assignments pass
-    return False
+    return any(_writes_foreign_path(t) for t in targets)
+
+
+def _writes_foreign_path(target: ast.expr) -> bool:
+    """A binding target that stores into ``<expr>.path`` or its elements, however nested
+    (tuple, list, starred). No receiver is trusted: any write to a ``.path`` attribute counts."""
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return any(_writes_foreign_path(t) for t in target.elts)
+    if isinstance(target, ast.Starred):
+        return _writes_foreign_path(target.value)
+    if isinstance(target, ast.Subscript):
+        return _foreign_path(target.value)  # element or slice assignment, ``del``
+    return _foreign_path(target)
 
 
 def _is_path_edit_statement(node: ast.AST, sys_names: set[str], text: str) -> bool:

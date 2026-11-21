@@ -32,6 +32,15 @@ REFUSED = {
     "name_attr_assign": SHADOW + "def _g(s):\n    s.path = [d]\n_g(sys)\n",
     "name_attr_augassign": SHADOW + "def _g(s):\n    s.path += [d]\n_g(sys)\n",
     "walrus_alias": SHADOW + "def _g(s):\n    (p := s.path).insert(0, d)\n_g(sys)\n",
+    "const_in_def": SHADOW + "def _g(s):\n    s.path = '/tmp/x'\n_g(sys)\n",
+    "for_target": SHADOW + "def _g(s):\n    for s.path in [[d]]:\n        pass\n_g(sys)\n",
+    "tuple_target": SHADOW + "def _g(s):\n    s.path, = [[d]]\n_g(sys)\n",
+    "starred_target": SHADOW + "def _g(s):\n    *s.path, = [d]\n_g(sys)\n",
+    "nested_target": SHADOW + "def _g(s):\n    (a, [s.path]) = (1, [d])\n_g(sys)\n",
+    "with_target": SHADOW
+    + "import contextlib\ndef _g(s):\n    with contextlib.nullcontext([d]) as s.path:\n        pass\n_g(sys)\n",
+    "request_path_in_signalled_file": SHADOW
+    + "# sys.path\nclass _Req:\n    path = ''\nrequest = _Req()\nrequest.path = '/x'\n",
     "attr_assign_nonname": SHADOW + "[sys][0].path = [d]\n",
 }
 
@@ -55,9 +64,17 @@ def test_indirect_receiver_is_refused(repo, name):
     [
         "import os\np = os.path.join('a', 'b')\n",
         "from pathlib import Path\nq = Path('a').parent\n",
+        "class _Req:\n    path = ''\nrequest = _Req()\nrequest.path = '/x'\n",
         SHADOW + "class _Req:\n    path = ''\nrequest = _Req()\nrequest.path = '/x'\n",
+        SHADOW + "request_path = 1\n",
     ],
-    ids=["os_path", "pathlib", "request_path_with_write"],
+    ids=[
+        "os_path",
+        "pathlib",
+        "request_path_no_write",
+        "request_path_unsignalled_file",
+        "write_without_path_edit",
+    ],
 )
 def test_unrelated_attributes_are_not_refused(repo, source):
     _check(repo, source)
