@@ -33,18 +33,19 @@ COLLECTION_KEYS = {"python_files", "python_classes", "python_functions", "collec
 SAFE_FLAGS = {
     "-q", "-qq", "-v", "-vv", "-vvv", "-l", "--showlocals", "--strict-markers", "--strict-config",
     "--strict", "--no-header", "--no-summary", "-s", "--capture=no", "--capture=fd",
-    "--capture=sys", "--doctest-modules", "--import-mode=importlib", "--import-mode=prepend",
+    "--capture=sys", "--import-mode=importlib", "--import-mode=prepend",
     "--import-mode=append",
 }  # fmt: skip
 SAFE_PREFIXES = (
     "--tb=", "--color=", "--durations=", "--durations-min=", "--code-highlight=",
-    "--cov=", "--cov-report=", "--cov-config=", "--cov-context=", "--doctest-glob=",
+    "--cov=", "--cov-report=", "--cov-config=", "--cov-context=",
 )  # fmt: skip
 SAFE_FLAGS |= {  # reporting only: coverage tracing (pytest-cov), verbosity, warning summaries
     "--verbose", "--cov", "--cov-append", "--cov-branch", "--no-cov", "--no-cov-on-fail",
     "--disable-warnings", "--disable-pytest-warnings",
 }  # fmt: skip
 WITH_VALUE = {"--cov-report", "--doctest-report"}  # safe options whose value is the next token
+DOCTESTS = ("--doctest-modules", "--doctest-glob")  # collect doctests: items and code unread
 SELECTING = ("-m", "-k", "--deselect", "--ignore", "--ignore-glob")  # change what is collected
 REPORT = re.compile(r"-r[fEsxXpPaAN]+")  # -r with summary letters only (not -random-order)
 FILTER_ACTIONS = ("ignore", "default", "always", "module", "once")
@@ -157,6 +158,12 @@ def _addopts(tokens: list[str]) -> tuple[str | None, bool, list[str]]:
             index, known = index + 2, False
         elif token.startswith(tuple(f"{s}=" for s in SELECTING if s.startswith("--"))):
             index, known = index + 1, False
+        elif token.split("=", 1)[0] in DOCTESTS:
+            return (
+                "pytest addopts collects doctests, which run code the reader does not read",
+                False,
+                [],
+            )
         elif token in SAFE_FLAGS or token.startswith(SAFE_PREFIXES) or REPORT.fullmatch(token):
             index += 1
         else:
