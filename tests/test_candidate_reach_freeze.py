@@ -69,3 +69,12 @@ def test_old_frozen_file_with_bound_line_removed_is_refused(repo):
     base = WRITE + BOUND + PATH_EDIT
     candidate = "\n" + WRITE + PATH_EDIT
     _refused(repo, base, candidate)
+
+
+def test_frozen_shape_must_hold_in_one_version(repo):
+    # old only binds, new only writes: neither version has both signals, so no freeze applies
+    _judge(repo, {"src/a.py": BOUND + PATH_EDIT}, {"src/a.py": WRITE})
+
+
+def test_write_removed_from_a_frozen_file_is_refused(repo):
+    _refused(repo, FROZEN, BOUND + PATH_EDIT)

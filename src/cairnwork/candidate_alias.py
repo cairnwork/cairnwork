@@ -321,11 +321,10 @@ def _has_write(tree: ast.Module) -> bool:
 
 
 def _frozen_search_path_file(new_tree: ast.Module, old_tree: ast.Module | None) -> bool:
-    """A file that binds the search path and writes a file, old or new, is frozen as a whole."""
-    binds = binds_search_path(new_tree) or (old_tree is not None and binds_search_path(old_tree))
-    if not binds:
-        return False
-    return _has_write(new_tree) or (old_tree is not None and _has_write(old_tree))
+    """Frozen when one single version both binds the search path and writes a file."""
+    if binds_search_path(new_tree) and _has_write(new_tree):
+        return True
+    return old_tree is not None and binds_search_path(old_tree) and _has_write(old_tree)
 
 
 def frozen_search_path_change(old: bytes | None, new: bytes) -> bool:
