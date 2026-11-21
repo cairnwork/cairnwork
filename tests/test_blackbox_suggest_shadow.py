@@ -39,6 +39,22 @@ REFUSED = [
         "import fractions\n", {"tests/fractions/__init__.py": SIDE}, id="package_in_test_dir"
     ),
     pytest.param("", {"tests/difflib.py": SIDE}, id="not_imported_by_the_test_file"),
+    pytest.param(
+        "import fractions\n",
+        {"tests/a_dir/fractions.py": SIDE, "tests/a_dir/test_z.py": "def test_z():\n    pass\n"},
+        id="module_beside_another_test_file",
+    ),
+    pytest.param("import fractions\n", {"tests/deep/er/fractions.py": SIDE}, id="module_deeper"),
+    pytest.param("import fractions\n", {"scripts/fractions.py": SIDE}, id="module_in_any_dir"),
+    pytest.param(
+        "import fractions\n",
+        {"tests/sub/__init__.py": "", "tests/sub/fractions.py": SIDE, "tests/sub/test_y.py": ""},
+        id="module_in_a_test_package",
+    ),
+    pytest.param(
+        "import fractions\n", {"tests/fractions/__init__.pyc": ""}, id="package_with_compiled_init"
+    ),
+    pytest.param("import fractions\n", {"tests/fractions.pyc": ""}, id="compiled_module"),
     pytest.param("import fractions\n", {"fractions.py": SIDE}, id="module_in_project_root"),
     pytest.param("import fractions\n", {"src/fractions.py": SIDE}, id="module_in_source_root"),
     pytest.param(
@@ -108,6 +124,16 @@ def test_helpers_with_other_names_keep_the_draft(tmp_path):
             pass
         from os import *
         """,
-        {"tests/helpers.py": "X = 1\n", "tests/json/data.txt": "{}\n"},
+        {
+            "tests/helpers.py": "X = 1\n",
+            "tests/json/data.txt": "{}\n",
+            "tests/json/notes.py": "X = 1\n",
+            "src/pkg/types.py": "X = 1\n",
+            "tests/sub/__init__.py": "",
+            "tests/sub/types.py": "X = 1\n",
+            "venv/pyvenv.cfg": "",
+            "venv/lib/fractions.py": SIDE,
+            ".git/fractions.py": SIDE,
+        },
     )
     assert item.protected(KINDS_NOW) and item.exact, item.reason(KINDS_NOW)
