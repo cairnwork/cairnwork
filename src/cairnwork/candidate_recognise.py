@@ -8,8 +8,8 @@ from cairnwork.candidate_recognise_names import TEST_MODULES
 
 _BASE_TOP_LEVEL = frozenset(
     """__future__ abc ast base64 collections colorsys configparser contextlib copy dataclasses
-    datetime email enum errno fcntl fnmatch functools getpass grp hashlib hmac html http io
-    itertools json math os pathlib posixpath pwd random re resource secrets shlex shutil signal
+    datetime email enum errno fcntl fnmatch fractions functools getpass grp hashlib hmac html http
+    io itertools json math os pathlib posixpath pwd random re resource secrets shlex shutil signal
     socket sqlite3 stat string struct subprocess sys tarfile tempfile textwrap threading time
     tomllib tracemalloc types typing unicodedata unittest urllib uuid warnings zipfile zlib
     pytest hypothesis cryptography cairnwork cairnwork_attest cairnwork_protocol
