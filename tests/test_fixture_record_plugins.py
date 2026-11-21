@@ -11,12 +11,13 @@ from test_fixture_record import ROOT, _exit, project, read_record, run_collectio
 def _record_for(
     tmp_path: Path, files: dict[str, str], extra: tuple[str, ...] = ()
 ) -> tuple[int, dict]:
-    code, record_dir = _exit(tmp_path, files, True) if not extra else (None, None)
-    if extra:
-        project(tmp_path, files)
-        record_dir = tmp_path / "run"
-        record_dir.mkdir()
-        code = run_collection(tmp_path, record_dir, extra).returncode
+    if not extra:
+        code, record_dir = _exit(tmp_path, files, True)
+        return code, read_record(record_dir)
+    project(tmp_path, files)
+    record_dir = tmp_path / "run"
+    record_dir.mkdir()
+    code = run_collection(tmp_path, record_dir, extra).returncode
     return code, read_record(record_dir)
 
 
