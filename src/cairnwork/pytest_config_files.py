@@ -56,10 +56,14 @@ def _pyproject(doc: Any, section: str, name: str) -> dict[str, Any] | None:
     error, so the base is refused."""
     tool = doc.get("tool")
     tool_pytest = tool.get("pytest") if isinstance(tool, dict) else None
+    if isinstance(tool, dict) and "pytest" in tool and not isinstance(tool_pytest, dict):
+        raise PytestConfigError(f"{name} [tool.pytest] must be a table")
     if not isinstance(tool_pytest, dict):
         return None
     native = {k: v for k, v in tool_pytest.items() if k != "ini_options"}
     ini = tool_pytest.get("ini_options")
+    if "ini_options" in tool_pytest and not isinstance(ini, dict):
+        raise PytestConfigError(f"{name} [tool.pytest.ini_options] must be a table")
     if native and ini:  # as pytest tests it: an empty ini_options table beside them is no error
         raise PytestConfigError(f"{name} sets both [tool.pytest] and [tool.pytest.ini_options]")
     if section == "tool.pytest":
