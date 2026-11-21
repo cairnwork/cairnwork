@@ -31,9 +31,23 @@ def base_teeth(runs, targets) -> tuple[str, str, str]:
             kind = run.fail_kind.get(nodeid)
             if kind is None:
                 return ("TEETH", "", "")
-            {"setup": setup, "plugin": plugin}.get(kind, env).append(nodeid)
+            if kind == "setup":
+                setup.append(nodeid)
+            elif kind == "plugin" or isinstance(kind, str) and kind.startswith("plugin:"):
+                plugin.append(nodeid)
+            else:
+                env.append(nodeid)
     if plugin and not setup:  # #804: only a missing table plugin's fixture stopped the base
-        detail = f"a pytest plugin fixture is missing for {_names(plugin)}"
+        modules = sorted(
+            {
+                kind.removeprefix("plugin:")
+                for run in runs
+                for nodeid, kind in run.fail_kind.items()
+                if nodeid in plugin and isinstance(kind, str) and kind.startswith("plugin:")
+            }
+        )
+        name = ", ".join(modules) or "an unknown table plugin"
+        detail = f"pytest plugin {name} is missing for {_names(plugin)}"
         return ("UNCOMPARABLE", "PLUGIN_NOT_INSTALLED", detail + _PLUGIN_HINT)
     if setup or plugin:
         setup += plugin

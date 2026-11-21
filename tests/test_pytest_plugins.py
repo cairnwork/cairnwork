@@ -11,6 +11,7 @@ from conftest import commit_change
 from test_uncomparable_paths import FIX_DOUBLE, run_cli
 from verify_helpers import FIX
 
+from cairnwork import pytest_config
 from cairnwork.pytest_config import PLUGINS, PytestConfigError, base_settings
 
 DJANGO = "pytest_django.plugin"
@@ -104,6 +105,40 @@ def test_plugins_named_by_the_base_are_never_loaded(repo):
     assert base_settings(repo, base).args() == []
 
 
+def test_plugins_are_selected_only_for_base_keys_or_usefixtures():
+    from cairnwork.pytest_config import PytestSettings
+    from cairnwork.pytest_plugin_support import base_plugins
+
+    no_base = base_plugins(PytestSettings(), None, None, (), PLUGINS)
+    async_base = base_plugins(
+        PytestSettings(values=(("asyncio_mode", "auto"),)), None, None, (), PLUGINS
+    )
+    fixture_base = base_plugins(
+        PytestSettings(values=(("usefixtures", "mocker"),)), None, None, (), PLUGINS
+    )
+    assert no_base == ()
+    assert async_base == ("pytest_asyncio.plugin",)
+    assert fixture_base == ("pytest_mock",)
+
+
+def test_installed_plugins_checks_the_full_module_and_rechecks_each_call(monkeypatch):
+    import subprocess
+
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append(args)
+        # Parent package exists, but pytest_asyncio.plugin does not.
+        modules = args[args.index("-c") + 2 :]
+        flags = [module != "pytest_asyncio.plugin" for module in modules]
+        return subprocess.CompletedProcess(args, 0, json.dumps(flags), "")
+
+    monkeypatch.setattr("cairnwork.pytest_plugin_support.subprocess.run", run)
+    assert "pytest_asyncio.plugin" not in pytest_config.installed_plugins("python-a")
+    assert "pytest_asyncio.plugin" not in pytest_config.installed_plugins("python-b")
+    assert len(calls) == 2
+
+
 # Real runs (Seatbelt) through cairnwork-verify. CI installs pytest-mock (dev group, #810), so
 # the first two do not skip there.
 
@@ -164,12 +199,32 @@ def test_plugin_not_installed_only_when_no_other_setup_error():
     assert judge({T1: "failed", T2: "failed"}, {T1: "plugin"}).kind == "TEETH"
 
 
+def test_missing_plugin_detail_names_the_module():
+    from types import SimpleNamespace
+
+    from cairnwork.base_teeth import base_teeth
+
+    target = "tests/test_x.py::test_x"
+    run = SimpleNamespace(outcomes={target: "failed"}, fail_kind={target: "plugin:pytest_mock"})
+    kind, code, detail = base_teeth([run], {target})
+    assert (kind, code) == ("UNCOMPARABLE", "PLUGIN_NOT_INSTALLED")
+    assert "pytest_mock" in detail
+
+
 def test_a_missing_fixture_is_plugin_not_installed_only_when_the_plugin_cannot_be_found():
     from cairnwork.pytest_config import plugin_kinds
 
     kinds = {"a": "plugin:pytest_mock", "b": "plugin:pytest_django.plugin", "c": "env"}
-    assert plugin_kinds(kinds, ("pytest_mock",)) == {"a": "setup", "b": "plugin", "c": "env"}
-    assert plugin_kinds(kinds, ()) == {"a": "plugin", "b": "plugin", "c": "env"}
+    assert plugin_kinds(kinds, ("pytest_mock",)) == {
+        "a": "setup",
+        "b": "plugin:pytest_django.plugin",
+        "c": "env",
+    }
+    assert plugin_kinds(kinds, ()) == {
+        "a": "plugin:pytest_mock",
+        "b": "plugin:pytest_django.plugin",
+        "c": "env",
+    }
 
 
 def test_the_guard_record_accepts_only_table_plugin_kinds():

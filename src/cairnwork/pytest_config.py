@@ -352,30 +352,17 @@ def plugin_kinds(fail_kind: dict[str, str], loaded: tuple[str, ...]) -> dict[str
     final = {}
     for node, kind in fail_kind.items():
         if kind.startswith("plugin:"):
-            kind = "setup" if kind.removeprefix("plugin:") in loaded else "plugin"
+            module = kind.removeprefix("plugin:")
+            kind = "setup" if module in loaded else kind
         final[node] = kind
     return final
 
 
-@lru_cache(maxsize=8)
 def installed_plugins(python: str) -> tuple[str, ...]:
     """The PLUGINS modules the interpreter can import (found, not imported)."""
-    done = subprocess.run(  # noqa: S603 - trusted interpreter path chosen by Cairnwork
-        [
-            python,
-            "-I",
-            "-c",
-            "import importlib.util as u, json, sys;"
-            " print(json.dumps([u.find_spec(n) is not None for n in sys.argv[1:]]))",
-            *(name for name, _, _ in PLUGINS),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=True,
-    )
-    found = json.loads(done.stdout)
-    return tuple(module for (_, module, _), ok in zip(PLUGINS, found, strict=True) if ok)
+    from cairnwork.pytest_plugin_support import installed_plugins as probe
+
+    return probe(python, PLUGINS)
 
 
 @lru_cache(maxsize=8)
