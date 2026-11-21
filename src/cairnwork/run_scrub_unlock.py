@@ -4,6 +4,8 @@ from __future__ import annotations
 
 # Executed by the verifier's isolated Python as the account. Keep this self-contained: it is
 # passed through sudo as one command and must not import code from the candidate tree.
+# Before walking, clear top's own ACL and flags, refuse a non-directory, add u+rwx without
+# following links, and refuse with its path if the account still lacks write and search access.
 # One pre-order pass. Per entry, before relying on lstat: clear its ACL (setattrlist with
 # FSOPT_NOFOLLOW: the entry itself, a symlink too, never a target; no open, so a denied read or
 # readsecurity does not stop it) and uchg/uappnd (the chflags syscall needs no stat). A directory
@@ -98,7 +100,15 @@ def opened(name, dev):
     short = short or len(names) > keep
     cut, listed = cut or short, listed + min(len(names), keep)
     return iter(names[:keep]), short, name, failed
-dev = os.stat(top, follow_symlinks=False).st_dev
+root = unlock(top)
+if root is None:
+    sys.exit(f"unlock: {top} is not writable by the account; the owner must fix it")
+if not stat.S_ISDIR(root.st_mode):
+    sys.exit("unlock: top is not a real directory")
+dev = root.st_dev
+attempt(os.chmod, top, stat.S_IMODE(root.st_mode) | 0o700, follow_symlinks=False)
+if not os.access(top, os.W_OK | os.X_OK, follow_symlinks=False):
+    sys.exit(f"unlock: {top} is not writable by the account; the owner must fix it")
 stack.append(opened(top, dev))
 while stack:
     name = next(stack[-1][0], None)

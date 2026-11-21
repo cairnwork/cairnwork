@@ -132,6 +132,8 @@ def _hint(user: str, python: str, path: Path, root: Path | None = None) -> str:
         f"leftover {_shown(path)} blocks the next account run. "
         f"Clean it by hand without following links: ls -ld {q_priv} {q_run}. "
         f"If either is a symlink, unlink that symlink only and do not remove or chmod its target. "
+        f"The unlock step reports an unwritable top as `unlock: {_shown(run)} is not writable "
+        f"by the account`; the owner must fix that directory before retrying. "
         f"If both are real directories under the run root, run the steps in order even when one "
         f"fails, and repeat the two account steps until {q_run} is gone or a pass removes or "
         f"moves nothing in it. {steps}"

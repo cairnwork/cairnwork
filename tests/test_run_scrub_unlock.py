@@ -1,10 +1,4 @@
-"""Issue #437: what a candidate leaves in its own run dir must not outlast the account cleanup.
-
-The real commands (``sys.executable`` stands in for the verifier python, then ``/bin/rm``), run as
-the current user, who owns the files as the account owns a candidate's, with the sudo prefix
-stripped. No sudo, no verifier account. Every flag, ACL and mode change is under ``tmp_path`` and
-undone by a fixture teardown that does not use the code under test, then checked gone.
-"""
+"""Issue #437 cleanup tests run account commands as this user, without sudo."""
 
 import ctypes
 import os
@@ -16,6 +10,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from run_scrub_unlock_harness import walk_source as _walk_source
 
 import cairnwork.run_scrub as run_scrub
 from cairnwork.run_scrub import account_delete_argv, close_private, stale_run_error
@@ -48,8 +43,7 @@ def _drop_acl(name: str) -> None:
 
 
 def _unlock_here(name: str) -> None:
-    """Teardown, not the code under test: flags and ACL before lstat, then recurse by relative
-    names (so deep trees too). Never follows a link."""
+    """Test teardown clears nested locks by relative names, without following links."""
     assert sys.platform == "darwin"  # lchflags and chflags exist only there
     try:
         os.lchflags(name, 0)
@@ -120,15 +114,7 @@ def _private(root: Path) -> Path:
 
 
 def _lock_down(home: Path) -> None:
-    """Locks of different kinds, nested so each level hides the next from a fixed tool order.
-
-    a: ACL denying list, search and readsecurity (the owner's lstat fails); b: mode 000 and uchg
-    (no chmod until the flag is gone, no listing until the mode is back); c: search-only and
-    uappnd; "-R": ACL denying list, a name chmod would parse as an option. Files: uchg, uappnd, an
-    ACL denying delete, and one denying readsecurity set before uchg (``chmod -N`` then gets
-    EPERM, ``chflags`` EACCES). Next to a: a deny-delete file, a deny-delete_child dir and a
-    symlink whose own ACL denies readsecurity and delete.
-    """
+    """Nest ACLs, flags and modes to defeat fixed recursive cleanup orders."""
     assert sys.platform == "darwin"
     deep = home / "a" / "b" / "c" / "-R"
     deep.mkdir(parents=True)
@@ -155,8 +141,7 @@ def _lock_down(home: Path) -> None:
 
 
 def test_every_account_command_succeeds_on_a_plain_tree(runs):
-    """B: BSD getopt stops at the mode or flags, so a ``--`` after them was taken as a file and
-    every cleanup returned 1. Each real command now returns 0."""
+    """BSD getopt needs ``--`` before paths that resemble options."""
     private = _private(runs)
     (private / "run" / "home" / "d").mkdir()
     (private / "run" / "home" / "d" / "f").write_text("x")
@@ -215,8 +200,7 @@ def test_the_printed_recovery_steps_clear_the_same_tree(runs):
 
 @darwin
 def test_the_account_sequence_does_not_follow_a_symlink_out_of_run(runs, tmp_path):
-    """Nothing outside run/ is unlocked or removed through a link (Apple's ``chmod -R -N`` would
-    clear the target's ACL), even when the link's own ACL hides it from lstat."""
+    """Cleanup must not follow links, including ones with a hiding ACL."""
     outside = tmp_path / "outside"
     (outside / "d").mkdir(parents=True)
     (outside / "d" / "kept").write_text("keep")
@@ -271,8 +255,7 @@ def test_a_lock_below_path_max_is_cleared(runs):
 @darwin
 @pytest.mark.parametrize("limits", [(3, 45), (500_000, 0)])
 def test_at_a_limit_the_rest_stays_and_the_next_run_is_refused(runs, monkeypatch, limits):
-    """Entries or seconds: the walk stops (exit 1), rm cannot finish, the scrub refuses and
-    names the root step for what repeating the account steps cannot clear."""
+    """At an entry or time limit, leave residue and report recovery steps."""
     monkeypatch.setattr(run_scrub, "_UNLOCK_LIMITS", limits)
     private = _private(runs)
     _lock_down(private / "run" / "home")
@@ -289,6 +272,58 @@ def _walk(monkeypatch, run: Path, limits: tuple[int, int]) -> subprocess.Complet
     monkeypatch.setattr(run_scrub, "_UNLOCK_LIMITS", limits)
     argv = run_scrub._unlock_argv(sys.executable, os.path.realpath(run))
     return subprocess.run(argv, capture_output=True, text=True, check=False)
+
+
+def test_unwritable_top_is_reported_on_every_pass(runs):
+    top = runs / "top"
+    (top / "a" / "b" / "c").mkdir(parents=True)
+    denied = (
+        f"real_chmod=os.chmod; real_access=os.access; "
+        f"os.chmod=lambda p,m,**k: None if os.fspath(p)=={str(top)!r} "
+        f"else real_chmod(p,m,**k); "
+        f"os.access=lambda p,m,**k: False if os.fspath(p)=={str(top)!r} "
+        "else real_access(p,m,**k)"
+    )
+    try:
+        for _ in range(2):
+            done = _walk_source(top, (2, 45), denied)
+            assert done.returncode != 0
+            assert str(top) in done.stderr and "not writable by the account" in done.stderr
+            assert "limit reached" not in done.stderr
+        refusal = run_scrub._hint(USER, sys.executable, top / "run")
+        assert f"unlock: {top / 'run'} is not writable by the account" in refusal
+    finally:
+        os.chmod(top, 0o700)
+
+
+def test_top_mode_0500_is_fixed_and_deep_tree_moves_up(runs):
+    top = runs / "top"
+    (top / "a" / "b" / "c").mkdir(parents=True)
+    os.chmod(top, 0o500)
+    try:
+        done = _walk_source(top, (2, 45))
+        assert done.returncode == 1 and "limit reached" in done.stderr, done
+        assert stat.S_IMODE(os.lstat(top).st_mode) == 0o700
+        assert len(list(top.glob(".unlock-*"))) == 1
+    finally:
+        os.chmod(top, 0o700)
+
+
+def test_writable_top_and_symlink_top_keep_existing_results(runs):
+    top = runs / "top"
+    (top / "a" / "b" / "c").mkdir(parents=True)
+    done = _walk_source(top, (2, 45))
+    assert done.returncode == 1 and "limit reached" in done.stderr, done
+    assert list(top.glob(".unlock-*"))
+    assert "not writable by the account" not in done.stderr
+    outside = runs / "outside"
+    outside.mkdir()
+    (outside / "kept").write_text("keep")
+    link = runs / "link"
+    link.symlink_to(outside, target_is_directory=True)
+    done = _walk_source(link, (2, 45))
+    assert done.returncode != 0 and "not a real directory" in done.stderr, done
+    assert list(outside.iterdir()) == [outside / "kept"]
 
 
 @darwin
@@ -322,8 +357,7 @@ os.lchflags = denied
 
 @darwin
 def test_a_large_directory_stops_at_the_entry_limit(runs, monkeypatch):
-    """A listing reads at most half the budget left plus one name, so a huge directory cannot
-    hold the walk in one listing past its limits: 1000 names against a budget of 10 stop it."""
+    """A large listing must stop at the entry budget."""
     private = _private(runs)
     crowd = private / "run" / "home" / "crowd"
     crowd.mkdir()
@@ -335,8 +369,7 @@ def test_a_large_directory_stops_at_the_entry_limit(runs, monkeypatch):
 
 @darwin
 def test_with_no_time_left_one_entry_is_still_unlocked(runs, monkeypatch):
-    """With 0 seconds a pass still does one unit of work (here: unlock one file), then stops,
-    so a pass never ends with nothing done; the other lock stays."""
+    """A zero-second pass still unlocks one entry before stopping."""
     private = _private(runs)
     home = private / "run" / "home"
     for name in ("f", "g"):
@@ -351,9 +384,7 @@ def test_with_no_time_left_one_entry_is_still_unlocked(runs, monkeypatch):
 
 
 def test_an_unexpected_error_in_cleanup_is_raised_not_swallowed(runs):
-    """C: expected failures (OSError, a subprocess error, VerifierAccountError) only ALERT. Any
-    other exception is a bug and propagates on purpose: it replaces the verdict (fail-closed),
-    and private stays 0750 with run/ in place for the next scrub to refuse."""
+    """Expected cleanup failures ALERT; unexpected exceptions propagate fail-closed."""
     private = _private(runs)
 
     class _Broken(_Refusing):
