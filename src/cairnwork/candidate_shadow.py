@@ -236,7 +236,19 @@ _NAMESPACE_NAMES = frozenset({"builtins", "__builtins__", "vars", "globals", "lo
 _NAMESPACE_ATTRS = frozenset({"__dict__", "__builtins__", "__globals__", "f_globals", "f_builtins"})
 # Modules whose use runs code or reaches the builtins; any use of them in a test file is enough.
 _EXEC_MODULES = frozenset(
-    {"timeit", "pdb", "bdb", "code", "codeop", "cProfile", "profile", "trace", "runpy", "doctest"}
+    {
+        "builtins",
+        "timeit",
+        "pdb",
+        "bdb",
+        "code",
+        "codeop",
+        "cProfile",
+        "profile",
+        "trace",
+        "runpy",
+        "doctest",
+    }
 )
 
 
