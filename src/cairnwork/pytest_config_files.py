@@ -36,6 +36,8 @@ def _section(text: str, section: str, form: str, name: str) -> dict[str, Any] | 
             table: Any = tomllib.loads(text)
             if name == "pyproject.toml":
                 return _pyproject(table, section, name)
+            if section == "pytest" and "pytest" in table and not isinstance(table["pytest"], dict):
+                raise PytestConfigError(f"{name} [pytest] must be a table")
             for part in section.split("."):
                 table = table.get(part) if isinstance(table, dict) else None
             return dict(table) if isinstance(table, dict) else None
@@ -55,11 +57,17 @@ def _pyproject(doc: Any, section: str, name: str) -> dict[str, Any] | None:
     and then wins over an empty ``ini_options``; with both non-empty, pytest stops with a usage
     error, so the base is refused."""
     tool = doc.get("tool")
+    if "tool" in doc and not isinstance(tool, dict):
+        raise PytestConfigError(f"{name} [tool] must be a table")
     tool_pytest = tool.get("pytest") if isinstance(tool, dict) else None
+    if isinstance(tool, dict) and "pytest" in tool and not isinstance(tool_pytest, dict):
+        raise PytestConfigError(f"{name} [tool.pytest] must be a table")
     if not isinstance(tool_pytest, dict):
         return None
     native = {k: v for k, v in tool_pytest.items() if k != "ini_options"}
     ini = tool_pytest.get("ini_options")
+    if "ini_options" in tool_pytest and not isinstance(ini, dict):
+        raise PytestConfigError(f"{name} [tool.pytest.ini_options] must be a table")
     if native and ini:  # as pytest tests it: an empty ini_options table beside them is no error
         raise PytestConfigError(f"{name} sets both [tool.pytest] and [tool.pytest.ini_options]")
     if section == "tool.pytest":
