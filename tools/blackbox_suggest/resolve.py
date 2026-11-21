@@ -18,6 +18,9 @@ from .literals import Refused
 MAX_HOPS = 6
 
 
+MODULE_HOOKS = {"__getattr__", "__dir__"}
+
+
 @dataclass(frozen=True)
 class Target:
     module: str  # what the test imported from: the module the runner will import
@@ -142,6 +145,37 @@ def _star_imports(tree: ast.Module, module: str, package: bool) -> list[str]:
         for node in tree.body
         if isinstance(node, ast.ImportFrom) and any(a.name == "*" for a in node.names)
     ]
+
+
+def binds_module_hook(tree: ast.Module) -> bool:
+    """Whether a module may bind ``__getattr__`` or ``__dir__`` as module attributes (#370):
+    any mention of either name outside a class or function body, a ``global`` of either, an
+    attribute store of either, or either name as a string anywhere (``globals()[...]``,
+    ``setattr``). A method of that name in a class body is not one."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Global) and MODULE_HOOKS & set(node.names):
+            return True
+        if isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Store):
+            if node.attr in MODULE_HOOKS:
+                return True
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if node.value in MODULE_HOOKS:
+                return True
+    return _mentions_hook(tree)
+
+
+def _mentions_hook(node: ast.AST) -> bool:
+    """A def/class name, or any name field (Name, alias, except/match targets) at module scope."""
+    scope = isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
+    for field, value in ast.iter_fields(node):
+        if scope and field == "body":
+            continue
+        for item in value if isinstance(value, list) else [value]:
+            if isinstance(item, str) and item in MODULE_HOOKS:
+                return True
+            if isinstance(item, ast.AST) and _mentions_hook(item):
+                return True
+    return False
 
 
 def _is_name(target: ast.expr, name: str) -> bool:
