@@ -62,6 +62,7 @@ from pathlib import Path
 
 import cairnwork_sandbox
 from cairnwork import gitcmd, pytest_config, report_channel, report_guard
+from cairnwork import pytest_plugin_support as plugin_support
 from cairnwork.account_checkout import checkout_differences, make_account_checkout
 from cairnwork.account_checkout import remove_checkout as _remove_checkout
 from cairnwork.account_prelude import locked_prelude
@@ -280,7 +281,7 @@ def _prepare_run(private: Path, ini: Path, ini_text: bytes, channel=None, hash_s
 
 def _run_one(batch: _Batch, spec, checkout) -> VerifierRun:
     account, python = batch.ctx.account, batch.python
-    plugins = pytest_config.installed_plugins(python)
+    plugins = plugin_support.plugins_for_run(batch, spec, python)
     ini_text = batch.settings.ini_text(checkout, plugins)
     private = Path(tempfile.mkdtemp(prefix=f"{checkout.name}.", dir=checkout.parent.parent))
     channel = report_channel.open_channel(private) if account is None else None
