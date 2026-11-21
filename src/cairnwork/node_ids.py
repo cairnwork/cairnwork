@@ -18,7 +18,7 @@ PER_RUN_NOTE = (
     "(pytest.param(..., id=...) or ids=) so the base and the candidate id match"
 )
 _PATH = re.compile(r"(?<![A-Za-z0-9._/-])/(?:[^\s/'\"<>\]]+/)+[^\s/'\"<>\]]*")
-_MAP_FIELDS = ("outcomes", "paths", "fail_kind", "denied", "setup_denied")
+_MAP_FIELDS = ("outcomes", "paths", "fail_kind", "denied", "setup_denied", "assertions")
 _TUPLE_FIELDS = ("collect_errors", "collect_skipped", "collected", "renamed", "teardown_errors")
 
 

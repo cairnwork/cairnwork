@@ -15,7 +15,7 @@ import stat
 from functools import partial
 from pathlib import Path
 
-from cairnwork import confined, deny_channel
+from cairnwork import confined, deny_channel, pytest_config
 
 
 def _same_directory(path: Path, before: os.stat_result) -> bool:
@@ -63,6 +63,47 @@ def _run_confined(deny, profile, python, argv, profile_path, checkout, env, *res
     with deny_channel.watch(deny, backend.name, tag, canary) as seen:
         returncode, timed_out, survivors = _execute(argv, profile_path, checkout, env, *rest)
     return profile, returncode, timed_out, survivors, seen.evidence
+
+
+def run_backend(
+    backend,
+    deny,
+    python,
+    argv,
+    profile_path,
+    checkout,
+    run_dir,
+    ini,
+    private,
+    env,
+    timeout,
+    log_path,
+    account,
+    channel,
+):
+    """Build and run the backend policy, or record the missing backend as a failed run."""
+    if backend is None:
+        _write_new(log_path, b"no sandbox backend available: verifier not executed\n")
+        return None, None, False, 0, None
+    profile = backend.policy(
+        read_roots=(*pytest_config.interpreter_roots(python), ini, private / "guard"),
+        write_roots=(checkout.parent, run_dir),
+        mask_home_credentials=account is None,
+    )
+    return _run_confined(
+        deny,
+        profile,
+        python,
+        argv,
+        profile_path,
+        checkout,
+        env,
+        timeout,
+        log_path,
+        account,
+        backend,
+        channel.pass_fds if channel else (),
+    )
 
 
 def _canary(python, profile_path, checkout, env, account, backend, argv, log_path) -> str:

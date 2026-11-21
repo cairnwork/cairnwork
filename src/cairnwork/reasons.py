@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import re
+import unicodedata
 
 from cairnwork import survivor_argv
 from cairnwork.textclean import replace_hidden
@@ -17,6 +18,31 @@ MAX_NAMES = 5
 MAX_NAME_CHARS = 120
 # The record delimiters of explain(); control and invisible characters go by category.
 _DELIMITERS = re.compile(r"[\[\];:]")
+_ANSI = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
+MAX_ASSERTION_CHARS = 240
+
+
+def _assertion_lines(assertions, failed) -> list[str]:
+    """Render bounded, single-line assertion text without terminal or workflow controls."""
+    shown = []
+    for node in failed[:MAX_NAMES]:
+        text = _ANSI.sub("", assertions.get(node, "")).splitlines()
+        summary = next(
+            (line.strip() for line in text if line.strip()), "assertion detail unavailable"
+        )
+        summary = "".join("?" if unicodedata.category(ch).startswith("C") else ch for ch in summary)
+        if summary.startswith(("::", "##[")):
+            summary = "?" + summary
+        if summary:
+            safe_node = _safe_line(node)
+            shown.append(f"{safe_node}: {summary[:MAX_ASSERTION_CHARS]}")
+    return shown
+
+
+def _safe_line(text: str) -> str:
+    clean = "".join("?" if unicodedata.category(ch).startswith("C") else ch for ch in text)
+    clean = replace_hidden(clean)
+    return "?" + clean if clean.startswith(("::", "##[")) else clean
 
 
 def _names(names) -> str:
@@ -101,8 +127,13 @@ def why_not_passed(
     denied_path="",
     all_skipped: bool = False,
     outcomes=None,
+    assertions=None,
+    hidden_tests: bool = False,
 ) -> str:  # fmt: skip
     """The causes that made a run fail, ``""`` if none (then the run passed)."""
+    hidden_failures = [node for node, outcome in (outcomes or {}).items() if outcome == "failed"]
+    if hidden_tests and hidden_failures:
+        return f"deferred: {len(hidden_failures)} failed"
     causes = []
     if not ran_sandboxed:
         causes.append("no sandbox backend: verifier not executed")
@@ -139,8 +170,14 @@ def why_not_passed(
         )
     if ran_sandboxed and not timed_out and returncode != 0:
         causes.append(f"pytest exit code {returncode}")
+        failures = [node for node, outcome in (outcomes or {}).items() if outcome == "failed"]
         causes.extend(_kind_causes(fail_kind or {}))
-        if denied_path:  # #962: a candidate run; the same denial on a base run is BASE_ENV_ERROR
+        if failures:
+            details = _assertion_lines(assertions or {}, failures)
+            if len(failures) > MAX_NAMES:
+                details.append(f"+{len(failures) - MAX_NAMES} more")
+            causes.append("assertions: " + "; ".join(details))
+        if denied_path:  # #962: a candidate run; base denial is BASE_ENV_ERROR
             causes.append(
                 f"the failing tests report an operation not permitted (EPERM) at"
                 f" {_names([denied_path])[3:]}, outside the run's write roots: unless the change"
@@ -161,6 +198,36 @@ def why_not_passed(
             )
         )
     return "; ".join(causes)
+
+
+def verifier_failure_reason(
+    passed,
+    sandboxed,
+    returncode,
+    timed_out,
+    mutated,
+    survivors,
+    log_too_big,
+    tests_ran,
+    verdict,
+    forged,
+    not_run,
+    denied_path,
+    hidden_tests,
+):
+    """Render one verifier's failure using its bounded guard record."""
+    if passed:
+        return ""
+    return why_not_passed(
+        ran_sandboxed=sandboxed, returncode=returncode, timed_out=timed_out,
+        mutated=mutated, survivors=survivors, log_too_big=log_too_big,
+        tests_ran=tests_ran, report_too_big=verdict.too_big, forged=forged,
+        not_run=not_run, renamed=verdict.renamed, exitstatus=verdict.exitstatus,
+        testsfailed=verdict.testsfailed, fail_kind=verdict.fail_kind,
+        data_refused=verdict.data_refused, denied_path=denied_path,
+        all_skipped=all_skipped(verdict.collected, verdict.outcomes), outcomes=verdict.outcomes,
+        assertions=verdict.assertions, hidden_tests=hidden_tests,
+    )  # fmt: skip
 
 
 def all_skipped(collected, outcomes) -> bool:

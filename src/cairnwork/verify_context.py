@@ -33,11 +33,19 @@ class VerifyContext:
     base_commit: str | None = None  # pytest settings come from this commit (pytest_config.py)
     import_paths: tuple[str, ...] = ()  # checkout-relative dirs prepended to the import path
     hash_seed: str = field(default_factory=new_hash_seed)  # PYTHONHASHSEED of every run (#870)
+    hidden_tests: bool = False  # defer failure details when tests came from the private overlay
 
     @classmethod
     def of(cls, task, run_root, attempt_id="", account=None, python=None) -> VerifyContext:
         return cls(
-            task.repo, run_root, attempt_id, account, python, task.base_commit, task.import_paths
+            task.repo,
+            run_root,
+            attempt_id,
+            account,
+            python,
+            task.base_commit,
+            task.import_paths,
+            hidden_tests=bool(task.test_commit),
         )
 
     def started(self, attempt_id: str) -> VerifyContext:

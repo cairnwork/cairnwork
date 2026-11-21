@@ -47,6 +47,15 @@ def test_raw_and_realpath_checkout_spellings_normalise_only_parameter_segment(tm
         assert got.collected == tuple(got.outcomes)
 
 
+def test_assertion_detail_keys_follow_normalised_node_ids(tmp_path):
+    root = tmp_path / "checkout"
+    node = f"tests/t.py::test_x[{root}/a]"
+    verdict = Verdict(True, {node: "failed"}, assertions={node: "AssertionError: value"})
+    got = normalise_run_ids(verdict, root)
+    normalized = "tests/t.py::test_x[<cw-checkout>/a]"
+    assert got.assertions == {normalized: "AssertionError: value"}
+
+
 def test_root_boundary_and_other_roots_are_not_rewritten(tmp_path):
     root = tmp_path / "checkout"
     foreign = tmp_path / "foreign"

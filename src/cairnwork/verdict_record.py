@@ -41,6 +41,7 @@ class Verdict:
     collection_finished: bool = False  # #793: the guard's pytest_collection wrapper returned
     data_refused: tuple[str, ...] = ()  # #850: declared data the data-exec hook refused to run
     uncollected_exposed: tuple[str, ...] | None = None
+    assertions: dict[str, str] = field(default_factory=dict)  # bounded, untrusted failure text
 
     def not_run(self, targets) -> tuple[str, ...]:
         """The named ``targets`` (``path`` or ``path::node``) that own no recorded test, then the
@@ -73,6 +74,34 @@ def _parse_skips(raw):
         if not isinstance(value["reason"], str) or len(value["reason"]) > 200:
             return None
     return {node: (value["kind"], value["reason"]) for node, value in raw.items()}
+
+
+def parse_assertions(raw, outcomes):
+    """Validate bounded assertion summaries from the candidate-writable report."""
+    if not isinstance(raw, dict) or len(raw) > len(outcomes):
+        return None
+    valid = all(
+        isinstance(node, str) and node in outcomes and isinstance(value, str) and len(value) <= 2048
+        for node, value in raw.items()
+    )
+    return raw if valid else None
+
+
+def run_status(
+    profile,
+    verdict,
+    targets,
+    returncode,
+    run_facts,
+):
+    """Return the pass gates and named targets missing a result."""
+    timed_out, mutated, survivors, forged, log_path, max_log_bytes = run_facts
+    not_run = verdict.not_run(targets)
+    ran = profile is not None and verdict.ran and not not_run
+    too_big = log_path.stat().st_size > max_log_bytes
+    clean = not (timed_out or mutated or survivors or forged or too_big or verdict.too_big)
+    passed = profile is not None and returncode == 0 and clean and ran
+    return not_run, ran, clean, passed, too_big
 
 
 def _sources(collected: list[str], files: list[str], file_of) -> dict[str, str]:

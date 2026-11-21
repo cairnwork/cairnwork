@@ -68,6 +68,7 @@ from cairnwork.verdict_record import (
     _parse_skips,
     _sources,
     denied_paths,
+    parse_assertions,
     setup_denials,
     well_formed,
 )
@@ -121,7 +122,6 @@ def _take():
 
 _HANDOVER = _take()
 
-
 '''
     + ENV_SOURCE
     + '''class _Reporter:
@@ -133,7 +133,7 @@ _HANDOVER = _take()
         self._fd = report_fd
         self._nonce = nonce
         self._collected = []
-        self._outcomes, self._skips = {}, {}
+        self._outcomes, self._skips, self._assertions = {}, {}, {}
         self._sources = {}  # id(item) -> (item, node id, file) when collected
         self._files = []
         self._file_of = []  # per collected item: its index in _files, -1 if it has none
@@ -213,6 +213,9 @@ _HANDOVER = _take()
         if when == "call":  # #570: one per sub-test, then the test's own
             _keep_worst(self, nodeid, outcome)
             if outcome == "failed":  # #775: an OSError says "environment", not a test failure
+                summary = getattr(report, "longreprtext", "")
+                if type(summary) is str:
+                    self._assertions[nodeid] = summary[:2048]
                 info = call.excinfo
                 oserr = info is not None and _env(info, item.config.rootpath)
                 self._env_ok[nodeid] = self._env_ok.get(nodeid, True) and oserr
@@ -243,6 +246,7 @@ _HANDOVER = _take()
                    "setup_denied": {n: d for n, d in self._setup_denied.items()
                                     if d and kind.get(n) == "setup"},
                    "collected": self._collected, "outcomes": self._outcomes,
+                   "assertions": self._assertions,
                    "files": self._files, "file_of": self._file_of,
                    "renamed": list(dict.fromkeys(self._renamed)),
                    "collect_errors": self._collect_errors,
@@ -353,9 +357,8 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
         isinstance(node, str) and isinstance(result, str) for node, result in outcomes.items()
     ):
         return Verdict(False, {})
-    if skips is None:
-        return Verdict(False, {})
-    if any(node not in outcomes for node in skips):
+    assertions = parse_assertions(data.get("assertions", {}), outcomes)
+    if skips is None or assertions is None or any(node not in outcomes for node in skips):
         return Verdict(False, {})
     shape, data_refused = well_formed(data, collected, outcomes, PLUGIN_KINDS), refused(data)
     if shape is None or data_refused is None:
@@ -375,6 +378,7 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
     return Verdict(
         ran,
         outcomes,
+        assertions=assertions,
         skips=skips,
         recorded=True,
         collect_errors=tuple(errors),

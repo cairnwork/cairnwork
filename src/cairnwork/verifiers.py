@@ -72,14 +72,15 @@ from cairnwork.core_request import VerifierObservation
 from cairnwork.import_path_tree import require_plain_dirs
 from cairnwork.node_ids import normalise_run_ids
 from cairnwork.pycache_guard import PYCACHE_DIR
-from cairnwork.reasons import all_skipped, candidate_denial, plain_test_failure, why_not_passed
+from cairnwork.reasons import candidate_denial, plain_test_failure, verifier_failure_reason
 from cairnwork.run_scrub import close_private
+from cairnwork.verdict_record import run_status
 from cairnwork.verifier_account import lock_wait_seconds
 from cairnwork.verifier_exec import (  # low-level run primitives, split out for the 400-line cap
     _file_sha256,
     _record_digest,
-    _run_confined,
     _write_new,
+    run_backend,
 )
 from cairnwork.verifier_spec import (  # re-exported for existing importers
     VerifierRejected,
@@ -330,38 +331,22 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
         *batch.settings.args(plugins), "-p", report_guard.MODULE, *spec.targets,
         *spec.flags(),  # --collect-only (#793), --continue-on-collection-errors (#796)
     ]  # fmt: skip
-    before, profile, evidence, backend = os.lstat(checkout), None, None, cairnwork_sandbox.select()
-    if backend is not None:
-        profile = backend.policy(
-            read_roots=(*pytest_config.interpreter_roots(python), ini, private / "guard"),
-            write_roots=(checkout.parent, run_dir),
-            mask_home_credentials=account is None,  # account uid can't enter the owner's home
-        )
-        profile, returncode, timed_out, survivors, evidence = _run_confined(
-            batch.deny, profile, python, argv, profile_path, checkout, env, timeout, log_path,
-            account, backend, channel.pass_fds if channel else (),
-        )  # fmt: skip
-    else:
-        _write_new(log_path, b"no sandbox backend available: verifier not executed\n")
-        returncode, timed_out, survivors = None, False, 0
+    before, backend = os.lstat(checkout), cairnwork_sandbox.select()
+    launch = (backend, batch.deny, python, argv, profile_path, checkout, run_dir, ini, private,
+              env, timeout, log_path, account, channel)  # fmt: skip
+    profile, returncode, timed_out, survivors, evidence = run_backend(*launch)
     mutated = checkout_differences(ctx.repo, candidate_commit, checkout, before, account, python)
     forged = bytecode_findings(tmp, checkout, run_dir, spec.targets, account, python)
     verdict = _read_verdict(channel, verdict_path, verdict_nonce, plugins, checkout)
-    not_run = verdict.not_run(spec.targets)  # a target with no test that ran, a skipped module
-    ran = profile is not None and verdict.ran and not not_run
-    too_big = log_path.stat().st_size > MAX_LOG_BYTES
-    clean = not (timed_out or mutated or survivors or forged or too_big or verdict.too_big)
-    passed = profile is not None and returncode == 0 and clean and ran  # ran: pytest said 0 too
-    plain_failure = plain_test_failure(profile is not None, returncode, clean, verdict.outcomes)
-    why = "" if passed else why_not_passed(
-        ran_sandboxed=profile is not None, returncode=returncode, timed_out=timed_out,
-        mutated=mutated, survivors=survivors, log_too_big=too_big, tests_ran=ran,
-        report_too_big=verdict.too_big, forged=forged, not_run=not_run, renamed=verdict.renamed,
-        exitstatus=verdict.exitstatus, testsfailed=verdict.testsfailed, fail_kind=verdict.fail_kind,
-        data_refused=verdict.data_refused,
-        denied_path=_denial(batch, verdict, checkout, run_dir, clean and not not_run),
-        all_skipped=all_skipped(verdict.collected, verdict.outcomes), outcomes=verdict.outcomes,
-    )  # fmt: skip
+    run_facts = timed_out, mutated, survivors, forged, log_path, MAX_LOG_BYTES
+    not_run, ran, clean, passed, too_big = run_status(
+        profile, verdict, spec.targets, returncode, run_facts
+    )
+    reason_facts = (passed, profile is not None, returncode, timed_out, mutated, survivors,
+                    too_big, ran, verdict, forged, not_run,
+                    _denial(batch, verdict, checkout, run_dir, clean and not not_run),
+                    ctx.hidden_tests)  # fmt: skip
+    why = verifier_failure_reason(*reason_facts)
     digest = _record_digest(
         candidate_commit=candidate_commit,
         verifier_id=spec.verifier_id,
@@ -382,7 +367,9 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
     )
     return VerifierRun(
         spec, returncode, timed_out, mutated, log_path, observation, verdict.outcomes,
-        survivors=survivors, ran=ran, plain_failure=plain_failure, why=why, forged=forged,
+        survivors=survivors, ran=ran,
+        plain_failure=plain_test_failure(profile is not None, returncode, clean, verdict.outcomes),
+        why=why, forged=forged,
         report_too_big=verdict.too_big, notes=(profile.notes if profile else ()) + host_notes(),
         collect_errors=verdict.collect_errors, uncollected_exposed=verdict.uncollected_exposed,
         teardown_errors=verdict.teardown_errors, fail_kind=verdict.fail_kind, log_too_big=too_big,
