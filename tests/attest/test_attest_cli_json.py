@@ -10,6 +10,8 @@ from pathlib import Path
 import pytest
 from conftest import git
 
+import cairnwork_attest.cli as cli
+from cairnwork_attest.bundle import BundleError, read_bundle
 from cairnwork_attest.cli import main
 from tests.attest.test_attest_cli import setup_cli_fixture
 
@@ -85,6 +87,47 @@ def test_verify_json_ok(tmp_path: Path, repo: Path, capsys: pytest.CaptureFixtur
     expected_sha = hashlib.sha256(raw_payload).hexdigest()
     assert len(data["statement_sha256"]) == 64
     assert data["statement_sha256"] == expected_sha
+
+
+def test_verify_json_reads_bundle_once_and_uses_same_envelope(
+    tmp_path: Path, repo: Path, capsys: pytest.CaptureFixture[str], monkeypatch
+) -> None:
+    candidate, _, pub_pem_file, bundle_file = _setup_signed_bundle(tmp_path, repo, capsys)
+    original = read_bundle(bundle_file)
+    original_raw_payload = base64.b64decode(original["payload"], validate=True)
+    original_sha = hashlib.sha256(original_raw_payload).hexdigest()
+    calls = 0
+
+    def read_then_replace(path: Path):
+        nonlocal calls
+        calls += 1
+        envelope = read_bundle(path)
+        path.write_text("{}", encoding="utf-8")
+        return envelope
+
+    monkeypatch.setattr(cli, "read_bundle", read_then_replace)
+    rc = main(
+        [
+            str(arg)
+            for arg in [
+                "verify",
+                bundle_file,
+                "--public-key",
+                pub_pem_file,
+                "--repo",
+                repo,
+                "--candidate",
+                candidate,
+                "--json",
+            ]
+        ]
+    )
+
+    assert rc == 0
+    assert calls == 1
+    data = json.loads(capsys.readouterr().out)
+    assert data["statement_sha256"] == original_sha
+    assert data["keyid"] == original["signatures"][0]["keyid"]
 
 
 def test_verify_json_candidate_mismatch(
@@ -257,3 +300,27 @@ def test_verify_json_unreadable_core_identity(
     assert data["core_status"] is None
     assert data["keyid"] is None
     assert "cannot read core-identity" in (data["detail"] or "")
+
+
+def test_verify_json_failed_first_read_keeps_refusal_and_null_facts(
+    tmp_path: Path, repo: Path, capsys: pytest.CaptureFixture[str], monkeypatch
+) -> None:
+    candidate, _, pub_pem_file, bundle_file = _setup_signed_bundle(tmp_path, repo, capsys)
+    good = Path(bundle_file).read_text(encoding="utf-8")
+    calls = 0
+
+    def fail_then_restore(path: Path):
+        nonlocal calls
+        calls += 1
+        path.write_text(good, encoding="utf-8")  # a valid bundle appears after the failure
+        raise BundleError("forced first-read failure", code="BUNDLE_UNREADABLE")
+
+    monkeypatch.setattr(cli, "read_bundle", fail_then_restore)
+    args = ["verify", bundle_file, "--public-key", pub_pem_file, "--repo", repo]
+    rc = main([str(a) for a in args + ["--candidate", candidate, "--json"]])
+
+    data = json.loads(capsys.readouterr().out)
+    assert rc != 0 and calls == 1
+    assert data["ok"] is False and data["code"] == "BUNDLE_UNREADABLE"
+    for key in ("base", "statement_sha256", "core_status", "keyid", "test_source"):
+        assert data[key] is None
