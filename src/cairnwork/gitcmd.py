@@ -5,9 +5,8 @@ from pointing a command at another repository or index. Hooks, the fsmonitor
 command, configuration-declared hooks and the untracked cache are disabled and replace refs
 are ignored. Only the file, https and ssh transports are allowed, and configured transport
 programs (upload-pack, receive-pack, git proxy, alternate refs command) are not run (#759).
-These options are a second line of defence: workers never get a checkout that
-shares Cairnwork's repository (see workspace.py), and Cairnwork never runs git
-inside a worker's repository except to fetch its HEAD.
+These options are a second line of defence: workers never get a checkout sharing Cairnwork's
+repository (see workspace.py), and Cairnwork runs git in a worker's repository only to fetch HEAD.
 """
 
 from __future__ import annotations
@@ -206,7 +205,8 @@ def _no_external_diff(args: tuple[str, ...]) -> tuple[str, ...]:
     if _subcommand(args) != "diff":
         return args
     i = args.index("diff") + 1
-    return (*args[:i], *(f for f in ("--no-ext-diff", "--no-textconv") if f not in args), *args[i:])
+    opts = args[: args.index("--")] if "--" in args else args  # a path after -- is not an option
+    return (*args[:i], *(f for f in ("--no-ext-diff", "--no-textconv") if f not in opts), *args[i:])
 
 
 class GitCommandError(Exception):

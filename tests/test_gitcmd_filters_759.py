@@ -234,3 +234,27 @@ def test_diff_keeps_one_copy_of_each_flag_already_given(tmp_path: Path) -> None:
     args = ("diff", "--no-ext-diff", "--no-textconv", "--", "x.txt")
     assert gitcmd._no_external_diff(args) == args
     assert gitcmd._no_external_diff(("log", "-1")) == ("log", "-1")
+
+
+def test_a_file_named_like_the_flag_after_dashdash_does_not_stop_it_being_added(
+    tmp_path: Path,
+) -> None:
+    repo, env = _repo(tmp_path)
+    (repo / ".gitattributes").write_text("*.txt diff=marker\n")
+    (repo / "--no-textconv").write_text("one\n")
+    (repo / "x.txt").write_text("one\n")
+    _commit(repo, env, "--", ".gitattributes", "x.txt", "--no-textconv")
+    (repo / "x.txt").write_text("two\n")
+    marker = tmp_path / "textconv-ran"
+    script = tmp_path / "textconv.sh"
+    script.write_text(f'#!/bin/sh\ntouch "{marker}"\ncat "$1"\n')
+    script.chmod(0o755)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "diff.marker.textconv", str(script)], check=True
+    )
+
+    run_git(repo, "diff", "--", "x.txt", "--no-textconv")
+
+    assert not marker.exists()
+    args = ("diff", "--", "--no-textconv", "--no-ext-diff")
+    assert gitcmd._no_external_diff(args)[:3] == ("diff", "--no-ext-diff", "--no-textconv")
