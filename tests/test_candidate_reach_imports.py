@@ -37,6 +37,12 @@ REFUSED = {
     "alias_next_to_other": "from sys import argv, path as p\np.insert(0, d)\n",
     "star_import": "from sys import *\npath.insert(0, d)\n",
     "alias_sort": "from sys import path as p\np.sort()\n",
+    "namespace_globals": "from sys import path as p\nglobals()['p'].insert(0, d)\n",
+    "namespace_vars": "from sys import path as p\nvars()['p'].append(d)\n",
+    "namespace_locals": "from sys import path as p\nlocals()['p'].insert(0, d)\n",
+    "namespace_dunder_dict": "import sys\nfrom sys import path as p\nsys.__dict__['x'] = 1\n",
+    "getattr_dynamic": "from sys import path as p\nn = 'ins' + 'ert'\ngetattr(p, n)(0, d)\n",
+    "getattr_other_object": "from sys import path as p\nimport os\nn = 'getcwd'\ngetattr(os, n)()\n",
 }
 
 

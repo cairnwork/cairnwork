@@ -322,6 +322,22 @@ def _imports_search_path(node: ast.AST) -> bool:
     )
 
 
+_NAMESPACE_NAMES = frozenset({"globals", "vars", "locals"})
+
+
+def _reaches_namespace(part: ast.AST) -> bool:
+    """A namespace lookup or a ``getattr`` with a non-constant name: the bound search path can be
+    taken from there without its name appearing, so a file that binds it recognises none of it."""
+    if isinstance(part, ast.Name):
+        return part.id in _NAMESPACE_NAMES
+    if isinstance(part, ast.Attribute):
+        return part.attr == "__dict__"
+    if isinstance(part, ast.Call) and isinstance(part.func, ast.Name) and part.func.id == "getattr":
+        name = part.args[1] if len(part.args) > 1 else None
+        return not (isinstance(name, ast.Constant) and isinstance(name.value, str))
+    return False
+
+
 def _is_path_edit_statement(
     node: ast.AST, sys_names: set[str], text: str, reach: frozenset[str] = frozenset()
 ) -> bool:
@@ -330,6 +346,8 @@ def _is_path_edit_statement(
         ast.fix_missing_locations(node)
     for part in ast.walk(node):
         if _imports_search_path(part) or _edits_foreign_path(part):
+            return True
+        if reach and _reaches_namespace(part):
             return True
         if (
             isinstance(part, ast.Attribute)
