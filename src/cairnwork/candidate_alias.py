@@ -14,6 +14,7 @@ from cairnwork.candidate_alias_writes import (
     _is_write_statement,
     _module_aliases,
 )
+from cairnwork.candidate_reach import binds_search_path, is_docstring
 
 _BLOCK_FIELDS = ("body", "orelse", "finalbody", "handlers", "cases")
 _DEF_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
@@ -336,7 +337,9 @@ def runtime_shadow_added(old: bytes | None, new: bytes) -> bool:
         _is_write_statement(own, openers, writers, modules, fileios, flag_openers)
         for own in added_items
     )
-    added_path = any(_is_path_edit_statement(own, new_sys, ast.unparse(own)) for own in added_items)
+    added_path = any(
+        _is_path_edit_statement(own, new_sys, ast.unparse(own)) for own in added_items
+    ) or (binds_search_path(new_tree) and not all(is_docstring(own) for own in added_items))
     new_path = any(_is_path_edit_statement(own, new_sys, ast.unparse(own)) for _, own in new_items)
     new_write = any(
         _is_write_statement(own, openers, writers, modules, fileios, flag_openers)
