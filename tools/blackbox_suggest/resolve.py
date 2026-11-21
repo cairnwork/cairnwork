@@ -24,6 +24,7 @@ DYNAMIC = {"exec", "eval", "globals", "locals", "vars", "setattr", "delattr", "_
 DYNAMIC |= {"__builtins__", "import_module", "attrgetter", "methodcaller"}
 REFLECTIVE = {"__dict__", "__globals__", "__self__", "__setattr__", "__getattribute__", "modules"}
 REFLECTIVE |= {"f_globals", "f_locals", "f_builtins"}
+INTROSPECTION = {"builtins", "ctypes", "gc", "inspect"}  # modules refused when imported at all
 
 
 @dataclass(frozen=True)
@@ -158,7 +159,8 @@ def binds_module_hook(tree: ast.Module) -> bool:
     store of either, either name as a string, or anything, anywhere in the module, that can
     bind a module attribute under a name the reader cannot see (``exec``, ``globals()``,
     ``setattr``, ``sys.modules``, a ``__dict__`` or ``__globals__``, a store to ``__class__``,
-    ``builtins``, a ``getattr`` with a computed name). A method in a class body is not one."""
+    an import of ``builtins``, ``ctypes``, ``gc`` or ``inspect``, a ``getattr`` with a computed
+    name). A method in a class body is not one."""
     plain = {
         id(node.func)
         for node in ast.walk(tree)
@@ -180,9 +182,9 @@ def _binds(node: ast.AST, plain: set[int]) -> bool:
         store = isinstance(node.ctx, ast.Store) and node.attr in hooks
         return store or node.attr in DYNAMIC | REFLECTIVE
     if isinstance(node, ast.alias):
-        return node.name.split(".")[0] == "builtins" or node.name in DYNAMIC | REFLECTIVE
+        return node.name.split(".")[0] in INTROSPECTION or node.name in DYNAMIC | REFLECTIVE
     if isinstance(node, ast.ImportFrom):
-        return node.module == "builtins"
+        return (node.module or "").split(".")[0] in INTROSPECTION
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value in MODULE_HOOKS | REFLECTIVE
     return False

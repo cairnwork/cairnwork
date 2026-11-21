@@ -188,3 +188,13 @@ REFLECTIVE += ["modules", "f_globals", "f_locals", "f_builtins"]
 def test_each_dynamic_or_reflective_name_alone_refuses(tmp_path, line):
     item = run(tmp_path, {"src/pkg/core.py": CORE + line})
     assert item.refusal is not None and not item.protected(KINDS_NOW)
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["import ctypes\n", "import ctypes.util\n", "import gc\n", "import inspect\n"]
+    + ["from inspect import getmodule\n", "from gc import get_objects\n", "import inspect as _i\n"],
+)
+def test_importing_a_reflection_module_refuses(tmp_path, line):
+    item = run(tmp_path, {"src/pkg/core.py": line + CORE})
+    assert item.refusal is not None and not item.protected(KINDS_NOW)
