@@ -22,11 +22,11 @@ def bundle_facts(path: Path) -> dict[str, Any]:
     try:
         envelope = read_bundle(path)
     except (BundleError, OSError):
-        return _null_facts()
+        return null_facts()
     return facts_from_envelope(envelope)
 
 
-def _null_facts() -> dict[str, Any]:
+def null_facts() -> dict[str, Any]:
     return {
         "base": None,
         "statement_sha256": None,

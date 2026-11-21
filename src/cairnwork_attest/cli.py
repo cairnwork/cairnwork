@@ -14,7 +14,7 @@ from typing import Any
 
 from cairnwork.textclean import replace_hidden
 from cairnwork_attest.bundle import BundleError, read_bundle, write_bundle
-from cairnwork_attest.bundle_facts import bundle_facts, facts_from_envelope
+from cairnwork_attest.bundle_facts import facts_from_envelope, null_facts
 from cairnwork_attest.checkrun import add_subparser as _add_check_run
 from cairnwork_attest.checkrun import cmd_check_run
 from cairnwork_attest.dsse import sign_statement
@@ -34,7 +34,7 @@ from cairnwork_attest.statement import (
     default_producer,
     run_test_source,
 )
-from cairnwork_attest.verify import KEY_CODES, verify_bundle
+from cairnwork_attest.verify import KEY_CODES, read_refusal, verify_bundle
 from cairnwork_attest.verify_binding import PolicyError, load_policy
 from cairnwork_protocol import canonical_json
 
@@ -155,6 +155,31 @@ def _usage_error(msg: str, candidate: str, as_json: bool) -> int:
     return 2
 
 
+def _first_read(args: argparse.Namespace) -> tuple[dict[str, Any] | None, Any]:
+    """--json reads the bundle once; a failed read is the verdict (no second read, no facts)."""
+    if not args.json:
+        return None, None
+    try:
+        return read_bundle(Path(args.bundle)), None
+    except (BundleError, OSError) as exc:
+        return None, read_refusal(exc)
+
+
+def _print_verify_json(result: Any, candidate: str, envelope: dict[str, Any] | None) -> int:
+    facts = facts_from_envelope(envelope) if envelope is not None else null_facts()
+    _print_json(
+        ok=result.ok,
+        code="OK" if result.ok else result.code,
+        detail=result.detail or None,
+        candidate=candidate,
+        assurance=result.assurance if result.ok else None,
+        **{
+            k: facts[k] for k in ("base", "statement_sha256", "core_status", "keyid", "test_source")
+        },
+    )
+    return 0 if result.ok else _fail_rc(result.code)
+
+
 def _cmd_verify(args: argparse.Namespace) -> int:
     candidate = args.candidate
     if not _OID.fullmatch(candidate):
@@ -195,43 +220,24 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         except PolicyError as exc:
             return _usage_error(f"cannot use policy: {exc}", candidate, args.json)
 
-    envelope = None
-    if args.json:
-        try:
-            envelope = read_bundle(Path(args.bundle))
-        except (BundleError, OSError):
-            envelope = None
-
-    result = verify_bundle(
-        Path(args.bundle),
-        public_key_pem=Path(args.public_key),
-        repo=repo,
-        expected_candidate=candidate,
-        core_identity_pin=core_id_pin,
-        expected_base=expected_base,
-        policy=policy,
-        envelope=envelope,
+    envelope, refusal = _first_read(args)
+    result = (
+        refusal
+        if refusal is not None
+        else verify_bundle(
+            Path(args.bundle),
+            public_key_pem=Path(args.public_key),
+            repo=repo,
+            expected_candidate=candidate,
+            core_identity_pin=core_id_pin,
+            expected_base=expected_base,
+            policy=policy,
+            envelope=envelope,
+        )
     )
 
     if args.json:
-        facts = (
-            facts_from_envelope(envelope)
-            if envelope is not None
-            else bundle_facts(Path(args.bundle))
-        )
-        _print_json(
-            ok=result.ok,
-            code="OK" if result.ok else result.code,
-            detail=result.detail or None,
-            candidate=candidate,
-            base=facts["base"],
-            statement_sha256=facts["statement_sha256"],
-            core_status=facts["core_status"],
-            keyid=facts["keyid"],
-            test_source=facts["test_source"],
-            assurance=result.assurance if result.ok else None,
-        )
-        return 0 if result.ok else _fail_rc(result.code)
+        return _print_verify_json(result, candidate, envelope)
 
     if result.ok and result.statement is not None:
         cand = result.statement["subject"][0]["digest"]["gitCommit"]

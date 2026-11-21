@@ -29,6 +29,15 @@ KEY_CODES = frozenset({"KEY_UNREADABLE", "KEY_MALFORMED", "KEY_WRONG_TYPE"})
 _OID = re.compile(r"^[0-9a-f]{40}$")
 
 
+def read_refusal(exc: BundleError | OSError) -> VerifyResult:
+    """The refusal for a failed bundle read (one mapping for verify and the CLI)."""
+    if isinstance(exc, BundleError):
+        if exc.code in ("BUNDLE_MALFORMED", "DUPLICATE_KEY"):
+            return _fail("BUNDLE_MALFORMED", str(exc))
+        return _fail("BUNDLE_UNREADABLE", str(exc))
+    return _fail("BUNDLE_UNREADABLE", f"cannot read bundle: {exc}")
+
+
 def _verify_envelope_and_payload(
     bundle_path: Path,
     public_key_pem: Path,
@@ -40,12 +49,8 @@ def _verify_envelope_and_payload(
     try:
         if envelope is None:
             envelope = read_bundle(Path(bundle_path))
-    except BundleError as exc:
-        if exc.code in ("BUNDLE_MALFORMED", "DUPLICATE_KEY"):
-            return None, _fail("BUNDLE_MALFORMED", str(exc)), ""
-        return None, _fail("BUNDLE_UNREADABLE", str(exc)), ""
-    except OSError as exc:
-        return None, _fail("BUNDLE_UNREADABLE", f"cannot read bundle: {exc}"), ""
+    except (BundleError, OSError) as exc:
+        return None, read_refusal(exc), ""
 
     try:
         pubkey = public_key
