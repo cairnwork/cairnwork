@@ -168,3 +168,25 @@ def test_probe_marks_walk_lost_when_cwd_cannot_be_restored(monkeypatch):
         assert walk._cwd_lost is True
     finally:
         os.chdir(here)
+
+
+def test_collect_stops_truncated_when_cwd_lost(monkeypatch):
+    import stat
+    import types
+
+    probed = []
+
+    def fake_probe(path):
+        probed.append(path)
+        monkeypatch.setattr(walk, "_cwd_lost", True)
+        return "stream", "pathtoolong_other"
+
+    def fake_walk(top, followlinks=False, **_kw):
+        yield "/d", [], ["a.sock", "b.sock"]
+
+    monkeypatch.setattr(walk.os, "walk", fake_walk)
+    monkeypatch.setattr(walk.os, "lstat", lambda _p: types.SimpleNamespace(st_mode=stat.S_IFSOCK))
+    monkeypatch.setattr(walk, "_probe", fake_probe)
+    monkeypatch.setattr(walk, "_cwd_lost", False)
+    assert walk.collect() == {"truncated|-|-": 1}
+    assert len(probed) == 1  # the second socket is not probed from the wrong directory
