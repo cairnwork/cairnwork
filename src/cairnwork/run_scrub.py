@@ -61,6 +61,13 @@ def _shown(path: Path) -> str:
     return str(path).replace("\r", "\\r").replace("\n", "\\n")
 
 
+def _shell_quote(value: str) -> str:
+    """Quote one shell argument without embedding control characters in recovery text."""
+    if not any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+        return shlex.quote(value)
+    return "$'" + "".join(f"\\x{byte:02x}" for byte in os.fsencode(value)) + "'"
+
+
 _SUDO = "/usr/bin/sudo"
 _ALLOW_ALL = "(version 1) (allow default)"
 
@@ -93,7 +100,7 @@ def account_delete_argv(user: str, path: str, wrap, python: str) -> list[list[st
 
 def _as_account_shell(user: str, argv: list[str]) -> str:
     """One recovery step, naming the account. The sandbox form matches ``unconfined``."""
-    inner = " ".join(shlex.quote(part) for part in argv)
+    inner = " ".join(_shell_quote(part) for part in argv)
     tool = (
         f"/usr/bin/sandbox-exec -p {shlex.quote(_ALLOW_ALL)} {inner}"
         if sys.platform == "darwin"
@@ -104,7 +111,7 @@ def _as_account_shell(user: str, argv: list[str]) -> str:
 
 def _recovery_steps(user: str, python: str, run: Path, private: Path) -> str:
     """Who runs each step. Joined with ``;``, not ``&&``, and no period after the last command."""
-    q_run, q_priv = shlex.quote(str(run)), shlex.quote(str(private))
+    q_run, q_priv = _shell_quote(str(run)), _shell_quote(str(private))
     steps = [_as_account_shell(user, _unlock_argv(python, str(run)))]
     account_rm = f"sudo -n -u {shlex.quote(user)} -- /bin/rm -rf -- {q_run}"
     steps.append(f"as the verifier account: {account_rm}")
@@ -121,12 +128,12 @@ def _hint(user: str, python: str, path: Path, root: Path | None = None) -> str:
     if root is not None and path.parent == root and path.name == "run":
         return (
             f"{_shown(path)} sits directly in the run root. Check it without following links: "
-            f"ls -ld {shlex.quote(str(path))}. If a symlink, unlink that symlink only; "
+            f"ls -ld {_shell_quote(str(path))}. If a symlink, unlink that symlink only; "
             f"never chmod the root."
         )
     private = path.parent if path.name == "run" else path
     run = private / "run"
-    q_run, q_priv = shlex.quote(str(run)), shlex.quote(str(private))
+    q_run, q_priv = _shell_quote(str(run)), _shell_quote(str(private))
     steps = _recovery_steps(user, python, run, private)
     return (
         f"leftover {_shown(path)} blocks the next account run. "

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 # Executed by the verifier's isolated Python as the account. Keep this self-contained: it is
 # passed through sudo as one command and must not import code from the candidate tree.
-# Before walking, clear top's own ACL and flags, refuse a non-directory, add u+rwx without
-# following links, and refuse with its path if the account still lacks write and search access.
+# Before walking, verify top, clear its own ACL and flags, add u+rwx without following links, and
+# refuse with its path if the account still lacks write and search access.
 # One pre-order pass. Per entry, before relying on lstat: clear its ACL (setattrlist with
 # FSOPT_NOFOLLOW: the entry itself, a symlink too, never a target; no open, so a denied read or
 # readsecurity does not stop it) and uchg/uappnd (the chflags syscall needs no stat). A directory
@@ -63,7 +63,7 @@ def stop():
 def late():
     return time.monotonic() >= deadline and (done or failed > 0 or len(stack) > 2)
 def no_acl(name):
-    lib.setattrlist(os.fsencode(name), ATTRS, NO_ACL, len(NO_ACL), 1)
+    return lib.setattrlist(os.fsencode(name), ATTRS, NO_ACL, len(NO_ACL), 1) == 0
 def unlock(name):
     no_acl(name)
     try:
@@ -79,6 +79,35 @@ def unlock(name):
         if not attempt(os.lchflags, name, info.st_flags & ~LOCKS):
             return None
         no_acl(name)
+    return info
+def top_info():
+    try:
+        info = os.lstat(top)
+    except FileNotFoundError:
+        sys.exit(f"unlock: top {top!a} does not exist")
+    except OSError as exc:
+        sys.exit(f"unlock: could not inspect top {top!a} ({type(exc).__name__})")
+    if not stat.S_ISDIR(info.st_mode):
+        sys.exit(f"unlock: top {top!a} is not a real directory")
+    if not no_acl(top):
+        sys.exit(f"unlock: could not clear top ACL for {top!a}")
+    if info.st_flags & LOCKS:
+        if not attempt(os.lchflags, top, info.st_flags & ~LOCKS):
+            sys.exit(f"unlock: could not clear top flags for {top!a}")
+        if not no_acl(top):
+            sys.exit(f"unlock: could not clear top ACL for {top!a}")
+    try:
+        info = os.lstat(top)
+    except OSError as exc:
+        sys.exit(
+            f"unlock: could not inspect top {top!a} after clearing locks ({type(exc).__name__})"
+        )
+    if not stat.S_ISDIR(info.st_mode):
+        sys.exit(f"unlock: top {top!a} is not a real directory")
+    try:
+        os.chmod(top, stat.S_IMODE(info.st_mode) | 0o700, follow_symlinks=False)
+    except OSError as exc:
+        sys.exit(f"unlock: could not chmod top {top!a} ({type(exc).__name__})")
     return info
 def opened(name, dev):
     global listed, cut
@@ -100,15 +129,10 @@ def opened(name, dev):
     short = short or len(names) > keep
     cut, listed = cut or short, listed + min(len(names), keep)
     return iter(names[:keep]), short, name, failed
-root = unlock(top)
-if root is None:
-    sys.exit(f"unlock: {top} is not writable by the account; the owner must fix it")
-if not stat.S_ISDIR(root.st_mode):
-    sys.exit("unlock: top is not a real directory")
+root = top_info()
 dev = root.st_dev
-attempt(os.chmod, top, stat.S_IMODE(root.st_mode) | 0o700, follow_symlinks=False)
 if not os.access(top, os.W_OK | os.X_OK, follow_symlinks=False):
-    sys.exit(f"unlock: {top} is not writable by the account; the owner must fix it")
+    sys.exit(f"unlock: {top!a} is not writable by the account; the owner must fix it")
 stack.append(opened(top, dev))
 while stack:
     name = next(stack[-1][0], None)
