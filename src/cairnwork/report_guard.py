@@ -151,12 +151,7 @@ _HANDOVER = _take()
         self._finished = False  # #793: collection ran to its end (not stopped part way)
         self._uncollected_exposed = None
 
-    def pytest_collectreport(self, report):
-        if report.failed:
-            self._collect_errors.append(report.nodeid)
-        elif report.skipped:  # a module or directory skipped whole while collecting
-            self._collect_skipped.append(report.nodeid)
-            self._skipped_deps.append(_missing(report))
+    def pytest_collectreport(self, report): _collect(self, report)
 
     def pytest_exception_interact(self, node, call, report, _hints=_collect_hints):
         _hints(node, call, report, self._hints)
@@ -206,25 +201,31 @@ _HANDOVER = _take()
     @pytest.hookimpl(wrapper=True, tryfirst=True)
     def pytest_runtest_makereport(self, item, call, _original=_original, _keep_worst=_keep_worst,
                                   _fixtures=_PLUGIN_FIXTURES, _env=_env_exc,
-                                  _origin=_denied_origin):
+                                  _origin=_denied_origin, _report=TestReport, _type=type):
         report = yield  # outermost: the report as every other hook left it
-        nodeid, _ = _original(self, item, report.nodeid)
-        if report.when == "call":  # #570: one per sub-test, then the test's own
-            _keep_worst(self, nodeid, report.outcome)
-            if report.failed:  # #775: an OSError says "environment", never a plain test failure
+        if _type(report) is not _report:
+            return report
+        outcome, when, rid = report.outcome, report.when, report.nodeid
+        if not all(_type(v) is str for v in (outcome, when, rid)):
+            self._renamed.append("")  # #1374: a hostile field fails closed; no method of it runs
+            return report
+        nodeid, _ = _original(self, item, rid)
+        if when == "call":  # #570: one per sub-test, then the test's own
+            _keep_worst(self, nodeid, outcome)
+            if outcome == "failed":  # #775: an OSError says "environment", not a test failure
                 info = call.excinfo
                 oserr = info is not None and _env(info, item.config.rootpath)
                 self._env_ok[nodeid] = self._env_ok.get(nodeid, True) and oserr
                 self._denied[nodeid] = self._denied.get(nodeid, True) and _denied_path(info)
-        elif report.when == "setup" and report.outcome in ("skipped", "failed"):
-            _keep_worst(self, nodeid, report.outcome)
-            if report.failed:  # a skip in a fixture is not an error
+        elif when == "setup" and outcome in ("skipped", "failed"):
+            _keep_worst(self, nodeid, outcome)
+            if outcome == "failed":  # a skip in a fixture is not an error
                 self._setup_failed.append(nodeid)
                 self._setup_denied[nodeid] = _origin(call.excinfo, item.config.rootpath)
                 module = _fixture_plugin(_fixtures, report.longrepr)
                 if module:
                     self._plugin_missing[nodeid] = module
-        elif report.when == "teardown" and report.failed:  # #478: a fixture raised after yield
+        elif when == "teardown" and outcome == "failed":  # #478: a fixture raised after yield
             self._outcomes[nodeid] = "failed"
             self._teardown_errors.append(nodeid)
         return report
@@ -251,7 +252,8 @@ _HANDOVER = _take()
                    "teardown_errors": self._teardown_errors,
                    "collection_finished": self._finished, "skips": self._skips,
                    # pytest's own status: the parent requires it and the process's to agree
-                   "exitstatus": _exit_status(exitstatus), "testsfailed": session.testsfailed}
+                   "exitstatus": _exit_status(exitstatus),
+                   "testsfailed": _tests_failed(session.testsfailed)}
         if self._uncollected_exposed is not None:
             payload["uncollected_exposed"] = self._uncollected_exposed
         data = dumps(payload).encode()  # the optional fact never makes the record too big
