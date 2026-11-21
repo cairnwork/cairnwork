@@ -47,7 +47,10 @@ def _probe(path: str) -> tuple[str, str]:
 
 
 def _connect(path: str, kind: int) -> str:
-    """Attempt one nonblocking connection and close immediately."""
+    """Attempt one nonblocking connection and close immediately.
+
+    A successful connect is visible to the listener; that is inherent to measuring reachability.
+    """
     try:
         probe = socket.socket(socket.AF_UNIX, kind)
     except OSError:
@@ -73,6 +76,9 @@ def collect() -> dict[str, int]:
     counts: dict[str, int] = {}
     deadline, entries = time.monotonic() + BUDGET_SECONDS, 0
     for root, dirs, files in os.walk("/", followlinks=False):
+        if time.monotonic() >= deadline:  # directories without files also count against the budget
+            counts["truncated|-|-"] = 1
+            return counts
         dirs[:] = [d for d in dirs if os.path.join(root, d) not in SKIP]
         for name in files:
             entries += 1

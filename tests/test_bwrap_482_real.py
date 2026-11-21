@@ -190,8 +190,9 @@ def test_verifier_socket_walk_reports_categories_only(account_tree):
     base, _rd, _cred = account_tree
     socket_dir = Path(tempfile.mkdtemp(prefix="cw471-", dir="/var/tmp"))
     socket_path = socket_dir / "probe.sock"
-    listener = socket.socket(socket.AF_UNIX)
+    listener = None
     try:
+        listener = socket.socket(socket.AF_UNIX)
         socket_dir.chmod(0o755)
         listener.bind(str(socket_path))
         socket_path.chmod(0o666)
@@ -223,6 +224,7 @@ def test_verifier_socket_walk_reports_categories_only(account_tree):
         print(report_text)
         warnings.warn(report_text, stacklevel=2)
     finally:
-        listener.close()
+        if listener is not None:
+            listener.close()
         socket_path.unlink(missing_ok=True)
         socket_dir.rmdir()
