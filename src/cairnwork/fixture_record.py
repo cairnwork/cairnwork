@@ -3,6 +3,7 @@
 import functools
 import json
 import os
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -11,10 +12,12 @@ import pytest
 
 _DIR = os.environ.get("CAIRNWORK_FIXTURE_RECORD_DIR")  # read once: checkout code cannot move it
 _META = {
-    "recorder_version": 1,
+    "recorder_version": 2,
     "settings_digest": os.environ.get("CAIRNWORK_SETTINGS_DIGEST", ""),
     "base_sha": os.environ.get("CAIRNWORK_BASE_SHA", ""),
+    "sys_path": list(sys.path),
 }
+_extra: dict[str, Any] = {}
 _stages: dict[str, dict[str, Any]] = {}
 _seen: set[str] = set()
 _count, _failed = [0], [False]
@@ -41,6 +44,7 @@ def _record(stage: str, items: list[Any], complete: bool = False) -> None:
         return
     record = {
         **_META,
+        **_extra,
         "stages": _stages,
         "names": sorted({n for s in _stages.values() for n in s["names"]}),
         "complete": complete and not _failed[0] and len(_stages) == 4,
@@ -74,6 +78,14 @@ def pytest_collection_modifyitems_last(items: list[Any]) -> None:
     _record("modifyitems_after", items)
 
 
+def _plugin_modules(config: Any) -> list[dict[str, Any]]:
+    mods = [p for p in config.pluginmanager.get_plugins() if getattr(p, "__name__", None)]
+    entries = [{"name": m.__name__, "file": getattr(m, "__file__", None)} for m in mods]
+    return sorted(entries, key=lambda e: (e["name"], e["file"] or ""))
+
+
 @_safe
 def pytest_collection_finish(session: Any) -> None:
+    _extra["plugin_modules"] = _plugin_modules(session.config)
+    _extra["sys_path_finish"] = list(sys.path)
     _record("finish", session.items, complete=session.testsfailed == 0)

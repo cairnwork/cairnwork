@@ -85,7 +85,7 @@ def test_records_fixture_sources_and_all_stages(tmp_path: Path) -> None:
         "finish",
     }
     assert {"value", "requested", "dep", "auto", "marked", "class_marked"} <= set(record["names"])
-    assert record["recorder_version"] == 1
+    assert record["recorder_version"] == 2
     assert record["settings_digest"] == "settings"
     assert record["base_sha"] == "base"
 
@@ -267,3 +267,77 @@ def test_single_hook_fault_voids_complete_but_not_the_run(tmp_path: Path) -> Non
         "finish",
     }
     assert record["complete"] is False
+
+
+def _record_for(
+    tmp_path: Path, files: dict[str, str], extra: tuple[str, ...] = ()
+) -> tuple[int, dict]:
+    code, record_dir = _exit(tmp_path, files, True) if not extra else (None, None)
+    if extra:
+        project(tmp_path, files)
+        record_dir = tmp_path / "run"
+        record_dir.mkdir()
+        code = run_collection(tmp_path, record_dir, extra).returncode
+    return code, read_record(record_dir)
+
+
+def test_conftest_plugin_module_recorded_with_file(tmp_path: Path) -> None:
+    files = {"conftest.py": "X = 1\n", "test_a.py": "def test_a(): pass\n"}
+    code, record = _record_for(tmp_path, files)
+    assert code == 0
+    entries = [m for m in record["plugin_modules"] if m["name"] == "conftest"]
+    assert entries and Path(entries[0]["file"]).name == "conftest.py"
+
+
+def test_pytest_plugins_and_dash_p_modules_recorded(tmp_path: Path) -> None:
+    files = {
+        "conftest.py": "pytest_plugins = ['helper_plug']\n",
+        "helper_plug.py": "X = 1\n",
+        "other_plug.py": "X = 2\n",
+        "test_a.py": "def test_a(): pass\n",
+    }
+    code, record = _record_for(tmp_path, files, ("-p", "other_plug"))
+    assert code == 0
+    names = {m["name"] for m in record["plugin_modules"]}
+    assert {"helper_plug", "other_plug"} <= names
+    files_by_name = {m["name"]: m["file"] for m in record["plugin_modules"]}
+    assert Path(files_by_name["helper_plug"]).name == "helper_plug.py"
+    assert Path(files_by_name["other_plug"]).name == "other_plug.py"
+
+
+def test_sys_path_at_load_and_inserted_path_only_at_finish(tmp_path: Path) -> None:
+    conftest = (
+        "import os, sys\nsys.path.insert(0, os.path.join(os.path.dirname(__file__), 'extra'))\n"
+    )
+    files = {"conftest.py": conftest, "test_a.py": "def test_a(): pass\n"}
+    (tmp_path / "extra").mkdir()
+    code, record = _record_for(tmp_path, files)
+    assert code == 0
+    assert str(ROOT / "src") in record["sys_path"]
+    assert not any(p.endswith("extra") for p in record["sys_path"])
+    assert any(p.endswith("extra") for p in record["sys_path_finish"])
+
+
+def test_plugin_object_without_name_keeps_record(tmp_path: Path) -> None:
+    conftest = (
+        "class Anon:\n    pass\n\n\n"
+        "def pytest_configure(config):\n    config.pluginmanager.register(Anon(), 'anon')\n"
+    )
+    files = {"conftest.py": conftest, "test_a.py": "def test_a(): pass\n"}
+    code, record = _record_for(tmp_path, files)
+    assert code == 0
+    assert record["complete"] is True
+    assert "finish" in record["stages"]
+
+
+def test_raising_file_attribute_voids_complete_not_exit(tmp_path: Path) -> None:
+    conftest = (
+        "class Boom:\n    __name__ = 'boomplug'\n\n"
+        "    @property\n    def __file__(self):\n        raise RuntimeError('boom')\n\n\n"
+        "def pytest_configure(config):\n    config.pluginmanager.register(Boom(), 'boom')\n"
+    )
+    files = {"conftest.py": conftest, "test_a.py": "def test_a(): pass\n"}
+    code, record_dir = _exit(tmp_path, files, True)
+    assert code == 0
+    path = record_dir / "record.json"
+    assert not path.exists() or read_record(record_dir)["complete"] is False
