@@ -24,19 +24,19 @@ def _kill_session(*, kill_group: bool = True, budget: float = 3.0) -> None:
     """Kill processes in this session, then kill the watchdog's process group."""
     session_id = os.getpid()
     deadline = time.monotonic() + budget
-    while time.monotonic() < deadline:
+    while (remaining := deadline - time.monotonic()) > 0:
         try:
             result = subprocess.run(
                 ["/bin/ps", "-A", "-o", "pid=,stat="],  # absolute: not the hook's PATH
                 capture_output=True,
                 text=True,
-                timeout=0.5,
+                timeout=min(0.5, remaining),  # a hanging ps cannot overrun the budget
                 check=False,
             )
         except (OSError, subprocess.TimeoutExpired):
             result = None
         if result is None or result.returncode != 0:
-            time.sleep(0.05)
+            time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
             continue
         pids: list[int] = []
         for row in result.stdout.splitlines():
@@ -62,7 +62,7 @@ def _kill_session(*, kill_group: bool = True, budget: float = 3.0) -> None:
                 pass
         if not pids:
             break
-        time.sleep(0.05)
+        time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
     if kill_group:
         os.killpg(0, signal.SIGKILL)
 

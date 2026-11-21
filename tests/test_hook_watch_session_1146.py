@@ -204,3 +204,36 @@ def test_runner_timeout_kills_setpgid_grandchild(tmp_path):
                 os.kill(pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+
+
+def test_exit_scan_is_bounded_by_budget_with_hanging_ps(monkeypatch):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("hook_watch_1600", _watcher())
+    assert spec is not None and spec.loader is not None
+    hook_watch = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hook_watch)
+    real_run = subprocess.run
+    calls: list[tuple[float, float]] = []  # (start, latest end the timeout allows)
+
+    def hanging_ps(argv, *args, **kwargs):
+        if argv[0] != "/bin/ps":
+            return real_run(argv, *args, **kwargs)
+        now = time.monotonic()
+        calls.append((now, now + kwargs["timeout"]))
+        time.sleep(0.1)  # a slow ps that fails; the next call must fit in what is left
+        raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+
+    monkeypatch.setattr(hook_watch.subprocess, "run", hanging_ps)
+    read_end, write_end = os.pipe()
+    monkeypatch.setattr(sys, "stdin", os.fdopen(read_end, "rb", buffering=0))
+    monkeypatch.setattr(sys, "argv", ["hook_watch", "30", "--", "/usr/bin/true"])
+    try:
+        assert hook_watch.main() == 0
+    finally:
+        os.close(write_end)
+    assert calls
+    first = calls[0][0]
+    # the runner allows EXIT_SCAN_GRACE (1 s) for this scan; no ps call may run past 0.5 s
+    assert max(end for _start, end in calls) <= first + 0.5 + 0.05, calls
+    assert time.monotonic() - first < post_verified.EXIT_SCAN_GRACE
