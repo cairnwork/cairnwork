@@ -174,3 +174,17 @@ def test_getattr_in_a_class_body_keeps_the_draft(tmp_path):
     )
     item = run(tmp_path, {"src/pkg/core.py": core})
     assert item.protected(KINDS_NOW) and item.exact, item.reason(KINDS_NOW)
+
+
+DYNAMIC = ["exec", "eval", "globals", "locals", "vars", "setattr", "delattr", "__import__"]
+DYNAMIC += ["__builtins__", "import_module", "attrgetter", "methodcaller"]
+REFLECTIVE = ["__dict__", "__globals__", "__self__", "__setattr__", "__getattribute__"]
+REFLECTIVE += ["modules", "f_globals", "f_locals", "f_builtins"]
+
+
+@pytest.mark.parametrize(
+    "line", [f"_x = {name}\n" for name in DYNAMIC] + [f"_x = f.{name}\n" for name in REFLECTIVE]
+)
+def test_each_dynamic_or_reflective_name_alone_refuses(tmp_path, line):
+    item = run(tmp_path, {"src/pkg/core.py": CORE + line})
+    assert item.refusal is not None and not item.protected(KINDS_NOW)
