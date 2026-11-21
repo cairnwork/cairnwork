@@ -197,6 +197,23 @@ os.lstat, os.fchdir, os.chdir = lstat, fchdir, chdir
 atexit.register(lambda: print("entries failed past the clock", len(failed_m)))
 """
 
+_FAIL_THEN_EXPIRE = """\
+import atexit, os, time
+attempts = []
+clock_calls = [0]
+def monotonic():
+    clock_calls[0] += 1
+    return 100 if clock_calls[0] >= 6 else 0
+real_lstat = os.lstat
+def lstat(name, *args, **kwargs):
+    if isinstance(name, str) and name.startswith("m"):
+        attempts.append(name)
+        raise PermissionError(1, "injected before deadline")
+    return real_lstat(name, *args, **kwargs)
+time.monotonic, os.lstat = monotonic, lstat
+atexit.register(lambda: print("failed entries", len(attempts)))
+"""
+
 
 def _failing_m(jump: str, directory: Path) -> str:
     return _FAILING_M.format(jump=jump, ino=os.lstat(directory).st_ino)
@@ -216,10 +233,23 @@ def test_past_the_clock_right_under_run_a_failing_entry_ends_the_pass(runs):
 
 
 @darwin
+def test_failure_before_deadline_still_stops_when_deadline_expires(runs):
+    """A failure before expiry is already a unit of work. Once time expires, the next entry
+    must not be mistaken for a fresh pass just because the failure was early."""
+    top = runs / "top"
+    top.mkdir()
+    (top / "m1").write_text("x")
+    (top / "m2").write_text("x")
+    done = _walk(top, (500_000, 10), _FAIL_THEN_EXPIRE)
+    assert done.returncode == 1 and "limit reached" in done.stderr, done
+    assert done.stdout.strip() == "failed entries 2", done
+
+
+@darwin
 def test_a_directory_with_an_entry_that_failed_is_not_counted_as_done(runs):
-    """``d`` holds an entry that fails, and the clock runs out as the walk leaves ``d``: ``d`` is
-    not removable, so it is no unit of work, and the pass goes on to ``e`` (listed after ``d``)
-    and unlocks one of its locked files before it stops."""
+    """``d`` holds an entry that fails, and the clock runs out as the walk leaves ``d``. Since
+    ``d`` cannot be removed and the failed entry is no completed work, the pass stops before
+    ``e``."""
     top = runs / "top"
     (top / "d").mkdir(parents=True)
     (top / "d" / "m").write_text("x")
@@ -230,7 +260,7 @@ def test_a_directory_with_an_entry_that_failed_is_not_counted_as_done(runs):
     done = _walk(top, (500_000, 30), _failing_m("left", top / "d"))
     assert done.returncode == 1 and "limit reached" in done.stderr, done
     subprocess.run(["/bin/rm", "-rf", "--", str(top)], capture_output=True, check=False)
-    assert len(os.listdir(top / "e")) == 4
+    assert len(os.listdir(top / "e")) == 5
 
 
 @darwin
