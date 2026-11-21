@@ -11,7 +11,6 @@ from cairnwork.candidate_shadow import _parse_imports
 from cairnwork.workspace import CandidateRejected
 
 TESTS = {
-    "exec_import_string": "exec('import helperx')\nmod = 1\n",
     "exec_name_string": "name = 'helperx'\nexec('import ' + name)\nmod = 1\n",
     "exec_dynamic": "import sys\nexec(sys.argv[0])\nmod = 1\n",
     "eval_dynamic": "import sys\neval(sys.argv[0])\nmod = 1\n",
@@ -20,7 +19,31 @@ TESTS = {
     "builtins_exec": "import builtins\nbuiltins.exec('import helperx')\nmod = 1\n",
     "getattr_exec": "import builtins\ngetattr(builtins, 'exec')('import helperx')\nmod = 1\n",
     "exec_in_function": "def go(src):\n    exec(src)\ngo('import helperx')\nmod = 1\n",
+    "namespace_globals": "g = globals()\nmod = g\n",
+    "namespace_vars": "mod = vars()\n",
+    "namespace_locals": "mod = locals()\n",
+    "namespace_dict": "import os\nmod = os.__dict__\n",
+    "dunder_builtins": "mod = __builtins__\n",
+    "builtins_module": "import builtins\nmod = builtins\n",
+    "getattr_dynamic_name": "import os\nn = 'sep'\nmod = getattr(os, n)\n",
+    "const_unparsable": "exec('import (')\nmod = 1\n",
+    "const_nested_dynamic": "exec('import sys\\nexec(sys.argv[0])')\nmod = 1\n",
+    "const_alias_import": (
+        "exec('from importlib import import_module as go\\ngo(\"helperx\")')\nmod = 1\n"
+    ),
+    "module_timeit": "import timeit\nmod = timeit\n",
+    "module_timeit_use": "import timeit\nmod = timeit.timeit('import helperx', number=1)\n",
+    "module_pdb": "import pdb\nmod = pdb\n",
+    "module_code": "import code\nmod = code\n",
+    "module_cprofile": "import cProfile\nmod = cProfile\n",
+    "module_profile_from": "from profile import run\nmod = run\n",
+    "module_runpy_from": "from runpy import run_path\nmod = run_path\n",
+}
+# A constant source adds what it imports, like a direct import, instead of a star.
+CONST = {
+    "exec_import_string": "exec('import helperx')\nmod = 1\n",
     "exec_bytes_import": "exec(b'import helperx')\nmod = 1\n",
+    "eval_expression_import": "eval('__import__(\"helperx\")')\nmod = 1\n",
 }
 BENIGN = {
     "constant_eval": "x = eval('1 + 1')\nmod = x\n",
@@ -62,3 +85,10 @@ def test_string_exec_adds_a_star_in_a_test_file_only(name):
 @pytest.mark.parametrize("name", sorted(BENIGN))
 def test_unrelated_code_adds_no_star(name):
     assert "*" not in _parse_imports(BENIGN[name].encode(), "tests/test_h.py")
+
+
+@pytest.mark.parametrize("name", sorted(CONST))
+def test_constant_source_adds_what_it_imports(repo, name):
+    assert "helperx" in _parse_imports(CONST[name].encode(), "tests/test_h.py")
+    with pytest.raises(CandidateRejected):
+        _check(repo, _files(repo, CONST[name]))
