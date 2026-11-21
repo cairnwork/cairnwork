@@ -44,24 +44,30 @@ class FakeAccount:
         if self.step == "require_idle":
             raise VerifierAccountError("account cairnwork-verifier still runs processes (1)")
 
-    def scrub_stale_runs(self):
+    def scrub_stale_runs(self, candidate_tree):
         self.calls.append("scrub")
         if self.step == "scrub":
             raise VerifierAccountError("a stale run directory is left")
 
 
 @pytest.mark.parametrize("step", ["available", "require_idle", "scrub"])
-def test_each_prelude_refusal_is_typed_and_nothing_after_it_runs(step):
+def test_each_prelude_refusal_is_typed_and_nothing_after_it_runs(step, tmp_path):
     account: Any = FakeAccount(step)
-    with pytest.raises(AccountUnusableBeforeRun) as raised, locked_prelude(account, "python3", 1):
+    with (
+        pytest.raises(AccountUnusableBeforeRun) as raised,
+        locked_prelude(account, "python3", 1, tmp_path / "candidate"),
+    ):
         pytest.fail("the run must not start")
     assert account.calls[-1] == {"scrub": "scrub"}.get(step, step)
     assert not raised.value.detail.startswith("VERIFIER_ACCOUNT_ERROR")
 
 
-def test_a_usable_account_runs_and_its_errors_are_not_prelude_refusals():
+def test_a_usable_account_runs_and_its_errors_are_not_prelude_refusals(tmp_path):
     account: Any = FakeAccount()
-    with pytest.raises(VerifierAccountError) as raised, locked_prelude(account, "python3", 1):
+    with (
+        pytest.raises(VerifierAccountError) as raised,
+        locked_prelude(account, "python3", 1, tmp_path / "candidate"),
+    ):
         raise VerifierAccountError("the run's own error")
     assert type(raised.value) is VerifierAccountError  # an error of the run stays what it was
     assert account.calls == ["available", "require_idle", "scrub"]
