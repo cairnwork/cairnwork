@@ -199,15 +199,13 @@ atexit.register(lambda: print("entries failed past the clock", len(failed_m)))
 
 _FAIL_THEN_EXPIRE = """\
 import atexit, os, time
-attempts = []
-clock_calls = [0]
+attempts = set()
 def monotonic():
-    clock_calls[0] += 1
-    return 100 if clock_calls[0] >= 6 else 0
+    return 100 if len(attempts) else 0
 real_lstat = os.lstat
 def lstat(name, *args, **kwargs):
     if isinstance(name, str) and name.startswith("m"):
-        attempts.append(name)
+        attempts.add(name)
         raise PermissionError(1, "injected before deadline")
     return real_lstat(name, *args, **kwargs)
 time.monotonic, os.lstat = monotonic, lstat
@@ -234,15 +232,14 @@ def test_past_the_clock_right_under_run_a_failing_entry_ends_the_pass(runs):
 
 @darwin
 def test_failure_before_deadline_still_stops_when_deadline_expires(runs):
-    """A failure before expiry is already a unit of work. Once time expires, the next entry
-    must not be mistaken for a fresh pass just because the failure was early."""
+    """One failed entry before expiry counts as work; once time expires, the next is not tried."""
     top = runs / "top"
     top.mkdir()
     (top / "m1").write_text("x")
     (top / "m2").write_text("x")
     done = _walk(top, (500_000, 10), _FAIL_THEN_EXPIRE)
     assert done.returncode == 1 and "limit reached" in done.stderr, done
-    assert done.stdout.strip() == "failed entries 2", done
+    assert done.stdout.strip() == "failed entries 1", done
 
 
 @darwin

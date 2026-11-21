@@ -4,6 +4,23 @@ from __future__ import annotations
 
 # Executed by the verifier's isolated Python as the account. Keep this self-contained: it is
 # passed through sudo as one command and must not import code from the candidate tree.
+# One pre-order pass. Per entry, before relying on lstat: clear its ACL (setattrlist with
+# FSOPT_NOFOLLOW: the entry itself, a symlink too, never a target; no open, so a denied read or
+# readsecurity does not stop it) and uchg/uappnd (the chflags syscall needs no stat). A directory
+# on run's device gets u+rwx and is entered by an O_NOFOLLOW fd, closed once listed (no PATH_MAX).
+# No depth limit: a listing keeps at most half the entries left and reads for at most half the
+# time left, so what it read is still unlocked, and the next listing gets some of both. A
+# cut-short directory once done, or the current one at the clock (checked before each entry), is
+# moved up into run unless it is right under run already: rm frees the path above it and the next
+# scrub goes on, not over. Whatever the clock says, a pass does one unit of work first: unlock a
+# non-directory, finish a directory with nothing in it cut short or failed (rm can then remove
+# it), or move one up. So past the clock it does at most that one unit, or tries one entry that
+# fails (what fails every pass is item G: root only); a listing it reads then is cut at one name.
+# A failure before the deadline now counts as work too: after the clock, the next entry stops the
+# pass. Failure to clear an entry's lock also counts as failure. With the entry budget spent no
+# directory is opened again: a deep one is moved up instead. Exit 1 if anything is left (cut
+# short, an entry, listing or move that failed, another device, the clock): rm fails, the scrub
+# refuses.
 UNLOCK_SOURCE = """\
 import ctypes, itertools, os, stat, struct, sys, time
 top, max_nodes, seconds = sys.argv[1], *map(int, sys.argv[2:4])
