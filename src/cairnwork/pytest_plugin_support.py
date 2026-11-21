@@ -12,6 +12,8 @@ _FIXTURES = {
     "pytest_mock": {"mocker", "class_mocker", "module_mocker", "package_mocker", "session_mocker"},
     "pytest_django.plugin": {
         "transactional_db",
+        "db",
+        "client",
         "django_db_setup",
         "django_db_blocker",
         "admin_client",
@@ -24,10 +26,15 @@ _FIXTURES = {
         "mailoutbox",
     },
     "anyio.pytest_plugin": {"anyio_backend"},
+    "pytest_asyncio.plugin": {"event_loop"},
 }
 
 
-_MARKERS = {"django_db": "pytest_django.plugin", "anyio": "anyio.pytest_plugin"}
+_MARKERS = {
+    "django_db": "pytest_django.plugin",
+    "anyio": "anyio.pytest_plugin",
+    "asyncio": "pytest_asyncio.plugin",
+}
 _MARKER = re.compile(r"pytest\.mark\.(" + "|".join(_MARKERS) + r")\b")
 
 

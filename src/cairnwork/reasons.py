@@ -38,8 +38,9 @@ def _kind_causes(fail_kind) -> list[str]:
         "env": "environment error (OSError, MemoryError, RecursionError, child) in",
         "plugin": "missing pytest plugin fixture in",
     }
-    kinds = {n: "plugin" if k.startswith("plugin:") else k for n, k in fail_kind.items()}
-    return [f"{said[kind]} {_names([node])[3:]}" for node, kind in kinds.items()][:MAX_NAMES]
+    return [
+        f"{said[kind.partition(':')[0]]} {_names([node])[3:]}" for node, kind in fail_kind.items()
+    ][:MAX_NAMES]
 
 
 def _outcome_cause(outcomes) -> str:

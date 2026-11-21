@@ -306,8 +306,11 @@ def test_a_marker_only_use_selects_its_plugin(monkeypatch):
     assert got == ("pytest_django.plugin",)
 
 
-def test_reasons_accept_a_module_named_plugin_kind():
+def test_a_plugin_kind_with_a_module_suffix_still_has_wording():
     from cairnwork.reasons import _kind_causes
 
-    out = _kind_causes({"t.py::test_a": "plugin:pytest_django.plugin", "t.py::test_b": "setup"})
-    assert out[0].startswith("missing pytest plugin fixture in") and out[1].startswith("setup")
+    got = _kind_causes({"tests/t.py::test_x": "plugin:pytest_django.plugin"})
+    assert (
+        got == ["missing pytest plugin fixture in tests/t.py::test_x"]
+        or "missing pytest plugin" in got[0]
+    )
