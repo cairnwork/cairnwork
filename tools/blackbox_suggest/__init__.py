@@ -21,7 +21,7 @@ from .literals import Refused
 from .obligations import Scope, collect
 from .resolve import Imports, Project, module_env
 from .scope import import_time
-from .shadows import base_dirs, stdlib_shadows
+from .shadows import stdlib_shadows, walk
 from .shapes import drafts_for
 
 KINDS_NOW = frozenset({"function"})  # what cairnwork.blackbox declares at this version
@@ -86,8 +86,10 @@ def conftests_for(test_file: Path, project: Path, name: str = "conftest.py") -> 
 def _scope(test_file: Path, root: Path, project: Project, modules: list[ast.Module]) -> Scope:
     """What the configuration and every module imported around the test file decide."""
     reason, known, usefixtures = pytest_config(test_file.parent, root)
-    extra = base_dirs(root, recursion_skips(test_file.parent, root))
-    dirs = None if extra is None else [*import_dirs(test_file.parent, root), *project.roots, *extra]
+    walked = walk(root, recursion_skips(test_file.parent, root))
+    dirs = None
+    if walked is not None:
+        dirs = [*import_dirs(test_file.parent, root), *project.roots, *walked.base_dirs]
     shadows = None if dirs is None else stdlib_shadows(dirs)
     if shadows is None:
         reason = (
@@ -95,6 +97,8 @@ def _scope(test_file: Path, root: Path, project: Project, modules: list[ast.Modu
         )
     elif shadows:
         reason = reason or "a file on pytest's import path takes a standard-library module name"
+    if walked is not None and walked.doctests:
+        reason = reason or "pytest collects a text file as doctests, which run unread code"
     tests_top = test_file.resolve().parent
 
     def is_project(name: str) -> bool:
