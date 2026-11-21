@@ -119,6 +119,14 @@ conftest 匯入的模組在每個測試之前執行，可以改掉 runner 回報
 ## 還沒決定的
 
 - verifier 的 sandbox：已用 macOS Seatbelt 封裝，預設全部拒絕，禁止連網，只能讀系統、Python 和 checkout，只能寫 checkout 和這次執行的目錄。缺少 sandbox-exec 時直接判失敗。每一種攻擊都有見證測試（`tests/test_sandbox.py`），macOS CI 一定會實際執行，不能跳過。**還沒解決的**：
+  - **觀察者與判決邊界（#1039）**：今天是同程序 `report_guard` 紀錄，加上獨立 Core 判決；保護等級為 `same_process_only`。紀錄涵蓋收集到的測試、各測試結果、失敗種類與 pytest 結束狀態，並由執行結束碼和 Core 判決共同決定是否 VERIFIED。這是分層證據，不宣稱判決不可偽造。
+    | 類別 | 今天的處置 |
+    | --- | --- |
+    | 改寫 junit；提早結束但沒有可信紀錄；事後改 checkout；ini、plugin 自動載入與 conftest 上溯 | 由 report guard、結束碼／checkout 比對及固定 pytest 設定拒絕或失敗關閉 |
+    | pycache／位元碼改道；網路與憑證存取 | 由執行期 bytecode hook、事後掃描及 Seatbelt／專屬帳號限制 |
+    | 取得 nonce 後偽造相符紀錄；改寫 reporter、報告物件或編碼器；候選 import 時執行；動態改 pytest 狀態的同族變體 | 同程序沒有獨立秘密；逐項涵蓋有限，不能當成判決邊界 |
+    | #845 第二觀察者 | 只累積影子資料，沒有裁決權，也不直接拒絕候選 |
+    不再新增逐字樣 `tamper_scan` 規則。殘餘類別的判決見證（只釘判決不是 VERIFIED，不區分哪一層拒絕）見 `tests/test_verifier_residual_classes_1039.py`；設計與範圍見 Issue #1039。
   - 候選程式碼和 pytest 在同一個程序裡，仍然可以偽造報告。判決已經不再讀候選可寫的
     `junit.xml`，改由受信任的 pytest plugin 在 `sessionfinish` 寫一份帶 nonce 的紀錄
     （`src/cairnwork/report_guard.py`，PR #21，保留行為 #14），這擋掉了「讀 argv 的 junit 路徑寫假檔」這條，但
