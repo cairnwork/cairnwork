@@ -1,0 +1,111 @@
+"""Measure AF_UNIX socket reachability from inside a sandbox; never disclose paths."""
+
+import errno
+import json
+import os
+import socket
+import stat
+import time
+
+SKIP = {"/proc", "/sys", "/dev"}
+MAX_ENTRIES = 5_000_000
+BUDGET_SECONDS = 60  # report says `truncated` when the walk stopped early
+
+
+def location(path: str) -> str:
+    """Map a filesystem path to its non-sensitive location class."""
+    path = os.path.normpath(path)
+    if any(path == root or path.startswith(root + "/") for root in ("/tmp", "/run", "/var/run")):
+        return "private-trees"
+    if path == "/var/tmp" or path.startswith("/var/tmp/"):
+        return "var-tmp"
+    if path == "/var/lib" or path.startswith("/var/lib/"):
+        return "var-lib"
+    home = os.path.expanduser("~")
+    if path == "/home" or path.startswith("/home/") or path == home or path.startswith(home + "/"):
+        return "home"
+    for root in ("/srv", "/opt"):
+        if path == root or path.startswith(root + "/"):
+            return root[1:]
+    if path.startswith(("/bin/", "/sbin/", "/lib/", "/lib64/", "/etc/", "/usr/")):
+        return "usr-and-other-system"
+    return "other"
+
+
+def _socket_type(path: str) -> str:
+    """Probe supported Unix socket types without sending data."""
+    for kind, label in ((socket.SOCK_STREAM, "stream"), (socket.SOCK_DGRAM, "dgram")):
+        if _connect(path, kind) == "connectable":
+            return label
+    if hasattr(socket, "SOCK_SEQPACKET") and _connect(path, socket.SOCK_SEQPACKET) == "connectable":
+        return "seqpacket"
+    return "stream"
+
+
+def _connect(path: str, kind: int) -> str:
+    """Attempt one nonblocking connection and close immediately."""
+    try:
+        probe = socket.socket(socket.AF_UNIX, kind)
+    except OSError:
+        return "unsupported"
+    try:
+        probe.setblocking(False)
+        probe.connect(path)
+        return "connectable"
+    except OSError as exc:
+        if exc.errno in (errno.EINPROGRESS, errno.EALREADY, errno.EISCONN):
+            return "connectable"
+        if exc.errno in (errno.ECONNREFUSED,):
+            return "refused"
+        if exc.errno in (errno.EACCES, errno.EPERM):
+            return "denied"
+        return errno.errorcode.get(exc.errno or 0, "other")
+    finally:
+        probe.close()
+
+
+def collect() -> dict[str, int]:
+    """Walk visible files within fixed time and entry bounds, returning counts only."""
+    counts: dict[str, int] = {}
+    deadline, entries = time.monotonic() + BUDGET_SECONDS, 0
+    for root, dirs, files in os.walk("/", followlinks=False):
+        dirs[:] = [d for d in dirs if os.path.join(root, d) not in SKIP]
+        for name in files:
+            entries += 1
+            if entries > MAX_ENTRIES or time.monotonic() >= deadline:
+                counts["truncated|-|-"] = 1
+                return counts
+            path = os.path.join(root, name)
+            try:
+                if not stat.S_ISSOCK(os.lstat(path).st_mode):
+                    continue
+            except OSError:
+                continue
+            loc = location(path)
+            kind = _socket_type(path)
+            socket_types = {
+                "stream": socket.SOCK_STREAM,
+                "dgram": socket.SOCK_DGRAM,
+                "seqpacket": getattr(socket, "SOCK_SEQPACKET", socket.SOCK_STREAM),
+            }
+            result = _connect(path, socket_types[kind])
+            key = f"{loc}|{kind}|{result}"
+            counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def main() -> None:
+    report = collect()
+    output = json.dumps(report, sort_keys=True)
+    print(output)
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a", encoding="utf-8") as handle:
+            handle.write("\n| Location | Socket type | Result | Count |\n|---|---|---|---:|\n")
+            for key, count in sorted(report.items()):
+                loc, kind, result = key.split("|")
+                handle.write(f"| {loc} | {kind} | {result} | {count} |\n")
+
+
+if __name__ == "__main__":
+    main()
