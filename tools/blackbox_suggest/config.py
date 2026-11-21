@@ -80,6 +80,42 @@ def pytest_config(test_dir: Path, root: Path) -> tuple[str | None, bool, list[st
     return reason, known, fixtures
 
 
+def import_dirs(test_dir: Path, root: Path) -> list[Path]:
+    """Directories pytest may put on ``sys.path`` for test_dir: each one up to root (the first
+    without ``__init__.py`` under prepend import mode, or root's parent when root has one) and
+    every ``pythonpath`` entry of the config files read above, relative to the file's directory.
+    """
+    found = _dirs(test_dir, root)
+    if (root / "__init__.py").is_file():
+        found.append(root.resolve().parent)
+    for directory in _dirs(test_dir, root):
+        for name, kind, section in SECTIONS:
+            try:
+                options = _section(directory / name, kind, section) or {}
+            except (OSError, ValueError, configparser.Error, UnicodeDecodeError):
+                continue  # pytest_config refuses an unreadable file
+            entries = [e for v in _values(options.get("pythonpath", [])) for e in v.split()]
+            found += [directory / e for e in entries]
+    return found
+
+
+NORECURSE = ("*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}")
+
+
+def recursion_skips(test_dir: Path, root: Path) -> tuple[str, ...]:
+    """Directory names pytest does not collect from: its default ``norecursedirs``, or none at
+    all when a config file read above sets its own (every directory then counts)."""
+    for directory in _dirs(test_dir, root):
+        for name, kind, section in SECTIONS:
+            try:
+                options = _section(directory / name, kind, section) or {}
+            except (OSError, ValueError, configparser.Error, UnicodeDecodeError):
+                return ()  # pytest_config refuses an unreadable file
+            if "norecursedirs" in options:
+                return ()
+    return NORECURSE
+
+
 def _dirs(test_dir: Path, root: Path) -> list[Path]:
     found, directory, top = [], test_dir.resolve(), root.resolve()
     while True:

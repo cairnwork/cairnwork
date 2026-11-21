@@ -130,10 +130,12 @@ def _bind(verdict: Verdict, name: str, origin: str = "") -> None:
     statement stops it naming a class defined here."""
     verdict.origins[name] = origin if verdict.origins.get(name, origin) == origin else ""
     verdict.classes.discard(name)
+    if name == "*":  # a star import can rebind any name: no class here is trusted as a base
+        verdict.classes.clear()
 
 
 def _trusted(verdict: Verdict, name: str, origin: str) -> bool:
-    return verdict.origins.get(name) == origin
+    return "*" not in verdict.origins and verdict.origins.get(name) == origin
 
 
 def _hook(verdict: Verdict, name: str, *, top: bool, by_def: bool) -> None:
