@@ -304,3 +304,13 @@ def test_a_marker_only_use_selects_its_plugin(monkeypatch):
     )
     got = support.base_plugins(_settings(), None, "b" * 40, ["tests/t.py"], pytest_config.PLUGINS)
     assert got == ("pytest_django.plugin",)
+
+
+def test_a_plugin_kind_with_a_module_suffix_still_has_wording():
+    from cairnwork.reasons import _kind_causes
+
+    got = _kind_causes({"tests/t.py::test_x": "plugin:pytest_django.plugin"})
+    assert (
+        got == ["missing pytest plugin fixture in tests/t.py::test_x"]
+        or "missing pytest plugin" in got[0]
+    )
