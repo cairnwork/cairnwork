@@ -52,3 +52,14 @@ def test_the_unreadable_and_invalid_json_refusals_also_escape_the_path(tmp_path)
 
 def test_an_absent_config_still_gives_defaults(tmp_path):
     assert Intake(_state(tmp_path)).config()
+
+
+def test_a_dangling_link_with_an_odd_name_is_refused_with_the_text_escaped(tmp_path):
+    state = _state(tmp_path, "st\n::error::z")
+    (state / "config.json").symlink_to(tmp_path / "gone\n::error::w.json")
+    with pytest.raises(IntakeRefused) as info:
+        Intake(state).config()
+    assert info.value.code == "BAD_CONFIG"
+    assert "could not be read: '[Errno 2]" in info.value.detail  # the exception text is quoted too
+    assert "\n" not in info.value.detail
+    assert "\\x0a::error::z" in info.value.detail
