@@ -8,7 +8,17 @@ import pytest
 from cairnwork.tamper_scan_tokens import file_views
 
 
-@pytest.mark.parametrize("source", ["x·y = 1\n", "℘ = 1\n", "ᢅ = 1\n"])
+@pytest.mark.parametrize(
+    "source",
+    [
+        "x·y = 1\n",
+        "℘ = 1\n",
+        "ᢅ = 1\n",
+        "℘· = 1\n",
+        "x℘· = 1\n",
+        "℘·℘ = 1\n",
+    ],
+)
 def test_compilable_identifier_characters_have_lexical_views(source: str) -> None:
     ast.parse(source)
     views = file_views(source.encode())
@@ -18,5 +28,15 @@ def test_compilable_identifier_characters_have_lexical_views(source: str) -> Non
 
 
 @pytest.mark.skipif(sys.version_info >= (3, 12), reason="3.12+ tokenizes this source")
-def test_other_error_tokens_still_fail_closed() -> None:
-    assert file_views("x = 😀\n".encode()) is None
+@pytest.mark.parametrize(
+    "source",
+    [
+        "x=😀\n",
+        "x = $\n",
+        "x = ?\n",
+        "a = 'unterminated\n",
+        "x = 1 ℘ 2\n",
+    ],
+)
+def test_other_error_tokens_still_fail_closed(source: str) -> None:
+    assert file_views(source.encode()) is None

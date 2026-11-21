@@ -138,9 +138,9 @@ def _repair_identifier_errors(
             continue
         text = token.string
         prior_name = (
-            index > 0
-            and tokens[index - 1].type == tokenize.NAME
-            and tokens[index - 1].end == token.start
+            bool(repaired)
+            and repaired[-1].type == tokenize.NAME
+            and repaired[-1].end == token.start
         )
         next_name = (
             index + 1 < len(tokens)
