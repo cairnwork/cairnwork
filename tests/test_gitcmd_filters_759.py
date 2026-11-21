@@ -202,3 +202,35 @@ def test_diff_external_is_disabled_without_call_site_option(tmp_path: Path) -> N
     run_git(repo, "diff", "--", "x.txt")
 
     assert not marker.exists()
+
+
+def _textconv_repo(tmp_path: Path) -> tuple[Path, Path]:
+    repo, env = _repo(tmp_path)
+    (repo / ".gitattributes").write_text("*.txt diff=marker\n")
+    (repo / "x.txt").write_text("one\n")
+    _commit(repo, env, ".gitattributes", "x.txt")
+    (repo / "x.txt").write_text("two\n")
+    marker = tmp_path / "textconv-ran"
+    script = tmp_path / "textconv.sh"
+    script.write_text(f'#!/bin/sh\ntouch "{marker}"\ncat "$1"\n')
+    script.chmod(0o755)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "diff.marker.textconv", str(script)], check=True
+    )
+    return repo, marker
+
+
+@pytest.mark.parametrize("extra", [(), ("--no-ext-diff",)], ids=["bare", "ext-flag-only"])
+def test_diff_textconv_is_disabled_without_call_site_option(tmp_path: Path, extra) -> None:
+    repo, marker = _textconv_repo(tmp_path)
+
+    out = run_git(repo, "diff", *extra, "--", "x.txt")
+
+    assert not marker.exists()
+    assert "+two" in out
+
+
+def test_diff_keeps_one_copy_of_each_flag_already_given(tmp_path: Path) -> None:
+    args = ("diff", "--no-ext-diff", "--no-textconv", "--", "x.txt")
+    assert gitcmd._no_external_diff(args) == args
+    assert gitcmd._no_external_diff(("log", "-1")) == ("log", "-1")

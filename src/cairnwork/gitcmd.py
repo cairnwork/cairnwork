@@ -202,11 +202,11 @@ def _subcommand(args: tuple[str, ...]) -> str:
 
 
 def _no_external_diff(args: tuple[str, ...]) -> tuple[str, ...]:
-    """Keep diff.external from running while preserving the normal internal diff output."""
-    if _subcommand(args) != "diff" or "--no-ext-diff" in args:
+    """Keep diff.external and diff.<x>.textconv from running; the internal diff output stays."""
+    if _subcommand(args) != "diff":
         return args
-    index = args.index("diff")
-    return (*args[: index + 1], "--no-ext-diff", *args[index + 1 :])
+    i = args.index("diff") + 1
+    return (*args[:i], *(f for f in ("--no-ext-diff", "--no-textconv") if f not in args), *args[i:])
 
 
 class GitCommandError(Exception):
