@@ -169,18 +169,33 @@ jobs:
       # #406 step 4: everything except the shared verifier account runs in parallel; files that
       # share state are pinned to one worker by their xdist_group mark (tests/xdist_groups.py).
       - name: Tests of this shard
+        id: shard_tests
         run: |
           set -euo pipefail
           files=()
           while IFS= read -r f; do files+=("$f"); done < <(uv run python scripts/ci_macos_shard.py "${{ matrix.shard }}")
           # an empty list would make pytest run the whole tree (and the witness file)
           [ "${#files[@]}" -gt 0 ] || { echo "no test files for shard ${{ matrix.shard }}"; exit 1; }
-          uv run pytest -q -o faulthandler_timeout=1200 -n auto --dist loadgroup -m "not verifier_account" "${files[@]}"
+          uv run pytest -q -o faulthandler_timeout=1200 -o junit_family=xunit1 \
+            --junitxml="$RUNNER_TEMP/macos-shard-${{ matrix.shard }}.xml" \
+            -n auto --dist loadgroup -m "not verifier_account" "${files[@]}"
       # The verifier account is one shared account: its tests stay serial, in shard 2 (the
       # marker selects them across the whole tree, whichever shard their file belongs to).
       - name: Verifier-account tests
         if: matrix.shard == '2'
-        run: uv run pytest -q -o faulthandler_timeout=1200 -m verifier_account --ignore=tests/test_1039_1353_witnesses.py
+        run: |
+          uv run pytest -q -o faulthandler_timeout=1200 -o junit_family=xunit1 \
+            --junitxml="$RUNNER_TEMP/macos-verifier.xml" \
+            -m verifier_account --ignore=tests/test_1039_1353_witnesses.py
+      # The time of every test file of this shard, for the job summary (not a check: never fails).
+      - name: Per-file time in the job summary
+        if: always() && steps.shard_tests.outcome != 'skipped'
+        continue-on-error: true
+        run: |
+          for xml in "$RUNNER_TEMP"/macos-*.xml; do
+            [ -f "$xml" ] || continue
+            python3 -I scripts/ci_junit_summary.py "$xml" "macOS shard ${{ matrix.shard }}: $(basename "$xml")" 80 >> "$GITHUB_STEP_SUMMARY"
+          done
 
   # The required check keeps its name: green only when both shards are green.
   test-macos:
@@ -238,6 +253,44 @@ jobs:
         run: bwrap --unshare-pid --unshare-user --cap-drop ALL --ro-bind / / --proc /proc true
       - name: Sandbox witnesses on real bwrap
         run: CAIRNWORK_REQUIRE_SANDBOX=1 uv run pytest -q tests/test_sandbox.py tests/test_bwrap_symlink_masks.py tests/test_bwrap_mask_roots.py tests/test_run_isolation_witness.py tests/test_tmp_isolation_witness.py tests/test_bwrap_inner_links.py tests/test_bwrap_link_real_423.py tests/test_pycache_redirect_spellings.py tests/test_pycache_redirect.py tests/test_bytecode_hook_proc_mem.py tests/test_denial_errno_sandbox.py tests/test_wrapped_dns_env.py tests/test_bwrap_482_real.py
+
+  # Informational probe (#1492): the tests marked `sandbox` run on real bwrap with the sandbox
+  # required, to measure which of them need macOS and how long each file takes. It is not a
+  # required check and cannot fail the PR (continue-on-error on the test step); the result is in
+  # the job summary. Like test-linux-sandbox and test-linux-verifier-account it does not run the
+  # #1353 gate (the gate is on `test` and on macOS shard 1): a pull_request job with read-only
+  # permissions and no secrets, and not a required check.
+  test-linux-sandbox-probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CAIRNWORK_REQUIRE_SANDBOX: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          python-version: "3.13"
+          enable-cache: false
+      - run: uv sync --locked
+      - name: Install bubblewrap
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+      - name: Lift the AppArmor userns restriction
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Tests marked sandbox on real bwrap (informational)
+        id: probe_tests
+        continue-on-error: true
+        run: |
+          uv run pytest -q -o faulthandler_timeout=1200 -o junit_family=xunit1 \
+            --junitxml="$RUNNER_TEMP/probe.xml" -n auto --dist loadgroup \
+            -m "sandbox and not verifier_account" --ignore=tests/test_1039_1353_witnesses.py
+      - name: Per-file result and time in the job summary
+        if: always() && steps.probe_tests.outcome != 'skipped'
+        continue-on-error: true
+        run: |
+          python3 -I scripts/ci_junit_summary.py "$RUNNER_TEMP/probe.xml" \
+            "bwrap probe: tests marked sandbox, CAIRNWORK_REQUIRE_SANDBOX=1" 200 >> "$GITHUB_STEP_SUMMARY"
 
   # Linux P4 (Issue #84): verifiers run as a dedicated unprivileged account, as on macOS.
   # Creates the account, then runs the account witnesses on real bwrap with the account
