@@ -33,6 +33,8 @@ COUNT_HOOKS = {  # change what is collected
     "pytest_collection",
 }
 HARMLESS_HOOKS = {"pytest_addoption", "pytest_report_header", "pytest_assertrepr_compare"}
+ACTIONS = {"store", "store_true", "store_false", "store_const", "append", "append_const"}
+ACTIONS |= {"count", "extend"}  # argparse's own; any other name may be registered elsewhere
 HOOKIMPL_OPTIONS = {"tryfirst", "trylast", "optionalhook"}  # specname, wrapper: not followed
 PYTEST_HEADS = {"pytest", "mark", "fixture", "param"}
 TYPING_NAMES = {"TYPE_CHECKING": "typing.TYPE_CHECKING", "typing": "typing"}
@@ -147,6 +149,8 @@ def _hook(verdict: Verdict, name: str, *, top: bool, by_def: bool) -> None:
         verdict.refuse(f"hook {name} changes what is collected", known=False)
     elif name.startswith("pytest_") and name not in HARMLESS_HOOKS:
         verdict.refuse(f"hook {name} runs around the tests")
+    elif name in HARMLESS_HOOKS and not by_def:
+        verdict.refuse(f"hook {name} is bound by something other than a def")
     elif name in (MODULE_DUNDERS if top else CLASS_DUNDERS):
         verdict.refuse(f"{name} is called implicitly (collection, subclassing, subscripting)")
     elif not by_def and name in SETUP_HOOKS | CLASS_HOOKS:
@@ -228,6 +232,8 @@ def _function(node: ast.FunctionDef | ast.AsyncFunctionDef, verdict: Verdict, *,
     if node.name in PYTEST_HEADS:
         verdict.refuse("a def binds a name this reader takes for pytest's")
     _hook(verdict, node.name, top=top, by_def=True)
+    if node.name in HARMLESS_HOOKS and not _empty_hook(node):
+        verdict.refuse(f"hook {node.name} does more than declare options")
     _decorators(node.decorator_list, verdict)
     if any(_hookimpl_options(d) - HOOKIMPL_OPTIONS for d in node.decorator_list):
         verdict.refuse("a hookimpl renames or wraps a hook (specname, wrapper)", known=False)
@@ -242,6 +248,38 @@ def _function(node: ast.FunctionDef | ast.AsyncFunctionDef, verdict: Verdict, *,
         verdict.refuse("a default argument is not a literal (it is evaluated at import time)")
     if not all(_annotation_inert(n, verdict) for n in notes if n):
         verdict.refuse("an annotation is not a plain type (it is evaluated at import time)")
+
+
+def _empty_hook(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """A body of docstrings, ``pass`` and, in ``pytest_addoption``, ``parser.addoption`` calls
+    whose arguments are all literals (#370): anything else runs before or around the tests."""
+    names = [a.arg for a in [*node.args.posonlyargs, *node.args.args]]
+    parser = "parser" if node.name == "pytest_addoption" and "parser" in names else None
+    return all(_empty_statement(stmt, parser) for stmt in node.body)
+
+
+def _empty_statement(stmt: ast.stmt, parser: str | None) -> bool:
+    call = stmt.value if isinstance(stmt, ast.Expr) else None
+    if isinstance(stmt, ast.Pass) or isinstance(call, ast.Constant):
+        return True
+    if not isinstance(call, ast.Call) or dotted(call.func) != [parser, "addoption"]:
+        return False  # parser None: no call is plain
+    values = [*call.args, *(k.value for k in call.keywords)]
+    options = {k.arg: k.value for k in call.keywords}
+    action = options.get("action", ast.Constant("store"))
+    return (
+        all(k.arg for k in call.keywords)
+        and all(_literal(v) for v in values)
+        and "type" not in options  # a name can reach a converter registered elsewhere
+        and isinstance(action, ast.Constant)
+        and action.value in ACTIONS
+    )
+
+
+def _literal(node: ast.expr) -> bool:
+    if isinstance(node, ast.List | ast.Tuple):
+        return all(_literal(e) for e in node.elts)
+    return isinstance(node, ast.Constant)
 
 
 def _pytest_module(name: str) -> bool:

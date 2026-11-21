@@ -87,10 +87,10 @@ def test_tryfirst_trylast_optionalhook_on_a_harmless_hook_keep_the_draft(tmp_pat
             pass
         @pytest.hookimpl(trylast=True, optionalhook=True)
         def pytest_report_header(config):
-            return "x"
+            pass
         @pytest.hookimpl
         def pytest_assertrepr_compare(op, left, right):
-            return None
+            pass
         """,
     )
     assert item.protected(KINDS_NOW) and item.exact, item.reason(KINDS_NOW)
