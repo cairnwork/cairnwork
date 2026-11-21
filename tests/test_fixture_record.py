@@ -246,3 +246,24 @@ def test_recorder_fault_voids_record_but_not_the_run(tmp_path: Path) -> None:
     assert code == 0
     path = record_dir / "record.json"
     assert not path.exists() or read_record(record_dir)["complete"] is False
+
+
+def test_single_hook_fault_voids_complete_but_not_the_run(tmp_path: Path) -> None:
+    conftest = (
+        "import pytest\n\n\nclass Once(pytest.Item):\n    n = 0\n\n"
+        "    def runtest(self): pass\n\n    @property\n    def fixturenames(self):\n"
+        "        Once.n += 1\n        if Once.n == 1:\n            raise RuntimeError('once')\n"
+        "        return []\n\n\ndef pytest_collect_file(file_path, parent):\n"
+        "    if file_path.name == 'odd.txt':\n        return Once.from_parent(parent, name='o')\n"
+    )
+    files = {"conftest.py": conftest, "odd.txt": "x", "test_a.py": "def test_a(): pass\n"}
+    code, record_dir = _exit(tmp_path, files, True)
+    record = read_record(record_dir)
+    assert code == 0
+    assert set(record["stages"]) == {
+        "itemcollected",
+        "modifyitems_before",
+        "modifyitems_after",
+        "finish",
+    }
+    assert record["complete"] is False

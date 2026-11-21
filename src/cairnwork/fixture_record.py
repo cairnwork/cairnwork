@@ -50,9 +50,9 @@ def _record(stage: str, items: list[Any], complete: bool = False) -> None:
         with handle:
             json.dump(record, handle, sort_keys=True)
         os.replace(handle.name, Path(_DIR) / "record.json")
-    finally:
-        if os.path.exists(handle.name):
-            os.unlink(handle.name)
+    except BaseException:
+        Path(handle.name).unlink(missing_ok=True)
+        raise
 
 
 @_safe
