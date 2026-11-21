@@ -113,7 +113,8 @@ def alert(message: str) -> None:
 def _run(argv: list[str], seconds: int, env: dict[str, str]) -> tuple[int, bytes, bytes]:
     """Its own session, so the group is stopped on every exit, timeout or not; cleanup is bounded
     too. hook_watch ends the group when this runner dies, even by SIGKILL (#1125). Limits: a
-    descendant that leaves the group (setpgid or setsid), one still holding the output pipe after
+    descendant that starts a new session (setsid; one that only changes group is killed with the
+    session, #1146), one still holding the output pipe after
     the hook exited when the runner is SIGKILLed, or the hook when the runner and its watchdog
     are killed at the same time (two layers failing together), can outlive it.
 
