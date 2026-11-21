@@ -38,7 +38,8 @@ REFUSED = {
     "starred_target": SHADOW + "def _g(s):\n    *s.path, = [d]\n_g(sys)\n",
     "nested_target": SHADOW + "def _g(s):\n    (a, [s.path]) = (1, [d])\n_g(sys)\n",
     "with_target": SHADOW
-    + "from contextlib import nullcontext as n\ndef _g(s):\n    with n([d]) as s.path:\n        pass\n_g(sys)\n",
+    + "from contextlib import nullcontext as n\n"
+    + "def _g(s):\n    with n([d]) as s.path:\n        pass\n_g(sys)\n",
     "request_path_in_signalled_file": SHADOW
     + "# sys.path\nclass _Req:\n    path = ''\nrequest = _Req()\nrequest.path = '/x'\n",
     "attr_assign_nonname": SHADOW + "[sys][0].path = [d]\n",
