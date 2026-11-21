@@ -198,10 +198,10 @@ atexit.register(lambda: print("entries failed past the clock", len(failed_m)))
 """
 
 _FAIL_THEN_EXPIRE = """\
-import atexit, os, time
+import atexit, os, sys, time
 attempts = set()
-def monotonic():
-    return 100 if len(attempts) else 0
+def monotonic():  # expired only for the walker's own clock check, after the first failure
+    return 100 if attempts and sys._getframe(1).f_code.co_name == "late" else 0
 real_lstat = os.lstat
 def lstat(name, *args, **kwargs):
     if isinstance(name, str) and name.startswith("m"):
