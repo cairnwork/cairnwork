@@ -6,7 +6,9 @@ only if every top-level statement is one of a few inert shapes (docstrings; impo
 unittest, the standard library or the project; assignments of literals, names and pytest marks;
 ``def`` and ``class`` whose decorators, decorator arguments, defaults and annotations are such
 literals or plain types and whose bases are defined in the file, ``object`` or unittest's
-``TestCase``; ``if TYPE_CHECKING:`` imports, with the flag imported from ``typing`` and never
+``TestCase``; marks whose ``ids`` and ``scope`` are literals, whose skipif or xfail conditions are
+``True`` or ``False`` and whose arguments name no ``def`` or ``class`` of the file; ``if
+TYPE_CHECKING:`` imports, with the flag imported from ``typing`` and never
 bound otherwise). Names that pytest or Python call implicitly (hooks, setup functions, a module's
 ``__getattr__``, a class's ``__init_subclass__``) are allowed only where a ``def`` of them is
 read elsewhere. Anything else refuses every test in its scope, and statements that may define or
@@ -16,9 +18,9 @@ collect tests mark the count inexact. Nothing is executed: the modules are parse
 from __future__ import annotations
 
 import ast
-import sys
 from collections.abc import Callable
 
+from .marks import SAFE_IMPORTS, callables, later
 from .obligations import CLASS_HOOKS, SETUP_HOOKS
 from .resolve import dotted
 
@@ -33,7 +35,6 @@ COUNT_HOOKS = {  # change what is collected
 HARMLESS_HOOKS = {"pytest_addoption", "pytest_report_header", "pytest_assertrepr_compare"}
 HOOKIMPL_OPTIONS = {"tryfirst", "trylast", "optionalhook"}  # specname, wrapper: not followed
 PYTEST_HEADS = {"pytest", "mark", "fixture", "param"}
-SAFE_IMPORTS = {"pytest", "unittest", "_pytest"} | set(sys.stdlib_module_names)
 TYPING_NAMES = {"TYPE_CHECKING": "typing.TYPE_CHECKING", "typing": "typing"}
 MODULE_DUNDERS = {"__getattr__", "__dir__"}  # pytest's collection looks names up on the module
 CLASS_DUNDERS = {"__init_subclass__", "__class_getitem__"}  # run on subclassing, subscripting
@@ -52,6 +53,7 @@ class Verdict:
         self.project_names: set[str] = set()  # local names bound by those imports
         self.classes: set[str] = set()  # module-level classes here: bases besides _safe_base
         self.origins: dict[str, str] = {}  # name -> the import binding it, "" if bound otherwise
+        self.callables: set[str] = set()  # names of a def or class anywhere here, and aliases
 
     def refuse(self, reason: str, *, known: bool = True) -> None:
         self.reason = self.reason or reason
@@ -156,6 +158,7 @@ def import_time(tree: ast.Module, is_project: Callable[[str], bool]) -> Verdict:
     blackbox case only if the runner imports the same module anyway; the caller checks this per
     test against ``verdict.imports``, once the drafted modules are known."""
     verdict = Verdict()
+    verdict.callables = callables(tree)
     _body(tree.body, verdict, is_project, top=True)
     return verdict
 
@@ -267,6 +270,12 @@ def _decorators(decorators: list[ast.expr], verdict: Verdict) -> None:
             and all(_inert(a, verdict) for a in [*d.args, *(k.value for k in d.keywords)])
         ):
             verdict.refuse("a decorator argument is not a literal (it is evaluated at import time)")
+        _later(d, verdict)
+
+
+def _later(node: ast.AST, verdict: Verdict) -> None:
+    for reason in later(node, verdict.callables, set(verdict.origins)):
+        verdict.refuse(reason)
 
 
 def _hookimpl_options(decorator: ast.expr) -> set[str]:
@@ -331,6 +340,8 @@ def _assign(node: ast.Assign | ast.AnnAssign, verdict: Verdict, *, top: bool) ->
         verdict.refuse("module-level value is not a literal (it can run project code)")
     if any(n.startswith("test") for n in names):  # test_b = test_a is collected too
         verdict.refuse("a test is defined by assignment", known=False)
+    if node.value is not None:  # pytestmark, or a mark assigned to a name and applied later
+        _later(node.value, verdict)
 
 
 def _annotation(node: ast.Assign | ast.AnnAssign) -> ast.expr | None:
