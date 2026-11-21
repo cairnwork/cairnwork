@@ -304,3 +304,10 @@ def test_a_marker_only_use_selects_its_plugin(monkeypatch):
     )
     got = support.base_plugins(_settings(), None, "b" * 40, ["tests/t.py"], pytest_config.PLUGINS)
     assert got == ("pytest_django.plugin",)
+
+
+def test_reasons_accept_a_module_named_plugin_kind():
+    from cairnwork.reasons import _kind_causes
+
+    out = _kind_causes({"t.py::test_a": "plugin:pytest_django.plugin", "t.py::test_b": "setup"})
+    assert out[0].startswith("missing pytest plugin fixture in") and out[1].startswith("setup")

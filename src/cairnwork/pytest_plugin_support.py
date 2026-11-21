@@ -77,11 +77,9 @@ def installed_plugins(python, table):
     return tuple(module for (_, module, _), ok in zip(table, found, strict=True) if ok)
 
 
-def plugins_for_run(batch, spec, python):
+def plugins_for_run(batch, spec, python, table, installed):
     """Installed table plugins that the base's config, fixtures or targets actually need."""
-    from cairnwork import pytest_config
-
     required = base_plugins(
-        batch.settings, batch.ctx.repo, batch.ctx.base_commit, spec.targets, pytest_config.PLUGINS
+        batch.settings, batch.ctx.repo, batch.ctx.base_commit, spec.targets, table
     )
-    return tuple(m for m in pytest_config.installed_plugins(python) if m in required)
+    return tuple(m for m in installed(python) if m in required)
