@@ -42,7 +42,9 @@ REFUSED = {
     "namespace_locals": "from sys import path as p\nlocals()['p'].insert(0, d)\n",
     "namespace_dunder_dict": "import sys\nfrom sys import path as p\nsys.__dict__['x'] = 1\n",
     "getattr_dynamic": "from sys import path as p\nn = 'ins' + 'ert'\ngetattr(p, n)(0, d)\n",
-    "getattr_other_object": "from sys import path as p\nimport os\nn = 'getcwd'\ngetattr(os, n)()\n",
+    "getattr_other_object": (
+        "from sys import path as p\nimport os\nn = 'getcwd'\ngetattr(os, n)()\n"
+    ),
 }
 
 
