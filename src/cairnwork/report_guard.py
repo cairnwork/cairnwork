@@ -338,7 +338,7 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
         return Verdict(False, {}, too_big=True)
     try:
         data = json.loads(raw)
-    except (json.JSONDecodeError, ValueError):
+    except (json.JSONDecodeError, ValueError, RecursionError):
         return Verdict(False, {})
     if not isinstance(data, dict) or data.get("nonce") != nonce:
         return Verdict(False, {})
