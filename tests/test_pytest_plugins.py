@@ -276,3 +276,31 @@ def test_a_table_plugin_that_is_found_but_fails_to_load_is_not_plugin_not_instal
     assert code == 2 and out["status"] == "UNCOMPARABLE" and out["verified"] is False, out
     assert out["uncomparable"]["code"] != "PLUGIN_NOT_INSTALLED"
     assert out["uncomparable"]["code"] in ("BASE_NO_REPORT", "BASE_PYTEST_ERROR"), out
+
+
+def _settings():
+    from types import SimpleNamespace
+
+    return SimpleNamespace(values={})
+
+
+def test_a_target_the_base_lacks_keeps_every_table_plugin(monkeypatch):
+    from cairnwork import pytest_plugin_support as support
+    from cairnwork.gitcmd import GitCommandError
+
+    def lacks(*_a, **_k):
+        raise GitCommandError("missing")
+
+    monkeypatch.setattr(support, "run_git", lacks)
+    got = support.base_plugins(_settings(), None, "b" * 40, ["tests/t.py"], pytest_config.PLUGINS)
+    assert got == tuple(m for _, m, _ in pytest_config.PLUGINS)
+
+
+def test_a_marker_only_use_selects_its_plugin(monkeypatch):
+    from cairnwork import pytest_plugin_support as support
+
+    monkeypatch.setattr(
+        support, "run_git", lambda *_a, **_k: "@pytest.mark.django_db\ndef t(): ..."
+    )
+    got = support.base_plugins(_settings(), None, "b" * 40, ["tests/t.py"], pytest_config.PLUGINS)
+    assert got == ("pytest_django.plugin",)

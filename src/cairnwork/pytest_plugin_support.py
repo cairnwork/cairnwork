@@ -6,7 +6,7 @@ import json
 import re
 import subprocess
 
-from cairnwork.gitcmd import run_git
+from cairnwork.gitcmd import GitCommandError, run_git
 
 _FIXTURES = {
     "pytest_mock": {"mocker", "class_mocker", "module_mocker", "package_mocker", "session_mocker"},
@@ -27,19 +27,31 @@ _FIXTURES = {
 }
 
 
+_MARKERS = {"django_db": "pytest_django.plugin", "anyio": "anyio.pytest_plugin"}
+_MARKER = re.compile(r"pytest\.mark\.(" + "|".join(_MARKERS) + r")\b")
+
+
 def base_plugins(settings, repo, base, targets, table):
     values = dict(settings.values)
     fixtures = set(str(values.get("usefixtures", "")).split())
+    marked: set[str] = set()
     if base:
         names = {name for group in _FIXTURES.values() for name in group}
         pattern = re.compile(r"\b(?:" + "|".join(map(re.escape, sorted(names))) + r")\b")
         for target in targets:
             path = target.split("::", 1)[0]
-            fixtures.update(pattern.findall(run_git(repo, "show", f"{base}:{path}")))
+            try:
+                text = run_git(repo, "show", f"{base}:{path}")
+            except GitCommandError:  # a file the base lacks (the task's own tests): cannot tell
+                return tuple(module for _, module, _ in table)
+            fixtures.update(pattern.findall(text))
+            marked.update(_MARKERS[m] for m in _MARKER.findall(text))
     return tuple(
         module
         for _, module, keys in table
-        if keys.intersection(values) or fixtures.intersection(_FIXTURES.get(module, set()))
+        if keys.intersection(values)
+        or module in marked
+        or fixtures.intersection(_FIXTURES.get(module, set()))
     )
 
 
