@@ -88,16 +88,12 @@ _SAFE_OPTIONS = (
 
 def _safe_transport_args(args: tuple[str, ...]) -> tuple[str, ...]:
     """Pin fetch and push to Git's built-in transport programs."""
-    subcommand = _subcommand(args)
-    if subcommand not in ("fetch", "push"):
+    i = _subcommand_index(args)
+    if i is None or args[i] not in ("fetch", "push"):
         return args
-    index = args.index(subcommand)
-    option = (
-        "--upload-pack=git-upload-pack"
-        if subcommand == "fetch"
-        else "--receive-pack=git-receive-pack"
-    )
-    return (*args[: index + 1], option, *args[index + 1 :])
+    pack = "upload" if args[i] == "fetch" else "receive"
+    option = f"--{pack}-pack=git-{pack}-pack"
+    return (*args[: i + 1], option, *args[i + 1 :])
 
 
 # hook.<friendly-name>.<key> (git 2.54 and later): hooks declared in configuration, which
@@ -210,7 +206,7 @@ def _no_external_diff(args: tuple[str, ...]) -> tuple[str, ...]:
     i = _subcommand_index(args)
     if i is None or args[i] != "diff":
         return args
-    return (*args[: i + 1], "--no-ext-diff", "--no-textconv", *args[i + 1 :])  # always insert
+    return (*args[: i + 1], "--no-ext-diff", "--no-textconv", *args[i + 1 :])
 
 
 class GitCommandError(Exception):
