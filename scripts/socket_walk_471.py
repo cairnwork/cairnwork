@@ -10,6 +10,7 @@ import time
 SKIP = {"/proc", "/sys", "/dev"}
 MAX_ENTRIES = 5_000_000
 SUN_PATH_LIMIT = 104  # smallest sun_path (macOS); Linux allows 108
+_cwd_lost = False  # set when the working directory could not be restored
 BUDGET_SECONDS = 60  # report says `truncated` when the walk stopped early
 
 
@@ -49,10 +50,26 @@ def _probe(path: str) -> tuple[str, str]:
             return "stream", "pathtoolong_other"
         finally:
             if old >= 0:
-                os.fchdir(old)
-                os.close(old)
+                _restore_cwd(old)
+        if _cwd_lost:
+            return "stream", "pathtoolong_other"
         return kind, f"pathtoolong_{result}"
     return _probe_short(path)
+
+
+def _restore_cwd(old: int) -> None:
+    """Return to the saved directory; on failure the walk must stop (see collect)."""
+    global _cwd_lost
+    try:
+        os.fchdir(old)
+    except OSError:
+        _cwd_lost = True
+        try:
+            os.chdir("/")
+        except OSError:
+            pass
+    finally:
+        os.close(old)
 
 
 def _probe_short(path: str) -> tuple[str, str]:
@@ -125,6 +142,9 @@ def collect(top: str = "/") -> dict[str, int]:
             loc = location(path)
             kind, result = _probe(path)
             key = f"{loc}|{kind}|{result}"
+            if _cwd_lost:  # the working directory is no longer the one we started in
+                counts["truncated|-|-"] = 1
+                return counts
             counts[key] = counts.get(key, 0) + 1
     return counts
 

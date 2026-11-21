@@ -153,3 +153,18 @@ def test_probe_with_unreadable_cwd_reports_pathtoolong_other():
         os.chdir(here)
         x_only.chmod(0o700)
         x_only.rmdir()
+
+
+def test_probe_marks_walk_lost_when_cwd_cannot_be_restored(monkeypatch):
+    here = os.getcwd()
+
+    def failing_fchdir(_fd):
+        raise OSError(13, "denied")
+
+    monkeypatch.setattr(walk.os, "fchdir", failing_fchdir)
+    monkeypatch.setattr(walk, "_cwd_lost", False)
+    try:
+        assert walk._probe(_long_missing_path()) == ("stream", "pathtoolong_other")
+        assert walk._cwd_lost is True
+    finally:
+        os.chdir(here)
