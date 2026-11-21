@@ -6,7 +6,6 @@ import ast
 import copy
 from collections import Counter
 from collections.abc import Sequence
-from contextvars import ContextVar
 
 from cairnwork.candidate_alias_writes import (
     _exclusive_imported_names,
@@ -232,29 +231,21 @@ def alias_machinery_changed(old: bytes | None, new: bytes) -> bool:
 
 # Methods on a ``<x>.path`` receiver that cannot change it; any other method call counts as an edit.
 _PATH_READERS = frozenset(
-    {"copy", "index", "count", "__len__", "__contains__", "__getitem__", "__iter__", "__repr__"}
-)
+    {
+        "copy", "index", "count", "__len__", "__contains__", "__getitem__", "__iter__", "__repr__",
+        # os.path string and stat helpers that only read
+        "join", "exists", "lexists", "isfile", "isdir", "islink", "isabs", "basename", "dirname",
+        "abspath", "realpath", "normpath", "normcase", "splitext", "split", "splitdrive",
+        "expanduser", "expandvars", "relpath", "commonpath", "commonprefix", "samefile",
+        "getsize", "getmtime", "getatime", "getctime", "sep", "pathsep", "curdir", "pardir",
+    }
+)  # fmt: skip
 
 
 def _foreign_path(node: ast.AST | None) -> bool:
-    """``<expr>.path`` with a receiver other than a plain ``os``."""
-    return isinstance(node, ast.Attribute) and node.attr == "path" and not _is_os_name(node.value)
-
-
-_OS_NAMES: ContextVar[frozenset[str]] = ContextVar("_OS_NAMES", default=frozenset({"os"}))
-
-
-def _is_os_name(node: ast.AST) -> bool:
-    return isinstance(node, ast.Name) and node.id in _OS_NAMES.get()
-
-
-def _collect_os_names(tree: ast.Module) -> frozenset[str]:
-    """Names ``os`` is imported under (``import os as o2``), so ``o2.path`` is not foreign."""
-    names = {"os"}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            names.update(a.asname or a.name for a in node.names if a.name == "os")
-    return frozenset(names)
+    """``<expr>.path`` whatever the receiver: no name is trusted (``os.path`` included; its harmless
+    functions are in ``_PATH_READERS``)."""
+    return isinstance(node, ast.Attribute) and node.attr == "path"
 
 
 def _edits_foreign_path(part: ast.AST) -> bool:
@@ -348,16 +339,8 @@ def runtime_shadow_added(old: bytes | None, new: bytes) -> bool:
         _is_write_statement(own, openers, writers, modules, fileios, flag_openers)
         for own in added_items
     )
-    token = _OS_NAMES.set(_collect_os_names(new_tree))
-    try:
-        added_path = any(
-            _is_path_edit_statement(own, new_sys, ast.unparse(own)) for own in added_items
-        )
-        new_path = any(
-            _is_path_edit_statement(own, new_sys, ast.unparse(own)) for _, own in new_items
-        )
-    finally:
-        _OS_NAMES.reset(token)
+    added_path = any(_is_path_edit_statement(own, new_sys, ast.unparse(own)) for own in added_items)
+    new_path = any(_is_path_edit_statement(own, new_sys, ast.unparse(own)) for _, own in new_items)
     new_write = any(
         _is_write_statement(own, openers, writers, modules, fileios, flag_openers)
         for _, own in new_items

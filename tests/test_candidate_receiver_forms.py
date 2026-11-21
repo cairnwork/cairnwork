@@ -54,6 +54,8 @@ REFUSED = {
     "method_map": SHADOW + "def _g(s):\n    list(map(s.path.append, [d]))\n_g(sys)\n",
     "method_decorator": SHADOW
     + "def _g(s):\n    @s.path.append\n    def h():\n        pass\n_g(sys)\n",
+    "os_alias_shadowed_by_param": SHADOW
+    + "import os as s\ndef _g(s):\n    s.path.insert(0, d)\n_g(sys)\n",
     "attr_assign_nonname": SHADOW + "[sys][0].path = [d]\n",
 }
 
@@ -80,8 +82,8 @@ def test_indirect_receiver_is_refused(repo, name):
         "class _Req:\n    path = ''\nrequest = _Req()\nrequest.path = '/x'\n",
         SHADOW + "class _Req:\n    path = ''\nrequest = _Req()\nrequest.path = '/x'\n",
         SHADOW + "request_path = 1\n",
-        "import os as o2\n# sys.path\nclass _R:\n    pass\nx = o2.path.join('a')\n",
-        SHADOW + "import os as o2\n# sys.path\nx = o2.path.join(d, 'a')\n",
+        SHADOW + "# sys.path\nx = os.path.join(d, 'a')\ny = os.path.exists(x)\n",
+        SHADOW + "import os as o2\n# sys.path\nx = o2.path.join(d, 'a')\ny = o2.path.isdir(x)\n",
         SHADOW + "# sys.path\ndef _g(s):\n    return s.path.copy(), s.path.index('a')\n",
     ],
     ids=[
@@ -90,8 +92,8 @@ def test_indirect_receiver_is_refused(repo, name):
         "request_path_no_write",
         "request_path_unsignalled_file",
         "write_without_path_edit",
-        "os_alias_unsignalled",
-        "os_alias_signalled_write",
+        "os_path_readers_signalled",
+        "os_alias_readers_signalled",
         "path_read_methods",
     ],
 )
