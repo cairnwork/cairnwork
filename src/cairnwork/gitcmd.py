@@ -5,9 +5,8 @@ from pointing a command at another repository or index. Hooks, the fsmonitor
 command, configuration-declared hooks and the untracked cache are disabled and replace refs
 are ignored. Only the file, https and ssh transports are allowed, and configured transport
 programs (upload-pack, receive-pack, git proxy, alternate refs command) are not run (#759).
-These options are a second line of defence: workers never get a checkout that
-shares Cairnwork's repository (see workspace.py), and Cairnwork never runs git
-inside a worker's repository except to fetch its HEAD.
+These options are a second line of defence: workers never get a checkout sharing Cairnwork's
+repository (see workspace.py), and Cairnwork runs git in a worker's repository only to fetch HEAD.
 """
 
 from __future__ import annotations
@@ -89,16 +88,12 @@ _SAFE_OPTIONS = (
 
 def _safe_transport_args(args: tuple[str, ...]) -> tuple[str, ...]:
     """Pin fetch and push to Git's built-in transport programs."""
-    subcommand = _subcommand(args)
-    if subcommand not in ("fetch", "push"):
+    i = _subcommand_index(args)
+    if i is None or args[i] not in ("fetch", "push"):
         return args
-    index = args.index(subcommand)
-    option = (
-        "--upload-pack=git-upload-pack"
-        if subcommand == "fetch"
-        else "--receive-pack=git-receive-pack"
-    )
-    return (*args[: index + 1], option, *args[index + 1 :])
+    pack = "upload" if args[i] == "fetch" else "receive"
+    option = f"--{pack}-pack=git-{pack}-pack"
+    return (*args[: i + 1], option, *args[i + 1 :])
 
 
 # hook.<friendly-name>.<key> (git 2.54 and later): hooks declared in configuration, which
@@ -190,23 +185,28 @@ def stderr_tail(raw: str | bytes | None) -> str:
     return text.replace("\n", " | ")[-STDERR_TAIL_CHARS:]
 
 
-def _subcommand(args: tuple[str, ...]) -> str:
-    """The git subcommand in args, skipping ``-c <name=value>``, ``-C <path>`` and other options."""
-    it = iter(args)
-    for arg in it:
+def _subcommand_index(args: tuple[str, ...]) -> int | None:
+    """Index of the git subcommand, skipping ``-c <name=value>``, ``-C <path>`` and options."""
+    it = enumerate(args)
+    for i, arg in it:
         if arg in ("-c", "-C"):
             next(it, None)
         elif not arg.startswith("-"):
-            return arg
-    return args[0] if args else "command"
+            return i
+    return None
+
+
+def _subcommand(args: tuple[str, ...]) -> str:
+    i = _subcommand_index(args)
+    return args[i] if i is not None else (args[0] if args else "command")
 
 
 def _no_external_diff(args: tuple[str, ...]) -> tuple[str, ...]:
-    """Keep diff.external from running while preserving the normal internal diff output."""
-    if _subcommand(args) != "diff" or "--no-ext-diff" in args:
+    """Keep diff.external and diff.<x>.textconv from running; the internal diff output stays."""
+    i = _subcommand_index(args)
+    if i is None or args[i] != "diff":
         return args
-    index = args.index("diff")
-    return (*args[: index + 1], "--no-ext-diff", *args[index + 1 :])
+    return (*args[: i + 1], "--no-ext-diff", "--no-textconv", *args[i + 1 :])
 
 
 class GitCommandError(Exception):
