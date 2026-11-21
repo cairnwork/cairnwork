@@ -1,4 +1,4 @@
-"""#1324: exception refusals preserve the main-branch message text."""
+"""#1324/#1516: exception refusals keep the text but show hidden characters escaped."""
 
 import pytest
 
@@ -8,6 +8,7 @@ from cairnwork.intake import Intake, IntakeRefused
 from cairnwork.pipeline import TaskRejected
 
 HOSTILE = "\n::error::x‮"
+ESC = "\\x0a::error::x\\u202e"  # #1516: typed refusals show hidden characters escaped
 
 
 def _assert_escaped(text: str) -> None:
@@ -22,20 +23,20 @@ def _raiser(exc):
     return raise_it
 
 
-def test_verifier_environment_error_text_matches_main(monkeypatch):
+def test_verifier_environment_error_text_is_escaped(monkeypatch):
     monkeypatch.setattr(checks, "check_task", _raiser(OSError(HOSTILE)))
     with pytest.raises(TaskRejected) as info:
         checks.check_task_for_verify(object(), "python")
     assert info.value.code == "VERIFIER_ENVIRONMENT_ERROR"
-    assert str(info.value) == f"VERIFIER_ENVIRONMENT_ERROR: {HOSTILE}"
+    assert str(info.value) == "VERIFIER_ENVIRONMENT_ERROR: " + ESC
 
 
-def test_bad_import_path_text_matches_main(monkeypatch):
+def test_bad_import_path_text_is_escaped(monkeypatch):
     monkeypatch.setattr(checks, "check_verify_import_paths", _raiser(ValueError(HOSTILE)))
     with pytest.raises(TaskRejected) as info:
         checks.validate_import_paths(None, "base", [], ())
     assert info.value.code == "BAD_IMPORT_PATH"
-    assert str(info.value) == f"BAD_IMPORT_PATH: {HOSTILE}"
+    assert str(info.value) == "BAD_IMPORT_PATH: " + ESC
 
 
 def test_bad_config_exception_text_is_escaped_once(tmp_path, monkeypatch):
