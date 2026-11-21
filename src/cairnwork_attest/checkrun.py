@@ -127,6 +127,7 @@ def _offline_result(
             public_key=key,  # loaded from public_key above: the file is read once
             repo=repo,
             expected_candidate=facts["candidate"],
+            envelope=facts["envelope"],
         )
         if result.ok:
             level = (result.assurance or {}).get("protection") or ""

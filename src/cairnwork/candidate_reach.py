@@ -23,3 +23,14 @@ def is_docstring(node: ast.AST) -> bool:
         and isinstance(node.value, ast.Constant)
         and isinstance(node.value.value, str)
     )
+
+
+def references_doc(tree: ast.Module) -> bool:
+    """Whether the file reads a docstring value as data."""
+    return any(
+        isinstance(node, ast.Name)
+        and node.id == "__doc__"
+        or isinstance(node, ast.Attribute)
+        and node.attr == "__doc__"
+        for node in ast.walk(tree)
+    )
