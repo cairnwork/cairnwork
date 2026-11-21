@@ -138,7 +138,7 @@ def test_a_raised_verifier_still_drops_its_run_dir(tmp_path, monkeypatch):
         raise RuntimeError("before verdict")
 
     monkeypatch.setattr(verifiers.tempfile, "mkdtemp", mkdtemp)
-    monkeypatch.setattr(verifiers.pytest_config, "installed_plugins", lambda _python: ())
+    monkeypatch.setattr(verifiers.plugin_support, "plugins_for_run", lambda *_args: ())
     monkeypatch.setattr(verifiers, "_run_one_in", boom)
     nothing: Any = None
     batch = verifiers._Batch(
