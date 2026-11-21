@@ -22,7 +22,7 @@ _MODULES = (
     "taskpaths conftest_check conftest_names deferred_tests deferred_nodes intake "
     "verify_candidate_checks verify_cli p2p pipeline"
 ).split()
-_EXPECTED_SITES = 48
+_EXPECTED_SITES = 50  # +2: verify_cli._intake BAD_CONFIG refusal (#1381)
 # Each exception is already code-prefixed, and the named source has shown() the detail.
 _ALLOWED_SITES: set[tuple[str, str, str]] = {
     # _attempt relays deferred_tests.py:108/137/258 and snapshot.py:65, whose details use shown().
