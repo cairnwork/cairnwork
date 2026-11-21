@@ -16,11 +16,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .config import pytest_config
+from .config import import_dirs, pytest_config
 from .literals import Refused
 from .obligations import Scope, collect
 from .resolve import Imports, Project, module_env
 from .scope import import_time
+from .shadows import stdlib_shadows
 from .shapes import drafts_for
 
 KINDS_NOW = frozenset({"function"})  # what cairnwork.blackbox declares at this version
@@ -85,6 +86,8 @@ def conftests_for(test_file: Path, project: Path, name: str = "conftest.py") -> 
 def _scope(test_file: Path, root: Path, project: Project, modules: list[ast.Module]) -> Scope:
     """What the configuration and every module imported around the test file decide."""
     reason, known, usefixtures = pytest_config(test_file.parent, root)
+    if stdlib_shadows([*import_dirs(test_file.parent, root), *project.roots]):
+        reason = reason or "a file on pytest's import path takes a standard-library module name"
     tests_top = test_file.resolve().parent
 
     def is_project(name: str) -> bool:
