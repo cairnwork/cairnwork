@@ -93,6 +93,30 @@ def _run_root_inside_candidate(root: Path, candidate_tree: Path) -> bool:
         current = current.parent
 
 
+def _candidate_chain(candidate_tree: Path) -> set[tuple[int, int]]:
+    """Identities of the candidate tree and every directory above it, by realpath."""
+    chain: set[tuple[int, int]] = set()
+    current = Path(os.path.realpath(candidate_tree))
+    while True:
+        try:
+            info = os.lstat(current)
+        except OSError:
+            return chain
+        chain.add((info.st_dev, info.st_ino))
+        if current.parent == current:
+            return chain
+        current = current.parent
+
+
+def _holds(entry: Path, chain: set[tuple[int, int]]) -> bool:
+    """True when ``entry`` is the candidate tree or one of its parents (never scrubbed)."""
+    try:
+        info = os.lstat(entry)
+    except OSError:
+        return False
+    return (info.st_dev, info.st_ino) in chain
+
+
 _SUDO = "/usr/bin/sudo"
 _ALLOW_ALL = "(version 1) (allow default)"
 
@@ -310,8 +334,9 @@ def stale_run_error(account, candidate_tree: Path) -> str | None:
     if (problem := root_problem(root)) is not None:
         return f"{_shown(root)} {problem}. The owner must fix it: ls -ld {shlex.quote(str(root))}"
     stuck: list[Path] = []
+    chain = _candidate_chain(candidate_tree)
     for name in names:
-        if name.endswith(".work"):
+        if name.endswith(".work") or _holds(root / name, chain):
             continue
         _consider(account, root, name, stuck)
     return _refuse(account, stuck) if stuck else None
