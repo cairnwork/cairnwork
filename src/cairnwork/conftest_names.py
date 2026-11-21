@@ -38,6 +38,7 @@ from cairnwork.fixture_forms import (
     registered,
     resolve_source_aliases,
 )
+from cairnwork.fixture_forwarding import external_decorator, external_roots, voided_modules
 from cairnwork.gitcmd import GitCommandError, run_git, run_git_bytes
 from cairnwork.imported_callable_uses import assignment_callables, imported_callable_uses
 
@@ -75,8 +76,11 @@ def taken_names(
     for conftest, tree in parent_conftests:
         names |= bound(tree, extra=resolved.get(conftest)) | requested(tree)
     called = imported_callable_uses(imported, index)
+    voided = voided_modules(all_trees)
     for f, tree in imported.items():
-        names |= _fixtures(tree, extra=resolved.get(f), called=called.get(f, set()))
+        names |= _fixtures(
+            tree, extra=resolved.get(f), called=called.get(f, set()), index=index, voided=voided
+        )
     return frozenset(bound(old, extra=resolved.get(path))), frozenset(names)
 
 
@@ -146,7 +150,11 @@ def _call_name(func: ast.expr) -> str:
 
 
 def _fixtures(
-    tree: ast.Module, extra: set[str] | None = None, called: set[str] | None = None
+    tree: ast.Module,
+    extra: set[str] | None = None,
+    called: set[str] | None = None,
+    index: dict[str, set[str]] | None = None,
+    voided: set[str] | None = None,
 ) -> set[str]:
     """#982 item 4 r2: what an imported module's fixtures take: each fixture's name (a star
     import, ``as`` or ``pytest_plugins`` registers it under that name), what ``registered`` reads,
@@ -157,13 +165,15 @@ def _fixtures(
     names = registered(tree, extra=extra) | _req_args(tree)
     selectors = names | set(called or ()) | assignment_callables(tree)
     top, aliases = {id(n) for n in module_level(tree.body)}, _aliases(tree, extra=extra)
+    roots = external_roots(tree, index, voided)
     for node in ast.walk(tree):
         if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             continue
         marked = any(  # main's rule kept: "fixture" anywhere in a decorator, even in a string
             _fixture(d, aliases) or "fixture" in ast.unparse(d) for d in node.decorator_list
         )
-        if marked or (node.decorator_list and id(node) in top) or node.name in selectors:
+        possible_factory = any(not external_decorator(d, roots) for d in node.decorator_list)
+        if marked or (possible_factory and id(node) in top) or node.name in selectors:
             a = node.args
             names |= {node.name} | {x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs)}
     return names

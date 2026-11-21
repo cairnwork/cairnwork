@@ -10,22 +10,9 @@ from collections.abc import Iterator
 from posixpath import dirname
 
 from cairnwork.deferred_overlay import TestCommitRejected
+from cairnwork.fixture_forwarding import forwarded, forwarded_names, module_level
 
 CODE = "TEST_COMMIT_CONFTEST_STATIC"
-
-
-def module_level(body: list[ast.stmt]) -> Iterator[ast.stmt]:
-    """#982: each statement of ``body`` and of the blocks inside it that run at module level."""
-    for node in body:
-        yield node
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
-            continue
-        blocks = [getattr(node, field, []) for field in ("body", "orelse", "finalbody")]
-        blocks += [
-            part.body for part in (*getattr(node, "handlers", []), *getattr(node, "cases", []))
-        ]
-        for block in blocks:
-            yield from module_level(block)
 
 
 def registered(tree: ast.Module, extra: set[str] | None = None) -> set[str]:
@@ -39,7 +26,8 @@ def registered(tree: ast.Module, extra: set[str] | None = None) -> set[str]:
     of the function around it; the name is set where that wrapper is called (#998 r3, Claude;
     #1019 r1, Codex: not the whole module)."""
     aliases, names = _aliases(tree, extra=extra), set()
-    exact, forwarded = _exact_aliases(tree), _forwarded(tree)
+    exact, forwarded_calls = _exact_aliases(tree), forwarded(tree)
+    names |= forwarded_names(tree)
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign | ast.AnnAssign) and node.value is not None:
             if any(_fixture_call(c, aliases) for c in ast.walk(node.value)):
@@ -60,29 +48,11 @@ def registered(tree: ast.Module, extra: set[str] | None = None) -> set[str]:
                 try:
                     names |= _strings(tree, k.value)
                 except TestCommitRejected:
-                    if _exact(node.func, exact) and _name(k.value) not in forwarded.get(
+                    if _exact(node.func, exact) and _name(k.value) not in forwarded_calls.get(
                         id(node), ()
                     ):
                         raise
     return names
-
-
-def _forwarded(tree: ast.Module) -> dict[int, set[str]]:
-    """In a module that defines ``fixture``: each call inside a function, with the parameters of
-    the functions around it (a wrapper forwarding its own ``name``)."""
-    if not any(getattr(n, "name", None) == "fixture" for n in module_level(tree.body)):
-        return {}
-    out: dict[int, set[str]] = {}
-    for d in ast.walk(tree):
-        if isinstance(d, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda):
-            a = d.args
-            params = {
-                x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs, a.vararg, a.kwarg) if x
-            }
-            for c in ast.walk(d):
-                if isinstance(c, ast.Call):
-                    out.setdefault(id(c), set()).update(params)
-    return out
 
 
 def _name(node: ast.expr) -> str:
