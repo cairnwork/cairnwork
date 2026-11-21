@@ -10,6 +10,7 @@ from collections import Counter
 from importlib.machinery import all_suffixes
 from pathlib import Path
 
+from cairnwork.candidate_recognise import recognised_test_imports
 from cairnwork.gitcmd import GitCommandError, run_git_bytes
 
 _OID = re.compile(r"^[0-9a-f]{40}$")
@@ -196,6 +197,8 @@ def _parse_imports(raw: bytes, path: str) -> set[str]:
     """Names one file imports; raises when it cannot be parsed (the caller treats that as None)."""
     tree = ast.parse(raw, filename=path)
     names: set[str] = set()
+    if _is_test_file(path):
+        names.update(recognised_test_imports(tree))
     called = {id(n.func) for n in ast.walk(tree) if isinstance(n, ast.Call)}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -203,13 +206,8 @@ def _parse_imports(raw: bytes, path: str) -> set[str]:
         elif isinstance(node, ast.ImportFrom):  # relative too: from . import helper
             names.update((node.module or "").split("."))  # a submodule can be redirected
             names.update(alias.name for alias in node.names if alias.name != "*")
-            if _is_test_file(path) and any(
-                alias.asname and alias.name in _IMPORT_ROUTES | _IMPORT_CALLS
-                for alias in node.names
-            ):
-                names.add("*")  # an import function bound to another name fails closed
         elif _is_test_file(path) and _indirect_import(node, called):
-            names.add("*")  # an import reached by another route fails closed for every file
+            continue  # the recogniser above handles these uses, including aliases
         elif isinstance(node, ast.Call) and _call_name(node.func) in _IMPORT_CALLS:
             named = (k.value for k in node.keywords if k.arg in {"name", "modname"})
             args = (*node.args[:1], *named)
