@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from cairnwork.textclean import shown
 from cairnwork_protocol import (
     acceptance_contract_hash,
     canonical_json,
@@ -153,6 +154,9 @@ def _parts_problem(
         return _fail(
             "RECEIPT_INCONSISTENT", f"contract and plan required_verifier_ids differ: {ids}"
         )
+    problem = _required_observations_problem(ids[0], request)
+    if problem is not None:
+        return problem
     try:
         copied = canonical_json(predicate.get("verifier_observations"))
         same = copied == canonical_json(request["evidence_bundle"]["observations"])
@@ -161,3 +165,24 @@ def _parts_problem(
     if not same:
         return _fail("RECEIPT_INCONSISTENT", "predicate.verifier_observations is not the request's")
     return None
+
+
+def _required_observations_problem(
+    required_ids: list[str], request: Mapping[str, Any]
+) -> VerifyResult | None:
+    """A Core-required id is observed once at most; absent or FAIL stays Core's call (#449)."""
+    evidence = request.get("evidence_bundle")
+    observations = evidence.get("observations") if isinstance(evidence, dict) else None
+    if not isinstance(observations, list):
+        return None
+    wanted = set(required_ids)
+    seen: dict[str, int] = {}
+    for observation in observations:
+        verifier_id = observation.get("verifier_id") if isinstance(observation, dict) else None
+        if isinstance(verifier_id, str) and verifier_id in wanted:
+            seen[verifier_id] = seen.get(verifier_id, 0) + 1
+    duplicated = [item for item in required_ids if seen.get(item, 0) > 1]
+    if not duplicated:
+        return None
+    shown_ids = [shown(item[:80]) for item in duplicated]
+    return _fail("RECEIPT_INCONSISTENT", f"duplicated required observation: {shown_ids}")
