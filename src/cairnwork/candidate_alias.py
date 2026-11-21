@@ -229,7 +229,10 @@ def alias_machinery_changed(old: bytes | None, new: bytes) -> bool:
     return any(k in new_hot for k in added) or any(k in old_hot for k in removed)
 
 
-_PATH_MUTATORS = frozenset({"insert", "append", "extend", "remove", "pop", "clear", "__setitem__"})
+# Methods on a ``<x>.path`` receiver that cannot change it; any other method call counts as an edit.
+_PATH_READERS = frozenset(
+    {"copy", "index", "count", "__len__", "__contains__", "__getitem__", "__iter__", "__repr__"}
+)
 
 
 def _foreign_path(node: ast.AST | None) -> bool:
@@ -248,7 +251,7 @@ def _edits_foreign_path(part: ast.AST) -> bool:
         func = part.func
         if (
             isinstance(func, ast.Attribute)
-            and func.attr in _PATH_MUTATORS
+            and func.attr not in _PATH_READERS
             and _foreign_path(func.value)
         ):
             return True
@@ -260,6 +263,10 @@ def _edits_foreign_path(part: ast.AST) -> bool:
             return True  # a stored alias of the search path
     elif isinstance(part, ast.NamedExpr):
         return _foreign_path(part.value)  # walrus alias of the search path
+    elif isinstance(part, ast.arguments):  # a default value binds the search path to a parameter
+        return any(_foreign_path(d) for d in (*part.defaults, *part.kw_defaults))
+    elif isinstance(part, ast.MatchValue):
+        return _foreign_path(part.value)  # a pattern naming ``<x>.path``
     elif isinstance(part, ast.Delete):
         targets = part.targets
     elif isinstance(part, (ast.For, ast.AsyncFor, ast.comprehension)):

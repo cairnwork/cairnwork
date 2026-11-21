@@ -42,6 +42,12 @@ REFUSED = {
     + "def _g(s):\n    with n([d]) as s.path:\n        pass\n_g(sys)\n",
     "request_path_in_signalled_file": SHADOW
     + "# sys.path\nclass _Req:\n    path = ''\nrequest = _Req()\nrequest.path = '/x'\n",
+    "reverse_method": SHADOW + "def _g(s):\n    s.path.reverse()\n_g(sys)\n",
+    "sort_method": SHADOW + "def _g(s):\n    s.path.sort(key=len)\n_g(sys)\n",
+    "lambda_default": SHADOW + "(lambda s: (lambda p=s.path: p.insert(0, d))())(sys)\n",
+    "def_default": SHADOW + "def _g(s=sys, p=[sys][0].path):\n    p.insert(0, d)\n_g()\n",
+    "match_target": SHADOW
+    + "def _g(s):\n    match [[d]]:\n        case [s.path]:\n            pass\n_g(sys)\n",
     "attr_assign_nonname": SHADOW + "[sys][0].path = [d]\n",
 }
 
@@ -68,6 +74,7 @@ def test_indirect_receiver_is_refused(repo, name):
         "class _Req:\n    path = ''\nrequest = _Req()\nrequest.path = '/x'\n",
         SHADOW + "class _Req:\n    path = ''\nrequest = _Req()\nrequest.path = '/x'\n",
         SHADOW + "request_path = 1\n",
+        SHADOW + "# sys.path\ndef _g(s):\n    return s.path.copy(), s.path.index('a')\n",
     ],
     ids=[
         "os_path",
@@ -75,6 +82,7 @@ def test_indirect_receiver_is_refused(repo, name):
         "request_path_no_write",
         "request_path_unsignalled_file",
         "write_without_path_edit",
+        "path_read_methods",
     ],
 )
 def test_unrelated_attributes_are_not_refused(repo, source):
