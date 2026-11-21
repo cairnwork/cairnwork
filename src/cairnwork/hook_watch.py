@@ -24,7 +24,7 @@ def _kill_session(*, kill_group: bool = True) -> None:
     while time.monotonic() < deadline:
         try:
             result = subprocess.run(
-                ["/bin/ps", "-A", "-o", "pid="],  # absolute: not the hook's PATH
+                ["/bin/ps", "-A", "-o", "pid=,stat="],  # absolute: not the hook's PATH
                 capture_output=True,
                 text=True,
                 timeout=0.5,
@@ -36,10 +36,19 @@ def _kill_session(*, kill_group: bool = True) -> None:
             time.sleep(0.05)
             continue
         pids: list[int] = []
-        for field in result.stdout.split():
+        for row in result.stdout.splitlines():
+            fields = row.split()
+            if len(fields) != 2:
+                continue
             try:
-                pid = int(field)
-                if pid > 0 and pid != session_id and os.getsid(pid) == session_id:
+                pid = int(fields[0])
+                stat = fields[1]
+                if (
+                    not stat.startswith("Z")
+                    and pid > 0
+                    and pid != session_id
+                    and os.getsid(pid) == session_id
+                ):
                     pids.append(pid)
             except (ValueError, OSError):  # gone, or another user's/session's (macOS EPERM)
                 continue

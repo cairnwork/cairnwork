@@ -14,6 +14,35 @@ def _watcher() -> Path:
     return Path(post_verified.__file__).with_name("hook_watch.py")
 
 
+def test_session_scan_skips_zombies(tmp_path):
+    code = (
+        "import os,sys,time\n"
+        "import importlib.util\n"
+        f"spec = importlib.util.spec_from_file_location('hook_watch', {str(_watcher())!r})\n"
+        "hook_watch = importlib.util.module_from_spec(spec)\n"
+        "spec.loader.exec_module(hook_watch)\n"
+        "child = os.fork()\n"
+        "if child == 0: os._exit(0)\n"
+        "time.sleep(0.3)\n"
+        "start = time.monotonic()\n"
+        "hook_watch._kill_session(kill_group=False)\n"
+        "print(time.monotonic() - start)\n"
+        "os.waitpid(child, 0)\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-I", "-c", code],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        start_new_session=True,
+        check=False,
+    )
+    # Linux keeps a zombie's session id, so without the skip the scan spins its full 3 s there;
+    # macOS getsid fails for zombies, so this passes there either way.
+    assert proc.returncode == 0, proc.stderr
+    assert float(proc.stdout) < 1.5
+
+
 def _spawn_hook(hook_code: str, seconds: int = 30) -> subprocess.Popen:
     return subprocess.Popen(
         [
