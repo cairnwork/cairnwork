@@ -61,6 +61,28 @@ def _shown(path: Path) -> str:
     return str(path).replace("\r", "\\r").replace("\n", "\\n")
 
 
+def _run_root_inside_candidate(root: Path, candidate_tree: Path) -> bool:
+    """Compare filesystem identities along the resolved run-root parent chain."""
+    try:
+        candidate = os.stat(candidate_tree)
+    except (OSError, TypeError, ValueError):
+        return True
+    if not stat.S_ISDIR(candidate.st_mode):
+        return True
+    candidate_id = (candidate.st_dev, candidate.st_ino)
+    current = Path(os.path.realpath(root))
+    while True:
+        try:
+            info = os.lstat(current)
+        except OSError:
+            return True
+        if (info.st_dev, info.st_ino) == candidate_id:
+            return True
+        if current.parent == current:
+            return False
+        current = current.parent
+
+
 _SUDO = "/usr/bin/sudo"
 _ALLOW_ALL = "(version 1) (allow default)"
 
@@ -257,11 +279,10 @@ def stale_run_error(account, candidate_tree: Path) -> str | None:
             f"{shown} is not a real directory. The owner must fix it without following links: "
             f"ls -ld {shown}. If it is a symlink, unlink it only and do not remove its target."
         )
-    real_candidate = Path(os.path.realpath(candidate_tree))
-    if real_root == real_candidate or real_candidate in real_root.parents:
+    if _run_root_inside_candidate(root, candidate_tree):
         return (
-            f"run root is inside the candidate tree: {_shown(root)} is within "
-            f"{_shown(real_candidate)}; move it outside the candidate tree before starting "
+            f"run root is inside the candidate tree or the candidate tree cannot be checked: "
+            f"{_shown(root)}; move it outside the candidate tree before starting "
             "verification. Nothing in the run root was inspected or changed."
         )
     try:

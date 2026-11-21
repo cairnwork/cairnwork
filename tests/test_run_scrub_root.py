@@ -10,6 +10,11 @@ from test_run_scrub import _Account
 from cairnwork.run_scrub import stale_run_error
 
 
+@pytest.fixture(autouse=True)
+def _candidate_tree(tmp_path):
+    (tmp_path / "candidate").mkdir()
+
+
 def _run_root_with_mode(tmp_path, mode):
     root = tmp_path / "runs"
     root.mkdir()

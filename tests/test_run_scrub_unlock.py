@@ -27,6 +27,11 @@ darwin = pytest.mark.skipif(sys.platform != "darwin", reason="macOS flags and AC
 HIDDEN = "everyone deny readsecurity,delete"  # then even the owner's lstat fails
 
 
+@pytest.fixture(autouse=True)
+def _candidate_tree(tmp_path):
+    (tmp_path / "candidate").mkdir()
+
+
 def _ok(argv: list[str]) -> None:
     done = subprocess.run(argv, capture_output=True, text=True, check=False)
     assert done.returncode == 0, (argv, done.stderr)

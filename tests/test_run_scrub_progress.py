@@ -31,6 +31,11 @@ darwin = pytest.mark.skipif(sys.platform != "darwin", reason="macOS flags and AC
 SMALL = (16, 45)  # entries, seconds: a budget the trees below outgrow
 
 
+@pytest.fixture(autouse=True)
+def _candidate_tree(tmp_path):
+    (tmp_path / "candidate").mkdir()
+
+
 @pytest.fixture
 def runs(tmp_path):
     root = tmp_path / "runs"

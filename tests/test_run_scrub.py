@@ -19,6 +19,11 @@ from cairnwork.verifier_account import VerifierAccount, VerifierAccountError
 from cairnwork.verify_context import VerifyContext
 
 
+@pytest.fixture(autouse=True)
+def _candidate_tree(tmp_path):
+    (tmp_path / "candidate").mkdir()
+
+
 class _Checkout:
     def __init__(self, root, name="id-v0"):
         self.name = name
