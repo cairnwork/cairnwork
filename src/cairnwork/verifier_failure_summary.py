@@ -12,9 +12,11 @@ import re
 from pathlib import Path
 
 from cairnwork.gitcmd import GitCommandError, run_git
+from cairnwork.node_file import file_part, name_part
 from cairnwork.reasons import _DELIMITERS
 from cairnwork.textclean import replace_hidden
 
+_SEP = "::"  # between the parts of a node id (node_file splits the file off, #1272)
 MAX_TEST_BYTES = 2048  # of one test's failure text taken from the log
 MAX_LINE = 160
 MAX_NODE = 120
@@ -34,8 +36,10 @@ def _clean(value, limit: int) -> str:
 
 
 def _node(node) -> str:
-    parts = [_clean(part, MAX_NODE) for part in str(node).split("::")]
-    return "::".join(parts)[:MAX_NODE].lstrip(":")
+    node = str(node)
+    parts = [_clean(file_part(node), MAX_NODE)]
+    parts += [_clean(part, MAX_NODE) for part in name_part(node).split(_SEP) if part]
+    return _SEP.join(parts)[:MAX_NODE].lstrip(":")
 
 
 def assertion_summary(value) -> str:
@@ -51,7 +55,7 @@ def assertion_summary(value) -> str:
 
 
 def _file(node) -> str:
-    return os.path.normpath(str(node).split("::", 1)[0]).lower()
+    return os.path.normpath(file_part(str(node))).lower()
 
 
 def _append(why, extra):
@@ -75,7 +79,7 @@ def _sections(log: str) -> dict[str, list[str]]:
 
 
 def _log_detail(sections, node) -> str | None:
-    parts = str(node).split("::")[1:]
+    parts = name_part(str(node)).split(_SEP)
     block = sections.get(".".join(parts[-2:])) or sections.get(parts[-1] if parts else "")
     return "\n".join(block)[:MAX_TEST_BYTES] if block is not None else None
 
