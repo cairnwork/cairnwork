@@ -188,7 +188,7 @@ def test_owner_socket_walk_reports_categories_only(fixture_tree):
     assert isinstance(report, dict)
     _publish_walk("owner", report_text)
     if "truncated|-|-" in report:
-        pytest.skip("socket walk stopped early (time or entry cap); no category count")
+        pytest.fail("socket walk stopped early (time or entry cap); no category count")
     assert sum(count for key, count in report.items() if key.startswith("home|")) >= 1
     print(report_text)
     warnings.warn(report_text, stacklevel=2)
@@ -232,7 +232,7 @@ def test_verifier_socket_walk_reports_categories_only(account_tree):
         report = json.loads(report_text)
         _publish_walk("verifier account", report_text)
         if "truncated|-|-" in report:
-            pytest.skip("socket walk stopped early (time or entry cap); no category count")
+            pytest.fail("socket walk stopped early (time or entry cap); no category count")
         assert sum(count for key, count in report.items() if key.startswith("var-tmp|")) >= 1
         print(report_text)
         warnings.warn(report_text, stacklevel=2)

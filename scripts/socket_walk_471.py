@@ -9,6 +9,7 @@ import time
 
 SKIP = {"/proc", "/sys", "/dev"}
 MAX_ENTRIES = 5_000_000
+SUN_PATH_LIMIT = 104  # smallest sun_path (macOS); Linux allows 108
 BUDGET_SECONDS = 60  # report says `truncated` when the walk stopped early
 
 
@@ -33,7 +34,26 @@ def location(path: str) -> str:
 
 
 def _probe(path: str) -> tuple[str, str]:
-    """Return (socket type, result); the first type that connects wins, else the stream result."""
+    """Return (socket type, result); the first type that connects wins, else the stream result.
+
+    A path longer than sun_path is probed by its basename from its directory and the result is
+    prefixed `pathtoolong_`, so it is not read as an ordinary failure.
+    """
+    if len(os.fsencode(path)) >= SUN_PATH_LIMIT:
+        old = os.open(".", os.O_RDONLY)
+        try:
+            os.chdir(os.path.dirname(path))
+            kind, result = _probe_short(os.path.basename(path))
+        except OSError:
+            return "stream", "pathtoolong_other"
+        finally:
+            os.fchdir(old)
+            os.close(old)
+        return kind, f"pathtoolong_{result}"
+    return _probe_short(path)
+
+
+def _probe_short(path: str) -> tuple[str, str]:
     kinds = [("stream", socket.SOCK_STREAM), ("dgram", socket.SOCK_DGRAM)]
     if hasattr(socket, "SOCK_SEQPACKET"):
         kinds.append(("seqpacket", socket.SOCK_SEQPACKET))
@@ -71,11 +91,20 @@ def _connect(path: str, kind: int) -> str:
         probe.close()
 
 
-def collect() -> dict[str, int]:
-    """Walk visible files within fixed time and entry bounds, returning counts only."""
+def collect(top: str = "/") -> dict[str, int]:
+    """Walk visible files within fixed time and entry bounds, returning counts only.
+
+    A directory that cannot be listed is counted as `<location>|-|unlistable`, so an empty report
+    is not read as "no sockets".
+    """
     counts: dict[str, int] = {}
+
+    def unlistable(exc: OSError) -> None:
+        key = f"{location(str(exc.filename or top))}|-|unlistable"
+        counts[key] = counts.get(key, 0) + 1
+
     deadline, entries = time.monotonic() + BUDGET_SECONDS, 0
-    for root, dirs, files in os.walk("/", followlinks=False):
+    for root, dirs, files in os.walk(top, followlinks=False, onerror=unlistable):
         if time.monotonic() >= deadline:  # directories without files also count against the budget
             counts["truncated|-|-"] = 1
             return counts
