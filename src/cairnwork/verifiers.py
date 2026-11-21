@@ -81,6 +81,7 @@ from cairnwork.verifier_exec import (  # low-level run primitives, split out for
     _run_confined,
     _write_new,
 )
+from cairnwork.verifier_failure_summary import with_failure_detail
 from cairnwork.verifier_spec import (  # re-exported for existing importers
     VerifierRejected,
     VerifierSpec,
@@ -353,7 +354,7 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
     clean = not (timed_out or mutated or survivors or forged or too_big or verdict.too_big)
     passed = profile is not None and returncode == 0 and clean and ran  # ran: pytest said 0 too
     plain_failure = plain_test_failure(profile is not None, returncode, clean, verdict.outcomes)
-    why = "" if passed else why_not_passed(
+    why = "" if passed else with_failure_detail(why_not_passed(
         ran_sandboxed=profile is not None, returncode=returncode, timed_out=timed_out,
         mutated=mutated, survivors=survivors, log_too_big=too_big, tests_ran=ran,
         report_too_big=verdict.too_big, forged=forged, not_run=not_run, renamed=verdict.renamed,
@@ -361,7 +362,7 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
         data_refused=verdict.data_refused,
         denied_path=_denial(batch, verdict, checkout, run_dir, clean and not not_run),
         all_skipped=all_skipped(verdict.collected, verdict.outcomes), outcomes=verdict.outcomes,
-    )  # fmt: skip
+    ), ctx, spec, verdict, log_path)  # fmt: skip  # #1186
     digest = _record_digest(
         candidate_commit=candidate_commit,
         verifier_id=spec.verifier_id,

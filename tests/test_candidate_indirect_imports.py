@@ -68,11 +68,11 @@ def test_plain_getattr_in_a_test_file_adds_no_star(repo):
     assert "*" not in _parse_imports(b"import runpy\nrunpy.run_module('a')\n", "src/a.py")
 
 
-def test_direct_from_import_with_constant_name_is_not_starred():
+def test_importlib_import_is_starred_even_with_constant_name():
     from cairnwork.candidate_shadow import _parse_imports
 
     src = b"from importlib import import_module\nmod = import_module('helperx')\n"
-    assert "*" not in _parse_imports(src, "tests/test_h.py")
+    assert "*" in _parse_imports(src, "tests/test_h.py")
 
 
 EDITS = {

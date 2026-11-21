@@ -19,7 +19,7 @@ from typing import Any
 from .config import import_dirs, pytest_config, recursion_skips
 from .literals import Refused
 from .obligations import Scope, collect
-from .resolve import Imports, Project, module_env
+from .resolve import Imports, Project, binds_module_hook, module_env
 from .scope import import_time
 from .shadows import stdlib_shadows, walk
 from .shapes import drafts_for
@@ -126,6 +126,19 @@ def _unimported(cases: list[dict[str, Any]], scope: Scope, project: Project) -> 
     return None
 
 
+def _module_hooks(cases: list[dict[str, Any]], project: Project) -> str | None:
+    """Refusal when a project module that the drafted targets import binds a module
+    ``__getattr__`` or ``__dir__``: a lookup of a name it lacks (``from pkg import core``, or
+    pytest probing the objects in a test module) runs that module's code. Called after
+    ``_unimported``, so this also covers every project module pytest imports for the test."""
+    drafted = {case["target"]["module"] for case in cases}
+    for module in sorted(project.import_closure(drafted)):
+        tree = project.tree(module)
+        if tree is not None and binds_module_hook(tree):
+            return f"{module} binds a module-level __getattr__ or __dir__"
+    return None
+
+
 def analyze_file(test_file: Path, project_root: Path, source_roots: list[Path]) -> list[Obligation]:
     """Every obligation of one test file, with its draft cases or refusal reason."""
     rel = test_file.resolve().relative_to(project_root.resolve()).as_posix()
@@ -150,6 +163,7 @@ def analyze_file(test_file: Path, project_root: Path, source_roots: list[Path]) 
                 drafts = drafts_for(item.func, item.bindings, imports, project, env)
                 cases = [d.plain() for d in drafts]
                 refusal = _unimported(cases, scope, project)
+                refusal = refusal or _module_hooks(cases, project)
             except Refused as exc:
                 refusal = str(exc)
             except RecursionError:
