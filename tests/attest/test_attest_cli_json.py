@@ -10,6 +10,8 @@ from pathlib import Path
 import pytest
 from conftest import git
 
+import cairnwork_attest.cli as cli
+from cairnwork_attest.bundle import read_bundle
 from cairnwork_attest.cli import main
 from tests.attest.test_attest_cli import setup_cli_fixture
 
@@ -85,6 +87,47 @@ def test_verify_json_ok(tmp_path: Path, repo: Path, capsys: pytest.CaptureFixtur
     expected_sha = hashlib.sha256(raw_payload).hexdigest()
     assert len(data["statement_sha256"]) == 64
     assert data["statement_sha256"] == expected_sha
+
+
+def test_verify_json_reads_bundle_once_and_uses_same_envelope(
+    tmp_path: Path, repo: Path, capsys: pytest.CaptureFixture[str], monkeypatch
+) -> None:
+    candidate, _, pub_pem_file, bundle_file = _setup_signed_bundle(tmp_path, repo, capsys)
+    original = read_bundle(bundle_file)
+    original_raw_payload = base64.b64decode(original["payload"], validate=True)
+    original_sha = hashlib.sha256(original_raw_payload).hexdigest()
+    calls = 0
+
+    def read_then_replace(path: Path):
+        nonlocal calls
+        calls += 1
+        envelope = read_bundle(path)
+        path.write_text("{}", encoding="utf-8")
+        return envelope
+
+    monkeypatch.setattr(cli, "read_bundle", read_then_replace)
+    rc = main(
+        [
+            str(arg)
+            for arg in [
+                "verify",
+                bundle_file,
+                "--public-key",
+                pub_pem_file,
+                "--repo",
+                repo,
+                "--candidate",
+                candidate,
+                "--json",
+            ]
+        ]
+    )
+
+    assert rc == 0
+    assert calls == 1
+    data = json.loads(capsys.readouterr().out)
+    assert data["statement_sha256"] == original_sha
+    assert data["keyid"] == original["signatures"][0]["keyid"]
 
 
 def test_verify_json_candidate_mismatch(

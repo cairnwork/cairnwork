@@ -13,8 +13,8 @@ from pathlib import Path
 from typing import Any
 
 from cairnwork.textclean import replace_hidden
-from cairnwork_attest.bundle import BundleError, write_bundle
-from cairnwork_attest.bundle_facts import bundle_facts
+from cairnwork_attest.bundle import BundleError, read_bundle, write_bundle
+from cairnwork_attest.bundle_facts import bundle_facts, facts_from_envelope
 from cairnwork_attest.checkrun import add_subparser as _add_check_run
 from cairnwork_attest.checkrun import cmd_check_run
 from cairnwork_attest.dsse import sign_statement
@@ -195,6 +195,13 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         except PolicyError as exc:
             return _usage_error(f"cannot use policy: {exc}", candidate, args.json)
 
+    envelope = None
+    if args.json:
+        try:
+            envelope = read_bundle(Path(args.bundle))
+        except (BundleError, OSError):
+            envelope = None
+
     result = verify_bundle(
         Path(args.bundle),
         public_key_pem=Path(args.public_key),
@@ -203,10 +210,15 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         core_identity_pin=core_id_pin,
         expected_base=expected_base,
         policy=policy,
+        envelope=envelope,
     )
 
     if args.json:
-        facts = bundle_facts(Path(args.bundle))
+        facts = (
+            facts_from_envelope(envelope)
+            if envelope is not None
+            else bundle_facts(Path(args.bundle))
+        )
         _print_json(
             ok=result.ok,
             code="OK" if result.ok else result.code,

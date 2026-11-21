@@ -30,11 +30,16 @@ _OID = re.compile(r"^[0-9a-f]{40}$")
 
 
 def _verify_envelope_and_payload(
-    bundle_path: Path, public_key_pem: Path, public_key: Ed25519PublicKey | None = None
+    bundle_path: Path,
+    public_key_pem: Path,
+    public_key: Ed25519PublicKey | None = None,
+    *,
+    envelope: dict[str, Any] | None = None,
 ) -> tuple[bytes | None, VerifyResult | None, str]:
     """Check the signature; also return the id of the one key that was read for it."""
     try:
-        envelope = read_bundle(Path(bundle_path))
+        if envelope is None:
+            envelope = read_bundle(Path(bundle_path))
     except BundleError as exc:
         if exc.code in ("BUNDLE_MALFORMED", "DUPLICATE_KEY"):
             return None, _fail("BUNDLE_MALFORMED", str(exc)), ""
@@ -258,6 +263,7 @@ def verify_bundle(
     core_identity_pin: Mapping[str, Any] | None = None,
     expected_base: str | None = None,
     policy: Mapping[str, Any] | None = None,
+    envelope: dict[str, Any] | None = None,
 ) -> VerifyResult:
     """Verify an attestation bundle against local git objects and a trusted public key.
 
@@ -279,6 +285,7 @@ def verify_bundle(
         bundle_path, public_key_pem=public_key_pem, public_key=None, repo=repo,
         expected_candidate=expected_candidate, core_identity_pin=core_identity_pin,
         expected_base=expected_base, policy=policy,
+        envelope=envelope,
     )  # fmt: skip
 
 
@@ -292,6 +299,7 @@ def _verify_loaded(
     core_identity_pin: Mapping[str, Any] | None = None,
     expected_base: str | None = None,
     policy: Mapping[str, Any] | None = None,
+    envelope: dict[str, Any] | None = None,
 ) -> VerifyResult:
     """verify_bundle, where ``public_key`` is the key the caller loaded from ``public_key_pem``.
 
@@ -303,6 +311,7 @@ def _verify_loaded(
             bundle_path, public_key_pem=public_key_pem, repo=repo,
             expected_candidate=expected_candidate, core_identity_pin=core_identity_pin,
             expected_base=expected_base, policy=policy, public_key=public_key,
+            envelope=envelope,
         )  # fmt: skip
     except RecursionError:
         return _fail("STATEMENT_SHAPE", "a signed value is nested too deeply to check")
@@ -318,9 +327,10 @@ def _verify_bundle(
     expected_base: str | None = None,
     policy: Mapping[str, Any] | None = None,
     public_key: Ed25519PublicKey | None = None,
+    envelope: dict[str, Any] | None = None,
 ) -> VerifyResult:
     payload_bytes, err, signing_key_id = _verify_envelope_and_payload(
-        bundle_path, public_key_pem, public_key
+        bundle_path, public_key_pem, public_key, envelope=envelope
     )
     if err is not None:
         return err

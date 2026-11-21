@@ -84,5 +84,5 @@ def test_public_verify_bundle_takes_no_loaded_key():
     """Only check-run's internal path may pass a loaded key; the public API reads the file."""
     assert list(inspect.signature(verify_bundle).parameters) == [
         "bundle_path", "public_key_pem", "repo", "expected_candidate",
-        "core_identity_pin", "expected_base", "policy",
+        "core_identity_pin", "expected_base", "policy", "envelope",
     ]  # fmt: skip
