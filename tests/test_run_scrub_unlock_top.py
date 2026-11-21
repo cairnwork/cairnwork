@@ -60,10 +60,10 @@ def test_lchflags_failure_has_accurate_failure(tmp_path):
     (top / "a" / "b" / "c").mkdir(parents=True)
     preamble = f"""\
 import os, stat
-real_lstat=os.lstat
+real_lstat=os.lstat; seen=[]
 def flagged_lstat(path, *args, **kwargs):
     info=real_lstat(path, *args, **kwargs)
-    if os.fspath(path) == {str(top)!r}: info.st_flags=1
+    if os.fspath(path) == {str(top)!r} and not seen: seen.append(1); info.st_flags=1
     return info
 os.lstat=flagged_lstat
 os.lchflags=lambda *args: (_ for _ in ()).throw(PermissionError('injected lchflags failure'))
@@ -128,10 +128,11 @@ def test_top_unlock_step_failure_is_best_effort_when_access_is_true(tmp_path, st
         preamble = _preflight_preamble(
             top,
             "stat.UF_IMMUTABLE=1; stat.UF_APPEND=2",
-            "real_lstat=os.lstat",
+            "real_lstat=os.lstat; SEEN=[]",
             """def flagged(path, *a, **k):
     info = real_lstat(path, *a, **k)
-    if os.fspath(path) == TOP:
+    if os.fspath(path) == TOP and not SEEN:
+        SEEN.append(1)
         info.st_flags = 1
     return info""",
             "os.lstat=flagged",
@@ -338,6 +339,28 @@ def test_top_replaced_after_clearing_locks_is_refused(tmp_path, replaced):
         assert "is not a real directory" in result.stderr, result
     else:
         assert f"after clearing locks ({replaced})" in result.stderr, result
+    assert "limit reached" not in result.stderr
+    assert not list(top.glob(".unlock-*"))
+
+
+def test_top_with_uncleared_lock_flag_is_refused_even_when_access_is_true(tmp_path):
+    top = tmp_path / "top"
+    (top / "a" / "b" / "c").mkdir(parents=True)
+    preamble = _preflight_preamble(
+        top,
+        "stat.UF_IMMUTABLE=1; stat.UF_APPEND=2",
+        "real_lstat=os.lstat; real_access=os.access",
+        """def flagged(path, *a, **k):
+    info = real_lstat(path, *a, **k)
+    if os.fspath(path) == TOP:
+        info.st_flags = 2
+    return info""",
+        "os.lstat=flagged; os.lchflags=lambda *a: 0",
+        "os.access=lambda p,m,**k: True if os.fspath(p)==TOP else real_access(p,m,**k)",
+    )
+    result = walk_source(top, (2, 45), preamble)
+    assert result.returncode != 0, result
+    assert "not writable by the account (top lock flags remain)" in result.stderr, result
     assert "limit reached" not in result.stderr
     assert not list(top.glob(".unlock-*"))
 

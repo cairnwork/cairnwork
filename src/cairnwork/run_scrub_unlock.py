@@ -111,6 +111,8 @@ def top_info():
         )
     if not stat.S_ISDIR(info.st_mode):
         sys.exit(f"unlock: top {top!a} is not a real directory")
+    if info.st_flags & LOCKS:
+        top_failures.append("top lock flags remain")
     return info
 def opened(name, dev):
     global listed, cut
@@ -134,7 +136,7 @@ def opened(name, dev):
     return iter(names[:keep]), short, name, failed
 root = top_info()
 dev = root.st_dev
-if not os.access(top, os.W_OK | os.X_OK, follow_symlinks=False):
+if root.st_flags & LOCKS or not os.access(top, os.W_OK | os.X_OK, follow_symlinks=False):
     detail = "; ".join(top_failures)
     suffix = f" ({detail})" if detail else ""
     sys.exit(f"unlock: {top!a} is not writable by the account{suffix}; the owner must fix it")
