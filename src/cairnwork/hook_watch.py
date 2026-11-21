@@ -1,4 +1,8 @@
-"""Keep a post-verified hook in the runner's process group and stop it on runner loss."""
+"""Keep a post-verified hook in the runner's session and stop it on runner loss.
+
+Descendants that call setsid() to enter a new session are not covered. Killing the
+watchdog and runner at the same time is also not covered.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +12,46 @@ import signal
 import subprocess
 import sys
 import time
+
+
+def _kill_session(*, kill_group: bool = True) -> None:
+    """Kill processes in this session, then kill the watchdog's process group."""
+    session_id = os.getpid()
+    deadline = time.monotonic() + 3
+    listing_failed = False
+    while time.monotonic() < deadline:
+        try:
+            result = subprocess.run(
+                ["ps", "-A", "-o", "pid="],
+                capture_output=True,
+                text=True,
+                timeout=0.5,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            result = None
+        if result is None or result.returncode != 0:
+            listing_failed = True
+            time.sleep(0.05)
+            continue
+        pids: list[int] = []
+        for field in result.stdout.split():
+            try:
+                pid = int(field)
+                if pid > 0 and pid != session_id and os.getsid(pid) == session_id:
+                    pids.append(pid)
+            except (ValueError, OSError):  # gone, or another user's/session's (macOS EPERM)
+                continue
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        if not pids:
+            break
+        time.sleep(0.05)
+    if kill_group or listing_failed:
+        os.killpg(0, signal.SIGKILL)
 
 
 def main() -> int:
@@ -23,17 +67,19 @@ def main() -> int:
         while True:
             code = hook.poll()
             if code is not None:
+                # Preserve the hook's status; killing our own group would replace it with SIGKILL.
+                _kill_session(kill_group=False)
                 return code if code >= 0 else 128 + -code
             if time.monotonic() >= deadline:
-                os.killpg(0, signal.SIGKILL)
+                _kill_session()
             readable, _, _ = select.select([sys.stdin], [], [], 0.2)
             if readable and not os.read(sys.stdin.fileno(), 1):
-                os.killpg(0, signal.SIGKILL)
+                _kill_session()
     except BaseException as exc:
         try:  # the record keeps why (e.g. Exec format error) before the group goes
             os.write(2, f"hook_watch: {type(exc).__name__}: {exc}\n".encode(errors="replace"))
         finally:
-            os.killpg(0, signal.SIGKILL)
+            _kill_session()
         raise
 
 
