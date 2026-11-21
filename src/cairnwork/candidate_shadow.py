@@ -210,6 +210,8 @@ def _parse_imports(raw: bytes, path: str) -> set[str]:
                 names.add("*")  # an import function bound to another name fails closed
         elif _is_test_file(path) and _indirect_import(node, called):
             names.add("*")  # an import reached by another route fails closed for every file
+        elif _is_test_file(path) and _string_exec(node, called):
+            names.add("*")  # code run from a string can import anything: fails closed
         elif isinstance(node, ast.Call) and _call_name(node.func) in _IMPORT_CALLS:
             named = (k.value for k in node.keywords if k.arg in {"name", "modname"})
             args = (*node.args[:1], *named)
@@ -226,6 +228,38 @@ def _parse_imports(raw: bytes, path: str) -> set[str]:
 
 
 _IMPORT_ROUTES = frozenset({"runpy", "pkgutil", "resolve_name", "run_module", "run_path"})
+
+
+_EXEC_NAMES = frozenset({"exec", "eval", "compile"})
+
+
+def _exec_ref(node: ast.AST) -> bool:
+    """The builtin ``exec``/``eval``/``compile``: the bare name or ``builtins.<name>`` (a
+    ``re.compile`` style method on another object is not the builtin)."""
+    if isinstance(node, ast.Name):
+        return node.id in _EXEC_NAMES
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr in _EXEC_NAMES
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "builtins"
+    )
+
+
+def _string_exec(node: ast.AST, called: set[int]) -> bool:
+    """Running code from a string: a call whose source is not a constant free of imports, the
+    builtin taken as a value, or reached by ``getattr``. Recognise it or refuse it."""
+    if isinstance(node, ast.Call):
+        if _exec_ref(node.func):
+            first = node.args[0] if node.args else None
+            if isinstance(first, ast.Constant) and isinstance(first.value, (str, bytes)):
+                return "import" in str(first.value)
+            return True
+        if _call_name(node.func) == "getattr" and len(node.args) >= 2:
+            attr = node.args[1]
+            return isinstance(attr, ast.Constant) and attr.value in _EXEC_NAMES
+        return False
+    return _exec_ref(node) and id(node) not in called
 
 
 def _indirect_import(node: ast.AST, called: set[int]) -> bool:
