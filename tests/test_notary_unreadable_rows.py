@@ -4,6 +4,7 @@ raising, and ``bound_to`` answers False."""
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import replace
 
@@ -119,3 +120,90 @@ def test_bound_to_is_false_for_a_stored_request_that_is_not_an_object(
     _rewrite(tmp_path, "request_json", value)
     monkeypatch.setattr(notarized, "_read", lambda *_a: replace(good))
     assert notarized.bound_to("task-1", "a1", _change(repo)) is False
+
+
+# --- #1574: pin the exact byte cap of #1544 (">" not ">=", bytes not characters) -------------
+
+
+def _padded(total_bytes: int, filler: str = "x") -> str:
+    """A JSON object text of exactly ``total_bytes`` UTF-8 bytes (``filler`` is 1 or 2 bytes)."""
+    head, tail = '{"pad":"', '"}'
+    room = total_bytes - len(head) - len(tail)
+    width = len(filler.encode())
+    assert room % width == 0
+    return head + filler * (room // width) + tail
+
+
+def _parsed_sizes(monkeypatch) -> list[int]:
+    sizes: list[int] = []
+    real = json.loads
+    monkeypatch.setattr(
+        json, "loads", lambda v, *a, **k: (sizes.append(len(v.encode())), real(v, *a, **k))[1]
+    )
+    return sizes
+
+
+@pytest.mark.parametrize("column", ["request_json", "response_json", "binding_json"])
+def test_a_stored_json_of_exactly_the_cap_is_still_read(
+    repo, tmp_path, notarized, monkeypatch, column
+):
+    from cairnwork.notary_binding import MAX_STORED_JSON_BYTES
+
+    sizes = _parsed_sizes(monkeypatch)
+    _rewrite(tmp_path, column, _padded(MAX_STORED_JSON_BYTES))
+    notarized.verdict("task-1", "a1", expected_candidate=head_of(repo))
+    assert MAX_STORED_JSON_BYTES in sizes  # at the cap it is read (">" not ">=")
+
+
+@pytest.mark.parametrize("column", ["request_json", "response_json", "binding_json"])
+def test_a_stored_json_one_byte_over_the_cap_is_withheld(
+    repo, tmp_path, notarized, monkeypatch, column
+):
+    from cairnwork.notary_binding import MAX_STORED_JSON_BYTES
+
+    sizes = _parsed_sizes(monkeypatch)
+    _rewrite(tmp_path, column, _padded(MAX_STORED_JSON_BYTES + 1))
+    verdict = notarized.verdict("task-1", "a1", expected_candidate=head_of(repo))
+    assert verdict is not None and not verdict.verified
+    assert MAX_STORED_JSON_BYTES + 1 not in sizes
+
+
+@pytest.mark.parametrize("column", ["request_json", "response_json", "binding_json"])
+def test_the_cap_counts_bytes_not_characters(repo, tmp_path, notarized, monkeypatch, column):
+    from cairnwork.notary_binding import MAX_STORED_JSON_BYTES
+
+    text = _padded(MAX_STORED_JSON_BYTES + 2, "é")  # 2 bytes each: under the cap in characters
+    assert len(text) <= MAX_STORED_JSON_BYTES < len(text.encode())
+    sizes = _parsed_sizes(monkeypatch)
+    _rewrite(tmp_path, column, text)
+    verdict = notarized.verdict("task-1", "a1", expected_candidate=head_of(repo))
+    assert verdict is not None and not verdict.verified
+    assert len(text.encode()) not in sizes
+
+
+def _bound_to_sizes(repo, tmp_path, notarized, monkeypatch, text):
+    good = notarized.verdict("task-1", "a1", expected_candidate=head_of(repo))
+    assert good is not None and good.verified
+    sizes = _parsed_sizes(monkeypatch)
+    _rewrite(tmp_path, "request_json", text)
+    monkeypatch.setattr(notarized, "_read", lambda *_a: replace(good))  # reach the 2nd read
+    assert notarized.bound_to("task-1", "a1", _change(repo)) is False
+    return sizes
+
+
+def test_bound_to_reads_a_request_of_exactly_the_cap(repo, tmp_path, notarized, monkeypatch):
+    from cairnwork.notary_binding import MAX_STORED_JSON_BYTES
+
+    sizes = _bound_to_sizes(repo, tmp_path, notarized, monkeypatch, _padded(MAX_STORED_JSON_BYTES))
+    assert MAX_STORED_JSON_BYTES in sizes
+
+
+@pytest.mark.parametrize("filler,extra", [("x", 1), ("é", 2)], ids=["one-byte-over", "bytes"])
+def test_bound_to_withholds_one_byte_over_and_counts_bytes(
+    repo, tmp_path, notarized, monkeypatch, filler, extra
+):
+    from cairnwork.notary_binding import MAX_STORED_JSON_BYTES
+
+    text = _padded(MAX_STORED_JSON_BYTES + extra, filler)
+    sizes = _bound_to_sizes(repo, tmp_path, notarized, monkeypatch, text)
+    assert len(text.encode()) not in sizes
