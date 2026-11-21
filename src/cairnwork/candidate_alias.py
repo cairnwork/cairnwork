@@ -287,9 +287,49 @@ def _writes_foreign_path(target: ast.expr) -> bool:
     return _foreign_path(target)
 
 
-def _is_path_edit_statement(node: ast.AST, sys_names: set[str], text: str) -> bool:
+def _reach_names(tree: ast.Module) -> frozenset[str]:
+    """Local names bound to the search path by ``from sys import path [as x]`` (or ``*``)."""
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "sys" and node.level == 0:
+            for alias in node.names:
+                if alias.name == "path":
+                    names.add(alias.asname or "path")
+                elif alias.name == "*":
+                    names.add("path")
+    return frozenset(names)
+
+
+class _AsSysPath(ast.NodeTransformer):
+    """Read a bound search-path name as ``sys.path`` so the receiver rules judge it unchanged."""
+
+    def __init__(self, names: frozenset[str]) -> None:
+        self._names = names
+
+    def visit_Name(self, node: ast.Name) -> ast.AST:
+        if node.id not in self._names:
+            return node
+        sys_name = ast.Name(id="sys", ctx=ast.Load())
+        return ast.copy_location(ast.Attribute(value=sys_name, attr="path", ctx=node.ctx), node)
+
+
+def _imports_search_path(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.ImportFrom)
+        and node.module == "sys"
+        and node.level == 0
+        and any(alias.name in ("path", "*") for alias in node.names)
+    )
+
+
+def _is_path_edit_statement(
+    node: ast.AST, sys_names: set[str], text: str, reach: frozenset[str] = frozenset()
+) -> bool:
+    if reach:
+        node = _AsSysPath(reach).visit(copy.deepcopy(node))
+        ast.fix_missing_locations(node)
     for part in ast.walk(node):
-        if _edits_foreign_path(part):
+        if _imports_search_path(part) or _edits_foreign_path(part):
             return True
         if (
             isinstance(part, ast.Attribute)
@@ -322,6 +362,7 @@ def runtime_shadow_added(old: bytes | None, new: bytes) -> bool:
         return False
 
     new_sys = _collect_sys_names(new_tree)
+    reach = _reach_names(new_tree)
     added_items = [own for key, own in new_items if key in added_counts]
     openers = _imported_openers(new_tree)
     writers = _imported_names(
@@ -336,8 +377,12 @@ def runtime_shadow_added(old: bytes | None, new: bytes) -> bool:
         _is_write_statement(own, openers, writers, modules, fileios, flag_openers)
         for own in added_items
     )
-    added_path = any(_is_path_edit_statement(own, new_sys, ast.unparse(own)) for own in added_items)
-    new_path = any(_is_path_edit_statement(own, new_sys, ast.unparse(own)) for _, own in new_items)
+    added_path = any(
+        _is_path_edit_statement(own, new_sys, ast.unparse(own), reach) for own in added_items
+    )
+    new_path = any(
+        _is_path_edit_statement(own, new_sys, ast.unparse(own), reach) for _, own in new_items
+    )
     new_write = any(
         _is_write_statement(own, openers, writers, modules, fileios, flag_openers)
         for _, own in new_items
