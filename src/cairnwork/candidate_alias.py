@@ -238,6 +238,11 @@ _PATH_READERS = frozenset(
         "abspath", "realpath", "normpath", "normcase", "splitext", "split", "splitdrive",
         "expanduser", "expandvars", "relpath", "commonpath", "commonprefix", "samefile",
         "getsize", "getmtime", "getatime", "getctime", "sep", "pathsep", "curdir", "pardir",
+        # str and pathlib.Path reads (a request path, a file path): none can edit a list in place
+        "startswith", "endswith", "lower", "upper", "strip", "lstrip", "rstrip", "replace", "find",
+        "rfind", "format", "encode", "isdigit", "resolve", "stat", "is_file", "is_dir",
+        "read_text", "read_bytes", "as_posix", "with_suffix", "with_name", "joinpath",
+        "relative_to", "parent", "parents", "name", "suffix", "stem", "parts",
     }
 )  # fmt: skip
 

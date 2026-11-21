@@ -83,6 +83,9 @@ def test_indirect_receiver_is_refused(repo, name):
         SHADOW + "class _Req:\n    path = ''\nrequest = _Req()\nrequest.path = '/x'\n",
         SHADOW + "request_path = 1\n",
         SHADOW + "# sys.path\nx = os.path.join(d, 'a')\ny = os.path.exists(x)\n",
+        SHADOW + "# sys.path\nclass _R:\n    path = '/x'\nr = _R()\n"
+        "ok = r.path.startswith('/') and r.path.strip().lower().endswith('x')\n"
+        "from pathlib import Path\nq = Path('a')\nz = q.parent.name\n",
         SHADOW + "import os as o2\n# sys.path\nx = o2.path.join(d, 'a')\ny = o2.path.isdir(x)\n",
         SHADOW + "# sys.path\ndef _g(s):\n    return s.path.copy(), s.path.index('a')\n",
     ],
@@ -93,6 +96,7 @@ def test_indirect_receiver_is_refused(repo, name):
         "request_path_unsignalled_file",
         "write_without_path_edit",
         "os_path_readers_signalled",
+        "str_path_readers_signalled",
         "os_alias_readers_signalled",
         "path_read_methods",
     ],
