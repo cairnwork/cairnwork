@@ -14,6 +14,12 @@ from cairnwork.candidate_alias_writes import (
     _is_write_statement,
     _module_aliases,
 )
+from cairnwork.candidate_reach import (
+    _AsSysPath,
+    _imports_search_path,
+    _reach_names,
+    _reaches_namespace,
+)
 
 _BLOCK_FIELDS = ("body", "orelse", "finalbody", "handlers", "cases")
 _DEF_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
@@ -287,41 +293,6 @@ def _writes_foreign_path(target: ast.expr) -> bool:
     return _foreign_path(target)
 
 
-def _reach_names(tree: ast.Module) -> frozenset[str]:
-    """Local names bound to the search path by ``from sys import path [as x]`` (or ``*``)."""
-    names: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module == "sys" and node.level == 0:
-            for alias in node.names:
-                if alias.name == "path":
-                    names.add(alias.asname or "path")
-                elif alias.name == "*":
-                    names.add("path")
-    return frozenset(names)
-
-
-class _AsSysPath(ast.NodeTransformer):
-    """Read a bound search-path name as ``sys.path`` so the receiver rules judge it unchanged."""
-
-    def __init__(self, names: frozenset[str]) -> None:
-        self._names = names
-
-    def visit_Name(self, node: ast.Name) -> ast.AST:
-        if node.id not in self._names:
-            return node
-        sys_name = ast.Name(id="sys", ctx=ast.Load())
-        return ast.copy_location(ast.Attribute(value=sys_name, attr="path", ctx=node.ctx), node)
-
-
-def _imports_search_path(node: ast.AST) -> bool:
-    return (
-        isinstance(node, ast.ImportFrom)
-        and node.module == "sys"
-        and node.level == 0
-        and any(alias.name in ("path", "*") for alias in node.names)
-    )
-
-
 def _is_path_edit_statement(
     node: ast.AST, sys_names: set[str], text: str, reach: frozenset[str] = frozenset()
 ) -> bool:
@@ -330,6 +301,8 @@ def _is_path_edit_statement(
         ast.fix_missing_locations(node)
     for part in ast.walk(node):
         if _imports_search_path(part) or _edits_foreign_path(part):
+            return True
+        if reach and _reaches_namespace(part):
             return True
         if (
             isinstance(part, ast.Attribute)

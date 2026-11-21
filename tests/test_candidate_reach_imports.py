@@ -37,6 +37,14 @@ REFUSED = {
     "alias_next_to_other": "from sys import argv, path as p\np.insert(0, d)\n",
     "star_import": "from sys import *\npath.insert(0, d)\n",
     "alias_sort": "from sys import path as p\np.sort()\n",
+    "namespace_globals": "from sys import path as p\nglobals()['p'].insert(0, d)\n",
+    "namespace_vars": "from sys import path as p\nvars()['p'].append(d)\n",
+    "namespace_locals": "from sys import path as p\nlocals()['p'].insert(0, d)\n",
+    "namespace_dunder_dict": "import sys\nfrom sys import path as p\nsys.__dict__['x'] = 1\n",
+    "getattr_dynamic": "from sys import path as p\nn = 'ins' + 'ert'\ngetattr(p, n)(0, d)\n",
+    "getattr_other_object": (
+        "from sys import path as p\nimport os\nn = 'getcwd'\ngetattr(os, n)()\n"
+    ),
 }
 
 
@@ -51,6 +59,23 @@ def test_edit_added_next_to_an_existing_import_is_refused(repo):
     base = "x = 1\n" + SHADOW + "from sys import path as p\nprint(len(p))\n"
     with pytest.raises(CandidateRejected) as got:
         _judge(repo, {"src/a.py": base}, {"src/a.py": base + "p.insert(0, d)\n"})
+    assert got.value.code == "CANDIDATE_SYS_PATH_MUTATION"
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [
+        "globals()['p'].insert(0, d)",
+        "vars()['p'].insert(0, d)",
+        "locals()['p'].insert(0, d)",
+        "globals().get('p').insert(0, d)",
+    ],
+    ids=["globals", "vars", "locals", "globals_get"],
+)
+def test_namespace_edit_next_to_an_existing_import_is_refused(repo, edit):
+    base = "x = 1\n" + SHADOW + "from sys import path as p\nprint(len(p))\n"
+    with pytest.raises(CandidateRejected) as got:
+        _judge(repo, {"src/a.py": base}, {"src/a.py": base + edit + "\n"})
     assert got.value.code == "CANDIDATE_SYS_PATH_MUTATION"
 
 
