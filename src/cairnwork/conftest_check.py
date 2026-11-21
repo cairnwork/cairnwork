@@ -80,13 +80,18 @@ def _check_conftests(repo: Path, base: str, test_commit: str, paths: tuple[str, 
     check_test_module_plugins(repo, test_commit, paths)
     names = conftest_of(paths)
     own = _own_packages(repo, base) if names else frozenset[str]()
+    candidate = _candidate_python(repo, test_commit, paths) if names else {}
     for path in names:
         new = _parse(repo, f"{test_commit}:{path}", path, present=True)
         old = _parse(repo, f"{base}:{path}", path, present=False)
         before = [ast.dump(n) for n in old.body]
         if before != [ast.dump(n) for n in new.body[: len(before)]]:
             _refuse(path, new.body[0] if new.body else None, "changes existing top-level code")
-        table, old_table, taken = _imports(new), _imports(old), taken_names(repo, base, path, old)
+        table, old_table, taken = (
+            _imports(new),
+            _imports(old),
+            taken_names(repo, base, path, old, candidate),
+        )
         for node in new.body[len(before) :]:
             problem = _rebinds(node, table) or _problem(node, own, table)
             problem = problem or _takes(node, taken, old_table)
@@ -94,6 +99,18 @@ def _check_conftests(repo: Path, base: str, test_commit: str, paths: tuple[str, 
                 _refuse(path, node, problem)
     if paths:
         _check_reach(repo, test_commit, paths)
+
+
+def _candidate_python(repo: Path, commit: str, paths: tuple[str, ...]) -> dict[str, bytes]:
+    """The ``.py`` files the test commit adds or changes (a deleted one is not there)."""
+    out: dict[str, bytes] = {}
+    for path in paths:
+        if path.endswith(".py"):
+            try:
+                out[path] = run_git_bytes(repo, "show", f"{commit}:{path}")
+            except GitCommandError:
+                continue
+    return out
 
 
 def _check_reach(repo: Path, test_commit: str, paths: tuple[str, ...]) -> None:

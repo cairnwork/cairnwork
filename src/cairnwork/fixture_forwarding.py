@@ -188,8 +188,14 @@ def voided_modules(trees: dict[str, ast.Module]) -> set[str]:
             result |= {t for t in names.values() if t in sys.stdlib_module_names}
             if tokens - _PATCH - {"sys.modules"}:
                 result.add(_ALL)
-        if tokens & {"exec-import", "str-module"}:
-            result.add(_ALL)
+        bare = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+        if tokens & {"exec-import", "str-module"} or bare & {
+            "exec",
+            "eval",
+            "compile",
+            "__import__",
+        }:
+            result.add(_ALL)  # runs text or imports by name: the patch can sit in any file
     return result
 
 

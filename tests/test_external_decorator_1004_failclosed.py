@@ -15,7 +15,7 @@ CAND = {NESTED: "import pytest\n\n\n@pytest.fixture\ndef dep():\n    return 1\n"
 FACTORY = {"tests/factory.py": "def register(fn):\n    return fn\n"}
 
 
-def _blocked(repo, helper, extra=None, candidate=None):
+def _blocked(repo, helper, extra=None, candidate=None):  # noqa: D103
     base = {**_base(helper), **(extra or {})}
     try:
         _check(repo, candidate or CAND, path=NESTED, base_files=base)
@@ -301,3 +301,49 @@ def test_differential_against_main_rule_agrees_except_on_the_must_pass_set():
         _fn("@lru_cache", "from factory import *\nfrom functools import lru_cache"),
     }
     assert differs  # the relaxation still exists
+
+
+HELPER = _fn("@functools.lru_cache")
+PATCH = "import functools\nimport factory\nfunctools.lru_cache = factory.register\n"
+UNSEEN = {**FACTORY, "tests/other/patch.py": PATCH}  # outside the candidate dir, never imported
+NAMES = ("pydoc", "importorskip", "importlib", "runpy")
+
+
+@pytest.mark.parametrize("loader", NAMES)
+def test_a_patch_in_an_unimported_base_file_voids_the_module(repo, loader):
+    helper = _fn(
+        "@functools.lru_cache", f"import functools\n# loads tests/other/patch.py via {loader}"
+    )
+    assert _blocked(repo, helper, UNSEEN)
+
+
+def test_an_unimported_base_file_that_runs_text_voids_everything(repo):
+    loader = {"tests/other/load.py": "exec(open('tests/other/p.txt').read())\n"}
+    assert _blocked(repo, HELPER, loader)
+
+
+def test_a_bare_compile_or_import_by_name_anywhere_voids_everything():
+    for body in ("eval('1')", "compile('1', 'f', 'eval')", "__import__('x')"):
+        assert voided_modules({"o": ast.parse(body)}) == {"*"}
+    assert voided_modules({"o": ast.parse("import re\nre.compile('x')")}) == set()
+
+
+def test_a_python_file_the_candidate_adds_is_scanned(repo):
+    candidate = {**CAND, "tests/other/new_patch.py": PATCH}
+    assert _blocked(repo, HELPER, FACTORY, candidate=candidate)
+
+
+def test_more_than_max_files_turns_the_relaxation_off(repo, monkeypatch):
+    import cairnwork.conftest_names as cn
+
+    monkeypatch.setattr(cn, "MAX_FILES", 1)
+    assert cn._scan_trees(repo, {"a.py": "x", "b.py": "y"}, {}) is None
+
+
+def test_an_unparsable_base_file_turns_the_relaxation_off(repo):
+    assert _blocked(repo, HELPER, {"tests/other/broken.py": "def (:\n"})
+
+
+def test_clean_unimported_base_files_leave_the_relaxation_on(repo):
+    other = {"tests/other/util.py": "import re\nX = re.compile('a')\n"}
+    assert not _blocked(repo, HELPER, other)

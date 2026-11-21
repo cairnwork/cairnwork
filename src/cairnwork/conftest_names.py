@@ -47,7 +47,7 @@ _REQUESTS = frozenset({"usefixtures", "getfixturevalue"})
 
 
 def taken_names(
-    repo: Path, base: str, path: str, old: ast.Module
+    repo: Path, base: str, path: str, old: ast.Module, candidate: dict[str, bytes] | None = None
 ) -> tuple[frozenset[str], frozenset[str]]:
     """(names the conftest at ``path``, whose base version is ``old``, binds; fixture names the
     base requests or a conftest above binds): a new binding may take neither."""
@@ -76,7 +76,8 @@ def taken_names(
     for conftest, tree in parent_conftests:
         names |= bound(tree, extra=resolved.get(conftest)) | requested(tree)
     called = imported_callable_uses(imported, index)
-    voided = voided_modules(all_trees)
+    scan = _scan_trees(repo, listing, candidate or {})
+    voided = voided_modules({**scan, **all_trees}) if scan is not None else {"*"}
     for f, tree in imported.items():
         names |= _fixtures(
             tree, extra=resolved.get(f), called=called.get(f, set()), index=index, voided=voided
@@ -177,6 +178,25 @@ def _fixtures(
             a = node.args
             names |= {node.name} | {x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs)}
     return names
+
+
+def _scan_trees(
+    repo: Path, listing: dict[str, str], candidate: dict[str, bytes]
+) -> dict[str, ast.Module] | None:
+    """#1004: every base ``.py`` and every ``.py`` the candidate adds or changes, parsed strictly,
+    for the stdlib-patch scan (a patch may sit in a file nothing imports and be loaded by name at
+    run time). None, which turns the relaxation off, when there are more than MAX_FILES or one
+    does not parse. Not seen: a plugin outside the repository, ``.pth`` files, PYTHONSTARTUP."""
+    if len(listing) > MAX_FILES:
+        return None
+    data = dict(zip(listing, _read(repo, list(listing.values())), strict=True)) | candidate
+    trees: dict[str, ast.Module] = {}
+    for file, blob in data.items():
+        try:
+            trees[f"scan:{file}"] = ast.parse(blob)
+        except (SyntaxError, ValueError, UnicodeError, RecursionError, MemoryError):
+            return None
+    return trees
 
 
 def _listing(repo: Path, base: str) -> dict[str, str]:
