@@ -98,6 +98,23 @@ def import_dirs(test_dir: Path, root: Path) -> list[Path]:
     return found
 
 
+NORECURSE = ("*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}")
+
+
+def recursion_skips(test_dir: Path, root: Path) -> tuple[str, ...]:
+    """Directory names pytest does not collect from: its default ``norecursedirs``, or none at
+    all when a config file read above sets its own (every directory then counts)."""
+    for directory in _dirs(test_dir, root):
+        for name, kind, section in SECTIONS:
+            try:
+                options = _section(directory / name, kind, section) or {}
+            except (OSError, ValueError, configparser.Error, UnicodeDecodeError):
+                return ()  # pytest_config refuses an unreadable file
+            if "norecursedirs" in options:
+                return ()
+    return NORECURSE
+
+
 def _dirs(test_dir: Path, root: Path) -> list[Path]:
     found, directory, top = [], test_dir.resolve(), root.resolve()
     while True:

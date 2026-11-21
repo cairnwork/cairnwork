@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .config import import_dirs, pytest_config
+from .config import import_dirs, pytest_config, recursion_skips
 from .literals import Refused
 from .obligations import Scope, collect
 from .resolve import Imports, Project, module_env
@@ -86,7 +86,10 @@ def conftests_for(test_file: Path, project: Path, name: str = "conftest.py") -> 
 def _scope(test_file: Path, root: Path, project: Project, modules: list[ast.Module]) -> Scope:
     """What the configuration and every module imported around the test file decide."""
     reason, known, usefixtures = pytest_config(test_file.parent, root)
-    if stdlib_shadows([*import_dirs(test_file.parent, root), *project.roots, *base_dirs(root)]):
+    extra = base_dirs(root, recursion_skips(test_file.parent, root))
+    if extra is None:
+        reason = reason or "a directory pytest may collect from cannot be listed or is a link"
+    elif stdlib_shadows([*import_dirs(test_file.parent, root), *project.roots, *extra]):
         reason = reason or "a file on pytest's import path takes a standard-library module name"
     tests_top = test_file.resolve().parent
 

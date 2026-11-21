@@ -7,6 +7,7 @@ rebind a name of a class defined in the file. The reader keeps a module only whe
 happen.
 """
 
+import os
 import textwrap
 
 import pytest
@@ -50,6 +51,11 @@ REFUSED = [
         "import fractions\n", {"tests/fractions/__init__.pyc": ""}, id="package_with_compiled_init"
     ),
     pytest.param("import fractions\n", {"tests/fractions.pyc": ""}, id="compiled_module"),
+    pytest.param(
+        "import fractions\n",
+        {"pytest.ini": "[pytest]\nnorecursedirs = other\n", "node_modules/fractions.py": SIDE},
+        id="configured_norecursedirs_replace_the_defaults",
+    ),
     pytest.param("import fractions\n", {"fractions.py": SIDE}, id="module_in_project_root"),
     pytest.param("import fractions\n", {"src/fractions.py": SIDE}, id="module_in_source_root"),
     pytest.param(
@@ -131,6 +137,41 @@ def test_helpers_with_other_names_keep_the_draft(tmp_path):
             "venv/pyvenv.cfg": "",
             "venv/lib/fractions.py": SIDE,
             ".git/fractions.py": SIDE,
+            ".hidden/fractions.py": SIDE,
+            "build/fractions.py": SIDE,
+            "dist/fractions.py": SIDE,
+            "node_modules/fractions.py": SIDE,
+            "x.egg/fractions.py": SIDE,
+            "tests/__pycache__/fractions.cpython-312.pyc": "",
         },
     )
     assert item.protected(KINDS_NOW) and item.exact, item.reason(KINDS_NOW)
+
+
+def test_a_file_added_after_an_earlier_read_counts(tmp_path):
+    assert run(tmp_path).protected(KINDS_NOW)
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/fractions.py").write_text(SIDE)
+    item = run(tmp_path, "import fractions\n")
+    assert item.refusal is not None and not item.protected(KINDS_NOW)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root lists any directory")
+def test_a_directory_that_cannot_be_listed_refuses(tmp_path):
+    locked = tmp_path / "tests/locked"
+    locked.mkdir(parents=True)
+    locked.chmod(0)
+    try:
+        item = run(tmp_path)
+    finally:
+        locked.chmod(0o755)
+    assert item.refusal is not None and not item.protected(KINDS_NOW)
+
+
+def test_a_linked_directory_refuses(tmp_path, tmp_path_factory):
+    outside = tmp_path_factory.mktemp("outside")
+    (outside / "fractions.py").write_text(SIDE)
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests/linked").symlink_to(outside, target_is_directory=True)
+    item = run(tmp_path, "import fractions\n")
+    assert item.refusal is not None and not item.protected(KINDS_NOW)
