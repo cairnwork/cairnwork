@@ -122,6 +122,48 @@ def test_base_roots_allow_only_names_from_trusted_tree():
     assert recognised_test_imports(__import__("ast").parse("import pkg\n"), roots) == {"pkg"}
 
 
+def test_base_roots_ignore_data_only_and_stdlib_collisions():
+    import ast
+
+    from cairnwork.candidate_recognise import recognised_test_imports
+    from cairnwork.candidate_recognise_names import base_roots_from_tree
+
+    roots = base_roots_from_tree(
+        (
+            (0o100644, "blob", "0" * 40, "code/README.md"),
+            (0o100644, "blob", "0" * 40, "mylib/data/README.md"),
+            (0o100644, "blob", "0" * 40, "mylib/pkg/module.py"),
+        )
+    )
+    assert "code" not in roots
+    assert "mylib" in roots
+    assert "*" in recognised_test_imports(ast.parse("import code\n"), roots)
+    assert recognised_test_imports(ast.parse("import mylib\n"), roots) == {"mylib"}
+
+
+def test_base_top_level_python_file_cannot_shadow_stdlib_allowlist():
+    import ast
+
+    from cairnwork.candidate_recognise import recognised_test_imports
+    from cairnwork.candidate_recognise_names import base_roots_from_tree
+
+    roots = base_roots_from_tree(((0o100644, "blob", "0" * 40, "code.py"),))
+    assert "code" not in roots
+    assert "*" in recognised_test_imports(ast.parse("import code\n"), roots)
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["__loader__", "__spec__", "__self__", "__class__", "__globals__", "__dict__"],
+)
+def test_dangerous_dunder_names_star(name):
+    import ast
+
+    from cairnwork.candidate_recognise import recognised_test_imports
+
+    assert "*" in recognised_test_imports(ast.parse(f"value = {name}\n"))
+
+
 def test_candidate_names_do_not_change_base_roots(repo, monkeypatch):
     from cairnwork import candidate_shadow
 

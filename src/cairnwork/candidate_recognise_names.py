@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 TEST_MODULES = frozenset(
     """_child_python agy_receipt_lines attest candidate_helpers conftest conftest_scenarios
     core_http_server crash_driver fixture_tree fixtures g1_root_probe issue_helpers
@@ -217,14 +219,16 @@ def base_roots_from_tree(entries: tuple[tuple[int, str, str, str], ...]) -> froz
     """Collect import roots visible in a trusted tree, including common source roots."""
     roots: set[str] = set()
     for _, _, _, path in entries:
+        if not path.endswith(".py"):
+            continue
         parts = path.split("/")
         if len(parts) == 1:
-            if path.endswith(".py"):
-                roots.add(path[:-3])
+            roots.add(path[:-3])
             continue
         roots.add(parts[0])
         if parts[0] in {"src", "tests"} and len(parts) > 1:
             leaf = parts[1]
             roots.add(leaf[:-3] if leaf.endswith(".py") else leaf)
     roots.discard("")
+    roots.difference_update(sys.stdlib_module_names)
     return frozenset(roots)

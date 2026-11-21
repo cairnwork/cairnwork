@@ -20,6 +20,9 @@ ALLOWED_TOP_LEVEL = _BASE_TOP_LEVEL | TEST_MODULES
 EXEC_NAMES = frozenset(
     {"exec", "eval", "compile", "__import__", "__builtins__", "globals", "vars", "locals"}
 )
+DANGEROUS_NAMES = frozenset(
+    {"__loader__", "__spec__", "__self__", "__class__", "__globals__", "__dict__"}
+)
 DANGEROUS_ATTRS = frozenset(
     """__dict__ __globals__ f_globals f_builtins f_locals __self__ __loader__ __spec__
     __subclasses__ tb_frame gi_frame cr_frame ag_frame modules meta_path path_hooks
@@ -106,6 +109,8 @@ def _dangerous_use(
     builtins_aliases: set[str],
     os_aliases: set[str],
 ) -> bool:
+    if isinstance(node, ast.Name) and node.id in DANGEROUS_NAMES:
+        return True
     if isinstance(node, ast.Name) and node.id in EXEC_NAMES:
         return id(node) not in called
     if isinstance(node, ast.Name) and node.id == "getattr":
