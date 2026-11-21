@@ -17,7 +17,7 @@ import sys
 from .resolve import dotted
 
 SAFE_IMPORTS = {"pytest", "unittest", "_pytest"} | set(sys.stdlib_module_names)
-ID_BUILTINS = {"str", "repr"}
+ID_BUILTINS = {"repr", "str", "type"}
 CONDITION_MARKS = {"skipif", "xfail"}
 
 

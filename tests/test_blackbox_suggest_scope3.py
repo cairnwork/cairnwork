@@ -242,3 +242,29 @@ CONTROLS = [
 def test_literal_ids_and_bool_conditions_keep_the_draft(tmp_path, body, conftest):
     item = run(tmp_path, body, conftest)
     assert item.protected(KINDS_NOW) and item.exact, item.reason(KINDS_NOW)
+
+
+def _ids_type(tmp_path, before=""):
+    files = {
+        "src/pkg/__init__.py": "",
+        "src/pkg/core.py": "SCALE = 1\ndef f(x):\n    return x * SCALE\n",
+        "tests/test_t.py": "import pytest\nfrom pkg import core\nfrom pkg.core import f\n"
+        + before
+        + "@pytest.mark.parametrize('v', [1], ids=type)\ndef test_b(v):\n    pass\n"
+        + "def test_a():\n    assert f(2) == 2\n",
+    }
+    for rel, text in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(text)
+    found = analyze_file(tmp_path / "tests/test_t.py", tmp_path, default_roots(tmp_path))
+    return next(o for o in found if o.test_id.endswith("::test_a"))
+
+
+def test_ids_type_keeps_the_draft(tmp_path):
+    item = _ids_type(tmp_path)
+    assert item.protected(KINDS_NOW) and item.exact, item.reason(KINDS_NOW)
+
+
+def test_ids_type_bound_to_a_same_file_class_refuses(tmp_path):
+    item = _ids_type(tmp_path, "class type:\n    def __init__(self, v):\n        core.SCALE = 10\n")
+    assert item.refusal is not None and not item.protected(KINDS_NOW)
