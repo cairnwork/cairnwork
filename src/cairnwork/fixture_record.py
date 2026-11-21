@@ -28,7 +28,7 @@ def _safe(hook: Any) -> Any:
     def run(*args: Any, **kwargs: Any) -> None:
         try:
             hook(*args, **kwargs)
-        except Exception:  # noqa: BLE001 - a fault voids the record, never the run
+        except BaseException:  # noqa: BLE001 - checkout code may raise anything; it voids the record only
             _failed[0] = True
 
     return run
@@ -79,8 +79,18 @@ def pytest_collection_modifyitems_last(items: list[Any]) -> None:
 
 
 def _plugin_modules(config: Any) -> list[dict[str, Any]]:
-    mods = [p for p in config.pluginmanager.get_plugins() if getattr(p, "__name__", None)]
-    entries = [{"name": m.__name__, "file": getattr(m, "__file__", None)} for m in mods]
+    try:  # checkout code: any raise, even SystemExit, voids the record only
+        mods = [p for p in config.pluginmanager.get_plugins() if getattr(p, "__name__", None)]
+        raw = [(m.__name__, getattr(m, "__file__", None)) for m in mods]
+    except BaseException:  # noqa: BLE001 - must not escape into the pytest exit code
+        _failed[0] = True
+        return []
+    entries = []
+    for name, file in raw:
+        if isinstance(name, str) and (file is None or isinstance(file, str)):
+            entries.append({"name": name, "file": file})
+        else:
+            _failed[0] = True  # non-serializable or wrong-typed metadata: skip, void complete
     return sorted(entries, key=lambda e: (e["name"], e["file"] or ""))
 
 

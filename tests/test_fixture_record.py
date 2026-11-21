@@ -341,3 +341,62 @@ def test_raising_file_attribute_voids_complete_not_exit(tmp_path: Path) -> None:
     assert code == 0
     path = record_dir / "record.json"
     assert not path.exists() or read_record(record_dir)["complete"] is False
+
+
+def test_plugin_file_raising_systemexit_keeps_exit_code(tmp_path: Path) -> None:
+    conftest = (
+        "import pytest\n\n\nclass Exiting:\n    __name__ = 'exitplug'\n    armed = False\n\n"
+        "    @property\n    def __file__(self):\n        if Exiting.armed:\n"
+        "            raise SystemExit(5)\n        return '/x/exit.py'\n\n\n"
+        "def pytest_configure(config):\n"
+        "    config.pluginmanager.register(Exiting(), 'exiting')\n\n\n"
+        "@pytest.hookimpl(tryfirst=True)\ndef pytest_collection_finish(session):\n"
+        "    Exiting.armed = True\n"
+    )
+    files = {"conftest.py": conftest, "test_a.py": "def test_a(): pass\n"}
+    code, record_dir = _exit(tmp_path, files, True)
+    assert code == 0
+    assert read_record(record_dir)["complete"] is not True
+
+
+def test_non_string_plugin_metadata_is_skipped(tmp_path: Path) -> None:
+    conftest = (
+        "class Num:\n    __name__ = 'numplug'\n    __file__ = 123\n\n\n"
+        "class NumName:\n    __name__ = 7\n    __file__ = 'name.py'\n\n\n"
+        "def pytest_configure(config):\n    config.pluginmanager.register(Num(), 'num')\n"
+        "    config.pluginmanager.register(NumName(), 'numname')\n"
+    )
+    files = {"conftest.py": conftest, "test_a.py": "def test_a(): pass\n"}
+    code, record_dir = _exit(tmp_path, files, True)
+    assert code == 0
+    record = read_record(record_dir)
+    assert record["complete"] is not True
+    modules = record["plugin_modules"]
+    assert all(isinstance(m["name"], str) for m in modules)
+    assert all(m["file"] is None or isinstance(m["file"], str) for m in modules)
+    assert not any(m["name"] in ("numplug", 7) or m["file"] == 123 for m in modules)
+
+
+def test_conftest_plugin_entry_has_exact_name_and_file(tmp_path: Path) -> None:
+    files = {"conftest.py": "X = 1\n", "test_a.py": "def test_a(): pass\n"}
+    code, record = _record_for(tmp_path, files)
+    assert code == 0
+    entries = [m for m in record["plugin_modules"] if m["name"] == "conftest"]
+    assert len(entries) == 1
+    assert set(entries[0]) == {"name", "file"}
+    assert Path(entries[0]["file"]).resolve() == (tmp_path / "conftest.py").resolve()
+
+
+def test_item_fixturenames_raising_systemexit_keeps_exit_code(tmp_path: Path) -> None:
+    conftest = (
+        "import pytest\n\n\nclass Bad(pytest.Item):\n    @property\n    def fixturenames(self):\n"
+        "        raise SystemExit(5)\n\n    def runtest(self):\n        pass\n\n\n"
+        "def pytest_collect_file(file_path, parent):\n"
+        "    if file_path.name == 'odd.txt':\n        return Bad.from_parent(parent, name='bad')\n"
+    )
+    files = {"conftest.py": conftest, "odd.txt": "x", "test_a.py": "def test_a(): pass\n"}
+    code, record_dir = _exit(tmp_path, files, True)
+    assert code == 0
+    assert (
+        not (record_dir / "record.json").exists() or read_record(record_dir)["complete"] is not True
+    )
