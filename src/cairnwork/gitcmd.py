@@ -204,9 +204,8 @@ def _no_external_diff(args: tuple[str, ...]) -> tuple[str, ...]:
     """Keep diff.external and diff.<x>.textconv from running; the internal diff output stays."""
     if _subcommand(args) != "diff":
         return args
-    i = args.index("diff") + 1
-    opts = args[: args.index("--")] if "--" in args else args  # a path after -- is not an option
-    return (*args[:i], *(f for f in ("--no-ext-diff", "--no-textconv") if f not in opts), *args[i:])
+    i = args.index("diff") + 1  # always insert: an option value or path can look like the flag
+    return (*args[:i], "--no-ext-diff", "--no-textconv", *args[i:])
 
 
 class GitCommandError(Exception):

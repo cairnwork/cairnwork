@@ -230,9 +230,22 @@ def test_diff_textconv_is_disabled_without_call_site_option(tmp_path: Path, extr
     assert "+two" in out
 
 
-def test_diff_keeps_one_copy_of_each_flag_already_given(tmp_path: Path) -> None:
-    args = ("diff", "--no-ext-diff", "--no-textconv", "--", "x.txt")
-    assert gitcmd._no_external_diff(args) == args
+def test_diff_flags_are_always_inserted_right_after_the_subcommand() -> None:
+    flags = ("--no-ext-diff", "--no-textconv")
+    assert gitcmd._no_external_diff(("diff", "--output", "--no-textconv", "--", "x")) == (
+        "diff",
+        *flags,
+        "--output",
+        "--no-textconv",
+        "--",
+        "x",
+    )
+    assert gitcmd._no_external_diff(("diff", "--", "--no-textconv")) == (
+        "diff",
+        *flags,
+        "--",
+        "--no-textconv",
+    )
     assert gitcmd._no_external_diff(("log", "-1")) == ("log", "-1")
 
 
@@ -256,5 +269,11 @@ def test_a_file_named_like_the_flag_after_dashdash_does_not_stop_it_being_added(
     run_git(repo, "diff", "--", "x.txt", "--no-textconv")
 
     assert not marker.exists()
-    args = ("diff", "--", "--no-textconv", "--no-ext-diff")
-    assert gitcmd._no_external_diff(args)[:3] == ("diff", "--no-ext-diff", "--no-textconv")
+
+
+def test_an_option_value_named_like_the_flag_does_not_stop_it_being_added(tmp_path: Path) -> None:
+    repo, marker = _textconv_repo(tmp_path)
+
+    run_git(repo, "diff", "--output", "--no-textconv", "--", "x.txt")
+
+    assert not marker.exists()
