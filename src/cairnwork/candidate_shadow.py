@@ -198,6 +198,8 @@ def _parse_imports(raw: bytes, path: str) -> set[str]:
     names: set[str] = set()
     called = {id(n.func) for n in ast.walk(tree) if isinstance(n, ast.Call)}
     for node in ast.walk(tree):
+        if _is_test_file(path):
+            names |= _exec_effect(node, called)  # string execution, namespaces, runner modules
         if isinstance(node, ast.Import):
             names.update(part for alias in node.names for part in alias.name.split("."))
         elif isinstance(node, ast.ImportFrom):  # relative too: from . import helper
@@ -210,8 +212,6 @@ def _parse_imports(raw: bytes, path: str) -> set[str]:
                 names.add("*")  # an import function bound to another name fails closed
         elif _is_test_file(path) and _indirect_import(node, called):
             names.add("*")  # an import reached by another route fails closed for every file
-        elif _is_test_file(path) and _string_exec(node, called):
-            names.add("*")  # code run from a string can import anything: fails closed
         elif isinstance(node, ast.Call) and _call_name(node.func) in _IMPORT_CALLS:
             named = (k.value for k in node.keywords if k.arg in {"name", "modname"})
             args = (*node.args[:1], *named)
@@ -231,6 +231,25 @@ _IMPORT_ROUTES = frozenset({"runpy", "pkgutil", "resolve_name", "run_module", "r
 
 
 _EXEC_NAMES = frozenset({"exec", "eval", "compile"})
+# Ways to reach a namespace, or the builtins, without writing the wanted name.
+_NAMESPACE_NAMES = frozenset({"builtins", "__builtins__", "vars", "globals", "locals"})
+_NAMESPACE_ATTRS = frozenset({"__dict__", "__builtins__", "__globals__", "f_globals", "f_builtins"})
+# Modules whose use runs code or reaches the builtins; any use of them in a test file is enough.
+_EXEC_MODULES = frozenset(
+    {
+        "builtins",
+        "timeit",
+        "pdb",
+        "bdb",
+        "code",
+        "codeop",
+        "cProfile",
+        "profile",
+        "trace",
+        "runpy",
+        "doctest",
+    }
+)
 
 
 def _exec_ref(node: ast.AST) -> bool:
@@ -246,20 +265,52 @@ def _exec_ref(node: ast.AST) -> bool:
     )
 
 
-def _string_exec(node: ast.AST, called: set[int]) -> bool:
-    """Running code from a string: a call whose source is not a constant free of imports, the
-    builtin taken as a value, or reached by ``getattr``. Recognise it or refuse it."""
+def _constant_source_names(source: str | bytes) -> set[str]:
+    """What a constant string passed to ``exec``/``eval``/``compile`` imports; text that does not
+    parse is not recognised and fails closed."""
+    raw = source.encode() if isinstance(source, str) else source
+    try:
+        return _parse_imports(raw, "tests/test_inline.py")
+    except (SyntaxError, ValueError):
+        pass
+    try:  # an eval source is an expression
+        ast.parse(raw, mode="eval")
+    except (SyntaxError, ValueError):
+        return {"*"}
+    return _parse_imports(b"(" + raw.strip() + b")\n", "tests/test_inline.py")
+
+
+def _exec_effect(node: ast.AST, called: set[int]) -> set[str]:
+    """What a test file's use of string execution or namespace lookup adds to its imported names:
+    a constant source adds what it imports, anything not recognised adds ``*``."""
+    if isinstance(node, (ast.Import, ast.ImportFrom)):
+        roots = [a.name.split(".")[0] for a in node.names]
+        if isinstance(node, ast.ImportFrom):
+            roots = [(node.module or "").split(".")[0], *(a.name for a in node.names)]
+        return {"*"} if any(root in _EXEC_MODULES for root in roots) else set()
     if isinstance(node, ast.Call):
         if _exec_ref(node.func):
             first = node.args[0] if node.args else None
             if isinstance(first, ast.Constant) and isinstance(first.value, (str, bytes)):
-                return "import" in str(first.value)
-            return True
+                return _constant_source_names(first.value)
+            return {"*"}
         if _call_name(node.func) == "getattr" and len(node.args) >= 2:
             attr = node.args[1]
-            return isinstance(attr, ast.Constant) and attr.value in _EXEC_NAMES
-        return False
-    return _exec_ref(node) and id(node) not in called
+            if not (isinstance(attr, ast.Constant) and isinstance(attr.value, str)):
+                return {"*"}  # a name built at run time
+            return (
+                {"*"} if attr.value in _EXEC_NAMES | _NAMESPACE_ATTRS | _NAMESPACE_NAMES else set()
+            )
+        return set()
+    if isinstance(node, ast.Name):
+        if node.id in _NAMESPACE_NAMES:
+            return {"*"}
+        return {"*"} if node.id in _EXEC_NAMES and id(node) not in called else set()
+    if isinstance(node, ast.Attribute):
+        if node.attr in _NAMESPACE_ATTRS:
+            return {"*"}
+        return {"*"} if _exec_ref(node) and id(node) not in called else set()
+    return set()
 
 
 def _indirect_import(node: ast.AST, called: set[int]) -> bool:
