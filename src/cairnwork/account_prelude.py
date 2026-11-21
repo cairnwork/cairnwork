@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from pathlib import Path
 
 from cairnwork.verifier_account import AccountBusy, VerifierAccountError
 
@@ -29,7 +30,7 @@ class AccountUnusableBeforeRun(VerifierAccountError):
 
 
 @contextmanager
-def locked_prelude(account, python: str, timeout: float) -> Iterator[None]:
+def locked_prelude(account, python: str, timeout: float, candidate_tree: Path) -> Iterator[None]:
     """Hold ``account.exclusive(timeout)`` for the run in the block, after the prelude passed. Only
     the prelude's refusals become ``AccountUnusableBeforeRun``, never an error of the run."""
     with account.exclusive(timeout):
@@ -37,7 +38,7 @@ def locked_prelude(account, python: str, timeout: float) -> Iterator[None]:
             if not account.available(python):
                 raise VerifierAccountError(f"account {account.user} is not usable")
             account.require_idle()
-            account.scrub_stale_runs()  # a killed run's private/run, before this run creates one
+            account.scrub_stale_runs(candidate_tree)  # before this run creates anything
         except AccountBusy:
             raise  # busy is not "unusable": the caller's busy rule decides (#832)
         except VerifierAccountError as exc:

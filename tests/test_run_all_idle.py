@@ -16,7 +16,7 @@ class FakeAccount:
     def require_idle(self):
         self.idle_calls += 1
 
-    def scrub_stale_runs(self):
+    def scrub_stale_runs(self, candidate_tree):
         pass
 
 
@@ -105,7 +105,7 @@ class _ScrubAccount(FakeAccount):
         self.scrub_calls = 0
         self.refuse_at = refuse_at
 
-    def scrub_stale_runs(self):
+    def scrub_stale_runs(self, candidate_tree):
         self.scrub_calls += 1
         if self.scrub_calls == self.refuse_at:
             from cairnwork.verifier_account import VerifierAccountError

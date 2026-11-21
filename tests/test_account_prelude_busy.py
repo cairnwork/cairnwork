@@ -40,26 +40,26 @@ class BusyAccount:
         if self.busy_probe:
             raise AccountBusy("RESOURCE_LEASE_TIMEOUT: probe saw a busy account")
 
-    def scrub_stale_runs(self):
+    def scrub_stale_runs(self, candidate_tree):
         self.events.append("scrub")
 
 
-def _section(account):
-    with locked_prelude(account, "python3", 1):
+def _section(account, candidate_tree):
+    with locked_prelude(account, "python3", 1, candidate_tree):
         account.events.append("run")
 
 
-def test_busy_inside_the_prelude_reaches_the_caller_unchanged():
+def test_busy_inside_the_prelude_reaches_the_caller_unchanged(tmp_path):
     account: Any = BusyAccount(busy_probe=True)
     with pytest.raises(AccountBusy) as raised:
-        _section(account)
+        _section(account, tmp_path / "candidate")
     assert not isinstance(raised.value, AccountUnusableBeforeRun)
     assert account.events == ["lock", "available", "require_idle", "unlock"]  # never ran
 
 
-def test_the_busy_retry_covers_only_taking_the_lock():
+def test_the_busy_retry_covers_only_taking_the_lock(tmp_path):
     account: Any = BusyAccount(busy_locks=1)
-    busy_once_more(_section, account)
+    busy_once_more(_section, account, tmp_path / "candidate")
     assert account.events == ["busy", "lock", "available", "require_idle", "scrub", "run", "unlock"]
     assert account.events.count("available") == 1  # the prelude ran once, under one lock
 
@@ -67,5 +67,5 @@ def test_the_busy_retry_covers_only_taking_the_lock():
 def test_a_second_busy_is_an_error_not_a_third_try():
     account: Any = BusyAccount(busy_locks=2)
     with pytest.raises(AccountBusy):
-        busy_once_more(_section, account)
+        busy_once_more(_section, account, "/candidate")
     assert account.events == ["busy", "busy"]

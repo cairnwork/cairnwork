@@ -163,7 +163,7 @@ def test_unavailable_account_precheck_does_not_consume(monkeypatch, tmp_path):
         def require_idle(self):
             pass
 
-        def scrub_stale_runs(self):
+        def scrub_stale_runs(self, candidate_tree):
             pass
 
     state = tmp_path / "state"

@@ -300,11 +300,11 @@ class VerifierAccount:
         if left != 0:
             raise VerifierAccountError(f"account {self.user} still runs processes ({left})")
 
-    def scrub_stale_runs(self) -> None:
+    def scrub_stale_runs(self, candidate_tree: Path) -> None:
         """Under exclusive(), after require_idle: drop leftover private/run dirs or refuse."""
         from cairnwork.run_scrub import stale_run_error
 
-        detail = stale_run_error(self)
+        detail = stale_run_error(self, candidate_tree)
         if detail:
             raise VerifierAccountError(detail)
 
