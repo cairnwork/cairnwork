@@ -125,6 +125,32 @@ BLOCK = {
     "second_decorator_unknown": _fn("@functools.lru_cache\n@missing"),
     "walrus": _fn("@functools.lru_cache", "import functools\n(functools := factory)"),
     "twice_imported": _fn("@functools.lru_cache", "import functools\nimport factory as functools"),
+    "importlib": _fn(
+        "@functools.lru_cache",
+        "import functools\nfrom importlib import import_module\n"
+        "import_module('functools').lru_cache = factory.register",
+    ),
+    "builtins_import": _fn("@functools.lru_cache", "import functools\nfrom builtins import object"),
+    "sys_alias_modules": _fn(
+        "@functools.lru_cache",
+        "import sys as s, factory\ns.modules['functools'] = factory\nimport functools",
+    ),
+    "mock_patch_string": _fn(
+        "@functools.lru_cache",
+        "import functools\nfrom unittest import mock\n"
+        "mock.patch('functools.lru_cache', factory.register).start()",
+    ),
+    "runpy": _fn(
+        "@functools.lru_cache", "import functools, runpy\nrunpy.run_path('tests/patch.py')"
+    ),
+    "string_names_stdlib": _fn(
+        "@functools.lru_cache", "import functools\nNAME = 'functools.lru_cache'"
+    ),
+    "same_statement_alias": _fn("@f.lru_cache", "import functools as f, factory as f"),
+    "sys_alias_modules_computed": _fn(
+        "@functools.lru_cache",
+        "import functools, sys as s, factory\nk = 'a' + 'b'\ns.modules[k] = factory",
+    ),
     "call_on_call": _fn("@functools.partial(functools.lru_cache)(1)", "import functools"),
     "expr_arg": _fn("@functools.lru_cache(maxsize=1 + x)", "import functools"),
 }
@@ -195,13 +221,31 @@ def test_a_second_pytest_plugins_module_that_patches_voids_the_module(repo):
     assert "dep" in str(refused.value)
 
 
+def test_store_through_a_non_stdlib_chain_voids_every_module():
+    helper = ast.parse(
+        "import functools\n\n\n@functools.lru_cache\ndef helper(dep):\n    return dep"
+    )
+    other = ast.parse("import factory\nfactory.functools.lru_cache = factory.register")
+    voided = voided_modules({"h": helper, "o": other})
+    assert "*" in voided
+    assert _counts(ast.unparse(helper), voided=voided)
+
+
+def test_exec_capable_import_or_stdlib_string_in_any_tree_file_voids_everything():
+    assert voided_modules({"o": ast.parse("import runpy\nrunpy.run_path('p')")}) == {"*"}
+    assert "*" in voided_modules({"o": ast.parse("x = go('functools.lru_cache')")})
+    assert voided_modules({"o": ast.parse("x = go('not a module')")}) == set()
+
+
 def test_voided_modules_unit():
     patch = ast.parse("import functools\nfunctools.lru_cache = 1\n")
     plain = ast.parse("import json\n")
     assert voided_modules({"a": patch, "b": plain}) == {"functools"}
     assert voided_modules({"b": plain}) == set()
-    assert voided_modules({"a": ast.parse("import os\nsetattr(os, 'x', 1)")}) == {"os"}
-    assert voided_modules({"a": ast.parse("import os\nsetattr(os, 'x', 1)\neval('1')")}) >= {"*"}
+    assert voided_modules({"a": ast.parse("import json\nsetattr(json, 'x', 1)")}) == {"json"}
+    assert voided_modules({"a": ast.parse("import json\nsetattr(json, 'x', 1)\neval('1')")}) >= {
+        "*"
+    }
     assert _counts(PASS[0], voided={"functools"})
     assert _counts(PASS[0], voided={"*"})
 

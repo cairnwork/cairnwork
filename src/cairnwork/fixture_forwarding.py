@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import re
 import sys
 from collections.abc import Iterator
 
@@ -27,25 +28,32 @@ _DYNAMIC = _PATCH | frozenset(
     "__getattr__ __getattribute__".split()
 )
 _ALL = "*"
+_EXEC = frozenset(
+    "importlib builtins runpy code codeop pickle marshal subprocess ctypes multiprocessing "
+    "unittest mock imp pkgutil zipimport os".split()
+)
+_MODULE_STR = re.compile(r"[A-Za-z_][\w]*(\.[A-Za-z_]\w*)*")
 
 
 def _tokens(tree: ast.Module) -> set[str]:
-    """Every Name, Attribute and string constant in ``tree`` that is a dynamic-access token."""
+    """Dynamic-access evidence in ``tree``: patch or lookup names, ``.modules`` on any base, an
+    import of an exec-capable module (``_EXEC``), a string naming a stdlib module (dotted too)."""
     found: set[str] = set()
     for n in ast.walk(tree):
         if isinstance(n, ast.Name):
             found.add(n.id)
         elif isinstance(n, ast.Attribute):
-            found.add(n.attr)
-            if n.attr == "modules" and isinstance(n.value, ast.Name) and n.value.id == "sys":
-                found.add("sys.modules")
+            found.add("sys.modules" if n.attr == "modules" else n.attr)
         elif isinstance(n, ast.Constant) and isinstance(n.value, str):
             found.add(n.value)
-        elif isinstance(n, ast.ImportFrom) and n.module == "sys":
+            if _MODULE_STR.fullmatch(n.value) and n.value.split(".")[0] in sys.stdlib_module_names:
+                found.add("str-module")
+        elif isinstance(n, ast.ImportFrom | ast.Import):
+            mods = [n.module or ""] if isinstance(n, ast.ImportFrom) else []
+            mods += [a.name for a in n.names]
+            found |= {"exec-import" for m in mods if m.split(".")[0] in _EXEC}
             found |= {"sys.modules" for a in n.names if a.name == "modules"}
-        elif isinstance(n, ast.alias):
-            found.add(n.name)
-    return found & (_DYNAMIC | {"sys.modules"})
+    return found & (_DYNAMIC | {"sys.modules", "exec-import", "str-module"})
 
 
 def _imports(tree: ast.Module) -> list[tuple[str, str, ast.stmt]]:
@@ -60,8 +68,8 @@ def _imports(tree: ast.Module) -> list[tuple[str, str, ast.stmt]]:
     return out
 
 
-def _binds(tree: ast.Module, root: str, skip: ast.stmt) -> bool:
-    """Is ``root`` bound anywhere in ``tree`` (any scope, any form) other than by ``skip``?"""
+def _binds(tree: ast.Module, root: str) -> bool:
+    """Is ``root`` bound in any form but exactly one import statement alias?"""
     for n in ast.walk(tree):
         hit = (
             (isinstance(n, ast.Name) and n.id == root and not isinstance(n.ctx, ast.Load))
@@ -76,7 +84,7 @@ def _binds(tree: ast.Module, root: str, skip: ast.stmt) -> bool:
         )  # fmt: skip
         if hit:
             return True
-    return any(name == root and stmt is not skip for name, _, stmt in _imports(tree))
+    return sum(name == root for name, _, _ in _imports(tree)) != 1
 
 
 def _chain_root(node: ast.expr) -> str | None:
@@ -121,7 +129,7 @@ def _candidates(tree: ast.Module, index: dict[str, set[str]] | None, voided: set
             ok = top in sys.stdlib_module_names and top not in voided
             ok = ok and not any(k.split(".")[0] == top for k in index or ())
             ok = ok and not any(line > stmt.lineno for line in stars)
-            if ok and not _binds(tree, name, stmt):
+            if ok and not _binds(tree, name):
                 out.add(name)
     return out
 
@@ -154,7 +162,8 @@ def external_decorator(decorator: ast.expr, roots: frozenset[str]) -> bool:
 
 def voided_modules(trees: dict[str, ast.Module]) -> set[str]:
     """Stdlib modules some tree file may patch (attribute store or delete, ``setattr``,
-    ``__dict__`` or ``sys.modules``); ``*`` when the target cannot be named."""
+    ``__dict__`` or ``sys.modules``); ``*`` when the target cannot be named: a store through a
+    longer chain or a non-stdlib root, an exec-capable import, a stdlib module named by string."""
     result: set[str] = set()
     for tree in trees.values():
         names = {n: m.split(".")[0] for n, m, _ in _imports(tree)}
@@ -162,12 +171,16 @@ def voided_modules(trees: dict[str, ast.Module]) -> set[str]:
         for n in ast.walk(tree):
             if isinstance(n, ast.Attribute) and not isinstance(n.ctx, ast.Load):
                 top = names.get(_chain_root(n) or "")
-                if top:
+                if top in sys.stdlib_module_names and isinstance(n.value, ast.Name):
                     result.add(top)
+                elif isinstance(n.value, ast.Attribute):
+                    result.add(_ALL)
         if tokens & (_PATCH | {"sys.modules"}):
             result |= {t for t in names.values() if t in sys.stdlib_module_names}
             if tokens - _PATCH - {"sys.modules"}:
                 result.add(_ALL)
+        if tokens & {"exec-import", "str-module"}:
+            result.add(_ALL)
     return result
 
 
