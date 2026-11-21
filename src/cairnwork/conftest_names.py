@@ -38,6 +38,7 @@ from cairnwork.fixture_forms import (
     registered,
     resolve_source_aliases,
 )
+from cairnwork.fixture_forwarding import external_decorator
 from cairnwork.gitcmd import GitCommandError, run_git, run_git_bytes
 from cairnwork.imported_callable_uses import assignment_callables, imported_callable_uses
 
@@ -76,7 +77,7 @@ def taken_names(
         names |= bound(tree, extra=resolved.get(conftest)) | requested(tree)
     called = imported_callable_uses(imported, index)
     for f, tree in imported.items():
-        names |= _fixtures(tree, extra=resolved.get(f), called=called.get(f, set()))
+        names |= _fixtures(tree, extra=resolved.get(f), called=called.get(f, set()), index=index)
     return frozenset(bound(old, extra=resolved.get(path))), frozenset(names)
 
 
@@ -146,7 +147,10 @@ def _call_name(func: ast.expr) -> str:
 
 
 def _fixtures(
-    tree: ast.Module, extra: set[str] | None = None, called: set[str] | None = None
+    tree: ast.Module,
+    extra: set[str] | None = None,
+    called: set[str] | None = None,
+    index: dict[str, set[str]] | None = None,
 ) -> set[str]:
     """#982 item 4 r2: what an imported module's fixtures take: each fixture's name (a star
     import, ``as`` or ``pytest_plugins`` registers it under that name), what ``registered`` reads,
@@ -163,7 +167,8 @@ def _fixtures(
         marked = any(  # main's rule kept: "fixture" anywhere in a decorator, even in a string
             _fixture(d, aliases) or "fixture" in ast.unparse(d) for d in node.decorator_list
         )
-        if marked or (node.decorator_list and id(node) in top) or node.name in selectors:
+        possible_factory = any(not external_decorator(d, tree, index) for d in node.decorator_list)
+        if marked or (possible_factory and id(node) in top) or node.name in selectors:
             a = node.args
             names |= {node.name} | {x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs)}
     return names
