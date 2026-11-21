@@ -177,3 +177,39 @@ def test_a_linked_directory_refuses(tmp_path, tmp_path_factory):
     (tmp_path / "tests/linked").symlink_to(outside, target_is_directory=True)
     item = run(tmp_path, "import fractions\n")
     assert item.refusal is not None and not item.protected(KINDS_NOW)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root lists any directory")
+def test_an_unlistable_directory_pytest_skips_keeps_the_draft(tmp_path):
+    locked = tmp_path / "tests/.cache"
+    locked.mkdir(parents=True)
+    locked.chmod(0)
+    try:
+        item = run(tmp_path)
+    finally:
+        locked.chmod(0o755)
+    assert item.protected(KINDS_NOW) and item.exact, item.reason(KINDS_NOW)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads any directory")
+def test_a_directory_that_cannot_be_searched_refuses(tmp_path):
+    half = tmp_path / "tests/half"
+    half.mkdir(parents=True)
+    (half / "x.py").write_text("")
+    half.chmod(0o444)
+    try:
+        item = run(tmp_path)
+    finally:
+        half.chmod(0o755)
+    assert item.refusal is not None and not item.protected(KINDS_NOW)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root lists any directory")
+def test_an_unreadable_pythonpath_entry_refuses(tmp_path, tmp_path_factory):
+    outside = tmp_path_factory.mktemp("lib")
+    outside.chmod(0)
+    try:
+        item = run(tmp_path, extra={"pytest.ini": f"[pytest]\npythonpath = {outside}\n"})
+    finally:
+        outside.chmod(0o755)
+    assert item.refusal is not None and not item.protected(KINDS_NOW)

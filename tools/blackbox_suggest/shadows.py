@@ -19,20 +19,22 @@ STDLIB = set(sys.stdlib_module_names)
 SUFFIXES = tuple(all_suffixes())
 
 
-def stdlib_shadows(dirs: list[Path]) -> set[str]:
-    """Standard-library names that a module file or a package in dirs would be imported as."""
+def stdlib_shadows(dirs: list[Path]) -> set[str] | None:
+    """Standard-library names that a module file or a package in dirs would be imported as.
+    None when a directory cannot be read: then the reader cannot tell."""
     found: set[str] = set()
-    for directory in dirs:
-        try:
-            entries = list(directory.iterdir()) if directory.is_dir() else []
-        except OSError:
-            entries = []
-        for path in entries:
-            if path.is_file() and path.name.endswith(SUFFIXES):
-                found.add(path.name.split(".")[0])
-            elif _is_package(path):
-                found.add(path.name)
-    return found & STDLIB
+    try:
+        for directory in dirs:
+            for path in directory.iterdir() if directory.is_dir() else []:
+                if path.name.split(".")[0] not in STDLIB:
+                    continue  # only a standard-library name matters; nothing else is read
+                if path.is_file() and path.name.endswith(SUFFIXES):
+                    found.add(path.name.split(".")[0])
+                elif _is_package(path):
+                    found.add(path.name)
+    except OSError:
+        return None
+    return found
 
 
 def base_dirs(root: Path, skips: tuple[str, ...]) -> list[Path] | None:
@@ -46,6 +48,8 @@ def base_dirs(root: Path, skips: tuple[str, ...]) -> list[Path] | None:
     failed: list[OSError] = []
     for directory, subdirs, files in os.walk(root.resolve(), onerror=failed.append):
         here = Path(directory)
+        if not os.access(here, os.R_OK | os.X_OK):
+            return None
         subdirs[:] = [d for d in subdirs if not _skipped(here / d, skips)]
         if any((here / d).is_symlink() for d in subdirs):
             return None
@@ -57,9 +61,12 @@ def base_dirs(root: Path, skips: tuple[str, ...]) -> list[Path] | None:
 
 
 def _skipped(path: Path, skips: tuple[str, ...]) -> bool:
-    if path.name == "__pycache__" or (path / "pyvenv.cfg").is_file():
+    if path.name == "__pycache__" or any(fnmatchcase(path.name, p) for p in skips):
         return True
-    return any(fnmatchcase(path.name, pattern) for pattern in skips)
+    try:
+        return (path / "pyvenv.cfg").is_file()
+    except OSError:  # Python < 3.14 raises for a directory it cannot read
+        return False  # walked, so listing it fails and the reader refuses
 
 
 def _is_package(path: Path) -> bool:

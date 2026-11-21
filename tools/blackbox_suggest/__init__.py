@@ -87,9 +87,13 @@ def _scope(test_file: Path, root: Path, project: Project, modules: list[ast.Modu
     """What the configuration and every module imported around the test file decide."""
     reason, known, usefixtures = pytest_config(test_file.parent, root)
     extra = base_dirs(root, recursion_skips(test_file.parent, root))
-    if extra is None:
-        reason = reason or "a directory pytest may collect from cannot be listed or is a link"
-    elif stdlib_shadows([*import_dirs(test_file.parent, root), *project.roots, *extra]):
+    dirs = None if extra is None else [*import_dirs(test_file.parent, root), *project.roots, *extra]
+    shadows = None if dirs is None else stdlib_shadows(dirs)
+    if shadows is None:
+        reason = (
+            reason or "a directory pytest may collect or import from cannot be read or is a link"
+        )
+    elif shadows:
         reason = reason or "a file on pytest's import path takes a standard-library module name"
     tests_top = test_file.resolve().parent
 
