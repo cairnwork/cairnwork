@@ -295,6 +295,7 @@ def _walk(monkeypatch, run: Path, limits: tuple[int, int]) -> subprocess.Complet
 def test_a_flag_that_lchflags_cannot_clear_is_reported_as_failure(runs):
     """The real walker must leave an unremovable flag for the caller to refuse, not count the
     file as completed merely because lchflags was attempted."""
+    assert sys.platform == "darwin"  # chflags exists only there
     top = runs / "top"
     top.mkdir()
     locked = top / "locked"
