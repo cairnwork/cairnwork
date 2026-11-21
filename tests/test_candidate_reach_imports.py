@@ -63,6 +63,23 @@ def test_edit_added_next_to_an_existing_import_is_refused(repo):
 
 
 @pytest.mark.parametrize(
+    "edit",
+    [
+        "globals()['p'].insert(0, d)",
+        "vars()['p'].insert(0, d)",
+        "locals()['p'].insert(0, d)",
+        "globals().get('p').insert(0, d)",
+    ],
+    ids=["globals", "vars", "locals", "globals_get"],
+)
+def test_namespace_edit_next_to_an_existing_import_is_refused(repo, edit):
+    base = "x = 1\n" + SHADOW + "from sys import path as p\nprint(len(p))\n"
+    with pytest.raises(CandidateRejected) as got:
+        _judge(repo, {"src/a.py": base}, {"src/a.py": base + edit + "\n"})
+    assert got.value.code == "CANDIDATE_SYS_PATH_MUTATION"
+
+
+@pytest.mark.parametrize(
     "source",
     [
         "from sys import argv, exit\nn = len(argv)\n",
