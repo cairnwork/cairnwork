@@ -140,3 +140,91 @@ def test_account_run_fails_with_the_unreachable_mask(account_tree, monkeypatch):
     failed = _account_run(base, ["/bin/true"], policy.text)
     assert failed.returncode != 0
     assert b"docker.sock" in failed.stderr, failed.stderr.decode(errors="replace")
+
+
+def _socket_report(base: Path, owner: bool) -> str:
+    """Run the measurement script with the fixture home and script readable."""
+    script = Path(__file__).parents[1] / "scripts" / "socket_walk_471.py"
+    policy = bwrap.BACKEND.policy((script,), (), home=base / "home", mask_home_credentials=owner)
+    policy_path = base / "walk-policy.txt"
+    policy_path.write_text(policy.text)
+    argv = bwrap.wrap([sys.executable, str(script)], policy_path)
+    result = subprocess.run(argv, capture_output=True, timeout=75, check=False)  # noqa: S603
+    assert result.returncode == 0, result.stderr.decode(errors="replace")
+    text = result.stdout.decode()
+    assert base.name not in text
+    return text
+
+
+def test_owner_socket_walk_reports_categories_only(fixture_tree):
+    import json
+    import socket
+    import warnings
+
+    base, _rd = fixture_tree
+    home = base / "home"
+    socket_path = home / "private-walk-token.sock"
+    listener = socket.socket(socket.AF_UNIX)
+    listener.bind(str(socket_path))
+    listener.listen()
+    try:
+        report_text = _socket_report(base, True)
+    finally:
+        listener.close()
+        socket_path.unlink(missing_ok=True)
+    report = json.loads(report_text)
+    assert isinstance(report, dict)
+    if "truncated|-|-" in report:
+        pytest.skip("socket walk stopped early (time or entry cap); no category count")
+    assert sum(count for key, count in report.items() if key.startswith("home|")) >= 1
+    print(report_text)
+    warnings.warn(report_text, stacklevel=2)
+
+
+@pytest.mark.verifier_account
+def test_verifier_socket_walk_reports_categories_only(account_tree):
+    import json
+    import socket
+    import warnings
+
+    base, _rd, _cred = account_tree
+    socket_dir = Path(tempfile.mkdtemp(prefix="cw471-", dir="/var/tmp"))
+    socket_path = socket_dir / "probe.sock"
+    listener = None
+    try:
+        listener = socket.socket(socket.AF_UNIX)
+        socket_dir.chmod(0o755)
+        listener.bind(str(socket_path))
+        socket_path.chmod(0o666)
+        listener.listen()
+        script = Path(__file__).parents[1] / "scripts" / "socket_walk_471.py"
+        policy = bwrap.BACKEND.policy(
+            (script,), (), home=base / "home", mask_home_credentials=False
+        )
+        policy_path = base / "walk-policy.txt"
+        policy_path.write_text(policy.text)
+        from cairnwork.verifier_account import VerifierAccount
+
+        account = VerifierAccount()
+        with account.exclusive(90):
+            result = subprocess.run(
+                account.wrap([sys.executable, str(script)], policy_path),
+                capture_output=True,
+                timeout=100,
+                check=False,
+                cwd=account.root,
+            )  # noqa: S603
+        assert result.returncode == 0, result.stderr.decode(errors="replace")
+        report_text = result.stdout.decode()
+        assert socket_dir.name not in report_text
+        report = json.loads(report_text)
+        if "truncated|-|-" in report:
+            pytest.skip("socket walk stopped early (time or entry cap); no category count")
+        assert sum(count for key, count in report.items() if key.startswith("var-tmp|")) >= 1
+        print(report_text)
+        warnings.warn(report_text, stacklevel=2)
+    finally:
+        if listener is not None:
+            listener.close()
+        socket_path.unlink(missing_ok=True)
+        socket_dir.rmdir()
