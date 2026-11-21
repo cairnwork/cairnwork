@@ -48,6 +48,12 @@ REFUSED = {
     "def_default": SHADOW + "def _g(s=sys, p=[sys][0].path):\n    p.insert(0, d)\n_g()\n",
     "match_target": SHADOW
     + "def _g(s):\n    match [[d]]:\n        case [s.path]:\n            pass\n_g(sys)\n",
+    "method_stored": SHADOW + "def _g(s):\n    f = s.path.insert\n    f(0, d)\n_g(sys)\n",
+    "method_partial": SHADOW
+    + "import functools\ndef _g(s):\n    functools.partial(s.path.insert, 0)(d)\n_g(sys)\n",
+    "method_map": SHADOW + "def _g(s):\n    list(map(s.path.append, [d]))\n_g(sys)\n",
+    "method_decorator": SHADOW
+    + "def _g(s):\n    @s.path.append\n    def h():\n        pass\n_g(sys)\n",
     "attr_assign_nonname": SHADOW + "[sys][0].path = [d]\n",
 }
 
@@ -74,6 +80,8 @@ def test_indirect_receiver_is_refused(repo, name):
         "class _Req:\n    path = ''\nrequest = _Req()\nrequest.path = '/x'\n",
         SHADOW + "class _Req:\n    path = ''\nrequest = _Req()\nrequest.path = '/x'\n",
         SHADOW + "request_path = 1\n",
+        "import os as o2\n# sys.path\nclass _R:\n    pass\nx = o2.path.join('a')\n",
+        SHADOW + "import os as o2\n# sys.path\nx = o2.path.join(d, 'a')\n",
         SHADOW + "# sys.path\ndef _g(s):\n    return s.path.copy(), s.path.index('a')\n",
     ],
     ids=[
@@ -82,6 +90,8 @@ def test_indirect_receiver_is_refused(repo, name):
         "request_path_no_write",
         "request_path_unsignalled_file",
         "write_without_path_edit",
+        "os_alias_unsignalled",
+        "os_alias_signalled_write",
         "path_read_methods",
     ],
 )
