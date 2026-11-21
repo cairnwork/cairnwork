@@ -310,6 +310,38 @@ def test_top_access_and_chmod_are_no_follow(tmp_path):
     assert result.returncode == 1 and "limit reached" in result.stderr, result
 
 
+@pytest.mark.parametrize("replaced", ["PermissionError", "FileNotFoundError", "symlink", "file"])
+def test_top_replaced_after_clearing_locks_is_refused(tmp_path, replaced):
+    top = tmp_path / "top"
+    (top / "a" / "b" / "c").mkdir(parents=True)
+    (tmp_path / "plain").write_text("x")
+    (tmp_path / "link").symlink_to(top, target_is_directory=True)
+    preamble = _preflight_preamble(
+        top,
+        f"REPLACED={replaced!r}; OTHER={str(tmp_path)!r}; DONE=[]",
+        "real_chmod=os.chmod; real_lstat=os.lstat",
+        """def marking_chmod(path, mode, **kwargs):
+    if os.fspath(path) == TOP:
+        DONE.append(1)
+    return real_chmod(path, mode, **kwargs)""",
+        """def replaced_lstat(path, *a, **k):
+    if os.fspath(path) != TOP or not DONE:
+        return real_lstat(path, *a, **k)
+    if REPLACED in ("symlink", "file"):
+        return real_lstat(os.path.join(OTHER, "link" if REPLACED == "symlink" else "plain"))
+    raise __import__("builtins").__dict__[REPLACED]()""",
+        "os.chmod=marking_chmod; os.lstat=replaced_lstat",
+    )
+    result = walk_source(top, (2, 45), preamble)
+    assert result.returncode != 0, result
+    if replaced in ("symlink", "file"):
+        assert "is not a real directory" in result.stderr, result
+    else:
+        assert f"after clearing locks ({replaced})" in result.stderr, result
+    assert "limit reached" not in result.stderr
+    assert not list(top.glob(".unlock-*"))
+
+
 def test_symlink_top_is_not_modified_before_refusal(tmp_path):
     target = tmp_path / "target"
     target.mkdir()

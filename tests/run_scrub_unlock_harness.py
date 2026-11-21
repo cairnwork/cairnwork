@@ -10,6 +10,8 @@ from cairnwork.run_scrub_unlock import UNLOCK_SOURCE
 
 
 def walk_source(top: Path, limits: tuple[int, int], preamble: str = "", postamble: str = ""):
+    """Run the walker; a child that crashed (any traceback) fails here, so a crash can never
+    pass as "limit reached" (Python echoes the exec line, which contains that text)."""
     compat = """\
 import ctypes, os, stat
 class FakeLib:
@@ -29,9 +31,11 @@ class Info:
 os.lstat = lambda *args, _real_lstat=real_lstat, **kwargs: Info(_real_lstat(*args, **kwargs))
 """
     code = f"{compat}\n{preamble}\nexec({UNLOCK_SOURCE!r})\n{postamble}"
-    return subprocess.run(
+    result = subprocess.run(
         [sys.executable, "-c", code, str(top), *map(str, limits)],
         capture_output=True,
         text=True,
         check=False,
     )
+    assert "Traceback" not in result.stderr, result.stderr
+    return result
