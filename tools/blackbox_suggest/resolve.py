@@ -18,6 +18,15 @@ from .literals import Refused
 MAX_HOPS = 6
 
 
+MODULE_HOOKS = {"__getattr__", "__dir__"}
+# Names that can bind a module attribute under a name the reader cannot see (#370).
+DYNAMIC = {"exec", "eval", "globals", "locals", "vars", "setattr", "delattr", "__import__"}
+DYNAMIC |= {"__builtins__", "import_module", "attrgetter", "methodcaller"}
+REFLECTIVE = {"__dict__", "__globals__", "__self__", "__setattr__", "__getattribute__", "modules"}
+REFLECTIVE |= {"f_globals", "f_locals", "f_builtins"}
+INTROSPECTION = {"builtins", "ctypes", "gc", "inspect"}  # modules refused when imported at all
+
+
 @dataclass(frozen=True)
 class Target:
     module: str  # what the test imported from: the module the runner will import
@@ -142,6 +151,57 @@ def _star_imports(tree: ast.Module, module: str, package: bool) -> list[str]:
         for node in tree.body
         if isinstance(node, ast.ImportFrom) and any(a.name == "*" for a in node.names)
     ]
+
+
+def binds_module_hook(tree: ast.Module) -> bool:
+    """Whether a module may bind ``__getattr__`` or ``__dir__`` as module attributes (#370):
+    any mention of either name outside a class or function body, a ``global`` or attribute
+    store of either, either name as a string, or anything, anywhere in the module, that can
+    bind a module attribute under a name the reader cannot see (``exec``, ``globals()``,
+    ``setattr``, ``sys.modules``, a ``__dict__`` or ``__globals__``, a store to ``__class__``,
+    an import of ``builtins``, ``ctypes``, ``gc`` or ``inspect``, a ``getattr`` with a computed
+    name). A method in a class body is not one."""
+    plain = {
+        id(node.func)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and _is_name(node.func, "getattr")
+        and len(node.args) > 1
+        and isinstance(node.args[1], ast.Constant)
+    }
+    return _mentions_hook(tree) or any(_binds(node, plain) for node in ast.walk(tree))
+
+
+def _binds(node: ast.AST, plain: set[int]) -> bool:
+    if isinstance(node, ast.Global):
+        return bool(MODULE_HOOKS & set(node.names))
+    if isinstance(node, ast.Name):
+        return node.id in DYNAMIC or (node.id == "getattr" and id(node) not in plain)
+    if isinstance(node, ast.Attribute):
+        hooks = MODULE_HOOKS | {"__class__"}
+        store = isinstance(node.ctx, ast.Store) and node.attr in hooks
+        return store or node.attr in DYNAMIC | REFLECTIVE
+    if isinstance(node, ast.alias):
+        return node.name.split(".")[0] in INTROSPECTION or node.name in DYNAMIC | REFLECTIVE
+    if isinstance(node, ast.ImportFrom):
+        return (node.module or "").split(".")[0] in INTROSPECTION
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value in MODULE_HOOKS | REFLECTIVE
+    return False
+
+
+def _mentions_hook(node: ast.AST) -> bool:
+    """A def/class name, or any name field (Name, alias, except/match targets) at module scope."""
+    scope = isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
+    for field, value in ast.iter_fields(node):
+        if scope and field == "body":
+            continue
+        for item in value if isinstance(value, list) else [value]:
+            if isinstance(item, str) and item in MODULE_HOOKS:
+                return True
+            if isinstance(item, ast.AST) and _mentions_hook(item):
+                return True
+    return False
 
 
 def _is_name(target: ast.expr, name: str) -> bool:
