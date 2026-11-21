@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import errno
+import json
 import os
 import stat
 import subprocess
@@ -11,9 +12,16 @@ from pathlib import Path
 from experimental.local_worker.canary import INSTALLED_PYROOT
 from experimental.pause.git_env import hardened_git_env
 
+SHARE_ENV = "CAIRNWORK_RELAY_WORKER_SHARES_VERIFIER_ENV"  # "1": worker sees the verifier packages
 
-def prepare_worker_layout(run_root: Path, checkout: Path) -> None:
-    """Create canary-compatible scratch, pytest runtime, and worker-writable checkout modes."""
+
+def prepare_worker_layout(
+    run_root: Path, checkout: Path, verifier_python: str | None = None
+) -> None:
+    """Create canary-compatible scratch, pytest runtime, and worker-writable checkout modes.
+
+    With ``SHARE_ENV=1`` and a ``verifier_python``, the worker venv also imports the task's own
+    dependencies (the packages Core's verifier sees), so run_test does not fail at collection."""
     gid = run_root.parent.stat().st_gid  # the runs directory's group (setgid, worker group)
     for name in ("tmp", "q"):
         path = run_root / name
@@ -35,7 +43,27 @@ def prepare_worker_layout(run_root: Path, checkout: Path) -> None:
         ],
         check=True,
     )
+    if verifier_python is not None and os.environ.get(SHARE_ENV) == "1":
+        share_verifier_packages(run_root / "venv", verifier_python)
     _regroup_tree(run_root / "venv", gid)
+
+
+def share_verifier_packages(venv: Path, verifier_python: str) -> None:
+    """Append the verifier interpreter's site-packages to the worker venv through a .pth file.
+
+    Read-only sharing by path: the worker venv keeps its own pytest first and installs nothing."""
+    code = (
+        "import json, site, sysconfig; "
+        "print(json.dumps([sysconfig.get_paths()['purelib'], *site.getsitepackages()]))"
+    )
+    out = subprocess.run(
+        [verifier_python, "-I", "-c", code], capture_output=True, text=True, check=True
+    ).stdout
+    dirs = [d for d in dict.fromkeys(json.loads(out)) if isinstance(d, str) and Path(d).is_dir()]
+    targets = sorted((venv / "lib").glob("python3*/site-packages"))
+    if not dirs or not targets:
+        raise RuntimeError("cannot share verifier packages: no site-packages found")
+    (targets[-1] / "cairnwork_verifier.pth").write_text("\n".join(dirs) + "\n", encoding="utf-8")
 
 
 def _worker_python() -> str:
