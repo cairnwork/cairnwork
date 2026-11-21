@@ -11,6 +11,7 @@ from importlib.machinery import all_suffixes
 from pathlib import Path
 
 from cairnwork.candidate_recognise import recognised_test_imports
+from cairnwork.candidate_recognise_names import base_roots_from_tree
 from cairnwork.gitcmd import GitCommandError, run_git_bytes
 
 _OID = re.compile(r"^[0-9a-f]{40}$")
@@ -23,6 +24,7 @@ def find_shadow_file(
     candidate: str,
     test_commit: str | None = None,
     changed: dict[str, str] | None = None,
+    base_commit: str | None = None,
 ) -> str | None:
     """Return the first changed nested file that can shadow an imported module.
 
@@ -35,6 +37,12 @@ def find_shadow_file(
     )
     always = {name.casefold() for name in (*sys.stdlib_module_names, *_ALWAYS_SHADOW)}
     changed = changed or {}
+    base_roots: frozenset[str] = frozenset()
+    if base_commit is not None:
+        try:
+            base_roots = base_roots_from_tree(_tree_entries(repo, base_commit))
+        except (GitCommandError, OSError, ValueError, UnicodeError):
+            base_roots = frozenset()
     imported: set[str] = set()
     importer_dirs: dict[str, set[str]] = {}
     top_importers: dict[str, set[str]] = {}
@@ -56,7 +64,7 @@ def find_shadow_file(
             try:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
-                    parsed[oid] = _parse_imports(blobs[oid], path)
+                    parsed[oid] = _parse_imports(blobs[oid], path, base_roots)
                     parsed_top[oid] = _parse_top_level_imports(blobs[oid], path)
             except (SyntaxError, ValueError, UnicodeError, MemoryError, RecursionError):
                 parsed[oid] = None
@@ -193,12 +201,12 @@ def _is_source(path: str) -> bool:
     return path.casefold().endswith(".py")
 
 
-def _parse_imports(raw: bytes, path: str) -> set[str]:
+def _parse_imports(raw: bytes, path: str, base_roots: frozenset[str] = frozenset()) -> set[str]:
     """Names one file imports; raises when it cannot be parsed (the caller treats that as None)."""
     tree = ast.parse(raw, filename=path)
     names: set[str] = set()
     if _is_test_file(path):
-        names.update(recognised_test_imports(tree))
+        names.update(recognised_test_imports(tree, base_roots))
     called = {id(n.func) for n in ast.walk(tree) if isinstance(n, ast.Call)}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):

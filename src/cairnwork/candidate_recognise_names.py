@@ -211,3 +211,20 @@ TEST_MODULES = frozenset(
     test_workspace_shown_1257 test_wrapped_dns_env test_xdist_groups trusted_checks_rules
     trusted_checks_syntax verify_helpers workflow_yaml xdist_groups""".split()
 )
+
+
+def base_roots_from_tree(entries: tuple[tuple[int, str, str, str], ...]) -> frozenset[str]:
+    """Collect import roots visible in a trusted tree, including common source roots."""
+    roots: set[str] = set()
+    for _, _, _, path in entries:
+        parts = path.split("/")
+        if len(parts) == 1:
+            if path.endswith(".py"):
+                roots.add(path[:-3])
+            continue
+        roots.add(parts[0])
+        if parts[0] in {"src", "tests"} and len(parts) > 1:
+            leaf = parts[1]
+            roots.add(leaf[:-3] if leaf.endswith(".py") else leaf)
+    roots.discard("")
+    return frozenset(roots)

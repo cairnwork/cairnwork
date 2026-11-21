@@ -104,6 +104,79 @@ def test_non_test_paths_never_star():
     assert "*" not in _parse_imports(b"import pickle\nexec(source)\n", "src/example.py")
 
 
+def test_base_roots_allow_only_names_from_trusted_tree():
+    from cairnwork.candidate_recognise import recognised_test_imports
+    from cairnwork.candidate_recognise_names import base_roots_from_tree
+
+    roots = base_roots_from_tree(
+        (
+            (0o100644, "blob", "0" * 40, "pkg/__init__.py"),
+            (0o100644, "blob", "0" * 40, "src/libname/tool.py"),
+            (0o100644, "blob", "0" * 40, "tests/helpers/util.py"),
+            (0o100644, "blob", "0" * 40, "topmod.py"),
+        )
+    )
+    assert roots == {"pkg", "topmod", "src", "tests", "libname", "helpers"}
+    new_test = __import__("ast").parse("import newly_added\n")
+    assert "*" in recognised_test_imports(new_test, roots)
+    assert recognised_test_imports(__import__("ast").parse("import pkg\n"), roots) == {"pkg"}
+
+
+def test_candidate_names_do_not_change_base_roots(repo, monkeypatch):
+    from cairnwork import candidate_shadow
+
+    base = commit_change(repo, {"pkg/__init__.py": ""})
+    candidate = commit_change(
+        repo,
+        {
+            "newpkg/__init__.py": "",
+            "tests/test_base_names.py": "import newpkg\n",
+            "pkg.py": "",
+        },
+    )
+    captured = {}
+    original = candidate_shadow._parse_imports
+
+    def capture(raw, path, base_roots=frozenset()):
+        result = original(raw, path, base_roots)
+        captured[path] = (base_roots, result)
+        return result
+
+    monkeypatch.setattr(candidate_shadow, "_parse_imports", capture)
+    candidate_shadow.find_shadow_file(repo, candidate, base_commit=base, changed={})
+    assert captured
+    roots, result = captured["tests/test_base_names.py"]
+    assert "newpkg" not in roots and "pkg" in roots
+    assert roots == candidate_shadow.base_roots_from_tree(
+        candidate_shadow._tree_entries(repo, base)
+    )
+    assert "*" in result
+
+
+def test_unreadable_base_tree_fails_closed(repo, monkeypatch):
+    from cairnwork import candidate_shadow
+
+    commit = commit_change(repo, {"tests/test_untrusted.py": "import unknown_package\n"})
+    original = candidate_shadow._tree_entries
+
+    def fail_base(path, tree):
+        if tree == "0" * 40:
+            raise OSError("unreadable")
+        return original(path, tree)
+
+    monkeypatch.setattr(candidate_shadow, "_tree_entries", fail_base)
+    parsed = {}
+
+    def capture(raw, path, base_roots=frozenset()):
+        parsed[path] = (base_roots, _parse_imports(raw, path, base_roots))
+        return parsed[path][1]
+
+    monkeypatch.setattr(candidate_shadow, "_parse_imports", capture)
+    candidate_shadow.find_shadow_file(repo, commit, base_commit="0" * 40, changed={})
+    roots, names = parsed["tests/test_untrusted.py"]
+    assert not roots and "*" in names
+
+
 def test_unrecognised_import_stars_a_nested_candidate_file(repo):
     commit_change(repo, {"tests/test_h.py": "import pickle\n"})
     base = git(repo, "rev-parse", "HEAD")

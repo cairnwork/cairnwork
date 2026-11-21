@@ -32,7 +32,7 @@ FORMATTER_ATTRS = frozenset({"get_field", "vformat", "format_field"})
 WARNING_ATTRS = frozenset({"_setoption", "_getcategory"})
 
 
-def recognised_test_imports(tree: ast.Module) -> set[str]:
+def recognised_test_imports(tree: ast.Module, base_roots: frozenset[str] = frozenset()) -> set[str]:
     """Return precise dynamic names, or a star when any test behavior is unrecognised."""
     names: set[str] = set()
     called = {id(n.func) for n in ast.walk(tree) if isinstance(n, ast.Call)}
@@ -57,7 +57,7 @@ def recognised_test_imports(tree: ast.Module) -> set[str]:
             roots = {node.module.split(".", 1)[0]} if node.module else set()
         else:
             roots = set()
-        if roots - ALLOWED_TOP_LEVEL:
+        if roots - (ALLOWED_TOP_LEVEL | base_roots):
             return {"*"}
         if (
             isinstance(node, ast.ImportFrom)
@@ -93,7 +93,7 @@ def recognised_test_imports(tree: ast.Module) -> set[str]:
         if _dangerous_use(node, called, builtins_aliases, os_aliases):
             return {"*"}
         if isinstance(node, ast.Call):
-            extra, star = _exit_effect(node, tree)
+            extra, star = _exit_effect(node, tree, base_roots)
             if star:
                 return {"*"}
             names.update(extra)
@@ -130,7 +130,9 @@ def _dangerous_use(
     return False
 
 
-def _exit_effect(node: ast.Call, tree: ast.Module) -> tuple[set[str], bool]:
+def _exit_effect(
+    node: ast.Call, tree: ast.Module, base_roots: frozenset[str]
+) -> tuple[set[str], bool]:
     name = _call_name(node.func)
     attr = node.func.attr if isinstance(node.func, ast.Attribute) else ""
     builtin_attribute = (
@@ -150,7 +152,7 @@ def _exit_effect(node: ast.Call, tree: ast.Module) -> tuple[set[str], bool]:
             nested = ast.parse(source, filename="tests/test_inline.py")
         except (SyntaxError, ValueError):
             return set(), True
-        extra = recognised_test_imports(nested)
+        extra = recognised_test_imports(nested, base_roots)
         return extra, "*" in extra
     if name == "getattr":
         return set(), False
