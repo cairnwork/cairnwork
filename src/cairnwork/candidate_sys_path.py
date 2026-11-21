@@ -161,7 +161,7 @@ def refuse_new_sys_path_mutation(
                         f"{path!r}: writes a file and edits the import path in the same change "
                         "(a shadow module can be created at run time)",
                     )
-                shadow = find_shadow_file(repo, candidate, test_commit, changed)
+                shadow = find_shadow_file(repo, candidate, test_commit, changed, base_commit=base)
                 if shadow:
                     raise CandidateRejected(
                         "CANDIDATE_SYS_PATH_MUTATION",

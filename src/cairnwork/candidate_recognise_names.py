@@ -1,0 +1,246 @@
+"""Repo-local test module names a recognised test file may import (itemised, no wildcards)."""
+
+from __future__ import annotations
+
+import sys
+
+TEST_MODULES = frozenset(
+    set(
+        """_child_python agy_receipt_lines attest candidate_helpers conftest conftest_scenarios
+    core_http_server crash_driver fixture_tree fixtures g1_root_probe issue_helpers
+    local_worker_allow_fakes local_worker_fakes namespace_site p2p_crash_driver p2p_side_stub
+    pause_fakes pra1353_base_record pra1353_c10 pra1353_consume pra1353_derive pra1353_extra
+    pra1353_gate pra1353_launch pra1353_probe pra1353_receipt pra1353_recipes pra1353_runner
+    pra1353_seal property run_root_scope second_observer_support shared_broker_report
+    socket_inventory survivor_child test_1039_1353_attacks test_1039_1353_audit
+    test_1039_1353_c10_control test_1039_1353_launch test_1039_1353_product_reach
+    test_1039_1353_recipes test_1039_1353_reflection test_1039_1353_runner test_1039_1353_static
+    test_1039_1353_variants_1468 test_1039_1353_witnesses test_1454_b2_lock_trust
+    test_1454_pr2a_source test_232_core_followups test_acceptance_casebook
+    test_acceptance_casebook_confirm test_acceptance_casebook_crash
+    test_acceptance_casebook_identity test_acceptance_casebook_origin
+    test_acceptance_casebook_origin_935 test_acceptance_casebook_real_core_refusal
+    test_acceptance_casebook_replay test_acceptance_casebook_replay_1453
+    test_acceptance_casebook_replay_binding test_acceptance_casebook_replay_env
+    test_acceptance_casebook_replay_failures test_acceptance_casebook_replay_hardening
+    test_acceptance_casebook_replay_mustblock test_acceptance_casebook_replay_out
+    test_acceptance_casebook_replay_runner test_acceptance_casebook_replay_runner_e2e
+    test_acceptance_casebook_reread test_acceptance_casebook_retain test_acceptance_casebook_rows
+    test_account_checkout
+    test_account_prelude_busy test_account_prelude_order test_account_probe_lock
+    test_account_remove_timeout test_agy_cleanup_509_1345_1360 test_agy_cwd_fence
+    test_agy_dispatch_reader test_agy_log_close test_agy_owner_sweep test_agy_receipts
+    test_agy_status_reader test_agy_streams_1345_1360 test_agy_worker test_agy_worker_account
+    test_agy_worker_kill test_allowed_path_length test_attached_deferred_guard
+    test_attached_deferred_tests test_attempt_trust test_audit_hook_exact_types_1368
+    test_available_under_lock test_base_comparison test_base_env test_base_env_fingerprint
+    test_base_fail_kind test_base_fail_kind_sandbox test_base_pythonpath_shadow test_base_seed_941
+    test_bind_import_paths test_binding_host_level test_blackbox test_blackbox_account
+    test_blackbox_attempt_marker test_blackbox_core test_blackbox_declare test_blackbox_entropy_1353
+    test_blackbox_hashseed test_blackbox_kinds test_blackbox_once_1353 test_blackbox_probe
+    test_blackbox_suggest test_blackbox_suggest_aliases test_blackbox_suggest_output
+    test_blackbox_suggest_review test_blackbox_suggest_review2 test_blackbox_suggest_review3
+    test_blackbox_suggest_scope test_blackbox_suggest_scope2 test_blackbox_verify test_blind_warn
+    test_blind_warn_classes test_blind_warn_context test_bracket_nodeid_1276 test_bwrap_482
+    test_bwrap_482_real test_bwrap_inner_links test_bwrap_link_chars_423 test_bwrap_link_real_423
+    test_bwrap_link_scan_1314 test_bwrap_mask_roots test_bwrap_private_trees test_bwrap_probe
+    test_bwrap_symlink_masks test_bwrap_two_hop_427 test_bytecode_by_content test_bytecode_hook
+    test_bytecode_hook_account test_bytecode_hook_notes test_bytecode_hook_proc_mem
+    test_bytecode_roots test_bytecode_walk_old_python test_cairnwork_protocol
+    test_candidate_account_prelude test_candidate_alias_1115 test_candidate_alias_1115_units
+    test_candidate_alias_1310 test_candidate_alias_rebind_1225 test_candidate_alias_rules_lock
+    test_candidate_cr_path test_candidate_dynamic_access_1147 test_candidate_env
+    test_candidate_env_account test_candidate_env_e2e test_candidate_env_reason
+    test_candidate_indirect_imports test_candidate_receiver_forms test_candidate_recognise
+    test_candidate_shadow_1065 test_candidate_shadow_1148 test_candidate_shadow_batch_1116
+    test_candidate_shadow_dynamic_1180 test_candidate_shadow_refusals test_candidate_sys_path_1065
+    test_candidate_syspath_1065_evidence test_case_collision_488 test_changeset test_check_size
+    test_checkout_write_parity test_child_import_guard_1397 test_child_run test_child_run_mutants
+    test_ci_macos_shard test_cli test_clone_history test_clone_templates test_collect_exposed_1413
+    test_collect_import_record test_collect_import_teeth test_collect_reader
+    test_collect_submodule_record test_collect_submodule_teeth test_commit_candidate_1394
+    test_committed_sys_path test_committed_sys_path_1198 test_committed_sys_path_git
+    test_committed_sys_path_r1 test_completion_ceiling test_confined_group_1163
+    test_confined_pipe_499 test_conftest_base_unreadable_1089 test_conftest_check_recursion
+    test_conftest_git_env test_conftest_import_e2e test_conftest_names
+    test_conftest_names_alias_source_1020 test_conftest_names_fixture_forms
+    test_conftest_names_imports test_conftest_packages_failure_1106 test_conftest_plugins_e2e
+    test_conftest_policy_false_927 test_conftest_reach test_conftest_rebind_e2e test_core_config
+    test_core_request_strength test_counterfactual_ps test_data_exec_hook test_data_exec_hook_runs
+    test_data_paths_receiver test_deep_json_readers test_deep_nesting_catches
+    test_deferred_attached_pins_1235 test_deferred_base_test_import_951 test_deferred_collection
+    test_deferred_conftest test_deferred_conftest_module test_deferred_deletes
+    test_deferred_replace_refs_1312 test_deferred_residual_971_983_1024 test_deferred_store
+    test_deferred_store_1185 test_deferred_store_bundle_create_1250 test_deferred_store_strict
+    test_deferred_store_timeout_1187 test_deferred_targets test_deferred_tests
+    test_deferred_tests_base_read test_denial_errno_sandbox test_deny_channel
+    test_deny_channel_sandbox test_deny_channel_stop test_deny_foreign_note
+    test_deny_halt_overcap_1096 test_deny_judge_denials test_deny_stream_lifetime_1085
+    test_deny_sweep_1124 test_diffcheck_detail test_dispatch_once test_dispatch_race
+    test_double_shown_1501 test_entrypoint_smoke_workflow test_env_failure test_env_failure_e2e
+    test_env_skip_uncomparable test_env_smoke test_env_smoke_git_env_1370
+    test_env_smoke_gitfail_1106 test_env_smoke_nested_include_1210 test_env_smoke_silent_1120
+    test_error_text_1328_1352_1399 test_exception_info_exact_1308 test_experimental_expiry_1249
+    test_fail_kind_guard test_fail_kind_wrapped test_fail_kind_wrapped_sandbox
+    test_failure_evidence_1105 test_failure_evidence_bounded_cost test_failure_evidence_e2e_1105
+    test_failure_evidence_wiring_1137 test_file_part_sites_1272 test_fixture_forms_1004_residual
+    test_g1_roots_1353 test_git_failure_class_1298 test_gitcmd test_gitcmd_config_hooks
+    test_gitcmd_ext_protocol_1106 test_gitcmd_filters_759 test_gitcmd_marker
+    test_gitcmd_no_lazy_fetch_489 test_gitcmd_prompt_off_759 test_gitcmd_show_signature_1126
+    test_gitcmd_transport_programs test_grant_read_fallback_1361 test_grant_read_nofollow_1361
+    test_grant_read_symlink test_hidden_deferred_tests test_hypothesis_storage
+    test_import_origin_1065 test_import_path_normalizer test_import_path_shadow
+    test_import_path_tree test_import_paths test_import_shadow test_ingress test_ingress_deadline
+    test_ingress_limits test_init_change_pins_866 test_intake test_intake_1244
+    test_intake_config_read_1576 test_intake_config_symlink_1381 test_intake_empty_verifiers
+    test_intake_request_durable test_intake_worker_account test_interrupt_account_mode
+    test_interrupt_keeps_dirs test_interrupt_keeps_verify_run test_inventory_hooks_310
+    test_issue_adopt_request test_issue_adopt_unreadable test_issue_env_failure_1177
+    test_issue_env_failure_1177_part2 test_issue_find_pr test_issue_origin test_issue_prompt_fence
+    test_issue_publish test_issue_receipt_binding test_issue_record test_issue_record_ledger
+    test_issue_relabel_order test_issue_repo_case_630 test_issue_retake_roots test_issue_runner
+    test_issue_runner_1250 test_issue_runner_blame_483 test_issue_runner_bundle_timeout_1195
+    test_issue_runner_receipt test_issue_runner_rerun test_issue_runner_stale_record
+    test_issue_settle_check_props test_issue_settle_closed test_issue_settle_crash
+    test_issue_settle_ledger test_issue_settle_recheck test_issue_task test_issue_task_block_props
+    test_issue_trust_recheck test_journal_integrity test_lineage test_lineage_foreign_refs_1266
+    test_lineage_strength test_local_relay test_local_relay_acceptance_paths
+    test_local_relay_diagnostics test_local_relay_gate_plan test_local_relay_proxy
+    test_local_relay_proxy_gate test_local_relay_runtime test_local_relay_safe_summary
+    test_local_relay_wiring test_local_worker_agent test_local_worker_agy_shim
+    test_local_worker_boundary test_local_worker_canary_evidence test_local_worker_canary_probe_rows
+    test_local_worker_capture test_local_worker_codex test_local_worker_context
+    test_local_worker_cut_limit test_local_worker_episode test_local_worker_followup
+    test_local_worker_gitquery test_local_worker_group_stop test_local_worker_guards
+    test_local_worker_ignore_rules test_local_worker_interrupt_context test_local_worker_interrupts
+    test_local_worker_paging test_local_worker_patch_count test_local_worker_paths
+    test_local_worker_precheck test_local_worker_protocol test_local_worker_query_dir
+    test_local_worker_readonly test_local_worker_reasoning_effort test_local_worker_reclaim
+    test_local_worker_reclaim_real test_local_worker_regex_budget test_local_worker_regex_cap
+    test_local_worker_resume_budget test_local_worker_review test_local_worker_run_root
+    test_local_worker_schema_rules test_local_worker_scope_record test_local_worker_search
+    test_local_worker_sweep_scope test_local_worker_tools test_local_worker_turn_record
+    test_local_worker_unreachable test_local_worker_unseen test_local_worker_untracked_allow
+    test_local_worker_untracked_allow_cli test_local_worker_untracked_allow_review
+    test_local_worker_utf8_args test_local_worker_wrapper test_local_worker_write_scope
+    test_local_worker_write_scope_links test_mask_secrets_cost_1145 test_named_nodes
+    test_namespace_open_path test_namespace_shadow test_namespace_shadow_e2e test_never_seen_1011
+    test_no_evidence_comment test_node_id_bracket_1301 test_node_ids_1036 test_node_ids_1309_review
+    test_node_ids_e2e_1036 test_node_ids_file_part_1272 test_notary test_notary_migrate
+    test_notary_older_callers test_notary_refusal_writes test_notary_row_binding_935
+    test_notary_row_binding_935_oom test_notary_unhashable_rows test_notary_unreadable_rows
+    test_notary_upgrade test_old_python_editable test_old_python_inventory test_overlay_deleted
+    test_overlay_tree test_ownership test_p2p test_p2p_base_complete test_p2p_base_may_supply_1154
+    test_p2p_base_walk_1154 test_p2p_bindings_dead_zone_1139 test_p2p_cap test_p2p_classify_limits
+    test_p2p_collect test_p2p_collect_1128 test_p2p_collect_1222 test_p2p_collect_bindings_1077
+    test_p2p_collect_issue_1153 test_p2p_collect_nested_1108 test_p2p_collect_rebind_847
+    test_p2p_dead_zone_1236 test_p2p_hidden_base_test_1127 test_p2p_inherited_allowlist_1413
+    test_p2p_inherited_closed_grammar_1413 test_p2p_inherited_encoding_files_1413
+    test_p2p_inherited_origin_1128 test_p2p_inherited_runtime_1413 test_p2p_no_targets
+    test_p2p_nodes test_p2p_plan test_p2p_probe_log test_p2p_probe_log_1329
+    test_p2p_probe_log_linear test_p2p_probe_log_nfkc_1313 test_p2p_python_files
+    test_p2p_python_files_plan test_p2p_rebind_mutants_1154 test_p2p_rebind_pins_1234
+    test_p2p_reserved_ids test_p2p_runtime_gate_1413 test_p2p_selection test_p2p_skip_targets
+    test_p2p_skipped_dir_997 test_p2p_superset test_parametrized_targets test_patterns
+    test_pause_1417_malformed test_pause_1418_r0family test_pause_1434_r0_bad_data
+    test_pause_cli_default test_pause_cli_task_parse test_pause_client test_pause_core_judge
+    test_pause_core_judge_races test_pause_digest test_pause_fail_closed_findings
+    test_pause_failures test_pause_failures_ac4 test_pause_failures_ac8 test_pause_failures_local
+    test_pause_failures_real test_pause_failures_scope test_pause_flow test_pause_flow_core_binding
+    test_pause_flow_fallback test_pause_gate_bad_output test_pause_git_config_pin test_pause_guard
+    test_pause_guard_meta test_pause_guard_metadata test_pause_off test_pause_r1_broad_failures_1405
+    test_pause_receipt test_pause_receipt_v2_rules test_pause_review_r2_exceptions
+    test_pause_review_r2_gaps test_pause_runner test_pause_schema test_pause_scope_findings
+    test_pause_secret_family test_pause_secret_family_g test_pause_secret_family_h
+    test_pause_secret_invisible_1204 test_pause_secret_nfkc_1362 test_pause_secret_scan_1204
+    test_pause_tree_metadata test_pause_window test_pause_winner test_pin_1546_pause_secret_category
+    test_pin_1566_reason_text test_pin_1578_binding_cap test_pin_guard test_pin_guard_bytecode
+    test_pin_guard_status test_pin_guard_wiring test_pipeline test_pipeline_blackbox_verify_only
+    test_pipeline_judge_strength_1273 test_pipeline_reason test_plain_result test_plain_result_card
+    test_post_verified test_post_verified_orphan_1125 test_post_verified_process
+    test_pra1353_base_record_1450 test_pra1353_base_record_1450_syspath
+    test_pra1353_trusted_hardening test_pra1353_trusted_isolation test_pra1353_trusted_symlink
+    test_pra1353_trusted_workflow test_pra1353_v4 test_prechecks test_preflight
+    test_prepend_shadow_names test_probe_retry test_proc_cwd test_proc_cwd_residuals
+    test_proc_restrict test_proc_start test_production_git_env_fixture test_protected_accept
+    test_protected_accept_attempts test_protected_accept_corpus test_protected_accept_measure
+    test_protected_accept_measure_account test_protected_paths test_protected_policy_text
+    test_protection test_protection_account test_protection_strength
+    test_protection_strict_failures_1353 test_provenance test_provenance_strength test_pycache_guard
+    test_pycache_prefix test_pycache_redirect test_pycache_redirect_spellings test_pyright_gate
+    test_pyright_trusted test_pytest_config test_pytest_config_shapes test_pytest_plugins
+    test_receipt_binding test_recovery test_recovery_account_cleanup test_recovery_leftovers
+    test_recovery_orphan_git test_recovery_roots test_recovery_sweep test_recovery_windows
+    test_recovery_withheld_env test_refusal_escape_1324 test_refusal_scan_1324
+    test_refusal_text_escape test_refused_shape_1152 test_replay test_replay_route test_replay_set
+    test_replay_set_verdict test_report_channel_close test_report_guard
+    test_report_guard_exact_types_1008 test_report_guard_exact_types_1368
+    test_report_guard_exact_types_1374 test_root_modules test_route test_route_exit_codes
+    test_run_all_idle test_run_isolation_witness test_run_leftovers_501 test_run_root_scope
+    test_run_scrub test_run_scrub_progress test_run_scrub_root test_run_scrub_units
+    test_run_scrub_unlock test_run_survivors test_run_tags_1170 test_runlock test_sandbox
+    test_sandbox_backend test_sandbox_decision_1458 test_sandbox_ipc test_sandbox_ipc_account
+    test_sealed_packages test_sealed_packages_scope test_seatbelt_env_802 test_seatbelt_profile
+    test_seatbelt_pyc test_seatbelt_sem test_seatbelt_shasum test_seatbelt_user_record
+    test_second_observer_a test_second_observer_na test_second_observer_round1
+    test_second_observer_round4 test_second_observer_unknown test_seed_record_941
+    test_session_status test_setup_denied_record test_share_walk test_shared_broker_report
+    test_skip_evidence test_skip_origins test_skipped_dependency_hint test_snapshot
+    test_socket_paths_blind test_state_location test_stderr_tail_cost_1145 test_subtest_outcomes
+    test_supersede_dispatch_race_1267 test_survivor_argv test_sweep_result test_sweep_vanished
+    test_sys_path_scan_shapes test_takeover test_takeover_1243 test_takeover_fence test_tamper_scan
+    test_tamper_scan_alias test_tamper_scan_budget test_tamper_scan_collectors
+    test_tamper_scan_lexical test_tamper_scan_lines test_tamper_scan_narrow
+    test_tamper_scan_older_scanner test_tamper_scan_plugin_fields test_tamper_scan_plugin_forms
+    test_tamper_scan_plugin_module test_tamper_scan_plugin_sandbox test_tamper_scan_plugin_wrappers
+    test_tamper_scan_pytest_strength test_tamper_scan_source test_tamper_scan_spellings
+    test_tamper_scan_verifier_parse test_target_witness test_taskpaths test_teardown_errors
+    test_test_commit_once test_test_module_plugins_1242 test_test_roots test_textclean
+    test_tmp_isolation_witness test_treecompare_symlink test_trusted_checks_app
+    test_trusted_checks_syntax test_typed_refusal_shown_1516 test_uncomparable_paths
+    test_unfence_rounds test_usefixtures_skip_493 test_verdict_parse_robust_853_479
+    test_verdict_wording test_verifier_account test_verifier_account_escape
+    test_verifier_account_lock test_verifier_account_probe test_verifier_cleanup
+    test_verifier_collection_skip test_verifier_handover test_verifier_hash_seed test_verifier_ids
+    test_verifier_lock_fairness test_verifier_select test_verifiers test_verify_base_env
+    test_verify_base_env_956 test_verify_candidate test_verify_changed_scope
+    test_verify_import_paths test_verify_interrupted test_verify_origin_config_1298
+    test_verify_receipt_e2e test_verify_run_state test_verify_single_use test_verify_test_source
+    test_verify_time_sealing test_verify_user_record test_verify_verdict
+    test_witness_require_sandbox_1488 test_worker_account_scripts test_worker_state_unknown
+    test_workflows_no_uv_cache test_workspace test_workspace_case test_workspace_cleanup
+    test_workspace_collect_config test_workspace_config test_workspace_refusal_escape
+    test_workspace_shown_1257 test_wrapped_dns_env test_xdist_groups trusted_checks_rules
+    trusted_checks_syntax verify_helpers workflow_yaml xdist_groups""".split()
+    )
+    # Built from parts so this core file never spells the experimental package name.
+    | {
+        f"test_acceptance_{tail}"
+        for tail in (
+            "outcomes",
+            "outcomes_809",
+            "outcomes_core",
+            "outcomes_identity",
+            "outcomes_order",
+        )
+    }
+)
+
+
+def base_roots_from_tree(entries: tuple[tuple[int, str, str, str], ...]) -> frozenset[str]:
+    """Collect import roots visible in a trusted tree, including common source roots."""
+    roots: set[str] = set()
+    for _, _, _, path in entries:
+        if not path.endswith(".py"):
+            continue
+        parts = path.split("/")
+        if len(parts) == 1:
+            roots.add(path[:-3])
+            continue
+        roots.add(parts[0])
+        if parts[0] in {"src", "tests"} and len(parts) > 1:
+            leaf = parts[1]
+            roots.add(leaf[:-3] if leaf.endswith(".py") else leaf)
+    roots.discard("")
+    roots.difference_update(sys.stdlib_module_names)
+    return frozenset(roots)
