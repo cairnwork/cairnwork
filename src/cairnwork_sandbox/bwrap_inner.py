@@ -84,11 +84,11 @@ def inner_link_masks(
             if real.startswith(SYSTEM_PREFIXES):
                 continue
             if not owner and not account_may_traverse(os.path.dirname(real)):
+                skipped += _covered(real, set(roots)) and not os.path.exists(real)  # #422
                 continue
-            if not _stat_ok(link):
-                if not _covered(real, set(roots)):
-                    skipped += 1
-                    continue
+            if not _stat_ok(link) and not _covered(real, set(roots)):
+                skipped += 1
+                continue
             if real.startswith(ETC) and os.path.isdir(real):
                 raise SandboxError(
                     f"credential link {link!r} points to the /etc directory {real!r}; a mask there"
