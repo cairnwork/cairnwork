@@ -4,7 +4,8 @@ Descendants that call setsid() to enter a new session are not covered. Killing t
 watchdog and runner at the same time is also not covered. On a normal hook exit the
 watchdog never kills its own group (that would replace the hook's status; the runner cleans the
 group); a descendant still forking when the 3 s scan ends, or a pid reused between listing and
-kill, can survive.
+kill, can survive. A hook that exits within its limit keeps its status; the post-exit scan is
+bounded by 0.5 s and the runner allows 1 s for it.
 """
 
 from __future__ import annotations
@@ -16,11 +17,13 @@ import subprocess
 import sys
 import time
 
+EXIT_SCAN_SECONDS = 0.5
 
-def _kill_session(*, kill_group: bool = True) -> None:
+
+def _kill_session(*, kill_group: bool = True, budget: float = 3.0) -> None:
     """Kill processes in this session, then kill the watchdog's process group."""
     session_id = os.getpid()
-    deadline = time.monotonic() + 3
+    deadline = time.monotonic() + budget
     while time.monotonic() < deadline:
         try:
             result = subprocess.run(
@@ -78,7 +81,7 @@ def main() -> int:
             code = hook.poll()
             if code is not None:
                 # Preserve the hook's status; killing our own group would replace it with SIGKILL.
-                _kill_session(kill_group=False)
+                _kill_session(kill_group=False, budget=EXIT_SCAN_SECONDS)
                 return code if code >= 0 else 128 + -code
             if time.monotonic() >= deadline:
                 _kill_session()

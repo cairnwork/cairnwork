@@ -18,6 +18,7 @@ import signal
 import stat
 import subprocess
 import sys
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,7 @@ from typing import Any
 LOG_NAME = "post-verified-hook.jsonl"
 TAIL_CHARS = 2000
 CLEANUP_SECONDS = 5  # after a timeout kill, for pipes a detached descendant still holds
+EXIT_SCAN_GRACE = 1  # hook_watch's post-exit session scan (EXIT_SCAN_SECONDS) runs inside this wait
 TOKEN_VAR = "CAIRNWORK_GITHUB_TOKEN"
 _PASSED = ("PATH", "HOME", "LANG", "LC_ALL", TOKEN_VAR)
 
@@ -121,6 +123,8 @@ def _run(argv: list[str], seconds: int, env: dict[str, str]) -> tuple[int, bytes
     layers failing together), can outlive it.
 
     Output stays bytes: _tail decodes it leniently, so no output can lose the record.
+    A hook that exits within its limit keeps its status; the post-exit scan is bounded by 0.5 s
+    and the runner allows 1 s for it.
     """
     if shutil.which(argv[0], path=env.get("PATH")) is None:
         raise FileNotFoundError(2, "No such file or directory", argv[0])
@@ -138,13 +142,15 @@ def _run(argv: list[str], seconds: int, env: dict[str, str]) -> tuple[int, bytes
     ) as proc:  # fmt: skip
         assert proc.stdin is not None  # stdin=PIPE; the dup keeps it open past communicate()
         control_fd = os.dup(proc.stdin.fileno())
+        cleanup_by: float | None = None
         try:
             try:
-                out, err = proc.communicate(timeout=seconds)
+                out, err = proc.communicate(timeout=seconds + EXIT_SCAN_GRACE)
             except subprocess.TimeoutExpired:
                 os.close(control_fd)  # EOF: the watchdog ends the session itself, then exits
                 control_fd = -1
                 try:
+                    cleanup_by = time.monotonic() + CLEANUP_SECONDS
                     out, err = proc.communicate(timeout=CLEANUP_SECONDS)
                 except subprocess.TimeoutExpired:  # a descendant in its own session holds the pipes
                     out = err = None
@@ -154,7 +160,12 @@ def _run(argv: list[str], seconds: int, env: dict[str, str]) -> tuple[int, bytes
             if control_fd >= 0:
                 os.close(control_fd)
             try:  # let the watchdog clean the session first; it is killed only as a backstop
-                proc.wait(timeout=CLEANUP_SECONDS)
+                wait_seconds = (
+                    CLEANUP_SECONDS
+                    if cleanup_by is None
+                    else max(0.0, cleanup_by - time.monotonic())
+                )
+                proc.wait(timeout=wait_seconds)
             except subprocess.TimeoutExpired:
                 pass
             _kill_group(proc)
