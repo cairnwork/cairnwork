@@ -111,6 +111,36 @@ def test_outside_run_root_is_not_refused_for_symlinks_in_candidate(
     assert stale_run_error(_Account(run_root), candidate) is None
 
 
+@pytest.mark.parametrize("kind", ["missing", "file"])
+def test_unusable_candidate_tree_is_refused(tmp_path, kind):
+    run_root = tmp_path / "runs"
+    run_root.mkdir(mode=0o700)
+    os.chmod(run_root, 0o700)
+    candidate = tmp_path / "cand"
+    if kind == "file":
+        candidate.write_text("not a directory")
+
+    message = stale_run_error(_Account(run_root), candidate)
+
+    assert message is not None
+    assert "candidate tree" in message
+
+
+def test_run_root_through_symlinked_ancestor_into_candidate_is_refused(tmp_path):
+    candidate = tmp_path / "cand"
+    candidate.mkdir(mode=0o700)
+    os.chmod(candidate, 0o700)
+    (candidate / "rr").mkdir(mode=0o700)
+    os.chmod(candidate / "rr", 0o700)
+    alias = tmp_path / "alias"
+    alias.symlink_to(candidate, target_is_directory=True)
+
+    message = stale_run_error(_Account(alias / "rr"), candidate)
+
+    assert message is not None
+    assert "run root is inside the candidate tree" in message
+
+
 def test_locked_prelude_passes_candidate_tree_to_account_scrub(tmp_path):
     class RecordingAccount:
         user = "cairnwork-verifier"
