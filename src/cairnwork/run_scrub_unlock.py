@@ -80,6 +80,7 @@ def unlock(name):
             return None
         no_acl(name)
     return info
+top_failures = []
 def top_info():
     try:
         info = os.lstat(top)
@@ -89,13 +90,19 @@ def top_info():
         sys.exit(f"unlock: could not inspect top {top!a} ({type(exc).__name__})")
     if not stat.S_ISDIR(info.st_mode):
         sys.exit(f"unlock: top {top!a} is not a real directory")
-    if not no_acl(top):
-        sys.exit(f"unlock: could not clear top ACL for {top!a}")
     if info.st_flags & LOCKS:
-        if not attempt(os.lchflags, top, info.st_flags & ~LOCKS):
-            sys.exit(f"unlock: could not clear top flags for {top!a}")
+        clear_flags = getattr(os, "lchflags", None)
+        if clear_flags is None or not attempt(clear_flags, top, info.st_flags & ~LOCKS):
+            top_failures.append("could not clear top flags")
+    try:
         if not no_acl(top):
-            sys.exit(f"unlock: could not clear top ACL for {top!a}")
+            top_failures.append("could not clear top ACL")
+    except OSError as exc:
+        top_failures.append(f"could not clear top ACL ({type(exc).__name__})")
+    try:
+        os.chmod(top, stat.S_IMODE(info.st_mode) | 0o700, follow_symlinks=False)
+    except OSError as exc:
+        top_failures.append(f"chmod failed: {type(exc).__name__}")
     try:
         info = os.lstat(top)
     except OSError as exc:
@@ -104,10 +111,6 @@ def top_info():
         )
     if not stat.S_ISDIR(info.st_mode):
         sys.exit(f"unlock: top {top!a} is not a real directory")
-    try:
-        os.chmod(top, stat.S_IMODE(info.st_mode) | 0o700, follow_symlinks=False)
-    except OSError as exc:
-        sys.exit(f"unlock: could not chmod top {top!a} ({type(exc).__name__})")
     return info
 def opened(name, dev):
     global listed, cut
@@ -132,7 +135,9 @@ def opened(name, dev):
 root = top_info()
 dev = root.st_dev
 if not os.access(top, os.W_OK | os.X_OK, follow_symlinks=False):
-    sys.exit(f"unlock: {top!a} is not writable by the account; the owner must fix it")
+    detail = "; ".join(top_failures)
+    suffix = f" ({detail})" if detail else ""
+    sys.exit(f"unlock: {top!a} is not writable by the account{suffix}; the owner must fix it")
 stack.append(opened(top, dev))
 while stack:
     name = next(stack[-1][0], None)

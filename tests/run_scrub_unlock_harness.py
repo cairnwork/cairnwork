@@ -9,7 +9,7 @@ from pathlib import Path
 from cairnwork.run_scrub_unlock import UNLOCK_SOURCE
 
 
-def walk_source(top: Path, limits: tuple[int, int], preamble: str = ""):
+def walk_source(top: Path, limits: tuple[int, int], preamble: str = "", postamble: str = ""):
     compat = """\
 import ctypes, os, stat
 class FakeLib:
@@ -17,7 +17,8 @@ class FakeLib:
         def __call__(self, *args): return 0
         argtypes = None
     setattrlist = Call()
-ctypes.CDLL = lambda _name: FakeLib()
+fake_lib = FakeLib()
+ctypes.CDLL = lambda _name: fake_lib
 stat.UF_IMMUTABLE = stat.UF_APPEND = 0
 if not hasattr(os, "lchflags"):
     os.lchflags = lambda *_args: 0
@@ -27,7 +28,7 @@ class Info:
     def __getattr__(self, name): return getattr(self.value, name)
 os.lstat = lambda *args, _real_lstat=real_lstat, **kwargs: Info(_real_lstat(*args, **kwargs))
 """
-    code = f"{compat}\n{preamble}\nexec({UNLOCK_SOURCE!r})"
+    code = f"{compat}\n{preamble}\nexec({UNLOCK_SOURCE!r})\n{postamble}"
     return subprocess.run(
         [sys.executable, "-c", code, str(top), *map(str, limits)],
         capture_output=True,

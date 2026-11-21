@@ -57,8 +57,11 @@ from cairnwork.run_tree import _private_name, _real_dir, root_problem, run_tree_
 
 
 def _shown(path: Path) -> str:
-    """One line: a leftover name must not start a second line in the error."""
-    return str(path).replace("\r", "\\r").replace("\n", "\\n")
+    """Escape C0 and DEL so displayed paths cannot inject terminal control characters."""
+    return "".join(
+        f"\\x{ord(char):02x}" if ord(char) < 0x20 or ord(char) == 0x7F else char
+        for char in str(path)
+    )
 
 
 def _shell_quote(value: str) -> str:
