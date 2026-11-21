@@ -176,7 +176,7 @@ def test_nested_flags_acls_and_modes_do_not_outlast_the_account_sequence(runs):
     close_private(private, account)
     assert not os.path.lexists(private / "run"), account.ran
     assert [rc for _argv, rc, _err in account.ran] == [0, 0], account.ran
-    assert stale_run_error(_Refusing(runs)) is None
+    assert stale_run_error(_Refusing(runs), runs.parent / "candidate") is None
     assert stat.S_IMODE(os.lstat(private).st_mode) == 0o700
 
 
@@ -204,13 +204,13 @@ def test_the_printed_recovery_steps_clear_the_same_tree(runs):
     """A and B: the steps an operator is told to run remove it, and each returns 0."""
     private = _private(runs)
     _lock_down(private / "run" / "home")
-    message = stale_run_error(_Refusing(runs))
+    message = stale_run_error(_Refusing(runs), runs.parent / "candidate")
     assert message is not None
     ran = _run_printed(message[message.index("as the verifier account: ") :])
     assert not os.path.lexists(private / "run"), ran
     assert [rc for _argv, rc, _err in ran] == [0] * len(ran), ran
     assert stat.S_IMODE(os.lstat(private).st_mode) == 0o700
-    assert stale_run_error(_Refusing(runs)) is None
+    assert stale_run_error(_Refusing(runs), runs.parent / "candidate") is None
 
 
 @darwin
@@ -281,7 +281,7 @@ def test_at_a_limit_the_rest_stays_and_the_next_run_is_refused(runs, monkeypatch
     assert os.path.lexists(private / "run")
     assert account.ran[0][1] == 1 and "limit reached" in account.ran[0][2], account.ran
     assert stat.S_IMODE(os.lstat(private).st_mode) == 0o750
-    message = stale_run_error(_Refusing(runs))
+    message = stale_run_error(_Refusing(runs), runs.parent / "candidate")
     assert message is not None and "as root, only if" in message
 
 

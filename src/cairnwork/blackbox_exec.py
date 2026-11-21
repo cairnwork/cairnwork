@@ -85,7 +85,7 @@ def run_blackbox(
         if not account.available(python):
             raise VerifierAccountError(f"account {account.user} is not usable")
         account.require_idle()
-        account.scrub_stale_runs()  # a killed run's private/run, before this run creates one
+        account.scrub_stale_runs(ctx.repo)  # before this run creates anything
         return _run(*args, replace(ctx, run_root=account.run_root), python, claim_root)
 
 

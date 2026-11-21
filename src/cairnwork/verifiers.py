@@ -178,7 +178,7 @@ def run_verifiers(
         python = verifier_interpreter(ctx)
         ctx = replace(ctx, run_root=account.run_root)
         # a prelude refusal is AccountUnusableBeforeRun (#803)
-        with locked_prelude(account, python, lock_wait_seconds(len(specs), timeout)):
+        with locked_prelude(account, python, lock_wait_seconds(len(specs), timeout), ctx.repo):
             batch = _Batch(ctx, python, candidate_commit, timeout, settings, note, deny)
             return _run_all(batch, specs, run_id)
     python = verifier_interpreter(ctx)
@@ -212,7 +212,7 @@ def _run_all(batch: _Batch, specs, run_id) -> tuple[VerifierRun, ...]:
     for index, spec in enumerate(specs):
         if index and ctx.account is not None:
             ctx.account.require_idle()  # survivors of the last spec
-            ctx.account.scrub_stale_runs()  # #437 D: no run beside the last spec's leftover run/
+            ctx.account.scrub_stale_runs(ctx.repo)  # #437 D: no run beside the last spec's run/
         clone_id = f"{run_id}-v{index}"
         # The checkout sits alone in its own work directory, which the tests may write (some
         # create files next to their repository: Nexus-new nexus-runtime-targets). Under the account
