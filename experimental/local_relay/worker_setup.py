@@ -44,14 +44,16 @@ def prepare_worker_layout(
         check=True,
     )
     if verifier_python is not None and os.environ.get(SHARE_ENV) == "1":
-        share_verifier_packages(run_root / "venv", verifier_python)
+        share_verifier_packages(run_root / "venv", verifier_python, checkout)
     _regroup_tree(run_root / "venv", gid)
 
 
-def share_verifier_packages(venv: Path, verifier_python: str) -> None:
-    """Append the verifier interpreter's site-packages to the worker venv through a .pth file.
+def share_verifier_packages(venv: Path, verifier_python: str, checkout: Path) -> None:
+    """Let the worker venv import the checkout first, then the verifier's third-party packages.
 
-    Read-only sharing by path: the worker venv keeps its own pytest first and installs nothing."""
+    The .pth lists the worker's checkout (``src`` when present, else its root) so edited code wins,
+    then ``site.addsitedir`` per verifier site-packages so their nested .pth files (editable
+    installs of dependencies) are processed too. The worker venv installs nothing."""
     code = (
         "import json, site, sysconfig; "
         "print(json.dumps([sysconfig.get_paths()['purelib'], *site.getsitepackages()]))"
@@ -63,7 +65,9 @@ def share_verifier_packages(venv: Path, verifier_python: str) -> None:
     targets = sorted((venv / "lib").glob("python3*/site-packages"))
     if not dirs or not targets:
         raise RuntimeError("cannot share verifier packages: no site-packages found")
-    (targets[-1] / "cairnwork_verifier.pth").write_text("\n".join(dirs) + "\n", encoding="utf-8")
+    own = checkout / "src" if (checkout / "src").is_dir() else checkout
+    lines = [str(own), *(f"import site; site.addsitedir({d!r})" for d in dirs)]
+    (targets[-1] / "cairnwork_verifier.pth").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _worker_python() -> str:
