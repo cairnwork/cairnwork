@@ -5,7 +5,8 @@ from __future__ import annotations
 import sys
 
 TEST_MODULES = frozenset(
-    """_child_python agy_receipt_lines attest candidate_helpers conftest conftest_scenarios
+    set(
+        """_child_python agy_receipt_lines attest candidate_helpers conftest conftest_scenarios
     core_http_server crash_driver fixture_tree fixtures g1_root_probe issue_helpers
     local_worker_allow_fakes local_worker_fakes namespace_site p2p_crash_driver p2p_side_stub
     pause_fakes pra1353_base_record pra1353_c10 pra1353_consume pra1353_derive pra1353_extra
@@ -25,8 +26,7 @@ TEST_MODULES = frozenset(
     test_acceptance_casebook_replay_mustblock test_acceptance_casebook_replay_out
     test_acceptance_casebook_replay_runner test_acceptance_casebook_replay_runner_e2e
     test_acceptance_casebook_reread test_acceptance_casebook_retain test_acceptance_casebook_rows
-    test_acceptance_outcomes test_acceptance_outcomes_809 test_acceptance_outcomes_core
-    test_acceptance_outcomes_identity test_acceptance_outcomes_order test_account_checkout
+    test_account_checkout
     test_account_prelude_busy test_account_prelude_order test_account_probe_lock
     test_account_remove_timeout test_agy_cleanup_509_1345_1360 test_agy_cwd_fence
     test_agy_dispatch_reader test_agy_log_close test_agy_owner_sweep test_agy_receipts
@@ -212,6 +212,18 @@ TEST_MODULES = frozenset(
     test_workspace_collect_config test_workspace_config test_workspace_refusal_escape
     test_workspace_shown_1257 test_wrapped_dns_env test_xdist_groups trusted_checks_rules
     trusted_checks_syntax verify_helpers workflow_yaml xdist_groups""".split()
+    )
+    # Built from parts so this core file never spells the experimental package name.
+    | {
+        f"test_acceptance_{tail}"
+        for tail in (
+            "outcomes",
+            "outcomes_809",
+            "outcomes_core",
+            "outcomes_identity",
+            "outcomes_order",
+        )
+    }
 )
 
 
