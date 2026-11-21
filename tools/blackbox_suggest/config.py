@@ -131,12 +131,20 @@ def _section(path: Path, kind: str, section: str) -> dict[str, Any] | None:
     if kind == "ini":
         parser = configparser.ConfigParser(interpolation=None)
         parser.read_string(path.read_text(encoding="utf-8"))
-        return dict(parser.items(section)) if parser.has_section(section) else None
+        if parser.has_section(section):
+            return dict(parser.items(section))
+        if parser.has_section("pytest"):  # setup.cfg: pytest refuses to start (#370, as #947)
+            raise ValueError("a [pytest] section in setup.cfg")
+        return None
     data: Any = tomllib.loads(path.read_text(encoding="utf-8"))
     for part in section.split("."):
-        data = data.get(part) if isinstance(data, dict) else None
+        if not isinstance(data, dict):  # pytest cannot load a table of the wrong type (#947)
+            raise ValueError(f"{section} is not a table")
+        data = data.get(part)
+        if data is None:
+            return None
     if not isinstance(data, dict):
-        return None
+        raise ValueError(f"{section} is not a table")
     if section == "tool.pytest":
         data = {k: v for k, v in data.items() if k != "ini_options"}  # read as its own section
     return data  # a sub-table (a plugin's [tool.pytest.ini_options.env]) is an unknown option
