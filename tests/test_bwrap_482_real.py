@@ -156,6 +156,18 @@ def _socket_report(base: Path, owner: bool) -> str:
     return text
 
 
+def _publish_walk(label: str, report_text: str) -> None:
+    """Append the categories-only report to the CI job summary, from outside the sandbox (#471)."""
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not path:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(f"\n#471 socket walk ({label}): `{report_text.strip()}`\n")
+    except OSError:
+        pass
+
+
 def test_owner_socket_walk_reports_categories_only(fixture_tree):
     import json
     import socket
@@ -174,6 +186,7 @@ def test_owner_socket_walk_reports_categories_only(fixture_tree):
         socket_path.unlink(missing_ok=True)
     report = json.loads(report_text)
     assert isinstance(report, dict)
+    _publish_walk("owner", report_text)
     if "truncated|-|-" in report:
         pytest.skip("socket walk stopped early (time or entry cap); no category count")
     assert sum(count for key, count in report.items() if key.startswith("home|")) >= 1
@@ -217,6 +230,7 @@ def test_verifier_socket_walk_reports_categories_only(account_tree):
         report_text = result.stdout.decode()
         assert socket_dir.name not in report_text
         report = json.loads(report_text)
+        _publish_walk("verifier account", report_text)
         if "truncated|-|-" in report:
             pytest.skip("socket walk stopped early (time or entry cap); no category count")
         assert sum(count for key, count in report.items() if key.startswith("var-tmp|")) >= 1
