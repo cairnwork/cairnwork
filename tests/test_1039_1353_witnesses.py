@@ -161,8 +161,13 @@ def test_c1_c4_evasions_are_runnable_and_live(core_rows):
     if _sandbox_expected():
         assert mutant != baseline
         # Linux: derived from src/cairnwork/reasons.py:112, not yet observed on CI
-        assert c3 == ["FAILED"] * 4 and c3_mutants == ["FAILED", "FAILED"]
-        assert all("checkout changed" in r["reason"].lower() for r in rows if r["class_id"] == "C3")
+        # Second evasion (a path insert reached through ``os.sys``) is now refused up front by the
+        # candidate guard (#1572: any receiver of ``.path``), so its verify row reads REFUSED.
+        assert c3[:2] == ["FAILED"] * 2 and c3[2] == "REFUSED" and c3[3] in {"REFUSED", "FAILED"}
+        assert c3_mutants == ["FAILED", "FAILED"]
+        assert all(
+            "checkout changed" in r["reason"].lower() for r in c3_rows if r["observed"] == "FAILED"
+        )
         # Linux: derived from src/cairnwork/reasons.py:141, not yet observed on CI
         assert all(
             "checkout changed" not in r["reason"].lower()
