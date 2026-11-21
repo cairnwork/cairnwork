@@ -40,15 +40,17 @@ def _probe(path: str) -> tuple[str, str]:
     prefixed `pathtoolong_`, so it is not read as an ordinary failure.
     """
     if len(os.fsencode(path)) >= SUN_PATH_LIMIT:
-        old = os.open(".", os.O_RDONLY)
+        old = -1
         try:
+            old = os.open(".", os.O_RDONLY)
             os.chdir(os.path.dirname(path))
             kind, result = _probe_short(os.path.basename(path))
         except OSError:
             return "stream", "pathtoolong_other"
         finally:
-            os.fchdir(old)
-            os.close(old)
+            if old >= 0:
+                os.fchdir(old)
+                os.close(old)
         return kind, f"pathtoolong_{result}"
     return _probe_short(path)
 

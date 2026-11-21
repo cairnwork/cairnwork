@@ -97,3 +97,59 @@ def test_overlong_path_is_probed_by_relative_name_and_reported_apart():
             if d == base.parent:
                 break
             d.rmdir()
+
+
+def _long_missing_path() -> str:
+    return "/tmp/" + "/".join(["m" * 60] * 4) + "/s.sock"
+
+
+def test_probe_restores_cwd_on_success_and_on_failure():
+    here = os.getcwd()
+    assert walk._probe(_long_missing_path()) == ("stream", "pathtoolong_other")
+    assert os.getcwd() == here
+    base = Path(tempfile.mkdtemp(prefix="cw471r-", dir="/tmp")).resolve()
+    deep = base
+    for _ in range(4):
+        deep = deep / ("d" * 60)
+        deep.mkdir()
+    listener = socket.socket(socket.AF_UNIX)
+    try:
+        os.chdir(deep)
+        listener.bind("s.sock")
+        listener.listen()
+        os.chdir(here)
+        assert walk._probe(str(deep / "s.sock"))[1] == "pathtoolong_connectable"
+        assert os.getcwd() == here
+    finally:
+        os.chdir(here)
+        listener.close()
+        (deep / "s.sock").unlink()
+        for d in (deep, *deep.parents):
+            if d == base.parent:
+                break
+            d.rmdir()
+
+
+def test_probe_with_unreadable_or_deleted_cwd_reports_pathtoolong_other():
+    here = os.getcwd()
+    gone = Path(tempfile.mkdtemp(prefix="cw471g-", dir="/tmp"))
+    try:
+        os.chdir(gone)
+        gone.rmdir()
+        assert walk._probe(_long_missing_path()) == ("stream", "pathtoolong_other")
+    finally:
+        os.chdir(here)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can open any directory")
+def test_probe_with_unreadable_cwd_reports_pathtoolong_other():
+    here = os.getcwd()
+    x_only = Path(tempfile.mkdtemp(prefix="cw471x-", dir="/tmp"))
+    try:
+        os.chdir(x_only)
+        x_only.chmod(0o311)
+        assert walk._probe(_long_missing_path()) == ("stream", "pathtoolong_other")
+    finally:
+        os.chdir(here)
+        x_only.chmod(0o700)
+        x_only.rmdir()
