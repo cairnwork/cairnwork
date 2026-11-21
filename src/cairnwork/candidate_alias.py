@@ -229,27 +229,19 @@ def alias_machinery_changed(old: bytes | None, new: bytes) -> bool:
     return any(k in new_hot for k in added) or any(k in old_hot for k in removed)
 
 
-# Methods on a ``<x>.path`` receiver that cannot change it; any other method call counts as an edit.
-_PATH_READERS = frozenset(
+# ``sys.path`` is a list: only a name that exists on ``list`` and can change it can edit it, so the
+# judgement is closed by the type (``tests/test_candidate_receiver_forms.py`` checks every name in
+# ``dir(list)``). str, Path and os.path names are not on ``list`` and are never hot.
+_PATH_HOT = frozenset(
     {
-        "copy", "index", "count", "__len__", "__contains__", "__getitem__", "__iter__", "__repr__",
-        # os.path string and stat helpers that only read
-        "join", "exists", "lexists", "isfile", "isdir", "islink", "isabs", "basename", "dirname",
-        "abspath", "realpath", "normpath", "normcase", "splitext", "split", "splitdrive",
-        "expanduser", "expandvars", "relpath", "commonpath", "commonprefix", "samefile",
-        "getsize", "getmtime", "getatime", "getctime", "sep", "pathsep", "curdir", "pardir",
-        # str and pathlib.Path reads (a request path, a file path): none can edit a list in place
-        "startswith", "endswith", "lower", "upper", "strip", "lstrip", "rstrip", "replace", "find",
-        "rfind", "format", "encode", "isdigit", "resolve", "stat", "is_file", "is_dir",
-        "read_text", "read_bytes", "as_posix", "with_suffix", "with_name", "joinpath",
-        "relative_to", "parent", "parents", "name", "suffix", "stem", "parts",
+        "append", "extend", "insert", "remove", "pop", "clear", "sort", "reverse",
+        "__setitem__", "__delitem__", "__iadd__", "__imul__", "__init__",
     }
 )  # fmt: skip
 
 
 def _foreign_path(node: ast.AST | None) -> bool:
-    """``<expr>.path`` whatever the receiver: no name is trusted (``os.path`` included; its harmless
-    functions are in ``_PATH_READERS``)."""
+    """``<expr>.path`` whatever the receiver: no name is trusted (``os.path`` included)."""
     return isinstance(node, ast.Attribute) and node.attr == "path"
 
 
@@ -258,7 +250,7 @@ def _edits_foreign_path(part: ast.AST) -> bool:
     excepted): mutator calls, element or slice assignment, ``del``, a stored alias."""
     if isinstance(part, ast.Attribute):
         # any method taken from a ``<x>.path`` receiver, called or not (stored, passed, decorator)
-        return _foreign_path(part.value) and part.attr not in _PATH_READERS
+        return _foreign_path(part.value) and part.attr in _PATH_HOT
     if isinstance(part, ast.Call):
         return any(_foreign_path(arg) for arg in (*part.args, *(k.value for k in part.keywords)))
     targets: list[ast.expr]

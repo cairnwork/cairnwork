@@ -88,6 +88,10 @@ def test_indirect_receiver_is_refused(repo, name):
         "from pathlib import Path\nq = Path('a')\nz = q.parent.name\n",
         SHADOW + "import os as o2\n# sys.path\nx = o2.path.join(d, 'a')\ny = o2.path.isdir(x)\n",
         SHADOW + "# sys.path\ndef _g(s):\n    return s.path.copy(), s.path.index('a')\n",
+        SHADOW + "# sys.path\nclass _R:\n    path = 'A b'\nr = _R()\n"
+        "t = [r.path.casefold(), r.path.splitlines(), r.path.title(), r.path.partition(' '),\n"
+        "     r.path.zfill(3), r.path.split(), r.path.replace('a', 'b')]\n"
+        "with r.path.open() as h:\n    h.read()\n",
     ],
     ids=[
         "os_path",
@@ -99,7 +103,34 @@ def test_indirect_receiver_is_refused(repo, name):
         "str_path_readers_signalled",
         "os_alias_readers_signalled",
         "path_read_methods",
+        "str_path_other_methods",
     ],
 )
 def test_unrelated_attributes_are_not_refused(repo, source):
     _check(repo, source)
+
+
+# The search path is a list, so only a name on ``list`` that can change it is a hot method; the
+# judgement is closed by the type, not by a list of harmless names.
+# Dunder names that another, older rule already refuses next to any import signal (interception
+# of attribute access), so they are refused whatever the receiver is.
+OTHER_RULE = {"__delattr__", "__getattribute__", "__setattr__"}
+HOT = {
+    "append", "extend", "insert", "remove", "pop", "clear", "sort", "reverse",
+    "__setitem__", "__delitem__", "__iadd__", "__imul__", "__init__",
+}  # fmt: skip
+
+
+def test_hot_set_is_inside_list_namespace():
+    assert HOT <= set(dir(list))
+
+
+@pytest.mark.parametrize("attr", sorted(dir(list)))
+def test_every_list_name_is_judged_by_the_list_type(repo, attr):
+    source = SHADOW + f"# sys.path\ndef _g(s):\n    return s.path.{attr}\n"
+    if attr in HOT | OTHER_RULE:
+        with pytest.raises(CandidateRejected) as got:
+            _check(repo, source)
+        assert got.value.code == "CANDIDATE_SYS_PATH_MUTATION"
+    else:
+        _check(repo, source)
