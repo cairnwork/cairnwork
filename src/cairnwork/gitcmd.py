@@ -189,23 +189,28 @@ def stderr_tail(raw: str | bytes | None) -> str:
     return text.replace("\n", " | ")[-STDERR_TAIL_CHARS:]
 
 
-def _subcommand(args: tuple[str, ...]) -> str:
-    """The git subcommand in args, skipping ``-c <name=value>``, ``-C <path>`` and other options."""
-    it = iter(args)
-    for arg in it:
+def _subcommand_index(args: tuple[str, ...]) -> int | None:
+    """Index of the git subcommand, skipping ``-c <name=value>``, ``-C <path>`` and options."""
+    it = enumerate(args)
+    for i, arg in it:
         if arg in ("-c", "-C"):
             next(it, None)
         elif not arg.startswith("-"):
-            return arg
-    return args[0] if args else "command"
+            return i
+    return None
+
+
+def _subcommand(args: tuple[str, ...]) -> str:
+    i = _subcommand_index(args)
+    return args[i] if i is not None else (args[0] if args else "command")
 
 
 def _no_external_diff(args: tuple[str, ...]) -> tuple[str, ...]:
     """Keep diff.external and diff.<x>.textconv from running; the internal diff output stays."""
-    if _subcommand(args) != "diff":
+    i = _subcommand_index(args)
+    if i is None or args[i] != "diff":
         return args
-    i = args.index("diff") + 1  # always insert: an option value or path can look like the flag
-    return (*args[:i], "--no-ext-diff", "--no-textconv", *args[i:])
+    return (*args[: i + 1], "--no-ext-diff", "--no-textconv", *args[i + 1 :])  # always insert
 
 
 class GitCommandError(Exception):

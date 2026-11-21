@@ -277,3 +277,23 @@ def test_an_option_value_named_like_the_flag_does_not_stop_it_being_added(tmp_pa
     run_git(repo, "diff", "--output", "--no-textconv", "--", "x.txt")
 
     assert not marker.exists()
+
+
+def test_flags_go_after_the_real_subcommand_not_a_path_named_diff() -> None:
+    flags = ("--no-ext-diff", "--no-textconv")
+    assert gitcmd._no_external_diff(("-C", "diff", "diff", "--", "x")) == (
+        "-C", "diff", "diff", *flags, "--", "x",
+    )  # fmt: skip
+    assert gitcmd._no_external_diff(("-c", "a=b", "diff")) == ("-c", "a=b", "diff", *flags)
+    assert gitcmd._no_external_diff(("-C", "diff", "log")) == ("-C", "diff", "log")
+
+
+def test_src_never_asks_git_to_run_ext_diff_or_textconv() -> None:
+    src = Path(gitcmd.__file__).parent
+    bad = [
+        f"{p.name}: {tok}"
+        for p in src.rglob("*.py")
+        for tok in ('"--textconv"', '"--ext-diff"', "'--textconv'", "'--ext-diff'")
+        if tok in p.read_text()
+    ]
+    assert bad == []
