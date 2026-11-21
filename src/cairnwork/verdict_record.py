@@ -130,9 +130,7 @@ def well_formed(data: dict, collected: list, outcomes: dict, plugin_kinds: froze
     files = data.get("files", [])
     kind = data.get("fail_kind", {})  # #775: node -> "setup" | "env" | "plugin:<module>" (#804)
     if not isinstance(kind, dict) or not all(
-        n in outcomes
-        and isinstance(v, str)
-        and (v in ("setup", "env") or v in plugin_kinds)
+        n in outcomes and isinstance(v, str) and (v in ("setup", "env") or v in plugin_kinds)
         for n, v in kind.items()
     ):
         return None
