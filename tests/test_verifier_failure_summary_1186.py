@@ -74,6 +74,16 @@ def test_overlay_among_the_run_files_withholds_even_when_it_has_no_outcome(tmp_p
     assert out == "exit 1"
 
 
+@pytest.mark.parametrize("overlay", [{"data/fixture.json"}, {"conftest.py"}, {"tests/other.py"}])
+def test_any_overlay_file_withholds_even_when_pytest_never_names_it(tmp_path, overlay):
+    """A test commit may hold data only; the whole commit is laid over the checkout (#1186)."""
+    log = LOG.replace("assert 1 == 2", "canary-HIDDEN-42")
+    out = format_failure("exit 1", {VIS: "failed"}, _log(tmp_path, log), overlay, None)
+    assert out == "exit 1"
+    out = format_failure("exit 1", {VIS: "failed"}, None, overlay, {VIS: "E canary-HIDDEN-42"})
+    assert out == "exit 1"
+
+
 def test_a_source_line_is_never_the_summary(tmp_path):
     out = format_failure(
         "x", {VIS: "failed"}, _log(tmp_path, LOG.replace("E       ", "")), (), None

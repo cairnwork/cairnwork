@@ -88,8 +88,9 @@ def format_failure(
     outcomes = outcomes if isinstance(outcomes, dict) else {}
     overlay = {os.path.normpath(str(path)).lower() for path in overlay_files or ()}
     failed = [node for node, outcome in outcomes.items() if outcome == "failed"]
-    in_run = {_file(node) for node in outcomes} | {_file(path) for path in run_files}
-    if overlay & in_run:
+    # A test commit can hold data files only, and the base and p2p runs lay the whole commit over
+    # the checkout: any overlay at all means the run may read it, whatever pytest collected.
+    if overlay:
         secret = [node for node in failed if _file(node) in overlay]
         return _append(why, f"deferred: {len(secret)} failed") if secret else why
     if not isinstance(assertions, dict):
