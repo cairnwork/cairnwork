@@ -31,6 +31,7 @@ COUNT_HOOKS = {  # change what is collected
     "pytest_collection",
 }
 HARMLESS_HOOKS = {"pytest_addoption", "pytest_report_header", "pytest_assertrepr_compare"}
+HOOKIMPL_OPTIONS = {"tryfirst", "trylast", "optionalhook"}  # specname, wrapper: not followed
 PYTEST_HEADS = {"pytest", "mark", "fixture", "param"}
 SAFE_IMPORTS = {"pytest", "unittest", "_pytest"} | set(sys.stdlib_module_names)
 TYPING_NAMES = {"TYPE_CHECKING": "typing.TYPE_CHECKING", "typing": "typing"}
@@ -223,6 +224,8 @@ def _function(node: ast.FunctionDef | ast.AsyncFunctionDef, verdict: Verdict, *,
         verdict.refuse("a def binds a name this reader takes for pytest's")
     _hook(verdict, node.name, top=top, by_def=True)
     _decorators(node.decorator_list, verdict)
+    if any(_hookimpl_options(d) - HOOKIMPL_OPTIONS for d in node.decorator_list):
+        verdict.refuse("a hookimpl renames or wraps a hook (specname, wrapper)", known=False)
     if any(_from_pytest(n) for stmt in node.body for n in ast.walk(stmt)):
         verdict.refuse("a function imports from pytest in its body (only module imports are read)")
     if _calls_outside_pytest(node.args) or (node.returns and _calls_outside_pytest(node.returns)):
@@ -264,6 +267,14 @@ def _decorators(decorators: list[ast.expr], verdict: Verdict) -> None:
             and all(_inert(a, verdict) for a in [*d.args, *(k.value for k in d.keywords)])
         ):
             verdict.refuse("a decorator argument is not a literal (it is evaluated at import time)")
+
+
+def _hookimpl_options(decorator: ast.expr) -> set[str]:
+    """The options of ``@pytest.hookimpl(...)``; a positional or ``**`` argument counts as one
+    the reader does not follow."""
+    if not isinstance(decorator, ast.Call) or (dotted(decorator.func) or [""])[-1] != "hookimpl":
+        return set()
+    return {k.arg or "**" for k in decorator.keywords} | ({"*"} if decorator.args else set())
 
 
 def _foreign(decorator: ast.expr) -> bool:
