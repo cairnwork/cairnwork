@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import ast
-import sys
 from collections.abc import Iterator
 
 
@@ -21,10 +20,57 @@ def module_level(body: list[ast.stmt]) -> Iterator[ast.stmt]:
             yield from module_level(block)
 
 
+def _bindings(tree: ast.Module, name: str) -> int:
+    """How many places in the file bind ``name`` (any scope; counted, not resolved)."""
+    count = 0
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id == name and not isinstance(node.ctx, ast.Load):
+            count += 1
+        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            count += node.name == name
+        elif isinstance(node, ast.arg):
+            count += node.arg == name
+        elif isinstance(node, ast.alias):
+            count += (node.asname or node.name.split(".")[0]) == name
+        elif isinstance(node, ast.ExceptHandler | ast.MatchAs | ast.MatchStar):
+            count += getattr(node, "name", None) == name
+        elif isinstance(node, ast.Global | ast.Nonlocal):
+            count += name in node.names
+    return count
+
+
+def _root_external(root: str, tree: ast.Module, index: dict[str, set[str]] | None) -> bool:
+    """``root`` is bound exactly once, by a plain top-level absolute import of a module that
+    is stdlib or absent from the source tree (and no tree module shares its top name)."""
+    if _bindings(tree, root) != 1:
+        return False
+    module = None
+    for stmt in tree.body:
+        if isinstance(stmt, ast.Import):
+            for alias in stmt.names:
+                if (alias.asname or alias.name.split(".")[0]) == root:
+                    module = alias.name
+        elif isinstance(stmt, ast.ImportFrom):
+            for alias in stmt.names:
+                if (alias.asname or alias.name) == root:
+                    module = None if stmt.level or not stmt.module else stmt.module
+    if module is None or index is None:
+        return False
+    top = module.split(".")[0]
+    if any(candidate.split(".")[0] == top for candidate in index):
+        return False
+    return True
+
+
 def external_decorator(
     decorator: ast.expr, tree: ast.Module, index: dict[str, set[str]] | None
 ) -> bool:
-    """Whether an imported decorator is known to resolve outside the base source tree."""
+    """Whether a decorator is known to resolve outside the base source tree (fail closed).
+
+    Only a name bound once, by a top-level absolute import of a module the source tree does
+    not define, qualifies; a call decorator may take only literals or such external names, so
+    ``partial(in_tree_factory)`` still counts. Anything else stays a possible factory.
+    """
     target = decorator.func if isinstance(decorator, ast.Call) else decorator
     if isinstance(target, ast.Name):
         root = target.id
@@ -32,29 +78,16 @@ def external_decorator(
         root = target.value.id
     else:
         return False
-    modules = {
-        alias.asname or alias.name.split(".")[0]: alias.name
-        for stmt in ast.walk(tree)
-        if isinstance(stmt, ast.Import)
-        for alias in stmt.names
-    }
-    modules |= {
-        alias.asname or alias.name: stmt.module or ""
-        for stmt in ast.walk(tree)
-        if isinstance(stmt, ast.ImportFrom)
-        for alias in stmt.names
-    }
-    module = modules.get(root)
-    if module is None:
+    if not _root_external(root, tree, index):
         return False
-    if module.split(".")[0] in sys.stdlib_module_names:
-        return True
-    return index is not None and not any(
-        candidate == module
-        or candidate.startswith(module + ".")
-        or module.startswith(candidate + ".")
-        for candidate in index
-    )
+    if isinstance(decorator, ast.Call):
+        for arg in (*decorator.args, *(k.value for k in decorator.keywords)):
+            if isinstance(arg, ast.Constant):
+                continue
+            inner = arg.value if isinstance(arg, ast.Attribute) else arg
+            if not (isinstance(inner, ast.Name) and _root_external(inner.id, tree, index)):
+                return False
+    return True
 
 
 def forwarded(tree: ast.Module) -> dict[int, set[str]]:
