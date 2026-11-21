@@ -151,3 +151,27 @@ def test_successful_hook_keeps_status_when_ps_is_not_on_path():
     """The listing uses an absolute ps and never kills the watchdog itself on a normal exit."""
     code, _out, _err = post_verified._run(["/usr/bin/true"], 10, {"PATH": "/nonexistent:/usr/bin"})
     assert code == 0
+
+
+def test_runner_timeout_kills_setpgid_grandchild(tmp_path):
+    pid_file = tmp_path / "gc.pid"
+    pid = 0
+    try:
+        try:
+            post_verified._run(
+                [sys.executable, "-c", _hook_with_grandchild(pid_file, wait_for_parent=True)],
+                2,
+                dict(os.environ),
+            )
+        except subprocess.TimeoutExpired:
+            pass
+        else:
+            raise AssertionError("the hook outlived its limit without a timeout")
+        pid = _wait_for_pid(pid_file)
+        _assert_gone(pid)
+    finally:
+        if pid:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass

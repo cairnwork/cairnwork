@@ -112,11 +112,13 @@ def alert(message: str) -> None:
 
 def _run(argv: list[str], seconds: int, env: dict[str, str]) -> tuple[int, bytes, bytes]:
     """Its own session, so the group is stopped on every exit, timeout or not; cleanup is bounded
-    too. hook_watch ends the group when this runner dies, even by SIGKILL (#1125). Limits: a
-    descendant that starts a new session (setsid; one that only changes group is killed with the
-    session, #1146), one still holding the output pipe after
-    the hook exited when the runner is SIGKILLed, or the hook when the runner and its watchdog
-    are killed at the same time (two layers failing together), can outlive it.
+    too. On a timeout or any other exit the runner closes the watchdog's control pipe first, so
+    hook_watch ends the whole session (a descendant that only changed its process group too,
+    #1146) before the runner's own group kill, which stays as the backstop. hook_watch also ends
+    the session when this runner dies, even by SIGKILL (#1125). Limits: a descendant that starts a
+    new session (setsid), one still holding the output pipe after the hook exited when the runner
+    is SIGKILLed, or the hook when the runner and its watchdog are killed at the same time (two
+    layers failing together), can outlive it.
 
     Output stays bytes: _tail decodes it leniently, so no output can lose the record.
     """
@@ -140,7 +142,8 @@ def _run(argv: list[str], seconds: int, env: dict[str, str]) -> tuple[int, bytes
             try:
                 out, err = proc.communicate(timeout=seconds)
             except subprocess.TimeoutExpired:
-                _kill_group(proc)
+                os.close(control_fd)  # EOF: the watchdog ends the session itself, then exits
+                control_fd = -1
                 try:
                     out, err = proc.communicate(timeout=CLEANUP_SECONDS)
                 except subprocess.TimeoutExpired:  # a descendant in its own session holds the pipes
@@ -148,7 +151,12 @@ def _run(argv: list[str], seconds: int, env: dict[str, str]) -> tuple[int, bytes
                 raise subprocess.TimeoutExpired(argv, seconds, out, err) from None
             return proc.returncode, out, err
         finally:  # every exit: what the hook left behind in its group must not outlive it
-            os.close(control_fd)
+            if control_fd >= 0:
+                os.close(control_fd)
+            try:  # let the watchdog clean the session first; it is killed only as a backstop
+                proc.wait(timeout=CLEANUP_SECONDS)
+            except subprocess.TimeoutExpired:
+                pass
             _kill_group(proc)
 
 
