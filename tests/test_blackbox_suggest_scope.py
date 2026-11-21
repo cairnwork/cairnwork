@@ -15,16 +15,14 @@ CORE = (
     "SCALE = 1\ndef f(x):\n    return x * SCALE\n"
     "REG = {}\nclass Registered:\n    def __init_subclass__(cls, **kw):\n"
     "        REG[cls.__name__] = cls\n"
-    "def __getattr__(name):\n    global SCALE\n    SCALE = 10\n    return 1\n"
 )
-INERT = CORE.split("def __getattr__")[0]  # controls: no module hook, which refuses on its own
 PLAIN = "def test_a():\n    assert f(2) == 2\n"
 
 
-def run(tmp_path, body, core=CORE):
+def run(tmp_path, body):
     files = {
         "src/pkg/__init__.py": "",
-        "src/pkg/core.py": core,
+        "src/pkg/core.py": CORE,
         "src/pkg/extra.py": "import pkg.core\npkg.core.SCALE = 10\n",
         "tests/test_x.py": textwrap.dedent(body),
     }
@@ -64,7 +62,7 @@ def test_fu1_a_base_not_defined_in_the_file_refuses(tmp_path, body):
     ],
 )
 def test_fu1_bases_in_the_file_object_and_testcase_keep_the_draft(tmp_path, body):
-    item = run(tmp_path, HEAD + body + PLAIN, INERT)
+    item = run(tmp_path, HEAD + body + PLAIN)
     assert item.protected(KINDS_NOW), item.reason(KINDS_NOW)
 
 
@@ -100,7 +98,7 @@ def test_fu2_literals_names_bound_to_them_and_marks_keep_the_draft(tmp_path):
         "XF = pytest.mark.xfail\nCASES = [pytest.param(1, marks=XF), (2, 2)]\n"
         "class Helper:\n    W = [X]\n"
     )
-    item = run(tmp_path, HEAD + body + "def test_a():\n    assert f(1) == X\n", INERT)
+    item = run(tmp_path, HEAD + body + "def test_a():\n    assert f(1) == X\n")
     assert item.protected(KINDS_NOW) and item.exact, item.reason(KINDS_NOW)
 
 
@@ -138,5 +136,5 @@ def test_fu3_a_type_checking_flag_not_from_typing_refuses(tmp_path, flag):
     ],
 )
 def test_fu3_type_checking_from_typing_keeps_the_draft(tmp_path, flag):
-    item = run(tmp_path, HEAD + flag + "    import pkg.extra\n" + PLAIN, INERT)
+    item = run(tmp_path, HEAD + flag + "    import pkg.extra\n" + PLAIN)
     assert item.protected(KINDS_NOW) and item.exact, item.reason(KINDS_NOW)

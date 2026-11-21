@@ -66,6 +66,84 @@ REFUSED = {
         "src/pkg/core.py": CORE
         + "def _install():\n    global __getattr__\n    __getattr__ = len\n_install()\n"
     },
+    "globals_update_in_a_function": {
+        "src/pkg/core.py": CORE + "def _i():\n    globals().update(__getattr__=len)\n_i()\n"
+    },
+    "setattr_with_a_computed_name": {
+        "src/pkg/core.py": "import sys\n"
+        + CORE
+        + "setattr(sys.modules[__name__], '__get' + 'attr__', len)\n"
+    },
+    "exec_defines_getattr": {
+        "src/pkg/core.py": CORE + "exec('def __getattr__(n):\\n    return 1')\n"
+    },
+    "exec_defines_dir": {
+        "src/pkg/core.py": CORE + "exec(\"def __dir__():\\n    return ['f']\\n\")\n"
+    },
+    "module_class_swapped": {
+        "src/pkg/core.py": "import sys, types\n"
+        + CORE
+        + "class _M(types.ModuleType):\n    def __getattr__(self, n):\n        return 1\n"
+        + "sys.modules[__name__].__class__ = _M\n"
+    },
+    "module_replaced_in_sys_modules": {
+        "src/pkg/core.py": "import sys\n"
+        + CORE
+        + "class _O:\n    def __getattr__(self, n):\n        return 1\n"
+        + "sys.modules[__name__] = _O()\n"
+    },
+    "vars_update_with_a_computed_name": {
+        "src/pkg/core.py": "import sys\n"
+        + CORE
+        + "vars(sys.modules[__name__]).update({'__di' + 'r__': len})\n"
+    },
+    "globals_subscript_with_a_computed_name": {
+        "src/pkg/core.py": CORE + "globals()['__get' + 'attr__'] = len\n"
+    },
+    "attribute_store_in_a_function": {
+        "src/pkg/core.py": CORE
+        + "def _i():\n    import pkg.core\n    pkg.core.__getattr__ = len\n_i()\n"
+    },
+    "function_globals": {
+        "src/pkg/core.py": CORE + "_g = f.__globals__\n_g['__get' + 'attr__'] = len\n"
+    },
+    "frame_globals": {
+        "src/pkg/core.py": "import sys\n"
+        + CORE
+        + "sys._getframe().f_globals['__get' + 'attr__'] = len\n"
+    },
+    "getattr_with_a_computed_name": {
+        "src/pkg/core.py": "import sys\n"
+        + CORE
+        + "_m = getattr(sys, 'modu' + 'les')\n_m[__name__].__getattr__ = len\n"
+    },
+    "builtins_exec": {
+        "src/pkg/core.py": "import builtins as _b\n"
+        + CORE
+        + "_b.exec('def __dir__():\\n    return []')\n"
+    },
+    "builtins_looked_up_by_a_plain_name": {
+        "src/pkg/core.py": "import builtins as _b\nimport pkg.core as _me\n"
+        + CORE
+        + "getattr(_b, 'setattr')(_me, '__get' + 'attr__', len)\n"
+    },
+    "methodcaller_with_a_computed_name": {
+        "src/pkg/core.py": "import operator\nimport pkg.core as _me\n"
+        + CORE
+        + "operator.methodcaller('__set' + 'attr__', '__get' + 'attr__', len)(_me)\n"
+    },
+    "sys_modules_looked_up_by_a_plain_name": {
+        "src/pkg/core.py": "import sys\n"
+        + CORE
+        + "class _O:\n    def __getattr__(self, n):\n        return 1\n"
+        + "getattr(sys, 'modules')[__name__] = _O()\n"
+    },
+    "sys_modules_looked_up_by_a_computed_name": {
+        "src/pkg/core.py": "import sys\n"
+        + CORE
+        + "class _O:\n    def __getattr__(self, n):\n        return 1\n"
+        + "getattr(sys, 'modu' + 'les')[__name__] = _O()\n"
+    },
     "getattr_in_a_module_the_target_imports": {
         "src/pkg/core.py": "from pkg import helper\n" + CORE,
         "src/pkg/helper.py": HOOK,
@@ -84,12 +162,14 @@ def test_getattr_in_a_class_body_keeps_the_draft(tmp_path):
         """
         class Proxy:
             def __getattr__(self, name):
-                return getattr(object(), name)
+                return name.upper()
             def __dir__(self):
                 return []
-        def g(obj, name):
+        import re
+        PATTERN = re.compile("x")
+        def g(obj):
             __dir__ = 1
-            return getattr(obj, name, __dir__)
+            return getattr(obj, "name", __dir__), obj.__class__.__name__
         """
     )
     item = run(tmp_path, {"src/pkg/core.py": core})

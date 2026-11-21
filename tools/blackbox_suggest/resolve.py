@@ -19,6 +19,11 @@ MAX_HOPS = 6
 
 
 MODULE_HOOKS = {"__getattr__", "__dir__"}
+# Names that can bind a module attribute under a name the reader cannot see (#370).
+DYNAMIC = {"exec", "eval", "globals", "locals", "vars", "setattr", "delattr", "__import__"}
+DYNAMIC |= {"__builtins__", "import_module", "attrgetter", "methodcaller"}
+REFLECTIVE = {"__dict__", "__globals__", "__self__", "__setattr__", "__getattribute__", "modules"}
+REFLECTIVE |= {"f_globals", "f_locals", "f_builtins"}
 
 
 @dataclass(frozen=True)
@@ -149,19 +154,38 @@ def _star_imports(tree: ast.Module, module: str, package: bool) -> list[str]:
 
 def binds_module_hook(tree: ast.Module) -> bool:
     """Whether a module may bind ``__getattr__`` or ``__dir__`` as module attributes (#370):
-    any mention of either name outside a class or function body, a ``global`` of either, an
-    attribute store of either, or either name as a string anywhere (``globals()[...]``,
-    ``setattr``). A method of that name in a class body is not one."""
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Global) and MODULE_HOOKS & set(node.names):
-            return True
-        if isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Store):
-            if node.attr in MODULE_HOOKS:
-                return True
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            if node.value in MODULE_HOOKS:
-                return True
-    return _mentions_hook(tree)
+    any mention of either name outside a class or function body, a ``global`` or attribute
+    store of either, either name as a string, or anything, anywhere in the module, that can
+    bind a module attribute under a name the reader cannot see (``exec``, ``globals()``,
+    ``setattr``, ``sys.modules``, a ``__dict__`` or ``__globals__``, a store to ``__class__``,
+    ``builtins``, a ``getattr`` with a computed name). A method in a class body is not one."""
+    plain = {
+        id(node.func)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and _is_name(node.func, "getattr")
+        and len(node.args) > 1
+        and isinstance(node.args[1], ast.Constant)
+    }
+    return _mentions_hook(tree) or any(_binds(node, plain) for node in ast.walk(tree))
+
+
+def _binds(node: ast.AST, plain: set[int]) -> bool:
+    if isinstance(node, ast.Global):
+        return bool(MODULE_HOOKS & set(node.names))
+    if isinstance(node, ast.Name):
+        return node.id in DYNAMIC or (node.id == "getattr" and id(node) not in plain)
+    if isinstance(node, ast.Attribute):
+        hooks = MODULE_HOOKS | {"__class__"}
+        store = isinstance(node.ctx, ast.Store) and node.attr in hooks
+        return store or node.attr in DYNAMIC | REFLECTIVE
+    if isinstance(node, ast.alias):
+        return node.name.split(".")[0] == "builtins" or node.name in DYNAMIC | REFLECTIVE
+    if isinstance(node, ast.ImportFrom):
+        return node.module == "builtins"
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value in MODULE_HOOKS | REFLECTIVE
+    return False
 
 
 def _mentions_hook(node: ast.AST) -> bool:
