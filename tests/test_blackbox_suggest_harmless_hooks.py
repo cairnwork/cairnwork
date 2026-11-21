@@ -57,6 +57,22 @@ REFUSED = {
         def pytest_addoption(parser):
             parser.addoption("--" + "x", default=f(1))
     """,
+    "addoption_type_string": """
+        def pytest_addoption(parser):
+            parser.addoption("--x", default="1", type="custom")
+    """,
+    "addoption_action_not_built_in": """
+        def pytest_addoption(parser):
+            parser.addoption("--x", action="custom")
+    """,
+    "addoption_action_help": """
+        def pytest_addoption(parser):
+            parser.addoption("--x", action="help")
+    """,
+    "addoption_action_not_a_string": """
+        def pytest_addoption(parser):
+            parser.addoption("--x", action=None)
+    """,
     "addoption_computed_in_a_list": """
         def pytest_addoption(parser):
             parser.addoption("--x", choices=["a", f(1)])
@@ -129,6 +145,16 @@ KEPT = {
         def pytest_addoption(parser, pluginmanager):
             parser.addoption("--x", action="store_true", default=False, help="x")
             parser.addoption("--y", choices=["a", "b"], default=None)
+    """,
+    "built_in_actions": """
+        def pytest_addoption(parser):
+            parser.addoption("--a", action="store", default="1")
+            parser.addoption("--b", action="store_false")
+            parser.addoption("--c", action="store_const", const=1)
+            parser.addoption("--d", action="append", default=[])
+            parser.addoption("--e", action="append_const", const=1)
+            parser.addoption("--f", action="count", default=0)
+            parser.addoption("--g", action="extend", nargs="+")
     """,
     "ellipsis": """
         def pytest_assertrepr_compare(config, op, left, right):

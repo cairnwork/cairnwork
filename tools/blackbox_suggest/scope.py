@@ -31,6 +31,8 @@ COUNT_HOOKS = {  # change what is collected
     "pytest_collection",
 }
 HARMLESS_HOOKS = {"pytest_addoption", "pytest_report_header", "pytest_assertrepr_compare"}
+ACTIONS = {"store", "store_true", "store_false", "store_const", "append", "append_const"}
+ACTIONS |= {"count", "extend"}  # argparse's own; any other name may be registered elsewhere
 PYTEST_HEADS = {"pytest", "mark", "fixture", "param"}
 SAFE_IMPORTS = {"pytest", "unittest", "_pytest"} | set(sys.stdlib_module_names)
 TYPING_NAMES = {"TYPE_CHECKING": "typing.TYPE_CHECKING", "typing": "typing"}
@@ -263,7 +265,15 @@ def _empty_statement(stmt: ast.stmt, parser: str | None) -> bool:
     ):
         return False
     values = [*call.args, *(k.value for k in call.keywords)]
-    return all(k.arg for k in call.keywords) and all(_literal(v) for v in values)
+    options = {k.arg: k.value for k in call.keywords}
+    action = options.get("action", ast.Constant("store"))
+    return (
+        all(k.arg for k in call.keywords)
+        and all(_literal(v) for v in values)
+        and "type" not in options  # a name can reach a converter registered elsewhere
+        and isinstance(action, ast.Constant)
+        and action.value in ACTIONS
+    )
 
 
 def _literal(node: ast.expr) -> bool:
