@@ -151,6 +151,13 @@ BLOCK = {
         "@functools.lru_cache",
         "import functools, sys as s, factory\nk = 'a' + 'b'\ns.modules[k] = factory",
     ),
+    **{
+        f"non_allowlisted_{m}": _fn("@functools.lru_cache", f"import functools\nimport {m}")
+        for m in "pydoc timeit trace pdb doctest cProfile zipapp site sched os subprocess".split()
+    },
+    "from_non_allowlisted": _fn(
+        "@functools.lru_cache", "import functools\nfrom pydoc import locate"
+    ),
     "call_on_call": _fn("@functools.partial(functools.lru_cache)(1)", "import functools"),
     "expr_arg": _fn("@functools.lru_cache(maxsize=1 + x)", "import functools"),
 }
@@ -233,6 +240,10 @@ def test_store_through_a_non_stdlib_chain_voids_every_module():
 
 def test_exec_capable_import_or_stdlib_string_in_any_tree_file_voids_everything():
     assert voided_modules({"o": ast.parse("import runpy\nrunpy.run_path('p')")}) == {"*"}
+    assert voided_modules({"o": ast.parse("import pydoc\npydoc.locate('p.t')")}) == {"*"}
+    assert (
+        voided_modules({"o": ast.parse("import pathlib, sys, re\nsys.path.insert(0, '')")}) == set()
+    )
     assert "*" in voided_modules({"o": ast.parse("x = go('functools.lru_cache')")})
     assert voided_modules({"o": ast.parse("x = go('not a module')")}) == set()
 

@@ -28,16 +28,20 @@ _DYNAMIC = _PATCH | frozenset(
     "__getattr__ __getattribute__".split()
 )
 _ALL = "*"
-_EXEC = frozenset(
-    "importlib builtins runpy code codeop pickle marshal subprocess ctypes multiprocessing "
-    "unittest mock imp pkgutil zipimport os".split()
+# Positive allowlist: the only stdlib modules whose import cannot load or run another file or
+# execute text. Any other stdlib import (importlib, pydoc, runpy, timeit, os, unittest ...) in a
+# file makes that file fall back to main, and in any tree file voids every stdlib module.
+_INERT = frozenset(
+    "__future__ abc bisect collections contextlib copy dataclasses datetime decimal enum "
+    "fractions functools heapq itertools json math numbers operator pathlib random re string "
+    "sys textwrap time types typing uuid warnings weakref".split()
 )
 _MODULE_STR = re.compile(r"[A-Za-z_][\w]*(\.[A-Za-z_]\w*)*")
 
 
 def _tokens(tree: ast.Module) -> set[str]:
     """Dynamic-access evidence in ``tree``: patch or lookup names, ``.modules`` on any base, an
-    import of an exec-capable module (``_EXEC``), a string naming a stdlib module (dotted too)."""
+    import of a stdlib module outside ``_INERT``, a string naming a stdlib module (dotted too)."""
     found: set[str] = set()
     for n in ast.walk(tree):
         if isinstance(n, ast.Name):
@@ -51,7 +55,11 @@ def _tokens(tree: ast.Module) -> set[str]:
         elif isinstance(n, ast.ImportFrom | ast.Import):
             mods = [n.module or ""] if isinstance(n, ast.ImportFrom) else []
             mods += [a.name for a in n.names]
-            found |= {"exec-import" for m in mods if m.split(".")[0] in _EXEC}
+            found |= {
+                "exec-import"
+                for m in mods
+                if m.split(".")[0] in sys.stdlib_module_names and m.split(".")[0] not in _INERT
+            }
             found |= {"sys.modules" for a in n.names if a.name == "modules"}
     return found & (_DYNAMIC | {"sys.modules", "exec-import", "str-module"})
 
@@ -163,7 +171,8 @@ def external_decorator(decorator: ast.expr, roots: frozenset[str]) -> bool:
 def voided_modules(trees: dict[str, ast.Module]) -> set[str]:
     """Stdlib modules some tree file may patch (attribute store or delete, ``setattr``,
     ``__dict__`` or ``sys.modules``); ``*`` when the target cannot be named: a store through a
-    longer chain or a non-stdlib root, an exec-capable import, a stdlib module named by string."""
+    longer chain or a non-stdlib root, an import outside the allowlist, a stdlib module named
+    by string."""
     result: set[str] = set()
     for tree in trees.values():
         names = {n: m.split(".")[0] for n, m, _ in _imports(tree)}
