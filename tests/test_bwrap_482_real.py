@@ -198,9 +198,8 @@ def test_verifier_socket_walk_reports_categories_only(account_tree):
         socket_path.chmod(0o666)
         listener.listen()
         script = Path(__file__).parents[1] / "scripts" / "socket_walk_471.py"
-        policy = bwrap.BACKEND.policy(
-            (script,), (), home=base / "home", mask_home_credentials=False
-        )
+        # the account cannot exec the venv or read the checkout: system python, source via -c
+        policy = bwrap.BACKEND.policy((), (), home=base / "home", mask_home_credentials=False)
         policy_path = base / "walk-policy.txt"
         policy_path.write_text(policy.text)
         from cairnwork.verifier_account import VerifierAccount
@@ -208,7 +207,7 @@ def test_verifier_socket_walk_reports_categories_only(account_tree):
         account = VerifierAccount()
         with account.exclusive(90):
             result = subprocess.run(
-                account.wrap([sys.executable, str(script)], policy_path),
+                account.wrap(["/usr/bin/python3", "-I", "-c", script.read_text()], policy_path),
                 capture_output=True,
                 timeout=100,
                 check=False,
