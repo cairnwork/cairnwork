@@ -1,7 +1,10 @@
 """Keep a post-verified hook in the runner's session and stop it on runner loss.
 
 Descendants that call setsid() to enter a new session are not covered. Killing the
-watchdog and runner at the same time is also not covered.
+watchdog and runner at the same time is also not covered. On a normal hook exit the
+watchdog never kills its own group (that would replace the hook's status; the runner cleans the
+group); a descendant still forking when the 3 s scan ends, or a pid reused between listing and
+kill, can survive.
 """
 
 from __future__ import annotations
@@ -18,11 +21,10 @@ def _kill_session(*, kill_group: bool = True) -> None:
     """Kill processes in this session, then kill the watchdog's process group."""
     session_id = os.getpid()
     deadline = time.monotonic() + 3
-    listing_failed = False
     while time.monotonic() < deadline:
         try:
             result = subprocess.run(
-                ["ps", "-A", "-o", "pid="],
+                ["/bin/ps", "-A", "-o", "pid="],  # absolute: not the hook's PATH
                 capture_output=True,
                 text=True,
                 timeout=0.5,
@@ -31,7 +33,6 @@ def _kill_session(*, kill_group: bool = True) -> None:
         except (OSError, subprocess.TimeoutExpired):
             result = None
         if result is None or result.returncode != 0:
-            listing_failed = True
             time.sleep(0.05)
             continue
         pids: list[int] = []
@@ -50,7 +51,7 @@ def _kill_session(*, kill_group: bool = True) -> None:
         if not pids:
             break
         time.sleep(0.05)
-    if kill_group or listing_failed:
+    if kill_group:
         os.killpg(0, signal.SIGKILL)
 
 

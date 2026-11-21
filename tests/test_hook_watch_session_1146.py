@@ -145,3 +145,9 @@ def test_ordinary_hook_exit_code_and_stdout_are_unchanged():
         dict(os.environ),
     )
     assert code == 7 and out == b"ordinary\n"
+
+
+def test_successful_hook_keeps_status_when_ps_is_not_on_path():
+    """The listing uses an absolute ps and never kills the watchdog itself on a normal exit."""
+    code, _out, _err = post_verified._run(["/usr/bin/true"], 10, {"PATH": "/nonexistent:/usr/bin"})
+    assert code == 0
