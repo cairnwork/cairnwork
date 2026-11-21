@@ -209,3 +209,29 @@ def test_cli_refuses_explicit_account_when_config_disables_it(
     out = json.loads(capsys.readouterr().out)
     assert code == 2
     assert out["error"] == "VERIFIER_ACCOUNT_NOT_ENABLED"
+
+
+def test_cli_returns_json_when_selected_account_config_cannot_be_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    monkeypatch.setitem(
+        verifier_select.VERIFIER_ACCOUNTS,
+        "cairnwork-verifier2",
+        VerifierAccount(user="cairnwork-verifier2", root=root),
+    )
+    monkeypatch.setattr(verifier_select.pwd, "getpwnam", lambda _u: object())
+
+    def unreadable(_self: Intake) -> dict[str, Any]:
+        raise PermissionError("config is unreadable")
+
+    monkeypatch.setattr(Intake, "config", unreadable)
+    code = verify_cli.main(
+        ["--verifier-account", "cairnwork-verifier2", "--state", str(tmp_path), "cleanup"]
+    )
+    captured = capsys.readouterr()
+
+    assert code == 2
+    assert json.loads(captured.out)["error"] == "BAD_CONFIG"
+    assert captured.err == ""

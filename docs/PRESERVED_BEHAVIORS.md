@@ -214,3 +214,19 @@ test commit 新增的非測試 `.py`（範例樹、lint fixture、故意不能 i
 宣告設計對這三者的答案（hook 接線後）：被宣告的檔若在執行期以自己的名字被載入，`DataExecRefused` 會讓該次執行失敗（base 跑變 `UNCOMPARABLE DATA_EXEC_REFUSED`，不算有牙齒）。殘餘（以別名執行檔案文字、C 層 eval）需要有意作弊的作者，屬 #843 的信任模型（test commit 是受信任的輸入，作者本來就持有判定權；全文見 `docs/SECURITY.md`「The test commit is trusted input」），不是 worker 繞過。`Cairnwork-Data` 是作者宣告，exec hook 抓的是意外，不是惡意作者。
 
 尚未做：producer 端接線。`module_plugins.py` 讀 `declared_data`（只用來擋改動模組的外掛），但 producer 還沒有用宣告來放寬 untargeted 規則（`deferred_tests.py` 242-245 行），也沒有把 `data_paths` 傳給 `_prepare_run`／`install_plugin`，所以用 trailer 的 test commit 接收端放行、producer 端仍回 `DEFERRED_TESTS_NOT_TARGETED`，exec hook 也不會在真實執行裡啟動。該接線會放寬 untargeted 拒絕，需先有獨立 spec 與跨家設計審查，另開 Design Issue（#1334）追蹤；在那之前本條目是現行行為與設計意圖的說明，不是已生效的防護。
+
+## 已知限制：兩個接受的殘留（#1011、#1369）
+
+兩條都是 layer1 裁定「接受並文件化」，沒有行為改動。
+
+### 「沒看過測試 commit」在物件庫局部損壞時的殘留（#1011）
+
+`deferred_tests.never_seen` 用 `rev-parse --verify --quiet`：只有 git 靜默 exit 1 才算「這台機器沒看過」，其他失敗（逾時、repo 壞）丟 `TEST_COMMIT_EXPOSURE_UNKNOWN`（#1013，`tests/test_never_seen_1011.py` 釘住）。殘留的窄類：物件庫局部損壞時 git 也會靜默 exit 1，但物件其實還在磁碟上，被當成「沒看過」（錯誤放行方向）。
+
+前提是要有能破壞物件庫的同帳號程序，而那個程序本來就能讀同一個 repo，所以風險低。曾考慮在 exit 1 後再跑 `git fsck --connectivity-only`，在真實 clone 量到的時間（各 5 次中位數）：cairnwork 13.85 秒、nexus-new 3.74 秒、knowledge 0.12 秒，超過 2 秒門檻，每個任務多這一步代價過大，所以不做；處置是不擋、列為已知限制。
+
+### 含 `]::` 的 case id 會被報成「沒跑」（#1369）
+
+`p2p_function._without_case`（括號深度）與 `node_ids.without_case`（第一個 `[` 起整段）對 `t.py::test_x[a]::b]` 結果不同；`deferred_tests`、`base_teeth`、`p2p_collect` 用前者，所以一個真的跑過的目標會被報成沒跑。方向是拒絕（fail closed），不是放行。
+
+不能統一成 `node_ids` 版：`t.py::C[variant]::test_y`（參數化類別，`tests/test_bracket_nodeid_1276.py`）與 `t.py::test_f[a]::b]`（case id，`tests/test_node_ids_1309_review.py`）文字同形，單看字串分不出來，統一會把 `C[a]::test_x[b]::1abc]]` 與 `C[c]::test_y[d]::2def]]` 併成同一個 `C`，可能 false pass（PR #1499 因此縮範圍）。根本解是 collect 階段記函式層 key（動 verdict 形狀，HIGH），等真遇到該類 id 再做。處置是不擋、列為已知限制。

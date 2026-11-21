@@ -292,6 +292,35 @@ def _walk(monkeypatch, run: Path, limits: tuple[int, int]) -> subprocess.Complet
 
 
 @darwin
+def test_a_flag_that_lchflags_cannot_clear_is_reported_as_failure(runs):
+    """The real walker must leave an unremovable flag for the caller to refuse, not count the
+    file as completed merely because lchflags was attempted."""
+    assert sys.platform == "darwin"  # chflags exists only there
+    top = runs / "top"
+    top.mkdir()
+    locked = top / "locked"
+    locked.write_text("x")
+    os.chflags(locked, stat.UF_IMMUTABLE)
+    preamble = """\
+import os
+real = os.lchflags
+def denied(path, flags):
+    if path == 'locked':
+        raise PermissionError(1, 'injected flag refusal')
+    return real(path, flags)
+os.lchflags = denied
+"""
+    argv = [sys.executable, "-I", "-c", f"{preamble}\n{run_scrub._UNLOCK}"]
+    done = subprocess.run(
+        [*argv, os.path.realpath(top), *map(str, run_scrub._UNLOCK_LIMITS)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 1 and "limit reached" in done.stderr, done
+
+
+@darwin
 def test_a_large_directory_stops_at_the_entry_limit(runs, monkeypatch):
     """A listing reads at most half the budget left plus one name, so a huge directory cannot
     hold the walk in one listing past its limits: 1000 names against a budget of 10 stop it."""

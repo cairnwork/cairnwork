@@ -9,6 +9,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from cairnwork.gitcmd import GitCommandError, run_git
+from cairnwork.refusal_types import _shown_detail
 
 _REGULAR = ("100644", "100755")
 MAX_DELETED_TEST_PATHS = (
@@ -20,7 +21,7 @@ OVERLAY_RULE = "overlay-v1"  # how the tests are laid over a candidate (#229); b
 class TestCommitRejected(Exception):
     def __init__(self, code: str, detail: str = "") -> None:
         self.code = code
-        super().__init__(f"{code}: {detail}" if detail else code)
+        super().__init__(f"{code}: {_shown_detail(detail)}" if detail else code)
 
 
 class TestFiles(tuple):  # noqa: SLOT001  (a tuple of the added or changed paths, as before)

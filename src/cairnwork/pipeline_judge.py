@@ -306,7 +306,7 @@ def judge_candidate(
     )
     recorded = notary.verdict(task_id, result.attempt_id, expected_candidate=subject)
     result.verified = bool(verdict.verified and recorded and recorded.verified)
-    result.reason = verdict_reason(result.verified, verdict, recorded) + explain(runs)
+    result.reason = verdict_reason(result.verified, verdict, recorded) + explain(runs, test_files)
     result.reason += "".join(f" [{check.reason}]" for check in checks) + gate_note
 
 

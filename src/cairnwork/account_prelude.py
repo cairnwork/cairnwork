@@ -38,6 +38,8 @@ def locked_prelude(account, python: str, timeout: float) -> Iterator[None]:
                 raise VerifierAccountError(f"account {account.user} is not usable")
             account.require_idle()
             account.scrub_stale_runs()  # a killed run's private/run, before this run creates one
+        except AccountBusy:
+            raise  # busy is not "unusable": the caller's busy rule decides (#832)
         except VerifierAccountError as exc:
             raise AccountUnusableBeforeRun(str(exc).removeprefix(f"{exc.code}: ")) from exc
         yield
