@@ -14,7 +14,7 @@ from cairnwork.candidate_alias_writes import (
     _is_write_statement,
     _module_aliases,
 )
-from cairnwork.candidate_reach import binds_search_path, is_docstring
+from cairnwork.candidate_reach import binds_search_path, is_docstring, references_doc
 
 _BLOCK_FIELDS = ("body", "orelse", "finalbody", "handlers", "cases")
 _DEF_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
@@ -322,6 +322,8 @@ def runtime_shadow_added(old: bytes | None, new: bytes) -> bool:
     if not added_counts:
         return False
 
+    doc_reference = references_doc(new_tree) or (old_tree is not None and references_doc(old_tree))
+
     new_sys = _collect_sys_names(new_tree)
     added_items = [own for key, own in new_items if key in added_counts]
     openers = _imported_openers(new_tree)
@@ -339,7 +341,10 @@ def runtime_shadow_added(old: bytes | None, new: bytes) -> bool:
     )
     added_path = any(
         _is_path_edit_statement(own, new_sys, ast.unparse(own)) for own in added_items
-    ) or (binds_search_path(new_tree) and not all(is_docstring(own) for own in added_items))
+    ) or (
+        binds_search_path(new_tree)
+        and (doc_reference or not all(is_docstring(own) for own in added_items))
+    )
     new_path = any(_is_path_edit_statement(own, new_sys, ast.unparse(own)) for _, own in new_items)
     new_write = any(
         _is_write_statement(own, openers, writers, modules, fileios, flag_openers)
