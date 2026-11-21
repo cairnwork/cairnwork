@@ -33,12 +33,14 @@ class VerifyContext:
     base_commit: str | None = None  # pytest settings come from this commit (pytest_config.py)
     import_paths: tuple[str, ...] = ()  # checkout-relative dirs prepended to the import path
     hash_seed: str = field(default_factory=new_hash_seed)  # PYTHONHASHSEED of every run (#870)
+    test_commit: str | None = None  # #1186: the private tests; wording only, never a verdict input
 
     @classmethod
     def of(cls, task, run_root, attempt_id="", account=None, python=None) -> VerifyContext:
         return cls(
-            task.repo, run_root, attempt_id, account, python, task.base_commit, task.import_paths
-        )
+            task.repo, run_root, attempt_id, account, python, task.base_commit, task.import_paths,
+            test_commit=getattr(task, "test_commit", None),
+        )  # fmt: skip
 
     def started(self, attempt_id: str) -> VerifyContext:
         """This context for a new attempt: a fresh hash seed that every run of the attempt (base,
