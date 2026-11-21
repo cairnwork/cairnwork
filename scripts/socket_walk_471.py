@@ -32,14 +32,18 @@ def location(path: str) -> str:
     return "other"
 
 
-def _socket_type(path: str) -> str:
-    """Probe supported Unix socket types without sending data."""
-    for kind, label in ((socket.SOCK_STREAM, "stream"), (socket.SOCK_DGRAM, "dgram")):
-        if _connect(path, kind) == "connectable":
-            return label
-    if hasattr(socket, "SOCK_SEQPACKET") and _connect(path, socket.SOCK_SEQPACKET) == "connectable":
-        return "seqpacket"
-    return "stream"
+def _probe(path: str) -> tuple[str, str]:
+    """Return (socket type, result); the first type that connects wins, else the stream result."""
+    kinds = [("stream", socket.SOCK_STREAM), ("dgram", socket.SOCK_DGRAM)]
+    if hasattr(socket, "SOCK_SEQPACKET"):
+        kinds.append(("seqpacket", socket.SOCK_SEQPACKET))
+    first = ""
+    for label, kind in kinds:
+        result = _connect(path, kind)
+        if result == "connectable":
+            return label, result
+        first = first or result
+    return "stream", first
 
 
 def _connect(path: str, kind: int) -> str:
@@ -82,13 +86,7 @@ def collect() -> dict[str, int]:
             except OSError:
                 continue
             loc = location(path)
-            kind = _socket_type(path)
-            socket_types = {
-                "stream": socket.SOCK_STREAM,
-                "dgram": socket.SOCK_DGRAM,
-                "seqpacket": getattr(socket, "SOCK_SEQPACKET", socket.SOCK_STREAM),
-            }
-            result = _connect(path, socket_types[kind])
+            kind, result = _probe(path)
             key = f"{loc}|{kind}|{result}"
             counts[key] = counts.get(key, 0) + 1
     return counts
@@ -99,12 +97,16 @@ def main() -> None:
     output = json.dumps(report, sort_keys=True)
     print(output)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
-    if summary:
+    if not summary:
+        return
+    try:  # the sandbox filesystem is read-only: the JSON above is the report
         with open(summary, "a", encoding="utf-8") as handle:
             handle.write("\n| Location | Socket type | Result | Count |\n|---|---|---|---:|\n")
             for key, count in sorted(report.items()):
                 loc, kind, result = key.split("|")
                 handle.write(f"| {loc} | {kind} | {result} | {count} |\n")
+    except OSError:
+        pass
 
 
 if __name__ == "__main__":

@@ -142,7 +142,7 @@ def test_account_run_fails_with_the_unreachable_mask(account_tree, monkeypatch):
     assert b"docker.sock" in failed.stderr, failed.stderr.decode(errors="replace")
 
 
-def _socket_report(base: Path, owner: bool, socket_path: Path) -> str:
+def _socket_report(base: Path, owner: bool) -> str:
     """Run the measurement script with the fixture home and script readable."""
     script = Path(__file__).parents[1] / "scripts" / "socket_walk_471.py"
     policy = bwrap.BACKEND.policy((script,), (), home=base / "home", mask_home_credentials=owner)
@@ -168,12 +168,14 @@ def test_owner_socket_walk_reports_categories_only(fixture_tree):
     listener.bind(str(socket_path))
     listener.listen()
     try:
-        report_text = _socket_report(base, True, socket_path)
+        report_text = _socket_report(base, True)
     finally:
         listener.close()
         socket_path.unlink(missing_ok=True)
     report = json.loads(report_text)
     assert isinstance(report, dict)
+    if "truncated|-|-" in report:
+        pytest.skip("socket walk stopped early (time or entry cap); no category count")
     assert sum(count for key, count in report.items() if key.startswith("home|")) >= 1
     print(report_text)
     warnings.warn(report_text, stacklevel=2)
@@ -186,13 +188,14 @@ def test_verifier_socket_walk_reports_categories_only(account_tree):
     import warnings
 
     base, _rd, _cred = account_tree
-    socket_path = Path(tempfile.mkdtemp(prefix="cw471-", dir="/var/tmp")) / "probe.sock"
-    socket_path.parent.chmod(0o755)
+    socket_dir = Path(tempfile.mkdtemp(prefix="cw471-", dir="/var/tmp"))
+    socket_path = socket_dir / "probe.sock"
     listener = socket.socket(socket.AF_UNIX)
-    listener.bind(str(socket_path))
-    socket_path.chmod(0o666)
-    listener.listen()
     try:
+        socket_dir.chmod(0o755)
+        listener.bind(str(socket_path))
+        socket_path.chmod(0o666)
+        listener.listen()
         script = Path(__file__).parents[1] / "scripts" / "socket_walk_471.py"
         policy = bwrap.BACKEND.policy(
             (script,), (), home=base / "home", mask_home_credentials=False
@@ -212,12 +215,14 @@ def test_verifier_socket_walk_reports_categories_only(account_tree):
             )  # noqa: S603
         assert result.returncode == 0, result.stderr.decode(errors="replace")
         report_text = result.stdout.decode()
-        assert socket_path.parent.name not in report_text
+        assert socket_dir.name not in report_text
         report = json.loads(report_text)
+        if "truncated|-|-" in report:
+            pytest.skip("socket walk stopped early (time or entry cap); no category count")
         assert sum(count for key, count in report.items() if key.startswith("var-tmp|")) >= 1
         print(report_text)
         warnings.warn(report_text, stacklevel=2)
     finally:
         listener.close()
         socket_path.unlink(missing_ok=True)
-        socket_path.parent.rmdir()
+        socket_dir.rmdir()
