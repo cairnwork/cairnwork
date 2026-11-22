@@ -61,7 +61,7 @@ from functools import partial
 from pathlib import Path
 
 import cairnwork_sandbox
-from cairnwork import gitcmd, pytest_config, report_channel, report_guard
+from cairnwork import fixture_probe, gitcmd, pytest_config, report_channel, report_guard
 from cairnwork.account_checkout import checkout_differences, make_account_checkout
 from cairnwork.account_checkout import remove_checkout as _remove_checkout
 from cairnwork.account_prelude import locked_prelude
@@ -240,7 +240,7 @@ def _prepare_run(private: Path, ini: Path, ini_text: bytes, channel=None, hash_s
 
 
 def _run_one(batch: _Batch, spec, checkout) -> VerifierRun:
-    account, python = batch.ctx.account, batch.python
+    account, python, ctx = batch.ctx.account, batch.python, batch.ctx
     plugins = pytest_config.installed_plugins(python)
     ini_text = batch.settings.ini_text(checkout, plugins)
     private = Path(tempfile.mkdtemp(prefix=f"{checkout.name}.", dir=checkout.parent.parent))
@@ -248,7 +248,9 @@ def _run_one(batch: _Batch, spec, checkout) -> VerifierRun:
     # close the channel, then drop private/run even if that close raises
     with unless_interrupted(partial(close_private, private, account)):
         try:
-            return _run_one_in(batch, spec, checkout, plugins, ini_text, private, channel)
+            run = _run_one_in(batch, spec, checkout, plugins, ini_text, private, channel)
+            names = fixture_probe.finish(spec, ctx, batch.candidate_commit, private, ini_text, run)
+            return replace(run, fixture_names=names)
         finally:
             if channel is not None:
                 channel.close()
@@ -283,28 +285,28 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
     )
     if account is not None:
         account.share_run(private, ini, run_dir, home, tmp)
-    if attempt_id:
-        env[ATTEMPT_ENV] = attempt_id
-    argv = [
-        python, "-P", "-m", "pytest", "-q", "-p", "no:cacheprovider", "-c", str(ini),
-        f"--rootdir={checkout}", f"--confcutdir={checkout}", "-o", "addopts=",
-        *batch.settings.args(plugins), "-p", report_guard.MODULE, *spec.targets,
-        *spec.flags(),  # --collect-only (#793), --continue-on-collection-errors (#796)
-    ]  # fmt: skip
-    before, profile, evidence, backend = os.lstat(checkout), None, None, cairnwork_sandbox.select()
-    if backend is not None:
-        profile = backend.policy(
-            read_roots=(*pytest_config.interpreter_roots(python), ini, private / "guard"),
-            write_roots=(checkout.parent, run_dir),
-            mask_home_credentials=account is None,  # account uid can't enter the owner's home
-        )
-        profile, returncode, timed_out, survivors, evidence = _run_confined(
-            batch.deny, profile, python, argv, profile_path, checkout, env, timeout, log_path,
-            account, backend, channel.pass_fds if channel else (),
-        )  # fmt: skip
-    else:
-        _write_new(log_path, b"no sandbox backend available: verifier not executed\n")
-        returncode, timed_out, survivors = None, False, 0
+    env.update({ATTEMPT_ENV: attempt_id} if attempt_id else {})
+    with fixture_probe.start(spec, ctx, private, env, ini_text, candidate_commit) as probe:
+        argv = [
+            python, "-P", "-m", "pytest", "-q", "-p", "no:cacheprovider", "-c", str(ini),
+            f"--rootdir={checkout}", f"--confcutdir={checkout}", "-o", "addopts=",
+            *batch.settings.args(plugins), "-p", report_guard.MODULE, *probe.argv, *spec.targets,
+            *spec.flags(),  # --collect-only (#793), --continue-on-collection-errors (#796)
+        ]  # fmt: skip
+        before, backend = os.lstat(checkout), cairnwork_sandbox.select()
+        profile, evidence, returncode, timed_out, survivors = None, None, None, False, 0
+        if backend is not None:
+            profile = backend.policy(
+                read_roots=(*pytest_config.interpreter_roots(python), ini, private / "guard"),
+                write_roots=(checkout.parent, run_dir),
+                mask_home_credentials=account is None,  # account uid can't enter the owner's home
+            )
+            profile, returncode, timed_out, survivors, evidence = _run_confined(
+                batch.deny, profile, python, argv, profile_path, checkout, env, timeout, log_path,
+                account, backend, (*(channel.pass_fds if channel else ()), *probe.pass_fds),
+            )  # fmt: skip
+        else:
+            _write_new(log_path, b"no sandbox backend available: verifier not executed\n")
     mutated = checkout_differences(ctx.repo, candidate_commit, checkout, before, account, python)
     forged = bytecode_findings(tmp, checkout, run_dir, spec.targets, account, python)
     verdict = _read_verdict(channel, verdict_path, verdict_nonce, plugins, checkout)

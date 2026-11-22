@@ -16,7 +16,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .config import import_dirs, pytest_config, recursion_skips
+from .config import import_dirs, pytest_config, recursion_skips, strict_ids
+from .ids import distinct_ids
 from .literals import Refused
 from .obligations import Scope, collect
 from .resolve import Imports, Project, binds_module_hook, module_env
@@ -161,9 +162,12 @@ def analyze_file(test_file: Path, project_root: Path, source_roots: list[Path]) 
     project = Project(source_roots)
     scope = _scope(test_file, project_root, project, [*inits, *conftests, tree])
     imports, env = Imports(tree), module_env(tree)
+    ids = None  # pytest stops collecting the file on a repeated id (#370)
+    if strict_ids(test_file.parent, project_root) and not distinct_ids([tree, *conftests]):
+        ids = "pytest config makes a repeated parametrize id an error; ids here may repeat"
     out: list[Obligation] = []
     for item in collect(tree, rel, conftests, scope, inits):
-        refusal, cases = item.refusal, []
+        refusal, cases = item.refusal or ids, []
         if refusal is None:
             try:
                 drafts = drafts_for(item.func, item.bindings, imports, project, env)
