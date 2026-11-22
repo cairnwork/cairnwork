@@ -286,3 +286,38 @@ def test_unit_timed_out_is_none(tmp_path):
     pf = tmp_path / "guard" / f"{UNIT_MODULE}.py"
     probe = _unit_probe(tmp_path, _record(UNIT_MODULE, pf), UNIT_MODULE, pf)
     assert probe.read(0, True) is None
+
+
+def test_an_account_run_records_nothing(tmp_path):
+    """Owner runs only: with an account, start adds nothing and finish reads nothing, even when a
+    complete, matching record is sitting in the private dir."""
+    import hashlib
+    import json
+    from types import SimpleNamespace
+
+    spec = SimpleNamespace(record_fixtures=True)
+    owner = SimpleNamespace(account=None, base_commit=None)
+    account = SimpleNamespace(account=object(), base_commit=None)
+    ini, commit = b"ini", "c" * 40
+    private = tmp_path / "private"
+    (private / "guard").mkdir(parents=True)
+    (private / "run").mkdir()
+    env: dict = {}
+    started = fixture_probe.start(spec, owner, private, env, ini, commit)
+    record = _record(started.module, started.plugin_file)
+    record["settings_digest"] = hashlib.sha256(ini).hexdigest()
+    record["base_sha"] = commit
+    assert started.record_dir is not None
+    (started.record_dir / "record.json").write_text(json.dumps(record))
+    run = SimpleNamespace(returncode=0, timed_out=False)
+    assert fixture_probe.finish(spec, owner, commit, private, ini, run) == frozenset(
+        {"widget", "tmp_path"}
+    )  # control: the same private dir reads fine for an owner run
+    assert fixture_probe.finish(spec, account, commit, private, ini, run) is None
+    other, other_env = tmp_path / "other", {}
+    (other / "guard").mkdir(parents=True)
+    (other / "run").mkdir()
+    assert (
+        fixture_probe.start(spec, account, other, other_env, ini, commit) == fixture_probe.Probe()
+    )
+    assert other_env == {} and not list((other / "guard").iterdir())
