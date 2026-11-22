@@ -29,7 +29,7 @@ LOADS = {"load", "loads", "Unpickler", "_load", "_loads", "_Unpickler"}
 NEVER = {f"{m}.{n}" for m in ("pickle", "_pickle") for n in LOADS} | {"shelve.open"}
 NEVER |= {"pytest.main", "pytest.console_main", "logging.config.fileConfig"}
 NEVER |= {"logging.config.listen", "unittest.main", "unittest.TestProgram"}
-HIDDEN = ("importlib.", "pkgutil.", "runpy.", *(f"{m}._" for m in MOCK))  # other members load
+HIDDEN = ("importlib.", "pkgutil.", "runpy.", "logging.config.", *(f"{m}._" for m in MOCK))
 DICT_CONFIG = "logging.config.dictConfig"
 BY_KEY = {"class", "()", "queue", "listener"}  # dictConfig keys whose string it imports
 OWNERS = {*MOCK, *(f"{m}.patch" for m in MOCK), "pytest", "pickle", "_pickle", "shelve"}
@@ -43,6 +43,11 @@ PATCHERS = {"setattr": (2, "value"), "delattr": (1, "name")}  # mp.setattr("m.x"
 REBINDERS = {"setattr", "delattr", "builtins.setattr", "builtins.delattr"}
 REBINDERS |= {f"{m}.{n}" for m in MOCK for n in ("patch", "patch.object", "patch.multiple")}
 MAPPINGS = {"os.environ", "sys.modules"}  # patch.dict mappings that are Python's own, not names
+ROOTS = {m.split(".")[0] for m in MAPPINGS}
+FIXTURE = "monkeypatch"
+MEMBERS = {"setattr", "delattr", "setitem", "delitem", "setenv", "delenv", "syspath_prepend"}
+MEMBERS |= {"chdir", "context", "undo"}  # what the fixture may be used for, by a direct call
+LOOKUPS = {*PATCHERS, FIXTURE}  # a string naming a patcher or the fixture: a lookup by name
 NAMED = {*PATCHERS, *LOADERS, *ATTR_NEVER, "__import__"}  # getattr(x, "<one of these>")
 
 
@@ -53,11 +58,17 @@ def by_name(tree: ast.Module) -> tuple[list[str], str | None]:
     names: list[str] = []
     if mixed:
         return names, NOT_STATIC  # one local name bound to a loader and to something else
+    shadowed = _shadowed(tree, aliases)
     calls = {id(n.func) for n in ast.walk(tree) if isinstance(n, ast.Call)}
     parts = {id(n.value) for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
+    direct = {id(v) for n in ast.walk(tree) if (v := _direct(n)) is not None}
     for node in ast.walk(tree):
         if _unreadable(node, aliases):
             return names, NOT_STATIC
+        if isinstance(node, ast.Constant) and node.value in LOOKUPS:
+            return names, NOT_STATIC  # a patcher or the fixture looked up by name
+        if isinstance(node, ast.Name) and node.id == FIXTURE and id(node) not in direct:
+            return names, NOT_STATIC  # the fixture passed on: its patchers are not read
         if not isinstance(node, ast.Name | ast.Attribute) or id(node) in parts:
             continue
         member = _member(node, aliases)
@@ -66,7 +77,7 @@ def by_name(tree: ast.Module) -> tuple[list[str], str | None]:
         if loader and id(node) not in calls:
             return names, NOT_STATIC  # passed on or stored: its arguments are not read
     for call in (n for n in ast.walk(tree) if isinstance(n, ast.Call)):
-        why = _call(call, aliases, names)
+        why = _call(call, aliases, names, shadowed)
         if why:
             return names, why
     return names, None
@@ -89,7 +100,7 @@ def _unreadable(node: ast.AST, aliases: dict[str, str]) -> bool:
     return False
 
 
-def _call(call: ast.Call, aliases: dict[str, str], names: list[str]) -> str | None:
+def _call(call: ast.Call, aliases: dict[str, str], names: list[str], shadowed: bool) -> str | None:
     member = _member(call.func, aliases)
     attr = _receiver(call.func)
     if member in {"getattr", "builtins.getattr"} and call.args:
@@ -100,7 +111,7 @@ def _call(call: ast.Call, aliases: dict[str, str], names: list[str]) -> str | No
             return NOT_STATIC
     if (
         member in NEVER
-        or (member.startswith(HIDDEN) and member not in BY_NAME)
+        or (member.startswith(HIDDEN) and member not in BY_NAME and member != DICT_CONFIG)
         or attr in ATTR_NEVER
     ):
         return UNSEEN
@@ -110,7 +121,8 @@ def _call(call: ast.Call, aliases: dict[str, str], names: list[str]) -> str | No
         return NOT_STATIC  # rebinds a mapping patch.dict trusts
     if member in BY_NAME:
         arg = _arg(call, *BY_NAME[member])
-        if member.endswith(".dict") and (isinstance(arg, ast.Dict) or _mapping(arg, aliases)):
+        exempt = isinstance(arg, ast.Dict) or _trusted(arg, aliases, not shadowed)
+        if member.endswith(".dict") and exempt:
             return None  # a mapping, not a name
         return _names([arg], names)
     if attr in LOADERS:
@@ -182,6 +194,36 @@ def _mapping(arg: ast.AST | None, aliases: dict[str, str]) -> bool:
     return arg is not None and _member(arg, aliases) in MAPPINGS
 
 
+def _trusted(arg: ast.AST | None, aliases: dict[str, str], trusted: bool) -> bool:
+    return trusted and _mapping(arg, aliases)
+
+
+def _direct(node: ast.AST) -> ast.expr | None:
+    """The receiver of a call of one of the fixture's members on a plain name."""
+    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+        return None
+    receiver = node.func.value
+    return receiver if node.func.attr in MEMBERS and isinstance(receiver, ast.Name) else None
+
+
+def _shadowed(tree: ast.Module, aliases: dict[str, str]) -> bool:
+    """Whether a name that spells os or sys, or one of their members, is bound other than by an
+    import: an assignment, a parameter, a loop, with or except target, a def or a class."""
+    bound: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load):
+            bound.add(node.id)
+        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            bound.add(node.name)
+        elif isinstance(node, ast.arg):
+            bound.add(node.arg)
+        elif isinstance(node, ast.ExceptHandler | ast.MatchAs | ast.MatchStar) and node.name:
+            bound.add(node.name)
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            bound.add(node.rest)
+    return any(aliases.get(n, n).split(".")[0] in ROOTS for n in bound)
+
+
 def _rebinds(call: ast.Call, aliases: dict[str, str]) -> bool:
     given = [*call.args, *(k.value for k in call.keywords)]
     keys = {k.arg for k in call.keywords} & {m.split(".")[1] for m in MAPPINGS}
@@ -240,6 +282,8 @@ def _aliases(tree: ast.Module) -> tuple[dict[str, str], bool]:
 
 
 def _owned(target: str) -> bool:
+    if target.split(".")[0] in ROOTS:
+        return True  # os or sys under a second meaning: the mapping exemption would misread it
     return _loader(target) or any(target == o or target.startswith(f"{o}.") for o in OWNERS)
 
 

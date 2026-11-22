@@ -15,6 +15,7 @@ CORE = "SCALE = 1\nTABLE = {}\n\n\ndef f(x):\n    return x * SCALE\n"
 SIDE = "import pkg.core\n\npkg.core.SCALE = 10\nX = 1\n"  # importing it changes f
 DRAFTED = "def test_a():\n    assert f(2) == 2\n"
 MOCK = "from unittest import mock\n"
+MP = "import pytest\n"
 CONFIG = "logging.config.dictConfig({'version': 1, 'handlers': {'h': {'class': %r%s}}})"
 
 REFUSED = {
@@ -112,6 +113,9 @@ REFUSED = {
     "import_module_relative": ("import importlib\n", "importlib.import_module('.side', 'pkg')"),
     "dunder_import_fromlist": ("", "__import__('pkg', fromlist=['side'])"),
     "resolve_name_literal_unimported": ("import pkgutil\n", "pkgutil.resolve_name('pkg.side:X')"),
+    "pytest_as_value": ("import pytest\n", "p = pytest\np.importorskip('pkg.side')"),
+    "pickle_as_value": ("import pickle\n", "p = pickle\np.loads(b'cpkg.side\\nX\\n.')"),
+    "unittest_as_value": ("import unittest\n", "u = unittest\nu.TestLoader().discover('src')"),
     "unittest_main": (
         "import unittest\n",
         "unittest.main(module='pkg.side', exit=False, argv=['x'])",
@@ -132,12 +136,89 @@ KEPT = {
     ),
     "resolve_name_drafted": ("import pkgutil\n", "pkgutil.resolve_name('pkg.core:f')"),
     "import_module_drafted": ("import importlib\n", "importlib.import_module('pkg.core')"),
-    "monkeypatch_object_other_name": ("import os\n", "m = monkeypatch\nm.setattr(os, 'sep', '/')"),
     "monkeypatch_builtins": ("import builtins\n", "monkeypatch.setattr(builtins, 'input', str)"),
     "patch_builtins_open": (MOCK, "with mock.patch('builtins.open', mock.mock_open()):\n    pass"),
+    "patch_dict_sys_modules": (
+        "import sys\n" + MOCK,
+        "with mock.patch.dict(sys.modules):\n    pass",
+    ),
+    "patch_dict_named_with_os_bound": (
+        MOCK,
+        "os = 1\nwith mock.patch.dict('os.environ', {'A': '1'}):\n    pass",
+    ),
     "patch_dict_environ_by_name": (
         "from os import environ\n" + MOCK,
         "with mock.patch.dict(environ, {'A': '1'}):\n    pass",
+    ),
+}
+
+# a name the patch.dict mapping exemption reads as os or sys, bound to something else
+MAPPING_BOUND = {
+    "assigned": (
+        MOCK + "import os\n",
+        "os = type('o', (), {'environ': 'pkg.side.X'})\n"
+        "with mock.patch.dict(os.environ, {}):\n    pass",
+    ),
+    "parameter": (
+        MOCK + "\n\ndef go(os):\n    with mock.patch.dict(os.environ, {}):\n        pass\n\n\n",
+        "go(type('o', (), {'environ': 'pkg.side.X'}))",
+    ),
+    "loop_target": (
+        MOCK + "import sys\n",
+        "for sys in [type('s', (), {'modules': 'pkg.side.X'})]:\n"
+        "    with mock.patch.dict(sys.modules, {}):\n        pass",
+    ),
+    "imported_as_another": (
+        MOCK + "import os\n\n\ndef go():\n    import json as os\n    return os\n\n\n",
+        "with mock.patch.dict(os.environ, {}):\n    pass",
+    ),
+    "imported_as_another_first": (
+        MOCK + "import json as os\n\n\ndef go():\n    import os\n    return os\n\n\n",
+        "with mock.patch.dict(os.environ, {}):\n    pass",
+    ),
+    "with_target": (
+        MOCK + "import contextlib\n",
+        "with contextlib.nullcontext(type('o', (), {'environ': 'pkg.side.X'})) as os:\n"
+        "    with mock.patch.dict(os.environ, {}):\n        pass",
+    ),
+}
+# the fixture or its patchers reached other than by a direct call of a member
+FIXTURE_LOOKUP = {
+    "methodcaller": (
+        "import operator\n",
+        "operator.methodcaller('setattr', 'pkg.side.X', 2)(monkeypatch)",
+    ),
+    "getattribute": ("", "monkeypatch.__getattribute__('setattr')('pkg.side.X', 2)"),
+    "getattr_variable": ("", "n = 'set' + 'attr'\ngetattr(monkeypatch, n)('pkg.side.X', 2)"),
+    "getattribute_variable": (
+        "",
+        "n = 'set' + 'attr'\nmonkeypatch.__getattribute__(n)('pkg.side.X', 2)",
+    ),
+    "methodcaller_instance": (
+        "import operator\nimport pytest\n",
+        "mp = pytest.MonkeyPatch()\noperator.methodcaller('setattr', 'pkg.side.X', 2)(mp)",
+    ),
+    "stored_on_instance": (MP, "mp = pytest.MonkeyPatch()\ns = mp.setattr\ns('pkg.side.X', 2)"),
+    "unbound_on_instance": (
+        MP,
+        "mp = pytest.MonkeyPatch()\npytest.MonkeyPatch.setattr(mp, 'pkg.side.X', 2)",
+    ),
+    "loader_by_getattr": (
+        "import unittest\n",
+        "getattr(unittest.TestLoader(), 'loadTestsFromName')('pkg.side')",
+    ),
+    "passed_on": ("import os\n", "m = monkeypatch\nm.setattr(os, 'sep', '/')"),
+}
+# logging.config's own configurator classes import the class names they are given
+CONFIGURATOR = {
+    "dict_configurator": (
+        "import logging.config as lc\n",
+        "lc.DictConfigurator({'version': 1, 'handlers': {'h': {'class': 'pkg.side.X'}}})"
+        ".configure()",
+    ),
+    "base_configurator": (
+        "from logging.config import BaseConfigurator\n",
+        "BaseConfigurator({}).resolve('pkg.side.X')",
     ),
 }
 
@@ -196,3 +277,23 @@ def test_a_literal_name_in_a_project_module_joins_the_closure(tmp_path: Path):
 def test_a_relative_name_is_not_read_as_an_import(tmp_path: Path):
     item = _drafted(tmp_path, *REFUSED["import_module_relative"])
     assert item.refusal is not None and "NAME_NOT_STATIC" in item.refusal
+
+
+def _refuses(tmp_path: Path, head: str, body: str) -> None:
+    item = _drafted(tmp_path, head, body)
+    assert item.refusal is not None and not item.protected(KINDS_NOW)
+
+
+@pytest.mark.parametrize("case", sorted(MAPPING_BOUND))
+def test_a_mapping_module_bound_without_an_import_refuses(tmp_path: Path, case: str):
+    _refuses(tmp_path, *MAPPING_BOUND[case])
+
+
+@pytest.mark.parametrize("case", sorted(FIXTURE_LOOKUP))
+def test_a_fixture_reached_by_a_name_lookup_refuses(tmp_path: Path, case: str):
+    _refuses(tmp_path, *FIXTURE_LOOKUP[case])
+
+
+@pytest.mark.parametrize("case", sorted(CONFIGURATOR))
+def test_a_configurator_class_refuses(tmp_path: Path, case: str):
+    _refuses(tmp_path, *CONFIGURATOR[case])
