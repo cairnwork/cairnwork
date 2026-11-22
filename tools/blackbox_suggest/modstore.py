@@ -153,10 +153,10 @@ def _bindings(node: ast.AST) -> list[tuple[list[ast.expr], ast.expr, bool]]:
 
 def _pairs(targets: list[ast.expr], value: ast.expr) -> list[tuple[list[ast.expr], ast.expr, bool]]:
     """a, b = x, y binds a to x and b to y; empty for any other shape."""
-    shapes = ast.Tuple | ast.List
-    if len(targets) != 1 or not isinstance(targets[0], shapes) or not isinstance(value, shapes):
+    target = targets[0] if len(targets) == 1 else None
+    if not isinstance(target, ast.Tuple | ast.List) or not isinstance(value, ast.Tuple | ast.List):
         return []
-    left, right = targets[0].elts, value.elts
+    left, right = target.elts, value.elts
     if len(left) != len(right) or any(isinstance(e, ast.Starred) for e in [*left, *right]):
         return []
     return [([t], v, False) for t, v in zip(left, right, strict=True)]
