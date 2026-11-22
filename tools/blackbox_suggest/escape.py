@@ -15,7 +15,7 @@ import ast
 import sys
 from typing import NamedTuple
 
-from .modstore import DISPLAYS, HANDS_BACK, VIEWS, _callee, _chain, _dotted
+from .modstore import DISPLAYS, HANDS_BACK, TAKES_ONE, VIEWS, _callee, _chain, _dotted
 
 SAFE_CALLEES = frozenset({  # builtins and library functions that only read their arguments
     "len", "isinstance", "issubclass", "str", "repr", "int", "float", "bool", "hash", "id",
@@ -109,6 +109,8 @@ def _climbed_safe(use: ast.expr, parents: dict[int, ast.AST], s: Scope) -> bool:
         if isinstance(parent, ast.Attribute | ast.Subscript) and parent.value is use:
             use = parent
         elif isinstance(parent, ast.Call) and _hands_back(parent, use, s):
+            if not _one_element(parent):
+                return _box_safe(parent, parents, s)  # a new container of its elements
             use = parent
         else:
             return _safe_use(use, parents, s)
@@ -123,7 +125,15 @@ def _hands_back(call: ast.Call, use: ast.expr, s: Scope) -> bool:
     return name in COPIES and s.library(call.func) and any(a is use for a in call.args)
 
 
-def _box_safe(name: ast.Name, parents: dict[int, ast.AST], s: Scope) -> bool:
+def _one_element(call: ast.Call) -> bool:
+    """next(v), min(v) or v.get(k): the result is one element itself, not a new container."""
+    func = call.func
+    if isinstance(func, ast.Attribute):
+        return func.attr == "get"
+    return isinstance(func, ast.Name) and func.id in TAKES_ONE
+
+
+def _box_safe(name: ast.expr, parents: dict[int, ast.AST], s: Scope) -> bool:
     """A new container holding a held value: an element taken out of it is held; the container
     itself is a new value."""
     parent = parents.get(id(name))
@@ -135,7 +145,8 @@ def _box_safe(name: ast.Name, parents: dict[int, ast.AST], s: Scope) -> bool:
             call, parents, s
         )
     if isinstance(parent, ast.Call) and _hands_back(parent, name, s):
-        return _climbed_safe(parent, parents, s)
+        one = _one_element(parent)
+        return _climbed_safe(parent, parents, s) if one else _box_safe(parent, parents, s)
     return True
 
 
