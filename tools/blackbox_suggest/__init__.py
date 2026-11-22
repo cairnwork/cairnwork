@@ -131,7 +131,7 @@ def _module_hooks(cases: list[dict[str, Any]], project: Project) -> str | None:
     drafted = {case["target"]["module"] for case in cases}
     for module in sorted(project.import_closure(drafted, anywhere=True)):
         tree = project.tree(module)
-        if tree is None or len(project.files(module)) > 1:
+        if tree is None or project.files(module) != [project.module_file(module)]:
             return f"{module} has no single source file this reader can read"
         if binds_module_hook(tree):
             return f"{module} binds a module-level __getattr__ or __dir__"

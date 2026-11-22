@@ -37,6 +37,9 @@ class Target:
     defined_in: str = ""  # the module whose source defines it (an exception's __module__)
 
 
+CLOSURE_LIMIT = 10000
+
+
 class Project:
     """The project's source tree: module name -> parsed file, cached."""
 
@@ -92,7 +95,7 @@ class Project:
         it may be too large instead (#370)."""
         found: set[str] = set()
         todo = list(modules)
-        while todo and len(found) < 10000:
+        while todo and len(found) < CLOSURE_LIMIT:
             module = todo.pop()
             parts = module.split(".")
             for name in (".".join(parts[: i + 1]) for i in range(len(parts))):
@@ -102,6 +105,8 @@ class Project:
                 found.add(name)
                 if tree is not None:
                     todo += _imported(tree, name, self.module_file(name), anywhere)
+        if anywhere and todo:  # too large: what is left might bind a hook
+            raise Refused("the drafted targets import more modules than this reader follows")
         return found
 
     def kind_of(self, module: str, name: str, hops: int = 0) -> tuple[str, str, str]:

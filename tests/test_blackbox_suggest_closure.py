@@ -6,11 +6,12 @@ module with no single readable source, a package that moves where its submodules
 refuses instead of being left out of that check.
 """
 
+import importlib.machinery
 import textwrap
 
 import pytest
 
-from tools.blackbox_suggest import KINDS_NOW, analyze_file, default_roots
+from tools.blackbox_suggest import KINDS_NOW, analyze_file, default_roots, resolve
 
 CORE = "SCALE = 1\ndef f(x):\n    return x * SCALE\n"
 HEAD = "import pytest\nfrom pkg.core import f\n"
@@ -100,3 +101,26 @@ KEPT = {
 def test_a_closure_the_reader_reads_keeps_the_draft(tmp_path, extra):
     item = run(tmp_path, extra)
     assert item.protected(KINDS_NOW) and item.exact, item.reason(KINDS_NOW)
+
+
+@pytest.mark.parametrize("suffix", [".pyc", importlib.machinery.EXTENSION_SUFFIXES[0]])
+def test_a_module_in_an_earlier_root_the_reader_cannot_read_refuses(tmp_path, suffix):
+    files = {
+        "src/pkg/__init__.py": "",
+        f"src/pkg/core{suffix}": "not read",
+        "pkg/__init__.py": "",
+        "pkg/core.py": CORE,
+        "tests/test_x.py": HEAD + PLAIN,
+    }
+    for rel, text in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(text)
+    found = analyze_file(tmp_path / "tests/test_x.py", tmp_path, default_roots(tmp_path))
+    item = next(o for o in found if o.test_id.endswith("::test_a"))
+    assert item.refusal is not None and not item.protected(KINDS_NOW)
+
+
+def test_a_closure_past_the_limit_refuses(tmp_path, monkeypatch):
+    monkeypatch.setattr(resolve, "CLOSURE_LIMIT", 2)
+    item = run(tmp_path, {"src/pkg/core.py": CORE + "import pkg.helper\n", "src/pkg/helper.py": ""})
+    assert item.refusal is not None and not item.protected(KINDS_NOW)
