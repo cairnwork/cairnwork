@@ -7,6 +7,7 @@ name included), a project module passed on as a value and changed where the read
 look, or a patcher. A value taken from a project module (by import, by star import, through
 an assignment, a loop, a call argument or a return) and then changed in place by a store, a
 delete or a mutating method can change it too. Any of these in such a module refuses the draft.
+Every other use of such a value must be a known-safe one (escape.py); any other refuses.
 """
 
 from __future__ import annotations
@@ -80,6 +81,10 @@ def rebinds_modules(
                     return "it changes a value taken from a project module in place"
         if _module_value(node, modules, parents.get(id(node))):
             return "it passes a project module on as a value"
+    from .escape import escapes  # built on this module's helpers, so imported here
+
+    if escapes(tree, derived, seeds | (_unbound(tree) if star else set()), parents):
+        return "it hands a value taken from a project module to a use this reader does not follow"
     return None
 
 
