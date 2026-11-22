@@ -19,6 +19,7 @@ from typing import Any
 from .config import import_dirs, pytest_config, recursion_skips, strict_ids
 from .ids import distinct_ids
 from .literals import Refused
+from .loaders import as_imports, by_name
 from .obligations import Scope, collect
 from .resolve import Imports, Project, binds_module_hook, module_env
 from .scope import import_time
@@ -111,10 +112,13 @@ def _scope(test_file: Path, root: Path, project: Project, modules: list[ast.Modu
 
     imported: set[str] = set()
     for module in modules:
-        verdict = import_time(module, is_project)
-        reason = reason or verdict.reason
-        known = known and verdict.known
-        imported |= verdict.imports
+        named, why = by_name(module)  # a literal name imports as an import statement does (#370)
+        reason = reason or why
+        for read in (module, as_imports(named, lambda n: project.module_file(n) is not None)):
+            verdict = import_time(read, is_project)
+            reason = reason or verdict.reason
+            known = known and verdict.known
+            imported |= verdict.imports
     return Scope(reason, known, usefixtures, imported)
 
 
@@ -140,6 +144,9 @@ def _module_hooks(cases: list[dict[str, Any]], project: Project) -> str | None:
             return f"{module} has no single source file this reader can read"
         if binds_module_hook(tree):
             return f"{module} binds a module-level __getattr__ or __dir__"
+        why = by_name(tree)[1]
+        if why:
+            return f"{module}: {why}"
     return None
 
 
