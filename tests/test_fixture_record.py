@@ -267,3 +267,40 @@ def test_single_hook_fault_voids_complete_but_not_the_run(tmp_path: Path) -> Non
         "finish",
     }
     assert record["complete"] is False
+
+
+def test_nonce_is_read_from_the_inherited_pipe_and_the_variable_removed(tmp_path: Path) -> None:
+    read_end, write_end = os.pipe()
+    os.write(write_end, b"abc123")
+    os.close(write_end)
+    proj = project(tmp_path, {"test_a.py": "def test_a():\n    pass\n"})
+    rec = tmp_path / "rec"
+    rec.mkdir()
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join([str(ROOT / "src"), env.get("PYTHONPATH", "")])
+    env.update(
+        CAIRNWORK_FIXTURE_RECORD_DIR=str(rec),
+        CAIRNWORK_FIXTURE_NONCE_FD=str(read_end),
+        CAIRNWORK_SETTINGS_DIGEST="settings",
+        CAIRNWORK_BASE_SHA="base",
+    )
+    (proj / "conftest.py").write_text(
+        "import os\n\ndef pytest_collection_finish(session):\n"
+        "    assert 'CAIRNWORK_FIXTURE_NONCE_FD' not in os.environ\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider",
+         "-p", "cairnwork.fixture_record"],
+        cwd=proj, env=env, capture_output=True, text=True, check=False, pass_fds=(read_end,),
+    )  # fmt: skip
+    os.close(read_end)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert read_record(rec)["nonce"] == "abc123"
+
+
+def test_missing_or_bad_nonce_fd_gives_an_empty_nonce(tmp_path: Path) -> None:
+    proj = project(tmp_path, {"test_a.py": "def test_a():\n    pass\n"})
+    rec = tmp_path / "rec"
+    rec.mkdir()
+    run_collection(proj, rec)
+    assert read_record(rec)["nonce"] == ""
