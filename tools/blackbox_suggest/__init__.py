@@ -130,11 +130,14 @@ def _module_hooks(cases: list[dict[str, Any]], project: Project) -> str | None:
     """Refusal when a project module that the drafted targets import binds a module
     ``__getattr__`` or ``__dir__``: a lookup of a name it lacks (``from pkg import core``, or
     pytest probing the objects in a test module) runs that module's code. Called after
-    ``_unimported``, so this also covers every project module pytest imports for the test."""
+    ``_unimported``, so this also covers every project module pytest imports for the test. Any
+    import statement is followed, and a module with no single readable source refuses."""
     drafted = {case["target"]["module"] for case in cases}
-    for module in sorted(project.import_closure(drafted)):
+    for module in sorted(project.import_closure(drafted, anywhere=True)):
         tree = project.tree(module)
-        if tree is not None and binds_module_hook(tree):
+        if tree is None or project.files(module) != [project.module_file(module)]:
+            return f"{module} has no single source file this reader can read"
+        if binds_module_hook(tree):
             return f"{module} binds a module-level __getattr__ or __dir__"
     return None
 
