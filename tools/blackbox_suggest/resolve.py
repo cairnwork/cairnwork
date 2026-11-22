@@ -27,6 +27,10 @@ DYNAMIC = {"exec", "eval", "globals", "locals", "vars", "setattr", "delattr", "_
 DYNAMIC |= {"__builtins__", "import_module", "attrgetter", "methodcaller"}
 REFLECTIVE = {"__dict__", "__globals__", "__self__", "__setattr__", "__getattribute__", "modules"}
 REFLECTIVE |= {"f_globals", "f_locals", "f_builtins"}
+# What a def runs or shows to introspection, and the builtin that builds code from text (#370).
+REFLECTIVE |= {"__code__", "__defaults__", "__kwdefaults__", "__closure__", "cell_contents"}
+REFLECTIVE |= {"__wrapped__", "__signature__"}
+BUILDERS = {"compile"}  # a name only: re.compile and other methods stay plain
 DYNAMIC |= {"exec_module", "load_module", "_bootstrap", "_bootstrap_external"}  # importlib loaders
 INTROSPECTION = {"builtins", "ctypes", "gc", "inspect"}  # modules refused when imported at all
 INTROSPECTION |= {"importlib", "importlib_metadata"}  # EntryPoint.load imports by name
@@ -229,7 +233,9 @@ def binds_module_hook(tree: ast.Module) -> bool:
     ``setattr``, ``sys.modules``, a ``__dict__`` or ``__globals__``, a store to ``__class__``,
     an import of ``builtins``, ``ctypes``, ``gc`` or ``inspect`` or of a module that runs
     other code by name, path or source text, an importlib loader, a ``getattr`` with a computed
-    name), or any mention of a package's ``__path__``. A method in a class body is not one."""
+    name, the ``compile`` builtin, or what a def runs or shows: its code object, defaults,
+    closure cells, ``__wrapped__`` or ``__signature__``), or any mention of a package's
+    ``__path__``. A method in a class body is not one."""
     plain = {
         id(node.func)
         for node in ast.walk(tree)
@@ -245,7 +251,9 @@ def _binds(node: ast.AST, plain: set[int]) -> bool:
     if isinstance(node, ast.Global):
         return bool(MODULE_HOOKS & set(node.names))
     if isinstance(node, ast.Name):
-        return node.id in DYNAMIC | SEARCH or (node.id == "getattr" and id(node) not in plain)
+        return node.id in DYNAMIC | SEARCH | BUILDERS or (
+            node.id == "getattr" and id(node) not in plain
+        )
     if isinstance(node, ast.Attribute):
         hooks = MODULE_HOOKS | {"__class__"}
         store = isinstance(node.ctx, ast.Store) and node.attr in hooks
