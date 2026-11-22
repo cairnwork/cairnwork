@@ -20,6 +20,8 @@ def collected_names(
 ) -> frozenset[str] | None:
     if type(exit_code) is not int or exit_code not in _OK_EXIT_CODES:
         return None
+    if type(settings_digest) is not str or type(base_sha) is not str:
+        return None
     if not settings_digest or not base_sha:
         return None
     record = _load(run_dir / "record.json")
@@ -54,7 +56,9 @@ def _valid(record: Any, digest: str, base_sha: str) -> bool:
         and type(record.get("recorder_version")) is int
         and record["recorder_version"] == 2
         and record.get("complete") is True
+        and type(record.get("settings_digest")) is str
         and record.get("settings_digest") == digest
+        and type(record.get("base_sha")) is str
         and record.get("base_sha") == base_sha
         and _stages_ok(record.get("stages"))
         and _names_ok(record)

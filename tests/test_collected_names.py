@@ -264,3 +264,17 @@ def test_a_special_file_in_place_at_open_returns_none_without_blocking(
     finally:
         signal.alarm(0)
         signal.signal(signal.SIGALRM, old)
+
+
+@pytest.mark.parametrize("bad", [1, 1.5, True, ["x"], {"k": 1}, b"digest-1"])
+@pytest.mark.parametrize("field", ["settings_digest", "base_sha"])
+def test_non_string_binding_equal_on_both_sides_returns_none(
+    tmp_path: Path, field: str, bad: Any
+) -> None:
+    """A malformed record field must not match an equally malformed argument."""
+    record = good_record()
+    record[field] = bad if not isinstance(bad, bytes) else "digest-1"
+    (tmp_path / "record.json").write_text(json.dumps(record))
+    args: dict[str, Any] = {"settings_digest": DIGEST, "base_sha": SHA}
+    args[field] = bad
+    assert collected_names(tmp_path, exit_code=0, **args) is None
