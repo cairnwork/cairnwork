@@ -114,8 +114,8 @@ WARNINGS = {n for n, v in vars(builtins).items() if isinstance(v, type) and issu
 
 def warning_filter(text: str) -> bool:
     """A filter pytest parses (#370): at most five fields, a builtin warning category (bare or
-    under ``builtins.``), a whole line number and patterns that compile. pytest refuses to start
-    on a configured filter it cannot parse."""
+    under ``builtins.``), a line number ``int()`` reads as not negative and patterns that
+    compile. pytest refuses to start on a configured filter it cannot parse."""
     parts = [p.strip() for p in text.split(":")]
     if len(parts) > 5:
         return False
@@ -123,11 +123,11 @@ def warning_filter(text: str) -> bool:
     owner, _, name = category.rpartition(".")
     if owner not in ("", "builtins") or (category and name not in WARNINGS):
         return False
-    if line and not (line.isascii() and line.isdigit()):
-        return False
     try:
+        if line and int(line) < 0:  # pytest reads the line number with int()
+            return False
         for pattern, flags in ((message, 0), (message, re.I), (module, 0)):
             re.compile(pattern, flags)
-    except re.error:
+    except (re.error, ValueError):
         return False
     return True

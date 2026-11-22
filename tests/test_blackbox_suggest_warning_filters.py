@@ -35,12 +35,17 @@ BAD = {
     "too_many_fields": "ignore:a:UserWarning:m:1:extra",
     "line_not_a_number": "ignore::UserWarning:m:x",
     "line_negative": "ignore::UserWarning:m:-1",
+    "line_not_whole": "ignore::UserWarning:m:1.0",
 }
 GOOD = {
     "bare_action": "ignore",
     "builtin_category": "ignore::DeprecationWarning",
     "builtin_under_module": "ignore::builtins.UserWarning",
     "message_and_module_patterns": "default:some .* text:UserWarning:pkg\\..*:3",
+    "line_signed": "ignore::UserWarning:m:+1",
+    "line_negative_zero": "ignore::UserWarning:m:-0",
+    "line_grouped": "ignore::UserWarning:m:1_0",
+    "line_other_digits": "ignore::UserWarning:m:\uff11",
 }
 
 
