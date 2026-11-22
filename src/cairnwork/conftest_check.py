@@ -67,16 +67,29 @@ def governed(conftests: Iterable[str], existing: Iterable[str]) -> tuple[str, ..
     return tuple(sorted(t for t in existing if t.startswith(dirs)))
 
 
-def check_conftests(repo: Path, base: str, test_commit: str, paths: Iterable[str]) -> None:
+def check_conftests(
+    repo: Path,
+    base: str,
+    test_commit: str,
+    paths: Iterable[str],
+    *,
+    collected: frozenset[str] | None = None,
+) -> None:
     """Refuse a conftest change the allowlist does not cover; see the module docstring. Input
     nested too deeply for the parser or for a walk of its tree is unparsable, refused (#1022)."""
     try:
-        _check_conftests(repo, base, test_commit, tuple(paths))
+        _check_conftests(repo, base, test_commit, tuple(paths), collected)
     except RecursionError as exc:
         raise TestCommitRejected("TEST_COMMIT_UNPARSABLE", "a conftest nests too deeply") from exc
 
 
-def _check_conftests(repo: Path, base: str, test_commit: str, paths: tuple[str, ...]) -> None:
+def _check_conftests(
+    repo: Path,
+    base: str,
+    test_commit: str,
+    paths: tuple[str, ...],
+    collected: frozenset[str] | None,
+) -> None:
     check_test_module_plugins(repo, test_commit, paths)
     names = conftest_of(paths)
     own = _own_packages(repo, base) if names else frozenset[str]()
@@ -86,7 +99,11 @@ def _check_conftests(repo: Path, base: str, test_commit: str, paths: tuple[str, 
         before = [ast.dump(n) for n in old.body]
         if before != [ast.dump(n) for n in new.body[: len(before)]]:
             _refuse(path, new.body[0] if new.body else None, "changes existing top-level code")
-        table, old_table, taken = _imports(new), _imports(old), taken_names(repo, base, path, old)
+        table, old_table, taken = (
+            _imports(new),
+            _imports(old),
+            taken_names(repo, base, path, old, collected=collected),
+        )
         for node in new.body[len(before) :]:
             problem = _rebinds(node, table) or _problem(node, own, table)
             problem = problem or _takes(node, taken, old_table)
