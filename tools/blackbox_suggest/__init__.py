@@ -21,7 +21,7 @@ from .literals import Refused
 from .obligations import Scope, collect
 from .resolve import Imports, Project, binds_module_hook, module_env
 from .scope import import_time
-from .shadows import stdlib_shadows, walk
+from .shadows import clashes, stdlib_shadows, walk
 from .shapes import drafts_for
 
 KINDS_NOW = frozenset({"function"})  # what cairnwork.blackbox declares at this version
@@ -91,12 +91,15 @@ def _scope(test_file: Path, root: Path, project: Project, modules: list[ast.Modu
     if walked is not None:
         dirs = [*import_dirs(test_file.parent, root), *project.roots, *walked.base_dirs]
     shadows = None if dirs is None else stdlib_shadows(dirs)
-    if shadows is None:
+    twice = None if dirs is None else clashes(dirs)
+    if shadows is None or twice is None:
         reason = (
             reason or "a directory pytest may collect or import from cannot be read or is a link"
         )
     elif shadows:
         reason = reason or "a file on pytest's import path takes a standard-library module name"
+    elif twice:  # which one an import loads depends on the path order (#370)
+        reason = reason or "a module name is defined in two places pytest may import from"
     if walked is not None and walked.doctests:
         reason = reason or "pytest collects a text file as doctests, which run unread code"
     tests_top = test_file.resolve().parent
