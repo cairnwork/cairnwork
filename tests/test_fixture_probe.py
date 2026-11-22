@@ -114,6 +114,7 @@ def test_each_run_gets_its_own_module_name(tmp_path):
         assert p.argv[0] == "-p" and p.plugin_file is not None and p.plugin_file.exists()
         modules.append(p.argv[1])
         guards.append(p.plugin_file.name)
+        p.close()
     assert modules[0] != modules[1] and guards[0] != guards[1]
     assert all(m.startswith("_cairnwork_fixture_record_") for m in modules)
 
@@ -213,6 +214,7 @@ def _record(module, plugin_file, names=("widget", "tmp_path")):
     stages = {s: {"names": sorted(names), "count": 1} for s in STAGES}
     return {
         "recorder_version": 2,
+        "nonce": "n0nce",
         "complete": True,
         "settings_digest": "dig",
         "base_sha": "base",
@@ -232,7 +234,9 @@ def _unit_probe(tmp_path, record, module, plugin_file):
     plugin_file.parent.mkdir(exist_ok=True)
     plugin_file.touch()
     (record_dir / "record.json").write_text(json.dumps(record))
-    return fixture_probe.Probe(("-p", module), module, record_dir, plugin_file, "dig", "base")
+    return fixture_probe.Probe(
+        ("-p", module), module, record_dir, plugin_file, "dig", "base", "n0nce"
+    )
 
 
 UNIT_MODULE = "_cairnwork_fixture_record_abc"
@@ -307,6 +311,7 @@ def test_an_account_run_records_nothing(tmp_path):
     record = _record(started.module, started.plugin_file)
     record["settings_digest"] = hashlib.sha256(ini).hexdigest()
     record["base_sha"] = commit
+    record["nonce"] = started.nonce
     assert started.record_dir is not None
     (started.record_dir / "record.json").write_text(json.dumps(record))
     run = SimpleNamespace(returncode=0, timed_out=False)
@@ -321,3 +326,72 @@ def test_an_account_run_records_nothing(tmp_path):
         fixture_probe.start(spec, account, other, other_env, ini, commit) == fixture_probe.Probe()
     )
     assert other_env == {} and not list((other / "guard").iterdir())
+
+
+def test_unit_record_without_this_runs_nonce_is_refused(tmp_path):
+    """A forged record that copies every visible field (module, file, digest) but not the nonce."""
+    pf = tmp_path / "guard" / f"{UNIT_MODULE}.py"
+    for nonce in ("other", "", None):
+        record = _record(UNIT_MODULE, pf)
+        record["nonce"] = nonce
+        assert _unit_probe(tmp_path, record, UNIT_MODULE, pf).read(0, False) is None
+    record = _record(UNIT_MODULE, pf)
+    del record["nonce"]
+    assert _unit_probe(tmp_path, record, UNIT_MODULE, pf).read(0, False) is None
+    probe = _unit_probe(tmp_path, _record(UNIT_MODULE, pf), UNIT_MODULE, pf)
+    probe.nonce = ""  # no nonce on the parent side: nothing can match
+    assert probe.read(0, False) is None
+
+
+FORGE_AT_EXIT = """
+import json, os, sys
+
+def pytest_unconfigure(config):
+    module = sys.argv[sys.argv.index("-p", sys.argv.index("no:cacheprovider")) + 1]
+    mod = sys.modules.get(module) or sys.modules[
+        next(m for m in sys.modules if m.startswith("_cairnwork_fixture_record_"))
+    ]
+    stages = {s: {"names": ["forged"], "count": 1}
+              for s in ("itemcollected", "modifyitems_before", "modifyitems_after", "finish")}
+    record = {
+        "recorder_version": 2, "complete": True,
+        "settings_digest": os.environ["CAIRNWORK_SETTINGS_DIGEST"],
+        "base_sha": os.environ["CAIRNWORK_BASE_SHA"],
+        "sys_path": [], "sys_path_finish": [], "stages": stages, "names": ["forged"],
+        "plugin_modules": [{"name": mod.__name__, "file": mod.__file__}],
+    }
+    path = os.path.join(os.environ["CAIRNWORK_FIXTURE_RECORD_DIR"], "record.json")
+    with open(path, "w") as handle:
+        json.dump(record, handle)
+"""
+
+
+@pytest.mark.sandbox
+def test_run_code_forging_every_visible_field_still_gives_no_names(repo, tmp_path):
+    # the run sees the module name, the guard file and the digests, but not the nonce
+    run = probe(repo, tmp_path, base_files(**{"conftest.py": FORGE_AT_EXIT}))
+    assert run.fixture_names is None
+
+
+def test_the_parents_nonce_pipe_is_closed_after_a_run(repo, tmp_path, monkeypatch):
+    seen = []
+    real = fixture_probe.start
+
+    def spy(*args):
+        result = real(*args)
+        seen.append(result)
+        return result
+
+    monkeypatch.setattr(fixture_probe, "start", spy)
+    probe(repo, tmp_path, base_files())
+    assert seen and seen[0].read_fd == -1
+    seen[0].close()  # idempotent
+
+
+def test_empty_nonce_on_both_sides_is_refused(tmp_path):
+    pf = tmp_path / "guard" / f"{UNIT_MODULE}.py"
+    record = _record(UNIT_MODULE, pf)
+    record["nonce"] = ""  # what the recorder writes when it got no pipe
+    unit = _unit_probe(tmp_path, record, UNIT_MODULE, pf)
+    unit.nonce = ""
+    assert unit.read(0, False) is None

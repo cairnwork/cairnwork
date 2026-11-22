@@ -294,19 +294,22 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
         *spec.flags(),  # --collect-only (#793), --continue-on-collection-errors (#796)
     ]  # fmt: skip
     before, profile, evidence, backend = os.lstat(checkout), None, None, cairnwork_sandbox.select()
-    if backend is not None:
-        profile = backend.policy(
-            read_roots=(*pytest_config.interpreter_roots(python), ini, private / "guard"),
-            write_roots=(checkout.parent, run_dir),
-            mask_home_credentials=account is None,  # account uid can't enter the owner's home
-        )
-        profile, returncode, timed_out, survivors, evidence = _run_confined(
-            batch.deny, profile, python, argv, profile_path, checkout, env, timeout, log_path,
-            account, backend, channel.pass_fds if channel else (),
-        )  # fmt: skip
-    else:
-        _write_new(log_path, b"no sandbox backend available: verifier not executed\n")
-        returncode, timed_out, survivors = None, False, 0
+    try:
+        if backend is not None:
+            profile = backend.policy(
+                read_roots=(*pytest_config.interpreter_roots(python), ini, private / "guard"),
+                write_roots=(checkout.parent, run_dir),
+                mask_home_credentials=account is None,  # account uid can't enter the owner's home
+            )
+            profile, returncode, timed_out, survivors, evidence = _run_confined(
+                batch.deny, profile, python, argv, profile_path, checkout, env, timeout, log_path,
+                account, backend, (*(channel.pass_fds if channel else ()), *probe.pass_fds),
+            )  # fmt: skip
+        else:
+            _write_new(log_path, b"no sandbox backend available: verifier not executed\n")
+            returncode, timed_out, survivors = None, False, 0
+    finally:
+        probe.close()  # the parent's copy of the recorder's nonce pipe
     mutated = checkout_differences(ctx.repo, candidate_commit, checkout, before, account, python)
     forged = bytecode_findings(tmp, checkout, run_dir, spec.targets, account, python)
     verdict = _read_verdict(channel, verdict_path, verdict_nonce, plugins, checkout)

@@ -22,9 +22,10 @@ PREFIX = "_cairnwork_fixture_record_"
 RECORDER = Path(__file__).with_name("fixture_record.py")
 _MAX_BYTES = 4 * 1024 * 1024
 _MODULE_FILE = "probe_module"  # in private/, which the sandbox cannot write: the run's module name
+_NONCE_FILE = "probe_nonce"  # likewise: the run's nonce (the recorder gets it on an inherited pipe)
 
 
-@dataclass(frozen=True)
+@dataclass
 class Probe:
     """One run's recorder: argv additions, and what the reader must check. Empty when inactive."""
 
@@ -34,12 +35,25 @@ class Probe:
     plugin_file: Path | None = None
     settings_digest: str = ""
     base_sha: str = ""
+    nonce: str = ""
+    read_fd: int = -1  # the parent's copy of the nonce pipe's read end; -1 once closed
+
+    @property
+    def pass_fds(self) -> tuple[int, ...]:
+        return (self.read_fd,) if self.read_fd >= 0 else ()
+
+    def close(self) -> None:
+        fd, self.read_fd = self.read_fd, -1  # never retry a close
+        if fd >= 0:
+            os.close(fd)
 
     def read(self, returncode: object, timed_out: bool) -> frozenset[str] | None:
         if self.record_dir is None or self.plugin_file is None or timed_out:
             return None
         try:
-            if not _recorded_by(self.record_dir, self.module, self.plugin_file):
+            if not self.nonce or not _recorded_by(
+                self.record_dir, self.module, self.plugin_file, self.nonce
+            ):
                 return None
             return collected_names(
                 self.record_dir,
@@ -55,21 +69,28 @@ def start(spec, ctx, private: Path, env: dict, ini_text: bytes, candidate_commit
     """Install the recorder under a fresh module name; point the run's env at a new record dir."""
     if not spec.record_fixtures or ctx.account is not None:
         return Probe()
+    read_fd = -1
     try:
         module = f"{PREFIX}{secrets.token_hex(8)}"
+        nonce = secrets.token_hex(16)
+        read_fd = _nonce_pipe(nonce)
         plugin_file = _install(private / "guard", module)
         record_dir = private / "run" / "fixture_record"
         record_dir.mkdir()
         digest = hashlib.sha256(ini_text).hexdigest()
         base = ctx.base_commit or candidate_commit
         _write_new(private / _MODULE_FILE, module.encode())
+        _write_new(private / _NONCE_FILE, nonce.encode())
         env.update(
+            CAIRNWORK_FIXTURE_NONCE_FD=str(read_fd),
             CAIRNWORK_FIXTURE_RECORD_DIR=str(record_dir),
             CAIRNWORK_SETTINGS_DIGEST=digest,
             CAIRNWORK_BASE_SHA=base,
         )
-        return Probe(("-p", module), module, record_dir, plugin_file, digest, base)
+        return Probe(("-p", module), module, record_dir, plugin_file, digest, base, nonce, read_fd)
     except Exception:  # noqa: BLE001 - no recorder means no names
+        if read_fd >= 0:
+            os.close(read_fd)
         return Probe()
 
 
@@ -79,14 +100,28 @@ def finish(spec, ctx, candidate_commit: str, private: Path, ini_text: bytes, run
         return None
     try:
         module = (private / _MODULE_FILE).read_text(encoding="utf-8")
+        nonce = (private / _NONCE_FILE).read_text(encoding="utf-8")
     except OSError:
         return None
     record_dir = private / "run" / "fixture_record"
     plugin_file = private / "guard" / f"{module}.py"
     digest = hashlib.sha256(ini_text).hexdigest()
     base = ctx.base_commit or candidate_commit
-    probe = Probe(("-p", module), module, record_dir, plugin_file, digest, base)
+    probe = Probe(("-p", module), module, record_dir, plugin_file, digest, base, nonce)
     return probe.read(run.returncode, run.timed_out)
+
+
+def _nonce_pipe(nonce: str) -> int:
+    """A pipe already holding the nonce, write end closed; returns the read end for pass_fds."""
+    read_end, write_end = os.pipe()
+    try:
+        os.write(write_end, nonce.encode())
+    except BaseException:
+        os.close(read_end)
+        raise
+    finally:
+        os.close(write_end)
+    return read_end
 
 
 def _write_new(path: Path, data: bytes) -> None:
@@ -105,9 +140,14 @@ def _install(guard: Path, module: str) -> Path:
     return path
 
 
-def _recorded_by(record_dir: Path, module: str, plugin_file: Path) -> bool:
-    """True when record.json lists this run's recorder module at this run's guard file."""
+def _recorded_by(record_dir: Path, module: str, plugin_file: Path, nonce: str) -> bool:
+    """True when record.json carries this run's nonce and lists its recorder module and file.
+
+    The nonce is what the run cannot learn (the recorder reads it from an inherited pipe at
+    import, before checkout code); the module and file check ties it to the recorder copy."""
     record = _load(record_dir / "record.json")
+    if not isinstance(record, dict) or record.get("nonce") != nonce:
+        return False
     entries = record.get("plugin_modules") if isinstance(record, dict) else None
     if not isinstance(entries, list):
         return False

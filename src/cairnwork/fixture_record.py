@@ -33,8 +33,34 @@ def _snapshot_sys_path() -> list[str]:
         return []
 
 
+def _take_nonce() -> str:
+    """The parent's nonce, read to EOF from an inherited pipe and closed before checkout code runs.
+
+    The variable is removed. Missing or unreadable gives "" (the parent then rejects the record)."""
+    spec = os.environ.pop("CAIRNWORK_FIXTURE_NONCE_FD", None)
+    try:
+        fd = int(spec) if spec is not None else -1
+    except ValueError:
+        return ""
+    if fd < 3:
+        return ""
+    try:
+        chunks = []
+        while chunk := os.read(fd, 64):
+            chunks.append(chunk)
+        return b"".join(chunks).decode("ascii")
+    except Exception:  # noqa: BLE001 - no nonce means the parent discards the record
+        return ""
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
 _META = {
     "recorder_version": 2,
+    "nonce": _take_nonce(),
     "settings_digest": os.environ.get("CAIRNWORK_SETTINGS_DIGEST", ""),
     "base_sha": os.environ.get("CAIRNWORK_BASE_SHA", ""),
     "sys_path": _snapshot_sys_path(),
