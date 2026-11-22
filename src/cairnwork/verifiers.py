@@ -56,7 +56,7 @@ import os
 import secrets
 import tempfile
 from contextlib import nullcontext
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 
@@ -81,6 +81,8 @@ from cairnwork.verifier_exec import (  # low-level run primitives, split out for
     _run_confined,
     _write_new,
 )
+from cairnwork.verifier_failure_summary import with_failure_detail
+from cairnwork.verifier_run import VerifierRun
 from cairnwork.verifier_spec import (  # re-exported for existing importers
     VerifierRejected,
     VerifierSpec,
@@ -104,47 +106,6 @@ DEFAULT_TIMEOUT_SECONDS = 600
 # Kept here (not in verifier_exec) because tests monkeypatch verifiers._ENV_KEEP to inject env vars,
 # and _prepare_run below must read the patched value.
 _ENV_KEEP = ("PATH", "LANG", "LC_ALL")
-
-
-@dataclass(frozen=True)
-class VerifierRun:
-    spec: VerifierSpec
-    returncode: int | None
-    timed_out: bool
-    mutated: tuple[str, ...]
-    log_path: Path
-    observation: VerifierObservation
-    outcomes: dict[str, str]
-    skips: dict[str, tuple[str, str]] = field(default_factory=dict)
-    survivors: int = 0
-    ran: bool = False
-    # a plain test failure: the guard reported a failed test and nothing about the run itself
-    # is suspect (no timeout, mutation, survivor or oversized log); p2p.py may re-run only this
-    plain_failure: bool = False
-    report_too_big: bool = False  # the guard's report exceeded MAX_REPORT_BYTES: no verdict read
-    recorded: bool = False  # the guard's record was there and well-formed (base_comparison, #234)
-    collect_errors: tuple[str, ...] = ()  # collectors the guard saw fail (B2, #234)
-    skipped_deps: tuple[str, ...] = ()  # modules skipped collectors could not import (#813)
-    import_errors: tuple[tuple[str, str, str], ...] = ()  # #796: guard's import record, unread
-    submodule_errors: tuple[tuple[str, str, str], ...] = ()  # #796 S3: the same, unread
-    teardown_errors: tuple[str, ...] = ()  # tests whose teardown failed (#478, report_guard)
-    fail_kind: dict[str, str] = field(default_factory=dict)  # #775: node -> setup/env/plugin
-    forged: tuple[str, ...] = ()  # FORGED_BYTECODE findings (#289): a base run proves nothing
-    log_too_big: bool = False  # the run's log went over MAX_LOG_BYTES (#481, base_comparison)
-    why: str = ""  # in words, why the run did not pass ("" when it passed): reasons.py
-    # facts about the sandbox policy used (e.g. "shm withheld: BWRAP_TMPFS_SIZE_UNSUPPORTED"); not
-    # in the observation's artifact hash, so recording them changes no bound digest
-    notes: tuple[str, ...] = ()
-    collected: tuple[str, ...] = ()  # #793: node ids pytest collected (the guard's record)
-    collect_skipped: tuple[str, ...] = ()  # #793: collectors skipped while collecting
-    collection_finished: bool = False  # #793: collection was not stopped part way
-    deny_evidence: str = ""  # #797 step 1: a base run's deny channel (deny_channel.py); not hashed
-    deny_denials: frozenset[tuple[str, str]] = frozenset()  # #991: its exact denials; not hashed
-    setup_denied: dict[str, tuple[str, str, int]] = field(default_factory=dict)  # #962; unhashed
-    data_refused: tuple[str, ...] = ()  # #850: declared data was executed: never a pass
-    not_run: tuple[str, ...] = ()  # #962 R0b: named targets or skipped collectors missing
-    renamed: tuple[str, ...] = ()  # #962 R0b: items changed after collection
-    uncollected_exposed: tuple[str, ...] | None = None
 
 
 def run_verifiers(
@@ -353,7 +314,7 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
     clean = not (timed_out or mutated or survivors or forged or too_big or verdict.too_big)
     passed = profile is not None and returncode == 0 and clean and ran  # ran: pytest said 0 too
     plain_failure = plain_test_failure(profile is not None, returncode, clean, verdict.outcomes)
-    why = "" if passed else why_not_passed(
+    why = "" if passed else with_failure_detail(why_not_passed(
         ran_sandboxed=profile is not None, returncode=returncode, timed_out=timed_out,
         mutated=mutated, survivors=survivors, log_too_big=too_big, tests_ran=ran,
         report_too_big=verdict.too_big, forged=forged, not_run=not_run, renamed=verdict.renamed,
@@ -361,7 +322,7 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
         data_refused=verdict.data_refused,
         denied_path=_denial(batch, verdict, checkout, run_dir, clean and not not_run),
         all_skipped=all_skipped(verdict.collected, verdict.outcomes), outcomes=verdict.outcomes,
-    )  # fmt: skip
+    ), ctx, spec, verdict, log_path)  # fmt: skip  # #1186
     digest = _record_digest(
         candidate_commit=candidate_commit,
         verifier_id=spec.verifier_id,

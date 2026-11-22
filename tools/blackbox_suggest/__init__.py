@@ -16,11 +16,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .config import pytest_config
+from .config import import_dirs, pytest_config, recursion_skips
 from .literals import Refused
 from .obligations import Scope, collect
-from .resolve import Imports, Project, module_env
+from .resolve import Imports, Project, binds_module_hook, module_env
 from .scope import import_time
+from .shadows import stdlib_shadows, walk
 from .shapes import drafts_for
 
 KINDS_NOW = frozenset({"function"})  # what cairnwork.blackbox declares at this version
@@ -85,6 +86,19 @@ def conftests_for(test_file: Path, project: Path, name: str = "conftest.py") -> 
 def _scope(test_file: Path, root: Path, project: Project, modules: list[ast.Module]) -> Scope:
     """What the configuration and every module imported around the test file decide."""
     reason, known, usefixtures = pytest_config(test_file.parent, root)
+    walked = walk(root, recursion_skips(test_file.parent, root))
+    dirs = None
+    if walked is not None:
+        dirs = [*import_dirs(test_file.parent, root), *project.roots, *walked.base_dirs]
+    shadows = None if dirs is None else stdlib_shadows(dirs)
+    if shadows is None:
+        reason = (
+            reason or "a directory pytest may collect or import from cannot be read or is a link"
+        )
+    elif shadows:
+        reason = reason or "a file on pytest's import path takes a standard-library module name"
+    if walked is not None and walked.doctests:
+        reason = reason or "pytest collects a text file as doctests, which run unread code"
     tests_top = test_file.resolve().parent
 
     def is_project(name: str) -> bool:
@@ -112,6 +126,22 @@ def _unimported(cases: list[dict[str, Any]], scope: Scope, project: Project) -> 
     return None
 
 
+def _module_hooks(cases: list[dict[str, Any]], project: Project) -> str | None:
+    """Refusal when a project module that the drafted targets import binds a module
+    ``__getattr__`` or ``__dir__``: a lookup of a name it lacks (``from pkg import core``, or
+    pytest probing the objects in a test module) runs that module's code. Called after
+    ``_unimported``, so this also covers every project module pytest imports for the test. Any
+    import statement is followed, and a module with no single readable source refuses."""
+    drafted = {case["target"]["module"] for case in cases}
+    for module in sorted(project.import_closure(drafted, anywhere=True)):
+        tree = project.tree(module)
+        if tree is None or project.files(module) != [project.module_file(module)]:
+            return f"{module} has no single source file this reader can read"
+        if binds_module_hook(tree):
+            return f"{module} binds a module-level __getattr__ or __dir__"
+    return None
+
+
 def analyze_file(test_file: Path, project_root: Path, source_roots: list[Path]) -> list[Obligation]:
     """Every obligation of one test file, with its draft cases or refusal reason."""
     rel = test_file.resolve().relative_to(project_root.resolve()).as_posix()
@@ -136,6 +166,7 @@ def analyze_file(test_file: Path, project_root: Path, source_roots: list[Path]) 
                 drafts = drafts_for(item.func, item.bindings, imports, project, env)
                 cases = [d.plain() for d in drafts]
                 refusal = _unimported(cases, scope, project)
+                refusal = refusal or _module_hooks(cases, project)
             except Refused as exc:
                 refusal = str(exc)
             except RecursionError:

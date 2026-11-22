@@ -312,6 +312,12 @@ def verify_record(
     try:
         notary = Notary(notary_sqlite, core_verify=_never_call_core, core_identity=core_identity)
         verdict = notary.verdict(task_id, attempt_id, expected_candidate=expected_candidate)
+    except sqlite3.Error as exc:
+        raise RecordNotFound(f"notary database unreadable: {exc}", code="RECORD_NOT_FOUND") from exc
+    except ImportError as exc:
+        raise RecordMalformed(
+            f"notary verifier unavailable: {exc}", code="RECORD_MALFORMED"
+        ) from exc
     except (NotaryInputError, NotarySchemaMismatch) as exc:
         raise RecordMalformed(str(exc), code="RECORD_MALFORMED") from exc
 

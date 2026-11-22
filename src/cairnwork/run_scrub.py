@@ -57,8 +57,18 @@ from cairnwork.run_tree import _private_name, _real_dir, root_problem, run_tree_
 
 
 def _shown(path: Path) -> str:
-    """One line: a leftover name must not start a second line in the error."""
-    return str(path).replace("\r", "\\r").replace("\n", "\\n")
+    """Escape C0 and DEL so displayed paths cannot inject terminal control characters."""
+    return "".join(
+        f"\\x{ord(char):02x}" if ord(char) < 0x20 or ord(char) == 0x7F else char
+        for char in str(path)
+    )
+
+
+def _shell_quote(value: str) -> str:
+    """Quote one shell argument without embedding control characters in recovery text."""
+    if not any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+        return shlex.quote(value)
+    return "$'" + "".join(f"\\x{byte:02x}" for byte in os.fsencode(value)) + "'"
 
 
 def _run_root_inside_candidate(root: Path, candidate_tree: Path) -> bool:
@@ -81,6 +91,30 @@ def _run_root_inside_candidate(root: Path, candidate_tree: Path) -> bool:
         if current.parent == current:
             return False
         current = current.parent
+
+
+def _candidate_chain(candidate_tree: Path) -> set[tuple[int, int]]:
+    """Identities of the candidate tree and every directory above it, by realpath."""
+    chain: set[tuple[int, int]] = set()
+    current = Path(os.path.realpath(candidate_tree))
+    while True:
+        try:
+            info = os.lstat(current)
+        except OSError:
+            return chain
+        chain.add((info.st_dev, info.st_ino))
+        if current.parent == current:
+            return chain
+        current = current.parent
+
+
+def _holds(entry: Path, chain: set[tuple[int, int]]) -> bool:
+    """True when ``entry`` is the candidate tree or one of its parents (never scrubbed)."""
+    try:
+        info = os.lstat(entry)
+    except OSError:
+        return False
+    return (info.st_dev, info.st_ino) in chain
 
 
 _SUDO = "/usr/bin/sudo"
@@ -115,7 +149,7 @@ def account_delete_argv(user: str, path: str, wrap, python: str) -> list[list[st
 
 def _as_account_shell(user: str, argv: list[str]) -> str:
     """One recovery step, naming the account. The sandbox form matches ``unconfined``."""
-    inner = " ".join(shlex.quote(part) for part in argv)
+    inner = " ".join(_shell_quote(part) for part in argv)
     tool = (
         f"/usr/bin/sandbox-exec -p {shlex.quote(_ALLOW_ALL)} {inner}"
         if sys.platform == "darwin"
@@ -126,7 +160,7 @@ def _as_account_shell(user: str, argv: list[str]) -> str:
 
 def _recovery_steps(user: str, python: str, run: Path, private: Path) -> str:
     """Who runs each step. Joined with ``;``, not ``&&``, and no period after the last command."""
-    q_run, q_priv = shlex.quote(str(run)), shlex.quote(str(private))
+    q_run, q_priv = _shell_quote(str(run)), _shell_quote(str(private))
     steps = [_as_account_shell(user, _unlock_argv(python, str(run)))]
     account_rm = f"sudo -n -u {shlex.quote(user)} -- /bin/rm -rf -- {q_run}"
     steps.append(f"as the verifier account: {account_rm}")
@@ -143,17 +177,19 @@ def _hint(user: str, python: str, path: Path, root: Path | None = None) -> str:
     if root is not None and path.parent == root and path.name == "run":
         return (
             f"{_shown(path)} sits directly in the run root. Check it without following links: "
-            f"ls -ld {shlex.quote(str(path))}. If a symlink, unlink that symlink only; "
+            f"ls -ld {_shell_quote(str(path))}. If a symlink, unlink that symlink only; "
             f"never chmod the root."
         )
     private = path.parent if path.name == "run" else path
     run = private / "run"
-    q_run, q_priv = shlex.quote(str(run)), shlex.quote(str(private))
+    q_run, q_priv = _shell_quote(str(run)), _shell_quote(str(private))
     steps = _recovery_steps(user, python, run, private)
     return (
         f"leftover {_shown(path)} blocks the next account run. "
         f"Clean it by hand without following links: ls -ld {q_priv} {q_run}. "
         f"If either is a symlink, unlink that symlink only and do not remove or chmod its target. "
+        f"The unlock step reports an unwritable top as `unlock: {_shown(run)} is not writable "
+        f"by the account`; the owner must fix that directory before retrying. "
         f"If both are real directories under the run root, run the steps in order even when one "
         f"fails, and repeat the two account steps until {q_run} is gone or a pass removes or "
         f"moves nothing in it. {steps}"
@@ -298,8 +334,9 @@ def stale_run_error(account, candidate_tree: Path) -> str | None:
     if (problem := root_problem(root)) is not None:
         return f"{_shown(root)} {problem}. The owner must fix it: ls -ld {shlex.quote(str(root))}"
     stuck: list[Path] = []
+    chain = _candidate_chain(candidate_tree)
     for name in names:
-        if name.endswith(".work"):
+        if name.endswith(".work") or _holds(root / name, chain):
             continue
         _consider(account, root, name, stuck)
     return _refuse(account, stuck) if stuck else None

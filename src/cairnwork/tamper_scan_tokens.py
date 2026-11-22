@@ -26,6 +26,7 @@ piece index).
 from __future__ import annotations
 
 import io
+import keyword
 import re
 import subprocess
 import sys
@@ -137,6 +138,8 @@ def _repair_identifier_errors(
             repaired.append(token)
             continue
         text = token.string
+        if text in (" ", "\t") and _blank_before_identifier(tokens, repaired, index):
+            continue  # 3.11 reports the blank before such a character as an error token itself
         prior_name = (
             bool(repaired)
             and repaired[-1].type == tokenize.NAME
@@ -157,6 +160,29 @@ def _repair_identifier_errors(
             return None
         repaired.append(token._replace(type=tokenize.NAME))
     return repaired
+
+
+def _blank_before_identifier(
+    tokens: list[tokenize.TokenInfo], before: list[tokenize.TokenInfo], index: int
+) -> bool:
+    """The blank at ``tokens[index]`` sits right before an identifier-character error token and
+    follows no operand (a name that is not a keyword, a number, a string or a closing bracket),
+    so the character starts an identifier: ``x = c``, ``f(a, c)``, ``return c``, ``import c``."""
+    token = tokens[index]
+    follow = tokens[index + 1] if index + 1 < len(tokens) else None
+    if follow is None or follow.type != tokenize.ERRORTOKEN or token.end != follow.start:
+        return False
+    last = before[-1] if before else None
+    if last is None or last.type in (
+        tokenize.NEWLINE,
+        tokenize.NL,
+        tokenize.INDENT,
+        tokenize.DEDENT,
+    ):
+        return True
+    if last.type == tokenize.NAME:
+        return keyword.iskeyword(last.string)
+    return last.type == tokenize.OP and last.string not in (")", "]", "}")
 
 
 def _prefix(token: tokenize.TokenInfo) -> str:

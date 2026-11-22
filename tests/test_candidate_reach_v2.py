@@ -92,18 +92,27 @@ def test_splits_that_do_not_start_the_rule_are_left_to_the_existing_checks(repo,
 @pytest.mark.parametrize(
     ("base", "added"),
     [
-        (BASE, "# a comment\n"),
-        (BASE, "\n\n"),
         ("x = 1\n" + WRITE, "y = 2\nimport json\n"),
         ("x = 1\n" + BOUND, "y = 2\nimport json\n"),
         ("x = 1\n" + WRITE + "import sys\n", "y = 2\n"),
     ],
-    ids=["comment", "blank", "write_no_binding", "binding_no_write", "sys_no_binding"],
+    ids=["write_no_binding", "binding_no_write", "sys_no_binding"],
 )
 def test_files_the_rule_does_not_start_on_are_unchanged(repo, base, added):
     _judge(repo, {"src/a.py": base}, {"src/a.py": base + added})
 
 
-def test_a_docstring_added_to_a_binding_file_is_allowed(repo):
+@pytest.mark.parametrize(
+    "added",
+    ["# a comment\n", "\n\n"],
+    ids=["comment", "blank"],
+)
+def test_comment_or_blank_added_to_a_frozen_binding_file_is_refused(repo, added):
+    # whole-file freeze: the file binds the search path and writes, so any byte change is refused
+    _refused(repo, {"src/a.py": BASE}, {"src/a.py": BASE + added})
+
+
+def test_a_docstring_added_to_a_binding_file_is_refused(repo):
+    # whole-file freeze: a docstring edit in a frozen file is refused as well
     base = '"""old"""\n' + BASE
-    _judge(repo, {"src/a.py": base}, {"src/a.py": base.replace('"""old"""', '"""new"""')})
+    _refused(repo, {"src/a.py": base}, {"src/a.py": base.replace('"""old"""', '"""new"""')})

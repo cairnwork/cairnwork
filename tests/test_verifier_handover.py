@@ -80,6 +80,7 @@ def test_an_exit_status_that_disagrees_with_the_recorded_session_status_fails(re
     assert result.outcomes == {"tests/test_add.py::test_add": "failed"}
     assert result.why == (
         "process exit status 0 disagrees with the recorded session status (exit status 1, 1 failed)"
+        "; tests/test_add.py::test_add assertion: E assert -1 == 3"  # #1186: wording only
     )
 
 

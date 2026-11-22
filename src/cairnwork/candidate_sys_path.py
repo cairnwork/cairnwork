@@ -40,7 +40,11 @@ import re
 import subprocess
 from pathlib import Path
 
-from cairnwork.candidate_alias import alias_machinery_changed, runtime_shadow_added
+from cairnwork.candidate_alias import (
+    alias_machinery_changed,
+    frozen_search_path_change,
+    runtime_shadow_added,
+)
 from cairnwork.candidate_shadow import find_shadow_file
 from cairnwork.candidate_statements import machinery_changed
 from cairnwork.changeset import ChangeSetError, read_change_set
@@ -161,7 +165,7 @@ def refuse_new_sys_path_mutation(
                         f"{path!r}: writes a file and edits the import path in the same change "
                         "(a shadow module can be created at run time)",
                     )
-                shadow = find_shadow_file(repo, candidate, test_commit, changed)
+                shadow = find_shadow_file(repo, candidate, test_commit, changed, base_commit=base)
                 if shadow:
                     raise CandidateRejected(
                         "CANDIDATE_SYS_PATH_MUTATION",
@@ -200,8 +204,8 @@ def _blob_signal(repo: Path, base: str, commit: str, path: str, changed: dict[st
         raise
     if alias:
         return _MACHINERY
-    if not signal:
-        return ""
+    if not signal:  # a frozen file stays frozen even when the candidate text loses its signal
+        return _RUNTIME if frozen_search_path_change(old, data) else ""
     if machinery_changed(old, data, _MACHINERY_WORDS, _REACH_WORDS, DYNAMIC_ACCESS_DENYLIST):
         return _MACHINERY
     if runtime_shadow_added(old, data):
