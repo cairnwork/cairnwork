@@ -144,11 +144,15 @@ class Project:
         if any(not self.lacks(star, name) for star in later):
             raise Refused(f"{name!r} in {module} may be bound again by a star import")
         if found is None:
-            for star in _star_imports(tree, module, package):
+            stars = _star_imports(tree, module, package)
+            for i, star in enumerate(stars):
                 try:
-                    return self.kind_of(star, name, hops + 1)
+                    kind = self.kind_of(star, name, hops + 1)
                 except Refused:
                     continue
+                if any(not self.lacks(later, name) for later in stars[i + 1 :]):
+                    raise Refused(f"{name!r} in {module} may be bound again by a later star import")
+                return kind
             raise Refused(f"cannot find {name!r} in {module} by reading its source")
         if found[0] in ("function", "class"):
             return found

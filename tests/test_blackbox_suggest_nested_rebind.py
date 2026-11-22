@@ -3,8 +3,9 @@
 The reader takes the last top-level def, class, import or plain assignment of a drafted target.
 The name can also be bound again under if/try/for/with/match, by a walrus, a tuple target, an
 import statement, an except or match name, a global statement in a function or class body, or a
-star import after any binding of it, unless the star's module is read and surely does not bind
-it. Then the name is not the def the reader read, so the target refuses.
+star import after any binding of it or after the star the reader follows, unless the star's
+module is read and surely does not bind it. Then the name is not the def the reader read, so
+the target refuses.
 """
 
 import pytest
@@ -76,6 +77,19 @@ REFUSED = {
     "star_names_it": core("from pkg.impl import *\n") | {"src/pkg/impl.py": '__all__ = ["f"]\n'},
     "star_of_a_package_with_it": core("from pkg.impl import *\n")
     | {"src/pkg/impl/__init__.py": "from . import f as _f\n", "src/pkg/impl/f.py": ""},
+    "second_star_has_it": core("from pkg.b import *\nfrom pkg.impl import *\n")
+    | {"src/pkg/b.py": "Q = 1\n", "src/pkg/impl.py": WRAP + "f = W(lambda x: x * 2 * SCALE)\n"},
+    "both_stars_have_it": {
+        "src/pkg/core.py": "from pkg.a import *\nfrom pkg.impl import *\n",
+        "src/pkg/a.py": "SCALE = 1\n" + PLAIN,
+        "src/pkg/impl.py": WRAP + "f = W(lambda x: x * 2 * SCALE)\n",
+    },
+    "third_star_has_it": {
+        "src/pkg/core.py": "from pkg.a import *\nfrom pkg.b import *\nfrom pkg.impl import *\n",
+        "src/pkg/a.py": "SCALE = 1\n" + PLAIN,
+        "src/pkg/b.py": "Q = 1\n",
+        "src/pkg/impl.py": WRAP + "f = W(lambda x: x * 2 * SCALE)\n",
+    },
 }
 
 
@@ -104,6 +118,11 @@ KEPT = {
     "star_after_def_lacking_it": core("from pkg.impl import *\n") | {"src/pkg/impl.py": "G = 1\n"},
     "star_after_import_lacking_it": {
         "src/pkg/core.py": "from pkg.a import f\nfrom pkg.impl import *\n",
+        "src/pkg/a.py": "SCALE = 1\n" + PLAIN,
+        "src/pkg/impl.py": "G = 1\n",
+    },
+    "first_star_has_it": {
+        "src/pkg/core.py": "from pkg.a import *\nfrom pkg.impl import *\n",
         "src/pkg/a.py": "SCALE = 1\n" + PLAIN,
         "src/pkg/impl.py": "G = 1\n",
     },
