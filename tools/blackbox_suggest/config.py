@@ -96,6 +96,27 @@ def pytest_config(test_dir: Path, root: Path) -> tuple[str | None, bool, list[st
     return reason, known, fixtures
 
 
+def strict_ids(test_dir: Path, root: Path) -> bool:
+    """Whether a config file around the test makes a repeated parametrize id a collection error:
+    ``strict_parametrization_ids`` on, or ``strict`` (or ``--strict`` in addopts) on in a file that
+    does not set ``strict_parametrization_ids`` itself."""
+    for directory in _dirs(test_dir, root):
+        for name, kind, section in SECTIONS:
+            try:
+                options = _section(directory / name, kind, section) or {}
+                tokens = [t for v in _values(options.get("addopts", "")) for t in shlex.split(v)]
+            except (OSError, ValueError, configparser.Error, UnicodeDecodeError):
+                return True
+            own = options.get("strict_parametrization_ids")
+            if _on(own) or (own is None and (_on(options.get("strict")) or "--strict" in tokens)):
+                return True
+    return False
+
+
+def _on(value: Any) -> bool:
+    return value is not None and str(value).strip().lower() in {"y", "yes", "t", "true", "on", "1"}
+
+
 def import_dirs(test_dir: Path, root: Path) -> list[Path]:
     """Directories pytest may put on ``sys.path`` for test_dir: each one up to root (the first
     without ``__init__.py`` under prepend import mode, or root's parent when root has one) and
