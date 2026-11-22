@@ -118,3 +118,13 @@ def test_the_probe_has_no_network(tmp_path):
     assert out.output
     assert json.loads(out.output)["v"]["reached"][0] is False
     assert socket and os  # keep the imports used
+
+
+def test_a_reused_workdir_does_not_let_an_early_exit_pass_on_a_stale_document(tmp_path):
+    """The earlier run left a matching document; the candidate of the second run exits at once."""
+    first = verdict(tmp_path, FIXED)
+    assert first.verdict == PASS
+    stale = (tmp_path / "oracle" / "run" / "out.json").read_bytes()
+    assert stale
+    second = verdict(tmp_path, BUGGY + "import os\nos._exit(0)\n")
+    assert (second.verdict, second.code) == (FAIL, NO_OUTPUT)

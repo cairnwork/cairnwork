@@ -81,10 +81,16 @@ def run_probe(
         supervisor / "probe.py",
         run_dir / "out.json",
     )
+    for old in (runner, probe_copy):  # a reused workdir holds the read-only copies of the last run
+        old.unlink(missing_ok=True)
     shutil.copyfile(RUNNER, runner)
     shutil.copyfile(probe, probe_copy)
     for path in (runner, probe_copy):
         path.chmod(0o444)
+    # A reused workdir may hold a document from an earlier run: start from nothing, so an early
+    # exit of this run cannot be judged by a stale file.
+    for stale in (out, run_dir / "probe.log"):
+        stale.unlink(missing_ok=True)
     out.touch(mode=0o600)
     env = {k: os.environ[k] for k in ENV_KEEP if k in os.environ}
     env.update(HOME=str(home), TMPDIR=str(home), **dict(getattr(backend, "run_env", ())))
