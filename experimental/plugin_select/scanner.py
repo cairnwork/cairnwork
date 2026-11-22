@@ -11,6 +11,7 @@ imported or executed. Logs print the reason, never file contents.
 from __future__ import annotations
 
 import ast
+import os
 import re
 import subprocess
 from collections.abc import Callable, Iterable
@@ -60,7 +61,7 @@ def safe_rel(path: str) -> str:
     text = path.split("::", 1)[0]
     posix = PurePosixPath(text)
     bad = not text or posix.is_absolute() or any(p in ("", "..") for p in posix.parts)
-    if bad or "\0" in text or any(ord(c) < 32 for c in text):
+    if bad or text.startswith(":") or "\0" in text or any(ord(c) < 32 for c in text):
         raise ScanUnknown("target path is not a file inside the repository")
     return posix.as_posix()
 
@@ -154,11 +155,15 @@ def _git_blob(repo: Path, base: str, path: str) -> bytes | None:
         listing = subprocess.run(  # noqa: S603 - fixed argv, base checked as 40-hex first
             ["git", "-C", str(repo), "ls-tree", "-z", base, "--", path],
             capture_output=True, timeout=GIT_TIMEOUT_SECONDS, check=True,
+            env={**os.environ, "GIT_LITERAL_PATHSPECS": "1"},
         ).stdout  # fmt: skip
         entry = listing.split(b"\0", 1)[0]
         if not entry:
             return None
-        mode, kind, oid = entry.split(b"\t", 1)[0].split()
+        head, _, listed = entry.partition(b"\t")
+        if listed != path.encode():
+            raise ScanUnknown(f"{path}: base listed a different path")
+        mode, kind, oid = head.split()
         if kind != b"blob" or mode not in (b"100644", b"100755"):
             raise ScanUnknown(f"{path}: not a regular file at the base")
         blob = subprocess.run(  # noqa: S603 - oid came from ls-tree
@@ -191,7 +196,9 @@ def candidate_bytes(candidate: Path | None, path: str) -> bytes | None:
     if candidate is None:
         return None
     target = candidate / path
-    if not target.is_file() or target.is_symlink():
+    if target.is_symlink():
+        raise ScanUnknown(f"{path}: a symlink in the candidate is not scanned")
+    if not target.is_file():
         return None
     if target.stat().st_size > MAX_FILE_BYTES:
         raise ScanUnknown(f"{path}: larger than the scan limit")
@@ -232,7 +239,7 @@ def _file_scan(
     """A target must exist at base. A conftest is read at base and, when present, as the
     candidate has it; a conftest absent on a side means that side loads none there."""
     data = _git_blob(repo, base, path)
-    if not path.endswith("conftest.py"):
+    if not PurePosixPath(path).name == "conftest.py":
         return scan_bytes(path, data, local)
     sides = [s for s in (data, candidate_bytes(candidate, path)) if s is not None]
     return merge(scan_bytes(path, side, local) for side in sides) if sides else Scan()
