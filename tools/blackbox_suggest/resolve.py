@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .literals import Refused
+from .loaders import by_name
 from .rebound import rebound
 
 MAX_HOPS = 6
@@ -192,7 +193,7 @@ def _imported(tree: ast.Module, module: str, path: Path | None, anywhere: bool) 
         elif isinstance(node, ast.ImportFrom):
             base = _absolute(module, node, package)
             out += [base, *(f"{base}.{a.name}" for a in node.names if a.name != "*")]
-    return out
+    return out + by_name(tree)[0] if anywhere else out  # a literal name imports too (#370)
 
 
 def _star_imports(tree: ast.Module, module: str, package: bool) -> list[str]:
