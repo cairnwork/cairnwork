@@ -94,8 +94,7 @@ def import_dirs(test_dir: Path, root: Path) -> list[Path]:
                 options = _section(directory / name, kind, section) or {}
             except (OSError, ValueError, configparser.Error, UnicodeDecodeError):
                 continue  # pytest_config refuses an unreadable file
-            entries = [e for v in _values(options.get("pythonpath", [])) for e in v.split()]
-            found += [directory / e for e in entries]
+            found += [directory / e for e in _paths(options.get("pythonpath", []))]
     return found
 
 
@@ -148,6 +147,16 @@ def _section(path: Path, kind: str, section: str) -> dict[str, Any] | None:
     if section == "tool.pytest":
         data = {k: v for k, v in data.items() if k != "ini_options"}  # read as its own section
     return data  # a sub-table (a plugin's [tool.pytest.ini_options.env]) is an unknown option
+
+
+def _paths(value: Any) -> list[str]:
+    """``pythonpath`` entries as pytest reads them, a list item whole and a string split like a
+    shell, and each part of those split on whitespace, as the reader used to (#370)."""
+    try:
+        whole = [str(v) for v in value] if isinstance(value, list) else shlex.split(str(value))
+    except ValueError:  # an unclosed quote: pytest stops
+        whole = []
+    return [*whole, *(e for v in _values(value) for e in v.split())]
 
 
 def _values(value: Any) -> list[str]:
