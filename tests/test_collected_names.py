@@ -3,6 +3,8 @@
 import copy
 import json
 import os
+import signal
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -233,3 +235,32 @@ def test_real_recorder_no_tests_returns_empty_set(tmp_path: Path) -> None:
     code, names = collect(tmp_path, {"helper.py": "X = 1\n"})
     assert code == 5
     assert names == frozenset()
+
+
+class _Blocked(BaseException):
+    pass
+
+
+def test_a_special_file_in_place_at_open_returns_none_without_blocking(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first check says regular file, but a FIFO with no writer is there at open time."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    real = tmp_path / "real.json"
+    real.write_text("{}")
+    os.mkfifo(run_dir / "record.json")
+    regular = os.lstat(real)
+    assert stat.S_ISREG(regular.st_mode)
+    monkeypatch.setattr(os, "lstat", lambda _path: regular)
+
+    def alarm(_signum: int, _frame: Any) -> None:
+        raise _Blocked("reader blocked on a FIFO")  # BaseException: the reader cannot swallow it
+
+    old = signal.signal(signal.SIGALRM, alarm)
+    signal.alarm(3)
+    try:
+        assert collected_names(run_dir, exit_code=0, settings_digest=DIGEST, base_sha=SHA) is None
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old)
