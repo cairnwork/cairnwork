@@ -25,7 +25,11 @@ DYNAMIC = {"exec", "eval", "globals", "locals", "vars", "setattr", "delattr", "_
 DYNAMIC |= {"__builtins__", "import_module", "attrgetter", "methodcaller"}
 REFLECTIVE = {"__dict__", "__globals__", "__self__", "__setattr__", "__getattribute__", "modules"}
 REFLECTIVE |= {"f_globals", "f_locals", "f_builtins"}
+DYNAMIC |= {"exec_module", "load_module", "_bootstrap", "_bootstrap_external"}  # importlib loaders
 INTROSPECTION = {"builtins", "ctypes", "gc", "inspect"}  # modules refused when imported at all
+# Modules that import or run other code by name, path or source text (#370).
+RUNNERS = {"runpy", "pkgutil", "timeit", "cProfile", "profile", "trace", "code", "codeop"}
+RUNNERS |= {"doctest", "pdb", "bdb", "zipimport"}
 SEARCH = {"__path__", "submodule_search_locations"}  # where a package finds its submodules
 
 
@@ -187,7 +191,8 @@ def binds_module_hook(tree: ast.Module) -> bool:
     store of either, either name as a string, or anything, anywhere in the module, that can
     bind a module attribute under a name the reader cannot see (``exec``, ``globals()``,
     ``setattr``, ``sys.modules``, a ``__dict__`` or ``__globals__``, a store to ``__class__``,
-    an import of ``builtins``, ``ctypes``, ``gc`` or ``inspect``, a ``getattr`` with a computed
+    an import of ``builtins``, ``ctypes``, ``gc`` or ``inspect`` or of a module that runs
+    other code by name, path or source text, an importlib loader, a ``getattr`` with a computed
     name), or any mention of a package's ``__path__``. A method in a class body is not one."""
     plain = {
         id(node.func)
@@ -210,9 +215,15 @@ def _binds(node: ast.AST, plain: set[int]) -> bool:
         store = isinstance(node.ctx, ast.Store) and node.attr in hooks
         return store or node.attr in DYNAMIC | REFLECTIVE | SEARCH
     if isinstance(node, ast.alias):
-        return node.name.split(".")[0] in INTROSPECTION or node.name in DYNAMIC | REFLECTIVE
+        parts = node.name.split(".")
+        return (
+            parts[0] in INTROSPECTION | RUNNERS
+            or node.name in REFLECTIVE
+            or bool(set(parts) & DYNAMIC)
+        )
     if isinstance(node, ast.ImportFrom):
-        return (node.module or "").split(".")[0] in INTROSPECTION
+        parts = (node.module or "").split(".")
+        return parts[0] in INTROSPECTION | RUNNERS or bool(set(parts) & DYNAMIC)
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value in MODULE_HOOKS | REFLECTIVE | SEARCH
     return False
