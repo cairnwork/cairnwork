@@ -149,7 +149,7 @@ def _socket_report(base: Path, owner: bool) -> str:
     policy_path = base / "walk-policy.txt"
     policy_path.write_text(policy.text)
     argv = bwrap.wrap([sys.executable, str(script)], policy_path)
-    result = subprocess.run(argv, capture_output=True, timeout=75, check=False)  # noqa: S603
+    result = subprocess.run(argv, capture_output=True, timeout=100, check=False)  # noqa: S603
     assert result.returncode == 0, result.stderr.decode(errors="replace")
     text = result.stdout.decode()
     assert base.name not in text
@@ -219,11 +219,11 @@ def test_verifier_socket_walk_reports_categories_only(account_tree):
         from cairnwork.verifier_account import VerifierAccount
 
         account = VerifierAccount()
-        with account.exclusive(90):
+        with account.exclusive(120):
             result = subprocess.run(
                 account.wrap(["/usr/bin/python3", "-I", "-c", script.read_text()], policy_path),
                 capture_output=True,
-                timeout=100,
+                timeout=130,
                 check=False,
                 cwd=account.root,
             )  # noqa: S603

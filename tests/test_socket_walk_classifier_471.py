@@ -198,10 +198,22 @@ def test_big_system_trees_are_pruned_not_walked(monkeypatch):
     seen = []
 
     def fake_walk(top, followlinks=False, **_kw):
-        dirs = ["usr", "tmp", "lib64", "var"]
+        dirs = ["usr", "tmp", "lib64", "var", "bin", "sbin", "lib", "lib32"]
         yield "/", dirs, []
         seen.extend(dirs)
 
     monkeypatch.setattr(walk.os, "walk", fake_walk)
     walk.collect()
     assert seen == ["tmp", "var"]
+
+
+def test_entry_cap_stops_with_its_own_reason(monkeypatch):
+    monkeypatch.setattr(walk, "MAX_ENTRIES", 2)
+
+    def fake_walk(top, followlinks=False, **_kw):
+        yield "/tmp", [], ["a", "b", "c"]
+
+    monkeypatch.setattr(walk.os, "walk", fake_walk)
+    monkeypatch.setattr(walk.os, "lstat", lambda _p: (_ for _ in ()).throw(OSError()))
+    report = walk.collect()
+    assert report["stopped-by-entries|-|-"] == 1 and report["walked-private-trees|-|-"] == 3
