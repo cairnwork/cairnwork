@@ -154,7 +154,10 @@ def _section(path: Path, kind: str, section: str) -> dict[str, Any] | None:
     if not isinstance(data, dict):
         raise ValueError(f"{section} is not a table")
     if section == "tool.pytest":
-        data = {k: v for k, v in data.items() if k != "ini_options"}  # read as its own section
+        native = {k: v for k, v in data.items() if k != "ini_options"}  # read as its own section
+        if native and data.get("ini_options"):  # pytest stops with a usage error
+            raise ValueError("native [tool.pytest] beside [tool.pytest.ini_options]")
+        data = native
     return data  # a sub-table (a plugin's [tool.pytest.ini_options.env]) is an unknown option
 
 
