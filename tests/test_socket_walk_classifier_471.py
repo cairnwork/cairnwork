@@ -42,7 +42,8 @@ def test_walk_reports_truncated_when_budget_expires_between_files(monkeypatch):
     clock = iter([0.0] + [10**6] * 5000)
     monkeypatch.setattr(walk.os, "walk", fake_walk)
     monkeypatch.setattr(walk.time, "monotonic", lambda: next(clock))
-    assert walk.collect() == {"truncated|-|-": 1}
+    report = walk.collect()
+    assert report["truncated|-|-"] == 1 and report["stopped-by-time|-|-"] == 1
     assert len(seen) < 5
 
 
@@ -188,5 +189,6 @@ def test_collect_stops_truncated_when_cwd_lost(monkeypatch):
     monkeypatch.setattr(walk.os, "lstat", lambda _p: types.SimpleNamespace(st_mode=stat.S_IFSOCK))
     monkeypatch.setattr(walk, "_probe", fake_probe)
     monkeypatch.setattr(walk, "_cwd_lost", False)
-    assert walk.collect() == {"truncated|-|-": 1}
+    report = walk.collect()
+    assert report["truncated|-|-"] == 1 and report["stopped-by-cwd|-|-"] == 1
     assert len(probed) == 1  # the second socket is not probed from the wrong directory

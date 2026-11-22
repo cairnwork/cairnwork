@@ -110,6 +110,14 @@ def _connect(path: str, kind: int) -> str:
         probe.close()
 
 
+def _stop(counts: dict[str, int], reason: str, entries: int) -> dict[str, int]:
+    """Mark the walk as stopped early; partial counts stay, with the reason and entries seen."""
+    counts["truncated|-|-"] = 1
+    counts[f"stopped-by-{reason}|-|-"] = 1
+    counts["entries-seen|-|-"] = entries
+    return counts
+
+
 def collect(top: str = "/") -> dict[str, int]:
     """Walk visible files within fixed time and entry bounds, returning counts only.
 
@@ -125,14 +133,12 @@ def collect(top: str = "/") -> dict[str, int]:
     deadline, entries = time.monotonic() + BUDGET_SECONDS, 0
     for root, dirs, files in os.walk(top, followlinks=False, onerror=unlistable):
         if time.monotonic() >= deadline:  # directories without files also count against the budget
-            counts["truncated|-|-"] = 1
-            return counts
+            return _stop(counts, "time", entries)
         dirs[:] = [d for d in dirs if os.path.join(root, d) not in SKIP]
         for name in files:
             entries += 1
             if entries > MAX_ENTRIES or time.monotonic() >= deadline:
-                counts["truncated|-|-"] = 1
-                return counts
+                return _stop(counts, "entries" if entries > MAX_ENTRIES else "time", entries)
             path = os.path.join(root, name)
             try:
                 if not stat.S_ISSOCK(os.lstat(path).st_mode):
@@ -143,8 +149,7 @@ def collect(top: str = "/") -> dict[str, int]:
             kind, result = _probe(path)
             key = f"{loc}|{kind}|{result}"
             if _cwd_lost:  # the working directory is no longer the one we started in
-                counts["truncated|-|-"] = 1
-                return counts
+                return _stop(counts, "cwd", entries)
             counts[key] = counts.get(key, 0) + 1
     return counts
 
