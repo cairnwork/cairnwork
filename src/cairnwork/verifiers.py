@@ -61,7 +61,7 @@ from functools import partial
 from pathlib import Path
 
 import cairnwork_sandbox
-from cairnwork import gitcmd, pytest_config, report_channel, report_guard
+from cairnwork import fixture_probe, gitcmd, pytest_config, report_channel, report_guard
 from cairnwork.account_checkout import checkout_differences, make_account_checkout
 from cairnwork.account_checkout import remove_checkout as _remove_checkout
 from cairnwork.account_prelude import locked_prelude
@@ -240,7 +240,7 @@ def _prepare_run(private: Path, ini: Path, ini_text: bytes, channel=None, hash_s
 
 
 def _run_one(batch: _Batch, spec, checkout) -> VerifierRun:
-    account, python = batch.ctx.account, batch.python
+    account, python, ctx = batch.ctx.account, batch.python, batch.ctx
     plugins = pytest_config.installed_plugins(python)
     ini_text = batch.settings.ini_text(checkout, plugins)
     private = Path(tempfile.mkdtemp(prefix=f"{checkout.name}.", dir=checkout.parent.parent))
@@ -248,7 +248,9 @@ def _run_one(batch: _Batch, spec, checkout) -> VerifierRun:
     # close the channel, then drop private/run even if that close raises
     with unless_interrupted(partial(close_private, private, account)):
         try:
-            return _run_one_in(batch, spec, checkout, plugins, ini_text, private, channel)
+            run = _run_one_in(batch, spec, checkout, plugins, ini_text, private, channel)
+            names = fixture_probe.finish(spec, ctx, batch.candidate_commit, private, ini_text, run)
+            return replace(run, fixture_names=names)
         finally:
             if channel is not None:
                 channel.close()
@@ -283,12 +285,12 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
     )
     if account is not None:
         account.share_run(private, ini, run_dir, home, tmp)
-    if attempt_id:
-        env[ATTEMPT_ENV] = attempt_id
+    env.update({ATTEMPT_ENV: attempt_id} if attempt_id else {})
+    probe = fixture_probe.start(spec, ctx, private, env, ini_text, candidate_commit)
     argv = [
         python, "-P", "-m", "pytest", "-q", "-p", "no:cacheprovider", "-c", str(ini),
         f"--rootdir={checkout}", f"--confcutdir={checkout}", "-o", "addopts=",
-        *batch.settings.args(plugins), "-p", report_guard.MODULE, *spec.targets,
+        *batch.settings.args(plugins), "-p", report_guard.MODULE, *probe.argv, *spec.targets,
         *spec.flags(),  # --collect-only (#793), --continue-on-collection-errors (#796)
     ]  # fmt: skip
     before, profile, evidence, backend = os.lstat(checkout), None, None, cairnwork_sandbox.select()
