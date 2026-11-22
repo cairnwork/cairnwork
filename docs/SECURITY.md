@@ -100,18 +100,18 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
   `/etc` symlink to a regular file under `/run` or `/var/run` (`/etc/resolv.conf ->
   /run/systemd/resolve/stub-resolv.conf`; under the dedicated account only one it may reach; a file
   its owner swaps between the policy build and the run start is bound as it then is; a link into
-  `/tmp` is not put back, since any local user may own and swap a file there), and the run's own
-  read and write roots under `/tmp` (production runs live under the required `--state` directory;
-  only tests put them in `/tmp`, under pytest's temp directory): a read root read-only (a read root
+  `/tmp` or `/var/tmp` is not put back, since any local user may own and swap a file there), and the
+  run's own read and write roots under `/tmp` or `/var/tmp` (production runs live under the required
+  `--state` directory; only tests put them in `/tmp`, under pytest's temp directory): a read root read-only (a read root
   absent when the policy is built is skipped), a write root writable (bwrap's `--remount-ro` does
   not recurse into a bind under the tree; Linux CI writes the run's `TMPDIR` and work directory
-  under `/tmp`) (#391, `src/cairnwork_sandbox/bwrap_private.py`). Refused (`SandboxError`): a read
+  under `/tmp`; `/var/tmp` is a private tree since #471 step 2b) (#391, `src/cairnwork_sandbox/bwrap_private.py`). Refused (`SandboxError`): a read
   or write root that is a whole tree or lies inside `/run` or `/var/run` (no caller puts one there,
   and binding it would bring host content back), a write root that holds a tree (it would cover it),
-  and trees whose real paths overlap, such as `/tmp` linked into `/run` (a root under `/tmp` would
+  and trees whose real paths overlap, such as `/tmp` linked into `/run` (a root under `/tmp` or `/var/tmp` would
   then be bound into `/run`; `/var/run` linked to `/run` itself is one tree). **Behaviour change:**
-  a run no longer sees the host's `/tmp`: a test that reads a host file under `/tmp` outside its own
-  roots now gets `ENOENT` (macOS Seatbelt already denies those reads), and it writes temporary files
+  a run no longer sees the host's `/tmp` or `/var/tmp`: a test that reads a host file under either
+  outside its own roots now gets `ENOENT` (macOS Seatbelt already denies those reads), and it writes temporary files
   in its `TMPDIR` (`tmp_path`, `tempfile`) as before.
   The masked set (all under `$HOME` unless an absolute path is given):
     - **Credential directories** emptied with a tmpfs: `.ssh`, `.aws`, `.gnupg`, `.config`,
