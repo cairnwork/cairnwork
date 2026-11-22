@@ -6,6 +6,7 @@ imports every module a python_files pattern collects and can turn off one of its
 """
 
 import pytest
+from _pytest.config import default_plugins, essential_plugins
 
 from tools.blackbox_suggest import KINDS_NOW, analyze_file, default_roots
 
@@ -44,6 +45,10 @@ REFUSED = {
         "setup.cfg": "[tool:pytest]\nfilterwarnings =\n"
         "    ignore::DeprecationWarning\n    ignore::pkg.side.Warn\n"
     },
+    "project_category_before_a_builtin": {
+        "setup.cfg": "[tool:pytest]\nfilterwarnings =\n"
+        "    ignore::pkg.side.Warn\n    ignore::DeprecationWarning\n"
+    },
     "log_file": {"pytest.ini": "[pytest]\nlog_file = src/pkg/core.py\n"},
     "python_files_everything": {"pytest.ini": "[pytest]\npython_files = *.py\n"},
     "python_files_beside_the_defaults": {
@@ -79,3 +84,12 @@ KEPT = {
 def test_an_option_known_to_leave_the_tests_alone_keeps_the_draft(tmp_path, extra):
     item = run(tmp_path, extra)
     assert item.protected(KINDS_NOW), item.reason(KINDS_NOW)
+
+
+OWN = sorted({*essential_plugins, *default_plugins} - {"cacheprovider"})  # it only caches
+
+
+@pytest.mark.parametrize("name", OWN)
+def test_turning_off_any_of_pytests_own_plugins_refuses(tmp_path, name):
+    item = run(tmp_path, {"pytest.ini": f"[pytest]\naddopts = -p no:{name}\n"})
+    assert item.refusal is not None and not item.protected(KINDS_NOW)
