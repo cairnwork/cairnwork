@@ -253,6 +253,8 @@ def _function(node: ast.FunctionDef | ast.AsyncFunctionDef, verdict: Verdict, *,
 def _empty_hook(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     """A body of docstrings, ``pass`` and, in ``pytest_addoption``, ``parser.addoption`` calls
     whose arguments are all literals (#370): anything else runs before or around the tests."""
+    if node.args.defaults or any(node.args.kw_defaults):  # may stand in for pytest's arguments
+        return False
     names = [a.arg for a in [*node.args.posonlyargs, *node.args.args]]
     parser = "parser" if node.name == "pytest_addoption" and "parser" in names else None
     return all(_empty_statement(stmt, parser) for stmt in node.body)
