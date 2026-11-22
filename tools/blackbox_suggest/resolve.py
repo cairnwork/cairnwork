@@ -116,6 +116,15 @@ class Project:
             raise Refused("the drafted targets import more modules than this reader follows")
         return found
 
+    def lacks(self, module: str, name: str) -> bool:
+        """Whether a star import of module surely does not bind name: its source is read, binds
+        no such name anywhere, names it in no string (__all__) and has no such submodule (#370)."""
+        tree = self.tree(module)
+        if tree is None or self.files(f"{module}.{name}"):
+            return False
+        named = any(isinstance(n, ast.Constant) and n.value == name for n in ast.walk(tree))
+        return not named and not rebound(tree, name, set())
+
     def kind_of(self, module: str, name: str, hops: int = 0) -> tuple[str, str, str]:
         """(kind, defining module, name there): kind is 'function' or 'class', following
         re-exports, star imports and simple aliases."""
@@ -126,7 +135,10 @@ class Project:
             raise Refused(f"{module} is not a module of the project (stdlib or a dependency?)")
         path = self.module_file(module)
         package = path is not None and path.name == "__init__.py"
-        found = _defined(tree, module, name, package)
+        later: list[str] = []
+        found = _defined(tree, module, name, package, later)
+        if any(not self.lacks(star, name) for star in later):
+            raise Refused(f"{name!r} in {module} may be bound again by a star import")
         if found is None:
             for star in _star_imports(tree, module, package):
                 try:
@@ -142,8 +154,9 @@ class Project:
 Defs = ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef
 
 
-def _defined(tree: ast.Module, module: str, name: str, package: bool):
-    """The last top-level binding of name: ('function'|'class', m, n) or ('import', m, n)."""
+def _defined(tree: ast.Module, module: str, name: str, package: bool, later: list[str]):
+    """The last top-level binding of name: ('function'|'class', m, n) or ('import', m, n).
+    Adds to later each module star-imported after a binding of name."""
     found: tuple[str, str, str] | None = None
     read: set[int] = set()
     for node in tree.body:
@@ -159,9 +172,9 @@ def _defined(tree: ast.Module, module: str, name: str, package: bool):
             found = ("class", module, name)
         elif isinstance(node, ast.ImportFrom):
             for alias in node.names:
-                if (alias.asname or alias.name) == name or (
-                    alias.name == "*" and (found is None or found[0] == "import")
-                ):
+                if alias.name == "*" and found is not None:
+                    later.append(_absolute(module, node, package))  # judged by lacks (#370)
+                if (alias.asname or alias.name) in (name, "*"):
                     read.add(id(alias))
                 if (alias.asname or alias.name) == name:
                     found = ("import", _absolute(module, node, package), alias.name)
