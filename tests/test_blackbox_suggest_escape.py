@@ -18,6 +18,7 @@ REFUSED = {
     "escape_method_on_unheld_receiver": held(IMP + "x = []\nx.extend(core.REG)\n"),
     "escape_in_place_operator": held(IMP + "r = core.REG\nr |= {'x': 1}\n"),
     "escape_unclassified_position": held(IMP + "x = (lambda: core.REG)\n"),
+    "escape_method_named_like_own_function": held(IMP + "x = object()\nx.K(core.REG)\n"),
     "escape_argument_to_held_receiver": held(IMP + "k = core.K\nk.index(core.REG)\n"),
 }
 KEPT = {

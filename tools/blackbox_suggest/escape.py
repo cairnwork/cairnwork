@@ -101,7 +101,8 @@ def _safe_argument(
     """Passed to this module's own functions, to a project function (followed there by that
     module's own check), to a function that only reads it, or as a function to call later."""
     name = _callee(call.func)
-    if name in SAFE_CALLEES or name in local:
+    own = isinstance(call.func, ast.Name) or _dotted(call.func) in {f"self.{name}", f"cls.{name}"}
+    if name in SAFE_CALLEES or (own and name in local):
         return True
     if isinstance(call.func, ast.Name | ast.Attribute) and _chain(call.func) & seeds:
         return True
