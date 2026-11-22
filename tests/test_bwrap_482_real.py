@@ -149,11 +149,23 @@ def _socket_report(base: Path, owner: bool) -> str:
     policy_path = base / "walk-policy.txt"
     policy_path.write_text(policy.text)
     argv = bwrap.wrap([sys.executable, str(script)], policy_path)
-    result = subprocess.run(argv, capture_output=True, timeout=75, check=False)  # noqa: S603
+    result = subprocess.run(argv, capture_output=True, timeout=100, check=False)  # noqa: S603
     assert result.returncode == 0, result.stderr.decode(errors="replace")
     text = result.stdout.decode()
     assert base.name not in text
     return text
+
+
+def _publish_walk(label: str, report_text: str) -> None:
+    """Append the categories-only report to the CI job summary, from outside the sandbox (#471)."""
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not path:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(f"\n#471 socket walk ({label}): `{report_text.strip()}`\n")
+    except OSError:
+        pass
 
 
 def test_owner_socket_walk_reports_categories_only(fixture_tree):
@@ -174,8 +186,10 @@ def test_owner_socket_walk_reports_categories_only(fixture_tree):
         socket_path.unlink(missing_ok=True)
     report = json.loads(report_text)
     assert isinstance(report, dict)
+    _publish_walk("owner", report_text)
     if "truncated|-|-" in report:
-        pytest.skip("socket walk stopped early (time or entry cap); no category count")
+        print(report_text)
+        pytest.fail("socket walk stopped early (time or entry cap); no category count")
     assert sum(count for key, count in report.items() if key.startswith("home|")) >= 1
     print(report_text)
     warnings.warn(report_text, stacklevel=2)
@@ -205,11 +219,11 @@ def test_verifier_socket_walk_reports_categories_only(account_tree):
         from cairnwork.verifier_account import VerifierAccount
 
         account = VerifierAccount()
-        with account.exclusive(90):
+        with account.exclusive(120):
             result = subprocess.run(
                 account.wrap(["/usr/bin/python3", "-I", "-c", script.read_text()], policy_path),
                 capture_output=True,
-                timeout=100,
+                timeout=130,
                 check=False,
                 cwd=account.root,
             )  # noqa: S603
@@ -217,8 +231,10 @@ def test_verifier_socket_walk_reports_categories_only(account_tree):
         report_text = result.stdout.decode()
         assert socket_dir.name not in report_text
         report = json.loads(report_text)
+        _publish_walk("verifier account", report_text)
         if "truncated|-|-" in report:
-            pytest.skip("socket walk stopped early (time or entry cap); no category count")
+            print(report_text)
+            pytest.fail("socket walk stopped early (time or entry cap); no category count")
         assert sum(count for key, count in report.items() if key.startswith("var-tmp|")) >= 1
         print(report_text)
         warnings.warn(report_text, stacklevel=2)
