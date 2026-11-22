@@ -48,6 +48,7 @@ Class 5: writes to the module table with a variable key, key variants or a swapp
   none
   Pin:
   tests/test_bytecode_hook.py::test_a_frozen_module_name_held_by_another_module_fails_the_install
+  tests/test_protection.py::test_levels
 
 Class 6: import-path changes made mid-run (search path, finders, path hooks, .pth, archives, a
 non-.py file imported later).
