@@ -347,10 +347,7 @@ FORGE_AT_EXIT = """
 import json, os, sys
 
 def pytest_unconfigure(config):
-    module = sys.argv[sys.argv.index("-p", sys.argv.index("no:cacheprovider")) + 1]
-    mod = sys.modules.get(module) or sys.modules[
-        next(m for m in sys.modules if m.startswith("_cairnwork_fixture_record_"))
-    ]
+    mod = sys.modules[next(m for m in sys.modules if m.startswith("_cairnwork_fixture_record_"))]
     stages = {s: {"names": ["forged"], "count": 1}
               for s in ("itemcollected", "modifyitems_before", "modifyitems_after", "finish")}
     record = {
@@ -395,3 +392,17 @@ def test_empty_nonce_on_both_sides_is_refused(tmp_path):
     unit = _unit_probe(tmp_path, record, UNIT_MODULE, pf)
     unit.nonce = ""
     assert unit.read(0, False) is None
+
+
+FORGE_WITH_NONCE = FORGE_AT_EXIT.replace(
+    '"plugin_modules"', '"nonce": mod._META["nonce"], "plugin_modules"'
+)
+
+
+@pytest.mark.sandbox
+def test_known_limit_same_process_code_can_forge_after_the_last_write(repo, tmp_path):
+    # Out of scope by design (see fixture_probe's docstring): code inside the pytest process can
+    # read the recorder module's state. If this ever starts returning None the limit was sealed;
+    # then flip the assertion and drop the advisory note.
+    run = probe(repo, tmp_path, base_files(**{"conftest.py": FORGE_WITH_NONCE}))
+    assert run.fixture_names == frozenset({"forged"})

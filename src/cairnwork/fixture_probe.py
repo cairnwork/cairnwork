@@ -4,6 +4,13 @@ The recorder is written into the run's private guard directory (read-only to the
 on PYTHONPATH) under a per-run random module name, so a checkout file cannot take that name and
 load ahead of it. Owner runs only. Any failure, a timeout, a missing sandbox or a record whose
 recorder entry is not this run's own module and file gives None (the #916 rule), never fewer names.
+
+Trust boundary (a higher hurdle, not a boundary; same as report_guard): record.json must carry a
+per-run nonce the parent passes on an inherited pipe that the recorder reads and closes at import,
+before checkout code. Code running in the pytest process itself can still read the recorder
+module's own state and write a forged record after the recorder's last write; that is out of scope
+and pinned by test_known_limit_same_process_code_can_forge_after_the_last_write. The result is
+therefore advisory: step 5 must only union it with the #916 names (it can add names, never remove).
 """
 
 from __future__ import annotations
@@ -41,6 +48,12 @@ class Probe:
     @property
     def pass_fds(self) -> tuple[int, ...]:
         return (self.read_fd,) if self.read_fd >= 0 else ()
+
+    def __enter__(self) -> Probe:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
 
     def close(self) -> None:
         fd, self.read_fd = self.read_fd, -1  # never retry a close

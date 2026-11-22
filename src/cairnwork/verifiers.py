@@ -286,15 +286,15 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
     if account is not None:
         account.share_run(private, ini, run_dir, home, tmp)
     env.update({ATTEMPT_ENV: attempt_id} if attempt_id else {})
-    probe = fixture_probe.start(spec, ctx, private, env, ini_text, candidate_commit)
-    argv = [
-        python, "-P", "-m", "pytest", "-q", "-p", "no:cacheprovider", "-c", str(ini),
-        f"--rootdir={checkout}", f"--confcutdir={checkout}", "-o", "addopts=",
-        *batch.settings.args(plugins), "-p", report_guard.MODULE, *probe.argv, *spec.targets,
-        *spec.flags(),  # --collect-only (#793), --continue-on-collection-errors (#796)
-    ]  # fmt: skip
-    before, profile, evidence, backend = os.lstat(checkout), None, None, cairnwork_sandbox.select()
-    try:
+    with fixture_probe.start(spec, ctx, private, env, ini_text, candidate_commit) as probe:
+        argv = [
+            python, "-P", "-m", "pytest", "-q", "-p", "no:cacheprovider", "-c", str(ini),
+            f"--rootdir={checkout}", f"--confcutdir={checkout}", "-o", "addopts=",
+            *batch.settings.args(plugins), "-p", report_guard.MODULE, *probe.argv, *spec.targets,
+            *spec.flags(),  # --collect-only (#793), --continue-on-collection-errors (#796)
+        ]  # fmt: skip
+        before, backend = os.lstat(checkout), cairnwork_sandbox.select()
+        profile, evidence, returncode, timed_out, survivors = None, None, None, False, 0
         if backend is not None:
             profile = backend.policy(
                 read_roots=(*pytest_config.interpreter_roots(python), ini, private / "guard"),
@@ -307,9 +307,6 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
             )  # fmt: skip
         else:
             _write_new(log_path, b"no sandbox backend available: verifier not executed\n")
-            returncode, timed_out, survivors = None, False, 0
-    finally:
-        probe.close()  # the parent's copy of the recorder's nonce pipe
     mutated = checkout_differences(ctx.repo, candidate_commit, checkout, before, account, python)
     forged = bytecode_findings(tmp, checkout, run_dir, spec.targets, account, python)
     verdict = _read_verdict(channel, verdict_path, verdict_nonce, plugins, checkout)
