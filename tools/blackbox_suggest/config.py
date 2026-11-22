@@ -23,6 +23,7 @@ from tools.blackbox_suggest.pytest_values import (
     beyond_installed,
     ini_refused,
     toml_refused,
+    warning_filter,
 )
 
 SAFE_KEYS = {
@@ -206,9 +207,12 @@ def _option(key: str, value: Any) -> tuple[str | None, bool, list[str]]:
         filters = [[f.strip() for f in v.split(":")] + ["", ""] for v in _values(value)]
         if not all(f[0] in FILTER_ACTIONS for f in filters):
             return "pytest config turns warnings into errors (filterwarnings)", True, []
-        if all("." not in f[2] or f[2].split(".")[0] in sys.stdlib_module_names for f in filters):
+        stdlib = sys.stdlib_module_names
+        if not all("." not in f[2] or f[2].split(".")[0] in stdlib for f in filters):
+            return "pytest config imports a warning category this reader does not read", True, []
+        if all(warning_filter(v) for v in _values(value)):
             return None, True, []
-        return "pytest config imports a warning category this reader does not read", True, []
+        return "pytest config holds a warning filter pytest refuses at start", False, []
     if key == "addopts":
         try:
             tokens = [t for v in _values(value) for t in shlex.split(v)]

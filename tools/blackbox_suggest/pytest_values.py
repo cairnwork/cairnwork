@@ -7,6 +7,7 @@ a native TOML table, and checks some values of options otherwise known to be ine
 
 from __future__ import annotations
 
+import builtins
 import importlib.metadata
 import logging
 import re
@@ -106,3 +107,27 @@ def _versions(text: str) -> tuple[Any, Any] | None:
         return Version(text), Version(importlib.metadata.version("pytest"))
     except (ImportError, ValueError, importlib.metadata.PackageNotFoundError):
         return None  # InvalidVersion is a ValueError
+
+
+WARNINGS = {n for n, v in vars(builtins).items() if isinstance(v, type) and issubclass(v, Warning)}
+
+
+def warning_filter(text: str) -> bool:
+    """A filter pytest parses (#370): at most five fields, a builtin warning category (bare or
+    under ``builtins.``), a whole line number and patterns that compile. pytest refuses to start
+    on a configured filter it cannot parse."""
+    parts = [p.strip() for p in text.split(":")]
+    if len(parts) > 5:
+        return False
+    _, message, category, module, line = parts + [""] * (5 - len(parts))
+    owner, _, name = category.rpartition(".")
+    if owner not in ("", "builtins") or (category and name not in WARNINGS):
+        return False
+    if line and not (line.isascii() and line.isdigit()):
+        return False
+    try:
+        for pattern, flags in ((message, 0), (message, re.I), (module, 0)):
+            re.compile(pattern, flags)
+    except re.error:
+        return False
+    return True

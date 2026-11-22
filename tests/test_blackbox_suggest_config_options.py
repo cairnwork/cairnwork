@@ -71,7 +71,7 @@ def test_an_option_that_runs_or_changes_project_code_refuses(tmp_path, extra):
 KEPT = {
     "builtin_and_stdlib_categories": {
         "pytest.ini": "[pytest]\nfilterwarnings =\n    ignore:m:UserWarning\n"
-        "    ignore::DeprecationWarning\n    ignore::warnings.WarningMessage\n"
+        "    ignore::DeprecationWarning\n    ignore::builtins.UserWarning\n"
     },
     "another_plugin_turned_off": {
         "pytest.ini": "[pytest]\naddopts = -p no:cacheprovider -p no:x\n"
