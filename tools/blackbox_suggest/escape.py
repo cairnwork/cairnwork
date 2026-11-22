@@ -16,7 +16,7 @@ from .modstore import DISPLAYS, _callee, _chain, _dotted
 SAFE_CALLEES = frozenset({  # builtins and library functions that only read their arguments
     "len", "isinstance", "issubclass", "str", "repr", "int", "float", "bool", "hash", "id",
     "type", "print", "sorted", "frozenset", "tuple", "format", "min", "max", "sum", "any",
-    "all", "abs", "round", "divmod", "ord", "chr", "callable", "hasattr", "getattr",
+    "all", "abs", "round", "divmod", "ord", "chr", "callable", "hasattr",
     "enumerate", "zip", "reversed", "range", "iter", "next", "bytes", "set", "list", "dict",
     "Path", "PurePosixPath", "escape", "fnmatch", "samefile", "fspath", "join", "basename",
     "dirname", "dumps", "quote", "compile", "b64encode", "Popen",
@@ -48,7 +48,11 @@ READS = (  # the result is a new value, or the value is only looked at
 
 
 def escapes(
-    tree: ast.Module, derived: set[str], seeds: set[str], parents: dict[int, ast.AST]
+    tree: ast.Module,
+    derived: set[str],
+    seeds: set[str],
+    parents: dict[int, ast.AST],
+    modules: set[str],
 ) -> bool:
     """A held name is used outside the known-safe uses. The use is that of the whole receiver
     chain it starts (attribute and subscript lookups on it)."""
@@ -68,13 +72,18 @@ def escapes(
                 if not (isinstance(parent, ast.Attribute | ast.Subscript) and parent.value is use):
                     break
                 use = parent
-            if not _safe_use(use, parents, held | seeds, seeds, local):
+            if not _safe_use(use, parents, held | seeds, seeds, local, modules):
                 return True
     return False
 
 
 def _safe_use(
-    use: ast.expr, parents: dict[int, ast.AST], held: set[str], seeds: set[str], local: set[str]
+    use: ast.expr,
+    parents: dict[int, ast.AST],
+    held: set[str],
+    seeds: set[str],
+    local: set[str],
+    modules: set[str],
 ) -> bool:
     parent = parents.get(id(use))
     if isinstance(parent, ast.Call) and parent.func is use:  # calling it
@@ -88,11 +97,24 @@ def _safe_use(
         return True  # *value in a display moves on; a class keyword (metaclass=) is read
     if isinstance(parent, ast.Call):
         return _safe_argument(parent, use, held, seeds, local)
+    if _method_as_value(use, parent, modules):
+        return False
     if isinstance(parent, ast.AugAssign):
         return parent.target is not use
     if isinstance(parent, ast.Attribute | ast.Subscript):
         return True  # a subscript key
     return isinstance(parent, PASSES + READS)
+
+
+def _method_as_value(use: ast.expr, parent: ast.AST | None, modules: set[str]) -> bool:
+    """An attribute of a held object that may be a method, moved on without being called: the
+    method would be called later on the held object."""
+    return (
+        isinstance(use, ast.Attribute)
+        and use.attr not in READ_METHODS
+        and _dotted(use.value) not in modules
+        and isinstance(parent, (ast.Assign, ast.AnnAssign, ast.NamedExpr, *DISPLAYS))
+    )
 
 
 def _safe_argument(

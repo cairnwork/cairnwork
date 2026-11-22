@@ -83,7 +83,7 @@ def rebinds_modules(
             return "it passes a project module on as a value"
     from .escape import escapes  # built on this module's helpers, so imported here
 
-    if escapes(tree, derived, seeds | (_unbound(tree) if star else set()), parents):
+    if escapes(tree, derived, seeds | (_unbound(tree) if star else set()), parents, modules):
         return "it hands a value taken from a project module to a use this reader does not follow"
     return None
 
@@ -112,9 +112,11 @@ def _derived(tree: ast.Module, seeds: set[str]) -> set[str]:
                 kind = _kind(value, derived, element)
                 if kind is not None:
                     derived |= {kind + n for t in targets for n in _target_names(t)}
+                    derived |= {f"[]{n}" for t in targets for n in _stored_into(t)}
             if isinstance(node, ast.Call):
                 for function in functions.get(_callee(node.func) or "", []):
                     derived |= _given(function, node, derived)
+                derived |= _lambda_given(node, derived)
             if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
                 if any(_kind(v, derived, True) is not None for v in _returns(node)):
                     derived.add(node.name)
@@ -132,8 +134,59 @@ def _kind(value: ast.expr, derived: set[str], element: bool) -> str | None:
     if direct & held:
         return ""
     if direct & boxes or inner & (held | boxes):
-        return "" if element else "[]"
+        return "" if element or _extracts(value) else "[]"
     return None
+
+
+VIEWS = {"get", "pop", "popitem", "setdefault", "values", "items"}  # hand out the elements
+
+
+def _extracts(node: ast.expr) -> bool:
+    """The value is an element taken out of a container (an index, get, values) and not the
+    container itself."""
+    if isinstance(node, ast.Subscript):
+        return True
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+        return node.func.attr in VIEWS or _extracts(node.func.value)
+    if isinstance(node, ast.Attribute):
+        return _extracts(node.value)
+    return isinstance(node, PASS_ON) and any(
+        _extracts(c) for c in ast.iter_child_nodes(node) if isinstance(c, ast.expr)
+    )
+
+
+def _stored_into(target: ast.expr) -> set[str]:
+    """D['k'] = v makes D a container holding v: the mark of the container being stored into."""
+    if isinstance(target, ast.Tuple | ast.List):
+        return {n for item in target.elts for n in _stored_into(item)}
+    if not isinstance(target, ast.Subscript):
+        return set()
+    base = target.value
+    while isinstance(base, ast.Subscript):
+        base = base.value
+    mark = _mark(base)
+    return {mark} if mark else set()
+
+
+APPLIERS = {  # calls that run a function over their other arguments
+    "map", "filter", "sorted", "min", "max", "reduce", "starmap", "groupby", "sum", "any", "all",
+}  # fmt: skip
+
+
+def _lambda_given(call: ast.Call, derived: set[str]) -> set[str]:
+    """The parameters of a lambda handed to a call that also gets a held value or container."""
+    if _callee(call.func) not in APPLIERS:
+        return set()
+    args = [*call.args, *(k.value for k in call.keywords)]
+    lambdas = [a for a in args if isinstance(a, ast.Lambda)]
+    if not any(_kind(a, derived, True) is not None for a in args if a not in lambdas):
+        return set()
+    return {p.arg for fn in lambdas for p in _parameters(fn.args)}
+
+
+def _parameters(spec: ast.arguments) -> list[ast.arg]:
+    every = [*spec.posonlyargs, *spec.args, *spec.kwonlyargs, spec.vararg, spec.kwarg]
+    return [a for a in every if a]
 
 
 def _bindings(node: ast.AST) -> list[tuple[list[ast.expr], ast.expr, bool]]:
@@ -153,6 +206,29 @@ def _bindings(node: ast.AST) -> list[tuple[list[ast.expr], ast.expr, bool]]:
         return [([node.target], node.iter, True)]
     if isinstance(node, ast.With | ast.AsyncWith):
         return [([i.optional_vars], i.context_expr, False) for i in node.items if i.optional_vars]
+    if isinstance(node, ast.Match):  # every capture takes the subject or an element of it
+        names = {
+            n
+            for case in node.cases
+            for p in ast.walk(case.pattern)
+            for n in (getattr(p, "name", None), getattr(p, "rest", None))
+            if isinstance(n, str)
+        }
+        return [([ast.Name(id=n, ctx=ast.Store()) for n in sorted(names)], node.subject, True)]
+    if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda):
+        spec = node.args  # a parameter default is the value of the parameter
+        params = [*spec.posonlyargs, *spec.args]
+        pairs = list(zip(params[len(params) - len(spec.defaults) :], spec.defaults, strict=True))
+        pairs += [(a, d) for a, d in zip(spec.kwonlyargs, spec.kw_defaults, strict=True) if d]
+        return [([ast.Name(id=a.arg, ctx=ast.Store())], d, False) for a, d in pairs]
+    if isinstance(node, ast.ClassDef):  # an attribute set in the class body
+        return [
+            ([ast.Attribute(ast.Name("_"), t.id)], b.value, False)
+            for b in node.body
+            if isinstance(b, ast.Assign | ast.AnnAssign) and b.value is not None
+            for t in (b.targets if isinstance(b, ast.Assign) else [b.target])
+            if isinstance(t, ast.Name)
+        ]
     return []
 
 
@@ -187,7 +263,7 @@ def _given(
     spec = function.args
     params = [*spec.posonlyargs, *spec.args]
     method = isinstance(call.func, ast.Attribute) and params and params[0].arg in {"self", "cls"}
-    every = {a.arg for a in [*params, *spec.kwonlyargs, spec.vararg, spec.kwarg] if a}
+    every = {a.arg for a in _parameters(spec)}
     found: set[str] = set()
     for i, arg in enumerate(call.args):
         kind = _kind(arg.value if isinstance(arg, ast.Starred) else arg, derived, False)
@@ -235,6 +311,8 @@ def _held(node: ast.expr) -> set[str]:
         return {f".{node.attr}"} | _held(node.value)
     if isinstance(node, ast.Subscript):
         return _held(node.value)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+        return _held(node.func.value) if node.func.attr in VIEWS else set()
     if isinstance(node, PASS_ON):
         parts = [c for c in ast.iter_child_nodes(node) if isinstance(c, ast.expr)]
         return {m for part in parts for m in _held(part)}
