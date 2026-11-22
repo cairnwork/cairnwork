@@ -38,7 +38,6 @@ REFUSED = {
     "section_line_with_more": {"pytest.ini": "[pytest] x\nminversion = 7.0\n"},
     "indented_first_line": ini("  minversion = 7.0\n"),
     "indented_first_line_setup_cfg": ini("  minversion = 7.0\n", "setup.cfg", "tool:pytest"),
-    "minversion_above_installed": ini("minversion = 99\n"),
     "minversion_with_comment": ini("minversion = 7.0 # c\n"),
     "log_level_unknown": ini("log_level = BOGUS\n"),
     "bool_unknown": ini("xfail_strict = maybe\n"),
@@ -69,8 +68,12 @@ KEPT = {
         'testpaths = ["tests"]\nlog_level = "INFO"\n'
     },
     "ini_options_coerced": {
-        "pyproject.toml": "[tool.pytest.ini_options]\nminversion = 7.0\nxfail_strict = true\n"
+        "pyproject.toml": "[tool.pytest.ini_options]\nminversion = 7.0\nxfail_strict = 1\n"
+        "testpaths = 1\nlog_cli = true\n"
     },
+    "ini_signed_count_and_exponent": ini(
+        "tmp_path_retention_count = +3\nfaulthandler_timeout = 1e1\n"
+    ),
     "setup_cfg_other_sections": {
         "setup.cfg": "[metadata]\nname = x\n[options]\ninstall_requires =\n    requests\n"
         "[tool:pytest]\nminversion = 7.0\n"
@@ -81,4 +84,9 @@ KEPT = {
 @pytest.mark.parametrize("extra", KEPT.values(), ids=KEPT.keys())
 def test_a_configuration_pytest_loads_keeps_the_draft(tmp_path, extra):
     item = run(tmp_path, extra)
-    assert item.protected(KINDS_NOW), item.reason(KINDS_NOW)
+    assert item.protected(KINDS_NOW) and item.exact, item.reason(KINDS_NOW)
+
+
+def test_a_minversion_newer_than_the_readers_pytest_leaves_the_count_unknown(tmp_path):
+    item = run(tmp_path, ini("minversion = 99\n"))  # the project's own pytest may be newer
+    assert item.protected(KINDS_NOW) and not item.exact

@@ -17,7 +17,12 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-from tools.blackbox_suggest.pytest_values import accepted, ini_refused, toml_refused
+from tools.blackbox_suggest.pytest_values import (
+    accepted,
+    beyond_installed,
+    ini_refused,
+    toml_refused,
+)
 
 SAFE_KEYS = {
     "minversion", "testpaths", "norecursedirs", "markers", "xfail_strict",
@@ -184,7 +189,7 @@ def _option(key: str, value: Any) -> tuple[str | None, bool, list[str]]:
             return "pytest addopts cannot be read", False, []
         return _addopts(tokens)
     if key in SAFE_KEYS:
-        return None, True, []
+        return None, not beyond_installed(key, value), []
     return "pytest config option not known to be inert", True, []
 
 
