@@ -176,9 +176,13 @@ def _section(path: Path, kind: str, section: str) -> dict[str, Any] | None:
         if ini_refused(text):  # pytest reads the whole file with iniconfig, which refuses it
             raise ValueError("a line pytest cannot read")
         parser = configparser.ConfigParser(interpolation=None)
+        parser.optionxform = str  # type: ignore[assignment]  # keep case as pytest does
         parser.read_string(text)
         if parser.has_section(section):
-            return dict(parser.items(section))
+            options = dict(parser.items(section))
+            if any(key != key.lower() for key in options):  # pytest: unknown, or stops (#370)
+                raise ValueError("an option name pytest reads with its case")
+            return options
         if parser.has_section("pytest"):  # setup.cfg: pytest refuses to start (#370, as #947)
             raise ValueError("a [pytest] section in setup.cfg")
         return None
