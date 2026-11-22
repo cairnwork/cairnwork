@@ -10,7 +10,7 @@ tests/test_tamper_scan_limits.py keeps this list parseable and every pin real.
 Class 1: names built at run time to reach a pytest-internal module, class or attribute, to change
 what pytest reports.
   Issues: #571, #643, #800
-  Defence: none (src/cairnwork/report_guard.py: "a hurdle, not a boundary")
+  Defence: none (src/cairnwork/report_guard.py: "hurdles, not a boundary")
   Pin:
   tests/test_protection.py::test_levels
 
@@ -28,10 +28,11 @@ Class 3: redirecting the bytecode location and planting bytecode.
   a Seatbelt read deny (src/cairnwork_sandbox/seatbelt.py). The Linux pins in
   tests/test_pycache_redirect.py are account-only, so Linux relies on the scans and the hook.
   Pin:
-  tests/test_pycache_redirect_spellings.py::test_a_redirect_built_from_strings_is_refused_for_sys_path_mutation
-  tests/test_pycache_redirect_spellings.py::test_bytecode_removed_before_the_run_ends_is_not_verified
   tests/test_seatbelt_pyc.py::test_bytecode_under_a_write_root_cannot_be_read_by_any_spelling
   tests/test_bytecode_hook.py::test_the_hook_holds_after_each_step
+  Scan-only (these show the static scan refuses the redirect before the run; not run-time cover):
+  tests/test_pycache_redirect_spellings.py::test_a_redirect_built_from_strings_is_refused_for_sys_path_mutation
+  tests/test_pycache_redirect_spellings.py::test_bytecode_removed_before_the_run_ends_is_not_verified
 
 Class 4: early exit, interpreter object-graph walks or frame dumps, by rebinding, split lines or
 context-line aliases.
@@ -68,7 +69,8 @@ Class 7: skipping, deselecting or renaming named tests.
 
 Class 8: forging the record by reading the nonce or path.
   Issues: #276
-  Defence: an environment scrub and the nonce pipe closed early (src/cairnwork/report_guard.py)
+  Defence: partial: an environment scrub and the nonce pipe closed early
+  (src/cairnwork/report_guard.py calls it a partial mitigation)
   Pin:
   tests/test_report_guard.py::test_the_descriptor_hand_over_records_a_passing_run_and_scrubs_the_environment
   tests/test_report_guard.py::test_the_nonce_pipe_is_closed_by_the_plugin_before_later_plugins_load

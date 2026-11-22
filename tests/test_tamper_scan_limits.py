@@ -24,7 +24,26 @@ def _defence(body: str) -> str:
 
 
 def _is_none(body: str) -> bool:
-    return _defence(body).startswith("none")
+    """A class with no run-time defence, in full or in part ("otherwise none")."""
+    return re.search(r"\bnone\b", _defence(body)) is not None
+
+
+DEFENCE_FILES = {
+    "Class 1": {"src/cairnwork/report_guard.py"},
+    "Class 2": {"src/cairnwork/report_guard.py"},
+    "Class 3": {
+        "src/cairnwork/pycache_guard.py",
+        "src/cairnwork/bytecode_roots.py",
+        "src/cairnwork/bytecode_hook.py",
+        "src/cairnwork_sandbox/seatbelt.py",
+    },
+    "Class 4": {"src/cairnwork/report_guard.py", "src/cairnwork/bytecode_hook.py"},
+    "Class 5": {"src/cairnwork/bytecode_hook.py"},
+    "Class 6": set(),
+    "Class 7": {"src/cairnwork/verdict_record.py", "src/cairnwork/report_guard.py"},
+    "Class 8": {"src/cairnwork/report_guard.py"},
+}
+NO_DEFENCE = {"Class 1", "Class 2", "Class 5", "Class 6"}
 
 
 def test_every_class_has_issues_a_defence_or_none_and_a_pin():
@@ -61,3 +80,14 @@ def test_a_class_with_no_defence_is_pinned_by_the_same_process_label():
         assert "tests/test_protection.py::test_levels" in body, name
     # a pytest-only verdict claims no protection beyond the same-process hurdle
     assert protection.level(("pytest-0",), macos=False) == protection.NONE == "same_process_only"
+
+
+def test_every_named_defence_file_exists():
+    entries = _entries()
+    named = {k: set(re.findall(r"src/\S+?\.py", _defence(b))) for k, b in entries.items()}
+    for name, files in named.items():
+        for file in files:
+            assert (ROOT / file).is_file(), (name, file)
+    # which files defend which class, and which classes have none, change only on purpose
+    assert named == DEFENCE_FILES
+    assert {k for k, b in entries.items() if _is_none(b)} == NO_DEFENCE
