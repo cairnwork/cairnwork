@@ -13,6 +13,7 @@ from __future__ import annotations
 import configparser
 import re
 import shlex
+import sys
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,7 @@ SAFE_KEYS = {
     "minversion", "testpaths", "norecursedirs", "markers", "xfail_strict",
     "console_output_style", "cache_dir", "pythonpath", "consider_namespace_packages",
     "log_cli", "log_level", "log_format", "log_date_format", "log_cli_level", "log_cli_format",
-    "log_cli_date_format", "log_file", "log_file_level", "log_file_format", "log_file_date_format",
+    "log_cli_date_format", "log_file_level", "log_file_format", "log_file_date_format",
     "log_auto_indent", "junit_family", "junit_suite_name", "junit_logging",
     "junit_log_passing_tests", "junit_duration_report", "doctest_optionflags",
     "doctest_encoding", "faulthandler_timeout", "verbosity_assertions", "verbosity_test_cases",
@@ -30,6 +31,14 @@ SAFE_KEYS = {
     "strict", "strict_parametrization_ids", "strict_xfail",
 }  # fmt: skip
 COLLECTION_KEYS = {"python_files", "python_classes", "python_functions", "collect_imported_tests"}
+TEST_FILES = {"test_*.py", "*_test.py"}  # pytest's default python_files
+PYTEST_PLUGINS = {  # pytest's own plugins: -p no: on one changes how every test runs
+    "pytest", "_pytest", "assertion", "capture", "debugging", "doctest", "faulthandler",
+    "fixtures", "helpconfig", "junitxml", "legacypath", "logging", "main", "mark",
+    "monkeypatch", "pastebin", "python", "recwarn", "reports", "runner", "setuponly",
+    "setupplan", "skipping", "stepwise", "subtests", "terminal", "threadexception", "tmpdir",
+    "unittest", "unraisableexception", "warnings", "python_path", "nose",
+}  # fmt: skip
 SAFE_FLAGS = {
     "-q", "-qq", "-v", "-vv", "-vvv", "-l", "--showlocals", "--strict-markers", "--strict-config",
     "--strict", "--no-header", "--no-summary", "-s", "--capture=no", "--capture=fd",
@@ -158,16 +167,22 @@ def _values(value: Any) -> list[str]:
 
 def _option(key: str, value: Any) -> tuple[str | None, bool, list[str]]:
     """(problem, count_known, usefixtures names) for one option."""
+    if key == "python_files":  # a module collected as tests is imported: code the reader skips
+        if {p for v in _values(value) for p in v.split()} <= TEST_FILES:
+            return None, False, []
+        return "pytest config collects more files as tests (python_files)", False, []
     if key in COLLECTION_KEYS:
         return None, False, []
     if key == "usefixtures":
         names = [n for v in _values(value) for n in v.split()]
         return "pytest config applies fixtures to every test (usefixtures)", True, names
     if key == "filterwarnings":
-        actions = [v.split(":", 1)[0].strip() for v in _values(value)]
-        if all(a in FILTER_ACTIONS for a in actions):
+        filters = [[f.strip() for f in v.split(":")] + ["", ""] for v in _values(value)]
+        if not all(f[0] in FILTER_ACTIONS for f in filters):
+            return "pytest config turns warnings into errors (filterwarnings)", True, []
+        if all("." not in f[2] or f[2].split(".")[0] in sys.stdlib_module_names for f in filters):
             return None, True, []
-        return "pytest config turns warnings into errors (filterwarnings)", True, []
+        return "pytest config imports a warning category this reader does not read", True, []
     if key == "addopts":
         try:
             tokens = [t for v in _values(value) for t in shlex.split(v)]
@@ -186,7 +201,8 @@ def _addopts(tokens: list[str]) -> tuple[str | None, bool, list[str]]:
     while index < len(tokens):
         token = tokens[index]
         has_next = index + 1 < len(tokens)
-        if token == "-p" and has_next and tokens[index + 1].startswith("no:"):
+        nxt = tokens[index + 1] if has_next else ""
+        if token == "-p" and nxt.startswith("no:") and nxt[3:].split(".")[0] not in PYTEST_PLUGINS:
             index += 2
         elif token in WITH_VALUE and has_next:
             index += 2
