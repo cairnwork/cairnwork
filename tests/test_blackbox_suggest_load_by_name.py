@@ -50,6 +50,72 @@ REFUSED = {
     "patch_literal_outside": (MOCK, "mock.patch('elsewhere.mod.X', 2).start()"),
     "monkeypatch_literal_unimported": ("", "monkeypatch.setattr('pkg.side.X', 2)"),
     "dict_config_literal_unimported": ("import logging.config\n", CONFIG % ("pkg.side.X", "")),
+    "dict_config_ext_unimported": (
+        "import logging.config\n",
+        CONFIG % ("logging.StreamHandler", ", 'stream': 'ext://pkg.side.X'"),
+    ),
+    # a loader the reader must not lose: under a second meaning of its name, under another name
+    # or as a value, unbound, or itself loaded by name
+    "alias_two_meanings": (
+        MOCK + "\n\ndef helper():\n    import json as mock\n",
+        "with mock.patch('pkg.side.X', 2):\n    pass",
+    ),
+    "owner_as_value": (MOCK + "\n\ndef go(m):\n    m.patch('pkg.side.X', 2).start()\n", "go(mock)"),
+    "loader_loaded_by_name": (
+        "import importlib\n",
+        "importlib.import_module('unittest.mock').patch('pkg.side.X', 2).start()",
+    ),
+    "monkeypatch_by_other_name": ("", "m = monkeypatch\nm.setattr('pkg.side.X', 2)"),
+    "monkeypatch_class": (
+        "import pytest\n",
+        "with pytest.MonkeyPatch.context() as m:\n    m.setattr('pkg.side.X', 2)",
+    ),
+    "monkeypatch_unbound": (
+        "import pytest\n",
+        "pytest.MonkeyPatch.setattr(monkeypatch, 'pkg.side.X', 2)",
+    ),
+    "patcher_stored": ("", "s = monkeypatch.setattr\ns('pkg.side.X', 2)"),
+    "patcher_by_getattr": ("", "getattr(monkeypatch, 'setattr')('pkg.side.X', 2)"),
+    "patch_dict_attribute": (
+        MOCK + "import sys\n",
+        "sys.T = 'pkg.side.X'\nwith mock.patch.dict(sys.T, {}):\n    pass",
+    ),
+    "patch_dict_mapping_rebound": (
+        MOCK + "import os\n",
+        "monkeypatch.setattr(os, 'environ', 'pkg.side.X')\n"
+        "with mock.patch.dict(os.environ):\n    pass",
+    ),
+    "loader_from_sys_modules": (
+        MOCK + "import sys\n",
+        "sys.modules['unittest.mock'].patch('pkg.side.X', 2).start()",
+    ),
+    "builtins_namespace": ("", "__builtins__['__import__']('pkg.side')"),
+    "patch_dict_mapping_assigned": (
+        MOCK + "import os\n",
+        "os.environ = 'pkg.side.X'\nwith mock.patch.dict(os.environ):\n    pass",
+    ),
+    "patch_dict_mapping_set_by_key": (
+        MOCK + "import os\n",
+        "vars(os)['environ'] = 'pkg.side.X'\nwith mock.patch.dict(os.environ):\n    pass",
+    ),
+    "loader_discover": ("import unittest\n", "unittest.TestLoader().discover('src')"),
+    "mock_private": ("from unittest.mock import _importer\n", "_importer('pkg.side')"),
+    # the standard importers and in-process runners
+    "import_module_literal_unimported": (
+        "import importlib\n",
+        "importlib.import_module('pkg.side')",
+    ),
+    "import_module_variable": (
+        "from importlib import import_module as im\n",
+        "n = 'pkg.side'\nim(n)",
+    ),
+    "import_module_relative": ("import importlib\n", "importlib.import_module('.side', 'pkg')"),
+    "dunder_import_fromlist": ("", "__import__('pkg', fromlist=['side'])"),
+    "resolve_name_literal_unimported": ("import pkgutil\n", "pkgutil.resolve_name('pkg.side:X')"),
+    "unittest_main": (
+        "import unittest\n",
+        "unittest.main(module='pkg.side', exit=False, argv=['x'])",
+    ),
 }
 KEPT = {
     "plain": ("", "pass"),
@@ -63,6 +129,15 @@ KEPT = {
     "dict_config_literal": (
         "import logging.config\n",
         CONFIG % ("logging.StreamHandler", ", 'stream': 'ext://sys.stdout'"),
+    ),
+    "resolve_name_drafted": ("import pkgutil\n", "pkgutil.resolve_name('pkg.core:f')"),
+    "import_module_drafted": ("import importlib\n", "importlib.import_module('pkg.core')"),
+    "monkeypatch_object_other_name": ("import os\n", "m = monkeypatch\nm.setattr(os, 'sep', '/')"),
+    "monkeypatch_builtins": ("import builtins\n", "monkeypatch.setattr(builtins, 'input', str)"),
+    "patch_builtins_open": (MOCK, "with mock.patch('builtins.open', mock.mock_open()):\n    pass"),
+    "patch_dict_environ_by_name": (
+        "from os import environ\n" + MOCK,
+        "with mock.patch.dict(environ, {'A': '1'}):\n    pass",
     ),
 }
 
@@ -116,3 +191,8 @@ def test_a_literal_name_in_a_project_module_joins_the_closure(tmp_path: Path):
     hook = "def __getattr__(name):\n    return 1\n"
     item = _drafted(tmp_path, "", "pass", core=f"{use}\n\n{CORE}", side=hook)
     assert item.refusal is not None and "pkg.side" in item.refusal
+
+
+def test_a_relative_name_is_not_read_as_an_import(tmp_path: Path):
+    item = _drafted(tmp_path, *REFUSED["import_module_relative"])
+    assert item.refusal is not None and "NAME_NOT_STATIC" in item.refusal
