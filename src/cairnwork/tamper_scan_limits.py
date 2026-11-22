@@ -30,6 +30,10 @@ Class 3: redirecting the bytecode location and planting bytecode.
   Pin:
   tests/test_seatbelt_pyc.py::test_bytecode_under_a_write_root_cannot_be_read_by_any_spelling
   tests/test_bytecode_hook.py::test_the_hook_holds_after_each_step
+  After-run scans (each goes red when its scan is switched off, #1039 step 1b):
+  tests/test_pycache_guard.py::test_bytecode_of_a_protected_input_is_forged
+  tests/test_bytecode_roots.py::test_a_mirror_of_a_protected_test_or_helper_anywhere_in_the_run_dir_fails
+  tests/test_bytecode_roots.py::test_bytecode_findings_joins_the_prefix_check_and_the_rest
   Scan-only (these show the static scan refuses the redirect before the run; not run-time cover):
   tests/test_pycache_redirect_spellings.py::test_a_redirect_built_from_strings_is_refused_for_sys_path_mutation
   tests/test_pycache_redirect_spellings.py::test_bytecode_removed_before_the_run_ends_is_not_verified
@@ -74,5 +78,13 @@ Class 8: forging the record by reading the nonce or path.
   Pin:
   tests/test_report_guard.py::test_the_descriptor_hand_over_records_a_passing_run_and_scrubs_the_environment
   tests/test_report_guard.py::test_the_nonce_pipe_is_closed_by_the_plugin_before_later_plugins_load
-  tests/test_report_guard.py::test_a_record_with_another_nonce_in_the_report_descriptor_is_not_a_pass
+  tests/test_report_guard.py::test_a_wrong_nonce_is_ignored
+  (the nonce check itself: that record differs from a passing one only in the nonce)
+
+Class 9: replacing, by literal name, the assertion helpers a protected test calls, where the helper
+is not a pytest class (so outside the class 1 and class 5 patterns).
+  Issues: #1039, #1640
+  Defence: none
+  Pin:
+  tests/test_protection.py::test_levels
 """

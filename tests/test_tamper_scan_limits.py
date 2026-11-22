@@ -42,13 +42,14 @@ DEFENCE_FILES = {
     "Class 6": set(),
     "Class 7": {"src/cairnwork/verdict_record.py", "src/cairnwork/report_guard.py"},
     "Class 8": {"src/cairnwork/report_guard.py"},
+    "Class 9": set(),
 }
-NO_DEFENCE = {"Class 1", "Class 2", "Class 5", "Class 6"}
+NO_DEFENCE = {"Class 1", "Class 2", "Class 5", "Class 6", "Class 9"}
 
 
 def test_every_class_has_issues_a_defence_or_none_and_a_pin():
     entries = _entries()
-    assert len(entries) >= 8
+    assert len(entries) >= 9
     for name, body in entries.items():
         assert re.search(r"^\s*Issues:.*#\d+", body, re.M), name
         defence = _defence(body)
