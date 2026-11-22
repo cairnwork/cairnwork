@@ -235,7 +235,8 @@ def test_verifier_socket_walk_reports_categories_only(account_tree):
         if "truncated|-|-" in report:
             print(report_text)
             pytest.fail("socket walk stopped early (time or entry cap); no category count")
-        assert sum(count for key, count in report.items() if key.startswith("var-tmp|")) >= 1
+        # /var/tmp is a private tree since #471 step 2b: the walk must not see the socket
+        assert sum(count for key, count in report.items() if key.startswith("var-tmp|")) == 0
         print(report_text)
         warnings.warn(report_text, stacklevel=2)
     finally:
