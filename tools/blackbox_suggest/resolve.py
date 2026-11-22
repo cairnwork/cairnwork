@@ -10,6 +10,7 @@ from (what the test itself calls) and only needs to know what the name is there:
 from __future__ import annotations
 
 import ast
+import importlib.machinery
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,6 +26,7 @@ DYNAMIC |= {"__builtins__", "import_module", "attrgetter", "methodcaller"}
 REFLECTIVE = {"__dict__", "__globals__", "__self__", "__setattr__", "__getattribute__", "modules"}
 REFLECTIVE |= {"f_globals", "f_locals", "f_builtins"}
 INTROSPECTION = {"builtins", "ctypes", "gc", "inspect"}  # modules refused when imported at all
+SEARCH = {"__path__", "submodule_search_locations"}  # where a package finds its submodules
 
 
 @dataclass(frozen=True)
@@ -65,10 +67,29 @@ class Project:
     def is_package_module(self, module: str) -> bool:
         return self.module_file(module) is not None
 
-    def import_closure(self, modules: set[str]) -> set[str]:
+    def files(self, module: str) -> list[Path]:
+        """Every file Python could import as module, in the first root that holds one."""
+        *head, last = module.split(".")
+        for root in self.roots:
+            found = [
+                path
+                for suffix in importlib.machinery.all_suffixes()
+                for path in (
+                    root.joinpath(*head, last + suffix),
+                    root.joinpath(*head, last, "__init__" + suffix),
+                )
+                if path.is_file()
+            ]
+            if found:
+                return found
+        return []
+
+    def import_closure(self, modules: set[str], anywhere: bool = False) -> set[str]:
         """The project modules that importing modules surely imports: each one, its parent
         packages, and what their top-level import statements name, transitively. Imports under
-        if/try/def are left out, so this may be too small, never too large."""
+        if/try/def are left out, so this may be too small, never too large. With anywhere, every
+        import statement is followed and a module with files but no readable source is kept, so
+        it may be too large instead (#370)."""
         found: set[str] = set()
         todo = list(modules)
         while todo and len(found) < 10000:
@@ -76,10 +97,11 @@ class Project:
             parts = module.split(".")
             for name in (".".join(parts[: i + 1]) for i in range(len(parts))):
                 tree = self.tree(name)
-                if name in found or tree is None:
+                if name in found or (tree is None and not (anywhere and self.files(name))):
                     continue
                 found.add(name)
-                todo += _imported(tree, name, self.module_file(name))
+                if tree is not None:
+                    todo += _imported(tree, name, self.module_file(name), anywhere)
         return found
 
     def kind_of(self, module: str, name: str, hops: int = 0) -> tuple[str, str, str]:
@@ -132,11 +154,12 @@ def _defined(tree: ast.Module, module: str, name: str, package: bool):
     return found
 
 
-def _imported(tree: ast.Module, module: str, path: Path | None) -> list[str]:
-    """Modules named by the top-level import statements of module (submodules included)."""
+def _imported(tree: ast.Module, module: str, path: Path | None, anywhere: bool) -> list[str]:
+    """Modules named by the top-level (or with anywhere, all) import statements of module
+    (submodules included)."""
     package = path is not None and path.name == "__init__.py"
     out: list[str] = []
-    for node in tree.body:
+    for node in ast.walk(tree) if anywhere else tree.body:
         if isinstance(node, ast.Import):
             out += [a.name for a in node.names]
         elif isinstance(node, ast.ImportFrom):
@@ -160,7 +183,7 @@ def binds_module_hook(tree: ast.Module) -> bool:
     bind a module attribute under a name the reader cannot see (``exec``, ``globals()``,
     ``setattr``, ``sys.modules``, a ``__dict__`` or ``__globals__``, a store to ``__class__``,
     an import of ``builtins``, ``ctypes``, ``gc`` or ``inspect``, a ``getattr`` with a computed
-    name). A method in a class body is not one."""
+    name), or any mention of a package's ``__path__``. A method in a class body is not one."""
     plain = {
         id(node.func)
         for node in ast.walk(tree)
@@ -176,17 +199,17 @@ def _binds(node: ast.AST, plain: set[int]) -> bool:
     if isinstance(node, ast.Global):
         return bool(MODULE_HOOKS & set(node.names))
     if isinstance(node, ast.Name):
-        return node.id in DYNAMIC or (node.id == "getattr" and id(node) not in plain)
+        return node.id in DYNAMIC | SEARCH or (node.id == "getattr" and id(node) not in plain)
     if isinstance(node, ast.Attribute):
         hooks = MODULE_HOOKS | {"__class__"}
         store = isinstance(node.ctx, ast.Store) and node.attr in hooks
-        return store or node.attr in DYNAMIC | REFLECTIVE
+        return store or node.attr in DYNAMIC | REFLECTIVE | SEARCH
     if isinstance(node, ast.alias):
         return node.name.split(".")[0] in INTROSPECTION or node.name in DYNAMIC | REFLECTIVE
     if isinstance(node, ast.ImportFrom):
         return (node.module or "").split(".")[0] in INTROSPECTION
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        return node.value in MODULE_HOOKS | REFLECTIVE
+        return node.value in MODULE_HOOKS | REFLECTIVE | SEARCH
     return False
 
 
