@@ -4,14 +4,18 @@ modstore follows where such a value goes (assignments, containers, parameters, r
 place it is used must be one of the uses listed here: moved on, read, called as an imported
 function or module function, a read-only method, or passed to this module's own functions, to
 a project function or to a function that only reads it. Any other use, a syntax position not
-listed here included, refuses the draft.
+listed here included, refuses the draft. An element taken out of it (an index, a read method
+or builtin that hands elements back) is held too. A builtin or standard-library name counts
+only when this module does not bind that name to anything else.
 """
 
 from __future__ import annotations
 
 import ast
+import sys
+from typing import NamedTuple
 
-from .modstore import DISPLAYS, _callee, _chain, _dotted
+from .modstore import DISPLAYS, HANDS_BACK, VIEWS, _callee, _chain, _dotted
 
 SAFE_CALLEES = frozenset({  # builtins and library functions that only read their arguments
     "len", "isinstance", "issubclass", "str", "repr", "int", "float", "bool", "hash", "id",
@@ -34,6 +38,8 @@ LATER = frozenset({  # calls that take a function to call later
     "map", "filter", "partial", "Thread", "Process", "Timer", "submit", "run_in_executor",
     "to_thread", "create_task", "register", "signal",
 })  # fmt: skip
+COPIES = HANDS_BACK | {"dict", "set", "frozenset"}  # builtins handing elements back
+HANDED = frozenset({"get", "values", "items", "keys", "copy"})  # read methods handing elements
 PASSES = (  # the value moves on; _derived follows where it goes
     *(ast.Assign, ast.AnnAssign, ast.NamedExpr, ast.For, ast.AsyncFor, ast.comprehension),
     *(ast.withitem, ast.Return, ast.Yield, ast.YieldFrom, ast.Await, ast.IfExp, ast.BoolOp),
@@ -45,6 +51,27 @@ READS = (  # the result is a new value, or the value is only looked at
     *(ast.While, ast.Assert, ast.Expr, ast.Raise, ast.Slice, ast.Delete, ast.ExceptHandler),
     *(ast.arg, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef),  # annotation, decorator
 )
+LITERALS = (ast.Constant, ast.JoinedStr, *DISPLAYS)
+
+
+class Scope(NamedTuple):
+    held: set[str]
+    seeds: set[str]
+    local: set[str]
+    modules: set[str]
+    std: set[str]  # names bound only to the standard library, under the library's own name
+    bound: set[str]  # every name this module binds
+
+    def library(self, func: ast.expr) -> bool:
+        """func is a builtin, a standard-library function, or a method of a literal."""
+        if isinstance(func, ast.Name):
+            return func.id in self.std or func.id not in self.bound
+        root = func
+        while isinstance(root, ast.Attribute):
+            root = root.value
+        if isinstance(root, LITERALS):
+            return True
+        return isinstance(root, ast.Name) and root.id in self.std
 
 
 def escapes(
@@ -54,50 +81,78 @@ def escapes(
     parents: dict[int, ast.AST],
     modules: set[str],
 ) -> bool:
-    """A held name is used outside the known-safe uses. The use is that of the whole receiver
-    chain it starts (attribute and subscript lookups on it)."""
+    """A held name, or an element of a container holding one, is used outside the known-safe
+    uses. The use is that of the whole chain it starts (lookups and elements handed back)."""
     held = {m for m in derived if not m.startswith("[]")}
+    boxes = {m[2:] for m in derived if m.startswith("[]")}
     local = {
         n.name
         for n in ast.walk(tree)
         if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
     }
+    s = Scope(held | seeds, seeds, local, modules, *_library_names(tree))
     for node in ast.walk(tree):
         if isinstance(node, ast.AugAssign) and _chain(node.target) & held:
             return True  # an in-place operator on it, through any alias
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in held:
-            use: ast.expr = node
-            while True:
-                parent = parents.get(id(use))
-                if not (isinstance(parent, ast.Attribute | ast.Subscript) and parent.value is use):
-                    break
-                use = parent
-            if not _safe_use(use, parents, held | seeds, seeds, local, modules):
-                return True
+        if not (isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)):
+            continue
+        if node.id in held and not _climbed_safe(node, parents, s):
+            return True
+        if node.id in boxes - held and not _box_safe(node, parents, s):
+            return True
     return False
 
 
-def _safe_use(
-    use: ast.expr,
-    parents: dict[int, ast.AST],
-    held: set[str],
-    seeds: set[str],
-    local: set[str],
-    modules: set[str],
-) -> bool:
+def _climbed_safe(use: ast.expr, parents: dict[int, ast.AST], s: Scope) -> bool:
+    while True:
+        parent = parents.get(id(use))
+        if isinstance(parent, ast.Attribute | ast.Subscript) and parent.value is use:
+            use = parent
+        elif isinstance(parent, ast.Call) and _hands_back(parent, use, s):
+            use = parent
+        else:
+            return _safe_use(use, parents, s)
+
+
+def _hands_back(call: ast.Call, use: ast.expr, s: Scope) -> bool:
+    """The call's result is, or holds, an element of use: a read method such as get or values,
+    or a builtin such as list, sorted or next."""
+    if call.func is use:
+        return isinstance(use, ast.Attribute) and use.attr in HANDED
+    name = _callee(call.func)
+    return name in COPIES and s.library(call.func) and any(a is use for a in call.args)
+
+
+def _box_safe(name: ast.Name, parents: dict[int, ast.AST], s: Scope) -> bool:
+    """A new container holding a held value: an element taken out of it is held; the container
+    itself is a new value."""
+    parent = parents.get(id(name))
+    if isinstance(parent, ast.Subscript) and parent.value is name:
+        return _climbed_safe(parent, parents, s)
+    call = parents.get(id(parent))
+    if isinstance(parent, ast.Attribute) and parent.attr in VIEWS:
+        return not (isinstance(call, ast.Call) and call.func is parent) or _climbed_safe(
+            call, parents, s
+        )
+    if isinstance(parent, ast.Call) and _hands_back(parent, name, s):
+        return _climbed_safe(parent, parents, s)
+    return True
+
+
+def _safe_use(use: ast.expr, parents: dict[int, ast.AST], s: Scope) -> bool:
     parent = parents.get(id(use))
     if isinstance(parent, ast.Call) and parent.func is use:  # calling it
-        if isinstance(use, ast.Name) or _dotted(getattr(use, "value", None) or use) in seeds:
+        if isinstance(use, ast.Name) or _dotted(getattr(use, "value", None) or use) in s.seeds:
             return True  # an imported function or class, or module.function(...)
         return isinstance(use, ast.Attribute) and use.attr in READ_METHODS
     if isinstance(parent, ast.Starred | ast.keyword):  # *value or name=value in a call
         call = parents.get(id(parent))
         if isinstance(call, ast.Call):
-            return _safe_argument(call, use, held, seeds, local)
+            return _safe_argument(call, use, s)
         return True  # *value in a display moves on; a class keyword (metaclass=) is read
     if isinstance(parent, ast.Call):
-        return _safe_argument(parent, use, held, seeds, local)
-    if _method_as_value(use, parent, modules):
+        return _safe_argument(parent, use, s)
+    if _method_as_value(use, parent, s.modules):
         return False
     if isinstance(parent, ast.AugAssign):
         return parent.target is not use
@@ -117,25 +172,53 @@ def _method_as_value(use: ast.expr, parent: ast.AST | None, modules: set[str]) -
     )
 
 
-def _safe_argument(
-    call: ast.Call, use: ast.expr, held: set[str], seeds: set[str], local: set[str]
-) -> bool:
+def _safe_argument(call: ast.Call, use: ast.expr, s: Scope) -> bool:
     """Passed to this module's own functions, to a project function (followed there by that
-    module's own check), to a function that only reads it, or as a function to call later."""
-    name = _callee(call.func)
-    own = isinstance(call.func, ast.Name) or _dotted(call.func) in {f"self.{name}", f"cls.{name}"}
-    if name in SAFE_CALLEES or (own and name in local):
+    module's own check), to a library function that only reads it, or as a function to call
+    later."""
+    func = call.func
+    name = _callee(func)
+    own = isinstance(func, ast.Name) or _dotted(func) in {f"self.{name}", f"cls.{name}"}
+    if own and name in s.local:
         return True
-    if isinstance(call.func, ast.Name | ast.Attribute) and _chain(call.func) & seeds:
+    if name in SAFE_CALLEES and s.library(func):
+        return True
+    if isinstance(func, ast.Name | ast.Attribute) and _chain(func) & s.seeds:
         return True
     plain = isinstance(use, ast.Name) or (
-        isinstance(use, ast.Attribute) and _dotted(use.value) in seeds
+        isinstance(use, ast.Attribute) and _dotted(use.value) in s.seeds
     )
-    if name in LATER and plain:
+    if name in LATER and plain and s.library(func):
         return True
-    func = call.func
     return (
         isinstance(func, ast.Attribute)
         and func.attr in READ_METHODS
-        and not _chain(func.value) & held
+        and not _chain(func.value) & s.held
     )
+
+
+def _library_names(tree: ast.Module) -> tuple[set[str], set[str]]:
+    """(names bound only by importing the standard library under its own name, every name
+    this module binds)."""
+    std: set[str] = set()
+    other: set[str] = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Import):
+            for a in n.names:
+                root = a.name.split(".")[0]
+                (std if root in sys.stdlib_module_names else other).add(a.asname or root)
+        elif isinstance(n, ast.ImportFrom):
+            ok = not n.level and (n.module or "").split(".")[0] in sys.stdlib_module_names
+            for a in n.names:
+                (std if ok and a.asname in (None, a.name) else other).add(a.asname or a.name)
+        elif isinstance(n, ast.Name) and not isinstance(n.ctx, ast.Load):
+            other.add(n.id)
+        elif isinstance(n, ast.arg):
+            other.add(n.arg)
+        elif isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            other.add(n.name)
+        elif isinstance(n, ast.ExceptHandler | ast.MatchAs | ast.MatchStar) and n.name:
+            other.add(n.name)
+        elif isinstance(n, ast.MatchMapping) and n.rest:
+            other.add(n.rest)
+    return std - other, std | other

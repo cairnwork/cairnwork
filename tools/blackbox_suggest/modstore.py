@@ -138,7 +138,9 @@ def _kind(value: ast.expr, derived: set[str], element: bool) -> str | None:
     return None
 
 
-VIEWS = {"get", "pop", "popitem", "setdefault", "values", "items"}  # hand out the elements
+VIEWS = {"get", "pop", "popitem", "setdefault", "values", "items", "keys"}  # elements
+TAKES_ONE = {"next", "min", "max"}  # builtins whose result is an element of the argument
+HANDS_BACK = TAKES_ONE | {"iter", "list", "tuple", "sorted", "reversed"}
 
 
 def _extracts(node: ast.expr) -> bool:
@@ -313,6 +315,13 @@ def _held(node: ast.expr) -> set[str]:
         return _held(node.value)
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
         return _held(node.func.value) if node.func.attr in VIEWS else set()
+    if isinstance(node, ast.Call) and _callee(node.func) in HANDS_BACK:  # list(v), next(v)
+        marks = {m for part in node.args for m in _held(part)}
+        return (
+            marks
+            if _callee(node.func) in TAKES_ONE
+            else {f"[]{m.removeprefix('[]')}" for m in marks}
+        )
     if isinstance(node, PASS_ON):
         parts = [c for c in ast.iter_child_nodes(node) if isinstance(c, ast.expr)]
         return {m for part in parts for m in _held(part)}
