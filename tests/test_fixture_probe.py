@@ -41,6 +41,7 @@ def base_files(**extra):
 def test_good_project_names_include_fixture_and_tmp_path(repo, tmp_path):
     run = probe(repo, tmp_path, base_files())
     assert run.returncode == 0
+    assert run.fixture_names is not None
     assert GENUINE <= run.fixture_names
 
 
@@ -56,6 +57,7 @@ def test_checkout_fixture_record_and_package_do_not_win(repo, tmp_path):
         }
     )
     run = probe(repo, tmp_path, files)
+    assert run.fixture_names is not None
     assert run.fixture_names is not None
     assert GENUINE <= run.fixture_names
 
@@ -92,7 +94,9 @@ def test_checkout_root_fixed_name_shadow_cannot_forge(repo, tmp_path):
     # checkout); its record claims the guard's path. Names must still be the real ones.
     run = probe(repo, tmp_path, base_files(**{"_cairnwork_fixture_record.py": FORGED_FIXED_NAME}))
     assert run.fixture_names is not None
+    assert run.fixture_names is not None
     assert GENUINE <= run.fixture_names
+    assert run.fixture_names is not None
     assert "forged" not in run.fixture_names
 
 
