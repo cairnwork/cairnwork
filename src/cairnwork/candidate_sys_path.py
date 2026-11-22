@@ -40,7 +40,11 @@ import re
 import subprocess
 from pathlib import Path
 
-from cairnwork.candidate_alias import alias_machinery_changed, runtime_shadow_added
+from cairnwork.candidate_alias import (
+    alias_machinery_changed,
+    frozen_search_path_change,
+    runtime_shadow_added,
+)
 from cairnwork.candidate_shadow import find_shadow_file
 from cairnwork.candidate_statements import machinery_changed
 from cairnwork.changeset import ChangeSetError, read_change_set
@@ -200,8 +204,8 @@ def _blob_signal(repo: Path, base: str, commit: str, path: str, changed: dict[st
         raise
     if alias:
         return _MACHINERY
-    if not signal:
-        return ""
+    if not signal:  # a frozen file stays frozen even when the candidate text loses its signal
+        return _RUNTIME if frozen_search_path_change(old, data) else ""
     if machinery_changed(old, data, _MACHINERY_WORDS, _REACH_WORDS, DYNAMIC_ACCESS_DENYLIST):
         return _MACHINERY
     if runtime_shadow_added(old, data):

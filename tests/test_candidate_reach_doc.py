@@ -44,13 +44,15 @@ def test_docstring_read_by_existing_path_edit_is_refused(repo, base_doc, candida
     _refused(repo, base, candidate)
 
 
-def test_docstring_change_without_doc_reference_is_allowed(repo):
+def test_docstring_change_without_doc_reference_is_refused(repo):
+    # whole-file freeze: a binding file that writes is frozen, docstring edits included
     base = '"""old text"""\n' + WRITE + BOUND + "p.insert(0, '/safe')\n"
     candidate = base.replace('"""old text"""', '"""new text"""')
-    _judge(repo, {"src/a.py": base}, {"src/a.py": candidate})
+    _refused(repo, base, candidate)
 
 
-def test_docstring_text_mentioning_doc_reference_is_allowed(repo):
+def test_docstring_text_mentioning_doc_reference_is_refused(repo):
+    # whole-file freeze: the docstring text does not matter, the file is frozen
     base = '"""old text"""\n' + WRITE + BOUND + "p.insert(0, '/safe')\n"
     candidate = base.replace('"""old text"""', '"""mentions __doc__ as text"""')
-    _judge(repo, {"src/a.py": base}, {"src/a.py": candidate})
+    _refused(repo, base, candidate)

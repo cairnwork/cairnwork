@@ -302,11 +302,46 @@ def _is_path_edit_statement(node: ast.AST, sys_names: set[str], text: str) -> bo
     return any(word in text for word in PATH_WORDS)
 
 
+def _has_write(tree: ast.Module) -> bool:
+    items: list[tuple[Key, ast.AST]] = []
+    _collect_statements(tree.body, "", items)
+    openers = _imported_openers(tree)
+    writers = _imported_names(
+        tree,
+        frozenset({"NamedTemporaryFile", "copyfileobj"}),
+        frozenset({"tempfile", "shutil"}),
+    )
+    fileios = _exclusive_imported_names(tree, frozenset({"FileIO"}), frozenset({"io"}))
+    flag_openers = _imported_names(tree, frozenset({"open"}), frozenset({"shelve", "dbm"}))
+    modules = _module_aliases(tree)
+    return any(
+        _is_write_statement(own, openers, writers, modules, fileios, flag_openers)
+        for _, own in items
+    )
+
+
+def _frozen_search_path_file(new_tree: ast.Module, old_tree: ast.Module | None) -> bool:
+    """Frozen when one single version both binds the search path and writes a file."""
+    if binds_search_path(new_tree) and _has_write(new_tree):
+        return True
+    return old_tree is not None and binds_search_path(old_tree) and _has_write(old_tree)
+
+
+def frozen_search_path_change(old: bytes | None, new: bytes) -> bool:
+    """Whether a change to a frozen file (old or new binds the search path and writes a file)."""
+    new_tree = _parse_source(new)
+    if new_tree is None or old is None or old == new:
+        return False
+    return _frozen_search_path_file(new_tree, _parse_source(old))
+
+
 def runtime_shadow_added(old: bytes | None, new: bytes) -> bool:
     new_tree = _parse_source(new)
     if new_tree is None:
         raise ValueError("candidate source could not be parsed")
     old_tree = _parse_source(old)
+    if frozen_search_path_change(old, new):
+        return True
 
     new_items: list[tuple[Key, ast.AST]] = []
     _collect_statements(new_tree.body, "", new_items)
