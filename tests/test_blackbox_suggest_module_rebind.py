@@ -28,6 +28,18 @@ def core(tail: str) -> dict[str, str]:
     return {"src/pkg/core.py": PLAIN + tail}
 
 
+DEFS = "class K:\n    S = 1\nREG = {'k': K()}\nTABLE = {'k': 1}\ndef get():\n    return K\n"
+OTHER = {"src/pkg/other.py": DEFS}
+
+
+def held(tail: str) -> dict[str, str]:
+    return core(DEFS + tail)
+
+
+def star(tail: str) -> dict[str, str]:
+    return {"src/pkg/core.py": "from pkg.other import *\n" + PLAIN + tail, **OTHER}
+
+
 REFUSED = {
     "store_a": core("import pkg.core\npkg.core.SCALE = 10\n"),
     "store_b": core("import pkg.core as me\nme.SCALE = 10\n"),
@@ -44,6 +56,36 @@ REFUSED = {
         "src/pkg/other.py": "import pkg.core\npkg.core.SCALE = 10\n",
     },
     "store_l": {"src/pkg/__init__.py": "from . import core\ncore.SCALE = 10\n", **core("")},
+    "store_m": held("from pkg.core import REG\nREG['k'].v = 1\n"),
+    "store_n": held("from pkg import core\ncore.get().x = 1\n"),
+    "store_o": held("from pkg.core import K as Q\nQ.S = 99\n"),
+    "held_a": held("from pkg import core\nKx = core.K\nKx.S = 99\n"),
+    "held_b": held("from pkg import core\ndef s():\n    k = core.K\n    k.S = 99\ns()\n"),
+    "held_c": held("from pkg import core\ndef go(k):\n    k.S = 99\ngo(core.K)\n"),
+    "held_d": held("from pkg import core\nfor k in [core.K]:\n    k.S = 99\n"),
+    "held_e": held(
+        "from pkg import core\nclass H:\n    def __init__(self):\n        self.k = core.K\n"
+        "H().k.S = 99\n"
+    ),
+    "held_f": held("import pkg.core\ndef g():\n    return pkg.core.K\ng().S = 99\n"),
+    "held_g": held(
+        "from pkg import core\nclass H:\n    def go(self, k):\n        k.S = 99\nH().go(core.K)\n"
+    ),
+    "held_h": held("from pkg import core\nx = core.REG['k']\nx.v = 1\n"),
+    "held_i": held("from pkg import core\nk = core.K if 1 else None\nk.S = 99\n"),
+    "held_j": held("from pkg import core\na, b = core.K, core.TABLE\na.S = 99\n"),
+    "held_k": held("from pkg import core\ndef go(k):\n    k.S = 99\ngo(k=core.K)\n"),
+    "held_l": held("from pkg import core\nL = [core.K]\na, = L\na.S = 99\n"),
+    "held_m": held("from pkg import core\nL = [[core.K]]\nfor x in L:\n    x[0].S = 99\n"),
+    "package_value": core("import pkg.core\nprint(pkg)\n"),
+    "table_a": held("from pkg.core import TABLE\nTABLE['k'] = 99\n"),
+    "table_b": held("from pkg import core\ncore.TABLE['k'] = 99\n"),
+    "table_c": held("from pkg import core\ncore.TABLE.update(k=99)\n"),
+    "table_d": held("from pkg import core\nT = core.TABLE\nT['k'] = 99\n"),
+    "table_e": held("from pkg.core import TABLE\ndel TABLE['k']\n"),
+    "star_a": star("K.S = 99\n"),
+    "star_b": star("TABLE['k'] = 99\n"),
+    "star_c": star("REG.clear()\n"),
     "value_a": core("import pkg.core\nm = pkg.core\nm.SCALE = 10\n"),
     "value_b": core("import pkg.core\ndef s(m):\n    m.SCALE = 10\ns(pkg.core)\n"),
     "value_c": core("import pkg.core\nfor m in [pkg.core]:\n    m.SCALE = 10\n"),
@@ -79,6 +121,18 @@ KEPT = {
     "module_attribute_read": {
         "src/pkg/core.py": "import pkg.other\n" + PLAIN + "X = pkg.other.V\n",
         "src/pkg/other.py": "V = 1\n",
+    },
+    "local_containers": core("D = {}\nD['k'] = 1\nL = []\nL.append(1)\n"),
+    "star_read": star("X = K.S + TABLE['k']\n"),
+    "held_read": held("from pkg import core\nT = core.TABLE\nX = T['k']\n"),
+    "held_container_append": held("from pkg import core\nL = [core.K]\nL.append(1)\n"),
+    "unpacked_fresh_container": held("from pkg import core\nk, L = core.K, []\nL.append(1)\n"),
+    "copy_in_container": held(
+        "from pkg import core\nfor d in [dict(core.TABLE)]:\n    d['k'] = 2\n"
+    ),
+    "module_function_named_like_mutator": {
+        "src/pkg/core.py": "from pkg import other\n" + PLAIN + "other.clear()\n",
+        "src/pkg/other.py": "def clear():\n    pass\n",
     },
     "stdlib_value": core("import json\nALL = [json]\n"),
     "hasattr_probe": core("import os\nHAS = hasattr(os, 'getuid')\n"),
