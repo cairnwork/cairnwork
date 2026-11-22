@@ -19,6 +19,7 @@ from .resolve import dotted
 SAFE_IMPORTS = {"pytest", "unittest", "_pytest"} | set(sys.stdlib_module_names)
 ID_BUILTINS = {"repr", "str", "type"}
 CONDITION_MARKS = {"skipif", "xfail"}
+HIDING = {"with_args"}  # like any __special__ name: reach a mark or hookimpl under another name
 
 
 def callables(tree: ast.Module) -> set[str]:
@@ -43,7 +44,10 @@ def later(node: ast.AST, defined: set[str], rebound: set[str]) -> list[str]:
     file, rebound the names an import or anything else binds (``*`` after a star import)."""
     reasons: list[str] = []
     for call in (n for n in ast.walk(node) if isinstance(n, ast.Call)):
-        name = (dotted(call.func) or [""])[-1]
+        parts = dotted(call.func) or [""]
+        if any(p in HIDING or p[:2] == p[-2:] == "__" for p in parts):
+            reasons.append("a mark or hook option is called in a form this reader does not name")
+        name = parts[-1]
         given = {k.arg: k.value for k in call.keywords if k.arg}
         if name == "parametrize":  # argnames, argvalues, indirect, ids, scope
             given |= dict(zip(("ids", "scope"), call.args[3:5], strict=False))

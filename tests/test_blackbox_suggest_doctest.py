@@ -45,3 +45,39 @@ def test_doctest_settings_without_collection_keep_the_draft(tmp_path):
     ini = "[pytest]\naddopts = -q --doctest-report udiff\ndoctest_optionflags = ELLIPSIS\n"
     item = run(tmp_path, {"pytest.ini": ini})
     assert item.protected(KINDS_NOW) and item.exact, item.reason(KINDS_NOW)
+
+
+DOCTEST = ">>> import pkg.core\n>>> pkg.core.SCALE = 10\n"
+NATIVE = '[tool.pytest]\nminversion = "9.0"\n'
+DEFAULT_REFUSED = {
+    "text_file_beside_the_tests": {"tests/test_notes.txt": DOCTEST},
+    "text_file_at_the_root": {"test_readme.txt": DOCTEST},
+    "text_file_in_another_directory": {"docs/testing.txt": DOCTEST},
+    "text_file_in_upper_case": {"tests/TEST_NOTES.TXT": DOCTEST},
+    "native_table_beside_ini_options": {
+        "pyproject.toml": NATIVE + '[tool.pytest.ini_options]\nminversion = "8.0"\n'
+    },
+    "ini_options_not_a_table": {"pyproject.toml": '[tool.pytest]\nini_options = "x"\n'},
+}
+
+
+@pytest.mark.parametrize("extra", DEFAULT_REFUSED.values(), ids=DEFAULT_REFUSED.keys())
+def test_doctests_pytest_collects_by_default_refuse(tmp_path, extra):
+    item = run(tmp_path, extra)
+    assert item.refusal is not None and not item.protected(KINDS_NOW)
+
+
+DEFAULT_KEPT = {
+    "other_text_file": {"tests/notes.txt": DOCTEST, "docs/readme.txt": DOCTEST},
+    "rst_file": {"tests/test_notes.rst": DOCTEST},
+    "text_file_in_a_directory_not_collected": {"build/test_notes.txt": DOCTEST},
+    "native_table_beside_empty_ini_options": {
+        "pyproject.toml": NATIVE + "[tool.pytest.ini_options]\n"
+    },
+}
+
+
+@pytest.mark.parametrize("extra", DEFAULT_KEPT.values(), ids=DEFAULT_KEPT.keys())
+def test_files_pytest_does_not_collect_keep_the_draft(tmp_path, extra):
+    item = run(tmp_path, extra)
+    assert item.protected(KINDS_NOW) and item.exact, item.reason(KINDS_NOW)

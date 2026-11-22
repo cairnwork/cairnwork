@@ -14,9 +14,11 @@ import sys
 from fnmatch import fnmatchcase
 from importlib.machinery import all_suffixes
 from pathlib import Path
+from typing import NamedTuple
 
 STDLIB = set(sys.stdlib_module_names)
 SUFFIXES = tuple(all_suffixes())
+DEFAULT_DOCTESTS = "test*.txt"  # the doctest plugin's glob when --doctest-glob is not given
 
 
 def stdlib_shadows(dirs: list[Path]) -> set[str] | None:
@@ -37,14 +39,24 @@ def stdlib_shadows(dirs: list[Path]) -> set[str] | None:
     return found
 
 
-def base_dirs(root: Path, skips: tuple[str, ...]) -> list[Path] | None:
-    """Every directory that prepend import mode may put on ``sys.path`` for some module under
-    root: for each directory holding a Python file, the first one at or above it without an
+class Walk(NamedTuple):
+    base_dirs: list[Path]
+    doctests: list[Path]
+
+
+def walk(root: Path, skips: tuple[str, ...]) -> Walk | None:
+    """What pytest may collect under root.
+
+    ``base_dirs``: every directory that prepend import mode may put on ``sys.path`` for some
+    module: for each directory holding a Python file, the first one at or above it without an
     ``__init__``. Any file may be collected (``python_files``, arguments), so all count.
+    ``doctests``: text files the doctest plugin collects with no option set (``test*.txt``,
+    in any case), whose examples run code the reader does not read (#370).
     Directories pytest does not collect from are not walked: names matching skips (its
     ``norecursedirs``), ``__pycache__`` and virtual environments. None when a directory cannot
     be listed or is a link (pytest follows links): then the reader cannot tell."""
     found: set[Path] = set()
+    doctests: list[Path] = []
     failed: list[OSError] = []
     for directory, subdirs, files in os.walk(root.resolve(), onerror=failed.append):
         here = Path(directory)
@@ -53,11 +65,12 @@ def base_dirs(root: Path, skips: tuple[str, ...]) -> list[Path] | None:
         subdirs[:] = [d for d in subdirs if not _skipped(here / d, skips)]
         if any((here / d).is_symlink() for d in subdirs):
             return None
+        doctests += [here / n for n in files if fnmatchcase(n.lower(), DEFAULT_DOCTESTS)]
         if any(name.endswith(SUFFIXES) for name in files):
             while _is_package(here) and here.parent != here:
                 here = here.parent
             found.add(here)
-    return None if failed else sorted(found)
+    return None if failed else Walk(sorted(found), sorted(doctests))
 
 
 def _skipped(path: Path, skips: tuple[str, ...]) -> bool:
