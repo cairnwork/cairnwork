@@ -65,6 +65,12 @@ WITH_VALUE = {"--cov-report", "--doctest-report"}  # safe options whose value is
 DOCTESTS = ("--doctest-modules", "--doctest-glob")  # collect doctests: items and code unread
 SELECTING = ("-m", "-k", "--deselect", "--ignore", "--ignore-glob")  # change what is collected
 REPORT = re.compile(r"-r[fEsxXpPaAN]+")  # -r with summary letters only (not -random-order)
+VALUES: dict[str, Any] = {  # pytest's own options whose value stops pytest when bad (#370)
+    "--tb": "auto|long|short|line|native|no", "--color": "yes|no|auto",
+    "--code-highlight": "yes|no",
+    "--durations": int, "--durations-min": float,  # read with int() / float() as pytest does
+    "--doctest-report": "udiff|cdiff|ndiff|only_first_failure|none",
+}  # fmt: skip
 FILTER_ACTIONS = ("ignore", "default", "always", "module", "once")
 SECTIONS = (
     ("pytest.ini", "ini", "pytest"),
@@ -234,7 +240,7 @@ def _addopts(tokens: list[str]) -> tuple[str | None, bool, list[str]]:
         nxt = tokens[index + 1] if has_next else ""
         if token == "-p" and nxt.startswith("no:") and nxt[3:].split(".")[0] not in PYTEST_PLUGINS:
             index += 2
-        elif token in WITH_VALUE and has_next and not tokens[index + 1].startswith("-"):
+        elif token in WITH_VALUE and has_next and not nxt.startswith("-") and _valued(token, nxt):
             index += 2
         elif token in SELECTING and has_next and not tokens[index + 1].startswith("-"):
             index, known = index + 2, False
@@ -246,8 +252,24 @@ def _addopts(tokens: list[str]) -> tuple[str | None, bool, list[str]]:
                 False,
                 [],
             )
-        elif token in SAFE_FLAGS or token.startswith(SAFE_PREFIXES) or REPORT.fullmatch(token):
+        elif (
+            token in SAFE_FLAGS
+            or REPORT.fullmatch(token)
+            or (token.startswith(SAFE_PREFIXES) and _valued(*token.split("=", 1)))
+        ):
             index += 1
         else:
             return "pytest addopts loads plugins or changes warnings or options", False, []
     return None, known, []
+
+
+def _valued(option: str, value: str) -> bool:
+    """Whether pytest takes this value for one of its own options (others are not checked here)."""
+    check = VALUES.get(option)
+    if check is None or isinstance(check, str):
+        return check is None or bool(re.fullmatch(check, value))
+    try:
+        check(value)
+    except ValueError:
+        return False
+    return True
