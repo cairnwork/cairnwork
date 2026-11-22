@@ -58,9 +58,13 @@ def clashes(dirs: list[Path]) -> set[str] | None:
 
 
 def _module_name(path: Path) -> str | None:
-    if path.is_file() and path.name.endswith(SUFFIXES):
-        return path.name.split(".")[0]
-    return path.name if _is_package(path) else None
+    """None also when the entry cannot be read: pytest cannot import it either."""
+    try:
+        if path.is_file() and path.name.endswith(SUFFIXES):
+            return path.name.split(".")[0]
+        return path.name if _is_package(path) else None
+    except OSError:
+        return None
 
 
 def _installed(name: str, paths: list[str]) -> bool:

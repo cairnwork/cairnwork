@@ -70,3 +70,23 @@ def test_the_project_on_the_environment_path_is_one_place(tmp_path, monkeypatch)
     monkeypatch.syspath_prepend(str(tmp_path / "src"))
     item = run(tmp_path, {})
     assert item.protected(KINDS_NOW) and item.exact, item.reason(KINDS_NOW)
+
+
+def test_an_entry_that_cannot_be_read_is_not_a_module(tmp_path, monkeypatch):
+    """A directory entry whose type cannot be read (Python before 3.14 raises) names no module
+    pytest could import; only a directory that cannot be listed leaves the reader unable to tell."""
+    from pathlib import Path
+
+    from tools.blackbox_suggest.shadows import clashes
+
+    (tmp_path / "locked").mkdir()
+    (tmp_path / "mod.py").write_text("")
+    is_file = Path.is_file
+
+    def raising(path):
+        if path.name == "locked" or path.parent.name == "locked":
+            raise PermissionError(13, "Permission denied", str(path))
+        return is_file(path)
+
+    monkeypatch.setattr(Path, "is_file", raising)
+    assert clashes([tmp_path]) is not None
