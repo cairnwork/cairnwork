@@ -110,6 +110,46 @@ def test_a_mark_called_through_another_attribute_refuses(tmp_path, body):
     assert item.refusal is not None and not item.protected(KINDS_NOW)
 
 
+SPECIAL = {
+    "skipif_wrapped": """
+        @pytest.mark.skipif.__wrapped__("x", reason="r")
+        def test_b():
+            pass
+    """,
+    "skipif_func": """
+        @pytest.mark.skipif.__func__("x", reason="r")
+        def test_b():
+            pass
+    """,
+    "skipif_self": """
+        @pytest.mark.skipif.__self__("x", reason="r")
+        def test_b():
+            pass
+    """,
+    "filterwarnings_wrapped": """
+        @pytest.mark.filterwarnings.__wrapped__("ignore::pkg.side.Warn")
+        def test_b():
+            pass
+    """,
+    "parametrize_func": """
+        @pytest.mark.parametrize.__func__("v", [1], False, exec)
+        def test_b(v):
+            pass
+    """,
+    "special_in_the_middle": """
+        @pytest.mark.__class__.slow("x")
+        def test_b():
+            pass
+    """,
+}
+
+
+@pytest.mark.parametrize("body", SPECIAL.values(), ids=SPECIAL.keys())
+def test_a_mark_through_another_special_attribute_refuses(tmp_path, body):
+    item = run(tmp_path, body)
+    assert item.refusal is not None and not item.protected(KINDS_NOW)
+
+
 HOOKIMPL_REFUSED = {
     "hookimpl_call_with_options": """
         @pytest.hookimpl.__call__(specname="pytest_runtest_setup")
