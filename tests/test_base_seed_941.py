@@ -247,7 +247,7 @@ def test_initial_refusal_does_not_start_second_run(monkeypatch, tmp_path, kind, 
     monkeypatch.setattr(
         pipeline_judge, "new_tests", lambda *a: frozenset({"tests/test_x.py::test_x"})
     )
-    monkeypatch.setattr(pipeline_judge, "check_conftests", lambda *a: None)
+    monkeypatch.setattr(pipeline_judge.base_fixture_names, "check_with_base", lambda *a: None)
     monkeypatch.setattr(pipeline_judge, "untargeted", lambda *a: ())
     calls = []
     monkeypatch.setattr(pipeline_judge, "run_verifiers", lambda *a, **k: calls.append(a) or ())

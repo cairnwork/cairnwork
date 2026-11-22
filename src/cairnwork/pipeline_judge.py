@@ -15,14 +15,14 @@ from dataclasses import replace
 from functools import partial
 from pathlib import Path
 
-from cairnwork import candidate_env, failure_evidence, protection
+from cairnwork import base_fixture_names, candidate_env, failure_evidence, protection
 from cairnwork.account_check import unusable
 from cairnwork.account_prelude import AccountUnusableBeforeRun, after_candidate_ran, busy_once_more
 from cairnwork.blackbox_judge import judge_blackbox
 from cairnwork.candidate_sys_path import refuse_new_sys_path_mutation
 from cairnwork.changeset import ChangeSetError, read_change_set
 from cairnwork.collect_import import as_failed
-from cairnwork.conftest_check import check_conftests, without_conftests
+from cairnwork.conftest_check import without_conftests
 from cairnwork.core_request import AcceptanceSpec, VerifierObservation
 from cairnwork.deferred_overlay import stray_deletions
 from cairnwork.deferred_store import consume
@@ -117,7 +117,7 @@ def tests_with_teeth(
         _sealing_with_tests(task, ctx, candidate)
     paths, deleted = test_paths(task.repo, task.base_commit, task.test_commit, task.test_roots)
     targets = new_tests(task.repo, task.base_commit, task.test_commit, paths)  # may refuse
-    check_conftests(task.repo, task.base_commit, task.test_commit, paths)  # #798
+    base_fixture_names.check_with_base(ctx, task, paths, f"{result.attempt_id}-f")  # #798, #986
     named = (t for spec in specs for t in spec.targets)
     if missing := untargeted(without_conftests(paths), targets, named):
         hint = (

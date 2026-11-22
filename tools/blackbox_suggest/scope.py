@@ -25,13 +25,9 @@ from .obligations import CLASS_HOOKS, SETUP_HOOKS
 from .resolve import dotted
 
 COUNT_HOOKS = {  # change what is collected
-    "pytest_generate_tests",
-    "pytest_collection_modifyitems",
-    "pytest_pycollect_makeitem",
-    "pytest_collect_file",
-    "pytest_ignore_collect",
-    "pytest_collection",
-}
+    "pytest_generate_tests", "pytest_collection_modifyitems", "pytest_pycollect_makeitem",
+    "pytest_collect_file", "pytest_ignore_collect", "pytest_collection",
+}  # fmt: skip
 HARMLESS_HOOKS = {"pytest_addoption", "pytest_report_header", "pytest_assertrepr_compare"}
 ACTIONS = {"store", "store_true", "store_false", "store_const", "append", "append_const"}
 ACTIONS |= {"count", "extend"}  # argparse's own; any other name may be registered elsewhere
@@ -56,6 +52,7 @@ class Verdict:
         self.classes: set[str] = set()  # module-level classes here: bases besides _safe_base
         self.origins: dict[str, str] = {}  # name -> the import binding it, "" if bound otherwise
         self.callables: set[str] = set()  # names of a def or class anywhere here, and aliases
+        self.notes: list[ast.expr] = []  # every def's annotations, read again once all has run
 
     def refuse(self, reason: str, *, known: bool = True) -> None:
         self.reason = self.reason or reason
@@ -166,6 +163,8 @@ def import_time(tree: ast.Module, is_project: Callable[[str], bool]) -> Verdict:
     verdict = Verdict()
     verdict.callables = callables(tree)
     _body(tree.body, verdict, is_project, top=True)
+    if not all(_annotation_inert(n, verdict) for n in verdict.notes):  # Python 3.14 (#370)
+        verdict.refuse("an annotation is not a plain type once the module has run (read lazily)")
     return verdict
 
 
@@ -246,6 +245,7 @@ def _function(node: ast.FunctionDef | ast.AsyncFunctionDef, verdict: Verdict, *,
     notes = [p.annotation for p in params if p and p.annotation] + [node.returns]
     if not all(_inert(d, verdict) for d in [*args.defaults, *args.kw_defaults] if d):
         verdict.refuse("a default argument is not a literal (it is evaluated at import time)")
+    verdict.notes += [n for n in notes if n]
     if not all(_annotation_inert(n, verdict) for n in notes if n):
         verdict.refuse("an annotation is not a plain type (it is evaluated at import time)")
 
