@@ -54,6 +54,13 @@ REFUSED = {
     "pdb": "import pdb\n",
     "bdb": "from bdb import Bdb\n",
     "zipimport": "import zipimport\n",
+    "entry_point": "from importlib.metadata import EntryPoint\n"
+    "EntryPoint('x', 'pkg._side', 'g').load()\n",
+    "entry_points_module": "import importlib.metadata as md\n",
+    "metadata_from_package": "from importlib import metadata\n",
+    "importlib_util": "import importlib.util\n_s = importlib.util.find_spec('json')\n",
+    "importlib_bare": "import importlib\n",
+    "metadata_backport": "import importlib_metadata\n",
 }
 
 
@@ -64,8 +71,7 @@ def test_a_module_that_loads_or_runs_code_by_name_refuses(tmp_path, extra):
 
 
 KEPT = {
-    "find_spec_only": "import importlib.util\n_s = importlib.util.find_spec('json')\n",
-    "importlib_metadata": "import importlib.metadata\n",
+    "plain_stdlib": "import json\n",
     "own_function_named_run": "def run():\n    return 1\n",
     "module_named_like_a_loader": "import json.decoder\n",
 }

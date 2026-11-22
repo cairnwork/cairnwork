@@ -27,6 +27,7 @@ REFLECTIVE = {"__dict__", "__globals__", "__self__", "__setattr__", "__getattrib
 REFLECTIVE |= {"f_globals", "f_locals", "f_builtins"}
 DYNAMIC |= {"exec_module", "load_module", "_bootstrap", "_bootstrap_external"}  # importlib loaders
 INTROSPECTION = {"builtins", "ctypes", "gc", "inspect"}  # modules refused when imported at all
+INTROSPECTION |= {"importlib", "importlib_metadata"}  # EntryPoint.load imports by name
 # Modules that import or run other code by name, path or source text (#370).
 RUNNERS = {"runpy", "pkgutil", "timeit", "cProfile", "profile", "trace", "code", "codeop"}
 RUNNERS |= {"doctest", "pdb", "bdb", "zipimport"}
