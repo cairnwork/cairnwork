@@ -152,8 +152,8 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
       write root of the run is refused; any other dangling target is skipped and counted in the
       policy notes. Residual (the #353 kind): the policy binds the whole host root read-only, so a
       skipped target outside the private trees created while the run is in progress (say a daemon's
-      socket under `/var/tmp`) is readable, a socket connectable, at its own path; one under `/tmp`,
-      `/run` or `/var/run` falls under the claim in **Pathname sockets** below. Each credential
+      socket under `/var/lib`) is readable, a socket connectable, at its own path; one under `/tmp`,
+      `/var/tmp`, `/run` or `/var/run` falls under the claim in **Pathname sockets** below. Each credential
       directory is scanned without following links, three levels deep (`.config/a/b/c`, where
       credential links live), up to 50,000 entries; past that, or when a directory cannot be read,
       the policy is refused rather than leave a link unscanned.
@@ -411,9 +411,9 @@ mode (launching account or dedicated account):
   (2) A regular file under `/run` or `/var/run` that a top-level `/etc` link names
   (`/etc/resolv.conf`), which its owner could replace with a socket between the policy check and the
   mount. This is not a claim that a Linux run has no host IPC channel: a pathname socket elsewhere —
-  under `/var/tmp`, `/var/lib` (sssd's pipes, databases), a home, `/srv` — stays connectable
+  under `/var/lib` (sssd's pipes, databases), a home, `/srv` — stays connectable
   whenever the running account may connect to it, and the witness does not walk those paths (#471).
-  `tests/test_run_isolation_witness.py` (every socket the host has under the three trees, outside
+  `tests/test_run_isolation_witness.py` (every socket the host has under the private trees, outside
   the run's own root) and `tests/test_tmp_isolation_witness.py` (sockets planted under `/tmp` before
   the run and after the policy is built) check the claim on real bwrap in CI. An agent socket an
   operator put at an open path is reachable by a candidate that guesses it (scrubbing

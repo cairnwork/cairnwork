@@ -22,7 +22,7 @@ def host(tmp_path, monkeypatch):
     (tmp_path / "varrun").symlink_to(run)
     trees = (str(run), str(tmp_path / "varrun"), str(tmp))
     monkeypatch.setattr(bwrap_private, "TREES", trees)
-    monkeypatch.setattr(bwrap_private, "HOLDS_ROOTS", str(tmp))
+    monkeypatch.setattr(bwrap_private, "HOLDS_ROOTS", (str(tmp),))
     monkeypatch.setattr(bwrap_private, "ETC", str(etc))
     return tmp_path
 

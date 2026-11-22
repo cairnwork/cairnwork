@@ -28,7 +28,7 @@ pytestmark = pytest.mark.sandbox
 # (class, owner can connect, verifier account can connect); True = open today (#471).
 EXPECTED = {
     "tmp": (False, False),  # control: private tree since #391
-    "var-tmp": (True, True),
+    "var-tmp": (False, False),  # private tree since #471 step 2b
     "home": (True, False),  # the account cannot enter the owner's 0700 home
     "srv": (True, True),
     "opt": (True, True),
