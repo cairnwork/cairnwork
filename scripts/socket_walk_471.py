@@ -7,9 +7,14 @@ import socket
 import stat
 import time
 
-SKIP = {"/proc", "/sys", "/dev"}
+# /usr and the library trees hold hundreds of thousands of files and no daemon sockets; CI runners
+# stopped at the time budget inside them (230k entries in 60 s) before reaching /home or /var.
+# After this prune the location class `usr-and-other-system` is effectively only /etc.
+SKIP = {"/proc", "/sys", "/dev", "/usr", "/lib", "/lib32", "/lib64", "/bin", "/sbin"}
 MAX_ENTRIES = 5_000_000
-BUDGET_SECONDS = 60  # report says `truncated` when the walk stopped early
+SUN_PATH_LIMIT = 104  # smallest sun_path (macOS); Linux allows 108
+_cwd_lost = False  # set when the working directory could not be restored
+BUDGET_SECONDS = 80  # report says `truncated` when the walk stopped early
 
 
 def location(path: str) -> str:
@@ -33,7 +38,44 @@ def location(path: str) -> str:
 
 
 def _probe(path: str) -> tuple[str, str]:
-    """Return (socket type, result); the first type that connects wins, else the stream result."""
+    """Return (socket type, result); the first type that connects wins, else the stream result.
+
+    A path longer than sun_path is probed by its basename from its directory and the result is
+    prefixed `pathtoolong_`, so it is not read as an ordinary failure.
+    """
+    if len(os.fsencode(path)) >= SUN_PATH_LIMIT:
+        old = -1
+        try:
+            old = os.open(".", os.O_RDONLY)
+            os.chdir(os.path.dirname(path))
+            kind, result = _probe_short(os.path.basename(path))
+        except OSError:
+            return "stream", "pathtoolong_other"
+        finally:
+            if old >= 0:
+                _restore_cwd(old)
+        if _cwd_lost:
+            return "stream", "pathtoolong_other"
+        return kind, f"pathtoolong_{result}"
+    return _probe_short(path)
+
+
+def _restore_cwd(old: int) -> None:
+    """Return to the saved directory; on failure the walk must stop (see collect)."""
+    global _cwd_lost
+    try:
+        os.fchdir(old)
+    except OSError:
+        _cwd_lost = True
+        try:
+            os.chdir("/")
+        except OSError:
+            pass
+    finally:
+        os.close(old)
+
+
+def _probe_short(path: str) -> tuple[str, str]:
     kinds = [("stream", socket.SOCK_STREAM), ("dgram", socket.SOCK_DGRAM)]
     if hasattr(socket, "SOCK_SEQPACKET"):
         kinds.append(("seqpacket", socket.SOCK_SEQPACKET))
@@ -71,20 +113,49 @@ def _connect(path: str, kind: int) -> str:
         probe.close()
 
 
-def collect() -> dict[str, int]:
-    """Walk visible files within fixed time and entry bounds, returning counts only."""
+def _stop(
+    counts: dict[str, int], reason: str, entries: int, walked: dict[str, int]
+) -> dict[str, int]:
+    """Mark the walk as stopped early; partial counts stay, with the reason and entries seen."""
+    counts["truncated|-|-"] = 1
+    counts[f"stopped-by-{reason}|-|-"] = 1
+    return _finish(counts, entries, walked)
+
+
+def _finish(counts: dict[str, int], entries: int, walked: dict[str, int]) -> dict[str, int]:
+    """Add entries seen overall and per location class (counts only), so a slow walk can be read."""
+    counts["entries-seen|-|-"] = entries
+    for loc, number in walked.items():
+        counts[f"walked-{loc}|-|-"] = number
+    return counts
+
+
+def collect(top: str = "/") -> dict[str, int]:
+    """Walk visible files within fixed time and entry bounds, returning counts only.
+
+    A directory that cannot be listed is counted as `<location>|-|unlistable`, so an empty report
+    is not read as "no sockets".
+    """
     counts: dict[str, int] = {}
+
+    def unlistable(exc: OSError) -> None:
+        key = f"{location(str(exc.filename or top))}|-|unlistable"
+        counts[key] = counts.get(key, 0) + 1
+
     deadline, entries = time.monotonic() + BUDGET_SECONDS, 0
-    for root, dirs, files in os.walk("/", followlinks=False):
+    walked: dict[str, int] = {}
+    for root, dirs, files in os.walk(top, followlinks=False, onerror=unlistable):
         if time.monotonic() >= deadline:  # directories without files also count against the budget
-            counts["truncated|-|-"] = 1
-            return counts
+            return _stop(counts, "time", entries, walked)
         dirs[:] = [d for d in dirs if os.path.join(root, d) not in SKIP]
+        here = location(root)
+        walked[here] = walked.get(here, 0) + len(files)
         for name in files:
             entries += 1
             if entries > MAX_ENTRIES or time.monotonic() >= deadline:
-                counts["truncated|-|-"] = 1
-                return counts
+                return _stop(
+                    counts, "entries" if entries > MAX_ENTRIES else "time", entries, walked
+                )
             path = os.path.join(root, name)
             try:
                 if not stat.S_ISSOCK(os.lstat(path).st_mode):
@@ -94,8 +165,10 @@ def collect() -> dict[str, int]:
             loc = location(path)
             kind, result = _probe(path)
             key = f"{loc}|{kind}|{result}"
+            if _cwd_lost:  # the working directory is no longer the one we started in
+                return _stop(counts, "cwd", entries, walked)
             counts[key] = counts.get(key, 0) + 1
-    return counts
+    return _finish(counts, entries, walked)
 
 
 def main() -> None:

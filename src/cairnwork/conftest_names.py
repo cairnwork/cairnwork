@@ -46,10 +46,18 @@ _REQUESTS = frozenset({"usefixtures", "getfixturevalue"})
 
 
 def taken_names(
-    repo: Path, base: str, path: str, old: ast.Module
+    repo: Path,
+    base: str,
+    path: str,
+    old: ast.Module,
+    *,
+    collected: frozenset[str] | None = None,
 ) -> tuple[frozenset[str], frozenset[str]]:
     """(names the conftest at ``path``, whose base version is ``old``, binds; fixture names the
-    base requests or a conftest above binds): a new binding may take neither."""
+    base requests or a conftest above binds): a new binding may take neither.
+
+    ``collected`` (#986) are the fixture names pytest itself saw on the base. Advisory: it is only
+    added to the second set, so it can add a refusal and never remove one; None adds nothing."""
     names: set[str] = set()
     directory = dirname(path)
     listing = _listing(repo, base)
@@ -77,7 +85,9 @@ def taken_names(
     called = imported_callable_uses(imported, index)
     for f, tree in imported.items():
         names |= _fixtures(tree, extra=resolved.get(f), called=called.get(f, set()))
-    return frozenset(bound(old, extra=resolved.get(path))), frozenset(names)
+    return frozenset(bound(old, extra=resolved.get(path))), frozenset(
+        names | (collected or frozenset())
+    )
 
 
 def bound(tree: ast.Module, extra: set[str] | None = None) -> set[str]:

@@ -137,11 +137,16 @@ class Project:
         return self.kind_of(found[1], found[2], hops + 1)
 
 
+Defs = ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef
+
+
 def _defined(tree: ast.Module, module: str, name: str, package: bool):
     """The last top-level binding of name: ('function'|'class', m, n) or ('import', m, n)."""
     found: tuple[str, str, str] | None = None
     for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and node.name == name:
+        if isinstance(node, Defs) and node.name == name and node.decorator_list:
+            found = ("other", module, name)  # bound to what the decorator returns (#370)
+        elif isinstance(node, ast.FunctionDef) and node.name == name:
             found = ("function", module, name)
         elif isinstance(node, ast.AsyncFunctionDef) and node.name == name:
             found = ("async", module, name)

@@ -84,9 +84,20 @@ def accepted(key: str, value: Any) -> bool:
         return not text or isinstance(level, int) or bool(re.fullmatch(r"\d+", str(level)))
     if key in COUNTS:
         return bool(re.fullmatch(r"\+?\d+", text))
+    if key == "verbosity_test_cases":  # int() unless "auto": else an internal error (#370)
+        return str(value) == "auto" or _whole(str(value))
     if key == "faulthandler_timeout":
         return bool(re.fullmatch(r"(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?", text))
     return text in CHOICES.get(key, {text})
+
+
+def _whole(text: str) -> bool:
+    """Whether int() reads this text, as pytest does."""
+    try:
+        int(text)
+    except ValueError:
+        return False
+    return True
 
 
 def beyond_installed(key: str, value: Any) -> bool:
