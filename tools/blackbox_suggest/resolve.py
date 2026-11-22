@@ -16,6 +16,7 @@ from pathlib import Path
 
 from .literals import Refused
 from .loaders import by_name
+from .rebound import rebound
 
 MAX_HOPS = 6
 
@@ -144,7 +145,10 @@ Defs = ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef
 def _defined(tree: ast.Module, module: str, name: str, package: bool):
     """The last top-level binding of name: ('function'|'class', m, n) or ('import', m, n)."""
     found: tuple[str, str, str] | None = None
+    read: set[int] = set()
     for node in tree.body:
+        if isinstance(node, Defs) and node.name == name:
+            read.add(id(node))
         if isinstance(node, Defs) and node.name == name and node.decorator_list:
             found = ("other", module, name)  # bound to what the decorator returns (#370)
         elif isinstance(node, ast.FunctionDef) and node.name == name:
@@ -155,16 +159,24 @@ def _defined(tree: ast.Module, module: str, name: str, package: bool):
             found = ("class", module, name)
         elif isinstance(node, ast.ImportFrom):
             for alias in node.names:
+                if (alias.asname or alias.name) == name or (
+                    alias.name == "*" and (found is None or found[0] == "import")
+                ):
+                    read.add(id(alias))
                 if (alias.asname or alias.name) == name:
                     found = ("import", _absolute(module, node, package), alias.name)
         elif (isinstance(node, ast.Assign) and any(_is_name(t, name) for t in node.targets)) or (
             isinstance(node, ast.AnnAssign) and _is_name(node.target, name)
         ):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            read.update(id(t) for t in targets if _is_name(t, name))
             found = (
                 ("import", module, node.value.id)
                 if isinstance(node.value, ast.Name)
                 else ("other", module, name)
             )
+    if rebound(tree, name, read):
+        found = ("other", module, name)  # bound again where this loop does not read (#370)
     if found and found[0] in ("async", "other"):
         raise Refused(f"{name!r} in {module} is not a plain def or class")
     return found
