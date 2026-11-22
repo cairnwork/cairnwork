@@ -91,7 +91,7 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
   data declared: an argv entry that is a path object rather than text.
 - **Linux bubblewrap** (`src/cairnwork_sandbox/bwrap.py`): a read-only bind of the whole root,
   read-write binds for the write roots only, every namespace unshared (no network), all
-  capabilities dropped, nested user namespaces disabled. `/run`, `/tmp` (and `/var/run` where
+  capabilities dropped, nested user namespaces disabled. `/run`, `/tmp`, `/var/tmp` (and `/var/run` where
   it is its own directory, not a link to `/run`) are private to each run: an empty tmpfs, made
   read-only last, with only what a run needs put back — the trees' top-level symlinks that
   resolve inside the trees, recreated at the canonical path that was checked (a link leading
@@ -401,11 +401,11 @@ mode (launching account or dedicated account):
   is sent and may forward it off the host). The dedicated account does not close this by itself: on
   Linux CI a run reached journald, systemd's notify and varlink sockets, snapd and uuidd under
   `/run` in both modes, and in owner mode the launching account's own sockets under `/tmp` (#391).
-  So every run gets the private, read-only `/run` and `/tmp` described above. The claim, in full:
-  from a Linux run, in owner or account mode, no host pathname socket under `/run`, `/var/run` or
-  `/tmp` is connectable, including one the host creates while the run is in progress (the tmpfs
+  So every run gets the private, read-only `/run`, `/tmp` and `/var/tmp` described above (`/var/tmp` since #471 step 2b). The claim, in full:
+  from a Linux run, in owner or account mode, no host pathname socket under `/run`, `/var/run`,
+  `/tmp` or `/var/tmp` is connectable, including one the host creates while the run is in progress (the tmpfs
   lives in the run's own mount namespace), with two exceptions. (1) Inside the run's own read and
-  write roots that lie under `/tmp`, which the caller chooses and which are bound back as they are:
+  write roots that lie under `/tmp` or `/var/tmp`, which the caller chooses and which are bound back as they are:
   the run's work and private directories and the interpreter's prefixes (Cairnwork puts runs under
   the required `--state` directory; only tests put them under pytest's temp directory in `/tmp`).
   (2) A regular file under `/run` or `/var/run` that a top-level `/etc` link names
