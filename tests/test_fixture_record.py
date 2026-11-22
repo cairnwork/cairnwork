@@ -85,7 +85,7 @@ def test_records_fixture_sources_and_all_stages(tmp_path: Path) -> None:
         "finish",
     }
     assert {"value", "requested", "dep", "auto", "marked", "class_marked"} <= set(record["names"])
-    assert record["recorder_version"] == 1
+    assert record["recorder_version"] == 2
     assert record["settings_digest"] == "settings"
     assert record["base_sha"] == "base"
 
