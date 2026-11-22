@@ -88,12 +88,25 @@ def rebinds_modules(
     return None
 
 
+def _depths(mark: str, derived: set[str]) -> set[int]:
+    return {(len(m) - len(m.lstrip("[]"))) // 2 for m in derived if m.lstrip("[]") == mark}
+
+
 def _changes(receiver: ast.expr, derived: set[str]) -> bool:
-    """A store or mutation on this receiver reaches a value taken from a project module: the
-    chain passes a holder of one, or goes into an element of a new container holding one."""
-    chain = _chain(receiver)
-    boxes = {m[2:] for m in derived if m.startswith("[]")}
-    return bool(chain & derived) or bool((chain & boxes) - {_mark(receiver)})
+    """A store or mutation on this receiver reaches a value taken from a project module: some
+    holder on the chain is a held object, or a container whose elements are taken out by at
+    least as many steps as it is deep (D['k'].x = 1; the container itself is a new value)."""
+    node, steps = receiver, 0
+    while True:
+        mark = _mark(node)
+        if mark and any(d <= steps for d in _depths(mark, derived)):
+            return True
+        if isinstance(node, ast.Attribute | ast.Subscript):
+            node, steps = node.value, steps + 1
+        elif isinstance(node, ast.Call):
+            node = node.func
+        else:
+            return False
 
 
 def _derived(tree: ast.Module, seeds: set[str]) -> set[str]:
@@ -109,65 +122,42 @@ def _derived(tree: ast.Module, seeds: set[str]) -> set[str]:
         size = len(derived)
         for node in ast.walk(tree):
             for targets, value, element in _bindings(node):
-                kind = _kind(value, derived, element)
-                if kind is not None:
-                    derived |= {kind + n for t in targets for n in _target_names(t)}
-                    derived |= {f"[]{n}" for t in targets for n in _stored_into(t)}
+                for d in _kind(value, derived, element):
+                    derived |= {"[]" * d + n for t in targets for n in _target_names(t)}
+                    derived |= {
+                        "[]" * min(d + s, 3) + n for t in targets for n, s in _stored_into(t)
+                    }
             if isinstance(node, ast.Call):
                 for function in functions.get(_callee(node.func) or "", []):
                     derived |= _given(function, node, derived)
                 derived |= _lambda_given(node, derived)
             if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
-                if any(_kind(v, derived, True) is not None for v in _returns(node)):
+                if any(_kind(v, derived, True) for v in _returns(node)):
                     derived.add(node.name)
     return derived
 
 
-def _kind(value: ast.expr, derived: set[str], element: bool) -> str | None:
-    """ "" when the value may be a held object, "[]" when it may be a new container holding
-    one, None otherwise. element: the target takes the value's elements (a loop, unpacking)."""
-    marks = _held(value)
-    direct = {m for m in marks if not m.startswith("[]")}
-    inner = {m[2:] for m in marks if m.startswith("[]")}
-    held = {m for m in derived if not m.startswith("[]")}
-    boxes = {m[2:] for m in derived if m.startswith("[]")}
-    if direct & held:
-        return ""
-    if direct & boxes or inner & (held | boxes):
-        return "" if element or _extracts(value) else "[]"
-    return None
+def _kind(value: ast.expr, derived: set[str], element: bool) -> set[int]:
+    """How deep the value may be: 0 a held object, 1 a new container of held objects, 2 a
+    container of such containers. element: the target takes the value's elements."""
+    return {max(d - 1, 0) if element else d for d in _held(value, derived)}
 
 
 VIEWS = {"get", "pop", "popitem", "setdefault", "values", "items", "keys"}  # elements
 TAKES_ONE = {"next", "min", "max"}  # builtins whose result is an element of the argument
-HANDS_BACK = TAKES_ONE | {"iter", "list", "tuple", "sorted", "reversed"}
+HANDS_BACK = TAKES_ONE | {"iter", "list", "tuple", "sorted", "reversed", "zip", "enumerate"}
+HANDS_BACK |= {"dict", "set", "frozenset", "copy"}  # copy(v), v.copy()
 
 
-def _extracts(node: ast.expr) -> bool:
-    """The value is an element taken out of a container (an index, get, values) and not the
-    container itself."""
-    if isinstance(node, ast.Subscript):
-        return True
-    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-        return node.func.attr in VIEWS or _extracts(node.func.value)
-    if isinstance(node, ast.Attribute):
-        return _extracts(node.value)
-    return isinstance(node, PASS_ON) and any(
-        _extracts(c) for c in ast.iter_child_nodes(node) if isinstance(c, ast.expr)
-    )
-
-
-def _stored_into(target: ast.expr) -> set[str]:
-    """D['k'] = v makes D a container holding v: the mark of the container being stored into."""
+def _stored_into(target: ast.expr) -> set[tuple[str, int]]:
+    """D['k'] = v makes D a container holding v: (the mark stored into, subscripts deep)."""
     if isinstance(target, ast.Tuple | ast.List):
-        return {n for item in target.elts for n in _stored_into(item)}
-    if not isinstance(target, ast.Subscript):
-        return set()
-    base = target.value
+        return {x for item in target.elts for x in _stored_into(item)}
+    steps, base = 0, target
     while isinstance(base, ast.Subscript):
-        base = base.value
+        base, steps = base.value, steps + 1
     mark = _mark(base)
-    return {mark} if mark else set()
+    return {(mark, steps)} if mark and steps else set()
 
 
 APPLIERS = {  # calls that run a function over their other arguments
@@ -181,7 +171,7 @@ def _lambda_given(call: ast.Call, derived: set[str]) -> set[str]:
         return set()
     args = [*call.args, *(k.value for k in call.keywords)]
     lambdas = [a for a in args if isinstance(a, ast.Lambda)]
-    if not any(_kind(a, derived, True) is not None for a in args if a not in lambdas):
+    if not any(_kind(a, derived, True) for a in args if a not in lambdas):
         return set()
     return {p.arg for fn in lambdas for p in _parameters(fn.args)}
 
@@ -208,15 +198,21 @@ def _bindings(node: ast.AST) -> list[tuple[list[ast.expr], ast.expr, bool]]:
         return [([node.target], node.iter, True)]
     if isinstance(node, ast.With | ast.AsyncWith):
         return [([i.optional_vars], i.context_expr, False) for i in node.items if i.optional_vars]
-    if isinstance(node, ast.Match):  # every capture takes the subject or an element of it
-        names = {
-            n
-            for case in node.cases
-            for p in ast.walk(case.pattern)
-            for n in (getattr(p, "name", None), getattr(p, "rest", None))
-            if isinstance(n, str)
-        }
-        return [([ast.Name(id=n, ctx=ast.Store()) for n in sorted(names)], node.subject, True)]
+    if isinstance(node, ast.Match):  # a whole-subject capture takes the subject, others an element
+        out = []
+        for case in node.cases:
+            top = case.pattern
+            whole = {top.name} if isinstance(top, ast.MatchAs) and top.name else set()
+            names = {
+                n
+                for p in ast.walk(top)
+                for n in (getattr(p, "name", None), getattr(p, "rest", None))
+                if isinstance(n, str)
+            }
+            for group, element in ((whole, False), (names - whole, True)):
+                targets = [ast.Name(id=n, ctx=ast.Store()) for n in sorted(group)]
+                out.append((targets, node.subject, element))
+        return out
     if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda):
         spec = node.args  # a parameter default is the value of the parameter
         params = [*spec.posonlyargs, *spec.args]
@@ -269,17 +265,15 @@ def _given(
     found: set[str] = set()
     for i, arg in enumerate(call.args):
         kind = _kind(arg.value if isinstance(arg, ast.Starred) else arg, derived, False)
-        if kind is None:
-            continue
         index = i + 1 if method else i
         starred = isinstance(arg, ast.Starred) or index >= len(params)
-        found |= {kind + n for n in (every if starred else {params[index].arg})}
+        found |= {"[]" * d + n for d in kind for n in (every if starred else {params[index].arg})}
     for keyword in call.keywords:
         kind = _kind(keyword.value, derived, False)
-        if kind is not None:
+        if kind:
             names = {keyword.arg} if keyword.arg else every
             names |= {spec.kwarg.arg} if spec.kwarg else set()
-            found |= {kind + n for n in names}
+            found |= {"[]" * d + n for d in kind for n in names}
     return found
 
 
@@ -304,30 +298,33 @@ DISPLAYS = (
 )
 
 
-def _held(node: ast.expr) -> set[str]:
-    """Marks for what a value may be: a name, .attr, or []mark for an element of a new
-    container. Other results (a call, arithmetic, a string) are new values that hold nothing."""
+def _held(node: ast.expr, derived: set[str]) -> set[int]:
+    """The depths a value may have (see _kind). Other results (a call, a string) are new values
+    that hold nothing."""
     if isinstance(node, ast.Name):
-        return {node.id}
+        return _depths(node.id, derived)
     if isinstance(node, ast.Attribute):
-        return {f".{node.attr}"} | _held(node.value)
+        return _depths(f".{node.attr}", derived) | _held(node.value, derived)
     if isinstance(node, ast.Subscript):
-        return _held(node.value)
+        return {max(d - 1, 0) for d in _held(node.value, derived)}
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-        return _held(node.func.value) if node.func.attr in VIEWS else set()
+        if node.func.attr in VIEWS:
+            return {max(d - 1, 0) for d in _held(node.func.value, derived)}
     if isinstance(node, ast.Call) and _callee(node.func) in HANDS_BACK:  # list(v), next(v)
-        marks = {m for part in node.args for m in _held(part)}
+        args = node.args or [getattr(node.func, "value", node.func)]  # v.copy()
+        ds = {d for part in args for d in _held(part, derived)}
         return (
-            marks
+            {max(d - 1, 0) for d in ds}
             if _callee(node.func) in TAKES_ONE
-            else {f"[]{m.removeprefix('[]')}" for m in marks}
+            else {max(d, 1) for d in ds}
         )
+    if isinstance(node, ast.BinOp):  # v + w: a new container of their elements
+        return {max(d, 1) for part in (node.left, node.right) for d in _held(part, derived)}
     if isinstance(node, PASS_ON):
         parts = [c for c in ast.iter_child_nodes(node) if isinstance(c, ast.expr)]
-        return {m for part in parts for m in _held(part)}
-    if isinstance(node, DISPLAYS):  # a nested container stays a container holding it
-        marks = {m for part in _elements(node) for m in _held(part)}
-        return {m if m.startswith("[]") else f"[]{m}" for m in marks}
+        return {d for part in parts for d in _held(part, derived)}
+    if isinstance(node, DISPLAYS):  # a new container of what it holds
+        return {min(d + 1, 3) for part in _elements(node) for d in _held(part, derived)}
     return set()
 
 

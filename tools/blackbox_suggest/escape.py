@@ -84,7 +84,7 @@ def escapes(
     """A held name, or an element of a container holding one, is used outside the known-safe
     uses. The use is that of the whole chain it starts (lookups and elements handed back)."""
     held = {m for m in derived if not m.startswith("[]")}
-    boxes = {m[2:] for m in derived if m.startswith("[]")}
+    boxes = {m.lstrip("[]") for m in derived if m.startswith("[]")}
     local = {
         n.name
         for n in ast.walk(tree)
@@ -147,7 +147,11 @@ def _box_safe(name: ast.expr, parents: dict[int, ast.AST], s: Scope) -> bool:
     if isinstance(parent, ast.Call) and _hands_back(parent, name, s):
         one = _one_element(parent)
         return _climbed_safe(parent, parents, s) if one else _box_safe(parent, parents, s)
-    return True
+    if isinstance(parent, ast.Attribute | ast.Subscript):
+        return True  # another attribute of the container, or a key
+    # an argument (also *x, name=x), or a position that only moves it on or looks at it;
+    # any other (a lambda body, an in-place operator target) is refused
+    return isinstance(parent, (ast.Call, ast.keyword, ast.Starred, *PASSES, *READS))
 
 
 def _safe_use(use: ast.expr, parents: dict[int, ast.AST], s: Scope) -> bool:
@@ -156,6 +160,8 @@ def _safe_use(use: ast.expr, parents: dict[int, ast.AST], s: Scope) -> bool:
         if isinstance(use, ast.Name) or _dotted(getattr(use, "value", None) or use) in s.seeds:
             return True  # an imported function or class, or module.function(...)
         return isinstance(use, ast.Attribute) and use.attr in READ_METHODS
+    if _method_as_value(use, parent, s.modules) or _method_as_callback(use, parents, s):
+        return False
     if isinstance(parent, ast.Starred | ast.keyword):  # *value or name=value in a call
         call = parents.get(id(parent))
         if isinstance(call, ast.Call):
@@ -163,8 +169,6 @@ def _safe_use(use: ast.expr, parents: dict[int, ast.AST], s: Scope) -> bool:
         return True  # *value in a display moves on; a class keyword (metaclass=) is read
     if isinstance(parent, ast.Call):
         return _safe_argument(parent, use, s)
-    if _method_as_value(use, parent, s.modules):
-        return False
     if isinstance(parent, ast.AugAssign):
         return parent.target is not use
     if isinstance(parent, ast.Attribute | ast.Subscript):
@@ -172,15 +176,30 @@ def _safe_use(use: ast.expr, parents: dict[int, ast.AST], s: Scope) -> bool:
     return isinstance(parent, PASSES + READS)
 
 
-def _method_as_value(use: ast.expr, parent: ast.AST | None, modules: set[str]) -> bool:
-    """An attribute of a held object that may be a method, moved on without being called: the
-    method would be called later on the held object."""
+def _may_be_method(use: ast.expr, modules: set[str]) -> bool:
     return (
         isinstance(use, ast.Attribute)
         and use.attr not in READ_METHODS
         and _dotted(use.value) not in modules
-        and isinstance(parent, (ast.Assign, ast.AnnAssign, ast.NamedExpr, *DISPLAYS))
     )
+
+
+def _method_as_value(use: ast.expr, parent: ast.AST | None, modules: set[str]) -> bool:
+    """An attribute of a held object that may be a method, moved on without being called: the
+    method would be called later on the held object."""
+    stored = (ast.Assign, ast.AnnAssign, ast.NamedExpr, *DISPLAYS)
+    return _may_be_method(use, modules) and isinstance(parent, stored)
+
+
+def _method_as_callback(use: ast.expr, parents: dict[int, ast.AST], s: Scope) -> bool:
+    """A possible method of a held object given to a call that is not a reader: it may be
+    called there."""
+    parent = parents.get(id(use))
+    call = parents.get(id(parent)) if isinstance(parent, ast.Starred | ast.keyword) else parent
+    if not (isinstance(call, ast.Call) and call.func is not use):
+        return False
+    reader = _callee(call.func) in SAFE_CALLEES and s.library(call.func)
+    return _may_be_method(use, s.modules) and not reader
 
 
 def _safe_argument(call: ast.Call, use: ast.expr, s: Scope) -> bool:

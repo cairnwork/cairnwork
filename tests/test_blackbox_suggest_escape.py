@@ -39,6 +39,23 @@ REFUSED = {
     ),
     "escape_library_name_on_unknown_receiver": held(IMP + NS + "x.dumps(core.REG)\n"),
     "escape_later_on_unknown_receiver": held(IMP + NS + "x.submit(core.REG)\n"),
+    "escape_element_through_zip": held(
+        IMP + "for a, b in zip(core.REG.values(), [1]):\n    a.reset()\n"
+    ),
+    "escape_element_through_enumerate": held(
+        IMP + "for i, a in enumerate(core.REG.values()):\n    a.reset()\n"
+    ),
+    "escape_element_through_next_iter": held(
+        IMP + "x = list(core.REG.values())\ny = next(iter(x))\ny.reset()\n"
+    ),
+    "escape_element_of_assigned_copy": held(IMP + "x = dict(core.REG)\nx['k'].reset()\n"),
+    "escape_element_of_method_copy": held(IMP + "x = core.REG.copy()\nx['k'].reset()\n"),
+    "escape_element_of_copy_in_container": held(
+        IMP + "L = [dict(core.REG)]\nfor d in L:\n    d['k'].reset()\n"
+    ),
+    "escape_element_after_concatenation": held(IMP + "x = [core.K] + [1]\nk, y = x\nk.reset()\n"),
+    "escape_method_as_callback": held(IMP + "def run(fn):\n    fn()\nrun(core.K.reset)\n"),
+    "escape_container_in_unlisted_position": held(IMP + "x = [core.K]\ng = lambda: x\n"),
 }
 KEPT = {
     "safe_read_method": held(IMP + "x = core.REG.get('k')\n"),
