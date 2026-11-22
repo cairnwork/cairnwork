@@ -7,7 +7,9 @@ import socket
 import stat
 import time
 
-SKIP = {"/proc", "/sys", "/dev"}
+# /usr and the library trees hold hundreds of thousands of files and no daemon sockets; CI runners
+# stopped at the time budget inside them (230k entries in 60 s) before reaching /home or /var.
+SKIP = {"/proc", "/sys", "/dev", "/usr", "/lib", "/lib32", "/lib64", "/bin", "/sbin"}
 MAX_ENTRIES = 5_000_000
 SUN_PATH_LIMIT = 104  # smallest sun_path (macOS); Linux allows 108
 _cwd_lost = False  # set when the working directory could not be restored

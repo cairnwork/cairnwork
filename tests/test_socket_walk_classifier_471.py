@@ -192,3 +192,16 @@ def test_collect_stops_truncated_when_cwd_lost(monkeypatch):
     report = walk.collect()
     assert report["truncated|-|-"] == 1 and report["stopped-by-cwd|-|-"] == 1
     assert len(probed) == 1  # the second socket is not probed from the wrong directory
+
+
+def test_big_system_trees_are_pruned_not_walked(monkeypatch):
+    seen = []
+
+    def fake_walk(top, followlinks=False, **_kw):
+        dirs = ["usr", "tmp", "lib64", "var"]
+        yield "/", dirs, []
+        seen.extend(dirs)
+
+    monkeypatch.setattr(walk.os, "walk", fake_walk)
+    walk.collect()
+    assert seen == ["tmp", "var"]
