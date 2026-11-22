@@ -20,8 +20,9 @@ from .config import import_dirs, pytest_config, recursion_skips, strict_ids
 from .ids import distinct_ids
 from .literals import Refused
 from .loaders import as_imports, by_name
+from .modstore import rebinds_modules
 from .obligations import Scope, collect
-from .resolve import Imports, Project, binds_module_hook, module_env
+from .resolve import Imports, Project, _absolute, binds_module_hook, module_env
 from .scope import import_time
 from .shadows import clashes, stdlib_shadows, walk
 from .shapes import drafts_for
@@ -141,7 +142,8 @@ def _module_hooks(cases: list[dict[str, Any]], project: Project) -> str | None:
     ``_unimported``, so this also covers every project module pytest imports for the test. Any
     import statement is followed, and a module with no single readable source refuses."""
     drafted = {case["target"]["module"] for case in cases}
-    for module in sorted(project.import_closure(drafted, anywhere=True)):
+    closure = project.import_closure(drafted, anywhere=True)
+    for module in sorted(closure):
         tree = project.tree(module)
         if tree is None or project.files(module) != [project.module_file(module)]:
             return f"{module} has no single source file this reader can read"
@@ -150,7 +152,32 @@ def _module_hooks(cases: list[dict[str, Any]], project: Project) -> str | None:
         why = by_name(tree)[1]
         if why:
             return f"{module}: {why}"
+    for module in sorted(closure):
+        why = _rebinds(project.tree(module), module, project)
+        if why:
+            return f"{module}: {why}"
     return None
+
+
+def _rebinds(tree: ast.Module | None, module: str, project: Project) -> str | None:
+    if tree is None:
+        return None  # refused above: a closure module this reader cannot read
+    package = getattr(project.module_file(module), "name", "") == "__init__.py"
+    return rebinds_modules(
+        tree,
+        lambda node: _absolute(module, node, package),
+        lambda name: _exact_module(project, name),
+    )
+
+
+def _exact_module(project: Project, name: str) -> bool:
+    """A project module by this exact name: a case-blind file system also finds backend.py
+    when asked for Backend.py."""
+    path = project.module_file(name)
+    if path is None:
+        return False
+    entry = path.parent if path.name == "__init__.py" else path
+    return entry.name in {p.name for p in entry.parent.iterdir()}
 
 
 def analyze_file(test_file: Path, project_root: Path, source_roots: list[Path]) -> list[Obligation]:
