@@ -35,6 +35,8 @@ REFUSED = {
     "durations_not_a_number": "--durations=x",
     "durations_fraction": "--durations=1.5",
     "durations_min_not_a_number": "--durations-min=x",
+    "durations_empty": "--durations=",
+    "durations_min_empty": "--durations-min=",
     "doctest_report_choice": "--doctest-report bogus",
 }
 KEPT = {
@@ -44,6 +46,12 @@ KEPT = {
     "code_highlight": "--code-highlight=yes",
     "durations": "--durations=10",
     "durations_min": "--durations-min=0.5",
+    "durations_signed": "--durations=+3",
+    "durations_negative": "--durations=-1",
+    "durations_grouped": "--durations=1_0",
+    "durations_min_leading_dot": "--durations-min=.5",
+    "durations_min_exponent": "--durations-min=1e3",
+    "durations_min_negative": "--durations-min=-1",
     "doctest_report": "--doctest-report udiff",
 }
 

@@ -64,10 +64,10 @@ WITH_VALUE = {"--cov-report", "--doctest-report"}  # safe options whose value is
 DOCTESTS = ("--doctest-modules", "--doctest-glob")  # collect doctests: items and code unread
 SELECTING = ("-m", "-k", "--deselect", "--ignore", "--ignore-glob")  # change what is collected
 REPORT = re.compile(r"-r[fEsxXpPaAN]+")  # -r with summary letters only (not -random-order)
-VALUES = {  # pytest's own options whose value pytest checks at start: a bad value stops it (#370)
+VALUES: dict[str, Any] = {  # pytest's own options whose value stops pytest when bad (#370)
     "--tb": "auto|long|short|line|native|no", "--color": "yes|no|auto",
     "--code-highlight": "yes|no",
-    "--durations": r"\d+", "--durations-min": r"\d+(\.\d+)?",
+    "--durations": int, "--durations-min": float,  # read with int() / float() as pytest does
     "--doctest-report": "udiff|cdiff|ndiff|only_first_failure|none",
 }  # fmt: skip
 FILTER_ACTIONS = ("ignore", "default", "always", "module", "once")
@@ -261,4 +261,11 @@ def _addopts(tokens: list[str]) -> tuple[str | None, bool, list[str]]:
 
 def _valued(option: str, value: str) -> bool:
     """Whether pytest takes this value for one of its own options (others are not checked here)."""
-    return option not in VALUES or bool(re.fullmatch(VALUES[option], value))
+    check = VALUES.get(option)
+    if check is None or isinstance(check, str):
+        return check is None or bool(re.fullmatch(check, value))
+    try:
+        check(value)
+    except ValueError:
+        return False
+    return True
