@@ -48,3 +48,4 @@ class VerifierRun:
     not_run: tuple[str, ...] = ()  # #962 R0b: named targets or skipped collectors missing
     renamed: tuple[str, ...] = ()  # #962 R0b: items changed after collection
     uncollected_exposed: tuple[str, ...] | None = None
+    fixture_names: frozenset[str] | None = None  # #986: the recorder's names; None unless verified
