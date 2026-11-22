@@ -2,8 +2,9 @@
 
 The reader takes the last top-level def, class, import or plain assignment of a drafted target.
 The name can also be bound again under if/try/for/with/match, by a walrus, a tuple target, an
-import statement, an except or match name, a star import after the def, or a global statement in
-a function or class body. Then the name is not the def the reader read, so the target refuses.
+import statement, an except or match name, a global statement in a function or class body, or a
+star import after any binding of it, unless the star's module is read and surely does not bind
+it. Then the name is not the def the reader read, so the target refuses.
 """
 
 import pytest
@@ -58,6 +59,23 @@ REFUSED = {
     "global_in_class": core("class K:\n    global f\n    f = W(f)\n"),
     "except_name": core("try:\n    raise ValueError\nexcept ValueError as f:\n    pass\n"),
     "deleted": core("del f\n"),
+    "match_star": core("match [W(f)]:\n    case [*f]:\n        pass\n"),
+    "match_rest": core("match {0: W(f)}:\n    case {**f}:\n        pass\n"),
+    "import_plain": core("import f\n") | {"src/f.py": ""},
+    "star_after_import": {
+        "src/pkg/core.py": "from pkg.a import f\nfrom pkg.impl import *\n",
+        "src/pkg/a.py": "SCALE = 1\n" + PLAIN,
+        "src/pkg/impl.py": WRAP + "f = W(lambda x: x * 2 * SCALE)\n",
+    },
+    "star_after_alias": {
+        "src/pkg/core.py": WRAP
+        + "def h(x):\n    return x * 2 * SCALE\nf = h\nfrom pkg.impl import *\n",
+        "src/pkg/impl.py": WRAP + "f = W(lambda x: x * 2 * SCALE)\n",
+    },
+    "star_outside_project": core("from json import *\n"),
+    "star_names_it": core("from pkg.impl import *\n") | {"src/pkg/impl.py": '__all__ = ["f"]\n'},
+    "star_of_a_package_with_it": core("from pkg.impl import *\n")
+    | {"src/pkg/impl/__init__.py": "from . import f as _f\n", "src/pkg/impl/f.py": ""},
 }
 
 
@@ -82,6 +100,13 @@ KEPT = {
         "src/pkg/impl.py": "SCALE = 1\n" + PLAIN,
     },
     "other_name_nested": core("if True:\n    g = W(f)\n"),
+    "alias_to_def": {"src/pkg/core.py": WRAP + "def h(x):\n    return x * 2 * SCALE\nf = h\n"},
+    "star_after_def_lacking_it": core("from pkg.impl import *\n") | {"src/pkg/impl.py": "G = 1\n"},
+    "star_after_import_lacking_it": {
+        "src/pkg/core.py": "from pkg.a import f\nfrom pkg.impl import *\n",
+        "src/pkg/a.py": "SCALE = 1\n" + PLAIN,
+        "src/pkg/impl.py": "G = 1\n",
+    },
 }
 
 
