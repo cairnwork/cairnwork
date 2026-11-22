@@ -17,6 +17,8 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+from tools.blackbox_suggest.pytest_values import accepted, ini_refused, toml_refused
+
 SAFE_KEYS = {
     "minversion", "testpaths", "norecursedirs", "markers", "xfail_strict",
     "console_output_style", "cache_dir", "pythonpath", "consider_namespace_packages",
@@ -129,8 +131,11 @@ def _section(path: Path, kind: str, section: str) -> dict[str, Any] | None:
     if not path.is_file():
         return None
     if kind == "ini":
+        text = path.read_text(encoding="utf-8")
+        if ini_refused(text):  # pytest reads the whole file with iniconfig, which refuses it
+            raise ValueError("a line pytest cannot read")
         parser = configparser.ConfigParser(interpolation=None)
-        parser.read_string(path.read_text(encoding="utf-8"))
+        parser.read_string(text)
         if parser.has_section(section):
             return dict(parser.items(section))
         if parser.has_section("pytest"):  # setup.cfg: pytest refuses to start (#370, as #947)
@@ -145,6 +150,8 @@ def _section(path: Path, kind: str, section: str) -> dict[str, Any] | None:
             return None
     if not isinstance(data, dict):
         raise ValueError(f"{section} is not a table")
+    if toml_refused(data, section != "tool.pytest.ini_options", SAFE_KEYS):
+        raise ValueError(f"{section} holds a value of a type pytest cannot load")
     if section == "tool.pytest":
         data = {k: v for k, v in data.items() if k != "ini_options"}  # read as its own section
     return data  # a sub-table (a plugin's [tool.pytest.ini_options.env]) is an unknown option
@@ -158,6 +165,8 @@ def _values(value: Any) -> list[str]:
 
 def _option(key: str, value: Any) -> tuple[str | None, bool, list[str]]:
     """(problem, count_known, usefixtures names) for one option."""
+    if not accepted(key, value):  # pytest refuses to start, so no test runs
+        return "pytest config holds a value pytest refuses at start", False, []
     if key in COLLECTION_KEYS:
         return None, False, []
     if key == "usefixtures":
@@ -188,9 +197,9 @@ def _addopts(tokens: list[str]) -> tuple[str | None, bool, list[str]]:
         has_next = index + 1 < len(tokens)
         if token == "-p" and has_next and tokens[index + 1].startswith("no:"):
             index += 2
-        elif token in WITH_VALUE and has_next:
+        elif token in WITH_VALUE and has_next and not tokens[index + 1].startswith("-"):
             index += 2
-        elif token in SELECTING and has_next:
+        elif token in SELECTING and has_next and not tokens[index + 1].startswith("-"):
             index, known = index + 2, False
         elif token.startswith(tuple(f"{s}=" for s in SELECTING if s.startswith("--"))):
             index, known = index + 1, False
