@@ -101,3 +101,21 @@ def test_a_none_carries_its_reason(
     assert (names is None) == (reason != "OK")
     assert [r.levelname for r in caplog.records] == ([level] if level else [])
     assert all(reason in r.getMessage() for r in caplog.records)
+
+
+def test_a_run_count_other_than_one_is_logged_as_such(task, monkeypatch, caplog):
+    monkeypatch.setattr(bfn, "run_verifiers", lambda *a, **k: ())
+    ctx = SimpleNamespace(account=None)
+    with caplog.at_level("INFO", logger=bfn.LOG.name):
+        assert bfn.collect(ctx, task, PATHS, "r-f") is None
+    assert [r.levelname for r in caplog.records] == ["WARNING"]
+    assert "RUN_COUNT" in caplog.records[0].getMessage()
+
+
+def test_an_empty_name_set_is_still_names_not_a_none(task, monkeypatch, caplog):
+    _calls(monkeypatch, frozenset())
+    ctx = SimpleNamespace(account=None)
+    with caplog.at_level("INFO", logger=bfn.LOG.name):
+        assert bfn.collect(ctx, task, PATHS, "r-f") == frozenset()
+    assert bfn.probe(ctx, task, PATHS, "r-f") == (frozenset(), "OK")
+    assert caplog.records == []
