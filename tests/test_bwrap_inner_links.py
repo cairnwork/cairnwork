@@ -314,6 +314,8 @@ def test_account_mode_refuses_an_unreadable_target_under_a_root_not_counts_it_da
     (world / "home" / ".aws" / "x").symlink_to(locked / "tok")
     locked.chmod(0)
     try:
+        if os.access(locked / "tok", os.F_OK):
+            pytest.skip("running as a user that stats through a mode-0 directory (root)")
         with pytest.raises(SandboxError, match="cannot be checked"):
             _policy(world / "home", reads=(world / "out",), owner=False)
     finally:
