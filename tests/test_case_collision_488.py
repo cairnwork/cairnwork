@@ -4,6 +4,7 @@ collision is not blamed on the base, and the cheap candidate checks run before t
 are built from git objects only, so the tests mean the same on case-sensitive and case-insensitive
 filesystems."""
 
+import subprocess
 from types import SimpleNamespace
 from typing import Any
 
@@ -195,3 +196,52 @@ def test_a_case_variant_of_a_path_that_stays_is_refused(repo, have, remove, add)
     with pytest.raises(TestCommitRejected) as err:
         paths_of(repo, base, tc)
     assert err.value.code == "TEST_COMMIT_SCOPE"
+
+
+# #1477: NFC and NFD spellings of one name (and their case variants) are one name on macOS.
+# Data files (no verifier target needed), and the paths go in through --index-info on stdin: git
+# on macOS precomposes the arguments, so a NFD name given as one would turn into its NFC form.
+_NFC, _NFD, _CAPS = "caf\u00e9", "cafe\u0301", "CAFE\u0301"
+
+
+def _commit_exact(repo, parent, *names):
+    git(repo, "config", "core.ignorecase", "false")
+    git(repo, "read-tree", parent)
+    blob = git(repo, "rev-parse", "HEAD:src/a.py")
+    entries = "".join(f"100644 {blob}\t{name}\0" for name in names)
+    subprocess.run(
+        ["git", "-C", str(repo), "update-index", "--add", "-z", "--index-info"],
+        input=entries.encode(), check=True, capture_output=True,
+    )  # fmt: skip
+    tree = git(repo, "write-tree")
+    git(repo, "read-tree", "HEAD")
+    return git(repo, "commit-tree", tree, "-p", parent, "-m", "c")
+
+
+@pytest.mark.parametrize(
+    ("have", "add"),
+    [
+        (f"tests/data/{_NFC}.txt", f"tests/data/{_NFD}.txt"),
+        (f"tests/data/{_NFD}.txt", f"tests/data/{_NFC}.txt"),
+        (f"tests/data/{_NFC}.txt", f"tests/data/{_CAPS}.txt"),
+        (f"tests/{_NFC}/a.txt", f"tests/{_NFD}/b.txt"),
+    ],
+)
+def test_an_nfc_nfd_variant_of_a_base_path_is_refused(repo, have, add):
+    base = _commit_exact(repo, "HEAD", have)
+    tc = _commit_exact(repo, base, add)
+    with pytest.raises(TestCommitRejected) as err:
+        paths_of(repo, base, tc)
+    assert err.value.code == "TEST_COMMIT_SCOPE"
+
+
+def test_an_nfc_nfd_pair_among_added_paths_is_refused(repo, base):
+    tc = _commit_exact(repo, base, f"tests/data/{_NFC}.txt", f"tests/data/{_NFD}.txt")
+    with pytest.raises(TestCommitRejected) as err:
+        paths_of(repo, base, tc)
+    assert err.value.code == "TEST_COMMIT_SCOPE"
+
+
+def test_same_spelling_unicode_additions_still_pass(repo, base):
+    tc = _commit_exact(repo, base, f"tests/data/{_NFC}.txt", f"tests/data/{_NFC}_b.txt")
+    assert paths_of(repo, base, tc)[0] == (f"tests/data/{_NFC}.txt", f"tests/data/{_NFC}_b.txt")

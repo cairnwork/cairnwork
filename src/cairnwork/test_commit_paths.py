@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import unicodedata
 from pathlib import Path, PurePosixPath
 
 from cairnwork.gitcmd import GitCommandError, run_git
@@ -35,11 +36,19 @@ def out_of_scope(path: str, status: str) -> bool:  # #798: conftest.py only adde
     )
 
 
+def _key(prefix: str) -> str:
+    """The comparison key of a path part (#1477): NFC, case-folded, NFC again (folding can
+    decompose). macOS filesystems treat NFC and NFD spellings as one name, as they do case."""
+    nfc = unicodedata.normalize("NFC", prefix)
+    return unicodedata.normalize("NFC", nfc.casefold())
+
+
 def case_variant_clash(
     repo: Path, base: str, added: list[str], deleted: list[str] | tuple[str, ...] = ()
 ) -> str | None:
-    """Why an added path (or one of its directories) differs only in case from a path of the
-    base tree or from another added path, else None. Compared case-folded whatever the local
+    """Why an added path (or one of its directories) differs only in case or in Unicode
+    normal form (NFC/NFD) from a path of the base tree or from another added path, else None.
+    Compared case-folded and normalized whatever the local
     filesystem, so the verdict never depends on the host; on a case-folding disk both would
     land in one file and the clone check would blame the base after a worker had run. An
     unreadable base tree is a clash too (refused, never passed). The refusal code is right
@@ -56,19 +65,19 @@ def case_variant_clash(
         parts = name.split("/")
         for end in range(1, len(parts) + 1):
             prefix = "/".join(parts[:end])
-            spelled.setdefault(prefix.casefold(), set()).add(prefix)
+            spelled.setdefault(_key(prefix), set()).add(prefix)
     new: dict[str, set[str]] = {}  # the added paths' own directories and files, among themselves
     for path in added:
         parts = path.split("/")
         for end in range(1, len(parts) + 1):
             prefix = "/".join(parts[:end])
-            same = spelled.get(prefix.casefold(), set())
+            same = spelled.get(_key(prefix), set())
             if same and prefix not in same:
                 return (
                     f"test commit adds {path!r}, which differs only in case from"
                     f" {sorted(same)[0]!r} in the base tree"
                 )
-            twin = new.setdefault(prefix.casefold(), set())
+            twin = new.setdefault(_key(prefix), set())
             if twin and prefix not in twin:
                 return (
                     f"test commit adds {path!r} and {sorted(twin)[0]!r}, which differ only in case"
