@@ -18,6 +18,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from cairnwork.deferred_tests import BaseUncomparable, Comparison
+from cairnwork.mask_recheck import MaskChanged
 from cairnwork.verifier_account import AccountBusy, VerifierAccount, VerifierAccountError
 
 UNUSABLE = "VERIFIER_ACCOUNT_UNUSABLE"
@@ -134,3 +135,5 @@ def base_stage(account: VerifierAccount | None, python: str | None) -> Iterator[
     except VerifierAccountError as exc:
         hint = blocked(python or account.python, account.user) if account is not None else ""
         raise unusable(f"{exc}; {hint}" if hint else str(exc)) from exc
+    except MaskChanged as exc:  # a host event during a base run is no evidence either way
+        raise unusable(str(exc)) from exc

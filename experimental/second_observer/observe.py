@@ -12,11 +12,12 @@ import os
 import secrets
 import shutil
 import stat
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 
 import cairnwork_sandbox
-from cairnwork import confined, pytest_config
+from cairnwork import confined, mask_recheck, pytest_config
 from cairnwork.confined import RUN_TOKEN_VAR
 from experimental.second_observer import FAIL, NA, OBS_ERROR, PASS, TIMEOUT
 from experimental.second_observer.inputs import ShadowInput
@@ -86,6 +87,7 @@ def run_observer(
         filter(None, (str(Path(inp.interpreter).parent), env.get("PATH")))
     )
     log = run_dir / "observer.log"
+    profile = None
     if sandbox and backend is not None:
         # Same arguments as verifiers._run_one_in (src/cairnwork/verifiers.py:310-314): the
         # interpreter roots, write roots (checkout.parent, run_dir), owner mode (home masked).
@@ -97,7 +99,8 @@ def run_observer(
         profile_path = supervisor / "profile.sb"
         profile_path.write_bytes(profile.text.encode())
         argv = backend.wrap(argv, profile_path)
-    code, timed_out, survivors = confined.execute(argv, checkout, env, timeout, log)
+    with mask_recheck.guard(backend, profile) if profile is not None else nullcontext():
+        code, timed_out, survivors = confined.execute(argv, checkout, env, timeout, log)
     return _observation(_read_result(result), code, timed_out, survivors)
 
 

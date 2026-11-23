@@ -21,7 +21,7 @@ from typing import Any
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from cairnwork_attest.bundle import BundleError, read_bundle
+from cairnwork_attest.bundle import BundleError, parse_bundle, read_bundle, read_bundle_bytes
 from cairnwork_attest.checkrun import _SLUG, TOKEN_ENV, post_check_run
 from cairnwork_attest.dsse import sign_statement
 from cairnwork_attest.keys import load_private_key, public_key_pem
@@ -157,13 +157,29 @@ def _statement_step(args: argparse.Namespace, bundle: Path, pubkey: Path) -> _St
     return _Step("statement", "OK")
 
 
-def _publish_step(args: argparse.Namespace, bundle: Path) -> _Step:
+def _publish_step(args: argparse.Namespace, bundle: Path, pubkey: Path) -> _Step:
+    """Read the bundle once, check its signature on those bytes, publish those same bytes (#458:
+    a file swapped after the statement step is never published)."""
+    try:
+        raw = read_bundle_bytes(bundle)
+        refused = verify_bundle(
+            bundle,
+            public_key_pem=pubkey,
+            repo=Path(args.repo),
+            expected_candidate=args.candidate,
+            envelope=parse_bundle(raw),
+        )
+    except AttestError as exc:
+        return _Step("publish", exc.code, exc.message)
+    if not refused.ok:
+        return _Step("publish", refused.code, refused.detail)
     result = publish_bundle(
         bundle=bundle,
         repo=Path(args.repo),
         candidate=args.candidate,
         remote=args.remote,
         notes_ref=args.notes_ref,
+        verified=raw,
     )
     return _Step("publish", result.code, result.detail)
 
@@ -192,7 +208,7 @@ def _guarded(name: str, step: Callable[[], _Step]) -> _Step:
 def _run_steps(args: argparse.Namespace, bundle: Path, pubkey: Path) -> list[_Step]:
     steps = [_guarded("statement", lambda: _statement_step(args, bundle, pubkey))]
     if steps[-1].code == "OK":
-        steps.append(_guarded("publish", lambda: _publish_step(args, bundle)))
+        steps.append(_guarded("publish", lambda: _publish_step(args, bundle, pubkey)))
     if steps[-1].step == "publish" and steps[-1].code in _PUBLISH_OK:
         if args.no_check_run:
             steps.append(_Step("check_run", "SKIPPED", _NO_CHECK_RUN))
