@@ -36,7 +36,20 @@ HOOK = {  # hidden from the announced run by its flag and from the quiet run by 
     f"class Hid(TC):\n    __test__ = not ({SEEN} or [n for n in dir({GUARD}) if 'loop' in n])\n"
     + BODY,
 }
+SCOPE = (  # review of #1698: a dynamic fixture scope is called with the config at registration
+    "import pytest\nSEEN = []\n"
+    "def _scope(*, fixture_name, config):\n"
+    "    g = getattr(config, 'plugin' + 'manager').get_plugin('cairnwork_report_guard')\n"
+    "    flags = [k for k, v in vars(g).items() if v is True]\n"
+    "    SEEN.append(bool(getattr(g, '_quiet', False) or flags))\n"
+    "    return 'function'\n"
+    "@pytest.fixture(scope=_scope)\ndef f():\n    pass\n"
+    "class Lazy:\n    def __iter__(self):\n"
+    "        return iter([1] if SEEN and SEEN[0] else [1, 2])\n"
+    "@pytest.mark.parametrize('v', Lazy())\ndef test_a(v):\n    assert '" + MARK + "'\n"
+)
 RIGHT = {
+    "plugin-state-read-by-dynamic-scope": SCOPE,
     "plain-class": "class TestHid:\n" + BODY,
     "argv-read-not-used": "import sys\nclass TestHid:\n    n = len(sys.argv)\n" + BODY,
 }
