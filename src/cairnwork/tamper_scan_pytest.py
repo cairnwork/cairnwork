@@ -76,7 +76,10 @@ _ASSIGN = r"(?:[-+*/%&|^@]|//|\*\*|<<|>>)?=(?!=)"  # ``=``, ``+=``, ``>>=``; not
 # call or subscript ("(" or "[" after a name or closer), so a keyword argument is no target.
 _TARGET = r"(?:(?![\w.)\]]\s*[(\[])[\w\s.,*()\[\]])"
 _FOR_TARGET = rf"(?:(?!\bin\b){_TARGET})"  # a ``for`` target ends at ``in``
-_START = r"(?:^|[;:])\s*"  # where a statement starts on the line
+# Where a statement starts on the line. The blanks are possessive (#587): the rule reads on from
+# the first non-blank, as the target run holds blanks itself, so a long run of blanks is read
+# once, not once per way of splitting it.
+_START = r"(?:^|[;:])\s*+"
 _KEYWORD = r"(?<![^\W\d])"  # a keyword may follow a digit or bracket directly ("0for", ")as(")
 # An annotated target and its colon. An annotation run stops where another one starts, which then
 # reads on from there itself: the same matches, but each part of a long line is read once.
@@ -105,7 +108,7 @@ PYTEST_PUBLIC_PATCH = (
     # mock's patch, patch.object and patch.multiple, which set the attribute for the caller, and
     # setattr/delattr (monkeypatch's too) on the class or a "pytest.TestReport.x" string target
     rf"|{_PATCH_TARGET}{_OBJECT}"
-    rf"|\bdel\b[^#;]*{_OBJECT}\s*\."
+    rf"|\bdel\b(?:(?!\bdel\b)[^#;])*{_OBJECT}\s*\."
     r"|\bfrom_item_and_call\b"
 )
 
