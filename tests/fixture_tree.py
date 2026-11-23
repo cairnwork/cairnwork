@@ -1,20 +1,24 @@
-"""Host-side fixture trees for the bwrap credential-mask tests, kept off /tmp and /run (#391).
+"""Host-side fixture trees for the bwrap credential-mask tests, kept off the private trees (#391).
 
 A Linux run is to see /tmp and /run as private, empty trees. A canary under pytest's ``tmp_path``
 (under /tmp on Linux) would then be absent inside the run, and a mask witness that skips an
-unreadable path would pass without testing anything. These trees live under /var/tmp instead:
-outside both trees, and world-traversable (1777) on Linux and macOS, so the account-path
-reachability walk (which runs from ``/``) can pass too. A real-run witness also puts a plain
+unreadable path would pass without testing anything. These trees live outside the private trees
+instead (/var/tmp, or /var/lib on Linux since /var/tmp is private too, #471 step 2b), and are
+world-traversable (1777), so the account-path reachability walk (which runs from ``/``) can pass
+too. A real-run witness also puts a plain
 control file beside its canaries (``reach_env``), which must stay readable inside the run.
 """
 
 import contextlib
 import os
 import shutil
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
 BASE = "/var/tmp"  # noqa: S108 - a fresh mkdtemp directory per test, removed afterwards
+LINUX_BASE = "/var/lib/cw-fixtures"  # /var/tmp is a private tree on Linux too since #471 step 2b
 REACH = "CW-REACH-OK\n"
 # Candidate-side check, pasted into a witness's test function body: every control file listed in
 # CW_REACH must be readable with its text, so a fixture the run cannot see fails the witness.
@@ -26,11 +30,24 @@ REACH_CHECK = (
 )
 
 
+def _base() -> str:
+    """Linux: a 1777 directory outside the private trees (made with sudo); else BASE."""
+    if sys.platform != "linux":
+        return BASE
+    made = subprocess.run(  # noqa: S603
+        ["sudo", "-n", "install", "-d", "-m", "1777", LINUX_BASE],  # noqa: S607
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    return LINUX_BASE if made.returncode == 0 else BASE
+
+
 @contextlib.contextmanager
 def world_dir(prefix: str):
     """A fresh 0755 directory under ``BASE``, removed afterwards (0700 subdirs reopened first; a
     link to a directory is not followed, so its target's mode is left alone)."""
-    base = Path(tempfile.mkdtemp(dir=BASE, prefix=prefix))
+    base = Path(tempfile.mkdtemp(dir=_base(), prefix=prefix))
     os.chmod(base, 0o755)
     try:
         yield base

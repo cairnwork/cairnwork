@@ -263,11 +263,11 @@ def test_dangerous_sockets_cover_the_root_equivalent_services():
     assert required <= set(_REAL_DANGEROUS_SOCKETS)
 
 
-def test_tmp_is_a_private_tree_too():
+def test_tmp_and_var_tmp_are_private_trees_too():
     # /tmp holds the users' own sockets (ssh-agent, tmux, X11 under /tmp/.X11-unix): private like
     # /run, the X11 tree with it (#391). The only tree a run's roots may sit in.
-    assert bwrap_private.TREES == ("/run", "/var/run", "/tmp")
-    assert bwrap_private.HOLDS_ROOTS == "/tmp"
+    assert bwrap_private.TREES == ("/run", "/var/run", "/tmp", "/var/tmp")
+    assert bwrap_private.HOLDS_ROOTS == ("/tmp", "/var/tmp")
 
 
 def test_socket_dirs_absent_add_no_tmpfs(tmp_path, monkeypatch):
@@ -287,7 +287,8 @@ def test_absent_credentials_are_not_masked(tmp_path, monkeypatch):
     monkeypatch.setattr(shm, "supports_tmpfs_size", lambda binary: True)
     home = _home(tmp_path)
     lines = bwrap.BACKEND.policy((), (), home=home).text.splitlines()
-    assert _tmpfs_targets(lines) == ["/dev/shm"]
+    private = bwrap_private.trees()  # the private trees (#391, #471) are tmpfs too
+    assert [t for t in _tmpfs_targets(lines) if t not in private] == ["/dev/shm"]
     assert f"{home.resolve()}/.netrc" not in lines
 
 

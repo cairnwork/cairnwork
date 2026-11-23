@@ -10,6 +10,7 @@ one); any fault, an account run, a conftest-free test commit or no base target g
 
 from __future__ import annotations
 
+import logging
 import subprocess
 from pathlib import Path
 
@@ -18,6 +19,8 @@ from cairnwork.verifier_spec import VerifierSpec
 from cairnwork.verifiers import run_verifiers
 
 MAX_TARGETS = 20
+LOG = logging.getLogger(__name__)
+LOUD = ("RUN_FAULT", "RUN_COUNT", "NO_NAMES_RECORDED")  # attempted, gave nothing
 
 
 def _on_base(repo: Path, base: str, path: str) -> bool:
@@ -36,10 +39,26 @@ def check_with_base(ctx, task, paths: tuple[str, ...], run_id: str) -> None:
 
 
 def collect(ctx, task, paths: tuple[str, ...], run_id: str):
-    """The names the base run recorded, or None."""
+    """The names the base run recorded, or None; a None is logged with its reason code."""
+    names, reason = probe(ctx, task, paths, run_id)
+    if names is None:
+        level = logging.WARNING if reason in LOUD else logging.INFO
+        try:
+            LOG.log(level, "base fixture names not used (%s): the #916 rule stands alone", reason)
+        except Exception:  # noqa: BLE001, S110 - a failing log handler must not change the verdict
+            pass
+    return names
+
+
+def probe(ctx, task, paths: tuple[str, ...], run_id: str):
+    """(names, reason): the names the base run recorded and "OK", or (None, a reason code):
+    ACCOUNT_RUN, NO_CONFTEST_CHANGE, NO_BASE_TARGET (not attempted), RUN_FAULT,
+    RUN_COUNT or NO_NAMES_RECORDED (attempted, nothing usable). Diagnostics only."""
     conftests = conftest_of(paths)
-    if ctx.account is not None or not conftests:
-        return None
+    if ctx.account is not None:
+        return None, "ACCOUNT_RUN"
+    if not conftests:
+        return None, "NO_CONFTEST_CHANGE"
     try:
         targets = tuple(
             p
@@ -47,9 +66,12 @@ def collect(ctx, task, paths: tuple[str, ...], run_id: str):
             if p.endswith(".py") and p not in conftests and _on_base(task.repo, task.base_commit, p)
         )[:MAX_TARGETS]
         if not targets:
-            return None
+            return None, "NO_BASE_TARGET"
         spec = VerifierSpec("fixture-names", targets, collect_only=True, record_fixtures=True)
         runs = run_verifiers(ctx, task.base_commit, (spec,), run_id)
-        return runs[0].fixture_names if len(runs) == 1 else None
+        if len(runs) != 1:
+            return None, "RUN_COUNT"
+        names = runs[0].fixture_names
+        return (names, "OK") if names is not None else (None, "NO_NAMES_RECORDED")
     except Exception:  # noqa: BLE001 - any fault means no names (the #916 rule)
-        return None
+        return None, "RUN_FAULT"  # never read the exception: the candidate shapes its name

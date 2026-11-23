@@ -23,3 +23,14 @@ _SYS_MODULES_STUB = (
     rf"|sys\s*\.\s*modules\s*\.\s*pop\s*\(\s*{_STUB_NAME}\s*(?:,\s*None\s*)?\)"
     rf"|sys\s*\.\s*modules\s*\.\s*setdefault\s*\(\s*{_STUB_NAME}\s*,{_STUB_RHS}\))\s*(?:#.*)?$"
 )
+
+# Runs that read on from a statement's start to what they look for. A run stops where the same
+# start comes again: that later start finds whatever this one would, so the verdict is the same,
+# but a long line of repeated starts is read once, not once per start (#587).
+_FROM_OS = r"\bfrom\s+(?:os|posix|nt)\s+import\b"
+_FROM_GC = r"\bfrom\s+gc\s+import\b"
+_GC_NAME = r"(?:get_objects|get_referrers|get_referents)\b"
+OS_EXIT = rf"\b(?:os|posix|nt)\s*\.\s*_exit\b|{_FROM_OS}(?:(?!{_FROM_OS})[^#\n])*\b_exit\b"
+GC_WALK = rf"\bgc\s*\.\s*{_GC_NAME}|{_FROM_GC}(?:(?!{_FROM_GC})[^#\n])*\b{_GC_NAME}"
+MODULES_ITEM = r"\bsys\s*\.\s*modules\s*\[(?!\s*__name__\s*\])"
+MODULES_UPDATE = r"(?:\.\s*(?:update|__ior__)\s*\(|\|=)"
