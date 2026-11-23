@@ -31,6 +31,13 @@ class MaskChanged(SandboxError):
     code = "CREDENTIAL_MASK_CHANGED"
 
 
+class PolicyChanged(MaskChanged):
+    """The rebuilt policy differs only outside the mask list (tree links, reach): the masks held,
+    but the run is still not counted. A MaskChanged, so every caller treats it the same way."""
+
+    code = "SANDBOX_POLICY_CHANGED"
+
+
 def mask_paths(text: str) -> list[str]:
     """The paths the policy masks: the line after ``--tmpfs``, and the second line after
     ``--ro-bind`` when that is followed by ``/dev/null``."""
@@ -111,16 +118,18 @@ def _identity_changes(held: _Held) -> list[str]:
 def _verify(backend: Any, policy: Policy, held: _Held) -> None:
     """Raise MaskChanged when the masks differ now; any error while checking counts as a change."""
     names: dict[str, str] = {}
+    outside = False
     try:
         names = _home_names(backend, policy)
         changed = _identity_changes(held)
         if not changed:
             rebuilt = backend.policy(*policy.inputs)  # type: ignore[misc]
             if rebuilt.text != policy.text:
-                old, new = set(mask_paths(policy.text)), set(mask_paths(rebuilt.text))
-                changed = sorted(old ^ new)
-                if not changed:  # a difference outside the mask list (tree links, reach)
-                    changed = ["a credential mask"]
+                old, new = mask_paths(policy.text), mask_paths(rebuilt.text)
+                if old != new:  # the mask list or its order (a later mount overrides an earlier)
+                    changed = sorted(set(old) ^ set(new)) or ["a credential mask"]
+                else:  # same masks, same order: a difference elsewhere (tree links, reach)
+                    outside = True
     except (OSError, SandboxError, ValueError) as exc:
         if isinstance(exc, MaskChanged):
             raise
@@ -130,6 +139,11 @@ def _verify(backend: Any, policy: Policy, held: _Held) -> None:
         ) from exc
     if changed:
         raise MaskChanged(_changed_message(changed, names))
+    if outside:
+        raise PolicyChanged(
+            "a part of the sandbox policy other than the credential masks changed during the run "
+            "(the masks held); the run is not counted and a retry is safe (docs/SECURITY.md)"
+        )
 
 
 @contextmanager

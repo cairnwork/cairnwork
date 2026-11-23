@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import cairnwork_sandbox
-from cairnwork import confined, pytest_config
+from cairnwork import confined, mask_recheck, pytest_config
 from cairnwork.confined import RUN_TOKEN_VAR
 from experimental.oracle_observer import FAIL, MISMATCH, NO_OUTPUT, OUTPUT_INVALID, PASS
 from experimental.oracle_observer.comparator import MAX_BYTES, Invalid, matches, parse_document
@@ -117,9 +117,10 @@ def run_probe(
     profile_path = supervisor / "profile.sb"
     profile_path.write_bytes(profile.text.encode())
     log = run_dir / "probe.log"
-    code, timed_out, survivors = confined.execute(
-        backend.wrap(argv, profile_path), checkout, env, timeout, log
-    )
+    with mask_recheck.guard(backend, profile):  # #353, #1681: a run whose masks moved is void
+        code, timed_out, survivors = confined.execute(
+            backend.wrap(argv, profile_path), checkout, env, timeout, log
+        )
     nonce_file.unlink(missing_ok=True)
     text = log.read_text(errors="replace") if log.exists() else ""
     return ProbeRun(
