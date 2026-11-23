@@ -111,25 +111,26 @@ def test_reusing_an_existing_bundle_checks_it_with_the_loaded_key(
 def test_check_run_given_a_loaded_key_uses_exactly_that_key(
     env: Env, http: FakeHttp, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A key object is the only key: a wrong one refuses, the right one verifies (no file read)."""
+    """A key object is the only key: a wrong one is refused, the right one verifies, and no
+    key file is read at all."""
     assert _run(capsys, env.argv("--no-check-run"))[0] == 0
     right = load_private_key(env.state).public_key()
-    seen: list[Any] = []
-    real = checkrun._verify_loaded
-    monkeypatch.setattr(
-        checkrun, "_verify_loaded", lambda *a, **k: seen.append(k["public_key"]) or real(*a, **k)
-    )
-    for key in (Ed25519PrivateKey.generate().public_key(), right):
-        http.calls.clear()
+    wrong = Ed25519PrivateKey.generate().public_key()
+    reads: list[Path] = []
+    real_read = Path.read_bytes
+
+    def no_pem(self: Path) -> bytes:
+        if self.suffix == ".pem":
+            reads.append(self)
+        return real_read(self)
+
+    monkeypatch.setattr(Path, "read_bytes", no_pem)
+    bodies: list[str] = []
+    for key in (wrong, right):
         checkrun.post_check_run(
-            env.bundle,
-            checkrun.SLUG_FOR_TESTS if False else "o/r",
-            public_key=key,
-            repo=env.repo,
-            token=TOKEN,
-            http=http,
+            env.bundle, "octo/repo", public_key=key, repo=env.repo, token=TOKEN, http=http
         )
-        summaries.append(str(http.calls)) if (
-            summaries := locals().get("summaries")
-        ) is not None else None
-    assert seen[0] is not right and seen[1] is right
+        bodies.append(http.calls[-1][3].decode())
+    assert "SIGNATURE_INVALID" in bodies[0] and "VERIFIED" not in bodies[0]
+    assert "VERIFIED" in bodies[1] and "SIGNATURE_INVALID" not in bodies[1]
+    assert reads == []
