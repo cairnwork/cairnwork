@@ -339,7 +339,7 @@ def test_a_base_conftest_that_imports_a_changed_module_is_refused(project, tmp_p
                  p2p_mode="whole-suite", p2p_budget=300, verifiers=NAMES_HELPER)  # fmt: skip
     if imported:
         assert result.status == "FAILED", result.reason
-        assert "TEST_COMMIT_CONFTEST_STATIC" in result.reason and "colorsys" in result.reason
+        assert "CONFTEST_STATIC: 1 refusal (detail withheld)" in result.reason, result.reason
     else:
         assert result.status == "COMPLETED", result.reason
 
@@ -357,7 +357,7 @@ def test_a_conftest_import_through_the_base_pythonpath_is_refused(project, tmp_p
                  p2p_mode="whole-suite", p2p_budget=300)  # fmt: skip
     assert result.status == "FAILED", result.reason
     assert "TEST_COMMIT_CONFTEST_STATIC" in result.reason
-    assert "tests/support/helper.py" in result.reason
+    assert "helper" not in result.reason and "detail withheld" in result.reason
 
 
 def test_a_base_conftest_that_puts_a_directory_on_the_path_is_refused(project, tmp_path):
@@ -373,7 +373,7 @@ def test_a_base_conftest_that_puts_a_directory_on_the_path_is_refused(project, t
     result = run(project, tmp_path, base, tests, SeeingWorker(BREAKS_BASE), key="k1",
                  p2p_mode="whole-suite", p2p_budget=300)  # fmt: skip
     assert result.status == "FAILED", result.reason
-    assert "TEST_COMMIT_CONFTEST_STATIC" in result.reason and "lib/helper.py" in result.reason
+    assert "CONFTEST_STATIC: 1 refusal (detail withheld)" in result.reason, result.reason
 
 
 def test_a_path_that_is_not_utf8_does_not_fail_the_check(project, monkeypatch):
