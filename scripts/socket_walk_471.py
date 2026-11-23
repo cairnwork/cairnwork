@@ -54,22 +54,36 @@ def _priority_paths() -> set[str]:
     return paths
 
 
+def _exists_or_unknown(path: str) -> bool:
+    """False only when the path is certainly absent (ENOENT/ENOTDIR); a link counts as existing."""
+    try:
+        os.lstat(path)
+    except OSError as exc:
+        return exc.errno not in (errno.ENOENT, errno.ENOTDIR)
+    return True
+
+
 def _priority_complete(failed: list[str], entered: set[str]) -> bool:
-    """True when every existing priority root was entered and nothing failed inside one.
+    """True when every existing priority root was entered and nothing failed in or above one.
 
     `failed` holds the paths of directories that could not be listed and files whose lstat failed
-    for any reason but "gone". Only a failure inside a priority root withholds the mark; a failure
-    elsewhere (a root-only directory under /etc, say) stays in the report but cannot hide the
-    priority trees. A root that exists but was never entered (a symlink is not followed) also
-    withholds it.
+    for any reason but "gone". A failure inside a priority root, or on a directory above one (the
+    root may then be unreachable), withholds the mark; a failure elsewhere (a root-only directory
+    under /etc, say) stays in the report but cannot hide the priority trees. A root that exists
+    or cannot be told apart from existing, yet was never entered (a symlink is not followed),
+    also withholds it.
     """
     roots = _priority_paths()
     for path in failed:
-        if any(path == root or path.startswith(root.rstrip("/") + "/") for root in roots):
+        base = path.rstrip("/")
+        if any(
+            path == r or path.startswith(r.rstrip("/") + "/") or r.startswith(base + "/")
+            for r in roots
+        ):
             return False
     for root in PRIORITY_ROOTS:
         root = os.path.normpath(os.path.expanduser(root))
-        if os.path.lexists(root) and not {root, os.path.realpath(root)} & entered:
+        if _exists_or_unknown(root) and not {root, os.path.realpath(root)} & entered:
             return False
     return True
 

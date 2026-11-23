@@ -535,3 +535,38 @@ def test_a_stat_failure_outside_the_priority_trees_keeps_the_marker(monkeypatch)
     monkeypatch.setattr(walk.os, "lstat", denied)
     report = walk.collect()
     assert walk.PRIORITY_DONE in report and report["usr-and-other-system|-|unstatable"] == 1
+
+
+def test_a_failure_on_a_directory_above_a_priority_root_withholds_the_marker(
+    monkeypatch, short_tmp
+):
+    root = str(short_tmp / "a" / "root")
+    report = _marker_for(monkeypatch, (root,), [str(short_tmp / "a")], [str(short_tmp)])
+    assert walk.PRIORITY_DONE not in report
+
+
+def test_a_failure_under_the_resolved_form_of_a_symlinked_root_withholds_the_marker(
+    monkeypatch, short_tmp
+):
+    real = short_tmp / "real"
+    real.mkdir()
+    link = short_tmp / "link"
+    link.symlink_to(real)
+    report = _marker_for(
+        monkeypatch, (str(link),), [str(real.resolve() / "sub")], [str(real.resolve())]
+    )
+    assert walk.PRIORITY_DONE not in report
+
+
+def test_a_root_whose_lstat_is_denied_is_not_treated_as_absent(monkeypatch, short_tmp):
+    root = str(short_tmp / "hidden")
+    real_lstat = os.lstat
+
+    def denied(path, *a, **k):
+        if str(path) == root:
+            raise PermissionError(13, "denied")
+        return real_lstat(path, *a, **k)
+
+    monkeypatch.setattr(walk.os, "lstat", denied)
+    report = _marker_for(monkeypatch, (root,), [], [str(short_tmp)])
+    assert walk.PRIORITY_DONE not in report
