@@ -21,8 +21,8 @@ def test_git_reads_are_bounded_as_file_count_grows(repo, monkeypatch):
     monkeypatch.setattr(git_read_cap, "run_git_bytes", counted)
     candidate_shadow.find_shadow_file(repo, cand, changed={})
     assert calls.count("ls-tree") == 1
-    assert calls.count("cat-file") == 1
-    assert len(calls) == 2
+    assert calls.count("cat-file") == 2  # one size check, then one batch read (#1515)
+    assert len(calls) == 3  # still constant as the file count grows
 
 
 def test_unchanged_syntaxwarning_is_suppressed(repo):

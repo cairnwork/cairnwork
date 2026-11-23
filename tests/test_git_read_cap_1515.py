@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,6 +12,7 @@ import pytest
 import cairnwork.git_read_cap as cap
 from cairnwork import candidate_env, candidate_shadow, candidate_sys_path, tamper_scan_plugin
 from cairnwork.gitcmd import GitCommandError
+from cairnwork.tamper_scan_budget import ScanBudget
 
 SMALL_CAP = 4096
 
@@ -85,18 +87,59 @@ def test_tamper_scan_plugin_batch_read_is_capped(repo):
         tamper_scan_plugin._batch(repo, [big])
 
 
-def test_candidate_env_reads_the_test_source_through_the_cap(repo, monkeypatch):
+def test_shadow_scan_of_sources_summing_past_the_cap_is_not_refused(repo, monkeypatch):
+    for n in range(40):
+        (repo / "pkg" / f"m{n}.py").write_text(f"v{n} = {n}\n" + "#" * 150 + "\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "many")
     commit = _git(repo, "rev-parse", "HEAD")
-    seen: list[tuple[str, ...]] = []
-    real = candidate_env.read_git_bytes
+    monkeypatch.setattr(cap, "MAX_GIT_READ", 4000)  # each blob fits; all 40 together do not
+    (repo / "pkg" / "big.py").unlink()
+    _git(repo, "commit", "-q", "-am", "drop big")
+    commit = _git(repo, "rev-parse", "HEAD")
+    assert candidate_shadow.find_shadow_file(repo, commit, changed={"pkg/m1.py": "MODIFY"}) is None
 
-    def spy(r, *args, **kwargs):
-        seen.append(args)
-        return real(r, *args, **kwargs)
 
-    monkeypatch.setattr(candidate_env, "read_git_bytes", spy)
+def test_shadow_scan_refuses_one_source_blob_past_the_cap(repo):
+    commit = _git(repo, "rev-parse", "HEAD")  # pkg/big.py is over the cap
+    with pytest.raises(GitCommandError):
+        candidate_shadow.find_shadow_file(repo, commit, changed={"pkg/small.py": "MODIFY"})
+
+
+def test_candidate_env_refuses_an_oversized_control_source(repo, monkeypatch):
+    monkeypatch.setattr(cap, "MAX_GIT_READ", 1 << 20)
+    body = "open('/etc/denied', 'w')\n" + "#" * 6000 + "\n"
+    (repo / "pkg" / "test_x.py").write_text(body)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "t")
+    commit = _git(repo, "rev-parse", "HEAD")
     task = SimpleNamespace(repo=repo, allowed_files=(), test_roots=("pkg/",))
-    assert candidate_env._literal_test_writer(task, commit, ("/x", "pkg/small.py", 1)) is False
-    assert seen and seen[0][0] == "show"
-    with pytest.raises(GitCommandError):  # the same read, over the cap, is refused by the helper
-        cap.read_git_bytes(repo, "show", f"{commit}:pkg/big.py")
+    record = ("/etc/denied", "pkg/test_x.py", 1)
+    assert candidate_env._literal_test_writer(task, commit, record) is True  # control: readable
+    monkeypatch.setattr(cap, "MAX_GIT_READ", SMALL_CAP)
+    assert candidate_env._literal_test_writer(task, commit, record) is False
+
+
+def test_file_rules_diff_listing_is_capped(repo, monkeypatch):
+    base = _git(repo, "rev-parse", "HEAD")
+    for n in range(30):
+        (repo / f"{'d' * 60}{n}.txt").write_text("x\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "names")
+    head = _git(repo, "rev-parse", "HEAD")
+    monkeypatch.setattr(cap, "MAX_GIT_READ", 1 << 20)
+    tamper_scan_plugin.file_rules(
+        repo, base, head, ScanBudget(), python=sys.executable
+    )  # control: the listing reads fine
+    monkeypatch.setattr(cap, "MAX_GIT_READ", 1000)
+    with pytest.raises(GitCommandError):
+        tamper_scan_plugin.file_rules(repo, base, head, ScanBudget(), python=sys.executable)
+
+
+def test_sys_path_base_side_read_is_capped(repo):
+    base = _git(repo, "rev-parse", "HEAD")  # pkg/big.py is over the cap in the base
+    (repo / "pkg" / "big.py").write_text("y = 1\n")
+    _git(repo, "commit", "-q", "-am", "shrink")
+    head = _git(repo, "rev-parse", "HEAD")
+    with pytest.raises(GitCommandError):
+        candidate_sys_path._blob_signal(repo, base, head, "pkg/big.py", {"pkg/big.py": "MODIFY"})
