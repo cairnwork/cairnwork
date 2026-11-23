@@ -42,6 +42,20 @@ def _reach(text):
         ),
         pytest.param("pytest_plugins.append(f())\n", id="method_call_arg"),
         pytest.param(
+            "import builtins\nbuiltins.list = lambda x: ['evil']\n"
+            "pytest_plugins = list(['safe'])\n",
+            id="builtin_via_builtins_module",
+        ),
+        pytest.param(
+            "import builtins\nsetattr(builtins, 'list', lambda x: ['evil'])\n"
+            "pytest_plugins = list(['safe'])\n",
+            id="builtin_via_setattr",
+        ),
+        pytest.param(
+            "globals()['list'] = lambda x: ['evil']\npytest_plugins = list(['safe'])\n",
+            id="builtin_via_globals",
+        ),
+        pytest.param(
             "def f():\n    global list\n    list = lambda x: ['evil']\nf()\n"
             "pytest_plugins = list(['safe'])\n",
             id="builtin_global_in_def",

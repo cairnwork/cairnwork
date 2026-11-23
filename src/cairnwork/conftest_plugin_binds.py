@@ -12,6 +12,9 @@ import ast
 from collections.abc import Sequence
 
 _NAME = "pytest_plugins"
+_DYNAMIC = frozenset(
+    {"builtins", "__builtins__", "globals", "vars", "setattr", "eval", "exec", "__import__"}
+)
 _BUILTINS = frozenset({"list", "tuple", "set", "frozenset", "sorted", "str"})
 
 
@@ -61,6 +64,8 @@ def _bound(tree: ast.Module) -> set[str]:
     class or lambda is local and does not count,
     unless a ``global`` statement at any depth names it."""
     out: set[str] = {x for n in ast.walk(tree) if isinstance(n, ast.Global) for x in n.names}
+    if _dynamic(tree):
+        return out | _BUILTINS
     todo: list[ast.AST] = [tree]
     while todo:
         n = todo.pop()
@@ -75,6 +80,19 @@ def _bound(tree: ast.Module) -> set[str]:
                 out.add(n.asname or n.name.split(".")[0])
             todo += ast.iter_child_nodes(n)
     return out
+
+
+def _dynamic(tree: ast.Module) -> bool:
+    """The module names a way to rebind a builtin at run time (``builtins.list = ...``,
+    ``setattr(builtins, ...)``, ``globals()['list'] = ...``): no conversion is trusted then."""
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Name) and n.id in _DYNAMIC:
+            return True
+        if isinstance(n, ast.Attribute) and n.attr in _DYNAMIC:
+            return True
+        if isinstance(n, ast.alias) and n.name.split(".")[0] in _DYNAMIC:
+            return True
+    return False
 
 
 def _opaque(value: ast.AST) -> bool:
