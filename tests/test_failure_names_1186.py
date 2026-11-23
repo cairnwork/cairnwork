@@ -149,3 +149,28 @@ def test_denied_path_is_named_for_visible_runs_and_withheld_for_hidden_ones():
     assert "/private/CANARY-path" in visible and "EPERM" in visible
     hidden = why_not_passed(**args, hidden_tests=True)
     assert "CANARY" not in hidden and "1 denied path (withheld)" in hidden
+
+
+class TestOverlayNeverReachesTheAssertionPath:
+    """format_failure: any overlay file means counts only, whichever node failed (#1186 R2)."""
+
+    NODES = {"tests/test_visible.py::test_v": "failed", "tests/test_secret.py::test_s": "failed"}
+    ASSERTIONS = {n: "E assert x == 'CANARY-assert'" for n in NODES}
+
+    def _call(self, overlay, outcomes):
+        from cairnwork.verifier_failure_summary import format_failure
+
+        return format_failure("w", outcomes, None, overlay, self.ASSERTIONS)
+
+    def test_overlay_with_failures_in_other_files_adds_no_assertion_text(self):
+        only_visible = {"tests/test_visible.py::test_v": "failed"}
+        assert self._call(("tests/test_secret.py",), only_visible) == "w"
+        both = self._call(("tests/test_secret.py",), self.NODES)
+        assert both == "w; deferred: 1 failed" and "CANARY" not in both
+
+    def test_a_data_only_overlay_still_withholds_every_assertion(self):
+        out = self._call(("data/fixture.json",), self.NODES)
+        assert out == "w" and "CANARY" not in out
+
+    def test_no_overlay_file_means_no_hidden_test_and_the_visible_summary_is_kept(self):
+        assert "CANARY-assert" in self._call((), self.NODES)
