@@ -287,7 +287,7 @@ def pytest_runtestloop(session):
 """
 
 
-def install_plugin(directory: Path, data_paths=(), quiet: bool = False) -> None:
+def install_plugin(directory: Path, data_paths=(), *, quiet: bool = False) -> None:
     """Write the standalone plugin into directory (which must be on the run's PYTHONPATH and a
     sandbox read root, and must not be writable by the candidate). The bytecode hook comes first
     (bytecode_hook.py): installed and probed before the plugin reads its hand-over, so a run
