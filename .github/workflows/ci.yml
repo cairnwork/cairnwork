@@ -24,15 +24,23 @@ concurrency:
 
 jobs:
   test:
-    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    if: github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 60  # a hung job must not hold a runner for the 6 h GitHub default (#1499)
+    # Issue #1696: a pull request runs the whole suite on the minimum Python (3.11) only; the other
+    # two legs keep their names (test (3.12), test (3.13): required checks, no ruleset change) and
+    # pass at once. A push to main, the nightly and a manual run on main run all three versions;
+    # a red one opens or updates an Issue (linux-nightly-report).
+    env:
+      FULL_SUITE: ${{ matrix.python-version == '3.11' || github.event_name != 'pull_request' }}
     strategy:
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        if: env.FULL_SUITE == 'true'
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        if: env.FULL_SUITE == 'true'
         with:
           python-version: ${{ matrix.python-version }}
           enable-cache: false
@@ -40,6 +48,7 @@ jobs:
       # scripts/*), from a venv synced from the BASE sha's uv.lock and pyproject.toml without the
       # project, in a directory outside the checkout. The gate checks that venv against that lock.
       - name: Trusted #1353 gate venv from the base lock
+        if: env.FULL_SUITE == 'true'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
           BASE_REF: ${{ github.base_ref }}
@@ -50,7 +59,7 @@ jobs:
           # so only main's lock is trusted. The private, empty uv cache keeps a cache that an
           # earlier run's PR code could have written out of the trusted venv.
           case "$EVENT:$BASE_REF:$GITHUB_REF" in
-            pull_request:main:* | push::refs/heads/main) ;;
+            pull_request:main:* | push::refs/heads/main | schedule::refs/heads/main | workflow_dispatch::refs/heads/main) ;;
             *) echo "the #1353 gate trusts only main's lock"; exit 1 ;;
           esac
           [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "base sha is not 40-hex"; exit 1; }
@@ -66,6 +75,7 @@ jobs:
           "$trusted/.venv/bin/python" -I -S -B "$GITHUB_WORKSPACE/tests/pra1353_base_record.py" \
             record "$RUNNER_TEMP/base-python.json"
       - name: Sealed #1353 witness gate
+        if: env.FULL_SUITE == 'true'
         run: |
           set -euo pipefail
           # The gate runs PR-controlled code: stop workflow commands (::, ##[) in its output.
@@ -78,13 +88,53 @@ jobs:
             "$RUNNER_TEMP/pra1353-trusted/.venv/bin/python" -I -S -B tests/pra1353_gate.py || rc=$?
           echo "::$token::"
           exit "$rc"
-      - run: uv sync --locked
-      - run: uv run ruff check .
-      - run: uv run ruff format --check .
-      - run: uv run lint-imports
-      - run: uv run python scripts/check_size.py
-      - run: uv run pytest -q --ignore=tests/test_1039_1353_witnesses.py
-      - run: git diff --check
+      - if: env.FULL_SUITE == 'true'
+        run: uv sync --locked
+      - if: env.FULL_SUITE == 'true'
+        run: uv run ruff check .
+      - if: env.FULL_SUITE == 'true'
+        run: uv run ruff format --check .
+      - if: env.FULL_SUITE == 'true'
+        run: uv run lint-imports
+      - if: env.FULL_SUITE == 'true'
+        run: uv run python scripts/check_size.py
+      - if: env.FULL_SUITE == 'true'
+        run: uv run pytest -q --ignore=tests/test_1039_1353_witnesses.py
+      - if: env.FULL_SUITE == 'true'
+        run: git diff --check
+      - name: Leg skipped on pull requests (Issue #1696)
+        if: env.FULL_SUITE != 'true'
+        run: echo "the full suite runs on Python 3.11 for pull requests; this version runs nightly"
+
+  # A red full Linux run (the nightly, or a manual run on main) opens or updates one Issue.
+  linux-nightly-report:
+    name: open or update the Linux nightly Issue
+    needs: test
+    if: ${{ always() && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')) && needs.test.result == 'failure' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Open or update the "Linux nightly failed" Issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EVENT: ${{ github.event_name }}
+          RESULT: ${{ needs.test.result }}
+        run: |
+          set -euo pipefail
+          body="$(printf 'The full Linux suite on all Python versions (%s run) finished %s.\n\nRun: %s\n' "$EVENT" "$RESULT" "$RUN_URL")"
+          n="$(gh issue list --repo "$REPO" --state open --limit 100 \
+            --search 'Linux nightly failed in:title' --json number,title \
+            --jq '[.[] | select(.title == "Linux nightly failed")][0].number // empty' || true)"
+          if [ -n "$n" ]; then
+            gh issue comment "$n" --repo "$REPO" --body "$body"
+          else
+            gh issue create --repo "$REPO" --title "Linux nightly failed" --body "$body"
+          fi
 
   # The exact-base Pyright gate runs from the default branch (pyright-trusted.yml, Issue #66):
   # a PR-owned job could be edited away, so it is not defined here.
