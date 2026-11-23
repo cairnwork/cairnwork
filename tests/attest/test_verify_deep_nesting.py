@@ -208,12 +208,25 @@ def test_any_step_that_recurses_too_deeply_refuses(tmp_path, repo, monkeypatch):
     assert "nested too deeply" in out.detail
 
 
-@pytest.mark.parametrize("error", [ValueError, KeyError, TypeError])
+@pytest.mark.parametrize(
+    "error",
+    [
+        ValueError,
+        KeyError,
+        TypeError,
+        AttributeError,
+        IndexError,
+        OSError,
+        ArithmeticError,
+        RuntimeError,  # RecursionError's own parent: a catch widened to it hides a bug too
+    ],
+)
 def test_a_step_raising_another_error_is_not_turned_into_a_refusal(
     tmp_path, repo, monkeypatch, error
 ):
     """#444 review N3, #449: the last-resort catch is for recursion only. A programmer error (a
-    ValueError, KeyError or TypeError from one step) still raises: a wider catch, even one
+    ValueError, KeyError, TypeError, AttributeError, IndexError, OSError, ArithmeticError or
+    RuntimeError from one step) still raises: a wider catch, even one
     widened to only one of them, would hide a bug as STATEMENT_SHAPE."""
     state = tmp_path / "state"
     bundle, pub, _base, candidate = setup_verified_bundle_fixture(state, repo)
