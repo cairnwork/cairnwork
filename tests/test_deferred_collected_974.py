@@ -72,14 +72,51 @@ def test_a_test_commit_run_with_no_record_is_refused_when_the_base_collected(mon
     assert err.value.code == "DEFERRED_TESTS_COLLECT_FAILED"
 
 
-def test_without_base_evidence_the_static_rule_stays(monkeypatch):
-    task = _fake(monkeypatch, None, None)  # the base run is unreadable too: environment unknown
-    _check(task, {f"{PATH}::test_x"})
+def test_a_test_commit_run_with_no_record_is_refused_even_without_base_evidence(monkeypatch):
+    task = _fake(monkeypatch, None, None)
+    with pytest.raises(Rejected) as err:
+        _check(task, {f"{PATH}::test_x"})
+    assert err.value.code == "DEFERRED_TESTS_COLLECT_FAILED"
     task = _fake(monkeypatch, None)
     monkeypatch.setattr(deferred_collected, "_exists", lambda *a: False)  # every file is new
-    _check(task, set())
+    with pytest.raises(Rejected) as err:
+        _check(task, set())
+    assert err.value.code == "DEFERRED_TESTS_COLLECT_FAILED"
+
+
+def test_an_unreadable_base_run_leaves_the_old_ids_unknown_and_the_static_rule(monkeypatch):
     task = _fake(monkeypatch, Collected((f"{PATH}::test_a",)), None)
-    _check(task, set())  # the base run failed, the test commit's did not: static rule
+    _check(task, set())
+
+
+def test_more_files_than_one_batch_are_collected_in_batches(monkeypatch):
+    names = [f"tests/test_f{i}.py" for i in range(deferred_collected.MAX_FILES + 3)]
+    calls = []
+
+    def fake(ctx, commit, files, run_id):
+        calls.append(len(files))
+        return Collected(tuple(f"{f}::test_x" for f in files))
+
+    monkeypatch.setattr(deferred_collected, "_collect", fake)
+    monkeypatch.setattr(deferred_collected, "_exists", lambda *a: False)
+    task = SimpleNamespace(test_commit="t", base_commit="b")
+    with pytest.raises(Rejected) as err:  # a file past the first batch is still checked
+        deferred_collected.check(None, task, tuple(names), set(), "r")
+    assert err.value.code == "DEFERRED_TESTS_UNREADABLE"
+    assert calls == [deferred_collected.MAX_FILES, 3]
+
+
+@sandbox
+def test_a_hidden_test_in_a_new_file_cannot_hide_behind_a_failed_collect_run(
+    project, tmp_path, monkeypatch
+):
+    def broken(*a, **k):
+        raise OSError("collect-only run failed")
+
+    monkeypatch.setattr(deferred_collected, "run_verifiers", broken)
+    result = _run(project, tmp_path, WRONG["attribute-base"])  # new file, no base evidence
+    assert result.status == "FAILED", result.reason
+    assert result.reason.startswith("DEFERRED_TESTS_COLLECT_FAILED"), result.reason
 
 
 def test_a_file_whose_collector_failed_is_unknown_not_refused(monkeypatch):
