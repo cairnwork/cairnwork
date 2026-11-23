@@ -74,3 +74,25 @@ def test_the_first_entry_with_a_code_wins_and_garbage_is_ignored():
     assert failure_evidence.headline(entries) == {"pytest_exit_code": 5, "pytest_output": None}
     assert failure_evidence.headline([None, 3]) == {"pytest_exit_code": None, "pytest_output": None}
     assert failure_evidence.headline([]) == {"pytest_exit_code": None, "pytest_output": None}
+
+
+def _entry(code, tail, withheld=False):
+    return {"returncode": code, "log_tail": tail, "log_tail_withheld": withheld}
+
+
+def test_the_first_of_two_entries_with_codes_wins():
+    entries = [_entry(3, "first"), _entry(4, "second")]
+    assert failure_evidence.headline(entries) == {"pytest_exit_code": 3, "pytest_output": "first"}
+
+
+@pytest.mark.parametrize(("width", "count"), [(300, 60), (512, 61)])
+def test_a_long_tail_is_cut_to_the_char_cap(width, count):
+    lines = [f"{n:03d}" + "x" * (width - 3) for n in range(count)]
+    got = failure_evidence.headline([_entry(1, "\n".join(lines))])["pytest_output"]
+    kept = "\n".join(lines[-failure_evidence.OUT_LINES :])
+    assert len(got) == failure_evidence.OUT_CHARS == 4096
+    assert got == kept[-4096:]  # the end of the last 60 lines, not the head
+
+
+def test_a_short_tail_comes_back_unchanged():
+    assert failure_evidence.headline([_entry(1, "a\nb")])["pytest_output"] == "a\nb"

@@ -82,7 +82,8 @@ def headline(entries) -> dict:
     """``pytest_exit_code`` and ``pytest_output`` of the first entry with an exit code (#1555):
     the verify output's top-level view of ``capture``. Record-only; never raises. The output is the
     end of the entry's already masked tail (never of a raw log), and None where the tail is
-    withheld or missing, so it follows the account and deferred-test rules above."""
+    withheld or missing, so it follows the account and deferred-test rules above. When the entries
+    come from a base run (UNCOMPARABLE, no candidate verdict), the code is that base run's."""
     try:
         for entry in entries:
             code = _exit_code(entry.get("returncode"))
