@@ -130,7 +130,7 @@ def test_a_missing_table_plugin_is_plugin_not_installed(project, state):
     code, out = run_cli(project, state, test, {"src/calc.py": FIX_DOUBLE})
     assert code == 2 and out["status"] == "UNCOMPARABLE", out
     assert out["uncomparable"]["code"] == "PLUGIN_NOT_INSTALLED"
-    assert "test_double" in out["uncomparable"]["detail"]
+    assert "for 1 test(s)" in out["uncomparable"]["detail"]  # #1186: a count
 
 
 @pytest.mark.sandbox

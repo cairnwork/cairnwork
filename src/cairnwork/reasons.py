@@ -49,13 +49,9 @@ def _kind_counts(fail_kind):
     return counts
 
 
-def _hidden_outcome_cause(outcomes):
-    failed = sum(value != "passed" for value in (outcomes or {}).values())
-    return f"pytest collected tests that did not pass ({failed} failed)"
-
-
-def _outcome_cause(outcomes) -> str:
-    """Summarize collected tests that did not pass; outcome values are untrusted text."""
+def _outcome_cause(outcomes, hidden=False) -> str:
+    """Summarize collected tests that did not pass; outcome values are untrusted text. For a
+    hidden run (#1186) only the counts per outcome."""
     failed = [(node, result) for node, result in outcomes.items() if result != "passed"]
     if not failed:
         return ""
@@ -69,6 +65,8 @@ def _outcome_cause(outcomes) -> str:
     ]
     more = len(kinds) - len(shown)
     summary = ", ".join(shown) + (f", +{more} more" if more > 0 else "")
+    if hidden:
+        return f"pytest collected tests that did not pass ({summary})"
     names = _names(node for node, _result in failed)
     return f"pytest collected tests that did not pass ({summary}: {names.split(': ', 1)[1]})"
 
@@ -164,8 +162,7 @@ def why_not_passed(
             where = "1 denied path (withheld)" if hidden_tests else _names([denied_path])[3:]
             causes.append(
                 f"the failing tests report an operation not permitted (EPERM) at"
-                f" {where}, outside the"
-                " run's write roots: unless the change"
+                f" {where}, outside the run's write roots: unless the change"
                 " raised this itself, likely the run environment, not evidence about the change"
             )
     elif ran_sandboxed and returncode == 0 and not tests_ran and not_run and not all_skipped:
@@ -173,7 +170,7 @@ def why_not_passed(
             f"pytest passed but no test ran for a target or skipped module ({names(not_run)})"
         )
     elif ran_sandboxed and returncode == 0 and not tests_ran and not renamed and not disagrees:
-        cause = _hidden_outcome_cause(outcomes) if hidden_tests else _outcome_cause(outcomes or {})
+        cause = _outcome_cause(outcomes or {}, hidden_tests)
         causes.append(
             cause
             or (

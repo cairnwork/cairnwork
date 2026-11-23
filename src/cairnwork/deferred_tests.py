@@ -207,8 +207,8 @@ def new_tests(repo: Path, base: str, test_commit: str, paths: tuple[str, ...]) -
                 if "::" in node_id and node_id.split("::", 1)[0] in uncollected:
                     raise TestCommitRejected(
                         "DEFERRED_TESTS_NOT_COLLECTED",
-                        f"{path}::{node_id}: pytest does not collect a test class with __init__"
-                        " or __new__, so no verifier runs it",
+                        "1 new test: pytest does not collect a test class with __init__"
+                        " or __new__, so no verifier runs it",  # #1186: no name
                     )
                 found.add(f"{path}::{node_id}")
     return frozenset(found)
@@ -338,10 +338,10 @@ def base_comparison(runs, targets: frozenset[str]) -> Comparison:
     record (collected and run, any outcome), or the receipt would bind tests no verifier ran
     (NOT_RUN, #660; the static target rule, ``untargeted``, cannot see what pytest collects).
     Teeth: one of them failed in the guard's record."""
+    hidden = any(getattr(run, "hidden_tests", False) for run in runs)
     problems = [(run, code) for run in runs if (code := _base_problem(run))]
     if problems:
         files = {file_part(target) for target in targets}
-        hidden = any(getattr(run, "hidden_tests", False) for run in runs)
         detail = "; ".join(
             f"{run.spec.verifier_id}: {code} (exit {run.returncode})"
             + _collection_error_detail(run, hidden)
@@ -352,7 +352,6 @@ def base_comparison(runs, targets: frozenset[str]) -> Comparison:
         )  # fmt: skip
         return Comparison("UNCOMPARABLE", problems[0][1], detail)
     if missing := not_run(runs, targets):  # #660: the receipt would bind a test that never ran
-        hidden = any(getattr(run, "hidden_tests", False) for run in runs)
         missing = str(len(missing)) if hidden else missing
         detail = f"no verifier collected or ran {missing}" + "".join(map(skip_hint, runs))
         return Comparison("NOT_RUN", "DEFERRED_TESTS_NOT_RUN", detail)

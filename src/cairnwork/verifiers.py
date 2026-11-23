@@ -316,7 +316,14 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
     clean = not (timed_out or mutated or survivors or forged or too_big or verdict.too_big)
     passed = profile is not None and returncode == 0 and clean and ran  # ran: pytest said 0 too
     plain_failure = plain_test_failure(profile is not None, returncode, clean, verdict.outcomes)
-    why = "" if passed else with_failure_detail(failure_reason(verdict, profile, ran, timed_out, mutated, survivors, too_big, returncode, forged, not_run, bool(ctx.test_commit), _denial(batch, verdict, checkout, run_dir, clean and not not_run)), ctx, spec, verdict, log_path)  # fmt: skip  # noqa: E501
+    why = ""
+    if not passed:
+        denial = _denial(batch, verdict, checkout, run_dir, clean and not not_run)
+        reason = failure_reason(
+            verdict, profile, ran, timed_out, mutated, survivors, too_big, returncode, forged,
+            not_run, bool(ctx.test_commit), denial,
+        )  # fmt: skip
+        why = with_failure_detail(reason, ctx, spec, verdict, log_path)
     digest = _record_digest(
         candidate_commit=candidate_commit,
         verifier_id=spec.verifier_id,
