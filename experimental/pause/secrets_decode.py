@@ -7,7 +7,8 @@ needs more than ``_DEPTH`` decoding layers, more than ``MAX_VIEWS`` views, a dec
 ``MAX_VIEW_CHARS`` characters, ``MAX_CHARS`` characters in all, or an encoded run (base64 or
 base32 characters without a break) longer than ``MAX_CHARS``, is refused.
 Encoded text of fewer than ``_MIN_SEGMENT`` characters is not decoded (too short to tell from
-noise). Base64 cut into pieces shorter than 16 characters is not rejoined (MIME 64/76 columns are).
+noise). Base64 cut into pieces shorter than 16 characters is not rejoined (MIME 64/76
+columns are), and only ASCII whitespace rejoins pieces.
 """
 
 from __future__ import annotations
@@ -36,7 +37,12 @@ _UNI = re.compile(
     r"(?:\\{1,2}u|%u)([0-9a-fA-F]{4})|\\{1,2}U([0-9a-fA-F]{8})|\\{1,2}x([0-9a-fA-F]{2})"
     r"|\\{1,2}u\{([0-9a-fA-F]{1,6})\}"
 )
-_TEXT = re.compile(rb"[\x20-\x7e\r\n\t]{16,}")
+# readable bytes, also with the invisible, control and full-width characters the scan removes or
+# folds (zero-width, BOM, soft hyphen, C0 controls, U+FF00-FF7F): a secret split by one still shows
+_TEXT = re.compile(
+    rb"(?:[\x20-\x7e\r\n\t]|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]|\xc2\xad|\xef\xbb\xbf"
+    rb"|\xe2\x80[\x8b-\x8f\xa8-\xae]|\xe2\x81[\xa0-\xaf]|\xef[\xbc\xbd][\x80-\xbf]){16,}"
+)
 
 
 def _codepoint(match: re.Match[str]) -> str:
@@ -51,8 +57,9 @@ class _Refuse(Exception):
 
 
 def _segments(raw: bytes) -> list[str]:
-    """The readable stretches of ``raw`` (16 or more printable ASCII bytes)."""
-    return [m.group().decode("ascii") for m in _TEXT.finditer(raw)]
+    """The readable stretches of ``raw`` (16 or more printable characters, invisible ones included;
+    the caller's scan then strips and folds them)."""
+    return [m.group().decode("utf-8") for m in _TEXT.finditer(raw)]
 
 
 def _b64_decode(run: str, offset: int) -> bytes | None:

@@ -179,3 +179,26 @@ def test_huge_encoded_run_is_refused_fast(size):
     hits = Scanner(NAMES).scan(blob)
     assert "encoded_overflow" in hits
     assert time.monotonic() - start < 3
+
+
+def _fullwidth(text):
+    return "".join(chr(ord(c) + 0xFEE0) if "!" <= c <= "~" else c for c in text)
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        KEY[:8] + "\u200b" + KEY[8:],
+        KEY[:8] + "\x01" + KEY[8:],
+        KEY[:8] + "\ufeff\u00ad" + KEY[8:],
+        _fullwidth(KEY),
+    ],
+    ids=["zero-width", "control", "bom-soft-hyphen", "full-width"],
+)
+@pytest.mark.parametrize(
+    "wrap", [lambda s: base64.b64encode(s.encode()).decode(), lambda s: s.encode().hex()]
+)
+def test_invisible_chars_inside_an_encoded_secret(key, wrap):
+    hits = Scanner(NAMES).scan(f"data {wrap(key)}")
+    assert "api_key" in hits
+    assert "encoded_overflow" not in hits
