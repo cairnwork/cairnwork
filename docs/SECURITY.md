@@ -327,6 +327,12 @@ the declaration lacks; its `assurance.blackbox_checks` is `unpinned`, so regener
 (`not_checked` means no id check ran: no policy, or no non-empty commitment pin).
 In full mode, `assurance.test_scope=signer_choice` likewise means the policy did not pin `test_roots`,
 so the receiver did not re-derive the producer's test scope.
+Compatibility (#1478, after #1375): a full-mode receiver that pins `test_roots` re-runs the producer's
+test-commit scope check, which now refuses a case-only variant of a base path or of another added path. A receipt
+signed earlier, on a case-sensitive checkout, for a test commit that carries such variants is therefore refused
+with `TEST_SOURCE_MISMATCH` (`test commit scope: TEST_COMMIT_SCOPE: ... only in case ...`). This only tightens; it
+needs no migration, since such a receipt is exactly the one the refusal exists for, and a producer re-signs after
+renaming the variant.
 What Core required is read from the contract, so both receipt versions also refuse a request whose
 contract and plan require different ids, whose plan or evidence names another contract, change set
 or plan, or whose `predicate.verifier_observations` differs from its observations
