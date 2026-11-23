@@ -141,7 +141,9 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
       creates a credential path or socket tree during a run leaves the secret readable for the
       rest of it. This is detected after the run, not prevented: the run is not counted and raises
       `CREDENTIAL_MASK_CHANGED` (a retry is safe; a base run is UNCOMPARABLE), by comparing the
-      masked objects and the policy rebuilt from the same inputs. For files this is detection
+      masked objects and the policy rebuilt from the same inputs. A rebuilt policy that differs
+      only outside the mask list (tree or `/etc` links) raises `SANDBOX_POLICY_CHANGED` instead:
+      same handling, but the masks held. For files this is detection
       only: a read already done inside the run is not undone, and a change undone before the check
       is not seen. A host tool that rewrites a masked path by replacement fails the run.
       A link found *inside* a credential directory (`~/.aws/credentials -> /srv/x/cred`, up to
