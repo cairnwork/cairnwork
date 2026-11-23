@@ -91,7 +91,7 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
   data declared: an argv entry that is a path object rather than text.
 - **Linux bubblewrap** (`src/cairnwork_sandbox/bwrap.py`): a read-only bind of the whole root,
   read-write binds for the write roots only, every namespace unshared (no network), all
-  capabilities dropped, nested user namespaces disabled. `/run`, `/tmp` (and `/var/run` where
+  capabilities dropped, nested user namespaces disabled. `/run`, `/tmp`, `/var/tmp` (and `/var/run` where
   it is its own directory, not a link to `/run`) are private to each run: an empty tmpfs, made
   read-only last, with only what a run needs put back — the trees' top-level symlinks that
   resolve inside the trees, recreated at the canonical path that was checked (a link leading
@@ -100,18 +100,18 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
   `/etc` symlink to a regular file under `/run` or `/var/run` (`/etc/resolv.conf ->
   /run/systemd/resolve/stub-resolv.conf`; under the dedicated account only one it may reach; a file
   its owner swaps between the policy build and the run start is bound as it then is; a link into
-  `/tmp` is not put back, since any local user may own and swap a file there), and the run's own
-  read and write roots under `/tmp` (production runs live under the required `--state` directory;
-  only tests put them in `/tmp`, under pytest's temp directory): a read root read-only (a read root
+  `/tmp` or `/var/tmp` is not put back, since any local user may own and swap a file there), and the
+  run's own read and write roots under `/tmp` or `/var/tmp` (production runs live under the required
+  `--state` directory; only tests put them in `/tmp`, under pytest's temp directory): a read root read-only (a read root
   absent when the policy is built is skipped), a write root writable (bwrap's `--remount-ro` does
   not recurse into a bind under the tree; Linux CI writes the run's `TMPDIR` and work directory
-  under `/tmp`) (#391, `src/cairnwork_sandbox/bwrap_private.py`). Refused (`SandboxError`): a read
+  under `/tmp`; `/var/tmp` is a private tree since #471 step 2b) (#391, `src/cairnwork_sandbox/bwrap_private.py`). Refused (`SandboxError`): a read
   or write root that is a whole tree or lies inside `/run` or `/var/run` (no caller puts one there,
   and binding it would bring host content back), a write root that holds a tree (it would cover it),
-  and trees whose real paths overlap, such as `/tmp` linked into `/run` (a root under `/tmp` would
+  and trees whose real paths overlap, such as `/tmp` linked into `/run` (a root under `/tmp` or `/var/tmp` would
   then be bound into `/run`; `/var/run` linked to `/run` itself is one tree). **Behaviour change:**
-  a run no longer sees the host's `/tmp`: a test that reads a host file under `/tmp` outside its own
-  roots now gets `ENOENT` (macOS Seatbelt already denies those reads), and it writes temporary files
+  a run no longer sees the host's `/tmp` or `/var/tmp`: a test that reads a host file under either
+  outside its own roots now gets `ENOENT` (macOS Seatbelt already denies those reads), and it writes temporary files
   in its `TMPDIR` (`tmp_path`, `tempfile`) as before.
   The masked set (all under `$HOME` unless an absolute path is given):
     - **Credential directories** emptied with a tmpfs: `.ssh`, `.aws`, `.gnupg`, `.config`,
@@ -152,8 +152,8 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
       write root of the run is refused; any other dangling target is skipped and counted in the
       policy notes. Residual (the #353 kind): the policy binds the whole host root read-only, so a
       skipped target outside the private trees created while the run is in progress (say a daemon's
-      socket under `/var/tmp`) is readable, a socket connectable, at its own path; one under `/tmp`,
-      `/run` or `/var/run` falls under the claim in **Pathname sockets** below. Each credential
+      socket under `/var/lib`) is readable, a socket connectable, at its own path; one under `/tmp`,
+      `/var/tmp`, `/run` or `/var/run` falls under the claim in **Pathname sockets** below. Each credential
       directory is scanned without following links, three levels deep (`.config/a/b/c`, where
       credential links live), up to 50,000 entries; past that, or when a directory cannot be read,
       the policy is refused rather than leave a link unscanned.
@@ -401,19 +401,19 @@ mode (launching account or dedicated account):
   is sent and may forward it off the host). The dedicated account does not close this by itself: on
   Linux CI a run reached journald, systemd's notify and varlink sockets, snapd and uuidd under
   `/run` in both modes, and in owner mode the launching account's own sockets under `/tmp` (#391).
-  So every run gets the private, read-only `/run` and `/tmp` described above. The claim, in full:
-  from a Linux run, in owner or account mode, no host pathname socket under `/run`, `/var/run` or
-  `/tmp` is connectable, including one the host creates while the run is in progress (the tmpfs
+  So every run gets the private, read-only `/run`, `/tmp` and `/var/tmp` described above (`/var/tmp` since #471 step 2b). The claim, in full:
+  from a Linux run, in owner or account mode, no host pathname socket under `/run`, `/var/run`,
+  `/tmp` or `/var/tmp` is connectable, including one the host creates while the run is in progress (the tmpfs
   lives in the run's own mount namespace), with two exceptions. (1) Inside the run's own read and
-  write roots that lie under `/tmp`, which the caller chooses and which are bound back as they are:
+  write roots that lie under `/tmp` or `/var/tmp`, which the caller chooses and which are bound back as they are:
   the run's work and private directories and the interpreter's prefixes (Cairnwork puts runs under
   the required `--state` directory; only tests put them under pytest's temp directory in `/tmp`).
   (2) A regular file under `/run` or `/var/run` that a top-level `/etc` link names
   (`/etc/resolv.conf`), which its owner could replace with a socket between the policy check and the
   mount. This is not a claim that a Linux run has no host IPC channel: a pathname socket elsewhere —
-  under `/var/tmp`, `/var/lib` (sssd's pipes, databases), a home, `/srv` — stays connectable
+  under `/var/lib` (sssd's pipes, databases), a home, `/srv` — stays connectable
   whenever the running account may connect to it, and the witness does not walk those paths (#471).
-  `tests/test_run_isolation_witness.py` (every socket the host has under the three trees, outside
+  `tests/test_run_isolation_witness.py` (every socket the host has under the private trees, outside
   the run's own root) and `tests/test_tmp_isolation_witness.py` (sockets planted under `/tmp` before
   the run and after the policy is built) check the claim on real bwrap in CI. An agent socket an
   operator put at an open path is reachable by a candidate that guesses it (scrubbing

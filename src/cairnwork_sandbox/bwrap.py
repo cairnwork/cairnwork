@@ -3,7 +3,7 @@
 The policy is a read-only bind of the whole root plus read-write binds for the write roots,
 with a fresh /dev and /proc, every namespace unshared (so no network), all capabilities
 dropped and nested user namespaces disabled. A read-only root bind does not stop connect() to a
-pathname socket, which no network namespace covers, so /run, /tmp (and a separate /var/run) are
+pathname socket, which no network namespace covers, so /run, /tmp, /var/tmp, /var/run are
 private, read-only tmpfs trees per run with only what a run needs put back (``bwrap_private``,
 #391). Named credential directories under $HOME are emptied with a tmpfs, credential files are
 replaced by /dev/null, and so are root-equivalent daemon sockets (Docker/Podman/containerd, the
@@ -14,7 +14,7 @@ Trade-off (documented in docs/SECURITY.md): the whole root stays readable, so ev
 running account (the launching one, or the dedicated verifier account) can read is readable
 inside; only the named credential list is masked. Other users' 0700 home directories are
 protected by POSIX permissions. This is not complete read isolation, and a pathname socket
-outside the private trees (/var/tmp, /var/lib, a home, /srv) stays connectable if that account may.
+outside the private trees (/var/lib, a home, /srv) stays connectable if that account may.
 
 On Ubuntu 24.04+ an AppArmor rule restricts unprivileged user namespaces by default:
 ``unshare(CLONE_NEWUSER)`` still succeeds but the new namespace holds no capabilities, so
