@@ -72,6 +72,24 @@ def test_a_test_commit_run_with_no_record_is_refused_when_the_base_collected(mon
     assert err.value.code == "DEFERRED_TESTS_COLLECT_FAILED"
 
 
+def test_the_probe_runs_on_the_base_commit_not_the_test_commit(monkeypatch):
+    """A fake that tells commits apart: only the base reads. A probe run on the test commit would
+    see no record too and let the failed run pass (review5's surviving mutant)."""
+    seen = []
+
+    def by_commit(ctx, commit, files, run_id):
+        seen.append(commit)
+        return Collected() if commit == "b" else None
+
+    monkeypatch.setattr(deferred_collected, "_collect", by_commit)
+    monkeypatch.setattr(deferred_collected, "_exists", lambda *a: True)
+    task = SimpleNamespace(test_commit="t", base_commit="b")
+    with pytest.raises(Rejected) as err:
+        _check(task, set())
+    assert err.value.code == "DEFERRED_TESTS_COLLECT_FAILED"
+    assert seen == ["t", "b"]
+
+
 def test_a_run_that_is_broken_on_the_base_probe_too_keeps_the_static_rule(monkeypatch):
     """#804: a table plugin that fails to load breaks every run; the base run says UNCOMPARABLE."""
     task = _fake(monkeypatch, None, None)
