@@ -506,3 +506,32 @@ def test_marker_is_withheld_for_a_dangling_symlink_root(monkeypatch, short_tmp):
 def test_marker_is_given_when_a_priority_root_does_not_exist_at_all(monkeypatch, short_tmp):
     report = _marker_for(monkeypatch, (str(short_tmp / "absent"),), [], [str(short_tmp)])
     assert walk.PRIORITY_DONE in report
+
+
+def test_a_failure_outside_the_priority_trees_keeps_the_marker(monkeypatch, short_tmp):
+    root = str(short_tmp)
+    report = _marker_for(monkeypatch, (root,), ["/etc/private-dir"], [root])
+    assert walk.PRIORITY_DONE in report  # the root-only directory is still counted below
+    assert sum(n for key, n in report.items() if key.endswith("|-|unlistable")) == 1
+
+
+def test_a_failure_beside_a_priority_root_name_does_not_withhold_the_marker(monkeypatch, short_tmp):
+    root = str(short_tmp)
+    report = _marker_for(monkeypatch, (root,), [root + "-sibling/sub"], [root])
+    assert walk.PRIORITY_DONE in report  # a name that merely starts with the root is not inside it
+
+
+def test_a_stat_failure_outside_the_priority_trees_keeps_the_marker(monkeypatch):
+    def fake_walk(top, followlinks=False, **_kw):
+        yield "/tmp", [], []
+        yield "/etc", [], ["shadow"]
+        yield "/opt", [], []
+
+    def denied(_path):
+        raise PermissionError(13, "denied")
+
+    monkeypatch.setattr(walk, "PRIORITY_ROOTS", ("/tmp",))
+    monkeypatch.setattr(walk.os, "walk", fake_walk)
+    monkeypatch.setattr(walk.os, "lstat", denied)
+    report = walk.collect()
+    assert walk.PRIORITY_DONE in report and report["usr-and-other-system|-|unstatable"] == 1

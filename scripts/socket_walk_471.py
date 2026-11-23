@@ -54,14 +54,19 @@ def _priority_paths() -> set[str]:
     return paths
 
 
-def _priority_complete(counts: dict[str, int], entered: set[str]) -> bool:
-    """True when every existing priority root was entered and nothing in the walk failed.
+def _priority_complete(failed: list[str], entered: set[str]) -> bool:
+    """True when every existing priority root was entered and nothing failed inside one.
 
-    A root that exists but was never entered (a symlink is not followed), a directory that could
-    not be listed, or a file whose lstat failed for any reason but "gone" all withhold the mark.
+    `failed` holds the paths of directories that could not be listed and files whose lstat failed
+    for any reason but "gone". Only a failure inside a priority root withholds the mark; a failure
+    elsewhere (a root-only directory under /etc, say) stays in the report but cannot hide the
+    priority trees. A root that exists but was never entered (a symlink is not followed) also
+    withholds it.
     """
-    if any(key.endswith(("|-|unlistable", "|-|unstatable")) for key in counts):
-        return False
+    roots = _priority_paths()
+    for path in failed:
+        if any(path == root or path.startswith(root.rstrip("/") + "/") for root in roots):
+            return False
     for root in PRIORITY_ROOTS:
         root = os.path.normpath(os.path.expanduser(root))
         if os.path.lexists(root) and not {root, os.path.realpath(root)} & entered:
@@ -174,9 +179,12 @@ def _walk(
     def unlistable(exc: OSError) -> None:
         key = f"{location(str(exc.filename or top))}|-|unlistable"
         counts[key] = counts.get(key, 0) + 1
+        failed.append(str(exc.filename or top))
 
     deadline = time.monotonic() + BUDGET_SECONDS
     priority, entered = _priority_paths(), set[str]()
+    failed: list[str] = []
+    outcome["failed"] = failed
     for root, dirs, files in os.walk(top, followlinks=False, onerror=unlistable):
         if time.monotonic() >= deadline:  # directories without files also count against the budget
             outcome["stop"] = "time"
@@ -189,7 +197,7 @@ def _walk(
             dirs[:] = [d for d in dirs if os.path.join(root, d) not in SKIP]
         if root in priority:
             entered.add(root)
-        if root in DEFER and _priority_complete(counts, entered):
+        if root in DEFER and _priority_complete(failed, entered):
             counts[PRIORITY_DONE] = 1
         here = location(root)
         walked[here] = walked.get(here, 0) + len(files)
@@ -206,6 +214,7 @@ def _walk(
                 if exc.errno not in (errno.ENOENT, errno.ENOTDIR):  # a file that vanished is fine
                     key = f"{location(path)}|-|unstatable"
                     counts[key] = counts.get(key, 0) + 1
+                    failed.append(path)
                 continue
             loc = location(path)
             kind, result = _probe(path)
@@ -257,7 +266,12 @@ def collect(top: str = "/") -> dict[str, int]:
     if outcome.get("stop"):
         return _stop(counts, str(outcome["stop"]), progress["entries"], walked)
     entered = outcome.get("entered")
-    if isinstance(entered, set) and _priority_complete(counts, entered):
+    failed = outcome.get("failed")
+    if (
+        isinstance(entered, set)
+        and isinstance(failed, list)
+        and _priority_complete(failed, entered)
+    ):
         counts[PRIORITY_DONE] = 1  # a full walk also completed the priority trees
     return _finish(counts, progress["entries"], walked)
 
