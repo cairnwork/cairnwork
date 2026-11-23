@@ -1,8 +1,11 @@
 """Decoded views of a text, for the secret scan (#1556).
 
 A secret that is escaped or encoded (URL, ``\\u``, HTML entity, base64, base32, hex) must be seen
-as the secret it is. ``decoded_views`` returns the extra texts to scan; it is bounded, and when a
-bound is hit it returns ``None`` so the caller refuses (fail closed), never skips.
+as the secret it is. ``decoded_views`` returns the extra texts to scan. Every bound fails closed:
+when one is hit it returns ``None`` and the caller refuses; it never skips. Limits: a text that
+needs more than ``_DEPTH`` decoding layers, more than ``MAX_VIEWS`` views, a decoded view over
+``MAX_VIEW_CHARS`` characters, or ``MAX_CHARS`` characters in all, is refused. Encoded text of
+fewer than ``_MIN_SEGMENT`` characters is not decoded (too short to tell from noise).
 """
 
 from __future__ import annotations
@@ -11,15 +14,28 @@ import base64
 import binascii
 import html
 import re
+from collections.abc import Iterable
 from urllib.parse import unquote
 
-MAX_VIEWS = 64
-MAX_CHARS = 256 * 1024
-_DEPTH = 2
+MAX_VIEWS = 32
+MAX_VIEW_CHARS = 4096  # the assignment and flag patterns cost more than linear per view
+MAX_CHARS = 32 * 1024
+_DEPTH = 4
+_MIN_SEGMENT = 16
 _B64 = re.compile(r"[A-Za-z0-9+/_-]{16,}={0,2}")
-_B32 = re.compile(r"[A-Z2-7]{16,}={0,6}")
+# base64 cut into lines or words (each piece of 16 or more characters, the last of 4 or more)
+_B64_WRAPPED = re.compile(
+    r"(?<![A-Za-z0-9+/_-])(?:[A-Za-z0-9+/_-]{16,}[ \t\r\n]+){1,}[A-Za-z0-9+/_-]{4,}={0,2}"
+)
+_B32 = re.compile(r"(?<![A-Za-z2-7])[A-Za-z2-7]{16,}={0,6}")
 _HEX = re.compile(r"(?:[0-9a-fA-F]{2}){8,}")
-_UNI = re.compile(r"(?:\\u|%u)([0-9a-fA-F]{4})|\\U([0-9a-fA-F]{8})|\\x([0-9a-fA-F]{2})")
+_HEX_SEP = re.compile(r"(?:[0-9a-fA-F]{2}[:\s-]){7,}[0-9a-fA-F]{2}")
+_UNI = re.compile(
+    r"(?:\\{1,2}u|%u)([0-9a-fA-F]{4})|\\{1,2}U([0-9a-fA-F]{8})|\\{1,2}x([0-9a-fA-F]{2})"
+    r"|\\{1,2}u\{([0-9a-fA-F]{1,6})\}"
+)
+_TEXT = re.compile(rb"[\x20-\x7e\r\n\t]{16,}")
+_SAMPLE = 64  # bytes looked at before a long run is decoded in full
 
 
 def _codepoint(match: re.Match[str]) -> str:
@@ -29,33 +45,53 @@ def _codepoint(match: re.Match[str]) -> str:
         return match.group(0)
 
 
-def _printable(raw: bytes) -> str | None:
-    """The text ``raw`` holds when it reads as text (UTF-8, at least 90% printable), else None."""
+class _Refuse(Exception):
+    """A bound was hit."""
+
+
+def _segments(raw: bytes) -> list[str]:
+    """The readable stretches of ``raw`` (16 or more printable ASCII bytes)."""
+    return [m.group().decode("ascii") for m in _TEXT.finditer(raw)]
+
+
+def _b64_decode(run: str, offset: int) -> bytes | None:
+    std = run[offset:].rstrip("=").replace("-", "+").replace("_", "/")
+    std = std[: len(std) - len(std) % 4 or None] if len(std) % 4 == 1 else std
     try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError:
+        return base64.b64decode(std + "=" * (-len(std) % 4))
+    except (binascii.Error, ValueError):
         return None
-    if len(text) < 8 or sum(c.isprintable() or c.isspace() for c in text) < 0.9 * len(text):
-        return None
-    return text
+
+
+def _readable(raw: bytes | None) -> bool:
+    return raw is not None and _TEXT.search(raw) is not None
 
 
 def _decode_blobs(text: str) -> list[str]:
-    found: list[bytes] = []
-    for run in _B64.findall(text):
-        std = run.rstrip("=").replace("-", "+").replace("_", "/")
-        try:
-            found.append(base64.b64decode(std + "=" * (-len(std) % 4), validate=True))
-        except (binascii.Error, ValueError):
-            pass
+    """Readable text hidden in base64 (any alignment, split over lines), base32 or hex runs. A
+    run that starts like text but is longer than the view bound is refused, not skipped."""
+    raws: list[bytes] = []
+    runs = [*_B64.findall(text)]
+    runs += [re.sub(r"\s+", "", w) for w in _B64_WRAPPED.findall(text)]
+    for run in runs:
+        for offset in range(4):  # the run may start inside another word
+            head = _b64_decode(run[: _SAMPLE * 2], offset)
+            if not _readable(head):
+                continue
+            if len(run) > MAX_VIEW_CHARS * 2:
+                raise _Refuse
+            full = _b64_decode(run, offset)
+            if full is not None:
+                raws.append(full)
     for run in _B32.findall(text):
+        body = run.rstrip("=").upper()
         try:
-            found.append(base64.b32decode(run.rstrip("=") + "=" * (-len(run.rstrip("=")) % 8)))
+            raws.append(base64.b32decode(body + "=" * (-len(body) % 8)))
         except (binascii.Error, ValueError):
             pass
-    for run in _HEX.findall(text):
-        found.append(bytes.fromhex(run))
-    return [t for raw in found if (t := _printable(raw)) is not None]
+    raws += [bytes.fromhex(r) for r in _HEX.findall(text)]
+    raws += [bytes.fromhex(re.sub(r"[:\s-]", "", r)) for r in _HEX_SEP.findall(text)]
+    return [seg for raw in raws for seg in _segments(raw)]
 
 
 def _unescape(text: str) -> list[str]:
@@ -72,22 +108,34 @@ def _unescape(text: str) -> list[str]:
     return out
 
 
-def decoded_views(text: str) -> tuple[str, ...] | None:
-    """Every distinct decoded form of ``text`` (nested up to two levels), or None when over a
-    bound (too many views or too many decoded characters: refuse)."""
-    seen, views, total = {text}, [], 0
-    layer = [text]
-    for _ in range(_DEPTH):
-        nxt: list[str] = []
-        for source in layer:
-            for view in (*_unescape(source), *_decode_blobs(source)):
-                if view in seen:
-                    continue
-                seen.add(view)
-                total += len(view)
-                if len(views) >= MAX_VIEWS or total > MAX_CHARS:
-                    return None
-                views.append(view)
-                nxt.append(view)
-        layer = nxt
-    return tuple(views)
+def decoded_views(sources: Iterable[str]) -> tuple[str, ...] | None:
+    """Every distinct decoded form of the texts in ``sources`` (the text as written and its
+    normalized forms), nested up to ``_DEPTH`` layers, or None when a bound is hit (refuse)."""
+    layer = list(dict.fromkeys(sources))
+    seen, views, total = set(layer), [], 0
+    try:
+        for _ in range(_DEPTH):
+            nxt: list[str] = []
+            for source in layer:
+                # a whole-text unescape is as long as its source: it is not a decoded blob
+                for view, blob in (
+                    *((v, False) for v in _unescape(source)),
+                    *((v, True) for v in _decode_blobs(source)),
+                ):
+                    if view in seen:
+                        continue
+                    seen.add(view)
+                    if blob:
+                        total += len(view)
+                        if len(view) > MAX_VIEW_CHARS or total > MAX_CHARS:
+                            raise _Refuse
+                    if len(views) >= MAX_VIEWS:
+                        raise _Refuse
+                    views.append(view)
+                    nxt.append(view)
+            if not nxt:
+                return tuple(views)
+            layer = nxt
+    except _Refuse:
+        return None
+    return None  # still decoding after the last allowed layer

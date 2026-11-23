@@ -54,19 +54,22 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 
-# Upper- or mixed-case forms (SK-..., -----Begin ...), run on the lower-cased text: a literal
-# prefix keeps the search fast, which re.IGNORECASE would not (#1556).
+# Upper- or mixed-case forms (SK-..., GHP_...), run on the lower-cased text: a literal prefix keeps
+# the search fast, which re.IGNORECASE would not (#1556). The vendor shape is required (a left
+# boundary, a long tail, a digit) so that task-4821-..., asia-southeast1-a or GHS_RUNNER_TEMP pass.
 _LOWER_PATTERNS = (
     (
         "api_key",
         re.compile(
-            r"(?:sk-ant-|sk-|gh[pousr]_|github_pat_|akia|asia|aiza|xox[abpres]-)[a-z0-9_\-]{12,}"
+            r"(?<![a-z0-9])(?:sk-ant-(?=[a-z_-]*[0-9])[a-z0-9_\-]{16,}|sk-(?=[a-z_-]*[0-9])[a-z0-9_\-]{20,}"
+            r"|gh[pousr]_[a-z0-9]{30,}|github_pat_[a-z0-9_]{20,}|xox[abpres]-(?=[a-z-]*[0-9])[a-z0-9-]{12,})"
         ),
     ),
     ("private_key", re.compile(r"-----begin [a-z0-9 ]*private key-----")),
 )
 # the header with its spaces and line breaks gone: a header split over lines (#1556)
 _SPLIT_PEM = re.compile(r"-----begin[a-z0-9]*privatekey-----")
+_PEM_BLANKS = re.compile(r"[\s+_.]+")  # a space may be written as + or _ or .
 
 
 def scan(text: str, names: tuple[str, ...] = ()) -> list[str]:
@@ -75,7 +78,9 @@ def scan(text: str, names: tuple[str, ...] = ()) -> list[str]:
     is also scanned after URL, ``\\u``, HTML, base64, base32 and hex decoding (#1556); a text with
     more encoded parts than the bounds allow is refused as ``encoded_overflow``."""
     hits = _scan_view(text, names)
-    views = decoded_views(text)
+    cleaned = _drop_invisible(text)
+    normalized = _drop_invisible(unicodedata.normalize("NFKC", cleaned))  # as _scan_view sees it
+    views = decoded_views((text, cleaned, normalized))
     if views is None:
         return [*hits, "encoded_overflow"]
     for view in views:
@@ -101,7 +106,7 @@ def _scan_view(text: str, names: tuple[str, ...]) -> list[str]:
             variants += (compact, wrapped)
         if any(pattern.search(variant) for variant in variants):
             hits.append(name)
-    low_compact = compact.lower()
+    low_compact = _PEM_BLANKS.sub("", normalized.lower())
     lowered = tuple(dict.fromkeys((text.lower(), normalized.lower(), low_compact, wrapped.lower())))
     for name, pattern in _LOWER_PATTERNS:
         if name not in hits and any(pattern.search(v) for v in lowered):
