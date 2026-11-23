@@ -57,15 +57,25 @@ def test_an_oversized_stored_json_is_refused_before_parsing(ledger, monkeypatch,
     assert all(size <= MAX_STORED_JSON_BYTES for size in parsed)
 
 
-def test_a_stored_request_of_exactly_the_cap_is_still_read(ledger, monkeypatch):
+@pytest.mark.parametrize("column", ["request_json", "response_json", "binding_json"])
+def test_a_stored_json_of_exactly_the_cap_is_still_read(ledger, monkeypatch, column):
     state, task, attempt = ledger
     parsed = _spy(monkeypatch)
-    _rewrite(state, "request_json", _padded(MAX_STORED_JSON_BYTES))
+    _rewrite(state, column, _padded(MAX_STORED_JSON_BYTES))
     try:
         read_record(state / "notary.sqlite", task, attempt)
     except RecordMalformed as err:
         assert err.code != "RECORD_TOO_LARGE"
     assert MAX_STORED_JSON_BYTES in parsed
+
+
+def test_an_oversized_stored_json_is_never_loaded_into_python(ledger):
+    state, task, attempt = ledger
+    _rewrite(state, "request_json", _padded(MAX_STORED_JSON_BYTES + 1))
+    row = record_module._fetch_row(  # noqa: SLF001
+        f"{(state / 'notary.sqlite').resolve().as_uri()}?mode=ro", task, attempt
+    )
+    assert row[5] is None and row[-1]  # request text withheld, too-large flag set
 
 
 def test_a_normal_row_still_reads(ledger):

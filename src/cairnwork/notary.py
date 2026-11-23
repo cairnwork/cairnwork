@@ -338,8 +338,7 @@ class Notary:
                 " THEN '' ELSE expected_identity END,"
                 " CASE WHEN length(CAST(binding_json AS BLOB)) > :cap"
                 " THEN '' ELSE binding_json END"
-                " FROM core_verifications"
-                " WHERE task_id = :task_id AND attempt_id = :attempt_id",
+                " FROM core_verifications WHERE task_id = :task_id AND attempt_id = :attempt_id",
                 {"cap": MAX_STORED_JSON_BYTES, "task_id": task_id, "attempt_id": attempt_id},
             ).fetchone()
         finally:

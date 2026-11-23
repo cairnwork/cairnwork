@@ -260,3 +260,18 @@ def test_row_binding_reads_an_oversized_identity_as_unreadable(
     assert binding.identity_problem == IDENTITY_UNREADABLE and not binding.columns_match
     assert binding.expected_identity_sha256 is None
     assert all(size <= MAX_STORED_JSON_BYTES for size in parsed)
+
+
+def test_row_binding_reads_an_identity_of_exactly_the_cap(repo, tmp_path, notarized, monkeypatch):
+    import hashlib
+
+    from cairnwork.notary_binding import IDENTITY_UNREADABLE, MAX_STORED_JSON_BYTES
+
+    parsed = _spy_notary_parse(monkeypatch)
+    text = _padded(MAX_STORED_JSON_BYTES)
+    _rewrite(tmp_path, "expected_identity", text)
+    binding = notarized.row_binding("task-1", "a1")
+    assert binding is not None
+    assert binding.expected_identity_sha256 == hashlib.sha256(text.encode()).hexdigest()
+    assert MAX_STORED_JSON_BYTES in parsed
+    assert binding.identity_problem != IDENTITY_UNREADABLE
