@@ -4,8 +4,9 @@ A secret that is escaped or encoded (URL, ``\\u``, HTML entity, base64, base32, 
 as the secret it is. ``decoded_views`` returns the extra texts to scan. Every bound fails closed:
 when one is hit it returns ``None`` and the caller refuses; it never skips. Limits: a text that
 needs more than ``_DEPTH`` decoding layers, more than ``MAX_VIEWS`` views, a decoded view over
-``MAX_VIEW_CHARS`` characters, or ``MAX_CHARS`` characters in all, is refused. Encoded text of
-fewer than ``_MIN_SEGMENT`` characters is not decoded (too short to tell from noise).
+``MAX_VIEW_CHARS`` characters, ``MAX_CHARS`` characters in all, or an encoded run (base64 or
+base32 characters without a break) longer than ``MAX_CHARS``, is refused.
+Encoded text of fewer than ``_MIN_SEGMENT`` characters is not decoded (too short to tell from noise).
 Base64 cut into pieces shorter than 16 characters is not rejoined (MIME 64/76 columns are).
 """
 
@@ -74,11 +75,15 @@ def _decode_blobs(text: str) -> list[str]:
     runs = [*_B64.findall(text)]
     runs += [re.sub(r"\s+", "", w) for w in _B64_WRAPPED.findall(text)]
     for run in runs:
+        if len(run) > MAX_CHARS:  # refuse before decoding, so a huge run costs nothing
+            raise _Refuse
         for offset in range(4):  # the run may start inside another word
             full = _b64_decode(run, offset)  # the whole run: junk bytes in front hide nothing
             if full is not None:
                 raws.append(full)
     for run in _B32.findall(text):
+        if len(run) > MAX_CHARS:
+            raise _Refuse
         body = run.rstrip("=").upper()
         try:
             raws.append(base64.b32decode(body + "=" * (-len(body) % 8)))

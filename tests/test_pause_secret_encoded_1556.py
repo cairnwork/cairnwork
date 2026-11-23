@@ -9,7 +9,7 @@ import pytest
 from experimental.pause import schema
 from experimental.pause.client import HaikuGate, HaikuPlanner, TransportResult
 from experimental.pause.interfaces import CallSettings, GateRequest, PlanRequest
-from experimental.pause.secrets_decode import MAX_VIEWS, decoded_views
+from experimental.pause.secrets_decode import MAX_CHARS, MAX_VIEWS, decoded_views
 from experimental.pause.secrets_scan import Scanner, scan
 
 SETTINGS = CallSettings("haiku-test", "high", 3.0, 3)
@@ -127,7 +127,7 @@ def test_result_never_holds_the_matched_text():
         "region asia-southeast1-a and DESK-1234-fix-login-bug",
         "TASK-4821-migrate-db-schema Asian-American-heritage-month-2024",
         "GHS_RUNNER_TEMP_DIRECTORY",
-        pytest.param("x" * 300_000 + " a &amp; b 100%25", id="long-plain-with-escape"),
+        pytest.param("word " * 60_000 + " a &amp; b 100%25", id="long-plain-with-escape"),
     ],
 )
 def test_ordinary_text_is_still_clean(text):
@@ -165,4 +165,17 @@ def test_plain_results_unchanged_order():
 def test_binary_padding_in_front_hides_nothing(pad):
     raw = bytes(range(128, 256)) * (pad // 128 + 1)
     blob = base64.b64encode(raw[:pad] + KEY.encode() + b"=" * 5).decode()
-    assert Scanner(NAMES).scan(f"data {blob}") != []
+    hits = Scanner(NAMES).scan(f"data {blob}")
+    assert "api_key" in hits
+    assert "encoded_overflow" not in hits
+
+
+@pytest.mark.parametrize("size", [MAX_CHARS + 4, 1_000_000])
+def test_huge_encoded_run_is_refused_fast(size):
+    import time
+
+    blob = base64.b64encode(bytes(range(256)) * (size // 340 + 1)).decode()[:size]
+    start = time.monotonic()
+    hits = Scanner(NAMES).scan(blob)
+    assert "encoded_overflow" in hits
+    assert time.monotonic() - start < 3
