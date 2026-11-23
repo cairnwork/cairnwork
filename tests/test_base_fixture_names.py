@@ -1,5 +1,6 @@
 """#986 step 5b, unit level: what the extra base run is, and when it is not made."""
 
+import logging
 import subprocess
 from types import SimpleNamespace
 
@@ -149,3 +150,24 @@ def test_an_exception_whose_name_raises_still_gives_none(task, monkeypatch):
     ctx = SimpleNamespace(account=None)
     assert bfn.collect(ctx, task, PATHS, "r-f") is None
     assert bfn.probe(ctx, task, PATHS, "r-f") == (None, "RUN_FAULT")
+
+
+class _Boom(logging.Handler):
+    def emit(self, record):
+        raise RuntimeError("handler failure")
+
+
+@pytest.mark.parametrize("error", [None, RuntimeError("x")])
+def test_a_log_handler_that_raises_does_not_change_the_result(task, monkeypatch, error):
+    _calls(monkeypatch, None, error=error)
+    ctx = SimpleNamespace(account=None)
+    handler = _Boom(level=logging.DEBUG)
+    bfn.LOG.addHandler(handler)
+    try:
+        assert bfn.collect(ctx, task, PATHS, "r-f") is None
+        seen = {}
+        monkeypatch.setattr(bfn, "check_conftests", lambda *a, **k: seen.update(k))
+        bfn.check_with_base(ctx, task, PATHS, "r-f")
+    finally:
+        bfn.LOG.removeHandler(handler)
+    assert seen == {"collected": None}

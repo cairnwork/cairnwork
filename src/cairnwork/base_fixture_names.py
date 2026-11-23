@@ -43,7 +43,10 @@ def collect(ctx, task, paths: tuple[str, ...], run_id: str):
     names, reason = probe(ctx, task, paths, run_id)
     if names is None:
         level = logging.WARNING if reason in LOUD else logging.INFO
-        LOG.log(level, "base fixture names not used (%s): the #916 rule stands alone", reason)
+        try:
+            LOG.log(level, "base fixture names not used (%s): the #916 rule stands alone", reason)
+        except Exception:  # noqa: BLE001, S110 - a failing log handler must not change the verdict
+            pass
     return names
 
 
