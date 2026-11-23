@@ -295,3 +295,82 @@ def test_script_main_prints_a_hang_report_and_exits_by_the_deadline(tmp_path):
     report = json.loads(result.stdout.decode())
     assert report["truncated|-|-"] == 1 and report["stopped-by-hang|-|-"] == 1
     assert marker not in result.stdout.decode() + result.stderr.decode()
+
+
+def _scandir_big_first(real):
+    """os.scandir that lists the `big` tree first, the order that starves the others."""
+
+    class Listing:
+        def __init__(self, path):
+            with real(path) as it:
+                entries = sorted(it, key=lambda e: e.name != "big")
+            self._it = iter(entries)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            return next(self._it)
+
+        def close(self):
+            pass
+
+    return Listing
+
+
+def _tree_with_big_and_socket(tmp_path):
+    big, other = tmp_path / "big", tmp_path / "other"  # tmp_path is short (see the fixture below)
+    big.mkdir()
+    other.mkdir()
+    for index in range(40):
+        (big / f"f{index}").write_text("x")
+    listener = socket.socket(socket.AF_UNIX)
+    listener.bind(str(other / "s.sock"))
+    listener.listen()
+    return big, listener
+
+
+def test_a_deferred_tree_is_walked_last_so_the_cap_cannot_starve_rest(monkeypatch, short_tmp):
+    tmp_path = short_tmp
+    big, listener = _tree_with_big_and_socket(tmp_path)
+    try:
+        monkeypatch.setattr(walk, "DEFER", {str(big)})
+        monkeypatch.setattr(walk, "MAX_ENTRIES", 10)
+        monkeypatch.setattr(walk.os, "scandir", _scandir_big_first(os.scandir))
+        report = walk.collect(str(tmp_path))
+    finally:
+        listener.close()
+    assert report["stopped-by-entries|-|-"] == 1  # the deferred tree really did hit the cap
+    assert report[walk.PRIORITY_DONE] == 1
+    assert sum(n for k, n in report.items() if k.endswith("|connectable")) == 1  # the socket
+
+
+def test_priority_mark_is_absent_when_the_cap_hits_before_deferred_trees(monkeypatch, short_tmp):
+    tmp_path = short_tmp
+    big, listener = _tree_with_big_and_socket(tmp_path)
+    try:
+        monkeypatch.setattr(walk, "DEFER", set())  # no deferral: the big tree starves the rest
+        monkeypatch.setattr(walk, "MAX_ENTRIES", 10)
+        monkeypatch.setattr(walk.os, "scandir", _scandir_big_first(os.scandir))
+        report = walk.collect(str(tmp_path))
+    finally:
+        listener.close()
+    assert report["stopped-by-entries|-|-"] == 1
+    assert walk.PRIORITY_DONE not in report
+    assert not any(key.endswith("|connectable") for key in report)
+
+
+@pytest.fixture
+def short_tmp():
+    """A short directory: AF_UNIX paths are limited to ~104 bytes and pytest's tmp_path is longer."""
+    import shutil
+
+    path = Path(tempfile.mkdtemp(prefix="w", dir="/tmp"))
+    yield path
+    shutil.rmtree(path, ignore_errors=True)

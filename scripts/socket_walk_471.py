@@ -13,6 +13,10 @@ import time
 # stopped at the time budget inside them (230k entries in 60 s) before reaching /home or /var.
 # After this prune the location class `usr-and-other-system` is effectively only /etc.
 SKIP = {"/proc", "/sys", "/dev", "/usr", "/lib", "/lib32", "/lib64", "/bin", "/sbin"}
+# Walked last: on the CI runners /opt holds ~240k files of toolchains (all of the time budget) and
+# no daemon sockets, while the trees the witnesses use (home, /var/tmp) were never reached.
+DEFER = {"/opt"}
+PRIORITY_DONE = "priority-complete|-|-"  # everything except DEFER was walked before any stop
 MAX_ENTRIES = 5_000_000
 SUN_PATH_LIMIT = 104  # smallest sun_path (macOS); Linux allows 108
 _cwd_lost = False  # set when the working directory could not be restored
@@ -151,7 +155,14 @@ def _walk(
         if time.monotonic() >= deadline:  # directories without files also count against the budget
             outcome["stop"] = "time"
             return
-        dirs[:] = [d for d in dirs if os.path.join(root, d) not in SKIP]
+        if root == top:  # visit the deferred trees after every other tree
+            kept = [d for d in dirs if os.path.join(root, d) not in SKIP]
+            late = [d for d in kept if os.path.join(root, d) in DEFER]
+            dirs[:] = [d for d in kept if d not in late] + late
+        else:
+            dirs[:] = [d for d in dirs if os.path.join(root, d) not in SKIP]
+        if root in DEFER:
+            counts[PRIORITY_DONE] = 1
         here = location(root)
         walked[here] = walked.get(here, 0) + len(files)
         for name in files:
@@ -205,6 +216,7 @@ def collect(top: str = "/") -> dict[str, int]:
         raise error
     if outcome.get("stop"):
         return _stop(counts, str(outcome["stop"]), progress["entries"], walked)
+    counts[PRIORITY_DONE] = 1  # a full walk also completed the priority trees
     return _finish(counts, progress["entries"], walked)
 
 
