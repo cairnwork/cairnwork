@@ -4,6 +4,7 @@ collision is not blamed on the base, and the cheap candidate checks run before t
 are built from git objects only, so the tests mean the same on case-sensitive and case-insensitive
 filesystems."""
 
+import itertools
 import subprocess
 from types import SimpleNamespace
 from typing import Any
@@ -15,6 +16,7 @@ import cairnwork.verify_candidate as verify_candidate
 import cairnwork.workspace as workspace
 from cairnwork.deferred_tests import TestCommitRejected
 from cairnwork.deferred_tests import test_paths as paths_of
+from cairnwork.test_commit_paths import _keys
 from cairnwork.workspace import (
     CandidateRejected,
     WorkspaceError,
@@ -245,3 +247,86 @@ def test_an_nfc_nfd_pair_among_added_paths_is_refused(repo, base):
 def test_same_spelling_unicode_additions_still_pass(repo, base):
     tc = _commit_exact(repo, base, f"tests/data/{_NFC}.txt", f"tests/data/{_NFC}_b.txt")
     assert paths_of(repo, base, tc)[0] == (f"tests/data/{_NFC}.txt", f"tests/data/{_NFC}_b.txt")
+
+
+def _clash_pairs() -> list[tuple[str, str]]:
+    """Spellings a plain case fold equates but NFC-then-fold does not (U+0345 with unordered
+    combining marks, the reviewer's 24 orders of four marks)."""
+    marks = ["\u0345", "\u0301", "\u0323", "\u0307"]
+    names = {"a" + "".join(o) for o in itertools.permutations(marks)}
+    names |= {n.replace("\u0345", "\u03b9") for n in list(names)}
+    pairs = [
+        (one, two)
+        for one, two in itertools.combinations(sorted(names), 2)
+        if one.casefold() == two.casefold() and _keys(one)[1] != _keys(two)[1]
+    ]
+    return pairs[:6]
+
+
+def test_the_fold_only_pairs_exist_and_are_refused_both_ways(repo, base):
+    pairs = _clash_pairs()
+    assert pairs  # the shape the reviewer found: equal by casefold, different by NFC-then-fold
+    for one, two in pairs:
+        tc = _commit_exact(repo, base, f"tests/data/{one}.txt", f"tests/data/{two}.txt")
+        with pytest.raises(TestCommitRejected):
+            paths_of(repo, base, tc)
+        for have, add in ((one, two), (two, one)):
+            held = _commit_exact(repo, base, f"tests/data/{have}.txt")
+            tc = _commit_exact(repo, held, f"tests/data/{add}.txt")
+            with pytest.raises(TestCommitRejected):
+                paths_of(repo, held, tc)
+
+
+@pytest.mark.parametrize(
+    ("one", "two"),
+    [
+        ("x\u0390", "X\u03aa\u0301"),
+        ("a\u0323\u0345", "a\u0345\u0323"),
+        (f"{_NFC}", f"{_CAPS}"),
+    ],
+)
+def test_unicode_fold_variants_are_refused_in_both_directions(repo, base, one, two):
+    for have, add in ((one, two), (two, one)):
+        held = _commit_exact(repo, base, f"tests/data/{have}.txt")
+        tc = _commit_exact(repo, held, f"tests/data/{add}.txt")
+        with pytest.raises(TestCommitRejected) as err:
+            paths_of(repo, held, tc)
+        assert err.value.code == "TEST_COMMIT_SCOPE"
+    tc = _commit_exact(repo, base, f"tests/data/{one}.txt", f"tests/data/{two}.txt")
+    with pytest.raises(TestCommitRejected):
+        paths_of(repo, base, tc)
+
+
+@pytest.mark.parametrize(
+    ("one", "two"),
+    [("\uff21", "A"), ("\u2460", "1"), ("\u3131", "\u1100"), (_NFC, "cafe")],
+)
+def test_names_that_are_not_one_name_on_disk_both_pass(repo, base, one, two):
+    # compatibility forms (NFKC) and a plain letter are different names: must not be merged
+    held = _commit_exact(repo, base, f"tests/data/{one}.txt")
+    tc = _commit_exact(repo, held, f"tests/data/{two}.txt")
+    assert paths_of(repo, held, tc)[0] == (f"tests/data/{two}.txt",)
+
+
+def test_deleting_the_nfd_name_and_adding_the_nfc_name_passes(repo, base):
+    held = _commit_exact(repo, base, f"tests/data/{_NFD}.txt")
+    tc = _swap_exact(repo, held, f"tests/data/{_NFD}.txt", f"tests/data/{_NFC}.txt")
+    assert paths_of(repo, held, tc) == ((f"tests/data/{_NFC}.txt",), (f"tests/data/{_NFD}.txt",))
+
+
+def _swap_exact(repo, parent, remove, add):
+    # two calls: in one, git's index (which folds NFC/NFD on macOS) drops the add after the remove
+    git(repo, "config", "core.ignorecase", "false")
+    git(repo, "read-tree", parent)
+    blob = git(repo, "rev-parse", "HEAD:src/a.py")
+    for flag, entry in (
+        ("--remove", f"0 {'0' * 40}\t{remove}\0"),
+        ("--add", f"100644 {blob}\t{add}\0"),
+    ):
+        subprocess.run(
+            ["git", "-C", str(repo), "update-index", flag, "-z", "--index-info"],
+            input=entry.encode(), check=True, capture_output=True,
+        )  # fmt: skip
+    tree = git(repo, "write-tree")
+    git(repo, "read-tree", "HEAD")
+    return git(repo, "commit-tree", tree, "-p", parent, "-m", "s")

@@ -36,11 +36,13 @@ def out_of_scope(path: str, status: str) -> bool:  # #798: conftest.py only adde
     )
 
 
-def _key(prefix: str) -> str:
-    """The comparison key of a path part (#1477): NFC, case-folded, NFC again (folding can
-    decompose). macOS filesystems treat NFC and NFD spellings as one name, as they do case."""
+def _keys(prefix: str) -> tuple[str, str]:
+    """The comparison keys of a path part (#1477): its case fold, and NFC, case fold, NFC again
+    (macOS filesystems treat NFC and NFD spellings as one name, as they do case). Two parts clash
+    when they share either key: the second is added to the first, never in its place, as the NFC
+    form alone misses pairs a plain case fold equates (U+0345 with unordered combining marks)."""
     nfc = unicodedata.normalize("NFC", prefix)
-    return unicodedata.normalize("NFC", nfc.casefold())
+    return prefix.casefold(), unicodedata.normalize("NFC", nfc.casefold())
 
 
 def case_variant_clash(
@@ -48,11 +50,11 @@ def case_variant_clash(
 ) -> str | None:
     """Why an added path (or one of its directories) differs only in case or in Unicode
     normal form (NFC/NFD) from a path of the base tree or from another added path, else None.
-    Compared case-folded and normalized whatever the local
-    filesystem, so the verdict never depends on the host; on a case-folding disk both would
-    land in one file and the clone check would blame the base after a worker had run. An
-    unreadable base tree is a clash too (refused, never passed). The refusal code is right
-    here, but the test commit is still consumed (#488 remainder)."""
+    Compared case-folded and normalized whatever the local filesystem, so the verdict never
+    depends on the host; on a case-folding disk both would land in one file and the clone check
+    would blame the base after a worker had run. An unreadable base tree is a clash too
+    (refused, never passed). The refusal code is right here, but the test commit is still
+    consumed (#488 remainder)."""
     try:
         raw = run_git(repo, "ls-tree", "-r", "-z", "--name-only", "--full-tree", base)
     except GitCommandError as exc:
@@ -65,22 +67,26 @@ def case_variant_clash(
         parts = name.split("/")
         for end in range(1, len(parts) + 1):
             prefix = "/".join(parts[:end])
-            spelled.setdefault(_key(prefix), set()).add(prefix)
+            for key in _keys(prefix):
+                spelled.setdefault(key, set()).add(prefix)
     new: dict[str, set[str]] = {}  # the added paths' own directories and files, among themselves
     for path in added:
         parts = path.split("/")
         for end in range(1, len(parts) + 1):
             prefix = "/".join(parts[:end])
-            same = spelled.get(_key(prefix), set())
+            keys = _keys(prefix)
+            same = set().union(*(spelled.get(key, set()) for key in keys))
             if same and prefix not in same:
                 return (
-                    f"test commit adds {path!r}, which differs only in case from"
-                    f" {sorted(same)[0]!r} in the base tree"
+                    f"test commit adds {path!r}, which differs only in case or Unicode normal"
+                    f" form from {sorted(same)[0]!r} in the base tree"
                 )
-            twin = new.setdefault(_key(prefix), set())
+            twin = set().union(*(new.get(key, set()) for key in keys))
             if twin and prefix not in twin:
                 return (
-                    f"test commit adds {path!r} and {sorted(twin)[0]!r}, which differ only in case"
+                    f"test commit adds {path!r} and {sorted(twin)[0]!r}, which differ only in"
+                    " case or Unicode normal form"
                 )
-            twin.add(prefix)
+            for key in keys:
+                new.setdefault(key, set()).add(prefix)
     return None
