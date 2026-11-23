@@ -308,7 +308,8 @@ def _verify_loaded(
 ) -> VerifyResult:
     """verify_bundle, where ``public_key`` is the key the caller loaded from ``public_key_pem``.
 
-    Only check-run passes a key (the one it just read from that file), so the file is read once;
+    Check-run and on-verified pass a key (the one loaded from that file, or the one it was
+    written from), so the file is read at most once;
     the public verify_bundle always passes None and reads the file itself.
     """
     try:
