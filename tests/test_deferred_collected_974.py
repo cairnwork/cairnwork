@@ -44,7 +44,7 @@ def test_a_new_collected_test_the_reader_cannot_see_is_refused(project, tmp_path
     result = _run(project, tmp_path, WRONG[shape])
     assert result.status == "FAILED", result.reason
     assert result.reason.startswith("DEFERRED_TESTS_UNREADABLE"), result.reason
-    assert f"{PATH}::Hid" in result.reason
+    assert "Hid" not in result.reason and "test_h" not in result.reason
 
 
 @sandbox
@@ -65,11 +65,21 @@ def _check(task, targets):
     deferred_collected.check(None, task, (PATH,), targets, "r")
 
 
-def test_a_run_that_cannot_be_read_leaves_the_static_rule_alone(monkeypatch):
+def test_a_test_commit_run_with_no_record_is_refused_when_the_base_collected(monkeypatch):
+    task = _fake(monkeypatch, None, Collected((f"{PATH}::test_old",)))
+    with pytest.raises(Rejected) as err:
+        _check(task, set())
+    assert err.value.code == "DEFERRED_TESTS_COLLECT_FAILED"
+
+
+def test_without_base_evidence_the_static_rule_stays(monkeypatch):
+    task = _fake(monkeypatch, None, None)  # the base run is unreadable too: environment unknown
+    _check(task, {f"{PATH}::test_x"})
     task = _fake(monkeypatch, None)
-    _check(task, {f"{PATH}::test_x"})  # no refusal, as before this check
-    task = _fake(monkeypatch, Collected((f"{PATH}::test_a",)), None)
+    monkeypatch.setattr(deferred_collected, "_exists", lambda *a: False)  # every file is new
     _check(task, set())
+    task = _fake(monkeypatch, Collected((f"{PATH}::test_a",)), None)
+    _check(task, set())  # the base run failed, the test commit's did not: static rule
 
 
 def test_a_file_whose_collector_failed_is_unknown_not_refused(monkeypatch):
@@ -100,4 +110,5 @@ def test_a_new_id_the_reader_does_not_hold_is_refused_even_beside_a_seen_one(mon
     with pytest.raises(Rejected) as err:
         _check(task, {f"{PATH}::test_n"})
     assert err.value.code == "DEFERRED_TESTS_UNREADABLE"
-    assert f"{PATH}::Hid::test_h" in str(err.value)
+    assert "Hid" not in str(err.value) and "test_h" not in str(err.value)  # no candidate text
+    assert "1 new test" in str(err.value)

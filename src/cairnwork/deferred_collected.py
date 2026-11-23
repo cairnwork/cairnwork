@@ -8,8 +8,11 @@ commit (same sandbox, ini and guard as every verifier run, collect_reader.py) ov
 commit's Python files: an id collected only on the test commit, parametrisation stripped, that
 ``new_tests`` did not return is refused, DEFERRED_TESTS_UNREADABLE.
 
-It only adds refusals. A run that cannot be read (timeout, collect error in a file, no record)
-leaves the static rule alone for that file, as the base fixture names do (base_fixture_names.py);
+It only adds refusals. A collector error in a file leaves that file to the static rule. A test
+commit run with no usable record (timeout, crash, no report) is refused
+DEFERRED_TESTS_COLLECT_FAILED when the base run over the same files was readable (so the run is
+not simply broken here); with no
+base evidence (all files new, or the base run unreadable too) the static rule stays;
 the receipt receiver re-derives the set statically without running pytest, so a test commit this
 check accepts is judged the same there. A test whose body changes under an id the base already
 collects is not seen by ids: the AST comparison still decides it.
@@ -46,24 +49,32 @@ def check(ctx, task, paths: tuple[str, ...], targets, run_id: str) -> None:
     if not files or len(files) > MAX_FILES:
         return
     after = _collect(ctx, task.test_commit, files, f"{run_id}t")
-    if after is None:
-        return
     on_base = tuple(f for f in files if _exists(task, f))
-    before = _collect(ctx, task.base_commit, on_base, f"{run_id}b") if on_base else Collected()
+    before = _collect(ctx, task.base_commit, on_base, f"{run_id}b") if on_base else None
+    if after is None:
+        if before is not None:  # the base collects fine, the test commit's run does not: refuse
+            raise TestCommitRejected(
+                "DEFERRED_TESTS_COLLECT_FAILED",
+                "pytest's collect-only run on the test commit gave no usable record (timeout,"
+                " crash or no report) while the base collected cleanly; rerun the task",
+            )
+        return  # no base evidence to tell the environment from the commit: the static rule alone
     if before is None:
-        return
+        if not on_base:
+            before = Collected()
+        else:
+            return
     unknown = {*after.error_files, *after.skipped_files, *before.error_files, *before.skipped_files}
     old = {_without_case(n) for n in before.ids}
     seen = set(targets)
     new = {_without_case(n) for n in after.ids} - old - seen
-    unseen = sorted(n for n in new if file_part(n) not in unknown)
-    if unseen:
-        shown = ", ".join(unseen[:5]) + (" ..." if len(unseen) > 5 else "")
+    unseen = [n for n in new if file_part(n) not in unknown]
+    if unseen:  # counts and fixed words only: a node id is candidate-controlled text
         raise TestCommitRejected(
             "DEFERRED_TESTS_UNREADABLE",
-            f"pytest collects {len(unseen)} new test(s) the reader cannot see ({shown});"
-            " Cairnwork cannot tell which tests the commit adds, so it cannot check they ran;"
-            " write them as plain Test* classes or top-level test functions",
+            f"pytest collects {len(unseen)} new test(s) in the changed files that the reader"
+            " cannot see; Cairnwork cannot tell which tests the commit adds, so it cannot check"
+            " they ran; write them as plain Test* classes or top-level test functions",
         )
 
 
