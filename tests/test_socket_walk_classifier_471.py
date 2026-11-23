@@ -224,9 +224,13 @@ def _blocking_lstat(release, ok_name=None):
     import stat as stat_mod
     import types
 
+    real = os.lstat
+
     def lstat(path):
         if ok_name and str(path).endswith(ok_name):
             return types.SimpleNamespace(st_mode=stat_mod.S_IFSOCK)
+        if not str(path).endswith("hang"):
+            return real(path)  # realpath() and friends still work
         release.wait(60)
         raise OSError("released")
 
@@ -245,14 +249,14 @@ def test_one_blocked_call_cannot_hold_the_report_past_the_hard_deadline(monkeypa
     monkeypatch.setattr(walk.os, "walk", fake_walk)
     monkeypatch.setattr(walk.os, "lstat", _blocking_lstat(release, "ok"))
     monkeypatch.setattr(walk, "_probe", lambda _p: ("stream", "refused"))
-    monkeypatch.setattr(walk, "BUDGET_SECONDS", 0.2)
-    monkeypatch.setattr(walk, "HANG_GRACE_SECONDS", 0.2)
+    monkeypatch.setattr(walk, "BUDGET_SECONDS", 1)
+    monkeypatch.setattr(walk, "HANG_GRACE_SECONDS", 1)
     started = time.monotonic()
     try:
         report = walk.collect()
     finally:
         release.set()
-    assert time.monotonic() - started < 5
+    assert time.monotonic() - started < 8
     assert report["truncated|-|-"] == 1 and report["stopped-by-hang|-|-"] == 1
     assert report["private-trees|stream|refused"] == 1  # what was measured before the hang stays
 
@@ -268,7 +272,7 @@ def test_a_worker_error_is_raised_not_swallowed(monkeypatch):
 
 
 def test_script_main_prints_a_hang_report_and_exits_by_the_deadline(tmp_path):
-    """Real entry: run the script's own main() in a child whose lstat never returns."""
+    """Real entry: the script's own main() in a child whose lstat never returns."""
     import json
     import subprocess
     import sys
@@ -277,24 +281,73 @@ def test_script_main_prints_a_hang_report_and_exits_by_the_deadline(tmp_path):
     marker = "cw1603-private-marker"
     cwd = tmp_path / marker
     cwd.mkdir()
+    summary = tmp_path / "summary.md"
     child = (
-        "import importlib.util, threading, os, sys\n"
+        "import importlib.util, threading, os\n"
         f"spec = importlib.util.spec_from_file_location('w', {str(_path)!r})\n"
         "w = importlib.util.module_from_spec(spec); spec.loader.exec_module(w)\n"
         "w.BUDGET_SECONDS, w.HANG_GRACE_SECONDS = 1, 1\n"
         "gate = threading.Event()\n"
+        "os.walk = lambda *a, **k: iter([('/tmp', [], ['file'])])  # a file is reached at once\n"
         "os.lstat = lambda p: gate.wait(120)\n"
         "w.main()\n"
     )
     started = time.monotonic()
     result = subprocess.run(  # noqa: S603
-        [sys.executable, "-c", child], capture_output=True, timeout=30, check=False, cwd=cwd
+        [sys.executable, "-c", child],
+        capture_output=True,
+        timeout=30,
+        check=False,
+        cwd=cwd,
+        env={**os.environ, "GITHUB_STEP_SUMMARY": str(summary)},
     )
-    assert time.monotonic() - started < 8  # deadline is 2 s
+    assert time.monotonic() - started < 5  # the deadline is 2 s plus interpreter start
     assert result.returncode == 0, result.stderr.decode(errors="replace")
     report = json.loads(result.stdout.decode())
     assert report["truncated|-|-"] == 1 and report["stopped-by-hang|-|-"] == 1
-    assert marker not in result.stdout.decode() + result.stderr.decode()
+    assert "stopped-by-hang" in summary.read_text()  # the summary is written before the exit
+    assert marker not in result.stdout.decode() + result.stderr.decode() + summary.read_text()
+
+
+def test_main_exits_at_once_after_a_hang_report(monkeypatch, tmp_path):
+    exits = []
+    summary = tmp_path / "s.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.setattr(walk, "collect", lambda: {"stopped-by-hang|-|-": 1, "truncated|-|-": 1})
+    monkeypatch.setattr(walk.os, "_exit", lambda code: exits.append((code, summary.exists())))
+    walk.main()
+    assert exits == [(0, True)]
+
+
+def test_main_does_not_hard_exit_on_an_ordinary_report(monkeypatch):
+    exits = []
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    monkeypatch.setattr(walk, "collect", lambda: {"home|stream|refused": 1})
+    monkeypatch.setattr(walk.os, "_exit", lambda code: exits.append(code))
+    walk.main()
+    assert exits == []
+
+
+def test_a_call_that_returns_inside_the_grace_is_not_a_hang(monkeypatch):
+    import time
+
+    def fake_walk(top, followlinks=False, **_kw):
+        yield "/tmp", [], ["slow", "next"]
+
+    real = os.lstat
+
+    def slow_lstat(path):
+        if not str(path).endswith(("slow", "next")):
+            return real(path)
+        time.sleep(1.5)  # past the 1 s budget, inside the 6 s grace
+        raise OSError("gone")
+
+    monkeypatch.setattr(walk.os, "walk", fake_walk)
+    monkeypatch.setattr(walk.os, "lstat", slow_lstat)
+    monkeypatch.setattr(walk, "BUDGET_SECONDS", 1)
+    monkeypatch.setattr(walk, "HANG_GRACE_SECONDS", 6)
+    report = walk.collect()
+    assert report["stopped-by-time|-|-"] == 1 and "stopped-by-hang|-|-" not in report
 
 
 def _scandir_big_first(real):
@@ -341,6 +394,7 @@ def test_a_deferred_tree_is_walked_last_so_the_cap_cannot_starve_rest(monkeypatc
     big, listener = _tree_with_big_and_socket(tmp_path)
     try:
         monkeypatch.setattr(walk, "DEFER", {str(big)})
+        monkeypatch.setattr(walk, "PRIORITY_ROOTS", (str(tmp_path),))
         monkeypatch.setattr(walk, "MAX_ENTRIES", 10)
         monkeypatch.setattr(walk.os, "scandir", _scandir_big_first(os.scandir))
         report = walk.collect(str(tmp_path))
@@ -374,3 +428,69 @@ def short_tmp():
     path = Path(tempfile.mkdtemp(prefix="w", dir="/tmp"))
     yield path
     shutil.rmtree(path, ignore_errors=True)
+
+
+def _fake_walk_with(failures, entered_roots):
+    def fake_walk(top, followlinks=False, onerror=lambda _e: None, **_kw):
+        for path in failures:
+            onerror(OSError(13, "denied", path))
+        for root in entered_roots:
+            yield root, [], []
+        yield "/opt", [], []
+
+    return fake_walk
+
+
+def _marker_for(monkeypatch, roots, failures, entered_roots):
+    monkeypatch.setattr(walk, "PRIORITY_ROOTS", roots)
+    monkeypatch.setattr(walk.os, "walk", _fake_walk_with(failures, entered_roots))
+    return walk.collect()
+
+
+def test_marker_is_given_when_every_priority_root_was_entered_cleanly(monkeypatch, short_tmp):
+    root = str(short_tmp)
+    assert walk.PRIORITY_DONE in _marker_for(monkeypatch, (root,), [], [root])
+
+
+def test_marker_is_withheld_when_a_priority_tree_was_unlistable(monkeypatch, short_tmp):
+    root = str(short_tmp)
+    report = _marker_for(monkeypatch, (root,), [root + "/sub"], [root])
+    assert walk.PRIORITY_DONE not in report
+
+
+def test_marker_is_withheld_when_a_priority_root_exists_but_was_not_entered(monkeypatch, short_tmp):
+    real = short_tmp / "real"
+    real.mkdir()
+    link = short_tmp / "link"
+    link.symlink_to(real)  # os.walk does not follow it, so it is never entered
+    report = _marker_for(monkeypatch, (str(link),), [], [str(short_tmp)])
+    assert walk.PRIORITY_DONE not in report
+
+
+def test_marker_is_withheld_when_a_file_could_not_be_statted(monkeypatch):
+    def fake_walk(top, followlinks=False, **_kw):
+        yield "/tmp", [], ["a"]
+        yield "/opt", [], []
+
+    def denied(_path):
+        raise PermissionError(13, "denied")
+
+    monkeypatch.setattr(walk, "PRIORITY_ROOTS", ("/tmp",))
+    monkeypatch.setattr(walk.os, "walk", fake_walk)
+    monkeypatch.setattr(walk.os, "lstat", denied)
+    report = walk.collect()
+    assert walk.PRIORITY_DONE not in report and report["private-trees|-|unstatable"] == 1
+
+
+def test_a_vanished_file_does_not_withhold_the_marker(monkeypatch):
+    def fake_walk(top, followlinks=False, **_kw):
+        yield "/tmp", [], ["a"]
+        yield "/opt", [], []
+
+    def gone(_path):
+        raise FileNotFoundError(2, "gone")
+
+    monkeypatch.setattr(walk, "PRIORITY_ROOTS", ("/tmp",))
+    monkeypatch.setattr(walk.os, "walk", fake_walk)
+    monkeypatch.setattr(walk.os, "lstat", gone)
+    assert walk.PRIORITY_DONE in walk.collect()

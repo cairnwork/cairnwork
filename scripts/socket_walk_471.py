@@ -17,6 +17,7 @@ SKIP = {"/proc", "/sys", "/dev", "/usr", "/lib", "/lib32", "/lib64", "/bin", "/s
 # no daemon sockets, while the trees the witnesses use (home, /var/tmp) were never reached.
 DEFER = {"/opt"}
 PRIORITY_DONE = "priority-complete|-|-"  # everything except DEFER was walked before any stop
+PRIORITY_ROOTS = ("~", "/var/tmp", "/tmp")  # trees the witnesses read; each must really be walked
 MAX_ENTRIES = 5_000_000
 SUN_PATH_LIMIT = 104  # smallest sun_path (macOS); Linux allows 108
 _cwd_lost = False  # set when the working directory could not be restored
@@ -42,6 +43,30 @@ def location(path: str) -> str:
     if path.startswith(("/bin/", "/sbin/", "/lib/", "/lib64/", "/etc/", "/usr/")):
         return "usr-and-other-system"
     return "other"
+
+
+def _priority_paths() -> set[str]:
+    """The priority roots as walked paths: as written and with symlinks resolved."""
+    paths: set[str] = set()
+    for root in PRIORITY_ROOTS:
+        root = os.path.normpath(os.path.expanduser(root))
+        paths.update((root, os.path.realpath(root)))
+    return paths
+
+
+def _priority_complete(counts: dict[str, int], entered: set[str]) -> bool:
+    """True when every existing priority root was entered and nothing in the walk failed.
+
+    A root that exists but was never entered (a symlink is not followed), a directory that could
+    not be listed, or a file whose lstat failed for any reason but "gone" all withhold the mark.
+    """
+    if any(key.endswith(("|-|unlistable", "|-|unstatable")) for key in counts):
+        return False
+    for root in PRIORITY_ROOTS:
+        root = os.path.normpath(os.path.expanduser(root))
+        if os.path.isdir(root) and not {root, os.path.realpath(root)} & entered:
+            return False
+    return True
 
 
 def _probe(path: str) -> tuple[str, str]:
@@ -151,6 +176,7 @@ def _walk(
         counts[key] = counts.get(key, 0) + 1
 
     deadline = time.monotonic() + BUDGET_SECONDS
+    priority, entered = _priority_paths(), set[str]()
     for root, dirs, files in os.walk(top, followlinks=False, onerror=unlistable):
         if time.monotonic() >= deadline:  # directories without files also count against the budget
             outcome["stop"] = "time"
@@ -161,7 +187,9 @@ def _walk(
             dirs[:] = [d for d in kept if d not in late] + late
         else:
             dirs[:] = [d for d in dirs if os.path.join(root, d) not in SKIP]
-        if root in DEFER:
+        if root in priority:
+            entered.add(root)
+        if root in DEFER and _priority_complete(counts, entered):
             counts[PRIORITY_DONE] = 1
         here = location(root)
         walked[here] = walked.get(here, 0) + len(files)
@@ -174,7 +202,10 @@ def _walk(
             try:
                 if not stat.S_ISSOCK(os.lstat(path).st_mode):
                     continue
-            except OSError:
+            except OSError as exc:
+                if exc.errno not in (errno.ENOENT, errno.ENOTDIR):  # a file that vanished is fine
+                    key = f"{location(path)}|-|unstatable"
+                    counts[key] = counts.get(key, 0) + 1
                 continue
             loc = location(path)
             kind, result = _probe(path)
@@ -183,9 +214,16 @@ def _walk(
                 outcome["stop"] = "cwd"
                 return
             counts[key] = counts.get(key, 0) + 1
+    outcome["entered"] = entered
 
 
-def _run(top, counts, walked, progress, outcome) -> None:  # noqa: ANN001
+def _run(
+    top: str,
+    counts: dict[str, int],
+    walked: dict[str, int],
+    progress: dict[str, int],
+    outcome: dict[str, object],
+) -> None:
     try:
         _walk(top, counts, walked, progress, outcome)
     except BaseException as exc:  # noqa: BLE001 - re-raised on the calling thread
@@ -199,6 +237,8 @@ def collect(top: str = "/") -> dict[str, int]:
     is not read as "no sockets". The walk runs on a worker thread and the caller waits at most
     BUDGET_SECONDS + HANG_GRACE_SECONDS: one filesystem call that never returns (a hung mount)
     cannot hold the report past that, which then says `stopped-by-hang` with the partial counts.
+    After a hang the worker thread is still blocked in its call (a daemon thread, left behind);
+    a caller other than main() must not rely on the process exiting by itself.
     """
     counts: dict[str, int] = {}
     walked: dict[str, int] = {}
@@ -216,7 +256,9 @@ def collect(top: str = "/") -> dict[str, int]:
         raise error
     if outcome.get("stop"):
         return _stop(counts, str(outcome["stop"]), progress["entries"], walked)
-    counts[PRIORITY_DONE] = 1  # a full walk also completed the priority trees
+    entered = outcome.get("entered")
+    if isinstance(entered, set) and _priority_complete(counts, entered):
+        counts[PRIORITY_DONE] = 1  # a full walk also completed the priority trees
     return _finish(counts, progress["entries"], walked)
 
 
@@ -224,12 +266,15 @@ def main() -> None:
     report = collect()
     output = json.dumps(report, sort_keys=True)
     print(output, flush=True)
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        _write_summary(summary, report)
     if "stopped-by-hang|-|-" in report:  # a worker is stuck in a call: do not wait for it at exit
         sys.stdout.flush()
         os._exit(0)
-    summary = os.environ.get("GITHUB_STEP_SUMMARY")
-    if not summary:
-        return
+
+
+def _write_summary(summary: str, report: dict[str, int]) -> None:
     try:  # the sandbox filesystem is read-only: the JSON above is the report
         with open(summary, "a", encoding="utf-8") as handle:
             handle.write("\n| Location | Socket type | Result | Count |\n|---|---|---|---:|\n")

@@ -172,7 +172,7 @@ def _publish_walk(label: str, report_text: str) -> None:
 
 
 def _require_priority_trees_walked(report: dict, report_text: str) -> None:
-    """Fail unless every tree except the deferred /opt was walked (#1603).
+    """Fail unless every priority tree (home, /var/tmp, /tmp) was walked cleanly (#1603).
 
     The walk visits /opt last because it holds ~240k toolchain files on CI runners and used to
     use the whole time budget before home and /var/tmp. A stop inside /opt is not a failure of
@@ -203,6 +203,7 @@ def test_owner_socket_walk_reports_categories_only(fixture_tree):
     assert isinstance(report, dict)
     _publish_walk("owner", report_text)
     _require_priority_trees_walked(report, report_text)
+    assert "walked-home|-|-" in report  # home really was walked, not merely absent from the report
     assert sum(count for key, count in report.items() if key.startswith("home|")) >= 1
     print(report_text)
     warnings.warn(report_text, stacklevel=2)
@@ -244,7 +245,9 @@ def test_verifier_socket_walk_reports_categories_only(account_tree):
         report = json.loads(report_text)
         _publish_walk("verifier account", report_text)
         _require_priority_trees_walked(report, report_text)
-        # /var/tmp is a private tree since #471 step 2b: the walk must not see the socket
+        # /var/tmp is a private tree since #471 step 2b: the walk must not see the socket, and the
+        # zero below only means something if /var/tmp was really walked (positive control)
+        assert "walked-var-tmp|-|-" in report, report_text
         assert sum(count for key, count in report.items() if key.startswith("var-tmp|")) == 0
         print(report_text)
         warnings.warn(report_text, stacklevel=2)
