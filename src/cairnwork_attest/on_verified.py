@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 from cairnwork_attest.bundle import BundleError, parse_bundle, read_bundle, read_bundle_bytes
 from cairnwork_attest.checkrun import _SLUG, TOKEN_ENV, post_check_run
@@ -28,7 +28,7 @@ from cairnwork_attest.keys import load_private_key, public_key_pem
 from cairnwork_attest.publish import publish_bundle
 from cairnwork_attest.record import AttestError, VerifiedRecord, verify_record
 from cairnwork_attest.statement import default_producer, run_test_source
-from cairnwork_attest.verify import verify_bundle
+from cairnwork_attest.verify import _verify_loaded
 from cairnwork_protocol import canonical_json
 
 _OID = re.compile(r"^[0-9a-f]{40}$")
@@ -101,13 +101,26 @@ def _write_private(path: Path, envelope: dict[str, Any]) -> None:
     os.close(fd)
 
 
+@dataclass
+class _Key:
+    """The one public key of this run: taken from the signing key in the statement step, then
+    handed to every later step, so no step trusts a file that could have changed (#1683)."""
+
+    path: Path
+    public: Ed25519PublicKey | None = None
+
+
 def _existing_is_ours(
-    path: Path, args: argparse.Namespace, pubkey: Path, verified: VerifiedRecord
+    path: Path, args: argparse.Namespace, pubkey: _Key, verified: VerifiedRecord
 ) -> bool:
     """Reuse a bundle left by an earlier run only if it fully verifies for this candidate and
     was signed for this very notary record (same request hash, so same task and attempt)."""
-    result = verify_bundle(
-        path, public_key_pem=pubkey, repo=Path(args.repo), expected_candidate=args.candidate
+    result = _verify_loaded(
+        path,
+        public_key_pem=pubkey.path,
+        public_key=pubkey.public,
+        repo=Path(args.repo),
+        expected_candidate=args.candidate,
     )
     if not result.ok or result.statement is None:
         return False
@@ -132,7 +145,7 @@ def _exists_message(bundle: Path) -> str:
     return f"bundle already exists: {bundle}"
 
 
-def _statement_step(args: argparse.Namespace, bundle: Path, pubkey: Path) -> _Step:
+def _statement_step(args: argparse.Namespace, bundle: Path, pubkey: _Key) -> _Step:
     try:
         verified = verify_record(
             Path(args.state) / "notary.sqlite",
@@ -141,7 +154,8 @@ def _statement_step(args: argparse.Namespace, bundle: Path, pubkey: Path) -> _St
             expected_candidate=args.candidate,
         )
         private_key = load_private_key(Path(args.state))
-        pubkey.write_text(public_key_pem(private_key.public_key()))
+        pubkey.public = private_key.public_key()
+        pubkey.path.write_text(public_key_pem(pubkey.public))
         if bundle.is_symlink():
             raise BundleError(f"bundle path is a symlink: {bundle}", code="BUNDLE_EXISTS")
         if bundle.exists():
@@ -157,14 +171,15 @@ def _statement_step(args: argparse.Namespace, bundle: Path, pubkey: Path) -> _St
     return _Step("statement", "OK")
 
 
-def _publish_step(args: argparse.Namespace, bundle: Path, pubkey: Path) -> _Step:
+def _publish_step(args: argparse.Namespace, bundle: Path, pubkey: _Key) -> _Step:
     """Read the bundle once, check its signature on those bytes, publish those same bytes (#458:
     a file swapped after the statement step is never published)."""
     try:
         raw = read_bundle_bytes(bundle)
-        refused = verify_bundle(
+        refused = _verify_loaded(
             bundle,
-            public_key_pem=pubkey,
+            public_key_pem=pubkey.path,
+            public_key=pubkey.public,
             repo=Path(args.repo),
             expected_candidate=args.candidate,
             envelope=parse_bundle(raw),
@@ -184,11 +199,12 @@ def _publish_step(args: argparse.Namespace, bundle: Path, pubkey: Path) -> _Step
     return _Step("publish", result.code, result.detail)
 
 
-def _check_run_step(args: argparse.Namespace, bundle: Path, pubkey: Path) -> _Step:
+def _check_run_step(args: argparse.Namespace, bundle: Path, pubkey: _Key) -> _Step:
     result = post_check_run(
         bundle,
         args.repo_slug,
-        public_key=pubkey,
+        public_key=pubkey.path,
+        loaded_key=pubkey.public,
         repo=Path(args.repo),
         token=os.environ.get(TOKEN_ENV),
         gh=args.gh,
@@ -205,7 +221,7 @@ def _guarded(name: str, step: Callable[[], _Step]) -> _Step:
         return _Step(name, "ERROR", f"{type(exc).__name__}: {exc}")
 
 
-def _run_steps(args: argparse.Namespace, bundle: Path, pubkey: Path) -> list[_Step]:
+def _run_steps(args: argparse.Namespace, bundle: Path, pubkey: _Key) -> list[_Step]:
     steps = [_guarded("statement", lambda: _statement_step(args, bundle, pubkey))]
     if steps[-1].code == "OK":
         steps.append(_guarded("publish", lambda: _publish_step(args, bundle, pubkey)))
@@ -277,7 +293,7 @@ def cmd_on_verified(args: argparse.Namespace) -> int:
     bundle = out_dir / f"{args.task_id}-{args.attempt_id}.bundle.json"
     try:
         with tempfile.TemporaryDirectory(prefix="cairnwork-onverified-") as tmp:
-            steps = _run_steps(args, bundle, Path(tmp) / "public.pem")
+            steps = _run_steps(args, bundle, _Key(Path(tmp) / "public.pem"))
     except OSError as exc:  # the temp dir itself could not be created or removed
         steps = [_Step("statement", "ERROR", f"temporary directory: {exc.strerror or exc}")]
     return _report(args, bundle if steps[0].code == "OK" else None, steps)

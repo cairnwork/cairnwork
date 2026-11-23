@@ -236,6 +236,7 @@ def post_check_run(
     repo_slug: str,
     *,
     public_key: Path | None = None,
+    loaded_key: Any = None,
     repo: Path | None = None,
     name: str = "cairnwork attestation",
     details_url: str | None = None,
@@ -256,7 +257,9 @@ def post_check_run(
     try:
         facts = _facts(Path(bundle_path))
         key = None
-        if public_key is not None:
+        if public_key is not None and loaded_key is not None:
+            key = loaded_key  # the caller already holds the key: the file is not read (#1683)
+        elif public_key is not None:
             key = load_public_key_pem(
                 public_key.read_bytes()
             )  # an operator key problem never reads as a forgery
