@@ -33,11 +33,11 @@ def http(monkeypatch: pytest.MonkeyPatch) -> FakeHttp:
 MARKER = "SWAPPED-BUNDLE-MARKER-7f3a"
 
 
-def _note(bare: Path, candidate: str) -> str | None:
+def _note(bare: Path, candidate: str, ref: str = "refs/notes/cairnwork") -> str | None:
     import subprocess
 
     proc = subprocess.run(
-        ["git", "-C", str(bare), "notes", "--ref=refs/notes/cairnwork", "show", candidate],
+        ["git", "-C", str(bare), "notes", f"--ref={ref}", "show", candidate],
         capture_output=True,
         text=True,
         check=False,
@@ -122,3 +122,39 @@ def test_verified_bytes_over_the_size_cap_are_refused(env: Env, capsys: pytest.C
     big = env.bundle.read_bytes() + b" " * MAX_BUNDLE_BYTES
     result = publish_bundle(env.bundle, env.repo, env.candidate, verified=big)
     assert result.code == "BUNDLE_TOO_LARGE" and not result.ok
+
+
+def test_verify_checks_the_same_bytes_that_are_published(
+    env: Env, http: FakeHttp, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bytes read for the publish step are the ones verified: the file on disk stays valid
+    while the read hands back a broken signature, and that must be refused."""
+    real = on_verified.read_bundle_bytes
+    monkeypatch.setattr(on_verified, "read_bundle_bytes", lambda p: _garbled_signature(real(p)))
+    rc, out, obj = _run(capsys, env.argv())
+    assert rc == 2
+    assert _codes(obj)[:2] == [("statement", "OK"), ("publish", "SIGNATURE_INVALID")]
+    assert _note(env.bare, env.candidate) is None
+    assert MARKER not in out and http.calls == []
+
+
+def test_plain_publish_does_not_reread_the_file_after_the_guarded_read(
+    env: Env, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cairnwork_attest import publish
+
+    assert _run(capsys, env.argv("--no-check-run"))[0] == 0
+    original = env.bundle.read_bytes()
+    real = publish.read_bundle_bytes
+
+    def read_then_swap(path: Path) -> bytes:
+        raw = real(path)
+        path.write_bytes(_garbled_signature(raw))
+        return raw
+
+    monkeypatch.setattr(publish, "read_bundle_bytes", read_then_swap)
+    ref = "refs/notes/fresh"
+    result = publish_bundle(env.bundle, env.repo, env.candidate, notes_ref=ref)
+    assert result.code == "PUBLISHED"
+    note = _note(env.bare, env.candidate, ref)
+    assert note == original.decode() and MARKER not in note
