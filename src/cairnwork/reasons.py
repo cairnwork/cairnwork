@@ -161,9 +161,10 @@ def why_not_passed(
         else:
             causes.extend(_kind_causes(fail_kind or {}))
         if denied_path:  # #962: a candidate run; the same denial on a base run is BASE_ENV_ERROR
+            where = "1 denied path (withheld)" if hidden_tests else _names([denied_path])[3:]
             causes.append(
                 f"the failing tests report an operation not permitted (EPERM) at"
-                f" {_names([denied_path])[3:]}, outside the"
+                f" {where}, outside the"
                 " run's write roots: unless the change"
                 " raised this itself, likely the run environment, not evidence about the change"
             )

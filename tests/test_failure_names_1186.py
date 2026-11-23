@@ -141,3 +141,11 @@ def test_hidden_base_comparison_not_run_is_a_count():
     targets = frozenset({"tests/test_CANARYname.py::test_x"})
     assert "CANARYname" not in base_comparison([_base_run()], targets).detail
     assert "CANARYname" in base_comparison([_base_run(hidden_tests=False)], targets).detail
+
+
+def test_denied_path_is_named_for_visible_runs_and_withheld_for_hidden_ones():
+    args = dict(BASE, denied_path="/private/CANARY-path")
+    visible = why_not_passed(**args)
+    assert "/private/CANARY-path" in visible and "EPERM" in visible
+    hidden = why_not_passed(**args, hidden_tests=True)
+    assert "CANARY" not in hidden and "1 denied path (withheld)" in hidden
