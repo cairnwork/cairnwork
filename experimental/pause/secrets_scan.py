@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
+from experimental.pause.secrets_clean import drop_invisible as _drop_invisible
 from experimental.pause.secrets_decode import decoded_views
 
 # Leak guard, recall first: a name (assignment or --flag) whose lower-cased form, with - and _
@@ -142,24 +143,6 @@ def _scan_view(text: str, names: tuple[str, ...]) -> list[str]:
 
 
 _ZERO_WIDTH = r"[\u00ad\u200b-\u200d\u2060\u2061-\u2064\ufeff]"  # the earlier hand list
-_ASCII_CONTROL = re.compile(r"[\x00-\x08\x0e-\x1f\x7f]")
-_FILLERS = frozenset("\u115f\u1160\u3164\uffa0\u2800")  # Default_Ignorable, not in C*/Mn/Me
-
-
-def _drop_invisible(text: str, repl: str = "") -> str:
-    """``text`` without invisible characters, chosen by Unicode category as textclean does: C*
-    (control, format, private use, unassigned) except whitespace, the combining marks Mn/Me, and
-    the fillers outside those categories (Hangul fillers, Braille blank). ``repl`` stands in for
-    each one (a space: an invisible character may itself be the separator)."""
-
-    if text.isascii() and not _ASCII_CONTROL.search(text):
-        return text  # nothing to drop; skips a per-character pass over a large input
-
-    def invisible(ch: str) -> bool:
-        cat = unicodedata.category(ch)
-        return (cat[0] == "C" and not ch.isspace()) or cat in ("Mn", "Me") or ch in _FILLERS
-
-    return "".join(repl if invisible(ch) else ch for ch in text)
 
 
 def _forms(word: str) -> tuple[str, ...]:

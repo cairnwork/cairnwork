@@ -5,12 +5,15 @@ as the secret it is. ``decoded_views`` returns the extra texts to scan. Every bo
 when one is hit it returns ``None`` and the caller refuses; it never skips. Limits: a text that
 needs more than ``_DEPTH`` decoding layers, more than ``MAX_VIEWS`` views, a decoded view over
 ``MAX_VIEW_CHARS`` characters, ``MAX_CHARS`` characters in all, or an encoded run (base64 or
-base32 characters without a break) longer than ``MAX_CHARS``, is refused.
-Encoded text of fewer than ``_MIN_SEGMENT`` characters is not decoded (too short to tell from
-noise). Base64 cut into pieces shorter than 16 characters is not rejoined (MIME 64/76
-columns are); any whitespace, NBSP included, rejoins pieces. A false refusal is possible by
-design (not measured): an unbroken run of 32K+ base64/base32 characters (a long list of hashes
-or UUIDs, a hex dump, a large data URI) is refused, not scanned.
+base32 characters; pieces joined by whitespace count as one run) longer than ``MAX_CHARS``, is
+refused. Decoded bytes are cleaned by the scanner's own ``drop_invisible`` plus NFKC before
+stretches are cut, so invisible, combining, control and look-alike characters inside an encoded
+(also nested) secret do not hide it; whitespace that NFKC does not fold still splits it, as in
+plain text. Encoded text of fewer than ``_MIN_SEGMENT`` characters is not decoded (too short to
+tell from noise). Base64 cut into pieces shorter than 16 characters is not rejoined (MIME 64/76
+columns are); any whitespace rejoins pieces. Known false refusals (fail closed, by design, rate
+not measured): an encoded run of 32K+ characters (a long list of hashes or UUIDs, a hex dump, a
+large data URI) and a decoded readable stretch of 4096+ characters.
 """
 
 from __future__ import annotations
@@ -19,8 +22,11 @@ import base64
 import binascii
 import html
 import re
+import unicodedata
 from collections.abc import Iterable
 from urllib.parse import unquote
+
+from experimental.pause.secrets_clean import drop_invisible
 
 MAX_VIEWS = 32
 MAX_VIEW_CHARS = 4096  # the assignment and flag patterns cost more than linear per view
@@ -39,12 +45,7 @@ _UNI = re.compile(
     r"(?:\\{1,2}u|%u)([0-9a-fA-F]{4})|\\{1,2}U([0-9a-fA-F]{8})|\\{1,2}x([0-9a-fA-F]{2})"
     r"|\\{1,2}u\{([0-9a-fA-F]{1,6})\}"
 )
-# readable bytes, also with the invisible, control and full-width characters the scan removes or
-# folds (zero-width, BOM, soft hyphen, C0 controls, U+FF00-FF7F): a secret split by one still shows
-_TEXT = re.compile(
-    rb"(?:[\x20-\x7e\r\n\t]|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]|\xc2\xad|\xef\xbb\xbf"
-    rb"|\xe2\x80[\x8b-\x8f\xa8-\xae]|\xe2\x81[\xa0-\xaf]|\xef[\xbc\xbd][\x80-\xbf]){16,}"
-)
+_PRINTABLE = re.compile(r"[\x20-\x7e\r\n\t]{16,}")  # a readable stretch: 16 or more characters
 
 
 def _codepoint(match: re.Match[str]) -> str:
@@ -59,9 +60,14 @@ class _Refuse(Exception):
 
 
 def _segments(raw: bytes) -> list[str]:
-    """The readable stretches of ``raw`` (16 or more printable characters, invisible ones included;
-    the caller's scan then strips and folds them)."""
-    return [m.group().decode("utf-8") for m in _TEXT.finditer(raw)]
+    """The readable stretches of ``raw``, cut from the text as the scan sees it: decoded as UTF-8,
+    cleaned of invisible characters and folded (NFKC) by the scanner's own function, so a secret
+    split by any invisible character, or written in look-alike letters, is whole again. The plain
+    ASCII stretches of the bytes are kept too (the union)."""
+    text = raw.decode("utf-8", errors="replace")
+    cleaned = drop_invisible(unicodedata.normalize("NFKC", drop_invisible(text)))
+    found = [*_PRINTABLE.findall(cleaned), *_PRINTABLE.findall(raw.decode("latin-1"))]
+    return list(dict.fromkeys(found))
 
 
 def _b64_decode(run: str, offset: int) -> bytes | None:
@@ -71,10 +77,6 @@ def _b64_decode(run: str, offset: int) -> bytes | None:
         return base64.b64decode(std + "=" * (-len(std) % 4))
     except (binascii.Error, ValueError):
         return None
-
-
-def _readable(raw: bytes | None) -> bool:
-    return raw is not None and _TEXT.search(raw) is not None
 
 
 def _decode_blobs(text: str) -> list[str]:

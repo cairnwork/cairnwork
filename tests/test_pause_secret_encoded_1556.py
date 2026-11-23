@@ -204,7 +204,48 @@ def test_invisible_chars_inside_an_encoded_secret(key, wrap):
     assert "encoded_overflow" not in hits
 
 
-def test_nbsp_separated_base64_is_rejoined():
+@pytest.mark.parametrize("sep", ["\v", "\f", "\x1c", "\x1f", "\x85", "\u2028", "\u2029", "\u1680"])
+def test_any_whitespace_rejoins_wrapped_base64(sep):
     blob = base64.b64encode((KEY + "x" * 40).encode()).decode()
     pieces = [blob[i : i + 20] for i in range(0, len(blob), 20)]
-    assert "api_key" in Scanner(NAMES).scan("\u00a0".join(pieces))
+    assert "api_key" in Scanner(NAMES).scan(sep.join(pieces))
+
+
+_HIDERS = [
+    "\u0080", "\u034f", "\ufe0f", "\U000e0041", "\u180e", "\u061c", "\ufff9", "\ue000",
+    "\uffa0", "\u3164", "\u200b", "\x01", "\ufeff", "\u00ad",
+]  # fmt: skip
+
+
+@pytest.mark.parametrize("hider", _HIDERS, ids=[f"U+{ord(h[0]):04X}" for h in _HIDERS])
+@pytest.mark.parametrize(
+    "wrap", [lambda s: base64.b64encode(s.encode()).decode(), lambda s: s.encode().hex()]
+)
+def test_every_hider_category_inside_an_encoded_secret(hider, wrap):
+    hits = Scanner(NAMES).scan(f"data {wrap(KEY[:9] + hider + KEY[9:])}")
+    assert "api_key" in hits
+    assert "encoded_overflow" not in hits
+
+
+def test_math_alphanumeric_key_is_folded():
+    bold = "".join(chr(0x1D41A + ord(c) - 97) if "a" <= c <= "z" else c for c in KEY)
+    assert "api_key" in Scanner(NAMES).scan(base64.b64encode(bold.encode()).decode())
+
+
+def test_nested_layers_each_with_a_hider():
+    inner = base64.b64encode((KEY[:9] + "\u200b" + KEY[9:]).encode()).decode()
+    outer = base64.b64encode((inner[:10] + "\u200b" + inner[10:]).encode()).decode()
+    assert "api_key" in Scanner(NAMES).scan(outer)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "img " + base64.b64encode(bytes(5000)).decode(),
+        base64.b64encode(("hello world " * 210).encode("utf-16-le")).decode(),
+        "00" * 4200,
+    ],
+    ids=["zero-buffer", "utf16-text", "zero-hex"],
+)
+def test_binary_and_wide_text_are_not_refused(text):
+    assert Scanner(NAMES).scan(text) == []
