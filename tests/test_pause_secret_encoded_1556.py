@@ -261,6 +261,18 @@ _PLAIN = [
     "API_TOKEN=" + MARK + "aaaabbbbccccdddd",
     KEY[:9] + "\u00a0" + KEY[9:],
     "login " + NAMES[0] + " now",
+    *(
+        "Authorization: Bearer"
+        + "\u200b" * n
+        + " sk-live-"
+        + MARK
+        + "abcdefghijklmnopqrstuvwxyz012"
+        for n in (1, 4, 5, 8, 40)
+    ),
+    "Authorization: Bearer\u200b\u200d\u2060\ufeff sk-live-"
+    + MARK
+    + "abcdefghijklmnopqrstuvwxyz012",
+    "Authorization: Bearer\x01\x02\x03\x04\x05 sk-live-" + MARK + "abcdefghijklmnopqrstuvwxyz012",
 ]
 
 
@@ -272,3 +284,10 @@ def test_encoded_gets_the_same_hits_as_plain(plain, wrap):
     want = set(Scanner(NAMES).scan(plain))
     assert want
     assert set(Scanner(NAMES).scan(f"data {wrap(plain)}")) == want
+
+
+def test_long_invisible_run_stays_short():
+    from experimental.pause.secrets_decode import _pieces
+
+    (piece,) = _pieces("a" + "\u200b" * 5000 + " b")
+    assert len(piece) < 20 and piece.endswith(" b")

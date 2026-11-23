@@ -8,9 +8,11 @@ needs more than ``_DEPTH`` decoding layers, more than ``MAX_VIEWS`` views, a dec
 base32 characters; pieces joined by whitespace count as one run) longer than ``MAX_CHARS``, is
 refused. A decoded stretch (ASCII, whitespace, invisible characters, letters NFKC folds to
 ASCII; at least 16 visible characters once cleaned) is scanned as written, so an encoded
-(also nested) secret gets the same result as the same plain text (a stretch over
-``MAX_VIEW_CHARS`` is scanned in its cleaned form only). Encoded text of fewer than
-``_MIN_SEGMENT`` characters is not decoded (too short to tell from noise). Base64 cut into
+(also nested) secret gets the same result as the same plain text, except: a stretch over
+``MAX_VIEW_CHARS`` is scanned in its cleaned form only, and a letter that NFKC does not fold
+to ASCII (accented, non-Latin) ends a stretch, so a decoded secret is scanned only up to it.
+Encoded text of fewer than ``_MIN_SEGMENT`` characters is not decoded (too short to tell from
+noise). Base64 cut into
 pieces shorter than 16 characters is not rejoined (MIME 64/76 columns are); any whitespace
 rejoins pieces. Known false refusals (fail closed, by design, rate not measured): an encoded
 run of 32K+ characters (a long list of hashes or UUIDs, a hex dump, a large data URI) and a
@@ -71,18 +73,23 @@ def _pieces(text: str) -> list[str]:
     out: list[str] = []
     piece: list[str] = []
     run = 0
+    spaced = False  # the current run already kept a whitespace character
     for ch in text:
         if ch.isascii() or ch.isspace() or not drop_invisible(ch):
             seen = not ch.isprintable() or ch.isspace()
             run = run + 1 if seen else 0
-            if run <= _RUN_KEEP:
+            if not seen:
+                spaced = False
+            # past the cap a run still keeps its first whitespace: patterns need a separator
+            if run <= _RUN_KEEP or (ch.isspace() and not spaced):
                 piece.append(ch)
+                spaced = spaced or ch.isspace()
         elif unicodedata.normalize("NFKC", ch).isascii():
             run = 0
             piece.append(ch)
         else:
             out.append("".join(piece))
-            piece, run = [], 0
+            piece, run, spaced = [], 0, False
     out.append("".join(piece))
     return out
 
