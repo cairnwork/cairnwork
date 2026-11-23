@@ -30,6 +30,17 @@ SHAPES = {
         "import shutil\ndef outer():\n    def inner():\n        for w in (shutil.copy,):\n"
         "            w('a', 'b')\n    inner()"
     ),
+    "for_unpack": "import shutil\nfor (a, w) in [(1, shutil.copy)]:\n    w('a', 'b')",
+    "for_star": "import shutil\nfor *a, w in [(1, shutil.copy)]:\n    w('a', 'b')",
+    "for_dict_values": "import shutil\nfor w in {'k': shutil.copy}.values():\n    w('a', 'b')",
+    "match_tuple": "import shutil\nmatch (shutil.copy,):\n    case (w,):\n        w('a', 'b')",
+    "with_tuple_target": (
+        "import shutil, contextlib\n"
+        "with contextlib.nullcontext((shutil.copy,)) as (w,):\n    w('a', 'b')"
+    ),
+    "default_tuple": "import shutil\ndef f(w=(shutil.copy,)):\n    w[0]('a', 'b')\nf()",
+    "lambda_kwonly": "import shutil\n(lambda *, w=shutil.copy: w('a', 'b'))()",
+    "os_writers": "import os\nfor w in (os.rename, os.replace):\n    w('a', 'b')",
 }
 PATH_EDIT = "import sys\nsys.path.insert(0, 'deep')\n"
 
@@ -49,8 +60,25 @@ def test_a_writer_bound_by_a_target_is_flagged(shape):
         "def f(value=3):\n    return value",
         "[x for x in range(3)]",
         "match command:\n    case other:\n        pass",
+        "with open('x') as f:\n    f.read()",
+        "with open('x', 'rb') as f, open('y') as g:\n    pass",
+        "for line in open('x'):\n    print(line)",
+        "[line for line in open('x')]",
+        "with open('x'):\n    pass",
+        "import shutil\nwith ctx(shutil.copy):\n    pass",
     ],
 )
 def test_binding_without_a_writer_is_not_flagged(snippet):
     source = (PATH_EDIT + snippet + "\n").encode()
     assert runtime_shadow_added(None, source) is False
+
+
+def test_a_with_context_without_as_binds_nothing():
+    import ast
+
+    from cairnwork.candidate_alias_targets import target_binding_sources
+
+    item = ast.parse("with ctx(shutil.copy):\n    pass").body[0].items[0]
+    assert target_binding_sources(item) == []
+    item = ast.parse("with ctx(shutil.copy) as w:\n    pass").body[0].items[0]
+    assert len(target_binding_sources(item)) == 1
