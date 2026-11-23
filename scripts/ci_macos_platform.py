@@ -16,7 +16,8 @@ SIGNAL = re.compile(
     r"mark\.sandbox|mark\.verifier_account|verifier_account|VerifierAccount"
     r"|seatbelt|sandbox-exec|sandbox_exec|cairnwork_sandbox"
     r"|REQUIRE_SANDBOX|REQUIRE_VERIFIER"
-    r"|sys\.platform|platform\.system|platform\.uname|os\.uname|darwin|skipif",
+    r"|sys\.platform|platform\.system|platform\.uname|os\.uname|darwin|skipif"
+    r"|pytest\.skip|importorskip|\.skip\(|mark\.skip\b",
     re.IGNORECASE,
 )
 

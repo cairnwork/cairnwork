@@ -19,12 +19,12 @@ permissions:
 # Nothing re-runs it automatically; a cancelled run can be re-run by hand. PR heads are always
 # tested before they land, unaffected by this.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || ((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'nightly') || 'main' }}
+  group: ci-${{ github.event.pull_request.number || (github.event_name == 'schedule' && 'nightly') || (github.event_name == 'workflow_dispatch' && format('dispatch-{0}', github.ref)) || 'main' }}
   cancel-in-progress: true
 
 jobs:
   test:
-    if: github.event_name != 'schedule'
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 60  # a hung job must not hold a runner for the 6 h GitHub default (#1499)
     strategy:
@@ -102,7 +102,7 @@ jobs:
   # tests/test_ci_macos_platform_guard.py pins this wiring and the selection. Check names unchanged.
   test-macos-shard:
     name: test-macos-shard (${{ matrix.shard }})
-    if: github.event_name != 'push'
+    if: ${{ github.event_name == 'pull_request' || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}
     strategy:
       fail-fast: false
       matrix:
@@ -196,7 +196,7 @@ jobs:
   # The required check keeps its name: green only when both shards are green.
   test-macos:
     needs: test-macos-shard
-    if: ${{ always() && github.event_name != 'push' }}
+    if: ${{ always() && (github.event_name == 'pull_request' || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -210,11 +210,10 @@ jobs:
   macos-nightly-report:
     name: open or update the macOS nightly Issue
     needs: test-macos-shard
-    if: ${{ always() && github.event_name != 'push' && github.event_name != 'pull_request' && needs.test-macos-shard.result == 'failure' }}
+    if: ${{ always() && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')) && needs.test-macos-shard.result == 'failure' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      actions: read
       contents: read
       issues: write
     steps:
@@ -243,7 +242,7 @@ jobs:
   # (unguarded on purpose: a host that cannot nest namespaces reddens the leg rather than letting
   # the sandbox tests skip silently), then runs the sandbox witnesses under CAIRNWORK_REQUIRE_SANDBOX.
   test-linux-sandbox:
-    if: github.event_name != 'schedule'
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
     strategy:
       fail-fast: false
       matrix:
@@ -286,7 +285,7 @@ jobs:
   # Creates the account, then runs the account witnesses on real bwrap with the account
   # required — a missing or unusable account fails the job (it cannot silently skip).
   test-linux-verifier-account:
-    if: github.event_name != 'schedule'
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 30  # a hung job must not hold a runner for the 6 h GitHub default (#1499)
     env:
@@ -334,7 +333,7 @@ jobs:
   # AppArmor's default userns restriction is lifted here exactly as an end user loads an AppArmor
   # profile. Advisory, not a required check.
   demo-linux:
-    if: github.event_name != 'schedule'
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 30  # a hung job must not hold a runner for the 6 h GitHub default (#1499)
     steps:

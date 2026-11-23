@@ -26,6 +26,28 @@ CI = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 CHECK_CALLS = {"sys.platform", "platform.system", "platform.uname", "os.uname"}
 NAME_HINT = re.compile(r"seatbelt|sandbox-exec|sandbox_exec|darwin", re.IGNORECASE)
 MARKS = {"sandbox", "verifier_account"}
+# a test that skips at run time may be skipping one platform's case (Issue #1684 review)
+SKIP_CALL = re.compile(r"(^|\.)(skip|importorskip)$")
+# src modules with a platform branch. Their unmarked tests run on Linux in a pull request and on
+# macOS in the nightly: an accepted trade-off. A new module here must be added on purpose.
+SRC_PLATFORM_MODULES = {
+    "src/cairnwork/account_checkout.py",
+    "src/cairnwork/bytecode_hook.py",
+    "src/cairnwork/confined.py",
+    "src/cairnwork/conftest_reach.py",
+    "src/cairnwork/old_python_probe.py",
+    "src/cairnwork/proc_cwd.py",
+    "src/cairnwork/proc_start.py",
+    "src/cairnwork/protection.py",
+    "src/cairnwork/run_scrub.py",
+    "src/cairnwork/survivor_argv.py",
+    "src/cairnwork/verifier_account.py",
+    "src/cairnwork/verifier_escape.py",
+    "src/cairnwork/verifier_select.py",
+    "src/cairnwork_sandbox/__init__.py",
+}
+PLATFORM_IN_SRC = re.compile(r"sys\.platform|platform\.system|os\.uname|darwin", re.IGNORECASE)
+LINUX_JOBS = ("test", "test-linux-sandbox", "test-linux-verifier-account", "demo-linux")
 
 
 def selected() -> list[str]:
@@ -44,6 +66,8 @@ def ast_platform_files() -> set[str]:
                     chain.startswith("pytest.mark.") and node.attr in MARKS
                 ):
                     found.add(rel)
+            elif isinstance(node, ast.Call) and SKIP_CALL.search(ast.unparse(node.func)):
+                found.add(rel)
             elif isinstance(node, ast.Constant) and isinstance(node.value, str):
                 if NAME_HINT.search(node.value):
                     found.add(rel)
@@ -91,14 +115,59 @@ def wiring_problems(text: str) -> list[str]:
         "  test-macos:",
         "name: test-macos-shard (${{ matrix.shard }})",
         'shard: ["1", "2"]',
-        "if: ${{ always() && github.event_name != 'push' }}",
+        "    needs: test-macos-shard\n    if: ${{ always() &&",
     ):
         if needle not in text:
             problems.append(f"a required check name or shape changed: {needle}")
     if "\n  workflow_dispatch:\n" not in text or "\n  schedule:\n" not in text:
         problems.append("the full suite lost its nightly or manual trigger")
-    if "macos-nightly-report:" not in text or "macOS nightly failed" not in text:
-        problems.append("a red full macOS run no longer opens or updates an Issue")
+    problems += report_problems(text) + trigger_problems(text)
+    feed = 'ci_macos_shard.py "${{ matrix.shard }}" ${mode[@]+"${mode[@]}"})'
+    if feed not in text or '"${files[@]}"' not in text:
+        problems.append("the selector output no longer feeds the pytest file list")
+    return problems
+
+
+def job_block(text: str, name: str) -> str:
+    found = re.search(rf"\n  {re.escape(name)}:\n(.*?)(?=\n  [A-Za-z][\w-]*:\n|\Z)", text, re.S)
+    return "\n" + found.group(1) if found else ""
+
+
+def report_problems(text: str) -> list[str]:
+    job = job_block(text, "macos-nightly-report")
+    problems = []
+    if not job:
+        return ["a red full macOS run no longer opens or updates an Issue"]
+    condition = re.search(r"\n    if: (.*)", job)
+    cond = condition.group(1) if condition else ""
+    if "needs.test-macos-shard.result == 'failure'" not in cond or "pull_request" in cond:
+        problems.append("the report job does not fire on a red full macOS run only")
+    if "github.ref == 'refs/heads/main'" not in cond or "schedule" not in cond:
+        problems.append("the report job is not limited to the schedule and main dispatch")
+    perms = re.search(r"\n    permissions:\n((?:      .*\n)+)", job)
+    if not perms or {ln.strip() for ln in perms.group(1).splitlines()} != {
+        "contents: read",
+        "issues: write",
+    }:
+        problems.append("the report job needs exactly contents: read and issues: write")
+    if "needs: test-macos-shard" not in job or "macOS nightly failed" not in job:
+        problems.append("the report job is not tied to the macOS shards or its Issue title")
+    return problems
+
+
+def trigger_problems(text: str) -> list[str]:
+    """A manual or scheduled run starts neither the Linux jobs nor a non-main macOS run."""
+    problems = []
+    for name in LINUX_JOBS:
+        condition = re.search(r"\n    if: (.*)", job_block(text, name))
+        cond = condition.group(1) if condition else ""
+        if "workflow_dispatch" in cond or "schedule" in cond or "pull_request" not in cond:
+            problems.append(f"Linux job {name} must run only on pull_request and push")
+    for name in ("test-macos-shard", "test-macos"):
+        condition = re.search(r"\n    if: (.*)", job_block(text, name))
+        cond = condition.group(1) if condition else ""
+        if "push" in cond or "github.ref == 'refs/heads/main'" not in cond:
+            problems.append(f"macOS job {name} must skip push and a non-main dispatch")
     return problems
 
 
@@ -139,6 +208,31 @@ def test_a_new_test_file_with_a_platform_signal_is_selected(tmp_path, text):
     (tmp_path / "tests" / "test_new.py").write_text(text)
     paths = shards.test_files(tmp_path)
     assert platform_select.platform_files(tmp_path, paths) == ["tests/test_new.py"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "import pytest\ndef test_a():\n    pytest.skip('no')\n",
+        "import pytest\nx = pytest.importorskip('y')\n",
+        "import pytest\n@pytest.mark.skip(reason='x')\ndef test_a(): ...\n",
+    ],
+)
+def test_a_test_that_skips_at_run_time_is_selected(tmp_path, text):
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_new.py").write_text(text)
+    assert platform_select.platform_files(tmp_path, shards.test_files(tmp_path)) == [
+        "tests/test_new.py"
+    ]
+
+
+def test_the_src_modules_with_a_platform_branch_are_the_listed_ones():
+    found = {
+        p.relative_to(ROOT).as_posix()
+        for p in (ROOT / "src").rglob("*.py")
+        if PLATFORM_IN_SRC.search(p.read_text(encoding="utf-8"))
+    }
+    assert found == SRC_PLATFORM_MODULES, sorted(found ^ SRC_PLATFORM_MODULES)
 
 
 def test_a_plain_test_file_is_left_to_the_linux_jobs(tmp_path):
@@ -199,6 +293,28 @@ def test_ci_yml_gives_the_subset_to_pull_requests_only_and_keeps_the_check_names
         ('shard: ["1", "2"]', 'shard: ["1"]'),
         ("  workflow_dispatch:\n", ""),
         ("  macos-nightly-report:", "  macos-nightly-report-off:"),
+        (
+            "needs.test-macos-shard.result == 'failure'",
+            "needs.test-macos-shard.result == 'success'",
+        ),
+        ("      issues: write\n    steps:\n      - name: Open", "    steps:\n      - name: Open"),
+        (
+            "      contents: read\n      issues: write\n    steps:\n      - name: Open",
+            "      contents: write\n      issues: write\n    steps:\n      - name: Open",
+        ),
+        (
+            "github.event_name == 'pull_request' || github.event_name == 'push'",
+            "github.event_name != 'schedule'",
+        ),
+        (
+            "(github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}\n"
+            "    strategy:",
+            "github.event_name == 'workflow_dispatch' }}\n    strategy:",
+        ),
+        (
+            'ci_macos_shard.py "${{ matrix.shard }}" ${mode[@]+"${mode[@]}"})',
+            'ci_macos_shard.py "${{ matrix.shard }}")',
+        ),
     ],
 )
 def test_the_wiring_check_goes_red_when_the_workflow_is_weakened(old, new):
