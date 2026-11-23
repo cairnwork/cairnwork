@@ -12,8 +12,12 @@ import errno
 import os
 import select
 import time
+from typing import Any
 
 _POLL_SECONDS = 0.005
+
+# kqueue exists on BSD and macOS only: typed as Any so the Linux type check reads the same code
+_select: Any = select
 
 
 def wait_exited_unreaped(pid: int, timeout: float | None) -> bool:
@@ -46,22 +50,22 @@ def _wait_kqueue(pid: int, timeout: float | None) -> bool:
     is still there (``os.kill(pid, 0)``) counts as exited. Any other error raises, as waitid
     does. That check only means "some process holds this pid": it is the exited child only because
     the caller's precondition (see wait_exited_unreaped) says a zombie child keeps its pid."""
-    queue = select.kqueue()
+    queue = _select.kqueue()
     try:
-        change = select.kevent(
+        change = _select.kevent(
             pid,
-            select.KQ_FILTER_PROC,
-            select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
-            select.KQ_NOTE_EXIT,
+            _select.KQ_FILTER_PROC,
+            _select.KQ_EV_ADD | _select.KQ_EV_ONESHOT,
+            _select.KQ_NOTE_EXIT,
         )
         events = queue.control([change], 1, None if timeout is None else max(0.0, timeout))
     finally:
         queue.close()
     for event in events:
-        if event.flags & select.KQ_EV_ERROR:
+        if event.flags & _select.KQ_EV_ERROR:
             _exited_zombie_or_raise(pid, event.data)
             return True
-        if event.fflags & select.KQ_NOTE_EXIT:
+        if event.fflags & _select.KQ_NOTE_EXIT:
             return True
     return False
 

@@ -14,6 +14,7 @@ import pytest
 from cairnwork import confined, proc_wait
 
 TOKEN = "t-1549"
+kq: Any = select  # kqueue constants exist on BSD and macOS only
 needs_kqueue = pytest.mark.skipif(not hasattr(select, "kqueue"), reason="kqueue hosts only")
 
 
@@ -118,7 +119,7 @@ def test_a_pid_that_never_existed_raises(no_waitid: None):
 @needs_kqueue
 def test_any_other_kqueue_error_raises_not_exited(no_waitid: None, monkeypatch: Any):
     class FakeEvent:
-        flags = select.KQ_EV_ERROR
+        flags = kq.KQ_EV_ERROR
         fflags = 0
         data = errno.EPERM
 
