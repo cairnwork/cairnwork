@@ -79,7 +79,7 @@ def run_relay(
             stages=tuple(trail),
         )
     except LedgerError as exc:
-        return RelayResult("LEDGER_ERROR", reason=str(exc), stages=tuple(trail))
+        return RelayResult("LEDGER_ERROR", reason=redact(str(exc)), stages=tuple(trail))
 
 
 def _route(task_id, worker, acceptance, gate, fallback, ledger, config, trail):
@@ -107,7 +107,7 @@ def _local_attempt(task_id, worker, context, ledger, stage):
     try:
         attempt = worker(context)
     except (EndpointContextLimit, EndpointTimeout, EndpointUnreachable, LocalAttemptFailed) as exc:
-        failure = str(exc)
+        failure = redact(str(exc))  # worker failure text is stored: scrub it here, at the sink
         _append(ledger, _row(task_id, stage, "local", 0, 0, 0.0, failure))
         return None, failure
     _append(
@@ -131,6 +131,7 @@ class LocalAttemptFailed(RuntimeError):
 
 def _check_stage(task_id, attempt, acceptance, gate, ledger, config, stage, trail):
     result = acceptance(attempt.candidate)
+    shown_raw = _safe(result.raw)  # what may leave this function; guard_plan gets the real text
     settings = CallSettings(config.gate_model_id, config.gate_effort, config.timeout_seconds, 1)
     mark_stage = getattr(gate, "set_stage", None)
     if callable(mark_stage):
@@ -138,13 +139,15 @@ def _check_stage(task_id, attempt, acceptance, gate, ledger, config, stage, trai
     try:
         plan = config.plan_for(attempt.candidate) if config.plan_for else str(attempt.candidate)
     except PlanIncomplete as exc:  # part of the change cannot be shown: never approve it
-        trail.append(_stage(stage, result, None, f"PLAN_INCOMPLETE: {exc}"))
+        trail.append(_stage(stage, result, None, f"PLAN_INCOMPLETE: {redact(str(exc))}"))
         return RelayResult(
-            "REJECTED", attempt.candidate, result.passed, result.raw, None, "PLAN_INCOMPLETE"
+            "REJECTED", attempt.candidate, result.passed, shown_raw, None, "PLAN_INCOMPLETE"
         )
     except Exception as exc:  # noqa: BLE001 - plan failures fail closed like gate failures.
-        trail.append(_stage(stage, result, None, f"plan failed: {exc}"))
-        return RelayResult("FAILED", attempt.candidate, result.passed, result.raw, reason=str(exc))
+        trail.append(_stage(stage, result, None, f"plan failed: {redact(str(exc))}"))
+        return RelayResult(
+            "FAILED", attempt.candidate, result.passed, shown_raw, reason=redact(str(exc))
+        )
     withheld, categories = False, []
     if config.mask_secret_lines:
         sendable, categories = guard_plan(plan, result.raw)
@@ -162,7 +165,7 @@ def _check_stage(task_id, attempt, acceptance, gate, ledger, config, stage, trai
                 "REJECTED",
                 attempt.candidate,
                 result.passed,
-                result.raw,
+                shown_raw,
                 None,
                 Reason.PAUSE_SECRET_BLOCKED,
             )
@@ -170,8 +173,10 @@ def _check_stage(task_id, attempt, acceptance, gate, ledger, config, stage, trai
     try:
         reply = gate.review(GateRequest(task_id, "", plan, settings))
     except Exception as exc:  # noqa: BLE001 - injected gate failures must fail closed.
-        trail.append(_stage(stage, result, None, f"gate raised: {exc}"))
-        return RelayResult("FAILED", attempt.candidate, result.passed, result.raw, reason=str(exc))
+        trail.append(_stage(stage, result, None, f"gate raised: {redact(str(exc))}"))
+        return RelayResult(
+            "FAILED", attempt.candidate, result.passed, shown_raw, reason=redact(str(exc))
+        )
     reason = _verdict_reason(reply)
     if withheld and reason is None:
         reason = "MASKED_ACCEPT"  # the gate saw a summary, not the change: never counts as ACCEPT
@@ -192,9 +197,9 @@ def _check_stage(task_id, attempt, acceptance, gate, ledger, config, stage, trai
         ),
     )
     if result.passed and reply.verdict == "ACCEPT" and reason is None:
-        return RelayResult("ACCEPTED", attempt.candidate, result.passed, result.raw, reply.verdict)
+        return RelayResult("ACCEPTED", attempt.candidate, result.passed, shown_raw, reply.verdict)
     return RelayResult(
-        "REJECTED", attempt.candidate, result.passed, result.raw, reply.verdict, reason
+        "REJECTED", attempt.candidate, result.passed, shown_raw, reply.verdict, reason
     )
 
 
@@ -203,7 +208,7 @@ def _fallback_stage(task_id, fallback, acceptance, gate, ledger, config, failure
     try:
         attempt = fallback(task_id)
     except LocalAttemptFailed as exc:
-        failure = str(exc)
+        failure = redact(str(exc))
         _append(
             ledger,
             _row(
@@ -252,12 +257,17 @@ def _cost(reply: GateReply) -> float:
     return float(getattr(reply, "usd", 0.0))
 
 
+def _safe(value) -> str:
+    """Acceptance output and exception text reach the trail, the ledger and the CLI JSON."""
+    return redact(str(value))
+
+
 def _stage(stage, result, reply, reason):
     """One stage's evidence: Core acceptance and the gate's verdict (or why it gave none)."""
     return {
         "stage": stage,
         "acceptance_passed": result.passed,
-        "acceptance": str(result.raw)[:500],
+        "acceptance": _safe(result.raw)[:500],
         "gate_verdict": getattr(reply, "verdict", None),
         "gate_reason": reason,
         "gate_called": True,
