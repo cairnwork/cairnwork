@@ -127,7 +127,7 @@ def test_a_gauge_that_hangs_does_not_outlast_the_time_limit(monkeypatch, tmp_pat
         _py("import time; time.sleep(60)"), b"", timeout=1, output_cap=100, memory_limit=1 << 30
     )
     assert out == b"" and timed_out
-    assert time.monotonic() - started < 6
+    assert time.monotonic() - started < 3
 
 
 def test_a_live_group_missing_from_the_gauge_fails_closed(monkeypatch, tmp_path):
