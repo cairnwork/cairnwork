@@ -13,6 +13,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from cairnwork import deferred_collected
 from cairnwork.conftest_check import check_conftests, conftest_of
 from cairnwork.verifier_spec import VerifierSpec
 from cairnwork.verifiers import run_verifiers
@@ -29,10 +30,13 @@ def _on_base(repo: Path, base: str, path: str) -> bool:
     return done.returncode == 0
 
 
-def check_with_base(ctx, task, paths: tuple[str, ...], run_id: str) -> None:
-    """``check_conftests`` with the base's collected fixture names (None when not obtained)."""
+def check_with_base(ctx, task, paths: tuple[str, ...], run_id: str, targets=None) -> None:
+    """``check_conftests`` with the base's collected fixture names (None when not obtained); with
+    ``targets`` (``new_tests``), also the collected-set cross-check (#974)."""
     collected = collect(ctx, task, paths, run_id)
     check_conftests(task.repo, task.base_commit, task.test_commit, paths, collected=collected)
+    if targets is not None:
+        deferred_collected.check(ctx, task, paths, targets, f"{run_id}c")
 
 
 def collect(ctx, task, paths: tuple[str, ...], run_id: str):

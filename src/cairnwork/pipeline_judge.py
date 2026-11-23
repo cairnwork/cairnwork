@@ -117,7 +117,7 @@ def tests_with_teeth(
         _sealing_with_tests(task, ctx, candidate)
     paths, deleted = test_paths(task.repo, task.base_commit, task.test_commit, task.test_roots)
     targets = new_tests(task.repo, task.base_commit, task.test_commit, paths)  # may refuse
-    base_fixture_names.check_with_base(ctx, task, paths, f"{result.attempt_id}-f")  # #798, #986
+    base_fixture_names.check_with_base(ctx, task, paths, f"{result.attempt_id}-f", targets)  # #974
     named = (t for spec in specs for t in spec.targets)
     if missing := untargeted(without_conftests(paths), targets, named):
         hint = (
