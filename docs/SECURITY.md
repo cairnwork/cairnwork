@@ -136,9 +136,14 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
       is a system root, `$HOME`, an ancestor of it or of a write root, makes the policy refuse
       (#341); under the dedicated account only for a link it selects, so a dangling link whose
       target's parent the account cannot reach, or that sits in a home the account cannot enter
-      and points inside it, is ignored. Residual: the policy is built before the run, so a credential link repointed while
-      a run is in progress leaves its new target readable (main already had this for relative
-      links); tracked in #353.
+      and points inside it, is ignored. Residual (#353): a mask holds one filesystem object, so a
+      host that re-points a credential link, replaces or renames a masked file or directory, or
+      creates a credential path or socket tree during a run leaves the secret readable for the
+      rest of it. This is detected after the run, not prevented: the run is not counted and raises
+      `CREDENTIAL_MASK_CHANGED` (a retry is safe; a base run is UNCOMPARABLE), by comparing the
+      masked objects and the policy rebuilt from the same inputs. For files this is detection
+      only: a read already done inside the run is not undone, and a change undone before the check
+      is not seen. A host tool that rewrites a masked path by replacement fails the run.
       A link found *inside* a credential directory (`~/.aws/credentials -> /srv/x/cred`, up to
       three levels deep) has its real target masked too when that target leaves the directory,
       by the same rule and the same reach rule under the dedicated account (#377): the
@@ -263,6 +268,8 @@ worker account and `test_source: "bundle"`); under the default `"auto"` a commit
 not hold is fetched from `origin`. A compromised author account is outside what the verifier
 defends. The static test-commit checks (conftest allowlist, module plugins, archives) are
 hygiene against accidents, not a boundary against a hostile author.
+The scope filter refuses, as it does a `.pth`, a metadata directory (`*.dist-info`, `*.egg-info`)
+or an `.egg-link` in the test commit, so a `pytest11` entry point cannot ride in with the tests (#843).
 
 ### What a VERIFIED rests on (#303)
 

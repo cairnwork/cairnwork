@@ -11,7 +11,7 @@ returns None nothing runs, and there is never an unconfined fallback.
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
@@ -31,6 +31,7 @@ class Policy:
     # Operator-facing facts about this policy (e.g. a withheld mount). Not part of ``text``, so
     # never hashed: adding a note must not change sandbox_profile_sha256 or any bound digest.
     notes: tuple[str, ...] = ()
+    inputs: tuple | None = field(default=None, compare=False)  # bwrap: policy(*inputs) rebuilds it
 
     @property
     def sha256(self) -> str:

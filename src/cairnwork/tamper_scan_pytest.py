@@ -85,6 +85,9 @@ _KEYWORD = r"(?<![^\W\d])"  # a keyword may follow a digit or bracket directly (
 # reads on from there itself: the same matches, but each part of a long line is read once.
 _ANNOTATED = rf"[(\s]*{_CHAIN}[\s)]*:"
 _NOT_FOR = rf"(?:(?!{_KEYWORD}for\b){_FOR_TARGET})"  # a ``for`` target up to a later ``for``
+# The start of a ``for`` that has such a chain (#1682). The search for the ``in`` stops there: that
+# later ``for`` reads the same text on from there itself, so each part of a long line is read once.
+_FOR_HEAD = rf"{_KEYWORD}for\b{_NOT_FOR}*?(?={_CHAIN}){_OBJECT}\s*\."
 # The target of a patch or set/delattr call: its first argument or ``target=`` (a keyword of mock's
 # patch and of monkeypatch), also in brackets, unpacked or a string with any prefix or quotes.
 _ARGS = r"(?:[^#;()]|\([^()]*\))*?"  # earlier arguments, holding at most one level of brackets
@@ -94,8 +97,14 @@ _PATCH_TARGET = (
 )
 # Such a target naming a ``_pytest`` module, which the call imports as an import statement would.
 PATCHED_INTERNALS = rf"{_PATCH_TARGET}_pytest\b"
+# The chain of the plain assignment stops where another ``pytest.<Class>`` starts that has an
+# attribute or subscript of its own, which is read on from there itself (#1682): a run such as
+# ``pytest.Item. pytest.Item. ...`` is one chain, and read from every start it is quadratic. The
+# same lines match, as that later start has the same end. A class with nothing after it is no
+# stop: ``pytest.Item.pytest.Item = 1`` is one chain (the second class is an attribute name).
+_CHAIN_STOP = rf"{_OBJECT}(?:\s*(?:\.\s*(?!{_OBJECT}\s*[.\[])\w+|\[[^\[\]]*\]))++"
 PYTEST_PUBLIC_PATCH = (
-    rf"{_CHAIN}\s*{_ASSIGN}"
+    rf"{_CHAIN_STOP}\s*{_ASSIGN}"
     # in a tuple, list or parentheses: a run of target characters up to "=" that holds the chain
     # (a chain, subscripts included, is one target there unless a call follows it)
     # (the possessive run first, so a long line is read once per statement, not once per offset)
@@ -103,7 +112,8 @@ PYTEST_PUBLIC_PATCH = (
     rf"|(?:^|[;:]){_ANNOTATED}(?:==|(?!:{_ANNOTATED})[^=#;])*=(?!=)"  # annotated ("==" inside)
     # a ``for`` target: only its first chain is tried (not every chain on a long line), and the
     # ``in`` is looked for from the chain's first attribute on, which may itself be named ``in``
-    rf"|{_KEYWORD}for\b(?>{_NOT_FOR}*?(?={_CHAIN}){_OBJECT}\s*\.)(?={_FOR_TARGET}*+\bin\b)"
+    rf"|{_KEYWORD}for\b(?>{_NOT_FOR}*?(?={_CHAIN}){_OBJECT}\s*\.)"
+    rf"(?=(?:(?!{_FOR_HEAD}){_FOR_TARGET})*+\bin\b)"
     rf"|{_KEYWORD}as\b[(\[\s]*{_CHAIN}\s*[:,)\]]"  # a ``with`` target
     # mock's patch, patch.object and patch.multiple, which set the attribute for the caller, and
     # setattr/delattr (monkeypatch's too) on the class or a "pytest.TestReport.x" string target
