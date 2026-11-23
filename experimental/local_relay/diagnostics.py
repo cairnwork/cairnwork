@@ -26,12 +26,14 @@ _SECRET_PATTERNS = (
 # Absolute filesystem paths (#1701): they name the user, the host layout and private checkouts.
 # Masked in text that is printed or stored for others; the mode-0600 debug log keeps them on
 # purpose (it records invocation paths). A path is not preceded by a word char, dot, slash, colon
-# or tilde, so URLs and relative paths stay. Home directories may contain spaces, so a path under
-# /Users or /home is masked to the end of the line or the next quote; file:// URLs likewise.
-# Known limit: a sentence-final period after a path is masked with it.
+# or tilde, so URLs and relative paths stay. Paths under well-known roots may contain spaces, so
+# they are masked up to the next ": ", " (", quote or line end (the error reason after the colon
+# survives). file: URLs are masked to the next space. Known limits: a sentence-final period after
+# a path goes with it, and text after a spaced path with no such stop goes with it too.
+_ROOTS = "Users|home|Volumes|private|var|tmp|Library|opt|srv|mnt|root|Applications"
 _ABS_PATHS = (
-    re.compile(r"\bfile://[^\s\"'<>]*"),
-    re.compile(r"(?<![\w./:~-])/(?:Users|home)/[^\n\"'<>]*"),
+    re.compile(r"(?i)\bfile:/+[^\s\"'<>]*"),
+    re.compile(rf"(?<![\w./:~-])/(?:{_ROOTS})/[^\n\"'<>]*?(?=:\s|\s\(|[\n\"'<>]|$)"),
     re.compile(r"(?<![\w./:~-])/(?:[\w.@+~-]+/)*[\w.@+~-]+"),
 )
 
@@ -43,6 +45,18 @@ def _scrub(value: str, paths: bool = True) -> str:
             lambda match: f"{match.group(1) if match.lastindex else ''}[REDACTED]", result
         )
     return result
+
+
+def redact_deep(value: Any) -> Any:
+    """Scrub (credentials and paths, no length cap) every string inside nested dicts and lists:
+    the one choke point for output that is printed or stored."""
+    if isinstance(value, str):
+        return _scrub(value)
+    if isinstance(value, dict):
+        return {key: redact_deep(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [redact_deep(item) for item in value]
+    return value
 
 
 def redact(value: str) -> str:

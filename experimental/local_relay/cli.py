@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from experimental.local_relay.config import DEFAULT_HAIKU_PROXY_URL, DEFAULT_LEDGER_PATH, FLAG
-from experimental.local_relay.diagnostics import redact
+from experimental.local_relay.diagnostics import redact, redact_deep
 from experimental.local_relay.ledger import JsonlLedger
 from experimental.local_relay.runtime import build_run_once, dry_route
 from experimental.local_worker.run_root_cleanup import INSTALLED_RUNS
@@ -41,7 +41,7 @@ def main(
     args = parser().parse_args(argv)
     if args.dry_route:
         try:
-            return _emit(dry_route(args), 0)
+            return _emit(dry_route(args), 0, scrub=False)  # the operator's own configured paths
         except Exception as exc:  # noqa: BLE001 - unavailable fallback is a route failure
             return _emit({"error": "RUN_FAILED", "detail": _detail(exc)}, 1)
     if os.environ.get(FLAG) != "1":
@@ -59,8 +59,9 @@ def _detail(exc: Exception) -> str:
     return redact(f"{type(exc).__name__}: {exc}")
 
 
-def _emit(value: dict[str, Any], code: int) -> int:
-    print(json.dumps(value, sort_keys=True, default=str))
+def _emit(value: dict[str, Any], code: int, scrub: bool = True) -> int:
+    data = json.loads(json.dumps(value, default=str))
+    print(json.dumps(redact_deep(data) if scrub else data, sort_keys=True))
     return code
 
 
