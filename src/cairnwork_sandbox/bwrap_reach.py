@@ -6,8 +6,10 @@ user namespace cannot drop them), so the kernel lets it through a directory by t
 by a group it is in, or by a POSIX ACL. The policy is built by the owner without naming the
 account, so a directory counts as enterable unless shown otherwise: ``o+x``; ``g+x`` when its
 group holds any user other than the directory's owner (a user-private group, as on the usual
-``0750`` home, does not); or any POSIX access ACL, or an error reading one. This errs toward
-masking: an over-mask fails the run at mount (EPERM), an under-mask leaks the credential.
+``0750`` home, does not) or when the user table cannot be shown complete; ``u+x`` when the owner
+could be the account itself (neither root nor the operator running the policy); or any POSIX access
+ACL, or an error reading one. This errs toward masking: an over-mask fails the run at mount
+(EPERM), an under-mask leaks the credential.
 """
 
 from __future__ import annotations
@@ -41,6 +43,8 @@ def account_may_traverse(directory: str) -> bool:
 def _may_enter(path: str, info: os.stat_result) -> bool:
     if info.st_mode & 0o001:
         return True
+    if info.st_mode & 0o100 and info.st_uid not in (0, os.geteuid()):
+        return True  # the account itself may own it; only root and the operator are known not to be
     if info.st_mode & 0o010 and _group_has_others(info):
         return True
     return _has_acl(path)
@@ -48,7 +52,8 @@ def _may_enter(path: str, info: os.stat_result) -> bool:
 
 def _group_has_others(info: os.stat_result) -> bool:
     """A user other than the directory's owner is in its group: a listed member, or a user whose
-    primary group it is. An unknown group or owner counts as yes."""
+    primary group it is. An unknown group or owner counts as yes, and so does a user table that
+    cannot be listed or does not list the owner (NSS/LDAP with enumeration off hides members)."""
     try:
         members = grp.getgrgid(info.st_gid).gr_mem
         owner = pwd.getpwuid(info.st_uid).pw_name
@@ -56,7 +61,13 @@ def _group_has_others(info: os.stat_result) -> bool:
         return True
     if any(member != owner for member in members):
         return True
-    return any(u.pw_gid == info.st_gid and u.pw_uid != info.st_uid for u in pwd.getpwall())
+    try:
+        users = pwd.getpwall()
+    except (OSError, KeyError):
+        return True
+    if not any(u.pw_uid == info.st_uid for u in users):
+        return True
+    return any(u.pw_gid == info.st_gid and u.pw_uid != info.st_uid for u in users)
 
 
 def _has_acl(path: str) -> bool:
