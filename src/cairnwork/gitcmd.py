@@ -50,13 +50,11 @@ def marked(var: str, value: str):
         _MARK.reset(token)
 
 
-# Options that config files cannot override: no hooks, filters, fsmonitor command,
-# submodule recursion, external diff, untracked cache, or password prompts; replace
-# refs are ignored so a commit is always what it is. Transports: file, https, ssh only.
-# Programs deliberately kept: credential helper and ssh command (operator configuration).
-# They serve ssh and https remotes (network fetch/push); a local fetch from a path or bundle
-# normally does not call them, but a repo's url.<ssh>.insteadOf can still route one through
-# core.sshCommand. Diff drivers remain disabled per call site.
+# Options that config files cannot override: no hooks, filters, fsmonitor command, submodule
+# recursion, external diff, untracked cache, or password prompts; replace refs are ignored.
+# Transports: file, https, ssh only. Kept on purpose (operator configuration): credential helper
+# and ssh command, for network fetch/push (a repo's url.<ssh>.insteadOf can route a local fetch
+# through core.sshCommand). Textconv is off per subcommand (_no_external_diff).
 _SAFE_OPTIONS = (
     "--no-replace-objects",
     "-c",
@@ -109,9 +107,8 @@ def config_execution_off(repo: Path | str, env: dict[str, str]) -> tuple[str, ..
     A name that ``-c`` cannot carry (it holds ``=``) is refused, and so is a listing that does
     not finish (timeout, git not started). The listing is every key, filtered here (a regex in
     git, under a UTF-8 locale, skips a key that is not UTF-8). A non-zero exit means the
-    configuration could not be enumerated, so the command is refused. Names are decoded
-    with surrogateescape, so ``-c`` carries the same bytes back to git (a name that is not UTF-8
-    is still matched). Listing runs no hook, so it needs no _SAFE_OPTIONS.
+    configuration could not be enumerated, so the command is refused. Names are decoded with
+    surrogateescape, so ``-c`` carries the same bytes back. Listing runs no hook.
     """
     try:
         done = subprocess.run(  # noqa: S603 - fixed git argv, no shell
@@ -202,11 +199,12 @@ def _subcommand(args: tuple[str, ...]) -> str:
 
 
 def _no_external_diff(args: tuple[str, ...]) -> tuple[str, ...]:
-    """Keep diff.external and diff.<x>.textconv from running; the internal diff output stays."""
+    """``diff`` gets --no-ext-diff and --no-textconv; the other patch printers only the latter."""
     i = _subcommand_index(args)
-    if i is None or args[i] != "diff":
+    if i is None or args[i] not in ("diff", "show", "log", "format-patch", "blame"):
         return args
-    return (*args[: i + 1], "--no-ext-diff", "--no-textconv", *args[i + 1 :])
+    flags = ("--no-ext-diff", "--no-textconv") if args[i] == "diff" else ("--no-textconv",)
+    return (*args[: i + 1], *flags, *args[i + 1 :])
 
 
 class GitCommandError(Exception):
@@ -274,8 +272,8 @@ def run_git_bytes(
 # GIT_ALLOW_PROTOCOL beats every protocol.*.allow setting, so git:// (core.gitProxy) and other
 # <helper>:: remotes never run (#759). Set in _child_env and in cairnwork_attest.publish._git.
 ALLOWED_PROTOCOLS = "file:https:ssh"
-# Subcommands that may reach a remote, so ssh runs in BatchMode for them (#759). A credential
-# helper that opens its own dialog still runs there: operator configuration, kept on purpose.
+# Subcommands that may reach a remote: ssh runs in BatchMode for them (#759). A credential
+# helper with its own dialog still runs there (operator configuration).
 NETWORK_SUBCOMMANDS = ("fetch", "push", "pull", "clone", "ls-remote")
 
 
