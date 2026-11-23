@@ -3,14 +3,13 @@ applies to its own worker's output: one commit on the base that touches only the
 files (no deletion, symlink or submodule), the deferred tests laid over it, the verifiers
 in the sandbox, and a Core verdict bound to the exact commit.
 
-No worker runs and nothing is bound in the ownership ledger, so the deployer's in-flight
-count never sees it. The run holds the shared run lock, as any run does, so ``recover``
-cannot mistake its verifier processes for a dead run's. Like ``submit`` it is refused
-while the state is drained (checked again once the run lock is held). Every check runs in
-a scratch clone of the state's ``mirror`` (or of --repo-path when there is none) that this
-run alone owns; the external candidate is fetched into the scratch clone only, never into
-the shared mirror or the caller's repository. The Core record
-goes to the state's notary under a one-off ``verify-`` task id.
+No worker runs and nothing is bound in the ownership ledger, so the deployer's in-flight count never
+sees it. The run holds the shared run lock, as any run does, so ``recover`` cannot mistake its
+verifier processes for a dead run's. Like ``submit`` it is refused while the state is drained
+(checked again once the run lock is held). Every check runs in a scratch clone of the state's
+``mirror`` (or of --repo-path when there is none) that this run alone owns; the external candidate
+is fetched into the scratch clone only, never into the shared mirror or the caller's repository. The
+Core record goes to the state's notary under a one-off ``verify-`` task id.
 
 A run marks itself with a locked file in ``<state>/verify-runs/``; the kernel drops the
 lock when the run dies, so ``cleanup`` (also done at the start of every run) can tell a
@@ -39,6 +38,7 @@ from cairnwork.deferred_tests import (
     OVERLAY_RULE,
     BaseUncomparable,
     TestCommitRejected,
+    author_reason,
     lay_tests_over,
     never_seen,
 )
@@ -128,7 +128,7 @@ def verify_candidate(
                 precheck(account, python)  # before _burn: an unusable account consumes no tests
                 binding = _judge(intake, task, source, specs, candidate, notary, result, ctx)
             except (CandidateRejected, TestCommitRejected, WorkspaceError) as exc:
-                result.reason, status = str(exc), "REFUSED"
+                result.reason, status = author_reason(exc, bool(task.test_commit)), "REFUSED"
             except BaseUncomparable as exc:  # before Core: nothing notarised, nothing to sign
                 result.reason, status = f"UNCOMPARABLE: {exc}", "UNCOMPARABLE"
                 found, rule = exc.comparison, candidate_env.uncomparable_rule(exc.comparison.code)
