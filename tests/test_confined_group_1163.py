@@ -5,7 +5,12 @@ import os
 import sys
 from typing import Any
 
+import pytest
+
 from cairnwork import confined
+
+# macOS before Python 3.13 has no os.waitid; test_confined_wait_1549 covers that path (#1549)
+pytestmark = pytest.mark.skipif(not hasattr(os, "waitid"), reason="os.waitid needed to observe")
 
 TOKEN = "t-1163"
 

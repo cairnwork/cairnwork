@@ -18,7 +18,7 @@ from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, replace
 
-from cairnwork import proc_cwd, proc_restrict, proc_start, survivor_argv
+from cairnwork import proc_cwd, proc_restrict, proc_start, proc_wait, survivor_argv
 from cairnwork.pipe_copy import MAX_LOG_BYTES as MAX_LOG_BYTES  # re-exported (verifiers)
 from cairnwork.pipe_copy import MAX_REPORT_BYTES as MAX_REPORT_BYTES  # re-exported (report_guard)
 from cairnwork.pipe_copy import _limit_file_size, copy_capped
@@ -87,13 +87,7 @@ def execute(
 def _wait_unreaped(pid: int, timeout: float | None) -> bool:
     """True if the leader exited within timeout. It is left unreaped (a zombie), so its process
     group id stays reserved until the group has been signalled (#1163)."""
-    deadline = None if timeout is None else time.monotonic() + timeout
-    while True:
-        if os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None:
-            return True
-        if deadline is not None and time.monotonic() >= deadline:
-            return False
-        time.sleep(0.005)
+    return proc_wait.wait_exited_unreaped(pid, timeout)  # os.waitid, or kqueue (#1549)
 
 
 def _sweep_survivors(
