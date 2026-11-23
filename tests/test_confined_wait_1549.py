@@ -1,10 +1,12 @@
 """macOS before Python 3.13 has no os.waitid: the confined run waits for its leader through a
 kqueue, still unreaped, and never ends in INTERNAL (Issue #1549, family of #1163)."""
 
+import errno
 import os
 import select
 import subprocess
 import sys
+import time
 from typing import Any
 
 import pytest
@@ -70,8 +72,10 @@ def test_timed_out_leader_is_running_when_the_group_is_signalled(
 def test_already_exited_leader_is_seen_without_reaping(no_waitid: None):
     child = subprocess.Popen([sys.executable, "-c", "pass"])  # noqa: S603
     try:
+        deadline = time.monotonic() + 30
         while not _state(child.pid).startswith("Z"):
-            pass
+            assert time.monotonic() < deadline, "child never became a zombie"
+            time.sleep(0.05)
         assert proc_wait.wait_exited_unreaped(child.pid, 5) is True
         assert _state(child.pid).startswith("Z")  # still there to wait for
     finally:
@@ -92,3 +96,51 @@ def test_a_host_with_neither_call_fails_loudly(no_waitid: None, monkeypatch: Any
     monkeypatch.delattr(select, "kqueue", raising=False)
     with pytest.raises(NotImplementedError, match="cannot wait for a child unreaped"):
         proc_wait.wait_exited_unreaped(os.getpid(), 0)
+
+
+@needs_kqueue
+def test_a_child_reaped_by_wait_raises_like_waitid(no_waitid: None):
+    child = subprocess.Popen([sys.executable, "-c", "pass"])  # noqa: S603
+    child.wait()
+    with pytest.raises(ChildProcessError):
+        proc_wait.wait_exited_unreaped(child.pid, 1)
+
+
+@needs_kqueue
+def test_a_pid_that_never_existed_raises(no_waitid: None):
+    child = subprocess.Popen([sys.executable, "-c", "pass"])  # noqa: S603
+    child.wait()
+    for pid in (child.pid + 1_000_000, 2**22 - 3):  # beyond any live pid
+        with pytest.raises(ChildProcessError):
+            proc_wait.wait_exited_unreaped(pid, 1)
+
+
+@needs_kqueue
+def test_any_other_kqueue_error_raises_not_exited(no_waitid: None, monkeypatch: Any):
+    class FakeEvent:
+        flags = select.KQ_EV_ERROR
+        fflags = 0
+        data = errno.EPERM
+
+    class FakeQueue:
+        def control(self, *_args: Any) -> list[Any]:
+            return [FakeEvent()]
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(select, "kqueue", FakeQueue)
+    with pytest.raises(PermissionError):
+        proc_wait.wait_exited_unreaped(os.getpid(), 1)
+
+
+@needs_kqueue
+def test_exit_after_registering_is_seen_and_zero_or_negative_timeouts_do_not_wait(no_waitid: None):
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(0.4)"])  # noqa: S603
+    try:
+        assert proc_wait.wait_exited_unreaped(child.pid, 0) is False
+        assert proc_wait.wait_exited_unreaped(child.pid, -1) is False  # as the waitid poll does
+        assert proc_wait.wait_exited_unreaped(child.pid, 10) is True
+        assert _state(child.pid).startswith("Z")
+    finally:
+        child.wait()

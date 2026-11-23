@@ -2,12 +2,13 @@
 
 The leader stays a zombie, so its process group id stays reserved until the group has been
 signalled (#1163). ``os.waitid`` does this on Linux and, from Python 3.13, on macOS; macOS with
-3.11 or 3.12 has none, so it asks the kernel for the exit with a kqueue instead (NOTE_EXIT is
-reported for a zombie too and never reaps). A host with neither fails loudly, never as a verdict.
+3.11 or 3.12 has none, so it asks the kernel through a kqueue instead, which never reaps. A host
+with neither fails loudly, never as a verdict.
 """
 
 from __future__ import annotations
 
+import errno
 import os
 import select
 import time
@@ -35,6 +36,10 @@ def _poll_waitid(pid: int, timeout: float | None) -> bool:
 
 
 def _wait_kqueue(pid: int, timeout: float | None) -> bool:
+    """macOS reports a child that already exited (a zombie) as an ESRCH error event, not as
+    NOTE_EXIT, so that is told apart from a pid that is gone or was never ours: only a pid that
+    is still there (``os.kill(pid, 0)``) counts as exited. Any other error raises, as waitid
+    does."""
     queue = select.kqueue()
     try:
         change = select.kevent(
@@ -43,9 +48,22 @@ def _wait_kqueue(pid: int, timeout: float | None) -> bool:
             select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
             select.KQ_NOTE_EXIT,
         )
-        try:
-            return bool(queue.control([change], 1, timeout))
-        except ProcessLookupError:  # already gone and reaped: it did exit
-            return True
+        events = queue.control([change], 1, None if timeout is None else max(0.0, timeout))
     finally:
         queue.close()
+    for event in events:
+        if event.flags & select.KQ_EV_ERROR:
+            _exited_zombie_or_raise(pid, event.data)
+            return True
+        if event.fflags & select.KQ_NOTE_EXIT:
+            return True
+    return False
+
+
+def _exited_zombie_or_raise(pid: int, error: int) -> None:
+    if error != errno.ESRCH:
+        raise OSError(error, os.strerror(error))
+    try:
+        os.kill(pid, 0)  # a zombie can still be signalled; a reaped or foreign pid cannot
+    except ProcessLookupError:
+        raise ChildProcessError(errno.ECHILD, os.strerror(errno.ECHILD)) from None
