@@ -144,3 +144,10 @@ def test_exit_after_registering_is_seen_and_zero_or_negative_timeouts_do_not_wai
         assert _state(child.pid).startswith("Z")
     finally:
         child.wait()
+
+
+@needs_kqueue
+def test_a_live_pid_that_is_not_our_child_is_waited_on_not_rejected(no_waitid: None):
+    # Recorded, not promised (proc_wait precondition: pid is the caller's own unreaped child):
+    # the kqueue form cannot tell a foreign live pid from a child, so it just waits for its exit.
+    assert proc_wait.wait_exited_unreaped(1, 0.1) is False  # init/launchd: alive, never ours

@@ -17,7 +17,12 @@ _POLL_SECONDS = 0.005
 
 
 def wait_exited_unreaped(pid: int, timeout: float | None) -> bool:
-    """True if child ``pid`` exited within ``timeout`` seconds (None: no limit), still unreaped."""
+    """True if child ``pid`` exited within ``timeout`` seconds (None: no limit), still unreaped.
+
+    Precondition: ``pid`` is a child of the caller that the caller has not reaped. ``os.waitid``
+    raises ChildProcessError for any other pid; the kqueue form cannot tell a foreign live pid
+    from a child, so for one it simply waits for its exit (behaviour recorded in the tests, not a
+    promise). The only caller, confined, passes its own just-started leader."""
     if hasattr(os, "waitid"):
         return _poll_waitid(pid, timeout)
     if hasattr(select, "kqueue"):
@@ -39,7 +44,8 @@ def _wait_kqueue(pid: int, timeout: float | None) -> bool:
     """macOS reports a child that already exited (a zombie) as an ESRCH error event, not as
     NOTE_EXIT, so that is told apart from a pid that is gone or was never ours: only a pid that
     is still there (``os.kill(pid, 0)``) counts as exited. Any other error raises, as waitid
-    does."""
+    does. That check only means "some process holds this pid": it is the exited child only because
+    the caller's precondition (see wait_exited_unreaped) says a zombie child keeps its pid."""
     queue = select.kqueue()
     try:
         change = select.kevent(
