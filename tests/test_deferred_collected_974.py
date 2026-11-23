@@ -106,6 +106,35 @@ def test_more_files_than_one_batch_are_collected_in_batches(monkeypatch):
     assert calls == [deferred_collected.MAX_FILES, 3]
 
 
+@pytest.mark.parametrize(("count", "batches"), [(50, [50]), (51, [50, 1])])
+def test_batch_boundary_at_the_file_cap(monkeypatch, count, batches):
+    calls = []
+
+    def fake(ctx, commit, files, run_id):
+        calls.append(len(files))
+        return Collected()
+
+    monkeypatch.setattr(deferred_collected, "_collect", fake)
+    got = deferred_collected._collect_all(None, "c", tuple(f"t{i}.py" for i in range(count)), "r")
+    assert got is not None
+    assert calls == batches
+
+
+def test_one_unusable_batch_makes_the_whole_collect_unusable(monkeypatch):
+    def fake(ctx, commit, files, run_id):
+        return (
+            None if "t50.py" in files else Collected()
+        )  # the later batch fails, the first is fine
+
+    monkeypatch.setattr(deferred_collected, "_collect", fake)
+    names = tuple(f"t{i}.py" for i in range(deferred_collected.MAX_FILES + 1))
+    assert deferred_collected._collect_all(None, "c", names, "r") is None
+    task = SimpleNamespace(test_commit="t", base_commit="b")
+    with pytest.raises(Rejected) as err:
+        deferred_collected.check(None, task, names, set(), "r")
+    assert err.value.code == "DEFERRED_TESTS_COLLECT_FAILED"
+
+
 @sandbox
 def test_a_hidden_test_in_a_new_file_cannot_hide_behind_a_failed_collect_run(
     project, tmp_path, monkeypatch
